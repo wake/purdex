@@ -24,28 +24,36 @@ export function getSummary(tool: string, input: Record<string, unknown>): string
     case 'Agent':
       return (input.description as string) ?? ''
     default:
-      // No truncation. Spec §4.2 wants the full value in the header — "never
-      // truncated to an ellipsis in the middle" — and this slice was worse
-      // than the thing that forbids: it cut at 80 without even an ellipsis to
-      // admit it. The renderer wraps (`whitespace-pre-wrap break-all`), so
-      // length is its problem, not this table's; SUMMARY_LIMIT still bounds
-      // the R10 fallback below, which is a different path.
+      // A bounded preview, not the whole input. Spec §4.2's "never truncated"
+      // is N2's `primary_arg` promise; an unknown tool's input is not an
+      // argument, and serialising a MB-class one in full on every render to
+      // hang it in the header is unbounded work (codex R2 A3 on #1451). The
+      // walk stops at SUMMARY_LIMIT and ends in `…`, so the cut is visible —
+      // the old bare `.slice(0, 80)` cut without saying so, and §4.2 forbids
+      // only an ellipsis in the middle. The whole input still shows in the
+      // operation block's own input section.
       //
       // An empty input has no argument at all, so say nothing rather than
       // `{}` — that is the serialiser answering, not the call, and it is
       // truthy enough to draw an argument span around it (every orphan
       // result got one). `unknownToolSummary` already returns '' here.
-      return Object.keys(input).length === 0 ? '' : JSON.stringify(input)
+      return hasOwnKey(input) ? previewValue(input, SUMMARY_LIMIT) : ''
   }
+}
+
+/** Whether `o` has any own enumerable key — without materialising every key the way `Object.keys` does. */
+function hasOwnKey(o: object): boolean {
+  for (const k in o) if (Object.hasOwn(o, k)) return true
+  return false
 }
 
 const R10_KEYS = 3
 
 /**
- * Header summary width. The R10 preview never serialises more than this
- * (codex R2 A3). The operation block itself no longer truncates the header
- * (spec §4.2: the argument wraps, it is not cut), so this bounds the preview
- * only.
+ * Header summary width. Neither the R10 preview nor `getSummary`'s default
+ * branch serialises more than this (codex R2 A3). The operation block itself
+ * no longer truncates the header (spec §4.2: the argument wraps, it is not
+ * cut), so this bounds those two input previews only.
  */
 export const SUMMARY_LIMIT = 80
 

@@ -28,17 +28,29 @@ describe('getSummary (client table, moved from ToolCallBlock)', () => {
     expect(getSummary('Agent', { description: 'Find files', prompt: 'long' })).toBe('Find files')
   })
 
-  // Spec §4.2: the header argument is the full value, "never truncated to an
-  // ellipsis in the middle" — and the old `.slice(0, 80)` here was worse than
-  // what that forbids, since it cut without even saying so. T3.1 removed the
-  // renderer's truncation; this is the last one on the path.
-  it('default → the whole JSON of input, not cut at 80 chars', () => {
-    const input = { alpha: 'x'.repeat(100) }
-    const json = JSON.stringify(input)
-    expect(json.length).toBeGreaterThan(80)
-    expect(getSummary('SomethingElse', input)).toBe(json)
-    // No amputated tail: the value ends where the JSON ends.
-    expect(getSummary('SomethingElse', input).endsWith('"}')).toBe(true)
+  // Spec §4.2's "never truncated" promise is about N2's `primary_arg`; an
+  // unknown tool's whole input is not an argument, and serialising a MB-class
+  // input on every render to hang it in the header is unbounded work (codex
+  // R2 A3 on PR #1451). So the default branch is a bounded preview — and,
+  // unlike the old bare `.slice(0, 80)`, one that says it was cut: the `…`
+  // is at the end, which §4.2 permits (it forbids one in the middle).
+  it('default → a short input is its JSON, verbatim', () => {
+    const input = { alpha: 'x', n: 1 }
+    expect(getSummary('SomethingElse', input)).toBe(JSON.stringify(input))
+  })
+
+  it('default → an overlong input is capped at SUMMARY_LIMIT and ends in an ellipsis', () => {
+    const summary = getSummary('SomethingElse', { alpha: 'x'.repeat(100_000) })
+    expect(summary.length).toBeLessThanOrEqual(SUMMARY_LIMIT + 1)
+    expect(summary.endsWith('…')).toBe(true)
+  })
+
+  it('default → an input with 200 000 keys is still capped', () => {
+    const input: Record<string, unknown> = {}
+    for (let i = 0; i < 200_000; i++) input[`k${i}`] = i
+    const summary = getSummary('SomethingElse', input)
+    expect(summary.length).toBeLessThanOrEqual(SUMMARY_LIMIT + 1)
+    expect(summary.endsWith('…')).toBe(true)
   })
 
   // An empty input has no argument to state. `{}` is the serialiser talking,
