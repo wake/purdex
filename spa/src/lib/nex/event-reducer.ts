@@ -171,14 +171,20 @@ const TURN_ENDING_KINDS = new Set([
  * seq guard, before the per-kind reducers.
  */
 function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): ExecutionState {
-  // A subagent's frames (non-null parent_tool_use_id) — including its own
-  // `result` and its N2 tool events (N0) — must never end the main turn or
-  // touch the main partial/tools.
-  if (!isLifecycleKind(ev.kind) && p.parent_tool_use_id != null) return s
   // N1 / N2: the derived kinds only overlay `tools`; they are not in
-  // TURN_ENDING_KINDS, so handling them first is purely for readability.
+  // TURN_ENDING_KINDS, so they are safe for a subagent's events too.
   if (ev.kind === 'tool_use') return recordN2ToolUse(s, p, ev.created_at)
   if (ev.kind === 'tool_result') return recordN2ToolResult(s, p, ev.created_at)
+  // A subagent's frames (non-null parent_tool_use_id) — including its own
+  // `result` — must never end the main turn, set turnLive or touch the main
+  // partial. Its tool timing is still recorded (#1228): tool_use ids are
+  // globally unique, so the one `tools` map is the right home, and endTurn
+  // on the parent's turn end aborts whatever the child left running.
+  if (!isLifecycleKind(ev.kind) && p.parent_tool_use_id != null) {
+    if (ev.kind === 'assistant') return recordToolStarts(s, p, ev.created_at)
+    if (ev.kind === 'user') return recordToolEnds(s, p, ev.created_at)
+    return s
+  }
   if (TURN_ENDING_KINDS.has(ev.kind)) return endTurn(s, ev.created_at)
   if (ev.kind === 'execution.running' || ev.kind === 'execution.message_accepted') return { ...s, turnLive: true }
   if (ev.kind === 'assistant') return finalizeBlock(recordToolStarts(s, p, ev.created_at), p)
