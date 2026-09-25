@@ -65,7 +65,27 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
   const nameRef = useRef<HTMLButtonElement>(null)
   const costRef = useRef<HTMLButtonElement>(null)
   const overflowRef = useRef<HTMLButtonElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const costTipId = useId()
+  // Crossing `@md` (a pane split, a window resize) turns the anchor of an open
+  // panel `display:none`; FloatingPanel's next reflow would then read an
+  // all-zero rect and pin the panel to the top-left. Watch the header's own
+  // box and close any panel whose anchor has lost its box — asking the anchor
+  // directly keeps the breakpoint in CSS instead of a copied pixel value.
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root || (!costOpen && !overflowOpen)) return
+    const boxless = (el: HTMLElement | null) => {
+      const r = el?.getBoundingClientRect()
+      return !r || (r.width === 0 && r.height === 0)
+    }
+    const ro = new ResizeObserver(() => {
+      if (costOpen && boxless(costFromOverflow ? overflowRef.current : costRef.current)) setCostOpen(false)
+      if (overflowOpen && boxless(overflowRef.current)) setOverflowOpen(false)
+    })
+    ro.observe(root)
+    return () => ro.disconnect()
+  }, [costOpen, overflowOpen, costFromOverflow])
   useEffect(() => {
     if (!confirming) return
     const id = setTimeout(() => setConfirming(false), TERMINATE_CONFIRM_MS)
@@ -87,7 +107,7 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
   }
 
   return (
-    <div className="@container flex items-center gap-2 px-4 py-2 border-b border-border-default text-xs text-text-muted">
+    <div ref={rootRef} className="@container flex items-center gap-2 px-4 py-2 border-b border-border-default text-xs text-text-muted">
       <span className={`shrink-0 w-2 h-2 rounded-full ${STATE_DOT[state] ?? 'bg-text-muted'}`} />
       <span data-testid="execution-state" className="shrink-0 text-text-primary font-medium">{state}</span>
       {cwdBase && (

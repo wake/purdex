@@ -356,6 +356,62 @@ describe('ExecutionHeader', () => {
       expect(costBtn().getAttribute('aria-describedby')).toBe(screen.getByRole('tooltip').id)
     })
 
+    // Codex R1 (PR #1464): an open panel must not outlive its anchor when the
+    // pane crosses the `@md` breakpoint — the anchor goes `display:none`, its
+    // rect is all zeros, and FloatingPanel's next reflow would pin the panel to
+    // the top-left corner. The header watches its own size and closes a panel
+    // whose anchor no longer has a box.
+    describe('closes panels whose anchor disappears across the breakpoint', () => {
+      let roCallbacks: Array<() => void> = []
+      const box = { x: 10, y: 10, left: 10, top: 10, right: 60, bottom: 30, width: 50, height: 20, toJSON: () => ({}) } as DOMRect
+      const zero = { x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) } as DOMRect
+      const setRect = (el: HTMLElement, r: DOMRect) => { vi.spyOn(el, 'getBoundingClientRect').mockReturnValue(r) }
+      const fireResize = () => act(() => { roCallbacks.forEach((cb) => cb()) })
+      beforeEach(() => {
+        roCallbacks = []
+        vi.stubGlobal('ResizeObserver', class {
+          private cb: () => void
+          constructor(cb: () => void) { this.cb = cb }
+          observe() { roCallbacks.push(this.cb) }
+          unobserve() {}
+          disconnect() { roCallbacks = roCallbacks.filter((c) => c !== this.cb) }
+        })
+      })
+      afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+      it('wide → narrow: the cost panel opened from the inline button closes', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+        setRect(costBtn(), box)
+        fireEvent.click(costBtn())
+        fireResize()
+        expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+        setRect(costBtn(), zero)
+        fireResize()
+        expect(screen.queryByTestId('cost-panel')).toBeNull()
+        expect(costBtn().getAttribute('aria-expanded')).toBe('false')
+      })
+
+      it('narrow → wide: the cost panel and the overflow menu opened from the trigger close', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+        const trigger = screen.getByTestId('header-overflow')
+        setRect(trigger, box)
+        fireEvent.click(trigger)
+        fireResize()
+        expect(screen.getByTestId('header-overflow-panel')).toBeInTheDocument()
+        setRect(trigger, zero)
+        fireResize()
+        expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
+        setRect(trigger, box)
+        fireEvent.click(trigger)
+        fireEvent.click(screen.getByTestId('overflow-cost'))
+        fireResize()
+        expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+        setRect(trigger, zero)
+        fireResize()
+        expect(screen.queryByTestId('cost-panel')).toBeNull()
+      })
+    })
+
     it('cost=null → no aria-expanded and click does nothing', () => {
       render(<ExecutionHeader {...baseProps} summary={summary()} cost={null} />)
       expect(costBtn().hasAttribute('aria-expanded')).toBe(false)
