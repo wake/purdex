@@ -6,7 +6,8 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, within } from '@testing-library/react'
 import RoomTurnGroup from './RoomTurnGroup'
 import OperationBlock from './OperationBlock'
-import { FoldContext, useFold, useFoldMemory } from './fold-context'
+import RoomThinking from './RoomThinking'
+import { FoldContext, useFoldMemory } from './fold-context'
 import type { DiffHunk } from '../../lib/nex/tool-activity'
 import type { ToolResultFacts } from '../../lib/nex/tool-result-facts'
 
@@ -16,16 +17,6 @@ beforeEach(() => { cleanup() })
 function Pane({ children }: { children: ReactNode }) {
   const store = useFoldMemory()
   return <FoldContext.Provider value={store}>{children}</FoldContext.Provider>
-}
-
-/**
- * Stand-in for a thinking block: there is no room version yet. It registers
- * through `useFold('<key>:thinking')` exactly as the real one will; T4.3
- * replaces it with RoomThinking.
- */
-function Thinking({ foldKey }: { foldKey: string }) {
-  const [expanded, toggle] = useFold(`${foldKey}:thinking`)
-  return <button type="button" data-testid="thinking" aria-expanded={expanded} onClick={toggle} />
 }
 
 const body = (n: number): string => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n')
@@ -41,7 +32,8 @@ const diffFacts: ToolResultFacts = { diff: { path: '/x', added: 10, removed: 0, 
 function TurnBody({ id }: { id: string }) {
   return (
     <>
-      <Thinking foldKey={id} />
+      {/* Long enough to fold: a short thought is shown whole and has nothing to expand. */}
+      <RoomThinking content={body(20)} foldKey={id} />
       <OperationBlock tool="Edit" input={{ file_path: '/x' }} foldKey={id}
         activity={{ status: 'done', startedAt: 0, endedAt: 0 }}
         facts={diffFacts} result={{ text: body(20), isError: false }} />
@@ -62,11 +54,16 @@ function twoTurns() {
 
 /** All three of the turn's folds, read off what each one draws. */
 function folds(turn: HTMLElement) {
-  const t = within(turn)
+  // The output and the thought draw the same affordance, so each is read
+  // inside its own block.
+  const op = within(within(turn).getByTestId('operation-block'))
+  const thought = within(within(turn).getByTestId('room-thinking'))
+  const state = (t: typeof op, less: string, more: string) =>
+    t.queryByTestId(less) ? 'open' : t.queryByTestId(more) ? 'closed' : 'missing'
   return {
-    output: t.queryByTestId('fold-less') ? 'open' : t.queryByTestId('fold-more') ? 'closed' : 'missing',
-    diff: t.queryByTestId('diff-less') ? 'open' : t.queryByTestId('diff-more') ? 'closed' : 'missing',
-    thinking: t.getByTestId('thinking').getAttribute('aria-expanded') === 'true' ? 'open' : 'closed',
+    output: state(op, 'fold-less', 'fold-more'),
+    diff: state(op, 'diff-less', 'diff-more'),
+    thinking: state(thought, 'fold-less', 'fold-more'),
   }
 }
 

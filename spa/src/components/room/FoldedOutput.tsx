@@ -6,6 +6,7 @@
 // re-keyed or virtualised away, and a `useState` in this component would take
 // the user's "open" with it (spec §3.2). `expanded` and `onToggle` are props,
 // fed by the pane-level memory in `fold-context`.
+import type { ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { FoldPlan } from '../../lib/nex/fold'
 
@@ -16,13 +17,19 @@ export interface FoldedOutputProps {
   onToggle: () => void
   /** 'error' tints the body text. */
   tone?: 'normal' | 'error'
+  /**
+   * Drawn inline at the end of the text, and only while the text's end is on
+   * screen (shown whole, or expanded) — the typewriter cursor of a streaming
+   * thought. A folded preview stops mid-body, so it gets none.
+   */
+  trailing?: ReactNode
 }
 
 const BODY_CLASS = 'text-xs whitespace-pre-wrap break-all overflow-auto max-h-96'
 const BUTTON_CLASS =
   'mt-1 text-xs text-text-muted hover:text-text-primary cursor-pointer text-left'
 
-export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal' }: FoldedOutputProps) {
+export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal', trailing }: FoldedOutputProps) {
   const t = useI18nStore((s) => s.t)
   const bodyClass = `${BODY_CLASS} ${tone === 'error' ? 'text-status-error' : 'text-text-secondary'}`
 
@@ -40,7 +47,7 @@ export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal' }
   if (!plan.collapsible) {
     return (
       <div>
-        <pre data-testid="fold-body" className={bodyClass}>{text}</pre>
+        <pre data-testid="fold-body" className={bodyClass}>{text}{trailing}</pre>
         {truncationNote}
       </div>
     )
@@ -49,7 +56,7 @@ export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal' }
   if (expanded) {
     return (
       <div>
-        <pre data-testid="fold-body" className={bodyClass}>{text}</pre>
+        <pre data-testid="fold-body" className={bodyClass}>{text}{trailing}</pre>
         {truncationNote}
         <button type="button" data-testid="fold-less" className={BUTTON_CLASS} onClick={onToggle}>
           {t('room.fold.less')}

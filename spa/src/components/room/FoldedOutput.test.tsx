@@ -75,6 +75,24 @@ describe('FoldedOutput', () => {
     expect(screen.getByTestId('fold-more').textContent).not.toContain('0 lines')
   })
 
+  it('draws `trailing` inline after the text only while the end of the text is on screen', () => {
+    // The typewriter's cursor (RoomThinking) goes at the end of the words, not
+    // after a preview that stops mid-body.
+    const mark = <span data-testid="tail">▌</span>
+    const short = body(3)
+    const { rerender } = render(
+      <FoldedOutput text={short} plan={foldPlan({ text: short })} expanded={false} onToggle={() => {}} trailing={mark} />,
+    )
+    expect(screen.getByTestId('fold-body').lastElementChild).toBe(screen.getByTestId('tail'))
+
+    const long = body(100)
+    rerender(<FoldedOutput text={long} plan={foldPlan({ text: long })} expanded={false} onToggle={() => {}} trailing={mark} />)
+    expect(screen.queryByTestId('tail')).toBeNull()
+
+    rerender(<FoldedOutput text={long} plan={foldPlan({ text: long })} expanded onToggle={() => {}} trailing={mark} />)
+    expect(screen.getByTestId('fold-body').lastElementChild).toBe(screen.getByTestId('tail'))
+  })
+
   it('never joins lines with a space', () => {
     // #1265: the preview is a body, not a sentence. Joining its lines with a
     // space turns a three-line file preview into one unreadable run-on.

@@ -1720,5 +1720,6 @@
   "room.fold.daemon_truncated": "輸出在 8 KB 處被 daemon 截斷",
   "room.op.show_input": "輸入",
   "room.turn.expand_all": "全部展開",
-  "room.turn.collapse_all": "全部收合"
+  "room.turn.collapse_all": "全部收合",
+  "room.thinking": "思考 · {{words}} 字"
 }
