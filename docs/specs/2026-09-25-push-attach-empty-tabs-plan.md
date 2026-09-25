@@ -1,6 +1,6 @@
 # Push attach keeps an empty `tabs.<id>` (#1450) — spec + plan
 
-Status: rev 2 — codex plan review `task-muggb0zh-1kf1qg` folded in (R1 narrowed, guards T1b, R3 honest copy). Spec and
+Status: rev 3 — plan review `task-muggb0zh-1kf1qg` (rev 2) and PR review R1/attacker (rev 3: in-flight guard, no concrete name) folded in. Spec and
 plan in one file: one bug, one PR.
 
 ## 1. The bug
@@ -49,6 +49,12 @@ The executor records the set `pulledInThisPeriod` (workspace ids present after a
 before it, computed around the apply with the existing `localWorkspaceIds()`); the set is per executor (every attach
 is a fresh period) and is not persisted. Direction `pull` and `null` keep today's behaviour exactly.
 
+(rev 3, after PR review attacker A-1) The apply writes the stores synchronously and only then awaits hashing, so the
+guard must hold **from the moment the apply begins**: `workspacesPullInFlight` = the ids before the apply (`'all'`
+when the world is unsettled); while it is set, only those ids may be exempt. A `finally` records the added ids into
+`pulledInThisPeriod` and clears it on every outcome (applied, refused, thrown, disposed). Test (g) holds the hash
+promise open and delivers the empty report and the remote event inside that window.
+
 Consequence for the #1450 case (no new mechanism): the empty report reaches the reducer → dirty + SOT moved →
 `lock-conflict` → `answerFor` answers push = keep-local synchronously → pushed with the SOT's rev as base → SOT
 `tabs.<id>` becomes `{order: [], tabs: {}}`, rev +1, and nothing is pulled into this device.
@@ -61,9 +67,10 @@ pulled in during the period is still a placeholder), and why.
 (device name, e.g. "Chrome · macOS"), computed at run time — it can change between the screen and the run, so the text
 must not promise an exact name it cannot guarantee:
 - master named → text unchanged (the name is kept as is);
-- master unnamed → a second key `settings.profile.wizard.local.move_unnamed` (en + zh-TW): the master (shown as
-  "{{master}}") stays on this device as a local workbench **named after this device (right now: "{{demoted}}")**,
-  where `demoted` = `offeredProfileName(<the same also-list the run would pass for the current draft>)`.
+- master unnamed → a second key `settings.profile.wizard.local.move_unnamed` (en + zh-TW): the master stays on this
+  device as a local workbench **named after this device**. (rev 3, after PR review R1: the text promises NO concrete
+  name — neither "Home" nor a precomputed device name: at this step the direction and the save-first name are not
+  known yet, and the run may number it, e.g. "Mac 2". The option row above still shows "Home".)
 
 Out of scope: making `unsorted` per-world (treats the symptom only, needs id migration).
 
@@ -99,8 +106,8 @@ returns `'edit'` when `direction() === 'push'` and the report's workspace is not
 of `pulledInThisPeriod` → (d) red; m3 exempt on `direction() !== null` → (e) red.
 
 **T4 — wizard copy (R3).** `WizardChoiceSteps.tsx` `LocalStep`; en + zh-TW; tests in the existing wizard step test
-file: master unnamed → `move_unnamed` with the name from `offeredProfileName` (call the helper in the test, no
-literal); master named → `move` with that name. Mutation: unnamed uses the `move` key → red.
+file: master unnamed → `move_unnamed`, and the text does not contain "Home"; master named → `move` with that name.
+Mutation: unnamed uses the `move` key → red.
 
 **Verification.** `cd spa && npx vitest run`, `pnpm run lint`, `npx tsc --noEmit -p tsconfig.app.json`,
 `pnpm run build`.
@@ -108,7 +115,7 @@ literal); master named → `move` with that name. Mutation: unnamed uses the `mo
 **Acceptance on a real client (after review).** mlab daemon, SOT profile `p_5566490da878` (left there for this):
 reproduce §1 on a worktree dev server (not :5174), two clients each with its own host id; the daemon section index
 shows `tabs.unsorted` rev +1 and empty and L2 shows no old tmux tab; promote back and check the demoted L2 does not
-receive them either. Wizard text for an unnamed master shows the device-derived name.
+receive them either. Wizard text for an unnamed master says it is kept under this device's name (no concrete name).
 
 ## 5. Risks
 
