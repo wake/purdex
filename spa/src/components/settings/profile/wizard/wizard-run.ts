@@ -164,11 +164,20 @@ async function runSubStep(id: SubStepId, plan: WizardPlan): Promise<{ ok: true }
     if (id === 'promote') {
       // Names the demoted master only if nobody named it; never like the copy that is made next.
       const r = await promoteToMaster(plan.localId, offeredProfileName(plan.saveAs === null ? [] : [plan.saveAs]))
+      // Half a promote may be left on this device (per-workbench shown hosts A3): a notice that stays until closed —
+      // it belongs to no world, and the wizard's own line may be gone with the page (as `announceRun`).
+      if (!r.ok && r.reason === 'rollback-incomplete') {
+        useUndoToast.getState().show(useI18nStore.getState().t('settings.profile.wizard.promote.rollback_incomplete'), undefined, undefined, { persistent: true })
+      }
       return r.ok ? { ok: true } : { ok: false, reason: r.reason }
     }
     if (id === 'save') {
       // THE MASTER'S world, after the promote — see the table in the header. Not `saveScreenAsSlave`.
       const r = copyMasterAsSlave(plan.saveAs ?? '')
+      // A copy that could not be fully undone may have left the new workbench: the same notice as Settings › Profile.
+      if (!r.ok && r.reason === 'rollback-incomplete') {
+        useUndoToast.getState().show(useI18nStore.getState().t('settings.profile.local.error.rollback_incomplete'), undefined, undefined, { persistent: true })
+      }
       return r.ok ? { ok: true } : { ok: false, reason: r.reason }
     }
     // The promote and the copy took time: ask again what the plan was made against (review, attacker H1).

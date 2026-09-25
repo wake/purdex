@@ -19,6 +19,7 @@ import en from '../../../../locales/en.json'
 import { createProfile, getSection, listProfiles } from '../../../../lib/profile/api'
 import type { ProfileIndexEntry } from '../../../../lib/profile/api'
 import { useUndoToast } from '../../../../stores/useUndoToast'
+import { useShownHostsStore } from '../../../../stores/useShownHostsStore'
 import { isRetiredSection } from '../../../../lib/profile/projections'
 import { ATTACH_REASONS, announceRun, countWorld, createSotProfile, hasLiveSections, prepareRun, retargetPlan, runPlan, sotFingerprint, sotNow, subStepsOf, worldToBeMaster, type SubStepState, type WizardDraft, type WizardPlan } from './wizard-run'
 
@@ -43,7 +44,7 @@ function world(prefix: string, sentinel: string, tabs = 2): ParkedWorld {
   const ws: Workspace = { id: `${prefix}ws`, name: `${sentinel}-ws`, tabs: ids, activeTabId: ids[0] ?? null }
   return { workspaces: [ws], tabs: Object.fromEntries(ids.map((id) => [id, tab(id, sentinel)])), activeWorkspaceId: ws.id, activeTabId: ids[0] ?? null }
 }
-const slave = (id: string, w: ParkedWorld | null) => ({ id, name: `Slave ${id}`, createdAt: 1, world: w })
+const slave = (id: string, w: ParkedWorld | null) => ({ id, name: `Slave ${id}`, createdAt: 1, shownHostIds: [], world: w })
 
 function putOnScreen(w: ParkedWorld, worldId: string, epoch: number): void {
   useTabStore.setState({ tabs: w.tabs, tabOrder: w.workspaces.flatMap((x) => x.tabs), activeTabId: w.activeTabId, visitHistory: [], worldId, worldEpoch: epoch })
@@ -96,6 +97,9 @@ beforeEach(() => {
   useWorkspaceSettingsStore.setState({ workspaces: {} })
   useRebuildStore.setState({ operations: {}, lockedBy: null, lockGrant: null })
   masterOnScreen()
+  // The master's shown list readable (its stamp = relabelCount): a promote earlier in this file moved the count.
+  useLocalProfilesStore.setState({ relabelCount: 0 })
+  useShownHostsStore.setState({ ids: [], relabelStamp: 0 })
 })
 
 afterEach(() => {
@@ -204,6 +208,60 @@ describe('the order, and what a failure stops', () => {
     expect(seen).toEqual([[0, 'running'], [0, 'failed']])
     expect(attachMaster).not.toHaveBeenCalled()
     expect(slaveNamed('Kept')).toBeUndefined()
+  })
+
+  // per-workbench shown hosts A3: a promote whose rollback did not finish is shown as a persistent notice (H1c)
+  describe('a promote that could not be fully undone', () => {
+    const notice = () => useUndoToast.getState().notice?.message ?? null
+    beforeEach(() => useUndoToast.getState().dismissNotice())
+    afterEach(() => {
+      vi.restoreAllMocks()
+      useUndoToast.getState().dismissNotice()
+    })
+
+    it('rollback-incomplete: the run stops there, and the persistent notice says to reload and check', async () => {
+      vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+        throw new Error('stamp failed')
+      })
+      vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation(() => {
+        throw new Error('restore failed')
+      })
+      const { result } = await run(plan({ localId: 's1' }))
+      expect(result).toEqual({ done: false, failedAt: 0, reason: 'rollback-incomplete' })
+      expect(notice()).toBe(en['settings.profile.wizard.promote.rollback_incomplete'])
+      expect(notice()).toBe('Making this the workbench master did not finish and could not be fully undone — reload and check this device\'s workbenches.')
+      expect(attachMaster).not.toHaveBeenCalled()
+    })
+
+    it('the copy kept (save) could not be fully undone: rollback-incomplete, the attach is not made, the persistent notice', async () => {
+    const real = Storage.prototype.setItem
+    let armed = true
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (armed && k === 'purdex-local-profiles') {
+        armed = false
+        throw new Error('quota') // the copy's add: memory set, storage refused
+      }
+      real.call(this, k, v)
+    })
+    vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation(() => {
+      throw new Error('restore failed') // and its rollback
+    })
+    const { result } = await run(plan({ saveAs: 'Kept' })) // the master chosen: the save is step 0
+    expect(result).toEqual({ done: false, failedAt: 0, reason: 'rollback-incomplete' })
+    expect(notice()).toBe(en['settings.profile.local.error.rollback_incomplete'])
+    expect(attachMaster).not.toHaveBeenCalled()
+  })
+
+  it('only for rollback-incomplete: a clean write-failed, or a refusal, raises no notice', async () => {
+      vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+        throw new Error('stamp failed')
+      })
+      expect((await run(plan({ localId: 's1' }))).result).toEqual({ done: false, failedAt: 0, reason: 'write-failed' })
+      expect(notice()).toBeNull()
+      useProfileStore.setState({ masterHostId: 'h1', masterProfileId: P, masterEndpoint: '10.0.0.1:7860' })
+      expect((await run(plan({ localId: 's1' }))).result).toMatchObject({ reason: 'master-attached' })
+      expect(notice()).toBeNull()
+    })
   })
 
   it('the copy is refused (a name that is none): the attach is NOT made — a pull without the copy that was asked for would be a loss', async () => {

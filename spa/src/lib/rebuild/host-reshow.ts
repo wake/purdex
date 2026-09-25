@@ -13,22 +13,31 @@
 //   they are given, so deduping by daemon would leave the other row's panes on Rebuild.
 // - Not a transition: a host added (it has no "before"), a host removed, a daemonId learned (the local-id form keeps
 //   the host shown across the re-key).
-// - The baseline is taken once both stores have hydrated, so the boot hydration of a stored list is no transition.
-// - Never writes the tab / workspace / shown-hosts stores.
+// - PER WORKBENCH (2026-09-25 plan, A6): the list judged is the CURRENT one (`currentShownIdsNow` — the workbench on
+//   screen's), so a world switch that turns X from hidden to shown recovers X, and a write to the on-screen slave's
+//   own list does too. While nobody can say whose list applies (`resolveShownOwnerNow` is null: a switch or a promote
+//   half-arrived) nothing is judged and the baseline is kept — the unsettled moments of a switch are no transitions.
+// - The baseline is taken once FOUR stores have hydrated — the host store (which local row a `d1_…` id means), the
+//   shown store, the local profiles and the tab store (whose list, and is it settled) — so the boot hydration of a
+//   stored list, or of a daemonId, is no transition.
+// - Never writes the tab / workspace / shown-hosts / local-profiles stores.
+import { useWorkspaceStore } from '../../features/workspace/store'
 import { useHostStore } from '../../stores/useHostStore'
+import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
-import { isRefShown } from '../shown-hosts'
+import { useTabStore } from '../../stores/useTabStore'
+import { currentShownIdsNow, isRefShown, resolveShownOwnerNow } from '../shown-hosts'
 import { recoverHostSessions } from './refresh-sessions'
 
-const STORES = [useHostStore, useShownHostsStore] as const
+const STORES = [useHostStore, useShownHostsStore, useLocalProfilesStore, useTabStore] as const
 
-/** Local id → shown, for every local host; `null` until both stores have hydrated. */
+/** Local id → shown, for every local host; `null` until the four stores have hydrated. */
 let baseline: Map<string, boolean> | null = null
 let stopActive: (() => void) | null = null
 
 function snapshot(): Map<string, boolean> {
   const { hosts } = useHostStore.getState()
-  const { ids } = useShownHostsStore.getState()
+  const ids = currentShownIdsNow()
   const out = new Map<string, boolean>()
   for (const id of Object.keys(hosts)) out.set(id, isRefShown(id, hosts, ids))
   return out
@@ -36,6 +45,7 @@ function snapshot(): Map<string, boolean> {
 
 function check(): void {
   if (!STORES.every((store) => store.persist.hasHydrated())) return // the finish callback catches up
+  if (resolveShownOwnerNow() === null) return // nobody can say whose list applies: judged once somebody can
   const now = snapshot()
   const before = baseline
   baseline = now
@@ -56,6 +66,14 @@ export function startHostReshowRecovery(): () => void {
     if (state.hosts !== prev.hosts) check() // runtime / active-host churn cannot move the answer
   }))
   unsubs.push(useShownHostsStore.subscribe(check))
+  unsubs.push(useLocalProfilesStore.subscribe(check)) // the pointer, the epoch, the relabel count, the slaves' lists
+  // The world tags: only a change of them — the tab store changes with every tab.
+  unsubs.push(useTabStore.subscribe((state, prev) => {
+    if (state.worldId !== prev.worldId || state.worldEpoch !== prev.worldEpoch) check()
+  }))
+  unsubs.push(useWorkspaceStore.subscribe((state, prev) => {
+    if (state.worldId !== prev.worldId || state.worldEpoch !== prev.worldEpoch) check()
+  }))
   check()
   const stop = () => {
     for (const unsub of unsubs) unsub()

@@ -276,7 +276,7 @@ describe('only the world on screen, and only while it is settled', () => {
     // The rest arrives: the slave's own workspace owns the tab. Nothing was ever adopted.
     useWorkspaceStore.setState({ workspaces: [ws('ssssss', 'S', [slaveTab.id])], activeWorkspaceId: 'ssssss', worldId: 'slave1', worldEpoch: 7 })
     useLocalProfilesStore.setState({
-      slaves: { slave1: { id: 'slave1', name: 'S', createdAt: 1, world: null } }, slaveOrder: ['slave1'], activeProfileId: 'slave1', worldEpoch: 7,
+      slaves: { slave1: { id: 'slave1', name: 'S', createdAt: 1, shownHostIds: [], world: null } }, slaveOrder: ['slave1'], activeProfileId: 'slave1', worldEpoch: 7,
       parkedMaster: { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null },
     })
     vi.advanceTimersByTime(ADOPTION_SETTLE_MS * 4)
@@ -317,7 +317,7 @@ describe('only the world on screen, and only while it is settled', () => {
     useTabStore.setState({ worldId: 'slave1', worldEpoch: 3 })
     useWorkspaceStore.setState({ worldId: 'slave1', worldEpoch: 3 })
     useLocalProfilesStore.setState({
-      slaves: { slave1: { id: 'slave1', name: 'S', createdAt: 1, world: null } }, slaveOrder: ['slave1'], activeProfileId: 'slave1', worldEpoch: 3,
+      slaves: { slave1: { id: 'slave1', name: 'S', createdAt: 1, shownHostIds: [], world: null } }, slaveOrder: ['slave1'], activeProfileId: 'slave1', worldEpoch: 3,
       parkedMaster: { workspaces: [ws('mmmmmm', 'M')], tabs: {}, activeWorkspaceId: 'mmmmmm', activeTabId: null },
     })
     const stray = addStray()

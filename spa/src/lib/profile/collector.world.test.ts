@@ -53,7 +53,7 @@ function world(prefix: string, sentinel: string): ParkedWorld {
 const masterWorld = (): ParkedWorld => world('m', MASTER_SENTINEL)
 const slaveWorld = (): ParkedWorld => world('s', SLAVE_SENTINEL)
 
-const slaveRecord = (w: ParkedWorld | null) => ({ [SLAVE]: { id: SLAVE, name: 'Slave', createdAt: 1, world: w } })
+const slaveRecord = (w: ParkedWorld | null) => ({ [SLAVE]: { id: SLAVE, name: 'Slave', createdAt: 1, shownHostIds: [], world: w } })
 
 /** This window, before anybody switched: the master on screen, the slave parked, epoch 0. */
 function masterOnScreen(): void {

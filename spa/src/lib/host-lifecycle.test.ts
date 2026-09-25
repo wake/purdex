@@ -1352,7 +1352,7 @@ describe('host delete cascade — parked worlds', () => {
     useTabStore.setState({ worldId: 'on', worldEpoch: 1 })
     useWorkspaceStore.setState({ worldId: 'on', worldEpoch: 1 })
     useLocalProfilesStore.setState({
-      slaves: { on: { id: 'on', name: 'On', createdAt: 1, world: null }, off: { id: 'off', name: 'Off', createdAt: 2, world: parkedWorld(off.a, off.b) } },
+      slaves: { on: { id: 'on', name: 'On', createdAt: 1, shownHostIds: [], world: null }, off: { id: 'off', name: 'Off', createdAt: 2, shownHostIds: [], world: parkedWorld(off.a, off.b) } },
       slaveOrder: ['on', 'off'],
       activeProfileId: 'on',
       parkedMaster: parkedWorld(master.a, master.b),

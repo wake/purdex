@@ -13,6 +13,8 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
+import { setHostShown } from '../shown-hosts'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { PROJECTIONS } from './projections'
 import { syncIdOfSync } from './host-identity'
@@ -223,6 +225,8 @@ describe('startCollector — changes that schedule nothing', () => {
   it('knownIds', () => expectIgnored(() => useNewTabLayoutStore.setState({ knownIds: ['x'] })))
   it('layout regions', () =>
     expectIgnored(() => useLayoutStore.setState({ regions: { ...useLayoutStore.getState().regions } })))
+  // per-workbench shown hosts §2: the shown store's `relabelStamp` is device-local, never projected
+  it('the shown store\'s relabelStamp', () => expectIgnored(() => useShownHostsStore.setState({ relabelStamp: 7 })))
 })
 
 describe('startCollector — tabs and workspaces', () => {
@@ -423,6 +427,16 @@ describe('startCollector — settings', () => {
     expect(keys()).toEqual(['settings'])
     const payload = reports[0].payload as Record<string, unknown>
     expect(payload['purdex-shown-hosts']).toEqual({ ids: ['d1_unknown', 'h1'] })
+  })
+
+  it('relabelStamp never reaches the payload, and moving it builds the same hash (per-workbench shown hosts §2)', async () => {
+    useShownHostsStore.setState({ ids: ['d1_a'], relabelStamp: 0 })
+    const before = buildSectionPayload('settings')?.payload
+    useShownHostsStore.setState({ relabelStamp: 42 })
+    const after = buildSectionPayload('settings')?.payload
+    expect(after).toBeDefined()
+    expect(structuralKey(after)).toBe(structuralKey(before))
+    expect((after as Record<string, unknown>)['purdex-shown-hosts']).toEqual({ ids: ['d1_a'] })
   })
 
   it('a look write schedules `settings` and travels, its keys verbatim (h1 has a daemonId: its local id is NOT mapped)', async () => {
@@ -711,5 +725,34 @@ describe('startCollector — `hosts` is retired (host ownership H3a-2)', () => {
     useHostStore.setState({ hosts: { h1: host('h1', 'renamed') } })
     await vi.advanceTimersByTimeAsync(5000)
     expect(reports).toEqual([])
+  })
+})
+
+// === per-workbench shown hosts (2026-09-25 plan, A3): a local workbench's list never reaches `settings` ===
+
+describe('startCollector — a local workbench on screen', () => {
+  afterEach(() => {
+    useLocalProfilesStore.setState({ slaves: {}, slaveOrder: [], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 0 })
+    useTabStore.setState({ worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+    useWorkspaceStore.setState({ worldId: MASTER_PROFILE_ID, worldEpoch: 0 })
+  })
+
+  it('slave toggle builds no new settings hash', async () => {
+    const master = { workspaces: useWorkspaceStore.getState().workspaces, tabs: useTabStore.getState().tabs, activeWorkspaceId: 'A', activeTabId: 't1' }
+    useLocalProfilesStore.setState({ slaves: { s1: { id: 's1', name: 'S', createdAt: 1, shownHostIds: [], world: null } }, slaveOrder: ['s1'], activeProfileId: 's1', parkedMaster: master, worldEpoch: 1 })
+    useTabStore.setState({ worldId: 's1', worldEpoch: 1 })
+    useWorkspaceStore.setState({ worldId: 's1', worldEpoch: 1 })
+    const c = start()
+    await c.primeAll()
+    const before = buildSectionPayload('settings')?.payload
+    expect(before).toBeDefined()
+    reports = []
+
+    expect(setHostShown('h1', true)).toBe(true)
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(keys()).not.toContain('settings')
+    expect(structuralKey(buildSectionPayload('settings')?.payload)).toBe(structuralKey(before))
+    expect(useLocalProfilesStore.getState().slaves.s1.shownHostIds).toEqual(['h1']) // written — to the workbench's record
   })
 })

@@ -28,6 +28,8 @@ import {
 } from './host-reresolve'
 import { hostLookOf } from './host-look'
 import { rekeyShownHosts } from './shown-hosts'
+import { promoteToMaster } from './profile/switch-active'
+import { buildSectionPayload } from './profile/collector'
 
 const DAEMON = 'air-lab:26aaaa'
 const WIRE = syncIdOfSync(DAEMON)
@@ -65,8 +67,8 @@ function seed(): void {
     worldEpoch: 1,
     parkedMaster: world({ m1: tab('m1', leaf('pm', tmux(WIRE))), m2: tab('m2', leaf('pm2', tmux(UNKNOWN))) }),
     slaves: {
-      on: { id: 'on', name: 'On', createdAt: 1, world: null },
-      s1: { id: 's1', name: 'S', createdAt: 1, world: world({ x1: tab('x1', leaf('px', { kind: 'execution', executionId: 'e', host: WIRE })) }) },
+      on: { id: 'on', name: 'On', createdAt: 1, shownHostIds: [], world: null },
+      s1: { id: 's1', name: 'S', createdAt: 1, shownHostIds: [], world: world({ x1: tab('x1', leaf('px', { kind: 'execution', executionId: 'e', host: WIRE })) }) },
     },
     slaveOrder: ['on', 's1'],
   })
@@ -317,7 +319,7 @@ describe('the shown-hosts re-key (H2d-1)', () => {
     useShownHostsStore.setState({ ids: [UNKNOWN, LOCAL, 'tail'] })
     expect(runHostReresolve()).toBe('done')
     expect(shownNow()).toEqual({ ids: [UNKNOWN, WIRE, 'tail'] })
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.SHOWN_HOSTS)!).state).toEqual({ ids: [UNKNOWN, WIRE, 'tail'] })
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.SHOWN_HOSTS)!).state).toEqual({ ids: [UNKNOWN, WIRE, 'tail'], relabelStamp: 0 })
   })
 
   it('the d1_ id already listed: the local id is dropped (deduped, the first kept)', () => {
@@ -410,6 +412,182 @@ describe('the shown-hosts re-key (H2d-1)', () => {
     } finally {
       vi.restoreAllMocks() // a failure must not leave the setItem spy on the next test
     }
+  })
+})
+
+// Per-workbench shown hosts (2026-09-25 plan, A5): each local workbench's own list is re-keyed with the master's, by
+// the same moves, in the same step — two stores, one step, one undo that restores both.
+describe('the shown-hosts re-key — every workbench\'s list (A5)', () => {
+  const lists = () => Object.fromEntries(Object.entries(useLocalProfilesStore.getState().slaves).map(([id, s]) => [id, s.shownHostIds]))
+  const setLists = (byId: Record<string, string[]>) =>
+    useLocalProfilesStore.setState((st) => ({ slaves: Object.fromEntries(Object.entries(st.slaves).map(([id, s]) => [id, { ...s, shownHostIds: byId[id] ?? s.shownHostIds }])) }))
+
+  it("a slave's listed local id becomes the d1_ id, in place, dedup as the master's; memory and storage agree", () => {
+    useShownHostsStore.setState({ ids: [LOCAL] })
+    setLists({ on: [UNKNOWN, LOCAL, 'tail'], s1: [WIRE, LOCAL] })
+    expect(runHostReresolve()).toBe('done')
+    expect(useShownHostsStore.getState().ids).toEqual([WIRE])
+    expect(lists()).toEqual({ on: [UNKNOWN, WIRE, 'tail'], s1: [WIRE] })
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.LOCAL_PROFILES)!).state.slaves
+    expect(stored.on.shownHostIds).toEqual([UNKNOWN, WIRE, 'tail'])
+  })
+
+  it('only a slave lists the id: it still moves (the step exists for the slaves alone)', () => {
+    setLists({ s1: [LOCAL] })
+    expect(rekeyShownHosts(useHostStore.getState().hosts)).not.toBeNull()
+    runHostReresolve()
+    expect(lists().s1).toEqual([WIRE])
+    expect(useShownHostsStore.getState().ids).toEqual([])
+  })
+
+  it("the slave write is read AT COMMIT: the parked-worlds write of the same pass is kept, not clobbered (m3)", () => {
+    setLists({ s1: [LOCAL] }) // s1's parked world holds WIRE refs: planRewrite's 'parked worlds' write rewrites them
+    expect(runHostReresolve()).toBe('done')
+    const s1 = useLocalProfilesStore.getState().slaves.s1
+    expect(hostIdsIn(s1.world)).toEqual([LOCAL]) // the world rewritten (WIRE → LOCAL)…
+    expect(s1.shownHostIds).toEqual([WIRE]) // …and the list re-keyed (LOCAL → WIRE), both
+  })
+
+  it('a deletion (rewriteHostRefs) never re-keys a list — the master\'s or a slave\'s', () => {
+    useShownHostsStore.setState({ ids: [LOCAL] })
+    setLists({ s1: [LOCAL], on: [WIRE] })
+    expect(rewriteHostRefs({ [LOCAL]: WIRE })).toBe('ok')
+    expect(useShownHostsStore.getState().ids).toEqual([LOCAL])
+    expect(lists()).toEqual({ on: [WIRE], s1: [LOCAL] })
+  })
+
+  describe('two stores, one step', () => {
+    /** Nothing else moves: the shown-hosts step is the only one (a first pass moved every other ref). */
+    beforeEach(() => {
+      runHostReresolve()
+      useShownHostsStore.setState({ ids: [LOCAL] })
+      setLists({ s1: [LOCAL] })
+    })
+    afterEach(() => { vi.restoreAllMocks() })
+
+    /** The step's slave write — the only local-profiles write of this pass — sets memory, then its storage throws. */
+    function failSlaveWrite(times: number): void {
+      const real = Storage.prototype.setItem
+      let left = times
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+        if (k === STORAGE_KEYS.LOCAL_PROFILES && left > 0) {
+          left--
+          throw new DOMException('quota', 'QuotaExceededError')
+        }
+        real.call(this, k, v)
+      })
+    }
+
+    it('the second write (the slaves) fails → both stores restored; write-failed; the retry lands (m8)', () => {
+      vi.useFakeTimers()
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      failSlaveWrite(1)
+      requestHostReresolve()
+      expect(useShownHostsStore.getState().ids).toEqual([LOCAL])
+      expect(lists().s1).toEqual([LOCAL])
+      vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS)
+      expect(useShownHostsStore.getState().ids).toEqual([WIRE])
+      expect(lists().s1).toEqual([WIRE])
+    })
+
+    it('the undo fails on its first restore → it still attempts the second, then throws one error: rollback-failed; the rerun rolls forward (m12)', () => {
+      vi.useFakeTimers()
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      failSlaveWrite(1)
+      const real = useShownHostsStore.setState
+      let call = 0
+      vi.spyOn(useShownHostsStore, 'setState').mockImplementation((...args) => {
+        if (++call === 2) throw new Error('master restore failed') // call 1: the commit's write; call 2: its restore
+        real(...(args as Parameters<typeof real>))
+      })
+      expect(runHostReresolve()).toBe('rollback-failed')
+      expect(lists().s1).toEqual([LOCAL]) // the second restore was attempted although the first threw
+      expect(String(vi.mocked(console.error).mock.calls[0][0])).toMatch(/shown hosts/)
+      requestHostReresolve()
+      expect(useShownHostsStore.getState().ids).toEqual([WIRE])
+      expect(lists().s1).toEqual([WIRE])
+    })
+  })
+
+  // PR-A2 review (attacker high, critic upheld): the step writes FIELD BY FIELD — each slave's `shownHostIds` — on the
+  // local-profiles state it re-reads from storage right before computing; its undo puts a list back only where it is
+  // still exactly what the step wrote. Another renderer's write is kept.
+  describe('another renderer wrote meanwhile', () => {
+    beforeEach(() => {
+      runHostReresolve() // nothing else moves
+      useShownHostsStore.setState({ ids: [LOCAL] })
+      setLists({ on: [LOCAL], s1: [LOCAL] })
+    })
+    afterEach(() => { vi.restoreAllMocks() })
+
+    /** What another renderer persisted: `mutate` over the stored local-profiles state, written to storage only. */
+    function otherRendererWrites(mutate: (state: { slaves: Record<string, Record<string, unknown>>; [k: string]: unknown }) => void): void {
+      const env = JSON.parse(localStorage.getItem(STORAGE_KEYS.LOCAL_PROFILES)!)
+      mutate(env.state)
+      localStorage.setItem(STORAGE_KEYS.LOCAL_PROFILES, JSON.stringify(env))
+    }
+
+    it('its write in storage (not memory) between plan and commit survives, and the re-key still lands', () => {
+      const step = rekeyShownHosts(useHostStore.getState().hosts)
+      if (step === null) throw new Error('nothing to move')
+      const otherWorld = world({ z1: tab('z1', leaf('pz', tmux(UNKNOWN))) })
+      otherRendererWrites((st) => {
+        st.slaves.on.shownHostIds = ['d1_toggled'] // a show / hide in another workbench
+        st.slaves.s1.name = 'Renamed there' // a record rebuilt elsewhere (a rename, a promote's relabel)
+        st.slaves.s1.world = otherWorld // a world written there (a switch parks the screen)
+      })
+      expect(lists().on).toEqual([LOCAL]) // memory has not heard
+      step.commit()
+      const s1 = useLocalProfilesStore.getState().slaves.s1
+      expect(lists().on).toEqual(['d1_toggled'])
+      expect(s1.name).toBe('Renamed there')
+      expect(s1.world).toEqual(otherWorld)
+      expect(s1.shownHostIds).toEqual([WIRE])
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.LOCAL_PROFILES)!).state.slaves
+      expect(stored.on.shownHostIds).toEqual(['d1_toggled'])
+      expect(stored.s1).toMatchObject({ name: 'Renamed there', shownHostIds: [WIRE] })
+    })
+
+    it("the undo after a concurrent change to one slave's list: that slave keeps it, the others are put back", () => {
+      const step = rekeyShownHosts(useHostStore.getState().hosts)
+      if (step === null) throw new Error('nothing to move')
+      step.commit()
+      expect(lists()).toEqual({ on: [WIRE], s1: [WIRE] })
+      useLocalProfilesStore.getState().setSlaveShownHosts('on', () => ['d1_concurrent'])
+      useLocalProfilesStore.getState().setProfileAppearance('s1', { name: 'Renamed meanwhile' })
+      step.undo()
+      expect(lists()).toEqual({ on: ['d1_concurrent'], s1: [LOCAL] })
+      expect(useLocalProfilesStore.getState().slaves.s1.name).toBe('Renamed meanwhile') // no other field touched
+    })
+
+    it("the master's list likewise: put back only while it is what the step wrote", () => {
+      const step = rekeyShownHosts(useHostStore.getState().hosts)
+      if (step === null) throw new Error('nothing to move')
+      step.commit()
+      useShownHostsStore.getState().show('d1_concurrent')
+      step.undo()
+      expect(useShownHostsStore.getState().ids).toEqual([WIRE, 'd1_concurrent'])
+      expect(lists().s1).toEqual([LOCAL])
+    })
+  })
+
+  // The critic's cross-device case: a list naming a host by its LOCAL id must reach the SOT as the d1_ id once the
+  // workbench becomes the master — the other device only knows the host by its daemon.
+  it('a slave list with a local id → daemonId learned → re-keyed to d1_ → promoted → the master list and the settings payload carry the d1_ id', async () => {
+    useHostStore.setState({ hosts: { [LOCAL]: host(LOCAL) }, hostOrder: [LOCAL] }) // no daemonId yet
+    runHostReresolve()
+    setLists({ s1: [LOCAL] })
+    expect(runHostReresolve()).toBe('done')
+    expect(lists().s1).toEqual([LOCAL]) // nothing to move: its daemon is not known
+    useHostStore.setState({ hosts: { [LOCAL]: host(LOCAL, { daemonId: DAEMON }) } })
+    expect(runHostReresolve()).toBe('done')
+    expect(lists().s1).toEqual([WIRE])
+    const promoted = await promoteToMaster('s1', 'Old master')
+    expect(promoted.ok).toBe(true)
+    expect(useShownHostsStore.getState().ids).toEqual([WIRE])
+    const payload = buildSectionPayload('settings')?.payload as Record<string, unknown> | undefined
+    expect(payload?.['purdex-shown-hosts']).toEqual({ ids: [WIRE] })
   })
 })
 
@@ -928,8 +1106,8 @@ describe('rewriteHostRefs (explicit map — the deletion direction)', () => {
     useLocalProfilesStore.setState({
       parkedMaster: world({ m1: tab('m1', leaf('pm', tmux(LOCAL))), m2: tab('m2', leaf('pm2', tmux(UNKNOWN))) }),
       slaves: {
-        on: { id: 'on', name: 'On', createdAt: 1, world: null },
-        s1: { id: 's1', name: 'S', createdAt: 1, world: world({ x1: tab('x1', leaf('px', { kind: 'execution', executionId: 'e', host: LOCAL })) }) },
+        on: { id: 'on', name: 'On', createdAt: 1, shownHostIds: [], world: null },
+        s1: { id: 's1', name: 'S', createdAt: 1, shownHostIds: [], world: world({ x1: tab('x1', leaf('px', { kind: 'execution', executionId: 'e', host: LOCAL })) }) },
       },
     })
     useHostSettingsStore.setState({ hosts: { [LOCAL]: { editor: { homePath: '/l' } }, [UNKNOWN]: { editor: { homePath: '/u' } } } })

@@ -56,13 +56,13 @@ function putOnScreen(w: ParkedWorld, worldId: string, epoch: number): void {
 
 /** The slave on screen, the master parked. */
 function slaveOnScreen(slave: ParkedWorld, master: ParkedWorld): void {
-  useLocalProfilesStore.setState({ slaves: { [S]: { id: S, name: 'Slave', createdAt: 1, world: null } }, slaveOrder: [S], activeProfileId: S, parkedMaster: master, worldEpoch: 1 })
+  useLocalProfilesStore.setState({ slaves: { [S]: { id: S, name: 'Slave', createdAt: 1, shownHostIds: [], world: null } }, slaveOrder: [S], activeProfileId: S, parkedMaster: master, worldEpoch: 1 })
   putOnScreen(slave, S, 1)
 }
 
 /** The master on screen, the slave parked. */
 function masterOnScreen(master: ParkedWorld, slave: ParkedWorld): void {
-  useLocalProfilesStore.setState({ slaves: { [S]: { id: S, name: 'Slave', createdAt: 1, world: slave } }, slaveOrder: [S], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 1 })
+  useLocalProfilesStore.setState({ slaves: { [S]: { id: S, name: 'Slave', createdAt: 1, shownHostIds: [], world: slave } }, slaveOrder: [S], activeProfileId: MASTER_PROFILE_ID, parkedMaster: null, worldEpoch: 1 })
   putOnScreen(master, MASTER_PROFILE_ID, 1)
 }
 

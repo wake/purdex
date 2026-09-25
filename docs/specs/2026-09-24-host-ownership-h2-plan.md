@@ -285,7 +285,8 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     manual `onFinishHydration`), and `startProfileSync` (mocked) is not called — so no collector exists and no
     `settings` build or report can happen — until hydration finishes AND the migration has returned; plus a real-store
     test in `host-look-migration.test.ts` with an async storage.
-17. **Settings stores are device-global** (spec §2). The shown-hosts setting therefore applies to whatever workbench
+17. *Superseded 2026-09-25 by per-workbench lists — see 2026-09-25-per-workbench-shown-hosts-plan.md.*
+    **Settings stores are device-global** (spec §2). The shown-hosts setting therefore applies to whatever workbench
     is on screen (a local slave too) and syncs with the attached master. **Where the switch lives (rev 7):** on the
     Hosts page — `OverviewSection` gets a "Show in this workbench" switch per host (H2d-2), and `HostSidebar` shows
     the hidden style; there is **no** Settings › 工作台 editor (rev 6's `ShownHostsBlock` is dropped). Reason: rule 1
@@ -341,7 +342,8 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
        `workspaces` or `hosts` section moves because of a hide / show (tested, H2d-1 T2 and H2d-5 T2). Two devices
        toggling different hosts from the same base meet the existing per-section conflict (`locked:conflict`, a human
        picks a side — §0.6; tested, H2d-1 T2); nothing is merged or lost silently.
-    5. **Worlds.** Nothing is done per world: a parked world's panes are gated when it is switched in (the gate reads
+    5. *Superseded 2026-09-25 by per-workbench lists — see 2026-09-25-per-workbench-shown-hosts-plan.md.*
+       **Worlds.** Nothing is done per world: a parked world's panes are gated when it is switched in (the gate reads
        the live store at render). Switching workbench needs nothing.
 
     | while X is hidden in W | behaviour |
@@ -427,7 +429,8 @@ plan marks the affected tasks per option), or plain (a measurement / plan choice
     hidden reopens a tab whose X panes are gated — like any existing tab, and not "a way to open a tab on X" that
     connects; history is left as it is (plan choice).
 26. **Nothing to close** — SUPERSEDED.
-27. **Settings are device-global, tabs are per world.** The closing half is SUPERSEDED. What remains: the shown list is
+27. *Superseded 2026-09-25 by per-workbench lists — see 2026-09-25-per-workbench-shown-hosts-plan.md.*
+    **Settings are device-global, tabs are per world.** The closing half is SUPERSEDED. What remains: the shown list is
     device-global and synced with the attached master (§0.17); every world on this device — the one on screen, the
     parked master, the parked slaves — gates its panes by the same list when it is on screen.
 28. **Split survivors** — SUPERSEDED (no split).
@@ -1321,7 +1324,8 @@ from a variable).
     A: on A it is hidden (tag, no New Tab block), `settings` rev unchanged; on B — through `hosts` before H3, or added by
     hand after H3 — it is hidden too, and still nothing is written. (A host whose wire id W already lists — shown there
     from another device — appears shown on the device that adds it: the list belongs to the workbench, §0.7.)
-13. **Parked worlds.** On A switch to a local profile (slave) holding its own air26 tab; hide air26 → the slave's air26
+13. *Superseded 2026-09-25 by per-workbench lists — see 2026-09-25-per-workbench-shown-hosts-plan.md.*
+    **Parked worlds.** On A switch to a local profile (slave) holding its own air26 tab; hide air26 → the slave's air26
     pane shows the message, nothing closes; switch back to the master → its air26 panes show the message too (the list
     is device-global); show air26 → both worlds' panes attach when on screen. No `tabs.*` rev moved by any of it.
 

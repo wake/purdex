@@ -61,7 +61,7 @@ function masterOnScreen(): void {
 /** A slave on screen (its own pane on `X`); the master's world parked. */
 function slaveOnScreen(): void {
   const st = tab('st1', leaf('sp', tmux(X)))
-  useLocalProfilesStore.setState({ slaves: { [SLAVE]: { id: SLAVE, name: 'Slave', createdAt: 1, world: null } }, slaveOrder: [SLAVE], activeProfileId: SLAVE, parkedMaster: masterWorld(), worldEpoch: 1 })
+  useLocalProfilesStore.setState({ slaves: { [SLAVE]: { id: SLAVE, name: 'Slave', createdAt: 1, shownHostIds: [], world: null } }, slaveOrder: [SLAVE], activeProfileId: SLAVE, parkedMaster: masterWorld(), worldEpoch: 1 })
   useTabStore.setState({ tabs: { st1: st }, tabOrder: ['st1'], activeTabId: 'st1', visitHistory: [], worldId: SLAVE, worldEpoch: 1 })
   useWorkspaceStore.setState({ workspaces: [ws('SLAVE-ws', ['st1'])], activeWorkspaceId: 'SLAVE-ws', worldId: SLAVE, worldEpoch: 1 })
 }

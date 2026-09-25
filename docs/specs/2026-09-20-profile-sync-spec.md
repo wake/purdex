@@ -211,8 +211,9 @@ requires an explicit PR listing IA impact).
 - **master** — the one profile per client that is synced with the SOT. It is the client's only
   source of `hosts` and `settings`. **It stays synced whether or not it is the active profile**
   (decision 9).
-- **slave** — a local-only profile holding `workspaces` + tabs only. It borrows the master's hosts
-  and settings. Slaves never reach the daemon (decision 9).
+- **slave** — a local-only profile holding `workspaces` + tabs and its own shown-hosts list; it
+  borrows every other setting of the master (host looks included). Slaves never reach the daemon
+  (decision 9). (Own shown-hosts list: 2026-09-25, `2026-09-25-per-workbench-shown-hosts-plan.md`.)
 - **active** — a device-local pointer saying which profile's workspaces/tabs are on screen. Switched
   by the top-left button. Switching active never starts or stops syncing.
 

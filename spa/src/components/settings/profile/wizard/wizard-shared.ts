@@ -16,8 +16,8 @@ export const NOTICE = 'mt-2 text-xs text-yellow-500'
 export const INPUT = 'bg-surface-secondary border border-border-default rounded px-2 py-1 text-xs text-text-primary w-48'
 
 const KNOWN: Record<SubStepId, ReadonlySet<string>> = {
-  promote: new Set(['master-attached', 'busy', 'unsettled', 'superseded', 'not-found', 'bad-name', 'bad-epoch', 'write-failed']),
-  save: new Set(['unsettled', 'bad-name', 'bad-world', 'write-failed']),
+  promote: new Set(['master-attached', 'busy', 'unsettled', 'superseded', 'not-found', 'bad-name', 'bad-epoch', 'write-failed', 'rollback-incomplete']),
+  save: new Set(['unsettled', 'bad-name', 'bad-world', 'write-failed', 'rollback-incomplete']),
   attach: new Set(ATTACH_REASONS),
 }
 

@@ -2,11 +2,13 @@
 // ownership plan H2d-5 T5). A scan of the import declarations of every NON-test source file under `src/`:
 //
 // 1. `stores/useShownHostsStore` is imported only by the files listed below — the reader module, the host store (its
-//    delete cascade), the re-resolve pass, the `settings` builder / applier and the re-show recovery. Everything else
+//    delete cascade), the re-resolve pass, the `settings` builder / applier, the re-show recovery, the local-profiles
+//    store (only `sanitizeShownIds`, for a local workbench's own list — per-workbench shown hosts A1) and the promote
+//    (switch-active.ts: the list follows the workbench into and out of the master's store — A3). Everything else
 //    goes through `lib/shown-hosts` (the one predicate).
 // 2. `lib/shown-hosts` is imported only by the H2d-2 / H2d-3 / H2d-4 production files listed below (the Hosts page, the
-//    openers and landings, the pane gate, the StatusBar, the per-pane sweeps, the re-show recovery) and the re-resolve
-//    pass. The list is the TRUE set on main after H2d-4b, derived from the code (it is wider than the plan's: H2d-3
+//    openers and landings, the pane gate, the StatusBar, the per-pane sweeps, the re-show recovery), the re-resolve
+//    pass and switch-active.ts (a saved screen copies the current list — per-workbench shown hosts A7). The list is the TRUE set on main after H2d-4b, derived from the code (it is wider than the plan's: H2d-3
 //    added `HistoryPage.tsx` and `useShortcuts.ts` — reopen-closed lands on the Hosts page — and H2d-4 added
 //    `HostHiddenPane.tsx`). A new importer turns this test red: a new consumer of the shown list must be a decision,
 //    reviewed against §0.21's "not filtered" table, not an accident.
@@ -31,9 +33,11 @@ const STORE_IMPORTERS = [
   'src/lib/host-reresolve.ts',
   'src/lib/profile/apply-to-stores.ts',
   'src/lib/profile/collector.ts',
+  'src/lib/profile/switch-active.ts',
   'src/lib/rebuild/host-reshow.ts',
   'src/lib/shown-hosts.ts',
   'src/stores/useHostStore.ts',
+  'src/stores/useLocalProfilesStore.ts',
 ]
 
 /** Importers of `lib/shown-hosts` (non-test), verbatim. */
@@ -56,6 +60,7 @@ const READER_IMPORTERS = [
   'src/lib/deeplink/deeplinkResolver.ts',
   'src/lib/host-reresolve.ts',
   'src/lib/nex/handoff.ts',
+  'src/lib/profile/switch-active.ts',
   'src/lib/rebuild/cwd-probe.ts',
   'src/lib/rebuild/host-reshow.ts',
   'src/lib/rebuild/reconcile-host.ts',

@@ -7,12 +7,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ADOPTION_SETTLE_MS, startStandaloneAdoption } from '../../features/workspace/lib/adopt-standalone'
 import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from '../../features/workspace/store'
+import { nextWorkspaceName } from '../../features/workspace/lib/workspace-naming'
 import { useHostStore } from '../../stores/useHostStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { useProfileStore } from '../../stores/useProfileStore'
 import { useRebuildStore } from '../../stores/useRebuildStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { currentShownIdsNow } from '../shown-hosts'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import { STORAGE_KEYS } from '../storage'
 import { MAX_WORLD_EPOCH, readWorldEpochFence } from '../storage/world-fence'
@@ -29,6 +32,8 @@ import { buildSettingsSection, repairTabOwnership } from './sections'
 import {
   PROFILE_SWITCH_LOCK_OWNER,
   copyMasterAsSlave,
+  createBlankSlave,
+  createSettingsCopySlave,
   deleteSlave,
   promoteToMaster,
   renameSlave,
@@ -88,7 +93,7 @@ const masterWorld = (): ParkedWorld => world('m', MASTER_SENTINEL)
 const slaveWorld = (): ParkedWorld => world('s', SLAVE_SENTINEL)
 const otherWorld = (): ParkedWorld => world('o', OTHER_SENTINEL)
 
-const slave = (id: string, w: ParkedWorld | null) => ({ id, name: `Slave ${id}`, createdAt: 1, world: w })
+const slave = (id: string, w: ParkedWorld | null) => ({ id, name: `Slave ${id}`, createdAt: 1, shownHostIds: [], world: w })
 
 function putOnScreen(w: ParkedWorld, worldId: string, epoch: number): void {
   useTabStore.setState({ tabs: w.tabs, tabOrder: w.workspaces.flatMap((x) => x.tabs), activeTabId: w.activeTabId, visitHistory: [], worldId, worldEpoch: epoch })
@@ -904,6 +909,190 @@ describe('saveScreenAsSlave', () => {
   })
 })
 
+// === C2. createBlankSlave ===
+
+describe('createBlankSlave', () => {
+  it('adds one parked slave, under the name given, whose world is ONE empty workspace named as a new workspace is (`nextWorkspaceName`)', () => {
+    const before = useLocalProfilesStore.getState().slaveOrder.length
+    const result = createBlankSlave('Blank')
+    if (!result.ok) throw new Error(result.reason)
+    const local = useLocalProfilesStore.getState()
+    expect(local.slaveOrder).toHaveLength(before + 1)
+    expect(local.slaveOrder.at(-1)).toBe(result.id)
+    expect(local.slaves[result.id].name).toBe('Blank')
+
+    const w = local.slaves[result.id].world
+    if (w === null) throw new Error('not parked')
+    expect(w.workspaces).toHaveLength(1)
+    const [ws] = w.workspaces
+    expect(ws.name).toBe(nextWorkspaceName([]))
+    expect(ws.name).toBe('Workspace 1')
+    expect(ws).toMatchObject({ tabs: [], activeTabId: null, moduleConfig: {} })
+    expect(w.tabs).toEqual({})
+    expect(w).toMatchObject({ activeWorkspaceId: ws.id, activeTabId: null })
+    // a fresh id: no world on this device holds it
+    for (const other of [masterWorld(), slaveWorld(), otherWorld()]) expect(mintedIds(other).workspaces).not.toContain(ws.id)
+    expect(JSON.stringify(w)).not.toContain('SENTINEL')
+  })
+
+  it('the screen does not move: tabs, workspaces and the active profile are untouched', () => {
+    slaveOnScreen()
+    const before = threeStores().slice(LOCAL_FIELDS.length)
+    expect(createBlankSlave('Blank').ok).toBe(true)
+    threeStores().slice(LOCAL_FIELDS.length).forEach((v, i) => expect(v).toBe(before[i]))
+    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: SLAVE, worldEpoch: 1 })
+    expect(screen()).toEqual(slaveWorld())
+  })
+
+  it('a blank name: refused, nothing added', () => {
+    const before = threeStores()
+    expect(createBlankSlave('')).toEqual({ ok: false, reason: 'bad-name' })
+    threeStores().forEach((v, i) => expect(v).toBe(before[i]))
+  })
+
+  it('switched to, the screen is that one empty workspace; switched back, the master is whole again', async () => {
+    const result = createBlankSlave('Blank')
+    if (!result.ok) throw new Error(result.reason)
+    const parked = useLocalProfilesStore.getState().slaves[result.id].world
+
+    expect(await switchActiveProfile(result.id)).toEqual({ ok: true })
+    expect(screen()).toEqual(parked)
+    expect(useWorkspaceStore.getState().workspaces).toHaveLength(1)
+    expect(useTabStore.getState().tabs).toEqual({})
+    expect(useTabStore.getState().tabOrder).toEqual([])
+
+    expect(await switchActiveProfile(MASTER_PROFILE_ID)).toEqual({ ok: true })
+    expect(screen()).toEqual(masterWorld())
+    expect(useLocalProfilesStore.getState().slaves[result.id].world).toEqual(parked)
+  })
+})
+
+// === C3. The three ways to a new workbench and their shown-hosts lists (per-workbench plan §0.2 / §0.3, B1) ===
+
+// PR-B review (attacker high): a create whose write failed AND whose rollback failed may have left the new slave in the
+// store; it must say so (`rollback-incomplete`), never a plain `write-failed` the user answers with a second click.
+describe('every create / copy path: a failed write, and a failed rollback', () => {
+  const PATHS = [
+    ['New blank workbench', () => createBlankSlave('New')],
+    ['Duplicate settings only', () => createSettingsCopySlave('New')],
+    ['Duplicate all', () => saveScreenAsSlave('New')],
+    ["the wizard's copy of the master", () => copyMasterAsSlave('New')],
+  ] as const
+  afterEach(() => { vi.restoreAllMocks() })
+
+  /** The add's storage write throws once, after persist has set memory. */
+  function failAddWrite(): void {
+    const real = Storage.prototype.setItem
+    let left = 1
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === STORAGE_KEYS.LOCAL_PROFILES && left > 0) {
+        left--
+        throw new Error('quota')
+      }
+      real.call(this, k, v)
+    })
+  }
+
+  it.each(PATHS)('%s: the write fails, the rollback works → write-failed, no slave added', (_name, make) => {
+    const order = useLocalProfilesStore.getState().slaveOrder
+    failAddWrite()
+    expect(make()).toEqual({ ok: false, reason: 'write-failed', detail: 'quota' })
+    expect(useLocalProfilesStore.getState().slaveOrder).toEqual(order)
+  })
+
+  it.each(PATHS)('%s: the write fails and the rollback fails too → rollback-incomplete', (_name, make) => {
+    failAddWrite()
+    vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation(() => {
+      throw new Error('restore failed')
+    })
+    expect(make()).toEqual({ ok: false, reason: 'rollback-incomplete' })
+  })
+
+  it('a copy whose workspace-scoped settings cannot be put back → rollback-incomplete', () => {
+    useWorkspaceSettingsStore.setState({ workspaces: { mws: { files: { a: 1 } } } })
+    const realWs = useWorkspaceSettingsStore.setState
+    let wsCalls = 0
+    vi.spyOn(useWorkspaceSettingsStore, 'setState').mockImplementation((...args) => {
+      wsCalls++
+      if (wsCalls === 1) {
+        realWs(...(args as Parameters<typeof realWs>))
+        throw new Error('scoped write failed') // the copy's scoped settings: memory set, storage refused
+      }
+      throw new Error('scoped restore failed')
+    })
+    expect(saveScreenAsSlave('New')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+  })
+})
+
+describe('the three creates — their shown-hosts lists (B1)', () => {
+  const CURRENT = ['d1_current']
+  const SLAVE_LIST = ['d1_slave']
+  const created = (result: { ok: boolean; id?: string; reason?: string }) => {
+    if (!result.ok || result.id === undefined) throw new Error(result.reason ?? 'refused')
+    return useLocalProfilesStore.getState().slaves[result.id]
+  }
+
+  beforeEach(() => {
+    useShownHostsStore.setState({ ids: CURRENT, relabelStamp: useLocalProfilesStore.getState().relabelCount })
+  })
+  afterEach(() => {
+    useShownHostsStore.setState({ ids: [], relabelStamp: 0 })
+  })
+
+  it('createBlankSlave: [] — every host hidden, whatever the current list is (§0.3)', () => {
+    expect(created(createBlankSlave('Blank')).shownHostIds).toEqual([])
+  })
+
+  it('createSettingsCopySlave: ONE empty workspace named as a new one, no tab — and a copy of the CURRENT list', () => {
+    const slave = created(createSettingsCopySlave('Settings'))
+    const w = slave.world
+    if (w === null) throw new Error('not parked')
+    expect(w.workspaces).toHaveLength(1)
+    expect(w.workspaces[0]).toMatchObject({ name: 'Workspace 1', tabs: [], activeTabId: null })
+    expect(w.tabs).toEqual({})
+    expect(w).toMatchObject({ activeWorkspaceId: w.workspaces[0].id, activeTabId: null })
+    expect(JSON.stringify(w)).not.toContain('SENTINEL')
+    expect(slave.shownHostIds).toEqual(CURRENT)
+    expect(slave.shownHostIds).not.toBe(useShownHostsStore.getState().ids) // a fresh array
+  })
+
+  it("createSettingsCopySlave with a slave on screen: that slave's list; the screen does not move", () => {
+    slaveOnScreen()
+    useLocalProfilesStore.getState().setSlaveShownHosts(SLAVE, () => SLAVE_LIST)
+    const before = threeStores().slice(LOCAL_FIELDS.length)
+    expect(created(createSettingsCopySlave('Settings')).shownHostIds).toEqual(SLAVE_LIST)
+    threeStores().slice(LOCAL_FIELDS.length).forEach((v, i) => expect(v).toBe(before[i]))
+    expect(useLocalProfilesStore.getState()).toMatchObject({ activeProfileId: SLAVE, worldEpoch: 1 })
+  })
+
+  it('createSettingsCopySlave while unsettled: [] — the current list fails closed, as saveScreenAsSlave', () => {
+    useTabStore.setState({ worldEpoch: 9 })
+    expect(created(createSettingsCopySlave('Settings')).shownHostIds).toEqual([])
+  })
+
+  it('no name, icon or colour is copied by any of the three; a blank name is refused', () => {
+    const local = useLocalProfilesStore.getState()
+    local.setProfileAppearance(MASTER_PROFILE_ID, { name: 'Work', icon: 'Briefcase', color: '#ef4444' })
+    for (const make of [saveScreenAsSlave, createSettingsCopySlave, createBlankSlave]) {
+      const slave = created(make('Plain'))
+      expect(slave.name).toBe('Plain')
+      expect(slave).not.toHaveProperty('icon')
+      expect(slave).not.toHaveProperty('color')
+      expect(make('  ')).toEqual({ ok: false, reason: 'bad-name' })
+    }
+  })
+
+  it('saveScreenAsSlave ("Duplicate all"): the workspaces and tabs, tmux bindings verbatim, AND the current list', () => {
+    const slave = created(saveScreenAsSlave('All'))
+    expect(slave.shownHostIds).toEqual(CURRENT)
+    const w = slave.world
+    if (w === null) throw new Error('not parked')
+    expect(shapeOf(w)).toEqual(shapeOf(masterWorld()))
+    const bindings = (world: ParkedWorld) => Object.values(world.tabs).flatMap((t) => JSON.stringify(t.layout).match(/"sessionCode":"[^"]*","mode":"[^"]*","cachedName":"[^"]*","tmuxInstance":"[^"]*"/g) ?? [])
+    expect(bindings(w).sort()).toEqual(bindings(masterWorld()).sort())
+  })
+})
+
 // === D. rename / delete / reorder ===
 
 describe('renameSlave / reorderSlaves / deleteSlave', () => {
@@ -1083,5 +1272,206 @@ describe('promoteToMaster — a move, never a copy (decision 10)', () => {
     })
     expect((await promoteToMaster(SLAVE, 'Old')).ok).toBe(false)
     expect(useLocalProfilesStore.getState().master).toBe(master)
+  })
+})
+
+// === E. The shown-hosts list follows the workbench (per-workbench shown hosts, 2026-09-25 plan A3) ===
+
+describe('promoteToMaster — the shown-hosts list follows the workbench (A3)', () => {
+  const MASTER_LIST = ['d1_master']
+  const SLAVE_LIST = ['d1_slave']
+  const shown = () => useShownHostsStore.getState()
+  const local = () => useLocalProfilesStore.getState()
+  const shownFields = () => [shown().ids, shown().relabelStamp]
+
+  beforeEach(() => {
+    useShownHostsStore.setState({ ids: MASTER_LIST, relabelStamp: local().relabelCount })
+    local().setSlaveShownHosts(SLAVE, () => SLAVE_LIST)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks() // before the reset below: a test spies on the stores' setState (the outer afterEach runs later)
+    useShownHostsStore.setState({ ids: [], relabelStamp: 0 })
+  })
+
+  it('the promoted slave\'s list becomes the master\'s (the store, stamped with the new relabelCount); the demoted workbench keeps the old master list (m4)', async () => {
+    const slaveList = local().slaves[SLAVE].shownHostIds
+    const result = await promoteToMaster(SLAVE, 'Old master')
+    if (!result.ok) throw new Error(result.reason)
+    expect(shown().ids).toBe(slaveList)
+    expect(shown().relabelStamp).toBe(local().relabelCount)
+    expect(local().slaves[result.demotedId].shownHostIds).toEqual(MASTER_LIST)
+    expect(persisted(STORAGE_KEYS.SHOWN_HOSTS)).toEqual({ ids: SLAVE_LIST, relabelStamp: local().relabelCount })
+    // the master was on screen: the screen is now the demoted workbench, and reads ITS list — the one it had
+    expect(currentShownIdsNow()).toEqual(MASTER_LIST)
+  })
+
+  it('that slave on screen: the screen becomes the master and keeps reading the list it had', async () => {
+    slaveOnScreen()
+    local().setSlaveShownHosts(SLAVE, () => SLAVE_LIST)
+    expect(currentShownIdsNow()).toEqual(SLAVE_LIST)
+    const result = await promoteToMaster(SLAVE, 'Old master')
+    if (!result.ok) throw new Error(result.reason)
+    expect(currentShownIdsNow()).toEqual(SLAVE_LIST)
+    expect(local().slaves[result.demotedId].shownHostIds).toEqual(MASTER_LIST)
+  })
+
+  it('a refusal writes neither list', async () => {
+    const before = shownFields()
+    const slaves = local().slaves
+    expect(await promoteToMaster('nope', 'Old')).toEqual({ ok: false, reason: 'not-found' })
+    shownFields().forEach((v, i) => expect(v).toBe(before[i]))
+    expect(local().slaves).toBe(slaves)
+  })
+
+  describe('a write that throws: every store put back, in reverse (codex #3)', () => {
+    const everything = () => [...threeStores(), ...shownFields()]
+
+    /** `key`'s storage write throws the first time (after persist has set memory). */
+    const failStorageOnce = (key: string): void => {
+      const real = Storage.prototype.setItem
+      let thrown = 0
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, value: string) {
+        if (k === key && thrown++ === 0) throw new Error(`${k} write failed`)
+        real.call(this, k, value)
+      })
+    }
+
+    it('the local-profiles write fails → write-failed, all four stores as they were', async () => {
+      const before = everything()
+      failStorageOnce(STORAGE_KEYS.LOCAL_PROFILES)
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'write-failed', detail: `${STORAGE_KEYS.LOCAL_PROFILES} write failed` })
+      everything().forEach((v, i) => expect(v).toBe(before[i]))
+    })
+
+    it('the shown-store write fails (memory set, storage threw) → write-failed, the shown store AND the parking lot back (m6)', async () => {
+      const before = everything()
+      failStorageOnce(STORAGE_KEYS.SHOWN_HOSTS)
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'write-failed', detail: `${STORAGE_KEYS.SHOWN_HOSTS} write failed` })
+      everything().forEach((v, i) => expect(v).toBe(before[i]))
+    })
+
+    it('restampWorld fails → write-failed, the shown store and the parking lot back too (m6)', async () => {
+      const before = everything()
+      vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+        throw new Error('stamp failed')
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'write-failed', detail: 'stamp failed' })
+      everything().forEach((v, i) => expect(v).toBe(before[i]))
+    })
+
+    it('… and the parking lot\'s restore fails too → rollback-incomplete; the shown store is still put back', async () => {
+      const shownBefore = shownFields()
+      vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+        throw new Error('stamp failed')
+      })
+      vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation(() => {
+        throw new Error('restore failed')
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+      shownFields().forEach((v, i) => expect(v).toBe(shownBefore[i]))
+    })
+
+    it('… and the shown store\'s restore fails → rollback-incomplete; the parking lot is still put back', async () => {
+      const localBefore = pick(local(), LOCAL_FIELDS)
+      vi.spyOn(useWorkspaceStore, 'setState').mockImplementationOnce(() => {
+        throw new Error('stamp failed')
+      })
+      const real = useShownHostsStore.setState
+      let calls = 0
+      vi.spyOn(useShownHostsStore, 'setState').mockImplementation((...args) => {
+        if (++calls > 1) throw new Error('restore failed') // the promote's write goes through; its restore does not
+        real(...(args as Parameters<typeof real>))
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+      pick(local(), LOCAL_FIELDS).forEach((v, i) => expect(v).toBe(localBefore[i]))
+    })
+
+    it('the shown-store write fails and the local restore fails → rollback-incomplete', async () => {
+      failStorageOnce(STORAGE_KEYS.SHOWN_HOSTS)
+      vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation(() => {
+        throw new Error('restore failed')
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+    })
+
+    it('the local write fails and its own restore fails → rollback-incomplete', async () => {
+      failStorageOnce(STORAGE_KEYS.LOCAL_PROFILES)
+      vi.spyOn(useLocalProfilesStore, 'setState').mockImplementation(() => {
+        throw new Error('restore failed')
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+    })
+
+    // restampWorld's own two restores (master-world.ts): each is attempted even when the other throws, and a failure
+    // is reported (m11). The workspace write sets memory and then its storage throws, so BOTH live stores hold the new
+    // tag when the restores run.
+    it("restampWorld: the tab store's restore fails → the workspace store is still put back; rollback-incomplete (m11)", async () => {
+      const wsBefore = pick(useWorkspaceStore.getState(), WS_FIELDS)
+      failStorageOnce(STORAGE_KEYS.WORKSPACES)
+      const real = useTabStore.setState
+      let calls = 0
+      vi.spyOn(useTabStore, 'setState').mockImplementation((...args) => {
+        if (++calls === 2) throw new Error('tab restore failed')
+        real(...(args as Parameters<typeof real>))
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+      pick(useWorkspaceStore.getState(), WS_FIELDS).forEach((v, i) => expect(v).toBe(wsBefore[i]))
+    })
+
+    it("restampWorld: the workspace store's restore fails → the tab store is still put back; rollback-incomplete", async () => {
+      const tabBefore = pick(useTabStore.getState(), TAB_FIELDS)
+      let calls = 0
+      vi.spyOn(useWorkspaceStore, 'setState').mockImplementation(() => {
+        ++calls
+        throw new Error(calls === 1 ? 'stamp failed' : 'ws restore failed')
+      })
+      expect(await promoteToMaster(SLAVE, 'Old')).toEqual({ ok: false, reason: 'rollback-incomplete' })
+      pick(useTabStore.getState(), TAB_FIELDS).forEach((v, i) => expect(v).toBe(tabBefore[i]))
+    })
+  })
+})
+
+describe("the copies carry a shown-hosts list (per-workbench shown hosts A7)", () => {
+  const MASTER_LIST = ['d1_master']
+  const SLAVE_LIST = ['d1_slave']
+  const listOf = (result: { ok: boolean; id?: string }) => {
+    if (!result.ok || result.id === undefined) throw new Error('not copied')
+    return useLocalProfilesStore.getState().slaves[result.id].shownHostIds
+  }
+
+  beforeEach(() => {
+    useShownHostsStore.setState({ ids: MASTER_LIST, relabelStamp: useLocalProfilesStore.getState().relabelCount })
+  })
+
+  afterEach(() => {
+    useShownHostsStore.setState({ ids: [], relabelStamp: 0 })
+  })
+
+  it("copyMasterAsSlave: the master's list, wherever the master is (a slave on screen here)", () => {
+    slaveOnScreen()
+    useLocalProfilesStore.getState().setSlaveShownHosts(SLAVE, () => SLAVE_LIST)
+    const list = listOf(copyMasterAsSlave('Copy'))
+    expect(list).toEqual(MASTER_LIST)
+    expect(list).not.toBe(useShownHostsStore.getState().ids) // a copy, not the store's array
+  })
+
+  it("saveScreenAsSlave: the CURRENT list — the screen's workbench's", () => {
+    expect(listOf(saveScreenAsSlave('Saved master'))).toEqual(MASTER_LIST)
+    slaveOnScreen()
+    useLocalProfilesStore.getState().setSlaveShownHosts(SLAVE, () => SLAVE_LIST)
+    expect(listOf(saveScreenAsSlave('Saved slave'))).toEqual(SLAVE_LIST)
+  })
+
+  it('saveScreenAsSlave of an unsettled screen: [] (the current list fails closed — accepted)', () => {
+    useTabStore.setState({ worldEpoch: 9 })
+    expect(listOf(saveScreenAsSlave('Saved'))).toEqual([])
+  })
+
+  it('writing the copy\'s list later leaves its source alone', () => {
+    const id = copyMasterAsSlave('Copy')
+    if (!id.ok) throw new Error(id.reason)
+    useLocalProfilesStore.getState().setSlaveShownHosts(id.id, () => ['d1_other'])
+    expect(useShownHostsStore.getState().ids).toEqual(MASTER_LIST)
   })
 })

@@ -247,6 +247,30 @@ export function commitTabWorld(world: TabWorld, afterWrite?: () => void, stamp?:
   }
 }
 
+/** A restore that says whether it worked: `false` when `setState` threw (memory may be back, storage is not). */
+function tryRestore(store: WritableStore, old: Record<string, unknown>): boolean {
+  try {
+    store.setState(old)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Thrown by `restampWorld` when its write failed AND one of its restores failed as well: the live stores may hold
+ * the new tag. `cause` is the write's error; `failed` names the restores that threw (per-workbench shown hosts A3 —
+ * a promote reports this as `rollback-incomplete`, never as a clean `write-failed`).
+ */
+export class RestampRollbackIncomplete extends Error {
+  readonly failed: readonly ('tab' | 'workspace')[]
+  constructor(cause: unknown, failed: readonly ('tab' | 'workspace')[]) {
+    super(`the world tag could not be fully restored (${failed.join(', ')})`, { cause })
+    this.name = 'RestampRollbackIncomplete'
+    this.failed = failed
+  }
+}
+
 /**
  * The world on screen CHANGES HANDS and its content does not — a promote (Task 5)
  * relabels what the screen holds, or only moves the epoch under it. Writes the
@@ -254,6 +278,10 @@ export function commitTabWorld(world: TabWorld, afterWrite?: () => void, stamp?:
  * gets a new identity, so no pane re-renders and no terminal re-attaches. Both
  * or neither, like `commitTabWorld`; the caller has written — and on a throw
  * takes back — the same epoch in `useLocalProfilesStore`.
+ *
+ * On a throw BOTH restores are attempted, whatever the first one does; if either
+ * throws, `RestampRollbackIncomplete` (carrying the write's error) is thrown
+ * instead of the write's error.
  */
 export function restampWorld(stamp: WorldStamp): void {
   const tabState = useTabStore.getState()
@@ -268,8 +296,10 @@ export function restampWorld(stamp: WorldStamp): void {
     wsStore.setState(tag)
   } catch (err) {
     stamp.beforeRollback?.()
-    restore(tabStore, oldTab)
-    restore(wsStore, oldWs)
+    const failed: ('tab' | 'workspace')[] = []
+    if (!tryRestore(tabStore, oldTab)) failed.push('tab')
+    if (!tryRestore(wsStore, oldWs)) failed.push('workspace')
+    if (failed.length > 0) throw new RestampRollbackIncomplete(err, failed)
     throw err
   }
 }

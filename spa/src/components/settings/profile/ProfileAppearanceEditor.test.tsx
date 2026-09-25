@@ -20,6 +20,7 @@ const slave = (extra: Partial<LocalProfile> = {}): LocalProfile => ({
   id: 's1',
   name: 'Scratch',
   createdAt: 1,
+  shownHostIds: [],
   world: { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null },
   ...extra,
 })

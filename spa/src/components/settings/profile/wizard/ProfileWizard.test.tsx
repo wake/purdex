@@ -104,7 +104,7 @@ beforeEach(() => {
   // `getSection` answers, but nothing of the wizard may ask it (host ownership H3b)
   vi.mocked(getSection).mockReset().mockResolvedValue({ kind: 'ok', value: null })
   useDeviceNameStore.setState({ deviceName: 'Laptop' })
-  useLocalProfilesStore.setState({ slaves: { s1: { id: 's1', name: 'Scratch', createdAt: 1, world: { workspaces: [], tabs: tabs(7), activeWorkspaceId: null, activeTabId: null } } }, slaveOrder: ['s1'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
+  useLocalProfilesStore.setState({ slaves: { s1: { id: 's1', name: 'Scratch', createdAt: 1, shownHostIds: [], world: { workspaces: [], tabs: tabs(7), activeWorkspaceId: null, activeTabId: null } } }, slaveOrder: ['s1'], activeProfileId: 'master', parkedMaster: null, worldEpoch: 0, relabelCount: 0, master: { name: null } })
 })
 
 afterEach(() => cleanup())
@@ -414,7 +414,7 @@ describe('step 4 — the direction', () => {
   })
 
   it('the copy\'s default name never repeats a name in use', async () => {
-    useLocalProfilesStore.setState({ slaves: { s1: { id: 's1', name: 'Laptop', createdAt: 1, world: { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null } } }, master: { name: 'Laptop 2' } })
+    useLocalProfilesStore.setState({ slaves: { s1: { id: 's1', name: 'Laptop', createdAt: 1, shownHostIds: [], world: { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null } } }, master: { name: 'Laptop 2' } })
     await toDirection()
     click('profile-wizard-direction-pull')
     expect((screen.getByTestId('profile-wizard-save-name') as HTMLInputElement).value).toBe('Laptop 3')

@@ -665,7 +665,7 @@ describe('useShortcuts', () => {
       const ws2 = useWorkspaceStore.getState().addWorkspace('WS2')
       useWorkspaceStore.getState().setActiveWorkspace(ws2.id)
       useLocalProfilesStore.setState({
-        slaves: { s1: { id: 's1', name: 'Scratch', createdAt: 1, world: { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null } } },
+        slaves: { s1: { id: 's1', name: 'Scratch', createdAt: 1, shownHostIds: [], world: { workspaces: [], tabs: {}, activeWorkspaceId: null, activeTabId: null } } },
         slaveOrder: ['s1'],
       })
       renderHook(() => useShortcuts())

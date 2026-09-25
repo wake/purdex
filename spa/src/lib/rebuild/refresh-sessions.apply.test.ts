@@ -129,7 +129,7 @@ describe('a profile apply is reconciled by its lock release (#1310)', () => {
     const master = useTabStore.getState()
     const parked: ParkedWorld = { tabs: master.tabs, workspaces: useWorkspaceStore.getState().workspaces, activeWorkspaceId: 'wa', activeTabId: 'a1' }
     const st = tab('st1', leaf('SLAVE-p1'))
-    useLocalProfilesStore.setState({ slaves: { [SLAVE]: { id: SLAVE, name: 'Slave', createdAt: 1, world: null } }, slaveOrder: [SLAVE], activeProfileId: SLAVE, parkedMaster: parked, worldEpoch: 1 })
+    useLocalProfilesStore.setState({ slaves: { [SLAVE]: { id: SLAVE, name: 'Slave', createdAt: 1, shownHostIds: [], world: null } }, slaveOrder: [SLAVE], activeProfileId: SLAVE, parkedMaster: parked, worldEpoch: 1 })
     useTabStore.setState({ tabs: { st1: st }, tabOrder: ['st1'], activeTabId: 'st1', visitHistory: ['st1'], worldId: SLAVE, worldEpoch: 1 })
     useWorkspaceStore.setState({ workspaces: [ws('SLAVE-ws', ['st1'])], activeWorkspaceId: 'SLAVE-ws', worldId: SLAVE, worldEpoch: 1 })
     const screenTabs = useTabStore.getState().tabs

@@ -10,6 +10,8 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
+import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { PaneRebuildRecord, Tab, TmuxSessionContent } from '../../types/tab'
 
 /** A full `Session`, so the dep-injected fakes stay type-checked (copied from engine.test.ts:18). */
@@ -359,9 +361,18 @@ describe('runRevivePass', () => {
   // #1255 SPA spec §3.5 (codex plan review #1): the snapshot is bound to the
   // world it was reconciled for — the world-epoch fence at that moment.
   describe('bound to the world (G6)', () => {
-    const setFence = (n: number) => localStorage.setItem(STORAGE_KEYS.WORLD_EPOCH, String(n))
-    beforeEach(() => localStorage.removeItem(STORAGE_KEYS.WORLD_EPOCH))
-    afterEach(() => localStorage.removeItem(STORAGE_KEYS.WORLD_EPOCH))
+    /** A switch to epoch `n`: the fence AND the three world stores (the shown list is read only in a settled world —
+     *  per-workbench shown hosts A2 — and a store behind the fence would read every host hidden). */
+    const setFence = (n: number) => {
+      localStorage.setItem(STORAGE_KEYS.WORLD_EPOCH, String(n))
+      for (const store of [useTabStore, useWorkspaceStore, useLocalProfilesStore] as unknown as { setState: (p: object) => void }[]) store.setState({ worldEpoch: n })
+    }
+    const resetWorld = () => {
+      localStorage.removeItem(STORAGE_KEYS.WORLD_EPOCH)
+      for (const store of [useTabStore, useWorkspaceStore, useLocalProfilesStore] as unknown as { setState: (p: object) => void }[]) store.setState({ worldEpoch: 0 })
+    }
+    beforeEach(resetWorld)
+    afterEach(resetWorld)
 
     it('a snapshot noted before the world changed is ignored by runRevivePass', () => {
       noteReconciledSessions('h1', [live]) // no fence yet: a device that never switched

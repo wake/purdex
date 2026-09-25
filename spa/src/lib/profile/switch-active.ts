@@ -106,15 +106,19 @@ import { MASTER_PROFILE_ID, normalizeLocalProfileName, useLocalProfilesStore } f
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { masterAttachedInStorage, useProfileStore } from '../../stores/useProfileStore'
 import { useRebuildStore } from '../../stores/useRebuildStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
+import { createWorkspace } from '../../types/tab'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
+import { nextWorkspaceName } from '../../features/workspace/lib/workspace-naming'
 import { generateId } from '../id'
 import { STORAGE_KEYS } from '../storage/keys'
 import { isWorldEpoch, nextWorldEpoch, persistedWorldEpoch, raiseWorldEpochFence, readWorldEpochFence } from '../storage/world-fence'
-import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld } from './master-world'
+import { commitTabWorld, readMasterWorld, recoverUnsettledWorld, restampWorld, RestampRollbackIncomplete } from './master-world'
 import type { MasterWorldRead } from './master-world'
 import { withWorldLock } from '../storage/world-lock'
+import { currentShownIdsNow, masterShownIdsNow } from '../shown-hosts'
 import { repairTabOwnership } from './sections'
 
 export const PROFILE_SWITCH_LOCK_OWNER = 'profile-switch'
@@ -135,14 +139,16 @@ function captureLocal(): LocalSnapshot {
   return { slaves: s.slaves, slaveOrder: s.slaveOrder, activeProfileId: s.activeProfileId, parkedMaster: s.parkedMaster, worldEpoch: s.worldEpoch, relabelCount: s.relabelCount, master: s.master } // `master`: a promote moves the looks too
 }
 
-/** As master-world.ts's `restore`: memory is back before persist's storage write can throw. */
-function restoreLocal(old: LocalSnapshot): void {
+/** As master-world.ts's `restore`: memory is back before persist's storage write can throw. `false` = the restore
+ *  itself threw (a switch and a copy ignore it — best effort; a promote reports it: `rollback-incomplete`). */
+function restoreLocal(old: LocalSnapshot): boolean {
   const now = captureLocal()
-  if ((Object.keys(old) as (keyof LocalSnapshot)[]).every((k) => now[k] === old[k])) return // refused, or threw before it wrote
+  if ((Object.keys(old) as (keyof LocalSnapshot)[]).every((k) => now[k] === old[k])) return true // refused, or threw before it wrote
   try {
     useLocalProfilesStore.setState(old)
+    return true
   } catch {
-    // best effort
+    return false
   }
 }
 
@@ -337,17 +343,20 @@ interface WorldCopy {
  * is kept as it is — it was dangling before. `Workspace.moduleConfig` is opaque
  * to this file and holds no id today (files: a project path).
  */
+/** A new id that is in `taken` nowhere — and is from now on. */
+function freshId(taken: Set<string>): string {
+  for (;;) {
+    const id = generateId()
+    if (taken.has(id)) continue
+    taken.add(id)
+    return id
+  }
+}
+
 function copyWorld(source: ParkedWorld): WorldCopy {
   const clone = structuredClone(source)
   const taken = idsInUse()
-  const fresh = (): string => {
-    for (;;) {
-      const id = generateId()
-      if (taken.has(id)) continue
-      taken.add(id)
-      return id
-    }
-  }
+  const fresh = (): string => freshId(taken)
 
   const workspaceIds = new Map(clone.workspaces.map((ws) => [ws.id, fresh()]))
   const tabIds = new Map(Object.keys(clone.tabs).map((id) => [id, fresh()]))
@@ -379,7 +388,12 @@ function copyWorld(source: ParkedWorld): WorldCopy {
   }
 }
 
-export type CopyResult = { ok: true; id: string } | Refused<'unsettled' | 'bad-name' | 'bad-world'> | WriteFailed
+/** A write threw AND putting everything back did not fully work either: the store may hold half the operation (a
+ *  promote's two stores; a create's new slave). Distinct from `write-failed` on purpose — the user is told to reload
+ *  and check (a persistent notice), and must not be invited to press again. */
+type RollbackIncomplete = { ok: false; reason: 'rollback-incomplete' }
+
+export type CopyResult = { ok: true; id: string } | Refused<'unsettled' | 'bad-name' | 'bad-world'> | WriteFailed | RollbackIncomplete
 
 /**
  * `source`, copied, as a new parked slave — with the workspace-scoped settings
@@ -389,7 +403,7 @@ export type CopyResult = { ok: true; id: string } | Refused<'unsettled' | 'bad-n
  * reach the SOT: the settings section projects the MASTER world's workspace ids
  * only (`masterWorkspaceIds`), and these ids are in no master world.
  */
-function addCopyAsSlave(name: string, source: ParkedWorld, tabOrder: readonly string[] = []): CopyResult {
+function addCopyAsSlave(name: string, source: ParkedWorld, tabOrder: readonly string[], shownHostIds: readonly string[]): CopyResult {
   if (normalizeLocalProfileName(name) === null) return { ok: false, reason: 'bad-name' } // before anything is built
   const old = captureLocal()
   const oldScoped = useWorkspaceSettingsStore.getState().workspaces
@@ -397,7 +411,9 @@ function addCopyAsSlave(name: string, source: ParkedWorld, tabOrder: readonly st
     // A copy is a snapshot and its source stays where it is, so there is no wait here (see `exchange`): at
     // worst a tab whose workspace was still on its way is under Unsorted in the COPY.
     const { world, workspaceIds } = copyWorld(withOwnershipRepaired(source, tabOrder))
-    const added = useLocalProfilesStore.getState().addSlave(name, world)
+    // Its shown-hosts list too (per-workbench shown hosts A7): the source's, copied — `addSlave` sanitises it into a
+    // new array, so writing one never writes the other.
+    const added = useLocalProfilesStore.getState().addSlave(name, world, shownHostIds)
     if (!added.ok) return added
 
     const scoped: typeof oldScoped = {}
@@ -407,15 +423,16 @@ function addCopyAsSlave(name: string, source: ParkedWorld, tabOrder: readonly st
     if (Object.keys(scoped).length > 0) useWorkspaceSettingsStore.setState({ workspaces: { ...oldScoped, ...scoped } })
     return added
   } catch (err) {
-    restoreLocal(old)
+    // Both restores are attempted; either failing is `rollback-incomplete` — the new slave may still be there.
+    let complete = restoreLocal(old)
     if (useWorkspaceSettingsStore.getState().workspaces !== oldScoped) {
       try {
         useWorkspaceSettingsStore.setState({ workspaces: oldScoped })
       } catch {
-        // best effort
+        complete = false
       }
     }
-    return writeFailed(err)
+    return complete ? writeFailed(err) : { ok: false, reason: 'rollback-incomplete' }
   }
 }
 
@@ -429,7 +446,11 @@ export function copyMasterAsSlave(name: string): CopyResult {
   const read = readMasterWorld()
   recoverUnsettledWorld(read, true)
   if (!read.settled) return { ok: false, reason: 'unsettled' }
-  return addCopyAsSlave(name, read.world)
+  // The master's list, wherever the master is — or nobody can say (a promote half-arrived from another window: the
+  // store may still hold the OLD master's list), and then no copy either: `unsettled`, as for the world.
+  const shownIds = masterShownIdsNow()
+  if (shownIds === null) return { ok: false, reason: 'unsettled' }
+  return addCopyAsSlave(name, read.world, [], shownIds)
 }
 
 /**
@@ -439,12 +460,52 @@ export function copyMasterAsSlave(name: string): CopyResult {
  * while unsettled, too: it files nothing under an existing label.
  */
 export function saveScreenAsSlave(name: string): CopyResult {
-  return addCopyAsSlave(name, readScreen(), useTabStore.getState().tabOrder)
+  // The CURRENT shown list — the screen's workbench's (lib/shown-hosts.ts). While unsettled that list fails closed and
+  // is `[]`, so the copy starts with every host hidden: accepted (hiding closes no tab; the user turns hosts back on).
+  return addCopyAsSlave(name, readScreen(), useTabStore.getState().tabOrder, currentShownIdsNow())
+}
+
+/**
+ * "New blank workbench" (per-workbench plan §0.3): a new parked slave whose world is ONE empty workspace — no tab,
+ * nothing active in it — named as a workspace the user adds is (`nextWorkspaceName`, App.tsx's
+ * `handleAddWorkspace`; the world has no other name to avoid), and whose shown-hosts list is EMPTY: every host
+ * hidden, the user turns hosts on in Settings. The screen does not move. Host looks and every other setting are the
+ * master's, as for every slave; the list is the slave's own.
+ */
+export function createBlankSlave(name: string): CopyResult {
+  return addEmptyWorldSlave(name, [])
+}
+
+/**
+ * "Duplicate settings only" (per-workbench plan §0.2): the blank world of `createBlankSlave` — one empty workspace,
+ * no tab — with a copy of the CURRENT shown-hosts list (`currentShownIdsNow`: the workbench on screen's). While
+ * nobody can say whose list applies that list is `[]`, and so is the copy's — the same answer `saveScreenAsSlave`
+ * ("Duplicate all") gives, and for the same reason: a copy files nothing under an existing label, so it is never
+ * refused for an unsettled world; hiding closes no tab, and the user turns hosts back on. The screen does not move.
+ */
+export function createSettingsCopySlave(name: string): CopyResult {
+  return addEmptyWorldSlave(name, currentShownIdsNow())
+}
+
+/** One empty workspace as a new parked slave, with `shownHostIds` (copied: `addSlave` sanitises into a new array). */
+function addEmptyWorldSlave(name: string, shownHostIds: readonly string[]): CopyResult {
+  if (normalizeLocalProfileName(name) === null) return { ok: false, reason: 'bad-name' } // before anything is built
+  const old = captureLocal()
+  try {
+    const workspace: Workspace = { ...createWorkspace(nextWorkspaceName([])), id: freshId(idsInUse()) }
+    return useLocalProfilesStore.getState().addSlave(name, { workspaces: [workspace], tabs: {}, activeWorkspaceId: workspace.id, activeTabId: null }, shownHostIds)
+  } catch (err) {
+    return restoreLocal(old) ? writeFailed(err) : { ok: false, reason: 'rollback-incomplete' }
+  }
 }
 
 // === The move ===
 
-export type PromoteResult = { ok: true; demotedId: string } | Refused<'master-attached' | 'busy' | 'unsettled' | 'superseded' | 'not-found' | 'bad-name' | 'bad-epoch'> | WriteFailed
+export type PromoteResult =
+  | { ok: true; demotedId: string }
+  | Refused<'master-attached' | 'busy' | 'unsettled' | 'superseded' | 'not-found' | 'bad-name' | 'bad-epoch'>
+  | WriteFailed
+  | RollbackIncomplete
 
 /**
  * A MOVE, never a copy (decision 10: there is no "copy as master"): the slave's
@@ -480,28 +541,57 @@ export function promoteToMaster(slaveId: string, demotedName: string): Promise<P
   )
 }
 
-/** THE SYNCHRONOUS BLOCK of a promote. Not `async`, on purpose — as `exchange`. */
+/**
+ * THE SYNCHRONOUS BLOCK of a promote. Not `async`, on purpose — as `exchange`.
+ *
+ * THE SHOWN-HOSTS LIST FOLLOWS THE WORKBENCH (per-workbench shown hosts, plan A3). The master's list lives in
+ * `useShownHostsStore`, a local workbench's on its record. So a promote writes TWO stores besides the tags, in this
+ * order: the parking lot (`promoteSlave` — the demoted workbench gets the store's list, in its one `set`), then the
+ * shown store (the promoted workbench's list, stamped with the new `relabelCount`: a window that has one of the two
+ * and not the other reads `[]` — lib/shown-hosts.ts), then the tags. Both before-states are captured before the first
+ * write; a throw anywhere — a persist storage write after the in-memory set included — puts every touched store back
+ * in reverse. A restore that throws as well (restampWorld's own two included) is `rollback-incomplete`, never folded
+ * into `write-failed`.
+ */
 function relabel(slaveId: string, demotedName: string): PromoteResult {
   if (useProfileStore.getState().masterHostId !== null || masterAttachedInStorage()) return { ok: false, reason: 'master-attached' }
   if (!worldIsCurrent()) return { ok: false, reason: 'unsettled' }
   const old = captureLocal()
+  const shownBefore = useShownHostsStore.getState()
+  const oldShown = { ids: shownBefore.ids, relabelStamp: shownBefore.relabelStamp }
   let lowerFence = (): void => {}
   try {
     const epoch = openEpoch()
     if (epoch === null) return { ok: false, reason: 'busy' }
     const { worldEpoch } = epoch
     lowerFence = epoch.lowerFence
-    const promoted = useLocalProfilesStore.getState().promoteSlave(slaveId, demotedName, worldEpoch)
+    const promoted = useLocalProfilesStore.getState().promoteSlave(slaveId, demotedName, worldEpoch, oldShown.ids)
     if (!promoted.ok) {
       lowerFence()
       return promoted
     }
+    useShownHostsStore.setState({ ids: promoted.promotedShownHostIds, relabelStamp: useLocalProfilesStore.getState().relabelCount })
     restampWorld({ worldId: promoted.activeProfileId, worldEpoch, beforeRollback: lowerFence })
     return superseded(worldEpoch) ? { ok: false, reason: 'superseded' } : { ok: true, demotedId: promoted.demotedId }
   } catch (err) {
     lowerFence()
-    restoreLocal(old)
-    return writeFailed(err)
+    // restampWorld has put its own two stores back (or said it could not); then the shown store, then the parking lot.
+    let complete = !(err instanceof RestampRollbackIncomplete)
+    if (!restoreShown(oldShown)) complete = false
+    if (!restoreLocal(old)) complete = false
+    return complete ? writeFailed(err) : { ok: false, reason: 'rollback-incomplete' }
+  }
+}
+
+/** The shown store's two fields back; `true` when there was nothing to put back. `false` = the restore threw. */
+function restoreShown(old: { ids: string[]; relabelStamp: number }): boolean {
+  const now = useShownHostsStore.getState()
+  if (now.ids === old.ids && now.relabelStamp === old.relabelStamp) return true
+  try {
+    useShownHostsStore.setState(old)
+    return true
+  } catch {
+    return false
   }
 }
 

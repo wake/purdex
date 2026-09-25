@@ -68,7 +68,7 @@ function putMasterOnScreen(w: ParkedWorld = masterWorld()): void {
 /** Slave `s1` on screen, the master parked, all three at `epoch`. */
 function putSlaveOnScreen(epoch = 1, master: ParkedWorld = masterWorld(), slave: ParkedWorld = slaveWorld()): void {
   useLocalProfilesStore.setState({
-    slaves: { s1: { id: 's1', name: 'Slave', createdAt: 1, world: null } },
+    slaves: { s1: { id: 's1', name: 'Slave', createdAt: 1, shownHostIds: [], world: null } },
     slaveOrder: ['s1'],
     activeProfileId: 's1',
     parkedMaster: master,
