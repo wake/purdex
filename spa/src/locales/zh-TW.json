@@ -1725,5 +1725,11 @@
   "room.info.profile": "Profile",
   "room.info.cwd": "目錄",
   "room.info.session": "Session",
-  "room.info.archived": "已歸檔"
+  "room.info.archived": "已歸檔",
+  "room.dock.observers": "觀察者",
+  "room.dock.lease": "lease",
+  "room.dock.you": "你",
+  "room.dock.sse": "串流",
+  "room.dock.expand": "展開 worker 狀態",
+  "room.dock.collapse": "收合 worker 狀態"
 }

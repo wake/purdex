@@ -1725,5 +1725,11 @@
   "room.info.profile": "Profile",
   "room.info.cwd": "Directory",
   "room.info.session": "Session",
-  "room.info.archived": "Archived"
+  "room.info.archived": "Archived",
+  "room.dock.observers": "observers",
+  "room.dock.lease": "lease",
+  "room.dock.you": "you",
+  "room.dock.sse": "stream",
+  "room.dock.expand": "Expand worker status",
+  "room.dock.collapse": "Collapse worker status"
 }

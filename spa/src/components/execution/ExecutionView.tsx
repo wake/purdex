@@ -1,7 +1,7 @@
 // spa/src/components/execution/ExecutionView.tsx — the {kind:'execution'}
 // pane (spec §4.3.3). Composes the observe subscription, the lazy control
 // lease, the pane's actions (useExecutionActions: send/interrupt/terminate,
-// the only writes), the room transcript and StreamInput. It also
+// the only writes), the room transcript, the worker dock and StreamInput. It also
 // owns "Take to terminal": confirm when a turn is running, then
 // `lib/nex/handoff.ts` does the request, the lease forget and the pane swap
 // (which unmounts this view) — `takeBack` to the origin session when the
@@ -10,6 +10,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import RoomTranscript from '../room/RoomTranscript'
 import RoomUserLine from '../room/RoomUserLine'
+import WorkerDock from '../room/WorkerDock'
 import StreamInput from '../StreamInput'
 import ExecutionHeader from './ExecutionHeader'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -20,6 +21,7 @@ import { useExecutionLease } from '../../hooks/useExecutionLease'
 import { useExecutionActions } from '../../hooks/useExecutionActions'
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { getNexClientId } from '../../lib/nex/client-id'
 import { defaultExecutionState } from '../../lib/nex/event-reducer'
 import { costSummary } from '../../lib/nex/cost-summary'
 import { partialHasVisibleContent } from '../../lib/nex/partial'
@@ -106,6 +108,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     else void runTakeBack()
   }, [key, runTakeBack, writeInFlight])
 
+  const isMine = useCallback((p: string | undefined) => !!p && p.endsWith(`/${getNexClientId()}`), [])
   // P-B4 spec §4.2: null until history is loaded so the header shows `$…`
   // rather than a partial sum.
   const cost = useMemo(() => (st.historyLoaded ? costSummary(st.messages) : null), [st.messages, st.historyLoaded])
@@ -182,6 +185,8 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
           )}
         </RoomTranscript>
       )}
+      {/* Worker pane spec §4.6 (Q3): the worker's current state, inside the pane, above the input. */}
+      <WorkerDock sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} isMine={isMine} />
       {leaseHeld && (
         <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning">
           {t('execution.lease_held', { principal: st.leaseError?.heldBy ?? '' })}

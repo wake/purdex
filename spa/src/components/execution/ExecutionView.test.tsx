@@ -62,6 +62,22 @@ describe('ExecutionView', () => {
     expect(screen.queryByText(/standard/)).toBeNull()
   })
 
+  // Worker pane spec §4.6/§4.7 (Q3): observers, lease and SSE left the header
+  // for the dock, which sits inside the pane between the transcript and the input.
+  it('shows observers, lease and sse in the dock between the transcript and the input, not in the header', () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ lease: { principal_id: 'pdx:mlab/t-me000000', expires_at: 1 } }) as never)
+    render(<ExecutionView {...base} isActive />)
+    const dock = screen.getByTestId('worker-dock')
+    expect(within(dock).getByTestId('worker-dock-row')).toHaveTextContent(/2 observers · lease: you/)
+    expect(screen.queryByTestId('execution-sse')).toBeNull()
+    expect(screen.queryByTestId('execution-lease')).toBeNull()
+    expect(screen.queryByText(/3 turns/)).toBeNull()
+    const transcript = screen.getByText('No messages yet.')
+    const input = screen.getByRole('textbox')
+    expect(transcript.compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(dock.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('send: optimistic bubble, lease acquired, message posted, queued tag shown', async () => {
     vi.mocked(api.sendMessage).mockResolvedValueOnce({ turn_id: 't1', delivery: 'queued' })
     render(<ExecutionView {...base} isActive />)
@@ -161,7 +177,7 @@ describe('ExecutionView', () => {
     const box = screen.getByRole('textbox') as HTMLTextAreaElement
     fireEvent.change(box, { target: { value: 'x' } })
     fireEvent.keyDown(box, { key: 'Enter' })
-    // The header's own lease line also renders the holder's principal, so
+    // The dock's lease entry also renders the holder's principal, so
     // /t-other/ matches two elements; scope to the dedicated notice.
     await waitFor(() => expect(screen.getByTestId('lease-held')).toHaveTextContent(/t-other/))
     // handleSend's catch always restores the draft via the `key={draft}`
