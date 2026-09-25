@@ -79,6 +79,17 @@
 //     content → dropped; SOT has nothing → delivered (a workspace created HERE,
 //     which is pushed). A non-empty payload is a real edit and conflicts, as it
 //     should; once there is a base, an empty report is an ordinary one.
+//     EXCEPT DURING A `push` PERIOD (#1450). Every attach starts without a base,
+//     so a workspace this device holds EMPTY — `unsorted` is a fixed id on every
+//     device, and a Hosts tab is never in the payload — while the SOT's has tabs
+//     looked like a placeholder: the report was dropped, the section stayed
+//     clean + moved, and the SOT's tabs were PULLED over a device the user had
+//     just told to replace the SOT. Under `push` the empty report is the edit it
+//     is: dirty + moved → the conflict `push` answers keep-local → pushed empty.
+//     The limit: a workspace a `workspaces` pull ADDED here during the period
+//     (another client moved `workspaces` while it was open) is the very case
+//     the rule is for — its tabs are 500 ms away — and stays a placeholder
+//     (`pulledInThisPeriod`). The held path is judged by the same function.
 //   - A `tabs.<id>` DELETION IS NEVER APPLIED BY A PULL. Its workspace still
 //     being here means the `workspaces` change that removes it has not arrived
 //     (two writes, two events, either order): the pull waits (backoff, the index
@@ -390,6 +401,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
   /** Empty `tabs.*` placeholders reported before the index landed: the latest per key (see the header). */
   const heldPlaceholders = new Map<string, SectionReport>()
+  /** Workspaces a `workspaces` pull ADDED here during this executor's life (#1450): their empty `tabs.<id>` stays a
+   *  placeholder under `push` too (see the header). Per executor, never persisted — every attach is a new period. */
+  const pulledInThisPeriod = new Set<string>()
 
   /** Last signature a persist was ATTEMPTED with, so a refused write is not retried on every event. */
   const attempted = new Map<string, string>()
@@ -1025,8 +1039,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const s = sections.get(r.key) // none = `initialSectionState`: no base, index never seen
     if (s === undefined) return 'unknown'
     if (s.base.hash !== null) return 'edit'
-    if (s.sot.hash !== null) return 'not-arrived'
+    if (s.sot.hash !== null) return pushReplaces(r.key) ? 'edit' : 'not-arrived'
     return s.indexStale ? 'unknown' : 'edit'
+  }
+
+  /** `push`: this device's (empty) workspace replaces the SOT's tabs — unless a pull brought the workspace in (#1450). */
+  function pushReplaces(key: string): boolean {
+    const id = workspaceIdOf(key)
+    return direction() === 'push' && id !== null && !pulledInThisPeriod.has(id)
   }
 
   function online(): boolean {
@@ -1278,6 +1298,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const payload = fetched === null ? null : fetched.payload
     const rev = fetched === null ? s.sot.rev : fetched.rev
 
+    const idsBefore = key === 'workspaces' ? localWorkspaceIds() : null
     let outcome: ApplyOutcome
     try {
       outcome = await applySectionToStores(key as ProfileSectionKey, payload, { masterHostId: hostId })
@@ -1287,6 +1308,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       return failed(key)
     }
     if (disposed) return WAIT
+    if (key === 'workspaces') {
+      // Before anything else reads the stores (#1450): these workspaces came from the SOT, their tabs are on the way.
+      // A world unsettled before the apply counts every id as pulled — the safe side (a placeholder).
+      const before = new Set(idsBefore ?? [])
+      for (const id of localWorkspaceIds() ?? []) if (!before.has(id)) pulledInThisPeriod.add(id)
+    }
 
     if (!outcome.ok) {
       if (outcome.reason === 'busy') return { how: 'retry', ms: BUSY_RETRY_MS }
