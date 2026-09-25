@@ -18,6 +18,14 @@ export interface OperationIndex {
   resultForCall: Map<BlockKey, OperationResult>
   /** Result blocks already shown by a call; the renderer skips exactly these. */
   consumedResults: Set<BlockKey>
+  /**
+   * A Task call's tool_use id → the indexes (ascending) of the messages its
+   * subagent produced: every frame whose `parent_tool_use_id` names a call
+   * that came earlier in the list (spec §4.5).
+   */
+  childrenByParent: Map<string, number[]>
+  /** Every index listed in `childrenByParent`; the top level skips exactly these. */
+  childIndexes: Set<number>
 }
 
 /** `string` → itself; `[{type:'text',text}]` → the texts joined by '\n'; anything else → JSON. */
@@ -71,15 +79,35 @@ function blocksOf(message: StreamMessage): ContentBlock[] {
  *
  * A call with no result is absent from `resultForCall`; an orphan result is
  * absent from `consumedResults` and renders on its own.
+ *
+ * The same scope also says **whose** a frame is. A frame whose
+ * `parent_tool_use_id` names a call earlier in the list belongs to that
+ * call's subagent and is listed under it in `childrenByParent` (#1263: a
+ * subagent's prompt is not the human's line and its tools are not top-level
+ * operations). Forward-only for the same reason as the pairing, and because
+ * it makes the parent chain strictly increasing — a frame can never end up
+ * listed under a call inside itself, so rendering the nesting cannot loop.
+ * A frame whose parent is not an earlier call is left at the top level:
+ * hiding it under a call nobody renders would lose it.
  */
 export function indexOperations(messages: StreamMessage[]): OperationIndex {
   const resultForCall = new Map<BlockKey, OperationResult>()
   const consumedResults = new Set<BlockKey>()
   // scope (parent_tool_use_id, '' for the main flow) → tool_use_id → FIFO of calls.
   const waitingCalls = new Map<string, Map<string, BlockKey[]>>()
+  const childrenByParent = new Map<string, number[]>()
+  const childIndexes = new Set<number>()
+  // Every tool_use id seen in an EARLIER message — a parent must precede its child.
+  const earlierCalls = new Set<string>()
 
   messages.forEach((message, mi) => {
     const scope = (message as { parent_tool_use_id?: string | null }).parent_tool_use_id ?? ''
+    if (scope !== '' && earlierCalls.has(scope)) {
+      const children = childrenByParent.get(scope)
+      if (children) children.push(mi)
+      else childrenByParent.set(scope, [mi])
+      childIndexes.add(mi)
+    }
     const waiting = waitingCalls.get(scope) ?? new Map<string, BlockKey[]>()
     waitingCalls.set(scope, waiting)
     blocksOf(message).forEach((block, bi) => {
@@ -103,7 +131,11 @@ export function indexOperations(messages: StreamMessage[]): OperationIndex {
         consumedResults.add(blockKey(mi, bi))
       }
     })
+    // After the message, not during it: a call cannot parent its own message.
+    for (const block of blocksOf(message)) {
+      if (block.type === 'tool_use' && block.id) earlierCalls.add(block.id)
+    }
   })
 
-  return { resultForCall, consumedResults }
+  return { resultForCall, consumedResults, childrenByParent, childIndexes }
 }
