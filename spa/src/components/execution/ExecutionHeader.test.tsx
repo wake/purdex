@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { render, screen, fireEvent, act, within } from '@testing-library/react'
 import ExecutionHeader from './ExecutionHeader'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import { costSummary } from '../../lib/nex/cost-summary'
@@ -35,47 +35,114 @@ const summary = (extra: Partial<ExecutionSummary> = {}): ExecutionSummary => ({
 const baseProps = {
   cost: costSummary([]),
   hostId: 'h1',
-  sse: 'open' as const,
-  isMine: () => false,
   onInterrupt: vi.fn(),
   onTerminate: vi.fn(),
   busy: false,
 }
 
 describe('ExecutionHeader', () => {
-  it('renders state dot text, profile, cwd basename, observers, and turns', () => {
-    render(<ExecutionHeader {...baseProps} summary={summary()} />)
+  beforeEach(() => { vi.clearAllMocks() })
+
+  // Worker pane spec §4.7: the header keeps only what you steer by.
+  it('shows state, name, cost and the actions', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={vi.fn()} />)
     expect(screen.getByTestId('execution-state')).toHaveTextContent('idle')
-    expect(screen.getByText(/standard/)).toBeInTheDocument()
-    expect(screen.getByText('repo')).toBeInTheDocument()
-    expect(screen.getByText(/2 observers/i)).toBeInTheDocument()
-    expect(screen.getByText(/3 turns/i)).toBeInTheDocument()
+    const name = screen.getByTestId('worker-name')
+    expect(name).toHaveTextContent(/^repo$/)
+    expect(name.className).toMatch(/\bfont-medium\b/)
+    expect(name.className).toMatch(/\btext-text-primary\b/)
+    expect(screen.getByTestId('execution-cost')).toHaveTextContent('$0.00')
+    expect(screen.getByRole('button', { name: /^interrupt$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^terminate$/i })).toBeInTheDocument()
+    expect(screen.getByTestId('take-back')).toBeInTheDocument()
   })
 
-  it('renders lease line: "(you)" when isMine, raw principal otherwise, "no lease" when absent', () => {
-    const { rerender } = render(
-      <ExecutionHeader {...baseProps} summary={summary({ lease: { principal_id: 'pdx:mlab/t-me', expires_at: 1 } })} isMine={() => true} />,
+  // Observers, lease and SSE moved to the dock (§4.6); turns are dropped;
+  // provider/profile moved to the worker-info popover. `cost={null}` keeps the
+  // cost tooltip ("N turns · …") out of the DOM so the turn check is honest.
+  it('does not show observers, lease, sse or turns', () => {
+    render(
+      <ExecutionHeader {...baseProps} cost={null}
+        summary={summary({ lease: { principal_id: 'pdx:mlab/t-me', expires_at: 1 } })} />,
     )
-    expect(screen.getByTestId('execution-lease')).toHaveTextContent('(you)')
-
-    rerender(
-      <ExecutionHeader {...baseProps} summary={summary({ lease: { principal_id: 'pdx:mlab/t-other', expires_at: 1 } })} isMine={() => false} />,
-    )
-    expect(screen.getByTestId('execution-lease')).toHaveTextContent('pdx:mlab/t-other')
-
-    rerender(<ExecutionHeader {...baseProps} summary={summary()} isMine={() => false} />)
-    expect(screen.getByTestId('execution-lease')).toHaveTextContent(/no lease/i)
+    expect(screen.queryByTestId('execution-sse')).toBeNull()
+    expect(screen.queryByTestId('execution-lease')).toBeNull()
+    expect(screen.queryByText(/observers/i)).toBeNull()
+    expect(screen.queryByText(/\blive\b/i)).toBeNull()
+    expect(screen.queryByText(/no lease|\(you\)|t-me/i)).toBeNull()
+    expect(screen.queryByText(/turns/i)).toBeNull()
+    expect(screen.queryByText(/standard/)).toBeNull()
   })
 
-  it('SSE badge text follows sse', () => {
-    const { rerender } = render(<ExecutionHeader {...baseProps} summary={summary()} sse="idle" />)
-    expect(screen.getByTestId('execution-sse')).toHaveTextContent(/connecting/i)
+  it('styles terminate as destructive before the first click', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} />)
+    const term = screen.getByRole('button', { name: /^terminate$/i })
+    expect(term.className).toMatch(/\btext-status-error\b/)
+    // The confirm step is unchanged: first click arms, the label changes.
+    fireEvent.click(term)
+    expect(screen.getByRole('button', { name: /confirm terminate/i }).className).toMatch(/\btext-status-error\b/)
+    expect(baseProps.onTerminate).not.toHaveBeenCalled()
+  })
 
-    rerender(<ExecutionHeader {...baseProps} summary={summary()} sse="open" />)
-    expect(screen.getByTestId('execution-sse')).toHaveTextContent(/live/i)
+  // Spec §1: take-to-terminal changes the pane's binding, it does not interrupt a turn.
+  it('separates take-to-terminal from the interrupt actions', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={vi.fn()} />)
+    const take = screen.getByTestId('take-back')
+    const sep = take.previousElementSibling as HTMLElement | null
+    expect(sep).not.toBeNull()
+    expect(sep!.tagName).toBe('SPAN')
+    expect(sep!.className).toMatch(/\bw-px\b/)
+    expect(sep!.className).toMatch(/\bh-4\b/)
+    expect(sep!.className).toMatch(/\bbg-border-subtle\b/)
+    // The separator sits between the lease-backed actions and take-to-terminal.
+    const interrupt = screen.getByRole('button', { name: /^interrupt$/i })
+    expect(interrupt.compareDocumentPosition(sep!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
 
-    rerender(<ExecutionHeader {...baseProps} summary={summary()} sse="paused" />)
-    expect(screen.getByTestId('execution-sse')).toHaveTextContent(/paused/i)
+  // jsdom evaluates no CSS, let alone container queries, so the narrow
+  // layout is asserted structurally: the root is a `@container`, the name
+  // truncates, the cost + lease-backed actions hide at `@max-md`, and an
+  // overflow trigger (shown only at `@max-md`) opens a FloatingPanel that
+  // carries them. The real narrow render is checked by screenshot (T6.4).
+  it('renders an overflow trigger for narrow widths', () => {
+    const { container } = render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={vi.fn()} />)
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).toMatch(/(^|\s)@container(\s|$)/)
+    const name = screen.getByTestId('worker-name')
+    expect(name.className).toMatch(/\btruncate\b/)
+    expect(name.className).toMatch(/\bmin-w-0\b/)
+    const wide = screen.getByTestId('header-wide-actions')
+    expect(wide.className).toMatch(/@max-md:hidden/)
+    expect(wide).toContainElement(screen.getByTestId('execution-cost'))
+    expect(wide).toContainElement(screen.getByRole('button', { name: /^interrupt$/i }))
+    expect(wide).toContainElement(screen.getByRole('button', { name: /^terminate$/i }))
+    expect(wide).not.toContainElement(screen.getByTestId('take-back'))
+    const trigger = screen.getByTestId('header-overflow')
+    expect(trigger.className).toMatch(/(^|\s)hidden(\s|$)/)
+    expect(trigger.className).toMatch(/@max-md:flex/)
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(trigger)
+    const menu = screen.getByTestId('header-overflow-panel')
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(within(menu).getByTestId('overflow-cost')).toHaveTextContent('$0.00')
+    fireEvent.click(within(menu).getByTestId('overflow-interrupt'))
+    expect(baseProps.onInterrupt).toHaveBeenCalledTimes(1)
+    // Acting from the menu closes it, like any menu.
+    expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
+    // Terminate keeps its two-step confirm inside the menu too.
+    fireEvent.click(trigger)
+    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-terminate'))
+    expect(baseProps.onTerminate).not.toHaveBeenCalled()
+    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-terminate'))
+    expect(baseProps.onTerminate).toHaveBeenCalledTimes(1)
+  })
+
+  it('the overflow cost entry opens the cost panel', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    fireEvent.click(screen.getByTestId('overflow-cost'))
+    expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
+    expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
   })
 
   // P-C.3b task 4 / exec-to-terminal spec §4.2: "Take to terminal" exists

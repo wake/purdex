@@ -20,7 +20,6 @@ import { useExecutionLease } from '../../hooks/useExecutionLease'
 import { useExecutionActions } from '../../hooks/useExecutionActions'
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { getNexClientId } from '../../lib/nex/client-id'
 import { defaultExecutionState } from '../../lib/nex/event-reducer'
 import { costSummary } from '../../lib/nex/cost-summary'
 import { partialHasVisibleContent } from '../../lib/nex/partial'
@@ -107,7 +106,6 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     else void runTakeBack()
   }, [key, runTakeBack, writeInFlight])
 
-  const isMine = useCallback((p: string | undefined) => !!p && p.endsWith(`/${getNexClientId()}`), [])
   // P-B4 spec §4.2: null until history is loaded so the header shows `$…`
   // rather than a partial sum.
   const cost = useMemo(() => (st.historyLoaded ? costSummary(st.messages) : null), [st.messages, st.historyLoaded])
@@ -155,7 +153,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
 
   return (
     <div className="flex flex-col h-full">
-      <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId} sse={st.sse} isMine={isMine}
+      <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
         onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal || takeBackBusy}
         onTakeBack={from || canTakeToTerminal ? onTakeBack : undefined} takeBackBusy={takeBackBusy || writeInFlight} />
       {confirmTakeBack && (

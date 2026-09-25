@@ -57,9 +57,9 @@ describe('ExecutionView', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ lease: { principal_id: 'pdx:mlab/t-me000000', expires_at: 1 } }) as never)
     render(<ExecutionView {...base} isActive />)
     expect(screen.getByTestId('execution-state')).toHaveTextContent('idle')
-    expect(screen.getByText(/standard/)).toBeInTheDocument()
-    expect(screen.getByText(/repo/)).toBeInTheDocument()
-    expect(screen.getByText(/\(you\)/)).toBeInTheDocument()
+    expect(screen.getByTestId('worker-name')).toHaveTextContent('repo')
+    // Worker pane spec §4.7: provider/profile moved to the name's popover.
+    expect(screen.queryByText(/standard/)).toBeNull()
   })
 
   it('send: optimistic bubble, lease acquired, message posted, queued tag shown', async () => {
