@@ -1,14 +1,15 @@
 // spa/src/components/execution/ExecutionView.tsx — the {kind:'execution'}
 // pane (spec §4.3.3). Composes the observe subscription, the lazy control
 // lease, the pane's actions (useExecutionActions: send/interrupt/terminate,
-// the only writes), the shared message renderer and StreamInput. It also
+// the only writes), the room transcript and StreamInput. It also
 // owns "Take to terminal": confirm when a turn is running, then
 // `lib/nex/handoff.ts` does the request, the lease forget and the pane swap
 // (which unmounts this view) — `takeBack` to the origin session when the
 // execution came from one (`from`, P-C.3 spec §4.4), else `takeToTerminal`
 // into a fresh session in the execution's cwd (exec-to-terminal spec §4.2).
 import { useCallback, useMemo, useRef, useState } from 'react'
-import ConversationMessages from '../ConversationMessages'
+import RoomTranscript from '../room/RoomTranscript'
+import RoomUserLine from '../room/RoomUserLine'
 import StreamInput from '../StreamInput'
 import ExecutionHeader from './ExecutionHeader'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -172,18 +173,16 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
           )}
         </div>
       ) : (
-        <ConversationMessages messages={st.messages} keyPrefix={executionId} showThinking={showThinking}
+        <RoomTranscript messages={st.messages} turnStarts={st.turnStarts} keyPrefix={executionId} showThinking={showThinking}
           showEmptyHint={st.messages.length === 0 && !st.pendingLocal} emptyText={t('execution.empty')} scrollKey={st.pendingLocal ? 1 : 0}
           partial={st.partial} tools={st.tools} now={now}>
+          {/* The optimistic line: a user line like any other, dimmed until message_accepted (spec §4.1). */}
           {st.pendingLocal && (
-            <div className="flex justify-end">
-              <div className="flex items-center gap-2 bg-surface-input rounded-[12px_12px_4px_12px] px-3 py-1.5 text-sm">
-                <span>{st.pendingLocal.text}</span>
-                {st.pendingLocal.delivery === 'queued' && <span className="text-[10px] uppercase text-text-muted">{t('execution.queued')}</span>}
-              </div>
-            </div>
+            <RoomUserLine text={st.pendingLocal.text} pending>
+              {st.pendingLocal.delivery === 'queued' && <span className="text-[10px] uppercase font-normal text-text-muted">{t('execution.queued')}</span>}
+            </RoomUserLine>
           )}
-        </ConversationMessages>
+        </RoomTranscript>
       )}
       {leaseHeld && (
         <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning">

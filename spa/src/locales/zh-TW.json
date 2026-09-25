@@ -605,7 +605,6 @@
   "status.rename_hint": "雙擊可修改 session 名稱",
   "status.open_host_hint": "雙擊開啟主機設定",
 
-  "stream.thinking": "思考中...",
   "stream.waiting": "等待訊息...",
   "stream.handoff.button": "Handoff",
   "stream.handoff.no_cc": "CC 未執行",

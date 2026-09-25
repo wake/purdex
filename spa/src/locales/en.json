@@ -605,7 +605,6 @@
   "status.rename_hint": "Double-click to rename session",
   "status.open_host_hint": "Double-click to open host settings",
 
-  "stream.thinking": "Thinking...",
   "stream.waiting": "Waiting for messages...",
   "stream.handoff.button": "Handoff",
   "stream.handoff.no_cc": "No CC running",
