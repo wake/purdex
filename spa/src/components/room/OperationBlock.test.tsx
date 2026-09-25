@@ -218,6 +218,18 @@ describe('OperationBlock', () => {
     expect(screen.getByTestId('diff-stat')).toHaveTextContent('+5 −0')
   })
 
+  it('the diff stat names the path when the header argument is something else', () => {
+    // A header that draws an argument is not the same as one that draws the
+    // path: an unknown tool whose summary is its command or description says
+    // nothing about which file changed, so the stat has to.
+    const pathFacts: ToolResultFacts =
+      { diff: { path: '/srv/app.ts', added: 5, removed: 0, hunks: [hunk], truncated: false } }
+    render(<OperationBlock tool="Bash" input={{ command: 'sed -i s/a/b/ app.ts' }} foldKey="tu1"
+      activity={{ status: 'done', startedAt: 0, endedAt: 0 }} facts={pathFacts} result={ok('ok')} />)
+    expect(screen.getByTestId('op-arg')).toHaveTextContent('sed -i s/a/b/ app.ts')
+    expect(screen.getByTestId('diff-path')).toHaveTextContent('/srv/app.ts')
+  })
+
   it('marks a result that held non-text content', () => {
     // The other fact the dismantled facts span carried (spec §3.1.1 #3): a
     // fold must not swallow "there was something here the transcript is not

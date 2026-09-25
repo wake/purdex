@@ -209,13 +209,14 @@ export default function OperationBlock({
             </pre>
           )}
           {/*
-            The diff names the file only when this header did not: for Edit and
+            The diff names the file unless this header already did: for Edit and
             Write `summary` is that same path, and two copies of it in one block
-            is the stacking spec §3.1.1 #3 objects to. An orphan result has no
-            call and so no argument, and there the stat is the only account of
-            which file was touched.
+            is the stacking spec §3.1.1 #3 objects to. Any other header — none
+            at all (an orphan result has no call and so no argument), or an
+            argument that is a command or a description — does not say which
+            file was touched, and there the stat is the only account of it.
           */}
-          {hasDiff && <ToolDiffView diff={diff} foldKey={foldKey} showPath={summary === ''} />}
+          {hasDiff && <ToolDiffView diff={diff} foldKey={foldKey} showPath={summary !== diff.path} />}
           {result !== null && (
             <FoldedOutput
               text={result.text}

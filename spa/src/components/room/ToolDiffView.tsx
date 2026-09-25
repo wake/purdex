@@ -17,9 +17,10 @@ interface Props {
   /**
    * Draw `diff.path` beside the stat. Off by default: for Edit and Write the
    * path is the header's own `primary_arg`, and the block that owns the header
-   * is the only one that knows whether it drew one (spec §3.1.1 #3 — one fact,
-   * one place). An orphan result has no call and so no argument, which is the
-   * case this exists for.
+   * is the only one that knows what it drew (spec §3.1.1 #3 — one fact, one
+   * place). The caller turns it on whenever the header's argument is not
+   * `diff.path`: an orphan result with no argument at all, or a header whose
+   * argument is a command or a description rather than the file.
    */
   showPath?: boolean
 }
@@ -125,10 +126,10 @@ export default function ToolDiffView({ diff, foldKey, showPath = false }: Props)
         every hunk, where it is the only thing left that says what changed.
         `+0 −0` is a normal edit result and renders (contract rule 7).
 
-        The numbers always show. The path only joins them when the caller says
-        the header has no argument of its own: for Edit and Write `diff.path`
-        is that argument, and printing it again here would rebuild, one column
-        over, the stacking spec §3.1.1 #3 objects to.
+        The numbers always show. The path joins them unless the caller says
+        the header's argument already is `diff.path`: for Edit and Write it is,
+        and printing it again here would rebuild, one column over, the
+        stacking spec §3.1.1 #3 objects to.
       */}
       <div data-testid="diff-stat" className="flex items-baseline gap-2 px-2 py-0.5 text-text-muted">
         {showPath && (
