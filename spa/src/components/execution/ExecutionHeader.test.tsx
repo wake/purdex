@@ -151,6 +151,38 @@ describe('ExecutionHeader', () => {
     expect(baseProps.onTerminate).toHaveBeenCalledTimes(1)
   })
 
+  // Worker pane spec §4.7 (spec:375): narrow leaves only name + state + the
+  // overflow menu, so "Take to terminal" folds into the menu too. The inline
+  // button and its separator hide at `@max-md`; the menu entry calls the same
+  // handler and honours `takeBackBusy`.
+  it('folds take-to-terminal into the overflow menu at narrow widths', () => {
+    const onTakeBack = vi.fn()
+    const { rerender } = render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} />)
+    const take = screen.getByTestId('take-back')
+    const sep = take.previousElementSibling as HTMLElement
+    // Both the button and its separator sit inside a wide-only group.
+    const group = take.closest('[class*="@max-md:hidden"]')
+    expect(group).not.toBeNull()
+    expect(group).toContainElement(sep)
+    expect(group).not.toContainElement(screen.getByTestId('header-overflow'))
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    const item = within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-take-back')
+    expect(item).toHaveTextContent(/take to terminal/i)
+    fireEvent.click(item)
+    expect(onTakeBack).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
+    // Busy take-back disables the menu entry as it does the inline button.
+    rerender(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} takeBackBusy />)
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    expect((screen.getByTestId('overflow-take-back') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('has no overflow take-to-terminal entry without onTakeBack', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} />)
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    expect(screen.queryByTestId('overflow-take-back')).toBeNull()
+  })
+
   it('the overflow cost entry opens the cost panel', () => {
     render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
     fireEvent.click(screen.getByTestId('header-overflow'))

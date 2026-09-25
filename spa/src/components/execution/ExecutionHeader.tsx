@@ -12,9 +12,11 @@
 // `CostPanel` (H3): the header owns the open flag and the anchor ref, and
 // `FloatingPanel` handles Escape / outside-click through that ref.
 // The name toggles `WorkerInfoPanel` (provider, profile, full cwd, session).
-// Narrow (the root is a `@container`): at `@max-md` the cost and the two
-// lease-backed actions hide and an overflow trigger opens a `FloatingPanel`
-// carrying them; the cost panel then anchors to that trigger.
+// Narrow (the root is a `@container`): at `@max-md` the header is only name +
+// state + an overflow trigger (spec §4.7); the cost, the two lease-backed
+// actions and "Take to terminal" (with its separator) hide, and the trigger
+// opens a `FloatingPanel` carrying them; the cost panel then anchors to that
+// trigger.
 import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowUUpLeft, CurrencyDollar, DotsThree, Prohibit, Power } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -117,12 +119,12 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
         <DotsThree size={14} />
       </button>
       {onTakeBack && (
-        <>
+        <div className="flex items-center gap-2 shrink-0 @max-md:hidden">
           <span className="shrink-0 w-px h-4 bg-border-subtle" />
           <button type="button" data-testid="take-back" disabled={takeBackBusy} onClick={onTakeBack} className={`shrink-0 ${ACTION}`}>
             <ArrowUUpLeft size={12} /> {t('takeback.button')}
           </button>
-        </>
+        </div>
       )}
       {overflowOpen && (
         <FloatingPanel title={t('execution.more_actions')} anchorRef={overflowRef} onClose={() => setOverflowOpen(false)}
@@ -140,6 +142,15 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
               onClick={() => { if (terminateClick()) setOverflowOpen(false) }}>
               <Power size={12} /> {confirming ? t('execution.terminate_confirm') : t('execution.terminate')}
             </button>
+            {onTakeBack && (
+              <>
+                <div className="my-0.5 h-px bg-border-subtle" />
+                <button type="button" data-testid="overflow-take-back" disabled={takeBackBusy} className={MENU_ITEM}
+                  onClick={() => { setOverflowOpen(false); onTakeBack() }}>
+                  <ArrowUUpLeft size={12} /> {t('takeback.button')}
+                </button>
+              </>
+            )}
           </div>
         </FloatingPanel>
       )}
