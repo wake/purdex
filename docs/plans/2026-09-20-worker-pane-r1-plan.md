@@ -1218,9 +1218,11 @@ if (TURN_ENDING_KINDS.has(ev.kind)) return endTurn(s, ev.created_at)
   `<span className="w-px h-4 bg-border-subtle" />` because it changes the
   pane's binding rather than interrupting a turn (spec §1).
 - Narrow: the header root is a `@container`; the name gets `truncate min-w-0`,
-  and at `@max-md` the cost button and the two lease-backed actions collapse
-  into an overflow menu (`data-testid="header-overflow"`, the existing
-  `FloatingPanel`).
+  and at `@max-md` the cost button, the two lease-backed actions and `Take to
+  terminal` (with its separator) collapse into an overflow menu
+  (`data-testid="header-overflow"`, the existing `FloatingPanel`) — spec
+  §4.7 (spec:375) leaves only name + state + the overflow menu at narrow
+  widths, so `Take to terminal` cannot stay on the row.
 - Tests in `ExecutionHeader.test.tsx`: `shows state, name, cost and the
   actions`; `does not show observers, lease, sse or turns`; `styles terminate
   as destructive before the first click`; `separates take-to-terminal from

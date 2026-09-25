@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { render, screen, fireEvent, act, within } from '@testing-library/react'
 import ExecutionHeader from './ExecutionHeader'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import { costSummary } from '../../lib/nex/cost-summary'
@@ -35,47 +35,160 @@ const summary = (extra: Partial<ExecutionSummary> = {}): ExecutionSummary => ({
 const baseProps = {
   cost: costSummary([]),
   hostId: 'h1',
-  sse: 'open' as const,
-  isMine: () => false,
   onInterrupt: vi.fn(),
   onTerminate: vi.fn(),
   busy: false,
 }
 
 describe('ExecutionHeader', () => {
-  it('renders state dot text, profile, cwd basename, observers, and turns', () => {
-    render(<ExecutionHeader {...baseProps} summary={summary()} />)
+  beforeEach(() => { vi.clearAllMocks() })
+
+  // Worker pane spec §4.7: the header keeps only what you steer by.
+  it('shows state, name, cost and the actions', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={vi.fn()} />)
     expect(screen.getByTestId('execution-state')).toHaveTextContent('idle')
-    expect(screen.getByText(/standard/)).toBeInTheDocument()
-    expect(screen.getByText('repo')).toBeInTheDocument()
-    expect(screen.getByText(/2 observers/i)).toBeInTheDocument()
-    expect(screen.getByText(/3 turns/i)).toBeInTheDocument()
+    const name = screen.getByTestId('worker-name')
+    expect(name).toHaveTextContent(/^repo$/)
+    expect(name.className).toMatch(/\bfont-medium\b/)
+    expect(name.className).toMatch(/\btext-text-primary\b/)
+    expect(screen.getByTestId('execution-cost')).toHaveTextContent('$0.00')
+    expect(screen.getByRole('button', { name: /^interrupt$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^terminate$/i })).toBeInTheDocument()
+    expect(screen.getByTestId('take-back')).toBeInTheDocument()
   })
 
-  it('renders lease line: "(you)" when isMine, raw principal otherwise, "no lease" when absent', () => {
-    const { rerender } = render(
-      <ExecutionHeader {...baseProps} summary={summary({ lease: { principal_id: 'pdx:mlab/t-me', expires_at: 1 } })} isMine={() => true} />,
+  // Observers, lease and SSE moved to the dock (§4.6); turns are dropped;
+  // provider/profile moved to the worker-info popover. `cost={null}` keeps the
+  // cost tooltip ("N turns · …") out of the DOM so the turn check is honest.
+  it('does not show observers, lease, sse or turns', () => {
+    render(
+      <ExecutionHeader {...baseProps} cost={null}
+        summary={summary({ lease: { principal_id: 'pdx:mlab/t-me', expires_at: 1 } })} />,
     )
-    expect(screen.getByTestId('execution-lease')).toHaveTextContent('(you)')
-
-    rerender(
-      <ExecutionHeader {...baseProps} summary={summary({ lease: { principal_id: 'pdx:mlab/t-other', expires_at: 1 } })} isMine={() => false} />,
-    )
-    expect(screen.getByTestId('execution-lease')).toHaveTextContent('pdx:mlab/t-other')
-
-    rerender(<ExecutionHeader {...baseProps} summary={summary()} isMine={() => false} />)
-    expect(screen.getByTestId('execution-lease')).toHaveTextContent(/no lease/i)
+    expect(screen.queryByTestId('execution-sse')).toBeNull()
+    expect(screen.queryByTestId('execution-lease')).toBeNull()
+    expect(screen.queryByText(/observers/i)).toBeNull()
+    expect(screen.queryByText(/\blive\b/i)).toBeNull()
+    expect(screen.queryByText(/no lease|\(you\)|t-me/i)).toBeNull()
+    expect(screen.queryByText(/turns/i)).toBeNull()
+    expect(screen.queryByText(/standard/)).toBeNull()
   })
 
-  it('SSE badge text follows sse', () => {
-    const { rerender } = render(<ExecutionHeader {...baseProps} summary={summary()} sse="idle" />)
-    expect(screen.getByTestId('execution-sse')).toHaveTextContent(/connecting/i)
+  // Spec §4.7: provider, profile and cwd live in a popover on the name.
+  it('the name toggles the worker-info popover', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} />)
+    const name = screen.getByTestId('worker-name')
+    expect(name.tagName).toBe('BUTTON')
+    expect(name.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(name)
+    expect(screen.getByTestId('worker-info-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('worker-info-cwd')).toHaveTextContent('/Users/w/repo')
+    expect(name.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(name)
+    expect(screen.queryByTestId('worker-info-panel')).toBeNull()
+  })
 
-    rerender(<ExecutionHeader {...baseProps} summary={summary()} sse="open" />)
-    expect(screen.getByTestId('execution-sse')).toHaveTextContent(/live/i)
+  it('styles terminate as destructive before the first click', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} />)
+    const term = screen.getByRole('button', { name: /^terminate$/i })
+    expect(term.className).toMatch(/\btext-status-error\b/)
+    // The confirm step is unchanged: first click arms, the label changes.
+    fireEvent.click(term)
+    expect(screen.getByRole('button', { name: /confirm terminate/i }).className).toMatch(/\btext-status-error\b/)
+    expect(baseProps.onTerminate).not.toHaveBeenCalled()
+  })
 
-    rerender(<ExecutionHeader {...baseProps} summary={summary()} sse="paused" />)
-    expect(screen.getByTestId('execution-sse')).toHaveTextContent(/paused/i)
+  // Spec §1: take-to-terminal changes the pane's binding, it does not interrupt a turn.
+  it('separates take-to-terminal from the interrupt actions', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={vi.fn()} />)
+    const take = screen.getByTestId('take-back')
+    const sep = take.previousElementSibling as HTMLElement | null
+    expect(sep).not.toBeNull()
+    expect(sep!.tagName).toBe('SPAN')
+    expect(sep!.className).toMatch(/\bw-px\b/)
+    expect(sep!.className).toMatch(/\bh-4\b/)
+    expect(sep!.className).toMatch(/\bbg-border-subtle\b/)
+    // The separator sits between the lease-backed actions and take-to-terminal.
+    const interrupt = screen.getByRole('button', { name: /^interrupt$/i })
+    expect(interrupt.compareDocumentPosition(sep!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  // jsdom evaluates no CSS, let alone container queries, so the narrow
+  // layout is asserted structurally: the root is a `@container`, the name
+  // truncates, the cost + lease-backed actions hide at `@max-md`, and an
+  // overflow trigger (shown only at `@max-md`) opens a FloatingPanel that
+  // carries them. The real narrow render is checked by screenshot (T6.4).
+  it('renders an overflow trigger for narrow widths', () => {
+    const { container } = render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={vi.fn()} />)
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).toMatch(/(^|\s)@container(\s|$)/)
+    const name = screen.getByTestId('worker-name')
+    expect(name.className).toMatch(/\btruncate\b/)
+    expect(name.className).toMatch(/\bmin-w-0\b/)
+    const wide = screen.getByTestId('header-wide-actions')
+    expect(wide.className).toMatch(/@max-md:hidden/)
+    expect(wide).toContainElement(screen.getByTestId('execution-cost'))
+    expect(wide).toContainElement(screen.getByRole('button', { name: /^interrupt$/i }))
+    expect(wide).toContainElement(screen.getByRole('button', { name: /^terminate$/i }))
+    expect(wide).not.toContainElement(screen.getByTestId('take-back'))
+    const trigger = screen.getByTestId('header-overflow')
+    expect(trigger.className).toMatch(/(^|\s)hidden(\s|$)/)
+    expect(trigger.className).toMatch(/@max-md:flex/)
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(trigger)
+    const menu = screen.getByTestId('header-overflow-panel')
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(within(menu).getByTestId('overflow-cost')).toHaveTextContent('$0.00')
+    fireEvent.click(within(menu).getByTestId('overflow-interrupt'))
+    expect(baseProps.onInterrupt).toHaveBeenCalledTimes(1)
+    // Acting from the menu closes it, like any menu.
+    expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
+    // Terminate keeps its two-step confirm inside the menu too.
+    fireEvent.click(trigger)
+    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-terminate'))
+    expect(baseProps.onTerminate).not.toHaveBeenCalled()
+    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-terminate'))
+    expect(baseProps.onTerminate).toHaveBeenCalledTimes(1)
+  })
+
+  // Worker pane spec §4.7 (spec:375): narrow leaves only name + state + the
+  // overflow menu, so "Take to terminal" folds into the menu too. The inline
+  // button and its separator hide at `@max-md`; the menu entry calls the same
+  // handler and honours `takeBackBusy`.
+  it('folds take-to-terminal into the overflow menu at narrow widths', () => {
+    const onTakeBack = vi.fn()
+    const { rerender } = render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} />)
+    const take = screen.getByTestId('take-back')
+    const sep = take.previousElementSibling as HTMLElement
+    // Both the button and its separator sit inside a wide-only group.
+    const group = take.closest('[class*="@max-md:hidden"]')
+    expect(group).not.toBeNull()
+    expect(group).toContainElement(sep)
+    expect(group).not.toContainElement(screen.getByTestId('header-overflow'))
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    const item = within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-take-back')
+    expect(item).toHaveTextContent(/take to terminal/i)
+    fireEvent.click(item)
+    expect(onTakeBack).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
+    // Busy take-back disables the menu entry as it does the inline button.
+    rerender(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} takeBackBusy />)
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    expect((screen.getByTestId('overflow-take-back') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('has no overflow take-to-terminal entry without onTakeBack', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} />)
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    expect(screen.queryByTestId('overflow-take-back')).toBeNull()
+  })
+
+  it('the overflow cost entry opens the cost panel', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    fireEvent.click(screen.getByTestId('overflow-cost'))
+    expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
+    expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
   })
 
   // P-C.3b task 4 / exec-to-terminal spec §4.2: "Take to terminal" exists
@@ -241,6 +354,131 @@ describe('ExecutionHeader', () => {
       fireEvent.click(costBtn())
       expect(screen.getByRole('tooltip')).toBeInTheDocument()
       expect(costBtn().getAttribute('aria-describedby')).toBe(screen.getByRole('tooltip').id)
+    })
+
+    // Codex R1 (PR #1464): an open panel must not outlive its anchor when the
+    // pane crosses the `@md` breakpoint — the anchor goes `display:none`, its
+    // rect is all zeros, and FloatingPanel's next reflow would pin the panel to
+    // the top-left corner. The header watches its own size and closes a panel
+    // whose anchor no longer has a box.
+    describe('closes panels whose anchor disappears across the breakpoint', () => {
+      let roCallbacks: Array<() => void> = []
+      const box = { x: 10, y: 10, left: 10, top: 10, right: 60, bottom: 30, width: 50, height: 20, toJSON: () => ({}) } as DOMRect
+      const zero = { x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) } as DOMRect
+      const setRect = (el: HTMLElement, r: DOMRect) => { vi.spyOn(el, 'getBoundingClientRect').mockReturnValue(r) }
+      const fireResize = () => act(() => { roCallbacks.forEach((cb) => cb()) })
+      beforeEach(() => {
+        roCallbacks = []
+        vi.stubGlobal('ResizeObserver', class {
+          private cb: () => void
+          constructor(cb: () => void) { this.cb = cb }
+          observe() { roCallbacks.push(this.cb) }
+          unobserve() {}
+          disconnect() { roCallbacks = roCallbacks.filter((c) => c !== this.cb) }
+        })
+      })
+      afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+      it('wide → narrow: the cost panel opened from the inline button closes', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+        setRect(costBtn(), box)
+        fireEvent.click(costBtn())
+        fireResize()
+        expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+        setRect(costBtn(), zero)
+        fireResize()
+        expect(screen.queryByTestId('cost-panel')).toBeNull()
+        expect(costBtn().getAttribute('aria-expanded')).toBe('false')
+      })
+
+      it('narrow → wide: the cost panel and the overflow menu opened from the trigger close', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+        const trigger = screen.getByTestId('header-overflow')
+        setRect(trigger, box)
+        fireEvent.click(trigger)
+        fireResize()
+        expect(screen.getByTestId('header-overflow-panel')).toBeInTheDocument()
+        setRect(trigger, zero)
+        fireResize()
+        expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
+        setRect(trigger, box)
+        fireEvent.click(trigger)
+        fireEvent.click(screen.getByTestId('overflow-cost'))
+        fireResize()
+        expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+        setRect(trigger, zero)
+        fireResize()
+        expect(screen.queryByTestId('cost-panel')).toBeNull()
+      })
+
+      // Codex re-review (PR #1464): FloatingPanel hands focus back to the
+      // anchor it opened from, which is now `display:none` — a real browser
+      // can't focus it and focus lands on <body>. The header moves focus to the
+      // trigger that is visible on this side of the breakpoint instead.
+      it('wide → narrow: focus moves to the visible overflow trigger, not the hidden cost button', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+        const trigger = screen.getByTestId('header-overflow')
+        setRect(costBtn(), box)
+        setRect(trigger, zero)
+        costBtn().focus()
+        fireEvent.click(costBtn())
+        fireResize()
+        expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+        setRect(costBtn(), zero)
+        setRect(trigger, box)
+        fireResize()
+        expect(screen.queryByTestId('cost-panel')).toBeNull()
+        expect(document.activeElement).toBe(trigger)
+      })
+
+      it('narrow → wide: focus moves to the visible cost button, not the hidden overflow trigger', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
+        const trigger = screen.getByTestId('header-overflow')
+        setRect(costBtn(), zero)
+        setRect(trigger, box)
+        // The overflow menu itself.
+        trigger.focus()
+        fireEvent.click(trigger)
+        fireResize()
+        expect(screen.getByTestId('header-overflow-panel')).toBeInTheDocument()
+        setRect(costBtn(), box)
+        setRect(trigger, zero)
+        fireResize()
+        expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
+        expect(document.activeElement).toBe(costBtn())
+        // The cost panel opened from the overflow menu.
+        setRect(costBtn(), zero)
+        setRect(trigger, box)
+        trigger.focus()
+        fireEvent.click(trigger)
+        fireEvent.click(screen.getByTestId('overflow-cost'))
+        fireResize()
+        expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+        setRect(costBtn(), box)
+        setRect(trigger, zero)
+        fireResize()
+        expect(screen.queryByTestId('cost-panel')).toBeNull()
+        expect(document.activeElement).toBe(costBtn())
+      })
+
+      it('does not steal focus the user has moved elsewhere while the panel was open', () => {
+        render(<>
+          <ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />
+          <input data-testid="elsewhere" />
+        </>)
+        const trigger = screen.getByTestId('header-overflow')
+        setRect(costBtn(), box)
+        setRect(trigger, zero)
+        costBtn().focus()
+        fireEvent.click(costBtn())
+        fireResize()
+        screen.getByTestId('elsewhere').focus()
+        setRect(costBtn(), zero)
+        setRect(trigger, box)
+        fireResize()
+        expect(screen.queryByTestId('cost-panel')).toBeNull()
+        expect(document.activeElement).toBe(screen.getByTestId('elsewhere'))
+      })
     })
 
     it('cost=null → no aria-expanded and click does nothing', () => {
