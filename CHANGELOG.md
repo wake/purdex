@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.453] - 2026-09-26
+
+> 純 SPA，不需要重新部署 daemon。worker pane 重新設計（R1）七支 PR 的第六支。
+
+### Feature：worker pane 的 header 收成一列，資訊移到 popover 與 dock（#1464）
+
+- header 只剩一列：狀態、worker 名稱（工作目錄的最後一段）、成本、操作按鈕；turn 數不再顯示。
+- **Terminate 一開始就是紅色**（仍要按兩次確認）；**Take to terminal** 前面加一條分隔線，因為它是換綁定、不是中斷。
+- pane 窄的時候，成本、Interrupt／Terminate 與 Take to terminal 收進「⋯」選單，只留狀態與名稱在列上。
+- 點 worker 名稱會打開資訊面板：provider、profile（要求與實際不同時顯示 `要求 → 實際`）、完整工作目錄（可選取）、
+  session id、是否已封存。
+- pane 內、對話與輸入欄之間新增一條 dock：`連線狀態 · N 位觀看 · lease: 你`，點開是表格。這些原本擠在 header 裡。
+
 ## [1.0.0-alpha.452] - 2026-09-26
 
 > 純 SPA，不需要重新部署 daemon。worker pane 重新設計（R1）七支 PR 的第五支。
