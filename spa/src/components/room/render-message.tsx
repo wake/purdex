@@ -9,14 +9,18 @@ import MessageRow from './MessageRow'
 
 /** What every message of one transcript shares. */
 export interface RenderCtx {
+  /** The whole list `index` was built from; a Task's children are read from it by index. */
+  messages: StreamMessage[]
   index: OperationIndex
   tools?: Record<string, ToolActivity>
   now?: number
   /** Stable per pane; a row's key is `${keyPrefix}-${i}`. */
   keyPrefix: string
+  /** 0 at the top level; each subagent rail adds one. */
+  depth: number
 }
 
-/** The message at position `i` of the list `ctx.index` was built from. */
+/** The message at position `i` of `ctx.messages`. */
 export function renderMessage(msg: StreamMessage, i: number, ctx: RenderCtx) {
-  return <MessageRow key={`${ctx.keyPrefix}-${i}`} msg={msg} i={i} index={ctx.index} tools={ctx.tools} now={ctx.now} />
+  return <MessageRow key={`${ctx.keyPrefix}-${i}`} msg={msg} i={i} ctx={ctx} />
 }

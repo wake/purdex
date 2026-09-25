@@ -4,28 +4,44 @@
 import { Prohibit, TerminalWindow } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import {
+  type ContentBlock,
   type StreamMessage,
   type AssistantMessage,
   type UserMessage,
 } from '../../lib/nex/message-types'
-import { toToolCallActivity, type ToolActivity } from '../../lib/nex/tool-activity'
-import { blockKey, toolResultText, type OperationIndex } from '../../lib/nex/operations'
+import { toToolCallActivity } from '../../lib/nex/tool-activity'
+import { blockKey, toolResultText } from '../../lib/nex/operations'
 import { INTERRUPT_TEXT } from '../../lib/nex/turns'
 import OperationBlock from './OperationBlock'
 import RoomProse from './RoomProse'
+import RoomSubagentLine from './RoomSubagentLine'
 import RoomThinking from './RoomThinking'
 import RoomUserLine from './RoomUserLine'
+import SubagentBlock from './SubagentBlock'
+import type { RenderCtx } from './render-message'
 
 export interface MessageRowProps {
   msg: StreamMessage
   i: number
-  index: OperationIndex
-  tools?: Record<string, ToolActivity>
-  now?: number
+  ctx: RenderCtx
 }
 
-export default function MessageRow({ msg, i, index, tools, now }: MessageRowProps) {
+/** tool_use blocks in the given messages — a subagent's own calls, not its children's. */
+function countToolCalls(indexes: readonly number[], messages: StreamMessage[]): number {
+  let n = 0
+  for (const ci of indexes) {
+    const content = (messages[ci] as { message?: { content?: unknown } } | undefined)?.message?.content
+    if (!Array.isArray(content)) continue
+    for (const b of content as ContentBlock[]) if (b?.type === 'tool_use') n++
+  }
+  return n
+}
+
+export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
   const t = useI18nStore((s) => s.t)
+  const { index, tools, now } = ctx
+  // A subagent's own frame (#1263): whatever it says as `user`, the human did not say it.
+  const fromSubagent = (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id != null
 
   // --- Assistant messages ---
   if (msg.type === 'assistant' && 'message' in msg) {
@@ -51,6 +67,30 @@ export default function MessageRow({ msg, i, index, tools, now }: MessageRowProp
             // name, while the block's own guard fires on an empty one. A
             // nameless call still renders — skipping it would consume its
             // result in the pairing and then show it nowhere.
+            //
+            // Spec §4.5: a call whose subagent left frames on this list carries
+            // them on a nested rail. `childrenByParent` is a Map, so an id like
+            // `constructor` cannot reach a prototype here.
+            const children = block.id ? index.childrenByParent.get(block.id) : undefined
+            const subagentType = (block.input as { subagent_type?: unknown } | undefined)?.subagent_type
+            const inner: RenderCtx = { ...ctx, depth: ctx.depth + 1 }
+            const subagent = children ? (
+              <SubagentBlock
+                name={typeof subagentType === 'string' && subagentType
+                  ? subagentType
+                  : (block.name || t('execution.tool.unknown'))}
+                toolCount={countToolCalls(children, ctx.messages)}
+                foldKey={blockKey(i, j)}
+                depth={inner.depth}
+                // Direct children only: a nested subagent's frames are listed
+                // under its own Task, which draws them one rail further in.
+                // Keys and fold keys stay positional, so they cannot collide
+                // with the top level, which skips exactly these indexes.
+                renderChildren={() => children.map((ci) => (
+                  <MessageRow key={`${ctx.keyPrefix}-${ci}`} msg={ctx.messages[ci]} i={ci} ctx={inner} />
+                ))}
+              />
+            ) : undefined
             return (
               <OperationBlock
                 key={j}
@@ -61,6 +101,7 @@ export default function MessageRow({ msg, i, index, tools, now }: MessageRowProp
                 facts={entry}
                 result={index.resultForCall.get(blockKey(i, j)) ?? null}
                 foldKey={blockKey(i, j)}
+                subagent={subagent}
               />
             )
           }
@@ -110,6 +151,10 @@ export default function MessageRow({ msg, i, index, tools, now }: MessageRowProp
                 </div>
               )
             }
+
+            // The prompt an agent wrote for its subagent: not the human's
+            // line, whatever its first character is.
+            if (fromSubagent) return <RoomSubagentLine key={j} text={block.text} />
 
             // A slash command: the human's line, told apart by its icon and face.
             if (block.text.startsWith('/')) {

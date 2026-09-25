@@ -9,6 +9,7 @@
 // re-keyed, so both affordances read the pane-level memory through `useFold`,
 // which also registers them with the surrounding turn so expand-all reaches
 // them (spec §3.2).
+import type { ReactNode } from 'react'
 import { CircleNotch } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { formatDuration } from '../../lib/nex/format-duration'
@@ -33,6 +34,12 @@ export interface OperationBlockProps {
   result: OperationResult | null
   /** Stable key for the pane-level fold memory (the tool_use id). */
   foldKey: string
+  /**
+   * A Task call's subagent (SubagentBlock, spec §4.5). Drawn on the rail
+   * before the result, because the result is the hand-back and it comes
+   * after the child's own output.
+   */
+  subagent?: ReactNode
 }
 
 /** `pending` is a call with nothing said about it yet — no activity, no facts, no result. */
@@ -101,6 +108,7 @@ export default function OperationBlock({
   facts,
   result,
   foldKey,
+  subagent,
 }: OperationBlockProps) {
   const t = useI18nStore((s) => s.t)
   const [outputExpanded, toggleOutput] = useFold(foldKey)
@@ -146,7 +154,7 @@ export default function OperationBlock({
   })
 
   const railFill = RAIL_FILL[status] ?? ''
-  const showRail = result !== null || hasDiff || hasNonText || (hasRawInput && inputExpanded)
+  const showRail = subagent != null || result !== null || hasDiff || hasNonText || (hasRawInput && inputExpanded)
 
   return (
     <div data-testid="operation-block" className="text-sm my-1">
@@ -208,6 +216,7 @@ export default function OperationBlock({
               {JSON.stringify(input, null, 2)}
             </pre>
           )}
+          {subagent}
           {/*
             The diff names the file unless this header already did: for Edit and
             Write `summary` is that same path, and two copies of it in one block

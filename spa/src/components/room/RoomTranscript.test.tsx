@@ -464,6 +464,54 @@ describe('RoomTranscript', () => {
     })
   })
 
+  // ---- subagents (T5.2, spec §4.5, #1263) ---------------------------------
+  describe('subagents (T5.2)', () => {
+    const child = (m: StreamMessage, parent: string): StreamMessage =>
+      ({ ...m, parent_tool_use_id: parent }) as StreamMessage
+
+    it("does not render a subagent's prompt as a user line at the top level", () => {
+      render(T({
+        messages: [
+          said('please delegate'),
+          asst(use('T', 'Task', { description: 'analyse notes.md', subagent_type: 'general-purpose', prompt: 'read it' })),
+          child(said('SUBAGENT PROMPT'), 'T'),
+          child(asst({ type: 'text', text: 'child prose' }), 'T'),
+          usr(res('T', 'hand-back')),
+        ],
+      }))
+      const lines = screen.getAllByTestId('room-user-line')
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toHaveTextContent('please delegate')
+      // Folded: the child's frames are inside the Task, not beside it.
+      expect(screen.queryByText('SUBAGENT PROMPT')).toBeNull()
+      expect(screen.queryByText('child prose')).toBeNull()
+    })
+
+    it("renders a subagent frame whose Task is off the list as the subagent's, not the user's", () => {
+      render(T({ messages: [child(said('ORPHAN PROMPT'), 'GONE')] }))
+      expect(screen.queryByTestId('room-user-line')).toBeNull()
+      expect(screen.getByTestId('room-subagent-line')).toHaveTextContent('ORPHAN PROMPT')
+    })
+
+    it('leaves turn containers and their order intact when child frames are skipped', () => {
+      render(T({
+        messages: [
+          said('one'),
+          asst(use('T', 'Task', { subagent_type: 'x' })),
+          child(asst({ type: 'text', text: 'child prose' }), 'T'),
+          usr(res('T', 'hand-back')),
+          said('two'),
+        ],
+        turnStarts: [0, 4],
+      }))
+      const [first, second] = screen.getAllByTestId('room-turn')
+      expect(within(first).getByTestId('room-user-line')).toHaveTextContent('one')
+      expect(within(first).getByTestId('subagent-block')).toBeInTheDocument()
+      expect(within(second).getByTestId('room-user-line')).toHaveTextContent('two')
+      expect(within(second).queryByTestId('subagent-block')).toBeNull()
+    })
+  })
+
   // ---- own-key lookup into `tools` (inherited from ToolUseBlock, T3.3) -------
   // `tools` is keyed by tool_use ids, which are foreign strings: a plain
   // `tools[id]` reads `Object.prototype.constructor` for the id `constructor`.

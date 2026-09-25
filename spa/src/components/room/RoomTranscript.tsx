@@ -94,7 +94,7 @@ export default function RoomTranscript({
   const shown: RoomTurn[] = turns.length === 0 && hasPartial ? [{ start: 0, end: 0, openerIndex: null }] : turns
   const lastTurn = shown.length - 1
 
-  const ctx: RenderCtx = { index, tools, now, keyPrefix }
+  const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0 }
 
   return (
     <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -107,7 +107,15 @@ export default function RoomTranscript({
         {shown.map((turn, ti) => (
           <RoomTurnGroup key={`${keyPrefix}-turn-${ti}`} index={ti}>
             <div className="space-y-4">
-              {messages.slice(turn.start, turn.end).map((msg, k) => renderMessage(msg, turn.start + k, ctx))}
+              {/*
+                A subagent's frames are drawn inside the Task that spawned them
+                (spec §4.5), so the top level skips exactly those. Indexes stay
+                absolute — a skip shifts nothing — and a turn left with only
+                skipped frames is the same empty container a declared empty
+                turn already is.
+              */}
+              {messages.slice(turn.start, turn.end).map((msg, k) =>
+                index.childIndexes.has(turn.start + k) ? null : renderMessage(msg, turn.start + k, ctx))}
               {/* R1: the in-flight assistant message, after the durable list and before children */}
               {ti === lastTurn && hasPartial && <PartialMessageGroup key={`${keyPrefix}-partial`} partial={partial} />}
             </div>
