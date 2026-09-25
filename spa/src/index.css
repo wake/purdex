@@ -55,7 +55,7 @@ button:disabled {
 
 /* === Markdown Live Mode (Tiptap) — Outline-style reading typography ===
    Scoped strictly to `.tiptap-editor` (only TiptapEditor uses this class;
-   MessageBubble uses generic prose and is unaffected). Sizes / weights /
+   room/RoomProse uses generic prose and is unaffected). Sizes / weights /
    spacing are ported from Outline (getoutline.com, ProseMirror family);
    colours stay on the existing theme variables (never override prose-invert
    hues). line-height 1.7 follows Outline's complex-script relaxation, which

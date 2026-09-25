@@ -268,7 +268,7 @@ describe('OperationBlock inherited contracts', () => {
     expect(screen.getByTestId('op-name')).toHaveTextContent('tool')
   })
 
-  // The `tools` map lookup itself moved up to ConversationMessages (T3.3), so
+  // The `tools` map lookup itself lives in RoomTranscript (T3.3, T4.3), so
   // what this block still owns of the hostile-id case is its own key handling:
   // a fold key or an input key named `constructor` must not read off
   // Object.prototype, and the block must render as if the lookup simply missed.

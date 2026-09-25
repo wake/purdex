@@ -1,6 +1,6 @@
 // spa/src/lib/nex/message-types.ts — Claude Code `stream-json` message shapes
 // (assistant / user / result / system / control_request / stream_event) as
-// consumed by the exec pane: event-reducer, ConversationMessages,
+// consumed by the exec pane: event-reducer, room/RoomTranscript,
 // lib/nex/operations, useExecutionStore. Moved verbatim in P-D.3 from the
 // Stream-mode WS client module that the same phase deleted; P-B4 added
 // the optional cost fields on ResultMessage (spec §4.5).

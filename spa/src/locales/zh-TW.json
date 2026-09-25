@@ -605,7 +605,6 @@
   "status.rename_hint": "雙擊可修改 session 名稱",
   "status.open_host_hint": "雙擊開啟主機設定",
 
-  "stream.thinking": "思考中...",
   "stream.waiting": "等待訊息...",
   "stream.handoff.button": "Handoff",
   "stream.handoff.no_cc": "CC 未執行",
@@ -1718,5 +1717,8 @@
   "room.fold.less": "收合",
   "room.fold.show_all": "顯示全部",
   "room.fold.daemon_truncated": "輸出在 8 KB 處被 daemon 截斷",
-  "room.op.show_input": "輸入"
+  "room.op.show_input": "輸入",
+  "room.turn.expand_all": "全部展開",
+  "room.turn.collapse_all": "全部收合",
+  "room.thinking": "思考 · {{words}} 字"
 }

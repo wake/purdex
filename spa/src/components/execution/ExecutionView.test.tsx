@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -302,6 +302,36 @@ const toolUseFrame = (seq: number, created_at: number) => ({
 const toolResultFrame = (seq: number, created_at: number) => ({
   seq, execution_id: E, kind: 'user', created_at,
   payload: { type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'ok', is_error: false }], stop_reason: null } },
+})
+
+// ---- worker pane R1 T4.4: the pane renders the room transcript ------------
+
+describe('ExecutionView — room transcript (T4.4)', () => {
+  const said = (text: string) =>
+    ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }) as Exec['messages'][number]
+
+  it('draws the optimistic line at the left edge, dimmed, inside a provisional turn', () => {
+    patchExec({ messages: [said('first')], turnStarts: [0], pendingLocal: { text: 'second', delivery: 'queued' } as Exec['pendingLocal'] })
+    const { container } = render(<ExecutionView {...base} isActive />)
+    const turns = screen.getAllByTestId('room-turn')
+    expect(turns).toHaveLength(2)
+    expect(turns[1]).toHaveAttribute('data-turn-index', '1')
+    const line = within(turns[1]).getByTestId('room-user-line')
+    expect(line).toHaveTextContent('second')
+    expect(line.className).toContain('opacity-60')
+    expect(within(line).getByTestId('room-user-mark')).toBeInTheDocument()
+    expect(within(line).getByText(/queued/i)).toBeInTheDocument()
+    expect(container.querySelector('.justify-end')).toBeNull()
+  })
+
+  it('groups the transcript by the turns the reducer recorded', () => {
+    patchExec({ messages: [said('one'), said('two')], turnStarts: [0, 1] })
+    render(<ExecutionView {...base} isActive />)
+    const turns = screen.getAllByTestId('room-turn')
+    expect(turns).toHaveLength(2)
+    expect(within(turns[0]).getByTestId('room-user-line')).toHaveTextContent('one')
+    expect(within(turns[1]).getByTestId('room-user-line')).toHaveTextContent('two')
+  })
 })
 
 describe('ExecutionView — thinking indicator truth table (R3)', () => {

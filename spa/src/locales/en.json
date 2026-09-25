@@ -605,7 +605,6 @@
   "status.rename_hint": "Double-click to rename session",
   "status.open_host_hint": "Double-click to open host settings",
 
-  "stream.thinking": "Thinking...",
   "stream.waiting": "Waiting for messages...",
   "stream.handoff.button": "Handoff",
   "stream.handoff.no_cc": "No CC running",
@@ -1718,5 +1717,8 @@
   "room.fold.less": "collapse",
   "room.fold.show_all": "show all",
   "room.fold.daemon_truncated": "the daemon cut this output at 8 KB",
-  "room.op.show_input": "input"
+  "room.op.show_input": "input",
+  "room.turn.expand_all": "expand all",
+  "room.turn.collapse_all": "collapse all",
+  "room.thinking": "Thought · {{words}} words"
 }
