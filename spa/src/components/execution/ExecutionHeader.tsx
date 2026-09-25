@@ -11,6 +11,7 @@
 // `formatUsd` so they can never disagree on a value. Click toggles the
 // `CostPanel` (H3): the header owns the open flag and the anchor ref, and
 // `FloatingPanel` handles Escape / outside-click through that ref.
+// The name toggles `WorkerInfoPanel` (provider, profile, full cwd, session).
 // Narrow (the root is a `@container`): at `@max-md` the cost and the two
 // lease-backed actions hide and an overflow trigger opens a `FloatingPanel`
 // carrying them; the cost panel then anchors to that trigger.
@@ -20,6 +21,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { HoverTooltip } from '../HoverTooltip'
 import { FloatingPanel } from '../FloatingPanel'
 import CostPanel from './CostPanel'
+import WorkerInfoPanel from './WorkerInfoPanel'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import type { CostSummary } from '../../lib/nex/cost-summary'
 import { formatTokens, formatUsd } from '../../lib/nex/format-cost'
@@ -57,6 +59,8 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
   /** Which element the cost panel hangs from: the inline button, or the overflow trigger at narrow widths. */
   const [costFromOverflow, setCostFromOverflow] = useState(false)
   const [overflowOpen, setOverflowOpen] = useState(false)
+  const [infoOpen, setInfoOpen] = useState(false)
+  const nameRef = useRef<HTMLButtonElement>(null)
   const costRef = useRef<HTMLButtonElement>(null)
   const overflowRef = useRef<HTMLButtonElement>(null)
   const costTipId = useId()
@@ -85,7 +89,9 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
       <span className={`shrink-0 w-2 h-2 rounded-full ${STATE_DOT[state] ?? 'bg-text-muted'}`} />
       <span data-testid="execution-state" className="shrink-0 text-text-primary font-medium">{state}</span>
       {cwdBase && (
-        <span data-testid="worker-name" title={summary?.cwd} className="truncate min-w-0 font-medium text-text-primary">{cwdBase}</span>
+        <button type="button" data-testid="worker-name" ref={nameRef} title={summary?.cwd}
+          aria-expanded={infoOpen} onClick={() => setInfoOpen((v) => !v)}
+          className="truncate min-w-0 font-medium text-text-primary hover:underline">{cwdBase}</button>
       )}
       <div className="flex-1" />
       <div data-testid="header-wide-actions" className="flex items-center gap-2 shrink-0 @max-md:hidden">
@@ -137,6 +143,7 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
           </div>
         </FloatingPanel>
       )}
+      {summary && infoOpen && <WorkerInfoPanel summary={summary} anchorRef={nameRef} onClose={() => setInfoOpen(false)} />}
       {cost && costOpen && (
         <CostPanel summary={cost} hostId={hostId} anchorRef={costFromOverflow ? overflowRef : costRef} onClose={() => setCostOpen(false)} />
       )}

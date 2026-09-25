@@ -1720,5 +1720,10 @@
   "room.turn.expand_all": "expand all",
   "room.turn.collapse_all": "collapse all",
   "room.thinking": "Thought · {{words}} words",
-  "room.subagent.summary": "{{name}} · {{tools}} tools"
+  "room.subagent.summary": "{{name}} · {{tools}} tools",
+  "room.info.provider": "Provider",
+  "room.info.profile": "Profile",
+  "room.info.cwd": "Directory",
+  "room.info.session": "Session",
+  "room.info.archived": "Archived"
 }

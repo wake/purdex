@@ -74,6 +74,20 @@ describe('ExecutionHeader', () => {
     expect(screen.queryByText(/standard/)).toBeNull()
   })
 
+  // Spec §4.7: provider, profile and cwd live in a popover on the name.
+  it('the name toggles the worker-info popover', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} />)
+    const name = screen.getByTestId('worker-name')
+    expect(name.tagName).toBe('BUTTON')
+    expect(name.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(name)
+    expect(screen.getByTestId('worker-info-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('worker-info-cwd')).toHaveTextContent('/Users/w/repo')
+    expect(name.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(name)
+    expect(screen.queryByTestId('worker-info-panel')).toBeNull()
+  })
+
   it('styles terminate as destructive before the first click', () => {
     render(<ExecutionHeader {...baseProps} summary={summary()} />)
     const term = screen.getByRole('button', { name: /^terminate$/i })

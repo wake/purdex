@@ -1720,5 +1720,10 @@
   "room.turn.expand_all": "全部展開",
   "room.turn.collapse_all": "全部收合",
   "room.thinking": "思考 · {{words}} 字",
-  "room.subagent.summary": "{{name}} · {{tools}} 個工具"
+  "room.subagent.summary": "{{name}} · {{tools}} 個工具",
+  "room.info.provider": "提供者",
+  "room.info.profile": "Profile",
+  "room.info.cwd": "目錄",
+  "room.info.session": "Session",
+  "room.info.archived": "已歸檔"
 }
