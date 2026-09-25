@@ -15,6 +15,23 @@ function visiblePartialBlocks(partial: PartialAssembly): PartialBlock[] {
   return Object.values(partial.blocks).filter(isPartialBlockVisible).sort((a, b) => a.index - b.index)
 }
 
+/**
+ * The fold key (and React key) of a streaming block. The pane's fold memory
+ * outlives the partial, so the block index alone would hand message A's
+ * expansion to message B's block at the same index: the message id scopes it.
+ *
+ * A null id is an orphan assembly — deltas that arrived without a
+ * `message_start` (a stream joined mid-message). It gets its own `orphan`
+ * namespace, which no real id can reach because those all sit under `msg:`.
+ * That is enough: every `message_start` carries an id and replaces the orphan,
+ * so an orphan can only follow an orphan when two id-less messages stream back
+ * to back, and at worst that shares one expansion bit between them.
+ */
+function partialKey(partial: PartialAssembly, block: PartialBlock): string {
+  const scope = partial.messageId === null ? 'orphan' : `msg:${partial.messageId}`
+  return `partial:${scope}#${block.index}`
+}
+
 export default function PartialMessageGroup({ partial }: { partial: PartialAssembly }) {
   const t = useI18nStore((s) => s.t)
   const blocks = useMemo(() => visiblePartialBlocks(partial), [partial])
@@ -24,16 +41,19 @@ export default function PartialMessageGroup({ partial }: { partial: PartialAssem
   return (
     <div data-testid="partial-group">
       {blocks.map((block) => {
+        // The React key carries the message too, so a new message's block is a
+        // new element rather than the previous message's one re-used.
+        const key = partialKey(partial, block)
         switch (block.type) {
           case 'text':
-            return <RoomProse key={block.index} content={block.text} streaming />
+            return <RoomProse key={key} content={block.text} streaming />
           case 'thinking':
-            return <RoomThinking key={block.index} content={block.thinking} foldKey={`partial-${block.index}`} streaming />
+            return <RoomThinking key={key} content={block.thinking} foldKey={key} streaming />
           case 'tool_use':
             return (
-              <OperationBlock key={block.index} tool={block.toolName ?? t('execution.tool.unknown')} input={{}}
+              <OperationBlock key={key} tool={block.toolName ?? t('execution.tool.unknown')} input={{}}
                 activity={{ status: 'streaming', rawInput: block.partialJson }}
-                result={null} foldKey={`partial-${block.index}`} />
+                result={null} foldKey={key} />
             )
           default:
             return null

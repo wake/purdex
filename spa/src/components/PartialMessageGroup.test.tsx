@@ -5,9 +5,9 @@
 // asserted in room/RoomTranscript.test.
 import type { ReactNode } from 'react'
 import { describe, it, expect } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, fireEvent } from '@testing-library/react'
 import PartialMessageGroup from './PartialMessageGroup'
-import { FoldContext, useFoldMemory } from './room/fold-context'
+import { FoldContext, useFoldMemory, type FoldStore } from './room/fold-context'
 import type { PartialAssembly, PartialBlock } from '../lib/nex/partial'
 
 /** The pane's fold memory: the room blocks read it, as they do in RoomTranscript. */
@@ -18,8 +18,10 @@ function Pane({ children }: { children: ReactNode }) {
 
 const pb = (index: number, over: Partial<PartialBlock> & { type: PartialBlock['type'] }): PartialBlock =>
   ({ index, text: '', thinking: '', partialJson: '', ...over })
-const assembly = (...blocks: PartialBlock[]): PartialAssembly =>
-  ({ messageId: 'm', finalized: 0, blocks: Object.fromEntries(blocks.map((b) => [b.index, b])) })
+const assemblyOf = (messageId: string | null, ...blocks: PartialBlock[]): PartialAssembly =>
+  ({ messageId, finalized: 0, blocks: Object.fromEntries(blocks.map((b) => [b.index, b])) })
+const assembly = (...blocks: PartialBlock[]): PartialAssembly => assemblyOf('m', ...blocks)
+const longThought = Array.from({ length: 100 }, (_, i) => `thought ${i + 1}`).join('\n')
 const follows = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
 
 const renderGroup = (partial: PartialAssembly) =>
@@ -98,5 +100,36 @@ describe('PartialMessageGroup (R1)', () => {
     const group = within(screen.getByTestId('partial-group'))
     expect(group.getByTestId('op-name')).toHaveTextContent('Read')
     expect(group.getByTestId('op-dot')).toHaveClass('animate-spin')
+  })
+
+  // PR #1458 review: the fold memory is pane-level and outlives the partial, so
+  // a key built from the block index alone let message A's expansion leak into
+  // message B's block at the same index.
+  it('an expanded streaming thought does not leak into the next message at the same index', () => {
+    const { rerender } = render(<Pane><PartialMessageGroup partial={assemblyOf('msg-a', pb(0, { type: 'thinking', thinking: longThought }))} /></Pane>)
+    fireEvent.click(screen.getByTestId('fold-more'))
+    expect(screen.getByTestId('fold-body')).toHaveTextContent('thought 100')
+
+    rerender(<Pane><PartialMessageGroup partial={assemblyOf('msg-b', pb(0, { type: 'thinking', thinking: longThought }))} /></Pane>)
+    expect(screen.getByTestId('fold-body')).not.toHaveTextContent('thought 100')
+    expect(screen.getByTestId('fold-more')).toBeInTheDocument()
+  })
+
+  it('a streaming tool_use registers a fold key scoped to its message', () => {
+    // A partial tool_use has no visible fold yet (no input, no result), but it
+    // registers with the pane store, so expand-all writes its key: the key must
+    // not be one the next message's block at the same index would read.
+    const keys: string[] = []
+    const store: FoldStore = {
+      isExpanded: () => false, toggle: () => {}, setTurn: () => {}, unregister: () => {},
+      register: (_turn, key) => { keys.push(key) },
+    }
+    const group = (id: string | null) =>
+      <FoldContext.Provider value={store}><PartialMessageGroup partial={assemblyOf(id, pb(0, { type: 'tool_use', toolName: 'Bash' }))} /></FoldContext.Provider>
+    const { rerender } = render(group('msg-a'))
+    rerender(group('msg-b'))
+    rerender(group(null))
+    const outputKeys = keys.filter((k) => !k.endsWith(':input'))
+    expect(new Set(outputKeys).size).toBe(3)
   })
 })
