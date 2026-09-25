@@ -158,7 +158,7 @@ describe('ExecutionView', () => {
     expect(st.pendingSend).toBe(false)
     expect(st.pendingLocal).toBeNull()
     expect(st.sendError?.code).toBe('invalid_text')
-    // The restore mechanism is a `key={draft}` remount (see StreamInput /
+    // The restore mechanism is a `key={draft}` remount (see WorkerInput /
     // ExecutionView), which replaces the textarea DOM node; re-query rather
     // than reuse the stale `box` reference captured before the remount.
     const restored = screen.getByRole('textbox') as HTMLTextAreaElement
@@ -233,7 +233,7 @@ describe('ExecutionView', () => {
   it('disables the input until history has loaded', () => {
     useExecutionStore.getState().setHistoryLoaded(H, E, false)
     render(<ExecutionView {...base} isActive />)
-    // The loading placeholder replaces the conversation, but StreamInput is
+    // The loading placeholder replaces the conversation, but WorkerInput is
     // still rendered below it — must stay disabled while spinner is up.
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
   })

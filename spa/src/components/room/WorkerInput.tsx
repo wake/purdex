@@ -1,7 +1,7 @@
-// spa/src/components/StreamInput.tsx
+// spa/src/components/room/WorkerInput.tsx
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Plus, Terminal } from '@phosphor-icons/react'
-import { useI18nStore } from '../stores/useI18nStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 
 interface Props {
   onSend: (text: string) => void
@@ -15,7 +15,7 @@ interface Props {
   initialValue?: string
 }
 
-export default function StreamInput({ onSend, onAttach, onHandoffToTerm, disabled = false, placeholder, focused = false, showAttach = true, initialValue }: Props) {
+export default function WorkerInput({ onSend, onAttach, onHandoffToTerm, disabled = false, placeholder, focused = false, showAttach = true, initialValue }: Props) {
   const t = useI18nStore((s) => s.t)
   const resolvedPlaceholder = placeholder ?? t('stream.input.placeholder')
   const [value, setValue] = useState(initialValue ?? '')

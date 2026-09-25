@@ -1,21 +1,21 @@
-// spa/src/components/StreamInput.test.tsx
+// spa/src/components/room/WorkerInput.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
-import StreamInput from './StreamInput'
+import WorkerInput from './WorkerInput'
 
 beforeEach(() => {
   cleanup()
 })
 
-describe('StreamInput', () => {
+describe('WorkerInput', () => {
   it('renders textarea', () => {
-    render(<StreamInput onSend={vi.fn()} />)
+    render(<WorkerInput onSend={vi.fn()} />)
     expect(screen.getByRole('textbox')).toBeInTheDocument()
   })
 
   it('calls onSend on Enter key', () => {
     const onSend = vi.fn()
-    render(<StreamInput onSend={onSend} />)
+    render(<WorkerInput onSend={onSend} />)
     const textarea = screen.getByRole('textbox')
     fireEvent.change(textarea, { target: { value: 'Enter test' } })
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
@@ -24,7 +24,7 @@ describe('StreamInput', () => {
 
   it('does NOT send on Shift+Enter', () => {
     const onSend = vi.fn()
-    render(<StreamInput onSend={onSend} />)
+    render(<WorkerInput onSend={onSend} />)
     const textarea = screen.getByRole('textbox')
     fireEvent.change(textarea, { target: { value: 'multiline' } })
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter', shiftKey: true })
@@ -32,7 +32,7 @@ describe('StreamInput', () => {
   })
 
   it('clears textarea after send', () => {
-    render(<StreamInput onSend={vi.fn()} />)
+    render(<WorkerInput onSend={vi.fn()} />)
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'test message' } })
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
@@ -40,65 +40,65 @@ describe('StreamInput', () => {
   })
 
   it('is disabled when disabled prop is true', () => {
-    render(<StreamInput onSend={vi.fn()} disabled />)
+    render(<WorkerInput onSend={vi.fn()} disabled />)
     expect(screen.getByRole('textbox')).toBeDisabled()
   })
 
   it('does not call onSend for empty input', () => {
     const onSend = vi.fn()
-    render(<StreamInput onSend={onSend} />)
+    render(<WorkerInput onSend={onSend} />)
     const textarea = screen.getByRole('textbox')
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
     expect(onSend).not.toHaveBeenCalled()
   })
 
   it('renders Handoff to Term button when onHandoffToTerm is provided', () => {
-    render(<StreamInput onSend={vi.fn()} onHandoffToTerm={vi.fn()} />)
+    render(<WorkerInput onSend={vi.fn()} onHandoffToTerm={vi.fn()} />)
     expect(screen.getByTitle('Handoff to Term')).toBeInTheDocument()
   })
 
   it('does not render Handoff to Term button when onHandoffToTerm is not provided', () => {
-    render(<StreamInput onSend={vi.fn()} />)
+    render(<WorkerInput onSend={vi.fn()} />)
     expect(screen.queryByTitle('Handoff to Term')).not.toBeInTheDocument()
   })
 
   it('calls onHandoffToTerm when button is clicked', () => {
     const onHandoffToTerm = vi.fn()
-    render(<StreamInput onSend={vi.fn()} onHandoffToTerm={onHandoffToTerm} />)
+    render(<WorkerInput onSend={vi.fn()} onHandoffToTerm={onHandoffToTerm} />)
     fireEvent.click(screen.getByTitle('Handoff to Term'))
     expect(onHandoffToTerm).toHaveBeenCalledOnce()
   })
 
   it('disables Handoff to Term button when disabled prop is true', () => {
-    render(<StreamInput onSend={vi.fn()} onHandoffToTerm={vi.fn()} disabled />)
+    render(<WorkerInput onSend={vi.fn()} onHandoffToTerm={vi.fn()} disabled />)
     expect(screen.getByTitle('Handoff to Term')).toBeDisabled()
   })
 
   it('focuses textarea when focused prop becomes true', async () => {
-    const { rerender } = render(<StreamInput onSend={vi.fn()} focused={false} />)
+    const { rerender } = render(<WorkerInput onSend={vi.fn()} focused={false} />)
     const textarea = screen.getByRole('textbox')
     expect(document.activeElement).not.toBe(textarea)
-    rerender(<StreamInput onSend={vi.fn()} focused={true} />)
+    rerender(<WorkerInput onSend={vi.fn()} focused={true} />)
     // requestAnimationFrame delay
     await new Promise((r) => requestAnimationFrame(r))
     expect(document.activeElement).toBe(textarea)
   })
 
   it('does not focus textarea when disabled even if focused=true', async () => {
-    render(<StreamInput onSend={vi.fn()} focused={true} disabled />)
+    render(<WorkerInput onSend={vi.fn()} focused={true} disabled />)
     await new Promise((r) => requestAnimationFrame(r))
     expect(document.activeElement).not.toBe(screen.getByRole('textbox'))
   })
 
   it('hides the attach button when showAttach is false', () => {
-    const { container, rerender } = render(<StreamInput onSend={() => {}} />)
+    const { container, rerender } = render(<WorkerInput onSend={() => {}} />)
     expect(container.querySelectorAll('button').length).toBeGreaterThanOrEqual(1)
-    rerender(<StreamInput onSend={() => {}} showAttach={false} />)
+    rerender(<WorkerInput onSend={() => {}} showAttach={false} />)
     expect(container.querySelector('button svg')).toBeNull()
   })
 
   it('seeds the textarea value from initialValue', () => {
-    render(<StreamInput onSend={vi.fn()} initialValue="restored text" />)
+    render(<WorkerInput onSend={vi.fn()} initialValue="restored text" />)
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('restored text')
   })
 })
