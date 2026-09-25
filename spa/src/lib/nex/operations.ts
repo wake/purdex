@@ -19,11 +19,13 @@ export interface OperationIndex {
   /** Result blocks already shown by a call; the renderer skips exactly these. */
   consumedResults: Set<BlockKey>
   /**
-   * A Task call's tool_use id → the indexes (ascending) of the messages its
+   * A Task call's own position → the indexes (ascending) of the messages its
    * subagent produced: every frame whose `parent_tool_use_id` names a call
-   * that came earlier in the list (spec §4.5).
+   * that came earlier in the list (spec §4.5). Keyed by position, not id, for
+   * the same reason as `resultForCall`: two calls sharing an id must not both
+   * draw the same subagent.
    */
-  childrenByParent: Map<string, number[]>
+  childrenByParent: Map<BlockKey, number[]>
   /** Every index listed in `childrenByParent`; the top level skips exactly these. */
   childIndexes: Set<number>
 }
@@ -89,23 +91,35 @@ function blocksOf(message: StreamMessage): ContentBlock[] {
  * listed under a call inside itself, so rendering the nesting cannot loop.
  * A frame whose parent is not an earlier call is left at the top level:
  * hiding it under a call nobody renders would lose it.
+ *
+ * When several earlier calls share that id, the frame goes to the **latest**
+ * of them (any scope; within one message, the last such block). A subagent's
+ * frames stream between its call and its hand-back, so a reused id — a
+ * replayed or resumed history — hands each call exactly the frames between
+ * it and the next call with that id. Not the oldest unanswered one, as the
+ * pairing does: a call that never got its answer (interrupted, or its result
+ * off the page) would then swallow every later same-id call's subagent. Two
+ * same-id Tasks running at once leave nothing in the frames to tell them
+ * apart; the latest call takes them, and each frame is still drawn once.
  */
 export function indexOperations(messages: StreamMessage[]): OperationIndex {
   const resultForCall = new Map<BlockKey, OperationResult>()
   const consumedResults = new Set<BlockKey>()
   // scope (parent_tool_use_id, '' for the main flow) → tool_use_id → FIFO of calls.
   const waitingCalls = new Map<string, Map<string, BlockKey[]>>()
-  const childrenByParent = new Map<string, number[]>()
+  const childrenByParent = new Map<BlockKey, number[]>()
   const childIndexes = new Set<number>()
-  // Every tool_use id seen in an EARLIER message — a parent must precede its child.
-  const earlierCalls = new Set<string>()
+  // tool_use id → the latest call with it in an EARLIER message — a parent
+  // must precede its child.
+  const latestEarlierCall = new Map<string, BlockKey>()
 
   messages.forEach((message, mi) => {
     const scope = (message as { parent_tool_use_id?: string | null }).parent_tool_use_id ?? ''
-    if (scope !== '' && earlierCalls.has(scope)) {
-      const children = childrenByParent.get(scope)
+    const parentKey = scope !== '' ? latestEarlierCall.get(scope) : undefined
+    if (parentKey !== undefined) {
+      const children = childrenByParent.get(parentKey)
       if (children) children.push(mi)
-      else childrenByParent.set(scope, [mi])
+      else childrenByParent.set(parentKey, [mi])
       childIndexes.add(mi)
     }
     const waiting = waitingCalls.get(scope) ?? new Map<string, BlockKey[]>()
@@ -132,9 +146,9 @@ export function indexOperations(messages: StreamMessage[]): OperationIndex {
       }
     })
     // After the message, not during it: a call cannot parent its own message.
-    for (const block of blocksOf(message)) {
-      if (block.type === 'tool_use' && block.id) earlierCalls.add(block.id)
-    }
+    blocksOf(message).forEach((block, bi) => {
+      if (block.type === 'tool_use' && block.id) latestEarlierCall.set(block.id, blockKey(mi, bi))
+    })
   })
 
   return { resultForCall, consumedResults, childrenByParent, childIndexes }

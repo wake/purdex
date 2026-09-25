@@ -69,9 +69,9 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
             // result in the pairing and then show it nowhere.
             //
             // Spec §4.5: a call whose subagent left frames on this list carries
-            // them on a nested rail. `childrenByParent` is a Map, so an id like
-            // `constructor` cannot reach a prototype here.
-            const children = block.id ? index.childrenByParent.get(block.id) : undefined
+            // them on a nested rail. Looked up by this call's position, not its
+            // id: two calls reusing an id each own only their own frames.
+            const children = index.childrenByParent.get(blockKey(i, j))
             const subagentType = (block.input as { subagent_type?: unknown } | undefined)?.subagent_type
             const inner: RenderCtx = { ...ctx, depth: ctx.depth + 1 }
             const subagent = children ? (

@@ -148,7 +148,7 @@ describe('indexOperations — the parent link', () => {
       scoped(msg('user', [result('R', 'contents')]), 'T'),
       msg('user', [result('T', 'hand-back')]),
     ])
-    expect(idx.childrenByParent.get('T')).toEqual([1, 2, 3])
+    expect(idx.childrenByParent.get(blockKey(0, 0))).toEqual([1, 2, 3])
     expect(idx.childrenByParent.size).toBe(1)
     // The hand-back is the main flow's answer to the Task call, not a child.
     expect(idx.resultForCall.get(blockKey(0, 0))).toEqual({ text: 'hand-back', isError: false })
@@ -185,7 +185,7 @@ describe('indexOperations — the parent link', () => {
       scoped(msg('assistant', [call('T', 'Task')]), 'T'),
       scoped(msg('user', [{ type: 'text', text: 'after' }]), 'T'),
     ])
-    expect(idx.childrenByParent.get('T')).toEqual([1])
+    expect(idx.childrenByParent.get(blockKey(0, 0))).toEqual([1])
     expect(idx.childIndexes.has(0)).toBe(false)
   })
 
@@ -201,8 +201,8 @@ describe('indexOperations — the parent link', () => {
       scoped(msg('user', [result('rb', 'b out')]), 'B'),
       scoped(msg('user', [result('ra', 'a out')]), 'A'),
     ])
-    expect(idx.childrenByParent.get('A')).toEqual([1, 3, 6])
-    expect(idx.childrenByParent.get('B')).toEqual([2, 4, 5])
+    expect(idx.childrenByParent.get(blockKey(0, 0))).toEqual([1, 3, 6])
+    expect(idx.childrenByParent.get(blockKey(0, 1))).toEqual([2, 4, 5])
   })
 
   it("lists a nested subagent's frames under the inner Task only", () => {
@@ -211,9 +211,29 @@ describe('indexOperations — the parent link', () => {
       scoped(msg('assistant', [call('U', 'Task')]), 'T'),
       scoped(msg('user', [{ type: 'text', text: 'inner prompt' }]), 'U'),
     ])
-    expect(idx.childrenByParent.get('T')).toEqual([1])
-    expect(idx.childrenByParent.get('U')).toEqual([2])
+    expect(idx.childrenByParent.get(blockKey(0, 0))).toEqual([1])
+    expect(idx.childrenByParent.get(blockKey(1, 0))).toEqual([2])
     expect([...idx.childIndexes].sort()).toEqual([1, 2])
+  })
+
+  it("lists each same-id Task's frames under that call only", () => {
+    // A reused tool_use id (a replayed or resumed history) names two calls.
+    // Keyed by id, both calls would own both subagents' frames and each
+    // would draw the other's transcript; keyed by position, each call owns
+    // the frames that came after it and before the next call with that id.
+    const idx = indexOperations([
+      msg('assistant', [call('T', 'Task')]),
+      scoped(msg('user', [{ type: 'text', text: 'first prompt' }]), 'T'),
+      msg('user', [result('T', 'first hand-back')]),
+      msg('assistant', [{ type: 'text', text: 'again' }, call('T', 'Task')]),
+      scoped(msg('user', [{ type: 'text', text: 'second prompt' }]), 'T'),
+      scoped(msg('assistant', [{ type: 'text', text: 'second says' }]), 'T'),
+      msg('user', [result('T', 'second hand-back')]),
+    ])
+    expect(idx.childrenByParent.get(blockKey(0, 0))).toEqual([1])
+    expect(idx.childrenByParent.get(blockKey(3, 1))).toEqual([4, 5])
+    expect(idx.childrenByParent.size).toBe(2)
+    expect([...idx.childIndexes].sort()).toEqual([1, 4, 5])
   })
 })
 

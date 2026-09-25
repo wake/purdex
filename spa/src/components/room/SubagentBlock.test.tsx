@@ -141,4 +141,27 @@ describe('SubagentBlock', () => {
     expect(rails.map((r) => r.getAttribute('data-depth'))).toEqual(['1', '2'])
     expect(within(rails[1]).getByText('INNER PROSE')).toBeInTheDocument()
   })
+
+  it("does not draw one same-id Task's subagent under the other", () => {
+    // Two calls reusing the id `T`: each Task's rail holds its own frames only.
+    renderDelegation([
+      asst(call('T', 'Task', { subagent_type: 'first' })),
+      child(asst({ type: 'text', text: 'FIRST CHILD' })),
+      usr(res('T', 'first done')),
+      asst(call('T', 'Task', { subagent_type: 'second' })),
+      child(asst({ type: 'text', text: 'SECOND CHILD' })),
+      usr(res('T', 'second done')),
+    ])
+    const toggles = screen.getAllByTestId('subagent-toggle')
+    expect(toggles).toHaveLength(2)
+    toggles.forEach((toggle) => fireEvent.click(toggle))
+    const rails = screen.getAllByTestId('subagent-rail')
+    expect(rails).toHaveLength(2)
+    expect(within(rails[0]).getByText('FIRST CHILD')).toBeInTheDocument()
+    expect(within(rails[0]).queryByText('SECOND CHILD')).toBeNull()
+    expect(within(rails[1]).getByText('SECOND CHILD')).toBeInTheDocument()
+    expect(within(rails[1]).queryByText('FIRST CHILD')).toBeNull()
+    expect(screen.getAllByText('FIRST CHILD')).toHaveLength(1)
+    expect(screen.getAllByText('SECOND CHILD')).toHaveLength(1)
+  })
 })
