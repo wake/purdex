@@ -22,6 +22,7 @@ export function getSummary(tool: string, input: Record<string, unknown>): string
     case 'Glob':
       return (input.pattern as string) ?? ''
     case 'Agent':
+    case 'Task':
       return (input.description as string) ?? ''
     default:
       // A bounded preview, not the whole input. Spec §4.2's "never truncated"
