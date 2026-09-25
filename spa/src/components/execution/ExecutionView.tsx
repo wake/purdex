@@ -193,7 +193,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
         </div>
       )}
       {errorText && <div data-testid="send-error" className="mx-2 mb-1 text-xs text-status-error">{errorText}</div>}
-      <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void handleSend(text)} showAttach={false}
+      <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void handleSend(text)}
         disabled={st.pendingSend || ended || !st.historyLoaded || streamDead || takeBackBusy} placeholder={placeholder} focused={isActive} />
     </div>
   )

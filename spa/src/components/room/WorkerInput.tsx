@@ -1,23 +1,24 @@
-// spa/src/components/room/WorkerInput.tsx
+// spa/src/components/room/WorkerInput.tsx — the worker pane's reply field
+// (spec §3.1.1 #6, §4.8): full width, no border box, one hairline separator
+// above it, growing with the text up to MAX_INPUT_PX and scrolling past that.
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Plus, Terminal } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
+
+/** Ceiling for the auto-grown textarea, so a long paste can't squeeze the transcript away. */
+const MAX_INPUT_PX = 200
 
 interface Props {
   onSend: (text: string) => void
-  onAttach?: () => void
-  onHandoffToTerm?: () => void
   disabled?: boolean
   placeholder?: string
   focused?: boolean
-  showAttach?: boolean
   /** Seeds the textarea (e.g. restoring text after a failed send). */
   initialValue?: string
 }
 
-export default function WorkerInput({ onSend, onAttach, onHandoffToTerm, disabled = false, placeholder, focused = false, showAttach = true, initialValue }: Props) {
+export default function WorkerInput({ onSend, disabled = false, placeholder, focused = false, initialValue }: Props) {
   const t = useI18nStore((s) => s.t)
-  const resolvedPlaceholder = placeholder ?? t('stream.input.placeholder')
+  const resolvedPlaceholder = placeholder ?? t('worker.input.placeholder')
   const [value, setValue] = useState(initialValue ?? '')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -31,7 +32,8 @@ export default function WorkerInput({ onSend, onAttach, onHandoffToTerm, disable
     const ta = textareaRef.current
     if (ta) {
       ta.style.height = 'auto'
-      ta.style.height = ta.scrollHeight + 'px'
+      ta.style.height = Math.min(ta.scrollHeight, MAX_INPUT_PX) + 'px'
+      ta.style.overflowY = ta.scrollHeight > MAX_INPUT_PX ? 'auto' : 'hidden'
     }
   }, [])
 
@@ -42,6 +44,7 @@ export default function WorkerInput({ onSend, onAttach, onHandoffToTerm, disable
     setValue('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
+      textareaRef.current.style.overflowY = 'hidden'
     }
   }
 
@@ -53,8 +56,8 @@ export default function WorkerInput({ onSend, onAttach, onHandoffToTerm, disable
   }
 
   return (
-    <div className={`mx-2 mb-2 border rounded-xl overflow-hidden transition-colors ${
-      disabled ? 'opacity-40 border-border-default bg-surface-input' : 'border-border-default bg-surface-input focus-within:border-blue-400'
+    <div className={`w-full border-t border-border-subtle bg-surface-input transition-colors ${
+      disabled ? 'opacity-40' : 'focus-within:border-border-active'
     }`}>
       <textarea
         ref={textareaRef}
@@ -65,33 +68,8 @@ export default function WorkerInput({ onSend, onAttach, onHandoffToTerm, disable
         disabled={disabled}
         placeholder={resolvedPlaceholder}
         rows={1}
-        className="w-full bg-transparent text-text-primary placeholder-text-muted px-3 py-2.5 text-sm outline-none resize-none"
+        className="block w-full bg-transparent text-text-primary placeholder-text-muted px-3 py-2.5 text-sm outline-none resize-none"
       />
-      <div className="flex items-center px-2 pb-1.5">
-        {showAttach && (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={onAttach}
-            className="w-7 h-7 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-40"
-          >
-            <Plus size={16} />
-          </button>
-        )}
-        <div className="flex-1" />
-        {onHandoffToTerm && (
-          <button
-            type="button"
-            onClick={onHandoffToTerm}
-            disabled={disabled}
-            title={t('stream.handoff_to_term')}
-            className="flex items-center gap-1 px-2 py-1 rounded text-xs text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-40"
-          >
-            <Terminal size={14} />
-            <span>{t('stream.handoff_to_term')}</span>
-          </button>
-        )}
-      </div>
     </div>
   )
 }

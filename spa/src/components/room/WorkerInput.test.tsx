@@ -52,28 +52,6 @@ describe('WorkerInput', () => {
     expect(onSend).not.toHaveBeenCalled()
   })
 
-  it('renders Handoff to Term button when onHandoffToTerm is provided', () => {
-    render(<WorkerInput onSend={vi.fn()} onHandoffToTerm={vi.fn()} />)
-    expect(screen.getByTitle('Handoff to Term')).toBeInTheDocument()
-  })
-
-  it('does not render Handoff to Term button when onHandoffToTerm is not provided', () => {
-    render(<WorkerInput onSend={vi.fn()} />)
-    expect(screen.queryByTitle('Handoff to Term')).not.toBeInTheDocument()
-  })
-
-  it('calls onHandoffToTerm when button is clicked', () => {
-    const onHandoffToTerm = vi.fn()
-    render(<WorkerInput onSend={vi.fn()} onHandoffToTerm={onHandoffToTerm} />)
-    fireEvent.click(screen.getByTitle('Handoff to Term'))
-    expect(onHandoffToTerm).toHaveBeenCalledOnce()
-  })
-
-  it('disables Handoff to Term button when disabled prop is true', () => {
-    render(<WorkerInput onSend={vi.fn()} onHandoffToTerm={vi.fn()} disabled />)
-    expect(screen.getByTitle('Handoff to Term')).toBeDisabled()
-  })
-
   it('focuses textarea when focused prop becomes true', async () => {
     const { rerender } = render(<WorkerInput onSend={vi.fn()} focused={false} />)
     const textarea = screen.getByRole('textbox')
@@ -90,15 +68,48 @@ describe('WorkerInput', () => {
     expect(document.activeElement).not.toBe(screen.getByRole('textbox'))
   })
 
-  it('hides the attach button when showAttach is false', () => {
-    const { container, rerender } = render(<WorkerInput onSend={() => {}} />)
-    expect(container.querySelectorAll('button').length).toBeGreaterThanOrEqual(1)
-    rerender(<WorkerInput onSend={() => {}} showAttach={false} />)
-    expect(container.querySelector('button svg')).toBeNull()
-  })
-
   it('seeds the textarea value from initialValue', () => {
     render(<WorkerInput onSend={vi.fn()} initialValue="restored text" />)
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('restored text')
+  })
+
+  it('renders no attach button', () => {
+    const { container } = render(<WorkerInput onSend={vi.fn()} />)
+    expect(container.querySelector('button')).toBeNull()
+  })
+
+  it('draws no border box', () => {
+    const { container } = render(<WorkerInput onSend={vi.fn()} />)
+    const wrapper = container.firstElementChild as HTMLElement
+    const classes = wrapper.className.split(/\s+/)
+    expect(classes).not.toContain('rounded-xl')
+    // The only border is the hairline separator above the input.
+    expect(classes).not.toContain('border')
+    expect(classes).toContain('border-t')
+    expect(classes).toContain('w-full')
+  })
+
+  it('defaults the placeholder to worker.input.placeholder', () => {
+    render(<WorkerInput onSend={vi.fn()} />)
+    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', 'Reply...')
+  })
+
+  it('caps its height', () => {
+    render(<WorkerInput onSend={vi.fn()} />)
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    // jsdom has no layout, so scrollHeight is always 0; fake a tall content box.
+    Object.defineProperty(textarea, 'scrollHeight', { configurable: true, get: () => 800 })
+    fireEvent.change(textarea, { target: { value: Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n') } })
+    expect(textarea.style.height).toBe('200px')
+    expect(textarea.style.overflowY).toBe('auto')
+  })
+
+  it('keeps overflow hidden while under the cap', () => {
+    render(<WorkerInput onSend={vi.fn()} />)
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    Object.defineProperty(textarea, 'scrollHeight', { configurable: true, get: () => 60 })
+    fireEvent.change(textarea, { target: { value: 'a\nb' } })
+    expect(textarea.style.height).toBe('60px')
+    expect(textarea.style.overflowY).toBe('hidden')
   })
 })
