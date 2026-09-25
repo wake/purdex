@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.452] - 2026-09-26
+
+> 純 SPA，不需要重新部署 daemon。worker pane 重新設計（R1）七支 PR 的第五支。
+
+### Feature：subagent 的內容收進它的 Task 裡（#1460，closes #1263、#1228）
+
+- subagent 的訊息不再散在頂層：它們收在呼叫它的 Task 區塊裡，預設收成一行「名稱 · N 個工具」，展開後往內縮一層、
+  有自己的一條 rail；subagent 再叫 subagent 會再縮一層。
+- subagent 的提問不再畫成你說的話；交回的結果以文字顯示（不是原始 JSON），排在 subagent 自己的輸出之後。
+- subagent 自己的工具也有計時與狀態了，但不會讓主流程的 turn 提早結束；主 turn 結束時，還沒回報的 subagent 工具會標成中止。
+- `Task` 工具的標題顯示它的 description（跟 `Agent` 一致），不再印 prompt 的開頭。
+- 「全部展開」第一次只打開 subagent 本身，再按一次才展開它裡面的工具。
+
 ## [1.0.0-alpha.451] - 2026-09-26
 
 > 純 SPA，不需要重新部署 daemon。
