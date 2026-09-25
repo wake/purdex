@@ -28,6 +28,13 @@ describe('getSummary (client table, moved from ToolCallBlock)', () => {
     expect(getSummary('Agent', { description: 'Find files', prompt: 'long' })).toBe('Find files')
   })
 
+  // `Task` is the older name of the same subagent call, and PR-5 nests its
+  // frames under it: without its own row the header fell through to the
+  // input preview and printed the whole prompt.
+  it('Task → description', () => {
+    expect(getSummary('Task', { description: 'Find files', prompt: 'long' })).toBe('Find files')
+  })
+
   // Spec §4.2's "never truncated" promise is about N2's `primary_arg`; an
   // unknown tool's whole input is not an argument, and serialising a MB-class
   // input on every render to hang it in the header is unbounded work (codex

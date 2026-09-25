@@ -439,6 +439,97 @@ describe('ExecutionView — tool activity (R2) and the elapsed ticker', () => {
   })
 })
 
+// ---- worker pane R1 T5.3 (#1228): the ticker and the dots see child tools --
+//
+// `anyRunning` spans the whole `tools` map, so once the reducer keeps a
+// subagent's tool entries they drive the ticker and suppress the dots too.
+// Each test isolates the child's own entry (no parent Task tool_use is
+// recorded), so the ticker's state is decided by the child alone.
+
+const PARENT_TOOL = 'tu_task'
+const childToolUseFrame = (seq: number, created_at: number) => ({
+  seq, execution_id: E, kind: 'assistant', created_at,
+  payload: { type: 'assistant', parent_tool_use_id: PARENT_TOOL, message: { id: 'm_child', role: 'assistant', content: [{ type: 'tool_use', id: 'tu_c1', name: 'Read', input: { file_path: '/a' } }], stop_reason: null } },
+})
+const childToolResultFrame = (seq: number, created_at: number) => ({
+  seq, execution_id: E, kind: 'user', created_at,
+  payload: { type: 'user', parent_tool_use_id: PARENT_TOOL, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_c1', content: 'ok', is_error: false }], stop_reason: null } },
+})
+const resultFrame = (seq: number, created_at: number, parent: string | null) => ({
+  seq, execution_id: E, kind: 'result', created_at,
+  payload: { type: 'result', subtype: 'success', parent_tool_use_id: parent },
+})
+
+describe('ExecutionView — subagent tools drive the ticker and the dots (T5.3)', () => {
+  const withFakeTimers = (body: () => void) => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(10_000)
+      body()
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+  const apply = (...frames: Parameters<ReturnType<typeof useExecutionStore.getState>['applyEvents']>[2]) =>
+    act(() => { useExecutionStore.getState().applyEvents(H, E, frames) })
+  const childTool = () => useExecutionStore.getState().executions[KEY].tools.tu_c1
+
+  it("the ticker stops when a child's tool result arrives", () => {
+    withFakeTimers(() => {
+      patchExec({ turnLive: true })
+      render(<ExecutionView {...base} isActive />)
+      const idleTimers = vi.getTimerCount()
+      apply(childToolUseFrame(1, 10_000))
+      expect(childTool().status).toBe('running')
+      expect(vi.getTimerCount()).toBe(idleTimers + 1)
+      apply(childToolResultFrame(2, 12_000))
+      expect(childTool().status).toBe('done')
+      expect(vi.getTimerCount()).toBe(idleTimers)
+    })
+  })
+
+  it('the main result stops the ticker even when a child tool never reported', () => {
+    withFakeTimers(() => {
+      patchExec({ turnLive: true })
+      render(<ExecutionView {...base} isActive />)
+      const idleTimers = vi.getTimerCount()
+      apply(childToolUseFrame(1, 10_000))
+      expect(vi.getTimerCount()).toBe(idleTimers + 1)
+      // No child tool_result ever lands; the parent turn's own result is the backstop.
+      apply(resultFrame(2, 15_000, null))
+      expect(childTool().status).toBe('aborted')
+      expect(useExecutionStore.getState().executions[KEY].turnLive).toBe(false)
+      expect(vi.getTimerCount()).toBe(idleTimers)
+    })
+  })
+
+  it("a child's own result frame does not stop the ticker while the parent turn is still running", () => {
+    withFakeTimers(() => {
+      patchExec({ turnLive: true })
+      render(<ExecutionView {...base} isActive />)
+      const idleTimers = vi.getTimerCount()
+      apply(childToolUseFrame(1, 10_000))
+      expect(vi.getTimerCount()).toBe(idleTimers + 1)
+      // The subagent says it is done, but its tool never reported: that is
+      // not a turn end, so the tool stays running and the clock keeps going.
+      apply(resultFrame(2, 12_000, PARENT_TOOL))
+      expect(useExecutionStore.getState().executions[KEY].turnLive).toBe(true)
+      expect(childTool().status).toBe('running')
+      expect(vi.getTimerCount()).toBe(idleTimers + 1)
+    })
+  })
+
+  it('a running child tool suppresses the thinking dots', () => {
+    patchExec({ turnLive: true })
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+    act(() => { useExecutionStore.getState().applyEvents(H, E, [childToolUseFrame(1, 5_000)]) })
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    act(() => { useExecutionStore.getState().applyEvents(H, E, [childToolResultFrame(2, 6_000)]) })
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+  })
+})
+
 // ---- P-C.3b task 4: "Take back to terminal" ------------------------------
 
 const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }

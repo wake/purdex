@@ -134,6 +134,109 @@ describe('indexOperations', () => {
   })
 })
 
+// T5.1 (spec §4.5, #1263): a frame whose parent_tool_use_id names a Task call
+// belongs to that call's subagent, not to the top level.
+describe('indexOperations — the parent link', () => {
+  const scoped = (m: StreamMessage, parent: string | null): StreamMessage =>
+    ({ ...m, parent_tool_use_id: parent }) as unknown as StreamMessage
+
+  it("collects a subagent's frames under its Task", () => {
+    const idx = indexOperations([
+      msg('assistant', [call('T', 'Task')]),
+      scoped(msg('user', [{ type: 'text', text: 'analyse notes.md' }]), 'T'),
+      scoped(msg('assistant', [call('R', 'Read')]), 'T'),
+      scoped(msg('user', [result('R', 'contents')]), 'T'),
+      msg('user', [result('T', 'hand-back')]),
+    ])
+    expect(idx.childrenByParent.get(blockKey(0, 0))).toEqual([1, 2, 3])
+    expect(idx.childrenByParent.size).toBe(1)
+    // The hand-back is the main flow's answer to the Task call, not a child.
+    expect(idx.resultForCall.get(blockKey(0, 0))).toEqual({ text: 'hand-back', isError: false })
+  })
+
+  it('keeps child indexes out of the top level', () => {
+    const idx = indexOperations([
+      msg('user', [{ type: 'text', text: 'please delegate' }]),
+      msg('assistant', [call('T', 'Task')]),
+      scoped(msg('user', [{ type: 'text', text: 'prompt' }]), 'T'),
+      scoped(msg('assistant', [{ type: 'text', text: 'child says' }]), 'T'),
+      msg('user', [result('T', 'hand-back')]),
+    ])
+    expect([...idx.childIndexes].sort()).toEqual([2, 3])
+    for (const top of [0, 1, 4]) expect(idx.childIndexes.has(top)).toBe(false)
+  })
+
+  it('handles a child whose parent id matches no call in the list', () => {
+    // Its Task call is off the list (or never came). Hiding the frame under a
+    // call nobody renders would lose it, so it stays at the top level.
+    const idx = indexOperations([
+      scoped(msg('user', [{ type: 'text', text: 'prompt' }]), 'GONE'),
+      scoped(msg('assistant', [{ type: 'text', text: 'child says' }]), 'GONE'),
+    ])
+    expect(idx.childrenByParent.size).toBe(0)
+    expect(idx.childIndexes.size).toBe(0)
+  })
+
+  it('does not let a call claim frames that precede it', () => {
+    // Forward-only, like the pairing: a child cannot come before the call that
+    // spawned it, and a frame naming a later call would make a cycle possible
+    // (a message listed under a call inside itself).
+    const idx = indexOperations([
+      scoped(msg('assistant', [call('T', 'Task')]), 'T'),
+      scoped(msg('user', [{ type: 'text', text: 'after' }]), 'T'),
+    ])
+    expect(idx.childrenByParent.get(blockKey(0, 0))).toEqual([1])
+    expect(idx.childIndexes.has(0)).toBe(false)
+  })
+
+  it('keeps children in seq order', () => {
+    // Two subagents running side by side interleave their frames with each
+    // other and with the main flow; each list is still ascending.
+    const idx = indexOperations([
+      msg('assistant', [call('A', 'Task'), call('B', 'Task')]),
+      scoped(msg('user', [{ type: 'text', text: 'a prompt' }]), 'A'),
+      scoped(msg('user', [{ type: 'text', text: 'b prompt' }]), 'B'),
+      scoped(msg('assistant', [call('ra', 'Read')]), 'A'),
+      scoped(msg('assistant', [call('rb', 'Read')]), 'B'),
+      scoped(msg('user', [result('rb', 'b out')]), 'B'),
+      scoped(msg('user', [result('ra', 'a out')]), 'A'),
+    ])
+    expect(idx.childrenByParent.get(blockKey(0, 0))).toEqual([1, 3, 6])
+    expect(idx.childrenByParent.get(blockKey(0, 1))).toEqual([2, 4, 5])
+  })
+
+  it("lists a nested subagent's frames under the inner Task only", () => {
+    const idx = indexOperations([
+      msg('assistant', [call('T', 'Task')]),
+      scoped(msg('assistant', [call('U', 'Task')]), 'T'),
+      scoped(msg('user', [{ type: 'text', text: 'inner prompt' }]), 'U'),
+    ])
+    expect(idx.childrenByParent.get(blockKey(0, 0))).toEqual([1])
+    expect(idx.childrenByParent.get(blockKey(1, 0))).toEqual([2])
+    expect([...idx.childIndexes].sort()).toEqual([1, 2])
+  })
+
+  it("lists each same-id Task's frames under that call only", () => {
+    // A reused tool_use id (a replayed or resumed history) names two calls.
+    // Keyed by id, both calls would own both subagents' frames and each
+    // would draw the other's transcript; keyed by position, each call owns
+    // the frames that came after it and before the next call with that id.
+    const idx = indexOperations([
+      msg('assistant', [call('T', 'Task')]),
+      scoped(msg('user', [{ type: 'text', text: 'first prompt' }]), 'T'),
+      msg('user', [result('T', 'first hand-back')]),
+      msg('assistant', [{ type: 'text', text: 'again' }, call('T', 'Task')]),
+      scoped(msg('user', [{ type: 'text', text: 'second prompt' }]), 'T'),
+      scoped(msg('assistant', [{ type: 'text', text: 'second says' }]), 'T'),
+      msg('user', [result('T', 'second hand-back')]),
+    ])
+    expect(idx.childrenByParent.get(blockKey(0, 0))).toEqual([1])
+    expect(idx.childrenByParent.get(blockKey(3, 1))).toEqual([4, 5])
+    expect(idx.childrenByParent.size).toBe(2)
+    expect([...idx.childIndexes].sort()).toEqual([1, 4, 5])
+  })
+})
+
 describe('toolResultText', () => {
   it('keeps a string content as is', () => {
     expect(toolResultText('done')).toBe('done')

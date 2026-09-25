@@ -1720,5 +1720,6 @@
   "room.op.show_input": "input",
   "room.turn.expand_all": "expand all",
   "room.turn.collapse_all": "collapse all",
-  "room.thinking": "Thought · {{words}} words"
+  "room.thinking": "Thought · {{words}} words",
+  "room.subagent.summary": "{{name}} · {{tools}} tools"
 }

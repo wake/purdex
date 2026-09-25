@@ -286,15 +286,6 @@ describe('applyDurableEvent: N2 tool events (P-B3 spec §4.3 N0 / N1 / N4)', () 
   })
   const running = (id: string, startedAt = 100) => ({ [id]: { name: 'Bash', startedAt, endedAt: null, status: 'running' as const } })
 
-  it('N0: subagent tool_use / tool_result (non-null parent_tool_use_id) leave tools untouched but advance lastSeq', () => {
-    const base: ExecutionState = { ...defaultExecutionState(), tools: running('toolu_main') }
-    let s = applyDurableEvent(base, at(1, 'tool_use', { tool_use_id: 'toolu_sub', parent_tool_use_id: 'toolu_parent', name: 'Read' }))
-    s = applyDurableEvent(s, at(2, 'tool_result', { tool_use_id: 'toolu_sub', parent_tool_use_id: 'toolu_parent', status: 'ok', duration_ms: 5 }))
-    expect(s.tools).toEqual(base.tools)
-    expect(s.tools.toolu_sub).toBeUndefined()
-    expect(s.messages).toEqual([])
-    expect(s.lastSeq).toBe(2)
-  })
 
   it('N2 tool_result does not clear pendingSend and leaves turnLive / partial alone (not a turn end, not a message)', () => {
     const partial: ExecutionState['partial'] = { messageId: 'msg_1', finalized: 0, blocks: { 0: { index: 0, type: 'text', text: 'a', thinking: '', partialJson: '' } } }
@@ -404,5 +395,78 @@ describe('turn starts (spec §4.1)', () => {
 
   it('starts with no turn boundaries', () => {
     expect(defaultExecutionState().turnStarts).toEqual([])
+  })
+})
+
+// ---- worker pane R1 T5.3 (#1228): a subagent's tool events are kept --------
+
+describe('applyDurableEvent: subagent tool events (#1228)', () => {
+  const at = (seq: number, kind: string, payload: Record<string, unknown>, created_at = seq * 100): NexEvent =>
+    ({ seq, execution_id: 'exc_1', kind, payload, created_at })
+  const PARENT = 'toolu_task'
+  const childToolUse = (id: string, name = 'Read') => ({
+    type: 'assistant', parent_tool_use_id: PARENT,
+    message: { id: 'msg_child', role: 'assistant', content: [{ type: 'tool_use', id, name, input: { file_path: '/a' } }], stop_reason: 'tool_use' },
+  })
+  const childToolResult = (id: string) => ({
+    type: 'user', parent_tool_use_id: PARENT,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] },
+  })
+  const mainPartial: ExecutionState['partial'] = {
+    messageId: 'msg_main', finalized: 0,
+    blocks: { 0: { index: 0, type: 'text', text: 'main says', thinking: '', partialJson: '' } },
+  }
+  const live = (): ExecutionState => ({ ...defaultExecutionState(), turnLive: true })
+
+  it("records a subagent's tool timing", () => {
+    let s = applyDurableEvent(live(), at(1, 'assistant', childToolUse('toolu_c1')))
+    expect(s.tools.toolu_c1).toEqual({ name: 'Read', startedAt: 100, endedAt: null, status: 'running' })
+    s = applyDurableEvent(s, at(2, 'user', childToolResult('toolu_c1')))
+    expect(s.tools.toolu_c1).toEqual({ name: 'Read', startedAt: 100, endedAt: 200, status: 'done' })
+    // Still a message each, as before.
+    expect(s.messages).toHaveLength(2)
+  })
+
+  it("a subagent's result does not end the main turn", () => {
+    let s = applyDurableEvent(live(), at(1, 'assistant', childToolUse('toolu_c1')))
+    s = applyDurableEvent(s, at(2, 'result', { type: 'result', subtype: 'success', parent_tool_use_id: PARENT }))
+    expect(s.turnLive).toBe(true)
+    expect(s.tools.toolu_c1.status).toBe('running')
+  })
+
+  it("a subagent's frames do not touch the main partial", () => {
+    const base: ExecutionState = { ...live(), partial: mainPartial }
+    let s = applyDurableEvent(base, at(1, 'assistant', childToolUse('toolu_c1')))
+    s = applyDurableEvent(s, at(2, 'user', childToolResult('toolu_c1')))
+    s = applyDurableEvent(s, at(3, 'tool_use', { tool_use_id: 'toolu_c1', parent_tool_use_id: PARENT, name: 'Read' }))
+    s = applyDurableEvent(s, at(4, 'result', { type: 'result', subtype: 'success', parent_tool_use_id: PARENT }))
+    expect(s.partial).toBe(base.partial)
+    expect(s.turnLive).toBe(true)
+    // A child frame never opens a turn either.
+    expect(s.turnStarts).toEqual([])
+  })
+
+  it("a subagent's N2 facts land on its own tool entry", () => {
+    const base: ExecutionState = { ...live(), tools: { [PARENT]: { name: 'Task', startedAt: 50, endedAt: null, status: 'running' } } }
+    let s = applyDurableEvent(base, at(1, 'assistant', childToolUse('toolu_c1')))
+    s = applyDurableEvent(s, at(2, 'tool_use', { tool_use_id: 'toolu_c1', parent_tool_use_id: PARENT, name: 'Read', known: true, primary_arg: { key: 'file_path', value: '/a' } }))
+    s = applyDurableEvent(s, at(3, 'user', childToolResult('toolu_c1')))
+    s = applyDurableEvent(s, at(4, 'tool_result', { tool_use_id: 'toolu_c1', parent_tool_use_id: PARENT, status: 'ok', duration_ms: 5, file: { path: '/a', lines: 12 } }))
+    expect(s.tools.toolu_c1).toEqual({
+      name: 'Read', startedAt: 100, endedAt: 300, status: 'done',
+      known: true, primaryArg: { key: 'file_path', value: '/a' }, durationMs: 5, file: { path: '/a', lines: 12 },
+    })
+    // The parent Task entry is not the child's home.
+    expect(s.tools[PARENT]).toEqual(base.tools[PARENT])
+    // N2 kinds are still never messages.
+    expect(s.messages).toHaveLength(2)
+    expect(s.lastSeq).toBe(4)
+  })
+
+  it("endTurn still aborts a child's running tool", () => {
+    let s = applyDurableEvent(live(), at(1, 'assistant', childToolUse('toolu_c1')))
+    s = applyDurableEvent(s, at(2, 'result', { type: 'result', subtype: 'success', parent_tool_use_id: null }))
+    expect(s.turnLive).toBe(false)
+    expect(s.tools.toolu_c1).toEqual({ name: 'Read', startedAt: 100, endedAt: 200, status: 'aborted' })
   })
 })
