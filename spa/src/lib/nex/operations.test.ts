@@ -105,6 +105,33 @@ describe('indexOperations', () => {
     expect(idx.resultForCall.size).toBe(0)
     expect(idx.consumedResults.size).toBe(0)
   })
+
+  it('does not let a subagent result answer a main-flow call that shares its id', () => {
+    // Main call X, then a subagent frame (parent_tool_use_id P) whose result
+    // also names X, then the main result X. Only the same-scope result may
+    // answer the call; the subagent one is left as an orphan.
+    const scoped = (m: StreamMessage, parent: string | null): StreamMessage =>
+      ({ ...m, parent_tool_use_id: parent }) as unknown as StreamMessage
+    const idx = indexOperations([
+      scoped(msg('assistant', [call('X')]), null),
+      scoped(msg('user', [result('X', 'subagent')]), 'P'),
+      msg('user', [result('X', 'main')]),
+    ])
+    expect(idx.resultForCall.get(blockKey(0, 0))).toEqual({ text: 'main', isError: false })
+    expect(idx.consumedResults.has(blockKey(1, 0))).toBe(false)
+    expect(idx.consumedResults.has(blockKey(2, 0))).toBe(true)
+  })
+
+  it('still pairs a call and result inside the same subagent scope', () => {
+    const scoped = (m: StreamMessage, parent: string | null): StreamMessage =>
+      ({ ...m, parent_tool_use_id: parent }) as unknown as StreamMessage
+    const idx = indexOperations([
+      scoped(msg('assistant', [call('X')]), 'P'),
+      scoped(msg('user', [result('X', 'sub done')]), 'P'),
+    ])
+    expect(idx.resultForCall.get(blockKey(0, 0))).toEqual({ text: 'sub done', isError: false })
+    expect(idx.consumedResults.has(blockKey(1, 0))).toBe(true)
+  })
 })
 
 describe('toolResultText', () => {

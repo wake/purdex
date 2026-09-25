@@ -62,28 +62,39 @@ function blocksOf(message: StreamMessage): ContentBlock[] {
  * floats its real answer off as an orphan. So a result that arrives with no
  * waiting call is an orphan, and stays one.
  *
+ * Queues are also per **scope**: a subagent's frames carry the
+ * `parent_tool_use_id` of the Task call that spawned them, and a result from
+ * inside a subagent may name the same `tool_use_id` as a main-flow call still
+ * waiting for its own answer. A call and a result pair only when their
+ * messages share a scope (null/absent = the main flow), so a subagent result
+ * can never eat the main flow's call; with no same-scope call it is an orphan.
+ *
  * A call with no result is absent from `resultForCall`; an orphan result is
  * absent from `consumedResults` and renders on its own.
  */
 export function indexOperations(messages: StreamMessage[]): OperationIndex {
   const resultForCall = new Map<BlockKey, OperationResult>()
   const consumedResults = new Set<BlockKey>()
-  const waitingCalls = new Map<string, BlockKey[]>()
+  // scope (parent_tool_use_id, '' for the main flow) → tool_use_id → FIFO of calls.
+  const waitingCalls = new Map<string, Map<string, BlockKey[]>>()
 
   messages.forEach((message, mi) => {
+    const scope = (message as { parent_tool_use_id?: string | null }).parent_tool_use_id ?? ''
+    const waiting = waitingCalls.get(scope) ?? new Map<string, BlockKey[]>()
+    waitingCalls.set(scope, waiting)
     blocksOf(message).forEach((block, bi) => {
       if (block.type === 'tool_use') {
         const id = block.id
         if (!id) return
-        const queue = waitingCalls.get(id)
+        const queue = waiting.get(id)
         if (queue) queue.push(blockKey(mi, bi))
-        else waitingCalls.set(id, [blockKey(mi, bi)])
+        else waiting.set(id, [blockKey(mi, bi)])
         return
       }
       if (block.type === 'tool_result') {
         const id = block.tool_use_id
         if (!id) return
-        const callKey = waitingCalls.get(id)?.shift()
+        const callKey = waiting.get(id)?.shift()
         if (callKey === undefined) return
         resultForCall.set(callKey, {
           text: toolResultText((block as { content?: unknown }).content),

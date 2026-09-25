@@ -1,8 +1,8 @@
 // spa/src/components/ConversationMessages.test.tsx
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, fireEvent } from '@testing-library/react'
 import ConversationMessages from './ConversationMessages'
-import type { StreamMessage } from '../lib/nex/message-types'
+import type { ContentBlock, StreamMessage } from '../lib/nex/message-types'
 import type { PartialAssembly, PartialBlock } from '../lib/nex/partial'
 import type { ToolActivity } from '../lib/nex/tool-activity'
 
@@ -126,9 +126,11 @@ describe('ConversationMessages', () => {
     it('R1: a started tool_use with empty partialJson renders the spinner row with only the tool name', () => {
       render(<ConversationMessages messages={[]} keyPrefix="k" showThinking={false} showEmptyHint={false}
         partial={assembly(pb(0, { type: 'tool_use', toolName: 'Bash' }))} />)
-      const header = within(screen.getByTestId('partial-group')).getByTestId('tool-header')
-      expect(within(header).getByTestId('tool-icon-spinner')).toBeInTheDocument()
-      expect(header).toHaveTextContent(/^Bash$/)
+      const group = within(screen.getByTestId('partial-group'))
+      expect(group.getByTestId('op-dot')).toHaveClass('animate-spin')
+      expect(group.getByTestId('op-name')).toHaveTextContent(/^Bash$/)
+      expect(group.getByTestId('op-arg-pending')).toBeInTheDocument()
+      expect(group.queryByTestId('op-rail')).toBeNull()
     })
 
     it('R1: an unknown block renders nothing', () => {
@@ -137,21 +139,23 @@ describe('ConversationMessages', () => {
       expect(screen.getByTestId('partial-group')).toBeEmptyDOMElement()
     })
 
-    it('R1: a snapshot-seeded tool_use block without toolName shows the execution.tool.unknown placeholder and the raw prefix', () => {
+    it('R1: a snapshot-seeded tool_use block without toolName shows the execution.tool.unknown placeholder, never the half-assembled JSON', () => {
       render(<ConversationMessages messages={[]} keyPrefix="k" showThinking={false} showEmptyHint={false}
         partial={assembly(pb(0, { type: 'tool_use', partialJson: '{"command":"ls' }))} />)
-      const header = within(screen.getByTestId('partial-group')).getByTestId('tool-header')
-      expect(header).toHaveTextContent('tool')
-      expect(header).toHaveTextContent('{"command":"ls')
-      expect(within(header).getByTestId('tool-icon-spinner')).toBeInTheDocument()
+      const group = screen.getByTestId('partial-group')
+      expect(within(group).getByTestId('op-name')).toHaveTextContent('tool')
+      // spec §3.1.1 #7: the placeholder, not the raw prefix.
+      expect(group).not.toHaveTextContent('{"command":"ls')
+      expect(within(group).getByTestId('op-arg-pending')).toBeInTheDocument()
+      expect(within(group).getByTestId('op-dot')).toHaveClass('animate-spin')
     })
 
     it('R1: a tool_use block with toolName shows that name as streaming', () => {
       render(<ConversationMessages messages={[]} keyPrefix="k" showThinking={false} showEmptyHint={false}
         partial={assembly(pb(0, { type: 'tool_use', toolName: 'Read', partialJson: '{"file' }))} />)
-      const header = within(screen.getByTestId('partial-group')).getByTestId('tool-header')
-      expect(header).toHaveTextContent('Read')
-      expect(within(header).getByTestId('tool-icon-spinner')).toBeInTheDocument()
+      const group = within(screen.getByTestId('partial-group'))
+      expect(group.getByTestId('op-name')).toHaveTextContent('Read')
+      expect(group.getByTestId('op-dot')).toHaveClass('animate-spin')
     })
 
     it('no partial (null or no blocks) → no partial group', () => {
@@ -166,75 +170,221 @@ describe('ConversationMessages', () => {
     it('R2: a durable tool_use with a running tools entry shows the spinner and the elapsed badge', () => {
       render(<ConversationMessages messages={[durableTool]} keyPrefix="k" showThinking={false} showEmptyHint={false}
         tools={{ tu1: running }} now={13_400} />)
-      expect(screen.getByTestId('tool-icon-spinner')).toBeInTheDocument()
-      expect(screen.getByTestId('tool-elapsed')).toHaveTextContent('12.4s')
-      expect(screen.queryByTestId('tool-icon-wrench')).not.toBeInTheDocument()
+      expect(screen.getByTestId('op-dot')).toHaveClass('animate-spin')
+      expect(screen.getByTestId('op-elapsed')).toHaveTextContent('12.4s')
     })
 
-    it('R2: a durable tool_use with a done tools entry shows the wrench and the duration badge', () => {
+    it('R2: a durable tool_use with a done tools entry shows the success dot and the duration badge', () => {
       render(<ConversationMessages messages={[durableTool]} keyPrefix="k" showThinking={false} showEmptyHint={false}
         tools={{ tu1: { ...running, endedAt: 7_200, status: 'done' } }} now={99_999} />)
-      expect(screen.getByTestId('tool-icon-wrench')).toBeInTheDocument()
-      expect(screen.getByTestId('tool-duration')).toHaveTextContent('6.2s')
+      expect(screen.getByTestId('op-dot')).not.toHaveClass('animate-spin')
+      expect(screen.getByTestId('op-dot').className).toContain('bg-status-success')
+      expect(screen.getByTestId('op-duration')).toHaveTextContent('6.2s')
     })
 
-    it("R2: a durable tool_use without a tools entry renders today's DOM (wrench, no badge)", () => {
+    it('R2: a durable tool_use without a tools entry renders the plain pending block (no badge)', () => {
       render(<ConversationMessages messages={[durableTool]} keyPrefix="k" showThinking={false} showEmptyHint={false}
         tools={{ other: running }} now={13_400} />)
-      expect(screen.getByTestId('tool-icon-wrench')).toBeInTheDocument()
-      expect(screen.queryByTestId('tool-icon-spinner')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('tool-elapsed')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('tool-duration')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('tool-aborted')).not.toBeInTheDocument()
+      expect(screen.getByTestId('operation-block')).toBeInTheDocument()
+      expect(screen.getByTestId('op-dot')).not.toHaveClass('animate-spin')
+      expect(screen.getByTestId('op-dot').className).toContain('bg-text-muted')
+      expect(screen.queryByTestId('op-elapsed')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('op-duration')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('op-aborted')).not.toBeInTheDocument()
     })
   })
 
-  // ---- P-B3.2 spec §4.4 R4: raw user tool_result → ToolResultBlock.facts by tool_use_id ----
-  describe('tool result facts (P-B3 R4)', () => {
-    const resultFrame = (toolUseId: string): StreamMessage => ({
-      type: 'user',
-      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'edited', is_error: false }], stop_reason: null },
-    } as StreamMessage)
-    const editDone: ToolActivity = {
+  // ---- T3.3: operations (spec §4.2) — one call ⊕ its result is one block ----
+  const asst = (...blocks: ContentBlock[]): StreamMessage =>
+    ({ type: 'assistant', message: { id: 'm', role: 'assistant', content: blocks, stop_reason: null } } as StreamMessage)
+  const usr = (...blocks: ContentBlock[]): StreamMessage =>
+    ({ type: 'user', message: { role: 'user', content: blocks, stop_reason: null } } as StreamMessage)
+  const use = (id: string, name: string | undefined, input: Record<string, unknown> = {}): ContentBlock =>
+    ({ type: 'tool_use', id, ...(name === undefined ? {} : { name }), input })
+  const res = (id: string, content: string, isError = false): ContentBlock =>
+    ({ type: 'tool_result', tool_use_id: id, content, is_error: isError })
+  const longBody = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join('\n')
+
+  describe('operations (T3.3)', () => {
+    it('pairs a call with its result into one block', () => {
+      render(<ConversationMessages messages={[asst(use('tu1', 'Bash', { command: 'ls -la' })), usr(res('tu1', 'total 8'))]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} />)
+      expect(screen.getAllByTestId('operation-block')).toHaveLength(1)
+      const one = screen.getByTestId('operation-block')
+      expect(within(one).getByTestId('op-name')).toHaveTextContent('Bash')
+      expect(within(one).getByTestId('op-arg')).toHaveTextContent('ls -la')
+      expect(within(one).getByTestId('fold-body')).toHaveTextContent('total 8')
+      expect(screen.queryByTestId('tool-result-block')).toBeNull()
+    })
+
+    it('renders an orphan result on its own', () => {
+      render(<ConversationMessages messages={[usr(res('tu9', 'stray output'))]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} />)
+      expect(screen.getAllByTestId('operation-block')).toHaveLength(1)
+      expect(screen.getByTestId('op-name')).toHaveTextContent('tool')
+      expect(screen.getByTestId('fold-body')).toHaveTextContent('stray output')
+    })
+
+    it('renders no argument for an orphan result', () => {
+      // An orphan has no call, so there is no input to summarise: it is
+      // rendered with `input={{}}`. The argument slot must stay empty —
+      // it used to print a literal `{}`, the serialiser's answer to a
+      // question the call never asked.
+      render(<ConversationMessages messages={[usr(res('tu9', 'stray output'))]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} />)
+      expect(screen.queryByTestId('op-arg')).toBeNull()
+      expect(screen.getByTestId('operation-block').textContent).not.toContain('{}')
+    })
+
+    it("remembers a block's expansion across a re-render", () => {
+      const messages = [asst(use('tu1', 'Bash', { command: 'ls' })), usr(res('tu1', longBody))]
+      const { rerender } = render(<ConversationMessages messages={messages}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} />)
+      expect(screen.getByTestId('fold-more')).toBeInTheDocument()
+      fireEvent.click(screen.getByTestId('fold-more'))
+      expect(screen.getByTestId('fold-less')).toBeInTheDocument()
+      // A new keyPrefix re-keys every row, so the blocks unmount and remount:
+      // a useState inside the block would lose the expansion here.
+      rerender(<ConversationMessages messages={messages}
+        keyPrefix="k2" showThinking={false} showEmptyHint={false} />)
+      expect(screen.getByTestId('fold-less')).toBeInTheDocument()
+      expect(screen.queryByTestId('fold-more')).toBeNull()
+    })
+
+    it('renders each of two same-id calls with its own result', () => {
+      render(<ConversationMessages
+        messages={[
+          asst(use('tu1', 'Bash', { command: 'first' }), use('tu1', 'Bash', { command: 'second' })),
+          usr(res('tu1', 'ANSWER A'), res('tu1', 'ANSWER B')),
+        ]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} />)
+      const blocks = screen.getAllByTestId('operation-block')
+      // Two calls, two blocks — and no third block for a result shown on its own.
+      expect(blocks).toHaveLength(2)
+      expect(within(blocks[0]).getByTestId('op-arg')).toHaveTextContent('first')
+      expect(within(blocks[0]).getByTestId('fold-body')).toHaveTextContent('ANSWER A')
+      expect(within(blocks[1]).getByTestId('op-arg')).toHaveTextContent('second')
+      expect(within(blocks[1]).getByTestId('fold-body')).toHaveTextContent('ANSWER B')
+      // Neither body leaked into the other block.
+      expect(blocks[0]).not.toHaveTextContent('ANSWER B')
+      expect(blocks[1]).not.toHaveTextContent('ANSWER A')
+    })
+
+    it('two calls sharing a tool_use id expand independently', () => {
+      // The fold key is the call's **position** (`blockKey(i, j)`), not its
+      // tool_use id: ids repeat (the #7 case above), and two calls under one
+      // id would then share one expansion — opening either would open both.
+      // Position is safe because `event-reducer.ts` only appends to
+      // `messages`; no unshift or splice ever moves an existing index.
+      render(<ConversationMessages
+        messages={[
+          asst(use('tu1', 'Bash', { command: 'first' }), use('tu1', 'Bash', { command: 'second' })),
+          usr(res('tu1', `A\n${longBody}`), res('tu1', `B\n${longBody}`)),
+        ]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} />)
+      const blocks = screen.getAllByTestId('operation-block')
+      expect(blocks).toHaveLength(2)
+      expect(screen.getAllByTestId('fold-more')).toHaveLength(2)
+      fireEvent.click(within(blocks[0]).getByTestId('fold-more'))
+      // The one that was clicked is open; the other is untouched.
+      expect(within(blocks[0]).getByTestId('fold-less')).toBeInTheDocument()
+      expect(within(blocks[0]).queryByTestId('fold-more')).toBeNull()
+      expect(within(blocks[1]).getByTestId('fold-more')).toBeInTheDocument()
+      expect(within(blocks[1]).queryByTestId('fold-less')).toBeNull()
+    })
+
+    it('renders every result exactly once', () => {
+      render(<ConversationMessages
+        messages={[
+          asst(use('tu1', 'Bash', { command: 'a' }), use('tu2', 'Read', { file_path: '/x' }), use('tu4', undefined, {})),
+          // out of order, plus one result nothing called for
+          usr(res('tu2', 'ANSWER 2'), res('tu1', 'ANSWER 1'), res('tu3', 'ORPHAN'), res('tu4', 'ANSWER 4')),
+        ]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} />)
+      // three calls + one orphan result
+      expect(screen.getAllByTestId('operation-block')).toHaveLength(4)
+      expect(screen.getAllByTestId('fold-body')).toHaveLength(4)
+      for (const text of ['ANSWER 1', 'ANSWER 2', 'ANSWER 4', 'ORPHAN']) {
+        expect(screen.getAllByText(text)).toHaveLength(1)
+      }
+      // A call with no name still renders — otherwise its result is consumed
+      // by the pairing and then shown by nobody.
+      const blocks = screen.getAllByTestId('operation-block')
+      expect(within(blocks[2]).getByTestId('op-name')).toHaveTextContent('tool')
+      expect(within(blocks[2]).getByTestId('fold-body')).toHaveTextContent('ANSWER 4')
+    })
+  })
+
+  // ---- own-key lookup into `tools` (inherited from ToolUseBlock, T3.3) -------
+  // `tools` is keyed by tool_use ids, which are foreign strings: a plain
+  // `tools[id]` reads `Object.prototype.constructor` for the id `constructor`
+  // and picks up any entry someone hung on the prototype. ToolUseBlock held
+  // these two guards; T3.3 deleted it, so the lookup — and the guards — live
+  // here now.
+  describe('own-key lookup into tools', () => {
+    const hunk = { oldStart: 1, oldLines: 3, newStart: 1, newLines: 3, lines: [' hello', '-world', '+nexen', ' three'] }
+    const diffEntry: ToolActivity = {
       name: 'Edit', startedAt: 1, endedAt: 2, status: 'done',
-      diff: { path: '/x', added: 1, removed: 1, hunks: [], truncated: false },
+      diff: { path: '/x', added: 1, removed: 1, hunks: [hunk], truncated: false },
     }
+    const fileEntry: ToolActivity = {
+      name: 'Read', startedAt: 1, endedAt: 2, status: 'done', file: { path: '/srv/x.ts', lines: 4 },
+    }
+    const resultFrame = (toolUseId: string): StreamMessage => usr(res(toolUseId, 'edited'))
 
-    it('a tools entry for the tool_use_id with a diff → facts span "+1 −1"', () => {
-      render(<ConversationMessages messages={[resultFrame('tu1')]} keyPrefix="k" showThinking={false} showEmptyHint={false}
-        tools={{ tu1: editDone }} />)
-      expect(screen.getByTestId('tool-result-facts')).toHaveTextContent('+1 −1')
+    it('a `constructor` id with an empty tools map does not reach Object.prototype', () => {
+      render(<ConversationMessages messages={[asst(use('constructor', 'Bash', { command: 'ls' }))]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} tools={{}} now={13_400} />)
+      expect(screen.getByTestId('op-name')).toHaveTextContent('Bash')
+      expect(screen.queryByTestId('tool-diff')).toBeNull()
+      expect(screen.queryByTestId('op-elapsed')).toBeNull()
+      expect(screen.queryByTestId('op-duration')).toBeNull()
+      expect(screen.queryByTestId('op-aborted')).toBeNull()
     })
 
-    it('no entry for this tool_use_id → no facts span', () => {
-      render(<ConversationMessages messages={[resultFrame('tu1')]} keyPrefix="k" showThinking={false} showEmptyHint={false}
-        tools={{ other: editDone }} />)
-      expect(screen.getByTestId('tool-result-block')).toBeInTheDocument()
-      expect(screen.queryByTestId('tool-result-facts')).not.toBeInTheDocument()
+    it('a `constructor` entry on the prototype is ignored; the same entry as an own key is found', () => {
+      const msgs = [asst(use('constructor', 'Edit', { file_path: '/x' })), usr(res('constructor', 'edited'))]
+      const inherited = Object.create({ constructor: diffEntry }) as Record<string, ToolActivity>
+      const { unmount } = render(<ConversationMessages messages={msgs}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} tools={inherited} now={13_400} />)
+      expect(screen.getByTestId('operation-block')).toBeInTheDocument()
+      expect(screen.queryByTestId('tool-diff')).toBeNull()
+      unmount()
+      // The positive control: without it "no diff" would pass against anything.
+      render(<ConversationMessages messages={msgs}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} tools={{ constructor: diffEntry }} now={13_400} />)
+      expect(screen.getByTestId('tool-diff')).toBeInTheDocument()
     })
 
-    it('tools undefined (Stream mode) → no facts span', () => {
-      render(<ConversationMessages messages={[resultFrame('tu1')]} keyPrefix="k" showThinking={false} showEmptyHint={false} />)
-      expect(screen.getByTestId('tool-result-block')).toBeInTheDocument()
-      expect(screen.queryByTestId('tool-result-facts')).not.toBeInTheDocument()
+    it('an entry reachable only through the prototype chain is ignored', () => {
+      const inherited = Object.create({ tu1: running }) as Record<string, ToolActivity>
+      const { unmount } = render(<ConversationMessages messages={[durableTool]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} tools={inherited} now={13_400} />)
+      expect(screen.getByTestId('op-dot')).not.toHaveClass('animate-spin')
+      expect(screen.queryByTestId('op-elapsed')).toBeNull()
+      unmount()
+      render(<ConversationMessages messages={[durableTool]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} tools={{ tu1: running }} now={13_400} />)
+      expect(screen.getByTestId('op-elapsed')).toHaveTextContent('12.4s')
     })
 
-    it('own-key lookup: tool_use_id "constructor" with an empty tools map → no facts, no crash', () => {
-      render(<ConversationMessages messages={[resultFrame('constructor')]} keyPrefix="k" showThinking={false} showEmptyHint={false}
-        tools={{}} />)
-      expect(screen.getByTestId('tool-result-block')).toBeInTheDocument()
-      expect(screen.queryByTestId('tool-result-facts')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('tool-result-denied')).not.toBeInTheDocument()
+    it('an orphan result does not take its name from a prototype entry', () => {
+      const inherited = Object.create({ tu9: fileEntry }) as Record<string, ToolActivity>
+      const { unmount } = render(<ConversationMessages messages={[resultFrame('tu9')]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} tools={inherited} />)
+      expect(screen.getByTestId('op-name')).toHaveTextContent('tool')
+      unmount()
+      render(<ConversationMessages messages={[resultFrame('tu9')]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} tools={{ tu9: fileEntry }} />)
+      expect(screen.getByTestId('op-name')).toHaveTextContent('/srv/x.ts')
     })
 
-    it('own-key lookup: an entry reachable only through the prototype chain is ignored', () => {
-      // `tools.tu1` resolves via the prototype but is not an own key — a
-      // `tools?.[id]` lookup would pick it up; Object.hasOwn must not.
-      const inherited = Object.create({ tu1: editDone }) as Record<string, ToolActivity>
-      render(<ConversationMessages messages={[resultFrame('tu1')]} keyPrefix="k" showThinking={false} showEmptyHint={false}
-        tools={inherited} />)
-      expect(screen.getByTestId('tool-result-block')).toBeInTheDocument()
-      expect(screen.queryByTestId('tool-result-facts')).not.toBeInTheDocument()
+    it('tools undefined (Stream mode) → the orphan result still renders, with no facts', () => {
+      render(<ConversationMessages messages={[resultFrame('tu1')]}
+        keyPrefix="k" showThinking={false} showEmptyHint={false} />)
+      expect(screen.getByTestId('operation-block')).toBeInTheDocument()
+      expect(screen.getByTestId('op-name')).toHaveTextContent('tool')
+      expect(screen.queryByTestId('tool-diff')).toBeNull()
     })
   })
 

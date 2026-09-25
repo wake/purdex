@@ -332,6 +332,13 @@ export function foldPlan(src: FoldSource): FoldPlan
     `previewLines` is `[]`.
   - `firstLine(text)` = `text.split('\n', 1)[0] ?? ''`, cut to
     `FOLD_LINE_MAX_CHARS` — **never** the lines joined by a space (#1265).
+    **It has no caller in R1 and that is expected.** R1's previews are
+    multi-line (6 or 3 lines in a `<pre>`, newlines intact), which is what
+    actually fixes #1265; `firstLine` exists for the previews that really are
+    one line — the subagent summary in PR-5 (§4.5) and chat's collapsed tool
+    line in R2 (§5). Spec §4.2's italic row was written for the old
+    single-line preview and contradicted the "first 6 / first 3 lines" rows
+    around it; it has been reworded to say which case each rule governs.
 
 - Test `spa/src/lib/nex/fold.test.ts`:
   `shows a short body whole` (3 lines → `collapsible === false`,
@@ -420,6 +427,14 @@ export function indexOperations(messages: StreamMessage[]): OperationIndex
   keeping one FIFO per id of calls still waiting for an answer, and give
   each `tool_result` to the **oldest unanswered call with that id**. A result
   with no waiting call is an orphan and **stays** one.
+
+  **Pairing is per scope** (PR #1451 R2 attack A1). The queues are keyed by
+  the message's `parent_tool_use_id` as well as the id (null / absent = the
+  main flow): a subagent's `tool_result` that names the same `tool_use_id` as
+  a main-flow call still waiting would otherwise consume that call, and the
+  main flow's real answer would float off as an orphan. A call and a result
+  pair only within one scope; a subagent result with no same-scope call is an
+  orphan.
 
   **Pairing is forward-only.** An earlier draft queued results too, so a
   result could pair with a call that arrives *later*; the attack review found
@@ -664,9 +679,16 @@ export interface OperationBlockProps {
   - header row: the status dot (`<span data-testid="op-dot">`, 6 px, colours
     below), the tool name (`font-semibold text-text-primary`; `line-through
     text-text-muted` when denied, as today), the argument
-    (`text-text-muted whitespace-pre-wrap break-all`, **not** truncated —
-    spec §4.2 — so `SUMMARY_LIMIT` is no longer applied here), then the
-    duration on the right, rendered only when `>= 1000` ms.
+    (`text-text-muted whitespace-pre-wrap break-all`, **not** truncated by
+    the renderer — spec §4.2 — so `SUMMARY_LIMIT` is no longer applied
+    here), then the duration on the right, rendered only when `>= 1000` ms.
+    The N2 `primary_arg` is shown whole. A tool with no primary argument
+    falls to `getSummary`'s default branch, which is a **bounded** preview of
+    the input (`previewValue(input, SUMMARY_LIMIT)`, ending in `…` when cut;
+    `''` for an empty input): §4.2's guarantee is about `primary_arg`, and
+    serialising a MB-class input in full on every render is unbounded work
+    (PR #1451 R2 attack A3). The whole input stays one click away in
+    `op-input`.
   - `show input` toggle (`data-testid="op-input-toggle"`), rendered only when
     `Object.keys(input).length > 0 && !(summaryEntry?.primaryArg && Object.keys(input).length === 1)`.
     Expanded → `<pre data-testid="op-input">` on the rail with
@@ -706,17 +728,37 @@ export interface OperationBlockProps {
   review #12 — these are P-B2 / P-B3 behaviours whose only guards are the
   test files T3.3 removes, so they are re-asserted here or they are gone):
   `falls back to the unknown-tool label when the block has no name`
-  (`execution.tool.unknown`); `looks tools up by own key`
-  (a `tools` map whose key is `constructor` must not reach
-  `Object.prototype` — the same hostile-id case `ToolUseBlock.tsx:21` and
-  `ConversationMessages.tsx:105` guard today); `an N2 status outranks the raw
-  frame's is_error` (`facts.status: 'ok'` with `isError: true` → the ok dot);
+  (`execution.tool.unknown` — **note the real fallback lives at the call
+  site**, `ToolUseBlock.tsx:26`'s `block.name ?? t(…)`, and `OperationBlock`
+  receives an already-resolved `tool: string`. The block keeps an empty-string
+  guard of its own, but **T3.3's call site still needs the `??`**: `??` fires
+  on an absent name, the block's guard on an empty one);
+  `an N2 status outranks the raw frame's is_error`
+  (**`facts.status: 'done'`** with `isError: true` → the ok dot. An earlier
+  draft wrote `'ok'`, which is not a member of `ToolActivity['status']` at
+  all — it is `ToolResultBlock`'s internal *tone*);
   `a raw result does not downgrade a denial` (`facts.status: 'denied'` with
-  `isError: false` stays denied); `shows no duration when both clocks are
-  unknown` (`startedAt: 0`, no `durationMs`); `prefers the daemon's
-  durationMs over the clock difference`; `shows the aborted badge`;
+  `isError: false` stays denied — asserted on the dot colour, the rail's
+  warning fill and the struck-through name, since the new DOM has no denied
+  badge); `shows no duration when **either** clock is unknown`
+  (`startedAt: 0` **and**, separately, `endedAt: 0`; the existing tests guard
+  each one, and "both" would leave half the contract uncovered);
+  `prefers the daemon's durationMs over the clock difference` (**the two
+  numbers have to straddle the 1 s threshold**: a clock difference of 6.2 s
+  against `durationMs: 1200` shows `1.2s`. The existing test's 26 ms against
+  100 ms would be invisible either way and assert nothing);
+  `shows the aborted badge` (the wrench icon it also checked today is gone —
+  the status dot replaced it);
   `renders a truncated diff that has no hunks` (the daemon dropped them all,
-  so only the note shows); `renders the elapsed timer only while running`.
+  so only the note shows); `renders the elapsed timer only while running` (two test ids,
+  `op-elapsed` and `op-duration`, which is how the existing tests tell the
+  running badge from the finished one).
+
+  **A negative assertion needs a positive control.** Three of these read
+  "shows no X"; against a stub that renders nothing they pass without
+  touching the implementation. Each is paired with the case that *does* show
+  X (1000 ms shows a duration, a second input key shows the toggle, a known
+  clock shows the badge), and the pair is what makes the guard real.
 
 ### T3.2 the diff display budget and the last theme tokens (#1227) (TDD)
 
@@ -737,10 +779,17 @@ defect, and R1's whole claim is "one folding rule for every block type".
     totalLines: rows.length, truncated: diff.truncated })` and render the
     first `plan.previewLines.length` **rows** — so a diff of ≤ 6 rows shows
     whole, ≤ 40 shows 6, more shows 3, and a daemon-truncated diff shows 3,
-    identically to every output in the pane. The remainder collapses behind
-    one `data-testid="diff-more"` button reading
-    `t('room.fold.more', { n: plan.hiddenLines })`. `foldPlan` decides the
-    rows; only the rendering of a row is this component's business.
+    identically to every output in the pane. While collapsed each of those
+    rows draws **its `plan.previewLines` entry, not its full text** — the
+    preview is bounded in bytes as well as rows (design decision 3), and
+    spending only the row count let one MB-class row reach the DOM whole
+    behind a one-row preview (PR #1451 R2 attack A2). Expanded rows draw their
+    full text. The remainder collapses behind one `data-testid="diff-more"`
+    button reading `t('room.fold.more', { n: plan.hiddenLines })`, or
+    `t('room.fold.show_all')` when the only thing folded is a cut row
+    (`hiddenLines === 0 && clamped`, as `FoldedOutput` says it). `foldPlan`
+    decides the rows and their cut; only the rendering of a row is this
+    component's business.
   - expansion goes through `useFold(`${foldKey}:diff`)`, so the key is
     registered with the surrounding turn and expand-all reaches it (T2.5).
   - the two hard-coded row tints become `bg-status-success/10` and
@@ -768,6 +817,12 @@ defect, and R1's whole claim is "one folding rule for every block type".
     `result={index.resultForCall.get(blockKey(i, j)) ?? null}` and the
     `facts` looked up the same own-key way `ToolResultBlock` is looked up
     today (`Object.hasOwn(tools, id)`);
+  - **the own-key lookup contract lands here** (it has no home in
+    `OperationBlock`, which takes no `tools` map): `ConversationMessages.test.tsx`
+    must assert that a `tools` map keyed `constructor` does not reach
+    `Object.prototype`, and that a prototype-chain entry is ignored. Those are
+    the two guards `ToolUseBlock.test.tsx` holds today, and deleting that file
+    without re-asserting them here loses them for good.
   - a `tool_result` block whose `blockKey(i, j)` is in
     `index.consumedResults` renders `null` (its call already showed it); one
     that is not renders an orphan
@@ -779,7 +834,8 @@ defect, and R1's whole claim is "one folding rule for every block type".
     `activity={{status:'streaming', rawInput: block.partialJson}}`,
     `result={null}`, `foldKey={`partial-${block.index}`}`.
     `SUMMARY_LIMIT` stays exported from `tool-summary.ts` (the R10 preview
-    still uses it); `SUMMARY_MAX` goes away with `ToolCallBlock`.
+    and `getSummary`'s default branch use it); `SUMMARY_MAX` goes away with
+    `ToolCallBlock`.
 - Tests: update `spa/src/components/ConversationMessages.test.tsx` — `pairs a
   call with its result into one block` (one `operation-block`, no
   `tool-result-block`); `renders an orphan result on its own`; `remembers a
@@ -787,10 +843,55 @@ defect, and R1's whole claim is "one folding rule for every block type".
   with its own result`** (the #7 guard at the render level: two blocks, two
   distinct bodies, and no leftover standalone result); **`renders every
   result exactly once`** over a list mixing paired, orphan and duplicate
-  cases. Update
-  `spa/src/components/PartialMessageGroup.test.tsx` for the new child.
+  cases. Update the partial group's tests for the new child — they live in
+  `ConversationMessages.test.tsx`'s `partial group (R1)` describe (the `R1:`
+  cases), **not** in a `PartialMessageGroup.test.tsx`: that file has never
+  existed.
 - New locale key in **both** `src/locales/en.json` and `zh-TW.json`:
   `room.op.show_input` (`"input"` / `"輸入"`).
+
+### T3.3b the facts the header span used to carry need homes (TDD)
+
+Dismantling `ToolResultBlock` took its facts span with it, and
+`toolResultFacts()` is now called from nowhere. Spec §3.1.1 #3 says where
+each of those facts goes — "size to the fold affordance, **the diff stat with
+the diff**, duration only when it is worth reading" — and two of them ended
+up nowhere at all.
+
+- **`+N −M` goes with the diff.** `room/ToolDiffView.tsx` gains a stat line
+  carrying `+{added} −{removed}` and — unless the operation's header already
+  drew it (`showPath={summary !== diff.path}`) — `diff.path`. For Edit /
+  Write the path *is* the header's `primary_arg`; printing it again is the
+  stacking §3.1.1 #3 undoes. Any other header keeps it: an orphan result has
+  no argument at all, and an argument that is a command or a description
+  does not name the file (PR #1451 R2 attack A4 — an earlier draft used
+  `summary === ''`, which hid the path behind any non-empty argument). The stat uses U+2212 MINUS, as
+  `tool-result-facts.ts` uses, so it lines up under `tabular-nums`), rendered
+  above the hunks and **visible while the diff is folded**. `+0 −0` is a
+  normal edit result and still renders (contract rule 7).
+- **`non-text` goes on the operation's rail.** When
+  `facts.output.hasNonText`, `OperationBlock` renders a muted
+  `data-testid="op-non-text"` marker beside the fold control with
+  `t('execution.tool.non_text')`. It says the payload held something the
+  transcript is not showing, which is exactly the kind of thing a fold must
+  not swallow silently.
+- `total_lines` needs no home: `FoldedOutput`'s `+N lines` is that fact, and
+  `truncated` is the `fold-daemon-truncated` note.
+- `toolResultFacts()` and its test are **deleted** — every segment it built
+  now has a home, and a helper with no caller is the kind of thing that grows
+  a second, disagreeing implementation. `ToolResultFacts` (the type) stays;
+  it is `OperationBlock`'s `facts` prop.
+
+- Tests: in `ToolDiffView.test.tsx`, `shows the +N −M stat, and omits the path the header already says`, `shows
+  the path when the header has none`,
+  `shows +0 −0 for an edit that changed nothing`, `keeps the stat visible
+  while the diff is folded`; in `OperationBlock.test.tsx`, `marks a result
+  that held non-text content` and its negative pair `does not mark a text-only
+  result`.
+
+Two branches T3.1 left unguarded get their tests in the same commit:
+`renders no diff for an empty, untruncated diff` (the other half of
+`hasDiff`), and `never looks up tools for a block with no id`.
 
 ### T3.4 PR-3
 
@@ -980,8 +1081,10 @@ export interface RoomTurnGroupProps {
   `ConversationMessages.test.tsx`, `MessageBubble.tsx`,
   `MessageBubble.test.tsx`, `ThinkingBlock.tsx`, `ThinkingBlock.test.tsx`
   (the last two live on as `room/RoomProse.tsx`, `room/RoomThinking.tsx`).
-- `spa/src/components/PartialMessageGroup.test.tsx` gains the partial
-  regression guards the rename would otherwise drop: `renders a streaming
+- `spa/src/components/PartialMessageGroup.test.tsx` is **created** here (the
+  partial group has never had a test file of its own) and takes over the
+  partial regression guards, which today live in `ConversationMessages.test.tsx`'s
+  `partial group (R1)` describe and would otherwise go with that file: `renders a streaming
   text block with the cursor`; `renders a streaming thinking block with the
   cursor`; `renders blocks in ascending index order`; `renders nothing for an
   invisible block`. Run `grep -rn "MessageBubble\|ThinkingBlock" src` after

@@ -24,15 +24,36 @@ export function getSummary(tool: string, input: Record<string, unknown>): string
     case 'Agent':
       return (input.description as string) ?? ''
     default:
-      return JSON.stringify(input).slice(0, 80)
+      // A bounded preview, not the whole input. Spec §4.2's "never truncated"
+      // is N2's `primary_arg` promise; an unknown tool's input is not an
+      // argument, and serialising a MB-class one in full on every render to
+      // hang it in the header is unbounded work (codex R2 A3 on #1451). The
+      // walk stops at SUMMARY_LIMIT and ends in `…`, so the cut is visible —
+      // the old bare `.slice(0, 80)` cut without saying so, and §4.2 forbids
+      // only an ellipsis in the middle. The whole input still shows in the
+      // operation block's own input section.
+      //
+      // An empty input has no argument at all, so say nothing rather than
+      // `{}` — that is the serialiser answering, not the call, and it is
+      // truthy enough to draw an argument span around it (every orphan
+      // result got one). `unknownToolSummary` already returns '' here.
+      return hasOwnKey(input) ? previewValue(input, SUMMARY_LIMIT) : ''
   }
+}
+
+/** Whether `o` has any own enumerable key — without materialising every key the way `Object.keys` does. */
+function hasOwnKey(o: object): boolean {
+  for (const k in o) if (Object.hasOwn(o, k)) return true
+  return false
 }
 
 const R10_KEYS = 3
 
 /**
- * Header summary width. `ToolCallBlock` truncates to this many characters,
- * so the R10 preview never needs to serialise more than this (codex R2 A3).
+ * Header summary width. Neither the R10 preview nor `getSummary`'s default
+ * branch serialises more than this (codex R2 A3). The operation block itself
+ * no longer truncates the header (spec §4.2: the argument wraps, it is not
+ * cut), so this bounds those two input previews only.
  */
 export const SUMMARY_LIMIT = 80
 
