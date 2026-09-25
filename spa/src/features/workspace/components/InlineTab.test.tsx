@@ -152,6 +152,15 @@ describe('InlineTab — host badge', () => {
     expect(children.indexOf(screen.getByTestId('inline-tab-lock'))).toBeGreaterThan(titleIdx)
   })
 
+  it('gives the lock the same 16x16 box as the close button', () => {
+    setH1Color('#3b82f6')
+    renderInline({ ...baseTab, locked: true } as never)
+    const lock = screen.getByTestId('inline-tab-lock')
+    expect(lock.className).toContain('h-4')
+    expect(lock.className).toContain('w-4')
+    expect(lock.className).toContain('justify-center')
+  })
+
   it('still renders a neutral badge when the host has an icon but no color', () => {
     setH1Icon('Laptop')
     renderInline()
