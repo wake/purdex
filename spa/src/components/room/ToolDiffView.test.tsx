@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { render as rtlRender, screen, cleanup, fireEvent } from '@testing-library/react'
 import ToolDiffView from './ToolDiffView'
 import { FoldContext, useFoldMemory } from './fold-context'
-import { foldPlan } from '../../lib/nex/fold'
+import { FOLD_LINE_MAX_CHARS, foldPlan } from '../../lib/nex/fold'
 import type { DiffHunk, ToolActivity } from '../../lib/nex/tool-activity'
 import fixture from '../../lib/nex/__fixtures__/n2-tool-events-06GBBX07.json'
 
@@ -234,6 +234,19 @@ describe('ToolDiffView folding (#1227)', () => {
     expect(outputPlan.hiddenLines).toBe(24)
     expect(allRows()).toHaveLength(outputPlan.previewLines.length)
     expect(screen.getByTestId('diff-more')).toHaveTextContent(`+${outputPlan.hiddenLines} lines`)
+  })
+
+  it('cuts an overlong row to the fold line cap while collapsed and shows it whole when expanded', () => {
+    // One MB-class row must not reach the DOM whole behind a one-row preview:
+    // the preview has a byte budget as well as a line budget (plan T3.2).
+    const long = 'x'.repeat(100_000)
+    render(<ToolDiffView diff={diffOf([hunk(1, 1, 1, 1, [`+${long}`])])} foldKey="d" />)
+    expect(allRows()).toHaveLength(1)
+    expect(textOf(allRows()[0])!.length).toBeLessThanOrEqual(FOLD_LINE_MAX_CHARS)
+    const more = screen.getByTestId('diff-more')
+    expect(more).toHaveTextContent('show all')
+    fireEvent.click(more)
+    expect(textOf(allRows()[0])).toHaveLength(long.length)
   })
 })
 

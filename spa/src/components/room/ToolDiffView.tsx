@@ -55,16 +55,27 @@ const BUTTON_CLASS =
  * outside it comes back empty and draws nothing — not even its header, which
  * is a label for rows that are not there.
  *
+ * `preview`, when given, is `foldPlan`'s `previewLines` — one entry per row in
+ * order, each already cut to the fold's per-line and byte caps — and replaces
+ * the text of the rows it covers. Spending only its length as a row count
+ * would still put a whole MB-class row into the DOM behind a one-row preview.
+ *
  * Module-level and pure: a running counter inside the component's own map is a
  * reassignment after render (react-hooks/immutability).
  */
-function spendBudget(hunks: HunkRows[], budget: number): HunkRows[] {
+function spendBudget(hunks: HunkRows[], budget: number, preview?: string[]): HunkRows[] {
   const out: HunkRows[] = []
   let left = budget
+  let at = 0
   for (const { hunk, rows } of hunks) {
     const take = Math.max(0, Math.min(rows.length, left))
     left -= take
-    out.push({ hunk, rows: rows.slice(0, take) })
+    const kept = rows.slice(0, take)
+    out.push({
+      hunk,
+      rows: preview ? kept.map((row, i) => ({ ...row, text: preview[at + i] ?? '' })) : kept,
+    })
+    at += take
   }
   return out
 }
@@ -86,14 +97,17 @@ export default function ToolDiffView({ diff, foldKey, showPath = false }: Props)
     totalLines: rows.length,
     truncated: diff.truncated,
   })
-  const budget = expanded || !plan.collapsible ? rows.length : plan.previewLines.length
+  const folded = !expanded && plan.collapsible
+  const budget = folded ? plan.previewLines.length : rows.length
 
   // No hunks and nothing dropped → nothing to say. No hunks but truncated →
   // the daemon dropped every hunk, and what is left — the stat and the
   // truncation note — is the only account of the edit there will be.
   if (diff.hunks.length === 0 && !diff.truncated) return null
 
-  const visible = spendBudget(hunks, budget)
+  // Collapsed, a row draws the fold's cut of its text, not the whole of it:
+  // the preview is bounded in bytes as well as rows. Expanded shows it all.
+  const visible = spendBudget(hunks, budget, folded ? plan.previewLines : undefined)
 
   // Spec §3.1.1 #1: room drops the card from every operation and opens one
   // exception — "only special blocks (diff) keep a container". A diff is a
@@ -152,7 +166,13 @@ export default function ToolDiffView({ diff, foldKey, showPath = false }: Props)
           className={BUTTON_CLASS}
           onClick={toggle}
         >
-          {expanded ? t('room.fold.less') : t('room.fold.more', { n: plan.hiddenLines })}
+          {expanded
+            ? t('room.fold.less')
+            : plan.hiddenLines === 0 && plan.clamped
+              // Only a cut row is folded away — "+0 lines" would be a lie;
+              // same wording as FoldedOutput.
+              ? t('room.fold.show_all')
+              : t('room.fold.more', { n: plan.hiddenLines })}
         </button>
       )}
     </div>
