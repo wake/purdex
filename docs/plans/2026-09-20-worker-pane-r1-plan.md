@@ -835,8 +835,11 @@ each of those facts goes — "size to the fold affordance, **the diff stat with
 the diff**, duration only when it is worth reading" — and two of them ended
 up nowhere at all.
 
-- **`+N −M` goes with the diff.** `room/ToolDiffView.tsx` gains a header line
-  carrying `diff.path` and `+{added} −{removed}` (U+2212 MINUS, as
+- **`+N −M` goes with the diff.** `room/ToolDiffView.tsx` gains a stat line
+  carrying `+{added} −{removed}` and — only when the operation's header drew
+  no argument (`showPath={summary === ''}`, i.e. an orphan result) — `diff.path`.
+  For Edit / Write the path *is* the header's `primary_arg`; printing it again
+  is the stacking §3.1.1 #3 undoes. The stat uses U+2212 MINUS, as
   `tool-result-facts.ts` uses, so it lines up under `tabular-nums`), rendered
   above the hunks and **visible while the diff is folded**. `+0 −0` is a
   normal edit result and still renders (contract rule 7).
@@ -853,7 +856,8 @@ up nowhere at all.
   a second, disagreeing implementation. `ToolResultFacts` (the type) stays;
   it is `OperationBlock`'s `facts` prop.
 
-- Tests: in `ToolDiffView.test.tsx`, `shows the path and the +N −M stat`,
+- Tests: in `ToolDiffView.test.tsx`, `shows the +N −M stat, and omits the path the header already says`, `shows
+  the path when the header has none`,
   `shows +0 −0 for an edit that changed nothing`, `keeps the stat visible
   while the diff is folded`; in `OperationBlock.test.tsx`, `marks a result
   that held non-text content` and its negative pair `does not mark a text-only

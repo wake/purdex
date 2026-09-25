@@ -237,10 +237,6 @@ describe('ToolDiffView folding (#1227)', () => {
   })
 })
 
-// T3.3b / spec §3.1.1 #3 — the right column used to stack duration, size and
-// the diff stat in one place. Size went to the fold affordance and duration to
-// the header; `+N −M` belongs to the diff, and it went nowhere when
-// `ToolResultBlock`'s facts span was dismantled.
 // Spec §3.1.1 #1 — room drops the card from every operation, and opens exactly
 // one exception: "only special blocks (diff) keep a container". The card that
 // used to hold the diff was `ToolResultBlock`'s, and it went with it.
@@ -260,6 +256,10 @@ describe('ToolDiffView container (spec §3.1.1 #1)', () => {
   })
 })
 
+// T3.3b / spec §3.1.1 #3 — the right column used to stack duration, size and
+// the diff stat in one place. Size went to the fold affordance and duration to
+// the header; `+N −M` belongs to the diff, and it went nowhere when
+// `ToolResultBlock`'s facts span was dismantled.
 describe('ToolDiffView stat (spec §3.1.1 #3)', () => {
   it('shows the +N −M stat, and omits the path the header already says', () => {
     render(<ToolDiffView diff={statDiff(5, 0, [addedHunk(3)])} foldKey="d" />)
