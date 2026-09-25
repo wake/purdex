@@ -370,6 +370,14 @@ describe('#1450 — PUSH attach: a workspace EMPTY here that has tabs on the SOT
 
   const lockedConflicts = (statuses: ExecutorStatus[], key: string) => statuses.filter((st) => st.sections[key] === 'locked:conflict')
 
+  /** A writes a row on the SOT directly (another machine). */
+  const sotWrite = async (key: string, payload: unknown, fp: [string, number]): Promise<{ rev: number; hash: string }> => {
+    const plain = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>
+    const row: Row = { rev: (daemon.rows.get(key)?.rev ?? 0) + 1, hash: await hashSection(plain), payload: plain, fingerprint: fp[0], ordinal: fp[1], writer: A }
+    daemon.rows.set(key, row)
+    return { rev: row.rev, hash: row.hash! }
+  }
+
   it('(d) push period still open: a workspace A adds arrives by a `workspaces` pull — its empty report is still a placeholder; B takes A\'s tabs, writes nothing there', async () => {
     await aPushedUnsorted()
     world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
@@ -386,12 +394,6 @@ describe('#1450 — PUSH attach: a workspace EMPTY here that has tabs on the SOT
     const writesBefore = daemon.writes.length
 
     // A adds w2 with a tab: `workspaces`, then `tabs.w2` — two writes, B hears them in that order
-    const sotWrite = async (key: string, payload: unknown, fp: [string, number]): Promise<{ rev: number; hash: string }> => {
-      const plain = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>
-      const row: Row = { rev: (daemon.rows.get(key)?.rev ?? 0) + 1, hash: await hashSection(plain), payload: plain, fingerprint: fp[0], ordinal: fp[1], writer: A }
-      daemon.rows.set(key, row)
-      return { rev: row.rev, hash: row.hash! }
-    }
     const w2 = ws('w2', ['tw2'])
     const wsWritten = await sotWrite('workspaces', buildWorkspacesSection([...useWorkspaceStore.getState().workspaces, w2]), ['fp-workspaces', 1])
     executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'workspaces', rev: wsWritten.rev, hash: wsWritten.hash, writerClientId: A })
@@ -407,6 +409,66 @@ describe('#1450 — PUSH attach: a workspace EMPTY here that has tabs on the SOT
     expect(daemon.writes.slice(writesBefore).filter((w) => w.key === 'tabs.w2')).toEqual([])
     expect(daemon.rows.get('tabs.w2')).toMatchObject({ rev: tabsWritten.rev, writer: A })
     expect(lockedConflicts(statuses.slice(seen), 'tabs.w2')).toEqual([])
+
+    holdOpen = false
+    executor!.syncNow()
+    for (let i = 0; i < 4; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+    expect(run.direction.value).toBeNull()
+    expect(executor!.status().profile).toBe('synced')
+  })
+
+  it('(g) as (d), but the empty `tabs.w2` report lands WHILE the `workspaces` apply is still awaited (stores written, hash not back): still a placeholder', async () => {
+    await aPushedUnsorted()
+    world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
+    let holdOpen = true
+    api.putSection.mockImplementation(async (_h, _p, key, body) =>
+      holdOpen && key === 'tabs.wb1' ? { kind: 'failed', reason: 'network', status: 0, message: 'dropped' } : daemon.put(key, body),
+    )
+    const statuses: ExecutorStatus[] = []
+    const reports: string[] = []
+    const run = await attach(B, 'push', M, { statuses, reports })
+    expect(run.direction.value).toBe('push')
+    expect(executor!.status().sections.workspaces).toBe('synced')
+    const seen = statuses.length
+    const writesBefore = daemon.writes.length
+
+    const w2 = ws('w2', ['tw2'])
+    const wsWritten = await sotWrite('workspaces', buildWorkspacesSection([...useWorkspaceStore.getState().workspaces, w2]), ['fp-workspaces', 1])
+    const tabsWritten = await sotWrite('tabs.w2', buildTabsSection(w2, { tw2: tab('tw2') }), ['fp-tabs', 1])
+
+    // The apply writes the stores synchronously, then awaits the hash of what it wrote (apply-to-stores `rebuilt`):
+    // the FIRST hash of a `workspaces` payload listing w2 is held here until released.
+    const hash = vi.mocked(hashSection)
+    const original = hash.getMockImplementation()!
+    let release: (() => void) | null = null
+    const isWorkspacesWithW2 = (p: unknown): boolean => {
+      const order = (p as { order?: unknown }).order
+      return Array.isArray(order) && order.includes('w2') && !order.includes('tw2')
+    }
+    hash.mockImplementation(async (payload: unknown) => {
+      if (release === null && isWorkspacesWithW2(payload)) await new Promise<void>((r) => (release = r))
+      return original(payload)
+    })
+    try {
+      executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'workspaces', rev: wsWritten.rev, hash: wsWritten.hash, writerClientId: A })
+      await vi.advanceTimersByTimeAsync(100)
+      expect(release).not.toBeNull() // the apply is in its await …
+      expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toContain('w2') // … with the stores already written
+      const reportsBefore = reports.length
+      executor!.onRemoteEvent({ hostId: M, profileId: PROFILE, section: 'tabs.w2', rev: tabsWritten.rev, hash: tabsWritten.hash, writerClientId: A })
+      for (let i = 0; i < 2; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+      expect(reports.slice(reportsBefore)).toContain('tabs.w2') // the empty report went in during the await
+      release!()
+      for (let i = 0; i < 6; i += 1) await vi.advanceTimersByTimeAsync(1_000)
+    } finally {
+      hash.mockImplementation(original)
+    }
+
+    expect(lockedConflicts(statuses.slice(seen), 'tabs.w2')).toEqual([])
+    expect(daemon.writes.slice(writesBefore).filter((w) => w.key === 'tabs.w2')).toEqual([])
+    expect(daemon.rows.get('tabs.w2')).toMatchObject({ rev: tabsWritten.rev, writer: A })
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === 'w2')!.tabs).toEqual(['tw2'])
+    expect(useTabStore.getState().tabs.tw2).toBeDefined()
 
     holdOpen = false
     executor!.syncNow()

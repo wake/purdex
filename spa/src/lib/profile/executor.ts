@@ -89,7 +89,10 @@
 //     The limit: a workspace a `workspaces` pull ADDED here during the period
 //     (another client moved `workspaces` while it was open) is the very case
 //     the rule is for — its tabs are 500 ms away — and stays a placeholder
-//     (`pulledInThisPeriod`). The held path is judged by the same function.
+//     (`pulledInThisPeriod`) — from the moment the apply BEGINS: it writes the
+//     stores before it awaits, so while it is awaited only a workspace that was
+//     here before it counts (`workspacesPullInFlight`). The held path is judged
+//     by the same function.
 //   - A `tabs.<id>` DELETION IS NEVER APPLIED BY A PULL. Its workspace still
 //     being here means the `workspaces` change that removes it has not arrived
 //     (two writes, two events, either order): the pull waits (backoff, the index
@@ -404,6 +407,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   /** Workspaces a `workspaces` pull ADDED here during this executor's life (#1450): their empty `tabs.<id>` stays a
    *  placeholder under `push` too (see the header). Per executor, never persisted — every attach is a new period. */
   const pulledInThisPeriod = new Set<string>()
+  /** A `workspaces` pull's apply is being awaited: the ids here BEFORE it began ('all' = the world was unsettled). */
+  let workspacesPullInFlight: Set<string> | 'all' | null = null
 
   /** Last signature a persist was ATTEMPTED with, so a refused write is not retried on every event. */
   const attempted = new Map<string, string>()
@@ -1046,7 +1051,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   /** `push`: this device's (empty) workspace replaces the SOT's tabs — unless a pull brought the workspace in (#1450). */
   function pushReplaces(key: string): boolean {
     const id = workspaceIdOf(key)
-    return direction() === 'push' && id !== null && !pulledInThisPeriod.has(id)
+    if (direction() !== 'push' || id === null || pulledInThisPeriod.has(id)) return false
+    // a `workspaces` apply still awaited: only a workspace that was here before it began is this device's
+    return workspacesPullInFlight === null || (workspacesPullInFlight !== 'all' && workspacesPullInFlight.has(id))
   }
 
   function online(): boolean {
@@ -1298,7 +1305,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const payload = fetched === null ? null : fetched.payload
     const rev = fetched === null ? s.sot.rev : fetched.rev
 
-    const idsBefore = key === 'workspaces' ? localWorkspaceIds() : null
+    // #1450: the apply writes the stores BEFORE it awaits (the hash of what it wrote), so a workspace it adds is on
+    // screen — and its empty `tabs.<id>` can be reported — while this is still awaited. The guard is up before the
+    // apply starts: until it is down, only a workspace that was here before counts as this device's. A world
+    // unsettled before the apply guards every id — the safe side (a placeholder).
+    if (key === 'workspaces') {
+      const ids = localWorkspaceIds()
+      workspacesPullInFlight = ids === null ? 'all' : new Set(ids)
+    }
     let outcome: ApplyOutcome
     try {
       outcome = await applySectionToStores(key as ProfileSectionKey, payload, { masterHostId: hostId })
@@ -1306,14 +1320,15 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       if (disposed) return WAIT
       problem('apply-threw', message(err), key)
       return failed(key)
+    } finally {
+      // Whatever the outcome (ok, refused, thrown, disposed): what appeared came from the SOT; the guard goes down.
+      if (key === 'workspaces' && workspacesPullInFlight !== null) {
+        const before = workspacesPullInFlight
+        for (const id of localWorkspaceIds() ?? []) if (before === 'all' || !before.has(id)) pulledInThisPeriod.add(id)
+        workspacesPullInFlight = null
+      }
     }
     if (disposed) return WAIT
-    if (key === 'workspaces') {
-      // Before anything else reads the stores (#1450): these workspaces came from the SOT, their tabs are on the way.
-      // A world unsettled before the apply counts every id as pulled — the safe side (a placeholder).
-      const before = new Set(idsBefore ?? [])
-      for (const id of localWorkspaceIds() ?? []) if (!before.has(id)) pulledInThisPeriod.add(id)
-    }
 
     if (!outcome.ok) {
       if (outcome.reason === 'busy') return { how: 'retry', ms: BUSY_RETRY_MS }
