@@ -155,7 +155,14 @@ export function InlineTab({
         />
       )}
       {tab.locked && (
-        <Lock size={10} data-testid="inline-tab-lock" className="flex-shrink-0" />
+        // Same 16x16 box as the close button so the lock lands on the exact
+        // same center — the row's right edge is shared by both icons.
+        <span
+          data-testid="inline-tab-lock"
+          className="flex h-4 w-4 flex-shrink-0 items-center justify-center"
+        >
+          <Lock size={10} />
+        </span>
       )}
       {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (
         <span
