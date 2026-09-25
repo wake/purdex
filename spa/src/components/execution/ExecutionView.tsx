@@ -1,7 +1,7 @@
 // spa/src/components/execution/ExecutionView.tsx — the {kind:'execution'}
 // pane (spec §4.3.3). Composes the observe subscription, the lazy control
 // lease, the pane's actions (useExecutionActions: send/interrupt/terminate,
-// the only writes), the room transcript, the worker dock and StreamInput. It also
+// the only writes), the room transcript, the worker dock and WorkerInput. It also
 // owns "Take to terminal": confirm when a turn is running, then
 // `lib/nex/handoff.ts` does the request, the lease forget and the pane swap
 // (which unmounts this view) — `takeBack` to the origin session when the
@@ -11,7 +11,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import RoomTranscript from '../room/RoomTranscript'
 import RoomUserLine from '../room/RoomUserLine'
 import WorkerDock from '../room/WorkerDock'
-import StreamInput from '../StreamInput'
+import WorkerInput from '../room/WorkerInput'
 import ExecutionHeader from './ExecutionHeader'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { useExecutionStore, executionKey } from '../../stores/useExecutionStore'
@@ -193,7 +193,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
         </div>
       )}
       {errorText && <div data-testid="send-error" className="mx-2 mb-1 text-xs text-status-error">{errorText}</div>}
-      <StreamInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void handleSend(text)} showAttach={false}
+      <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void handleSend(text)}
         disabled={st.pendingSend || ended || !st.historyLoaded || streamDead || takeBackBusy} placeholder={placeholder} focused={isActive} />
     </div>
   )
