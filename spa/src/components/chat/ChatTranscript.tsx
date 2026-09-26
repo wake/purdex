@@ -15,7 +15,7 @@ import { Children, isValidElement, useRef, useEffect, useMemo, type ReactNode } 
 import { Prohibit } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { AssistantMessage, StreamMessage, UserMessage } from '../../lib/nex/message-types'
-import { partialVersionOf } from '../../lib/nex/partial'
+import { partialTextVersionOf } from '../../lib/nex/partial'
 import { indexOperations } from '../../lib/nex/operations'
 import { groupTurns, INTERRUPT_TEXT, type RoomTurn } from '../../lib/nex/turns'
 import ThinkingIndicator from '../ThinkingIndicator'
@@ -100,7 +100,8 @@ export default function ChatTranscript({
   // One fold memory per pane, as in the room (the pane's, when it provides
   // one): R2-B's lines fold through it.
   const foldStore = useInheritedFoldMemory()
-  const partialVersion: string = useMemo(() => partialVersionOf(partial), [partial])
+  // F10: only the text chat draws moves the key, not a thought or a tool's input.
+  const partialVersion: string = useMemo(() => partialTextVersionOf(partial), [partial])
 
   // Same effect and deps as RoomTranscript's auto-scroll: instant on the
   // first run (mount / view switch), smooth after (F3).

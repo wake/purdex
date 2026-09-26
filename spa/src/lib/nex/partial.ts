@@ -92,6 +92,21 @@ export function partialVersionOf(p: PartialAssembly | null | undefined): string 
   return `${p.messageId ?? ''}#${p.finalized}#${blocks}`
 }
 
+/**
+ * Chat's R4 key (F10): chat draws only the partial's text (ChatPartialGroup),
+ * so its auto-scroll follows the text blocks alone — a streaming thought or a
+ * tool_use's input moves `partialVersionOf` without changing anything chat
+ * shows. '' when there is no partial.
+ */
+export function partialTextVersionOf(p: PartialAssembly | null | undefined): string {
+  if (!p) return ''
+  const blocks = Object.values(p.blocks)
+    .filter((b) => b.type === 'text')
+    .map((b) => `${b.index}:${b.text.length}`)
+    .join('|')
+  return `${p.messageId ?? ''}#${blocks}`
+}
+
 function blockIndex(v: unknown): number | null {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null
 }

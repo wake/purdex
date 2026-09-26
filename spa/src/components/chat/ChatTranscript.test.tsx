@@ -190,5 +190,24 @@ describe('ChatTranscript', () => {
       expect(scrollTo).toHaveBeenCalledTimes(2)
       expect(scrollTo.mock.calls[1][0]).toMatchObject({ behavior: 'smooth' })
     })
+
+    // F10: chat draws no thought, so a streaming thought is no reason to scroll.
+    it('F10: a streaming thought does not scroll; streaming text does', () => {
+      Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+      const messages = [said('q')]
+      const block = (i: number, type: 'text' | 'thinking', s: string) =>
+        ({ index: i, type, text: type === 'text' ? s : '', thinking: type === 'thinking' ? s : '', partialJson: '' })
+      const partial = (...blocks: ReturnType<typeof block>[]): PartialAssembly =>
+        ({ messageId: 'm1', finalized: 0, blocks: Object.fromEntries(blocks.map((b) => [b.index, b])) })
+      const { rerender } = render(T({ messages, partial: partial(block(0, 'thinking', 'a')) }))
+      expect(scrollTo).toHaveBeenCalledTimes(1)
+      rerender(T({ messages, partial: partial(block(0, 'thinking', 'a longer thought')) }))
+      rerender(T({ messages, partial: partial(block(0, 'thinking', 'a longer thought, still going')) }))
+      expect(scrollTo).toHaveBeenCalledTimes(1)
+      rerender(T({ messages, partial: partial(block(0, 'thinking', 'done'), block(1, 'text', 'he')) }))
+      expect(scrollTo).toHaveBeenCalledTimes(2)
+      rerender(T({ messages, partial: partial(block(0, 'thinking', 'done'), block(1, 'text', 'hello')) }))
+      expect(scrollTo).toHaveBeenCalledTimes(3)
+    })
   })
 })
