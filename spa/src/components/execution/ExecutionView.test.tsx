@@ -1062,6 +1062,29 @@ describe('ExecutionView — room and chat (R2 T1.4)', () => {
     expect(useExecutionStore.getState().executions[KEY].historyLoaded).toBe(true)
   })
 
+  // F2: spec §3.2 — fold memory is per pane and must survive the transcript
+  // remounting, which is exactly what a view switch does.
+  it('F2: a block expanded in the room is still expanded after a round trip through chat', () => {
+    const longBody = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join('\n')
+    patchExec({
+      messages: [
+        { type: 'assistant', message: { id: 'm1', role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: 'ls' } }], stop_reason: null } },
+        { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: longBody, is_error: false }], stop_reason: null } },
+      ] as Exec['messages'],
+      turnStarts: [0],
+    })
+    render(<Switchable {...base} isActive />)
+    fireEvent.click(screen.getByTestId('fold-more'))
+    expect(screen.getByTestId('fold-less')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('view-mode'))
+    fireEvent.click(screen.getByTestId('view-mode-chat'))
+    expect(screen.queryByTestId('operation-block')).toBeNull()
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    fireEvent.click(screen.getByTestId('view-mode-room'))
+    expect(screen.getByTestId('fold-less')).toBeInTheDocument()
+    expect(screen.queryByTestId('fold-more')).toBeNull()
+  })
+
   it('chat has no dock', () => {
     render(<ExecutionView {...base} mode="chat" isActive />)
     expect(screen.queryByTestId('worker-dock')).toBeNull()

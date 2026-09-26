@@ -20,7 +20,7 @@ import ThinkingIndicator from '../ThinkingIndicator'
 import PartialMessageGroup from '../PartialMessageGroup'
 import RoomTurnGroup from './RoomTurnGroup'
 import { renderMessage, type RenderCtx } from './render-message'
-import { FoldContext, useFoldMemory } from './fold-context'
+import { FoldContext, useInheritedFoldMemory } from './fold-context'
 
 export interface RoomTranscriptProps {
   messages: StreamMessage[]
@@ -77,14 +77,19 @@ export default function RoomTranscript({
   const turns = useMemo(() => groupTurns(messages, turnStarts), [messages, turnStarts])
   // Spec §3.2: one fold memory per pane, above the blocks — a block unmounts
   // whenever its row is re-keyed and would take a local useState with it.
-  const foldStore = useFoldMemory()
+  // The pane (ExecutionView) holds it, so a view switch keeps it too (F2).
+  const foldStore = useInheritedFoldMemory()
   // R4: follow the typewriter by a content/structure key, not the assembly's identity.
   const partialVersion: string = useMemo(() => partialVersionOf(partial), [partial])
 
-  // Auto-scroll on new messages, control requests, or partial growth
+  // Auto-scroll on new messages, control requests, or partial growth. The
+  // first one (the pane opening, or a view switch remounting this) jumps
+  // straight to the bottom; only later growth animates (F3).
+  const scrolled = useRef(false)
   useEffect(() => {
     if (scrollRef.current?.scrollTo) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: scrolled.current ? 'smooth' : 'auto' })
+      scrolled.current = true
     }
   }, [messages, scrollKey, partialVersion])
 

@@ -101,6 +101,19 @@ export function useFoldMemory(): FoldStore {
 }
 
 /**
+ * For a transcript: the pane's fold memory when one is provided above it
+ * (ExecutionView holds it, so switching room ⇄ chat — which remounts the
+ * transcript — keeps what was expanded), else a memory of its own, so a
+ * transcript mounted by itself still folds. Both hooks run on every render
+ * (rules of hooks); the unused own store is a couple of empty containers.
+ */
+export function useInheritedFoldMemory(): FoldStore {
+  const outer = useContext(FoldContext)
+  const own = useFoldMemory()
+  return outer ?? own
+}
+
+/**
  * Registers `key` under the surrounding turn for the component's lifetime and
  * returns [expanded, toggle]. Registration rather than a key list handed down
  * from the turn: a turn holds more foldable things than its operations (a raw

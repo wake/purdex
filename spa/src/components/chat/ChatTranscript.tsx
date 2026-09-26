@@ -21,7 +21,7 @@ import { groupTurns, INTERRUPT_TEXT, type RoomTurn } from '../../lib/nex/turns'
 import ThinkingIndicator from '../ThinkingIndicator'
 import RoomTurnGroup from '../room/RoomTurnGroup'
 import RoomProse from '../room/RoomProse'
-import { FoldContext, useFoldMemory } from '../room/fold-context'
+import { FoldContext, useInheritedFoldMemory } from '../room/fold-context'
 import type { RoomTranscriptProps } from '../room/RoomTranscript'
 import ChatBubble from './ChatBubble'
 import ChatPartialGroup from './ChatPartialGroup'
@@ -102,14 +102,18 @@ export default function ChatTranscript({
   // Only for `childIndexes`: a subagent's frames stay out of the top level.
   const index = useMemo(() => indexOperations(messages), [messages])
   const turns = useMemo(() => groupTurns(messages, turnStarts), [messages, turnStarts])
-  // One fold memory per pane, as in the room: R2-B's lines fold through it.
-  const foldStore = useFoldMemory()
+  // One fold memory per pane, as in the room (the pane's, when it provides
+  // one): R2-B's lines fold through it.
+  const foldStore = useInheritedFoldMemory()
   const partialVersion: string = useMemo(() => partialVersionOf(partial), [partial])
 
-  // Same effect and deps as RoomTranscript's auto-scroll.
+  // Same effect and deps as RoomTranscript's auto-scroll: instant on the
+  // first run (mount / view switch), smooth after (F3).
+  const scrolled = useRef(false)
   useEffect(() => {
     if (scrollRef.current?.scrollTo) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: scrolled.current ? 'smooth' : 'auto' })
+      scrolled.current = true
     }
   }, [messages, scrollKey, partialVersion])
 

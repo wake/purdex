@@ -14,6 +14,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import RoomTranscript from '../room/RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
+import { FoldContext, useFoldMemory } from '../room/fold-context'
 import RoomUserLine from '../room/RoomUserLine'
 import WorkerDock from '../room/WorkerDock'
 import WorkerInput from '../room/WorkerInput'
@@ -124,6 +125,9 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // Spec §4.2: the 1 s clock only runs while some tool is running.
   const anyRunning = useMemo(() => Object.values(st.tools).some((tool) => tool.status === 'running'), [st.tools])
   const now = useElapsedTicker(anyRunning)
+  // Spec §3.2: one fold memory per pane. It lives here, above the view
+  // switch, because room ⇄ chat remounts the transcript (F2).
+  const foldStore = useFoldMemory()
 
   if (problem) {
     const text = problem === 'not_found' ? t('execution.not_found')
@@ -197,16 +201,20 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
             </span>
           )}
         </div>
-      ) : chat ? (
-        <ChatTranscript {...transcriptProps}>
-          {/* ChatTranscript wraps the optimistic line in its own dimmed user bubble, so only the text goes in. */}
-          {st.pendingLocal && <>{st.pendingLocal.text} {queuedTag}</>}
-        </ChatTranscript>
       ) : (
-        <RoomTranscript {...transcriptProps}>
-          {/* The optimistic line: a user line like any other, dimmed until message_accepted (spec §4.1). */}
-          {st.pendingLocal && <RoomUserLine text={st.pendingLocal.text} pending>{queuedTag}</RoomUserLine>}
-        </RoomTranscript>
+        <FoldContext.Provider value={foldStore}>
+          {chat ? (
+            <ChatTranscript {...transcriptProps}>
+              {/* ChatTranscript wraps the optimistic line in its own dimmed user bubble, so only the text goes in. */}
+              {st.pendingLocal && <>{st.pendingLocal.text} {queuedTag}</>}
+            </ChatTranscript>
+          ) : (
+            <RoomTranscript {...transcriptProps}>
+              {/* The optimistic line: a user line like any other, dimmed until message_accepted (spec §4.1). */}
+              {st.pendingLocal && <RoomUserLine text={st.pendingLocal.text} pending>{queuedTag}</RoomUserLine>}
+            </RoomTranscript>
+          )}
+        </FoldContext.Provider>
       )}
       {/* Worker pane spec §4.6 (Q3): the worker's current state, inside the pane, above the input. Chat has none (spec §5). */}
       {!chat && <WorkerDock sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} isMine={isMine} />}

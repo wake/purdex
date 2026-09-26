@@ -603,6 +603,18 @@ describe('RoomTranscript', () => {
       expect(scrollTo).toHaveBeenCalledTimes(2)
     })
 
+    // F3: a (re)mount — the pane opening, or a view switch — jumps to the
+    // bottom at once; only later growth animates.
+    it('F3: the first scroll is instant, later ones smooth', () => {
+      Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+      const { rerender } = render(T({ messages: [assistantText] }))
+      expect(scrollTo).toHaveBeenCalledTimes(1)
+      expect(scrollTo.mock.calls[0][0]).toMatchObject({ behavior: 'auto' })
+      rerender(T({ messages: [assistantText, said('more')] }))
+      expect(scrollTo).toHaveBeenCalledTimes(2)
+      expect(scrollTo.mock.calls[1][0]).toMatchObject({ behavior: 'smooth' })
+    })
+
     it('R4: the pending line scrolls via scrollKey', () => {
       Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
       const messages = [assistantText]

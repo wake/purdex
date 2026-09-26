@@ -1,7 +1,7 @@
 // spa/src/components/chat/ChatTranscript.test.tsx — the chat transcript
 // (spec §5, R2 plan T1.3): the agent's bubbles on the left, yours on the
 // right, no thinking, no ceremony. Tool operations are absent until R2-B.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import ChatTranscript, { type ChatTranscriptProps } from './ChatTranscript'
 import type { ContentBlock, StreamMessage } from '../../lib/nex/message-types'
@@ -169,5 +169,25 @@ describe('ChatTranscript', () => {
     render(T({ messages: [said('q')], turnStarts: [0], partial }))
     const turn = screen.getByTestId('room-turn')
     expect(within(turn).getByTestId('chat-partial-group')).toHaveTextContent('typing')
+  })
+
+  describe('auto-scroll', () => {
+    const scrollTo = vi.fn()
+    afterEach(() => {
+      scrollTo.mockClear()
+      delete (Element.prototype as { scrollTo?: unknown }).scrollTo
+    })
+
+    // F3: a (re)mount — the pane opening, or a view switch — jumps to the
+    // bottom at once; only later growth animates.
+    it('F3: the first scroll is instant, later ones smooth', () => {
+      Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+      const { rerender } = render(T({ messages: [said('q')] }))
+      expect(scrollTo).toHaveBeenCalledTimes(1)
+      expect(scrollTo.mock.calls[0][0]).toMatchObject({ behavior: 'auto' })
+      rerender(T({ messages: [said('q'), reply('a')] }))
+      expect(scrollTo).toHaveBeenCalledTimes(2)
+      expect(scrollTo.mock.calls[1][0]).toMatchObject({ behavior: 'smooth' })
+    })
   })
 })
