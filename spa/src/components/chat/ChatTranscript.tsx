@@ -230,9 +230,11 @@ export default function ChatTranscript({
                     ? null
                     : <ChatMessage key={`${keyPrefix}-${i}`} msg={msg} interrupted={interrupted} lineAt={(j) => lines.get(blockKey(i, j))} />
                 })}
-                {/* Only streaming calls so far: the line comes with them. */}
-                {plain.length === 0 && toolsLine}
                 {ti === lastTurn && hasPartial && <ChatPartialGroup key={`${keyPrefix}-partial`} partial={partial} />}
+                {/* Only streaming calls so far: the line comes with them, after
+                    any text streaming ahead of them, so it does not jump from
+                    above the typing bubble to below it once the text lands. */}
+                {plain.length === 0 && toolsLine}
               </div>
             </RoomTurnGroup>
           )

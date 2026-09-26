@@ -308,6 +308,23 @@ describe('ChatTranscript', () => {
       expect(screen.getByTestId('chat-tools-line')).toHaveTextContent('Using 2 tools…')
     })
 
+    // PR #1471 R1 (P3): with no durable tool yet, a partial holding text
+    // then a tool_use put the line above the text still being typed, and it
+    // jumped below once the text was finalised. The line follows the stream.
+    it('puts a streaming-only tools line after the text streaming before it', () => {
+      const partial: PartialAssembly = {
+        messageId: 'm2', finalized: 0,
+        blocks: {
+          0: { index: 0, type: 'text', text: 'let me check', thinking: '', partialJson: '' },
+          1: toolUse(1, 's', 'Bash'),
+        },
+      }
+      render(T({ messages: [said('q')], turnStarts: [0], partial }))
+      const text = screen.getByTestId('chat-partial-group')
+      const line = screen.getByTestId('chat-tools-line')
+      expect(text.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
     it('a Task counts as a tool and expands into its subagent', () => {
       render(T({ messages: [
         said('go'),
