@@ -1,12 +1,15 @@
 // spa/src/components/chat/ChatTranscript.test.tsx — the chat transcript
 // (spec §5, R2 plan T1.3): the agent's bubbles on the left, yours on the
-// right, no thinking, no ceremony. Tool operations are absent until R2-B.
+// right, no thinking, no ceremony; a turn's tools fold into quiet lines (R2-B).
+import type { ReactNode } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, fireEvent } from '@testing-library/react'
 import ChatTranscript, { type ChatTranscriptProps } from './ChatTranscript'
 import { ChatUserBubble } from './ChatBubble'
+import { FoldContext, useFoldMemory } from '../room/fold-context'
 import type { ContentBlock, StreamMessage } from '../../lib/nex/message-types'
 import type { PartialAssembly } from '../../lib/nex/partial'
+import type { DiffHunk, ToolActivity } from '../../lib/nex/tool-activity'
 
 const asst = (...blocks: ContentBlock[]): StreamMessage =>
   ({ type: 'assistant', message: { id: 'm', role: 'assistant', content: blocks, stop_reason: null } } as StreamMessage)
@@ -172,6 +175,195 @@ describe('ChatTranscript', () => {
     expect(within(turn).getByTestId('chat-partial-group')).toHaveTextContent('typing')
   })
 
+  // R2 plan T2.1: a turn's operations as quiet lines.
+  describe('operation lines', () => {
+    const errRes = (id: string, content: string): ContentBlock =>
+      ({ type: 'tool_result', tool_use_id: id, content, is_error: true })
+    const entry = (status: ToolActivity['status'], over: Partial<ToolActivity> = {}): ToolActivity =>
+      ({ name: 'x', startedAt: 1, endedAt: status === 'running' ? null : 2, status, ...over })
+    const hunk: DiffHunk = { oldStart: 1, oldLines: 1, newStart: 1, newLines: 4, lines: [' a', '+b', '+c', '+d'] }
+    const diff = { path: '/w/notes.md', added: 3, removed: 0, hunks: [hunk], truncated: false }
+    const toolUse = (i: number, id: string, name: string): PartialAssembly['blocks'][number] =>
+      ({ index: i, type: 'tool_use', text: '', thinking: '', partialJson: '{"com', toolId: id, toolName: name })
+
+    it("folds a turn's tools into one line", () => {
+      render(T({ messages: [
+        said('q'),
+        asst(use('a', 'Read', { file_path: '/a' })), usr(res('a', 'AAA')),
+        asst(use('b', 'Grep', { pattern: 'x' })), usr(res('b', 'BBB')),
+        reply('done'),
+      ] }))
+      expect(screen.getAllByTestId('chat-tools-line')).toHaveLength(1)
+      expect(screen.getByTestId('chat-tools-line')).toHaveTextContent('Used 2 tools')
+      expect(screen.queryByTestId('operation-block')).toBeNull()
+      expect(screen.queryByText('AAA')).toBeNull()
+    })
+
+    it('expands the line into the room blocks in place', () => {
+      render(T({ messages: [
+        said('q'),
+        asst(use('a', 'Read', { file_path: '/a' })), usr(res('a', 'AAA')),
+        asst(use('b', 'Grep', { pattern: 'x' })), usr(res('b', 'BBB')),
+        reply('done'),
+      ] }))
+      fireEvent.click(screen.getByTestId('chat-tools-line'))
+      const ops = screen.getByTestId('chat-tools-ops')
+      const blocks = within(ops).getAllByTestId('operation-block')
+      expect(blocks.map((b) => within(b).getByTestId('op-name').textContent)).toEqual(['Read', 'Grep'])
+      expect(within(ops).getByText('AAA')).toBeInTheDocument()
+      // In place: right under the line, before the reply that followed the tools.
+      expect(follows(screen.getByTestId('chat-tools-line'), ops)).toBe(true)
+      expect(follows(ops, screen.getByText('done'))).toBe(true)
+    })
+
+    it('gives an edit its own Edited line with the stat', () => {
+      render(T({
+        messages: [
+          said('q'),
+          asst(use('r', 'Read', { file_path: '/w/notes.md' }), use('e', 'Edit', { file_path: '/w/notes.md' })),
+          usr(res('r', 'x'), res('e', 'ok')),
+        ],
+        tools: { e: entry('done', { diff }) },
+      }))
+      expect(screen.getByTestId('chat-edited-line')).toHaveTextContent('Edited notes.md (+3 −0)')
+      // Not counted in the tools line.
+      expect(screen.getByTestId('chat-tools-line')).toHaveTextContent('Used 1 tool')
+      fireEvent.click(screen.getByTestId('chat-edited-line'))
+      expect(screen.getByTestId('tool-diff')).toBeInTheDocument()
+    })
+
+    it('never hides a failed tool', () => {
+      render(T({ messages: [
+        said('q'),
+        asst(use('r', 'Read', { file_path: '/a' }), use('x', 'Bash', { command: 'false' })),
+        usr(res('r', 'x'), errRes('x', 'boom: exit 1\nmore')),
+      ] }))
+      const failed = screen.getByTestId('chat-failed-line')
+      expect(failed).toHaveTextContent('Bash · boom: exit 1')
+      expect(failed.className).toContain('text-status-error')
+      expect(screen.getByTestId('chat-tools-line')).toHaveTextContent('Used 1 tool')
+      fireEvent.click(failed)
+      const block = screen.getByTestId('operation-block')
+      expect(within(block).getByTestId('op-name')).toHaveTextContent('Bash')
+    })
+
+    it('a denied tool is a failed line', () => {
+      render(T({
+        messages: [said('q'), asst(use('w', 'Write', { file_path: '/etc/x' })), usr(res('w', 'Permission denied by user'))],
+        tools: { w: entry('denied') },
+      }))
+      expect(screen.getByTestId('chat-failed-line')).toHaveTextContent('Write · Permission denied by user')
+      expect(screen.queryByTestId('chat-tools-line')).toBeNull()
+    })
+
+    it("places the tools line at the turn's first operation", () => {
+      render(T({ messages: [
+        said('q'),
+        asst({ type: 'text', text: 'before' }, use('a', 'Read', { file_path: '/a' })), usr(res('a', 'x')),
+        asst({ type: 'text', text: 'between' }, use('b', 'Grep', { pattern: 'y' })), usr(res('b', 'y')),
+        reply('after'),
+      ] }))
+      const line = screen.getByTestId('chat-tools-line')
+      expect(follows(screen.getByText('before'), line)).toBe(true)
+      expect(follows(line, screen.getByText('between'))).toBe(true)
+      expect(screen.getAllByTestId('chat-tools-line')).toHaveLength(1)
+      expect(line).toHaveTextContent('Used 2 tools')
+    })
+
+    it('draws no tools line for a turn with none', () => {
+      render(T({
+        messages: [
+          said('one'), asst(use('a', 'Read', { file_path: '/a' })), usr(res('a', 'x')), reply('a'),
+          said('two'), asst(use('e', 'Edit', { file_path: '/w/notes.md' })), usr(res('e', 'ok')), reply('b'),
+          said('three'), reply('c'),
+        ],
+        turnStarts: [0, 4, 8],
+        tools: { e: entry('done', { diff }) },
+      }))
+      const turns = screen.getAllByTestId('room-turn')
+      expect(within(turns[0]).getByTestId('chat-tools-line')).toBeInTheDocument()
+      expect(within(turns[1]).queryByTestId('chat-tools-line')).toBeNull()
+      expect(within(turns[1]).getByTestId('chat-edited-line')).toBeInTheDocument()
+      expect(within(turns[2]).queryByTestId('chat-tools-line')).toBeNull()
+    })
+
+    it('says the tools are running while one is', () => {
+      const messages = [said('q'), asst(use('a', 'Read', { file_path: '/a' })), usr(res('a', 'x')), asst(use('r', 'Bash', { command: 'sleep 9' }))]
+      const { rerender } = render(T({ messages, tools: { a: entry('done'), r: entry('running') } }))
+      expect(screen.getByTestId('chat-tools-line')).toHaveTextContent('Using 2 tools…')
+      rerender(T({ messages: [...messages, usr(res('r', 'slept'))], tools: { a: entry('done'), r: entry('done') } }))
+      expect(screen.getByTestId('chat-tools-line')).toHaveTextContent('Used 2 tools')
+    })
+
+    it("counts a tool_use still streaming its input in the turn's running line", () => {
+      const partial: PartialAssembly = { messageId: 'm2', finalized: 0, blocks: { 0: toolUse(0, 's', 'Bash') } }
+      // A turn with no durable tool yet: the line appears for the streaming call alone.
+      const { rerender } = render(T({ messages: [said('q')], turnStarts: [0], partial }))
+      expect(screen.getByTestId('chat-tools-line')).toHaveTextContent('Using 1 tool…')
+      fireEvent.click(screen.getByTestId('chat-tools-line'))
+      expect(within(screen.getByTestId('chat-tools-ops')).getByTestId('op-arg-pending')).toBeInTheDocument()
+      // With durable tools in the turn, it joins their line.
+      rerender(T({ messages: [said('q'), asst(use('a', 'Read', { file_path: '/a' })), usr(res('a', 'x'))], turnStarts: [0], partial }))
+      expect(screen.getAllByTestId('chat-tools-line')).toHaveLength(1)
+      expect(screen.getByTestId('chat-tools-line')).toHaveTextContent('Using 2 tools…')
+    })
+
+    // PR #1471 R1 (P3): with no durable tool yet, a partial holding text
+    // then a tool_use put the line above the text still being typed, and it
+    // jumped below once the text was finalised. The line follows the stream.
+    it('puts a streaming-only tools line after the text streaming before it', () => {
+      const partial: PartialAssembly = {
+        messageId: 'm2', finalized: 0,
+        blocks: {
+          0: { index: 0, type: 'text', text: 'let me check', thinking: '', partialJson: '' },
+          1: toolUse(1, 's', 'Bash'),
+        },
+      }
+      render(T({ messages: [said('q')], turnStarts: [0], partial }))
+      const text = screen.getByTestId('chat-partial-group')
+      const line = screen.getByTestId('chat-tools-line')
+      expect(text.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('a Task counts as a tool and expands into its subagent', () => {
+      render(T({ messages: [
+        said('go'),
+        asst(use('T', 'Task', { subagent_type: 'general-purpose', description: 'look around' })),
+        child(said('SUBAGENT PROMPT'), 'T'),
+        child(asst(use('c', 'Bash', { command: 'ls' })), 'T'),
+        child(usr(errRes('c', 'child boom')), 'T'),
+        child(reply('SUBAGENT REPLY'), 'T'),
+        usr(res('T', 'handed back')),
+        reply('done'),
+      ] }))
+      // One tool: the Task. Its subagent's failed call is inside it, not a red line of this turn.
+      expect(screen.getByTestId('chat-tools-line')).toHaveTextContent('Used 1 tool')
+      expect(screen.queryByTestId('chat-failed-line')).toBeNull()
+      fireEvent.click(screen.getByTestId('chat-tools-line'))
+      const ops = screen.getByTestId('chat-tools-ops')
+      expect(within(ops).getAllByTestId('operation-block')[0]).toHaveTextContent('Task')
+      fireEvent.click(within(ops).getByTestId('subagent-toggle'))
+      expect(within(ops).getByText('SUBAGENT REPLY')).toBeInTheDocument()
+    })
+
+    it('expand-all opens the tools line', () => {
+      // The pane's memory, with a stand-in for turn 0's expand-all (chat draws no strip).
+      function Pane({ children }: { children: ReactNode }) {
+        const s = useFoldMemory()
+        return (
+          <FoldContext.Provider value={s}>
+            <button type="button" data-testid="expand-turn-0" onClick={() => s.setTurn(0, true)} />
+            {children}
+          </FoldContext.Provider>
+        )
+      }
+      render(<Pane>{T({ messages: [said('q'), asst(use('a', 'Read', { file_path: '/a' })), usr(res('a', 'AAA'))] })}</Pane>)
+      expect(screen.queryByTestId('chat-tools-ops')).toBeNull()
+      fireEvent.click(screen.getByTestId('expand-turn-0'))
+      expect(within(screen.getByTestId('chat-tools-ops')).getByText('AAA')).toBeInTheDocument()
+    })
+  })
+
   describe('auto-scroll', () => {
     const scrollTo = vi.fn()
     afterEach(() => {
@@ -208,6 +400,32 @@ describe('ChatTranscript', () => {
       expect(scrollTo).toHaveBeenCalledTimes(2)
       rerender(T({ messages, partial: partial(block(0, 'thinking', 'done'), block(1, 'text', 'hello')) }))
       expect(scrollTo).toHaveBeenCalledTimes(3)
+    })
+
+    // R2-B: the tool lines grow the transcript without a new message — a
+    // streaming tool_use draws the "using…" line, and an N2 status that turns
+    // a call into a failure draws a red line. Both must scroll; a tool's input
+    // streaming (which chat does not show) must not.
+    it('follows the tool lines chat draws, not a tool input it hides', () => {
+      Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+      const messages = [said('q'), asst(use('a', 'Bash', { command: 'x' }))]
+      const tu = (json: string): PartialAssembly => ({
+        messageId: 'm2', finalized: 0,
+        blocks: { 0: { index: 0, type: 'tool_use', text: '', thinking: '', partialJson: json, toolId: 's', toolName: 'Read' } },
+      })
+      const running = { a: { name: 'Bash', startedAt: 1, endedAt: null, status: 'running' } as ToolActivity }
+      const { rerender } = render(T({ messages, tools: running }))
+      expect(scrollTo).toHaveBeenCalledTimes(1)
+      // A streaming call joins the line.
+      rerender(T({ messages, tools: running, partial: tu('{') }))
+      expect(scrollTo).toHaveBeenCalledTimes(2)
+      // Its input streams: nothing chat shows moved.
+      rerender(T({ messages, tools: running, partial: tu('{"file_path":"/a"') }))
+      expect(scrollTo).toHaveBeenCalledTimes(2)
+      // N2 says the running call failed: a red line appears with no new message.
+      rerender(T({ messages, tools: { a: { ...running.a, endedAt: 2, status: 'error' } }, partial: tu('{"file_path":"/a"') }))
+      expect(scrollTo).toHaveBeenCalledTimes(3)
+      expect(screen.getByTestId('chat-failed-line')).toBeInTheDocument()
     })
   })
 })

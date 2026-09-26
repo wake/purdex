@@ -18,6 +18,7 @@ import { foldPlan } from '../../lib/nex/fold'
 import type { ToolActivity, ToolCallActivity } from '../../lib/nex/tool-activity'
 import type { ToolResultFacts } from '../../lib/nex/tool-result-facts'
 import type { OperationResult } from '../../lib/nex/operations'
+import { resolveStatus, type OpStatus } from '../../lib/nex/operation-status'
 import { useFold } from './fold-context'
 import { FoldedOutput } from './FoldedOutput'
 import ToolDiffView from './ToolDiffView'
@@ -42,9 +43,6 @@ export interface OperationBlockProps {
   subagent?: ReactNode
 }
 
-/** `pending` is a call with nothing said about it yet — no activity, no facts, no result. */
-type OpStatus = ToolActivity['status'] | 'streaming' | 'pending'
-
 /** Duration is shown at a second and up (spec §3.1.1 #3) until #1229 lands. */
 const DURATION_FLOOR_MS = 1_000
 
@@ -59,24 +57,6 @@ const DOT_CLASS: Record<Exclude<OpStatus, 'running' | 'streaming'>, string> = {
 const RAIL_FILL: Partial<Record<OpStatus, string>> = {
   error: 'bg-status-error/10',
   denied: 'bg-status-warning/10',
-}
-
-/**
- * What the block is: the lifecycle variant when there is one, else the N2
- * status, else what the raw frame's `is_error` says. N2 outranks the raw
- * frame both ways — a denial it flagged is not downgraded by a result that
- * arrived without `is_error`, and an `is_error` it contradicts is not an
- * error (P-B3 R3 / codex R2 A1).
- */
-function resolveStatus(
-  activity: ToolCallActivity | undefined,
-  facts: ToolResultFacts | undefined,
-  result: OperationResult | null,
-): OpStatus {
-  if (activity) return activity.status
-  if (facts?.status) return facts.status
-  if (result) return result.isError ? 'error' : 'done'
-  return 'pending'
 }
 
 /**

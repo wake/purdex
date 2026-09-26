@@ -31,7 +31,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
 import { defaultExecutionState } from '../../lib/nex/event-reducer'
 import { costSummary } from '../../lib/nex/cost-summary'
-import { partialHasVisibleContent, partialHasVisibleText } from '../../lib/nex/partial'
+import { partialHasChatContent, partialHasVisibleContent } from '../../lib/nex/partial'
 import { HandoffApiError } from '../../lib/nex/handoff-api'
 import { takeBack, takeToTerminal, handoffErrorMessage, manualResumeHint } from '../../lib/nex/handoff'
 import type { ExecutionFrom, ExecutionViewMode } from '../../types/tab'
@@ -165,15 +165,15 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // Spec §4.4 R3: dots while the model is silent (own delivered send, or an
   // observed live turn); the typewriter takes over once tokens flow, and a
   // running tool's spinner already shows activity, so no dots beside it.
-  // Chat never draws a thought (nor, until R2-B, a streaming tool_use), so
-  // only prose switches its dots off (R2 plan T1.3b).
-  // Chat draws no tool line either, so a running tool is no activity signal
-  // there and must not switch the dots off (F1). Revisit once R2-B gives chat
-  // its "using N tools…" line — that line then carries the running state.
+  // Chat never draws a thought, so a streaming thought keeps its dots on
+  // (R2 plan T1.3b); prose or a streaming call switches them off — the call
+  // shows as the turn's "Using N tools…" line (R2-B). A running tool switches
+  // them off in both views: the room's spinner, chat's tools line (F1,
+  // revisited in R2-B — one signal per state, as in the room).
   const chat = mode === 'chat'
-  const partialVisible = chat ? partialHasVisibleText(st.partial) : partialHasVisibleContent(st.partial)
+  const partialVisible = chat ? partialHasChatContent(st.partial) : partialHasVisibleContent(st.partial)
   const showThinking = (st.turnLive || (st.pendingSend && st.pendingLocal?.delivery !== 'queued'))
-    && !partialVisible && (chat || !anyRunning)
+    && !partialVisible && !anyRunning
   const queuedTag = st.pendingLocal?.delivery === 'queued'
     && <span className="text-[10px] uppercase font-normal text-text-muted">{t('execution.queued')}</span>
   const transcriptProps = {

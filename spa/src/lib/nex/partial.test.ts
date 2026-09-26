@@ -1,7 +1,7 @@
 // spa/src/lib/nex/partial.test.ts — spec §4.1 T1–T8 (transient frames) and D1
 // (durable assistant frames finalize the partial through applyDurableEvent).
 import { describe, it, expect } from 'vitest'
-import { applyTransientFrame, finalizedFor, isPartialBlockVisible, partialHasVisibleContent, partialHasVisibleText, partialTextVersionOf, partialVersionOf, type PartialAssembly, type PartialBlock } from './partial'
+import { applyTransientFrame, finalizedFor, isPartialBlockVisible, partialHasVisibleContent, partialHasChatContent, partialHasVisibleText, partialChatVersionOf, partialToolUses, partialVersionOf, type PartialAssembly, type PartialBlock } from './partial'
 import { applyDurableEvent, defaultExecutionState, type ExecutionState } from './event-reducer'
 import type { NexEvent } from './types'
 import type { AssistantMessage } from './message-types'
@@ -404,8 +404,32 @@ describe('partialHasVisibleText (R2 chat dots rule)', () => {
     expect(partialHasVisibleText(assembly({ 0: { ...empty, text: ' \n ' } }))).toBe(false)
     // Prose starts: the dots go off.
     expect(partialHasVisibleText(assembly({ 0: { ...empty, type: 'thinking', thinking: 't' }, 1: { ...empty, index: 1, text: 'a' } }))).toBe(true)
-    // Chat draws nothing for a streaming tool_use in R2-A either.
+    // Text only: a streaming tool_use is partialHasChatContent's other half.
     expect(partialHasVisibleText(assembly({ 0: { ...empty, type: 'tool_use', toolName: 'Bash', partialJson: '{' } }))).toBe(false)
+  })
+})
+
+// R2-B: chat counts a streaming tool_use in the turn's "using N tools…" line.
+describe('partialToolUses / partialHasChatContent (R2-B chat)', () => {
+  const assembly = (blocks: PartialAssembly['blocks']): PartialAssembly => ({ messageId: 'm', finalized: 0, blocks })
+  const empty = { index: 0, type: 'text' as const, text: '', thinking: '', partialJson: '' }
+
+  it('lists the streaming tool_use blocks in index order', () => {
+    expect(partialToolUses(null)).toEqual([])
+    const p = assembly({
+      2: { ...empty, index: 2, type: 'tool_use', toolName: 'Grep' },
+      0: { ...empty, type: 'thinking', thinking: 't' },
+      1: { ...empty, index: 1, type: 'tool_use', toolName: 'Bash' },
+    })
+    expect(partialToolUses(p).map((b) => b.toolName)).toEqual(['Bash', 'Grep'])
+  })
+
+  it('is text or a tool_use, never a thought', () => {
+    expect(partialHasChatContent(null)).toBe(false)
+    expect(partialHasChatContent(assembly({ 0: { ...empty, type: 'thinking', thinking: 'pondering' } }))).toBe(false)
+    expect(partialHasChatContent(assembly({ 0: { ...empty, text: 'a' } }))).toBe(true)
+    // A started call with no input yet already draws the "using…" line.
+    expect(partialHasChatContent(assembly({ 0: { ...empty, type: 'tool_use', toolName: 'Bash' } }))).toBe(true)
   })
 })
 
@@ -454,30 +478,39 @@ describe('partialVersionOf (spec §4.4 R4)', () => {
   })
 })
 
-// F10: chat draws only the text of a partial, so its auto-scroll key must not
-// move for what chat does not draw (a thought, a tool_use and its input).
-describe('partialTextVersionOf (chat auto-scroll key)', () => {
+// F10: chat's auto-scroll key moves only for what chat draws of a partial —
+// its text, and (R2-B) a tool_use joining the turn's tools line — never for a
+// thought or a tool's streaming input.
+describe('partialChatVersionOf (chat auto-scroll key)', () => {
   const pb = (index: number, over: Partial<PartialBlock> & { type: PartialBlock['type'] }): PartialBlock =>
     ({ index, text: '', thinking: '', partialJson: '', ...over })
   const assembly = (...blocks: PartialBlock[]): PartialAssembly =>
     ({ messageId: 'm', finalized: 0, blocks: Object.fromEntries(blocks.map((b) => [b.index, b])) })
 
   it('same value for null / undefined', () => {
-    expect(partialTextVersionOf(null)).toBe(partialTextVersionOf(undefined))
+    expect(partialChatVersionOf(null)).toBe(partialChatVersionOf(undefined))
   })
 
-  it('does not move while a thought streams, a tool_use appears or its input streams', () => {
-    const base = partialTextVersionOf(assembly(pb(0, { type: 'thinking', thinking: 'a' })))
-    expect(partialTextVersionOf(assembly(pb(0, { type: 'thinking', thinking: 'a much longer thought' })))).toBe(base)
-    expect(partialTextVersionOf(assembly(pb(0, { type: 'thinking', thinking: 'a' }), pb(1, { type: 'tool_use', toolName: 'Bash' })))).toBe(base)
-    expect(partialTextVersionOf(assembly(pb(0, { type: 'thinking', thinking: 'a' }), pb(1, { type: 'tool_use', toolName: 'Bash', partialJson: '{"c' })))).toBe(base)
+  it('does not move while a thought streams or a tool input streams', () => {
+    const base = partialChatVersionOf(assembly(pb(0, { type: 'thinking', thinking: 'a' })))
+    expect(partialChatVersionOf(assembly(pb(0, { type: 'thinking', thinking: 'a much longer thought' })))).toBe(base)
+    const tool = partialChatVersionOf(assembly(pb(0, { type: 'thinking', thinking: 'a' }), pb(1, { type: 'tool_use', toolName: 'Bash' })))
+    expect(partialChatVersionOf(assembly(pb(0, { type: 'thinking', thinking: 'a' }), pb(1, { type: 'tool_use', toolName: 'Bash', partialJson: '{"c' })))).toBe(tool)
+  })
+
+  it('moves when a tool_use appears (it joins the tools line)', () => {
+    const thought = assembly(pb(0, { type: 'thinking', thinking: 'a' }))
+    const tool = assembly(pb(0, { type: 'thinking', thinking: 'a' }), pb(1, { type: 'tool_use', toolName: 'Bash' }))
+    const two = assembly(pb(0, { type: 'thinking', thinking: 'a' }), pb(1, { type: 'tool_use', toolName: 'Bash' }), pb(2, { type: 'tool_use', toolName: 'Read' }))
+    expect(partialChatVersionOf(tool)).not.toBe(partialChatVersionOf(thought))
+    expect(partialChatVersionOf(two)).not.toBe(partialChatVersionOf(tool))
   })
 
   it('moves when text grows, or a text block appears', () => {
     const thought = assembly(pb(0, { type: 'thinking', thinking: 'a' }))
     const he = assembly(pb(0, { type: 'thinking', thinking: 'a' }), pb(1, { type: 'text', text: 'he' }))
     const hello = assembly(pb(0, { type: 'thinking', thinking: 'a' }), pb(1, { type: 'text', text: 'hello' }))
-    expect(partialTextVersionOf(he)).not.toBe(partialTextVersionOf(thought))
-    expect(partialTextVersionOf(hello)).not.toBe(partialTextVersionOf(he))
+    expect(partialChatVersionOf(he)).not.toBe(partialChatVersionOf(thought))
+    expect(partialChatVersionOf(hello)).not.toBe(partialChatVersionOf(he))
   })
 })
