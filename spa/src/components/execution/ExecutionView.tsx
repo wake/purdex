@@ -162,10 +162,13 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // running tool's spinner already shows activity, so no dots beside it.
   // Chat never draws a thought (nor, until R2-B, a streaming tool_use), so
   // only prose switches its dots off (R2 plan T1.3b).
+  // Chat draws no tool line either, so a running tool is no activity signal
+  // there and must not switch the dots off (F1). Revisit once R2-B gives chat
+  // its "using N tools…" line — that line then carries the running state.
   const chat = mode === 'chat'
   const partialVisible = chat ? partialHasVisibleText(st.partial) : partialHasVisibleContent(st.partial)
   const showThinking = (st.turnLive || (st.pendingSend && st.pendingLocal?.delivery !== 'queued'))
-    && !partialVisible && !anyRunning
+    && !partialVisible && (chat || !anyRunning)
   const queuedTag = st.pendingLocal?.delivery === 'queued'
     && <span className="text-[10px] uppercase font-normal text-text-muted">{t('execution.queued')}</span>
   const transcriptProps = {

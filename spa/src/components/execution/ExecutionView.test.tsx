@@ -1107,6 +1107,23 @@ describe('ExecutionView — room and chat (R2 T1.4)', () => {
     expect(screen.getByTestId('chat-partial-group')).toHaveTextContent('here it is')
   })
 
+  // F1: chat draws no tools until R2-B, so a running tool must not switch
+  // chat's only activity signal off; the room keeps its spinner instead.
+  it('F1: chat keeps the dots on while a tool runs', () => {
+    patchExec({ turnLive: true })
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    act(() => { useExecutionStore.getState().applyEvents(H, E, [toolUseFrame(1, 5_000)]) })
+    expect(Object.values(useExecutionStore.getState().executions[KEY].tools).some((x) => x.status === 'running')).toBe(true)
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+  })
+
+  it('F1: the room still turns the dots off while a tool runs', () => {
+    patchExec({ turnLive: true })
+    render(<ExecutionView {...base} isActive />)
+    act(() => { useExecutionStore.getState().applyEvents(H, E, [toolUseFrame(1, 5_000)]) })
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+  })
+
   it('room still hands a streaming thought to RoomThinking', () => {
     patchExec({ turnLive: true, partial: thinkingPartial('weighing options') })
     render(<ExecutionView {...base} isActive />)
