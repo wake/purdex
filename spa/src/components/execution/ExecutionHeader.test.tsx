@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { useState } from 'react'
 import { render, screen, fireEvent, act, within } from '@testing-library/react'
 import ExecutionHeader from './ExecutionHeader'
 import type { ExecutionSummary } from '../../lib/nex/types'
@@ -581,6 +582,97 @@ describe('ExecutionHeader', () => {
       fireEvent.click(costBtn())
       expect(screen.queryByTestId('cost-panel')).toBeNull()
       expect(costBtn().hasAttribute('aria-expanded')).toBe(false)
+    })
+  })
+
+  // F5 / F6 / F7: a view switch — from the menu, or from elsewhere (Profile
+  // Sync writes the pane's mode) — must not leave panels open behind it, and
+  // must not drop focus on <body> when the trigger it came from is gone.
+  describe('a view switch closes the panels and keeps focus on a visible trigger', () => {
+    const box = { x: 10, y: 10, left: 10, top: 10, right: 60, bottom: 30, width: 50, height: 20, toJSON: () => ({}) } as DOMRect
+    const zero = { x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) } as DOMRect
+    /** The CSS at a width, by class: `hidden` / `@max-md:hidden` / `@max-md:flex`. */
+    const layout = (width: 'wide' | 'narrow') => {
+      const hiddenAt = (el: HTMLElement | null): boolean => {
+        if (!el) return false
+        const c = el.classList
+        const hidden = width === 'wide' ? c.contains('hidden') : c.contains('@max-md:hidden') || (c.contains('hidden') && !c.contains('@max-md:flex'))
+        return hidden || hiddenAt(el.parentElement)
+      }
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+        return this.isConnected && !hiddenAt(this) ? box : zero
+      })
+    }
+    afterEach(() => { vi.restoreAllMocks() })
+    const panels = ['worker-info-panel', 'view-mode-menu', 'cost-panel', 'header-overflow-panel']
+    const openPanels = () => panels.filter((id) => screen.queryByTestId(id))
+
+    function Pane({ start = 'room' as 'room' | 'chat' }) {
+      const [mode, setMode] = useState(start)
+      return <ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} onTakeBack={vi.fn()} mode={mode} onModeChange={setMode} />
+    }
+
+    it('F5: a remote switch closes all four panels, and switching back reopens none', () => {
+      layout('wide')
+      const props = { ...baseProps, summary: summary(), cost: costSummary(fixturePayloads), onTakeBack: vi.fn() }
+      const { rerender } = render(<ExecutionHeader {...props} mode="room" />)
+      fireEvent.click(screen.getByTestId('worker-name'))
+      fireEvent.click(screen.getByTestId('view-mode'))
+      fireEvent.click(screen.getByTestId('execution-cost'))
+      fireEvent.click(screen.getByTestId('header-overflow'))
+      expect(openPanels()).toEqual(panels)
+      rerender(<ExecutionHeader {...props} mode="chat" />)
+      expect(openPanels()).toEqual([])
+      rerender(<ExecutionHeader {...props} mode="room" />)
+      expect(openPanels()).toEqual([])
+    })
+
+    it('F6: the cost panel opened in chat closes when the pane goes back to the room', () => {
+      layout('narrow')
+      const props = { ...baseProps, summary: summary(), cost: costSummary(fixturePayloads) }
+      const { rerender } = render(<ExecutionHeader {...props} mode="chat" />)
+      fireEvent.click(screen.getByTestId('execution-cost'))
+      expect(screen.getByTestId('cost-panel')).toBeInTheDocument()
+      rerender(<ExecutionHeader {...props} mode="room" />)
+      expect(screen.queryByTestId('cost-panel')).toBeNull()
+    })
+
+    it('F7: room → chat through the view menu leaves focus on a visible trigger, not <body>', () => {
+      layout('wide')
+      render(<Pane />)
+      const view = screen.getByTestId('view-mode')
+      view.focus()
+      fireEvent.click(view)
+      fireEvent.click(screen.getByTestId('view-mode-chat'))
+      expect(screen.queryByTestId('view-mode')).toBeNull()
+      expect(document.activeElement).not.toBe(document.body)
+      expect(document.activeElement).toBe(screen.getByTestId('execution-cost'))
+    })
+
+    it('F7: chat → room through the overflow leaves focus on a visible trigger, not the hidden overflow', () => {
+      layout('wide')
+      render(<Pane start="chat" />)
+      const trigger = screen.getByTestId('header-overflow')
+      trigger.focus()
+      fireEvent.click(trigger)
+      fireEvent.click(screen.getByTestId('view-mode-room'))
+      expect(screen.getByTestId('view-mode')).toBeInTheDocument()
+      expect(document.activeElement).not.toBe(document.body)
+      expect(document.activeElement).not.toBe(screen.getByTestId('header-overflow'))
+      expect(document.activeElement).toBe(screen.getByTestId('execution-cost'))
+    })
+
+    it('F5: the worker info left open does not pop back after room → chat → room', () => {
+      layout('wide')
+      render(<Pane />)
+      fireEvent.click(screen.getByTestId('worker-name'))
+      expect(screen.getByTestId('worker-info-panel')).toBeInTheDocument()
+      fireEvent.click(screen.getByTestId('view-mode'))
+      fireEvent.click(screen.getByTestId('view-mode-chat'))
+      fireEvent.click(screen.getByTestId('header-overflow'))
+      fireEvent.click(screen.getByTestId('view-mode-room'))
+      expect(screen.getByTestId('view-mode')).toBeInTheDocument()
+      expect(screen.queryByTestId('worker-info-panel')).toBeNull()
     })
   })
 })

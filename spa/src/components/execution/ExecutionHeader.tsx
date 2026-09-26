@@ -103,6 +103,39 @@ export default function ExecutionHeader({
   // unmount cleanup (React runs every passive destroy before any create), so
   // the panel's restore can't take focus back afterwards.
   const refocusFrom = useRef<HTMLElement | null>(null)
+  /** Focus the first header trigger that has a box on this side of the breakpoint (and in this view). */
+  const focusVisibleTrigger = () => {
+    const target = [costRef.current, overflowRef.current, viewRef.current, nameRef.current]
+      .find((el) => el && !el.disabled && !boxless(el))
+    target?.focus()
+  }
+  // F5–F7: a view switch — from the menu or from outside (Profile Sync writes
+  // the pane's mode) — closes every panel: one left open would hang off an
+  // anchor the other view hides or unmounts (the cost panel pinned top-left),
+  // or pop back by itself on the way back. The trigger focus came from may be
+  // gone too (the room's view menu trigger) or hidden (the room hides chat's
+  // overflow trigger at wide widths), which leaves focus on <body>; move it to
+  // a visible trigger then. The panels close during render (React's "adjust
+  // state on a prop change"), so they unmount in the same commit as the
+  // switch; the focus move is an effect, after their unmount cleanup has
+  // tried (and, for a gone or hidden anchor, failed) to restore focus. Not on
+  // first render: nothing has switched yet.
+  const [panelsMode, setPanelsMode] = useState(mode)
+  if (panelsMode !== mode) {
+    setPanelsMode(mode)
+    setViewOpen(false)
+    setInfoOpen(false)
+    setCostOpen(false)
+    setOverflowOpen(false)
+  }
+  const focusedMode = useRef(mode)
+  useEffect(() => {
+    if (focusedMode.current === mode) return
+    focusedMode.current = mode
+    const active = document.activeElement as HTMLElement | null
+    if (active && active !== document.body && active.isConnected && !boxless(active)) return
+    focusVisibleTrigger()
+  }, [mode])
   useEffect(() => {
     const root = rootRef.current
     if (!root || (!costOpen && !overflowOpen && !viewOpen)) return
@@ -123,9 +156,7 @@ export default function ExecutionHeader({
     // focus the user moved elsewhere while the panel was open stays put.
     const active = document.activeElement
     if (active && active !== document.body && active !== hidden) return
-    const target = [costRef.current, overflowRef.current, viewRef.current, nameRef.current]
-      .find((el) => el && !el.disabled && !boxless(el))
-    target?.focus()
+    focusVisibleTrigger()
   }, [costOpen, overflowOpen, viewOpen])
   useEffect(() => {
     if (!confirming) return
