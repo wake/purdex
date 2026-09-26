@@ -18,10 +18,10 @@ import { useHostStore } from '../stores/useHostStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { syncIdOfSync } from '../lib/profile/host-identity'
 import { getPrimaryPane } from '../lib/pane-tree'
-import type { Tab } from '../types/tab'
+import type { PaneContent, Tab } from '../types/tab'
 
 function makeTab(id: string, contentKind: 'tmux-session' | 'dashboard' | 'history' | 'settings', mode?: 'terminal'): Tab {
-  const content = contentKind === 'tmux-session'
+  const content: PaneContent = contentKind === 'tmux-session'
     ? { kind: 'tmux-session' as const, hostId: 'test-host', sessionCode: 'test', mode: mode ?? 'terminal' as const, cachedName: '', tmuxInstance: '' }
     : contentKind === 'settings'
       ? { kind: 'settings' as const, scope: 'global' as const }
