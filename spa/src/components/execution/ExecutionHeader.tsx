@@ -14,12 +14,14 @@
 // The name toggles `WorkerInfoPanel` (provider, profile, full cwd, session).
 // Narrow (the root is a `@container`): at `@max-md` the header is only name +
 // state + an overflow trigger (spec §4.7); the cost, the two lease-backed
-// actions and "Take to terminal" (with its separator) hide, and the trigger
+// actions and the view trigger (with its separator) hide, and the trigger
 // opens a `FloatingPanel` carrying them; the cost panel then anchors to that
 // trigger.
 // View (R2 plan T1.2): "Take to terminal" is now the 終端機 item of the view
 // menu (指揮室／聊天 radios + 終端機 action); its trigger sits where the
 // take-back button was, and at `@max-md` the overflow carries the same items.
+// The pane can always switch views, so the menu is always offered; only the
+// 終端機 item depends on `onTakeBack`.
 // Chat (`mode === 'chat'`, spec §5) keeps only state, cost and the overflow at
 // every width; interrupt, terminate and the view items live in the overflow.
 import { useEffect, useId, useRef, useState } from 'react'
@@ -51,12 +53,8 @@ export interface ExecutionHeaderProps {
   takeBackBusy?: boolean
   /** The pane's current view; room is the default (spec §1). */
   mode?: ExecutionViewMode
-  /**
-   * Switches the view. Optional until ExecutionView threads the mode through
-   * (plan T1.4); without it the 指揮室／聊天 radios render disabled, and the
-   * view trigger shows only when there is a terminal item to offer.
-   */
-  onModeChange?: (mode: ExecutionViewMode) => void
+  /** Switches the view (the pane writes it to its content). The view menu is therefore always offered. */
+  onModeChange: (mode: ExecutionViewMode) => void
 }
 
 const STATE_DOT: Record<string, string> = {
@@ -80,8 +78,6 @@ export default function ExecutionHeader({
 }: ExecutionHeaderProps) {
   const t = useI18nStore((s) => s.t)
   const chat = mode === 'chat'
-  /** Nothing to offer (no way to switch, no terminal) → no view trigger or overflow section. */
-  const hasViewMenu = !!onModeChange || !!onTakeBack
   const [confirming, setConfirming] = useState(false)
   const [viewOpen, setViewOpen] = useState(false)
   const viewRef = useRef<HTMLButtonElement>(null)
@@ -192,7 +188,7 @@ export default function ExecutionHeader({
         </div>
       )}
       {overflowTrigger}
-      {!chat && hasViewMenu && (
+      {!chat && (
         <div className="flex items-center gap-2 shrink-0 @max-md:hidden">
           <span className="shrink-0 w-px h-4 bg-border-subtle" />
           <button type="button" data-testid="view-mode" ref={viewRef} aria-haspopup="menu" aria-expanded={viewOpen}
@@ -219,16 +215,12 @@ export default function ExecutionHeader({
               onClick={() => { if (terminateClick()) setOverflowOpen(false) }}>
               <Power size={12} /> {confirming ? t('execution.terminate_confirm') : t('execution.terminate')}
             </button>
-            {hasViewMenu && (
-              <>
-                <div className="my-0.5 h-px bg-border-subtle" />
-                <div className="px-2 pt-0.5 text-[10px] text-text-muted">{t('room.view.label')}</div>
-                <div role="group" aria-label={t('room.view.label')} className="flex flex-col gap-0.5">
-                  <ViewModeItems mode={mode} onModeChange={onModeChange} onTakeBack={onTakeBack}
-                    takeBackBusy={takeBackBusy} onDone={() => setOverflowOpen(false)} />
-                </div>
-              </>
-            )}
+            <div className="my-0.5 h-px bg-border-subtle" />
+            <div className="px-2 pt-0.5 text-[10px] text-text-muted">{t('room.view.label')}</div>
+            <div role="group" aria-label={t('room.view.label')} className="flex flex-col gap-0.5">
+              <ViewModeItems mode={mode} onModeChange={onModeChange} onTakeBack={onTakeBack}
+                takeBackBusy={takeBackBusy} onDone={() => setOverflowOpen(false)} />
+            </div>
           </div>
         </FloatingPanel>
       )}

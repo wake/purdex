@@ -38,6 +38,7 @@ const baseProps = {
   onInterrupt: vi.fn(),
   onTerminate: vi.fn(),
   busy: false,
+  onModeChange: vi.fn(),
 }
 
 describe('ExecutionHeader', () => {
