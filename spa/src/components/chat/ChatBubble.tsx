@@ -18,6 +18,21 @@ const SIDE = {
   user: 'bg-accent-muted text-text-primary',
 } as const
 
+/**
+ * Your line as a bubble — the durable one and the pending one (F8) share it.
+ * Never markdown (same rule as RoomUserLine): the text as written, line
+ * breaks kept; a slash command gets the mono face. `pending` dims it until
+ * message_accepted; `children` follow the text (the pending line's `queued` tag).
+ */
+export function ChatUserBubble({ text, pending, children }: { text: string; pending?: boolean; children?: ReactNode }) {
+  const face = text.startsWith('/') ? 'font-mono text-[13px]' : 'text-sm'
+  return (
+    <ChatBubble side="user" className={pending ? `${face} opacity-60` : face}>
+      <p className="whitespace-pre-wrap break-words">{text}{children != null && children !== false && <> {children}</>}</p>
+    </ChatBubble>
+  )
+}
+
 export default function ChatBubble({ side, className, children }: Props) {
   return (
     <div className={`flex ${side === 'agent' ? 'justify-start' : 'justify-end'}`}>

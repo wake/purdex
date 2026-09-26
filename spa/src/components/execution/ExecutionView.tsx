@@ -14,6 +14,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import RoomTranscript from '../room/RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
+import { ChatUserBubble } from '../chat/ChatBubble'
 import { FoldContext, useFoldMemory } from '../room/fold-context'
 import RoomUserLine from '../room/RoomUserLine'
 import WorkerDock from '../room/WorkerDock'
@@ -205,8 +206,8 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
         <FoldContext.Provider value={foldStore}>
           {chat ? (
             <ChatTranscript {...transcriptProps}>
-              {/* ChatTranscript wraps the optimistic line in its own dimmed user bubble, so only the text goes in. */}
-              {st.pendingLocal && <>{st.pendingLocal.text} {queuedTag}</>}
+              {/* The optimistic line: your bubble like any other, dimmed until message_accepted (F8). */}
+              {st.pendingLocal && <ChatUserBubble text={st.pendingLocal.text} pending>{queuedTag}</ChatUserBubble>}
             </ChatTranscript>
           ) : (
             <RoomTranscript {...transcriptProps}>

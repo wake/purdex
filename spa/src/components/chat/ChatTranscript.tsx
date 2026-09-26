@@ -23,7 +23,7 @@ import RoomTurnGroup from '../room/RoomTurnGroup'
 import RoomProse from '../room/RoomProse'
 import { FoldContext, useInheritedFoldMemory } from '../room/fold-context'
 import type { RoomTranscriptProps } from '../room/RoomTranscript'
-import ChatBubble from './ChatBubble'
+import ChatBubble, { ChatUserBubble } from './ChatBubble'
 import ChatPartialGroup from './ChatPartialGroup'
 
 /**
@@ -70,13 +70,8 @@ function ChatMessage({ msg, interrupted }: { msg: StreamMessage; interrupted: st
         )
         return
       }
-      // Your line is never markdown (same rule as RoomUserLine); a slash
-      // command keeps its bubble and gets the mono face.
-      rows.push(
-        <ChatBubble key={j} side="user" className={block.text.startsWith('/') ? 'font-mono text-[13px]' : 'text-sm'}>
-          <p className="whitespace-pre-wrap break-words">{block.text}</p>
-        </ChatBubble>,
-      )
+      // Your line is never markdown; a slash command gets the mono face (ChatUserBubble).
+      rows.push(<ChatUserBubble key={j} text={block.text} />)
     })
   }
 
@@ -145,10 +140,10 @@ export default function ChatTranscript({
           </RoomTurnGroup>
         ))}
 
-        {/* The optimistic line, in the provisional turn the room puts it in. */}
+        {/* The optimistic line (the caller's pending ChatUserBubble), in the provisional turn the room puts it in. */}
         {hasPending && (
           <RoomTurnGroup key={`${keyPrefix}-turn-${shown.length}`} index={shown.length} chrome={false}>
-            <ChatBubble side="user" className="text-sm opacity-60">{children}</ChatBubble>
+            {children}
           </RoomTurnGroup>
         )}
 

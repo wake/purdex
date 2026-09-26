@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import ChatTranscript, { type ChatTranscriptProps } from './ChatTranscript'
+import { ChatUserBubble } from './ChatBubble'
 import type { ContentBlock, StreamMessage } from '../../lib/nex/message-types'
 import type { PartialAssembly } from '../../lib/nex/partial'
 
@@ -113,7 +114,7 @@ describe('ChatTranscript', () => {
   it('draws the pending line as a dimmed user bubble', () => {
     render(
       <ChatTranscript messages={[said('first'), reply('ok')]} turnStarts={[0]} keyPrefix="k" showThinking showEmptyHint={false}>
-        <span data-testid="pending">second</span>
+        <ChatUserBubble text="second" pending><span data-testid="pending">queued</span></ChatUserBubble>
       </ChatTranscript>,
     )
     const pending = screen.getByTestId('pending')

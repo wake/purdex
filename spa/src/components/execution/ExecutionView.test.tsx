@@ -1118,6 +1118,29 @@ describe('ExecutionView — room and chat (R2 T1.4)', () => {
     expect(screen.queryByTestId('room-user-line')).toBeNull()
   })
 
+  // F8: the pending bubble follows the durable one's rules — your text as
+  // written (line breaks kept), and a slash command in mono.
+  it('F8: a multi-line pending line keeps its line breaks', () => {
+    patchExec({ pendingSend: true, pendingLocal: { text: 'line one\nline two', delivery: 'delivered' } as Exec['pendingLocal'] })
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    const bubble = screen.getByTestId('chat-bubble-user')
+    const p = bubble.querySelector('p')
+    expect(p).not.toBeNull()
+    expect(p!.className).toContain('whitespace-pre-wrap')
+    expect(p!.className).toContain('break-words')
+    expect(p!.textContent).toContain('line one\nline two')
+    expect(bubble.className).toContain('text-sm')
+  })
+
+  it('F8: a pending slash command gets the mono face, like a durable one', () => {
+    patchExec({ pendingSend: true, pendingLocal: { text: '/compact', delivery: 'queued' } as Exec['pendingLocal'] })
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    const bubble = screen.getByTestId('chat-bubble-user')
+    expect(bubble.className).toContain('font-mono')
+    expect(bubble.className).toContain('opacity-60')
+    expect(within(bubble).getByText(/queued/i)).toBeInTheDocument()
+  })
+
   it('chat keeps the dots on while a thought streams', () => {
     patchExec({ turnLive: true, partial: thinkingPartial('weighing options') })
     render(<ExecutionView {...base} mode="chat" isActive />)
