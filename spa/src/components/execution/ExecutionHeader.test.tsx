@@ -54,7 +54,7 @@ describe('ExecutionHeader', () => {
     expect(screen.getByTestId('execution-cost')).toHaveTextContent('$0.00')
     expect(screen.getByRole('button', { name: /^interrupt$/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^terminate$/i })).toBeInTheDocument()
-    expect(screen.getByTestId('take-back')).toBeInTheDocument()
+    expect(screen.getByTestId('view-mode')).toBeInTheDocument()
   })
 
   // Observers, lease and SSE moved to the dock (§4.6); turns are dropped;
@@ -98,10 +98,11 @@ describe('ExecutionHeader', () => {
     expect(baseProps.onTerminate).not.toHaveBeenCalled()
   })
 
-  // Spec §1: take-to-terminal changes the pane's binding, it does not interrupt a turn.
-  it('separates take-to-terminal from the interrupt actions', () => {
+  // Spec §1: take-to-terminal changes the pane's binding, it does not interrupt
+  // a turn. It now lives in the view menu, whose trigger keeps the separator.
+  it('separates the view menu from the interrupt actions', () => {
     render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={vi.fn()} />)
-    const take = screen.getByTestId('take-back')
+    const take = screen.getByTestId('view-mode')
     const sep = take.previousElementSibling as HTMLElement | null
     expect(sep).not.toBeNull()
     expect(sep!.tagName).toBe('SPAN')
@@ -130,7 +131,7 @@ describe('ExecutionHeader', () => {
     expect(wide).toContainElement(screen.getByTestId('execution-cost'))
     expect(wide).toContainElement(screen.getByRole('button', { name: /^interrupt$/i }))
     expect(wide).toContainElement(screen.getByRole('button', { name: /^terminate$/i }))
-    expect(wide).not.toContainElement(screen.getByTestId('take-back'))
+    expect(wide).not.toContainElement(screen.getByTestId('view-mode'))
     const trigger = screen.getByTestId('header-overflow')
     expect(trigger.className).toMatch(/(^|\s)hidden(\s|$)/)
     expect(trigger.className).toMatch(/@max-md:flex/)
@@ -151,36 +152,113 @@ describe('ExecutionHeader', () => {
     expect(baseProps.onTerminate).toHaveBeenCalledTimes(1)
   })
 
-  // Worker pane spec §4.7 (spec:375): narrow leaves only name + state + the
-  // overflow menu, so "Take to terminal" folds into the menu too. The inline
-  // button and its separator hide at `@max-md`; the menu entry calls the same
-  // handler and honours `takeBackBusy`.
-  it('folds take-to-terminal into the overflow menu at narrow widths', () => {
+  // R2 plan T1.2: "Take to terminal" is the terminal item of the view menu
+  // (指揮室／聊天／終端機); the header draws no button of its own for it.
+  it('the header no longer draws a separate take-back button', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={vi.fn()} onModeChange={vi.fn()} />)
+    expect(screen.queryByTestId('take-back')).toBeNull()
+    expect(screen.queryByText(/take to terminal/i)).toBeNull()
+    const trigger = screen.getByTestId('view-mode')
+    expect(trigger).toHaveTextContent('Room')
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu')
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(trigger)
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(within(screen.getByTestId('view-mode-menu')).getByTestId('view-mode-terminal')).toHaveTextContent(/take to terminal/i)
+  })
+
+  it('the view menu switches the view and takes the worker to a terminal', () => {
+    const onModeChange = vi.fn()
     const onTakeBack = vi.fn()
-    const { rerender } = render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} />)
-    const take = screen.getByTestId('take-back')
+    render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} onModeChange={onModeChange} />)
+    fireEvent.click(screen.getByTestId('view-mode'))
+    fireEvent.click(screen.getByTestId('view-mode-chat'))
+    expect(onModeChange).toHaveBeenCalledWith('chat')
+    expect(screen.queryByTestId('view-mode-menu')).toBeNull()
+    fireEvent.click(screen.getByTestId('view-mode'))
+    fireEvent.click(screen.getByTestId('view-mode-terminal'))
+    expect(onTakeBack).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('view-mode-menu')).toBeNull()
+  })
+
+  // Worker pane spec §4.7: narrow leaves only name + state + the overflow
+  // menu, so the view trigger (with its separator) hides at `@max-md` and the
+  // overflow carries the same three items under a small "view" label.
+  it('the overflow lists the three view items at narrow widths', () => {
+    const onTakeBack = vi.fn()
+    const onModeChange = vi.fn()
+    const { rerender } = render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} onModeChange={onModeChange} />)
+    const take = screen.getByTestId('view-mode')
     const sep = take.previousElementSibling as HTMLElement
-    // Both the button and its separator sit inside a wide-only group.
     const group = take.closest('[class*="@max-md:hidden"]')
     expect(group).not.toBeNull()
     expect(group).toContainElement(sep)
     expect(group).not.toContainElement(screen.getByTestId('header-overflow'))
     fireEvent.click(screen.getByTestId('header-overflow'))
-    const item = within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-take-back')
+    const panel = screen.getByTestId('header-overflow-panel')
+    expect(within(panel).getByText('View')).toBeInTheDocument()
+    expect(within(panel).getByTestId('view-mode-room').getAttribute('aria-checked')).toBe('true')
+    expect(within(panel).getByTestId('view-mode-chat').getAttribute('aria-checked')).toBe('false')
+    expect(within(panel).queryByTestId('overflow-take-back')).toBeNull()
+    fireEvent.click(within(panel).getByTestId('view-mode-chat'))
+    expect(onModeChange).toHaveBeenCalledWith('chat')
+    expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    const item = within(screen.getByTestId('header-overflow-panel')).getByTestId('view-mode-terminal')
     expect(item).toHaveTextContent(/take to terminal/i)
     fireEvent.click(item)
     expect(onTakeBack).toHaveBeenCalledTimes(1)
     expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
-    // Busy take-back disables the menu entry as it does the inline button.
-    rerender(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} takeBackBusy />)
+    // Busy take-back disables the terminal item.
+    rerender(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} onModeChange={onModeChange} takeBackBusy />)
     fireEvent.click(screen.getByTestId('header-overflow'))
-    expect((screen.getByTestId('overflow-take-back') as HTMLButtonElement).disabled).toBe(true)
+    expect((within(screen.getByTestId('header-overflow-panel')).getByTestId('view-mode-terminal') as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('has no overflow take-to-terminal entry without onTakeBack', () => {
-    render(<ExecutionHeader {...baseProps} summary={summary()} />)
+  it('has no terminal item in the overflow without onTakeBack', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} onModeChange={vi.fn()} />)
     fireEvent.click(screen.getByTestId('header-overflow'))
-    expect(screen.queryByTestId('overflow-take-back')).toBeNull()
+    const panel = screen.getByTestId('header-overflow-panel')
+    expect(within(panel).getByTestId('view-mode-room')).toBeInTheDocument()
+    expect(within(panel).queryByTestId('view-mode-terminal')).toBeNull()
+  })
+
+  // Spec §5: chat keeps state + cost only; everything else is in the overflow,
+  // at every width (a `mode` branch, not a breakpoint).
+  it("chat's header shows state, cost and the overflow only", () => {
+    const { container } = render(
+      <ExecutionHeader {...baseProps} summary={summary()} mode="chat" onModeChange={vi.fn()} onTakeBack={vi.fn()} />,
+    )
+    expect(screen.getByTestId('execution-state')).toHaveTextContent('idle')
+    const cost = screen.getByTestId('execution-cost')
+    expect(cost.closest('[class*="@max-md:hidden"]')).toBeNull()
+    const trigger = screen.getByTestId('header-overflow')
+    expect(trigger.className).not.toMatch(/(^|\s)hidden(\s|$)/)
+    expect(screen.queryByTestId('worker-name')).toBeNull()
+    expect(screen.queryByTestId('header-wide-actions')).toBeNull()
+    expect(screen.queryByTestId('view-mode')).toBeNull()
+    expect(screen.queryByRole('button', { name: /^interrupt$/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^terminate$/i })).toBeNull()
+    expect(container.querySelectorAll('button')).toHaveLength(2)
+  })
+
+  it("chat's overflow holds interrupt, terminate and the view items at wide widths too", () => {
+    const onModeChange = vi.fn()
+    render(<ExecutionHeader {...baseProps} summary={summary()} mode="chat" onModeChange={onModeChange} onTakeBack={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    const panel = screen.getByTestId('header-overflow-panel')
+    expect(within(panel).queryByTestId('overflow-cost')).toBeNull()
+    expect(within(panel).getByTestId('view-mode-chat').getAttribute('aria-checked')).toBe('true')
+    expect(within(panel).getByTestId('view-mode-terminal')).toBeInTheDocument()
+    fireEvent.click(within(panel).getByTestId('overflow-interrupt'))
+    expect(baseProps.onInterrupt).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-terminate'))
+    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-terminate'))
+    expect(baseProps.onTerminate).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('view-mode-room'))
+    expect(onModeChange).toHaveBeenCalledWith('room')
   })
 
   it('the overflow cost entry opens the cost panel', () => {
@@ -193,32 +271,24 @@ describe('ExecutionHeader', () => {
 
   // P-C.3b task 4 / exec-to-terminal spec §4.2: "Take to terminal" exists
   // only when the view passes `onTakeBack` (it decides from `from` / summary).
-  it('renders no take-back control without onTakeBack', () => {
-    render(<ExecutionHeader {...baseProps} summary={summary()} />)
-    expect(screen.queryByTestId('take-back')).toBeNull()
+  it('offers no terminal item without onTakeBack', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} onModeChange={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('view-mode'))
+    expect(screen.queryByTestId('view-mode-terminal')).toBeNull()
   })
 
-  it('renders the take-back control with onTakeBack, labelled and clickable', () => {
-    const onTakeBack = vi.fn()
-    render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} />)
-    const btn = screen.getByTestId('take-back') as HTMLButtonElement
-    expect(btn).toHaveTextContent(/take to terminal/i)
-    expect(btn.disabled).toBe(false)
-    fireEvent.click(btn)
-    expect(onTakeBack).toHaveBeenCalledTimes(1)
-  })
-
-  it('disables the take-back control while takeBackBusy, independent of `busy`', () => {
+  it('disables the terminal item while takeBackBusy, independent of `busy`', () => {
     const onTakeBack = vi.fn()
     const { rerender } = render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} takeBackBusy />)
-    const btn = screen.getByTestId('take-back') as HTMLButtonElement
+    fireEvent.click(screen.getByTestId('view-mode'))
+    const btn = screen.getByTestId('view-mode-terminal') as HTMLButtonElement
     expect(btn.disabled).toBe(true)
     fireEvent.click(btn)
     expect(onTakeBack).not.toHaveBeenCalled()
     // `busy` (terminal execution) gates interrupt/terminate, not take-back:
     // an ended execution can still go back to its terminal.
     rerender(<ExecutionHeader {...baseProps} summary={summary({ state: 'failed' })} busy onTakeBack={onTakeBack} />)
-    expect((screen.getByTestId('take-back') as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByTestId('view-mode-terminal') as HTMLButtonElement).disabled).toBe(false)
   })
 
   // P-B4 spec §4.2 H1–H2: the cost is an anchor button with a hover summary.
@@ -459,6 +529,29 @@ describe('ExecutionHeader', () => {
         fireResize()
         expect(screen.queryByTestId('cost-panel')).toBeNull()
         expect(document.activeElement).toBe(costBtn())
+      })
+
+      // R2 plan T1.2 (plan review #3): the view menu is controlled by the
+      // header so this same effect closes it, and hands focus to the trigger
+      // visible on the narrow side (the overflow).
+      it('the view menu closes when its anchor loses its box', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} onTakeBack={vi.fn()} onModeChange={vi.fn()} />)
+        const view = screen.getByTestId('view-mode')
+        const trigger = screen.getByTestId('header-overflow')
+        setRect(costBtn(), box)
+        setRect(view, box)
+        setRect(trigger, zero)
+        view.focus()
+        fireEvent.click(view)
+        fireResize()
+        expect(screen.getByTestId('view-mode-menu')).toBeInTheDocument()
+        setRect(costBtn(), zero)
+        setRect(view, zero)
+        setRect(trigger, box)
+        fireResize()
+        expect(screen.queryByTestId('view-mode-menu')).toBeNull()
+        expect(view.getAttribute('aria-expanded')).toBe('false')
+        expect(document.activeElement).toBe(trigger)
       })
 
       it('does not steal focus the user has moved elsewhere while the panel was open', () => {
