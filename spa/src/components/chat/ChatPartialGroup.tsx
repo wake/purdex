@@ -3,23 +3,13 @@
 //
 // - text → the typewriter (`RoomProse streaming`) inside an agent bubble;
 // - thinking → nothing: chat never shows a thought, streaming or not
-//   (spec §5). The pane keeps its dots on meanwhile (partialHasVisibleText);
-// - tool_use → nothing in R2-A; R2-B counts it in the turn's tools line.
+//   (spec §5). The pane keeps its dots on meanwhile (partialHasChatContent);
+// - tool_use → nothing here: ChatTranscript counts it in the running turn's
+//   tools line ("Using N tools…", R2-B) and lists it when that line opens.
 import { useMemo } from 'react'
-import { isPartialBlockVisible, type PartialAssembly, type PartialBlock } from '../../lib/nex/partial'
+import { isPartialBlockVisible, partialBlockKey, type PartialAssembly, type PartialBlock } from '../../lib/nex/partial'
 import RoomProse from '../room/RoomProse'
 import ChatBubble from './ChatBubble'
-
-/**
- * The React key of a streaming block, message-id scoped so a new message's
- * block is a new element. Same rule as PartialMessageGroup's `partialKey`
- * (components/PartialMessageGroup.tsx), which is not exported; see its
- * comment for why a null id gets the `orphan` namespace.
- */
-function partialKey(partial: PartialAssembly, block: PartialBlock): string {
-  const scope = partial.messageId === null ? 'orphan' : `msg:${partial.messageId}`
-  return `partial:${scope}#${block.index}`
-}
 
 /** Ascending index, text with something to show — exactly what partialHasVisibleText counts. */
 function textBlocks(partial: PartialAssembly): PartialBlock[] {
@@ -33,7 +23,8 @@ export default function ChatPartialGroup({ partial }: { partial: PartialAssembly
   return (
     <div data-testid="chat-partial-group" className="space-y-3">
       {blocks.map((block) => (
-        <ChatBubble key={partialKey(partial, block)} side="agent">
+        // Message-id scoped, so a new message's block is a new element.
+        <ChatBubble key={partialBlockKey(partial, block)} side="agent">
           <RoomProse content={block.text} streaming />
         </ChatBubble>
       ))}

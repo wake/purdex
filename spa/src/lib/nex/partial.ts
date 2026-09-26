@@ -64,15 +64,44 @@ export function partialHasVisibleContent(p: PartialAssembly | null): boolean {
 }
 
 /**
- * Chat's half of R3 (R2 plan T1.3b): some text block is visible. Chat never
- * draws a thought and, until R2-B, never a streaming tool_use — so only prose
- * switches its dots off; while a thought streams, the dots stay. This is the
- * exact set ChatPartialGroup renders, keeping chat's dots and typewriter on
- * the same predicate as the room's.
+ * Some text block is visible — the exact set ChatPartialGroup renders (R2
+ * plan T1.3b). Chat never draws a thought, so a streaming thought is not here.
  */
 export function partialHasVisibleText(p: PartialAssembly | null): boolean {
   if (!p) return false
   return Object.values(p.blocks).some((b) => b.type === 'text' && isPartialBlockVisible(b))
+}
+
+/**
+ * The streaming tool_use blocks, ascending index. Chat does not draw them as
+ * blocks: it counts them in the turn's "using N tools…" line (R2-B) and lists
+ * them when that line is expanded.
+ */
+export function partialToolUses(p: PartialAssembly | null | undefined): PartialBlock[] {
+  if (!p) return []
+  return Object.values(p.blocks).filter((b) => b.type === 'tool_use').sort((a, b) => a.index - b.index)
+}
+
+/**
+ * Chat's half of R3: what chat draws of a partial — prose (ChatPartialGroup)
+ * or a streaming call (the turn's running tools line, R2-B). A thought is
+ * neither, so while only a thought streams, chat keeps its dots.
+ */
+export function partialHasChatContent(p: PartialAssembly | null): boolean {
+  return partialHasVisibleText(p) || partialToolUses(p).length > 0
+}
+
+/**
+ * The fold key (and React key) of a streaming block, message-id scoped: the
+ * pane's fold memory outlives the partial, so the block index alone would
+ * hand message A's expansion to message B's block at the same index. A null
+ * id is an orphan assembly (a stream joined mid-message) and gets its own
+ * `orphan` namespace, which no real id can reach (they all sit under `msg:`).
+ * Same rule as PartialMessageGroup's own copy, which the room keeps.
+ */
+export function partialBlockKey(p: PartialAssembly, block: PartialBlock): string {
+  const scope = p.messageId === null ? 'orphan' : `msg:${p.messageId}`
+  return `partial:${scope}#${block.index}`
 }
 
 /**
@@ -93,16 +122,17 @@ export function partialVersionOf(p: PartialAssembly | null | undefined): string 
 }
 
 /**
- * Chat's R4 key (F10): chat draws only the partial's text (ChatPartialGroup),
- * so its auto-scroll follows the text blocks alone — a streaming thought or a
- * tool_use's input moves `partialVersionOf` without changing anything chat
- * shows. '' when there is no partial.
+ * Chat's R4 key (F10): it moves only for what chat draws of the partial — the
+ * text (ChatPartialGroup) and, since R2-B, each streaming tool_use, which adds
+ * one to the turn's tools line. A thought, or a tool's input streaming (the
+ * line never shows it), moves `partialVersionOf` but not this. '' when there
+ * is no partial.
  */
-export function partialTextVersionOf(p: PartialAssembly | null | undefined): string {
+export function partialChatVersionOf(p: PartialAssembly | null | undefined): string {
   if (!p) return ''
   const blocks = Object.values(p.blocks)
-    .filter((b) => b.type === 'text')
-    .map((b) => `${b.index}:${b.text.length}`)
+    .filter((b) => b.type === 'text' || b.type === 'tool_use')
+    .map((b) => (b.type === 'text' ? `${b.index}:${b.text.length}` : `${b.index}:tool`))
     .join('|')
   return `${p.messageId ?? ''}#${blocks}`
 }

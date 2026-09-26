@@ -1153,14 +1153,27 @@ describe('ExecutionView — room and chat (R2 T1.4)', () => {
     expect(screen.getByTestId('chat-partial-group')).toHaveTextContent('here it is')
   })
 
-  // F1: chat draws no tools until R2-B, so a running tool must not switch
-  // chat's only activity signal off; the room keeps its spinner instead.
-  it('F1: chat keeps the dots on while a tool runs', () => {
+  // F1, revisited in R2-B: chat now says "Using N tools…" while a tool runs,
+  // so that line carries the activity and the dots go off, as in the room —
+  // two signals for one state is what spec §4.4 R3 rules out.
+  it('F1: chat turns the dots off while a tool runs; its tools line says so', () => {
     patchExec({ turnLive: true })
     render(<ExecutionView {...base} mode="chat" isActive />)
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
     act(() => { useExecutionStore.getState().applyEvents(H, E, [toolUseFrame(1, 5_000)]) })
     expect(Object.values(useExecutionStore.getState().executions[KEY].tools).some((x) => x.status === 'running')).toBe(true)
-    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-tools-line')).toHaveTextContent('Using 1 tool…')
+  })
+
+  it('chat turns the dots off while a tool_use streams its input; the tools line counts it', () => {
+    patchExec({
+      turnLive: true,
+      partial: { messageId: 'm', finalized: 0, blocks: { 0: { index: 0, type: 'tool_use', text: '', thinking: '', partialJson: '{"com', toolId: 's', toolName: 'Bash' } } },
+    })
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-tools-line')).toHaveTextContent('Using 1 tool…')
   })
 
   it('F1: the room still turns the dots off while a tool runs', () => {

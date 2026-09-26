@@ -1,36 +1,46 @@
 // spa/src/components/chat/ChatTranscript.tsx — the chat transcript (spec §5,
-// R2 plan T1.3). The same state as the room, drawn with minimum ceremony for a
-// phone: the agent's prose in bubbles on the left, your lines in bubbles on
-// the right, and nothing else.
+// R2 plan T1.3 / T2.1). The same state as the room, drawn with minimum
+// ceremony for a phone: the agent's prose in bubbles on the left, your lines
+// in bubbles on the right, and a turn's tool work as a few quiet lines.
 //
-// - **No thinking**, durable or streaming. While a thought streams the pane
-//   keeps its dots on (ExecutionView's chat rule, partialHasVisibleText).
-// - **No tool operations yet**: R2-B adds chat's tool lines (T2.1). Until then
-//   a tool_use draws nothing and a tool_result never becomes a bubble.
-// - **Turns** are still RoomTurnGroups — without their fold strip — so fold
-//   memory and the turn index keep working when R2-B adds foldable lines.
+// - **No thinking**, durable or streaming. While only a thought streams the
+//   pane keeps its dots on (ExecutionView's chat rule, partialHasChatContent).
+// - **Operations** are sorted by the room's own rule (classifyTurnOperations):
+//   a turn's ordinary tools fold into one ChatToolsLine at the position of the
+//   first of them (a call still streaming its input counts too); an edit is a
+//   ChatEditedLine and a failure a ChatFailedLine, each at its own position.
+//   Every line expands in place into the room's blocks — nothing in chat is
+//   unreachable. A tool_result is never a bubble.
+// - **Turns** are RoomTurnGroups without their fold strip, so the lines'
+//   fold memory registers per turn and expand-all still reaches them.
 // - The root is an `@container`: a narrow pane on a desktop behaves like a
 //   phone (the bubble cap is a share of the pane below `@md`).
 import { Children, isValidElement, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { Prohibit } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import type { AssistantMessage, StreamMessage, UserMessage } from '../../lib/nex/message-types'
-import { partialTextVersionOf } from '../../lib/nex/partial'
-import { indexOperations } from '../../lib/nex/operations'
+import type { AssistantMessage, ContentBlock, StreamMessage, UserMessage } from '../../lib/nex/message-types'
+import { partialBlockKey, partialChatVersionOf, partialToolUses } from '../../lib/nex/partial'
+import { blockKey, indexOperations, toolResultText, type BlockKey } from '../../lib/nex/operations'
+import { classifyTurnOperations, toolEntryFor, type TurnOperation } from '../../lib/nex/operation-status'
 import { groupTurns, INTERRUPT_TEXT, type RoomTurn } from '../../lib/nex/turns'
 import ThinkingIndicator from '../ThinkingIndicator'
 import RoomTurnGroup from '../room/RoomTurnGroup'
 import RoomProse from '../room/RoomProse'
+import OperationBlock from '../room/OperationBlock'
+import { OperationAt } from '../room/MessageRow'
+import type { RenderCtx } from '../room/render-message'
 import { FoldContext, useInheritedFoldMemory } from '../room/fold-context'
 import type { RoomTranscriptProps } from '../room/RoomTranscript'
 import ChatBubble, { ChatUserBubble } from './ChatBubble'
 import ChatPartialGroup from './ChatPartialGroup'
+import ChatToolsLine from './ChatToolsLine'
+import ChatEditedLine from './ChatEditedLine'
+import ChatFailedLine from './ChatFailedLine'
 
 /**
  * RoomTranscript's props, so the pane hands either view the same state.
  * `showThinking` is the ThinkingIndicator (the dots), not thinking blocks —
  * those chat never draws; the caller computes it with chat's rule.
- * `tools` / `now` are accepted and unused until R2-B's tool lines.
  */
 export type ChatTranscriptProps = RoomTranscriptProps
 
@@ -41,25 +51,62 @@ function hasContent(node: ReactNode): boolean {
   return Children.toArray(node).some((c) => isValidElement(c) || typeof c === 'string' || typeof c === 'number')
 }
 
-/** One durable top-level message as chat bubbles; null when it has nothing chat draws. */
-function ChatMessage({ msg, interrupted }: { msg: StreamMessage; interrupted: string }) {
+function blockAt(messages: StreamMessage[], op: TurnOperation): ContentBlock | undefined {
+  return (messages[op.msgIndex] as { message?: { content?: ContentBlock[] } } | undefined)?.message?.content?.[op.blockIndex]
+}
+
+/**
+ * An edited or failed operation's own line. The name, facts and result are
+ * read the way MessageRow reads them for the room block the line expands into.
+ */
+function ChatOperationLine({ op, ctx }: { op: TurnOperation; ctx: RenderCtx }) {
+  const t = useI18nStore((s) => s.t)
+  const block = blockAt(ctx.messages, op)
+  if (!block) return null
+  const call = block.type === 'tool_use'
+  const facts = toolEntryFor(ctx.tools, call ? block.id : block.tool_use_id)
+  if (op.kind === 'edited' && facts?.diff) return <ChatEditedLine foldKey={op.key} diff={facts.diff} />
+  const name = (call ? block.name : facts?.file?.path) || t('execution.tool.unknown')
+  const message = call ? (ctx.index.resultForCall.get(op.key)?.text ?? '') : toolResultText(block.content)
+  return (
+    <ChatFailedLine foldKey={op.key} name={name} message={message}
+      renderOperation={() => <OperationAt msg={ctx.messages[op.msgIndex]} i={op.msgIndex} j={op.blockIndex} ctx={ctx} />} />
+  )
+}
+
+/**
+ * One durable top-level message as chat rows; null when it has nothing chat
+ * draws. `lineAt(j)` is the operation line (if any) that sits at block j.
+ */
+function ChatMessage({ msg, interrupted, lineAt }: {
+  msg: StreamMessage
+  interrupted: string
+  lineAt: (j: number) => ReactNode
+}) {
   const rows: ReactNode[] = []
+  const line = (j: number) => {
+    const node = lineAt(j)
+    if (node) rows.push(<div key={`op-${j}`}>{node}</div>)
+  }
 
   if (msg.type === 'assistant' && 'message' in msg) {
     ;(msg as AssistantMessage).message.content.forEach((block, j) => {
-      // Thinking and tool_use draw nothing in chat (tools until R2-B).
+      // Thinking draws nothing in chat.
       if (block.type === 'text' && block.text?.trim()) {
         rows.push(<ChatBubble key={j} side="agent"><RoomProse content={block.text} /></ChatBubble>)
+      } else if (block.type === 'tool_use') {
+        line(j)
       }
     })
   } else if (msg.type === 'user' && 'message' in msg) {
     const um = msg as UserMessage
     // A subagent's frame whose Task is off the list: whatever it says as
     // `user`, the human did not say it, so it is not a right-hand bubble.
-    if (um.parent_tool_use_id != null) return null
+    const fromSubagent = um.parent_tool_use_id != null
     um.message.content.forEach((block, j) => {
-      // tool_result: its call's line (R2-B) carries it; never a bubble.
-      if (block.type !== 'text' || !block.text) return
+      // tool_result: its call's line carries it (an orphan has a line of its own); never a bubble.
+      if (block.type === 'tool_result') { line(j); return }
+      if (fromSubagent || block.type !== 'text' || !block.text) return
       if (block.text === INTERRUPT_TEXT) {
         rows.push(
           <div key={j} data-testid="chat-interrupted"
@@ -89,35 +136,49 @@ export default function ChatTranscript({
   afterThinking,
   turnStarts = NO_STARTS,
   partial,
+  tools,
+  now,
 }: ChatTranscriptProps) {
   const t = useI18nStore((s) => s.t)
   const scrollRef = useRef<HTMLDivElement>(null)
   const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
   const hasPending = hasContent(children)
-  // Only for `childIndexes`: a subagent's frames stay out of the top level.
+  // The room's pairing: results for the lines' blocks, and `childIndexes`, so
+  // a subagent's frames stay out of the top level.
   const index = useMemo(() => indexOperations(messages), [messages])
   const turns = useMemo(() => groupTurns(messages, turnStarts), [messages, turnStarts])
-  // One fold memory per pane, as in the room (the pane's, when it provides
-  // one): R2-B's lines fold through it.
+  // One classification per turn, by the rule the room draws its blocks by.
+  const opsByTurn = useMemo(
+    () => turns.map((turn) => classifyTurnOperations(messages, turn, index, tools)),
+    [turns, messages, index, tools],
+  )
+  // One fold memory per pane, as in the room (the pane's, when it provides one).
   const foldStore = useInheritedFoldMemory()
-  // F10: only the text chat draws moves the key, not a thought or a tool's input.
-  const partialVersion: string = useMemo(() => partialTextVersionOf(partial), [partial])
+  // F10 / R2-B: the key moves only for what chat draws — the partial's text
+  // and streaming calls, and each turn's lines (how many operations of each
+  // kind, and which are running). Not a thought, not a tool's input.
+  const partialVersion: string = useMemo(() => partialChatVersionOf(partial), [partial])
+  const linesVersion: string = useMemo(
+    () => opsByTurn.map((ops) => ops.map((o) => `${o.kind[0]}${o.status === 'running' ? '*' : ''}`).join('')).join('|'),
+    [opsByTurn],
+  )
 
-  // Same effect and deps as RoomTranscript's auto-scroll: instant on the
-  // first run (mount / view switch), smooth after (F3).
+  // Same effect as RoomTranscript's auto-scroll: instant on the first run
+  // (mount / view switch), smooth after (F3).
   const scrolled = useRef(false)
   useEffect(() => {
     if (scrollRef.current?.scrollTo) {
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: scrolled.current ? 'smooth' : 'auto' })
       scrolled.current = true
     }
-  }, [messages, scrollKey, partialVersion])
+  }, [messages, scrollKey, partialVersion, linesVersion])
 
   // As RoomTranscript: the in-flight message belongs to the last turn, and
   // needs one even before any boundary is recorded.
   const shown: RoomTurn[] = turns.length === 0 && hasPartial ? [{ start: 0, end: 0, openerIndex: null }] : turns
   const lastTurn = shown.length - 1
   const interrupted = t('stream.interrupted')
+  const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0 }
 
   return (
     <div ref={scrollRef} className="@container flex-1 overflow-y-auto p-4 space-y-3">
@@ -127,19 +188,55 @@ export default function ChatTranscript({
             {emptyText ?? t('stream.waiting')}
           </div>
         )}
-        {shown.map((turn, ti) => (
-          <RoomTurnGroup key={`${keyPrefix}-turn-${ti}`} index={ti} chrome={false}>
-            <div className="space-y-3">
-              {messages.slice(turn.start, turn.end).map((msg, k) => {
-                const i = turn.start + k
-                return index.childIndexes.has(i)
-                  ? null
-                  : <ChatMessage key={`${keyPrefix}-${i}`} msg={msg} interrupted={interrupted} />
-              })}
-              {ti === lastTurn && hasPartial && <ChatPartialGroup key={`${keyPrefix}-partial`} partial={partial} />}
-            </div>
-          </RoomTurnGroup>
-        ))}
+        {shown.map((turn, ti) => {
+          const ops = opsByTurn[ti] ?? []
+          const plain = ops.filter((o) => o.kind === 'plain')
+          // A call still streaming its input belongs to the running turn's tools.
+          const streaming = ti === lastTurn && hasPartial ? partialToolUses(partial) : []
+          const count = plain.length + streaming.length
+          const toolsLine = count > 0 && (
+            <ChatToolsLine
+              foldKey={`${keyPrefix}-turn-${ti}:chat-tools`}
+              count={count}
+              running={streaming.length > 0 || plain.some((o) => o.status === 'running')}
+              renderOperations={() => (
+                <>
+                  {plain.map((o) => (
+                    <OperationAt key={o.key} msg={messages[o.msgIndex]} i={o.msgIndex} j={o.blockIndex} ctx={ctx} />
+                  ))}
+                  {partial && streaming.map((b) => {
+                    const key = partialBlockKey(partial, b)
+                    return (
+                      <OperationBlock key={key} tool={b.toolName ?? t('execution.tool.unknown')} input={{}}
+                        activity={{ status: 'streaming', rawInput: b.partialJson }} result={null} foldKey={key} />
+                    )
+                  })}
+                </>
+              )}
+            />
+          )
+          const lines = new Map<BlockKey, ReactNode>()
+          // The tools line sits where the turn's first ordinary tool was called.
+          if (plain.length > 0) lines.set(plain[0].key, toolsLine)
+          for (const op of ops) {
+            if (op.kind !== 'plain') lines.set(op.key, <ChatOperationLine op={op} ctx={ctx} />)
+          }
+          return (
+            <RoomTurnGroup key={`${keyPrefix}-turn-${ti}`} index={ti} chrome={false}>
+              <div className="space-y-3">
+                {messages.slice(turn.start, turn.end).map((msg, k) => {
+                  const i = turn.start + k
+                  return index.childIndexes.has(i)
+                    ? null
+                    : <ChatMessage key={`${keyPrefix}-${i}`} msg={msg} interrupted={interrupted} lineAt={(j) => lines.get(blockKey(i, j))} />
+                })}
+                {/* Only streaming calls so far: the line comes with them. */}
+                {plain.length === 0 && toolsLine}
+                {ti === lastTurn && hasPartial && <ChatPartialGroup key={`${keyPrefix}-partial`} partial={partial} />}
+              </div>
+            </RoomTurnGroup>
+          )
+        })}
 
         {/* The optimistic line (the caller's pending ChatUserBubble), in the provisional turn the room puts it in. */}
         {hasPending && (
