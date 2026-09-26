@@ -117,6 +117,19 @@ describe('RoomTurnGroup', () => {
     expect(folds(first)).toEqual(ALL_CLOSED)
   })
 
+  // Chat wraps its turns in the same group for fold memory and the turn index,
+  // but draws no ceremony of its own (spec §5).
+  it('draws no fold strip without chrome', () => {
+    render(<Pane><RoomTurnGroup index={3} chrome={false}><p>hi</p></RoomTurnGroup></Pane>)
+    const turn = screen.getByTestId('room-turn')
+    expect(turn.tagName).toBe('SECTION')
+    expect(turn).toHaveAttribute('data-turn-index', '3')
+    expect(within(turn).getByText('hi')).toBeInTheDocument()
+    expect(within(turn).queryByTestId('turn-fold-strip')).toBeNull()
+    expect(within(turn).queryByTestId('turn-expand-all')).toBeNull()
+    expect(within(turn).queryByTestId('turn-collapse-all')).toBeNull()
+  })
+
   it('leaves a neighbouring turn untouched', () => {
     const { first, second } = twoTurns()
     fireEvent.click(within(first).getByTestId('turn-expand-all'))
