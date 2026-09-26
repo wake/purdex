@@ -194,4 +194,12 @@ describe('contentMatches', () => {
     expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a', from }, { kind: 'execution', executionId: 'exc_1', host: 'a', from: { ...from, sessionCode: 'other' } })).toBe(true)
     expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a', from }, { kind: 'execution', executionId: 'exc_2', host: 'a', from })).toBe(false)
   })
+
+  // The view (room / chat) is how a pane shows its worker, not which worker it is.
+  it('an execution pane matches whatever its mode', () => {
+    useHostStore.setState({ hosts: { a: { id: 'a', name: 'A', ip: '1', port: 1 } } as never, hostOrder: ['a'], activeHostId: 'a', runtime: {} })
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a', mode: 'room' }, { kind: 'execution', executionId: 'exc_1', host: 'a', mode: 'chat' })).toBe(true)
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a', mode: 'chat' }, { kind: 'execution', executionId: 'exc_1', host: 'a' })).toBe(true)
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a', mode: 'chat' }, { kind: 'execution', executionId: 'exc_2', host: 'a', mode: 'chat' })).toBe(false)
+  })
 })

@@ -974,6 +974,22 @@ describe('applySectionToStores — tabs.<id>', () => {
     expect(useRebuildStore.getState().lockedBy).toBeNull()
   })
 
+  // Worker pane R2 D1: `mode` rides the tab payload as it is — no projection change, so no ordinal bump.
+  it('carries an execution pane\'s mode through a tabs round trip', async () => {
+    seedTabWorld()
+    const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
+    const chat: PaneLayout = { type: 'leaf', pane: { id: 'p-x', content: { kind: 'execution', executionId: 'e1', host: M, from, mode: 'chat' } } }
+    const room: PaneLayout = { type: 'leaf', pane: { id: 'p-y', content: { kind: 'execution', executionId: 'e2', host: M, mode: 'room' } } }
+    const payload = incomingFor([tab('a6', chat), tab('a7', room)])
+    const outcome = await applySectionToStores('tabs.wa', payload, ctx)
+    const t = useTabStore.getState()
+    expect((t.tabs.a6.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content).toEqual({ kind: 'execution', executionId: 'e1', host: M, from, mode: 'chat' })
+    expect((t.tabs.a7.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content).toEqual({ kind: 'execution', executionId: 'e2', host: M, mode: 'room' })
+    // …and back: the stores rebuild the very payload that arrived
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(buildTabsSection(useWorkspaceStore.getState().workspaces[0], t.tabs)).toEqual(payload)
+  })
+
   it('keeps the global active tab while it survives', async () => {
     seedTabWorld()
     await applySectionToStores('tabs.wa', incomingFor([tab('a2'), tab('a9')]), ctx)
@@ -1234,6 +1250,17 @@ describe('applySectionToStores — wire host ids (host-sync-identity §6, §11)'
     // the canonical form of what the stores hold: both panes now name the master's sync id
     const wire = buildTabsSection(ws('wa', ['a5']), { a5: tab('a5', { ...split, children: [tmuxLeaf('canon', WIRE), tmuxLeaf('legacy', WIRE)] }) })
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(wire) })
+  })
+
+  // Worker pane R2 D1: the host-id remap (`mapContent`) spreads the content, so `mode` survives both directions.
+  it('tabs: an execution pane keeps its mode through the host-id remap, local → wire → local', async () => {
+    seedTabWorld()
+    const local: PaneLayout = { type: 'leaf', pane: { id: 'p-x', content: { kind: 'execution', executionId: 'e1', host: M, mode: 'chat' } } }
+    const payload = buildTabsSection(ws('wa', ['a5']), { a5: tab('a5', local) }, identityOfSync(useHostStore.getState().hosts))
+    expect((payload.tabs.a5.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content).toEqual({ kind: 'execution', executionId: 'e1', host: WIRE, mode: 'chat' })
+    const outcome = await applySectionToStores('tabs.wa', payload, ctx)
+    expect((useTabStore.getState().tabs.a5.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content).toEqual({ kind: 'execution', executionId: 'e1', host: M, mode: 'chat' })
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
   })
 
   it('settings: host-settings keys and preset columns resolve to local ids; a column of a host not here is KEPT verbatim (host ownership §3.2)', async () => {
