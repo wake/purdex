@@ -72,8 +72,13 @@ Phosphor icons, **no kill-type commands**.
 
 | PR | content | est. (added, non-test) |
 |---|---|---|
-| **R2-A** | the `mode` field and its setter; the view menu; chat renders prose, user lines, typewriter; header and dock chat variants | ~350 |
-| **R2-B** | chat's tool line per turn, the `Edited …` line, the failed-tool line, expand in place | ~300 |
+| **R2-A** | the `mode` field and its setter; the view menu; chat renders prose, user lines, typewriter (own streaming renderer, T1.3b); header and dock chat variants | ~450 |
+| **R2-B** | the shared operation classifier (T2.0); chat's tool line per turn, the `Edited …` line, the failed-tool line, expand in place | ~350 |
+
+Plan review (Claude reviewer, standing in for codex while its quota is out
+until 2026-09-30): 5 findings, all applied — #1 turn-group chrome (T1.3),
+#2 streaming blocks (T1.3b, critical), #3 controlled view menu (T1.2),
+#4 shared classifier (T2.0), #5 chat header branch (T1.2).
 
 Review: R2-A gets R1 + attack + critic (it changes the pane content contract
 that Profile Sync carries); R2-B gets R1 only, escalating on a critical.
@@ -119,7 +124,12 @@ that Profile Sync carries); R2-B gets R1 only, escalating on a critical.
 ### T1.2 the view menu (TDD)
 
 - `spa/src/components/execution/ViewModeMenu.tsx` (new), on the existing
-  `FloatingPanel`. Trigger: the current view's icon + label
+  `FloatingPanel`, **controlled** like `CostPanel` / `WorkerInfoPanel`:
+  `ExecutionHeader` owns `viewOpen` and the trigger's ref, and passes
+  `anchorRef` + `onClose`. That is what lets the header's existing
+  anchor-lost effect (`ExecutionHeader.tsx:88-110`, which `FloatingPanel`
+  does not do by itself) close and refocus it — a self-contained menu would
+  be invisible to that effect (plan review #3). Trigger: the current view's icon + label
   (`ListBullets` for 指揮室 — `Rows` already means a split layout in
   `StatusBar`/`TitleBar` — and `ChatsCircle` for 聊天; Phosphor), `data-testid="view-mode"`.
   Items: `view-mode-room`, `view-mode-chat` (radio semantics:
@@ -134,6 +144,13 @@ that Profile Sync carries); R2-B gets R1 only, escalating on a critical.
   replacing `overflow-take-back`. The breakpoint-close / refocus logic added
   in PR-6 covers the new panel the same way it covers the cost panel (the
   anchor-lost check must include the view menu's anchor).
+- **The chat branch of the header** (spec §5 "header keeps state + cost
+  only"; plan review #5) is built here, since `mode` is already threaded
+  through: when `mode === 'chat'` the header renders state, the cost button
+  and the overflow trigger at **every** width — no name / info popover, no
+  wide action row, no inline view trigger — and the overflow holds
+  Interrupt, Terminate and the three view items. This is a `mode` branch,
+  not a breakpoint, so it is asserted directly (no container-query mock).
 - Locale: `room.view.label` (`"View"` / `"顯示方式"`), `room.view.room`
   (`"Room"` / `"指揮室"`), `room.view.chat` (`"Chat"` / `"聊天"`).
 - Tests (`ViewModeMenu.test.tsx`, `ExecutionHeader.test.tsx`):
@@ -142,7 +159,9 @@ that Profile Sync carries); R2-B gets R1 only, escalating on a critical.
   item without onTakeBack`; `the header no longer draws a separate take-back
   button`; `the overflow lists the three view items at narrow widths`;
   `the view menu closes when its anchor loses its box` (reuse PR-6's
-  ResizeObserver mock).
+  ResizeObserver mock); `chat's header shows state, cost and the overflow
+  only`; `chat's overflow holds interrupt, terminate and the view items at
+  wide widths too`.
 - Existing tests that click `take-back` / `overflow-take-back` move to
   `view-mode-terminal` (grep both ids across `src`).
 
@@ -160,9 +179,13 @@ that Profile Sync carries); R2-B gets R1 only, escalating on a critical.
     `bg-surface-secondary` with a `border-border-subtle` hairline, the user
     bubble on `bg-accent-muted` (existing token). The transcript root is `@container`.
   - **thinking**: nothing, in durable and partial alike (spec §5: "a turn
-    that is only thinking shows the typewriter, then nothing") — the
-    streaming thinking block shows the existing `ThinkingIndicator` while it
-    streams and disappears once finalised;
+    that is only thinking shows the typewriter, then nothing"). Read as: while
+    a thought streams, chat shows only the `ThinkingIndicator` dots, never the
+    thought's text; once finalised, nothing. Today the dots switch **off** the
+    moment a thinking block gets text (`ExecutionView.tsx:154`,
+    `partialHasVisibleContent` in `lib/nex/partial.ts:43-64`) and
+    `RoomThinking` takes over — so chat needs its own rule, see T1.3b
+    (plan review #2);
   - a subagent's frames (`childIndexes`) stay out of the top level, as in
     room;
   - the interrupt sentinel: a centred muted system line
@@ -171,8 +194,13 @@ that Profile Sync carries); R2-B gets R1 only, escalating on a critical.
   - the optimistic pending line: a user bubble at `opacity-60`, in the same
     position room puts it;
   - turns: `groupTurns(messages, turnStarts)` still wraps each turn in a
-    `RoomTurnGroup` so fold memory and expand-all keep working (chat has no
-    visible turn chrome — the group draws none);
+    `RoomTurnGroup` so fold memory and the turn index keep working. Today the
+    group **always** draws its hover expand/collapse strip
+    (`RoomTurnGroup.tsx:28-58`), which chat must not (spec §5, minimum
+    ceremony; plan review #1): `RoomTurnGroup` gains `chrome?: boolean`
+    (default `true`), chat passes `false` and gets only the section +
+    `TurnIndexContext`. Test in `RoomTurnGroup.test.tsx`: `draws no fold
+    strip without chrome`;
   - auto-scroll: the same effect and deps as `RoomTranscript`.
   - **Tool operations render nothing in this task** — T2.1 adds the chat
     lines. Until then a turn's tools are simply absent from chat (R2-A is not
@@ -185,6 +213,30 @@ that Profile Sync carries); R2-B gets R1 only, escalating on a critical.
   sentinel as a system line`; `renders a slash command in a user bubble`;
   `draws the pending line as a dimmed user bubble`; `caps bubble width`
   (className check); `wraps each turn in a turn group`.
+
+### T1.3b chat's streaming blocks (TDD)
+
+`PartialMessageGroup` (`components/PartialMessageGroup.tsx:47-60`) hard-codes
+room's renderers: `text` → `RoomProse`, `thinking` → `RoomThinking` (room's
+fold chrome), `tool_use` → `OperationBlock`. Reused as-is it would put a
+thought's text and a live room block into chat (plan review #2).
+
+- `components/chat/ChatPartialGroup.tsx` (new), same inputs as
+  `PartialMessageGroup`: `text` → `RoomProse streaming` inside an agent
+  `ChatBubble`; `thinking` → nothing; `tool_use` → nothing in R2-A (R2-B
+  counts it in the turn's running tools line). Keys follow
+  `PartialMessageGroup`'s `partialKey` (messageId-scoped).
+- `ExecutionView`'s dots rule gets a chat variant: in chat, `showThinking`
+  ignores thinking blocks when asking whether the partial has visible content
+  (`partialHasVisibleText` — the text-only half of `partialHasVisibleContent`,
+  exported from `lib/nex/partial.ts`), so the dots stay on while a thought
+  streams and go off when prose starts. Room's rule is unchanged.
+- Tests: `chat/ChatPartialGroup.test.tsx` — `streams text into an agent
+  bubble with the cursor`; `renders nothing for a streaming thought`;
+  `renders nothing for a streaming tool_use`. `lib/nex/partial.test.ts` —
+  `partialHasVisibleText ignores thinking`. `ExecutionView.test.tsx` —
+  `chat keeps the dots on while a thought streams`; `room still hands a
+  streaming thought to RoomThinking`.
 
 ### T1.4 the pane switches (TDD)
 
@@ -211,6 +263,28 @@ that Profile Sync carries); R2-B gets R1 only, escalating on a critical.
 ---
 
 ## R2-B
+
+### T2.0 one classifier for room and chat (TDD)
+
+Room decides an operation's status in `resolveStatus`, a private function in
+`components/room/OperationBlock.tsx:71-80` (activity status ⊕ N2 facts ⊕
+`result.isError`, in that precedence), and enumerates operations inline in
+`MessageRow.tsx`. Chat must sort a turn's operations by exactly the same rule,
+or "failed" in chat drifts from "failed" in room (plan review #4).
+
+- Move `resolveStatus` verbatim to `lib/nex/operation-status.ts` and import it
+  back into `OperationBlock` (pure move, its own commit; byte-compare the
+  function body before/after).
+- Add `classifyTurnOperations(messages, turn, index, tools, factsFor)` there:
+  walks the turn's top-level messages (skipping `childIndexes`), returns
+  `{ key: BlockKey; msgIndex; kind: 'plain' | 'edited' | 'failed' }[]` in
+  order — `failed` when `resolveStatus` says `error` / `denied`, else
+  `edited` when the result carries `facts.diff`, else `plain`. A Task is
+  `plain` (its subagent expands inside the room block).
+- Tests `lib/nex/operation-status.test.ts`: `classifies an error and a denied
+  call as failed`; `classifies a diff as edited`; `a failed edit is failed,
+  not edited`; `skips a subagent's own calls`; `keeps call order`;
+  `a running call is plain`.
 
 ### T2.1 chat's operation lines (TDD)
 
