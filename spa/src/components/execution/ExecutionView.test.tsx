@@ -1105,7 +1105,7 @@ describe('ExecutionView — room and chat (R2 T1.4)', () => {
     for (const id of ['overflow-interrupt', 'overflow-terminate', 'view-mode-room', 'view-mode-chat', 'view-mode-terminal']) {
       expect(within(panel).getByTestId(id)).toBeInTheDocument()
     }
-    expect(within(panel).getByTestId('view-mode-chat')).toHaveAttribute('aria-checked', 'true')
+    expect(within(panel).getByTestId('view-mode-chat')).toHaveAttribute('aria-pressed', 'true')
   })
 
   it("chat's pending line is a dimmed user bubble carrying the queued tag", () => {

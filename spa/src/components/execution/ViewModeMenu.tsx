@@ -36,14 +36,22 @@ export interface ViewModeItemsProps {
   takeBackBusy?: boolean
   /** Called after any item acts, so the surrounding panel can close. */
   onDone: () => void
+  /**
+   * Whether the items sit inside a `role="menu"` (the view menu). The menu
+   * roles are only valid there; elsewhere (the header's overflow panel, which
+   * also holds interrupt / terminate) the views are toggle buttons with
+   * `aria-pressed` and the terminal item a plain button (F12).
+   */
+  inMenu?: boolean
 }
 
-export function ViewModeItems({ mode, onModeChange, onTakeBack, takeBackBusy = false, onDone }: ViewModeItemsProps) {
+export function ViewModeItems({ mode, onModeChange, onTakeBack, takeBackBusy = false, onDone, inMenu = false }: ViewModeItemsProps) {
   const t = useI18nStore((s) => s.t)
   return (
     <>
       {VIEW_MODES.map(({ mode: m, icon: ModeIcon, labelKey }) => (
-        <button key={m} type="button" role="menuitemradio" aria-checked={mode === m}
+        <button key={m} type="button"
+          {...(inMenu ? { role: 'menuitemradio', 'aria-checked': mode === m } : { 'aria-pressed': mode === m })}
           data-testid={`view-mode-${m}`} disabled={!onModeChange}
           className={`${MENU_ITEM} ${mode === m ? 'font-medium' : ''}`}
           onClick={() => { onDone(); if (m !== mode) onModeChange?.(m) }}>
@@ -53,7 +61,7 @@ export function ViewModeItems({ mode, onModeChange, onTakeBack, takeBackBusy = f
       {onTakeBack && (
         <>
           <div role="separator" className="my-0.5 h-px bg-border-subtle" />
-          <button type="button" role="menuitem" data-testid="view-mode-terminal" disabled={takeBackBusy}
+          <button type="button" role={inMenu ? 'menuitem' : undefined} data-testid="view-mode-terminal" disabled={takeBackBusy}
             className={MENU_ITEM} onClick={() => { onDone(); onTakeBack() }}>
             <Terminal size={12} /> {t('takeback.button')}
           </button>
@@ -73,7 +81,7 @@ export default function ViewModeMenu({ anchorRef, onClose, ...items }: ViewModeM
   return (
     <FloatingPanel title={t('room.view.label')} anchorRef={anchorRef} onClose={onClose} width={200} testId="view-mode-menu">
       <div role="menu" aria-label={t('room.view.label')} className="flex flex-col gap-0.5 text-xs text-text-primary">
-        <ViewModeItems {...items} onDone={onClose} />
+        <ViewModeItems {...items} onDone={onClose} inMenu />
       </div>
     </FloatingPanel>
   )

@@ -199,8 +199,8 @@ describe('ExecutionHeader', () => {
     fireEvent.click(screen.getByTestId('header-overflow'))
     const panel = screen.getByTestId('header-overflow-panel')
     expect(within(panel).getByText('View')).toBeInTheDocument()
-    expect(within(panel).getByTestId('view-mode-room').getAttribute('aria-checked')).toBe('true')
-    expect(within(panel).getByTestId('view-mode-chat').getAttribute('aria-checked')).toBe('false')
+    expect(within(panel).getByTestId('view-mode-room').getAttribute('aria-pressed')).toBe('true')
+    expect(within(panel).getByTestId('view-mode-chat').getAttribute('aria-pressed')).toBe('false')
     expect(within(panel).queryByTestId('overflow-take-back')).toBeNull()
     fireEvent.click(within(panel).getByTestId('view-mode-chat'))
     expect(onModeChange).toHaveBeenCalledWith('chat')
@@ -215,6 +215,31 @@ describe('ExecutionHeader', () => {
     rerender(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={onTakeBack} onModeChange={onModeChange} takeBackBusy />)
     fireEvent.click(screen.getByTestId('header-overflow'))
     expect((within(screen.getByTestId('header-overflow-panel')).getByTestId('view-mode-terminal') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  // F12: menuitemradio / menuitem are only valid inside a `menu`, and the
+  // overflow panel is not one (it also holds interrupt / terminate). There the
+  // views are toggle buttons (aria-pressed); the view menu keeps its radios.
+  it('F12: the overflow draws the views as pressed buttons, the view menu as radios in a menu', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} onTakeBack={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    const panel = screen.getByTestId('header-overflow-panel')
+    expect(within(panel).queryByRole('menuitemradio')).toBeNull()
+    expect(within(panel).queryByRole('menuitem')).toBeNull()
+    expect(panel.querySelector('[role="menu"]')).toBeNull()
+    const room = within(panel).getByTestId('view-mode-room')
+    const chat = within(panel).getByTestId('view-mode-chat')
+    expect(room).toHaveAttribute('aria-pressed', 'true')
+    expect(chat).toHaveAttribute('aria-pressed', 'false')
+    expect(room).not.toHaveAttribute('aria-checked')
+    expect(within(panel).getByTestId('view-mode-terminal')).not.toHaveAttribute('role')
+    fireEvent.click(screen.getByTestId('header-overflow'))
+
+    fireEvent.click(screen.getByTestId('view-mode'))
+    const menu = within(screen.getByTestId('view-mode-menu')).getByRole('menu')
+    expect(within(menu).getAllByRole('menuitemradio')).toHaveLength(2)
+    expect(within(menu).getByTestId('view-mode-room')).toHaveAttribute('aria-checked', 'true')
+    expect(within(menu).getByRole('menuitem')).toHaveAttribute('data-testid', 'view-mode-terminal')
   })
 
   it('has no terminal item in the overflow without onTakeBack', () => {
@@ -250,7 +275,7 @@ describe('ExecutionHeader', () => {
     fireEvent.click(screen.getByTestId('header-overflow'))
     const panel = screen.getByTestId('header-overflow-panel')
     expect(within(panel).queryByTestId('overflow-cost')).toBeNull()
-    expect(within(panel).getByTestId('view-mode-chat').getAttribute('aria-checked')).toBe('true')
+    expect(within(panel).getByTestId('view-mode-chat').getAttribute('aria-pressed')).toBe('true')
     expect(within(panel).getByTestId('view-mode-terminal')).toBeInTheDocument()
     fireEvent.click(within(panel).getByTestId('overflow-interrupt'))
     expect(baseProps.onInterrupt).toHaveBeenCalledTimes(1)
