@@ -24,6 +24,7 @@ import { HostPage } from '../../components/HostPage'
 import ExecutionView from '../../components/execution/ExecutionView'
 import { ExecutionsView } from '../../components/executions/ExecutionsView'
 import { resolveExecutionHostId } from '../nex/resolve-host'
+import { viewModeOf, withViewMode } from '../nex/view-mode'
 import { AppearanceSection } from '../../components/settings/AppearanceSection'
 import { TerminalSection } from '../../components/settings/TerminalSection'
 import { ElectronSection } from '../../components/settings/ElectronSection'
@@ -33,7 +34,7 @@ import { ProfileSection } from '../../components/settings/profile/ProfileSection
 import { FileTreeWorkspaceView } from '../../components/FileTreeView'
 import { FileTreeSessionView } from '../../components/FileTreeSessionView'
 import { useTabStore } from '../../stores/useTabStore'
-import type { PaneContent } from '../../types/tab'
+import type { ExecutionViewMode, PaneContent } from '../../types/tab'
 import type { PaneRendererProps } from '../module-registry'
 import {
   registerInterfaceSubsection,
@@ -110,11 +111,27 @@ function ExecutionPaneWrapper({ pane, isActive }: PaneRendererProps) {
   // stored host that no longer exists must surface as "Host removed", never
   // as another daemon (spec §4.3.2 step 5).
   const hostId = content.host ?? resolveExecutionHostId(undefined)
+  // The view (room / chat, R2 plan T1.1) lives on the pane content, so it is
+  // persisted and travels with the tab (D1). The switch reads the content the
+  // store holds *now*, not this render's, so a `from` or host rewrite that
+  // landed since is kept; a pane that no longer shows this execution is left
+  // alone. The mode stays out of the `key`: switching must not remount the
+  // view (no resubscribe, no refetch).
+  const executionId = content.executionId
+  const onModeChange = (mode: ExecutionViewMode) => {
+    if (!tabId) return
+    const store = useTabStore.getState()
+    const tab = store.tabs[tabId]
+    const current = tab ? findPane(tab.layout, pane.id)?.content : undefined
+    if (current?.kind !== 'execution' || current.executionId !== executionId) return
+    store.setPaneContent(tabId, pane.id, withViewMode(current, mode))
+  }
   // No owning tab (should not happen for a rendered pane) → nothing to swap
   // back into, so no take-back is offered.
   return (
-    <ExecutionView key={`${hostId}:${content.executionId}`} hostId={hostId} executionId={content.executionId} isActive={isActive}
-      tabId={tabId ?? ''} paneId={pane.id} from={tabId ? content.from : undefined} />
+    <ExecutionView key={`${hostId}:${executionId}`} hostId={hostId} executionId={executionId} isActive={isActive}
+      tabId={tabId ?? ''} paneId={pane.id} from={tabId ? content.from : undefined}
+      mode={viewModeOf(content)} onModeChange={onModeChange} />
   )
 }
 

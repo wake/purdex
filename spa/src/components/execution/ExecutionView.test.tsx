@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { useEffect, useState } from 'react'
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
 import { useExecutionStore } from '../../stores/useExecutionStore'
@@ -34,7 +35,7 @@ vi.mock('../../lib/nex/handoff', async (importOriginal) => {
 })
 
 const H = 'h', E = 'exc_1', KEY = 'h:exc_1'
-const base = { hostId: H, executionId: E, tabId: 't1', paneId: 'p1' }
+const base = { hostId: H, executionId: E, tabId: 't1', paneId: 'p1', onModeChange: () => {} }
 const ensureLease = vi.fn(), release = vi.fn(), touch = vi.fn(), forget = vi.fn()
 const summary = (extra = {}) => ({ id: E, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/Users/w/repo', mount_kind: 'dev', brief: 'b', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 2, archived: false, effective_profile: 'standard', turn_count: 3, ...extra })
 
@@ -561,7 +562,33 @@ function executionTab(): { tabId: string; paneId: string } {
 }
 const paneContent = (tabId: string) => getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
 const toast = () => useUndoToast.getState().toast
-const takeBackBtn = () => screen.getByTestId('take-back') as HTMLButtonElement
+/**
+ * The header's view menu, opened unless it already is (R2 plan T1.2 moved
+ * "Take to terminal" there as the 終端機 item). The last trigger / item wins,
+ * so a test that renders a second view reaches that view's menu.
+ */
+const openViewMenu = () => {
+  const trigger = screen.getAllByTestId('view-mode').at(-1)!
+  if (trigger.getAttribute('aria-expanded') !== 'true') fireEvent.click(trigger)
+}
+const takeBackBtn = () => {
+  openViewMenu()
+  return screen.getAllByTestId('view-mode-terminal').at(-1) as HTMLButtonElement
+}
+/**
+ * Clicks 終端機 and lets the take-back settle. The menu is opened outside the
+ * async `act` — inside it the trigger's state update would not flush before
+ * the item is looked up.
+ */
+const clickTakeBack = async () => {
+  const item = takeBackBtn()
+  await act(async () => { fireEvent.click(item) })
+}
+/** Whether the view menu offers 終端機 (the trigger is always there: the pane can always switch views). */
+const offersTerminal = () => {
+  openViewMenu()
+  return screen.queryByTestId('view-mode-terminal') !== null
+}
 
 function deferred<T>() {
   let resolve!: (v: T) => void
@@ -581,14 +608,14 @@ describe('ExecutionView — take back to terminal', () => {
 
   it('no `from` → no take-back control', () => {
     render(<ExecutionView {...base} isActive />)
-    expect(screen.queryByTestId('take-back')).toBeNull()
+    expect(offersTerminal()).toBe(false)
   })
 
   it("with `from` → the control is there; idle execution → no confirm, takeBack called with the held lease id and the hook's forget", async () => {
     mockedTakeback.mockResolvedValueOnce(takebackOk)
     const ids = executionTab()
     render(<ExecutionView {...base} {...ids} from={from} isActive />)
-    await act(async () => { fireEvent.click(takeBackBtn()) })
+    await clickTakeBack()
     expect(screen.queryByTestId('takeback-dialog')).toBeNull()
     expect(mockedTakeBack).toHaveBeenCalledTimes(1)
     expect(mockedTakeBack).toHaveBeenCalledWith({ hostId: H, executionId: E, from, leaseId: 'ls_1', tabId: ids.tabId, paneId: ids.paneId, forgetLease: forget })
@@ -603,7 +630,7 @@ describe('ExecutionView — take back to terminal', () => {
     mockedTakeback.mockResolvedValueOnce(takebackOk)
     const ids = executionTab()
     render(<ExecutionView {...base} {...ids} from={from} isActive />)
-    await act(async () => { fireEvent.click(takeBackBtn()) })
+    await clickTakeBack()
     expect(mockedTakeBack.mock.calls[0][0].leaseId).toBeUndefined()
     expect(mockedTakeback.mock.calls[0][2]).not.toHaveProperty('lease_id')
   })
@@ -633,7 +660,7 @@ describe('ExecutionView — take back to terminal', () => {
     mockedTakeback.mockResolvedValueOnce(takebackOk)
     const ids = executionTab()
     render(<ExecutionView {...base} {...ids} from={from} isActive />)
-    await act(async () => { fireEvent.click(takeBackBtn()) })
+    await clickTakeBack()
     expect(paneContent(ids.tabId)).toEqual({
       kind: 'tmux-session', hostId: H, sessionCode: from.sessionCode, mode: 'terminal', cachedName: from.cachedName, tmuxInstance: from.tmuxInstance,
     })
@@ -716,7 +743,7 @@ describe('ExecutionView — take back to terminal', () => {
     mockedTakeback.mockRejectedValueOnce(new HandoffApiError(404, 'session_missing', { code: 'session_missing' }))
     const ids = executionTab()
     render(<ExecutionView {...base} {...ids} from={from} isActive />)
-    await act(async () => { fireEvent.click(takeBackBtn()) })
+    await clickTakeBack()
     expect(toast()?.message).toBe('The tmux session no longer exists.')
     expect(paneContent(ids.tabId).kind).toBe('execution')
     expect(forget).not.toHaveBeenCalled()
@@ -727,7 +754,7 @@ describe('ExecutionView — take back to terminal', () => {
     mockedTakeback.mockRejectedValueOnce(new HandoffApiError(409, 'cc_already_running', { code: 'cc_already_running', session_id: 'sid-4' }))
     const ids = executionTab()
     render(<ExecutionView {...base} {...ids} from={from} isActive />)
-    await act(async () => { fireEvent.click(takeBackBtn()) })
+    await clickTakeBack()
     expect(toast()?.message).toBe('Claude Code is already running in that session.\nResume by hand: claude --resume sid-4')
   })
 
@@ -735,7 +762,7 @@ describe('ExecutionView — take back to terminal', () => {
     mockedTakeback.mockRejectedValueOnce(new TypeError('boom'))
     const ids = executionTab()
     render(<ExecutionView {...base} {...ids} from={from} isActive />)
-    await act(async () => { fireEvent.click(takeBackBtn()) })
+    await clickTakeBack()
     expect(toast()?.message).toBe('Handoff failed (unknown).')
   })
 })
@@ -758,7 +785,7 @@ describe('ExecutionView — take back with the real lease hook', () => {
     mockedTakeback.mockResolvedValueOnce(takebackOk)
     const ids = executionTab()
     const { unmount } = render(<ExecutionView {...base} {...ids} from={from} isActive />)
-    await act(async () => { fireEvent.click(takeBackBtn()) })
+    await clickTakeBack()
     expect(paneContent(ids.tabId).kind).toBe('tmux-session')
     expect(useExecutionStore.getState().executions[KEY].lease).toBeNull()
     unmount()
@@ -770,7 +797,7 @@ describe('ExecutionView — take back with the real lease hook', () => {
     mockedTakeback.mockRejectedValueOnce(new HandoffApiError(404, 'session_missing', { code: 'session_missing' }))
     const ids = executionTab()
     const { unmount } = render(<ExecutionView {...base} {...ids} from={from} isActive />)
-    await act(async () => { fireEvent.click(takeBackBtn()) })
+    await clickTakeBack()
     expect(useExecutionStore.getState().executions[KEY].lease?.leaseId).toBe('ls_1')
     unmount()
     await act(async () => {})
@@ -846,20 +873,20 @@ describe('ExecutionView — take to terminal (no `from`)', () => {
     it.each(cases)('%s → %s', (_name, extra, shown) => {
       useExecutionStore.getState().setSummary(H, E, summary(extra) as never)
       render(<ExecutionView {...base} {...headlessTab()} isActive />)
-      expect(screen.queryByTestId('take-back') !== null).toBe(shown)
+      expect(offersTerminal()).toBe(shown)
     })
 
     it('no summary yet → hidden', () => {
       useExecutionStore.setState({ executions: {} })
       useExecutionStore.getState().setHistoryLoaded(H, E, true)
       render(<ExecutionView {...base} {...headlessTab()} isActive />)
-      expect(screen.queryByTestId('take-back')).toBeNull()
+      expect(offersTerminal()).toBe(false)
     })
 
     it('with `from` the control is there regardless (codex, queued): the session-bound path decides', () => {
       useExecutionStore.getState().setSummary(H, E, summary({ state: 'queued', provider: 'codex' }) as never)
       render(<ExecutionView {...base} {...executionTab()} from={from} isActive />)
-      expect(screen.getByTestId('take-back')).toBeInTheDocument()
+      expect(offersTerminal()).toBe(true)
     })
 
     it('the label is "Take to terminal" in both cases', () => {
@@ -877,7 +904,7 @@ describe('ExecutionView — take to terminal (no `from`)', () => {
     mockedToTerminal.mockResolvedValueOnce(toTerminalOk)
     const ids = headlessTab()
     render(<ExecutionView {...base} {...ids} isActive />)
-    await act(async () => { fireEvent.click(takeBackBtn()) })
+    await clickTakeBack()
     expect(screen.queryByTestId('takeback-dialog')).toBeNull()
     expect(mockedTakeBack).not.toHaveBeenCalled()
     expect(mockedTakeToTerminal).toHaveBeenCalledTimes(1)
@@ -894,7 +921,7 @@ describe('ExecutionView — take to terminal (no `from`)', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid' }) as never)
     mockedToTerminal.mockResolvedValueOnce(toTerminalOk)
     render(<ExecutionView {...base} {...headlessTab()} isActive />)
-    await act(async () => { fireEvent.click(takeBackBtn()) })
+    await clickTakeBack()
     expect(mockedTakeToTerminal.mock.calls[0][0].leaseId).toBeUndefined()
     expect(mockedToTerminal.mock.calls[0][2]).not.toHaveProperty('lease_id')
   })
@@ -929,17 +956,17 @@ describe('ExecutionView — take to terminal (no `from`)', () => {
     mockedToTerminal.mockRejectedValueOnce(new HandoffApiError(409, 'cwd_missing', { code: 'cwd_missing' }))
     const ids2 = headlessTab()
     render(<ExecutionView {...base} {...ids2} isActive />)
-    await act(async () => { fireEvent.click(screen.getAllByTestId('take-back').at(-1)!) })
+    await clickTakeBack()
     expect(toast()?.message).toBe("The execution's working directory no longer exists on the host.")
     expect(paneContent(ids2.tabId).kind).toBe('execution')
-    await waitFor(() => expect((screen.getAllByTestId('take-back').at(-1) as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expect(takeBackBtn().disabled).toBe(false))
   })
 
   it('cc_start_timeout with session_id → manual-resume line (the daemon killed the session it created)', async () => {
     useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid' }) as never)
     mockedToTerminal.mockRejectedValueOnce(new HandoffApiError(504, 'cc_start_timeout', { code: 'cc_start_timeout', session_id: 'sid-4' }))
     render(<ExecutionView {...base} {...headlessTab()} isActive />)
-    await act(async () => { fireEvent.click(takeBackBtn()) })
+    await clickTakeBack()
     expect(toast()?.message).toBe('Claude Code did not start in the pane in time.\nResume by hand: claude --resume sid-4')
     expect(forget).not.toHaveBeenCalled()
   })
@@ -948,7 +975,7 @@ describe('ExecutionView — take to terminal (no `from`)', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid' }) as never)
     mockedToTerminal.mockRejectedValueOnce(new HandoffApiError(500, 'session_create_failed', { code: 'session_create_failed', session_name: 'repo-1', session_alive: true }))
     render(<ExecutionView {...base} {...headlessTab()} isActive />)
-    await act(async () => { fireEvent.click(takeBackBtn()) })
+    await clickTakeBack()
     expect(toast()?.message).toBe('Could not create the tmux session repo-1; check the session list.')
     expect(fetchHost).toHaveBeenCalledWith(H)
   })
@@ -982,5 +1009,108 @@ describe('ExecutionView — header cost (P-B4 H1, P6, G3)', () => {
 
     act(() => { useExecutionStore.getState().applyEvents(H, E, [resultFrame(4, 1, 'toolu_x')]) })
     expect(costBtn().textContent).toBe('$0.06')
+  })
+})
+
+// ---- worker pane R2 T1.4 / T1.3b: the pane switches between room and chat ----
+
+describe('ExecutionView — room and chat (R2 T1.4)', () => {
+  const said = (text: string) =>
+    ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }) as Exec['messages'][number]
+  const thinkingPartial = (thinking: string): Exec['partial'] =>
+    ({ messageId: 'm', finalized: 0, blocks: { 0: { index: 0, type: 'thinking', text: '', thinking, partialJson: '' } } })
+
+  /** The pane as the wrapper drives it: the view menu's choice comes back as the `mode` prop. */
+  function Switchable(props: Omit<Parameters<typeof ExecutionView>[0], 'mode' | 'onModeChange'>) {
+    const [mode, setMode] = useState<'room' | 'chat'>('room')
+    return <ExecutionView {...props} mode={mode} onModeChange={setMode} />
+  }
+
+  it('renders the room by default', () => {
+    patchExec({ messages: [said('hello')], turnStarts: [0] })
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.getByTestId('room-user-line')).toHaveTextContent('hello')
+    expect(screen.queryByTestId('chat-bubble-user')).toBeNull()
+    expect(screen.getByTestId('worker-dock')).toBeInTheDocument()
+  })
+
+  it('renders chat when the pane says chat', () => {
+    patchExec({ messages: [said('hello')], turnStarts: [0] })
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    expect(screen.getByTestId('chat-bubble-user')).toHaveTextContent('hello')
+    expect(screen.queryByTestId('room-user-line')).toBeNull()
+  })
+
+  it('switching does not resubscribe', () => {
+    let subscribes = 0
+    function useCountingSubscription(hostId: string, executionId: string, isActive: boolean) {
+      useEffect(() => { subscribes++ }, [hostId, executionId, isActive])
+      return { problem: null, paused: false }
+    }
+    vi.mocked(sub.useExecutionSubscription).mockImplementation(useCountingSubscription)
+    patchExec({ messages: [said('hello')], turnStarts: [0] })
+    render(<Switchable {...base} isActive />)
+    expect(subscribes).toBe(1)
+    fireEvent.click(screen.getByTestId('view-mode'))
+    fireEvent.click(screen.getByTestId('view-mode-chat'))
+    expect(screen.getByTestId('chat-bubble-user')).toHaveTextContent('hello')
+    // Back to the room through chat's overflow (chat has no inline trigger).
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    fireEvent.click(screen.getByTestId('view-mode-room'))
+    expect(screen.getByTestId('room-user-line')).toHaveTextContent('hello')
+    expect(subscribes).toBe(1)
+    expect(useExecutionStore.getState().executions[KEY].historyLoaded).toBe(true)
+  })
+
+  it('chat has no dock', () => {
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    expect(screen.queryByTestId('worker-dock')).toBeNull()
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
+  })
+
+  it("chat's header shows state and cost and folds the actions", () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid' }) as never)
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    render(<ExecutionView {...base} {...headlessTab()} mode="chat" isActive />)
+    expect(screen.getByTestId('execution-state')).toHaveTextContent('idle')
+    expect(screen.getByTestId('execution-cost')).toBeInTheDocument()
+    expect(screen.queryByTestId('worker-name')).toBeNull()
+    expect(screen.queryByTestId('header-wide-actions')).toBeNull()
+    expect(screen.queryByTestId('view-mode')).toBeNull()
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    const panel = screen.getByTestId('header-overflow-panel')
+    for (const id of ['overflow-interrupt', 'overflow-terminate', 'view-mode-room', 'view-mode-chat', 'view-mode-terminal']) {
+      expect(within(panel).getByTestId(id)).toBeInTheDocument()
+    }
+    expect(within(panel).getByTestId('view-mode-chat')).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it("chat's pending line is a dimmed user bubble carrying the queued tag", () => {
+    patchExec({ pendingSend: true, pendingLocal: { text: 'second', delivery: 'queued' } as Exec['pendingLocal'] })
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    const bubble = screen.getByTestId('chat-bubble-user')
+    expect(bubble).toHaveTextContent('second')
+    expect(within(bubble).getByText(/queued/i)).toBeInTheDocument()
+    expect(bubble.className).toContain('opacity-60')
+    expect(screen.queryByTestId('room-user-line')).toBeNull()
+  })
+
+  it('chat keeps the dots on while a thought streams', () => {
+    patchExec({ turnLive: true, partial: thinkingPartial('weighing options') })
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+    expect(screen.queryByTestId('room-thinking')).toBeNull()
+    expect(screen.queryByText('weighing options')).toBeNull()
+    // Prose starts: the typewriter takes over and the dots go.
+    act(() => { patchExec({ partial: textPartial('here it is') }) })
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-partial-group')).toHaveTextContent('here it is')
+  })
+
+  it('room still hands a streaming thought to RoomThinking', () => {
+    patchExec({ turnLive: true, partial: thinkingPartial('weighing options') })
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    expect(screen.getByTestId('room-thinking')).toBeInTheDocument()
   })
 })
