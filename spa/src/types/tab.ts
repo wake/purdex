@@ -121,7 +121,15 @@ export type PaneContent =
   // "Hand to nex" — the session CC exited in, so "Take back" can resume it
   // there. Pane-local provenance only: it takes no part in `contentMatches`
   // or the route, but `openSingletonTab` prefers a pane that carries it.
-  | { kind: 'execution'; executionId: string; host?: string; from?: ExecutionFrom }
+  //
+  // `mode` (worker pane R2, spec §1/§6): which **view** of the worker this
+  // pane shows. A view, not a binding — terminal is not a member; moving to
+  // a terminal is Take to terminal. Absent reads as `room` (the default);
+  // it syncs with the tab like every other content field.
+  | { kind: 'execution'; executionId: string; host?: string; from?: ExecutionFrom; mode?: ExecutionViewMode }
+
+/** The two views of one worker (spec §1): room（指揮室）and chat（聊天模式）. */
+export type ExecutionViewMode = 'room' | 'chat'
 
 /** The tmux session an execution pane was handed off from (spec §4.4). */
 export interface ExecutionFrom {

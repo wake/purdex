@@ -7,8 +7,15 @@
 // (which unmounts this view) — `takeBack` to the origin session when the
 // execution came from one (`from`, P-C.3 spec §4.4), else `takeToTerminal`
 // into a fresh session in the execution's cwd (exec-to-terminal spec §4.2).
+// The view (R2 plan T1.4): the same state renders as the room or as chat
+// (`mode`, from the pane content). Chat has no dock and chat's header (see
+// ExecutionHeader); switching is local — the subscription, the store and the
+// lease are untouched, so nothing is refetched.
 import { useCallback, useMemo, useRef, useState } from 'react'
 import RoomTranscript from '../room/RoomTranscript'
+import ChatTranscript from '../chat/ChatTranscript'
+import { ChatUserBubble } from '../chat/ChatBubble'
+import { FoldContext, useFoldMemory } from '../room/fold-context'
 import RoomUserLine from '../room/RoomUserLine'
 import WorkerDock from '../room/WorkerDock'
 import WorkerInput from '../room/WorkerInput'
@@ -24,10 +31,10 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
 import { defaultExecutionState } from '../../lib/nex/event-reducer'
 import { costSummary } from '../../lib/nex/cost-summary'
-import { partialHasVisibleContent } from '../../lib/nex/partial'
+import { partialHasVisibleContent, partialHasVisibleText } from '../../lib/nex/partial'
 import { HandoffApiError } from '../../lib/nex/handoff-api'
 import { takeBack, takeToTerminal, handoffErrorMessage, manualResumeHint } from '../../lib/nex/handoff'
-import type { ExecutionFrom } from '../../types/tab'
+import type { ExecutionFrom, ExecutionViewMode } from '../../types/tab'
 
 export interface ExecutionViewProps {
   hostId: string
@@ -38,6 +45,10 @@ export interface ExecutionViewProps {
   paneId: string
   /** Set when the execution was handed off from a tmux session; "Take to terminal" then returns to that session. */
   from?: ExecutionFrom
+  /** The pane's view; absent reads as room (spec §1, D3). */
+  mode?: ExecutionViewMode
+  /** Writes the chosen view back to the pane content (ExecutionPaneWrapper). */
+  onModeChange: (mode: ExecutionViewMode) => void
 }
 
 const EMPTY = defaultExecutionState()
@@ -49,7 +60,7 @@ const TERMINAL_STATES = new Set(['rejected', 'failed', 'terminated'])
 const TAKEABLE_STATES = new Set(['running', 'idle', 'failed', 'terminated'])
 const KNOWN_ERROR_KEYS = new Set(['invalid_text', 'execution_archived', 'execution_terminal', 'turn_failed_to_launch', 'turn_stalled', 'interrupt_unconfirmed'])
 
-export default function ExecutionView({ hostId, executionId, isActive, tabId, paneId, from }: ExecutionViewProps) {
+export default function ExecutionView({ hostId, executionId, isActive, tabId, paneId, from, mode = 'room', onModeChange }: ExecutionViewProps) {
   const t = useI18nStore((s) => s.t)
   const key = executionKey(hostId, executionId)
   const st = useExecutionStore((s) => s.executions[key] ?? EMPTY)
@@ -115,6 +126,9 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // Spec §4.2: the 1 s clock only runs while some tool is running.
   const anyRunning = useMemo(() => Object.values(st.tools).some((tool) => tool.status === 'running'), [st.tools])
   const now = useElapsedTicker(anyRunning)
+  // Spec §3.2: one fold memory per pane. It lives here, above the view
+  // switch, because room ⇄ chat remounts the transcript (F2).
+  const foldStore = useFoldMemory()
 
   if (problem) {
     const text = problem === 'not_found' ? t('execution.not_found')
@@ -151,14 +165,29 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // Spec §4.4 R3: dots while the model is silent (own delivered send, or an
   // observed live turn); the typewriter takes over once tokens flow, and a
   // running tool's spinner already shows activity, so no dots beside it.
+  // Chat never draws a thought (nor, until R2-B, a streaming tool_use), so
+  // only prose switches its dots off (R2 plan T1.3b).
+  // Chat draws no tool line either, so a running tool is no activity signal
+  // there and must not switch the dots off (F1). Revisit once R2-B gives chat
+  // its "using N tools…" line — that line then carries the running state.
+  const chat = mode === 'chat'
+  const partialVisible = chat ? partialHasVisibleText(st.partial) : partialHasVisibleContent(st.partial)
   const showThinking = (st.turnLive || (st.pendingSend && st.pendingLocal?.delivery !== 'queued'))
-    && !partialHasVisibleContent(st.partial) && !anyRunning
+    && !partialVisible && (chat || !anyRunning)
+  const queuedTag = st.pendingLocal?.delivery === 'queued'
+    && <span className="text-[10px] uppercase font-normal text-text-muted">{t('execution.queued')}</span>
+  const transcriptProps = {
+    messages: st.messages, turnStarts: st.turnStarts, keyPrefix: executionId, showThinking,
+    showEmptyHint: st.messages.length === 0 && !st.pendingLocal, emptyText: t('execution.empty'), scrollKey: st.pendingLocal ? 1 : 0,
+    partial: st.partial, tools: st.tools, now,
+  }
 
   return (
     <div className="flex flex-col h-full">
       <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
         onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal || takeBackBusy}
-        onTakeBack={from || canTakeToTerminal ? onTakeBack : undefined} takeBackBusy={takeBackBusy || writeInFlight} />
+        onTakeBack={from || canTakeToTerminal ? onTakeBack : undefined} takeBackBusy={takeBackBusy || writeInFlight}
+        mode={mode} onModeChange={onModeChange} />
       {confirmTakeBack && (
         <ConfirmDialog testIdPrefix="takeback" title={t('takeback.confirm_title')} body={t('takeback.confirm_running')}
           confirmLabel={t('takeback.button')} onCancel={() => setConfirmTakeBack(false)}
@@ -174,19 +203,22 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
           )}
         </div>
       ) : (
-        <RoomTranscript messages={st.messages} turnStarts={st.turnStarts} keyPrefix={executionId} showThinking={showThinking}
-          showEmptyHint={st.messages.length === 0 && !st.pendingLocal} emptyText={t('execution.empty')} scrollKey={st.pendingLocal ? 1 : 0}
-          partial={st.partial} tools={st.tools} now={now}>
-          {/* The optimistic line: a user line like any other, dimmed until message_accepted (spec §4.1). */}
-          {st.pendingLocal && (
-            <RoomUserLine text={st.pendingLocal.text} pending>
-              {st.pendingLocal.delivery === 'queued' && <span className="text-[10px] uppercase font-normal text-text-muted">{t('execution.queued')}</span>}
-            </RoomUserLine>
+        <FoldContext.Provider value={foldStore}>
+          {chat ? (
+            <ChatTranscript {...transcriptProps}>
+              {/* The optimistic line: your bubble like any other, dimmed until message_accepted (F8). */}
+              {st.pendingLocal && <ChatUserBubble text={st.pendingLocal.text} pending>{queuedTag}</ChatUserBubble>}
+            </ChatTranscript>
+          ) : (
+            <RoomTranscript {...transcriptProps}>
+              {/* The optimistic line: a user line like any other, dimmed until message_accepted (spec §4.1). */}
+              {st.pendingLocal && <RoomUserLine text={st.pendingLocal.text} pending>{queuedTag}</RoomUserLine>}
+            </RoomTranscript>
           )}
-        </RoomTranscript>
+        </FoldContext.Provider>
       )}
-      {/* Worker pane spec §4.6 (Q3): the worker's current state, inside the pane, above the input. */}
-      <WorkerDock sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} isMine={isMine} />
+      {/* Worker pane spec §4.6 (Q3): the worker's current state, inside the pane, above the input. Chat has none (spec §5). */}
+      {!chat && <WorkerDock sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} isMine={isMine} />}
       {leaseHeld && (
         <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning">
           {t('execution.lease_held', { principal: st.leaseError?.heldBy ?? '' })}

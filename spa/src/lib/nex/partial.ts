@@ -64,6 +64,18 @@ export function partialHasVisibleContent(p: PartialAssembly | null): boolean {
 }
 
 /**
+ * Chat's half of R3 (R2 plan T1.3b): some text block is visible. Chat never
+ * draws a thought and, until R2-B, never a streaming tool_use — so only prose
+ * switches its dots off; while a thought streams, the dots stay. This is the
+ * exact set ChatPartialGroup renders, keeping chat's dots and typewriter on
+ * the same predicate as the room's.
+ */
+export function partialHasVisibleText(p: PartialAssembly | null): boolean {
+  if (!p) return false
+  return Object.values(p.blocks).some((b) => b.type === 'text' && isPartialBlockVisible(b))
+}
+
+/**
  * Spec §4.4 R4: a cheap change key that differs whenever the rendered group
  * would differ, so the auto-scroll effect can follow the typewriter without
  * depending on the assembly's identity. It folds in the structure (message
@@ -78,6 +90,21 @@ export function partialVersionOf(p: PartialAssembly | null | undefined): string 
     .map((b) => `${b.index}:${b.type}:${b.toolName ?? ''}:${b.text.length}:${b.thinking.length}:${b.partialJson.length}`)
     .join('|')
   return `${p.messageId ?? ''}#${p.finalized}#${blocks}`
+}
+
+/**
+ * Chat's R4 key (F10): chat draws only the partial's text (ChatPartialGroup),
+ * so its auto-scroll follows the text blocks alone — a streaming thought or a
+ * tool_use's input moves `partialVersionOf` without changing anything chat
+ * shows. '' when there is no partial.
+ */
+export function partialTextVersionOf(p: PartialAssembly | null | undefined): string {
+  if (!p) return ''
+  const blocks = Object.values(p.blocks)
+    .filter((b) => b.type === 'text')
+    .map((b) => `${b.index}:${b.text.length}`)
+    .join('|')
+  return `${p.messageId ?? ''}#${blocks}`
 }
 
 function blockIndex(v: unknown): number | null {

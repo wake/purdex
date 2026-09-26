@@ -17,11 +17,17 @@ import { TurnIndexContext, useFoldStore } from './fold-context'
 export interface RoomTurnGroupProps {
   index: number
   children: ReactNode
+  /**
+   * The hover expand/collapse strip (default true). Chat passes false: it
+   * keeps the section and the turn index, so fold memory still reaches every
+   * block, but draws no ceremony of its own (spec §5).
+   */
+  chrome?: boolean
 }
 
 const STRIP_BUTTON_CLASS = 'text-xs text-text-muted hover:text-text-primary cursor-pointer'
 
-export default function RoomTurnGroup({ index, children }: RoomTurnGroupProps) {
+export default function RoomTurnGroup({ index, children, chrome = true }: RoomTurnGroupProps) {
   const t = useI18nStore((s) => s.t)
   const { setTurn } = useFoldStore()
 
@@ -32,7 +38,7 @@ export default function RoomTurnGroup({ index, children }: RoomTurnGroupProps) {
         not part of what the turn says. It sits over the turn's top-right
         corner rather than taking a row, so a hover never reflows the text.
       */}
-      <div
+      {chrome && <div
         data-testid="turn-fold-strip"
         className="absolute right-0 top-0 flex gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
       >
@@ -52,7 +58,7 @@ export default function RoomTurnGroup({ index, children }: RoomTurnGroupProps) {
         >
           {t('room.turn.collapse_all')}
         </button>
-      </div>
+      </div>}
       <TurnIndexContext.Provider value={index}>{children}</TurnIndexContext.Provider>
     </section>
   )

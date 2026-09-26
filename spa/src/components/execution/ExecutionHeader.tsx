@@ -14,16 +14,25 @@
 // The name toggles `WorkerInfoPanel` (provider, profile, full cwd, session).
 // Narrow (the root is a `@container`): at `@max-md` the header is only name +
 // state + an overflow trigger (spec §4.7); the cost, the two lease-backed
-// actions and "Take to terminal" (with its separator) hide, and the trigger
+// actions and the view trigger (with its separator) hide, and the trigger
 // opens a `FloatingPanel` carrying them; the cost panel then anchors to that
 // trigger.
+// View (R2 plan T1.2): "Take to terminal" is now the 終端機 item of the view
+// menu (指揮室／聊天 radios + 終端機 action); its trigger sits where the
+// take-back button was, and at `@max-md` the overflow carries the same items.
+// The pane can always switch views, so the menu is always offered; only the
+// 終端機 item depends on `onTakeBack`.
+// Chat (`mode === 'chat'`, spec §5) keeps only state, cost and the overflow at
+// every width; interrupt, terminate and the view items live in the overflow.
 import { useEffect, useId, useRef, useState } from 'react'
-import { ArrowUUpLeft, CurrencyDollar, DotsThree, Prohibit, Power } from '@phosphor-icons/react'
+import { CurrencyDollar, DotsThree, Prohibit, Power } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HoverTooltip } from '../HoverTooltip'
 import { FloatingPanel } from '../FloatingPanel'
 import CostPanel from './CostPanel'
 import WorkerInfoPanel from './WorkerInfoPanel'
+import ViewModeMenu, { ViewModeItems, ViewModeLabel } from './ViewModeMenu'
+import type { ExecutionViewMode } from '../../types/tab'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import type { CostSummary } from '../../lib/nex/cost-summary'
 import { formatTokens, formatUsd } from '../../lib/nex/format-cost'
@@ -42,6 +51,10 @@ export interface ExecutionHeaderProps {
   /** Present when the execution can be taken to a terminal (ExecutionView decides). */
   onTakeBack?: () => void
   takeBackBusy?: boolean
+  /** The pane's current view; room is the default (spec §1). */
+  mode?: ExecutionViewMode
+  /** Switches the view (the pane writes it to its content). The view menu is therefore always offered. */
+  onModeChange: (mode: ExecutionViewMode) => void
 }
 
 const STATE_DOT: Record<string, string> = {
@@ -60,9 +73,14 @@ const boxless = (el: HTMLElement | null) => {
   return !r || (r.width === 0 && r.height === 0)
 }
 
-export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, onTerminate, busy, onTakeBack, takeBackBusy = false }: ExecutionHeaderProps) {
+export default function ExecutionHeader({
+  summary, cost, hostId, onInterrupt, onTerminate, busy, onTakeBack, takeBackBusy = false, mode = 'room', onModeChange,
+}: ExecutionHeaderProps) {
   const t = useI18nStore((s) => s.t)
+  const chat = mode === 'chat'
   const [confirming, setConfirming] = useState(false)
+  const [viewOpen, setViewOpen] = useState(false)
+  const viewRef = useRef<HTMLButtonElement>(null)
   const [costOpen, setCostOpen] = useState(false)
   /** Which element the cost panel hangs from: the inline button, or the overflow trigger at narrow widths. */
   const [costFromOverflow, setCostFromOverflow] = useState(false)
@@ -85,17 +103,51 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
   // unmount cleanup (React runs every passive destroy before any create), so
   // the panel's restore can't take focus back afterwards.
   const refocusFrom = useRef<HTMLElement | null>(null)
+  /** Focus the first header trigger that has a box on this side of the breakpoint (and in this view). */
+  const focusVisibleTrigger = () => {
+    const target = [costRef.current, overflowRef.current, viewRef.current, nameRef.current]
+      .find((el) => el && !el.disabled && !boxless(el))
+    target?.focus()
+  }
+  // F5–F7: a view switch — from the menu or from outside (Profile Sync writes
+  // the pane's mode) — closes every panel: one left open would hang off an
+  // anchor the other view hides or unmounts (the cost panel pinned top-left),
+  // or pop back by itself on the way back. The trigger focus came from may be
+  // gone too (the room's view menu trigger) or hidden (the room hides chat's
+  // overflow trigger at wide widths), which leaves focus on <body>; move it to
+  // a visible trigger then. The panels close during render (React's "adjust
+  // state on a prop change"), so they unmount in the same commit as the
+  // switch; the focus move is an effect, after their unmount cleanup has
+  // tried (and, for a gone or hidden anchor, failed) to restore focus. Not on
+  // first render: nothing has switched yet.
+  const [panelsMode, setPanelsMode] = useState(mode)
+  if (panelsMode !== mode) {
+    setPanelsMode(mode)
+    setViewOpen(false)
+    setInfoOpen(false)
+    setCostOpen(false)
+    setOverflowOpen(false)
+  }
+  const focusedMode = useRef(mode)
+  useEffect(() => {
+    if (focusedMode.current === mode) return
+    focusedMode.current = mode
+    const active = document.activeElement as HTMLElement | null
+    if (active && active !== document.body && active.isConnected && !boxless(active)) return
+    focusVisibleTrigger()
+  }, [mode])
   useEffect(() => {
     const root = rootRef.current
-    if (!root || (!costOpen && !overflowOpen)) return
+    if (!root || (!costOpen && !overflowOpen && !viewOpen)) return
     const ro = new ResizeObserver(() => {
       const costAnchor = costFromOverflow ? overflowRef.current : costRef.current
       if (costOpen && boxless(costAnchor)) { refocusFrom.current = costAnchor; setCostOpen(false) }
       if (overflowOpen && boxless(overflowRef.current)) { refocusFrom.current = overflowRef.current; setOverflowOpen(false) }
+      if (viewOpen && boxless(viewRef.current)) { refocusFrom.current = viewRef.current; setViewOpen(false) }
     })
     ro.observe(root)
     return () => ro.disconnect()
-  }, [costOpen, overflowOpen, costFromOverflow])
+  }, [costOpen, overflowOpen, viewOpen, costFromOverflow])
   useEffect(() => {
     const hidden = refocusFrom.current
     if (!hidden) return
@@ -104,10 +156,8 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
     // focus the user moved elsewhere while the panel was open stays put.
     const active = document.activeElement
     if (active && active !== document.body && active !== hidden) return
-    const target = [costRef.current, overflowRef.current, nameRef.current]
-      .find((el) => el && !el.disabled && !boxless(el))
-    target?.focus()
-  }, [costOpen, overflowOpen])
+    focusVisibleTrigger()
+  }, [costOpen, overflowOpen, viewOpen])
   useEffect(() => {
     if (!confirming) return
     const id = setTimeout(() => setConfirming(false), TERMINATE_CONFIRM_MS)
@@ -128,43 +178,53 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
     return false
   }
 
+  const overflowTrigger = (
+    <button type="button" data-testid="header-overflow" ref={overflowRef}
+      aria-label={t('execution.more_actions')} aria-expanded={overflowOpen}
+      onClick={() => setOverflowOpen((v) => !v)}
+      className={`${chat ? 'flex' : 'hidden @max-md:flex'} shrink-0 ${ACTION}`}>
+      <DotsThree size={14} />
+    </button>
+  )
+  const costButton = (
+    <button type="button" data-testid="execution-cost" disabled={!cost} ref={costRef}
+      aria-describedby={cost && !costOpen ? costTipId : undefined}
+      aria-expanded={cost ? costOpen : undefined}
+      onClick={() => { setCostFromOverflow(false); setCostOpen((v) => !v) }}
+      className="relative shrink-0 tabular-nums hover:underline disabled:no-underline disabled:cursor-default">
+      {costLabel}
+      {cost && !costOpen && <HoverTooltip id={costTipId} placement="top">{costLine}</HoverTooltip>}
+    </button>
+  )
+
   return (
     <div ref={rootRef} className="@container flex items-center gap-2 px-4 py-2 border-b border-border-default text-xs text-text-muted">
       <span className={`shrink-0 w-2 h-2 rounded-full ${STATE_DOT[state] ?? 'bg-text-muted'}`} />
       <span data-testid="execution-state" className="shrink-0 text-text-primary font-medium">{state}</span>
-      {cwdBase && (
+      {!chat && cwdBase && (
         <button type="button" data-testid="worker-name" ref={nameRef} title={summary?.cwd}
           aria-expanded={infoOpen} onClick={() => setInfoOpen((v) => !v)}
           className="truncate min-w-0 font-medium text-text-primary hover:underline">{cwdBase}</button>
       )}
       <div className="flex-1" />
-      <div data-testid="header-wide-actions" className="flex items-center gap-2 shrink-0 @max-md:hidden">
-        <button type="button" data-testid="execution-cost" disabled={!cost} ref={costRef}
-          aria-describedby={cost && !costOpen ? costTipId : undefined}
-          aria-expanded={cost ? costOpen : undefined}
-          onClick={() => { setCostFromOverflow(false); setCostOpen((v) => !v) }}
-          className="relative tabular-nums hover:underline disabled:no-underline disabled:cursor-default">
-          {costLabel}
-          {cost && !costOpen && <HoverTooltip id={costTipId} placement="top">{costLine}</HoverTooltip>}
-        </button>
-        <button type="button" disabled={busy} onClick={onInterrupt} className={ACTION}>
-          <Prohibit size={12} /> {t('execution.interrupt')}
-        </button>
-        <button type="button" disabled={busy} onClick={terminateClick} className={`${ACTION} text-status-error`}>
-          <Power size={12} /> {confirming ? t('execution.terminate_confirm') : t('execution.terminate')}
-        </button>
-      </div>
-      <button type="button" data-testid="header-overflow" ref={overflowRef}
-        aria-label={t('execution.more_actions')} aria-expanded={overflowOpen}
-        onClick={() => setOverflowOpen((v) => !v)}
-        className={`hidden @max-md:flex shrink-0 ${ACTION}`}>
-        <DotsThree size={14} />
-      </button>
-      {onTakeBack && (
+      {chat ? costButton : (
+        <div data-testid="header-wide-actions" className="flex items-center gap-2 shrink-0 @max-md:hidden">
+          {costButton}
+          <button type="button" disabled={busy} onClick={onInterrupt} className={ACTION}>
+            <Prohibit size={12} /> {t('execution.interrupt')}
+          </button>
+          <button type="button" disabled={busy} onClick={terminateClick} className={`${ACTION} text-status-error`}>
+            <Power size={12} /> {confirming ? t('execution.terminate_confirm') : t('execution.terminate')}
+          </button>
+        </div>
+      )}
+      {overflowTrigger}
+      {!chat && (
         <div className="flex items-center gap-2 shrink-0 @max-md:hidden">
           <span className="shrink-0 w-px h-4 bg-border-subtle" />
-          <button type="button" data-testid="take-back" disabled={takeBackBusy} onClick={onTakeBack} className={`shrink-0 ${ACTION}`}>
-            <ArrowUUpLeft size={12} /> {t('takeback.button')}
+          <button type="button" data-testid="view-mode" ref={viewRef} aria-haspopup="menu" aria-expanded={viewOpen}
+            onClick={() => setViewOpen((v) => !v)} className={`shrink-0 ${ACTION}`}>
+            <ViewModeLabel mode={mode} />
           </button>
         </div>
       )}
@@ -172,10 +232,12 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
         <FloatingPanel title={t('execution.more_actions')} anchorRef={overflowRef} onClose={() => setOverflowOpen(false)}
           width={200} testId="header-overflow-panel">
           <div className="flex flex-col gap-0.5 text-xs text-text-primary">
-            <button type="button" data-testid="overflow-cost" disabled={!cost} className={`${MENU_ITEM} tabular-nums`}
-              onClick={() => { setOverflowOpen(false); setCostFromOverflow(true); setCostOpen(true) }}>
-              <CurrencyDollar size={12} /> {t('execution.cost.title')} <span className="flex-1" /> {costLabel}
-            </button>
+            {!chat && (
+              <button type="button" data-testid="overflow-cost" disabled={!cost} className={`${MENU_ITEM} tabular-nums`}
+                onClick={() => { setOverflowOpen(false); setCostFromOverflow(true); setCostOpen(true) }}>
+                <CurrencyDollar size={12} /> {t('execution.cost.title')} <span className="flex-1" /> {costLabel}
+              </button>
+            )}
             <button type="button" data-testid="overflow-interrupt" disabled={busy} className={MENU_ITEM}
               onClick={() => { setOverflowOpen(false); onInterrupt() }}>
               <Prohibit size={12} /> {t('execution.interrupt')}
@@ -184,19 +246,20 @@ export default function ExecutionHeader({ summary, cost, hostId, onInterrupt, on
               onClick={() => { if (terminateClick()) setOverflowOpen(false) }}>
               <Power size={12} /> {confirming ? t('execution.terminate_confirm') : t('execution.terminate')}
             </button>
-            {onTakeBack && (
-              <>
-                <div className="my-0.5 h-px bg-border-subtle" />
-                <button type="button" data-testid="overflow-take-back" disabled={takeBackBusy} className={MENU_ITEM}
-                  onClick={() => { setOverflowOpen(false); onTakeBack() }}>
-                  <ArrowUUpLeft size={12} /> {t('takeback.button')}
-                </button>
-              </>
-            )}
+            <div className="my-0.5 h-px bg-border-subtle" />
+            <div className="px-2 pt-0.5 text-[10px] text-text-muted">{t('room.view.label')}</div>
+            <div role="group" aria-label={t('room.view.label')} className="flex flex-col gap-0.5">
+              <ViewModeItems mode={mode} onModeChange={onModeChange} onTakeBack={onTakeBack}
+                takeBackBusy={takeBackBusy} onDone={() => setOverflowOpen(false)} />
+            </div>
           </div>
         </FloatingPanel>
       )}
-      {summary && infoOpen && <WorkerInfoPanel summary={summary} anchorRef={nameRef} onClose={() => setInfoOpen(false)} />}
+      {viewOpen && !chat && (
+        <ViewModeMenu mode={mode} onModeChange={onModeChange} onTakeBack={onTakeBack} takeBackBusy={takeBackBusy}
+          anchorRef={viewRef} onClose={() => setViewOpen(false)} />
+      )}
+      {!chat && summary && infoOpen && <WorkerInfoPanel summary={summary} anchorRef={nameRef} onClose={() => setInfoOpen(false)} />}
       {cost && costOpen && (
         <CostPanel summary={cost} hostId={hostId} anchorRef={costFromOverflow ? overflowRef : costRef} onClose={() => setCostOpen(false)} />
       )}

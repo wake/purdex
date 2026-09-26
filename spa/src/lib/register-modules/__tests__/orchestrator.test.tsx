@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render } from '@testing-library/react'
+import { act, render } from '@testing-library/react'
+import { useEffect } from 'react'
 import { registerBuiltinModules, resetFileOpenerRegistryForHmr } from '../index'
 import { getDefaultOpener, getRegisteredOpeners } from '../../file-opener-registry'
 import { getModule, getViewDefinition, resolvePaneRenderer } from '../../module-registry'
@@ -99,6 +100,68 @@ describe('registerBuiltinModules orchestrator', () => {
     expect(vi.mocked(ExecutionView)).toHaveBeenCalled()
     expect(vi.mocked(ExecutionView).mock.calls[0][0]).toEqual({
       hostId: 'h1', executionId: 'exc_1', isActive: true, tabId: tab.id, paneId: pane.id, from,
+      mode: 'room', onModeChange: expect.any(Function),
+    })
+  })
+
+  // R2 plan T1.1/T1.4: the view menu's choice is written to the pane content
+  // (so it persists and syncs with the tab, D1), read back as `mode`.
+  describe('the execution pane view mode', () => {
+    const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
+    function mountWrapper() {
+      useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+      vi.mocked(ExecutionView).mockClear()
+      const tab = createTab({ kind: 'execution', executionId: 'exc_1', host: 'h1', from })
+      useTabStore.getState().addTab(tab)
+      const pane = getPrimaryPane(tab.layout)
+      const resolution = resolvePaneRenderer('execution')
+      if (resolution.kind !== 'render') throw new Error('execution pane not registered')
+      const Component = resolution.component
+      const current = () => getPrimaryPane(useTabStore.getState().tabs[tab.id].layout)
+      const view = render(<Component pane={pane} isActive />)
+      const rerender = () => view.rerender(<Component pane={current()} isActive />)
+      const lastProps = () => vi.mocked(ExecutionView).mock.calls.at(-1)![0]
+      return { tab, pane, current, rerender, lastProps }
+    }
+
+    it('switching the view writes mode to the pane content', () => {
+      const { current, rerender, lastProps } = mountWrapper()
+      expect(lastProps().mode).toBe('room')
+      act(() => { lastProps().onModeChange('chat') })
+      expect(current().content).toMatchObject({ kind: 'execution', executionId: 'exc_1', mode: 'chat' })
+      rerender()
+      expect(lastProps().mode).toBe('chat')
+    })
+
+    it("switching keeps the pane's from", () => {
+      const { tab, pane, current, lastProps } = mountWrapper()
+      // A concurrent write (a host remap, a new `from`) lands after render:
+      // the switch reads the content at call time and must not undo it.
+      const from2 = { ...from, cachedName: 'renamed' }
+      useTabStore.getState().setPaneContent(tab.id, pane.id, { kind: 'execution', executionId: 'exc_1', host: 'h2', from: from2 })
+      act(() => { lastProps().onModeChange('chat') })
+      expect(current().content).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'h2', from: from2, mode: 'chat' })
+    })
+
+    it('does not write when the pane no longer shows that execution', () => {
+      const { tab, pane, current, lastProps } = mountWrapper()
+      useTabStore.getState().setPaneContent(tab.id, pane.id, { kind: 'execution', executionId: 'exc_2', host: 'h1' })
+      act(() => { lastProps().onModeChange('chat') })
+      expect(current().content).toEqual({ kind: 'execution', executionId: 'exc_2', host: 'h1' })
+    })
+
+    it('switching does not remount the view (the key ignores the mode)', () => {
+      const unmounts = vi.fn()
+      vi.mocked(ExecutionView).mockImplementation(function FakeView() { useEffect(() => unmounts, []); return <></> })
+      try {
+        const { rerender, lastProps } = mountWrapper()
+        act(() => { lastProps().onModeChange('chat') })
+        rerender()
+        expect(lastProps().mode).toBe('chat')
+        expect(unmounts).not.toHaveBeenCalled()
+      } finally {
+        vi.mocked(ExecutionView).mockImplementation(() => <></>)
+      }
     })
   })
 

@@ -1,7 +1,7 @@
 // spa/src/lib/nex/partial.test.ts — spec §4.1 T1–T8 (transient frames) and D1
 // (durable assistant frames finalize the partial through applyDurableEvent).
 import { describe, it, expect } from 'vitest'
-import { applyTransientFrame, finalizedFor, isPartialBlockVisible, partialHasVisibleContent, partialVersionOf, type PartialAssembly, type PartialBlock } from './partial'
+import { applyTransientFrame, finalizedFor, isPartialBlockVisible, partialHasVisibleContent, partialHasVisibleText, partialTextVersionOf, partialVersionOf, type PartialAssembly, type PartialBlock } from './partial'
 import { applyDurableEvent, defaultExecutionState, type ExecutionState } from './event-reducer'
 import type { NexEvent } from './types'
 import type { AssistantMessage } from './message-types'
@@ -389,6 +389,26 @@ describe('partialHasVisibleContent (spec §4.4 R3)', () => {
   })
 })
 
+describe('partialHasVisibleText (R2 chat dots rule)', () => {
+  const assembly = (blocks: PartialAssembly['blocks']): PartialAssembly => ({ messageId: 'm', finalized: 0, blocks })
+  const empty = { index: 0, type: 'text' as const, text: '', thinking: '', partialJson: '' }
+
+  it('partialHasVisibleText ignores thinking', () => {
+    expect(partialHasVisibleText(null)).toBe(false)
+    expect(partialHasVisibleText(assembly({}))).toBe(false)
+    // A streaming thought is visible content to the room, not to chat.
+    const thought = assembly({ 0: { ...empty, type: 'thinking', thinking: 'pondering' } })
+    expect(partialHasVisibleContent(thought)).toBe(true)
+    expect(partialHasVisibleText(thought)).toBe(false)
+    // Whitespace-only text draws no bubble, so the dots stay.
+    expect(partialHasVisibleText(assembly({ 0: { ...empty, text: ' \n ' } }))).toBe(false)
+    // Prose starts: the dots go off.
+    expect(partialHasVisibleText(assembly({ 0: { ...empty, type: 'thinking', thinking: 't' }, 1: { ...empty, index: 1, text: 'a' } }))).toBe(true)
+    // Chat draws nothing for a streaming tool_use in R2-A either.
+    expect(partialHasVisibleText(assembly({ 0: { ...empty, type: 'tool_use', toolName: 'Bash', partialJson: '{' } }))).toBe(false)
+  })
+})
+
 describe('partialVersionOf (spec §4.4 R4)', () => {
   const pb = (index: number, over: Partial<PartialBlock> & { type: PartialBlock['type'] }): PartialBlock =>
     ({ index, text: '', thinking: '', partialJson: '', ...over })
@@ -431,5 +451,33 @@ describe('partialVersionOf (spec §4.4 R4)', () => {
     const bash = assembly(pb(0, { type: 'tool_use', toolName: 'Bash' }))
     const read = assembly(pb(0, { type: 'tool_use', toolName: 'Read' }))
     expect(partialVersionOf(bash)).not.toBe(partialVersionOf(read))
+  })
+})
+
+// F10: chat draws only the text of a partial, so its auto-scroll key must not
+// move for what chat does not draw (a thought, a tool_use and its input).
+describe('partialTextVersionOf (chat auto-scroll key)', () => {
+  const pb = (index: number, over: Partial<PartialBlock> & { type: PartialBlock['type'] }): PartialBlock =>
+    ({ index, text: '', thinking: '', partialJson: '', ...over })
+  const assembly = (...blocks: PartialBlock[]): PartialAssembly =>
+    ({ messageId: 'm', finalized: 0, blocks: Object.fromEntries(blocks.map((b) => [b.index, b])) })
+
+  it('same value for null / undefined', () => {
+    expect(partialTextVersionOf(null)).toBe(partialTextVersionOf(undefined))
+  })
+
+  it('does not move while a thought streams, a tool_use appears or its input streams', () => {
+    const base = partialTextVersionOf(assembly(pb(0, { type: 'thinking', thinking: 'a' })))
+    expect(partialTextVersionOf(assembly(pb(0, { type: 'thinking', thinking: 'a much longer thought' })))).toBe(base)
+    expect(partialTextVersionOf(assembly(pb(0, { type: 'thinking', thinking: 'a' }), pb(1, { type: 'tool_use', toolName: 'Bash' })))).toBe(base)
+    expect(partialTextVersionOf(assembly(pb(0, { type: 'thinking', thinking: 'a' }), pb(1, { type: 'tool_use', toolName: 'Bash', partialJson: '{"c' })))).toBe(base)
+  })
+
+  it('moves when text grows, or a text block appears', () => {
+    const thought = assembly(pb(0, { type: 'thinking', thinking: 'a' }))
+    const he = assembly(pb(0, { type: 'thinking', thinking: 'a' }), pb(1, { type: 'text', text: 'he' }))
+    const hello = assembly(pb(0, { type: 'thinking', thinking: 'a' }), pb(1, { type: 'text', text: 'hello' }))
+    expect(partialTextVersionOf(he)).not.toBe(partialTextVersionOf(thought))
+    expect(partialTextVersionOf(hello)).not.toBe(partialTextVersionOf(he))
   })
 })
