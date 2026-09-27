@@ -1242,12 +1242,24 @@ describe('ExecutionView — quick replies (R3 T2.1)', () => {
   })
 
   it('does not clear what is typed in the input', async () => {
+    // PR #1493 R1 (P3): start from a draft an earlier failed typed send left
+    // behind. A quick reply that cleared it (the default `setDraft(null)`)
+    // would change WorkerInput's key and remount it over the new text; with
+    // a null draft to begin with, that mistake was invisible.
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'too long'))
     render(<ExecutionView {...base} isActive />)
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'half-typ' } })
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'first' } })
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+    await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('first'))
+    await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false))
+    const box = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'half-typ' } })
     fireEvent.click(reply('go on'))
     await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'go on'))
     await waitFor(() => expect(useExecutionStore.getState().executions[KEY].lastTurn?.turnId).toBe('t1'))
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('half-typ')
+    const after = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(after).toBe(box)
+    expect(after.value).toBe('half-typ')
   })
 
   it('a failed quick reply leaves the half-typed input alone and shows the error', async () => {
