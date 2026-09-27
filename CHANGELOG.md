@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.461] - 2026-09-27
+
+> ⚠️ **需要重新部署 daemon**（新增 host config 的 `quick_replies`）。舊版 daemon 仍可搭配新版 SPA：
+> 設定頁會顯示「daemon 太舊」，不能編輯。worker pane R3（快速回覆與搜尋）四支 PR 的第一支。
+
+### Feature：每台主機的快速回覆清單（#1483）
+
+- Hosts › 指令 多一個「快速回覆」分頁：新增、就地編輯、刪除、上下排序；每台主機各自一份，存在該主機的 daemon。
+- 還沒存過時先列出預設三個：`continue`、`run the tests`、`explain that`；第一次修改才會真的寫入。刪光就是不要快速回覆。
+- 每則最多 1000 bytes、每台最多 20 則；前後空白會去掉。
+- 輸入欄上方的快速回覆按鈕列在下一版（R3-B）才會出現。
+
 ## [1.0.0-alpha.460] - 2026-09-27
 
 > 純 SPA，不需要重新部署 daemon。
