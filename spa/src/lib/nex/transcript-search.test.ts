@@ -127,6 +127,13 @@ describe('buildSearchUnits / findMatches', () => {
     expect(find(units([said('ファイル 파일')], 'room'), '파')).toHaveLength(1)
   })
 
+  // A F8: Bopomofo, and the long-vowel mark (full and half width), are CJK too.
+  it('a single Bopomofo letter or long-vowel mark searches', () => {
+    expect(find(units([said('注音 ㄅㄆㄇ')], 'room'), 'ㄅ')).toHaveLength(1)
+    expect(find(units([said('コーヒー')], 'room'), 'ー')).toHaveLength(2)
+    expect(find(units([said('ｺｰﾋｰ')], 'room'), 'ｰ')).toHaveLength(2)
+  })
+
   it('a single Latin letter does not', () => {
     const messages = [said('a b c')]
     expect(find(units(messages, 'room'), 'a')).toEqual([])

@@ -250,7 +250,9 @@ export const SEARCH_MIN_CHARS = 2
 /** …unless it holds a CJK character: one Han character (`錯`, `檔`) already narrows a transcript. */
 export const SEARCH_MIN_CHARS_CJK = 1
 
-const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
+// Bopomofo (注音) is Taiwan's; the long-vowel mark ー (U+30FC) and its half
+// width ｰ (U+FF70) are Script=Common, so they are named on their own (A F8).
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}ーｰ]/u
 
 /**
  * The query as it is searched: NFC, trimmed. null when that leaves nothing,
