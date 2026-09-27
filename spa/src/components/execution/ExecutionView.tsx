@@ -11,7 +11,7 @@
 // (`mode`, from the pane content). Chat has no dock and chat's header (see
 // ExecutionHeader); switching is local — the subscription, the store and the
 // lease are untouched, so nothing is refetched.
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import RoomTranscript from '../room/RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
 import { ChatUserBubble } from '../chat/ChatBubble'
@@ -20,6 +20,8 @@ import RoomUserLine from '../room/RoomUserLine'
 import WorkerDock from '../room/WorkerDock'
 import WorkerInput from '../room/WorkerInput'
 import QuickReplyDock from '../room/QuickReplyDock'
+import TranscriptSearch from '../room/TranscriptSearch'
+import { isFindShortcut } from '../../lib/find-shortcut'
 import { useQuickReplies } from '../../lib/quick-replies'
 import ExecutionHeader from './ExecutionHeader'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -133,6 +135,49 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const foldStore = useFoldMemory()
   const quickReplies = useQuickReplies(hostId)
 
+  // R3 T3.3: the search bar. Open state lives here; the bar is the
+  // transcript's (TranscriptSearch). `focusRequest` refocuses its input on a
+  // repeated Mod+F; `restoreFocus` is where Escape sends focus back to.
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [focusRequest, setFocusRequest] = useState(0)
+  const restoreFocus = useRef<HTMLElement | null>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false)
+    const el = restoreFocus.current
+    restoreFocus.current = null
+    if (el?.isConnected) el.focus()
+  }, [])
+  // No focusable pane root (plan review #4): a click-to-focus root would
+  // fight the input's auto-focus, the header's refocus and every fold button.
+  // Instead, while this pane is active, Mod+F anywhere in it — or with
+  // nothing focused (the body) — opens the bar and keeps the browser's own
+  // find (the web build) from opening. A target anywhere else (another pane,
+  // a dialog, Monaco) keeps its own Mod+F. Electron registers no Cmd+F
+  // accelerator (electron/keybindings.ts), so the renderer gets the key.
+  useEffect(() => {
+    if (!isActive) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!isFindShortcut(e)) return
+      const root = rootRef.current
+      const target = e.target
+      if (!root || !(target === document.body || (target instanceof Node && root.contains(target)))) return
+      // Nothing to search until the history is in.
+      if (!useExecutionStore.getState().executions[key]?.historyLoaded) return
+      e.preventDefault()
+      const active = document.activeElement
+      // The first open remembers where focus was; a repeat only refocuses.
+      if (!restoreFocus.current && active instanceof HTMLElement && active !== document.body && !active.closest('[data-testid="transcript-search"]')) {
+        restoreFocus.current = active
+      }
+      setSearchOpen(true)
+      setFocusRequest((n) => n + 1)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [isActive, key])
+
   if (problem) {
     const text = problem === 'not_found' ? t('execution.not_found')
       : problem === 'host_removed' ? t('execution.host_removed')
@@ -185,10 +230,13 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     messages: st.messages, turnStarts: st.turnStarts, keyPrefix: executionId, showThinking,
     showEmptyHint: st.messages.length === 0 && !st.pendingLocal, emptyText: t('execution.empty'), scrollKey: st.pendingLocal ? 1 : 0,
     partial: st.partial, tools: st.tools, now,
+    // R3 T3.3: the search bar marks and scrolls inside the transcript, and
+    // while it is open a new line never pulls the reader off a match (A4).
+    scrollRef, holdScroll: searchOpen,
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div ref={rootRef} className="flex flex-col h-full">
       <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
         onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal || takeBackBusy}
         onTakeBack={from || canTakeToTerminal ? onTakeBack : undefined} takeBackBusy={takeBackBusy || writeInFlight}
@@ -209,6 +257,11 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
         </div>
       ) : (
         <FoldContext.Provider value={foldStore}>
+          {searchOpen && (
+            <TranscriptSearch owner={paneId} scrollRef={scrollRef} messages={st.messages} tools={st.tools}
+              view={chat ? 'chat' : 'room'} keyPrefix={executionId} turnStarts={st.turnStarts}
+              onClose={closeSearch} focusRequest={focusRequest} />
+          )}
           {chat ? (
             <ChatTranscript {...transcriptProps}>
               {/* The optimistic line: your bubble like any other, dimmed until message_accepted (F8). */}

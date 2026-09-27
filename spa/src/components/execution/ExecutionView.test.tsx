@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useEffect, useState } from 'react'
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
@@ -1275,5 +1275,137 @@ describe('ExecutionView — quick replies (R3 T2.1)', () => {
     expect(after.value).toBe('half-typ')
     expect(after.disabled).toBe(false)
     expect(useExecutionStore.getState().executions[KEY].pendingLocal).toBeNull()
+  })
+})
+
+// R3 T3.3: Mod+F opens the pane's search bar. jsdom is not a Mac, so Mod is Ctrl.
+describe('ExecutionView — search (R3 T3.3)', () => {
+  const said = (text: string) =>
+    ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }) as Exec['messages'][number]
+  const modF = (target: Element) => fireEvent.keyDown(target, { key: 'f', ctrlKey: true })
+  const bar = () => screen.queryByTestId('transcript-search')
+
+  class FakeHighlight {
+    ranges: Range[] = []
+    add(range: Range) { this.ranges.push(range); return this }
+  }
+  const g = globalThis as unknown as { CSS?: unknown; Highlight?: unknown }
+  let highlights: Map<string, FakeHighlight>
+  let saved: [unknown, unknown]
+  beforeEach(() => {
+    saved = [g.CSS, g.Highlight]
+    highlights = new Map()
+    g.CSS = { highlights }
+    g.Highlight = FakeHighlight
+    patchExec({ messages: [said('find the needle'), said('and another needle')], turnStarts: [0] })
+  })
+  afterEach(() => {
+    ;[g.CSS, g.Highlight] = saved
+    delete (Element.prototype as { scrollTo?: unknown }).scrollTo
+  })
+
+  it('Mod+F opens the bar and focuses the input', () => {
+    render(<ExecutionView {...base} isActive />)
+    expect(bar()).toBeNull()
+    // Not cancelled = the browser's own find would open (the web build).
+    expect(modF(document.body)).toBe(false)
+    expect(bar()).toBeInTheDocument()
+    expect(screen.getByTestId('transcript-search-input')).toHaveFocus()
+  })
+
+  it('shows the match count', () => {
+    render(<ExecutionView {...base} isActive />)
+    modF(document.body)
+    fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'needle' } })
+    expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('1 / 2')
+    expect(highlights.get('search-current')?.ranges.map(String)).toEqual(['needle'])
+  })
+
+  it('a target inside the pane opens it', () => {
+    render(<ExecutionView {...base} isActive />)
+    const box = screen.getByRole('textbox')
+    expect(modF(box)).toBe(false)
+    expect(bar()).toBeInTheDocument()
+  })
+
+  it('an inactive pane ignores it', () => {
+    render(<ExecutionView {...base} isActive={false} />)
+    expect(modF(document.body)).toBe(true)
+    expect(bar()).toBeNull()
+  })
+
+  it('a target inside another pane ignores it', () => {
+    render(<ExecutionView {...base} isActive />)
+    const other = document.createElement('textarea')
+    document.body.appendChild(other)
+    // Another pane, a dialog, Monaco: its own Mod+F, not prevented.
+    expect(modF(other)).toBe(true)
+    expect(bar()).toBeNull()
+    other.remove()
+  })
+
+  it('the other modifier, or Mod+Shift+F, does not open it', () => {
+    render(<ExecutionView {...base} isActive />)
+    fireEvent.keyDown(document.body, { key: 'f', metaKey: true })
+    fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true, shiftKey: true })
+    fireEvent.keyDown(document.body, { key: 'g', ctrlKey: true })
+    expect(bar()).toBeNull()
+  })
+
+  it('escape closes and clears; focus returns to where it was', () => {
+    render(<ExecutionView {...base} isActive />)
+    const box = screen.getByRole('textbox')
+    box.focus()
+    modF(box)
+    const input = screen.getByTestId('transcript-search-input')
+    expect(input).toHaveFocus()
+    fireEvent.change(input, { target: { value: 'needle' } })
+    expect(highlights.has('search-current')).toBe(true)
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(bar()).toBeNull()
+    expect(highlights.has('search-current')).toBe(false)
+    expect(highlights.has('search-match')).toBe(false)
+    expect(box).toHaveFocus()
+  })
+
+  it('unmounting the pane clears its marks', () => {
+    const { unmount } = render(<ExecutionView {...base} isActive />)
+    modF(document.body)
+    fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'needle' } })
+    expect(highlights.has('search-current')).toBe(true)
+    unmount()
+    expect(highlights.has('search-current')).toBe(false)
+  })
+
+  it('opens in chat too', () => {
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    modF(document.body)
+    fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'needle' } })
+    expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('1 / 2')
+  })
+
+  it('holds the bottom-follow only while the bar is open', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    render(<ExecutionView {...base} isActive />)
+    const scroller = document.querySelector('.overflow-y-auto') as HTMLElement
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 })
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, writable: true, value: 800 })
+    fireEvent.scroll(scroller)
+    // The reader scrolls up to read.
+    scroller.scrollTop = 100
+    fireEvent.scroll(scroller)
+    const land = (text: string) => act(() => {
+      const s = useExecutionStore.getState().executions[KEY]
+      patchExec({ messages: [...s.messages, said(text)] })
+    })
+    modF(document.body)
+    scrollTo.mockClear()
+    land('while open')
+    expect(scrollTo).not.toHaveBeenCalled()
+    fireEvent.keyDown(screen.getByTestId('transcript-search-input'), { key: 'Escape' })
+    land('after closing')
+    expect(scrollTo).toHaveBeenCalledTimes(1)
   })
 })
