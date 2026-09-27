@@ -229,3 +229,44 @@ describe('runningTasks', () => {
     expect(runningTasks({})).toEqual([])
   })
 })
+
+describe('prototype-named task ids (A3)', () => {
+  const ids = ['__proto__', 'constructor', 'toString']
+
+  it('applyTaskEvent treats them as ordinary own rows', () => {
+    for (const id of ids) {
+      let t: TaskTable = {}
+      t = applyTaskEvent(t, 'task_start', start({ task_id: id }), 3)
+      expect(Object.hasOwn(t, id)).toBe(true)
+      expect(Object.getPrototypeOf(t)).toBe(Object.prototype)
+      expect(t[id]).toMatchObject({ task_id: id, status: 'running', startSeq: 3 })
+      expect(runningTasks(t).map((r) => r.task_id)).toEqual([id])
+      t = applyTaskEvent(t, 'task_end', end({ task_id: id }), 4)
+      expect(t[id]).toMatchObject({ status: 'completed', description: 'Run sleep 8', startSeq: 3 })
+      expect(runningTasks(t)).toEqual([])
+    }
+  })
+
+  it('a task_end for a prototype-named id with no start does not read inherited props', () => {
+    const t = applyTaskEvent({}, 'task_end', end({ task_id: 'constructor' }), 4)
+    expect(Object.hasOwn(t, 'constructor')).toBe(true)
+    expect(t.constructor).toMatchObject({ task_id: 'constructor', status: 'completed', startSeq: 4 })
+  })
+
+  it('applyTaskSnapshot creates own rows and keeps the table an ordinary object', () => {
+    const items = ids.map((id, i) => parseTask(start({ task_id: id, started_at: 100 - i }), 0)!)
+    const t = applyTaskSnapshot({}, items, 20)
+    expect(Object.getPrototypeOf(t)).toBe(Object.prototype)
+    for (const id of ids) {
+      expect(Object.hasOwn(t, id)).toBe(true)
+      expect(t[id]).toMatchObject({ task_id: id, status: 'running', startSeq: 20 })
+    }
+    expect(runningTasks(t).map((r) => r.task_id)).toEqual(['toString', 'constructor', '__proto__'])
+    // A closed prototype-named row stays closed through a later snapshot.
+    const closed = applyTaskEvent(t, 'task_end', end({ task_id: '__proto__' }), 30)
+    const again = applyTaskSnapshot(closed, [parseTask(start({ task_id: '__proto__' }), 0)!], 25)
+    expect(Object.hasOwn(again, '__proto__')).toBe(true)
+    expect(again['__proto__']).toMatchObject({ status: 'completed' })
+    expect(Object.getPrototypeOf(again)).toBe(Object.prototype)
+  })
+})

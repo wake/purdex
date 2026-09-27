@@ -16,6 +16,19 @@ import type { TaskKind, TaskStatus, TaskUsage, WorkerTask } from './types'
 
 export type TaskTable = Record<string, WorkerTask>
 
+// task_id is wire data: "__proto__" / "constructor" / "toString" must be
+// ordinary rows. Reads only see own keys; writes define an own data
+// property (a plain `t[id] = row` with "__proto__" would set the prototype).
+const rowOf = (table: TaskTable, id: string): WorkerTask | undefined => (Object.hasOwn(table, id) ? table[id] : undefined)
+function setRow(table: TaskTable, id: string, row: WorkerTask): void {
+  Object.defineProperty(table, id, { value: row, writable: true, enumerable: true, configurable: true })
+}
+function withRow(table: TaskTable, id: string, row: WorkerTask): TaskTable {
+  const next = { ...table }
+  setRow(next, id, row)
+  return next
+}
+
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 /** Non-empty string or null — the wire's "key always present, null when unknown" fields. */
@@ -102,18 +115,18 @@ export function applyTaskEvent(table: TaskTable, kind: string, payload: unknown,
   if (kind !== 'task_start' && kind !== 'task_end') return table
   const parsed = parseTask(payload, seq)
   if (!parsed) return table
-  const prev = table[parsed.task_id]
+  const prev = rowOf(table, parsed.task_id)
   if (kind === 'task_start') {
     if (prev && prev.status !== 'running') return table
     const row: WorkerTask = { ...parsed, status: 'running', provider_status: null, closed_by: null, ended_at: null, startSeq: prev ? prev.startSeq : seq }
     delete row.summary
     delete row.usage
-    return { ...table, [row.task_id]: row }
+    return withRow(table, row.task_id, row)
   }
   // An end that says running is not an end the contract can produce; it
   // still closes the row, fail-closed.
   const end = parsed.status === 'running' ? { ...parsed, status: 'failed' as const } : parsed
-  return { ...table, [end.task_id]: withStartFacts(end, prev) }
+  return withRow(table, end.task_id, withStartFacts(end, prev))
 }
 
 /**
@@ -133,12 +146,12 @@ export function applyTaskSnapshot(table: TaskTable, items: WorkerTask[], cursor:
   const inSnapshot = new Set<string>()
   for (const item of items) inSnapshot.add(item.task_id)
   for (const [id, row] of Object.entries(table)) {
-    if (row.status !== 'running' || inSnapshot.has(id) || row.startSeq > cursor) next[id] = row
+    if (row.status !== 'running' || inSnapshot.has(id) || row.startSeq > cursor) setRow(next, id, row)
   }
   for (const item of items) {
-    const prev = table[item.task_id]
+    const prev = rowOf(table, item.task_id)
     if (prev && prev.status !== 'running') continue
-    next[item.task_id] = { ...item, startSeq: prev ? prev.startSeq : cursor }
+    setRow(next, item.task_id, { ...item, startSeq: prev ? prev.startSeq : cursor })
   }
   return next
 }
