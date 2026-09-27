@@ -221,15 +221,22 @@ function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unkno
 }
 
 export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionState {
-  if (!Number.isFinite(ev.seq) || ev.seq <= s.lastSeq) return s
+  if (!Number.isFinite(ev.seq)) return s
   const p = ev.payload ?? {}
 
   // Task kinds only touch `tasks`. Handled before applyTurnRules: a shell
   // started inside a subagent carries a non-null parent_tool_use_id, and
   // the subagent branch there would swallow it.
+  // They also bypass the seq guard: nexen's live SSE can deliver a
+  // regressing seq (commit→publish is not globally serialised, consumer-guide
+  // #83), and dropping a late task_end would leave the row running forever.
+  // Safe because task events are idempotent per task_id and closure is final.
   if (isTaskEventKind(ev.kind)) {
-    return { ...s, lastSeq: ev.seq, tasks: applyTaskEvent(s.tasks, ev.kind, p, ev.seq) }
+    const tasks = applyTaskEvent(s.tasks, ev.kind, p, ev.seq)
+    const lastSeq = Math.max(s.lastSeq, ev.seq)
+    return tasks === s.tasks && lastSeq === s.lastSeq ? s : { ...s, lastSeq, tasks }
   }
+  if (ev.seq <= s.lastSeq) return s
 
   let next: ExecutionState = applyTurnRules({ ...s, lastSeq: ev.seq }, ev, p)
 

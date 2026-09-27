@@ -546,6 +546,28 @@ describe('task events (nexen v0.13 task_start / task_end)', () => {
     expect(next.messages).toBe(s.messages)
   })
 
+  it('out-of-order live task_end (#83 regressing seq) still closes the row and does not lower lastSeq', () => {
+    let s = applyDurableEvent(defaultExecutionState(), ev(2, 'task_start', start('t1')))
+    s = applyDurableEvent(s, ev(10, 'assistant', { type: 'assistant' }))
+    s = applyDurableEvent(s, ev(7, 'task_end', end('t1')))
+    expect(s.tasks.t1.status).toBe('completed')
+    expect(s.lastSeq).toBe(10)
+  })
+
+  it('a task_start replayed with a lower seq after close does not reopen', () => {
+    let s = applyDurableEvent(defaultExecutionState(), ev(5, 'task_start', start('t1')))
+    s = applyDurableEvent(s, ev(9, 'task_end', end('t1')))
+    s = applyDurableEvent(s, ev(5, 'task_start', start('t1')))
+    expect(s.tasks.t1.status).toBe('completed')
+    expect(s.lastSeq).toBe(9)
+  })
+
+  it('a non-task event with a low seq is still dropped', () => {
+    const s = applyDurableEvent(defaultExecutionState(), ev(10, 'task_start', start('t1')))
+    const next = applyDurableEvent(s, ev(4, 'assistant', { type: 'assistant' }))
+    expect(next).toBe(s)
+  })
+
   it('defaultExecutionState has an empty task table', () => {
     expect(defaultExecutionState().tasks).toEqual({})
   })
