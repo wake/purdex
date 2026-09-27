@@ -1755,5 +1755,12 @@
   "room.dock.you": "you",
   "room.dock.sse": "stream",
   "room.dock.expand": "Expand worker status",
-  "room.dock.collapse": "Collapse worker status"
+  "room.dock.collapse": "Collapse worker status",
+  "room.search.placeholder": "Search this conversation",
+  "room.search.count": "{{current}} / {{total}}",
+  "room.search.count_more": "{{current}} / {{total}}+",
+  "room.search.none": "No results",
+  "room.search.next": "Next match",
+  "room.search.prev": "Previous match",
+  "room.search.close": "Close search"
 }

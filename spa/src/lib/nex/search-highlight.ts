@@ -188,7 +188,9 @@ function markWindow(total: number, current: number): [number, number] {
  * replaces a text node (new content, a fold toggling, a streaming message
  * growing) its Ranges collapse and the mark silently disappears, so the
  * caller must call this again after every commit that can touch the marked
- * units — the search bar (R3-C2) owns that.
+ * units — the search bar (R3-C2) owns that. Such a re-mark passes
+ * `{ scroll: false }`: only moving to a match scrolls, or every new message
+ * would drag the reader back to it.
  */
 export function highlightSearch(
   owner: string,
@@ -196,6 +198,7 @@ export function highlightSearch(
   query: string,
   matches: readonly SearchMatch[],
   current: number,
+  { scroll = true }: { scroll?: boolean } = {},
 ): void {
   const pattern = searchPattern(query)
   if (!pattern) {
@@ -255,7 +258,7 @@ export function highlightSearch(
   owners.set(owner, { matches: others, current: currentRange })
   publish()
 
-  if (currentEl) {
+  if (scroll && currentEl) {
     if (currentRange) scrollRangeIntoView(currentRange, container, currentEl)
     else (currentEl as Element).scrollIntoView?.({ block: 'center' })
   }

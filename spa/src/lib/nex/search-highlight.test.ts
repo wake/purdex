@@ -109,6 +109,29 @@ describe('highlightSearch', () => {
     expect(scroller.scrollTop).toBe(500 - (300 - 10) / 2)
   })
 
+  // R3-C2: the search bar re-marks after every commit (A8) and must not drag
+  // the reader back to the match each time — it scrolls only when moving.
+  it('marks the current match without scrolling when told not to', () => {
+    installApi()
+    const root = dom('<div><pre data-search-unit="a">top\nneedle</pre></div>')
+    const scroller = root.firstElementChild as HTMLElement
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 2000 })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 300 })
+    scroller.getBoundingClientRect = () => ({ top: 0, bottom: 300, height: 300 } as DOMRect)
+    const intoView = vi.fn()
+    Element.prototype.scrollIntoView = intoView
+    Range.prototype.getBoundingClientRect = () => ({ top: 500, bottom: 510, height: 10 } as DOMRect)
+    try {
+      highlightSearch('p1', scroller, 'needle', [m('a', 4, 10)], 0, { scroll: false })
+    } finally {
+      delete (Range.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+    expect(texts('search-current')).toEqual(['needle'])
+    expect(scroller.scrollTop).toBe(0)
+    expect(intoView).not.toHaveBeenCalled()
+  })
+
   it('scrolls a horizontally scrolling box to the current match too', () => {
     // Finding A6: prose code fences are overflow-x:auto; a match far along a
     // long line was scrolled to vertically and stayed out of sight.

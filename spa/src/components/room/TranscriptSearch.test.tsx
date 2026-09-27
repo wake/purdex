@@ -1,0 +1,268 @@
+// spa/src/components/room/TranscriptSearch.test.tsx — the search bar over a
+// real transcript (R3 plan T3.3; A4/A5/A8/A11 from the R3-C1 review). jsdom
+// has no CSS Custom Highlight API, so it is stubbed to observe the marks.
+import { useRef } from 'react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, act } from '@testing-library/react'
+import TranscriptSearch from './TranscriptSearch'
+import RoomTranscript from './RoomTranscript'
+import ChatTranscript from '../chat/ChatTranscript'
+import { FoldContext, useFoldMemory } from './fold-context'
+import { clearSearchHighlights } from '../../lib/nex/search-highlight'
+import type { ContentBlock, StreamMessage } from '../../lib/nex/message-types'
+import type { PartialAssembly } from '../../lib/nex/partial'
+import type { ToolActivity } from '../../lib/nex/tool-activity'
+
+const asst = (...blocks: ContentBlock[]): StreamMessage =>
+  ({ type: 'assistant', message: { id: 'm', role: 'assistant', content: blocks, stop_reason: null } } as StreamMessage)
+const usr = (...blocks: ContentBlock[]): StreamMessage =>
+  ({ type: 'user', message: { role: 'user', content: blocks, stop_reason: null } } as StreamMessage)
+const said = (text: string): StreamMessage => usr({ type: 'text', text })
+const prose = (text: string): StreamMessage => asst({ type: 'text', text })
+const call = (id: string, command: string): ContentBlock => ({ type: 'tool_use', id, name: 'Bash', input: { command } })
+const res = (id: string, content: string): ContentBlock => ({ type: 'tool_result', tool_use_id: id, content, is_error: false })
+const ran = (command: string): ToolActivity =>
+  ({ name: 'Bash', startedAt: 0, endedAt: 1, status: 'done', primaryArg: { key: 'command', value: command } })
+const textPartial = (text: string): PartialAssembly =>
+  ({ messageId: 'mp', finalized: 0, blocks: { 0: { index: 0, type: 'text', text, thinking: '', partialJson: '' } } })
+
+class FakeHighlight {
+  ranges: Range[] = []
+  add(range: Range) {
+    this.ranges.push(range)
+    return this
+  }
+}
+const g = globalThis as unknown as { CSS?: unknown; Highlight?: unknown }
+let highlights: Map<string, FakeHighlight>
+let saved: [unknown, unknown]
+
+beforeEach(() => {
+  saved = [g.CSS, g.Highlight]
+  highlights = new Map()
+  g.CSS = { highlights }
+  g.Highlight = FakeHighlight
+})
+afterEach(() => {
+  clearSearchHighlights('p1')
+  ;[g.CSS, g.Highlight] = saved
+  delete (Element.prototype as { scrollTo?: unknown }).scrollTo
+  delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+  vi.restoreAllMocks()
+})
+
+const current = () => highlights.get('search-current')?.ranges ?? []
+const marked = () => highlights.get('search-match')?.ranges ?? []
+/** The unit the current mark sits in. */
+const currentUnit = () => current()[0]?.startContainer.parentElement?.closest('[data-search-unit]')?.getAttribute('data-search-unit')
+
+interface HarnessProps {
+  messages: StreamMessage[]
+  view?: 'room' | 'chat'
+  tools?: Record<string, ToolActivity>
+  turnStarts?: number[]
+  partial?: PartialAssembly | null
+  onClose?: () => void
+}
+
+/** The pane as ExecutionView composes it: one fold memory, the bar above the transcript, one scroll box. */
+function Harness({ messages, view = 'room', tools, turnStarts = [0], partial = null, onClose = () => {} }: HarnessProps) {
+  const fold = useFoldMemory()
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const Transcript = view === 'chat' ? ChatTranscript : RoomTranscript
+  return (
+    <FoldContext.Provider value={fold}>
+      <TranscriptSearch owner="p1" scrollRef={scrollRef} messages={messages} tools={tools} view={view}
+        keyPrefix="k" turnStarts={turnStarts} onClose={onClose} />
+      <Transcript messages={messages} keyPrefix="k" showThinking={false} showEmptyHint={false}
+        turnStarts={turnStarts} tools={tools} partial={partial} scrollRef={scrollRef} holdScroll />
+    </FoldContext.Provider>
+  )
+}
+
+const input = () => screen.getByTestId('transcript-search-input')
+const count = () => screen.getByTestId('transcript-search-count')
+const type = (value: string) => fireEvent.change(input(), { target: { value } })
+const next = () => fireEvent.keyDown(input(), { key: 'Enter' })
+const prev = () => fireEvent.keyDown(input(), { key: 'Enter', shiftKey: true })
+
+describe('TranscriptSearch', () => {
+  it('focuses its input when it opens', () => {
+    render(<Harness messages={[said('hello')]} />)
+    expect(input()).toHaveFocus()
+  })
+
+  it('shows the match count', () => {
+    render(<Harness messages={[said('one needle'), prose('two needle, three needle')]} />)
+    expect(screen.queryByTestId('transcript-search-count')).toBeNull()
+    type('needle')
+    expect(count()).toHaveTextContent('1 / 3')
+    next()
+    expect(count()).toHaveTextContent('2 / 3')
+    type('nothing like it')
+    expect(count()).toHaveTextContent('No results')
+    // Too short to search: no count at all.
+    type('n')
+    expect(screen.queryByTestId('transcript-search-count')).toBeNull()
+  })
+
+  it('shows 10000+ past the limit', () => {
+    render(<Harness messages={[said('ab '.repeat(10_001))]} />)
+    type('ab')
+    expect(count()).toHaveTextContent('1 / 10000+')
+  })
+
+  it('marks every match and the current one', () => {
+    render(<Harness messages={[said('one needle'), said('two needle')]} />)
+    type('needle')
+    expect(current().map(String)).toEqual(['needle'])
+    expect(currentUnit()).toBe('0:0:text')
+    expect(marked().map(String)).toEqual(['needle'])
+  })
+
+  it('next expands a folded output that holds the match', () => {
+    const body = Array.from({ length: 100 }, (_, i) => (i === 90 ? 'the needle line' : `line ${i}`)).join('\n')
+    const messages = [said('go'), asst(call('t1', 'ls')), usr(res('t1', body)), said('a needle after')]
+    render(<Harness messages={messages} tools={{ t1: ran('ls') }} />)
+    expect(screen.getByTestId('fold-more')).toBeInTheDocument()
+    type('needle')
+    // The first match is the folded output's: reaching it opens the fold.
+    expect(count()).toHaveTextContent('1 / 2')
+    expect(screen.queryByTestId('fold-more')).toBeNull()
+    expect(currentUnit()).toBe('1:0:output')
+    next()
+    expect(currentUnit()).toBe('3:0:text')
+  })
+
+  it('wraps from the last match to the first', () => {
+    render(<Harness messages={[said('xx one'), said('xx two'), said('xx three')]} />)
+    type('xx')
+    next()
+    next()
+    expect(count()).toHaveTextContent('3 / 3')
+    next()
+    expect(count()).toHaveTextContent('1 / 3')
+    expect(currentUnit()).toBe('0:0:text')
+    prev()
+    expect(count()).toHaveTextContent('3 / 3')
+    fireEvent.click(screen.getByTestId('transcript-search-prev'))
+    expect(count()).toHaveTextContent('2 / 3')
+    fireEvent.click(screen.getByTestId('transcript-search-next'))
+    expect(count()).toHaveTextContent('3 / 3')
+  })
+
+  it('does not move while an IME is composing', () => {
+    render(<Harness messages={[said('錯 一'), said('錯 二')]} />)
+    type('錯')
+    fireEvent.keyDown(input(), { key: 'Enter', isComposing: true })
+    expect(count()).toHaveTextContent('1 / 2')
+  })
+
+  it('escape closes and clears', () => {
+    const onClose = vi.fn()
+    const { unmount } = render(<Harness messages={[said('one needle')]} onClose={onClose} />)
+    type('needle')
+    expect(current()).toHaveLength(1)
+    fireEvent.keyDown(input(), { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByTestId('transcript-search-close'))
+    expect(onClose).toHaveBeenCalledTimes(2)
+    // The parent closes it by unmounting: the marks go with it.
+    unmount()
+    expect(highlights.has('search-current')).toBe(false)
+    expect(highlights.has('search-match')).toBe(false)
+  })
+
+  it('works in chat and reveals through the tools line', () => {
+    const messages = [said('go'), asst(call('a', 'grep needle')), usr(res('a', 'ok')), prose('done')]
+    render(<Harness messages={messages} view="chat" tools={{ a: ran('grep needle') }} />)
+    expect(screen.queryByTestId('chat-tools-ops')).toBeNull()
+    type('needle')
+    expect(count()).toHaveTextContent('1 / 1')
+    expect(screen.getByTestId('chat-tools-ops')).toBeInTheDocument()
+    expect(currentUnit()).toBe('1:0:arg')
+  })
+
+  it('a new message keeps the current match', () => {
+    // Chat draws a turn's tools where its first one sits, so a new tool call
+    // lands *before* the prose that is current: its list index moves, it does not.
+    const tools = { a: ran('xx a'), b: ran('xx b') }
+    const first = [said('go'), asst(call('a', 'xx a')), usr(res('a', 'ok')), prose('xx between')]
+    const { rerender } = render(<Harness messages={first} view="chat" tools={tools} />)
+    type('xx')
+    next()
+    expect(count()).toHaveTextContent('2 / 2')
+    expect(currentUnit()).toBe('3:0:text')
+    rerender(<Harness messages={[...first, asst(call('b', 'xx b')), usr(res('b', 'ok'))]} view="chat" tools={tools} />)
+    expect(count()).toHaveTextContent('3 / 3')
+    expect(currentUnit()).toBe('3:0:text')
+  })
+
+  it('the current match survives the stream ending', () => {
+    const messages = [said('needle one'), prose('needle two')]
+    const { rerender } = render(<Harness messages={messages} partial={null} />)
+    type('needle')
+    next()
+    expect(count()).toHaveTextContent('2 / 2')
+    // A streaming reply is not indexed…
+    rerender(<Harness messages={messages} partial={textPartial('needle thr')} />)
+    expect(count()).toHaveTextContent('2 / 2')
+    // …until it lands.
+    rerender(<Harness messages={[...messages, prose('needle three')]} partial={null} />)
+    expect(count()).toHaveTextContent('2 / 3')
+    expect(currentUnit()).toBe('1:0:text')
+    expect(current()[0].collapsed).toBe(false)
+  })
+
+  it('a mark survives a new message', () => {
+    const { rerender } = render(<Harness messages={[said('first needle')]} />)
+    type('needle')
+    const before = current()[0]
+    expect(before.collapsed).toBe(false)
+    // The marked line is redrawn (its text node replaced) as a message lands.
+    rerender(<Harness messages={[said('the first needle'), said('more')]} />)
+    expect(before.collapsed).toBe(true)
+    expect(current()[0].collapsed).toBe(false)
+    expect(current().map(String)).toEqual(['needle'])
+  })
+
+  it('re-marking after a new message does not drag the reader back to the match', () => {
+    const intoView = vi.fn()
+    Element.prototype.scrollIntoView = intoView
+    const { rerender } = render(<Harness messages={[said('the needle')]} />)
+    type('needle')
+    expect(intoView).toHaveBeenCalledTimes(1)
+    rerender(<Harness messages={[said('the needle'), said('a new line')]} />)
+    expect(current()).toHaveLength(1)
+    expect(intoView).toHaveBeenCalledTimes(1)
+    next()
+    expect(intoView).toHaveBeenCalledTimes(2)
+  })
+
+  it('a streaming message does not scroll away from the current match', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    const messages = [said('the needle'), ...Array.from({ length: 5 }, (_, i) => said(`filler ${i}`))]
+    const { rerender } = render(<Harness messages={messages} />)
+    const box = document.querySelector('.overflow-y-auto') as HTMLElement
+    const geometry = (scrollHeight: number, scrollTop: number) => {
+      Object.defineProperty(box, 'scrollHeight', { configurable: true, value: scrollHeight })
+      Object.defineProperty(box, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(box, 'scrollTop', { configurable: true, writable: true, value: scrollTop })
+    }
+    // The reader is at the bottom…
+    geometry(1000, 800)
+    fireEvent.scroll(box)
+    // …and jumps to the match near the top (jsdom has no layout: the jump is stubbed).
+    Element.prototype.scrollIntoView = vi.fn(() => { box.scrollTop = 50 })
+    type('needle')
+    expect(box.scrollTop).toBe(50)
+    scrollTo.mockClear()
+    act(() => {
+      rerender(<Harness messages={messages} partial={textPartial('streaming…')} />)
+    })
+    rerender(<Harness messages={messages} partial={textPartial('streaming… more')} />)
+    expect(scrollTo).not.toHaveBeenCalled()
+    expect(box.scrollTop).toBe(50)
+  })
+})

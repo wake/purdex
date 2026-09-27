@@ -1,6 +1,9 @@
 // spa/src/lib/nex/transcript-search.test.ts — the search index (R3 plan T3.1).
 import { describe, it, expect } from 'vitest'
-import { buildSearchUnits, findMatches, SEARCH_MATCH_LIMIT, searchUnitId, type SearchUnit, type SearchUnitOptions } from './transcript-search'
+import {
+  buildSearchUnits, findCurrent, findMatches, matchIdentity, SEARCH_MATCH_LIMIT, searchUnitId,
+  type SearchUnit, type SearchUnitOptions,
+} from './transcript-search'
 import { indexOperations } from './operations'
 import type { ContentBlock, StreamMessage } from './message-types'
 import type { ToolActivity } from './tool-activity'
@@ -221,5 +224,43 @@ describe('buildSearchUnits / findMatches', () => {
     const many: SearchUnit[] = [{ id: 'm', text: 'ab'.repeat(10_001), reveal: [] }]
     expect(findMatches(many, 'ab')).toMatchObject({ truncated: true })
     expect(findMatches(many, 'ab').matches).toHaveLength(10_000)
+  })
+})
+
+// A5: the current match is remembered as (unit, ordinal within the unit), not
+// as a position in the list, which shifts whenever a match lands before it.
+describe('matchIdentity / findCurrent', () => {
+  const U = (id: string, text: string): SearchUnit => ({ id, text, reveal: [] })
+
+  it('keeps the current match by identity when others land before it', () => {
+    const before = [U('a', 'ab'), U('c', 'ab ab')]
+    const { matches: m1 } = findMatches(before, 'ab')
+    const id = matchIdentity(before, m1, 2) // the second `ab` of c
+    expect(id).toEqual({ unitId: 'c', ordinal: 1, unitPos: 1 })
+    const after = [U('a', 'ab'), U('b', 'ab ab'), U('c', 'ab ab')]
+    const { matches: m2 } = findMatches(after, 'ab')
+    expect(findCurrent(after, m2, id)).toBe(4)
+    // Two units landing before it push it past its old position.
+    const more = [U('a', 'ab'), U('b', 'ab'), U('b2', 'ab'), U('c', 'ab ab')]
+    expect(findCurrent(more, findMatches(more, 'ab').matches, id)).toBe(4)
+  })
+
+  it('falls to the nearest following match when it is gone, else the last', () => {
+    const units1 = [U('a', 'ab'), U('b', 'ab ab'), U('c', 'ab')]
+    const { matches } = findMatches(units1, 'ab')
+    const id = matchIdentity(units1, matches, 2) // b's second
+    // b now holds one occurrence: the next one after it is c's.
+    const units2 = [U('a', 'ab'), U('b', 'ab'), U('c', 'ab')]
+    expect(findCurrent(units2, findMatches(units2, 'ab').matches, id)).toBe(2)
+    // Nothing follows it: the last.
+    const units3 = [U('a', 'ab'), U('b', 'ab'), U('c', 'x')]
+    expect(findCurrent(units3, findMatches(units3, 'ab').matches, id)).toBe(1)
+  })
+
+  it('starts at the first match and is -1 with none', () => {
+    const units = [U('a', 'ab')]
+    expect(findCurrent(units, findMatches(units, 'ab').matches, null)).toBe(0)
+    expect(findCurrent(units, [], null)).toBe(-1)
+    expect(matchIdentity(units, [], 0)).toBeNull()
   })
 })

@@ -305,3 +305,51 @@ export function findMatches(units: readonly SearchUnit[], query: string, limit =
   }
   return { matches, truncated: false }
 }
+
+/**
+ * Which match is current, in terms that survive a recompute (A5): its unit,
+ * its ordinal among that unit's matches, and the unit's position (to find
+ * what follows it once it is gone). A list index would not do — a match
+ * landing before it (a chat tools line gaining an operation) shifts it.
+ */
+export interface MatchIdentity {
+  unitId: string
+  ordinal: number
+  unitPos: number
+}
+
+function unitPositions(units: readonly SearchUnit[]): Map<string, number> {
+  const pos = new Map<string, number>()
+  units.forEach((u, i) => { if (!pos.has(u.id)) pos.set(u.id, i) })
+  return pos
+}
+
+/** The identity of `matches[i]`; null when there is no such match. */
+export function matchIdentity(units: readonly SearchUnit[], matches: readonly SearchMatch[], i: number): MatchIdentity | null {
+  const match = matches[i]
+  if (!match) return null
+  let ordinal = 0
+  for (let k = i - 1; k >= 0 && matches[k].unitId === match.unitId; k--) ordinal++
+  return { unitId: match.unitId, ordinal, unitPos: unitPositions(units).get(match.unitId) ?? -1 }
+}
+
+/**
+ * The index of the match `identity` names in a recomputed list: the same
+ * match when it still exists, else the nearest one after where it was, else
+ * the last. No identity → the first; no matches → -1.
+ */
+export function findCurrent(units: readonly SearchUnit[], matches: readonly SearchMatch[], identity: MatchIdentity | null): number {
+  if (matches.length === 0) return -1
+  if (!identity) return 0
+  const pos = unitPositions(units)
+  // Where its unit is now, when it is still there (units may have landed before it).
+  const at = pos.get(identity.unitId) ?? identity.unitPos
+  let ordinal = 0
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i]
+    ordinal = i > 0 && matches[i - 1].unitId === m.unitId ? ordinal + 1 : 0
+    const p = pos.get(m.unitId) ?? -1
+    if (m.unitId === identity.unitId ? ordinal >= identity.ordinal : p > at) return i
+  }
+  return matches.length - 1
+}
