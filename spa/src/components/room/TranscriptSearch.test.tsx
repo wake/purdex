@@ -13,6 +13,13 @@ import type { ContentBlock, StreamMessage } from '../../lib/nex/message-types'
 import type { PartialAssembly } from '../../lib/nex/partial'
 import type { ToolActivity } from '../../lib/nex/tool-activity'
 import type { TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
+import { buildSearchUnits, findMatches } from '../../lib/nex/transcript-search'
+
+// Pass-throughs, counted (A F10).
+vi.mock('../../lib/nex/transcript-search', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/nex/transcript-search')>()
+  return { ...actual, buildSearchUnits: vi.fn(actual.buildSearchUnits), findMatches: vi.fn(actual.findMatches) }
+})
 
 const asst = (...blocks: ContentBlock[]): StreamMessage =>
   ({ type: 'assistant', message: { id: 'm', role: 'assistant', content: blocks, stop_reason: null } } as StreamMessage)
@@ -90,6 +97,33 @@ const next = () => fireEvent.keyDown(input(), { key: 'Enter' })
 const prev = () => fireEvent.keyDown(input(), { key: 'Enter', shiftKey: true })
 
 describe('TranscriptSearch', () => {
+  // A F10: nothing is indexed until there is something to search, and a
+  // keystroke searches once.
+  it('does not index the transcript while the query is empty', () => {
+    const build = vi.mocked(buildSearchUnits)
+    build.mockClear()
+    const { rerender } = render(<Harness messages={[said('one needle')]} />)
+    rerender(<Harness messages={[said('one needle'), said('two')]} />)
+    expect(build).not.toHaveBeenCalled()
+    type('needle')
+    expect(build).toHaveBeenCalledTimes(1)
+    expect(count()).toHaveTextContent('1 / 1')
+    type('')
+    rerender(<Harness messages={[said('one needle'), said('two'), said('three')]} />)
+    expect(build).toHaveBeenCalledTimes(1)
+  })
+
+  it('a keystroke runs findMatches once', () => {
+    render(<Harness messages={[said('one needle'), said('two needle')]} />)
+    const find = vi.mocked(findMatches)
+    find.mockClear()
+    type('needle')
+    expect(find).toHaveBeenCalledTimes(1)
+    find.mockClear()
+    type('needl')
+    expect(find).toHaveBeenCalledTimes(1)
+  })
+
   it('focuses its input when it opens', () => {
     render(<Harness messages={[said('hello')]} />)
     expect(input()).toHaveFocus()

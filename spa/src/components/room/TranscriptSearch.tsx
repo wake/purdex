@@ -8,7 +8,8 @@
 // (transcript-search.ts), and marks the DOM (search-highlight.ts):
 //
 // - **Index** (A11): `buildSearchUnits` runs when the transcript changes —
-//   never per keystroke; typing re-runs only `findMatches`.
+//   never per keystroke, and not at all while the query is empty (A F10);
+//   typing re-runs only `findMatches`, once per keystroke.
 // - **Current match** (A5): remembered as (unit, ordinal within the unit), so
 //   a match landing before it — a message, a chat tools line gaining a call —
 //   does not move it; gone, the nearest following one (else the last) takes
@@ -69,18 +70,33 @@ export interface TranscriptSearchProps {
 const NO_RESULT: SearchResult = { matches: [], truncated: false, truncatedBefore: false, truncatedAfter: false }
 
 /**
- * findMatches over `units`, remembering its last answer (A F10): a keystroke
- * computes it once in onChange, and the render that follows asks again.
+ * The transcript's search index, built on first use (A F10: an open bar
+ * with an empty query indexes nothing), and findMatches over it remembering
+ * its last answer: a keystroke computes it once in onChange, and the render
+ * that follows asks again.
  */
-function searcher(units: readonly SearchUnit[]): (query: string, anchor: UnitAnchor) => SearchResult {
+interface SearchIndex {
+  units: () => SearchUnit[]
+  find: (query: string, anchor: UnitAnchor) => SearchResult
+}
+
+function searchIndex(build: () => SearchUnit[]): SearchIndex {
+  let built: SearchUnit[] | null = null
   let last: { query: string; at: number; result: SearchResult } | null = null
-  return (query, anchor) => {
-    const at = anchorPosition(units, anchor)
-    if (last && last.query === query && last.at === at) return last.result
-    last = { query, at, result: findMatches(units, query, SEARCH_MATCH_LIMIT, at) }
-    return last.result
+  const units = () => (built ??= build())
+  return {
+    units,
+    find: (query, anchor) => {
+      const all = units()
+      const at = anchorPosition(all, anchor)
+      if (last && last.query === query && last.at === at) return last.result
+      last = { query, at, result: findMatches(all, query, SEARCH_MATCH_LIMIT, at) }
+      return last.result
+    },
   }
 }
+
+const NO_UNITS: SearchUnit[] = []
 
 /** Where a transcript opens: its end, at once. */
 function scrollToEnd(el: HTMLElement): void {
@@ -104,11 +120,13 @@ export default function TranscriptSearch({
   // effect scrolls once and clears it. Every other re-mark stays put.
   const wantScroll = useRef(false)
 
-  const units = useMemo(
-    () => buildSearchUnits({ messages, index: indexOperations(messages), tools, view, keyPrefix, turnStarts }),
+  const index = useMemo(
+    () => searchIndex(() => buildSearchUnits({ messages, index: indexOperations(messages), tools, view, keyPrefix, turnStarts })),
     [messages, tools, view, keyPrefix, turnStarts],
   )
-  const search = useMemo(() => searcher(units), [units])
+  const searching = normalizeQuery(query) !== null
+  const units = searching ? index.units() : NO_UNITS
+  const search = index.find
   // The units changed (a message, or the view): re-seat the current match
   // and the window on these units. A unit this view does not draw (the
   // room's thinking, chat's edited-file label) hands over to the next one
@@ -119,7 +137,6 @@ export default function TranscriptSearch({
     if (sel) setSel(relocate(seenUnits, units, sel))
     setWin(relocate(seenUnits, units, win))
   }
-  const searching = normalizeQuery(query) !== null
   const { matches, truncated, truncatedBefore, truncatedAfter } = searching ? search(query, win) : NO_RESULT
   const current = useMemo(() => findCurrent(units, matches, sel), [units, matches, sel])
 
@@ -191,9 +208,11 @@ export default function TranscriptSearch({
       setSel(matchIdentity(units, refined, findCurrent(units, refined, sel)))
       return
     }
-    let anchor = unitAnchor(units, container?.isConnected ? firstUnitInView(container) : null)
+    // A new search: the bar may have held no index until now.
+    const all = index.units()
+    let anchor = unitAnchor(all, container?.isConnected ? firstUnitInView(container) : null)
     let result = search(value, anchor)
-    let i = firstAtOrAfter(units, result.matches, anchorPosition(units, anchor))
+    let i = firstAtOrAfter(all, result.matches, anchorPosition(all, anchor))
     if (i < 0) {
       // Nothing from the viewport down: the very first match.
       if (result.truncatedBefore) {
@@ -203,7 +222,7 @@ export default function TranscriptSearch({
       i = 0
     }
     setWin(anchor)
-    setSel(matchIdentity(units, result.matches, i))
+    setSel(matchIdentity(all, result.matches, i))
   }
 
   // One step. Past an end of the kept matches it re-centres them on where it
