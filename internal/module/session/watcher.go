@@ -22,12 +22,14 @@ type watcherState struct {
 	// started without a server never had them and a new server drops them
 	// (#1473 spec D3). hooksOK says they are known to be on the current
 	// server; hooksInstance is the tmux instance they were installed on
-	// ("" if unknown). hooksFailing suppresses repeat failure logs within
-	// one failure streak. hooksDisabled is the operator's manual remove: the
-	// watcher leaves the hooks alone until a manual install (spec D3.1).
+	// ("" if unknown). hooksFailing and hooksLastErr throttle the failure
+	// log to one line per streak and per distinct error text.
+	// hooksDisabled is the operator's manual remove: the watcher leaves the
+	// hooks alone until a manual install (spec D3.1).
 	hooksOK       bool
 	hooksInstance string
 	hooksFailing  bool
+	hooksLastErr  string
 	hooksDisabled bool
 }
 
@@ -56,21 +58,25 @@ func (ws *watcherState) updateHash(newHash string) bool {
 	return true
 }
 
-// setHooksInstalled records the outcome of an install attempt on instance.
-// It reports whether this failure opens a new failure streak (log it) —
-// false for a success or a repeat failure.
-func (ws *watcherState) setHooksInstalled(ok bool, instance string) (firstFailure bool) {
+// setHooksInstalled records the outcome (err) of an install attempt on
+// instance. It reports whether the failure is worth logging: it opens a
+// failure streak or its text differs from the previous failure's (spec
+// D3.1) — false for a success or a repeat of the same failure.
+func (ws *watcherState) setHooksInstalled(err error, instance string) (logFailure bool) {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
-	ws.hooksOK = ok
-	if ok {
+	ws.hooksOK = err == nil
+	if err == nil {
 		ws.hooksInstance = instance
 		ws.hooksFailing = false
+		ws.hooksLastErr = ""
 		return false
 	}
-	firstFailure = !ws.hooksFailing
+	msg := err.Error()
+	logFailure = !ws.hooksFailing || msg != ws.hooksLastErr
 	ws.hooksFailing = true
-	return firstFailure
+	ws.hooksLastErr = msg
+	return logFailure
 }
 
 // hooksCurrent reports whether the hooks need no (re)install for instance: a
@@ -119,7 +125,7 @@ func (m *SessionModule) ensureHooks(instance string) {
 		return
 	}
 	err := m.installTmuxHooks()
-	if m.wstate.setHooksInstalled(err == nil, instance) {
+	if m.wstate.setHooksInstalled(err, instance) {
 		log.Printf("session: install tmux hooks: %v (retrying every tick)", err)
 	}
 }

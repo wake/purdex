@@ -1,9 +1,11 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -240,4 +242,50 @@ func TestHookSetup_InstallFailureRetriedByTick(t *testing.T) {
 	fake.ResetHookSets()
 	mod.tickNormal()
 	assert.Equal(t, allHookEvents, fake.HookSets(), "the watcher must retry a failed manual install")
+}
+
+// --- Failure log throttle (#1473 spec D3.1, review A6) ---
+
+// captureLog redirects the standard logger into a buffer for the test.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	return &buf
+}
+
+func hookFailureLines(buf *bytes.Buffer) int {
+	return strings.Count(buf.String(), "session: install tmux hooks:")
+}
+
+// One line per failure streak and per change of error text: a retry every
+// 5 s must not flood the log, but a new cause must not be hidden either.
+func TestEnsureHooks_FailureLogThrottledPerErrorText(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	buf := captureLog(t)
+
+	fake.SetHookGlobalError(errors.New("no server running"))
+	mod.ensureHooks("")
+	mod.ensureHooks("")
+	assert.Equal(t, 1, hookFailureLines(buf), "same error twice: one line")
+
+	fake.SetHookGlobalError(errors.New("permission denied"))
+	mod.ensureHooks("")
+	assert.Equal(t, 2, hookFailureLines(buf), "a different error: a new line")
+	mod.ensureHooks("")
+	assert.Equal(t, 2, hookFailureLines(buf), "the new error repeated: no new line")
+
+	// A success ends the streak; the same error afterwards logs again.
+	fake.SetHookGlobalError(nil)
+	mod.ensureHooks("")
+	mod.wstate.clearHooksOK()
+	fake.SetHookGlobalError(errors.New("permission denied"))
+	mod.ensureHooks("")
+	assert.Equal(t, 3, hookFailureLines(buf), "success resets the streak")
 }

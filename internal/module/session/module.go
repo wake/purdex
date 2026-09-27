@@ -178,7 +178,7 @@ func (m *SessionModule) Start(ctx context.Context) error {
 	m.hooksMu.Lock()
 	m.hooksStopped = false
 	err := m.installTmuxHooks()
-	m.wstate.setHooksInstalled(err == nil, "")
+	m.wstate.setHooksInstalled(err, "")
 	m.hooksMu.Unlock()
 	if err != nil {
 		log.Printf("session: failed to install tmux hooks: %v (continuing without push; the watcher retries)", err)

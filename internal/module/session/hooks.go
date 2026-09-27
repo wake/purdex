@@ -104,7 +104,7 @@ func (m *SessionModule) handleTmuxHookSetup(w http.ResponseWriter, r *http.Reque
 		m.hooksMu.Lock()
 		err := m.installTmuxHooks()
 		m.wstate.setHooksDisabled(false)
-		m.wstate.setHooksInstalled(err == nil, "")
+		m.wstate.setHooksInstalled(err, "")
 		m.hooksMu.Unlock()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
