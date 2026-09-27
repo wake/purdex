@@ -101,6 +101,13 @@ type FakeExecutor struct {
 	// <dir>` on a directory it cannot use silently starts the session in $HOME,
 	// so `#{session_path}` comes back as somewhere nobody asked for.
 	ForceNewSessionCwd string
+	// hookCalls is every SetHookGlobal / RemoveHookGlobal in completion
+	// order, as "set <event>" / "remove <event>".
+	hookCalls []string
+	// hookSetEntered / hookSetRelease gate SetHookGlobal; see
+	// SetHookGlobalGate.
+	hookSetEntered chan<- struct{}
+	hookSetRelease <-chan struct{}
 }
 
 func NewFakeExecutor() *FakeExecutor {
@@ -899,15 +906,50 @@ func (f *FakeExecutor) SetWindowOptionCalls() []SetWindowOptionCall {
 }
 
 // SetHookGlobal records every attempt (failed ones included) and returns the
-// error injected by SetHookGlobalError.
+// error injected by SetHookGlobalError. With a gate installed it first
+// signals entered and waits for release, outside the lock, and records only
+// once released — so the record order is the completion order.
 func (f *FakeExecutor) SetHookGlobal(event, command string) error {
+	f.mu.Lock()
+	entered, release := f.hookSetEntered, f.hookSetRelease
+	f.mu.Unlock()
+	if release != nil {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.hookSets = append(f.hookSets, event)
+	f.hookCalls = append(f.hookCalls, "set "+event)
 	return f.hookSetErr
 }
 
-func (f *FakeExecutor) RemoveHookGlobal(event string) error { return nil }
+func (f *FakeExecutor) RemoveHookGlobal(event string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hookCalls = append(f.hookCalls, "remove "+event)
+	return nil
+}
+
+// SetHookGlobalGate makes every later SetHookGlobal signal entered (without
+// blocking if nobody listens) and then block until release is closed — the
+// seam for "Stop arrives while an install is in flight". nil release removes
+// the gate.
+func (f *FakeExecutor) SetHookGlobalGate(entered chan<- struct{}, release <-chan struct{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hookSetEntered, f.hookSetRelease = entered, release
+}
+
+// HookCalls returns a copy of every set/remove hook call, in completion order.
+func (f *FakeExecutor) HookCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.hookCalls...)
+}
 
 // HookSets returns a copy of the events passed to SetHookGlobal so far.
 func (f *FakeExecutor) HookSets() []string {
@@ -921,6 +963,7 @@ func (f *FakeExecutor) ResetHookSets() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.hookSets = nil
+	f.hookCalls = nil
 }
 
 // SetHookGlobalError makes every later SetHookGlobal return err (nil clears

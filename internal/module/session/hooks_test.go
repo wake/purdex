@@ -1,10 +1,15 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -109,4 +114,67 @@ func TestHandleTmuxHookSetup_InvalidAction(t *testing.T) {
 	if w.Code != 400 {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
+}
+
+// --- Hook changes serialised with Stop (#1473 spec D3.1, review A2) ---
+
+// An install already in flight when Stop arrives must finish before Stop's
+// remove, and nothing may be set after Stop returns: the daemon must not
+// leave hooks behind that point at a wait-for nobody listens to.
+func TestEnsureHooks_ConcurrentStop_NoSetAfterRemove(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fake.SetHookGlobalGate(entered, release)
+
+	installDone := make(chan struct{})
+	go func() {
+		defer close(installDone)
+		mod.ensureHooks("")
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("install never reached set-hook")
+	}
+
+	stopDone := make(chan struct{})
+	go func() {
+		defer close(stopDone)
+		_ = mod.Stop(context.Background())
+	}()
+	// Give Stop the chance to run ahead of the blocked install.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	<-installDone
+	select {
+	case <-stopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop never returned")
+	}
+
+	calls := fake.HookCalls()
+	require.NotEmpty(t, calls)
+	firstRemove := -1
+	for i, c := range calls {
+		if strings.HasPrefix(c, "remove ") {
+			firstRemove = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, firstRemove, 0, "Stop must remove the hooks: %v", calls)
+	for _, c := range calls[firstRemove:] {
+		assert.False(t, strings.HasPrefix(c, "set "), "set-hook after Stop's remove: %v", calls)
+	}
+}
+
+func TestEnsureHooks_AfterStop_IsNoop(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	require.NoError(t, mod.Stop(context.Background()))
+	fake.ResetHookSets()
+
+	mod.wstate.clearHooksOK()
+	mod.ensureHooks("")
+	mod.ensureHooks("111:1000")
+	assert.Empty(t, fake.HookSets(), "no hook may be installed after Stop")
 }

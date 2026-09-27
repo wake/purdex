@@ -89,9 +89,16 @@ func (ws *watcherState) clearHooksOK() {
 // ensureHooks installs the session hooks unless they are already known to be
 // on the server identified by instance (spec D3). installTmuxHooks sets all
 // three every time (set-hook -g overwrites), so a retry also repairs a
-// partial install. The set-hook subprocesses run outside the state lock.
+// partial install. The set-hook subprocesses run under hooksMu, outside the
+// state lock; the state is checked again once hooksMu is held, since Stop or
+// another install may have run while this one waited (spec D3.1).
 func (m *SessionModule) ensureHooks(instance string) {
 	if m.wstate.hooksCurrent(instance) {
+		return
+	}
+	m.hooksMu.Lock()
+	defer m.hooksMu.Unlock()
+	if m.hooksStopped || m.wstate.hooksCurrent(instance) {
 		return
 	}
 	err := m.installTmuxHooks()

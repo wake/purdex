@@ -99,12 +99,17 @@ func (m *SessionModule) handleTmuxHookSetup(w http.ResponseWriter, r *http.Reque
 
 	switch req.Action {
 	case "install":
-		if err := m.installTmuxHooks(); err != nil {
+		m.hooksMu.Lock()
+		err := m.installTmuxHooks()
+		m.hooksMu.Unlock()
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	case "remove":
+		m.hooksMu.Lock()
 		m.removeTmuxHooks()
+		m.hooksMu.Unlock()
 	default:
 		http.Error(w, `{"error":"action must be install or remove"}`, http.StatusBadRequest)
 		return
