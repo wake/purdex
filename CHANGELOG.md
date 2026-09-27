@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.464] - 2026-09-28
+
+> **需要重新部署 daemon，而且升級時要先刪掉 `~/.config/pdx/nex/nex.db*`**（內嵌 Nexen 升到 v0.13.1，資料庫 schema v6，alpha 期不做 migration；
+> 不刪的話 worker 功能整個回 503，錯誤訊息會附上檔案路徑）。舊的 worker 紀錄會一起消失。
+> worker pane R4（背景工作、subagent 收尾、列表總覽）的第一支，畫面還沒有變化。
+
+### Internal：接上 Nexen v0.13.1 的背景工作資料（#1498）
+
+- 內嵌 Nexen 從 v0.12.0 升到 v0.13.1：多了背景 shell／subagent 的開始與結束事件、`/tasks` 查詢、列表的成本／turn 數／最後工具／執行中數量／目前狀態。
+- 背景工作事件記在各 worker 自己的工作表，**不會混進對話紀錄**（否則 daemon 一升級，turn 分組與搜尋就會多出看不見的項目）。
+- 晚到的結束事件照樣會關掉那一列；背景工作事件不影響一般訊息的去重與重連接續點。
+- 舊 daemon（沒有 `worker_rollup`）行為完全不變。
+
 ## [1.0.0-alpha.463] - 2026-09-27
 
 > 純 SPA，不需要重新部署 daemon。worker pane R3（快速回覆與搜尋）的最後一支，R3 全部完成。
