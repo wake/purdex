@@ -99,15 +99,23 @@ func (m *SessionModule) handleTmuxHookSetup(w http.ResponseWriter, r *http.Reque
 
 	switch req.Action {
 	case "install":
+		// Re-enables the watcher and counts as its install, so a failure
+		// here is retried by the next tick (#1473 spec D3.1).
 		m.hooksMu.Lock()
 		err := m.installTmuxHooks()
+		m.wstate.setHooksDisabled(false)
+		m.wstate.setHooksInstalled(err == nil, "")
 		m.hooksMu.Unlock()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	case "remove":
+		// An opt-out for the rest of this daemon process: the watcher must
+		// not reinstall what the operator removed. Start installs again on
+		// the next daemon start.
 		m.hooksMu.Lock()
+		m.wstate.setHooksDisabled(true)
 		m.removeTmuxHooks()
 		m.hooksMu.Unlock()
 	default:

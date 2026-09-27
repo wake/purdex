@@ -23,10 +23,12 @@ type watcherState struct {
 	// (#1473 spec D3). hooksOK says they are known to be on the current
 	// server; hooksInstance is the tmux instance they were installed on
 	// ("" if unknown). hooksFailing suppresses repeat failure logs within
-	// one failure streak.
+	// one failure streak. hooksDisabled is the operator's manual remove: the
+	// watcher leaves the hooks alone until a manual install (spec D3.1).
 	hooksOK       bool
 	hooksInstance string
 	hooksFailing  bool
+	hooksDisabled bool
 }
 
 func (ws *watcherState) getTmuxAlive() bool {
@@ -72,12 +74,27 @@ func (ws *watcherState) setHooksInstalled(ok bool, instance string) (firstFailur
 }
 
 // hooksCurrent reports whether the hooks need no (re)install for instance: a
-// known-good install on the same server. An empty instance proves nothing
-// about a restart, so it never forces a reinstall on its own.
+// known-good install on the same server, or the operator disabled them. An
+// empty instance proves nothing about a restart, so it never forces a
+// reinstall on its own.
 func (ws *watcherState) hooksCurrent(instance string) bool {
 	ws.mu.RLock()
 	defer ws.mu.RUnlock()
+	if ws.hooksDisabled {
+		return true
+	}
 	return ws.hooksOK && (instance == "" || instance == ws.hooksInstance)
+}
+
+// setHooksDisabled records a manual remove (true) or install (false). A
+// removed hook is no longer known to be on the server.
+func (ws *watcherState) setHooksDisabled(v bool) {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	ws.hooksDisabled = v
+	if v {
+		ws.hooksOK = false
+	}
 }
 
 func (ws *watcherState) clearHooksOK() {

@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -177,4 +178,66 @@ func TestEnsureHooks_AfterStop_IsNoop(t *testing.T) {
 	mod.ensureHooks("")
 	mod.ensureHooks("111:1000")
 	assert.Empty(t, fake.HookSets(), "no hook may be installed after Stop")
+}
+
+// --- Manual setup API vs the watcher (#1473 spec D3.1, review A3) ---
+
+func postHookSetup(t *testing.T, mod *SessionModule, action string) int {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/api/hooks/tmux/setup", strings.NewReader(`{"action":"`+action+`"}`))
+	w := httptest.NewRecorder()
+	mod.handleTmuxHookSetup(w, req)
+	return w.Code
+}
+
+// A manual remove is an opt-out: the watcher must not put the hooks back,
+// not even for a new server.
+func TestHookSetup_RemoveDisablesWatcherReinstall(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	fake.AddSession("dev", "/w")
+	setInstance(mod, "111:1000")
+	mod.tickNormal()
+	require.Equal(t, allHookEvents, fake.HookSets())
+
+	require.Equal(t, 200, postHookSetup(t, mod, "remove"))
+	fake.ResetHookSets()
+	setInstance(mod, "222:2000")
+	mod.tickNormal()
+	assert.Empty(t, fake.HookSets(), "a manual remove must not be undone by the watcher")
+}
+
+// A manual install after a remove re-enables the watcher and counts as an
+// install: a tick with nothing new to compare does not install again.
+func TestHookSetup_InstallAfterRemoveRecordsOutcome(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	require.Equal(t, 200, postHookSetup(t, mod, "remove"))
+	require.Equal(t, 200, postHookSetup(t, mod, "install"))
+	require.Equal(t, allHookEvents, fake.HookSets())
+
+	fake.ResetHookSets()
+	mod.tickNormal() // no sessions: payload instance ""
+	assert.Empty(t, fake.HookSets(), "a successful manual install must not be repeated")
+
+	// Re-enabled: a new server gets its hooks again.
+	fake.AddSession("dev", "/w")
+	setInstance(mod, "222:2000")
+	mod.tickNormal()
+	assert.Equal(t, allHookEvents, fake.HookSets())
+}
+
+// A failed manual install leaves the hooks unknown, so the watcher retries.
+func TestHookSetup_InstallFailureRetriedByTick(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	fake.AddSession("dev", "/w")
+	setInstance(mod, "111:1000")
+	mod.tickNormal()
+	require.Equal(t, allHookEvents, fake.HookSets())
+
+	fake.SetHookGlobalError(errors.New("no server running"))
+	require.Equal(t, 500, postHookSetup(t, mod, "install"))
+
+	fake.SetHookGlobalError(nil)
+	fake.ResetHookSets()
+	mod.tickNormal()
+	assert.Equal(t, allHookEvents, fake.HookSets(), "the watcher must retry a failed manual install")
 }
