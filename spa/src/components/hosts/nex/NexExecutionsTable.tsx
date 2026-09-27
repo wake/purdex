@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useHostExecutions } from '../../../hooks/useHostExecutions'
+import { selectRollupCostShown, useNexHostStore } from '../../../stores/useNexHostStore'
 import { openExecutionDetailTab } from '../../../lib/deeplink/deeplinkResolver'
 import { archiveExecution, attachControl, listExecutions, releaseLease, terminateExecution } from '../../../lib/nex/nex-api'
 import { NexApiError, type ExecutionSummary } from '../../../lib/nex/types'
@@ -48,6 +49,8 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
   // A host hidden in this workbench keeps its executions listed and manageable; only "open" (it creates a tab) is
   // not offered (plan H2d-2, §0.21 user rules 1 / 5).
   const shown = useIsRefShown(hostId)
+  // R4 T4.2: the cost column follows the sidebar's cost_basis gate (T4.1).
+  const showCost = useNexHostStore(selectRollupCostShown(hostId))
 
   // Same gate as before the store migration: a host that is not nex-ready
   // subscribes nothing (the store would refuse to open anyway, but staying
@@ -241,6 +244,10 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
                 <th className="text-left px-3 py-2">{t('hosts.nex.executions.col.cwd')}</th>
                 <th className="text-left px-3 py-2">{t('hosts.nex.executions.col.brief')}</th>
                 <th className="text-right px-3 py-2">{t('hosts.nex.executions.col.observers')}</th>
+                <th className="text-right px-3 py-2">{t('hosts.nex.executions.col.cost')}</th>
+                <th className="text-right px-3 py-2">{t('hosts.nex.executions.col.turns')}</th>
+                <th className="text-left px-3 py-2">{t('hosts.nex.executions.col.last_tool')}</th>
+                <th className="text-right px-3 py-2">{t('hosts.nex.executions.col.running')}</th>
                 <th className="text-left px-3 py-2">{t('hosts.nex.executions.col.lease')}</th>
                 <th className="text-left px-3 py-2">{t('hosts.nex.executions.col.last_turn')}</th>
                 <th className="text-left px-3 py-2">{t('hosts.nex.executions.col.updated')}</th>
@@ -252,6 +259,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
                 <NexExecutionRow
                   key={row.id}
                   row={row}
+                  showCost={showCost}
                   confirmingTerminate={confirmTerminateId === row.id}
                   pending={pendingId === row.id}
                   onOpen={shown ? () => handleOpen(row) : undefined}

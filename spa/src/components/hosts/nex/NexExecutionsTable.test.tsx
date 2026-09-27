@@ -289,6 +289,66 @@ describe('NexExecutionsTable', () => {
     expect(screen.getByTestId('nex-lease-exc_ffffffffffffffff')).toHaveTextContent('—')
   })
 
+  describe('R4 T4.2: rollup columns (cost, turns, last tool, running)', () => {
+    const rollupEntry = (cost_basis: string | undefined): NexHostEntry => ({
+      ...readyEntry,
+      capabilities: { host_id: 'd', worker_rollup: { task_kinds: [], task_statuses: [], activity_phases: [], cost_basis, subagent_cost: false } } as unknown as NexHostEntry['capabilities'],
+    })
+    const cells = (id: string) => ['cost', 'turns', 'last-tool', 'running'].map((c) => screen.getByTestId(`nex-${c}-${id}`))
+    const ID = 'exc_rollup000000000000000000'
+
+    it('header has the four columns after observers', async () => {
+      render(<NexExecutionsTable hostId="h" enabled />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      const heads = screen.getAllByRole('columnheader').map((h) => h.textContent)
+      const at = heads.indexOf('Observers')
+      expect(heads.slice(at + 1, at + 5)).toEqual(['Cost', 'Turns', 'Last tool', 'Running'])
+    })
+
+    it('a row with rollup fields and cost_basis result_evidence shows all four; the hand-over note is the cost title', async () => {
+      useNexHostStore.setState({ byHost: { h: rollupEntry('result_evidence') } })
+      vi.mocked(api.listExecutions).mockResolvedValue({
+        items: [row({ id: ID, cost_usd: 0.1126, turn_count: 3, running_tasks: 2, resume_session_id: 'c191a5a0', last_tool: { name: 'Bash', tool_use_id: 't', at: 1 } })],
+        next_cursor: '',
+      })
+      render(<NexExecutionsTable hostId="h" enabled />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      const [cost, turns, lastTool, running] = cells(ID)
+      expect(cost).toHaveTextContent('$0.11')
+      expect(cost.querySelector('[title]')).toHaveAttribute('title', 'Includes spend from before the hand-over')
+      expect(turns).toHaveTextContent('3')
+      expect(lastTool).toHaveTextContent('Bash')
+      expect(running).toHaveTextContent('2')
+    })
+
+    it('today\'s v0.13.1 daemon (cost_basis session_cumulative): cost is — , the rest still shows', async () => {
+      useNexHostStore.setState({ byHost: { h: rollupEntry('session_cumulative') } })
+      vi.mocked(api.listExecutions).mockResolvedValue({ items: [row({ id: ID, cost_usd: 0.1126, turn_count: 3, running_tasks: 0 })], next_cursor: '' })
+      render(<NexExecutionsTable hostId="h" enabled />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      const [cost, turns, lastTool, running] = cells(ID)
+      expect(cost).toHaveTextContent('—')
+      expect(turns).toHaveTextContent('3')
+      expect(lastTool).toHaveTextContent('—')
+      expect(running).toHaveTextContent('0')
+    })
+
+    it('cost_usd null → —', async () => {
+      useNexHostStore.setState({ byHost: { h: rollupEntry('result_evidence') } })
+      vi.mocked(api.listExecutions).mockResolvedValue({ items: [row({ id: ID, cost_usd: null })], next_cursor: '' })
+      render(<NexExecutionsTable hostId="h" enabled />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(cells(ID)[0]).toHaveTextContent('—')
+    })
+
+    it('an old daemon\'s row (no rollup fields): — in all four', async () => {
+      vi.mocked(api.listExecutions).mockResolvedValue({ items: [row({ id: ID })], next_cursor: '' })
+      render(<NexExecutionsTable hostId="h" enabled />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      for (const cell of cells(ID)) expect(cell).toHaveTextContent('—')
+    })
+  })
+
   it('archived toggle on: frame, reconnect, archive and terminate refresh the archived query', async () => {
     render(<NexExecutionsTable hostId="h" enabled />)
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
@@ -468,7 +528,11 @@ describe('NexExecutionsTable', () => {
     vi.setSystemTime(NOW)
     vi.mocked(api.listExecutions).mockResolvedValue({
       items: [
-        row({ id: 'exc_running0000000000000000', state: 'running', brief: 'running one\nmore', updated_at: NOW - 5 * 60_000 }),
+        row({
+          id: 'exc_running0000000000000000', state: 'running', brief: 'running one\nmore', updated_at: NOW - 5 * 60_000,
+          // R4 T4.2: rollup fields (worker_rollup daemon); the other two rows are an old daemon's.
+          cost_usd: 0.1126, turn_count: 3, running_tasks: 1, last_tool: { name: 'Bash', tool_use_id: 'toolu_1', at: NOW - 60_000 },
+        }),
         row({ id: 'exc_idle00000000000000000000', state: 'idle', brief: 'idle one', updated_at: NOW - 3 * 3_600_000, lease: undefined, last_turn_reason: null }),
         row({ id: 'exc_archived0000000000000000', state: 'terminated', brief: 'archived one', updated_at: NOW - 2 * 86_400_000, archived: true, lease: { principal_id: 'pdx:air/t-other', expires_at: 1 } }),
       ],

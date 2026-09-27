@@ -82,6 +82,26 @@ exports[`NexExecutionsTable > renders a fixed dataset identically (DOM snapshot)
               Observers
             </th>
             <th
+              class="text-right px-3 py-2"
+            >
+              Cost
+            </th>
+            <th
+              class="text-right px-3 py-2"
+            >
+              Turns
+            </th>
+            <th
+              class="text-left px-3 py-2"
+            >
+              Last tool
+            </th>
+            <th
+              class="text-right px-3 py-2"
+            >
+              Running
+            </th>
+            <th
               class="text-left px-3 py-2"
             >
               Lease
@@ -143,6 +163,30 @@ exports[`NexExecutionsTable > renders a fixed dataset identically (DOM snapshot)
             </td>
             <td
               class="px-3 py-2 text-xs text-text-muted text-right"
+            >
+              1
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted text-right whitespace-nowrap tabular-nums"
+              data-testid="nex-cost-exc_running0000000000000000"
+            >
+              —
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted text-right tabular-nums"
+              data-testid="nex-turns-exc_running0000000000000000"
+            >
+              3
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted font-mono whitespace-nowrap"
+              data-testid="nex-last-tool-exc_running0000000000000000"
+            >
+              Bash
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted text-right tabular-nums"
+              data-testid="nex-running-exc_running0000000000000000"
             >
               1
             </td>
@@ -239,6 +283,30 @@ exports[`NexExecutionsTable > renders a fixed dataset identically (DOM snapshot)
               1
             </td>
             <td
+              class="px-3 py-2 text-xs text-text-muted text-right whitespace-nowrap tabular-nums"
+              data-testid="nex-cost-exc_idle00000000000000000000"
+            >
+              —
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted text-right tabular-nums"
+              data-testid="nex-turns-exc_idle00000000000000000000"
+            >
+              —
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted font-mono whitespace-nowrap"
+              data-testid="nex-last-tool-exc_idle00000000000000000000"
+            >
+              —
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted text-right tabular-nums"
+              data-testid="nex-running-exc_idle00000000000000000000"
+            >
+              —
+            </td>
+            <td
               class="px-3 py-2 text-xs text-text-muted"
               data-testid="nex-lease-exc_idle00000000000000000000"
             >
@@ -324,6 +392,30 @@ exports[`NexExecutionsTable > renders a fixed dataset identically (DOM snapshot)
               class="px-3 py-2 text-xs text-text-muted text-right"
             >
               1
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted text-right whitespace-nowrap tabular-nums"
+              data-testid="nex-cost-exc_archived0000000000000000"
+            >
+              —
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted text-right tabular-nums"
+              data-testid="nex-turns-exc_archived0000000000000000"
+            >
+              —
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted font-mono whitespace-nowrap"
+              data-testid="nex-last-tool-exc_archived0000000000000000"
+            >
+              —
+            </td>
+            <td
+              class="px-3 py-2 text-xs text-text-muted text-right tabular-nums"
+              data-testid="nex-running-exc_archived0000000000000000"
+            >
+              —
             </td>
             <td
               class="px-3 py-2 text-xs text-text-muted"
