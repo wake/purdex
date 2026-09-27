@@ -17,6 +17,14 @@ describe('isFindShortcut', () => {
     expect(isFindShortcut(key({ metaKey: true }), false)).toBe(false)
   })
 
+  // A F11: a non-Latin layout reports the character (Cyrillic а, Hebrew כ) in
+  // `key`; `code` is the physical F key.
+  it('is the physical F key on a non-Latin layout', () => {
+    expect(isFindShortcut(key({ key: 'а', code: 'KeyF', metaKey: true }), true)).toBe(true)
+    expect(isFindShortcut(key({ key: 'כ', code: 'KeyF', ctrlKey: true }), false)).toBe(true)
+    expect(isFindShortcut(key({ key: 'п', code: 'KeyG', metaKey: true }), true)).toBe(false)
+  })
+
   it('takes no other modifier and no other key', () => {
     expect(isFindShortcut(key({ metaKey: true, shiftKey: true }), true)).toBe(false)
     expect(isFindShortcut(key({ metaKey: true, altKey: true }), true)).toBe(false)
