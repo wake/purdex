@@ -13,7 +13,7 @@ import type { ReactNode } from 'react'
 import { CircleNotch } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { formatDuration } from '../../lib/nex/format-duration'
-import { toolSummary } from '../../lib/nex/tool-summary'
+import { showsRawInput, toolSummary } from '../../lib/nex/tool-summary'
 import { foldPlan } from '../../lib/nex/fold'
 import type { ToolActivity, ToolCallActivity } from '../../lib/nex/tool-activity'
 import type { ToolResultFacts } from '../../lib/nex/tool-result-facts'
@@ -112,9 +112,7 @@ export default function OperationBlock({
 
   // A second affordance, and only when it has something the header does not
   // already say: an input whose single key is the primary arg reveals nothing.
-  const inputKeys = Object.keys(input)
-  const hasRawInput =
-    inputKeys.length > 0 && !(summaryEntry?.primaryArg && inputKeys.length === 1)
+  const hasRawInput = showsRawInput(input, summaryEntry)
 
   const diff = facts?.diff
   const hasDiff = diff !== undefined && (diff.hunks.length > 0 || diff.truncated)

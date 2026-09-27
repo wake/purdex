@@ -183,3 +183,17 @@ export function toolSummary(
   if (entry?.known === false) return unknownToolSummary(input)
   return getSummary(tool, input)
 }
+
+/**
+ * Whether an operation block offers its raw input behind `${foldKey}:input`:
+ * only when it says something the header does not — an input whose single
+ * key is the primary arg reveals nothing. Shared by OperationBlock and the
+ * transcript search, so search never promises an input the block won't draw.
+ */
+export function showsRawInput(
+  input: Record<string, unknown>,
+  entry?: Pick<ToolActivity, 'primaryArg'>,
+): boolean {
+  const keys = Object.keys(input)
+  return keys.length > 0 && !(entry?.primaryArg && keys.length === 1)
+}
