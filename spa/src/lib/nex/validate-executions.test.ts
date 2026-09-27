@@ -1,6 +1,6 @@
 // spa/src/lib/nex/validate-executions.test.ts
 import { describe, it, expect } from 'vitest'
-import { sanitizeExecutionsPage } from './validate-executions'
+import { sanitizeExecutionsPage, sanitizeSummaryRollup } from './validate-executions'
 
 const good = { id: 'exc_1', state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/w', mount_kind: 'dev', brief: 'b', labels: { source: 'purdex' }, created_at: 1, updated_at: 2, duration_ms: null, event_count: 0, observers: 0, archived: false }
 
@@ -131,6 +131,39 @@ describe('sanitizeExecutionsPage', () => {
       expect('activity' in rows[1]).toBe(false)
       // Unknown phase is kept verbatim here; normalizePhase maps it at render time.
       expect(rows[2].activity).toEqual({ phase: 'awaiting_input', open_tools: 0 })
+    })
+  })
+
+  // R4 T4.1b (R4-A review A4): the single GET gets the same rollup coercion,
+  // and only that — the summary itself is never rejected or reshaped.
+  describe('sanitizeSummaryRollup (single GET)', () => {
+    it('coerces the same hostile rollup values the list does', () => {
+      const out = sanitizeSummaryRollup({
+        id: 'exc_1', state: 'idle',
+        cost_usd: Infinity, running_tasks: -1, turn_count: 1.5,
+        last_tool: { name: 3, tool_use_id: 'toolu_1', at: 1 },
+        activity: { phase: 'idle', open_tools: 'x' },
+      })
+      expect(out.cost_usd).toBeNull()
+      for (const k of ['running_tasks', 'turn_count', 'last_tool', 'activity'] as const) expect(k in out).toBe(false)
+      const kept = sanitizeSummaryRollup({ id: 'exc_1', state: 'idle', cost_usd: -1, running_tasks: '2', activity: { phase: 'awaiting_input', open_tools: 0, since: 'now' } })
+      expect(kept.cost_usd).toBeNull()
+      expect('running_tasks' in kept).toBe(false)
+      expect(kept.activity).toEqual({ phase: 'awaiting_input', open_tools: 0 })
+    })
+
+    it('passes well-formed rollup fields and every other field through untouched; absent stays absent', () => {
+      const raw = { id: 'exc_1', state: 'idle', brief: 42, labels: 'odd', cost_usd: 0.5, running_tasks: 2, turn_count: 3 }
+      const out = sanitizeSummaryRollup(raw)
+      expect(out).toEqual(raw)
+      expect(out).not.toBe(raw) // a copy: the fetched object is not mutated
+      const old = sanitizeSummaryRollup({ id: 'exc_1', state: 'idle' })
+      for (const k of ['cost_usd', 'last_tool', 'running_tasks', 'activity', 'turn_count'] as const) expect(k in old).toBe(false)
+    })
+
+    it('a body that is not an object is returned as is (never throws)', () => {
+      expect(sanitizeSummaryRollup(null)).toBeNull()
+      expect(sanitizeSummaryRollup('x')).toBe('x')
     })
   })
 })
