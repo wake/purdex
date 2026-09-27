@@ -325,6 +325,23 @@ returns `{ matches, truncated }` (limit `SEARCH_MATCH_LIMIT` = 10,000);
   prose units are already memoised per content (`proseText`). The count shows
   `10000+` when `truncated` (`room.search.count_more`, `"{{current}} /
   {{total}}+"`). Test: `shows 10000+ past the limit`.
+- **Where a search starts (user decision, 2026-09-27; do not reopen).** Like
+  a browser's find: when a query starts searching, the current match is the
+  first one at or below the top of the visible area — the first unit whose
+  bottom edge is below the scroll box's top is the anchor, and its own
+  matches count — else it wraps to the very first match. Next goes down and
+  wraps from the last to the first; a query refining one that had a match
+  stays on that match (or the next). **Past `SEARCH_MATCH_LIMIT` the matches
+  kept are the ones around the screen, not the oldest 10,000**, so the newest
+  content stays reachable: `findMatches(units, query, limit, anchor)` keeps up
+  to half the limit before the anchor unit and the rest from it on (a side
+  with fewer gives its share to the other) and reports `truncatedBefore` /
+  `truncatedAfter`; every match carries its `ordinal` within its unit, so a
+  list that starts mid-unit still locates its matches. Stepping past an end
+  of the kept list re-centres it (onwards when that side was cut, else round
+  to the very first / last). Tests: `typing starts at the first match at or
+  below the viewport`, `wraps to the first match when none is below`, `past
+  the limit, keeps the matches around the viewport and can reach the newest`.
 
 ### T3.4 gates
 

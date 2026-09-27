@@ -15,7 +15,7 @@
 //   fold memory registers per turn and expand-all still reaches them.
 // - The root is an `@container`: a narrow pane on a desktop behaves like a
 //   phone (the bubble cap is a share of the pane below `@md`).
-import { Children, isValidElement, useRef, useEffect, useMemo, type ReactNode } from 'react'
+import { Children, isValidElement, useEffect, useMemo, type ReactNode } from 'react'
 import { Prohibit } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { AssistantMessage, ContentBlock, StreamMessage, UserMessage } from '../../lib/nex/message-types'
@@ -31,6 +31,7 @@ import OperationBlock from '../room/OperationBlock'
 import { OperationAt } from '../room/MessageRow'
 import type { RenderCtx } from '../room/render-message'
 import { FoldContext, useInheritedFoldMemory } from '../room/fold-context'
+import { useScrollControl, useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 import type { RoomTranscriptProps } from '../room/RoomTranscript'
 import ChatBubble, { ChatUserBubble } from './ChatBubble'
 import ChatPartialGroup from './ChatPartialGroup'
@@ -141,9 +142,14 @@ export default function ChatTranscript({
   partial,
   tools,
   now,
+  scrollRef,
+  holdScroll = false,
+  scrollControl,
 }: ChatTranscriptProps) {
   const t = useI18nStore((s) => s.t)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const scroll = useTranscriptScroll(scrollRef, holdScroll)
+  const { attach, onScroll, follow } = scroll
+  useScrollControl(scrollControl, scroll)
   const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
   const hasPending = hasContent(children)
   // The room's pairing: results for the lines' blocks, and `childIndexes`, so
@@ -167,14 +173,8 @@ export default function ChatTranscript({
   )
 
   // Same effect as RoomTranscript's auto-scroll: instant on the first run
-  // (mount / view switch), smooth after (F3).
-  const scrolled = useRef(false)
-  useEffect(() => {
-    if (scrollRef.current?.scrollTo) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: scrolled.current ? 'smooth' : 'auto' })
-      scrolled.current = true
-    }
-  }, [messages, scrollKey, partialVersion, linesVersion])
+  // (mount / view switch), smooth after (F3), held by the search bar (A4).
+  useEffect(() => { follow() }, [follow, messages, scrollKey, partialVersion, linesVersion])
 
   // As RoomTranscript: the in-flight message belongs to the last turn, and
   // needs one even before any boundary is recorded.
@@ -184,7 +184,7 @@ export default function ChatTranscript({
   const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0 }
 
   return (
-    <div ref={scrollRef} className="@container flex-1 overflow-y-auto p-4 space-y-3">
+    <div ref={attach} onScroll={onScroll} className="@container flex-1 overflow-y-auto p-4 space-y-3">
       <FoldContext.Provider value={foldStore}>
         {showEmptyHint && (
           <div className="flex items-center justify-center h-full text-text-muted text-sm">

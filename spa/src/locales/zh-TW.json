@@ -1755,5 +1755,12 @@
   "room.dock.you": "你",
   "room.dock.sse": "串流",
   "room.dock.expand": "展開 worker 狀態",
-  "room.dock.collapse": "收合 worker 狀態"
+  "room.dock.collapse": "收合 worker 狀態",
+  "room.search.placeholder": "搜尋這段對話",
+  "room.search.count": "{{current}} / {{total}}",
+  "room.search.count_more": "{{current}} / {{total}}+",
+  "room.search.none": "沒有符合的結果",
+  "room.search.next": "下一個符合",
+  "room.search.prev": "上一個符合",
+  "room.search.close": "關閉搜尋"
 }

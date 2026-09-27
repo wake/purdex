@@ -16,6 +16,11 @@
 // its own source, and agent prose is indexed by `proseText` — the text
 // RoomProse renders, not the markdown source (markdown-text.ts) — so a link's
 // URL or a split `nee**dle**` cannot shift the count. Offsets are not used.
+// The index is NFC (A10) but the DOM draws text as it arrived. An element
+// whose text is not already NFC is not marked at all — in a unit mixing both
+// forms the n-th NFC occurrence in the DOM is not the n-th match, so counting
+// would mark the wrong word (A F3) — and its match is still scrolled to by
+// its element.
 //
 // **Owners.** Highlight names are document-wide, so two panes searching at
 // once would overwrite — or, clearing, erase — each other's marks. Each caller
@@ -85,7 +90,7 @@ export function clearSearchHighlights(owner: string): void {
 
 /**
  * The first `count` occurrences of `pattern` in `el`'s text, as Ranges over
- * its text nodes (a match may cross nodes).
+ * its text nodes (a match may cross nodes). None when that text is not NFC.
  */
 function occurrences(el: Element, pattern: RegExp, count: number): Range[] {
   const nodes: Text[] = []
@@ -98,6 +103,8 @@ function occurrences(el: Element, pattern: RegExp, count: number): Range[] {
     starts.push(text.length)
     text += t.data
   }
+  // Not NFC: the ordinals of the index would not line up (see the header).
+  if (text !== text.normalize('NFC')) return []
   // The node holding character `pos`: the last node starting at or before it.
   // `forEnd` resolves a boundary to the node that ends there, not the next one.
   const at = (pos: number, forEnd: boolean): [Text, number] => {
@@ -164,6 +171,20 @@ function scrollRangeIntoView(range: Range, container: HTMLElement, fallback: Ele
   }
 }
 
+/**
+ * The first unit drawn at or below the top of `container`'s visible area —
+ * the one whose bottom edge is below that top, so a unit cut by it counts —
+ * or null when every unit is above it (or nothing is laid out). Where a new
+ * search starts (user decision 2026-09-27).
+ */
+export function firstUnitInView(container: HTMLElement): string | null {
+  const top = container.getBoundingClientRect().top
+  for (const el of container.querySelectorAll('[data-search-unit]')) {
+    if (el.getBoundingClientRect().bottom > top) return el.getAttribute('data-search-unit')
+  }
+  return null
+}
+
 /** The most matches one owner marks at once (the current one included). */
 export const SEARCH_MARK_LIMIT = 2000
 
@@ -185,7 +206,9 @@ function markWindow(total: number, current: number): [number, number] {
  * replaces a text node (new content, a fold toggling, a streaming message
  * growing) its Ranges collapse and the mark silently disappears, so the
  * caller must call this again after every commit that can touch the marked
- * units — the search bar (R3-C2) owns that.
+ * units — the search bar (R3-C2) owns that. Such a re-mark passes
+ * `{ scroll: false }`: only moving to a match scrolls, or every new message
+ * would drag the reader back to it.
  */
 export function highlightSearch(
   owner: string,
@@ -193,6 +216,7 @@ export function highlightSearch(
   query: string,
   matches: readonly SearchMatch[],
   current: number,
+  { scroll = true }: { scroll?: boolean } = {},
 ): void {
   const pattern = searchPattern(query)
   if (!pattern) {
@@ -209,21 +233,15 @@ export function highlightSearch(
   }
 
   // Only a window of SEARCH_MARK_LIMIT matches around the current one is
-  // marked. Ordinals count from the first match, so every match is counted,
-  // but only the window's units are searched in the DOM, and each only as far
-  // as its last ordinal in the window.
+  // marked: only the window's units are searched in the DOM, and each only as
+  // far as its last ordinal in the window. A match carries its ordinal within
+  // its unit, so a list that starts mid-unit (findMatches past its limit)
+  // still locates it.
   const [lo, hi] = markWindow(matches.length, current)
-  const ordinals: number[] = []
   const needed = new Map<string, number>()
-  const seen = new Map<string, number>()
-  for (let i = 0; i < hi; i++) {
-    const id = matches[i].unitId
-    const ordinal = seen.get(id) ?? 0
-    seen.set(id, ordinal + 1)
-    if (i >= lo) {
-      ordinals.push(ordinal)
-      needed.set(id, ordinal + 1)
-    }
+  for (let i = lo; i < hi; i++) {
+    const { unitId, ordinal } = matches[i]
+    needed.set(unitId, Math.max(needed.get(unitId) ?? 0, ordinal + 1))
   }
 
   const found = new Map<string, Range[]>()
@@ -240,7 +258,7 @@ export function highlightSearch(
       ranges = occurrences(el, pattern, needed.get(id)!)
       found.set(id, ranges)
     }
-    const range = ranges[ordinals[i - lo]] ?? null
+    const range = ranges[matches[i].ordinal] ?? null
     if (i === current) {
       currentRange = range
       currentEl = el
@@ -252,7 +270,7 @@ export function highlightSearch(
   owners.set(owner, { matches: others, current: currentRange })
   publish()
 
-  if (currentEl) {
+  if (scroll && currentEl) {
     if (currentRange) scrollRangeIntoView(currentRange, container, currentEl)
     else (currentEl as Element).scrollIntoView?.({ block: 'center' })
   }

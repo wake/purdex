@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useEffect, useState } from 'react'
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
@@ -1275,5 +1275,314 @@ describe('ExecutionView — quick replies (R3 T2.1)', () => {
     expect(after.value).toBe('half-typ')
     expect(after.disabled).toBe(false)
     expect(useExecutionStore.getState().executions[KEY].pendingLocal).toBeNull()
+  })
+})
+
+// R3 T3.3: Mod+F opens the pane's search bar. jsdom is not a Mac, so Mod is Ctrl.
+describe('ExecutionView — search (R3 T3.3)', () => {
+  const said = (text: string) =>
+    ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }) as Exec['messages'][number]
+  const modF = (target: Element) => fireEvent.keyDown(target, { key: 'f', ctrlKey: true })
+  const bar = () => screen.queryByTestId('transcript-search')
+  /** A pointer press inside the pane: it becomes the last pane interacted with (R1-2). */
+  const touch = () => fireEvent.pointerDown(screen.getAllByRole('textbox').at(-1)!)
+  const openSearch = () => { touch(); return modF(document.body) }
+
+  class FakeHighlight {
+    ranges: Range[] = []
+    add(range: Range) { this.ranges.push(range); return this }
+  }
+  const g = globalThis as unknown as { CSS?: unknown; Highlight?: unknown }
+  let highlights: Map<string, FakeHighlight>
+  let saved: [unknown, unknown]
+  beforeEach(() => {
+    saved = [g.CSS, g.Highlight]
+    highlights = new Map()
+    g.CSS = { highlights }
+    g.Highlight = FakeHighlight
+    patchExec({ messages: [said('find the needle'), said('and another needle')], turnStarts: [0] })
+  })
+  afterEach(() => {
+    ;[g.CSS, g.Highlight] = saved
+    delete (Element.prototype as { scrollTo?: unknown }).scrollTo
+  })
+
+  it('Mod+F opens the bar and focuses the input', () => {
+    render(<ExecutionView {...base} isActive />)
+    expect(bar()).toBeNull()
+    touch()
+    // Not cancelled = the browser's own find would open (the web build).
+    expect(modF(document.body)).toBe(false)
+    expect(bar()).toBeInTheDocument()
+    expect(screen.getByTestId('transcript-search-input')).toHaveFocus()
+  })
+
+  it('shows the match count', () => {
+    render(<ExecutionView {...base} isActive />)
+    openSearch()
+    fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'needle' } })
+    expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('1 / 2')
+    expect(highlights.get('search-current')?.ranges.map(String)).toEqual(['needle'])
+  })
+
+  // R1-2: isActive is the tab's; with a split, both worker panes listen.
+  // Only the pane the reader last pressed or focused in takes a body Mod+F.
+  it('in a split, Mod+F on the body opens only the pane last interacted with', () => {
+    render(
+      <>
+        <div data-testid="pane-a"><ExecutionView {...base} paneId="pa" isActive /></div>
+        <div data-testid="pane-b"><ExecutionView {...base} paneId="pb" isActive /></div>
+      </>,
+    )
+    const [inA, inB] = screen.getAllByRole('textbox')
+    fireEvent.pointerDown(inA)
+    fireEvent.focusIn(inB)
+    expect(modF(document.body)).toBe(false)
+    expect(screen.getAllByTestId('transcript-search')).toHaveLength(1)
+    expect(within(screen.getByTestId('pane-b')).getByTestId('transcript-search')).toBeInTheDocument()
+  })
+
+  it('with no pane interacted with, Mod+F on the body opens none', () => {
+    render(
+      <>
+        <ExecutionView {...base} paneId="pa" isActive />
+        <ExecutionView {...base} paneId="pb" isActive />
+      </>,
+    )
+    expect(modF(document.body)).toBe(true)
+    expect(bar()).toBeNull()
+  })
+
+  // PR #1495 re-review P2-1: the interaction record is only for telling
+  // split panes apart. A lone pane takes a body Mod+F without one — an ended
+  // worker's input is disabled and never takes focus, so nothing would
+  // record it, and searching an old transcript is what it is for.
+  it('a lone pane opens on a body Mod+F with no interaction recorded', () => {
+    render(<ExecutionView {...base} isActive />)
+    expect(modF(document.body)).toBe(false)
+    expect(bar()).toBeInTheDocument()
+  })
+
+  it('an ended execution, alone, opens on a body Mod+F', () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    expect(modF(document.body)).toBe(false)
+    expect(bar()).toBeInTheDocument()
+  })
+
+  it('in a split, once the pane interacted with unmounts, the one left opens on a body Mod+F', () => {
+    const { rerender } = render(
+      <>
+        <div data-testid="pane-a"><ExecutionView {...base} paneId="pa" isActive /></div>
+        <div data-testid="pane-b"><ExecutionView {...base} paneId="pb" isActive /></div>
+      </>,
+    )
+    fireEvent.pointerDown(screen.getAllByRole('textbox')[0])
+    rerender(
+      <>
+        <div data-testid="pane-b"><ExecutionView {...base} paneId="pb" isActive /></div>
+      </>,
+    )
+    expect(modF(document.body)).toBe(false)
+    expect(within(screen.getByTestId('pane-b')).getByTestId('transcript-search')).toBeInTheDocument()
+  })
+
+  it('a target inside the pane opens it', () => {
+    render(<ExecutionView {...base} isActive />)
+    const box = screen.getByRole('textbox')
+    expect(modF(box)).toBe(false)
+    expect(bar()).toBeInTheDocument()
+  })
+
+  it('an inactive pane ignores it', () => {
+    render(<ExecutionView {...base} isActive={false} />)
+    touch()
+    expect(modF(document.body)).toBe(true)
+    expect(bar()).toBeNull()
+  })
+
+  it('a target inside another pane ignores it', () => {
+    render(<ExecutionView {...base} isActive />)
+    const other = document.createElement('textarea')
+    document.body.appendChild(other)
+    // Another pane, a dialog, Monaco: its own Mod+F, not prevented.
+    expect(modF(other)).toBe(true)
+    expect(bar()).toBeNull()
+    other.remove()
+  })
+
+  it('the other modifier, or Mod+Shift+F, does not open it', () => {
+    render(<ExecutionView {...base} isActive />)
+    fireEvent.keyDown(document.body, { key: 'f', metaKey: true })
+    fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true, shiftKey: true })
+    fireEvent.keyDown(document.body, { key: 'g', ctrlKey: true })
+    expect(bar()).toBeNull()
+  })
+
+  it('escape closes and clears; focus returns to where it was', () => {
+    render(<ExecutionView {...base} isActive />)
+    const box = screen.getByRole('textbox')
+    box.focus()
+    modF(box)
+    const input = screen.getByTestId('transcript-search-input')
+    expect(input).toHaveFocus()
+    fireEvent.change(input, { target: { value: 'needle' } })
+    expect(highlights.has('search-current')).toBe(true)
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(bar()).toBeNull()
+    expect(highlights.has('search-current')).toBe(false)
+    expect(highlights.has('search-match')).toBe(false)
+    expect(box).toHaveFocus()
+  })
+
+  it('unmounting the pane clears its marks', () => {
+    const { unmount } = render(<ExecutionView {...base} isActive />)
+    openSearch()
+    fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'needle' } })
+    expect(highlights.has('search-current')).toBe(true)
+    unmount()
+    expect(highlights.has('search-current')).toBe(false)
+  })
+
+  it('opens in chat too', () => {
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    openSearch()
+    fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'needle' } })
+    expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('1 / 2')
+  })
+
+  // R1-3 / A F6: the take-back confirm renders inside the pane's root.
+  it('Mod+F inside a dialog is the dialog\'s', () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'running' }) as never)
+    render(<ExecutionView {...base} from={from} isActive />)
+    fireEvent.click(takeBackBtn())
+    const cancel = screen.getByTestId('takeback-cancel')
+    cancel.focus()
+    expect(modF(cancel)).toBe(true)
+    expect(bar()).toBeNull()
+  })
+
+  it('one Escape closes the dialog, not the bar too', () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'running' }) as never)
+    render(<ExecutionView {...base} from={from} isActive />)
+    openSearch()
+    expect(bar()).toBeInTheDocument()
+    fireEvent.click(takeBackBtn())
+    expect(screen.getByTestId('takeback-dialog')).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByTestId('transcript-search-input'), { key: 'Escape' })
+    expect(screen.queryByTestId('takeback-dialog')).toBeNull()
+    expect(bar()).toBeInTheDocument()
+  })
+
+  // R1-1 / A F2: room ⇄ chat with the bar open.
+  it('switching view with the bar open keeps the marks and the place', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    const intoView = vi.fn()
+    Element.prototype.scrollIntoView = intoView
+    try {
+      const { rerender } = render(<ExecutionView {...base} isActive />)
+      openSearch()
+      const input = screen.getByTestId('transcript-search-input')
+      fireEvent.change(input, { target: { value: 'needle' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('2 / 2')
+      const jumps = intoView.mock.calls.length
+      scrollTo.mockClear()
+      rerender(<ExecutionView {...base} mode="chat" isActive />)
+      const cur = highlights.get('search-current')?.ranges ?? []
+      expect(cur.map(String)).toEqual(['needle'])
+      expect(cur[0].collapsed).toBe(false)
+      expect(cur[0].startContainer.isConnected).toBe(true)
+      expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('2 / 2')
+      expect(intoView.mock.calls.length).toBe(jumps + 1)
+      expect(scrollTo).not.toHaveBeenCalled()
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  })
+
+  it('switching view with the bar open and no match lands at the bottom', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    const { rerender } = render(<ExecutionView {...base} isActive />)
+    openSearch()
+    // jsdom has no layout: every box is 1000 high, and scrollTop writes are recorded.
+    const proto = Element.prototype
+    const saved = [Object.getOwnPropertyDescriptor(proto, 'scrollTop'), Object.getOwnPropertyDescriptor(proto, 'scrollHeight')]
+    const setTop = vi.fn()
+    Object.defineProperty(proto, 'scrollTop', { configurable: true, get: () => 0, set: setTop })
+    Object.defineProperty(proto, 'scrollHeight', { configurable: true, get: () => 1000 })
+    try {
+      scrollTo.mockClear()
+      rerender(<ExecutionView {...base} mode="chat" isActive />)
+      // The transcript's own first jump is held; the bar puts the reader at the bottom.
+      expect(scrollTo).not.toHaveBeenCalled()
+      expect(setTop).toHaveBeenCalledWith(1000)
+      expect(bar()).toBeInTheDocument()
+    } finally {
+      for (const [name, d] of [['scrollTop', saved[0]], ['scrollHeight', saved[1]]] as const) {
+        if (d) Object.defineProperty(proto, name, d)
+        else delete (proto as unknown as Record<string, unknown>)[name]
+      }
+    }
+  })
+
+  // A F4: the pane wires the bar's jumps to the transcript's release().
+  it('a jump into the last screen stops the bottom-follow', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    render(<ExecutionView {...base} isActive />)
+    const scroller = document.querySelector('.overflow-y-auto') as HTMLElement
+    const geometry = (scrollHeight: number, scrollTop: number) => {
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: scrollHeight })
+      Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(scroller, 'scrollTop', { configurable: true, writable: true, value: scrollTop })
+    }
+    geometry(1000, 800)
+    fireEvent.scroll(scroller)
+    const intoView = vi.fn(() => { scroller.scrollTop = 790 })
+    Element.prototype.scrollIntoView = intoView
+    try {
+      openSearch()
+      fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'needle' } })
+      expect(intoView).toHaveBeenCalled()
+      fireEvent.scroll(scroller)
+      scrollTo.mockClear()
+      geometry(1100, 790)
+      act(() => {
+        const s = useExecutionStore.getState().executions[KEY]
+        patchExec({ messages: [...s.messages, said('a new line')] })
+      })
+      expect(scrollTo).not.toHaveBeenCalled()
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  })
+
+  it('holds the bottom-follow only while the bar is open', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    render(<ExecutionView {...base} isActive />)
+    const scroller = document.querySelector('.overflow-y-auto') as HTMLElement
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 })
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, writable: true, value: 800 })
+    fireEvent.scroll(scroller)
+    // The reader scrolls up to read.
+    scroller.scrollTop = 100
+    fireEvent.scroll(scroller)
+    const land = (text: string) => act(() => {
+      const s = useExecutionStore.getState().executions[KEY]
+      patchExec({ messages: [...s.messages, said(text)] })
+    })
+    openSearch()
+    scrollTo.mockClear()
+    land('while open')
+    expect(scrollTo).not.toHaveBeenCalled()
+    fireEvent.keyDown(screen.getByTestId('transcript-search-input'), { key: 'Escape' })
+    land('after closing')
+    expect(scrollTo).toHaveBeenCalledTimes(1)
   })
 })

@@ -40,7 +40,7 @@ function dom(html: string): HTMLElement {
   return root
 }
 
-const m = (unitId: string, start: number, end: number): SearchMatch => ({ unitId, start, end, reveal: [] })
+const m = (unitId: string, start: number, end: number, ordinal = 0): SearchMatch => ({ unitId, start, end, ordinal, reveal: [] })
 const texts = (name: string) => (highlights.get(name)?.ranges ?? []).map((r) => r.toString())
 
 beforeEach(() => {
@@ -109,6 +109,29 @@ describe('highlightSearch', () => {
     expect(scroller.scrollTop).toBe(500 - (300 - 10) / 2)
   })
 
+  // R3-C2: the search bar re-marks after every commit (A8) and must not drag
+  // the reader back to the match each time — it scrolls only when moving.
+  it('marks the current match without scrolling when told not to', () => {
+    installApi()
+    const root = dom('<div><pre data-search-unit="a">top\nneedle</pre></div>')
+    const scroller = root.firstElementChild as HTMLElement
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 2000 })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 300 })
+    scroller.getBoundingClientRect = () => ({ top: 0, bottom: 300, height: 300 } as DOMRect)
+    const intoView = vi.fn()
+    Element.prototype.scrollIntoView = intoView
+    Range.prototype.getBoundingClientRect = () => ({ top: 500, bottom: 510, height: 10 } as DOMRect)
+    try {
+      highlightSearch('p1', scroller, 'needle', [m('a', 4, 10)], 0, { scroll: false })
+    } finally {
+      delete (Range.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+    expect(texts('search-current')).toEqual(['needle'])
+    expect(scroller.scrollTop).toBe(0)
+    expect(intoView).not.toHaveBeenCalled()
+  })
+
   it('scrolls a horizontally scrolling box to the current match too', () => {
     // Finding A6: prose code fences are overflow-x:auto; a match far along a
     // long line was scrolled to vertically and stayed out of sight.
@@ -126,16 +149,16 @@ describe('highlightSearch', () => {
     }
     Range.prototype.getBoundingClientRect = () => ({ top: 5, bottom: 15, height: 10, left: 900, right: 910, width: 10 } as DOMRect)
     try {
-      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6)], 0)
+      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6, 1)], 0)
       expect(pre.scrollLeft).toBe(900 - (200 - 10) / 2)
       // Inside the box already: left alone.
       pre.scrollLeft = 0
       Range.prototype.getBoundingClientRect = () => ({ top: 5, bottom: 15, height: 10, left: 50, right: 60, width: 10 } as DOMRect)
-      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6)], 0)
+      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6, 1)], 0)
       expect(pre.scrollLeft).toBe(0)
       // A box that clips on purpose (overflow hidden, e.g. truncate) is not scrolled.
       Range.prototype.getBoundingClientRect = () => ({ top: 5, bottom: 15, height: 10, left: 900, right: 910, width: 10 } as DOMRect)
-      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6)], 1)
+      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6, 1)], 1)
       expect(clipped.scrollLeft).toBe(0)
     } finally {
       delete (Range.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect
@@ -150,6 +173,30 @@ describe('highlightSearch', () => {
     pre.scrollIntoView = scroll
     highlightSearch('p1', root, 'needle', [m('a', 0, 6)], 0)
     expect(scroll).toHaveBeenCalledWith({ block: 'center' })
+  })
+
+  // A F3: the index is NFC, the DOM is as it arrived. In a unit mixing both
+  // forms the n-th NFC occurrence in the DOM is not the n-th match, so the
+  // element is not marked at all — only scrolled to.
+  it('an element whose text is not NFC is scrolled to, not marked', () => {
+    installApi()
+    const nfc = 'café'
+    const nfd = 'café'
+    const root = dom(`<pre data-search-unit="a">${nfd} then ${nfc}</pre><pre data-search-unit="b">${nfc}</pre>`)
+    const pre = root.firstElementChild as HTMLElement
+    const scroll = vi.fn()
+    pre.scrollIntoView = scroll
+    const { matches } = findMatches([
+      { id: 'a', text: `${nfd} then ${nfc}`.normalize('NFC'), reveal: [] },
+      { id: 'b', text: nfc, reveal: [] },
+    ], nfc)
+    expect(matches).toHaveLength(3)
+    highlightSearch('p1', root, nfc, matches, 0)
+    // Not the second word marked as if it were the first.
+    expect(texts('search-current')).toEqual([])
+    expect(scroll).toHaveBeenCalledWith({ block: 'center' })
+    // Other units are marked as usual.
+    expect(texts('search-match')).toEqual([nfc])
   })
 
   it('does nothing to highlights without the API', () => {
@@ -167,7 +214,7 @@ describe('highlightSearch', () => {
   it('clears both highlights', () => {
     installApi()
     const root = dom('<pre data-search-unit="a">needle needle</pre>')
-    highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 7, 13)], 0)
+    highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 7, 13, 1)], 0)
     expect(highlights.size).toBe(2)
     clearSearchHighlights('p1')
     expect(highlights.size).toBe(0)
@@ -179,8 +226,8 @@ describe('highlightSearch', () => {
     installApi()
     const one = dom('<pre data-search-unit="a">alpha needle needle</pre>')
     const two = dom('<pre data-search-unit="a">beta needle needle</pre>')
-    highlightSearch('p1', one, 'needle', [m('a', 6, 12), m('a', 13, 19)], 0)
-    highlightSearch('p2', two, 'needle', [m('a', 5, 11), m('a', 12, 18)], 1)
+    highlightSearch('p1', one, 'needle', [m('a', 6, 12), m('a', 13, 19, 1)], 0)
+    highlightSearch('p2', two, 'needle', [m('a', 5, 11), m('a', 12, 18, 1)], 1)
     const owners = (name: string) => (highlights.get(name)?.ranges ?? [])
       .map((r) => (r.startContainer.textContent ?? '').split(' ')[0]).sort()
     expect(owners('search-current')).toEqual(['alpha', 'beta'])
@@ -191,7 +238,7 @@ describe('highlightSearch', () => {
     expect(owners('search-match')).toEqual(['beta'])
 
     // Re-marking one owner replaces only its own ranges.
-    highlightSearch('p2', two, 'needle', [m('a', 5, 11), m('a', 12, 18)], 0)
+    highlightSearch('p2', two, 'needle', [m('a', 5, 11), m('a', 12, 18, 1)], 0)
     expect(texts('search-current')).toEqual(['needle'])
     expect(texts('search-match')).toEqual(['needle'])
     clearSearchHighlights('p2')
