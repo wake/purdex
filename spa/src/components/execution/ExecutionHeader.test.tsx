@@ -336,11 +336,12 @@ describe('ExecutionHeader', () => {
       expect(screen.queryByRole('tooltip')).toBeNull()
     })
 
-    it('cost from the 12-turn fixture → enabled `$0.26`', () => {
+    // R4 T2.1: seq 974 continues seq 958, so the fixture is $0.1973 (was $0.2577).
+    it('cost from the 12-turn fixture → enabled `$0.20`', () => {
       render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
       const btn = costBtn()
       expect(btn.disabled).toBe(false)
-      expect(btn.textContent).toBe('$0.26')
+      expect(btn.textContent).toBe('$0.20')
       // H3: an enabled anchor is a toggle; closed by default.
       expect(btn.getAttribute('aria-expanded')).toBe('false')
     })
@@ -349,13 +350,51 @@ describe('ExecutionHeader', () => {
       vi.useFakeTimers()
       render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
       const tip = screen.getByRole('tooltip')
-      expect(tip.textContent).toBe('12 turns · $0.2577 · 4.5k out · 1m 05s API / 1m 33s wall')
+      expect(tip.textContent).toBe('12 turns · $0.1973 · 3.9k out · 57.6s API / 1m 33s wall')
       expect(tip.className).toMatch(/\bopacity-0\b/)
       fireEvent.mouseEnter(costBtn())
       act(() => vi.advanceTimersByTime(799))
       expect(tip.className).toMatch(/\bopacity-0\b/)
       act(() => vi.advanceTimersByTime(1))
       expect(tip.className).toMatch(/\bopacity-100\b/)
+    })
+
+    // R4 T2.2 (Q3): a hand-over's first turn resumes an outside session, so its
+    // result carries spend from before the hand-over.
+    describe('hand-over note (Q3)', () => {
+      const note = 'Includes spend from before the hand-over'
+      const cost = () => costSummary(fixturePayloads)
+
+      it('successful hand-over → tooltip adds the note, and so does the panel', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary({ resume_session_id: 'c191a5a0' })} cost={cost()} />)
+        const tip = screen.getByRole('tooltip')
+        expect(tip.textContent).toContain('12 turns · $0.1973')
+        expect(within(tip).getByTestId('cost-prior-history-tip').textContent).toBe(note)
+        fireEvent.click(costBtn())
+        expect(screen.getByTestId('cost-prior-history').textContent).toBe(note)
+      })
+
+      it('no resume_session_id → no note anywhere', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary()} cost={cost()} />)
+        expect(screen.getByRole('tooltip').textContent).not.toContain(note)
+        fireEvent.click(costBtn())
+        expect(screen.queryByTestId('cost-prior-history')).toBeNull()
+      })
+
+      it('review #7: hand-over but no costed result yet → no note anywhere', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary({ state: 'running', resume_session_id: 'c191a5a0' })} cost={costSummary([])} />)
+        expect(screen.getByRole('tooltip').textContent).not.toContain(note)
+        fireEvent.click(costBtn())
+        expect(screen.queryByTestId('cost-prior-history')).toBeNull()
+      })
+
+      it('turn 1 resume rejected (terminal_reason session_expired) → no note', () => {
+        const s = summary({ state: 'failed', resume_session_id: 'c191a5a0', terminal_reason: 'session_expired', last_turn_reason: 'session_expired' })
+        render(<ExecutionHeader {...baseProps} summary={s} cost={cost()} />)
+        expect(screen.getByRole('tooltip').textContent).not.toContain(note)
+        fireEvent.click(costBtn())
+        expect(screen.queryByTestId('cost-prior-history')).toBeNull()
+      })
     })
 
     // Codex R2 A1: header and tooltip share formatUsd — a MAX_VALUE cost never renders 'Infinity'.
@@ -435,7 +474,7 @@ describe('ExecutionHeader', () => {
     it('the panel receives the header\'s summary and hostId', () => {
       render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
       fireEvent.click(costBtn())
-      expect(screen.getByTestId('cost-totals').textContent).toContain('$0.2577')
+      expect(screen.getByTestId('cost-totals').textContent).toContain('$0.1973')
     })
 
     // Spec §3.1.1 #8: the panel repeats the line the tooltip carries, so the

@@ -256,11 +256,16 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
      missing / non-finite `total_cost_usd` contributes nothing and does not
      become `prev` either.
   2. The first frame with `modelUsage` is independent.
-  3. After that, a frame is **cumulative** ⇔ for every model in
-     `prev.modelUsage`, this frame's `outputTokens` ≥ prev's (a model
-     missing here counts as 0 ⇒ not cumulative), **and** Σ over this
-     frame's models of (this `outputTokens` − prev's, prev missing = 0) ≥
-     this frame's `usage.output_tokens`.
+  3. After that, a frame is **cumulative** ⇔ every model in
+     `prev.modelUsage` is present here with **all four** counters
+     (`inputTokens`, `outputTokens`, `cacheReadInputTokens`,
+     `cacheCreationInputTokens`) ≥ prev's (a model missing here ⇒ not
+     cumulative), **and** Σ over this frame's models of (this `outputTokens`
+     − prev's, prev missing = 0) ≥ this frame's `usage.output_tokens`.
+     Models are matched by `canonicalModel` when it is a non-empty string,
+     else by the `modelUsage` key (entries of one frame sharing a model are
+     summed). A frame whose Σ `modelUsage` `outputTokens` is 0 never becomes
+     `prev` (`prev` stays); it still contributes per its own classification.
   4. Cumulative → cost contribution = this `total_cost_usd` − prev's; if
      that is negative, treat the frame as independent. Otherwise the
      contribution = this frame's `total_cost_usd`.
@@ -268,13 +273,20 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
      rules). No session / `resumed_from` logic — evidence only.
   Edge cases (agreed 2026-09-28, second round):
   (a) `outputTokens` compare as plain JS numbers (no integer coercion);
-  (b) a malformed `modelUsage` (not an object, a model's value not an
-  object, `outputTokens` non-number / negative / non-finite) → the whole
-  frame counts as having **no** `modelUsage` (rule 1), never dropped;
+  (b) a malformed `modelUsage` (not an object, empty, a model's value not
+  an object, or any of `inputTokens` / `outputTokens` /
+  `cacheReadInputTokens` / `cacheCreationInputTokens` / `costUSD` not a
+  finite number ≥ 0) → the whole frame counts as having **no** `modelUsage`
+  (rule 1: contributes its own `total_cost_usd` if finite and > 0, never
+  `prev`), never dropped. Evidence validity and per-model entry validity are
+  the same rule, so every model of `prev` has an entry and a cumulative
+  frame's breakdown never shows a raw running total (review #6, amended with
+  nexen-a2 2026-09-28 third round, together with the four-counter,
+  canonical-keying and zero-output rules in 3);
   (c) `modelUsage` present but `total_cost_usd` negative → same as missing:
   contributes nothing, not `prev`;
   (d) `usage.output_tokens` missing or malformed → 0.
-  The frame then becomes `prev`. For the panel's breakdown, a cumulative
+  The frame then becomes `prev` (unless its Σ `outputTokens` is 0, rule 3). For the panel's breakdown, a cumulative
   frame's per-model cost and tokens and `duration_api_ms` are the deltas
   against `prev`, each clamped at 0; `num_turns` and `duration_ms` are
   always per-frame.

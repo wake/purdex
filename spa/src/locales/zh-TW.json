@@ -650,6 +650,7 @@
   "execution.cost.turn": "#",
   "execution.cost.quota": "主機額度 — {{account}}",
   "execution.cost.turn_error": "錯誤",
+  "execution.cost.includesPriorHistory": "含接續前的費用",
   "execution.interrupt": "中斷",
   "execution.more_actions": "更多動作",
   "execution.terminate": "終止",
