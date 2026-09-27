@@ -40,7 +40,7 @@ function dom(html: string): HTMLElement {
   return root
 }
 
-const m = (unitId: string, start: number, end: number): SearchMatch => ({ unitId, start, end, reveal: [] })
+const m = (unitId: string, start: number, end: number, ordinal = 0): SearchMatch => ({ unitId, start, end, ordinal, reveal: [] })
 const texts = (name: string) => (highlights.get(name)?.ranges ?? []).map((r) => r.toString())
 
 beforeEach(() => {
@@ -149,16 +149,16 @@ describe('highlightSearch', () => {
     }
     Range.prototype.getBoundingClientRect = () => ({ top: 5, bottom: 15, height: 10, left: 900, right: 910, width: 10 } as DOMRect)
     try {
-      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6)], 0)
+      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6, 1)], 0)
       expect(pre.scrollLeft).toBe(900 - (200 - 10) / 2)
       // Inside the box already: left alone.
       pre.scrollLeft = 0
       Range.prototype.getBoundingClientRect = () => ({ top: 5, bottom: 15, height: 10, left: 50, right: 60, width: 10 } as DOMRect)
-      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6)], 0)
+      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6, 1)], 0)
       expect(pre.scrollLeft).toBe(0)
       // A box that clips on purpose (overflow hidden, e.g. truncate) is not scrolled.
       Range.prototype.getBoundingClientRect = () => ({ top: 5, bottom: 15, height: 10, left: 900, right: 910, width: 10 } as DOMRect)
-      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6)], 1)
+      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6, 1)], 1)
       expect(clipped.scrollLeft).toBe(0)
     } finally {
       delete (Range.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect
@@ -214,7 +214,7 @@ describe('highlightSearch', () => {
   it('clears both highlights', () => {
     installApi()
     const root = dom('<pre data-search-unit="a">needle needle</pre>')
-    highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 7, 13)], 0)
+    highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 7, 13, 1)], 0)
     expect(highlights.size).toBe(2)
     clearSearchHighlights('p1')
     expect(highlights.size).toBe(0)
@@ -226,8 +226,8 @@ describe('highlightSearch', () => {
     installApi()
     const one = dom('<pre data-search-unit="a">alpha needle needle</pre>')
     const two = dom('<pre data-search-unit="a">beta needle needle</pre>')
-    highlightSearch('p1', one, 'needle', [m('a', 6, 12), m('a', 13, 19)], 0)
-    highlightSearch('p2', two, 'needle', [m('a', 5, 11), m('a', 12, 18)], 1)
+    highlightSearch('p1', one, 'needle', [m('a', 6, 12), m('a', 13, 19, 1)], 0)
+    highlightSearch('p2', two, 'needle', [m('a', 5, 11), m('a', 12, 18, 1)], 1)
     const owners = (name: string) => (highlights.get(name)?.ranges ?? [])
       .map((r) => (r.startContainer.textContent ?? '').split(' ')[0]).sort()
     expect(owners('search-current')).toEqual(['alpha', 'beta'])
@@ -238,7 +238,7 @@ describe('highlightSearch', () => {
     expect(owners('search-match')).toEqual(['beta'])
 
     // Re-marking one owner replaces only its own ranges.
-    highlightSearch('p2', two, 'needle', [m('a', 5, 11), m('a', 12, 18)], 0)
+    highlightSearch('p2', two, 'needle', [m('a', 5, 11), m('a', 12, 18, 1)], 0)
     expect(texts('search-current')).toEqual(['needle'])
     expect(texts('search-match')).toEqual(['needle'])
     clearSearchHighlights('p2')

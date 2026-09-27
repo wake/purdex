@@ -1,7 +1,7 @@
 // spa/src/lib/nex/transcript-search.test.ts — the search index (R3 plan T3.1).
 import { describe, it, expect } from 'vitest'
 import {
-  buildSearchUnits, findCurrent, findMatches, matchIdentity, SEARCH_MATCH_LIMIT, searchUnitId,
+  buildSearchUnits, findCurrent, findMatches, firstAtOrAfter, matchIdentity, SEARCH_MATCH_LIMIT, searchUnitId,
   type SearchUnit, type SearchUnitOptions,
 } from './transcript-search'
 import { indexOperations } from './operations'
@@ -102,7 +102,7 @@ describe('buildSearchUnits / findMatches', () => {
   it('room does', () => {
     const messages = [said('q'), asst({ type: 'thinking', thinking: 'a deep needle' }, { type: 'text', text: 'Answer' })]
     const matches = find(units(messages, 'room'), 'needle')
-    expect(matches).toEqual([{ unitId: searchUnitId('1:0', 'thinking'), start: 7, end: 13, reveal: ['1:0:thinking'] }])
+    expect(matches).toEqual([{ unitId: searchUnitId('1:0', 'thinking'), start: 7, end: 13, ordinal: 0, reveal: ['1:0:thinking'] }])
   })
 
   it('is case insensitive and literal', () => {
@@ -231,6 +231,56 @@ describe('buildSearchUnits / findMatches', () => {
     const many: SearchUnit[] = [{ id: 'm', text: 'ab'.repeat(10_001), reveal: [] }]
     expect(findMatches(many, 'ab')).toMatchObject({ truncated: true })
     expect(findMatches(many, 'ab').matches).toHaveLength(10_000)
+  })
+
+  it('numbers each match within its unit', () => {
+    const list: SearchUnit[] = [{ id: 'a', text: 'ab ab', reveal: [] }, { id: 'b', text: 'ab', reveal: [] }]
+    expect(findMatches(list, 'ab').matches.map((m) => [m.unitId, m.ordinal])).toEqual([['a', 0], ['a', 1], ['b', 0]])
+  })
+
+  // User decision (2026-09-27): past the limit, the matches kept are the ones
+  // around where the reader is (the anchor unit), not the oldest.
+  describe('anchored', () => {
+    // Ten units, two matches each: u0#0 u0#1 u1#0 … u9#1.
+    const ten: SearchUnit[] = Array.from({ length: 10 }, (_, i) => ({ id: `u${i}`, text: 'ab ab', reveal: [] }))
+    const ids = (r: ReturnType<typeof findMatches>) => r.matches.map((m) => `${m.unitId}#${m.ordinal}`)
+
+    it('keeps half the limit before the anchor and the rest from it on', () => {
+      const r = findMatches(ten, 'ab', 6, 5)
+      expect(ids(r)).toEqual(['u3#1', 'u4#0', 'u4#1', 'u5#0', 'u5#1', 'u6#0'])
+      expect(r).toMatchObject({ truncated: true, truncatedBefore: true, truncatedAfter: true })
+    })
+
+    it('near the end, gives the unused half to the matches before it', () => {
+      const r = findMatches(ten, 'ab', 6, 9)
+      expect(ids(r)).toEqual(['u7#0', 'u7#1', 'u8#0', 'u8#1', 'u9#0', 'u9#1'])
+      expect(r).toMatchObject({ truncated: true, truncatedBefore: true, truncatedAfter: false })
+      // Past the last unit: the newest `limit`.
+      expect(ids(findMatches(ten, 'ab', 6, 10))).toEqual(ids(r))
+    })
+
+    it('at the start it is the first `limit`, and nothing is cut when all fit', () => {
+      expect(ids(findMatches(ten, 'ab', 6, 0))).toEqual(['u0#0', 'u0#1', 'u1#0', 'u1#1', 'u2#0', 'u2#1'])
+      expect(findMatches(ten, 'ab', 6, 0)).toMatchObject({ truncatedBefore: false, truncatedAfter: true })
+      expect(findMatches(ten, 'ab', 20, 5)).toMatchObject({ truncated: false, truncatedBefore: false, truncatedAfter: false })
+      expect(findMatches(ten, 'ab', 20, 5).matches).toHaveLength(20)
+    })
+
+    it('firstAtOrAfter is the first match in the anchor unit or after it', () => {
+      const list: SearchUnit[] = [{ id: 'a', text: 'ab', reveal: [] }, { id: 'b', text: 'x', reveal: [] }, { id: 'c', text: 'ab', reveal: [] }]
+      const { matches } = findMatches(list, 'ab')
+      expect(firstAtOrAfter(list, matches, 0)).toBe(0)
+      expect(firstAtOrAfter(list, matches, 1)).toBe(1)
+      expect(firstAtOrAfter(list, matches, 3)).toBe(-1)
+    })
+
+    it('a window starting inside a unit keeps the true ordinals', () => {
+      const r = findMatches(ten, 'ab', 6, 5)
+      // The window opens on u3's second match: its identity says so.
+      expect(matchIdentity(ten, r.matches, 0)).toEqual({ unitId: 'u3', ordinal: 1, unitPos: 3 })
+      const whole = findMatches(ten, 'ab', 100).matches
+      expect(whole[findCurrent(ten, whole, matchIdentity(ten, r.matches, 0))]).toMatchObject({ unitId: 'u3', ordinal: 1 })
+    })
   })
 })
 

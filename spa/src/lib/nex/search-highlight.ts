@@ -171,6 +171,20 @@ function scrollRangeIntoView(range: Range, container: HTMLElement, fallback: Ele
   }
 }
 
+/**
+ * The first unit drawn at or below the top of `container`'s visible area —
+ * the one whose bottom edge is below that top, so a unit cut by it counts —
+ * or null when every unit is above it (or nothing is laid out). Where a new
+ * search starts (user decision 2026-09-27).
+ */
+export function firstUnitInView(container: HTMLElement): string | null {
+  const top = container.getBoundingClientRect().top
+  for (const el of container.querySelectorAll('[data-search-unit]')) {
+    if (el.getBoundingClientRect().bottom > top) return el.getAttribute('data-search-unit')
+  }
+  return null
+}
+
 /** The most matches one owner marks at once (the current one included). */
 export const SEARCH_MARK_LIMIT = 2000
 
@@ -219,21 +233,15 @@ export function highlightSearch(
   }
 
   // Only a window of SEARCH_MARK_LIMIT matches around the current one is
-  // marked. Ordinals count from the first match, so every match is counted,
-  // but only the window's units are searched in the DOM, and each only as far
-  // as its last ordinal in the window.
+  // marked: only the window's units are searched in the DOM, and each only as
+  // far as its last ordinal in the window. A match carries its ordinal within
+  // its unit, so a list that starts mid-unit (findMatches past its limit)
+  // still locates it.
   const [lo, hi] = markWindow(matches.length, current)
-  const ordinals: number[] = []
   const needed = new Map<string, number>()
-  const seen = new Map<string, number>()
-  for (let i = 0; i < hi; i++) {
-    const id = matches[i].unitId
-    const ordinal = seen.get(id) ?? 0
-    seen.set(id, ordinal + 1)
-    if (i >= lo) {
-      ordinals.push(ordinal)
-      needed.set(id, ordinal + 1)
-    }
+  for (let i = lo; i < hi; i++) {
+    const { unitId, ordinal } = matches[i]
+    needed.set(unitId, Math.max(needed.get(unitId) ?? 0, ordinal + 1))
   }
 
   const found = new Map<string, Range[]>()
@@ -250,7 +258,7 @@ export function highlightSearch(
       ranges = occurrences(el, pattern, needed.get(id)!)
       found.set(id, ranges)
     }
-    const range = ranges[ordinals[i - lo]] ?? null
+    const range = ranges[matches[i].ordinal] ?? null
     if (i === current) {
       currentRange = range
       currentEl = el

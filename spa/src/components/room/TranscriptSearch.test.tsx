@@ -114,6 +114,61 @@ describe('TranscriptSearch', () => {
     expect(count()).toHaveTextContent('1 / 10000+')
   })
 
+  // User decision (2026-09-27): like a browser's find, the search starts
+  // from what is on screen. jsdom has no layout: the viewport is stubbed as
+  // the scroll box's top at 100 and each unit's bottom edge.
+  describe('starting from the viewport', () => {
+    const native = Element.prototype.getBoundingClientRect
+    const layout = (bottoms: Record<string, number>) => {
+      Element.prototype.getBoundingClientRect = function (this: Element) {
+        const id = this.getAttribute('data-search-unit')
+        const top = this.classList.contains('overflow-y-auto') ? 100 : id !== null && id in bottoms ? bottoms[id] - 20 : 0
+        const bottom = this.classList.contains('overflow-y-auto') ? 300 : id !== null && id in bottoms ? bottoms[id] : 0
+        return { top, bottom, left: 0, right: 0, width: 0, height: bottom - top, x: 0, y: top, toJSON() {} } as DOMRect
+      }
+    }
+    afterEach(() => { Element.prototype.getBoundingClientRect = native })
+
+    it('typing starts at the first match at or below the viewport', () => {
+      render(<Harness messages={[said('xx a'), said('xx b'), said('xx c')]} />)
+      layout({ '0:0:text': 50, '1:0:text': 150, '2:0:text': 250 })
+      type('xx')
+      expect(count()).toHaveTextContent('2 / 3')
+      expect(currentUnit()).toBe('1:0:text')
+      next()
+      expect(currentUnit()).toBe('2:0:text')
+      // Next wraps from the end to the first.
+      next()
+      expect(count()).toHaveTextContent('1 / 3')
+      expect(currentUnit()).toBe('0:0:text')
+    })
+
+    it('wraps to the first match when none is below', () => {
+      render(<Harness messages={[said('xx a'), said('xx b'), said('zz')]} />)
+      layout({ '0:0:text': 50, '1:0:text': 80, '2:0:text': 150 })
+      type('xx')
+      expect(count()).toHaveTextContent('1 / 2')
+      expect(currentUnit()).toBe('0:0:text')
+    })
+
+    it('past the limit, keeps the matches around the viewport and can reach the newest', () => {
+      render(<Harness messages={[said('ab '.repeat(10_001)), said('ab newest')]} />)
+      layout({ '0:0:text': 50, '1:0:text': 150 })
+      type('ab')
+      // The newest line is on screen and is where the search starts, though
+      // 10,002 matches come before it: the oldest ones are the ones dropped.
+      expect(currentUnit()).toBe('1:0:text')
+      expect(count()).toHaveTextContent('10000 / 10000+')
+      // Next, at the end, wraps to the very first match…
+      next()
+      expect(currentUnit()).toBe('0:0:text')
+      expect(current()[0].startOffset).toBe(0)
+      // …and previous, from there, back to the newest.
+      prev()
+      expect(currentUnit()).toBe('1:0:text')
+    })
+  })
+
   it('marks every match and the current one', () => {
     render(<Harness messages={[said('one needle'), said('two needle')]} />)
     type('needle')

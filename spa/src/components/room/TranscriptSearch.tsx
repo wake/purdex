@@ -29,9 +29,11 @@ import { CaretDown, CaretUp, MagnifyingGlass, X } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { indexOperations } from '../../lib/nex/operations'
 import {
-  buildSearchUnits, findCurrent, findMatches, matchIdentity, normalizeQuery, type MatchIdentity,
+  ANCHOR_END, ANCHOR_START, anchorPosition, buildSearchUnits, findCurrent, findMatches, firstAtOrAfter,
+  matchIdentity, normalizeQuery, SEARCH_MATCH_LIMIT, unitAnchor,
+  type MatchIdentity, type SearchResult, type SearchUnit, type UnitAnchor,
 } from '../../lib/nex/transcript-search'
-import { clearSearchHighlights, highlightSearch } from '../../lib/nex/search-highlight'
+import { clearSearchHighlights, firstUnitInView, highlightSearch } from '../../lib/nex/search-highlight'
 import type { StreamMessage } from '../../lib/nex/message-types'
 import type { ToolActivity } from '../../lib/nex/tool-activity'
 import { useFoldStore } from './fold-context'
@@ -56,6 +58,22 @@ export interface TranscriptSearchProps {
   onJump?: () => void
 }
 
+const NO_RESULT: SearchResult = { matches: [], truncated: false, truncatedBefore: false, truncatedAfter: false }
+
+/**
+ * findMatches over `units`, remembering its last answer (A F10): a keystroke
+ * computes it once in onChange, and the render that follows asks again.
+ */
+function searcher(units: readonly SearchUnit[]): (query: string, anchor: UnitAnchor) => SearchResult {
+  let last: { query: string; at: number; result: SearchResult } | null = null
+  return (query, anchor) => {
+    const at = anchorPosition(units, anchor)
+    if (last && last.query === query && last.at === at) return last.result
+    last = { query, at, result: findMatches(units, query, SEARCH_MATCH_LIMIT, at) }
+    return last.result
+  }
+}
+
 const BUTTON = 'p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none'
 
 export default function TranscriptSearch({
@@ -66,6 +84,9 @@ export default function TranscriptSearch({
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
   const [sel, setSel] = useState<MatchIdentity | null>(null)
+  // Where the kept matches are centred past SEARCH_MATCH_LIMIT: the viewport
+  // when a search starts, moved only when next / previous step past an end.
+  const [win, setWin] = useState<UnitAnchor>(ANCHOR_START)
   // Set by whatever moves to a match (typing, next, previous); the layout
   // effect scrolls once and clears it. Every other re-mark stays put.
   const wantScroll = useRef(false)
@@ -74,9 +95,10 @@ export default function TranscriptSearch({
     () => buildSearchUnits({ messages, index: indexOperations(messages), tools, view, keyPrefix, turnStarts }),
     [messages, tools, view, keyPrefix, turnStarts],
   )
-  const { matches, truncated } = useMemo(() => findMatches(units, query), [units, query])
-  const current = useMemo(() => findCurrent(units, matches, sel), [units, matches, sel])
+  const search = useMemo(() => searcher(units), [units])
   const searching = normalizeQuery(query) !== null
+  const { matches, truncated, truncatedBefore, truncatedAfter } = searching ? search(query, win) : NO_RESULT
+  const current = useMemo(() => findCurrent(units, matches, sel), [units, matches, sel])
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -109,22 +131,70 @@ export default function TranscriptSearch({
 
   useLayoutEffect(() => () => clearSearchHighlights(owner), [owner])
 
+  // Pin the identity of the match the new query lands on, so a transcript
+  // change before the next keystroke cannot move it. A query refining one
+  // that had a match stays on it (or the next one); a new search starts at
+  // the first match at or below the top of the viewport, else wraps to the
+  // first (user decision 2026-09-27, like a browser's find).
   const onChange = (value: string) => {
     setQuery(value)
-    // Pin the identity of the match the new query lands on, so a transcript
-    // change before the next keystroke cannot move it (findMatches runs again
-    // in the memo; it is linear and bounded).
-    const next = findMatches(units, value).matches
-    setSel(matchIdentity(units, next, findCurrent(units, next, sel)))
     wantScroll.current = true
+    if (normalizeQuery(value) === null) {
+      setSel(null)
+      return
+    }
+    if (sel) {
+      const { matches: refined } = search(value, win)
+      setSel(matchIdentity(units, refined, findCurrent(units, refined, sel)))
+      return
+    }
+    const box = scrollRef.current
+    let anchor = unitAnchor(units, box ? firstUnitInView(box) : null)
+    let result = search(value, anchor)
+    let i = firstAtOrAfter(units, result.matches, anchorPosition(units, anchor))
+    if (i < 0) {
+      // Nothing from the viewport down: the very first match.
+      if (result.truncatedBefore) {
+        anchor = ANCHOR_START
+        result = search(value, anchor)
+      }
+      i = 0
+    }
+    setWin(anchor)
+    setSel(matchIdentity(units, result.matches, i))
   }
 
+  // One step. Past an end of the kept matches it re-centres them on where it
+  // goes: past the last, onto the ones that follow when some were cut, else
+  // round to the very first; before the first, likewise backwards.
   const move = (delta: 1 | -1) => {
     const n = matches.length
     if (n === 0) return
-    const i = current < 0 ? 0 : (current + delta + n) % n
-    setSel(matchIdentity(units, matches, i))
     wantScroll.current = true
+    const i = current < 0 ? 0 : current + delta
+    if (i >= 0 && i < n) {
+      setSel(matchIdentity(units, matches, i))
+      return
+    }
+    const edge = matches[i < 0 ? 0 : n - 1]
+    const cut = i < 0 ? truncatedBefore : truncatedAfter
+    let anchor: UnitAnchor
+    let result: SearchResult
+    let j: number
+    if (cut) {
+      // Onwards: re-centre on the edge match's unit and step from it there.
+      anchor = unitAnchor(units, edge.unitId)
+      result = search(query, anchor)
+      const at = findCurrent(units, result.matches, matchIdentity(units, [edge], 0))
+      j = Math.max(0, Math.min(result.matches.length - 1, at + delta))
+    } else {
+      // Round: the very first (or last) match, recomputing only if it was cut.
+      anchor = i < 0 ? (truncatedAfter ? ANCHOR_END : win) : (truncatedBefore ? ANCHOR_START : win)
+      result = search(query, anchor)
+      j = i < 0 ? result.matches.length - 1 : 0
+    }
+    setWin(anchor)
+    setSel(matchIdentity(units, result.matches, j))
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
