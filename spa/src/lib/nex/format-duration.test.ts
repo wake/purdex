@@ -1,6 +1,6 @@
 // spa/src/lib/nex/format-duration.test.ts
 import { describe, it, expect } from 'vitest'
-import { formatDuration } from './format-duration'
+import { formatCoarseDuration, formatDuration } from './format-duration'
 
 describe('formatDuration', () => {
   it('negative → 0.0s', () => {
@@ -48,5 +48,25 @@ describe('formatDuration', () => {
     expect(formatDuration(3_720_000)).toBe('1h 02m')
     expect(formatDuration(3_779_999)).toBe('1h 02m')
     expect(formatDuration(45_000_000)).toBe('12h 30m')
+  })
+})
+
+// R4: task elapsed / subagent duration — no decimals, one unit below an hour.
+describe('formatCoarseDuration', () => {
+  it('seconds floor: whole seconds, then minutes, then hours + minutes', () => {
+    expect(formatCoarseDuration(0)).toBe('0s')
+    expect(formatCoarseDuration(12_900)).toBe('12s')
+    expect(formatCoarseDuration(59_999)).toBe('59s')
+    expect(formatCoarseDuration(60_000)).toBe('1m')
+    expect(formatCoarseDuration(4 * 60_000 + 59_000)).toBe('4m')
+    expect(formatCoarseDuration(3_600_000 + 5 * 60_000)).toBe('1h 05m')
+  })
+  it('minutes floor: under a minute is <1m', () => {
+    expect(formatCoarseDuration(30_000, 'minute')).toBe('<1m')
+    expect(formatCoarseDuration(90_000, 'minute')).toBe('1m')
+  })
+  it('negative / NaN → zero', () => {
+    expect(formatCoarseDuration(-5)).toBe('0s')
+    expect(formatCoarseDuration(Number.NaN, 'minute')).toBe('<1m')
   })
 })

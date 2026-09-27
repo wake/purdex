@@ -1586,3 +1586,64 @@ describe('ExecutionView — search (R3 T3.3)', () => {
     expect(scrollTo).toHaveBeenCalledTimes(1)
   })
 })
+
+// R4 T3.2: the dock lists running tasks; "inspect" goes where search would.
+describe('ExecutionView — dock tasks (R4 T3.2)', () => {
+  type Msg = Exec['messages'][number]
+  const said = (text: string) => ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }) as Msg
+  const call = (id: string, name: string, input: Record<string, unknown>, parent: string | null = null) =>
+    ({ type: 'assistant', parent_tool_use_id: parent, message: { id: `m_${id}`, role: 'assistant', content: [{ type: 'tool_use', id, name, input }], stop_reason: null } }) as Msg
+  const running = (id: string, toolUseId: string | null, extra: Record<string, unknown> = {}) => ({
+    task_id: id, turn_id: 't1', kind: 'shell' as const, task_type: 'local_bash', tool_use_id: toolUseId, parent_tool_use_id: null,
+    description: '', backgrounded: true, status: 'running' as const, provider_status: null, closed_by: null,
+    started_at: Date.now() - 120_000, ended_at: null, startSeq: 1, ...extra,
+  })
+  afterEach(() => {
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    delete (Element.prototype as { scrollTo?: unknown }).scrollTo
+  })
+
+  it('shows running tasks in the dock, oldest first; closed ones are not listed', () => {
+    patchExec({ tasks: {
+      b: running('b', 'tu_b', { command: 'tail -f log', started_at: Date.now() - 60_000 }),
+      a: running('a', 'tu_a', { command: 'pnpm dev' }),
+      c: { ...running('c', 'tu_c', { command: 'done' }), status: 'completed' },
+    } })
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.getByTestId('worker-dock-tasks')).toHaveTextContent('2 running')
+    expect(screen.getAllByTestId('worker-dock-task').map((el) => el.textContent)).toEqual(['pnpm dev (2m)', 'tail -f log (1m)'])
+  })
+
+  it('inspect opens the subagent that hides the call and scrolls to it, once', () => {
+    const intoView = vi.fn()
+    Element.prototype.scrollIntoView = intoView
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    patchExec({
+      messages: [said('go'), call('task', 'Task', { description: 'explore' }), call('c1', 'Bash', { command: 'tail -f log' }, 'task')],
+      turnStarts: [0],
+      tasks: { a: running('a', 'c1', { command: 'tail -f log' }) },
+    })
+    render(<ExecutionView {...base} isActive />)
+    expect(document.querySelector('[data-search-unit="2:0:arg"]')).toBeNull()
+    fireEvent.click(screen.getByTestId('worker-dock-toggle'))
+    fireEvent.click(screen.getByTestId('worker-dock-inspect'))
+    const target = document.querySelector('[data-search-unit="2:0:arg"]')
+    expect(target).not.toBeNull()
+    expect(intoView).toHaveBeenCalledTimes(1)
+    expect(intoView.mock.contexts[0]).toBe(target)
+    // A re-render (new content) does not replay the jump.
+    act(() => { const s = useExecutionStore.getState().executions[KEY]; patchExec({ messages: [...s.messages, said('later')] }) })
+    expect(intoView).toHaveBeenCalledTimes(1)
+  })
+
+  it('inspect for a call not in the transcript does nothing', () => {
+    const intoView = vi.fn()
+    Element.prototype.scrollIntoView = intoView
+    patchExec({ messages: [said('go')], turnStarts: [0], tasks: { a: running('a', 'missing', { command: 'x' }) } })
+    render(<ExecutionView {...base} isActive />)
+    fireEvent.click(screen.getByTestId('worker-dock-toggle'))
+    fireEvent.click(screen.getByTestId('worker-dock-inspect'))
+    expect(intoView).not.toHaveBeenCalled()
+  })
+})
