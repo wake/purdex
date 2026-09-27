@@ -292,3 +292,51 @@ func TestCreateError_SessionAliveByStage(t *testing.T) {
 		assert.Equal(t, want, ce.SessionAlive(), "stage %s", stage)
 	}
 }
+
+// A create on a host with no server starts one; the watcher must recover at
+// once — hooks, wait-for, a sessions push — instead of on the next 5 s tick
+// (#1108, #1474 spec D4).
+func TestCreateSession_WatcherDown_RecoversWithoutTick(t *testing.T) {
+	mod, fake, events := newHookTestModule(t, false)
+	setInstance(mod, "111:1000")
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+	// Real tmux new-session starts the server.
+	fake.SetCreateHook(func(_ context.Context, op tmux.ReadOp, _ string) error {
+		if op == tmux.OpNewSession {
+			fake.SetAlive(true)
+		}
+		return nil
+	})
+	fake.ResetHookSets()
+
+	_, err := mod.CreateSession("first", t.TempDir())
+	require.NoError(t, err)
+
+	assert.True(t, mod.TmuxAlive(), "the watcher must be up after the create")
+	assert.Equal(t, allHookEvents, fake.HookSets(), "hooks must be installed on the new server")
+	assert.Equal(t, []string{"sessions"}, drainTypes(t, sub),
+		"one sessions push and no tmux frame (no server was already ok)")
+	select {
+	case v := <-mod.waitForGate:
+		assert.True(t, v, "wait-for must be resumed")
+	default:
+		t.Fatal("wait-for was not resumed")
+	}
+}
+
+// With the watcher already up, a create runs no recovery.
+func TestCreateSession_WatcherUp_NoRecovery(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	setInstance(mod, "111:1000")
+	fake.ResetHookSets()
+
+	_, err := mod.CreateSession("second", t.TempDir())
+	require.NoError(t, err)
+	assert.Empty(t, fake.HookSets())
+	select {
+	case <-mod.waitForGate:
+		t.Fatal("wait-for must not be signalled")
+	default:
+	}
+}

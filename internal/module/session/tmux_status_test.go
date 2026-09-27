@@ -184,3 +184,44 @@ func TestOnSubscribe_ConcurrentChangeNeverStale(t *testing.T) {
 		assert.Equal(t, "unavailable", frames[len(frames)-1], "subscriber %d ended on a stale value", i)
 	}
 }
+
+// markServerUp runs the recovery only for the caller whose flip took the
+// watcher up (spec D4): a second call, sequential or concurrent, is a no-op.
+func TestMarkServerUp_RecoversOnce(t *testing.T) {
+	t.Run("sequential", func(t *testing.T) {
+		mod, fake, events := newStatusTestModule(t, tmux.ServerAbsent)
+		fake.SetServerState(tmux.ServerUp)
+		sub := events.AddTestSubscriber()
+		defer events.RemoveTestSubscriber(sub)
+		fake.ResetHookSets()
+
+		mod.markServerUp()
+		expireDebounce(mod) // so a second push would not be hidden by it
+		mod.markServerUp()
+
+		assert.True(t, mod.TmuxAlive())
+		assert.Equal(t, allHookEvents, fake.HookSets(), "one install")
+		assert.Equal(t, []string{"sessions"}, drainTypes(t, sub), "one sessions push")
+	})
+	t.Run("concurrent", func(t *testing.T) {
+		mod, fake, events := newStatusTestModule(t, tmux.ServerAbsent)
+		fake.SetServerState(tmux.ServerUp)
+		sub := events.AddTestSubscriber()
+		defer events.RemoveTestSubscriber(sub)
+		fake.ResetHookSets()
+
+		var wg sync.WaitGroup
+		for i := 0; i < 2; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				mod.markServerUp()
+			}()
+		}
+		wg.Wait()
+
+		assert.True(t, mod.TmuxAlive())
+		assert.Equal(t, allHookEvents, fake.HookSets(), "one install")
+		assert.Equal(t, []string{"sessions"}, drainTypes(t, sub), "one sessions push")
+	})
+}

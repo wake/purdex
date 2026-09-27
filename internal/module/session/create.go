@@ -358,6 +358,15 @@ func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd stri
 		m.invalidateNameCache()
 		m.invalidateListCache()
 
+		// A create on a host with no server just started one. Recover now
+		// (hooks, wait-for, sessions push) rather than on the next 5 s
+		// tick (#1108, #1474 spec D4). A tick that probed "down" before
+		// this and writes after it can flip the watcher back; the next
+		// tick then recovers again, and the reported value never moves.
+		if !m.wstate.getTmuxAlive() {
+			m.markServerUp()
+		}
+
 		return &SessionInfo{
 			Code:   code,
 			TmuxID: s.ID,

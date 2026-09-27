@@ -209,15 +209,26 @@ func (m *SessionModule) tickTmuxDown() {
 	// (spec D2).
 	m.recordServerState(state)
 	if state == tmux.ServerUp {
-		m.wstate.setTmuxAlive(true)
-		// A server that just appeared has no hooks, whatever an earlier
-		// install said. A failure here is retried by tickNormal and never
-		// skips the recovery below (#1473 spec D3).
-		m.wstate.clearHooksOK()
-		m.ensureHooks("")
-		m.notifyWaitFor(true)
-		m.broadcastSessions()
+		m.markServerUp()
 	}
+}
+
+// markServerUp takes the watcher up and recovers — hooks, wait-for, a
+// sessions push — for the one caller whose flip does it; any other caller
+// (a concurrent tick or create) returns at once (#1474 spec D4). The caller
+// knows a server answers, so tmux is usable too.
+func (m *SessionModule) markServerUp() {
+	if !m.wstate.setTmuxAlive(true) {
+		return
+	}
+	m.recordServerState(tmux.ServerUp)
+	// A server that just appeared has no hooks, whatever an earlier
+	// install said. A failure here is retried by tickNormal and never
+	// skips the recovery below (#1473 spec D3).
+	m.wstate.clearHooksOK()
+	m.ensureHooks("")
+	m.notifyWaitFor(true)
+	m.broadcastSessions()
 }
 
 // recordServerState records a probe's result and broadcasts the reported
