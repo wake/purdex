@@ -57,6 +57,21 @@ type SessionModule struct {
 	hooksMu      sync.Mutex
 	hooksStopped bool
 
+	// lifeMu makes a watcher recovery and Stop mutually exclusive:
+	// markServerUp holds RLock for its whole run, Stop holds Lock (after
+	// cancelling runCtx) while it marks the module stopped and removes the
+	// hooks, so no recovery changes state or announces anything after Stop
+	// returns (#1474 spec D4). Nothing else takes it.
+	//
+	// Lock order: lifeMu → hooksMu → wstate.mu (ensureHooks takes hooksMu
+	// under markServerUp's RLock; Stop takes lifeMu, then hooksMu).
+	lifeMu sync.RWMutex
+
+	// recoveryHook, when set (tests only), runs inside markServerUp once it
+	// holds lifeMu and before it checks for Stop or changes any state — the
+	// seam for "Stop begins while a recovery is in flight".
+	recoveryHook func()
+
 	// createMu serializes handleCreate's HasSession→NewSession→SetMeta
 	// critical section so two concurrent POSTs with the same name can't
 	// both slip past the duplicate check. See #61. A ctxMutex so a caller
@@ -188,11 +203,15 @@ func (m *SessionModule) Start(ctx context.Context) error {
 	watchCtx, cancel := context.WithCancel(ctx)
 	m.cancelWatch = cancel
 	m.runCtx = watchCtx
-	m.wstate.setTmuxAlive(m.tmux.TmuxAlive())
+	state := m.tmux.ServerState()
+	m.wstate.setTmuxAlive(state == tmux.ServerUp)
+	m.recordServerState(state)
 	m.core.TmuxAliveFunc = m.TmuxAlive
 	m.watchSessions(watchCtx)
 
-	// Register OnSubscribe callback to send initial sessions snapshot.
+	// OnSubscribe: the current tmux value first (#1474 spec D3; it never
+	// waits on a tmux read), then the initial sessions snapshot.
+	m.core.Events.OnSubscribe(m.sendTmuxStatus)
 	m.core.Events.OnSubscribe(m.sendSessionsSnapshot)
 
 	return nil
@@ -298,6 +317,10 @@ func (m *SessionModule) Stop(_ context.Context) error {
 	if m.cancelWatch != nil {
 		m.cancelWatch()
 	}
+	// Wait for any watcher recovery in flight; one that starts later sees
+	// runCtx cancelled or hooksStopped (lifeMu, #1474 spec D4).
+	m.lifeMu.Lock()
+	defer m.lifeMu.Unlock()
 	// Remove tmux hooks (best-effort). Under hooksMu, after any install in
 	// flight, and marked stopped first so none follows (#1473 D3.1).
 	m.hooksMu.Lock()

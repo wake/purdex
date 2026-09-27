@@ -1,6 +1,10 @@
 package tmux
 
-import "context"
+import (
+	"context"
+	"testing"
+	"time"
+)
 
 // ReadWaitDelay exposes readWaitDelay so the deadline tests can bound how long
 // a killed read may take to return.
@@ -14,4 +18,12 @@ const ActivePaneMetadataFormat = activePaneMetadataFormat
 // assert the combined read is equivalent to it.
 func (r *RealExecutor) ActivePaneMetadataPerField(ctx context.Context, sessionName string) (TmuxPaneMetadata, error) {
 	return r.activePaneMetadataPerField(ctx, sessionName)
+}
+
+// SetServerStateTimeout shortens the `tmux info` deadline ServerState runs
+// under, for the hung-probe test; the previous value is restored at cleanup.
+func SetServerStateTimeout(t testing.TB, d time.Duration) {
+	prev := serverStateTimeout
+	serverStateTimeout = d
+	t.Cleanup(func() { serverStateTimeout = prev })
 }

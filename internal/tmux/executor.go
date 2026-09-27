@@ -132,6 +132,10 @@ type Executor interface {
 	RemoveHookGlobal(event string) error
 	ShowHooksGlobal() (string, error)
 	TmuxAlive() bool
+	// ServerState classifies one `tmux info` probe: Up, Absent (no server;
+	// creating a session starts one) or Broken (tmux unusable). TmuxAlive
+	// is ServerState() == ServerUp (#1108, #1474 spec D1).
+	ServerState() ServerState
 }
 
 // --- Real Executor ---
@@ -701,10 +705,63 @@ func (r *RealExecutor) ShowHooksGlobal() (string, error) {
 	return string(out), nil
 }
 
-func (r *RealExecutor) TmuxAlive() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// ServerState is what one `tmux info` probe says about the server (#1108,
+// #1474 spec D1).
+type ServerState int
+
+const (
+	// ServerUp: a server answered.
+	ServerUp ServerState = iota
+	// ServerAbsent: no server exists (stale or missing socket). A usable
+	// host — creating a session starts one — and the normal state after a
+	// reboot.
+	ServerAbsent
+	// ServerBroken: tmux cannot be used — binary missing or not
+	// executable, `tmux info` timing out, or any other failure.
+	ServerBroken
+)
+
+func (s ServerState) String() string {
+	switch s {
+	case ServerUp:
+		return "up"
+	case ServerAbsent:
+		return "absent"
+	case ServerBroken:
+		return "broken"
+	}
+	return fmt.Sprintf("ServerState(%d)", int(s))
+}
+
+// serverStateTimeout bounds the `tmux info` probe. A var so a test can
+// shorten it.
+var serverStateTimeout = 5 * time.Second
+
+func (r *RealExecutor) ServerState() ServerState {
+	ctx, cancel := context.WithTimeout(context.Background(), serverStateTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, "tmux", "info").Run() == nil
+	// Output() (not Run) so a failure's stderr lands in ExitError.Stderr.
+	_, err := boundedRead(ctx, "info").Output()
+	if err == nil {
+		return ServerUp
+	}
+	// A probe killed at the deadline is a hung server, never an absent
+	// one, whatever it printed first.
+	if ctx.Err() != nil {
+		return ServerBroken
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && IsNoServer(string(exitErr.Stderr)) {
+		return ServerAbsent
+	}
+	return ServerBroken
+}
+
+// TmuxAlive reports whether a server answers. "No server" is false here even
+// though it is a usable host: the watcher's internal up/down state machine
+// (wait-for gate, hooks) needs a running server (spec D1).
+func (r *RealExecutor) TmuxAlive() bool {
+	return r.ServerState() == ServerUp
 }
 
 type processEntry struct {

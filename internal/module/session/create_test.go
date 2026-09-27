@@ -7,13 +7,16 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -290,5 +293,131 @@ func TestCreateError_SessionAliveByStage(t *testing.T) {
 	for stage, want := range cases {
 		ce := &CreateError{Stage: stage, Name: "x", Err: errors.New("boom")}
 		assert.Equal(t, want, ce.SessionAlive(), "stage %s", stage)
+	}
+}
+
+// newServerStartingModule is a module whose watcher is down on a host with
+// no server, and whose fake new-session starts one, as real tmux does.
+func newServerStartingModule(t *testing.T) (*SessionModule, *tmux.FakeExecutor, *core.EventsBroadcaster) {
+	t.Helper()
+	mod, fake, events := newHookTestModule(t, false)
+	setInstance(mod, "111:1000")
+	fake.SetCreateHook(func(_ context.Context, op tmux.ReadOp, _ string) error {
+		if op == tmux.OpNewSession {
+			fake.SetAlive(true)
+		}
+		return nil
+	})
+	fake.ResetHookSets()
+	return mod, fake, events
+}
+
+// createWithin runs CreateSession and fails the test if it has not returned
+// within d.
+func createWithin(t *testing.T, mod *SessionModule, name string, d time.Duration) {
+	t.Helper()
+	done := make(chan error, 1)
+	dir := t.TempDir()
+	go func() {
+		_, err := mod.CreateSession(name, dir)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(d):
+		t.Fatalf("create %q did not return within %v", name, d)
+	}
+}
+
+// waitSessionsFrame reads sub until a sessions frame arrives or the deadline
+// passes, failing on a tmux frame (no server was already reported ok).
+func waitSessionsFrame(t *testing.T, sub *core.EventSubscriber, d time.Duration) {
+	t.Helper()
+	deadline := time.After(d)
+	for {
+		select {
+		case msg := <-sub.SendCh():
+			var env struct {
+				Type string `json:"type"`
+			}
+			require.NoError(t, json.Unmarshal(msg, &env))
+			require.NotEqual(t, "tmux", env.Type, "no tmux frame expected")
+			if env.Type == "sessions" {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("no sessions frame within %v", d)
+		}
+	}
+}
+
+// A create on a host with no server starts one; the watcher recovers —
+// hooks, wait-for, a sessions push — shortly after, without waiting for the
+// next 5 s tick (#1108, #1474 spec D4). The recovery is started, not awaited.
+func TestCreateSession_WatcherDown_RecoversWithoutTick(t *testing.T) {
+	mod, fake, events := newServerStartingModule(t)
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+
+	createWithin(t, mod, "first", 2*time.Second)
+
+	waitSessionsFrame(t, sub, 2*time.Second)
+	assert.True(t, mod.TmuxAlive(), "the watcher must be up after the create")
+	assert.Equal(t, allHookEvents, fake.HookSets(), "hooks must be installed on the new server")
+	select {
+	case v := <-mod.waitForGate:
+		assert.True(t, v, "wait-for must be resumed")
+	default:
+		t.Fatal("wait-for was not resumed")
+	}
+}
+
+// The recovery's hook subprocesses have no deadline, so it must never run
+// under createMu (PR review A1/A2): with the install blocked, the create
+// that started it returns and a second create completes; once released,
+// the recovery finishes on its own.
+func TestCreateSession_RecoveryRunsOffTheCreateLock(t *testing.T) {
+	mod, fake, events := newServerStartingModule(t)
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+	entered := make(chan struct{}, 8)
+	release := make(chan struct{})
+	fake.SetHookGlobalGate(entered, release)
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+
+	createWithin(t, mod, "first", 2*time.Second)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the recovery never reached the hook install")
+	}
+	createWithin(t, mod, "second", 2*time.Second)
+	assert.Empty(t, fake.HookSets(), "the recovery must still be blocked")
+
+	close(release)
+	released = true
+	waitSessionsFrame(t, sub, 2*time.Second)
+	assert.Equal(t, allHookEvents, fake.HookSets(), "one install, finished after the release")
+}
+
+// With the watcher already up, a create runs no recovery.
+func TestCreateSession_WatcherUp_NoRecovery(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	setInstance(mod, "111:1000")
+	fake.ResetHookSets()
+
+	_, err := mod.CreateSession("second", t.TempDir())
+	require.NoError(t, err)
+	assert.Empty(t, fake.HookSets())
+	select {
+	case <-mod.waitForGate:
+		t.Fatal("wait-for must not be signalled")
+	default:
 	}
 }

@@ -188,6 +188,8 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (isImeEscape(e)) return
+      // Already answered by something on top of the panel — a ConfirmDialog opened from inside it (ConfirmDialog.tsx).
+      if (e.defaultPrevented) return
       if (openPanels[openPanels.length - 1] !== idRef.current) return
       e.preventDefault()
       onClose()

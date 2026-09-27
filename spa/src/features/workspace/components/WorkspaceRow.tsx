@@ -1,4 +1,5 @@
 import type React from 'react'
+import { useRef } from 'react'
 import { CaretRight, CaretDown, Plus } from '@phosphor-icons/react'
 import { useDroppable } from '@dnd-kit/core'
 import { useSortable } from '@dnd-kit/sortable'
@@ -7,6 +8,8 @@ import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
 import { InlineTabList } from './InlineTabList'
+import { WorkspaceConflictButton, WorkspaceConflictPanel } from './WorkspaceConflict'
+import { useWorkspaceConflict } from './useWorkspaceConflict'
 
 interface Props {
   workspace: Workspace
@@ -43,6 +46,8 @@ export function WorkspaceRow(props: Props) {
   const toggleExpanded = useLayoutStore((s) => s.toggleWorkspaceExpanded)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
   const showTabs = tabPosition !== 'top'
+  const conflictButtonRef = useRef<HTMLButtonElement>(null)
+  const conflict = useWorkspaceConflict(workspace.id, conflictButtonRef)
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: workspace.id,
@@ -107,6 +112,7 @@ export function WorkspaceRow(props: Props) {
           />
           <span className="truncate">{workspace.name}</span>
         </button>
+        <WorkspaceConflictButton workspace={workspace} conflict={conflict} buttonRef={conflictButtonRef} />
         {showTabs && (
           <button
             type="button"
@@ -136,6 +142,8 @@ export function WorkspaceRow(props: Props) {
           </button>
         )}
       </div>
+      {/* Outside the header on purpose: a portal's events bubble through the React tree (WorkspaceConflict.tsx). */}
+      <WorkspaceConflictPanel workspace={workspace} conflict={conflict} buttonRef={conflictButtonRef} />
 
       {showTabs && expanded && (
         <InlineTabList

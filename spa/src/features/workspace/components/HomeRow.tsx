@@ -2,6 +2,7 @@ import { useRef } from 'react'
 import { CaretDown } from '@phosphor-icons/react'
 import { useProfileSwitcherTrigger } from '../../../stores/useProfileSwitcherStore'
 import { ProfileIcon, ProfileSwitcher } from './ProfileSwitcher'
+import { ProfileConflictButton } from './ProfileConflict'
 
 interface Props {
   isActive: boolean
@@ -13,7 +14,8 @@ interface Props {
  * belongs to a workspace now (Profile Sync spec §4.3), so it is a plain button — no list, no drop target.
  * It shows the profile on screen — its icon and name; with neither set that is the Purdex logo and `Home`, the
  * row as it always was. On a device with a local profile (a slave) it is the profile switcher's trigger as
- * well: a chevron, and a click opens the menu (spec §4.9).
+ * well: a chevron, and a click opens the menu (spec §4.9). While the master has sync locks, an icon beside the button
+ * opens what they are (sidebar conflict icons spec §3).
  */
 export function HomeRow({ isActive, onSelectHome }: Props) {
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -43,6 +45,8 @@ export function HomeRow({ isActive, onSelectHome }: Props) {
         <span data-testid="home-label" className="flex-1 truncate">{switcher.label}</span>
         {switcher.enabled && <CaretDown size={12} data-testid="home-switcher-chevron" className="mr-2 shrink-0 text-text-muted" />}
       </button>
+      {/* Beside the trigger, not in it: a click on the icon opens its popover only (ProfileConflict.tsx). */}
+      <ProfileConflictButton />
       {switcher.enabled && <ProfileSwitcher trigger={buttonRef} placement="bottom-start" />}
     </div>
   )

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -681,5 +682,85 @@ func TestRealExecutor_HasSessionContext_AbsentSocket(t *testing.T) {
 	ok, err := (&tmux.RealExecutor{}).HasSessionContext(context.Background(), "x")
 	if ok || err != nil {
 		t.Errorf("HasSessionContext on absent socket = (%v, %v), want (false, nil)", ok, err)
+	}
+}
+
+// installTmuxScript puts a fake tmux running body first on PATH.
+func installTmuxScript(t *testing.T, body string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestRealExecutor_ServerState is the D1 classification (#1108, #1474): only a
+// failing `tmux info` whose stderr says there is no server is Absent — a
+// usable host, since creating a session starts one. Every other failure is
+// Broken, and TmuxAlive stays "the server answered".
+func TestRealExecutor_ServerState(t *testing.T) {
+	cases := []struct {
+		name    string
+		install func(t *testing.T)
+		want    tmux.ServerState
+	}{
+		{"exit 0", func(t *testing.T) { installTmuxScript(t, "exit 0") }, tmux.ServerUp},
+		{"stale socket", func(t *testing.T) {
+			installFailingTmux(t, "no server running on /tmp/tmux-501/default")
+		}, tmux.ServerAbsent},
+		{"absent socket", func(t *testing.T) { installFailingTmux(t, absentSocketStderr(t)) }, tmux.ServerAbsent},
+		{"other error", func(t *testing.T) { installFailingTmux(t, "something else") }, tmux.ServerBroken},
+		{"permission denied", func(t *testing.T) { installFailingTmux(t, permissionDeniedStderr(t)) }, tmux.ServerBroken},
+		{"tmux not on PATH", func(t *testing.T) { t.Setenv("PATH", t.TempDir()) }, tmux.ServerBroken},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.install(t)
+			r := &tmux.RealExecutor{}
+			if got := r.ServerState(); got != tc.want {
+				t.Errorf("ServerState() = %v, want %v", got, tc.want)
+			}
+			if got, want := r.TmuxAlive(), tc.want == tmux.ServerUp; got != want {
+				t.Errorf("TmuxAlive() = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// TestRealExecutor_ServerState_HungIsBroken: a `tmux info` that never
+// answers is killed at the deadline and counts as Broken — a hung server
+// is not a missing one.
+func TestRealExecutor_ServerState_HungIsBroken(t *testing.T) {
+	installTmuxScript(t, "exec sleep 5")
+	tmux.SetServerStateTimeout(t, 200*time.Millisecond)
+	start := time.Now()
+	got := (&tmux.RealExecutor{}).ServerState()
+	if got != tmux.ServerBroken {
+		t.Errorf("ServerState() on hung tmux = %v, want ServerBroken", got)
+	}
+	if el := time.Since(start); el > 200*time.Millisecond+tmux.ReadWaitDelay+time.Second {
+		t.Errorf("ServerState() took %v, want it bounded by the deadline", el)
+	}
+}
+
+// TestFakeExecutor_ServerState: SetAlive keeps its old meaning (Up / Absent)
+// and SetServerState reaches Broken.
+func TestFakeExecutor_ServerState(t *testing.T) {
+	f := tmux.NewFakeExecutor()
+	if got := f.ServerState(); got != tmux.ServerUp {
+		t.Errorf("default ServerState() = %v, want ServerUp", got)
+	}
+	f.SetAlive(false)
+	if got := f.ServerState(); got != tmux.ServerAbsent {
+		t.Errorf("after SetAlive(false) = %v, want ServerAbsent", got)
+	}
+	f.SetServerState(tmux.ServerBroken)
+	if got := f.ServerState(); got != tmux.ServerBroken || f.TmuxAlive() {
+		t.Errorf("after SetServerState(Broken) = %v alive=%v, want ServerBroken, false", got, f.TmuxAlive())
+	}
+	f.SetAlive(true)
+	if got := f.ServerState(); got != tmux.ServerUp || !f.TmuxAlive() {
+		t.Errorf("after SetAlive(true) = %v alive=%v, want ServerUp, true", got, f.TmuxAlive())
 	}
 }

@@ -4,6 +4,7 @@ import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 import { WorkspaceRow } from './WorkspaceRow'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
+import { __resetSyncStatusForTest, setLocalSnapshot } from '../../../lib/profile/sync-status'
 import type { Workspace, Tab } from '../../../types/tab'
 
 const mkWs = (id: string, name: string, tabs: string[] = []): Workspace => ({
@@ -171,6 +172,30 @@ describe('WorkspaceRow', () => {
       const stopPropagationSpy = vi.spyOn(evt, 'stopPropagation')
       plusBtn.dispatchEvent(evt)
       expect(stopPropagationSpy).not.toHaveBeenCalled()
+    })
+
+    // The sync-conflict icon (sidebar conflict icons, review I2): shown only with a lock on this workspace's tabs;
+    // the rest of its behaviour is WorkspaceConflict.test.tsx's.
+    it('sync-conflict button does not block pointer-down', () => {
+      __resetSyncStatusForTest()
+      const lock = { status: 'locked:conflict', currentHash: 'a'.repeat(64), sot: { rev: 1, hash: 'b'.repeat(64) }, conflict: null } as const
+      setLocalSnapshot({
+        master: { hostId: 'h1', profileId: 'p1' },
+        leader: true,
+        blocked: null,
+        status: { profile: 'locked:conflict', schemaLock: null, sections: { 'tabs.ws-1': 'locked:conflict' }, locks: { 'tabs.ws-1': lock }, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null },
+        problems: [],
+      })
+      try {
+        renderRow(mkWs('ws-1', 'Alpha'))
+        const evt = new Event('pointerdown', { bubbles: true, cancelable: true })
+        const stopPropagationSpy = vi.spyOn(evt, 'stopPropagation')
+        screen.getByTestId('ws-conflict-button-ws-1').dispatchEvent(evt)
+        expect(stopPropagationSpy).not.toHaveBeenCalled()
+      } finally {
+        cleanup()
+        __resetSyncStatusForTest()
+      }
     })
   })
 })

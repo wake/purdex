@@ -1,6 +1,6 @@
 import { useCallback, useMemo, type RefObject } from 'react'
 import { useLocation } from 'wouter'
-import { GearSix } from '@phosphor-icons/react'
+import { GearSix, WarningCircle } from '@phosphor-icons/react'
 import { Menu, type MenuEntry, type MenuPlacement } from '../../../components/Menu'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useLocalProfilesStore, MASTER_PROFILE_ID, type ProfileAppearance } from '../../../stores/useLocalProfilesStore'
@@ -8,6 +8,7 @@ import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore
 import { useProfileStore } from '../../../stores/useProfileStore'
 import { useProfileSync } from '../../../hooks/useProfileSync'
 import { SYNC_DOT_CLASS, heldByAutoSyncOff, syncDotOf } from '../../../lib/profile/sync-view'
+import { locksOf } from '../../../lib/profile/conflict-view'
 import { WorkspaceIcon } from './WorkspaceIcon'
 
 /**
@@ -69,6 +70,9 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
   const autoSync = useProfileStore((s) => s.autoSync)
   const dot = syncDotOf(sync)
   const dotLabel = dot === null ? '' : t(heldByAutoSyncOff(sync, autoSync) ? 'profile.sync.held' : `profile.sync.${dot}`)
+  // Only the count is needed: no names, so no master world to read.
+  const conflicts = locksOf(sync, null).length
+  const conflictLabel = conflicts > 0 ? t('profile.conflict.button', { count: conflicts }) : ''
 
   const items = useMemo<MenuEntry[]>(() => {
     const entry = (id: string, label: string, look: ProfileAppearance, extra: Partial<Extract<MenuEntry, { id: string }>> = {}): MenuEntry => ({
@@ -89,15 +93,26 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
       // Unnamed → `Home`, as on the button. `profile.master` is THE word for it, here and wherever P3d-2 needs one.
       entry(MASTER_PROFILE_ID, master.name ?? t('nav.home'), master, {
         hint: t('profile.master'),
-        trailing: dot !== null && (
-          <span
-            role="img"
-            aria-label={dotLabel}
-            title={dotLabel}
-            data-testid="profile-sync-dot"
-            data-state={dot}
-            className={`w-1.5 h-1.5 rounded-full ${SYNC_DOT_CLASS[dot]}`}
-          />
+        // The master's locks (sidebar conflict icons spec §4): display only — the Home row's own icon opens them.
+        // A switch under way shows `busy` in this place instead (Menu.tsx): it is over in a moment.
+        trailing: (dot !== null || conflicts > 0) && (
+          <span className="flex items-center gap-1.5">
+            {conflicts > 0 && (
+              <span role="img" aria-label={conflictLabel} title={conflictLabel} data-testid="profile-item-conflict" className="flex items-center text-amber-500">
+                <WarningCircle size={12} />
+              </span>
+            )}
+            {dot !== null && (
+              <span
+                role="img"
+                aria-label={dotLabel}
+                title={dotLabel}
+                data-testid="profile-sync-dot"
+                data-state={dot}
+                className={`w-1.5 h-1.5 rounded-full ${SYNC_DOT_CLASS[dot]}`}
+              />
+            )}
+          </span>
         ),
       }),
       // A name is the user's own text: shown as is, never through t().
@@ -115,7 +130,7 @@ export function ProfileSwitcher({ trigger, placement }: Props) {
         testId: 'profile-item-settings',
       },
     ]
-  }, [slaves, slaveOrder, master, activeProfileId, pendingId, chooseProfile, dot, dotLabel, t, setLocation])
+  }, [slaves, slaveOrder, master, activeProfileId, pendingId, chooseProfile, dot, dotLabel, conflicts, conflictLabel, t, setLocation])
 
   return <Menu trigger={trigger} open={open} onClose={close} items={items} label={t('profile.switcher.label')} placement={placement} testId="profile-switcher-menu" />
 }
