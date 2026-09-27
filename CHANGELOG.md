@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.467] - 2026-09-28
+
+> **需要重新部署 daemon**（內嵌 Nexen 升到 v0.13.2；schema 仍是 v6，**不必**刪 `nex.db`）。worker pane R4 的最後一支，R4 全部完成。
+
+### Feature：worker 列表的總覽（#1505）
+
+- 側欄每個 worker 多顯示執行中背景工作的數量與成本（`$0.11`）；窄的時候只有描述會被截斷，不會換行。
+- 狀態點 hover 顯示 worker 正在做什麼：「執行 Bash」／「思考中」／「啟動中」／「閒置」／「排隊中」。
+- 接續既有對話的 worker，成本 hover 註明「含接續前的費用」。
+- Hosts › Nex 的 worker 表多了成本、turn 數、最後工具、執行中四欄。
+- 成本只在 daemon 採用新的成本規則（Nexen v0.13.2 起）時顯示，與 pane 裡的數字一致；較舊的 daemon 不顯示成本，其他欄位照常。
+
+### Internal
+
+- 內嵌 Nexen v0.13.1 → v0.13.2（列表成本改用與 Purdex 相同的規則）。
+- 單筆 worker 查詢的總覽欄位也做格式檢查，與列表一致。
+
 ## [1.0.0-alpha.466] - 2026-09-28
 
 > 純 SPA，不需要重新部署 daemon（新內容需要 alpha.464 以上的 daemon；舊 daemon 的 dock 與 subagent 照舊顯示）。worker pane R4 的第三支。
