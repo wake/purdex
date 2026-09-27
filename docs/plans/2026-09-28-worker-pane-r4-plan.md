@@ -266,6 +266,14 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
      contribution = this frame's `total_cost_usd`.
   5. `totalUsd` = Σ contributions (non-finite → the existing saturating
      rules). No session / `resumed_from` logic — evidence only.
+  Edge cases (agreed 2026-09-28, second round):
+  (a) `outputTokens` compare as plain JS numbers (no integer coercion);
+  (b) a malformed `modelUsage` (not an object, a model's value not an
+  object, `outputTokens` non-number / negative / non-finite) → the whole
+  frame counts as having **no** `modelUsage` (rule 1), never dropped;
+  (c) `modelUsage` present but `total_cost_usd` negative → same as missing:
+  contributes nothing, not `prev`;
+  (d) `usage.output_tokens` missing or malformed → 0.
   The frame then becomes `prev`. For the panel's breakdown, a cumulative
   frame's per-model cost and tokens and `duration_api_ms` are the deltas
   against `prev`, each clamped at 0; `num_turns` and `duration_ms` are
