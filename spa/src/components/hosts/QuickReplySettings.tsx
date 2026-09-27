@@ -26,6 +26,8 @@ function QuickReplyEditor({ initial, busy, error, onSave, onCancel }: {
   const [invalid, setInvalid] = useState<string | null>(null)
 
   const save = () => {
+    // Enter reaches here too, past the button's `disabled` (as in CommandEditDialog).
+    if (busy) return
     const trimmed = text.trim()
     const problem = validateQuickReplyText(trimmed)
     if (problem) {

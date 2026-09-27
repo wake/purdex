@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QuickReplySettings } from './QuickReplySettings'
 import { CommandsSection } from './CommandsSection'
 import { useHostStore } from '../../stores/useHostStore'
@@ -112,6 +112,35 @@ describe('QuickReplySettings', () => {
     expect(rowIds()).toEqual([])
     expect(screen.getByTestId('quick-replies-empty')).toBeInTheDocument()
     expect(screen.queryByTestId('quick-replies-defaults')).toBeNull()
+  })
+
+  // R1-1 / F4: Enter must honour the same `busy` the save button does.
+  it('Enter does not save while the host is offline', async () => {
+    seed(entry([{ id: 'a', text: 'alpha' }], 1))
+    render(<QuickReplySettings hostId={H} />)
+    fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
+    act(() => useHostStore.setState({ runtime: { [H]: { status: 'disconnected' } } }))
+    expect(screen.getByTestId('quick-reply-save')).toBeDisabled()
+    fireEvent.change(screen.getByTestId('quick-reply-input'), { target: { value: 'ALPHA' } })
+    fireEvent.keyDown(screen.getByTestId('quick-reply-input'), { key: 'Enter' })
+    // The save queue runs on a later tick; let it.
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    expect(saveQuickReplies).not.toHaveBeenCalled()
+  })
+
+  it('Enter twice in a row sends one save', async () => {
+    seed(entry([{ id: 'a', text: 'alpha' }], 1))
+    let release!: () => void
+    saveQuickReplies.mockImplementation(() => new Promise<void>((r) => { release = r }))
+    render(<QuickReplySettings hostId={H} />)
+    fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
+    fireEvent.change(screen.getByTestId('quick-reply-input'), { target: { value: 'ALPHA' } })
+    fireEvent.keyDown(screen.getByTestId('quick-reply-input'), { key: 'Enter' })
+    await waitFor(() => expect(saveQuickReplies).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(screen.getByTestId('quick-reply-input'), { key: 'Enter' })
+    await act(async () => { release() })
+    await waitFor(() => expect(screen.queryByTestId('quick-reply-input')).toBeNull())
+    expect(saveQuickReplies).toHaveBeenCalledTimes(1)
   })
 
   it('a failed reload keeps listing the last known list, not the defaults', () => {
