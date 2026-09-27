@@ -80,14 +80,24 @@ correctly.
   run, `core/events.go`; with the mutex, whichever of broadcast / snapshot runs
   second carries the newest value.)
 - D4. After a successful create (`create.go`, after the session is confirmed
-  and listed), if the watcher is internally down, run the recovery path
-  immediately — the body of today's `tickTmuxDown` recovery, factored into
-  `markServerUp()` — so hooks, wait-for and the sessions broadcast do not wait
-  for the next 5 s tick. `markServerUp()` runs the recovery only for the caller
-  whose `setTmuxAlive(true)` flips the state. A `tickNormal` that probed "down"
-  before the create and writes after it can still flip the internal state back;
-  that is self-healing (the next `tickTmuxDown` probe sees Up and recovers) and
-  never changes the reported value, so the SPA sees nothing.
+  and listed), if the watcher is internally down, **start** the recovery path
+  (`go m.markServerUp()`, after `createMu` is released) so hooks, wait-for and
+  the sessions broadcast do not wait for the next 5 s tick. `markServerUp()` —
+  the body of today's `tickTmuxDown` recovery — runs only for the caller whose
+  `setTmuxAlive(true)` flips the state.
+  - Asynchronous on purpose (PR review A1/A2): the hook subprocesses have no
+    deadline (pre-existing), so running them under `createMu` could block every
+    later create; and a create that loses the flip to an in-progress tick
+    recovery has nothing to wait for. Nothing user-visible needs the recovery to
+    finish before the create returns: the reported value does not depend on it,
+    and the creating client uses the create response.
+  - Lifecycle (review A4): `markServerUp()` does nothing once the module is
+    stopping, and re-checks before `notifyWaitFor` / `broadcastSessions`, so a
+    recovery racing `Stop()` does not announce a revival after shutdown began.
+  - A `tickNormal` that probed "down" before the create and writes after it can
+    still flip the internal state back; that is self-healing (the next
+    `tickTmuxDown` probe sees Up and recovers) and never changes the reported
+    value, so the SPA sees nothing.
 
 ### SPA
 
@@ -101,6 +111,8 @@ correctly.
   `reconnecting` and `connected` during the daemon's subscribe-retry loop does
   not reset it (`daemonState` stays `connected` across an events-WS close,
   `useMultiHostEventWs.ts:231-247`). Either condition breaking resets the timer.
+  The timer is scoped to the host: a pane re-bound to another host starts a
+  fresh 10 s even if both hosts are waiting (review R1-b/A3).
   Hook `useAttachStall(hostId, 10_000)` in `SessionPaneContent`, passed through
   `TerminalView`'s existing `connectingMessage` prop.
 - S2. i18n key `session.attach_stalled` in `en.json` and `zh-TW.json`.
@@ -126,7 +138,9 @@ tmux is genuinely unusable — where blocking is correct.
   D3: first `tmux` frame for a new subscriber is `ok` for Up and Absent,
   `unavailable` for Broken; a concurrent change + subscribe never leaves the
   subscriber's last frame stale (`-race`). D4: create with the watcher down
-  → hooks installed and a `sessions` frame broadcast before any tick; two
+  → shortly after it returns (poll with a deadline), hooks installed and a
+  `sessions` frame broadcast with no tick called; create never runs the
+  recovery while holding `createMu`; after `Stop()` a recovery broadcasts nothing; two
   concurrent `markServerUp` → one recovery.
 - Mutation: classify `ServerAbsent` as broken → a D2 test fails.
 - SPA unit tests: `useAttachStall` with fake timers (9.9 s false; 10 s true;
