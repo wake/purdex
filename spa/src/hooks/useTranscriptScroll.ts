@@ -28,7 +28,8 @@
 // The release holds whether or not the search bar is open: the dock's
 // inspect jump (R4 T3.2) releases with the bar closed, and the next streamed
 // line must not pull the reader back down. Without a release, a closed bar
-// follows growth as ever.
+// follows growth as ever — and closing the bar drops any release, so the
+// next growth follows the bottom again.
 import { useCallback, useImperativeHandle, useLayoutEffect, useMemo, useRef, type Ref, type UIEvent } from 'react'
 
 /** Within this many pixels of the end counts as the bottom (sub-pixel rounding, a last line's margin). */
@@ -74,7 +75,18 @@ export function useTranscriptScroll(external: Ref<HTMLDivElement> | undefined, h
   const releaseHold = useRef(false)
   const holding = useRef(hold)
   // Before any passive effect of the same commit reads it.
-  useLayoutEffect(() => { holding.current = hold }, [hold])
+  useLayoutEffect(() => {
+    // The bar closing (hold true → false) is the explicit "back to live"
+    // gesture: it drops any release — a search jump's or an earlier inspect
+    // jump's — so the next growth follows the bottom again (alpha.463:
+    // 關掉搜尋列就恢復自動捲到底). An inspect release with the bar closed
+    // throughout never sees this transition and keeps holding.
+    if (holding.current && !hold) {
+      releaseHold.current = false
+      released.current = null
+    }
+    holding.current = hold
+  }, [hold])
 
   const attach = useCallback((node: HTMLDivElement | null) => {
     box.current = node
