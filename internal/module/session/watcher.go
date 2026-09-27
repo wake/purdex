@@ -9,6 +9,9 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // watcherState tracks the NORMAL / TMUX_DOWN state machine.
@@ -31,6 +34,15 @@ type watcherState struct {
 	hooksFailing  bool
 	hooksLastErr  string
 	hooksDisabled bool
+
+	// broken is the last probe's "tmux cannot be used" (ServerBroken), the
+	// only state reported as `tmux: unavailable`; a missing server is
+	// reported as ok since creating a session starts one (#1108, #1474
+	// spec D2). Guarded by statusMu, not mu: a change and its broadcast,
+	// and a new subscriber's read and queue, run under statusMu so a
+	// subscriber never ends on a value older than the last broadcast (D3).
+	statusMu sync.Mutex
+	broken   bool
 }
 
 func (ws *watcherState) getTmuxAlive() bool {
@@ -157,12 +169,14 @@ func (m *SessionModule) tickNormal() {
 	sessions := v.Sessions
 
 	if len(sessions) == 0 {
-		if !m.tmux.TmuxAlive() {
+		state := m.tmux.ServerState()
+		m.recordServerState(state)
+		if state != tmux.ServerUp {
 			// The hooks go with the server; the next one needs them anew.
+			// Internally down whether absent or broken; only broken was
+			// reported (spec D2).
 			m.wstate.clearHooksOK()
-			if m.wstate.setTmuxAlive(false) {
-				m.broadcastTmuxStatus("unavailable")
-			}
+			m.wstate.setTmuxAlive(false)
 			m.notifyWaitFor(false)
 			return
 		}
@@ -190,17 +204,57 @@ func (m *SessionModule) tickNormal() {
 }
 
 func (m *SessionModule) tickTmuxDown() {
-	if m.tmux.TmuxAlive() {
+	state := m.tmux.ServerState()
+	// Broken → Absent broadcasts ok here, without the server coming up
+	// (spec D2).
+	m.recordServerState(state)
+	if state == tmux.ServerUp {
 		m.wstate.setTmuxAlive(true)
 		// A server that just appeared has no hooks, whatever an earlier
 		// install said. A failure here is retried by tickNormal and never
-		// skips the recovery below (spec D3).
+		// skips the recovery below (#1473 spec D3).
 		m.wstate.clearHooksOK()
 		m.ensureHooks("")
-		m.broadcastTmuxStatus("ok")
 		m.notifyWaitFor(true)
 		m.broadcastSessions()
 	}
+}
+
+// recordServerState records a probe's result and broadcasts the reported
+// `tmux` value when it changes (spec D2). The internal up/down (tmuxAlive)
+// is the caller's business: an Up → Absent edge takes the watcher down but
+// reports nothing, since the value stays ok.
+func (m *SessionModule) recordServerState(s tmux.ServerState) {
+	broken := s == tmux.ServerBroken
+	m.wstate.statusMu.Lock()
+	defer m.wstate.statusMu.Unlock()
+	if m.wstate.broken == broken {
+		return
+	}
+	m.wstate.broken = broken
+	m.broadcastTmuxStatus(reportedTmuxValue(broken))
+}
+
+func reportedTmuxValue(broken bool) string {
+	if broken {
+		return "unavailable"
+	}
+	return "ok"
+}
+
+// sendTmuxStatus queues the current reported value for one new subscriber:
+// the value only goes out on a change, so a client connecting to a daemon
+// already down would otherwise never learn it (#1474 §2, spec D3). Under
+// statusMu, so it and any concurrent change reach the subscriber in the
+// order they happened (Events adds the subscriber before this runs).
+func (m *SessionModule) sendTmuxStatus(sub *core.EventSubscriber) {
+	m.wstate.statusMu.Lock()
+	defer m.wstate.statusMu.Unlock()
+	data, err := json.Marshal(core.HostEvent{Type: "tmux", Value: reportedTmuxValue(m.wstate.broken)})
+	if err != nil {
+		return
+	}
+	sub.TrySend(data)
 }
 
 func (m *SessionModule) broadcastTmuxStatus(value string) {

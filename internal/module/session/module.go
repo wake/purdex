@@ -188,11 +188,15 @@ func (m *SessionModule) Start(ctx context.Context) error {
 	watchCtx, cancel := context.WithCancel(ctx)
 	m.cancelWatch = cancel
 	m.runCtx = watchCtx
-	m.wstate.setTmuxAlive(m.tmux.TmuxAlive())
+	state := m.tmux.ServerState()
+	m.wstate.setTmuxAlive(state == tmux.ServerUp)
+	m.recordServerState(state)
 	m.core.TmuxAliveFunc = m.TmuxAlive
 	m.watchSessions(watchCtx)
 
-	// Register OnSubscribe callback to send initial sessions snapshot.
+	// OnSubscribe: the current tmux value first (#1474 spec D3; it never
+	// waits on a tmux read), then the initial sessions snapshot.
+	m.core.Events.OnSubscribe(m.sendTmuxStatus)
 	m.core.Events.OnSubscribe(m.sendSessionsSnapshot)
 
 	return nil
