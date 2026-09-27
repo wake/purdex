@@ -22,10 +22,18 @@
 // `session_expired` (launch.go's owned-session branch clears `fatal`, so the
 // execution stays idle) without undoing turn 1's successful resume. Only
 // turn 1 can make `terminal_reason` be `session_expired`.
+//
+// Review #7: the summary alone cannot tell "turn 1 resumed" from "turn 1 has
+// not produced anything yet" (still running, a fatal launch error with no
+// result, terminated first). There is no prior spend to note until a
+// top-level `result` actually billed something, so the note also needs one
+// costed turn in the pane's `costSummary` (computed once by the caller).
+import type { CostSummary } from './cost-summary'
 import type { ExecutionSummary } from './types'
 
-export function costIncludesPriorHistory(summary: ExecutionSummary | null): boolean {
+export function costIncludesPriorHistory(summary: ExecutionSummary | null, cost: CostSummary | null): boolean {
   if (!summary?.resume_session_id) return false
+  if (!cost?.turns.some((t) => t.costUsd > 0)) return false
   if (summary.state === 'rejected' || summary.reject_reason) return false
   return summary.terminal_reason !== 'session_expired'
 }

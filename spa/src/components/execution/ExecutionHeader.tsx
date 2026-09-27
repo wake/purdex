@@ -177,7 +177,7 @@ export default function ExecutionHeader({
   }) : ''
   const costLabel = cost ? formatUsd(cost.totalUsd, 2) : t('execution.cost.loading')
   // Q3 (R4 T2.2): a hand-over's turn 1 bills the resumed session's earlier spend.
-  const priorHistory = costIncludesPriorHistory(summary)
+  const priorHistory = costIncludesPriorHistory(summary, cost)
   const terminateClick = () => {
     if (confirming) { setConfirming(false); onTerminate(); return true }
     setConfirming(true)

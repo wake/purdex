@@ -381,6 +381,13 @@ describe('ExecutionHeader', () => {
         expect(screen.queryByTestId('cost-prior-history')).toBeNull()
       })
 
+      it('review #7: hand-over but no costed result yet → no note anywhere', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary({ state: 'running', resume_session_id: 'c191a5a0' })} cost={costSummary([])} />)
+        expect(screen.getByRole('tooltip').textContent).not.toContain(note)
+        fireEvent.click(costBtn())
+        expect(screen.queryByTestId('cost-prior-history')).toBeNull()
+      })
+
       it('turn 1 resume rejected (terminal_reason session_expired) → no note', () => {
         const s = summary({ state: 'failed', resume_session_id: 'c191a5a0', terminal_reason: 'session_expired', last_turn_reason: 'session_expired' })
         render(<ExecutionHeader {...baseProps} summary={s} cost={cost()} />)
