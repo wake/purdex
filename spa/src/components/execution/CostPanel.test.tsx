@@ -95,10 +95,11 @@ describe('CostPanel', () => {
   it('totals line: $ total (4 dp) · turns · API rounds · API / wall', () => {
     renderPanel(fixtureSummary)
     const totals = screen.getByTestId('cost-totals')
-    expect(totals.textContent).toContain('$0.2577')
+    // R4 T2.1: seq 974 continues seq 958 → $0.1973 (was $0.2577), API 57.6s (was 1m 05s).
+    expect(totals.textContent).toContain('$0.1973')
     expect(totals.textContent).toContain('12 turns')
     expect(totals.textContent).toContain('22 API rounds')
-    expect(totals.textContent).toContain('1m 05s API / 1m 33s wall')
+    expect(totals.textContent).toContain('57.6s API / 1m 33s wall')
   })
 
   // P2
@@ -107,7 +108,7 @@ describe('CostPanel', () => {
     const row = screen.getByTestId('cost-tokens')
     expect(row.className).toMatch(/\btabular-nums\b/)
     const { output, input, cacheRead, cacheWrite } = fixtureSummary.tokens
-    expect(formatTokens(output)).toBe('4.5k')
+    expect(formatTokens(output)).toBe('3.9k')
     const cell = (key: string) => within(row).getByTestId(`cost-tokens-${key}`)
     const expectCell = (key: string, label: string, value: number) => {
       const c = cell(key)

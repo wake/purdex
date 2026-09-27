@@ -336,11 +336,12 @@ describe('ExecutionHeader', () => {
       expect(screen.queryByRole('tooltip')).toBeNull()
     })
 
-    it('cost from the 12-turn fixture → enabled `$0.26`', () => {
+    // R4 T2.1: seq 974 continues seq 958, so the fixture is $0.1973 (was $0.2577).
+    it('cost from the 12-turn fixture → enabled `$0.20`', () => {
       render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
       const btn = costBtn()
       expect(btn.disabled).toBe(false)
-      expect(btn.textContent).toBe('$0.26')
+      expect(btn.textContent).toBe('$0.20')
       // H3: an enabled anchor is a toggle; closed by default.
       expect(btn.getAttribute('aria-expanded')).toBe('false')
     })
@@ -349,7 +350,7 @@ describe('ExecutionHeader', () => {
       vi.useFakeTimers()
       render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
       const tip = screen.getByRole('tooltip')
-      expect(tip.textContent).toBe('12 turns · $0.2577 · 4.5k out · 1m 05s API / 1m 33s wall')
+      expect(tip.textContent).toBe('12 turns · $0.1973 · 3.9k out · 57.6s API / 1m 33s wall')
       expect(tip.className).toMatch(/\bopacity-0\b/)
       fireEvent.mouseEnter(costBtn())
       act(() => vi.advanceTimersByTime(799))
@@ -435,7 +436,7 @@ describe('ExecutionHeader', () => {
     it('the panel receives the header\'s summary and hostId', () => {
       render(<ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} />)
       fireEvent.click(costBtn())
-      expect(screen.getByTestId('cost-totals').textContent).toContain('$0.2577')
+      expect(screen.getByTestId('cost-totals').textContent).toContain('$0.1973')
     })
 
     // Spec §3.1.1 #8: the panel repeats the line the tooltip carries, so the

@@ -7,8 +7,40 @@
 // the rules rest on:
 //
 //   F4  `total_cost_usd === Σ modelUsage[*].costUSD` on every frame measured
-//       (floating-point equality) — so `totalUsd` is Σ total_cost_usd and the
-//       per-model fold sums to the same number whenever every turn is split.
+//       (floating-point equality), and SOME results are running totals, not
+//       per-turn figures. Two measured sources: Nexen spec §1.2 (cumulative
+//       within one `-p` and across `--resume`: 0.0528 → 0.0643 → 0.1126,
+//       inputTokens 18 → 36 → 46) and fixture 06GB2ZFD (CC 2.1.27x, one
+//       session): ten results are independent per resumed turn, but seq 974
+//       continues seq 958 (sonnet outputTokens 598 → 701, Δ 103 = 974's own
+//       `usage.output_tokens`). `modelUsage[*].costUSD` / tokens and
+//       `duration_api_ms` follow the same pattern; `num_turns` and
+//       `duration_ms` are always per-frame. Neither "always add" nor "always
+//       take the latest" is right, and session ids / `resumed_from` do not
+//       predict it — so a frame must PROVE it continues the previous one with
+//       token evidence (R4 T2.1; the rule below is shared word for word with
+//       Nexen v0.13.2's rollup so the list and the pane show one number).
+//
+//       Walk top-level results in seq order:
+//       1. A frame without a usable `modelUsage` never becomes `prev`; it
+//          contributes its own `total_cost_usd` if finite and > 0, else
+//          nothing. A frame WITH `modelUsage` but a missing / non-finite /
+//          negative `total_cost_usd` contributes nothing and is not `prev`.
+//       2. The first frame with `modelUsage` is independent.
+//       3. After that a frame is cumulative ⇔ every model in prev.modelUsage
+//          has outputTokens here ≥ prev's (missing here = 0 ⇒ not cumulative)
+//          AND Σ over this frame's models (this − prev, prev missing = 0) ≥
+//          this frame's `usage.output_tokens`.
+//       4. Cumulative → contribution = this total − prev total; negative ⇒
+//          independent. Independent → contribution = this total.
+//       5. totalUsd = Σ contributions (saturating, see Overflow).
+//       Edge cases: outputTokens compare as plain numbers (no integer
+//       coercion); a malformed modelUsage (not an object, empty, a model value
+//       not an object, an outputTokens that is not a finite number ≥ 0) makes
+//       the whole frame count as having NO modelUsage (rule 1, never dropped);
+//       `usage.output_tokens` missing / malformed → 0. The frame (rules 2–4)
+//       then becomes `prev`. A cumulative frame's per-model cost, tokens and
+//       `duration_api_ms` are deltas against `prev`, each clamped at 0.
 //   F5  `usage` is NOT the whole turn when more than one model ran: it
 //       reflects one model's messages, `modelUsage` all of them (seq 8:
 //       usage.output_tokens 364 vs Σ modelUsage 376). Token breakdowns
@@ -44,7 +76,8 @@ export interface TokenTotals { input: number; output: number; cacheRead: number;
 export interface TurnCost {
   /** 1-based among top-level result frames, in seq order. */
   index: number
-  /** `total_cost_usd` (0 when absent / invalid). */
+  /** This frame's contribution (F4 rules): its `total_cost_usd`, or the delta
+   *  against the frame it continues; 0 when absent / invalid. */
   costUsd: number
   /** Σ valid modelUsage entries, else `usage`, else null. */
   tokens: TokenTotals | null
@@ -103,7 +136,7 @@ function addTokens(into: TokenTotals, t: TokenTotals): void {
   into.cacheWrite = addFinite(into.cacheWrite, t.cacheWrite)
 }
 
-interface ValidEntry { model: string; costUsd: number; tokens: TokenTotals }
+interface ValidEntry { key: string; model: string; costUsd: number; tokens: TokenTotals }
 
 /** C3: an entry is valid when its four token fields and `costUSD` are all finite numbers ≥ 0. */
 function readEntry(key: string, v: unknown): ValidEntry | null {
@@ -113,6 +146,7 @@ function readEntry(key: string, v: unknown): ValidEntry | null {
   if (!nonNeg(inputTokens) || !nonNeg(outputTokens) || !nonNeg(cacheReadInputTokens) || !nonNeg(cacheCreationInputTokens) || !nonNeg(costUSD)) return null
   const canonical = e.canonicalModel
   return {
+    key,
     model: str(canonical) && canonical !== '' ? canonical : key,
     costUsd: costUSD,
     tokens: { input: inputTokens, output: outputTokens, cacheRead: cacheReadInputTokens, cacheWrite: cacheCreationInputTokens },
@@ -158,6 +192,60 @@ function readUsage(usage: unknown): TokenTotals | null {
 
 const optNum = (v: unknown): number | null => (nonNeg(v) ? v : null)
 
+/**
+ * Rule 1 / edge (b): the per-model outputTokens a frame offers as continuation
+ * evidence, keyed by the raw `modelUsage` key (own keys only). `null` = no
+ * usable modelUsage — absent, not an object, empty, or ANY model value not an
+ * object / its outputTokens not a finite number ≥ 0.
+ */
+function readEvidence(modelUsage: unknown): Map<string, number> | null {
+  const mu = obj(modelUsage)
+  if (!mu) return null
+  const out = new Map<string, number>()
+  for (const key in mu) {
+    if (!Object.hasOwn(mu, key)) continue
+    const tokens = obj(mu[key])?.outputTokens
+    if (!nonNeg(tokens)) return null
+    out.set(key, tokens)
+  }
+  return out.size > 0 ? out : null
+}
+
+/** Rule 3. Plain-number comparison (edge a). */
+function continues(prev: Map<string, number>, cur: Map<string, number>, ownOutput: number): boolean {
+  for (const [key, before] of prev) {
+    if ((cur.get(key) ?? 0) < before) return false
+  }
+  let growth = 0
+  for (const [key, now] of cur) growth += now - (prev.get(key) ?? 0)
+  return growth >= ownOutput
+}
+
+interface Prev {
+  costUsd: number
+  evidence: Map<string, number>
+  /** Raw (not delta) valid entries of that frame, by modelUsage key. */
+  entries: Map<string, ValidEntry>
+  apiMs: number | null
+}
+
+const clampDelta = (now: number, before: number): number => Math.max(0, now - before)
+
+function deltaEntry(e: ValidEntry, before: ValidEntry | undefined): ValidEntry {
+  if (!before) return e
+  return {
+    key: e.key,
+    model: e.model,
+    costUsd: clampDelta(e.costUsd, before.costUsd),
+    tokens: {
+      input: clampDelta(e.tokens.input, before.tokens.input),
+      output: clampDelta(e.tokens.output, before.tokens.output),
+      cacheRead: clampDelta(e.tokens.cacheRead, before.tokens.cacheRead),
+      cacheWrite: clampDelta(e.tokens.cacheWrite, before.tokens.cacheWrite),
+    },
+  }
+}
+
 export function costSummary(messages: readonly StreamMessage[]): CostSummary {
   const turns: TurnCost[] = []
   const tokens = zeroTokens()
@@ -167,22 +255,43 @@ export function costSummary(messages: readonly StreamMessage[]): CostSummary {
   let apiMs = 0
   let rounds = 0
   let unsplitTurns = 0
+  let prev: Prev | null = null
 
   for (const m of messages) {
     const p = obj(m)
     // C1: a turn is a top-level `result` (F6 — subagent-scoped results are already inside the parent's).
     if (!p || p.type !== 'result' || p.parent_tool_use_id != null) continue
 
-    // C2
-    const costUsd = nonNeg(p.total_cost_usd) ? p.total_cost_usd : 0
+    // C2 + F4 rules 1–5: this frame's contribution, and the frame it continues (if any).
+    const rawCost = p.total_cost_usd
+    const costOk = nonNeg(rawCost)
+    const evidence = readEvidence(p.modelUsage)
+    const usageOut = obj(p.usage)?.output_tokens
+    const ownOutput = nonNeg(usageOut) ? usageOut : 0 // edge (d)
+    const entries = validEntries(p.modelUsage)
+    const turnApiRaw = optNum(p.duration_api_ms)
+    let costUsd = 0
+    let base: Prev | null = null
+    if (!evidence) {
+      // Rule 1: contributes its own cost (0 when absent / invalid), never `prev`.
+      costUsd = costOk ? rawCost : 0
+    } else if (costOk) {
+      costUsd = rawCost
+      if (prev && continues(prev.evidence, evidence, ownOutput) && rawCost - prev.costUsd >= 0) {
+        costUsd = rawCost - prev.costUsd // rule 4
+        base = prev
+      }
+      prev = { costUsd: rawCost, evidence, entries: new Map(entries.map((e) => [e.key, e])), apiMs: turnApiRaw }
+    }
+    // else: modelUsage but no usable total_cost_usd (rule 1 / edge c) — contributes nothing, not `prev`.
     totalUsd = addFinite(totalUsd, costUsd)
 
-    // C3 / C5
-    const entries = validEntries(p.modelUsage)
+    // C3 / C5 — a cumulative frame's breakdown is its delta against `base`.
+    const turnEntries = base ? entries.map((e) => deltaEntry(e, base.entries.get(e.key))) : entries
     let turnTokens: TokenTotals | null
-    if (entries.length > 0) {
+    if (turnEntries.length > 0) {
       turnTokens = zeroTokens()
-      for (const e of entries) {
+      for (const e of turnEntries) {
         addTokens(turnTokens, e.tokens)
         const agg = byModel.get(e.model)
         if (agg) {
@@ -202,9 +311,9 @@ export function costSummary(messages: readonly StreamMessage[]): CostSummary {
     const subtype = str(p.subtype) ? p.subtype : ''
     const isError = p.is_error === true || (subtype !== '' && subtype !== 'success')
 
-    // C4
+    // C4 — `duration_api_ms` is a running total on a cumulative frame; the other two never are.
     const turnDuration = optNum(p.duration_ms)
-    const turnApi = optNum(p.duration_api_ms)
+    const turnApi = base && turnApiRaw !== null ? clampDelta(turnApiRaw, base.apiMs ?? 0) : turnApiRaw
     const turnRounds = optNum(p.num_turns)
     durationMs = addFinite(durationMs, turnDuration ?? 0)
     apiMs = addFinite(apiMs, turnApi ?? 0)
@@ -219,7 +328,7 @@ export function costSummary(messages: readonly StreamMessage[]): CostSummary {
       rounds: turnRounds,
       subtype,
       isError,
-      models: entries.map((e) => e.model),
+      models: turnEntries.map((e) => e.model),
     })
   }
 
