@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/wake/purdex/internal/tmux"
 )
 
 const tmuxPaneListFormat = "#{session_id}\t#{session_name}\t#{pane_id}\t#{pane_pid}"
@@ -69,8 +71,11 @@ func parseTmuxPaneListOutput(out string) ([]TmuxPane, error) {
 	return panes, nil
 }
 
+// isNoTmuxPanesOutput reports a list-panes failure that means "no panes":
+// no server (stale or absent socket, #1473) or no sessions. out is combined
+// output, so it may carry stdout lines too; IsNoServer checks line by line.
 func isNoTmuxPanesOutput(out string) bool {
-	return strings.Contains(out, "no server running") || strings.Contains(out, "no sessions")
+	return tmux.IsNoServer(out) || strings.Contains(out, "no sessions")
 }
 
 type tmuxCLICommandRunner struct{}

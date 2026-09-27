@@ -48,6 +48,15 @@ type SessionModule struct {
 	cancelWatch context.CancelFunc
 	wstate      watcherState
 	waitForGate chan bool
+
+	// hooksMu serialises every tmux hook mutation — the watcher's
+	// ensureHooks, Stop's remove and the manual setup API — with the
+	// set-hook subprocesses run under it (never under wstate.mu).
+	// hooksStopped, set by Stop under hooksMu, makes any later ensureHooks
+	// a no-op so no hook is reinstalled after Stop returns (#1473 D3.1).
+	hooksMu      sync.Mutex
+	hooksStopped bool
+
 	// createMu serializes handleCreate's HasSession→NewSession→SetMeta
 	// critical section so two concurrent POSTs with the same name can't
 	// both slip past the duplicate check. See #61. A ctxMutex so a caller
@@ -163,9 +172,16 @@ func (m *SessionModule) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Install tmux hooks (log warning on error, don't fail startup).
-	if err := m.installTmuxHooks(); err != nil {
-		log.Printf("session: failed to install tmux hooks: %v (continuing without push)", err)
+	// Install tmux hooks (log warning on error, don't fail startup). The
+	// outcome seeds the watcher, which retries a failed install once a
+	// server is up (#1473 spec D3).
+	m.hooksMu.Lock()
+	m.hooksStopped = false
+	err := m.installTmuxHooks()
+	m.wstate.setHooksInstalled(err, "")
+	m.hooksMu.Unlock()
+	if err != nil {
+		log.Printf("session: failed to install tmux hooks: %v (continuing without push; the watcher retries)", err)
 	}
 
 	// Start session watcher with a child context.
@@ -282,7 +298,11 @@ func (m *SessionModule) Stop(_ context.Context) error {
 	if m.cancelWatch != nil {
 		m.cancelWatch()
 	}
-	// Remove tmux hooks (best-effort).
+	// Remove tmux hooks (best-effort). Under hooksMu, after any install in
+	// flight, and marked stopped first so none follows (#1473 D3.1).
+	m.hooksMu.Lock()
+	defer m.hooksMu.Unlock()
+	m.hooksStopped = true
 	m.removeTmuxHooks()
 	return nil
 }

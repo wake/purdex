@@ -99,12 +99,32 @@ func (m *SessionModule) handleTmuxHookSetup(w http.ResponseWriter, r *http.Reque
 
 	switch req.Action {
 	case "install":
-		if err := m.installTmuxHooks(); err != nil {
+		// Re-enables the watcher and counts as its install, so a failure
+		// here is retried by the next tick (#1473 spec D3.1). Refused after
+		// Stop: core shuts HTTP down only after StopModules, so a request can
+		// still arrive once Stop has removed the hooks.
+		m.hooksMu.Lock()
+		if m.hooksStopped {
+			m.hooksMu.Unlock()
+			http.Error(w, `{"error":"daemon is stopping"}`, http.StatusServiceUnavailable)
+			return
+		}
+		err := m.installTmuxHooks()
+		m.wstate.setHooksDisabled(false)
+		m.wstate.setHooksInstalled(err, "")
+		m.hooksMu.Unlock()
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	case "remove":
+		// An opt-out for the rest of this daemon process: the watcher must
+		// not reinstall what the operator removed. Start installs again on
+		// the next daemon start.
+		m.hooksMu.Lock()
+		m.wstate.setHooksDisabled(true)
 		m.removeTmuxHooks()
+		m.hooksMu.Unlock()
 	default:
 		http.Error(w, `{"error":"action must be install or remove"}`, http.StatusBadRequest)
 		return

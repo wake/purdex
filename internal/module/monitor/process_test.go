@@ -3,6 +3,8 @@ package monitor
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -79,6 +81,31 @@ func TestTmuxPaneListerReturnsEmptyForNoServerOrSessions(t *testing.T) {
 			assert.Empty(t, panes)
 		})
 	}
+}
+
+// An absent socket (after a reboot) is no server too, not a fault (#1473).
+func TestTmuxPaneListerReturnsEmptyForAbsentSocket(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "tmux-501", "default")
+	output := "error connecting to " + missing + " (No such file or directory)\n"
+	lister := NewTmuxPaneLister(&fakeTmuxCommandRunner{output: output, err: errors.New("exit status 1")})
+
+	panes, err := lister.ListPanes(context.Background())
+
+	require.NoError(t, err)
+	assert.Nil(t, panes)
+}
+
+func TestTmuxPaneListerPermissionDeniedStaysError(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "default")
+	require.NoError(t, os.WriteFile(sock, nil, 0o600))
+	output := "error connecting to " + sock + " (Permission denied)\n"
+	lister := NewTmuxPaneLister(&fakeTmuxCommandRunner{output: output, err: errors.New("exit status 1")})
+
+	panes, err := lister.ListPanes(context.Background())
+
+	assert.Nil(t, panes)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tmux list-panes")
 }
 
 func TestTmuxPaneListerWrapsRunnerError(t *testing.T) {

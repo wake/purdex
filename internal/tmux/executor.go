@@ -173,14 +173,12 @@ func (r *RealExecutor) ListSessions(ctx context.Context) ([]TmuxSession, error) 
 		if cerr := readCtxErr(ctx, "tmux list-sessions", err); cerr != nil {
 			return nil, cerr
 		}
-		if strings.Contains(err.Error(), "no server running") ||
-			strings.Contains(string(out), "no server running") {
-			return nil, nil
-		}
-		// exit status 1 with "no sessions" is normal
+		// No server (stale or absent socket, #1473) or "no sessions" is an
+		// empty list, not a failure. Only stderr can carry either phrase:
+		// Output() captures it into ExitError.Stderr.
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			if strings.Contains(string(exitErr.Stderr), "no server running") ||
-				strings.Contains(string(exitErr.Stderr), "no sessions") {
+			stderr := string(exitErr.Stderr)
+			if IsNoServer(stderr) || strings.Contains(stderr, "no sessions") {
 				return nil, nil
 			}
 		}
@@ -452,8 +450,9 @@ func (r *RealExecutor) HasPane(paneID string) (bool, error) {
 		// global absence (false, nil) rather than a transient query
 		// failure. Without this branch the detector would poll forever
 		// when the user tears down the last tmux session — codex pane
-		// is definitively gone but the lights stay armed.
-		if strings.Contains(stderr.String(), "no server running") {
+		// is definitively gone but the lights stay armed. IsNoServer also
+		// covers the absent-socket form after a reboot (#1473).
+		if IsNoServer(stderr.String()) {
 			return false, nil
 		}
 		return false, err
@@ -656,7 +655,7 @@ func (r *RealExecutor) ShowWindowOption(option string) (string, error) {
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			stderr := string(exitErr.Stderr)
-			if strings.Contains(stderr, "no server running") {
+			if IsNoServer(stderr) {
 				return "", nil
 			}
 		}
@@ -670,7 +669,7 @@ func (r *RealExecutor) ShowGlobalOption(ctx context.Context, option string) (str
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			stderr := string(exitErr.Stderr)
-			if strings.Contains(stderr, "no server running") {
+			if IsNoServer(stderr) {
 				return "", nil
 			}
 		}
@@ -693,8 +692,7 @@ func (r *RealExecutor) ShowHooksGlobal() (string, error) {
 		// "no hooks" is a normal condition — return empty string
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			stderr := string(exitErr.Stderr)
-			if strings.Contains(stderr, "no hooks") ||
-				strings.Contains(stderr, "no server running") {
+			if strings.Contains(stderr, "no hooks") || IsNoServer(stderr) {
 				return "", nil
 			}
 		}

@@ -1,10 +1,18 @@
 package session
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -109,4 +117,187 @@ func TestHandleTmuxHookSetup_InvalidAction(t *testing.T) {
 	if w.Code != 400 {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
+}
+
+// --- Hook changes serialised with Stop (#1473 spec D3.1, review A2) ---
+
+// An install already in flight when Stop arrives must finish before Stop's
+// remove, and nothing may be set after Stop returns: the daemon must not
+// leave hooks behind that point at a wait-for nobody listens to.
+func TestEnsureHooks_ConcurrentStop_NoSetAfterRemove(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fake.SetHookGlobalGate(entered, release)
+
+	installDone := make(chan struct{})
+	go func() {
+		defer close(installDone)
+		mod.ensureHooks("")
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("install never reached set-hook")
+	}
+
+	stopDone := make(chan struct{})
+	go func() {
+		defer close(stopDone)
+		_ = mod.Stop(context.Background())
+	}()
+	// Give Stop the chance to run ahead of the blocked install.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	<-installDone
+	select {
+	case <-stopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop never returned")
+	}
+
+	calls := fake.HookCalls()
+	require.NotEmpty(t, calls)
+	firstRemove := -1
+	for i, c := range calls {
+		if strings.HasPrefix(c, "remove ") {
+			firstRemove = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, firstRemove, 0, "Stop must remove the hooks: %v", calls)
+	for _, c := range calls[firstRemove:] {
+		assert.False(t, strings.HasPrefix(c, "set "), "set-hook after Stop's remove: %v", calls)
+	}
+}
+
+func TestEnsureHooks_AfterStop_IsNoop(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	require.NoError(t, mod.Stop(context.Background()))
+	fake.ResetHookSets()
+
+	mod.wstate.clearHooksOK()
+	mod.ensureHooks("")
+	mod.ensureHooks("111:1000")
+	assert.Empty(t, fake.HookSets(), "no hook may be installed after Stop")
+}
+
+// --- Manual setup API vs the watcher (#1473 spec D3.1, review A3) ---
+
+func postHookSetup(t *testing.T, mod *SessionModule, action string) int {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/api/hooks/tmux/setup", strings.NewReader(`{"action":"`+action+`"}`))
+	w := httptest.NewRecorder()
+	mod.handleTmuxHookSetup(w, req)
+	return w.Code
+}
+
+// A manual remove is an opt-out: the watcher must not put the hooks back,
+// not even for a new server.
+func TestHookSetup_RemoveDisablesWatcherReinstall(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	fake.AddSession("dev", "/w")
+	setInstance(mod, "111:1000")
+	mod.tickNormal()
+	require.Equal(t, allHookEvents, fake.HookSets())
+
+	require.Equal(t, 200, postHookSetup(t, mod, "remove"))
+	fake.ResetHookSets()
+	setInstance(mod, "222:2000")
+	mod.tickNormal()
+	assert.Empty(t, fake.HookSets(), "a manual remove must not be undone by the watcher")
+}
+
+// A manual install after a remove re-enables the watcher and counts as an
+// install: a tick with nothing new to compare does not install again.
+func TestHookSetup_InstallAfterRemoveRecordsOutcome(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	require.Equal(t, 200, postHookSetup(t, mod, "remove"))
+	require.Equal(t, 200, postHookSetup(t, mod, "install"))
+	require.Equal(t, allHookEvents, fake.HookSets())
+
+	fake.ResetHookSets()
+	mod.tickNormal() // no sessions: payload instance ""
+	assert.Empty(t, fake.HookSets(), "a successful manual install must not be repeated")
+
+	// Re-enabled: a new server gets its hooks again.
+	fake.AddSession("dev", "/w")
+	setInstance(mod, "222:2000")
+	mod.tickNormal()
+	assert.Equal(t, allHookEvents, fake.HookSets())
+}
+
+// A failed manual install leaves the hooks unknown, so the watcher retries.
+func TestHookSetup_InstallFailureRetriedByTick(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	fake.AddSession("dev", "/w")
+	setInstance(mod, "111:1000")
+	mod.tickNormal()
+	require.Equal(t, allHookEvents, fake.HookSets())
+
+	fake.SetHookGlobalError(errors.New("no server running"))
+	require.Equal(t, 500, postHookSetup(t, mod, "install"))
+
+	fake.SetHookGlobalError(nil)
+	fake.ResetHookSets()
+	mod.tickNormal()
+	assert.Equal(t, allHookEvents, fake.HookSets(), "the watcher must retry a failed manual install")
+}
+
+// --- Failure log throttle (#1473 spec D3.1, review A6) ---
+
+// captureLog redirects the standard logger into a buffer for the test.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	return &buf
+}
+
+func hookFailureLines(buf *bytes.Buffer) int {
+	return strings.Count(buf.String(), "session: install tmux hooks:")
+}
+
+// One line per failure streak and per change of error text: a retry every
+// 5 s must not flood the log, but a new cause must not be hidden either.
+func TestEnsureHooks_FailureLogThrottledPerErrorText(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	buf := captureLog(t)
+
+	fake.SetHookGlobalError(errors.New("no server running"))
+	mod.ensureHooks("")
+	mod.ensureHooks("")
+	assert.Equal(t, 1, hookFailureLines(buf), "same error twice: one line")
+
+	fake.SetHookGlobalError(errors.New("permission denied"))
+	mod.ensureHooks("")
+	assert.Equal(t, 2, hookFailureLines(buf), "a different error: a new line")
+	mod.ensureHooks("")
+	assert.Equal(t, 2, hookFailureLines(buf), "the new error repeated: no new line")
+
+	// A success ends the streak; the same error afterwards logs again.
+	fake.SetHookGlobalError(nil)
+	mod.ensureHooks("")
+	mod.wstate.clearHooksOK()
+	fake.SetHookGlobalError(errors.New("permission denied"))
+	mod.ensureHooks("")
+	assert.Equal(t, 3, hookFailureLines(buf), "success resets the streak")
+}
+
+// Core shuts HTTP down only after StopModules, so a manual install can arrive
+// after Stop removed the hooks; it must be refused, not reinstall them
+// (#1473 spec D3.1).
+func TestHookSetup_InstallAfterStopRefused(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	require.NoError(t, mod.Stop(context.Background()))
+	fake.ResetHookSets()
+
+	assert.Equal(t, 503, postHookSetup(t, mod, "install"))
+	assert.Empty(t, fake.HookSets(), "no set-hook after Stop")
 }
