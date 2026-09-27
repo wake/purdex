@@ -17,6 +17,7 @@ const (
 	KeyProjects        = "projects"
 	KeyCommands        = "commands"
 	KeyResumeTemplates = "resume_templates"
+	KeyQuickReplies    = "quick_replies"
 )
 
 // Entry is one stored collection. A missing row reads as Revision 0, Value nil.

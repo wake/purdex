@@ -8,9 +8,10 @@ import { ResumeTemplateSettings } from '../settings/ResumeTemplateSettings'
 import { CommandEditDialog } from './CommandEditDialog'
 import { CommandIconView } from './CommandIconView'
 import { HostConfigNotice } from './HostConfigNotice'
+import { QuickReplySettings } from './QuickReplySettings'
 import { useHostConfigCollection } from './useHostConfigCollection'
 
-type Tab = 'normal' | 'resume'
+type Tab = 'normal' | 'resume' | 'quick'
 
 export function CommandsSection({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
@@ -48,12 +49,15 @@ export function CommandsSection({ hostId }: { hostId: string }) {
       <div className="flex gap-1 mb-4">
         {tabBtn('normal', 'commands.tab.normal')}
         {tabBtn('resume', 'commands.tab.resume')}
+        {tabBtn('quick', 'hosts.quick_replies.tab')}
       </div>
 
       <HostConfigNotice notice={notice} />
 
       {tab === 'resume' ? (
         <ResumeTemplateSettings hostId={hostId} busy={!editable} />
+      ) : tab === 'quick' ? (
+        <QuickReplySettings hostId={hostId} />
       ) : (
         <>
           {atLimit && (

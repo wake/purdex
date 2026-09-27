@@ -20,8 +20,46 @@ func TestHandlerGetEmpty(t *testing.T) {
 	assert.JSONEq(t, `{
 		"projects":{"items":[],"revision":0},
 		"commands":{"items":[],"revision":0},
-		"resumeTemplates":{"items":{},"revision":0}
+		"resumeTemplates":{"items":{},"revision":0},
+		"quickReplies":{"items":[],"revision":0}
 	}`, rr.Body.String())
+}
+
+func TestHandlerPutQuickRepliesRoundTrip(t *testing.T) {
+	m := newTestModule(t)
+	rr := serve(m, http.MethodPut, "/api/hostconfig/quick-replies",
+		`{"items":[{"id":"continue","text":" continue "}],"baseRevision":0}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	assert.JSONEq(t, `{"items":[{"id":"continue","text":"continue"}],"revision":1}`, rr.Body.String())
+
+	rr = serve(m, http.MethodPut, "/api/hostconfig/quick-replies", `{"items":[],"baseRevision":1}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	assert.JSONEq(t, `{"items":[],"revision":2}`, rr.Body.String())
+
+	rr = serve(m, http.MethodGet, "/api/hostconfig", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	assert.JSONEq(t, `{"items":[],"revision":2}`, string(got["quickReplies"]))
+}
+
+func TestHandlerPutQuickRepliesConflict(t *testing.T) {
+	m := newTestModule(t)
+	body := `{"items":[{"id":"a","text":"hi"}],"baseRevision":0}`
+	require.Equal(t, http.StatusOK, serve(m, http.MethodPut, "/api/hostconfig/quick-replies", body).Code)
+
+	rr := serve(m, http.MethodPut, "/api/hostconfig/quick-replies", `{"items":[],"baseRevision":0}`)
+	require.Equal(t, http.StatusConflict, rr.Code, rr.Body.String())
+	assert.JSONEq(t, `{"items":[{"id":"a","text":"hi"}],"revision":1}`, rr.Body.String())
+}
+
+func TestHandlerPutQuickRepliesRejectsInvalid(t *testing.T) {
+	m := newTestModule(t)
+	rr := serve(m, http.MethodPut, "/api/hostconfig/quick-replies", `{"items":[{"id":"a","text":""}],"baseRevision":0}`)
+	assert.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+	e, err := m.store.Get(KeyQuickReplies)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), e.Revision, "nothing stored")
 }
 
 func TestHandlerPutProjectsRoundTrip(t *testing.T) {

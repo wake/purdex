@@ -12,6 +12,7 @@ export type CommandIcon =
 export interface HostProject { id: string; name: string; slug: string; path: string }
 export interface HostCommand { id: string; name: string; command: string; icon: CommandIcon }
 export type ResumeTemplateOverrides = Record<string, { exact: string; fallback: string }>
+export interface QuickReply { id: string; text: string }
 
 export interface Versioned<T> { items: T; revision: number }
 
@@ -19,6 +20,8 @@ export interface HostConfigPayload {
   projects: Versioned<HostProject[]>
   commands: Versioned<HostCommand[]>
   resumeTemplates: Versioned<ResumeTemplateOverrides>
+  /** Absent on a daemon that predates the collection (R3-A). */
+  quickReplies?: Versioned<QuickReply[]>
 }
 
 export type PathCheckStatus = 'dir' | 'not_dir' | 'missing' | 'error' | 'unverifiable'
@@ -28,6 +31,7 @@ export interface HostConfigCollectionItems {
   projects: HostProject[]
   commands: HostCommand[]
   'resume-templates': ResumeTemplateOverrides
+  'quick-replies': QuickReply[]
 }
 export type HostConfigCollection = keyof HostConfigCollectionItems
 
