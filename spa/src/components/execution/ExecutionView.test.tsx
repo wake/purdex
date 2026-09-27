@@ -7,6 +7,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useUndoToast } from '../../stores/useUndoToast'
+import { useHostConfigStore, emptyHostConfigEntry } from '../../stores/useHostConfigStore'
 import { NexApiError } from '../../lib/nex/types'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { HandoffApiError, nexTakeback, nexTakeToTerminal } from '../../lib/nex/handoff-api'
@@ -51,6 +52,8 @@ beforeEach(() => {
   useExecutionStore.getState().setHistoryLoaded(H, E, true)
   // Take back / Take to terminal re-point the pane only on a host shown in the workbench (host ownership H2d-3).
   useShownHostsStore.setState({ ids: [H] })
+  // Quick replies (R3): no daemon here — the host's list is whatever a test seeds.
+  useHostConfigStore.setState({ byHost: {}, ensureLoaded: async () => {} })
 })
 
 describe('ExecutionView', () => {
@@ -1188,5 +1191,89 @@ describe('ExecutionView — room and chat (R2 T1.4)', () => {
     render(<ExecutionView {...base} isActive />)
     expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
     expect(screen.getByTestId('room-thinking')).toBeInTheDocument()
+  })
+})
+
+// ---- worker pane R3 T2.1: the quick-reply dock above the input -------------
+
+describe('ExecutionView — quick replies (R3 T2.1)', () => {
+  const seed = (items: { id: string; text: string }[]) => {
+    const e = emptyHostConfigEntry('ready')
+    useHostConfigStore.setState({ byHost: { [H]: { ...e, quickReplies: items, quickRepliesSupported: true, revisions: { ...e.revisions, quickReplies: 1 } } } })
+  }
+  const reply = (text: string) => screen.getAllByTestId('quick-reply').find((b) => b.textContent === text)!
+
+  beforeEach(() => seed([{ id: 'go', text: 'go on' }, { id: 'tests', text: 'run the tests' }]))
+
+  it('shows above the input in the room', () => {
+    render(<ExecutionView {...base} isActive />)
+    const first = screen.getAllByTestId('quick-reply')[0]
+    expect(screen.getAllByTestId('quick-reply').map((b) => b.textContent)).toEqual(['go on', 'run the tests'])
+    expect(first.compareDocumentPosition(screen.getByRole('textbox')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('shows in chat as well as room', () => {
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    expect(screen.getAllByTestId('quick-reply')).toHaveLength(2)
+    expect(screen.getAllByTestId('quick-reply')[0].compareDocumentPosition(screen.getByRole('textbox')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('an emptied list shows no dock', () => {
+    seed([])
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.queryByTestId('quick-reply')).toBeNull()
+  })
+
+  it('a tap sends the reply at once', async () => {
+    render(<ExecutionView {...base} isActive />)
+    fireEvent.click(reply('run the tests'))
+    await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'run the tests'))
+  })
+
+  it('is disabled while a send is pending / the worker ended', async () => {
+    const { rerender } = render(<ExecutionView {...base} isActive />)
+    act(() => useExecutionStore.getState().setPendingSend(H, E, true))
+    for (const b of screen.getAllByTestId('quick-reply')) expect(b).toBeDisabled()
+    act(() => useExecutionStore.getState().setPendingSend(H, E, false))
+    for (const b of screen.getAllByTestId('quick-reply')) expect(b).not.toBeDisabled()
+    act(() => useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never))
+    rerender(<ExecutionView {...base} isActive />)
+    for (const b of screen.getAllByTestId('quick-reply')) expect(b).toBeDisabled()
+  })
+
+  it('does not clear what is typed in the input', async () => {
+    // PR #1493 R1 (P3): start from a draft an earlier failed typed send left
+    // behind. A quick reply that cleared it (the default `setDraft(null)`)
+    // would change WorkerInput's key and remount it over the new text; with
+    // a null draft to begin with, that mistake was invisible.
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'too long'))
+    render(<ExecutionView {...base} isActive />)
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'first' } })
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+    await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('first'))
+    await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false))
+    const box = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'half-typ' } })
+    fireEvent.click(reply('go on'))
+    await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'go on'))
+    await waitFor(() => expect(useExecutionStore.getState().executions[KEY].lastTurn?.turnId).toBe('t1'))
+    const after = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(after).toBe(box)
+    expect(after.value).toBe('half-typ')
+  })
+
+  it('a failed quick reply leaves the half-typed input alone and shows the error', async () => {
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'too long'))
+    render(<ExecutionView {...base} isActive />)
+    const box = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'half-typ' } })
+    fireEvent.click(reply('go on'))
+    await waitFor(() => expect(screen.getByTestId('send-error')).toBeInTheDocument())
+    const after = screen.getByRole('textbox') as HTMLTextAreaElement
+    // Not remounted (the same node) and not overwritten by the reply's text.
+    expect(after).toBe(box)
+    expect(after.value).toBe('half-typ')
+    expect(after.disabled).toBe(false)
+    expect(useExecutionStore.getState().executions[KEY].pendingLocal).toBeNull()
   })
 })

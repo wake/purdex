@@ -91,3 +91,34 @@ describe('useExecutionActions — actionPending', () => {
     expect(result.current.actionPending).toBe(false)
   })
 })
+
+describe('useExecutionActions — restoring the draft after a failed send', () => {
+  it('a failed typed send still restores it as the draft', async () => {
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'too long'))
+    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+    await act(async () => { await result.current.handleSend('typed') })
+    expect(result.current.draft).toBe('typed')
+    expect(st().sendError?.code).toBe('invalid_text')
+  })
+
+  // A quick reply (R3 T2.1, plan review #1): WorkerInput is keyed on the
+  // draft, so any change to it remounts the input and wipes what is typed.
+  it('restoreDraft: false only reports the error and never touches the draft', async () => {
+    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+    // A draft already restored by an earlier typed failure …
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'too long'))
+    await act(async () => { await result.current.handleSend('typed') })
+    expect(result.current.draft).toBe('typed')
+    // … is neither replaced nor cleared by a quick reply, failed or not.
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'nope'))
+    await act(async () => { await result.current.handleSend('continue', { restoreDraft: false }) })
+    expect(result.current.draft).toBe('typed')
+    expect(st().sendError?.message).toBe('nope')
+    expect(st().pendingSend).toBe(false)
+    expect(st().pendingLocal).toBeNull()
+    vi.mocked(api.sendMessage).mockResolvedValueOnce({ turn_id: 't2', delivery: 'delivered' })
+    await act(async () => { await result.current.handleSend('continue', { restoreDraft: false }) })
+    expect(result.current.draft).toBe('typed')
+    expect(st().sendError).toBeNull()
+  })
+})
