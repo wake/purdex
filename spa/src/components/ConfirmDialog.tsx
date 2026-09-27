@@ -23,12 +23,17 @@ export interface ConfirmDialogProps {
 export function ConfirmDialog({ testIdPrefix, title, body, confirmLabel, busy = false, onCancel, onConfirm, children }: ConfirmDialogProps) {
   const t = useI18nStore((s) => s.t)
 
+  // Escape is the dialog's while it is up — busy or not — also when it was opened from inside a FloatingPanel: taken
+  // in the CAPTURE phase (the panel mounted first, so its bubble listener on `document` would run first) and marked
+  // handled (`preventDefault`), which FloatingPanel leaves alone. One Escape closes one thing: the topmost.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !busy) onCancel()
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      if (!busy) onCancel()
     }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey, { capture: true })
+    return () => document.removeEventListener('keydown', onKey, { capture: true })
   }, [busy, onCancel])
 
   const titleId = `${testIdPrefix}-dialog-title`
