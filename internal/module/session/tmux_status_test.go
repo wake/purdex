@@ -185,6 +185,76 @@ func TestOnSubscribe_ConcurrentChangeNeverStale(t *testing.T) {
 	}
 }
 
+// A recovery that starts after Stop announces nothing and installs nothing
+// (spec D4 lifecycle, PR review A4).
+func TestMarkServerUp_AfterStop_DoesNothing(t *testing.T) {
+	mod, fake, events := newStatusTestModule(t, tmux.ServerAbsent)
+	require.NoError(t, mod.Stop(context.Background()))
+	fake.SetServerState(tmux.ServerUp)
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+	fake.ResetHookSets()
+
+	mod.markServerUp()
+
+	assert.Empty(t, drainTypes(t, sub), "no sessions or tmux frame after Stop")
+	assert.Empty(t, fake.HookSets(), "no hook install after Stop")
+	select {
+	case <-mod.waitForGate:
+		t.Fatal("wait-for must not be resumed after Stop")
+	default:
+	}
+}
+
+// A recovery already blocked in its hook install when Stop begins must not
+// announce a revival once released (spec D4 lifecycle, PR review A4).
+func TestMarkServerUp_RacingStop_AnnouncesNothing(t *testing.T) {
+	mod, fake, events := newWatcherTestModule(t)
+	fake.SetServerState(tmux.ServerAbsent)
+	require.NoError(t, mod.Start(context.Background()))
+	require.False(t, mod.TmuxAlive())
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+
+	fake.SetServerState(tmux.ServerUp)
+	entered := make(chan struct{}, 8)
+	release := make(chan struct{})
+	fake.SetHookGlobalGate(entered, release)
+
+	recovered := make(chan struct{})
+	go func() {
+		defer close(recovered)
+		mod.markServerUp()
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("the recovery never reached the hook install")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		_ = mod.Stop(context.Background())
+	}()
+	// Stop has begun (its first step cancels the watcher) and is now
+	// waiting for the blocked install to let go of hooksMu.
+	require.Eventually(t, func() bool { return mod.runCtx.Err() != nil }, 2*time.Second, time.Millisecond)
+
+	close(release)
+	<-stopped
+	<-recovered
+	for _, typ := range drainTypes(t, sub) {
+		assert.NotEqual(t, "sessions", typ, "no sessions push once Stop began")
+	}
+	select {
+	case <-mod.waitForGate:
+		t.Fatal("wait-for must not be resumed once Stop began")
+	default:
+	}
+}
+
 // markServerUp runs the recovery only for the caller whose flip took the
 // watcher up (spec D4): a second call, sequential or concurrent, is a no-op.
 func TestMarkServerUp_RecoversOnce(t *testing.T) {

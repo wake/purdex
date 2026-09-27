@@ -217,7 +217,15 @@ func (m *SessionModule) tickTmuxDown() {
 // sessions push — for the one caller whose flip does it; any other caller
 // (a concurrent tick or create) returns at once (#1474 spec D4). The caller
 // knows a server answers, so tmux is usable too.
+//
+// Once the module is stopping it does nothing, and it checks again after
+// the hook install (which can block for as long as tmux does), so a
+// recovery racing Stop never announces a revival after shutdown began
+// (spec D4 lifecycle, PR review A4).
 func (m *SessionModule) markServerUp() {
+	if m.stopping() {
+		return
+	}
 	if !m.wstate.setTmuxAlive(true) {
 		return
 	}
@@ -227,8 +235,24 @@ func (m *SessionModule) markServerUp() {
 	// skips the recovery below (#1473 spec D3).
 	m.wstate.clearHooksOK()
 	m.ensureHooks("")
+	if m.stopping() {
+		return
+	}
 	m.notifyWaitFor(true)
 	m.broadcastSessions()
+}
+
+// stopping reports whether Stop has begun. Stop cancels runCtx first,
+// before it waits for hooksMu (an install may hold it), so that is the
+// earliest signal; hooksStopped covers a module that was never started
+// (no runCtx) but was stopped.
+func (m *SessionModule) stopping() bool {
+	if m.runCtx != nil && m.runCtx.Err() != nil {
+		return true
+	}
+	m.hooksMu.Lock()
+	defer m.hooksMu.Unlock()
+	return m.hooksStopped
 }
 
 // recordServerState records a probe's result and broadcasts the reported
