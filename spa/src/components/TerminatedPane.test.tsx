@@ -150,6 +150,17 @@ describe('TerminatedPane', () => {
     render(<TerminatedPane content={content} tabId={TAB_ID} paneId={PANE_ID} />)
     expect(screen.getByTestId('session-picker')).toBeInTheDocument()
   })
+
+  // Plain `justify-center` in a scrolling column pushes overflow above the
+  // scroll origin, where it can never be scrolled back into view.
+  it('centres its content without clipping the top when it overflows', () => {
+    const content = makeContent('session-closed')
+    setupTab(content)
+    const { container } = render(<TerminatedPane content={content} tabId={TAB_ID} paneId={PANE_ID} />)
+    const root = container.firstElementChild as HTMLElement
+    expect(root).toHaveClass('overflow-y-auto', 'justify-center-safe')
+    expect(root).not.toHaveClass('justify-center')
+  })
 })
 
 describe('TerminatedPane rebuild action set', () => {
