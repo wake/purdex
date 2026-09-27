@@ -7,7 +7,7 @@
 // stale and this hook refetches, debounced; it also refetches once after a
 // reconnect. Host removal in keep-tabs mode tears everything down here.
 import { useEffect, useRef, useState } from 'react'
-import { attachObserve, fetchExecutionEvents, getExecution } from '../lib/nex/nex-api'
+import { attachObserve, fetchExecutionEvents, fetchExecutionTasks, getExecution } from '../lib/nex/nex-api'
 import { openNexSse, type NexSseHandle } from '../lib/nex/nex-sse'
 import { frameToEvent } from '../lib/nex/event-reducer'
 import { subscriptionSlots } from '../lib/nex/subscription-slots'
@@ -15,6 +15,7 @@ import { createTransientFrameQueue, type TransientFrameQueue } from '../lib/nex/
 import { NexApiError } from '../lib/nex/types'
 import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
 import { useHostStore } from '../stores/useHostStore'
+import { selectWorkerRollup, useNexHostStore } from '../stores/useNexHostStore'
 
 export type SubscriptionProblem = null | 'not_found' | 'host_removed' | 'nex_unavailable' | 'nex_disabled'
 export const HISTORY_PAGE_LIMIT = 500
@@ -109,6 +110,25 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
     // future caller of scheduleRefetch forgets to check `cancelled` first,
     // a debounced getExecution settling after unmount/key-change can never
     // arm a new timer here.
+    // nexen #83: the task table is rebuilt by history replay, but a (re)open
+    // can miss task_end frames. Every `open` — the first, each reconnect,
+    // and a resumed stream after eviction — re-reads the running rows and
+    // merges them. Only the newest read may land: `tasksGen` bumps per read
+    // (and `cancelled` covers an execution switch), so an older answer
+    // arriving late is dropped rather than merged over a newer one.
+    let tasksGen = 0
+    const refetchTasks = async () => {
+      if (!selectWorkerRollup(hostId)(useNexHostStore.getState())) return
+      const gen = ++tasksGen
+      try {
+        const snap = await fetchExecutionTasks(hostId, executionId, 'running')
+        if (cancelled || gen !== tasksGen) return
+        store().applyTasksSnapshot(hostId, executionId, snap)
+      } catch {
+        // transient — the next (re)open reads again; live events keep flowing
+      }
+    }
+
     const scheduleRefetch = () => {
       if (cancelled || refetchTimer) return
       refetchTimer = setTimeout(() => { refetchTimer = null; void refetchSummary() }, SUMMARY_REFETCH_DEBOUNCE_MS)
@@ -133,6 +153,7 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
     // opens a fresh stream with a fresh queue.
     let queue: TransientFrameQueue | null = null
     const closeStream = () => {
+      tasksGen += 1 // a /tasks read for the closed stream must not land
       sseRef.current?.close()
       sseRef.current = null
       queue?.close()
@@ -225,7 +246,7 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
               if (status === 'closed') q.close()
               store().setSse(hostId, executionId, status, err?.message ?? null)
               if (status === 'reconnecting') wasReconnecting = true
-              if (status === 'open') { warnedMalformed = false; if (wasReconnecting) { wasReconnecting = false; void refetchSummary() } }
+              if (status === 'open') { warnedMalformed = false; void refetchTasks(); if (wasReconnecting) { wasReconnecting = false; void refetchSummary() } }
               if (status === 'closed' && err) {
                 // Terminal from openNexSse itself (401/403, or a
                 // non-retryable structured error code) — the handle is

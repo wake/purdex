@@ -762,3 +762,64 @@ describe('costSummary — a frame must prove it continues the previous one', () 
     expect(s.totalUsd).toBeCloseTo(0.3, 10)
   })
 })
+
+// Shared rule with Nexen: float sums run in a fixed order so both sides land
+// on the same bits. Entries sharing a model fold in lexicographic order of
+// their original modelUsage key; every sum across models runs in
+// lexicographic order of the canonical key. 1e16 + 1 rounds back to 1e16,
+// so (1e16 + 1) + 1 = 1e16 but (1 + 1) + 1e16 = 1e16 + 2.
+describe('costSummary — deterministic summation order', () => {
+  type Entry = ReturnType<typeof entry>
+  const entry = (out: number, canonicalModel: string, cost = 0) => ({
+    inputTokens: out, outputTokens: out, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: cost, canonicalModel,
+  })
+  /** modelUsage with its keys inserted in the given order. */
+  const mu = (pairs: [string, Entry][]) => {
+    const o: Record<string, unknown> = {}
+    for (const [k, v] of pairs) o[k] = v
+    return o
+  }
+
+  it('entries sharing a model fold in order of their original key', () => {
+    const e: [string, Entry][] = [['k1', entry(1e16, 'm', 1e16)], ['k2', entry(1, 'm', 1)], ['k3', entry(1, 'm', 1)]]
+    const sorted = costSummary([result({ total_cost_usd: 1, modelUsage: mu(e) })])
+    const reversed = costSummary([result({ total_cost_usd: 1, modelUsage: mu([...e].reverse()) })])
+    expect(sorted.turns[0].tokens!.output).toBe(1e16)
+    expect(reversed.turns[0].tokens).toEqual(sorted.turns[0].tokens)
+    expect(reversed.models).toEqual(sorted.models)
+    expect(reversed.models[0].costUsd).toBe(1e16)
+  })
+
+  it('per-frame totals sum models in order of the canonical key, not the original key', () => {
+    // Original keys sort x < y < z; canonical keys sort a < b < c the other way round.
+    const e: [string, Entry][] = [['z', entry(1e16, 'a')], ['y', entry(1, 'b')], ['x', entry(1, 'c')]]
+    for (const order of [e, [...e].reverse()]) {
+      const s = costSummary([result({ total_cost_usd: 1, modelUsage: mu(order) })])
+      expect(s.turns[0].tokens!.output).toBe(1e16)
+      expect(s.tokens.input).toBe(1e16)
+      expect(s.turns[0].models).toEqual(['a', 'b', 'c'])
+    }
+  })
+
+  it('the growth sum runs in canonical order: reverse insertion gives the same classification and total', () => {
+    // prev a:0 b:1 c:0 (Σ 1 > 0, so it becomes prev); this frame's deltas are
+    // a 1e16, b 1, c 1 → growth 1e16 in canonical order, below its own
+    // output 1e16 + 2 → independent (contribution = its whole total).
+    const prevE: [string, Entry][] = [['a', entry(0, 'a')], ['b', entry(1, 'b')], ['c', entry(0, 'c')]]
+    const curE: [string, Entry][] = [['a', entry(1e16, 'a')], ['b', entry(2, 'b')], ['c', entry(1, 'c')]]
+    const run = (reverse: boolean) => {
+      const o = (x: [string, Entry][]) => mu(reverse ? [...x].reverse() : x)
+      return costSummary([
+        result({ total_cost_usd: 0.25, modelUsage: o(prevE), usage: { output_tokens: 1 } }),
+        result({ total_cost_usd: 0.5, modelUsage: o(curE), usage: { output_tokens: 1e16 + 2 } }),
+      ])
+    }
+    const sorted = run(false)
+    const reversed = run(true)
+    expect(sorted.turns[1].costUsd).toBe(0.5)
+    expect(sorted.totalUsd).toBe(0.75)
+    expect(reversed.turns.map((t) => t.costUsd)).toEqual(sorted.turns.map((t) => t.costUsd))
+    expect(reversed.totalUsd).toBe(sorted.totalUsd)
+    expect(reversed.tokens).toEqual(sorted.tokens)
+  })
+})

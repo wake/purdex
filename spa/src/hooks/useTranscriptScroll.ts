@@ -25,6 +25,11 @@
 // calls `release()` after every jump: following stops, and the position the
 // jump left is remembered so its own (late) scroll event does not count —
 // only the reader moving away from it, back to the bottom, resumes it.
+// The release holds whether or not the search bar is open: the dock's
+// inspect jump (R4 T3.2) releases with the bar closed, and the next streamed
+// line must not pull the reader back down. Without a release, a closed bar
+// follows growth as ever — and closing the bar drops any release, so the
+// next growth follows the bottom again.
 import { useCallback, useImperativeHandle, useLayoutEffect, useMemo, useRef, type Ref, type UIEvent } from 'react'
 
 /** Within this many pixels of the end counts as the bottom (sub-pixel rounding, a last line's margin). */
@@ -35,7 +40,7 @@ export interface TranscriptScroll {
   attach: (node: HTMLDivElement | null) => void
   /** The container's onScroll. */
   onScroll: (e: UIEvent<HTMLDivElement>) => void
-  /** Scroll to the bottom, unless holding and the reader is elsewhere. */
+  /** Scroll to the bottom, unless holding (or released) and the reader is elsewhere. */
   follow: () => void
   /** Stop following where the box is now, until the reader scrolls (A F4). */
   release: () => void
@@ -65,9 +70,23 @@ export function useTranscriptScroll(external: Ref<HTMLDivElement> | undefined, h
   const scrolled = useRef(false)
   // The scrollTop a `release()` left, until the reader moves off it.
   const released = useRef<number | null>(null)
+  // A `release()` holds the bottom-follow — bar open or not — until the
+  // reader is back at the bottom.
+  const releaseHold = useRef(false)
   const holding = useRef(hold)
   // Before any passive effect of the same commit reads it.
-  useLayoutEffect(() => { holding.current = hold }, [hold])
+  useLayoutEffect(() => {
+    // The bar closing (hold true → false) is the explicit "back to live"
+    // gesture: it drops any release — a search jump's or an earlier inspect
+    // jump's — so the next growth follows the bottom again (alpha.463:
+    // 關掉搜尋列就恢復自動捲到底). An inspect release with the bar closed
+    // throughout never sees this transition and keeps holding.
+    if (holding.current && !hold) {
+      releaseHold.current = false
+      released.current = null
+    }
+    holding.current = hold
+  }, [hold])
 
   const attach = useCallback((node: HTMLDivElement | null) => {
     box.current = node
@@ -83,8 +102,10 @@ export function useTranscriptScroll(external: Ref<HTMLDivElement> | undefined, h
       if (top === released.current) return
       released.current = null
     }
-    if (el.scrollHeight - top - el.clientHeight <= NEAR_BOTTOM) atBottom.current = true
-    else if (top < lastTop.current) atBottom.current = false
+    if (el.scrollHeight - top - el.clientHeight <= NEAR_BOTTOM) {
+      atBottom.current = true
+      releaseHold.current = false
+    } else if (top < lastTop.current) atBottom.current = false
     lastTop.current = top
   }, [])
 
@@ -98,17 +119,19 @@ export function useTranscriptScroll(external: Ref<HTMLDivElement> | undefined, h
       scrolled.current = true
       return
     }
-    if (holding.current && !atBottom.current) return
+    if ((holding.current || releaseHold.current) && !atBottom.current) return
     el.scrollTo({ top: el.scrollHeight, behavior: scrolled.current ? 'smooth' : 'auto' })
     scrolled.current = true
     atBottom.current = true
     released.current = null
+    releaseHold.current = false
   }, [observe])
 
   const release = useCallback(() => {
     const el = box.current
     if (!el) return
     atBottom.current = false
+    releaseHold.current = true
     released.current = el.scrollTop
     lastTop.current = el.scrollTop
   }, [])

@@ -50,6 +50,11 @@
 //       frame): then `prev` stays, though the frame still contributes per its
 //       own classification. A cumulative frame's per-model cost, tokens and
 //       `duration_api_ms` are deltas against `prev`, each clamped at 0.
+//       Summation order (so both sides get the same float bits): entries
+//       sharing a model fold in lexicographic order of their original
+//       modelUsage key; every sum across models (the growth sum, Σ
+//       outputTokens, per-frame cost / token totals) runs in lexicographic
+//       order of the canonical key (plain `a < b`; keys are ASCII).
 //   F5  `usage` is NOT the whole turn when more than one model ran: it
 //       reflects one model's messages, `modelUsage` all of them (seq 8:
 //       usage.output_tokens 364 vs Σ modelUsage 376). Token breakdowns
@@ -100,7 +105,7 @@ export interface TurnCost {
   subtype: string
   /** `is_error === true || (subtype present && subtype !== 'success')`. */
   isError: boolean
-  /** canonicalModel (or modelUsage key) of the valid entries, order of appearance. */
+  /** canonicalModel (or modelUsage key) of the valid entries, in lexicographic order. */
   models: string[]
 }
 
@@ -161,7 +166,14 @@ function readEntry(key: string, v: unknown): ValidEntry | null {
   }
 }
 
-/** Entries of one frame that share a model (rule 3 keying) are summed, in order of first appearance. */
+/** Plain string order (`a < b`) — the summation order shared with Nexen. */
+const byString = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+
+/**
+ * Entries of one frame that share a model (rule 3 keying) are summed. The
+ * caller hands them in order of their original modelUsage key; the result is
+ * in order of the canonical key, which every cross-model sum then follows.
+ */
 function mergeByModel(entries: ValidEntry[]): ValidEntry[] {
   const out = new Map<string, ValidEntry>()
   for (const e of entries) {
@@ -170,7 +182,7 @@ function mergeByModel(entries: ValidEntry[]): ValidEntry[] {
     had.costUsd = addFinite(had.costUsd, e.costUsd)
     addTokens(had.tokens, e.tokens)
   }
-  return [...out.values()]
+  return [...out.values()].sort((a, b) => byString(a.model, b.model))
 }
 
 /**
@@ -185,8 +197,9 @@ function readModelUsage(modelUsage: unknown, strict: boolean): ValidEntry[] | nu
   const mu = obj(modelUsage)
   if (!mu) return strict ? null : []
   const out: ValidEntry[] = []
-  for (const key in mu) {
-    if (!Object.hasOwn(mu, key)) continue
+  const keys: string[] = []
+  for (const key in mu) if (Object.hasOwn(mu, key)) keys.push(key)
+  for (const key of keys.sort(byString)) {
     const entry = readEntry(key, mu[key])
     if (entry) out.push(entry)
     else if (strict) return null
@@ -231,7 +244,10 @@ function continues(prev: Map<string, ValidEntry>, cur: Map<string, ValidEntry>, 
     if (a.input < b.input || a.output < b.output || a.cacheRead < b.cacheRead || a.cacheWrite < b.cacheWrite) return false
   }
   let growth = 0
-  for (const [model, now] of cur) growth += now.tokens.output - (prev.get(model)?.tokens.output ?? 0)
+  for (const model of [...cur.keys()].sort(byString)) {
+    const now = cur.get(model)!
+    growth += now.tokens.output - (prev.get(model)?.tokens.output ?? 0)
+  }
   return growth >= ownOutput
 }
 
@@ -296,7 +312,7 @@ export function costSummary(messages: readonly StreamMessage[]): CostSummary {
       }
       // Rule 3: a frame with no output (interrupted / empty) never becomes prev.
       let outSum = 0
-      for (const e of evidence.values()) outSum += e.tokens.output
+      for (const e of evidence.values()) outSum += e.tokens.output // canonical order: built from mergeByModel
       if (outSum > 0) prev = { costUsd: rawCost, entries: evidence, apiMs: turnApiRaw }
     }
     // else: modelUsage but no usable total_cost_usd (rule 1 / edge c) — contributes nothing, not `prev`.

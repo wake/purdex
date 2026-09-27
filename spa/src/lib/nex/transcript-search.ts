@@ -247,6 +247,29 @@ export function buildSearchUnits(opts: SearchUnitOptions): SearchUnit[] {
   return units
 }
 
+/**
+ * The room's unit for the tool call `toolUseId` — its header argument, else
+ * the first unit the call draws — with the fold keys that reveal it (R4 T3.2:
+ * the dock's "inspect" goes where search would). The first call with that id
+ * wins; null when no call has it or the call draws no text.
+ */
+export function toolUseUnit(
+  opts: Pick<SearchUnitOptions, 'messages' | 'index' | 'tools'>,
+  toolUseId: string,
+): SearchUnit | null {
+  let key: BlockKey | null = null
+  for (let mi = 0; mi < opts.messages.length && key === null; mi++) {
+    const msg = opts.messages[mi]
+    if (msg.type !== 'assistant') continue
+    const bj = blocksOf(msg).findIndex((b) => b.type === 'tool_use' && b.id === toolUseId)
+    if (bj >= 0) key = blockKey(mi, bj)
+  }
+  if (key === null) return null
+  const units = buildSearchUnits({ ...opts, view: 'room', keyPrefix: '', turnStarts: [] })
+  const arg = searchUnitId(key, 'arg')
+  return units.find((u) => u.id === arg) ?? units.find((u) => u.id.startsWith(`${key}:`)) ?? null
+}
+
 /** The shortest query, in code points, that searches (A10)… */
 export const SEARCH_MIN_CHARS = 2
 /** …unless it holds a CJK character: one Han character (`錯`, `檔`) already narrows a transcript. */

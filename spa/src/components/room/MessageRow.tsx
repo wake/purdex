@@ -18,7 +18,7 @@ import RoomProse from './RoomProse'
 import RoomSubagentLine from './RoomSubagentLine'
 import RoomThinking from './RoomThinking'
 import RoomUserLine from './RoomUserLine'
-import SubagentBlock from './SubagentBlock'
+import SubagentBlock, { SubagentTaskSuffix } from './SubagentBlock'
 import type { RenderCtx } from './render-message'
 
 export interface MessageRowProps {
@@ -77,8 +77,13 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
     const children = index.childrenByParent.get(blockKey(i, j))
     const subagentType = (block.input as { subagent_type?: unknown } | undefined)?.subagent_type
     const inner: RenderCtx = { ...ctx, depth: ctx.depth + 1 }
+    // R4 T3.3: this call's subagent task row (nexen v0.13), by its id — a
+    // Map, so an id like `constructor` is just a missing key.
+    const task = block.id ? ctx.subagentTasks?.get(block.id) : undefined
     const subagent = children ? (
       <SubagentBlock
+        task={task}
+        now={now}
         name={typeof subagentType === 'string' && subagentType
           ? subagentType
           : (block.name || t('execution.tool.unknown'))}
@@ -105,6 +110,12 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
         foldKey={blockKey(i, j)}
         subagent={subagent}
         searchKey={blockKey(i, j)}
+        // No children to fold (backgrounded, or frames not here yet): the
+        // close-out goes on the call's own header. A call still running as a
+        // tool already shows its own clock there, so no second one.
+        headerExtra={task && !children && !(task.status === 'running' && entry?.status === 'running')
+          ? <SubagentTaskSuffix task={task} now={now} />
+          : undefined}
       />
     )
   }

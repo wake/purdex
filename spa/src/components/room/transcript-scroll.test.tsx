@@ -129,6 +129,127 @@ describe.each(views)('%s transcript scrolling', (_name, Transcript) => {
     expect(scrollTo).toHaveBeenCalledTimes(1)
   })
 
+  // R4 T3.2: the dock's inspect jump releases with the search bar closed.
+  // The release holds on its own — the next line does not pull the reader
+  // back down — until the reader returns to the bottom.
+  it('release() holds without the search bar until the reader is back at the bottom', () => {
+    const ref = createRef<HTMLDivElement>()
+    const control = createRef<TranscriptScrollControl>()
+    let messages = [said('a')]
+    const { rerender } = render(T({ messages, scrollRef: ref, scrollControl: control }))
+    const box = ref.current!
+    const grow = () => {
+      messages = [...messages, said(`m${messages.length}`)]
+      rerender(T({ messages, scrollRef: ref, scrollControl: control }))
+    }
+    geometry(box, 1000, 200, 800)
+    fireEvent.scroll(box)
+    // The jump lands mid-transcript and releases.
+    geometry(box, 1000, 200, 300)
+    control.current!.release()
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    geometry(box, 1100, 200, 300)
+    grow()
+    expect(scrollTo).not.toHaveBeenCalled()
+    // Moving down short of the bottom still holds.
+    geometry(box, 1100, 200, 500)
+    fireEvent.scroll(box)
+    grow()
+    expect(scrollTo).not.toHaveBeenCalled()
+    // Back at the bottom: following resumes, and keeps on.
+    geometry(box, 1200, 200, 1000)
+    fireEvent.scroll(box)
+    grow()
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+    geometry(box, 1300, 200, 400)
+    fireEvent.scroll(box)
+    grow()
+    expect(scrollTo).toHaveBeenCalledTimes(2)
+  })
+
+  it('release() into the last screen holds without the search bar too', () => {
+    const ref = createRef<HTMLDivElement>()
+    const control = createRef<TranscriptScrollControl>()
+    let messages = [said('a')]
+    const { rerender } = render(T({ messages, scrollRef: ref, scrollControl: control }))
+    const box = ref.current!
+    geometry(box, 1000, 200, 800)
+    fireEvent.scroll(box)
+    geometry(box, 1000, 200, 790)
+    control.current!.release()
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    geometry(box, 1100, 200, 790)
+    messages = [...messages, said('b')]
+    rerender(T({ messages, scrollRef: ref, scrollControl: control }))
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  // Closing the search bar is the explicit "back to live" gesture (alpha.463
+  // CHANGELOG): whatever a release held, the next line follows the bottom.
+  it('a search jump, then closing the bar: the next growth follows', () => {
+    const ref = createRef<HTMLDivElement>()
+    const control = createRef<TranscriptScrollControl>()
+    let messages = [said('a')]
+    let hold = true
+    const { rerender } = render(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: hold }))
+    const box = ref.current!
+    const grow = () => {
+      messages = [...messages, said(`m${messages.length}`)]
+      rerender(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: hold }))
+    }
+    geometry(box, 1000, 200, 800)
+    fireEvent.scroll(box)
+    geometry(box, 1000, 200, 300)
+    control.current!.release()
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    geometry(box, 1100, 200, 300)
+    grow()
+    expect(scrollTo).not.toHaveBeenCalled()
+    // The bar closes.
+    hold = false
+    rerender(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: hold }))
+    geometry(box, 1200, 200, 300)
+    grow()
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+  })
+
+  it('an inspect release, then opening and closing the bar: follow resumes', () => {
+    const ref = createRef<HTMLDivElement>()
+    const control = createRef<TranscriptScrollControl>()
+    let messages = [said('a')]
+    let hold = false
+    const { rerender } = render(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: hold }))
+    const box = ref.current!
+    const grow = () => {
+      messages = [...messages, said(`m${messages.length}`)]
+      rerender(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: hold }))
+    }
+    geometry(box, 1000, 200, 800)
+    fireEvent.scroll(box)
+    geometry(box, 1000, 200, 300)
+    control.current!.release()
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    geometry(box, 1100, 200, 300)
+    grow()
+    expect(scrollTo).not.toHaveBeenCalled()
+    // Re-rendering with the bar still closed keeps the hold.
+    rerender(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: hold }))
+    geometry(box, 1150, 200, 300)
+    grow()
+    expect(scrollTo).not.toHaveBeenCalled()
+    hold = true
+    rerender(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: hold }))
+    hold = false
+    rerender(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: hold }))
+    geometry(box, 1200, 200, 300)
+    grow()
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+  })
+
   // R1-1: a view switch under the open bar mounts the transcript holding;
   // the bar, not the transcript, decides where the reader lands.
   it('mounted while holding, the first follow does not jump', () => {

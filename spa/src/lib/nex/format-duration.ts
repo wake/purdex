@@ -38,3 +38,16 @@ export function formatDuration(ms: number): string {
   const seconds = Math.floor((ms % MINUTE) / SECOND)
   return `${minutes}m ${pad2(seconds)}s`
 }
+
+/**
+ * Coarse duration for background tasks (R4: the dock's elapsed, a subagent's
+ * duration): '12s' / '4m' / '1h 05m', always floored. With `floor: 'minute'`
+ * anything under a minute is '<1m' — the dock only ticks every 30 s, so a
+ * seconds count there would sit still and lie.
+ */
+export function formatCoarseDuration(ms: number, floor: 'second' | 'minute' = 'second'): string {
+  const v = Number.isFinite(ms) && ms > 0 ? ms : 0
+  if (v >= HOUR) return `${Math.floor(v / HOUR)}h ${pad2(Math.floor((v % HOUR) / MINUTE))}m`
+  if (v >= MINUTE) return `${Math.floor(v / MINUTE)}m`
+  return floor === 'minute' ? '<1m' : `${Math.floor(v / SECOND)}s`
+}

@@ -1,7 +1,7 @@
 // spa/src/lib/nex/transcript-search.test.ts — the search index (R3 plan T3.1).
 import { describe, it, expect } from 'vitest'
 import {
-  ANCHOR_END, anchorOrdinal, buildSearchUnits, findCurrent, findMatches, firstAtOrAfter, matchIdentity, relocate, SEARCH_MATCH_LIMIT, searchUnitId,
+  ANCHOR_END, anchorOrdinal, buildSearchUnits, findCurrent, findMatches, firstAtOrAfter, matchIdentity, relocate, SEARCH_MATCH_LIMIT, searchUnitId, toolUseUnit,
   type SearchUnit, type SearchUnitOptions,
 } from './transcript-search'
 import { indexOperations } from './operations'
@@ -377,5 +377,36 @@ describe('matchIdentity / findCurrent', () => {
     expect(findCurrent(units, findMatches(units, 'ab').matches, null)).toBe(0)
     expect(findCurrent(units, [], null)).toBe(-1)
     expect(matchIdentity(units, [], 0)).toBeNull()
+  })
+})
+
+// R4 T3.2: the dock's "inspect" reveals the call that started a task the way
+// search reveals a match — same unit ids, same reveal keys.
+describe('toolUseUnit', () => {
+  const opts = (messages: StreamMessage[], tools?: Record<string, ToolActivity>) => ({ messages, index: indexOperations(messages), tools })
+
+  it('a top-level call: its header argument, nothing to expand', () => {
+    const messages = [said('go'), asst(use('t1', 'Bash', { command: 'pnpm dev' }))]
+    expect(toolUseUnit(opts(messages, { t1: ran('pnpm dev', 'running') }), 't1')).toEqual({ id: searchUnitId('1:0', 'arg'), text: 'pnpm dev', reveal: [] })
+  })
+
+  it('a call inside a subagent needs the Task\'s subagent key', () => {
+    const messages = [
+      said('go'),
+      asst(use('task', 'Task', { description: 'explore' })),
+      child(asst(use('c1', 'Bash', { command: 'tail -f log' })), 'task'),
+    ]
+    expect(toolUseUnit(opts(messages, { c1: ran('tail -f log', 'running') }), 'c1')).toMatchObject({ id: searchUnitId('2:0', 'arg'), reveal: ['1:0:subagent'] })
+  })
+
+  it('a call with no header argument falls back to its first unit', () => {
+    const messages = [said('go'), asst(use('t1', 'Mystery', {})), usr(res('t1', 'out'))]
+    expect(toolUseUnit(opts(messages), 't1')).toMatchObject({ id: searchUnitId('1:0', 'output'), reveal: ['1:0'] })
+  })
+
+  it('an unknown id, or a call with nothing drawn, is null', () => {
+    const messages = [said('go'), asst(use('t1', 'Mystery', {}))]
+    expect(toolUseUnit(opts(messages), 'nope')).toBeNull()
+    expect(toolUseUnit(opts(messages), 't1')).toBeNull()
   })
 })

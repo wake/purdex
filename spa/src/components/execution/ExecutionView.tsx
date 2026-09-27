@@ -11,7 +11,7 @@
 // (`mode`, from the pane content). Chat has no dock and chat's header (see
 // ExecutionHeader); switching is local — the subscription, the store and the
 // lease are untouched, so nothing is refetched.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import RoomTranscript from '../room/RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
 import { ChatUserBubble } from '../chat/ChatBubble'
@@ -36,6 +36,9 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
 import { defaultExecutionState } from '../../lib/nex/event-reducer'
 import { costSummary } from '../../lib/nex/cost-summary'
+import { anyRunningSubagent, runningTasks, subagentTasksByToolUse } from '../../lib/nex/tasks'
+import { indexOperations } from '../../lib/nex/operations'
+import { toolUseUnit } from '../../lib/nex/transcript-search'
 import { partialHasChatContent, partialHasVisibleContent } from '../../lib/nex/partial'
 import { HandoffApiError } from '../../lib/nex/handoff-api'
 import { takeBack, takeToTerminal, handoffErrorMessage, manualResumeHint } from '../../lib/nex/handoff'
@@ -143,7 +146,11 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const cost = useMemo(() => (st.historyLoaded ? costSummary(st.messages) : null), [st.messages, st.historyLoaded])
   // Spec §4.2: the 1 s clock only runs while some tool is running.
   const anyRunning = useMemo(() => Object.values(st.tools).some((tool) => tool.status === 'running'), [st.tools])
-  const now = useElapsedTicker(anyRunning)
+  // R4 T3.3: a running subagent's close-out line ticks too (a background one
+  // has no running tool). Only the clock — `anyRunning` also gates thinking.
+  const subagentRunning = useMemo(() => anyRunningSubagent(st.tasks), [st.tasks])
+  const subagentTasks = useMemo(() => subagentTasksByToolUse(st.tasks), [st.tasks])
+  const now = useElapsedTicker(anyRunning || subagentRunning)
   // Spec §3.2: one fold memory per pane. It lives here, above the view
   // switch, because room ⇄ chat remounts the transcript (F2).
   const foldStore = useFoldMemory()
@@ -162,6 +169,35 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // The transcript's bottom-follow: every jump to a match releases it (A F4).
   const scrollControl = useRef<TranscriptScrollControl>(null)
   const onSearchJump = useCallback(() => scrollControl.current?.release(), [])
+
+  // R4 T3.2: the dock's running tasks, and its "inspect" — the search reveal
+  // path: find the call's unit (`toolUseUnit`, the same ids and reveal keys
+  // as a search match), open the folds that hide it, and once that commit is
+  // on screen scroll its `data-search-unit` into view and release the
+  // bottom-follow, as a search jump does (the release holds with the search
+  // bar closed too, until the reader is back at the bottom). The target waits in a ref so a later
+  // re-render (a view switch handing over a new scroll box) never replays it.
+  const dockTasks = useMemo(() => runningTasks(st.tasks), [st.tasks])
+  const inspectTarget = useRef<string | null>(null)
+  const [inspectRequest, setInspectRequest] = useState(0)
+  const onInspectTask = useCallback((toolUseId: string) => {
+    const unit = toolUseUnit({ messages: st.messages, index: indexOperations(st.messages), tools: st.tools }, toolUseId)
+    if (!unit) return
+    foldStore.expand(unit.reveal)
+    inspectTarget.current = unit.id
+    setInspectRequest((n) => n + 1)
+  }, [st.messages, st.tools, foldStore])
+  useLayoutEffect(() => {
+    const id = inspectTarget.current
+    if (id === null || !scrollBox) return
+    inspectTarget.current = null
+    for (const el of scrollBox.querySelectorAll('[data-search-unit]')) {
+      if (el.getAttribute('data-search-unit') !== id) continue
+      el.scrollIntoView?.({ block: 'center' })
+      scrollControl.current?.release()
+      return
+    }
+  }, [inspectRequest, scrollBox])
   const closeSearch = useCallback(() => {
     setSearchOpen(false)
     const el = restoreFocus.current
@@ -264,7 +300,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const transcriptProps = {
     messages: st.messages, turnStarts: st.turnStarts, keyPrefix: executionId, showThinking,
     showEmptyHint: st.messages.length === 0 && !st.pendingLocal, emptyText: t('execution.empty'), scrollKey: st.pendingLocal ? 1 : 0,
-    partial: st.partial, tools: st.tools, now,
+    partial: st.partial, tools: st.tools, now, subagentTasks,
     // R3 T3.3: the search bar marks and scrolls inside the transcript, and
     // while it is open a new line never pulls the reader off a match (A4).
     scrollRef: setScrollBox, holdScroll: searchOpen, scrollControl,
@@ -311,7 +347,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
         </FoldContext.Provider>
       )}
       {/* Worker pane spec §4.6 (Q3): the worker's current state, inside the pane, above the input. Chat has none (spec §5). */}
-      {!chat && <WorkerDock sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} isMine={isMine} />}
+      {!chat && <WorkerDock sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} isMine={isMine} tasks={dockTasks} onInspect={onInspectTask} />}
       {leaseHeld && (
         <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning">
           {t('execution.lease_held', { principal: st.leaseError?.heldBy ?? '' })}

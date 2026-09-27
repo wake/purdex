@@ -76,4 +76,12 @@ describe('useElapsedTicker', () => {
     unmount()
     expect(vi.getTimerCount()).toBe(0)
   })
+
+  it('takes a coarser interval (the dock ticks every 30 s)', () => {
+    const { result } = renderHook(() => useElapsedTicker(true, 30_000))
+    act(() => { vi.advanceTimersByTime(29_999) })
+    expect(result.current).toBe(T0)
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(result.current).toBe(T0 + 30_000)
+  })
 })

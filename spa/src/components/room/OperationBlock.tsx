@@ -48,6 +48,11 @@ export interface OperationBlockProps {
    * in the transcript's messages, so search cannot find it.
    */
   searchKey?: BlockKey
+  /**
+   * Extra facts on the header line, after the argument (R4 T3.3: a subagent's
+   * close-out when its Task call has no children to fold).
+   */
+  headerExtra?: ReactNode
 }
 
 /** Duration is shown at a second and up (spec §3.1.1 #3) until #1229 lands. */
@@ -97,6 +102,7 @@ export default function OperationBlock({
   foldKey,
   subagent,
   searchKey,
+  headerExtra,
 }: OperationBlockProps) {
   const anchor = (part: 'arg' | 'input' | 'output') => (searchKey === undefined ? undefined : searchUnitId(searchKey, part))
   const t = useI18nStore((s) => s.t)
@@ -169,6 +175,7 @@ export default function OperationBlock({
         ) : (
           <span className="flex-1" />
         )}
+        {headerExtra}
         {status === 'aborted' && (
           <span data-testid="op-aborted" className="text-xs text-text-muted shrink-0">
             {t('execution.tool.aborted')}

@@ -142,6 +142,7 @@ export default function ChatTranscript({
   partial,
   tools,
   now,
+  subagentTasks,
   scrollRef,
   holdScroll = false,
   scrollControl,
@@ -181,7 +182,7 @@ export default function ChatTranscript({
   const shown: RoomTurn[] = turns.length === 0 && hasPartial ? [{ start: 0, end: 0, openerIndex: null }] : turns
   const lastTurn = shown.length - 1
   const interrupted = t('stream.interrupted')
-  const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0 }
+  const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0, subagentTasks }
 
   return (
     <div ref={attach} onScroll={onScroll} className="@container flex-1 overflow-y-auto p-4 space-y-3">
