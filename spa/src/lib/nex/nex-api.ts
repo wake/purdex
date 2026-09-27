@@ -135,7 +135,10 @@ export async function fetchExecutionTasks(
 ): Promise<WorkerTasksSnapshot> {
   const body = await nexFetch(hostId, `${execPath(executionId, '/tasks')}?state=${state}`).then((r) => okJson<unknown>(r))
   const rec = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {}
-  const cursor = typeof rec.cursor === 'number' && Number.isFinite(rec.cursor) && rec.cursor >= 0 ? rec.cursor : 0
+  // The cursor is an event seq: anything but a safe non-negative integer
+  // makes the whole body malformed (its rows cannot be placed against seqs).
+  if (!Number.isSafeInteger(rec.cursor) || (rec.cursor as number) < 0) return { items: [], cursor: 0 }
+  const cursor = rec.cursor as number
   const items: WorkerTask[] = []
   if (Array.isArray(rec.items)) {
     for (const raw of rec.items) {

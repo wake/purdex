@@ -209,6 +209,18 @@ describe('nex-api', () => {
     expect(res).toEqual({ items: [], cursor: 0 })
   })
 
+  it('fetchExecutionTasks: a cursor that is not a safe non-negative integer is a malformed body (empty snapshot at 0)', async () => {
+    const item = { task_id: 't1', status: 'running', started_at: 5 }
+    for (const cursor of [1.5, -1, 2 ** 53, Number.MAX_VALUE, '7', null]) {
+      testGlobal.fetch.mockResolvedValueOnce(json({ items: [item], cursor }))
+      expect(await fetchExecutionTasks(hostId, 'exc_1')).toEqual({ items: [], cursor: 0 })
+    }
+    testGlobal.fetch.mockResolvedValueOnce(json({ items: [item], cursor: 0 }))
+    const ok = await fetchExecutionTasks(hostId, 'exc_1')
+    expect(ok.cursor).toBe(0)
+    expect(ok.items).toHaveLength(1)
+  })
+
   it('fetchExecutionTasks throws the structured error (old daemon: 404)', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ error: 'not found', code: 'not_found' }, 404))
     await expect(fetchExecutionTasks(hostId, 'exc_1')).rejects.toMatchObject({ status: 404, code: 'not_found' })
