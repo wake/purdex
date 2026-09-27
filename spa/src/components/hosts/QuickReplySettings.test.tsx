@@ -114,6 +114,21 @@ describe('QuickReplySettings', () => {
     expect(screen.queryByTestId('quick-replies-defaults')).toBeNull()
   })
 
+  // F2: the editor trims like the daemon's strings.TrimSpace, NEL included.
+  it('a NEL-only text is refused as empty; NEL around a text is trimmed away', async () => {
+    seed(entry([{ id: 'a', text: 'alpha' }], 1))
+    render(<QuickReplySettings hostId={H} />)
+    fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
+    fireEvent.change(screen.getByTestId('quick-reply-input'), { target: { value: '\u0085' } })
+    fireEvent.click(screen.getByTestId('quick-reply-save'))
+    expect(screen.getByTestId('quick-reply-error')).toHaveTextContent(/./)
+    expect(saveQuickReplies).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByTestId('quick-reply-input'), { target: { value: '\u0085go on\u0085' } })
+    fireEvent.click(screen.getByTestId('quick-reply-save'))
+    await waitFor(() => expect(stored()).toEqual([{ id: 'a', text: 'go on' }]))
+  })
+
   // R1-1 / F4: Enter must honour the same `busy` the save button does.
   it('Enter does not save while the host is offline', async () => {
     seed(entry([{ id: 'a', text: 'alpha' }], 1))

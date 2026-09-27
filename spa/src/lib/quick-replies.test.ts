@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { DEFAULT_QUICK_REPLIES, effectiveQuickReplies, useQuickReplies, validateQuickReplyText } from './quick-replies'
+import { DEFAULT_QUICK_REPLIES, effectiveQuickReplies, trimLikeGo, useQuickReplies, validateQuickReplyText } from './quick-replies'
 import { emptyHostConfigEntry, useHostConfigStore, type HostConfigEntry } from '../stores/useHostConfigStore'
 import type { QuickReply } from './host-config-api'
 
@@ -78,6 +78,31 @@ describe('validateQuickReplyText', () => {
     expect(validateQuickReplyText('a\0b')).toBe('hosts.quick_replies.error_invalid')
     expect(validateQuickReplyText('字'.repeat(333))).toBeNull() // 999 bytes
     expect(validateQuickReplyText('字'.repeat(334))).toBe('hosts.quick_replies.error_invalid')
+  })
+})
+
+describe('trimLikeGo', () => {
+  // F2: the daemon stores `strings.TrimSpace(text)`, whose set is Unicode
+  // White_Space. JS `trim()` differs in two code points: it keeps U+0085 (NEL)
+  // and strips U+FEFF (BOM), which Go keeps.
+  it('only NEL is empty, like the daemon', () => {
+    expect(trimLikeGo('\u0085')).toBe('')
+    expect(validateQuickReplyText(trimLikeGo('\u0085 \u0085'))).toBe('hosts.quick_replies.error_empty')
+  })
+
+  it('strips NEL around the text', () => {
+    expect(trimLikeGo('\u0085go on\u0085')).toBe('go on')
+  })
+
+  it('matches Go unicode.IsSpace exactly', () => {
+    const goSpace = ['\t', '\n', '\v', '\f', '\r', ' ', '\u0085', ' ', ' ',
+      ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+      ' ', ' ', ' ', ' ', '　']
+    for (const s of goSpace) expect(trimLikeGo(`${s}x${s}`)).toBe('x')
+    // Not white space to Go: kept, so the SPA never saves less than the daemon would.
+    for (const s of ['﻿', '​', '᠎']) expect(trimLikeGo(`${s}x${s}`)).toBe(`${s}x${s}`)
+    // Inner space is untouched.
+    expect(trimLikeGo(' a \u0085 b ')).toBe('a \u0085 b')
   })
 })
 

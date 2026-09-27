@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { ArrowDown, ArrowUp, Check, PencilSimple, Plus, Trash, X } from '@phosphor-icons/react'
 import type { QuickReply } from '../../lib/host-config-api'
 import { newConfigId } from '../../lib/host-config-validate'
-import { MAX_QUICK_REPLIES, validateQuickReplyText } from '../../lib/quick-replies'
+import { MAX_QUICK_REPLIES, trimLikeGo, validateQuickReplyText } from '../../lib/quick-replies'
 import { EMPTY_HOST_CONFIG, useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostConfigCollection } from './useHostConfigCollection'
@@ -28,7 +28,7 @@ function QuickReplyEditor({ initial, busy, error, onSave, onCancel }: {
   const save = () => {
     // Enter reaches here too, past the button's `disabled` (as in CommandEditDialog).
     if (busy) return
-    const trimmed = text.trim()
+    const trimmed = trimLikeGo(text)
     const problem = validateQuickReplyText(trimmed)
     if (problem) {
       setInvalid(problem)
