@@ -130,6 +130,30 @@ retries until they are.
   between two ticks that the down/alive edge never saw).
 - Alive → down transition in `tickNormal`: `hooksOK = false`.
 
+#### D3.1 Serialisation with Stop and the manual API (PR review R2 A2/A3/A6)
+
+- A `hooksMu sync.Mutex` on the module serialises every hook mutation:
+  `ensureHooks`'s install, `Stop()`'s remove, and the manual
+  `POST /api/hooks/tmux/setup` install/remove. The set-hook subprocesses run
+  under `hooksMu` (not under `watcherState.mu`).
+- `Stop()` takes `hooksMu`, sets `hooksStopped = true`, then removes. An
+  `ensureHooks` that acquires `hooksMu` afterwards sees `hooksStopped` and does
+  nothing, so no hook can be reinstalled after `Stop()` returns.
+- Manual **remove** is an opt-out for the rest of this daemon process:
+  it sets `hooksDisabled = true` and `hooksOK = false`; `ensureHooks` does
+  nothing while disabled. (A daemon restart installs them again in `Start()`,
+  as it always has.) Manual **install** clears `hooksDisabled` and records the
+  result like `ensureHooks` does (`hooksOK` from the outcome, instance `""`).
+- The failure log is throttled per distinct error text: a failure logs when it
+  opens a streak or its message differs from the previous failure's.
+
+Accepted as low and tracked separately (not fixed here): a server that
+restarts between two ticks **with no sessions** keeps the old `hooksOK` until
+its first session appears (A1 — latency only, the 5 s ticker still delivers);
+the localised-strerror `Stat` fallback has a TOCTOU window (A4 — one read
+misclassified, next tick retries); monitor `ListPanes` classifies combined
+stdout+stderr (A5 — pre-existing).
+
 ## Acceptance
 
 - Unit: `IsNoServer` table — stale form; absent form with a missing absolute
