@@ -16,6 +16,9 @@
 // its own source, and agent prose is indexed by `proseText` — the text
 // RoomProse renders, not the markdown source (markdown-text.ts) — so a link's
 // URL or a split `nee**dle**` cannot shift the count. Offsets are not used.
+// The index is NFC (A10) but the DOM draws text as it arrived: in the rare
+// NFD transcript the element holds no NFC occurrence to mark, and the match
+// is still scrolled to by its element.
 //
 // **Owners.** Highlight names are document-wide, so two panes searching at
 // once would overwrite — or, clearing, erase — each other's marks. Each caller

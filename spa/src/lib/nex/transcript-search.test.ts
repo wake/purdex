@@ -115,6 +115,45 @@ describe('buildSearchUnits / findMatches', () => {
     expect(find(units(messages, 'room'), '')).toEqual([])
   })
 
+  // A10: a single Han character narrows a transcript as well as two Latin letters.
+  it('a single Han character searches', () => {
+    const messages = [said('有錯誤，檔案沒找到'), said('一切正常')]
+    expect(find(units(messages, 'room'), '錯').map((m) => [m.unitId, m.start])).toEqual([[searchUnitId('0:0', 'text'), 1]])
+    // Kana and Hangul count as CJK too.
+    expect(find(units([said('ファイル 파일')], 'room'), 'フ')).toHaveLength(1)
+    expect(find(units([said('ファイル 파일')], 'room'), '파')).toHaveLength(1)
+  })
+
+  it('a single Latin letter does not', () => {
+    const messages = [said('a b c')]
+    expect(find(units(messages, 'room'), 'a')).toEqual([])
+    // Padding does not make it long enough: the query is trimmed first.
+    expect(find(units(messages, 'room'), ' a ')).toEqual([])
+    expect(find(units(messages, 'room'), 'é')).toEqual([])
+  })
+
+  it('whitespace-only searches nothing', () => {
+    const messages = [said('a  b\t\tc')]
+    expect(find(units(messages, 'room'), '  ')).toEqual([])
+    expect(find(units(messages, 'room'), '\t\t')).toEqual([])
+    expect(find(units(messages, 'room'), '')).toEqual([])
+    // Around real text the spaces are trimmed, not searched.
+    expect(find(units([said('xx yy')], 'room'), '  yy ').map((m) => m.start)).toEqual([3])
+  })
+
+  it('NFD input matches NFC text', () => {
+    const nfc = 'café'
+    const nfd = 'café'
+    expect(nfc).not.toBe(nfd)
+    // An NFD query over NFC text…
+    expect(find(units([said(`a ${nfc} b`)], 'room'), nfd).map((m) => [m.start, m.end])).toEqual([[2, 6]])
+    // …and an NFC query over NFD text: the unit text is NFC at index time, so
+    // the offsets are offsets into that NFC text.
+    const list = units([said(`a ${nfd} b`)], 'room')
+    expect(list[0].text).toBe(`a ${nfc} b`)
+    expect(find(list, nfc).map((m) => [m.start, m.end])).toEqual([[2, 6]])
+  })
+
   it('keeps transcript order', () => {
     const messages = [
       said('xx one'),

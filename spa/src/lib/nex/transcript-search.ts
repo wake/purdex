@@ -231,7 +231,9 @@ export function buildSearchUnits(opts: SearchUnitOptions): SearchUnit[] {
     messages: opts.messages,
     index: opts.index,
     tools: opts.tools,
-    push: (id, text, reveal) => { if (text) units.push({ id, text, reveal }) },
+    // NFC at index time (A10): the query is NFC too, so a match's offsets are
+    // offsets into this text, whatever form the transcript arrived in.
+    push: (id, text, reveal) => { if (text) units.push({ id, text: text.normalize('NFC'), reveal }) },
   }
   if (opts.view === 'chat') {
     chatUnits(w, opts.keyPrefix, opts.turnStarts)
@@ -243,19 +245,36 @@ export function buildSearchUnits(opts: SearchUnitOptions): SearchUnit[] {
   return units
 }
 
-/** Queries shorter than this (in code points) find nothing. */
+/** The shortest query, in code points, that searches (A10)… */
 export const SEARCH_MIN_CHARS = 2
+/** …unless it holds a CJK character: one Han character (`錯`, `檔`) already narrows a transcript. */
+export const SEARCH_MIN_CHARS_CJK = 1
+
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
 
 /**
- * The query as a case-insensitive, **literal** pattern: every regex
- * metacharacter is escaped, so `a.b` does not match `axb`. A RegExp rather
- * than `toLowerCase` + `indexOf` because lower-casing can change a string's
- * length (`İ` → `i̇`), which would shift every offset after it. null when the
- * query is too short to search.
+ * The query as it is searched: NFC, trimmed. null when that leaves nothing,
+ * or fewer code points than the minimum — 1 when it holds a CJK character,
+ * else 2 (a single Latin letter matches nearly every line).
+ */
+export function normalizeQuery(query: string): string | null {
+  const q = query.normalize('NFC').trim()
+  if (!q) return null
+  const min = CJK.test(q) ? SEARCH_MIN_CHARS_CJK : SEARCH_MIN_CHARS
+  return [...q].length < min ? null : q
+}
+
+/**
+ * The query (normalised by `normalizeQuery`) as a case-insensitive,
+ * **literal** pattern: every regex metacharacter is escaped, so `a.b` does
+ * not match `axb`. A RegExp rather than `toLowerCase` + `indexOf` because
+ * lower-casing can change a string's length (`İ` → `i̇`), which would shift
+ * every offset after it. null when the query does not search.
  */
 export function searchPattern(query: string): RegExp | null {
-  if ([...query].length < SEARCH_MIN_CHARS) return null
-  return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu')
+  const q = normalizeQuery(query)
+  if (q === null) return null
+  return new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu')
 }
 
 /** The most matches `findMatches` returns by default; past it the UI shows `10000+`. */
