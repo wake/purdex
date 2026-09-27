@@ -30,6 +30,7 @@ import (
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/peers/ccuds"
 	"github.com/wake/purdex/internal/peers/proxyhelper"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 const (
@@ -620,7 +621,7 @@ func selftestTmuxNoSession(err error) bool {
 	}
 	msg := string(ee.Stderr)
 	return strings.Contains(msg, "can't find session") ||
-		strings.Contains(msg, "no server running") ||
+		tmux.IsNoServer(msg) || // stale or absent socket (#1473)
 		strings.Contains(msg, "no current session") ||
 		strings.Contains(msg, "session not found")
 }

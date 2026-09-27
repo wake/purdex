@@ -1515,3 +1515,18 @@ func TestSelftest_ProductionDepsAreWired(t *testing.T) {
 		t.Errorf("sleep(1ms) = %v", err)
 	}
 }
+
+// TestSelftestTmuxNoSession_AbsentSocket: cleanup's kill-session on a host
+// whose tmux socket does not exist (no server) means there is nothing to
+// clean up, not a cleanup failure (#1473).
+func TestSelftestTmuxNoSession_AbsentSocket(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "tmux-501", "default")
+	_, err := exec.Command("sh", "-c", `printf 'error connecting to %s (No such file or directory)\n' "$1" >&2; exit 1`, "sh", missing).Output()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("want *exec.ExitError, got %v", err)
+	}
+	if !selftestTmuxNoSession(err) {
+		t.Errorf("selftestTmuxNoSession(%q) = false, want true", ee.Stderr)
+	}
+}
