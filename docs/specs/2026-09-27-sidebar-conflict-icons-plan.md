@@ -65,3 +65,34 @@ Two clients (distinct host ids) on the same SOT profile via worktree dev server;
 (both edit the same workspace's tabs with auto-sync off, then turn it on); verify Home icon + workspace icon in both,
 resolve from the workspace panel, icons gone in both; Home popover actions (settings link, show workspace, slave →
 switch to master).
+
+## Plan review amendments (Claude reviewer standing in for codex; all adopted — these OVERRIDE the text above and spec where they conflict)
+
+- **C1** `tabsLockOf`: `if (!isSyncableWorkspaceId(id)) return null` BEFORE building the key; never call `tabsSectionKey`
+  (it throws on unsyncable ids, projections.ts:158-163) in render. Test with an id like `ws.bad!` → null, no throw.
+- **I1** Only the icon button lives inside the header `div {...listeners}`. The `FloatingPanel` is rendered as a
+  SIBLING of the header div inside the row's outer div (portal events bubble through the React tree; inside the
+  header a panel drag would start a workspace drag). Test: pointerdown on the panel's `floating-panel-handle` does
+  not reach the header's listeners.
+- **I2** NO `stopPropagation` on the conflict button (WorkspaceRow.test.tsx:139-173 pins that inner header buttons
+  must not block pointer-down; `distance: 5` separates click from drag; the header div has no onClick). Add the
+  new button to those "does not block pointer-down" tests. Drop the "drop stopPropagation" mutation from spec §8.
+- **I3** Escape inside the ConfirmDialog must not also close the FloatingPanel. Fix in the shared components:
+  ConfirmDialog handles Escape so that the panel can tell (e.g. listen in the capture phase and `preventDefault()`),
+  and FloatingPanel's Escape handler returns early on `e.defaultPrevented`. Verify listener ORDER actually makes it
+  work (the panel mounts first); add a test (dialog inside panel: Escape closes the dialog only; a second Escape
+  closes the panel). Keep existing ConfirmDialog/FloatingPanel tests green.
+- **I4** Tests that press keep-local/take-sot must set up `useProfileStore` master + `masterEndpoint` and a
+  `useHostStore` host at that endpoint (copy ResolveBlock.test.tsx's fixture); call `__resetSyncStatusForTest`
+  before render.
+- **I5** The row's close effect closes the store entry ONLY when the lock is gone or a slave is actually active
+  (`readMasterWorld().settled && !onScreen`… i.e. settled-and-not-master). While merely unsettled, hide icon+panel
+  but keep `openWsId`.
+- **M1** i18n placeholders are `{{name}}` / `{{count}}` (useI18nStore.ts:50).
+- **M2** `settings.profile.current.label.tabs` takes `{ workspace: <name> }`.
+- **M3** master on screen = `const r = readMasterWorld(); r.settled && r.onScreen` (verify field name).
+- **M4** Home popover, `tabs.<ws>` row with the master active but world unsettled → the Settings button.
+- **M5** `locksOf(sync, masterWorkspaces)` passes the master workspaces to `describeSections` (null allowed).
+- **M6** Key the workspace `ResolveRow` by `JSON.stringify([master.hostId, master.profileId, key])` as ResolveBlock does.
+- **M7** ProfileSwitcher `useMemo` deps include the lock count. `busy` replaces `trailing` (Menu.tsx:258-260) — accepted.
+- **M8** On unmount, a row whose id equals `openWsId` closes the store entry.
