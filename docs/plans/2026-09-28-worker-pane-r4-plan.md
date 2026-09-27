@@ -252,7 +252,9 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
   `result` frames in seq order:
   1. A frame without a usable `modelUsage` never becomes `prev`; it
      contributes its own `total_cost_usd` if finite and > 0 (older CC that
-     only gives `usage`), else nothing.
+     only gives `usage`), else nothing. A frame **with** `modelUsage` but a
+     missing / non-finite `total_cost_usd` contributes nothing and does not
+     become `prev` either.
   2. The first frame with `modelUsage` is independent.
   3. After that, a frame is **cumulative** ⇔ for every model in
      `prev.modelUsage`, this frame's `outputTokens` ≥ prev's (a model
@@ -367,10 +369,11 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
 
 - `ExecutionRowCompact`, only when the row carries rollup fields:
   - after the age: the cost (`$0.11`, `formatUsd`) when `cost_usd` is a
-    number; nothing when `null`. **Needs Nexen ≥ v0.13.2** (the shared
-    rule of T2.1; v0.13.1's `chainCost` under-counts). The capability
-    carries no version, so R4-D ships after the mlab daemon is on a pin
-    ≥ v0.13.2 (bump the pin in R4-D if R4-A shipped 0.13.1);
+    number; nothing when `null`. **Shown only when
+    `capabilities.worker_rollup.cost_basis === "result_evidence"`** (Nexen
+    v0.13.2, the shared rule of T2.1). v0.13.1 says `"session_cumulative"`
+    and under-counts, so its cost is hidden; any other / unknown value is
+    hidden too. Bump the pin to ≥ v0.13.2 in R4-D if R4-A shipped 0.13.1;
   - a small running badge (`Terminal` icon + count) when `running_tasks >
     0`;
   - the state dot's tooltip = the activity (`normalizePhase`):
@@ -384,7 +387,8 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
 ### T4.2 Host › Nex table
 
 - `NexExecutionRow`: columns `cost`, `turns`, `last tool`, `running` after
-  `observers`; `—` when the field is absent (old daemon). Update the table
+  `observers`; `—` when the field is absent (old daemon). The cost column
+  follows T4.1's `cost_basis` gate (`—` otherwise). Update the table
   snapshot.
 - Tests: row with and without rollup fields.
 
