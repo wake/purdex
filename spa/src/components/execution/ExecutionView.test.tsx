@@ -1284,7 +1284,9 @@ describe('ExecutionView — search (R3 T3.3)', () => {
     ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }) as Exec['messages'][number]
   const modF = (target: Element) => fireEvent.keyDown(target, { key: 'f', ctrlKey: true })
   const bar = () => screen.queryByTestId('transcript-search')
-  const openSearch = () => modF(document.body)
+  /** A pointer press inside the pane: it becomes the last pane interacted with (R1-2). */
+  const touch = () => fireEvent.pointerDown(screen.getAllByRole('textbox').at(-1)!)
+  const openSearch = () => { touch(); return modF(document.body) }
 
   class FakeHighlight {
     ranges: Range[] = []
@@ -1308,6 +1310,7 @@ describe('ExecutionView — search (R3 T3.3)', () => {
   it('Mod+F opens the bar and focuses the input', () => {
     render(<ExecutionView {...base} isActive />)
     expect(bar()).toBeNull()
+    touch()
     // Not cancelled = the browser's own find would open (the web build).
     expect(modF(document.body)).toBe(false)
     expect(bar()).toBeInTheDocument()
@@ -1316,10 +1319,38 @@ describe('ExecutionView — search (R3 T3.3)', () => {
 
   it('shows the match count', () => {
     render(<ExecutionView {...base} isActive />)
-    modF(document.body)
+    openSearch()
     fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'needle' } })
     expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('1 / 2')
     expect(highlights.get('search-current')?.ranges.map(String)).toEqual(['needle'])
+  })
+
+  // R1-2: isActive is the tab's; with a split, both worker panes listen.
+  // Only the pane the reader last pressed or focused in takes a body Mod+F.
+  it('in a split, Mod+F on the body opens only the pane last interacted with', () => {
+    render(
+      <>
+        <div data-testid="pane-a"><ExecutionView {...base} paneId="pa" isActive /></div>
+        <div data-testid="pane-b"><ExecutionView {...base} paneId="pb" isActive /></div>
+      </>,
+    )
+    const [inA, inB] = screen.getAllByRole('textbox')
+    fireEvent.pointerDown(inA)
+    fireEvent.focusIn(inB)
+    expect(modF(document.body)).toBe(false)
+    expect(screen.getAllByTestId('transcript-search')).toHaveLength(1)
+    expect(within(screen.getByTestId('pane-b')).getByTestId('transcript-search')).toBeInTheDocument()
+  })
+
+  it('with no pane interacted with, Mod+F on the body opens none', () => {
+    render(
+      <>
+        <ExecutionView {...base} paneId="pa" isActive />
+        <ExecutionView {...base} paneId="pb" isActive />
+      </>,
+    )
+    expect(modF(document.body)).toBe(true)
+    expect(bar()).toBeNull()
   })
 
   it('a target inside the pane opens it', () => {
@@ -1331,6 +1362,7 @@ describe('ExecutionView — search (R3 T3.3)', () => {
 
   it('an inactive pane ignores it', () => {
     render(<ExecutionView {...base} isActive={false} />)
+    touch()
     expect(modF(document.body)).toBe(true)
     expect(bar()).toBeNull()
   })
@@ -1371,7 +1403,7 @@ describe('ExecutionView — search (R3 T3.3)', () => {
 
   it('unmounting the pane clears its marks', () => {
     const { unmount } = render(<ExecutionView {...base} isActive />)
-    modF(document.body)
+    openSearch()
     fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'needle' } })
     expect(highlights.has('search-current')).toBe(true)
     unmount()
@@ -1380,7 +1412,7 @@ describe('ExecutionView — search (R3 T3.3)', () => {
 
   it('opens in chat too', () => {
     render(<ExecutionView {...base} mode="chat" isActive />)
-    modF(document.body)
+    openSearch()
     fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'needle' } })
     expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('1 / 2')
   })
@@ -1456,7 +1488,7 @@ describe('ExecutionView — search (R3 T3.3)', () => {
       const s = useExecutionStore.getState().executions[KEY]
       patchExec({ messages: [...s.messages, said(text)] })
     })
-    modF(document.body)
+    openSearch()
     scrollTo.mockClear()
     land('while open')
     expect(scrollTo).not.toHaveBeenCalled()

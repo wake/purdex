@@ -63,6 +63,14 @@ const TERMINAL_STATES = new Set(['rejected', 'failed', 'terminated'])
  * (it would answer `execution_not_settled`) nor `rejected`.
  */
 const TAKEABLE_STATES = new Set(['running', 'idle', 'failed', 'terminated'])
+/**
+ * The worker pane the reader last pressed or focused in (R1-2). `isActive`
+ * is the tab's, so in a split every worker pane listens for Mod+F; a Mod+F
+ * with nothing focused (the body) goes to this one only. Module state: one
+ * reader, one keyboard.
+ */
+let lastInteractedPane: string | null = null
+
 const KNOWN_ERROR_KEYS = new Set(['invalid_text', 'execution_archived', 'execution_terminal', 'turn_failed_to_launch', 'turn_stalled', 'interrupt_unconfirmed'])
 
 export default function ExecutionView({ hostId, executionId, isActive, tabId, paneId, from, mode = 'room', onModeChange }: ExecutionViewProps) {
@@ -156,17 +164,24 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // No focusable pane root (plan review #4): a click-to-focus root would
   // fight the input's auto-focus, the header's refocus and every fold button.
   // Instead, while this pane is active, Mod+F anywhere in it — or with
-  // nothing focused (the body) — opens the bar and keeps the browser's own
-  // find (the web build) from opening. A target anywhere else (another pane,
-  // a dialog, Monaco) keeps its own Mod+F. Electron registers no Cmd+F
-  // accelerator (electron/keybindings.ts), so the renderer gets the key.
+  // nothing focused (the body) when it is the pane last interacted with —
+  // opens the bar and keeps the browser's own find (the web build) from
+  // opening. A target anywhere else (another pane, a dialog, Monaco) keeps
+  // its own Mod+F, and so does the body when no pane has been interacted
+  // with. Electron registers no Cmd+F accelerator (electron/keybindings.ts),
+  // so the renderer gets the key.
+  const markInteracted = useCallback(() => { lastInteractedPane = paneId }, [paneId])
+  useEffect(() => () => {
+    if (lastInteractedPane === paneId) lastInteractedPane = null
+  }, [paneId])
   useEffect(() => {
     if (!isActive) return
     const onKeyDown = (e: KeyboardEvent) => {
       if (!isFindShortcut(e)) return
       const root = rootRef.current
       const target = e.target
-      if (!root || !(target === document.body || (target instanceof Node && root.contains(target)))) return
+      if (!root) return
+      if (target === document.body ? lastInteractedPane !== paneId : !(target instanceof Node && root.contains(target))) return
       // A dialog is modal: its Mod+F is its own, even rendered inside the pane (R1-3).
       if (target instanceof Element && target.closest('[role="dialog"]')) return
       if (root.querySelector('[aria-modal="true"]')) return
@@ -183,7 +198,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [isActive, key])
+  }, [isActive, key, paneId])
 
   if (problem) {
     const text = problem === 'not_found' ? t('execution.not_found')
@@ -243,7 +258,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   }
 
   return (
-    <div ref={rootRef} className="flex flex-col h-full">
+    <div ref={rootRef} onPointerDownCapture={markInteracted} onFocusCapture={markInteracted} className="flex flex-col h-full">
       <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
         onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal || takeBackBusy}
         onTakeBack={from || canTakeToTerminal ? onTakeBack : undefined} takeBackBusy={takeBackBusy || writeInFlight}
