@@ -1385,6 +1385,29 @@ describe('ExecutionView — search (R3 T3.3)', () => {
     expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('1 / 2')
   })
 
+  // R1-3 / A F6: the take-back confirm renders inside the pane's root.
+  it('Mod+F inside a dialog is the dialog\'s', () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'running' }) as never)
+    render(<ExecutionView {...base} from={from} isActive />)
+    fireEvent.click(takeBackBtn())
+    const cancel = screen.getByTestId('takeback-cancel')
+    cancel.focus()
+    expect(modF(cancel)).toBe(true)
+    expect(bar()).toBeNull()
+  })
+
+  it('one Escape closes the dialog, not the bar too', () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'running' }) as never)
+    render(<ExecutionView {...base} from={from} isActive />)
+    openSearch()
+    expect(bar()).toBeInTheDocument()
+    fireEvent.click(takeBackBtn())
+    expect(screen.getByTestId('takeback-dialog')).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByTestId('transcript-search-input'), { key: 'Escape' })
+    expect(screen.queryByTestId('takeback-dialog')).toBeNull()
+    expect(bar()).toBeInTheDocument()
+  })
+
   // A F4: the pane wires the bar's jumps to the transcript's release().
   it('a jump into the last screen stops the bottom-follow', () => {
     const scrollTo = vi.fn()

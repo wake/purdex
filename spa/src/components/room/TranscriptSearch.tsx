@@ -134,6 +134,9 @@ export default function TranscriptSearch({
       e.preventDefault()
       move(e.shiftKey ? -1 : 1)
     } else if (e.key === 'Escape') {
+      // Already handled — a dialog above takes Escape in the capture phase
+      // and marks it: one Escape closes one thing (R1-3).
+      if (e.defaultPrevented) return
       e.preventDefault()
       e.stopPropagation()
       onClose()

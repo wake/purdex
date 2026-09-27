@@ -167,6 +167,9 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
       const root = rootRef.current
       const target = e.target
       if (!root || !(target === document.body || (target instanceof Node && root.contains(target)))) return
+      // A dialog is modal: its Mod+F is its own, even rendered inside the pane (R1-3).
+      if (target instanceof Element && target.closest('[role="dialog"]')) return
+      if (root.querySelector('[aria-modal="true"]')) return
       // Nothing to search until the history is in.
       if (!useExecutionStore.getState().executions[key]?.historyLoaded) return
       e.preventDefault()
