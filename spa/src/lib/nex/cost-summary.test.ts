@@ -550,8 +550,8 @@ describe('costSummary — a frame must prove it continues the previous one', () 
       duration_ms: 2000,
       num_turns: 1,
       modelUsage: {
-        // a's costUSD and inputTokens went down → clamped at 0.
-        a: { inputTokens: 80, outputTokens: 20, cacheReadInputTokens: 70, cacheCreationInputTokens: 5, costUSD: 0.2, canonicalModel: 'a' },
+        // a's costUSD went down → clamped at 0. (Its counters cannot shrink: rule 3 would make the frame independent.)
+        a: { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 70, cacheCreationInputTokens: 5, costUSD: 0.2, canonicalModel: 'a' },
         b: { inputTokens: 7, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 1, costUSD: 0.3, canonicalModel: 'b' },
       },
       usage: { output_tokens: 15 },
@@ -621,6 +621,135 @@ describe('costSummary — a frame must prove it continues the previous one', () 
     // Control: a real own output of 1 with no growth is independent.
     const ctl = costSummary([frame(0.1, 100, 100), frame(0.3, 100, 1)])
     expect(ctl.turns[1].costUsd).toBe(0.3)
+  })
+
+  /** One-model frame with all four counters and its own cost. */
+  const full = (
+    cost: number,
+    c: { input: number; output: number; cacheRead?: number; cacheWrite?: number },
+    own: number,
+    key = 's',
+    canonical: string | undefined = key,
+  ): StreamMessage =>
+    result({
+      total_cost_usd: cost,
+      modelUsage: {
+        [key]: {
+          inputTokens: c.input, outputTokens: c.output, cacheReadInputTokens: c.cacheRead ?? 0,
+          cacheCreationInputTokens: c.cacheWrite ?? 0, costUSD: cost,
+          ...(canonical === undefined ? {} : { canonicalModel: canonical }),
+        },
+      },
+      usage: { output_tokens: own },
+    })
+
+  it.each([
+    ['costUSD NaN', { costUSD: NaN }],
+    ['inputTokens a string', { inputTokens: '1' }],
+    ['cacheReadInputTokens negative', { cacheReadInputTokens: -1 }],
+    ['cacheCreationInputTokens missing', { cacheCreationInputTokens: undefined }],
+  ])('rule 1 edge: any model with %s → the frame has no modelUsage (not prev, contributes its own cost)', (_, bad) => {
+    const s = costSummary([
+      frame(0.1, 100, 100),
+      result({ total_cost_usd: 0.05, modelUsage: { m: { ...validEntry, outputTokens: 5000, canonicalModel: 'm', ...bad } }, usage: { output_tokens: 1 } }),
+      frame(0.3, 150, 50),
+    ])
+    expect(s.turns.map((t) => t.costUsd)).toEqual([0.1, 0.05, expect.closeTo(0.2, 10)])
+    expect(s.totalUsd).toBeCloseTo(0.35, 10)
+  })
+
+  it('review #6: a model with outputTokens but an invalid costUSD cannot become prev, so Σ per-model cost never exceeds totalUsd', () => {
+    const s = costSummary([
+      full(0.05, { input: 1, output: 50 }, 50, 'm'),
+      result({
+        total_cost_usd: 0.1,
+        modelUsage: { m: { inputTokens: 2, outputTokens: 100, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: NaN, canonicalModel: 'm' } },
+        usage: { output_tokens: 50 },
+      }),
+      full(0.3, { input: 3, output: 150 }, 50, 'm'),
+    ])
+    // Third continues the FIRST (Δ 0.25), not the malformed second (which would have left m's raw 0.3 in the breakdown).
+    expect(s.turns.map((t) => t.costUsd)).toEqual([0.05, 0.1, expect.closeTo(0.25, 10)])
+    expect(s.totalUsd).toBeCloseTo(0.4, 10)
+    const perModel = s.models.reduce((a, m) => a + m.costUsd, 0)
+    expect(perModel).toBeLessThanOrEqual(s.totalUsd + 1e-12)
+    expect(perModel).toBeCloseTo(0.3, 10)
+  })
+
+  it('review #4: a $0 all-zero frame between 0.0528 and a 0.1126 running total does not become prev → total 0.1126', () => {
+    const s = costSummary([
+      full(0.0528, { input: 18, output: 120 }, 120),
+      full(0, { input: 0, output: 0 }, 0),
+      full(0.1126, { input: 46, output: 260 }, 140),
+    ])
+    expect(s.turns.map((t) => t.costUsd)).toEqual([0.0528, 0, expect.closeTo(0.0598, 10)])
+    expect(s.totalUsd).toBeCloseTo(0.1126, 10)
+  })
+
+  it('review #2: an interrupted $0.04 frame with 0 output then an independent $0.10 frame → 0.14', () => {
+    const s = costSummary([
+      full(0.04, { input: 50, output: 0, cacheRead: 100 }, 0),
+      full(0.1, { input: 60, output: 30, cacheRead: 200 }, 30),
+    ])
+    expect(s.turns.map((t) => t.costUsd)).toEqual([0.04, 0.1])
+    expect(s.totalUsd).toBeCloseTo(0.14, 10)
+  })
+
+  it('rule 3: a costed 0-output frame still contributes (independent) while prev stays', () => {
+    const s = costSummary([
+      full(0.1, { input: 10, output: 100 }, 100),
+      full(0.03, { input: 40, output: 0 }, 0),
+      full(0.3, { input: 30, output: 150 }, 50),
+    ])
+    // Middle: its output 0 < prev's 100 → independent (0.03); Σ output 0 → not prev, so the third continues the first.
+    expect(s.turns.map((t) => t.costUsd)).toEqual([0.1, 0.03, expect.closeTo(0.2, 10)])
+    expect(s.totalUsd).toBeCloseTo(0.33, 10)
+  })
+
+  it('rule 3 keying: models match by canonicalModel (claude-sonnet-5 → claude-sonnet-5[1m])', () => {
+    const s = costSummary([
+      full(0.1, { input: 10, output: 100 }, 100, 'claude-sonnet-5', 'claude-sonnet-5'),
+      full(0.3, { input: 20, output: 150 }, 50, 'claude-sonnet-5[1m]', 'claude-sonnet-5'),
+    ])
+    expect(s.turns.map((t) => t.costUsd)).toEqual([0.1, expect.closeTo(0.2, 10)])
+    expect(s.models).toHaveLength(1)
+    expect(s.models[0].model).toBe('claude-sonnet-5')
+    expect(s.models[0].costUsd).toBeCloseTo(0.3, 10)
+    expect(s.models[0].tokens).toEqual({ input: 20, output: 150, cacheRead: 0, cacheWrite: 0 })
+    // Without canonicalModel the raw keys differ → the model is "missing" → independent.
+    const raw = costSummary([
+      full(0.1, { input: 10, output: 100 }, 100, 'claude-sonnet-5', undefined),
+      full(0.3, { input: 20, output: 150 }, 50, 'claude-sonnet-5[1m]', undefined),
+    ])
+    expect(raw.turns[1].costUsd).toBe(0.3)
+  })
+
+  it('rule 3: all counters growing is not enough — output growth below own output stays independent (53→91, 130→958 style)', () => {
+    const s = costSummary([
+      full(0.02, { input: 10, output: 53, cacheRead: 1000, cacheWrite: 10 }, 53),
+      full(0.03, { input: 20, output: 91, cacheRead: 2000, cacheWrite: 20 }, 91),
+      full(0.04, { input: 30, output: 130, cacheRead: 3000, cacheWrite: 30 }, 130),
+      full(0.2, { input: 40, output: 958, cacheRead: 4000, cacheWrite: 40 }, 958),
+    ])
+    expect(s.turns.map((t) => t.costUsd)).toEqual([0.02, 0.03, 0.04, 0.2])
+  })
+
+  it.each([
+    ['input', { input: 5, output: 150, cacheRead: 100, cacheWrite: 10 }],
+    ['cacheRead', { input: 20, output: 150, cacheRead: 50, cacheWrite: 10 }],
+    ['cacheWrite', { input: 20, output: 150, cacheRead: 100, cacheWrite: 5 }],
+  ])('rule 3: %s shrinking vs prev → independent even with enough output growth', (_, c) => {
+    const s = costSummary([
+      full(0.1, { input: 10, output: 100, cacheRead: 100, cacheWrite: 10 }, 100),
+      full(0.3, c, 50),
+    ])
+    expect(s.turns[1].costUsd).toBe(0.3)
+    // Control: all four ≥ → cumulative.
+    const ctl = costSummary([
+      full(0.1, { input: 10, output: 100, cacheRead: 100, cacheWrite: 10 }, 100),
+      full(0.3, { input: 10, output: 150, cacheRead: 100, cacheWrite: 10 }, 50),
+    ])
+    expect(ctl.turns[1].costUsd).toBeCloseTo(0.2, 10)
   })
 
   it('subagent-scoped results never take part in the walk (F6)', () => {

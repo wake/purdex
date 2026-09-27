@@ -28,18 +28,27 @@
 //          negative `total_cost_usd` contributes nothing and is not `prev`.
 //       2. The first frame with `modelUsage` is independent.
 //       3. After that a frame is cumulative ⇔ every model in prev.modelUsage
-//          has outputTokens here ≥ prev's (missing here = 0 ⇒ not cumulative)
-//          AND Σ over this frame's models (this − prev, prev missing = 0) ≥
-//          this frame's `usage.output_tokens`.
+//          is present here with ALL FOUR counters (inputTokens, outputTokens,
+//          cacheReadInputTokens, cacheCreationInputTokens) ≥ prev's (missing
+//          here ⇒ not cumulative) AND Σ over this frame's models of
+//          (this outputTokens − prev's, prev missing = 0) ≥ this frame's
+//          `usage.output_tokens`. Models are matched by `canonicalModel` when
+//          it is a non-empty string, else by the modelUsage key (entries of
+//          one frame sharing a model are summed).
 //       4. Cumulative → contribution = this total − prev total; negative ⇒
 //          independent. Independent → contribution = this total.
 //       5. totalUsd = Σ contributions (saturating, see Overflow).
-//       Edge cases: outputTokens compare as plain numbers (no integer
-//       coercion); a malformed modelUsage (not an object, empty, a model value
-//       not an object, an outputTokens that is not a finite number ≥ 0) makes
-//       the whole frame count as having NO modelUsage (rule 1, never dropped);
-//       `usage.output_tokens` missing / malformed → 0. The frame (rules 2–4)
-//       then becomes `prev`. A cumulative frame's per-model cost, tokens and
+//       Edge cases: counters compare as plain numbers (no integer coercion);
+//       a malformed modelUsage (not an object, empty, a model value not an
+//       object, or any of inputTokens / outputTokens / cacheReadInputTokens /
+//       cacheCreationInputTokens / costUSD not a finite number ≥ 0) makes the
+//       whole frame count as having NO modelUsage (rule 1, never dropped) —
+//       so every model of `prev` has a valid entry and a cumulative frame's
+//       breakdown never shows a raw running total; `usage.output_tokens`
+//       missing / malformed → 0. The frame (rules 2–4) then becomes `prev`,
+//       UNLESS its Σ modelUsage outputTokens is 0 (an interrupted / empty
+//       frame): then `prev` stays, though the frame still contributes per its
+//       own classification. A cumulative frame's per-model cost, tokens and
 //       `duration_api_ms` are deltas against `prev`, each clamped at 0.
 //   F5  `usage` is NOT the whole turn when more than one model ran: it
 //       reflects one model's messages, `modelUsage` all of them (seq 8:
@@ -136,7 +145,7 @@ function addTokens(into: TokenTotals, t: TokenTotals): void {
   into.cacheWrite = addFinite(into.cacheWrite, t.cacheWrite)
 }
 
-interface ValidEntry { key: string; model: string; costUsd: number; tokens: TokenTotals }
+interface ValidEntry { model: string; costUsd: number; tokens: TokenTotals }
 
 /** C3: an entry is valid when its four token fields and `costUSD` are all finite numbers ≥ 0. */
 function readEntry(key: string, v: unknown): ValidEntry | null {
@@ -146,24 +155,44 @@ function readEntry(key: string, v: unknown): ValidEntry | null {
   if (!nonNeg(inputTokens) || !nonNeg(outputTokens) || !nonNeg(cacheReadInputTokens) || !nonNeg(cacheCreationInputTokens) || !nonNeg(costUSD)) return null
   const canonical = e.canonicalModel
   return {
-    key,
     model: str(canonical) && canonical !== '' ? canonical : key,
     costUsd: costUSD,
     tokens: { input: inputTokens, output: outputTokens, cacheRead: cacheReadInputTokens, cacheWrite: cacheCreationInputTokens },
   }
 }
 
-/** C6: own keys only — `{ __proto__: … }` and inherited props are never read. */
-function validEntries(modelUsage: unknown): ValidEntry[] {
+/** Entries of one frame that share a model (rule 3 keying) are summed, in order of first appearance. */
+function mergeByModel(entries: ValidEntry[]): ValidEntry[] {
+  const out = new Map<string, ValidEntry>()
+  for (const e of entries) {
+    const had = out.get(e.model)
+    if (!had) { out.set(e.model, { model: e.model, costUsd: e.costUsd, tokens: { ...e.tokens } }); continue }
+    had.costUsd = addFinite(had.costUsd, e.costUsd)
+    addTokens(had.tokens, e.tokens)
+  }
+  return [...out.values()]
+}
+
+/**
+ * C6: own keys only — `{ __proto__: … }` and inherited props are never read.
+ * `strict` = rule 1's edge: ANY malformed model value makes the whole result
+ * `null` (the frame has no usable modelUsage); otherwise malformed entries are
+ * skipped (C3, display only). Empty → `[]` / `null`.
+ */
+function readModelUsage(modelUsage: unknown, strict: true): ValidEntry[] | null
+function readModelUsage(modelUsage: unknown, strict: false): ValidEntry[]
+function readModelUsage(modelUsage: unknown, strict: boolean): ValidEntry[] | null {
   const mu = obj(modelUsage)
-  if (!mu) return []
+  if (!mu) return strict ? null : []
   const out: ValidEntry[] = []
   for (const key in mu) {
     if (!Object.hasOwn(mu, key)) continue
     const entry = readEntry(key, mu[key])
     if (entry) out.push(entry)
+    else if (strict) return null
   }
-  return out
+  if (strict && out.length === 0) return null
+  return mergeByModel(out)
 }
 
 const USAGE_KEYS = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const
@@ -192,39 +221,23 @@ function readUsage(usage: unknown): TokenTotals | null {
 
 const optNum = (v: unknown): number | null => (nonNeg(v) ? v : null)
 
-/**
- * Rule 1 / edge (b): the per-model outputTokens a frame offers as continuation
- * evidence, keyed by the raw `modelUsage` key (own keys only). `null` = no
- * usable modelUsage — absent, not an object, empty, or ANY model value not an
- * object / its outputTokens not a finite number ≥ 0.
- */
-function readEvidence(modelUsage: unknown): Map<string, number> | null {
-  const mu = obj(modelUsage)
-  if (!mu) return null
-  const out = new Map<string, number>()
-  for (const key in mu) {
-    if (!Object.hasOwn(mu, key)) continue
-    const tokens = obj(mu[key])?.outputTokens
-    if (!nonNeg(tokens)) return null
-    out.set(key, tokens)
-  }
-  return out.size > 0 ? out : null
-}
-
-/** Rule 3. Plain-number comparison (edge a). */
-function continues(prev: Map<string, number>, cur: Map<string, number>, ownOutput: number): boolean {
-  for (const [key, before] of prev) {
-    if ((cur.get(key) ?? 0) < before) return false
+/** Rule 3: every prev model present here with all four counters ≥, and enough output growth. Plain numbers (edge a). */
+function continues(prev: Map<string, ValidEntry>, cur: Map<string, ValidEntry>, ownOutput: number): boolean {
+  for (const [model, before] of prev) {
+    const now = cur.get(model)
+    if (!now) return false
+    const a = now.tokens
+    const b = before.tokens
+    if (a.input < b.input || a.output < b.output || a.cacheRead < b.cacheRead || a.cacheWrite < b.cacheWrite) return false
   }
   let growth = 0
-  for (const [key, now] of cur) growth += now - (prev.get(key) ?? 0)
+  for (const [model, now] of cur) growth += now.tokens.output - (prev.get(model)?.tokens.output ?? 0)
   return growth >= ownOutput
 }
 
 interface Prev {
   costUsd: number
-  evidence: Map<string, number>
-  /** Raw (not delta) valid entries of that frame, by modelUsage key. */
+  /** Raw (not delta) entries of that frame, by model — every one valid (rule 1 edge). */
   entries: Map<string, ValidEntry>
   apiMs: number | null
 }
@@ -234,7 +247,6 @@ const clampDelta = (now: number, before: number): number => Math.max(0, now - be
 function deltaEntry(e: ValidEntry, before: ValidEntry | undefined): ValidEntry {
   if (!before) return e
   return {
-    key: e.key,
     model: e.model,
     costUsd: clampDelta(e.costUsd, before.costUsd),
     tokens: {
@@ -265,10 +277,11 @@ export function costSummary(messages: readonly StreamMessage[]): CostSummary {
     // C2 + F4 rules 1–5: this frame's contribution, and the frame it continues (if any).
     const rawCost = p.total_cost_usd
     const costOk = nonNeg(rawCost)
-    const evidence = readEvidence(p.modelUsage)
+    const strict = readModelUsage(p.modelUsage, true)
+    const evidence = strict ? new Map(strict.map((e) => [e.model, e])) : null
     const usageOut = obj(p.usage)?.output_tokens
     const ownOutput = nonNeg(usageOut) ? usageOut : 0 // edge (d)
-    const entries = validEntries(p.modelUsage)
+    const entries = strict ?? readModelUsage(p.modelUsage, false)
     const turnApiRaw = optNum(p.duration_api_ms)
     let costUsd = 0
     let base: Prev | null = null
@@ -277,17 +290,20 @@ export function costSummary(messages: readonly StreamMessage[]): CostSummary {
       costUsd = costOk ? rawCost : 0
     } else if (costOk) {
       costUsd = rawCost
-      if (prev && continues(prev.evidence, evidence, ownOutput) && rawCost - prev.costUsd >= 0) {
+      if (prev && continues(prev.entries, evidence, ownOutput) && rawCost - prev.costUsd >= 0) {
         costUsd = rawCost - prev.costUsd // rule 4
         base = prev
       }
-      prev = { costUsd: rawCost, evidence, entries: new Map(entries.map((e) => [e.key, e])), apiMs: turnApiRaw }
+      // Rule 3: a frame with no output (interrupted / empty) never becomes prev.
+      let outSum = 0
+      for (const e of evidence.values()) outSum += e.tokens.output
+      if (outSum > 0) prev = { costUsd: rawCost, entries: evidence, apiMs: turnApiRaw }
     }
     // else: modelUsage but no usable total_cost_usd (rule 1 / edge c) — contributes nothing, not `prev`.
     totalUsd = addFinite(totalUsd, costUsd)
 
     // C3 / C5 — a cumulative frame's breakdown is its delta against `base`.
-    const turnEntries = base ? entries.map((e) => deltaEntry(e, base.entries.get(e.key))) : entries
+    const turnEntries = base ? entries.map((e) => deltaEntry(e, base.entries.get(e.model))) : entries
     let turnTokens: TokenTotals | null
     if (turnEntries.length > 0) {
       turnTokens = zeroTokens()
