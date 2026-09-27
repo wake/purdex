@@ -119,11 +119,26 @@ function occurrences(el: Element, pattern: RegExp, count: number): Range[] {
   return ranges
 }
 
+/** Overflow values that clip without offering a scrollbar (a `truncate` label). */
+const CLIPPING = new Set(['hidden', 'clip', 'visible'])
+
+/**
+ * Whether `el` scrolls horizontally: it overflows and its `overflow-x` offers
+ * a scrollbar. A box that clips on purpose is left alone — scrolling it would
+ * slide its text under the ellipsis.
+ */
+function scrollsX(el: HTMLElement): boolean {
+  if (el.scrollWidth <= el.clientWidth) return false
+  return !CLIPPING.has(getComputedStyle(el).overflowX)
+}
+
 /**
  * Brings `range` into view in every scrolling box between it and `container`,
  * innermost first: a match deep in a long output sits inside FoldedOutput's
  * own scroll box (`max-h-96 overflow-auto`), which `scrollIntoView` on the
- * element would show only from its top. Each box centres the match.
+ * element would show only from its top; one far along a long line of a code
+ * fence (`overflow-x: auto`) needs the box scrolled sideways too (A6). Each
+ * box centres the match on each axis it scrolls on.
  */
 function scrollRangeIntoView(range: Range, container: HTMLElement, fallback: Element): void {
   if (typeof range.getBoundingClientRect !== 'function') {
@@ -132,11 +147,16 @@ function scrollRangeIntoView(range: Range, container: HTMLElement, fallback: Ele
   }
   let el: HTMLElement | null = range.startContainer.parentElement
   while (el) {
-    if (el.scrollHeight > el.clientHeight) {
+    const y = el.scrollHeight > el.clientHeight
+    const x = scrollsX(el)
+    if (y || x) {
       const r = range.getBoundingClientRect()
       const box = el.getBoundingClientRect()
-      if (r.top < box.top || r.bottom > box.bottom) {
+      if (y && (r.top < box.top || r.bottom > box.bottom)) {
         el.scrollTop += r.top - box.top - (box.height - r.height) / 2
+      }
+      if (x && (r.left < box.left || r.right > box.right)) {
+        el.scrollLeft += r.left - box.left - (box.width - r.width) / 2
       }
     }
     if (el === container) break

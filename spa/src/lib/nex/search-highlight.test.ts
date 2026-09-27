@@ -109,6 +109,39 @@ describe('highlightSearch', () => {
     expect(scroller.scrollTop).toBe(500 - (300 - 10) / 2)
   })
 
+  it('scrolls a horizontally scrolling box to the current match too', () => {
+    // Finding A6: prose code fences are overflow-x:auto; a match far along a
+    // long line was scrolled to vertically and stayed out of sight.
+    installApi()
+    const root = dom(
+      '<div data-search-unit="a"><pre style="overflow-x: auto"><code>' + 'x'.repeat(200) + ' needle</code></pre>' +
+      // overflow-x, not the shorthand: jsdom does not expand `overflow` into it.
+      '<p style="overflow-x: hidden">clipped needle</p></div>',
+    )
+    const [pre, clipped] = [root.querySelector('pre')!, root.querySelector('p')!]
+    for (const el of [pre, clipped]) {
+      Object.defineProperty(el, 'scrollWidth', { configurable: true, value: 2000 })
+      Object.defineProperty(el, 'clientWidth', { configurable: true, value: 200 })
+      el.getBoundingClientRect = () => ({ top: 0, bottom: 20, height: 20, left: 0, right: 200, width: 200 } as DOMRect)
+    }
+    Range.prototype.getBoundingClientRect = () => ({ top: 5, bottom: 15, height: 10, left: 900, right: 910, width: 10 } as DOMRect)
+    try {
+      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6)], 0)
+      expect(pre.scrollLeft).toBe(900 - (200 - 10) / 2)
+      // Inside the box already: left alone.
+      pre.scrollLeft = 0
+      Range.prototype.getBoundingClientRect = () => ({ top: 5, bottom: 15, height: 10, left: 50, right: 60, width: 10 } as DOMRect)
+      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6)], 0)
+      expect(pre.scrollLeft).toBe(0)
+      // A box that clips on purpose (overflow hidden, e.g. truncate) is not scrolled.
+      Range.prototype.getBoundingClientRect = () => ({ top: 5, bottom: 15, height: 10, left: 900, right: 910, width: 10 } as DOMRect)
+      highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 0, 6)], 1)
+      expect(clipped.scrollLeft).toBe(0)
+    } finally {
+      delete (Range.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect
+    }
+  })
+
   it('falls back to scrolling the unit into view without layout', () => {
     installApi()
     const root = dom('<pre data-search-unit="a">needle</pre>')
