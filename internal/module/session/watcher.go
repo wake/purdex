@@ -218,11 +218,19 @@ func (m *SessionModule) tickTmuxDown() {
 // (a concurrent tick or create) returns at once (#1474 spec D4). The caller
 // knows a server answers, so tmux is usable too.
 //
-// Once the module is stopping it does nothing, and it checks again after
-// the hook install (which can block for as long as tmux does), so a
-// recovery racing Stop never announces a revival after shutdown began
-// (spec D4 lifecycle, PR review A4).
+// Lifecycle (spec D4, PR review A4 and re-review P1): the whole run holds
+// lifeMu.RLock, and Stop takes lifeMu.Lock after cancelling runCtx, so Stop
+// returns only once an in-flight recovery has ended, and a recovery that
+// gets the lock after Stop began sees it. Under the lock, "not stopping"
+// is checked right before the first state change and again after the hook
+// install (which can block for as long as tmux does), so nothing is
+// changed or announced once shutdown began.
 func (m *SessionModule) markServerUp() {
+	m.lifeMu.RLock()
+	defer m.lifeMu.RUnlock()
+	if m.recoveryHook != nil {
+		m.recoveryHook()
+	}
 	if m.stopping() {
 		return
 	}

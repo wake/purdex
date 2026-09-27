@@ -255,6 +255,61 @@ func TestMarkServerUp_RacingStop_AnnouncesNothing(t *testing.T) {
 	}
 }
 
+// A recovery in flight when Stop begins, but not yet past its state change,
+// must never change state or announce anything once Stop has returned, and
+// Stop waits for it (PR re-review P1: the stopping check alone was a
+// TOCTOU). Starts from broken, where a late flip would broadcast `tmux: ok`.
+func TestMarkServerUp_InFlightWhenStopBegins_ChangesNothing(t *testing.T) {
+	mod, fake, events := newWatcherTestModule(t)
+	fake.SetServerState(tmux.ServerBroken)
+	require.NoError(t, mod.Start(context.Background()))
+	require.False(t, mod.TmuxAlive())
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+	fake.SetServerState(tmux.ServerUp)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	mod.recoveryHook = func() {
+		close(entered)
+		<-release
+	}
+	recovered := make(chan struct{})
+	go func() {
+		defer close(recovered)
+		mod.markServerUp()
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the recovery never got in flight")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		_ = mod.Stop(context.Background())
+	}()
+	require.Eventually(t, func() bool { return mod.runCtx.Err() != nil }, 2*time.Second, time.Millisecond,
+		"Stop never began")
+	select {
+	case <-stopped:
+		t.Error("Stop returned while a recovery was still in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	<-stopped
+	select {
+	case <-recovered:
+	default:
+		t.Error("Stop returned before the recovery ended")
+	}
+	<-recovered
+	assert.Empty(t, drainTypes(t, sub), "no tmux or sessions frame once Stop began")
+	assert.False(t, mod.TmuxAlive(), "a recovery that had not flipped when Stop began must not flip")
+}
+
 // markServerUp runs the recovery only for the caller whose flip took the
 // watcher up (spec D4): a second call, sequential or concurrent, is a no-op.
 func TestMarkServerUp_RecoversOnce(t *testing.T) {
