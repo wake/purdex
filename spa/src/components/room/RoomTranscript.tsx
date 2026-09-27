@@ -9,7 +9,7 @@
 //   (`turnStarts`, from execution.message_accepted / execution.delegated),
 //   shaped by `groupTurns`; each range is a RoomTurnGroup, which draws no edge
 //   of its own and whose hover strip folds everything inside it.
-import { Children, isValidElement, useRef, useEffect, useMemo, type ReactNode } from 'react'
+import { Children, isValidElement, useEffect, useMemo, type ReactNode, type Ref } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { StreamMessage } from '../../lib/nex/message-types'
 import { partialVersionOf, type PartialAssembly } from '../../lib/nex/partial'
@@ -21,6 +21,7 @@ import PartialMessageGroup from '../PartialMessageGroup'
 import RoomTurnGroup from './RoomTurnGroup'
 import { renderMessage, type RenderCtx } from './render-message'
 import { FoldContext, useInheritedFoldMemory } from './fold-context'
+import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 
 export interface RoomTranscriptProps {
   messages: StreamMessage[]
@@ -43,6 +44,13 @@ export interface RoomTranscriptProps {
   partial?: PartialAssembly | null          // R1: trailing in-flight assistant group
   tools?: Record<string, ToolActivity>      // R2: status/timing for durable tool_use blocks, by block id
   now?: number                              // R2: ticker value for running tools
+  /** The scrolling container, forwarded (R3 T3.3: the search bar marks and scrolls inside it). */
+  scrollRef?: Ref<HTMLDivElement>
+  /**
+   * R3 T3.3 (A4): while on (the search bar is open), new content follows the
+   * bottom only if the reader was already there — never away from a match.
+   */
+  holdScroll?: boolean
 }
 
 const NO_STARTS: readonly number[] = []
@@ -65,9 +73,11 @@ export default function RoomTranscript({
   partial,
   tools,
   now,
+  scrollRef,
+  holdScroll = false,
 }: RoomTranscriptProps) {
   const t = useI18nStore((s) => s.t)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const { attach, onScroll, follow } = useTranscriptScroll(scrollRef, holdScroll)
   const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
   const hasPending = hasContent(children)
   // Spec §4.2: a tool_use and the tool_result that answers it are one block.
@@ -84,14 +94,9 @@ export default function RoomTranscript({
 
   // Auto-scroll on new messages, control requests, or partial growth. The
   // first one (the pane opening, or a view switch remounting this) jumps
-  // straight to the bottom; only later growth animates (F3).
-  const scrolled = useRef(false)
-  useEffect(() => {
-    if (scrollRef.current?.scrollTo) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: scrolled.current ? 'smooth' : 'auto' })
-      scrolled.current = true
-    }
-  }, [messages, scrollKey, partialVersion])
+  // straight to the bottom; only later growth animates (F3). While the search
+  // bar holds the view, only a reader already at the bottom is followed (A4).
+  useEffect(() => { follow() }, [follow, messages, scrollKey, partialVersion])
 
   // The in-flight assistant message belongs to the turn that is running: the
   // last recorded one. With nothing recorded yet it still needs a container,
@@ -102,7 +107,7 @@ export default function RoomTranscript({
   const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0 }
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+    <div ref={attach} onScroll={onScroll} className="flex-1 overflow-y-auto p-4 space-y-4">
       <FoldContext.Provider value={foldStore}>
         {showEmptyHint && (
           <div className="flex items-center justify-center h-full text-text-muted text-sm">
