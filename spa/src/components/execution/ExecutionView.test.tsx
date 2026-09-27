@@ -1353,6 +1353,41 @@ describe('ExecutionView — search (R3 T3.3)', () => {
     expect(bar()).toBeNull()
   })
 
+  // PR #1495 re-review P2-1: the interaction record is only for telling
+  // split panes apart. A lone pane takes a body Mod+F without one — an ended
+  // worker's input is disabled and never takes focus, so nothing would
+  // record it, and searching an old transcript is what it is for.
+  it('a lone pane opens on a body Mod+F with no interaction recorded', () => {
+    render(<ExecutionView {...base} isActive />)
+    expect(modF(document.body)).toBe(false)
+    expect(bar()).toBeInTheDocument()
+  })
+
+  it('an ended execution, alone, opens on a body Mod+F', () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    expect(modF(document.body)).toBe(false)
+    expect(bar()).toBeInTheDocument()
+  })
+
+  it('in a split, once the pane interacted with unmounts, the one left opens on a body Mod+F', () => {
+    const { rerender } = render(
+      <>
+        <div data-testid="pane-a"><ExecutionView {...base} paneId="pa" isActive /></div>
+        <div data-testid="pane-b"><ExecutionView {...base} paneId="pb" isActive /></div>
+      </>,
+    )
+    fireEvent.pointerDown(screen.getAllByRole('textbox')[0])
+    rerender(
+      <>
+        <div data-testid="pane-b"><ExecutionView {...base} paneId="pb" isActive /></div>
+      </>,
+    )
+    expect(modF(document.body)).toBe(false)
+    expect(within(screen.getByTestId('pane-b')).getByTestId('transcript-search')).toBeInTheDocument()
+  })
+
   it('a target inside the pane opens it', () => {
     render(<ExecutionView {...base} isActive />)
     const box = screen.getByRole('textbox')

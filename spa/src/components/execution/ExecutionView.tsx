@@ -64,11 +64,16 @@ const TERMINAL_STATES = new Set(['rejected', 'failed', 'terminated'])
  */
 const TAKEABLE_STATES = new Set(['running', 'idle', 'failed', 'terminated'])
 /**
- * The worker pane the reader last pressed or focused in (R1-2). `isActive`
- * is the tab's, so in a split every worker pane listens for Mod+F; a Mod+F
- * with nothing focused (the body) goes to this one only. Module state: one
- * reader, one keyboard.
+ * The worker panes listening for Mod+F right now (their tab is active), and
+ * the one the reader last pressed or focused in (R1-2). `isActive` is the
+ * tab's, so in a split every worker pane listens; a Mod+F with nothing
+ * focused (the body) goes to the lone listener when there is one, else to
+ * the one last interacted with, else to none. The record only tells split
+ * panes apart: a lone pane needs none — an ended worker's input is disabled
+ * and never takes focus, so nothing would record it (#1495 re-review P2-1).
+ * Module state: one reader, one keyboard.
  */
+const findListeners = new Set<string>()
 let lastInteractedPane: string | null = null
 
 const KNOWN_ERROR_KEYS = new Set(['invalid_text', 'execution_archived', 'execution_terminal', 'turn_failed_to_launch', 'turn_stalled', 'interrupt_unconfirmed'])
@@ -166,11 +171,11 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // No focusable pane root (plan review #4): a click-to-focus root would
   // fight the input's auto-focus, the header's refocus and every fold button.
   // Instead, while this pane is active, Mod+F anywhere in it — or with
-  // nothing focused (the body) when it is the pane last interacted with —
-  // opens the bar and keeps the browser's own find (the web build) from
-  // opening. A target anywhere else (another pane, a dialog, Monaco) keeps
-  // its own Mod+F, and so does the body when no pane has been interacted
-  // with. Electron registers no Cmd+F accelerator (electron/keybindings.ts),
+  // nothing focused (the body) when it is the only pane listening, or, in a
+  // split, the one last interacted with — opens the bar and keeps the
+  // browser's own find (the web build) from opening. A target anywhere else
+  // (another pane, a dialog, Monaco) keeps its own Mod+F, and so does the
+  // body in a split where no listening pane has been interacted with. Electron registers no Cmd+F accelerator (electron/keybindings.ts),
   // so the renderer gets the key.
   const markInteracted = useCallback(() => { lastInteractedPane = paneId }, [paneId])
   useEffect(() => () => {
@@ -183,7 +188,9 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
       const root = rootRef.current
       const target = e.target
       if (!root) return
-      if (target === document.body ? lastInteractedPane !== paneId : !(target instanceof Node && root.contains(target))) return
+      if (target === document.body) {
+        if (findListeners.size > 1 && lastInteractedPane !== paneId) return
+      } else if (!(target instanceof Node && root.contains(target))) return
       // A dialog is modal: its Mod+F is its own, even rendered inside the pane (R1-3).
       if (target instanceof Element && target.closest('[role="dialog"]')) return
       if (root.querySelector('[aria-modal="true"]')) return
@@ -198,8 +205,12 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
       setSearchOpen(true)
       setFocusRequest((n) => n + 1)
     }
+    findListeners.add(paneId)
     document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
+    return () => {
+      findListeners.delete(paneId)
+      document.removeEventListener('keydown', onKeyDown)
+    }
   }, [isActive, key, paneId])
 
   if (problem) {
