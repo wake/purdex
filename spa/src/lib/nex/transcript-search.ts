@@ -17,12 +17,15 @@
 //   edit as a line holding only its diff, a failure as a line holding the
 //   room's block), and MessageRow's rules again inside a subagent — chat draws
 //   a subagent with the room's renderer, thinking included.
+// A unit's text is what is drawn: agent prose is `proseText` of its markdown
+// (the rendered text), everything else is drawn verbatim.
 // Pure: no React, no store.
 import { blockKey, toolResultText, type BlockKey, type OperationIndex } from './operations'
 import { classifyTurnOperations, toolEntryFor, type TurnOperation } from './operation-status'
 import { groupTurns, INTERRUPT_TEXT } from './turns'
 import { showsRawInput, toolSummary } from './tool-summary'
 import { diffRows } from './diff-lines'
+import { proseText } from './markdown-text'
 import type { ContentBlock, StreamMessage } from './message-types'
 import type { ToolActivity } from './tool-activity'
 
@@ -140,7 +143,7 @@ function messageUnits(w: Walk, mi: number, reveal: string[]) {
       if (block.type === 'thinking' && block.thinking?.trim()) {
         w.push(searchUnitId(key, 'thinking'), block.thinking, [...reveal, `${key}:thinking`])
       } else if (block.type === 'text' && block.text) {
-        w.push(searchUnitId(key, 'text'), block.text, reveal)
+        w.push(searchUnitId(key, 'text'), proseText(block.text), reveal)
       } else if (block.type === 'tool_use') {
         operationUnits(w, mi, bj, reveal)
       }
@@ -179,7 +182,7 @@ function chatUnits(w: Walk, keyPrefix: string, turnStarts: readonly number[]) {
       blocksOf(msg).forEach((block, bj) => {
         const key = blockKey(mi, bj)
         if (msg.type === 'assistant') {
-          if (block.type === 'text' && block.text?.trim()) w.push(searchUnitId(key, 'text'), block.text, [])
+          if (block.type === 'text' && block.text?.trim()) w.push(searchUnitId(key, 'text'), proseText(block.text), [])
           else if (block.type === 'tool_use') lines.get(key)?.()
         } else if (msg.type === 'user') {
           if (block.type === 'tool_result') lines.get(key)?.()

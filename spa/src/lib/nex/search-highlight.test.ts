@@ -3,7 +3,8 @@
 // layout, so both are stubbed per test.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { clearSearchHighlights, highlightSearch } from './search-highlight'
-import type { SearchMatch } from './transcript-search'
+import { findMatches, type SearchMatch } from './transcript-search'
+import { proseText } from './markdown-text'
 
 class FakeHighlight {
   ranges: Range[]
@@ -53,13 +54,18 @@ afterEach(() => {
 describe('highlightSearch', () => {
   it('marks the current match and the rest', () => {
     installApi()
-    // The second unit is markdown: its unit text is `**Needle** and nee**dle**`,
-    // the DOM is what ReactMarkdown drew — different offsets, same occurrences.
+    // The second unit is markdown: the index holds its rendered text (proseText),
+    // the DOM is what ReactMarkdown drew for the same source.
     const root = dom(
       '<pre data-search-unit="a">one needle</pre>' +
       '<div data-search-unit="b"><p><strong>Needle</strong> and nee<strong>dle</strong></p></div>',
     )
-    highlightSearch(root, 'needle', [m('a', 4, 10), m('b', 2, 8), m('b', 17, 25)], 1)
+    const matches = findMatches([
+      { id: 'a', text: 'one needle', reveal: [] },
+      { id: 'b', text: proseText('**Needle** and nee**dle**'), reveal: [] },
+    ], 'needle')
+    expect(matches).toHaveLength(3)
+    highlightSearch(root, 'needle', matches, 1)
     expect(texts('search-current')).toEqual(['Needle'])
     // The last one crosses two text nodes.
     expect(texts('search-match')).toEqual(['needle', 'needle'])

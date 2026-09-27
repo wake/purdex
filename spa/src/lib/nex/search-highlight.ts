@@ -8,16 +8,14 @@
 // missing (jsdom, Safari before 17.2) nothing is marked and the match is still
 // scrolled to.
 //
-// **Locating a match.** A match's `[start, end)` is an offset into the unit's
-// *data* text (transcript-search), and the rendered text is not always that
-// text: prose is markdown (`**x**` renders as `x`, a code fence loses its
-// backticks). So the offsets are not trusted. A match is located by its
-// **ordinal** instead — the n-th match of a unit is the n-th occurrence of the
-// query in the unit element's `textContent`, found with the same literal,
-// case-insensitive pattern. For text drawn verbatim (user lines, outputs,
-// inputs, diff rows, thinking) the two agree exactly. For markdown an
-// occurrence the syntax breaks (`nee**dle**` in the data is `needle` on screen
-// and vice versa) can shift or drop a mark; the unit is then still scrolled to.
+// **Locating a match.** A match is located by its **ordinal**: the n-th match
+// of a unit is the n-th occurrence of the query in the unit element's
+// `textContent`, found with the same literal, case-insensitive pattern. That
+// holds only while the unit's text and the DOM count occurrences alike: text
+// drawn verbatim (user lines, outputs, inputs, diff rows, thinking, paths) is
+// its own source, and agent prose is indexed by `proseText` — the text
+// RoomProse renders, not the markdown source (markdown-text.ts) — so a link's
+// URL or a split `nee**dle**` cannot shift the count. Offsets are not used.
 //
 // Highlight names are document-wide: one search is marked at a time.
 import { searchPattern, type SearchMatch } from './transcript-search'

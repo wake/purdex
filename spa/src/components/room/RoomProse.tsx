@@ -13,9 +13,10 @@ interface Props {
   /** Append a blinking cursor after the markdown body (the P-B2 typewriter). */
   streaming?: boolean
   /**
-   * The search anchor, on the markdown body only (not the cursor). Rendered
-   * markdown is not the source text; search-highlight locates matches in it
-   * by ordinal, not offset.
+   * The search anchor, on the markdown body only (not the cursor). The index
+   * holds `proseText(content)` — this body's `textContent` — so any change to
+   * the plugins here must be mirrored in lib/nex/markdown-text.ts (its tests
+   * render this component and compare).
    */
   searchUnit?: string
 }

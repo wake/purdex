@@ -38,7 +38,7 @@ const messages: StreamMessage[] = [
   said('first question'),                                                        // 0
   asst(
     { type: 'thinking', thinking: lines(20, 'thought') },
-    { type: 'text', text: 'plain prose answer' },
+    { type: 'text', text: 'plain **prose** [answer](https://x.dev)\n\n```sh\nls\n```' },
     call('bash', 'Bash', { command: 'ls -la', timeout: 5 }),                      // raw input
   ),                                                                             // 1
   usr(res('bash', lines(60, 'out'))),                                            // 2 folded output
@@ -93,8 +93,8 @@ function mount(view: View) {
 const unitsFor = (view: View): SearchUnit[] =>
   buildSearchUnits({ messages, index: indexOperations(messages), tools, view, keyPrefix: 'k', turnStarts })
 
-/** Markdown prose renders its own text; everything else is drawn verbatim. */
-const rendered = (el: Element) => (el.textContent ?? '').trim()
+/** Every unit's text is exactly what its anchor draws: prose as proseText, the rest verbatim. */
+const rendered = (el: Element) => el.textContent ?? ''
 
 describe.each<View>(['room', 'chat'])('search anchors in %s', (view) => {
   const units = unitsFor(view)
@@ -120,7 +120,7 @@ describe.each<View>(['room', 'chat'])('search anchors in %s', (view) => {
       expand(unit.reveal)
       const found = anchors(unit.id)
       expect(found, unit.id).toHaveLength(1)
-      expect(rendered(found[0]), unit.id).toBe(unit.text.trim())
+      expect(rendered(found[0]), unit.id).toBe(unit.text)
       unmount()
     }
   })

@@ -158,4 +158,13 @@ describe('buildSearchUnits / findMatches', () => {
     const matches = findMatches(units([said('abab ab')], 'room'), 'ab')
     expect(matches.map((m) => [m.start, m.end])).toEqual([[0, 2], [2, 4], [5, 7]])
   })
+
+  it.each<'room' | 'chat'>(['room', 'chat'])('%s indexes agent prose as rendered, not as markdown source', (view) => {
+    // R1-F2: the URL is not on screen, the split word is.
+    const prose = asst({ type: 'text', text: 'see [docs](https://needle.dev), nee**dle** and nee**dle**' })
+    const matches = findMatches(units([said('go'), prose], view), 'needle')
+    expect(matches.map((m) => m.unitId)).toEqual([searchUnitId('1:0', 'text'), searchUnitId('1:0', 'text')])
+    // A user's line is drawn verbatim: its text stays the source.
+    expect(findMatches(units([said('[docs](https://needle.dev)')], view), 'needle')).toHaveLength(1)
+  })
 })
