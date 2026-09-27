@@ -45,6 +45,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // Owners are module state: forget every one a test used.
+  clearSearchHighlights('p1')
+  clearSearchHighlights('p2')
   g.CSS = savedCSS
   g.Highlight = savedHighlight
   document.body.innerHTML = ''
@@ -65,7 +68,7 @@ describe('highlightSearch', () => {
       { id: 'b', text: proseText('**Needle** and nee**dle**'), reveal: [] },
     ], 'needle')
     expect(matches).toHaveLength(3)
-    highlightSearch(root, 'needle', matches, 1)
+    highlightSearch('p1', root, 'needle', matches, 1)
     expect(texts('search-current')).toEqual(['Needle'])
     // The last one crosses two text nodes.
     expect(texts('search-match')).toEqual(['needle', 'needle'])
@@ -74,7 +77,7 @@ describe('highlightSearch', () => {
   it('skips a match whose unit is not on screen', () => {
     installApi()
     const root = dom('<pre data-search-unit="a">needle</pre>')
-    highlightSearch(root, 'needle', [m('gone', 0, 6), m('a', 0, 6)], 0)
+    highlightSearch('p1', root, 'needle', [m('gone', 0, 6), m('a', 0, 6)], 0)
     expect(highlights.has('search-current')).toBe(false)
     expect(texts('search-match')).toEqual(['needle'])
   })
@@ -93,7 +96,7 @@ describe('highlightSearch', () => {
     const rangeRect = vi.fn(() => ({ top: 500, bottom: 510, height: 10 } as DOMRect))
     Range.prototype.getBoundingClientRect = rangeRect
     try {
-      highlightSearch(scroller, 'needle', [m('a', 4, 10)], 0)
+      highlightSearch('p1', scroller, 'needle', [m('a', 4, 10)], 0)
     } finally {
       delete (Range.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect
     }
@@ -108,7 +111,7 @@ describe('highlightSearch', () => {
     const pre = root.firstElementChild as HTMLElement
     const scroll = vi.fn()
     pre.scrollIntoView = scroll
-    highlightSearch(root, 'needle', [m('a', 0, 6)], 0)
+    highlightSearch('p1', root, 'needle', [m('a', 0, 6)], 0)
     expect(scroll).toHaveBeenCalledWith({ block: 'center' })
   })
 
@@ -118,8 +121,8 @@ describe('highlightSearch', () => {
     const pre = root.firstElementChild as HTMLElement
     const scroll = vi.fn()
     pre.scrollIntoView = scroll
-    expect(() => highlightSearch(root, 'needle', [m('a', 0, 6)], 0)).not.toThrow()
-    expect(() => clearSearchHighlights()).not.toThrow()
+    expect(() => highlightSearch('p1', root, 'needle', [m('a', 0, 6)], 0)).not.toThrow()
+    expect(() => clearSearchHighlights('p1')).not.toThrow()
     // It still takes the reader there.
     expect(scroll).toHaveBeenCalled()
   })
@@ -127,17 +130,42 @@ describe('highlightSearch', () => {
   it('clears both highlights', () => {
     installApi()
     const root = dom('<pre data-search-unit="a">needle needle</pre>')
-    highlightSearch(root, 'needle', [m('a', 0, 6), m('a', 7, 13)], 0)
+    highlightSearch('p1', root, 'needle', [m('a', 0, 6), m('a', 7, 13)], 0)
     expect(highlights.size).toBe(2)
-    clearSearchHighlights()
+    clearSearchHighlights('p1')
+    expect(highlights.size).toBe(0)
+  })
+
+  it('two owners mark at once, and clearing one keeps the other', () => {
+    // CSS highlight names are document-wide; two panes searching must not
+    // overwrite or clear each other (finding R1-F3 / A1).
+    installApi()
+    const one = dom('<pre data-search-unit="a">alpha needle needle</pre>')
+    const two = dom('<pre data-search-unit="a">beta needle needle</pre>')
+    highlightSearch('p1', one, 'needle', [m('a', 6, 12), m('a', 13, 19)], 0)
+    highlightSearch('p2', two, 'needle', [m('a', 5, 11), m('a', 12, 18)], 1)
+    const owners = (name: string) => (highlights.get(name)?.ranges ?? [])
+      .map((r) => (r.startContainer.textContent ?? '').split(' ')[0]).sort()
+    expect(owners('search-current')).toEqual(['alpha', 'beta'])
+    expect(owners('search-match')).toEqual(['alpha', 'beta'])
+
+    clearSearchHighlights('p1')
+    expect(owners('search-current')).toEqual(['beta'])
+    expect(owners('search-match')).toEqual(['beta'])
+
+    // Re-marking one owner replaces only its own ranges.
+    highlightSearch('p2', two, 'needle', [m('a', 5, 11), m('a', 12, 18)], 0)
+    expect(texts('search-current')).toEqual(['needle'])
+    expect(texts('search-match')).toEqual(['needle'])
+    clearSearchHighlights('p2')
     expect(highlights.size).toBe(0)
   })
 
   it('a query too short to search clears the marks', () => {
     installApi()
     const root = dom('<pre data-search-unit="a">needle</pre>')
-    highlightSearch(root, 'needle', [m('a', 0, 6)], 0)
-    highlightSearch(root, 'n', [], -1)
+    highlightSearch('p1', root, 'needle', [m('a', 0, 6)], 0)
+    highlightSearch('p1', root, 'n', [], -1)
     expect(highlights.size).toBe(0)
   })
 })

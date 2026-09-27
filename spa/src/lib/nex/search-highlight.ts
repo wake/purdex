@@ -17,7 +17,10 @@
 // RoomProse renders, not the markdown source (markdown-text.ts) — so a link's
 // URL or a split `nee**dle**` cannot shift the count. Offsets are not used.
 //
-// Highlight names are document-wide: one search is marked at a time.
+// **Owners.** Highlight names are document-wide, so two panes searching at
+// once would overwrite — or, clearing, erase — each other's marks. Each caller
+// marks under its own `owner` (a pane id): the module keeps every owner's
+// ranges and registers the union of them under the one pair of names.
 import { searchPattern, type SearchMatch } from './transcript-search'
 
 const MATCH = 'search-match'
@@ -37,12 +40,34 @@ function highlightApi(): { registry: HighlightRegistry; Highlight: HighlightCtor
   return { registry, Highlight: g.Highlight }
 }
 
-/** Removes both marks. Safe without the API. */
-export function clearSearchHighlights(): void {
+interface OwnerMarks {
+  matches: Range[]
+  current: Range | null
+}
+
+/** Every owner's marks; the registered highlights are their union. */
+const owners = new Map<string, OwnerMarks>()
+
+/** Registers the union of every owner's marks (or removes a name nobody uses). */
+function publish(): void {
   const api = highlightApi()
   if (!api) return
-  api.registry.delete(MATCH)
-  api.registry.delete(CURRENT)
+  const matches: Range[] = []
+  const currents: Range[] = []
+  for (const marks of owners.values()) {
+    matches.push(...marks.matches)
+    if (marks.current) currents.push(marks.current)
+  }
+  if (matches.length > 0) api.registry.set(MATCH, new api.Highlight(...matches))
+  else api.registry.delete(MATCH)
+  if (currents.length > 0) api.registry.set(CURRENT, new api.Highlight(...currents))
+  else api.registry.delete(CURRENT)
+}
+
+/** Removes `owner`'s marks, keeping every other owner's. Safe without the API. */
+export function clearSearchHighlights(owner: string): void {
+  if (!owners.delete(owner)) return
+  publish()
 }
 
 /** Every occurrence of `pattern` in `el`'s text, as Ranges over its text nodes (a match may cross nodes). */
@@ -103,12 +128,14 @@ function scrollRangeIntoView(range: Range, container: HTMLElement, fallback: Ele
 }
 
 /**
- * Marks `matches` under `container` and scrolls to `matches[current]`.
+ * Marks `matches` under `container` as `owner`'s marks (replacing that owner's
+ * earlier ones) and scrolls to `matches[current]`.
  * Matches whose unit is not rendered (still folded) are skipped; the caller
  * expands the current match's `reveal` keys and calls this after that render
  * commits. `current` outside the list marks without scrolling.
  */
 export function highlightSearch(
+  owner: string,
   container: HTMLElement,
   query: string,
   matches: readonly SearchMatch[],
@@ -116,7 +143,7 @@ export function highlightSearch(
 ): void {
   const pattern = searchPattern(query)
   if (!pattern) {
-    clearSearchHighlights()
+    clearSearchHighlights(owner)
     return
   }
 
@@ -153,13 +180,8 @@ export function highlightSearch(
     }
   })
 
-  const api = highlightApi()
-  if (api) {
-    if (others.length > 0) api.registry.set(MATCH, new api.Highlight(...others))
-    else api.registry.delete(MATCH)
-    if (currentRange) api.registry.set(CURRENT, new api.Highlight(currentRange))
-    else api.registry.delete(CURRENT)
-  }
+  owners.set(owner, { matches: others, current: currentRange })
+  publish()
 
   if (currentEl) {
     if (currentRange) scrollRangeIntoView(currentRange, container, currentEl)

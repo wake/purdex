@@ -85,7 +85,7 @@ describe('prose search against the real RoomProse', () => {
   })
   afterEach(() => {
     ;[g.CSS, g.Highlight] = saved
-    clearSearchHighlights()
+    clearSearchHighlights('t')
   })
 
   /** The offset of `range`'s start in `el`'s textContent. */
@@ -107,7 +107,7 @@ describe('prose search against the real RoomProse', () => {
     const dom = [...(el.textContent ?? '').matchAll(/needle/gi)].map((m) => m.index)
     expect(matches.map((m) => m.start)).toEqual(dom)
     matches.forEach((match, i) => {
-      highlightSearch(container as HTMLElement, 'needle', matches, i)
+      highlightSearch('t', container as HTMLElement, 'needle', matches, i)
       const current = highlights.get('search-current')!.ranges
       expect(current).toHaveLength(1)
       expect(current[0].toString().toLowerCase()).toBe('needle')
