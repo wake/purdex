@@ -9,8 +9,10 @@ import * as api from '../lib/nex/nex-api'
 import * as sse from '../lib/nex/nex-sse'
 import type { NexSseOptions } from '../lib/nex/nex-sse'
 import { subscriptionSlots } from '../lib/nex/subscription-slots'
+import { useNexHostStore } from '../stores/useNexHostStore'
+import type { WorkerTask, WorkerTasksSnapshot } from '../lib/nex/types'
 
-vi.mock('../lib/nex/nex-api', () => ({ getExecution: vi.fn(), attachObserve: vi.fn(), fetchExecutionEvents: vi.fn() }))
+vi.mock('../lib/nex/nex-api', () => ({ getExecution: vi.fn(), attachObserve: vi.fn(), fetchExecutionEvents: vi.fn(), fetchExecutionTasks: vi.fn() }))
 vi.mock('../lib/nex/nex-sse', () => ({ openNexSse: vi.fn() }))
 
 const H = 'host-a', E = 'exc_1', KEY = 'host-a:exc_1'
@@ -608,5 +610,123 @@ describe('useExecutionSubscription', () => {
     act(() => { sseOpts!.onStatus('closed', new Error('unauthorized')) })
 
     expect(useExecutionStore.getState().executions[KEY].pendingSend).toBe(false)
+  })
+})
+
+// T3.1 — nexen #83: after every (re)open of the scoped stream, re-read
+// `/tasks?state=running` and merge it as a snapshot. Only on a daemon that
+// advertises capabilities.worker_rollup; an older one gets no request.
+describe('useExecutionSubscription — /tasks correction (#83)', () => {
+  const rollup = { task_kinds: ['shell', 'subagent', 'other'], task_statuses: ['running'], activity_phases: ['model'], subagent_cost: false }
+  const setRollup = (on: boolean) =>
+    useNexHostStore.setState({ byHost: { [H]: { phase: 'ready', capabilities: on ? { worker_rollup: rollup } : {} } } as never })
+  const task = (id: string, extra: Partial<WorkerTask> = {}): WorkerTask => ({
+    task_id: id, turn_id: 't1', kind: 'shell', task_type: 'local_bash', tool_use_id: `tu_${id}`, parent_tool_use_id: null,
+    description: id, backgrounded: true, status: 'running', provider_status: null, closed_by: null, started_at: 1000, ended_at: null, startSeq: 2, ...extra,
+  })
+  const snap = (items: WorkerTask[], cursor = 2): WorkerTasksSnapshot => ({ items, cursor })
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    subscriptionSlots.resetForTests()
+    useExecutionStore.setState({ executions: {} })
+    useHostStore.setState({ hosts: { [H]: { id: H, name: 'A', ip: '1', port: 1 } } as never, hostOrder: [H], activeHostId: H, runtime: {} })
+    setRollup(true)
+    sseOpts = null
+    sseClose = vi.fn<() => void>()
+    vi.mocked(sse.openNexSse).mockReset().mockImplementation((o) => { sseOpts = o; return { close: sseClose } })
+    vi.mocked(api.getExecution).mockReset().mockResolvedValue(summary())
+    vi.mocked(api.attachObserve).mockReset().mockResolvedValue({ mode: 'observe', stream_url: '/api/nex/v1/events?execution_id=exc_1', cursor: 2, state: 'idle' })
+    vi.mocked(api.fetchExecutionEvents).mockReset().mockResolvedValue({ items: [ev(1), ev(2)], next_cursor: 0 })
+    vi.mocked(api.fetchExecutionTasks).mockReset().mockResolvedValue(snap([task('a')]))
+  })
+  afterEach(() => { vi.useRealTimers(); useNexHostStore.setState({ byHost: {} }) })
+
+  it('fetches once on the first open and merges the snapshot', async () => {
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(api.fetchExecutionTasks).not.toHaveBeenCalled()
+    act(() => { sseOpts!.onStatus('open') })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(api.fetchExecutionTasks).toHaveBeenCalledTimes(1)
+    expect(api.fetchExecutionTasks).toHaveBeenCalledWith(H, E, 'running')
+    expect(Object.keys(useExecutionStore.getState().executions[KEY].tasks)).toEqual(['a'])
+  })
+
+  it('fetches once on each reconnect', async () => {
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { sseOpts!.onStatus('open') })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { sseOpts!.onStatus('reconnecting'); sseOpts!.onStatus('open') })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { sseOpts!.onStatus('reconnecting'); sseOpts!.onStatus('open') })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(api.fetchExecutionTasks).toHaveBeenCalledTimes(3)
+  })
+
+  it('an older daemon (no worker_rollup) makes no request and tasks stay empty', async () => {
+    setRollup(false)
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { sseOpts!.onStatus('open'); sseOpts!.onStatus('reconnecting'); sseOpts!.onStatus('open') })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(api.fetchExecutionTasks).not.toHaveBeenCalled()
+    expect(useExecutionStore.getState().executions[KEY].tasks).toEqual({})
+  })
+
+  it('a snapshot arriving after a live task_end does not reopen the task', async () => {
+    let resolve!: (v: WorkerTasksSnapshot) => void
+    vi.mocked(api.fetchExecutionTasks).mockReset().mockImplementation(() => new Promise((r) => { resolve = r }))
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => {
+      sseOpts!.onStatus('open')
+      sseOpts!.onFrame({ id: '3', event: 'task_start', data: JSON.stringify({ task_id: 'a', turn_id: 't1', kind: 'shell', tool_use_id: 'tu_a', started_at: 1000 }) })
+      sseOpts!.onFrame({ id: '4', event: 'task_end', data: JSON.stringify({ task_id: 'a', turn_id: 't1', kind: 'shell', tool_use_id: 'tu_a', status: 'completed', ended_at: 2000 }) })
+    })
+    await act(async () => { resolve(snap([task('a')], 3)); await vi.advanceTimersByTimeAsync(0) })
+    expect(useExecutionStore.getState().executions[KEY].tasks.a.status).toBe('completed')
+  })
+
+  it('a kicked pane resuming on a new stream fetches again', async () => {
+    const { rerender } = renderHook(({ active }) => useExecutionSubscription(H, E, active), { initialProps: { active: true } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { sseOpts!.onStatus('open') })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    const first = sseOpts
+    // Four busier siblings take every live slot → this pane is evicted (paused).
+    act(() => { for (const k of ['x1', 'x2', 'x3', 'x4']) subscriptionSlots.touch(H, `${H}:${k}`) })
+    expect(useExecutionStore.getState().executions[KEY].sse).toBe('paused')
+    rerender({ active: false })
+    rerender({ active: true })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(sseOpts).not.toBe(first)
+    act(() => { sseOpts!.onStatus('open') })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(api.fetchExecutionTasks).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops a response that belongs to an earlier stream generation', async () => {
+    const pending: ((v: WorkerTasksSnapshot) => void)[] = []
+    vi.mocked(api.fetchExecutionTasks).mockReset().mockImplementation(() => new Promise((r) => { pending.push(r) }))
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { sseOpts!.onStatus('open'); sseOpts!.onStatus('reconnecting'); sseOpts!.onStatus('open') })
+    // The newer read answers first; the older one lands after it and must be ignored.
+    await act(async () => { pending[1](snap([], 5)); await vi.advanceTimersByTimeAsync(0) })
+    await act(async () => { pending[0](snap([task('stale')], 2)); await vi.advanceTimersByTimeAsync(0) })
+    expect(useExecutionStore.getState().executions[KEY].tasks).toEqual({})
+  })
+
+  it('drops a response that lands after the execution changed', async () => {
+    let resolve!: (v: WorkerTasksSnapshot) => void
+    vi.mocked(api.fetchExecutionTasks).mockReset().mockImplementation(() => new Promise((r) => { resolve = r }))
+    const { rerender } = renderHook(({ id }) => useExecutionSubscription(H, id, true), { initialProps: { id: E } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { sseOpts!.onStatus('open') })
+    rerender({ id: 'exc_2' })
+    await act(async () => { resolve(snap([task('a')])); await vi.advanceTimersByTimeAsync(0) })
+    expect(useExecutionStore.getState().executions[KEY]?.tasks ?? {}).toEqual({})
   })
 })
