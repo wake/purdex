@@ -16,9 +16,11 @@
 // its own source, and agent prose is indexed by `proseText` — the text
 // RoomProse renders, not the markdown source (markdown-text.ts) — so a link's
 // URL or a split `nee**dle**` cannot shift the count. Offsets are not used.
-// The index is NFC (A10) but the DOM draws text as it arrived: in the rare
-// NFD transcript the element holds no NFC occurrence to mark, and the match
-// is still scrolled to by its element.
+// The index is NFC (A10) but the DOM draws text as it arrived. An element
+// whose text is not already NFC is not marked at all — in a unit mixing both
+// forms the n-th NFC occurrence in the DOM is not the n-th match, so counting
+// would mark the wrong word (A F3) — and its match is still scrolled to by
+// its element.
 //
 // **Owners.** Highlight names are document-wide, so two panes searching at
 // once would overwrite — or, clearing, erase — each other's marks. Each caller
@@ -88,7 +90,7 @@ export function clearSearchHighlights(owner: string): void {
 
 /**
  * The first `count` occurrences of `pattern` in `el`'s text, as Ranges over
- * its text nodes (a match may cross nodes).
+ * its text nodes (a match may cross nodes). None when that text is not NFC.
  */
 function occurrences(el: Element, pattern: RegExp, count: number): Range[] {
   const nodes: Text[] = []
@@ -101,6 +103,8 @@ function occurrences(el: Element, pattern: RegExp, count: number): Range[] {
     starts.push(text.length)
     text += t.data
   }
+  // Not NFC: the ordinals of the index would not line up (see the header).
+  if (text !== text.normalize('NFC')) return []
   // The node holding character `pos`: the last node starting at or before it.
   // `forEnd` resolves a boundary to the node that ends there, not the next one.
   const at = (pos: number, forEnd: boolean): [Text, number] => {

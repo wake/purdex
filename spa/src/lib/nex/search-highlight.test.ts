@@ -175,6 +175,30 @@ describe('highlightSearch', () => {
     expect(scroll).toHaveBeenCalledWith({ block: 'center' })
   })
 
+  // A F3: the index is NFC, the DOM is as it arrived. In a unit mixing both
+  // forms the n-th NFC occurrence in the DOM is not the n-th match, so the
+  // element is not marked at all — only scrolled to.
+  it('an element whose text is not NFC is scrolled to, not marked', () => {
+    installApi()
+    const nfc = 'café'
+    const nfd = 'café'
+    const root = dom(`<pre data-search-unit="a">${nfd} then ${nfc}</pre><pre data-search-unit="b">${nfc}</pre>`)
+    const pre = root.firstElementChild as HTMLElement
+    const scroll = vi.fn()
+    pre.scrollIntoView = scroll
+    const { matches } = findMatches([
+      { id: 'a', text: `${nfd} then ${nfc}`.normalize('NFC'), reveal: [] },
+      { id: 'b', text: nfc, reveal: [] },
+    ], nfc)
+    expect(matches).toHaveLength(3)
+    highlightSearch('p1', root, nfc, matches, 0)
+    // Not the second word marked as if it were the first.
+    expect(texts('search-current')).toEqual([])
+    expect(scroll).toHaveBeenCalledWith({ block: 'center' })
+    // Other units are marked as usual.
+    expect(texts('search-match')).toEqual([nfc])
+  })
+
   it('does nothing to highlights without the API', () => {
     removeApi()
     const root = dom('<pre data-search-unit="a">needle</pre>')
