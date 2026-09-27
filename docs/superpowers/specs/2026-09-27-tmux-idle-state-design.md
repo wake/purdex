@@ -91,9 +91,17 @@ correctly.
     recovery has nothing to wait for. Nothing user-visible needs the recovery to
     finish before the create returns: the reported value does not depend on it,
     and the creating client uses the create response.
-  - Lifecycle (review A4): `markServerUp()` does nothing once the module is
-    stopping, and re-checks before `notifyWaitFor` / `broadcastSessions`, so a
-    recovery racing `Stop()` does not announce a revival after shutdown began.
+  - Lifecycle (review A4 + re-reviews): recovery and `Stop()` are linearised
+    by `lifeMu` (recovery holds it shared for its whole run, `Stop()` takes it
+    exclusively after cancelling `runCtx`). Guarantee: a recovery whose entry
+    check runs after `runCtx` is cancelled changes nothing; a recovery already
+    past its entry check is **before** `Stop()` — it completes (its state flip
+    and `tmux: ok` are true statements about a server that is up) and `Stop()`
+    waits for it before removing the hooks, so nothing is announced or
+    installed after `Stop()` removed them. A second check before
+    `notifyWaitFor` / `broadcastSessions` skips the tail when `Stop()` began
+    meanwhile. "Stop began" is not a point after which the watcher's cached
+    alive flag must stay false: after `Stop()` the module no longer acts on it.
   - A `tickNormal` that probed "down" before the create and writes after it can
     still flip the internal state back; that is self-healing (the next
     `tickTmuxDown` probe sees Up and recovers) and never changes the reported
