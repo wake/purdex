@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.465] - 2026-09-28
+
+> 純 SPA，不需要重新部署 daemon。worker pane R4 的第二支。
+
+### Fix：worker 的成本不再重複計算（#1500）
+
+- 每個 turn 回報的成本有時是「到目前為止的累計」（同一個行程裡的多筆結果；新版 CLI 跨 resume 也會累計），以前一律相加，多 turn 的 worker 會多算。
+  現在一筆結果要有 token 數字證明它是前一筆的延續，才只算差額；否則照舊整筆計入。實錄的一個 worker 從 $0.26 修正為 $0.20。
+- 同一條規則也用在 Nexen v0.13.2 的列表成本，之後側欄與 pane 會顯示同一個數字。
+- 已知限制：有 subagent 的獨立 turn 接在很短的 turn 後面時，仍可能被當成延續而少算（#1501，等實錄資料再定）。
+
+### Feature：接續既有對話的 worker 標出「含接續前的費用」
+
+- 從 tmux session 交給 worker（hand-over）且第一個 turn 確實接續成功時，成本的 hover 與成本面板會註明「含接續前的費用」。
+- 接續失敗、還沒有任何有費用的結果、或不是接續來的 worker，不顯示。
+
 ## [1.0.0-alpha.464] - 2026-09-28
 
 > **需要重新部署 daemon，而且升級時要先刪掉 `~/.config/pdx/nex/nex.db*`**（內嵌 Nexen 升到 v0.13.1，資料庫 schema v6，alpha 期不做 migration；
