@@ -14,16 +14,18 @@ const TEXT_FIELD = 'input, textarea, select, [contenteditable]:not([contentedita
  * Whether the reader is typing somewhere other than `self`: a text field
  * holds focus — this pane's search bar, another pane's, a terminal. A send
  * coming back then must not pull them in here, where Enter would send the
- * rest of what they type to the worker (A F5). Anything else — the body, a
- * clicked tab (dnd-kit's tabIndex=0 keeps focus on it), a button — is taken
- * over, as before (#1495 re-review P2-2). A field in an inert subtree (an
- * inactive tab, TabContent) is not being typed into, even while a browser
- * without focus fixup leaves focus on it.
+ * rest of what they type to the worker (A F5). Focus inside an open panel
+ * (`role="dialog"`: the header's overflow menu, the cost panel) is kept too —
+ * the reader is using it. Anything else — the body, a clicked tab (dnd-kit's
+ * tabIndex=0 keeps focus on it), a stray button — is taken over, so switching
+ * to the tab lands in the reply box (#1495 re-review P2-2). A field in an
+ * inert subtree (an inactive tab, TabContent) is not being used, even while a
+ * browser without focus fixup leaves focus on it.
  */
 function typingElsewhere(self: HTMLTextAreaElement | null): boolean {
   const active = document.activeElement
-  if (!active || active === self || !active.matches(TEXT_FIELD)) return false
-  return !active.closest('[inert]')
+  if (!active || active === self || active.closest('[inert]')) return false
+  return active.matches(TEXT_FIELD) || !!active.closest('[role="dialog"]')
 }
 
 interface Props {

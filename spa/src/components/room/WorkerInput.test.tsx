@@ -129,6 +129,26 @@ describe('WorkerInput', () => {
     })
   })
 
+  // #1495 re-review (0.45): a panel the reader has open — the header's
+  // overflow menu, the cost panel (FloatingPanel, role="dialog") — keeps
+  // its focus when the pane comes back to life underneath it.
+  it('does not take focus from inside an open dialog panel', async () => {
+    const panel = document.createElement('div')
+    panel.setAttribute('role', 'dialog')
+    const item = document.createElement('button')
+    panel.appendChild(item)
+    document.body.appendChild(panel)
+    try {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} focused disabled />)
+      item.focus()
+      rerender(<WorkerInput onSend={vi.fn()} focused disabled={false} />)
+      await new Promise((r) => requestAnimationFrame(r))
+      expect(document.activeElement).toBe(item)
+    } finally {
+      panel.remove()
+    }
+  })
+
   it('does not take focus from a contenteditable field', async () => {
     const editor = document.createElement('div')
     editor.setAttribute('contenteditable', 'true')
