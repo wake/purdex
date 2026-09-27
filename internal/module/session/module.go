@@ -163,10 +163,14 @@ func (m *SessionModule) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Install tmux hooks (log warning on error, don't fail startup).
-	if err := m.installTmuxHooks(); err != nil {
-		log.Printf("session: failed to install tmux hooks: %v (continuing without push)", err)
+	// Install tmux hooks (log warning on error, don't fail startup). The
+	// outcome seeds the watcher, which retries a failed install once a
+	// server is up (#1473 spec D3).
+	err := m.installTmuxHooks()
+	if err != nil {
+		log.Printf("session: failed to install tmux hooks: %v (continuing without push; the watcher retries)", err)
 	}
+	m.wstate.setHooksInstalled(err == nil, "")
 
 	// Start session watcher with a child context.
 	watchCtx, cancel := context.WithCancel(ctx)

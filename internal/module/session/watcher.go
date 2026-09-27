@@ -17,6 +17,16 @@ type watcherState struct {
 	tmuxAlive     bool
 	lastHash      string
 	lastBroadcast time.Time // debounce: tracks last broadcastSessions call time
+
+	// Global tmux hooks live in the server's memory, so a daemon that
+	// started without a server never had them and a new server drops them
+	// (#1473 spec D3). hooksOK says they are known to be on the current
+	// server; hooksInstance is the tmux instance they were installed on
+	// ("" if unknown). hooksFailing suppresses repeat failure logs within
+	// one failure streak.
+	hooksOK       bool
+	hooksInstance string
+	hooksFailing  bool
 }
 
 func (ws *watcherState) getTmuxAlive() bool {
@@ -42,6 +52,52 @@ func (ws *watcherState) updateHash(newHash string) bool {
 	}
 	ws.lastHash = newHash
 	return true
+}
+
+// setHooksInstalled records the outcome of an install attempt on instance.
+// It reports whether this failure opens a new failure streak (log it) —
+// false for a success or a repeat failure.
+func (ws *watcherState) setHooksInstalled(ok bool, instance string) (firstFailure bool) {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	ws.hooksOK = ok
+	if ok {
+		ws.hooksInstance = instance
+		ws.hooksFailing = false
+		return false
+	}
+	firstFailure = !ws.hooksFailing
+	ws.hooksFailing = true
+	return firstFailure
+}
+
+// hooksCurrent reports whether the hooks need no (re)install for instance: a
+// known-good install on the same server. An empty instance proves nothing
+// about a restart, so it never forces a reinstall on its own.
+func (ws *watcherState) hooksCurrent(instance string) bool {
+	ws.mu.RLock()
+	defer ws.mu.RUnlock()
+	return ws.hooksOK && (instance == "" || instance == ws.hooksInstance)
+}
+
+func (ws *watcherState) clearHooksOK() {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	ws.hooksOK = false
+}
+
+// ensureHooks installs the session hooks unless they are already known to be
+// on the server identified by instance (spec D3). installTmuxHooks sets all
+// three every time (set-hook -g overwrites), so a retry also repairs a
+// partial install. The set-hook subprocesses run outside the state lock.
+func (m *SessionModule) ensureHooks(instance string) {
+	if m.wstate.hooksCurrent(instance) {
+		return
+	}
+	err := m.installTmuxHooks()
+	if m.wstate.setHooksInstalled(err == nil, instance) {
+		log.Printf("session: install tmux hooks: %v (retrying every tick)", err)
+	}
 }
 
 // TmuxAlive returns the cached tmux status (thread-safe).
@@ -72,6 +128,8 @@ func (m *SessionModule) tickNormal() {
 
 	if len(sessions) == 0 {
 		if !m.tmux.TmuxAlive() {
+			// The hooks go with the server; the next one needs them anew.
+			m.wstate.clearHooksOK()
 			if m.wstate.setTmuxAlive(false) {
 				m.broadcastTmuxStatus("unavailable")
 			}
@@ -80,9 +138,14 @@ func (m *SessionModule) tickNormal() {
 		}
 	}
 
+	// Retries a failed install every tick, and reinstalls when the payload
+	// shows a server restart the down/alive edge never saw (spec D3).
+	instance := payloadInstance(sessions)
+	m.ensureHooks(instance)
+
 	// The hash covers (instance, sessions) only, so a new seq alone never
 	// triggers a broadcast.
-	hash := hashSessions(payloadInstance(sessions), sessions)
+	hash := hashSessions(instance, sessions)
 	if m.wstate.updateHash(hash) {
 		// Hash changed = session list mutated (possibly by external tmux
 		// commands that bypass the HTTP handlers' invalidation). Bust the
@@ -99,6 +162,11 @@ func (m *SessionModule) tickNormal() {
 func (m *SessionModule) tickTmuxDown() {
 	if m.tmux.TmuxAlive() {
 		m.wstate.setTmuxAlive(true)
+		// A server that just appeared has no hooks, whatever an earlier
+		// install said. A failure here is retried by tickNormal and never
+		// skips the recovery below (spec D3).
+		m.wstate.clearHooksOK()
+		m.ensureHooks("")
 		m.broadcastTmuxStatus("ok")
 		m.notifyWaitFor(true)
 		m.broadcastSessions()

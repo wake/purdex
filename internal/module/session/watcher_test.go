@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -580,4 +581,184 @@ func TestOnSubscribeSnapshot_CarriesVersion(t *testing.T) {
 		assert.Contains(t, f.Value, `"name":"s1"`)
 		return
 	}
+}
+
+// --- Self-healing tmux hooks (#1473 spec D3) ---
+
+var allHookEvents = []string{"session-created", "session-closed", "session-renamed"}
+
+// newHookTestModule builds a module whose watcher state is seeded by hand
+// instead of by Start, so no real `tmux wait-for` goroutine runs and the
+// wait-for gate can be read directly.
+func newHookTestModule(t *testing.T, alive bool) (*SessionModule, *tmux.FakeExecutor, *core.EventsBroadcaster) {
+	t.Helper()
+	mod, fake, events := newWatcherTestModule(t)
+	mod.waitForGate = make(chan bool, 1)
+	mod.wstate.setTmuxAlive(alive)
+	fake.SetAlive(alive)
+	return mod, fake, events
+}
+
+func setInstance(mod *SessionModule, v string) {
+	mod.tmuxInstanceFn = func(context.Context) string { return v }
+}
+
+// drainTypes returns the envelope types broadcast within the drain window,
+// with the tmux status value appended ("tmux:ok").
+func drainTypes(t *testing.T, sub *core.EventSubscriber) []string {
+	t.Helper()
+	var out []string
+	timeout := time.After(100 * time.Millisecond)
+	for {
+		select {
+		case msg := <-sub.SendCh():
+			var env struct {
+				Type  string `json:"type"`
+				Value string `json:"value"`
+			}
+			if err := json.Unmarshal(msg, &env); err != nil {
+				continue
+			}
+			if env.Type == "tmux" {
+				out = append(out, "tmux:"+env.Value)
+			} else {
+				out = append(out, env.Type)
+			}
+		case <-timeout:
+			return out
+		}
+	}
+}
+
+// A daemon that saw tmux go down must install the hooks when a server comes
+// back: the new server has none (global hooks live in server memory).
+func TestWatcherAliveEdge_InstallsHooks(t *testing.T) {
+	mod, fake, events := newWatcherTestModule(t)
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, mod.Start(ctx))
+
+	fake.SetAlive(false)
+	mod.checkAndBroadcast()
+	require.False(t, mod.TmuxAlive())
+	fake.ResetHookSets()
+
+	fake.SetAlive(true)
+	fake.AddSession("recovered", "/tmp")
+	mod.checkAndBroadcast()
+	require.True(t, mod.TmuxAlive())
+	assert.Equal(t, allHookEvents, fake.HookSets())
+}
+
+func TestWatcherStayingDown_InstallsNoHooks(t *testing.T) {
+	mod, fake, _ := newWatcherTestModule(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, mod.Start(ctx))
+
+	fake.SetAlive(false)
+	mod.checkAndBroadcast()
+	fake.ResetHookSets()
+
+	mod.checkAndBroadcast()
+	mod.checkAndBroadcast()
+	assert.Empty(t, fake.HookSets())
+}
+
+// A failed install on the alive edge must not skip the rest of the recovery,
+// and the next normal tick retries until it succeeds — then stops.
+func TestWatcherAliveEdge_FailedInstallRetriedByTickNormal(t *testing.T) {
+	mod, fake, events := newHookTestModule(t, false)
+	sub := events.AddTestSubscriber()
+	defer events.RemoveTestSubscriber(sub)
+
+	fake.SetHookGlobalError(errors.New("no server running"))
+	fake.SetAlive(true)
+	fake.AddSession("dev", "/w")
+	setInstance(mod, "111:1000")
+	mod.tickTmuxDown()
+
+	assert.True(t, mod.TmuxAlive())
+	assert.Equal(t, []string{"tmux:ok", "sessions"}, drainTypes(t, sub),
+		"a failed hook install must not skip the ok and sessions broadcasts")
+	select {
+	case v := <-mod.waitForGate:
+		assert.True(t, v, "wait-for must be resumed")
+	default:
+		t.Fatal("wait-for was not resumed")
+	}
+	require.NotEmpty(t, fake.HookSets(), "the alive edge must attempt an install")
+
+	fake.SetHookGlobalError(nil)
+	fake.ResetHookSets()
+	mod.tickNormal()
+	assert.Equal(t, allHookEvents, fake.HookSets(), "tickNormal must retry the failed install")
+
+	fake.ResetHookSets()
+	mod.tickNormal()
+	assert.Empty(t, fake.HookSets(), "a successful install must not be repeated")
+}
+
+// A server restart between two ticks (never seen as down) shows up as a new
+// non-empty instance; the new server has no hooks, so reinstall.
+func TestTickNormal_InstanceChange_ReinstallsHooks(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	fake.AddSession("dev", "/w")
+	setInstance(mod, "111:1000")
+	mod.tickNormal()
+	require.Equal(t, allHookEvents, fake.HookSets())
+
+	fake.ResetHookSets()
+	mod.tickNormal()
+	require.Empty(t, fake.HookSets(), "same instance: no reinstall")
+
+	setInstance(mod, "222:2000")
+	mod.tickNormal()
+	assert.Equal(t, allHookEvents, fake.HookSets(), "new instance: reinstall")
+}
+
+// An empty payload carries no instance, which proves nothing about a restart.
+func TestTickNormal_EmptyPayload_DoesNotReinstallHooks(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	fake.AddSession("dev", "/w")
+	setInstance(mod, "111:1000")
+	mod.tickNormal()
+	require.Equal(t, allHookEvents, fake.HookSets())
+
+	fake.ResetHookSets()
+	require.NoError(t, fake.KillSession("dev"))
+	mod.tickNormal()
+	require.True(t, mod.TmuxAlive())
+	assert.Empty(t, fake.HookSets())
+}
+
+// Start's own install counts: a later tick with no instance to compare must
+// not install again, but a failed Start install is retried.
+func TestStart_HookInstallSeedsWatcher(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		mod, fake, _ := newWatcherTestModule(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		require.NoError(t, mod.Start(ctx))
+		require.Equal(t, allHookEvents, fake.HookSets())
+
+		fake.ResetHookSets()
+		mod.tickNormal() // no sessions: payload instance ""
+		assert.Empty(t, fake.HookSets())
+	})
+	t.Run("failure", func(t *testing.T) {
+		mod, fake, _ := newWatcherTestModule(t)
+		fake.SetHookGlobalError(errors.New("no server running"))
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		require.NoError(t, mod.Start(ctx))
+
+		fake.SetHookGlobalError(nil)
+		fake.ResetHookSets()
+		mod.tickNormal()
+		assert.Equal(t, allHookEvents, fake.HookSets())
+	})
 }

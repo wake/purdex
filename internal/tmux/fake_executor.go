@@ -89,6 +89,8 @@ type FakeExecutor struct {
 	listCallCount         int      // how many times ListSessions was called
 	alive                 bool     // whether tmux server is "alive"
 	HooksOutput           string   // returned by ShowHooksGlobal
+	hookSets              []string // events passed to SetHookGlobal, failed calls included
+	hookSetErr            error    // returned by SetHookGlobal when non-nil
 	FailSendKeys          bool     // if true, SendKeysRaw returns an error
 	FailPasteText         bool     // if true, PasteText returns an error
 	FailKillIfInstance    bool     // if true, KillSessionIfInstance returns an error (nothing killed)
@@ -896,8 +898,38 @@ func (f *FakeExecutor) SetWindowOptionCalls() []SetWindowOptionCall {
 	return f.setWindowOptionCalls
 }
 
-func (f *FakeExecutor) SetHookGlobal(event, command string) error { return nil }
-func (f *FakeExecutor) RemoveHookGlobal(event string) error       { return nil }
+// SetHookGlobal records every attempt (failed ones included) and returns the
+// error injected by SetHookGlobalError.
+func (f *FakeExecutor) SetHookGlobal(event, command string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hookSets = append(f.hookSets, event)
+	return f.hookSetErr
+}
+
+func (f *FakeExecutor) RemoveHookGlobal(event string) error { return nil }
+
+// HookSets returns a copy of the events passed to SetHookGlobal so far.
+func (f *FakeExecutor) HookSets() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.hookSets...)
+}
+
+// ResetHookSets forgets the recorded SetHookGlobal calls.
+func (f *FakeExecutor) ResetHookSets() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hookSets = nil
+}
+
+// SetHookGlobalError makes every later SetHookGlobal return err (nil clears
+// it) — the seam for "the server vanished between the probe and set-hook".
+func (f *FakeExecutor) SetHookGlobalError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hookSetErr = err
+}
 
 func (f *FakeExecutor) ShowHooksGlobal() (string, error) {
 	f.mu.Lock()
