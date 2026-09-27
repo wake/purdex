@@ -257,6 +257,15 @@ describe('matchIdentity / findCurrent', () => {
     expect(findCurrent(units3, findMatches(units3, 'ab').matches, id)).toBe(1)
   })
 
+  // R1-4: the unit that moves up into the gone unit's position follows it.
+  it('a gone unit hands over to the unit now in its place', () => {
+    const units1 = [U('a', 'ab'), U('b', 'ab'), U('c', 'ab'), U('d', 'ab')]
+    const id = matchIdentity(units1, findMatches(units1, 'ab').matches, 1) // b's
+    const units2 = [U('a', 'ab'), U('c', 'ab'), U('d', 'ab')]
+    const m2 = findMatches(units2, 'ab').matches
+    expect(m2[findCurrent(units2, m2, id)].unitId).toBe('c')
+  })
+
   it('starts at the first match and is -1 with none', () => {
     const units = [U('a', 'ab')]
     expect(findCurrent(units, findMatches(units, 'ab').matches, null)).toBe(0)

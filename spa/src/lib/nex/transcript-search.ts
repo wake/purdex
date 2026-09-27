@@ -349,7 +349,9 @@ export function findCurrent(units: readonly SearchUnit[], matches: readonly Sear
     const m = matches[i]
     ordinal = i > 0 && matches[i - 1].unitId === m.unitId ? ordinal + 1 : 0
     const p = pos.get(m.unitId) ?? -1
-    if (m.unitId === identity.unitId ? ordinal >= identity.ordinal : p > at) return i
+    // `>=`: when its unit is gone, `at` is where it was, and the unit that
+    // moved up into that place is the one that followed it (R1-4).
+    if (m.unitId === identity.unitId ? ordinal >= identity.ordinal : p >= at) return i
   }
   return matches.length - 1
 }
