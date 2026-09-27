@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, act } from '@testing-library/react'
 import { SessionPaneContent } from './SessionPaneContent'
 import { useHostStore } from '../stores/useHostStore'
@@ -335,6 +335,35 @@ describe('SessionPaneContent', () => {
   // have (an unresolvable wire id) is kept verbatim and shown as missing. It
   // must never reach the network — `getWsBase` falls back to the active host
   // for an unknown id, so attaching would open a terminal on the WRONG host.
+  // #1474: the host is reachable but its session list never arrives, so the
+  // attach gate stays shut and the terminal would say "connecting..." forever.
+  describe('attach stall message', () => {
+    afterEach(() => { vi.useRealTimers() })
+
+    it('tells the user after 10 s with the gate closed and the daemon reachable', () => {
+      vi.useFakeTimers()
+      useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected' as const, attachReady: false, daemonState: 'connected' as const } } })
+      const pane = makePane()
+      setupTabStore(pane)
+      render(<SessionPaneContent pane={pane} isActive={true} />)
+      expect(terminalViewProps.last?.connectingMessage).toBeUndefined()
+      act(() => { vi.advanceTimersByTime(10_000) })
+      expect(terminalViewProps.last?.connectingMessage).toBe(
+        "Connected to the host, but the tmux session list can't be read. Retrying automatically.",
+      )
+    })
+
+    it('says nothing once the gate is open', () => {
+      vi.useFakeTimers()
+      useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected' as const, attachReady: true, daemonState: 'connected' as const } } })
+      const pane = makePane()
+      setupTabStore(pane)
+      render(<SessionPaneContent pane={pane} isActive={true} />)
+      act(() => { vi.advanceTimersByTime(10_000) })
+      expect(terminalViewProps.last?.connectingMessage).toBeUndefined()
+    })
+  })
+
   describe('host this device does not have', () => {
     const missing = (): Pane => makePane({
       content: {
