@@ -61,11 +61,12 @@ describe('exec wire replay', () => {
 // (capability-matrix §3); `type` carries the kind like every other line and
 // is stripped from the payload for the two task kinds.
 describe('exec wire replay with task events (nexen v0.13)', () => {
-  function replay(raw: string): { s: ReturnType<typeof defaultExecutionState>; durable: number } {
+  function replay(raw: string): { s: ReturnType<typeof defaultExecutionState>; durable: number; lastNonTaskSeq: number } {
     const frames = raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l) as Record<string, unknown>)
     // One daemon-declared turn in front, so the turn grouping has a boundary to keep.
     let s = applyDurableEvent(defaultExecutionState(), { seq: 1, execution_id: 'exc_1', kind: 'execution.delegated', payload: { brief: 'sleep 6' }, created_at: 50 })
     let seq = 1
+    let lastNonTaskSeq = 1
     // Timestamps follow the original wire's line numbers, so both replays
     // stamp the shared frames identically.
     let line = 0
@@ -78,16 +79,19 @@ describe('exec wire replay with task events (nexen v0.13)', () => {
         return
       }
       seq += 1
+      if (!isTask) lastNonTaskSeq = seq
       const { type: _t, ...rest } = frame
       s = applyDurableEvent(s, { seq, execution_id: 'exc_1', kind, payload: isTask ? rest : frame, created_at: line * 100 })
     })
-    return { s, durable: seq }
+    return { s, durable: seq, lastNonTaskSeq }
   }
 
   it('task events never reach messages, turns or the partial; the table ends with one completed row', () => {
     const plain = replay(wireSample)
     const withTasks = replay(wireWithTasks)
     expect(withTasks.durable).toBe(plain.durable + 2)
+    // lastSeq tracks non-task events only (task events never move it).
+    expect(withTasks.s.lastSeq).toBe(withTasks.lastNonTaskSeq)
     expect(withTasks.s.lastSeq).toBe(plain.s.lastSeq + 2)
     expect(withTasks.s.messages).toEqual(plain.s.messages)
     expect(withTasks.s.turnStarts).toEqual(plain.s.turnStarts)

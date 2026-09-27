@@ -29,7 +29,8 @@ describe('useExecutionStore', () => {
     const st = useExecutionStore.getState().executions['h:exc_1']
     expect(Object.keys(st.tasks)).toEqual(['newer'])
     expect(st.messages).toHaveLength(0)
-    expect(st.lastSeq).toBe(9)
+    // Task events never move lastSeq (the SSE Last-Event-ID high-water mark).
+    expect(st.lastSeq).toBe(0)
   })
 
   it('applyEvents with only already-seen seqs does not create a new object', () => {

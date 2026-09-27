@@ -227,14 +227,20 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
   // Task kinds only touch `tasks`. Handled before applyTurnRules: a shell
   // started inside a subagent carries a non-null parent_tool_use_id, and
   // the subagent branch there would swallow it.
-  // They also bypass the seq guard: nexen's live SSE can deliver a
-  // regressing seq (commit→publish is not globally serialised, consumer-guide
-  // #83), and dropping a late task_end would leave the row running forever.
-  // Safe because task events are idempotent per task_id and closure is final.
+  // They bypass the seq guard: nexen's live SSE can deliver a regressing seq
+  // (commit→publish is not globally serialised, consumer-guide #83), and
+  // dropping a late task_end would leave the row running forever. Safe
+  // because task events are idempotent per task_id and closure is final.
+  // They also never touch `lastSeq`, neither raising nor lowering it: it is
+  // the shared high-water mark every other kind is guarded by, and the SSE
+  // Last-Event-ID on reconnect. A task event arriving early with a higher seq
+  // must not make a later lower-seq assistant / user / result frame look
+  // already-seen (dropped now, and skipped for good on reconnect). Cost: when
+  // the last durable event is a task event, reconnect replays it once —
+  // harmless, by the same idempotence.
   if (isTaskEventKind(ev.kind)) {
     const tasks = applyTaskEvent(s.tasks, ev.kind, p, ev.seq)
-    const lastSeq = Math.max(s.lastSeq, ev.seq)
-    return tasks === s.tasks && lastSeq === s.lastSeq ? s : { ...s, lastSeq, tasks }
+    return tasks === s.tasks ? s : { ...s, tasks }
   }
   if (ev.seq <= s.lastSeq) return s
 

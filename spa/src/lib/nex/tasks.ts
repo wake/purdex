@@ -24,9 +24,27 @@ function setRow(table: TaskTable, id: string, row: WorkerTask): void {
   Object.defineProperty(table, id, { value: row, writable: true, enumerable: true, configurable: true })
 }
 function withRow(table: TaskTable, id: string, row: WorkerTask): TaskTable {
+  const prev = rowOf(table, id)
+  if (prev && sameRow(prev, row)) return table
   const next = { ...table }
   setRow(next, id, row)
   return next
+}
+
+/** Rows are flat apart from `usage`; a replayed event rebuilding an equal row is a no-op. */
+function sameRow(a: WorkerTask, b: WorkerTask): boolean {
+  const ka = Object.keys(a) as (keyof WorkerTask)[]
+  if (ka.length !== Object.keys(b).length) return false
+  for (const k of ka) {
+    if (!Object.hasOwn(b, k)) return false
+    if (k === 'usage') {
+      const ua = a.usage
+      const ub = b.usage
+      if (ua === ub) continue
+      if (!ua || !ub || ua.total_tokens !== ub.total_tokens || ua.tool_uses !== ub.tool_uses || ua.duration_ms !== ub.duration_ms) return false
+    } else if (a[k] !== b[k]) return false
+  }
+  return true
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -109,7 +127,7 @@ function withStartFacts(end: WorkerTask, prev: WorkerTask | undefined): WorkerTa
 /**
  * Fold one durable task event into the table. Returns the same table for
  * anything that changes nothing (other kinds, invalid payloads, a start
- * replayed after its end).
+ * replayed after its end, any replay that rebuilds an equal row).
  */
 export function applyTaskEvent(table: TaskTable, kind: string, payload: unknown, seq: number): TaskTable {
   if (kind !== 'task_start' && kind !== 'task_end') return table

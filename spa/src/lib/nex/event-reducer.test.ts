@@ -497,7 +497,8 @@ describe('task events (nexen v0.13 task_start / task_end)', () => {
     const before = live()
     let s = applyDurableEvent(before, ev(2, 'task_start', start('t1')))
     s = applyDurableEvent(s, ev(3, 'task_end', end('t1')))
-    expect(s.lastSeq).toBe(3)
+    // Task events never move the shared high-water mark (SSE Last-Event-ID).
+    expect(s.lastSeq).toBe(before.lastSeq)
     expect(s.messages).toBe(before.messages)
     expect(s.turnStarts).toBe(before.turnStarts)
     expect(s.partial).toBe(before.partial)
@@ -542,7 +543,7 @@ describe('task events (nexen v0.13 task_start / task_end)', () => {
     expect(next.tasks.newer).toMatchObject({ status: 'running', startSeq: 13 })
     expect(next.tasks.unseen).toMatchObject({ status: 'running', startSeq: 10 })
     // Nothing else moves: the snapshot is not an event.
-    expect(next.lastSeq).toBe(13)
+    expect(next.lastSeq).toBe(s.lastSeq)
     expect(next.messages).toBe(s.messages)
   })
 
@@ -559,13 +560,36 @@ describe('task events (nexen v0.13 task_start / task_end)', () => {
     s = applyDurableEvent(s, ev(9, 'task_end', end('t1')))
     s = applyDurableEvent(s, ev(5, 'task_start', start('t1')))
     expect(s.tasks.t1.status).toBe('completed')
-    expect(s.lastSeq).toBe(9)
+    expect(s.lastSeq).toBe(0)
   })
 
-  it('a non-task event with a low seq is still dropped', () => {
-    const s = applyDurableEvent(defaultExecutionState(), ev(10, 'task_start', start('t1')))
-    const next = applyDurableEvent(s, ev(4, 'assistant', { type: 'assistant' }))
-    expect(next).toBe(s)
+  it('a replayed task_end / task_start that changes nothing returns the same state object', () => {
+    let s = applyDurableEvent(defaultExecutionState(), ev(3, 'assistant', { type: 'assistant' }))
+    s = applyDurableEvent(s, ev(5, 'task_start', start('t1')))
+    s = applyDurableEvent(s, ev(9, 'task_end', end('t1')))
+    expect(applyDurableEvent(s, ev(9, 'task_end', end('t1')))).toBe(s)
+    expect(applyDurableEvent(s, ev(5, 'task_start', start('t1')))).toBe(s)
+    const running = applyDurableEvent(s, ev(11, 'task_start', start('t2')))
+    expect(applyDurableEvent(running, ev(11, 'task_start', start('t2')))).toBe(running)
+    expect(running.lastSeq).toBe(3)
+  })
+
+  it('an early task event with a higher seq does not move lastSeq, so a later lower-seq non-task event is still applied', () => {
+    let s = applyDurableEvent(defaultExecutionState(), ev(3, 'assistant', { type: 'assistant' }))
+    expect(s.lastSeq).toBe(3)
+    s = applyDurableEvent(s, ev(10, 'task_start', start('t1')))
+    expect(s.lastSeq).toBe(3)
+    expect(s.tasks.t1.status).toBe('running')
+    const next = applyDurableEvent(s, ev(4, 'assistant', { type: 'assistant', n: 4 }))
+    expect(next.lastSeq).toBe(4)
+    expect(next.messages).toHaveLength(2)
+    expect(next.messages[1]).toMatchObject({ n: 4 })
+  })
+
+  it('a non-task event at or below lastSeq is still dropped', () => {
+    const s = applyDurableEvent(defaultExecutionState(), ev(5, 'assistant', { type: 'assistant' }))
+    expect(applyDurableEvent(s, ev(4, 'assistant', { type: 'assistant' }))).toBe(s)
+    expect(applyDurableEvent(s, ev(5, 'assistant', { type: 'assistant' }))).toBe(s)
   })
 
   it('defaultExecutionState has an empty task table', () => {

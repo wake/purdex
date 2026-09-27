@@ -107,6 +107,22 @@ describe('parseTask', () => {
 })
 
 describe('applyTaskEvent', () => {
+  it('a replay that changes nothing returns the same table (running start, closed end with usage)', () => {
+    const running = applyTaskEvent({}, 'task_start', start(), 5)
+    expect(applyTaskEvent(running, 'task_start', start(), 5)).toBe(running)
+    expect(applyTaskEvent(running, 'task_start', start(), 7)).toBe(running)
+    const closed = applyTaskEvent(running, 'task_end', end(), 9)
+    expect(applyTaskEvent(closed, 'task_end', end(), 9)).toBe(closed)
+    expect(applyTaskEvent(closed, 'task_start', start(), 5)).toBe(closed)
+    // A differing end still replaces the end state wholesale.
+    const changed = applyTaskEvent(closed, 'task_end', end({ usage: { total_tokens: 1, tool_uses: 0, duration_ms: 2149 } }), 9)
+    expect(changed).not.toBe(closed)
+    expect(changed.bkdw11ap1.usage?.total_tokens).toBe(1)
+    const noSummary = applyTaskEvent(closed, 'task_end', end({ summary: undefined }), 9)
+    expect(noSummary).not.toBe(closed)
+    expect(noSummary.bkdw11ap1.summary).toBeUndefined()
+  })
+
   it('start then end: one row, closed with the end facts and the start facts kept', () => {
     let t: TaskTable = {}
     t = applyTaskEvent(t, 'task_start', start(), 5)
