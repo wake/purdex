@@ -1637,6 +1637,36 @@ describe('ExecutionView — dock tasks (R4 T3.2)', () => {
     expect(intoView).toHaveBeenCalledTimes(1)
   })
 
+  it('inspect with the search bar closed survives the next streamed line', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    patchExec({
+      messages: [said('go'), call('c1', 'Bash', { command: 'tail -f log' })],
+      turnStarts: [0],
+      tasks: { a: running('a', 'c1', { command: 'tail -f log' }) },
+    })
+    render(<ExecutionView {...base} isActive />)
+    const scroller = document.querySelector('.overflow-y-auto') as HTMLElement
+    const geometry = (scrollHeight: number, scrollTop: number) => {
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: scrollHeight })
+      Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(scroller, 'scrollTop', { configurable: true, writable: true, value: scrollTop })
+    }
+    geometry(1000, 800)
+    fireEvent.scroll(scroller)
+    const intoView = vi.fn(() => { scroller.scrollTop = 300 })
+    Element.prototype.scrollIntoView = intoView
+    fireEvent.click(screen.getByTestId('worker-dock-toggle'))
+    fireEvent.click(screen.getByTestId('worker-dock-inspect'))
+    expect(intoView).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('transcript-search-input')).toBeNull()
+    fireEvent.scroll(scroller)
+    scrollTo.mockClear()
+    geometry(1100, 300)
+    act(() => { const s = useExecutionStore.getState().executions[KEY]; patchExec({ messages: [...s.messages, said('a new line')] }) })
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
   it('inspect for a call not in the transcript does nothing', () => {
     const intoView = vi.fn()
     Element.prototype.scrollIntoView = intoView

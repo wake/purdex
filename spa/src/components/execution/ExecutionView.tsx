@@ -174,8 +174,8 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // path: find the call's unit (`toolUseUnit`, the same ids and reveal keys
   // as a search match), open the folds that hide it, and once that commit is
   // on screen scroll its `data-search-unit` into view and release the
-  // bottom-follow, as a search jump does (the release only holds while the
-  // search bar is open — without it, growth follows the bottom as ever). The target waits in a ref so a later
+  // bottom-follow, as a search jump does (the release holds with the search
+  // bar closed too, until the reader is back at the bottom). The target waits in a ref so a later
   // re-render (a view switch handing over a new scroll box) never replays it.
   const dockTasks = useMemo(() => runningTasks(st.tasks), [st.tasks])
   const inspectTarget = useRef<string | null>(null)
