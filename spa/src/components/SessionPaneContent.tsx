@@ -6,6 +6,8 @@ import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { fetchWsTicket } from '../lib/host-api'
 import { useHostStore } from '../stores/useHostStore'
+import { useI18nStore } from '../stores/useI18nStore'
+import { useAttachStall } from '../hooks/useAttachStall'
 import { findPane } from '../lib/pane-tree'
 import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
@@ -50,6 +52,13 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
     probeSessionProvenance(hostId, sessionCode, tmuxInstance)
   }, [hostId, sessionCode, tmuxInstance, terminated, hostKnown, attachGateOpen])
 
+  // #1474: a reachable host whose session list never arrives keeps the gate
+  // shut, and the terminal would say "connecting..." forever. Called before the
+  // early returns below (rules of hooks); the message only shows while the
+  // terminal is not yet attached, which is the only time its overlay is up.
+  const t = useI18nStore((s) => s.t)
+  const attachStalled = useAttachStall(hostKnown ? hostId : '')
+
   // Look up tabId from store (pane renderers don't receive tabId as a prop)
   const tabId = useTabStore((s) => {
     for (const id of Object.keys(s.tabs)) {
@@ -84,6 +93,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
       sessionCode={sessionCode}
       workspaceId={workspaceId}
       getTicket={() => fetchWsTicket(hostId)}
+      connectingMessage={attachStalled ? t('session.attach_stalled') : undefined}
     />
   )
 }

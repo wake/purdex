@@ -42,6 +42,8 @@ func TestWatcherTmuxAliveInitialState(t *testing.T) {
 	assert.True(t, mod.TmuxAlive(), "tmux should be alive when FakeExecutor default alive=true")
 }
 
+// A broken tmux (not merely no server, #1474) is the one down edge the SPA
+// hears about.
 func TestWatcherTransitionsToTmuxDown(t *testing.T) {
 	mod, fake, events := newWatcherTestModule(t)
 	sub := events.AddTestSubscriber()
@@ -51,7 +53,7 @@ func TestWatcherTransitionsToTmuxDown(t *testing.T) {
 	defer cancel()
 	require.NoError(t, mod.Start(ctx))
 
-	fake.SetAlive(false)
+	fake.SetServerState(tmux.ServerBroken)
 	mod.checkAndBroadcast()
 	assert.False(t, mod.TmuxAlive())
 
@@ -73,7 +75,7 @@ func TestWatcherRecoverFromTmuxDown(t *testing.T) {
 	defer cancel()
 	require.NoError(t, mod.Start(ctx))
 
-	fake.SetAlive(false)
+	fake.SetServerState(tmux.ServerBroken)
 	mod.checkAndBroadcast()
 	assert.False(t, mod.TmuxAlive())
 	<-sub.SendCh()
@@ -189,7 +191,7 @@ func TestWatcherNoRepeatBroadcastInTmuxDown(t *testing.T) {
 	defer cancel()
 	require.NoError(t, mod.Start(ctx))
 
-	fake.SetAlive(false)
+	fake.SetServerState(tmux.ServerBroken)
 	mod.checkAndBroadcast()
 	<-sub.SendCh()
 
@@ -682,8 +684,9 @@ func TestWatcherAliveEdge_FailedInstallRetriedByTickNormal(t *testing.T) {
 	mod.tickTmuxDown()
 
 	assert.True(t, mod.TmuxAlive())
-	assert.Equal(t, []string{"tmux:ok", "sessions"}, drainTypes(t, sub),
-		"a failed hook install must not skip the ok and sessions broadcasts")
+	// No tmux frame: "no server" was already reported as ok (#1474 D2).
+	assert.Equal(t, []string{"sessions"}, drainTypes(t, sub),
+		"a failed hook install must not skip the sessions broadcast")
 	select {
 	case v := <-mod.waitForGate:
 		assert.True(t, v, "wait-for must be resumed")

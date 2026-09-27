@@ -28,6 +28,10 @@ func newTestModule(t *testing.T) (*SessionModule, *store.MetaStore, *tmux.FakeEx
 		Registry: core.NewServiceRegistry(),
 	})
 	require.NoError(t, mod.Init(c))
+	// Seed the watcher as Start would (the fake's server is up) without
+	// starting it: a module left "down" would run the create-time recovery
+	// (#1474 spec D4) on every create.
+	mod.wstate.setTmuxAlive(fake.TmuxAlive())
 
 	return mod, meta, fake
 }

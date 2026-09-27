@@ -218,6 +218,18 @@ func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd stri
 	// Serialize the HasSession→NewSession→SetMeta critical section so two
 	// concurrent creates with the same name can't both slip past the
 	// duplicate check. Input validation stays outside the lock.
+	//
+	// startRecovery is set by a create that found the watcher down. The
+	// recovery is started by this defer, registered before the Unlock one
+	// so it runs after createMu is released, and not awaited: its hook
+	// subprocesses have no deadline and must never hold up later creates
+	// (#1108, #1474 spec D4, PR review A1/A2).
+	startRecovery := false
+	defer func() {
+		if startRecovery {
+			go m.markServerUp()
+		}
+	}()
 	if err := m.createMu.LockContext(ctx); err != nil {
 		return fail(CreateStageCancelled, err)
 	}
@@ -357,6 +369,14 @@ func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd stri
 
 		m.invalidateNameCache()
 		m.invalidateListCache()
+
+		// A create on a host with no server just started one. Recover now
+		// (hooks, wait-for, sessions push) rather than on the next 5 s
+		// tick (#1108, #1474 spec D4) — started once createMu is released
+		// (see startRecovery). A tick that probed "down" before this and
+		// writes after it can flip the watcher back; the next tick then
+		// recovers again, and the reported value never moves.
+		startRecovery = !m.wstate.getTmuxAlive()
 
 		return &SessionInfo{
 			Code:   code,

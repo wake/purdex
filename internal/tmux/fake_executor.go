@@ -87,7 +87,6 @@ type FakeExecutor struct {
 	paneIDs               []string // global pane id list for HasPane
 	hasPaneErr            error    // simulated transient tmux error for HasPane
 	listCallCount         int      // how many times ListSessions was called
-	alive                 bool     // whether tmux server is "alive"
 	HooksOutput           string   // returned by ShowHooksGlobal
 	hookSets              []string // events passed to SetHookGlobal, failed calls included
 	hookSetErr            error    // returned by SetHookGlobal when non-nil
@@ -108,6 +107,9 @@ type FakeExecutor struct {
 	// SetHookGlobalGate.
 	hookSetEntered chan<- struct{}
 	hookSetRelease <-chan struct{}
+	// serverState is what ServerState/TmuxAlive report; the zero value is
+	// ServerUp, a running server.
+	serverState ServerState
 }
 
 func NewFakeExecutor() *FakeExecutor {
@@ -131,7 +133,6 @@ func NewFakeExecutor() *FakeExecutor {
 		globalOptions:        make(map[string]string),
 		globalOptionErrs:     make(map[string]error),
 		globalOptionDelays:   make(map[string]time.Duration),
-		alive:                true,
 	}
 }
 
@@ -980,14 +981,28 @@ func (f *FakeExecutor) ShowHooksGlobal() (string, error) {
 	return f.HooksOutput, nil
 }
 
+// SetAlive keeps its pre-#1474 meaning: true is a running server, false is
+// no server (ServerAbsent). SetServerState reaches ServerBroken.
 func (f *FakeExecutor) SetAlive(v bool) {
+	if v {
+		f.SetServerState(ServerUp)
+	} else {
+		f.SetServerState(ServerAbsent)
+	}
+}
+
+func (f *FakeExecutor) SetServerState(s ServerState) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.alive = v
+	f.serverState = s
+}
+
+func (f *FakeExecutor) ServerState() ServerState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.serverState
 }
 
 func (f *FakeExecutor) TmuxAlive() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.alive
+	return f.ServerState() == ServerUp
 }
