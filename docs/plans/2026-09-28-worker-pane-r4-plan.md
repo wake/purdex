@@ -290,6 +290,11 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
   frame's per-model cost and tokens and `duration_api_ms` are the deltas
   against `prev`, each clamped at 0; `num_turns` and `duration_ms` are
   always per-frame.
+  Summation order (agreed with Nexen 2026-09-28, so both sides get the same
+  float bits): entries sharing a model fold in lexicographic order of their
+  original `modelUsage` key; every sum across models (the rule-3 growth sum,
+  Σ `outputTokens`, per-frame cost / token totals) runs in lexicographic
+  order of the canonical key (plain `a < b` string comparison; keys are ASCII).
 - Rewrite the F4 note in the header comment: the measured fact is now "some
   results are running totals" with both sources (Nexen spec §1.2; fixture
   06GB2ZFD seq 958 → 974), and why continuation needs token evidence.
