@@ -47,7 +47,7 @@ export function HomeRow({ isActive, onSelectHome }: Props) {
       </button>
       {/* Beside the trigger, not in it: a click on the icon opens its popover only (ProfileConflict.tsx). */}
       <ProfileConflictButton />
-      {switcher.enabled &&<ProfileSwitcher trigger={buttonRef} placement="bottom-start" />}
+      {switcher.enabled && <ProfileSwitcher trigger={buttonRef} placement="bottom-start" />}
     </div>
   )
 }

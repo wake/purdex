@@ -86,7 +86,7 @@ export function ProfileConflictButton() {
         title={label}
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="mr-1 p-0.5 rounded text-amber-500 hover:bg-surface-secondary cursor-pointer focus:outline-none"
+        className="mr-1 p-0.5 rounded text-amber-500 hover:bg-surface-secondary cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
       >
         <WarningCircle size={14} />
       </button>

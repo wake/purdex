@@ -49,7 +49,7 @@ export function WorkspaceConflictButton({ workspace, conflict, buttonRef }: Prop
       title={label}
       aria-expanded={conflict.open}
       onClick={() => useConflictPanelStore.getState().toggle(workspace.id)}
-      className="p-0.5 rounded text-amber-500 hover:bg-surface-secondary cursor-pointer focus:outline-none"
+      className="p-0.5 rounded text-amber-500 hover:bg-surface-secondary cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
     >
       <WarningCircle size={14} />
     </button>
@@ -71,7 +71,7 @@ export function WorkspaceConflictPanel({ workspace, conflict, buttonRef }: Props
       width={360}
       testId={`ws-conflict-panel-${workspace.id}`}
     >
-      <ul className="flex flex-col">
+      <ul className="flex flex-col [&>li]:border-t-0">
         <ResolveRow
           // Keyed by the master and the section, as in Settings: a master that changes takes the open confirmation
           // and the "sent" with it.
