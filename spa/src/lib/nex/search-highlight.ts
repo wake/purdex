@@ -180,6 +180,12 @@ function markWindow(total: number, current: number): [number, number] {
  * Matches whose unit is not rendered (still folded) are skipped; the caller
  * expands the current match's `reveal` keys and calls this after that render
  * commits. `current` outside the list marks without scrolling.
+ *
+ * The marks are Ranges over the text nodes as they are now. When React
+ * replaces a text node (new content, a fold toggling, a streaming message
+ * growing) its Ranges collapse and the mark silently disappears, so the
+ * caller must call this again after every commit that can touch the marked
+ * units — the search bar (R3-C2) owns that.
  */
 export function highlightSearch(
   owner: string,
