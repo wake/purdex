@@ -4,6 +4,7 @@ import {
   NEX_HOST_TTL_MS,
   selectHandoffReady,
   selectReady,
+  selectRollupCostShown,
   selectWorkerRollup,
   startNexHostInvalidation,
   useNexHostStore,
@@ -522,6 +523,21 @@ describe('selectors', () => {
     seed({ capabilities: caps({ worker_rollup: 'yes' as unknown as undefined }) })
     expect(selectWorkerRollup(H)(useNexHostStore.getState())).toBeNull()
     expect(selectWorkerRollup('ghost')(useNexHostStore.getState())).toBeNull()
+  })
+
+  it('selectRollupCostShown: only cost_basis "result_evidence" shows the rollup cost (v0.13.1 session_cumulative under-counts)', () => {
+    const rollup = (cost_basis?: string) => ({ task_kinds: [], task_statuses: [], activity_phases: [], cost_basis, subagent_cost: false })
+    seed({ capabilities: caps({ worker_rollup: rollup('result_evidence') }) })
+    expect(selectRollupCostShown(H)(useNexHostStore.getState())).toBe(true)
+    for (const basis of ['session_cumulative', 'something_new', undefined]) {
+      seed({ capabilities: caps({ worker_rollup: rollup(basis) }) })
+      expect(selectRollupCostShown(H)(useNexHostStore.getState())).toBe(false)
+    }
+    seed({})
+    expect(selectRollupCostShown(H)(useNexHostStore.getState())).toBe(false)
+    seed({ phase: 'unavailable', capabilities: caps({ worker_rollup: rollup('result_evidence') }) })
+    expect(selectRollupCostShown(H)(useNexHostStore.getState())).toBe(false)
+    expect(selectRollupCostShown('ghost')(useNexHostStore.getState())).toBe(false)
   })
 
   it('selectHandoffReady is false for an unknown host', () => {

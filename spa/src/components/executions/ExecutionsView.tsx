@@ -10,7 +10,7 @@ import type { ViewProps } from '../../lib/module-registry'
 import { useHostExecutions } from '../../hooks/useHostExecutions'
 import { useHostLook } from '../../lib/host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useNexHostStore, type NexHostPhase } from '../../stores/useNexHostStore'
+import { selectRollupCostShown, useNexHostStore, type NexHostPhase } from '../../stores/useNexHostStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { groupBySource } from '../../lib/nex/execution-groups'
 import { isRefShownNow, useIsRefShown } from '../../lib/shown-hosts'
@@ -41,6 +41,7 @@ export function ExecutionsView({ hostId }: ViewProps) {
   const hostName = useHostLook(id).name
   const entry = useNexHostStore((s) => s.byHost[id])
   const daemonHostId = typeof entry?.capabilities?.host_id === 'string' ? entry.capabilities.host_id : null
+  const showCost = useNexHostStore(selectRollupCostShown(id))
   const { items, phase, error, refetch } = useHostExecutions(id, { enabled: id !== '' })
   const now = useNowTicker()
   const groups = useMemo(() => groupBySource(items), [items])
@@ -93,7 +94,7 @@ export function ExecutionsView({ hostId }: ViewProps) {
           <p data-testid="executions-empty" className="px-3 py-2 text-xs text-text-muted">{t('executions.empty')}</p>
         )}
         {groups.map((group) => (
-          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} onOpen={shown ? open : undefined} />
+          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={shown ? open : undefined} />
         ))}
       </>
     )

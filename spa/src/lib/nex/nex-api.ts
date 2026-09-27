@@ -23,6 +23,7 @@ import {
   type WorkerTasksSnapshot,
 } from './types'
 import { parseTask } from './tasks'
+import { sanitizeSummaryRollup } from './validate-executions'
 
 const PREFIX = '/api/nex'
 
@@ -119,7 +120,8 @@ export function delegateExecution(
 }
 
 export function getExecution(hostId: string, executionId: string): Promise<ExecutionSummary> {
-  return nexFetch(hostId, execPath(executionId)).then((r) => okJson<ExecutionSummary>(r))
+  // R4 T4.1b: the rollup fields get the list rows' coercion before any view reads them.
+  return nexFetch(hostId, execPath(executionId)).then((r) => okJson<unknown>(r)).then(sanitizeSummaryRollup)
 }
 
 /**

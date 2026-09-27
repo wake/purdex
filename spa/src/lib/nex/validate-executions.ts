@@ -99,6 +99,19 @@ const OPTIONAL_STRINGS = [
   'last_turn_reason', 'session_id', 'resume_session_id', 'transcript_path', 'mount_kind', 'principal_id',
 ] as const satisfies readonly (keyof ExecutionSummary)[]
 
+/**
+ * The single GET (`getExecution`, R4 T4.1b): only the rollup fields are
+ * coerced, exactly as on a list row — the summary is never rejected or
+ * otherwise reshaped (the pane has its own handling of the rest). Returns a
+ * copy; a body that is not an object comes back as is.
+ */
+export function sanitizeSummaryRollup(raw: unknown): ExecutionSummary {
+  if (!isRecord(raw)) return raw as ExecutionSummary
+  const out = { ...raw } as unknown as ExecutionSummary
+  applyRollup(out, raw)
+  return out
+}
+
 /** Never throws: a page that is not `{ items: [...] }` is an empty list with `dropped: 1`. */
 export function sanitizeExecutionsPage(raw: unknown): SanitizedExecutionsPage {
   if (!isRecord(raw) || !Array.isArray(raw.items)) return { items: [], dropped: 1 }

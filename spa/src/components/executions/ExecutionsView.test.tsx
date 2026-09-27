@@ -177,6 +177,21 @@ describe('ExecutionsView', () => {
     expect(within(rows[3]).queryByTestId('executions-marker')).toBeNull()
   })
 
+  it('R4 T4.1: the rollup cost shows only when the host\'s worker_rollup.cost_basis is "result_evidence"', () => {
+    const withBasis = (cost_basis: string | undefined) => entryWith({
+      capabilities: { host_id: 'd', worker_rollup: { task_kinds: [], task_statuses: [], activity_phases: [], cost_basis, subagent_cost: false } } as unknown as NexHostEntry['capabilities'],
+    })
+    seedList([row({ id: 'exc_a', cost_usd: 0.25, running_tasks: 1 })])
+    useNexHostStore.setState({ byHost: { [H]: withBasis('session_cumulative') } }) // today's v0.13.1 daemon
+    const { unmount } = render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.queryByTestId('executions-cost')).toBeNull()
+    expect(screen.getByTestId('executions-running')).toHaveTextContent('1') // the rest of the rollup is not gated
+    unmount()
+    useNexHostStore.setState({ byHost: { [H]: withBasis('result_evidence') } })
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.getByTestId('executions-cost')).toHaveTextContent('$0.25')
+  })
+
   it('click opens the singleton tab', () => {
     seedList([row({ id: 'exc_click' })])
     render(<ExecutionsView hostId={H} isActive />)

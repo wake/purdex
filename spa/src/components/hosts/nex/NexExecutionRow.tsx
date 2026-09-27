@@ -6,10 +6,14 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { getNexClientId } from '../../../lib/nex/client-id'
 import { STATE_DOT_CLASSES } from '../../../lib/nex/state-dot'
 import { firstLine, shortId } from '../../../lib/nex/format'
+import { formatUsd } from '../../../lib/nex/format-cost'
+import { rowCostIncludesPriorHistory } from '../../../lib/nex/prior-history'
 import type { ExecutionSummary } from '../../../lib/nex/types'
 
 export interface NexExecutionRowProps {
   row: ExecutionSummary
+  /** The host's rollup cost is trusted (`selectRollupCostShown`, R4 T4.2); false → the cost cell is "—". */
+  showCost?: boolean
   confirmingTerminate: boolean
   pending: boolean
   /** Absent → no "Open" (the host is hidden in this workbench — plan H2d-2). */
@@ -41,6 +45,7 @@ function formatRelativeTime(t: ReturnType<typeof useI18nStore.getState>['t'], ms
 
 export default function NexExecutionRow({
   row,
+  showCost = false,
   confirmingTerminate,
   pending,
   onOpen,
@@ -52,6 +57,10 @@ export default function NexExecutionRow({
   // List rows may omit `lease` entirely — render the holder only
   // when present, "—" otherwise. `(you)` decorates a lease this tab holds.
   const isMine = row.lease != null && row.lease.principal_id.endsWith(`/${getNexClientId()}`)
+  // Rollup columns (R4 T4.2): "—" when the field is absent (an older daemon), and for the cost also when it is
+  // null or the host's cost_basis is not trusted.
+  const costText = showCost && typeof row.cost_usd === 'number' ? formatUsd(row.cost_usd, 2) : null
+  const count = (n: number | undefined) => (typeof n === 'number' ? n : '—')
 
   return (
     <tr className="border-t border-border-subtle hover:bg-surface-secondary/30">
@@ -74,6 +83,22 @@ export default function NexExecutionRow({
       </td>
       <td className="px-3 py-2 text-xs text-text-primary truncate max-w-[240px]">{firstLine(row.brief)}</td>
       <td className="px-3 py-2 text-xs text-text-muted text-right">{row.observers}</td>
+      <td className="px-3 py-2 text-xs text-text-muted text-right whitespace-nowrap tabular-nums" data-testid={`nex-cost-${row.id}`}>
+        {costText !== null ? (
+          <span title={rowCostIncludesPriorHistory(row) ? t('execution.cost.includesPriorHistory') : undefined}>{costText}</span>
+        ) : (
+          '—'
+        )}
+      </td>
+      <td className="px-3 py-2 text-xs text-text-muted text-right tabular-nums" data-testid={`nex-turns-${row.id}`}>
+        {count(row.turn_count)}
+      </td>
+      <td className="px-3 py-2 text-xs text-text-muted font-mono whitespace-nowrap" data-testid={`nex-last-tool-${row.id}`}>
+        {row.last_tool?.name ?? '—'}
+      </td>
+      <td className="px-3 py-2 text-xs text-text-muted text-right tabular-nums" data-testid={`nex-running-${row.id}`}>
+        {count(row.running_tasks)}
+      </td>
       <td className="px-3 py-2 text-xs text-text-muted" data-testid={`nex-lease-${row.id}`}>
         {row.lease ? (
           <span title={row.lease.principal_id}>

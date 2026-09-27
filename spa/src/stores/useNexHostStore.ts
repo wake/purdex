@@ -61,6 +61,18 @@ export function selectWorkerRollup(hostId: string): (s: Pick<NexHostState, 'byHo
 }
 
 /**
+ * Whether the lists may show the rollup `cost_usd` (R4 T4.1). Only
+ * `worker_rollup.cost_basis === "result_evidence"` (nexen v0.13.2+, the same
+ * continuation rule as the pane's `costSummary`) is trusted; v0.13.1's
+ * `"session_cumulative"` under-counts, and any other or missing value is
+ * unknown — hidden too.
+ */
+export function selectRollupCostShown(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
+  const rollup = selectWorkerRollup(hostId)
+  return (s) => rollup(s)?.cost_basis === 'result_evidence'
+}
+
+/**
  * Keep the cache honest against the host store. Same shape as
  * `startPeerCacheInvalidation`: one module-level subscription for the app's
  * lifetime, started from main.tsx; returns its unsubscribe. Two triggers:

@@ -183,6 +183,18 @@ describe('nex-api', () => {
     expect(init.method ?? 'GET').toBe('GET')
   })
 
+  it('R4 T4.1b: getExecution coerces the rollup fields (and only those) like list rows', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({
+      id: 'exc_1', state: 'running', brief: 7,
+      cost_usd: 'x', running_tasks: 1.5, turn_count: -2, last_tool: 'Bash', activity: { phase: 'tool', open_tools: -1 },
+    }))
+    const s = await getExecution(hostId, 'exc_1')
+    expect(s.cost_usd).toBeNull()
+    for (const k of ['running_tasks', 'turn_count', 'last_tool', 'activity'] as const) expect(k in s).toBe(false)
+    expect(s.state).toBe('running')
+    expect(s.brief).toBe(7) // not the rollup: passed through untouched, never rejected
+  })
+
   it('fetchExecutionTasks GETs /tasks?state=running by default, parses items, drops invalid ones', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({
       items: [
