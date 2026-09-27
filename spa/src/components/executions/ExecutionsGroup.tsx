@@ -16,11 +16,13 @@ interface Props {
   /** The daemon's own host id (`capabilities.host_id`) — what it stamps into `origin`; null until known. */
   daemonHostId: string | null
   now: number
+  /** The host's rollup cost is trusted (`selectRollupCostShown`, R4 T4.1). */
+  showCost: boolean
   /** Absent → the rows are listed but not openable (the host is hidden in this workbench — plan H2d-2). */
   onOpen?: (executionId: string) => void
 }
 
-export function ExecutionsGroup({ group, daemonHostId, now, onOpen }: Props) {
+export function ExecutionsGroup({ group, daemonHostId, now, showCost, onOpen }: Props) {
   const t = useI18nStore((s) => s.t)
   const key = KNOWN_SOURCES[group.source]
   const label = key ? t(key) : group.source
@@ -30,13 +32,13 @@ export function ExecutionsGroup({ group, daemonHostId, now, onOpen }: Props) {
       <div className="px-3 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-text-muted truncate">{label}</div>
       {onOpen ? (
         group.rows.map((row) => (
-          <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} onOpen={() => onOpen(row.id)} />
+          <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={() => onOpen(row.id)} />
         ))
       ) : (
         // Non-openable rows (a hidden host, plan H2d-2) are list items; this is their list.
         <div role="list" aria-label={label} className="flex flex-col">
           {group.rows.map((row) => (
-            <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} />
+            <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} showCost={showCost} />
           ))}
         </div>
       )}

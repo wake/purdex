@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { costSummary } from './cost-summary'
 import type { StreamMessage } from './message-types'
-import { costIncludesPriorHistory } from './prior-history'
+import { costIncludesPriorHistory, rowCostIncludesPriorHistory } from './prior-history'
 import type { ExecutionSummary } from './types'
 
 const summary = (extra: Partial<ExecutionSummary> = {}): ExecutionSummary => ({
@@ -71,5 +71,30 @@ describe('costIncludesPriorHistory', () => {
     expect(costIncludesPriorHistory(summary({
       state: 'idle', resume_session_id: 'c191a5a0', last_turn_reason: 'session_expired',
     }), costed)).toBe(true)
+  })
+})
+
+// R4 T4.1: a list row has no history — the row's own rollup `cost_usd` is the
+// "something was billed" evidence; the resume checks are the same ones.
+describe('rowCostIncludesPriorHistory', () => {
+  it('a successful hand-over with a positive rollup cost → true', () => {
+    expect(rowCostIncludesPriorHistory(summary({ resume_session_id: 'c191a5a0', cost_usd: 0.11 }))).toBe(true)
+  })
+
+  it('no resume_session_id → false', () => {
+    expect(rowCostIncludesPriorHistory(summary({ cost_usd: 0.11 }))).toBe(false)
+  })
+
+  it('no cost yet (absent, null, 0) → false', () => {
+    expect(rowCostIncludesPriorHistory(summary({ resume_session_id: 'c191a5a0' }))).toBe(false)
+    expect(rowCostIncludesPriorHistory(summary({ resume_session_id: 'c191a5a0', cost_usd: null }))).toBe(false)
+    expect(rowCostIncludesPriorHistory(summary({ resume_session_id: 'c191a5a0', cost_usd: 0 }))).toBe(false)
+  })
+
+  it('rejected, or turn 1 failed its resume gate → false', () => {
+    expect(rowCostIncludesPriorHistory(summary({ state: 'rejected', resume_session_id: 'c191a5a0', reject_reason: 'x', cost_usd: 0.1 }))).toBe(false)
+    expect(rowCostIncludesPriorHistory(summary({
+      state: 'failed', resume_session_id: 'c191a5a0', terminal_reason: 'session_expired', cost_usd: 0.1,
+    }))).toBe(false)
   })
 })

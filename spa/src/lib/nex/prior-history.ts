@@ -28,12 +28,26 @@
 // result, terminated first). There is no prior spend to note until a
 // top-level `result` actually billed something, so the note also needs one
 // costed turn in the pane's `costSummary` (computed once by the caller).
+//
+// R4 T4.1: a list row has no history loaded; there the row's own rollup
+// `cost_usd` (a number > 0) is the "something was billed" evidence. Both
+// call sites share `turnOneResumed`.
 import type { CostSummary } from './cost-summary'
 import type { ExecutionSummary } from './types'
 
-export function costIncludesPriorHistory(summary: ExecutionSummary | null, cost: CostSummary | null): boolean {
+/** The summary-only half: a hand-over set `resume_session_id`, and turn 1 did not fail to resume. */
+function turnOneResumed(summary: ExecutionSummary | null): summary is ExecutionSummary {
   if (!summary?.resume_session_id) return false
-  if (!cost?.turns.some((t) => t.costUsd > 0)) return false
   if (summary.state === 'rejected' || summary.reject_reason) return false
   return summary.terminal_reason !== 'session_expired'
+}
+
+/** The pane: evidence is a costed top-level result in its own `costSummary`. */
+export function costIncludesPriorHistory(summary: ExecutionSummary | null, cost: CostSummary | null): boolean {
+  return turnOneResumed(summary) && cost?.turns.some((t) => t.costUsd > 0) === true
+}
+
+/** A list row: evidence is the rollup `cost_usd` (a number > 0). */
+export function rowCostIncludesPriorHistory(row: ExecutionSummary): boolean {
+  return turnOneResumed(row) && typeof row.cost_usd === 'number' && row.cost_usd > 0
 }
