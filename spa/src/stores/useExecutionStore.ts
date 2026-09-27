@@ -6,9 +6,9 @@
 import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
 import { compositeKey } from '../lib/composite-key'
-import { applyDurableEvent, defaultExecutionState, type ExecutionState } from '../lib/nex/event-reducer'
+import { applyDurableEvent, applyTasksSnapshot, defaultExecutionState, type ExecutionState } from '../lib/nex/event-reducer'
 import { applyTransientFrame } from '../lib/nex/partial'
-import type { ExecutionSummary, NexEvent } from '../lib/nex/types'
+import type { ExecutionSummary, NexEvent, WorkerTasksSnapshot } from '../lib/nex/types'
 
 export function executionKey(hostId: string, executionId: string): string {
   return compositeKey(hostId, executionId)
@@ -46,6 +46,8 @@ interface ExecutionStore {
    * no entry for an execution nobody has otherwise touched.
    */
   applyTransient: (hostId: string, executionId: string, frames: { kind: string; payload: Record<string, unknown> }[]) => void
+  /** Merge a `/tasks` snapshot into the task table (nexen #83 correction; see `applyTasksSnapshot`). */
+  applyTasksSnapshot: (hostId: string, executionId: string, snapshot: WorkerTasksSnapshot) => void
   setHistoryLoaded: (hostId: string, executionId: string, v: boolean) => void
   setSse: (hostId: string, executionId: string, status: ExecutionState['sse'], err?: string | null) => void
   setLease: (hostId: string, executionId: string, lease: ExecutionState['lease']) => void
@@ -85,6 +87,8 @@ export const useExecutionStore = create<ExecutionStore>()(subscribeWithSelector(
 
     applyTransient: (h, e, frames) =>
       patch(h, e, (c) => frames.reduce((s, f) => applyTransientFrame(s, f.kind, f.payload), c)),
+
+    applyTasksSnapshot: (h, e, snapshot) => patch(h, e, (c) => applyTasksSnapshot(c, snapshot)),
 
     setHistoryLoaded: (h, e, v) => patch(h, e, (c) => ({ ...c, historyLoaded: v })),
 
