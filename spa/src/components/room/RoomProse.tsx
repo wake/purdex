@@ -12,12 +12,18 @@ interface Props {
   content: string
   /** Append a blinking cursor after the markdown body (the P-B2 typewriter). */
   streaming?: boolean
+  /**
+   * The search anchor, on the markdown body only (not the cursor). Rendered
+   * markdown is not the source text; search-highlight locates matches in it
+   * by ordinal, not offset.
+   */
+  searchUnit?: string
 }
 
-export default function RoomProse({ content, streaming }: Props) {
+export default function RoomProse({ content, streaming, searchUnit }: Props) {
   return (
     <div data-testid="room-prose" className="max-w-[90ch] text-sm leading-[1.7] text-text-primary">
-      <div className="prose prose-invert prose-sm max-w-none">
+      <div data-search-unit={searchUnit} className="prose prose-invert prose-sm max-w-none">
         <ReactMarkdown rehypePlugins={[rehypeHighlight]}>
           {content}
         </ReactMarkdown>

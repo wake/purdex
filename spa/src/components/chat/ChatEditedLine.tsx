@@ -43,7 +43,7 @@ export default function ChatEditedLine({ foldKey, diff }: ChatEditedLineProps) {
       {expanded && (
         <div data-testid="chat-edited-diff" className="mt-1">
           {/* The full path: the line only names the file. */}
-          <ToolDiffView diff={diff} foldKey={foldKey} showPath />
+          <ToolDiffView diff={diff} foldKey={foldKey} showPath searchKey={foldKey} />
         </div>
       )}
     </div>

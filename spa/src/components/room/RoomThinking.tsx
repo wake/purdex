@@ -22,20 +22,22 @@ interface Props {
   foldKey: string
   /** The P-B2 typewriter: a cursor after the label, and at the end of the text while it is on screen. */
   streaming?: boolean
+  /** The search anchor of the thought's text (a durable block's; a streaming one has none). */
+  searchUnit?: string
 }
 
 function wordCount(text: string): number {
   return text.split(/\s+/).filter(Boolean).length
 }
 
-export default function RoomThinking({ content, foldKey, streaming }: Props) {
+export default function RoomThinking({ content, foldKey, streaming, searchUnit }: Props) {
   if (content.trim() === '') return null
-  return <Thought content={content} foldKey={foldKey} streaming={streaming} />
+  return <Thought content={content} foldKey={foldKey} streaming={streaming} searchUnit={searchUnit} />
 }
 
 // Split so the empty case returns before the fold registers itself: an empty
 // thought is not a foldable thing, and expand-all should not count it.
-function Thought({ content, foldKey, streaming }: Props) {
+function Thought({ content, foldKey, streaming, searchUnit }: Props) {
   const t = useI18nStore((s) => s.t)
   const [expanded, toggle] = useFold(`${foldKey}:thinking`)
   const plan = foldPlan({ text: content })
@@ -49,7 +51,7 @@ function Thought({ content, foldKey, streaming }: Props) {
       </div>
       <div data-testid="thinking-content" className="pb-1 font-mono">
         <FoldedOutput text={content} plan={plan} expanded={expanded} onToggle={toggle}
-          trailing={streaming ? <StreamCursor /> : undefined} />
+          trailing={streaming ? <StreamCursor /> : undefined} searchUnit={searchUnit} />
       </div>
     </div>
   )

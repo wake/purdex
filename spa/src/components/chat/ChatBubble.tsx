@@ -24,11 +24,17 @@ const SIDE = {
  * breaks kept; a slash command gets the mono face. `pending` dims it until
  * message_accepted; `children` follow the text (the pending line's `queued` tag).
  */
-export function ChatUserBubble({ text, pending, children }: { text: string; pending?: boolean; children?: ReactNode }) {
+export function ChatUserBubble({ text, pending, children, searchUnit }: {
+  text: string
+  pending?: boolean
+  children?: ReactNode
+  /** The search anchor of a durable line's text. */
+  searchUnit?: string
+}) {
   const face = text.startsWith('/') ? 'font-mono text-[13px]' : 'text-sm'
   return (
     <ChatBubble side="user" className={pending ? `${face} opacity-60` : face}>
-      <p className="whitespace-pre-wrap break-words">{text}{children != null && children !== false && <> {children}</>}</p>
+      <p className="whitespace-pre-wrap break-words"><span data-search-unit={searchUnit}>{text}</span>{children != null && children !== false && <> {children}</>}</p>
     </ChatBubble>
   )
 }

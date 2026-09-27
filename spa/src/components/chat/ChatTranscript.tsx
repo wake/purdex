@@ -23,6 +23,7 @@ import { partialBlockKey, partialChatVersionOf, partialToolUses } from '../../li
 import { blockKey, indexOperations, toolResultText, type BlockKey } from '../../lib/nex/operations'
 import { classifyTurnOperations, toolEntryFor, type TurnOperation } from '../../lib/nex/operation-status'
 import { groupTurns, INTERRUPT_TEXT, type RoomTurn } from '../../lib/nex/turns'
+import { chatToolsKey, searchUnitId } from '../../lib/nex/transcript-search'
 import ThinkingIndicator from '../ThinkingIndicator'
 import RoomTurnGroup from '../room/RoomTurnGroup'
 import RoomProse from '../room/RoomProse'
@@ -78,8 +79,10 @@ function ChatOperationLine({ op, ctx }: { op: TurnOperation; ctx: RenderCtx }) {
  * One durable top-level message as chat rows; null when it has nothing chat
  * draws. `lineAt(j)` is the operation line (if any) that sits at block j.
  */
-function ChatMessage({ msg, interrupted, lineAt }: {
+function ChatMessage({ msg, i, interrupted, lineAt }: {
   msg: StreamMessage
+  /** Its position in the transcript's messages (search anchors are named by it). */
+  i: number
   interrupted: string
   lineAt: (j: number) => ReactNode
 }) {
@@ -93,7 +96,7 @@ function ChatMessage({ msg, interrupted, lineAt }: {
     ;(msg as AssistantMessage).message.content.forEach((block, j) => {
       // Thinking draws nothing in chat.
       if (block.type === 'text' && block.text?.trim()) {
-        rows.push(<ChatBubble key={j} side="agent"><RoomProse content={block.text} /></ChatBubble>)
+        rows.push(<ChatBubble key={j} side="agent"><RoomProse content={block.text} searchUnit={searchUnitId(blockKey(i, j), 'text')} /></ChatBubble>)
       } else if (block.type === 'tool_use') {
         line(j)
       }
@@ -118,7 +121,7 @@ function ChatMessage({ msg, interrupted, lineAt }: {
         return
       }
       // Your line is never markdown; a slash command gets the mono face (ChatUserBubble).
-      rows.push(<ChatUserBubble key={j} text={block.text} />)
+      rows.push(<ChatUserBubble key={j} text={block.text} searchUnit={searchUnitId(blockKey(i, j), 'text')} />)
     })
   }
 
@@ -196,7 +199,7 @@ export default function ChatTranscript({
           const count = plain.length + streaming.length
           const toolsLine = count > 0 && (
             <ChatToolsLine
-              foldKey={`${keyPrefix}-turn-${ti}:chat-tools`}
+              foldKey={chatToolsKey(keyPrefix, ti)}
               count={count}
               running={streaming.length > 0 || plain.some((o) => o.status === 'running')}
               renderOperations={() => (
@@ -228,7 +231,7 @@ export default function ChatTranscript({
                   const i = turn.start + k
                   return index.childIndexes.has(i)
                     ? null
-                    : <ChatMessage key={`${keyPrefix}-${i}`} msg={msg} interrupted={interrupted} lineAt={(j) => lines.get(blockKey(i, j))} />
+                    : <ChatMessage key={`${keyPrefix}-${i}`} msg={msg} i={i} interrupted={interrupted} lineAt={(j) => lines.get(blockKey(i, j))} />
                 })}
                 {ti === lastTurn && hasPartial && <ChatPartialGroup key={`${keyPrefix}-partial`} partial={partial} />}
                 {/* Only streaming calls so far: the line comes with them, after
