@@ -1,9 +1,9 @@
-# "No tmux server" is an idle host, not a broken one (#1108, #1474) — design
+# "No tmux server" is a usable host, not a broken one (#1108, #1474) — design
 
 ## Background
 
 #1473 (alpha.458) made the daemon recognise both "no server" forms, so a host
-without a tmux server now reports an empty session list. Two problems remain:
+without a tmux server now reports an empty session list. Three problems remain:
 
 1. **The daemon still calls "no server" `unavailable`.** `TmuxAlive()` is
    `tmux info` succeeding; when it fails for any reason the watcher broadcasts
@@ -14,9 +14,7 @@ without a tmux server now reports an empty session list. Two problems remain:
    and brought tmux up. "No server" is the normal empty state after a reboot.
 2. **The SPA never learns the tmux state when the daemon starts with tmux
    down** (#1474 §2): the value is only broadcast on an edge, and nothing is
-   sent to a new subscriber. Fixing that alone would make things worse — every
-   rebooted host would then be marked `unavailable` and lose its create button —
-   so it ships together with (1).
+   sent to a new subscriber.
 3. **A pane waits forever on `connecting...`** when the host is reachable but
    its `sessions` payload never arrives (#1474 §1): the terminal attach gate
    only opens on that payload.
@@ -25,7 +23,8 @@ without a tmux server now reports an empty session list. Two problems remain:
 error. The most likely cause is the post-create check racing the watcher:
 `SessionLauncher` checks `isHostLive` milliseconds after the create returns,
 while `tmuxState` stays `unavailable` until the next 5 s tick notices the new
-server (#1108 note ②). This design removes both halves of that race.
+server (#1108 note ②). With (1) fixed the state is never `unavailable` for a
+missing server, so that race cannot fire.
 
 ## Decisions (user, 2026-09-27)
 
@@ -36,96 +35,105 @@ server (#1108 note ②). This design removes both halves of that race.
   (en: "Connected to the host, but the tmux session list can't be read. Retrying
   automatically."). It returns to normal by itself when the list arrives.
 
+## Key choice: no new wire value
+
+The `tmux` event keeps its two values; their meaning becomes **"can tmux be
+used"** rather than "is a server running":
+
+| Wire value | Server state |
+|---|---|
+| `ok` | a server answers, **or** no server exists (creating a session starts one) |
+| `unavailable` | tmux cannot be used: binary missing / not executable, `tmux info` timing out, any other `tmux info` failure |
+
+A new `idle` value was considered and rejected (plan review, 2026-09-27): the
+Electron app loads its **bundled** renderer by default (`electron/window-manager.ts`
+`app://./index.html`; the dev server only via Settings → Development), so any
+installed `.app` older than the change would map `idle` to `unavailable`
+(`useMultiHostEventWs.ts:197`) and block create on every rebooted host. The
+decided UX renders "no server" exactly like `ok`, so no client needs the
+distinction. Old SPA + new daemon and new SPA + old daemon both behave
+correctly.
+
 ## Design
 
-### Tmux state has three values
-
-| Value | Meaning | SPA |
-|---|---|---|
-| `ok` | a tmux server answers | normal |
-| `idle` | **new** — no tmux server (socket stale or absent); creating a session starts one | normal: green, no warning, create allowed |
-| `unavailable` | tmux cannot be used (binary missing / not executable, any other `tmux info` failure) | as today: yellow warning, notification, create blocked |
-
-### Phase 1 — SPA (PR-1, ships first)
-
-A daemon that sends `idle` to an SPA that does not know it would be mapped to
-`unavailable` (`useMultiHostEventWs.ts:197` maps every non-`ok` value to
-`unavailable`), which would block create on every rebooted host. So the SPA
-learns `idle` first; the current daemon never sends it, so PR-1 changes nothing
-until PR-2 is deployed.
-
-- S1. `HostRuntime.tmuxState`: `'ok' | 'idle' | 'unavailable'`.
-  `useMultiHostEventWs`: `ok` → `ok`, `idle` → `idle`, anything else →
-  `unavailable` (unknown values stay conservative).
-- S2. Every existing reader already compares against `'unavailable'` only
-  (`connectionErrorMessage`, `isHostLive`, `SessionSection.createDisabled`,
-  `SessionsSection.isOffline`, `StatusBar`, `OverviewSection`, `HostSidebar`),
-  so `idle` renders as normal with no change there. The notification
-  dispatcher's L3 rule becomes "into `unavailable` from `ok` **or `idle`**"
-  (a host whose tmux breaks while idle is still worth a notification); `ok` ↔
-  `idle` never notifies. Tests lock each reader's `idle` rendering.
-- S3. Attach-stall message. A pane bound to a known host whose attach gate is
-  closed shows the 10 s message when **both** hold continuously for 10 s:
-  the gate is closed (`runtime.attachReady !== true`) and the daemon is
-  reachable (`runtime.daemonState === 'connected'`). Either condition breaking
-  resets the timer. Implemented as a hook `useAttachStall(hostId, 10_000)` in
-  `SessionPaneContent`, which passes the text through `TerminalView`'s existing
-  `connectingMessage` prop. Not shown for terminated or missing-host panes
-  (they render other components). While the daemon is unreachable the existing
-  overlay text is unchanged.
-- S4. i18n keys in `en.json` and `zh-TW.json`.
-
-### Phase 2 — daemon (PR-2)
+### Daemon
 
 - D1. `tmux.ServerState` (`ServerUp`, `ServerAbsent`, `ServerBroken`) and
-  `Executor.ServerState() ServerState`. `RealExecutor`: `tmux info` (5 s
-  timeout, as `TmuxAlive` today) → nil error: `ServerUp`; `*exec.ExitError`
-  whose stderr satisfies `IsNoServer`: `ServerAbsent`; anything else
-  (exec not found, other exit): `ServerBroken`. `TmuxAlive()` becomes
-  `ServerState() == ServerUp`, so its callers are unchanged.
-  `FakeExecutor.SetAlive(v)` maps to Up/Absent; add `SetServerState`.
-- D2. The watcher tracks the down kind: `watcherState` gains `downState string`
-  (`idle` | `unavailable`), meaningful while `tmuxAlive` is false.
-  - `Start()`: seed from `ServerState()` (today it seeds `tmuxAlive` only).
-  - `tickNormal`, empty list and not alive: `setDown(kind)`; broadcast the kind
-    when the value the SPA would see changes (ok → idle, ok → unavailable).
-  - `tickTmuxDown`: `ServerUp` → recovery (below). Otherwise, if the down kind
-    changed (idle ↔ unavailable), broadcast the new kind.
-- D3. Current state on subscribe: register an `OnSubscribe` callback that
-  queues one `tmux` frame (`ok` / `idle` / `unavailable`) for the new
-  subscriber — the same frame `Events.Broadcast("", "tmux", v)` produces.
-  Fixes #1474 §2.
-- D4. Recovery is one guarded method, `markServerUp()`: only the caller whose
-  `setTmuxAlive(true)` actually flips the state runs clear-hooks → ensureHooks →
-  broadcast `ok` → `notifyWaitFor(true)` → `broadcastSessions()`. Used by
-  `tickTmuxDown` and by D5; the guard makes concurrent callers safe (one
-  broadcast, not two).
-- D5. A successful create (`create.go`, after the session is confirmed and
-  listed) calls `markServerUp()` when the watcher still thinks tmux is down.
-  The creating client and every other client learn `ok` and the new list
-  immediately instead of on the next tick (removes #1108 race ②).
+  `Executor.ServerState() ServerState`. `RealExecutor`: `tmux info` under a 5 s
+  timeout (as `TmuxAlive` today) → nil error: `ServerUp`; `*exec.ExitError`
+  whose stderr satisfies `IsNoServer`: `ServerAbsent`; anything else (exec not
+  found, other exit, deadline): `ServerBroken`. `TmuxAlive()` stays
+  `ServerState() == ServerUp` — the watcher's internal up/down state machine
+  (wait-for gate, hooks, `tickNormal` vs `tickTmuxDown`) is unchanged.
+  `FakeExecutor`: `SetAlive(v)` maps to Up/Absent; add `SetServerState`.
+- D2. The **reported** value is separate from the internal up/down:
+  `reported = ok` unless the last probe said `ServerBroken`. `watcherState`
+  gains `broken bool`. Every place that probes (`Start()`, `tickNormal`'s empty
+  list check, `tickTmuxDown`) records the probe result; a `broken` change
+  broadcasts the new reported value. Internal up → down with the server merely
+  absent broadcasts nothing (the reported value stays `ok`).
+- D3. Current value on subscribe: an `OnSubscribe` callback queues one `tmux`
+  frame with the reported value. Ordering: the reported-value change + its
+  broadcast and the subscribe callback's read + queue happen under one mutex
+  (`statusMu`), so a new subscriber cannot receive a value older than one
+  broadcast after it was added. (Events adds the subscriber before callbacks
+  run, `core/events.go`; with the mutex, whichever of broadcast / snapshot runs
+  second carries the newest value.)
+- D4. After a successful create (`create.go`, after the session is confirmed
+  and listed), if the watcher is internally down, run the recovery path
+  immediately — the body of today's `tickTmuxDown` recovery, factored into
+  `markServerUp()` — so hooks, wait-for and the sessions broadcast do not wait
+  for the next 5 s tick. `markServerUp()` runs the recovery only for the caller
+  whose `setTmuxAlive(true)` flips the state. A `tickNormal` that probed "down"
+  before the create and writes after it can still flip the internal state back;
+  that is self-healing (the next `tickTmuxDown` probe sees Up and recovers) and
+  never changes the reported value, so the SPA sees nothing.
+
+### SPA
+
+- S1. Attach-stall message: a `tmux-session` pane bound to a known host shows
+  the 10 s message **while its terminal is not yet attached** (the only time
+  `TerminalView` shows an overlay; an attached terminal keeps working when the
+  host-events connection drops, and needs no message). Condition, held
+  continuously for 10 s: the attach gate is closed
+  (`runtime.attachReady !== true`) **and** the daemon is reachable
+  (`runtime.daemonState === 'connected'`). `status` flapping between
+  `reconnecting` and `connected` during the daemon's subscribe-retry loop does
+  not reset it (`daemonState` stays `connected` across an events-WS close,
+  `useMultiHostEventWs.ts:231-247`). Either condition breaking resets the timer.
+  Hook `useAttachStall(hostId, 10_000)` in `SessionPaneContent`, passed through
+  `TerminalView`'s existing `connectingMessage` prop.
+- S2. i18n key `session.attach_stalled` in `en.json` and `zh-TW.json`.
+
+No other SPA change: every reader already treats anything but `unavailable` as
+usable, and #1108's three gates only block on `unavailable`, which now means
+tmux is genuinely unusable — where blocking is correct.
 
 ## Non-goals
 
-- A persistently failing list read does not flip the state to `unavailable`
-  (the pane stall message covers the user-visible side). Tracked in #1478's
-  spirit if needed later.
+- A persistently failing list read does not flip the reported value to
+  `unavailable` (the pane stall message covers the user-visible side).
 - #1478 items (A1/A4/A5).
 
 ## Acceptance
 
-- PR-1: unit tests for S1 mapping (incl. unknown → unavailable), S2 per reader
-  (`idle` = normal; create enabled; no notification on ok→idle; notification on
-  idle→unavailable), S3 hook with fake timers (10 s threshold, reset on gate
-  open / daemon unreachable, no message before 10 s). `pnpm run lint`,
-  `npx tsc --noEmit -p tsconfig.app.json`, `npx vitest run` green.
-- PR-2: unit tests for D1 classification (fake tmux on PATH: success, stale,
-  absent, other error, missing binary), D2 transitions and broadcast values,
-  D3 frame on subscribe for each state, D4 single broadcast under concurrent
-  callers (`-race`), D5 create with watcher down → `ok` + sessions broadcast
-  without waiting for a tick. Mutation: map `ServerAbsent` to `unavailable` →
-  a D2 test fails.
-- Real host (air26, after PR-2 deploy): `kill-server` + remove socket → SPA
-  shows the host green with no sessions and the create button enabled; create
-  from the SPA → session opens with no `launcher.created_offline`; stop tmux
-  entirely (rename the binary is **not** done — covered by unit tests only).
+- Daemon unit tests: D1 classification with a fake `tmux` on PATH (exit 0 → Up;
+  stale and absent-socket stderr → Absent; other error → Broken; tmux not on
+  PATH → Broken; a hung `tmux info` → Broken after the deadline — make the
+  deadline injectable for the test). D2: Up→Absent broadcasts nothing;
+  Up→Broken broadcasts `unavailable`; Absent→Broken broadcasts `unavailable`;
+  Broken→Absent broadcasts `ok`; repeated same-state ticks broadcast nothing.
+  D3: first `tmux` frame for a new subscriber is `ok` for Up and Absent,
+  `unavailable` for Broken; a concurrent change + subscribe never leaves the
+  subscriber's last frame stale (`-race`). D4: create with the watcher down
+  → hooks installed and a `sessions` frame broadcast before any tick; two
+  concurrent `markServerUp` → one recovery.
+- Mutation: classify `ServerAbsent` as broken → a D2 test fails.
+- SPA unit tests: `useAttachStall` with fake timers (9.9 s false; 10 s true;
+  gate opens → false; `daemonState` unreachable → false and restarts; status
+  flapping `reconnecting`/`connected` with gate closed and daemon connected
+  across 10 s → true). `SessionPaneContent` renders the message when stalled
+  and the terminal is not attached.
+- Real host (air26 after deploy): `kill-server` + remove socket → host green,
+  no "tmux 環境無法連線", create from the SPA opens the session with no
+  `launcher.created_offline`.
