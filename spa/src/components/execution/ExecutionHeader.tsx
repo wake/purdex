@@ -11,6 +11,9 @@
 // `formatUsd` so they can never disagree on a value. Click toggles the
 // `CostPanel` (H3): the header owns the open flag and the anchor ref, and
 // `FloatingPanel` handles Escape / outside-click through that ref.
+// After a successful hand-over both the tooltip and the panel add a
+// "includes spend from before the hand-over" note (R4 T2.2 Q3; the condition
+// and why it reads `terminal_reason` are in `lib/nex/prior-history.ts`).
 // The name toggles `WorkerInfoPanel` (provider, profile, full cwd, session).
 // Narrow (the root is a `@container`): at `@max-md` the header is only name +
 // state + an overflow trigger (spec §4.7); the cost, the two lease-backed
@@ -36,6 +39,7 @@ import type { ExecutionViewMode } from '../../types/tab'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import type { CostSummary } from '../../lib/nex/cost-summary'
 import { formatTokens, formatUsd } from '../../lib/nex/format-cost'
+import { costIncludesPriorHistory } from '../../lib/nex/prior-history'
 import { formatDuration } from '../../lib/nex/format-duration'
 
 export interface ExecutionHeaderProps {
@@ -172,6 +176,8 @@ export default function ExecutionHeader({
     api: formatDuration(cost.apiMs), wall: formatDuration(cost.durationMs),
   }) : ''
   const costLabel = cost ? formatUsd(cost.totalUsd, 2) : t('execution.cost.loading')
+  // Q3 (R4 T2.2): a hand-over's turn 1 bills the resumed session's earlier spend.
+  const priorHistory = costIncludesPriorHistory(summary)
   const terminateClick = () => {
     if (confirming) { setConfirming(false); onTerminate(); return true }
     setConfirming(true)
@@ -193,7 +199,12 @@ export default function ExecutionHeader({
       onClick={() => { setCostFromOverflow(false); setCostOpen((v) => !v) }}
       className="relative shrink-0 tabular-nums hover:underline disabled:no-underline disabled:cursor-default">
       {costLabel}
-      {cost && !costOpen && <HoverTooltip id={costTipId} placement="top">{costLine}</HoverTooltip>}
+      {cost && !costOpen && (
+        <HoverTooltip id={costTipId} placement="top">
+          {costLine}
+          {priorHistory && <span data-testid="cost-prior-history-tip" className="block">{t('execution.cost.includesPriorHistory')}</span>}
+        </HoverTooltip>
+      )}
     </button>
   )
 
@@ -261,7 +272,7 @@ export default function ExecutionHeader({
       )}
       {!chat && summary && infoOpen && <WorkerInfoPanel summary={summary} anchorRef={nameRef} onClose={() => setInfoOpen(false)} />}
       {cost && costOpen && (
-        <CostPanel summary={cost} hostId={hostId} anchorRef={costFromOverflow ? overflowRef : costRef} onClose={() => setCostOpen(false)} />
+        <CostPanel summary={cost} hostId={hostId} priorHistory={priorHistory} anchorRef={costFromOverflow ? overflowRef : costRef} onClose={() => setCostOpen(false)} />
       )}
     </div>
   )

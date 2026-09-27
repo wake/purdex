@@ -151,6 +151,17 @@ describe('CostPanel', () => {
     expect(note.textContent).toBe('1 turns without a per-model split')
   })
 
+  // R4 T2.2 (Q3)
+  it('hand-over note: shown under the totals only when priorHistory', () => {
+    renderPanel(fixtureSummary)
+    expect(screen.queryByTestId('cost-prior-history')).toBeNull()
+    cleanup()
+    const anchor = document.createElement('button')
+    document.body.appendChild(anchor)
+    render(<CostPanel summary={fixtureSummary} hostId="h1" anchorRef={{ current: anchor }} onClose={vi.fn()} priorHistory />)
+    expect(screen.getByTestId('cost-prior-history').textContent).toBe('Includes spend from before the hand-over')
+  })
+
   it('models section is hidden when models is empty and nothing is unsplit', () => {
     const s: CostSummary = { ...fixtureSummary, models: [], unsplitTurns: 0 }
     renderPanel(s)

@@ -23,6 +23,8 @@ export interface CostPanelProps {
   hostId: string
   anchorRef: RefObject<HTMLElement | null>
   onClose: () => void
+  /** The total includes spend from before a hand-over (R4 T2.2 Q3, `costIncludesPriorHistory`). */
+  priorHistory?: boolean
 }
 
 const CELL = 'px-1.5 py-0.5'
@@ -65,7 +67,7 @@ function TurnRow({ turn, t }: { turn: TurnCost; t: (key: string) => string }) {
   )
 }
 
-export default function CostPanel({ summary, hostId, anchorRef, onClose }: CostPanelProps) {
+export default function CostPanel({ summary, hostId, anchorRef, onClose, priorHistory = false }: CostPanelProps) {
   const t = useI18nStore((s) => s.t)
   const width = usePanelWidth()
   const turnsRef = useRef<HTMLDivElement>(null)
@@ -127,6 +129,9 @@ export default function CostPanel({ summary, hostId, anchorRef, onClose }: CostP
         <div data-testid="cost-totals" className="tabular-nums">
           {formatUsd(summary.totalUsd)} · {turns.length} {t('execution.cost.turns')} · {summary.rounds} {t('execution.cost.rounds')} · {formatDuration(summary.apiMs)} API / {formatDuration(summary.durationMs)} wall
         </div>
+        {priorHistory && (
+          <div data-testid="cost-prior-history" className="text-text-muted">{t('execution.cost.includesPriorHistory')}</div>
+        )}
 
         {anyTokens && (
           <div data-testid="cost-tokens" className="grid grid-cols-4 gap-2 tabular-nums">

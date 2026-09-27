@@ -650,6 +650,7 @@
   "execution.cost.turn": "#",
   "execution.cost.quota": "Host quota — {{account}}",
   "execution.cost.turn_error": "error",
+  "execution.cost.includesPriorHistory": "Includes spend from before the hand-over",
   "execution.interrupt": "Interrupt",
   "execution.more_actions": "More actions",
   "execution.terminate": "Terminate",

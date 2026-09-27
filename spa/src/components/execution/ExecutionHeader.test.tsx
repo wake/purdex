@@ -359,6 +359,37 @@ describe('ExecutionHeader', () => {
       expect(tip.className).toMatch(/\bopacity-100\b/)
     })
 
+    // R4 T2.2 (Q3): a hand-over's first turn resumes an outside session, so its
+    // result carries spend from before the hand-over.
+    describe('hand-over note (Q3)', () => {
+      const note = 'Includes spend from before the hand-over'
+      const cost = () => costSummary(fixturePayloads)
+
+      it('successful hand-over → tooltip adds the note, and so does the panel', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary({ resume_session_id: 'c191a5a0' })} cost={cost()} />)
+        const tip = screen.getByRole('tooltip')
+        expect(tip.textContent).toContain('12 turns · $0.1973')
+        expect(within(tip).getByTestId('cost-prior-history-tip').textContent).toBe(note)
+        fireEvent.click(costBtn())
+        expect(screen.getByTestId('cost-prior-history').textContent).toBe(note)
+      })
+
+      it('no resume_session_id → no note anywhere', () => {
+        render(<ExecutionHeader {...baseProps} summary={summary()} cost={cost()} />)
+        expect(screen.getByRole('tooltip').textContent).not.toContain(note)
+        fireEvent.click(costBtn())
+        expect(screen.queryByTestId('cost-prior-history')).toBeNull()
+      })
+
+      it('turn 1 resume rejected (terminal_reason session_expired) → no note', () => {
+        const s = summary({ state: 'failed', resume_session_id: 'c191a5a0', terminal_reason: 'session_expired', last_turn_reason: 'session_expired' })
+        render(<ExecutionHeader {...baseProps} summary={s} cost={cost()} />)
+        expect(screen.getByRole('tooltip').textContent).not.toContain(note)
+        fireEvent.click(costBtn())
+        expect(screen.queryByTestId('cost-prior-history')).toBeNull()
+      })
+    })
+
     // Codex R2 A1: header and tooltip share formatUsd — a MAX_VALUE cost never renders 'Infinity'.
     it('two MAX_VALUE costs → header text starts with $ and never contains Infinity; tooltip agrees', () => {
       const big = { type: 'result', total_cost_usd: Number.MAX_VALUE } as StreamMessage
