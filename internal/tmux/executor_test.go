@@ -585,3 +585,101 @@ exit 99
 		t.Errorf("HasPane(\"\") = true, want false")
 	}
 }
+
+// installFailingTmux puts a fake tmux first on PATH that prints stderr and
+// exits 1, whatever its arguments. The text goes through a file so a path
+// with shell metacharacters needs no quoting.
+func installFailingTmux(t *testing.T, stderr string) {
+	t.Helper()
+	dir := t.TempDir()
+	msg := filepath.Join(dir, "stderr.txt")
+	if err := os.WriteFile(msg, []byte(stderr+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ncat '"+msg+"' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// absentSocketStderr is what tmux prints when its socket file does not exist
+// (after a reboot wiped /tmp): no server, not a fault (#1473).
+func absentSocketStderr(t *testing.T) string {
+	return "error connecting to " + filepath.Join(t.TempDir(), "tmux-501", "default") + " (No such file or directory)"
+}
+
+// permissionDeniedStderr is a real connect fault on a socket that exists; it
+// must stay an error at every site.
+func permissionDeniedStderr(t *testing.T) string {
+	sock := filepath.Join(t.TempDir(), "default")
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return "error connecting to " + sock + " (Permission denied)"
+}
+
+// noServerSites is every RealExecutor read that treats "no server" as a
+// benign empty answer (#1473 spec D2). call reports whether the result was
+// the benign one, and the error.
+var noServerSites = []struct {
+	name string
+	call func() (benign bool, err error)
+}{
+	{"ListSessions", func() (bool, error) {
+		s, err := (&tmux.RealExecutor{}).ListSessions(context.Background())
+		return s == nil, err
+	}},
+	{"HasPane", func() (bool, error) {
+		ok, err := (&tmux.RealExecutor{}).HasPane("%5")
+		return !ok, err
+	}},
+	{"ShowWindowOption", func() (bool, error) {
+		v, err := (&tmux.RealExecutor{}).ShowWindowOption("allow-rename")
+		return v == "", err
+	}},
+	{"ShowGlobalOption", func() (bool, error) {
+		v, err := (&tmux.RealExecutor{}).ShowGlobalOption(context.Background(), "status")
+		return v == "", err
+	}},
+	{"ShowHooksGlobal", func() (bool, error) {
+		v, err := (&tmux.RealExecutor{}).ShowHooksGlobal()
+		return v == "", err
+	}},
+}
+
+func TestRealExecutor_AbsentSocketIsNoServer(t *testing.T) {
+	for _, site := range noServerSites {
+		t.Run(site.name, func(t *testing.T) {
+			installFailingTmux(t, absentSocketStderr(t))
+			benign, err := site.call()
+			if err != nil {
+				t.Fatalf("%s on absent socket: err=%v, want nil (no server)", site.name, err)
+			}
+			if !benign {
+				t.Errorf("%s on absent socket: non-empty result, want the no-server answer", site.name)
+			}
+		})
+	}
+}
+
+func TestRealExecutor_PermissionDeniedStaysError(t *testing.T) {
+	for _, site := range noServerSites {
+		t.Run(site.name, func(t *testing.T) {
+			installFailingTmux(t, permissionDeniedStderr(t))
+			if _, err := site.call(); err == nil {
+				t.Errorf("%s on Permission denied: err=nil, want an error", site.name)
+			}
+		})
+	}
+}
+
+// TestRealExecutor_HasSessionContext_AbsentSocket locks the existing fold:
+// any non-ctx failure is tmux's own "no", the absent socket included.
+func TestRealExecutor_HasSessionContext_AbsentSocket(t *testing.T) {
+	installFailingTmux(t, absentSocketStderr(t))
+	ok, err := (&tmux.RealExecutor{}).HasSessionContext(context.Background(), "x")
+	if ok || err != nil {
+		t.Errorf("HasSessionContext on absent socket = (%v, %v), want (false, nil)", ok, err)
+	}
+}
