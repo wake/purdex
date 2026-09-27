@@ -59,6 +59,37 @@ describe('useAttachStall', () => {
     expect(result.current).toBe(true)
   })
 
+  // A pane re-bound to another host starts a fresh run: host A's accumulated
+  // time (or its stall) says nothing about host B.
+  it('rebinding to another waiting host restarts the timer', () => {
+    useHostStore.setState({ runtime: { A: stalling, B: stalling } })
+    const { result, rerender } = renderHook(({ id }) => useAttachStall(id), { initialProps: { id: 'A' } })
+    act(() => { vi.advanceTimersByTime(9_000) })
+    rerender({ id: 'B' })
+    act(() => { vi.advanceTimersByTime(1_000) })
+    expect(result.current).toBe(false)
+    act(() => { vi.advanceTimersByTime(8_900) })
+    expect(result.current).toBe(false)
+    act(() => { vi.advanceTimersByTime(100) })
+    expect(result.current).toBe(true)
+  })
+
+  it('a stalled pane re-bound to another waiting host is not stalled, even for one render', () => {
+    useHostStore.setState({ runtime: { A: stalling, B: stalling } })
+    const seen: boolean[] = []
+    const { result, rerender } = renderHook(({ id }) => {
+      const v = useAttachStall(id)
+      seen.push(v)
+      return v
+    }, { initialProps: { id: 'A' } })
+    act(() => { vi.advanceTimersByTime(10_000) })
+    expect(result.current).toBe(true)
+    seen.length = 0
+    rerender({ id: 'B' })
+    expect(result.current).toBe(false)
+    expect(seen).not.toContain(true)
+  })
+
   it('an empty hostId never stalls', () => {
     const { result } = renderHook(() => useAttachStall(''))
     act(() => { vi.advanceTimersByTime(20_000) })
