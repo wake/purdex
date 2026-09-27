@@ -6,12 +6,28 @@ import { useEffect } from 'react'
 import type { QuickReply } from './host-config-api'
 import { useHostConfigStore, type HostConfigEntry } from '../stores/useHostConfigStore'
 
+/** The daemon's limits (`internal/module/hostconfig/validate.go`). */
+export const MAX_QUICK_REPLIES = 20
+export const QUICK_REPLY_MAX_BYTES = 1000
+
 /** What a host with nothing configured shows (Q3). Editable and deletable. */
 export const DEFAULT_QUICK_REPLIES: readonly QuickReply[] = Object.freeze([
   Object.freeze({ id: 'continue', text: 'continue' }),
   Object.freeze({ id: 'run-tests', text: 'run the tests' }),
   Object.freeze({ id: 'explain', text: 'explain that' }),
 ])
+
+const utf8 = new TextEncoder()
+
+/**
+ * Why `text` (already trimmed) cannot be saved, as a locale key, or `null`.
+ * The same rules the daemon enforces, so a bad text never costs a round trip.
+ */
+export function validateQuickReplyText(text: string): string | null {
+  if (text === '') return 'hosts.quick_replies.error_empty'
+  if (text.includes('\0') || utf8.encode(text).length > QUICK_REPLY_MAX_BYTES) return 'hosts.quick_replies.error_invalid'
+  return null
+}
 
 /**
  * The list to show for a host.

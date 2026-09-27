@@ -1,5 +1,5 @@
-// spa/src/components/hosts/useHostConfigCollection.ts — everything the two
-// daemon-backed collection editors (Projects and Commands) do the same way:
+// spa/src/components/hosts/useHostConfigCollection.ts — everything the
+// daemon-backed list editors (Projects, Commands, Quick replies) do the same way:
 // the gate, the item limit, the edit dialog's open/close/commit, the
 // delete confirmation, and the save path below. The sections keep what is
 // genuinely theirs — their fields and validation, their dialog, their rows.
@@ -22,9 +22,10 @@
 // The UI keeps its buttons live while a save is in flight; queueing is what
 // makes that safe, and it is what keeps the second intent.
 import { useCallback, useRef, useState } from 'react'
-import { HostConfigConflictError, type HostCommand, type HostProject } from '../../lib/host-config-api'
+import { HostConfigConflictError, type HostCommand, type HostProject, type QuickReply } from '../../lib/host-config-api'
 import { hostConfigQueueKey, queueHostConfigSave } from '../../lib/host-config-queue'
 import { MAX_CONFIG_ITEMS } from '../../lib/host-config-validate'
+import { effectiveQuickReplies, MAX_QUICK_REPLIES } from '../../lib/quick-replies'
 import { useHostConfigStore, type HostConfigEntry } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostConfigGate, type GateNotice } from './HostConfigNotice'
@@ -33,7 +34,7 @@ import { useHostConfigGate, type GateNotice } from './HostConfigNotice'
 export type ErrorTarget = 'dialog' | 'list'
 export interface SaveError { target: ErrorTarget; text: string }
 
-type CollectionItem = HostProject | HostCommand
+type CollectionItem = HostProject | HostCommand | QuickReply
 
 /**
  * How each collection is read from a host's entry, written back, and capped.
@@ -56,6 +57,13 @@ const COLLECTIONS = {
     read: (entry) => entry.commands,
     save: (hostId, items) => useHostConfigStore.getState().saveCommands(hostId, items as HostCommand[]),
     max: MAX_CONFIG_ITEMS,
+  },
+  // A list never written reads as the defaults, so the first action writes
+  // them — edited — for real.
+  'quick-replies': {
+    read: (entry) => effectiveQuickReplies(entry),
+    save: (hostId, items) => useHostConfigStore.getState().saveQuickReplies(hostId, items as QuickReply[]),
+    max: MAX_QUICK_REPLIES,
   },
 } satisfies Record<string, CollectionBinding>
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { DEFAULT_QUICK_REPLIES, effectiveQuickReplies, useQuickReplies } from './quick-replies'
+import { DEFAULT_QUICK_REPLIES, effectiveQuickReplies, useQuickReplies, validateQuickReplyText } from './quick-replies'
 import { emptyHostConfigEntry, useHostConfigStore, type HostConfigEntry } from '../stores/useHostConfigStore'
 import type { QuickReply } from './host-config-api'
 
@@ -40,6 +40,16 @@ describe('effectiveQuickReplies', () => {
 
   it('an emptied list stays empty', () => {
     expect(effectiveQuickReplies(ready([], 2))).toEqual([])
+  })
+})
+
+describe('validateQuickReplyText', () => {
+  it('follows the daemon: non-empty, at most 1000 bytes, no NUL', () => {
+    expect(validateQuickReplyText('go')).toBeNull()
+    expect(validateQuickReplyText('')).toBe('hosts.quick_replies.error_empty')
+    expect(validateQuickReplyText('a\0b')).toBe('hosts.quick_replies.error_invalid')
+    expect(validateQuickReplyText('字'.repeat(333))).toBeNull() // 999 bytes
+    expect(validateQuickReplyText('字'.repeat(334))).toBe('hosts.quick_replies.error_invalid')
   })
 })
 
