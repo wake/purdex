@@ -7,6 +7,25 @@ import { useI18nStore } from '../../stores/useI18nStore'
 /** Ceiling for the auto-grown textarea, so a long paste can't squeeze the transcript away. */
 const MAX_INPUT_PX = 200
 
+/** A field that takes typing: what the reader may be in the middle of. */
+const TEXT_FIELD = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])'
+
+/**
+ * Whether the reader is typing somewhere other than `self`: a text field
+ * holds focus — this pane's search bar, another pane's, a terminal. A send
+ * coming back then must not pull them in here, where Enter would send the
+ * rest of what they type to the worker (A F5). Anything else — the body, a
+ * clicked tab (dnd-kit's tabIndex=0 keeps focus on it), a button — is taken
+ * over, as before (#1495 re-review P2-2). A field in an inert subtree (an
+ * inactive tab, TabContent) is not being typed into, even while a browser
+ * without focus fixup leaves focus on it.
+ */
+function typingElsewhere(self: HTMLTextAreaElement | null): boolean {
+  const active = document.activeElement
+  if (!active || active === self || !active.matches(TEXT_FIELD)) return false
+  return !active.closest('[inert]')
+}
+
 interface Props {
   onSend: (text: string) => void
   disabled?: boolean
@@ -25,11 +44,7 @@ export default function WorkerInput({ onSend, disabled = false, placeholder, foc
   useEffect(() => {
     if (focused && !disabled) {
       requestAnimationFrame(() => {
-        // Only when nothing else holds focus: a send coming back while the
-        // reader types in the search bar must not pull them in here, where
-        // Enter would send the rest of their query to the worker (A F5).
-        const active = document.activeElement
-        if (!active || active === document.body || active === textareaRef.current) textareaRef.current?.focus()
+        if (!typingElsewhere(textareaRef.current)) textareaRef.current?.focus()
       })
     }
   }, [focused, disabled])

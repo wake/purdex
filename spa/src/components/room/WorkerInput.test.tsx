@@ -85,6 +85,66 @@ describe('WorkerInput', () => {
     }
   })
 
+  // PR #1495 re-review P2-2: only a field the reader types into is guarded.
+  // A clicked tab (dnd-kit gives it tabIndex=0 and keeps focus on it) or a
+  // button is not — switching to the tab must still land in the reply box.
+  describe('takes focus from what is not a text field', () => {
+    const cases: [string, () => HTMLElement][] = [
+      ['a focusable tab', () => Object.assign(document.createElement('div'), { tabIndex: 0 })],
+      ['a button', () => document.createElement('button')],
+    ]
+    for (const [name, make] of cases) {
+      it(`${name}, when it becomes focused`, async () => {
+        const el = make()
+        document.body.appendChild(el)
+        try {
+          const { rerender } = render(<WorkerInput onSend={vi.fn()} focused={false} />)
+          el.focus()
+          expect(document.activeElement).toBe(el)
+          rerender(<WorkerInput onSend={vi.fn()} focused />)
+          await new Promise((r) => requestAnimationFrame(r))
+          expect(document.activeElement).toBe(screen.getByRole('textbox'))
+        } finally {
+          el.remove()
+        }
+      })
+    }
+
+    it('a text field inside an inert (hidden) tab', async () => {
+      const hidden = document.createElement('div')
+      const field = document.createElement('textarea')
+      hidden.appendChild(field)
+      try {
+        const { rerender } = render(<WorkerInput onSend={vi.fn()} focused={false} />)
+        const box = screen.getByRole('textbox')
+        document.body.appendChild(hidden)
+        field.focus()
+        hidden.setAttribute('inert', '')
+        rerender(<WorkerInput onSend={vi.fn()} focused />)
+        await new Promise((r) => requestAnimationFrame(r))
+        expect(document.activeElement).toBe(box)
+      } finally {
+        hidden.remove()
+      }
+    })
+  })
+
+  it('does not take focus from a contenteditable field', async () => {
+    const editor = document.createElement('div')
+    editor.setAttribute('contenteditable', 'true')
+    editor.tabIndex = 0
+    document.body.appendChild(editor)
+    try {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} focused disabled />)
+      editor.focus()
+      rerender(<WorkerInput onSend={vi.fn()} focused disabled={false} />)
+      await new Promise((r) => requestAnimationFrame(r))
+      expect(document.activeElement).toBe(editor)
+    } finally {
+      editor.remove()
+    }
+  })
+
   it('takes focus when enabled again with nothing focused', async () => {
     const { rerender } = render(<WorkerInput onSend={vi.fn()} focused disabled />)
     ;(document.activeElement as HTMLElement | null)?.blur()
