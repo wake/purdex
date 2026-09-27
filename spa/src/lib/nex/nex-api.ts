@@ -19,7 +19,10 @@ import {
   type NexCapabilities,
   type NexHostInfo,
   type SendResponse,
+  type WorkerTask,
+  type WorkerTasksSnapshot,
 } from './types'
+import { parseTask } from './tasks'
 
 const PREFIX = '/api/nex'
 
@@ -117,6 +120,33 @@ export function delegateExecution(
 
 export function getExecution(hostId: string, executionId: string): Promise<ExecutionSummary> {
   return nexFetch(hostId, execPath(executionId)).then((r) => okJson<ExecutionSummary>(r))
+}
+
+/**
+ * `GET /v1/executions/{id}/tasks` (capabilities.worker_rollup only — an older
+ * daemon answers 404). Items go through `parseTask` with `startSeq = cursor`;
+ * rows without a task_id are dropped, and a body that is not the documented
+ * shape is an empty snapshot at cursor 0 (which drops nothing on merge).
+ */
+export async function fetchExecutionTasks(
+  hostId: string,
+  executionId: string,
+  state: 'running' | 'all' = 'running',
+): Promise<WorkerTasksSnapshot> {
+  const body = await nexFetch(hostId, `${execPath(executionId, '/tasks')}?state=${state}`).then((r) => okJson<unknown>(r))
+  const rec = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {}
+  // The cursor is an event seq: anything but a safe non-negative integer
+  // makes the whole body malformed (its rows cannot be placed against seqs).
+  if (!Number.isSafeInteger(rec.cursor) || (rec.cursor as number) < 0) return { items: [], cursor: 0 }
+  const cursor = rec.cursor as number
+  const items: WorkerTask[] = []
+  if (Array.isArray(rec.items)) {
+    for (const raw of rec.items) {
+      const t = parseTask(raw, cursor)
+      if (t) items.push(t)
+    }
+  }
+  return { items, cursor }
 }
 
 export function fetchExecutionEvents(

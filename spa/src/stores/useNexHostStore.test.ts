@@ -4,6 +4,7 @@ import {
   NEX_HOST_TTL_MS,
   selectHandoffReady,
   selectReady,
+  selectWorkerRollup,
   startNexHostInvalidation,
   useNexHostStore,
   type NexHostEntry,
@@ -505,6 +506,22 @@ describe('selectors', () => {
       }),
     })
     expect(selectHandoffReady(H)(useNexHostStore.getState())).toBe(expected)
+  })
+
+  it('selectWorkerRollup returns the capability object when present and ready, else null', () => {
+    const rollup = { task_kinds: ['shell', 'subagent', 'other'], task_statuses: ['running'], activity_phases: ['model'], cost_basis: 'session_cumulative', subagent_cost: false }
+    seed({ capabilities: caps({ worker_rollup: rollup }) })
+    const got = selectWorkerRollup(H)(useNexHostStore.getState())
+    expect(got).toEqual(rollup)
+    // Stable reference: the selector hands back the cached object, not a copy.
+    expect(selectWorkerRollup(H)(useNexHostStore.getState())).toBe(got)
+    seed({})
+    expect(selectWorkerRollup(H)(useNexHostStore.getState())).toBeNull()
+    seed({ phase: 'unavailable', capabilities: caps({ worker_rollup: rollup }) })
+    expect(selectWorkerRollup(H)(useNexHostStore.getState())).toBeNull()
+    seed({ capabilities: caps({ worker_rollup: 'yes' as unknown as undefined }) })
+    expect(selectWorkerRollup(H)(useNexHostStore.getState())).toBeNull()
+    expect(selectWorkerRollup('ghost')(useNexHostStore.getState())).toBeNull()
   })
 
   it('selectHandoffReady is false for an unknown host', () => {

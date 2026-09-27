@@ -69,4 +69,68 @@ describe('sanitizeExecutionsPage', () => {
     }
     expect(out.dropped).toBe(0)
   })
+
+  describe('worker rollup fields (nexen v0.13 worker_rollup)', () => {
+    const rollup = {
+      cost_usd: 0.1126,
+      last_tool: { name: 'Bash', tool_use_id: 'toolu_1', at: 1790500501000 },
+      running_tasks: 1,
+      turn_count: 3,
+      activity: { phase: 'tool', tool: { name: 'Bash', tool_use_id: 'toolu_1', since: 1790500501000 }, open_tools: 1, since: 1790500501000 },
+    }
+
+    it('passes well-formed rollup fields through', () => {
+      const [r] = sanitizeExecutionsPage({ items: [{ ...good, ...rollup }] }).items
+      expect(r).toMatchObject(rollup)
+    })
+
+    it('an old daemon row has none of them (not invented)', () => {
+      const [r] = sanitizeExecutionsPage({ items: [good] }).items
+      for (const k of ['cost_usd', 'last_tool', 'running_tasks', 'activity', 'turn_count'] as const) expect(k in r).toBe(false)
+    })
+
+    it('cost_usd: null stays null; non-finite, negative or non-number → null', () => {
+      const rows = sanitizeExecutionsPage({ items: [
+        { ...good, cost_usd: null }, { ...good, cost_usd: -1 }, { ...good, cost_usd: 'x' }, { ...good, cost_usd: Infinity }, { ...good, cost_usd: 0 },
+      ] }).items
+      expect(rows.map((r) => r.cost_usd)).toEqual([null, null, null, null, 0])
+    })
+
+    it('running_tasks / turn_count must be non-negative integers, else dropped', () => {
+      const rows = sanitizeExecutionsPage({ items: [
+        { ...good, running_tasks: -1, turn_count: 1.5 }, { ...good, running_tasks: '2', turn_count: null }, { ...good, running_tasks: 0, turn_count: 0 },
+      ] }).items
+      expect('running_tasks' in rows[0]).toBe(false)
+      expect('turn_count' in rows[0]).toBe(false)
+      expect('running_tasks' in rows[1]).toBe(false)
+      expect('turn_count' in rows[1]).toBe(false)
+      expect(rows[2].running_tasks).toBe(0)
+      expect(rows[2].turn_count).toBe(0)
+    })
+
+    it('last_tool is dropped unless name / tool_use_id / at have the right types', () => {
+      const rows = sanitizeExecutionsPage({ items: [
+        { ...good, last_tool: { name: 'Bash', tool_use_id: 'toolu_1' } },
+        { ...good, last_tool: { name: 3, tool_use_id: 'toolu_1', at: 1 } },
+        { ...good, last_tool: 'Bash' },
+        { ...good, last_tool: { name: 'Bash', tool_use_id: 'toolu_1', at: 1, extra: true } },
+      ] }).items
+      expect('last_tool' in rows[0]).toBe(false)
+      expect('last_tool' in rows[1]).toBe(false)
+      expect('last_tool' in rows[2]).toBe(false)
+      expect(rows[3].last_tool).toEqual({ name: 'Bash', tool_use_id: 'toolu_1', at: 1 })
+    })
+
+    it('activity is dropped unless phase is a string and open_tools a non-negative integer; a bad tool / since is dropped alone', () => {
+      const rows = sanitizeExecutionsPage({ items: [
+        { ...good, activity: { open_tools: 0 } },
+        { ...good, activity: { phase: 'idle', open_tools: 'x' } },
+        { ...good, activity: { phase: 'awaiting_input', open_tools: 0, tool: { name: 'Bash' }, since: 'now' } },
+      ] }).items
+      expect('activity' in rows[0]).toBe(false)
+      expect('activity' in rows[1]).toBe(false)
+      // Unknown phase is kept verbatim here; normalizePhase maps it at render time.
+      expect(rows[2].activity).toEqual({ phase: 'awaiting_input', open_tools: 0 })
+    })
+  })
 })

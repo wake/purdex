@@ -1,6 +1,7 @@
 // spa/src/lib/nex/event-reducer.test.ts
 import { describe, it, expect } from 'vitest'
-import { applyDurableEvent, applyTransientFrame, defaultExecutionState, frameToEvent, isLifecycleKind, type ExecutionState } from './event-reducer'
+import { applyDurableEvent, applyTasksSnapshot, applyTransientFrame, defaultExecutionState, frameToEvent, isLifecycleKind, isTaskEventKind, type ExecutionState } from './event-reducer'
+import { parseTask } from './tasks'
 import type { NexEvent, ExecutionSummary } from './types'
 
 const ev = (seq: number, kind: string, payload: Record<string, unknown> = {}): NexEvent =>
@@ -468,5 +469,130 @@ describe('applyDurableEvent: subagent tool events (#1228)', () => {
     s = applyDurableEvent(s, at(2, 'result', { type: 'result', subtype: 'success', parent_tool_use_id: null }))
     expect(s.turnLive).toBe(false)
     expect(s.tools.toolu_c1).toEqual({ name: 'Read', startedAt: 100, endedAt: 200, status: 'aborted' })
+  })
+})
+
+describe('task events (nexen v0.13 task_start / task_end)', () => {
+  const start = (task_id: string, over: Record<string, unknown> = {}) => ({
+    task_id, turn_id: 'turn_1', kind: 'shell', task_type: 'local_bash', tool_use_id: `toolu_${task_id}`, parent_tool_use_id: null,
+    description: `run ${task_id}`, command: 'sleep 8', backgrounded: true, started_at: 1000, ...over,
+  })
+  const end = (task_id: string, over: Record<string, unknown> = {}) => ({
+    task_id, turn_id: 'turn_1', kind: 'shell', tool_use_id: `toolu_${task_id}`, status: 'completed', provider_status: 'completed',
+    ended_at: 2000, closed_by: 'provider', cost_usd: null, ...over,
+  })
+  const live = (): ExecutionState => {
+    const s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.message_accepted', { text: 'go' }))
+    return { ...s, pendingSend: true, partial: { messageId: 'msg_1', finalized: 0, blocks: {} } }
+  }
+
+  it('isTaskEventKind is exactly task_start / task_end', () => {
+    expect(isTaskEventKind('task_start')).toBe(true)
+    expect(isTaskEventKind('task_end')).toBe(true)
+    expect(isTaskEventKind('task_updated')).toBe(false)
+    expect(isTaskEventKind('tool_use')).toBe(false)
+  })
+
+  it('never appended to messages, never a turn boundary, never touches partial / pendingSend / turnLive / summary', () => {
+    const before = live()
+    let s = applyDurableEvent(before, ev(2, 'task_start', start('t1')))
+    s = applyDurableEvent(s, ev(3, 'task_end', end('t1')))
+    // Task events never move the shared high-water mark (SSE Last-Event-ID).
+    expect(s.lastSeq).toBe(before.lastSeq)
+    expect(s.messages).toBe(before.messages)
+    expect(s.turnStarts).toBe(before.turnStarts)
+    expect(s.partial).toBe(before.partial)
+    expect(s.pendingSend).toBe(true)
+    expect(s.turnLive).toBe(true)
+    expect(s.summaryStale).toBe(before.summaryStale)
+    expect(s.tools).toBe(before.tools)
+    expect(s.tasks.t1).toMatchObject({ status: 'completed', description: 'run t1', startSeq: 2 })
+  })
+
+  it('a shell started inside a subagent (non-null parent_tool_use_id) still lands in tasks', () => {
+    const s = applyDurableEvent(live(), ev(2, 'task_start', start('t2', { parent_tool_use_id: 'toolu_agent' })))
+    expect(s.tasks.t2).toMatchObject({ status: 'running', parent_tool_use_id: 'toolu_agent' })
+    expect(s.turnLive).toBe(true)
+  })
+
+  it('a start replayed after its end does not reopen the row', () => {
+    let s = applyDurableEvent(defaultExecutionState(), ev(2, 'task_start', start('t1')))
+    s = applyDurableEvent(s, ev(3, 'task_end', end('t1')))
+    s = applyDurableEvent(s, ev(4, 'task_start', start('t1')))
+    expect(s.tasks.t1.status).toBe('completed')
+  })
+
+  it('replay then snapshot (#83): a missed task_end is corrected, a row newer than the cursor survives, closure is final', () => {
+    let s = defaultExecutionState()
+    s = applyDurableEvent(s, ev(5, 'task_start', start('missed')))
+    s = applyDurableEvent(s, ev(6, 'task_start', start('done')))
+    s = applyDurableEvent(s, ev(12, 'task_end', end('done')))
+    s = applyDurableEvent(s, ev(13, 'task_start', start('newer')))
+    const snapshot = {
+      cursor: 10,
+      items: [
+        // Read before `done` closed live at seq 12: still says running.
+        parseTask({ ...start('done'), status: 'running' }, 10)!,
+        // Started before we connected; never seen live.
+        parseTask({ ...start('unseen'), status: 'running' }, 10)!,
+      ],
+    }
+    const next = applyTasksSnapshot(s, snapshot)
+    expect(Object.keys(next.tasks).sort()).toEqual(['done', 'newer', 'unseen'])
+    expect(next.tasks.done.status).toBe('completed')
+    expect(next.tasks.newer).toMatchObject({ status: 'running', startSeq: 13 })
+    expect(next.tasks.unseen).toMatchObject({ status: 'running', startSeq: 10 })
+    // Nothing else moves: the snapshot is not an event.
+    expect(next.lastSeq).toBe(s.lastSeq)
+    expect(next.messages).toBe(s.messages)
+  })
+
+  it('out-of-order live task_end (#83 regressing seq) still closes the row and does not lower lastSeq', () => {
+    let s = applyDurableEvent(defaultExecutionState(), ev(2, 'task_start', start('t1')))
+    s = applyDurableEvent(s, ev(10, 'assistant', { type: 'assistant' }))
+    s = applyDurableEvent(s, ev(7, 'task_end', end('t1')))
+    expect(s.tasks.t1.status).toBe('completed')
+    expect(s.lastSeq).toBe(10)
+  })
+
+  it('a task_start replayed with a lower seq after close does not reopen', () => {
+    let s = applyDurableEvent(defaultExecutionState(), ev(5, 'task_start', start('t1')))
+    s = applyDurableEvent(s, ev(9, 'task_end', end('t1')))
+    s = applyDurableEvent(s, ev(5, 'task_start', start('t1')))
+    expect(s.tasks.t1.status).toBe('completed')
+    expect(s.lastSeq).toBe(0)
+  })
+
+  it('a replayed task_end / task_start that changes nothing returns the same state object', () => {
+    let s = applyDurableEvent(defaultExecutionState(), ev(3, 'assistant', { type: 'assistant' }))
+    s = applyDurableEvent(s, ev(5, 'task_start', start('t1')))
+    s = applyDurableEvent(s, ev(9, 'task_end', end('t1')))
+    expect(applyDurableEvent(s, ev(9, 'task_end', end('t1')))).toBe(s)
+    expect(applyDurableEvent(s, ev(5, 'task_start', start('t1')))).toBe(s)
+    const running = applyDurableEvent(s, ev(11, 'task_start', start('t2')))
+    expect(applyDurableEvent(running, ev(11, 'task_start', start('t2')))).toBe(running)
+    expect(running.lastSeq).toBe(3)
+  })
+
+  it('an early task event with a higher seq does not move lastSeq, so a later lower-seq non-task event is still applied', () => {
+    let s = applyDurableEvent(defaultExecutionState(), ev(3, 'assistant', { type: 'assistant' }))
+    expect(s.lastSeq).toBe(3)
+    s = applyDurableEvent(s, ev(10, 'task_start', start('t1')))
+    expect(s.lastSeq).toBe(3)
+    expect(s.tasks.t1.status).toBe('running')
+    const next = applyDurableEvent(s, ev(4, 'assistant', { type: 'assistant', n: 4 }))
+    expect(next.lastSeq).toBe(4)
+    expect(next.messages).toHaveLength(2)
+    expect(next.messages[1]).toMatchObject({ n: 4 })
+  })
+
+  it('a non-task event at or below lastSeq is still dropped', () => {
+    const s = applyDurableEvent(defaultExecutionState(), ev(5, 'assistant', { type: 'assistant' }))
+    expect(applyDurableEvent(s, ev(4, 'assistant', { type: 'assistant' }))).toBe(s)
+    expect(applyDurableEvent(s, ev(5, 'assistant', { type: 'assistant' }))).toBe(s)
+  })
+
+  it('defaultExecutionState has an empty task table', () => {
+    expect(defaultExecutionState().tasks).toEqual({})
   })
 })

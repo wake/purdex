@@ -5,7 +5,7 @@ import {
   nexFetch, fetchNexCapabilities, listExecutions, fetchExecutionEvents,
   attachObserve, attachControl, sendMessage, releaseLease, archiveExecution, resolveExecutionHostId,
   getExecution, fetchNexHost, renewLease, interruptExecution, terminateExecution,
-  delegateExecution, pinnedLeaseRelease,
+  delegateExecution, pinnedLeaseRelease, fetchExecutionTasks,
 } from './nex-api'
 import { NexApiError } from './types'
 import { NEX_CLIENT_ID_RE } from './client-id'
@@ -181,6 +181,49 @@ describe('nex-api', () => {
     const [url, init] = testGlobal.fetch.mock.calls[0]
     expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1')
     expect(init.method ?? 'GET').toBe('GET')
+  })
+
+  it('fetchExecutionTasks GETs /tasks?state=running by default, parses items, drops invalid ones', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({
+      items: [
+        { task_id: 't1', turn_id: 'u1', kind: 'shell', task_type: 'local_bash', tool_use_id: 'toolu_1', parent_tool_use_id: null, description: 'd', command: 'sleep 8', backgrounded: true, status: 'running', provider_status: null, closed_by: null, ended_at: null, cost_usd: null, started_at: 5 },
+        { turn_id: 'no id' },
+        'junk',
+      ],
+      cursor: 128,
+    }))
+    const res = await fetchExecutionTasks(hostId, 'exc a')
+    const [url, init] = testGlobal.fetch.mock.calls[0]
+    expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc%20a/tasks?state=running')
+    expect(init.method ?? 'GET').toBe('GET')
+    expect(res.cursor).toBe(128)
+    expect(res.items).toHaveLength(1)
+    expect(res.items[0]).toMatchObject({ task_id: 't1', status: 'running', command: 'sleep 8', startSeq: 128 })
+  })
+
+  it('fetchExecutionTasks passes state=all; a malformed body is an empty snapshot at cursor 0', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ items: 'nope', cursor: 'x' }))
+    const res = await fetchExecutionTasks(hostId, 'exc_1', 'all')
+    const [url] = testGlobal.fetch.mock.calls[0]
+    expect(new URL(url).searchParams.get('state')).toBe('all')
+    expect(res).toEqual({ items: [], cursor: 0 })
+  })
+
+  it('fetchExecutionTasks: a cursor that is not a safe non-negative integer is a malformed body (empty snapshot at 0)', async () => {
+    const item = { task_id: 't1', status: 'running', started_at: 5 }
+    for (const cursor of [1.5, -1, 2 ** 53, Number.MAX_VALUE, '7', null]) {
+      testGlobal.fetch.mockResolvedValueOnce(json({ items: [item], cursor }))
+      expect(await fetchExecutionTasks(hostId, 'exc_1')).toEqual({ items: [], cursor: 0 })
+    }
+    testGlobal.fetch.mockResolvedValueOnce(json({ items: [item], cursor: 0 }))
+    const ok = await fetchExecutionTasks(hostId, 'exc_1')
+    expect(ok.cursor).toBe(0)
+    expect(ok.items).toHaveLength(1)
+  })
+
+  it('fetchExecutionTasks throws the structured error (old daemon: 404)', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ error: 'not found', code: 'not_found' }, 404))
+    await expect(fetchExecutionTasks(hostId, 'exc_1')).rejects.toMatchObject({ status: 404, code: 'not_found' })
   })
 
   it('fetchNexHost GETs the host info', async () => {

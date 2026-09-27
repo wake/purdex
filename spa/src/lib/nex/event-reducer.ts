@@ -8,7 +8,8 @@ import type { StreamMessage } from './message-types'
 import { finalizeBlock, type PartialAssembly } from './partial'
 import type { NexSseFrame } from './sse-parser'
 import { endTurn, recordN2ToolResult, recordN2ToolUse, recordToolEnds, recordToolStarts, type ToolActivity } from './tool-activity'
-import type { ExecutionSummary, NexEvent } from './types'
+import { applyTaskEvent, applyTaskSnapshot, type TaskTable } from './tasks'
+import type { ExecutionSummary, NexEvent, WorkerTasksSnapshot } from './types'
 
 export type { PartialAssembly, PartialBlock } from './partial'
 export { applyTransientFrame, finalizedFor } from './partial'
@@ -57,6 +58,12 @@ export interface ExecutionState {
    * events, which overlay the daemon's facts onto the same entry).
    */
   tools: Record<string, ToolActivity>
+  /**
+   * Background tasks (Bash `run_in_background` / subagents), keyed by
+   * task_id. Written only by the durable `task_start` / `task_end` kinds
+   * (nexen v0.13) and by `applyTasksSnapshot`; always `{}` on an older daemon.
+   */
+  tasks: TaskTable
 }
 
 export function defaultExecutionState(): ExecutionState {
@@ -78,6 +85,7 @@ export function defaultExecutionState(): ExecutionState {
     turnLive: false,
     turnStarts: [],
     tools: {},
+    tasks: {},
   }
 }
 
@@ -93,6 +101,26 @@ export function isLifecycleKind(kind: string): boolean {
  */
 export function isToolEventKind(kind: string): boolean {
   return kind === 'tool_use' || kind === 'tool_result'
+}
+
+/**
+ * Nexen's background-task kinds (v0.13, `capabilities.worker_rollup`). Like
+ * the tool kinds they are not provider passthrough and not lifecycle: they
+ * only update `tasks` — never a message, never a turn boundary, never the
+ * partial.
+ */
+export function isTaskEventKind(kind: string): boolean {
+  return kind === 'task_start' || kind === 'task_end'
+}
+
+/**
+ * Merge a `GET /v1/executions/{id}/tasks` snapshot into the task table (the
+ * #83 correction after every SSE (re)open). Not an event: `lastSeq` and
+ * everything else stay as they are. Merge rules in `tasks.ts`.
+ */
+export function applyTasksSnapshot(s: ExecutionState, snapshot: WorkerTasksSnapshot): ExecutionState {
+  const tasks = applyTaskSnapshot(s.tasks, snapshot.items, snapshot.cursor)
+  return { ...s, tasks }
 }
 
 /**
@@ -193,8 +221,28 @@ function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unkno
 }
 
 export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionState {
-  if (!Number.isFinite(ev.seq) || ev.seq <= s.lastSeq) return s
+  if (!Number.isFinite(ev.seq)) return s
   const p = ev.payload ?? {}
+
+  // Task kinds only touch `tasks`. Handled before applyTurnRules: a shell
+  // started inside a subagent carries a non-null parent_tool_use_id, and
+  // the subagent branch there would swallow it.
+  // They bypass the seq guard: nexen's live SSE can deliver a regressing seq
+  // (commit→publish is not globally serialised, consumer-guide #83), and
+  // dropping a late task_end would leave the row running forever. Safe
+  // because task events are idempotent per task_id and closure is final.
+  // They also never touch `lastSeq`, neither raising nor lowering it: it is
+  // the shared high-water mark every other kind is guarded by, and the SSE
+  // Last-Event-ID on reconnect. A task event arriving early with a higher seq
+  // must not make a later lower-seq assistant / user / result frame look
+  // already-seen (dropped now, and skipped for good on reconnect). Cost: when
+  // the last durable event is a task event, reconnect replays it once —
+  // harmless, by the same idempotence.
+  if (isTaskEventKind(ev.kind)) {
+    const tasks = applyTaskEvent(s.tasks, ev.kind, p, ev.seq)
+    return tasks === s.tasks ? s : { ...s, tasks }
+  }
+  if (ev.seq <= s.lastSeq) return s
 
   let next: ExecutionState = applyTurnRules({ ...s, lastSeq: ev.seq }, ev, p)
 

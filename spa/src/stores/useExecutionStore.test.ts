@@ -21,6 +21,18 @@ describe('useExecutionStore', () => {
     expect(st.lastSeq).toBe(2)
   })
 
+  it('applyTasksSnapshot merges a /tasks snapshot into the entry (#83 correction)', () => {
+    const s = useExecutionStore.getState()
+    const start = (task_id: string) => ({ task_id, turn_id: 'u', kind: 'shell', task_type: 'local_bash', tool_use_id: null, parent_tool_use_id: null, description: task_id, backgrounded: true, started_at: 1 })
+    s.applyEvents('h', 'exc_1', [ev(3, 'task_start', start('missed_end')), ev(9, 'task_start', start('newer'))])
+    s.applyTasksSnapshot('h', 'exc_1', { items: [], cursor: 5 })
+    const st = useExecutionStore.getState().executions['h:exc_1']
+    expect(Object.keys(st.tasks)).toEqual(['newer'])
+    expect(st.messages).toHaveLength(0)
+    // Task events never move lastSeq (the SSE Last-Event-ID high-water mark).
+    expect(st.lastSeq).toBe(0)
+  })
+
   it('applyEvents with only already-seen seqs does not create a new object', () => {
     const s = useExecutionStore.getState()
     s.applyEvents('h', 'exc_1', [ev(1, 'assistant', { type: 'assistant' })])
