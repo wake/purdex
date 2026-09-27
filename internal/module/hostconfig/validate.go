@@ -16,6 +16,9 @@ const (
 	nameMaxRunes    = 64
 	pathMaxBytes    = 1024
 	commandMaxBytes = 4096
+
+	maxQuickReplies    = 20
+	quickReplyMaxBytes = 1000
 )
 
 var (
@@ -163,6 +166,38 @@ func normalizeCommands(raw json.RawMessage) ([]Command, error) {
 			return nil, fmt.Errorf("invalid icon kind %q", c.Icon.Kind)
 		}
 		out = append(out, Command{ID: c.ID, Name: name, Command: c.Command, Icon: c.Icon})
+	}
+	return out, nil
+}
+
+// QuickReply is one canned message a worker pane can send with one click.
+type QuickReply struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
+
+// normalizeQuickReplies validates the list and stores each text trimmed.
+// encoding/json already replaces invalid UTF-8 with U+FFFD; the ValidString
+// check is a guard should the decoding path ever change.
+func normalizeQuickReplies(raw json.RawMessage) ([]QuickReply, error) {
+	var in []QuickReply
+	if err := decodeArray(raw, &in); err != nil {
+		return nil, err
+	}
+	if len(in) > maxQuickReplies {
+		return nil, fmt.Errorf("at most %d quick replies", maxQuickReplies)
+	}
+	out := make([]QuickReply, 0, len(in))
+	ids := map[string]bool{}
+	for _, q := range in {
+		if err := checkIDs(ids, q.ID); err != nil {
+			return nil, err
+		}
+		text := strings.TrimSpace(q.Text)
+		if text == "" || len(text) > quickReplyMaxBytes || strings.ContainsRune(text, 0) || !utf8.ValidString(text) {
+			return nil, fmt.Errorf("invalid text for quick reply %q", q.ID)
+		}
+		out = append(out, QuickReply{ID: q.ID, Text: text})
 	}
 	return out, nil
 }

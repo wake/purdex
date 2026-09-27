@@ -55,7 +55,12 @@ func emptyFor(key string) string {
 // handleGet returns all collections: GET /api/hostconfig.
 func (m *Module) handleGet(w http.ResponseWriter, _ *http.Request) {
 	out := map[string]collection{}
-	for field, key := range map[string]string{"projects": KeyProjects, "commands": KeyCommands, "resumeTemplates": KeyResumeTemplates} {
+	for field, key := range map[string]string{
+		"projects":        KeyProjects,
+		"commands":        KeyCommands,
+		"resumeTemplates": KeyResumeTemplates,
+		"quickReplies":    KeyQuickReplies,
+	} {
 		e, err := m.store.Get(key)
 		if err != nil {
 			log.Printf("[hostconfig] get %s: %v", key, err)

@@ -121,3 +121,53 @@ func TestNormalizeResumeTemplates(t *testing.T) {
 	_, err = normalizeResumeTemplates(json.RawMessage("{" + strings.Join(many, ",") + "}"))
 	assert.Error(t, err)
 }
+
+func quickReplyList(n int) string {
+	items := make([]string, n)
+	for i := range items {
+		items[i] = fmt.Sprintf(`{"id":"q%d","text":"t"}`, i)
+	}
+	return "[" + strings.Join(items, ",") + "]"
+}
+
+func TestNormalizeQuickRepliesOK(t *testing.T) {
+	got, err := normalizeQuickReplies(json.RawMessage(`[
+		{"id":"continue","text":"  continue \n"},
+		{"id":"run-tests","text":"請跑測試"}
+	]`))
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, QuickReply{ID: "continue", Text: "continue"}, got[0], "text is stored trimmed")
+	assert.Equal(t, "請跑測試", got[1].Text)
+
+	empty, err := normalizeQuickReplies(json.RawMessage(`[]`))
+	require.NoError(t, err)
+	assert.NotNil(t, empty)
+
+	_, err = normalizeQuickReplies(json.RawMessage(quickReplyList(20)))
+	assert.NoError(t, err, "20 items is allowed")
+
+	_, err = normalizeQuickReplies(json.RawMessage(`[{"id":"a","text":"` + strings.Repeat("x", 1000) + `"}]`))
+	assert.NoError(t, err, "1000 bytes is allowed")
+}
+
+func TestNormalizeQuickRepliesRejects(t *testing.T) {
+	cases := map[string]string{
+		"not array":    `{}`,
+		"null":         `null`,
+		"over 20":      quickReplyList(21),
+		"empty text":   `[{"id":"a","text":"   "}]`,
+		"missing text": `[{"id":"a"}]`,
+		"long text":    `[{"id":"a","text":"` + strings.Repeat("x", 1001) + `"}]`,
+		"nul text":     `[{"id":"a","text":"a\u0000b"}]`,
+		"dup id":       `[{"id":"a","text":"x"},{"id":"a","text":"y"}]`,
+		"bad id":       `[{"id":"a b","text":"x"}]`,
+		"empty id":     `[{"id":"","text":"x"}]`,
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := normalizeQuickReplies(json.RawMessage(raw))
+			assert.Error(t, err)
+		})
+	}
+}
