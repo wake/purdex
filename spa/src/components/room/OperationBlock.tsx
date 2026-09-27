@@ -13,11 +13,12 @@ import type { ReactNode } from 'react'
 import { CircleNotch } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { formatDuration } from '../../lib/nex/format-duration'
-import { toolSummary } from '../../lib/nex/tool-summary'
+import { showsRawInput, toolSummary } from '../../lib/nex/tool-summary'
 import { foldPlan } from '../../lib/nex/fold'
 import type { ToolActivity, ToolCallActivity } from '../../lib/nex/tool-activity'
 import type { ToolResultFacts } from '../../lib/nex/tool-result-facts'
-import type { OperationResult } from '../../lib/nex/operations'
+import type { BlockKey, OperationResult } from '../../lib/nex/operations'
+import { searchUnitId } from '../../lib/nex/transcript-search'
 import { resolveStatus, type OpStatus } from '../../lib/nex/operation-status'
 import { useFold } from './fold-context'
 import { FoldedOutput } from './FoldedOutput'
@@ -41,6 +42,12 @@ export interface OperationBlockProps {
    * after the child's own output.
    */
   subagent?: ReactNode
+  /**
+   * The durable block's position, which names its search anchors
+   * (`searchUnitId(searchKey, part)`). Absent for a streaming call: it is not
+   * in the transcript's messages, so search cannot find it.
+   */
+  searchKey?: BlockKey
 }
 
 /** Duration is shown at a second and up (spec §3.1.1 #3) until #1229 lands. */
@@ -89,7 +96,9 @@ export default function OperationBlock({
   result,
   foldKey,
   subagent,
+  searchKey,
 }: OperationBlockProps) {
+  const anchor = (part: 'arg' | 'input' | 'output') => (searchKey === undefined ? undefined : searchUnitId(searchKey, part))
   const t = useI18nStore((s) => s.t)
   const [outputExpanded, toggleOutput] = useFold(foldKey)
   const [inputExpanded, toggleInput] = useFold(`${foldKey}:input`)
@@ -112,9 +121,7 @@ export default function OperationBlock({
 
   // A second affordance, and only when it has something the header does not
   // already say: an input whose single key is the primary arg reveals nothing.
-  const inputKeys = Object.keys(input)
-  const hasRawInput =
-    inputKeys.length > 0 && !(summaryEntry?.primaryArg && inputKeys.length === 1)
+  const hasRawInput = showsRawInput(input, summaryEntry)
 
   const diff = facts?.diff
   const hasDiff = diff !== undefined && (diff.hunks.length > 0 || diff.truncated)
@@ -156,7 +163,7 @@ export default function OperationBlock({
           // The half-assembled JSON is noise, not information (spec §3.1.1 #7).
           <span data-testid="op-arg-pending" className="text-text-muted">…</span>
         ) : summary ? (
-          <span data-testid="op-arg" className="text-text-muted whitespace-pre-wrap break-all min-w-0 flex-1">
+          <span data-testid="op-arg" data-search-unit={anchor('arg')} className="text-text-muted whitespace-pre-wrap break-all min-w-0 flex-1">
             {summary}
           </span>
         ) : (
@@ -192,7 +199,7 @@ export default function OperationBlock({
       {showRail && (
         <div data-testid="op-rail" className={`ml-[3px] border-l border-border-subtle pl-3 ${railFill}`}>
           {hasRawInput && inputExpanded && (
-            <pre data-testid="op-input" className="text-xs text-text-secondary whitespace-pre-wrap break-all overflow-auto max-h-60">
+            <pre data-testid="op-input" data-search-unit={anchor('input')} className="text-xs text-text-secondary whitespace-pre-wrap break-all overflow-auto max-h-60">
               {JSON.stringify(input, null, 2)}
             </pre>
           )}
@@ -205,7 +212,7 @@ export default function OperationBlock({
             argument that is a command or a description — does not say which
             file was touched, and there the stat is the only account of it.
           */}
-          {hasDiff && <ToolDiffView diff={diff} foldKey={foldKey} showPath={summary !== diff.path} />}
+          {hasDiff && <ToolDiffView diff={diff} foldKey={foldKey} showPath={summary !== diff.path} searchKey={searchKey} />}
           {result !== null && (
             <FoldedOutput
               text={result.text}
@@ -213,6 +220,7 @@ export default function OperationBlock({
               expanded={outputExpanded}
               onToggle={toggleOutput}
               tone={status === 'error' ? 'error' : 'normal'}
+              searchUnit={anchor('output')}
             />
           )}
           {hasNonText && (

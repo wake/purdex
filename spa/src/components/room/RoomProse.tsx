@@ -12,12 +12,19 @@ interface Props {
   content: string
   /** Append a blinking cursor after the markdown body (the P-B2 typewriter). */
   streaming?: boolean
+  /**
+   * The search anchor, on the markdown body only (not the cursor). The index
+   * holds `proseText(content)` — this body's `textContent` — so any change to
+   * the plugins here must be mirrored in lib/nex/markdown-text.ts (its tests
+   * render this component and compare).
+   */
+  searchUnit?: string
 }
 
-export default function RoomProse({ content, streaming }: Props) {
+export default function RoomProse({ content, streaming, searchUnit }: Props) {
   return (
     <div data-testid="room-prose" className="max-w-[90ch] text-sm leading-[1.7] text-text-primary">
-      <div className="prose prose-invert prose-sm max-w-none">
+      <div data-search-unit={searchUnit} className="prose prose-invert prose-sm max-w-none">
         <ReactMarkdown rehypePlugins={[rehypeHighlight]}>
           {content}
         </ReactMarkdown>

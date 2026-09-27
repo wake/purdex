@@ -12,6 +12,7 @@ import {
 import { toToolCallActivity } from '../../lib/nex/tool-activity'
 import { blockKey, toolResultText } from '../../lib/nex/operations'
 import { INTERRUPT_TEXT } from '../../lib/nex/turns'
+import { searchUnitId } from '../../lib/nex/transcript-search'
 import OperationBlock from './OperationBlock'
 import RoomProse from './RoomProse'
 import RoomSubagentLine from './RoomSubagentLine'
@@ -103,6 +104,7 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
         result={index.resultForCall.get(blockKey(i, j)) ?? null}
         foldKey={blockKey(i, j)}
         subagent={subagent}
+        searchKey={blockKey(i, j)}
       />
     )
   }
@@ -124,6 +126,7 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
         facts={facts}
         result={{ text: toolResultText(block.content), isError: block.is_error ?? false }}
         foldKey={blockKey(i, j)}
+        searchKey={blockKey(i, j)}
       />
     )
   }
@@ -145,10 +148,11 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
           // Spec §4.3: a thought with no text draws nothing (RoomThinking
           // returns null for it too; this keeps the list free of the slot).
           if (block.type === 'thinking' && block.thinking?.trim()) {
-            return <RoomThinking key={j} content={block.thinking} foldKey={blockKey(i, j)} />
+            return <RoomThinking key={j} content={block.thinking} foldKey={blockKey(i, j)}
+              searchUnit={searchUnitId(blockKey(i, j), 'thinking')} />
           }
           if (block.type === 'text' && block.text) {
-            return <RoomProse key={j} content={block.text} />
+            return <RoomProse key={j} content={block.text} searchUnit={searchUnitId(blockKey(i, j), 'text')} />
           }
           if (block.type === 'tool_use') return <OperationAt key={j} msg={msg} i={i} j={j} ctx={ctx} />
           return null
@@ -180,7 +184,8 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
 
             // The prompt an agent wrote for its subagent: not the human's
             // line, whatever its first character is.
-            if (fromSubagent) return <RoomSubagentLine key={j} text={block.text} />
+            const anchor = searchUnitId(blockKey(i, j), 'text')
+            if (fromSubagent) return <RoomSubagentLine key={j} text={block.text} searchUnit={anchor} />
 
             // A slash command: the human's line, told apart by its icon and face.
             if (block.text.startsWith('/')) {
@@ -188,12 +193,12 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
                 <div key={j} data-testid="room-command"
                   className="flex items-center gap-1.5 text-[13px] text-status-warning font-mono">
                   <TerminalWindow size={14} weight="bold" />
-                  <span>{block.text}</span>
+                  <span data-search-unit={anchor}>{block.text}</span>
                 </div>
               )
             }
 
-            return <RoomUserLine key={j} text={block.text} />
+            return <RoomUserLine key={j} text={block.text} searchUnit={anchor} />
           }
 
           return null

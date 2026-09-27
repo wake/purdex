@@ -283,6 +283,49 @@ Full gate (vitest / lint / tsc / build + `go test ./...` + `go vet ./...`).
   to the first`; `escape closes and clears`; `works in chat and reveals
   through the tools line`; `a new message keeps the current match`.
 
+**Carried from the R3-C1 review (PR #1492, critic verdict: belongs to C2).**
+R3-C1 changed the APIs this task uses: `findMatches(units, query, limit?)`
+returns `{ matches, truncated }` (limit `SEARCH_MATCH_LIMIT` = 10,000);
+`highlightSearch(owner, container, query, matches, current)` and
+`clearSearchHighlights(owner)` take an owner — pass the pane id.
+
+- **A4 auto-scroll.** The transcript's stick-to-bottom must not pull the
+  reader away from a match. While the bar is open, a new commit follows the
+  bottom only if the reader was already at the bottom before it; jumping to a
+  match (which leaves the bottom) therefore stops following until the reader
+  scrolls back down or closes the bar. Test: `a streaming message does not
+  scroll away from the current match`.
+- **A5 streaming partials.** Decision: partials are **not** indexed. They are
+  not in `messages`, carry no block key (so no stable anchor — OperationBlock
+  and RoomProse draw them without `searchUnit`), and their text changes every
+  chunk. A message becomes searchable when it lands in `messages`. The
+  current match is kept across that and every other recompute by identity —
+  `(unitId, ordinal within the unit)` — not by list index; when that match no
+  longer exists, the nearest following match (else the last) becomes current.
+  Test: `the current match survives the stream ending` (partial ends → same
+  match stays current and marked).
+- **A8 re-applying marks.** Marks are Ranges over live text nodes and
+  collapse when React replaces them. Re-run `highlightSearch` in a layout
+  effect after every commit while the bar is open with a non-empty query
+  (depends on `messages`, `tools`, `view`, fold state, query, current) — not
+  only when the query or current changes. Test: `a mark survives a new
+  message` (a new message re-renders; the current range is non-collapsed).
+- **A10 query rules.** Normalise the query to NFC and trim it; an empty
+  result searches nothing. Minimum length: **1 character if it contains a CJK
+  character, else 2** (code points). Reason: user decision Q4 is that search
+  finds everything, and a single Han character (`錯`, `檔`) already narrows a
+  transcript as well as two Latin letters do, while a single Latin letter
+  matches nearly every line. Unit text is normalised to NFC at index time so
+  the offsets stay aligned with the query. `SEARCH_MIN_CHARS` and
+  `searchPattern` move to these rules; tests: `a single Han character
+  searches`, `a single Latin letter does not`, `whitespace-only searches
+  nothing`, `NFD input matches NFC text`.
+- **A11 cost.** `buildSearchUnits` is memoised on `messages`, `tools` and
+  `view` only (never the query), so typing re-runs only `findMatches`; the
+  prose units are already memoised per content (`proseText`). The count shows
+  `10000+` when `truncated` (`room.search.count_more`, `"{{current}} /
+  {{total}}+"`). Test: `shows 10000+ past the limit`.
+
 ### T3.4 gates
 
 R3-C1 = T3.1 + T3.2 (full gate), R3-C2 = T3.3 (full gate).

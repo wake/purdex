@@ -8,6 +8,8 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { diffRows, type DiffRow, type DiffRowKind } from '../../lib/nex/diff-lines'
 import type { ToolActivity } from '../../lib/nex/tool-activity'
 import { foldPlan } from '../../lib/nex/fold'
+import type { BlockKey } from '../../lib/nex/operations'
+import { searchUnitId } from '../../lib/nex/transcript-search'
 import { useFold } from './fold-context'
 
 interface Props {
@@ -23,6 +25,15 @@ interface Props {
    * argument is a command or a description rather than the file.
    */
   showPath?: boolean
+  /**
+   * The operation's block position: each row's text carries
+   * `searchUnitId(searchKey, 'diff', row)`, rows numbered across hunks in
+   * drawing order. Only while rows are drawn whole — a folded row is the
+   * preview's cut, not the row (search expands `${foldKey}:diff` first).
+   * The path, when shown, carries `searchUnitId(searchKey, 'path')` whether
+   * folded or not: it sits on the stat line, outside the fold.
+   */
+  searchKey?: BlockKey
 }
 
 /**
@@ -81,7 +92,7 @@ function spendBudget(hunks: HunkRows[], budget: number, preview?: string[]): Hun
   return out
 }
 
-export default function ToolDiffView({ diff, foldKey, showPath = false }: Props) {
+export default function ToolDiffView({ diff, foldKey, showPath = false, searchKey }: Props) {
   const t = useI18nStore((s) => s.t)
   const [expanded, toggle] = useFold(`${foldKey}:diff`)
 
@@ -109,6 +120,12 @@ export default function ToolDiffView({ diff, foldKey, showPath = false }: Props)
   // Collapsed, a row draws the fold's cut of its text, not the whole of it:
   // the preview is bounded in bytes as well as rows. Expanded shows it all.
   const visible = spendBudget(hunks, budget, folded ? plan.previewLines : undefined)
+  // Each hunk's first row number across the whole diff (budget or not: a
+  // hunk keeps a prefix of its rows, so row j of hunk i is firstRow[i] + j).
+  const firstRow: number[] = []
+  for (let i = 0, n = 0; i < hunks.length; n += hunks[i].rows.length, i++) firstRow.push(n)
+  const rowAnchor = (hunk: number, row: number) =>
+    searchKey === undefined || folded ? undefined : searchUnitId(searchKey, 'diff', firstRow[hunk] + row)
 
   // Spec §3.1.1 #1: room drops the card from every operation and opens one
   // exception — "only special blocks (diff) keep a container". A diff is a
@@ -133,7 +150,11 @@ export default function ToolDiffView({ diff, foldKey, showPath = false }: Props)
       */}
       <div data-testid="diff-stat" className="flex items-baseline gap-2 px-2 py-0.5 text-text-muted">
         {showPath && (
-          <span data-testid="diff-path" className="min-w-0 flex-1 break-all">{diff.path}</span>
+          <span
+            data-testid="diff-path"
+            data-search-unit={searchKey === undefined ? undefined : searchUnitId(searchKey, 'path')}
+            className="min-w-0 flex-1 break-all"
+          >{diff.path}</span>
         )}
         <span className="shrink-0 tabular-nums">{`+${diff.added} ${MINUS}${diff.removed}`}</span>
       </div>
@@ -149,7 +170,7 @@ export default function ToolDiffView({ diff, foldKey, showPath = false }: Props)
                 <span className={NUM_CLASS}>{row.old ?? ''}</span>
                 <span className={NUM_CLASS}>{row.new ?? ''}</span>
                 <span className="w-4 shrink-0 select-none">{SIGN[row.kind]}</span>
-                <span className="whitespace-pre-wrap break-all flex-1 min-w-0">{row.text}</span>
+                <span data-search-unit={rowAnchor(i, j)} className="whitespace-pre-wrap break-all flex-1 min-w-0">{row.text}</span>
               </div>
             ))}
           </div>

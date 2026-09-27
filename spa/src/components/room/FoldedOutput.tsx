@@ -23,13 +23,15 @@ export interface FoldedOutputProps {
    * thought. A folded preview stops mid-body, so it gets none.
    */
   trailing?: ReactNode
+  /** The search anchor (`data-search-unit`) of the text this body draws; absent → not searchable. */
+  searchUnit?: string
 }
 
 const BODY_CLASS = 'text-xs whitespace-pre-wrap break-all overflow-auto max-h-96'
 const BUTTON_CLASS =
   'mt-1 text-xs text-text-muted hover:text-text-primary cursor-pointer text-left'
 
-export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal', trailing }: FoldedOutputProps) {
+export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal', trailing, searchUnit }: FoldedOutputProps) {
   const t = useI18nStore((s) => s.t)
   const bodyClass = `${BODY_CLASS} ${tone === 'error' ? 'text-status-error' : 'text-text-secondary'}`
 
@@ -47,7 +49,7 @@ export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal', 
   if (!plan.collapsible) {
     return (
       <div>
-        <pre data-testid="fold-body" className={bodyClass}>{text}{trailing}</pre>
+        <pre data-testid="fold-body" data-search-unit={searchUnit} className={bodyClass}>{text}{trailing}</pre>
         {truncationNote}
       </div>
     )
@@ -56,7 +58,7 @@ export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal', 
   if (expanded) {
     return (
       <div>
-        <pre data-testid="fold-body" className={bodyClass}>{text}{trailing}</pre>
+        <pre data-testid="fold-body" data-search-unit={searchUnit} className={bodyClass}>{text}{trailing}</pre>
         {truncationNote}
         <button type="button" data-testid="fold-less" className={BUTTON_CLASS} onClick={onToggle}>
           {t('room.fold.less')}
@@ -74,6 +76,7 @@ export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal', 
 
   return (
     <div>
+      {/* No anchor: the preview is a cut of the text, not the text (search expands first). */}
       <pre data-testid="fold-body" className={bodyClass}>{plan.previewLines.join('\n')}</pre>
       {truncationNote}
       <button type="button" data-testid="fold-more" className={BUTTON_CLASS} onClick={onToggle}>

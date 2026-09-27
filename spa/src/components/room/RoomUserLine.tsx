@@ -11,9 +11,11 @@ interface Props {
   pending?: boolean
   /** Drawn after the text on the same row — the pending line's `queued` tag. */
   children?: ReactNode
+  /** The search anchor of the text (a durable line's; the pending line has none). */
+  searchUnit?: string
 }
 
-export default function RoomUserLine({ text, pending, children }: Props) {
+export default function RoomUserLine({ text, pending, children, searchUnit }: Props) {
   return (
     <div
       data-testid="room-user-line"
@@ -28,7 +30,7 @@ export default function RoomUserLine({ text, pending, children }: Props) {
         aria-hidden="true"
         className="absolute -left-2.5 top-0.5 bottom-0.5 w-0.5 rounded-full bg-accent"
       />
-      <p className="whitespace-pre-wrap break-words">{text}</p>
+      <p data-search-unit={searchUnit} className="whitespace-pre-wrap break-words">{text}</p>
       {children}
     </div>
   )

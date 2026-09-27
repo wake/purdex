@@ -5,11 +5,11 @@
 // speaking to its child.
 import { Robot } from '@phosphor-icons/react'
 
-export default function RoomSubagentLine({ text }: { text: string }) {
+export default function RoomSubagentLine({ text, searchUnit }: { text: string; searchUnit?: string }) {
   return (
     <div data-testid="room-subagent-line" className="flex items-baseline gap-1.5 text-sm text-text-secondary">
       <Robot size={12} aria-hidden="true" className="shrink-0 translate-y-0.5" />
-      <p className="whitespace-pre-wrap break-words">{text}</p>
+      <p data-search-unit={searchUnit} className="whitespace-pre-wrap break-words">{text}</p>
     </div>
   )
 }

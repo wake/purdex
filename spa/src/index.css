@@ -53,6 +53,30 @@ button:disabled {
   to { visibility: hidden; }
 }
 
+/* Transcript search marks (R3 T3.2, lib/nex/search-highlight.ts): every match
+   on screen in a 40% accent fill with an accent underline, the one
+   being visited in the accent itself. CSS Custom Highlight API — no DOM is
+   inserted; browsers without it simply draw no mark. ::highlight takes only
+   colour, background and text-decoration properties.
+
+   Not --accent-muted: that is the chat user bubble's own fill
+   (`bg-accent-muted`), so a match inside a bubble disappeared (finding A9).
+   40% accent over the bubble's 0.3 (dark) / 0.15 (light) fill stands apart
+   from it by 1.55:1 / 1.68:1 luminance (the old mark: none), and body text
+   on the mark stays at 6.9:1 or better in the dark and light themes, bubble
+   or not (nord's light accent is the low end: 3.8:1 inside its bubble).
+   Stronger costs text contrast in nord and dracula. The underline is a cue
+   that does not depend on telling two purples apart. Built from --accent,
+   not a new token, so custom themes get it too. */
+::highlight(search-match) {
+  background-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-decoration: underline 2px var(--accent);
+}
+::highlight(search-current) {
+  background-color: var(--accent);
+  color: var(--text-inverse);
+}
+
 /* === Markdown Live Mode (Tiptap) — Outline-style reading typography ===
    Scoped strictly to `.tiptap-editor` (only TiptapEditor uses this class;
    room/RoomProse uses generic prose and is unaffected). Sizes / weights /

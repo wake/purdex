@@ -27,3 +27,20 @@ describe('index.css — host badge state rule', () => {
     expect(opened).toBe(closed)
   })
 })
+
+describe('index.css — transcript search marks', () => {
+  // @ts-expect-error __dirname is untyped here — see comment above.
+  const css: string = readFileSync(resolve(__dirname, 'index.css'), 'utf8')
+  const rule = (name: string) => css.match(new RegExp(`::highlight\\(${name}\\)\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+
+  it('does not paint a match in the user bubble\'s own fill (finding A9)', () => {
+    // ChatUserBubble is `bg-accent-muted`: a mark in that same fill vanishes inside it.
+    const match = rule('search-match')
+    expect(match).toMatch(/background-color:/)
+    expect(match).not.toMatch(/var\(--accent-muted\)/)
+  })
+
+  it('marks every match with a cue that is not a fill alone', () => {
+    expect(rule('search-match')).toMatch(/text-decoration:[^;]*underline/)
+  })
+})
