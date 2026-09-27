@@ -9,6 +9,7 @@ import { create } from 'zustand'
 import { createNexHostEffects, type NexHostEntries } from '../lib/nex/nex-host-effects'
 import { hostFingerprint } from '../lib/nex/nex-host-reducer'
 import { useHostStore } from './useHostStore'
+import type { WorkerRollupCapability } from '../lib/nex/types'
 
 export { NEX_HOST_TTL_MS, type NexHostEntry, type NexHostPhase } from '../lib/nex/nex-host-reducer'
 
@@ -41,6 +42,21 @@ export function selectHandoffReady(hostId: string): (s: Pick<NexHostState, 'byHo
     if (entry?.phase !== 'ready' || !entry.capabilities) return false
     return entry.capabilities.delegate?.resume_session_id === true
       && entry.capabilities.sandbox_profiles.includes('handoff')
+  }
+}
+
+/**
+ * `capabilities.worker_rollup` of a ready host, or null (not ready, unknown
+ * host, or an older daemon without task events / rollup fields). Presence is
+ * the only feature detect (nexen contract §0) — never a version compare.
+ * Returns the cached object itself, so it is a stable selector result.
+ */
+export function selectWorkerRollup(hostId: string): (s: Pick<NexHostState, 'byHost'>) => WorkerRollupCapability | null {
+  return (s) => {
+    const entry = s.byHost[hostId]
+    if (entry?.phase !== 'ready' || !entry.capabilities) return null
+    const rollup = entry.capabilities.worker_rollup
+    return typeof rollup === 'object' && rollup !== null ? rollup : null
   }
 }
 

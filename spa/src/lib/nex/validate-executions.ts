@@ -5,7 +5,7 @@
 // be able to unmount either of them. Rows without a usable identity are
 // dropped; every field the views render is coerced to the shape the type
 // promises. Unknown fields pass through untouched.
-import type { ExecutionLeaseView, ExecutionSummary } from './types'
+import type { ExecutionLeaseView, ExecutionSummary, WorkerActivity } from './types'
 
 export interface SanitizedExecutionsPage {
   items: ExecutionSummary[]
@@ -55,7 +55,43 @@ function sanitizeRow(raw: unknown): ExecutionSummary | null {
     if (v === undefined) delete row[k]
     else row[k] = v
   }
+  applyRollup(row, raw)
   return row
+}
+
+const isFiniteNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0
+
+/**
+ * The worker_rollup fields (nexen v0.13). Absent keys stay absent — an old
+ * daemon's row must not look like "0 running, no cost". A present but
+ * malformed `cost_usd` is `null` (the contract's own "no number"); the
+ * others are dropped.
+ */
+function applyRollup(row: ExecutionSummary, raw: Record<string, unknown>): void {
+  if ('cost_usd' in raw) row.cost_usd = isFiniteNum(raw.cost_usd) && raw.cost_usd >= 0 ? raw.cost_usd : null
+  for (const k of ['running_tasks', 'turn_count'] as const) {
+    if (isCount(raw[k])) row[k] = raw[k]
+    else delete row[k]
+  }
+  const lt = raw.last_tool
+  if (isRecord(lt) && typeof lt.name === 'string' && typeof lt.tool_use_id === 'string' && isFiniteNum(lt.at)) {
+    row.last_tool = { name: lt.name, tool_use_id: lt.tool_use_id, at: lt.at }
+  } else delete row.last_tool
+  const activity = activityOf(raw.activity)
+  if (activity) row.activity = activity
+  else delete row.activity
+}
+
+function activityOf(v: unknown): WorkerActivity | undefined {
+  if (!isRecord(v) || typeof v.phase !== 'string' || !isCount(v.open_tools)) return undefined
+  const out: WorkerActivity = { phase: v.phase, open_tools: v.open_tools }
+  const t = v.tool
+  if (isRecord(t) && typeof t.name === 'string' && typeof t.tool_use_id === 'string' && isFiniteNum(t.since)) {
+    out.tool = { name: t.name, tool_use_id: t.tool_use_id, since: t.since }
+  }
+  if (isFiniteNum(v.since)) out.since = v.since
+  return out
 }
 
 const OPTIONAL_STRINGS = [

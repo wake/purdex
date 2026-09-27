@@ -36,10 +36,83 @@ export interface ExecutionSummary {
   event_count: number
   observers: number
   archived: boolean
-  // Single-get only (GET /v1/executions/{id}); absent on list rows.
+  // On a worker_rollup daemon (nexen v0.13+) list rows always carry it (0 is
+  // an answer); the single GET keeps omitempty. Older daemons: single GET only.
   turn_count?: number
   live_turn_id?: string
   lease?: ExecutionLeaseView
+  // Rollup fields (capabilities.worker_rollup; absent on an older daemon).
+  /** The conversation's cumulative cost (resume chain, may predate the execution); null = none reported. */
+  cost_usd?: number | null
+  last_tool?: { name: string; tool_use_id: string; at: number }
+  running_tasks?: number
+  activity?: WorkerActivity
+}
+
+/** `activity` on an execution summary. `phase` is an open set — read it through `normalizePhase`. */
+export interface WorkerActivity {
+  phase: string
+  tool?: { name: string; tool_use_id: string; since: number }
+  open_tools: number
+  since?: number
+}
+
+export type TaskKind = 'shell' | 'subagent' | 'other'
+export type TaskStatus = 'running' | 'completed' | 'failed' | 'killed' | 'lost'
+
+export interface TaskUsage {
+  total_tokens: number
+  tool_uses: number
+  duration_ms: number
+}
+
+/**
+ * One background task (Bash `run_in_background` / subagent) — the merged
+ * `task_start` ∪ `task_end` shape, which is also a `/tasks` item. End fields
+ * are null (or absent, for the optional ones) while running. `cost_usd` is
+ * deliberately not carried: it is always null (`worker_rollup.subagent_cost`).
+ */
+export interface WorkerTask {
+  task_id: string
+  turn_id: string
+  kind: TaskKind
+  /** Provider original (`local_bash`, `local_agent`, …). */
+  task_type: string
+  tool_use_id: string | null
+  parent_tool_use_id: string | null
+  description: string
+  command?: string
+  subagent_type?: string
+  backgrounded: boolean
+  status: TaskStatus
+  provider_status: string | null
+  closed_by: string | null
+  summary?: string
+  usage?: TaskUsage
+  /** Daemon observation time (ms); null only for a row known from its task_end alone. */
+  started_at: number | null
+  ended_at: number | null
+  /**
+   * Client-only: the durable seq of this row's task_start, or the snapshot
+   * cursor for a row first seen in a `/tasks` snapshot. Decides whether a
+   * later snapshot that omits a running row may drop it.
+   */
+  startSeq: number
+}
+
+export interface WorkerTasksSnapshot {
+  items: WorkerTask[]
+  /** The execution's latest seq, read BEFORE the rows (nexen api/tasks.go). */
+  cursor: number
+}
+
+/** `capabilities.worker_rollup` — presence is the feature detect; never compare versions. */
+export interface WorkerRollupCapability {
+  task_kinds: string[]
+  task_statuses: string[]
+  activity_phases: string[]
+  cost_basis?: string
+  subagent_cost: boolean
 }
 
 export interface NexEvent {
@@ -100,6 +173,12 @@ export interface NexCapabilities {
    * them (P-B3 spec §4.5).
    */
   tool_events?: { output_max_bytes: number; diff_max_lines: number }
+  /**
+   * Presence = the daemon emits `task_start` / `task_end`, serves
+   * `GET /v1/executions/{id}/tasks` and puts the rollup fields on execution
+   * summaries (nexen v0.13, contract §0 `worker_rollup`).
+   */
+  worker_rollup?: WorkerRollupCapability
   [key: string]: unknown
 }
 
