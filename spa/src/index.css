@@ -53,6 +53,18 @@ button:disabled {
   to { visibility: hidden; }
 }
 
+/* Transcript search marks (R3 T3.2, lib/nex/search-highlight.ts): every match
+   on screen in the accent's muted fill, the one being visited in the accent
+   itself. CSS Custom Highlight API — no DOM is inserted; browsers without it
+   simply draw no mark. Only colour properties are allowed on ::highlight. */
+::highlight(search-match) {
+  background-color: var(--accent-muted);
+}
+::highlight(search-current) {
+  background-color: var(--accent);
+  color: var(--text-inverse);
+}
+
 /* === Markdown Live Mode (Tiptap) — Outline-style reading typography ===
    Scoped strictly to `.tiptap-editor` (only TiptapEditor uses this class;
    room/RoomProse uses generic prose and is unaffected). Sizes / weights /
