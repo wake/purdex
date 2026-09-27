@@ -12,6 +12,7 @@ import { clearSearchHighlights } from '../../lib/nex/search-highlight'
 import type { ContentBlock, StreamMessage } from '../../lib/nex/message-types'
 import type { PartialAssembly } from '../../lib/nex/partial'
 import type { ToolActivity } from '../../lib/nex/tool-activity'
+import type { TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
 
 const asst = (...blocks: ContentBlock[]): StreamMessage =>
   ({ type: 'assistant', message: { id: 'm', role: 'assistant', content: blocks, stop_reason: null } } as StreamMessage)
@@ -69,13 +70,14 @@ interface HarnessProps {
 function Harness({ messages, view = 'room', tools, turnStarts = [0], partial = null, onClose = () => {} }: HarnessProps) {
   const fold = useFoldMemory()
   const scrollRef = useRef<HTMLDivElement>(null)
+  const control = useRef<TranscriptScrollControl>(null)
   const Transcript = view === 'chat' ? ChatTranscript : RoomTranscript
   return (
     <FoldContext.Provider value={fold}>
       <TranscriptSearch owner="p1" scrollRef={scrollRef} messages={messages} tools={tools} view={view}
-        keyPrefix="k" turnStarts={turnStarts} onClose={onClose} />
+        keyPrefix="k" turnStarts={turnStarts} onClose={onClose} onJump={() => control.current?.release()} />
       <Transcript messages={messages} keyPrefix="k" showThinking={false} showEmptyHint={false}
-        turnStarts={turnStarts} tools={tools} partial={partial} scrollRef={scrollRef} holdScroll />
+        turnStarts={turnStarts} tools={tools} partial={partial} scrollRef={scrollRef} scrollControl={control} holdScroll />
     </FoldContext.Provider>
   )
 }
@@ -237,6 +239,31 @@ describe('TranscriptSearch', () => {
     expect(intoView).toHaveBeenCalledTimes(1)
     next()
     expect(intoView).toHaveBeenCalledTimes(2)
+  })
+
+  // A F4: a match in the last screen leaves the box within NEAR_BOTTOM of
+  // the end; after the jump, a new line must still not pull the reader down.
+  it('a jump into the last screen stops the bottom-follow', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    const messages = [said('filler'), said('the needle')]
+    const { rerender } = render(<Harness messages={messages} />)
+    const box = document.querySelector('.overflow-y-auto') as HTMLElement
+    const geometry = (scrollHeight: number, scrollTop: number) => {
+      Object.defineProperty(box, 'scrollHeight', { configurable: true, value: scrollHeight })
+      Object.defineProperty(box, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(box, 'scrollTop', { configurable: true, writable: true, value: scrollTop })
+    }
+    geometry(1000, 800)
+    fireEvent.scroll(box)
+    // The match is on the last screen: centring it is clamped near the end.
+    Element.prototype.scrollIntoView = vi.fn(() => { box.scrollTop = 790 })
+    type('needle')
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    geometry(1100, 790)
+    rerender(<Harness messages={[...messages, said('a new line')]} />)
+    expect(scrollTo).not.toHaveBeenCalled()
   })
 
   it('a streaming message does not scroll away from the current match', () => {

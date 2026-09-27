@@ -3,6 +3,7 @@
 // (the search bar is open), follow new content only when the reader was
 // already at the bottom (R3 plan T3.3, A4).
 import { createRef } from 'react'
+import type { TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, fireEvent } from '@testing-library/react'
 import RoomTranscript, { type RoomTranscriptProps } from './RoomTranscript'
@@ -91,6 +92,38 @@ describe.each(views)('%s transcript scrolling', (_name, Transcript) => {
 
     // Back at the bottom: following resumes.
     geometry(box, 1300, 200, 1100)
+    fireEvent.scroll(box)
+    grow()
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+  })
+
+  // A F4: a jump to a match in the last screen leaves scrollTop clamped
+  // within NEAR_BOTTOM of the end, which read as "at the bottom", and the next
+  // line pushed the match off screen. `release()` stops following until the
+  // reader scrolls on their own.
+  it('A F4: after release() a jump that ends near the bottom does not follow', () => {
+    const ref = createRef<HTMLDivElement>()
+    const control = createRef<TranscriptScrollControl>()
+    let messages = [said('a')]
+    const { rerender } = render(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: true }))
+    const box = ref.current!
+    const grow = () => {
+      messages = [...messages, said(`m${messages.length}`)]
+      rerender(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: true }))
+    }
+    geometry(box, 1000, 200, 800)
+    fireEvent.scroll(box)
+    // The jump lands in the last screen: scrollTop is clamped to the bottom.
+    geometry(box, 1000, 200, 790)
+    control.current!.release()
+    // …and its own scroll event arrives.
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    geometry(box, 1100, 200, 790)
+    grow()
+    expect(scrollTo).not.toHaveBeenCalled()
+    // The reader scrolls back to the bottom: following resumes.
+    geometry(box, 1100, 200, 900)
     fireEvent.scroll(box)
     grow()
     expect(scrollTo).toHaveBeenCalledTimes(1)

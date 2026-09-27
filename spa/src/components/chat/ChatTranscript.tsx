@@ -31,7 +31,7 @@ import OperationBlock from '../room/OperationBlock'
 import { OperationAt } from '../room/MessageRow'
 import type { RenderCtx } from '../room/render-message'
 import { FoldContext, useInheritedFoldMemory } from '../room/fold-context'
-import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
+import { useScrollControl, useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 import type { RoomTranscriptProps } from '../room/RoomTranscript'
 import ChatBubble, { ChatUserBubble } from './ChatBubble'
 import ChatPartialGroup from './ChatPartialGroup'
@@ -144,9 +144,12 @@ export default function ChatTranscript({
   now,
   scrollRef,
   holdScroll = false,
+  scrollControl,
 }: ChatTranscriptProps) {
   const t = useI18nStore((s) => s.t)
-  const { attach, onScroll, follow } = useTranscriptScroll(scrollRef, holdScroll)
+  const scroll = useTranscriptScroll(scrollRef, holdScroll)
+  const { attach, onScroll, follow } = scroll
+  useScrollControl(scrollControl, scroll)
   const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
   const hasPending = hasContent(children)
   // The room's pairing: results for the lines' blocks, and `childIndexes`, so

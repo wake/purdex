@@ -21,7 +21,9 @@
 //   replaces them, so they are re-applied after every commit that can touch
 //   the transcript — without scrolling: only moving scrolls.
 // - The pane holds the transcript's bottom-follow while the bar is open (A4,
-//   `holdScroll`), so a streaming reply does not pull the reader off a match.
+//   `holdScroll`), so a streaming reply does not pull the reader off a match;
+//   every jump also releases it (`onJump`, A F4), since a match on the last
+//   screen leaves the box close enough to the end to read as "at the bottom".
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import { CaretDown, CaretUp, MagnifyingGlass, X } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -47,12 +49,17 @@ export interface TranscriptSearchProps {
   onClose: () => void
   /** Bumped by the pane on every Mod+F: focus (and select) the input again. */
   focusRequest?: number
+  /**
+   * Called after every jump to a match: the pane releases the transcript's
+   * bottom-follow (A F4), so a match on the last screen stays put.
+   */
+  onJump?: () => void
 }
 
 const BUTTON = 'p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none'
 
 export default function TranscriptSearch({
-  owner, scrollRef, messages, tools, view, keyPrefix, turnStarts, onClose, focusRequest = 0,
+  owner, scrollRef, messages, tools, view, keyPrefix, turnStarts, onClose, focusRequest = 0, onJump,
 }: TranscriptSearchProps) {
   const t = useI18nStore((s) => s.t)
   const foldStore = useFoldStore()
@@ -94,9 +101,11 @@ export default function TranscriptSearch({
       foldStore.expand(match.reveal)
       return
     }
+    const jump = wantScroll.current && current >= 0
     highlightSearch(owner, container, query, matches, current, { scroll: wantScroll.current })
     wantScroll.current = false
-  }, [owner, scrollRef, searching, query, matches, current, sel, foldStore, messages, tools, view])
+    if (jump) onJump?.()
+  }, [owner, scrollRef, searching, query, matches, current, sel, foldStore, messages, tools, view, onJump])
 
   useLayoutEffect(() => () => clearSearchHighlights(owner), [owner])
 

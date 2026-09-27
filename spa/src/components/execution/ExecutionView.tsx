@@ -22,6 +22,7 @@ import WorkerInput from '../room/WorkerInput'
 import QuickReplyDock from '../room/QuickReplyDock'
 import TranscriptSearch from '../room/TranscriptSearch'
 import { isFindShortcut } from '../../lib/find-shortcut'
+import type { TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
 import { useQuickReplies } from '../../lib/quick-replies'
 import ExecutionHeader from './ExecutionHeader'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -143,6 +144,9 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const restoreFocus = useRef<HTMLElement | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // The transcript's bottom-follow: every jump to a match releases it (A F4).
+  const scrollControl = useRef<TranscriptScrollControl>(null)
+  const onSearchJump = useCallback(() => scrollControl.current?.release(), [])
   const closeSearch = useCallback(() => {
     setSearchOpen(false)
     const el = restoreFocus.current
@@ -232,7 +236,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     partial: st.partial, tools: st.tools, now,
     // R3 T3.3: the search bar marks and scrolls inside the transcript, and
     // while it is open a new line never pulls the reader off a match (A4).
-    scrollRef, holdScroll: searchOpen,
+    scrollRef, holdScroll: searchOpen, scrollControl,
   }
 
   return (
@@ -260,7 +264,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
           {searchOpen && (
             <TranscriptSearch owner={paneId} scrollRef={scrollRef} messages={st.messages} tools={st.tools}
               view={chat ? 'chat' : 'room'} keyPrefix={executionId} turnStarts={st.turnStarts}
-              onClose={closeSearch} focusRequest={focusRequest} />
+              onClose={closeSearch} focusRequest={focusRequest} onJump={onSearchJump} />
           )}
           {chat ? (
             <ChatTranscript {...transcriptProps}>

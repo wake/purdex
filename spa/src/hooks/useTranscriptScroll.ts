@@ -14,7 +14,14 @@
 // `follow` re-reads the position itself before deciding, because a jump to a
 // match moves `scrollTop` synchronously and its scroll event has not arrived
 // yet when the next commit lands.
-import { useCallback, useLayoutEffect, useMemo, useRef, type Ref, type UIEvent } from 'react'
+//
+// **Releasing (A F4).** A jump to a match in the last screen leaves
+// `scrollTop` clamped within NEAR_BOTTOM of the end, which reads as "at the
+// bottom", and the next line would push the match off screen. The search bar
+// calls `release()` after every jump: following stops, and the position the
+// jump left is remembered so its own (late) scroll event does not count —
+// only the reader moving away from it, back to the bottom, resumes it.
+import { useCallback, useImperativeHandle, useLayoutEffect, useMemo, useRef, type Ref, type UIEvent } from 'react'
 
 /** Within this many pixels of the end counts as the bottom (sub-pixel rounding, a last line's margin). */
 const NEAR_BOTTOM = 24
@@ -26,6 +33,19 @@ export interface TranscriptScroll {
   onScroll: (e: UIEvent<HTMLDivElement>) => void
   /** Scroll to the bottom, unless holding and the reader is elsewhere. */
   follow: () => void
+  /** Stop following where the box is now, until the reader scrolls (A F4). */
+  release: () => void
+}
+
+/** What a transcript hands its `scrollControl` ref (the search bar's handle). */
+export interface TranscriptScrollControl {
+  release: () => void
+}
+
+/** Exposes `scroll.release` on a transcript's `scrollControl` prop. */
+export function useScrollControl(control: Ref<TranscriptScrollControl> | undefined, scroll: TranscriptScroll): void {
+  const { release } = scroll
+  useImperativeHandle(control, () => ({ release }), [release])
 }
 
 /** Hands `node` to a caller's ref, whichever kind it is. */
@@ -39,6 +59,8 @@ export function useTranscriptScroll(external: Ref<HTMLDivElement> | undefined, h
   const atBottom = useRef(true)
   const lastTop = useRef(0)
   const scrolled = useRef(false)
+  // The scrollTop a `release()` left, until the reader moves off it.
+  const released = useRef<number | null>(null)
   const holding = useRef(hold)
   // Before any passive effect of the same commit reads it.
   useLayoutEffect(() => { holding.current = hold }, [hold])
@@ -52,6 +74,11 @@ export function useTranscriptScroll(external: Ref<HTMLDivElement> | undefined, h
     const el = box.current
     if (!el) return
     const top = el.scrollTop
+    if (released.current !== null) {
+      // Still where the jump left it (its own scroll event, or growth).
+      if (top === released.current) return
+      released.current = null
+    }
     if (el.scrollHeight - top - el.clientHeight <= NEAR_BOTTOM) atBottom.current = true
     else if (top < lastTop.current) atBottom.current = false
     lastTop.current = top
@@ -65,7 +92,16 @@ export function useTranscriptScroll(external: Ref<HTMLDivElement> | undefined, h
     el.scrollTo({ top: el.scrollHeight, behavior: scrolled.current ? 'smooth' : 'auto' })
     scrolled.current = true
     atBottom.current = true
+    released.current = null
   }, [observe])
 
-  return useMemo(() => ({ attach, onScroll: observe, follow }), [attach, observe, follow])
+  const release = useCallback(() => {
+    const el = box.current
+    if (!el) return
+    atBottom.current = false
+    released.current = el.scrollTop
+    lastTop.current = el.scrollTop
+  }, [])
+
+  return useMemo(() => ({ attach, onScroll: observe, follow, release }), [attach, observe, follow, release])
 }

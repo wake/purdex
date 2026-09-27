@@ -21,7 +21,7 @@ import PartialMessageGroup from '../PartialMessageGroup'
 import RoomTurnGroup from './RoomTurnGroup'
 import { renderMessage, type RenderCtx } from './render-message'
 import { FoldContext, useInheritedFoldMemory } from './fold-context'
-import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
+import { useScrollControl, useTranscriptScroll, type TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
 
 export interface RoomTranscriptProps {
   messages: StreamMessage[]
@@ -51,6 +51,8 @@ export interface RoomTranscriptProps {
    * bottom only if the reader was already there — never away from a match.
    */
   holdScroll?: boolean
+  /** The search bar's handle on the bottom-follow (A F4: `release()` after a jump). */
+  scrollControl?: Ref<TranscriptScrollControl>
 }
 
 const NO_STARTS: readonly number[] = []
@@ -75,9 +77,12 @@ export default function RoomTranscript({
   now,
   scrollRef,
   holdScroll = false,
+  scrollControl,
 }: RoomTranscriptProps) {
   const t = useI18nStore((s) => s.t)
-  const { attach, onScroll, follow } = useTranscriptScroll(scrollRef, holdScroll)
+  const scroll = useTranscriptScroll(scrollRef, holdScroll)
+  const { attach, onScroll, follow } = scroll
+  useScrollControl(scrollControl, scroll)
   const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
   const hasPending = hasContent(children)
   // Spec §4.2: a tool_use and the tool_result that answers it are one block.

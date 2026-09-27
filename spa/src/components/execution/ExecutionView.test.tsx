@@ -1284,6 +1284,7 @@ describe('ExecutionView — search (R3 T3.3)', () => {
     ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }) as Exec['messages'][number]
   const modF = (target: Element) => fireEvent.keyDown(target, { key: 'f', ctrlKey: true })
   const bar = () => screen.queryByTestId('transcript-search')
+  const openSearch = () => modF(document.body)
 
   class FakeHighlight {
     ranges: Range[] = []
@@ -1382,6 +1383,38 @@ describe('ExecutionView — search (R3 T3.3)', () => {
     modF(document.body)
     fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'needle' } })
     expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('1 / 2')
+  })
+
+  // A F4: the pane wires the bar's jumps to the transcript's release().
+  it('a jump into the last screen stops the bottom-follow', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    render(<ExecutionView {...base} isActive />)
+    const scroller = document.querySelector('.overflow-y-auto') as HTMLElement
+    const geometry = (scrollHeight: number, scrollTop: number) => {
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: scrollHeight })
+      Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 })
+      Object.defineProperty(scroller, 'scrollTop', { configurable: true, writable: true, value: scrollTop })
+    }
+    geometry(1000, 800)
+    fireEvent.scroll(scroller)
+    const intoView = vi.fn(() => { scroller.scrollTop = 790 })
+    Element.prototype.scrollIntoView = intoView
+    try {
+      openSearch()
+      fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'needle' } })
+      expect(intoView).toHaveBeenCalled()
+      fireEvent.scroll(scroller)
+      scrollTo.mockClear()
+      geometry(1100, 790)
+      act(() => {
+        const s = useExecutionStore.getState().executions[KEY]
+        patchExec({ messages: [...s.messages, said('a new line')] })
+      })
+      expect(scrollTo).not.toHaveBeenCalled()
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
   })
 
   it('holds the bottom-follow only while the bar is open', () => {
