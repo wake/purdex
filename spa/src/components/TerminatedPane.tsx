@@ -64,7 +64,7 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center h-full p-8 text-center overflow-y-auto">
+    <div className="flex flex-col items-center justify-center-safe h-full p-8 text-center overflow-y-auto">
       <SmileySad size={48} className="text-zinc-500 mb-4" />
       <h2 className="text-lg font-medium text-zinc-300 mb-1">{t(keys.title)}</h2>
       <p className="text-sm text-zinc-500 mb-6">{t(keys.desc, { name: content.cachedName })}</p>
