@@ -533,6 +533,52 @@ describe('the master\'s sync dot', () => {
   })
 })
 
+// Sidebar conflict icons spec §4: the master's item also says there are locks — display only, beside the dot.
+describe('the master\'s conflict icon', () => {
+  beforeEach(() => seedSlaves())
+
+  const H = (c: string) => c.repeat(64)
+  const LOCK = { status: 'locked:conflict', currentHash: H('a'), sot: { rev: 1, hash: H('b') }, conflict: null } as const
+  const withLocks = (keys: string[]): ProfileSyncSnapshot => {
+    const base = attached({}, 'locked:conflict')
+    return { ...base, status: { ...base.status!, locks: Object.fromEntries(keys.map((k) => [k, LOCK])), sections: Object.fromEntries(keys.map((k) => [k, LOCK.status])) } }
+  }
+  const openMenu = () => fireEvent.click(screen.getByTestId('home-button'))
+
+  it('locks → the icon on the master item, with their count, beside the dot', () => {
+    vi.mocked(useProfileSync).mockReturnValue(withLocks(['workspaces', 'tabs.w1']))
+    renderHome()
+    openMenu()
+    const el = screen.getByTestId('profile-item-conflict')
+    expect(el).toHaveAttribute('aria-label', en['profile.conflict.button'].replace('{{count}}', '2'))
+    expect(screen.getByTestId('profile-item-master').contains(el)).toBe(true)
+    expect(screen.getByTestId('profile-item-master').contains(screen.getByTestId('profile-sync-dot'))).toBe(true)
+    expect(screen.getAllByTestId('profile-item-conflict')).toHaveLength(1)
+  })
+
+  it('no locks (even with the profile locked:schema) / no master → no icon', () => {
+    vi.mocked(useProfileSync).mockReturnValue(attached({}, 'locked:schema'))
+    renderHome()
+    openMenu()
+    expect(screen.queryByTestId('profile-item-conflict')).toBeNull()
+    cleanup()
+    vi.mocked(useProfileSync).mockReturnValue(NO_MASTER)
+    renderHome()
+    openMenu()
+    expect(screen.queryByTestId('profile-item-conflict')).toBeNull()
+  })
+
+  it('the count follows the locks while the menu is open', () => {
+    vi.mocked(useProfileSync).mockReturnValue(withLocks(['workspaces']))
+    const { rerender } = renderHome()
+    openMenu()
+    expect(screen.getByTestId('profile-item-conflict')).toHaveAttribute('aria-label', en['profile.conflict.button'].replace('{{count}}', '1'))
+    vi.mocked(useProfileSync).mockReturnValue(withLocks(['workspaces', 'settings']))
+    rerender(<HomeRow isActive={false} onSelectHome={vi.fn()} />)
+    expect(screen.getByTestId('profile-item-conflict')).toHaveAttribute('aria-label', en['profile.conflict.button'].replace('{{count}}', '2'))
+  })
+})
+
 // One rule, no branches: the Home button shows the name, icon and colour of the profile on screen. Unnamed →
 // `Home`; no icon → the Purdex logo; no colour → none. So with nothing set it is, item for item, today's button.
 describe('the Home button shows the profile on screen', () => {

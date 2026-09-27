@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { FloatingPanel } from './FloatingPanel'
+import { ConfirmDialog } from './ConfirmDialog'
 import { getPlatformCapabilities } from '../lib/platform'
 import type { PlatformCapabilities } from '../lib/platform'
 
@@ -453,5 +454,60 @@ describe('FloatingPanel', () => {
     // Unmounting the second: its remembered element (inside-1) is gone, so it falls back to its own anchor.
     rerender(<TwoPanelToggleHarness open1={false} open2={false} onCloseFirst={() => {}} onCloseSecond={() => {}} />)
     expect(document.activeElement).toBe(screen.getByTestId('anchor-2'))
+  })
+})
+
+// A confirmation opened from INSIDE a panel (the sidebar's workspace conflict panel → ResolveRow's ConfirmDialog):
+// Escape answers the topmost thing on screen, the dialog. The panel mounted first, so its document listener would run
+// first — the dialog takes Escape in the capture phase and marks it handled; the panel leaves a handled Escape alone.
+describe('FloatingPanel — a ConfirmDialog inside it', () => {
+  function DialogInPanel({ onClosePanel, onCancelDialog }: { onClosePanel: () => void; onCancelDialog: () => void }) {
+    const anchor = useRef<HTMLButtonElement>(null)
+    const [asking, setAsking] = useState(false)
+    return (
+      <div>
+        <button ref={anchor} data-testid="anchor">anchor</button>
+        <FloatingPanel title="Main" anchorRef={anchor} onClose={onClosePanel}>
+          <button data-testid="ask" onClick={() => setAsking(true)}>ask</button>
+          {asking && (
+            <ConfirmDialog
+              testIdPrefix="x"
+              title="t"
+              body="b"
+              confirmLabel="ok"
+              onCancel={() => { onCancelDialog(); setAsking(false) }}
+              onConfirm={() => setAsking(false)}
+            />
+          )}
+        </FloatingPanel>
+      </div>
+    )
+  }
+
+  it('Escape closes the dialog only; a second Escape closes the panel', () => {
+    const onClosePanel = vi.fn()
+    const onCancelDialog = vi.fn()
+    render(<DialogInPanel onClosePanel={onClosePanel} onCancelDialog={onCancelDialog} />)
+    fireEvent.click(screen.getByTestId('ask'))
+    screen.getByTestId('x-confirm').focus()
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(onCancelDialog).toHaveBeenCalledTimes(1)
+    expect(onClosePanel).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('x-dialog')).toBeNull()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onClosePanel).toHaveBeenCalledTimes(1)
+    expect(onCancelDialog).toHaveBeenCalledTimes(1)
+  })
+
+  it('a busy dialog ignores Escape — and the panel under it still does not close', () => {
+    const onClosePanel = vi.fn()
+    const anchor = { current: null }
+    render(
+      <FloatingPanel title="Main" anchorRef={anchor} onClose={onClosePanel}>
+        <ConfirmDialog testIdPrefix="x" title="t" body="b" confirmLabel="ok" busy onCancel={() => {}} onConfirm={() => {}} />
+      </FloatingPanel>,
+    )
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onClosePanel).not.toHaveBeenCalled()
   })
 })
