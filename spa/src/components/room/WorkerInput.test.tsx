@@ -68,6 +68,31 @@ describe('WorkerInput', () => {
     expect(document.activeElement).not.toBe(screen.getByRole('textbox'))
   })
 
+  // A F5: a send coming back (disabled → enabled) while the reader types in
+  // the search bar must not pull focus into the reply box — Enter would then
+  // send what is left of the search to the worker.
+  it('does not take focus from another field when it is enabled again', async () => {
+    const search = document.createElement('input')
+    document.body.appendChild(search)
+    try {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} focused disabled />)
+      search.focus()
+      rerender(<WorkerInput onSend={vi.fn()} focused disabled={false} />)
+      await new Promise((r) => requestAnimationFrame(r))
+      expect(document.activeElement).toBe(search)
+    } finally {
+      search.remove()
+    }
+  })
+
+  it('takes focus when enabled again with nothing focused', async () => {
+    const { rerender } = render(<WorkerInput onSend={vi.fn()} focused disabled />)
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    rerender(<WorkerInput onSend={vi.fn()} focused disabled={false} />)
+    await new Promise((r) => requestAnimationFrame(r))
+    expect(document.activeElement).toBe(screen.getByRole('textbox'))
+  })
+
   it('seeds the textarea value from initialValue', () => {
     render(<WorkerInput onSend={vi.fn()} initialValue="restored text" />)
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('restored text')

@@ -24,7 +24,13 @@ export default function WorkerInput({ onSend, disabled = false, placeholder, foc
 
   useEffect(() => {
     if (focused && !disabled) {
-      requestAnimationFrame(() => textareaRef.current?.focus())
+      requestAnimationFrame(() => {
+        // Only when nothing else holds focus: a send coming back while the
+        // reader types in the search bar must not pull them in here, where
+        // Enter would send the rest of their query to the worker (A F5).
+        const active = document.activeElement
+        if (!active || active === document.body || active === textareaRef.current) textareaRef.current?.focus()
+      })
     }
   }, [focused, disabled])
 
