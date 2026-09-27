@@ -384,6 +384,15 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
 - Tests: with / without rollup fields, `cost_usd: null`, running 0 / 2,
   unknown phase reads as Thinking.
 
+### T4.1b Sanitise the single GET too (R4-A review A4)
+
+- `getExecution` (`nex-api.ts:121`) passes the summary through unvalidated;
+  list rows go through `validate-executions`. Export the rollup coercion and
+  apply it to the single GET's rollup fields only (never reject the whole
+  summary), before any view reads `cost_usd` / `running_tasks` /
+  `activity` / `last_tool` from `st.summary`. Test with the same hostile
+  values as the list tests.
+
 ### T4.2 Host › Nex table
 
 - `NexExecutionRow`: columns `cost`, `turns`, `last tool`, `running` after
