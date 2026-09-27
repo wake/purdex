@@ -258,16 +258,31 @@ export function searchPattern(query: string): RegExp | null {
   return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu')
 }
 
-/** Every occurrence of `query` in `units`, in unit order then position; non-overlapping. */
-export function findMatches(units: readonly SearchUnit[], query: string): SearchMatch[] {
+/** The most matches `findMatches` returns by default; past it the UI shows `10000+`. */
+export const SEARCH_MATCH_LIMIT = 10_000
+
+export interface SearchResult {
+  matches: SearchMatch[]
+  /** More occurrences exist than `matches` holds (the limit was reached). */
+  truncated: boolean
+}
+
+/**
+ * Every occurrence of `query` in `units`, in unit order then position;
+ * non-overlapping. Stops after `limit` — a two-letter query over a long
+ * session can occur hundreds of thousands of times, and nobody steps through
+ * those one by one.
+ */
+export function findMatches(units: readonly SearchUnit[], query: string, limit = SEARCH_MATCH_LIMIT): SearchResult {
   const pattern = searchPattern(query)
-  if (!pattern) return []
+  if (!pattern) return { matches: [], truncated: false }
   const matches: SearchMatch[] = []
   for (const unit of units) {
     pattern.lastIndex = 0
     for (const m of unit.text.matchAll(pattern)) {
+      if (matches.length === limit) return { matches, truncated: true }
       matches.push({ unitId: unit.id, start: m.index, end: m.index + m[0].length, reveal: unit.reveal })
     }
   }
-  return matches
+  return { matches, truncated: false }
 }

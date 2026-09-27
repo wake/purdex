@@ -31,7 +31,14 @@ interface HighlightRegistry {
   delete(name: string): void
 }
 
-type HighlightCtor = new (...ranges: Range[]) => unknown
+/**
+ * Built empty and filled with `add`: spreading ~10^5 Ranges into the
+ * constructor overflows the call stack (RangeError), finding A3.
+ */
+interface HighlightLike {
+  add(range: Range): unknown
+}
+type HighlightCtor = new () => HighlightLike
 
 function highlightApi(): { registry: HighlightRegistry; Highlight: HighlightCtor } | null {
   const g = globalThis as unknown as { CSS?: { highlights?: HighlightRegistry }; Highlight?: HighlightCtor }
@@ -52,15 +59,21 @@ const owners = new Map<string, OwnerMarks>()
 function publish(): void {
   const api = highlightApi()
   if (!api) return
-  const matches: Range[] = []
-  const currents: Range[] = []
+  const matches = new api.Highlight()
+  const currents = new api.Highlight()
+  let anyMatch = false
+  let anyCurrent = false
   for (const marks of owners.values()) {
-    matches.push(...marks.matches)
-    if (marks.current) currents.push(marks.current)
+    for (const range of marks.matches) matches.add(range)
+    anyMatch ||= marks.matches.length > 0
+    if (marks.current) {
+      currents.add(marks.current)
+      anyCurrent = true
+    }
   }
-  if (matches.length > 0) api.registry.set(MATCH, new api.Highlight(...matches))
+  if (anyMatch) api.registry.set(MATCH, matches)
   else api.registry.delete(MATCH)
-  if (currents.length > 0) api.registry.set(CURRENT, new api.Highlight(...currents))
+  if (anyCurrent) api.registry.set(CURRENT, currents)
   else api.registry.delete(CURRENT)
 }
 
@@ -70,8 +83,11 @@ export function clearSearchHighlights(owner: string): void {
   publish()
 }
 
-/** Every occurrence of `pattern` in `el`'s text, as Ranges over its text nodes (a match may cross nodes). */
-function occurrences(el: Element, pattern: RegExp): Range[] {
+/**
+ * The first `count` occurrences of `pattern` in `el`'s text, as Ranges over
+ * its text nodes (a match may cross nodes).
+ */
+function occurrences(el: Element, pattern: RegExp, count: number): Range[] {
   const nodes: Text[] = []
   const starts: number[] = []
   let text = ''
@@ -92,6 +108,7 @@ function occurrences(el: Element, pattern: RegExp): Range[] {
   const ranges: Range[] = []
   pattern.lastIndex = 0
   for (const m of text.matchAll(pattern)) {
+    if (ranges.length === count) break
     const range = document.createRange()
     const [sn, so] = at(m.index, false)
     const [en, eo] = at(m.index + m[0].length, true)
@@ -127,6 +144,16 @@ function scrollRangeIntoView(range: Range, container: HTMLElement, fallback: Ele
   }
 }
 
+/** The most matches one owner marks at once (the current one included). */
+export const SEARCH_MARK_LIMIT = 2000
+
+/** `[lo, hi)`: at most SEARCH_MARK_LIMIT matches, centred on `current` where the ends allow. */
+function markWindow(total: number, current: number): [number, number] {
+  const centre = current >= 0 && current < total ? current : 0
+  const lo = Math.max(0, Math.min(centre - Math.floor(SEARCH_MARK_LIMIT / 2), total - SEARCH_MARK_LIMIT))
+  return [lo, Math.min(total, lo + SEARCH_MARK_LIMIT)]
+}
+
 /**
  * Marks `matches` under `container` as `owner`'s marks (replacing that owner's
  * earlier ones) and scrolls to `matches[current]`.
@@ -155,30 +182,46 @@ export function highlightSearch(
     if (id !== null && !elements.has(id)) elements.set(id, el)
   }
 
-  const found = new Map<string, Range[]>()
+  // Only a window of SEARCH_MARK_LIMIT matches around the current one is
+  // marked. Ordinals count from the first match, so every match is counted,
+  // but only the window's units are searched in the DOM, and each only as far
+  // as its last ordinal in the window.
+  const [lo, hi] = markWindow(matches.length, current)
+  const ordinals: number[] = []
+  const needed = new Map<string, number>()
   const seen = new Map<string, number>()
+  for (let i = 0; i < hi; i++) {
+    const id = matches[i].unitId
+    const ordinal = seen.get(id) ?? 0
+    seen.set(id, ordinal + 1)
+    if (i >= lo) {
+      ordinals.push(ordinal)
+      needed.set(id, ordinal + 1)
+    }
+  }
+
+  const found = new Map<string, Range[]>()
   const others: Range[] = []
   let currentRange: Range | null = null
   let currentEl: Element | null = null
 
-  matches.forEach((match, i) => {
-    const ordinal = seen.get(match.unitId) ?? 0
-    seen.set(match.unitId, ordinal + 1)
-    const el = elements.get(match.unitId)
-    if (!el) return
-    let ranges = found.get(match.unitId)
+  for (let i = lo; i < hi; i++) {
+    const id = matches[i].unitId
+    const el = elements.get(id)
+    if (!el) continue
+    let ranges = found.get(id)
     if (!ranges) {
-      ranges = occurrences(el, pattern)
-      found.set(match.unitId, ranges)
+      ranges = occurrences(el, pattern, needed.get(id)!)
+      found.set(id, ranges)
     }
-    const range = ranges[ordinal] ?? null
+    const range = ranges[ordinals[i - lo]] ?? null
     if (i === current) {
       currentRange = range
       currentEl = el
     } else if (range) {
       others.push(range)
     }
-  })
+  }
 
   owners.set(owner, { matches: others, current: currentRange })
   publish()

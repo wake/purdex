@@ -2,7 +2,7 @@
 // matches (R3 plan T3.2). jsdom has neither the CSS Custom Highlight API nor
 // layout, so both are stubbed per test.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { clearSearchHighlights, highlightSearch } from './search-highlight'
+import { clearSearchHighlights, highlightSearch, SEARCH_MARK_LIMIT } from './search-highlight'
 import { findMatches, type SearchMatch } from './transcript-search'
 import { proseText } from './markdown-text'
 
@@ -10,6 +10,10 @@ class FakeHighlight {
   ranges: Range[]
   constructor(...ranges: Range[]) {
     this.ranges = ranges
+  }
+  add(range: Range) {
+    this.ranges.push(range)
+    return this
   }
 }
 
@@ -63,7 +67,7 @@ describe('highlightSearch', () => {
       '<pre data-search-unit="a">one needle</pre>' +
       '<div data-search-unit="b"><p><strong>Needle</strong> and nee<strong>dle</strong></p></div>',
     )
-    const matches = findMatches([
+    const { matches } = findMatches([
       { id: 'a', text: 'one needle', reveal: [] },
       { id: 'b', text: proseText('**Needle** and nee**dle**'), reveal: [] },
     ], 'needle')
@@ -159,6 +163,41 @@ describe('highlightSearch', () => {
     expect(texts('search-match')).toEqual(['needle'])
     clearSearchHighlights('p2')
     expect(highlights.size).toBe(0)
+  })
+
+  it('marks 150,000 matches without throwing, replacing the old marks', () => {
+    // Finding A3: spreading ~10^5 Ranges into the Highlight constructor threw
+    // a RangeError and left the previous search's marks behind.
+    installApi()
+    const old = dom('<pre data-search-unit="old">needle</pre>')
+    highlightSearch('p1', old, 'needle', [m('old', 0, 6)], 0)
+    const text = 'ab '.repeat(150_000)
+    const root = dom(`<pre data-search-unit="u">${text}</pre>`)
+    const { matches } = findMatches([{ id: 'u', text, reveal: [] }], 'ab', 200_000)
+    expect(matches).toHaveLength(150_000)
+    expect(() => highlightSearch('p1', root, 'ab', matches, 0)).not.toThrow()
+    const all = [...texts('search-match'), ...texts('search-current')]
+    expect(all.length).toBeLessThanOrEqual(SEARCH_MARK_LIMIT)
+    expect(all.every((t) => t === 'ab')).toBe(true)
+  })
+
+  it('marks at most the limit, in a window that holds the current match', () => {
+    installApi()
+    const text = 'ab '.repeat(5000)
+    const root = dom(`<pre data-search-unit="u">${text}</pre>`)
+    const { matches } = findMatches([{ id: 'u', text, reveal: [] }], 'ab')
+    const offset = (r: Range) => r.startOffset
+    for (const current of [0, 4000, 4999]) {
+      highlightSearch('p1', root, 'ab', matches, current)
+      const cur = highlights.get('search-current')!.ranges
+      expect(cur.map(offset)).toEqual([matches[current].start])
+      const others = highlights.get('search-match')!.ranges
+      expect(others.length + 1).toBe(SEARCH_MARK_LIMIT)
+      // A contiguous window around the current match.
+      const starts = others.map(offset).concat(cur.map(offset)).sort((x, y) => x - y)
+      const first = matches.findIndex((mt) => mt.start === starts[0])
+      expect(starts).toEqual(matches.slice(first, first + SEARCH_MARK_LIMIT).map((mt) => mt.start))
+    }
   })
 
   it('a query too short to search clears the marks', () => {

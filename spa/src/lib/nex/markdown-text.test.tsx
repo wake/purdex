@@ -15,7 +15,7 @@ function domText(markdown: string): string {
   return text
 }
 
-const count = (text: string, query: string) => findMatches([{ id: 'u', text, reveal: [] }], query).length
+const count = (text: string, query: string) => findMatches([{ id: 'u', text, reveal: [] }], query).matches.length
 
 describe('proseText', () => {
   it('drops a link\'s URL and keeps its label', () => {
@@ -103,7 +103,7 @@ describe('prose search against the real RoomProse', () => {
   ])('every match is the DOM\'s occurrence at the same place: %s', (md) => {
     const { container } = render(<RoomProse content={md} searchUnit="u" />)
     const el = container.querySelector('[data-search-unit="u"]')!
-    const matches = findMatches([{ id: 'u', text: proseText(md), reveal: [] }], 'needle')
+    const { matches } = findMatches([{ id: 'u', text: proseText(md), reveal: [] }], 'needle')
     const dom = [...(el.textContent ?? '').matchAll(/needle/gi)].map((m) => m.index)
     expect(matches.map((m) => m.start)).toEqual(dom)
     matches.forEach((match, i) => {
