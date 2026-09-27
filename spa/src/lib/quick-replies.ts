@@ -17,6 +17,8 @@ export const DEFAULT_QUICK_REPLIES: readonly QuickReply[] = Object.freeze([
   Object.freeze({ id: 'explain', text: 'explain that' }),
 ])
 
+const NO_QUICK_REPLIES: readonly QuickReply[] = Object.freeze([])
+
 const utf8 = new TextEncoder()
 
 /**
@@ -32,14 +34,25 @@ export function validateQuickReplyText(text: string): string | null {
 /**
  * The list to show for a host.
  *
- * Defaults while the entry is not loaded, when the daemon predates the
- * collection, or when the collection was never written (revision 0). Once
- * written, the stored items — **even an empty list**, which means "no dock".
+ * A tap sends at once (Q1) and an emptied list means "no dock" (Q3), so the
+ * defaults are shown only when the host is KNOWN to have none of its own:
+ *
+ * - The collection loaded once (`quickRepliesSupported`) → what it held,
+ *   whatever the current status: a failed or running reload keeps the last
+ *   known copy. Revision 0 (never written) → the defaults; otherwise the
+ *   stored items, **even an empty list**.
+ * - The daemon predates the collection (`unsupported`, or loaded without it)
+ *   → the defaults.
+ * - Anything else — no entry, idle, loading, an error before any success —
+ *   is unknown → nothing (no dock), never a guess the user may have deleted.
  */
 export function effectiveQuickReplies(entry: HostConfigEntry | undefined): readonly QuickReply[] {
-  if (!entry || entry.status !== 'ready' || !entry.quickRepliesSupported) return DEFAULT_QUICK_REPLIES
-  if (entry.revisions.quickReplies === 0) return DEFAULT_QUICK_REPLIES
-  return entry.quickReplies
+  if (!entry) return NO_QUICK_REPLIES
+  if (entry.quickRepliesSupported) {
+    return entry.revisions.quickReplies === 0 ? DEFAULT_QUICK_REPLIES : entry.quickReplies
+  }
+  if (entry.status === 'unsupported' || entry.status === 'ready') return DEFAULT_QUICK_REPLIES
+  return NO_QUICK_REPLIES
 }
 
 /** The host's quick replies; loads its host config if nothing has yet. */

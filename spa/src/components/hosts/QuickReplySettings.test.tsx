@@ -114,6 +114,37 @@ describe('QuickReplySettings', () => {
     expect(screen.queryByTestId('quick-replies-defaults')).toBeNull()
   })
 
+  it('a failed reload keeps listing the last known list, not the defaults', () => {
+    seed({ ...entry([{ id: 'a', text: 'alpha' }], 3), status: 'error', error: 'offline' })
+    render(<QuickReplySettings hostId={H} />)
+    expect(rowIds()).toEqual(['a'])
+    expect(screen.queryByTestId('quick-replies-defaults')).toBeNull()
+  })
+
+  it('a failed reload keeps an emptied list empty', () => {
+    seed({ ...entry([], 2), status: 'error', error: 'offline' })
+    render(<QuickReplySettings hostId={H} />)
+    expect(rowIds()).toEqual([])
+    expect(screen.getByTestId('quick-replies-empty')).toBeInTheDocument()
+  })
+
+  it('a failed reload of a never-written list still marks the defaults', () => {
+    seed({ ...entry([], 0), status: 'error', error: 'offline' })
+    render(<QuickReplySettings hostId={H} />)
+    expect(rowIds()).toEqual(['continue', 'run-tests', 'explain'])
+    expect(screen.getByTestId('quick-replies-defaults')).toBeInTheDocument()
+  })
+
+  it.each(['idle', 'loading', 'error'] as const)('lists nothing before the first load (%s) — the section notice explains', (status) => {
+    seed({ ...emptyHostConfigEntry(status), error: status === 'error' ? 'offline' : undefined })
+    render(<QuickReplySettings hostId={H} />)
+    expect(screen.getByTestId('quick-replies')).toBeInTheDocument()
+    expect(rowIds()).toEqual([])
+    expect(screen.queryByTestId('quick-replies-empty')).toBeNull()
+    expect(screen.queryByTestId('quick-replies-defaults')).toBeNull()
+    expect(screen.queryByTestId('quick-reply-add')).toBeNull()
+  })
+
   it('shows the unsupported note on an old daemon', () => {
     seed(entry([], 0, false))
     render(<QuickReplySettings hostId={H} />)

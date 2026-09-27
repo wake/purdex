@@ -78,7 +78,14 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
     )
   }
 
-  const neverWritten = entry.status === 'ready' && entry.revisions.quickReplies === 0
+  // Never loaded (idle, loading, or failed before any success): there is no
+  // list to show — not even the defaults, which the host may no longer hold.
+  // The section's `HostConfigNotice` above says why (loading / load failed).
+  if (!entry.quickRepliesSupported) return <div data-testid="quick-replies" />
+
+  // A failed reload keeps the last known list, so this follows the collection,
+  // not the current status.
+  const neverWritten = entry.revisions.quickReplies === 0
   const editor = (reply: QuickReply) => (
     <QuickReplyEditor key={reply.id} initial={reply} busy={locked || pending}
       error={saveError?.target === 'dialog' ? saveError.text : null} onSave={submit} onCancel={closeEditor} />

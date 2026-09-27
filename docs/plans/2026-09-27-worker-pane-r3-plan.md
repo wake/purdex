@@ -119,13 +119,25 @@ that does not have the collection yet (see T1.2).
   `saveQuickReplies`.
 - `lib/quick-replies.ts` (new, mirrors `resume-templates.ts`):
   `DEFAULT_QUICK_REPLIES` (ids `continue`, `run-tests`, `explain` with the
-  three texts from Q3); `effectiveQuickReplies(entry)`: not loaded /
-  unsupported / **revision 0 (never written)** → defaults; otherwise the stored
-  items, **even when empty** (an emptied list means "no dock", Q3);
+  three texts from Q3); `effectiveQuickReplies(entry)` shows the defaults only
+  when the host is *known* to hold none of its own, because a tap sends at
+  once (Q1) and an emptied list means "no dock" (Q3) — a stray default
+  `continue` after the user deleted it is one tap from being sent:
+  - collection loaded once (`quickRepliesSupported`) → regardless of the
+    current `status` (a failed or running reload keeps the last known copy):
+    **revision 0 (never written)** → defaults, otherwise the stored items,
+    **even when empty**;
+  - old daemon (`status === 'unsupported'`, or `ready` without the
+    collection) → defaults;
+  - anything else (no entry, `idle`, `loading`, an `error` before any
+    success) → `[]` (no dock). The settings tab lists nothing then either;
+    the section's load notice explains.
   `useQuickReplies(hostId)` hook (calls `ensureLoaded`).
-- Tests: `quick-replies.test.ts` — `defaults when never written`; `defaults
-  when the daemon has no collection`; `stored items win`; `an emptied list
-  stays empty`. Store test: `loads quickReplies and its revision`;
+- Tests: `quick-replies.test.ts` — `defaults when never written`; `stored
+  items win`; `an emptied list stays empty`; `error after ready keeps the
+  stored list`; `error after ready keeps an emptied list empty`; `loading
+  shows nothing`; `never-loaded error shows nothing`; `an old daemon still
+  gets the defaults`. Store test: `loads quickReplies and its revision`;
   `marks the collection unsupported on an old daemon payload`.
 
 ### T1.3 SPA: the Hosts-page editor (TDD)
