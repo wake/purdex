@@ -48,7 +48,7 @@ describe('load', () => {
     expect(e.status).toBe('ready')
     expect(e.projects).toEqual(payload.projects.items)
     expect(e.resumeTemplates).toEqual(payload.resumeTemplates.items)
-    expect(e.revisions).toEqual({ projects: 3, commands: 0, resumeTemplates: 1 })
+    expect(e.revisions).toEqual({ projects: 3, commands: 0, resumeTemplates: 1, quickReplies: 0 })
   })
 
   it('404 → unsupported; never throws', async () => {
@@ -61,6 +61,26 @@ describe('load', () => {
     vi.mocked(api.fetchHostConfig).mockRejectedValue(new Error('boom'))
     await useHostConfigStore.getState().load(H)
     expect(useHostConfigStore.getState().byHost[H]).toMatchObject({ status: 'error', error: 'boom' })
+  })
+
+  it('loads quickReplies and its revision', async () => {
+    const quickReplies = { items: [{ id: 'go', text: 'go on' }], revision: 2 }
+    vi.mocked(api.fetchHostConfig).mockResolvedValue({ ...payload, quickReplies })
+    await useHostConfigStore.getState().load(H)
+    const e = useHostConfigStore.getState().byHost[H]
+    expect(e.quickReplies).toEqual(quickReplies.items)
+    expect(e.revisions.quickReplies).toBe(2)
+    expect(e.quickRepliesSupported).toBe(true)
+  })
+
+  it('marks the collection unsupported on an old daemon payload', async () => {
+    vi.mocked(api.fetchHostConfig).mockResolvedValue(payload)
+    await useHostConfigStore.getState().load(H)
+    const e = useHostConfigStore.getState().byHost[H]
+    expect(e.status).toBe('ready')
+    expect(e.quickRepliesSupported).toBe(false)
+    expect(e.quickReplies).toEqual([])
+    expect(e.revisions.quickReplies).toBe(0)
   })
 
   it('dedupes concurrent loads for one host', async () => {
@@ -108,6 +128,16 @@ describe('save*', () => {
     const e = useHostConfigStore.getState().byHost[H]
     expect(e.resumeTemplates).toEqual(server.items)
     expect(e.revisions.resumeTemplates).toBe(7)
+  })
+
+  it('saveQuickReplies PUTs the quick-replies collection and stores the copy', async () => {
+    const next = [{ id: 'go', text: 'go on' }]
+    vi.mocked(api.putHostConfig).mockResolvedValue({ items: next, revision: 1 })
+    await useHostConfigStore.getState().saveQuickReplies(H, next)
+    expect(api.putHostConfig).toHaveBeenCalledWith(H, 'quick-replies', next, 0)
+    const e = useHostConfigStore.getState().byHost[H]
+    expect(e.quickReplies).toEqual(next)
+    expect(e.revisions.quickReplies).toBe(1)
   })
 
   it('refuses to save a host that is not ready', async () => {

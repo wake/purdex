@@ -1,6 +1,7 @@
 // spa/src/stores/useHostConfigStore.ts — per-host cache of the daemon's
-// projects / commands / resume templates (spec §4.1). Not persisted, not
-// synced: the daemon is the source of truth and every write is a CAS.
+// projects / commands / resume templates / quick replies (spec §4.1). Not
+// persisted, not synced: the daemon is the source of truth and every write is
+// a CAS.
 import { create } from 'zustand'
 import {
   fetchHostConfig,
@@ -11,6 +12,7 @@ import {
   type HostConfigCollection,
   type HostConfigCollectionItems,
   type HostProject,
+  type QuickReply,
   type ResumeTemplateOverrides,
 } from '../lib/host-config-api'
 import { useHostStore } from './useHostStore'
@@ -22,12 +24,26 @@ export interface HostConfigEntry {
   projects: HostProject[]
   commands: HostCommand[]
   resumeTemplates: ResumeTemplateOverrides
-  revisions: { projects: number; commands: number; resumeTemplates: number }
+  quickReplies: QuickReply[]
+  /**
+   * The daemon's GET carried a `quickReplies` field. An older daemon has the
+   * rest of host config but not this collection, so `status` alone cannot tell.
+   */
+  quickRepliesSupported: boolean
+  revisions: { projects: number; commands: number; resumeTemplates: number; quickReplies: number }
   error?: string
 }
 
 export function emptyHostConfigEntry(status: HostConfigStatus = 'idle'): HostConfigEntry {
-  return { status, projects: [], commands: [], resumeTemplates: {}, revisions: { projects: 0, commands: 0, resumeTemplates: 0 } }
+  return {
+    status,
+    projects: [],
+    commands: [],
+    resumeTemplates: {},
+    quickReplies: [],
+    quickRepliesSupported: false,
+    revisions: { projects: 0, commands: 0, resumeTemplates: 0, quickReplies: 0 },
+  }
 }
 
 /** Stable fallback for selectors — a fresh object per call would loop useSyncExternalStore. */
@@ -42,6 +58,7 @@ interface HostConfigState {
   saveProjects: (hostId: string, items: HostProject[]) => Promise<void>
   saveCommands: (hostId: string, items: HostCommand[]) => Promise<void>
   saveResumeTemplates: (hostId: string, items: ResumeTemplateOverrides) => Promise<void>
+  saveQuickReplies: (hostId: string, items: QuickReply[]) => Promise<void>
   forget: (hostId: string) => void
 }
 
@@ -154,7 +171,14 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
             projects: p.projects.items ?? [],
             commands: p.commands.items ?? [],
             resumeTemplates: p.resumeTemplates.items ?? {},
-            revisions: { projects: p.projects.revision, commands: p.commands.revision, resumeTemplates: p.resumeTemplates.revision },
+            quickReplies: p.quickReplies?.items ?? [],
+            quickRepliesSupported: p.quickReplies !== undefined,
+            revisions: {
+              projects: p.projects.revision,
+              commands: p.commands.revision,
+              resumeTemplates: p.resumeTemplates.revision,
+              quickReplies: p.quickReplies?.revision ?? 0,
+            },
           })
         } catch (err) {
           // A failure is as endpoint-specific as a success: the old daemon
@@ -183,6 +207,7 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
     saveProjects: (hostId, items) => save(hostId, 'projects', 'projects', items),
     saveCommands: (hostId, items) => save(hostId, 'commands', 'commands', items),
     saveResumeTemplates: (hostId, items) => save(hostId, 'resume-templates', 'resumeTemplates', items),
+    saveQuickReplies: (hostId, items) => save(hostId, 'quick-replies', 'quickReplies', items),
 
     forget: (hostId) => {
       // Dropping the entry is only half of it: an answer already in flight
