@@ -35,7 +35,7 @@ import { CaretDown, CaretUp, MagnifyingGlass, X } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { indexOperations } from '../../lib/nex/operations'
 import {
-  ANCHOR_END, ANCHOR_START, anchorPosition, buildSearchUnits, findCurrent, findMatches, firstAtOrAfter,
+  ANCHOR_END, ANCHOR_START, anchorOrdinal, anchorPosition, buildSearchUnits, findCurrent, findMatches, firstAtOrAfter,
   matchIdentity, normalizeQuery, relocate, SEARCH_MATCH_LIMIT, unitAnchor,
   type MatchIdentity, type SearchResult, type SearchUnit, type UnitAnchor,
 } from '../../lib/nex/transcript-search'
@@ -82,15 +82,16 @@ interface SearchIndex {
 
 function searchIndex(build: () => SearchUnit[]): SearchIndex {
   let built: SearchUnit[] | null = null
-  let last: { query: string; at: number; result: SearchResult } | null = null
+  let last: { query: string; at: number; ordinal: number; result: SearchResult } | null = null
   const units = () => (built ??= build())
   return {
     units,
     find: (query, anchor) => {
       const all = units()
       const at = anchorPosition(all, anchor)
-      if (last && last.query === query && last.at === at) return last.result
-      last = { query, at, result: findMatches(all, query, SEARCH_MATCH_LIMIT, at) }
+      const ordinal = anchorOrdinal(all, anchor)
+      if (last && last.query === query && last.at === at && last.ordinal === ordinal) return last.result
+      last = { query, at, ordinal, result: findMatches(all, query, SEARCH_MATCH_LIMIT, at, ordinal) }
       return last.result
     },
   }
@@ -243,8 +244,10 @@ export default function TranscriptSearch({
     let result: SearchResult
     let j: number
     if (cut) {
-      // Onwards: re-centre on the edge match's unit and step from it there.
-      anchor = unitAnchor(units, edge.unitId)
+      // Onwards: re-centre on the edge match itself — not its unit, which
+      // may hold more matches than the window (#1495 re-review item 3) — and
+      // step from it there.
+      anchor = { ...unitAnchor(units, edge.unitId), ordinal: edge.ordinal }
       result = search(query, anchor)
       const at = findCurrent(units, result.matches, matchIdentity(units, [edge], 0))
       j = Math.max(0, Math.min(result.matches.length - 1, at + delta))

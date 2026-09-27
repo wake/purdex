@@ -315,19 +315,32 @@ function unitMatches(unit: SearchUnit, pattern: RegExp): SearchMatch[] {
  * oldest — so the newest content stays reachable): up to half the limit
  * before it, the rest from it on; a side that has fewer gives its share to
  * the other. `anchor` 0 keeps the first `limit`; `units.length`, the last.
- * Each side scans at most `limit + 1` matches.
+ * `anchorOrdinal` puts the anchor on that match of its unit: the unit's
+ * earlier matches are before it — a single unit can hold more than `limit`,
+ * and a window centred on its start could never move past them (#1495
+ * re-review item 3). Each side scans at most `limit + 1` matches beyond the
+ * anchor unit.
  */
-export function findMatches(units: readonly SearchUnit[], query: string, limit = SEARCH_MATCH_LIMIT, anchor = 0): SearchResult {
+export function findMatches(
+  units: readonly SearchUnit[], query: string, limit = SEARCH_MATCH_LIMIT, anchor = 0, anchorOrdinal = 0,
+): SearchResult {
   const pattern = searchPattern(query)
   if (!pattern) return { matches: [], truncated: false, truncatedBefore: false, truncatedAfter: false }
   const at = Math.max(0, Math.min(anchor, units.length))
   const after: SearchMatch[] = []
-  // (Pushed one by one: spreading a unit's 10^5 matches overflows the stack.)
-  for (let u = at; u < units.length && after.length <= limit; u++) {
+  // Nearest first: the anchor unit's matches before its ordinal, then the
+  // unit before it, each unit's last match first.
+  const before: SearchMatch[] = []
+  if (at < units.length) {
+    // (Pushed one by one: spreading a unit's 10^5 matches overflows the stack.)
+    const ms = unitMatches(units[at], pattern)
+    const split = Math.max(0, Math.min(anchorOrdinal, ms.length))
+    for (let k = split - 1; k >= 0; k--) before.push(ms[k])
+    for (let k = split; k < ms.length; k++) after.push(ms[k])
+  }
+  for (let u = at + 1; u < units.length && after.length <= limit; u++) {
     for (const m of unitMatches(units[u], pattern)) after.push(m)
   }
-  // Nearest first: the unit before the anchor, its last match first.
-  const before: SearchMatch[] = []
   for (let u = at - 1; u >= 0 && before.length <= limit; u--) {
     const ms = unitMatches(units[u], pattern)
     for (let k = ms.length - 1; k >= 0; k--) before.push(ms[k])
@@ -347,11 +360,14 @@ export function findMatches(units: readonly SearchUnit[], query: string, limit =
 /**
  * A unit position that survives a recompute, like MatchIdentity: the unit's
  * id when there is one (units landing before it shift its position), else a
- * bare position — `ANCHOR_START`, `ANCHOR_END`.
+ * bare position — `ANCHOR_START`, `ANCHOR_END`. `ordinal` narrows it to
+ * that match of its unit (findMatches' `anchorOrdinal`); it holds only while
+ * the unit itself is there — re-seated on a successor, it is that unit's start.
  */
 export interface UnitAnchor {
   unitId: string | null
   unitPos: number
+  ordinal?: number
 }
 export const ANCHOR_START: UnitAnchor = { unitId: null, unitPos: 0 }
 export const ANCHOR_END: UnitAnchor = { unitId: null, unitPos: Number.MAX_SAFE_INTEGER }
@@ -360,6 +376,12 @@ export const ANCHOR_END: UnitAnchor = { unitId: null, unitPos: Number.MAX_SAFE_I
 export function anchorPosition(units: readonly SearchUnit[], anchor: UnitAnchor): number {
   const at = anchor.unitId === null ? undefined : unitPositions(units).get(anchor.unitId)
   return Math.min(at ?? anchor.unitPos, units.length)
+}
+
+/** The match of its unit `anchor` sits on: its `ordinal` while that unit is in `units`, else 0. */
+export function anchorOrdinal(units: readonly SearchUnit[], anchor: UnitAnchor): number {
+  if (!anchor.ordinal || anchor.unitId === null) return 0
+  return unitPositions(units).has(anchor.unitId) ? anchor.ordinal : 0
 }
 
 /** The anchor at the unit `id`; the end when it is not a unit. */

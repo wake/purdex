@@ -1,7 +1,7 @@
 // spa/src/lib/nex/transcript-search.test.ts — the search index (R3 plan T3.1).
 import { describe, it, expect } from 'vitest'
 import {
-  ANCHOR_END, buildSearchUnits, findCurrent, findMatches, firstAtOrAfter, matchIdentity, relocate, SEARCH_MATCH_LIMIT, searchUnitId,
+  ANCHOR_END, anchorOrdinal, buildSearchUnits, findCurrent, findMatches, firstAtOrAfter, matchIdentity, relocate, SEARCH_MATCH_LIMIT, searchUnitId,
   type SearchUnit, type SearchUnitOptions,
 } from './transcript-search'
 import { indexOperations } from './operations'
@@ -264,6 +264,36 @@ describe('buildSearchUnits / findMatches', () => {
       expect(findMatches(ten, 'ab', 6, 0)).toMatchObject({ truncatedBefore: false, truncatedAfter: true })
       expect(findMatches(ten, 'ab', 20, 5)).toMatchObject({ truncated: false, truncatedBefore: false, truncatedAfter: false })
       expect(findMatches(ten, 'ab', 20, 5).matches).toHaveLength(20)
+    })
+
+    // PR #1495 re-review item 3: the window can be centred on a match inside
+    // a unit — its earlier matches then count as before the anchor.
+    it('an anchor ordinal splits its unit: earlier matches are before it', () => {
+      expect(ids(findMatches(ten, 'ab', 6, 5, 1))).toEqual(['u4#0', 'u4#1', 'u5#0', 'u5#1', 'u6#0', 'u6#1'])
+      // Past the unit's last match: the whole unit is before it, as if anchored on the next unit.
+      expect(ids(findMatches(ten, 'ab', 6, 5, 9))).toEqual(ids(findMatches(ten, 'ab', 6, 6)))
+      expect(ids(findMatches(ten, 'ab', 6, 5, 0))).toEqual(ids(findMatches(ten, 'ab', 6, 5)))
+    })
+
+    it('one unit with twice the limit: centred on a match deep inside it, the window moves on', () => {
+      const one: SearchUnit[] = [{ id: 'big', text: 'ab '.repeat(2 * SEARCH_MATCH_LIMIT), reveal: [] }]
+      // Centred on the unit, the window is its first `limit` matches…
+      const start = findMatches(one, 'ab', SEARCH_MATCH_LIMIT, 0)
+      expect(start.matches.at(-1)!.ordinal).toBe(SEARCH_MATCH_LIMIT - 1)
+      // …and centred on that last one, it holds the ones after it.
+      const on = findMatches(one, 'ab', SEARCH_MATCH_LIMIT, 0, SEARCH_MATCH_LIMIT - 1)
+      expect(on.matches).toHaveLength(SEARCH_MATCH_LIMIT)
+      expect(on.matches[0].ordinal).toBe(SEARCH_MATCH_LIMIT / 2 - 1)
+      expect(on.matches.at(-1)!.ordinal).toBe(SEARCH_MATCH_LIMIT * 1.5 - 2)
+      expect(on).toMatchObject({ truncatedBefore: true, truncatedAfter: true })
+    })
+
+    it('anchorOrdinal holds while its unit is there, else 0', () => {
+      const list: SearchUnit[] = [{ id: 'a', text: 'ab', reveal: [] }, { id: 'b', text: 'ab ab', reveal: [] }]
+      expect(anchorOrdinal(list, { unitId: 'b', unitPos: 1, ordinal: 1 })).toBe(1)
+      expect(anchorOrdinal(list, { unitId: 'b', unitPos: 1 })).toBe(0)
+      expect(anchorOrdinal(list, { unitId: 'gone', unitPos: 1, ordinal: 1 })).toBe(0)
+      expect(anchorOrdinal(list, ANCHOR_END)).toBe(0)
     })
 
     it('firstAtOrAfter is the first match in the anchor unit or after it', () => {

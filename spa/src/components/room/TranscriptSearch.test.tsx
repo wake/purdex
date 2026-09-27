@@ -224,6 +224,53 @@ describe('TranscriptSearch', () => {
     })
   })
 
+  // PR #1495 re-review item 3: one unit can hold more matches than the kept
+  // window. Stepping past the window's end must re-centre on the match, not
+  // on its unit's start — else the recompute hands back the same window and
+  // next stays put (or previous skips one). The window is shrunk to 10 here
+  // (10,000 presses would not run); transcript-search.test.ts has the real size.
+  describe('one unit holding more matches than the window', () => {
+    const WINDOW = 10
+    let actual: typeof import('../../lib/nex/transcript-search')
+    beforeEach(async () => {
+      actual = await vi.importActual<typeof import('../../lib/nex/transcript-search')>('../../lib/nex/transcript-search')
+      vi.mocked(findMatches).mockImplementation((units, query, _limit, ...rest) => actual.findMatches(units, query, WINDOW, ...rest))
+    })
+    afterEach(() => { vi.mocked(findMatches).mockImplementation(actual.findMatches) })
+    /** Which occurrence of `ab ` the current mark is (each is 3 characters). */
+    const ordinal = () => current()[0].startOffset / 3
+
+    it('next steps through every match and wraps', () => {
+      render(<Harness messages={[said('ab '.repeat(25))]} />)
+      type('ab')
+      expect(count()).toHaveTextContent(`1 / ${WINDOW}+`)
+      for (let k = 1; k < 25; k++) {
+        next()
+        expect(currentUnit()).toBe('0:0:text')
+        expect(ordinal()).toBe(k)
+      }
+      next()
+      expect(ordinal()).toBe(0)
+    })
+
+    it('previous steps back through every match, with a unit before it', () => {
+      render(<Harness messages={[said('ab'), said('ab '.repeat(25))]} />)
+      type('ab')
+      // Previous from the very first wraps to the very last…
+      prev()
+      expect(currentUnit()).toBe('1:0:text')
+      expect(ordinal()).toBe(24)
+      // …and from there back, one by one, into the unit before.
+      for (let k = 23; k >= 0; k--) {
+        prev()
+        expect(currentUnit()).toBe('1:0:text')
+        expect(ordinal()).toBe(k)
+      }
+      prev()
+      expect(currentUnit()).toBe('0:0:text')
+    })
+  })
+
   it('marks every match and the current one', () => {
     render(<Harness messages={[said('one needle'), said('two needle')]} />)
     type('needle')
