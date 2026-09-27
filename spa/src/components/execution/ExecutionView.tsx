@@ -19,6 +19,8 @@ import { FoldContext, useFoldMemory } from '../room/fold-context'
 import RoomUserLine from '../room/RoomUserLine'
 import WorkerDock from '../room/WorkerDock'
 import WorkerInput from '../room/WorkerInput'
+import QuickReplyDock from '../room/QuickReplyDock'
+import { useQuickReplies } from '../../lib/quick-replies'
 import ExecutionHeader from './ExecutionHeader'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { useExecutionStore, executionKey } from '../../stores/useExecutionStore'
@@ -129,6 +131,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // Spec §3.2: one fold memory per pane. It lives here, above the view
   // switch, because room ⇄ chat remounts the transcript (F2).
   const foldStore = useFoldMemory()
+  const quickReplies = useQuickReplies(hostId)
 
   if (problem) {
     const text = problem === 'not_found' ? t('execution.not_found')
@@ -154,6 +157,8 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // is reactivated (see useExecutionSubscription's activation effect), so
   // this clears itself without redesigning the reconnect path.
   const streamDead = st.historyLoaded && st.sse === 'closed' && !!st.sseError
+  // One gate for everything that sends: the input and the quick replies.
+  const inputDisabled = st.pendingSend || ended || !st.historyLoaded || streamDead || takeBackBusy
   const placeholder = st.summary?.archived ? t('execution.input.archived')
     : ended ? t('execution.input.terminal')
     : streamDead ? t('execution.input.disconnected')
@@ -225,8 +230,11 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
         </div>
       )}
       {errorText && <div data-testid="send-error" className="mx-2 mb-1 text-xs text-status-error">{errorText}</div>}
+      {/* R3 T2.1: part of the input, so in chat too. A tap sends at once and
+          never restores a draft — that would remount the input over what is typed. */}
+      <QuickReplyDock replies={quickReplies} onSend={(text) => void handleSend(text, { restoreDraft: false })} disabled={inputDisabled} />
       <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void handleSend(text)}
-        disabled={st.pendingSend || ended || !st.historyLoaded || streamDead || takeBackBusy} placeholder={placeholder} focused={isActive} />
+        disabled={inputDisabled} placeholder={placeholder} focused={isActive} />
     </div>
   )
 }

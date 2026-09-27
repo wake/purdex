@@ -8,12 +8,23 @@ import { interruptExecution, sendMessage, terminateExecution } from '../lib/nex/
 import { NexApiError } from '../lib/nex/types'
 import type { ExecutionLeaseApi } from './useExecutionLease'
 
+export interface SendOptions {
+  /**
+   * Default true: a failed send is put back into the input as the draft (a
+   * typed send). False for a quick reply (R3 T2.1): the input is keyed on the
+   * draft, so touching it at all would remount the input and wipe what the
+   * user has half typed — the draft is neither cleared nor set, and a failure
+   * only shows the send error.
+   */
+  restoreDraft?: boolean
+}
+
 export interface ExecutionActions {
   /** Text restored into the input after a failed send; null otherwise. */
   draft: string | null
   /** An interrupt or terminate request is in flight (sends are tracked by the store's `pendingSend`). */
   actionPending: boolean
-  handleSend(text: string): Promise<void>
+  handleSend(text: string, opts?: SendOptions): Promise<void>
   handleInterrupt(): Promise<void>
   handleTerminate(): Promise<void>
 }
@@ -52,7 +63,8 @@ export function useExecutionActions(
     }
   }, [hostId, executionId, forget])
 
-  const handleSend = useCallback(async (text: string) => {
+  const handleSend = useCallback(async (text: string, opts?: SendOptions) => {
+    const restoreDraft = opts?.restoreDraft ?? true
     // Re-entrancy guard: pendingSend is set
     // synchronously below, before the `await ensureLease()`, so a second
     // submit fired while the first lease acquisition is still in flight
@@ -60,7 +72,7 @@ export function useExecutionActions(
     // two sends race and both post (sharing the same pendingLocal bubble).
     if (store().executions[key]?.pendingSend) return
     store().setSendError(hostId, executionId, null)
-    setDraft(null)
+    if (restoreDraft) setDraft(null)
     touch()
     store().setPendingLocal(hostId, executionId, { text, delivery: null })
     store().setPendingSend(hostId, executionId, true)
@@ -84,7 +96,7 @@ export function useExecutionActions(
       if (attempt !== sendAttempt.current) return
       store().setPendingLocal(hostId, executionId, null)
       store().setPendingSend(hostId, executionId, false)
-      setDraft(text)
+      if (restoreDraft) setDraft(text)
       fail(e)
     }
   }, [hostId, executionId, key, ensureLease, touch, fail])
