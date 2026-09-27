@@ -20,6 +20,12 @@ export interface FoldStore {
   /** Takes the turn too: the same key can be live in two turns at once. */
   unregister(turnIndex: number, key: string): void
   setTurn(turnIndex: number, expanded: boolean): void
+  /**
+   * Opens every key, in one state update, and closes none (R3 T3.2: moving to
+   * a search match reveals what hides it). A key need not be registered — a
+   * block inside a folded subagent mounts only after its rail opens.
+   */
+  expand(keys: readonly string[]): void
 }
 
 export const FoldContext = createContext<FoldStore | null>(null)
@@ -94,9 +100,21 @@ export function useFoldMemory(): FoldStore {
     })
   }, [])
 
+  // Returns `prev` when every key is already open, so a repeat reveal (the
+  // same match again, the next match in the same block) renders nothing.
+  const expand = useCallback((keys: readonly string[]) => {
+    setExpanded(prev => {
+      const closed = keys.filter(key => !(Object.hasOwn(prev, key) && prev[key]))
+      if (closed.length === 0) return prev
+      const next = { ...prev }
+      for (const key of closed) next[key] = true
+      return next
+    })
+  }, [])
+
   return useMemo(
-    () => ({ isExpanded, toggle, register, unregister, setTurn }),
-    [isExpanded, toggle, register, unregister, setTurn],
+    () => ({ isExpanded, toggle, register, unregister, setTurn, expand }),
+    [isExpanded, toggle, register, unregister, setTurn, expand],
   )
 }
 

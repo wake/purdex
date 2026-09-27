@@ -112,6 +112,29 @@ describe('fold memory', () => {
     expect(result.current.isExpanded('op-3')).toBe(true)
   })
 
+  // Search reveals a match (R3 T3.2): it opens what hides the match, never
+  // closes something the reader opened, and reaches keys that are not
+  // registered yet — a subagent's inner block mounts only once its rail opens.
+  it('expand opens every key and collapses none', () => {
+    const { result } = renderHook(() => useFoldMemory())
+    act(() => result.current.toggle('open-already'))
+    act(() => result.current.expand(['open-already', 'op-1', 'op-1:subagent', 'never-registered']))
+    expect(result.current.isExpanded('open-already')).toBe(true)
+    expect(result.current.isExpanded('op-1')).toBe(true)
+    expect(result.current.isExpanded('op-1:subagent')).toBe(true)
+    expect(result.current.isExpanded('never-registered')).toBe(true)
+    expect(result.current.isExpanded('other')).toBe(false)
+  })
+
+  it('expand with nothing new keeps the store as it was', () => {
+    const { result } = renderHook(() => useFoldMemory())
+    act(() => result.current.expand(['a']))
+    const before = result.current
+    act(() => result.current.expand(['a']))
+    act(() => result.current.expand([]))
+    expect(result.current).toBe(before)
+  })
+
   it('setTurn leaves another turn alone', () => {
     const { result } = renderHook(() => useFoldMemory())
     act(() => {

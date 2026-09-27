@@ -121,7 +121,7 @@ describe('PartialMessageGroup (R1)', () => {
     // not be one the next message's block at the same index would read.
     const keys: string[] = []
     const store: FoldStore = {
-      isExpanded: () => false, toggle: () => {}, setTurn: () => {}, unregister: () => {},
+      isExpanded: () => false, toggle: () => {}, setTurn: () => {}, unregister: () => {}, expand: () => {},
       register: (_turn, key) => { keys.push(key) },
     }
     const group = (id: string | null) =>
