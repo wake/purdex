@@ -289,3 +289,15 @@ func TestEnsureHooks_FailureLogThrottledPerErrorText(t *testing.T) {
 	mod.ensureHooks("")
 	assert.Equal(t, 3, hookFailureLines(buf), "success resets the streak")
 }
+
+// Core shuts HTTP down only after StopModules, so a manual install can arrive
+// after Stop removed the hooks; it must be refused, not reinstall them
+// (#1473 spec D3.1).
+func TestHookSetup_InstallAfterStopRefused(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	require.NoError(t, mod.Stop(context.Background()))
+	fake.ResetHookSets()
+
+	assert.Equal(t, 503, postHookSetup(t, mod, "install"))
+	assert.Empty(t, fake.HookSets(), "no set-hook after Stop")
+}
