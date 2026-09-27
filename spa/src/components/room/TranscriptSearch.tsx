@@ -246,6 +246,8 @@ export default function TranscriptSearch({
       e.preventDefault()
       move(e.shiftKey ? -1 : 1)
     } else if (e.key === 'Escape') {
+      // An IME's Escape cancels the composition (A F7).
+      if (e.nativeEvent.isComposing) return
       // Already handled — a dialog above takes Escape in the capture phase
       // and marks it: one Escape closes one thing (R1-3).
       if (e.defaultPrevented) return

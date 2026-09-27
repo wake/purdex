@@ -216,6 +216,14 @@ describe('TranscriptSearch', () => {
     expect(count()).toHaveTextContent('1 / 2')
   })
 
+  // A F7: an IME's Escape cancels the composition; it does not close the bar.
+  it('escape while an IME is composing does not close', () => {
+    const onClose = vi.fn()
+    render(<Harness messages={[said('錯 一')]} onClose={onClose} />)
+    fireEvent.keyDown(input(), { key: 'Escape', isComposing: true })
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('escape closes and clears', () => {
     const onClose = vi.fn()
     const { unmount } = render(<Harness messages={[said('one needle')]} onClose={onClose} />)
