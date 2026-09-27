@@ -70,7 +70,16 @@ kill-type commands**.
 |---|---|---|---|
 | **R3-A** | daemon `quick_replies` collection + SPA api/store/lookup + Hosts-page tab | ~350 (Go ~120) | R1 + attack + critic (daemon contract) |
 | **R3-B** | the quick-reply dock above the input | ~150 | R1 |
-| **R3-C** | transcript search | ~500 | R1 + attack + critic |
+| **R3-C1** | search index, fold `expand`, `data-search-unit` anchors, highlight module (T3.1–T3.2) | ~350 | R1 + attack + critic |
+| **R3-C2** | the search bar and Mod+F (T3.3) | ~250 | R1 |
+
+Plan review (Claude reviewer, standing in for codex until 2026-09-30): 6
+findings, all applied — #1 (critical) a failed quick-reply send must not
+remount the input over half-typed text (T2.1), #2 the collection hook's
+kind→field mismatch (T1.3), #3 the old-daemon note needs its own check (T1.3),
+#4 no focusable pane root — Mod+F is a document listener on the active pane
+(T3.3), #5 the quick-reply dock is input, so chat keeps it (T2.1), #6 R3-C
+split in two.
 
 Deploy: R3-A changes the daemon — after merge, rebuild and restart the mlab
 daemon (`reference_pdx_daemon_runtime` in memory: new inode when replacing
@@ -123,13 +132,23 @@ that does not have the collection yet (see T1.2).
 
 - `components/hosts/CommandsSection.tsx` gains a third tab `quick`
   ("Quick replies" / "快速回覆") beside `normal` / `resume`.
+- `useHostConfigCollection.ts` today works only because each kind string
+  equals its entry field (`entry[kind]`, `useHostConfigCollection.ts:36,45-54`)
+  and save is a two-way ternary. Replace both with an explicit table
+  `{ projects: { field: 'projects', save: saveProjects }, commands: …,
+  'quick-replies': { field: 'quickReplies', save: saveQuickReplies } }` —
+  `entry['quick-replies']` would silently read `undefined` (plan review #2).
+  Existing projects/commands tests must stay green unchanged.
 - `components/hosts/QuickReplySettings.tsx` (new), on
-  `useHostConfigCollection` (extend `CollectionKind` with `'quick-replies'`):
+  `useHostConfigCollection` with kind `'quick-replies'`:
   list with add / edit (one text field) / delete / up-down reorder, saved
   through the existing host-config save queue. When the list was never
   written it shows the three defaults with a "defaults" note; the first save
   writes them for real. When the daemon lacks the collection: a muted
-  "this host's daemon is too old for quick replies" line and no editor.
+  "this host's daemon is too old for quick replies" line and no editor. The
+  shared `useHostConfigGate` (`HostConfigNotice.tsx:16-31`) only knows the
+  whole host config is `ready`, so this check reads the store's
+  `quickRepliesSupported` in `QuickReplySettings` itself (plan review #3).
 - Locale: `hosts.quick_replies.*` (tab label, add, empty, defaults note,
   unsupported note, text label).
 - Tests: `lists the defaults when never written`; `adds, edits, reorders and
@@ -151,14 +170,26 @@ Full gate (vitest / lint / tsc / build + `go test ./...` + `go vet ./...`).
   `WorkerInput` in **both** views (it is input, not the room dock of §4.6).
   Props `{ replies: QuickReply[]; onSend(text): void; disabled: boolean }`.
   Renders nothing for an empty list.
-- `ExecutionView`: `useQuickReplies(hostId)`; `onSend` = the same
-  `handleSend` as the input (Q1: sends at once; the input's own value is
-  untouched because it lives in `WorkerInput`); `disabled` = the input's
-  disabled expression (extract it to one const so both read it).
+- `ExecutionView`: `useQuickReplies(hostId)`; `onSend` = `handleSend` with
+  a new option `{ restoreDraft: false }`; `disabled` = the input's disabled
+  expression (extract it to one const so both read it). The dock sits above
+  the input in **both** views: it is input (§4.8), not the §4.6 persistent
+  dock that spec §5 removes from chat, and chat is the phone view Q1 is for
+  (plan review #5).
+- **Q1 on the failure path** (plan review #1, critical): today a failed send
+  calls `setDraft(text)` (`useExecutionActions.ts:87`), and `WorkerInput` is
+  keyed on `draft` (`ExecutionView.tsx:228`), so it **remounts** with the
+  failed text — a failed quick reply would wipe what was half-typed.
+  `handleSend(text, opts?: { restoreDraft?: boolean })`, default `true`
+  (typed sends keep today's recovery); the dock passes `false`, so a failed
+  quick reply only shows the send error and the input is not touched.
 - Tests: `renders a button per reply`; `renders nothing for an empty list`;
   `a tap sends the reply's text`; `is disabled while a send is pending / the
   worker ended`; `does not clear what is typed in the input`
-  (ExecutionView); `shows in chat as well as room`.
+  (ExecutionView); **`a failed quick reply leaves the half-typed input
+  alone and shows the error`** (ExecutionView, with the send rejected);
+  `a failed typed send still restores it as the draft` (unchanged
+  behaviour, `useExecutionActions.test.ts`); `shows in chat as well as room`.
 
 ### T2.2 R3-B — full gate.
 
@@ -217,13 +248,15 @@ Full gate (vitest / lint / tsc / build + `go test ./...` + `go vet ./...`).
   transcript area, inside the pane: input, `n / m` count, previous / next
   buttons, close. Enter = next, Shift+Enter = previous, Escape = close and
   clear highlights (focus returns to where it was).
-- `ExecutionView` owns `searchOpen`; the pane root gets `tabIndex={-1}` so a
-  click inside focuses it, and a `keydown` handler on the root opens the bar on
-  Mod+F (`metaKey` on mac, `ctrlKey` elsewhere) with `preventDefault` (the web
-  build would otherwise open the browser's find). It must not fire when the
-  event comes from inside another editor-like element that handles Mod+F
-  itself (none exists in the pane today — assert the handler only runs for
-  events whose target is inside this pane).
+- `ExecutionView` owns `searchOpen`. **No focusable pane root** (plan review
+  #4: a click-to-focus root would fight the input's auto-focus, PR-6's header
+  refocus and every fold button). Instead, while `isActive`, a `document`
+  `keydown` listener opens the bar on Mod+F (`metaKey` on mac, `ctrlKey`
+  elsewhere) with `preventDefault` (the web build would otherwise open the
+  browser's find) — only when the event's target is `document.body` or inside
+  this pane's root element, so another pane, a dialog, or Monaco keeps its own
+  Mod+F. Assert: inactive pane ignores it; a target inside another pane
+  ignores it; body and inside-pane targets open it.
 - Moving to a match: `foldStore.expand(match.reveal)`, then after the render
   commits, highlight + scroll. Matches are recomputed when `messages`, `tools`,
   `view` or the query change; the current index is kept when possible.
@@ -238,7 +271,9 @@ Full gate (vitest / lint / tsc / build + `go test ./...` + `go vet ./...`).
   to the first`; `escape closes and clears`; `works in chat and reveals
   through the tools line`; `a new message keeps the current match`.
 
-### T3.4 R3-C — full gate.
+### T3.4 gates
+
+R3-C1 = T3.1 + T3.2 (full gate), R3-C2 = T3.3 (full gate).
 
 ---
 
