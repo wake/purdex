@@ -97,7 +97,7 @@ describe('TranscriptSearch', () => {
 
   it('shows the match count', () => {
     render(<Harness messages={[said('one needle'), prose('two needle, three needle')]} />)
-    expect(screen.queryByTestId('transcript-search-count')).toBeNull()
+    expect(count()).toBeEmptyDOMElement()
     type('needle')
     expect(count()).toHaveTextContent('1 / 3')
     next()
@@ -106,7 +106,27 @@ describe('TranscriptSearch', () => {
     expect(count()).toHaveTextContent('No results')
     // Too short to search: no count at all.
     type('n')
-    expect(screen.queryByTestId('transcript-search-count')).toBeNull()
+    expect(count()).toBeEmptyDOMElement()
+  })
+
+  // A F12: a live region announces changes only once it is in the document,
+  // so it stays mounted and only its text changes.
+  it('the count is one live region from the start', () => {
+    render(<Harness messages={[said('one needle')]} />)
+    const region = count()
+    expect(region).toHaveAttribute('aria-live', 'polite')
+    type('needle')
+    expect(count()).toBe(region)
+    expect(region).toHaveTextContent('1 / 1')
+  })
+
+  it('escape closes from the buttons too', () => {
+    const onClose = vi.fn()
+    render(<Harness messages={[said('one needle')]} onClose={onClose} />)
+    const nextButton = screen.getByTestId('transcript-search-next')
+    nextButton.focus()
+    fireEvent.keyDown(nextButton, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 
   it('shows 10000+ past the limit', () => {

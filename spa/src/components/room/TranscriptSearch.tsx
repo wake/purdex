@@ -239,30 +239,33 @@ export default function TranscriptSearch({
     setSel(matchIdentity(units, result.matches, j))
   }
 
-  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      // An IME's Enter commits the composition; it is not a search step.
-      if (e.nativeEvent.isComposing) return
-      e.preventDefault()
-      move(e.shiftKey ? -1 : 1)
-    } else if (e.key === 'Escape') {
-      // An IME's Escape cancels the composition (A F7).
-      if (e.nativeEvent.isComposing) return
-      // Already handled — a dialog above takes Escape in the capture phase
-      // and marks it: one Escape closes one thing (R1-3).
-      if (e.defaultPrevented) return
-      e.preventDefault()
-      e.stopPropagation()
-      onClose()
-    }
+  const onInputKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return
+    // An IME's Enter commits the composition; it is not a search step.
+    if (e.nativeEvent.isComposing) return
+    e.preventDefault()
+    move(e.shiftKey ? -1 : 1)
   }
 
-  const count = !searching ? null
+  // Escape anywhere in the bar — the input or a button (A F12).
+  const onBarKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Escape') return
+    // An IME's Escape cancels the composition (A F7).
+    if (e.nativeEvent.isComposing) return
+    // Already handled — a dialog above takes Escape in the capture phase
+    // and marks it: one Escape closes one thing (R1-3).
+    if (e.defaultPrevented) return
+    e.preventDefault()
+    e.stopPropagation()
+    onClose()
+  }
+
+  const count = !searching ? ''
     : matches.length === 0 ? t('room.search.none')
     : t(truncated ? 'room.search.count_more' : 'room.search.count', { current: current + 1, total: matches.length })
 
   return (
-    <div data-testid="transcript-search" role="search"
+    <div data-testid="transcript-search" role="search" onKeyDown={onBarKeyDown}
       className="shrink-0 flex items-center gap-1.5 px-3 py-1 border-b border-border-subtle bg-surface-secondary">
       <MagnifyingGlass size={14} className="shrink-0 text-text-muted" />
       <input
@@ -271,16 +274,15 @@ export default function TranscriptSearch({
         type="search"
         value={query}
         onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onKeyDown}
+        onKeyDown={onInputKeyDown}
         placeholder={t('room.search.placeholder')}
         aria-label={t('room.search.placeholder')}
         className="flex-1 min-w-0 bg-transparent text-sm text-text-primary placeholder:text-text-muted outline-none [&::-webkit-search-cancel-button]:hidden"
       />
-      {count !== null && (
-        <span data-testid="transcript-search-count" aria-live="polite" className="shrink-0 text-xs text-text-muted tabular-nums">
-          {count}
-        </span>
-      )}
+      {/* Always mounted (A F12): a live region added with its text is not announced. */}
+      <span data-testid="transcript-search-count" aria-live="polite" className="shrink-0 text-xs text-text-muted tabular-nums">
+        {count}
+      </span>
       <button type="button" data-testid="transcript-search-prev" className={BUTTON} disabled={matches.length === 0}
         onClick={() => move(-1)} title={t('room.search.prev')} aria-label={t('room.search.prev')}>
         <CaretUp size={14} />
