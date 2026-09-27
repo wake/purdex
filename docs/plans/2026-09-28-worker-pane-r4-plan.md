@@ -57,10 +57,20 @@ Wire (Nexen contract, v0.13.1):
 - The site-level stream strips `task_start.command/description` and
   `task_end.summary`; the scoped stream (`?execution_id=`) and history keep
   them. The pane uses the scoped stream.
-- **`result.total_cost_usd` is session-cumulative and survives `--resume`**
-  (Nexen spec §1.2, measured: 0.0528 → 0.0643 → 0.1126 across two results of
-  one `-p` and one `--resume`; `modelUsage.inputTokens` 18 → 36 → 46). The
-  same holds for `modelUsage` token counts.
+- **`result.total_cost_usd` is sometimes cumulative, sometimes not.** Nexen
+  spec §1.2 measured it cumulative within one `-p` and across `--resume`
+  (0.0528 → 0.0643 → 0.1126; `modelUsage.inputTokens` 18 → 36 → 46). But
+  Purdex's own recording `spa/src/lib/nex/__fixtures__/cost-turns-06GB2ZFD.json`
+  (CC 2.1.27x, one session `c191a5a0`, 12 top-level results) goes 0.0300 /
+  0.0095 / 0.0106 / 0.0091 / 0.0105 / 0 / 0.0294 / 0 / 0.0208 / 0.0057 /
+  0.0603 / 0.0717 — independent per resumed turn; only the last two (seq
+  958 → 974, sonnet `outputTokens` 598 → 701, Δ 103 = 974's
+  `usage.output_tokens`) accumulate. `modelUsage[*].costUSD` and
+  `duration_api_ms` follow the same pattern; `num_turns` and `duration_ms`
+  do not. So neither "always add" nor "always take the latest" is right; a
+  frame must prove it continues the previous one (T2.1). Reported to
+  nexen-a2 on 2026-09-28, because Nexen's `chainCost` ("latest per chain")
+  under-counts the fixture's pattern (≈ 0.07 instead of ≈ 0.19).
 
 Purdex:
 
@@ -86,10 +96,10 @@ Purdex:
   (`nexFetch` :26, `getExecution` :118; no tasks call). Capabilities cached in
   `stores/useNexHostStore.ts` (`byHost[hostId].capabilities`; selector
   pattern `selectHandoffReady` :38-45).
-- **Cost bug**: `lib/nex/cost-summary.ts` sums `total_cost_usd` (:177) and
-  `modelUsage` tokens over every top-level `result`. Given the cumulative
-  fact above, a worker with N turns shows roughly the sum of N running
-  totals — over-counted from the second turn on. `ExecutionView.tsx:143`
+- **Cost bug**: `lib/nex/cost-summary.ts` sums `total_cost_usd` (:177),
+  `byModel.costUsd` (:183-189) and `modelUsage` tokens over every top-level
+  `result`. Wherever results do accumulate (several results in one process,
+  or a CC build that carries totals across `--resume`), that double-counts. `ExecutionView.tsx:143`
   feeds it to `ExecutionHeader` (tooltip `execution.cost.summary`, :170-196)
   and `CostPanel`.
 - Dock `components/room/WorkerDock.tsx` (props `sse, observers, lease?,
@@ -134,9 +144,21 @@ together, Phosphor icons, **no kill-type commands** (no `pkill` / `kill` /
 | PR | content | est. (non-test) | review |
 |---|---|---|---|
 | **R4-A** | pin v0.13.1; wire types, capability selector, reducer routes task events out of `messages` into a task table, `/tasks` fetch | ~300 (Go ~10) | R1 + attack + critic (wire) |
-| **R4-B** | cost: fix the cumulative over-count; header / panel read the rollup when present; hand-over hover (Q3) | ~200 | R1 + attack + critic (money) |
+| **R4-B** | cost: continuation needs token evidence (fixes the double count); hand-over hover (Q3) | ~200 | R1 + attack + critic (money) |
 | **R4-C** | dock running tasks (cold start, reconnect re-read, inspect) + subagent close-out line (Q2) | ~300 | R1 |
 | **R4-D** | sidebar and Host › Nex rollups (cost, turns, last tool, running, activity) | ~200 | R1 |
+
+Plan review (Claude reviewer, standing in for codex until 2026-09-30): 7
+findings, all applied — #1 (critical) "a drop means a new chain" under-counts
+the recorded fixture; continuation now needs token evidence (T2.1), and the
+counter-example went to nexen-a2; #2 `byModel.costUsd` / `duration_api_ms`
+are cumulative too, and two more test files change (T2.1); #3 subscribing
+from the `/tasks` cursor would break the reducer's single high-water mark;
+cold start replays history, the snapshot only corrects after (re)open
+(T3.1); #4 the snapshot merge dropped tasks started while it was in flight —
+`startSeq` guard (T1.3); #5 subagents without children (T3.3); #6 the Q3
+note needs turn 1's resume to have succeeded (T2.2); #7 header vs rollup lag
+— moot, the header no longer reads the rollup (T2.2).
 
 Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (see
 §Deploy); B–D are SPA-only.
@@ -166,7 +188,8 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
     open_tools: number; since?: number }`.
   - `TaskKind = 'shell' | 'subagent' | 'other'`, `TaskStatus = 'running' |
     'completed' | 'failed' | 'killed' | 'lost'`, `WorkerTask` = the merged
-    start∪end shape (all end fields optional/null while running).
+    start∪end shape (all end fields optional/null while running) plus the
+    client-only `startSeq: number` (T1.3).
   - `NexCapabilities.worker_rollup?: { task_kinds: string[]; task_statuses:
     string[]; activity_phases: string[]; subagent_cost: boolean }`.
 - `validate-executions.ts`: coerce the four rollup fields — non-finite or
@@ -204,10 +227,13 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
   guidance), but closure is final (each `task_id` ends exactly once): a row
   already closed in state is never reopened by a snapshot that still says
   running — that snapshot was read before a `task_end` that has since
-  arrived live. Otherwise the snapshot row wins, and a row that state holds as
-  running but a `state=running` snapshot omits is dropped (it ended and we
-  missed the `task_end`). Closed rows in state that the snapshot omits are
-  kept (a running-only snapshot never lists them).
+  arrived live. Otherwise the snapshot row wins. Each row records
+  `startSeq` (the `ev.seq` of its `task_start`; rows first seen in a
+  snapshot get `startSeq = snapshot.cursor`). A row state holds as running
+  but the snapshot omits is dropped **only if `startSeq ≤ snapshot.cursor`**
+  (it ended and we missed the `task_end`); a newer row started live while
+  the snapshot was in flight is kept (Nexen reads `cursor` before the rows,
+  `api/tasks.go:138-153`). Closed rows the snapshot omits are kept.
 - Tests: the fixture `lib/nex/__fixtures__/cc-2.1.275-sleep6.jsonl` gets a
   sibling with the two new kinds interleaved (hand-written from the contract
   payloads); assert `messages.length` and turn count are identical with and
@@ -218,43 +244,57 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
 
 ## R4-B — cost
 
-### T2.1 `costSummary`: cumulative, not additive (TDD)
+### T2.1 `costSummary`: a frame must prove it continues (TDD)
 
-- Per top-level `result`, `total_cost_usd` is the running total of its
-  session. Walk results in seq order keeping `prev` (the last cumulative
-  total seen): a turn's own spend = `cur − prev` when `cur ≥ prev`, else
-  (`cur < prev`: a new session started — `session_expired`, a fresh
-  delegate) the turn starts a new chain and its spend = `cur`. `totalUsd` =
-  Σ own spends (= Σ chain maxima).
-- Tokens: same delta rule per model in `modelUsage` (key by model name; a
-  model new to the chain → its value; a drop in any counter → new chain for
-  the whole frame, matching the cost rule). The `usage` fallback (older CC,
-  F5) is per-message, not cumulative — keep it additive, and document the
-  distinction in the header comment next to F4–F6.
-- Replace F4's wording ("`totalUsd` is Σ total_cost_usd") with the measured
-  cumulative fact and its source (Nexen spec §1.2).
-- Tests: the three-result sequence from Nexen §1.2 (0.0528 / 0.0643 /
-  0.1126 → turns 0.0528 / 0.0115 / 0.0483, total 0.1126); a chain reset;
-  a turn with no cost (`0`) between two costed turns keeps `prev`; the
-  existing F6 subagent-result exclusion and overflow tests still pass; the
-  existing fixtures `cost-subagent-06GBGXTW.json` etc. are re-asserted with
-  corrected expected totals (state the old and new number in the commit).
+- Walk top-level `result` frames in seq order, keeping `prev` = the last
+  frame with a usable `modelUsage`. A frame **continues** `prev` only when
+  both hold:
+  1. every model present in `prev.modelUsage` is present in this frame and
+     none of its counters (`inputTokens`, `outputTokens`,
+     `cacheReadInputTokens`, `cacheCreationInputTokens`, `costUSD`)
+     decreased; and
+  2. Σ over models of (this `outputTokens` − prev `outputTokens`) ≥ this
+     frame's `usage.output_tokens` (the frame's own output must fit inside
+     the growth).
+  A continuing frame contributes the **deltas** (cost, per-model cost and
+  tokens, `duration_api_ms`); any other frame contributes its **own
+  values**, as today. `num_turns` and `duration_ms` are always per-frame.
+  A frame without a usable `modelUsage` (older CC, F5 fallback, or an empty
+  zero-cost result) never continues, contributes its own values, and leaves
+  `prev` unchanged — so a zero-cost frame between two costed frames cannot
+  break a real continuation.
+- Rewrite the F4 note in the header comment: the measured fact is now "some
+  results are running totals" with both sources (Nexen spec §1.2; fixture
+  06GB2ZFD seq 958 → 974), and why continuation needs token evidence.
+- Tests: Nexen §1.2's three-frame sequence (0.0528 / 0.0643 / 0.1126,
+  inputTokens 18 / 36 / 46 → turns 0.0528 / 0.0115 / 0.0483, total 0.1126);
+  fixture `cost-turns-06GB2ZFD.json` — ten independent frames plus seq
+  974 as a continuation of 958 (turn 974 = 0.0114, total drops by 0.0603;
+  write the old and new totals in the test and the commit); a model
+  disappearing breaks continuation (seq 8 → 17: haiku gone); a zero-cost
+  frame in between keeps `prev`; F6 subagent-result exclusion and the
+  overflow tests unchanged.
+- Expected values also change in `CostPanel.test.tsx` and
+  `ExecutionHeader.test.tsx` (they read the same fixtures) — update them in
+  the same commit.
 
-### T2.2 Header and panel prefer the rollup; hand-over note (Q3)
+### T2.2 Hand-over note (Q3)
 
-- `ExecutionHeader`: the number shown = `summary.cost_usd` when it is a
-  finite number (rollup daemon), else `cost.totalUsd` from T2.1. The per-turn
-  breakdown in the tooltip / `CostPanel` stays from `costSummary`.
-- When the two disagree by more than a cent, the panel shows the rollup as
-  the total and notes "per-turn figures are from this pane's history" — no
-  attempt to reconcile.
-- **Q3**: when `summary.resume_session_id` is set (turn 1 resumed a
-  conversation that existed before this worker — a hand-over), the tooltip
-  and panel add `execution.cost.includesPriorHistory` ("Includes spend from
-  before the hand-over" / 「含接續前的費用」). Not shown otherwise, because
-  then there is no prior spend.
-- Tests: header shows rollup when present / falls back when absent or null;
-  note appears only with `resume_session_id`; locale parity.
+- The header and panel keep reading `costSummary` (T2.1): the pane has the
+  full history, updates on every `result` without waiting for a summary
+  refetch, and is not exposed to the `chainCost` question above. The
+  rollup `cost_usd` is used only where no history is loaded (R4-D).
+- **Q3**: when `summary.resume_session_id` is set (only `handoff.go:236`
+  sets it; Nexen uses it on turn 1 only, `launch.go:307-320`) **and** turn 1
+  actually resumed — i.e. it did not end `rejected` / `session_expired`
+  (`launch.go:321-324`; the implementer confirms which summary field
+  carries that, `reject_reason` or `last_turn_reason`, and writes the answer
+  in the PR) — the tooltip and panel add
+  `execution.cost.includesPriorHistory` ("Includes spend from before the
+  hand-over" / 「含接續前的費用」). Not shown otherwise.
+- Tests: note with a successful hand-over; absent without
+  `resume_session_id`; absent when turn 1's resume was rejected; locale
+  parity.
 
 ---
 
@@ -262,18 +302,20 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
 
 ### T3.1 Task table in the pane (TDD)
 
-- `ExecutionView` (or a `useWorkerTasks(hostId, id)` hook): when
-  `selectWorkerRollup(hostId)` is non-null, fetch `/tasks?state=running`
-  **before** the scoped SSE subscribes, and subscribe from its `cursor`
-  (check how the current SSE hook passes `Last-Event-ID`; if it always
-  resumes from history's last seq, the snapshot's rows are still applied
-  first and duplicates are idempotent — record which in the PR).
-- **After every SSE reconnect** (the existing `sse` state leaving
-  `reconnecting` for `open`), re-fetch `/tasks?state=running` and apply it as
-  the snapshot (#83).
-- No rollup capability → no fetch, `tasks` stays empty, dock as today.
-- Tests: fetch order (snapshot before subscribe), reconnect triggers exactly
-  one re-fetch, old daemon makes no request.
+- **Cold start needs no snapshot**: `useExecutionSubscription.ts:167-192`
+  already replays history from 0 up to `obs.cursor`, then opens SSE with
+  `Last-Event-ID = store.lastSeq` (the reducer's single high-water mark,
+  `event-reducer.ts:196` — do not change it). `task_start` / `task_end` are
+  durable, so the replay rebuilds `tasks` completely.
+- **#83 correction**: in `useExecutionSubscription`'s `onStatus`, next to
+  `refetchSummary` (:228), re-fetch `/tasks?state=running` and apply it as
+  the snapshot (T1.3) on the first `open` and every `reconnecting → open`,
+  and when a kicked pane resumes on a new stream. Only when
+  `selectWorkerRollup(hostId)` is non-null; otherwise no request and `tasks`
+  stays empty (dock as today). Not in `ExecutionView`.
+- Tests: first open fetches once; each reconnect fetches once; old daemon
+  makes no request; a snapshot that arrives after a live `task_end` does not
+  reopen the task.
 
 ### T3.2 Dock shows running tasks
 
@@ -305,7 +347,12 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
     failure — never red).
 - Without a task row (old daemon, or not found) the block is exactly as
   today (tool count from `countToolCalls`).
-- Tests: each status, usage partially present, no task.
+- `SubagentBlock` is only built when the Task call has children
+  (`MessageRow.tsx:79-80`). A background subagent, or one whose frames have
+  not arrived, has none — then the same status / usage suffix goes on the
+  Agent/Task call's own operation header instead.
+- Tests: each status, usage partially present, no task, a subagent task
+  with no children.
 
 ---
 
@@ -315,7 +362,9 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
 
 - `ExecutionRowCompact`, only when the row carries rollup fields:
   - after the age: the cost (`$0.11`, `formatUsd`) when `cost_usd` is a
-    number; nothing when `null`;
+    number; nothing when `null`. **Gated on nexen-a2's answer about
+    `chainCost`** (Facts): if Nexen fixes it, show it; if not, R4-D ships
+    without the cost and a follow-up tracks it;
   - a small running badge (`Terminal` icon + count) when `running_tasks >
     0`;
   - the state dot's tooltip = the activity (`normalizePhase`):
