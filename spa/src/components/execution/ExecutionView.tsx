@@ -36,7 +36,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
 import { defaultExecutionState } from '../../lib/nex/event-reducer'
 import { costSummary } from '../../lib/nex/cost-summary'
-import { runningTasks } from '../../lib/nex/tasks'
+import { anyRunningSubagent, runningTasks, subagentTasksByToolUse } from '../../lib/nex/tasks'
 import { indexOperations } from '../../lib/nex/operations'
 import { toolUseUnit } from '../../lib/nex/transcript-search'
 import { partialHasChatContent, partialHasVisibleContent } from '../../lib/nex/partial'
@@ -146,7 +146,11 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const cost = useMemo(() => (st.historyLoaded ? costSummary(st.messages) : null), [st.messages, st.historyLoaded])
   // Spec §4.2: the 1 s clock only runs while some tool is running.
   const anyRunning = useMemo(() => Object.values(st.tools).some((tool) => tool.status === 'running'), [st.tools])
-  const now = useElapsedTicker(anyRunning)
+  // R4 T3.3: a running subagent's close-out line ticks too (a background one
+  // has no running tool). Only the clock — `anyRunning` also gates thinking.
+  const subagentRunning = useMemo(() => anyRunningSubagent(st.tasks), [st.tasks])
+  const subagentTasks = useMemo(() => subagentTasksByToolUse(st.tasks), [st.tasks])
+  const now = useElapsedTicker(anyRunning || subagentRunning)
   // Spec §3.2: one fold memory per pane. It lives here, above the view
   // switch, because room ⇄ chat remounts the transcript (F2).
   const foldStore = useFoldMemory()
@@ -296,7 +300,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const transcriptProps = {
     messages: st.messages, turnStarts: st.turnStarts, keyPrefix: executionId, showThinking,
     showEmptyHint: st.messages.length === 0 && !st.pendingLocal, emptyText: t('execution.empty'), scrollKey: st.pendingLocal ? 1 : 0,
-    partial: st.partial, tools: st.tools, now,
+    partial: st.partial, tools: st.tools, now, subagentTasks,
     // R3 T3.3: the search bar marks and scrolls inside the transcript, and
     // while it is open a new line never pulls the reader off a match (A4).
     scrollRef: setScrollBox, holdScroll: searchOpen, scrollControl,

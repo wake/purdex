@@ -1,6 +1,6 @@
 // spa/src/lib/nex/tasks.test.ts
 import { describe, it, expect } from 'vitest'
-import { applyTaskEvent, applyTaskSnapshot, parseTask, runningTasks, type TaskTable } from './tasks'
+import { anyRunningSubagent, applyTaskEvent, applyTaskSnapshot, parseTask, runningTasks, subagentTasksByToolUse, type TaskTable } from './tasks'
 
 // Payloads as the contract prints them (capability-matrix §3 "task_start／task_end 的 payload").
 const start = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -284,5 +284,26 @@ describe('prototype-named task ids (A3)', () => {
     expect(Object.hasOwn(again, '__proto__')).toBe(true)
     expect(again['__proto__']).toMatchObject({ status: 'completed' })
     expect(Object.getPrototypeOf(again)).toBe(Object.prototype)
+  })
+})
+
+describe('subagentTasksByToolUse (R4 T3.3)', () => {
+  it('maps subagent rows by the Task call id; shells and id-less rows are left out', () => {
+    let t: TaskTable = {}
+    t = applyTaskEvent(t, 'task_start', start({ task_id: 'a', kind: 'subagent', tool_use_id: 'T1' }), 1)
+    t = applyTaskEvent(t, 'task_start', start({ task_id: 'b', kind: 'shell', tool_use_id: 'B1' }), 2)
+    t = applyTaskEvent(t, 'task_start', start({ task_id: 'c', kind: 'subagent', tool_use_id: null }), 3)
+    const m = subagentTasksByToolUse(t)
+    expect([...m.keys()]).toEqual(['T1'])
+    expect(m.get('T1')?.task_id).toBe('a')
+  })
+
+  it('anyRunningSubagent says whether a subagent row is still running', () => {
+    let t: TaskTable = {}
+    expect(anyRunningSubagent(t)).toBe(false)
+    t = applyTaskEvent(t, 'task_start', start({ task_id: 'b', kind: 'shell' }), 1)
+    expect(anyRunningSubagent(t)).toBe(false)
+    t = applyTaskEvent(t, 'task_start', start({ task_id: 'a', kind: 'subagent', tool_use_id: 'T1' }), 2)
+    expect(anyRunningSubagent(t)).toBe(true)
   })
 })

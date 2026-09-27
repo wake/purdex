@@ -14,6 +14,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import type { StreamMessage } from '../../lib/nex/message-types'
 import { partialVersionOf, type PartialAssembly } from '../../lib/nex/partial'
 import type { ToolActivity } from '../../lib/nex/tool-activity'
+import type { WorkerTask } from '../../lib/nex/types'
 import { indexOperations } from '../../lib/nex/operations'
 import { groupTurns, type RoomTurn } from '../../lib/nex/turns'
 import ThinkingIndicator from '../ThinkingIndicator'
@@ -44,6 +45,8 @@ export interface RoomTranscriptProps {
   partial?: PartialAssembly | null          // R1: trailing in-flight assistant group
   tools?: Record<string, ToolActivity>      // R2: status/timing for durable tool_use blocks, by block id
   now?: number                              // R2: ticker value for running tools
+  /** R4 T3.3: subagent task rows by their Task call's tool_use_id — the close-out line. */
+  subagentTasks?: ReadonlyMap<string, WorkerTask>
   /** The scrolling container, forwarded (R3 T3.3: the search bar marks and scrolls inside it). */
   scrollRef?: Ref<HTMLDivElement>
   /**
@@ -75,6 +78,7 @@ export default function RoomTranscript({
   partial,
   tools,
   now,
+  subagentTasks,
   scrollRef,
   holdScroll = false,
   scrollControl,
@@ -109,7 +113,7 @@ export default function RoomTranscript({
   const shown: RoomTurn[] = turns.length === 0 && hasPartial ? [{ start: 0, end: 0, openerIndex: null }] : turns
   const lastTurn = shown.length - 1
 
-  const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0 }
+  const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0, subagentTasks }
 
   return (
     <div ref={attach} onScroll={onScroll} className="flex-1 overflow-y-auto p-4 space-y-4">

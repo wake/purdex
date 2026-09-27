@@ -174,6 +174,24 @@ export function applyTaskSnapshot(table: TaskTable, items: WorkerTask[], cursor:
   return next
 }
 
+/**
+ * Subagent rows by the Task call that started them (`tool_use_id`), for the
+ * transcript's close-out line (R4 T3.3). Rows without a call id cannot be
+ * placed and are left out; the first row per id wins.
+ */
+export function subagentTasksByToolUse(table: TaskTable): ReadonlyMap<string, WorkerTask> {
+  const m = new Map<string, WorkerTask>()
+  for (const row of Object.values(table)) {
+    if (row.kind === 'subagent' && row.tool_use_id !== null && !m.has(row.tool_use_id)) m.set(row.tool_use_id, row)
+  }
+  return m
+}
+
+/** Whether any subagent row is still running (its close-out line shows a ticking elapsed). */
+export function anyRunningSubagent(table: TaskTable): boolean {
+  return Object.values(table).some((row) => row.kind === 'subagent' && row.status === 'running')
+}
+
 /** Running rows, oldest first (by start time, then start seq). */
 export function runningTasks(table: TaskTable): WorkerTask[] {
   return Object.values(table)

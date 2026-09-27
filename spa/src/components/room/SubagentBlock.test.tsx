@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest'
 import { render, screen, within, fireEvent } from '@testing-library/react'
 import RoomTranscript from './RoomTranscript'
 import type { ContentBlock, StreamMessage } from '../../lib/nex/message-types'
+import type { TaskUsage, WorkerTask } from '../../lib/nex/types'
 
 const asst = (...blocks: ContentBlock[]): StreamMessage =>
   ({ type: 'assistant', message: { id: 'm', role: 'assistant', content: blocks, stop_reason: null } } as StreamMessage)
@@ -163,5 +164,69 @@ describe('SubagentBlock', () => {
     expect(within(rails[1]).queryByText('FIRST CHILD')).toBeNull()
     expect(screen.getAllByText('FIRST CHILD')).toHaveLength(1)
     expect(screen.getAllByText('SECOND CHILD')).toHaveLength(1)
+  })
+})
+
+// R4 T3.3 (Q2): a subagent's close-out from its task row — tokens, tools,
+// duration, and a status word; never a cost, never a placeholder.
+describe('SubagentBlock — task close-out (R4 T3.3)', () => {
+  const NOW = 1_800_000_000_000
+  const task = (extra: Partial<WorkerTask> = {}): WorkerTask => ({
+    task_id: 'k1', turn_id: 't1', kind: 'subagent', task_type: 'local_agent', tool_use_id: 'T', parent_tool_use_id: null,
+    description: 'analyse notes.md', backgrounded: false, status: 'running', provider_status: null, closed_by: null,
+    started_at: NOW - 12_000, ended_at: null, startSeq: 1, ...extra,
+  })
+  const done = (status: WorkerTask['status'], usage?: Partial<TaskUsage>) =>
+    task({ status, ended_at: NOW, ...(usage ? { usage: usage as TaskUsage } : {}) })
+  const withTask = (t: WorkerTask | undefined, messages = delegation, now = NOW) =>
+    render(<RoomTranscript messages={messages} keyPrefix="k" showThinking={false} showEmptyHint={false} now={now}
+      subagentTasks={t ? new Map([[t.tool_use_id!, t]]) : undefined} />)
+  const toggle = () => screen.getByTestId('subagent-toggle')
+
+  it('no task row: exactly as before', () => {
+    withTask(undefined)
+    expect(toggle()).toHaveTextContent(/^general-purpose · 2 tools$/)
+  })
+
+  it('running: the summary adds the elapsed time', () => {
+    withTask(task())
+    expect(toggle()).toHaveTextContent(/^general-purpose · 2 tools · 12s$/)
+    expect(screen.queryByTestId('subagent-status')).toBeNull()
+  })
+
+  it('completed: tokens, tools and duration from usage — no cost, no status word', () => {
+    withTask(done('completed', { total_tokens: 26_400, tool_uses: 8, duration_ms: 12_300 }))
+    expect(toggle()).toHaveTextContent(/^general-purpose · 26k tokens · 8 tools · 12s$/)
+    expect(toggle().textContent).not.toMatch(/\$/)
+    expect(screen.queryByTestId('subagent-status')).toBeNull()
+  })
+
+  it('failed: the same plus a red failed', () => {
+    withTask(done('failed', { total_tokens: 900, tool_uses: 1, duration_ms: 3_000 }))
+    expect(toggle()).toHaveTextContent(/^general-purpose · 900 tokens · 1 tool · 3s · failed$/)
+    expect(screen.getByTestId('subagent-status').className).toMatch(/\btext-status-error\b/)
+  })
+
+  it('killed → neutral stopped; lost → neutral interrupted (never red)', () => {
+    const { unmount } = withTask(done('killed'))
+    expect(toggle()).toHaveTextContent(/^general-purpose · 2 tools · stopped$/)
+    expect(screen.getByTestId('subagent-status').className).not.toMatch(/status-error/)
+    unmount()
+    withTask(done('lost'))
+    expect(toggle()).toHaveTextContent(/^general-purpose · 2 tools · interrupted$/)
+    expect(screen.getByTestId('subagent-status').className).not.toMatch(/status-error/)
+  })
+
+  it('usage partly present: only the parts it has, nothing in place of the rest', () => {
+    withTask(done('completed', { total_tokens: 1_500_000 }))
+    expect(toggle()).toHaveTextContent(/^general-purpose · 1.5M tokens$/)
+  })
+
+  it('a subagent task whose call has no children: the suffix goes on the call\'s own header', () => {
+    const noChildren = [usr({ type: 'text', text: 'go' }), asst(call('T', 'Task', { description: 'bg explore', subagent_type: 'Explore' }))]
+    withTask(done('completed', { total_tokens: 2_000, tool_uses: 4, duration_ms: 65_000 }), noChildren)
+    expect(screen.queryByTestId('subagent-block')).toBeNull()
+    const op = screen.getByTestId('operation-block')
+    expect(within(op).getByTestId('subagent-task-suffix')).toHaveTextContent(/^· 2k tokens · 4 tools · 1m$/)
   })
 })
