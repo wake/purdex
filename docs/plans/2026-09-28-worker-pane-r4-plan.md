@@ -246,23 +246,28 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
 
 ### T2.1 `costSummary`: a frame must prove it continues (TDD)
 
-- Walk top-level `result` frames in seq order, keeping `prev` = the last
-  frame with a usable `modelUsage`. A frame **continues** `prev` only when
-  both hold:
-  1. every model present in `prev.modelUsage` is present in this frame and
-     none of its counters (`inputTokens`, `outputTokens`,
-     `cacheReadInputTokens`, `cacheCreationInputTokens`, `costUSD`)
-     decreased; and
-  2. Σ over models of (this `outputTokens` − prev `outputTokens`) ≥ this
-     frame's `usage.output_tokens` (the frame's own output must fit inside
-     the growth).
-  A continuing frame contributes the **deltas** (cost, per-model cost and
-  tokens, `duration_api_ms`); any other frame contributes its **own
-  values**, as today. `num_turns` and `duration_ms` are always per-frame.
-  A frame without a usable `modelUsage` (older CC, F5 fallback, or an empty
-  zero-cost result) never continues, contributes its own values, and leaves
-  `prev` unchanged — so a zero-cost frame between two costed frames cannot
-  break a real continuation.
+- **Shared rule with Nexen** (agreed with nexen-a2 2026-09-28; Nexen v0.13.2
+  implements the same in `chainCost` so the list and the pane show the same
+  number — keep the wording in sync if either side changes). Walk top-level
+  `result` frames in seq order:
+  1. A frame without a usable `modelUsage` never becomes `prev`; it
+     contributes its own `total_cost_usd` if finite and > 0 (older CC that
+     only gives `usage`), else nothing.
+  2. The first frame with `modelUsage` is independent.
+  3. After that, a frame is **cumulative** ⇔ for every model in
+     `prev.modelUsage`, this frame's `outputTokens` ≥ prev's (a model
+     missing here counts as 0 ⇒ not cumulative), **and** Σ over this
+     frame's models of (this `outputTokens` − prev's, prev missing = 0) ≥
+     this frame's `usage.output_tokens`.
+  4. Cumulative → cost contribution = this `total_cost_usd` − prev's; if
+     that is negative, treat the frame as independent. Otherwise the
+     contribution = this frame's `total_cost_usd`.
+  5. `totalUsd` = Σ contributions (non-finite → the existing saturating
+     rules). No session / `resumed_from` logic — evidence only.
+  The frame then becomes `prev`. For the panel's breakdown, a cumulative
+  frame's per-model cost and tokens and `duration_api_ms` are the deltas
+  against `prev`, each clamped at 0; `num_turns` and `duration_ms` are
+  always per-frame.
 - Rewrite the F4 note in the header comment: the measured fact is now "some
   results are running totals" with both sources (Nexen spec §1.2; fixture
   06GB2ZFD seq 958 → 974), and why continuation needs token evidence.
@@ -362,9 +367,10 @@ Order A → B → C → D; B, C, D only depend on A. Deploy after R4-A merges (s
 
 - `ExecutionRowCompact`, only when the row carries rollup fields:
   - after the age: the cost (`$0.11`, `formatUsd`) when `cost_usd` is a
-    number; nothing when `null`. **Gated on nexen-a2's answer about
-    `chainCost`** (Facts): if Nexen fixes it, show it; if not, R4-D ships
-    without the cost and a follow-up tracks it;
+    number; nothing when `null`. **Needs Nexen ≥ v0.13.2** (the shared
+    rule of T2.1; v0.13.1's `chainCost` under-counts). The capability
+    carries no version, so R4-D ships after the mlab daemon is on a pin
+    ≥ v0.13.2 (bump the pin in R4-D if R4-A shipped 0.13.1);
   - a small running badge (`Terminal` icon + count) when `running_tasks >
     0`;
   - the state dot's tooltip = the activity (`normalizePhase`):
