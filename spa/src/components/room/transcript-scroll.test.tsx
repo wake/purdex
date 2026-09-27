@@ -129,6 +129,15 @@ describe.each(views)('%s transcript scrolling', (_name, Transcript) => {
     expect(scrollTo).toHaveBeenCalledTimes(1)
   })
 
+  // R1-1: a view switch under the open bar mounts the transcript holding;
+  // the bar, not the transcript, decides where the reader lands.
+  it('mounted while holding, the first follow does not jump', () => {
+    render(T({ messages: [said('a')], holdScroll: true }))
+    expect(scrollTo).not.toHaveBeenCalled()
+    render(T({ messages: [said('a')] }))
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+  })
+
   it('A4: an in-flight smooth scroll towards the bottom keeps following', () => {
     const ref = createRef<HTMLDivElement>()
     let messages = [said('a')]

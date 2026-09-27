@@ -1,7 +1,7 @@
 // spa/src/components/room/TranscriptSearch.test.tsx — the search bar over a
 // real transcript (R3 plan T3.3; A4/A5/A8/A11 from the R3-C1 review). jsdom
 // has no CSS Custom Highlight API, so it is stubbed to observe the marks.
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import TranscriptSearch from './TranscriptSearch'
@@ -69,15 +69,16 @@ interface HarnessProps {
 /** The pane as ExecutionView composes it: one fold memory, the bar above the transcript, one scroll box. */
 function Harness({ messages, view = 'room', tools, turnStarts = [0], partial = null, onClose = () => {} }: HarnessProps) {
   const fold = useFoldMemory()
-  const scrollRef = useRef<HTMLDivElement>(null)
+  // As the pane: the scroll box is state, so a view switch (a new box) re-marks.
+  const [box, setBox] = useState<HTMLDivElement | null>(null)
   const control = useRef<TranscriptScrollControl>(null)
   const Transcript = view === 'chat' ? ChatTranscript : RoomTranscript
   return (
     <FoldContext.Provider value={fold}>
-      <TranscriptSearch owner="p1" scrollRef={scrollRef} messages={messages} tools={tools} view={view}
+      <TranscriptSearch owner="p1" container={box} messages={messages} tools={tools} view={view}
         keyPrefix="k" turnStarts={turnStarts} onClose={onClose} onJump={() => control.current?.release()} />
       <Transcript messages={messages} keyPrefix="k" showThinking={false} showEmptyHint={false}
-        turnStarts={turnStarts} tools={tools} partial={partial} scrollRef={scrollRef} scrollControl={control} holdScroll />
+        turnStarts={turnStarts} tools={tools} partial={partial} scrollRef={setBox} scrollControl={control} holdScroll />
     </FoldContext.Provider>
   )
 }
@@ -319,6 +320,42 @@ describe('TranscriptSearch', () => {
     geometry(1100, 790)
     rerender(<Harness messages={[...messages, said('a new line')]} />)
     expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  // R1-1 / A F2: room ⇄ chat remounts the transcript under an open bar.
+  it('switching view keeps the marks, returns to the current match and is not pulled to the bottom', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    const intoView = vi.fn()
+    Element.prototype.scrollIntoView = intoView
+    const messages = [said('one needle'), said('two needle'), said('filler')]
+    const { rerender } = render(<Harness messages={messages} />)
+    type('needle')
+    next()
+    expect(currentUnit()).toBe('1:0:text')
+    const jumps = intoView.mock.calls.length
+    scrollTo.mockClear()
+    rerender(<Harness messages={messages} view="chat" />)
+    expect(document.querySelector('.\\@container')).not.toBeNull()
+    expect(current()[0].collapsed).toBe(false)
+    expect(currentUnit()).toBe('1:0:text')
+    expect(marked()).toHaveLength(1)
+    expect(intoView.mock.calls.length).toBe(jumps + 1)
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('a current match only one view draws hands over to the next one there', () => {
+    const think = (text: string) => asst({ type: 'thinking', thinking: text } as ContentBlock)
+    const messages = [think('x1'), think('x2'), said('needle a'), think('needle idea'), said('needle b'), said('needle c')]
+    const { rerender } = render(<Harness messages={messages} />)
+    type('needle')
+    expect(currentUnit()).toBe('2:0:text')
+    next()
+    expect(currentUnit()).toBe('3:0:thinking')
+    // Chat draws no thinking: the match after it takes over.
+    rerender(<Harness messages={messages} view="chat" />)
+    expect(currentUnit()).toBe('4:0:text')
+    expect(count()).toHaveTextContent('2 / 3')
   })
 
   it('a streaming message does not scroll away from the current match', () => {

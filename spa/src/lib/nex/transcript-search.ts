@@ -368,6 +368,36 @@ export function unitAnchor(units: readonly SearchUnit[], id: string | null): Uni
   return at === undefined ? ANCHOR_END : { unitId: id, unitPos: at }
 }
 
+/**
+ * `a` (a MatchIdentity or a UnitAnchor) re-seated from `prev` onto `next`:
+ * its unit's new position; when `next` lacks that unit, the position of the
+ * first unit after it in `prev` that `next` has (else the end) — when `prev`
+ * lacked it too, its stored position already names that successor — so the
+ * match after it takes over, even across room ⇄ chat, whose unit lists
+ * differ. Returns `a` itself when nothing moved.
+ */
+export function relocate<T extends { unitId: string | null; unitPos: number }>(
+  prev: readonly SearchUnit[], next: readonly SearchUnit[], a: T,
+): T {
+  if (a.unitId === null) return a
+  const nextPos = unitPositions(next)
+  let unitPos = nextPos.get(a.unitId)
+  if (unitPos === undefined) {
+    // Gone from `prev` already: `unitPos` is its successor's place there.
+    const was = unitPositions(prev).get(a.unitId)
+    const from = was === undefined ? a.unitPos : was + 1
+    unitPos = next.length
+    for (let k = from; k < prev.length; k++) {
+      const at = nextPos.get(prev[k].id)
+      if (at !== undefined) {
+        unitPos = at
+        break
+      }
+    }
+  }
+  return unitPos === a.unitPos ? a : { ...a, unitPos }
+}
+
 /** The first match in the unit at position `anchor` or after it; -1 when none. */
 export function firstAtOrAfter(units: readonly SearchUnit[], matches: readonly SearchMatch[], anchor: number): number {
   const pos = unitPositions(units)

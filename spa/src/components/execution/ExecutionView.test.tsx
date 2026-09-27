@@ -1440,6 +1440,60 @@ describe('ExecutionView — search (R3 T3.3)', () => {
     expect(bar()).toBeInTheDocument()
   })
 
+  // R1-1 / A F2: room ⇄ chat with the bar open.
+  it('switching view with the bar open keeps the marks and the place', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    const intoView = vi.fn()
+    Element.prototype.scrollIntoView = intoView
+    try {
+      const { rerender } = render(<ExecutionView {...base} isActive />)
+      openSearch()
+      const input = screen.getByTestId('transcript-search-input')
+      fireEvent.change(input, { target: { value: 'needle' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('2 / 2')
+      const jumps = intoView.mock.calls.length
+      scrollTo.mockClear()
+      rerender(<ExecutionView {...base} mode="chat" isActive />)
+      const cur = highlights.get('search-current')?.ranges ?? []
+      expect(cur.map(String)).toEqual(['needle'])
+      expect(cur[0].collapsed).toBe(false)
+      expect(cur[0].startContainer.isConnected).toBe(true)
+      expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('2 / 2')
+      expect(intoView.mock.calls.length).toBe(jumps + 1)
+      expect(scrollTo).not.toHaveBeenCalled()
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  })
+
+  it('switching view with the bar open and no match lands at the bottom', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    const { rerender } = render(<ExecutionView {...base} isActive />)
+    openSearch()
+    // jsdom has no layout: every box is 1000 high, and scrollTop writes are recorded.
+    const proto = Element.prototype
+    const saved = [Object.getOwnPropertyDescriptor(proto, 'scrollTop'), Object.getOwnPropertyDescriptor(proto, 'scrollHeight')]
+    const setTop = vi.fn()
+    Object.defineProperty(proto, 'scrollTop', { configurable: true, get: () => 0, set: setTop })
+    Object.defineProperty(proto, 'scrollHeight', { configurable: true, get: () => 1000 })
+    try {
+      scrollTo.mockClear()
+      rerender(<ExecutionView {...base} mode="chat" isActive />)
+      // The transcript's own first jump is held; the bar puts the reader at the bottom.
+      expect(scrollTo).not.toHaveBeenCalled()
+      expect(setTop).toHaveBeenCalledWith(1000)
+      expect(bar()).toBeInTheDocument()
+    } finally {
+      for (const [name, d] of [['scrollTop', saved[0]], ['scrollHeight', saved[1]]] as const) {
+        if (d) Object.defineProperty(proto, name, d)
+        else delete (proto as unknown as Record<string, unknown>)[name]
+      }
+    }
+  })
+
   // A F4: the pane wires the bar's jumps to the transcript's release().
   it('a jump into the last screen stops the bottom-follow', () => {
     const scrollTo = vi.fn()

@@ -151,7 +151,9 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const [focusRequest, setFocusRequest] = useState(0)
   const restoreFocus = useRef<HTMLElement | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  // The transcript's scroll box, as state (a callback ref): room ⇄ chat
+  // mounts a new one, and the open bar must re-mark and re-scroll in it (R1-1).
+  const [scrollBox, setScrollBox] = useState<HTMLDivElement | null>(null)
   // The transcript's bottom-follow: every jump to a match releases it (A F4).
   const scrollControl = useRef<TranscriptScrollControl>(null)
   const onSearchJump = useCallback(() => scrollControl.current?.release(), [])
@@ -254,7 +256,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     partial: st.partial, tools: st.tools, now,
     // R3 T3.3: the search bar marks and scrolls inside the transcript, and
     // while it is open a new line never pulls the reader off a match (A4).
-    scrollRef, holdScroll: searchOpen, scrollControl,
+    scrollRef: setScrollBox, holdScroll: searchOpen, scrollControl,
   }
 
   return (
@@ -280,7 +282,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
       ) : (
         <FoldContext.Provider value={foldStore}>
           {searchOpen && (
-            <TranscriptSearch owner={paneId} scrollRef={scrollRef} messages={st.messages} tools={st.tools}
+            <TranscriptSearch owner={paneId} container={scrollBox} messages={st.messages} tools={st.tools}
               view={chat ? 'chat' : 'room'} keyPrefix={executionId} turnStarts={st.turnStarts}
               onClose={closeSearch} focusRequest={focusRequest} onJump={onSearchJump} />
           )}

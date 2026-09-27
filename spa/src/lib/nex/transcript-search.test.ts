@@ -1,7 +1,7 @@
 // spa/src/lib/nex/transcript-search.test.ts — the search index (R3 plan T3.1).
 import { describe, it, expect } from 'vitest'
 import {
-  buildSearchUnits, findCurrent, findMatches, firstAtOrAfter, matchIdentity, SEARCH_MATCH_LIMIT, searchUnitId,
+  ANCHOR_END, buildSearchUnits, findCurrent, findMatches, firstAtOrAfter, matchIdentity, relocate, SEARCH_MATCH_LIMIT, searchUnitId,
   type SearchUnit, type SearchUnitOptions,
 } from './transcript-search'
 import { indexOperations } from './operations'
@@ -321,6 +321,25 @@ describe('matchIdentity / findCurrent', () => {
     const units2 = [U('a', 'ab'), U('c', 'ab'), U('d', 'ab')]
     const m2 = findMatches(units2, 'ab').matches
     expect(m2[findCurrent(units2, m2, id)].unitId).toBe('c')
+  })
+
+  // R1-1: room ⇄ chat. The room's thinking has no chat unit; the next unit
+  // chat draws takes over, at chat's position for it.
+  it('relocate re-seats onto another list, handing a missing unit to its successor', () => {
+    const room = [U('t0', 'x'), U('a', 'ab'), U('t1', 'ab'), U('b', 'ab')]
+    const chat = [U('a', 'ab'), U('b', 'ab')]
+    const id = { unitId: 't1', ordinal: 0, unitPos: 2 }
+    const moved = relocate(room, chat, id)
+    expect(moved).toEqual({ unitId: 't1', ordinal: 0, unitPos: 1 })
+    const m = findMatches(chat, 'ab').matches
+    expect(m[findCurrent(chat, m, moved)].unitId).toBe('b')
+    // Re-seated again on a copy that also lacks it: the stored place stands.
+    expect(relocate(chat, [...chat], moved)).toBe(moved)
+    // Back in the room it is found by id; nothing follows it → the end.
+    expect(relocate(chat, room, moved).unitPos).toBe(2)
+    expect(relocate(room, [U('a', 'ab')], { unitId: 'b', ordinal: 0, unitPos: 3 }).unitPos).toBe(1)
+    // A bare position is left alone.
+    expect(relocate(room, chat, ANCHOR_END)).toBe(ANCHOR_END)
   })
 
   it('starts at the first match and is -1 with none', () => {

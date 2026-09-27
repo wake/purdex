@@ -24,13 +24,18 @@
 //   `holdScroll`), so a streaming reply does not pull the reader off a match;
 //   every jump also releases it (`onJump`, A F4), since a match on the last
 //   screen leaves the box close enough to the end to read as "at the bottom".
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
+// - **Room ⇄ chat** remounts the transcript under the open bar (R1-1): the
+//   scroll box arrives as state (`container`), so the marks follow it; the
+//   current match is re-seated on the new view's units (`relocate`) and
+//   scrolled to again, and the new transcript does not jump to its end on
+//   its own — the bar takes the reader there only when nothing is current.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { CaretDown, CaretUp, MagnifyingGlass, X } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { indexOperations } from '../../lib/nex/operations'
 import {
   ANCHOR_END, ANCHOR_START, anchorPosition, buildSearchUnits, findCurrent, findMatches, firstAtOrAfter,
-  matchIdentity, normalizeQuery, SEARCH_MATCH_LIMIT, unitAnchor,
+  matchIdentity, normalizeQuery, relocate, SEARCH_MATCH_LIMIT, unitAnchor,
   type MatchIdentity, type SearchResult, type SearchUnit, type UnitAnchor,
 } from '../../lib/nex/transcript-search'
 import { clearSearchHighlights, firstUnitInView, highlightSearch } from '../../lib/nex/search-highlight'
@@ -41,8 +46,11 @@ import { useFoldStore } from './fold-context'
 export interface TranscriptSearchProps {
   /** Whose marks these are (search-highlight owners): the pane id. */
   owner: string
-  /** The transcript's scroll container (its `scrollRef`). */
-  scrollRef: RefObject<HTMLDivElement | null>
+  /**
+   * The transcript's scroll container (its `scrollRef`), as state: room ⇄
+   * chat mounts a new one, and the marks must follow it (R1-1).
+   */
+  container: HTMLElement | null
   messages: StreamMessage[]
   tools?: Record<string, ToolActivity>
   view: 'room' | 'chat'
@@ -74,10 +82,15 @@ function searcher(units: readonly SearchUnit[]): (query: string, anchor: UnitAnc
   }
 }
 
+/** Where a transcript opens: its end, at once. */
+function scrollToEnd(el: HTMLElement): void {
+  el.scrollTop = el.scrollHeight
+}
+
 const BUTTON = 'p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none'
 
 export default function TranscriptSearch({
-  owner, scrollRef, messages, tools, view, keyPrefix, turnStarts, onClose, focusRequest = 0, onJump,
+  owner, container, messages, tools, view, keyPrefix, turnStarts, onClose, focusRequest = 0, onJump,
 }: TranscriptSearchProps) {
   const t = useI18nStore((s) => s.t)
   const foldStore = useFoldStore()
@@ -96,6 +109,16 @@ export default function TranscriptSearch({
     [messages, tools, view, keyPrefix, turnStarts],
   )
   const search = useMemo(() => searcher(units), [units])
+  // The units changed (a message, or the view): re-seat the current match
+  // and the window on these units. A unit this view does not draw (the
+  // room's thinking, chat's edited-file label) hands over to the next one
+  // that it does (R1-1) — a stored position from the other view would not.
+  const [seenUnits, setSeenUnits] = useState(units)
+  if (seenUnits !== units) {
+    setSeenUnits(units)
+    if (sel) setSel(relocate(seenUnits, units, sel))
+    setWin(relocate(seenUnits, units, win))
+  }
   const searching = normalizeQuery(query) !== null
   const { matches, truncated, truncatedBefore, truncatedAfter } = searching ? search(query, win) : NO_RESULT
   const current = useMemo(() => findCurrent(units, matches, sel), [units, matches, sel])
@@ -110,14 +133,34 @@ export default function TranscriptSearch({
   // the current match. `messages`, `tools` and `view` are listed even though
   // `matches` follows them, because a commit that redraws a unit without
   // changing any match still replaces its text nodes.
+  // A view switch remounts the transcript: take the reader back to the
+  // current match in the new one — or, with none, to its bottom, where a
+  // transcript opens (it does not jump there itself while the bar holds it).
+  // Declared before the marking effect, which runs after it in the commit.
+  const lastView = useRef(view)
+  const toBottom = useRef(false)
   useLayoutEffect(() => {
-    const container = scrollRef.current
-    if (!container) return
+    if (lastView.current === view) return
+    lastView.current = view
+    wantScroll.current = true
+    toBottom.current = true
+  }, [view])
+
+  useLayoutEffect(() => {
+    // The old transcript's box, gone from the document in a view switch:
+    // wait for the new one (`container` is state, so this runs again).
+    if (!container?.isConnected) return
+    const match = matches[current]
+    if (toBottom.current && (!searching || !match)) {
+      toBottom.current = false
+      wantScroll.current = false
+      scrollToEnd(container)
+    }
+    toBottom.current = false
     if (!searching) {
       clearSearchHighlights(owner)
       return
     }
-    const match = matches[current]
     if (wantScroll.current && match && match.reveal.some((key) => !foldStore.isExpanded(key))) {
       // Not on screen yet: open what hides it; this runs again after that commit.
       foldStore.expand(match.reveal)
@@ -127,7 +170,7 @@ export default function TranscriptSearch({
     highlightSearch(owner, container, query, matches, current, { scroll: wantScroll.current })
     wantScroll.current = false
     if (jump) onJump?.()
-  }, [owner, scrollRef, searching, query, matches, current, sel, foldStore, messages, tools, view, onJump])
+  }, [owner, container, searching, query, matches, current, sel, foldStore, messages, tools, view, onJump])
 
   useLayoutEffect(() => () => clearSearchHighlights(owner), [owner])
 
@@ -148,8 +191,7 @@ export default function TranscriptSearch({
       setSel(matchIdentity(units, refined, findCurrent(units, refined, sel)))
       return
     }
-    const box = scrollRef.current
-    let anchor = unitAnchor(units, box ? firstUnitInView(box) : null)
+    let anchor = unitAnchor(units, container?.isConnected ? firstUnitInView(container) : null)
     let result = search(value, anchor)
     let i = firstAtOrAfter(units, result.matches, anchorPosition(units, anchor))
     if (i < 0) {

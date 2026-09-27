@@ -15,6 +15,10 @@
 // match moves `scrollTop` synchronously and its scroll event has not arrived
 // yet when the next commit lands.
 //
+// Mounted while holding (room ⇄ chat under an open bar), the first call
+// does not jump: the search bar puts the reader back on the current match,
+// or at the bottom when there is none (R1-1).
+//
 // **Releasing (A F4).** A jump to a match in the last screen leaves
 // `scrollTop` clamped within NEAR_BOTTOM of the end, which reads as "at the
 // bottom", and the next line would push the match off screen. The search bar
@@ -88,7 +92,13 @@ export function useTranscriptScroll(external: Ref<HTMLDivElement> | undefined, h
     const el = box.current
     if (!el?.scrollTo) return
     observe()
-    if (holding.current && scrolled.current && !atBottom.current) return
+    if (holding.current && !scrolled.current) {
+      // Mounted under an open search bar (a view switch): the bar places
+      // the reader — at the current match, or the bottom — not this (R1-1).
+      scrolled.current = true
+      return
+    }
+    if (holding.current && !atBottom.current) return
     el.scrollTo({ top: el.scrollHeight, behavior: scrolled.current ? 'smooth' : 'auto' })
     scrolled.current = true
     atBottom.current = true
