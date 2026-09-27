@@ -23,14 +23,18 @@
 import { blockKey, toolResultText, type BlockKey, type OperationIndex } from './operations'
 import { classifyTurnOperations, toolEntryFor, type TurnOperation } from './operation-status'
 import { groupTurns, INTERRUPT_TEXT } from './turns'
-import { showsRawInput, toolSummary } from './tool-summary'
+import { pathBasename, showsRawInput, toolSummary } from './tool-summary'
 import { diffRows } from './diff-lines'
 import { proseText } from './markdown-text'
 import type { ContentBlock, StreamMessage } from './message-types'
 import type { ToolActivity } from './tool-activity'
 
-/** Which text of a block a unit is. */
-export type SearchUnitPart = 'text' | 'thinking' | 'arg' | 'input' | 'output' | 'diff'
+/**
+ * Which text of a block a unit is. `path` is a diff's full path on its stat
+ * line; `file` is the file name in chat's edited-line label (two anchors of
+ * one block, so two parts).
+ */
+export type SearchUnitPart = 'text' | 'thinking' | 'arg' | 'input' | 'output' | 'diff' | 'path' | 'file'
 
 /**
  * The DOM anchor of a unit: `data-search-unit={searchUnitId(...)}`. Built from
@@ -87,8 +91,13 @@ interface Walk {
   push: Push
 }
 
-/** A diff's rows as ToolDiffView draws them once expanded (`${key}:diff`). */
-function diffUnits(w: Walk, key: BlockKey, diff: NonNullable<ToolActivity['diff']>, reveal: string[]) {
+/**
+ * A diff as ToolDiffView draws it: the path on the stat line when `showPath`
+ * (outside the diff's fold — the stat is what you read instead of
+ * expanding), then the rows once expanded (`${key}:diff`).
+ */
+function diffUnits(w: Walk, key: BlockKey, diff: NonNullable<ToolActivity['diff']>, reveal: string[], showPath: boolean) {
+  if (showPath) w.push(searchUnitId(key, 'path'), diff.path, reveal)
   let row = 0
   for (const hunk of diff.hunks) {
     for (const r of diffRows(hunk)) w.push(searchUnitId(key, 'diff', row++), r.text, [...reveal, `${key}:diff`])
@@ -118,7 +127,8 @@ function operationUnits(w: Walk, mi: number, bj: number, reveal: string[]) {
       for (const ci of children) messageUnits(w, ci, [...reveal, `${key}:subagent`])
     }
     const diff = entry?.diff
-    if (diff && (diff.hunks.length > 0 || diff.truncated)) diffUnits(w, key, diff, reveal)
+    // OperationBlock: the diff names the file unless the header already did.
+    if (diff && (diff.hunks.length > 0 || diff.truncated)) diffUnits(w, key, diff, reveal, summary !== diff.path)
     const result = w.index.resultForCall.get(key)
     if (result) w.push(searchUnitId(key, 'output'), result.text, [...reveal, key])
     return
@@ -128,7 +138,7 @@ function operationUnits(w: Walk, mi: number, bj: number, reveal: string[]) {
     // An orphan: no call, no input — so no argument either (toolSummary of `{}` is '').
     const facts = toolEntryFor(w.tools, block.tool_use_id)
     const diff = facts?.diff
-    if (diff && (diff.hunks.length > 0 || diff.truncated)) diffUnits(w, key, diff, reveal)
+    if (diff && (diff.hunks.length > 0 || diff.truncated)) diffUnits(w, key, diff, reveal, true)
     w.push(searchUnitId(key, 'output'), toolResultText(block.content), [...reveal, key])
   }
 }
@@ -195,13 +205,20 @@ function chatUnits(w: Walk, keyPrefix: string, turnStarts: readonly number[]) {
   })
 }
 
-/** An edited line holds only the diff; a failed line holds the room's whole block. */
+/**
+ * An edited line is its label — whose file name is always on screen — and,
+ * expanded, only the diff with its full path; a failed line holds the room's
+ * whole block.
+ */
 function chatOperationLine(w: Walk, op: TurnOperation) {
   const block = blocksOf(w.messages[op.msgIndex])[op.blockIndex]
   if (!block) return
   const facts = toolEntryFor(w.tools, block.type === 'tool_use' ? block.id : block.type === 'tool_result' ? block.tool_use_id : undefined)
   if (op.kind === 'edited' && facts?.diff) {
-    diffUnits(w, op.key, facts.diff, [`${op.key}:chat-edited`])
+    const diff = facts.diff
+    w.push(searchUnitId(op.key, 'file'), pathBasename(diff.path), [])
+    // ToolDiffView draws nothing for a diff with no hunks that dropped none.
+    if (diff.hunks.length > 0 || diff.truncated) diffUnits(w, op.key, diff, [`${op.key}:chat-edited`], true)
     return
   }
   operationUnits(w, op.msgIndex, op.blockIndex, [`${op.key}:chat-failed`])

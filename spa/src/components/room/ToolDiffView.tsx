@@ -30,6 +30,8 @@ interface Props {
    * `searchUnitId(searchKey, 'diff', row)`, rows numbered across hunks in
    * drawing order. Only while rows are drawn whole — a folded row is the
    * preview's cut, not the row (search expands `${foldKey}:diff` first).
+   * The path, when shown, carries `searchUnitId(searchKey, 'path')` whether
+   * folded or not: it sits on the stat line, outside the fold.
    */
   searchKey?: BlockKey
 }
@@ -148,7 +150,11 @@ export default function ToolDiffView({ diff, foldKey, showPath = false, searchKe
       */}
       <div data-testid="diff-stat" className="flex items-baseline gap-2 px-2 py-0.5 text-text-muted">
         {showPath && (
-          <span data-testid="diff-path" className="min-w-0 flex-1 break-all">{diff.path}</span>
+          <span
+            data-testid="diff-path"
+            data-search-unit={searchKey === undefined ? undefined : searchUnitId(searchKey, 'path')}
+            className="min-w-0 flex-1 break-all"
+          >{diff.path}</span>
         )}
         <span className="shrink-0 tabular-nums">{`+${diff.added} ${MINUS}${diff.removed}`}</span>
       </div>

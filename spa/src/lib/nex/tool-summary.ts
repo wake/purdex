@@ -197,3 +197,13 @@ export function showsRawInput(
   const keys = Object.keys(input)
   return keys.length > 0 && !(entry?.primaryArg && keys.length === 1)
 }
+
+/**
+ * The last segment of a path; the whole path when it has none (or ends in a
+ * separator). Chat's edited line names the file by it, and the transcript
+ * search indexes that same label.
+ */
+export function pathBasename(path: string): string {
+  const last = path.split(/[\\/]/).pop()
+  return last ? last : path
+}
