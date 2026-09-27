@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.458] - 2026-09-27
+
+> **daemon 需要重新部署**（兩台）；SPA 無變更。
+
+### Fix：主機重開機後，tmux 分頁不再永遠停在 connecting（#1477，修 #1473）
+
+- 重開機後（或那台機器從沒開過 tmux）tmux 回報「沒有 server」的方式跟平常不同，daemon 以前認不出來，把它當成讀取失敗：
+  session 清單一份都送不出去，這台主機的分頁永遠停在 `connecting...`、不會變成「已結束」，只能先到那台機器手動開一個 tmux session。
+  現在 daemon 認得這種情況，會回報「目前沒有 session」，分頁會正確變成已結束、可以直接重建。
+- 同一個判斷也套用到其他把「沒有 server」當正常狀況的地方（pane 偵測、tmux 設定讀取、hook 狀態讀取、`pdx msg selftest` 的清理）。
+- tmux hooks（session 變動即時推送）現在會自動補裝：daemon 啟動時沒有 tmux server 的話，以前 hooks 永遠裝不上，session 列表只能靠
+  5 秒輪詢更新；現在 server 一出現就會裝上，裝失敗會每 5 秒重試，tmux server 換成新的一代時也會重裝。在主機頁手動移除 hooks 後，
+  這次 daemon 執行期間不會自動裝回。
+
 ## [1.0.0-alpha.457] - 2026-09-27
 
 > 純 SPA，不需要重新部署 daemon。
