@@ -11,6 +11,12 @@ import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
  * theme a sync peer no longer has registered degrades gracefully instead of
  * losing the rest of the preference.
  *
+ * Sync: registered with `syncManager` (other windows of this device) and
+ * projected into the Profile Sync `settings` section like the other
+ * appearance stores (`lib/profile/projections.ts`, settings ordinal 9) —
+ * `theme` and `iconStyle` travel; `customIcon` does not (it is nullable,
+ * which the settings applier cannot shape-check; phase C decides).
+ *
  * `iconStyle` / `customIcon` are consumed starting in phase C (§8.3); wired
  * here so the persisted shape does not change across phases.
  */

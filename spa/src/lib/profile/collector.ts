@@ -50,6 +50,7 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import type { Workspace } from '../../types/tab'
 import { hashSection } from './hash'
 import { identityOfSync, type HostIdentity } from './host-identity'
@@ -113,6 +114,7 @@ const SETTINGS_STORES: Record<SettingsStorageKey, SettingsStore> = {
   'purdex-layout': useLayoutStore,
   'purdex-host-looks': useHostLookStore,
   'purdex-shown-hosts': useShownHostsStore,
+  'purdex-worker-settings': useWorkerSettingsStore,
 }
 
 const SETTINGS_KEYS = Object.keys(SETTINGS_STORES) as SettingsStorageKey[]

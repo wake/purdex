@@ -31,7 +31,9 @@ export const STORAGE_KEYS = {
   MODULE_ENABLED: 'purdex-module-enabled',
   EDITOR_SETTINGS: 'purdex-editor-settings',
   /** Worker pane theme + icon setting (useWorkerSettingsStore, worker theme spec §4.2): `{ theme, iconStyle, customIcon }`,
-   *  one purdex-scope global setting (T1); synced like other appearance prefs. */
+   *  one purdex-scope global setting (T1); registered with syncManager (cross-window) and projected into Profile Sync
+   *  `settings` like the other appearance stores — `theme` / `iconStyle` only, `customIcon` stays device-local
+   *  (PROJECTIONS.settings, settings ordinal 9) */
   WORKER_SETTINGS: 'purdex-worker-settings',
   SYNC_STATE: 'purdex-sync-state',
   PATH_CACHE_V1: 'purdex-path-cache-v1',

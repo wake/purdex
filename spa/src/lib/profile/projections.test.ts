@@ -28,6 +28,7 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { compareShape, profileLock } from './profile-state'
 import type { Shape, SotIndexEntry } from './types'
 
@@ -275,7 +276,7 @@ describe('PROJECTIONS', () => {
     const real = new Set<string>(Object.values(STORAGE_KEYS))
     for (const key of real) expect(key).not.toContain('.')
     const prefixes = Object.keys(settingsFieldsByStore())
-    expect(prefixes).toHaveLength(10)
+    expect(prefixes).toHaveLength(11)
     for (const prefix of prefixes) expect(real.has(prefix)).toBe(true)
   })
 
@@ -322,6 +323,7 @@ describe('PROJECTIONS', () => {
       [STORAGE_KEYS.LAYOUT]: useLayoutStore.getState,
       [STORAGE_KEYS.HOST_LOOKS]: useHostLookStore.getState,
       [STORAGE_KEYS.SHOWN_HOSTS]: useShownHostsStore.getState,
+      [STORAGE_KEYS.WORKER_SETTINGS]: useWorkerSettingsStore.getState,
     }
     const fields = settingsFieldsByStore()
     expect(Object.keys(fields).sort()).toEqual(Object.keys(stores).sort())
@@ -666,18 +668,18 @@ describe('shape: fingerprint and ordinal', () => {
         hosts: await row('hosts'),
         tabs: await row('tabs'),
         workspaces: await row('workspaces'),
-        settings: { fingerprint: await fingerprintOf([...PROJECTIONS.settings, ...WIRE_MARKERS.settings.filter((m) => m !== '@wire:hosts-retired=1')]), ordinal: 7 },
+        settings: { fingerprint: await fingerprintOf([...PROJECTIONS.settings.filter((p) => !p.startsWith('purdex-worker-settings.')), ...WIRE_MARKERS.settings.filter((m) => m !== '@wire:hosts-retired=1')]), ordinal: 7 },
       }
     }
 
-    it('the final marker array pinned exactly, the ordinal 8', () => {
+    it('the final marker array pinned exactly, the ordinal ≥ 8 (worker pane theme pins 9)', () => {
       expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'])
-      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(8)
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBeGreaterThanOrEqual(8)
     })
 
-    it('the marker is the only thing between the two shapes: no projection moved', async () => {
+    it('the marker is the only thing between the two shapes: no projection moved (the later worker paths aside)', async () => {
       expect((await oldShapes()).settings.fingerprint).toBe(
-        await fingerprintOf([...PROJECTIONS.settings, '@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1']),
+        await fingerprintOf([...PROJECTIONS.settings.filter((p) => !p.startsWith('purdex-worker-settings.')), '@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1']),
       )
       expect((await oldShapes()).settings.fingerprint).not.toBe(await sectionFingerprint('settings'))
     })
@@ -690,6 +692,52 @@ describe('shape: fingerprint and ordinal', () => {
     })
 
     it('this build meets an ordinal-7 settings row as i-am-newer (pulls it, no lock)', async () => {
+      const mine = { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings }
+      const old = (await oldShapes()).settings
+      expect(compareShape(mine, old)).toBe('i-am-newer')
+      const oldRow: SotIndexEntry = { section: 'settings', rev: 1, hash: 'h', ...old }
+      expect(profileLock([oldRow], { ...(await oldShapes()), settings: mine })).toBeNull()
+    })
+  })
+
+  // worker pane theme (spec §4.2): `purdex-worker-settings.theme` / `.iconStyle` join `settings` — a projection change,
+  // so the fingerprint moves by itself (no marker needed: markers are for a new meaning under UNCHANGED paths) and the
+  // ordinal goes 8 → 9. The ordinal-8 client meets a settings row of this build as newer and locks; we pull its rows.
+  describe('worker pane theme: the ordinal-8 settings client and this build', () => {
+    const WORKER = ['purdex-worker-settings.theme', 'purdex-worker-settings.iconStyle']
+    async function oldShapes(): Promise<Record<SectionKind, Shape>> {
+      const row = async (kind: SectionKind): Promise<Shape> => ({ fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] })
+      return {
+        hosts: await row('hosts'),
+        tabs: await row('tabs'),
+        workspaces: await row('workspaces'),
+        settings: { fingerprint: await fingerprintOf([...PROJECTIONS.settings.filter((p) => !WORKER.includes(p)), ...WIRE_MARKERS.settings]), ordinal: 8 },
+      }
+    }
+
+    it('theme and iconStyle are listed; customIcon (nullable, phase C) is not; no new marker; ordinal 9', () => {
+      expect(PROJECTIONS.settings.filter((p) => p.startsWith('purdex-worker-settings.')).sort()).toEqual([...WORKER].sort())
+      expect(PROJECTIONS.settings).not.toContain('purdex-worker-settings.customIcon')
+      expect(Object.keys(useWorkerSettingsStore.getState())).toContain('customIcon') // the field exists; it is unlisted on purpose
+      expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'])
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(9)
+    })
+
+    it('the two shapes differ by exactly the worker paths', async () => {
+      expect(await sectionFingerprint('settings')).toBe(
+        await fingerprintOf([...PROJECTIONS.settings.filter((p) => !WORKER.includes(p)), ...WORKER, ...WIRE_MARKERS.settings]),
+      )
+      expect((await oldShapes()).settings.fingerprint).not.toBe(await sectionFingerprint('settings'))
+    })
+
+    it('an index holding a settings row of this build → sot-is-newer (locked:schema) for the ordinal-8 client', async () => {
+      const entry: SotIndexEntry = {
+        section: 'settings', rev: 1, hash: 'h', fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings,
+      }
+      expect(profileLock([entry], await oldShapes())).toMatchObject({ section: 'settings', kind: 'settings', verdict: 'sot-is-newer' })
+    })
+
+    it('this build meets an ordinal-8 settings row as i-am-newer (pulls it, no lock)', async () => {
       const mine = { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings }
       const old = (await oldShapes()).settings
       expect(compareShape(mine, old)).toBe('i-am-newer')
@@ -712,8 +760,8 @@ describe('shape: fingerprint and ordinal', () => {
           3,
         ],
         "settings": [
-          "0301080c343a5f7c680c3cbca74fa2986f17025178fdd56f211932dc10d33349",
-          8,
+          "8e0d87c02a51782dc8b5827c2dc7ef02d63fd475f5b5e2ca6a53ad57f8f77b47",
+          9,
         ],
         "tabs": [
           "ce81d1cfb4d3f20253306eab14a9be981fb0eecedab2599f07baccf0238a286f",

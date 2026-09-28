@@ -40,6 +40,7 @@ import { withOperationLock } from '../../stores/useRebuildStore'
 import { useThemeStore } from '../../stores/useThemeStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import type { Tab } from '../../types/tab'
 import { scheduleHostReresolve } from '../host-reresolve'
 import { registerLocale, unregisterLocale } from '../locale-registry'
@@ -122,6 +123,7 @@ const SETTINGS_STORES: Record<SettingsStorageKey, PersistedStore> = {
   'purdex-layout': asPersisted(useLayoutStore),
   'purdex-host-looks': asPersisted(useHostLookStore),
   'purdex-shown-hosts': asPersisted(useShownHostsStore),
+  'purdex-worker-settings': asPersisted(useWorkerSettingsStore),
 }
 
 /** The nine settings stores' current states, by storage key: the input of `buildSettingsSection` and `applySettings`. */
