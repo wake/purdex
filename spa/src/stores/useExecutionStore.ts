@@ -138,4 +138,13 @@ export function revokeDroppedPreviews(prev: Record<string, ExecutionState>, next
   }
 }
 
-useExecutionStore.subscribe((s, prev) => revokeDroppedPreviews(prev.executions, s.executions))
+const unsubscribeRevokeDroppedPreviews = useExecutionStore.subscribe((s, prev) => revokeDroppedPreviews(prev.executions, s.executions))
+
+// HMR-dispose so a hot-reload round-trip can't leave a second subscription
+// registered against the module-level store: without this, "revoked exactly
+// once" would stop being literally true after any edit to this file while
+// the dev server is running (each reload's new subscription piles onto the
+// old one, and the old one keeps the previous module's closure alive too).
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => unsubscribeRevokeDroppedPreviews())
+}
