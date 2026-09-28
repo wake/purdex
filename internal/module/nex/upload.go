@@ -224,13 +224,17 @@ func findFilePart(r *http.Request) (*multipart.Part, error) {
 // that would break the SPA's `[file: <path>]` reference line: a newline (or
 // any other Unicode control character, including \r and \t) would split the
 // line and inject arbitrary text into the next prompt, and a literal `[` or
-// `]` would break out of the brackets. Both classes become "_"; the result
-// is then trimmed of surrounding spaces. A name with nothing usable left
-// (".", "..", "/", or empty after trimming) becomes "upload".
+// `]` would break out of the brackets. The line-splitting risk isn't limited
+// to Cc: U+2028/U+2029 (line/paragraph separator) split a line just as a
+// newline would, and Cf format characters (bidi overrides like U+202E,
+// zero-width chars) can visually disguise the result without being caught by
+// IsControl. All of those plus `[` `]` become "_"; the result is then
+// trimmed of surrounding spaces. A name with nothing usable left (".", "..",
+// "/", or empty after trimming) becomes "upload".
 func uploadFileName(raw string) string {
 	name := filepath.Base(raw)
 	name = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || r == '[' || r == ']' {
+		if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp) || r == '[' || r == ']' {
 			return '_'
 		}
 		return r
