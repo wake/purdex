@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react'
 import { describe, it, expect } from 'vitest'
 import { workerIcon } from './worker-icon'
-import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS, CC_COLOR_ICON_VARIANTS, CODEX_COLOR_ICON } from './agent-icons'
+import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS, CC_COLOR_ICON_VARIANTS, CODEX_COLOR_ICON, getAgentIcon } from './agent-icons'
 import { ICON_MAP } from '../components/tab-icon-map'
 
 const base = { ccVariant: 'bot', codexVariant: 'openai', customIcon: '' } as const
@@ -52,6 +52,16 @@ describe('workerIcon — custom', () => {
   it('an unrecognised name falls back to Robot', () => {
     expect(workerIcon('claude', 'custom', { ...base, customIcon: 'NotAnIcon' })).toBe(ICON_MAP.Robot)
     expect(workerIcon('claude', 'custom', { ...base, customIcon: 'x' })).toBe(ICON_MAP.Robot)
+  })
+})
+
+describe('workerIcon — known-but-unlisted provider (opencode)', () => {
+  it('mono and color both resolve through providerAgentType to its own logo, not Robot', () => {
+    const expected = getAgentIcon('opencode', base)
+    expect(workerIcon('opencode', 'mono', base)).toBe(expected)
+    // No colour mark for opencode: `color` falls back to its own mono logo, not Robot.
+    expect(workerIcon('opencode', 'color', base)).toBe(expected)
+    expect(workerIcon('opencode', 'mono', base)).not.toBe(ICON_MAP.Robot)
   })
 })
 

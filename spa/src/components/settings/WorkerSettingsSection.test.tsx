@@ -80,6 +80,16 @@ describe('WorkerSettingsSection', () => {
       fireEvent.click(document.querySelector('[data-icon="House"]') as HTMLElement)
       expect(useWorkerSettingsStore.getState().customIcon).toBe('House')
     })
+
+    it('changing the icon style resets the open picker, so switching back to custom does not reopen it', () => {
+      useWorkerSettingsStore.setState({ iconStyle: 'custom' })
+      render(<WorkerSettingsSection />)
+      fireEvent.click(screen.getByTestId('worker-icon-picker-toggle'))
+      expect(screen.getByTestId('worker-icon-picker-toggle')).toHaveAttribute('aria-expanded', 'true')
+      fireEvent.change(iconSelect(), { target: { value: 'mono' } })
+      fireEvent.change(iconSelect(), { target: { value: 'custom' } })
+      expect(screen.getByTestId('worker-icon-picker-toggle')).toHaveAttribute('aria-expanded', 'false')
+    })
   })
 
   it('renders a theme select with the Purdex option', () => {

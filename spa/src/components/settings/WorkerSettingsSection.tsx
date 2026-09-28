@@ -64,7 +64,7 @@ export function WorkerSettingsSection() {
           <select
             aria-label={t('worker.icon.label')}
             value={iconStyle}
-            onChange={(e) => setIconStyle(e.target.value as WorkerIconStyle)}
+            onChange={(e) => { setIconStyle(e.target.value as WorkerIconStyle); setPicking(false) }}
             className={SELECT_CLASS}
           >
             {ICON_STYLES.map((style) => (

@@ -47,5 +47,8 @@ export function workerIcon(provider: string, style: WorkerIconStyle, opts: Worke
     if (agentType === 'codex') return CODEX_COLOR_ICON
     // No colour logo for this provider: its mono logo, else Robot (below).
   }
+  // A provider `getAgentIcon` recognises but has no case above for (e.g.
+  // opencode) still resolves to its own logo here; only a provider unknown
+  // to `getAgentIcon` itself falls through to Robot.
   return getAgentIcon(agentType, { ccVariant: opts.ccVariant, codexVariant: opts.codexVariant }) ?? ROBOT
 }
