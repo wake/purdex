@@ -17,8 +17,8 @@
 //   or down alike — except while a smooth scroll that `follow` itself
 //   started is still travelling down (`smoothTarget`): that is the box
 //   catching up, not the reader leaving. Moving up, arriving, or the
-//   reader's own scrolling input (wheel, touch, a press on the scrollbar, a
-//   scrolling key — A3) ends it: after that the position alone decides, so
+//   reader's own scrolling input (wheel, touch, a press in the scrollbar
+//   gutter, a scrolling key — A3) ends it: after that the position alone decides, so
 //   a reader who drags down and stops short of the end is not pulled on;
 // - `scrollTop` unchanged → the flag unchanged: growth makes the box taller
 //   under a reader at the bottom without moving them.
@@ -112,6 +112,13 @@ function firstVisibleTurn(el: HTMLElement): number | null {
   return null
 }
 
+/** A press on the box's own scrollbar gutter, not its content or padding (A3). */
+function onScrollbar(e: MouseEvent): boolean {
+  const el = e.currentTarget
+  if (!(el instanceof HTMLElement) || e.target !== el) return false
+  return e.offsetX >= el.clientWidth || e.offsetY >= el.clientHeight
+}
+
 export function useTranscriptScroll(
   external: Ref<HTMLDivElement> | undefined,
   hold: boolean,
@@ -143,11 +150,14 @@ export function useTranscriptScroll(
 
   // A3: the reader's own scrolling input ends follow()'s smooth scroll.
   // Native listeners on the box, so neither transcript has to spread more
-  // handlers. A press counts only on the box itself (its scrollbar), not a
-  // click on the content; a key only when it scrolls.
+  // handlers. A press counts only on the scrollbar: on the box itself (not
+  // the content) and in its gutter — clientWidth / clientHeight exclude the
+  // scrollbar, so a press past them is on it, while one inside is on the
+  // box's padding or a gap between messages (re-review round 2). A key
+  // counts only when it scrolls.
   const takeOver = useCallback((e: Event) => {
     if (smoothTarget.current === null) return
-    if (e.type === 'pointerdown' && e.target !== e.currentTarget) return
+    if (e.type === 'pointerdown' && !onScrollbar(e as MouseEvent)) return
     if (e.type === 'keydown' && !SCROLL_KEYS.has((e as KeyboardEvent).key)) return
     smoothTarget.current = null
   }, [])

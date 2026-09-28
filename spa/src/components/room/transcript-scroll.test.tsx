@@ -5,7 +5,7 @@
 import { createRef } from 'react'
 import type { TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, fireEvent } from '@testing-library/react'
+import { render, fireEvent, createEvent } from '@testing-library/react'
 import RoomTranscript, { type RoomTranscriptProps } from './RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
 import type { StreamMessage } from '../../lib/nex/message-types'
@@ -24,6 +24,18 @@ function geometry(box: HTMLElement, scrollHeight: number, clientHeight: number, 
   Object.defineProperty(box, 'scrollHeight', { configurable: true, value: scrollHeight })
   Object.defineProperty(box, 'clientHeight', { configurable: true, value: clientHeight })
   Object.defineProperty(box, 'scrollTop', { configurable: true, writable: true, value: scrollTop })
+}
+
+/**
+ * A pointerdown on the box itself at (x, y) in its padding box. jsdom has no
+ * layout, so the box gets a clientWidth and the event its offsets by hand.
+ */
+function pressBox(box: HTMLElement, x: number, y: number) {
+  Object.defineProperty(box, 'clientWidth', { configurable: true, value: 300 })
+  const ev = createEvent.pointerDown(box)
+  Object.defineProperty(ev, 'offsetX', { value: x })
+  Object.defineProperty(ev, 'offsetY', { value: y })
+  fireEvent(box, ev)
 }
 
 const scrollTo = vi.fn()
@@ -122,7 +134,9 @@ describe.each(views)('%s transcript scrolling', (_name, Transcript) => {
     ['wheel', (box: HTMLElement) => fireEvent.wheel(box, { deltaY: 40 })],
     ['touchstart', (box: HTMLElement) => fireEvent.touchStart(box)],
     ['touchmove', (box: HTMLElement) => fireEvent.touchMove(box)],
-    ['pointerdown on the scrollbar', (box: HTMLElement) => fireEvent.pointerDown(box)],
+    // clientWidth / clientHeight exclude the scrollbar: past them is the gutter.
+    ['pointerdown on the vertical scrollbar', (box: HTMLElement) => pressBox(box, 305, 50)],
+    ['pointerdown on the horizontal scrollbar', (box: HTMLElement) => pressBox(box, 50, 205)],
     ['PageDown', (box: HTMLElement) => fireEvent.keyDown(box, { key: 'PageDown' })],
     ['ArrowDown', (box: HTMLElement) => fireEvent.keyDown(box, { key: 'ArrowDown' })],
     ['Space', (box: HTMLElement) => fireEvent.keyDown(box, { key: ' ' })],
@@ -147,7 +161,7 @@ describe.each(views)('%s transcript scrolling', (_name, Transcript) => {
     expect(scrollTo).not.toHaveBeenCalled()
   })
 
-  it('A3: a click on the content or a non-scrolling key mid-flight does not end the smooth follow', () => {
+  it('A3: a click on the content or its padding, or a non-scrolling key, mid-flight does not end the smooth follow', () => {
     const ref = createRef<HTMLDivElement>()
     let messages = [said('a')]
     const { rerender, getByText } = render(T({ messages, scrollRef: ref }))
@@ -157,6 +171,9 @@ describe.each(views)('%s transcript scrolling', (_name, Transcript) => {
     messages = [...messages, said('b')]
     rerender(T({ messages, scrollRef: ref }))
     fireEvent.pointerDown(getByText('a'))
+    // The box's own padding / the gap between messages: target is the box,
+    // but inside clientWidth × clientHeight, so not the scrollbar.
+    pressBox(box, 120, 150)
     fireEvent.keyDown(box, { key: 'c', metaKey: true })
     geometry(box, 1400, 200, 900)
     fireEvent.scroll(box)
