@@ -191,6 +191,41 @@ func TestUpload409MissingCwdDir(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "cwd still does not exist")
 }
 
+// The saved path (which starts with the execution's cwd) is embedded by the
+// SPA into a `[file: <path>]` reference line, so a cwd carrying the same
+// disruptive characters as a hostile upload filename must be rejected before
+// anything is created — the cwd itself isn't sanitized the way a filename
+// is.
+func TestUpload409CwdUnsupportedChars(t *testing.T) {
+	base := t.TempDir()
+	unsafe := map[string]string{
+		"newline":        "bad\ndir",
+		"line_separator": "bad dir", // Zl; renders like a plain space
+		"bracket":        "bad]dir",
+	}
+	for name, sub := range unsafe {
+		t.Run(name, func(t *testing.T) {
+			env := newTakebackEnv(t)
+			cwd := filepath.Join(base, sub)
+			require.NoError(t, os.MkdirAll(cwd, 0o755))
+			env.store.results = []getResult{{exec: uploadExec(store.StateIdle, cwd)}}
+
+			status, body := postUpload(t, env, tbExecID, "file", "a.txt", []byte("a"))
+			assert.Equal(t, http.StatusConflict, status, body)
+			assert.Equal(t, "cwd_unsupported_chars", body["code"])
+
+			_, err := os.Stat(filepath.Join(cwd, ".purdex-uploads"))
+			assert.True(t, os.IsNotExist(err), "nothing created")
+		})
+	}
+
+	t.Run("normal_cwd_unaffected", func(t *testing.T) {
+		env, _ := newUploadEnv(t)
+		status, body := postUpload(t, env, tbExecID, "file", "a.txt", []byte("a"))
+		assert.Equal(t, http.StatusOK, status, body)
+	})
+}
+
 // .purdex-uploads pre-created as a symlink pointing outside the cwd: the
 // lexical containment check above can't see this (it never touches the
 // filesystem), so the post-MkdirAll symlink-resolved check must catch it.
