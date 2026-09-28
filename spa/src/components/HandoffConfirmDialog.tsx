@@ -9,6 +9,10 @@ import { useRef, useState } from 'react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { useTabStore } from '../stores/useTabStore'
+import { useSessionStore } from '../stores/useSessionStore'
+import { useAgentStore } from '../stores/useAgentStore'
+import { compositeKey } from '../lib/composite-key'
+import { stripAgentTitleMarker, stripAnyKnownAgentTitleMarker } from '../lib/agent-title-marker'
 import { countPanesOnSession } from '../lib/pane-tree'
 import { HandoffApiError } from '../lib/nex/handoff-api'
 import {
@@ -22,7 +26,7 @@ import {
 import { isRefShownNow, landOnHostsPageIfHidden } from '../lib/shown-hosts'
 import { ConfirmDialog } from './ConfirmDialog'
 
-interface Props extends Omit<HandToNexArgs, 'keepSession'> {
+interface Props extends Omit<HandToNexArgs, 'keepSession' | 'fromTitle'> {
   onClose: () => void
 }
 
@@ -33,6 +37,23 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
   // 預設保留、每次都問); nothing persists it.
   const [keepSession, setKeepSession] = useState(true)
   const otherPanes = useTabStore((s) => countPanesOnSession(s.tabs, args.hostId, args.sessionCode, args.paneId))
+  // The session's own pane title, recorded on the execution pane as its
+  // pre-handoff title (worker theme spec §8.4), with the agent marker
+  // stripped. Looked up by (hostId, sessionCode) directly — not through the
+  // tab's displayTitle, which composes a suffix and describes whichever pane
+  // is primary — so this is unaffected by the dynamicTabName /
+  // stripAgentTitleMarker display settings and applies equally to a
+  // secondary-pane handoff on a split.
+  const rawPaneTitle = useSessionStore((s) => s.sessions[args.hostId]?.find((sess) => sess.code === args.sessionCode)?.pane_title)
+  const agentType = useAgentStore((s) => s.agentTypes[compositeKey(args.hostId, args.sessionCode)])
+  // agentType can be unclassified yet (useAgentStore hasn't seen this session
+  // classify), in which case the typed, agentType-keyed strip is a no-op and
+  // a marker like "✳ fix-login" would be recorded verbatim (review finding
+  // A2). Fall back to stripping any known agent's marker shape by pattern
+  // alone; the typed path stays authoritative once agentType is known.
+  const fromTitle = rawPaneTitle
+    ? (agentType ? stripAgentTitleMarker(rawPaneTitle, agentType) : stripAnyKnownAgentTitleMarker(rawPaneTitle))
+    : undefined
   // Ref, not state: two clicks in one event burst both see `busy === false`
   // before React commits the first setBusy.
   const inFlight = useRef(false)
@@ -48,7 +69,7 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
     setBusy(true)
     const toast = useUndoToast.getState()
     try {
-      const { result, swapped } = await handToNex({ ...args, keepSession })
+      const { result, swapped } = await handToNex({ ...args, keepSession, fromTitle })
       if (swapped) {
         toast.show(t('handoff.success'))
       } else if (!isRefShownNow(args.hostId)) {
@@ -61,7 +82,7 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
           () => {
             // Re-checked at click (H2d-3): hidden since → the Hosts page on that host, never an execution tab.
             if (landOnHostsPageIfHidden(args.hostId)) return
-            useTabStore.getState().openSingletonTab(executionContentFor(args.hostId, result.execution_id, from))
+            useTabStore.getState().openSingletonTab(executionContentFor(args.hostId, result.execution_id, from, fromTitle))
           },
           t('handoff.open_execution'),
         )

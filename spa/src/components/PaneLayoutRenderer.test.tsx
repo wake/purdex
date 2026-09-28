@@ -8,6 +8,7 @@ import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useSessionStore } from '../stores/useSessionStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { compositeKey } from '../lib/composite-key'
@@ -585,6 +586,7 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     ensure = vi.fn().mockResolvedValue(undefined)
     useNexHostStore.setState({ byHost: {}, ensure } as never)
     useAgentStore.setState({ agentTypes: {} })
+    useSessionStore.setState({ sessions: {} })
     useUndoToast.setState({ toast: null })
     useShownHostsStore.setState({ ids: [H] }) // the host is shown (H2d-4: a hidden host's leaf is gated)
   })
@@ -657,6 +659,10 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     }
     seedTab(split)
     seedReady()
+    // fromTitle is looked up by (hostId, sessionCode), not by the tab's
+    // primary pane, so it is recorded here too even though the tab's own
+    // title ("Dashboard") describes the OTHER (primary) pane.
+    useSessionStore.setState({ sessions: { [H]: [{ code: CODE, pane_title: 'fix-login' }] as never } })
     // The dialog hands off only on a host shown in the workbench (host ownership H2d-3).
     const { useShownHostsStore } = await import('../stores/useShownHostsStore')
     useShownHostsStore.setState({ ids: [H] })
@@ -676,6 +682,7 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     expect(mockedHandToNex).toHaveBeenCalledTimes(1)
     expect(mockedHandToNex).toHaveBeenCalledWith({
       hostId: H, sessionCode: CODE, tmuxInstance: 'inst-1', cachedName: 'purdex', tabId: 't1', paneId: 'p2', keepSession: true,
+      fromTitle: 'fix-login',
     })
     expect(screen.queryByTestId('handoff-dialog')).not.toBeInTheDocument()
     expect(useUndoToast.getState().toast?.message).toBe('Handed to nex.')

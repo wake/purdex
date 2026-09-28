@@ -61,6 +61,8 @@ export interface HandToNexArgs {
   paneId: string
   /** G4: keep the idle tmux session as the anchor to come back to (default `true`). */
   keepSession?: boolean
+  /** The source tab's title, recorded on the execution pane (worker theme spec §8.4). */
+  fromTitle?: string
 }
 
 export interface HandToNexOutcome {
@@ -73,10 +75,16 @@ export interface HandToNexOutcome {
  * The execution content a successful handoff writes into the pane (also what
  * the recovery toast opens). `from` is omitted when the session was not kept:
  * the pane then has nothing to return to, and "Take to terminal" creates a
- * new session instead.
+ * new session instead. `fromTitle` (the source tab's title) is kept either
+ * way; a blank one is omitted.
  */
-export function executionContentFor(hostId: string, executionId: string, from?: ExecutionFrom): PaneContent {
-  return from ? { kind: 'execution', executionId, host: hostId, from } : { kind: 'execution', executionId, host: hostId }
+export function executionContentFor(hostId: string, executionId: string, from?: ExecutionFrom, fromTitle?: string): PaneContent {
+  const title = fromTitle?.trim()
+  return {
+    kind: 'execution', executionId, host: hostId,
+    ...(from ? { from } : {}),
+    ...(title ? { fromTitle: title } : {}),
+  }
 }
 
 /** `from` for the execution pane, or undefined when the daemon says the session is gone. */
@@ -104,7 +112,7 @@ export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> 
       keep_session: keepSession,
     })
     const swapped = isRefShownNow(hostId) && useTabStore.getState().trySetPaneContent(
-      tabId, paneId, executionContentFor(hostId, result.execution_id, handoffFromFor(args, result)),
+      tabId, paneId, executionContentFor(hostId, result.execution_id, handoffFromFor(args, result), args.fromTitle),
       (c) => c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && c.tmuxInstance === tmuxInstance,
     )
     return { result, swapped }

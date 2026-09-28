@@ -8,6 +8,9 @@ import { handToNex } from '../lib/nex/handoff'
 import { HandoffApiError } from '../lib/nex/handoff-api'
 import { useUndoToast } from '../stores/useUndoToast'
 import { useTabStore } from '../stores/useTabStore'
+import { useSessionStore } from '../stores/useSessionStore'
+import { useAgentStore } from '../stores/useAgentStore'
+import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { createTab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useHostStore } from '../stores/useHostStore'
@@ -203,6 +206,93 @@ describe('HandoffConfirmDialog — confirm', () => {
       host: 'h1',
       from: { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' },
     })
+  })
+})
+
+describe('HandoffConfirmDialog — records the session pane title (worker theme spec §8.4)', () => {
+  function titledSessionTab(paneTitle: string) {
+    const tab = createTab({ kind: 'tmux-session', hostId: 'h1', sessionCode: 'zk16vd', mode: 'terminal', cachedName: 'purdex', tmuxInstance: 'inst-1' })
+    useTabStore.getState().addTab(tab)
+    useSessionStore.setState({ sessions: { h1: [{ code: 'zk16vd', name: 'fix-login', pane_title: paneTitle }] as never } })
+    return { tabId: tab.id, paneId: getPrimaryPane(tab.layout).id }
+  }
+  afterEach(() => {
+    useSessionStore.setState({ sessions: {} })
+    useAgentStore.setState({ agentTypes: {} })
+    useUISettingsStore.setState({ dynamicTabName: false, stripAgentTitleMarker: true })
+  })
+
+  it('passes the session pane title to handToNex as fromTitle', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
+    const ids = titledSessionTab('fix-login')
+    render(<HandoffConfirmDialog {...args} {...ids} onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex).toHaveBeenCalledWith({ ...args, ...ids, keepSession: true, fromTitle: 'fix-login' })
+  })
+
+  it('strips the agent title marker regardless of the dynamicTabName / stripAgentTitleMarker display settings', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
+    const ids = titledSessionTab('✳ fix-login')
+    useAgentStore.setState({ agentTypes: { 'h1:zk16vd': 'cc' } })
+    useUISettingsStore.setState({ dynamicTabName: false, stripAgentTitleMarker: false })
+    render(<HandoffConfirmDialog {...args} {...ids} onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex.mock.calls[0][0].fromTitle).toBe('fix-login')
+  })
+
+  it('no fromTitle when the session has no pane title, or the tab is gone', async () => {
+    mockedHandToNex.mockResolvedValue({ result: ok, swapped: true })
+    const tab = createTab({ kind: 'tmux-session', hostId: 'h1', sessionCode: 'zk16vd', mode: 'terminal', cachedName: 'purdex', tmuxInstance: 'inst-1' })
+    useTabStore.getState().addTab(tab)
+    useSessionStore.setState({ sessions: { h1: [{ code: 'zk16vd', name: 'fix-login' }] as never } })
+    render(<HandoffConfirmDialog {...args} tabId={tab.id} paneId={getPrimaryPane(tab.layout).id} onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex.mock.calls[0][0].fromTitle).toBeUndefined()
+    cleanup()
+    render(<HandoffConfirmDialog {...args} tabId="gone" onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex.mock.calls[1][0].fromTitle).toBeUndefined()
+  })
+
+  it('strips a known marker even when agentType is unclassified (review finding A2)', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
+    const ids = titledSessionTab('✳ fix-login')
+    // agentTypes stays {} (unclassified) — the typed strip would be a no-op.
+    render(<HandoffConfirmDialog {...args} {...ids} onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex.mock.calls[0][0].fromTitle).toBe('fix-login')
+  })
+
+  it('an ordinary title with no marker is unchanged when agentType is unclassified', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
+    const ids = titledSessionTab('fix-login')
+    render(<HandoffConfirmDialog {...args} {...ids} onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex.mock.calls[0][0].fromTitle).toBe('fix-login')
+  })
+
+  it('records the pane title of the handed-off session even on a secondary pane of a split', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
+    // The tab is unrelated to the handed-off session (a split whose primary
+    // pane is something else); the lookup is by (hostId, sessionCode), not by tab.
+    const tab = createTab({ kind: 'tmux-session', hostId: 'h1', sessionCode: 'other-code', mode: 'terminal', cachedName: 'other', tmuxInstance: 'inst-2' })
+    useTabStore.getState().addTab(tab)
+    useSessionStore.setState({ sessions: { h1: [{ code: 'zk16vd', name: 'fix-login', pane_title: 'fix-login' }] as never } })
+    render(<HandoffConfirmDialog {...args} tabId={tab.id} paneId="p2" onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex.mock.calls[0][0].fromTitle).toBe('fix-login')
+  })
+
+  it('the swapped:false "Open execution" content carries it too', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: false })
+    const ids = titledSessionTab('fix-login')
+    render(<HandoffConfirmDialog {...args} {...ids} onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    act(() => { toast()!.action!() })
+    const opened = Object.values(useTabStore.getState().tabs)
+      .map((tab) => getPrimaryPane(tab.layout).content)
+      .find((c) => c.kind === 'execution')
+    expect(opened).toMatchObject({ kind: 'execution', executionId: 'exc_1', fromTitle: 'fix-login' })
   })
 })
 

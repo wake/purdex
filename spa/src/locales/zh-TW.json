@@ -110,6 +110,12 @@
   "worker.theme.label": "主題",
   "worker.theme.desc": "Worker pane 的字級、清單、表格與側軌樣式",
   "worker.theme.purdex": "Purdex",
+  "worker.icon.label": "圖示",
+  "worker.icon.desc": "側欄與分頁列上 worker 分頁的圖示",
+  "worker.icon.mono": "服務商標誌",
+  "worker.icon.color": "服務商標誌（彩色）",
+  "worker.icon.custom": "自訂圖示",
+  "worker.icon.pick": "選擇圖示…",
 
   "settings.appearance.title": "外觀",
   "settings.appearance.desc": "應用程式視覺偏好設定",
