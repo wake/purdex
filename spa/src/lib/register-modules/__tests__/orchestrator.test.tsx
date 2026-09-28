@@ -165,6 +165,60 @@ describe('registerBuiltinModules orchestrator', () => {
     })
   })
 
+  // A1 (PR #1514 review): a handoff / take-back can swap a pane's content to
+  // another execution while the paneId stays. The wrapper's
+  // `key={`${hostId}:${executionId}`}` (register-modules/index.tsx,
+  // ExecutionPaneWrapper) must remount ExecutionView then, so its transcript
+  // gets a fresh useTranscriptScroll (first follow restores / jumps from
+  // scratch) instead of carrying the previous execution's scroll state.
+  describe('the execution pane remounts per execution', () => {
+    function mountCounting() {
+      const mounts: string[] = []
+      const unmounts: string[] = []
+      vi.mocked(ExecutionView).mockImplementation(function FakeView({ hostId, executionId }) {
+        useEffect(() => {
+          mounts.push(`${hostId}:${executionId}`)
+          return () => { unmounts.push(`${hostId}:${executionId}`) }
+        }, [])
+        return <></>
+      })
+      useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+      const tab = createTab({ kind: 'execution', executionId: 'exc_1', host: 'h1' })
+      useTabStore.getState().addTab(tab)
+      const pane = getPrimaryPane(tab.layout)
+      const resolution = resolvePaneRenderer('execution')
+      if (resolution.kind !== 'render') throw new Error('execution pane not registered')
+      const Component = resolution.component
+      const current = () => getPrimaryPane(useTabStore.getState().tabs[tab.id].layout)
+      // Same renderer, same element type: only a rerender, never an unmount.
+      const view = render(<Component pane={current()} isActive />)
+      const rerender = () => view.rerender(<Component pane={current()} isActive />)
+      return { tab, pane, rerender, mounts, unmounts }
+    }
+    afterEach(() => {
+      vi.mocked(ExecutionView).mockImplementation(() => <></>)
+    })
+
+    it('a different executionId on the same pane → a fresh ExecutionView mount', () => {
+      const { tab, pane, rerender, mounts, unmounts } = mountCounting()
+      useTabStore.getState().setPaneContent(tab.id, pane.id, { kind: 'execution', executionId: 'exc_2', host: 'h1' })
+      rerender()
+      expect(vi.mocked(ExecutionView).mock.calls.at(-1)![0]).toMatchObject({ executionId: 'exc_2', paneId: pane.id })
+      expect(unmounts).toEqual(['h1:exc_1'])
+      expect(mounts).toEqual(['h1:exc_1', 'h1:exc_2'])
+    })
+
+    it('a different host for the same executionId → a fresh mount too; an unchanged pane does not remount', () => {
+      const { tab, pane, rerender, mounts, unmounts } = mountCounting()
+      rerender()
+      expect(unmounts).toEqual([])
+      useTabStore.getState().setPaneContent(tab.id, pane.id, { kind: 'execution', executionId: 'exc_1', host: 'h2' })
+      rerender()
+      expect(unmounts).toEqual(['h1:exc_1'])
+      expect(mounts).toEqual(['h1:exc_1', 'h2:exc_1'])
+    })
+  })
+
   it('the execution pane wrapper offers no `from` (no take-back) when the pane belongs to no tab', () => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
     vi.mocked(ExecutionView).mockClear()
