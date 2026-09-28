@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import WorkerInput from './WorkerInput'
+import type { Chip } from '../../lib/nex/worker-upload'
 
 beforeEach(() => {
   cleanup()
@@ -216,5 +217,81 @@ describe('WorkerInput', () => {
     fireEvent.change(textarea, { target: { value: 'a\nb' } })
     expect(textarea.style.height).toBe('60px')
     expect(textarea.style.overflowY).toBe('hidden')
+  })
+})
+
+describe('WorkerInput — attachments (spec §9.1)', () => {
+  const uploading: Chip = { key: 'u', name: 'u.txt', status: 'uploading' }
+  const failed: Chip = { key: 'f', name: 'f.txt', status: 'failed', error: 'network' }
+  const done: Chip = { key: 'd', name: 'd.txt', status: 'done', path: '/w/d.txt' }
+  const enter = (ta: HTMLElement) => fireEvent.keyDown(ta, { key: 'Enter', code: 'Enter' })
+
+  it('renders the chips above the textarea and removes one through onRemoveChip', () => {
+    const onRemoveChip = vi.fn()
+    render(<WorkerInput onSend={vi.fn()} chips={[done]} onRemoveChip={onRemoveChip} />)
+    expect(screen.getAllByTestId('upload-chip')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove d.txt' }))
+    expect(onRemoveChip).toHaveBeenCalledWith('d')
+  })
+
+  it('blocks send while a chip is uploading and says why, keeping the text', () => {
+    const onSend = vi.fn()
+    render(<WorkerInput onSend={onSend} chips={[uploading]} />)
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: 'hi' } })
+    enter(ta)
+    expect(onSend).not.toHaveBeenCalled()
+    expect(ta.value).toBe('hi')
+    expect(screen.getByTestId('upload-block').textContent).toBe('Waiting for uploads to finish…')
+  })
+
+  it('a failed chip blocks send until it is removed', () => {
+    const onSend = vi.fn()
+    const { rerender } = render(<WorkerInput onSend={onSend} chips={[failed]} />)
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: 'hi' } })
+    enter(ta)
+    expect(onSend).not.toHaveBeenCalled()
+    expect(screen.getByTestId('upload-block').textContent).toBe('An upload failed — remove it to send')
+    rerender(<WorkerInput onSend={onSend} chips={[]} />)
+    expect(screen.queryByTestId('upload-block')).toBeNull()
+    enter(ta)
+    expect(onSend).toHaveBeenCalledWith('hi')
+  })
+
+  it('sends with no text when a done chip is attached', () => {
+    const onSend = vi.fn()
+    render(<WorkerInput onSend={onSend} chips={[done]} />)
+    enter(screen.getByRole('textbox'))
+    expect(onSend).toHaveBeenCalledWith('')
+  })
+
+  it('pasting files hands them to onAddFiles; pasting text does not', () => {
+    const onAddFiles = vi.fn()
+    render(<WorkerInput onSend={vi.fn()} onAddFiles={onAddFiles} />)
+    const ta = screen.getByRole('textbox')
+    const file = new File(['x'], 'shot.png', { type: 'image/png' })
+    fireEvent.paste(ta, { clipboardData: { files: [file], getData: () => '' } })
+    expect(onAddFiles).toHaveBeenCalledWith([file])
+    onAddFiles.mockClear()
+    fireEvent.paste(ta, { clipboardData: { files: [], getData: () => 'text' } })
+    expect(onAddFiles).not.toHaveBeenCalled()
+  })
+
+  it('the + button opens a file picker whose files go to onAddFiles', () => {
+    const onAddFiles = vi.fn()
+    render(<WorkerInput onSend={vi.fn()} onAddFiles={onAddFiles} />)
+    const picker = screen.getByTestId('attach-input') as HTMLInputElement
+    const click = vi.spyOn(picker, 'click')
+    fireEvent.click(screen.getByRole('button', { name: 'Attach files' }))
+    expect(click).toHaveBeenCalled()
+    const file = new File(['x'], 'a.txt', { type: 'text/plain' })
+    fireEvent.change(picker, { target: { files: [file] } })
+    expect(onAddFiles).toHaveBeenCalledWith([file])
+  })
+
+  it('has no + button without onAddFiles', () => {
+    render(<WorkerInput onSend={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Attach files' })).toBeNull()
   })
 })
