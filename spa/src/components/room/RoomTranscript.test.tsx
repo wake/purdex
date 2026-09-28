@@ -89,13 +89,13 @@ describe('RoomTranscript', () => {
       expect(container.querySelector('[class*="max-w-["][class*="%]"]')).toBeNull()
     })
 
-    it('renders a user line with a gutter mark, not a bubble', () => {
+    it('renders a user line as a full-width band, not a bubble', () => {
       render(T({ messages: [said('hello')], turnStarts: [0] }))
       const line = screen.getByTestId('room-user-line')
       expect(line).toHaveTextContent('hello')
-      expect(line.className).toContain('text-text-primary')
-      expect(line.className).toContain('font-medium')
-      expect(within(line).getByTestId('room-user-mark').className).toContain('bg-accent')
+      expect(line.className).toContain('bg-[var(--wt-user-band-bg)]')
+      expect(line.className).toContain('text-[var(--wt-user-band-fg)]')
+      expect(within(line).getByTestId('room-user-prefix')).toBeInTheDocument()
       expect(screen.queryByTestId('user-bubble')).toBeNull()
       // No hard-coded bubble colours left.
       expect(line.outerHTML).not.toMatch(/#[0-9a-f]{3,6}/i)
@@ -264,11 +264,20 @@ describe('RoomTranscript', () => {
   })
 
   describe('RoomUserLine', () => {
-    it('a pending line has the same gutter mark, dimmed', () => {
+    // A4 (spec §5.4): the user's line is a full-width band, not a gutter mark.
+    it('draws the user line as a full-width band with a › prefix', () => {
+      render(<RoomUserLine text="ping" />)
+      const line = screen.getByTestId('room-user-line')
+      expect(line.className).toContain('bg-[var(--wt-user-band-bg)]')
+      expect(line.className).toContain('-mx-4') // bleeds to the transcript's edges (p-4)
+      expect(screen.getByTestId('room-user-prefix').textContent).toBe('›')
+      expect(screen.queryByTestId('room-user-mark')).toBeNull()
+    })
+
+    it('pending band is dimmed, with the queued tag kept', () => {
       render(<RoomUserLine text="sending" pending><span data-testid="aside">queued</span></RoomUserLine>)
       const line = screen.getByTestId('room-user-line')
-      expect(line.className).toContain('opacity-60')
-      expect(within(line).getByTestId('room-user-mark').className).toContain('bg-accent')
+      expect(line).toHaveClass('opacity-60')
       expect(within(line).getByTestId('aside')).toBeInTheDocument()
     })
 

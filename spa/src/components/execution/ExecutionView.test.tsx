@@ -348,7 +348,7 @@ describe('ExecutionView — room transcript (T4.4)', () => {
     const line = within(turns[1]).getByTestId('room-user-line')
     expect(line).toHaveTextContent('second')
     expect(line.className).toContain('opacity-60')
-    expect(within(line).getByTestId('room-user-mark')).toBeInTheDocument()
+    expect(within(line).getByTestId('room-user-prefix')).toBeInTheDocument()
     expect(within(line).getByText(/queued/i)).toBeInTheDocument()
     expect(container.querySelector('.justify-end')).toBeNull()
   })
