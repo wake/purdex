@@ -3,43 +3,15 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/wake/purdex/internal/fsutil"
 	"github.com/wake/purdex/internal/module/session"
 )
-
-// createDedupFile atomically creates a file in dir using O_CREATE|O_EXCL to
-// avoid TOCTOU races. If "photo.png" already exists it tries "photo-1.png",
-// "photo-2.png", etc. Returns the open file and the chosen filename.
-func createDedupFile(dir, name string) (*os.File, string, error) {
-	path := filepath.Join(dir, name)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-	if err == nil {
-		return f, name, nil
-	}
-	if !os.IsExist(err) {
-		return nil, "", err
-	}
-	ext := filepath.Ext(name)
-	base := strings.TrimSuffix(name, ext)
-	for i := 1; ; i++ {
-		candidate := fmt.Sprintf("%s-%d%s", base, i, ext)
-		path = filepath.Join(dir, candidate)
-		f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-		if err == nil {
-			return f, candidate, nil
-		}
-		if !os.IsExist(err) {
-			return nil, "", err
-		}
-	}
-}
 
 // handleUpload handles POST /api/agent/upload.
 // It saves the uploaded file and injects the path into the tmux pane.
@@ -78,7 +50,7 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save file with atomic dedup. Strip directory components to prevent path traversal.
-	dst, filename, err := createDedupFile(dir, filepath.Base(header.Filename))
+	dst, filename, err := fsutil.CreateDedupFile(dir, filepath.Base(header.Filename))
 	if err != nil {
 		log.Printf("[agent] create file: %v", err)
 		http.Error(w, `{"error":"cannot save file"}`, http.StatusInternalServerError)
