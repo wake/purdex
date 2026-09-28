@@ -136,8 +136,8 @@ describe('the rows', () => {
     update(statusOf({ workspaces: { ...CONFLICT, currentHash: H('9') } }))
     expect(screen.getByTestId('profile-resolve-row-workspaces')).toBeInTheDocument()
     expect(screen.queryByTestId('profile-resolve-undoes-workspaces')).toBeNull()
-    expect(en).not.toHaveProperty('settings.profile.resolve.undoes')
-    expect(zhTW).not.toHaveProperty('settings.profile.resolve.undoes')
+    expect(Object.hasOwn(en, 'settings.profile.resolve.undoes')).toBe(false)
+    expect(Object.hasOwn(zhTW, 'settings.profile.resolve.undoes')).toBe(false)
   })
 
   it('a follower window: every row carries the "reported by the window that is syncing" badge', () => {
@@ -211,8 +211,8 @@ describe('the confirmation', () => {
     openKeepLocal('workspaces')
     expect(screen.getByTestId('profile-resolve-dialog')).toHaveTextContent(en['settings.profile.resolve.keep_local_body'])
     expect(screen.queryByTestId('profile-resolve-dialog-undoes')).toBeNull()
-    expect(en).not.toHaveProperty('settings.profile.resolve.dialog_undoes')
-    expect(zhTW).not.toHaveProperty('settings.profile.resolve.dialog_undoes')
+    expect(Object.hasOwn(en, 'settings.profile.resolve.dialog_undoes')).toBe(false)
+    expect(Object.hasOwn(zhTW, 'settings.profile.resolve.dialog_undoes')).toBe(false)
   })
 
   it('"Take the host\'s" has its own words, and no "undoes" line', () => {
