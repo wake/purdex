@@ -134,10 +134,13 @@ export default function WorkerInput({
               className="shrink-0 ml-1.5 mt-1.5 p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:cursor-default">
               <Plus size={14} />
             </button>
-            <input ref={pickerRef} data-testid="attach-input" type="file" multiple hidden tabIndex={-1}
+            {/* The OS picker can outlive the input being enabled (a send went
+                out, the worker ended); what it returns then is dropped (PR #1522 A3). */}
+            <input ref={pickerRef} data-testid="attach-input" type="file" multiple hidden tabIndex={-1} disabled={disabled}
               onChange={(e) => {
                 const files = Array.from(e.target.files ?? [])
                 e.target.value = ''
+                if (disabled) return
                 if (files.length > 0) onAddFiles(files)
               }} />
           </>

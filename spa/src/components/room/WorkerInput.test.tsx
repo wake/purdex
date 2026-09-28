@@ -336,6 +336,19 @@ describe('WorkerInput — attachments (spec §9.1)', () => {
     expect(onAddFiles).toHaveBeenCalledWith([file])
   })
 
+  // PR #1522 A3: the OS picker stays open while the input turns disabled
+  // (a send went out, the worker ended); what it returns then is dropped.
+  it('a picker that returns after the input became disabled adds nothing', () => {
+    const onAddFiles = vi.fn()
+    const { rerender } = render(<WorkerInput onSend={vi.fn()} onAddFiles={onAddFiles} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Attach files' }))
+    rerender(<WorkerInput onSend={vi.fn()} onAddFiles={onAddFiles} disabled />)
+    const picker = screen.getByTestId('attach-input') as HTMLInputElement
+    expect(picker).toBeDisabled()
+    fireEvent.change(picker, { target: { files: [new File(['x'], 'a.txt', { type: 'text/plain' })] } })
+    expect(onAddFiles).not.toHaveBeenCalled()
+  })
+
   it('has no + button without onAddFiles', () => {
     render(<WorkerInput onSend={vi.fn()} />)
     expect(screen.queryByRole('button', { name: 'Attach files' })).toBeNull()
