@@ -53,6 +53,13 @@ export interface ExecutionState {
   messages: StreamMessage[]
   /** Highest durable seq applied (history or SSE). Never moved by transient frames. */
   lastSeq: number
+  /**
+   * Newest `created_at` among the applied durable events (max-monotonic; 0 =
+   * none). Task events are excluded like they are from `lastSeq`: they bypass
+   * the seq guard and may replay. The projection compares it with a list
+   * row's `updated_at` to tell which of the two is fresher.
+   */
+  lastEventAt: number
   historyLoaded: boolean
   /** A lifecycle event arrived; the summary is authoritative, so the hook refetches. */
   summaryStale: boolean
@@ -112,6 +119,7 @@ export function defaultExecutionState(): ExecutionState {
     summary: null,
     messages: [],
     lastSeq: 0,
+    lastEventAt: 0,
     historyLoaded: false,
     summaryStale: false,
     sse: 'idle',
@@ -130,6 +138,27 @@ export function defaultExecutionState(): ExecutionState {
     tools: {},
     tasks: {},
   }
+}
+
+/**
+ * A turn the daemon accepted has not ended yet — no main-turn end event has
+ * stamped it (its outcome is still null). Unlike the execution-wide
+ * `turnLive`, which the first turn's end clears, this stays true while a
+ * queued send (accepted during the previous turn) still waits or runs
+ * (worker-pane theme spec §8.2: running from the accepted send until that
+ * turn ends).
+ */
+export function hasOpenTurn(s: ExecutionState): boolean {
+  return s.turnMeta.some((m) => m.outcome === null)
+}
+
+/** The outcome of the most recent turn that has ended; null when none has. */
+export function lastEndedOutcome(s: ExecutionState): TurnOutcome | null {
+  for (let i = s.turnMeta.length - 1; i >= 0; i--) {
+    const o = s.turnMeta[i].outcome
+    if (o !== null) return o
+  }
+  return null
 }
 
 /** Nexen's own (closed-set) kinds; everything else is provider passthrough. */
@@ -449,7 +478,8 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
   }
   if (ev.seq <= s.lastSeq) return s
 
-  let next: ExecutionState = applyTurnRules({ ...s, lastSeq: ev.seq }, ev, p)
+  const lastEventAt = ev.created_at > s.lastEventAt ? ev.created_at : s.lastEventAt
+  let next: ExecutionState = applyTurnRules({ ...s, lastSeq: ev.seq, lastEventAt }, ev, p)
 
   // The N2 tool kinds are consumed by applyTurnRules alone: not a message
   // (appending them would leave invisible entries behind), not a turn end,
