@@ -314,6 +314,15 @@ func TestUploadFileName(t *testing.T) {
 		"/":               "upload",
 		".hidden":         ".hidden",
 		"name with sp.md": "name with sp.md",
+		"a\nb.txt":        "a_b.txt",
+		"a\r\nb.txt":      "a__b.txt",
+		"a\tb.txt":        "a_b.txt",
+		"[x].txt":         "_x_.txt",
+		"   ":             "upload",
+		"a b.txt":    "a_b.txt", // LINE SEPARATOR (Zl)
+		"a b.txt":    "a_b.txt", // PARAGRAPH SEPARATOR (Zp)
+		"a‮b.txt":    "a_b.txt", // RIGHT-TO-LEFT OVERRIDE (Cf)
+		"a​b.txt":    "a_b.txt", // ZERO WIDTH SPACE (Cf)
 	}
 	for in, want := range cases {
 		assert.Equal(t, want, uploadFileName(in), in)
