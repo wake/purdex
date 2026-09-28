@@ -114,6 +114,14 @@ function ChatMessage({ msg, i, interrupted, lineAt }: {
     // text; with no text to hang them on (an image-only message, Review
     // Focus 4) they are a bubble of their own.
     const atts = fromSubagent ? undefined : attachmentsOf(msg)
+    // Unlike room (MessageRow), a slash command's text block is not excluded
+    // from the search here: below, every text block — slash command
+    // included — becomes a ChatUserBubble (the mono face just changes its
+    // rendering, not its kind of row), so attaching the thumbnails to that
+    // same bubble still reads as "your line, with its images". Room instead
+    // pulls a slash command out into its own icon+mono row, which is not a
+    // RoomUserLine and so has no attachments slot to hang them on — room
+    // gives the images a line of their own in that case (see MessageRow).
     const attsAt = atts ? um.message.content.findIndex((b) => b.type === 'text' && !!b.text && b.text !== INTERRUPT_TEXT) : -1
     um.message.content.forEach((block, j) => {
       // tool_result: its call's line carries it (an orphan has a line of its own); never a bubble.
