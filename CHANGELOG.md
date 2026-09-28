@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.468] - 2026-09-28
+
+> **需要重新部署 daemon**（provenance 回應多了 `started_at`；舊 daemon 仍相容，只是補抓時間戳退回本機時鐘）。
+
+### Fix：Profile Sync 無故衝突與「保留這台裝置的」撤銷操作（#1508）
+
+- 兩台裝置同時開著時，agent 啟動／結束、自動補抓等由主機事件觸發的寫入不再互相衝突：時間戳改用主機（daemon）提供的時間，兩台寫出相同內容，同步主機會直接收斂。
+- 衝突時按「保留這台裝置的」，保留的是**現在畫面上的內容**（包含鎖住後做的操作，例如重建 session），不再退回衝突當下的舊快照。原本這會把鎖定期間的重建撤銷，讓 pane 顯示「已關閉」。
+- 衝突確認框移除「會復原你之後的變更」提示，「這台」的數量改算現在的內容。
+- 較舊的 SessionStart 晚到時不再蓋掉較新的 agent 記錄；異常的 daemon 時間不會被採用。
+
+### Internal
+
+- daemon 的 session provenance 回應新增 `started_at`（frame 開始時間）。
+- follow-up：#1507（移除已無路徑的 restore-local 機制）、#1509（選舉混用兩種時鐘）、#1510（debounce 期間確認保留會先推舊內容）。
+
 ## [1.0.0-alpha.467] - 2026-09-28
 
 > **需要重新部署 daemon**（內嵌 Nexen 升到 v0.13.2；schema 仍是 v6，**不必**刪 `nex.db`）。worker pane R4 的最後一支，R4 全部完成。
