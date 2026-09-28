@@ -8,6 +8,7 @@ import { handToNex } from '../lib/nex/handoff'
 import { HandoffApiError } from '../lib/nex/handoff-api'
 import { useUndoToast } from '../stores/useUndoToast'
 import { useTabStore } from '../stores/useTabStore'
+import { useSessionStore } from '../stores/useSessionStore'
 import { createTab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useHostStore } from '../stores/useHostStore'
@@ -203,6 +204,48 @@ describe('HandoffConfirmDialog — confirm', () => {
       host: 'h1',
       from: { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' },
     })
+  })
+})
+
+describe('HandoffConfirmDialog — records the source tab title (worker theme spec §8.4)', () => {
+  function titledSessionTab() {
+    const tab = createTab({ kind: 'tmux-session', hostId: 'h1', sessionCode: 'zk16vd', mode: 'terminal', cachedName: 'purdex', tmuxInstance: 'inst-1' })
+    useTabStore.getState().addTab(tab)
+    useSessionStore.setState({ sessions: { h1: [{ code: 'zk16vd', name: 'fix-login' }] as never } })
+    return { tabId: tab.id, paneId: getPrimaryPane(tab.layout).id }
+  }
+  afterEach(() => useSessionStore.setState({ sessions: {} }))
+
+  it('passes the source tab displayTitle to handToNex as fromTitle', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
+    const ids = titledSessionTab()
+    render(<HandoffConfirmDialog {...args} {...ids} onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex).toHaveBeenCalledWith({ ...args, ...ids, keepSession: true, fromTitle: 'fix-login' })
+  })
+
+  it('no fromTitle when the handed-off pane is not the tab primary pane, or the tab is gone', async () => {
+    mockedHandToNex.mockResolvedValue({ result: ok, swapped: true })
+    const ids = titledSessionTab()
+    render(<HandoffConfirmDialog {...args} tabId={ids.tabId} paneId="not-primary" onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex.mock.calls[0][0].fromTitle).toBeUndefined()
+    cleanup()
+    render(<HandoffConfirmDialog {...args} tabId="gone" onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex.mock.calls[1][0].fromTitle).toBeUndefined()
+  })
+
+  it('the swapped:false "Open execution" content carries it too', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: false })
+    const ids = titledSessionTab()
+    render(<HandoffConfirmDialog {...args} {...ids} onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    act(() => { toast()!.action!() })
+    const opened = Object.values(useTabStore.getState().tabs)
+      .map((tab) => getPrimaryPane(tab.layout).content)
+      .find((c) => c.kind === 'execution')
+    expect(opened).toMatchObject({ kind: 'execution', executionId: 'exc_1', fromTitle: 'fix-login' })
   })
 })
 

@@ -110,6 +110,12 @@
   "worker.theme.label": "Theme",
   "worker.theme.desc": "Worker pane typography, lists, tables and rail",
   "worker.theme.purdex": "Purdex",
+  "worker.icon.label": "Icon",
+  "worker.icon.desc": "Worker tab icon in the sidebar and tab bar",
+  "worker.icon.mono": "Provider logo",
+  "worker.icon.color": "Provider logo (colour)",
+  "worker.icon.custom": "Custom icon",
+  "worker.icon.pick": "Choose icon…",
 
   "settings.appearance.title": "Appearance",
   "settings.appearance.desc": "Visual preferences for the application",

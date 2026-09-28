@@ -126,7 +126,11 @@ export type PaneContent =
   // pane shows. A view, not a binding — terminal is not a member; moving to
   // a terminal is Take to terminal. Absent reads as `room` (the default);
   // it syncs with the tab like every other content field.
-  | { kind: 'execution'; executionId: string; host?: string; from?: ExecutionFrom; mode?: ExecutionViewMode }
+  //
+  // `fromTitle` (worker theme spec §8.4): the source tab's title at
+  // Hand-to-nex time — the worker tab title's second source, after Nexen's
+  // session_title. Kept even when `from` is not (the session was killed).
+  | { kind: 'execution'; executionId: string; host?: string; from?: ExecutionFrom; mode?: ExecutionViewMode; fromTitle?: string }
 
 /** The two views of one worker (spec §1): room（指揮室）and chat（聊天模式）. */
 export type ExecutionViewMode = 'room' | 'chat'

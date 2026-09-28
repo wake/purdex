@@ -21,6 +21,7 @@ import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { setHostShown } from '../shown-hosts'
 import {
   handToNex,
+  executionContentFor,
   takeBack,
   takeToTerminal,
   handoffErrorMessage,
@@ -163,6 +164,29 @@ describe('handToNex', () => {
     expect(mockedHandoff).toHaveBeenCalledWith(H, from.sessionCode, { expected_tmux_instance: from.tmuxInstance, rollback_command: 'claude --resume {id}', keep_session: true })
     expect(out).toEqual({ result: handoffOk, swapped: true })
     expect(paneContent(a.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from })
+  })
+
+  describe('fromTitle (worker theme spec §8.4 — the pre-handoff terminal title)', () => {
+    it('is recorded on the new pane content', async () => {
+      mockedHandoff.mockResolvedValueOnce(handoffOk)
+      const a = { ...args(), fromTitle: 'Fix login - purdex' }
+      await handToNex(a)
+      expect(paneContent(a.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from, fromTitle: 'Fix login - purdex' })
+    })
+
+    it('is kept even when the session was not kept (the title does not depend on `from`)', async () => {
+      mockedHandoff.mockResolvedValueOnce({ ...handoffOk, session_kept: false })
+      const a = { ...args(), keepSession: false, fromTitle: 'T' }
+      await handToNex(a)
+      expect(paneContent(a.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, fromTitle: 'T' })
+    })
+
+    it('executionContentFor omits an absent or blank title', () => {
+      expect(executionContentFor(H, 'e', from, 'Title')).toEqual({ kind: 'execution', executionId: 'e', host: H, from, fromTitle: 'Title' })
+      expect(executionContentFor(H, 'e', undefined, 'Title')).toEqual({ kind: 'execution', executionId: 'e', host: H, fromTitle: 'Title' })
+      expect(executionContentFor(H, 'e', from, '  ')).not.toHaveProperty('fromTitle')
+      expect(executionContentFor(H, 'e', from)).not.toHaveProperty('fromTitle')
+    })
   })
 
   describe('keep_session (exec-to-terminal spec §4.3 / G4)', () => {

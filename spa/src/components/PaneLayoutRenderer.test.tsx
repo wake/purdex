@@ -677,6 +677,8 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     expect(mockedHandToNex).toHaveBeenCalledWith({
       hostId: H, sessionCode: CODE, tmuxInstance: 'inst-1', cachedName: 'purdex', tabId: 't1', paneId: 'p2', keepSession: true,
     })
+    // The tab title ("Dashboard") describes the primary pane, not this terminal: no pre-handoff title.
+    expect(mockedHandToNex.mock.calls[0][0].fromTitle).toBeUndefined()
     expect(screen.queryByTestId('handoff-dialog')).not.toBeInTheDocument()
     expect(useUndoToast.getState().toast?.message).toBe('Handed to nex.')
   })

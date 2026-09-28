@@ -5,6 +5,9 @@ import ClaudeCodeBotSvg from '@lobehub/icons-static-svg/icons/claudecode.svg?rea
 import ClaudeStarSvg from '@lobehub/icons-static-svg/icons/claude.svg?react'
 import CodexLobeSvg from '@lobehub/icons-static-svg/icons/codex.svg?react'
 import OpenCodeSvg from '@lobehub/icons-static-svg/icons/opencode.svg?react'
+import ClaudeCodeBotColorSvg from '@lobehub/icons-static-svg/icons/claudecode-color.svg?react'
+import ClaudeStarColorSvg from '@lobehub/icons-static-svg/icons/claude-color.svg?react'
+import CodexColorSvg from '@lobehub/icons-static-svg/icons/codex-color.svg?react'
 import type { CcIconVariant, CodexIconVariant } from '../stores/useUISettingsStore'
 
 type SvgComponent = ComponentType<SVGProps<SVGSVGElement>>
@@ -54,3 +57,18 @@ export const CC_ICON_VARIANTS = CC_VARIANTS
 
 /** Icon components for each codex variant — exposed so Settings can render a live preview. */
 export const CODEX_ICON_VARIANTS = CODEX_VARIANTS
+
+/**
+ * Original-colour provider logos for the worker tab's `color` icon style
+ * (worker theme spec §8.3). Codex has one: OpenAI's mark has no colour
+ * variant, so `color` always uses the lobe `codex-color`.
+ */
+const CC_COLOR_VARIANTS: Record<CcIconVariant, AgentIconComponent> = {
+  bot: wrapSvg(ClaudeCodeBotColorSvg),
+  star: wrapSvg(ClaudeStarColorSvg),
+}
+
+const CODEX_COLOR: AgentIconComponent = wrapSvg(CodexColorSvg)
+
+export const CC_COLOR_ICON_VARIANTS = CC_COLOR_VARIANTS
+export const CODEX_COLOR_ICON = CODEX_COLOR

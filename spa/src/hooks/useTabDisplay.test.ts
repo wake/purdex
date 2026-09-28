@@ -11,6 +11,14 @@ import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
 import { compositeKey } from '../lib/composite-key'
 import { useTabDisplay } from './useTabDisplay'
+import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
+import { useExecutionListStore } from '../stores/useExecutionListStore'
+import { useWorkerSettingsStore, DEFAULT_WORKER_SETTINGS } from '../stores/useWorkerSettingsStore'
+import { defaultExecutionState } from '../lib/nex/event-reducer'
+import { emptyListCache } from '../lib/nex/execution-list-effects'
+import type { ExecutionSummary } from '../lib/nex/types'
+import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS, CC_COLOR_ICON_VARIANTS } from '../lib/agent-icons'
+import { ICON_MAP } from '../components/tab-icon-map'
 
 function makeTab(
   overrides: Partial<{ hostId: string; sessionCode: string; terminated: boolean; cachedName: string }> = {},
@@ -245,5 +253,67 @@ describe('useTabDisplay — agent store fields', () => {
     expect(result.current.isUnread).toBe(true)
     expect(result.current.subagentCount).toBe(1)
     expect(result.current.tabIndicatorStyle).toBe('dot')
+  })
+})
+
+describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)', () => {
+  const summary = (over: Partial<ExecutionSummary> = {}): ExecutionSummary =>
+    ({ id: 'e1', state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/w/repo', mount_kind: 'dev', brief: 'Fix the bug\nmore',
+      labels: {}, created_at: 1, updated_at: 5, duration_ms: null, event_count: 0, observers: 0, archived: false, ...over }) as ExecutionSummary
+
+  const execTab = (over: { host?: string; fromTitle?: string } = {}): Tab => ({
+    id: 'tx', pinned: false, locked: false, createdAt: 0,
+    layout: { type: 'leaf', pane: { id: 'px', content: {
+      kind: 'execution', executionId: 'e1', host: over.host ?? 'h1', ...(over.fromTitle !== undefined ? { fromTitle: over.fromTitle } : {}),
+    } } },
+  })
+
+  const setLiveSummary = (over: Partial<ExecutionSummary> = {}) =>
+    useExecutionStore.setState({ executions: { [executionKey('h1', 'e1')]: { ...defaultExecutionState(), summary: summary(over) } } })
+
+  beforeEach(() => {
+    useExecutionStore.setState({ executions: {} })
+    useExecutionListStore.setState({ byHost: {} })
+    useWorkerSettingsStore.setState({ ...DEFAULT_WORKER_SETTINGS })
+  })
+
+  it('reads the light from the exec:<id> key and gives a non-undefined icon', () => {
+    const key = compositeKey('h1', 'exec:e1')
+    useAgentStore.setState({ statuses: { [key]: 'running' }, unread: { [key]: true }, agentTypes: { [key]: 'cc' } })
+    setLiveSummary()
+    const { result } = renderHook(() => useTabDisplay(execTab()))
+    expect(result.current.agentStatus).toBe('running')
+    expect(result.current.isUnread).toBe(true)
+    expect(result.current.IconComponent).toBe(CC_ICON_VARIANTS.bot)
+    expect(result.current.displayTitle).toBe('Fix the bug - repo')
+  })
+
+  it('with no summary anywhere: Robot icon and the locale label', () => {
+    const { result } = renderHook(() => useTabDisplay(execTab()))
+    expect(result.current.IconComponent).toBeDefined()
+    expect(result.current.IconComponent).toBe(ICON_MAP.Robot)
+    expect(result.current.displayTitle).toBe('page.pane.execution')
+  })
+
+  it('falls back to the host list row for the summary', () => {
+    useExecutionListStore.setState({ byHost: { h1: { ...emptyListCache(), items: [summary({ provider: 'codex', brief: 'Row brief' })] } } })
+    const { result } = renderHook(() => useTabDisplay(execTab()))
+    expect(result.current.displayTitle).toBe('Row brief - repo')
+    expect(result.current.IconComponent).toBe(CODEX_ICON_VARIANTS.openai)
+  })
+
+  it('the pre-handoff title wins over the brief', () => {
+    setLiveSummary()
+    const { result } = renderHook(() => useTabDisplay(execTab({ fromTitle: 'Old terminal' })))
+    expect(result.current.displayTitle).toBe('Old terminal - repo')
+  })
+
+  it('honours the icon style setting', () => {
+    setLiveSummary()
+    useWorkerSettingsStore.setState({ iconStyle: 'color' })
+    const { result } = renderHook(() => useTabDisplay(execTab()))
+    expect(result.current.IconComponent).toBe(CC_COLOR_ICON_VARIANTS.bot)
+    act(() => { useWorkerSettingsStore.setState({ iconStyle: 'custom', customIcon: '' }) })
+    expect(result.current.IconComponent).toBe(ICON_MAP.Robot)
   })
 })

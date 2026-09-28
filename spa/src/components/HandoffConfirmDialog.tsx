@@ -9,7 +9,9 @@ import { useRef, useState } from 'react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { useTabStore } from '../stores/useTabStore'
-import { countPanesOnSession } from '../lib/pane-tree'
+import { countPanesOnSession, getPrimaryPane } from '../lib/pane-tree'
+import { useTabDisplay } from '../hooks/useTabDisplay'
+import type { Tab } from '../types/tab'
 import { HandoffApiError } from '../lib/nex/handoff-api'
 import {
   handToNex,
@@ -22,9 +24,12 @@ import {
 import { isRefShownNow, landOnHostsPageIfHidden } from '../lib/shown-hosts'
 import { ConfirmDialog } from './ConfirmDialog'
 
-interface Props extends Omit<HandToNexArgs, 'keepSession'> {
+interface Props extends Omit<HandToNexArgs, 'keepSession' | 'fromTitle'> {
   onClose: () => void
 }
+
+/** Stand-in so `useTabDisplay` runs unconditionally while the source tab is gone. */
+const NO_TAB: Tab = { id: '', pinned: false, locked: false, createdAt: 0, layout: { type: 'leaf', pane: { id: '', content: { kind: 'new-tab' } } } }
 
 export function HandoffConfirmDialog({ onClose, ...args }: Props) {
   const t = useI18nStore((s) => s.t)
@@ -33,6 +38,13 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
   // 預設保留、每次都問); nothing persists it.
   const [keepSession, setKeepSession] = useState(true)
   const otherPanes = useTabStore((s) => countPanesOnSession(s.tabs, args.hostId, args.sessionCode, args.paneId))
+  // The source tab's title as the user sees it, recorded on the execution pane
+  // as its pre-handoff title (worker theme spec §8.4). Only when the handed-off
+  // pane is the tab's primary pane: the tab title describes that pane, so on
+  // a split whose primary is something else it is not this terminal's title.
+  const sourceTab = useTabStore((s) => s.tabs[args.tabId])
+  const sourceTitle = useTabDisplay(sourceTab ?? NO_TAB).displayTitle
+  const fromTitle = sourceTab && getPrimaryPane(sourceTab.layout).id === args.paneId ? sourceTitle : undefined
   // Ref, not state: two clicks in one event burst both see `busy === false`
   // before React commits the first setBusy.
   const inFlight = useRef(false)
@@ -48,7 +60,7 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
     setBusy(true)
     const toast = useUndoToast.getState()
     try {
-      const { result, swapped } = await handToNex({ ...args, keepSession })
+      const { result, swapped } = await handToNex({ ...args, keepSession, fromTitle })
       if (swapped) {
         toast.show(t('handoff.success'))
       } else if (!isRefShownNow(args.hostId)) {
@@ -61,7 +73,7 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
           () => {
             // Re-checked at click (H2d-3): hidden since → the Hosts page on that host, never an execution tab.
             if (landOnHostsPageIfHidden(args.hostId)) return
-            useTabStore.getState().openSingletonTab(executionContentFor(args.hostId, result.execution_id, from))
+            useTabStore.getState().openSingletonTab(executionContentFor(args.hostId, result.execution_id, from, fromTitle))
           },
           t('handoff.open_execution'),
         )
