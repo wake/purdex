@@ -60,6 +60,23 @@ function enter() {
 }
 const chips = () => screen.queryAllByTestId('upload-chip')
 
+/**
+ * Holds every FileReader.readAsDataURL until `flush()` — a slow encode the
+ * test can act inside of (remove a chip, click a quick reply).
+ */
+function holdReads() {
+  const pending: Array<() => void> = []
+  const Real = globalThis.FileReader
+  class Held extends Real {
+    readAsDataURL(blob: Blob) { pending.push(() => super.readAsDataURL(blob)) }
+  }
+  vi.stubGlobal('FileReader', Held)
+  return {
+    get count() { return pending.length },
+    flush: () => { for (const f of pending.splice(0)) f() },
+  }
+}
+
 let createUrl: ReturnType<typeof vi.fn>, revokeUrl: ReturnType<typeof vi.fn>
 const origCreate = URL.createObjectURL, origRevoke = URL.revokeObjectURL
 
@@ -80,6 +97,7 @@ beforeEach(() => {
   Object.assign(URL, { createObjectURL: createUrl, revokeObjectURL: revokeUrl })
 })
 afterEach(() => {
+  vi.unstubAllGlobals()
   Object.assign(URL, { createObjectURL: origCreate, revokeObjectURL: origRevoke })
 })
 
@@ -239,5 +257,48 @@ describe('ExecutionView — native image attachments', () => {
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('hi')
     enter()
     await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', `hi\n\n[file: ${saved('p.png')}]`))
+  })
+  it('a chip removed while its image is still encoding is not sent (PR #1527 A1)', async () => {
+    seedCaps(imageCaps())
+    const reads = holdReads()
+    const B = [0x89, 0x50, 0x4e, 0x47, 9, 9, 9]
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([png('a.png'), png('b.png', B)])
+    type('two')
+    enter()
+    await waitFor(() => expect(reads.count).toBe(2))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove b.png' }))
+    act(() => reads.flush())
+    await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+    expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'two', [{ type: 'image', media_type: 'image/png', data: b64(PNG) }])
+    // Only the kept image got an optimistic preview.
+    expect(useExecutionStore.getState().executions[`${H}:${E}`].pendingLocal?.attachments).toHaveLength(1)
+  })
+
+  it('removing the only image mid-encode of an image-only send posts nothing (PR #1527 A1)', async () => {
+    seedCaps(imageCaps())
+    const reads = holdReads()
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([png('a.png')])
+    enter()
+    await waitFor(() => expect(reads.count).toBe(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove a.png' }))
+    await act(async () => { reads.flush(); await new Promise((r) => setTimeout(r, 20)) })
+    expect(api.sendMessage).not.toHaveBeenCalled()
+    expect(useExecutionStore.getState().executions[`${H}:${E}`].pendingLocal ?? null).toBeNull()
+  })
+
+  it('a path chip removed while another image encodes loses its [file:] line (PR #1527 A1)', async () => {
+    seedCaps(imageCaps())
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([png('a.png'), txt('t.txt')])
+    await waitFor(() => expect(chips().map((c) => c.dataset.status)).toEqual(['done', 'done']))
+    const reads = holdReads()
+    type('go')
+    enter()
+    await waitFor(() => expect(reads.count).toBe(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove t.txt' }))
+    act(() => reads.flush())
+    await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'go', [{ type: 'image', media_type: 'image/png', data: b64(PNG) }]))
   })
 })
