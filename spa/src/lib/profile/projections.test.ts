@@ -700,11 +700,14 @@ describe('shape: fingerprint and ordinal', () => {
     })
   })
 
-  // worker pane theme (spec §4.2): `purdex-worker-settings.theme` / `.iconStyle` join `settings` — a projection change,
-  // so the fingerprint moves by itself (no marker needed: markers are for a new meaning under UNCHANGED paths) and the
-  // ordinal goes 8 → 9. The ordinal-8 client meets a settings row of this build as newer and locks; we pull its rows.
+  // worker pane theme (spec §4.2): `purdex-worker-settings.{theme,iconStyle,customIcon}` join `settings` — a projection
+  // change, so the fingerprint moves by itself (no marker needed: markers are for a new meaning under UNCHANGED paths)
+  // and the ordinal goes 8 → 9. `customIcon` joined the other two under the SAME ordinal 9 in a later commit (not a
+  // second bump): ordinal 9 was never released, so moving its fingerprint in place trips no shipped client's lock —
+  // the same sanctioned exception the guard test records for ordinal 7 (H2d-1). The ordinal-8 client below is the one
+  // real boundary: it meets a settings row of this build as newer and locks; we pull its rows.
   describe('worker pane theme: the ordinal-8 settings client and this build', () => {
-    const WORKER = ['purdex-worker-settings.theme', 'purdex-worker-settings.iconStyle']
+    const WORKER = ['purdex-worker-settings.theme', 'purdex-worker-settings.iconStyle', 'purdex-worker-settings.customIcon']
     async function oldShapes(): Promise<Record<SectionKind, Shape>> {
       const row = async (kind: SectionKind): Promise<Shape> => ({ fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] })
       return {
@@ -715,10 +718,9 @@ describe('shape: fingerprint and ordinal', () => {
       }
     }
 
-    it('theme and iconStyle are listed; customIcon (nullable, phase C) is not; no new marker; ordinal 9', () => {
+    it('theme, iconStyle and customIcon are all listed; no new marker; ordinal 9', () => {
       expect(PROJECTIONS.settings.filter((p) => p.startsWith('purdex-worker-settings.')).sort()).toEqual([...WORKER].sort())
-      expect(PROJECTIONS.settings).not.toContain('purdex-worker-settings.customIcon')
-      expect(Object.keys(useWorkerSettingsStore.getState())).toContain('customIcon') // the field exists; it is unlisted on purpose
+      expect(Object.keys(useWorkerSettingsStore.getState())).toContain('customIcon')
       expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'])
       expect(SECTION_SCHEMA_ORDINAL.settings).toBe(9)
     })
@@ -750,8 +752,10 @@ describe('shape: fingerprint and ordinal', () => {
   // `SECTION_SCHEMA_ORDINAL.<kind>` and update this snapshot in the same commit.
   // Never update the snapshot alone: a fingerprint that changes with an unchanged
   // ordinal makes every other client lock the section (`locked:schema`).
-  // (One sanctioned exception: settings ordinal 7 was never released — PR #1421 open — so the H2d-1 rework from
-  // `{ all, ids }` to `{ ids }` changes the ordinal-7 fingerprint in place; plan H2d-1 "Wire".)
+  // (Sanctioned exceptions — an ordinal that was never released, so moving its fingerprint in place trips no shipped
+  // client's lock: settings ordinal 7, PR #1421 open — the H2d-1 rework from `{ all, ids }` to `{ ids }` changes the
+  // ordinal-7 fingerprint in place (plan H2d-1 "Wire"). Settings ordinal 9, this PR still open — `customIcon` joined
+  // `purdex-worker-settings.{theme,iconStyle}` under the same ordinal 9, worker pane theme spec §4.2.)
   it('guard: every projection change comes with an ordinal bump', async () => {
     expect(await shapeTable()).toMatchInlineSnapshot(`
       {
@@ -760,7 +764,7 @@ describe('shape: fingerprint and ordinal', () => {
           3,
         ],
         "settings": [
-          "8e0d87c02a51782dc8b5827c2dc7ef02d63fd475f5b5e2ca6a53ad57f8f77b47",
+          "bcb5398db0064a8b7832b1cc1b04df1fb4e66d0851f670a4b9ff322658e743b6",
           9,
         ],
         "tabs": [

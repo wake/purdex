@@ -738,17 +738,18 @@ describe('applySectionToStores — settings: shown hosts', () => {
   })
 })
 
-// worker pane theme (spec §4.2, settings ordinal 8 → 9): `purdex-worker-settings` rides `settings` like the other
-// appearance stores — `theme` and `iconStyle` travel; `customIcon` (nullable, consumed from phase C) stays device-local.
+// worker pane theme (spec §4.2, settings ordinal 9): `purdex-worker-settings` rides `settings` like the other
+// appearance stores — `theme`, `iconStyle` and `customIcon` all travel. `customIcon` is a plain string (`''` = none),
+// never `null`, so it is one shape class and the applier's shape check never rejects it.
 describe('applySectionToStores — settings: worker pane theme', () => {
   const worker = () => useWorkerSettingsStore.getState()
   const collected = (): SettingsPayload => JSON.parse(JSON.stringify(buildSectionPayload('settings')!.payload)) as SettingsPayload
 
-  it('collect → apply round-trips theme and iconStyle; the rebuilt hash is the payload\'s (nothing to push)', async () => {
+  it('collect → apply round-trips theme, iconStyle and customIcon; the rebuilt hash is the payload\'s (nothing to push)', async () => {
     // device A
     useWorkerSettingsStore.setState({ theme: 'mono-dark', iconStyle: 'color', customIcon: 'Star' })
     const fromA = collected()
-    expect(fromA['purdex-worker-settings']).toEqual({ theme: 'mono-dark', iconStyle: 'color' })
+    expect(fromA['purdex-worker-settings']).toEqual({ theme: 'mono-dark', iconStyle: 'color', customIcon: 'Star' })
 
     // device B, at the defaults
     useWorkerSettingsStore.setState({ ...DEFAULT_WORKER_SETTINGS })
@@ -756,13 +757,13 @@ describe('applySectionToStores — settings: worker pane theme', () => {
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(fromA) })
     expect(worker().theme).toBe('mono-dark')
     expect(worker().iconStyle).toBe('color')
-    expect(worker().customIcon).toBeNull() // device-local: not sent, not touched
-    expect(persistedOf(STORAGE_KEYS.WORKER_SETTINGS)).toMatchObject({ theme: 'mono-dark', iconStyle: 'color', customIcon: null })
+    expect(worker().customIcon).toBe('Star')
+    expect(persistedOf(STORAGE_KEYS.WORKER_SETTINGS)).toMatchObject({ theme: 'mono-dark', iconStyle: 'color', customIcon: 'Star' })
     expect(JSON.stringify(collected()['purdex-worker-settings'])).toBe(JSON.stringify(fromA['purdex-worker-settings']))
   })
 
   it('an unregistered theme id travels verbatim (the read side falls back, the preference is not lost)', async () => {
-    const payload = { ...collected(), 'purdex-worker-settings': { theme: 'gone', iconStyle: 'mono' } } as SettingsPayload
+    const payload = { ...collected(), 'purdex-worker-settings': { theme: 'gone', iconStyle: 'mono', customIcon: '' } } as SettingsPayload
     expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
     expect(worker().theme).toBe('gone')
   })
@@ -774,14 +775,18 @@ describe('applySectionToStores — settings: worker pane theme', () => {
     const outcome = await applySectionToStores('settings', legacy, ctx)
     expect(worker()).toBe(before)
     expect({ theme: worker().theme, iconStyle: worker().iconStyle, customIcon: worker().customIcon }).toEqual(DEFAULT_WORKER_SETTINGS)
-    expect(outcome).toMatchObject({ ok: true, hash: await hashSection({ ...legacy, 'purdex-worker-settings': { theme: 'purdex', iconStyle: 'mono' } }) })
+    expect(outcome).toMatchObject({
+      ok: true,
+      hash: await hashSection({ ...legacy, 'purdex-worker-settings': { theme: 'purdex', iconStyle: 'mono', customIcon: '' } }),
+    })
     expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(legacy) })
   })
 
-  it('a worker entry carrying the device-local customIcon is refused whole: invalid, nothing written', async () => {
+  it('a worker entry carrying customIcon round-trips it like theme and iconStyle', async () => {
     const payload = { ...collected(), 'purdex-worker-settings': { theme: 'mono-dark', iconStyle: 'mono', customIcon: 'Star' } } as SettingsPayload
-    expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: false, reason: 'invalid', code: 'malformed' })
-    expect(worker().theme).toBe('purdex')
+    expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(worker().theme).toBe('mono-dark')
+    expect(worker().customIcon).toBe('Star')
   })
 })
 

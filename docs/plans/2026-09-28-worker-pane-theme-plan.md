@@ -49,7 +49,7 @@
   - `interface WorkerTheme { id: string; labelKey: string; vars: Record<WorkerThemeVar, string> }`
   - `registerWorkerTheme(theme: WorkerTheme): void`, `getWorkerTheme(id: string | undefined): WorkerTheme` (unknown → purdex), `listWorkerThemes(): WorkerTheme[]`
   - `workerThemeStyle(theme: WorkerTheme): Record<string, string>` → `{ '--wt-font-size': '14px', ... }`
-  - `useWorkerSettingsStore`: `{ theme: string; iconStyle: 'mono' | 'color' | 'custom'; customIcon: string | null; setTheme(id): void; setIconStyle(s): void; setCustomIcon(icon: string | null): void }`, persisted as `purdex-worker-settings`
+  - `useWorkerSettingsStore`: `{ theme: string; iconStyle: 'mono' | 'color' | 'custom'; customIcon: string; setTheme(id): void; setIconStyle(s): void; setCustomIcon(icon: string): void }`, persisted as `purdex-worker-settings` (`customIcon` is a plain string; `''` = no custom icon, never `null`)
 
 - [ ] **Step 1: Write failing tests**
 
@@ -454,10 +454,10 @@ Same gate as A5.
 
 **Interfaces:**
 - `workerTabTitle({ sessionTitle, fromTitle, brief, cwd }: { sessionTitle?: string | null; fromTitle?: string; brief?: string; cwd?: string }): string | null` → `primary + ' - ' + basename(cwd)`, or just `primary` if there is no cwd. Returns null if there is no primary. `sessionTitle` is passed only when the host capability says the field exists. Until phase E, callers pass `undefined`.
-- `workerIcon(provider: string, style: 'mono' | 'color' | 'custom', opts: { ccVariant; codexVariant; customIcon: string | null }): TabIconComponent`
+- `workerIcon(provider: string, style: 'mono' | 'color' | 'custom', opts: { ccVariant; codexVariant; customIcon: string }): TabIconComponent` (`customIcon` is `''` when none is set, never `null`)
   - `mono` → `getAgentIcon(providerAgentType(provider), {ccVariant, codexVariant})`
   - `color` → `claudecode-color` (bot) or `claude-color` (star) for cc; `codex-color` for codex, including when codexVariant is `openai`, because OpenAI has no colour mark
-  - `custom` → the Phosphor icon named by `customIcon`, resolved the same way the workspace icon picker resolves names; fall back to `Robot`
+  - `custom` → the Phosphor icon named by `customIcon` (`''` falls back like an unrecognised name), resolved the same way the workspace icon picker resolves names; fall back to `Robot`
   - Unknown provider → `Robot`.
 - `useTabDisplay`: when the primary pane is `execution`, it sets `hostId` and `sessionCode = execAgentCode(id)` so `useSessionAgentIndicator` finds the light. It overrides `agentIcon` with `workerIcon(...)` and sets `displayTitle = workerTabTitle(...) ?? baseLabel`, reading the summary from the execution store, or the list row.
 

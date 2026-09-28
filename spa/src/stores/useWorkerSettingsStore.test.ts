@@ -30,7 +30,7 @@ describe('useWorkerSettingsStore', () => {
     const s = useWorkerSettingsStore.getState()
     expect(s.theme).toBe('purdex')
     expect(s.iconStyle).toBe('mono')
-    expect(s.customIcon).toBeNull()
+    expect(s.customIcon).toBe('')
   })
 
   it('registers with syncManager under WORKER_SETTINGS', () => {
@@ -57,7 +57,16 @@ describe('useWorkerSettingsStore', () => {
     const s = useWorkerSettingsStore.getState()
     expect(s.theme).toBe('custom-theme')
     expect(s.iconStyle).toBe('mono')
-    expect(s.customIcon).toBeNull()
+    expect(s.customIcon).toBe('')
+  })
+
+  it('rehydrate: a persisted `null` customIcon (pre-string-type shape) sanitizes to \'\'', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.WORKER_SETTINGS,
+      JSON.stringify({ state: { theme: 'purdex', iconStyle: 'mono', customIcon: null }, version: 1 }),
+    )
+    await useWorkerSettingsStore.persist.rehydrate()
+    expect(useWorkerSettingsStore.getState().customIcon).toBe('')
   })
 
   it('rehydrate: happy-path persisted values are restored', async () => {

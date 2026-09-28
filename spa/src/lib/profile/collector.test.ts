@@ -419,19 +419,23 @@ describe('startCollector — settings', () => {
     expect(payload['purdex-host-looks']).toEqual({ looks: {} })
     // host ownership H2d-1 (§0.6): the shown-hosts store too — the EMPTY default { ids: [] } included
     expect(payload['purdex-shown-hosts']).toEqual({ ids: [] })
-    // worker pane theme (§4.2): theme + iconStyle, never the device-local customIcon
-    expect(payload['purdex-worker-settings']).toEqual({ theme: 'purdex', iconStyle: 'mono' })
+    // worker pane theme (§4.2): theme, iconStyle and customIcon all listed (ordinal 9)
+    expect(payload['purdex-worker-settings']).toEqual({ theme: 'purdex', iconStyle: 'mono', customIcon: '' })
   })
 
-  it('a worker theme write schedules `settings` and travels; a customIcon-only write schedules nothing', async () => {
+  it('a worker theme write schedules `settings` and travels; so does a customIcon-only write', async () => {
     start()
     useWorkerSettingsStore.getState().setCustomIcon('Star')
-    expect(await pendingTimers()).toBe(0)
-    useWorkerSettingsStore.getState().setTheme('mono-dark')
     await vi.advanceTimersByTimeAsync(500)
     expect(keys()).toEqual(['settings'])
     const payload = reports[0].payload as Record<string, unknown>
-    expect(payload['purdex-worker-settings']).toEqual({ theme: 'mono-dark', iconStyle: 'mono' })
+    expect(payload['purdex-worker-settings']).toEqual({ theme: 'purdex', iconStyle: 'mono', customIcon: 'Star' })
+
+    useWorkerSettingsStore.getState().setTheme('mono-dark')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(keys()).toEqual(['settings', 'settings'])
+    const payload2 = reports[1].payload as Record<string, unknown>
+    expect(payload2['purdex-worker-settings']).toEqual({ theme: 'mono-dark', iconStyle: 'mono', customIcon: 'Star' })
   })
 
   it('a shown-hosts write schedules `settings` and travels, its ids verbatim (h1 has a daemonId: its local id is NOT mapped)', async () => {

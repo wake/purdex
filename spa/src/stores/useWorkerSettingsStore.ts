@@ -14,8 +14,10 @@ import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
  * Sync: registered with `syncManager` (other windows of this device) and
  * projected into the Profile Sync `settings` section like the other
  * appearance stores (`lib/profile/projections.ts`, settings ordinal 9) —
- * `theme` and `iconStyle` travel; `customIcon` does not (it is nullable,
- * which the settings applier cannot shape-check; phase C decides).
+ * `theme`, `iconStyle` and `customIcon` all travel. `customIcon` is a plain
+ * `string`, never `null` — `''` means "no custom icon" — so it is one shape
+ * class throughout and the settings applier's shape check (`applier.ts`
+ * `shapeOf`) never rejects it the way a nullable field would.
  *
  * `iconStyle` / `customIcon` are consumed starting in phase C (§8.3); wired
  * here so the persisted shape does not change across phases.
@@ -25,16 +27,16 @@ export type WorkerIconStyle = 'mono' | 'color' | 'custom'
 export interface WorkerSettingsState {
   theme: string
   iconStyle: WorkerIconStyle
-  customIcon: string | null
+  customIcon: string
   setTheme: (id: string) => void
   setIconStyle: (style: WorkerIconStyle) => void
-  setCustomIcon: (icon: string | null) => void
+  setCustomIcon: (icon: string) => void
 }
 
 export const DEFAULT_WORKER_SETTINGS = {
   theme: 'purdex',
   iconStyle: 'mono' as WorkerIconStyle,
-  customIcon: null as string | null,
+  customIcon: '',
 }
 
 function isWorkerIconStyle(v: unknown): v is WorkerIconStyle {
@@ -52,7 +54,9 @@ function sanitize(raw: unknown): Partial<Pick<WorkerSettingsState, 'theme' | 'ic
   const out: Partial<WorkerSettingsState> = {}
   if (typeof src.theme === 'string') out.theme = src.theme
   if (isWorkerIconStyle(src.iconStyle)) out.iconStyle = src.iconStyle
-  if (typeof src.customIcon === 'string' || src.customIcon === null) out.customIcon = src.customIcon as string | null
+  // Anything non-string (a stale `null` from before this field was string-typed, a number, …) is left
+  // unset here, so the `...DEFAULT_WORKER_SETTINGS` spread in `merge` below supplies `''`.
+  if (typeof src.customIcon === 'string') out.customIcon = src.customIcon
   return out
 }
 
