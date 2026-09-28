@@ -7,6 +7,7 @@ import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
 import { interruptExecution, sendMessage, terminateExecution } from '../lib/nex/nex-api'
 import { NexApiError } from '../lib/nex/types'
 import type { ExecutionLeaseApi } from './useExecutionLease'
+import type { WireImageAttachment } from '../lib/nex/worker-upload'
 
 export interface SendOptions {
   /**
@@ -24,6 +25,14 @@ export interface SendOptions {
    * chips stay on their own). Defaults to the sent text.
    */
   draftText?: string
+  /** Native images (phase E), already encoded; forwarded to `sendMessage` as `attachments`. */
+  attachments?: WireImageAttachment[]
+  /**
+   * The optimistic line's thumbnails for those images. The caller creates
+   * the object URLs; ExecutionView revokes them once `pendingLocal` drops
+   * this array (the same array is kept across the delivery update).
+   */
+  previews?: { previewUrl: string; media_type: string }[]
 }
 
 export interface ExecutionActions {
@@ -40,6 +49,8 @@ export interface ExecutionActions {
   handleSend(text: string, opts?: SendOptions): Promise<boolean>
   handleInterrupt(): Promise<void>
   handleTerminate(): Promise<void>
+  /** Put text back into the input for a send that failed before reaching `handleSend` (an image that could not be read). */
+  restoreDraft(text: string): void
 }
 
 export function useExecutionActions(
@@ -70,7 +81,7 @@ export function useExecutionActions(
       // (no release() DELETE, it's pointless) so the next send/interrupt/
       // terminate re-acquires instead of retrying against a dead lease id.
       if (e.code === 'lease_expired' || e.code === 'lease_mismatch' || e.code === 'lease_required') forget()
-      store().setSendError(hostId, executionId, { code: e.code, message: e.message, turnId: e.turnId })
+      store().setSendError(hostId, executionId, { code: e.code, message: e.message, turnId: e.turnId, attachmentIndex: e.attachmentIndex })
     } else {
       store().setSendError(hostId, executionId, { code: 'network', message: e instanceof Error ? e.message : String(e) })
     }
@@ -87,12 +98,16 @@ export function useExecutionActions(
     store().setSendError(hostId, executionId, null)
     if (restoreDraft) setDraft(null)
     touch()
-    store().setPendingLocal(hostId, executionId, { text, delivery: null })
+    const previews = opts?.previews
+    const attachments = opts?.attachments
+    store().setPendingLocal(hostId, executionId, previews ? { text, delivery: null, attachments: previews } : { text, delivery: null })
     store().setPendingSend(hostId, executionId, true)
     const attempt = ++sendAttempt.current
     try {
       const leaseId = await ensureLease()
-      const r = await sendMessage(hostId, executionId, leaseId, text)
+      const r = attachments && attachments.length > 0
+        ? await sendMessage(hostId, executionId, leaseId, text, attachments)
+        : await sendMessage(hostId, executionId, leaseId, text)
       // Superseded but accepted: still true (the daemon has it) — only the
       // local bubble/lock/lastTurn writes below are skipped, since they'd
       // stomp the newer send's state.
@@ -103,7 +118,7 @@ export function useExecutionActions(
       // resurrect a second bubble (I12, spec §5). Only write if the event hasn't
       // already consumed it.
       if (store().executions[key]?.pendingLocal) {
-        store().setPendingLocal(hostId, executionId, { text, delivery: r.delivery })
+        store().setPendingLocal(hostId, executionId, previews ? { text, delivery: r.delivery, attachments: previews } : { text, delivery: r.delivery })
       }
       store().setLastTurn(hostId, executionId, { turnId: r.turn_id, delivery: r.delivery })
       return true
@@ -131,5 +146,7 @@ export function useExecutionActions(
     try { await terminateExecution(hostId, executionId, await ensureLease()) } catch (e) { fail(e) } finally { setActionPending(false) }
   }, [hostId, executionId, ensureLease, touch, fail])
 
-  return { draft, actionPending, handleSend, handleInterrupt, handleTerminate }
+  const restoreDraft = useCallback((text: string) => setDraft(text), [])
+
+  return { draft, actionPending, handleSend, handleInterrupt, handleTerminate, restoreDraft }
 }

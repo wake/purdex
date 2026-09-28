@@ -31,6 +31,7 @@ export default function UploadChips({ chips, onRemove }: Props) {
             {c.status === 'uploading' && (
               <CircleNotch size={12} className="shrink-0 animate-spin text-text-muted" aria-label={t('worker.upload.uploading')} />
             )}
+            {c.note && !failed && <span data-testid="upload-chip-note" className="shrink-0 text-text-muted">· {t(`worker.upload.${c.note}`)}</span>}
             {failed && <span className="shrink-0">· {reason}</span>}
             <button type="button" onClick={() => onRemove(c.key)} aria-label={t('worker.upload.remove', { name: c.name })}
               className="shrink-0 rounded p-0.5 text-text-muted hover:text-text-primary hover:bg-surface-hover cursor-pointer">

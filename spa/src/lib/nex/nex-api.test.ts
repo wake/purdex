@@ -97,6 +97,20 @@ describe('nex-api', () => {
     expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
   })
 
+  it('sendMessage carries attachments only when non-empty (the key is absent otherwise)', async () => {
+    const att = [{ type: 'image' as const, media_type: 'image/png', data: 'iVBORw0KGgo=' }]
+    testGlobal.fetch.mockImplementation(async () => json({ turn_id: 'trn_1', delivery: 'delivered' }))
+    await sendMessage(hostId, 'exc_1', 'ls_1', '', att)
+    await sendMessage(hostId, 'exc_1', 'ls_1', 'hi', [])
+    await sendMessage(hostId, 'exc_1', 'ls_1', 'hi')
+    const bodies = testGlobal.fetch.mock.calls.map((c: unknown[]) => (c[1] as RequestInit).body as string)
+    expect(JSON.parse(bodies[0])).toEqual({ lease_id: 'ls_1', text: '', attachments: att })
+    expect(Object.keys(JSON.parse(bodies[1]))).toEqual(['lease_id', 'text'])
+    expect(Object.keys(JSON.parse(bodies[2]))).toEqual(['lease_id', 'text'])
+    // The key order requestBytes measures.
+    expect(Object.keys(JSON.parse(bodies[0]))).toEqual(['lease_id', 'text', 'attachments'])
+  })
+
   it('releaseLease forwards a RequestInit (keepalive for beforeunload)', async () => {
     testGlobal.fetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
     await releaseLease(hostId, 'exc_1', 'ls_1', { keepalive: true })

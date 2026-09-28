@@ -4,6 +4,7 @@ import { renderHook, act } from '@testing-library/react'
 import { useWorkerUploads } from './useWorkerUploads'
 import * as api from '../lib/nex/nex-api'
 import { NexApiError } from '../lib/nex/types'
+import { requestBytes } from '../lib/nex/worker-upload'
 
 vi.mock('../lib/nex/nex-api', () => ({ uploadWorkerFile: vi.fn() }))
 
@@ -75,6 +76,20 @@ describe('useWorkerUploads', () => {
     expect(result.current.chips).toEqual([])
   })
 
+  it('isLive tracks add, remove and clear (a send checks it after encoding, PR #1527 A1)', async () => {
+    vi.mocked(api.uploadWorkerFile).mockResolvedValue({ path: '/w/x', name: 'x', size: 1 })
+    const { result } = renderHook(() => useWorkerUploads('h', 'exc_1'))
+    act(() => result.current.add([txt('a.txt'), txt('b.txt'), txt('c.txt')]))
+    const [a, b, c] = result.current.chips.map((x) => x.key)
+    expect([a, b, c].map(result.current.isLive)).toEqual([true, true, true])
+    act(() => result.current.remove(a))
+    act(() => result.current.clear([b]))
+    expect([a, b, c].map(result.current.isLive)).toEqual([false, false, true])
+    act(() => result.current.clear())
+    expect(result.current.isLive(c)).toBe(false)
+    expect(result.current.isLive('nope')).toBe(false)
+  })
+
   it('clear(keys) removes only those chips; clear() removes all and revokes thumbnails', async () => {
     vi.mocked(api.uploadWorkerFile).mockResolvedValue({ path: '/w/x', name: 'x', size: 1 })
     const { result } = renderHook(() => useWorkerUploads('h', 'exc_1'))
@@ -85,6 +100,90 @@ describe('useWorkerUploads', () => {
     expect(revokeUrl).toHaveBeenCalledWith('blob:1')
     act(() => result.current.clear())
     expect(result.current.chips).toEqual([])
+  })
+
+  describe('native images (phase E)', () => {
+    const MiB = 1024 * 1024
+    const caps = (over: Record<string, unknown> = {}) => ({
+      media_types: ['image/png', 'image/jpeg'], max_bytes: 5 * MiB, max_count: 10, max_total_bytes: 20 * MiB,
+      providers: ['claude'], fetch: { method: 'GET', path: '/x/{id}/{sha256}' }, maxRequestBytes: 32 * MiB, ...over,
+    })
+    const sized = (name: string, size: number, type = 'image/png') => {
+      const f = new File(['x'], name, { type })
+      Object.defineProperty(f, 'size', { value: size })
+      return f
+    }
+    beforeEach(() => {
+      vi.mocked(api.uploadWorkerFile).mockImplementation(async (_h, _e, f) => ({ path: `/w/${f.name}`, name: f.name, size: 1 }))
+    })
+
+    it('null caps (an older daemon): an image uploads by path exactly as in phase D, with no note (Review Focus 1)', async () => {
+      const { result } = renderHook(() => useWorkerUploads('h', 'exc_1', { caps: null, getText: () => '' }))
+      act(() => result.current.add([png('p.png')]))
+      await vi.waitFor(() => expect(result.current.chips[0].status).toBe('done'))
+      expect(result.current.chips[0]).toMatchObject({ kind: 'path', path: '/w/p.png' })
+      expect(result.current.chips[0].note).toBeUndefined()
+      expect(api.uploadWorkerFile).toHaveBeenCalledTimes(1)
+      expect(result.current.nativeFiles()).toEqual([])
+    })
+
+    it('a fitting image stays local (done, no path, never uploaded); other files still upload', async () => {
+      const p = png('p.png'), t = txt('a.txt')
+      const { result } = renderHook(() => useWorkerUploads('h', 'exc_1', { caps: caps(), getText: () => '' }))
+      act(() => result.current.add([p, t]))
+      expect(result.current.chips[0]).toMatchObject({ kind: 'image', status: 'done', previewUrl: 'blob:1' })
+      expect(result.current.chips[0].path).toBeUndefined()
+      await vi.waitFor(() => expect(result.current.chips[1].status).toBe('done'))
+      expect(vi.mocked(api.uploadWorkerFile).mock.calls.map((c) => c[2].name)).toEqual(['a.txt'])
+      expect(result.current.nativeFiles()).toEqual([{ key: result.current.chips[0].key, file: p }])
+    })
+
+    it('six 4 MiB images: five stay native, the sixth uploads by path with a note (Review Focus 3)', async () => {
+      const files = [1, 2, 3, 4, 5, 6].map((n) => sized(`${n}.png`, 4 * MiB))
+      const { result } = renderHook(() => useWorkerUploads('h', 'exc_1', { caps: caps({ maxRequestBytes: 64 * MiB }), getText: () => '' }))
+      act(() => result.current.add(files.slice(0, 5)))
+      act(() => result.current.add(files.slice(5)))
+      await vi.waitFor(() => expect(result.current.chips[5].status).toBe('done'))
+      expect(result.current.chips.map((c) => c.kind)).toEqual(['image', 'image', 'image', 'image', 'image', 'path'])
+      expect(result.current.chips[5]).toMatchObject({ note: 'image_as_path', path: '/w/6.png' })
+      expect(vi.mocked(api.uploadWorkerFile).mock.calls.map((c) => c[2].name)).toEqual(['6.png'])
+    })
+
+    it('plans with the current draft text', () => {
+      const limit = requestBytes('', [{ size: 30, type: 'image/png' }])
+      let text = ''
+      const { result } = renderHook(() => useWorkerUploads('h', 'exc_1', { caps: caps({ maxRequestBytes: limit }), getText: () => text }))
+      act(() => result.current.add([sized('a.png', 30)]))
+      expect(result.current.chips[0]).toMatchObject({ kind: 'image' })
+      act(() => result.current.remove(result.current.chips[0].key))
+      text = 'a longer draft'
+      act(() => result.current.add([sized('b.png', 30)]))
+      expect(result.current.chips[0]).toMatchObject({ kind: 'path', note: 'image_as_path' })
+    })
+
+    it('an unsupported image type goes by path with the note', async () => {
+      const { result } = renderHook(() => useWorkerUploads('h', 'exc_1', { caps: caps(), getText: () => '' }))
+      act(() => result.current.add([new File(['x'], 'b.bmp', { type: 'image/bmp' })]))
+      expect(result.current.chips[0]).toMatchObject({ kind: 'path', note: 'image_as_path', status: 'uploading' })
+    })
+
+    it('demote turns a native chip into a path upload with the note; markFailed fails a chip', async () => {
+      const { result } = renderHook(() => useWorkerUploads('h', 'exc_1', { caps: caps(), getText: () => '' }))
+      act(() => result.current.add([png('a.png'), png('b.png')]))
+      const [a, b] = result.current.chips
+      act(() => result.current.demote([a.key]))
+      await vi.waitFor(() => expect(result.current.chips[0]).toMatchObject({ kind: 'path', status: 'done', path: '/w/a.png', note: 'image_as_path' }))
+      expect(result.current.nativeFiles().map((n) => n.key)).toEqual([b.key])
+      act(() => result.current.markFailed(b.key, 'attachment_too_large'))
+      expect(result.current.chips[1]).toMatchObject({ status: 'failed', error: 'attachment_too_large' })
+    })
+
+    it('removing a native chip forgets its file', () => {
+      const { result } = renderHook(() => useWorkerUploads('h', 'exc_1', { caps: caps(), getText: () => '' }))
+      act(() => result.current.add([png('a.png')]))
+      act(() => result.current.remove(result.current.chips[0].key))
+      expect(result.current.nativeFiles()).toEqual([])
+    })
   })
 
   it('revokes remaining thumbnails on unmount', () => {

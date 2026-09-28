@@ -319,13 +319,16 @@ export class NexApiError extends Error {
   readonly status: number
   readonly code: string
   readonly turnId?: string
+  /** 0-based index of the offending image, on Nexen's per-image attachment errors (contract §1.9). */
+  readonly attachmentIndex?: number
 
-  constructor(status: number, code: string, message: string, turnId?: string) {
+  constructor(status: number, code: string, message: string, turnId?: string, attachmentIndex?: number) {
     super(message)
     this.name = 'NexApiError'
     this.status = status
     this.code = code
     this.turnId = turnId
+    this.attachmentIndex = attachmentIndex
   }
 }
 
@@ -338,11 +341,13 @@ export async function nexErrorFromResponse(res: Response): Promise<NexApiError> 
     return new NexApiError(res.status, fallback, `nex: HTTP ${res.status}`)
   }
   try {
-    const body = JSON.parse(text) as { error?: unknown; code?: unknown; turn_id?: unknown }
+    const body = JSON.parse(text) as { error?: unknown; code?: unknown; turn_id?: unknown; attachment_index?: unknown }
     if (typeof body.code === 'string' && body.code !== '') {
       const message = typeof body.error === 'string' && body.error !== '' ? body.error : `nex: HTTP ${res.status}`
       const turnId = typeof body.turn_id === 'string' && body.turn_id !== '' ? body.turn_id : undefined
-      return new NexApiError(res.status, body.code, message, turnId)
+      const idx = body.attachment_index
+      const attachmentIndex = typeof idx === 'number' && Number.isInteger(idx) && idx >= 0 ? idx : undefined
+      return new NexApiError(res.status, body.code, message, turnId, attachmentIndex)
     }
   } catch {
     // not JSON — fall through

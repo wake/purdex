@@ -36,7 +36,11 @@ import { useExecutionSubscription } from '../../hooks/useExecutionSubscription'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
 import { useExecutionActions, type SendOptions } from '../../hooks/useExecutionActions'
 import { useWorkerUploads } from '../../hooks/useWorkerUploads'
-import { canSend, composeWithAttachments } from '../../lib/nex/worker-upload'
+import {
+  canSend, composeWithAttachments, encodeImage, isAttachmentError, planAttachments, requestBytes, uploadErrorKey,
+  PER_IMAGE_ERRORS, type Chip, type WireImageAttachment,
+} from '../../lib/nex/worker-upload'
+import { selectImageAttachments, useNexHostStore } from '../../stores/useNexHostStore'
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
@@ -98,11 +102,37 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const workerThemeVars = useMemo(() => workerThemeStyle(workerTheme), [workerTheme])
   const { problem } = useExecutionSubscription(hostId, executionId, isActive)
   const lease = useExecutionLease(hostId, executionId)
-  const { draft, actionPending, handleSend, handleInterrupt, handleTerminate } = useExecutionActions(hostId, executionId, lease)
+  const { draft, actionPending, handleSend, handleInterrupt, handleTerminate, restoreDraft } = useExecutionActions(hostId, executionId, lease)
+  // Spec §9.2 (phase E): native images only when the host's capability
+  // exists AND lists this execution's provider — null otherwise (an older
+  // daemon, a codex execution, the summary not in yet), and then every image
+  // goes by path exactly as in phase D. The result is reference-stable.
+  const imageCaps = useNexHostStore(selectImageAttachments(hostId, st.summary?.provider ?? ''))
+  useEffect(() => { void useNexHostStore.getState().ensure(hostId) }, [hostId])
+  // The typed text, for planning an image added mid-draft against the request budget.
+  const draftText = useRef('')
+  const onTextChange = useCallback((text: string) => { draftText.current = text }, [])
+  const getDraftText = useCallback(() => draftText.current, [])
   // Spec §9.1: attachments. The chips live here, not in WorkerInput — the
   // input is re-keyed on the restored draft and remounts after a failed send —
   // and the whole pane is the drop target (TerminalView's overlay pattern).
-  const uploads = useWorkerUploads(hostId, executionId)
+  const uploads = useWorkerUploads(hostId, executionId, { caps: imageCaps, getText: getDraftText })
+  // A send refused before going out (phase E: the body would exceed
+  // max_request_bytes); cleared by the next send or a removed chip.
+  const [sendBlock, setSendBlock] = useState<'request_too_large' | null>(null)
+  // Encoding the images is async; this keeps a second submit meanwhile from
+  // posting the same chips twice (handleSend's own lock starts after it).
+  // The ref is the same-tick guard; the state renders it, so the input and
+  // the quick replies show disabled instead of dropping a click (PR #1527 A3).
+  const encoding = useRef(false)
+  const [encodingBusy, setEncodingBusy] = useState(false)
+  // The optimistic line's thumbnails are its own object URLs (the chips'
+  // are revoked as soon as the send clears them): revoked when pendingLocal
+  // drops this array — accepted, failed or replaced — and on unmount.
+  const pendingPreviews = st.pendingLocal?.attachments
+  useEffect(() => () => {
+    for (const p of pendingPreviews ?? []) URL.revokeObjectURL(p.previewUrl)
+  }, [pendingPreviews])
   const [dragging, setDragging] = useState(false)
   const dragDepth = useRef(0)
 
@@ -291,7 +321,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // this clears itself without redesigning the reconnect path.
   const streamDead = st.historyLoaded && st.sse === 'closed' && !!st.sseError
   // One gate for everything that sends: the input and the quick replies.
-  const inputDisabled = st.pendingSend || ended || !st.historyLoaded || streamDead || takeBackBusy
+  const inputDisabled = st.pendingSend || encodingBusy || ended || !st.historyLoaded || streamDead || takeBackBusy
   const placeholder = st.summary?.archived ? t('execution.input.archived')
     : ended ? t('execution.input.terminal')
     : streamDead ? t('execution.input.disconnected')
@@ -305,12 +335,101 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // meanwhile stays for the next message. A typed send's failure restores
   // just the typed text as the draft (the chips stay where they are); a quick
   // reply passes `restoreDraft: false` and leaves the input alone.
+  //
+  // Phase E: the native image chips go as base64 `attachments`, the rest as
+  // `[file: …]` lines. Before anything goes out the planned set is checked
+  // once more against the final text: over `max_request_bytes` the send is
+  // refused with a visible reason (returns false: the input keeps the text);
+  // an image the capability no longer admits (the daemon changed under us)
+  // is re-uploaded by path first. A per-image refusal from the daemon fails
+  // that chip (`attachment_index`, in send order).
   const attachGate = canSend(uploads.chips)
-  const sendWithAttachments = async (text: string, opts: SendOptions) => {
-    if (!canSend(uploads.chips).ok) return
+  const sendWithAttachments = (text: string, opts: SendOptions): boolean => {
+    if (encoding.current || !canSend(uploads.chips).ok) return false
     const sent = uploads.chips.filter((c) => c.status === 'done')
-    const ok = await handleSend(composeWithAttachments(text, sent), opts)
-    if (ok) uploads.clear(sent.map((c) => c.key))
+    const finalText = composeWithAttachments(text, sent.filter((c) => c.kind === 'path'))
+    const natives = uploads.nativeFiles(sent.filter((c) => c.kind === 'image').map((c) => c.key))
+    if (natives.length > 0) {
+      const planned = natives.map((n) => ({ key: n.key, size: n.file.size, type: n.file.type }))
+      if (imageCaps && requestBytes(finalText, planned) > imageCaps.maxRequestBytes) {
+        setSendBlock('request_too_large')
+        return false
+      }
+      const plan = planAttachments(planned, imageCaps, finalText)
+      if (plan.path.length > 0) {
+        uploads.demote(plan.path)
+        return false
+      }
+    }
+    setSendBlock(null)
+    if (natives.length === 0) {
+      // No await without images: a text-only send takes handleSend's lock in
+      // the same tick as the submit, as in phase D.
+      void sendNow(finalText, opts, sent.map((c) => c.key), [], [])
+      return true
+    }
+    void encodeThenSend(text, opts, sent, natives)
+    return true
+  }
+  // Encoding is async and a chip can be removed meanwhile (PR #1527 A1): once
+  // the images are read, the snapshot is re-checked against the chips that
+  // still exist — a removed image leaves the attachments (and gets no
+  // optimistic preview), a removed path chip loses its `[file:]` line — and
+  // with nothing left to say the send is dropped.
+  const encodeThenSend = async (typed: string, opts: SendOptions, sent: Chip[], natives: { key: string; file: File }[]) => {
+    encoding.current = true
+    setEncodingBusy(true)
+    try {
+      const encoded = await Promise.allSettled(natives.map((n) => encodeImage(n.file)))
+      const kept = natives.flatMap((n, i) => (uploads.isLive(n.key) ? [{ ...n, result: encoded[i] }] : []))
+      const unreadable = kept.filter((n) => n.result.status === 'rejected')
+      if (unreadable.length > 0) {
+        for (const n of unreadable) uploads.markFailed(n.key)
+        if (opts.restoreDraft !== false) restoreDraft(opts.draftText ?? typed)
+        return
+      }
+      const liveSent = sent.filter((c) => uploads.isLive(c.key))
+      const finalText = composeWithAttachments(typed, liveSent.filter((c) => c.kind === 'path'))
+      if (!finalText && kept.length === 0) return
+      const data = kept.map((n) => (n.result as PromiseFulfilledResult<string>).value)
+      await sendNow(finalText, opts, liveSent.map((c) => c.key), kept, data)
+    } finally {
+      encoding.current = false
+      setEncodingBusy(false)
+    }
+  }
+  const sendNow = async (finalText: string, opts: SendOptions, sentKeys: string[], natives: { key: string; file: File }[], data: string[]) => {
+    const attachments: WireImageAttachment[] = natives.map((n, i) => ({ type: 'image', media_type: n.file.type, data: data[i] }))
+    const previews = natives.length > 0
+      ? natives.map((n) => ({ previewUrl: URL.createObjectURL(n.file), media_type: n.file.type }))
+      : undefined
+    const ok = await handleSend(finalText, previews ? { ...opts, attachments, previews } : opts)
+    // Previews the store never kept (a no-op re-entrant send, or set and
+    // cleared before a render) are not the effect's to revoke.
+    if (previews && useExecutionStore.getState().executions[key]?.pendingLocal?.attachments !== previews) {
+      for (const p of previews) URL.revokeObjectURL(p.previewUrl)
+    }
+    if (ok) {
+      uploads.clear(sentKeys)
+      return
+    }
+    const err = useExecutionStore.getState().executions[key]?.sendError
+    if (err && PER_IMAGE_ERRORS.has(err.code) && err.attachmentIndex !== undefined) {
+      const failed = natives[err.attachmentIndex]
+      if (failed) uploads.markFailed(failed.key, err.code)
+    } else if (err?.code === 'attachments_unsupported' && natives.length > 0) {
+      // The cached capability was wrong (PR #1527 A2): left `done`, every
+      // retry would re-post the same refused body. Refetch it, and send
+      // these images by path — the draft stays, and the reader resends once
+      // the uploads finish. `request_too_large` keeps its chips: the reason
+      // shows, and the reader decides what to drop.
+      void useNexHostStore.getState().invalidate(hostId)
+      uploads.demote(natives.map((n) => n.key))
+    }
+  }
+  const removeChip = (k: string) => {
+    setSendBlock(null)
+    uploads.remove(k)
   }
   // A file dragged over the pane must never fall through to the browser's
   // default (Electron would navigate to it), so every file drag is claimed;
@@ -342,7 +461,9 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     if (canDrop) uploads.add(Array.from(e.dataTransfer.files))
   }
   const errorText = st.sendError
-    ? (KNOWN_ERROR_KEYS.has(st.sendError.code) ? t(`execution.error.${st.sendError.code}`) : t('execution.error.generic', { message: st.sendError.message }))
+    ? (KNOWN_ERROR_KEYS.has(st.sendError.code) ? t(`execution.error.${st.sendError.code}`)
+      : isAttachmentError(st.sendError.code) ? t(uploadErrorKey(st.sendError.code))
+      : t('execution.error.generic', { message: st.sendError.message }))
     : null
   // Spec §4.4 R3: dots while the model is silent (own delivered send, or an
   // observed live turn); the typewriter takes over once tokens flow, and a
@@ -424,13 +545,18 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
         </div>
       )}
       {errorText && <div data-testid="send-error" className="mx-2 mb-1 text-xs text-status-error">{errorText}</div>}
+      {sendBlock && (
+        <div data-testid="send-block" role="status" aria-live="polite" className="mx-2 mb-1 text-xs text-status-error">
+          {t(`worker.upload.${sendBlock}`)}
+        </div>
+      )}
       {/* R3 T2.1: part of the input, so in chat too. A tap sends at once and
           never restores a draft — that would remount the input over what is typed. */}
-      <QuickReplyDock replies={quickReplies} onSend={(text) => void sendWithAttachments(text, { restoreDraft: false })}
+      <QuickReplyDock replies={quickReplies} onSend={(text) => { sendWithAttachments(text, { restoreDraft: false }) }}
         disabled={inputDisabled || !attachGate.ok} />
-      <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void sendWithAttachments(text, { draftText: text })}
-        disabled={inputDisabled} placeholder={placeholder} focused={isActive}
-        chips={uploads.chips} onRemoveChip={uploads.remove} onAddFiles={canAttach ? uploads.add : undefined} />
+      <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => sendWithAttachments(text, { draftText: text })}
+        disabled={inputDisabled} placeholder={placeholder} focused={isActive} onTextChange={onTextChange}
+        chips={uploads.chips} onRemoveChip={removeChip} onAddFiles={canAttach ? uploads.add : undefined} />
       {dragging && (
         <div data-testid="drop-overlay"
           className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none z-20"
