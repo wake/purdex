@@ -1794,6 +1794,50 @@ describe('ExecutionView — attachments', () => {
     expect(screen.queryByTestId('drop-overlay')).toBeNull()
   })
 
+  // PR #1522 A1: a quick reply goes through the same attachment-aware send as
+  // a typed message — blocked by an uploading / failed chip, and carrying the
+  // done chips (then clearing them) otherwise.
+  describe('quick replies share the attachment gate', () => {
+    beforeEach(() => {
+      const e = emptyHostConfigEntry('ready')
+      useHostConfigStore.setState({ byHost: { [H]: { ...e, quickReplies: [{ id: 'go', text: 'go on' }], quickRepliesSupported: true, revisions: { ...e.revisions, quickReplies: 1 } } } })
+    })
+
+    it('an uploading chip blocks a quick reply (disabled, reason shown, nothing sent)', async () => {
+      vi.mocked(api.uploadWorkerFile).mockReset().mockReturnValue(new Promise(() => {}))
+      render(<ExecutionView {...base} isActive />)
+      dropFiles([txt('a.txt')])
+      const btn = screen.getByTestId('quick-reply')
+      expect(btn).toBeDisabled()
+      fireEvent.click(btn)
+      await act(async () => {})
+      expect(api.sendMessage).not.toHaveBeenCalled()
+      expect(screen.getByTestId('upload-block')).toHaveTextContent('Waiting for uploads to finish…')
+    })
+
+    it('a failed chip blocks a quick reply', async () => {
+      vi.mocked(api.uploadWorkerFile).mockReset().mockRejectedValue(new NexApiError(413, 'file_too_large', 'too big'))
+      render(<ExecutionView {...base} isActive />)
+      dropFiles([txt('a.txt')])
+      await waitFor(() => expect(screen.getByTestId('upload-chip').dataset.status).toBe('failed'))
+      const btn = screen.getByTestId('quick-reply')
+      expect(btn).toBeDisabled()
+      fireEvent.click(btn)
+      await act(async () => {})
+      expect(api.sendMessage).not.toHaveBeenCalled()
+      expect(screen.getByTestId('upload-block')).toHaveTextContent('An upload failed — remove it to send')
+    })
+
+    it('with done chips, a quick reply carries their [file:] lines and clears them', async () => {
+      render(<ExecutionView {...base} isActive />)
+      dropFiles([txt('a.txt')])
+      await waitFor(() => expect(screen.getByTestId('upload-chip').dataset.status).toBe('done'))
+      fireEvent.click(screen.getByTestId('quick-reply'))
+      await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', `go on\n\n[file: ${saved('a.txt')}]`))
+      await waitFor(() => expect(screen.queryAllByTestId('upload-chip')).toHaveLength(0))
+    })
+  })
+
   // Matches the disabled `+` button: while a send is in flight the input is
   // disabled, so a drop must not open the overlay or upload either.
   it('takes no drop while the input is disabled (a send in flight)', () => {

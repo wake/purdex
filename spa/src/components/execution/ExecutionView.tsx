@@ -34,7 +34,7 @@ import { getWorkerTheme, workerThemeStyle } from '../../lib/worker-theme/registr
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useExecutionSubscription } from '../../hooks/useExecutionSubscription'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
-import { useExecutionActions } from '../../hooks/useExecutionActions'
+import { useExecutionActions, type SendOptions } from '../../hooks/useExecutionActions'
 import { useWorkerUploads } from '../../hooks/useWorkerUploads'
 import { canSend, composeWithAttachments } from '../../lib/nex/worker-upload'
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
@@ -298,14 +298,18 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     : undefined
   const leaseHeld = st.leaseError?.code === 'lease_held'
 
-  // A typed send carries the done chips as `[file: …]` lines; the chips go
-  // only once the daemon accepted it, and a failure restores just the typed
-  // text as the draft (the chips stay where they are). Only the chips that
-  // went out are cleared — one added meanwhile stays for the next message.
-  const sendTyped = async (text: string) => {
+  // Every user send — typed or a quick reply — goes through here (PR #1522
+  // A1): an uploading or failed chip blocks it, and otherwise the done chips
+  // ride along as `[file: …]` lines. The chips go only once the daemon
+  // accepted it; only the chips that went out are cleared — one added
+  // meanwhile stays for the next message. A typed send's failure restores
+  // just the typed text as the draft (the chips stay where they are); a quick
+  // reply passes `restoreDraft: false` and leaves the input alone.
+  const attachGate = canSend(uploads.chips)
+  const sendWithAttachments = async (text: string, opts: SendOptions) => {
     if (!canSend(uploads.chips).ok) return
     const sent = uploads.chips.filter((c) => c.status === 'done')
-    const ok = await handleSend(composeWithAttachments(text, sent), { draftText: text })
+    const ok = await handleSend(composeWithAttachments(text, sent), opts)
     if (ok) uploads.clear(sent.map((c) => c.key))
   }
   // A file dragged over the pane must never fall through to the browser's
@@ -422,8 +426,9 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
       {errorText && <div data-testid="send-error" className="mx-2 mb-1 text-xs text-status-error">{errorText}</div>}
       {/* R3 T2.1: part of the input, so in chat too. A tap sends at once and
           never restores a draft — that would remount the input over what is typed. */}
-      <QuickReplyDock replies={quickReplies} onSend={(text) => void handleSend(text, { restoreDraft: false })} disabled={inputDisabled} />
-      <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void sendTyped(text)}
+      <QuickReplyDock replies={quickReplies} onSend={(text) => void sendWithAttachments(text, { restoreDraft: false })}
+        disabled={inputDisabled || !attachGate.ok} />
+      <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void sendWithAttachments(text, { draftText: text })}
         disabled={inputDisabled} placeholder={placeholder} focused={isActive}
         chips={uploads.chips} onRemoveChip={uploads.remove} onAddFiles={canAttach ? uploads.add : undefined} />
       {dragging && (
