@@ -69,3 +69,6 @@ Repro green; full vitest, lint, tsc clean; each task its own commit.
 - **`exited.at`** needs no fallback (parseExit already rejects ≤ 0).
 - **Known tests that change:** useTabStore.rebuild.test.ts ~236 ("stamps capturedAt on every write"),
   ~691-700 (exit expects Date.now), executor.test.ts ~636 / ~1659 (restore after keep-local).
+
+Note (2026-09-28): the plan review above ran on a Claude subagent while codex quota was exhausted; quota is
+back, so the PR reviews follow the standard codex R1 + R2 (attack → critic) flow.
