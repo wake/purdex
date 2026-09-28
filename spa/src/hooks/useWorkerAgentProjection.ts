@@ -143,8 +143,22 @@ function failureReason(src: Source): string {
  * so re-projecting the same state after a reload must not look like a new
  * event. Running → the turn's start; idle / error → the turn's end; else the
  * summary's `updated_at`; the clock only as a last resort.
+ *
+ * `firstInSession`: this engine has not dispatched the key yet. A list-row
+ * source then stamps 0 instead of `updated_at`. The live and list-row sources
+ * stamp the same state differently (turn endAt vs `updated_at`), and Nexen
+ * advances `updated_at` on lease acquire / renew / release and on
+ * last_turn_reason writes with no status change — so after a reload the first
+ * list-row projection would carry a stamp above the one the dispatcher stored
+ * and replay an old Stop. 0 is a baseline the dispatcher records (for an
+ * unseen key) but never shows, and it can never exceed a stored stamp. Later
+ * list-row dispatches in the session keep `updated_at`: change detection only
+ * lets them through on a real status / signature change, and that
+ * `updated_at` is newer than anything stored. The live source always keeps
+ * its turn-derived stamps.
  */
-function stateStamp(status: WorkerProjection['status'], src: Source): number {
+function stateStamp(status: WorkerProjection['status'], src: Source, firstInSession: boolean): number {
+  if (!src.live && firstInSession) return 0
   const meta = src.live?.turnMeta.at(-1)
   const t = status === 'running' ? meta?.startAt : meta?.endAt
   if (typeof t === 'number' && t > 0) return t
@@ -198,7 +212,8 @@ export function startWorkerAgentProjection(): () => void {
       const projection = projectWorkerStatus(src.input)
       const agentType = src.provider ? providerAgentType(src.provider) : ''
       const sig = signatureOf(agentType, projection)
-      if (dispatched.get(key)?.sig === sig) continue
+      const prev = dispatched.get(key)
+      if (prev?.sig === sig) continue
       const code = execAgentCode(w.executionId)
       dispatched.set(key, { hostId: w.hostId, code, status: projection.status, sig })
       dispatch(w.hostId, code, {
@@ -206,7 +221,7 @@ export function startWorkerAgentProjection(): () => void {
         status: projection.status,
         subagents: projection.subagents,
         raw_event_name: RAW_EVENT_NAME[projection.status],
-        broadcast_ts: stateStamp(projection.status, src),
+        broadcast_ts: stateStamp(projection.status, src, prev === undefined),
         detail: detailOf(projection.status, src),
       })
     }
@@ -218,6 +233,9 @@ export function startWorkerAgentProjection(): () => void {
     }
   }
 
+  // `Date.now()` here is intentionally outside the stamp logic: a `clear`
+  // never reaches `lastEvents` (the agent store drops the key), so the
+  // dispatcher's dedup never compares this stamp.
   const clearKey = (d: Dispatched) =>
     dispatch(d.hostId, d.code, { agent_type: '', status: 'clear', raw_event_name: RAW_EVENT_NAME.clear, broadcast_ts: Date.now(), detail: {} })
 

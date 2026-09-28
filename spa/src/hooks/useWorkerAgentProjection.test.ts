@@ -9,6 +9,8 @@ import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useHostStore } from '../stores/useHostStore'
 import { compositeKey } from '../lib/composite-key'
+import { shouldDispatch } from './useNotificationDispatcher'
+import { STORAGE_KEYS } from '../lib/storage'
 import { defaultExecutionState, type ExecutionState } from '../lib/nex/event-reducer'
 import { emptyListCache } from '../lib/nex/execution-list-effects'
 import type { ExecutionSummary, WorkerTask } from '../lib/nex/types'
@@ -147,6 +149,18 @@ describe('useWorkerAgentProjection', () => {
     useTabStore.setState({ tabs: {}, tabOrder: [] })
     expect(useAgentStore.getState().statuses[KEY]).toBeUndefined()
     expect(useAgentStore.getState().lastEvents[KEY]).toBeUndefined()
+    expect(useAgentStore.getState().unread[KEY]).toBeUndefined()
+    stop()
+  })
+
+  it('the same execution open in two tabs keeps its key when one tab closes', () => {
+    const stop = startWorkerAgentProjection()
+    setLive({ summary: summary({ state: 'idle' }) })
+    useTabStore.setState({ tabs: { t1: execTab('t1'), t2: execTab('t2') }, tabOrder: ['t1', 't2'] })
+    expect(useAgentStore.getState().statuses[KEY]).toBe('idle')
+    useTabStore.setState({ tabs: { t2: execTab('t2') }, tabOrder: ['t2'] })
+    expect(useAgentStore.getState().statuses[KEY]).toBe('idle')
+    expect(useAgentStore.getState().lastEvents[KEY].raw_event_name).toBe('Stop')
     stop()
   })
 
@@ -173,6 +187,59 @@ describe('useWorkerAgentProjection', () => {
     stop = startWorkerAgentProjection()
     expect(useAgentStore.getState().lastEvents[KEY].broadcast_ts).toBe(first)
     stop()
+  })
+
+  describe('list-row stamps across a reload', () => {
+    const listRow = (over: Partial<ExecutionSummary>) =>
+      useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), items: [summary({ turn_count: 1, ...over })] } } })
+    const resetStores = () => {
+      useAgentStore.setState({ statuses: {}, agentTypes: {}, models: {}, subagents: {}, lastEvents: {}, oscTitles: {}, ccStatus: {}, unread: {} })
+      useExecutionStore.setState({ executions: {} })
+      useExecutionListStore.setState({ byHost: {} })
+    }
+    beforeEach(() => localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN))
+    afterEach(() => localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN))
+
+    it('a first list-row projection after a reload is a 0 baseline, never a replayed Stop', () => {
+      let stop = startWorkerAgentProjection()
+      setLive({ summary: summary({ state: 'idle' }), turnStarts: [0], turnMeta: [{ startAt: 100, endAt: 200, outcome: 'ok', durationMs: 100 }] })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      expect(useAgentStore.getState().lastEvents[KEY].broadcast_ts).toBe(200)
+      shouldDispatch(KEY, 200) // the dispatcher records the stamp it saw
+      stop()
+      // Reload: in-memory stores are fresh, the dispatcher's seen map (localStorage) survives.
+      resetStores()
+      stop = startWorkerAgentProjection()
+      // Nexen bumped updated_at (lease renew) without a status change.
+      listRow({ state: 'idle', updated_at: 500 })
+      const ev = useAgentStore.getState().lastEvents[KEY]
+      expect(ev.raw_event_name).toBe('Stop')
+      expect(ev.broadcast_ts).toBe(0)
+      expect(shouldDispatch(KEY, ev.broadcast_ts)).toBe(false)
+      stop()
+    })
+
+    it('a later list-row transition within the session stamps updated_at and notifies', () => {
+      localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [KEY]: 200 }))
+      const stop = startWorkerAgentProjection()
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      listRow({ state: 'running', updated_at: 300 })
+      expect(useAgentStore.getState().lastEvents[KEY].broadcast_ts).toBe(0)
+      listRow({ state: 'idle', updated_at: 600 })
+      const ev = useAgentStore.getState().lastEvents[KEY]
+      expect(ev.raw_event_name).toBe('Stop')
+      expect(ev.broadcast_ts).toBe(600)
+      expect(shouldDispatch(KEY, ev.broadcast_ts)).toBe(true)
+      stop()
+    })
+
+    it('a first projection from the live source after a reload keeps the turn stamp', () => {
+      const stop = startWorkerAgentProjection()
+      setLive({ summary: summary({ state: 'idle', updated_at: 900 }), turnStarts: [0], turnMeta: [{ startAt: 100, endAt: 200, outcome: 'ok', durationMs: 100 }] })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      expect(useAgentStore.getState().lastEvents[KEY].broadcast_ts).toBe(200)
+      stop()
+    })
   })
 
   it('stop releases subscriptions and clears the keys it set', () => {
