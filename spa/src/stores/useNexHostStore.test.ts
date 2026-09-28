@@ -583,6 +583,29 @@ describe('selectors', () => {
       seed({ capabilities: caps({ send: v15Send({ fetch: { method: 'GET' } as never }) }) })
       expect(selectAttachmentFetch(H)(useNexHostStore.getState())).toBeNull()
     })
+
+    it('stays the same reference across a capabilities refetch when method+path are unchanged (fix round 1)', () => {
+      // A fresh `caps(...)` call is a brand-new object graph, as a real
+      // refetch's `commitLoaded` would install — content-equal but not
+      // identical to the first. The route must still come back `===`, or
+      // an effect keyed on it (AttachmentThumbs) revokes and refetches on
+      // every 60s capability refresh.
+      seed({ capabilities: caps({ send: v15Send() }) })
+      const first = selectAttachmentFetch(H)(useNexHostStore.getState())
+      seed({ capabilities: caps({ send: v15Send() }), generation: 2 })
+      const second = selectAttachmentFetch(H)(useNexHostStore.getState())
+      expect(second).toEqual(first)
+      expect(second).toBe(first)
+    })
+
+    it('a genuinely different path gets a new reference', () => {
+      seed({ capabilities: caps({ send: v15Send() }) })
+      const first = selectAttachmentFetch(H)(useNexHostStore.getState())
+      seed({ capabilities: caps({ send: v15Send({ fetch: { method: 'GET', path: '/elsewhere/{sha256}' } }) }), generation: 2 })
+      const second = selectAttachmentFetch(H)(useNexHostStore.getState())
+      expect(second).not.toBe(first)
+      expect(second).toEqual({ method: 'GET', path: '/elsewhere/{sha256}' })
+    })
   })
 
   describe('selectImageAttachments (E1)', () => {

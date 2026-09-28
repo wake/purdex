@@ -113,6 +113,28 @@ describe('AttachmentThumbs', () => {
     await act(async () => { pending.slice(1).forEach((d) => d.resolve(new Blob(['z']))) })
   })
 
+  it('re-seeding content-equal capabilities (a capability refresh) does not refetch or revoke; a genuinely different route does (fix round 1)', async () => {
+    vi.mocked(api.fetchAttachment).mockResolvedValue(new Blob(['x'], { type: 'image/png' }))
+    inPane(<AttachmentThumbs items={[meta('a')]} />)
+    await waitFor(() => expect(thumbs()[0].dataset.state).toBe('ready'))
+    expect(api.fetchAttachment).toHaveBeenCalledTimes(1)
+
+    // A brand-new capabilities object, same route content — what a 60s TTL
+    // capability refresh's `commitLoaded` installs.
+    act(() => seed({ ...ROUTE }))
+    expect(api.fetchAttachment).toHaveBeenCalledTimes(1)
+    expect(revokeUrl).not.toHaveBeenCalled()
+    expect(thumbs()[0].dataset.state).toBe('ready')
+
+    // A genuinely different route: the thumbnail refetches, revoking the
+    // stale blob URL first.
+    const OTHER_ROUTE = { method: 'GET', path: '/elsewhere/{sha256}' }
+    act(() => seed(OTHER_ROUTE))
+    expect(revokeUrl).toHaveBeenCalledWith('blob:t1')
+    await waitFor(() => expect(api.fetchAttachment).toHaveBeenCalledTimes(2))
+    expect(api.fetchAttachment).toHaveBeenCalledWith(H, E, sha('a'), OTHER_ROUTE)
+  })
+
   it('no fetch route: loading while the host is not ready yet, the placeholder once it is ready without one', async () => {
     seed(null, 'loading')
     inPane(<AttachmentThumbs items={[meta('a')]} />)
