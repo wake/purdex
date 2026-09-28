@@ -112,13 +112,13 @@ interface WorkerTheme {
 
 ### 7.1 Data
 
-- The reducer keeps timing next to the boundaries: `turnStarts` entries gain the start event's `created_at`, and a parallel `turnEnds` records, for each main-turn end, `{ at: created_at, outcome, durationMs? }`:
+- The reducer keeps timing next to the boundaries: `turnStarts` (message indexes) is unchanged, and a parallel, index-aligned `turnMeta[i] = { startAt, endAt, outcome, durationMs }` records the start event's `created_at` and, at the main turn's end, the end event's `created_at` and the outcome:
   - `outcome: 'ok'` — a top-level `result` with `is_error` false.
   - `outcome: 'failed'` — `result.is_error`, `execution.error`, `execution.turn_stalled`, `execution.turn_orphaned`, `execution.rejected`, `execution.terminal` with a failure reason.
   - `outcome: 'interrupted'` — `execution.interrupted` (and a `result` that follows an interrupt within the same turn), `execution.terminated` / `execution.archived` (user actions).
   - `execution.terminal` is classified by its payload reason; the plan lists each reason Nexen emits and its outcome, and an unknown reason is `failed` (a failure must never be hidden, F3).
   - Subagent frames never end a turn (existing rule).
-- `durationMs` = `result.duration_ms` when present, else `end.at − start.at` when both are non-zero, else absent.
+- `durationMs` = `result.duration_ms` when present, else `endAt − startAt` when both are non-zero, else absent.
 - Replay rebuilds the same data (both fields come from durable events).
 
 ### 7.2 Render
@@ -205,7 +205,7 @@ A–D do not depend on Nexen. E waits for nexen-c3's two PRs. Each phase stays w
 - Theme: registry fallback; pane root carries the vars; components use `--wt-*` (snapshot of computed class names on the touched elements).
 - Markdown: a GFM table renders `<table>`; search text of a table equals rendered `textContent` (extends the existing markdown-text parity test).
 - Scroll: reader scrolled up + growth (bar closed) → position unchanged; at bottom + growth → follows; unmount/remount restores `scrollTop`; remount at bottom → bottom; view switch honours `atBottom` only.
-- Reducer: `turnEnds` for ok / failed / interrupted / subagent result (none); replay yields the same; duration fallback.
+- Reducer: `turnMeta` for ok / failed / interrupted / subagent result (none); replay yields the same; duration fallback.
 - Footer: formatting of durations; 12h and 24h locales via an injected formatter; failed colour; none for interrupted and live turns.
 - Sidebar: status mapping table as a pure function test (every row of §8.2); error guard; unread via the existing store tests with an exec key; icon style resolution; title precedence including capability-absent fallback.
 - Upload: daemon handler (dedup, traversal, size, unknown execution); input chip states; send text composition; blocked send while uploading.

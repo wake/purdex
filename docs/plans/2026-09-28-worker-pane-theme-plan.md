@@ -92,7 +92,7 @@ export const PURDEX_THEME: WorkerTheme = {
   vars: {
     'font-size': '14px',
     'line-height': '1.5',            // tuned in A3 against the terminal row height
-    'block-gap': '0.75em',
+    'block-gap': 'calc(var(--wt-line-height) * 1em)',   // one line (spec §5.1)
     'heading-weight': '600',
     'list-marker-color': 'var(--text-muted)',
     'list-indent': '1.5em',
@@ -302,17 +302,20 @@ Update any existing test that asserts `room-user-mark` (grep for it) to use the 
 
 ```tsx
 it('hidden growth keeps position: scrolled up + new message with the bar closed → scrollTop unchanged', ...)
+it('scrolled down but short of the bottom + new message → scrollTop unchanged', ...)  // top rises from 100 to 400, bottom at 1000
+it('growth during follow()\'s own smooth scroll keeps following', ...)
 it('at bottom + new message → follows', ...)            // existing behaviour, keep
 it('remount restores scrollTop from memory', ...)       // unmount, remount with same scrollMemoryKey → same scrollTop
 it('remount at bottom → jumps to bottom', ...)
-it('view switch honours only atBottom; otherwise scrolls the remembered first turn into view', ...)
+it('view switch honours only atBottom; otherwise scrolls the remembered first turn into view', ...)  // ≥3 turns, first one scrolled out: remembers turn 1 or 2, not 0
 it('the search bar placement wins over restore on mount', ...)  // holdScroll true on mount → restore skipped
 ```
 
 - [ ] **Step 2: Run → the first and the remount tests fail.**
 - [ ] **Step 3: Implement**
+  - `observe()` must make `atBottom` positional (codex plan review #3): today it only clears the flag when the reader moves **up**, so a reader who scrolls down but stops short of the bottom still counts as at-bottom. New rule: near bottom → `atBottom = true`; otherwise `atBottom = false`, **except** while a smooth scroll that `follow()` itself started is still travelling down (`smoothTarget.current !== null && top >= lastTop.current`). Set `smoothTarget` in `follow()` when it issues a smooth scroll, and clear it when the bottom is reached or the reader moves up.
   - In `follow()`, replace `if ((holding.current || releaseHold.current) && !atBottom.current) return` with `if (!atBottom.current && scrolled.current) return`. The first call after mount still decides by memory (below). Keep `release()`: it sets `atBottom=false`, which now stops following without the separate flag. Keep `releaseHold` only if an existing test needs it, and update the file's header comment to state the new single rule: "growth follows only a reader at the bottom".
-  - Memory: `observe()` writes `{scrollTop, atBottom, view, firstTurn}` when `memory` is present. `firstTurn` is `Number(el.querySelector('[data-turn-index]')…)` for the first `[data-testid="room-turn"]` whose `getBoundingClientRect().bottom > box.top`. Chat must carry `data-turn-index` too; it already renders `RoomTurnGroup` with `chrome={false}`.
+  - Memory: `observe()` writes `{scrollTop, atBottom, view, firstTurn}` when `memory` is present. `firstTurn` is the `data-turn-index` of the first element in `el.querySelectorAll('[data-turn-index]')` (iterate the whole NodeList) whose `getBoundingClientRect().bottom > el.getBoundingClientRect().top`. Chat must carry `data-turn-index` too; it already renders `RoomTurnGroup` with `chrome={false}`.
   - First `follow()` after mount: if `holding` is set, keep the current R1-1 behaviour. Otherwise, if a memo exists and `!memo.atBottom`: when `memo.view === memory.view`, set `el.scrollTop = memo.scrollTop` (clamped). Otherwise scroll `[data-turn-index="${memo.firstTurn}"]` into view with `block: 'start'`. Set `atBottom=false`, `scrolled=true` and return. If there is no memo or it is at the bottom, use today's jump.
   - Do not call `forgetScrollMemo` on unmount. It is called when the pane is closed: find the pane-removal path with `grep -rn "removePane\|closeTab" spa/src/stores` and add the call there in the smallest way. If that crosses a store boundary awkwardly, skip it; the map holds only a few numbers per pane.
 - [ ] **Step 4: Pass + mutation.** Restore the old `holding || releaseHold` guard and confirm "hidden growth keeps position" fails. Also run the R3 search tests `src/components/room/TranscriptSearch.test.tsx`; they must stay green.
@@ -434,7 +437,7 @@ Same gate as A5.
 
 **Interfaces:**
 - Consumes: `projectWorkerStatus`, `execAgentCode`, `providerAgentType`, `useExecutionStore`, `useExecutionListStore`, `useTabStore`, `useExecutionListStore.getState().subscribe(hostId)`
-- Produces: for each execution pane in any tab, the hook calls `useAgentStore.getState().handleNormalizedEvent(hostId, execAgentCode(id), ev)` **only when the projection changes**. `ev` is `{ agent_type, status, subagents, raw_event_name, broadcast_ts: Date.now(), detail: {} }`. `raw_event_name` is `'PdxWorkerTurn'` for idle/error (so the unread rule treats it like a Stop, not a Notification) and `'PdxWorkerState'` otherwise. The status `clear` goes through the same call, and the store clears the key.
+- Produces: for each execution pane in any tab, the hook calls `useAgentStore.getState().handleNormalizedEvent(hostId, execAgentCode(id), ev)` **only when the projection changes**. `ev` is `{ agent_type, status, subagents, raw_event_name, broadcast_ts: Date.now(), detail: {} }`. `raw_event_name` must be a name the notification pipeline already understands (codex plan review #1: `notification-content.ts:21-53` returns null for unknown names, `event-name.ts:6-14` normalises only the Pdx* set): `'Stop'` for idle, `'StopFailure'` for error, `'UserPromptSubmit'` for running, `'SessionEnd'` for clear. `detail` for Stop carries `last_assistant_message` = the last top-level assistant text of the turn (first 300 chars; absent from a list-row source); for StopFailure `error` = the failing turn's reason (`result.subtype`, or the lifecycle kind / terminal reason). The status `clear` goes through the same call, and the store clears the key.
 - Sources, in priority order: `useExecutionStore.executions[executionKey(host, id)]` when present (live), taking `turnLive`, `summary.state`, `summary.archived`, `turnMeta.at(-1)?.outcome`, and running subagents from `runningTasks(tasks)`. Otherwise the list row from `useExecutionListStore.byHost[host].items`, taking `state`, `archived`, `running_tasks` (a count only, so `subagents: []`), `hasTurn = (turn_count ?? 0) > 0`, `turnLive = state === 'running'`, and `lastOutcome = state === 'failed' ? 'failed' : null`.
 - Keep a refcounted list subscription for every host that has at least one execution tab, and release it when no execution tab remains on that host.
 - The execution's host id comes from `resolve-host.ts`, following what `ExecutionPaneWrapper` does in `register-modules/index.tsx:121-134`.
@@ -443,27 +446,11 @@ Same gate as A5.
 - [ ] **Step 2–4:** Run → fail, implement, pass. Mutation: remove the change-detection and confirm the "dispatches once" test fails.
 - [ ] **Step 5: Commit** `feat(spa): project worker panes into the agent store`
 
-### Task C3: Active tab, unread, notifications understand exec keys
-
-**Files:**
-- Modify: `spa/src/lib/active-session.ts:17`, `spa/src/lib/pane-tree.ts:91` (`findTabBySessionCode`), `spa/src/hooks/useNotificationDispatcher.ts` (~231-253 name lookup, 331-373 click)
-- Test: the existing tests of those files plus new cases
-
-**Interfaces:**
-- `getActiveSessionInfo()` also returns `{ hostId, sessionCode: execAgentCode(id) }` when the primary pane is `execution`. Check every caller (`main.tsx`, `useAgentStore`, `useNotificationDispatcher`, `pane-tree`) for code that assumes a tmux code. Each caller must either be exec-safe or skip exec codes explicitly (`isExecAgentCode`).
-- `findTabBySessionCode(tabs, hostId, code)` matches an execution primary pane when `code === execAgentCode(content.executionId)`.
-- Notification name: for exec codes, use the worker's display title from the C4 helper `workerTabTitle(...)`. If it isn't available yet, use `firstLine(brief)`, and then the id.
-- Click: for exec codes, focus the tab that `findTabBySessionCode` finds. Never create a tmux tab. If no tab is found, do nothing except `markRead`.
-
-- [ ] **Step 1: Failing tests:** "active exec tab is not unread" (store with the active tab = exec, handleNormalizedEvent idle → unread false), "activating exec tab marks read" (main.tsx subscription path or its extracted function), "notification click focuses the exec tab", "no tmux tab is created for exec click", "hasTab true for exec with an open tab".
-- [ ] **Step 2–4:** Run → fail, implement, pass. Mutation: revert the `active-session.ts` change and confirm "active exec tab is not unread" fails.
-- [ ] **Step 5: Commit** `feat(spa): active tab, unread and notifications cover worker tabs`
-
-### Task C4: Tab icon, icon setting, title
+### Task C3: Tab icon, icon setting, title
 
 **Files:**
 - Create: `spa/src/lib/nex/worker-tab-title.ts` (+ test), `spa/src/lib/worker-icon.tsx` (+ test)
-- Modify: `spa/src/hooks/useTabDisplay.ts`, `spa/src/components/tab-icon-map.tsx` (add `Robot`), `spa/src/lib/agent-icons.tsx` (export colour variants), `spa/src/components/settings/WorkerSettingsSection.tsx` (icon options), `spa/src/types/tab.ts` (optional `fromTitle?: string` on execution content), the Hand-to-nex path that builds execution content (find it with `grep -rn "kind: 'execution'" spa/src --include=*.ts*`; record the terminal tab's current display title into `fromTitle`), locales
+- Modify: `spa/src/hooks/useTabDisplay.ts`, `spa/src/components/tab-icon-map.tsx` (add `Robot`), `spa/src/lib/agent-icons.tsx` (export colour variants), `spa/src/components/settings/WorkerSettingsSection.tsx` (icon options), `spa/src/types/tab.ts` (optional `fromTitle?: string` on execution content), `spa/src/lib/nex/handoff.ts` (`HandToNexArgs` gains `fromTitle?: string`; `executionContentFor(hostId, executionId, from?, fromTitle?)` writes it; `handToNex` passes `args.fromTitle`), `spa/src/components/HandoffConfirmDialog.tsx:51` (the only `handToNex` caller: pass the source tab's current `displayTitle` — read it with `useTabDisplay` for the source tab, or accept it as a new prop from whoever opens the dialog; pick whichever already has the tab), locales
 
 **Interfaces:**
 - `workerTabTitle({ sessionTitle, fromTitle, brief, cwd }: { sessionTitle?: string | null; fromTitle?: string; brief?: string; cwd?: string }): string | null` → `primary + ' - ' + basename(cwd)`, or just `primary` if there is no cwd. Returns null if there is no primary. `sessionTitle` is passed only when the host capability says the field exists. Until phase E, callers pass `undefined`.
@@ -474,9 +461,25 @@ Same gate as A5.
   - Unknown provider → `Robot`.
 - `useTabDisplay`: when the primary pane is `execution`, it sets `hostId` and `sessionCode = execAgentCode(id)` so `useSessionAgentIndicator` finds the light. It overrides `agentIcon` with `workerIcon(...)` and sets `displayTitle = workerTabTitle(...) ?? baseLabel`, reading the summary from the execution store, or the list row.
 
-- [ ] **Step 1: Failing tests:** the title precedence (all combinations including no cwd and whitespace-only brief); `workerIcon` for each style and provider; `ICON_MAP.Robot` is defined; `useTabDisplay` for an execution tab returns a non-undefined `IconComponent`, `agentStatus` from the store, and the title `brief - repo`; the settings section switches `iconStyle` and shows the picker only for `custom`.
+- [ ] **Step 1: Failing tests:** `executionContentFor(..., fromTitle)` stores it and a handoff through `HandoffConfirmDialog` writes the source tab's title into the new pane content; the title precedence (all combinations including no cwd and whitespace-only brief); `workerIcon` for each style and provider; `ICON_MAP.Robot` is defined; `useTabDisplay` for an execution tab returns a non-undefined `IconComponent`, `agentStatus` from the store, and the title `brief - repo`; the settings section switches `iconStyle` and shows the picker only for `custom`.
 - [ ] **Step 2–4:** Run → fail, implement, pass. Check the colour logos on a dark theme via playwright (`playwright cli -s=worker-theme`). If one is illegible, note it in the commit and wrap that icon with a light variant (spec §8.3). Mutation: drop `Robot` from `ICON_MAP` and confirm the test fails.
 - [ ] **Step 5: Commit** `feat(spa): worker tab icon, icon setting and title`
+
+### Task C4: Active tab, unread, notifications understand exec keys
+
+**Files:**
+- Modify: `spa/src/lib/active-session.ts:17`, `spa/src/lib/pane-tree.ts:91` (`findTabBySessionCode`), `spa/src/hooks/useNotificationDispatcher.ts` (~231-253 name lookup, 331-373 click)
+- Test: the existing tests of those files plus new cases
+
+**Interfaces:**
+- `getActiveSessionInfo()` also returns `{ hostId, sessionCode: execAgentCode(id) }` when the primary pane is `execution`. Check every caller (`main.tsx`, `useAgentStore`, `useNotificationDispatcher`, `pane-tree`) for code that assumes a tmux code. Each caller must either be exec-safe or skip exec codes explicitly (`isExecAgentCode`).
+- `findTabBySessionCode(tabs, hostId, code)` matches an execution primary pane when `code === execAgentCode(content.executionId)`.
+- Notification name: for exec codes, use `workerTabTitle(...)` (built in C3, which runs before this task), fed from the same summary source as the tab (execution store, else list row), falling back to the execution id. A test asserts the notification title equals the tab's `displayTitle` for the same worker.
+- Click: for exec codes, focus the tab that `findTabBySessionCode` finds. Never create a tmux tab. If no tab is found, do nothing except `markRead`.
+
+- [ ] **Step 1: Failing tests:** "worker idle builds notification content (title = worker title, body = last assistant text)" and "worker error builds StopFailure content" (call `buildNotificationContent` with the event C2 dispatches, and run the dispatcher's `shouldNotify` with an exec key that has an open tab); "active exec tab is not unread" (store with the active tab = exec, handleNormalizedEvent idle → unread false), "activating exec tab marks read" (main.tsx subscription path or its extracted function), "notification click focuses the exec tab", "no tmux tab is created for exec click", "hasTab true for exec with an open tab".
+- [ ] **Step 2–4:** Run → fail, implement, pass. Mutation: revert the `active-session.ts` change and confirm "active exec tab is not unread" fails.
+- [ ] **Step 5: Commit** `feat(spa): active tab, unread and notifications cover worker tabs`
 
 ### Task C5: PR-C gate
 
@@ -510,16 +513,19 @@ Measured 2026-09-28: under `standard` (acceptEdits) and `readonly` (dontAsk), `c
 
 **Files:**
 - Create: `spa/src/lib/nex/worker-upload.ts` (+ test), `spa/src/components/room/UploadChips.tsx` (+ test)
-- Modify: `spa/src/lib/nex/nex-api.ts` (add `uploadWorkerFile`), `spa/src/components/room/WorkerInput.tsx`, `spa/src/components/execution/ExecutionView.tsx` (pass `hostId` and `executionId` to WorkerInput and wrap the drop area), locales
+- Create: `spa/src/hooks/useWorkerUploads.ts` (+ test)
+- Modify: `spa/src/hooks/useExecutionActions.ts` (`handleSend` → `Promise<boolean>`, `SendOptions.draftText`), `spa/src/components/room/QuickReplyDock.tsx` caller if typed, `spa/src/lib/nex/nex-api.ts` (add `uploadWorkerFile`), `spa/src/components/room/WorkerInput.tsx`, `spa/src/components/execution/ExecutionView.tsx` (pass `hostId` and `executionId` to WorkerInput and wrap the drop area), locales
 
 **Interfaces:**
 - `uploadWorkerFile(hostId: string, executionId: string, file: File): Promise<{ path: string; name: string; size: number }>` via `pinnedHostFetch` to `/api/nex/executions/${encodeURIComponent(id)}/uploads`.
 - `type Chip = { key: string; name: string; status: 'uploading' | 'done' | 'failed'; path?: string; error?: string; previewUrl?: string }`
 - `composeWithAttachments(text: string, chips: Chip[]): string` → `text` + (if any done chips) `'\n\n' + chips.map((c) => `[file: ${c.path}]`).join('\n')`. With no text, it returns only the file lines.
 - `canSend(chips): { ok: true } | { ok: false; reason: 'uploading' | 'failed' }`
-- WorkerInput new props: `onUpload?: (file: File) => Promise<{ path: string; name: string }>`. Chips live in WorkerInput state and are cleared after a successful `onSend`. Drag-drop covers the whole pane, reusing the TerminalView overlay pattern (`TerminalView.tsx:61-110,178-187`, `data-testid="drop-overlay"`, `t('upload.drop_files')`), with paste handled in the textarea (`e.clipboardData.files`) and a `+` button that opens a hidden `<input type="file" multiple>`. Image chips show a thumbnail from `URL.createObjectURL`, revoked on remove and on unmount.
+- **Chip state lives in ExecutionView, not WorkerInput** (codex plan review #2/#7): WorkerInput is re-keyed by `draft` and remounts when a failed send restores the draft, and the pane-wide drop target is ExecutionView's root. New hook `useWorkerUploads(hostId, executionId): { chips: Chip[]; add(files: File[]): void; remove(key: string): void; clear(): void }` in `spa/src/hooks/useWorkerUploads.ts`, used by ExecutionView; WorkerInput receives `chips`, `onRemoveChip`, `onAddFiles(files)` (paste and the `+` button) as props and renders `<UploadChips>` above the textarea.
+- `useExecutionActions.handleSend` returns `Promise<boolean>` (true when `sendMessage` resolved and the attempt was not superseded; false on the re-entrancy no-op and on failure). ExecutionView's send wrapper: `if (!canSend(chips).ok) return; const ok = await handleSend(composeWithAttachments(text, chips)); if (ok) clear()`. On failure the chips stay and the draft restore works as today (the draft holds only the typed text, not the file lines — pass `restoreDraft` text explicitly if `handleSend` would otherwise restore the composed string: add an optional `draftText` to `SendOptions`). Update the existing QuickReplyDock caller (it ignores the result). WorkerInput's own `send()` keeps clearing the textarea immediately, as today.
+- Drag-drop covers the whole pane (handlers on ExecutionView's root), reusing the TerminalView overlay pattern (`TerminalView.tsx:61-110,178-187`, `data-testid="drop-overlay"`, `t('upload.drop_files')`), with paste handled in the textarea (`e.clipboardData.files`) and a `+` button that opens a hidden `<input type="file" multiple>`. Image chips show a thumbnail from `URL.createObjectURL`, revoked on remove and on unmount.
 
-- [ ] **Step 1: Failing tests:** `composeWithAttachments` cases; `canSend`; "send blocked while uploading" (the Enter key does not call onSend and a status line shows `t('worker.upload.wait')`); a failed chip blocks send with `t('worker.upload.failed_remove')`; removing a chip unblocks send; paste of a file calls onUpload; drop shows the overlay and uploads each file in order; a successful send clears the chips; the text is composed exactly.
+- [ ] **Step 1: Failing tests:** `handleSend` resolves true / false (success, failure, re-entrant no-op); a failed send keeps the chips and restores only the typed text as draft; a drop fired on the pane root (not the input) adds chips; `composeWithAttachments` cases; `canSend`; "send blocked while uploading" (the Enter key does not call onSend and a status line shows `t('worker.upload.wait')`); a failed chip blocks send with `t('worker.upload.failed_remove')`; removing a chip unblocks send; paste of a file calls onUpload; drop shows the overlay and uploads each file in order; a successful send clears the chips; the text is composed exactly.
 - [ ] **Step 2–4:** Run → fail, implement, pass. Mutation: make `canSend` always ok and confirm the blocked-send test fails.
 - [ ] **Step 5: Commit** `feat(spa): attach files to a worker message by path`
 
@@ -540,4 +546,4 @@ This phase is blocked on nexen-c3's two PRs (image attachments, `session_title`)
 
 ## Execution order and gates
 
-A1 → A2 → A3 → A4 → A5 (PR-A merge → bump) → B1 → B2 → B3 → B4 (merge → bump) → C1 → C2 → C3 → C4 → C5 (merge → bump) → D1 → D2 → D3 (merge → bump → daemon deploy). Each PR runs the review from CLAUDE.md (codex R1, then attack, then critic, with sol and low effort). Before each bump, `git fetch` VERSION, because other sessions bump too.
+A1 → A2 → A3 → A4 → A5 (PR-A merge → bump) → B1 → B2 → B3 → B4 (merge → bump) → C1 → C2 → C3 (title/icon) → C4 (active/unread/notifications) → C5 (merge → bump) → D1 → D2 → D3 (merge → bump → daemon deploy). Each PR runs the review from CLAUDE.md (codex R1, then attack, then critic, with sol and low effort). Before each bump, `git fetch` VERSION, because other sessions bump too.
