@@ -1,7 +1,7 @@
 // spa/src/components/room/transcript-scroll.test.tsx — both transcripts hand
-// their scroll container out (`scrollRef`) and, while `holdScroll` is on
-// (the search bar is open), follow new content only when the reader was
-// already at the bottom (R3 plan T3.3, A4).
+// their scroll container out (`scrollRef`), follow new content only when the
+// reader is at the bottom (worker pane theme spec §6; with the search bar
+// open, R3 plan T3.3, A4), and remember the position per pane.
 import { createRef } from 'react'
 import type { TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
@@ -9,6 +9,7 @@ import { render, fireEvent } from '@testing-library/react'
 import RoomTranscript, { type RoomTranscriptProps } from './RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
 import type { StreamMessage } from '../../lib/nex/message-types'
+import { forgetScrollMemo, readScrollMemo, writeScrollMemo } from '../../lib/nex/transcript-scroll-memory'
 
 const said = (text: string): StreamMessage =>
   ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }) as StreamMessage
@@ -47,13 +48,71 @@ describe.each(views)('%s transcript scrolling', (_name, Transcript) => {
     expect(ref.current).toHaveTextContent('hello')
   })
 
-  it('without holdScroll new content always follows the bottom', () => {
+  // Worker pane theme spec §6: growth follows only a reader at the bottom,
+  // bar open or not. A tab kept alive under visibility:hidden grows while the
+  // reader is away; they come back to where they left it.
+  it('hidden growth keeps position: scrolled up + new message with the bar closed → no scroll', () => {
     const ref = createRef<HTMLDivElement>()
     const { rerender } = render(T({ messages: [said('a')], scrollRef: ref }))
     geometry(ref.current!, 1000, 200, 100)
     fireEvent.scroll(ref.current!)
     scrollTo.mockClear()
     rerender(T({ messages: [said('a'), said('b')], scrollRef: ref }))
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('scrolled down but short of the bottom + new message → no scroll', () => {
+    const ref = createRef<HTMLDivElement>()
+    const { rerender } = render(T({ messages: [said('a')], scrollRef: ref }))
+    const box = ref.current!
+    geometry(box, 1000, 200, 100)
+    fireEvent.scroll(box)
+    geometry(box, 1000, 200, 400)
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    rerender(T({ messages: [said('a'), said('b')], scrollRef: ref }))
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('at bottom + new message → follows, and growth alone does not count as leaving', () => {
+    const ref = createRef<HTMLDivElement>()
+    let messages = [said('a')]
+    const { rerender } = render(T({ messages, scrollRef: ref }))
+    const box = ref.current!
+    geometry(box, 1000, 200, 800)
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    // The new line has already made the box taller when the effect runs.
+    geometry(box, 1100, 200, 800)
+    messages = [...messages, said('b')]
+    rerender(T({ messages, scrollRef: ref }))
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 1100, behavior: 'smooth' })
+  })
+
+  it("growth during follow()'s own smooth scroll keeps following", () => {
+    const ref = createRef<HTMLDivElement>()
+    let messages = [said('a')]
+    const { rerender } = render(T({ messages, scrollRef: ref }))
+    const box = ref.current!
+    geometry(box, 1000, 200, 800)
+    fireEvent.scroll(box)
+    messages = [...messages, said('b')]
+    rerender(T({ messages, scrollRef: ref }))
+    // The smooth scroll animates downwards and has not arrived yet.
+    geometry(box, 1400, 200, 900)
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    messages = [...messages, said('c')]
+    rerender(T({ messages, scrollRef: ref }))
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+    // The reader wheels up mid-flight: that ends it.
+    geometry(box, 1500, 200, 700)
+    fireEvent.scroll(box)
+    geometry(box, 1500, 200, 750)
+    fireEvent.scroll(box)
+    messages = [...messages, said('d')]
+    rerender(T({ messages, scrollRef: ref }))
     expect(scrollTo).toHaveBeenCalledTimes(1)
   })
 
@@ -162,7 +221,7 @@ describe.each(views)('%s transcript scrolling', (_name, Transcript) => {
     fireEvent.scroll(box)
     grow()
     expect(scrollTo).toHaveBeenCalledTimes(1)
-    geometry(box, 1300, 200, 400)
+    geometry(box, 1300, 200, 1100)
     fireEvent.scroll(box)
     grow()
     expect(scrollTo).toHaveBeenCalledTimes(2)
@@ -275,5 +334,123 @@ describe.each(views)('%s transcript scrolling', (_name, Transcript) => {
     messages = [...messages, said('c')]
     rerender(T({ messages, scrollRef: ref, holdScroll: true }))
     expect(scrollTo).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Worker pane theme spec §6: a non-persisted memo per pane, read back on
+// (re)mount. Room ⇄ chat differ in height, so across a view switch only
+// "at the bottom" carries over; otherwise the first visible turn does.
+describe('transcript scroll memory', () => {
+  const PANE = 'pane-scroll-memo'
+  const three = [said('a'), said('b'), said('c')]
+  const props = (extra: Partial<RoomTranscriptProps> = {}): RoomTranscriptProps => ({
+    keyPrefix: 'k', showThinking: false, showEmptyHint: false, messages: three, turnStarts: [0, 1, 2],
+    scrollMemoryKey: PANE, ...extra,
+  })
+  // Each turn is 300px tall; `offset` is how far the box is scrolled.
+  let offset = 0
+  let rectSpy: ReturnType<typeof vi.spyOn> | null = null
+  function layout() {
+    rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const turn = this.dataset.turnIndex
+      if (turn === undefined) return { top: 0, bottom: 200 } as DOMRect
+      const top = Number(turn) * 300 - offset
+      return { top, bottom: top + 300 } as DOMRect
+    })
+  }
+  afterEach(() => {
+    forgetScrollMemo(PANE)
+    rectSpy?.mockRestore()
+    rectSpy = null
+    offset = 0
+  })
+
+  it('scrolling writes the memo, with the first turn still on screen', () => {
+    layout()
+    const ref = createRef<HTMLDivElement>()
+    render(<RoomTranscript {...props({ scrollRef: ref })} />)
+    offset = 400
+    geometry(ref.current!, 1000, 200, 400)
+    fireEvent.scroll(ref.current!)
+    // Turn 0 ends at -100 (scrolled out); turn 1 is the first one visible.
+    expect(readScrollMemo(PANE)).toEqual({ scrollTop: 400, atBottom: false, view: 'room', firstTurn: 1 })
+  })
+
+  it.each(views)('%s: remount restores scrollTop from memory', (view, Transcript) => {
+    const ref = createRef<HTMLDivElement>()
+    const first = render(<Transcript {...props({ scrollRef: ref })} />)
+    geometry(ref.current!, 1000, 200, 300)
+    fireEvent.scroll(ref.current!)
+    first.unmount()
+    expect(readScrollMemo(PANE)).toMatchObject({ scrollTop: 300, atBottom: false, view })
+    scrollTo.mockClear()
+    render(<Transcript {...props()} />)
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+    expect(scrollTo).toHaveBeenCalledWith({ top: 300, behavior: 'auto' })
+  })
+
+  it('a restored reader is not pulled down by the next line', () => {
+    writeScrollMemo(PANE, { scrollTop: 300, atBottom: false, view: 'room', firstTurn: 1 })
+    const ref = createRef<HTMLDivElement>()
+    const { rerender } = render(<RoomTranscript {...props({ scrollRef: ref })} />)
+    geometry(ref.current!, 1000, 200, 300)
+    fireEvent.scroll(ref.current!)
+    scrollTo.mockClear()
+    rerender(<RoomTranscript {...props({ scrollRef: ref, messages: [...three, said('d')] })} />)
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('remount at bottom → jumps to bottom', () => {
+    const ref = createRef<HTMLDivElement>()
+    const first = render(<RoomTranscript {...props({ scrollRef: ref })} />)
+    geometry(ref.current!, 1000, 200, 800)
+    fireEvent.scroll(ref.current!)
+    first.unmount()
+    expect(readScrollMemo(PANE)?.atBottom).toBe(true)
+    scrollTo.mockClear()
+    render(<RoomTranscript {...props()} />)
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' }))
+    expect(scrollTo).not.toHaveBeenCalledWith(expect.objectContaining({ top: 800 }))
+  })
+
+  it('view switch honours only atBottom; otherwise it scrolls the remembered first turn into view', () => {
+    layout()
+    const ref = createRef<HTMLDivElement>()
+    const room = render(<RoomTranscript {...props({ scrollRef: ref })} />)
+    offset = 400
+    geometry(ref.current!, 1000, 200, 400)
+    fireEvent.scroll(ref.current!)
+    room.unmount()
+    expect(readScrollMemo(PANE)?.firstTurn).toBe(1)
+    scrollTo.mockClear()
+    // Chat mounts at the top: turn 1 starts 300px down its box.
+    offset = 0
+    render(<ChatTranscript {...props()} />)
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+    expect(scrollTo).toHaveBeenCalledWith({ top: 300, behavior: 'auto' })
+  })
+
+  it('view switch at the bottom → jumps to bottom', () => {
+    writeScrollMemo(PANE, { scrollTop: 800, atBottom: true, view: 'room', firstTurn: 2 })
+    render(<ChatTranscript {...props()} />)
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+    expect(scrollTo).not.toHaveBeenCalledWith(expect.objectContaining({ top: 800 }))
+  })
+
+  it('the search bar placement wins over restore on mount', () => {
+    writeScrollMemo(PANE, { scrollTop: 300, atBottom: false, view: 'room', firstTurn: 1 })
+    render(<RoomTranscript {...props({ holdScroll: true })} />)
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('without a scrollMemoryKey nothing is remembered or restored', () => {
+    writeScrollMemo(PANE, { scrollTop: 300, atBottom: false, view: 'room', firstTurn: 1 })
+    const ref = createRef<HTMLDivElement>()
+    render(<RoomTranscript {...props({ scrollRef: ref, scrollMemoryKey: undefined })} />)
+    expect(scrollTo).not.toHaveBeenCalledWith({ top: 300, behavior: 'auto' })
+    geometry(ref.current!, 1000, 200, 500)
+    fireEvent.scroll(ref.current!)
+    expect(readScrollMemo(PANE)?.scrollTop).toBe(300)
   })
 })

@@ -146,9 +146,10 @@ export default function ChatTranscript({
   scrollRef,
   holdScroll = false,
   scrollControl,
+  scrollMemoryKey,
 }: ChatTranscriptProps) {
   const t = useI18nStore((s) => s.t)
-  const scroll = useTranscriptScroll(scrollRef, holdScroll)
+  const scroll = useTranscriptScroll(scrollRef, holdScroll, scrollMemoryKey ? { paneId: scrollMemoryKey, view: 'chat' } : undefined)
   const { attach, onScroll, follow } = scroll
   useScrollControl(scrollControl, scroll)
   const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
@@ -173,8 +174,9 @@ export default function ChatTranscript({
     [opsByTurn],
   )
 
-  // Same effect as RoomTranscript's auto-scroll: instant on the first run
-  // (mount / view switch), smooth after (F3), held by the search bar (A4).
+  // Same effect as RoomTranscript's auto-scroll: placed at once on the first
+  // run (mount / view switch, from the pane's memory), smooth after (F3),
+  // and only for a reader at the bottom (§6).
   useEffect(() => { follow() }, [follow, messages, scrollKey, partialVersion, linesVersion])
 
   // As RoomTranscript: the in-flight message belongs to the last turn, and

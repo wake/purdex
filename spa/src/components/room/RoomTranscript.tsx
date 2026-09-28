@@ -56,6 +56,8 @@ export interface RoomTranscriptProps {
   holdScroll?: boolean
   /** The search bar's handle on the bottom-follow (A F4: `release()` after a jump). */
   scrollControl?: Ref<TranscriptScrollControl>
+  /** The pane whose scroll position this transcript remembers and restores on mount (spec §6). */
+  scrollMemoryKey?: string
 }
 
 const NO_STARTS: readonly number[] = []
@@ -82,9 +84,10 @@ export default function RoomTranscript({
   scrollRef,
   holdScroll = false,
   scrollControl,
+  scrollMemoryKey,
 }: RoomTranscriptProps) {
   const t = useI18nStore((s) => s.t)
-  const scroll = useTranscriptScroll(scrollRef, holdScroll)
+  const scroll = useTranscriptScroll(scrollRef, holdScroll, scrollMemoryKey ? { paneId: scrollMemoryKey, view: 'room' } : undefined)
   const { attach, onScroll, follow } = scroll
   useScrollControl(scrollControl, scroll)
   const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
@@ -102,9 +105,9 @@ export default function RoomTranscript({
   const partialVersion: string = useMemo(() => partialVersionOf(partial), [partial])
 
   // Auto-scroll on new messages, control requests, or partial growth. The
-  // first one (the pane opening, or a view switch remounting this) jumps
-  // straight to the bottom; only later growth animates (F3). While the search
-  // bar holds the view, only a reader already at the bottom is followed (A4).
+  // first one (the pane opening, or a view switch remounting this) places the
+  // reader at once — where the pane's memory left them, else the bottom;
+  // later growth animates (F3) and follows only a reader at the bottom (§6).
   useEffect(() => { follow() }, [follow, messages, scrollKey, partialVersion])
 
   // The in-flight assistant message belongs to the turn that is running: the

@@ -312,6 +312,8 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     // R3 T3.3: the search bar marks and scrolls inside the transcript, and
     // while it is open a new line never pulls the reader off a match (A4).
     scrollRef: setScrollBox, holdScroll: searchOpen, scrollControl,
+    // Spec §6: the pane remembers where its reader was, across remounts and view switches.
+    scrollMemoryKey: paneId,
   }
 
   return (
