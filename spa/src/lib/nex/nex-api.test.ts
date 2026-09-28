@@ -422,6 +422,26 @@ describe('nex-api', () => {
       expect(testGlobal.fetch).not.toHaveBeenCalled()
     })
 
+    it('preserves `host_removed` when the host disappears between this function\'s own check and pinnedHostFetch\'s', async () => {
+      const present = useHostStore.getState()
+      let calls = 0
+      const spy = vi.spyOn(useHostStore, 'getState').mockImplementation(() => {
+        calls += 1
+        // uploadWorkerFile's own guard (call 1) still sees the host; every
+        // later read — pinnedHostFetch's own check, and this fix's re-check
+        // in the catch — sees it gone.
+        return calls === 1 ? present : ({ ...present, hosts: {} } as typeof present)
+      })
+      try {
+        const err = await uploadWorkerFile(hostId, 'exc_1', file()).catch((e) => e)
+        expect(err).toBeInstanceOf(NexApiError)
+        expect(err).toMatchObject({ status: 0, code: 'host_removed' })
+        expect(testGlobal.fetch).not.toHaveBeenCalled()
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
     it('rejects a 200 whose body has no path', async () => {
       testGlobal.fetch.mockResolvedValueOnce(json({ name: 'x' }))
       await expect(uploadWorkerFile(hostId, 'exc_1', file())).rejects.toMatchObject({ code: 'bad_response' })

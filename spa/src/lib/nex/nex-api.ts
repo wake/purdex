@@ -232,7 +232,10 @@ export interface WorkerUploadResult {
  * `pinnedHostFetch` refuses a host this device lacks instead of falling back
  * to another daemon. Every failure rejects with a NexApiError: the daemon's
  * `code`, `network` for a request that never reached it, `host_removed` for
- * an unknown host.
+ * an unknown host — including one that disappears in the gap between this
+ * function's own check and `pinnedHostFetch`'s (it rejects with a plain
+ * `Error`, not a `NexApiError`, so the catch below re-checks the host store
+ * rather than flattening that race into `network`).
  */
 export async function uploadWorkerFile(hostId: string, executionId: string, file: File): Promise<WorkerUploadResult> {
   if (!useHostStore.getState().hosts[hostId]) throw new NexApiError(0, 'host_removed', 'host removed')
@@ -242,6 +245,7 @@ export async function uploadWorkerFile(hostId: string, executionId: string, file
   try {
     res = await pinnedHostFetch(hostId, `${PREFIX}/executions/${encodeURIComponent(executionId)}/uploads`, { method: 'POST', body: form })
   } catch (e) {
+    if (!useHostStore.getState().hosts[hostId]) throw new NexApiError(0, 'host_removed', 'host removed')
     throw new NexApiError(0, 'network', e instanceof Error ? e.message : String(e))
   }
   const body = await okJson<Partial<WorkerUploadResult>>(res)
