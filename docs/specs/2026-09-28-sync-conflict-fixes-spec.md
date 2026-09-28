@@ -107,13 +107,30 @@ not from the stash of `conflict.localHash`.
   panel's "resume" default; changing it is a product decision of its own).
 - Auto-resolving conflicts whose payloads differ only in timestamps.
 
+## Known limitations
+
+- The batch election (`groupForBatch`, newest `capturedAt` wins) mixes client-clock user edits
+  (`field`) and daemon-clock automatic writes in one comparison; a skewed client clock can win or lose
+  it unfairly. Tracked in #1509.
+- Keep-local acts on `currentHash`, i.e. the collector's last REPORT. An edit made within the
+  collector's 500 ms debounce before the user confirms is not in it yet: the first push carries the
+  previous report (or, when that is `null`, deletes), and the pending report follows with a second
+  push. There is no synchronous flush — hashing is async (`crypto.subtle`) and the confirm path is a
+  synchronous, lock-bound turn (`sync-status.ts`); closing this window is a follow-up.
+
 ## Tests
 
 - Repro `spa/src/lib/profile/executor.keep-local-live.integration.test.ts` (rebuild while locked → keep local →
-  pane stays on the new session, not terminated) goes green.
+  pane stays on the new session, not terminated; the PUT rebases on the conflict's SOT rev and carries the
+  rebuilt pane) goes green.
 - Reducer: `resolved keep:'local'` with `currentHash !== conflict.localHash` → `restoreLocal === null`,
   `base = conflict.sot`, next decision push; with equal hashes → behaviour as before.
 - Store: each automatic patch kind produces identical content when applied at two different wall
   clocks (fake timers), `field` still stamps the clock.
-- Writers: `writeProvenanceRecord` uses `broadcast_ts`, the provenance probe uses `lastSeenAt`, with the
-  0-fallback.
+- Writers: `writeProvenanceRecord` uses `broadcast_ts`, the provenance probe uses `startedAt` (the
+  frame's `started_at`), falling back to `Date.now()` when missing / 0 / outside the window.
+- `daemonNsToMs`: 1e300, `MAX_SAFE_INTEGER`, pre-2020 and post-2100 values fall back; the window's
+  edges and a normal ns epoch convert.
+- Ordering: an older SessionStart (by `agent.updatedAt`) leaves identity, cwd and `capturedAt`
+  untouched; equal applies; a prev record with no agent / no `updatedAt` accepts; backfill fill /
+  replace never lower `capturedAt`.
