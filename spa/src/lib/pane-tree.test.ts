@@ -1,7 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, swapPaneContent, remountLeaf, countPanesOnSession } from './pane-tree'
 import type { PaneLayout, Pane, PaneContent } from '../types/tab'
 import { useHostStore } from '../stores/useHostStore'
+
+const DEFAULT_HOST_ORDER = useHostStore.getState().hostOrder
 
 // ── helpers for new tests ──────────────────────────────────────────────────
 const mkLeaf = (id: string, kind: string = 'dashboard'): PaneLayout => ({ type: 'leaf', pane: { id, content: { kind } as PaneContent } })
@@ -113,6 +115,17 @@ describe('findTabBySessionCode — worker (execution) tabs (spec §8.2)', () => 
     const tabs = { t1: { layout: { type: 'leaf', pane: { id: 'px', content: { kind: 'execution', executionId: 'e1', host: '' } } } } as { layout: PaneLayout } }
     expect(findTabBySessionCode(tabs, 'h9', 'exec:e1')).toBe('t1')
     expect(findTabBySessionCode(tabs, 'h1', 'exec:e1')).toBeUndefined()
+  })
+
+  // Regression guard: the two tests above overwrite useHostStore's hostOrder
+  // directly (no beforeEach seeds it here) — without a reset that mutation
+  // leaks into whichever test runs next in this file.
+  it('does not leak the overridden hostOrder into later tests', () => {
+    expect(useHostStore.getState().hostOrder).toEqual(DEFAULT_HOST_ORDER)
+  })
+
+  afterEach(() => {
+    useHostStore.setState({ hostOrder: DEFAULT_HOST_ORDER })
   })
 })
 
