@@ -36,8 +36,8 @@ interface Props {
 
 export default function RoomProse({ content, streaming, searchUnit }: Props) {
   return (
-    <div data-testid="room-prose" className="max-w-[90ch] text-sm leading-[1.7] text-text-primary">
-      <div data-search-unit={searchUnit} className="prose prose-invert prose-sm max-w-none">
+    <div data-testid="room-prose" className="max-w-[90ch] text-text-primary">
+      <div data-search-unit={searchUnit} className="prose prose-invert worker-prose max-w-none">
         <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={COMPONENTS}>
           {content}
         </ReactMarkdown>

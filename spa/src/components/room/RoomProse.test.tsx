@@ -58,6 +58,17 @@ describe('RoomProse GFM tables (A2)', () => {
   })
 })
 
+// A3 (spec §5.1): body-size headings and terminal density, not Tailwind
+// Typography's prose-sm scale.
+describe('RoomProse worker prose scale (A3)', () => {
+  it('uses the worker prose scale, not prose-sm', () => {
+    render(<RoomProse content={'# h\n\ntext'} />)
+    const body = screen.getByTestId('room-prose').querySelector('[data-search-unit], .worker-prose')!
+    expect(body).toHaveClass('worker-prose')
+    expect(body).not.toHaveClass('prose-sm')
+  })
+})
+
 // P-B2.2 task 8 (spec §4.4 R1): `streaming` appends a blinking cursor after
 // the markdown body. The typewriter is on spec §3's do-not-touch list.
 describe('RoomProse streaming cursor (R1)', () => {

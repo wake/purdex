@@ -239,3 +239,22 @@ button:disabled {
 .tiptap-editor.resize-cursor {
   cursor: col-resize;
 }
+
+/* === Worker prose (worker theme, spec §5) — every size and colour comes
+   from the pane root's --wt-* vars. Headings are body-size, bold only. === */
+.worker-prose { font-size: var(--wt-font-size); line-height: var(--wt-line-height); }
+.worker-prose :where(p, ul, ol, pre, table, blockquote, h1, h2, h3, h4, h5, h6) {
+  margin-top: 0; margin-bottom: var(--wt-block-gap);
+}
+.worker-prose :where(> :last-child) { margin-bottom: 0; }
+.worker-prose :where(h1, h2, h3, h4, h5, h6) {
+  font-size: 1em; line-height: inherit; font-weight: var(--wt-heading-weight); margin-top: 0;
+}
+.worker-prose :where(ul, ol) { padding-left: var(--wt-list-indent); }
+.worker-prose :where(li) { margin: 0; padding-left: 0; }
+.worker-prose :where(li)::marker { color: var(--wt-list-marker-color); font-weight: 400; }
+.worker-prose :where(li > p) { margin: 0; }
+.worker-prose :where(code, pre) { font-family: var(--wt-code-font); font-size: 1em; }
+.worker-prose :where(table) { font-size: 1em; border-collapse: collapse; margin-top: 0; }
+.worker-prose :where(th, td) { border: 1px solid var(--wt-table-border); padding: 0.2em 0.6em; }
+.worker-prose :where(thead th) { background: var(--wt-table-header-bg); font-weight: var(--wt-heading-weight); }

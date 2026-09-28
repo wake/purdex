@@ -10,8 +10,11 @@ export const PURDEX_THEME: WorkerTheme = {
   labelKey: 'worker.theme.purdex',
   vars: {
     'font-size': '14px',
-    // Tuned in A3 against the terminal row height (spec §5.1).
-    'line-height': '1.5',
+    // Tuned in A3 against the terminal row height (spec §5.1): measured
+    // Menlo 14px / line-height:normal box height 16px on this device
+    // (16 / 14 = 1.14, playwright cli run-code against about:blank), below
+    // the 1.35 CJK readability floor, so the floor applies.
+    'line-height': '1.35',
     // One line (spec §5.1).
     'block-gap': 'calc(var(--wt-line-height) * 1em)',
     'heading-weight': '600',
