@@ -314,6 +314,11 @@ func TestUploadFileName(t *testing.T) {
 		"/":               "upload",
 		".hidden":         ".hidden",
 		"name with sp.md": "name with sp.md",
+		"a\nb.txt":        "a_b.txt",
+		"a\r\nb.txt":      "a__b.txt",
+		"a\tb.txt":        "a_b.txt",
+		"[x].txt":         "_x_.txt",
+		"   ":             "upload",
 	}
 	for in, want := range cases {
 		assert.Equal(t, want, uploadFileName(in), in)
