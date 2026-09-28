@@ -42,20 +42,29 @@ event. Timestamps in such writes come from the event / the daemon, never from th
 |---|---|---|
 | `agent-exit` | `exited.at` (daemon, ms) | untouched |
 | `agent-group` (SessionStart envelope) | event `broadcast_ts` ns → ms | same value |
-| `agent-backfill` fill / replace (provenance answer) | answer `lastSeenAt` ns → ms | same value |
+| `agent-backfill` fill / replace (provenance answer) | answer `started_at` (the frame's start; new daemon field) ns → ms | same value |
 | `agent-backfill` confirm | unchanged (as today) | unchanged |
 | `probe-cwd` | **not re-stamped** (keeps `prev.capturedAt`) | — |
 | `unverified` | **not re-stamped** | — |
 | `field` (user edit) | `Date.now()` — unchanged: two humans editing IS a conflict | — |
 
-A daemon value of 0 / missing falls back to `Date.now()` (old daemon; no worse than today).
+A daemon value of 0 / missing falls back to `Date.now()` (old daemon; no worse than today). The ns → ms
+conversion with that fallback lives in one helper, `daemonNsToMs` (`lib/rebuild/provenance.ts`).
+
+Why `started_at`, not `last_seen_at`: `last_seen_at` moves on every hook event of the run, so two
+clients' probes of the same run usually see different values. The frame's start is fixed for the
+life of the run. The daemon's provenance answer (`internal/module/agent/provenance_handler.go`) gains
+`started_at` (the frame's `StartedAt`, same unit as `last_seen_at`) for this.
 
 `capturedAt` elects the group's newest record (`groupForBatch`). A probe filling a missing cwd and an
 unverified flag learn nothing that should win that election, so not re-stamping them is correct.
 The exit's daemon time and SessionStart's broadcast time are the real moments the content changed.
 
-Residual (accepted): two clients whose provenance probes straddle a frame's `last_seen_at` update
-still write different values; that race needs both probes in flight at once and is not addressed here.
+Residual (accepted): a client on an old daemon (no `started_at`) still stamps its own clock, as
+before. Two clients whose probes are answered by DIFFERENT root frames (the owner changed between the
+two probes) write different content anyway — that is a real difference, not a timestamp one. The
+backfill's `agent.updatedAt` is shown by the Rebuild panel as "running when last seen"; it now shows
+the run's start rather than the moment this client probed.
 
 ### D2 — keep-local keeps what this device shows NOW (fixes RC2; confirmed by the user 2026-09-28)
 

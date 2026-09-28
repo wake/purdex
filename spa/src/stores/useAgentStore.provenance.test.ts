@@ -1,6 +1,6 @@
 // spa/src/stores/useAgentStore.provenance.test.ts — the SPA write path reads
 // ONLY `detail.pdx_provenance` (spec §4.3.1).
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useAgentStore, type NormalizedEvent } from './useAgentStore'
 import { useTabStore } from './useTabStore'
 import { createTab, type PaneContent } from '../types/tab'
@@ -92,6 +92,32 @@ describe('provenance write path', () => {
     expect(recordOf(tab.id)?.cwd).toBe('/w/p')
     expect(recordOf(tab.id)?.cwdSource).toBe('agent-session-start')
     expect(recordOf(tab.id)?.tmuxInstance).toBe('222:2000')
+  })
+
+  it('stamps the record with the event\'s broadcast_ts (ns → ms), not this client\'s clock', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(9_000)
+      const tab = seedTerminalPane('222:2000')
+      send(event({ broadcast_ts: 7_123_456_789, detail: { pdx_provenance: envelope() } }))
+      expect(recordOf(tab.id)?.agent?.updatedAt).toBe(7_123)
+      expect(recordOf(tab.id)?.capturedAt).toBe(7_123)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('an event with no usable broadcast_ts falls back to this client\'s clock', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(9_000)
+      const tab = seedTerminalPane('222:2000')
+      send(event({ broadcast_ts: 0, detail: { pdx_provenance: envelope() } }))
+      expect(recordOf(tab.id)?.agent?.updatedAt).toBe(9_000)
+      expect(recordOf(tab.id)?.capturedAt).toBe(9_000)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('writes nothing for a proxy-collapsed event', () => {

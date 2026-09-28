@@ -24,6 +24,7 @@
 // launches.
 import { fetchSessionProvenance } from '../host-api'
 import { generationMatchesLegacy } from './binding'
+import { daemonNsToMs } from './provenance'
 import { useTabStore } from '../../stores/useTabStore'
 import { scanPaneTree } from '../pane-tree'
 import { canAttachTerminal } from './attach-gate'
@@ -245,10 +246,14 @@ function startRequest(
             sessionId: ans.sessionId || undefined,
             tmuxPaneId: ans.tmuxPaneId || undefined,
             frameId: ans.frameId || undefined,
-            // When THIS client saw the agent live — what the Rebuild panel
-            // shows as "running when last seen". Not the daemon's
-            // `last_seen_at`: frames stamp that in nanoseconds.
-            updatedAt: Date.now(),
+            // The answering frame's START on the daemon (ns → ms), so every
+            // client that backfills this run writes the same bytes into the
+            // synced section (sync-conflict-fixes spec D1). Not `last_seen_at`:
+            // it moves on every hook event, so two clients' probes of one run
+            // would rarely agree. An older daemon sends no start → this
+            // client's clock, as before. The store also stamps `capturedAt`
+            // with it (fill / replace).
+            updatedAt: daemonNsToMs(ans.startedAt),
           },
           ...(ans.cwd ? { cwd: ans.cwd } : {}),
         },

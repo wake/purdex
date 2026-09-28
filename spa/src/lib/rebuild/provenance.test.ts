@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { parseExit, parseProvenance } from './provenance'
+import { describe, it, expect, vi } from 'vitest'
+import { daemonNsToMs, parseExit, parseProvenance } from './provenance'
 
 const envelope = {
   owner_session_start: true, agent_type: 'codex', session_id: 'S1',
@@ -84,5 +84,25 @@ describe('parseExit', () => {
     expect(parseExit({ pdx_exit: 'yes' })).toBeNull()
     expect(parseExit({ pdx_exit: null })).toBeNull()
     expect(parseExit({ pdx_exit: [exitEnvelope] })).toBeNull()
+  })
+})
+
+// sync-conflict-fixes spec D1: a daemon time makes the same write byte-identical on every client.
+describe('daemonNsToMs', () => {
+  it('converts the daemon\'s nanoseconds to milliseconds, rounding down', () => {
+    expect(daemonNsToMs(1_788_800_000_123_456_768)).toBe(1_788_800_000_123)
+    expect(daemonNsToMs(7_999_999)).toBe(7)
+  })
+
+  it('falls back to this client\'s clock when the daemon sent nothing usable (an older daemon; no worse than before)', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(5_000)
+      for (const v of [0, -1, 999_999, Number.NaN, Number.POSITIVE_INFINITY, undefined, null, '123000000']) {
+        expect(daemonNsToMs(v)).toBe(5_000)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

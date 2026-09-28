@@ -22,6 +22,7 @@ type PaneOwner struct {
 	Cwd        string
 	TmuxPaneID string
 	LastSeenAt int64
+	StartedAt  int64  // the frame's start (same unit as LastSeenAt); fixed for the life of the run
 	Status     string // string(frame.Status) — the owning frame's Purdex agent status
 }
 
@@ -154,6 +155,7 @@ func (m *Module) resolvePaneOwners(ctx context.Context, paneID string, read proc
 			Cwd:        frame.Cwd,
 			TmuxPaneID: frame.PaneID,
 			LastSeenAt: frame.LastSeenAt,
+			StartedAt:  frame.StartedAt,
 			Status:     string(frame.Status),
 		})
 	}

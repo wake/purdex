@@ -225,8 +225,8 @@ function identityInvalidates(
  * event by writing the same pane of the same synced `tabs.<ws>` section; with
  * its own `Date.now()` in it each client's payload hashes differently and the
  * Profile Sync CAS cannot fold them — a conflict nobody made. So:
- *   agent-group            the writer's `record.capturedAt` (useAgentStore.ts writeProvenanceRecord)
- *   agent-backfill fill /  the answer's `agent.updatedAt` (lib/rebuild/provenance-probe.ts)
+ *   agent-group            the writer's `record.capturedAt` (the SessionStart's `broadcast_ts`)
+ *   agent-backfill fill /  the answer's `agent.updatedAt` (the answering frame's `started_at`)
  *     replace
  *   agent-backfill confirm not re-stamped — see mode 3 below
  *   agent-exit             `exited.at` (the daemon's exit time)

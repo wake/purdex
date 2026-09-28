@@ -111,6 +111,7 @@ func TestResolvePaneOwners_LiveRootWithSessionID_Returned(t *testing.T) {
 		Cwd:        "/w/purdex",
 		TmuxPaneID: "%5",
 		LastSeenAt: 42,
+		StartedAt:  42, // seedIdentityFrame starts the frame when it was last seen
 		Status:     string(agentpkg.StatusIdle),
 	}
 	if got != want {

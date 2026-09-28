@@ -60,7 +60,8 @@ export interface ParsedExit {
   tmuxInstance: string
   frameId: string
   reason: AgentExitReason
-  /** Unix ms on the daemon's clock — display only, never used for ordering. */
+  /** Unix ms on the daemon's clock. Displayed, and stamped as the record's `capturedAt`
+   *  (the same on every client — sync-conflict-fixes spec D1); never compared with a client clock. */
   at: number
 }
 
@@ -94,4 +95,26 @@ export function parseExit(detail: Record<string, unknown> | undefined): ParsedEx
     reason: reason as AgentExitReason,
     at,
   }
+}
+
+/**
+ * A daemon timestamp in nanoseconds (`broadcast_ts`, a frame's `started_at`) as
+ * Unix milliseconds, for a record written from a HOST EVENT.
+ *
+ * Every attached client writes the same pane of the same synced `tabs.<ws>`
+ * section when it sees the same event; stamped with each client's own clock
+ * the payloads differ and Profile Sync locks the section as a conflict nobody
+ * made (sync-conflict-fixes spec D1). The daemon's value is the same bytes on
+ * every client. Anything that is not a positive finite number of at least one
+ * millisecond — an older daemon that never sent it, 0 — falls back to
+ * `Date.now()`: no worse than before.
+ *
+ * Nanosecond epochs exceed Number.MAX_SAFE_INTEGER, so the parsed value is the
+ * nearest double; that is still the same double on every client, and far
+ * finer than the millisecond kept.
+ */
+export function daemonNsToMs(ns: unknown): number {
+  if (typeof ns !== 'number' || !Number.isFinite(ns)) return Date.now()
+  const ms = Math.floor(ns / 1e6)
+  return ms > 0 ? ms : Date.now()
 }
