@@ -1,5 +1,6 @@
 // spa/src/stores/useNexHostStore.test.ts
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { renderHook } from '@testing-library/react'
 import {
   NEX_HOST_TTL_MS,
   selectHandoffReady,
@@ -592,18 +593,45 @@ describe('selectors', () => {
       expect(selectImageAttachments(H, 'claude')(useNexHostStore.getState())).toBeNull()
     })
 
-    it('malformed send.max_request_bytes → maxRequestBytes null, image capability still returned', () => {
-      seed({ capabilities: caps({ send: { ...v15Send(), max_request_bytes: 0 } }) })
-      expect(selectImageAttachments(H, 'claude')(useNexHostStore.getState())).toEqual({
-        ...imageCaps(),
-        maxRequestBytes: null,
-      })
+    it.each([
+      ['missing', undefined],
+      ['zero', 0],
+      ['negative', -1],
+      ['NaN', Number.NaN],
+      ['Infinity', Infinity],
+    ] as const)('malformed send.max_request_bytes (%s) → null (fail-closed)', (_label, malformed) => {
+      seed({ capabilities: caps({ send: { ...v15Send(), max_request_bytes: malformed } }) })
+      expect(selectImageAttachments(H, 'claude')(useNexHostStore.getState())).toBeNull()
     })
 
     it('not ready or unknown host → null', () => {
       seed({ phase: 'unavailable', capabilities: caps({ send: v15Send() }) })
       expect(selectImageAttachments(H, 'claude')(useNexHostStore.getState())).toBeNull()
       expect(selectImageAttachments('ghost', 'claude')(useNexHostStore.getState())).toBeNull()
+    })
+
+    it('stable reference: two calls on the same state return the same object', () => {
+      seed({ capabilities: caps({ send: v15Send() }) })
+      const first = selectImageAttachments(H, 'claude')(useNexHostStore.getState())
+      const second = selectImageAttachments(H, 'claude')(useNexHostStore.getState())
+      expect(first).not.toBeNull()
+      expect(second).toBe(first)
+    })
+
+    it('renders a bounded number of times with no "getSnapshot should be cached" console error', () => {
+      seed({ capabilities: caps({ send: v15Send() }) })
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      let renderCount = 0
+      const { result } = renderHook(() => {
+        renderCount += 1
+        return useNexHostStore(selectImageAttachments(H, 'claude'))
+      })
+      expect(result.current).not.toBeNull()
+      expect(renderCount).toBeLessThan(5)
+      const cachingWarning = errorSpy.mock.calls.some((call) =>
+        call.some((arg) => typeof arg === 'string' && arg.includes('getSnapshot should be cached')))
+      expect(cachingWarning).toBe(false)
+      errorSpy.mockRestore()
     })
   })
 
