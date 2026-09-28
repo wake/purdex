@@ -628,45 +628,43 @@ describe('turnMeta (spec §7.1)', () => {
     expect(s.turnMeta[0].outcome).toBe('failed')
   })
 
-  it('interrupt then result → interrupted', () => {
+  // A result never follows its own turn's lifecycle seal: nexen v0.13.2
+  // drains and persists every provider frame (the result included) before
+  // concludeTurn emits execution.terminal / execution.interrupted, and an
+  // interrupted / error path produces no result at all (nexen@v0.13.2
+  // execution/turn.go:282-409). So a result goes only to the oldest unsealed
+  // turn; one arriving after every turn is sealed has no turn to stamp and
+  // changes nothing (re-review round 2 — no routing back to a sealed turn).
+  it('interrupt then result → interrupted; a result after the seal is not routed back to it', () => {
     const s = run([
       accept(1, 1000),
       at(2, 'execution.interrupted', { turn_id: 't1', source: 'user' }, 3000),
       result(3, 3100, { subtype: 'error_during_execution', is_error: true, duration_ms: 99 }),
       terminal(4, 3200, 'interrupted'),
     ])
-    // endAt stays the interrupt's; the later result's duration_ms replaces the endAt − startAt fallback (§7.1).
-    expect(s.turnMeta[0]).toMatchObject({ endAt: 3000, outcome: 'interrupted', durationMs: 99 })
+    expect(s.turnMeta[0]).toMatchObject({ endAt: 3000, outcome: 'interrupted', durationMs: 2000 })
   })
 
-  it('a lifecycle end before the result: the result duration_ms replaces the fallback (R1-1)', () => {
+  it('an unsealed turn with a fallback duration: the result duration_ms replaces it (R1-1)', () => {
     const s = run([
       accept(1, 1000),
-      at(2, 'execution.interrupted', { turn_id: 't1', source: 'turn_timeout' }, 5000),
-      result(3, 5100, { subtype: 'error_during_execution', is_error: true, duration_ms: 3700 }),
+      at(2, 'execution.terminated', { principal_id: 'p' }, 4000),
+      result(3, 4100, { subtype: 'error_during_execution', is_error: true, duration_ms: 2500 }),
     ])
-    expect(s.turnMeta[0]).toEqual({ startAt: 1000, endAt: 5000, outcome: 'failed', durationMs: 3700 })
+    expect(s.turnMeta[0]).toEqual({ startAt: 1000, endAt: 4000, outcome: 'interrupted', durationMs: 2500 })
   })
 
-  it('a keyed terminal before the result: the result duration_ms replaces the fallback', () => {
+  it('turn A sealed without a result, turn B ends with a lone top-level result → B gets it, A untouched', () => {
     const s = run([
       accept(1, 1000),
-      at(2, 'execution.terminal', { turn_id: 't1', reason: 'final_response', state: 'idle' }, 4000),
-      result(3, 4100, { duration_ms: 2500 }),
-    ])
-    expect(s.turnMeta[0]).toEqual({ startAt: 1000, endAt: 4000, outcome: 'ok', durationMs: 2500 })
-  })
-
-  it('a late result after an interrupt belongs to the interrupted turn, not a queued one', () => {
-    const s = run([
-      accept(1, 1000),
-      accept(2, 1500),
-      at(3, 'execution.interrupted', { turn_id: 't1', source: 'user' }, 3000),
-      result(4, 3100, { subtype: 'error_during_execution', is_error: true, duration_ms: 1900 }),
+      at(2, 'execution.terminal', { turn_id: 't1', reason: 'error', state: 'idle' }, 2000),
+      accept(3, 5000),
+      // Turn B fails to launch: a top-level result, no assistant frame before it.
+      result(4, 5200, { subtype: 'error_during_execution', is_error: true, duration_ms: 150 }),
     ])
     expect(s.turnMeta).toEqual([
-      { startAt: 1000, endAt: 3000, outcome: 'interrupted', durationMs: 1900 },
-      { startAt: 1500, endAt: null, outcome: null, durationMs: null },
+      { startAt: 1000, endAt: 2000, outcome: 'failed', durationMs: 1000 },
+      { startAt: 5000, endAt: 5200, outcome: 'failed', durationMs: 150 },
     ])
   })
 
@@ -689,7 +687,7 @@ describe('turnMeta (spec §7.1)', () => {
     expect(twice.turnMeta[0].durationMs).toBe(1800)
     const bad = run([
       accept(1, 1000),
-      at(2, 'execution.terminal', { turn_id: 't1', reason: 'final_response', state: 'idle' }, 4000),
+      at(2, 'execution.terminated', { principal_id: 'p' }, 4000),
       result(3, 4100, { duration_ms: Number.NaN }),
     ])
     expect(bad.turnMeta[0].durationMs).toBe(3000)
