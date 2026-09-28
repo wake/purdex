@@ -45,12 +45,15 @@ function customIconComponent(name: string): TabIconComponent {
 // static type claims otherwise. Guard both variant lookups against that: an
 // unrecognised value falls back to the default variant's icon rather than
 // `undefined`, for mono and color alike.
+// `in` also matches inherited Object.prototype keys (`__proto__`,
+// `constructor`, `toString`), which a synced value can legitimately be —
+// use `Object.hasOwn` so only an actual variant entry passes.
 function safeCcVariant(v: CcIconVariant): CcIconVariant {
-  return v in CC_ICON_VARIANTS ? v : 'bot'
+  return Object.hasOwn(CC_ICON_VARIANTS, v) ? v : 'bot'
 }
 
 function safeCodexVariant(v: CodexIconVariant): CodexIconVariant {
-  return v in CODEX_ICON_VARIANTS ? v : 'openai'
+  return Object.hasOwn(CODEX_ICON_VARIANTS, v) ? v : 'openai'
 }
 
 export function workerIcon(provider: string, style: WorkerIconStyle, opts: WorkerIconOptions): TabIconComponent {
