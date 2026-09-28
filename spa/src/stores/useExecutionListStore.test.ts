@@ -147,6 +147,23 @@ describe('useExecutionListStore', () => {
     expect(api.listExecutions).toHaveBeenCalledTimes(2)
   })
 
+  // Phase E: the site-level stream (`/api/nex/v1/events`) opens with no `kind=`
+  // filter, so a title-only event still reaches it. onFrame reacts on any
+  // frame regardless of `event`/`data` (execution-list-effects.ts:169-176) —
+  // this frame's payload is stripped (`data: ''`) to prove the refetch it
+  // schedules never depended on reading it.
+  it('a site-level execution.title_changed frame (payload stripped) schedules a debounced refetch', async () => {
+    useExecutionListStore.getState().subscribe(A)
+    await flush()
+    expect(api.listExecutions).toHaveBeenCalledTimes(1)
+
+    sseFor(A).opts.onFrame({ id: null, event: 'execution.title_changed', data: '' })
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_DEBOUNCE_MS - 1)
+    expect(api.listExecutions).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(api.listExecutions).toHaveBeenCalledTimes(2)
+  })
+
   it('a durable frame id advances lastSeq and is replayed as Last-Event-ID on reconnect', () => {
     useExecutionListStore.getState().subscribe(A)
     const { opts } = sseFor(A)

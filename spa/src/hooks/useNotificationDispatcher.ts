@@ -15,6 +15,7 @@ import { executionIdOfAgentCode, isExecAgentCode } from '../lib/nex/worker-agent
 import { readWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
 import { getPlatformCapabilities } from '../lib/platform'
 import { useHostStore } from '../stores/useHostStore'
+import { selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
 import { landOnHostsPageIfHidden } from '../lib/shown-hosts'
 import { createTab } from '../types/tab'
@@ -338,7 +339,8 @@ function notificationName(hostId: string, sessionCode: string): string {
     const tabId = findTabBySessionCode(useTabStore.getState().tabs, hostId, sessionCode)
     const primary = tabId ? getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content : undefined
     const fromTitle = primary?.kind === 'execution' ? primary.fromTitle : undefined
-    return workerTitleOf({ fromTitle }, readWorkerSummary(hostId, executionId)) ?? executionId
+    const titleSupported = selectSessionTitleSupported(hostId)(useNexHostStore.getState())
+    return workerTitleOf({ fromTitle }, readWorkerSummary(hostId, executionId), titleSupported) ?? executionId
   }
   const session = useSessionStore.getState().sessions[hostId]?.find((s) => s.code === sessionCode)
   return session?.name || sessionCode
