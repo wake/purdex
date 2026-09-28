@@ -169,7 +169,14 @@ export type TmuxSessionContent = Extract<PaneContent, { kind: 'tmux-session' }>
  *   review decision 4): termination can arrive before the exit broadcast.
  */
 export type RebuildPatch =
-  | { kind: 'agent-group'; record: Omit<PaneRebuildRecord, 'sessionName'> }
+  | {
+      kind: 'agent-group'
+      record: Omit<PaneRebuildRecord, 'sessionName'>
+      /** Not persisted: true only when `record.agent.updatedAt` is a daemon time.
+       *  Only then may the store drop this write as older than the recorded
+       *  agent; a client-clock fallback stamp never rejects a SessionStart. */
+      ordered?: boolean
+    }
   | {
       kind: 'agent-backfill'
       record: {

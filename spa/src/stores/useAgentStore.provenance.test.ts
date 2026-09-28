@@ -120,6 +120,29 @@ describe('provenance write path', () => {
     }
   })
 
+  // A fallback stamp is this client's clock, not a daemon time: it cannot say
+  // which run is newer, so it must never be used to REJECT a SessionStart.
+  it('a SessionStart stamped by the fallback clock applies even when older than the recorded agent', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(9_000)
+      const tab = seedTerminalPane('222:2000')
+      send(event({ broadcast_ts: 1_788_800_000_123_456_768, detail: { pdx_provenance: envelope({ session_id: 'OLD' }) } }))
+      send(event({ broadcast_ts: 0, detail: { pdx_provenance: envelope({ session_id: 'NEW' }) } }))
+      expect(recordOf(tab.id)?.agent?.sessionId).toBe('NEW')
+      expect(recordOf(tab.id)?.agent?.updatedAt).toBe(9_000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a SessionStart with a daemon broadcast_ts older than the recorded agent is ignored', () => {
+    const tab = seedTerminalPane('222:2000')
+    send(event({ broadcast_ts: 1_788_800_000_123_456_768, detail: { pdx_provenance: envelope({ session_id: 'NEW' }) } }))
+    send(event({ broadcast_ts: 1_788_700_000_000_000_000, detail: { pdx_provenance: envelope({ session_id: 'OLD' }) } }))
+    expect(recordOf(tab.id)?.agent?.sessionId).toBe('NEW')
+  })
+
   it('writes nothing for a proxy-collapsed event', () => {
     const tab = seedTerminalPane('222:2000')
     send(event({ agent_type: 'cc', detail: {} }))

@@ -115,9 +115,20 @@ export function parseExit(detail: Record<string, unknown> | undefined): ParsedEx
  * finer than the millisecond kept.
  */
 export function daemonNsToMs(ns: unknown): number {
-  if (typeof ns !== 'number' || !Number.isFinite(ns)) return Date.now()
+  return daemonNsToMsOrNull(ns) ?? Date.now()
+}
+
+/**
+ * The same conversion as `daemonNsToMs`, but null when `ns` is not a valid
+ * daemon time — so a writer can tell a daemon stamp from the client-clock
+ * fallback. Only a daemon stamp may ORDER a write against synced content: a
+ * client clock says nothing about which run is newer, so it must never be
+ * used to reject one (sync-conflict-fixes spec, ordering rules).
+ */
+export function daemonNsToMsOrNull(ns: unknown): number | null {
+  if (typeof ns !== 'number' || !Number.isFinite(ns)) return null
   const ms = Math.floor(ns / 1e6)
-  return Number.isSafeInteger(ms) && ms >= DAEMON_MS_MIN && ms <= DAEMON_MS_MAX ? ms : Date.now()
+  return Number.isSafeInteger(ms) && ms >= DAEMON_MS_MIN && ms <= DAEMON_MS_MAX ? ms : null
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { daemonNsToMs, parseExit, parseProvenance } from './provenance'
+import { daemonNsToMs, daemonNsToMsOrNull, parseExit, parseProvenance } from './provenance'
 
 const envelope = {
   owner_session_start: true, agent_type: 'codex', session_id: 'S1',
@@ -121,6 +121,22 @@ describe('daemonNsToMs', () => {
       }
     } finally {
       vi.useRealTimers()
+    }
+  })
+})
+
+// The fallback must be visible to the writer: a client clock may stamp a record
+// but must never be used to order it against a daemon time.
+describe('daemonNsToMsOrNull', () => {
+  it('converts a daemon time in the window', () => {
+    expect(daemonNsToMsOrNull(1_788_800_000_123_456_768)).toBe(1_788_800_000_123)
+    expect(daemonNsToMsOrNull(Date.UTC(2020, 0, 1) * 1e6)).toBe(Date.UTC(2020, 0, 1))
+    expect(daemonNsToMsOrNull(Date.UTC(2100, 0, 1) * 1e6)).toBe(Date.UTC(2100, 0, 1))
+  })
+
+  it('returns null for anything that is not a valid daemon time', () => {
+    for (const v of [0, -1, 999_999, Number.NaN, Number.POSITIVE_INFINITY, undefined, null, '123000000', 1e300, Date.UTC(2019, 11, 31) * 1e6, Date.UTC(2100, 0, 2) * 1e6]) {
+      expect(daemonNsToMsOrNull(v)).toBeNull()
     }
   })
 })

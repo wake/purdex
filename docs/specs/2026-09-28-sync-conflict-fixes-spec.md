@@ -67,7 +67,10 @@ synced content, so every client decides identically:
   entirely (identity, cwd, `capturedAt` untouched) — a late SessionStart (reconnect replay, slow
   client) must not roll the pane back to a previous run. Only `agent.updatedAt` is compared, never
   `capturedAt`, which may be a user edit's client clock. Equal or newer applies; a prev record with
-  no agent / no `updatedAt` always accepts.
+  no agent / no `updatedAt` always accepts. The guard applies only when the incoming stamp IS a
+  daemon time: the writer marks the patch `ordered: true` (a non-persisted patch flag, not a record
+  field) only when `broadcast_ts` converted via `daemonNsToMsOrNull`; a `Date.now()` fallback stamp
+  is never used to reject a SessionStart — it always applies.
 - `agent-backfill` fill / replace stamp `capturedAt = max(prev.capturedAt, t)` (t = the answer's
   daemon-derived stamp), so a backfill never moves the election stamp backwards past a newer write.
 
@@ -131,6 +134,7 @@ not from the stash of `conflict.localHash`.
   frame's `started_at`), falling back to `Date.now()` when missing / 0 / outside the window.
 - `daemonNsToMs`: 1e300, `MAX_SAFE_INTEGER`, pre-2020 and post-2100 values fall back; the window's
   edges and a normal ns epoch convert.
-- Ordering: an older SessionStart (by `agent.updatedAt`) leaves identity, cwd and `capturedAt`
-  untouched; equal applies; a prev record with no agent / no `updatedAt` accepts; backfill fill /
+- Ordering: an older SessionStart (by `agent.updatedAt`, daemon-stamped) leaves identity, cwd and
+  `capturedAt` untouched; a newer one applies; an older one whose stamp is the client-clock fallback
+  (not `ordered`) still applies; equal applies; a prev record with no agent / no `updatedAt` accepts; backfill fill /
   replace never lower `capturedAt`.

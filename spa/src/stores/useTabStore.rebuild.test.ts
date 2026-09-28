@@ -1065,13 +1065,31 @@ describe('setPaneRebuild — capturedAt ordering (review A2 / C1)', () => {
 
   it('an agent group OLDER than the recorded agent (daemon clock) is ignored entirely', () => {
     const tab = seed()
-    set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', cwd: '/new', agent: { type: 'cc', sessionId: 'NEW', updatedAt: 9_000 }, capturedAt: 9_000 } })
+    set({ kind: 'agent-group', ordered: true, record: { tmuxInstance: '111:1000', cwd: '/new', agent: { type: 'cc', sessionId: 'NEW', updatedAt: 9_000 }, capturedAt: 9_000 } })
     const before = rec(tab.id)
-    set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', cwd: '/old', agent: { type: 'cc', sessionId: 'OLD', updatedAt: 4_000 }, capturedAt: 4_000 } })
+    set({ kind: 'agent-group', ordered: true, record: { tmuxInstance: '111:1000', cwd: '/old', agent: { type: 'cc', sessionId: 'OLD', updatedAt: 4_000 }, capturedAt: 4_000 } })
     expect(rec(tab.id)).toBe(before)
     expect(rec(tab.id)?.agent?.sessionId).toBe('NEW')
     expect(rec(tab.id)?.cwd).toBe('/new')
     expect(rec(tab.id)?.capturedAt).toBe(9_000)
+  })
+
+  it('an agent group NEWER than the recorded agent (daemon clock) applies', () => {
+    const tab = seed()
+    set({ kind: 'agent-group', ordered: true, record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'OLD', updatedAt: 4_000 }, capturedAt: 4_000 } })
+    set({ kind: 'agent-group', ordered: true, record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'NEW', updatedAt: 9_000 }, capturedAt: 9_000 } })
+    expect(rec(tab.id)?.agent?.sessionId).toBe('NEW')
+  })
+
+  // A stamp that fell back to a client clock is not a daemon time and says
+  // nothing about which run is newer: it must never REJECT a SessionStart.
+  it('an agent group whose stamp is NOT a daemon time (not `ordered`) applies even when older', () => {
+    const tab = seed()
+    set({ kind: 'agent-group', ordered: true, record: { tmuxInstance: '111:1000', cwd: '/new', agent: { type: 'cc', sessionId: 'NEW', updatedAt: 9_000 }, capturedAt: 9_000 } })
+    set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', cwd: '/fb', agent: { type: 'cc', sessionId: 'FB', updatedAt: 4_000 }, capturedAt: 4_000 } })
+    expect(rec(tab.id)?.agent?.sessionId).toBe('FB')
+    expect(rec(tab.id)?.cwd).toBe('/fb')
+    expect(rec(tab.id)?.capturedAt).toBe(4_000)
   })
 
   it('orders on agent.updatedAt only — a newer SessionStart applies even below a user edit\'s capturedAt', () => {

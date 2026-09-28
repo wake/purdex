@@ -254,10 +254,13 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
       // are daemon times, whereas `capturedAt` may be a user edit's client clock
       // (a `field` write), which says nothing about which run is newer. A record
       // with no agent / no `updatedAt` has nothing to order against. Equal
-      // applies, so an idle re-emit still refreshes the group.
+      // applies, so an idle re-emit still refreshes the group. Applied only
+      // when the writer says the incoming stamp IS a daemon time
+      // (`patch.ordered`): a client-clock fallback stamp says nothing about
+      // which run is newer, so it must never reject a SessionStart.
       const prevAt = prev.agent?.updatedAt
       const nextAt = record.agent?.updatedAt
-      if (typeof prevAt === 'number' && typeof nextAt === 'number' && nextAt < prevAt) return c
+      if (patch.ordered === true && typeof prevAt === 'number' && typeof nextAt === 'number' && nextAt < prevAt) return c
       // One unit: everything the agent group owns is replaced together, so a
       // payload without cwd clears cwd instead of leaving the previous agent's
       // directory beside a new session id. `unverified` is cleared too — it

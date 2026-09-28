@@ -2,7 +2,7 @@
 import { create } from 'zustand'
 import { getActiveSessionInfo } from '../lib/active-session'
 import { compositeKey } from '../lib/composite-key'
-import { daemonNsToMs, parseExit, parseProvenance } from '../lib/rebuild/provenance'
+import { daemonNsToMsOrNull, parseExit, parseProvenance } from '../lib/rebuild/provenance'
 import { useTabStore } from './useTabStore'
 import { scanPaneTree } from '../lib/pane-tree'
 
@@ -86,9 +86,13 @@ function writeProvenanceRecord(
 ): boolean {
   const prov = parseProvenance(detail)
   if (!prov) return false
-  const now = daemonNsToMs(broadcastTs)
+  // A missing / out-of-window broadcast_ts falls back to this client's clock:
+  // still a stamp, but not a daemon time, so the store must not order on it.
+  const daemonMs = daemonNsToMsOrNull(broadcastTs)
+  const now = daemonMs ?? Date.now()
   useTabStore.getState().setPaneRebuild(hostId, sessionCode, prov.tmuxInstance, {
     kind: 'agent-group',
+    ordered: daemonMs !== null,
     record: {
       tmuxInstance: prov.tmuxInstance,
       cwd: prov.cwd || undefined,
