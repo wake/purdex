@@ -41,6 +41,23 @@ describe('RoomProse', () => {
   })
 })
 
+// A2 (spec §5.3): GFM tables render as a real <table>, wrapped so a wide
+// table scrolls horizontally inside itself, not the whole transcript.
+describe('RoomProse GFM tables (A2)', () => {
+  const TABLE = '| a | b |\n|---|---|\n| 1 | 2 |'
+
+  it('renders a GFM table', () => {
+    render(<RoomProse content={TABLE} />)
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.getAllByRole('columnheader').map((c) => c.textContent)).toEqual(['a', 'b'])
+  })
+
+  it('table is wrapped in overflow-x-auto', () => {
+    render(<RoomProse content={TABLE} />)
+    expect(screen.getByRole('table').parentElement).toHaveClass('overflow-x-auto')
+  })
+})
+
 // P-B2.2 task 8 (spec §4.4 R1): `streaming` appends a blinking cursor after
 // the markdown body. The typewriter is on spec §3's do-not-touch list.
 describe('RoomProse streaming cursor (R1)', () => {
