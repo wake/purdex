@@ -107,12 +107,9 @@ describe('countPayload — tabs are counted as this build would apply them (tabs
     expect(countPayload('tabs.w1', legacy)).toBe(1)
   })
 
-  it('the host side of a legacy row, and a legacy local stash, are both counted that way', async () => {
+  it('the host side of a legacy row is counted that way', async () => {
     api.getSection.mockResolvedValue({ kind: 'ok', value: { section: 'tabs.mws0', rev: 4, hash: 'e'.repeat(64), fingerprint: 'f', ordinal: 2, writer: 'c', updatedAt: 0, payload: legacy } })
     expect((await readHostSide(HOST, PROFILE, 'tabs.mws0', lock({}), { expectEndpoint: '10.0.0.1:7860' })).count).toEqual({ state: 'read', count: 1 })
-    putStash(PROFILE, HASH, legacy)
-    const side = await readLocalSide(PROFILE, 'tabs.mws0', lock({ status: 'locked:conflict', currentHash: 'c'.repeat(64), conflict: { localHash: HASH, sot: { rev: 4, hash: 'b'.repeat(64) } } }))
-    expect(side.count).toEqual({ state: 'read', count: 1 })
   })
 })
 
@@ -147,42 +144,39 @@ describe('buildSectionPayload — the collector\'s own builders over the MASTER 
 })
 
 describe('readLocalSide — what "Keep this device\'s" keeps (R1)', () => {
-  it('locked:conflict → the SENT snapshot (the stash of conflict.localHash), NOT what is built now', async () => {
+  // spec 2026-09-28 D2: keep-local pushes the live stores for every lock kind — a conflict too
+  it('locked:conflict → the payload built NOW, NOT the sent snapshot (even when the stash holds it)', async () => {
     putStash(PROFILE, HASH, { order: ['a'], workspaces: { a: {} } }) // 1 workspace was sent; 2 are here now
-    const side = await readLocalSide(PROFILE, 'workspaces', lock({ status: 'locked:conflict', currentHash: 'c'.repeat(64), conflict: { localHash: HASH, sot: { rev: 4, hash: 'b'.repeat(64) } } }))
-    expect(side).toEqual({ count: { state: 'read', count: 1 }, changedSince: false })
+    const built = buildSectionPayload('workspaces')!.payload
+    const side = await readLocalSide('workspaces', lock({ status: 'locked:conflict', currentHash: await hashSection(built), conflict: { localHash: HASH, sot: { rev: 4, hash: 'b'.repeat(64) } } }))
+    expect(side).toEqual({ count: { state: 'read', count: 2 }, changedSince: false })
   })
 
-  it('locked:conflict whose snapshot is not in the stash (conflict-not-persisted) → unreadable', async () => {
-    const side = await readLocalSide(PROFILE, 'workspaces', lock({ status: 'locked:conflict', currentHash: HASH, conflict: { localHash: HASH, sot: { rev: 4, hash: null } } }))
-    expect(side.count).toEqual({ state: 'unreadable' })
-  })
-
-  it('locked:conflict whose sent side was "nothing" (localHash null) → 0', async () => {
-    const side = await readLocalSide(PROFILE, 'tabs.mws0', lock({ status: 'locked:conflict', currentHash: null, conflict: { localHash: null, sot: { rev: 4, hash: 'b'.repeat(64) } } }))
-    expect(side.count).toEqual({ state: 'read', count: 0 })
+  it('locked:conflict whose sent side was "nothing" (localHash null): still what is here now', async () => {
+    const side = await readLocalSide('tabs.mws0', lock({ status: 'locked:conflict', currentHash: 'c'.repeat(64), conflict: { localHash: null, sot: { rev: 4, hash: 'b'.repeat(64) } } }))
+    expect(side).toEqual({ count: { state: 'read', count: 3 }, changedSince: true })
   })
 
   it.each(['locked:reset', 'locked:invalid'] as const)('%s → the payload built NOW; unchanged since the lock → not said', async (status) => {
     const built = buildSectionPayload('workspaces')!.payload
-    const side = await readLocalSide(PROFILE, 'workspaces', lock({ status, currentHash: await hashSection(built) }))
+    const side = await readLocalSide('workspaces', lock({ status, currentHash: await hashSection(built) }))
     expect(side).toEqual({ count: { state: 'read', count: 2 }, changedSince: false })
   })
 
   it('locked:reset, this device changed since the lock was taken → said', async () => {
-    const side = await readLocalSide(PROFILE, 'workspaces', lock({ status: 'locked:reset', currentHash: 'd'.repeat(64) }))
+    const side = await readLocalSide('workspaces', lock({ status: 'locked:reset', currentHash: 'd'.repeat(64) }))
     expect(side).toEqual({ count: { state: 'read', count: 2 }, changedSince: true })
   })
 
   it('locked:reset with an unsettled world → unreadable, and nothing is claimed about a change', async () => {
     useTabStore.setState({ worldId: 's1', worldEpoch: 1 })
-    const side = await readLocalSide(PROFILE, 'workspaces', lock({ status: 'locked:reset', currentHash: 'd'.repeat(64) }))
+    const side = await readLocalSide('workspaces', lock({ status: 'locked:reset', currentHash: 'd'.repeat(64) }))
     expect(side).toEqual({ count: { state: 'unreadable' }, changedSince: false })
   })
 
-  it('locked:reset is never read from the stash, even when one holds currentHash', async () => {
+  it('never read from the stash, even when one holds currentHash', async () => {
     putStash(PROFILE, HASH, { order: [], workspaces: {} })
-    const side = await readLocalSide(PROFILE, 'workspaces', lock({ status: 'locked:reset', currentHash: HASH }))
+    const side = await readLocalSide('workspaces', lock({ status: 'locked:reset', currentHash: HASH }))
     expect(side.count).toEqual({ state: 'read', count: 2 })
   })
 })

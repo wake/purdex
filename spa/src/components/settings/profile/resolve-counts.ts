@@ -2,13 +2,12 @@
 // action goes through a ConfirmDialog", R1, R5). COUNTS, NOT A DIFF — the precedent is the wizard's `countWorld`.
 //
 // EACH SIDE IS COUNTED FROM WHERE THE CHOICE TAKES IT (R1):
-//   - this device, `locked:conflict` → the payload that was SENT (`conflict.localHash`, from the section store's
-//     stash — any window can read it): "Keep this device's" restores THAT snapshot, not what is here now;
-//   - this device, `locked:reset` / `locked:invalid` → the payload the collector would build NOW
-//     (`buildSectionPayload`, over the master world): no snapshot is restored, the current state is pushed. When it
-//     no longer hashes like the lock's `currentHash`, that is said;
+//   - this device, every lock kind → the payload the collector would build NOW (`buildSectionPayload`, over the
+//     master world): "Keep this device's" restores no snapshot, it pushes the current state (spec 2026-09-28 D2 —
+//     a `locked:conflict` too: NOT the snapshot that was sent, `conflict.localHash`). When it no longer hashes like
+//     the lock's `currentHash`, that is said;
 //   - the host → ONE read-only `getSection`, made when the confirmation opens. Its rev ≠ the frozen lock's → said.
-// Whatever cannot be read (no stash entry, an unsettled world, a failed request, a shape this build does not know) is
+// Whatever cannot be read (an unsettled world, a failed request, a shape this build does not know) is
 // `unreadable` — "could not be read", never a guess. The counts inform; they never gate the action.
 import { getSection } from '../../../lib/profile/api'
 import { upcastLegacyTabs } from '../../../lib/profile/applier'
@@ -16,14 +15,13 @@ import { buildSectionPayload } from '../../../lib/profile/collector'
 import type { SectionLock } from '../../../lib/profile/executor'
 import { hashSection } from '../../../lib/profile/hash'
 import { sectionKind } from '../../../lib/profile/projections'
-import { getStash } from '../../../lib/profile/section-store'
 import type { ProfileSectionKey, TabsPayload } from '../../../lib/profile/types'
 
 export type SideCount = { state: 'read'; count: number } | { state: 'unreadable' }
 
 export interface LocalSide {
   count: SideCount
-  /** Reset / invalid only: what is built now no longer hashes like the lock's `currentHash`. */
+  /** What is built now no longer hashes like the lock's `currentHash`. */
   changedSince: boolean
 }
 
@@ -75,14 +73,8 @@ function sideCount(key: string, payload: unknown): SideCount {
   return count === null ? UNREADABLE : { state: 'read', count }
 }
 
-/** What "Keep this device's" keeps. */
-export async function readLocalSide(profileId: string, key: string, lock: SectionLock): Promise<LocalSide> {
-  if (lock.conflict !== null) {
-    const { localHash } = lock.conflict
-    if (localHash === null) return { count: { state: 'read', count: 0 }, changedSince: false }
-    const sent = getStash(profileId, localHash)
-    return { count: sent === undefined ? UNREADABLE : sideCount(key, sent), changedSince: false }
-  }
+/** What "Keep this device's" keeps: what the stores hold now, whatever the lock kind. */
+export async function readLocalSide(key: string, lock: SectionLock): Promise<LocalSide> {
   let built: { payload: unknown | null } | null
   try {
     built = buildSectionPayload(key as ProfileSectionKey)

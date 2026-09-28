@@ -174,7 +174,7 @@ describe('executor — integration (real collector, section store, apply, stores
     expect(problems).toEqual([])
   })
 
-  it('RESTART: a 409 lock survives with the snapshot that was SENT, and keep-local puts THAT back and pushes it', async () => {
+  it('RESTART: a 409 lock survives with the snapshot that was SENT, and keep-local pushes what the stores hold NOW', async () => {
     await attach()
     const theirs = theirSettings(3)
     const theirHash = await hashSection(theirs)
@@ -191,7 +191,8 @@ describe('executor — integration (real collector, section store, apply, stores
     // the stores move on under the lock
     edit(5)
     await debounce()
-    const laterHash = await hashSection(mySettings())
+    const later = mySettings()
+    const laterHash = await hashSection(later)
     expect(loadSectionStore(PROFILE).sections.settings).toEqual({
       base: { rev: 1, hash: expect.any(String) },
       currentHash: laterHash,
@@ -217,21 +218,23 @@ describe('executor — integration (real collector, section store, apply, stores
 
     executor.resolve('settings', 'local')
     await flush()
-    expect(keepAlive()).toBe(4) // not 5: the user chose between two known snapshots
+    // keep-local = this device as it is now (spec 2026-09-28 D2): 5, the edit made under the lock — not the sent 4
+    expect(keepAlive()).toBe(5)
     expect(api.putSection).toHaveBeenCalledTimes(1)
     expect(api.putSection.mock.calls[0][2]).toBe('settings')
-    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: sentHash, payload: sent })
+    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: laterHash, payload: later })
+    expect(laterHash).not.toBe(sentHash)
     put.resolve({ kind: 'applied', rev: 6 })
     await flush()
     await debounce()
     expect(executor.status().sections.settings).toBe('synced')
-    expect(loadSectionStore(PROFILE).sections.settings).toEqual({ base: { rev: 6, hash: sentHash }, currentHash: sentHash })
+    expect(loadSectionStore(PROFILE).sections.settings).toEqual({ base: { rev: 6, hash: laterHash }, currentHash: laterHash })
     expect(executor.status().sections).not.toHaveProperty('hosts')
     expect(api.getSection).not.toHaveBeenCalled()
     expect(problems).toEqual([])
   })
 
-  it('DECIDE-TIME conflict (the SOT side is a hash only): persisted, restored after a restart, and keep-local restores what was local THEN', async () => {
+  it('DECIDE-TIME conflict (the SOT side is a hash only): persisted, restored after a restart, and keep-local pushes what is local NOW', async () => {
     await attach()
     const theirHash = await hashSection(theirSettings(3))
     const stored = loadSectionStore(PROFILE).sections
@@ -260,6 +263,8 @@ describe('executor — integration (real collector, section store, apply, stores
     // the stores move on, then a restart
     edit(8)
     await debounce()
+    const now = mySettings()
+    const nowHash = await hashSection(now)
     stop()
     api.listProfiles.mockResolvedValue(
       index([meta('settings', 6, newerHash), meta('workspaces', 1, stored.workspaces.currentHash!)]),
@@ -274,8 +279,9 @@ describe('executor — integration (real collector, section store, apply, stores
 
     executor.resolve('settings', 'local')
     await flush()
-    expect(keepAlive()).toBe(6)
-    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 6, hash: mineHash, payload: mine })
+    expect(keepAlive()).toBe(8)
+    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 6, hash: nowHash, payload: now })
+    expect(nowHash).not.toBe(mineHash)
     expect(problems).toEqual([])
   })
 })

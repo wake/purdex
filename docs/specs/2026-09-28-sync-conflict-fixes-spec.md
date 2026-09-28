@@ -59,15 +59,23 @@ still write different values; that race needs both probes in flight at once and 
 
 ### D2 — keep-local keeps what this device shows NOW (fixes RC2; confirmed by the user 2026-09-28)
 
-「保留這台裝置的」keeps the current local content, including edits made after the lock opened. It
-restores the sent snapshot only when the stores still hold exactly it (`currentHash === localHash`,
-i.e. nothing to restore anyway) — so in practice `resolved keep:'local'` sets no `restoreLocal`
-whenever `currentHash !== conflict.localHash`; the section is then dirty against `base = sot` and
-the ordinary table pushes (or deletes, when the current local side is absent).
+「保留這台裝置的」keeps the current local content, including edits made after the lock opened.
+`resolved keep:'local'` sets `restoreLocal: null` **unconditionally** (when the stores still hold the
+sent snapshot there is nothing to restore anyway — `finish()` used to drop such a restore at once).
+The section is then dirty against `base = sot` and the ordinary table pushes (or deletes, when the
+current local side is absent). The restore machinery (row 0c, `local-restored`, the executor's
+`restoreLocal()`, the parked restore) is no longer reached from any event; it is left in place in this
+PR and removed by a follow-up.
 
 After a restart the same rule holds: stores are persisted, `currentHash` is their hash.
 
-`answerFor` keeps its guard (no behaviour change for the first reconciliation).
+`answerFor` drops its `conflict.localHash !== currentHash` guard: under the `push` direction a 409
+whose sent snapshot the stores no longer hold is answered keep-local like any other — which now pushes
+the live stores, i.e. exactly what `push` means.
+
+The conflict UI follows: the "keep local also undoes what you changed here since" lines (row and
+dialog) are removed, and the local-side count is read from what the stores hold now (`currentHash`),
+not from the stash of `conflict.localHash`.
 
 ## Out of scope
 
@@ -77,7 +85,7 @@ After a restart the same rule holds: stores are persisted, `currentHash` is thei
 
 ## Tests
 
-- Repro `spa/src/lib/profile/repro-keep-local-terminated.test.ts` (rebuild while locked → keep local →
+- Repro `spa/src/lib/profile/executor.keep-local-live.integration.test.ts` (rebuild while locked → keep local →
   pane stays on the new session, not terminated) goes green.
 - Reducer: `resolved keep:'local'` with `currentHash !== conflict.localHash` → `restoreLocal === null`,
   `base = conflict.sot`, next decision push; with equal hashes → behaviour as before.

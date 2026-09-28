@@ -126,7 +126,7 @@ export function useResolveContext(sectionKey: string, lock: SectionLock): Resolv
       setOpen((now) => (now === open ? null : now))
       setChanged(true)
     }
-    void readLocalSide(ctx.profileId, sectionKey, ctx.lock).then((side) => {
+    void readLocalSide(sectionKey, ctx.lock).then((side) => {
       if (live) setLocal(side)
     })
     if (stale()) lost() // before the host is asked: it must still be at the attachment's endpoint

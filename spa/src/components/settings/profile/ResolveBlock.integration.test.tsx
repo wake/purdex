@@ -262,7 +262,7 @@ describe('Resolve, end to end (R7)', () => {
     expect(daemon.rows.get('workspaces')!.writer).toBe(OTHER)
   })
 
-  it('a conflict edited here since it arose: "Keep this device\'s" pushes the SENT snapshot — and the confirmation said so', async () => {
+  it('a conflict edited here since it arose: "Keep this device\'s" pushes what is here NOW — the edit made since is kept (spec 2026-09-28 D2)', async () => {
     await attachedAt(1)
     // another client moves `workspaces` while this one edits it: the push is refused (409) and the sent snapshot kept
     await sotWrites(2, (p) => void (p.workspaces.wa.name = 'theirs'))
@@ -277,20 +277,20 @@ describe('Resolve, end to end (R7)', () => {
     const lock = wsLock()!
     expect(lock.currentHash).not.toBe(lock.conflict!.localHash)
 
-    expect(screen.getByTestId('profile-resolve-undoes-workspaces')).toHaveTextContent(en['settings.profile.resolve.undoes'])
+    expect(screen.queryByTestId('profile-resolve-undoes-workspaces')).toBeNull()
     await click('profile-resolve-keep-local-workspaces')
-    expect(screen.getByTestId('profile-resolve-dialog-undoes')).toHaveTextContent(en['settings.profile.resolve.dialog_undoes'])
-    // this device's side is the SENT snapshot, read from the stash: 2 workspaces — not the 3 here now
+    expect(screen.queryByTestId('profile-resolve-dialog-undoes')).toBeNull()
+    // this device's side is what the stores hold now: 3 workspaces — not the 2 that were sent
     expect(screen.getByTestId('profile-resolve-count-local')).toHaveAttribute('data-state', 'read')
-    expect(screen.getByTestId('profile-resolve-count-local')).toHaveTextContent(en['settings.profile.resolve.unit.workspaces'].replace('{{count}}', '2'))
+    expect(screen.getByTestId('profile-resolve-count-local')).toHaveTextContent(en['settings.profile.resolve.unit.workspaces'].replace('{{count}}', '3'))
     await click('profile-resolve-confirm')
     await settle()
 
     expect(screen.queryByTestId('profile-resolve-row-workspaces')).toBeNull()
     expect(waName()).toBe('sent-here')
-    expect(wsIds()).toEqual(['wa', 'wb']) // the edit made since is undone, as said
+    expect(wsIds()).toEqual(['wa', 'wb', 'wc']) // the edit made since is kept
     expect(sotWorkspaces().workspaces.wa.name).toBe('sent-here')
-    expect(Object.keys(sotWorkspaces().workspaces)).toEqual(['wa', 'wb'])
+    expect(Object.keys(sotWorkspaces().workspaces)).toEqual(['wa', 'wb', 'wc'])
     expect(daemon.rows.get('workspaces')!.writer).toBe('c_aaaaaaaaaaaa')
   })
 

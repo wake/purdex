@@ -131,11 +131,13 @@ describe('the rows', () => {
     expect(screen.getByTestId('profile-resolve-why-settings')).toHaveTextContent(en['settings.profile.resolve.why.invalid.unknown'])
   })
 
-  it('a conflict edited here since it arose: "Keep this device\'s" also undoes that — said on the row', () => {
+  it('a conflict edited here since it arose: no "undoes" line — keep-local keeps that edit (spec 2026-09-28 D2)', () => {
     const { update } = view(statusOf({ workspaces: CONFLICT }))
-    expect(screen.queryByTestId('profile-resolve-undoes-workspaces')).toBeNull()
     update(statusOf({ workspaces: { ...CONFLICT, currentHash: H('9') } }))
-    expect(screen.getByTestId('profile-resolve-undoes-workspaces')).toHaveTextContent(en['settings.profile.resolve.undoes'])
+    expect(screen.getByTestId('profile-resolve-row-workspaces')).toBeInTheDocument()
+    expect(screen.queryByTestId('profile-resolve-undoes-workspaces')).toBeNull()
+    expect(en).not.toHaveProperty('settings.profile.resolve.undoes')
+    expect(zhTW).not.toHaveProperty('settings.profile.resolve.undoes')
   })
 
   it('a follower window: every row carries the "reported by the window that is syncing" badge', () => {
@@ -173,7 +175,7 @@ describe('the confirmation', () => {
     const dialog = screen.getByTestId('profile-resolve-dialog')
     expect(dialog).toHaveTextContent(en['settings.profile.resolve.keep_local_body'])
     expect(readLocalSide).toHaveBeenCalledTimes(1)
-    expect(readLocalSide).toHaveBeenCalledWith(MASTER.profileId, 'workspaces', CONFLICT)
+    expect(readLocalSide).toHaveBeenCalledWith('workspaces', CONFLICT)
     expect(readHostSide).toHaveBeenCalledTimes(1)
     expect(readHostSide).toHaveBeenCalledWith(MASTER.hostId, MASTER.profileId, 'workspaces', CONFLICT, { expectEndpoint: ENDPOINT, signal: expect.any(AbortSignal) })
     expect(screen.getByTestId('profile-resolve-count-local')).toHaveAttribute('data-state', 'loading')
@@ -204,16 +206,13 @@ describe('the confirmation', () => {
     expect(screen.getByTestId('profile-resolve-count-sot')).toHaveTextContent(en['settings.profile.resolve.unit.hosts'].replace('{{count}}', '4'))
   })
 
-  it('a conflict edited here since: the dialog says that keeping this device\'s puts back what was SENT', () => {
+  it('a conflict edited here since: the keep-local dialog has no "undoes" line either', () => {
     view(statusOf({ workspaces: { ...CONFLICT, currentHash: H('9') } }))
     openKeepLocal('workspaces')
-    expect(screen.getByTestId('profile-resolve-dialog-undoes')).toHaveTextContent(en['settings.profile.resolve.dialog_undoes'])
-  })
-
-  it('…and does not claim that copy was SENT: with Auto-sync off it never was (P3d-4c F4)', () => {
-    expect(en['settings.profile.resolve.dialog_undoes']).toMatch(/had when the conflict was found/)
-    expect(en['settings.profile.resolve.dialog_undoes']).not.toMatch(/\bsent\b/)
-    expect(zhTW['settings.profile.resolve.dialog_undoes']).not.toMatch(/送出/)
+    expect(screen.getByTestId('profile-resolve-dialog')).toHaveTextContent(en['settings.profile.resolve.keep_local_body'])
+    expect(screen.queryByTestId('profile-resolve-dialog-undoes')).toBeNull()
+    expect(en).not.toHaveProperty('settings.profile.resolve.dialog_undoes')
+    expect(zhTW).not.toHaveProperty('settings.profile.resolve.dialog_undoes')
   })
 
   it('"Take the host\'s" has its own words, and no "undoes" line', () => {

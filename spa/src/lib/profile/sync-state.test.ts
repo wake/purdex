@@ -49,6 +49,12 @@ function tokenOf(a: SectionAction): FlightToken {
   if (a.do !== 'push' && a.do !== 'delete') throw new Error(`expected push/delete, got ${a.do}`)
   return a.token
 }
+/** A pending keep-local restore, built by hand: since spec 2026-09-28 D2 `resolved keep:'local'` never sets
+ *  one (it keeps the live stores), but the restore machinery (row 0c, `local-restored`) is still in the
+ *  reducer until a follow-up removes it. base = sot = {6,H8}, live = H2, the snapshot pending = `hash`. */
+function pendingRestore(hash: string | null): SectionSyncState {
+  return mk({ base: { rev: 6, hash: H8 }, sot: { rev: 6, hash: H8 }, currentHash: H2, restoreLocal: { hash } })
+}
 /** decide → push-started, asserting the flight opened with that very token. */
 function startFlight(s: SectionSyncState): [SectionSyncState, FlightToken] {
   const token = tokenOf(decideSection(s, ON))
@@ -956,21 +962,25 @@ describe('reduceSection — rule 7: locked / resolved / local-restored', () => {
     expect(s.forcePull).toBe(true)
     expect(decideSection(s, ON)).toEqual({ do: 'pull' })
   })
-  it('resolved keep:local → base = conflict.sot, restoreLocal = the sent snapshot', () => {
+  it('resolved keep:local after an edit made while locked → base = conflict.sot, NO restore, the LIVE hash is pushed', () => {
+    // spec 2026-09-28 D2: 「保留這台裝置的」keeps what this device shows now — the sent snapshot H1 is not put back
     const [f] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
     const s = run(f, { type: 'local-changed', hash: H2 }, { type: 'push-conflict', rev: 6, hash: H8 }, { type: 'resolved', keep: 'local' })
     expect(s.status).toBe('pending')
     expect(s.conflict).toBeNull()
     expect(s.base).toEqual({ rev: 6, hash: H8 })
-    expect(s.restoreLocal).toEqual({ hash: H1 })
-    expect(decideSection(s, { reachable: false, autoSync: false })).toEqual({ do: 'restore-local', hash: H1 })
+    expect(s.restoreLocal).toBeNull()
+    expect(s.currentHash).toBe(H2)
+    expect(retainedHashes(s)).toEqual([])
+    expect(decideSection(s, { reachable: false, autoSync: false })).toEqual({ do: 'nothing' })
+    expect(tokenOf(decideSection(s, ON))).toMatchObject({ kind: 'put', hash: H2, baseRev: 6 })
   })
   it('restoreLocal is dropped as soon as the live hash already is the snapshot (nothing to put back)', () => {
     const s = run(conflicted(), { type: 'locked', reason: 'conflict' }, { type: 'resolved', keep: 'local' })
     expect(s.restoreLocal).toBeNull()
     expect(tokenOf(decideSection(s, ON))).toMatchObject({ hash: H1, baseRev: 6 })
   })
-  it('a DELETE that hit a 409: keep-local restores "absent" and re-sends the delete against the newest rev', () => {
+  it('a DELETE that hit a 409, re-created while locked: keep-local keeps the live copy and PUTs it against the newest rev', () => {
     const [f, token] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: null }))
     expect(token).toMatchObject({ kind: 'delete', hash: null, baseRev: 5 })
     // they edited it while we were deleting it: the SOT is live
@@ -980,17 +990,14 @@ describe('reduceSection — rule 7: locked / resolved / local-restored', () => {
     // while locked the user re-creates it locally, and the SOT moves again
     s = run(s, { type: 'local-changed', hash: H1 }, { type: 'remote-event', rev: 7, hash: H8, own: false })
     s = reduceSection(s, { type: 'resolved', keep: 'local' })
-    expect(s.restoreLocal).toEqual({ hash: null })
+    // what this device holds now is H1, not "absent": nothing is put back
+    expect(s.restoreLocal).toBeNull()
     expect(s.base).toEqual({ rev: 7, hash: H8 })
     expect(retainedHashes(s)).toEqual([])
-    expect(decideSection(s, ON)).toEqual({ do: 'restore-local', hash: null })
-    expect(decideSection(s, { reachable: false, autoSync: false })).toEqual({ do: 'restore-local', hash: null })
-    s = reduceSection(s, { type: 'local-restored', hash: null })
-    expect(s.currentHash).toBeNull()
-    expect(s.restoreLocal).toBeNull()
+    expect(decideSection(s, { reachable: false, autoSync: false })).toEqual({ do: 'nothing' })
     const d = decideSection(s, ON)
-    expect(d.do).toBe('delete')
-    expect(tokenOf(d)).toEqual({ kind: 'delete', hash: null, baseRev: 7, epoch: s.epoch })
+    expect(d.do).toBe('push')
+    expect(tokenOf(d)).toEqual({ kind: 'put', hash: H1, baseRev: 7, epoch: s.epoch })
   })
   it('restoreLocal {hash:null} is dropped at once when the section already is absent locally', () => {
     const [f] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: null }))
@@ -999,27 +1006,21 @@ describe('reduceSection — rule 7: locked / resolved / local-restored', () => {
     expect(tokenOf(decideSection(s, ON))).toMatchObject({ kind: 'delete', hash: null, baseRev: 6 })
   })
   it('local-restored sets currentHash and clears restoreLocal; without a pending restore it is ignored', () => {
-    const [f] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
-    const s = run(f, { type: 'local-changed', hash: H2 }, { type: 'push-conflict', rev: 6, hash: H8 }, { type: 'resolved', keep: 'local' })
+    const s = pendingRestore(H1)
     const r = reduceSection(s, { type: 'local-restored', hash: H1 })
     expect(r.currentHash).toBe(H1)
     expect(r.restoreLocal).toBeNull()
     expect(reduceSection(r, { type: 'local-restored', hash: H2 })).toBe(r)
   })
-  describe('a keep-local restore is cancelled by an edit made after the user resolved (attack finding)', () => {
-    /** base = sot = {5,H0} → H1 sent → H2 edited in flight → 409 {6,H8} → keep-local: restoreLocal = H1, live = H2. */
+  describe('a pending restore is cancelled by a later edit (leftover machinery, hand-built — see pendingRestore)', () => {
+    /** restoreLocal = H1, live = H2, base = sot = {6,H8}. */
     function awaitingRestore(): SectionSyncState {
-      const [f] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
-      const locked = run(f, { type: 'local-changed', hash: H2 }, { type: 'push-conflict', rev: 6, hash: H8 })
-      expect(locked.status).toBe('locked:conflict')
-      expect(locked.conflict?.localHash).toBe(H1)
-      const s = reduceSection(locked, { type: 'resolved', keep: 'local' })
-      expect(s.restoreLocal).toEqual({ hash: H1 })
+      const s = pendingRestore(H1)
       expect(decideSection(s, ON)).toEqual({ do: 'restore-local', hash: H1 })
       return s
     }
 
-    it('H1 → H2 → 409 → keep-local → H3: the restore is dropped, H3 is what gets pushed, against the newest rev', () => {
+    it('restore pending → H3: the restore is dropped, H3 is what gets pushed, against the newest rev', () => {
       const s = reduceSection(deepFreeze(awaitingRestore()), { type: 'local-changed', hash: H3 })
       expect(s.restoreLocal).toBeNull()
       expect(s.currentHash).toBe(H3)
@@ -1070,9 +1071,8 @@ describe('reduceSection — rule 7: locked / resolved / local-restored', () => {
     })
 
     it('a pending restore to "absent" is cancelled the same way', () => {
-      let [s] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: null }))
-      s = run(s, { type: 'local-changed', hash: H2 }, { type: 'push-conflict', rev: 6, hash: H8 }, { type: 'resolved', keep: 'local' })
-      expect(s.restoreLocal).toEqual({ hash: null })
+      let s = pendingRestore(null)
+      expect(decideSection(s, ON)).toEqual({ do: 'restore-local', hash: null })
       s = reduceSection(s, { type: 'local-changed', hash: H3 })
       expect(s.restoreLocal).toBeNull()
       expect(reduceSection(s, { type: 'local-restored', hash: null })).toBe(s)
@@ -1406,16 +1406,14 @@ describe('restoreSectionState — a persisted conflict (spec §4.6.2: the local 
     expect(i.indexStale).toBe(false)
     expect(i.status).toBe('locked:conflict')
   })
-  it('resolved keep:local → restore-local (before the reindex) → reindex → push of the SENT snapshot', () => {
+  it('resolved keep:local → reindex → push of the LIVE hash (the stores are persisted: currentHash is still theirs)', () => {
     const r = reduceSection(restoreSectionState(persisted()), { type: 'resolved', keep: 'local' })
     expect(r.base).toEqual({ rev: 6, hash: H2 })
-    expect(r.restoreLocal).toEqual({ hash: H1 })
-    expect(decideSection(r, ON)).toEqual({ do: 'restore-local', hash: H1 })
-    const put = reduceSection(r, { type: 'local-restored', hash: H1 })
-    expect(put.currentHash).toBe(H1)
-    expect(decideSection(put, ON)).toMatchObject({ do: 'reindex' })
-    const [f, token] = startFlight(indexed(put, { rev: 6, hash: H2 }))
-    expect(token).toMatchObject({ kind: 'put', hash: H1, baseRev: 6 })
+    expect(r.restoreLocal).toBeNull()
+    expect(r.currentHash).toBe(H3)
+    expect(decideSection(r, ON)).toMatchObject({ do: 'reindex' })
+    const [f, token] = startFlight(indexed(r, { rev: 6, hash: H2 }))
+    expect(token).toMatchObject({ kind: 'put', hash: H3, baseRev: 6 })
     expect(reduceSection(f, { type: 'push-applied', rev: 7 }).status).toBe('synced')
   })
   it('resolved keep:sot → forcePull → reindex → pull → synced', () => {
@@ -1439,7 +1437,12 @@ describe('restoreSectionState — a persisted conflict (spec §4.6.2: the local 
     const a = run(live, ...events)
     const b = run(back, ...events)
     for (const k of ['base', 'currentHash', 'sot', 'status', 'conflict', 'restoreLocal', 'forcePull', 'invalid'] as const) expect(b[k]).toEqual(a[k])
-    expect(decideSection(b, ON)).toEqual(decideSection(a, ON))
+    // the restored one reindexes first (a restart leaves the index stale); then both push the same thing
+    expect(decideSection(b, ON)).toMatchObject({ do: 'reindex' })
+    const { epoch: _a, ...wantA } = tokenOf(decideSection(a, ON))
+    const { epoch: _b, ...wantB } = tokenOf(decideSection(indexed(b, { rev: 7, hash: H8 }), ON))
+    expect(wantB).toEqual(wantA)
+    expect(wantA).toMatchObject({ kind: 'put', hash: H3, baseRev: 7 })
   })
 })
 
@@ -1457,9 +1460,7 @@ describe('retainedHashes — rule 8', () => {
     expect([...retainedHashes(s)].sort()).toEqual([H1, H8])
   })
   it('the snapshot awaiting restore', () => {
-    const [f] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
-    const s = run(f, { type: 'local-changed', hash: H2 }, { type: 'push-conflict', rev: 6, hash: H8 }, { type: 'resolved', keep: 'local' })
-    expect(retainedHashes(s)).toEqual([H1])
+    expect(retainedHashes(pendingRestore(H1))).toEqual([H1])
   })
   it('drops nulls and duplicates', () => {
     const s = mk({
@@ -1511,7 +1512,7 @@ describe('regression sequences — spec §9.4, verbatim', () => {
     expect(s3.inFlight).toBeNull()
   })
 
-  it('#6a: keep-local targets the newest rev learnt while locked, and restores the sent snapshot', () => {
+  it('#6a: keep-local targets the newest rev learnt while locked, and pushes the LIVE stores (spec 2026-09-28 D2)', () => {
     const [opened, token] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
     expect(token.baseRev).toBe(5)
     let s = opened
@@ -1522,14 +1523,13 @@ describe('regression sequences — spec §9.4, verbatim', () => {
     s = reduceSection(s, { type: 'resolved', keep: 'local' })
     expect(s.base.rev).toBe(7)
     expect(s.base).toEqual({ rev: 7, hash: 'h7' })
-    expect(decideSection(s, ON)).toEqual({ do: 'restore-local', hash: H1 })
-    s = reduceSection(s, { type: 'local-restored', hash: H1 })
+    expect(s.restoreLocal).toBeNull()
     const d = decideSection(s, ON)
     expect(d.do).toBe('push')
-    expect(tokenOf(d)).toMatchObject({ kind: 'put', hash: H1, baseRev: 7 })
+    expect(tokenOf(d)).toMatchObject({ kind: 'put', hash: H2, baseRev: 7 })
   })
 
-  it('#6c: keep-local while offline — the restore happens at once, the network steps wait', () => {
+  it('#6c: keep-local while offline — nothing local to do, the network steps wait, then the live hash goes out', () => {
     const OFF = { reachable: false, autoSync: false }
     let [s] = startFlight(run(synced(5, H0), { type: 'local-changed', hash: H1 }))
     s = reduceSection(s, { type: 'push-conflict', rev: 6, hash: 'h6' })
@@ -1540,18 +1540,15 @@ describe('regression sequences — spec §9.4, verbatim', () => {
     expect(s.indexStale).toBe(true)
     s = reduceSection(s, { type: 'resolved', keep: 'local' })
     expect(s.indexStale).toBe(true)
-    expect(s.restoreLocal).toEqual({ hash: H1 })
-    expect(decideSection(s, OFF)).toEqual({ do: 'restore-local', hash: H1 })
-    expect(decideSection(s, ON)).toEqual({ do: 'restore-local', hash: H1 })
-    s = reduceSection(s, { type: 'local-restored', hash: H1 })
-    expect(s.currentHash).toBe(H1)
+    expect(s.restoreLocal).toBeNull()
+    expect(s.currentHash).toBe(H2)
     expect(decideSection(s, OFF)).toEqual({ do: 'nothing' })
     expect(decideSection(s, ON)).toMatchObject({ do: 'reindex' })
     s = reduceSection(s, { type: 'sot-index', epoch: s.indexEpoch, entry: { rev: 7, hash: 'h7' } })
     expect(s.indexStale).toBe(false)
     const d = decideSection(s, ON)
     expect(d.do).toBe('push')
-    expect(tokenOf(d)).toMatchObject({ kind: 'put', hash: H1, baseRev: 7 })
+    expect(tokenOf(d)).toMatchObject({ kind: 'put', hash: H2, baseRev: 7 })
     expect(tokenOf(d).baseRev).toBe(s.sot.rev)
   })
 
@@ -1661,6 +1658,13 @@ describe('property tests (seeded)', () => {
       let indexSeen = false
       let editedSinceRestoreSet = false
       if (!s.indexStale || decideSection(s, ON).do !== 'reindex') throw new Error(`seed=${seed}: a fresh state must reindex first`)
+      // `resolved keep:'local'` no longer sets a restore (spec 2026-09-28 D2), so no event reaches row 0c.
+      // The restore machinery is still in the reducer: a share of the sequences START with one pending,
+      // so its invariants keep being exercised until it is removed.
+      if (rnd() < 0.3) {
+        const others = HASHES.filter((h) => h !== s.currentHash)
+        s = deepFreeze({ ...s, restoreLocal: { hash: pick(others) } })
+      }
 
       const gen = (): SectionEvent => {
         const r = int(100)
@@ -1708,7 +1712,7 @@ describe('property tests (seeded)', () => {
         if (rnd() < 0.5) {
           if (d0.do === 'lock-conflict') e = { type: 'locked', reason: 'conflict' }
           else if (d0.do === 'lock-reset') e = { type: 'locked', reason: 'reset' }
-          // resolve → (edit) → restore: the user sometimes edits before the driver got to put the snapshot back
+          // (seeded) restore pending: the user sometimes edits before the driver got to put the snapshot back
           else if (d0.do === 'restore-local') e = rnd() < 0.3 ? { type: 'local-changed', hash: pick(HASHES) } : { type: 'local-restored', hash: d0.hash }
           // the driver fetched the payload and sometimes refuses it — now and then for a rev that is not the one held
           else if (d0.do === 'pull' && rnd() < 0.3) e = { type: 'locked', reason: 'invalid', rev: rnd() < 0.8 ? s.sot.rev : s.sot.rev + 1 }
@@ -1746,6 +1750,8 @@ describe('property tests (seeded)', () => {
           acceptedRestores++
         }
         if (e.type === 'local-restored' && canRestoreLocal(prev, e.hash) !== (next !== prev)) fail('canRestoreLocal disagrees with the reducer')
+        // keep-local keeps the live stores: resolving never schedules a restore
+        if (e.type === 'resolved' && next.restoreLocal !== null && next.restoreLocal !== prev.restoreLocal) fail('resolved scheduled a restore')
 
         // unchanged ⇒ same reference; changed ⇒ epoch + 1
         if (next !== prev && next.epoch !== prev.epoch + 1) fail('a changed state must bump the epoch by exactly one')

@@ -58,9 +58,7 @@ export function ResolveRow({ sectionKey, kind, label, lock, invalidReason, fromL
     return { state: 'read', text: t(`settings.profile.resolve.unit.${kind}`, { count: count.count }) }
   }
 
-  // A conflict whose local side moved since it arose: keeping this device's restores what was SENT.
-  const undoesOf = (l: SectionLock): boolean => l.status === 'locked:conflict' && l.conflict !== null && l.currentHash !== l.conflict.localHash
-  const undoes = undoesOf(lock)
+  // No "keep local undoes your later edits" line: keep-local pushes what this device holds NOW (spec 2026-09-28 D2).
   const pending = outcome?.state === 'sent'
   const reason = why()
   const localCount = countText(local)
@@ -93,7 +91,6 @@ export function ResolveRow({ sectionKey, kind, label, lock, invalidReason, fromL
         </span>
       </div>
       <p data-testid={`profile-resolve-why-${sectionKey}`} data-reason={reason.reason} className="text-text-secondary">{reason.text}</p>
-      {undoes && <p data-testid={`profile-resolve-undoes-${sectionKey}`} className={NOTICE}>{t('settings.profile.resolve.undoes')}</p>}
       {changed && <p data-testid={`profile-resolve-changed-${sectionKey}`} className={NOTICE}>{t('settings.profile.resolve.changed')}</p>}
       {outcome !== null && (
         <p data-testid={`profile-resolve-sent-${sectionKey}`} data-state={outcome.state} className={outcome.state === 'sent' ? 'text-text-secondary' : NOTICE}>
@@ -120,9 +117,6 @@ export function ResolveRow({ sectionKey, kind, label, lock, invalidReason, fromL
               {t('settings.profile.resolve.count_sot', { what: hostCount.text })}
             </li>
           </ul>
-          {open.keep === 'local' && undoesOf(open.ctx.lock) && (
-            <p data-testid="profile-resolve-dialog-undoes" className={`mt-2 ${NOTICE}`}>{t('settings.profile.resolve.dialog_undoes')}</p>
-          )}
           {local !== null && local.changedSince && (
             <p data-testid="profile-resolve-local-moved" className={`mt-2 ${NOTICE}`}>{t('settings.profile.resolve.local_moved')}</p>
           )}

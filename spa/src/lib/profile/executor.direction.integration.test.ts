@@ -876,7 +876,7 @@ describe('P3e NEW side: this build (settings ordinal 4) meets settings an ordina
     await expectQuiet()
   })
 
-  it('RESTART with a persisted conflict whose LOCAL side is an old build\'s payload (profiles), answered keep-local: restoreLocal lands it under presets and ONE canonical PUT goes out', async () => {
+  it('RESTART with a persisted conflict whose LOCAL side is an old build\'s payload (profiles), answered keep-local: the LIVE stores go out (ONE canonical PUT), the stashed `profiles` snapshot never does', async () => {
     h.shape = shapeWithSettings(shapes.current)
     world('named-by-B', [ws('wb1', ['tb1'])], [tab('tb1')])
     await attach(B, 'push')
@@ -893,7 +893,8 @@ describe('P3e NEW side: this build (settings ordinal 4) meets settings an ordina
     expect(
       saveConflict(PROFILE, 'settings', { base: { rev: base.rev, hash: base.hash }, currentHash: localHash, conflict: { localHash, sot: { rev: sot.rev, hash: sot.hash } } }, { [localHash]: localPayload }),
     ).toBe('ok')
-    resetNewTab()
+    // the stores come back in this build's shape (the store's own migration), the layout under presets
+    useNewTabLayoutStore.setState({ presets: LAYOUT_B })
     problems.length = 0
     const writesBefore = daemon.writes.length
     const putCallsBefore = api.putSection.mock.calls.length
@@ -916,8 +917,8 @@ describe('P3e NEW side: this build (settings ordinal 4) meets settings an ordina
 
     expect(useNewTabLayoutStore.getState().presets).toEqual(LAYOUT_B)
     expect(settingsProblems()).toEqual([]) // no restore-invalid, no apply-threw
-    // Keep-local pushes the restored snapshot — upcast first: the old build's `profiles` never goes out
-    // under this build's ordinal 4 / fingerprint, not even transiently. ONE PUT, canonical shape.
+    // Keep-local pushes what the stores hold NOW (spec 2026-09-28 D2), not the persisted sent snapshot: the old
+    // build's `profiles` never goes out under this build's ordinal 4 / fingerprint. ONE PUT, canonical shape.
     const puts = api.putSection.mock.calls.slice(putCallsBefore).filter((c) => c[2] === 'settings').map((c) => c[3] as { payload: Record<string, unknown>; ordinal: number; hash: string })
     expect(puts.map((b) => [b.payload[NEWTAB], b.ordinal])).toEqual([[{ presets: LAYOUT_B }, shapes.current[1]]])
     expect(Object.hasOwn(puts[0].payload[NEWTAB] as object, 'profiles')).toBe(false)

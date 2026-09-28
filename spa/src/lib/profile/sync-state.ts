@@ -60,7 +60,15 @@
 //     when the 409 lands), no conflict is opened: the snapshot that was sent has
 //     already been abandoned, the section is clean, and row 3 pulls. Edited to a
 //     third value, it is still dirty → `locked:conflict`, the local side being
-//     the snapshot that was SENT.
+//     the snapshot that was SENT. That pair records what was refused; it is
+//     NOT what keep-local pushes (next bullet).
+//   - `resolved keep:'local'` keeps what the stores hold NOW (spec 2026-09-28
+//     D2): `base` = the newest SOT, `currentHash` untouched, no restore. An
+//     edit made while the section was locked (a Rebuild re-pointing a pane)
+//     survives; the section is dirty against the new base and the table
+//     pushes it (or deletes, when the live side is absent). `restoreLocal`,
+//     row 0c and `local-restored` are no longer reached from any event — the
+//     machinery is left in place until a follow-up removes it.
 //   - One 409 decides nothing: `{rev:0}` ("absent / tombstone") on a flight
 //     during which a `remote-event` showed a LIVE SOT. Events (WebSocket) and
 //     HTTP answers travel on different channels and carry no causal order, so
@@ -122,8 +130,8 @@
 //     It is never persisted: after a restart the section reindexes, pulls, and
 //     is judged again — cheap, and it cannot go stale on disk.
 //   - Decision order, first match wins: 0a locked → 0b in flight → 0c
-//     `restore-local` → 0d `reindex` → 0e `forcePull` → rows 1–8. The restore
-//     sits ABOVE the reindex because putting the sent snapshot back is a purely
+//     `restore-local` (unreached, see above) → 0d `reindex` → 0e `forcePull` →
+//     rows 1–8. The restore sits ABOVE the reindex because putting the sent snapshot back is a purely
 //     local action: it must not queue behind a step that needs the network
 //     (`indexStale` is the normal state offline and after every `reconnected`),
 //     or edits made while waiting would be overwritten by the late restore. It
@@ -139,7 +147,8 @@
 //     `restoreSectionState`, never-synced ones with `initialSectionState`.
 //     `base` is persisted, and so is an open `conflict` pair (with both
 //     payloads): a 409's local side is the snapshot that was SENT, which the
-//     table cannot re-derive. Flights, `locked:reset`, `locked:invalid`,
+//     table cannot re-derive (keep-local does not push it — it pushes the live
+//     stores — but the lock and its pair must survive the restart). Flights, `locked:reset`, `locked:invalid`,
 //     `forcePull` and `restoreLocal` are not — a decide-time conflict that was
 //     never recorded is re-derived by the decision table (row 8) after the
 //     first index.
@@ -172,7 +181,7 @@
 //     (404) the deletion is applied and reported with `rev = state.sot.rev`.
 //   - sot-index: tag the response with the `indexEpoch` the `reindex` action
 //     carried (i.e. read when the request was *sent*), unchanged.
-//   - restore-local: a pending restore is CANCELLED by any `local-changed` that
+//   - restore-local (unreached since spec 2026-09-28 D2): a pending restore is CANCELLED by any `local-changed` that
 //     really changes the live hash — what the user typed after choosing
 //     keep-local beats the snapshot that choice was about. So, before writing
 //     the snapshot into the stores, check `canRestoreLocal(state, hash)` on the
@@ -233,7 +242,8 @@ export interface SectionSyncState {
   invalid: Held | null
   /** Set by `resolved keep:'sot'`: pull even though the section is dirty. */
   forcePull: boolean
-  /** Set by `resolved keep:'local'`: the sent snapshot the driver must put back.
+  /** A snapshot the driver must put back. No event sets it since spec 2026-09-28 D2
+   *  (`resolved keep:'local'` keeps the live stores); left in place until a follow-up removes it.
    *  `null` = nothing to restore; `{ hash: null }` = restore to "does not exist"
    *  (the 409 was on a delete). Cleared by the restore itself and by any
    *  `local-changed` that changes the live hash (a later edit wins). */
@@ -309,10 +319,10 @@ export function initialSectionState(currentHash: string | null): SectionSyncStat
  *
  *  With one, the section comes back `locked:conflict`, the pair as persisted
  *  and `sot = conflict.sot`. Why it is persisted rather than re-derived (spec
- *  §4.6.2): the local side of a 409 is the snapshot that was SENT. A conflict
- *  re-derived after a restart by the decision table (row 8) would take the
- *  live hash of that moment as its local side instead, and keep-local would
- *  push something other than what the user was shown. The restored lock is an
+ *  §4.6.2): the local side of a 409 is the snapshot that was SENT, which the
+ *  decision table cannot re-derive — the lock the user comes back to is the one
+ *  that was opened, not one re-judged from the live hash of the next index.
+ *  (Keep-local itself pushes the LIVE stores, spec 2026-09-28 D2.) The restored lock is an
  *  ordinary one: it keeps learning (`remote-event` / `sot-index` move `sot` and
  *  `conflict.sot`), decides `nothing` (0a precedes the 0d reindex, so the
  *  stale index waits for `resolved`), and both `resolved` directions work.
@@ -606,7 +616,10 @@ function step(s: SectionSyncState, e: SectionEvent): SectionSyncState {
       if (e.keep === 'sot') return { ...unlocked, forcePull: true }
       // conflict.sot and sot move together; locked:reset / locked:invalid have no pair and read sot
       const target = s.conflict !== null ? s.conflict.sot : s.sot
-      return { ...unlocked, base: { rev: target.rev, hash: target.hash }, restoreLocal: s.conflict !== null ? { hash: s.conflict.localHash } : null }
+      // Keep-local keeps what the stores hold NOW (`currentHash`), edits made while locked included —
+      // not the snapshot that was sent (spec 2026-09-28 D2). Nothing is put back: the section is dirty
+      // against `base = target` and the ordinary table pushes (or deletes) the live side.
+      return { ...unlocked, base: { rev: target.rev, hash: target.hash }, restoreLocal: null }
     }
   }
 }

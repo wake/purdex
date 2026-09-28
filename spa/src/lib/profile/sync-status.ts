@@ -127,7 +127,9 @@
 //                 under `locked:conflict` and `locked:reset`; under `locked:invalid`
 //                 a new SOT unlocks — and may lock again, same status, other SOT.
 //   conflict      the pair, `locked:conflict` only: `localHash` is the snapshot that
-//                 was SENT, which is what is restored — not `currentHash`.
+//                 was SENT (what was refused). Keep-local does NOT restore it — it
+//                 pushes `currentHash` (spec 2026-09-28 D2) — but the pair still
+//                 identifies the lock.
 // "There was no pair and there still is none" is NOT enough: it is true of every
 // pairless lock there ever was. The same check guards the leader's own window:
 // its UI renders a snapshot too. A refused resolve is dropped, never kept for later.

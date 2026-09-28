@@ -1,8 +1,8 @@
-// spa/src/lib/profile/repro-keep-local-terminated.test.ts — REPRO (Profile Sync bug, 2026-09-28): a `tabs.<ws>` section
-// locked by a 409, the user rebuilds a terminated pane WHILE the lock stands, then answers 「保留這台裝置的」(keep local).
-// Keep-local restores the SENT snapshot (sync-state.ts `resolved` → `restoreLocal: conflict.localHash`), so the
-// rebuild made during the lock is overwritten: the pane goes back to the dead binding, `terminated: 'session-closed'`
-// and the old run's `agentExited`. Real executor / collector / apply; network, digest and shapeTable faked.
+// spa/src/lib/profile/executor.keep-local-live.integration.test.ts — Profile Sync, 2026-09-28 (spec D2): a `tabs.<ws>`
+// section locked by a 409, the user rebuilds a terminated pane WHILE the lock stands, then answers 「保留這台裝置的」
+// (keep local). Keep-local keeps what this device holds NOW: the rebuild made during the lock survives and is what gets
+// pushed. (It used to restore the SENT snapshot — the pane went back to the dead binding, `terminated: 'session-closed'`
+// and the old run's `agentExited`.) Real executor / collector / apply; network, digest and shapeTable faked.
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
