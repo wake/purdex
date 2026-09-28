@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.473] - 2026-09-29
+
+> **需要重新部署 daemon**（內嵌 Nexen 升到 v0.15.0；schema 仍是 v6，**不必**刪 `nex.db`）。
+
+### Feature：worker 分頁標題優先用 Claude 的 session 標題（#1525）
+
+- 從 terminal 交接過來的 worker，分頁標題改用 Claude 自己產生的 session 標題（例如「Nexen worker pane 顯示修正」）；你在 terminal 用 `/rename` 取的名字優先。沒有標題的 worker 照舊用交接前的終端機標題或任務第一行。
+- 通知的標題和分頁標題一致。
+- 舊 daemon 沒有這個功能時，標題維持原本的規則。
+
+### Internal
+
+- 內嵌 Nexen v0.13.2 → v0.15.0：帶來圖片附件（v0.14.0）與 session 標題（v0.15.0）。圖片直接傳給 agent 在下一版接上。
+- SPA 能讀新的能力欄位；圖片能力在缺少請求大小上限時一律視為不支援。
+
 ## [1.0.0-alpha.472] - 2026-09-29
 
 > **需要重新部署 daemon**（新增上傳端點 `POST /api/nex/executions/{id}/uploads`）。舊 daemon 下 worker 的上傳會失敗並在附件上顯示錯誤，其他功能不受影響。
