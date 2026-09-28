@@ -7,7 +7,7 @@ import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
-import { useHostConfigStore } from '../../stores/useHostConfigStore'
+import { useHostConfigStore, emptyHostConfigEntry } from '../../stores/useHostConfigStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { NexApiError } from '../../lib/nex/types'
 import { requestBytes } from '../../lib/nex/worker-upload'
@@ -342,5 +342,27 @@ describe('ExecutionView — native image attachments', () => {
     expect(api.uploadWorkerFile).not.toHaveBeenCalled()
     expect(invalidate).not.toHaveBeenCalled()
     expect(api.sendMessage).toHaveBeenCalledTimes(1)
+  })
+  it('while images encode, the quick replies and the input are disabled (PR #1527 A3)', async () => {
+    seedCaps(imageCaps())
+    const e = emptyHostConfigEntry('ready')
+    useHostConfigStore.setState({ byHost: { [H]: { ...e, quickReplies: [{ id: 'go', text: 'go on' }], quickRepliesSupported: true, revisions: { ...e.revisions, quickReplies: 1 } } } })
+    const reads = holdReads()
+    render(<ExecutionView {...base} isActive />)
+    const reply = () => screen.getByTestId('quick-reply')
+    expect(reply()).not.toBeDisabled()
+    dropFiles([png('a.png')])
+    enter()
+    await waitFor(() => expect(reads.count).toBe(1))
+    expect(reply()).toBeDisabled()
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    // The chip can still be removed meanwhile (A1); with nothing left the
+    // send is dropped, and the gate lifts once the encode settles.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove a.png' }))
+    expect(reply()).toBeDisabled()
+    act(() => reads.flush())
+    await waitFor(() => expect(reply()).not.toBeDisabled())
+    expect(screen.getByRole('textbox')).not.toBeDisabled()
+    expect(api.sendMessage).not.toHaveBeenCalled()
   })
 })

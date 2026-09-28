@@ -122,7 +122,10 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const [sendBlock, setSendBlock] = useState<'request_too_large' | null>(null)
   // Encoding the images is async; this keeps a second submit meanwhile from
   // posting the same chips twice (handleSend's own lock starts after it).
+  // The ref is the same-tick guard; the state renders it, so the input and
+  // the quick replies show disabled instead of dropping a click (PR #1527 A3).
   const encoding = useRef(false)
+  const [encodingBusy, setEncodingBusy] = useState(false)
   // The optimistic line's thumbnails are its own object URLs (the chips'
   // are revoked as soon as the send clears them): revoked when pendingLocal
   // drops this array — accepted, failed or replaced — and on unmount.
@@ -318,7 +321,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // this clears itself without redesigning the reconnect path.
   const streamDead = st.historyLoaded && st.sse === 'closed' && !!st.sseError
   // One gate for everything that sends: the input and the quick replies.
-  const inputDisabled = st.pendingSend || ended || !st.historyLoaded || streamDead || takeBackBusy
+  const inputDisabled = st.pendingSend || encodingBusy || ended || !st.historyLoaded || streamDead || takeBackBusy
   const placeholder = st.summary?.archived ? t('execution.input.archived')
     : ended ? t('execution.input.terminal')
     : streamDead ? t('execution.input.disconnected')
@@ -375,6 +378,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // with nothing left to say the send is dropped.
   const encodeThenSend = async (typed: string, opts: SendOptions, sent: Chip[], natives: { key: string; file: File }[]) => {
     encoding.current = true
+    setEncodingBusy(true)
     try {
       const encoded = await Promise.allSettled(natives.map((n) => encodeImage(n.file)))
       const kept = natives.flatMap((n, i) => (uploads.isLive(n.key) ? [{ ...n, result: encoded[i] }] : []))
@@ -391,6 +395,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
       await sendNow(finalText, opts, liveSent.map((c) => c.key), kept, data)
     } finally {
       encoding.current = false
+      setEncodingBusy(false)
     }
   }
   const sendNow = async (finalText: string, opts: SendOptions, sentKeys: string[], natives: { key: string; file: File }[], data: string[]) => {
