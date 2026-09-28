@@ -13,11 +13,11 @@ import { stripAgentTitleMarker } from '../lib/agent-title-marker'
 import { compositeKey } from '../lib/composite-key'
 import { ICON_MAP } from '../components/tab-icon-map'
 import type { Session } from '../lib/host-api'
-import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
+import { useExecutionStore } from '../stores/useExecutionStore'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { useWorkerSettingsStore } from '../stores/useWorkerSettingsStore'
 import { execAgentCode } from '../lib/nex/worker-agent-status'
-import { workerTabTitle } from '../lib/nex/worker-tab-title'
+import { liveWorkerSummary, rowWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
 import { workerIcon } from '../lib/worker-icon'
 import type { ExecutionSummary } from '../lib/nex/types'
 import { useSessionAgentIndicator } from './useSessionAgentIndicator'
@@ -49,7 +49,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const t = useI18nStore((s) => s.t)
   const primaryContent = getPrimaryPane(tab.layout).content
   const exec = primaryContent.kind === 'execution' ? primaryContent : undefined
-  // A worker tab's light lives under `exec:<id>` (useWorkerAgentProjection,
+  // A worker tab's light lives under `exec-<id>` (useWorkerAgentProjection,
   // spec §8.1); its host resolves like ExecutionPaneWrapper's (hint, else the first host).
   const execHostId = useHostStore((s) => (exec ? exec.host || s.hostOrder[0] || '' : ''))
   const hostId = primaryContent.kind === 'tmux-session' ? primaryContent.hostId : execHostId
@@ -77,9 +77,9 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
 
   // Worker summary: the live pane state when present, else the host's list row (same order as the projection).
   const execSummary = useExecutionStore((s): ExecutionSummary | null =>
-    exec && hostId ? s.executions[executionKey(hostId, exec.executionId)]?.summary ?? null : null)
+    exec && hostId ? liveWorkerSummary(s.executions, hostId, exec.executionId) : null)
   const execRow = useExecutionListStore((s): ExecutionSummary | null =>
-    exec && hostId && !execSummary ? s.byHost[hostId]?.items.find((r) => r.id === exec.executionId) ?? null : null)
+    exec && hostId && !execSummary ? rowWorkerSummary(s.byHost, hostId, exec.executionId) : null)
   const workerSummary = execSummary ?? execRow
   const workerIconStyle = useWorkerSettingsStore((s) => s.iconStyle)
   const workerCustomIcon = useWorkerSettingsStore((s) => s.customIcon)
@@ -100,8 +100,8 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const rawPaneTitle = dynamicTabName && !isTerminated && !!agentType ? session?.pane_title : undefined
   const paneTitle = rawPaneTitle && stripMarker ? stripAgentTitleMarker(rawPaneTitle, agentType) : rawPaneTitle
   const displayTitle = exec
-    // Nexen session_title is not wired yet (phase E): sessionTitle stays undefined.
-    ? workerTabTitle({ sessionTitle: undefined, fromTitle: exec.fromTitle, brief: workerSummary?.brief, cwd: workerSummary?.cwd }) ?? baseLabel
+    // Shared with the notification dispatcher's worker title (worker-summary.ts).
+    ? workerTitleOf(exec, workerSummary) ?? baseLabel
     : paneTitle ? `${paneTitle} - ${baseLabel}` : baseLabel
 
   return {

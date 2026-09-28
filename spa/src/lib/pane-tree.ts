@@ -1,5 +1,7 @@
 import type { Pane, PaneContent, PaneLayout, LayoutPattern } from '../types/tab'
 import { generateId } from './id'
+import { execAgentCode } from './nex/worker-agent-status'
+import { resolveExecutionHostId } from './nex/resolve-host'
 
 export function getPrimaryPane(layout: PaneLayout): Pane {
   if (layout.type === 'leaf') return layout.pane
@@ -87,6 +89,10 @@ export function remountLeaf(
  * (`internal/module/session/codec.go`), so two hosts routinely produce the
  * same code for unrelated sessions. Matching on the code alone would land on
  * whichever host's tab happens to come first in `tabs`.
+ *
+ * A worker (execution) primary pane matches the agent key `exec-<executionId>`
+ * on its resolved host (the pane's host hint, else the first host — the host
+ * the worker projection writes under; worker-pane theme spec §8.2).
  */
 export function findTabBySessionCode(
   tabs: Record<string, { layout: PaneLayout }>,
@@ -95,13 +101,9 @@ export function findTabBySessionCode(
 ): string | undefined {
   for (const [tabId, tab] of Object.entries(tabs)) {
     const primary = getPrimaryPane(tab.layout)
-    if (
-      primary.content.kind === 'tmux-session' &&
-      primary.content.hostId === hostId &&
-      primary.content.sessionCode === sessionCode
-    ) {
-      return tabId
-    }
+    const c = primary.content
+    if (c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode) return tabId
+    if (c.kind === 'execution' && execAgentCode(c.executionId) === sessionCode && resolveExecutionHostId(c.host) === hostId) return tabId
   }
   return undefined
 }

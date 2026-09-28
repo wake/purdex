@@ -18,9 +18,7 @@ import { bootHostLooks } from './lib/host-look-migration'
 import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalone'
 import { startHostReshowRecovery } from './lib/rebuild/host-reshow'
 import { scheduleLegacyResidueCleanup } from './lib/legacy-residue-cleanup'
-import { getActiveSessionInfo } from './lib/active-session'
-import { useTabStore } from './stores/useTabStore'
-import { useAgentStore } from './stores/useAgentStore'
+import { startActiveTabMarkRead } from './lib/active-tab-mark-read'
 import { useLayoutStore } from './stores/useLayoutStore'
 
 // Locales / themes are also registered by useI18nStore / useThemeStore before their persist
@@ -68,23 +66,8 @@ startHostReshowRecovery()
 
 useLayoutStore.getState().reconcileViews()
 
-// Cross-store subscription: auto-markRead when active tab changes to a session.
-// Inlined here to avoid circular dependency between active-session.ts and useAgentStore.
-// Compare composite keys (hostId:sessionCode) for cross-host correctness.
-let prevKey: string | null = (() => {
-  const info = getActiveSessionInfo()
-  return info ? `${info.hostId}:${info.sessionCode}` : null
-})()
-useTabStore.subscribe(() => {
-  const currentInfo = getActiveSessionInfo()
-  const currentKey = currentInfo ? `${currentInfo.hostId}:${currentInfo.sessionCode}` : null
-  if (currentKey !== prevKey) {
-    prevKey = currentKey
-    if (currentInfo) {
-      useAgentStore.getState().markRead(currentInfo.hostId, currentInfo.sessionCode)
-    }
-  }
-})
+// Cross-store subscription: auto-markRead when the active tab changes to a session or a worker (app lifetime).
+startActiveTabMarkRead()
 
 // Leftovers of the removed Sync / device-state / workspace-snapshot features (#1303): on a later task, after the first
 // render is scheduled; never awaited, never throws.

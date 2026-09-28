@@ -10,7 +10,9 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { buildNotificationContent } from '../lib/notification-content'
 import { normalizeEventName } from '../lib/event-name'
-import { findTabBySessionCode } from '../lib/pane-tree'
+import { findTabBySessionCode, getPrimaryPane } from '../lib/pane-tree'
+import { executionIdOfAgentCode, isExecAgentCode } from '../lib/nex/worker-agent-status'
+import { readWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
 import { getPlatformCapabilities } from '../lib/platform'
 import { useHostStore } from '../stores/useHostStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
@@ -247,10 +249,7 @@ export function useNotificationDispatcher(): void {
           errorString,
         })) continue
 
-        const sessionsMap = useSessionStore.getState().sessions
-        const hostSessions = sessionsMap[hostId] ?? []
-        const session = hostSessions.find((s) => s.code === sessionCode)
-        const sessionName = session?.name || sessionCode
+        const sessionName = notificationName(hostId, sessionCode)
 
         const content = buildNotificationContent(event.raw_event_name, (event.detail ?? {}) as Record<string, unknown>, sessionName, useI18nStore.getState().t)
         if (!content) continue
@@ -328,6 +327,23 @@ export function useNotificationDispatcher(): void {
   }, [])
 }
 
+/**
+ * The notification title for an agent key. A worker (`exec-<id>`) is titled
+ * like its tab — same summary source, same title rule (worker-summary.ts) —
+ * falling back to the execution id; a tmux session by its name, else its code.
+ */
+function notificationName(hostId: string, sessionCode: string): string {
+  const executionId = executionIdOfAgentCode(sessionCode)
+  if (executionId !== null) {
+    const tabId = findTabBySessionCode(useTabStore.getState().tabs, hostId, sessionCode)
+    const primary = tabId ? getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content : undefined
+    const fromTitle = primary?.kind === 'execution' ? primary.fromTitle : undefined
+    return workerTitleOf({ fromTitle }, readWorkerSummary(hostId, executionId)) ?? executionId
+  }
+  const session = useSessionStore.getState().sessions[hostId]?.find((s) => s.code === sessionCode)
+  return session?.name || sessionCode
+}
+
 export function handleNotificationClick(action: NotificationAction): void {
   switch (action.kind) {
     case 'open-session': {
@@ -354,6 +370,10 @@ export function handleNotificationClick(action: NotificationAction): void {
           useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabId)
         }
         handled = true
+      } else if (isExecAgentCode(sessionCode)) {
+        // A worker with no open tab: never reopen it as a tmux tab (an exec key is not a tmux code). Nothing to
+        // focus, so only the unread mark is cleared (worker-pane theme spec §8.2).
+        useAgentStore.getState().markRead(hostId, sessionCode)
       } else if (agentSettings.reopenTabOnClick) {
         const session = useSessionStore.getState().sessions[hostId]?.find(s => s.code === sessionCode)
         const sessionName = session?.name ?? ''

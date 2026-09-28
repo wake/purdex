@@ -12,6 +12,13 @@ import { createTab } from '../types/tab'
 import { useHostStore } from '../stores/useHostStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { getPrimaryPane } from '../lib/pane-tree'
+import type { Tab } from '../types/tab'
+import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
+import { useExecutionListStore } from '../stores/useExecutionListStore'
+import { defaultExecutionState } from '../lib/nex/event-reducer'
+import { emptyListCache } from '../lib/nex/execution-list-effects'
+import type { ExecutionSummary } from '../lib/nex/types'
+import { useTabDisplay } from './useTabDisplay'
 
 const defaultSettings: NotificationSettings = {
   enabled: true, events: {}, notifyWithoutTab: false, reopenTabOnClick: false,
@@ -868,5 +875,167 @@ describe('debounce isolation guards', () => {
     // Step 5: unread must be true even though shouldNotify returned false
     // This test FAILS if a future change gates the unread write on shouldNotify's return value.
     expect(useAgentStore.getState().unread[ck]).toBe(true)
+  })
+})
+
+// Worker (exec-) agent keys — worker-pane theme spec §8.2 (unread + notifications rows).
+describe('worker (execution) tabs in the notification dispatcher', () => {
+  const HOST = 'h1'
+  const CODE = 'exec-e1'
+  const CK = `${HOST}:${CODE}`
+  const summary = (over: Partial<ExecutionSummary> = {}): ExecutionSummary =>
+    ({ id: 'e1', state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/w/repo', mount_kind: 'dev', brief: 'Fix the bug\nmore',
+      labels: {}, created_at: 1, updated_at: 5, duration_ms: null, event_count: 0, observers: 0, archived: false, ...over }) as ExecutionSummary
+  const execTab = (over: { fromTitle?: string } = {}): Tab => ({
+    id: 'tx', pinned: false, locked: false, createdAt: 0,
+    layout: { type: 'leaf', pane: { id: 'px', content: {
+      kind: 'execution', executionId: 'e1', host: HOST, ...(over.fromTitle !== undefined ? { fromTitle: over.fromTitle } : {}),
+    } } },
+  })
+  const openExecTab = (over: { fromTitle?: string } = {}) => {
+    const tab = execTab(over)
+    useTabStore.setState({ tabs: { [tab.id]: tab }, tabOrder: [tab.id], activeTabId: null })
+    return tab
+  }
+  const setLiveSummary = (over: Partial<ExecutionSummary> = {}) =>
+    useExecutionStore.setState({ executions: { [executionKey(HOST, 'e1')]: { ...defaultExecutionState(), summary: summary(over) } } })
+  // What useWorkerAgentProjection (C2) dispatches.
+  const dispatch = (ev: { status: string; raw_event_name: string; broadcast_ts: number; detail?: Record<string, unknown> }) =>
+    useAgentStore.setState({ lastEvents: { [CK]: { agent_type: 'cc', ...ev } } })
+
+  let showNotification: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    __resetDebounceStateForTests()
+    localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [CK]: 1 }))
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.getState().reset()
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {} })
+    useNotificationSettingsStore.setState({ agents: {} })
+    useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+    useHostStore.setState({ hostOrder: [HOST] })
+    useShownHostsStore.setState({ ids: [HOST] })
+    useExecutionStore.setState({ executions: {} })
+    useExecutionListStore.setState({ byHost: {} })
+    showNotification = vi.fn()
+    Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
+  })
+
+  afterEach(() => {
+    Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+    localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN)
+  })
+
+  it('worker idle builds notification content (title = worker title, body = last assistant text)', () => {
+    openExecTab()
+    setLiveSummary()
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    dispatch({ status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2, detail: { last_assistant_message: 'All done.' } })
+
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    const payload = showNotification.mock.calls[0][0]
+    expect(payload.title).toBe('Fix the bug - repo')
+    expect(payload.body).toBe('All done.')
+    expect(payload.action).toEqual({ kind: 'open-session', hostId: HOST, sessionCode: CODE })
+    unmount()
+  })
+
+  it('worker error builds StopFailure content', () => {
+    openExecTab()
+    setLiveSummary()
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    dispatch({ status: 'error', raw_event_name: 'StopFailure', broadcast_ts: 2, detail: { error: 'rate limited' } })
+
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    expect(showNotification.mock.calls[0][0].title).toBe('Fix the bug - repo')
+    expect(showNotification.mock.calls[0][0].body).toBe('rate limited')
+    unmount()
+  })
+
+  it('the notification title equals the tab displayTitle for the same worker', () => {
+    const tab = openExecTab({ fromTitle: 'Old terminal' })
+    useExecutionListStore.setState({ byHost: { [HOST]: { ...emptyListCache(), items: [summary({ brief: 'Row brief', cwd: '/x/proj' })] } } })
+    const { result } = renderHook(() => useTabDisplay(tab))
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    dispatch({ status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2, detail: {} })
+
+    expect(showNotification.mock.calls[0][0].title).toBe(result.current.displayTitle)
+    expect(result.current.displayTitle).toBe('Old terminal - proj')
+    unmount()
+  })
+
+  it('with no summary anywhere the title falls back to the execution id', () => {
+    openExecTab()
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    dispatch({ status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2, detail: {} })
+    expect(showNotification.mock.calls[0][0].title).toBe('e1')
+    unmount()
+  })
+
+  it('hasTab true for exec with an open tab (notifyWithoutTab off still notifies)', () => {
+    openExecTab()
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    dispatch({ status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2, detail: {} })
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    unmount()
+  })
+
+  it('an exec key with no open tab is not notified when notifyWithoutTab is off', () => {
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    dispatch({ status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2, detail: {} })
+    expect(showNotification).not.toHaveBeenCalled()
+    unmount()
+  })
+
+  // Controller ruling (worker-pane theme spec §L1): the worker projection
+  // (useWorkerAgentProjection) covers every execution pane, but the tab
+  // lookup this dispatcher uses (`findTabBySessionCode`) is primary-pane
+  // only — same as a tmux agent tab. So a worker sitting in a *secondary*
+  // split pane has `hasTab: false` here, exactly like a tab with no worker
+  // tab open at all, and is gated by `notifyWithoutTab` the same way.
+  it('a worker as the secondary pane of a split tab has no tab to route to — not notified when notifyWithoutTab is off', () => {
+    const splitTab: Tab = {
+      id: 'tx', pinned: false, locked: false, createdAt: 0,
+      layout: {
+        type: 'split', id: 's1', direction: 'h', sizes: [50, 50],
+        children: [
+          { type: 'leaf', pane: { id: 'p-other', content: { kind: 'new-tab' } } },
+          { type: 'leaf', pane: { id: 'p-worker', content: { kind: 'execution', executionId: 'e1', host: HOST } } },
+        ],
+      },
+    }
+    useTabStore.setState({ tabs: { [splitTab.id]: splitTab }, tabOrder: [splitTab.id], activeTabId: null })
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    dispatch({ status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2, detail: {} })
+    expect(showNotification).not.toHaveBeenCalled()
+    unmount()
+  })
+
+  it('notification click focuses the exec tab and marks it read', () => {
+    const tab = openExecTab()
+    const ws = useWorkspaceStore.getState().addWorkspace('W')
+    useWorkspaceStore.getState().addTabToWorkspace(ws.id, tab.id)
+    useAgentStore.setState({ unread: { [CK]: true } })
+
+    handleNotificationClick({ kind: 'open-session', hostId: HOST, sessionCode: CODE })
+
+    expect(useTabStore.getState().activeTabId).toBe(tab.id)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(ws.id)
+    expect(useAgentStore.getState().unread[CK]).toBeUndefined()
+  })
+
+  it('no tmux tab is created for exec click (reopenTabOnClick on, no tab open) — only markRead', () => {
+    useNotificationSettingsStore.getState().setReopenTabOnClick('cc', true)
+    useNotificationSettingsStore.getState().setReopenTabOnClick('', true)
+    useAgentStore.setState({
+      unread: { [CK]: true },
+      lastEvents: { [CK]: { agent_type: 'cc', status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2 } },
+    })
+
+    handleNotificationClick({ kind: 'open-session', hostId: HOST, sessionCode: CODE })
+
+    expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(0)
+    expect(useTabStore.getState().activeTabId).toBeNull()
+    expect(useAgentStore.getState().unread[CK]).toBeUndefined()
   })
 })

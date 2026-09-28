@@ -108,10 +108,11 @@ function ExecutionPaneWrapper({ pane, isActive }: PaneRendererProps) {
   const tabId = useTabStore((s) => Object.keys(s.tabs).find((id) => findPane(s.tabs[id].layout, pane.id) !== undefined))
   const content = pane.content
   if (content.kind !== 'execution') return null
-  // Fallback only when there is no hint at all (legacy route / deeplink); a
-  // stored host that no longer exists must surface as "Host removed", never
-  // as another daemon (spec §4.3.2 step 5).
-  const hostId = content.host ?? resolveExecutionHostId(undefined)
+  // Fallback only when there is no hint at all (legacy route / deeplink, or
+  // an empty-string hint — `resolveExecutionHostId` treats '' the same as
+  // absent); a stored host that no longer exists must surface as "Host
+  // removed", never as another daemon (spec §4.3.2 step 5).
+  const hostId = resolveExecutionHostId(content.host)
   // The view (room / chat, R2 plan T1.1) lives on the pane content, so it is
   // persisted and travels with the tab (D1). The switch reads the content the
   // store holds *now*, not this render's, so a `from` or host rewrite that

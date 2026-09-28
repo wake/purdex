@@ -19,7 +19,7 @@ import type { Tab } from '../types/tab'
 
 const H = 'host-a'
 const E = 'E1'
-const KEY = compositeKey(H, 'exec:E1')
+const KEY = compositeKey(H, 'exec-E1')
 
 const summary = (over: Partial<ExecutionSummary> = {}): ExecutionSummary =>
   ({ id: E, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/w', mount_kind: 'dev', brief: 'b', labels: {},
@@ -129,6 +129,21 @@ describe('useWorkerAgentProjection', () => {
     stop()
   })
 
+  it('a pane with an empty-string host hint resolves to the first host, same as no hint', () => {
+    const stop = startWorkerAgentProjection()
+    try {
+      setLive({ summary: summary({ state: 'running' }), turnLive: true })
+      const emptyHostTab: Tab = {
+        id: 't-exec', pinned: false, locked: false, createdAt: 0,
+        layout: { type: 'leaf', pane: { id: 'p-t-exec', content: { kind: 'execution', executionId: E, host: '' } } },
+      }
+      useTabStore.setState({ tabs: { 't-exec': emptyHostTab }, tabOrder: ['t-exec'] })
+      expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+    } finally {
+      stop()
+    }
+  })
+
   it('keeps one list subscription per host with a worker tab and releases it with the last tab', () => {
     const stop = startWorkerAgentProjection()
     useTabStore.setState({ tabs: { t1: execTab('t1'), t2: execTab('t2', H, 'E2') }, tabOrder: ['t1', 't2'] })
@@ -175,6 +190,47 @@ describe('useWorkerAgentProjection', () => {
     setLive({ turnLive: false, summary: summary({ state: 'idle' }), turnStarts: [0], turnMeta: [{ startAt: 1, endAt: 2, outcome: 'ok', durationMs: 1 }] })
     expect(spy).toHaveBeenCalledTimes(2)
     stop()
+  })
+
+  describe('every execution pane, not just the primary one (controller ruling, spec L1)', () => {
+    const splitTab = (workerFirst: boolean): Tab => {
+      const worker = { type: 'leaf' as const, pane: { id: 'p-w', content: { kind: 'execution' as const, executionId: E, host: H } } }
+      const other = { type: 'leaf' as const, pane: { id: 'p-o', content: { kind: 'new-tab' as const } } }
+      return {
+        id: 't-split', pinned: false, locked: false, createdAt: 0,
+        layout: { type: 'split', id: 's1', direction: 'h', sizes: [50, 50], children: workerFirst ? [worker, other] : [other, worker] },
+      }
+    }
+
+    it('a worker as the second pane of a split is still projected (status in store, unread when not active)', () => {
+      const stop = startWorkerAgentProjection()
+      try {
+        setLive({ summary: summary({ state: 'running' }), turnLive: true })
+        useTabStore.setState({ tabs: { 't-split': splitTab(false) }, tabOrder: ['t-split'] })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+        setLive({ summary: summary({ state: 'idle' }), turnLive: false, turnStarts: [0], turnMeta: [{ startAt: 1, endAt: 2, outcome: 'ok', durationMs: 1 }] })
+        const st = useAgentStore.getState()
+        expect(st.statuses[KEY]).toBe('idle')
+        expect(st.unread[KEY]).toBe(true)
+        expect(st.lastEvents[KEY].raw_event_name).toBe('Stop')
+      } finally {
+        stop()
+      }
+    })
+
+    it('a worker as the primary pane of a split tab is projected the same way', () => {
+      const stop = startWorkerAgentProjection()
+      try {
+        setLive({ summary: summary({ state: 'running' }), turnLive: true })
+        useTabStore.setState({ tabs: { 't-split': splitTab(true) }, tabOrder: ['t-split'] })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+        setLive({ summary: summary({ state: 'idle' }), turnLive: false, turnStarts: [0], turnMeta: [{ startAt: 1, endAt: 2, outcome: 'ok', durationMs: 1 }] })
+        expect(useAgentStore.getState().unread[KEY]).toBe(true)
+        expect(useAgentStore.getState().lastEvents[KEY].raw_event_name).toBe('Stop')
+      } finally {
+        stop()
+      }
+    })
   })
 
   it('broadcast_ts is stable across restarts for the same state (no replay notification)', () => {

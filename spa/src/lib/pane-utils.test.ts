@@ -186,6 +186,20 @@ describe('contentMatches', () => {
     expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'zzz' }, { kind: 'execution', executionId: 'exc_1', host: 'a' })).toBe(false)
   })
 
+  it('an empty-string host is the same as a missing one (both resolve to the first host)', () => {
+    useHostStore.setState({ hosts: { a: { id: 'a', name: 'A', ip: '1', port: 1 }, b: { id: 'b', name: 'B', ip: '2', port: 1 } } as never, hostOrder: ['a', 'b'], activeHostId: 'a', runtime: {} })
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: '' }, { kind: 'execution', executionId: 'exc_1' })).toBe(true)
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1' }, { kind: 'execution', executionId: 'exc_1', host: '' })).toBe(true)
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: '' }, { kind: 'execution', executionId: 'exc_1', host: 'a' })).toBe(true)
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: '' }, { kind: 'execution', executionId: 'exc_1', host: 'b' })).toBe(false)
+  })
+
+  it('an explicit first host and a missing host are the same pane', () => {
+    useHostStore.setState({ hosts: { a: { id: 'a', name: 'A', ip: '1', port: 1 }, b: { id: 'b', name: 'B', ip: '2', port: 1 } } as never, hostOrder: ['a', 'b'], activeHostId: 'a', runtime: {} })
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'a' }, { kind: 'execution', executionId: 'exc_1' })).toBe(true)
+    expect(contentMatches({ kind: 'execution', executionId: 'exc_1', host: 'b' }, { kind: 'execution', executionId: 'exc_1' })).toBe(false)
+  })
+
   it('execution `from` (the session it was handed off from) does not affect matching', () => {
     useHostStore.setState({ hosts: { a: { id: 'a', name: 'A', ip: '1', port: 1 } } as never, hostOrder: ['a'], activeHostId: 'a', runtime: {} })
     const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }

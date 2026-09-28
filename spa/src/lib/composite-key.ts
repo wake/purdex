@@ -5,9 +5,11 @@ export function compositeKey(hostId: string, sessionCode: string): string {
 /**
  * Inverse of compositeKey.
  *
- * Why lastIndexOf: sessionCode is a fixed 6-char base36 token and never
- * contains ':', while hostId may (e.g. "mlab:abc123"). Splitting on the
- * first colon would truncate such hostIds to "mlab".
+ * Why lastIndexOf: the session code never contains ':' — a tmux session code
+ * is a fixed 6-char base36 token, and a worker (execution) agent code is
+ * `exec-<executionId>` (worker-pane theme spec §8.1, no colon) — while hostId
+ * may (e.g. "mlab:abc123"). Splitting on the first colon would truncate such
+ * hostIds to "mlab".
  *
  * A key without ':' yields hostId '' and sessionCode = the whole key.
  */

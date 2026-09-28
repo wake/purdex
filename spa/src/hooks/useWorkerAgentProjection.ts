@@ -1,6 +1,6 @@
 // spa/src/hooks/useWorkerAgentProjection.ts — app-lifetime projection of every
 // worker (execution) pane's state into `useAgentStore` (worker-pane theme spec
-// §8.1–8.2), under `exec:<id>` keys, so the sidebar light, unread and the
+// §8.1–8.2), under `exec-<id>` keys, so the sidebar light, unread and the
 // notification dispatcher treat a worker tab like a terminal agent tab.
 //
 // Source per pane: the live `useExecutionStore` entry (when it has a summary
@@ -40,15 +40,33 @@ const LAST_MESSAGE_MAX = 300
 
 interface WorkerRef { hostId: string; executionId: string }
 
-/** Every execution pane in any tab, keyed by its agent-store composite key. */
+/**
+ * Every execution pane in any tab, keyed by its agent-store composite key.
+ * Controller ruling (worker-pane theme spec §L1): a worker's status is
+ * decided by the daemon regardless of which pane shows it — identical to a
+ * tmux agent, whose status the daemon reports no matter which pane runs it.
+ * Only the *tab lookups* (`getActiveSessionInfo`, `findTabBySessionCode`,
+ * `useTabDisplay`) are primary-pane, because a tab has one place to show a
+ * badge or route a click. This projection is not a tab lookup — it feeds the
+ * store every execution pane reads from — so it must scan every pane, not
+ * just `getPrimaryPane`. A worker in a secondary split pane still gets a
+ * status/unread entry here; it just has no tab to badge (`hasTab` is false in
+ * the dispatcher), so it notifies only when `notifyWithoutTab` is on. Do not
+ * narrow this back to the primary pane — that was tried and reverted
+ * (`d108afd7`, then undone) because it silently dropped secondary-pane
+ * workers' status and unread instead of just their notification routing.
+ */
 function collectWorkers(tabs: Record<string, Tab>): Map<string, WorkerRef> {
   const out = new Map<string, WorkerRef>()
   for (const tab of Object.values(tabs)) {
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
       if (c.kind !== 'execution') return
-      // Same resolution as ExecutionPaneWrapper (register-modules/index.tsx).
-      const hostId = c.host ?? resolveExecutionHostId(undefined)
+      // Same resolution as ExecutionPaneWrapper (register-modules/index.tsx):
+      // `resolveExecutionHostId` treats an empty-string host the same as a
+      // missing one (falls back to the first host), so `??` here — which
+      // only catches null/undefined — would leave a '' hint unresolved.
+      const hostId = resolveExecutionHostId(c.host)
       if (!hostId) return
       out.set(compositeKey(hostId, execAgentCode(c.executionId)), { hostId, executionId: c.executionId })
     })
