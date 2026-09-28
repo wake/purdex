@@ -26,6 +26,7 @@ import { groupTurns, INTERRUPT_TEXT, type RoomTurn } from '../../lib/nex/turns'
 import { chatToolsKey, searchUnitId } from '../../lib/nex/transcript-search'
 import ThinkingIndicator from '../ThinkingIndicator'
 import RoomTurnGroup from '../room/RoomTurnGroup'
+import TurnFooter from '../room/TurnFooter'
 import RoomProse from '../room/RoomProse'
 import OperationBlock from '../room/OperationBlock'
 import { OperationAt } from '../room/MessageRow'
@@ -139,6 +140,7 @@ export default function ChatTranscript({
   children,
   afterThinking,
   turnStarts = NO_STARTS,
+  turnMeta,
   partial,
   tools,
   now,
@@ -241,6 +243,8 @@ export default function ChatTranscript({
                     any text streaming ahead of them, so it does not jump from
                     above the typing bubble to below it once the text lands. */}
                 {plain.length === 0 && toolsLine}
+                {/* Spec §7.2: the footer is the last line of a completed turn; a live turn's meta has no endAt, so it draws nothing. */}
+                {turn.boundary !== null && turnMeta?.[turn.boundary] && <TurnFooter meta={turnMeta[turn.boundary]} />}
               </div>
             </RoomTurnGroup>
           )

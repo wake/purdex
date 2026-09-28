@@ -306,7 +306,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const queuedTag = st.pendingLocal?.delivery === 'queued'
     && <span className="text-[10px] uppercase font-normal text-text-muted">{t('execution.queued')}</span>
   const transcriptProps = {
-    messages: st.messages, turnStarts: st.turnStarts, keyPrefix: executionId, showThinking,
+    messages: st.messages, turnStarts: st.turnStarts, turnMeta: st.turnMeta, keyPrefix: executionId, showThinking,
     showEmptyHint: st.messages.length === 0 && !st.pendingLocal, emptyText: t('execution.empty'), scrollKey: st.pendingLocal ? 1 : 0,
     partial: st.partial, tools: st.tools, now, subagentTasks,
     // R3 T3.3: the search bar marks and scrolls inside the transcript, and

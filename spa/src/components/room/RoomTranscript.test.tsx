@@ -9,6 +9,7 @@ import RoomUserLine from './RoomUserLine'
 import type { ContentBlock, StreamMessage } from '../../lib/nex/message-types'
 import type { PartialAssembly, PartialBlock } from '../../lib/nex/partial'
 import type { ToolActivity } from '../../lib/nex/tool-activity'
+import type { TurnMeta } from '../../lib/nex/event-reducer'
 
 const assistantText: StreamMessage = { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Hi there' }], stop_reason: null } } as StreamMessage
 
@@ -631,6 +632,44 @@ describe('RoomTranscript', () => {
       expect(scrollTo).toHaveBeenCalledTimes(1)
       rerender(T({ messages, scrollKey: 1 }))
       expect(scrollTo).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  // ---- spec §7.2: turn footer ------------------------------------------------
+
+  describe('turn footer (spec §7.2)', () => {
+    const meta = (patch: Partial<TurnMeta>): TurnMeta => ({ startAt: 0, endAt: null, outcome: null, durationMs: null, ...patch })
+    const twoTurns: StreamMessage[] = [said('first'), assistantText, said('second'), asst({ type: 'text', text: 'again' })]
+
+    it('shows a footer after a completed turn', () => {
+      render(T({
+        messages: twoTurns, turnStarts: [0, 2],
+        turnMeta: [meta({ endAt: 1000, outcome: 'ok', durationMs: 500 }), meta({ endAt: 2000, outcome: 'failed', durationMs: 900 })],
+      }))
+      const turns = screen.getAllByTestId('room-turn')
+      expect(within(turns[0]).getByTestId('turn-footer')).toHaveTextContent('Worked for')
+      expect(within(turns[1]).getByTestId('turn-footer')).toHaveTextContent('Failed after')
+    })
+
+    it('shows no footer after a turn the user interrupted', () => {
+      render(T({
+        messages: [said('first'), assistantText], turnStarts: [0],
+        turnMeta: [meta({ endAt: 1000, outcome: 'interrupted', durationMs: 500 })],
+      }))
+      expect(screen.queryByTestId('turn-footer')).toBeNull()
+    })
+
+    it('shows no footer without turnMeta (absent prop)', () => {
+      render(T({ messages: twoTurns, turnStarts: [0, 2] }))
+      expect(screen.queryByTestId('turn-footer')).toBeNull()
+    })
+
+    it('shows no footer for the live turn (meta not yet recorded)', () => {
+      render(T({
+        messages: [said('first'), assistantText], turnStarts: [0],
+        turnMeta: [meta({ startAt: 500, endAt: null, outcome: null, durationMs: null })],
+      }))
+      expect(screen.queryByTestId('turn-footer')).toBeNull()
     })
   })
 })

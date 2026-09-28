@@ -17,9 +17,11 @@ import type { ToolActivity } from '../../lib/nex/tool-activity'
 import type { WorkerTask } from '../../lib/nex/types'
 import { indexOperations } from '../../lib/nex/operations'
 import { groupTurns, type RoomTurn } from '../../lib/nex/turns'
+import type { TurnMeta } from '../../lib/nex/event-reducer'
 import ThinkingIndicator from '../ThinkingIndicator'
 import PartialMessageGroup from '../PartialMessageGroup'
 import RoomTurnGroup from './RoomTurnGroup'
+import TurnFooter from './TurnFooter'
 import { renderMessage, type RenderCtx } from './render-message'
 import { FoldContext, useInheritedFoldMemory } from './fold-context'
 import { useScrollControl, useTranscriptScroll, type TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
@@ -41,6 +43,8 @@ export interface RoomTranscriptProps {
   afterThinking?: ReactNode    // rendered AFTER ThinkingIndicator
   /** Turn boundaries the reducer recorded (ExecutionState.turnStarts). Absent → one turn. */
   turnStarts?: readonly number[]
+  /** Timing/outcome per boundary, index-aligned with `turnStarts` (spec §7.1). Absent → no footers. */
+  turnMeta?: readonly TurnMeta[]
   // P-B2.2 spec §4.4.
   partial?: PartialAssembly | null          // R1: trailing in-flight assistant group
   tools?: Record<string, ToolActivity>      // R2: status/timing for durable tool_use blocks, by block id
@@ -77,6 +81,7 @@ export default function RoomTranscript({
   children,
   afterThinking,
   turnStarts = NO_STARTS,
+  turnMeta,
   partial,
   tools,
   now,
@@ -142,6 +147,8 @@ export default function RoomTranscript({
                 index.childIndexes.has(turn.start + k) ? null : renderMessage(msg, turn.start + k, ctx))}
               {/* R1: the in-flight assistant message, after the durable list and before children */}
               {ti === lastTurn && hasPartial && <PartialMessageGroup key={`${keyPrefix}-partial`} partial={partial} />}
+              {/* Spec §7.2: the footer is the last line of a completed turn; a live turn's meta has no endAt, so it draws nothing. */}
+              {turn.boundary !== null && turnMeta?.[turn.boundary] && <TurnFooter meta={turnMeta[turn.boundary]} />}
             </div>
           </RoomTurnGroup>
         ))}
