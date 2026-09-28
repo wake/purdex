@@ -94,11 +94,11 @@ describe('findTabBySessionCode — worker (execution) tabs (spec §8.2)', () => 
     layout: { type: 'leaf', pane: { id: 'px' + executionId, content: { kind: 'execution', executionId, ...(host ? { host } : {}) } } },
   })
 
-  it('matches an execution primary pane by exec:<id> and its host', () => {
+  it('matches an execution primary pane by exec-<id> and its host', () => {
     const tabs = { t1: { layout: leaf }, t2: execLeaf('e1', 'h1') }
-    expect(findTabBySessionCode(tabs, 'h1', 'exec:e1')).toBe('t2')
-    expect(findTabBySessionCode(tabs, 'h2', 'exec:e1')).toBeUndefined()
-    expect(findTabBySessionCode(tabs, 'h1', 'exec:e2')).toBeUndefined()
+    expect(findTabBySessionCode(tabs, 'h1', 'exec-e1')).toBe('t2')
+    expect(findTabBySessionCode(tabs, 'h2', 'exec-e1')).toBeUndefined()
+    expect(findTabBySessionCode(tabs, 'h1', 'exec-e2')).toBeUndefined()
     // the bare execution id is not an agent key
     expect(findTabBySessionCode(tabs, 'h1', 'e1')).toBeUndefined()
   })
@@ -106,15 +106,15 @@ describe('findTabBySessionCode — worker (execution) tabs (spec §8.2)', () => 
   it('a host-less execution pane resolves to the first host, like the projection', () => {
     useHostStore.setState({ hostOrder: ['h9', 'h1'] })
     const tabs = { t1: execLeaf('e1') }
-    expect(findTabBySessionCode(tabs, 'h9', 'exec:e1')).toBe('t1')
-    expect(findTabBySessionCode(tabs, 'h1', 'exec:e1')).toBeUndefined()
+    expect(findTabBySessionCode(tabs, 'h9', 'exec-e1')).toBe('t1')
+    expect(findTabBySessionCode(tabs, 'h1', 'exec-e1')).toBeUndefined()
   })
 
   it('an empty-string host resolves to the first host, same as no host', () => {
     useHostStore.setState({ hostOrder: ['h9', 'h1'] })
     const tabs = { t1: { layout: { type: 'leaf', pane: { id: 'px', content: { kind: 'execution', executionId: 'e1', host: '' } } } } as { layout: PaneLayout } }
-    expect(findTabBySessionCode(tabs, 'h9', 'exec:e1')).toBe('t1')
-    expect(findTabBySessionCode(tabs, 'h1', 'exec:e1')).toBeUndefined()
+    expect(findTabBySessionCode(tabs, 'h9', 'exec-e1')).toBe('t1')
+    expect(findTabBySessionCode(tabs, 'h1', 'exec-e1')).toBeUndefined()
   })
 
   // Regression guard: the two tests above overwrite useHostStore's hostOrder

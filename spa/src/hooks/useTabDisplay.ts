@@ -49,7 +49,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const t = useI18nStore((s) => s.t)
   const primaryContent = getPrimaryPane(tab.layout).content
   const exec = primaryContent.kind === 'execution' ? primaryContent : undefined
-  // A worker tab's light lives under `exec:<id>` (useWorkerAgentProjection,
+  // A worker tab's light lives under `exec-<id>` (useWorkerAgentProjection,
   // spec §8.1); its host resolves like ExecutionPaneWrapper's (hint, else the first host).
   const execHostId = useHostStore((s) => (exec ? exec.host || s.hostOrder[0] || '' : ''))
   const hostId = primaryContent.kind === 'tmux-session' ? primaryContent.hostId : execHostId

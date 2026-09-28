@@ -15,7 +15,7 @@ export function getActiveSessionCode(): string | null {
 }
 
 /** Derive both hostId and sessionCode (the `useAgentStore` key) from the current active tab.
- *  A worker (execution) tab yields `exec:<id>` on its resolved host (worker-pane theme spec §8.2),
+ *  A worker (execution) tab yields `exec-<id>` on its resolved host (worker-pane theme spec §8.2),
  *  so unread and notification suppression treat it like a terminal tab — a caller that needs a
  *  tmux code must skip it with `isExecAgentCode`.
  *  Returns null if no tab is active or the active tab is neither. */

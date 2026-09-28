@@ -878,10 +878,10 @@ describe('debounce isolation guards', () => {
   })
 })
 
-// Worker (exec:) agent keys — worker-pane theme spec §8.2 (unread + notifications rows).
+// Worker (exec-) agent keys — worker-pane theme spec §8.2 (unread + notifications rows).
 describe('worker (execution) tabs in the notification dispatcher', () => {
   const HOST = 'h1'
-  const CODE = 'exec:e1'
+  const CODE = 'exec-e1'
   const CK = `${HOST}:${CODE}`
   const summary = (over: Partial<ExecutionSummary> = {}): ExecutionSummary =>
     ({ id: 'e1', state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/w/repo', mount_kind: 'dev', brief: 'Fix the bug\nmore',

@@ -11,16 +11,22 @@ import {
 } from './worker-agent-status'
 
 describe('execAgentCode / isExecAgentCode / executionIdOfAgentCode', () => {
-  it('round-trips an execution id through the exec: namespace', () => {
-    const code = execAgentCode('abc123')
-    expect(code).toBe('exec:abc123')
+  it('round-trips an execution id through the exec- namespace', () => {
+    const code = execAgentCode('exc_abc123')
+    expect(code).toBe('exec-exc_abc123')
+    expect(code).not.toContain(':')
     expect(isExecAgentCode(code)).toBe(true)
-    expect(executionIdOfAgentCode(code)).toBe('abc123')
+    expect(executionIdOfAgentCode(code)).toBe('exc_abc123')
   })
 
   it('a tmux session code is not an exec code', () => {
+    expect(isExecAgentCode('abc123')).toBe(false)
+    expect(executionIdOfAgentCode('abc123')).toBeNull()
     expect(isExecAgentCode('main-1')).toBe(false)
-    expect(executionIdOfAgentCode('main-1')).toBeNull()
+  })
+
+  it('the old colon spelling is not an exec code', () => {
+    expect(isExecAgentCode('exec:e1')).toBe(false)
   })
 })
 

@@ -1,6 +1,6 @@
 // spa/src/hooks/useWorkerAgentProjection.ts — app-lifetime projection of every
 // worker tab's (primary execution pane's) state into `useAgentStore` (worker-pane theme spec
-// §8.1–8.2), under `exec:<id>` keys, so the sidebar light, unread and the
+// §8.1–8.2), under `exec-<id>` keys, so the sidebar light, unread and the
 // notification dispatcher treat a worker tab like a terminal agent tab.
 //
 // Source per pane: the live `useExecutionStore` entry (when it has a summary

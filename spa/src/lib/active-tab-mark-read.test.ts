@@ -23,7 +23,7 @@ afterEach(() => stop())
 
 describe('startActiveTabMarkRead', () => {
   it('activating exec tab marks read', () => {
-    const ck = compositeKey('h1', 'exec:e1')
+    const ck = compositeKey('h1', 'exec-e1')
     useAgentStore.setState({ unread: { [ck]: true } })
     stop = startActiveTabMarkRead()
     useTabStore.setState({ tabs: { tx: execTab }, activeTabId: 'tx' })
@@ -40,7 +40,7 @@ describe('startActiveTabMarkRead', () => {
   })
 
   it('a tab-store change that keeps the same active tab does not mark read again', () => {
-    const ck = compositeKey('h1', 'exec:e1')
+    const ck = compositeKey('h1', 'exec-e1')
     useTabStore.setState({ tabs: { tx: execTab }, activeTabId: 'tx' })
     stop = startActiveTabMarkRead()
     useAgentStore.setState({ unread: { [ck]: true } })

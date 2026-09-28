@@ -136,7 +136,7 @@ interface WorkerTheme {
 
 ### 8.1 Projection
 
-Worker state is projected into **the same `useAgentStore`** under a key that cannot collide with a tmux session code (e.g. `compositeKey(hostId, 'exec:' + executionId)`), so `tabIndicatorStyle`, `renderInlineTabIcon`, `TabStatusIndicator`, `SubagentDots`, unread and `useNotificationDispatcher` are reused unchanged. `agentTypes[key]` is set from the provider (`claude` → `cc`, `codex` → `codex`).
+Worker state is projected into **the same `useAgentStore`** under a key that cannot collide with a tmux session code (e.g. `compositeKey(hostId, 'exec-' + executionId)`), so `tabIndicatorStyle`, `renderInlineTabIcon`, `TabStatusIndicator`, `SubagentDots`, unread and `useNotificationDispatcher` are reused unchanged. `agentTypes[key]` is set from the provider (`claude` → `cc`, `codex` → `codex`).
 
 Source of truth, in order: the pane's `useExecutionStore` state when subscribed (live), else the host's execution list row (`state`, `activity`, `running_tasks`). Hosts with a worker tab keep a list subscription so a row can be derived for an evicted pane.
 

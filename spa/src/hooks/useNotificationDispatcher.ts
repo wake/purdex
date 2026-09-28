@@ -328,7 +328,7 @@ export function useNotificationDispatcher(): void {
 }
 
 /**
- * The notification title for an agent key. A worker (`exec:<id>`) is titled
+ * The notification title for an agent key. A worker (`exec-<id>`) is titled
  * like its tab — same summary source, same title rule (worker-summary.ts) —
  * falling back to the execution id; a tmux session by its name, else its code.
  */

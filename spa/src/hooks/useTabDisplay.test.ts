@@ -277,8 +277,8 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
     useWorkerSettingsStore.setState({ ...DEFAULT_WORKER_SETTINGS })
   })
 
-  it('reads the light from the exec:<id> key and gives a non-undefined icon', () => {
-    const key = compositeKey('h1', 'exec:e1')
+  it('reads the light from the exec-<id> key and gives a non-undefined icon', () => {
+    const key = compositeKey('h1', 'exec-e1')
     useAgentStore.setState({ statuses: { [key]: 'running' }, unread: { [key]: true }, agentTypes: { [key]: 'cc' } })
     setLiveSummary()
     const { result } = renderHook(() => useTabDisplay(execTab()))

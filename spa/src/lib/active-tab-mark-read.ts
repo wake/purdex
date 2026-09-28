@@ -8,7 +8,7 @@ import { compositeKey } from './composite-key'
 /**
  * Subscribe to tab-store changes; whenever the active agent key changes
  * (composite `hostId:sessionCode`, so cross-host correct — a worker tab's key
- * is `exec:<id>`, worker-pane theme spec §8.2), mark that key read. Returns
+ * is `exec-<id>`, worker-pane theme spec §8.2), mark that key read. Returns
  * the unsubscribe. Started once from main.tsx (app lifetime).
  */
 export function startActiveTabMarkRead(): () => void {

@@ -90,7 +90,7 @@ export function remountLeaf(
  * same code for unrelated sessions. Matching on the code alone would land on
  * whichever host's tab happens to come first in `tabs`.
  *
- * A worker (execution) primary pane matches the agent key `exec:<executionId>`
+ * A worker (execution) primary pane matches the agent key `exec-<executionId>`
  * on its resolved host (the pane's host hint, else the first host — the host
  * the worker projection writes under; worker-pane theme spec §8.2).
  */

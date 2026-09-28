@@ -19,7 +19,7 @@ import type { Tab } from '../types/tab'
 
 const H = 'host-a'
 const E = 'E1'
-const KEY = compositeKey(H, 'exec:E1')
+const KEY = compositeKey(H, 'exec-E1')
 
 const summary = (over: Partial<ExecutionSummary> = {}): ExecutionSummary =>
   ({ id: E, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/w', mount_kind: 'dev', brief: 'b', labels: {},

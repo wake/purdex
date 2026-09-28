@@ -4,10 +4,16 @@
 // `useAgentStore`'s consumers are reused unchanged (spec §8.1–8.2).
 import type { TurnOutcome } from './event-reducer'
 import type { SubagentRef } from '../../stores/useAgentStore'
-import { EXEC_PREFIX } from '../composite-key'
 
-/** The `useAgentStore` key namespace for a worker tab (spec §8.1) — never
- * collides with a tmux session code. */
+/**
+ * The `useAgentStore` key namespace for a worker tab (spec §8.1): the agent
+ * code is `exec-<executionId>`. It never collides with a tmux session code
+ * (a 6-char base36 token, internal/module/session/codec.go, which never
+ * contains '-'), and it carries no ':' so `splitCompositeKey` splits a worker
+ * key at the last colon like any other.
+ */
+export const EXEC_PREFIX = 'exec-'
+
 export function execAgentCode(executionId: string): string {
   return EXEC_PREFIX + executionId
 }
