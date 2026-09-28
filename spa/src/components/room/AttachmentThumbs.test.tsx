@@ -169,6 +169,61 @@ describe('AttachmentThumbs', () => {
     }
   })
 
+  it("a queued thumbnail's 30s deadline starts only once its own fetch begins, not at mount (A1 fix round 2)", async () => {
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      vi.mocked(api.fetchAttachment).mockImplementation((_h, _e, _sha, _route, signal) => new Promise<Blob>((resolve, reject) => {
+        const idx = calls++
+        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+        // The 5th call (and later) actually completes, shortly after it
+        // starts — but only if it wasn't already aborted the instant it
+        // began (which is what the bug would do to a thumbnail dequeued
+        // right as the four ahead of it expire).
+        if (idx >= 4) setTimeout(() => resolve(new Blob(['x'], { type: 'image/png' })), 100)
+        // idx < 4: hangs forever except for abort.
+      }))
+      const held = inPane(<AttachmentThumbs items={['a', 'b', 'c', 'd'].map((c) => meta(c))} />)
+      await act(async () => {})
+      expect(api.fetchAttachment).toHaveBeenCalledTimes(4)
+
+      // A 5th queues behind the four held slots.
+      const fifth = inPane(<AttachmentThumbs items={[meta('e')]} />)
+      await act(async () => {})
+      expect(api.fetchAttachment).toHaveBeenCalledTimes(4)
+      expect(thumbs()[4].dataset.state).toBe('loading')
+
+      // A 6th, queued behind the 5th, is unmounted while still waiting —
+      // it must never fetch, deadline or not.
+      const sixth = inPane(<AttachmentThumbs items={[meta('f')]} />)
+      await act(async () => {})
+      sixth.unmount()
+
+      // 29s pass with the 5th still queued: no deadline has touched it yet.
+      await act(async () => { await vi.advanceTimersByTimeAsync(29_000) })
+      expect(api.fetchAttachment).toHaveBeenCalledTimes(4)
+      expect(thumbs()[4].dataset.state).toBe('loading')
+
+      // At 30s the first four expire and free their slots; the 5th is
+      // dequeued and starts its own fetch — this call must not already be
+      // carrying an aborted signal.
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+      expect(thumbs().slice(0, 4).every((t) => t.dataset.state === 'error')).toBe(true)
+      expect(api.fetchAttachment).toHaveBeenCalledTimes(5)
+
+      // The 5th's own fetch (started at t=30s) settles 100ms after it
+      // began, well inside a fresh 30s window — it must succeed, not be
+      // aborted by a stale mount-time deadline.
+      await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+      expect(thumbs()[4].dataset.state).toBe('ready')
+
+      expect(vi.mocked(api.fetchAttachment).mock.calls.map((c) => c[2])).not.toContain(sha('f'))
+      held.unmount(); fifth.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('an unmounted thumbnail still waiting for a slot is skipped and passes the slot on', async () => {
     const pending = Array.from({ length: 4 }, deferredBlob)
     pending.forEach((d) => vi.mocked(api.fetchAttachment).mockReturnValueOnce(d.p))

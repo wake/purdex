@@ -111,8 +111,18 @@ function RemoteThumb({ meta, source }: { meta: AttachmentMeta; source: { hostId:
     // releases the slot immediately instead of only once the network
     // eventually settles on its own (Review Focus A1).
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), ATTACHMENT_FETCH_TIMEOUT_MS)
-    withSlot(() => fetchAttachment(hostId, executionId, sha256, route, controller.signal), () => cancelled)
+    // The 30s deadline is started inside the slotted task itself, not here
+    // at mount: a thumbnail queued behind four busy slots would otherwise
+    // carry a deadline that elapses before its fetch ever begins — and a
+    // whole batch of thumbnails queued together would then expire in
+    // lockstep the instant the four ahead of them finally time out, instead
+    // of each getting a full 30s once it's actually dequeued.
+    const task = () => {
+      const timeoutId = setTimeout(() => controller.abort(), ATTACHMENT_FETCH_TIMEOUT_MS)
+      return fetchAttachment(hostId, executionId, sha256, route, controller.signal)
+        .finally(() => clearTimeout(timeoutId))
+    }
+    withSlot(task, () => cancelled)
       .then((blob) => {
         if (cancelled || !blob) return
         const safe = sanitizeImageBlob(blob, mediaType)
@@ -123,7 +133,6 @@ function RemoteThumb({ meta, source }: { meta: AttachmentMeta; source: { hostId:
       .catch(() => { if (!cancelled) setResult({ want, state: { status: 'error' } }) })
     return () => {
       cancelled = true
-      clearTimeout(timeoutId)
       controller.abort()
       if (url) URL.revokeObjectURL(url)
     }
