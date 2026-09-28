@@ -40,7 +40,7 @@ import { useExecutionActions, type SendOptions } from '../../hooks/useExecutionA
 import { useWorkerUploads } from '../../hooks/useWorkerUploads'
 import {
   canSend, composeWithAttachments, encodeImage, isAttachmentError, planAttachments, requestBytes, uploadErrorKey,
-  PER_IMAGE_ERRORS, type WireImageAttachment,
+  PER_IMAGE_ERRORS, type Chip, type WireImageAttachment,
 } from '../../lib/nex/worker-upload'
 import { selectImageAttachments, useNexHostStore } from '../../stores/useNexHostStore'
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
@@ -124,7 +124,10 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const [sendBlock, setSendBlock] = useState<'request_too_large' | null>(null)
   // Encoding the images is async; this keeps a second submit meanwhile from
   // posting the same chips twice (handleSend's own lock starts after it).
+  // The ref is the same-tick guard; the state renders it, so the input and
+  // the quick replies show disabled instead of dropping a click (PR #1527 A3).
   const encoding = useRef(false)
+  const [encodingBusy, setEncodingBusy] = useState(false)
   // Phase E: where the transcript's replayed image attachments are fetched from.
   const attachmentSource = useMemo(() => ({ hostId, executionId }), [hostId, executionId])
   const [dragging, setDragging] = useState(false)
@@ -315,7 +318,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // this clears itself without redesigning the reconnect path.
   const streamDead = st.historyLoaded && st.sse === 'closed' && !!st.sseError
   // One gate for everything that sends: the input and the quick replies.
-  const inputDisabled = st.pendingSend || ended || !st.historyLoaded || streamDead || takeBackBusy
+  const inputDisabled = st.pendingSend || encodingBusy || ended || !st.historyLoaded || streamDead || takeBackBusy
   const placeholder = st.summary?.archived ? t('execution.input.archived')
     : ended ? t('execution.input.terminal')
     : streamDead ? t('execution.input.disconnected')
@@ -356,44 +359,71 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
       }
     }
     setSendBlock(null)
-    void sendNow(finalText, text, opts, sent.map((c) => c.key), natives)
-    return true
-  }
-  const sendNow = async (finalText: string, typed: string, opts: SendOptions, sentKeys: string[], natives: { key: string; file: File }[]) => {
-    encoding.current = true
-    try {
+    if (natives.length === 0) {
       // No await without images: a text-only send takes handleSend's lock in
       // the same tick as the submit, as in phase D.
-      const encoded = natives.length > 0 ? await Promise.allSettled(natives.map((n) => encodeImage(n.file))) : []
-      const unreadable = natives.filter((_, i) => encoded[i].status === 'rejected')
+      void sendNow(finalText, opts, sent.map((c) => c.key), [], [])
+      return true
+    }
+    void encodeThenSend(text, opts, sent, natives)
+    return true
+  }
+  // Encoding is async and a chip can be removed meanwhile (PR #1527 A1): once
+  // the images are read, the snapshot is re-checked against the chips that
+  // still exist — a removed image leaves the attachments (and gets no
+  // optimistic preview), a removed path chip loses its `[file:]` line — and
+  // with nothing left to say the send is dropped.
+  const encodeThenSend = async (typed: string, opts: SendOptions, sent: Chip[], natives: { key: string; file: File }[]) => {
+    encoding.current = true
+    setEncodingBusy(true)
+    try {
+      const encoded = await Promise.allSettled(natives.map((n) => encodeImage(n.file)))
+      const kept = natives.flatMap((n, i) => (uploads.isLive(n.key) ? [{ ...n, result: encoded[i] }] : []))
+      const unreadable = kept.filter((n) => n.result.status === 'rejected')
       if (unreadable.length > 0) {
         for (const n of unreadable) uploads.markFailed(n.key)
         if (opts.restoreDraft !== false) restoreDraft(opts.draftText ?? typed)
         return
       }
-      const attachments: WireImageAttachment[] = encoded.map((r, i) => ({
-        type: 'image', media_type: natives[i].file.type, data: (r as PromiseFulfilledResult<string>).value,
-      }))
-      // The optimistic line's thumbnails: its own object URLs (the chips' go
-      // with the chips). handleSend takes them over — the execution store
-      // revokes them once pendingLocal drops them (accepted, failed,
-      // replaced), whichever pane is showing them, and a no-op send revokes
-      // them itself — so this pane never revokes them, not even on unmount.
-      const previews = natives.length > 0
-        ? natives.map((n) => ({ previewUrl: URL.createObjectURL(n.file), media_type: n.file.type }))
-        : undefined
-      const ok = await handleSend(finalText, previews ? { ...opts, attachments, previews } : opts)
-      if (ok) {
-        uploads.clear(sentKeys)
-        return
-      }
-      const err = useExecutionStore.getState().executions[key]?.sendError
-      if (err && PER_IMAGE_ERRORS.has(err.code) && err.attachmentIndex !== undefined) {
-        const failed = natives[err.attachmentIndex]
-        if (failed) uploads.markFailed(failed.key, err.code)
-      }
+      const liveSent = sent.filter((c) => uploads.isLive(c.key))
+      const finalText = composeWithAttachments(typed, liveSent.filter((c) => c.kind === 'path'))
+      if (!finalText && kept.length === 0) return
+      const data = kept.map((n) => (n.result as PromiseFulfilledResult<string>).value)
+      await sendNow(finalText, opts, liveSent.map((c) => c.key), kept, data)
     } finally {
       encoding.current = false
+      setEncodingBusy(false)
+    }
+  }
+  const sendNow = async (finalText: string, opts: SendOptions, sentKeys: string[], natives: { key: string; file: File }[], data: string[]) => {
+    const attachments: WireImageAttachment[] = natives.map((n, i) => ({ type: 'image', media_type: n.file.type, data: data[i] }))
+    // The optimistic line's thumbnails: its own object URLs (the chips' go
+    // with the chips), made only for the images still live after encoding —
+    // so none is ever made that isn't handed over. handleSend takes them
+    // over: the execution store revokes them once pendingLocal drops them
+    // (accepted, failed, replaced), whichever pane is showing them, and a
+    // no-op send revokes them itself — so this pane never revokes them, not
+    // even on unmount or on the `attachments_unsupported` demote below.
+    const previews = natives.length > 0
+      ? natives.map((n) => ({ previewUrl: URL.createObjectURL(n.file), media_type: n.file.type }))
+      : undefined
+    const ok = await handleSend(finalText, previews ? { ...opts, attachments, previews } : opts)
+    if (ok) {
+      uploads.clear(sentKeys)
+      return
+    }
+    const err = useExecutionStore.getState().executions[key]?.sendError
+    if (err && PER_IMAGE_ERRORS.has(err.code) && err.attachmentIndex !== undefined) {
+      const failed = natives[err.attachmentIndex]
+      if (failed) uploads.markFailed(failed.key, err.code)
+    } else if (err?.code === 'attachments_unsupported' && natives.length > 0) {
+      // The cached capability was wrong (PR #1527 A2): left `done`, every
+      // retry would re-post the same refused body. Refetch it, and send
+      // these images by path — the draft stays, and the reader resends once
+      // the uploads finish. `request_too_large` keeps its chips: the reason
+      // shows, and the reader decides what to drop.
+      void useNexHostStore.getState().invalidate(hostId)
+      uploads.demote(natives.map((n) => n.key))
     }
   }
   const removeChip = (k: string) => {

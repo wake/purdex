@@ -30,6 +30,8 @@ export interface WorkerUploads {
   demote(keys: readonly string[]): void
   /** Fail a chip with a code (see `uploadErrorKey`), e.g. a native image the daemon refused. */
   markFailed(key: string, error?: string): void
+  /** Whether the chip still exists (not removed or cleared) — for work that outlived a render. */
+  isLive(key: string): boolean
 }
 
 export interface WorkerUploadImages {
@@ -169,5 +171,7 @@ export function useWorkerUploads(hostId: string, executionId: string, images?: W
     patch(key, { status: 'failed', error })
   }, [patch])
 
-  return { chips, add, remove, clear, nativeFiles, demote, markFailed }
+  const isLive = useCallback((key: string) => live.current.has(key), [])
+
+  return { chips, add, remove, clear, nativeFiles, demote, markFailed, isLive }
 }

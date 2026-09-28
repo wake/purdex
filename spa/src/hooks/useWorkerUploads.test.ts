@@ -76,6 +76,20 @@ describe('useWorkerUploads', () => {
     expect(result.current.chips).toEqual([])
   })
 
+  it('isLive tracks add, remove and clear (a send checks it after encoding, PR #1527 A1)', async () => {
+    vi.mocked(api.uploadWorkerFile).mockResolvedValue({ path: '/w/x', name: 'x', size: 1 })
+    const { result } = renderHook(() => useWorkerUploads('h', 'exc_1'))
+    act(() => result.current.add([txt('a.txt'), txt('b.txt'), txt('c.txt')]))
+    const [a, b, c] = result.current.chips.map((x) => x.key)
+    expect([a, b, c].map(result.current.isLive)).toEqual([true, true, true])
+    act(() => result.current.remove(a))
+    act(() => result.current.clear([b]))
+    expect([a, b, c].map(result.current.isLive)).toEqual([false, false, true])
+    act(() => result.current.clear())
+    expect(result.current.isLive(c)).toBe(false)
+    expect(result.current.isLive('nope')).toBe(false)
+  })
+
   it('clear(keys) removes only those chips; clear() removes all and revokes thumbnails', async () => {
     vi.mocked(api.uploadWorkerFile).mockResolvedValue({ path: '/w/x', name: 'x', size: 1 })
     const { result } = renderHook(() => useWorkerUploads('h', 'exc_1'))

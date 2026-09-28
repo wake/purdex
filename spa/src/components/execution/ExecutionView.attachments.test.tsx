@@ -7,7 +7,7 @@ import { render, screen, fireEvent, act, waitFor, within } from '@testing-librar
 import ExecutionView from './ExecutionView'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
-import { useHostConfigStore } from '../../stores/useHostConfigStore'
+import { useHostConfigStore, emptyHostConfigEntry } from '../../stores/useHostConfigStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { NexApiError } from '../../lib/nex/types'
 import { requestBytes } from '../../lib/nex/worker-upload'
@@ -60,6 +60,23 @@ function enter() {
 }
 const chips = () => screen.queryAllByTestId('upload-chip')
 
+/**
+ * Holds every FileReader.readAsDataURL until `flush()` — a slow encode the
+ * test can act inside of (remove a chip, click a quick reply).
+ */
+function holdReads() {
+  const pending: Array<() => void> = []
+  const Real = globalThis.FileReader
+  class Held extends Real {
+    readAsDataURL(blob: Blob) { pending.push(() => super.readAsDataURL(blob)) }
+  }
+  vi.stubGlobal('FileReader', Held)
+  return {
+    get count() { return pending.length },
+    flush: () => { for (const f of pending.splice(0)) f() },
+  }
+}
+
 let createUrl: ReturnType<typeof vi.fn>, revokeUrl: ReturnType<typeof vi.fn>
 const origCreate = URL.createObjectURL, origRevoke = URL.revokeObjectURL
 
@@ -81,6 +98,7 @@ beforeEach(() => {
   Object.assign(URL, { createObjectURL: createUrl, revokeObjectURL: revokeUrl })
 })
 afterEach(() => {
+  vi.unstubAllGlobals()
   Object.assign(URL, { createObjectURL: origCreate, revokeObjectURL: origRevoke })
 })
 
@@ -260,6 +278,113 @@ describe('ExecutionView — native image attachments', () => {
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('hi')
     enter()
     await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', `hi\n\n[file: ${saved('p.png')}]`))
+  })
+  it('a chip removed while its image is still encoding is not sent (PR #1527 A1)', async () => {
+    seedCaps(imageCaps())
+    const reads = holdReads()
+    const B = [0x89, 0x50, 0x4e, 0x47, 9, 9, 9]
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([png('a.png'), png('b.png', B)])
+    type('two')
+    enter()
+    await waitFor(() => expect(reads.count).toBe(2))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove b.png' }))
+    act(() => reads.flush())
+    await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+    expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'two', [{ type: 'image', media_type: 'image/png', data: b64(PNG) }])
+    // Only the kept image got an optimistic preview.
+    expect(useExecutionStore.getState().executions[`${H}:${E}`].pendingLocal?.attachments).toHaveLength(1)
+  })
+
+  it('removing the only image mid-encode of an image-only send posts nothing (PR #1527 A1)', async () => {
+    seedCaps(imageCaps())
+    const reads = holdReads()
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([png('a.png')])
+    enter()
+    await waitFor(() => expect(reads.count).toBe(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove a.png' }))
+    await act(async () => { reads.flush(); await new Promise((r) => setTimeout(r, 20)) })
+    expect(api.sendMessage).not.toHaveBeenCalled()
+    expect(useExecutionStore.getState().executions[`${H}:${E}`].pendingLocal ?? null).toBeNull()
+  })
+
+  it('a path chip removed while another image encodes loses its [file:] line (PR #1527 A1)', async () => {
+    seedCaps(imageCaps())
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([png('a.png'), txt('t.txt')])
+    await waitFor(() => expect(chips().map((c) => c.dataset.status)).toEqual(['done', 'done']))
+    const reads = holdReads()
+    type('go')
+    enter()
+    await waitFor(() => expect(reads.count).toBe(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove t.txt' }))
+    act(() => reads.flush())
+    await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'go', [{ type: 'image', media_type: 'image/png', data: b64(PNG) }]))
+  })
+  it('attachments_unsupported: the capability cache is invalidated and the images go by path; the resend has no attachments (PR #1527 A2)', async () => {
+    seedCaps(imageCaps())
+    const invalidate = vi.fn(async () => {})
+    useNexHostStore.setState({ invalidate })
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'attachments_unsupported', 'no images'))
+    let finishUpload: () => void = () => {}
+    vi.mocked(api.uploadWorkerFile).mockImplementationOnce((_h, _e, f) => new Promise((r) => { finishUpload = () => r({ path: saved(f.name), name: f.name, size: 1 }) }))
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([png('a.png')])
+    expect(chips()[0].dataset.status).toBe('done')
+    type('look')
+    enter()
+    await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.sendMessage).mock.calls[0][4]).toHaveLength(1)
+    // The chip is re-uploaded by path; the draft stays.
+    await waitFor(() => expect(chips()[0].dataset.status).toBe('uploading'))
+    expect(invalidate).toHaveBeenCalledWith(H)
+    expect(api.uploadWorkerFile).toHaveBeenCalledTimes(1)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('look')
+    await act(async () => finishUpload())
+    await waitFor(() => expect(chips()[0].dataset.status).toBe('done'))
+    expect(screen.getByTestId('upload-chip-note')).toHaveTextContent('sent as a file path')
+    enter()
+    await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(api.sendMessage).mock.calls[1]).toEqual([H, E, 'ls_1', `look\n\n[file: ${saved('a.png')}]`])
+  })
+
+  it('request_too_large from the daemon keeps the chips and shows the reason, no demotion (PR #1527 A2)', async () => {
+    seedCaps(imageCaps())
+    const invalidate = vi.fn(async () => {})
+    useNexHostStore.setState({ invalidate })
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(413, 'request_too_large', 'too big'))
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([png('a.png')])
+    type('x')
+    enter()
+    await waitFor(() => expect(screen.getByTestId('send-error')).toHaveTextContent('Message too large'))
+    expect(chips().map((c) => c.dataset.status)).toEqual(['done'])
+    expect(api.uploadWorkerFile).not.toHaveBeenCalled()
+    expect(invalidate).not.toHaveBeenCalled()
+    expect(api.sendMessage).toHaveBeenCalledTimes(1)
+  })
+  it('while images encode, the quick replies and the input are disabled (PR #1527 A3)', async () => {
+    seedCaps(imageCaps())
+    const e = emptyHostConfigEntry('ready')
+    useHostConfigStore.setState({ byHost: { [H]: { ...e, quickReplies: [{ id: 'go', text: 'go on' }], quickRepliesSupported: true, revisions: { ...e.revisions, quickReplies: 1 } } } })
+    const reads = holdReads()
+    render(<ExecutionView {...base} isActive />)
+    const reply = () => screen.getByTestId('quick-reply')
+    expect(reply()).not.toBeDisabled()
+    dropFiles([png('a.png')])
+    enter()
+    await waitFor(() => expect(reads.count).toBe(1))
+    expect(reply()).toBeDisabled()
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    // The chip can still be removed meanwhile (A1); with nothing left the
+    // send is dropped, and the gate lifts once the encode settles.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove a.png' }))
+    expect(reply()).toBeDisabled()
+    act(() => reads.flush())
+    await waitFor(() => expect(reply()).not.toBeDisabled())
+    expect(screen.getByRole('textbox')).not.toBeDisabled()
+    expect(api.sendMessage).not.toHaveBeenCalled()
   })
 })
 
