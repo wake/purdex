@@ -18,6 +18,7 @@ import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { useWorkerSettingsStore } from '../stores/useWorkerSettingsStore'
 import { execAgentCode } from '../lib/nex/worker-agent-status'
 import { liveWorkerSummary, rowWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
+import { selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
 import { workerIcon } from '../lib/worker-icon'
 import type { ExecutionSummary } from '../lib/nex/types'
 import { useSessionAgentIndicator } from './useSessionAgentIndicator'
@@ -81,6 +82,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const execRow = useExecutionListStore((s): ExecutionSummary | null =>
     exec && hostId && !execSummary ? rowWorkerSummary(s.byHost, hostId, exec.executionId) : null)
   const workerSummary = execSummary ?? execRow
+  const titleSupported = useNexHostStore(selectSessionTitleSupported(hostId))
   const workerIconStyle = useWorkerSettingsStore((s) => s.iconStyle)
   const workerCustomIcon = useWorkerSettingsStore((s) => s.customIcon)
   const ccIconVariant = useUISettingsStore((s) => s.ccIconVariant)
@@ -101,7 +103,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const paneTitle = rawPaneTitle && stripMarker ? stripAgentTitleMarker(rawPaneTitle, agentType) : rawPaneTitle
   const displayTitle = exec
     // Shared with the notification dispatcher's worker title (worker-summary.ts).
-    ? workerTitleOf(exec, workerSummary) ?? baseLabel
+    ? workerTitleOf(exec, workerSummary, titleSupported) ?? baseLabel
     : paneTitle ? `${paneTitle} - ${baseLabel}` : baseLabel
 
   return {

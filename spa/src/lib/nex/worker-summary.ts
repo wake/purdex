@@ -30,11 +30,21 @@ export function readWorkerSummary(hostId: string, executionId: string): Executio
 
 /**
  * The worker title from a pane's content and its summary (null when nothing
- * has text). Nexen `session_title` is not wired yet (phase E), so
- * `sessionTitle` stays undefined here — the one place to change when it is.
+ * has text). `sessionTitle` is read from the summary only when the caller
+ * says the host capability (`selectSessionTitleSupported`) is present —
+ * older daemons never populate `session_title`, but gate on the capability
+ * regardless so a title left over from a still-ready older cache is never
+ * used either (worker-pane theme spec §0 fail-closed).
  */
 export function workerTitleOf(
-  content: { fromTitle?: string }, summary: Pick<ExecutionSummary, 'brief' | 'cwd'> | null | undefined,
+  content: { fromTitle?: string },
+  summary: Pick<ExecutionSummary, 'brief' | 'cwd' | 'session_title'> | null | undefined,
+  titleSupported: boolean,
 ): string | null {
-  return workerTabTitle({ sessionTitle: undefined, fromTitle: content.fromTitle, brief: summary?.brief, cwd: summary?.cwd })
+  return workerTabTitle({
+    sessionTitle: titleSupported ? summary?.session_title?.text : undefined,
+    fromTitle: content.fromTitle,
+    brief: summary?.brief,
+    cwd: summary?.cwd,
+  })
 }

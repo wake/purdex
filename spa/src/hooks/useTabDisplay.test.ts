@@ -17,6 +17,7 @@ import { useWorkerSettingsStore, DEFAULT_WORKER_SETTINGS } from '../stores/useWo
 import { defaultExecutionState } from '../lib/nex/event-reducer'
 import { emptyListCache } from '../lib/nex/execution-list-effects'
 import type { ExecutionSummary } from '../lib/nex/types'
+import { useNexHostStore } from '../stores/useNexHostStore'
 import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS, CC_COLOR_ICON_VARIANTS } from '../lib/agent-icons'
 import { ICON_MAP } from '../components/tab-icon-map'
 
@@ -271,10 +272,22 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
   const setLiveSummary = (over: Partial<ExecutionSummary> = {}) =>
     useExecutionStore.setState({ executions: { [executionKey('h1', 'e1')]: { ...defaultExecutionState(), summary: summary(over) } } })
 
+  const setTitleSupported = (supported: boolean) =>
+    useNexHostStore.setState({
+      byHost: {
+        h1: {
+          info: null, error: null, fetchedAt: 0, generation: 0, fingerprint: '',
+          phase: 'ready',
+          capabilities: (supported ? { session_title: { sources: ['ai'], max_bytes: 200 } } : {}) as never,
+        },
+      },
+    })
+
   beforeEach(() => {
     useExecutionStore.setState({ executions: {} })
     useExecutionListStore.setState({ byHost: {} })
     useWorkerSettingsStore.setState({ ...DEFAULT_WORKER_SETTINGS })
+    useNexHostStore.setState({ byHost: {} })
   })
 
   it('reads the light from the exec-<id> key and gives a non-undefined icon', () => {
@@ -315,5 +328,28 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
     expect(result.current.IconComponent).toBe(CC_COLOR_ICON_VARIANTS.bot)
     act(() => { useWorkerSettingsStore.setState({ iconStyle: 'custom', customIcon: '' }) })
     expect(result.current.IconComponent).toBe(ICON_MAP.Robot)
+  })
+
+  describe('phase E: session_title gated by the host capability', () => {
+    it('with the capability, session_title wins over the brief', () => {
+      setTitleSupported(true)
+      setLiveSummary({ session_title: { text: 'Fix login', source: 'ai' } })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Fix login - repo')
+    })
+
+    it('without the capability, the same summary falls back to the brief', () => {
+      setTitleSupported(false)
+      setLiveSummary({ session_title: { text: 'Fix login', source: 'ai' } })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Fix the bug - repo')
+    })
+
+    it('a session_title containing markup-looking text renders literally', () => {
+      setTitleSupported(true)
+      setLiveSummary({ session_title: { text: 'Fix <b>login</b>', source: 'custom' } })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Fix <b>login</b> - repo')
+    })
   })
 })

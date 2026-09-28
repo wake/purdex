@@ -19,6 +19,7 @@ import { defaultExecutionState } from '../lib/nex/event-reducer'
 import { emptyListCache } from '../lib/nex/execution-list-effects'
 import type { ExecutionSummary } from '../lib/nex/types'
 import { useTabDisplay } from './useTabDisplay'
+import { useNexHostStore } from '../stores/useNexHostStore'
 
 const defaultSettings: NotificationSettings = {
   enabled: true, events: {}, notifyWithoutTab: false, reopenTabOnClick: false,
@@ -899,6 +900,16 @@ describe('worker (execution) tabs in the notification dispatcher', () => {
   }
   const setLiveSummary = (over: Partial<ExecutionSummary> = {}) =>
     useExecutionStore.setState({ executions: { [executionKey(HOST, 'e1')]: { ...defaultExecutionState(), summary: summary(over) } } })
+  const setTitleSupported = (supported: boolean) =>
+    useNexHostStore.setState({
+      byHost: {
+        [HOST]: {
+          info: null, error: null, fetchedAt: 0, generation: 0, fingerprint: '',
+          phase: 'ready',
+          capabilities: (supported ? { session_title: { sources: ['ai'], max_bytes: 200 } } : {}) as never,
+        },
+      },
+    })
   // What useWorkerAgentProjection (C2) dispatches.
   const dispatch = (ev: { status: string; raw_event_name: string; broadcast_ts: number; detail?: Record<string, unknown> }) =>
     useAgentStore.setState({ lastEvents: { [CK]: { agent_type: 'cc', ...ev } } })
@@ -917,6 +928,7 @@ describe('worker (execution) tabs in the notification dispatcher', () => {
     useShownHostsStore.setState({ ids: [HOST] })
     useExecutionStore.setState({ executions: {} })
     useExecutionListStore.setState({ byHost: {} })
+    useNexHostStore.setState({ byHost: {} })
     showNotification = vi.fn()
     Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
   })
@@ -962,6 +974,46 @@ describe('worker (execution) tabs in the notification dispatcher', () => {
     expect(showNotification.mock.calls[0][0].title).toBe(result.current.displayTitle)
     expect(result.current.displayTitle).toBe('Old terminal - proj')
     unmount()
+  })
+
+  // Phase E: session_title, gated by the host capability (worker-summary.ts).
+  describe('session_title (phase E)', () => {
+    it('with the capability, session_title wins in both the tab and the notification', () => {
+      setTitleSupported(true)
+      const tab = openExecTab()
+      setLiveSummary({ session_title: { text: 'Fix login', source: 'ai' } })
+      const { result } = renderHook(() => useTabDisplay(tab))
+      const { unmount } = renderHook(() => useNotificationDispatcher())
+      dispatch({ status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2, detail: {} })
+
+      expect(showNotification.mock.calls[0][0].title).toBe('Fix login - repo')
+      expect(showNotification.mock.calls[0][0].title).toBe(result.current.displayTitle)
+      unmount()
+    })
+
+    it('without the capability, the same summary falls back — identically in the tab and the notification', () => {
+      setTitleSupported(false)
+      const tab = openExecTab()
+      setLiveSummary({ session_title: { text: 'Fix login', source: 'ai' } })
+      const { result } = renderHook(() => useTabDisplay(tab))
+      const { unmount } = renderHook(() => useNotificationDispatcher())
+      dispatch({ status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2, detail: {} })
+
+      expect(showNotification.mock.calls[0][0].title).toBe('Fix the bug - repo')
+      expect(showNotification.mock.calls[0][0].title).toBe(result.current.displayTitle)
+      unmount()
+    })
+
+    it('a session_title containing markup-looking text renders literally in the notification title', () => {
+      setTitleSupported(true)
+      openExecTab()
+      setLiveSummary({ session_title: { text: 'Fix <b>login</b>', source: 'custom' } })
+      const { unmount } = renderHook(() => useNotificationDispatcher())
+      dispatch({ status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2, detail: {} })
+
+      expect(showNotification.mock.calls[0][0].title).toBe('Fix <b>login</b> - repo')
+      unmount()
+    })
   })
 
   it('with no summary anywhere the title falls back to the execution id', () => {
