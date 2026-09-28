@@ -30,6 +30,9 @@ export const STORAGE_KEYS = {
   MODULE_CONFIG: 'purdex-module-config',
   MODULE_ENABLED: 'purdex-module-enabled',
   EDITOR_SETTINGS: 'purdex-editor-settings',
+  /** Worker pane theme + icon setting (useWorkerSettingsStore, worker theme spec §4.2): `{ theme, iconStyle, customIcon }`,
+   *  one purdex-scope global setting (T1); synced like other appearance prefs. */
+  WORKER_SETTINGS: 'purdex-worker-settings',
   SYNC_STATE: 'purdex-sync-state',
   PATH_CACHE_V1: 'purdex-path-cache-v1',
   RECENT_FILES: 'purdex-recent-files',

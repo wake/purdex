@@ -12,6 +12,7 @@
 // ExecutionHeader); switching is local — the subscription, the store and the
 // lease are untouched, so nothing is refetched.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import RoomTranscript from '../room/RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
 import { ChatUserBubble } from '../chat/ChatBubble'
@@ -27,6 +28,8 @@ import { useQuickReplies } from '../../lib/quick-replies'
 import ExecutionHeader from './ExecutionHeader'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { useExecutionStore, executionKey } from '../../stores/useExecutionStore'
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
+import { getWorkerTheme, workerThemeStyle } from '../../lib/worker-theme/registry'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useExecutionSubscription } from '../../hooks/useExecutionSubscription'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
@@ -85,6 +88,11 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const t = useI18nStore((s) => s.t)
   const key = executionKey(hostId, executionId)
   const st = useExecutionStore((s) => s.executions[key] ?? EMPTY)
+  // Worker pane theme spec §4.1: the pane root carries the theme id and its
+  // `--wt-*` vars as inline style; room and chat read only `var(--wt-*)`.
+  const workerThemeId = useWorkerSettingsStore((s) => s.theme)
+  const workerTheme = getWorkerTheme(workerThemeId)
+  const workerThemeVars = useMemo(() => workerThemeStyle(workerTheme), [workerTheme])
   const { problem } = useExecutionSubscription(hostId, executionId, isActive)
   const lease = useExecutionLease(hostId, executionId)
   const { draft, actionPending, handleSend, handleInterrupt, handleTerminate } = useExecutionActions(hostId, executionId, lease)
@@ -307,7 +315,8 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   }
 
   return (
-    <div ref={rootRef} onPointerDownCapture={markInteracted} onFocusCapture={markInteracted} className="flex flex-col h-full">
+    <div ref={rootRef} data-testid="execution-view" data-worker-theme={workerTheme.id} style={workerThemeVars as CSSProperties}
+      onPointerDownCapture={markInteracted} onFocusCapture={markInteracted} className="flex flex-col h-full">
       <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
         onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal || takeBackBusy}
         onTakeBack={from || canTakeToTerminal ? onTakeBack : undefined} takeBackBusy={takeBackBusy || writeInFlight}

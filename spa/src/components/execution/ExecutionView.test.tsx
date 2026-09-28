@@ -57,6 +57,15 @@ beforeEach(() => {
 })
 
 describe('ExecutionView', () => {
+  // Worker pane theme spec §4.1: the pane root carries the theme id and its
+  // `--wt-*` vars, defaulting to Purdex.
+  it('sets the worker theme on the pane root', () => {
+    render(<ExecutionView {...base} isActive />)
+    const root = screen.getByTestId('execution-view')
+    expect(root.dataset.workerTheme).toBe('purdex')
+    expect(root.style.getPropertyValue('--wt-font-size')).toBe('14px')
+  })
+
   it('renders header facts from the summary', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ lease: { principal_id: 'pdx:mlab/t-me000000', expires_at: 1 } }) as never)
     render(<ExecutionView {...base} isActive />)
