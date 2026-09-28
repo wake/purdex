@@ -312,11 +312,15 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // default (Electron would navigate to it), so every file drag is claimed;
   // an ended execution just shows no overlay and takes nothing.
   const canAttach = !ended && !takeBackBusy
+  // The drop target matches the disabled `+` button (worker.upload.attach):
+  // while sending, mid-take-back, history still loading or the stream dead,
+  // neither offers to attach.
+  const canDrop = canAttach && !inputDisabled
   const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files')
   const onDragEnter = (e: DragEvent) => {
     if (!hasFiles(e)) return
     e.preventDefault()
-    if (!canAttach) return
+    if (!canDrop) return
     dragDepth.current++
     if (dragDepth.current === 1) setDragging(true)
   }
@@ -331,7 +335,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     e.preventDefault()
     dragDepth.current = 0
     setDragging(false)
-    if (canAttach) uploads.add(Array.from(e.dataTransfer.files))
+    if (canDrop) uploads.add(Array.from(e.dataTransfer.files))
   }
   const errorText = st.sendError
     ? (KNOWN_ERROR_KEYS.has(st.sendError.code) ? t(`execution.error.${st.sendError.code}`) : t('execution.error.generic', { message: st.sendError.message }))

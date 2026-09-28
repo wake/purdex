@@ -25,7 +25,7 @@ export default function UploadChips({ chips, onRemove }: Props) {
               failed ? 'border-status-error/60 text-status-error' : 'border-border-subtle text-text-secondary'
             }`}>
             {c.previewUrl
-              ? <img src={c.previewUrl} alt="" className="h-5 w-5 shrink-0 rounded-sm object-cover" />
+              ? <img src={c.previewUrl} alt="" draggable={false} className="h-5 w-5 shrink-0 rounded-sm object-cover" />
               : failed ? <WarningCircle size={14} className="shrink-0" /> : <FileIcon size={14} className="shrink-0" />}
             <span className="truncate">{c.name}</span>
             {c.status === 'uploading' && (

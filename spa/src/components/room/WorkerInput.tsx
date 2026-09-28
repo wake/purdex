@@ -102,6 +102,10 @@ export default function WorkerInput({
     if (!onAddFiles) return
     const files = Array.from(e.clipboardData?.files ?? [])
     if (files.length === 0) return
+    // A rich-text app (e.g. a chat client) puts an image rendition alongside
+    // the text on copy; with non-empty text present, let the ordinary text
+    // paste happen and skip the upload — files-only still uploads.
+    if ((e.clipboardData?.getData('text/plain') ?? '') !== '') return
     e.preventDefault()
     onAddFiles(files)
   }
@@ -112,7 +116,7 @@ export default function WorkerInput({
     }`}>
       <UploadChips chips={chips} onRemove={onRemoveChip ?? noop} />
       {!gate.ok && (
-        <div data-testid="upload-block" className={`px-3 pt-1 text-xs ${gate.reason === 'failed' ? 'text-status-error' : 'text-text-muted'}`}>
+        <div data-testid="upload-block" role="status" aria-live="polite" className={`px-3 pt-1 text-xs ${gate.reason === 'failed' ? 'text-status-error' : 'text-text-muted'}`}>
           {t(gate.reason === 'failed' ? 'worker.upload.failed_remove' : 'worker.upload.wait')}
         </div>
       )}

@@ -1793,4 +1793,17 @@ describe('ExecutionView — attachments', () => {
     fireEvent.dragEnter(screen.getByTestId('execution-view'), { dataTransfer: { types: ['Files'], files: [txt('a.txt')] } })
     expect(screen.queryByTestId('drop-overlay')).toBeNull()
   })
+
+  // Matches the disabled `+` button: while a send is in flight the input is
+  // disabled, so a drop must not open the overlay or upload either.
+  it('takes no drop while the input is disabled (a send in flight)', () => {
+    act(() => useExecutionStore.getState().setPendingSend(H, E, true))
+    render(<ExecutionView {...base} isActive />)
+    const root = screen.getByTestId('execution-view')
+    fireEvent.dragEnter(root, { dataTransfer: { types: ['Files'], files: [txt('a.txt')] } })
+    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+    fireEvent.drop(root, { dataTransfer: { types: ['Files'], files: [txt('a.txt')] } })
+    expect(screen.queryAllByTestId('upload-chip')).toHaveLength(0)
+    expect(api.uploadWorkerFile).not.toHaveBeenCalled()
+  })
 })

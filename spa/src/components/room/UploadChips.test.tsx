@@ -27,6 +27,13 @@ describe('UploadChips', () => {
     expect(els[2].textContent).toContain('File too large')
   })
 
+  // Dragging the thumbnail out of the chip must not read as a file drag over
+  // the pane (it would open the drop overlay and try to "upload" the image).
+  it('the thumbnail is not draggable', () => {
+    render(<UploadChips chips={chips} onRemove={() => {}} />)
+    expect(screen.getAllByTestId('upload-chip')[1].querySelector('img')).toHaveAttribute('draggable', 'false')
+  })
+
   it('the remove button reports the chip key', () => {
     const onRemove = vi.fn()
     render(<UploadChips chips={chips} onRemove={onRemove} />)

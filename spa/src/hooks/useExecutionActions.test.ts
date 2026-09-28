@@ -155,7 +155,7 @@ describe('useExecutionActions — handleSend reports whether the send went throu
     expect(firstOk).toBe(true)
   })
 
-  it('resolves false for a send superseded before it settled', async () => {
+  it('resolves true for an accepted send superseded before it settled — the caller clears its own chips', async () => {
     const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
     const a = deferredSend()
     let pa: Promise<boolean> | undefined
@@ -166,6 +166,20 @@ describe('useExecutionActions — handleSend reports whether the send went throu
     await act(async () => { void result.current.handleSend('B'); await Promise.resolve() })
     let aOk: boolean | undefined
     await act(async () => { a.resolve({ turn_id: 'tA', delivery: 'queued' }); aOk = await pa })
+    expect(aOk).toBe(true)
+  })
+
+  it('resolves false for a send superseded before it settled, when it then fails', async () => {
+    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+    const a = deferredSend()
+    let pa: Promise<boolean> | undefined
+    await act(async () => { pa = result.current.handleSend('A'); await Promise.resolve() })
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+    stall()
+    deferredSend()
+    await act(async () => { void result.current.handleSend('B'); await Promise.resolve() })
+    let aOk: boolean | undefined
+    await act(async () => { a.reject(new NexApiError(400, 'invalid_text', 'late')); aOk = await pa })
     expect(aOk).toBe(false)
   })
 

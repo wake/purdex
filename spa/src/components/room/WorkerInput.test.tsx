@@ -243,6 +243,8 @@ describe('WorkerInput — attachments (spec §9.1)', () => {
     expect(onSend).not.toHaveBeenCalled()
     expect(ta.value).toBe('hi')
     expect(screen.getByTestId('upload-block').textContent).toBe('Waiting for uploads to finish…')
+    expect(screen.getByTestId('upload-block')).toHaveAttribute('role', 'status')
+    expect(screen.getByTestId('upload-block')).toHaveAttribute('aria-live', 'polite')
   })
 
   it('a failed chip blocks send until it is removed', () => {
@@ -276,6 +278,19 @@ describe('WorkerInput — attachments (spec §9.1)', () => {
     onAddFiles.mockClear()
     fireEvent.paste(ta, { clipboardData: { files: [], getData: () => 'text' } })
     expect(onAddFiles).not.toHaveBeenCalled()
+  })
+
+  // A rich-text app (e.g. a chat client) puts an image rendition next to the
+  // text on copy — with text present, the ordinary paste must win and no
+  // upload should start.
+  it('a paste with both files and non-empty text lets the text paste through and does not upload', () => {
+    const onAddFiles = vi.fn()
+    render(<WorkerInput onSend={vi.fn()} onAddFiles={onAddFiles} />)
+    const ta = screen.getByRole('textbox')
+    const file = new File(['x'], 'shot.png', { type: 'image/png' })
+    const event = fireEvent.paste(ta, { clipboardData: { files: [file], getData: () => 'hello' } })
+    expect(onAddFiles).not.toHaveBeenCalled()
+    expect(event).toBe(true) // not cancelled: preventDefault was not called
   })
 
   it('the + button opens a file picker whose files go to onAddFiles', () => {
