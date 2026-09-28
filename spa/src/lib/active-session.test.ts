@@ -55,6 +55,15 @@ describe('getActiveSessionInfo — worker (execution) tab (spec §8.2)', () => {
     expect(getActiveSessionInfo()).toEqual({ hostId: 'h1', sessionCode: 'exec:e1' })
   })
 
+  it('a pane with an empty-string host resolves to the first host, same as no host', () => {
+    const tab: Tab = {
+      id: 'tx', pinned: false, locked: false, createdAt: 0,
+      layout: { type: 'leaf', pane: { id: 'px', content: { kind: 'execution', executionId: 'e1', host: '' } } },
+    }
+    useTabStore.setState({ tabs: { tx: tab }, activeTabId: 'tx' })
+    expect(getActiveSessionInfo()).toEqual({ hostId: 'h1', sessionCode: 'exec:e1' })
+  })
+
   it('active exec tab is not unread', () => {
     useTabStore.setState({ tabs: { tx: execTab('h1') }, activeTabId: 'tx' })
     useAgentStore.getState().handleNormalizedEvent('h1', 'exec:e1', {

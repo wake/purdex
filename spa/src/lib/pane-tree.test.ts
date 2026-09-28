@@ -107,6 +107,13 @@ describe('findTabBySessionCode — worker (execution) tabs (spec §8.2)', () => 
     expect(findTabBySessionCode(tabs, 'h9', 'exec:e1')).toBe('t1')
     expect(findTabBySessionCode(tabs, 'h1', 'exec:e1')).toBeUndefined()
   })
+
+  it('an empty-string host resolves to the first host, same as no host', () => {
+    useHostStore.setState({ hostOrder: ['h9', 'h1'] })
+    const tabs = { t1: { layout: { type: 'leaf', pane: { id: 'px', content: { kind: 'execution', executionId: 'e1', host: '' } } } } as { layout: PaneLayout } }
+    expect(findTabBySessionCode(tabs, 'h9', 'exec:e1')).toBe('t1')
+    expect(findTabBySessionCode(tabs, 'h1', 'exec:e1')).toBeUndefined()
+  })
 })
 
 describe('findTabBySessionCode', () => {

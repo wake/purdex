@@ -129,6 +129,21 @@ describe('useWorkerAgentProjection', () => {
     stop()
   })
 
+  it('a pane with an empty-string host hint resolves to the first host, same as no hint', () => {
+    const stop = startWorkerAgentProjection()
+    try {
+      setLive({ summary: summary({ state: 'running' }), turnLive: true })
+      const emptyHostTab: Tab = {
+        id: 't-exec', pinned: false, locked: false, createdAt: 0,
+        layout: { type: 'leaf', pane: { id: 'p-t-exec', content: { kind: 'execution', executionId: E, host: '' } } },
+      }
+      useTabStore.setState({ tabs: { 't-exec': emptyHostTab }, tabOrder: ['t-exec'] })
+      expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+    } finally {
+      stop()
+    }
+  })
+
   it('keeps one list subscription per host with a worker tab and releases it with the last tab', () => {
     const stop = startWorkerAgentProjection()
     useTabStore.setState({ tabs: { t1: execTab('t1'), t2: execTab('t2', H, 'E2') }, tabOrder: ['t1', 't2'] })

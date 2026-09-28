@@ -45,8 +45,11 @@ function collectWorkers(tabs: Record<string, Tab>): Map<string, WorkerRef> {
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
       if (c.kind !== 'execution') return
-      // Same resolution as ExecutionPaneWrapper (register-modules/index.tsx).
-      const hostId = c.host ?? resolveExecutionHostId(undefined)
+      // Same resolution as ExecutionPaneWrapper (register-modules/index.tsx):
+      // `resolveExecutionHostId` treats an empty-string host the same as a
+      // missing one (falls back to the first host), so `??` here — which
+      // only catches null/undefined — would leave a '' hint unresolved.
+      const hostId = resolveExecutionHostId(c.host)
       if (!hostId) return
       out.set(compositeKey(hostId, execAgentCode(c.executionId)), { hostId, executionId: c.executionId })
     })
