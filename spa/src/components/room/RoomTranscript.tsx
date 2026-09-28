@@ -17,9 +17,11 @@ import type { ToolActivity } from '../../lib/nex/tool-activity'
 import type { WorkerTask } from '../../lib/nex/types'
 import { indexOperations } from '../../lib/nex/operations'
 import { groupTurns, type RoomTurn } from '../../lib/nex/turns'
+import type { TurnMeta } from '../../lib/nex/event-reducer'
 import ThinkingIndicator from '../ThinkingIndicator'
 import PartialMessageGroup from '../PartialMessageGroup'
 import RoomTurnGroup from './RoomTurnGroup'
+import TurnFooter from './TurnFooter'
 import { renderMessage, type RenderCtx } from './render-message'
 import { FoldContext, useInheritedFoldMemory } from './fold-context'
 import { useScrollControl, useTranscriptScroll, type TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
@@ -41,6 +43,8 @@ export interface RoomTranscriptProps {
   afterThinking?: ReactNode    // rendered AFTER ThinkingIndicator
   /** Turn boundaries the reducer recorded (ExecutionState.turnStarts). Absent → one turn. */
   turnStarts?: readonly number[]
+  /** Timing/outcome per boundary, index-aligned with `turnStarts` (spec §7.1). Absent → no footers. */
+  turnMeta?: readonly TurnMeta[]
   // P-B2.2 spec §4.4.
   partial?: PartialAssembly | null          // R1: trailing in-flight assistant group
   tools?: Record<string, ToolActivity>      // R2: status/timing for durable tool_use blocks, by block id
@@ -56,6 +60,8 @@ export interface RoomTranscriptProps {
   holdScroll?: boolean
   /** The search bar's handle on the bottom-follow (A F4: `release()` after a jump). */
   scrollControl?: Ref<TranscriptScrollControl>
+  /** The pane whose scroll position this transcript remembers and restores on mount (spec §6). */
+  scrollMemoryKey?: string
 }
 
 const NO_STARTS: readonly number[] = []
@@ -75,6 +81,7 @@ export default function RoomTranscript({
   children,
   afterThinking,
   turnStarts = NO_STARTS,
+  turnMeta,
   partial,
   tools,
   now,
@@ -82,9 +89,10 @@ export default function RoomTranscript({
   scrollRef,
   holdScroll = false,
   scrollControl,
+  scrollMemoryKey,
 }: RoomTranscriptProps) {
   const t = useI18nStore((s) => s.t)
-  const scroll = useTranscriptScroll(scrollRef, holdScroll)
+  const scroll = useTranscriptScroll(scrollRef, holdScroll, scrollMemoryKey ? { paneId: scrollMemoryKey, view: 'room' } : undefined)
   const { attach, onScroll, follow } = scroll
   useScrollControl(scrollControl, scroll)
   const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
@@ -102,15 +110,15 @@ export default function RoomTranscript({
   const partialVersion: string = useMemo(() => partialVersionOf(partial), [partial])
 
   // Auto-scroll on new messages, control requests, or partial growth. The
-  // first one (the pane opening, or a view switch remounting this) jumps
-  // straight to the bottom; only later growth animates (F3). While the search
-  // bar holds the view, only a reader already at the bottom is followed (A4).
+  // first one (the pane opening, or a view switch remounting this) places the
+  // reader at once — where the pane's memory left them, else the bottom;
+  // later growth animates (F3) and follows only a reader at the bottom (§6).
   useEffect(() => { follow() }, [follow, messages, scrollKey, partialVersion])
 
   // The in-flight assistant message belongs to the turn that is running: the
   // last recorded one. With nothing recorded yet it still needs a container,
   // or expand-all could never reach the call it is streaming.
-  const shown: RoomTurn[] = turns.length === 0 && hasPartial ? [{ start: 0, end: 0, openerIndex: null }] : turns
+  const shown: RoomTurn[] = turns.length === 0 && hasPartial ? [{ start: 0, end: 0, openerIndex: null, boundary: null }] : turns
   const lastTurn = shown.length - 1
 
   const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0, subagentTasks }
@@ -139,6 +147,8 @@ export default function RoomTranscript({
                 index.childIndexes.has(turn.start + k) ? null : renderMessage(msg, turn.start + k, ctx))}
               {/* R1: the in-flight assistant message, after the durable list and before children */}
               {ti === lastTurn && hasPartial && <PartialMessageGroup key={`${keyPrefix}-partial`} partial={partial} />}
+              {/* Spec §7.2: the footer is the last line of a completed turn; a live turn's meta has no endAt, so it draws nothing. */}
+              {turn.boundary !== null && turnMeta?.[turn.boundary] && <TurnFooter meta={turnMeta[turn.boundary]} />}
             </div>
           </RoomTurnGroup>
         ))}

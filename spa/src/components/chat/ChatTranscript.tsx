@@ -26,6 +26,7 @@ import { groupTurns, INTERRUPT_TEXT, type RoomTurn } from '../../lib/nex/turns'
 import { chatToolsKey, searchUnitId } from '../../lib/nex/transcript-search'
 import ThinkingIndicator from '../ThinkingIndicator'
 import RoomTurnGroup from '../room/RoomTurnGroup'
+import TurnFooter from '../room/TurnFooter'
 import RoomProse from '../room/RoomProse'
 import OperationBlock from '../room/OperationBlock'
 import { OperationAt } from '../room/MessageRow'
@@ -139,6 +140,7 @@ export default function ChatTranscript({
   children,
   afterThinking,
   turnStarts = NO_STARTS,
+  turnMeta,
   partial,
   tools,
   now,
@@ -146,9 +148,10 @@ export default function ChatTranscript({
   scrollRef,
   holdScroll = false,
   scrollControl,
+  scrollMemoryKey,
 }: ChatTranscriptProps) {
   const t = useI18nStore((s) => s.t)
-  const scroll = useTranscriptScroll(scrollRef, holdScroll)
+  const scroll = useTranscriptScroll(scrollRef, holdScroll, scrollMemoryKey ? { paneId: scrollMemoryKey, view: 'chat' } : undefined)
   const { attach, onScroll, follow } = scroll
   useScrollControl(scrollControl, scroll)
   const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
@@ -173,13 +176,14 @@ export default function ChatTranscript({
     [opsByTurn],
   )
 
-  // Same effect as RoomTranscript's auto-scroll: instant on the first run
-  // (mount / view switch), smooth after (F3), held by the search bar (A4).
+  // Same effect as RoomTranscript's auto-scroll: placed at once on the first
+  // run (mount / view switch, from the pane's memory), smooth after (F3),
+  // and only for a reader at the bottom (§6).
   useEffect(() => { follow() }, [follow, messages, scrollKey, partialVersion, linesVersion])
 
   // As RoomTranscript: the in-flight message belongs to the last turn, and
   // needs one even before any boundary is recorded.
-  const shown: RoomTurn[] = turns.length === 0 && hasPartial ? [{ start: 0, end: 0, openerIndex: null }] : turns
+  const shown: RoomTurn[] = turns.length === 0 && hasPartial ? [{ start: 0, end: 0, openerIndex: null, boundary: null }] : turns
   const lastTurn = shown.length - 1
   const interrupted = t('stream.interrupted')
   const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0, subagentTasks }
@@ -239,6 +243,8 @@ export default function ChatTranscript({
                     any text streaming ahead of them, so it does not jump from
                     above the typing bubble to below it once the text lands. */}
                 {plain.length === 0 && toolsLine}
+                {/* Spec §7.2: the footer is the last line of a completed turn; a live turn's meta has no endAt, so it draws nothing. */}
+                {turn.boundary !== null && turnMeta?.[turn.boundary] && <TurnFooter meta={turnMeta[turn.boundary]} />}
               </div>
             </RoomTurnGroup>
           )

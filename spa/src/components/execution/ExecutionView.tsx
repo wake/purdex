@@ -306,12 +306,18 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const queuedTag = st.pendingLocal?.delivery === 'queued'
     && <span className="text-[10px] uppercase font-normal text-text-muted">{t('execution.queued')}</span>
   const transcriptProps = {
-    messages: st.messages, turnStarts: st.turnStarts, keyPrefix: executionId, showThinking,
+    messages: st.messages, turnStarts: st.turnStarts, turnMeta: st.turnMeta, keyPrefix: executionId, showThinking,
     showEmptyHint: st.messages.length === 0 && !st.pendingLocal, emptyText: t('execution.empty'), scrollKey: st.pendingLocal ? 1 : 0,
     partial: st.partial, tools: st.tools, now, subagentTasks,
     // R3 T3.3: the search bar marks and scrolls inside the transcript, and
     // while it is open a new line never pulls the reader off a match (A4).
     scrollRef: setScrollBox, holdScroll: searchOpen, scrollControl,
+    // Spec §6: the pane remembers where its reader was, across remounts and
+    // view switches. Keyed by the execution too, not just the pane: a
+    // handoff / take-back swaps a pane's content to a different execution
+    // while keeping its paneId, and the old memo must not bleed into it
+    // (fix round 1, finding 1).
+    scrollMemoryKey: `${paneId}:${hostId}:${executionId}`,
   }
 
   return (

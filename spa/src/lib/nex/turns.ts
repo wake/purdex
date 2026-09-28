@@ -19,6 +19,12 @@ export interface RoomTurn {
    * carried no text. The turn container exists either way.
    */
   openerIndex: number | null
+  /**
+   * Index into `turnStarts` (and so into the index-aligned `turnMeta`) of the
+   * boundary that opened this turn; null for the leading group `groupTurns`
+   * adds when the first boundary is not 0 — no daemon event opened it.
+   */
+  boundary: number | null
 }
 
 /** A user message that reads as the human's own line (not a tool result, not the interrupt sentinel, not a subagent's prompt). */
@@ -39,11 +45,15 @@ export function isOpeningLine(msg: StreamMessage): boolean {
  */
 export function groupTurns(messages: StreamMessage[], turnStarts: readonly number[]): RoomTurn[] {
   const len = messages.length
-  const starts = turnStarts.map(s => Math.min(Math.max(s, 0), len)).sort((a, b) => a - b)
-  if (len > 0 && (starts.length === 0 || starts[0] !== 0)) starts.unshift(0)
+  // Each start keeps the turnStarts index it came from, so a range maps back
+  // to its boundary even if the list arrived out of order (stable sort).
+  const starts: { start: number; boundary: number | null }[] = turnStarts
+    .map((s, i) => ({ start: Math.min(Math.max(s, 0), len), boundary: i }))
+    .sort((a, b) => a.start - b.start)
+  if (len > 0 && (starts.length === 0 || starts[0].start !== 0)) starts.unshift({ start: 0, boundary: null })
 
-  return starts.map((start, i) => {
-    const end = i + 1 < starts.length ? starts[i + 1] : len
+  return starts.map(({ start, boundary }, i) => {
+    const end = i + 1 < starts.length ? starts[i + 1].start : len
     let openerIndex: number | null = null
     for (let j = start; j < end; j++) {
       if (isOpeningLine(messages[j])) {
@@ -51,6 +61,6 @@ export function groupTurns(messages: StreamMessage[], turnStarts: readonly numbe
         break
       }
     }
-    return { start, end, openerIndex }
+    return { start, end, openerIndex, boundary }
   })
 }

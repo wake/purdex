@@ -10,6 +10,7 @@ import { FoldContext, useFoldMemory } from '../room/fold-context'
 import type { ContentBlock, StreamMessage } from '../../lib/nex/message-types'
 import type { PartialAssembly } from '../../lib/nex/partial'
 import type { DiffHunk, ToolActivity } from '../../lib/nex/tool-activity'
+import type { TurnMeta } from '../../lib/nex/event-reducer'
 
 const asst = (...blocks: ContentBlock[]): StreamMessage =>
   ({ type: 'assistant', message: { id: 'm', role: 'assistant', content: blocks, stop_reason: null } } as StreamMessage)
@@ -426,6 +427,36 @@ describe('ChatTranscript', () => {
       rerender(T({ messages, tools: { a: { ...running.a, endedAt: 2, status: 'error' } }, partial: tu('{"file_path":"/a"') }))
       expect(scrollTo).toHaveBeenCalledTimes(3)
       expect(screen.getByTestId('chat-failed-line')).toBeInTheDocument()
+    })
+  })
+
+  // ---- spec §7.2: turn footer ------------------------------------------------
+
+  describe('turn footer (spec §7.2)', () => {
+    const meta = (patch: Partial<TurnMeta>): TurnMeta => ({ startAt: 0, endAt: null, outcome: null, durationMs: null, ...patch })
+    const twoTurns: StreamMessage[] = [said('hello'), reply('Hi there'), said('second'), reply('again')]
+
+    it('shows a footer after a completed turn', () => {
+      render(T({
+        messages: twoTurns, turnStarts: [0, 2],
+        turnMeta: [meta({ endAt: 1000, outcome: 'ok', durationMs: 500 }), meta({ endAt: 2000, outcome: 'failed', durationMs: 900 })],
+      }))
+      const turns = screen.getAllByTestId('room-turn')
+      expect(within(turns[0]).getByTestId('turn-footer')).toHaveTextContent('Worked for')
+      expect(within(turns[1]).getByTestId('turn-footer')).toHaveTextContent('Failed after')
+    })
+
+    it('shows no footer after a turn the user interrupted', () => {
+      render(T({
+        messages: [said('hello'), reply('Hi there')], turnStarts: [0],
+        turnMeta: [meta({ endAt: 1000, outcome: 'interrupted', durationMs: 500 })],
+      }))
+      expect(screen.queryByTestId('turn-footer')).toBeNull()
+    })
+
+    it('shows no footer without turnMeta (absent prop)', () => {
+      render(T({ messages: twoTurns, turnStarts: [0, 2] }))
+      expect(screen.queryByTestId('turn-footer')).toBeNull()
     })
   })
 })

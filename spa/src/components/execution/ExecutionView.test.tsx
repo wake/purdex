@@ -1596,6 +1596,40 @@ describe('ExecutionView — search (R3 T3.3)', () => {
   })
 })
 
+// Fix round 1, finding 1: the pane's scroll memo is keyed by pane AND
+// execution, not just the pane — a handoff / take-back swaps a pane's
+// content to a different execution while keeping its paneId (lib/nex/handoff
+// swaps `PaneContent`, but `paneId` never changes).
+describe('ExecutionView — scroll memory is keyed per execution (spec §6 fix)', () => {
+  afterEach(() => {
+    delete (Element.prototype as { scrollTo?: unknown }).scrollTo
+  })
+
+  it('a different execution swapped into the same pane does not inherit the old scroll position', () => {
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    const E2 = 'exc_2'
+    useExecutionStore.getState().setSummary(H, E2, summary({ id: E2 }) as never)
+    useExecutionStore.getState().setHistoryLoaded(H, E2, true)
+
+    const { unmount } = render(<ExecutionView {...base} paneId="p1" isActive />)
+    const scroller = document.querySelector('.overflow-y-auto') as HTMLElement
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 })
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, writable: true, value: 300 })
+    fireEvent.scroll(scroller)
+    unmount()
+
+    // A different execution takes the same pane (as a handoff / take-back
+    // would): its first `follow()` must jump to the bottom, not restore the
+    // previous execution's mid-transcript position.
+    scrollTo.mockClear()
+    render(<ExecutionView {...base} paneId="p1" executionId={E2} isActive />)
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+    expect(scrollTo).not.toHaveBeenCalledWith(expect.objectContaining({ top: 300 }))
+  })
+})
+
 // R4 T3.2: the dock lists running tasks; "inspect" goes where search would.
 describe('ExecutionView — dock tasks (R4 T3.2)', () => {
   type Msg = Exec['messages'][number]
