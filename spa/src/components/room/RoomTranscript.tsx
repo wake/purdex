@@ -116,6 +116,8 @@ export default function RoomTranscript({
   const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0, subagentTasks }
 
   return (
+    // `p-4` — RoomUserLine's `-mx-4` bleeds the user band back out to this
+    // container's edges (spec §5.4). If you change one, change the other.
     <div ref={attach} onScroll={onScroll} className="flex-1 overflow-y-auto p-4 space-y-4">
       <FoldContext.Provider value={foldStore}>
         {showEmptyHint && (

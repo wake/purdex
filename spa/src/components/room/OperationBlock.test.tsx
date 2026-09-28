@@ -56,6 +56,14 @@ describe('OperationBlock', () => {
     expect(screen.getByTestId('op-rail').className).not.toContain('bg-status')
   })
 
+  // A4 (spec §5.5): the rail reads the worker theme's rail colour, brighter
+  // than the app's generic subtle border. Error / denied fills are unchanged.
+  it('rail uses the worker theme rail colour', () => {
+    render(<OperationBlock tool="Bash" input={{ command: 'ls' }} foldKey="tu1"
+      activity={{ status: 'done', startedAt: 1_000, endedAt: 2_500 }} result={ok('fine')} />)
+    expect(screen.getByTestId('op-rail').className).toContain('border-[var(--wt-rail-color)]')
+  })
+
   it('an error fills the rail', () => {
     render(<OperationBlock tool="Bash" input={{ command: 'false' }} foldKey="tu1"
       activity={{ status: 'error', startedAt: 1_000, endedAt: 2_500 }} result={bad('boom')} />)

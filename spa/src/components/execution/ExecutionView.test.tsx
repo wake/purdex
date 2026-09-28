@@ -57,6 +57,15 @@ beforeEach(() => {
 })
 
 describe('ExecutionView', () => {
+  // Worker pane theme spec §4.1: the pane root carries the theme id and its
+  // `--wt-*` vars, defaulting to Purdex.
+  it('sets the worker theme on the pane root', () => {
+    render(<ExecutionView {...base} isActive />)
+    const root = screen.getByTestId('execution-view')
+    expect(root.dataset.workerTheme).toBe('purdex')
+    expect(root.style.getPropertyValue('--wt-font-size')).toBe('14px')
+  })
+
   it('renders header facts from the summary', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ lease: { principal_id: 'pdx:mlab/t-me000000', expires_at: 1 } }) as never)
     render(<ExecutionView {...base} isActive />)
@@ -339,7 +348,7 @@ describe('ExecutionView — room transcript (T4.4)', () => {
     const line = within(turns[1]).getByTestId('room-user-line')
     expect(line).toHaveTextContent('second')
     expect(line.className).toContain('opacity-60')
-    expect(within(line).getByTestId('room-user-mark')).toBeInTheDocument()
+    expect(within(line).getByTestId('room-user-prefix')).toBeInTheDocument()
     expect(within(line).getByText(/queued/i)).toBeInTheDocument()
     expect(container.querySelector('.justify-end')).toBeNull()
   })

@@ -28,6 +28,7 @@ import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { DEFAULT_WORKER_SETTINGS, useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { deleteHostCascade } from '../host-lifecycle'
@@ -53,6 +54,7 @@ import { masterWorkspaceIds as masterWorkspaceIdsOrNull } from './master-world'
 import { buildHostsSection, buildSettingsSection, buildTabsSection, buildWorkspacesSection, stripSizes } from './sections'
 import type { HostsPayload, SettingsPayload, TabsPayload, WorkspacesPayload } from './types'
 import { INVALID_REASONS, applySectionToStores, readSettingsSources } from './apply-to-stores'
+import { buildSectionPayload } from './collector'
 import { identityOfSync, syncIdOfSync } from './host-identity'
 import { isRefShownNow, setHostShown } from '../shown-hosts'
 
@@ -111,6 +113,7 @@ function resetStores(): void {
   useHostSettingsStore.setState({ hosts: {} })
   useHostLookStore.setState({ looks: {} })
   useShownHostsStore.setState({ ids: [] })
+  useWorkerSettingsStore.setState({ ...DEFAULT_WORKER_SETTINGS })
   // Reset too: since every apply ends with a re-resolve pass, a column one test left behind would move in the next.
   useNewTabLayoutStore.setState(useNewTabLayoutStore.getInitialState(), true)
 }
@@ -519,7 +522,7 @@ describe('applySectionToStores — settings', () => {
   })
 
   it('editor preferences are device-local: not a settings source, and a payload carrying them is invalid', async () => {
-    expect(Object.keys(readSettingsSources())).toHaveLength(10)
+    expect(Object.keys(readSettingsSources())).toHaveLength(11)
     expect(readSettingsSources()).not.toHaveProperty('purdex-editor-settings')
     const payload = { ...settingsNow(), 'purdex-editor-settings': { fontSize: 20 } }
     let outcome: unknown
@@ -732,6 +735,58 @@ describe('applySectionToStores — settings: shown hosts', () => {
     const outcome = await applySectionToStores('settings', legacy, ctx)
     expect(useShownHostsStore.getState()).toBe(before)
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection({ ...legacy, 'purdex-shown-hosts': { ids: [WIRE] } }) })
+  })
+})
+
+// worker pane theme (spec §4.2, settings ordinal 9): `purdex-worker-settings` rides `settings` like the other
+// appearance stores — `theme`, `iconStyle` and `customIcon` all travel. `customIcon` is a plain string (`''` = none),
+// never `null`, so it is one shape class and the applier's shape check never rejects it.
+describe('applySectionToStores — settings: worker pane theme', () => {
+  const worker = () => useWorkerSettingsStore.getState()
+  const collected = (): SettingsPayload => JSON.parse(JSON.stringify(buildSectionPayload('settings')!.payload)) as SettingsPayload
+
+  it('collect → apply round-trips theme, iconStyle and customIcon; the rebuilt hash is the payload\'s (nothing to push)', async () => {
+    // device A
+    useWorkerSettingsStore.setState({ theme: 'mono-dark', iconStyle: 'color', customIcon: 'Star' })
+    const fromA = collected()
+    expect(fromA['purdex-worker-settings']).toEqual({ theme: 'mono-dark', iconStyle: 'color', customIcon: 'Star' })
+
+    // device B, at the defaults
+    useWorkerSettingsStore.setState({ ...DEFAULT_WORKER_SETTINGS })
+    const outcome = await applySectionToStores('settings', fromA, ctx)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(fromA) })
+    expect(worker().theme).toBe('mono-dark')
+    expect(worker().iconStyle).toBe('color')
+    expect(worker().customIcon).toBe('Star')
+    expect(persistedOf(STORAGE_KEYS.WORKER_SETTINGS)).toMatchObject({ theme: 'mono-dark', iconStyle: 'color', customIcon: 'Star' })
+    expect(JSON.stringify(collected()['purdex-worker-settings'])).toBe(JSON.stringify(fromA['purdex-worker-settings']))
+  })
+
+  it('an unregistered theme id travels verbatim (the read side falls back, the preference is not lost)', async () => {
+    const payload = { ...collected(), 'purdex-worker-settings': { theme: 'gone', iconStyle: 'mono', customIcon: '' } } as SettingsPayload
+    expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(worker().theme).toBe('gone')
+  })
+
+  it('an ordinal-8 payload (no worker store) leaves the store at its defaults; the rebuild carries it, so the hash differs (pushed once)', async () => {
+    const before = worker()
+    const legacy = collected()
+    delete legacy['purdex-worker-settings']
+    const outcome = await applySectionToStores('settings', legacy, ctx)
+    expect(worker()).toBe(before)
+    expect({ theme: worker().theme, iconStyle: worker().iconStyle, customIcon: worker().customIcon }).toEqual(DEFAULT_WORKER_SETTINGS)
+    expect(outcome).toMatchObject({
+      ok: true,
+      hash: await hashSection({ ...legacy, 'purdex-worker-settings': { theme: 'purdex', iconStyle: 'mono', customIcon: '' } }),
+    })
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(legacy) })
+  })
+
+  it('a worker entry carrying customIcon round-trips it like theme and iconStyle', async () => {
+    const payload = { ...collected(), 'purdex-worker-settings': { theme: 'mono-dark', iconStyle: 'mono', customIcon: 'Star' } } as SettingsPayload
+    expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
+    expect(worker().theme).toBe('mono-dark')
+    expect(worker().customIcon).toBe('Star')
   })
 })
 

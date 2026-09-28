@@ -63,6 +63,8 @@ describe('proseText', () => {
     ['inline code', 'call `needle()` then needle'],
     ['hard break', 'needle  \nneedle\\\nneedle'],
     ['autolink', '<https://needle.dev> needle'],
+    ['GFM table', '| needle | b |\n|---|---|\n| 1 | needle |'],
+    ['GFM strikethrough and autolink', '~~gone~~ needle and https://needle.test'],
   ])('equals RoomProse\'s DOM text: %s', (_, md) => {
     expect(proseText(md)).toBe(domText(md))
   })

@@ -64,6 +64,7 @@
   "settings.section.files": "檔案",
   "settings.section.files_workspace": "檔案",
   "settings.section.monitor": "監控",
+  "settings.section.worker": "Worker",
 
   "settings.agent.title": "Agent",
   "settings.agent.desc": "Agent 通知與 Hook 設定",
@@ -103,6 +104,12 @@
   "settings.editor.font_size.desc": "編輯器字型大小（像素，10–24）。",
   "settings.editor.font_size.aria": "字型大小",
   "settings.editor.tiptap_note": "此設定僅套用於 Monaco 程式碼編輯器。富文字（Tiptap）整合將於後續更新支援。",
+
+  "settings.worker.title": "Worker",
+  "settings.worker.desc": "Worker pane（執行室 / 對話）的外觀",
+  "worker.theme.label": "主題",
+  "worker.theme.desc": "Worker pane 的字級、清單、表格與側軌樣式",
+  "worker.theme.purdex": "Purdex",
 
   "settings.appearance.title": "外觀",
   "settings.appearance.desc": "應用程式視覺偏好設定",

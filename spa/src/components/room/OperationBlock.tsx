@@ -204,7 +204,7 @@ export default function OperationBlock({
       )}
 
       {showRail && (
-        <div data-testid="op-rail" className={`ml-[3px] border-l border-border-subtle pl-3 ${railFill}`}>
+        <div data-testid="op-rail" className={`ml-[3px] border-l border-[var(--wt-rail-color)] pl-3 ${railFill}`}>
           {hasRawInput && inputExpanded && (
             <pre data-testid="op-input" data-search-unit={anchor('input')} className="text-xs text-text-secondary whitespace-pre-wrap break-all overflow-auto max-h-60">
               {JSON.stringify(input, null, 2)}

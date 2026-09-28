@@ -31,6 +31,7 @@ import { ElectronSection } from '../../components/settings/ElectronSection'
 import { DevEnvironmentSection } from '../../components/settings/DevEnvironmentSection'
 import { ModulesSwitchboardSection } from '../../components/settings/ModulesSwitchboardSection'
 import { ProfileSection } from '../../components/settings/profile/ProfileSection'
+import { WorkerSettingsSection } from '../../components/settings/WorkerSettingsSection'
 import { FileTreeWorkspaceView } from '../../components/FileTreeView'
 import { FileTreeSessionView } from '../../components/FileTreeSessionView'
 import { useTabStore } from '../../stores/useTabStore'
@@ -264,6 +265,15 @@ export function registerBuiltinModules(): void {
         component: ExecutionsView,
       },
     ],
+    // Worker pane theme spec §4.2: "Worker → Appearance" — one purdex-scope
+    // global setting (T1), not per pane.
+    settings: [{
+      localId: 'worker',
+      scope: 'purdex',
+      order: SETTINGS_ORDER.MODULE_WORKER,
+      labelKey: 'settings.section.worker',
+      component: WorkerSettingsSection,
+    }],
   })
 
   // Editor module

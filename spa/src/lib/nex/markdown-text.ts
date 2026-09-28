@@ -7,23 +7,27 @@
 // the index and the DOM must count occurrences the same way.
 //
 // The same unified pipeline react-markdown 10 runs, up to the hast tree:
-// remark-parse → remark-rehype with `allowDangerousHtml: true` (react-markdown
-// always sets it). RoomProse adds no remark plugin (no GFM), and its one
-// rehype plugin, rehype-highlight, only wraps code in spans without changing
-// text, so it is left out. react-markdown then turns every `raw` node (inline
-// or block HTML, comments included) into a text node holding the HTML
-// literally — it draws `<b>x</b>` as those characters — so a raw node counts
-// as its value. Everything else is the DOM's `textContent`: every text node's
-// value in document order, the `\n` text nodes remark-rehype puts between
-// blocks included, element properties (href, src, alt) excluded.
+// remark-parse → remark-gfm → remark-rehype with `allowDangerousHtml: true`
+// (react-markdown always sets it). RoomProse runs GFM (A2, spec §5.3: tables,
+// strikethrough, task lists, autolinks), so this mirrors it. Its one rehype
+// plugin, rehype-highlight, only wraps code in spans without changing text,
+// so it is left out. react-markdown then turns every `raw` node (inline or
+// block HTML, comments included) into a text node holding the HTML literally
+// — it draws `<b>x</b>` as those characters — so a raw node counts as its
+// value. Everything else is the DOM's `textContent`: every text node's value
+// in document order, the `\n` text nodes remark-rehype puts between blocks
+// included, element properties (href, src, alt) excluded. A GFM table's
+// `TABLE_ELEMENTS` whitespace-only text nodes are now reachable (RoomProse
+// wraps the `<table>` in a plain `<div>`, which adds no text).
 //
 // Not mdast-util-to-string: it glues paragraphs with no separator and counts
 // an image's alt — both differ from the DOM.
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
+import remarkGfm from 'remark-gfm'
 import remarkRehype from 'remark-rehype'
 
-const processor = unified().use(remarkParse).use(remarkRehype, { allowDangerousHtml: true })
+const processor = unified().use(remarkParse).use(remarkGfm).use(remarkRehype, { allowDangerousHtml: true })
 
 /** The slice of hast this walk reads. */
 interface HastNode {

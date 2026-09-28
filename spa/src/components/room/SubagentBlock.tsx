@@ -90,7 +90,7 @@ export default function SubagentBlock({ name, toolCount, foldKey, depth, renderC
         <div
           data-testid="subagent-rail"
           data-depth={depth}
-          className="mt-1 ml-[3px] border-l border-border-subtle pl-3 space-y-4"
+          className="mt-1 ml-[3px] border-l border-[var(--wt-rail-color)] pl-3 space-y-4"
         >
           {renderChildren()}
         </div>

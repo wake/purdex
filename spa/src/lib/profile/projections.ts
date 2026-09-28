@@ -78,8 +78,16 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
     // The hosts shown in this workbench (host ownership H2d, plan §0.6): a plain list `{ ids }`, always sent (`[]` =
     // every host hidden) — WIRE ids in the store itself, passed through verbatim like the look keys.
     ...settingsPaths('purdex-shown-hosts', ['ids']),
-    // NOT `purdex-module-enabled` (nor `purdex-editor-settings`, below) — ten
-    // stores, not twelve. useModuleEnabledStore
+    // The worker pane theme (worker theme spec §4.2): an appearance preference, synced like the theme and the UI
+    // appearance fields above. `customIcon` is included too — it is a plain `string` (`''` = no custom icon),
+    // never `null`, so it is one shape class and applySettings' shape check (applier.ts `shapeOf`) never rejects
+    // it. The theme id and the icon name are sent verbatim; `getWorkerTheme` falls back at read time. Adding
+    // `customIcon` here is a projection change under the SAME ordinal 9 (not a bump): ordinal 9 was never
+    // released (see the guard test's sanctioned-exception note, matching the ordinal-7 precedent), so there is
+    // no shipped client whose lock this would trip.
+    ...settingsPaths('purdex-worker-settings', ['theme', 'iconStyle', 'customIcon']),
+    // NOT `purdex-module-enabled` (nor `purdex-editor-settings`, below) — eleven
+    // stores, not thirteen. useModuleEnabledStore
     // says so itself: toggling a module on or off "is a device-local preference
     // (a host with limited resources can turn off modules it doesn't want to
     // run), not a config to sync between devices". P2a listed `.enabled` here;
@@ -115,7 +123,12 @@ export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   // 7: purdex-shown-hosts.ids (wire ids of the hosts shown in the workbench; host ownership H2d)
   // 8: `hosts` retired from the sync loop (host ownership H3a-2) — no projection change; the `@wire:hosts-retired=1`
   //    marker locks an H2-era client, which would otherwise keep pulling / pushing `hosts` (plan D1)
-  settings: 8,
+  // 9: purdex-worker-settings.{theme,iconStyle} (worker pane theme spec §4.2) — a projection change, so the fingerprint
+  //    moves by itself (no marker); an ordinal-8 payload lacks the store and leaves it alone on apply.
+  //    `customIcon` joined the same three fields shortly after, still under ordinal 9 (not a bump): ordinal 9 was never
+  //    released, so the fingerprint moving in place trips no shipped client's lock — the same sanctioned exception the
+  //    guard test records for ordinal 7 (H2d-1).
+  settings: 9,
   workspaces: 1,
   // 2: `tmux-session.hostId`, daemon `source.hostId`, `execution.host` are WIRE ids (host-sync-identity). The projection is
   //    unchanged; the fingerprint moves through WIRE_MARKERS.tabs.

@@ -64,6 +64,7 @@
   "settings.section.files": "Files",
   "settings.section.files_workspace": "Files",
   "settings.section.monitor": "Monitor",
+  "settings.section.worker": "Worker",
 
   "settings.agent.title": "Agent",
   "settings.agent.desc": "Agent notification and hook settings",
@@ -103,6 +104,12 @@
   "settings.editor.font_size.desc": "Editor font size in pixels (10–24).",
   "settings.editor.font_size.aria": "Font size",
   "settings.editor.tiptap_note": "These settings apply to the Monaco code editor. Rich-text (Tiptap) integration arrives in a follow-up.",
+
+  "settings.worker.title": "Worker",
+  "settings.worker.desc": "Appearance of the worker pane (execution room / chat)",
+  "worker.theme.label": "Theme",
+  "worker.theme.desc": "Worker pane typography, lists, tables and rail",
+  "worker.theme.purdex": "Purdex",
 
   "settings.appearance.title": "Appearance",
   "settings.appearance.desc": "Visual preferences for the application",

@@ -65,6 +65,14 @@ describe('SubagentBlock', () => {
     expect(within(rail).getByText('3 matches')).toBeInTheDocument()
   })
 
+  // A4 (spec §5.5): the rail reads the worker theme's rail colour, brighter
+  // than the app's generic subtle border.
+  it('rail uses the worker theme rail colour', () => {
+    renderDelegation()
+    expand()
+    expect(screen.getByTestId('subagent-rail').className).toContain('border-[var(--wt-rail-color)]')
+  })
+
   it("renders the child's tools one indent deeper", () => {
     renderDelegation()
     expand()
@@ -90,7 +98,7 @@ describe('SubagentBlock', () => {
     expand()
     const line = screen.getByTestId('room-subagent-line')
     expect(line).toHaveTextContent('read notes.md and list the TODOs')
-    expect(within(line).queryByTestId('room-user-mark')).toBeNull()
+    expect(within(line).queryByTestId('room-user-prefix')).toBeNull()
     // The human's line is still the only user line in the transcript.
     const userLines = screen.getAllByTestId('room-user-line')
     expect(userLines).toHaveLength(1)
