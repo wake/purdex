@@ -412,6 +412,14 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     if (err && PER_IMAGE_ERRORS.has(err.code) && err.attachmentIndex !== undefined) {
       const failed = natives[err.attachmentIndex]
       if (failed) uploads.markFailed(failed.key, err.code)
+    } else if (err?.code === 'attachments_unsupported' && natives.length > 0) {
+      // The cached capability was wrong (PR #1527 A2): left `done`, every
+      // retry would re-post the same refused body. Refetch it, and send
+      // these images by path — the draft stays, and the reader resends once
+      // the uploads finish. `request_too_large` keeps its chips: the reason
+      // shows, and the reader decides what to drop.
+      void useNexHostStore.getState().invalidate(hostId)
+      uploads.demote(natives.map((n) => n.key))
     }
   }
   const removeChip = (k: string) => {
