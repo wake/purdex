@@ -129,10 +129,21 @@ it('keep-local after a rebuild made during the lock must not bring the dead pane
 
   // ~13:31 — the user answers 「保留這台裝置的」
   api.putSection.mockResolvedValue({ kind: 'applied', rev: 3 })
+  const putsBefore = api.putSection.mock.calls.length
   executor.resolve('tabs.wa', 'local')
   await vi.advanceTimersByTimeAsync(5_000)
 
   // "keep this device's" = what this device holds NOW: the live, rebuilt pane.
   expect(pane()).not.toHaveProperty('terminated')
   expect(pane().sessionCode).toBe('hakmez')
+
+  // …and that is what went to the host: rebased on the conflict's SOT rev, carrying the rebuilt pane.
+  const puts = api.putSection.mock.calls.slice(putsBefore).filter(([, , section]) => section === 'tabs.wa')
+  expect(puts.length).toBeGreaterThan(0)
+  const [, , , body] = puts[0]
+  expect(body.baseRev).toBe(2)
+  const sent = (body.payload as { tabs: Record<string, Tab> }).tabs.t1.layout
+  if (sent.type !== 'leaf' || sent.pane.content.kind !== 'tmux-session') throw new Error('not a tmux leaf')
+  expect(sent.pane.content.sessionCode).toBe('hakmez')
+  expect(sent.pane.content).not.toHaveProperty('terminated')
 })
