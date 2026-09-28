@@ -96,6 +96,19 @@ func (m *Module) handleExecutionUpload(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusBadRequest, "invalid_execution_id", "upload directory escapes the execution's cwd", nil)
 		return
 	}
+	// The SPA embeds the full saved path (which starts with the execution's
+	// cwd) into a `[file: <path>]` line in the next message. The cwd is
+	// itself a legal filename/path on disk and isn't sanitized the way an
+	// uploaded file's own name is below — a cwd containing a newline, a
+	// Unicode line/paragraph separator, or a literal `[`/`]` would split or
+	// escape that marker exactly like a hostile upload filename would.
+	// Checked here, before any directory is created, using the same
+	// predicate uploadFileName uses.
+	if hasUnsafePathRune(dir) {
+		writeHandoffError(w, http.StatusConflict, "cwd_unsupported_chars",
+			"execution cwd contains characters unsafe for the upload reference", nil)
+		return
+	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, uploadMaxBytes+uploadBodyOverhead)
 	part, err := findFilePart(r)
@@ -220,21 +233,36 @@ func findFilePart(r *http.Request) (*multipart.Part, error) {
 	}
 }
 
+// unsafePathRune reports whether r would break the SPA's `[file: <path>]`
+// reference line if it ended up inside it: a newline (or any other Unicode
+// control character, including \r and \t) would split the line and inject
+// arbitrary text into the next prompt, and a literal `[` or `]` would break
+// out of the brackets. The line-splitting risk isn't limited to Cc:
+// U+2028/U+2029 (line/paragraph separator) split a line just as a newline
+// would, and Cf format characters (bidi overrides like U+202E, zero-width
+// chars) can visually disguise the result without being caught by
+// IsControl. Shared by uploadFileName (sanitizes an uploaded file's own
+// name) and the execution-cwd check in handleExecutionUpload (the cwd is a
+// legal path on disk and isn't sanitized the way a filename is, but it's
+// embedded in that same reference line).
+func unsafePathRune(r rune) bool {
+	return unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp) || r == '[' || r == ']'
+}
+
+// hasUnsafePathRune reports whether s contains any rune unsafePathRune flags.
+func hasUnsafePathRune(s string) bool {
+	return strings.ContainsFunc(s, unsafePathRune)
+}
+
 // uploadFileName strips directory components, then neutralizes characters
-// that would break the SPA's `[file: <path>]` reference line: a newline (or
-// any other Unicode control character, including \r and \t) would split the
-// line and inject arbitrary text into the next prompt, and a literal `[` or
-// `]` would break out of the brackets. The line-splitting risk isn't limited
-// to Cc: U+2028/U+2029 (line/paragraph separator) split a line just as a
-// newline would, and Cf format characters (bidi overrides like U+202E,
-// zero-width chars) can visually disguise the result without being caught by
-// IsControl. All of those plus `[` `]` become "_"; the result is then
-// trimmed of surrounding spaces. A name with nothing usable left (".", "..",
-// "/", or empty after trimming) becomes "upload".
+// that would break the SPA's `[file: <path>]` reference line (see
+// unsafePathRune) by turning them into "_"; the result is then trimmed of
+// surrounding spaces. A name with nothing usable left (".", "..", "/", or
+// empty after trimming) becomes "upload".
 func uploadFileName(raw string) string {
 	name := filepath.Base(raw)
 	name = strings.Map(func(r rune) rune {
-		if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp) || r == '[' || r == ']' {
+		if unsafePathRune(r) {
 			return '_'
 		}
 		return r
