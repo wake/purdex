@@ -12,7 +12,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { compositeKey } from '../lib/composite-key'
-import { stripAgentTitleMarker } from '../lib/agent-title-marker'
+import { stripAgentTitleMarker, stripAnyKnownAgentTitleMarker } from '../lib/agent-title-marker'
 import { countPanesOnSession } from '../lib/pane-tree'
 import { HandoffApiError } from '../lib/nex/handoff-api'
 import {
@@ -46,7 +46,14 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
   // secondary-pane handoff on a split.
   const rawPaneTitle = useSessionStore((s) => s.sessions[args.hostId]?.find((sess) => sess.code === args.sessionCode)?.pane_title)
   const agentType = useAgentStore((s) => s.agentTypes[compositeKey(args.hostId, args.sessionCode)])
-  const fromTitle = rawPaneTitle ? stripAgentTitleMarker(rawPaneTitle, agentType) : undefined
+  // agentType can be unclassified yet (useAgentStore hasn't seen this session
+  // classify), in which case the typed, agentType-keyed strip is a no-op and
+  // a marker like "✳ fix-login" would be recorded verbatim (review finding
+  // A2). Fall back to stripping any known agent's marker shape by pattern
+  // alone; the typed path stays authoritative once agentType is known.
+  const fromTitle = rawPaneTitle
+    ? (agentType ? stripAgentTitleMarker(rawPaneTitle, agentType) : stripAnyKnownAgentTitleMarker(rawPaneTitle))
+    : undefined
   // Ref, not state: two clicks in one event burst both see `busy === false`
   // before React commits the first setBusy.
   const inFlight = useRef(false)

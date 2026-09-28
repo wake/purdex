@@ -254,6 +254,23 @@ describe('HandoffConfirmDialog — records the session pane title (worker theme 
     expect(mockedHandToNex.mock.calls[1][0].fromTitle).toBeUndefined()
   })
 
+  it('strips a known marker even when agentType is unclassified (review finding A2)', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
+    const ids = titledSessionTab('✳ fix-login')
+    // agentTypes stays {} (unclassified) — the typed strip would be a no-op.
+    render(<HandoffConfirmDialog {...args} {...ids} onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex.mock.calls[0][0].fromTitle).toBe('fix-login')
+  })
+
+  it('an ordinary title with no marker is unchanged when agentType is unclassified', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
+    const ids = titledSessionTab('fix-login')
+    render(<HandoffConfirmDialog {...args} {...ids} onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex.mock.calls[0][0].fromTitle).toBe('fix-login')
+  })
+
   it('records the pane title of the handed-off session even on a secondary pane of a split', async () => {
     mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
     // The tab is unrelated to the handed-off session (a split whose primary

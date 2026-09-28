@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { AGENT_TITLE_MARKERS, stripAgentTitleMarker } from './agent-title-marker'
+import { AGENT_TITLE_MARKERS, stripAgentTitleMarker, stripAnyKnownAgentTitleMarker } from './agent-title-marker'
 
 describe('stripAgentTitleMarker', () => {
   it('removes the leading "✳ " Claude Code writes (measured 2026-09-18: U+2733 + space)', () => {
@@ -20,5 +20,23 @@ describe('stripAgentTitleMarker', () => {
   })
   it('only cc has a marker today', () => {
     expect(Object.keys(AGENT_TITLE_MARKERS)).toEqual(['cc'])
+  })
+})
+
+describe('stripAnyKnownAgentTitleMarker (review finding A2: agentType may be unknown)', () => {
+  it('strips a known marker even without an agentType to key the lookup by', () => {
+    expect(stripAnyKnownAgentTitleMarker('✳ fix-login')).toBe('fix-login')
+  })
+  it('tolerates the emoji presentation selector and extra spaces, like the typed path', () => {
+    expect(stripAnyKnownAgentTitleMarker('✳️  plan review')).toBe('plan review')
+  })
+  it('leaves an ordinary title with no marker unchanged', () => {
+    expect(stripAnyKnownAgentTitleMarker('fix-login')).toBe('fix-login')
+  })
+  it('leaves a title untouched when the marker only appears mid-string, not leading', () => {
+    expect(stripAnyKnownAgentTitleMarker('fix ✳ later')).toBe('fix ✳ later')
+  })
+  it('an empty title stays empty', () => {
+    expect(stripAnyKnownAgentTitleMarker('')).toBe('')
   })
 })
