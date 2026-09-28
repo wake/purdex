@@ -4,6 +4,7 @@
 // from the derived `tool_use` / `tool_result` kinds (P-B3 spec §4.3). No
 // React, no fetch, no store: the hook feeds it history pages and SSE frames
 // alike.
+import { parseAttachmentMeta, type AttachmentMeta } from './attachments'
 import { isResultError } from './cost-summary'
 import type { StreamMessage } from './message-types'
 import { finalizeBlock, type PartialAssembly } from './partial'
@@ -244,8 +245,27 @@ export function frameToEvent(frame: NexSseFrame): NexEvent | null {
   return { seq: idSeq, execution_id: '', kind: frame.event, payload: obj, created_at: 0 }
 }
 
-function userBubble(text: string): StreamMessage {
-  return { type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } } as StreamMessage
+/**
+ * A synthetic user message. Image attachments (phase E) ride as the side
+ * field `purdex_attachments`, present only when there are some — a message
+ * without images is byte-for-byte the phase D shape.
+ */
+function userBubble(text: string, attachments: AttachmentMeta[] = []): StreamMessage {
+  const msg = { type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }
+  return (attachments.length > 0 ? { ...msg, purdex_attachments: attachments } : msg) as StreamMessage
+}
+
+/**
+ * The bubble a turn-opening event appends, or null for none. Text absent is
+ * the site-wide stream's stripping (spec §4.2.4) — no bubble, unless the
+ * event still carries images (the site-wide stream strips those too, so this
+ * only guards a payload shape that should not occur). An empty text with
+ * images is an image-only message and gets its line (Review Focus 4).
+ */
+function turnBubble(text: string | undefined, rawAttachments: unknown): StreamMessage | null {
+  const attachments = parseAttachmentMeta(rawAttachments)
+  if (text === undefined && attachments.length === 0) return null
+  return userBubble(text ?? '', attachments)
 }
 
 /**
@@ -513,7 +533,8 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       const brief = str(p, 'brief')
       // execution/service.go:551 — no turn_id here; the first keyed end binds it.
       next = markTurnStart(next, ev.created_at, null)
-      if (brief !== undefined) next = { ...next, messages: [...next.messages, userBubble(brief)] }
+      const bubble = turnBubble(brief, p.attachments)
+      if (bubble) next = { ...next, messages: [...next.messages, bubble] }
       return patchSummary(next, {})
     }
     case 'execution.message_accepted': {
@@ -522,7 +543,8 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // Same empty-vs-absent distinction as execution.delegated above.
       const text = str(p, 'text')
       next = markTurnStart({ ...next, pendingLocal: null, summaryStale: true }, ev.created_at, str(p, 'turn_id') || null)
-      if (text !== undefined) next = { ...next, messages: [...next.messages, userBubble(text)] }
+      const bubble = turnBubble(text, p.attachments)
+      if (bubble) next = { ...next, messages: [...next.messages, bubble] }
       return next
     }
     case 'execution.running':

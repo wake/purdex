@@ -262,6 +262,39 @@ export async function uploadWorkerFile(hostId: string, executionId: string, file
   return { path: body.path, name: typeof body.name === 'string' ? body.name : file.name, size: typeof body.size === 'number' ? body.size : file.size }
 }
 
+/**
+ * The bytes of one image attachment (nexen contract §1.9, consumer-guide
+ * §9.5), from the capability's `send.attachments.image.fetch` route with
+ * `{id}` and `{sha256}` substituted (URL-encoded). The route's path is
+ * origin-relative and already carries the public prefix (`/api/nex/v1/…`
+ * when embedded in pdx), so it goes straight to `pinnedHostFetch` against
+ * the daemon origin — never through `nexFetch`, which would prefix it again.
+ * Anything but a GET on an origin-relative path is refused unsent
+ * (`attachment_route_invalid`), as is a host this device lacks
+ * (`host_removed`). Other failures reject like `uploadWorkerFile`'s: the
+ * daemon's code (`attachment_not_found`, …) or `network`.
+ */
+export async function fetchAttachment(
+  hostId: string, executionId: string, sha256: string, route: { method: string; path: string },
+): Promise<Blob> {
+  if (!useHostStore.getState().hosts[hostId]) throw new NexApiError(0, 'host_removed', 'host removed')
+  if (route.method.toUpperCase() !== 'GET' || !route.path.startsWith('/') || route.path.startsWith('//')) {
+    throw new NexApiError(0, 'attachment_route_invalid', `attachment route not usable: ${route.method} ${route.path}`)
+  }
+  const path = route.path
+    .replaceAll('{id}', () => encodeURIComponent(executionId))
+    .replaceAll('{sha256}', () => encodeURIComponent(sha256))
+  let res: Response
+  try {
+    res = await pinnedHostFetch(hostId, path, { method: 'GET', headers: { 'X-Pdx-Client': getNexClientId() } })
+  } catch (e) {
+    if (!useHostStore.getState().hosts[hostId]) throw new NexApiError(0, 'host_removed', 'host removed')
+    throw new NexApiError(0, 'network', e instanceof Error ? e.message : String(e))
+  }
+  if (!res.ok) throw await nexErrorFromResponse(res)
+  return res.blob()
+}
+
 // Resolve an optional `host` hint (pane content / deeplink) onto a known SPA
 // hostId; falls back to the first host so an execution always has a daemon
 // to talk to. (Moved to resolve-host.ts, which P-B.2 keeps free of fetch

@@ -3,7 +3,7 @@
 // what changes when the host accepts images for the execution's provider,
 // and that nothing changes when it does not (Review Focus 1–3).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
@@ -15,7 +15,7 @@ import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
 
-vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn() }))
+vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchAttachment: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
@@ -69,6 +69,7 @@ beforeEach(() => {
   vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease, release, forget, touch })
   vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: null, paused: false })
   vi.mocked(api.sendMessage).mockReset().mockResolvedValue({ turn_id: 't1', delivery: 'delivered' })
+  vi.mocked(api.fetchAttachment).mockReset().mockResolvedValue(new Blob(['x'], { type: 'image/png' }))
   vi.mocked(api.uploadWorkerFile).mockReset().mockImplementation(async (_h, _e, f) => ({ path: saved(f.name), name: f.name, size: 1 }))
   useExecutionStore.getState().setSummary(H, E, summary() as never)
   useExecutionStore.getState().setHistoryLoaded(H, E, true)
@@ -199,6 +200,8 @@ describe('ExecutionView — native image attachments', () => {
     await waitFor(() => expect(useExecutionStore.getState().executions[`${H}:${E}`].pendingLocal?.attachments).toEqual([{ previewUrl: 'blob:2', media_type: 'image/png' }]))
     other.unmount()
     expect(revokeUrl).not.toHaveBeenCalledWith('blob:2')
+    // The sending pane still draws its pending thumbnail from the live URL.
+    expect(within(scope).getByTestId('attachment-thumb').querySelector('img')).toHaveAttribute('src', 'blob:2')
     sender.unmount()
     expect(revokeUrl).not.toHaveBeenCalledWith('blob:2')
     act(() => useExecutionStore.getState().setPendingLocal(H, E, null))
@@ -257,5 +260,55 @@ describe('ExecutionView — native image attachments', () => {
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('hi')
     enter()
     await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', `hi\n\n[file: ${saved('p.png')}]`))
+  })
+})
+
+describe('ExecutionView — image attachments on user lines (E4)', () => {
+  const ROUTE = { method: 'GET', path: '/api/nex/v1/executions/{id}/attachments/{sha256}' }
+  const sha = (c: string) => c.repeat(64)
+  const accepted = (seq: number, text: string, attachments: unknown[]) =>
+    ({ seq, execution_id: E, kind: 'execution.message_accepted', payload: { turn_id: `t${seq}`, text, attachments }, created_at: 0 })
+  const lineIn = (mode: 'room' | 'chat') => mode === 'room' ? screen.getAllByTestId('room-user-line') : screen.getAllByTestId('chat-bubble-user')
+
+  it.each(['room', 'chat'] as const)('an image-only message renders its line with the thumbnail in %s (Review Focus 4)', async (mode) => {
+    seedCaps(imageCaps())
+    useExecutionStore.getState().applyEvents(H, E, [accepted(1, '', [{ media_type: 'image/png', bytes: 11, sha256: sha('a') }])])
+    render(<ExecutionView {...base} mode={mode} isActive />)
+    const lines = lineIn(mode)
+    expect(lines).toHaveLength(1)
+    await waitFor(() => expect(within(lines[0]).getByTestId('attachment-thumb').dataset.state).toBe('ready'))
+    expect(api.fetchAttachment).toHaveBeenCalledWith(H, E, sha('a'), ROUTE)
+    expect(within(lines[0]).getByRole('img')).toHaveAttribute('src', 'blob:1')
+  })
+
+  it.each(['room', 'chat'] as const)('a line with text and two images shows the text and one thumbnail per image in %s', async (mode) => {
+    seedCaps(imageCaps())
+    useExecutionStore.getState().applyEvents(H, E, [accepted(1, 'compare these', [
+      { media_type: 'image/png', bytes: 11, sha256: sha('a') }, { media_type: 'image/jpeg', bytes: 12, sha256: sha('b') },
+    ])])
+    render(<ExecutionView {...base} mode={mode} isActive />)
+    const [line] = lineIn(mode)
+    expect(line).toHaveTextContent('compare these')
+    expect(within(line).getAllByTestId('attachment-thumb')).toHaveLength(2)
+    await waitFor(() => expect(api.fetchAttachment).toHaveBeenCalledTimes(2))
+  })
+
+  it.each(['room', 'chat'] as const)('a 404 shows the broken-image placeholder with the media type in %s (Review Focus 5)', async (mode) => {
+    seedCaps(imageCaps())
+    vi.mocked(api.fetchAttachment).mockRejectedValue(new NexApiError(404, 'attachment_not_found', 'gone'))
+    useExecutionStore.getState().applyEvents(H, E, [accepted(1, '', [{ media_type: 'image/gif', bytes: 11, sha256: sha('a') }])])
+    render(<ExecutionView {...base} mode={mode} isActive />)
+    const thumb = () => within(lineIn(mode)[0]).getByTestId('attachment-thumb')
+    await waitFor(() => expect(thumb().dataset.state).toBe('error'))
+    expect(thumb()).toHaveTextContent('image/gif')
+  })
+
+  it.each(['room', 'chat'] as const)('the optimistic line shows its local previews in %s, without fetching', (mode) => {
+    seedCaps(imageCaps())
+    useExecutionStore.getState().setPendingLocal(H, E, { text: '', delivery: null, attachments: [{ previewUrl: 'blob:local', media_type: 'image/png' }] })
+    render(<ExecutionView {...base} mode={mode} isActive />)
+    const [line] = lineIn(mode)
+    expect(within(line).getByRole('img')).toHaveAttribute('src', 'blob:local')
+    expect(api.fetchAttachment).not.toHaveBeenCalled()
   })
 })

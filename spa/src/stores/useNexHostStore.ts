@@ -141,6 +141,24 @@ export function selectImageAttachments(
 }
 
 /**
+ * `capabilities.send.attachments.image.fetch` of a ready host — the route a
+ * replayed image attachment is fetched back from (nexen contract §1.9) — or
+ * null (not ready, unknown host, an older daemon, a malformed route). Not
+ * gated on `providers`: that list says who may *send* images now, while a
+ * stored attachment stays fetchable whatever the host's runners are today.
+ * Returns the capability's own object, so the result is stable.
+ */
+export function selectAttachmentFetch(hostId: string): (s: Pick<NexHostState, 'byHost'>) => { method: string; path: string } | null {
+  return (s) => {
+    const entry = s.byHost[hostId]
+    if (entry?.phase !== 'ready' || !entry.capabilities) return null
+    const route = entry.capabilities.send?.attachments?.image?.fetch
+    if (typeof route !== 'object' || route === null) return null
+    return typeof route.method === 'string' && typeof route.path === 'string' ? route : null
+  }
+}
+
+/**
  * Whether the top-level `capabilities.session_title` object exists (nexen
  * contract §0/§1.10) — the only feature detect for the execution summary's
  * `session_title` field and the `execution.title_changed` event; never a

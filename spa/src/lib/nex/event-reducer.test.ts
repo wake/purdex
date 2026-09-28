@@ -75,6 +75,67 @@ describe('applyDurableEvent', () => {
     expect(s.summaryStale).toBe(true)
   })
 
+  describe('image attachments (phase E, contract §1.9)', () => {
+    const sha = (c: string) => c.repeat(64)
+    const meta = [{ media_type: 'image/png', bytes: 12, sha256: sha('a') }, { media_type: 'image/jpeg', bytes: 34, sha256: sha('b') }]
+
+    it('keeps the metadata on the user message as purdex_attachments, not as a content block', () => {
+      const s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.message_accepted', { text: 'look', turn_id: 't1', attachments: meta }))
+      expect(s.messages).toEqual([
+        { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'look' }], stop_reason: null }, purdex_attachments: meta },
+      ])
+    })
+
+    it('appends an image-only message (text "") and one whose text key is absent', () => {
+      let s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.message_accepted', { text: '', turn_id: 't1', attachments: meta.slice(0, 1) }))
+      s = applyDurableEvent(s, ev(2, 'execution.message_accepted', { turn_id: 't2', attachments: meta.slice(1) }))
+      expect(s.messages).toEqual([
+        { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '' }], stop_reason: null }, purdex_attachments: meta.slice(0, 1) },
+        { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '' }], stop_reason: null }, purdex_attachments: meta.slice(1) },
+      ])
+      expect(s.turnStarts).toEqual([0, 1])
+    })
+
+    it('carries execution.delegated attachments on the brief bubble', () => {
+      const s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.delegated', { brief: 'build this', attachments: meta }))
+      expect(s.messages[0]).toMatchObject({ purdex_attachments: meta })
+    })
+
+    it('drops malformed entries and leaves a message with none unchanged (no key)', () => {
+      const bad = [
+        { media_type: 'image/png', bytes: 1, sha256: 'A'.repeat(64) }, // not lowercase
+        { media_type: 'image/png', bytes: 1, sha256: 'a'.repeat(63) },
+        { media_type: 3, bytes: 1, sha256: sha('c') },
+        { media_type: 'image/png', bytes: -1, sha256: sha('c') },
+        null,
+        meta[0],
+      ]
+      let s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.message_accepted', { text: 'x', turn_id: 't1', attachments: bad }))
+      expect(s.messages[0]).toMatchObject({ purdex_attachments: [meta[0]] })
+      s = applyDurableEvent(s, ev(2, 'execution.message_accepted', { text: 'y', turn_id: 't2', attachments: 'nope' }))
+      expect(s.messages[1]).not.toHaveProperty('purdex_attachments')
+      s = applyDurableEvent(s, ev(3, 'execution.message_accepted', { text: 'z', turn_id: 't3', attachments: [] }))
+      expect(s.messages[2]).not.toHaveProperty('purdex_attachments')
+    })
+
+    it('replay from history equals the live stream', () => {
+      const payloads = [
+        { kind: 'execution.delegated', payload: { brief: 'b', attachments: meta.slice(0, 1) } },
+        { kind: 'execution.message_accepted', payload: { text: '', turn_id: 't2', attachments: meta } },
+        { kind: 'execution.message_accepted', payload: { text: 'plain', turn_id: 't3' } },
+      ]
+      let live = defaultExecutionState()
+      payloads.forEach((p, i) => {
+        const e = frameToEvent({ id: String(i + 1), event: p.kind, data: JSON.stringify(p.payload) })
+        if (e) live = applyDurableEvent(live, e)
+      })
+      const history = payloads.map((p, i) => ({ seq: i + 1, execution_id: 'exc_1', kind: p.kind, payload: JSON.parse(JSON.stringify(p.payload)), created_at: 0 }))
+        .reduce(applyDurableEvent, defaultExecutionState())
+      expect(history.messages).toEqual(live.messages)
+      expect(history.messages.map((m) => (m as { purdex_attachments?: unknown }).purdex_attachments)).toEqual([meta.slice(0, 1), meta, undefined])
+    })
+  })
+
   it('skips message_accepted with no text (site-wide stripped) without adding a bubble', () => {
     const s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.message_accepted', { turn_id: 't1' }))
     expect(s.messages).toEqual([])

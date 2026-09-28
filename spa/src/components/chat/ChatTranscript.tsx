@@ -35,6 +35,8 @@ import { FoldContext, useInheritedFoldMemory } from '../room/fold-context'
 import { useScrollControl, useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 import type { RoomTranscriptProps } from '../room/RoomTranscript'
 import ChatBubble, { ChatUserBubble } from './ChatBubble'
+import AttachmentThumbs from '../room/AttachmentThumbs'
+import { attachmentsOf } from '../../lib/nex/attachments'
 import ChatPartialGroup from './ChatPartialGroup'
 import ChatToolsLine from './ChatToolsLine'
 import ChatEditedLine from './ChatEditedLine'
@@ -108,6 +110,11 @@ function ChatMessage({ msg, i, interrupted, lineAt }: {
     // A subagent's frame whose Task is off the list: whatever it says as
     // `user`, the human did not say it, so it is not a right-hand bubble.
     const fromSubagent = um.parent_tool_use_id != null
+    // Phase E: the images this line carried go inside your bubble, under the
+    // text; with no text to hang them on (an image-only message, Review
+    // Focus 4) they are a bubble of their own.
+    const atts = fromSubagent ? undefined : attachmentsOf(msg)
+    const attsAt = atts ? um.message.content.findIndex((b) => b.type === 'text' && !!b.text && b.text !== INTERRUPT_TEXT) : -1
     um.message.content.forEach((block, j) => {
       // tool_result: its call's line carries it (an orphan has a line of its own); never a bubble.
       if (block.type === 'tool_result') { line(j); return }
@@ -123,8 +130,10 @@ function ChatMessage({ msg, i, interrupted, lineAt }: {
         return
       }
       // Your line is never markdown; a slash command gets the mono face (ChatUserBubble).
-      rows.push(<ChatUserBubble key={j} text={block.text} searchUnit={searchUnitId(blockKey(i, j), 'text')} />)
+      rows.push(<ChatUserBubble key={j} text={block.text} searchUnit={searchUnitId(blockKey(i, j), 'text')}
+        attachments={atts && j === attsAt ? <AttachmentThumbs items={atts} /> : undefined} />)
     })
+    if (atts && attsAt < 0) rows.push(<ChatUserBubble key="attachments" text="" attachments={<AttachmentThumbs items={atts} />} />)
   }
 
   return rows.length > 0 ? <>{rows}</> : null

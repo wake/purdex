@@ -19,6 +19,8 @@ import ChatTranscript from '../chat/ChatTranscript'
 import { ChatUserBubble } from '../chat/ChatBubble'
 import { FoldContext, useFoldMemory } from '../room/fold-context'
 import RoomUserLine from '../room/RoomUserLine'
+import { PendingAttachmentThumbs } from '../room/AttachmentThumbs'
+import { AttachmentSourceContext } from '../room/attachment-source'
 import WorkerDock from '../room/WorkerDock'
 import WorkerInput from '../room/WorkerInput'
 import QuickReplyDock from '../room/QuickReplyDock'
@@ -123,6 +125,8 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // Encoding the images is async; this keeps a second submit meanwhile from
   // posting the same chips twice (handleSend's own lock starts after it).
   const encoding = useRef(false)
+  // Phase E: where the transcript's replayed image attachments are fetched from.
+  const attachmentSource = useMemo(() => ({ hostId, executionId }), [hostId, executionId])
   const [dragging, setDragging] = useState(false)
   const dragDepth = useRef(0)
 
@@ -444,6 +448,11 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     && !partialVisible && !anyRunning
   const queuedTag = st.pendingLocal?.delivery === 'queued'
     && <span className="text-[10px] uppercase font-normal text-text-muted">{t('execution.queued')}</span>
+  // The optimistic line's images: the local previews the execution store owns (phase E).
+  const pendingPreviews = st.pendingLocal?.attachments
+  const pendingThumbs = pendingPreviews && pendingPreviews.length > 0
+    ? <PendingAttachmentThumbs items={pendingPreviews} />
+    : undefined
   const transcriptProps = {
     messages: st.messages, turnStarts: st.turnStarts, turnMeta: st.turnMeta, keyPrefix: executionId, showThinking,
     showEmptyHint: st.messages.length === 0 && !st.pendingLocal, emptyText: t('execution.empty'), scrollKey: st.pendingLocal ? 1 : 0,
@@ -484,6 +493,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
         </div>
       ) : (
         <FoldContext.Provider value={foldStore}>
+        <AttachmentSourceContext.Provider value={attachmentSource}>
           {searchOpen && (
             <TranscriptSearch owner={paneId} container={scrollBox} messages={st.messages} tools={st.tools}
               view={chat ? 'chat' : 'room'} keyPrefix={executionId} turnStarts={st.turnStarts}
@@ -492,14 +502,19 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
           {chat ? (
             <ChatTranscript {...transcriptProps}>
               {/* The optimistic line: your bubble like any other, dimmed until message_accepted (F8). */}
-              {st.pendingLocal && <ChatUserBubble text={st.pendingLocal.text} pending>{queuedTag}</ChatUserBubble>}
+              {st.pendingLocal && (
+                <ChatUserBubble text={st.pendingLocal.text} pending attachments={pendingThumbs}>{queuedTag}</ChatUserBubble>
+              )}
             </ChatTranscript>
           ) : (
             <RoomTranscript {...transcriptProps}>
               {/* The optimistic line: a user line like any other, dimmed until message_accepted (spec §4.1). */}
-              {st.pendingLocal && <RoomUserLine text={st.pendingLocal.text} pending>{queuedTag}</RoomUserLine>}
+              {st.pendingLocal && (
+                <RoomUserLine text={st.pendingLocal.text} pending attachments={pendingThumbs}>{queuedTag}</RoomUserLine>
+              )}
             </RoomTranscript>
           )}
+        </AttachmentSourceContext.Provider>
         </FoldContext.Provider>
       )}
       {/* Worker pane spec §4.6 (Q3): the worker's current state, inside the pane, above the input. Chat has none (spec §5). */}
