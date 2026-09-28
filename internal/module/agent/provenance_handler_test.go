@@ -14,6 +14,7 @@ import (
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -107,6 +108,7 @@ type provenanceBody struct {
 	TmuxPaneID   string `json:"tmux_pane_id"`
 	TmuxInstance string `json:"tmux_instance"`
 	LastSeenAt   int64  `json:"last_seen_at"`
+	StartedAt    int64  `json:"started_at"`
 	FrameID      string `json:"frame_id"`
 }
 
@@ -166,12 +168,41 @@ func TestHandleSessionProvenance_OneRoot(t *testing.T) {
 		TmuxPaneID:   "%5",
 		TmuxInstance: "4465:1788754497",
 		LastSeenAt:   42,
+		StartedAt:    42, // seedIdentityFrame starts the frame when it was last seen
 		// The backfill adopts it: a live answer names the run an exit envelope
 		// will later name (agent-last-state spec, review decision 6).
 		FrameID: seeded.FrameID,
 	}
 	if body != want {
 		t.Fatalf("body = %+v, want %+v", body, want)
+	}
+}
+
+// TestHandleSessionProvenance_StartedAt_IsTheFramesStart — the answer carries the
+// frame's start, not only its last hook: every SPA client that backfills the same
+// run must stamp the record with the same time (sync-conflict-fixes spec D1), and
+// last_seen_at moves on every hook event, so two clients' probes of one run
+// usually see different values. started_at is fixed for the life of the run.
+func TestHandleSessionProvenance_StartedAt_IsTheFramesStart(t *testing.T) {
+	m, fake, _ := newProvenanceQueryModule(t)
+	fake.AddSession("work", "/w")
+	attachPane(fake, "%5", "$0", "200")
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1, ProcessStartTime: "t100",
+		Status: agentpkg.StatusIdle, StartedAt: 7, LastSeenAt: 42, Verified: true,
+		SessionID: "sess-1", Cwd: "/w/purdex",
+	}); err != nil {
+		t.Fatalf("seed frame: %v", err)
+	}
+	withProcessTree(t, map[int]int{100: 200, 200: 1})
+	withLivePids(t, map[int]string{100: "t100"})
+
+	_, body, generic := getProvenance(t, m, codeOf(t, "$0"))
+	if !body.Found || body.StartedAt != 7 || body.LastSeenAt != 42 {
+		t.Fatalf("body = %+v, want found with started_at 7 and last_seen_at 42", body)
+	}
+	if _, ok := generic["started_at"]; !ok {
+		t.Fatalf("started_at missing from the wire: %v", generic)
 	}
 }
 

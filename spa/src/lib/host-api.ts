@@ -578,6 +578,13 @@ export interface SessionProvenance {
   tmuxInstance: string
   lastSeenAt: number
   /**
+   * The answering frame's start, in the daemon's nanoseconds (0 from a daemon
+   * that predates it). Fixed for the life of the run — unlike `lastSeenAt`,
+   * which moves on every hook event — so it is what the backfill stamps.
+   * Optional so hand-built answers in older fixtures stay valid.
+   */
+  startedAt?: number
+  /**
    * The answering agent run's daemon frame id ('' from a daemon that predates
    * it). Optional so hand-built answers in older fixtures stay valid.
    */
@@ -600,6 +607,7 @@ export async function fetchSessionProvenance(
     tmuxPaneId: String(body.tmux_pane_id ?? ''),
     tmuxInstance: String(body.tmux_instance ?? ''),
     lastSeenAt: Number(body.last_seen_at ?? 0),
+    startedAt: Number(body.started_at ?? 0),
     frameId: String(body.frame_id ?? ''),
   }
 }

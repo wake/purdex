@@ -1,6 +1,6 @@
 // spa/src/stores/useAgentStore.provenance.test.ts — the SPA write path reads
 // ONLY `detail.pdx_provenance` (spec §4.3.1).
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useAgentStore, type NormalizedEvent } from './useAgentStore'
 import { useTabStore } from './useTabStore'
 import { createTab, type PaneContent } from '../types/tab'
@@ -92,6 +92,55 @@ describe('provenance write path', () => {
     expect(recordOf(tab.id)?.cwd).toBe('/w/p')
     expect(recordOf(tab.id)?.cwdSource).toBe('agent-session-start')
     expect(recordOf(tab.id)?.tmuxInstance).toBe('222:2000')
+  })
+
+  it('stamps the record with the event\'s broadcast_ts (ns → ms), not this client\'s clock', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(9_000)
+      const tab = seedTerminalPane('222:2000')
+      send(event({ broadcast_ts: 1_788_800_000_123_456_768, detail: { pdx_provenance: envelope() } }))
+      expect(recordOf(tab.id)?.agent?.updatedAt).toBe(1_788_800_000_123)
+      expect(recordOf(tab.id)?.capturedAt).toBe(1_788_800_000_123)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('an event with no usable broadcast_ts falls back to this client\'s clock', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(9_000)
+      const tab = seedTerminalPane('222:2000')
+      send(event({ broadcast_ts: 0, detail: { pdx_provenance: envelope() } }))
+      expect(recordOf(tab.id)?.agent?.updatedAt).toBe(9_000)
+      expect(recordOf(tab.id)?.capturedAt).toBe(9_000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // A fallback stamp is this client's clock, not a daemon time: it cannot say
+  // which run is newer, so it must never be used to REJECT a SessionStart.
+  it('a SessionStart stamped by the fallback clock applies even when older than the recorded agent', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(9_000)
+      const tab = seedTerminalPane('222:2000')
+      send(event({ broadcast_ts: 1_788_800_000_123_456_768, detail: { pdx_provenance: envelope({ session_id: 'OLD' }) } }))
+      send(event({ broadcast_ts: 0, detail: { pdx_provenance: envelope({ session_id: 'NEW' }) } }))
+      expect(recordOf(tab.id)?.agent?.sessionId).toBe('NEW')
+      expect(recordOf(tab.id)?.agent?.updatedAt).toBe(9_000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a SessionStart with a daemon broadcast_ts older than the recorded agent is ignored', () => {
+    const tab = seedTerminalPane('222:2000')
+    send(event({ broadcast_ts: 1_788_800_000_123_456_768, detail: { pdx_provenance: envelope({ session_id: 'NEW' }) } }))
+    send(event({ broadcast_ts: 1_788_700_000_000_000_000, detail: { pdx_provenance: envelope({ session_id: 'OLD' }) } }))
+    expect(recordOf(tab.id)?.agent?.sessionId).toBe('NEW')
   })
 
   it('writes nothing for a proxy-collapsed event', () => {

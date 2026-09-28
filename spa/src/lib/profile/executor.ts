@@ -139,9 +139,9 @@
 //   lock restored from the section store or made by a 409.
 //   - NOT `locked:invalid` (the payload cannot be applied; no direction fixes
 //     that), not the schema lock, not `profileGone`.
-//   - NOT, under `push`, a 409 whose sent snapshot is no longer what the stores
-//     hold: keep-local restores the SENT snapshot, which would undo the edit
-//     made since. That one is the user's.
+//   - Under `push`, a 409 whose sent snapshot is no longer what the stores hold
+//     is answered like any other: keep-local pushes what the stores hold NOW
+//     (spec 2026-09-28 D2), so the edit made since goes out — nothing is undone.
 //   - `push` means this machine REPLACES the SOT, so a `tabs.<id>` another
 //     client left there, whose workspace is not here, must not stay behind as an
 //     orphan. Once `workspaces` is up to date such a section (no local content,
@@ -197,10 +197,12 @@
 //     only; the sent snapshot does not survive a restart (spec §7, issue #1244).
 //     (A missing SOT-side payload is NOT this: the store requires the local
 //     side only.)
-//   - `restore-payload-missing`: keep-local was chosen but the sent snapshot is
-//     in neither stash. `local-restored` is NOT dispatched (it would claim a
-//     restore that did not happen); the section stays on `restore-local` until a
-//     local edit cancels the restore — the only way out the reducer offers.
+//   - `restore-payload-missing`: a `restore-local` whose snapshot is in neither
+//     stash. `local-restored` is NOT dispatched (it would claim a restore that
+//     did not happen); the section stays on `restore-local` until a local edit
+//     cancels the restore — the only way out the reducer offers. (Unreachable
+//     since spec 2026-09-28 D2: keep-local no longer restores anything. The
+//     restore machinery stays until a follow-up removes it.)
 //   - `pull-hash-mismatch`: after an apply the stores hold something else than
 //     what was fetched (a sanitiser; a deleted `tabs.<id>` whose workspace is
 //     still here). Not a fault: `pull-applied` carries both hashes, the section
@@ -675,8 +677,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const d = direction()
     if (d === null) return null
     if (d === 'pull') return 'sot'
-    // keep-local restores the SENT snapshot: not over an edit made since
-    if (s.conflict !== null && s.conflict.localHash !== s.currentHash) return null
+    // keep-local pushes the live stores (spec 2026-09-28 D2) — edits made since the 409 included — which is what `push` means
     return 'local'
   }
 
@@ -1406,7 +1407,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     return AGAIN
   }
 
-  /* ─── restore-local ─── */
+  /* ─── restore-local (unreachable from `resolved` since spec 2026-09-28 D2; kept until a follow-up removes it) ─── */
 
   async function restoreLocal(key: string, hash: string | null): Promise<Finish> {
     let payload: unknown = null

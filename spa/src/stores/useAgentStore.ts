@@ -2,7 +2,7 @@
 import { create } from 'zustand'
 import { getActiveSessionInfo } from '../lib/active-session'
 import { compositeKey } from '../lib/composite-key'
-import { parseExit, parseProvenance } from '../lib/rebuild/provenance'
+import { daemonNsToMsOrNull, parseExit, parseProvenance } from '../lib/rebuild/provenance'
 import { useTabStore } from './useTabStore'
 import { scanPaneTree } from '../lib/pane-tree'
 
@@ -73,17 +73,26 @@ export interface NormalizedEvent {
  * What lands is the agent IDENTITY, never a command: `resolveResumeCommand`
  * composes from the identity at the moment the command is needed, so a
  * template the user edits later reaches every pane already recorded.
+ *
+ * Stamped with the event's `broadcast_ts`, not this client's clock: every
+ * attached client writes this same record into the same synced section, and
+ * the bytes must match (sync-conflict-fixes spec D1).
  */
 function writeProvenanceRecord(
   hostId: string,
   sessionCode: string,
   detail: Record<string, unknown> | undefined,
+  broadcastTs: number,
 ): boolean {
   const prov = parseProvenance(detail)
   if (!prov) return false
-  const now = Date.now()
+  // A missing / out-of-window broadcast_ts falls back to this client's clock:
+  // still a stamp, but not a daemon time, so the store must not order on it.
+  const daemonMs = daemonNsToMsOrNull(broadcastTs)
+  const now = daemonMs ?? Date.now()
   useTabStore.getState().setPaneRebuild(hostId, sessionCode, prov.tmuxInstance, {
     kind: 'agent-group',
+    ordered: daemonMs !== null,
     record: {
       tmuxInstance: prov.tmuxInstance,
       cwd: prov.cwd || undefined,
@@ -237,7 +246,7 @@ export const useAgentStore = create<AgentState>()(
       // Rebuild record (spec §4.2). Reads ONLY `detail.pdx_provenance` — the
       // outer `agent_type` above is the session-projection winner and must
       // never reach the record (spec §4.3.1).
-      const wroteProvenance = writeProvenanceRecord(hostId, sessionCode, event.detail)
+      const wroteProvenance = writeProvenanceRecord(hostId, sessionCode, event.detail, event.broadcast_ts)
       if (!wroteProvenance && event.raw_event_name === 'replay') {
         flagUnverifiedAgent(hostId, sessionCode, event.agent_type)
       }

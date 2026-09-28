@@ -233,17 +233,16 @@ describe('setPaneRebuild', () => {
     expect(rec(tab.id)?.agent?.sessionId).toBe('S1')
   })
 
-  it('stamps capturedAt on every write', () => {
+  it('an agent group keeps the writer\'s capturedAt (the event\'s time), not this client\'s clock', () => {
     const tab = seed()
-    const before = Date.now()
     useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', {
       kind: 'agent-group',
       record: {
         tmuxInstance: '111:1000', agent: { type: 'cc', updatedAt: 1 },
-        capturedAt: 1,   // stale stamp from the payload
+        capturedAt: 1,
       },
     })
-    expect(rec(tab.id)!.capturedAt).toBeGreaterThanOrEqual(before)
+    expect(rec(tab.id)!.capturedAt).toBe(1)
   })
 
   it('a fresh agent group clears a stale unverified flag', () => {
@@ -653,8 +652,8 @@ describe('setPaneRebuild — agent-backfill', () => {
     backfill({ tmuxInstance: '111:1000', agent: answer, cwd: '/w/answer' })
     seedAgentGroup({
       tmuxInstance: '111:1000', cwd: '/w/fresh', cwdSource: 'agent-session-start',
-      agent: { type: 'opencode', sessionId: 'ses_x', updatedAt: 9 },
-      capturedAt: 9,
+      agent: { type: 'opencode', sessionId: 'ses_x', updatedAt: 99 },
+      capturedAt: 99,
     })
     expect(rec(tab.id)?.agent?.type).toBe('opencode')
     expect(rec(tab.id)?.cwd).toBe('/w/fresh')
@@ -688,7 +687,7 @@ describe('setPaneRebuild — agent-exit', () => {
       kind: 'agent-backfill', record: { tmuxInstance: '111:1000', agent },
     })
 
-  it('marks the run the frame id names as exited, keeps the identity, and re-stamps capturedAt', () => {
+  it('marks the run the frame id names as exited, keeps the identity, and re-stamps capturedAt with the exit\'s time', () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(1_000)
@@ -697,7 +696,8 @@ describe('setPaneRebuild — agent-exit', () => {
       const before = rec(tab.id)!
       vi.setSystemTime(9_000)
       exit('F1', 7_000, 'process-dead')
-      expect(rec(tab.id)).toEqual({ ...before, agentExited: { at: 7_000, reason: 'process-dead' }, capturedAt: 9_000 })
+      // the daemon's exit time, not this client's clock (spec 2026-09-28 D1)
+      expect(rec(tab.id)).toEqual({ ...before, agentExited: { at: 7_000, reason: 'process-dead' }, capturedAt: 7_000 })
       expect(resolveResumeCommand(rec(tab.id), defaultTemplates)).toBe('claude --resume S1') // "resume anyway" stays possible
     } finally {
       vi.useRealTimers()
@@ -987,5 +987,170 @@ describe('updateSessionCache — generation scoped', () => {
     useTabStore.getState().updateSessionCache('h1', 'abc123', 'renamed', '111:1000')
     expect(cachedNameOfPane(split.id, 'p2')).toBe('renamed')
     expect(cachedNameOfPane(split.id, 'p1')).toBe('renamed')
+  })
+})
+
+// spec 2026-09-28 D1: a write driven by a host event produces byte-identical content on every client that sees the
+// event — every attached client writes the same pane of the same synced section, and a timestamp read from each
+// client's own clock makes their payloads differ (a spurious Profile Sync conflict).
+describe('setPaneRebuild — automatic writes are deterministic (no client clock)', () => {
+  beforeEach(() => useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null }))
+
+  const set = (patch: Parameters<ReturnType<typeof useTabStore.getState>['setPaneRebuild']>[3]) =>
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', patch)
+  const group = (sessionId: string, at: number) =>
+    set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId, tmuxPaneId: '%2', frameId: 'F1', updatedAt: at }, capturedAt: at } })
+
+  /** Apply `setup` at 1 000, then `patch` at `clock`; the record it leaves. */
+  function recordAt(clock: number, setup: () => void, patch: () => void): PaneRebuildRecord | undefined {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    vi.setSystemTime(1_000)
+    const tab = seed()
+    setup()
+    vi.setSystemTime(clock)
+    patch()
+    return rec(tab.id)
+  }
+
+  const cases: [string, () => void, () => void, number | 'prev'][] = [
+    ['agent-group', () => {}, () => group('S1', 5_000), 5_000],
+    ['agent-backfill fill', () => {}, () => set({ kind: 'agent-backfill', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'S1', updatedAt: 6_000 } } }), 6_000],
+    [
+      'agent-backfill replace',
+      () => { group('S1', 5_000); set({ kind: 'unverified', unverified: true }) },
+      () => set({ kind: 'agent-backfill', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'S2', updatedAt: 6_500 } } }),
+      6_500,
+    ],
+    ['agent-exit', () => group('S1', 5_000), () => set({ kind: 'agent-exit', frameId: 'F1', sessionId: 'S1', exited: { at: 7_000, reason: 'session-end' } }), 7_000],
+    ['probe-cwd', () => group('S1', 5_000), () => set({ kind: 'probe-cwd', cwd: '/probed' }), 'prev'],
+    ['unverified', () => group('S1', 5_000), () => set({ kind: 'unverified', unverified: true }), 'prev'],
+  ]
+
+  it.each(cases)('%s: the same content whatever this client\'s clock says', (_name, setup, patch, stamp) => {
+    vi.useFakeTimers()
+    try {
+      const a = recordAt(20_000, setup, patch)
+      const b = recordAt(90_000, setup, patch)
+      expect(a).toBeDefined()
+      expect(b).toEqual(a)
+      expect(a!.capturedAt).toBe(stamp === 'prev' ? 5_000 : stamp)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a user edit (`field`) still stamps this client\'s clock: two humans editing IS a conflict', () => {
+    vi.useFakeTimers()
+    try {
+      const edit = () => set({ kind: 'field', field: 'cwd', value: '/typed' })
+      const a = recordAt(20_000, () => group('S1', 5_000), edit)
+      const b = recordAt(90_000, () => group('S1', 5_000), edit)
+      expect(a!.capturedAt).toBe(20_000)
+      expect(b!.capturedAt).toBe(90_000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// A SessionStart delivered late (reconnect replay, a slow client) must not roll
+// the record back to an older run, and a backfill must not move the election
+// stamp backwards past a newer write. Both compare only daemon-clock values
+// against synced content, so every client decides identically.
+describe('setPaneRebuild — capturedAt ordering (review A2 / C1)', () => {
+  beforeEach(() => useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null }))
+
+  const set = (patch: Parameters<ReturnType<typeof useTabStore.getState>['setPaneRebuild']>[3]) =>
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', patch)
+
+  it('an agent group OLDER than the recorded agent (daemon clock) is ignored entirely', () => {
+    const tab = seed()
+    set({ kind: 'agent-group', ordered: true, record: { tmuxInstance: '111:1000', cwd: '/new', agent: { type: 'cc', sessionId: 'NEW', updatedAt: 9_000 }, capturedAt: 9_000 } })
+    const before = rec(tab.id)
+    set({ kind: 'agent-group', ordered: true, record: { tmuxInstance: '111:1000', cwd: '/old', agent: { type: 'cc', sessionId: 'OLD', updatedAt: 4_000 }, capturedAt: 4_000 } })
+    expect(rec(tab.id)).toBe(before)
+    expect(rec(tab.id)?.agent?.sessionId).toBe('NEW')
+    expect(rec(tab.id)?.cwd).toBe('/new')
+    expect(rec(tab.id)?.capturedAt).toBe(9_000)
+  })
+
+  it('an agent group NEWER than the recorded agent (daemon clock) applies', () => {
+    const tab = seed()
+    set({ kind: 'agent-group', ordered: true, record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'OLD', updatedAt: 4_000 }, capturedAt: 4_000 } })
+    set({ kind: 'agent-group', ordered: true, record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'NEW', updatedAt: 9_000 }, capturedAt: 9_000 } })
+    expect(rec(tab.id)?.agent?.sessionId).toBe('NEW')
+  })
+
+  // A stamp that fell back to a client clock is not a daemon time and says
+  // nothing about which run is newer: it must never REJECT a SessionStart.
+  it('an agent group whose stamp is NOT a daemon time (not `ordered`) applies even when older', () => {
+    const tab = seed()
+    set({ kind: 'agent-group', ordered: true, record: { tmuxInstance: '111:1000', cwd: '/new', agent: { type: 'cc', sessionId: 'NEW', updatedAt: 9_000 }, capturedAt: 9_000 } })
+    set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', cwd: '/fb', agent: { type: 'cc', sessionId: 'FB', updatedAt: 4_000 }, capturedAt: 4_000 } })
+    expect(rec(tab.id)?.agent?.sessionId).toBe('FB')
+    expect(rec(tab.id)?.cwd).toBe('/fb')
+    expect(rec(tab.id)?.capturedAt).toBe(4_000)
+  })
+
+  it('orders on agent.updatedAt only — a newer SessionStart applies even below a user edit\'s capturedAt', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(50_000)
+      const tab = seed()
+      set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'A', updatedAt: 1_000 }, capturedAt: 1_000 } })
+      set({ kind: 'field', field: 'cwd', value: '/typed' })   // capturedAt 50_000 (client clock)
+      set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'B', updatedAt: 2_000 }, capturedAt: 2_000 } })
+      expect(rec(tab.id)?.agent?.sessionId).toBe('B')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('an equal-time agent group still applies', () => {
+    const tab = seed()
+    set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', cwd: '/a', agent: { type: 'cc', sessionId: 'S1', updatedAt: 5_000 }, capturedAt: 5_000 } })
+    set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', cwd: '/b', agent: { type: 'cc', sessionId: 'S1', updatedAt: 5_000 }, capturedAt: 5_000 } })
+    expect(rec(tab.id)?.cwd).toBe('/b')
+  })
+
+  it('a record without an agent, or whose agent has no updatedAt, still accepts', () => {
+    const tab = seed()
+    set({ kind: 'field', field: 'cwd', value: '/typed' })
+    set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'S1', updatedAt: 1 }, capturedAt: 1 } })
+    expect(rec(tab.id)?.agent?.sessionId).toBe('S1')
+
+    const t2 = seed()
+    useTabStore.setState((s) => {
+      const t = s.tabs[t2.id]
+      const pane = getPrimaryPane(t.layout)
+      if (pane.content.kind !== 'tmux-session') throw new Error('bad fixture')
+      const legacy = { sessionName: 'dev', tmuxInstance: '111:1000', capturedAt: 9_000, agent: { type: 'cc' } } as unknown as PaneRebuildRecord
+      return { tabs: { [t2.id]: { ...t, layout: updatePaneInLayout(t.layout, pane.id, { ...pane.content, rebuild: legacy }) } } }
+    })
+    set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'S2', updatedAt: 2 }, capturedAt: 2 } })
+    expect(rec(t2.id)?.agent?.sessionId).toBe('S2')
+  })
+
+  it('backfill fill never moves capturedAt backwards (a user edit newer than the frame start)', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(50_000)
+      const tab = seed()
+      set({ kind: 'field', field: 'cwd', value: '/typed' })   // capturedAt 50_000
+      set({ kind: 'agent-backfill', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'S1', updatedAt: 6_000 } } })
+      expect(rec(tab.id)?.agent?.sessionId).toBe('S1')
+      expect(rec(tab.id)?.capturedAt).toBe(50_000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('backfill replace never moves capturedAt backwards', () => {
+    const tab = seed()
+    set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'S1', updatedAt: 9_000 }, capturedAt: 9_000 } })
+    set({ kind: 'unverified', unverified: true })
+    set({ kind: 'agent-backfill', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'S2', updatedAt: 6_000 } } })
+    expect(rec(tab.id)?.agent?.sessionId).toBe('S2')
+    expect(rec(tab.id)?.capturedAt).toBe(9_000)
   })
 })

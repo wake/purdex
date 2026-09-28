@@ -60,7 +60,8 @@ export interface ParsedExit {
   tmuxInstance: string
   frameId: string
   reason: AgentExitReason
-  /** Unix ms on the daemon's clock — display only, never used for ordering. */
+  /** Unix ms on the daemon's clock. Displayed, and stamped as the record's `capturedAt`
+   *  (the same on every client — sync-conflict-fixes spec D1); never compared with a client clock. */
   at: number
 }
 
@@ -95,3 +96,47 @@ export function parseExit(detail: Record<string, unknown> | undefined): ParsedEx
     at,
   }
 }
+
+/**
+ * A daemon timestamp in nanoseconds (`broadcast_ts`, a frame's `started_at`) as
+ * Unix milliseconds, for a record written from a HOST EVENT.
+ *
+ * Every attached client writes the same pane of the same synced `tabs.<ws>`
+ * section when it sees the same event; stamped with each client's own clock
+ * the payloads differ and Profile Sync locks the section as a conflict nobody
+ * made (sync-conflict-fixes spec D1). The daemon's value is the same bytes on
+ * every client. Anything that is not a positive finite number of at least one
+ * millisecond inside a fixed 2020-01-01 .. 2100-01-01 window (see below) — an
+ * older daemon that never sent it, 0, garbage — falls back to
+ * `Date.now()`: no worse than before.
+ *
+ * Nanosecond epochs exceed Number.MAX_SAFE_INTEGER, so the parsed value is the
+ * nearest double; that is still the same double on every client, and far
+ * finer than the millisecond kept.
+ */
+export function daemonNsToMs(ns: unknown): number {
+  return daemonNsToMsOrNull(ns) ?? Date.now()
+}
+
+/**
+ * The same conversion as `daemonNsToMs`, but null when `ns` is not a valid
+ * daemon time — so a writer can tell a daemon stamp from the client-clock
+ * fallback. Only a daemon stamp may ORDER a write against synced content: a
+ * client clock says nothing about which run is newer, so it must never be
+ * used to reject one (sync-conflict-fixes spec, ordering rules).
+ */
+export function daemonNsToMsOrNull(ns: unknown): number | null {
+  if (typeof ns !== 'number' || !Number.isFinite(ns)) return null
+  const ms = Math.floor(ns / 1e6)
+  return Number.isSafeInteger(ms) && ms >= DAEMON_MS_MIN && ms <= DAEMON_MS_MAX ? ms : null
+}
+
+/**
+ * The sane window for a daemon time, as FIXED constants: a garbage value (1e300,
+ * a seconds value mistaken for ns, a broken clock) must not become a record
+ * stamp — `capturedAt` elects each group's newest record, and a far-future one
+ * would win every election for good. Never relative to `Date.now()`: every
+ * client must judge the same value the same way, or their payloads diverge.
+ */
+const DAEMON_MS_MIN = Date.UTC(2020, 0, 1)
+const DAEMON_MS_MAX = Date.UTC(2100, 0, 1)

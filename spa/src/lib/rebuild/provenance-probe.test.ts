@@ -25,7 +25,8 @@ function answer(over?: Partial<SessionProvenance>): SessionProvenance {
     cwd: '/w/proj',
     tmuxPaneId: '%12',
     tmuxInstance: '222:2000',
-    lastSeenAt: 1788800000000,
+    lastSeenAt: 1_788_800_000_000_000_000,
+    startedAt: 1_788_700_000_000_000_000,
     frameId: 'F-live',
     ...over,
   }
@@ -144,16 +145,26 @@ describe('probeSessionProvenance', () => {
     vi.mocked(fetchSessionProvenance).mockResolvedValue(answer())
     trigger()
     await settle()
-    // `updatedAt` is when THIS client saw the agent live — the Rebuild panel
-    // shows it as "running when last seen". The daemon's `last_seen_at` is
-    // not used: frames stamp it in nanoseconds, so it is no time to display.
+    // `updatedAt` (and `capturedAt`) is the answering frame's START, ns → ms — the same on every client that
+    // backfills this run (sync-conflict-fixes spec D1). Not `last_seen_at`: it moves with every hook event.
     expect(recordOf(tab.id)?.agent).toEqual({
-      type: 'cc', sessionId: 'sess-1', tmuxPaneId: '%12', frameId: 'F-live', updatedAt: 5_000,
+      type: 'cc', sessionId: 'sess-1', tmuxPaneId: '%12', frameId: 'F-live', updatedAt: 1_788_700_000_000,
     })
+    expect(recordOf(tab.id)?.capturedAt).toBe(1_788_700_000_000)
     expect(recordOf(tab.id)?.cwd).toBe('/w/proj')
     expect(recordOf(tab.id)?.cwdSource).toBe('agent-backfill')
     // The answer carries an identity, never a command: the resolver composes.
     expect(resolveResumeCommand(recordOf(tab.id), defaultTemplates)).toBe('claude --resume sess-1')
+  })
+
+  it('an answer without started_at (an older daemon) is stamped with this client\'s clock, as before', async () => {
+    const tab = seed()
+    vi.setSystemTime(5_000)
+    vi.mocked(fetchSessionProvenance).mockResolvedValue(answer({ startedAt: 0 }))
+    trigger()
+    await settle()
+    expect(recordOf(tab.id)?.agent?.updatedAt).toBe(5_000)
+    expect(recordOf(tab.id)?.capturedAt).toBe(5_000)
   })
 
   it('writes nothing when the daemon found no owner', async () => {

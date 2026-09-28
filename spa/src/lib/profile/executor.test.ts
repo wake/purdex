@@ -621,7 +621,7 @@ describe('executor — push and delete', () => {
     expect(ex.status().sections).toEqual({ hosts: 'locked:conflict' })
   })
 
-  it('resolving a persisted conflict writes the section without it and prunes the stash, keeping the snapshot to restore', async () => {
+  it('resolving a persisted conflict writes the section without it and prunes the stash: the sent snapshot goes, the live payload stays', async () => {
     const { ex } = await synced({ hosts: 'H1' })
     api.putSection.mockResolvedValueOnce({ kind: 'conflict', rev: 5, hash: 'H9', payload: { theirs: true } })
     ex.onSection({ key: 'hosts', hash: 'H2', payload: { sent: true } })
@@ -633,7 +633,8 @@ describe('executor — push and delete', () => {
     expect(store.saveSection).toHaveBeenCalledWith(PROFILE, 'hosts', { base: { rev: 5, hash: 'H9' }, currentHash: 'H3' })
     expect(store.pruneStash).toHaveBeenCalledTimes(1)
     const keep = store.pruneStash.mock.calls[0][1]
-    expect(keep.has('H2')).toBe(true) // restoreLocal retains it
+    expect(keep.has('H2')).toBe(false) // keep-local pushes the live stores: nothing is restored (spec 2026-09-28 D2)
+    expect(keep.has('H3')).toBe(true)
   })
 
   it('SERIALISED: the second section’s PUT is not sent before the first one resolved', async () => {
@@ -1621,7 +1622,7 @@ describe('executor — an empty tabs placeholder is not an edit while the SOT ha
 
 /* ─── restore-local, resolve ─── */
 
-describe('executor — resolve and restore-local', () => {
+describe('executor — resolve', () => {
   async function locked(): Promise<Harness> {
     const harness = await synced({ hosts: 'H1' })
     api.putSection.mockResolvedValueOnce({ kind: 'conflict', rev: 5, hash: 'H9', payload: { theirs: true } })
@@ -1634,15 +1635,15 @@ describe('executor — resolve and restore-local', () => {
     return harness
   }
 
-  it('keep local: the SENT snapshot is put back, then pushed over the SOT rev that conflicted', async () => {
+  it('keep local: the LIVE stores are pushed over the SOT rev that conflicted — the sent snapshot is not put back', async () => {
     const { ex } = await locked()
-    applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2' })
     api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
     ex.resolve('hosts', 'local')
     await flush()
-    expect(applySectionToStores).toHaveBeenCalledWith('hosts', { sent: true }, { masterHostId: HOST })
-    expect(eventsOf('local-restored')).toEqual([{ type: 'local-restored', hash: 'H2' }])
-    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: 'H2', payload: { sent: true } })
+    expect(applySectionToStores).not.toHaveBeenCalled()
+    expect(eventsOf('local-restored')).toEqual([])
+    expect(api.putSection).toHaveBeenCalledTimes(1)
+    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: 'H3', payload: { later: true } })
     expect(ex.status().profile).toBe('synced')
   })
 
@@ -1656,108 +1657,22 @@ describe('executor — resolve and restore-local', () => {
     expect(ex.status().profile).toBe('synced')
   })
 
-  it('an edit after keep-local cancels the restore: the snapshot is not written', async () => {
-    const { ex } = await locked()
-    applySectionToStores.mockResolvedValueOnce({ ok: false, reason: 'busy' })
-    api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
-    ex.resolve('hosts', 'local')
-    await flush()
-    ex.onSection({ key: 'hosts', hash: 'H4', payload: { typed: true } }) // while the restore waits out `busy`
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(applySectionToStores).toHaveBeenCalledTimes(1)
-    expect(eventsOf('local-restored')).toEqual([])
-    expect(api.putSection.mock.calls[0][3]).toMatchObject({ hash: 'H4', baseRev: 5 })
-  })
-
-  it('PAYLOAD MISSING: local-restored is not dispatched, it is reported once, the section does not spin, and an edit frees it', async () => {
-    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H3', conflict: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } } }
-    const { ex, problems } = make() // a restart: the memory stash is empty, and the stored payload is gone too
-    ex.resolve('hosts', 'local')
-    await vi.advanceTimersByTimeAsync(600_000)
-    expect(store.getStash).toHaveBeenCalledWith(PROFILE, 'H2')
-    expect(store.getStash).toHaveBeenCalledTimes(1)
-    expect(eventsOf('local-restored')).toEqual([])
-    expect(applySectionToStores).not.toHaveBeenCalled()
-    expect(problems.filter((p) => p.kind === 'restore-payload-missing')).toHaveLength(1)
-    expect(ex.status().sections.hosts).toBe('pending')
-    // the only way out the reducer offers: a local edit cancels the restore
-    api.listProfiles.mockResolvedValue(index([meta('hosts', 5, 'H9')]))
-    api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
-    ex.onSection({ key: 'hosts', hash: 'H4', payload: { typed: true } })
-    await flush()
-    expect(api.putSection.mock.calls[0][3]).toMatchObject({ hash: 'H4', baseRev: 5 })
-  })
-
-  it('after a restart the snapshot comes from the persisted stash, and the push that follows sends it', async () => {
+  it('after a restart keep-local pushes what the collector reports the stores hold, not the persisted sent snapshot', async () => {
     h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H3', conflict: { localHash: 'H2', sot: { rev: 5, hash: 'H9' } } } }
     h.persistedStash.set('H2', { sent: true })
     api.listProfiles.mockResolvedValue(index([meta('hosts', 5, 'H9')]))
-    applySectionToStores.mockResolvedValue({ ok: true, hash: 'H2' })
     api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
     const { ex } = make()
+    ex.onSection({ key: 'hosts', hash: 'H3', payload: { later: true } }) // the collector's prime
+    ex.onReconnected()
+    await flush()
+    expect(ex.status().sections.hosts).toBe('locked:conflict')
     ex.resolve('hosts', 'local')
     await flush()
-    expect(applySectionToStores).toHaveBeenCalledWith('hosts', { sent: true }, { masterHostId: HOST })
-    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: 'H2', payload: { sent: true } })
-  })
-
-  it('P3e: a persisted settings snapshot in the ordinal-3 shape (newtab `profiles`) is upcast before it is applied and pushed: ONE canonical PUT', async () => {
-    const legacy = { 'purdex-newtab-layout': { profiles: { '1col': { enabled: true, columns: [['a']] } } }, other: { k: 1 } }
-    const canonical = { 'purdex-newtab-layout': { presets: { '1col': { enabled: true, columns: [['a']] } } }, other: { k: 1 } }
-    const { structuralKey } = await vi.importActual<typeof import('./hash')>('./hash')
-    const canonicalHash = structuralKey(canonical)
-    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' }, workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' }, settings: { base: { rev: 1, hash: 'S1' }, currentHash: 'S3', conflict: { localHash: 'S2', sot: { rev: 5, hash: 'S9' } } } }
-    h.persistedStash.set('S2', legacy)
-    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('settings', 5, 'S9')]))
-    applySectionToStores.mockResolvedValue({ ok: true, hash: canonicalHash })
-    api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
-    const { ex, problems } = make()
-    ex.resolve('settings', 'local')
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(applySectionToStores).toHaveBeenCalledWith('settings', canonical, { masterHostId: HOST })
-    expect(eventsOf('local-restored')).toEqual([{ type: 'local-restored', hash: 'S2', localHash: canonicalHash }])
+    expect(applySectionToStores).not.toHaveBeenCalled()
+    expect(eventsOf('local-restored')).toEqual([])
     expect(api.putSection).toHaveBeenCalledTimes(1)
-    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: canonicalHash, payload: canonical })
-    expect(problems).toEqual([])
-    expect(ex.status().sections.settings).toBe('synced')
-  })
-
-  // tabs-local-only §3.5 (codex critical): a keep-local choice persisted before the upgrade holds an ordinal-2 tabs
-  // payload with this device's interface tabs in it. Pushed as-is it would reach the SOT under ordinal 3.
-  it('tabs-local-only: a persisted ordinal-2 tabs snapshot with a Settings tab is upcast before it is applied and pushed', async () => {
-    const entry = (id: string, content: Record<string, unknown>): Record<string, unknown> => ({ id, pinned: false, locked: false, createdAt: 1, layout: { type: 'leaf', pane: { id: `p-${id}`, content } } })
-    const legacy = { order: ['a1', 's1'], tabs: { a1: entry('a1', { kind: 'browser', url: 'u' }), s1: entry('s1', { kind: 'settings', scope: 'global' }) } }
-    const canonical = { order: ['a1'], tabs: { a1: entry('a1', { kind: 'browser', url: 'u' }) } }
-    const { structuralKey } = await vi.importActual<typeof import('./hash')>('./hash')
-    const canonicalHash = structuralKey(canonical)
-    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' }, workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' }, 'tabs.wa': { base: { rev: 1, hash: 'T1' }, currentHash: 'T3', conflict: { localHash: 'T2', sot: { rev: 5, hash: 'T9' } } } }
-    h.persistedStash.set('T2', legacy)
-    useWorkspaceStore.setState({ workspaces: [ws('wa')] })
-    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('tabs.wa', 5, 'T9')]))
-    applySectionToStores.mockResolvedValue({ ok: true, hash: canonicalHash })
-    api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
-    const { ex, problems } = make()
-    ex.resolve('tabs.wa', 'local')
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(applySectionToStores).toHaveBeenCalledWith('tabs.wa', canonical, { masterHostId: HOST })
-    expect(eventsOf('local-restored')).toEqual([{ type: 'local-restored', hash: 'T2', localHash: canonicalHash }])
-    expect(api.putSection).toHaveBeenCalledTimes(1)
-    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: canonicalHash, payload: canonical })
-    expect(problems).toEqual([])
-  })
-
-  it('P3e: a settings snapshot already in this build\'s shape is restored as-is (same hash, no localHash)', async () => {
-    const current = { 'purdex-newtab-layout': { presets: {} } }
-    h.stored = { hosts: { base: { rev: 1, hash: 'H1' }, currentHash: 'H1' }, workspaces: { base: { rev: 1, hash: 'W1' }, currentHash: 'W1' }, settings: { base: { rev: 1, hash: 'S1' }, currentHash: 'S3', conflict: { localHash: 'S2', sot: { rev: 5, hash: 'S9' } } } }
-    h.persistedStash.set('S2', current)
-    api.listProfiles.mockResolvedValue(index([meta('hosts', 1, 'H1'), meta('workspaces', 1, 'W1'), meta('settings', 5, 'S9')]))
-    applySectionToStores.mockResolvedValue({ ok: true, hash: 'S2' })
-    api.putSection.mockResolvedValue({ kind: 'applied', rev: 6 })
-    const { ex } = make()
-    ex.resolve('settings', 'local')
-    await flush()
-    expect(eventsOf('local-restored')).toEqual([{ type: 'local-restored', hash: 'S2' }])
-    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: 'S2', payload: current })
+    expect(api.putSection.mock.calls[0][3]).toMatchObject({ baseRev: 5, hash: 'H3', payload: { later: true } })
   })
 
   it('resolve on an unknown section is a no-op', () => {
@@ -2038,18 +1953,21 @@ describe('executor — the first reconciliation (initialDirection)', () => {
     expect(eventsOf('resolved')).toEqual([{ type: 'resolved', keep: 'sot' }])
   })
 
-  it('push: a 409 whose sent snapshot is no longer what the stores hold is left to the user (keep-local would undo the newer edit)', async () => {
+  it('push: a 409 whose sent snapshot is no longer what the stores hold is answered too — keep-local pushes the newer edit', async () => {
     const { ex, settingsPut } = await openPeriod('push')
     const put = deferred<PutOutcome>()
-    api.putSection.mockReturnValueOnce(put.promise)
+    api.putSection.mockReturnValueOnce(put.promise).mockResolvedValue({ kind: 'applied', rev: 6 })
     ex.onSection({ key: 'hosts', hash: 'H2', payload: { mine: true } })
     settingsPut.resolve({ kind: 'applied', rev: 1 })
     await flush()
     ex.onSection({ key: 'hosts', hash: 'H3', payload: { mine: 'later' } })
     put.resolve({ kind: 'conflict', rev: 5, hash: 'H9', payload: { theirs: true } })
     await flush()
-    expect(ex.status().sections.hosts).toBe('locked:conflict')
-    expect(eventsOf('resolved')).toEqual([])
+    expect(eventsOf('resolved')).toEqual([{ type: 'resolved', keep: 'local' }])
+    expect(eventsOf('local-restored')).toEqual([])
+    const hostsPuts = api.putSection.mock.calls.filter((c) => c[2] === 'hosts').map((c) => c[3])
+    expect(hostsPuts.at(-1)).toMatchObject({ baseRev: 5, hash: 'H3', payload: { mine: 'later' } })
+    expect(ex.status().sections.hosts).toBe('synced')
   })
 
   it.each(['pull', 'push'] as const)('%s: locked:invalid is NOT resolved by a direction, and nothing settles while it stands', async (direction) => {
