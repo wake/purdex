@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render } from '@testing-library/react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { registerBuiltinModules, resetFileOpenerRegistryForHmr } from '../index'
 import { getDefaultOpener, getRegisteredOpeners } from '../../file-opener-registry'
 import { getModule, getViewDefinition, resolvePaneRenderer } from '../../module-registry'
@@ -176,10 +176,12 @@ describe('registerBuiltinModules orchestrator', () => {
       const mounts: string[] = []
       const unmounts: string[] = []
       vi.mocked(ExecutionView).mockImplementation(function FakeView({ hostId, executionId }) {
+        // Captured once per instance, so the effect runs once per mount.
+        const [id] = useState(`${hostId}:${executionId}`)
         useEffect(() => {
-          mounts.push(`${hostId}:${executionId}`)
-          return () => { unmounts.push(`${hostId}:${executionId}`) }
-        }, [])
+          mounts.push(id)
+          return () => { unmounts.push(id) }
+        }, [id])
         return <></>
       })
       useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
