@@ -5,7 +5,7 @@ import {
   nexFetch, fetchNexCapabilities, listExecutions, fetchExecutionEvents,
   attachObserve, attachControl, sendMessage, releaseLease, archiveExecution, resolveExecutionHostId,
   getExecution, fetchNexHost, renewLease, interruptExecution, terminateExecution,
-  delegateExecution, pinnedLeaseRelease, fetchExecutionTasks,
+  delegateExecution, pinnedLeaseRelease, fetchExecutionTasks, uploadWorkerFile,
 } from './nex-api'
 import { NexApiError } from './types'
 import { NEX_CLIENT_ID_RE } from './client-id'
@@ -387,5 +387,44 @@ describe('nex-api', () => {
   it('resolveExecutionHostId falls back to an empty string when there are no hosts and no hint', () => {
     useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null, runtime: {} } as never)
     expect(resolveExecutionHostId(undefined)).toBe('')
+  })
+
+  describe('uploadWorkerFile', () => {
+    const file = () => new File(['hello'], 'a b.txt', { type: 'text/plain' })
+
+    it('POSTs multipart `file` to /api/nex/executions/{id}/uploads with Bearer and returns the saved path', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ path: '/w/.purdex-uploads/exc 1/a b.txt', name: 'a b.txt', size: 5 }))
+      const r = await uploadWorkerFile(hostId, 'exc 1', file())
+      expect(r).toEqual({ path: '/w/.purdex-uploads/exc 1/a b.txt', name: 'a b.txt', size: 5 })
+      const [url, init] = testGlobal.fetch.mock.calls[0]
+      expect(url).toBe('http://100.64.0.2:7860/api/nex/executions/exc%201/uploads')
+      expect(init.method).toBe('POST')
+      expect(init.body).toBeInstanceOf(FormData)
+      expect((init.body as FormData).get('file')).toBeInstanceOf(File)
+      const h = new Headers(init.headers)
+      expect(h.get('Authorization')).toBe('Bearer tok-1')
+      // The browser sets the multipart boundary; a JSON content type would break the body.
+      expect(h.get('Content-Type')).toBeNull()
+    })
+
+    it('rejects with the daemon error code', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'file exceeds the upload limit', code: 'file_too_large' }, 413))
+      await expect(uploadWorkerFile(hostId, 'exc_1', file())).rejects.toMatchObject({ status: 413, code: 'file_too_large' })
+    })
+
+    it('maps a fetch that never reached the daemon to `network`', async () => {
+      testGlobal.fetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      await expect(uploadWorkerFile(hostId, 'exc_1', file())).rejects.toMatchObject({ code: 'network' })
+    })
+
+    it('refuses a host this device does not have without sending anything', async () => {
+      await expect(uploadWorkerFile('nope', 'exc_1', file())).rejects.toBeInstanceOf(NexApiError)
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+
+    it('rejects a 200 whose body has no path', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ name: 'x' }))
+      await expect(uploadWorkerFile(hostId, 'exc_1', file())).rejects.toMatchObject({ code: 'bad_response' })
+    })
   })
 })
