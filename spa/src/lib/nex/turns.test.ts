@@ -23,22 +23,22 @@ const assistant = (text: string): StreamMessage => ({
 describe('groupTurns', () => {
   it('groups a single turn', () => {
     const msgs = [user('hi'), assistant('hello'), assistant('done')]
-    expect(groupTurns(msgs, [0])).toEqual([{ start: 0, end: 3, openerIndex: 0 }])
+    expect(groupTurns(msgs, [0])).toEqual([{ start: 0, end: 3, openerIndex: 0, boundary: 0 }])
   })
 
   it('starts a new turn at each recorded boundary', () => {
     const msgs = [user('a'), assistant('1'), user('b'), assistant('2')]
     expect(groupTurns(msgs, [0, 2])).toEqual([
-      { start: 0, end: 2, openerIndex: 0 },
-      { start: 2, end: 4, openerIndex: 2 },
+      { start: 0, end: 2, openerIndex: 0, boundary: 0 },
+      { start: 2, end: 4, openerIndex: 2, boundary: 1 },
     ])
   })
 
   it('puts messages before the first boundary in a leading group', () => {
     const msgs = [assistant('resumed'), user('a'), assistant('1')]
     expect(groupTurns(msgs, [1])).toEqual([
-      { start: 0, end: 1, openerIndex: null },
-      { start: 1, end: 3, openerIndex: 1 },
+      { start: 0, end: 1, openerIndex: null, boundary: null },
+      { start: 1, end: 3, openerIndex: 1, boundary: 0 },
     ])
   })
 
@@ -47,8 +47,8 @@ describe('groupTurns', () => {
     // but the daemon declared a turn — it must not merge into the first.
     const msgs = [user('a'), assistant('1'), assistant('2')]
     expect(groupTurns(msgs, [0, 2])).toEqual([
-      { start: 0, end: 2, openerIndex: 0 },
-      { start: 2, end: 3, openerIndex: null },
+      { start: 0, end: 2, openerIndex: 0, boundary: 0 },
+      { start: 2, end: 3, openerIndex: null, boundary: 1 },
     ])
   })
 
@@ -82,7 +82,7 @@ describe('groupTurns', () => {
     // as a just-opened turn whose first message has not arrived yet.
     const msgs = [user('a'), assistant('1')]
     const turns = groupTurns(msgs, [0, 9])
-    expect(turns[0]).toEqual({ start: 0, end: 2, openerIndex: 0 })
+    expect(turns[0]).toEqual({ start: 0, end: 2, openerIndex: 0, boundary: 0 })
     for (const t of turns) expect(t.end).toBeLessThanOrEqual(msgs.length)
     expect(turns.slice(1).every(t => t.start === t.end)).toBe(true)
   })
@@ -90,9 +90,18 @@ describe('groupTurns', () => {
   it('keeps an empty turn as its own range', () => {
     const msgs = [user('b'), assistant('1')]
     expect(groupTurns(msgs, [0, 0])).toEqual([
-      { start: 0, end: 0, openerIndex: null },
-      { start: 0, end: 2, openerIndex: 0 },
+      { start: 0, end: 0, openerIndex: null, boundary: 0 },
+      { start: 0, end: 2, openerIndex: 0, boundary: 1 },
     ])
+  })
+
+  it('boundary maps each turn to its turnStarts index; leading implicit turn has null', () => {
+    const msgs = [assistant('resumed'), user('a'), assistant('1'), user('b'), assistant('2')]
+    expect(groupTurns(msgs, [1, 3]).map(t => t.boundary)).toEqual([null, 0, 1])
+    // A boundary clamped to the end keeps its own index.
+    expect(groupTurns(msgs, [0, 3, 9]).map(t => t.boundary)).toEqual([0, 1, 2])
+    // An out-of-order list maps each range back to the entry that produced it.
+    expect(groupTurns(msgs, [3, 1]).map(t => [t.start, t.boundary])).toEqual([[0, null], [1, 1], [3, 0]])
   })
 
   it('covers every index exactly once', () => {

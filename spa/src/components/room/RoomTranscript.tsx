@@ -113,7 +113,7 @@ export default function RoomTranscript({
   // The in-flight assistant message belongs to the turn that is running: the
   // last recorded one. With nothing recorded yet it still needs a container,
   // or expand-all could never reach the call it is streaming.
-  const shown: RoomTurn[] = turns.length === 0 && hasPartial ? [{ start: 0, end: 0, openerIndex: null }] : turns
+  const shown: RoomTurn[] = turns.length === 0 && hasPartial ? [{ start: 0, end: 0, openerIndex: null, boundary: null }] : turns
   const lastTurn = shown.length - 1
 
   const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0, subagentTasks }

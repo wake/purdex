@@ -4,6 +4,7 @@
 // from the derived `tool_use` / `tool_result` kinds (P-B3 spec §4.3). No
 // React, no fetch, no store: the hook feeds it history pages and SSE frames
 // alike.
+import { isResultError } from './cost-summary'
 import type { StreamMessage } from './message-types'
 import { finalizeBlock, type PartialAssembly } from './partial'
 import type { NexSseFrame } from './sse-parser'
@@ -14,6 +15,18 @@ import type { ExecutionSummary, NexEvent, WorkerTasksSnapshot } from './types'
 export type { PartialAssembly, PartialBlock } from './partial'
 export { applyTransientFrame, finalizedFor } from './partial'
 export type { ToolActivity } from './tool-activity'
+
+export type TurnOutcome = 'ok' | 'failed' | 'interrupted'
+
+export interface TurnMeta {
+  /** created_at of the event that opened the turn (0 when the frame carried none). */
+  startAt: number
+  /** created_at of the first main-turn end event; null while the turn is live. */
+  endAt: number | null
+  outcome: TurnOutcome | null
+  /** result.duration_ms, else endAt − startAt when both are > 0, else null. */
+  durationMs: number | null
+}
 
 export interface ExecutionState {
   summary: ExecutionSummary | null
@@ -53,6 +66,20 @@ export interface ExecutionState {
    */
   turnStarts: number[]
   /**
+   * Timing and outcome per turn, index-aligned with `turnStarts` (worker-pane
+   * theme spec §7.1). Pushed by the same events that push a boundary, stamped
+   * by the main turn's end events; both come from durable events, so replay
+   * rebuilds it exactly.
+   */
+  turnMeta: TurnMeta[]
+  /**
+   * Where the last turn's end stands: `null` nothing ended it yet, `'result'`
+   * a top-level result stamped it (a lifecycle end may still refine the
+   * outcome), `'sealed'` a lifecycle end closed it — later events (an
+   * archive or terminate of an idle execution) must not rewrite it.
+   */
+  turnEnd: 'result' | 'sealed' | null
+  /**
    * Keyed by tool_use id; written only by the durable A-rules (raw
    * assistant / user frames) and the N-rules (derived tool_use / tool_result
    * events, which overlay the daemon's facts onto the same entry).
@@ -84,6 +111,8 @@ export function defaultExecutionState(): ExecutionState {
     partial: null,
     turnLive: false,
     turnStarts: [],
+    turnMeta: [],
+    turnEnd: null,
     tools: {},
     tasks: {},
   }
@@ -175,8 +204,87 @@ function userBubble(text: string): StreamMessage {
  * impossible, so a dedupe here would protect nothing. Consumers therefore
  * have to tolerate an empty turn range (`start === end`).
  */
-function markTurnStart(s: ExecutionState): ExecutionState {
-  return { ...s, turnStarts: [...s.turnStarts, s.messages.length] }
+function markTurnStart(s: ExecutionState, createdAt: number): ExecutionState {
+  return {
+    ...s,
+    turnStarts: [...s.turnStarts, s.messages.length],
+    turnMeta: [...s.turnMeta, { startAt: createdAt, endAt: null, outcome: null, durationMs: null }],
+    turnEnd: null,
+  }
+}
+
+/**
+ * `execution.terminal`'s `reason` is the turn's `last_turn_reason` (nexen
+ * v0.13.2 docs/contract/capability-matrix.md, "turn 終局原因"):
+ *
+ * | reason              | outcome                                       |
+ * |---------------------|-----------------------------------------------|
+ * | `final_response`    | normal end: keep a result's outcome, else ok  |
+ * | `interrupted`       | interrupted (user / timeout / terminate)      |
+ * | `error`             | failed                                        |
+ * | `session_expired`   | failed (the turn could not start)             |
+ * | `orphaned`          | failed (daemon restart reconciled the turn)   |
+ * | `auth_failed`       | failed                                        |
+ * | `permission_denied` | failed (reserved, no producer yet)            |
+ * | `context_exhausted` | failed (reserved, no producer yet)            |
+ * | `quota_exhausted`   | failed (reserved, no producer yet)            |
+ * | anything else       | failed — a failure is never hidden (spec F3)  |
+ *
+ * `'normal'` means "keep what a result said, else ok".
+ */
+function terminalOutcome(reason: string | undefined): TurnOutcome | 'normal' {
+  if (reason === 'final_response') return 'normal'
+  if (reason === 'interrupted') return 'interrupted'
+  return 'failed'
+}
+
+/** The outcome a main-turn end event proposes (spec §7.1). */
+function endOutcome(kind: string, p: Record<string, unknown>): TurnOutcome | 'normal' {
+  switch (kind) {
+    case 'result':
+      return isResultError(p) ? 'failed' : 'ok'
+    case 'execution.terminal':
+      return terminalOutcome(str(p, 'reason'))
+    case 'execution.interrupted':
+    case 'execution.terminated':
+    case 'execution.archived':
+      return 'interrupted'
+    default:
+      // execution.error / rejected / turn_stalled / turn_orphaned
+      return 'failed'
+  }
+}
+
+/**
+ * Stamp the last turn's meta at a main-turn end (spec §7.1). The outcome is
+ * written once, except that a lifecycle end may refine what a `result`
+ * said: `interrupted` wins (CC emits a result after an interrupt) and
+ * `failed` beats `ok` (a failure is never hidden, F3). Once a lifecycle end
+ * seals the turn, nothing rewrites it. Later events only fill `endAt` /
+ * `durationMs` while they are still null.
+ */
+function stampTurnEnd(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): ExecutionState {
+  const n = s.turnMeta.length
+  if (n === 0 || s.turnEnd === 'sealed') return s
+  const last = s.turnMeta[n - 1]
+  const isResult = ev.kind === 'result'
+  const proposed = endOutcome(ev.kind, p)
+
+  let outcome = last.outcome
+  if (proposed === 'normal') outcome = outcome ?? 'ok'
+  else if (outcome === null) outcome = proposed
+  else if (!isResult && (proposed === 'interrupted' || (proposed === 'failed' && outcome === 'ok'))) outcome = proposed
+
+  const endAt = last.endAt ?? (ev.created_at > 0 ? ev.created_at : null)
+  let durationMs = last.durationMs
+  if (durationMs === null && isResult && typeof p.duration_ms === 'number' && Number.isFinite(p.duration_ms) && p.duration_ms >= 0) {
+    durationMs = p.duration_ms
+  }
+  if (durationMs === null && endAt !== null && last.startAt > 0 && endAt >= last.startAt) durationMs = endAt - last.startAt
+
+  const turnMeta = s.turnMeta.slice()
+  turnMeta[n - 1] = { startAt: last.startAt, endAt, outcome, durationMs }
+  return { ...s, turnMeta, turnEnd: isResult ? 'result' : 'sealed' }
 }
 
 function str(p: Record<string, unknown>, k: string): string | undefined {
@@ -213,7 +321,7 @@ function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unkno
     if (ev.kind === 'user') return recordToolEnds(s, p, ev.created_at)
     return s
   }
-  if (TURN_ENDING_KINDS.has(ev.kind)) return endTurn(s, ev.created_at)
+  if (TURN_ENDING_KINDS.has(ev.kind)) return stampTurnEnd(endTurn(s, ev.created_at), ev, p)
   if (ev.kind === 'execution.running' || ev.kind === 'execution.message_accepted') return { ...s, turnLive: true }
   if (ev.kind === 'assistant') return finalizeBlock(recordToolStarts(s, p, ev.created_at), p)
   if (ev.kind === 'user') return recordToolEnds(s, p, ev.created_at)
@@ -265,7 +373,7 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // bubble, while an absent key means the site-wide stream stripped it
       // (spec §4.2.4). A truthy check would conflate the two.
       const brief = str(p, 'brief')
-      next = markTurnStart(next)
+      next = markTurnStart(next, ev.created_at)
       if (brief !== undefined) next = { ...next, messages: [...next.messages, userBubble(brief)] }
       return patchSummary(next, {})
     }
@@ -274,7 +382,7 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // summary moved, so the hook refetches (summaryStale) like any other.
       // Same empty-vs-absent distinction as execution.delegated above.
       const text = str(p, 'text')
-      next = markTurnStart({ ...next, pendingLocal: null, summaryStale: true })
+      next = markTurnStart({ ...next, pendingLocal: null, summaryStale: true }, ev.created_at)
       if (text !== undefined) next = { ...next, messages: [...next.messages, userBubble(text)] }
       return next
     }

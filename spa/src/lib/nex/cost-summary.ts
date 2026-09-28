@@ -129,6 +129,16 @@ export interface CostSummary {
 const nonNeg = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 const str = (v: unknown): v is string => typeof v === 'string'
 
+/**
+ * C3a — a top-level `result` frame reports a failed turn. Shared with the
+ * reducer's turn outcome (worker-pane theme spec §7.1) so the cost table and
+ * the turn footer can never disagree about which turns failed.
+ */
+export function isResultError(p: Record<string, unknown>): boolean {
+  const subtype = str(p.subtype) ? p.subtype : ''
+  return p.is_error === true || (subtype !== '' && subtype !== 'success')
+}
+
 const zeroTokens = (): TokenTotals => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
 
 /**
@@ -341,7 +351,7 @@ export function costSummary(messages: readonly StreamMessage[]): CostSummary {
 
     // C3a
     const subtype = str(p.subtype) ? p.subtype : ''
-    const isError = p.is_error === true || (subtype !== '' && subtype !== 'success')
+    const isError = isResultError(p)
 
     // C4 — `duration_api_ms` is a running total on a cumulative frame; the other two never are.
     const turnDuration = optNum(p.duration_ms)

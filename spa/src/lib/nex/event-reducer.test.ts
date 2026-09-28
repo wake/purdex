@@ -596,3 +596,140 @@ describe('task events (nexen v0.13 task_start / task_end)', () => {
     expect(defaultExecutionState().tasks).toEqual({})
   })
 })
+
+describe('turnMeta (spec §7.1)', () => {
+  const at = (seq: number, kind: string, payload: Record<string, unknown>, created_at: number): NexEvent =>
+    ({ seq, execution_id: 'exc_1', kind, payload, created_at })
+  const accept = (seq: number, created_at: number) => at(seq, 'execution.message_accepted', { turn_id: `t${seq}`, text: 'go' }, created_at)
+  const result = (seq: number, created_at: number, extra: Record<string, unknown> = {}) =>
+    at(seq, 'result', { type: 'result', subtype: 'success', is_error: false, parent_tool_use_id: null, ...extra }, created_at)
+  const terminal = (seq: number, created_at: number, reason: string) =>
+    at(seq, 'execution.terminal', { turn_id: 't', reason, state: 'idle' }, created_at)
+  const run = (events: NexEvent[]) => events.reduce(applyDurableEvent, defaultExecutionState())
+
+  it('defaultExecutionState has no turn meta', () => {
+    expect(defaultExecutionState().turnMeta).toEqual([])
+  })
+
+  it('records ok with duration from result.duration_ms', () => {
+    const s = run([accept(1, 1000), result(2, 7000, { duration_ms: 5000 }), terminal(3, 7100, 'final_response')])
+    expect(s.turnMeta).toEqual([{ startAt: 1000, endAt: 7000, outcome: 'ok', durationMs: 5000 }])
+    expect(s.turnStarts).toEqual([0])
+  })
+
+  it('records failed for result.is_error', () => {
+    const s = run([accept(1, 1000), result(2, 2000, { is_error: true, duration_ms: 10 }), terminal(3, 2100, 'final_response')])
+    expect(s.turnMeta[0].outcome).toBe('failed')
+  })
+
+  it('records failed for a non-success result subtype', () => {
+    const s = run([accept(1, 1000), result(2, 2000, { subtype: 'error_max_turns' })])
+    expect(s.turnMeta[0].outcome).toBe('failed')
+  })
+
+  it('interrupt then result → interrupted', () => {
+    const s = run([
+      accept(1, 1000),
+      at(2, 'execution.interrupted', { turn_id: 't1', source: 'user' }, 3000),
+      result(3, 3100, { subtype: 'error_during_execution', is_error: true, duration_ms: 99 }),
+      terminal(4, 3200, 'interrupted'),
+    ])
+    expect(s.turnMeta[0]).toMatchObject({ endAt: 3000, outcome: 'interrupted', durationMs: 2000 })
+  })
+
+  it('result then interrupt → interrupted overrides the result', () => {
+    const s = run([
+      accept(1, 1000),
+      result(2, 3000, { subtype: 'error_during_execution', is_error: true, duration_ms: 1500 }),
+      at(3, 'execution.interrupted', { turn_id: 't1', source: 'user' }, 3100),
+    ])
+    expect(s.turnMeta[0]).toEqual({ startAt: 1000, endAt: 3000, outcome: 'interrupted', durationMs: 1500 })
+  })
+
+  it('terminal final_response keeps the result outcome; alone it is ok; terminal interrupted alone → interrupted', () => {
+    expect(run([accept(1, 1000), result(2, 1500, { is_error: true }), terminal(3, 2000, 'final_response')]).turnMeta[0].outcome).toBe('failed')
+    expect(run([accept(1, 1000), terminal(2, 2000, 'final_response')]).turnMeta[0].outcome).toBe('ok')
+    expect(run([accept(1, 1000), terminal(2, 2000, 'interrupted')]).turnMeta[0].outcome).toBe('interrupted')
+  })
+
+  it.each(['error', 'session_expired', 'orphaned', 'auth_failed', 'permission_denied', 'context_exhausted', 'quota_exhausted', ''])(
+    'terminal reason %j → failed', reason => {
+      expect(run([accept(1, 1000), terminal(2, 2000, reason)]).turnMeta[0].outcome).toBe('failed')
+    })
+
+  it('unknown terminal reason → failed', () => {
+    expect(run([accept(1, 1000), terminal(2, 2000, 'brand_new_reason')]).turnMeta[0].outcome).toBe('failed')
+  })
+
+  it('a failure reason after an ok result still reads failed (F3: never hide a failure)', () => {
+    const s = run([accept(1, 1000), result(2, 2000, { duration_ms: 900 }), terminal(3, 2100, 'error')])
+    expect(s.turnMeta[0]).toEqual({ startAt: 1000, endAt: 2000, outcome: 'failed', durationMs: 900 })
+  })
+
+  it.each([
+    ['execution.error', 'failed'], ['execution.rejected', 'failed'], ['execution.turn_stalled', 'failed'],
+    ['execution.turn_orphaned', 'failed'], ['execution.terminated', 'interrupted'], ['execution.archived', 'interrupted'],
+  ])('%s ends a live turn as %s', (kind, outcome) => {
+    expect(run([accept(1, 1000), at(2, kind, {}, 2000)]).turnMeta[0].outcome).toBe(outcome)
+  })
+
+  it('a lifecycle event after the turn was sealed does not rewrite it (archive / terminate an idle execution)', () => {
+    const done = [accept(1, 1000), result(2, 2000, { duration_ms: 900 }), terminal(3, 2100, 'final_response')]
+    const s = run([...done, at(4, 'execution.archived', {}, 9000), at(5, 'execution.terminated', { principal_id: 'p' }, 9100)])
+    expect(s.turnMeta).toEqual([{ startAt: 1000, endAt: 2000, outcome: 'ok', durationMs: 900 }])
+  })
+
+  it('subagent result does not end or stamp the main turn', () => {
+    const s = run([accept(1, 1000), result(2, 1500, { parent_tool_use_id: 'toolu_1', is_error: true, duration_ms: 1 })])
+    expect(s.turnMeta).toEqual([{ startAt: 1000, endAt: null, outcome: null, durationMs: null }])
+    expect(s.turnLive).toBe(true)
+  })
+
+  it('duration falls back to endAt - startAt', () => {
+    const s = run([accept(1, 1000), result(2, 4500)])
+    expect(s.turnMeta[0]).toEqual({ startAt: 1000, endAt: 4500, outcome: 'ok', durationMs: 3500 })
+  })
+
+  it('no fallback duration when a timestamp is missing (0)', () => {
+    expect(run([accept(1, 0), result(2, 4500)]).turnMeta[0].durationMs).toBeNull()
+  })
+
+  it('a non-finite duration_ms falls back', () => {
+    expect(run([accept(1, 1000), result(2, 4000, { duration_ms: 'x' })]).turnMeta[0].durationMs).toBe(3000)
+  })
+
+  it('stays index-aligned with turnStarts across turns, including delegated', () => {
+    const s = run([
+      at(1, 'execution.delegated', { brief: 'b' }, 500),
+      result(2, 900, { duration_ms: 300 }),
+      terminal(3, 950, 'final_response'),
+      accept(4, 2000),
+      terminal(5, 2600, 'error'),
+      accept(6, 3000),
+    ])
+    expect(s.turnStarts).toHaveLength(3)
+    expect(s.turnMeta).toEqual([
+      { startAt: 500, endAt: 900, outcome: 'ok', durationMs: 300 },
+      { startAt: 2000, endAt: 2600, outcome: 'failed', durationMs: 600 },
+      { startAt: 3000, endAt: null, outcome: null, durationMs: null },
+    ])
+  })
+
+  it('task events do not touch turnMeta', () => {
+    const s = run([accept(1, 1000)])
+    const next = applyDurableEvent(s, at(9, 'task_start', { task_id: 'x', turn_id: 't', kind: 'shell', started_at: 1 }, 5000))
+    expect(next.turnMeta).toBe(s.turnMeta)
+  })
+
+  it('replay from scratch yields identical turnMeta', () => {
+    const events = [
+      accept(1, 1000), result(2, 3000, { duration_ms: 1800 }), terminal(3, 3100, 'final_response'),
+      accept(4, 4000), at(5, 'execution.interrupted', { source: 'user' }, 4500), result(6, 4600), terminal(7, 4700, 'interrupted'),
+      accept(8, 5000), terminal(9, 5200, 'mystery'),
+    ]
+    const a = run(events)
+    const b = run(events)
+    expect(b.turnMeta).toEqual(a.turnMeta)
+    expect(a.turnMeta.map(m => m.outcome)).toEqual(['ok', 'interrupted', 'failed'])
+  })
+})

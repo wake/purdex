@@ -181,7 +181,7 @@ export default function ChatTranscript({
 
   // As RoomTranscript: the in-flight message belongs to the last turn, and
   // needs one even before any boundary is recorded.
-  const shown: RoomTurn[] = turns.length === 0 && hasPartial ? [{ start: 0, end: 0, openerIndex: null }] : turns
+  const shown: RoomTurn[] = turns.length === 0 && hasPartial ? [{ start: 0, end: 0, openerIndex: null, boundary: null }] : turns
   const lastTurn = shown.length - 1
   const interrupted = t('stream.interrupted')
   const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0, subagentTasks }
