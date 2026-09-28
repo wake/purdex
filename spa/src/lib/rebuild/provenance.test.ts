@@ -91,7 +91,25 @@ describe('parseExit', () => {
 describe('daemonNsToMs', () => {
   it('converts the daemon\'s nanoseconds to milliseconds, rounding down', () => {
     expect(daemonNsToMs(1_788_800_000_123_456_768)).toBe(1_788_800_000_123)
-    expect(daemonNsToMs(7_999_999)).toBe(7)
+    expect(daemonNsToMs(1_788_800_000_999_900_000)).toBe(1_788_800_000_999)
+  })
+
+  // A garbage value must not become a record stamp: `capturedAt` elects the
+  // group's newest record, and a far-future stamp would win every election for
+  // good. The window is FIXED, never relative to Date.now, so every client
+  // judges the same value the same way.
+  it('falls back to this client\'s clock outside the fixed 2020-01-01 .. 2100-01-01 window', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(5_000)
+      for (const v of [1e300, Number.MAX_SAFE_INTEGER * 1e6, Number.MAX_SAFE_INTEGER, 7_999_999, Date.UTC(2019, 11, 31) * 1e6, Date.UTC(2100, 0, 2) * 1e6]) {
+        expect(daemonNsToMs(v)).toBe(5_000)
+      }
+      expect(daemonNsToMs(Date.UTC(2020, 0, 1) * 1e6)).toBe(Date.UTC(2020, 0, 1))
+      expect(daemonNsToMs(Date.UTC(2100, 0, 1) * 1e6)).toBe(Date.UTC(2100, 0, 1))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('falls back to this client\'s clock when the daemon sent nothing usable (an older daemon; no worse than before)', () => {

@@ -106,7 +106,8 @@ export function parseExit(detail: Record<string, unknown> | undefined): ParsedEx
  * the payloads differ and Profile Sync locks the section as a conflict nobody
  * made (sync-conflict-fixes spec D1). The daemon's value is the same bytes on
  * every client. Anything that is not a positive finite number of at least one
- * millisecond — an older daemon that never sent it, 0 — falls back to
+ * millisecond inside a fixed 2020-01-01 .. 2100-01-01 window (see below) — an
+ * older daemon that never sent it, 0, garbage — falls back to
  * `Date.now()`: no worse than before.
  *
  * Nanosecond epochs exceed Number.MAX_SAFE_INTEGER, so the parsed value is the
@@ -116,5 +117,15 @@ export function parseExit(detail: Record<string, unknown> | undefined): ParsedEx
 export function daemonNsToMs(ns: unknown): number {
   if (typeof ns !== 'number' || !Number.isFinite(ns)) return Date.now()
   const ms = Math.floor(ns / 1e6)
-  return ms > 0 ? ms : Date.now()
+  return Number.isSafeInteger(ms) && ms >= DAEMON_MS_MIN && ms <= DAEMON_MS_MAX ? ms : Date.now()
 }
+
+/**
+ * The sane window for a daemon time, as FIXED constants: a garbage value (1e300,
+ * a seconds value mistaken for ns, a broken clock) must not become a record
+ * stamp — `capturedAt` elects each group's newest record, and a far-future one
+ * would win every election for good. Never relative to `Date.now()`: every
+ * client must judge the same value the same way, or their payloads diverge.
+ */
+const DAEMON_MS_MIN = Date.UTC(2020, 0, 1)
+const DAEMON_MS_MAX = Date.UTC(2100, 0, 1)

@@ -50,6 +50,10 @@ event. Timestamps in such writes come from the event / the daemon, never from th
 
 A daemon value of 0 / missing falls back to `Date.now()` (old daemon; no worse than today). The ns → ms
 conversion with that fallback lives in one helper, `daemonNsToMs` (`lib/rebuild/provenance.ts`).
+The converted value must also be a safe integer inside a **fixed** window, 2020-01-01 ≤ ms ≤
+2100-01-01 (constants, never relative to `Date.now()`, so every client judges the same value the same
+way); anything outside takes the same `Date.now()` fallback — a garbage far-future stamp would
+otherwise win every `groupForBatch` election for good.
 
 Why `started_at`, not `last_seen_at`: `last_seen_at` moves on every hook event of the run, so two
 clients' probes of the same run usually see different values. The frame's start is fixed for the

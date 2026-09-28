@@ -99,9 +99,9 @@ describe('provenance write path', () => {
     try {
       vi.setSystemTime(9_000)
       const tab = seedTerminalPane('222:2000')
-      send(event({ broadcast_ts: 7_123_456_789, detail: { pdx_provenance: envelope() } }))
-      expect(recordOf(tab.id)?.agent?.updatedAt).toBe(7_123)
-      expect(recordOf(tab.id)?.capturedAt).toBe(7_123)
+      send(event({ broadcast_ts: 1_788_800_000_123_456_768, detail: { pdx_provenance: envelope() } }))
+      expect(recordOf(tab.id)?.agent?.updatedAt).toBe(1_788_800_000_123)
+      expect(recordOf(tab.id)?.capturedAt).toBe(1_788_800_000_123)
     } finally {
       vi.useRealTimers()
     }
