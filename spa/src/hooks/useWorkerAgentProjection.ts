@@ -4,7 +4,8 @@
 // notification dispatcher treat a worker tab like a terminal agent tab.
 //
 // Source per pane, in order: the live `useExecutionStore` entry (when it has a
-// summary), else the host's execution list row. Every host with a worker tab
+// summary and its SSE is delivering), else the host's execution list row (a
+// frozen live entry is still used when no row exists). Every host with a worker tab
 // holds one list subscription so a row exists for an evicted pane. A dispatch
 // happens only when the projection (status, subagent ids, agent type) changes;
 // closing the last pane of a worker dispatches `clear`.
@@ -62,9 +63,23 @@ interface Source {
   summary: ExecutionSummary
 }
 
+/**
+ * The live entry is delivering: its SSE is open (or briefly reconnecting).
+ * An evicted pane (`paused`, useExecutionSubscription's slot cap) or a dead
+ * stream (`closed`) keeps its store entry frozen until `clearExecution`, and
+ * a resumed one reads `connecting` until the stream is back — in all of
+ * those the list row is fresher. `idle` is the state before a pane ever
+ * connected.
+ */
+function isLiveDelivering(live: ExecutionState): boolean {
+  return live.sse === 'open' || live.sse === 'reconnecting'
+}
+
 function deriveSource({ hostId, executionId }: WorkerRef): Source | null {
   const live = useExecutionStore.getState().executions[executionKey(hostId, executionId)]
-  if (live?.summary) {
+  const row = useExecutionListStore.getState().byHost[hostId]?.items.find((r) => r.id === executionId)
+  // A stale live entry yields to the list row; with no row it is still the best we have.
+  if (live?.summary && (isLiveDelivering(live) || !row)) {
     const subs = runningTasks(live.tasks).filter((t) => t.kind === 'subagent')
     return {
       input: {
@@ -82,7 +97,6 @@ function deriveSource({ hostId, executionId }: WorkerRef): Source | null {
       summary: live.summary,
     }
   }
-  const row = useExecutionListStore.getState().byHost[hostId]?.items.find((r) => r.id === executionId)
   if (!row) return null
   return {
     input: {

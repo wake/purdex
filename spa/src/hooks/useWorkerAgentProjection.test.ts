@@ -296,6 +296,60 @@ describe('useWorkerAgentProjection', () => {
     })
   })
 
+  describe('evicted live subscription (A2)', () => {
+    const listRow = (over: Partial<ExecutionSummary>) =>
+      useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), items: [summary({ turn_count: 1, ...over })] } } })
+    const runningLive = () => setLive({ summary: summary({ state: 'running' }), turnLive: true, turnStarts: [0],
+      turnMeta: [{ startAt: 10, endAt: null, outcome: null, durationMs: null }], sse: 'open' })
+
+    it('a paused (evicted) pane follows the list row, and the live stream again once resumed', () => {
+      const stop = startWorkerAgentProjection()
+      runningLive()
+      listRow({ state: 'running', updated_at: 20 })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      const st = () => useAgentStore.getState()
+      expect(st().statuses[KEY]).toBe('running')
+
+      // Eviction: SSE closed, store entry kept frozen at running.
+      useExecutionStore.getState().setSse(H, E, 'paused')
+      listRow({ state: 'idle', updated_at: 30 })
+      expect(st().statuses[KEY]).toBe('idle')
+      expect(st().lastEvents[KEY].raw_event_name).toBe('Stop')
+
+      // Resuming but not delivering yet: the frozen running must not win.
+      useExecutionStore.getState().setSse(H, E, 'connecting')
+      expect(st().statuses[KEY]).toBe('idle')
+
+      // Live again: a new turn runs on the live stream while the row still reads idle.
+      setLive({ sse: 'open', turnStarts: [0, 1], turnMeta: [{ startAt: 10, endAt: 25, outcome: 'ok', durationMs: 15 }, { startAt: 40, endAt: null, outcome: null, durationMs: null }] })
+      expect(st().statuses[KEY]).toBe('running')
+      // A transient reconnect keeps the live source.
+      useExecutionStore.getState().setSse(H, E, 'reconnecting')
+      expect(st().statuses[KEY]).toBe('running')
+      stop()
+    })
+
+    it('a closed live stream falls back to the list row', () => {
+      const stop = startWorkerAgentProjection()
+      runningLive()
+      listRow({ state: 'running', updated_at: 20 })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      useExecutionStore.getState().setSse(H, E, 'closed', 'boom')
+      listRow({ state: 'failed', updated_at: 30, last_turn_reason: 'orphaned' })
+      expect(useAgentStore.getState().statuses[KEY]).toBe('error')
+      stop()
+    })
+
+    it('a paused pane with no list row keeps its live state as the source', () => {
+      const stop = startWorkerAgentProjection()
+      runningLive()
+      useExecutionStore.getState().setSse(H, E, 'paused')
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+      stop()
+    })
+  })
+
   it('stop releases subscriptions and clears the keys it set', () => {
     const stop = startWorkerAgentProjection()
     setLive({ summary: summary({ state: 'idle' }) })
