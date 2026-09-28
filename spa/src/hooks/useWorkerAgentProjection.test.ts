@@ -192,7 +192,7 @@ describe('useWorkerAgentProjection', () => {
     stop()
   })
 
-  describe('primary pane only (terminal semantics)', () => {
+  describe('every execution pane, not just the primary one (controller ruling, spec L1)', () => {
     const splitTab = (workerFirst: boolean): Tab => {
       const worker = { type: 'leaf' as const, pane: { id: 'p-w', content: { kind: 'execution' as const, executionId: E, host: H } } }
       const other = { type: 'leaf' as const, pane: { id: 'p-o', content: { kind: 'new-tab' as const } } }
@@ -202,27 +202,23 @@ describe('useWorkerAgentProjection', () => {
       }
     }
 
-    it('a worker in a non-primary split pane is not projected (no key, no unread, no notification)', () => {
-      // zustand copies the (possibly already spied) action into each new state
-      // object, so an earlier test's spy can carry calls — start from zero.
-      const spy = vi.spyOn(useAgentStore.getState(), 'handleNormalizedEvent')
-      spy.mockClear()
+    it('a worker as the second pane of a split is still projected (status in store, unread when not active)', () => {
       const stop = startWorkerAgentProjection()
       try {
         setLive({ summary: summary({ state: 'running' }), turnLive: true })
         useTabStore.setState({ tabs: { 't-split': splitTab(false) }, tabOrder: ['t-split'] })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
         setLive({ summary: summary({ state: 'idle' }), turnLive: false, turnStarts: [0], turnMeta: [{ startAt: 1, endAt: 2, outcome: 'ok', durationMs: 1 }] })
         const st = useAgentStore.getState()
-        expect(st.statuses[KEY]).toBeUndefined()
-        expect(st.lastEvents[KEY]).toBeUndefined()
-        expect(st.unread[KEY]).toBeUndefined()
-        expect(spy).not.toHaveBeenCalled()
+        expect(st.statuses[KEY]).toBe('idle')
+        expect(st.unread[KEY]).toBe(true)
+        expect(st.lastEvents[KEY].raw_event_name).toBe('Stop')
       } finally {
         stop()
       }
     })
 
-    it('a worker as the primary pane of a split tab is projected as before', () => {
+    it('a worker as the primary pane of a split tab is projected the same way', () => {
       const stop = startWorkerAgentProjection()
       try {
         setLive({ summary: summary({ state: 'running' }), turnLive: true })

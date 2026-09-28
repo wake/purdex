@@ -987,6 +987,30 @@ describe('worker (execution) tabs in the notification dispatcher', () => {
     unmount()
   })
 
+  // Controller ruling (worker-pane theme spec §L1): the worker projection
+  // (useWorkerAgentProjection) covers every execution pane, but the tab
+  // lookup this dispatcher uses (`findTabBySessionCode`) is primary-pane
+  // only — same as a tmux agent tab. So a worker sitting in a *secondary*
+  // split pane has `hasTab: false` here, exactly like a tab with no worker
+  // tab open at all, and is gated by `notifyWithoutTab` the same way.
+  it('a worker as the secondary pane of a split tab has no tab to route to — not notified when notifyWithoutTab is off', () => {
+    const splitTab: Tab = {
+      id: 'tx', pinned: false, locked: false, createdAt: 0,
+      layout: {
+        type: 'split', id: 's1', direction: 'h', sizes: [50, 50],
+        children: [
+          { type: 'leaf', pane: { id: 'p-other', content: { kind: 'new-tab' } } },
+          { type: 'leaf', pane: { id: 'p-worker', content: { kind: 'execution', executionId: 'e1', host: HOST } } },
+        ],
+      },
+    }
+    useTabStore.setState({ tabs: { [splitTab.id]: splitTab }, tabOrder: [splitTab.id], activeTabId: null })
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    dispatch({ status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2, detail: {} })
+    expect(showNotification).not.toHaveBeenCalled()
+    unmount()
+  })
+
   it('notification click focuses the exec tab and marks it read', () => {
     const tab = openExecTab()
     const ws = useWorkspaceStore.getState().addWorkspace('W')
