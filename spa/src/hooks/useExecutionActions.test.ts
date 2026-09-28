@@ -122,3 +122,58 @@ describe('useExecutionActions — restoring the draft after a failed send', () =
     expect(st().sendError).toBeNull()
   })
 })
+
+describe('useExecutionActions — handleSend reports whether the send went through', () => {
+  it('resolves true when sendMessage resolves', async () => {
+    vi.mocked(api.sendMessage).mockResolvedValueOnce({ turn_id: 't1', delivery: 'delivered' })
+    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+    let ok: boolean | undefined
+    await act(async () => { ok = await result.current.handleSend('hi') })
+    expect(ok).toBe(true)
+  })
+
+  it('resolves false when the send fails', async () => {
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'too long'))
+    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+    let ok: boolean | undefined
+    await act(async () => { ok = await result.current.handleSend('hi') })
+    expect(ok).toBe(false)
+  })
+
+  it('resolves false for the re-entrant no-op while a send is pending', async () => {
+    const d = deferredSend()
+    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+    let first: Promise<boolean> | undefined
+    await act(async () => { first = result.current.handleSend('A'); await Promise.resolve() })
+    let second: boolean | undefined
+    await act(async () => { second = await result.current.handleSend('B') })
+    expect(second).toBe(false)
+    expect(api.sendMessage).toHaveBeenCalledTimes(1)
+    d.resolve({ turn_id: 't1', delivery: 'delivered' })
+    let firstOk: boolean | undefined
+    await act(async () => { firstOk = await first })
+    expect(firstOk).toBe(true)
+  })
+
+  it('resolves false for a send superseded before it settled', async () => {
+    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+    const a = deferredSend()
+    let pa: Promise<boolean> | undefined
+    await act(async () => { pa = result.current.handleSend('A'); await Promise.resolve() })
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+    stall()
+    deferredSend()
+    await act(async () => { void result.current.handleSend('B'); await Promise.resolve() })
+    let aOk: boolean | undefined
+    await act(async () => { a.resolve({ turn_id: 'tA', delivery: 'queued' }); aOk = await pa })
+    expect(aOk).toBe(false)
+  })
+
+  it('draftText restores only the typed text, not the composed message', async () => {
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'too long'))
+    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+    await act(async () => { await result.current.handleSend('typed\n\n[file: /a/b.txt]', { draftText: 'typed' }) })
+    expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'typed\n\n[file: /a/b.txt]')
+    expect(result.current.draft).toBe('typed')
+  })
+})

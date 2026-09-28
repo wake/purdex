@@ -211,7 +211,7 @@ export function hostFetch(hostId: string, path: string, init?: RequestInit): Pro
  * ask a different daemon. `getDaemonBase` itself keeps its fallback for the
  * callers that rely on it.
  */
-function pinnedHostFetch(hostId: string, path: string, init?: RequestInit): Promise<Response> {
+export function pinnedHostFetch(hostId: string, path: string, init?: RequestInit): Promise<Response> {
   if (!Object.hasOwn(useHostStore.getState().hosts, hostId)) {
     return Promise.reject(new Error(`host ${hostId} is not configured`))
   }

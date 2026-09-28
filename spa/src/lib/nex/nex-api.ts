@@ -2,7 +2,7 @@
 // mounted at /api/nex on each pdx daemon (P-A spec §4.3). Every call goes
 // through hostFetch (Bearer from the host store) plus the per-tab
 // X-Pdx-Client header; tickets are never involved on this path.
-import { hostFetch } from '../host-api'
+import { hostFetch, pinnedHostFetch } from '../host-api'
 import { useHostStore } from '../../stores/useHostStore'
 import { getNexClientId } from './client-id'
 import {
@@ -215,6 +215,42 @@ export function archiveExecution(hostId: string, executionId: string, undo = fal
 
 export function terminateExecution(hostId: string, executionId: string, leaseId: string): Promise<void> {
   return postJson(hostId, execPath(executionId, '/terminate'), { lease_id: leaseId }).then(okVoid)
+}
+
+export interface WorkerUploadResult {
+  /** Absolute path on the daemon host, inside the execution's cwd. */
+  path: string
+  name: string
+  size: number
+}
+
+/**
+ * Save a file into the execution's cwd (worker-pane theme spec §9.1) so the
+ * agent can Read it by path. A Purdex daemon route, not part of the Nexen
+ * contract — hence `/api/nex/executions/…`, not `/api/nex/v1/…`, and not
+ * `nexFetch`, which would stamp a JSON Content-Type over the multipart body.
+ * `pinnedHostFetch` refuses a host this device lacks instead of falling back
+ * to another daemon. Every failure rejects with a NexApiError: the daemon's
+ * `code`, `network` for a request that never reached it, `host_removed` for
+ * an unknown host — including one that disappears in the gap between this
+ * function's own check and `pinnedHostFetch`'s (it rejects with a plain
+ * `Error`, not a `NexApiError`, so the catch below re-checks the host store
+ * rather than flattening that race into `network`).
+ */
+export async function uploadWorkerFile(hostId: string, executionId: string, file: File): Promise<WorkerUploadResult> {
+  if (!useHostStore.getState().hosts[hostId]) throw new NexApiError(0, 'host_removed', 'host removed')
+  const form = new FormData()
+  form.append('file', file)
+  let res: Response
+  try {
+    res = await pinnedHostFetch(hostId, `${PREFIX}/executions/${encodeURIComponent(executionId)}/uploads`, { method: 'POST', body: form })
+  } catch (e) {
+    if (!useHostStore.getState().hosts[hostId]) throw new NexApiError(0, 'host_removed', 'host removed')
+    throw new NexApiError(0, 'network', e instanceof Error ? e.message : String(e))
+  }
+  const body = await okJson<Partial<WorkerUploadResult>>(res)
+  if (typeof body.path !== 'string' || body.path === '') throw new NexApiError(res.status, 'bad_response', 'upload response has no path')
+  return { path: body.path, name: typeof body.name === 'string' ? body.name : file.name, size: typeof body.size === 'number' ? body.size : file.size }
 }
 
 // Resolve an optional `host` hint (pane content / deeplink) onto a known SPA
