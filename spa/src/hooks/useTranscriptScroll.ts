@@ -48,7 +48,8 @@
 // (`lib/nex/transcript-scroll-memory`): scrollTop, the flag, the view and the
 // first turn still on screen. The first call after a mount reads it back: at
 // the bottom → the jump to the bottom as ever; elsewhere, the same view
-// restores scrollTop (the browser clamps it), and the other view — a
+// restores scrollTop (the browser clamps it; a clamp that lands at the
+// bottom counts as the bottom, A4), and the other view — a
 // different height — brings the remembered first turn to the top.
 // **Keying.** The caller's `memory.paneId` is whatever key it composes — a
 // worker pane's transcript keys it by pane *and* execution
@@ -212,8 +213,15 @@ export function useTranscriptScroll(
       if (turn) top = turn.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
     }
     el.scrollTo({ top, behavior: 'auto' })
-    atBottom.current = false
-    lastTop.current = top
+    // Read back where it landed: an instant scroll lands synchronously, and
+    // the browser clamps a memo past the max (less content now) — possibly
+    // to the bottom, and possibly with no scroll event at all (it all fits).
+    // A clamped restore is judged from where it landed (A4); an unclamped
+    // one keeps the memo's "not at the bottom" (a released jump into the
+    // last screen stays released).
+    const landed = el.scrollTop
+    atBottom.current = landed !== top && el.scrollHeight - landed - el.clientHeight <= NEAR_BOTTOM
+    lastTop.current = landed
     return true
   }, [])
 

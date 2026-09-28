@@ -499,6 +499,90 @@ describe('transcript scroll memory', () => {
     expect(scrollTo).not.toHaveBeenCalled()
   })
 
+  // A4 (PR #1514 review): the memo's scrollTop can exceed the remounted
+  // box's max (less content now); the browser clamps the restore to the
+  // bottom, and a reader left at the bottom follows the next line.
+  describe('A4: a restore the browser clamps to the bottom', () => {
+    /** An instant scrollTo that lands clamped, like the browser's, synchronously. */
+    function clampingScrollTo(max: () => number) {
+      scrollTo.mockImplementation(function (this: HTMLElement, o: ScrollToOptions) {
+        const top = Math.max(0, Math.min(o.top ?? 0, max()))
+        Object.defineProperty(this, 'scrollTop', { configurable: true, writable: true, value: top })
+      })
+    }
+    afterEach(() => { scrollTo.mockReset() })
+
+    it.each([
+      ['its scroll event arrives before the growth', true],
+      ['the growth lands before its scroll event', false],
+    ])('memo past the new max, %s → the next growth follows', (_order, scrollFirst) => {
+      writeScrollMemo(PANE, { scrollTop: 2000, atBottom: false, view: 'room', firstTurn: 2 })
+      let height = 1000
+      const client = 200
+      // Geometry the box has at mount, before the first follow runs.
+      const sh = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => height)
+      const ch = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => client)
+      clampingScrollTo(() => height - client)
+      try {
+        const ref = createRef<HTMLDivElement>()
+        const { rerender } = render(<RoomTranscript {...props({ scrollRef: ref })} />)
+        expect(scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: 'auto' })
+        expect(ref.current!.scrollTop).toBe(800)
+        if (scrollFirst) fireEvent.scroll(ref.current!)
+        scrollTo.mockClear()
+        height = 1100
+        rerender(<RoomTranscript {...props({ scrollRef: ref, messages: [...three, said('d')] })} />)
+        expect(scrollTo).toHaveBeenCalledTimes(1)
+        expect(scrollTo).toHaveBeenLastCalledWith({ top: 1100, behavior: 'smooth' })
+      } finally {
+        sh.mockRestore()
+        ch.mockRestore()
+      }
+    })
+
+    it('an unclamped restore into the last screen keeps the memo\'s "not at the bottom" (a released jump)', () => {
+      writeScrollMemo(PANE, { scrollTop: 790, atBottom: false, view: 'room', firstTurn: 2 })
+      let height = 1000
+      const client = 200
+      const sh = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => height)
+      const ch = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => client)
+      clampingScrollTo(() => height - client)
+      try {
+        const ref = createRef<HTMLDivElement>()
+        const { rerender } = render(<RoomTranscript {...props({ scrollRef: ref })} />)
+        expect(ref.current!.scrollTop).toBe(790)
+        scrollTo.mockClear()
+        height = 1100
+        rerender(<RoomTranscript {...props({ scrollRef: ref, messages: [...three, said('d')] })} />)
+        expect(scrollTo).not.toHaveBeenCalled()
+      } finally {
+        sh.mockRestore()
+        ch.mockRestore()
+      }
+    })
+
+    it('memo past the new max where everything fits (no scroll event ever) → the next growth follows', () => {
+      writeScrollMemo(PANE, { scrollTop: 2000, atBottom: false, view: 'room', firstTurn: 2 })
+      let height = 150
+      const client = 200
+      const sh = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => height)
+      const ch = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => client)
+      clampingScrollTo(() => Math.max(0, height - client))
+      try {
+        const ref = createRef<HTMLDivElement>()
+        const { rerender } = render(<RoomTranscript {...props({ scrollRef: ref })} />)
+        expect(ref.current!.scrollTop).toBe(0)
+        scrollTo.mockClear()
+        height = 260
+        rerender(<RoomTranscript {...props({ scrollRef: ref, messages: [...three, said('d')] })} />)
+        expect(scrollTo).toHaveBeenCalledTimes(1)
+      } finally {
+        sh.mockRestore()
+        ch.mockRestore()
+      }
+    })
+  })
+
   it('remount at bottom → jumps to bottom', () => {
     const ref = createRef<HTMLDivElement>()
     const first = render(<RoomTranscript {...props({ scrollRef: ref })} />)
