@@ -35,12 +35,21 @@ export interface TurnMeta {
  * lifecycle end may still refine the outcome; `'sealed'` a turn-scoped
  * lifecycle end closed it. `bySource` records that an
  * `execution.interrupted` already decided the outcome from its `source`.
+ * `resulted`: a top-level `result` stamped it, so `durationMs` is the
+ * result's (or the fallback when it carried none) and no later event may
+ * replace it. `awaitsResult`: a turn-scoped lifecycle end sealed it before
+ * any result, so its (late) result may still arrive — CC emits one after an
+ * interrupt — and `durationMs` is only the `endAt − startAt` fallback. The
+ * next top-level `result` goes to it; the next turn's own output (a
+ * top-level `assistant`) means none is coming and clears it.
  */
 export interface TurnEnd {
   /** The daemon's turn_id; null for turn 1 (execution.delegated carries none) until a keyed end binds it. */
   turnId: string | null
   state: null | 'soft' | 'sealed'
   bySource: boolean
+  resulted: boolean
+  awaitsResult: boolean
 }
 
 export interface ExecutionState {
@@ -219,7 +228,7 @@ function markTurnStart(s: ExecutionState, createdAt: number, turnId: string | nu
     ...s,
     turnStarts: [...s.turnStarts, s.messages.length],
     turnMeta: [...s.turnMeta, { startAt: createdAt, endAt: null, outcome: null, durationMs: null }],
-    turnEnds: [...s.turnEnds, { turnId, state: null, bySource: false }],
+    turnEnds: [...s.turnEnds, { turnId, state: null, bySource: false, resulted: false, awaitsResult: false }],
   }
 }
 
@@ -315,6 +324,10 @@ const EXECUTION_SCOPED_ENDS = new Set(['execution.terminated', 'execution.archiv
  */
 function findEndTarget(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): { i: number; bind: string | null } | null {
   const ends = s.turnEnds
+  if (ev.kind === 'result') {
+    const late = ends.findIndex(e => e.awaitsResult)
+    if (late >= 0) return { i: late, bind: null }
+  }
   if (ev.kind === 'result' || EXECUTION_SCOPED_ENDS.has(ev.kind)) {
     const i = ends.findIndex(e => e.state !== 'sealed')
     return i < 0 ? null : { i, bind: null }
@@ -334,8 +347,11 @@ function findEndTarget(s: ExecutionState, ev: NexEvent, p: Record<string, unknow
  * once, except that a turn-scoped lifecycle end may refine it: `interrupted`
  * wins (CC emits a result after an interrupt) and `failed` beats `ok` (a
  * failure is never hidden, F3). An `execution.interrupted` is authoritative:
- * its source decides, and nothing after it changes the outcome. Only
- * `endAt` / `durationMs` still null are filled.
+ * its source decides, and nothing after it changes the outcome. `endAt` is
+ * filled once. `durationMs` is filled once too, except that the turn's own
+ * top-level result's finite `duration_ms` replaces an `endAt − startAt`
+ * fallback a lifecycle end left (§7.1: result.duration_ms wins, R1-1) — a
+ * value a result set is never replaced.
  */
 function stampTurnEnd(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): ExecutionState {
   const target = findEndTarget(s, ev, p)
@@ -357,20 +373,33 @@ function stampTurnEnd(s: ExecutionState, ev: NexEvent, p: Record<string, unknown
 
   const endAt = meta.endAt ?? (ev.created_at > 0 ? ev.created_at : null)
   let durationMs = meta.durationMs
-  if (durationMs === null && isResult && typeof p.duration_ms === 'number' && Number.isFinite(p.duration_ms) && p.duration_ms >= 0) {
+  if (isResult && !end.resulted && typeof p.duration_ms === 'number' && Number.isFinite(p.duration_ms) && p.duration_ms >= 0) {
     durationMs = p.duration_ms
   }
   if (durationMs === null && endAt !== null && meta.startAt > 0 && endAt >= meta.startAt) durationMs = endAt - meta.startAt
 
   const turnMeta = s.turnMeta.slice()
   turnMeta[i] = { startAt: meta.startAt, endAt, outcome, durationMs }
-  const turnEnds = s.turnEnds.slice()
+  const sealsNow = end.state !== 'sealed' && !isResult && !execScoped
+  // A turn sealed now can no longer be waited on by an older one: that one's
+  // result would have come first.
+  const turnEnds = sealsNow ? s.turnEnds.map((e, k) => (k < i && e.awaitsResult ? { ...e, awaitsResult: false } : e)) : s.turnEnds.slice()
   turnEnds[i] = {
     turnId: end.turnId ?? target.bind,
-    state: end.state === 'sealed' || (!isResult && !execScoped) ? 'sealed' : 'soft',
+    state: end.state === 'sealed' || sealsNow ? 'sealed' : 'soft',
     bySource: end.bySource || isInterrupt,
+    resulted: end.resulted || isResult,
+    // Only the running turn can still get a result: a turn sealed while an
+    // older one is open was withdrawn from the queue and never ran.
+    awaitsResult: isResult ? false : end.awaitsResult || (sealsNow && !end.resulted && s.turnEnds.slice(0, i).every(e => e.state === 'sealed')),
   }
   return { ...s, turnMeta, turnEnds }
+}
+
+/** A top-level assistant frame: the next turn is running, so no sealed turn still awaits its result. */
+function dropAwaitedResult(s: ExecutionState): ExecutionState {
+  if (!s.turnEnds.some(e => e.awaitsResult)) return s
+  return { ...s, turnEnds: s.turnEnds.map(e => (e.awaitsResult ? { ...e, awaitsResult: false } : e)) }
 }
 
 function str(p: Record<string, unknown>, k: string): string | undefined {
@@ -409,7 +438,7 @@ function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unkno
   }
   if (TURN_ENDING_KINDS.has(ev.kind)) return stampTurnEnd(endTurn(s, ev.created_at), ev, p)
   if (ev.kind === 'execution.running' || ev.kind === 'execution.message_accepted') return { ...s, turnLive: true }
-  if (ev.kind === 'assistant') return finalizeBlock(recordToolStarts(s, p, ev.created_at), p)
+  if (ev.kind === 'assistant') return finalizeBlock(recordToolStarts(dropAwaitedResult(s), p, ev.created_at), p)
   if (ev.kind === 'user') return recordToolEnds(s, p, ev.created_at)
   return s
 }

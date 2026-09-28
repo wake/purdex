@@ -635,7 +635,64 @@ describe('turnMeta (spec §7.1)', () => {
       result(3, 3100, { subtype: 'error_during_execution', is_error: true, duration_ms: 99 }),
       terminal(4, 3200, 'interrupted'),
     ])
-    expect(s.turnMeta[0]).toMatchObject({ endAt: 3000, outcome: 'interrupted', durationMs: 2000 })
+    // endAt stays the interrupt's; the later result's duration_ms replaces the endAt − startAt fallback (§7.1).
+    expect(s.turnMeta[0]).toMatchObject({ endAt: 3000, outcome: 'interrupted', durationMs: 99 })
+  })
+
+  it('a lifecycle end before the result: the result duration_ms replaces the fallback (R1-1)', () => {
+    const s = run([
+      accept(1, 1000),
+      at(2, 'execution.interrupted', { turn_id: 't1', source: 'turn_timeout' }, 5000),
+      result(3, 5100, { subtype: 'error_during_execution', is_error: true, duration_ms: 3700 }),
+    ])
+    expect(s.turnMeta[0]).toEqual({ startAt: 1000, endAt: 5000, outcome: 'failed', durationMs: 3700 })
+  })
+
+  it('a keyed terminal before the result: the result duration_ms replaces the fallback', () => {
+    const s = run([
+      accept(1, 1000),
+      at(2, 'execution.terminal', { turn_id: 't1', reason: 'final_response', state: 'idle' }, 4000),
+      result(3, 4100, { duration_ms: 2500 }),
+    ])
+    expect(s.turnMeta[0]).toEqual({ startAt: 1000, endAt: 4000, outcome: 'ok', durationMs: 2500 })
+  })
+
+  it('a late result after an interrupt belongs to the interrupted turn, not a queued one', () => {
+    const s = run([
+      accept(1, 1000),
+      accept(2, 1500),
+      at(3, 'execution.interrupted', { turn_id: 't1', source: 'user' }, 3000),
+      result(4, 3100, { subtype: 'error_during_execution', is_error: true, duration_ms: 1900 }),
+    ])
+    expect(s.turnMeta).toEqual([
+      { startAt: 1000, endAt: 3000, outcome: 'interrupted', durationMs: 1900 },
+      { startAt: 1500, endAt: null, outcome: null, durationMs: null },
+    ])
+  })
+
+  it('a sealed turn that never gets its result does not take the next turn\'s result', () => {
+    const s = run([
+      accept(1, 1000),
+      at(2, 'execution.terminal', { turn_id: 't1', reason: 'error', state: 'idle' }, 2000),
+      accept(3, 5000),
+      at(4, 'assistant', { type: 'assistant', parent_tool_use_id: null, message: { content: [] } }, 5500),
+      result(5, 6000, { duration_ms: 800 }),
+    ])
+    expect(s.turnMeta).toEqual([
+      { startAt: 1000, endAt: 2000, outcome: 'failed', durationMs: 1000 },
+      { startAt: 5000, endAt: 6000, outcome: 'ok', durationMs: 800 },
+    ])
+  })
+
+  it('a result duration is never replaced by a later result, and a non-finite one keeps the fallback', () => {
+    const twice = run([accept(1, 1000), result(2, 3000, { duration_ms: 1800 }), result(3, 3500, { duration_ms: 42 })])
+    expect(twice.turnMeta[0].durationMs).toBe(1800)
+    const bad = run([
+      accept(1, 1000),
+      at(2, 'execution.terminal', { turn_id: 't1', reason: 'final_response', state: 'idle' }, 4000),
+      result(3, 4100, { duration_ms: Number.NaN }),
+    ])
+    expect(bad.turnMeta[0].durationMs).toBe(3000)
   })
 
   it('result then interrupt → interrupted overrides the result', () => {
