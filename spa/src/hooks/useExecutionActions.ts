@@ -17,6 +17,13 @@ export interface SendOptions {
    * only shows the send error.
    */
   restoreDraft?: boolean
+  /**
+   * The text restored as the draft after a failed send, when it differs from
+   * the text sent — a message with attachments sends the typed text plus its
+   * `[file: …]` lines, but only the typed text goes back into the input (the
+   * chips stay on their own). Defaults to the sent text.
+   */
+  draftText?: string
 }
 
 export interface ExecutionActions {
@@ -24,7 +31,12 @@ export interface ExecutionActions {
   draft: string | null
   /** An interrupt or terminate request is in flight (sends are tracked by the store's `pendingSend`). */
   actionPending: boolean
-  handleSend(text: string, opts?: SendOptions): Promise<void>
+  /**
+   * Resolves true when the message was accepted by the daemon and this attempt
+   * was not superseded; false on the re-entrant no-op, on failure, and for a
+   * superseded attempt.
+   */
+  handleSend(text: string, opts?: SendOptions): Promise<boolean>
   handleInterrupt(): Promise<void>
   handleTerminate(): Promise<void>
 }
@@ -63,14 +75,14 @@ export function useExecutionActions(
     }
   }, [hostId, executionId, forget])
 
-  const handleSend = useCallback(async (text: string, opts?: SendOptions) => {
+  const handleSend = useCallback(async (text: string, opts?: SendOptions): Promise<boolean> => {
     const restoreDraft = opts?.restoreDraft ?? true
     // Re-entrancy guard: pendingSend is set
     // synchronously below, before the `await ensureLease()`, so a second
     // submit fired while the first lease acquisition is still in flight
     // reads the lock here and is a no-op — without this, a slow lease let
     // two sends race and both post (sharing the same pendingLocal bubble).
-    if (store().executions[key]?.pendingSend) return
+    if (store().executions[key]?.pendingSend) return false
     store().setSendError(hostId, executionId, null)
     if (restoreDraft) setDraft(null)
     touch()
@@ -80,7 +92,7 @@ export function useExecutionActions(
     try {
       const leaseId = await ensureLease()
       const r = await sendMessage(hostId, executionId, leaseId, text)
-      if (attempt !== sendAttempt.current) return
+      if (attempt !== sendAttempt.current) return false
       // execution.message_accepted (execution/service.go:794-807) can land
       // before this resolves and already clear pendingLocal + push the
       // durable bubble; writing it back unconditionally here would
@@ -90,14 +102,16 @@ export function useExecutionActions(
         store().setPendingLocal(hostId, executionId, { text, delivery: r.delivery })
       }
       store().setLastTurn(hostId, executionId, { turnId: r.turn_id, delivery: r.delivery })
+      return true
     } catch (e) {
       // Superseded: skip fail() too — a stale lease_* error must not forget
       // a lease the newer send may be using; that send reports its own.
-      if (attempt !== sendAttempt.current) return
+      if (attempt !== sendAttempt.current) return false
       store().setPendingLocal(hostId, executionId, null)
       store().setPendingSend(hostId, executionId, false)
-      if (restoreDraft) setDraft(text)
+      if (restoreDraft) setDraft(opts?.draftText ?? text)
       fail(e)
+      return false
     }
   }, [hostId, executionId, key, ensureLease, touch, fail])
 
