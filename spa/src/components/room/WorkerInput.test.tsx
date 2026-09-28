@@ -281,16 +281,47 @@ describe('WorkerInput — attachments (spec §9.1)', () => {
   })
 
   // A rich-text app (e.g. a chat client) puts an image rendition next to the
-  // text on copy — with text present, the ordinary paste must win and no
-  // upload should start.
-  it('a paste with both files and non-empty text lets the text paste through and does not upload', () => {
+  // text on copy. With non-empty text present the ordinary text paste wins
+  // (never cancelled) and only the image files are skipped — any other file
+  // on the clipboard is still attached (PR #1522 A2).
+  describe('a paste with files and non-empty text', () => {
+    const png = new File(['x'], 'shot.png', { type: 'image/png' })
+    const pdf = new File(['x'], 'doc.pdf', { type: 'application/pdf' })
+    const paste = (files: File[]) => {
+      const onAddFiles = vi.fn()
+      render(<WorkerInput onSend={vi.fn()} onAddFiles={onAddFiles} />)
+      const notCancelled = fireEvent.paste(screen.getByRole('textbox'), { clipboardData: { files, getData: (t: string) => (t === 'text/plain' ? 'hello' : '') } })
+      return { onAddFiles, notCancelled }
+    }
+
+    it('text + image: the text pastes, no chip', () => {
+      const { onAddFiles, notCancelled } = paste([png])
+      expect(notCancelled).toBe(true)
+      expect(onAddFiles).not.toHaveBeenCalled()
+    })
+
+    it('text + pdf: the text pastes and the pdf is attached', () => {
+      const { onAddFiles, notCancelled } = paste([pdf])
+      expect(notCancelled).toBe(true)
+      expect(onAddFiles).toHaveBeenCalledWith([pdf])
+    })
+
+    it('text + image + pdf: only the pdf is attached', () => {
+      const { onAddFiles, notCancelled } = paste([png, pdf])
+      expect(notCancelled).toBe(true)
+      expect(onAddFiles).toHaveBeenCalledTimes(1)
+      expect(onAddFiles).toHaveBeenCalledWith([pdf])
+    })
+  })
+
+  it('a files-only paste attaches every file, images included, and takes over the paste', () => {
     const onAddFiles = vi.fn()
     render(<WorkerInput onSend={vi.fn()} onAddFiles={onAddFiles} />)
-    const ta = screen.getByRole('textbox')
-    const file = new File(['x'], 'shot.png', { type: 'image/png' })
-    const event = fireEvent.paste(ta, { clipboardData: { files: [file], getData: () => 'hello' } })
-    expect(onAddFiles).not.toHaveBeenCalled()
-    expect(event).toBe(true) // not cancelled: preventDefault was not called
+    const png = new File(['x'], 'shot.png', { type: 'image/png' })
+    const pdf = new File(['x'], 'doc.pdf', { type: 'application/pdf' })
+    const notCancelled = fireEvent.paste(screen.getByRole('textbox'), { clipboardData: { files: [png, pdf], getData: () => '' } })
+    expect(notCancelled).toBe(false)
+    expect(onAddFiles).toHaveBeenCalledWith([png, pdf])
   })
 
   it('the + button opens a file picker whose files go to onAddFiles', () => {

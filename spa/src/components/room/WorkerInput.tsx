@@ -103,9 +103,15 @@ export default function WorkerInput({
     const files = Array.from(e.clipboardData?.files ?? [])
     if (files.length === 0) return
     // A rich-text app (e.g. a chat client) puts an image rendition alongside
-    // the text on copy; with non-empty text present, let the ordinary text
-    // paste happen and skip the upload — files-only still uploads.
-    if ((e.clipboardData?.getData('text/plain') ?? '') !== '') return
+    // the text on copy. With non-empty text present, let the ordinary text
+    // paste happen and skip only the image files (that rendition); any other
+    // file on the clipboard is still attached (PR #1522 A2). Files-only
+    // takes over the paste and attaches everything, images included.
+    if ((e.clipboardData?.getData('text/plain') ?? '') !== '') {
+      const others = files.filter((f) => !f.type.startsWith('image/'))
+      if (others.length > 0) onAddFiles(others)
+      return
+    }
     e.preventDefault()
     onAddFiles(files)
   }
