@@ -168,7 +168,7 @@ The light is drawn on this icon exactly as on a terminal agent icon. Separately,
 
 `displayTitle = primary + ' - ' + basename(cwd)`; primary is the first present of:
 1. `summary.session_title.text` (Nexen; carries `custom` → `agent_name` → `ai` precedence) — only when the capability says the field exists;
-2. the pre-handoff terminal title, recorded on the pane content (`from`-side) at Hand-to-nex time;
+2. the pre-handoff terminal title — the source session's own `pane_title` (agent marker stripped), recorded on the pane content at Hand-to-nex time; not the tab's composed label (which appends the session name);
 3. `firstLine(brief)`.
 
 Titles are sanitised for display (single line, truncated by CSS). No title → the locale's 執行 as today.
