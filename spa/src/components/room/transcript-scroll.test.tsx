@@ -116,6 +116,74 @@ describe.each(views)('%s transcript scrolling', (_name, Transcript) => {
     expect(scrollTo).toHaveBeenCalledTimes(1)
   })
 
+  // A3: the reader's own input during follow()'s smooth scroll ends it, so
+  // stopping short of the bottom on the way down is not "the box catching up".
+  it.each([
+    ['wheel', (box: HTMLElement) => fireEvent.wheel(box, { deltaY: 40 })],
+    ['touchstart', (box: HTMLElement) => fireEvent.touchStart(box)],
+    ['touchmove', (box: HTMLElement) => fireEvent.touchMove(box)],
+    ['pointerdown on the scrollbar', (box: HTMLElement) => fireEvent.pointerDown(box)],
+    ['PageDown', (box: HTMLElement) => fireEvent.keyDown(box, { key: 'PageDown' })],
+    ['ArrowDown', (box: HTMLElement) => fireEvent.keyDown(box, { key: 'ArrowDown' })],
+    ['Space', (box: HTMLElement) => fireEvent.keyDown(box, { key: ' ' })],
+  ])('A3: %s during follow()\'s smooth scroll, then stopping short of the bottom → no follow', (_input, act) => {
+    const ref = createRef<HTMLDivElement>()
+    let messages = [said('a')]
+    const { rerender } = render(T({ messages, scrollRef: ref }))
+    const box = ref.current!
+    geometry(box, 1000, 200, 800)
+    fireEvent.scroll(box)
+    messages = [...messages, said('b')]
+    rerender(T({ messages, scrollRef: ref }))
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 1000, behavior: 'smooth' })
+    // Mid-flight the reader takes over and stops going down short of the end.
+    geometry(box, 1400, 200, 850)
+    act(box)
+    geometry(box, 1400, 200, 900)
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    messages = [...messages, said('c')]
+    rerender(T({ messages, scrollRef: ref }))
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('A3: a click on the content or a non-scrolling key mid-flight does not end the smooth follow', () => {
+    const ref = createRef<HTMLDivElement>()
+    let messages = [said('a')]
+    const { rerender, getByText } = render(T({ messages, scrollRef: ref }))
+    const box = ref.current!
+    geometry(box, 1000, 200, 800)
+    fireEvent.scroll(box)
+    messages = [...messages, said('b')]
+    rerender(T({ messages, scrollRef: ref }))
+    fireEvent.pointerDown(getByText('a'))
+    fireEvent.keyDown(box, { key: 'c', metaKey: true })
+    geometry(box, 1400, 200, 900)
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    messages = [...messages, said('c')]
+    rerender(T({ messages, scrollRef: ref }))
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+  })
+
+  it('A3: after the reader takes over, reaching the bottom follows again', () => {
+    const ref = createRef<HTMLDivElement>()
+    let messages = [said('a')]
+    const { rerender } = render(T({ messages, scrollRef: ref }))
+    const box = ref.current!
+    geometry(box, 1000, 200, 800)
+    fireEvent.scroll(box)
+    messages = [...messages, said('b')]
+    rerender(T({ messages, scrollRef: ref }))
+    fireEvent.wheel(box, { deltaY: 40 })
+    geometry(box, 1400, 200, 1200)
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    messages = [...messages, said('c')]
+    rerender(T({ messages, scrollRef: ref }))
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+  })
+
   it('A4: with holdScroll new content follows only when the reader was at the bottom', () => {
     const ref = createRef<HTMLDivElement>()
     let messages = [said('a')]

@@ -16,7 +16,10 @@
 // - anywhere else, once the reader has moved → not at the bottom, moving up
 //   or down alike — except while a smooth scroll that `follow` itself
 //   started is still travelling down (`smoothTarget`): that is the box
-//   catching up, not the reader leaving. Moving up, or arriving, ends it;
+//   catching up, not the reader leaving. Moving up, arriving, or the
+//   reader's own scrolling input (wheel, touch, a press on the scrollbar, a
+//   scrolling key — A3) ends it: after that the position alone decides, so
+//   a reader who drags down and stops short of the end is not pulled on;
 // - `scrollTop` unchanged → the flag unchanged: growth makes the box taller
 //   under a reader at the bottom without moving them.
 //
@@ -56,6 +59,11 @@ import { readScrollMemo, writeScrollMemo, type ScrollMemo } from '../lib/nex/tra
 
 /** Within this many pixels of the end counts as the bottom (sub-pixel rounding, a last line's margin). */
 const NEAR_BOTTOM = 24
+
+/** Keys that scroll the box (A3). */
+const SCROLL_KEYS = new Set(['PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', ' ', 'Spacebar', 'End', 'Home'])
+/** Input that is always the reader scrolling (A3). */
+const SCROLL_INPUTS = ['wheel', 'touchstart', 'touchmove'] as const
 
 export interface TranscriptScroll {
   /** The container's callback ref: set on the scrolling div (forwards to the caller's `scrollRef`). */
@@ -132,10 +140,32 @@ export function useTranscriptScroll(
     holding.current = hold
   }, [hold])
 
+  // A3: the reader's own scrolling input ends follow()'s smooth scroll.
+  // Native listeners on the box, so neither transcript has to spread more
+  // handlers. A press counts only on the box itself (its scrollbar), not a
+  // click on the content; a key only when it scrolls.
+  const takeOver = useCallback((e: Event) => {
+    if (smoothTarget.current === null) return
+    if (e.type === 'pointerdown' && e.target !== e.currentTarget) return
+    if (e.type === 'keydown' && !SCROLL_KEYS.has((e as KeyboardEvent).key)) return
+    smoothTarget.current = null
+  }, [])
+
   const attach = useCallback((node: HTMLDivElement | null) => {
+    const prev = box.current
+    if (prev && prev !== node) {
+      for (const type of SCROLL_INPUTS) prev.removeEventListener(type, takeOver)
+      prev.removeEventListener('pointerdown', takeOver)
+      prev.removeEventListener('keydown', takeOver)
+    }
+    if (node && node !== prev) {
+      for (const type of SCROLL_INPUTS) node.addEventListener(type, takeOver, { passive: true })
+      node.addEventListener('pointerdown', takeOver)
+      node.addEventListener('keydown', takeOver)
+    }
     box.current = node
     assignRef(external, node)
-  }, [external])
+  }, [external, takeOver])
 
   const remember = useCallback((el: HTMLDivElement) => {
     const m = mem.current
