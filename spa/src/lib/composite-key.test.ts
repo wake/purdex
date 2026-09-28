@@ -30,4 +30,29 @@ describe('splitCompositeKey', () => {
       expect(splitCompositeKey(compositeKey(hostId, sessionCode))).toEqual({ hostId, sessionCode })
     }
   })
+
+  describe('exec split only applies at the `:exec:` immediately before the final segment', () => {
+    it('a plain tmux key is unchanged', () => {
+      expect(splitCompositeKey('h1:abc123')).toEqual({ hostId: 'h1', sessionCode: 'abc123' })
+    })
+
+    it('a tmux key whose host is literally "exec" is unchanged', () => {
+      expect(splitCompositeKey('exec:abc123')).toEqual({ hostId: 'exec', sessionCode: 'abc123' })
+    })
+
+    it('a worker key splits host from the exec:<id> code', () => {
+      expect(splitCompositeKey('h1:exec:e1')).toEqual({ hostId: 'h1', sessionCode: 'exec:e1' })
+    })
+
+    it('a host id containing ":" with a tmux code is unchanged', () => {
+      expect(splitCompositeKey('mlab:abc123:ses001')).toEqual({ hostId: 'mlab:abc123', sessionCode: 'ses001' })
+    })
+
+    it('a ":exec:" that is not immediately before the final segment does not trigger the exec split', () => {
+      // hostId "a:exec:b" with a plain tmux code "ses001" — the "exec:" here
+      // sits mid-host, not right before the trailing id, so this must fall
+      // back to the last-colon split, not be misread as a worker key.
+      expect(splitCompositeKey('a:exec:b:ses001')).toEqual({ hostId: 'a:exec:b', sessionCode: 'ses001' })
+    })
+  })
 })

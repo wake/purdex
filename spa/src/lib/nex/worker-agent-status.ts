@@ -4,8 +4,7 @@
 // `useAgentStore`'s consumers are reused unchanged (spec §8.1–8.2).
 import type { TurnOutcome } from './event-reducer'
 import type { SubagentRef } from '../../stores/useAgentStore'
-
-const EXEC_PREFIX = 'exec:'
+import { EXEC_PREFIX } from '../composite-key'
 
 /** The `useAgentStore` key namespace for a worker tab (spec §8.1) — never
  * collides with a tmux session code. */
