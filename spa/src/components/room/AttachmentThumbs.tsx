@@ -88,6 +88,7 @@ function RemoteThumb({ meta, source }: { meta: AttachmentMeta; source: { hostId:
   const hostId = source?.hostId ?? ''
   const executionId = source?.executionId ?? ''
   const sha256 = meta.sha256
+  const mediaType = meta.media_type
   const route = useNexHostStore(selectAttachmentFetch(hostId))
   const ready = useNexHostStore(selectReady(hostId))
   // What the last settled fetch was for; a new source, hash or route starts over.
@@ -101,7 +102,7 @@ function RemoteThumb({ meta, source }: { meta: AttachmentMeta; source: { hostId:
     withSlot(() => fetchAttachment(hostId, executionId, sha256, route), () => cancelled)
       .then((blob) => {
         if (cancelled || !blob) return
-        const safe = sanitizeImageBlob(blob, meta.media_type)
+        const safe = sanitizeImageBlob(blob, mediaType)
         if (!safe) { setResult({ want, state: { status: 'error' } }); return }
         url = URL.createObjectURL(safe)
         setResult({ want, state: { status: 'ready', url } })
@@ -111,14 +112,14 @@ function RemoteThumb({ meta, source }: { meta: AttachmentMeta; source: { hostId:
       cancelled = true
       if (url) URL.revokeObjectURL(url)
     }
-  }, [hostId, executionId, sha256, route, want])
+  }, [hostId, executionId, sha256, mediaType, route, want])
 
   // No route: still loading while the host's capabilities are on their way;
   // otherwise (no pane source, an older daemon, a host gone) it never comes.
   const state: ThumbState = !hostId || !executionId || (!route && ready) ? { status: 'error' }
     : result?.want === want ? result.state
     : { status: 'loading' }
-  return <ThumbView key={state.status === 'ready' ? state.url : state.status} state={state} mediaType={meta.media_type} />
+  return <ThumbView key={state.status === 'ready' ? state.url : state.status} state={state} mediaType={mediaType} />
 }
 
 /** A durable user line's images, fetched from the pane's host. */
