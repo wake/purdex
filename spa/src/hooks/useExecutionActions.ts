@@ -29,8 +29,9 @@ export interface SendOptions {
   attachments?: WireImageAttachment[]
   /**
    * The optimistic line's thumbnails for those images. The caller creates
-   * the object URLs; ExecutionView revokes them once `pendingLocal` drops
-   * this array (the same array is kept across the delivery update).
+   * the object URLs and hands them over: once on `pendingLocal` the store
+   * revokes them when it drops this array (the same array is kept across the
+   * delivery update); a re-entrant no-op send revokes them here.
    */
   previews?: { previewUrl: string; media_type: string }[]
 }
@@ -94,7 +95,12 @@ export function useExecutionActions(
     // submit fired while the first lease acquisition is still in flight
     // reads the lock here and is a no-op — without this, a slow lease let
     // two sends race and both post (sharing the same pendingLocal bubble).
-    if (store().executions[key]?.pendingSend) return false
+    if (store().executions[key]?.pendingSend) {
+      // The previews never reach the store, whose write-drop revoke owns
+      // them otherwise (useExecutionStore's revokeDroppedPreviews).
+      for (const p of opts?.previews ?? []) URL.revokeObjectURL(p.previewUrl)
+      return false
+    }
     store().setSendError(hostId, executionId, null)
     if (restoreDraft) setDraft(null)
     touch()

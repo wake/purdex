@@ -120,3 +120,31 @@ export const useExecutionStore = create<ExecutionStore>()(subscribeWithSelector(
     }),
   }
 }))
+
+/**
+ * The optimistic line's thumbnails (phase E) are owned here, by the store,
+ * not by a pane: `pendingLocal` is per-execution state that two panes may
+ * show at once, so no pane's unmount may revoke them. An array is revoked
+ * exactly once, on the write that drops it — pendingLocal cleared (accepted,
+ * failed, the execution or host cleared) or replaced by another array. The
+ * same array kept across the delivery update is not a drop.
+ */
+export function revokeDroppedPreviews(prev: Record<string, ExecutionState>, next: Record<string, ExecutionState>): void {
+  if (prev === next || typeof URL.revokeObjectURL !== 'function') return
+  for (const key in prev) {
+    const old = prev[key].pendingLocal?.attachments
+    if (!old || next[key]?.pendingLocal?.attachments === old) continue
+    for (const p of old) URL.revokeObjectURL(p.previewUrl)
+  }
+}
+
+const unsubscribeRevokeDroppedPreviews = useExecutionStore.subscribe((s, prev) => revokeDroppedPreviews(prev.executions, s.executions))
+
+// HMR-dispose so a hot-reload round-trip can't leave a second subscription
+// registered against the module-level store: without this, "revoked exactly
+// once" would stop being literally true after any edit to this file while
+// the dev server is running (each reload's new subscription piles onto the
+// old one, and the old one keeps the previous module's closure alive too).
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => unsubscribeRevokeDroppedPreviews())
+}

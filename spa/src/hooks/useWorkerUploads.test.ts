@@ -178,6 +178,32 @@ describe('useWorkerUploads', () => {
       expect(result.current.chips[1]).toMatchObject({ status: 'failed', error: 'attachment_too_large' })
     })
 
+    it('a native chip failed by markFailed is never re-planned or re-uploaded by a later add', async () => {
+      let text = ''
+      const limit = requestBytes('', [{ size: 30, type: 'image/png' }])
+      const { result } = renderHook(() => useWorkerUploads('h', 'exc_1', { caps: caps({ maxRequestBytes: limit }), getText: () => text }))
+      act(() => result.current.add([sized('a.png', 30)]))
+      const a = result.current.chips[0]
+      expect(a).toMatchObject({ kind: 'image' })
+      act(() => result.current.markFailed(a.key, 'attachment_too_large'))
+      expect(result.current.nativeFiles()).toEqual([])
+      // A longer draft would push `a` to path on a re-plan, and a demote uploads it.
+      text = 'a longer draft'
+      act(() => result.current.add([txt('b.txt')]))
+      await vi.waitFor(() => expect(result.current.chips[1].status).toBe('done'))
+      expect(vi.mocked(api.uploadWorkerFile).mock.calls.map((c) => c[2].name)).toEqual(['b.txt'])
+      expect(result.current.chips[0]).toMatchObject({ kind: 'image', status: 'failed', error: 'attachment_too_large' })
+    })
+
+    it('a failed native chip does not take a slot from a new image', () => {
+      const { result } = renderHook(() => useWorkerUploads('h', 'exc_1', { caps: caps({ max_count: 1 }), getText: () => '' }))
+      act(() => result.current.add([png('a.png')]))
+      act(() => result.current.markFailed(result.current.chips[0].key))
+      act(() => result.current.add([png('b.png')]))
+      expect(result.current.chips[1]).toMatchObject({ kind: 'image', status: 'done' })
+      expect(api.uploadWorkerFile).not.toHaveBeenCalled()
+    })
+
     it('removing a native chip forgets its file', () => {
       const { result } = renderHook(() => useWorkerUploads('h', 'exc_1', { caps: caps(), getText: () => '' }))
       act(() => result.current.add([png('a.png')]))

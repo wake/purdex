@@ -4,6 +4,7 @@ import { renderHook } from '@testing-library/react'
 import {
   NEX_HOST_TTL_MS,
   selectHandoffReady,
+  selectAttachmentFetch,
   selectImageAttachments,
   selectReady,
   selectRollupCostShown,
@@ -562,6 +563,49 @@ describe('selectors', () => {
     max_text_bytes: 1,
     max_request_bytes: 33554432,
     attachments: { image: imageCaps(overImage) },
+  })
+
+  describe('selectAttachmentFetch (E4)', () => {
+    it('is the capability fetch route itself (stable), whatever the provider list', () => {
+      seed({ capabilities: caps({ send: v15Send({ providers: [] }) }) })
+      const st = useNexHostStore.getState()
+      const route = selectAttachmentFetch(H)(st)
+      expect(route).toEqual({ method: 'GET', path: '/api/nex/v1/executions/{id}/attachments/{sha256}' })
+      expect(selectAttachmentFetch(H)(st)).toBe(route)
+    })
+
+    it('null when not ready, unknown, an older daemon, or a malformed route', () => {
+      seed({ phase: 'unavailable', capabilities: caps({ send: v15Send() }) })
+      expect(selectAttachmentFetch(H)(useNexHostStore.getState())).toBeNull()
+      expect(selectAttachmentFetch('ghost')(useNexHostStore.getState())).toBeNull()
+      seed({ capabilities: caps({ send: { delivery: ['text'], max_text_bytes: 1 } }) })
+      expect(selectAttachmentFetch(H)(useNexHostStore.getState())).toBeNull()
+      seed({ capabilities: caps({ send: v15Send({ fetch: { method: 'GET' } as never }) }) })
+      expect(selectAttachmentFetch(H)(useNexHostStore.getState())).toBeNull()
+    })
+
+    it('stays the same reference across a capabilities refetch when method+path are unchanged (fix round 1)', () => {
+      // A fresh `caps(...)` call is a brand-new object graph, as a real
+      // refetch's `commitLoaded` would install — content-equal but not
+      // identical to the first. The route must still come back `===`, or
+      // an effect keyed on it (AttachmentThumbs) revokes and refetches on
+      // every 60s capability refresh.
+      seed({ capabilities: caps({ send: v15Send() }) })
+      const first = selectAttachmentFetch(H)(useNexHostStore.getState())
+      seed({ capabilities: caps({ send: v15Send() }), generation: 2 })
+      const second = selectAttachmentFetch(H)(useNexHostStore.getState())
+      expect(second).toEqual(first)
+      expect(second).toBe(first)
+    })
+
+    it('a genuinely different path gets a new reference', () => {
+      seed({ capabilities: caps({ send: v15Send() }) })
+      const first = selectAttachmentFetch(H)(useNexHostStore.getState())
+      seed({ capabilities: caps({ send: v15Send({ fetch: { method: 'GET', path: '/elsewhere/{sha256}' } }) }), generation: 2 })
+      const second = selectAttachmentFetch(H)(useNexHostStore.getState())
+      expect(second).not.toBe(first)
+      expect(second).toEqual({ method: 'GET', path: '/elsewhere/{sha256}' })
+    })
   })
 
   describe('selectImageAttachments (E1)', () => {

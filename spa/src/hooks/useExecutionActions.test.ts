@@ -208,6 +208,23 @@ describe('useExecutionActions — native image attachments (phase E)', () => {
     expect(st().pendingLocal?.attachments).toBe(previews)
   })
 
+  it('a re-entrant no-op send revokes the previews it was handed (the store never saw them)', async () => {
+    const revoke = vi.fn()
+    const orig = URL.revokeObjectURL
+    Object.assign(URL, { revokeObjectURL: revoke })
+    try {
+      useExecutionStore.getState().setPendingSend(H, E, true)
+      const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+      let ok = true
+      await act(async () => { ok = await result.current.handleSend('t', { attachments, previews: [{ previewUrl: 'blob:x', media_type: 'image/png' }] }) })
+      expect(ok).toBe(false)
+      expect(revoke.mock.calls).toEqual([['blob:x']])
+      expect(api.sendMessage).not.toHaveBeenCalled()
+    } finally {
+      Object.assign(URL, { revokeObjectURL: orig })
+    }
+  })
+
   it('records the per-image attachment_index on the send error', async () => {
     vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'attachment_too_large', 'big', undefined, 1))
     const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))

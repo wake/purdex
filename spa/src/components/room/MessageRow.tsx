@@ -18,6 +18,8 @@ import RoomProse from './RoomProse'
 import RoomSubagentLine from './RoomSubagentLine'
 import RoomThinking from './RoomThinking'
 import RoomUserLine from './RoomUserLine'
+import AttachmentThumbs from './AttachmentThumbs'
+import { attachmentsOf } from '../../lib/nex/attachments'
 import SubagentBlock, { SubagentTaskSuffix } from './SubagentBlock'
 import type { RenderCtx } from './render-message'
 
@@ -175,6 +177,14 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
   // --- User messages ---
   if (msg.type === 'user' && 'message' in msg) {
     const um = msg as UserMessage
+    // Phase E: the images this line carried (the reducer's side field; a
+    // subagent's frame never has any). They go under the human's plain text
+    // line, or on a line of their own when there is none to hang them on —
+    // an image-only message (Review Focus 4) or a slash command.
+    const atts = fromSubagent ? undefined : attachmentsOf(msg)
+    const attsAt = atts
+      ? um.message.content.findIndex((b) => b.type === 'text' && !!b.text && b.text !== INTERRUPT_TEXT && !b.text.startsWith('/'))
+      : -1
     return (
       <div>
         {um.message.content.map((block, j) => {
@@ -209,11 +219,13 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
               )
             }
 
-            return <RoomUserLine key={j} text={block.text} searchUnit={anchor} />
+            return <RoomUserLine key={j} text={block.text} searchUnit={anchor}
+              attachments={atts && j === attsAt ? <AttachmentThumbs items={atts} /> : undefined} />
           }
 
           return null
         })}
+        {atts && attsAt < 0 && <RoomUserLine text="" attachments={<AttachmentThumbs items={atts} />} />}
       </div>
     )
   }

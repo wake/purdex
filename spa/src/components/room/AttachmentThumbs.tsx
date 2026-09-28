@@ -1,0 +1,168 @@
+// spa/src/components/room/AttachmentThumbs.tsx — the images a user line
+// carried (worker-pane theme phase E, nexen contract §1.9), shared by the
+// room and chat lines. A durable line knows only each image's metadata, so
+// every thumbnail fetches its bytes from the host's capability route
+// (`fetchAttachment`) — at most four fetches at a time across the whole app —
+// and turns them into an object URL it revokes on unmount. The optimistic
+// line already holds local object URLs (owned by the execution store) and
+// only draws them. While loading, and when a fetch fails (a 404
+// `attachment_not_found`, an older daemon, a host gone), the thumbnail is a
+// placeholder naming the media type — never an empty box (Review Focus 5).
+// A thumbnail that loaded opens the full image in a new tab.
+import { useContext, useEffect, useState } from 'react'
+import { Image as ImageIcon, ImageBroken } from '@phosphor-icons/react'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { selectAttachmentFetch, selectReady, useNexHostStore } from '../../stores/useNexHostStore'
+import { fetchAttachment } from '../../lib/nex/nex-api'
+import type { AttachmentMeta } from '../../lib/nex/attachments'
+import { AttachmentSourceContext } from './attachment-source'
+
+/** Fetches in flight at once, app-wide. */
+const ATTACHMENT_FETCH_CONCURRENCY = 4
+/**
+ * A held fetch is aborted after this long without settling (Review Focus
+ * A1): a host that's offline, or a half-open connection, would otherwise
+ * hold one of the four shared slots until the network eventually gives up
+ * on its own — four such requests starve every later thumbnail forever.
+ */
+const ATTACHMENT_FETCH_TIMEOUT_MS = 30_000
+let running = 0
+const waiting: Array<() => void> = []
+
+/** Run `task` once one of the shared slots is free; `cancelled` is re-checked when the slot is granted. */
+function withSlot<T>(task: () => Promise<T>, cancelled: () => boolean): Promise<T | undefined> {
+  return new Promise<T | undefined>((resolve, reject) => {
+    const start = () => {
+      if (cancelled()) { next(); resolve(undefined); return }
+      running++
+      task().then(resolve, reject).finally(() => { running--; next() })
+    }
+    if (running < ATTACHMENT_FETCH_CONCURRENCY) start()
+    else waiting.push(start)
+  })
+}
+function next() {
+  if (running < ATTACHMENT_FETCH_CONCURRENCY) waiting.shift()?.()
+}
+
+/** The only types ever opened as a `blob:` URL (top-level navigation via the new-tab link). */
+const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+
+/**
+ * Guards against trusting the daemon's `Content-Type` at face value: a blob
+ * is only ever handed to `URL.createObjectURL` (and so opened as a top-level
+ * `blob:` document via the thumbnail's link) when its type is one of
+ * `ALLOWED_IMAGE_TYPES`. If the fetched blob's own type isn't allowed but the
+ * attachment's declared `media_type` is, the blob is rewrapped with that type
+ * — a daemon that serves a stale or generic `Content-Type` while reporting
+ * the media type correctly in the attachment's own metadata. Otherwise this
+ * is a load error: no blob URL is created, no link is drawn.
+ */
+function sanitizeImageBlob(blob: Blob, mediaType: string): Blob | null {
+  if (ALLOWED_IMAGE_TYPES.has(blob.type)) return blob
+  if (ALLOWED_IMAGE_TYPES.has(mediaType)) return new Blob([blob], { type: mediaType })
+  return null
+}
+
+type ThumbState = { status: 'loading' } | { status: 'ready'; url: string } | { status: 'error' }
+
+function ThumbView({ state, mediaType }: { state: ThumbState; mediaType: string }) {
+  const t = useI18nStore((s) => s.t)
+  const [broken, setBroken] = useState(false)
+  if (state.status === 'ready' && !broken) {
+    return (
+      <a data-testid="attachment-thumb" data-state="ready" href={state.url} target="_blank" rel="noopener noreferrer"
+        title={t('worker.attachment.open', { type: mediaType })}
+        className="block shrink-0 rounded border border-border-subtle overflow-hidden hover:border-border-default">
+        <img src={state.url} alt={t('worker.attachment.image', { type: mediaType })} draggable={false}
+          onError={() => setBroken(true)} className="block h-16 max-w-[8rem] object-cover" />
+      </a>
+    )
+  }
+  const error = state.status === 'error' || broken
+  const label = t(error ? 'worker.attachment.unavailable' : 'worker.attachment.image', { type: mediaType })
+  return (
+    <div data-testid="attachment-thumb" data-state={error ? 'error' : 'loading'} role="img" aria-label={label} title={label}
+      className="flex h-16 w-16 shrink-0 flex-col items-center justify-center gap-0.5 rounded border border-dashed border-border-subtle text-text-muted">
+      {error ? <ImageBroken size={18} /> : <ImageIcon size={18} className="animate-pulse" />}
+      <span className="max-w-full truncate px-1 text-[10px] leading-tight">{mediaType}</span>
+    </div>
+  )
+}
+
+function RemoteThumb({ meta, source }: { meta: AttachmentMeta; source: { hostId: string; executionId: string } | null }) {
+  // Primitives only: the context value may be a fresh object on any render.
+  const hostId = source?.hostId ?? ''
+  const executionId = source?.executionId ?? ''
+  const sha256 = meta.sha256
+  const mediaType = meta.media_type
+  const route = useNexHostStore(selectAttachmentFetch(hostId))
+  const ready = useNexHostStore(selectReady(hostId))
+  // What the last settled fetch was for; a new source, hash or route starts over.
+  const want = `${hostId}\n${executionId}\n${sha256}\n${route?.method ?? ''} ${route?.path ?? ''}`
+  const [result, setResult] = useState<{ want: string; state: ThumbState } | null>(null)
+
+  useEffect(() => {
+    if (!hostId || !executionId || !route) return
+    let cancelled = false
+    let url: string | null = null
+    // Aborting `controller` — on unmount, or once the timeout fires — makes
+    // `fetchAttachment`'s underlying request reject right away, so `withSlot`
+    // releases the slot immediately instead of only once the network
+    // eventually settles on its own (Review Focus A1).
+    const controller = new AbortController()
+    // The 30s deadline is started inside the slotted task itself, not here
+    // at mount: a thumbnail queued behind four busy slots would otherwise
+    // carry a deadline that elapses before its fetch ever begins — and a
+    // whole batch of thumbnails queued together would then expire in
+    // lockstep the instant the four ahead of them finally time out, instead
+    // of each getting a full 30s once it's actually dequeued.
+    const task = () => {
+      const timeoutId = setTimeout(() => controller.abort(), ATTACHMENT_FETCH_TIMEOUT_MS)
+      return fetchAttachment(hostId, executionId, sha256, route, controller.signal)
+        .finally(() => clearTimeout(timeoutId))
+    }
+    withSlot(task, () => cancelled)
+      .then((blob) => {
+        if (cancelled || !blob) return
+        const safe = sanitizeImageBlob(blob, mediaType)
+        if (!safe) { setResult({ want, state: { status: 'error' } }); return }
+        url = URL.createObjectURL(safe)
+        setResult({ want, state: { status: 'ready', url } })
+      })
+      .catch(() => { if (!cancelled) setResult({ want, state: { status: 'error' } }) })
+    return () => {
+      cancelled = true
+      controller.abort()
+      if (url) URL.revokeObjectURL(url)
+    }
+  }, [hostId, executionId, sha256, mediaType, route, want])
+
+  // No route: still loading while the host's capabilities are on their way;
+  // otherwise (no pane source, an older daemon, a host gone) it never comes.
+  const state: ThumbState = !hostId || !executionId || (!route && ready) ? { status: 'error' }
+    : result?.want === want ? result.state
+    : { status: 'loading' }
+  return <ThumbView key={state.status === 'ready' ? state.url : state.status} state={state} mediaType={mediaType} />
+}
+
+/** A durable user line's images, fetched from the pane's host. */
+export default function AttachmentThumbs({ items }: { items: readonly AttachmentMeta[] }) {
+  const source = useContext(AttachmentSourceContext)
+  if (items.length === 0) return null
+  return (
+    <div data-testid="attachment-thumbs" className="flex flex-wrap gap-1.5">
+      {items.map((m, i) => <RemoteThumb key={`${i}-${m.sha256}`} meta={m} source={source} />)}
+    </div>
+  )
+}
+
+/** The optimistic line's images: local object URLs the execution store owns; drawn, never revoked here. */
+export function PendingAttachmentThumbs({ items }: { items: readonly { previewUrl: string; media_type: string }[] }) {
+  if (items.length === 0) return null
+  return (
+    <div data-testid="attachment-thumbs" className="flex flex-wrap gap-1.5">
+      {items.map((p, i) => <ThumbView key={`${i}-${p.previewUrl}`} state={{ status: 'ready', url: p.previewUrl }} mediaType={p.media_type} />)}
+    </div>
+  )
+}

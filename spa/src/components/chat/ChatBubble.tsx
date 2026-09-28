@@ -24,17 +24,23 @@ const SIDE = {
  * breaks kept; a slash command gets the mono face. `pending` dims it until
  * message_accepted; `children` follow the text (the pending line's `queued` tag).
  */
-export function ChatUserBubble({ text, pending, children, searchUnit }: {
+export function ChatUserBubble({ text, pending, children, searchUnit, attachments }: {
   text: string
   pending?: boolean
   children?: ReactNode
   /** The search anchor of a durable line's text. */
   searchUnit?: string
+  /** Image thumbnails (phase E), under the text inside the bubble; an image-only bubble has no text row. */
+  attachments?: ReactNode
 }) {
   const face = text.startsWith('/') ? 'font-mono text-[13px]' : 'text-sm'
+  const tail = children != null && children !== false
+  const textRow = <p className="whitespace-pre-wrap break-words"><span data-search-unit={searchUnit}>{text}</span>{tail && <> {children}</>}</p>
   return (
     <ChatBubble side="user" className={pending ? `${face} opacity-60` : face}>
-      <p className="whitespace-pre-wrap break-words"><span data-search-unit={searchUnit}>{text}</span>{children != null && children !== false && <> {children}</>}</p>
+      {attachments
+        ? <div className="flex flex-col gap-1.5">{(text || tail) && textRow}{attachments}</div>
+        : textRow}
     </ChatBubble>
   )
 }

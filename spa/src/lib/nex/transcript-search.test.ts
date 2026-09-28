@@ -37,6 +37,18 @@ function units(messages: StreamMessage[], view: 'room' | 'chat', extra: Partial<
   })
 }
 
+describe('buildSearchUnits — image attachments (phase E)', () => {
+  it('thumbnails are not search units: the index is the same with or without purdex_attachments', () => {
+    const att = { purdex_attachments: [{ media_type: 'image/png', bytes: 1, sha256: 'a'.repeat(64) }] }
+    const plain = [said('look at image/png'), said(''), asst({ type: 'text', text: 'ok' })]
+    const withImages = [{ ...plain[0], ...att }, { ...plain[1], ...att }, plain[2]] as StreamMessage[]
+    for (const view of ['room', 'chat'] as const) {
+      expect(units(withImages, view, { turnStarts: [0, 1] })).toEqual(units(plain, view, { turnStarts: [0, 1] }))
+    }
+    expect(units(withImages, 'room').map((u) => u.text)).toEqual(['look at image/png', 'ok'])
+  })
+})
+
 describe('buildSearchUnits / findMatches', () => {
   it('finds a match in folded tool output and lists the key that reveals it', () => {
     const long = Array.from({ length: 50 }, (_, n) => `line ${n}`).join('\n') + '\nneedle here'

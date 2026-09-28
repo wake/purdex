@@ -141,6 +141,47 @@ export function selectImageAttachments(
 }
 
 /**
+ * Interns `selectAttachmentFetch`'s result by `method + '\n' + path`. A ready
+ * host's `capabilities` object is replaced wholesale on every refetch (the
+ * same 60s TTL `ensure`/`invalidate` cycle documented on
+ * `imageAttachmentsCache` above), so the raw `send.attachments.image.fetch`
+ * object gets a fresh identity each time even when its content is unchanged.
+ * `AttachmentThumbs` keys a fetch/revoke effect on this selector's result, so
+ * without interning, every capability refresh revoked and refetched every
+ * visible thumbnail. A plain `Map` (not `WeakMap`) is correct here: the key
+ * is a string, not an object, and the keyspace is bounded — realistically one
+ * route for the life of the app, a handful across daemon versions.
+ */
+const attachmentFetchInterned = new Map<string, { method: string; path: string }>()
+
+/**
+ * `capabilities.send.attachments.image.fetch` of a ready host — the route a
+ * replayed image attachment is fetched back from (nexen contract §1.9) — or
+ * null (not ready, unknown host, an older daemon, a malformed route). Not
+ * gated on `providers`: that list says who may *send* images now, while a
+ * stored attachment stays fetchable whatever the host's runners are today.
+ * Returns an interned object (see `attachmentFetchInterned`), so the result
+ * is stable both within one capabilities snapshot and across a content-equal
+ * refetch.
+ */
+export function selectAttachmentFetch(hostId: string): (s: Pick<NexHostState, 'byHost'>) => { method: string; path: string } | null {
+  return (s) => {
+    const entry = s.byHost[hostId]
+    if (entry?.phase !== 'ready' || !entry.capabilities) return null
+    const route = entry.capabilities.send?.attachments?.image?.fetch
+    if (typeof route !== 'object' || route === null) return null
+    if (typeof route.method !== 'string' || typeof route.path !== 'string') return null
+    const key = `${route.method}\n${route.path}`
+    let interned = attachmentFetchInterned.get(key)
+    if (!interned) {
+      interned = { method: route.method, path: route.path }
+      attachmentFetchInterned.set(key, interned)
+    }
+    return interned
+  }
+}
+
+/**
  * Whether the top-level `capabilities.session_title` object exists (nexen
  * contract §0/§1.10) — the only feature detect for the execution summary's
  * `session_title` field and the `execution.title_changed` event; never a
