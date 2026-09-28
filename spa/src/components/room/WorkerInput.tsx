@@ -1,8 +1,14 @@
 // spa/src/components/room/WorkerInput.tsx — the worker pane's reply field
 // (spec §3.1.1 #6, §4.8): full width, no border box, one hairline separator
 // above it, growing with the text up to MAX_INPUT_PX and scrolling past that.
+// Attachments (worker-pane theme spec §9.1): the chips live in ExecutionView
+// (this input remounts on a restored draft); here they render above the
+// textarea, gate the send, and paste / the `+` picker hand files up.
 import { useState, useRef, useCallback, useEffect } from 'react'
+import { Plus } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { canSend, type Chip } from '../../lib/nex/worker-upload'
+import UploadChips from './UploadChips'
 
 /** Ceiling for the auto-grown textarea, so a long paste can't squeeze the transcript away. */
 const MAX_INPUT_PX = 200
@@ -35,13 +41,26 @@ interface Props {
   focused?: boolean
   /** Seeds the textarea (e.g. restoring text after a failed send). */
   initialValue?: string
+  /** Files attached to the next message; one uploading or failed blocks the send. */
+  chips?: readonly Chip[]
+  onRemoveChip?: (key: string) => void
+  /** Pasted or picked files; without it there is no `+` button and a paste is plain text. */
+  onAddFiles?: (files: File[]) => void
 }
 
-export default function WorkerInput({ onSend, disabled = false, placeholder, focused = false, initialValue }: Props) {
+const NO_CHIPS: readonly Chip[] = []
+const noop = () => {}
+
+export default function WorkerInput({
+  onSend, disabled = false, placeholder, focused = false, initialValue, chips = NO_CHIPS, onRemoveChip, onAddFiles,
+}: Props) {
   const t = useI18nStore((s) => s.t)
   const resolvedPlaceholder = placeholder ?? t('worker.input.placeholder')
   const [value, setValue] = useState(initialValue ?? '')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const pickerRef = useRef<HTMLInputElement>(null)
+  const gate = canSend(chips)
+  const hasAttachment = chips.some((c) => c.status === 'done')
 
   useEffect(() => {
     if (focused && !disabled) {
@@ -62,7 +81,8 @@ export default function WorkerInput({ onSend, disabled = false, placeholder, foc
 
   function send() {
     const trimmed = value.trim()
-    if (!trimmed) return
+    if (!trimmed && !hasAttachment) return
+    if (!gate.ok) return
     onSend(trimmed)
     setValue('')
     if (textareaRef.current) {
@@ -78,21 +98,66 @@ export default function WorkerInput({ onSend, disabled = false, placeholder, foc
     }
   }
 
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (!onAddFiles) return
+    const files = Array.from(e.clipboardData?.files ?? [])
+    if (files.length === 0) return
+    // A rich-text app (e.g. a chat client) puts an image rendition alongside
+    // the text on copy. With non-empty text present, let the ordinary text
+    // paste happen and skip only the image files (that rendition); any other
+    // file on the clipboard is still attached (PR #1522 A2). Files-only
+    // takes over the paste and attaches everything, images included.
+    if ((e.clipboardData?.getData('text/plain') ?? '') !== '') {
+      const others = files.filter((f) => !f.type.startsWith('image/'))
+      if (others.length > 0) onAddFiles(others)
+      return
+    }
+    e.preventDefault()
+    onAddFiles(files)
+  }
+
   return (
     <div className={`w-full border-t border-border-subtle bg-surface-input transition-colors ${
       disabled ? 'opacity-40' : 'focus-within:border-border-active'
     }`}>
-      <textarea
-        ref={textareaRef}
-        role="textbox"
-        value={value}
-        onChange={e => { setValue(e.target.value); autoGrow() }}
-        onKeyDown={handleKeyDown}
-        disabled={disabled}
-        placeholder={resolvedPlaceholder}
-        rows={1}
-        className="block w-full bg-transparent text-text-primary placeholder-text-muted px-3 py-2.5 text-sm outline-none resize-none"
-      />
+      <UploadChips chips={chips} onRemove={onRemoveChip ?? noop} />
+      {!gate.ok && (
+        <div data-testid="upload-block" role="status" aria-live="polite" className={`px-3 pt-1 text-xs ${gate.reason === 'failed' ? 'text-status-error' : 'text-text-muted'}`}>
+          {t(gate.reason === 'failed' ? 'worker.upload.failed_remove' : 'worker.upload.wait')}
+        </div>
+      )}
+      <div className="flex items-start">
+        {onAddFiles && (
+          <>
+            <button type="button" onClick={() => pickerRef.current?.click()} disabled={disabled}
+              aria-label={t('worker.upload.attach')} title={t('worker.upload.attach')}
+              className="shrink-0 ml-1.5 mt-1.5 p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:cursor-default">
+              <Plus size={14} />
+            </button>
+            {/* The OS picker can outlive the input being enabled (a send went
+                out, the worker ended); what it returns then is dropped (PR #1522 A3). */}
+            <input ref={pickerRef} data-testid="attach-input" type="file" multiple hidden tabIndex={-1} disabled={disabled}
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? [])
+                e.target.value = ''
+                if (disabled) return
+                if (files.length > 0) onAddFiles(files)
+              }} />
+          </>
+        )}
+        <textarea
+          ref={textareaRef}
+          role="textbox"
+          value={value}
+          onChange={e => { setValue(e.target.value); autoGrow() }}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          disabled={disabled}
+          placeholder={resolvedPlaceholder}
+          rows={1}
+          className="block w-full bg-transparent text-text-primary placeholder-text-muted px-3 py-2.5 text-sm outline-none resize-none"
+        />
+      </div>
     </div>
   )
 }

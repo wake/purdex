@@ -12,7 +12,8 @@
 // ExecutionHeader); switching is local — the subscription, the store and the
 // lease are untouched, so nothing is refetched.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, DragEvent } from 'react'
+import { UploadSimple } from '@phosphor-icons/react'
 import RoomTranscript from '../room/RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
 import { ChatUserBubble } from '../chat/ChatBubble'
@@ -33,7 +34,9 @@ import { getWorkerTheme, workerThemeStyle } from '../../lib/worker-theme/registr
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useExecutionSubscription } from '../../hooks/useExecutionSubscription'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
-import { useExecutionActions } from '../../hooks/useExecutionActions'
+import { useExecutionActions, type SendOptions } from '../../hooks/useExecutionActions'
+import { useWorkerUploads } from '../../hooks/useWorkerUploads'
+import { canSend, composeWithAttachments } from '../../lib/nex/worker-upload'
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
@@ -96,6 +99,12 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const { problem } = useExecutionSubscription(hostId, executionId, isActive)
   const lease = useExecutionLease(hostId, executionId)
   const { draft, actionPending, handleSend, handleInterrupt, handleTerminate } = useExecutionActions(hostId, executionId, lease)
+  // Spec §9.1: attachments. The chips live here, not in WorkerInput — the
+  // input is re-keyed on the restored draft and remounts after a failed send —
+  // and the whole pane is the drop target (TerminalView's overlay pattern).
+  const uploads = useWorkerUploads(hostId, executionId)
+  const [dragging, setDragging] = useState(false)
+  const dragDepth = useRef(0)
 
   // Take-back: `takeBack` is single-flight per execution, but the busy flag
   // is what the header shows; the ref keeps a same-tick second click from
@@ -288,6 +297,50 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     : streamDead ? t('execution.input.disconnected')
     : undefined
   const leaseHeld = st.leaseError?.code === 'lease_held'
+
+  // Every user send — typed or a quick reply — goes through here (PR #1522
+  // A1): an uploading or failed chip blocks it, and otherwise the done chips
+  // ride along as `[file: …]` lines. The chips go only once the daemon
+  // accepted it; only the chips that went out are cleared — one added
+  // meanwhile stays for the next message. A typed send's failure restores
+  // just the typed text as the draft (the chips stay where they are); a quick
+  // reply passes `restoreDraft: false` and leaves the input alone.
+  const attachGate = canSend(uploads.chips)
+  const sendWithAttachments = async (text: string, opts: SendOptions) => {
+    if (!canSend(uploads.chips).ok) return
+    const sent = uploads.chips.filter((c) => c.status === 'done')
+    const ok = await handleSend(composeWithAttachments(text, sent), opts)
+    if (ok) uploads.clear(sent.map((c) => c.key))
+  }
+  // A file dragged over the pane must never fall through to the browser's
+  // default (Electron would navigate to it), so every file drag is claimed;
+  // an ended execution just shows no overlay and takes nothing.
+  const canAttach = !ended && !takeBackBusy
+  // The drop target matches the disabled `+` button (worker.upload.attach):
+  // while sending, mid-take-back, history still loading or the stream dead,
+  // neither offers to attach.
+  const canDrop = canAttach && !inputDisabled
+  const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files')
+  const onDragEnter = (e: DragEvent) => {
+    if (!hasFiles(e)) return
+    e.preventDefault()
+    if (!canDrop) return
+    dragDepth.current++
+    if (dragDepth.current === 1) setDragging(true)
+  }
+  const onDragOver = (e: DragEvent) => { if (hasFiles(e)) e.preventDefault() }
+  const onDragLeave = (e: DragEvent) => {
+    if (!hasFiles(e)) return
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (dragDepth.current === 0) setDragging(false)
+  }
+  const onDrop = (e: DragEvent) => {
+    if (!hasFiles(e)) return
+    e.preventDefault()
+    dragDepth.current = 0
+    setDragging(false)
+    if (canDrop) uploads.add(Array.from(e.dataTransfer.files))
+  }
   const errorText = st.sendError
     ? (KNOWN_ERROR_KEYS.has(st.sendError.code) ? t(`execution.error.${st.sendError.code}`) : t('execution.error.generic', { message: st.sendError.message }))
     : null
@@ -322,7 +375,9 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
 
   return (
     <div ref={rootRef} data-testid="execution-view" data-worker-theme={workerTheme.id} style={workerThemeVars as CSSProperties}
-      onPointerDownCapture={markInteracted} onFocusCapture={markInteracted} className="flex flex-col h-full">
+      onPointerDownCapture={markInteracted} onFocusCapture={markInteracted}
+      onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+      className="relative flex flex-col h-full">
       <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
         onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal || takeBackBusy}
         onTakeBack={from || canTakeToTerminal ? onTakeBack : undefined} takeBackBusy={takeBackBusy || writeInFlight}
@@ -371,9 +426,19 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
       {errorText && <div data-testid="send-error" className="mx-2 mb-1 text-xs text-status-error">{errorText}</div>}
       {/* R3 T2.1: part of the input, so in chat too. A tap sends at once and
           never restores a draft — that would remount the input over what is typed. */}
-      <QuickReplyDock replies={quickReplies} onSend={(text) => void handleSend(text, { restoreDraft: false })} disabled={inputDisabled} />
-      <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void handleSend(text)}
-        disabled={inputDisabled} placeholder={placeholder} focused={isActive} />
+      <QuickReplyDock replies={quickReplies} onSend={(text) => void sendWithAttachments(text, { restoreDraft: false })}
+        disabled={inputDisabled || !attachGate.ok} />
+      <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => void sendWithAttachments(text, { draftText: text })}
+        disabled={inputDisabled} placeholder={placeholder} focused={isActive}
+        chips={uploads.chips} onRemoveChip={uploads.remove} onAddFiles={canAttach ? uploads.add : undefined} />
+      {dragging && (
+        <div data-testid="drop-overlay"
+          className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none z-20"
+          style={{ background: 'rgba(0, 0, 0, 0.6)' }}>
+          <UploadSimple size={32} className="text-text-secondary" />
+          <span className="text-text-secondary text-sm">{t('upload.drop_files')}</span>
+        </div>
+      )}
     </div>
   )
 }

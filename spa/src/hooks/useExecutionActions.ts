@@ -32,9 +32,10 @@ export interface ExecutionActions {
   /** An interrupt or terminate request is in flight (sends are tracked by the store's `pendingSend`). */
   actionPending: boolean
   /**
-   * Resolves true when the message was accepted by the daemon and this attempt
-   * was not superseded; false on the re-entrant no-op, on failure, and for a
-   * superseded attempt.
+   * Resolves true whenever the daemon accepted the message — including an
+   * attempt superseded by a later send before it settled, so a caller that
+   * clears state keyed on this send (e.g. the chips it composed in) still
+   * does so. False only for the re-entrant no-op and on failure.
    */
   handleSend(text: string, opts?: SendOptions): Promise<boolean>
   handleInterrupt(): Promise<void>
@@ -92,7 +93,10 @@ export function useExecutionActions(
     try {
       const leaseId = await ensureLease()
       const r = await sendMessage(hostId, executionId, leaseId, text)
-      if (attempt !== sendAttempt.current) return false
+      // Superseded but accepted: still true (the daemon has it) — only the
+      // local bubble/lock/lastTurn writes below are skipped, since they'd
+      // stomp the newer send's state.
+      if (attempt !== sendAttempt.current) return true
       // execution.message_accepted (execution/service.go:794-807) can land
       // before this resolves and already clear pendingLocal + push the
       // durable bubble; writing it back unconditionally here would

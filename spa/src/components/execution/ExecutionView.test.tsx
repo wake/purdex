@@ -18,7 +18,7 @@ import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
 
-vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn() }))
+vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
@@ -1718,5 +1718,136 @@ describe('ExecutionView — dock tasks (R4 T3.2)', () => {
     fireEvent.click(screen.getByTestId('worker-dock-toggle'))
     fireEvent.click(screen.getByTestId('worker-dock-inspect'))
     expect(intoView).not.toHaveBeenCalled()
+  })
+})
+
+// Worker pane theme spec §9.1: files attached by path. The chips live here,
+// not in WorkerInput (re-keyed on the draft), and the whole pane is the drop target.
+describe('ExecutionView — attachments', () => {
+  const txt = (name: string) => new File(['x'], name, { type: 'text/plain' })
+  const saved = (name: string) => `/Users/w/repo/.purdex-uploads/${E}/${name}`
+  const dropFiles = (files: File[]) => {
+    const root = screen.getByTestId('execution-view')
+    fireEvent.dragEnter(root, { dataTransfer: { types: ['Files'], files } })
+    expect(screen.getByTestId('drop-overlay')).toHaveTextContent('Drop files to upload')
+    fireEvent.drop(root, { dataTransfer: { types: ['Files'], files } })
+  }
+  beforeEach(() => {
+    vi.mocked(api.uploadWorkerFile).mockReset().mockImplementation(async (_h, _e, f) => ({ path: saved(f.name), name: f.name, size: 1 }))
+  })
+
+  it('a drop on the pane root (not the input) shows the overlay and uploads each file in order', async () => {
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([txt('a.txt'), txt('b.txt')])
+    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+    await waitFor(() => expect(screen.getAllByTestId('upload-chip').map((c) => c.dataset.status)).toEqual(['done', 'done']))
+    expect(vi.mocked(api.uploadWorkerFile).mock.calls.map((c) => [c[0], c[1], c[2].name])).toEqual([[H, E, 'a.txt'], [H, E, 'b.txt']])
+  })
+
+  it('a drag without files shows no overlay', () => {
+    render(<ExecutionView {...base} isActive />)
+    fireEvent.dragEnter(screen.getByTestId('execution-view'), { dataTransfer: { types: ['text/plain'], files: [] } })
+    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+  })
+
+  it('a successful send composes the text exactly and clears the chips', async () => {
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([txt('a.txt'), txt('b.txt')])
+    await waitFor(() => expect(screen.getAllByTestId('upload-chip').every((c) => c.dataset.status === 'done')).toBe(true))
+    const box = screen.getByRole('textbox')
+    fireEvent.change(box, { target: { value: 'read these' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1',
+      `read these\n\n[file: ${saved('a.txt')}]\n[file: ${saved('b.txt')}]`))
+    await waitFor(() => expect(screen.queryAllByTestId('upload-chip')).toHaveLength(0))
+  })
+
+  it('a failed send keeps the chips and restores only the typed text', async () => {
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'too long'))
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([txt('a.txt')])
+    await waitFor(() => expect(screen.getByTestId('upload-chip').dataset.status).toBe('done'))
+    const box = screen.getByRole('textbox')
+    fireEvent.change(box, { target: { value: 'typed' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(screen.getByTestId('send-error')).toBeInTheDocument())
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('typed')
+    expect(screen.getAllByTestId('upload-chip')).toHaveLength(1)
+  })
+
+  it('send is blocked while a file is still uploading', async () => {
+    vi.mocked(api.uploadWorkerFile).mockReset().mockReturnValue(new Promise(() => {}))
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([txt('a.txt')])
+    const box = screen.getByRole('textbox')
+    fireEvent.change(box, { target: { value: 'hi' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await act(async () => {})
+    expect(api.sendMessage).not.toHaveBeenCalled()
+    expect(screen.getByTestId('upload-block')).toHaveTextContent('Waiting for uploads to finish…')
+  })
+
+  it('an ended execution takes no drop', () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
+    render(<ExecutionView {...base} isActive />)
+    fireEvent.dragEnter(screen.getByTestId('execution-view'), { dataTransfer: { types: ['Files'], files: [txt('a.txt')] } })
+    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+  })
+
+  // PR #1522 A1: a quick reply goes through the same attachment-aware send as
+  // a typed message — blocked by an uploading / failed chip, and carrying the
+  // done chips (then clearing them) otherwise.
+  describe('quick replies share the attachment gate', () => {
+    beforeEach(() => {
+      const e = emptyHostConfigEntry('ready')
+      useHostConfigStore.setState({ byHost: { [H]: { ...e, quickReplies: [{ id: 'go', text: 'go on' }], quickRepliesSupported: true, revisions: { ...e.revisions, quickReplies: 1 } } } })
+    })
+
+    it('an uploading chip blocks a quick reply (disabled, reason shown, nothing sent)', async () => {
+      vi.mocked(api.uploadWorkerFile).mockReset().mockReturnValue(new Promise(() => {}))
+      render(<ExecutionView {...base} isActive />)
+      dropFiles([txt('a.txt')])
+      const btn = screen.getByTestId('quick-reply')
+      expect(btn).toBeDisabled()
+      fireEvent.click(btn)
+      await act(async () => {})
+      expect(api.sendMessage).not.toHaveBeenCalled()
+      expect(screen.getByTestId('upload-block')).toHaveTextContent('Waiting for uploads to finish…')
+    })
+
+    it('a failed chip blocks a quick reply', async () => {
+      vi.mocked(api.uploadWorkerFile).mockReset().mockRejectedValue(new NexApiError(413, 'file_too_large', 'too big'))
+      render(<ExecutionView {...base} isActive />)
+      dropFiles([txt('a.txt')])
+      await waitFor(() => expect(screen.getByTestId('upload-chip').dataset.status).toBe('failed'))
+      const btn = screen.getByTestId('quick-reply')
+      expect(btn).toBeDisabled()
+      fireEvent.click(btn)
+      await act(async () => {})
+      expect(api.sendMessage).not.toHaveBeenCalled()
+      expect(screen.getByTestId('upload-block')).toHaveTextContent('An upload failed — remove it to send')
+    })
+
+    it('with done chips, a quick reply carries their [file:] lines and clears them', async () => {
+      render(<ExecutionView {...base} isActive />)
+      dropFiles([txt('a.txt')])
+      await waitFor(() => expect(screen.getByTestId('upload-chip').dataset.status).toBe('done'))
+      fireEvent.click(screen.getByTestId('quick-reply'))
+      await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', `go on\n\n[file: ${saved('a.txt')}]`))
+      await waitFor(() => expect(screen.queryAllByTestId('upload-chip')).toHaveLength(0))
+    })
+  })
+
+  // Matches the disabled `+` button: while a send is in flight the input is
+  // disabled, so a drop must not open the overlay or upload either.
+  it('takes no drop while the input is disabled (a send in flight)', () => {
+    act(() => useExecutionStore.getState().setPendingSend(H, E, true))
+    render(<ExecutionView {...base} isActive />)
+    const root = screen.getByTestId('execution-view')
+    fireEvent.dragEnter(root, { dataTransfer: { types: ['Files'], files: [txt('a.txt')] } })
+    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+    fireEvent.drop(root, { dataTransfer: { types: ['Files'], files: [txt('a.txt')] } })
+    expect(screen.queryAllByTestId('upload-chip')).toHaveLength(0)
+    expect(api.uploadWorkerFile).not.toHaveBeenCalled()
   })
 })
