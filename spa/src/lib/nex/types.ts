@@ -47,6 +47,15 @@ export interface ExecutionSummary {
   last_tool?: { name: string; tool_use_id: string; at: number }
   running_tasks?: number
   activity?: WorkerActivity
+  /**
+   * A human-readable name for the provider session, read from the transcript
+   * (nexen contract §1.10). Key absent = no title yet — NOT null, NOT `{}`,
+   * NOT `text: ""`. Present ⇒ `text` is always non-empty. `source` is the
+   * closed vocabulary in `capabilities.session_title.sources`, in priority
+   * order (`custom` highest); typed loosely here since an older/newer daemon
+   * could in principle send a value outside today's three.
+   */
+  session_title?: { text: string; source: 'custom' | 'agent_name' | 'ai' | string }
 }
 
 /** `activity` on an execution summary. `phase` is an open set — read it through `normalizePhase`. */
@@ -135,6 +144,28 @@ export interface EventsPage {
   next_cursor: number
 }
 
+/**
+ * `capabilities.send.attachments.image` (nexen contract §0/§1.9). The whole
+ * object being absent = this daemon does not accept images; presence plus
+ * `providers` including the execution's `provider` is the ONLY feature
+ * detect (never a version compare). Numbers are the daemon's actual caps —
+ * a client must never hard-code them.
+ */
+export interface ImageAttachmentCaps {
+  /** Accepted `media_type`s; anything else → 400 `attachment_type_unsupported`. */
+  media_types: string[]
+  /** Per-image **decoded** byte cap (not the base64 length); over → 400 `attachment_too_large`. */
+  max_bytes: number
+  /** Max images in one message; over → 400 `too_many_attachments`. */
+  max_count: number
+  /** Sum of all images' **decoded** bytes in one message; over → 400 `attachments_too_large`. */
+  max_total_bytes: number
+  /** Providers this host currently has a runner for AND that support image input. */
+  providers: string[]
+  /** Route to fetch the original image back; `path` is origin-relative and already carries `PublicPrefix`. */
+  fetch: { method: string; path: string }
+}
+
 export interface NexCapabilities {
   phase: string
   host_id: string
@@ -153,7 +184,18 @@ export interface NexCapabilities {
     renew: { method: string; path: string }
     release: { method: string; path: string }
   }
-  send: { delivery: string[]; max_text_bytes: number }
+  send: {
+    delivery: string[]
+    max_text_bytes: number
+    /**
+     * The whole request body cap (bytes) shared by `send` and `delegate`
+     * (nexen contract §0/§1.9, 32 MiB); over → 413 `request_too_large`.
+     * Absent on a daemon older than 2026-09-28.
+     */
+    max_request_bytes?: number
+    /** Absent object, or `image` absent inside it, ⇒ this daemon does not accept images (fail-closed). */
+    attachments?: { image?: ImageAttachmentCaps }
+  }
   brief?: { max_bytes: number }
   origin?: { max_bytes: number }
   labels?: {
@@ -163,7 +205,18 @@ export interface NexCapabilities {
     max_total_bytes: number
     reserved_prefix: string
   }
-  delegate?: { resume_session_id?: boolean }
+  delegate?: {
+    resume_session_id?: boolean
+    /** This build accepts `attachments` on delegate's first turn; absent/false on a daemon that does not. */
+    attachments?: boolean
+  }
+  /**
+   * Presence = this build may put `session_title` on execution summaries and
+   * emits `execution.title_changed` (nexen contract §0/§1.10). Absence =
+   * older daemon; consumer falls back on its own. Presence does NOT mean
+   * every execution has a title (§2 #62) — callers still need a fallback.
+   */
+  session_title?: { sources: string[]; max_bytes: number }
   /**
    * Presence = the daemon emits the N2 `tool_use` / `tool_result` events
    * (nexen contract §0). The exec pane does NOT branch on it (P-B3 spec

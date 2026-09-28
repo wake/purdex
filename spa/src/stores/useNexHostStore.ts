@@ -9,7 +9,7 @@ import { create } from 'zustand'
 import { createNexHostEffects, type NexHostEntries } from '../lib/nex/nex-host-effects'
 import { hostFingerprint } from '../lib/nex/nex-host-reducer'
 import { useHostStore } from './useHostStore'
-import type { WorkerRollupCapability } from '../lib/nex/types'
+import type { ImageAttachmentCaps, WorkerRollupCapability } from '../lib/nex/types'
 
 export { NEX_HOST_TTL_MS, type NexHostEntry, type NexHostPhase } from '../lib/nex/nex-host-reducer'
 
@@ -70,6 +70,66 @@ export function selectWorkerRollup(hostId: string): (s: Pick<NexHostState, 'byHo
 export function selectRollupCostShown(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
   const rollup = selectWorkerRollup(hostId)
   return (s) => rollup(s)?.cost_basis === 'result_evidence'
+}
+
+/** A number the wire may hand us that we can actually use as a byte cap: finite and > 0. */
+function isUsableCap(n: unknown): n is number {
+  return typeof n === 'number' && Number.isFinite(n) && n > 0
+}
+
+/**
+ * `capabilities.send.attachments.image` of a ready host, gated on `provider`
+ * (nexen contract §0/§1.9, fail-closed per §1.9 rules 1–2): null unless the
+ * capability object exists AND its `providers` includes `provider` AND its
+ * three byte/count caps are all usable numbers. `maxRequestBytes` comes from
+ * the sibling `send.max_request_bytes` (shared with delegate) — it is read
+ * independently and is `null` on its own if missing or malformed, which does
+ * NOT fail the rest of the result (an older/odd daemon could in principle
+ * ship `attachments.image` without it).
+ */
+export function selectImageAttachments(
+  hostId: string,
+  provider: string,
+): (s: Pick<NexHostState, 'byHost'>) => (ImageAttachmentCaps & { maxRequestBytes: number | null }) | null {
+  return (s) => {
+    const entry = s.byHost[hostId]
+    if (entry?.phase !== 'ready' || !entry.capabilities) return null
+    const image = entry.capabilities.send?.attachments?.image
+    if (typeof image !== 'object' || image === null) return null
+    if (!Array.isArray(image.providers) || !image.providers.includes(provider)) return null
+    if (!Array.isArray(image.media_types)) return null
+    if (typeof image.fetch !== 'object' || image.fetch === null
+      || typeof image.fetch.method !== 'string' || typeof image.fetch.path !== 'string') return null
+    if (!isUsableCap(image.max_bytes) || !isUsableCap(image.max_count) || !isUsableCap(image.max_total_bytes)) return null
+
+    const rawMaxRequestBytes = entry.capabilities.send?.max_request_bytes
+    const maxRequestBytes = isUsableCap(rawMaxRequestBytes) ? rawMaxRequestBytes : null
+
+    return {
+      media_types: image.media_types,
+      max_bytes: image.max_bytes,
+      max_count: image.max_count,
+      max_total_bytes: image.max_total_bytes,
+      providers: image.providers,
+      fetch: image.fetch,
+      maxRequestBytes,
+    }
+  }
+}
+
+/**
+ * Whether the top-level `capabilities.session_title` object exists (nexen
+ * contract §0/§1.10) — the only feature detect for the execution summary's
+ * `session_title` field and the `execution.title_changed` event; never a
+ * version compare. True does not mean every execution has a title (§2 #62).
+ */
+export function selectSessionTitleSupported(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
+  return (s) => {
+    const entry = s.byHost[hostId]
+    if (entry?.phase !== 'ready' || !entry.capabilities) return false
+    const title = entry.capabilities.session_title
+    return typeof title === 'object' && title !== null
+  }
 }
 
 /**
