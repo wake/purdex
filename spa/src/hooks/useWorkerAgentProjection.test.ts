@@ -323,13 +323,90 @@ describe('useWorkerAgentProjection', () => {
       // Live again: a new turn runs on the live stream while the row still reads idle.
       setLive({ sse: 'open', turnStarts: [0, 1], turnMeta: [{ startAt: 10, endAt: 25, outcome: 'ok', durationMs: 15 }, { startAt: 40, endAt: null, outcome: null, durationMs: null }] })
       expect(st().statuses[KEY]).toBe('running')
-      // A stream stuck reconnecting yields to the fresher list row, not a frozen live snapshot.
-      useExecutionStore.getState().setSse(H, E, 'reconnecting')
-      expect(st().statuses[KEY]).toBe('idle')
-      // Delivering again: the live source wins back.
-      useExecutionStore.getState().setSse(H, E, 'open')
-      expect(st().statuses[KEY]).toBe('running')
       stop()
+    })
+
+    it('while evicted, a row that advances again keeps winning over the frozen live state', () => {
+      const stop = startWorkerAgentProjection()
+      runningLive()
+      setLive({ lastEventAt: 15 })
+      listRow({ state: 'running', updated_at: 20 })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      const st = () => useAgentStore.getState()
+      useExecutionStore.getState().setSse(H, E, 'paused')
+      listRow({ state: 'idle', updated_at: 30 })
+      expect(st().statuses[KEY]).toBe('idle')
+      listRow({ state: 'running', updated_at: 50 })
+      expect(st().statuses[KEY]).toBe('running')
+      listRow({ state: 'failed', updated_at: 60, last_turn_reason: 'orphaned' })
+      expect(st().statuses[KEY]).toBe('error')
+      stop()
+    })
+
+    describe('source choice by freshness (non-open SSE)', () => {
+      const names = (spy: { mock: { calls: unknown[][] } }) =>
+        spy.mock.calls.map((c) => (c[2] as { raw_event_name: string }).raw_event_name)
+      const spyDispatch = () => {
+        const spy = vi.spyOn(useAgentStore.getState(), 'handleNormalizedEvent')
+        spy.mockClear()
+        return spy
+      }
+      // Live snapshot is fresh as of t=100 (its last applied event).
+      const freshRunningLive = (sse: ExecutionState['sse']) =>
+        setLive({ summary: summary({ state: 'running', updated_at: 40 }), turnLive: true, turnStarts: [0],
+          turnMeta: [{ startAt: 10, endAt: null, outcome: null, durationMs: null }], lastEventAt: 100, sse })
+
+      it('open: the live state wins regardless of a newer list row', () => {
+        const stop = startWorkerAgentProjection()
+        freshRunningLive('open')
+        listRow({ state: 'idle', updated_at: 500 })
+        useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+        stop()
+      })
+
+      it('a brief reconnect with a row older than the live snapshot stays live (no Stop / UserPromptSubmit flip)', () => {
+        const spy = spyDispatch()
+        const stop = startWorkerAgentProjection()
+        freshRunningLive('open')
+        // Row is older than the last live event (100), though newer than the live summary (40).
+        listRow({ state: 'idle', updated_at: 80 })
+        useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+        useExecutionStore.getState().setSse(H, E, 'reconnecting')
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+        useExecutionStore.getState().setSse(H, E, 'open')
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+        expect(names(spy)).toEqual(['UserPromptSubmit'])
+        stop()
+      })
+
+      it('a row older than a refetched live summary also stays live', () => {
+        const stop = startWorkerAgentProjection()
+        freshRunningLive('reconnecting')
+        setLive({ summary: summary({ state: 'running', updated_at: 200 }) })
+        listRow({ state: 'idle', updated_at: 150 })
+        useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+        stop()
+      })
+
+      it('an equally fresh row does not displace the live state', () => {
+        const stop = startWorkerAgentProjection()
+        freshRunningLive('reconnecting')
+        listRow({ state: 'idle', updated_at: 100 })
+        useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+        stop()
+      })
+
+      it.each(['reconnecting', 'paused', 'connecting', 'closed'] as const)('%s with a row newer than the live snapshot: the row wins', (sse) => {
+        const stop = startWorkerAgentProjection()
+        freshRunningLive(sse)
+        listRow({ state: 'idle', updated_at: 101 })
+        useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('idle')
+        stop()
+      })
     })
 
     it('a closed live stream falls back to the list row', () => {

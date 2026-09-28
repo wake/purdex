@@ -33,6 +33,27 @@ describe('applyDurableEvent', () => {
     expect(s.pendingSend).toBe(defaultExecutionState().pendingSend)
   })
 
+  it('lastEventAt tracks the newest applied non-task event created_at, max-monotonic', () => {
+    const at = (seq: number, kind: string, created_at: number, payload: Record<string, unknown> = {}): NexEvent =>
+      ({ seq, execution_id: 'exc_1', kind, payload, created_at })
+    let s = defaultExecutionState()
+    expect(s.lastEventAt).toBe(0)
+    s = applyDurableEvent(s, at(1, 'assistant', 100, { type: 'assistant' }))
+    expect(s.lastEventAt).toBe(100)
+    s = applyDurableEvent(s, at(2, 'tool_use', 150, { tool_use_id: 'x', parent_tool_use_id: null, name: 'Bash' }))
+    expect(s.lastEventAt).toBe(150)
+    // A higher seq with an older (or missing) stamp never lowers it.
+    s = applyDurableEvent(s, at(3, 'assistant', 120, { type: 'assistant' }))
+    s = applyDurableEvent(s, at(4, 'assistant', 0, { type: 'assistant' }))
+    expect(s.lastEventAt).toBe(150)
+    // A replayed (seq-guarded) event does not move it.
+    s = applyDurableEvent(s, at(2, 'assistant', 999, { type: 'assistant' }))
+    expect(s.lastEventAt).toBe(150)
+    // Task events bypass the seq guard and never move it.
+    s = applyDurableEvent(s, at(9, 'task_start', 999, { task_id: 't1', kind: 'shell' }))
+    expect(s.lastEventAt).toBe(150)
+  })
+
   it('is idempotent by seq', () => {
     let s = defaultExecutionState()
     s = applyDurableEvent(s, ev(5, 'assistant', { type: 'assistant' }))

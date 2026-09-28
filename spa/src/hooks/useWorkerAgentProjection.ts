@@ -3,9 +3,10 @@
 // §8.1–8.2), under `exec:<id>` keys, so the sidebar light, unread and the
 // notification dispatcher treat a worker tab like a terminal agent tab.
 //
-// Source per pane, in order: the live `useExecutionStore` entry (when it has a
-// summary and its SSE is delivering), else the host's execution list row (a
-// frozen live entry is still used when no row exists). Every host with a worker tab
+// Source per pane: the live `useExecutionStore` entry (when it has a summary
+// and its SSE is open, or the list row is not strictly newer than it), else
+// the host's execution list row (a frozen live entry is still used when no
+// row exists). Every host with a worker tab
 // holds one list subscription so a row exists for an evicted pane. A dispatch
 // happens only when the projection (status, subagent ids, agent type) changes;
 // closing the last pane of a worker dispatches `clear`.
@@ -64,22 +65,37 @@ interface Source {
 }
 
 /**
- * The live entry is delivering: its SSE is `open`. Every other status keeps
- * its store entry frozen — an evicted pane (`paused`, useExecutionSubscription's
- * slot cap), a dead stream (`closed`), a resumed one still dialing in
- * (`connecting`), and a stream stuck retrying (`reconnecting`, which can
- * persist indefinitely) — so in all of those the list row is fresher when one
- * exists. `idle` is the state before a pane ever connected.
+ * How fresh the live snapshot is, on the daemon's clock: the newer of the
+ * summary's `updated_at` (refreshed by every summary refetch — event patches
+ * never touch it) and the `created_at` of the last applied durable event
+ * (`lastEventAt`; the summary lags it between an event and its refetch).
+ * Both are the same clock a list row's `updated_at` is on.
  */
-function isLiveDelivering(live: ExecutionState): boolean {
-  return live.sse === 'open'
+function liveFreshness(live: ExecutionState, summary: ExecutionSummary): number {
+  return Math.max(summary.updated_at, live.lastEventAt)
+}
+
+/**
+ * Chosen by freshness, not by SSE state alone. An `open` stream is delivering,
+ * so the live entry wins. Every other status leaves the entry frozen — an
+ * evicted pane (`paused`, useExecutionSubscription's slot cap), a dead stream
+ * (`closed`), a resumed one still dialing in (`connecting`), a stream retrying
+ * (`reconnecting`) — and then the list row wins only when it is strictly newer
+ * than the live snapshot. That serves both failure modes: a brief network
+ * blip leaves the row older, so the live state holds (no false Stop then
+ * UserPromptSubmit); a stream stuck retrying or evicted falls behind a row
+ * that keeps advancing, so the row takes over. With no row the frozen live
+ * entry is still the best we have.
+ */
+function liveWins(live: ExecutionState, summary: ExecutionSummary, row: ExecutionSummary | undefined): boolean {
+  if (live.sse === 'open' || !row) return true
+  return !(row.updated_at > liveFreshness(live, summary))
 }
 
 function deriveSource({ hostId, executionId }: WorkerRef): Source | null {
   const live = useExecutionStore.getState().executions[executionKey(hostId, executionId)]
   const row = useExecutionListStore.getState().byHost[hostId]?.items.find((r) => r.id === executionId)
-  // A stale live entry yields to the list row; with no row it is still the best we have.
-  if (live?.summary && (isLiveDelivering(live) || !row)) {
+  if (live?.summary && liveWins(live, live.summary, row)) {
     const subs = runningTasks(live.tasks).filter((t) => t.kind === 'subagent')
     return {
       input: {
