@@ -41,8 +41,8 @@ event. Timestamps in such writes come from the event / the daemon, never from th
 | Patch | `capturedAt` | `agent.updatedAt` |
 |---|---|---|
 | `agent-exit` | `exited.at` (daemon, ms) | untouched |
-| `agent-group` (SessionStart envelope) | event `broadcast_ts` ns → ms | same value |
-| `agent-backfill` fill / replace (provenance answer) | answer `started_at` (the frame's start; new daemon field) ns → ms | same value |
+| `agent-group` (SessionStart envelope) | event `broadcast_ts` ns → ms (ignored whole when older than the recorded agent) | same value |
+| `agent-backfill` fill / replace (provenance answer) | max(prev, answer `started_at` (the frame's start; new daemon field) ns → ms) | answer value |
 | `agent-backfill` confirm | unchanged (as today) | unchanged |
 | `probe-cwd` | **not re-stamped** (keeps `prev.capturedAt`) | — |
 | `unverified` | **not re-stamped** | — |
@@ -55,6 +55,17 @@ Why `started_at`, not `last_seen_at`: `last_seen_at` moves on every hook event o
 clients' probes of the same run usually see different values. The frame's start is fixed for the
 life of the run. The daemon's provenance answer (`internal/module/agent/provenance_handler.go`) gains
 `started_at` (the frame's `StartedAt`, same unit as `last_seen_at`) for this.
+
+**Ordering rules for `capturedAt` (review round 2).** Both compare only daemon-clock values against
+synced content, so every client decides identically:
+
+- `agent-group` whose `record.agent.updatedAt` is **older** than `prev.agent.updatedAt` is ignored
+  entirely (identity, cwd, `capturedAt` untouched) — a late SessionStart (reconnect replay, slow
+  client) must not roll the pane back to a previous run. Only `agent.updatedAt` is compared, never
+  `capturedAt`, which may be a user edit's client clock. Equal or newer applies; a prev record with
+  no agent / no `updatedAt` always accepts.
+- `agent-backfill` fill / replace stamp `capturedAt = max(prev.capturedAt, t)` (t = the answer's
+  daemon-derived stamp), so a backfill never moves the election stamp backwards past a newer write.
 
 `capturedAt` elects the group's newest record (`groupForBatch`). A probe filling a missing cwd and an
 unverified flag learn nothing that should win that election, so not re-stamping them is correct.

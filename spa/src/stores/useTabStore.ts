@@ -225,9 +225,12 @@ function identityInvalidates(
  * event by writing the same pane of the same synced `tabs.<ws>` section; with
  * its own `Date.now()` in it each client's payload hashes differently and the
  * Profile Sync CAS cannot fold them — a conflict nobody made. So:
- *   agent-group            the writer's `record.capturedAt` (the SessionStart's `broadcast_ts`)
- *   agent-backfill fill /  the answer's `agent.updatedAt` (the answering frame's `started_at`)
- *     replace
+ *   agent-group            the writer's `record.capturedAt` (the SessionStart's `broadcast_ts`);
+ *                          ignored whole when its `agent.updatedAt` is older than the
+ *                          recorded agent's (a late delivery must not roll back a run)
+ *   agent-backfill fill /  max(prev.capturedAt, the answer's `agent.updatedAt` — the
+ *     replace              answering frame's `started_at`): never moves the stamp backwards
+ *                          past a newer write; prev is synced, so every client agrees
  *   agent-backfill confirm not re-stamped — see mode 3 below
  *   agent-exit             `exited.at` (the daemon's exit time)
  *   probe-cwd, unverified  not re-stamped: a probe filling a missing cwd and a
@@ -245,6 +248,16 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
   switch (patch.kind) {
     case 'agent-group': {
       const { record } = patch
+      // Ordering: a SessionStart OLDER than the agent already recorded (a late
+      // delivery — reconnect replay, a slow client) must not roll the record
+      // back to a previous run. Compared on `agent.updatedAt` ONLY: both sides
+      // are daemon times, whereas `capturedAt` may be a user edit's client clock
+      // (a `field` write), which says nothing about which run is newer. A record
+      // with no agent / no `updatedAt` has nothing to order against. Equal
+      // applies, so an idle re-emit still refreshes the group.
+      const prevAt = prev.agent?.updatedAt
+      const nextAt = record.agent?.updatedAt
+      if (typeof prevAt === 'number' && typeof nextAt === 'number' && nextAt < prevAt) return c
       // One unit: everything the agent group owns is replaced together, so a
       // payload without cwd clears cwd instead of leaving the previous agent's
       // directory beside a new session id. `unverified` is cleared too — it
@@ -296,7 +309,7 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
           unverified: undefined,
           // `resumeCommandOverride` rides through untouched: nothing was
           // invalidated, because the record held no identity to invalidate.
-          capturedAt: record.agent.updatedAt,
+          capturedAt: Math.max(prev.capturedAt, record.agent.updatedAt),
         }
         break
       }
@@ -337,7 +350,7 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
           cwd: keepsUserCwd ? prev.cwd : record.cwd,
           cwdSource: keepsUserCwd ? 'user' : record.cwd === undefined ? undefined : 'agent-backfill',
           agent: record.agent,
-          capturedAt: record.agent.updatedAt,
+          capturedAt: Math.max(prev.capturedAt, record.agent.updatedAt),
         }
         break
       }
