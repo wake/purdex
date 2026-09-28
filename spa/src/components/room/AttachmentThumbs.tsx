@@ -38,6 +38,25 @@ function next() {
   if (running < ATTACHMENT_FETCH_CONCURRENCY) waiting.shift()?.()
 }
 
+/** The only types ever opened as a `blob:` URL (top-level navigation via the new-tab link). */
+const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+
+/**
+ * Guards against trusting the daemon's `Content-Type` at face value: a blob
+ * is only ever handed to `URL.createObjectURL` (and so opened as a top-level
+ * `blob:` document via the thumbnail's link) when its type is one of
+ * `ALLOWED_IMAGE_TYPES`. If the fetched blob's own type isn't allowed but the
+ * attachment's declared `media_type` is, the blob is rewrapped with that type
+ * — a daemon that serves a stale or generic `Content-Type` while reporting
+ * the media type correctly in the attachment's own metadata. Otherwise this
+ * is a load error: no blob URL is created, no link is drawn.
+ */
+function sanitizeImageBlob(blob: Blob, mediaType: string): Blob | null {
+  if (ALLOWED_IMAGE_TYPES.has(blob.type)) return blob
+  if (ALLOWED_IMAGE_TYPES.has(mediaType)) return new Blob([blob], { type: mediaType })
+  return null
+}
+
 type ThumbState = { status: 'loading' } | { status: 'ready'; url: string } | { status: 'error' }
 
 function ThumbView({ state, mediaType }: { state: ThumbState; mediaType: string }) {
@@ -82,7 +101,9 @@ function RemoteThumb({ meta, source }: { meta: AttachmentMeta; source: { hostId:
     withSlot(() => fetchAttachment(hostId, executionId, sha256, route), () => cancelled)
       .then((blob) => {
         if (cancelled || !blob) return
-        url = URL.createObjectURL(blob)
+        const safe = sanitizeImageBlob(blob, meta.media_type)
+        if (!safe) { setResult({ want, state: { status: 'error' } }); return }
+        url = URL.createObjectURL(safe)
         setResult({ want, state: { status: 'ready', url } })
       })
       .catch(() => { if (!cancelled) setResult({ want, state: { status: 'error' } }) })

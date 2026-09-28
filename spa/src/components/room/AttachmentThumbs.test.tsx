@@ -36,7 +36,7 @@ const origCreate = URL.createObjectURL, origRevoke = URL.revokeObjectURL
 beforeEach(() => {
   vi.mocked(api.fetchAttachment).mockReset()
   let n = 0
-  createUrl = vi.fn(() => `blob:t${++n}`)
+  createUrl = vi.fn((_blob: Blob) => `blob:t${++n}`)
   revokeUrl = vi.fn()
   Object.assign(URL, { createObjectURL: createUrl, revokeObjectURL: revokeUrl })
   seed(ROUTE)
@@ -57,6 +57,22 @@ describe('AttachmentThumbs', () => {
     expect(link.target).toBe('_blank')
     expect(link.rel).toContain('noopener')
     expect(link.getAttribute('href')).toBe(imgs[0].getAttribute('src'))
+  })
+
+  it('a mislabeled Content-Type is rewrapped when the declared media_type is a trusted image type (fix round 1)', async () => {
+    vi.mocked(api.fetchAttachment).mockResolvedValue(new Blob(['<script>'], { type: 'text/html' }))
+    inPane(<AttachmentThumbs items={[meta('a', 'image/png')]} />)
+    await waitFor(() => expect(thumbs()[0].dataset.state).toBe('ready'))
+    expect(createUrl).toHaveBeenCalledTimes(1)
+    expect(createUrl.mock.calls[0][0].type).toBe('image/png')
+  })
+
+  it('a mislabeled Content-Type with an untrusted declared media_type is a load error, never opened as a blob (fix round 1)', async () => {
+    vi.mocked(api.fetchAttachment).mockResolvedValue(new Blob(['<script>'], { type: 'text/html' }))
+    inPane(<AttachmentThumbs items={[meta('a', 'text/html')]} />)
+    await waitFor(() => expect(thumbs()[0].dataset.state).toBe('error'))
+    expect(createUrl).not.toHaveBeenCalled()
+    expect(screen.queryByRole('link')).toBeNull()
   })
 
   it('a 404 (attachment_not_found) shows a broken-image placeholder naming the media type (Review Focus 5)', async () => {
