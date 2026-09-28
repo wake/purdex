@@ -39,12 +39,18 @@
 // not count. Only the reader moving off it, back to the bottom, resumes
 // following.
 //
-// **Memory (spec §6).** Given `memory`, every observed position is written to
-// the pane's memo (`lib/nex/transcript-scroll-memory`): scrollTop, the flag,
-// the view and the first turn still on screen. The first call after a mount
-// reads it back: at the bottom → the jump to the bottom as ever; elsewhere,
-// the same view restores scrollTop (the browser clamps it), and the other
-// view — a different height — brings the remembered first turn to the top.
+// **Memory (spec §6).** Given `memory`, every observed position — and
+// `follow`'s own jump, mount's or a later catch-up alike, which never gets a
+// scroll event of its own to observe — is written to the pane's memo
+// (`lib/nex/transcript-scroll-memory`): scrollTop, the flag, the view and the
+// first turn still on screen. The first call after a mount reads it back: at
+// the bottom → the jump to the bottom as ever; elsewhere, the same view
+// restores scrollTop (the browser clamps it), and the other view — a
+// different height — brings the remembered first turn to the top.
+// **Keying.** The caller's `memory.paneId` is whatever key it composes — a
+// worker pane's transcript keys it by pane *and* execution
+// (ExecutionView), since a handoff / take-back can swap a pane's content to
+// a different execution while keeping its paneId.
 import { useCallback, useImperativeHandle, useLayoutEffect, useMemo, useRef, type Ref, type UIEvent } from 'react'
 import { readScrollMemo, writeScrollMemo, type ScrollMemo } from '../lib/nex/transcript-scroll-memory'
 
@@ -200,7 +206,13 @@ export function useTranscriptScroll(
     atBottom.current = true
     released.current = null
     resume.current = false
-  }, [observe, restore])
+    // The jump itself must be remembered too (fix round 1, finding 3):
+    // jsdom (and, for a smooth scroll, the real browser mid-flight) never
+    // fires a scroll event for a programmatic scrollTo, so without this an
+    // immediate unmount right after a follow()-driven jump would leave the
+    // memo at whatever stale, off-bottom position the reader had before.
+    remember(el)
+  }, [observe, restore, remember])
 
   const release = useCallback(() => {
     const el = box.current

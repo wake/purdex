@@ -275,6 +275,37 @@ describe.each(views)('%s transcript scrolling', (_name, Transcript) => {
     expect(scrollTo).toHaveBeenCalledTimes(1)
   })
 
+  // Fix round 1, finding 2: closing the bar sets `resume`, but it is not a
+  // standing pass — a reader who scrolls up before anything grows cancels it,
+  // same as any other move off the bottom.
+  it('closing the bar, then scrolling up before growth: resume is cancelled', () => {
+    const ref = createRef<HTMLDivElement>()
+    const control = createRef<TranscriptScrollControl>()
+    let messages = [said('a')]
+    let hold = true
+    const { rerender } = render(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: hold }))
+    const box = ref.current!
+    const grow = () => {
+      messages = [...messages, said(`m${messages.length}`)]
+      rerender(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: hold }))
+    }
+    geometry(box, 1000, 200, 800)
+    fireEvent.scroll(box)
+    geometry(box, 1000, 200, 300)
+    control.current!.release()
+    fireEvent.scroll(box)
+    // The bar closes: the next growth would normally follow wherever the reader is.
+    hold = false
+    rerender(T({ messages, scrollRef: ref, scrollControl: control, holdScroll: hold }))
+    // But before anything grows, the reader scrolls further up.
+    geometry(box, 1000, 200, 200)
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    geometry(box, 1100, 200, 200)
+    grow()
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
   it('an inspect release, then opening and closing the bar: follow resumes', () => {
     const ref = createRef<HTMLDivElement>()
     const control = createRef<TranscriptScrollControl>()
@@ -442,6 +473,38 @@ describe('transcript scroll memory', () => {
     writeScrollMemo(PANE, { scrollTop: 300, atBottom: false, view: 'room', firstTurn: 1 })
     render(<RoomTranscript {...props({ holdScroll: true })} />)
     expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  // Fix round 1, finding 3: `follow()`'s own jump never gets a scroll event
+  // of its own to observe (jsdom, and — mid-flight — a real browser too), so
+  // it must write the memo itself. Otherwise an immediate remount right
+  // after a resumed catch-up would read back the stale, off-bottom memo the
+  // reader had before the bar closed, instead of landing at the bottom.
+  it("follow()'s own resume jump writes the memo, so an immediate remount lands at the bottom", () => {
+    const ref = createRef<HTMLDivElement>()
+    const control = createRef<TranscriptScrollControl>()
+    let messages = three
+    let hold = true
+    const { rerender, unmount } = render(
+      <RoomTranscript {...props({ scrollRef: ref, scrollControl: control, holdScroll: hold })} />,
+    )
+    const box = ref.current!
+    geometry(box, 1000, 200, 300)
+    fireEvent.scroll(box)
+    expect(readScrollMemo(PANE)).toMatchObject({ scrollTop: 300, atBottom: false })
+    // The bar closes: the next growth resumes, and follow() jumps to the bottom on its own.
+    hold = false
+    rerender(<RoomTranscript {...props({ scrollRef: ref, scrollControl: control, holdScroll: hold })} />)
+    geometry(box, 1100, 200, 300)
+    messages = [...three, said('d')]
+    rerender(<RoomTranscript {...props({ scrollRef: ref, scrollControl: control, holdScroll: hold, messages })} />)
+    expect(scrollTo).toHaveBeenCalled()
+    // Nothing else observes a position between the jump and the remount.
+    unmount()
+    scrollTo.mockClear()
+    render(<RoomTranscript {...props({ messages })} />)
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+    expect(scrollTo).not.toHaveBeenCalledWith(expect.objectContaining({ top: 300 }))
   })
 
   it('without a scrollMemoryKey nothing is remembered or restored', () => {
