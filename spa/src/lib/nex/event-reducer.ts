@@ -28,6 +28,21 @@ export interface TurnMeta {
   durationMs: number | null
 }
 
+/**
+ * Reducer-internal bookkeeping for one turn, index-aligned with `turnMeta`.
+ * `state`: `null` nothing ended it yet; `'soft'` a `result` or an
+ * execution-scoped end (terminate / archive) stamped it and a turn-scoped
+ * lifecycle end may still refine the outcome; `'sealed'` a turn-scoped
+ * lifecycle end closed it. `bySource` records that an
+ * `execution.interrupted` already decided the outcome from its `source`.
+ */
+export interface TurnEnd {
+  /** The daemon's turn_id; null for turn 1 (execution.delegated carries none) until a keyed end binds it. */
+  turnId: string | null
+  state: null | 'soft' | 'sealed'
+  bySource: boolean
+}
+
 export interface ExecutionState {
   summary: ExecutionSummary | null
   /** Provider passthrough + synthetic user bubbles, in seq order. */
@@ -72,13 +87,8 @@ export interface ExecutionState {
    * rebuilds it exactly.
    */
   turnMeta: TurnMeta[]
-  /**
-   * Where the last turn's end stands: `null` nothing ended it yet, `'result'`
-   * a top-level result stamped it (a lifecycle end may still refine the
-   * outcome), `'sealed'` a lifecycle end closed it — later events (an
-   * archive or terminate of an idle execution) must not rewrite it.
-   */
-  turnEnd: 'result' | 'sealed' | null
+  /** Reducer bookkeeping per turn, index-aligned with `turnMeta` (see TurnEnd). */
+  turnEnds: TurnEnd[]
   /**
    * Keyed by tool_use id; written only by the durable A-rules (raw
    * assistant / user frames) and the N-rules (derived tool_use / tool_result
@@ -112,7 +122,7 @@ export function defaultExecutionState(): ExecutionState {
     turnLive: false,
     turnStarts: [],
     turnMeta: [],
-    turnEnd: null,
+    turnEnds: [],
     tools: {},
     tasks: {},
   }
@@ -204,12 +214,12 @@ function userBubble(text: string): StreamMessage {
  * impossible, so a dedupe here would protect nothing. Consumers therefore
  * have to tolerate an empty turn range (`start === end`).
  */
-function markTurnStart(s: ExecutionState, createdAt: number): ExecutionState {
+function markTurnStart(s: ExecutionState, createdAt: number, turnId: string | null): ExecutionState {
   return {
     ...s,
     turnStarts: [...s.turnStarts, s.messages.length],
     turnMeta: [...s.turnMeta, { startAt: createdAt, endAt: null, outcome: null, durationMs: null }],
-    turnEnd: null,
+    turnEnds: [...s.turnEnds, { turnId, state: null, bySource: false }],
   }
 }
 
@@ -220,7 +230,8 @@ function markTurnStart(s: ExecutionState, createdAt: number): ExecutionState {
  * | reason              | outcome                                       |
  * |---------------------|-----------------------------------------------|
  * | `final_response`    | normal end: keep a result's outcome, else ok  |
- * | `interrupted`       | interrupted (user / timeout / terminate)      |
+ * | `interrupted`       | interrupted; the execution.interrupted that   |
+ * |                     | follows refines it by source (see below)      |
  * | `error`             | failed                                        |
  * | `session_expired`   | failed (the turn could not start)             |
  * | `orphaned`          | failed (daemon restart reconciled the turn)   |
@@ -238,6 +249,31 @@ function terminalOutcome(reason: string | undefined): TurnOutcome | 'normal' {
   return 'failed'
 }
 
+/**
+ * `execution.interrupted`'s `source` (nexen v0.13.2 capability-matrix §3,
+ * "打斷來源子表"; closed vocabulary `execution.InterruptSources`). Spec F3
+ * hides only an interrupt a human asked for; every other source is a
+ * failure the user must see (controller ruling, fix round 1):
+ *
+ * | source            | meaning                                   | outcome     |
+ * |-------------------|-------------------------------------------|-------------|
+ * | `user`            | the user pressed interrupt                | interrupted |
+ * | `terminated`      | the interrupt a human `Terminate` carries | interrupted |
+ * | (absent / empty)  | older payload without a source            | interrupted |
+ * | `turn_timeout`    | the whole-turn watchdog fired             | failed      |
+ * | `daemon_shutdown` | graceful shutdown interrupted live turns  | failed      |
+ * | `quota`           | hit the quota (reserved, no producer yet) | failed      |
+ * | anything else     | unknown — a failure is never hidden       | failed      |
+ *
+ * `execution.terminal` carries no source (execution/turn.go:610), so a
+ * terminal{interrupted} reads interrupted until the execution.interrupted
+ * nexen emits right after it, keyed by the same turn_id, decides.
+ */
+function interruptOutcome(source: string | undefined): TurnOutcome {
+  if (!source || source === 'user' || source === 'terminated') return 'interrupted'
+  return 'failed'
+}
+
 /** The outcome a main-turn end event proposes (spec §7.1). */
 function endOutcome(kind: string, p: Record<string, unknown>): TurnOutcome | 'normal' {
   switch (kind) {
@@ -246,6 +282,7 @@ function endOutcome(kind: string, p: Record<string, unknown>): TurnOutcome | 'no
     case 'execution.terminal':
       return terminalOutcome(str(p, 'reason'))
     case 'execution.interrupted':
+      return interruptOutcome(str(p, 'source'))
     case 'execution.terminated':
     case 'execution.archived':
       return 'interrupted'
@@ -255,36 +292,85 @@ function endOutcome(kind: string, p: Record<string, unknown>): TurnOutcome | 'no
   }
 }
 
+/** Execution-scoped ends: no turn_id, and they may land after a turn already finished. */
+const EXECUTION_SCOPED_ENDS = new Set(['execution.terminated', 'execution.archived'])
+
 /**
- * Stamp the last turn's meta at a main-turn end (spec §7.1). The outcome is
- * written once, except that a lifecycle end may refine what a `result`
- * said: `interrupted` wins (CC emits a result after an interrupt) and
- * `failed` beats `ok` (a failure is never hidden, F3). Once a lifecycle end
- * seals the turn, nothing rewrites it. Later events only fill `endAt` /
- * `durationMs` while they are still null.
+ * Which turn an end event belongs to. Nexen accepts a send while the
+ * previous turn is still live (`message_accepted` is emitted at send time,
+ * execution/service.go:782-803, capability-matrix §2 #22), so "the last
+ * turn" is wrong once a send is queued. Queued turns run FIFO, hence:
+ *
+ * - `result` (no turn_id): the oldest turn not yet sealed.
+ * - turn-scoped lifecycle ends (`terminal`, `interrupted`, `error`,
+ *   `turn_stalled`, `turn_orphaned`, `rejected`): the turn with that
+ *   `turn_id`, sealed or not; unknown / missing turn_id → the oldest
+ *   unsealed turn (binding the id when that turn has none, i.e. turn 1 from
+ *   `execution.delegated`).
+ * - `terminated` / `archived`: the oldest unsealed turn too, but they only
+ *   stamp it when it has no outcome yet (stampTurnEnd never lets them
+ *   refine) — so they never re-mark a turn whose result already arrived,
+ *   and never reach past it to a queued turn (that one gets its own keyed
+ *   `turn_stalled`).
+ */
+function findEndTarget(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): { i: number; bind: string | null } | null {
+  const ends = s.turnEnds
+  if (ev.kind === 'result' || EXECUTION_SCOPED_ENDS.has(ev.kind)) {
+    const i = ends.findIndex(e => e.state !== 'sealed')
+    return i < 0 ? null : { i, bind: null }
+  }
+  const turnId = str(p, 'turn_id') || null
+  if (turnId) {
+    const exact = ends.findIndex(e => e.turnId === turnId)
+    if (exact >= 0) return { i: exact, bind: null }
+  }
+  const i = ends.findIndex(e => e.state !== 'sealed')
+  if (i < 0) return null
+  return { i, bind: ends[i].turnId === null ? turnId : null }
+}
+
+/**
+ * Stamp a turn's meta at a main-turn end (spec §7.1). The outcome is written
+ * once, except that a turn-scoped lifecycle end may refine it: `interrupted`
+ * wins (CC emits a result after an interrupt) and `failed` beats `ok` (a
+ * failure is never hidden, F3). An `execution.interrupted` is authoritative:
+ * its source decides, and nothing after it changes the outcome. Only
+ * `endAt` / `durationMs` still null are filled.
  */
 function stampTurnEnd(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): ExecutionState {
-  const n = s.turnMeta.length
-  if (n === 0 || s.turnEnd === 'sealed') return s
-  const last = s.turnMeta[n - 1]
+  const target = findEndTarget(s, ev, p)
+  if (!target) return s
+  const { i } = target
+  const end = s.turnEnds[i]
+  const meta = s.turnMeta[i]
   const isResult = ev.kind === 'result'
+  const execScoped = EXECUTION_SCOPED_ENDS.has(ev.kind)
+  const isInterrupt = ev.kind === 'execution.interrupted'
   const proposed = endOutcome(ev.kind, p)
 
-  let outcome = last.outcome
-  if (proposed === 'normal') outcome = outcome ?? 'ok'
+  let outcome = meta.outcome
+  if (isInterrupt) outcome = proposed === 'normal' ? outcome : proposed
+  else if (end.bySource) { /* the interrupt's source already decided */ }
+  else if (proposed === 'normal') outcome = outcome ?? 'ok'
   else if (outcome === null) outcome = proposed
-  else if (!isResult && (proposed === 'interrupted' || (proposed === 'failed' && outcome === 'ok'))) outcome = proposed
+  else if (!isResult && !execScoped && (proposed === 'interrupted' || (proposed === 'failed' && outcome === 'ok'))) outcome = proposed
 
-  const endAt = last.endAt ?? (ev.created_at > 0 ? ev.created_at : null)
-  let durationMs = last.durationMs
+  const endAt = meta.endAt ?? (ev.created_at > 0 ? ev.created_at : null)
+  let durationMs = meta.durationMs
   if (durationMs === null && isResult && typeof p.duration_ms === 'number' && Number.isFinite(p.duration_ms) && p.duration_ms >= 0) {
     durationMs = p.duration_ms
   }
-  if (durationMs === null && endAt !== null && last.startAt > 0 && endAt >= last.startAt) durationMs = endAt - last.startAt
+  if (durationMs === null && endAt !== null && meta.startAt > 0 && endAt >= meta.startAt) durationMs = endAt - meta.startAt
 
   const turnMeta = s.turnMeta.slice()
-  turnMeta[n - 1] = { startAt: last.startAt, endAt, outcome, durationMs }
-  return { ...s, turnMeta, turnEnd: isResult ? 'result' : 'sealed' }
+  turnMeta[i] = { startAt: meta.startAt, endAt, outcome, durationMs }
+  const turnEnds = s.turnEnds.slice()
+  turnEnds[i] = {
+    turnId: end.turnId ?? target.bind,
+    state: end.state === 'sealed' || (!isResult && !execScoped) ? 'sealed' : 'soft',
+    bySource: end.bySource || isInterrupt,
+  }
+  return { ...s, turnMeta, turnEnds }
 }
 
 function str(p: Record<string, unknown>, k: string): string | undefined {
@@ -373,7 +459,8 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // bubble, while an absent key means the site-wide stream stripped it
       // (spec §4.2.4). A truthy check would conflate the two.
       const brief = str(p, 'brief')
-      next = markTurnStart(next, ev.created_at)
+      // execution/service.go:551 — no turn_id here; the first keyed end binds it.
+      next = markTurnStart(next, ev.created_at, null)
       if (brief !== undefined) next = { ...next, messages: [...next.messages, userBubble(brief)] }
       return patchSummary(next, {})
     }
@@ -382,7 +469,7 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // summary moved, so the hook refetches (summaryStale) like any other.
       // Same empty-vs-absent distinction as execution.delegated above.
       const text = str(p, 'text')
-      next = markTurnStart({ ...next, pendingLocal: null, summaryStale: true }, ev.created_at)
+      next = markTurnStart({ ...next, pendingLocal: null, summaryStale: true }, ev.created_at, str(p, 'turn_id') || null)
       if (text !== undefined) next = { ...next, messages: [...next.messages, userBubble(text)] }
       return next
     }
