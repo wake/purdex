@@ -1,5 +1,5 @@
 // spa/src/hooks/useWorkerAgentProjection.ts — app-lifetime projection of every
-// worker (execution) pane's state into `useAgentStore` (worker-pane theme spec
+// worker tab's (primary execution pane's) state into `useAgentStore` (worker-pane theme spec
 // §8.1–8.2), under `exec:<id>` keys, so the sidebar light, unread and the
 // notification dispatcher treat a worker tab like a terminal agent tab.
 //
@@ -18,7 +18,7 @@ import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useHostStore } from '../stores/useHostStore'
 import { compositeKey } from '../lib/composite-key'
-import { scanPaneTree } from '../lib/pane-tree'
+import { getPrimaryPane } from '../lib/pane-tree'
 import { resolveExecutionHostId } from '../lib/nex/resolve-host'
 import { runningTasks } from '../lib/nex/tasks'
 import { isResultError } from '../lib/nex/cost-summary'
@@ -40,21 +40,25 @@ const LAST_MESSAGE_MAX = 300
 
 interface WorkerRef { hostId: string; executionId: string }
 
-/** Every execution pane in any tab, keyed by its agent-store composite key. */
+/**
+ * Every tab whose primary pane is an execution, keyed by its agent-store
+ * composite key. Primary pane only — the same terminal semantics as
+ * `getActiveSessionInfo`, `findTabBySessionCode` and `useTabDisplay`, which
+ * all read `getPrimaryPane`: a worker in a non-primary split pane would get a
+ * light / unread / notification that no tab lookup could resolve.
+ */
 function collectWorkers(tabs: Record<string, Tab>): Map<string, WorkerRef> {
   const out = new Map<string, WorkerRef>()
   for (const tab of Object.values(tabs)) {
-    scanPaneTree(tab.layout, (pane) => {
-      const c = pane.content
-      if (c.kind !== 'execution') return
-      // Same resolution as ExecutionPaneWrapper (register-modules/index.tsx):
-      // `resolveExecutionHostId` treats an empty-string host the same as a
-      // missing one (falls back to the first host), so `??` here — which
-      // only catches null/undefined — would leave a '' hint unresolved.
-      const hostId = resolveExecutionHostId(c.host)
-      if (!hostId) return
-      out.set(compositeKey(hostId, execAgentCode(c.executionId)), { hostId, executionId: c.executionId })
-    })
+    const c = getPrimaryPane(tab.layout).content
+    if (c.kind !== 'execution') continue
+    // Same resolution as ExecutionPaneWrapper (register-modules/index.tsx):
+    // `resolveExecutionHostId` treats an empty-string host the same as a
+    // missing one (falls back to the first host), so `??` here — which
+    // only catches null/undefined — would leave a '' hint unresolved.
+    const hostId = resolveExecutionHostId(c.host)
+    if (!hostId) continue
+    out.set(compositeKey(hostId, execAgentCode(c.executionId)), { hostId, executionId: c.executionId })
   }
   return out
 }
