@@ -76,8 +76,18 @@ export interface ExecutionState {
   leaseError: { code: string; heldBy?: string } | null
   pendingSend: boolean
   /** Optimistic user bubble; replaced by the durable execution.message_accepted. */
-  pendingLocal: { text: string; delivery: 'delivered' | 'queued' | null } | null
-  sendError: { code: string; message: string; turnId?: string } | null
+  pendingLocal: {
+    text: string
+    delivery: 'delivered' | 'queued' | null
+    /**
+     * Thumbnails of the native images this send carries (phase E). The
+     * object URLs belong to the optimistic line — ExecutionView revokes them
+     * when this array goes away — never to the chips they were sent from.
+     */
+    attachments?: { previewUrl: string; media_type: string }[]
+  } | null
+  /** `attachmentIndex`: the offending image on Nexen's per-image attachment errors (contract §1.9). */
+  sendError: { code: string; message: string; turnId?: string; attachmentIndex?: number } | null
   lastTurn: { turnId: string; delivery: 'delivered' | 'queued' } | null
   /** In-flight assistant message from transient frames; only applyTransientFrame / D-rules write it. */
   partial: PartialAssembly | null

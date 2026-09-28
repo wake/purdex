@@ -35,7 +35,8 @@ function typingElsewhere(self: HTMLTextAreaElement | null): boolean {
 }
 
 interface Props {
-  onSend: (text: string) => void
+  /** Returning false means the send was refused before going out (e.g. too large): the text stays in the box. */
+  onSend: (text: string) => void | boolean
   disabled?: boolean
   placeholder?: string
   focused?: boolean
@@ -46,13 +47,15 @@ interface Props {
   onRemoveChip?: (key: string) => void
   /** Pasted or picked files; without it there is no `+` button and a paste is plain text. */
   onAddFiles?: (files: File[]) => void
+  /** Every change of the typed text (the attachment planner counts it against the request budget). */
+  onTextChange?: (text: string) => void
 }
 
 const NO_CHIPS: readonly Chip[] = []
 const noop = () => {}
 
 export default function WorkerInput({
-  onSend, disabled = false, placeholder, focused = false, initialValue, chips = NO_CHIPS, onRemoveChip, onAddFiles,
+  onSend, disabled = false, placeholder, focused = false, initialValue, chips = NO_CHIPS, onRemoveChip, onAddFiles, onTextChange,
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const resolvedPlaceholder = placeholder ?? t('worker.input.placeholder')
@@ -61,6 +64,8 @@ export default function WorkerInput({
   const pickerRef = useRef<HTMLInputElement>(null)
   const gate = canSend(chips)
   const hasAttachment = chips.some((c) => c.status === 'done')
+
+  useEffect(() => { onTextChange?.(value) }, [value, onTextChange])
 
   useEffect(() => {
     if (focused && !disabled) {
@@ -83,7 +88,7 @@ export default function WorkerInput({
     const trimmed = value.trim()
     if (!trimmed && !hasAttachment) return
     if (!gate.ok) return
-    onSend(trimmed)
+    if (onSend(trimmed) === false) return
     setValue('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'

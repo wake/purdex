@@ -191,3 +191,30 @@ describe('useExecutionActions — handleSend reports whether the send went throu
     expect(result.current.draft).toBe('typed')
   })
 })
+
+describe('useExecutionActions — native image attachments (phase E)', () => {
+  const attachments = [{ type: 'image' as const, media_type: 'image/png', data: 'AAAA' }]
+  const previews = [{ previewUrl: 'blob:p1', media_type: 'image/png' }]
+
+  it('forwards attachments and keeps the same previews array on the optimistic line after the POST', async () => {
+    const d = deferredSend()
+    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+    let done!: Promise<boolean>
+    await act(async () => { done = result.current.handleSend('', { attachments, previews }); await Promise.resolve() })
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', '', attachments))
+    expect(st().pendingLocal?.attachments).toBe(previews)
+    await act(async () => { d.resolve({ turn_id: 't1', delivery: 'queued' }); await done })
+    expect(st().pendingLocal).toEqual({ text: '', delivery: 'queued', attachments: previews })
+    expect(st().pendingLocal?.attachments).toBe(previews)
+  })
+
+  it('records the per-image attachment_index on the send error', async () => {
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'attachment_too_large', 'big', undefined, 1))
+    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+    let ok = true
+    await act(async () => { ok = await result.current.handleSend('t', { attachments, previews }) })
+    expect(ok).toBe(false)
+    expect(st().sendError).toMatchObject({ code: 'attachment_too_large', attachmentIndex: 1 })
+    expect(st().pendingLocal).toBeNull()
+  })
+})

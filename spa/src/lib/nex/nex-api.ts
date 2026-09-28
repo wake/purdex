@@ -24,6 +24,7 @@ import {
 } from './types'
 import { parseTask } from './tasks'
 import { sanitizeSummaryRollup } from './validate-executions'
+import type { WireImageAttachment } from './worker-upload'
 
 const PREFIX = '/api/nex'
 
@@ -200,8 +201,16 @@ export function pinnedLeaseRelease(hostId: string): ((executionId: string, lease
   }
 }
 
-export function sendMessage(hostId: string, executionId: string, leaseId: string, text: string): Promise<SendResponse> {
-  return postJson(hostId, execPath(executionId, '/messages'), { lease_id: leaseId, text }).then((r) => okJson<SendResponse>(r))
+/**
+ * `attachments` (nexen contract §1.9) go on the wire only when non-empty, so a
+ * text-only send is byte-identical to phase D. Key order is what
+ * `requestBytes` measures. The caller has already feature-detected (§0).
+ */
+export function sendMessage(
+  hostId: string, executionId: string, leaseId: string, text: string, attachments?: readonly WireImageAttachment[],
+): Promise<SendResponse> {
+  const body = attachments && attachments.length > 0 ? { lease_id: leaseId, text, attachments } : { lease_id: leaseId, text }
+  return postJson(hostId, execPath(executionId, '/messages'), body).then((r) => okJson<SendResponse>(r))
 }
 
 export function interruptExecution(hostId: string, executionId: string, leaseId: string): Promise<InterruptResponse> {
