@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.471] - 2026-09-29
+
+> 純 SPA，不必重新部署 daemon。
+
+### Feature：側欄的 worker 分頁（#1517 #1518 #1516）
+
+- worker 分頁現在有和 terminal agent 一樣的燈號：執行中（綠色呼吸燈）、完成（灰）、失敗（紅），執行中的 subagent 以小點顯示。規則和 terminal 完全相同，失敗後會維持紅燈，直到你送出下一則訊息。
+- 未讀與桌面通知也和 terminal 一樣：不在畫面上的 worker 完成或失敗時會標未讀、跳通知，點通知會切到那個 worker 分頁。重新載入 app 不會重播舊通知。
+- 分頁 icon 可在 設定 → Worker 選擇：provider logo（單色，沿用 Claude／Codex 圖示設定）、provider logo（原色）、自選 icon。先前 worker 分頁的 icon 是空白的，已修正。
+- 分頁標題改成「交接前的終端機標題（沒有就用任務第一行） - 專案資料夾」，不再一律顯示「執行」。
+
+### Internal
+
+- worker 的 agent key 是 `<host>:exec-<executionId>`；只看 split 的主 pane 找分頁，和 terminal 一致。
+- follow-up：Nexen `session_title`（v0.15.0）與圖片附件（v0.14.0）在 phase E 接上。
+
 ## [1.0.0-alpha.470] - 2026-09-29
 
 > 純 SPA，不必重新部署 daemon。
