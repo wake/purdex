@@ -4,7 +4,7 @@
 import type { TabIconComponent } from '../hooks/useSessionAgentIndicator'
 import type { CcIconVariant, CodexIconVariant } from '../stores/useUISettingsStore'
 import type { WorkerIconStyle } from '../stores/useWorkerSettingsStore'
-import { getAgentIcon, CC_COLOR_ICON_VARIANTS, CODEX_COLOR_ICON } from './agent-icons'
+import { getAgentIcon, CC_COLOR_ICON_VARIANTS, CODEX_COLOR_ICON, CC_ICON_VARIANTS, CODEX_ICON_VARIANTS } from './agent-icons'
 import { providerAgentType } from './nex/worker-agent-status'
 import { ICON_MAP } from '../components/tab-icon-map'
 // Same renderer + name catalogue the workspace icon picker uses (direct file
@@ -39,16 +39,32 @@ function customIconComponent(name: string): TabIconComponent {
   return Icon
 }
 
+// Profile Sync only checks that ccIconVariant/codexIconVariant are strings
+// (not that they're a known variant — see `useUISettingsStore`'s validator),
+// so a stale or foreign value can reach here at runtime even though the
+// static type claims otherwise. Guard both variant lookups against that: an
+// unrecognised value falls back to the default variant's icon rather than
+// `undefined`, for mono and color alike.
+function safeCcVariant(v: CcIconVariant): CcIconVariant {
+  return v in CC_ICON_VARIANTS ? v : 'bot'
+}
+
+function safeCodexVariant(v: CodexIconVariant): CodexIconVariant {
+  return v in CODEX_ICON_VARIANTS ? v : 'openai'
+}
+
 export function workerIcon(provider: string, style: WorkerIconStyle, opts: WorkerIconOptions): TabIconComponent {
   if (style === 'custom') return customIconComponent(opts.customIcon)
   const agentType = providerAgentType(provider)
+  const ccVariant = safeCcVariant(opts.ccVariant)
+  const codexVariant = safeCodexVariant(opts.codexVariant)
   if (style === 'color') {
-    if (agentType === 'cc') return CC_COLOR_ICON_VARIANTS[opts.ccVariant]
+    if (agentType === 'cc') return CC_COLOR_ICON_VARIANTS[ccVariant]
     if (agentType === 'codex') return CODEX_COLOR_ICON
     // No colour logo for this provider: its mono logo, else Robot (below).
   }
   // A provider `getAgentIcon` recognises but has no case above for (e.g.
   // opencode) still resolves to its own logo here; only a provider unknown
   // to `getAgentIcon` itself falls through to Robot.
-  return getAgentIcon(agentType, { ccVariant: opts.ccVariant, codexVariant: opts.codexVariant }) ?? ROBOT
+  return getAgentIcon(agentType, { ccVariant, codexVariant }) ?? ROBOT
 }
