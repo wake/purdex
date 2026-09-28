@@ -184,18 +184,36 @@ describe('ExecutionView — native image attachments', () => {
     // … but the pending line's own URL is still alive.
     expect(revokeUrl).not.toHaveBeenCalledWith('blob:2')
     act(() => useExecutionStore.getState().setPendingLocal(H, E, null))
-    expect(revokeUrl).toHaveBeenCalledWith('blob:2')
+    expect(revokeUrl.mock.calls.filter(([u]) => u === 'blob:2')).toHaveLength(1)
   })
 
-  it('revokes the pending previews on unmount', async () => {
+  it('two panes on one execution: unmounting either leaves the pending previews alive; clearing pendingLocal revokes once', async () => {
     seedCaps(imageCaps())
-    const { unmount } = render(<ExecutionView {...base} isActive />)
-    dropFiles([png('p.png')])
-    enter()
-    await waitFor(() => expect(chips()).toHaveLength(0))
+    const other = render(<ExecutionView {...base} paneId="p2" isActive={false} />)
+    const sender = render(<ExecutionView {...base} isActive />)
+    const scope = sender.container
+    const root = scope.querySelector('[data-testid="execution-view"]') as HTMLElement
+    fireEvent.dragEnter(root, { dataTransfer: { types: ['Files'], files: [png('p.png')] } })
+    fireEvent.drop(root, { dataTransfer: { types: ['Files'], files: [png('p.png')] } })
+    fireEvent.keyDown(scope.querySelector('textarea') as HTMLElement, { key: 'Enter' })
+    await waitFor(() => expect(useExecutionStore.getState().executions[`${H}:${E}`].pendingLocal?.attachments).toEqual([{ previewUrl: 'blob:2', media_type: 'image/png' }]))
+    other.unmount()
     expect(revokeUrl).not.toHaveBeenCalledWith('blob:2')
-    unmount()
-    expect(revokeUrl).toHaveBeenCalledWith('blob:2')
+    sender.unmount()
+    expect(revokeUrl).not.toHaveBeenCalledWith('blob:2')
+    act(() => useExecutionStore.getState().setPendingLocal(H, E, null))
+    expect(revokeUrl.mock.calls.filter(([u]) => u === 'blob:2')).toHaveLength(1)
+  })
+
+  it('a failed send revokes its pending previews exactly once', async () => {
+    seedCaps(imageCaps())
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'attachments_too_large', 'too much'))
+    render(<ExecutionView {...base} isActive />)
+    dropFiles([png('a.png')])
+    enter()
+    await waitFor(() => expect(screen.getByTestId('send-error')).toBeInTheDocument())
+    expect(useExecutionStore.getState().executions[`${H}:${E}`].pendingLocal).toBeNull()
+    expect(revokeUrl.mock.calls.filter(([u]) => u === 'blob:2')).toHaveLength(1)
   })
 
   it('attachment_too_large at index 1 fails the second native chip and keeps the draft', async () => {

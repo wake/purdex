@@ -81,8 +81,9 @@ export interface ExecutionState {
     delivery: 'delivered' | 'queued' | null
     /**
      * Thumbnails of the native images this send carries (phase E). The
-     * object URLs belong to the optimistic line — ExecutionView revokes them
-     * when this array goes away — never to the chips they were sent from.
+     * object URLs belong to the optimistic line — the execution store
+     * revokes them on the write that drops this array (revokeDroppedPreviews),
+     * never a pane — and never to the chips they were sent from.
      */
     attachments?: { previewUrl: string; media_type: string }[]
   } | null

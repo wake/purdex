@@ -123,13 +123,6 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   // Encoding the images is async; this keeps a second submit meanwhile from
   // posting the same chips twice (handleSend's own lock starts after it).
   const encoding = useRef(false)
-  // The optimistic line's thumbnails are its own object URLs (the chips'
-  // are revoked as soon as the send clears them): revoked when pendingLocal
-  // drops this array — accepted, failed or replaced — and on unmount.
-  const pendingPreviews = st.pendingLocal?.attachments
-  useEffect(() => () => {
-    for (const p of pendingPreviews ?? []) URL.revokeObjectURL(p.previewUrl)
-  }, [pendingPreviews])
   const [dragging, setDragging] = useState(false)
   const dragDepth = useRef(0)
 
@@ -377,15 +370,15 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
       const attachments: WireImageAttachment[] = encoded.map((r, i) => ({
         type: 'image', media_type: natives[i].file.type, data: (r as PromiseFulfilledResult<string>).value,
       }))
+      // The optimistic line's thumbnails: its own object URLs (the chips' go
+      // with the chips). handleSend takes them over — the execution store
+      // revokes them once pendingLocal drops them (accepted, failed,
+      // replaced), whichever pane is showing them, and a no-op send revokes
+      // them itself — so this pane never revokes them, not even on unmount.
       const previews = natives.length > 0
         ? natives.map((n) => ({ previewUrl: URL.createObjectURL(n.file), media_type: n.file.type }))
         : undefined
       const ok = await handleSend(finalText, previews ? { ...opts, attachments, previews } : opts)
-      // Previews the store never kept (a no-op re-entrant send, or set and
-      // cleared before a render) are not the effect's to revoke.
-      if (previews && useExecutionStore.getState().executions[key]?.pendingLocal?.attachments !== previews) {
-        for (const p of previews) URL.revokeObjectURL(p.previewUrl)
-      }
       if (ok) {
         uploads.clear(sentKeys)
         return

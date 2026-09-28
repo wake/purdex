@@ -1,5 +1,5 @@
 // spa/src/stores/useExecutionStore.test.ts
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useExecutionStore, executionKey, splitExecutionKey } from './useExecutionStore'
 import type { NexEvent } from '../lib/nex/types'
 
@@ -190,5 +190,49 @@ describe('useExecutionStore', () => {
     expect(Object.keys(useExecutionStore.getState().executions).sort()).toEqual(['h10:exc_1', 'h1:exc_1'])
     s.clearHost('h1')
     expect(Object.keys(useExecutionStore.getState().executions)).toEqual(['h10:exc_1'])
+  })
+})
+
+describe('useExecutionStore — the optimistic line owns its preview URLs (phase E)', () => {
+  const origRevoke = URL.revokeObjectURL
+  let revoke: ReturnType<typeof vi.fn>
+  const previews = (...urls: string[]) => urls.map((previewUrl) => ({ previewUrl, media_type: 'image/png' }))
+  beforeEach(() => {
+    useExecutionStore.setState({ executions: {} })
+    revoke = vi.fn()
+    Object.assign(URL, { revokeObjectURL: revoke })
+  })
+  afterEach(() => { Object.assign(URL, { revokeObjectURL: origRevoke }) })
+
+  it('revokes the URLs exactly once when pendingLocal clears, not while the same array stays', () => {
+    const s = useExecutionStore.getState()
+    const p = previews('blob:a', 'blob:b')
+    s.setPendingLocal('h', 'exc_1', { text: '', delivery: null, attachments: p })
+    s.setPendingLocal('h', 'exc_1', { text: '', delivery: 'queued', attachments: p })
+    s.setPendingSend('h', 'exc_1', true)
+    expect(revoke).not.toHaveBeenCalled()
+    s.setPendingLocal('h', 'exc_1', null)
+    expect(revoke.mock.calls).toEqual([['blob:a'], ['blob:b']])
+    s.setPendingLocal('h', 'exc_1', null)
+    expect(revoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('revokes the replaced array when a newer send takes the line', () => {
+    const s = useExecutionStore.getState()
+    s.setPendingLocal('h', 'exc_1', { text: 'A', delivery: null, attachments: previews('blob:a') })
+    s.setPendingLocal('h', 'exc_1', { text: 'B', delivery: null, attachments: previews('blob:b') })
+    expect(revoke.mock.calls).toEqual([['blob:a']])
+  })
+
+  it('revokes when message_accepted consumes the line, and when the execution or host is cleared', () => {
+    const s = useExecutionStore.getState()
+    s.setPendingLocal('h', 'exc_1', { text: '', delivery: null, attachments: previews('blob:a') })
+    s.applyEvents('h', 'exc_1', [ev(1, 'execution.message_accepted', { turn_id: 't1', text: '' })])
+    expect(revoke.mock.calls).toEqual([['blob:a']])
+    s.setPendingLocal('h', 'exc_1', { text: '', delivery: null, attachments: previews('blob:b') })
+    s.clearExecution('h', 'exc_1')
+    s.setPendingLocal('h', 'exc_2', { text: '', delivery: null, attachments: previews('blob:c') })
+    s.clearHost('h')
+    expect(revoke.mock.calls).toEqual([['blob:a'], ['blob:b'], ['blob:c']])
   })
 })
