@@ -323,8 +323,11 @@ describe('useWorkerAgentProjection', () => {
       // Live again: a new turn runs on the live stream while the row still reads idle.
       setLive({ sse: 'open', turnStarts: [0, 1], turnMeta: [{ startAt: 10, endAt: 25, outcome: 'ok', durationMs: 15 }, { startAt: 40, endAt: null, outcome: null, durationMs: null }] })
       expect(st().statuses[KEY]).toBe('running')
-      // A transient reconnect keeps the live source.
+      // A stream stuck reconnecting yields to the fresher list row, not a frozen live snapshot.
       useExecutionStore.getState().setSse(H, E, 'reconnecting')
+      expect(st().statuses[KEY]).toBe('idle')
+      // Delivering again: the live source wins back.
+      useExecutionStore.getState().setSse(H, E, 'open')
       expect(st().statuses[KEY]).toBe('running')
       stop()
     })

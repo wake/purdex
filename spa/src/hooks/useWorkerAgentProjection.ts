@@ -64,15 +64,15 @@ interface Source {
 }
 
 /**
- * The live entry is delivering: its SSE is open (or briefly reconnecting).
- * An evicted pane (`paused`, useExecutionSubscription's slot cap) or a dead
- * stream (`closed`) keeps its store entry frozen until `clearExecution`, and
- * a resumed one reads `connecting` until the stream is back — in all of
- * those the list row is fresher. `idle` is the state before a pane ever
- * connected.
+ * The live entry is delivering: its SSE is `open`. Every other status keeps
+ * its store entry frozen — an evicted pane (`paused`, useExecutionSubscription's
+ * slot cap), a dead stream (`closed`), a resumed one still dialing in
+ * (`connecting`), and a stream stuck retrying (`reconnecting`, which can
+ * persist indefinitely) — so in all of those the list row is fresher when one
+ * exists. `idle` is the state before a pane ever connected.
  */
 function isLiveDelivering(live: ExecutionState): boolean {
-  return live.sse === 'open' || live.sse === 'reconnecting'
+  return live.sse === 'open'
 }
 
 function deriveSource({ hostId, executionId }: WorkerRef): Source | null {
