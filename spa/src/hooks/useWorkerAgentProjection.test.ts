@@ -13,7 +13,7 @@ import { shouldDispatch } from './useNotificationDispatcher'
 import { STORAGE_KEYS } from '../lib/storage'
 import { defaultExecutionState, type ExecutionState } from '../lib/nex/event-reducer'
 import { emptyListCache } from '../lib/nex/execution-list-effects'
-import type { ExecutionSummary, WorkerTask } from '../lib/nex/types'
+import type { ExecutionSummary, NexEvent, WorkerTask } from '../lib/nex/types'
 import type { StreamMessage } from '../lib/nex/message-types'
 import type { Tab } from '../types/tab'
 
@@ -238,6 +238,60 @@ describe('useWorkerAgentProjection', () => {
       setLive({ summary: summary({ state: 'idle', updated_at: 900 }), turnStarts: [0], turnMeta: [{ startAt: 100, endAt: 200, outcome: 'ok', durationMs: 100 }] })
       useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
       expect(useAgentStore.getState().lastEvents[KEY].broadcast_ts).toBe(200)
+      stop()
+    })
+  })
+
+  describe('queued sends (A1)', () => {
+    let seq = 0
+    const ev = (kind: string, payload: Record<string, unknown> = {}, created_at = 0): NexEvent =>
+      ({ seq: ++seq, execution_id: E, kind, payload, created_at: created_at || seq * 10 })
+    const apply = (...evs: NexEvent[]) => useExecutionStore.getState().applyEvents(H, E, evs)
+    const names = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.map((c) => (c[2] as { raw_event_name: string }).raw_event_name)
+
+    const runToTaEnd = () => {
+      seq = 0
+      const spy = vi.spyOn(useAgentStore.getState(), 'handleNormalizedEvent')
+      spy.mockClear() // an earlier test's spy may be carried over on the store state
+      const stop = startWorkerAgentProjection()
+      setLive({ summary: summary({ state: 'running' }), sse: 'open' })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      apply(ev('execution.message_accepted', { text: 'a', turn_id: 'tA' }), ev('execution.running', { turn_id: 'tA' }))
+      apply(ev('execution.message_accepted', { text: 'b', turn_id: 'tB' }))
+      apply(ev('assistant', { type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'A done' }], stop_reason: null } }))
+      apply(ev('result', { type: 'result', subtype: 'success', is_error: false }))
+      apply(ev('execution.terminal', { turn_id: 'tA', reason: 'final_response' }))
+      // The refetched summary may already read idle while tB waits in the queue.
+      setLive({ summary: summary({ state: 'idle' }) })
+      return { spy, stop }
+    }
+
+    it('never projects idle between the first turn ending and the queued turn starting', () => {
+      const { spy, stop } = runToTaEnd()
+      expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+      expect(names(spy)).not.toContain('Stop')
+      apply(ev('execution.running', { turn_id: 'tB' }))
+      expect(names(spy)).toEqual(['UserPromptSubmit'])
+      stop()
+    })
+
+    it('the queued turn ending ok dispatches Stop once', () => {
+      const { spy, stop } = runToTaEnd()
+      apply(ev('execution.running', { turn_id: 'tB' }))
+      apply(ev('result', { type: 'result', subtype: 'success', is_error: false }))
+      apply(ev('execution.terminal', { turn_id: 'tB', reason: 'final_response' }))
+      expect(useAgentStore.getState().statuses[KEY]).toBe('idle')
+      expect(names(spy)).toEqual(['UserPromptSubmit', 'Stop'])
+      stop()
+    })
+
+    it('the queued turn failing dispatches StopFailure', () => {
+      const { spy, stop } = runToTaEnd()
+      apply(ev('execution.running', { turn_id: 'tB' }))
+      apply(ev('execution.terminal', { turn_id: 'tB', reason: 'error' }))
+      expect(useAgentStore.getState().statuses[KEY]).toBe('error')
+      expect(names(spy)).toEqual(['UserPromptSubmit', 'StopFailure'])
       stop()
     })
   })

@@ -21,7 +21,7 @@ import { resolveExecutionHostId } from '../lib/nex/resolve-host'
 import { runningTasks } from '../lib/nex/tasks'
 import { isResultError } from '../lib/nex/cost-summary'
 import { execAgentCode, projectWorkerStatus, providerAgentType, type WorkerProjection, type WorkerStatusInput } from '../lib/nex/worker-agent-status'
-import type { ExecutionState } from '../lib/nex/event-reducer'
+import { hasOpenTurn, lastEndedOutcome, type ExecutionState } from '../lib/nex/event-reducer'
 import type { ExecutionSummary } from '../lib/nex/types'
 import type { AssistantMessage, StreamMessage } from '../lib/nex/message-types'
 import type { Tab } from '../types/tab'
@@ -69,8 +69,10 @@ function deriveSource({ hostId, executionId }: WorkerRef): Source | null {
     return {
       input: {
         state: live.summary.state,
-        turnLive: live.turnLive,
-        lastOutcome: live.turnMeta.at(-1)?.outcome ?? null,
+        // Per turn, not the execution-wide `turnLive` alone: the first
+        // turn's end clears `turnLive` while a queued send is still pending.
+        turnLive: live.turnLive || hasOpenTurn(live),
+        lastOutcome: lastEndedOutcome(live),
         hasTurn: live.turnStarts.length > 0,
         archived: live.summary.archived,
         runningSubagents: subs.map((t) => ({ task_id: t.task_id, subagent_type: t.subagent_type, started_at: t.started_at })),

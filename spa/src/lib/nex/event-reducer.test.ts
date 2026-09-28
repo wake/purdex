@@ -1,6 +1,6 @@
 // spa/src/lib/nex/event-reducer.test.ts
 import { describe, it, expect } from 'vitest'
-import { applyDurableEvent, applyTasksSnapshot, applyTransientFrame, defaultExecutionState, frameToEvent, isLifecycleKind, isTaskEventKind, type ExecutionState } from './event-reducer'
+import { applyDurableEvent, applyTasksSnapshot, applyTransientFrame, defaultExecutionState, frameToEvent, hasOpenTurn, isLifecycleKind, isTaskEventKind, lastEndedOutcome, type ExecutionState } from './event-reducer'
 import { parseTask } from './tasks'
 import type { NexEvent, ExecutionSummary } from './types'
 
@@ -897,5 +897,48 @@ describe('turnMeta (spec §7.1)', () => {
       expect(again).toBe(s)
       expect(again.turnMeta.map(m => m.outcome)).toEqual(['ok', null])
     })
+  })
+})
+
+describe('hasOpenTurn / lastEndedOutcome (queued sends)', () => {
+  const queued = () => {
+    let s = defaultExecutionState()
+    s = applyDurableEvent(s, ev(1, 'execution.message_accepted', { text: 'a', turn_id: 'tA' }))
+    s = applyDurableEvent(s, ev(2, 'execution.running', { turn_id: 'tA' }))
+    s = applyDurableEvent(s, ev(3, 'execution.message_accepted', { text: 'b', turn_id: 'tB' }))
+    s = applyDurableEvent(s, ev(4, 'result', { type: 'result', subtype: 'success', is_error: false }))
+    s = applyDurableEvent(s, ev(5, 'execution.terminal', { turn_id: 'tA', reason: 'final_response' }))
+    return s
+  }
+
+  it('no turn yet: nothing open, no outcome', () => {
+    expect(hasOpenTurn(defaultExecutionState())).toBe(false)
+    expect(lastEndedOutcome(defaultExecutionState())).toBeNull()
+  })
+
+  it('a queued turn stays open after the previous turn ends (turnLive is execution-wide)', () => {
+    const s = queued()
+    expect(s.turnLive).toBe(false)
+    expect(hasOpenTurn(s)).toBe(true)
+    expect(lastEndedOutcome(s)).toBe('ok')
+  })
+
+  it('the queued turn ending closes it and its outcome becomes the last one', () => {
+    let s = queued()
+    s = applyDurableEvent(s, ev(6, 'execution.running', { turn_id: 'tB' }))
+    expect(hasOpenTurn(s)).toBe(true)
+    s = applyDurableEvent(s, ev(7, 'result', { type: 'result', subtype: 'error_during_execution', is_error: true }))
+    expect(hasOpenTurn(s)).toBe(false)
+    expect(lastEndedOutcome(s)).toBe('failed')
+  })
+
+  it('an earlier turn still running keeps it open when the queued one is closed by its own keyed end', () => {
+    let s = defaultExecutionState()
+    s = applyDurableEvent(s, ev(1, 'execution.message_accepted', { text: 'a', turn_id: 'tA' }))
+    s = applyDurableEvent(s, ev(2, 'execution.message_accepted', { text: 'b', turn_id: 'tB' }))
+    s = applyDurableEvent(s, ev(3, 'execution.turn_stalled', { turn_id: 'tB' }))
+    expect(s.turnMeta.map(m => m.outcome)).toEqual([null, 'failed'])
+    expect(hasOpenTurn(s)).toBe(true)
+    expect(lastEndedOutcome(s)).toBe('failed')
   })
 })
