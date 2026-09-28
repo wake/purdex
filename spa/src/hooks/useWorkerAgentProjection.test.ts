@@ -13,7 +13,7 @@ import { shouldDispatch } from './useNotificationDispatcher'
 import { STORAGE_KEYS } from '../lib/storage'
 import { defaultExecutionState, type ExecutionState } from '../lib/nex/event-reducer'
 import { emptyListCache } from '../lib/nex/execution-list-effects'
-import type { ExecutionSummary, WorkerTask } from '../lib/nex/types'
+import type { ExecutionSummary, NexEvent, WorkerTask } from '../lib/nex/types'
 import type { StreamMessage } from '../lib/nex/message-types'
 import type { Tab } from '../types/tab'
 
@@ -238,6 +238,194 @@ describe('useWorkerAgentProjection', () => {
       setLive({ summary: summary({ state: 'idle', updated_at: 900 }), turnStarts: [0], turnMeta: [{ startAt: 100, endAt: 200, outcome: 'ok', durationMs: 100 }] })
       useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
       expect(useAgentStore.getState().lastEvents[KEY].broadcast_ts).toBe(200)
+      stop()
+    })
+  })
+
+  describe('queued sends (A1)', () => {
+    let seq = 0
+    const ev = (kind: string, payload: Record<string, unknown> = {}, created_at = 0): NexEvent =>
+      ({ seq: ++seq, execution_id: E, kind, payload, created_at: created_at || seq * 10 })
+    const apply = (...evs: NexEvent[]) => useExecutionStore.getState().applyEvents(H, E, evs)
+    const names = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.map((c) => (c[2] as { raw_event_name: string }).raw_event_name)
+
+    const runToTaEnd = () => {
+      seq = 0
+      const spy = vi.spyOn(useAgentStore.getState(), 'handleNormalizedEvent')
+      spy.mockClear() // an earlier test's spy may be carried over on the store state
+      const stop = startWorkerAgentProjection()
+      setLive({ summary: summary({ state: 'running' }), sse: 'open' })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      apply(ev('execution.message_accepted', { text: 'a', turn_id: 'tA' }), ev('execution.running', { turn_id: 'tA' }))
+      apply(ev('execution.message_accepted', { text: 'b', turn_id: 'tB' }))
+      apply(ev('assistant', { type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'A done' }], stop_reason: null } }))
+      apply(ev('result', { type: 'result', subtype: 'success', is_error: false }))
+      apply(ev('execution.terminal', { turn_id: 'tA', reason: 'final_response' }))
+      // The refetched summary may already read idle while tB waits in the queue.
+      setLive({ summary: summary({ state: 'idle' }) })
+      return { spy, stop }
+    }
+
+    it('never projects idle between the first turn ending and the queued turn starting', () => {
+      const { spy, stop } = runToTaEnd()
+      expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+      expect(names(spy)).not.toContain('Stop')
+      apply(ev('execution.running', { turn_id: 'tB' }))
+      expect(names(spy)).toEqual(['UserPromptSubmit'])
+      stop()
+    })
+
+    it('the queued turn ending ok dispatches Stop once', () => {
+      const { spy, stop } = runToTaEnd()
+      apply(ev('execution.running', { turn_id: 'tB' }))
+      apply(ev('result', { type: 'result', subtype: 'success', is_error: false }))
+      apply(ev('execution.terminal', { turn_id: 'tB', reason: 'final_response' }))
+      expect(useAgentStore.getState().statuses[KEY]).toBe('idle')
+      expect(names(spy)).toEqual(['UserPromptSubmit', 'Stop'])
+      stop()
+    })
+
+    it('the queued turn failing dispatches StopFailure', () => {
+      const { spy, stop } = runToTaEnd()
+      apply(ev('execution.running', { turn_id: 'tB' }))
+      apply(ev('execution.terminal', { turn_id: 'tB', reason: 'error' }))
+      expect(useAgentStore.getState().statuses[KEY]).toBe('error')
+      expect(names(spy)).toEqual(['UserPromptSubmit', 'StopFailure'])
+      stop()
+    })
+  })
+
+  describe('evicted live subscription (A2)', () => {
+    const listRow = (over: Partial<ExecutionSummary>) =>
+      useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), items: [summary({ turn_count: 1, ...over })] } } })
+    const runningLive = () => setLive({ summary: summary({ state: 'running' }), turnLive: true, turnStarts: [0],
+      turnMeta: [{ startAt: 10, endAt: null, outcome: null, durationMs: null }], sse: 'open' })
+
+    it('a paused (evicted) pane follows the list row, and the live stream again once resumed', () => {
+      const stop = startWorkerAgentProjection()
+      runningLive()
+      listRow({ state: 'running', updated_at: 20 })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      const st = () => useAgentStore.getState()
+      expect(st().statuses[KEY]).toBe('running')
+
+      // Eviction: SSE closed, store entry kept frozen at running.
+      useExecutionStore.getState().setSse(H, E, 'paused')
+      listRow({ state: 'idle', updated_at: 30 })
+      expect(st().statuses[KEY]).toBe('idle')
+      expect(st().lastEvents[KEY].raw_event_name).toBe('Stop')
+
+      // Resuming but not delivering yet: the frozen running must not win.
+      useExecutionStore.getState().setSse(H, E, 'connecting')
+      expect(st().statuses[KEY]).toBe('idle')
+
+      // Live again: a new turn runs on the live stream while the row still reads idle.
+      setLive({ sse: 'open', turnStarts: [0, 1], turnMeta: [{ startAt: 10, endAt: 25, outcome: 'ok', durationMs: 15 }, { startAt: 40, endAt: null, outcome: null, durationMs: null }] })
+      expect(st().statuses[KEY]).toBe('running')
+      stop()
+    })
+
+    it('while evicted, a row that advances again keeps winning over the frozen live state', () => {
+      const stop = startWorkerAgentProjection()
+      runningLive()
+      setLive({ lastEventAt: 15 })
+      listRow({ state: 'running', updated_at: 20 })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      const st = () => useAgentStore.getState()
+      useExecutionStore.getState().setSse(H, E, 'paused')
+      listRow({ state: 'idle', updated_at: 30 })
+      expect(st().statuses[KEY]).toBe('idle')
+      listRow({ state: 'running', updated_at: 50 })
+      expect(st().statuses[KEY]).toBe('running')
+      listRow({ state: 'failed', updated_at: 60, last_turn_reason: 'orphaned' })
+      expect(st().statuses[KEY]).toBe('error')
+      stop()
+    })
+
+    describe('source choice by freshness (non-open SSE)', () => {
+      const names = (spy: { mock: { calls: unknown[][] } }) =>
+        spy.mock.calls.map((c) => (c[2] as { raw_event_name: string }).raw_event_name)
+      const spyDispatch = () => {
+        const spy = vi.spyOn(useAgentStore.getState(), 'handleNormalizedEvent')
+        spy.mockClear()
+        return spy
+      }
+      // Live snapshot is fresh as of t=100 (its last applied event).
+      const freshRunningLive = (sse: ExecutionState['sse']) =>
+        setLive({ summary: summary({ state: 'running', updated_at: 40 }), turnLive: true, turnStarts: [0],
+          turnMeta: [{ startAt: 10, endAt: null, outcome: null, durationMs: null }], lastEventAt: 100, sse })
+
+      it('open: the live state wins regardless of a newer list row', () => {
+        const stop = startWorkerAgentProjection()
+        freshRunningLive('open')
+        listRow({ state: 'idle', updated_at: 500 })
+        useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+        stop()
+      })
+
+      it('a brief reconnect with a row older than the live snapshot stays live (no Stop / UserPromptSubmit flip)', () => {
+        const spy = spyDispatch()
+        const stop = startWorkerAgentProjection()
+        freshRunningLive('open')
+        // Row is older than the last live event (100), though newer than the live summary (40).
+        listRow({ state: 'idle', updated_at: 80 })
+        useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+        useExecutionStore.getState().setSse(H, E, 'reconnecting')
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+        useExecutionStore.getState().setSse(H, E, 'open')
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+        expect(names(spy)).toEqual(['UserPromptSubmit'])
+        stop()
+      })
+
+      it('a row older than a refetched live summary also stays live', () => {
+        const stop = startWorkerAgentProjection()
+        freshRunningLive('reconnecting')
+        setLive({ summary: summary({ state: 'running', updated_at: 200 }) })
+        listRow({ state: 'idle', updated_at: 150 })
+        useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+        stop()
+      })
+
+      it('an equally fresh row does not displace the live state', () => {
+        const stop = startWorkerAgentProjection()
+        freshRunningLive('reconnecting')
+        listRow({ state: 'idle', updated_at: 100 })
+        useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+        stop()
+      })
+
+      it.each(['reconnecting', 'paused', 'connecting', 'closed'] as const)('%s with a row newer than the live snapshot: the row wins', (sse) => {
+        const stop = startWorkerAgentProjection()
+        freshRunningLive(sse)
+        listRow({ state: 'idle', updated_at: 101 })
+        useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('idle')
+        stop()
+      })
+    })
+
+    it('a closed live stream falls back to the list row', () => {
+      const stop = startWorkerAgentProjection()
+      runningLive()
+      listRow({ state: 'running', updated_at: 20 })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      useExecutionStore.getState().setSse(H, E, 'closed', 'boom')
+      listRow({ state: 'failed', updated_at: 30, last_turn_reason: 'orphaned' })
+      expect(useAgentStore.getState().statuses[KEY]).toBe('error')
+      stop()
+    })
+
+    it('a paused pane with no list row keeps its live state as the source', () => {
+      const stop = startWorkerAgentProjection()
+      runningLive()
+      useExecutionStore.getState().setSse(H, E, 'paused')
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      expect(useAgentStore.getState().statuses[KEY]).toBe('running')
       stop()
     })
   })
