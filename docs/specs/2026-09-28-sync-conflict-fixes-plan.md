@@ -45,3 +45,27 @@ Run: `cd spa && npx vitest run <files>`; at the end full `npx vitest run`, `pnpm
 ## Done when
 
 Repro green; full vitest, lint, tsc clean; each task its own commit.
+
+## Review round 1 (Claude subagent, 2026-09-28) — amendments, these override the tasks above
+
+- **Task 1 +UI.** D2 makes the conflict UI's "keep local also undoes what you did here since" wrong:
+  remove that hint (ResolveRow.tsx ~61-63, ~116; zh-TW.json ~1532/~1550 and the en.json twins) and make
+  resolve-counts.ts (~5, ~81-84) count the LOCAL side from `currentHash` (what is actually pushed), not
+  `conflict.localHash`. Fix sync-status.ts ~129-130 comment. Update ResolveBlock.test.tsx /
+  ResolveBlock.integration.test.tsx accordingly.
+- **Task 1 simplification.** Since `finish()` clears a `restoreLocal` whose hash equals `currentHash`,
+  `resolved keep:'local'` sets `restoreLocal: null` unconditionally. The restore-local machinery (row 0c,
+  `local-restored`, executor `restoreLocal()`, parked restore) becomes unreachable from `resolved`; it is
+  LEFT IN PLACE in this PR (a follow-up issue removes it). Existing tests asserting the restore after
+  keep-local are rewritten to assert the new behaviour.
+- **Task 1 answerFor.** Drop the `conflict.localHash !== currentHash` guard in `answerFor`
+  (executor.ts ~678): under `push`, keep-local now pushes the live stores, which is what push means.
+  Update the header bullet accordingly.
+- **Task 3 backfill stamp → frame start.** `last_seen_at` moves on every hook event, so two clients' probes
+  usually differ. Daemon: `internal/module/agent/provenance_handler.go` answer gains `started_at` (the
+  frame's `StartedAt`, same unit as `last_seen_at`; Go test). SPA: `SessionProvenance.startedAt`
+  (host-api.ts), the backfill uses it (ns → ms) for `agent.updatedAt` and `capturedAt`; 0 / missing
+  (old daemon) → `Date.now()` as today. Update the spec's D1 table + Residual paragraph.
+- **`exited.at`** needs no fallback (parseExit already rejects ≤ 0).
+- **Known tests that change:** useTabStore.rebuild.test.ts ~236 ("stamps capturedAt on every write"),
+  ~691-700 (exit expects Date.now), executor.test.ts ~636 / ~1659 (restore after keep-local).
