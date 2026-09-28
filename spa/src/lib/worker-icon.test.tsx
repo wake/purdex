@@ -1,6 +1,6 @@
 import { render } from '@testing-library/react'
 import { describe, it, expect } from 'vitest'
-import { workerIcon } from './worker-icon'
+import { workerIcon, type WorkerIconOptions } from './worker-icon'
 import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS, CC_COLOR_ICON_VARIANTS, CODEX_COLOR_ICON, getAgentIcon } from './agent-icons'
 import { ICON_MAP } from '../components/tab-icon-map'
 
@@ -72,5 +72,54 @@ describe('workerIcon — unknown provider', () => {
   })
   it('custom ignores the provider', () => {
     expect(workerIcon('gemini', 'custom', { ...base, customIcon: 'Rocket' })).toBe(workerIcon('claude', 'custom', { ...base, customIcon: 'Rocket' }))
+  })
+})
+
+// A Profile Sync payload only checks that ccIconVariant/codexIconVariant are
+// strings (not that they're a known variant), so a stale or foreign value can
+// reach workerIcon here. It must never return undefined for a recognised
+// agentType — fall back to the default variant's icon, not an empty tab icon.
+describe('workerIcon — unknown icon variant (review finding A1)', () => {
+  it('unknown ccIconVariant falls back to the default variant (bot), mono and color', () => {
+    const opts: WorkerIconOptions = { ...base, ccVariant: 'nope-not-a-variant' as WorkerIconOptions['ccVariant'] }
+    expect(workerIcon('claude', 'mono', opts)).toBe(CC_ICON_VARIANTS.bot)
+    expect(workerIcon('claude', 'color', opts)).toBe(CC_COLOR_ICON_VARIANTS.bot)
+  })
+  it('unknown codexIconVariant falls back to the default variant (openai), mono and color', () => {
+    const opts: WorkerIconOptions = { ...base, codexVariant: 'nope-not-a-variant' as WorkerIconOptions['codexVariant'] }
+    expect(workerIcon('codex', 'mono', opts)).toBe(CODEX_ICON_VARIANTS.openai)
+    expect(workerIcon('codex', 'color', opts)).toBe(CODEX_COLOR_ICON)
+  })
+  it('both unknown together still resolves to defined icons, never undefined', () => {
+    const opts: WorkerIconOptions = {
+      ...base,
+      ccVariant: 'x' as WorkerIconOptions['ccVariant'],
+      codexVariant: 'y' as WorkerIconOptions['codexVariant'],
+    }
+    expect(workerIcon('claude', 'mono', opts)).toBeDefined()
+    expect(workerIcon('claude', 'color', opts)).toBeDefined()
+    expect(workerIcon('codex', 'mono', opts)).toBeDefined()
+    expect(workerIcon('codex', 'color', opts)).toBeDefined()
+  })
+})
+
+// The variant guard used `v in <map>`, which is true for inherited
+// Object.prototype keys (`__proto__`, `constructor`, `toString`) even though
+// the map has no own property by that name — a synced value like that
+// yields a non-component and breaks tab rendering (review finding P2).
+// `Object.hasOwn` must be used instead, for every variant map lookup.
+describe('workerIcon — prototype-chain variant values (review finding P2)', () => {
+  const proto = ['__proto__', 'constructor', 'toString'] as const
+
+  it.each(proto)('ccIconVariant %s falls back to bot, mono and color', (name) => {
+    const opts: WorkerIconOptions = { ...base, ccVariant: name as WorkerIconOptions['ccVariant'] }
+    expect(workerIcon('claude', 'mono', opts)).toBe(CC_ICON_VARIANTS.bot)
+    expect(workerIcon('claude', 'color', opts)).toBe(CC_COLOR_ICON_VARIANTS.bot)
+  })
+
+  it.each(proto)('codexIconVariant %s falls back to openai, mono and color', (name) => {
+    const opts: WorkerIconOptions = { ...base, codexVariant: name as WorkerIconOptions['codexVariant'] }
+    expect(workerIcon('codex', 'mono', opts)).toBe(CODEX_ICON_VARIANTS.openai)
+    expect(workerIcon('codex', 'color', opts)).toBe(CODEX_COLOR_ICON)
   })
 })
