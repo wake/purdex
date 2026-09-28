@@ -23,6 +23,9 @@ describe('splitCompositeKey', () => {
       ['mlab', 'ses001'],
       ['mlab:abc123', 'ses001'],
       ['a:b:c', 'z9x8y7'],
+      // worker (execution) agent keys contain a colon of their own (spec §8.1)
+      ['h1', 'exec:e1'],
+      ['mlab:abc123', 'exec:01J9ZK'],
     ] as const) {
       expect(splitCompositeKey(compositeKey(hostId, sessionCode))).toEqual({ hostId, sessionCode })
     }

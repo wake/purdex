@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, swapPaneContent, remountLeaf, countPanesOnSession } from './pane-tree'
 import type { PaneLayout, Pane, PaneContent } from '../types/tab'
+import { useHostStore } from '../stores/useHostStore'
 
 // ── helpers for new tests ──────────────────────────────────────────────────
 const mkLeaf = (id: string, kind: string = 'dashboard'): PaneLayout => ({ type: 'leaf', pane: { id, content: { kind } as PaneContent } })
@@ -83,6 +84,28 @@ describe('getLayoutKey', () => {
 
   it('returns split id for split', () => {
     expect(getLayoutKey(split)).toBe('ssssss')
+  })
+})
+
+describe('findTabBySessionCode — worker (execution) tabs (spec §8.2)', () => {
+  const execLeaf = (executionId: string, host?: string): { layout: PaneLayout } => ({
+    layout: { type: 'leaf', pane: { id: 'px' + executionId, content: { kind: 'execution', executionId, ...(host ? { host } : {}) } } },
+  })
+
+  it('matches an execution primary pane by exec:<id> and its host', () => {
+    const tabs = { t1: { layout: leaf }, t2: execLeaf('e1', 'h1') }
+    expect(findTabBySessionCode(tabs, 'h1', 'exec:e1')).toBe('t2')
+    expect(findTabBySessionCode(tabs, 'h2', 'exec:e1')).toBeUndefined()
+    expect(findTabBySessionCode(tabs, 'h1', 'exec:e2')).toBeUndefined()
+    // the bare execution id is not an agent key
+    expect(findTabBySessionCode(tabs, 'h1', 'e1')).toBeUndefined()
+  })
+
+  it('a host-less execution pane resolves to the first host, like the projection', () => {
+    useHostStore.setState({ hostOrder: ['h9', 'h1'] })
+    const tabs = { t1: execLeaf('e1') }
+    expect(findTabBySessionCode(tabs, 'h9', 'exec:e1')).toBe('t1')
+    expect(findTabBySessionCode(tabs, 'h1', 'exec:e1')).toBeUndefined()
   })
 })
 
