@@ -79,6 +79,14 @@ func (m *Module) handleExecutionUpload(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusConflict, "cwd_unavailable", "execution has no absolute cwd", nil)
 		return
 	}
+	// The cwd must exist as a directory *before* anything is created. Without
+	// this, a removed or unmounted cwd is silently recreated by MkdirAll
+	// below and the upload "succeeds" into a directory the execution never
+	// had.
+	if info, err := os.Stat(exec.Cwd); err != nil || !info.IsDir() {
+		writeHandoffError(w, http.StatusConflict, "cwd_unavailable", "execution cwd does not exist", nil)
+		return
+	}
 
 	cwd := filepath.Clean(exec.Cwd)
 	root := filepath.Join(cwd, uploadsDirName)
@@ -106,6 +114,29 @@ func (m *Module) handleExecutionUpload(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusInternalServerError, "upload_dir_failed", "cannot create upload directory", nil)
 		return
 	}
+
+	// Symlink containment: the lexical check above (cwd → dir via filepath.Rel)
+	// cannot see a symlink planted somewhere along .purdex-uploads/<id> — e.g.
+	// .purdex-uploads pre-created as a symlink pointing outside the cwd.
+	// MkdirAll above follows symlinks like any other mkdir, so resolve both
+	// sides now and refuse to write if the real target left the cwd.
+	realCwd, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		m.logf("nex: upload resolve cwd %s: %v", cwd, err)
+		writeHandoffError(w, http.StatusInternalServerError, "upload_dir_failed", "cannot resolve execution cwd", nil)
+		return
+	}
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		m.logf("nex: upload resolve dir %s: %v", dir, err)
+		writeHandoffError(w, http.StatusInternalServerError, "upload_dir_failed", "cannot resolve upload directory", nil)
+		return
+	}
+	if rel, err := filepath.Rel(realCwd, realDir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == "." {
+		writeHandoffError(w, http.StatusBadRequest, "upload_dir_outside_cwd", "upload directory escapes the execution's cwd", nil)
+		return
+	}
+
 	ensureUploadsGitignore(m, root)
 
 	dst, name, err := fsutil.CreateDedupFile(dir, uploadFileName(part.FileName()))
@@ -201,9 +232,13 @@ func uploadFileName(raw string) string {
 
 // ensureUploadsGitignore writes <root>/.gitignore = "*" when absent. O_EXCL
 // so an existing one — the user's or a concurrent request's — is kept.
-// Failure is logged, not fatal: the upload itself is still usable.
+// Failure is logged, not fatal: the upload itself is still usable. A write
+// or close failure removes the file it started, rather than leaving a
+// short/empty .gitignore behind that O_EXCL would then treat as "already
+// there" forever, silently defeating this on every later upload.
 func ensureUploadsGitignore(m *Module, root string) {
-	f, err := os.OpenFile(filepath.Join(root, ".gitignore"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	path := filepath.Join(root, ".gitignore")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		if !os.IsExist(err) {
 			m.logf("nex: upload .gitignore in %s: %v", root, err)
@@ -212,8 +247,14 @@ func ensureUploadsGitignore(m *Module, root string) {
 	}
 	if _, err := f.WriteString("*\n"); err != nil {
 		m.logf("nex: upload .gitignore write in %s: %v", root, err)
+		f.Close()
+		os.Remove(path)
+		return
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		m.logf("nex: upload .gitignore close in %s: %v", root, err)
+		os.Remove(path)
+	}
 }
 
 func writeUploadTooLarge(w http.ResponseWriter) {

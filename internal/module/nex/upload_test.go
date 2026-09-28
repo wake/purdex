@@ -179,6 +179,35 @@ func TestUpload409NoCwd(t *testing.T) {
 	assert.Equal(t, "cwd_unavailable", body["code"])
 }
 
+// A cwd that no longer exists (removed, or an unmounted volume) must not be
+// silently recreated by MkdirAll further down the handler.
+func TestUpload409MissingCwdDir(t *testing.T) {
+	env, cwd := newUploadEnv(t)
+	require.NoError(t, os.RemoveAll(cwd))
+	status, body := postUpload(t, env, tbExecID, "file", "a.txt", []byte("a"))
+	assert.Equal(t, http.StatusConflict, status, body)
+	assert.Equal(t, "cwd_unavailable", body["code"])
+	_, err := os.Stat(cwd)
+	assert.True(t, os.IsNotExist(err), "cwd still does not exist")
+}
+
+// .purdex-uploads pre-created as a symlink pointing outside the cwd: the
+// lexical containment check above can't see this (it never touches the
+// filesystem), so the post-MkdirAll symlink-resolved check must catch it.
+func TestUploadRejectsSymlinkedUploadsDir(t *testing.T) {
+	env, cwd := newUploadEnv(t)
+	outside := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(cwd, ".purdex-uploads")))
+
+	status, body := postUpload(t, env, tbExecID, "file", "a.txt", []byte("a"))
+	assert.Equal(t, http.StatusBadRequest, status, body)
+	assert.Equal(t, "upload_dir_outside_cwd", body["code"])
+
+	entries, err := os.ReadDir(filepath.Join(outside, tbExecID))
+	require.NoError(t, err, "mkdir followed the symlink before the check ran")
+	assert.Empty(t, entries, "nothing written in the target")
+}
+
 func TestUpload413OverCap(t *testing.T) {
 	old := uploadMaxBytes
 	uploadMaxBytes = 16
@@ -189,13 +218,43 @@ func TestUpload413OverCap(t *testing.T) {
 	assert.Equal(t, http.StatusRequestEntityTooLarge, status)
 	assert.Equal(t, "file_too_large", body["code"])
 	entries, err := os.ReadDir(filepath.Join(cwd, ".purdex-uploads", tbExecID))
-	if err == nil {
-		assert.Empty(t, entries, "partial file removed")
-	}
+	require.NoError(t, err, "upload dir exists (created before the copy that overflowed)")
+	assert.Empty(t, entries, "partial file removed")
 
 	// Exactly at the cap is fine.
 	status, body = postUpload(t, env, tbExecID, "file", "ok.bin", bytes.Repeat([]byte("z"), 16))
 	assert.Equal(t, http.StatusOK, status, body)
+}
+
+// The cap can also be tripped by http.MaxBytesReader while findFilePart is
+// still skipping past an earlier, oversized field — before the "file" part
+// is ever reached, and before any directory is created.
+func TestUpload413CapTrippedByPaddingField(t *testing.T) {
+	old := uploadMaxBytes
+	uploadMaxBytes = 16
+	t.Cleanup(func() { uploadMaxBytes = old })
+
+	env, cwd := newUploadEnv(t)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	require.NoError(t, mw.WriteField("pad", strings.Repeat("p", int(uploadMaxBytes+uploadBodyOverhead)+1024)))
+	fw, err := mw.CreateFormFile("file", "a.txt")
+	require.NoError(t, err)
+	_, err = fw.Write([]byte("a"))
+	require.NoError(t, err)
+	require.NoError(t, mw.Close())
+
+	resp, err := http.Post(env.srv.URL+"/api/nex/executions/"+tbExecID+"/uploads", mw.FormDataContentType(), &buf)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	var out map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+	assert.Equal(t, "file_too_large", out["code"])
+	_, err = os.Stat(filepath.Join(cwd, ".purdex-uploads"))
+	assert.True(t, os.IsNotExist(err), "nothing created")
 }
 
 func TestUploadCapDefaultIs50MiB(t *testing.T) {
@@ -233,6 +292,13 @@ func TestUpload503WhenEngineUnavailable(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, status)
 	assert.Equal(t, "nex_unavailable", body["code"])
 }
+
+// ensureUploadsGitignore's write/close-error cleanup (remove the file it
+// started, so a later request's O_EXCL doesn't find a stale/short file and
+// skip forever) has no test here: triggering a write or close failure on an
+// fd this function just opened itself, without adding a production-only
+// seam (an injected writer or a package-var os.OpenFile), isn't practical
+// with the real filesystem this test suite uses everywhere else.
 
 // Part.FileName already applies filepath.Base, so the handler tests cannot
 // see uploadFileName's own stripping; pin it directly.
