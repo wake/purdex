@@ -7,9 +7,9 @@ import type { Chip } from '../../lib/nex/worker-upload'
 afterEach(cleanup)
 
 const chips: Chip[] = [
-  { key: 'a', name: 'a.txt', status: 'uploading' },
-  { key: 'b', name: 'b.png', status: 'done', path: '/w/b.png', previewUrl: 'blob:b' },
-  { key: 'c', name: 'c.bin', status: 'failed', error: 'file_too_large' },
+  { key: 'a', kind: 'path', name: 'a.txt', status: 'uploading' },
+  { key: 'b', kind: 'path', name: 'b.png', status: 'done', path: '/w/b.png', previewUrl: 'blob:b' },
+  { key: 'c', kind: 'path', name: 'c.bin', status: 'failed', error: 'file_too_large' },
 ]
 
 describe('UploadChips', () => {

@@ -18,6 +18,21 @@ describe('nexErrorFromResponse', () => {
     expect(err.turnId).toBe('trn_1')
   })
 
+  it('carries attachment_index only when it is a non-negative integer', async () => {
+    const parse = async (idx: unknown) => {
+      const body: Record<string, unknown> = { error: 'x', code: 'attachment_too_large' }
+      if (idx !== undefined) body.attachment_index = idx
+      return (await nexErrorFromResponse(new Response(JSON.stringify(body), { status: 400 }))).attachmentIndex
+    }
+    expect(await parse(0)).toBe(0)
+    expect(await parse(3)).toBe(3)
+    expect(await parse(undefined)).toBeUndefined()
+    expect(await parse(-1)).toBeUndefined()
+    expect(await parse(1.5)).toBeUndefined()
+    expect(await parse('2')).toBeUndefined()
+    expect(await parse(null)).toBeUndefined()
+  })
+
   it('falls back to http_<status> for a non-JSON body', async () => {
     const res = new Response('<html>nope</html>', { status: 502 })
     const err = await nexErrorFromResponse(res)

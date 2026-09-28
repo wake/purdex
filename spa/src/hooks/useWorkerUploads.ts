@@ -50,7 +50,7 @@ export function useWorkerUploads(hostId: string, executionId: string): WorkerUpl
     if (files.length === 0) return
     const added: Array<{ chip: Chip; file: File }> = files.map((file) => {
       const key = `up${++seq}`
-      const chip: Chip = { key, name: file.name, status: 'uploading' }
+      const chip: Chip = { key, kind: 'path', name: file.name, status: 'uploading' }
       if (file.type.startsWith('image/')) {
         chip.previewUrl = URL.createObjectURL(file)
         previews.current.set(key, chip.previewUrl)

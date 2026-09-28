@@ -221,9 +221,9 @@ describe('WorkerInput', () => {
 })
 
 describe('WorkerInput — attachments (spec §9.1)', () => {
-  const uploading: Chip = { key: 'u', name: 'u.txt', status: 'uploading' }
-  const failed: Chip = { key: 'f', name: 'f.txt', status: 'failed', error: 'network' }
-  const done: Chip = { key: 'd', name: 'd.txt', status: 'done', path: '/w/d.txt' }
+  const uploading: Chip = { key: 'u', kind: 'path', name: 'u.txt', status: 'uploading' }
+  const failed: Chip = { key: 'f', kind: 'path', name: 'f.txt', status: 'failed', error: 'network' }
+  const done: Chip = { key: 'd', kind: 'path', name: 'd.txt', status: 'done', path: '/w/d.txt' }
   const enter = (ta: HTMLElement) => fireEvent.keyDown(ta, { key: 'Enter', code: 'Enter' })
 
   it('renders the chips above the textarea and removes one through onRemoveChip', () => {
