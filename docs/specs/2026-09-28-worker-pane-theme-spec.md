@@ -177,8 +177,8 @@ Titles are sanitised for display (single line, truncated by CSS). No title → t
 
 ### 9.1 Non-image — path reference (phase D)
 
-- Daemon: `POST /api/nex/uploads` (multipart `file`, `execution`), saves to `<uploadDir>/exec/<executionId>/` with the existing `createDedupFile`; returns `{ path, name, size }`. Same auth as other daemon APIs; filename is `filepath.Base`d; size cap reused from the agent upload. No tmux involvement.
-- The file must be readable by the worker process: **verify in the plan** that the worker's sandbox profile (e.g. `handoff`) can read the upload dir; if not, save under a path the profile allows and record which.
+- Daemon: `POST /api/nex/executions/{id}/uploads` (multipart `file`), saves with the existing dedup helper; returns `{ path, name, size }`. Same auth as other daemon APIs; filename is `filepath.Base`d; 50 MiB cap. No tmux involvement.
+- **Location (measured 2026-09-28):** under the `standard` (acceptEdits) and `readonly` (dontAsk) profiles `claude -p` denies Read outside its cwd, and mlab's default profile is `standard`. Files are therefore saved **inside the execution's cwd** at `.purdex-uploads/<executionId>/`, with `.purdex-uploads/.gitignore` = `*` so the directory never shows in git.
 - SPA: `WorkerInput` accepts drag-drop, paste (files) and a `+` button. Each upload shows a removable chip while uploading / done / failed. On send the chips become text: the message is the typed text followed by one line per file, `[file: <absolute path>]`. A failed or still-uploading chip blocks send with a visible reason. Removing a chip deletes nothing on disk.
 - Images before phase E go through this same path (the agent can Read them); the chip shows a thumbnail.
 
