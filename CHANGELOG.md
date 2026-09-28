@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.469] - 2026-09-28
+
+> ⚠️ **Profile Sync 的 settings schema 從 8 升到 9**：新版裝置寫入設定後，還停在舊版的裝置會把 profile 鎖住（`locked:schema`），**所有裝置都要更新到這一版**。純 SPA，不必重新部署 daemon。
+
+### Feature：worker pane 外觀（Purdex theme）（#1512）
+
+- worker pane 新增外觀 theme 架構，目前只有一套「Purdex」；在 設定 → Worker 選擇，跟著 Profile Sync 同步。
+- 字級改成和內文相同：h1–h6 不再放大、只加粗；行距改成接近終端機的密度，段落之間空一行。
+- 有序／無序列表的編號與符號改成淡色，換行時對齊項目文字。
+- markdown 表格現在會正確畫出（先前整張表變成一段文字）；太寬時在表格內橫向捲動。
+- 你的輸入改成整列全寬的底色條、前面加 `›`，和終端機一樣。
+- 工具與 subagent 前面的直線調亮。
+
 ## [1.0.0-alpha.468] - 2026-09-28
 
 > **需要重新部署 daemon**（provenance 回應多了 `started_at`；舊 daemon 仍相容，只是補抓時間戳退回本機時鐘）。
