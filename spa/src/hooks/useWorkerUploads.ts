@@ -161,7 +161,11 @@ export function useWorkerUploads(hostId: string, executionId: string, images?: W
     return [...natives.current].filter(([key]) => !want || want.has(key)).map(([key, file]) => ({ key, file }))
   }, [])
 
+  // A failed chip is out of play until removed: its File leaves `natives`, so
+  // a later add neither re-plans it (taking a slot or budget) nor demotes it
+  // into a silent path upload. The thumbnail stays with the chip.
   const markFailed = useCallback((key: string, error?: string) => {
+    natives.current.delete(key)
     patch(key, { status: 'failed', error })
   }, [patch])
 

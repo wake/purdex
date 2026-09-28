@@ -33,7 +33,11 @@ export type WireImageAttachment = { type: 'image'; media_type: string; data: str
 /** `selectImageAttachments`'s result: the image capability for this execution's provider, or null (fail-closed). */
 export type ImageAttachmentPlanCaps = (ImageAttachmentCaps & { maxRequestBytes: number }) | null
 
-/** A generous upper bound for a lease id on the wire (nexen mints 26-char ULIDs). */
+/**
+ * A generous upper bound for a lease id on the wire: nexen mints it with
+ * `newULID()` (store/lease.go:110 → store/execution.go:1105), a 26-char
+ * Crockford base32 ULID, so 64 leaves headroom for a format change.
+ */
 const LEASE_ID_BOUND = 64
 
 /**
