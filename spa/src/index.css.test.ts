@@ -44,3 +44,16 @@ describe('index.css — transcript search marks', () => {
     expect(rule('search-match')).toMatch(/text-decoration:[^;]*underline/)
   })
 })
+
+describe('index.css — worker prose', () => {
+  // @ts-expect-error __dirname is untyped here — see comment above.
+  const css: string = readFileSync(resolve(__dirname, 'index.css'), 'utf8')
+
+  it('has no `:where(>` — a relative selector is invalid inside :where(), and the browser drops the whole rule', () => {
+    expect(css).not.toMatch(/:where\(\s*>/)
+  })
+
+  it('zeroes the last direct child\'s bottom margin with a valid child combinator', () => {
+    expect(css).toMatch(/\.worker-prose > :last-child\s*\{\s*margin-bottom:\s*0;\s*\}/)
+  })
+})
