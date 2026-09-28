@@ -19,6 +19,13 @@ import { AttachmentSourceContext } from './attachment-source'
 
 /** Fetches in flight at once, app-wide. */
 const ATTACHMENT_FETCH_CONCURRENCY = 4
+/**
+ * A held fetch is aborted after this long without settling (Review Focus
+ * A1): a host that's offline, or a half-open connection, would otherwise
+ * hold one of the four shared slots until the network eventually gives up
+ * on its own — four such requests starve every later thumbnail forever.
+ */
+const ATTACHMENT_FETCH_TIMEOUT_MS = 30_000
 let running = 0
 const waiting: Array<() => void> = []
 
@@ -99,7 +106,13 @@ function RemoteThumb({ meta, source }: { meta: AttachmentMeta; source: { hostId:
     if (!hostId || !executionId || !route) return
     let cancelled = false
     let url: string | null = null
-    withSlot(() => fetchAttachment(hostId, executionId, sha256, route), () => cancelled)
+    // Aborting `controller` — on unmount, or once the timeout fires — makes
+    // `fetchAttachment`'s underlying request reject right away, so `withSlot`
+    // releases the slot immediately instead of only once the network
+    // eventually settles on its own (Review Focus A1).
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), ATTACHMENT_FETCH_TIMEOUT_MS)
+    withSlot(() => fetchAttachment(hostId, executionId, sha256, route, controller.signal), () => cancelled)
       .then((blob) => {
         if (cancelled || !blob) return
         const safe = sanitizeImageBlob(blob, mediaType)
@@ -110,6 +123,8 @@ function RemoteThumb({ meta, source }: { meta: AttachmentMeta; source: { hostId:
       .catch(() => { if (!cancelled) setResult({ want, state: { status: 'error' } }) })
     return () => {
       cancelled = true
+      clearTimeout(timeoutId)
+      controller.abort()
       if (url) URL.revokeObjectURL(url)
     }
   }, [hostId, executionId, sha256, mediaType, route, want])

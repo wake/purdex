@@ -435,6 +435,14 @@ describe('nex-api', () => {
       await expect(fetchAttachment(hostId, 'exc_1', SHA, route)).rejects.toMatchObject({ code: 'network' })
     })
 
+    it('forwards an optional AbortSignal to the underlying fetch (A1: releases the concurrency slot promptly on abort)', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(png())
+      const controller = new AbortController()
+      await fetchAttachment(hostId, 'exc_1', SHA, route, controller.signal)
+      const [, init] = testGlobal.fetch.mock.calls[0]
+      expect(init.signal).toBe(controller.signal)
+    })
+
     it('sends nothing for an unknown host, a route that is not origin-relative, or a method other than GET', async () => {
       await expect(fetchAttachment('nope', 'exc_1', SHA, route)).rejects.toMatchObject({ code: 'host_removed' })
       for (const bad of [

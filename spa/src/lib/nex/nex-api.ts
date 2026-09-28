@@ -272,10 +272,13 @@ export async function uploadWorkerFile(hostId: string, executionId: string, file
  * Anything but a GET on an origin-relative path is refused unsent
  * (`attachment_route_invalid`), as is a host this device lacks
  * (`host_removed`). Other failures reject like `uploadWorkerFile`'s: the
- * daemon's code (`attachment_not_found`, …) or `network`.
+ * daemon's code (`attachment_not_found`, …) or `network` (an aborted
+ * `signal` lands here too, via `AbortError` — Review Focus A1: it lets the
+ * caller's concurrency slot free up the moment the request stops mattering,
+ * rather than only once the network eventually settles on its own).
  */
 export async function fetchAttachment(
-  hostId: string, executionId: string, sha256: string, route: { method: string; path: string },
+  hostId: string, executionId: string, sha256: string, route: { method: string; path: string }, signal?: AbortSignal,
 ): Promise<Blob> {
   if (!useHostStore.getState().hosts[hostId]) throw new NexApiError(0, 'host_removed', 'host removed')
   if (route.method.toUpperCase() !== 'GET' || !route.path.startsWith('/') || route.path.startsWith('//')) {
@@ -286,7 +289,7 @@ export async function fetchAttachment(
     .replaceAll('{sha256}', () => encodeURIComponent(sha256))
   let res: Response
   try {
-    res = await pinnedHostFetch(hostId, path, { method: 'GET', headers: { 'X-Pdx-Client': getNexClientId() } })
+    res = await pinnedHostFetch(hostId, path, { method: 'GET', headers: { 'X-Pdx-Client': getNexClientId() }, signal })
   } catch (e) {
     if (!useHostStore.getState().hosts[hostId]) throw new NexApiError(0, 'host_removed', 'host removed')
     throw new NexApiError(0, 'network', e instanceof Error ? e.message : String(e))

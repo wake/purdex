@@ -49,8 +49,8 @@ describe('AttachmentThumbs', () => {
     inPane(<AttachmentThumbs items={[meta('a'), meta('b', 'image/jpeg')]} />)
     expect(thumbs()).toHaveLength(2)
     await waitFor(() => expect(thumbs().map((t) => t.dataset.state)).toEqual(['ready', 'ready']))
-    expect(api.fetchAttachment).toHaveBeenCalledWith(H, E, sha('a'), ROUTE)
-    expect(api.fetchAttachment).toHaveBeenCalledWith(H, E, sha('b'), ROUTE)
+    expect(api.fetchAttachment).toHaveBeenCalledWith(H, E, sha('a'), ROUTE, expect.any(AbortSignal))
+    expect(api.fetchAttachment).toHaveBeenCalledWith(H, E, sha('b'), ROUTE, expect.any(AbortSignal))
     const imgs = screen.getAllByRole('img')
     expect(imgs.map((i) => i.getAttribute('src')).sort()).toEqual(['blob:t1', 'blob:t2'])
     const link = thumbs()[0] as HTMLAnchorElement
@@ -112,6 +112,63 @@ describe('AttachmentThumbs', () => {
     await act(async () => { pending.slice(2).forEach((d) => d.resolve(new Blob(['z']))) })
   })
 
+  it('unmounting a thumbnail with an in-flight fetch aborts it (its signal fires) and frees its concurrency slot immediately (A1)', async () => {
+    const signals: AbortSignal[] = []
+    vi.mocked(api.fetchAttachment).mockImplementation((_h, _e, _sha, _route, signal) => {
+      if (signal) signals.push(signal)
+      return new Promise<Blob>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+      })
+    })
+    const held = inPane(<AttachmentThumbs items={['a', 'b', 'c', 'd'].map((c) => meta(c))} />)
+    await act(async () => {})
+    expect(api.fetchAttachment).toHaveBeenCalledTimes(4)
+    expect(signals).toHaveLength(4)
+    expect(signals.every((s) => !s.aborted)).toBe(true)
+
+    // A fifth thumbnail queues behind the four held slots — it gets none
+    // until one frees up.
+    const fifth = inPane(<AttachmentThumbs items={[meta('e')]} />)
+    await act(async () => {})
+    expect(api.fetchAttachment).toHaveBeenCalledTimes(4)
+
+    // Unmounting the four in-flight thumbnails must abort their fetches
+    // (not just stop caring about the result) so the slots they hold don't
+    // stay pinned until the network eventually settles on its own.
+    held.unmount()
+    expect(signals.every((s) => s.aborted)).toBe(true)
+    await act(async () => {})
+    expect(api.fetchAttachment).toHaveBeenCalledTimes(5)
+    fifth.unmount()
+  })
+
+  it('a hung fetch times out after 30s, releasing its concurrency slot and settling the thumbnail as an error placeholder (A1)', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(api.fetchAttachment).mockImplementation((_h, _e, _sha, _route, signal) =>
+        new Promise<Blob>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+        }))
+      const held = inPane(<AttachmentThumbs items={['a', 'b', 'c', 'd'].map((c) => meta(c))} />)
+      await act(async () => {})
+      expect(api.fetchAttachment).toHaveBeenCalledTimes(4)
+      expect(thumbs().every((t) => t.dataset.state === 'loading')).toBe(true)
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+      expect(thumbs().every((t) => t.dataset.state === 'error')).toBe(true)
+
+      // The timeout released every held slot — a freshly mounted thumbnail
+      // gets one immediately instead of queueing behind four dead requests.
+      vi.mocked(api.fetchAttachment).mockResolvedValue(new Blob(['x'], { type: 'image/png' }))
+      const fresh = inPane(<AttachmentThumbs items={[meta('e')]} />)
+      await act(async () => {})
+      expect(api.fetchAttachment).toHaveBeenCalledTimes(5)
+      held.unmount(); fresh.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('an unmounted thumbnail still waiting for a slot is skipped and passes the slot on', async () => {
     const pending = Array.from({ length: 4 }, deferredBlob)
     pending.forEach((d) => vi.mocked(api.fetchAttachment).mockReturnValueOnce(d.p))
@@ -148,7 +205,7 @@ describe('AttachmentThumbs', () => {
     act(() => seed(OTHER_ROUTE))
     expect(revokeUrl).toHaveBeenCalledWith('blob:t1')
     await waitFor(() => expect(api.fetchAttachment).toHaveBeenCalledTimes(2))
-    expect(api.fetchAttachment).toHaveBeenCalledWith(H, E, sha('a'), OTHER_ROUTE)
+    expect(api.fetchAttachment).toHaveBeenCalledWith(H, E, sha('a'), OTHER_ROUTE, expect.any(AbortSignal))
   })
 
   it('no fetch route: loading while the host is not ready yet, the placeholder once it is ready without one', async () => {

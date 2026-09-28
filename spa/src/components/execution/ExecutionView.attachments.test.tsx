@@ -402,7 +402,7 @@ describe('ExecutionView — image attachments on user lines (E4)', () => {
     const lines = lineIn(mode)
     expect(lines).toHaveLength(1)
     await waitFor(() => expect(within(lines[0]).getByTestId('attachment-thumb').dataset.state).toBe('ready'))
-    expect(api.fetchAttachment).toHaveBeenCalledWith(H, E, sha('a'), ROUTE)
+    expect(api.fetchAttachment).toHaveBeenCalledWith(H, E, sha('a'), ROUTE, expect.any(AbortSignal))
     expect(within(lines[0]).getByRole('img')).toHaveAttribute('src', 'blob:1')
   })
 
