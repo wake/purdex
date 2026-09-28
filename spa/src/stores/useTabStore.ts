@@ -217,10 +217,22 @@ function identityInvalidates(
  *
  * Returns the same content object when the patch changes nothing (a probe
  * against a cwd that is already known, an edit that retypes the same value).
- * A write that lands NEW CONTENT re-stamps `capturedAt`, which is what makes
- * the batch view's "latest edit wins" resolution meaningful. The one exception
- * is the backfill's confirm mode, which learns nothing about the content and
- * so must not re-open that election — see mode 3 below.
+ *
+ * `capturedAt` elects each group's newest record (`groupForBatch`), so it moves
+ * only when the write says something that should win that election — and a
+ * write driven by a HOST EVENT stamps it with the event's own time, never this
+ * client's clock (spec 2026-09-28 D1). Every attached client reacts to the same
+ * event by writing the same pane of the same synced `tabs.<ws>` section; with
+ * its own `Date.now()` in it each client's payload hashes differently and the
+ * Profile Sync CAS cannot fold them — a conflict nobody made. So:
+ *   agent-group            the writer's `record.capturedAt` (useAgentStore.ts writeProvenanceRecord)
+ *   agent-backfill fill /  the answer's `agent.updatedAt` (lib/rebuild/provenance-probe.ts)
+ *     replace
+ *   agent-backfill confirm not re-stamped — see mode 3 below
+ *   agent-exit             `exited.at` (the daemon's exit time)
+ *   probe-cwd, unverified  not re-stamped: a probe filling a missing cwd and a
+ *                          flag learn nothing that should win the election
+ *   field                  `Date.now()`: a user edit; two humans editing IS a conflict
  */
 function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSessionContent {
   const prev: PaneRebuildRecord = c.rebuild ?? {
@@ -228,7 +240,6 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
     tmuxInstance: c.tmuxInstance,
     capturedAt: 0,
   }
-  const now = Date.now()
   let next: PaneRebuildRecord
 
   switch (patch.kind) {
@@ -255,7 +266,7 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
         ...(identityInvalidates(prev.agent, record.agent)
           ? {}
           : { resumeCommandOverride: prev.resumeCommandOverride }),
-        capturedAt: now,
+        capturedAt: record.capturedAt,
       }
       break
     }
@@ -285,7 +296,7 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
           unverified: undefined,
           // `resumeCommandOverride` rides through untouched: nothing was
           // invalidated, because the record held no identity to invalidate.
-          capturedAt: now,
+          capturedAt: record.agent.updatedAt,
         }
         break
       }
@@ -326,7 +337,7 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
           cwd: keepsUserCwd ? prev.cwd : record.cwd,
           cwdSource: keepsUserCwd ? 'user' : record.cwd === undefined ? undefined : 'agent-backfill',
           agent: record.agent,
-          capturedAt: now,
+          capturedAt: record.agent.updatedAt,
         }
         break
       }
@@ -372,6 +383,7 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
       // override is DROPPED rather than stored as '': clearing the row is how
       // the user goes back to the agent's template, so the record has to end
       // up in the state it was in before they typed anything.
+      const now = Date.now()
       next = patch.field === 'cwd' ? { ...prev, cwd: patch.value, cwdSource: 'user', capturedAt: now }
         : patch.field === 'resumeCommandOverride'
           ? { ...prev, resumeCommandOverride: patch.value || undefined, capturedAt: now }
@@ -380,12 +392,12 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
     }
     case 'probe-cwd': {
       if (prev.cwd) return c   // agent provenance (or an edit) already won
-      next = { ...prev, cwd: patch.cwd, cwdSource: 'pane-probe', capturedAt: now }
+      next = { ...prev, cwd: patch.cwd, cwdSource: 'pane-probe' }
       break
     }
     case 'unverified': {
       if (prev.unverified === patch.unverified) return c
-      next = { ...prev, unverified: patch.unverified, capturedAt: now }
+      next = { ...prev, unverified: patch.unverified }
       break
     }
     case 'agent-exit': {
@@ -405,8 +417,9 @@ function applyRebuildPatch(c: TmuxSessionContent, patch: RebuildPatch): TmuxSess
       const { at, reason } = patch.exited
       if (prev.agentExited?.at === at && prev.agentExited.reason === reason) return c
       // Re-stamped (review decision 8): the batch elects each group's newest
-      // record, and that election has to see the exit.
-      next = { ...prev, agentExited: { at, reason }, capturedAt: now }
+      // record, and that election has to see the exit. With the daemon's exit
+      // time, the same on every client (parseExit already refuses at ≤ 0).
+      next = { ...prev, agentExited: { at, reason }, capturedAt: at }
       break
     }
   }

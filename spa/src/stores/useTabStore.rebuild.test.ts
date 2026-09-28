@@ -233,17 +233,16 @@ describe('setPaneRebuild', () => {
     expect(rec(tab.id)?.agent?.sessionId).toBe('S1')
   })
 
-  it('stamps capturedAt on every write', () => {
+  it('an agent group keeps the writer\'s capturedAt (the event\'s time), not this client\'s clock', () => {
     const tab = seed()
-    const before = Date.now()
     useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', {
       kind: 'agent-group',
       record: {
         tmuxInstance: '111:1000', agent: { type: 'cc', updatedAt: 1 },
-        capturedAt: 1,   // stale stamp from the payload
+        capturedAt: 1,
       },
     })
-    expect(rec(tab.id)!.capturedAt).toBeGreaterThanOrEqual(before)
+    expect(rec(tab.id)!.capturedAt).toBe(1)
   })
 
   it('a fresh agent group clears a stale unverified flag', () => {
@@ -688,7 +687,7 @@ describe('setPaneRebuild — agent-exit', () => {
       kind: 'agent-backfill', record: { tmuxInstance: '111:1000', agent },
     })
 
-  it('marks the run the frame id names as exited, keeps the identity, and re-stamps capturedAt', () => {
+  it('marks the run the frame id names as exited, keeps the identity, and re-stamps capturedAt with the exit\'s time', () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(1_000)
@@ -697,7 +696,8 @@ describe('setPaneRebuild — agent-exit', () => {
       const before = rec(tab.id)!
       vi.setSystemTime(9_000)
       exit('F1', 7_000, 'process-dead')
-      expect(rec(tab.id)).toEqual({ ...before, agentExited: { at: 7_000, reason: 'process-dead' }, capturedAt: 9_000 })
+      // the daemon's exit time, not this client's clock (spec 2026-09-28 D1)
+      expect(rec(tab.id)).toEqual({ ...before, agentExited: { at: 7_000, reason: 'process-dead' }, capturedAt: 7_000 })
       expect(resolveResumeCommand(rec(tab.id), defaultTemplates)).toBe('claude --resume S1') // "resume anyway" stays possible
     } finally {
       vi.useRealTimers()
@@ -987,5 +987,68 @@ describe('updateSessionCache — generation scoped', () => {
     useTabStore.getState().updateSessionCache('h1', 'abc123', 'renamed', '111:1000')
     expect(cachedNameOfPane(split.id, 'p2')).toBe('renamed')
     expect(cachedNameOfPane(split.id, 'p1')).toBe('renamed')
+  })
+})
+
+// spec 2026-09-28 D1: a write driven by a host event produces byte-identical content on every client that sees the
+// event — every attached client writes the same pane of the same synced section, and a timestamp read from each
+// client's own clock makes their payloads differ (a spurious Profile Sync conflict).
+describe('setPaneRebuild — automatic writes are deterministic (no client clock)', () => {
+  beforeEach(() => useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null }))
+
+  const set = (patch: Parameters<ReturnType<typeof useTabStore.getState>['setPaneRebuild']>[3]) =>
+    useTabStore.getState().setPaneRebuild('h1', 'abc123', '111:1000', patch)
+  const group = (sessionId: string, at: number) =>
+    set({ kind: 'agent-group', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId, tmuxPaneId: '%2', frameId: 'F1', updatedAt: at }, capturedAt: at } })
+
+  /** Apply `setup` at 1 000, then `patch` at `clock`; the record it leaves. */
+  function recordAt(clock: number, setup: () => void, patch: () => void): PaneRebuildRecord | undefined {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    vi.setSystemTime(1_000)
+    const tab = seed()
+    setup()
+    vi.setSystemTime(clock)
+    patch()
+    return rec(tab.id)
+  }
+
+  const cases: [string, () => void, () => void, number | 'prev'][] = [
+    ['agent-group', () => {}, () => group('S1', 5_000), 5_000],
+    ['agent-backfill fill', () => {}, () => set({ kind: 'agent-backfill', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'S1', updatedAt: 6_000 } } }), 6_000],
+    [
+      'agent-backfill replace',
+      () => { group('S1', 5_000); set({ kind: 'unverified', unverified: true }) },
+      () => set({ kind: 'agent-backfill', record: { tmuxInstance: '111:1000', agent: { type: 'cc', sessionId: 'S2', updatedAt: 6_500 } } }),
+      6_500,
+    ],
+    ['agent-exit', () => group('S1', 5_000), () => set({ kind: 'agent-exit', frameId: 'F1', sessionId: 'S1', exited: { at: 7_000, reason: 'session-end' } }), 7_000],
+    ['probe-cwd', () => group('S1', 5_000), () => set({ kind: 'probe-cwd', cwd: '/probed' }), 'prev'],
+    ['unverified', () => group('S1', 5_000), () => set({ kind: 'unverified', unverified: true }), 'prev'],
+  ]
+
+  it.each(cases)('%s: the same content whatever this client\'s clock says', (_name, setup, patch, stamp) => {
+    vi.useFakeTimers()
+    try {
+      const a = recordAt(20_000, setup, patch)
+      const b = recordAt(90_000, setup, patch)
+      expect(a).toBeDefined()
+      expect(b).toEqual(a)
+      expect(a!.capturedAt).toBe(stamp === 'prev' ? 5_000 : stamp)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a user edit (`field`) still stamps this client\'s clock: two humans editing IS a conflict', () => {
+    vi.useFakeTimers()
+    try {
+      const edit = () => set({ kind: 'field', field: 'cwd', value: '/typed' })
+      const a = recordAt(20_000, () => group('S1', 5_000), edit)
+      const b = recordAt(90_000, () => group('S1', 5_000), edit)
+      expect(a!.capturedAt).toBe(20_000)
+      expect(b!.capturedAt).toBe(90_000)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
