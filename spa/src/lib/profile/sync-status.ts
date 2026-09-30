@@ -91,6 +91,16 @@
 // `stale` only when it is older than `STATUS_STALE_MS` AND nobody holds the
 // lease: then nobody is there who would have corrected it. A follower finds that
 // out by a timer of its own — the lease running out is not an event.
+//   And stale is not terminal: a lease can come back to life without a new
+// record. A holder whose renewals ran late (a hidden window's throttled timers)
+// lets its own lease lapse while it is alive, and takes it back at the late
+// renewal (leader.ts, `onRecovered`) — with nothing new to publish when the
+// profile is synced. Meanwhile any `refresh()` puts the holder's OWN window on the
+// follower side (its `isLeader()` reads false), where it reads its own old record
+// as stale. So a stale follower keeps re-reading the record and the lease every
+// `STALE_RECHECK_MS`: a live lease again — the holder's, or this very window's —
+// clears `stale` within that. A recheck that finds nothing new notifies nobody
+// (the snapshot is deduplicated).
 //   The record names its writer, so a new leader always publishes, identical
 // content or not. And a record that vanishes under a sitting leader is published
 // again.
@@ -148,6 +158,8 @@ import type { SectionConflict } from './sync-state'
 export const STATUS_THROTTLE_MS = 250
 /** A published record OLDER than this, with nobody holding the lease, is `stale`. */
 export const STATUS_STALE_MS = 10_000
+/** A follower that has called its record stale reads it and the lease again this often (the lease's renew period). */
+export const STALE_RECHECK_MS = 2_000
 /** A command OLDER than this is removed unexecuted. */
 export const COMMAND_TTL_MS = 30_000
 /** … and so is one from further in the FUTURE than this: clocks of one machine's windows do not differ, a clock set back does. */
@@ -656,8 +668,10 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
     const age = deps.now() - record.at
     const stale = age > STATUS_STALE_MS && !deps.leaseLive()
     setSnapshot({ master: local.master, leader: false, blocked: record.blocked, status: record.status, problems: record.problems, remote: true, stale })
-    // Neither growing old nor a lease running out is an event. Once stale, only a new record changes that — and that IS one.
-    if (!stale) staleTimer = setTimeout(refresh, age <= STATUS_STALE_MS ? STATUS_STALE_MS - age + 1 : STATUS_STALE_MS)
+    // Neither growing old nor a lease running out is an event — and neither is a lease coming back to life (a holder
+    // that took back its own lapsed lease, with nothing new to publish). So a fresh record is looked at again when it
+    // turns old, and a stale one every STALE_RECHECK_MS, for as long as it stays stale (the header).
+    staleTimer = setTimeout(refresh, stale ? STALE_RECHECK_MS : age <= STATUS_STALE_MS ? STATUS_STALE_MS - age + 1 : STATUS_STALE_MS)
   }
 
   const onStorage = (e: StorageEvent): void => {

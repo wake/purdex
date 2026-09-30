@@ -465,10 +465,151 @@ describe('a follower reads what the leader published', () => {
     expect(b.snapshot().stale).toBe(true)
     expect(heard).toHaveBeenCalledTimes(1)
 
+    // Stale is not terminal (stale-leader spec F2): the holder came back — its lease is live again — but it has
+    // nothing new to publish. No record, no event; the follower's own recheck finds out within STALE_RECHECK_MS.
+    const { STALE_RECHECK_MS } = b.mod
+    expect(STALE_RECHECK_MS).toBe(2_000)
+    leaseLive = true
+    vi.advanceTimersByTime(STALE_RECHECK_MS - 1)
+    expect(b.snapshot().stale).toBe(true)
+    vi.advanceTimersByTime(1)
+    expect(b.snapshot()).toMatchObject({ remote: true, stale: false })
+    expect(heard).toHaveBeenCalledTimes(2)
+
     leaseLive = true // somebody took over; its first publish is what wakes the follower
     localStorage.setItem(STATUS, JSON.stringify({ at: Date.now(), leader: 'C', master: TAG1, status: SYNCED, blocked: null, problems: [] }))
     deliver()
     expect(b.snapshot()).toMatchObject({ remote: true, stale: false })
+  })
+
+  describe('stale is not terminal: a recheck every STALE_RECHECK_MS (stale-leader spec F2)', () => {
+    /** B follows A's record; A is gone (closed, no lease) and the record is past STATUS_STALE_MS: B is stale. */
+    async function staleFollower(id = 'B'): Promise<Win> {
+      const b = await openWindow(id)
+      vi.advanceTimersByTime(10_001)
+      expect(b.snapshot()).toMatchObject({ remote: true, stale: true })
+      return b
+    }
+    async function goneLeader(): Promise<void> {
+      const a = await openWindow('A', { leader: true, status: SYNCED })
+      vi.advanceTimersByTime(250)
+      a.channel.close(false)
+      leaseLive = false
+    }
+
+    it('the holder’s OWN window: a lapse makes it read its own record as stale; once its lease is live again, a recheck puts it back on the leader side — and it publishes again', async () => {
+      const a = await openWindow('A', { leader: true, status: SYNCED })
+      vi.advanceTimersByTime(250 + 1) // the publish, then jsdom's own 0 ms timer for the write
+      const at0 = published()!.at
+      const { STALE_RECHECK_MS } = a.mod
+      // The lapse: its lease ran out, isLeader() (what `local().leader` is in start.ts) answers false, the record is old.
+      vi.setSystemTime(Date.now() + 30_000)
+      leaseLive = false
+      a.set({ leader: false })
+      expect(a.snapshot()).toMatchObject({ remote: true, stale: true, leader: false })
+      expect(vi.getTimerCount()).toBe(1)
+
+      // The late renewal: the lease is its own and live again. Nobody calls refresh() — isLeader() just reads true.
+      leaseLive = true
+      ;(a.local as { leader: boolean }).leader = true
+      vi.advanceTimersByTime(STALE_RECHECK_MS)
+      expect(a.snapshot()).toMatchObject({ remote: false, stale: false, leader: true, status: SYNCED })
+      vi.advanceTimersByTime(250 + 1) // the follower branch forgot what it had published: it publishes again
+      expect(published()!.at).toBeGreaterThan(at0)
+      expect(vi.getTimerCount()).toBe(0) // no stale recheck left behind
+    })
+
+    it('REGRESSION, end to end with the real leader.ts: a single window whose renewal ran late reads itself as stale, and comes back by itself — no new status, no refresh() from outside', async () => {
+      // The bug as it was found: before F2 this window said "sync state unknown" forever.
+      vi.resetModules()
+      const { contendForLeadership } = await import('./leader')
+      const mod = await import('./sync-status')
+      const L = contendForLeadership({ now: () => Date.now(), random: () => 0, windowId: 'me' })
+      try {
+        vi.advanceTimersByTime(60) // leads after the 50 ms jitter
+        expect(L.isLeader()).toBe(true)
+        const ch = mod.openStatusChannel({
+          now: () => Date.now(),
+          windowId: 'me',
+          masterTag: TAG1,
+          local: () => ({ master: MASTER, leader: L.isLeader(), blocked: null, status: SYNCED, problems: [] }),
+          leaseLive: () => {
+            const l = JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE_LEADER) ?? 'null')
+            return l !== null && l.expiresAt > Date.now()
+          },
+          syncNow() {},
+          resolve() {},
+          lockOf: () => null,
+        })
+        open.push(ch)
+        ch.refresh()
+        vi.advanceTimersByTime(300) // published
+        expect(published()).toMatchObject({ leader: 'me', master: TAG1 })
+
+        // The window was hidden: 30 s pass and no timer runs — the renewal is late, the lease has lapsed.
+        vi.setSystemTime(Date.now() + 30_000)
+        ch.refresh() // e.g. a host-store change
+        expect(mod.profileSyncSnapshot()).toMatchObject({ remote: true, stale: true })
+
+        // Timers run again: the late renewal takes the lease back (no onChange), the stale recheck sees it.
+        vi.advanceTimersByTime(mod.STALE_RECHECK_MS)
+        expect(L.isLeader()).toBe(true)
+        expect(mod.profileSyncSnapshot()).toMatchObject({ remote: false, stale: false, leader: true, status: SYNCED })
+      } finally {
+        L.stop()
+      }
+    })
+
+    it('while stale and nothing changes: nobody is notified again, and there is exactly one timer', async () => {
+      await goneLeader()
+      const b = await staleFollower()
+      const heard = vi.fn()
+      b.mod.subscribeProfileSync(heard)
+      const seen = b.snapshot()
+      vi.advanceTimersByTime(60_000)
+      expect(heard).not.toHaveBeenCalled()
+      expect(b.snapshot()).toBe(seen)
+      expect(vi.getTimerCount()).toBe(1)
+    })
+
+    it('stale → this window becomes the leader: the recheck is gone, only the publish is pending', async () => {
+      await goneLeader()
+      const b = await staleFollower()
+      leaseLive = true
+      b.set({ leader: true, status: PENDING })
+      expect(b.snapshot()).toMatchObject({ remote: false, stale: false, leader: true })
+      expect(vi.getTimerCount()).toBe(1) // the publish
+      vi.advanceTimersByTime(250 + 1)
+      expect(published()).toMatchObject({ leader: 'B', status: PENDING })
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('stale → the record becomes another master’s: no record, no timer', async () => {
+      await goneLeader()
+      const b = await staleFollower()
+      localStorage.setItem(STATUS, JSON.stringify({ at: Date.now(), leader: 'X', master: TAG2, status: SYNCED, blocked: null, problems: [] }))
+      deliver()
+      expect(b.snapshot()).toMatchObject({ status: null, remote: false, stale: false })
+      vi.advanceTimersByTime(1) // jsdom's own 0 ms timer for the write
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('two followers, both stale, one timer each; the lease live again → both clear within STALE_RECHECK_MS', async () => {
+      await goneLeader()
+      const b = await openWindow('B')
+      const c = await openWindow('C')
+      vi.advanceTimersByTime(10_001)
+      expect(b.snapshot()).toMatchObject({ remote: true, stale: true })
+      expect(c.snapshot()).toMatchObject({ remote: true, stale: true })
+      expect(vi.getTimerCount()).toBe(2)
+      vi.advanceTimersByTime(10_000)
+      expect(vi.getTimerCount()).toBe(2)
+
+      leaseLive = true
+      vi.advanceTimersByTime(b.mod.STALE_RECHECK_MS)
+      expect(b.snapshot()).toMatchObject({ remote: true, stale: false })
+      expect(c.snapshot()).toMatchObject({ remote: true, stale: false })
+    })
   })
 
   it.each([
@@ -1235,6 +1376,19 @@ describe('close', () => {
     vi.advanceTimersByTime(1) // jsdom's own 0 ms timers
     expect(vi.getTimerCount()).toBe(1)
     b.channel.close(true)
+    vi.advanceTimersByTime(1)
+    expect(vi.getTimerCount()).toBe(0)
+
+    // …and neither does one that has already called it stale and keeps rechecking (stale-leader spec F2)
+    localStorage.clear()
+    const a2 = await openWindow('A2', { leader: true, status: SYNCED })
+    vi.advanceTimersByTime(250)
+    a2.channel.close(false)
+    const c = await openWindow('C')
+    vi.advanceTimersByTime(10_001)
+    expect(c.snapshot().stale).toBe(true)
+    expect(vi.getTimerCount()).toBe(1)
+    c.channel.close(true)
     vi.advanceTimersByTime(1)
     expect(vi.getTimerCount()).toBe(0)
   })
