@@ -500,7 +500,7 @@ describe('a follower reads what the leader published', () => {
     it('the holder’s OWN window: a lapse makes it read its own record as stale; once its lease is live again, a recheck puts it back on the leader side — and it publishes again', async () => {
       const a = await openWindow('A', { leader: true, status: SYNCED })
       vi.advanceTimersByTime(250 + 1) // the publish, then jsdom's own 0 ms timer for the write
-      const at0 = published()!.at
+      const at0 = published()!.at as number
       const { STALE_RECHECK_MS } = a.mod
       // The lapse: its lease ran out, isLeader() (what `local().leader` is in start.ts) answers false, the record is old.
       vi.setSystemTime(Date.now() + 30_000)

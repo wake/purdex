@@ -1330,7 +1330,7 @@ describe('a lapsed lease taken back: onRecovered re-judges at once (stale-leader
 
   it('lapse → a refresh reads its own record as stale; the renewal that takes the lease back makes it the leader’s snapshot IMMEDIATELY, with the driver kept', async () => {
     await lapsed()
-    h.executors[0].deps.onStatus(h.executors[0].status()) // anything that refreshes during the lapse
+    h.executors[0].deps.onStatus({ profile: 'synced', schemaLock: null, sections: {}, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null }) // anything that refreshes during the lapse
     expect(profileSyncSnapshot()).toMatchObject({ leader: false, remote: true, stale: true })
 
     h.leaderships[0].isLeader.mockReturnValue(true)
