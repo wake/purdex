@@ -65,6 +65,16 @@ a lease that is live again (holder recovered, or THIS window renewed its own) cl
 `setSnapshot` is deduplicated, so a recheck that finds nothing new notifies nobody.
 The timer is cleared exactly like the existing one (leader branch, other-master record, `close`).
 
+**Amended after PR review (a flat 2 s recheck = permanent 0.5 Hz re-parse of a record of up to
+512 KiB per stale window):** the wake-up is event-driven — while (and only while) the last refresh
+judged this window a stale follower, a `storage` event on the lease key (`PROFILE_LEADER`) triggers
+`refresh()`, so another window taking its lapsed lease back clears `stale` at once; a non-stale
+follower ignores the 2 s renewals. The timer is insurance only: first recheck after
+`STALE_RECHECK_MS` (2 s), then doubling, capped at `STALE_RECHECK_MAX_MS` (60 s); the backoff
+resets whenever the snapshot is not stale, the window leads, the record is another master's, or
+the channel closes. THIS window's own recovery never produces an event (a writer does not hear its
+own `storage`), and is handled by F1's `onRecovered`.
+
 ## Not changed
 
 - Lease TTL / renew period, and the stale threshold (10 s).
@@ -79,7 +89,9 @@ The timer is cleared exactly like the existing one (leader branch, other-master 
   does not fire it; stop/hidden/storageless do not; unsubscribe works.
 - Unit (sync-status): holder's own window goes stale during a lapse and returns to
   `remote:false, stale:false` after the lease is live again (≤ `STALE_RECHECK_MS`);
-  a follower's stale clears within `STALE_RECHECK_MS` once `leaseLive` is true with no new record;
+  a follower's stale clears at once on a lease-key event with a live lease (and, as insurance, at the
+  first recheck after `STALE_RECHECK_MS`); non-stale followers ignore lease-key events; the recheck
+  backs off to `STALE_RECHECK_MAX_MS` and restarts at 2 s after leaving stale;
   close clears the recheck timer (update the "no timer behind" test).
 - Unit (start): after `onRecovered`, the snapshot is the local leader's, not stale.
 - Manual: mlab + air26 App, leave the window hidden > 1 min, come back: no stale warning

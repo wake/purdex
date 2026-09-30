@@ -25,6 +25,7 @@ import type { StatusChannel } from './sync-status'
 
 const STATUS = STORAGE_KEYS.PROFILE_STATUS
 const CMD = STORAGE_KEYS.PROFILE_COMMAND_PREFIX
+const LEASE = STORAGE_KEYS.PROFILE_LEADER
 const MASTER = { hostId: 'h1', profileId: 'p_000000000001' }
 const MASTER2 = { hostId: 'h2', profileId: 'p_000000000002' }
 /** `hostId|profileId|attachGeneration` — written out, not built with the module's helper: the format is pinned here. */
@@ -111,6 +112,17 @@ function fire(key: string): void {
 function deliver(): void {
   fire(STATUS)
   for (const key of commandKeys()) fire(key)
+}
+
+/** A holder's renewal, as another window hears it: the lease key rewritten (the test's `leaseLive` is what it says). */
+function renewLease(): void {
+  localStorage.setItem(LEASE, JSON.stringify({ holder: 'X', expiresAt: Date.now() + 5_000 }))
+  fire(LEASE)
+}
+
+/** How often the status record was read through a `getItem` spy. */
+function statusReads(getItem: { mock: { calls: unknown[][] } }): number {
+  return getItem.mock.calls.filter(([k]) => k === STATUS).length
 }
 
 function published(): Record<string, unknown> | null {
@@ -466,7 +478,8 @@ describe('a follower reads what the leader published', () => {
     expect(heard).toHaveBeenCalledTimes(1)
 
     // Stale is not terminal (stale-leader spec F2): the holder came back — its lease is live again — but it has
-    // nothing new to publish. No record, no event; the follower's own recheck finds out within STALE_RECHECK_MS.
+    // nothing new to publish, and no lease-key event reached this window (a missed one). The insurance timer's
+    // FIRST recheck finds out after STALE_RECHECK_MS; later ones back off (the describe block below).
     const { STALE_RECHECK_MS } = b.mod
     expect(STALE_RECHECK_MS).toBe(2_000)
     leaseLive = true
@@ -482,7 +495,7 @@ describe('a follower reads what the leader published', () => {
     expect(b.snapshot()).toMatchObject({ remote: true, stale: false })
   })
 
-  describe('stale is not terminal: a recheck every STALE_RECHECK_MS (stale-leader spec F2)', () => {
+  describe('stale is not terminal: the lease key wakes a stale follower, a backed-off recheck insures it (stale-leader spec F2)', () => {
     /** B follows A's record; A is gone (closed, no lease) and the record is past STATUS_STALE_MS: B is stale. */
     async function staleFollower(id = 'B'): Promise<Win> {
       const b = await openWindow(id)
@@ -594,7 +607,7 @@ describe('a follower reads what the leader published', () => {
       expect(vi.getTimerCount()).toBe(0)
     })
 
-    it('two followers, both stale, one timer each; the lease live again → both clear within STALE_RECHECK_MS', async () => {
+    it('two followers, both stale, one timer each; the holder writes its lease live again → both clear AT ONCE, no timer advanced', async () => {
       await goneLeader()
       const b = await openWindow('B')
       const c = await openWindow('C')
@@ -606,9 +619,88 @@ describe('a follower reads what the leader published', () => {
       expect(vi.getTimerCount()).toBe(2)
 
       leaseLive = true
-      vi.advanceTimersByTime(b.mod.STALE_RECHECK_MS)
+      renewLease()
       expect(b.snapshot()).toMatchObject({ remote: true, stale: false })
       expect(c.snapshot()).toMatchObject({ remote: true, stale: false })
+    })
+
+    it('a stale follower hears the lease key: a live lease clears stale at once, without advancing a single timer', async () => {
+      await goneLeader()
+      const b = await staleFollower()
+      const heard = vi.fn()
+      b.mod.subscribeProfileSync(heard)
+      leaseLive = true
+      renewLease() // the holder took its lapsed lease back — in ANOTHER window, so this one hears the key
+      expect(b.snapshot()).toMatchObject({ remote: true, stale: false })
+      expect(heard).toHaveBeenCalledTimes(1)
+    })
+
+    it('a follower that is NOT stale ignores the lease key: the 2 s renewals of a live leader cost it no read of the record', async () => {
+      await openWindow('A', { leader: true, status: SYNCED })
+      vi.advanceTimersByTime(250 + 1)
+      const b = await openWindow('B')
+      expect(b.snapshot()).toMatchObject({ remote: true, stale: false })
+      const getItem = vi.spyOn(Storage.prototype, 'getItem')
+      for (let i = 0; i < 10; i++) renewLease()
+      expect(statusReads(getItem)).toBe(0) // counted over both windows: the leader's does not read on it either
+      expect(b.snapshot()).toMatchObject({ remote: true, stale: false })
+    })
+
+    it('while stale and nothing changes, the recheck backs off: +2 s, +4 s, +8 s … capped at STALE_RECHECK_MAX_MS, one timer at a time', async () => {
+      await goneLeader()
+      const b = await staleFollower()
+      const { STALE_RECHECK_MS, STALE_RECHECK_MAX_MS } = b.mod
+      expect(STALE_RECHECK_MS).toBe(2_000)
+      expect(STALE_RECHECK_MAX_MS).toBe(60_000)
+      const t0 = Date.now()
+      const reads: number[] = []
+      const spy = vi.spyOn(Storage.prototype, 'getItem')
+      for (let s = 0; s < 300; s++) {
+        const before = statusReads(spy)
+        vi.advanceTimersByTime(1_000)
+        if (statusReads(spy) > before) reads.push(Date.now() - t0)
+        expect(vi.getTimerCount()).toBe(1)
+      }
+      expect(reads).toEqual([2_000, 6_000, 14_000, 30_000, 62_000, 122_000, 182_000, 242_000])
+      expect(b.snapshot()).toMatchObject({ remote: true, stale: true })
+    })
+
+    it('the backoff starts over: stale → not stale → stale again rechecks after STALE_RECHECK_MS again', async () => {
+      await goneLeader()
+      const b = await staleFollower()
+      vi.advanceTimersByTime(30_000) // backed off: the next recheck is 32 s away
+      leaseLive = true
+      renewLease()
+      expect(b.snapshot()).toMatchObject({ remote: true, stale: false })
+
+      // the holder is gone again; the not-stale follower finds out at its own timer (the record is long past 10 s)
+      leaseLive = false
+      vi.advanceTimersByTime(b.mod.STATUS_STALE_MS)
+      expect(b.snapshot()).toMatchObject({ remote: true, stale: true })
+      const spy = vi.spyOn(Storage.prototype, 'getItem')
+      vi.advanceTimersByTime(b.mod.STALE_RECHECK_MS - 1)
+      expect(statusReads(spy)).toBe(0)
+      vi.advanceTimersByTime(1)
+      expect(statusReads(spy)).toBe(1)
+    })
+
+    it('the backoff starts over after this window has led: stale again rechecks after STALE_RECHECK_MS', async () => {
+      await goneLeader()
+      const b = await staleFollower()
+      vi.advanceTimersByTime(30_000)
+      leaseLive = true
+      b.set({ leader: true })
+      vi.advanceTimersByTime(250 + 1) // its publish
+      // it loses the lease and its record goes old: stale on the next look
+      leaseLive = false
+      vi.setSystemTime(Date.now() + 30_000)
+      b.set({ leader: false })
+      expect(b.snapshot()).toMatchObject({ remote: true, stale: true })
+      const spy = vi.spyOn(Storage.prototype, 'getItem')
+      vi.advanceTimersByTime(b.mod.STALE_RECHECK_MS - 1)
+      expect(statusReads(spy)).toBe(0)
+      vi.advanceTimersByTime(1)
+      expect(statusReads(spy)).toBe(1)
     })
   })
 

@@ -97,10 +97,19 @@
 // renewal (leader.ts, `onRecovered`) — with nothing new to publish when the
 // profile is synced. Meanwhile any `refresh()` puts the holder's OWN window on the
 // follower side (its `isLeader()` reads false), where it reads its own old record
-// as stale. So a stale follower keeps re-reading the record and the lease every
-// `STALE_RECHECK_MS`: a live lease again — the holder's, or this very window's —
-// clears `stale` within that. A recheck that finds nothing new notifies nobody
-// (the snapshot is deduplicated).
+// as stale. What ends it: a lease taken back IS a write — of the lease key. So a
+// follower that has called its record stale, and only such a one, also listens
+// to the lease key and looks again when it moves: a holder in another window that
+// takes its lease back clears `stale` at once. (A follower that is not stale
+// ignores the key: the lease is renewed every 2 s, and re-reading a record of up
+// to `MAX_PUBLISHED_STATUS_CHARS` on every renewal, in every window, is what the
+// record's own events exist to avoid.) THIS window's own renewal is no event here
+// — `storage` never reaches the writer — and needs none: start.ts re-judges on
+// `onRecovered`. A timer stays, as insurance against an event that never came:
+// the first recheck after `STALE_RECHECK_MS`, each next one twice as far, capped
+// at `STALE_RECHECK_MAX_MS` — and back to the start once the snapshot is not
+// stale (or this window leads, or the record is another master's). A recheck that
+// finds nothing new notifies nobody (the snapshot is deduplicated).
 //   The record names its writer, so a new leader always publishes, identical
 // content or not. And a record that vanishes under a sitting leader is published
 // again.
@@ -158,8 +167,14 @@ import type { SectionConflict } from './sync-state'
 export const STATUS_THROTTLE_MS = 250
 /** A published record OLDER than this, with nobody holding the lease, is `stale`. */
 export const STATUS_STALE_MS = 10_000
-/** A follower that has called its record stale reads it and the lease again this often (the lease's renew period). */
+/**
+ * A follower that has called its record stale reads it and the lease again after this long (the lease's renew
+ * period) — insurance only, the lease key's `storage` event is what wakes it (the header). Each recheck that finds
+ * it still stale doubles the wait, up to `STALE_RECHECK_MAX_MS`.
+ */
 export const STALE_RECHECK_MS = 2_000
+/** The longest a stale follower waits between two rechecks. */
+export const STALE_RECHECK_MAX_MS = 60_000
 /** A command OLDER than this is removed unexecuted. */
 export const COMMAND_TTL_MS = 30_000
 /** … and so is one from further in the FUTURE than this: clocks of one machine's windows do not differ, a clock set back does. */
@@ -207,6 +222,7 @@ function serializeToFit(record: PublishedStatus): { text: string; fits: boolean 
 
 const STATUS_KEY = STORAGE_KEYS.PROFILE_STATUS
 const COMMAND_PREFIX = STORAGE_KEYS.PROFILE_COMMAND_PREFIX
+const LEASE_KEY = STORAGE_KEYS.PROFILE_LEADER
 
 /**
  * Which master — and which attach of it — a channel, a status record and a command belong to. `generation` is
@@ -566,6 +582,10 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
   let oversizeLogged = false
   let publishTimer: ReturnType<typeof setTimeout> | null = null
   let staleTimer: ReturnType<typeof setTimeout> | null = null
+  /** The last refresh found this window a follower whose record is stale: only then does the lease key wake it. */
+  let followerStale = false
+  /** The wait before the next stale recheck; back to `STALE_RECHECK_MS` whenever the snapshot is not stale. */
+  let staleRecheckMs = STALE_RECHECK_MS
 
   const clearPublishTimer = (): void => {
     if (publishTimer !== null) clearTimeout(publishTimer)
@@ -644,8 +664,10 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
   const refresh = (): void => {
     if (closed) return
     const local = deps.local()
+    followerStale = false
     if (local.leader) {
       clearStaleTimer()
+      staleRecheckMs = STALE_RECHECK_MS
       setSnapshot({ ...local, remote: false, stale: false })
       if (publishTimer === null && publishable(local) !== publishedSignature) publishTimer = setTimeout(publish, STATUS_THROTTLE_MS)
       if (!wasLeader) {
@@ -662,16 +684,24 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
     // Another master's record is no record: this window's master has none yet — or this window has not heard that
     // its master is gone, and what is there belongs to the next one.
     if (record === null || record.master !== tag) {
+      staleRecheckMs = STALE_RECHECK_MS
       setSnapshot({ ...local, remote: false, stale: false })
       return
     }
     const age = deps.now() - record.at
     const stale = age > STATUS_STALE_MS && !deps.leaseLive()
     setSnapshot({ master: local.master, leader: false, blocked: record.blocked, status: record.status, problems: record.problems, remote: true, stale })
-    // Neither growing old nor a lease running out is an event — and neither is a lease coming back to life (a holder
-    // that took back its own lapsed lease, with nothing new to publish). So a fresh record is looked at again when it
-    // turns old, and a stale one every STALE_RECHECK_MS, for as long as it stays stale (the header).
-    staleTimer = setTimeout(refresh, stale ? STALE_RECHECK_MS : age <= STATUS_STALE_MS ? STATUS_STALE_MS - age + 1 : STATUS_STALE_MS)
+    // Neither growing old nor a lease running out is an event, so a fresh record is looked at again when it turns
+    // old. A lease coming back to life IS one — of the lease key, heard by `onStorage` while `followerStale` — and
+    // the timer of a stale record is only insurance against missing it: backed off, capped (the header).
+    followerStale = stale
+    if (stale) {
+      staleTimer = setTimeout(refresh, staleRecheckMs)
+      staleRecheckMs = Math.min(staleRecheckMs * 2, STALE_RECHECK_MAX_MS)
+    } else {
+      staleRecheckMs = STALE_RECHECK_MS
+      staleTimer = setTimeout(refresh, age <= STATUS_STALE_MS ? STATUS_STALE_MS - age + 1 : STATUS_STALE_MS)
+    }
   }
 
   const onStorage = (e: StorageEvent): void => {
@@ -683,6 +713,10 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
     } else if (e.key === STATUS_KEY) {
       if (e.newValue === null) publishedSignature = null
       refresh()
+    } else if (e.key === LEASE_KEY) {
+      // A holder took the lease (back): the one event that can end `stale` without a record. Not otherwise — every
+      // renewal writes this key, and a follower that is not stale has nothing to learn from it (the header).
+      if (followerStale) refresh()
     } else if (e.key.startsWith(ownPrefix)) {
       if (e.newValue !== null && deps.local().leader) take(e.key)
     }
@@ -741,6 +775,8 @@ export function openStatusChannel(deps: StatusChannelDeps): StatusChannel {
       closed = true
       clearPublishTimer()
       clearStaleTimer()
+      followerStale = false
+      staleRecheckMs = STALE_RECHECK_MS
       if (hasWindow) window.removeEventListener('storage', onStorage)
       if (!clear) return
       // EVERY window does this when the master goes, not only the leader: removing is idempotent, and the leader
