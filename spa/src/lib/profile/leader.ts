@@ -83,6 +83,22 @@
 // late asks `isLeader()` itself. `stop()` does not fire it either — the caller
 // ended this on purpose, and nothing is heard after `stop()` returns or, if a
 // listener calls `stop()`, after that call.
+//
+// `onRecovered` IS FOR THE ONE THING `onChange` CANNOT SAY. A holder whose renewal
+// runs late (a hidden window's timers are throttled, see above) lets its own lease
+// EXPIRE while it is alive: `isLeader()` answers false for that while, but the
+// in-memory flag never changed, and when the late renewal finds the record still
+// its own and rewrites it, `isLeader()` is true again — with no `onChange` either
+// way. `onRecovered` fires exactly then: the renewal read THIS window's lease with
+// `expiresAt <= now()` and wrote it back. It is not a step-down and a re-lead (the
+// lease was never anyone else's, and the caller's driver is kept). It does not fire
+// for an ordinary renewal, when leaving storageless mode (there was no lease to
+// lapse), after `pagehide` or `stop()`, or when the renewal steps down instead.
+// Same listener rules as `onChange`. And it is a hint, not a verdict: the read and
+// the write are two steps (no compare-and-swap), so another window's claim can land
+// right after the write, and `isLeader()` may already be false inside the callback.
+// A caller re-judges with `isLeader()`; the flag itself is corrected at the next
+// renewal through `onChange(false)`. Pinned in leader.test.ts ("PINNED read/write race").
 import { STORAGE_KEYS } from '../storage/keys'
 
 export interface LeaderOptions {
@@ -105,6 +121,11 @@ export interface Leadership {
   isLeader(): boolean
   /** Fires on change only; does not replay the current value. Returns the unsubscribe. */
   onChange(cb: (leader: boolean) => void): () => void
+  /**
+   * Fires when a renewal took back this window's own EXPIRED lease (a lapse: `isLeader()` was false
+   * meanwhile, `onChange` never fired). A hint — re-read `isLeader()`. Does not replay. Returns the unsubscribe.
+   */
+  onRecovered(cb: () => void): () => void
   /** Releases the lease if it is ours, cancels every timer and listener. Nothing is heard afterwards. */
   stop(): void
 }
@@ -182,6 +203,7 @@ export function contendForLeadership(opts: LeaderOptions = {}): Leadership {
   let storageless = false
   let timer: ReturnType<typeof setTimeout> | null = null
   const listeners = new Set<(leader: boolean) => void>()
+  const recoveredListeners = new Set<() => void>()
 
   function read(): ReadResult {
     try {
@@ -244,6 +266,17 @@ export function contendForLeadership(opts: LeaderOptions = {}): Leadership {
     }
   }
 
+  function fireRecovered(): void {
+    for (const cb of [...recoveredListeners]) {
+      if (phase === 'stopped') return
+      try {
+        cb()
+      } catch (err) {
+        console.error('[profile/leader] onRecovered listener threw', err)
+      }
+    }
+  }
+
   function contend(): void {
     if (phase === 'stopped' || phase === 'hidden') return
     const r = read()
@@ -297,6 +330,7 @@ export function contendForLeadership(opts: LeaderOptions = {}): Leadership {
   /** READ FIRST. A lease that is not ours is never written over — that is the whole takeover protocol. */
   function renew(): void {
     const r = read()
+    const wasStorageless = storageless
     if (storageless) {
       if (!r.ok) {
         schedule(renew, renewMs)
@@ -304,11 +338,14 @@ export function contendForLeadership(opts: LeaderOptions = {}): Leadership {
       }
       storageless = false // storage is back: the normal rules apply from here
     }
+    // Our own lease, but run out: a lapse (a late renewal). Not after storageless mode — no lease was held there.
+    const lapsed = !wasStorageless && r.ok && r.lease?.windowId === id && r.lease.expiresAt <= now()
     if (!r.ok || r.lease?.windowId !== id || !write()) {
       stepDown()
       return
     }
     schedule(renew, renewMs)
+    if (lapsed) fireRecovered()
   }
 
   function onStorage(e: StorageEvent): void {
@@ -360,6 +397,13 @@ export function contendForLeadership(opts: LeaderOptions = {}): Leadership {
         listeners.delete(cb)
       }
     },
+    onRecovered(cb) {
+      if (phase === 'stopped') return () => {}
+      recoveredListeners.add(cb)
+      return () => {
+        recoveredListeners.delete(cb)
+      }
+    },
     stop() {
       if (phase === 'stopped') return
       release()
@@ -368,6 +412,7 @@ export function contendForLeadership(opts: LeaderOptions = {}): Leadership {
       storageless = false
       clearTimer()
       listeners.clear()
+      recoveredListeners.clear()
       if (hasWindow) {
         window.removeEventListener('storage', onStorage)
         window.removeEventListener('pagehide', onPageHide)

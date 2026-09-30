@@ -572,6 +572,12 @@ function enterMasterMode(master: Master, generation: number, attachId: string | 
     reportProblem({ kind: 'profile-gone', detail: `profile ${master.profileId} is not on host ${master.hostId} any more (${detail}); nothing was applied and nothing was dropped` })
   }
   const unsubscribe = leadership.onChange(apply)
+  // A lapse (leader.ts, `onRecovered`): a late renewal let this window's own lease run out and has taken it back.
+  // `isLeader()` read false meanwhile, and a refresh then may have shown this window its own record as stale, or a
+  // host / suspension change may have taken the driver down — while `onChange` said nothing either way. Re-judge
+  // now: `apply` rebuilds a driver that is missing and refreshes the channel. With `isLeader()`, not `true`: the
+  // read and the write of a renewal are two steps, and another window's claim may already have landed.
+  const unrecovered = leadership.onRecovered(() => apply(leadership.isLeader()))
 
   // Subscribed BEFORE the endpoint watcher below, so that when one change moves both, `identity` is already
   // current when that watcher calls `apply`: a driver is never built on a change that also pauses the profile.
@@ -643,6 +649,7 @@ function enterMasterMode(master: Master, generation: number, attachId: string | 
       if (ended) return
       ended = true
       unsubscribe()
+      unrecovered()
       unwatchIdentity()
       unwatchEndpoint()
       if (wake !== null) clearTimeout(wake)

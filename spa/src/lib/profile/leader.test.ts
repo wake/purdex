@@ -525,3 +525,191 @@ describe('two windows', () => {
     expect(b.changes).toEqual([true, false, true])
   })
 })
+
+describe('onRecovered: a lapsed lease taken back (stale-leader spec F1)', () => {
+  // A lapse: the holder's renewal ran late (a throttled, hidden window) and its own
+  // lease EXPIRED meanwhile. `isLeader()` read false for that while; the in-memory
+  // flag never changed, so `onChange` cannot say "true again". `onRecovered` does.
+  /** Lead, then move the clock 30 s on without running a timer: the renewal is now late and the lease has run out. */
+  async function lapsed(opts: LeaderOptions = {}): Promise<Win & { recovered: number[] }> {
+    const w = await openWindow(opts)
+    const recovered: number[] = []
+    w.lead.onRecovered(() => recovered.push(Date.now()))
+    vi.advanceTimersByTime(100)
+    expect(w.lead.isLeader()).toBe(true)
+    vi.setSystemTime(Date.now() + 30_000)
+    expect(w.lead.isLeader()).toBe(false) // the lapse
+    return { ...w, recovered }
+  }
+
+  it('the late renewal finds its own expired lease, rewrites it and fires onRecovered once — onChange not at all', async () => {
+    const a = await lapsed()
+    const before = lease()!.expiresAt
+    vi.advanceTimersByTime(RENEW) // the renewal that was due runs now
+    expect(a.recovered).toEqual([Date.now()])
+    expect(a.changes).toEqual([true])
+    expect(lease()!.expiresAt).toBe(Date.now() + TTL)
+    expect(lease()!.expiresAt).toBeGreaterThan(before)
+    expect(a.lead.isLeader()).toBe(true)
+
+    vi.advanceTimersByTime(RENEW * 5) // ordinary renewals after that: nothing more
+    expect(a.recovered).toHaveLength(1)
+    expect(a.changes).toEqual([true])
+  })
+
+  it('ordinary renewals of a live lease never fire it', async () => {
+    const a = await openWindow()
+    const recovered: number[] = []
+    a.lead.onRecovered(() => recovered.push(Date.now()))
+    vi.advanceTimersByTime(10_000)
+    expect(a.lead.isLeader()).toBe(true)
+    expect(recovered).toEqual([])
+  })
+
+  it('a lapse during which another window claimed → onChange(false), not onRecovered', async () => {
+    const a = await lapsed()
+    localStorage.setItem(KEY, JSON.stringify({ windowId: 'someone-else', expiresAt: Date.now() + TTL }))
+    vi.advanceTimersByTime(RENEW)
+    expect(a.changes).toEqual([true, false])
+    expect(a.recovered).toEqual([])
+    expect(lease()!.windowId).toBe('someone-else')
+  })
+
+  it('the unsubscribe it returns works; a throwing listener is logged and the others still run', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const a = await openWindow()
+    const heard: string[] = []
+    const off = a.lead.onRecovered(() => heard.push('off'))
+    a.lead.onRecovered(() => {
+      throw new Error('listener bug')
+    })
+    a.lead.onRecovered(() => heard.push('kept'))
+    off()
+    vi.advanceTimersByTime(100)
+    vi.setSystemTime(Date.now() + 30_000)
+    vi.advanceTimersByTime(RENEW)
+    expect(heard).toEqual(['kept'])
+    expect(logged).toHaveBeenCalledTimes(1) // reported, not swallowed
+    expect(a.lead.isLeader()).toBe(true)
+  })
+
+  it('nothing after stop(): not from a lapse, and a listener that stops it silences the rest', async () => {
+    const a = await lapsed()
+    a.lead.stop()
+    vi.advanceTimersByTime(TTL * 3)
+    expect(a.recovered).toEqual([])
+    a.lead.onRecovered(() => a.recovered.push(-1))() // a no-op subscription, and its no-op unsubscribe
+
+    const b = await openWindow({ windowId: 'b' })
+    const heard: string[] = []
+    b.lead.onRecovered(() => {
+      heard.push('first')
+      b.lead.stop()
+    })
+    b.lead.onRecovered(() => heard.push('second'))
+    vi.advanceTimersByTime(100)
+    vi.setSystemTime(Date.now() + 30_000)
+    vi.advanceTimersByTime(RENEW)
+    expect(heard).toEqual(['first'])
+    expect(a.recovered).toEqual([])
+  })
+
+  it('storageless mode never fires it — not while storage is gone, and not when it comes back holding this window’s own EXPIRED lease', async () => {
+    localStorage.setItem(KEY, JSON.stringify({ windowId: 'a', expiresAt: 1_000_000 - 1 }))
+    const boom = (): never => {
+      throw new Error('SecurityError')
+    }
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(boom)
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(boom)
+    const a = await openWindow({ windowId: 'a' })
+    const recovered: number[] = []
+    a.lead.onRecovered(() => recovered.push(Date.now()))
+    vi.advanceTimersByTime(100)
+    expect(a.changes).toEqual([true]) // leads alone
+    vi.setSystemTime(Date.now() + 30_000)
+    vi.advanceTimersByTime(RENEW * 3)
+    expect(recovered).toEqual([])
+
+    vi.restoreAllMocks() // storage is back, and it still holds a's lease from long ago
+    expect(lease()).toEqual({ windowId: 'a', expiresAt: 1_000_000 - 1 })
+    vi.advanceTimersByTime(RENEW)
+    expect(recovered).toEqual([]) // leaving storageless mode is not a lapse
+    expect(a.changes).toEqual([true])
+    expect(lease()!.windowId).toBe('a')
+    expect(a.lead.isLeader()).toBe(true)
+  })
+
+  it('pagehide during a lapse → never fired; pageshow (bfcache) re-contends through onChange, not onRecovered', async () => {
+    const a = await lapsed()
+    window.dispatchEvent(new Event('pagehide'))
+    expect(a.changes).toEqual([true, false])
+    vi.advanceTimersByTime(TTL * 3)
+    expect(a.recovered).toEqual([])
+
+    window.dispatchEvent(new Event('pageshow'))
+    vi.advanceTimersByTime(100 + RENEW * 3)
+    expect(a.changes).toEqual([true, false, true])
+    expect(a.recovered).toEqual([])
+  })
+
+  it('pageshow after a pagehide whose release failed (own EXPIRED lease still in storage) → a claim, not a recovery', async () => {
+    const a = await lapsed()
+    const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('blocked')
+    })
+    window.dispatchEvent(new Event('pagehide'))
+    remove.mockRestore()
+    expect(lease()!.expiresAt).toBeLessThan(Date.now()) // own, expired, still there
+    window.dispatchEvent(new Event('pageshow'))
+    vi.advanceTimersByTime(100 + RENEW * 3)
+    expect(a.changes).toEqual([true, false, true])
+    expect(a.recovered).toEqual([])
+  })
+
+  it('PINNED read/write race: another window’s lease lands between the renewal’s read (own, expired) and its write', async () => {
+    // localStorage has no compare-and-swap (see the header), so renew() cannot see
+    // a write that lands after its read. Faked with a one-shot setItem.
+    const realSetItem = Storage.prototype.setItem
+
+    // (a) the other write lands BEFORE ours: ours overwrites it (last writer wins) —
+    // this window holds the lease, onRecovered fires, and isLeader() is true.
+    const a = await lapsed()
+    const otherA = JSON.stringify({ windowId: 'someone-else', expiresAt: Date.now() + TTL })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(function (this: Storage, k: string, v: string) {
+      realSetItem.call(this, KEY, otherA)
+      realSetItem.call(this, k, v)
+    })
+    const seenA: boolean[] = []
+    a.lead.onRecovered(() => seenA.push(a.lead.isLeader()))
+    vi.advanceTimersByTime(RENEW)
+    expect(a.recovered).toHaveLength(1)
+    expect(seenA).toEqual([true])
+    expect(lease()!.windowId).not.toBe('someone-else')
+    a.lead.stop()
+    vi.restoreAllMocks()
+
+    // (b) the other write lands AFTER ours: onRecovered STILL fires (the write
+    // succeeded and renew() cannot know better), but isLeader() — which reads
+    // storage — is already false inside the callback. That is why the caller must
+    // re-judge with isLeader() and not assume "leader again" (start.ts does). The
+    // in-memory flag is corrected at the next renewal, through onChange(false).
+    vi.setSystemTime(1_000_000)
+    localStorage.clear()
+    const b = await lapsed({ windowId: 'b' })
+    const otherB = JSON.stringify({ windowId: 'someone-else', expiresAt: Date.now() + TTL })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(function (this: Storage, k: string, v: string) {
+      realSetItem.call(this, k, v)
+      realSetItem.call(this, KEY, otherB)
+    })
+    const seenB: boolean[] = []
+    b.lead.onRecovered(() => seenB.push(b.lead.isLeader()))
+    vi.advanceTimersByTime(RENEW)
+    expect(b.recovered).toHaveLength(1)
+    expect(seenB).toEqual([false])
+    expect(b.changes).toEqual([true])
+    vi.advanceTimersByTime(RENEW)
+    expect(b.changes).toEqual([true, false])
+    expect(lease()!.windowId).toBe('someone-else')
+    expect(b.recovered).toHaveLength(1)
+  })
+})

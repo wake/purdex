@@ -36,6 +36,10 @@ interface FakeLeadership {
   stop: ReturnType<typeof vi.fn>
   listeners: Set<(l: boolean) => void>
   set: (leader: boolean) => void
+  onRecovered: (cb: () => void) => () => void
+  recoveredListeners: Set<() => void>
+  /** What leader.ts does when a late renewal takes back this window's own lapsed lease: fire `onRecovered`, no `onChange`. */
+  recover: () => void
 }
 
 const h = vi.hoisted(() => ({
@@ -97,6 +101,7 @@ vi.mock('./leader', () => ({
   contendForLeadership: vi.fn(() => {
     let leader = h.initialLeader
     const listeners = new Set<(l: boolean) => void>()
+    const recoveredListeners = new Set<() => void>()
     const l: FakeLeadership = {
       isLeader: vi.fn(() => leader),
       onChange: (cb) => {
@@ -108,6 +113,14 @@ vi.mock('./leader', () => ({
       set: (v) => {
         leader = v
         for (const cb of [...listeners]) cb(v)
+      },
+      onRecovered: (cb) => {
+        recoveredListeners.add(cb)
+        return () => recoveredListeners.delete(cb)
+      },
+      recoveredListeners,
+      recover: () => {
+        for (const cb of [...recoveredListeners]) cb()
       },
     }
     h.leaderships.push(l)
@@ -1297,6 +1310,91 @@ describe('leader and follower', () => {
     h.leaderships[0].set(true)
     await flush()
     expect(h.executors).toHaveLength(1)
+  })
+})
+
+describe('a lapsed lease taken back: onRecovered re-judges at once (stale-leader spec F1b)', () => {
+  const STATUS = STORAGE_KEYS.PROFILE_STATUS
+  /** Leading, published; then the lapse: the lease ran out (a throttled window), isLeader() reads false, no onChange. */
+  async function lapsed(): Promise<void> {
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    vi.advanceTimersByTime(250 + 1) // published (and jsdom's own 0 ms timer for the write)
+    expect(localStorage.getItem(STATUS)).not.toBeNull()
+    vi.setSystemTime(Date.now() + 30_000)
+    h.leaderships[0].isLeader.mockReturnValue(false)
+    h.lease = { windowId: 'w-test', expiresAt: Date.now() - 1 } // its own, expired
+  }
+
+  it('lapse → a refresh reads its own record as stale; the renewal that takes the lease back makes it the leader’s snapshot IMMEDIATELY, with the driver kept', async () => {
+    await lapsed()
+    h.executors[0].deps.onStatus({ profile: 'synced', schemaLock: null, sections: {}, locks: {}, profileGone: false, detail: {}, indexFailures: 0, lastSuccessAt: null }) // anything that refreshes during the lapse
+    expect(profileSyncSnapshot()).toMatchObject({ leader: false, remote: true, stale: true })
+
+    h.leaderships[0].isLeader.mockReturnValue(true)
+    h.lease = { windowId: 'w-test', expiresAt: Date.now() + 6_000 }
+    h.leaderships[0].recover()
+    expect(profileSyncSnapshot()).toMatchObject({ leader: true, remote: false, stale: false }) // no timer advanced
+    expect(h.executors).toHaveLength(1) // not a step-down and a re-lead: no teardown, no full reindex
+    expect(h.executors[0].dispose).not.toHaveBeenCalled()
+    const before = JSON.parse(localStorage.getItem(STATUS)!).at
+    vi.advanceTimersByTime(250)
+    expect(JSON.parse(localStorage.getItem(STATUS)!).at).toBeGreaterThan(before) // and it publishes again
+  })
+
+  it('a driver torn down during the lapse (apply(false) from a host change) is rebuilt on recovery', async () => {
+    await lapsed()
+    const { hosts } = useHostStore.getState()
+    useHostStore.setState({ hosts: { ...hosts, h1: { ...hosts.h1, port: 7999 } } }) // blocked: the driver goes
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: host('h1') } }) // put back: apply(isLeader() = false)
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(h.executors).toHaveLength(1)
+
+    h.leaderships[0].isLeader.mockReturnValue(true)
+    h.leaderships[0].recover()
+    await flush()
+    expect(h.executors).toHaveLength(2)
+    expect(profileSyncSnapshot()).toMatchObject({ leader: true, remote: false, stale: false })
+  })
+
+  it('recovered while isLeader() is ALREADY false again (leader.ts’s read/write race: another claim landed after the write) → a follower, no driver', async () => {
+    await lapsed()
+    h.lease = { windowId: 'other', expiresAt: Date.now() + 6_000 }
+    h.leaderships[0].recover()
+    expect(h.executors[0].dispose).toHaveBeenCalledTimes(1)
+    expect(h.executors).toHaveLength(1)
+    expect(profileSyncSnapshot()).toMatchObject({ leader: false })
+  })
+
+  it('after the master is cleared, or stop(), the old leadership’s recovery changes nothing: end() unsubscribed', async () => {
+    connect('h1')
+    stop = startProfileSync()
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    const old = h.leaderships[0]
+    expect(old.recoveredListeners.size).toBe(1)
+    useProfileStore.getState().clearMaster()
+    expect(old.recoveredListeners.size).toBe(0)
+    const snapshot = profileSyncSnapshot()
+    old.recover()
+    await flush()
+    expect(h.executors).toHaveLength(1)
+    expect(profileSyncSnapshot()).toBe(snapshot)
+
+    useProfileStore.getState().setMaster('h1', P1, 'pull', EP)
+    await flush()
+    const second = h.leaderships[1]
+    expect(second.recoveredListeners.size).toBe(1)
+    stop()
+    stop = () => {}
+    expect(second.recoveredListeners.size).toBe(0)
+    const after = profileSyncSnapshot()
+    second.recover()
+    await flush()
+    expect(h.executors).toHaveLength(2)
+    expect(profileSyncSnapshot()).toBe(after)
   })
 })
 

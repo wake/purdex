@@ -21,7 +21,9 @@ import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import type { PaneLayout, Tab, Workspace } from '../../types/tab'
 import { hashSection } from './hash'
 import { clearSectionStore, loadSectionStore } from './section-store'
-import { __resetProfileSyncForTest, attachMaster, profileSyncState, startProfileSync } from './start'
+import { STORAGE_KEYS } from '../storage/keys'
+import { __resetProfileSyncForTest, attachMaster, profileSyncSnapshot, profileSyncState, startProfileSync } from './start'
+import { STALE_RECHECK_MS } from './sync-status'
 import { FakeDaemon } from './test-fake-daemon'
 
 vi.mock('./hash', async (importOriginal) => {
@@ -355,6 +357,34 @@ describe('C-1a — the write that had not left yet', () => {
     await useProfileStore.persist.rehydrate() // the broadcast arrives
     expect(profileSyncState().blocked).toBe('suspended')
     expect(daemon.writes.slice(writes)).toEqual([])
+  })
+})
+
+describe('a lapsed lease (stale-leader spec): the real lease, the real channel', () => {
+  it('REGRESSION — a window whose renewal ran late reads its own record as stale; the renewal that takes the lease back ends that AT ONCE, before any stale recheck', async () => {
+    const STATUS = STORAGE_KEYS.PROFILE_STATUS
+    const LEASE = STORAGE_KEYS.PROFILE_LEADER
+    const expiresAt = (): number => JSON.parse(localStorage.getItem(LEASE)!).expiresAt
+    await attachedAndSettled()
+    expect(profileSyncSnapshot()).toMatchObject({ leader: true, remote: false, stale: false })
+    expect(localStorage.getItem(STATUS)).not.toBeNull()
+
+    // Hidden: 30 s and not one timer. The lease has run out under a live holder; a refresh (any event) comes first.
+    vi.setSystemTime(Date.now() + 30_000)
+    window.dispatchEvent(new StorageEvent('storage', { key: STATUS, newValue: localStorage.getItem(STATUS) }))
+    expect(profileSyncSnapshot()).toMatchObject({ leader: false, remote: true, stale: true })
+
+    // Timers run again. Step to the late renewal, one ms at a time: the moment it has rewritten the lease, the
+    // snapshot is the leader's again — onRecovered → apply → changed(), not the recheck STALE_RECHECK_MS away.
+    const lapsed = expiresAt()
+    let waited = 0
+    while (expiresAt() === lapsed && waited < STALE_RECHECK_MS) {
+      vi.advanceTimersByTime(1)
+      waited += 1
+    }
+    expect(expiresAt()).toBeGreaterThan(Date.now())
+    expect(waited).toBeLessThan(STALE_RECHECK_MS)
+    expect(profileSyncSnapshot()).toMatchObject({ leader: true, remote: false, stale: false, status: { profile: 'synced' } })
   })
 })
 
