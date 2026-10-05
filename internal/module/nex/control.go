@@ -60,8 +60,7 @@ func (m *Module) takeControl(parent context.Context, execID, callerLease, princi
 			continue // released or expired between the two reads
 		}
 		if !m.isPdxPrincipal(row.LeasePrincipalID) {
-			return control{release: noRelease}, &handoffError{http.StatusConflict, "held_by", "execution lease is held by " + row.LeasePrincipalID,
-				map[string]any{"principal": row.LeasePrincipalID}}
+			return control{release: noRelease}, heldByError(row.LeasePrincipalID)
 		}
 		return control{LeaseID: row.LeaseID, PrincipalID: row.LeasePrincipalID, release: noRelease}, nil
 	}
@@ -79,11 +78,38 @@ func (m *Module) renewControl(parent context.Context, execID string, ctl control
 	if err == nil {
 		return ctl, nil
 	}
-	if !errors.Is(err, store.ErrLeaseExpired) && !errors.Is(err, store.ErrLeaseMismatch) && !errors.Is(err, store.ErrLeaseRequired) {
+	if !isLeaseErr(err) {
 		return ctl, &handoffError{http.StatusInternalServerError, "lease_error", "renewing lease: " + err.Error(), nil}
 	}
 	ctl.release()
 	return m.takeControl(parent, execID, "", principal)
+}
+
+// isLeaseErr reports Nexen's CheckLease refusals: the control a caller acts
+// under is gone (released, expired, or now someone else's).
+func isLeaseErr(err error) bool {
+	return errors.Is(err, store.ErrLeaseRequired) || errors.Is(err, store.ErrLeaseExpired) || errors.Is(err, store.ErrLeaseMismatch)
+}
+
+// heldByError is D4's refusal: a non-pdx principal holds the lease.
+func heldByError(principal string) *handoffError {
+	return &handoffError{http.StatusConflict, "held_by", "execution lease is held by " + principal,
+		map[string]any{"principal": principal}}
+}
+
+// heldByOther re-reads the row and reports a live lease held by a non-pdx
+// principal (D4: nothing of theirs is changed). ok is false when the
+// re-read itself failed, so the caller cannot tell and must not act.
+func (m *Module) heldByOther(parent context.Context, execID string) (herr *handoffError, ok bool) {
+	row, err := m.getExecution(parent, execID)
+	if err != nil {
+		m.logf("nex: re-reading %s for its lease holder: %v", execID, err)
+		return nil, false
+	}
+	if row.LeaseID != "" && row.LeaseExpiresAt > nowMs() && !m.isPdxPrincipal(row.LeasePrincipalID) {
+		return heldByError(row.LeasePrincipalID), true
+	}
+	return nil, true
 }
 
 // ctlPtr hands exitWorker the transfer's control, or nil when the transfer

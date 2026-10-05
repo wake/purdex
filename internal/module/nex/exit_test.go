@@ -272,6 +272,218 @@ func TestExitWorker_Failures(t *testing.T) {
 	})
 }
 
+// TestFakeLeaseFence pins the fake's opt-in fence to store.CheckLease's three answers.
+func TestFakeLeaseFence(t *testing.T) {
+	ctx := context.Background()
+	term := func(f *fakeNexService, lease, principal string) error {
+		return f.Terminate(ctx, execution.TerminateRequest{ExecutionID: "E", LeaseID: lease, PrincipalID: principal})
+	}
+	f := &fakeNexService{enforceLease: true}
+	if err := term(f, "L", "p"); !errors.Is(err, store.ErrLeaseRequired) {
+		t.Fatalf("no lease: %v", err)
+	}
+	f.heldLease = store.Lease{ID: "L", PrincipalID: "p", ExpiresAt: nowMs() - 1}
+	if err := term(f, "L", "p"); !errors.Is(err, store.ErrLeaseExpired) {
+		t.Fatalf("expired: %v", err)
+	}
+	f.heldLease.ExpiresAt = nowMs() + 60_000
+	if err := term(f, "L", "q"); !errors.Is(err, store.ErrLeaseMismatch) {
+		t.Fatalf("other principal: %v", err)
+	}
+	if err := term(f, "M", "p"); !errors.Is(err, store.ErrLeaseMismatch) {
+		t.Fatalf("other id: %v", err)
+	}
+	if _, err := f.RenewLease(ctx, "E", "M", "p"); !errors.Is(err, store.ErrLeaseMismatch) {
+		t.Fatalf("renew other id: %v", err)
+	}
+	before := f.heldLease.ExpiresAt
+	if l, err := f.RenewLease(ctx, "E", "L", "p"); err != nil || l.ExpiresAt <= before {
+		t.Fatalf("renew: %+v %v", l, err)
+	}
+	if err := term(f, "L", "p"); err != nil {
+		t.Fatalf("holder: %v", err)
+	}
+	if _, err := f.AcquireLease(ctx, "E", "q"); !errors.Is(err, store.ErrLeaseHeld) {
+		t.Fatalf("acquire over a live lease: %v", err)
+	}
+}
+
+// PR #1578 B1: a lease that changes hands between takeControl's read and the
+// terminate must never end in archiving a non-pdx holder's execution (D4).
+func TestExitWorker_LeaseRace(t *testing.T) {
+	const self = "pdx:" + testHostID
+	ploom := store.Lease{ID: "L-p", PrincipalID: "ploom:agent-7", ExpiresAt: nowMs() + 60_000}
+	rowHeld := func(l store.Lease) store.Execution {
+		return store.Execution{ID: "E", State: store.StateIdle, LeaseID: l.ID, LeasePrincipalID: l.PrincipalID, LeaseExpiresAt: l.ExpiresAt}
+	}
+	idle := store.Execution{ID: "E", State: store.StateIdle}
+
+	t.Run("B1-a: borrowed pdx lease handed to a non-pdx holder → held_by, nothing archived", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		borrowed := store.Lease{ID: "L-b", PrincipalID: pdxOther, ExpiresAt: nowMs() + 60_000}
+		env.svc.enforceLease = true
+		env.svc.heldLease = borrowed
+		env.store.script(rowHeld(borrowed), rowHeld(ploom))
+		env.svc.onTerminate = func(execution.TerminateRequest) { env.svc.setHeldLease(ploom) }
+		_, herr := env.m.exitWorker(context.Background(), idle, nil, self)
+		if herr == nil || herr.status != http.StatusConflict || herr.code != "held_by" || herr.detail["principal"] != "ploom:agent-7" {
+			t.Fatalf("herr = %+v", herr)
+		}
+		if n := len(env.svc.ArchiveCalls()); n != 0 {
+			t.Fatalf("archive calls = %d, want 0", n)
+		}
+		if len(env.svc.terminateCalls) != 1 || len(env.svc.acquires) != 2 || len(env.svc.releases) != 0 {
+			t.Fatalf("terminate=%+v acquires=%v releases=%+v", env.svc.terminateCalls, env.svc.acquires, env.svc.releases)
+		}
+	})
+	t.Run("B1-b: lease expired before terminate → re-taken once, retried, archived", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		borrowed := store.Lease{ID: "L-b", PrincipalID: pdxOther, ExpiresAt: nowMs() + 60_000}
+		expired := borrowed
+		expired.ExpiresAt = nowMs() - 1
+		env.svc.enforceLease = true
+		env.svc.heldLease = borrowed
+		env.svc.lease = store.Lease{ID: "L-new"}
+		env.store.script(rowHeld(borrowed), rowHeld(expired))
+		env.svc.onTerminate = func(req execution.TerminateRequest) {
+			if req.LeaseID == "L-b" {
+				env.svc.setHeldLease(expired) // the other tab stopped renewing
+			}
+		}
+		out, herr := env.m.exitWorker(context.Background(), idle, nil, self)
+		if herr != nil || !out.Exited() || !out.Terminated || !out.Archived || out.State != store.StateTerminated {
+			t.Fatalf("out=%+v herr=%+v", out, herr)
+		}
+		calls := env.svc.terminateCalls
+		if len(calls) != 2 || calls[1].LeaseID != "L-new" || calls[1].PrincipalID != self {
+			t.Fatalf("terminate calls = %+v", calls)
+		}
+		if n := len(env.svc.ArchiveCalls()); n != 1 {
+			t.Fatalf("archive calls = %d", n)
+		}
+		if len(env.svc.releases) != 1 || env.svc.releases[0].LeaseID != "L-new" {
+			t.Fatalf("releases = %+v (own re-taken lease must be released)", env.svc.releases)
+		}
+	})
+	t.Run("own lease lost before terminate: released before the re-take", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.enforceLease = true
+		env.svc.lease = store.Lease{ID: "L-own"}
+		env.svc.onTerminate = func(req execution.TerminateRequest) {
+			if len(env.svc.terminateCalls) == 1 {
+				env.svc.setHeldLease(store.Lease{ID: "L-own", PrincipalID: self, ExpiresAt: nowMs() - 1})
+				env.svc.mu.Lock()
+				env.svc.lease = store.Lease{ID: "L-own2"}
+				env.svc.mu.Unlock()
+			}
+		}
+		out, herr := env.m.exitWorker(context.Background(), idle, nil, self)
+		if herr != nil || !out.Terminated || !out.Archived {
+			t.Fatalf("out=%+v herr=%+v", out, herr)
+		}
+		got := env.svc.Calls()
+		want := []string{"acquire", "terminate", "release", "acquire", "terminate", "archive", "release"}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("calls = %v, want %v", got, want)
+		}
+		if env.svc.releases[0].LeaseID != "L-own" || env.svc.releases[1].LeaseID != "L-own2" {
+			t.Fatalf("releases = %+v", env.svc.releases)
+		}
+	})
+	t.Run("re-take fails with an infra error → existing failure rules (archive)", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.enforceLease = true
+		env.svc.lease = store.Lease{ID: "L-own"}
+		env.svc.onTerminate = func(execution.TerminateRequest) {
+			env.svc.setHeldLease(store.Lease{})
+			env.svc.mu.Lock()
+			env.svc.acquireErr = errors.New("db locked")
+			env.svc.mu.Unlock()
+		}
+		out, herr := env.m.exitWorker(context.Background(), idle, nil, self)
+		if herr != nil || !out.Exited() || out.Terminated || !out.Archived {
+			t.Fatalf("out=%+v herr=%+v", out, herr)
+		}
+		if len(env.svc.terminateCalls) != 1 || len(env.svc.ArchiveCalls()) != 1 {
+			t.Fatalf("terminate=%d archive=%d", len(env.svc.terminateCalls), len(env.svc.ArchiveCalls()))
+		}
+	})
+	t.Run("B1-c: transfer's ctl, lease now held by a non-pdx principal → held_by, no re-take, no archive", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.enforceLease = true
+		env.svc.heldLease = ploom
+		env.store.script(rowHeld(ploom))
+		released := false
+		ctl := &control{LeaseID: "L-t", PrincipalID: self, release: func() { released = true }}
+		_, herr := env.m.exitWorker(context.Background(), idle, ctl, self)
+		if herr == nil || herr.status != http.StatusConflict || herr.code != "held_by" || herr.detail["principal"] != "ploom:agent-7" {
+			t.Fatalf("herr = %+v", herr)
+		}
+		if len(env.svc.ArchiveCalls()) != 0 || len(env.svc.acquires) != 0 || len(env.svc.terminateCalls) != 1 || released {
+			t.Fatalf("archive=%d acquires=%v terminate=%d released=%v", len(env.svc.ArchiveCalls()), env.svc.acquires, len(env.svc.terminateCalls), released)
+		}
+	})
+	t.Run("B1-c': transfer's ctl, lease merely expired → terminate failure, archived", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.enforceLease = true
+		env.svc.heldLease = store.Lease{ID: "L-t", PrincipalID: self, ExpiresAt: nowMs() - 1}
+		env.store.script(idle)
+		ctl := &control{LeaseID: "L-t", PrincipalID: self, release: noRelease}
+		out, herr := env.m.exitWorker(context.Background(), idle, ctl, self)
+		if herr != nil || !out.Archived || out.Terminated || len(env.svc.acquires) != 0 {
+			t.Fatalf("out=%+v herr=%+v acquires=%v", out, herr, env.svc.acquires)
+		}
+	})
+
+	// B1-d: the guard before an archive that follows a failed (non-lease) terminate.
+	guard := []struct {
+		name        string
+		reread      store.Execution
+		wantHeldBy  bool
+		wantArchive int
+	}{
+		{"re-read shows a non-pdx holder → held_by, no archive", rowHeld(ploom), true, 0},
+		{"re-read shows no holder → archived", idle, false, 1},
+		{"re-read shows a pdx holder → archived", rowHeld(store.Lease{ID: "L-b", PrincipalID: pdxOther, ExpiresAt: nowMs() + 60_000}), false, 1},
+		{"re-read shows an expired non-pdx lease → archived", rowHeld(store.Lease{ID: "L-p", PrincipalID: "ploom:agent-7", ExpiresAt: nowMs() - 1}), false, 1},
+	}
+	for _, c := range guard {
+		t.Run("B1-d: "+c.name, func(t *testing.T) {
+			env := newTakebackEnv(t)
+			env.svc.lease = store.Lease{ID: "L-own"}
+			env.svc.terminateErr = execution.ErrInterruptUnconfirmed
+			env.store.script(c.reread)
+			out, herr := env.m.exitWorker(context.Background(), idle, nil, self)
+			if c.wantHeldBy {
+				if herr == nil || herr.status != http.StatusConflict || herr.code != "held_by" || herr.detail["principal"] != "ploom:agent-7" {
+					t.Fatalf("herr = %+v", herr)
+				}
+			} else if herr != nil || !out.Exited() || !out.Archived || out.Terminated {
+				t.Fatalf("out=%+v herr=%+v", out, herr)
+			}
+			if n := len(env.svc.ArchiveCalls()); n != c.wantArchive {
+				t.Fatalf("archive calls = %d, want %d", n, c.wantArchive)
+			}
+			if len(env.svc.releases) != 1 || env.svc.releases[0].LeaseID != "L-own" {
+				t.Fatalf("releases = %+v", env.svc.releases)
+			}
+		})
+	}
+	t.Run("B1-d: guard re-read fails → no archive, the terminate error", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.lease = store.Lease{ID: "L-own"}
+		env.svc.terminateErr = errors.New("boom")
+		env.store.results = []getResult{{err: errors.New("disk")}}
+		_, herr := env.m.exitWorker(context.Background(), idle, nil, self)
+		if herr == nil || herr.code != "terminate_failed" {
+			t.Fatalf("herr = %+v", herr)
+		}
+		if n := len(env.svc.ArchiveCalls()); n != 0 {
+			t.Fatalf("archive calls = %d, want 0", n)
+		}
+	})
+}
+
 func exitPost(t *testing.T, env *takebackEnv, id, body string) (int, map[string]any) {
 	t.Helper()
 	resp, err := http.Post(env.srv.URL+"/api/nex/executions/"+id+"/exit", "application/json", strings.NewReader(body))

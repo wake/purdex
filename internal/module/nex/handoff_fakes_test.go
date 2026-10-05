@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -318,6 +319,39 @@ type fakeNexService struct {
 	onTerminate    func(execution.TerminateRequest) // runs before the answer; lets a test flip the store row to terminated
 	renewCalls     []renewCall
 	renewErr       error
+
+	// Opt-in lease fence, off by default so existing tests are unaffected.
+	// With enforceLease, heldLease is the execution's lease as Nexen's store
+	// holds it: AcquireLease refuses a live lease of another principal and
+	// otherwise mints f.lease.ID for the caller; RenewLease, ReleaseLease and
+	// Terminate check the request like store.CheckLease (store/lease.go).
+	// A hook (onTerminate, or a test between calls) may hand the lease over
+	// with setHeldLease.
+	enforceLease bool
+	heldLease    store.Lease
+}
+
+// fakeLeaseTTL is the lifetime (ms) the fake gives an acquired or renewed lease.
+const fakeLeaseTTL = 120_000
+
+// setHeldLease replaces the lease the fence checks against (a hand-over).
+func (f *fakeNexService) setHeldLease(l store.Lease) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.heldLease = l
+}
+
+// checkLease is store.CheckLease over heldLease; the caller holds f.mu.
+func (f *fakeNexService) checkLease(executionID, leaseID, principalID string) error {
+	switch {
+	case f.heldLease.ID == "":
+		return fmt.Errorf("execution %s: %w", executionID, store.ErrLeaseRequired)
+	case f.heldLease.ExpiresAt <= nowMs():
+		return fmt.Errorf("execution %s: %w", executionID, store.ErrLeaseExpired)
+	case f.heldLease.ID != leaseID || f.heldLease.PrincipalID != principalID:
+		return fmt.Errorf("execution %s: %w", executionID, store.ErrLeaseMismatch)
+	}
+	return nil
 }
 
 type renewCall struct{ ExecutionID, LeaseID, PrincipalID string }
@@ -372,7 +406,7 @@ func (f *fakeNexService) Requests() []execution.Request {
 	return append([]execution.Request(nil), f.requests...)
 }
 
-func (f *fakeNexService) AcquireLease(_ context.Context, _, principalID string) (store.Lease, error) {
+func (f *fakeNexService) AcquireLease(_ context.Context, executionID, principalID string) (store.Lease, error) {
 	f.record("acquire")
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -380,7 +414,14 @@ func (f *fakeNexService) AcquireLease(_ context.Context, _, principalID string) 
 	if f.acquireErr != nil {
 		return store.Lease{}, f.acquireErr
 	}
-	return f.lease, nil
+	if !f.enforceLease {
+		return f.lease, nil
+	}
+	if h := f.heldLease; h.ID != "" && h.ExpiresAt > nowMs() && h.PrincipalID != principalID {
+		return store.Lease{}, fmt.Errorf("execution %s: %w by %s", executionID, store.ErrLeaseHeld, h.PrincipalID)
+	}
+	f.heldLease = store.Lease{ID: f.lease.ID, PrincipalID: principalID, ExpiresAt: nowMs() + fakeLeaseTTL}
+	return f.heldLease, nil
 }
 
 func (f *fakeNexService) ReleaseLease(ctx context.Context, executionID, leaseID, principalID string) error {
@@ -389,7 +430,15 @@ func (f *fakeNexService) ReleaseLease(ctx context.Context, executionID, leaseID,
 	defer f.mu.Unlock()
 	f.releases = append(f.releases, releaseCall{executionID, leaseID, principalID})
 	f.releaseCtxErrs = append(f.releaseCtxErrs, ctx.Err())
-	return f.releaseErr
+	if f.releaseErr != nil || !f.enforceLease {
+		return f.releaseErr
+	}
+	// Nexen releases the holder's lease even once expired; anyone else gets CheckLease's answer.
+	if f.heldLease.ID == leaseID && f.heldLease.PrincipalID == principalID {
+		f.heldLease = store.Lease{}
+		return nil
+	}
+	return f.checkLease(executionID, leaseID, principalID)
 }
 
 func (f *fakeNexService) Interrupt(ctx context.Context, req execution.InterruptRequest) (execution.InterruptResult, error) {
@@ -421,16 +470,26 @@ func (f *fakeNexService) Archive(ctx context.Context, req execution.ArchiveReque
 	return nil
 }
 
+// Terminate runs onTerminate first (so a hook can hand the lease over), then,
+// with enforceLease, fences the request as Nexen's Terminate does (CheckLease
+// before anything else), and otherwise answers terminateErr.
 func (f *fakeNexService) Terminate(_ context.Context, req execution.TerminateRequest) error {
 	f.record("terminate")
 	f.mu.Lock()
 	f.terminateCalls = append(f.terminateCalls, req)
-	hook, err := f.onTerminate, f.terminateErr
+	hook := f.onTerminate
 	f.mu.Unlock()
 	if hook != nil {
 		hook(req)
 	}
-	return err
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.enforceLease {
+		if err := f.checkLease(req.ExecutionID, req.LeaseID, req.PrincipalID); err != nil {
+			return err
+		}
+	}
+	return f.terminateErr
 }
 
 func (f *fakeNexService) RenewLease(_ context.Context, executionID, leaseID, principalID string) (store.Lease, error) {
@@ -441,7 +500,14 @@ func (f *fakeNexService) RenewLease(_ context.Context, executionID, leaseID, pri
 	if f.renewErr != nil {
 		return store.Lease{}, f.renewErr
 	}
-	return f.lease, nil
+	if !f.enforceLease {
+		return f.lease, nil
+	}
+	if err := f.checkLease(executionID, leaseID, principalID); err != nil {
+		return store.Lease{}, err
+	}
+	f.heldLease.ExpiresAt = nowMs() + fakeLeaseTTL
+	return f.heldLease, nil
 }
 
 var _ nexService = (*fakeNexService)(nil)

@@ -22,9 +22,11 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 	out := exitOutcome{Terminated: exec.State == store.StateTerminated, Archived: exec.ArchivedAt != 0, State: exec.State}
 	var termErr *handoffError // a failed terminate; reported only if the archive cannot stand in for it
 	if needsTerminate(exec.State) {
+		own := control{release: noRelease} // a control exitWorker took itself; released on return
+		defer func() { own.release() }()
 		c := ctl
 		if c == nil {
-			own, herr := m.takeControl(parent, exec.ID, "", principal)
+			got, herr := m.takeControl(parent, exec.ID, "", principal)
 			if herr != nil {
 				if herr.code == "held_by" {
 					return out, herr // D4: a non-pdx holder is never overridden — nothing changes
@@ -32,12 +34,30 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 				termErr = herr
 				m.logf("nex: exit %s: no control (%s); archiving only", exec.ID, herr.msg)
 			} else {
-				defer own.release()
-				c = &own
+				own, c = got, &own
 			}
 		}
 		if c != nil {
 			err := m.terminateExecution(parent, execution.TerminateRequest{ExecutionID: exec.ID, LeaseID: c.LeaseID, PrincipalID: c.PrincipalID})
+			if isLeaseErr(err) && ctl == nil {
+				// The lease changed hands between takeControl's read and the
+				// terminate. Take control once more, as of now: a non-pdx
+				// holder is refused here like on the first take (D4). A
+				// transfer's control (ctl != nil) is the transfer's to keep.
+				m.logf("nex: exit %s: lease lost before terminate (%v); re-taking control once", exec.ID, err)
+				own.release()
+				own = control{release: noRelease}
+				got, herr := m.takeControl(parent, exec.ID, "", principal)
+				switch {
+				case herr == nil:
+					own = got
+					err = m.terminateExecution(parent, execution.TerminateRequest{ExecutionID: exec.ID, LeaseID: own.LeaseID, PrincipalID: own.PrincipalID})
+				case herr.code == "held_by":
+					return out, herr
+				default:
+					m.logf("nex: exit %s: re-taking control: %s", exec.ID, herr.msg) // err stays the terminate's
+				}
+			}
 			switch {
 			case err == nil:
 				out.Terminated, out.State = true, store.StateTerminated
@@ -58,6 +78,20 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 		}
 	}
 	if !out.Archived {
+		if termErr != nil {
+			// D4: the terminate did not happen, possibly because the lease
+			// changed hands meanwhile. Never archive a non-pdx holder's
+			// execution, and never archive blind when the holder is unknown.
+			held, ok := m.heldByOther(parent, exec.ID)
+			if !ok {
+				m.logf("nex: exit %s: lease holder unknown after a failed terminate; not archiving", exec.ID)
+				return out, termErr
+			}
+			if held != nil {
+				m.logf("nex: exit %s: terminate failed and %s now holds the lease; not archiving (D4)", exec.ID, held.detail["principal"])
+				return out, held
+			}
+		}
 		err := m.archiveExecution(parent, execution.ArchiveRequest{ExecutionID: exec.ID, PrincipalID: principal, Archived: true})
 		switch {
 		case err == nil:
