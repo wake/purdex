@@ -25,6 +25,7 @@ import {
 import { parseTask } from './tasks'
 import { sanitizeSummaryRollup } from './validate-executions'
 import type { WireImageAttachment } from './worker-upload'
+import { sanitizePreludePage, type PreludePage } from './prelude-wire'
 
 const PREFIX = '/api/nex'
 
@@ -160,6 +161,35 @@ export function fetchExecutionEvents(
   const q = new URLSearchParams({ after: String(opts.after) })
   if (opts.limit) q.set('limit', String(opts.limit))
   return nexFetch(hostId, `${execPath(executionId, '/events')}?${q.toString()}`).then((r) => okJson<EventsPage>(r))
+}
+
+/**
+ * One page of the worker prelude (spec §4.2), newest page first: no
+ * `before` = the page ending at the execution's turn-1 boundary. A body that
+ * is not a page is an error (`malformed_response`), never "no prelude".
+ */
+export function fetchExecutionPrelude(
+  hostId: string,
+  executionId: string,
+  opts: { before?: string; limit?: number } = {},
+): Promise<PreludePage> {
+  const q = new URLSearchParams()
+  if (opts.before) q.set('before', opts.before)
+  if (opts.limit) q.set('limit', String(opts.limit))
+  const qs = q.toString()
+  return nexFetch(hostId, `${execPath(executionId, '/prelude')}${qs ? `?${qs}` : ''}`)
+    .then((r) => okJson<unknown>(r))
+    .catch((e) => {
+      // If the response was ok but JSON parse failed, it's a malformed page.
+      // HTTP errors (non-2xx) are already NexApiError from okJson → nexErrorFromResponse.
+      if (e instanceof SyntaxError) throw new NexApiError(0, 'malformed_response', 'malformed prelude page')
+      throw e
+    })
+    .then((body) => {
+      const page = sanitizePreludePage(body)
+      if (!page) throw new NexApiError(0, 'malformed_response', 'malformed prelude page')
+      return page
+    })
 }
 
 export function attachObserve(hostId: string, executionId: string): Promise<AttachObserveResponse> {

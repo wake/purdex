@@ -209,8 +209,8 @@ function sameEntry(a: unknown, b: unknown): boolean {
   return ka.length === Object.keys(ob).length && ka.every((k) => k in ob && sameEntry(oa[k], ob[k]))
 }
 
-function putEntry(s: ExecutionState, id: string, next: ToolActivity): ExecutionState {
-  return sameEntry(lookup(s.tools, id), next) ? s : { ...s, tools: { ...s.tools, [id]: next } }
+function putIn(tools: Record<string, ToolActivity>, id: string, next: ToolActivity): Record<string, ToolActivity> {
+  return sameEntry(lookup(tools, id), next) ? tools : { ...tools, [id]: next }
 }
 
 /**
@@ -219,15 +219,21 @@ function putEntry(s: ExecutionState, id: string, next: ToolActivity): ExecutionS
  * empty name are filled; startedAt / endedAt / status are never touched, which
  * is also what keeps a duplicate id (N7) on one entry.
  */
-export function recordN2ToolUse(s: ExecutionState, p: Record<string, unknown>, at: number): ExecutionState {
+export function recordN2ToolUseIn(tools: Record<string, ToolActivity>, p: Record<string, unknown>, at: number): Record<string, ToolActivity> {
   const id = p.tool_use_id
-  if (!str(id)) return s
+  if (!str(id)) return tools
   const overlay: Pick<Overlay, 'primaryArg' | 'known'> = { ...readPrimaryArg(p), ...(bool(p.known) ? { known: p.known } : {}) }
-  const t = lookup(s.tools, id)
+  const t = lookup(tools, id)
   const next: ToolActivity = t
     ? { ...t, ...overlay, name: t.name === '' && str(p.name) ? p.name : t.name }
     : { name: str(p.name) ? p.name : '', startedAt: at, endedAt: null, status: 'running', ...overlay }
-  return putEntry(s, id, next)
+  return putIn(tools, id, next)
+}
+
+/** N1 on an execution's own tools; the prelude overlay uses `recordN2ToolUseIn` directly. */
+export function recordN2ToolUse(s: ExecutionState, p: Record<string, unknown>, at: number): ExecutionState {
+  const tools = recordN2ToolUseIn(s.tools, p, at)
+  return tools === s.tools ? s : { ...s, tools }
 }
 
 /**
@@ -236,19 +242,24 @@ export function recordN2ToolUse(s: ExecutionState, p: Record<string, unknown>, a
  * it); an unknown status string leaves the entry's status as is (closed set).
  * endedAt is kept when A2 already set it. Facts are copied per readResultFacts.
  */
-export function recordN2ToolResult(s: ExecutionState, p: Record<string, unknown>, at: number): ExecutionState {
+export function recordN2ToolResultIn(tools: Record<string, ToolActivity>, p: Record<string, unknown>, at: number): Record<string, ToolActivity> {
   const id = p.tool_use_id
-  if (!str(id)) return s
+  if (!str(id)) return tools
   const mapped = mapResultStatus(p.status)
   const facts = readResultFacts(p)
-  const t = lookup(s.tools, id)
+  const t = lookup(tools, id)
   const next: ToolActivity = t
     ? { ...t, ...facts, status: mapped ?? t.status, endedAt: t.endedAt ?? at }
     : // Unseen + unknown status: the spec's "leave as is" has nothing to keep,
       // so 'done' is the conservative default — the result did arrive, and no
       // error / denial was claimed.
       { name: str(p.name) ? p.name : '', startedAt: 0, endedAt: at, status: mapped ?? 'done', ...facts }
-  return putEntry(s, id, next)
+  return putIn(tools, id, next)
+}
+
+export function recordN2ToolResult(s: ExecutionState, p: Record<string, unknown>, at: number): ExecutionState {
+  const tools = recordN2ToolResultIn(s.tools, p, at)
+  return tools === s.tools ? s : { ...s, tools }
 }
 
 export function endTurn(s: ExecutionState, at: number): ExecutionState {

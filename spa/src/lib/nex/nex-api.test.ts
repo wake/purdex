@@ -6,6 +6,7 @@ import {
   attachObserve, attachControl, sendMessage, releaseLease, archiveExecution, resolveExecutionHostId,
   getExecution, fetchNexHost, renewLease, interruptExecution, terminateExecution,
   delegateExecution, pinnedLeaseRelease, fetchExecutionTasks, uploadWorkerFile, fetchAttachment,
+  fetchExecutionPrelude,
 } from './nex-api'
 import { NexApiError } from './types'
 import { NEX_CLIENT_ID_RE } from './client-id'
@@ -63,6 +64,34 @@ describe('nex-api', () => {
     await fetchExecutionEvents(hostId, 'exc a', { after: 41, limit: 500 })
     const [url] = testGlobal.fetch.mock.calls[0]
     expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc%20a/events?after=41&limit=500')
+  })
+
+  it('fetchExecutionPrelude GETs /prelude with before/limit and sanitises the page', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ state: 'ok', items: [], prev_cursor: 'c2', total_bytes: 5 }))
+    const page = await fetchExecutionPrelude(hostId, 'exc_1', { before: 'c1', limit: 200 })
+    expect(testGlobal.fetch.mock.calls[0][0]).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1/prelude?before=c1&limit=200')
+    expect(page).toEqual({ state: 'ok', items: [], prevCursor: 'c2', totalBytes: 5 })
+  })
+
+  it('fetchExecutionPrelude sends no query for the first page', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ state: 'none', items: [], prev_cursor: null }))
+    await fetchExecutionPrelude(hostId, 'exc_1')
+    expect(testGlobal.fetch.mock.calls[0][0]).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1/prelude')
+  })
+
+  it('fetchExecutionPrelude rejects a body that is not a page', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ hello: 1 }))
+    await expect(fetchExecutionPrelude(hostId, 'exc_1')).rejects.toMatchObject({ code: 'malformed_response' })
+  })
+
+  it('fetchExecutionPrelude rejects a 200 with invalid JSON (e.g. HTML proxy page)', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(new Response('<html>oops', { status: 200, headers: { 'Content-Type': 'text/html' } }))
+    await expect(fetchExecutionPrelude(hostId, 'exc_1')).rejects.toMatchObject({ code: 'malformed_response', status: 0 })
+  })
+
+  it('fetchExecutionPrelude rejects a 404 JSON error with the daemon code, not malformed_response', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ error: 'not found', code: 'execution_not_found' }, 404))
+    await expect(fetchExecutionPrelude(hostId, 'exc_1')).rejects.toMatchObject({ status: 404, code: 'execution_not_found' })
   })
 
   it('attachObserve / attachControl post the mode as JSON', async () => {

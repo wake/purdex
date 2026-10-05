@@ -6,7 +6,7 @@
 // the optional cost fields on ResultMessage (spec §4.5).
 
 export interface ContentBlock {
-  type: 'text' | 'tool_use' | 'tool_result' | 'thinking'
+  type: 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'image' | 'document'
   text?: string
   id?: string
   name?: string
@@ -15,6 +15,11 @@ export interface ContentBlock {
   is_error?: boolean
   thinking?: string
   tool_use_id?: string
+  /** `image` / `document` blocks. In the prelude: `{type:'omitted', media_type, bytes}` (spec §4.3), never data; `bytes` is the decoded size. */
+  source?: { type: string; media_type?: string; bytes?: number }
+  /** Prelude only (spec §4.3): the block was cut at `max_block_bytes`. */
+  truncated?: boolean
+  total_bytes?: number
 }
 
 export interface AssistantMessage {

@@ -9,6 +9,7 @@ import {
   selectReady,
   selectRollupCostShown,
   selectSessionTitleSupported,
+  selectTranscriptPrelude,
   selectWorkerRollup,
   startNexHostInvalidation,
   useNexHostStore,
@@ -527,6 +528,19 @@ describe('selectors', () => {
     seed({ capabilities: caps({ worker_rollup: 'yes' as unknown as undefined }) })
     expect(selectWorkerRollup(H)(useNexHostStore.getState())).toBeNull()
     expect(selectWorkerRollup('ghost')(useNexHostStore.getState())).toBeNull()
+  })
+
+  it('selectTranscriptPrelude returns the capability object when present and ready, else null', () => {
+    const cap = { route: { method: 'GET', path: '/api/nex/v1/executions/{id}/prelude' }, page_max_items: 500, page_max_bytes: 1048576, max_block_bytes: 65536 }
+    seed({ capabilities: caps({ transcript_prelude: cap }) })
+    const got = selectTranscriptPrelude(H)(useNexHostStore.getState())
+    expect(got).toEqual(cap)
+    expect(selectTranscriptPrelude(H)(useNexHostStore.getState())).toBe(got)
+    seed({})
+    expect(selectTranscriptPrelude(H)(useNexHostStore.getState())).toBeNull()
+    seed({ phase: 'unavailable', capabilities: caps({ transcript_prelude: cap }) })
+    expect(selectTranscriptPrelude(H)(useNexHostStore.getState())).toBeNull()
+    expect(selectTranscriptPrelude('ghost')(useNexHostStore.getState())).toBeNull()
   })
 
   it('selectRollupCostShown: only cost_basis "result_evidence" shows the rollup cost (v0.13.1 session_cumulative under-counts)', () => {

@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useExecutionStore, executionKey, splitExecutionKey } from './useExecutionStore'
 import type { NexEvent } from '../lib/nex/types'
+import { defaultPreludeState } from '../lib/nex/prelude'
 
 const ev = (seq: number, kind: string, payload: Record<string, unknown> = {}): NexEvent =>
   ({ seq, execution_id: 'exc_1', kind, payload, created_at: 0 })
@@ -234,5 +235,70 @@ describe('useExecutionStore — the optimistic line owns its preview URLs (phase
     s.setPendingLocal('h', 'exc_2', { text: '', delivery: null, attachments: previews('blob:c') })
     s.clearHost('h')
     expect(revoke.mock.calls).toEqual([['blob:a'], ['blob:b'], ['blob:c']])
+  })
+})
+
+describe('prelude actions', () => {
+  beforeEach(() => useExecutionStore.setState({ executions: {} }))
+
+  it('loading → page → never touches messages, lastSeq or tools', () => {
+    const s = useExecutionStore.getState()
+    s.applyEvents('h', 'e', [{ seq: 1, execution_id: 'e', kind: 'execution.delegated', payload: { brief: 'b' }, created_at: 1 }])
+    const before = useExecutionStore.getState().executions[executionKey('h', 'e')]
+    s.preludeLoading('h', 'e', 1)
+    s.applyPreludePage('h', 'e', { state: 'ok', items: [], prevCursor: null, totalBytes: null }, null, 1)
+    const after = useExecutionStore.getState().executions[executionKey('h', 'e')]
+    expect(after.prelude).toMatchObject({ status: 'ok', done: true })
+    expect(after.messages).toBe(before.messages)
+    expect(after.lastSeq).toBe(before.lastSeq)
+    expect(after.tools).toBe(before.tools)
+  })
+
+  it('preludeHalted is a no-op while loading, and otherwise sets the error and frees the lock, keeping items and cursor', () => {
+    const s = useExecutionStore.getState()
+    const page = { state: 'ok' as const, items: [{ pos: '1', at: 1, kind: 'prelude.segment' as const, entrypoint: 'cli' }], prevCursor: 'c', totalBytes: null }
+    s.preludeLoading('h', 'e', 1)
+    s.applyPreludePage('h', 'e', page, null, 1)
+    s.preludeLoading('h', 'e', 2)
+    const loading = useExecutionStore.getState().executions[executionKey('h', 'e')]
+    s.preludeHalted('h', 'e', 'ignored')
+    expect(useExecutionStore.getState().executions[executionKey('h', 'e')]).toBe(loading)
+    s.preludeFailed('h', 'e', 'x', 2)
+    s.resetPrelude('h', 'e')
+    s.preludeLoading('h', 'e', 3)
+    s.applyPreludePage('h', 'e', page, null, 3)
+    s.preludeHalted('h', 'e', 'prelude: too many pages')
+    const p = useExecutionStore.getState().executions[executionKey('h', 'e')].prelude
+    expect(p).toMatchObject({ status: 'error', error: 'prelude: too many pages', request: null, cursor: 'c' })
+    expect(p.items).toHaveLength(1)
+  })
+
+  it('a stale request id leaves the entry referentially identical (apply and fail)', () => {
+    const s = useExecutionStore.getState()
+    s.preludeLoading('h', 'e', 2)
+    const before = useExecutionStore.getState().executions[executionKey('h', 'e')]
+    s.applyPreludePage('h', 'e', { state: 'ok', items: [], prevCursor: null, totalBytes: null }, null, 1)
+    expect(useExecutionStore.getState().executions[executionKey('h', 'e')]).toBe(before)
+    s.preludeFailed('h', 'e', 'late', 1)
+    expect(useExecutionStore.getState().executions[executionKey('h', 'e')]).toBe(before)
+  })
+
+  it('resetPrelude restores the default slice and leaves messages untouched', () => {
+    const s = useExecutionStore.getState()
+    s.applyEvents('h', 'e', [{ seq: 1, execution_id: 'e', kind: 'execution.delegated', payload: { brief: 'b' }, created_at: 1 }])
+    const before = useExecutionStore.getState().executions[executionKey('h', 'e')]
+    s.preludeLoading('h', 'e', 1)
+    s.applyPreludePage('h', 'e', { state: 'ok', items: [{ pos: '1', at: 1, kind: 'prelude.segment', entrypoint: 'cli' }], prevCursor: 'c', totalBytes: 5 }, null, 1)
+    s.resetPrelude('h', 'e')
+    const after = useExecutionStore.getState().executions[executionKey('h', 'e')]
+    expect(after.prelude).toEqual(defaultPreludeState())
+    expect(after.messages).toBe(before.messages)
+  })
+
+  it('preludeFailed with the live request id records the error and frees the lock', () => {
+    const s = useExecutionStore.getState()
+    s.preludeLoading('h', 'e', 3)
+    s.preludeFailed('h', 'e', 'boom', 3)
+    expect(useExecutionStore.getState().executions[executionKey('h', 'e')].prelude).toMatchObject({ status: 'error', error: 'boom', request: null })
   })
 })

@@ -124,6 +124,14 @@ export interface WorkerRollupCapability {
   subagent_cost: boolean
 }
 
+/** `capabilities.transcript_prelude` (worker prelude spec §4.5). Presence is the only feature detect. */
+export interface TranscriptPreludeCapability {
+  route: { method: string; path: string }
+  page_max_items: number
+  page_max_bytes: number
+  max_block_bytes: number
+}
+
 export interface NexEvent {
   seq: number
   execution_id: string
@@ -232,6 +240,8 @@ export interface NexCapabilities {
    * summaries (nexen v0.13, contract §0 `worker_rollup`).
    */
   worker_rollup?: WorkerRollupCapability
+  /** Presence = `GET /v1/executions/{id}/prelude` exists (worker prelude spec §4). */
+  transcript_prelude?: TranscriptPreludeCapability
   [key: string]: unknown
 }
 
