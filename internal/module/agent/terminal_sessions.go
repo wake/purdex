@@ -43,47 +43,76 @@ type TerminalSessions interface {
 	SubscribeSessionStart(fn func(SessionStartEvent)) (unsubscribe func()) // Task 3
 }
 
+// sessionStartQueueSize bounds each subscriber's pending events.
+const sessionStartQueueSize = 64
+
 // sessionStartHub fans a granted SessionStart out to in-process subscribers.
-// Delivery contract: each subscriber runs on its own goroutine with a
-// recover, so the hook response never waits for (or dies with) a subscriber.
+//
+// Delivery contract: every subscriber owns a bounded queue
+// (sessionStartQueueSize) and exactly one consumer goroutine, started at
+// subscribe time, which calls the callback for each event in publish order.
+// Each call has its own recover, so a panic is logged and the consumer moves
+// on to the next event. publish never blocks: when a subscriber's queue is
+// full the event is dropped for that subscriber and logged, so a stuck
+// subscriber costs one goroutine and 64 queued events, never the hook
+// response and never an unbounded number of goroutines.
+//
+// unsubscribe is idempotent. It closes the queue under the hub mutex (the
+// same lock publish sends under, so a send can never hit a closed channel);
+// the consumer drains what is already queued and exits, so events queued
+// before unsubscribe may still be delivered.
 type sessionStartHub struct {
 	mu   sync.Mutex
 	next int
-	subs map[int]func(SessionStartEvent)
+	subs map[int]chan SessionStartEvent
 }
 
 func (h *sessionStartHub) subscribe(fn func(SessionStartEvent)) func() {
+	ch := make(chan SessionStartEvent, sessionStartQueueSize)
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.subs == nil {
-		h.subs = map[int]func(SessionStartEvent){}
+		h.subs = map[int]chan SessionStartEvent{}
 	}
 	id := h.next
 	h.next++
-	h.subs[id] = fn
+	h.subs[id] = ch
+	h.mu.Unlock()
+
+	go func() {
+		for ev := range ch {
+			deliverSessionStart(fn, ev)
+		}
+	}()
+
+	var once sync.Once
 	return func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		delete(h.subs, id)
+		once.Do(func() {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			delete(h.subs, id)
+			close(ch)
+		})
 	}
+}
+
+func deliverSessionStart(fn func(SessionStartEvent), ev SessionStartEvent) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[agent] session_start subscriber panic: %v", r)
+		}
+	}()
+	fn(ev)
 }
 
 func (h *sessionStartHub) publish(ev SessionStartEvent) {
 	h.mu.Lock()
-	fns := make([]func(SessionStartEvent), 0, len(h.subs))
-	for _, fn := range h.subs {
-		fns = append(fns, fn)
-	}
-	h.mu.Unlock()
-	for _, fn := range fns {
-		go func(fn func(SessionStartEvent)) {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[agent] session_start subscriber panic: %v", r)
-				}
-			}()
-			fn(ev)
-		}(fn)
+	defer h.mu.Unlock()
+	for _, ch := range h.subs {
+		select {
+		case ch <- ev:
+		default:
+			log.Printf("[agent] session_start subscriber queue full; event dropped (session=%s source=%s)", ev.SessionID, ev.Source)
+		}
 	}
 }
 
