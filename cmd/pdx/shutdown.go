@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +18,15 @@ import (
 // (daemon restart spec §3.1). Like http.ErrServerClosed, it is an outcome,
 // not a failure.
 var errRestart = errors.New("restart requested")
+
+// restartRequested is the restart outcome serveAndWait returns; it is
+// errRestart to errors.Is. The restart still re-execs after a cleanup
+// error, but does not hide it: warnings (one per logged error) go to
+// last-shutdown.json for the next image to report (spec D13).
+type restartRequested struct{ warnings []string }
+
+func (*restartRequested) Error() string        { return errRestart.Error() }
+func (*restartRequested) Is(target error) bool { return target == errRestart }
 
 // shutdownTarget is the module side of the shutdown sequence (*core.Core).
 type shutdownTarget interface {
@@ -56,8 +66,8 @@ type server interface {
 // StopModules that overruns the budget hands Shutdown an already-expired
 // ctx and Shutdown falls through to Close immediately.
 //
-// Returns Serve's error unless it is http.ErrServerClosed, and errRestart
-// when restart triggered the sequence and no signal cancelled it. A nil
+// Returns Serve's error unless it is http.ErrServerClosed, and a
+// *restartRequested (errors.Is errRestart) when restart triggered the sequence and no signal cancelled it. A nil
 // restart channel never fires. A restart the endpoint accepted just before
 // a Serve failure won the trigger select still counts (target.BeginShutdown
 // reports it); a signal does not yield to it.
@@ -152,13 +162,18 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	ctx, ctxCancel := context.WithTimeout(context.Background(), budget)
 	defer ctxCancel()
 
+	// Each error logged below is also kept for a restart's last-shutdown record.
+	var warnings []string
 	if e := target.StopModules(ctx); e != nil {
 		logf("stop modules: %v", e)
+		warnings = append(warnings, fmt.Sprintf("stop modules: %v", e))
 	}
 	if e := srv.Shutdown(ctx); e != nil {
 		logf("http shutdown: %v; closing connections", e)
+		warnings = append(warnings, fmt.Sprintf("http shutdown: %v", e))
 		if ce := srv.Close(); ce != nil {
 			logf("http close: %v", ce)
+			warnings = append(warnings, fmt.Sprintf("http close: %v", ce))
 		}
 	}
 	// Shutdown/Close makes Serve return; collect it so the accept loop is
@@ -168,6 +183,7 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	}
 	if e := target.CloseModules(); e != nil {
 		logf("close modules: %v", e)
+		warnings = append(warnings, fmt.Sprintf("close modules: %v", e))
 	}
 
 	close(done)
@@ -175,8 +191,12 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	if restartTriggered && !restartCancelled.Load() {
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logf("server error during restart: %v", err)
+			warnings = append(warnings, fmt.Sprintf("server error during restart: %v", err))
 		}
-		return errRestart
+		if len(warnings) > 0 {
+			logf("restart: continuing despite %d cleanup error(s)", len(warnings))
+		}
+		return &restartRequested{warnings: warnings}
 	}
 
 	if errors.Is(err, http.ErrServerClosed) {

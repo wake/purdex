@@ -1075,3 +1075,27 @@ func TestServeAndWait_CallsBeginShutdownOnce(t *testing.T) {
 		})
 	}
 }
+
+func TestServeAndWait_RestartCarriesCleanupErrors(t *testing.T) {
+	h := newHarness()
+	h.target.stopErr = errors.New("nex: timeout")
+	h.restart <- struct{}{}
+	err := h.run(testBudget)
+	var rr *restartRequested
+	if !errors.Is(err, errRestart) || !errors.As(err, &rr) {
+		t.Fatalf("err = %v, want a restartRequested", err)
+	}
+	if len(rr.warnings) != 1 || rr.warnings[0] != "stop modules: nex: timeout" {
+		t.Fatalf("warnings = %v", rr.warnings)
+	}
+	waitForLog(t, h, "restart: continuing despite 1 cleanup error(s)")
+}
+
+func TestServeAndWait_CleanRestartHasNoWarnings(t *testing.T) {
+	h := newHarness()
+	h.restart <- struct{}{}
+	var rr *restartRequested
+	if err := h.run(testBudget); !errors.As(err, &rr) || len(rr.warnings) != 0 {
+		t.Fatalf("err = %v, warnings = %v", err, rr)
+	}
+}
