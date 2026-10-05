@@ -13,6 +13,7 @@ import { toolEntryFor, type TurnOperation } from '../../lib/nex/operation-status
 import { utf8Length } from '../../lib/nex/fold'
 import { INTERRUPT_TEXT } from '../../lib/nex/turns'
 import { searchUnitId } from '../../lib/nex/transcript-search'
+import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
 import RoomProse from '../room/RoomProse'
 import OperationBlock from '../room/OperationBlock'
 import { OperationAt } from '../room/MessageRow'
@@ -194,7 +195,8 @@ export default function ChatTurnBody({ messages, turn, ops, ctx, toolsKey, inter
     if (op.kind !== 'plain') lines.set(op.key, <ChatOperationLine op={op} ctx={ctx} />)
   }
   return (
-    <div className="space-y-3" data-prelude-pos={preludePoses?.[0]} data-prelude-poses={preludePoses?.join(' ')}>
+    <div className={preludePoses?.[0] !== undefined ? `space-y-3 ${SCROLL_ANCHOR_CLASS}` : 'space-y-3'}
+      data-prelude-pos={preludePoses?.[0]} data-prelude-poses={preludePoses?.join(' ')}>
       {messages.slice(turn.start, turn.end).map((msg, k) => {
         const i = turn.start + k
         return index.childIndexes.has(i)

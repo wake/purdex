@@ -13,6 +13,15 @@ export type ScrollAnchor =
   | { kind: 'prelude'; pos: string; offset: number }
   | { kind: 'turn'; index: number; offset: number }
 
+/**
+ * The class every anchor element carries — each one with `data-prelude-pos`
+ * or `data-turn-index`, and nothing else — so the scroll hook keeps one live
+ * `getElementsByClassName` list per box instead of rescanning the DOM on
+ * every scroll event (spec §5.4). A marker, not a style: no CSS rule names it
+ * and Tailwind generates nothing for it.
+ */
+export const SCROLL_ANCHOR_CLASS = 'scroll-anchor'
+
 export interface ScrollMemo {
   scrollTop: number
   atBottom: boolean

@@ -16,6 +16,7 @@ import { utf8Length } from '../../lib/nex/fold'
 import { keyAt, rowKey } from '../../lib/nex/message-keys'
 import { INTERRUPT_TEXT } from '../../lib/nex/turns'
 import { searchUnitId } from '../../lib/nex/transcript-search'
+import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
 import OperationBlock from './OperationBlock'
 import RoomProse from './RoomProse'
 import RoomSubagentLine from './RoomSubagentLine'
@@ -167,6 +168,8 @@ export default function MessageRow({ msg, i, ctx, preludePos }: MessageRowProps)
   const t = useI18nStore((s) => s.t)
   // A subagent's own frame (#1263): whatever it says as `user`, the human did not say it.
   const fromSubagent = (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id != null
+  // A prelude row is a scroll anchor (#1534); a worker's own row is not.
+  const anchorClass = preludePos !== undefined ? SCROLL_ANCHOR_CLASS : undefined
 
   /** Spec §5.3: omitted media becomes its placeholder; a cut block keeps its own drawing plus one hint line. */
   const decorate = (block: ContentBlock, j: number, el: ReactNode): ReactNode => {
@@ -193,7 +196,7 @@ export default function MessageRow({ msg, i, ctx, preludePos }: MessageRowProps)
       return null
     }
     return (
-      <div data-prelude-pos={preludePos}>
+      <div data-prelude-pos={preludePos} className={anchorClass}>
         {am.message.content.map((block, j) => decorate(block, j, assistantBlock(block, j)))}
       </div>
     )
@@ -249,7 +252,7 @@ export default function MessageRow({ msg, i, ctx, preludePos }: MessageRowProps)
       return null
     }
     return (
-      <div data-prelude-pos={preludePos}>
+      <div data-prelude-pos={preludePos} className={anchorClass}>
         {um.message.content.map((block, j) => decorate(block, j, userBlock(block, j)))}
         {atts && attsAt < 0 && <RoomUserLine text="" attachments={<AttachmentThumbs items={atts} />} />}
       </div>

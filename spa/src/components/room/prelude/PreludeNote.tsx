@@ -6,6 +6,7 @@ import { useMemo, type ReactNode } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { foldPlan, utf8Length } from '../../../lib/nex/fold'
 import { searchUnitId } from '../../../lib/nex/transcript-search'
+import { SCROLL_ANCHOR_CLASS } from '../../../lib/nex/transcript-scroll-memory'
 import { FoldedOutput } from '../FoldedOutput'
 import { useFold } from '../fold-context'
 import RoomProse from '../RoomProse'
@@ -33,7 +34,7 @@ export default function PreludeNote({ id, pos, source, text, truncated, totalByt
   const hint: ReactNode = truncated ? <TruncatedHint shown={utf8Length(text)} total={totalBytes} /> : null
   if (source === 'bash_input') {
     return (
-      <div data-testid="prelude-bash-input" data-prelude-pos={pos}>
+      <div data-testid="prelude-bash-input" data-prelude-pos={pos} className={SCROLL_ANCHOR_CLASS}>
         <div className="flex items-center gap-1.5 text-[13px] text-status-warning font-mono">
           <TerminalWindow size={14} weight="bold" />
           <span>! </span><span data-search-unit={anchor}>{text}</span>
@@ -44,7 +45,7 @@ export default function PreludeNote({ id, pos, source, text, truncated, totalByt
   }
   if (source === 'task_notification') {
     return (
-      <div data-testid="prelude-task" data-prelude-pos={pos} className="text-xs text-text-muted">
+      <div data-testid="prelude-task" data-prelude-pos={pos} className={`text-xs text-text-muted ${SCROLL_ANCHOR_CLASS}`}>
         <span>{t('worker.prelude.note_task')}: </span><span data-search-unit={anchor}>{text}</span>
         {hint}
       </div>
@@ -54,7 +55,7 @@ export default function PreludeNote({ id, pos, source, text, truncated, totalByt
     // Spec §5.3: a labelled block whose body is drawn like agent prose
     // (markdown, never folded).
     return (
-      <div data-testid="prelude-note-peer_message" data-prelude-pos={pos} className="space-y-1">
+      <div data-testid="prelude-note-peer_message" data-prelude-pos={pos} className={`space-y-1 ${SCROLL_ANCHOR_CLASS}`}>
         <div className="text-xs text-text-muted">{t('worker.prelude.note_peer')}</div>
         <RoomProse content={text} searchUnit={anchor} />
         {hint}
@@ -65,7 +66,7 @@ export default function PreludeNote({ id, pos, source, text, truncated, totalByt
   // is unknown to this build and drawn muted.
   const known = source === 'command_output' || source === 'bash_output'
   return (
-    <div data-testid={`prelude-note-${source}`} data-prelude-pos={pos}>
+    <div data-testid={`prelude-note-${source}`} data-prelude-pos={pos} className={SCROLL_ANCHOR_CLASS}>
       <FoldedOutput text={text} plan={plan} expanded={expanded} onToggle={toggle} searchUnit={anchor}
         tone={stream === 'stderr' ? 'error' : known ? 'normal' : 'muted'} />
       {hint}

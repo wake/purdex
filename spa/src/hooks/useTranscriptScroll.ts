@@ -62,7 +62,7 @@
 // (ExecutionView), since a handoff / take-back can swap a pane's content to
 // a different execution while keeping its paneId.
 import { useCallback, useImperativeHandle, useLayoutEffect, useMemo, useRef, type Ref, type UIEvent } from 'react'
-import { readScrollMemo, writeScrollMemo, type ScrollAnchor, type ScrollMemo } from '../lib/nex/transcript-scroll-memory'
+import { readScrollMemo, writeScrollMemo, SCROLL_ANCHOR_CLASS, type ScrollAnchor, type ScrollMemo } from '../lib/nex/transcript-scroll-memory'
 
 /** Within this many pixels of the end counts as the bottom (sub-pixel rounding, a last line's margin). */
 const NEAR_BOTTOM = 24
@@ -120,18 +120,24 @@ function firstVisibleTurn(el: HTMLElement): number | null {
   return null
 }
 
-/** What the memory anchors to (#1534): the prelude's rows, spans, notes and markers, then the turns. */
-const ANCHORS = '[data-prelude-pos], [data-turn-index]'
+/**
+ * What the memory anchors to (#1534): the prelude's rows, spans, notes and
+ * markers, then the turns — every element carrying SCROLL_ANCHOR_CLASS, in
+ * DOM order. A live list the browser keeps current, taken once per box, so a
+ * page landing needs no new query (spec §5.4).
+ */
+type AnchorList = HTMLCollectionOf<HTMLElement>
+const anchorsIn = (el: HTMLElement) => el.getElementsByClassName(SCROLL_ANCHOR_CLASS) as AnchorList
 
 /**
  * The first anchor whose bottom is below the box's top, with its top's
- * offset from the box's top. Anchors are stacked rows, so their bottoms only
- * grow in DOM order: a binary search, not a walk over a long prelude on
- * every scroll event.
+ * offset from the box's top. This runs on every scroll event, so it never
+ * rescans the DOM: anchors are stacked rows, so their bottoms only grow in
+ * DOM order, and a binary search over the box's live list reads O(log n) of
+ * them, however long the prelude.
  */
-function firstVisibleAnchor(el: HTMLElement): ScrollAnchor | undefined {
+function firstVisibleAnchor(el: HTMLElement, nodes: AnchorList): ScrollAnchor | undefined {
   const top = el.getBoundingClientRect().top
-  const nodes = el.querySelectorAll<HTMLElement>(ANCHORS)
   let lo = 0
   let hi = nodes.length
   while (lo < hi) {
@@ -172,6 +178,8 @@ export function useTranscriptScroll(
   memory?: TranscriptScrollMemory,
 ): TranscriptScroll {
   const box = useRef<HTMLDivElement | null>(null)
+  // The box's anchors, live (spec §5.4): taken when the box attaches.
+  const anchors = useRef<AnchorList | null>(null)
   const atBottom = useRef(true)
   const lastTop = useRef(0)
   const scrolled = useRef(false)
@@ -221,6 +229,7 @@ export function useTranscriptScroll(
       node.addEventListener('pointerdown', takeOver)
       node.addEventListener('keydown', takeOver)
     }
+    if (node !== prev) anchors.current = node ? anchorsIn(node) : null
     box.current = node
     assignRef(external, node)
   }, [external, takeOver])
@@ -230,7 +239,7 @@ export function useTranscriptScroll(
     if (!m) return
     writeScrollMemo(m.paneId, {
       scrollTop: el.scrollTop, atBottom: atBottom.current, view: m.view, firstTurn: firstVisibleTurn(el),
-      anchor: firstVisibleAnchor(el),
+      anchor: anchors.current ? firstVisibleAnchor(el, anchors.current) : undefined,
     })
   }, [])
 

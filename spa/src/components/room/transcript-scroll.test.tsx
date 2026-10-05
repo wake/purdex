@@ -9,7 +9,7 @@ import { render, fireEvent, createEvent } from '@testing-library/react'
 import RoomTranscript, { type RoomTranscriptProps } from './RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
 import type { StreamMessage } from '../../lib/nex/message-types'
-import { forgetScrollMemo, readScrollMemo, writeScrollMemo } from '../../lib/nex/transcript-scroll-memory'
+import { forgetScrollMemo, readScrollMemo, writeScrollMemo, SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
 import PreludeSection from './prelude/PreludeSection'
 import { derivePrelude } from '../../lib/nex/prelude'
 import type { PreludeItem } from '../../lib/nex/prelude-wire'
@@ -975,6 +975,67 @@ describe('scroll memory anchors inside the prelude (#1534)', () => {
     })
   })
 
+  // Spec §5.4: finding the first anchor on screen runs on every scroll
+  // event, so it binary-searches a cached, live list of the anchors
+  // (SCROLL_ANCHOR_CLASS) instead of querying the box each time.
+  describe('finding the first anchor does not rescan the DOM (§5.4)', () => {
+    beforeEach(() => {
+      // The same stacking, read off the document: the box's own
+      // querySelectorAll stays the hook's alone, for the spy below.
+      rectSpy!.mockImplementation(function (this: HTMLElement) {
+        const box = this.closest<HTMLElement>('.overflow-y-auto')
+        if (!box || !this.matches(ANCHORS)) return { top: 0, bottom: 0 } as DOMRect
+        let top = -box.scrollTop
+        for (const el of document.querySelectorAll<HTMLElement>(ANCHORS)) {
+          if (!box.contains(el)) continue
+          if (el === this) return { top, bottom: top + height(el) } as DOMRect
+          top += height(el)
+        }
+        return { top: 0, bottom: 0 } as DOMRect
+      })
+    })
+
+    it.each<[View, unknown]>([
+      ['room', { kind: 'prelude', pos: '3', offset: -50 }],
+      ['chat', { kind: 'prelude', pos: '2', offset: -150 }],
+    ])('%s: a scroll event asks the box for no anchor query and no new list', (view, anchor) => {
+      const { box } = mount(view, BOTH)
+      const query = vi.spyOn(box, 'querySelectorAll')
+      const byClass = vi.spyOn(box, 'getElementsByClassName')
+      scrollAt(box, 250)
+      scrollAt(box, 260)
+      expect(readScrollMemo(PANE)?.anchor).toEqual({ ...(anchor as object), offset: (anchor as { offset: number }).offset - 10 })
+      // firstVisibleTurn's own walk (unchanged) is the only query left.
+      expect(query.mock.calls.filter(([selector]) => selector !== '[data-turn-index]')).toEqual([])
+      expect(byClass).not.toHaveBeenCalled()
+    })
+
+    it.each<[View, unknown]>([
+      // Room rows 1–6 at 0–600 once OLDER lands: at 250, row 3.
+      ['room', { kind: 'prelude', pos: '3', offset: -50 }],
+      // Chat: marker 1, span 2 3 at 100–300.
+      ['chat', { kind: 'prelude', pos: '2', offset: -150 }],
+    ])('%s: a page that lands is found by the list the box already holds (live, not a snapshot)', (view, anchor) => {
+      const ref = createRef<HTMLDivElement>()
+      const Transcript = view === 'room' ? RoomTranscript : ChatTranscript
+      const tree = (items: PreludeItem[], version: string) => (
+        <Transcript keyPrefix="k" showThinking={false} showEmptyHint={false} messages={[said('a'), said('b')]} turnStarts={[0, 1]}
+          scrollMemoryKey={PANE} scrollRef={ref}
+          prelude={<PreludeSection view={derivePrelude(items)} status="ok" done error={null} keyPrefix="k" mode={view} pages={1}
+            onLoadOlder={() => {}} onRetry={() => {}} />}
+          preludeVersion={version} />
+      )
+      const out = render(tree(NEWER, '1:ok'))
+      const box = ref.current!
+      const byClass = vi.spyOn(box, 'getElementsByClassName')
+      out.rerender(tree(BOTH, '2:ok'))
+      expect(ref.current).toBe(box)
+      scrollAt(box, 250)
+      expect(readScrollMemo(PANE)?.anchor).toEqual(anchor)
+      expect(byClass).not.toHaveBeenCalled()
+    })
+  })
+
   it.each<[View, View]>([['room', 'room'], ['room', 'chat'], ['chat', 'room']])('at the bottom (%s → %s) the reader opens at the bottom, anchor or not', (from, next) => {
     writeScrollMemo(PANE, { scrollTop: 250, atBottom: true, view: from, firstTurn: 0, anchor: { kind: 'prelude', pos: '3', offset: -50 } })
     const sh = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => 5000)
@@ -985,5 +1046,50 @@ describe('scroll memory anchors inside the prelude (#1534)', () => {
     } finally {
       sh.mockRestore()
     }
+  })
+})
+
+// Spec §5.4: the hook's anchor list is the class, so the class must mark
+// exactly the anchors — every element with data-prelude-pos or
+// data-turn-index, and nothing else (the handoff marker, a worker's own
+// rows and chat bodies carry neither).
+describe.each(views)('%s: the scroll anchor class marks exactly the anchors', (name, Transcript) => {
+  const ANCHORS = '[data-prelude-pos], [data-turn-index]'
+  const message = (type: 'user' | 'assistant', text: string) =>
+    ({ type, parent_tool_use_id: null, message: { role: type, content: [{ type: 'text', text }], stop_reason: null } }) as unknown as StreamMessage
+  const note = (pos: string, source: string, stream: string | null = null): PreludeItem =>
+    ({ pos, at: 0, kind: 'prelude.note', source, text: `${source} text`, truncated: false, totalBytes: null, stream })
+  const ITEMS: PreludeItem[] = [
+    { pos: 'a', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+    { pos: 'b', at: 0, kind: 'prelude.compaction', trigger: 'auto' },
+    note('c', 'bash_input'), note('d', 'bash_output', 'stderr'), note('e', 'task_notification'),
+    note('f', 'peer_message'), note('g', 'command_output'), note('h', 'something_new'),
+    { pos: 'i', at: 0, kind: 'user', msg: message('user', 'a question') },
+    { pos: 'j', at: 0, kind: 'assistant', msg: message('assistant', 'an answer') },
+    { pos: 'k', at: 0, kind: 'assistant', msg: message('assistant', 'more of it') },
+    { pos: 'l', at: 0, kind: 'user', msg: message('user', 'another question') },
+  ]
+  // Room: one row per message. Chat: span i (i j k), span l.
+  const DRAWN = name === 'room'
+    ? ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'turn 0', 'turn 1']
+    : ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'l', 'turn 0', 'turn 1']
+  const label = (el: Element) => el.getAttribute('data-prelude-pos')
+    ?? (el.hasAttribute('data-turn-index') ? `turn ${el.getAttribute('data-turn-index')}` : `unmarked ${el.outerHTML.slice(0, 80)}`)
+
+  it('every element with data-prelude-pos or data-turn-index has the class, and nothing else does', () => {
+    const { container } = render(
+      <Transcript keyPrefix="k" showThinking={false} showEmptyHint={false}
+        messages={[said('a'), message('assistant', 'b'), said('c'), message('assistant', 'd')]} turnStarts={[0, 2]}
+        prelude={<PreludeSection view={derivePrelude(ITEMS)} status="ok" done error={null} keyPrefix="k" mode={name} pages={1}
+          onLoadOlder={() => {}} onRetry={() => {}} />}
+        preludeVersion="1:ok" />,
+    )
+    const anchors = [...container.querySelectorAll(ANCHORS)]
+    const marked = [...container.getElementsByClassName(SCROLL_ANCHOR_CLASS)]
+    // The fixture draws every kind of anchor (and the handoff marker, which is none).
+    expect(anchors.map(label)).toEqual(DRAWN)
+    expect(container.querySelector('[data-testid="prelude-handoff"]')).not.toBeNull()
+    expect(marked.map(label)).toEqual(anchors.map(label))
+    expect(marked.every((el, i) => el === anchors[i])).toBe(true)
   })
 })
