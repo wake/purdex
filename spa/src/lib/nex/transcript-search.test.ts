@@ -440,12 +440,12 @@ describe('buildSearchUnits — the loaded prelude (worker prelude P3b)', () => {
   })
 
   it('draws bash input whole, a peer message as prose, and folds the rest', () => {
-    const view = derivePrelude([
+    const notes = derivePrelude([
       { pos: '1', at: 0, kind: 'prelude.note', source: 'bash_input', text: 'ls', truncated: false, totalBytes: null, stream: null },
       { pos: '2', at: 0, kind: 'prelude.note', source: 'peer_message', text: 'hi **there**', truncated: false, totalBytes: null, stream: null },
       { pos: '3', at: 0, kind: 'prelude.note', source: 'task_notification', text: 'done', truncated: false, totalBytes: null, stream: null },
     ])
-    const list = buildSearchUnits({ messages: [], index: indexOperations([]), view: 'room', keyPrefix: 'k', turnStarts: [], prelude: view })
+    const list = buildSearchUnits({ messages: [], index: indexOperations([]), view: 'room', keyPrefix: 'k', turnStarts: [], prelude: notes })
     expect(list.map((u) => [u.id, u.text, u.reveal])).toEqual([
       ['p1:note:text', 'ls', []], ['p2:note:text', 'hi there', []], ['p3:note:text', 'done', []],
     ])

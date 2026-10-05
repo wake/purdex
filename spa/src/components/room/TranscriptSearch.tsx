@@ -132,6 +132,16 @@ export default function TranscriptSearch({
     () => searchIndex(() => buildSearchUnits({ messages, index: indexOperations(messages), tools, view, keyPrefix, turnStarts, prelude })),
     [messages, tools, view, keyPrefix, turnStarts, prelude],
   )
+  // Load all: the banner shows progress meanwhile, and the input gets focus
+  // back (the button was clicked, and disabled, so it would drop it) so the
+  // bar's keys (Enter, Escape) keep working.
+  const loadAll = () => {
+    setLoadingAll(true)
+    void (onLoadAll?.() ?? Promise.resolve()).finally(() => {
+      setLoadingAll(false)
+      inputRef.current?.focus()
+    })
+  }
   const searching = normalizeQuery(query) !== null
   const units = searching ? index.units() : NO_UNITS
   const search = index.find
@@ -328,10 +338,11 @@ export default function TranscriptSearch({
       </div>
       {prelude && preludeDone === false && (
         <div data-testid="search-prelude-incomplete" className="flex items-center gap-2 px-3 pb-1 text-xs text-text-muted">
-          <span>{t('worker.prelude.search_incomplete')}</span>
-          <button type="button" disabled={loadingAll}
-            onClick={() => { setLoadingAll(true); void onLoadAll?.().finally(() => setLoadingAll(false)) }}
-            className="underline hover:text-text-primary disabled:opacity-50">{t('worker.prelude.load_all')}</button>
+          <span>{t(loadingAll ? 'worker.prelude.loading' : 'worker.prelude.search_incomplete')}</span>
+          {onLoadAll && (
+            <button type="button" disabled={loadingAll} onClick={loadAll}
+              className="underline hover:text-text-primary disabled:opacity-50">{t('worker.prelude.load_all')}</button>
+          )}
         </div>
       )}
     </div>

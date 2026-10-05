@@ -10,6 +10,9 @@
 // first) and which DOM element will then hold it (`id`, carried by the
 // component as `data-search-unit`).
 //
+// A loaded worker prelude is walked first (it is drawn above the live list),
+// by its stable ids, mirroring PreludeSection.
+//
 // The walk mirrors what each view draws, block for block:
 // - room: every message through MessageRow's rules;
 // - chat: ChatTranscript's rules at the top level (no thinking, a turn's plain

@@ -507,7 +507,7 @@ describe('TranscriptSearch — prelude', () => {
   }
   const bar = (props: Partial<React.ComponentProps<typeof TranscriptSearch>>) => render(<Bar {...props} />)
 
-  it('says the prelude is incomplete and loads it all on demand', async () => {
+  it('says the prelude is incomplete and loads it all on demand', () => {
     const onLoadAll = vi.fn(() => Promise.resolve())
     bar({ prelude: derivePrelude([]), preludeDone: false, onLoadAll })
     expect(screen.getByTestId('search-prelude-incomplete')).toBeTruthy()
@@ -516,8 +516,27 @@ describe('TranscriptSearch — prelude', () => {
     expect(onLoadAll).toHaveBeenCalledWith()
   })
 
-  it('shows no banner once the prelude is complete, or when there is none', () => {
-    bar({ prelude: derivePrelude([]), preludeDone: true })
+  it('shows progress and a disabled button while loading, then gives focus back to the input', async () => {
+    let done: () => void = () => {}
+    const onLoadAll = vi.fn(() => new Promise<void>((r) => { done = r }))
+    bar({ prelude: derivePrelude([]), preludeDone: false, onLoadAll })
+    fireEvent.click(screen.getByRole('button', { name: 'Load all' }))
+    expect(screen.getByRole('button', { name: 'Load all' })).toBeDisabled()
+    expect(screen.getByTestId('search-prelude-incomplete')).toHaveTextContent('Loading earlier conversation')
+    await act(async () => { done() })
+    expect(screen.getByRole('button', { name: 'Load all' })).toBeEnabled()
+    expect(screen.getByTestId('search-prelude-incomplete')).toHaveTextContent('Earlier conversation not fully loaded')
+    expect(input()).toHaveFocus()
+  })
+
+  it('shows no banner once the prelude is complete, when there is none, or without a loader button', () => {
+    const { unmount } = bar({ prelude: derivePrelude([]), preludeDone: true })
     expect(screen.queryByTestId('search-prelude-incomplete')).toBeNull()
+    unmount()
+    const second = bar({ preludeDone: false })
+    expect(screen.queryByTestId('search-prelude-incomplete')).toBeNull()
+    second.unmount()
+    bar({ prelude: derivePrelude([]), preludeDone: false })
+    expect(screen.queryByRole('button', { name: 'Load all' })).toBeNull()
   })
 })
