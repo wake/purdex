@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.478] - 2026-10-05
+
+> 純 SPA，不必重新部署 daemon。殼層整理第一支（P1／7）。
+
+### Feature：側欄的 Workers 清單、底部按鈕可收成一排（#1540）
+
+- 左側欄底部新增 **Workers** 鈕。寬版時 worker 清單出現在工作區清單**下方**，兩者同時看得到；中間的分隔線可以拖曳調整高度，會記住。
+- 清單列出這個工作台顯示中的**每一台主機**，一台一段（段頭是主機名和 Nexen 狀態點）；沒開 Nexen 的主機不顯示。
+- 點 worker：已經開著就切過去（連同它所在的工作區，不會被搬走）；沒開過就在**目前的工作區**開新分頁。修正了以前會被搬進「未分類」的問題。
+- 窄版側欄按 Workers 會在側欄右邊開浮動面板，底部對齊按鈕，不會改變寬窄設定。
+- 寬版底部的按鈕可以切成「一橫排只剩圖示」，用區塊上的小箭頭切換，會記住；側欄太窄時會自動換行，按鈕不會被壓扁。
+- 視窗太矮時清單只是暫時被壓縮，存的高度不變；拖曳時存的是放開那一刻畫面上的高度。
+
+### Fix
+
+- 分隔線拖曳中切到別的視窗、或在視窗外放開，不再殘留拖曳狀態（游標、禁止選字、之後滑鼠移動還在改大小）；pane 分割的分隔線也一併受惠。
+
+### Internal
+
+- `openWorkerTab`（`features/workspace/lib/open-worker-tab.ts`）、`WorkerList`、`BottomNav`（寬／窄共用）、`useWorkerListResize`。
+- `FloatingPanel` 新增 `placement='right'`：render 後量實際高度再定位，內容長高時重新對齊。
+- `useLayoutStore` 新增 `workerListOpen`／`workerListHeight`／`bottomNavCompact`，只在同一裝置跨視窗同步，不進 Profile Sync（有守門測試）。
+- spec／plan：`docs/specs/2026-10-05-shell-cleanup-spec.md`、`docs/plans/2026-10-05-shell-cleanup-plan.md`。
+
 ## [1.0.0-alpha.477] - 2026-10-05
 
 > 純 SPA，不必重新部署 daemon。和 476 一樣，要等 daemon 內嵌 Nexen v0.16.0（`transcript_prelude`）才會出現；在那之前畫面與 475 完全相同。
