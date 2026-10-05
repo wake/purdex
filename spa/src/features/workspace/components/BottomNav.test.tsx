@@ -89,6 +89,14 @@ describe('BottomNav — wide, compact', () => {
     expect(buttons().at(-1)).toBe(toggle)
   })
 
+  // Five 30px buttons need 150px plus padding; the wide bar can be 120px. jsdom has no layout, so the classes are the
+  // contract: the buttons never shrink, and the row wraps onto a second line instead.
+  it('keeps every compact button 30×30 at narrow widths: buttons do not shrink, the row wraps', () => {
+    renderNav({ compact: true })
+    expect(nav()).toHaveClass('flex-wrap', 'gap-1')
+    for (const b of buttons()) expect(b).toHaveClass('shrink-0')
+  })
+
   it('the toggle back calls onToggleCompact; Workers keeps aria-pressed', () => {
     const p = renderNav({ compact: true, workersOpen: true })
     fireEvent.click(screen.getByTestId('bottom-nav-compact-toggle'))

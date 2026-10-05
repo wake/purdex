@@ -1,7 +1,8 @@
 // spa/src/features/workspace/components/BottomNav.tsx — the activity bar's bottom button group (shell cleanup spec
 // §4.5, rules B and C). One entry list, three looks: the wide bar's labelled rows (today's look, with a toggle to
-// compact at the end of the first row), the wide bar's compact single row of icon buttons (the toggle back is last),
-// and the narrow bar's icon column (no toggle; it is icon-only already).
+// compact at the end of the first row), the wide bar's compact single row of icon buttons (the toggle back is last;
+// it wraps onto a second line when the bar is too narrow), and the narrow bar's icon column (no toggle; it is
+// icon-only already).
 import type { Ref } from 'react'
 import { Plus, Lightning, HardDrives, Sliders, CaretDown, CaretUp, type Icon } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -31,7 +32,8 @@ interface Entry {
 }
 
 const ROW = 'flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer'
-const ICON = 'w-[30px] h-[30px] rounded-md flex items-center justify-center cursor-pointer'
+// shrink-0: a row too narrow for every button wraps (compact) instead of squeezing them below 30px.
+const ICON = 'shrink-0 w-[30px] h-[30px] rounded-md flex items-center justify-center cursor-pointer'
 // The active style is the one the title bar's toggles use.
 const ACTIVE = 'text-accent-base bg-accent-base/10 hover:bg-accent-base/20'
 const IDLE_WIDE = 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
@@ -88,7 +90,7 @@ export function BottomNav({
       <div
         data-testid="bottom-nav"
         data-compact="true"
-        className="flex shrink-0 flex-row items-center justify-between px-2 pb-1 pt-2"
+        className="flex shrink-0 flex-row flex-wrap items-center justify-between gap-1 px-2 pb-1 pt-2"
       >
         {entries.map((e) => iconButton(e, IDLE_WIDE))}
         {onToggleCompact && (
