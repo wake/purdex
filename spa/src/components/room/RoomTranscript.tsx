@@ -133,7 +133,7 @@ export default function RoomTranscript({
   return (
     // `p-4` — RoomUserLine's `-mx-4` bleeds the user band back out to this
     // container's edges (spec §5.4). If you change one, change the other.
-    <div ref={attach} onScroll={onScroll} className="flex-1 overflow-y-auto p-4 space-y-4 [overflow-anchor:none]">
+    <div ref={attach} onScroll={onScroll} className={`flex-1 overflow-y-auto p-4 space-y-4${prelude !== undefined ? ' [overflow-anchor:none]' : ''}`}>
       <FoldContext.Provider value={foldStore}>
         {showEmptyHint && (
           <div className="flex items-center justify-center h-full text-text-muted text-sm">

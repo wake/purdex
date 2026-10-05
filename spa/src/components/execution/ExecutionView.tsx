@@ -45,7 +45,7 @@ import {
   canSend, composeWithAttachments, encodeImage, isAttachmentError, planAttachments, requestBytes, uploadErrorKey,
   PER_IMAGE_ERRORS, type Chip, type WireImageAttachment,
 } from '../../lib/nex/worker-upload'
-import { selectImageAttachments, useNexHostStore } from '../../stores/useNexHostStore'
+import { selectImageAttachments, selectTranscriptPrelude, useNexHostStore } from '../../stores/useNexHostStore'
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
@@ -106,6 +106,8 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const workerTheme = getWorkerTheme(workerThemeId)
   const workerThemeVars = useMemo(() => workerThemeStyle(workerTheme), [workerTheme])
   const { problem } = useExecutionSubscription(hostId, executionId, isActive)
+  // Spec D4: a worker with no prelude to draw gets no prelude markup at all.
+  const preludeEligible = useNexHostStore(selectTranscriptPrelude(hostId)) !== null && !!st.summary?.resume_session_id
   const preludeApi = useExecutionPrelude(hostId, executionId)
   const preludeView = useMemo(() => derivePrelude(st.prelude.items), [st.prelude.items])
   const lease = useExecutionLease(hostId, executionId)
@@ -506,7 +508,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     // while keeping its paneId, and the old memo must not bleed into it
     // (fix round 1, finding 1).
     scrollMemoryKey: `${paneId}:${hostId}:${executionId}`,
-    prelude: preludeNode, preludeVersion: `${st.prelude.pages}:${st.prelude.status}`,
+    ...(preludeEligible ? { prelude: preludeNode, preludeVersion: `${st.prelude.pages}:${st.prelude.status}` } : {}),
   }
 
   return (

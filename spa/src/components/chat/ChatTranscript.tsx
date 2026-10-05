@@ -211,7 +211,7 @@ export default function ChatTranscript({
   const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0, subagentTasks }
 
   return (
-    <div ref={attach} onScroll={onScroll} className="@container flex-1 overflow-y-auto p-4 space-y-3 [overflow-anchor:none]">
+    <div ref={attach} onScroll={onScroll} className={`@container flex-1 overflow-y-auto p-4 space-y-3${prelude !== undefined ? ' [overflow-anchor:none]' : ''}`}>
       <FoldContext.Provider value={foldStore}>
         {showEmptyHint && (
           <div className="flex items-center justify-center h-full text-text-muted text-sm">

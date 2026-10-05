@@ -277,17 +277,26 @@ export function useTranscriptScroll(
 
   /**
    * Content above the reader changed height by `delta` (the prelude, spec
-   * §5.4): move scrollTop by exactly that, so what is on screen stays put —
-   * and a reader at the bottom stays at the bottom, the distance to the end
-   * being unchanged (the at-bottom flag is left as it is). Before the first
-   * placement there is nothing to keep: `follow`'s first call places the
-   * reader. The box opts out of the browser's own anchoring
-   * (`overflow-anchor: none`), so this is the only correction.
+   * §5.4). A reader scrolled up gets `scrollTop += delta`, so what is on
+   * screen stays put. A reader at the bottom, or one a smooth follow is still
+   * carrying there, is pinned to the end instead: writing `scrollTop` aborts
+   * an in-flight smooth scroll (CSSOM), which would strand a fresh pane
+   * mid-way, and the distance to the end is what they want kept. Before the
+   * first placement there is nothing to keep: `follow`'s first call places
+   * the reader. The box opts out of the browser's own anchoring
+   * (`overflow-anchor: none`) when it has a prelude, so this is the only
+   * correction.
    */
   const shiftBy = useCallback((delta: number) => {
     const el = box.current
     if (!el || !scrolled.current || delta === 0) return
-    el.scrollTop += delta
+    if (atBottom.current || smoothTarget.current !== null) {
+      el.scrollTop = el.scrollHeight
+      smoothTarget.current = null
+      atBottom.current = true
+    } else {
+      el.scrollTop += delta
+    }
     lastTop.current = el.scrollTop
     if (released.current !== null) released.current = el.scrollTop
     remember(el)

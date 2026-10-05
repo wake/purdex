@@ -1856,20 +1856,57 @@ describe('ExecutionView — attachments', () => {
 describe('ExecutionView — worker prelude', () => {
   const said = (text: string) =>
     ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }) as Exec['messages'][number]
-
-  it('draws the prelude above the brief line (turn 1)', async () => {
-    useNexHostStore.setState({
-      byHost: { [H]: { phase: 'ready', capabilities: { transcript_prelude: { route: { method: 'GET', path: '/x' }, page_max_items: 500, page_max_bytes: 1, max_block_bytes: 1 } } } },
-    } as never)
-    useExecutionStore.getState().setSummary(H, E, summary({ resume_session_id: 'sid' }) as never)
+  const CAP = { route: { method: 'GET', path: '/x' }, page_max_items: 500, page_max_bytes: 1, max_block_bytes: 1 }
+  const seed = (resume: boolean) => {
+    useNexHostStore.setState({ byHost: { [H]: { phase: 'ready', capabilities: { transcript_prelude: CAP } } } } as never)
+    useExecutionStore.getState().setSummary(H, E, summary(resume ? { resume_session_id: 'sid' } : {}) as never)
     patchExec({ messages: [said('the brief')], turnStarts: [0] })
     vi.mocked(api.fetchExecutionPrelude).mockResolvedValue({
       state: 'ok', prevCursor: null, totalBytes: null,
       items: [{ pos: '2', at: 1, kind: 'user', msg: said('earlier') }],
     } as never)
+  }
+  let offsetHeightDesc: PropertyDescriptor | undefined
+  beforeEach(() => {
+    offsetHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+  })
+  afterEach(() => {
+    if (offsetHeightDesc) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeightDesc)
+    delete (Element.prototype as { scrollTo?: unknown }).scrollTo
+    useNexHostStore.setState({ byHost: {} })
+    vi.mocked(api.fetchExecutionPrelude).mockReset()
+  })
+
+  it('draws the prelude above the brief line (turn 1)', async () => {
+    seed(true)
     render(<ExecutionView {...base} isActive />)
     const earlier = await screen.findByText('earlier')
     const brief = screen.getByText('the brief')
     expect(earlier.compareDocumentPosition(brief) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('a worker without a resume session id gets no prelude markup and no request (D4)', () => {
+    seed(false)
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.queryByTestId('prelude-anchor')).toBeNull()
+    expect(api.fetchExecutionPrelude).not.toHaveBeenCalled()
+  })
+
+  it('the composed preludeVersion drives the scroll correction when the first page lands', async () => {
+    seed(true)
+    Element.prototype.scrollTo = vi.fn() as unknown as Element['scrollTo']
+    // jsdom has no layout: the anchor is as tall as its text.
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) { return this.dataset?.testid === 'prelude-anchor' ? (this.textContent ?? '').length : 0 },
+    })
+    render(<ExecutionView {...base} isActive />)
+    const box = screen.getByTestId('prelude-anchor').parentElement as HTMLElement
+    Object.defineProperty(box, 'scrollHeight', { configurable: true, value: 100000 })
+    Object.defineProperty(box, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(box, 'scrollTop', { configurable: true, writable: true, value: 300 })
+    fireEvent.scroll(box)
+    await screen.findByText('earlier')
+    expect(box.scrollTop).not.toBe(300)
   })
 })
