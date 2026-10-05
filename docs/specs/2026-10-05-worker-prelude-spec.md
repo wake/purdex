@@ -206,7 +206,12 @@ Bump `lab.protype.tw/wake/nexen` to v0.16.0, then rebuild and redeploy the mlab 
 - Opening the pane works as today (memory, else bottom). The first prelude page arriving while the reader is at the bottom keeps them at the bottom.
 - A top sentinel (`IntersectionObserver`) calls `loadOlder()`. It is mounted only while the prelude is `ok` and not done, so an `error` stops automatic paging. It re-arms after every page, so content shorter than the viewport keeps loading until the viewport fills or the prelude is done.
 - **Keeping the reader's place.** The prelude section's own height is snapshotted right before the commit that grows it (`getSnapshotBeforeUpdate`), and `scrollTop` is shifted by exactly that section's growth afterwards. Measuring the section rather than the whole box keeps a live message or a typewriter frame landing in the **same** commit out of the correction. The box opts out of the browser's own anchoring (`overflow-anchor: none`), so this is the only correction.
-- Room ⇄ chat and scroll-memory restore keep working, because the prelude lives in the store and not in component state.
+- **Scroll memory inside the prelude** (#1534; the live acceptance showed the earlier wording here — "keeps working because the prelude lives in the store" — false for a reader inside the prelude):
+  - Every drawn prelude element carries the stable position it starts at, `data-prelude-pos` (its first entry's `pos`). A chat span also lists every message it draws in `data-prelude-poses` (space-separated), so a room row's `pos` can be found inside the span that holds it. The closing handoff marker carries none.
+  - The memo records an **anchor** besides `scrollTop`, `atBottom` and `firstTurn`: the first element still on screen — a prelude element (by `pos`) or a turn (by `data-turn-index`) — and its offset from the box's top.
+  - Same view: the restore puts the anchor back at its offset. A page that landed while the pane was unmounted therefore no longer shifts the reader. Raw `scrollTop` is the fallback when the anchor is not drawn.
+  - Other view: a prelude anchor is brought to the top (heights differ), found by `data-prelude-pos` or inside a span's `data-prelude-poses`; a turn anchor keeps today's `firstTurn` rule.
+  - At the bottom, nothing changes: the reader opens at the bottom.
 
 ### 5.5 Search (D7)
 
