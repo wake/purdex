@@ -80,6 +80,14 @@ type fakeTarget struct {
 	closeGate chan struct{} // if non-nil, CloseModules blocks until it is closed
 	closeHook func()        // runs at the start of CloseModules, before closeGate
 	stops     atomic.Int32
+
+	restartAccepted bool         // what BeginShutdown reports (a restart 202 sent before the sequence)
+	beginCalls      atomic.Int32 // not in the step recorder: tests compare exact step lists
+}
+
+func (t *fakeTarget) BeginShutdown() bool {
+	t.beginCalls.Add(1)
+	return t.restartAccepted
 }
 
 func (t *fakeTarget) StopModules(ctx context.Context) error {
@@ -1023,4 +1031,47 @@ func TestServeAndWait_RestartLogsRealServeError(t *testing.T) {
 		t.Fatalf("serveAndWait returned %v, want errRestart", err)
 	}
 	waitForLog(t, h, "server error during restart: accept boom")
+}
+
+// A restart the endpoint accepted (202 sent) just before a Serve failure won
+// the trigger select is honoured, not lost behind the Serve error (G1).
+func TestServeAndWait_ServeErrorWithAcceptedRestartStillRestarts(t *testing.T) {
+	h := newHarness()
+	h.target.restartAccepted = true
+	h.srv.serveErr = errors.New("accept boom")
+	out := h.runAsync(testBudget)
+	err := recvOrFail(t, out, "serveAndWait to return")
+	if !errors.Is(err, errRestart) {
+		t.Fatalf("serveAndWait returned %v, want errRestart", err)
+	}
+	waitForLog(t, h, "restart accepted before shutdown began")
+	waitForLog(t, h, "server error during restart: accept boom")
+}
+
+// A signal still wins over an accepted restart (D4).
+func TestServeAndWait_SignalWithAcceptedRestartStops(t *testing.T) {
+	h := newHarness()
+	h.target.restartAccepted = true
+	h.sig <- syscall.SIGTERM
+	err := h.run(testBudget)
+	if err != nil {
+		t.Fatalf("serveAndWait returned %v, want nil (stop)", err)
+	}
+}
+
+func TestServeAndWait_CallsBeginShutdownOnce(t *testing.T) {
+	for name, trigger := range map[string]func(h *harness){
+		"signal":  func(h *harness) { h.sig <- syscall.SIGTERM },
+		"serve":   func(h *harness) { h.srv.serveErr = errors.New("boom") },
+		"restart": func(h *harness) { h.restart <- struct{}{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness()
+			trigger(h)
+			h.run(testBudget)
+			if n := h.target.beginCalls.Load(); n != 1 {
+				t.Fatalf("BeginShutdown called %d times, want 1", n)
+			}
+		})
+	}
 }

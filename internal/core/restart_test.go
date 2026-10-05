@@ -82,3 +82,31 @@ func TestDaemonRestart_LogsRequester(t *testing.T) {
 	c.handleDaemonRestart(httptest.NewRecorder(), req)
 	assert.Equal(t, 1, strings.Count(buf.String(), "daemon restart requested by 100.64.0.4:51234"))
 }
+
+func TestDaemonRestart_AfterBeginShutdown503(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{}})
+	calls := 0
+	c.SetRestartHook(func() { calls++ })
+	assert.False(t, c.BeginShutdown(), "no restart was accepted before the shutdown began")
+
+	rec := httptest.NewRecorder()
+	c.handleDaemonRestart(rec, httptest.NewRequest("POST", "/api/daemon/restart", nil))
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Equal(t, "shutting_down", decode(t, rec)["error"])
+	assert.Equal(t, 0, calls, "a restart nothing would perform must not fire the hook")
+}
+
+func TestBeginShutdown_ReportsAcceptedRestart(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{}})
+	c.SetRestartHook(func() {})
+	rec := httptest.NewRecorder()
+	c.handleDaemonRestart(rec, httptest.NewRequest("POST", "/api/daemon/restart", nil))
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	assert.True(t, c.BeginShutdown(), "the accepted restart is reported so the sequence honours it")
+
+	rec = httptest.NewRecorder()
+	c.handleDaemonRestart(rec, httptest.NewRequest("POST", "/api/daemon/restart", nil))
+	assert.Equal(t, http.StatusConflict, rec.Code, "a restart already accepted stays 409, not 503")
+	assert.Equal(t, "restart_in_progress", decode(t, rec)["error"])
+}

@@ -22,6 +22,9 @@ var errRestart = errors.New("restart requested")
 type shutdownTarget interface {
 	StopModules(context.Context) error
 	CloseModules() error
+	// BeginShutdown closes the restart endpoint to new requests and reports
+	// whether one had already been accepted (202 sent).
+	BeginShutdown() bool
 }
 
 // shutdownServer is the HTTP side of the shutdown sequence (*http.Server).
@@ -55,7 +58,9 @@ type server interface {
 //
 // Returns Serve's error unless it is http.ErrServerClosed, and errRestart
 // when restart triggered the sequence and no signal cancelled it. A nil
-// restart channel never fires.
+// restart channel never fires. A restart the endpoint accepted just before
+// a Serve failure won the trigger select still counts (target.BeginShutdown
+// reports it); a signal does not yield to it.
 //
 // A forced exit is always available while the sequence below is still
 // running (e.g. a slow or blocking StopModules): a SECOND signal exits
@@ -103,6 +108,15 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 		// race. It is left there: the Serve-first watcher below counts
 		// it as the FIRST signal (hint, no exit), exactly as it would a
 		// signal arriving later.
+	}
+
+	// The restart endpoint stops accepting now, whatever started the
+	// sequence. A restart it accepted just before (202 already sent) is
+	// honoured even if a Serve failure won the select above; a signal
+	// still wins (D4).
+	if target.BeginShutdown() && !signalTriggered && !restartTriggered {
+		restartTriggered = true
+		logf("restart accepted before shutdown began; restarting")
 	}
 
 	done := make(chan struct{})

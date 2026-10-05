@@ -23,6 +23,26 @@ func newBootID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// Core lifecycle as the restart endpoint sees it (spec §3.1).
+const (
+	lifeRunning    int32 = iota
+	lifeRestarting       // a restart was accepted (202 sent)
+	lifeStopping         // the shutdown sequence started for another reason
+)
+
+// BeginShutdown is called once by serve's shutdown sequence the moment it
+// starts, whatever started it. From then on the restart endpoint answers
+// 503 shutting_down rather than accept a restart nothing would perform. It
+// reports whether a restart had already been accepted (202 sent): the
+// sequence honours that one unless a signal started it (spec D4 — a stop
+// request wins).
+func (c *Core) BeginShutdown() (restartAccepted bool) {
+	if c.life.CompareAndSwap(lifeRunning, lifeStopping) {
+		return false
+	}
+	return c.life.Load() == lifeRestarting
+}
+
 // SetRestartHook installs what POST /api/daemon/restart calls once its 202
 // is flushed. serve installs a non-blocking trigger of the shutdown sequence
 // (cmd/pdx). Must be called before the server starts; fn must not block —
@@ -32,7 +52,8 @@ func (c *Core) SetRestartHook(fn func()) { c.restartHook = fn }
 // handleDaemonRestart is POST /api/daemon/restart (spec §3.1): 202 with the
 // current boot id, flushed, then the hook. A second request while one is
 // under way gets 409 with the same boot id so its client can follow the
-// restart already in flight. No hook → 503: a 202 here would promise a
+// restart already in flight; once the shutdown has begun for any other
+// reason it gets 503 shutting_down. No hook → 503: a 202 here would promise a
 // restart nothing will perform.
 func (c *Core) handleDaemonRestart(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -41,9 +62,14 @@ func (c *Core) handleDaemonRestart(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": "restart_unavailable"})
 		return
 	}
-	if !c.restarting.CompareAndSwap(false, true) {
-		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(map[string]string{"error": "restart_in_progress", "boot_id": c.BootID})
+	if !c.life.CompareAndSwap(lifeRunning, lifeRestarting) {
+		if c.life.Load() == lifeRestarting {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{"error": "restart_in_progress", "boot_id": c.BootID})
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "shutting_down"})
 		return
 	}
 	log.Printf("daemon restart requested by %s", r.RemoteAddr)

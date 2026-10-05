@@ -78,9 +78,9 @@ type Core struct {
 	// BootID is new on every process start (newBootID, set in New) and is
 	// reported by /api/health; never mutated after New.
 	BootID string
-	// restartHook / restarting back POST /api/daemon/restart (restart.go).
+	// restartHook / life back POST /api/daemon/restart (restart.go).
 	restartHook func()
-	restarting  atomic.Bool
+	life        atomic.Int32
 }
 
 // New creates a Core from the given dependencies.
