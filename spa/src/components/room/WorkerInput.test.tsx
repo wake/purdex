@@ -233,6 +233,29 @@ describe('WorkerInput', () => {
       }
     })
 
+    // The first enabling uses it up even when its frame never runs: the box
+    // disabled again before then (the stream lost, a send, a take-back)
+    // cancels that focus, and a later, unrelated enabling is not the activation.
+    it('used up by the first enabling even when the box is disabled again before its frame runs', async () => {
+      const focus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus')
+      try {
+        const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+        await nextFrame()
+        expect(focus).not.toHaveBeenCalled()
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+        await nextFrame()
+        expect(focus).not.toHaveBeenCalled()
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+        await nextFrame()
+        await nextFrame()
+        expect(focus).not.toHaveBeenCalled()
+        expect(screen.getByRole('textbox')).not.toHaveFocus()
+      } finally {
+        focus.mockRestore()
+      }
+    })
+
     it('once fulfilled, a later enabling (the stream back) does not focus again', async () => {
       const focus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus')
       try {

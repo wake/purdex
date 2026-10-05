@@ -100,17 +100,29 @@ export default function WorkerInput({
   useEffect(() => {
     if (!isActive || !isFocusTarget) pendingActivationRef.current = false
   }, [isActive, isFocusTarget])
+  // Read when a scheduled focus frame runs (here and after a send, below).
+  const isActiveRef = useRef(isActive)
+  const isFocusTargetRef = useRef(isFocusTarget)
+  const disabledRef = useRef(disabled)
+  // Declared before the effects that schedule those frames, so the refs are current when they run.
+  useEffect(() => {
+    isActiveRef.current = isActive
+    isFocusTargetRef.current = isFocusTarget
+    disabledRef.current = disabled
+  })
   const prevDisabledRef = useRef(disabled)
   useEffect(() => {
     const enabled = prevDisabledRef.current && !disabled
     prevDisabledRef.current = disabled
     if (!enabled || !pendingActivationRef.current) return
-    // Checked again when the frame runs: a click on another pane before then cancelled it (P5 review A1).
+    // This first enabling uses it up now, focused or not: if the box is
+    // disabled again before the frame runs, the cleanup cancels this one
+    // focus and a later enabling is not the activation (P5 re-review).
+    pendingActivationRef.current = false
+    // Checked again when the frame runs: a click on another pane before then
+    // cancels it (P5 review A1); the reader typing elsewhere keeps their field.
     const id = requestAnimationFrame(() => {
-      if (!pendingActivationRef.current) return
-      // This first enabling uses it up, focused or not (the reader typing elsewhere keeps their field).
-      pendingActivationRef.current = false
-      focusInput()
+      if (isActiveRef.current && isFocusTargetRef.current && !disabledRef.current) focusInput()
     })
     return () => cancelAnimationFrame(id)
   }, [disabled, focusInput])
@@ -126,15 +138,6 @@ export default function WorkerInput({
   // the reader's send — only a pending activation (above) waits on it. Mount
   // is not a transition (the ref starts at the first value).
   const prevPendingSendRef = useRef(pendingSend)
-  const isActiveRef = useRef(isActive)
-  const isFocusTargetRef = useRef(isFocusTarget)
-  const disabledRef = useRef(disabled)
-  // Declared before the refocus effect, so the refs are current when it reads them.
-  useEffect(() => {
-    isActiveRef.current = isActive
-    isFocusTargetRef.current = isFocusTarget
-    disabledRef.current = disabled
-  })
   useEffect(() => {
     const sendCameBack = prevPendingSendRef.current && !pendingSend
     prevPendingSendRef.current = pendingSend
