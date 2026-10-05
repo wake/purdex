@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	iagent "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
@@ -215,6 +218,12 @@ func newTestModuleWith(t *testing.T, opts fixtureOpts) *moduleFixture {
 		stopCtx:    stopCtx,
 		stopCancel: stopCancel,
 		replySem:   make(chan struct{}, 8),
+	}
+	// The pass's process view answers from the test's own fake Liveness, read
+	// at the pass (some tests swap m.liveness after construction), so every
+	// registry verdict is the one that fake gives.
+	m.snapshotProcs = func(context.Context) (iagent.ProcessView, error) {
+		return livenessView{l: m.liveness}, nil
 	}
 	f.m = m
 	m.helpers = newHelperManager(helperManagerConfig{
@@ -2388,4 +2397,452 @@ func TestHandlePeers_ScopeAll_UnreachableHostHasNoSelfAlias(t *testing.T) {
 	if got.Hosts[1].SelfAlias != "" {
 		t.Errorf("self_alias = %q, want \"\" for a host that was never reached", got.Hosts[1].SelfAlias)
 	}
+}
+
+var _ agent.OwnerPassResolver = (*passOwners)(nil)
+
+// rowOf returns env's row for session code, failing the test without one.
+func rowOf(t *testing.T, env ipeers.Envelope, code string) ipeers.PeerRecord {
+	t.Helper()
+	for _, rec := range env.Peers {
+		if rec.SessionCode == code {
+			return rec
+		}
+	}
+	t.Fatalf("no row for session %q in %+v", code, env.Peers)
+	return ipeers.PeerRecord{}
+}
+
+// mt1Owner is fixture76973's owner: its pane is the registry entry's, so a
+// confirmed answer makes the mt1 row deliverable as purdex-47.
+var mt1Owner = agent.PaneOwner{
+	AgentType:  "cc",
+	SessionID:  "fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c",
+	Cwd:        "/Users/wake/Workspace/wake/purdex",
+	TmuxPaneID: "%10",
+	LastSeenAt: 1789314156000,
+	Status:     "busy",
+}
+
+// An inventory takes ONE process snapshot and hands that same view to the
+// owner pass and to the registry read. The per-PID reader is armed to fail
+// the test: a registry entry the view knows is classified from the view alone.
+// PidAlive is not armed — it stays the per-read kill check (D10).
+func TestLocalEnvelope_OneSnapshotSharedByPassAndRegistry(t *testing.T) {
+	dir := t.TempDir()
+	writeRegistryFixture(t, dir, "76973.json", fixture76973)
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "mt1code", Name: "mt1", Cwd: "/Users/wake/Workspace/wake/purdex"},
+		{Code: "aigora3code", Name: "aigora3", Cwd: "/work/aigora3"},
+	}}
+	owners := &passOwners{results: map[string]agent.OwnerResult{
+		"mt1code": {Owner: mt1Owner, Found: true},
+	}}
+	live := ipeers.Liveness{
+		Stat:     func(string) error { return nil },
+		PidAlive: func(int) bool { return true },
+		StartTime: func(pid int) (time.Time, error) {
+			t.Fatalf("per-PID StartTime(%d) called while the snapshot succeeded", pid)
+			return time.Time{}, nil
+		},
+		Info: func(pid int) (iagent.ProcessInfo, error) {
+			t.Fatalf("per-PID Info(%d) called while the snapshot succeeded", pid)
+			return iagent.ProcessInfo{}, nil
+		},
+	}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	m := newTestModule(t, newTestCore(t, "mlab:abc123", "mlab"), sessions, owners, dir, live, clock, 2*time.Second)
+	view := &mapView{infos: map[int]iagent.ProcessInfo{
+		76973: {PID: 76973, Argv: []string{"claude"}, StartTime: fixture76973ProcStart},
+	}}
+	snapshots := 0
+	m.snapshotProcs = func(context.Context) (iagent.ProcessView, error) {
+		snapshots++
+		return view, nil
+	}
+
+	env := m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+
+	if snapshots != 1 {
+		t.Errorf("process snapshots = %d, want 1", snapshots)
+	}
+	if len(owners.srcs) != 1 || owners.srcs[0] == nil {
+		t.Fatalf("owner passes = %d (sources %v), want one pass with a source", len(owners.srcs), owners.srcs)
+	}
+	if owners.views[0] != iagent.ProcessView(view) || owners.viewErrs[0] != nil {
+		t.Errorf("pass source returned (%v, %v), want the inventory's view", owners.views[0], owners.viewErrs[0])
+	}
+	if snapshots != 1 {
+		t.Errorf("process snapshots after the pass read its source = %d, want 1", snapshots)
+	}
+	if view.reads == 0 {
+		t.Error("the registry read never asked the view")
+	}
+	if owners.confirms != 1 {
+		t.Errorf("Confirm calls = %d, want 1", owners.confirms)
+	}
+	if want := []string{"mt1code", "aigora3code"}; !slices.Equal(owners.resolved, want) {
+		t.Errorf("sessions resolved through the pass = %v, want %v", owners.resolved, want)
+	}
+	if len(owners.direct) != 0 {
+		t.Errorf("per-session lookups = %v, want none with a pass", owners.direct)
+	}
+	if !env.OK || env.Partial {
+		t.Fatalf("ok=%v partial=%v error=%q, want a complete inventory", env.OK, env.Partial, env.Error)
+	}
+	mt1 := rowOf(t, env, "mt1code")
+	if !mt1.Deliverable || mt1.Agent == nil || mt1.Agent.PeerName != "purdex-47" {
+		t.Errorf("mt1 row = %+v, want deliverable purdex-47 from the view-classified entry", mt1)
+	}
+	if rec := rowOf(t, env, "aigora3code"); rec.Reason != "no_agent" {
+		t.Errorf("aigora3 reason = %q, want no_agent", rec.Reason)
+	}
+}
+
+// A snapshot that fails is taken once and not retried: the registry falls back
+// to the per-PID liveness, the pass is handed the same failure, and the
+// sessions it could not answer are unresolved, never "no owner" (#988).
+func TestLocalEnvelope_SnapshotFailure(t *testing.T) {
+	dir := t.TempDir()
+	writeRegistryFixture(t, dir, "76973.json", fixture76973)
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "mt1code", Name: "mt1", Cwd: "/Users/wake/Workspace/wake/purdex"},
+		{Code: "aigora3code", Name: "aigora3", Cwd: "/work/aigora3"},
+	}}
+	owners := &passOwners{results: map[string]agent.OwnerResult{
+		"mt1code": {Owner: mt1Owner, Found: true},
+	}}
+	infoCalls := 0
+	live := allLiveLiveness(fixture76973ProcStart)
+	live.Info = func(pid int) (iagent.ProcessInfo, error) {
+		infoCalls++
+		return iagent.ProcessInfo{PID: pid, Argv: []string{"claude"}, StartTime: fixture76973ProcStart}, nil
+	}
+	f := newTestModuleWith(t, fixtureOpts{
+		core:        newTestCore(t, "mlab:abc123", "mlab"),
+		sessions:    sessions,
+		owners:      owners,
+		registryDir: dir,
+		liveness:    live,
+		budget:      2 * time.Second,
+	})
+	errSnap := errors.New("sysctl kern.proc.all: boom")
+	snapshots := 0
+	f.m.snapshotProcs = func(context.Context) (iagent.ProcessView, error) {
+		snapshots++
+		return nil, errSnap
+	}
+
+	env := f.m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+
+	if snapshots != 1 {
+		t.Errorf("process snapshots = %d, want 1", snapshots)
+	}
+	if infoCalls != 1 {
+		t.Errorf("per-PID Info calls = %d, want 1: the registry reads each process itself", infoCalls)
+	}
+	if len(env.UnknownRegistryFiles) != 0 {
+		t.Errorf("unknown registry files = %v, want the live entry classified by the per-PID reader", env.UnknownRegistryFiles)
+	}
+	if !f.logs.contains(errSnap.Error()) {
+		t.Errorf("log = %v, want the snapshot failure", f.logs.all())
+	}
+	if len(owners.srcs) != 1 || owners.srcs[0] == nil {
+		t.Fatalf("owner passes = %d (sources %v), want one pass with a source", len(owners.srcs), owners.srcs)
+	}
+	if owners.views[0] != nil || !errors.Is(owners.viewErrs[0], errSnap) {
+		t.Errorf("pass source returned (%v, %v), want the snapshot's error", owners.views[0], owners.viewErrs[0])
+	}
+	if snapshots != 1 {
+		t.Errorf("process snapshots after the pass read its source = %d, want 1", snapshots)
+	}
+	if !env.OK || !env.Partial {
+		t.Fatalf("ok=%v partial=%v error=%q, want ok and partial", env.OK, env.Partial, env.Error)
+	}
+	for _, code := range []string{"mt1code", "aigora3code"} {
+		rec := rowOf(t, env, code)
+		if rec.Agent != nil || rec.Reason != "" || rec.Deliverable {
+			t.Errorf("%s row = %+v, want unresolved (agent nil, reason \"\")", code, rec)
+		}
+	}
+}
+
+// Confirm's map is the inventory's answer, mapped by today's rules: an error
+// is unresolved and marks the response partial (#988), Found is an owner row,
+// and neither is "no owner", which is what a code without either gets. A code
+// the map has no answer for at all is unresolved too, never "no owner".
+func TestLocalEnvelope_PassAnswersMappedFromConfirm(t *testing.T) {
+	dir := t.TempDir()
+	writeRegistryFixture(t, dir, "76973.json", fixture76973)
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "s1", Name: "s1", Cwd: "/a"},
+		{Code: "mt1code", Name: "mt1", Cwd: "/Users/wake/Workspace/wake/purdex"},
+		{Code: "aigora3code", Name: "aigora3", Cwd: "/work/aigora3"},
+		{Code: "s4", Name: "s4", Cwd: "/d"},
+	}}
+	owners := &passOwners{
+		results: map[string]agent.OwnerResult{
+			"s1":      {Err: errors.New("second listing: tmux gone")},
+			"mt1code": {Owner: mt1Owner, Found: true},
+		},
+		omit: map[string]bool{"s4": true},
+	}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	m := newTestModule(t, newTestCore(t, "mlab:abc123", "mlab"), sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	env := m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+
+	if !env.OK || !env.Partial {
+		t.Fatalf("ok=%v partial=%v error=%q, want ok and partial", env.OK, env.Partial, env.Error)
+	}
+	if rec := rowOf(t, env, "s1"); rec.Agent != nil || rec.Reason != "" || rec.Deliverable {
+		t.Errorf("s1 row = %+v, want unresolved (agent nil, reason \"\")", rec)
+	}
+	if rec := rowOf(t, env, "mt1code"); !rec.Deliverable || rec.Agent == nil || rec.Agent.PeerName != "purdex-47" {
+		t.Errorf("mt1 row = %+v, want deliverable purdex-47", rec)
+	}
+	if rec := rowOf(t, env, "aigora3code"); rec.Reason != "no_agent" {
+		t.Errorf("aigora3 reason = %q, want no_agent", rec.Reason)
+	}
+	if rec := rowOf(t, env, "s4"); rec.Agent != nil || rec.Reason != "" || rec.Deliverable {
+		t.Errorf("s4 row = %+v, want unresolved (agent nil, reason \"\")", rec)
+	}
+}
+
+// The m.now() budget still decides which sessions are asked at all: one past
+// the deadline never reaches the pass, and is unresolved.
+func TestLocalEnvelope_PassRespectsBudget(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "s1", Name: "s1", Cwd: "/a"},
+		{Code: "s2", Name: "s2", Cwd: "/b"},
+	}}
+	owners := &passOwners{results: map[string]agent.OwnerResult{
+		"s1": {Owner: agent.PaneOwner{AgentType: "codex", SessionID: "sess-1"}, Found: true},
+		"s2": {Owner: agent.PaneOwner{AgentType: "codex", SessionID: "sess-2"}, Found: true},
+	}}
+	// handler start → t0 (deadline t0+2s); s1's check → t0+1s; s2's → t0+3s.
+	clock := &fakeClock{times: []time.Time{t0, t0.Add(time.Second), t0.Add(3 * time.Second)}}
+	m := newTestModule(t, newTestCore(t, "mlab:abc123", "mlab"), sessions, owners, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	env := m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+
+	if want := []string{"s1"}; !slices.Equal(owners.resolved, want) {
+		t.Errorf("sessions resolved through the pass = %v, want %v", owners.resolved, want)
+	}
+	if owners.confirms != 1 {
+		t.Errorf("Confirm calls = %d, want 1", owners.confirms)
+	}
+	if !env.OK || !env.Partial {
+		t.Fatalf("ok=%v partial=%v error=%q, want ok and partial", env.OK, env.Partial, env.Error)
+	}
+	if rec := rowOf(t, env, "s1"); rec.Agent == nil || rec.Agent.SessionID != "sess-1" {
+		t.Errorf("s1 row = %+v, want its owner", rec)
+	}
+	if rec := rowOf(t, env, "s2"); rec.Agent != nil || rec.Reason != "" {
+		t.Errorf("s2 row = %+v, want unresolved (agent nil, reason \"\")", rec)
+	}
+}
+
+// countingLiveness is a per-PID Liveness that answers alive / info from maps
+// and counts every call, for comparing inventoryLiveness against it.
+type countingLiveness struct {
+	alive      map[int]bool
+	infos      map[int]iagent.ProcessInfo
+	statCalls  int
+	aliveCalls int
+	infoCalls  int
+	startCalls int
+}
+
+var errStatSentinel = errors.New("stat sentinel")
+
+func (c *countingLiveness) liveness(withInfo bool) ipeers.Liveness {
+	l := ipeers.Liveness{
+		Stat: func(string) error {
+			c.statCalls++
+			return errStatSentinel
+		},
+		PidAlive: func(pid int) bool {
+			c.aliveCalls++
+			return c.alive[pid]
+		},
+		StartTime: func(pid int) (time.Time, error) {
+			c.startCalls++
+			info, ok := c.infos[pid]
+			if !ok {
+				return time.Time{}, fmt.Errorf("pid %d: no such process", pid)
+			}
+			return info.StartTime, nil
+		},
+	}
+	if withInfo {
+		l.Info = func(pid int) (iagent.ProcessInfo, error) {
+			c.infoCalls++
+			info, ok := c.infos[pid]
+			if !ok {
+				return iagent.ProcessInfo{}, fmt.Errorf("pid %d: no such process", pid)
+			}
+			return info, nil
+		}
+	}
+	return l
+}
+
+// D10 / D4: the registry's verdicts over the inventory's Liveness are today's.
+// The view answers Info only for a PID it can vouch for; a PID it never saw,
+// or whose process changed since, is asked of the per-PID reader, and the
+// liveness check itself is always the per-PID one.
+func TestInventoryLiveness_RegistryVerdictsEqualToday(t *testing.T) {
+	viewStart := time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)
+	baseStart := time.Date(2026, 10, 6, 9, 30, 0, 0, time.UTC)
+	errBoom := errors.New("kern.procargs2: boom")
+	newView := func() *mapView {
+		return &mapView{
+			infos: map[int]iagent.ProcessInfo{
+				10: {PID: 10, Argv: []string{"view-claude"}, StartTime: viewStart},
+			},
+			errs: map[int]error{
+				30: fmt.Errorf("pid 30: %w", iagent.ErrProcessChanged),
+				40: errBoom,
+			},
+		}
+	}
+	newBase := func() *countingLiveness {
+		infos := map[int]iagent.ProcessInfo{}
+		for _, pid := range []int{10, 20, 30, 40} {
+			infos[pid] = iagent.ProcessInfo{PID: pid, Argv: []string{"base-claude"}, StartTime: baseStart}
+		}
+		return &countingLiveness{alive: map[int]bool{10: false, 20: true}, infos: infos}
+	}
+
+	cases := []struct {
+		name      string
+		pid       int
+		wantArgv  string
+		wantStart time.Time
+		wantErr   error
+		wantBase  int // base Info calls
+	}{
+		{name: "in the view", pid: 10, wantArgv: "view-claude", wantStart: viewStart, wantBase: 0},
+		{name: "not in the view", pid: 20, wantArgv: "base-claude", wantStart: baseStart, wantBase: 1},
+		{name: "changed since the view", pid: 30, wantArgv: "base-claude", wantStart: baseStart, wantBase: 1},
+		{name: "other view error", pid: 40, wantErr: errBoom, wantBase: 0},
+	}
+	for _, tc := range cases {
+		t.Run("Info/"+tc.name, func(t *testing.T) {
+			base := newBase()
+			live := inventoryLiveness(base.liveness(true), newView())
+			if live.Info == nil {
+				t.Fatal("Info is nil over a base with Info")
+			}
+			info, err := live.Info(tc.pid)
+			if base.infoCalls != tc.wantBase {
+				t.Errorf("base Info calls = %d, want %d", base.infoCalls, tc.wantBase)
+			}
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Info(%d) err = %v, want %v", tc.pid, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Info(%d): %v", tc.pid, err)
+			}
+			if len(info.Argv) != 1 || info.Argv[0] != tc.wantArgv || !info.StartTime.Equal(tc.wantStart) {
+				t.Errorf("Info(%d) = %+v, want argv [%s] start %v", tc.pid, info, tc.wantArgv, tc.wantStart)
+			}
+			start, err := live.StartTime(tc.pid)
+			if err != nil || !start.Equal(tc.wantStart) {
+				t.Errorf("StartTime(%d) = %v, %v; want %v from the same Info", tc.pid, start, err, tc.wantStart)
+			}
+		})
+	}
+
+	t.Run("PidAlive and Stat are the base's", func(t *testing.T) {
+		base := newBase()
+		live := inventoryLiveness(base.liveness(true), newView())
+		// 10 is in the view but the base says dead; 20 is absent but alive.
+		if live.PidAlive(10) {
+			t.Error("PidAlive(10) = true, want the base's false")
+		}
+		if !live.PidAlive(20) {
+			t.Error("PidAlive(20) = false, want the base's true")
+		}
+		if base.aliveCalls != 2 {
+			t.Errorf("base PidAlive calls = %d, want 2", base.aliveCalls)
+		}
+		if err := live.Stat("/tmp/x.sock"); !errors.Is(err, errStatSentinel) || base.statCalls != 1 {
+			t.Errorf("Stat = %v (base calls %d), want the base's answer", err, base.statCalls)
+		}
+	})
+
+	// A base without Info keeps the registry's rule for one: no Info, so no
+	// argv classification, and the start time read through StartTime — the
+	// view's where it can vouch, the base's where it cannot.
+	t.Run("base without Info", func(t *testing.T) {
+		base := newBase()
+		live := inventoryLiveness(base.liveness(false), newView())
+		if live.Info != nil {
+			t.Fatal("Info is set over a base without one; the registry would classify argv it never did")
+		}
+		if start, err := live.StartTime(10); err != nil || !start.Equal(viewStart) {
+			t.Errorf("StartTime(10) = %v, %v; want the view's %v", start, err, viewStart)
+		}
+		if base.startCalls != 0 {
+			t.Errorf("base StartTime calls = %d, want 0 for a PID the view knows", base.startCalls)
+		}
+		if start, err := live.StartTime(20); err != nil || !start.Equal(baseStart) {
+			t.Errorf("StartTime(20) = %v, %v; want the base's %v", start, err, baseStart)
+		}
+		if base.startCalls != 1 {
+			t.Errorf("base StartTime calls = %d, want 1", base.startCalls)
+		}
+	})
+
+	// End to end: entries the view cannot vouch for are classified exactly as
+	// the per-PID reader classifies them on its own. 20 is absent from the
+	// view and alive by kill, so it is live, not "dead"; 30 changed since the
+	// view and the base says it now started later, so it is dead.
+	t.Run("ReadRegistryDiag", func(t *testing.T) {
+		dir := t.TempDir()
+		procStart, err := ipeers.ParseProcStart(e2eCCProcStart)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeRegistryFixture(t, dir, "20.json", e2eRegistryJSON(20, "sid-20", "n20", "", "/tmp/20.sock"))
+		writeRegistryFixture(t, dir, "30.json", e2eRegistryJSON(30, "sid-30", "n30", "", "/tmp/30.sock"))
+		newBaseLive := func() ipeers.Liveness {
+			base := &countingLiveness{
+				alive: map[int]bool{20: true, 30: true},
+				infos: map[int]iagent.ProcessInfo{
+					20: {PID: 20, Argv: []string{"claude"}, StartTime: procStart},
+					30: {PID: 30, Argv: []string{"claude"}, StartTime: procStart.Add(time.Hour)},
+				},
+			}
+			l := base.liveness(true)
+			l.Stat = func(string) error { return nil }
+			return l
+		}
+		view := &mapView{errs: map[int]error{30: fmt.Errorf("pid 30: %w", iagent.ErrProcessChanged)}}
+
+		got, gotDiag, err := ipeers.ReadRegistryDiag(dir, inventoryLiveness(newBaseLive(), view))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, wantDiag, err := ipeers.ReadRegistryDiag(dir, newBaseLive())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].PID != 20 {
+			t.Errorf("live entries = %+v, want pid 20 alone", got)
+		}
+		if gotDiag.Dead != 1 || len(gotDiag.Unknown) != 0 {
+			t.Errorf("diag = %+v, want pid 30 dead and nothing unknown", gotDiag)
+		}
+		if len(got) != len(want) || (len(got) == 1 && got[0].PID != want[0].PID) ||
+			gotDiag.Dead != wantDiag.Dead || len(gotDiag.Unknown) != len(wantDiag.Unknown) {
+			t.Errorf("verdicts (%+v, %+v) differ from the per-PID reader's (%+v, %+v)", got, gotDiag, want, wantDiag)
+		}
+	})
 }

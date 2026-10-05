@@ -15,6 +15,7 @@ package peers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/google/uuid"
 
+	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
@@ -196,6 +198,11 @@ type Module struct {
 	fetch       fetchFunc                        // default fetchRemote; test seam
 	logf        func(format string, args ...any) // default log.Printf; test seam
 
+	// snapshotProcs reads the process table once for an inventory pass, which
+	// shares it between the owner lookups and the registry read. Default
+	// snapshotProcesses; test seam.
+	snapshotProcs func(ctx context.Context) (agentpkg.ProcessView, error)
+
 	// titles is the peer_labels store (Task 3/7): Snapshot joins into every
 	// inventory build (localEnvelope, unguarded — a plain read with no
 	// ordering requirement of its own); the self routes (titles.go —
@@ -267,6 +274,7 @@ func New(audit AuditStore, titles TitleStore) *Module {
 	m := &Module{
 		registryDir:          registryDir,
 		liveness:             ipeers.DefaultLiveness(),
+		snapshotProcs:        snapshotProcesses,
 		budget:               2 * time.Second,
 		now:                  time.Now, // the one clock seam; every other clock reader below takes m.now
 		client:               newRemoteClient(),
@@ -441,6 +449,10 @@ var (
 	_ contextTmuxInstancer = (*session.SessionModule)(nil)
 )
 
+// The production resolver batches; a rename there must not silently drop the
+// inventory back to one owner lookup, with its own process reads, per session.
+var _ agent.OwnerPassResolver = (*agent.Module)(nil)
+
 // listSessionsWithin reads the session list under ctx — the inventory's
 // budget context (#1293 §3.2): a hung tmux read ends at the budget with an
 // error, and the inventory answers ok:false instead of holding the request.
@@ -463,6 +475,97 @@ func (m *Module) tmuxInstanceWithin(ctx context.Context) string {
 		return p.TmuxInstanceContext(ctx)
 	}
 	return m.sessions.TmuxInstance()
+}
+
+// inventoryLiveness is the registry's Liveness for one inventory pass: base,
+// with each process read answered from the pass's view where the view can
+// vouch for it, so that live entries cost no per-PID reads. Every verdict
+// stays base's (spec D4 / D10), because localEnvelope also decides where
+// send, deliver and reply go:
+//   - PidAlive and Stat are base's: kill(pid, 0) and os.Stat, evaluated at
+//     the read, never the view's point-in-time table;
+//   - a PID the view never saw (ErrNotInSnapshot), or whose process exited or
+//     was replaced since (ErrProcessChanged), is read by base, exactly as
+//     without a view;
+//   - any other failure of the view's read is that process's answer, as a
+//     failed per-PID read is: the entry is unclassifiable.
+//
+// A base without Info keeps ReadRegistryDiag's rule for one: no Info (so no
+// argv classification) and the start time read through StartTime, base's
+// StartTime where the view cannot vouch.
+func inventoryLiveness(base ipeers.Liveness, procs agentpkg.ProcessView) ipeers.Liveness {
+	fallback := base.Info
+	if fallback == nil {
+		fallback = func(pid int) (agentpkg.ProcessInfo, error) {
+			start, err := base.StartTime(pid)
+			return agentpkg.ProcessInfo{PID: pid, StartTime: start}, err
+		}
+	}
+	info := func(pid int) (agentpkg.ProcessInfo, error) {
+		got, err := procs.Read(pid)
+		if errors.Is(err, agentpkg.ErrNotInSnapshot) || errors.Is(err, agentpkg.ErrProcessChanged) {
+			return fallback(pid)
+		}
+		return got, err
+	}
+	live := ipeers.Liveness{
+		Stat:     base.Stat,
+		PidAlive: base.PidAlive,
+		StartTime: func(pid int) (time.Time, error) {
+			got, err := info(pid)
+			if err != nil {
+				return time.Time{}, err
+			}
+			return got.StartTime, nil
+		},
+	}
+	if base.Info != nil {
+		live.Info = info
+	}
+	return live
+}
+
+// perSessionPass is the agent.OwnerPass over a resolver that cannot batch:
+// each Resolve is that session's own ResolveSessionOwner, run at once, so each
+// lookup runs in the loop's order, after the loop's clock check and under its
+// context, as a direct call would.
+type perSessionPass struct {
+	r       agent.OwnerResolver
+	results map[string]agent.OwnerResult
+}
+
+func (p *perSessionPass) Resolve(ctx context.Context, code string) {
+	owner, found, err := p.r.ResolveSessionOwner(ctx, code)
+	if p.results == nil {
+		p.results = make(map[string]agent.OwnerResult)
+	}
+	p.results[code] = agent.OwnerResult{Owner: owner, Found: found, Err: err}
+}
+
+func (p *perSessionPass) Confirm(context.Context) map[string]agent.OwnerResult {
+	return p.results
+}
+
+// ownerPass is the inventory's owner pass over src, the inventory's own
+// process snapshot (or its failure), so the pass never reads the table a
+// second time. A resolver without OwnerPassResolver is asked per session, in
+// the same way a provider without contextSessionLister is read unbounded.
+func (m *Module) ownerPass(src agent.ProcessSource) agent.OwnerPass {
+	if r, ok := m.owners.(agent.OwnerPassResolver); ok {
+		return r.NewOwnerPass(src)
+	}
+	return &perSessionPass{r: m.owners}
+}
+
+// snapshotProcesses is the production snapshotProcs.
+func snapshotProcesses(ctx context.Context) (agentpkg.ProcessView, error) {
+	snap, err := agentpkg.SnapshotProcesses(ctx)
+	if err != nil {
+		// Never return snap here: a nil *ProcessSnapshot in a ProcessView is
+		// not a nil interface, and the registry read would call through it.
+		return nil, err
+	}
+	return snap, nil
 }
 
 // localEnvelope builds this host's own inventory from a caller-supplied
@@ -502,7 +605,19 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		return writeError(err.Error())
 	}
 
-	entries, diag, err := ipeers.ReadRegistryDiag(m.registryDir, m.liveness)
+	// ONE read of the process table per pass, shared by the registry read and
+	// every owner lookup (spec R2 / D4). A failed read is not retried: the
+	// registry reads each process itself through m.liveness, and the owner
+	// pass is handed the same failure.
+	procs, procsErr := m.snapshotProcs(invCtx)
+	live := m.liveness
+	if procsErr != nil {
+		m.logf("peers: inventory: process snapshot failed, the registry reads each process itself: %v", procsErr)
+	} else {
+		live = inventoryLiveness(m.liveness, procs)
+	}
+
+	entries, diag, err := ipeers.ReadRegistryDiag(m.registryDir, live)
 	if err != nil {
 		return writeError(err.Error())
 	}
@@ -512,6 +627,8 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	owners := make(map[string]ipeers.Owner, len(sessions))
 	unresolved := make(map[string]bool)
 
+	pass := m.ownerPass(func() (agentpkg.ProcessView, error) { return procs, procsErr })
+	var asked []string
 	for _, s := range sessions {
 		summaries = append(summaries, ipeers.SessionSummary{
 			Code:         s.Code,
@@ -525,24 +642,33 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 			continue
 		}
 
-		owner, ok, err := m.owners.ResolveSessionOwner(invCtx, s.Code)
-		if err != nil {
+		pass.Resolve(invCtx, s.Code)
+		asked = append(asked, s.Code)
+	}
+
+	// An answer is only an answer once Confirm has re-checked it, so nothing is
+	// read from the pass before this.
+	results := pass.Confirm(invCtx)
+	for _, code := range asked {
+		res, answered := results[code]
+		if !answered || res.Err != nil {
 			// The lookup itself failed (tmux read error, resolver timeout,
 			// cancelled context) — this is not "no agent". Reporting it as
 			// no_agent would tell the SPA a live session has none, so it is
 			// reported the same way as a session whose owner lookup never
-			// ran: agent:null, reason:"", partial:true (Item 1, #988).
-			unresolved[s.Code] = true
+			// ran: agent:null, reason:"", partial:true (Item 1, #988). A
+			// session the pass has no answer for at all is the same.
+			unresolved[code] = true
 			continue
 		}
-		if ok {
-			owners[s.Code] = ipeers.Owner{
-				AgentType:  owner.AgentType,
-				SessionID:  owner.SessionID,
-				Cwd:        owner.Cwd,
-				TmuxPaneID: owner.TmuxPaneID,
-				LastSeenAt: owner.LastSeenAt,
-				Status:     owner.Status,
+		if res.Found {
+			owners[code] = ipeers.Owner{
+				AgentType:  res.Owner.AgentType,
+				SessionID:  res.Owner.SessionID,
+				Cwd:        res.Owner.Cwd,
+				TmuxPaneID: res.Owner.TmuxPaneID,
+				LastSeenAt: res.Owner.LastSeenAt,
+				Status:     res.Owner.Status,
 			}
 		}
 	}
