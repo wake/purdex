@@ -50,6 +50,12 @@ The third item of the same report (how terminated workers are listed) is under d
   - keeps Tab / Shift+Tab inside the dialog while it is up;
   - on unmount, if focus is still inside the dialog, returns it to whatever had it when the dialog opened (the pane, when opened from a covered button) — the same rule as `FloatingPanel`; if something else has taken focus meanwhile (e.g. a tab switch that cancelled the dialog and focused the new tab's pane), it leaves focus alone.
   This also fixes the same gap for every other `ConfirmDialog` caller.
+- **A tab that goes inactive lets go of focus and the text selection** (found while checking the codex R2 critic's list of covered buttons that switch to content without activation focus: new workspace, Hosts, Settings, the host segment's double-click). `TabContent` hides an inactive tab in place (`visibility: hidden` + `inert`). Measured 2026-10-06 with `playwright cli` on a bare page — a focused textarea whose container then goes hidden + inert:
+  - Chromium: focus moves to body and later key presses go nowhere. This is safe, and Electron is Chromium;
+  - **WebKit: `activeElement` reports body, but key presses still land in the hidden textarea**. This holds with `inert` alone, with `visibility: hidden` alone, and with both. WebKit routes typing by the selection, not by `activeElement`;
+  - blurring the element and calling `getSelection().removeAllRanges()` before hiding stops the leak in both engines.
+
+  The leak predates this PR (a keyboard tab switch to Settings/Hosts already hits it), but rule F widens it to mouse clicks on the bottom buttons. So when a tab goes from active to inactive, `TabContent` does two things if they are inside that tab's container: blurs the focused element, and clears the selection. The newly active tab's own activation focus (P5) is unchanged.
 - The narrow bar: pressing Workers no longer focuses the button, so when the floating panel closes it restores focus to what had it before (the pane), not to the Workers button.
 
 ## 5. Tests
