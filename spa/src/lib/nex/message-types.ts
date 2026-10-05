@@ -20,6 +20,8 @@ export interface ContentBlock {
   /** Prelude only (spec §4.3): the block was cut at `max_block_bytes`. */
   truncated?: boolean
   total_bytes?: number
+  /** Prelude only (U3, spec §5.3): a `text` block that is one pasted body, wrapper removed; `cut` = its closing tag was cut off. */
+  pasted?: { lines: number; cut: boolean }
 }
 
 export interface AssistantMessage {

@@ -90,7 +90,7 @@ function clampLine(line: string, maxChars: number, maxBytes: number): string {
 }
 
 /** A single trailing newline terminates the last line, it does not open a new one. */
-function splitLines(text: string): string[] {
+export function splitLines(text: string): string[] {
   if (text.length === 0) return []
   return (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n')
 }
