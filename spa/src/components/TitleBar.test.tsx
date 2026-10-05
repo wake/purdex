@@ -19,11 +19,10 @@ describe('TitleBar', () => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
     render(<TitleBar title="test" />)
     const buttons = screen.getByTestId('layout-buttons').querySelectorAll('button')
-    // 4 region toggles + 3 layout patterns = 7 buttons (CollapseButton now
-    // lives in the dedicated sidebar-toggle slot on the left; grid-4 removed).
-    expect(buttons).toHaveLength(7)
-    // Only layout pattern buttons (last 3, indices 4-6) should be disabled
-    for (let i = 4; i < 7; i++) {
+    // Only the 3 layout pattern buttons (CollapseButton lives in the dedicated
+    // sidebar-toggle slot on the left).
+    expect(buttons).toHaveLength(3)
+    for (let i = 0; i < 3; i++) {
       expect(buttons[i]).toHaveProperty('disabled', true)
     }
   })
@@ -48,11 +47,10 @@ describe('TitleBar', () => {
 
     render(<TitleBar title="test" />)
     const buttons = screen.getByTestId('layout-buttons').querySelectorAll('button')
-    // Layout pattern buttons start after 4 region toggles (index 4)
-    expect(buttons[4]).toHaveProperty('disabled', false)
+    expect(buttons[0]).toHaveProperty('disabled', false)
 
-    // Click "Split horizontal" (second layout pattern button = index 5)
-    fireEvent.click(buttons[5])
+    // Click "Split horizontal" (second layout pattern button = index 1)
+    fireEvent.click(buttons[1])
     const updated = useTabStore.getState().tabs[tab.id]
     expect(updated.layout.type).toBe('split')
   })
@@ -61,7 +59,7 @@ describe('TitleBar', () => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
     render(<TitleBar title="test" />)
     const buttons = screen.getByTestId('layout-buttons').querySelectorAll('button')
-    for (let i = 4; i < 7; i++) {
+    for (let i = 0; i < 3; i++) {
       expect(buttons[i]).toHaveProperty('disabled', true)
     }
   })
