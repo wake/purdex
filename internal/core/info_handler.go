@@ -24,6 +24,7 @@ func (c *Core) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		"mode":    c.Pairing.Get().String(),
 		"version": buildinfo.Version,
 		"hash":    buildinfo.Hash,
+		"boot_id": c.BootID,
 	})
 }
 

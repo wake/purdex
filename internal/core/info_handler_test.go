@@ -356,3 +356,12 @@ func TestInfoEndpoint_ReporterCannotOverrideCoreNexFields(t *testing.T) {
 	assert.Equal(t, false, nex["restart_required"])
 	assert.Equal(t, true, nex["ready"], "reporter-owned keys still come through")
 }
+
+func TestHandleHealth_CarriesBootID(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{}})
+	rec := httptest.NewRecorder()
+	c.HandleHealth(rec, httptest.NewRequest("GET", "/api/health", nil))
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Equal(t, c.BootID, body["boot_id"])
+}
