@@ -2690,9 +2690,9 @@ func (c *countingLiveness) liveness(withInfo bool) ipeers.Liveness {
 }
 
 // D10 / D4: the registry's verdicts over the inventory's Liveness are today's.
-// The view answers Info only for a PID it can vouch for; a PID it never saw,
-// or whose process changed since, is asked of the per-PID reader, and the
-// liveness check itself is always the per-PID one.
+// The view's answer is used only when its read succeeds; a PID it never saw,
+// one whose process changed since, or any other failed read is asked of the
+// per-PID reader, and the liveness check itself is always the per-PID one.
 func TestInventoryLiveness_RegistryVerdictsEqualToday(t *testing.T) {
 	viewStart := time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)
 	baseStart := time.Date(2026, 10, 6, 9, 30, 0, 0, time.UTC)
@@ -2721,13 +2721,12 @@ func TestInventoryLiveness_RegistryVerdictsEqualToday(t *testing.T) {
 		pid       int
 		wantArgv  string
 		wantStart time.Time
-		wantErr   error
 		wantBase  int // base Info calls
 	}{
 		{name: "in the view", pid: 10, wantArgv: "view-claude", wantStart: viewStart, wantBase: 0},
 		{name: "not in the view", pid: 20, wantArgv: "base-claude", wantStart: baseStart, wantBase: 1},
 		{name: "changed since the view", pid: 30, wantArgv: "base-claude", wantStart: baseStart, wantBase: 1},
-		{name: "other view error", pid: 40, wantErr: errBoom, wantBase: 0},
+		{name: "other view error", pid: 40, wantArgv: "base-claude", wantStart: baseStart, wantBase: 1},
 	}
 	for _, tc := range cases {
 		t.Run("Info/"+tc.name, func(t *testing.T) {
@@ -2739,12 +2738,6 @@ func TestInventoryLiveness_RegistryVerdictsEqualToday(t *testing.T) {
 			info, err := live.Info(tc.pid)
 			if base.infoCalls != tc.wantBase {
 				t.Errorf("base Info calls = %d, want %d", base.infoCalls, tc.wantBase)
-			}
-			if tc.wantErr != nil {
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("Info(%d) err = %v, want %v", tc.pid, err, tc.wantErr)
-				}
-				return
 			}
 			if err != nil {
 				t.Fatalf("Info(%d): %v", tc.pid, err)
@@ -2798,12 +2791,20 @@ func TestInventoryLiveness_RegistryVerdictsEqualToday(t *testing.T) {
 		if base.startCalls != 1 {
 			t.Errorf("base StartTime calls = %d, want 1", base.startCalls)
 		}
+		if start, err := live.StartTime(40); err != nil || !start.Equal(baseStart) {
+			t.Errorf("StartTime(40) = %v, %v; want the base's %v after the view's read failed", start, err, baseStart)
+		}
+		if base.startCalls != 2 {
+			t.Errorf("base StartTime calls = %d, want 2", base.startCalls)
+		}
 	})
 
 	// End to end: entries the view cannot vouch for are classified exactly as
 	// the per-PID reader classifies them on its own. 20 is absent from the
 	// view and alive by kill, so it is live, not "dead"; 30 changed since the
-	// view and the base says it now started later, so it is dead.
+	// view and the base says it now started later, so it is dead; the view's
+	// read of 40 fails outright, and the base reads it as live, so it is live,
+	// not unclassifiable.
 	t.Run("ReadRegistryDiag", func(t *testing.T) {
 		dir := t.TempDir()
 		procStart, err := ipeers.ParseProcStart(e2eCCProcStart)
@@ -2812,19 +2813,24 @@ func TestInventoryLiveness_RegistryVerdictsEqualToday(t *testing.T) {
 		}
 		writeRegistryFixture(t, dir, "20.json", e2eRegistryJSON(20, "sid-20", "n20", "", "/tmp/20.sock"))
 		writeRegistryFixture(t, dir, "30.json", e2eRegistryJSON(30, "sid-30", "n30", "", "/tmp/30.sock"))
+		writeRegistryFixture(t, dir, "40.json", e2eRegistryJSON(40, "sid-40", "n40", "", "/tmp/40.sock"))
 		newBaseLive := func() ipeers.Liveness {
 			base := &countingLiveness{
-				alive: map[int]bool{20: true, 30: true},
+				alive: map[int]bool{20: true, 30: true, 40: true},
 				infos: map[int]iagent.ProcessInfo{
 					20: {PID: 20, Argv: []string{"claude"}, StartTime: procStart},
 					30: {PID: 30, Argv: []string{"claude"}, StartTime: procStart.Add(time.Hour)},
+					40: {PID: 40, Argv: []string{"claude"}, StartTime: procStart},
 				},
 			}
 			l := base.liveness(true)
 			l.Stat = func(string) error { return nil }
 			return l
 		}
-		view := &mapView{errs: map[int]error{30: fmt.Errorf("pid 30: %w", iagent.ErrProcessChanged)}}
+		view := &mapView{errs: map[int]error{
+			30: fmt.Errorf("pid 30: %w", iagent.ErrProcessChanged),
+			40: errBoom,
+		}}
 
 		got, gotDiag, err := ipeers.ReadRegistryDiag(dir, inventoryLiveness(newBaseLive(), view))
 		if err != nil {
@@ -2834,13 +2840,20 @@ func TestInventoryLiveness_RegistryVerdictsEqualToday(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got) != 1 || got[0].PID != 20 {
-			t.Errorf("live entries = %+v, want pid 20 alone", got)
+		entryPIDs := func(entries []ipeers.Entry) []int {
+			pids := make([]int, 0, len(entries))
+			for _, e := range entries {
+				pids = append(pids, e.PID)
+			}
+			return pids
+		}
+		if pids := entryPIDs(got); !slices.Equal(pids, []int{20, 40}) {
+			t.Errorf("live entries = %v, want pids 20 and 40", pids)
 		}
 		if gotDiag.Dead != 1 || len(gotDiag.Unknown) != 0 {
 			t.Errorf("diag = %+v, want pid 30 dead and nothing unknown", gotDiag)
 		}
-		if len(got) != len(want) || (len(got) == 1 && got[0].PID != want[0].PID) ||
+		if !slices.Equal(entryPIDs(got), entryPIDs(want)) ||
 			gotDiag.Dead != wantDiag.Dead || len(gotDiag.Unknown) != len(wantDiag.Unknown) {
 			t.Errorf("verdicts (%+v, %+v) differ from the per-PID reader's (%+v, %+v)", got, gotDiag, want, wantDiag)
 		}

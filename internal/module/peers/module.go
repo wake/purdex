@@ -15,7 +15,6 @@ package peers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -484,11 +483,11 @@ func (m *Module) tmuxInstanceWithin(ctx context.Context) string {
 // send, deliver and reply go:
 //   - PidAlive and Stat are base's: kill(pid, 0) and os.Stat, evaluated at
 //     the read, never the view's point-in-time table;
-//   - a PID the view never saw (ErrNotInSnapshot), or whose process exited or
-//     was replaced since (ErrProcessChanged), is read by base, exactly as
-//     without a view;
-//   - any other failure of the view's read is that process's answer, as a
-//     failed per-PID read is: the entry is unclassifiable.
+//   - the view's answer is used only when its read succeeds. Everything else
+//     — a PID the view never saw, one whose process exited or was replaced
+//     since, any other failed read — is read by base, exactly as without a
+//     view: a read today's per-PID reader might answer must never turn an
+//     entry unclassifiable.
 //
 // A base without Info keeps ReadRegistryDiag's rule for one: no Info (so no
 // argv classification) and the start time read through StartTime, base's
@@ -502,11 +501,10 @@ func inventoryLiveness(base ipeers.Liveness, procs agentpkg.ProcessView) ipeers.
 		}
 	}
 	info := func(pid int) (agentpkg.ProcessInfo, error) {
-		got, err := procs.Read(pid)
-		if errors.Is(err, agentpkg.ErrNotInSnapshot) || errors.Is(err, agentpkg.ErrProcessChanged) {
-			return fallback(pid)
+		if got, err := procs.Read(pid); err == nil {
+			return got, nil
 		}
-		return got, err
+		return fallback(pid)
 	}
 	live := ipeers.Liveness{
 		Stat:     base.Stat,
