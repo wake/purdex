@@ -626,7 +626,11 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// The lifecycle check is redundant today (frame_ops.go grants an envelope
 	// only on SessionStart) and kept on purpose: Q1 must never fire on any
 	// other event, whatever a later change does to the grant site.
-	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil && frameMeta.Provenance.SessionID != "" {
+	// IdentityRecorded: a subscriber re-checks LiveBySessionID(S), which only
+	// sees S once the frame row holds it. If the identity write failed the
+	// event would be skipped there and never replayed, so do not publish it.
+	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil &&
+		frameMeta.Provenance.SessionID != "" && frameMeta.IdentityRecorded {
 		m.sessionStarts.publish(sessionStartEventFrom(req, *frameMeta.Provenance))
 	}
 	// Exit envelope (agent-last-state spec §1): granted only when a

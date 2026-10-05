@@ -78,7 +78,8 @@ func newSessionStartTestModule(t *testing.T) *Module {
 	t.Helper()
 	m := newProvenanceTestModule(t, "inst-1")
 	m.registry = agentpkg.NewRegistry()
-	m.registry.Register(&fakeAgentProvider{typeName: "cc", derive: func(name string, raw json.RawMessage) agentpkg.DeriveResult {
+	// Identifying like the real cc provider: the identity write gates publication.
+	m.registry.Register(&fakeIdentifyingAgentProvider{fakeAgentProvider{typeName: "cc", derive: func(name string, raw json.RawMessage) agentpkg.DeriveResult {
 		var p struct {
 			Source string `json:"source"`
 		}
@@ -87,7 +88,7 @@ func newSessionStartTestModule(t *testing.T) *Module {
 			return agentpkg.DeriveResult{Valid: false, Reason: "compact_ignored"}
 		}
 		return deriveWithSessionDetail(name, raw)
-	}})
+	}}})
 	return m
 }
 
