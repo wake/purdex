@@ -6,14 +6,8 @@ import { useHostStore } from '../../stores/useHostStore'
  * The daemon resolves the capability into an actual absolute path; client
  * code MUST NOT supply absolute paths directly — the daemon's server-side
  * allowlist (P5 spec §"fs.search root allowlist") rejects `kind:"absolute"`.
- *
- * `workspace-projectPath` is currently a v6 soft-degrade: the daemon accepts
- * the schema but responds 501 (no workspace registry yet). Layer-3 callers
- * MUST treat 501 as "layer-3 not available" rather than as an error.
  */
-export type SearchRootCapability =
-  | { kind: 'session-cwd'; sessionCode: string }
-  | { kind: 'workspace-projectPath'; workspaceId: string }
+export type SearchRootCapability = { kind: 'session-cwd'; sessionCode: string }
 
 export interface SearchMatch {
   path: string

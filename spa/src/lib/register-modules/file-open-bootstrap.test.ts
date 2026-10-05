@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   __resetFileOpenBootstrap,
   resolveOpenContextCwdFromSessions,
-  tryOpenFileForFileTree,
+  tryOpenFileForTerminalLink,
 } from './file-open-bootstrap'
 import type { FileInfo } from '../../types/fs'
 import { useSessionStore } from '../../stores/useSessionStore'
@@ -11,13 +11,9 @@ import { useWorkspaceStore } from '../../features/workspace/store'
 import { useEditorSettingsStore, DEFAULT_EDITOR_SETTINGS } from '../../stores/useEditorSettingsStore'
 import { __disposeFileNotFoundPopupForTests } from '../file-open'
 
-// We exercise the layer 2/3 expand wiring by spying on global fetch — same
-// approach fs-search.test.ts uses. This validates the bootstrap's
-// runExpandedSearch correctly:
-//   1. Builds a session-cwd root for layer 2,
-//   2. Builds a workspace-projectPath root for layer 3,
-//   3. Suppresses 501 from layer 3 (silent — no throw, no popup error),
-//   4. Re-mounts the popup with results when signal still alive.
+// We exercise the layer 2 expand wiring by spying on global fetch — same
+// approach fs-search.test.ts uses: the session search builds a session-cwd
+// root and returns matches newest first.
 
 beforeEach(() => {
   __resetFileOpenBootstrap()
@@ -41,7 +37,6 @@ beforeEach(() => {
         name: 'w',
         tabs: [],
         activeTabId: null,
-        moduleConfig: { files: { projectPath: '/ws/project' } },
       },
     ],
     activeWorkspaceId: 'w1',
@@ -104,7 +99,7 @@ describe('wrong-host guard', () => {
     }
 
     await expect(
-      tryOpenFileForFileTree(
+      tryOpenFileForTerminalLink(
         file,
         { type: 'daemon', hostId: 'hX' },
         { hostId: 'hX', cwd: '/', sourceWorkspaceId: 'w1' },
@@ -114,48 +109,7 @@ describe('wrong-host guard', () => {
   })
 })
 
-describe('layer 2 / 3 expand search wiring', () => {
-  // We import these as type only (they're internal); behavior is verified
-  // through fetch interception when the popup renders the expand CTAs.
-  // Direct integration test of runExpandedSearch is done by mounting the
-  // popup with show(spec).
-  it('layer 3 daemon 501 → silently degrades to empty hits (no popup error)', async () => {
-    const fetchSpy = vi.fn(async (_url: string, init: RequestInit) => {
-      const body = JSON.parse(init.body as string) as { roots: { kind: string }[] }
-      const isLayer3 = body.roots.some((r) => r.kind === 'workspace-projectPath')
-      if (isLayer3) {
-        return new Response('not implemented', { status: 501 })
-      }
-      return new Response(
-        JSON.stringify({
-          matches: [{ path: '/x/foo.go', modTime: '2026-04-27T00:00:00Z', sizeBytes: 1, root: '/x' }],
-          partial: false,
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      )
-    })
-    globalThis.fetch = fetchSpy as never
-
-    // Use the public popup-mount path — show with ask-expand spec, then
-    // simulate a click on Workspace CTA. The bootstrap's `onSearchWorkspace`
-    // is what we want to validate, but it's wired only when the controller
-    // is built inside a service. For unit-level validation we replicate the
-    // exact internal behavior here: build the same call shape and verify
-    // the 501 is swallowed.
-    const { fsSearchByCapability, FsSearchError } = await import('../file-open')
-    let caught: unknown = null
-    try {
-      await fsSearchByCapability('h1', 'foo.go', [
-        { kind: 'workspace-projectPath', workspaceId: 'w1' },
-      ])
-    } catch (err) {
-      caught = err
-    }
-    expect(caught).toBeInstanceOf(FsSearchError)
-    expect((caught as { status: number }).status).toBe(501)
-    // The bootstrap catches the FsSearchError(501) and replaces with [].
-  })
-
+describe('layer 2 expand search wiring', () => {
   it('layer 2 (session-cwd) succeeds with matches sorted by mtime', async () => {
     globalThis.fetch = vi.fn(async (_url: string, init: RequestInit) => {
       const body = JSON.parse(init.body as string) as { roots: { kind: string; sessionCode?: string }[] }

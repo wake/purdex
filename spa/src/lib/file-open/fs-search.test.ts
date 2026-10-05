@@ -32,7 +32,7 @@ describe('fsSearchByCapability', () => {
   it('posts mode-envelope body with capability roots and returns matches sorted by modTime desc', async () => {
     const roots: SearchRootCapability[] = [
       { kind: 'session-cwd', sessionCode: 'sess1' },
-      { kind: 'workspace-projectPath', workspaceId: 'w1' },
+      { kind: 'session-cwd', sessionCode: 'sess2' },
     ]
     const matches = await fsSearchByCapability('h1', 'foo.go', roots)
     // Newer mtime sorted first
@@ -65,14 +65,11 @@ describe('fsSearchByCapability', () => {
     expect(fetchCall[1].signal).toBe(ac.signal)
   })
 
-  it('returns empty matches when daemon responds 501 not-implemented (caller should suppress)', async () => {
-    // Layer 3 caller decides what to do; helper just exposes the status via thrown error.
-    // For this contract: 501 is treated as a soft failure — helper throws Error tagged with status,
-    // so layer 3 caller catches and suppresses (per plan v4).
-    globalThis.fetch = vi.fn(async () => new Response('not implemented', { status: 501 })) as never
+  it('tags the thrown error with the HTTP status so callers can branch on it', async () => {
+    globalThis.fetch = vi.fn(async () => new Response('server error', { status: 500 })) as never
     await expect(
-      fsSearchByCapability('h1', 'foo.go', [{ kind: 'workspace-projectPath', workspaceId: 'w1' }]),
-    ).rejects.toMatchObject({ status: 501 })
+      fsSearchByCapability('h1', 'foo.go', [{ kind: 'session-cwd', sessionCode: 's1' }]),
+    ).rejects.toMatchObject({ status: 500 })
   })
 
   // Restore baseline so other tests in this file (if added later) and global state aren't polluted.

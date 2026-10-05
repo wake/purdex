@@ -6,25 +6,21 @@ export interface FileNotFoundPopupProps {
   spec: PopupSpec
   /** Resolved cwd of the session (Layer 2 root). null → capability missing. */
   sessionCwd: string | null
-  /** Resolved workspace projectPath (Layer 3 root). null → capability missing. */
-  projectPath: string | null
   onClose: () => void
   /** Open a specific candidate path (cancel popup as side-effect). */
   onOpenPath: (path: string) => void
   /** Trigger Layer 2 fs.search (only meaningful when sessionCwd is non-null). */
   onSearchSessionCwd: () => void
-  /** Trigger Layer 3 fs.search (only meaningful when projectPath is non-null). */
-  onSearchWorkspace: () => void
 }
 
 /**
  * P5 file-not-found popup.
  *
- * The two primary CTAs surface the search root explicitly so the user knows
- * what scope they're opting into rather than seeing a generic "Search" button
+ * The search CTA surfaces the search root explicitly so the user knows what
+ * scope they're opting into rather than seeing a generic "Search" button
  * (defensive review #4). When the underlying capability is absent (no
- * sessionCode → no sessionCwd, or no workspace projectPath), the relevant
- * button is disabled with an `aria-disabled` + tooltip explaining the gap.
+ * sessionCode → no sessionCwd), the button is disabled with an
+ * `aria-disabled` + tooltip explaining the gap.
  *
  * Focus trap is intentionally minimal — initial focus moves to the popup root
  * and ESC closes; tab order naturally cycles through the rendered buttons.
@@ -34,11 +30,9 @@ export interface FileNotFoundPopupProps {
 export function FileNotFoundPopup({
   spec,
   sessionCwd,
-  projectPath,
   onClose,
   onOpenPath,
   onSearchSessionCwd,
-  onSearchWorkspace,
 }: FileNotFoundPopupProps) {
   const t = useI18nStore((s) => s.t)
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -53,11 +47,10 @@ export function FileNotFoundPopup({
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  // Capability flags drive the CTA disabled state. We require BOTH ctx
+  // The capability flag drives the CTA disabled state. We require BOTH ctx
   // sessionCode AND a resolved sessionCwd because the daemon needs the code
   // to resolve the root server-side; missing either is a hard "can't search".
   const sessionCapable = !!spec.ctx.sessionCode && !!sessionCwd
-  const workspaceCapable = !!projectPath
 
   return (
     <div
@@ -98,24 +91,17 @@ export function FileNotFoundPopup({
         )}
 
         {spec.mode === 'expanded' && (
-          <div className="mb-4 space-y-3">
+          <div className="mb-4">
             <ExpandedSection
-              titleScope="session"
               rootLabel={sessionCwd ?? '(unknown)'}
               hits={spec.layer2Hits.map((h) => h.path)}
-              onOpenPath={onOpenPath}
-            />
-            <ExpandedSection
-              titleScope="workspace"
-              rootLabel={projectPath ?? '(unknown)'}
-              hits={spec.layer3Hits.map((h) => h.path)}
               onOpenPath={onOpenPath}
             />
           </div>
         )}
 
         {(spec.mode === 'ask-expand' || spec.mode === 'layer1-multi') && (
-          <div className="space-y-2 mb-4">
+          <div className="mb-4">
             <CtaButton
               label={t('file_not_found.search_session_cwd_label', { path: sessionCwd ?? '—' })}
               ariaLabel={t('file_not_found.search_session_cwd')}
@@ -126,17 +112,6 @@ export function FileNotFoundPopup({
                   : 'No active session — cannot search session cwd'
               }
               onClick={onSearchSessionCwd}
-            />
-            <CtaButton
-              label={t('file_not_found.search_workspace_path_label', { path: projectPath ?? '—' })}
-              ariaLabel={t('file_not_found.search_workspace_path')}
-              disabled={!workspaceCapable}
-              tooltip={
-                workspaceCapable
-                  ? undefined
-                  : 'Workspace projectPath not set — open Workspace settings to configure'
-              }
-              onClick={onSearchWorkspace}
             />
           </div>
         )}
@@ -185,20 +160,15 @@ function CtaButton({ label, ariaLabel, disabled, tooltip, onClick }: CtaButtonPr
 }
 
 interface ExpandedSectionProps {
-  titleScope: 'session' | 'workspace'
   rootLabel: string
   hits: string[]
   onOpenPath: (path: string) => void
 }
 
-function ExpandedSection({ titleScope, rootLabel, hits, onOpenPath }: ExpandedSectionProps) {
-  const heading =
-    titleScope === 'session'
-      ? `Session cwd: ${rootLabel}`
-      : `Workspace projectPath: ${rootLabel}`
+function ExpandedSection({ rootLabel, hits, onOpenPath }: ExpandedSectionProps) {
   return (
     <div>
-      <h4 className="text-xs uppercase text-text-muted mb-1">{heading}</h4>
+      <h4 className="text-xs uppercase text-text-muted mb-1">{`Session cwd: ${rootLabel}`}</h4>
       {hits.length === 0 ? (
         <p className="text-xs text-text-muted px-2 py-1">No matches.</p>
       ) : (

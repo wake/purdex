@@ -29,7 +29,7 @@ export interface FilePathOpenerDeps {
    * Resolve the cwd for the open-file context — usually the active session's
    * cwd. Used as the path-cache scope key (per-host, per-cwd). When unset
    * (no active session), the resolver may return null and the cwd field is
-   * filled from a sensible fallback (workspace projectPath / home).
+   * filled from a sensible fallback (the file's directory).
    */
   resolveOpenContextCwd(hostId: string, sessionCode?: string): string | null
 }
