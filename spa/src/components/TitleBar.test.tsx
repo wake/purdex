@@ -368,6 +368,40 @@ describe('TitleBar layout buttons', () => {
     })
   })
 
+  // Shell polish spec §4: the layout buttons leave focus on the pane (rule F), so the dialog they open takes it itself —
+  // onto its panel, not a button — and gives it back to the pane when it closes. A textarea stands in for the pane.
+  describe('a dialog opened from a layout button takes focus, and gives it back', () => {
+    const renderWithPane = () => render(<><textarea data-testid="pane" /><TitleBar title="t" /></>)
+    const pane = () => screen.getByTestId('pane')
+
+    it.each([
+      ['case 2 confirm', 'layout-apply', () => { setAgent('cc1'); showTab(splitOf('h', leafOf('ed', editor), leafOf('cc', terminal('cc1')))) }],
+      ['case 3 picker', 'layout-keep', () => showTab(splitOf('h', leafOf('ed', editor), leafOf('plain', terminal('plain'))))],
+    ] as const)('%s: a press and a click from the focused pane → the panel has focus; Cancel → the pane again', (_name, prefix, seed) => {
+      seed()
+      renderWithPane()
+      pane().focus()
+      expect(fireEvent.mouseDown(button(SINGLE))).toBe(false)
+      fireEvent.click(button(SINGLE))
+      expect(document.activeElement).toBe(screen.getByTestId(`${prefix}-panel`))
+      fireEvent.click(screen.getByTestId(`${prefix}-cancel`))
+      expect(screen.queryByTestId(`${prefix}-dialog`)).toBeNull()
+      expect(document.activeElement).toBe(pane())
+    })
+
+    it('Escape closes it and the pane has focus again', () => {
+      setAgent('cc1')
+      showTab(splitOf('h', leafOf('ed', editor), leafOf('cc', terminal('cc1'))))
+      renderWithPane()
+      pane().focus()
+      fireEvent.mouseDown(button(SINGLE))
+      fireEvent.click(button(SINGLE))
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+      expect(screen.queryByTestId('layout-apply-dialog')).toBeNull()
+      expect(document.activeElement).toBe(pane())
+    })
+  })
+
   // The dialog belongs to the tab it was opened for: once another tab is shown (a shortcut, a notification, a deep
   // link), applying it would rebuild a tab the user is not looking at.
   describe('the dialog closes when its tab is no longer active', () => {
@@ -399,6 +433,22 @@ describe('TitleBar layout buttons', () => {
       expect(screen.queryByRole('dialog')).toBeNull()
       expect(layoutNow()).toBe(before)
       expect(otherLayout()).toBe(otherBefore)
+    })
+
+    it('the new tab\'s pane took focus before the dialog closed → focus stays on it, not back on the old pane', () => {
+      showTwoTabs(splitOf('h', leafOf('ed', editor), leafOf('plain', terminal('plain'))))
+      render(<><textarea data-testid="old-pane" /><textarea data-testid="new-pane" /><TitleBar title="t" /></>)
+      screen.getByTestId('old-pane').focus()
+      fireEvent.click(button(SINGLE))
+      expect(document.activeElement).toBe(screen.getByTestId('layout-keep-panel'))
+
+      const newPane = screen.getByTestId('new-pane')
+      act(() => {
+        newPane.focus()
+        useTabStore.getState().setActiveTab(OTHER)
+      })
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(document.activeElement).toBe(newPane)
     })
 
     it('a tab switch that lands in the same click as Confirm applies nothing', () => {
@@ -508,6 +558,15 @@ describe('TitleBar layout buttons', () => {
     const agentsNow = (...codes: string[]) =>
       act(() => useAgentStore.setState({ agentTypes: Object.fromEntries(codes.map((c) => [compositeKey(HOST, c), 'cc'])) }))
     const threeTerminals = () => splitOf('h', leafOf('a', terminal('a')), leafOf('b', terminal('b')), leafOf('c', terminal('c')))
+    /**
+     * Pending timers, once jsdom's own zero-delay ones have run: every `focus()` queues its `selectionchange` event on a
+     * `setTimeout(0)`, and the dialog focuses its panel each time it opens (shell polish spec §4). The lock timer is
+     * `REPLAN_CONFIRM_LOCK_MS` long, so a zero-length tick never fires it.
+     */
+    const pendingTimers = () => {
+      act(() => { vi.advanceTimersByTime(0) })
+      return vi.getTimerCount()
+    }
     /** Two clicks at the same place: each finds whatever Confirm is there by then. */
     const clickTwice = (prefix: string) => {
       fireEvent.click(confirmButton(prefix))
@@ -597,13 +656,13 @@ describe('TitleBar layout buttons', () => {
       render(<TitleBar title="t" />)
       fireEvent.click(button(SINGLE))
       agentsNow('b')
-      const othersTimers = vi.getTimerCount()
+      const othersTimers = pendingTimers()
       fireEvent.click(confirmButton('layout-apply'))
       expect(confirmButton('layout-apply').disabled).toBe(true)
-      expect(vi.getTimerCount()).toBe(othersTimers + 1)
+      expect(pendingTimers()).toBe(othersTimers + 1)
 
       fireEvent.click(screen.getByTestId('layout-apply-cancel'))
-      expect(vi.getTimerCount()).toBe(othersTimers)
+      expect(pendingTimers()).toBe(othersTimers)
       fireEvent.click(button(SINGLE))
       expect(confirmButton('layout-apply').disabled).toBe(false)
       fireEvent.click(confirmButton('layout-apply'))
@@ -616,11 +675,11 @@ describe('TitleBar layout buttons', () => {
       const { unmount } = render(<TitleBar title="t" />)
       fireEvent.click(button(SINGLE))
       agentsNow('b')
-      const othersTimers = vi.getTimerCount()
+      const othersTimers = pendingTimers()
       fireEvent.click(confirmButton('layout-apply'))
-      expect(vi.getTimerCount()).toBe(othersTimers + 1)
+      expect(pendingTimers()).toBe(othersTimers + 1)
       unmount()
-      expect(vi.getTimerCount()).toBe(othersTimers)
+      expect(pendingTimers()).toBe(othersTimers)
     })
   })
 })

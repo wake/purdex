@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { PaneModeButtons } from './PaneModeButtons'
+import { HandoffDialogHost } from '../HandoffDialogHost'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useAgentStore } from '../../stores/useAgentStore'
@@ -307,6 +308,32 @@ describe('PaneModeButtons — a mouse press keeps focus where it was', () => {
     fireEvent.mouseDown(button('Chat'))
     fireEvent.click(button('Chat'))
     expect(contentOf(TARGET)).toEqual(exec('exc_target', { mode: 'chat' }))
+  })
+
+  // Shell polish spec §4: the press leaves focus on the pane, so the Hand to Nex confirm (the app-level
+  // `HandoffDialogHost`, opened through the store) takes it itself — onto its panel, not a button, so Enter does not
+  // reach the pane's input — and gives it back to the pane when it closes. A textarea stands in for the pane.
+  it.each([
+    ['Cancel', () => fireEvent.click(screen.getByTestId('handoff-cancel'))],
+    ['Escape', () => fireEvent.keyDown(document.activeElement!, { key: 'Escape' })],
+  ] as const)('worker on a candidate: the dialog panel takes focus from the pane; %s gives it back', (_name, close) => {
+    seedReady()
+    agents({ prim01: 'cc', targ01: 'cc' })
+    render(
+      <>
+        <textarea data-testid="pane" />
+        <PaneModeButtons tabId={TAB} pane={seedTab(tmux('prim01'), tmux('targ01'))} />
+        <HandoffDialogHost />
+      </>,
+    )
+    const pane = screen.getByTestId('pane')
+    pane.focus()
+    expect(fireEvent.mouseDown(button('Worker room'))).toBe(false)
+    fireEvent.click(button('Worker room'))
+    expect(document.activeElement).toBe(screen.getByTestId('handoff-panel'))
+    close()
+    expect(screen.queryByTestId('handoff-dialog')).toBeNull()
+    expect(document.activeElement).toBe(pane)
   })
 })
 
