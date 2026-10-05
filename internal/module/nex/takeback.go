@@ -278,6 +278,9 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Mark S and wait for the terminal's frame before the exit (PR #1586 C2).
+	m.afterResume(parent, "takeback", sid)
+
 	// The terminal is now the writer of that transcript: the worker exits
 	// under the transfer's control (terminate + archive). The resume
 	// succeeded, so the answer is 200 either way; a worker that could not

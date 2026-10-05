@@ -281,6 +281,10 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The terminal owns S: mark it, and wait for its frame to be visible so
+	// the next owner check sees it (PR #1586 C2). The exit comes after.
+	m.afterResume(parent, "take-to-terminal", sid)
+
 	// Step 12 (§4.3): the terminal owns S now; the worker it was exits,
 	// under the transfer's control. The resume succeeded, so the answer is
 	// 200 either way: the SPA must swap the pane to the terminal that now

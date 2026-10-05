@@ -115,6 +115,12 @@ type Module struct {
 	engineTerminateTimeout time.Duration // Service.Terminate (retries interrupt up to 3 times)
 	leaseCleanupTimeout    time.Duration // ReleaseLease, under its own fresh context
 
+	// After a successful resume (recent_resume.go): poll for the terminal's
+	// frame, and remember S as just resumed.
+	ownerVisiblePoll    time.Duration
+	ownerVisibleTimeout time.Duration
+	recentResumes       recentResumeSet
+
 	assemble assembleFn        // default realAssemble; test seam
 	isDir    func(string) bool // default statIsDir; test seam
 	logf     func(string, ...any)

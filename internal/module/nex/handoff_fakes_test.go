@@ -717,6 +717,8 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 		handoffExitTimeout:      100 * time.Millisecond,
 		rollbackWait:            2 * time.Second,
 		rollbackPoll:            5 * time.Millisecond,
+		ownerVisiblePoll:        2 * time.Millisecond,
+		ownerVisibleTimeout:     20 * time.Millisecond,
 		delegateTimeout:         2 * time.Second,
 		engineOpTimeout:         2 * time.Second,
 		engineInterruptTimeout:  2 * time.Second,

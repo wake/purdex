@@ -85,9 +85,17 @@ func sidLockKey(sid string) string { return "sid:" + sid }
 // allowPane name that owner ("" = none).
 // 409 session_owned {owner: "terminal", session_id, tmux_pane_id} |
 // {owner: "worker", session_id, execution_id, state};
+// {owner: "terminal", session_id, recent_resume: true} (just resumed, frame not yet recorded);
 // 503 owner_check_failed when either lookup errs (a truncated worker scan
 // counts as an error).
 func (m *Module) checkOwners(parent context.Context, sid, allowExec, allowPane string) *handoffError {
+	// A resume that just succeeded may not have its terminal frame recorded
+	// yet. Handoff (allowPane != "") transfers the terminal itself, so only
+	// the other callers are held back by the marker.
+	if allowPane == "" && m.recentlyResumed(sid) {
+		return &handoffError{http.StatusConflict, "session_owned", "this conversation was just resumed in a terminal",
+			map[string]any{"owner": "terminal", "session_id": sid, "recent_resume": true}}
+	}
 	ctx, cancel := detachedContext(parent, m.engineOpTimeout)
 	terms, err := m.terminals.LiveBySessionID(ctx, "cc", sid)
 	cancel()
