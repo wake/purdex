@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.486] - 2026-10-06
+
+> 只有 SPA，走 HMR；daemon 與 Electron 不必更新。標題列與狀態列 mode 鈕開出的確認框，請在 Electron 上點一次確認（見 #1566 的 review 紀錄）。
+
+### Feature：側欄 Worker 清單加上標題列與關閉鈕（#1566）
+
+- 寬版側欄的 Worker 區塊頂端多一行「Workers」，右邊是 ×，按下就收起清單，跟按底部的閃電鈕一樣；捲動清單時標題列不動。窄版的浮動面板本來就有，兩邊現在一致。
+- 標題列算在原本可拖曳的高度內，記住的高度不變；最小高度 96 時清單區仍有 66 px。
+
+### Fix：點殼層按鈕不再搶走 pane 的 focus（#1566）
+
+- 以前用滑鼠點底部按鈕（新增工作區、Workers、主機、設定、收合切換）、標題列（版型、側欄切換）或狀態列（terminal／worker／chat、可複製的欄位、重新整理）之後，focus 會停在按鈕上：下一個按鍵就冒出外框，按空白鍵還會再觸發一次（例如 Worker 清單又被切換）。現在點完 focus 留在原本的 pane，繼續打字就會進到 pane。鍵盤操作（Tab、Enter、空白）不變。
+- 確認框（套用版型、交給 nex 等）打開時會拿走 focus，Tab 只在框內循環，Enter 不會誤送出 pane 裡的草稿；關掉後 focus 回到原本的 pane。
+- 切到別的分頁時，舊分頁裡的 focus 與選取範圍會放掉。Safari／WebKit 以前會把之後的按鍵打進已經看不見的輸入框，現在不會（Electron 本來就不會）。
+
+### Internal
+
+- 新增 `lib/keep-focus.ts`（mousedown 時 `preventDefault`），套在殼層按鈕上。
+- `ConfirmDialog`：開啟時 focus 面板本身（不預選按鈕）、Tab 圈在框內、關閉時 focus 仍在框內才還原。
+- `TabContent`：分頁從 active 變 inactive 時，若 focus 或選取範圍在它裡面，就 blur 並清掉選取範圍（在 layout effect 執行，早於新分頁的 activation focus）。
+- spec／plan：`docs/specs/2026-10-06-shell-polish-spec.md`、`docs/plans/2026-10-06-shell-polish-plan.md`。
+
 ## [1.0.0-alpha.485] - 2026-10-06
 
 > 要重新部署 daemon（內嵌 Nexen 升到 v0.16.1，不必刪 nex.db）；mlab 已在 2026-10-06 部署（`6e6ed9c7`）。SPA 走 HMR。air26 的 Nexen 是關的，不受影響。
