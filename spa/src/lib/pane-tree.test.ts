@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, swapPaneContent, remountLeaf, countPanesOnSession } from './pane-tree'
+import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, currentLayoutPattern, swapPaneContent, remountLeaf, countPanesOnSession } from './pane-tree'
 import type { PaneLayout, Pane, PaneContent } from '../types/tab'
 import { useHostStore } from '../stores/useHostStore'
 
@@ -393,6 +393,78 @@ describe('applyLayoutPattern', () => {
     }
   })
 
+  // ── keepIds: the exact survivor set (shell cleanup spec §10, rule D.1a) ──
+  const leafIds = (l: PaneLayout) => collectLeaves(l).map((p) => p.id)
+
+  it('keepIds: single keeps the one listed pane, not the first leaf', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2'), mkLeaf('p3')])
+    const result = applyLayoutPattern(layout, 'single', ['p2'])
+    expect(result.type).toBe('leaf')
+    expect(leafIds(result)).toEqual(['p2'])
+  })
+
+  it('keepIds: survivors are placed in layout order, whatever order keepIds lists them in', () => {
+    const layout = mkSplit('s1', 'v', [mkLeaf('p1'), mkSplit('s2', 'h', [mkLeaf('p2'), mkLeaf('p3')])])
+    const result = applyLayoutPattern(layout, 'split-h', ['p3', 'p1'])
+    expect(result.type === 'split' && result.direction).toBe('h')
+    expect(leafIds(result)).toEqual(['p1', 'p3'])
+  })
+
+  it('keepIds: a missing slot is filled with a fresh new-tab pane, and nothing outside keepIds survives', () => {
+    const layout = mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2'), mkLeaf('p3')])
+    const result = applyLayoutPattern(layout, 'split-v', ['p3'])
+    const leaves = collectLeaves(result)
+    expect(leaves).toHaveLength(2)
+    expect(leaves[0].id).toBe('p3')
+    expect(leaves[1].content).toEqual({ kind: 'new-tab' })
+    expect(['p1', 'p2']).not.toContain(leaves[1].id)
+  })
+
+  it('keepIds: an empty set leaves only blank panes', () => {
+    const result = applyLayoutPattern(mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2')]), 'single', [])
+    expect(result.type === 'leaf' && result.pane.content).toEqual({ kind: 'new-tab' })
+    expect(leafIds(result)).not.toContain('p1')
+  })
+
+  it('keepIds: ids not in the layout are ignored', () => {
+    const result = applyLayoutPattern(mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2')]), 'split-v', ['gone', 'p2'])
+    const leaves = collectLeaves(result)
+    expect(leaves[0].id).toBe('p2')
+    expect(leaves[1].content).toEqual({ kind: 'new-tab' })
+  })
+
+  it('keepIds: survivors keep their pane object (content and id) untouched', () => {
+    const layout = mkSplit('s1', 'h', [{ type: 'leaf', pane: paneB }, { type: 'leaf', pane: paneA }])
+    const result = applyLayoutPattern(layout, 'single', [paneA.id])
+    expect(result.type === 'leaf' && result.pane).toBe(paneA)
+  })
+})
+
+// ── currentLayoutPattern ──────────────────────────────────────────────────────
+describe('currentLayoutPattern', () => {
+  it('a leaf → single', () => {
+    expect(currentLayoutPattern(mkLeaf('p1'))).toBe('single')
+  })
+
+  it('a horizontal split of two leaves → split-h', () => {
+    expect(currentLayoutPattern(mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2')]))).toBe('split-h')
+  })
+
+  it('a vertical split of two leaves → split-v', () => {
+    expect(currentLayoutPattern(mkSplit('s1', 'v', [mkLeaf('p1'), mkLeaf('p2')]))).toBe('split-v')
+  })
+
+  it('a split with three leaves → null', () => {
+    expect(currentLayoutPattern(mkSplit('s1', 'h', [mkLeaf('p1'), mkLeaf('p2'), mkLeaf('p3')]))).toBeNull()
+  })
+
+  it('a split of two whose child is itself a split → null', () => {
+    expect(currentLayoutPattern(mkSplit('s1', 'h', [mkLeaf('p1'), mkSplit('s2', 'v', [mkLeaf('p2'), mkLeaf('p3')])]))).toBeNull()
+  })
+
+  it('a split with one leaf child → null', () => {
+    expect(currentLayoutPattern(mkSplit('s1', 'v', [mkLeaf('p1')]))).toBeNull()
+  })
 })
 
 describe('remountLeaf', () => {
