@@ -87,3 +87,18 @@ func TestRestartStillWanted_StopsDeliveryThenDrains(t *testing.T) {
 		t.Fatalf("logs = %v", logs)
 	}
 }
+
+// A signal delivered just before signal.Stop returns lands in sig during
+// stop(). Stopping first and draining second catches it; the reverse
+// order (drain, then stop) would miss it and re-exec under `pdx stop`.
+func TestRestartStillWanted_SignalLandingDuringStopIsSeen(t *testing.T) {
+	sig := make(chan os.Signal, 1)
+	stop := func() { sig <- syscall.SIGTERM }
+	var logs []string
+	if restartStillWanted(sig, stop, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }) {
+		t.Fatal("a signal landing during stop must turn the restart into a stop")
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0], "exiting instead of restarting") {
+		t.Fatalf("logs = %v", logs)
+	}
+}

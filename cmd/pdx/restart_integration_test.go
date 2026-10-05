@@ -17,11 +17,9 @@ import (
 	"time"
 )
 
-// (codex plan review #3: codexbroker's default socket glob reads the real
-// /var/folders/*/*/T; PDX_CODEX_* point it at the temp dir. Before relying on
-// the env list in isolatedEnv, read registerServeModules (cmd/pdx/main.go
-// ~267-300) and add an override for anything else that reaches outside
-// HOME/TMUX_TMPDIR/data_dir.)
+// Isolation audit done: every path a module reaches is covered by isolatedEnv
+// except /tmp/cc-socks (peers helperSockDir, not overridable), which is
+// unreachable because the test sends no peer message.
 
 // TestMain doubles as the daemon: the integration test starts this test
 // binary with PDX_RESTART_HELPER=1 and `serve` args, and a restart re-execs
@@ -76,7 +74,7 @@ func waitBootID(t *testing.T, base, not string, timeout time.Duration) string {
 // isolatedEnv is os.Environ() minus every key the helper daemon must not
 // inherit, plus the overrides — built explicitly rather than appended so no
 // duplicate key decides which value wins (codex plan review #3).
-func isolatedEnv(dir string) []string {
+func isolatedEnv(dir, tmuxDir string) []string {
 	drop := map[string]bool{"HOME": true, "TMUX": true, "TMUX_PANE": true, "TMUX_TMPDIR": true,
 		"PDX_DEV_MODE": true, "PDX_RESTART_HELPER": true, "PDX_CODEX_STATE_ROOT": true, "PDX_CODEX_SOCKET_ROOTS": true}
 	var env []string
@@ -90,18 +88,20 @@ func isolatedEnv(dir string) []string {
 	return append(env,
 		"PDX_RESTART_HELPER=1",
 		"HOME="+dir,                     // every ~/... a module touches (~/.claude, ~/.codex, …)
-		"TMUX_TMPDIR="+dir,              // tmux calls hit a private, absent server — never the user's sessions
+		"TMUX_TMPDIR="+tmuxDir,          // tmux calls hit a private, absent server — never the user's sessions
 		"PDX_CODEX_STATE_ROOT="+codex,   // codexbroker state …
 		"PDX_CODEX_SOCKET_ROOTS="+codex, // … and its socket glob (default globs the real /var/folders/*/*/T)
 		"PDX_DEV_MODE=0",                // observable env: dev routes stay off across the re-exec (D3)
 	)
 }
 
+var itestClient = &http.Client{Timeout: 5 * time.Second}
+
 func devCheckStatus(t *testing.T, base string) int {
 	t.Helper()
 	req, _ := http.NewRequest("GET", base+"/api/dev/daemon/check", nil)
 	req.Header.Set("Authorization", "Bearer itest-token")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := itestClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,14 @@ func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(os.Args[0], "serve", "--config", cfgPath)
-	cmd.Env = isolatedEnv(dir)
+	// Short path: a long t.TempDir under /var/folders can exceed the ~104-byte
+	// unix socket limit if tmux ever starts.
+	tmuxDir, err := os.MkdirTemp("", "pdxt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmuxDir) })
+	cmd.Env = isolatedEnv(dir, tmuxDir)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -135,6 +142,7 @@ func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 	t.Cleanup(func() {
+		defer logFile.Close()
 		cmd.Process.Signal(syscall.SIGTERM)
 		select {
 		case <-exited:
@@ -156,7 +164,7 @@ func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
 
 	req, _ := http.NewRequest("POST", base+"/api/daemon/restart", nil)
 	req.Header.Set("Authorization", "Bearer itest-token")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := itestClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

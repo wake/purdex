@@ -108,6 +108,7 @@ func (t *fakeTarget) CloseModules() error {
 type fakeServer struct {
 	rec         *recorder
 	serveErr    error
+	lateErr     error // if set, Serve returns it (not ErrServerClosed) once released
 	shutdownErr error
 	done        chan struct{}
 	closeOnce   sync.Once
@@ -124,6 +125,9 @@ func (s *fakeServer) Serve(net.Listener) error {
 		return s.serveErr
 	}
 	<-s.done
+	if s.lateErr != nil {
+		return s.lateErr
+	}
 	return http.ErrServerClosed
 }
 
@@ -226,6 +230,19 @@ func equalSteps(got, want []string) bool {
 }
 
 const testBudget = time.Second
+
+// recvOrFail receives from ch, failing fast instead of hanging to the go
+// test timeout if a deadlock keeps the value from ever arriving.
+func recvOrFail[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		panic("unreachable")
+	}
+}
 
 // waitForLog polls the harness log until a line containing substr appears.
 func waitForLog(t *testing.T, h *harness, substr string) {
@@ -937,12 +954,15 @@ func TestServeAndWait_SignalDuringRestartCancelsRestart(t *testing.T) {
 	h.target.stopHook = func(context.Context) { close(entered); <-unblock }
 	h.restart <- struct{}{}
 	out := h.runAsync(testBudget)
-	<-entered
+	recvOrFail(t, entered, "StopModules/CloseModules to start")
 	h.sig <- syscall.SIGTERM // `pdx stop` while the restart's shutdown runs
 	waitForLog(t, h, "exiting instead of restarting")
 	close(unblock)
-	if err := <-out; err != nil {
+	if err := recvOrFail(t, out, "serveAndWait to return"); err != nil {
 		t.Fatalf("serveAndWait returned %v, want nil (a stop, not a restart)", err)
+	}
+	if h.rec.count("CloseModules") != 1 {
+		t.Fatalf("first signal must not skip CloseModules: steps = %v", h.rec.names())
 	}
 	if len(h.exited()) != 0 {
 		t.Fatalf("first signal must not force exit: %v", h.exited())
@@ -956,19 +976,22 @@ func TestServeAndWait_TwoSignalsDuringRestartExitImmediately(t *testing.T) {
 	h.target.stopHook = func(context.Context) { close(entered); <-unblock }
 	h.restart <- struct{}{}
 	out := h.runAsync(testBudget)
-	<-entered
+	recvOrFail(t, entered, "StopModules/CloseModules to start")
 	h.sig <- syscall.SIGTERM
 	waitForLog(t, h, "exiting instead of restarting")
 	h.sig <- syscall.SIGTERM
 	waitForExit(t, h, 130)
 	close(unblock)
-	<-out
+	if err := recvOrFail(t, out, "serveAndWait to return"); err != nil {
+		t.Fatalf("serveAndWait returned %v, want nil (restart cancelled by the first signal)", err)
+	}
 }
 
 // A signal at the TAIL of the sequence (during CloseModules) must still
-// cancel the restart. The decision may only be read once the watcher has
-// exited, or a signal the watcher has taken but not yet recorded is lost
-// and the daemon re-execs under `pdx stop`.
+// cancel the restart. This pins that behaviour only; it does not prove the
+// watcher join (<-watcherDone before reading restartCancelled), which is
+// correct by construction — the log line happens-after the Store, so the
+// test passes with or without the join.
 func TestServeAndWait_SignalDuringCloseModulesCancelsRestart(t *testing.T) {
 	h := newHarness()
 	unblock := make(chan struct{})
@@ -976,11 +999,28 @@ func TestServeAndWait_SignalDuringCloseModulesCancelsRestart(t *testing.T) {
 	h.target.closeHook = func() { close(entered); <-unblock }
 	h.restart <- struct{}{}
 	out := h.runAsync(testBudget)
-	<-entered
+	recvOrFail(t, entered, "StopModules/CloseModules to start")
 	h.sig <- syscall.SIGTERM
 	waitForLog(t, h, "exiting instead of restarting")
 	close(unblock)
-	if err := <-out; err != nil {
+	if err := recvOrFail(t, out, "serveAndWait to return"); err != nil {
 		t.Fatalf("serveAndWait returned %v, want nil", err)
 	}
+	if h.rec.count("CloseModules") != 1 {
+		t.Fatalf("CloseModules not recorded once: steps = %v", h.rec.names())
+	}
+}
+
+// A real Serve error that surfaces during a restart is logged, not lost
+// behind errRestart (F4).
+func TestServeAndWait_RestartLogsRealServeError(t *testing.T) {
+	h := newHarness()
+	h.srv.lateErr = errors.New("accept boom")
+	h.restart <- struct{}{}
+	out := h.runAsync(testBudget)
+	err := recvOrFail(t, out, "serveAndWait to return")
+	if !errors.Is(err, errRestart) {
+		t.Fatalf("serveAndWait returned %v, want errRestart", err)
+	}
+	waitForLog(t, h, "server error during restart: accept boom")
 }

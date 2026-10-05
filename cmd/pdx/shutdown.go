@@ -117,7 +117,8 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 			case s := <-sig:
 				if restartTriggered {
 					restartCancelled.Store(true)
-					logf("received %v during restart; exiting instead of restarting (send again to exit immediately)", s)
+					logf("received %v during restart; exiting instead of "+
+						"restarting (send again to exit immediately)", s)
 				} else {
 					logf("received %v during shutdown; send again to exit immediately", s)
 				}
@@ -158,6 +159,9 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	close(done)
 	<-watcherDone // a signal the watcher took is now recorded in restartCancelled
 	if restartTriggered && !restartCancelled.Load() {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logf("server error during restart: %v", err)
+		}
 		return errRestart
 	}
 
