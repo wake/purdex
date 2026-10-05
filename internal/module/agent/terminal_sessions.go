@@ -16,8 +16,11 @@ const TerminalSessionsKey = "agent.terminal-sessions"
 type TerminalSession struct {
 	FrameID, PaneID, AgentType, SessionID, Cwd, TranscriptPath string
 	// Verified is true when the pid is alive AND its start time matched the
-	// recorded one. False means "alive, start time unreadable": an owner check
-	// counts it (conservative), the Q1 handler does not act on it alone.
+	// recorded one. False means "alive, start time unreadable": it is NOT an
+	// owner under spec D1, but the session is not provably free either. An
+	// owner check therefore answers 503 owner_check_failed (retryable) rather
+	// than "owned" or "free", and the manual-resume handler does not act on it.
+	// (That behaviour lands in Task 7; this type only records the distinction.)
 	Verified bool
 }
 
