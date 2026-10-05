@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.0-alpha.485] - 2026-10-06
+
+> 要重新部署 daemon（內嵌 Nexen 升到 v0.16.1，不必刪 nex.db）；mlab 已在 2026-10-06 部署（`6e6ed9c7`）。SPA 走 HMR。air26 的 Nexen 是關的，不受影響。
+
+### Feature：交接前內容裡，在終端機貼上的文字收成可展開的區塊（#1564）
+
+- 在終端機貼上的大段文字，不再連同 `<pasted_content …>` 標籤整段攤開，改成一個標題「貼上的文字 · N 行」的區塊。短的直接全部顯示，長的只露出開頭幾行，點一下看全文；同一則訊息裡自己打的字照常顯示在前後。
+- 被 daemon 截斷（超過 64 KB）的貼上，標題寫「N+ 行」，後面一條「只顯示前 64 KB（共 75 KB）」提示，數字是整則訊息實際顯示的大小。
+- 搜尋（Cmd+F）找得到貼上內容裡的字，命中時區塊自動展開。
+- room 和 chat 都一樣；chat 裡貼上的區塊在你這一側（右邊）。只影響交接前的內容，worker 自己的對話不變。
+
+### Fix：交接前內容補上 `/model` 這類指令、`!` 大輸出不再露出標籤（#1563）
+
+- 在終端機打的 `/model` 這類指令（Claude Code 2.1.289 改用另一種紀錄格式）現在會顯示在交接前內容裡，下面接它的輸出（例如「Kept model as Opus 5.5」）。
+- `!seq 1 20000` 這種超大輸出不再露出 `<persisted-output>` 標籤，直接顯示「Output too large (106.3KB)…」與預覽。
+
+### Internal
+
+- Nexen pin v0.16.0 → v0.16.1（`system`/`local_command` 行改寫成 slash command＋`command_output` note；bash 串流裡的 `<persisted-output>` 包裝剝一層；schema 仍是 v6）。
+- `lib/nex/pasted-text.ts`：照 Claude Code 2.1.289 自己的解析規則拆貼上內容。結尾標籤帶同一個 id（`</pasted_content id="hhhh">`），所以內容裡字面上的結尾標籤不會提早結束；第一版誤以為結尾不帶 id，review 後讀 CLI 原始碼才更正。截斷提示用 SPA 內部欄位 `shown_bytes` 報整則訊息的大小。
+- spec §2 新增使用者決定 U3（貼上文字的呈現）、§5.3 對應規則；plan Task 11。
+- follow-up：nexen #112（剝掉 `<persisted-output>` 後內文開頭留一個換行）。
+
 ## [1.0.0-alpha.484] - 2026-10-06
 
 > SPA 走 HMR；daemon 要是內嵌 Nexen v0.16.0 的版本（#1554，482 起）。mlab 已在 2026-10-05 部署（`3d7390af`）。air26 的 Nexen 是關的，不受影響。
