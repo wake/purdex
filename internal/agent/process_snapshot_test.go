@@ -302,6 +302,49 @@ func TestProcessSnapshot_ForkCount(t *testing.T) {
 	}
 }
 
+// The owner walk asks only for PPIDs. PPID answers from the table alone: no
+// argument read, so no ps fork even for an argv the fast path cannot take,
+// and no identity re-check.
+func TestProcessSnapshot_PPID(t *testing.T) {
+	pids := map[string]int{
+		"self":             os.Getpid(),
+		"parent":           os.Getppid(),
+		"sleep":            startProcess(t, exec.Command("sleep", "30")),
+		"non-ASCII helper": startHelper(t, []string{"snap-helper", "中文"}),
+	}
+	want := make(map[string]int, len(pids))
+	for name, pid := range pids {
+		info, err := ReadProcessInfo(pid)
+		if err != nil {
+			t.Fatalf("ReadProcessInfo(%s %d): %v", name, pid, err)
+		}
+		want[name] = info.PPID
+	}
+
+	forks := countPSForks(t)
+	var rechecks atomic.Int64
+	orig := kernProcPid
+	kernProcPid = func(pid int) (*unix.KinfoProc, error) {
+		rechecks.Add(1)
+		return orig(pid)
+	}
+	t.Cleanup(func() { kernProcPid = orig })
+
+	snap := takeSnapshot(t)
+	for name, pid := range pids {
+		got, err := snap.PPID(pid)
+		if err != nil || got != want[name] {
+			t.Errorf("PPID(%s %d) = %d, %v; want the per-PID reader's %d", name, pid, got, err, want[name])
+		}
+	}
+	if got := forks.Load(); got != 0 {
+		t.Fatalf("snapshot + PPID of self, parent, sleep and a non-ASCII argv forked ps %d times, want 0", got)
+	}
+	if got := rechecks.Load(); got != 0 {
+		t.Fatalf("PPID re-checked identity %d times, want 0", got)
+	}
+}
+
 func TestProcessSnapshot_IdentityRecheck_ProcessGone(t *testing.T) {
 	cmd := exec.Command("sleep", "30")
 	pid := startProcess(t, cmd)
@@ -455,6 +498,9 @@ func TestProcessSnapshot_MissingPID(t *testing.T) {
 	if _, err := snap.StartTime(999999); !errors.Is(err, ErrNotInSnapshot) {
 		t.Fatalf("StartTime(999999): err = %v, want ErrNotInSnapshot", err)
 	}
+	if _, err := snap.PPID(999999); !errors.Is(err, ErrNotInSnapshot) {
+		t.Fatalf("PPID(999999): err = %v, want ErrNotInSnapshot", err)
+	}
 
 	for _, pid := range []int{0, -1} {
 		if snap.Alive(pid) {
@@ -465,6 +511,9 @@ func TestProcessSnapshot_MissingPID(t *testing.T) {
 		}
 		if _, err := snap.StartTime(pid); err == nil || errors.Is(err, ErrNotInSnapshot) {
 			t.Fatalf("StartTime(%d): err = %v, want a plain invalid pid error", pid, err)
+		}
+		if _, err := snap.PPID(pid); err == nil || !strings.Contains(err.Error(), "invalid pid") {
+			t.Fatalf("PPID(%d): err = %v, want a plain invalid pid error", pid, err)
 		}
 	}
 }

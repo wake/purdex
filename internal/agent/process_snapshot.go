@@ -24,15 +24,20 @@ var (
 )
 
 // ProcessView answers the process questions an owner walk or a registry read
-// asks, as one point-in-time view for one pass. Alive, StartTime and the PPID
-// in Read describe the process table at one moment, so every frame and entry
-// in the pass is judged against the same table, the way a per-PID reader
-// judged each one against the table at the moment of its own read.
+// asks, as one point-in-time view for one pass. Alive, StartTime and PPID (in
+// Read too) describe the process table at one moment, so every frame and
+// entry in the pass is judged against the same table, the way a per-PID
+// reader judged each one against the table at the moment of its own read.
 type ProcessView interface {
 	Alive(pid int) bool
 	// StartTime is the trimmed text `ps -p <pid> -o lstart=` prints, which
 	// is what store.Frame.ProcessStartTime holds.
 	StartTime(pid int) (string, error)
+	// PPID is the parent the table saw for pid, at the snapshot's moment. It
+	// reads no arguments and re-checks no identity, so it never forks: an
+	// owner walk needs only this, at every step, and judges each step as of
+	// that moment.
+	PPID(pid int) (int, error)
 	// Read returns what ReadProcessInfo returns for pid, field by field.
 	Read(pid int) (ProcessInfo, error)
 }
@@ -93,6 +98,14 @@ func (s *ProcessSnapshot) StartTime(pid int) (string, error) {
 		return "", err
 	}
 	return e.lstart, nil
+}
+
+func (s *ProcessSnapshot) PPID(pid int) (int, error) {
+	e, err := s.entry(pid)
+	if err != nil {
+		return 0, err
+	}
+	return e.ppid, nil
 }
 
 func (s *ProcessSnapshot) Read(pid int) (ProcessInfo, error) {

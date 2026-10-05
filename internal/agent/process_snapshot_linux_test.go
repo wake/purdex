@@ -159,6 +159,9 @@ func TestProcessSnapshot_MissingPID(t *testing.T) {
 	if _, err := snap.StartTime(never); !errors.Is(err, ErrNotInSnapshot) {
 		t.Fatalf("StartTime(%d): err = %v, want ErrNotInSnapshot", never, err)
 	}
+	if _, err := snap.PPID(never); !errors.Is(err, ErrNotInSnapshot) {
+		t.Fatalf("PPID(%d): err = %v, want ErrNotInSnapshot", never, err)
+	}
 
 	for _, pid := range []int{0, -1} {
 		if snap.Alive(pid) {
@@ -170,6 +173,38 @@ func TestProcessSnapshot_MissingPID(t *testing.T) {
 		if _, err := snap.StartTime(pid); err == nil || errors.Is(err, ErrNotInSnapshot) {
 			t.Fatalf("StartTime(%d): err = %v, want a plain invalid pid error", pid, err)
 		}
+		if _, err := snap.PPID(pid); err == nil || !strings.Contains(err.Error(), "invalid pid") {
+			t.Fatalf("PPID(%d): err = %v, want a plain invalid pid error", pid, err)
+		}
+	}
+}
+
+// PPID answers from the table alone, so it adds no fork to the snapshot's one.
+func TestProcessSnapshot_PPID(t *testing.T) {
+	pids := map[string]int{
+		"self":   os.Getpid(),
+		"parent": os.Getppid(),
+		"sleep":  startProcess(t, exec.Command("sleep", "30")),
+	}
+	want := make(map[string]int, len(pids))
+	for name, pid := range pids {
+		info, err := ReadProcessInfo(pid)
+		if err != nil {
+			t.Fatalf("ReadProcessInfo(%s %d): %v", name, pid, err)
+		}
+		want[name] = info.PPID
+	}
+
+	forks := countPSForks(t)
+	snap := takeSnapshot(t)
+	for name, pid := range pids {
+		got, err := snap.PPID(pid)
+		if err != nil || got != want[name] {
+			t.Errorf("PPID(%s %d) = %d, %v; want the per-PID reader's %d", name, pid, got, err, want[name])
+		}
+	}
+	if got := forks.Load(); got != 1 {
+		t.Fatalf("snapshot + PPID of self, parent and sleep forked ps %d times, want 1 (the table)", got)
 	}
 }
 
@@ -290,6 +325,10 @@ func TestProcessSnapshot_UnverifiableIdentity(t *testing.T) {
 			}
 			if got, err := snap.StartTime(sleepPID); err != nil || got != lstart {
 				t.Fatalf("StartTime = %q, %v; want ps's %q", got, err, lstart)
+			}
+			// sleep is this test's child, and ps's row says so.
+			if got, err := snap.PPID(sleepPID); err != nil || got != os.Getpid() {
+				t.Fatalf("PPID = %d, %v; want ps's %d", got, err, os.Getpid())
 			}
 		})
 	}
