@@ -19,7 +19,6 @@ import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalo
 import { startHostReshowRecovery } from './lib/rebuild/host-reshow'
 import { scheduleLegacyResidueCleanup } from './lib/legacy-residue-cleanup'
 import { startActiveTabMarkRead } from './lib/active-tab-mark-read'
-import { useLayoutStore } from './stores/useLayoutStore'
 
 // Locales / themes are also registered by useI18nStore / useThemeStore before their persist
 // hydrates (#1385) — by the time this line runs, those stores already exist. These calls are
@@ -63,8 +62,6 @@ startStandaloneAdoption()
 // Shown hosts (host ownership H2d-4): showing a host again — by its switch or a synced apply — recovers its sessions
 // once per daemon, so a revivable pane comes back without waiting for a `sessions` frame (app lifetime).
 startHostReshowRecovery()
-
-useLayoutStore.getState().reconcileViews()
 
 // Cross-store subscription: auto-markRead when the active tab changes to a session or a worker (app lifetime).
 startActiveTabMarkRead()
