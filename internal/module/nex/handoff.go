@@ -31,6 +31,8 @@ const (
 	// the engine's verdict — not a bare deadline — is what the caller sees.
 	defaultEngineInterruptTimeout = 20 * time.Second
 	defaultLeaseCleanupTimeout    = 5 * time.Second // ReleaseLease
+	// Service.Terminate loops stall -> interrupt -> write up to 3 times.
+	defaultEngineTerminateTimeout = 3*defaultEngineInterruptTimeout + defaultEngineOpTimeout
 )
 
 // detachedContext derives a context for an engine call from the request's:
@@ -84,6 +86,9 @@ func (m *Module) applyHandoffDefaults() {
 	}
 	if m.engineInterruptTimeout == 0 {
 		m.engineInterruptTimeout = defaultEngineInterruptTimeout
+	}
+	if m.engineTerminateTimeout == 0 {
+		m.engineTerminateTimeout = defaultEngineTerminateTimeout
 	}
 	if m.leaseCleanupTimeout == 0 {
 		m.leaseCleanupTimeout = defaultLeaseCleanupTimeout

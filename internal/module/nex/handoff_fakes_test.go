@@ -597,6 +597,7 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 		delegateTimeout:         2 * time.Second,
 		engineOpTimeout:         2 * time.Second,
 		engineInterruptTimeout:  2 * time.Second,
+		engineTerminateTimeout:  2 * time.Second,
 		leaseCleanupTimeout:     2 * time.Second,
 	}
 
@@ -655,4 +656,15 @@ func reviveCCAfterKeys(env *handoffEnv) {
 			time.Sleep(5 * time.Millisecond)
 		}
 	}()
+}
+
+// script sets the Get answers, one per call (the last repeats), and resets the call count.
+func (f *fakeNexStore) script(rows ...store.Execution) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.results = nil
+	for _, r := range rows {
+		f.results = append(f.results, getResult{exec: r})
+	}
+	f.calls = 0
 }

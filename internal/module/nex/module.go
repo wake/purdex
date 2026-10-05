@@ -111,6 +111,7 @@ type Module struct {
 	delegateTimeout        time.Duration // Service.Delegate
 	engineOpTimeout        time.Duration // Store.Get, AcquireLease, Archive
 	engineInterruptTimeout time.Duration // Service.Interrupt; > Nexen's own interruptTimeout so its verdict wins
+	engineTerminateTimeout time.Duration // Service.Terminate (retries interrupt up to 3 times)
 	leaseCleanupTimeout    time.Duration // ReleaseLease, under its own fresh context
 
 	assemble assembleFn        // default realAssemble; test seam
