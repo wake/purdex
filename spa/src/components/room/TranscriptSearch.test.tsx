@@ -14,6 +14,7 @@ import type { PartialAssembly } from '../../lib/nex/partial'
 import type { ToolActivity } from '../../lib/nex/tool-activity'
 import type { TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
 import { buildSearchUnits, findMatches } from '../../lib/nex/transcript-search'
+import { derivePrelude } from '../../lib/nex/prelude'
 
 // Pass-throughs, counted (A F10).
 vi.mock('../../lib/nex/transcript-search', async (importOriginal) => {
@@ -492,5 +493,50 @@ describe('TranscriptSearch', () => {
     rerender(<Harness messages={messages} partial={textPartial('streaming… more')} />)
     expect(scrollTo).not.toHaveBeenCalled()
     expect(box.scrollTop).toBe(50)
+  })
+})
+
+describe('TranscriptSearch — prelude', () => {
+  function Bar(props: Partial<React.ComponentProps<typeof TranscriptSearch>>) {
+    const fold = useFoldMemory()
+    return (
+      <FoldContext.Provider value={fold}>
+        <TranscriptSearch owner="p1" container={null} messages={[]} view="room" keyPrefix="k" turnStarts={[]} onClose={() => {}} {...props} />
+      </FoldContext.Provider>
+    )
+  }
+  const bar = (props: Partial<React.ComponentProps<typeof TranscriptSearch>>) => render(<Bar {...props} />)
+
+  it('says the prelude is incomplete and loads it all on demand', () => {
+    const onLoadAll = vi.fn(() => Promise.resolve())
+    bar({ prelude: derivePrelude([]), preludeDone: false, onLoadAll })
+    expect(screen.getByTestId('search-prelude-incomplete')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Load all' }))
+    expect(onLoadAll).toHaveBeenCalledTimes(1)
+    expect(onLoadAll).toHaveBeenCalledWith()
+  })
+
+  it('shows progress and a disabled button while loading, then gives focus back to the input', async () => {
+    let done: () => void = () => {}
+    const onLoadAll = vi.fn(() => new Promise<void>((r) => { done = r }))
+    bar({ prelude: derivePrelude([]), preludeDone: false, onLoadAll })
+    fireEvent.click(screen.getByRole('button', { name: 'Load all' }))
+    expect(screen.getByRole('button', { name: 'Load all' })).toBeDisabled()
+    expect(screen.getByTestId('search-prelude-incomplete')).toHaveTextContent('Loading earlier conversation')
+    await act(async () => { done() })
+    expect(screen.getByRole('button', { name: 'Load all' })).toBeEnabled()
+    expect(screen.getByTestId('search-prelude-incomplete')).toHaveTextContent('Earlier conversation not fully loaded')
+    expect(input()).toHaveFocus()
+  })
+
+  it('shows no banner once the prelude is complete, when there is none, or without a loader button', () => {
+    const { unmount } = bar({ prelude: derivePrelude([]), preludeDone: true })
+    expect(screen.queryByTestId('search-prelude-incomplete')).toBeNull()
+    unmount()
+    const second = bar({ preludeDone: false })
+    expect(screen.queryByTestId('search-prelude-incomplete')).toBeNull()
+    second.unmount()
+    bar({ prelude: derivePrelude([]), preludeDone: false })
+    expect(screen.queryByRole('button', { name: 'Load all' })).toBeNull()
   })
 })

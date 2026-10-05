@@ -540,7 +540,9 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
           {searchOpen && (
             <TranscriptSearch owner={paneId} container={scrollBox} messages={st.messages} tools={st.tools}
               view={chat ? 'chat' : 'room'} keyPrefix={executionId} turnStarts={st.turnStarts}
-              onClose={closeSearch} focusRequest={focusRequest} onJump={onSearchJump} />
+              onClose={closeSearch} focusRequest={focusRequest} onJump={onSearchJump}
+              prelude={preludeEligible && st.prelude.status !== 'idle' && st.prelude.status !== 'none' ? preludeView : undefined}
+              preludeDone={st.prelude.done} onLoadAll={() => { preludeApi.retry(); return preludeApi.loadAll() }} />
           )}
           {chat ? (
             <ChatTranscript {...transcriptProps}>

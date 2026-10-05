@@ -5,6 +5,7 @@ import {
   type SearchUnit, type SearchUnitOptions,
 } from './transcript-search'
 import { indexOperations } from './operations'
+import { derivePrelude } from './prelude'
 import type { ContentBlock, StreamMessage } from './message-types'
 import type { ToolActivity } from './tool-activity'
 
@@ -420,5 +421,33 @@ describe('toolUseUnit', () => {
     const messages = [said('go'), asst(use('t1', 'Mystery', {}))]
     expect(toolUseUnit(opts(messages), 'nope')).toBeNull()
     expect(toolUseUnit(opts(messages), 't1')).toBeNull()
+  })
+})
+
+describe('buildSearchUnits — the loaded prelude (worker prelude P3b)', () => {
+  const prelude = derivePrelude([
+    { pos: '2', at: 0, kind: 'user', msg: said('needle early') },
+    { pos: '3', at: 0, kind: 'prelude.note', source: 'command_output', text: 'needle note', truncated: false, totalBytes: null, stream: null },
+  ])
+
+  it('walks the prelude first, by its stable ids, in both views', () => {
+    for (const view of ['room', 'chat'] as const) {
+      const live = [said('needle late')]
+      const list = buildSearchUnits({ messages: live, index: indexOperations(live), view, keyPrefix: 'k', turnStarts: [], prelude })
+      expect(list.map((u) => u.id)).toEqual(['p2:0:text', 'p3:note:text', '0:0:text'])
+      expect(list[1].reveal).toEqual(['p3:note'])
+    }
+  })
+
+  it('draws bash input whole, a peer message as prose, and folds the rest', () => {
+    const notes = derivePrelude([
+      { pos: '1', at: 0, kind: 'prelude.note', source: 'bash_input', text: 'ls', truncated: false, totalBytes: null, stream: null },
+      { pos: '2', at: 0, kind: 'prelude.note', source: 'peer_message', text: 'hi **there**', truncated: false, totalBytes: null, stream: null },
+      { pos: '3', at: 0, kind: 'prelude.note', source: 'task_notification', text: 'done', truncated: false, totalBytes: null, stream: null },
+    ])
+    const list = buildSearchUnits({ messages: [], index: indexOperations([]), view: 'room', keyPrefix: 'k', turnStarts: [], prelude: notes })
+    expect(list.map((u) => [u.id, u.text, u.reveal])).toEqual([
+      ['p1:note:text', 'ls', []], ['p2:note:text', 'hi there', []], ['p3:note:text', 'done', []],
+    ])
   })
 })

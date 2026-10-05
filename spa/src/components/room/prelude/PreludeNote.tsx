@@ -26,7 +26,8 @@ export default function PreludeNote({ id, source, text, truncated, totalBytes, s
   const t = useI18nStore((s) => s.t)
   const [expanded, toggle] = useFold(`${id}:note`)
   const plan = useMemo(() => foldPlan({ text }), [text])
-  const anchor = searchUnitId(`${id}:note`, 'text')
+  // Search skips an empty unit, so an empty note draws no anchor either.
+  const anchor = text ? searchUnitId(`${id}:note`, 'text') : undefined
   const hint: ReactNode = truncated ? <TruncatedHint shown={utf8Length(text)} total={totalBytes} /> : null
   if (source === 'bash_input') {
     return (
