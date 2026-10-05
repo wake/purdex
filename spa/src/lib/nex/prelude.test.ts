@@ -1,5 +1,7 @@
 // spa/src/lib/nex/prelude.test.ts
 import { describe, it, expect } from 'vitest'
+import { sanitizePreludePage } from './prelude-wire'
+import golden from './__fixtures__/prelude-golden-nexen.json'
 import { applyPreludePage, defaultPreludeState, derivePrelude, preludeBlocks, preludeFailed, preludeLoading, type PreludeState } from './prelude'
 import type { PreludeItem, PreludePage } from './prelude-wire'
 import type { StreamMessage } from './message-types'
@@ -125,5 +127,37 @@ describe('preludeBlocks', () => {
       { kind: 'entry', entry: v.entries[4] },
       { kind: 'span', start: 3, end: 4 },
     ])
+  })
+})
+
+describe('Nexen golden page (spec §4.6)', () => {
+  const page = sanitizePreludePage(golden)!
+  const view = derivePrelude(page.items)
+
+  it('pairs every tool_use with its result, denied included', () => {
+    expect(Object.keys(view.tools).sort()).toEqual(['toolu_golden0001', 'toolu_golden0002', 'toolu_golden0003', 'toolu_golden0004'])
+    expect(Object.fromEntries(Object.entries(view.tools).map(([id, t]) => [id, [t.name, t.status]]))).toEqual({
+      toolu_golden0001: ['Bash', 'done'],
+      toolu_golden0002: ['Read', 'done'],
+      toolu_golden0003: ['Write', 'done'],
+      toolu_golden0004: ['Edit', 'denied'],
+    })
+  })
+
+  it('loses no item: every message, note, segment and compaction shows up once, in order', () => {
+    const shown = page.items.filter((i) => i.kind !== 'tool_use' && i.kind !== 'tool_result')
+    expect(view.messages).toHaveLength(22)
+    expect(view.entries.map((e) => e.pos)).toEqual(shown.map((i) => i.pos))
+    expect(view.ids).toEqual(page.items.filter((i) => i.kind === 'user' || i.kind === 'assistant').map((i) => `p${i.pos}`))
+    const kinds = (k: string) => view.entries.filter((e) => e.kind === k).length
+    expect([kinds('message'), kinds('note'), kinds('segment'), kinds('compaction')]).toEqual([22, 9, 3, 1])
+  })
+
+  it('preludeBlocks covers every entry exactly once without throwing', () => {
+    const blocks = preludeBlocks(view)
+    const covered = blocks.flatMap((b) => (b.kind === 'entry' ? [b.entry.pos] : view.entries.filter((e) => e.kind === 'message' && e.m >= b.start && e.m < b.end).map((e) => e.pos)))
+    expect(covered).toEqual(view.entries.map((e) => e.pos))
+    expect(blocks.filter((b) => b.kind === 'entry').length).toBe(13)
+    expect(blocks.some((b) => b.kind === 'span')).toBe(true)
   })
 })
