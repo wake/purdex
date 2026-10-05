@@ -1426,6 +1426,7 @@
   "executions.activity.starting": "啟動中",
   "executions.activity.idle": "閒置",
   "executions.activity.queued": "排隊中",
+  "workers.list.none": "沒有開啟 Nexen 的主機",
   "peer.label.host": "主機",
   "peer.label.cwd": "工作目錄",
   "peer.label.agent": "agent",

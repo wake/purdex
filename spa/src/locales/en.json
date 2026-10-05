@@ -1426,6 +1426,7 @@
   "executions.activity.starting": "Starting",
   "executions.activity.idle": "Idle",
   "executions.activity.queued": "Queued",
+  "workers.list.none": "No hosts with Nexen",
   "peer.label.host": "host",
   "peer.label.cwd": "cwd",
   "peer.label.agent": "agent",
