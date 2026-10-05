@@ -149,6 +149,13 @@ func (m *Module) recordSessionIdentity(req EventRequest, frameID string) {
 			return
 		}
 		log.Printf("[agent] session_identity_write_failed: frame=%s pane=%s err=%v", frameID, req.TmuxPaneID, err)
+		return
+	}
+	if tp := agentpkg.ExtractTranscriptPath(req.RawEvent); tp != "" {
+		if err := m.frames.SetTranscriptPath(frameID, tp, req.identitySeq); err != nil &&
+			!errors.Is(err, sql.ErrNoRows) && !errors.Is(err, store.ErrIdentityOutOfOrder) {
+			log.Printf("[agent] transcript_path_write_failed: frame=%s pane=%s err=%v", frameID, req.TmuxPaneID, err)
+		}
 	}
 }
 

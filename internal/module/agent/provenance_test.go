@@ -32,7 +32,7 @@ func deriveWithSessionDetail(_ string, raw json.RawMessage) agentpkg.DeriveResul
 	if len(raw) > 0 {
 		var parsed map[string]any
 		if err := json.Unmarshal(raw, &parsed); err == nil {
-			for _, key := range []string{"session_id", "cwd"} {
+			for _, key := range []string{"session_id", "cwd", "transcript_path"} {
 				if v, ok := parsed[key].(string); ok && v != "" {
 					detail[key] = v
 				}
@@ -270,5 +270,23 @@ func TestProvenance_NilSessionProvider_EmptyInstance(t *testing.T) {
 	}
 	if p.TmuxInstance != "" {
 		t.Fatalf("TmuxInstance = %q, want empty for a half-wired daemon", p.TmuxInstance)
+	}
+}
+
+func TestProvenance_CarriesTranscriptPath(t *testing.T) {
+	m := newProvenanceTestModule(t, "inst-1")
+	req := EventRequest{
+		TmuxPaneID: "%5", AgentType: "cc", SenderPID: 200,
+		SenderStartTime: "t200", PurdexName: "PdxSessionStart",
+		RawEvent: []byte(`{"session_id":"s1","cwd":"/w","source":"startup","transcript_path":"/t/s1.jsonl"}`),
+	}
+	withProcessTree(t, map[int]int{200: 999})
+	ev := m.buildNormalizedForTest(t, req)
+	prov, ok := ev.Detail["pdx_provenance"].(Provenance)
+	if !ok {
+		t.Fatalf("no provenance: %+v", ev.Detail)
+	}
+	if prov.TranscriptPath != "/t/s1.jsonl" {
+		t.Fatalf("TranscriptPath = %q", prov.TranscriptPath)
 	}
 }

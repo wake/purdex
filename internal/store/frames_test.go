@@ -1289,3 +1289,54 @@ func TestFrames_ClaimDelete(t *testing.T) {
 		}
 	})
 }
+
+func TestFrames_TranscriptPathColumnMigratesAndRoundTrips(t *testing.T) {
+	s := openTestFramesStore(t)
+	f := seedIdentityFrame(t, s, "", "")
+	if err := s.UpdateSessionIdentity(f.FrameID, "sess-1", "/w", 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTranscriptPath(f.FrameID, "/h/.claude/projects/-w/sess-1.jsonl", 5); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetByIdentity(f.PaneID, f.PID, f.ProcessStartTime)
+	if err != nil || got == nil {
+		t.Fatalf("get: %v %v", got, err)
+	}
+	if got.TranscriptPath != "/h/.claude/projects/-w/sess-1.jsonl" {
+		t.Fatalf("TranscriptPath = %q", got.TranscriptPath)
+	}
+}
+
+func TestFrames_SetTranscriptPathRefusesOlderSeq(t *testing.T) {
+	s := openTestFramesStore(t)
+	f := seedIdentityFrame(t, s, "", "")
+	_ = s.UpdateSessionIdentity(f.FrameID, "sess-2", "/w", 9)
+	err := s.SetTranscriptPath(f.FrameID, "/old.jsonl", 8)
+	if !errors.Is(err, ErrIdentityOutOfOrder) {
+		t.Fatalf("err = %v, want ErrIdentityOutOfOrder", err)
+	}
+	if err := s.SetTranscriptPath("no-such-frame", "/x.jsonl", 1); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing frame err = %v, want sql.ErrNoRows", err)
+	}
+	if err := s.SetTranscriptPath(f.FrameID, "", 100); err != nil {
+		t.Fatalf("empty path must be a no-op, got %v", err)
+	}
+}
+
+func TestMigrateFramesDB_AddsTranscriptPathColumn(t *testing.T) {
+	events := openTestAgentEventStore(t)
+	seedPreIdentitySchema(t, events.db)
+	frames, err := events.Frames()
+	if err != nil {
+		t.Fatalf("Frames (migrate): %v", err)
+	}
+	var n int
+	if err := events.db.QueryRow(`SELECT count(*) FROM pragma_table_info('agent_frames') WHERE name = 'transcript_path'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("transcript_path column present = %d err=%v", n, err)
+	}
+	all, err := frames.ListAll()
+	if err != nil || len(all) != 1 || all[0].TranscriptPath != "" {
+		t.Fatalf("ListAll = %+v err=%v", all, err)
+	}
+}

@@ -15,6 +15,7 @@ type Provenance struct {
 	AgentType         string `json:"agent_type"`
 	SessionID         string `json:"session_id,omitempty"`
 	Cwd               string `json:"cwd,omitempty"`
+	TranscriptPath    string `json:"transcript_path,omitempty"`
 	TmuxPaneID        string `json:"tmux_pane_id"`
 	TmuxInstance      string `json:"tmux_instance"`
 	// FrameID names this one agent run. The exit envelope (pdx_exit) carries
@@ -34,6 +35,7 @@ func buildProvenance(req EventRequest, result agentpkg.DeriveResult, tmuxInstanc
 		AgentType:         req.AgentType,
 		SessionID:         strFromDetail(result.Detail, "session_id"),
 		Cwd:               strFromDetail(result.Detail, "cwd"),
+		TranscriptPath:    strFromDetail(result.Detail, "transcript_path"),
 		TmuxPaneID:        req.TmuxPaneID,
 		TmuxInstance:      tmuxInstance,
 		FrameID:           frameID,

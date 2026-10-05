@@ -16,14 +16,15 @@ import (
 // multi-root tie-break sorts on it to stay deterministic when two roots share
 // a last_seen_at (spec §5.3 step 6).
 type PaneOwner struct {
-	FrameID    string
-	AgentType  string
-	SessionID  string
-	Cwd        string
-	TmuxPaneID string
-	LastSeenAt int64
-	StartedAt  int64  // the frame's start (same unit as LastSeenAt); fixed for the life of the run
-	Status     string // string(frame.Status) — the owning frame's Purdex agent status
+	FrameID        string
+	AgentType      string
+	SessionID      string
+	Cwd            string
+	TranscriptPath string
+	TmuxPaneID     string
+	LastSeenAt     int64
+	StartedAt      int64  // the frame's start (same unit as LastSeenAt); fixed for the life of the run
+	Status         string // string(frame.Status) — the owning frame's Purdex agent status
 }
 
 // resolvePaneOwners returns the root agent frames of one pane.
@@ -149,14 +150,15 @@ func (m *Module) resolvePaneOwners(ctx context.Context, paneID string, read proc
 			continue
 		}
 		owners = append(owners, PaneOwner{
-			FrameID:    frame.FrameID,
-			AgentType:  frame.AgentType,
-			SessionID:  frame.SessionID,
-			Cwd:        frame.Cwd,
-			TmuxPaneID: frame.PaneID,
-			LastSeenAt: frame.LastSeenAt,
-			StartedAt:  frame.StartedAt,
-			Status:     string(frame.Status),
+			FrameID:        frame.FrameID,
+			AgentType:      frame.AgentType,
+			SessionID:      frame.SessionID,
+			Cwd:            frame.Cwd,
+			TranscriptPath: frame.TranscriptPath,
+			TmuxPaneID:     frame.PaneID,
+			LastSeenAt:     frame.LastSeenAt,
+			StartedAt:      frame.StartedAt,
+			Status:         string(frame.Status),
 		})
 	}
 	// One last look before the result is called an answer. The paths that

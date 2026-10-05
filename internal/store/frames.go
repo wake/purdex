@@ -32,6 +32,10 @@ type Frame struct {
 	// round-trip write, so no optimistic-retry loop can clobber them.
 	SessionID string
 	Cwd       string
+	// TranscriptPath is the agent's own transcript file as its hooks report it.
+	// Written only by SetTranscriptPath, under the same identity_seq order as
+	// UpdateSessionIdentity.
+	TranscriptPath string
 }
 
 type FramesStore struct {
@@ -120,6 +124,7 @@ func addFrameIdentityColumns(db *sql.DB) error {
 		{"session_id", `TEXT NOT NULL DEFAULT ''`},
 		{"cwd", `TEXT NOT NULL DEFAULT ''`},
 		{"identity_seq", `INTEGER NOT NULL DEFAULT 0`},
+		{"transcript_path", `TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, column := range columns {
 		if existing[column.name] {
@@ -284,7 +289,7 @@ func (s *FramesStore) GetByIdentity(paneID string, pid int, startTime string) (*
 	row := s.db.QueryRow(`
 		SELECT frame_id, pane_id, agent_type, pid, ppid, process_start_time,
 		       parent_frame_id, subagents_json, status, started_at, last_seen_at, verified,
-		       session_id, cwd
+		       session_id, cwd, transcript_path
 		FROM agent_frames
 		WHERE pane_id = ? AND pid = ? AND process_start_time = ?
 	`, paneID, pid, startTime)
@@ -302,7 +307,7 @@ func (s *FramesStore) FindByPanePID(paneID string, pid int) (*Frame, error) {
 	row := s.db.QueryRow(`
 		SELECT frame_id, pane_id, agent_type, pid, ppid, process_start_time,
 		       parent_frame_id, subagents_json, status, started_at, last_seen_at, verified,
-		       session_id, cwd
+		       session_id, cwd, transcript_path
 		FROM agent_frames
 		WHERE pane_id = ? AND pid = ?
 		ORDER BY started_at DESC
@@ -322,7 +327,7 @@ func (s *FramesStore) ListByPane(paneID string) ([]Frame, error) {
 	rows, err := s.db.Query(`
 		SELECT frame_id, pane_id, agent_type, pid, ppid, process_start_time,
 		       parent_frame_id, subagents_json, status, started_at, last_seen_at, verified,
-		       session_id, cwd
+		       session_id, cwd, transcript_path
 		FROM agent_frames
 		WHERE pane_id = ?
 		ORDER BY started_at ASC
@@ -338,7 +343,7 @@ func (s *FramesStore) ListAll() ([]Frame, error) {
 	rows, err := s.db.Query(`
 		SELECT frame_id, pane_id, agent_type, pid, ppid, process_start_time,
 		       parent_frame_id, subagents_json, status, started_at, last_seen_at, verified,
-		       session_id, cwd
+		       session_id, cwd, transcript_path
 		FROM agent_frames
 		ORDER BY pane_id ASC, started_at ASC
 	`)
@@ -480,6 +485,28 @@ func (s *FramesStore) UpdateSessionIdentity(frameID, sessionID, cwd string, seq 
 	if affected == 0 {
 		// Zero rows means one of two different things, and callers log them
 		// differently: the frame is gone, or the guard refused a stale write.
+		return s.classifyIdentityMiss(frameID)
+	}
+	return nil
+}
+
+// SetTranscriptPath records the transcript path for a frame. It follows
+// UpdateSessionIdentity's ordering rule: equal or newer seq applies, an older
+// one returns ErrIdentityOutOfOrder, and a missing frame returns sql.ErrNoRows.
+func (s *FramesStore) SetTranscriptPath(frameID, path string, seq int64) error {
+	if path == "" {
+		return nil
+	}
+	res, err := s.db.Exec(`UPDATE agent_frames SET transcript_path = ?, identity_seq = ?
+		WHERE frame_id = ? AND identity_seq <= ?`, path, seq, frameID, seq)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return s.classifyIdentityMiss(frameID)
 	}
 	return nil
@@ -655,6 +682,7 @@ func scanFrame(scanner frameScanner) (Frame, error) {
 		&verified,
 		&frame.SessionID,
 		&frame.Cwd,
+		&frame.TranscriptPath,
 	)
 	if err != nil {
 		return Frame{}, err
