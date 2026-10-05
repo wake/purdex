@@ -53,6 +53,23 @@ describe('sanitizePreludePage', () => {
     expect(it0.at).toBe(7)
   })
 
+  it('drops tool_use_result / tool_result_meta from user and assistant payloads (spec §4.3)', () => {
+    const extra = { tool_use_result: { stdout: 'x' }, tool_result_meta: [{ a: 1 }] }
+    const page = sanitizePreludePage({
+      state: 'ok', prev_cursor: null,
+      items: [
+        { pos: '1', kind: 'user', at: 1, payload: { type: 'user', ...extra, message: { role: 'user', content: 'hi' } } },
+        { pos: '2', kind: 'assistant', at: 1, payload: { type: 'assistant', ...extra, message: { role: 'assistant', content: [] } } },
+      ],
+    })
+    expect(page!.items).toHaveLength(2)
+    for (const it of page!.items) {
+      if (it.kind !== 'user' && it.kind !== 'assistant') throw new Error('kind')
+      expect(it.msg).not.toHaveProperty('tool_use_result')
+      expect(it.msg).not.toHaveProperty('tool_result_meta')
+    }
+  })
+
   it('reads N2, segment, compaction and note items', () => {
     const page = sanitizePreludePage({
       state: 'ok', prev_cursor: null,

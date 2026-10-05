@@ -58,8 +58,11 @@ function frame(kind: 'assistant' | 'user', payload: Record<string, unknown>): St
     ? [{ type: 'text', text: raw }]
     : Array.isArray(raw) ? raw.map(cleanBlock).filter((b): b is Record<string, unknown> => b !== null) : null
   if (!content) return null
+  // Nexen's N2-derivation inputs, never sent to clients (spec §4.3); untrusted if present.
+  const { tool_use_result: _r, tool_result_meta: _m, ...rest } = payload
+  void _r; void _m
   return {
-    ...payload,
+    ...rest,
     type: kind,
     parent_tool_use_id: null,
     message: { ...message, role: kind, content, stop_reason: message.stop_reason ?? null },
