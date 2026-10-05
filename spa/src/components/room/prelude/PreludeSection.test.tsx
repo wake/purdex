@@ -562,7 +562,9 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection pasted te
   const body = (n: number) => Array.from({ length: n }, (_, k) => `pasted line ${k}`).join('\n')
   const draw = (items: PreludeItem[]) => render(<PreludeSection {...base} mode={mode} view={derivePrelude(items)} status="ok" done />)
   const titles = () => screen.getAllByTestId('prelude-pasted-title').map((e) => e.textContent)
+  // Your typed lines (chat: your bubbles, minus the ones a paste sits in).
   const userLines = () => screen.queryAllByTestId(mode === 'room' ? 'room-user-line' : 'chat-bubble-user')
+    .filter((e) => !e.querySelector('[data-testid="prelude-pasted"]'))
   const items = [
     m('1', 'user', [{ type: 'text', text: `${OPEN}\nsolo\n${CLOSE}` }]),
     m('2', 'assistant', [{ type: 'text', text: 'ok' }]),
@@ -592,7 +594,16 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection pasted te
     // The room's line carries a `›` prefix; chat's bubble does not.
     expect(userLines().map((e) => e.textContent?.replace('›', '').trim())).toEqual(['fix this:', 'thanks'])
     const pasted = screen.getByTestId('prelude-pasted')
-    expect(pasted.closest('[data-testid="room-user-line"],[data-testid="chat-bubble-user"]')).toBeNull()
+    expect(pasted.closest('[data-testid="room-user-line"]')).toBeNull()
+    if (mode === 'chat') {
+      // Chat tells speakers apart by side: your paste sits on your side, in a bubble of its own.
+      const bubble = pasted.closest('[data-testid="chat-bubble-user"]')
+      expect(bubble).not.toBeNull()
+      expect(bubble!.textContent).not.toContain('fix this:')
+      expect(bubble!.textContent).not.toContain('thanks')
+    } else {
+      expect(pasted.closest('[data-testid="chat-bubble-user"]')).toBeNull()
+    }
     expect(pasted.textContent).not.toContain('pasted line 59')
     expect(document.querySelector('[data-search-unit="p1:1:text"]')).toBeNull()
     fireEvent.click(within(pasted).getByTestId('fold-more'))
