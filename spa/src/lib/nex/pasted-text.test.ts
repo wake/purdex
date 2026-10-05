@@ -99,10 +99,13 @@ describe('splitPasted', () => {
     ])
   })
 
-  it('a cut that fell inside the closer itself leaves no fragment of it in the body', () => {
-    for (const frag of ['\n', '\n<', '\n</pasted_con', '\n</pasted_content id="bb', '\n</pasted_content id="bb1b"']) {
-      const [b] = splitPasted(text(`${open()}l1\nl2${frag}`, { truncated: true }))
-      expect(b.text, JSON.stringify(frag)).toBe('l1\nl2')
+  it('a cut body runs verbatim to the end — what looks like the start of its closer may be the body’s own', () => {
+    // Guessing that the cut fell inside the closer could silently drop pasted
+    // text; a rare visible fragment is the honest outcome (spec §5.3).
+    for (const tail of ['\n', '\n<', '\n</pasted_con', '\n</pasted_content id="bb', '\n</pasted_content id="bb1b"']) {
+      const [b] = splitPasted(text(`${open()}l1\nl2${tail}`, { truncated: true }))
+      expect(b.text, JSON.stringify(tail)).toBe(`l1\nl2${tail}`)
+      expect(b.pasted?.cut).toBe(true)
     }
   })
 

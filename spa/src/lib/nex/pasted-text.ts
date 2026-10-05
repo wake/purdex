@@ -49,7 +49,9 @@ export function splitPasted(block: ContentBlock): ContentBlock[] {
     if (typedEnd > done) out.push({ type: 'text', text: t.slice(done, typedEnd) })
     found = true
     const cut = close < 0
-    const body = cut ? withoutCloserStart(t.slice(bodyAt), closer) : t.slice(bodyAt, Math.max(bodyAt, close))
+    // A cut body runs verbatim to the end: a tail that looks like the start of
+    // its closer may be the body's own, so nothing is guessed away (spec §5.3).
+    const body = cut ? t.slice(bodyAt) : t.slice(bodyAt, Math.max(bodyAt, close))
     out.push({ type: 'text', text: body, pasted: { lines: splitLines(body).length, cut } })
     if (cut) { done = t.length; break }
     done = close + closer.length
@@ -63,16 +65,4 @@ export function splitPasted(block: ContentBlock): ContentBlock[] {
   if (block.total_bytes !== undefined) last.total_bytes = block.total_bytes
   if (block.truncated) last.shown_bytes = utf8Length(t)
   return out
-}
-
-/**
- * A cut body loses the longest start of its own closer it ends with: the
- * daemon's cut fell inside the closer. A lone trailing `\n` goes too — it may
- * be the body's own, but a trailing newline never changes the line count.
- */
-function withoutCloserStart(body: string, closer: string): string {
-  for (let k = Math.min(closer.length - 1, body.length); k > 0; k--) {
-    if (body.endsWith(closer.slice(0, k))) return body.slice(0, -k)
-  }
-  return body
 }
