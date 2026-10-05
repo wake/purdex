@@ -1,6 +1,19 @@
 # Plan — shell cleanup (P1–P7)
 
-Spec: `docs/specs/2026-10-05-shell-cleanup-spec.md` v1.0. The decisions in its §1 are the user's and are not reopened here.
+Spec: `docs/specs/2026-10-05-shell-cleanup-spec.md` v1.1. The decisions in its §1 are the user's and are not reopened here.
+
+The codex plan review (job `task-muv5ptkz-8typid`, gpt-5.6-sol) returned 6 findings, all with confidence ≥ 0.91, and all are applied:
+
+| # | Severity | Finding | Fixed in |
+|---|---|---|---|
+| 1 | critical | P5 activation-only focus | T5.3, T5.4 |
+| 2 | critical | P2 popup removal file list | T2.2 |
+| 3 | important | P1 DOM split box | T1.6 |
+| 4 | important | measured right placement | T1.7 |
+| 5 | important | chat mode on the handoff recovery path | T6.4 |
+| 6 | important | focus-record cleanup by subscription | T5.1 |
+
+The user's rule D.1a (2026-10-05) reshaped T7.1 and T7.2.
 
 Anchors were measured on `498b8d59` (origin/main alpha.475 + spec) in worktree `shell-cleanup`. SPA paths are relative to `spa/src/`.
 
@@ -117,14 +130,15 @@ export function openWorkerTab(content: Extract<PaneContent, { kind: 'execution' 
 
 **`ActivityBarWide`**
 - The bottom group (`:319-344`) is replaced by `<BottomNav variant="wide" …/>`, wired to the store.
-- When `workerListOpen`, insert after the `DndContext` (`:317`), in this order:
-  - `<PaneSplitter direction="v" testId="worker-list-divider" onResize={…} onResizeEnd={…}/>`
-  - `<div data-testid="worker-list-section" className="min-h-0 overflow-y-auto overscroll-contain" style={{ height: renderedHeight }}><WorkerList/></div>`
+- **The split box** (spec §4.2). Inside the `DndContext`, right after the separator (`:286-288`), a new `<div data-testid="worker-split-box" ref={splitBoxRef} className="flex min-h-0 flex-1 flex-col">` wraps, in this order:
+  - the existing workspace scroll zone (`:290-316`). Its `flex-1` now flexes inside the box, and `wsScrollRef` stays on it;
+  - when `workerListOpen`, `<PaneSplitter direction="v" testId="worker-list-divider" onResize={…} onResizeEnd={…}/>`;
+  - when `workerListOpen`, `<div data-testid="worker-list-section" className="min-h-0 shrink-0 overflow-y-auto overscroll-contain" style={{ height: renderedHeight }}><WorkerList/></div>`.
+  - Home and the separator stay where they are, outside the box.
 - **Height**
   - Keep a draft in local state and a ref, mirroring the width draft at `:100-104`. `onResize(dy)` sets the draft to `base − dy`, so dragging up grows the list. `onResizeEnd` commits through `setWorkerListHeight`.
-  - The rendered height is `min(draft ?? stored, available − WORKSPACE_ZONE_MIN)`, where `WORKSPACE_ZONE_MIN = 96`.
-  - `available` is measured with a ResizeObserver on a wrapper around the workspace zone plus the list. Without an RO (jsdom), skip the cap.
-- `restrictWorkspaceDrag` keeps clamping to `wsScrollRef` only.
+  - The rendered height is `min(draft ?? stored, available − WORKSPACE_ZONE_MIN − dividerHeight)`, where `WORKSPACE_ZONE_MIN = 96` and `available` is the split box's height, measured by a ResizeObserver on `splitBoxRef`. Without an RO (jsdom), skip the cap; tests stub RO.
+- `restrictWorkspaceDrag` keeps clamping to `wsScrollRef` only. The list registers no draggables or droppables.
 
 **Tests**
 - The section is absent when closed. Open → the order is DndContext zone → divider → section → bottom-nav.
@@ -133,14 +147,18 @@ export function openWorkerTab(content: Extract<PaneContent, { kind: 'execution' 
 - The toggle flips `bottomNavCompact`, and `data-compact` follows it.
 - Workers `aria-pressed` follows the store.
 - The existing tests keep passing, including "root has overflow-hidden" and "only the workspace zone scrolls". That last assertion must now allow the worker section as a second scroller: update the test to name the two allowed scrollers explicitly.
+- DnD regression, with the list open: workspace reorder still calls `onReorderWorkspaces`, and a tab drag into another workspace still calls `onMoveTabToWorkspace`. Copy the existing DnD test setup in `ActivityBarWide.test.tsx`; if that file has none, drive the handlers through the same `DndContext` events the inline-tab tests use.
 
 ### T1.7 `FloatingPanel` `placement='right'` and the narrow Workers panel
 
 **Files:** `components/FloatingPanel.tsx` + test, `features/workspace/components/ActivityBarNarrow.tsx` + test
 
 **`FloatingPanel`**
-- Add `placement?: 'below' | 'right'`, default `'below'`.
-- In `place()`, `'right'` sets `left = a.right + PADDING` and `top = a.bottom − RIGHT_PANEL_HEIGHT`, with `RIGHT_PANEL_HEIGHT = min(480, window.innerHeight − topInset − PADDING)`. It then clamps exactly like `'below'`, and `applyMaxHeight(top)` still bounds the body.
+- Add `placement?: 'below' | 'right'`, default `'below'` (unchanged code path).
+- `'right'`, per spec §4.6:
+  - `maxHeight = innerHeight − topInset − PADDING`, set before measuring.
+  - In the layout effect, after render, read the panel's `getBoundingClientRect().height` (`h`). Then `left = clamp(a.right + PADDING)` and `top = clamp(a.bottom − h, topInset, innerHeight − PADDING − h)`.
+  - A ResizeObserver on the panel re-runs this while `draggedRef` is false. The resize/scroll re-anchoring (`:123-140`) also calls the `'right'` path.
 
 **`ActivityBarNarrow`**
 - The bottom group becomes `<BottomNav variant="narrow" …/>`.
@@ -149,7 +167,7 @@ export function openWorkerTab(content: Extract<PaneContent, { kind: 'execution' 
 - The narrow variant passes `workersOpen={workersPanelOpen}`, not the store field.
 
 **Tests**
-- `placement='right'` geometry: left = anchor.right + 4, and top is clamped.
+- `placement='right'` geometry, with `getBoundingClientRect` stubbed: left = anchor.right + 4; `panel.bottom === anchor.bottom` for a short panel; clamped to `topInset` when the anchor is near the top; re-placed after an RO callback reports a taller panel.
 - `'below'` is unchanged.
 - In the narrow bar, a click opens `workers-panel` and a second click closes it. That works because the outside-mousedown check excludes the anchor.
 
@@ -182,15 +200,18 @@ export function openWorkerTab(content: Extract<PaneContent, { kind: 'execution' 
 
 ### T2.2 Remove the popup's workspace-search action
 
-**Files:**
-- `lib/register-modules/file-open-bootstrap.ts`: `resolveProjectPath` (`:183-188`), `tryOpenFileForFileTree`, `_fileTreeService`, `getFileTreeService` (`:206-217, 232-239, 274`)
-- `components/editor/popups/FileNotFoundPopup.tsx:129-139`, plus its i18n keys if they become unused
-- `file-open-bootstrap.test.ts:5,107`: retarget to `tryOpenFileForTerminalLink`
-- Comments at `file-open-bootstrap.ts:29,33,193,232`, `file-not-found-popup-service.tsx:9`, `open-file.ts:109`
+**Files** (spec §5; the whole feature goes, end to end):
+- `lib/register-modules/file-open-bootstrap.ts`: `resolveProjectPath` (`:183-188`), `tryOpenFileForFileTree`, `_fileTreeService`, `getFileTreeService` (`:206-217, 232-239, 274`), and wherever it builds `projectPath` / `onSearchWorkspace` for the popup.
+- `lib/file-open/file-not-found-popup-service.tsx`: the `projectPath` / `onSearchWorkspace` members of `ShowCallbacks` (`:20`) and their pass-through in **both** render paths (`:51` and the second one). Also the stale comment at `:9`.
+- `components/editor/popups/FileNotFoundPopup.tsx`: those props, the action button (`:129-139`), the expanded mode's workspace-results section (`:100`) and any state that only it uses. Drop i18n keys that become unused.
+- Tests: `file-open-bootstrap.test.ts:5,107` (retarget to `tryOpenFileForTerminalLink`), the popup-service test, and the `FileNotFoundPopup` test.
+- Comments at `file-open-bootstrap.ts:29,33,193,232` and `open-file.ts:109`.
 
-**Precondition:** before deleting, read `FileNotFoundPopup.tsx` in full and confirm that the workspace search is its own action and not the only way to dismiss the popup or to retry. If removing it changes anything other than that one action, stop and report back. Do not widen the change.
+**Precondition:** before deleting, read the popup and the service in full and confirm that the workspace search is self-contained: neither the popup's dismissal nor its other actions depend on it. If removing it would change anything else, stop and report back. Do not widen the change.
 
-**Tests:** the popup renders without the action, and its other actions still work.
+**Tests:** the popup renders without the search action or the results section, in both the compact and expanded modes. Its other actions still work.
+
+**Check:** `grep -rn "projectPath\|onSearchWorkspace\|searchWorkspace" spa/src` returns nothing.
 
 ### T2.3 Locale
 
@@ -289,7 +310,11 @@ This should return nothing.
 
 **Tests:** every rule, plus dead ids being skipped.
 
-**Wiring `forgetTab`:** `useTabStore.closeTab` (or a subscription where tabs are removed) calls `forgetTab`. Test: closing a tab clears its entry.
+**Cleanup** (spec §8.1): the store module subscribes to `useTabStore` and, whenever the set of tab ids changes, deletes `recent[id]` for every id no longer in `tabs`. This is the only cleanup point, and `closeTab` is not touched.
+- Make it cheap: compare `Object.keys(tabs)` identity or length before diffing.
+- Export the subscription's install function and call it once from the module, so tests can reset state.
+
+**Tests:** `closeTab` clears the entry. A wholesale `useTabStore.setState({ tabs: {...} })` that drops two tabs clears both. A tab that stays keeps its record.
 
 ### T5.2 Record user focus
 
@@ -304,33 +329,47 @@ This should return nothing.
 
 **Files:** `lib/module-registry.ts` (`PaneRendererProps`), `components/PaneLayoutRenderer.tsx:100-113`
 
-- Add `isFocusTarget: boolean` to `PaneRendererProps`.
-- Compute it in the leaf as `isActive && layout.pane.id === focusTargetOf(tab, recent)`.
+- Add `isFocusTarget: boolean` to `PaneRendererProps`, **next to** `isActive`.
+- Compute it in the leaf as `layout.pane.id === focusTargetOf(tab, recent)`. It does **not** include `isActive`: the sites need both to tell an activation from a click (spec §8.2).
 - Use a selector that returns only the target id for this tab (`usePaneFocusStore(s => …)`), so that a `touch` on another tab does not re-render this one.
 - The disabled-module path ignores it.
 - `Component` typing is `ComponentType<PaneRendererProps>`.
 
 ### T5.4 Gate every activation-time focus
 
-The rule for every site: focus only when the pane **becomes** the target of a visible tab, which means one of:
-- (a) the tab turned visible while this pane is the target, or
-- (b) first mount as the active tab's target.
+The rule for every site (spec §8.2): programmatic focus happens only at **activation**, meaning `isActive` flips false→true, or the pane first mounts with `isActive` true. At that moment the pane focuses iff `isFocusTarget` is true. A change of `isFocusTarget` while `isActive` stays true must **never** call `focus()`.
 
-A target change inside an already-visible tab must **not** call `focus()`.
+Implementation pattern, shared as a tiny hook `useActivationFocus(isActive, isFocusTarget, focusFn)` in `hooks/useActivationFocus.ts`:
+- a `prevActive` ref, initialised to `false` so that mount counts as an activation;
+- an effect with dependencies `[isActive]` **only**, which reads `isFocusTarget` and `focusFn` through refs;
+- when `isActive && !prevActive && isFocusTargetRef.current`, it calls `focusFn` (inside a rAF where the site used one);
+- it then sets `prevActive = isActive`.
 
-Implementation pattern: track `prevIsActive` in a ref and focus when `isActive` flips false→true with `isFocusTarget` true. On mount, focus if `isActive && isFocusTarget`.
+Because `isFocusTarget` is not a dependency, a click inside a visible tab cannot trigger it. Test the hook directly for all three timing paths.
 
 **Sites**
-- `components/TerminalView.tsx:128-141`: thread `isFocusTarget` from `SessionPaneContent.tsx:91`.
-- `hooks/useTerminalWs.ts:81-86`: `reveal()` reads `isFocusTargetRef.current`, a new option passed by TerminalView. It focuses only when that is true.
-- `components/room/WorkerInput.tsx:70-76`: the `focused` prop becomes `isFocusTarget`. `ExecutionView.tsx:568` passes it, `ExecutionPaneWrapper` (`register-modules/index.tsx:104-138`) threads it, and `ExecutionView` gets an `isFocusTarget` prop. The effect's dependencies stay `[focused, disabled]`. That way a send finishing in the target pane still refocuses it, while a send finishing in a non-target pane does nothing.
-- `components/editor/MonacoWrapper.tsx:65-67, 86-89` and `components/editor/TiptapEditor.tsx:102, 120-123`: they take an `isFocusTarget` prop from `EditorPane.tsx:342, 362`.
+- `components/TerminalView.tsx:128-141`: the visible effect keeps its fit/resize work on `visible` false→true, and its `focus()` moves into `useActivationFocus(visible, isFocusTarget, …)`. Thread `isFocusTarget` from `SessionPaneContent.tsx:91`. Keep in mind that `prevVisible` starts at the initial value today, so a mount does not fire; the new hook handles mount on its own.
+- `hooks/useTerminalWs.ts:81-86`: `reveal()` is the first-mount path. It focuses only if `activeRef.current && isFocusTargetRef.current`, two new refs that TerminalView passes in options, the way `onReadyRef` works.
+  - When the activation hook also fires on mount, the terminal may not be connected yet. Whichever of the two runs first focuses, and the second call is harmless because it targets the same pane.
+- `components/room/WorkerInput.tsx:70-76`:
+  - replace `focused` with two props, `isActive` and `isFocusTarget`;
+  - activation focus goes through the hook;
+  - the post-send refocus is a separate effect on `disabled` true→false, with a `prevDisabled` ref, gated by `isFocusTargetRef.current && isActive`;
+  - thread the props through `ExecutionView.tsx:568` and `ExecutionPaneWrapper` (`register-modules/index.tsx:104-138`).
+- `components/editor/MonacoWrapper.tsx:65-67, 86-89` and `components/editor/TiptapEditor.tsx:102, 120-123`: they take `isFocusTarget` from `EditorPane.tsx:342, 362`.
+  - The on-ready/on-mount focus becomes "if `isActive && isFocusTarget`".
+  - The `isActive` effect becomes `useActivationFocus`.
 
-**Tests (jsdom; spy on `focus`, do not rely on `inert`)**
-- Terminal: a split tab A with two terminals; record the right one; deactivate, then reactivate A. Only the right terminal's `focus` is called. With no record, only the primary's is called.
-- `reveal()` does not focus a non-target pane.
-- Worker + editor split: on activation only the target focuses.
-- Clicking between panes of a visible tab causes no `focus()` calls from these effects.
+**Tests (jsdom; spy on `focus`, do not rely on `inert`).** These are named after the three spec §8.3 timing paths.
+- `useActivationFocus`:
+  - mount active and target → called once;
+  - mount active and not target → not called;
+  - inactive→active with target → called;
+  - target flips while active → **not** called.
+- **Keep-alive reactivation**: a split tab A with two terminals; record the right one; deactivate, then reactivate A. Only the right terminal's `focus` is called. With no record, only the primary's is called.
+- **First mount as active**: only the target focuses, through the hook and through `reveal()`; `reveal()` does not focus a non-target pane.
+- **Click inside a visible tab**: a pointerdown on the other pane causes no programmatic `focus()` from any site.
+- Worker + editor split: on activation only the target focuses. A worker that finishes sending while it is not the target does not take focus.
 - Monaco and Tiptap: `isActive` true with `isFocusTarget` false → no `focus`.
 
 ### T5.5 Stale comment
@@ -389,12 +428,14 @@ For an `execution` target, render:
 - A `HandoffDialogHost` renders `HandoffConfirmDialog` from the store. It closes when the target's host becomes hidden (moved from `PaneLayoutRenderer.tsx:77-79`) or when the pane no longer holds that tmux content.
 - The context menu's `hand-to-nex` calls `open(…)`.
 - `handToNex`: on success with `mode`, the written content is `withViewMode(newContent, mode)`.
+- Recovery path (spec §9.4): `executionContentFor(...)` (`lib/nex/handoff.ts:81`) takes the optional `mode`. `HandoffConfirmDialog`'s CAS-failure branch (`:72-79`) passes it, so the "Open execution" content it offers carries the mode. Thread the mode through `handoff.ts:114` too.
 
 **Tests**
 - The existing hand-to-nex context-menu tests are retargeted and still pass.
 - The store opens and closes.
 - The host-hidden auto-close works.
 - `handToNex` with `mode: 'chat'` writes chat.
+- With `mode: 'chat'`, a CAS failure (the pane closed mid-request) leads to a recovery "Open execution" that opens a chat tab.
 
 ### T6.5 Take-to-terminal registry and the mode buttons
 
@@ -431,14 +472,19 @@ The buttons render in the tmux controls block (`max-[500px]:hidden`) and in the 
 
 - `currentLayoutPattern(layout): LayoutPattern | null`
 - `applyLayoutPattern(layout, pattern, keepIds?)`:
-  - survivors = the first k live ids of `keepIds`, topped up from `collectLeaves` order (k = 1 or 2);
-  - they are placed in `collectLeaves` order;
+  - with `keepIds`, it is the exact survivor set (size ≤ k);
+  - survivors are placed in `collectLeaves` order;
   - the rest is dropped;
   - missing slots are filled with `new-tab` panes.
   - Without `keepIds` the behaviour is unchanged, so the tests at `pane-tree.test.ts:367-395` stay green.
-- `droppedLeaves(layout, pattern, keepIds?)`: returns the leaves that would be closed.
+- `planLayoutChange(layout, pattern, { isAgent, recent })` (new, in `lib/layout-change.ts`) implements spec D.1a. It returns one of:
+  - `{ kind: 'apply', keepIds }`: case 1, nothing with content closes;
+  - `{ kind: 'confirm', keepIds, closing }`: case 2, exactly k agent panes;
+  - `{ kind: 'pick', k, candidates, preselected }`: case 3, where `candidates` are the content panes and `preselected` are the k most recently focused of them, topped up in layout order.
 
-**Tests:** each shape; survivors follow `keepIds`; the dropped list.
+  `isAgent` is P6's `isAgentPane`, so P7 depends on P6.
+
+**Tests:** each shape; survivors equal `keepIds`; `planLayoutChange`'s three cases with the spec §10 examples (one terminal + blank; one CC + editor + plain; two CC; editor + plain), and that `preselected` follows the focus record.
 
 ### T7.2 TitleBar
 
@@ -446,18 +492,29 @@ The buttons render in the tmux controls block (`max-[500px]:hidden`) and in the 
 
 - Labels go through i18n: new `pane.layout_single`, existing `pane.split_horizontal` / `pane.split_vertical`.
 - The current pattern is pressed (`aria-pressed`, active style); clicking it does nothing.
-- Click handling:
-  - compute `dropped` with `keepIds = recent[activeTabId]`;
-  - if any dropped leaf is not `new-tab`, open `ConfirmDialog` (`testIdPrefix="layout-apply"`). The body lists the dropped panes' labels via `lib/pane-labels.ts` and carries the keep-running note plus the unsaved-editor note (new keys `pane.layout_confirm_title`, `pane.layout_confirm_body`, `pane.layout_confirm_editor`);
-  - otherwise apply immediately.
+- Click handling: `planLayoutChange(...)`.
+  - `apply` → apply immediately.
+  - `confirm` → `ConfirmDialog` (`testIdPrefix="layout-apply"`). The body lists the closing panes' labels (via `lib/pane-labels.ts`) and carries the keep-running note plus the unsaved-editor note. New keys: `pane.layout_confirm_title`, `pane.layout_confirm_body`, `pane.layout_confirm_editor`.
+  - `pick` → a new `components/LayoutKeepPicker.tsx`:
+    - it is built on `ConfirmDialog`'s `children` slot, with `testIdPrefix="layout-keep"`;
+    - a checkbox per candidate (label + kind icon), preselected;
+    - at most k can be ticked: ticking one more unticks the oldest tick when k = 1, and is refused at the cap when k = 2;
+    - confirm is disabled until exactly k are ticked;
+    - the closing list updates live.
+    - New keys: `pane.layout_keep_title`, `pane.layout_keep_body`.
+  - Both dialogs apply with `applyLayout(tabId, pattern, keepIds)`.
 - Keep the 3-button count and the existing invariants (`translate-y-[2.5px]`, `cursor-pointer`).
 
 **Tests**
 - Pressed state for each pattern.
 - A no-op on the pressed button.
 - A split of `new-tab` panes applies with no dialog (the existing test at `:45-58` stays valid).
-- Dropping a terminal pane opens the dialog; cancel leaves the layout unchanged; confirm applies it.
-- `single` keeps the most recently focused pane.
+- Case 2 → confirm; cancel leaves the layout unchanged; confirm keeps the agent pane.
+- Case 3 → picker:
+  - the preselection follows the focus record;
+  - confirm is disabled at the wrong count;
+  - the result keeps the ticked panes;
+  - cancel leaves the layout unchanged.
 
 ---
 
