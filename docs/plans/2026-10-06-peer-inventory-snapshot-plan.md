@@ -79,7 +79,12 @@ D1–D8 are in the spec (R1 / R2 / R3 / §4 / §5 blocks). This section adds onl
   - For the owner walk, `Alive`, `StartTime` and `PPID` describe the process table at the moment of the snapshot. That is what spec R2 asks for.
   - `ExePath` / `Argv` are read later, on first `Read`.
     - **darwin:** `Read` re-reads `kern.proc.pid.<pid>` (sysctl, no fork) **after** the args read. If the PID is gone or its start time differs, `Read` returns an error wrapping the exported `agent.ErrProcessChanged`. The owner walk treats that as an unreadable process (Indeterminate → excluded).
-    - **Linux:** keeps today's level, where the per-PID reader also mixes a `ps` PPID with later `/proc` reads (code comment).
+    - **Linux** (PR #1574 review: R1, attacker and critic agreed): the snapshot records `/proc/<pid>/stat` start ticks for every PID right after `ps -A`.
+      - An entry whose stat cannot be read, or whose stat PPID differs from `ps`'s, is unverifiable: its `Read` gives `ErrProcessChanged`.
+      - `Read` re-reads the ticks after the `/proc` exe/cmdline reads, and a difference gives `ErrProcessChanged`.
+    - **darwin** compares the full `p_starttime` (seconds and microseconds), not seconds only (same review).
+  - **The owner walk reads `ProcessView.PPID`** (added in the #1574 fixes): the table's row only, with no args, no fork and no re-check. So a CC with non-ASCII argv costs the walk nothing, and the walk is point-in-time end to end.
+  - **`StartTime` parity in a DST fall-back hour** (same review): the public `StartTime` is the `lstart` text parsed with `ParseInLocation`, exactly as today's reader does. The exact start is the private identity.
   - A PID absent from the snapshot gives an error wrapping the exported `agent.ErrNotInSnapshot`.
   - **The registry never relies on point-in-time liveness.** That is the coordinator's condition: `localEnvelope` also serves send, deliver and reply (`send.go:286`, `deliver.go:257`, `reply.go:109`).
     - `PidAlive` stays `kill(pid, 0)`, a syscall evaluated at the read.
@@ -230,11 +235,14 @@ Files:
 - `internal/module/agent/pane_owner_test.go`
 - `internal/module/agent/provenance_handler_test.go`
 
-1. `liveProcs struct{ read procReader }` implements `agentpkg.ProcessView` through `isPidAliveFn`, `processStartTimeFn` and `read`. `classifyAncestor` passes `liveProcs{read: readProcessInfoFn}`, so the hook path reads the same PIDs in the same order (the `provenance_test.go:170` premise).
-2. `walkPaneAncestry(paneID, startPID, agentType, procs agentpkg.ProcessView, opts)`. The candidate check uses `procs.Alive` / `procs.StartTime`, and the step uses `procs.Read`.
+1. `liveProcs struct{ read procReader }` implements `agentpkg.ProcessView` through `isPidAliveFn`, `processStartTimeFn` and `read`; its `PPID(pid)` is `read(pid).PPID`. `classifyAncestor` passes `liveProcs{read: readProcessInfoFn}`, so the hook path reads the same PIDs in the same order (the `provenance_test.go:170` premise).
+2. `walkPaneAncestry(paneID, startPID, agentType, procs agentpkg.ProcessView, opts)`:
+   - the candidate check uses `procs.Alive` / `procs.StartTime`;
+   - the step uses `procs.PPID`;
+   - `resolvePaneOwners` reads the frame's own parent with `procs.PPID` too. Neither needs `ExePath` / `Argv`, so the snapshot never reads argv for the walk.
 3. `resolvePaneOwners(ctx, paneID string, panePID int, procs agentpkg.ProcessView)`:
    - survivors are decided by `procs.Alive` / `procs.StartTime`;
-   - `ctxGuardedReader` becomes `ctxGuardedProcs`, which guards `Read` only, the same reads as today.
+   - `ctxGuardedReader` becomes `ctxGuardedProcs`, which guards `PPID` (the walk's step) and `Read`. Today's guard covered the step read, so the step stays guarded.
 4. `provenance_handler.go` keeps today's flow: it resolves the pane PID with `resolvePanePIDFn` (an error → the pane contributes nothing) and passes `liveProcs{read: newMemoProcReader(readProcessInfoFn)}`.
 5. Test edits (setup only):
    - `ancestor_test.go` walk calls wrap their reader as `liveProcs{read: …}`;
