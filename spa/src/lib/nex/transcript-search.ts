@@ -68,15 +68,15 @@ export interface SearchUnitOptions {
   index: OperationIndex
   tools?: Record<string, ToolActivity>
   view: 'room' | 'chat'
-  /** The transcript's keyPrefix: chat's tools line folds at `${keyPrefix}-turn-${ti}:chat-tools`. */
+  /** The transcript's keyPrefix: chat's tools line folds at `${keyPrefix}-turn-${ti}:chat-tools` (a prelude span: `${keyPrefix}-prelude-turn-${last message id}:chat-tools`). */
   keyPrefix: string
   /** ExecutionState.turnStarts — chat groups plain operations per turn. */
   turnStarts: readonly number[]
 }
 
-/** The fold key of a chat turn's tools line (ChatTranscript). */
-export function chatToolsKey(keyPrefix: string, turnIndex: number): string {
-  return `${keyPrefix}-turn-${turnIndex}:chat-tools`
+/** The fold key of a chat turn's tools line (ChatTranscript); `turn` is a turn index, or a prelude span's last message id. */
+export function chatToolsKey(keyPrefix: string, turn: number | string): string {
+  return `${keyPrefix}-turn-${turn}:chat-tools`
 }
 
 function blocksOf(message: StreamMessage | undefined): ContentBlock[] {

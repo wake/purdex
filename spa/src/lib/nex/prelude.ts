@@ -4,6 +4,7 @@
 // transcripts draw. Nothing here reads or writes the execution's own
 // messages, seq, turns or tools. Pure.
 import type { StreamMessage } from './message-types'
+import { isOpeningLine } from './turns'
 import type { PreludeItem, PreludePage } from './prelude-wire'
 import { recordN2ToolResultIn, recordN2ToolUseIn, type ToolActivity } from './tool-activity'
 
@@ -142,4 +143,25 @@ export function derivePrelude(items: readonly PreludeItem[]): PreludeView {
     Object.defineProperty(tools, id, { value: { ...t, status: 'aborted' }, enumerable: true, writable: true, configurable: true })
   }
   return { entries, messages, ids, tools }
+}
+
+export type PreludeBlock = { kind: 'span'; start: number; end: number } | { kind: 'entry'; entry: Exclude<PreludeEntry, { kind: 'message' }> }
+
+/**
+ * Chat's grouping of the prelude (spec §5.3): runs of consecutive messages,
+ * cut at every line that opens a turn (the human's own line) and closed by
+ * any marker or note, so drawing order stays entry order. Search walks the
+ * same blocks (transcript-search).
+ */
+export function preludeBlocks(view: PreludeView): PreludeBlock[] {
+  const out: PreludeBlock[] = []
+  let span: { start: number; end: number } | null = null
+  const close = () => { if (span) out.push({ kind: 'span', ...span }); span = null }
+  for (const e of view.entries) {
+    if (e.kind !== 'message') { close(); out.push({ kind: 'entry', entry: e }); continue }
+    if (span && isOpeningLine(view.messages[e.m])) close()
+    span = span ? { start: span.start, end: e.m + 1 } : { start: e.m, end: e.m + 1 }
+  }
+  close()
+  return out
 }
