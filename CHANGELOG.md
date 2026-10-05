@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.0-alpha.491] - 2026-10-06
+
+> Daemon only; no SPA or Electron change. **The daemon is not deployed yet.** The coordinator batches the mlab restart with the other lines. Until then the status bar can still show `tmux:<name>` with agent「—」for sessions late in the alphabet.
+
+### Fix: the peer inventory resolves every session within its budget (#1573 #1574 #1582 #1584)
+
+- **Symptom.** The status bar sometimes showed `tmux:<name>` and agent「—」for a session that runs Claude Code. `pdx peers` listed it twice: once as a `tmux:` row with no agent, and once as a `?` registry row. It also printed `partial: N sessions not resolved within budget`.
+- **Cause.** The local inventory (`GET /api/peers`, also used by send, deliver and reply) ran out of its 2 s budget. On mlab (21 sessions) every run hit the budget at about 2020 ms and left 4–12 sessions unresolved, always the ones late in the alphabet. The time went to:
+  - asking tmux, once per session, for the session of every pane that has a frame: ≈ 1.6 s;
+  - four `ps` forks per process read: owner walks plus every live registry entry.
+- **Now, one pass per inventory:**
+  - one process-table snapshot (`sysctl kern.proc.all` on darwin, no fork; one `ps -A` on Linux);
+  - two `tmux list-panes -a` (enumerate, then re-confirm membership);
+  - owner walks read only the snapshot's PPIDs;
+  - the registry read uses the same snapshot.
+- **Every answer stays the same as before.** The guards are kept:
+  - PID plus start time identity;
+  - the join-pane re-check;
+  - the proxy depth;
+  - "lookup failed" ≠ "no owner" (#988);
+  - an expired deadline is no answer.
+
+  In detail:
+  - A registry verdict uses the snapshot only when it can vouch for the PID; otherwise it uses the old per-PID reader.
+  - A malformed or failed pane listing is a failed lookup, never an empty one.
+  - The 2 s budget is unchanged, and now also bounds the snapshot.
+- `GET /api/sessions/{code}/provenance` answers through the same machinery with its own one-session pass.
+- New primitives:
+  - `agent.ProcessSnapshot` / `ProcessView`, field-for-field equal to the old reader, including argv escaping (non-ASCII argv falls back to `ps`), zombies, other users' processes, and DST;
+  - `tmux.Executor.ListAllPanes`.
+
 ## [1.0.0-alpha.490] - 2026-10-06
 
 > 只動 daemon。**daemon 尚未部署**：跟 alpha.487／488／489 累積在一起，由統籌安排一次重啟。SPA 的錯誤訊息要到 P1b-2 才會對應新錯誤碼，部署前 SPA 照舊運作。Electron 不必更新。
