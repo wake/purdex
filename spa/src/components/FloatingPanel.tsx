@@ -11,6 +11,9 @@ export interface FloatingPanelProps {
   onClose: () => void
   width?: number
   testId?: string
+  /** `'below'` (default): under the anchor, left edges aligned. `'right'`: beside
+   * it, bottom edges aligned — for a button at the bottom of a vertical bar. */
+  placement?: 'below' | 'right'
   children: ReactNode
 }
 
@@ -52,7 +55,7 @@ const openPanels: symbol[] = []
  * through `setState` would either lint-fail (`set-state-in-effect`-style cascades
  * apply to the initial placement effect too) or force a re-render per pixel moved.
  */
-export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId = 'floating-panel', children }: FloatingPanelProps) {
+export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId = 'floating-panel', placement = 'below', children }: FloatingPanelProps) {
   const t = useI18nStore((s) => s.t)
   // Only the Electron title bar's drag region needs the panel pushed down —
   // `App.tsx` renders `TitleBar` under the same check, so this stays in sync
@@ -96,10 +99,8 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
   // `MIN_PANEL_HEIGHT` of the viewport remains below it — past that point the
   // panel slides up just enough to keep that floor, rather than opening with
   // almost nothing to show. `maxHeight` then fits the panel from there to the
-  // bottom edge, with the body scrolling for the rest. Used for the initial
-  // placement and to re-anchor on scroll/resize while the panel hasn't been
-  // dragged.
-  const place = () => {
+  // bottom edge, with the body scrolling for the rest.
+  const placeBelow = () => {
     const a = anchorRef.current?.getBoundingClientRect()
     let left = a ? a.left : PADDING
     let top = a ? a.bottom + PADDING : PADDING
@@ -109,10 +110,41 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
     applyMaxHeight(top)
   }
 
+  /** `'right'` bounds the panel by the whole viewport below `topInset`, whatever
+   * its `top` — it grows upward from the anchor, not down from its own top. */
+  const rightMaxHeight = () => Math.max(0, window.innerHeight - topInset - PADDING)
+
+  // Beside the anchor, the panel's bottom edge on the anchor's. The panel's height
+  // comes from its content (only `maxHeight` bounds it), so `top` can't come from a
+  // constant: set `maxHeight` first, then measure the rendered height `h` (reading
+  // the rect forces the layout) and end the panel at the anchor's bottom — clamped
+  // so it never rises above `topInset` nor drops past the bottom padding.
+  const placeRight = () => {
+    const el = panelRef.current
+    if (el) el.style.maxHeight = `${rightMaxHeight()}px`
+    const h = el ? el.getBoundingClientRect().height : 0
+    const a = anchorRef.current?.getBoundingClientRect()
+    let left = a ? a.right + PADDING : PADDING
+    let top = a ? a.bottom - h : topInset
+    left = Math.max(PADDING, Math.min(left, window.innerWidth - width - PADDING))
+    top = Math.max(topInset, Math.min(top, window.innerHeight - PADDING - h))
+    applyPos(left, top)
+  }
+
+  // Used for the initial placement and to re-anchor on scroll/resize (and, for
+  // `'right'`, on a content-height change) while the panel hasn't been dragged.
+  const place = placement === 'right' ? placeRight : placeBelow
+
   // Initial position. Runs once per mount (a fresh instance every time the caller
-  // re-opens the panel).
+  // re-opens the panel). `'right'` also re-places whenever the panel's own height
+  // changes (rows loading in), until the user drags it somewhere of their own.
   useLayoutEffect(() => {
     place()
+    const el = panelRef.current
+    if (placement !== 'right' || !el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => { if (!draggedRef.current) place() })
+    ro.observe(el)
+    return () => ro.disconnect()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -217,7 +249,8 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
         top: posRef.current.top,
         width,
         zIndex: Z_INDEX,
-        maxHeight: window.innerHeight - posRef.current.top - PADDING,
+        // Mirrors the imperative value, so a re-render doesn't swap it for the other formula.
+        maxHeight: placement === 'right' && !draggedRef.current ? rightMaxHeight() : window.innerHeight - posRef.current.top - PADDING,
         // Otherwise the panel sits inside the Electron title bar's OS drag
         // region and can neither be dragged nor have its × clicked (see `TitleBar.tsx`).
         WebkitAppRegion: 'no-drag',
