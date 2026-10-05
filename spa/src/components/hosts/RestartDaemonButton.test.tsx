@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { RestartDaemonButton } from './RestartDaemonButton'
 import { useDaemonRestartStore } from '../../stores/useDaemonRestartStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -72,13 +72,40 @@ describe('RestartDaemonButton', () => {
     expect(screen.getByTestId('nex-restart-now').textContent).toBe('立即重啟')
   })
 
-  it('unmount while counting does not open a dialog or throw', async () => {
+  it('while counting: keeps focus, aria-busy not disabled, Cancel returns focus to the button', async () => {
     let resolve!: (n: number) => void
     vi.mocked(restartLib.countRunningWorkers).mockReturnValueOnce(new Promise((r) => { resolve = r }))
-    const { unmount } = render(<RestartDaemonButton hostId="h1" />)
-    fireEvent.click(screen.getByTestId('restart-daemon'))
-    unmount()
+    render(<RestartDaemonButton hostId="h1" />)
+    const btn = screen.getByTestId('restart-daemon') as HTMLButtonElement
+    btn.focus()
+    fireEvent.click(btn)
+    expect(document.activeElement).toBe(btn)
+    expect(btn.disabled).toBe(false)
+    expect(btn.getAttribute('aria-busy')).toBe('true')
+    expect(btn.getAttribute('aria-disabled')).toBe('true')
+    await act(async () => { resolve(0) })
+    await screen.findByTestId('restart-daemon-confirm-dialog')
+    fireEvent.click(screen.getByTestId('restart-daemon-confirm-cancel'))
+    expect(screen.queryByTestId('restart-daemon-confirm-dialog')).toBeNull()
+    expect(document.activeElement).toBe(btn)
+    expect(btn.getAttribute('aria-busy')).toBeNull()
+  })
+
+  it('double click while counting counts once and opens one dialog', async () => {
+    let resolve!: (n: number) => void
+    vi.mocked(restartLib.countRunningWorkers).mockReturnValueOnce(new Promise((r) => { resolve = r }))
+    render(<RestartDaemonButton hostId="h1" />)
+    const btn = screen.getByTestId('restart-daemon')
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+    expect(restartLib.countRunningWorkers).toHaveBeenCalledTimes(1)
     await act(async () => { resolve(1) })
-    await waitFor(() => expect(screen.queryByTestId('restart-daemon-confirm-dialog')).toBeNull())
+    expect(screen.getAllByTestId('restart-daemon-confirm-dialog')).toHaveLength(1)
+  })
+
+  it('restarting spinner icon is aria-hidden', () => {
+    useDaemonRestartStore.setState({ restarting: { h1: true } })
+    render(<RestartDaemonButton hostId="h1" />)
+    expect(screen.getByTestId('restart-daemon').querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
   })
 })
