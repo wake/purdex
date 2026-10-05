@@ -3,6 +3,7 @@
 // shell cleanup spec §9.2).
 import { useEffect, useRef, type ReactNode } from 'react'
 import { useHostLook } from '../../lib/host-look'
+import { keepFocus } from '../../lib/keep-focus'
 import { useI18nStore } from '../../stores/useI18nStore'
 
 /**
@@ -93,6 +94,8 @@ export function CopySegment({ testId, display, value, what, title, dim, rtl, cla
       data-dim={dim ? 'true' : undefined}
       disabled={value === ''}
       title={title}
+      // A mouse press leaves focus on the pane (shell polish spec §4); click and double-click still fire.
+      onMouseDown={keepFocus}
       onClick={handleClick}
       onDoubleClick={onDoubleClick ? handleDoubleClick : undefined}
       // `bdi` keeps the path itself left-to-right inside an RTL box, so the

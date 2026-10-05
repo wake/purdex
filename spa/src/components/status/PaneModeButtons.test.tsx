@@ -275,6 +275,41 @@ describe('PaneModeButtons — an execution target in chat', () => {
   })
 })
 
+// Shell polish spec §4 (rule F): a mouse press on a mode button leaves focus on the pane. jsdom does not focus on
+// mousedown, so `fireEvent.mouseDown(...) === false` proves the wiring. Pressed and action buttons are probed; a disabled
+// one never sees the press (React drops mouse events on a disabled button, and a browser does not focus one).
+describe('PaneModeButtons — a mouse press keeps focus where it was', () => {
+  const ALL = ['Terminal', 'Worker room', 'Chat'] as const
+
+  it('tmux target: every button prevents the mousedown default and stays in the tab order; a click still opens the dialog', () => {
+    seedReady()
+    agents({ prim01: 'cc', targ01: 'cc' })
+    const target = tmux('targ01')
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(tmux('prim01'), target)} />)
+    for (const name of ALL) {
+      expect(fireEvent.mouseDown(button(name)), name).toBe(false)
+      expect(button(name).tabIndex, name).toBeGreaterThanOrEqual(0)
+    }
+    fireEvent.click(button('Worker room'))
+    expect(useHandoffDialogStore.getState().target).toEqual({ tabId: TAB, paneId: TARGET, content: target })
+  })
+
+  it('execution target: every button prevents the mousedown default; a press then a click still runs each action', () => {
+    const take = registerTake(TARGET)
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(exec('exc_primary'), exec('exc_target'))} />)
+    for (const name of ALL) {
+      expect(fireEvent.mouseDown(button(name)), name).toBe(false)
+      expect(button(name).tabIndex, name).toBeGreaterThanOrEqual(0)
+    }
+    fireEvent.mouseDown(button('Terminal'))
+    fireEvent.click(button('Terminal'))
+    expect(take.takeToTerminal).toHaveBeenCalledTimes(1)
+    fireEvent.mouseDown(button('Chat'))
+    fireEvent.click(button('Chat'))
+    expect(contentOf(TARGET)).toEqual(exec('exc_target', { mode: 'chat' }))
+  })
+})
+
 describe('PaneModeButtons — layout and other kinds', () => {
   it('the group drops below 500 px, like the split buttons it replaces', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(exec('exc_primary'), exec('exc_target'))} />)

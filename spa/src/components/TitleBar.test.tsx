@@ -165,6 +165,27 @@ describe('TitleBar layout buttons', () => {
     }
   })
 
+  // Shell polish spec §4 (rule F): a mouse press on a layout button leaves focus on the pane. jsdom does not focus on
+  // mousedown, so `fireEvent.mouseDown(...) === false` proves the button is wired to `keepFocus`; the helper itself is
+  // proven in a real browser (spec §5).
+  it('a mouse press on any layout button keeps focus where it was; every button stays in the tab order', () => {
+    showTab(leafOf('a', terminal('x')))
+    render(<TitleBar title="t" />)
+    for (const name of [SINGLE, SPLIT_H, SPLIT_V]) {
+      expect(fireEvent.mouseDown(button(name)), name).toBe(false)
+      expect(button(name).tabIndex, name).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('a press then a click still changes the layout', () => {
+    showTab(leafOf('a', terminal('x')))
+    render(<TitleBar title="t" />)
+    fireEvent.mouseDown(button(SPLIT_V))
+    fireEvent.click(button(SPLIT_V))
+    expect(button(SPLIT_V).getAttribute('aria-pressed')).toBe('true')
+    expect(leafIds()).toHaveLength(2)
+  })
+
   it('no button is pressed for a layout no pattern describes (three panes)', () => {
     showTab(splitOf('h', leafOf('a', blank), leafOf('b', blank), leafOf('c', blank)))
     render(<TitleBar title="t" />)

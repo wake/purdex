@@ -179,6 +179,13 @@ describe('FloatingPanel', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  // Shell polish spec §4: the panel owns focus (it takes it on open and restores it on close), so its × is not shell
+  // chrome and a mouse press on it is left alone — the negative control for `keepFocus`.
+  it('does not prevent the mousedown default on its close button', () => {
+    render(<Harness onClose={vi.fn()} />)
+    expect(fireEvent.mouseDown(screen.getByTestId('floating-panel-close'))).toBe(true)
+  })
+
   it('closes on Escape and on the close button', () => {
     const onClose = vi.fn()
     render(<Harness onClose={onClose} />)

@@ -19,6 +19,7 @@ import { setExecutionPaneMode, viewModeOf } from '../../lib/nex/view-mode'
 import { resolveExecutionHostId } from '../../lib/nex/resolve-host'
 import { useHandoffDialogStore } from '../../stores/useHandoffDialogStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { keepFocus } from '../../lib/keep-focus'
 import type { ExecutionViewMode, Pane } from '../../types/tab'
 
 type Mode = 'terminal' | ExecutionViewMode
@@ -99,6 +100,9 @@ export function PaneModeButtons({ tabId, pane }: { tabId: string; pane: Pane }) 
             // The name stays the label; a disabled button's title says why, which reads as its description.
             title={state.kind === 'disabled' ? state.why : name}
             disabled={state.kind === 'disabled'}
+            // On every state, for one rule: a mouse press leaves focus on the pane (shell polish spec §4). A disabled
+            // button never sees the press, so it is harmless there.
+            onMouseDown={keepFocus}
             onClick={state.kind === 'action' ? state.run : undefined}
             className={`${BASE} ${TONE[state.kind]}`}
           >

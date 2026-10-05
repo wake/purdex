@@ -7,6 +7,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { isAgentPane } from '../hooks/useStatusTargetPane'
 import { collectLeaves, currentLayoutPattern } from '../lib/pane-tree'
 import { planLayoutChange, type LayoutChangePlan } from '../lib/layout-change'
+import { keepFocus } from '../lib/keep-focus'
 import type { LayoutPattern, Pane } from '../types/tab'
 import { CollapseButton } from '../features/workspace/components/CollapseButton'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -186,6 +187,8 @@ export function TitleBar({ title }: Props) {
                 aria-pressed={pressed}
                 className={`${BUTTON} ${pressed ? PRESSED : IDLE}`}
                 title={t(labelKey)}
+                // A mouse press leaves focus on the pane (shell polish spec §4).
+                onMouseDown={keepFocus}
                 onClick={() => handlePattern(pattern)}
               >
                 <Icon size={14} />
