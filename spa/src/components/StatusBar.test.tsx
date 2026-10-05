@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act, waitFor, within } from '@testing-library/react'
 import { StatusBar } from './StatusBar'
+import { PaneLayoutRenderer } from './PaneLayoutRenderer'
+import { clearModuleRegistry, registerModule } from '../lib/module-registry'
+import { findPane } from '../lib/pane-tree'
 import { createTab } from '../types/tab'
 import type { Tab, PaneContent } from '../types/tab'
 import { useSessionStore } from '../stores/useSessionStore'
@@ -153,51 +156,24 @@ describe('StatusBar', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('shows split-H / split-V buttons for a tmux-session tab', () => {
-    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    render(<StatusBar activeTab={tab} />)
-    expect(screen.getByTitle('Split Horizontal')).toBeInTheDocument()
-    expect(screen.getByTitle('Split Vertical')).toBeInTheDocument()
-  })
-
-  it('clicking split-H calls splitPaneBlank with the primary pane id', () => {
-    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
-    const paneId = (tab.layout as { pane: { id: string } }).pane.id
-    const spy = vi.spyOn(useTabStore.getState(), 'splitPaneBlank').mockImplementation(() => {})
-    render(<StatusBar activeTab={tab} />)
-    fireEvent.click(screen.getByTitle('Split Horizontal'))
-    expect(spy).toHaveBeenCalledWith('t1', paneId, 'h')
-    fireEvent.click(screen.getByTitle('Split Vertical'))
-    expect(spy).toHaveBeenCalledWith('t1', paneId, 'v')
-  })
-
-  it('shows split buttons for a split-layout tab whose primary pane is a tmux-session, using the primary pane id', () => {
-    const primaryPane = { id: 'primary-pane', content: { kind: 'tmux-session' as const, hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal' as const, cachedName: '', tmuxInstance: '' } }
-    const layout: PaneLayout = {
-      type: 'split', id: 's1', direction: 'h',
-      children: [
-        { type: 'leaf', pane: primaryPane },
-        { type: 'leaf', pane: { id: 'other', content: { kind: 'new-tab' } } },
-      ],
-      sizes: [50, 50],
-    }
-    const tab = { ...makeTab('t1', { kind: 'new-tab' }), layout }
-    const spy = vi.spyOn(useTabStore.getState(), 'splitPaneBlank').mockImplementation(() => {})
-    render(<StatusBar activeTab={tab} />)
-    expect(screen.getByTitle('Split Horizontal')).toBeInTheDocument()
-    fireEvent.click(screen.getByTitle('Split Horizontal'))
-    expect(spy).toHaveBeenCalledWith('t1', 'primary-pane', 'h')
-  })
-
-  it('does not show split buttons for an editor tab (bar is null)', () => {
-    const tab = makeTab('t1', { kind: 'editor', source: { type: 'inapp' }, filePath: '/notes/a.md' })
-    render(<StatusBar activeTab={tab} />)
+  // Shell cleanup P6 (spec D.3, §9.6): the split buttons are gone — splitting stays in the title bar and the pane
+  // context menu — and the mode buttons (§9.3) take their place in the controls block.
+  it('a tmux-session bar has the mode buttons in its controls block, terminal pressed, and no split buttons', () => {
+    render(<StatusBar activeTab={sessionTab()} />)
+    const modes = screen.getByTestId('status-mode-buttons')
+    expect(screen.getByTestId('status-controls')).toContainElement(modes)
+    expect(screen.getByRole('button', { name: 'Terminal' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.queryByTestId('status-split-buttons')).toBeNull()
     expect(screen.queryByTitle('Split Horizontal')).toBeNull()
+    expect(screen.queryByTitle('Split Vertical')).toBeNull()
   })
 
-  it('does not show split buttons when there is no active tab', () => {
+  it('no mode buttons for a non-session pane or when there is no active tab', () => {
+    render(<StatusBar activeTab={makeTab('t1', { kind: 'dashboard' })} />)
+    expect(screen.queryByTestId('status-mode-buttons')).toBeNull()
+    cleanup()
     render(<StatusBar activeTab={null} />)
-    expect(screen.queryByTitle('Split Horizontal')).toBeNull()
+    expect(screen.queryByTestId('status-mode-buttons')).toBeNull()
   })
 
   it('falls back to sessionCode when session not in store', () => {
@@ -317,7 +293,7 @@ describe('StatusBar agent pane title', () => {
     useUploadStore.setState({ sessions: {} })
   })
 
-  it('shows pane_title left of the split buttons when showAgentTitleInStatusBar=true', () => {
+  it('shows pane_title left of the mode buttons when showAgentTitleInStatusBar=true', () => {
     const ck = compositeKey(HOST_ID, 'dev001')
     useSessionStore.setState({
       sessions: {
@@ -336,7 +312,7 @@ describe('StatusBar agent pane title', () => {
 
     const title = screen.getByTestId('agent-pane-title')
     expect(title.textContent).toBe('plan review')
-    expect(title.compareDocumentPosition(screen.getByTestId('status-split-buttons')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(title.compareDocumentPosition(screen.getByTestId('status-mode-buttons')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('hides title when showAgentTitleInStatusBar=false', () => {
@@ -708,7 +684,7 @@ describe('StatusBar peer segments', () => {
     expect(screen.getByTestId('agent-label').className).toContain('max-[700px]:hidden')
     expect(screen.getByTestId('agent-label').className).toContain('truncate')
     expect(screen.getByTestId('agent-label').className).toMatch(/max-w-\[\d+ch\]/)
-    expect(screen.getByTestId('status-split-buttons').className).toContain('max-[500px]:hidden')
+    expect(screen.getByTestId('status-mode-buttons').className).toContain('max-[500px]:hidden')
     // Never dropped.
     for (const testId of ['status-seg-status', 'upload-status', 'status-seg-host', 'status-seg-peer-id']) {
       expect(screen.getByTestId(testId).className, testId).not.toContain(':hidden')
@@ -914,6 +890,41 @@ describe('StatusBar status target pane', () => {
     expect(screen.queryByText('plain-shell')).toBeNull()
   })
 
+  it('D.4-1 end to end: after a real pointerdown on the plain terminal, the bar still shows the worker and its chat button switches the worker pane', () => {
+    clearModuleRegistry()
+    const stub = ({ pane }: { pane: { id: string } }) => <div data-testid={`pane-${pane.id}`} />
+    registerModule({
+      id: 'status-bar-test-panes',
+      name: 'Stub panes',
+      panes: [{ kind: 'tmux-session', component: stub }, { kind: 'execution', component: stub }],
+    })
+    // The plain terminal is the primary (first) pane: a button that acted on the primary would write the terminal.
+    const tab = splitTab('t1', { id: 'term', content: plainTerminal }, { id: 'w', content: workerContent })
+    useTabStore.setState({ tabs: { t1: tab }, tabOrder: ['t1'], activeTabId: 't1', visitHistory: [] })
+    function Live() {
+      const live = useTabStore((s) => s.tabs.t1)
+      return (
+        <>
+          <PaneLayoutRenderer layout={live.layout} tabId="t1" isActive />
+          <StatusBar activeTab={live} />
+        </>
+      )
+    }
+    render(<Live />)
+
+    fireEvent.pointerDown(screen.getByTestId('pane-term'))
+    expect(usePaneFocusStore.getState().recent.t1).toEqual(['term'])
+    expect(screen.getByTestId('status-seg-worker-name')).toBeInTheDocument()
+    expect(screen.queryByTestId('status-seg-session-name')).toBeNull()
+
+    fireEvent.click(within(screen.getByTestId('status-bar')).getByRole('button', { name: 'Chat' }))
+    const layout = useTabStore.getState().tabs.t1.layout
+    expect(findPane(layout, 'w')?.content).toEqual({ ...workerContent, mode: 'chat' })
+    expect(findPane(layout, 'term')?.content).toEqual(plainTerminal)
+    expect(within(screen.getByTestId('status-bar')).getByRole('button', { name: 'Chat' }).getAttribute('aria-pressed')).toBe('true')
+    clearModuleRegistry()
+  })
+
   it('D.4-2: two agent panes → follows the click', () => {
     useAgentStore.setState({ agentTypes: { [compositeKey(HOST_ID, CC_CODE)]: 'cc', [compositeKey(HOST_ID, 'plain01')]: 'codex' } })
     render(<StatusBar activeTab={splitTab('t1', { id: 'cc', content: ccTerminal }, { id: 'cx', content: plainTerminal })} />)
@@ -987,12 +998,16 @@ describe('StatusBar worker bar', () => {
     expect(screen.queryByText('execution')).toBeNull()
   })
 
-  it('lays out the same three containers, with exactly one ml-auto: the (empty) controls block', () => {
+  it('lays out the same three containers, with exactly one ml-auto: the controls block, holding the mode buttons', () => {
     render(<StatusBar activeTab={workerTab()} />)
     const bar = screen.getByTestId('status-bar')
     expect(bar.querySelectorAll('.ml-auto').length).toBe(1)
     const controls = screen.getByTestId('status-controls')
     expect(controls.className).toContain('ml-auto')
+    const modes = screen.getByTestId('status-mode-buttons')
+    expect(controls).toContainElement(modes)
+    expect(modes.className).toContain('max-[500px]:hidden')
+    expect(screen.getByRole('button', { name: 'Worker room' }).getAttribute('aria-pressed')).toBe('true')
     expect(controls.className).toContain('shrink-0')
     expect(screen.getByTestId('status-segments').className).toContain('min-w-0')
     expect(screen.getByTestId('status-copy-feedback')).toBeInTheDocument()

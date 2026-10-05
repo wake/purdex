@@ -1,6 +1,6 @@
 // spa/src/components/status/WorkerStatusBar.tsx — the status bar for an `execution` (worker) target pane (shell
-// cleanup spec §9.2): the host segment the tmux bar uses, the worker name, its cwd, then the controls block. No
-// refresh / peer-id / upload segments: those are tmux-specific.
+// cleanup spec §9.2): the host segment the tmux bar uses, the worker name, its cwd, then the mode buttons (§9.3) in the
+// controls block. No refresh / peer-id / upload segments: those are tmux-specific.
 import { useHostStore } from '../../stores/useHostStore'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { selectSessionTitleSupported, useNexHostStore } from '../../stores/useNexHostStore'
@@ -9,12 +9,16 @@ import { liveWorkerSummary } from '../../lib/nex/worker-summary'
 import { workerTabTitle } from '../../lib/nex/worker-tab-title'
 import type { ExecutionContent } from '../../types/tab'
 import { CopySegment, HostSegment, Separator, StatusBarLayout } from './StatusSegments'
+import { PaneModeButtons } from './PaneModeButtons'
 import { useCopyFeedback } from './useCopyFeedback'
 
-export function WorkerStatusBar({ content, onNavigateToHost }: {
-  content: ExecutionContent
+export function WorkerStatusBar({ tabId, pane, onNavigateToHost }: {
+  tabId: string
+  /** The status target: a worker pane. */
+  pane: { id: string; content: ExecutionContent }
   onNavigateToHost?: (hostId: string) => void
 }) {
+  const { content } = pane
   const t = useI18nStore((s) => s.t)
   // The host resolves like the worker pane's own (`resolveExecutionHostId`: the hint, else the first host), but
   // through a selector so a host list that loads after mount still lands here.
@@ -60,8 +64,7 @@ export function WorkerStatusBar({ content, onNavigateToHost }: {
           />
         </>
       )}
-      // The mode buttons (spec §9.3) go in the controls block; until then it stays empty, but it is still the one
-      // `ml-auto` container of the row.
+      controls={<PaneModeButtons tabId={tabId} pane={pane} />}
     />
   )
 }

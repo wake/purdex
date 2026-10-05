@@ -1,7 +1,6 @@
 import { useCallback, useEffect } from 'react'
-import { CircleNotch, CheckCircle, XCircle, LockSimple, Columns, Rows, ArrowsClockwise } from '@phosphor-icons/react'
+import { CircleNotch, CheckCircle, XCircle, LockSimple, ArrowsClockwise } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
-import { useTabStore } from '../stores/useTabStore'
 import { useStatusTargetPane } from '../hooks/useStatusTargetPane'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
@@ -16,6 +15,7 @@ import type { PeerRow } from '../stores/usePeerStore'
 import { reasonText } from '../lib/peer-display'
 import { CopySegment, HostSegment, Separator, StatusBarLayout } from './status/StatusSegments'
 import { WorkerStatusBar } from './status/WorkerStatusBar'
+import { PaneModeButtons } from './status/PaneModeButtons'
 import { useCopyFeedback } from './status/useCopyFeedback'
 
 type T = (key: string, params?: Record<string, string | number>) => string
@@ -220,7 +220,7 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
   }
 
   if (content.kind === 'execution') {
-    return <WorkerStatusBar content={content} onNavigateToHost={onNavigateToHost} />
+    return <WorkerStatusBar tabId={activeTab.id} pane={{ id: target.id, content }} onNavigateToHost={onNavigateToHost} />
   }
 
   if (content.kind !== 'tmux-session') {
@@ -369,22 +369,8 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
             {paneTitle}
           </span>
         )}
-        <span data-testid="status-split-buttons" className="flex items-center gap-1 max-[500px]:hidden">
-          <button
-            title={t('pane.split_horizontal')}
-            onClick={() => useTabStore.getState().splitPaneBlank(activeTab.id, target.id, 'h')}
-            className="flex items-center px-1 py-0.5 rounded border border-border-default text-text-secondary cursor-pointer transition-colors hover:bg-surface-hover"
-          >
-            <Columns size={12} />
-          </button>
-          <button
-            title={t('pane.split_vertical')}
-            onClick={() => useTabStore.getState().splitPaneBlank(activeTab.id, target.id, 'v')}
-            className="flex items-center px-1 py-0.5 rounded border border-border-default text-text-secondary cursor-pointer transition-colors hover:bg-surface-hover"
-          >
-            <Rows size={12} />
-          </button>
-        </span>
+        {/* Where the split buttons were (spec D.3, §9.6; splitting stays in the title bar and the pane menu). */}
+        <PaneModeButtons tabId={activeTab.id} pane={target} />
       </>}
     />
   )
