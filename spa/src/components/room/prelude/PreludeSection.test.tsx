@@ -308,6 +308,23 @@ describe('PreludeSection chat form', () => {
     expect(screen.getByTestId('chat-failed-line')).toBeTruthy()
   })
 
+  it('a cut edit call and its cut result show their hints beside the edited line, not behind the fold', () => {
+    const diff = { path: '/w/n.md', added: 1, removed: 0, truncated: false, hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: [' a', '+b'] }] }
+    const tools = { e: { name: 'Edit', startedAt: 1, endedAt: 2, status: 'done' as const, diff } }
+    const cut = derivePrelude([
+      m('2', 'assistant', [call('e', { truncated: true, total_bytes: 90000 })]),
+      m('3', 'user', [result('e', 'abcd', { truncated: true, total_bytes: 50000 })]),
+    ])
+    const { unmount } = render(<PreludeSection {...chat} view={{ ...cut, tools }} status="ok" done />)
+    expect(screen.getByTestId('chat-edited-line')).toBeTruthy()
+    expect(screen.getAllByTestId('prelude-truncated')).toHaveLength(2)
+    unmount()
+    const whole = derivePrelude([m('2', 'assistant', [call('e')]), m('3', 'user', [result('e', 'abcd')])])
+    render(<PreludeSection {...chat} view={{ ...whole, tools }} status="ok" done />)
+    expect(screen.getByTestId('chat-edited-line')).toBeTruthy()
+    expect(screen.queryAllByTestId('prelude-truncated')).toHaveLength(0)
+  })
+
   it('an omitted image in an agent bubble; a cut user line gets its hint', () => {
     const view = derivePrelude([
       m('2', 'assistant', [{ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 2048 } }]),

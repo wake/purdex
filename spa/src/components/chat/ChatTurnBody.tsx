@@ -10,6 +10,7 @@ import { partialBlockKey, partialToolUses, type PartialAssembly } from '../../li
 import { toolResultText, type BlockKey } from '../../lib/nex/operations'
 import { keyAt, rowKey, type MessageIdOf } from '../../lib/nex/message-keys'
 import { toolEntryFor, type TurnOperation } from '../../lib/nex/operation-status'
+import { utf8Length } from '../../lib/nex/fold'
 import { INTERRUPT_TEXT } from '../../lib/nex/turns'
 import { searchUnitId } from '../../lib/nex/transcript-search'
 import RoomProse from '../room/RoomProse'
@@ -40,7 +41,19 @@ function ChatOperationLine({ op, ctx }: { op: TurnOperation; ctx: RenderCtx }) {
   if (!block) return null
   const call = block.type === 'tool_use'
   const facts = toolEntryFor(ctx.tools, call ? block.id : block.tool_use_id)
-  if (op.kind === 'edited' && facts?.diff) return <ChatEditedLine foldKey={op.key} diff={facts.diff} />
+  if (op.kind === 'edited' && facts?.diff) {
+    // The edited line holds only the diff, so a cut call or result says so
+    // beside it, visible without expanding (spec 5.3: hints go with whatever
+    // line represents the operation).
+    const result = call ? ctx.index.resultForCall.get(op.key) : undefined
+    return (
+      <>
+        <ChatEditedLine foldKey={op.key} diff={facts.diff} />
+        {call && block.truncated && <TruncatedHint shown={blockShownBytes(block)} total={block.total_bytes ?? null} />}
+        {result?.truncated && <TruncatedHint shown={utf8Length(result.text)} total={result.totalBytes ?? null} />}
+      </>
+    )
+  }
   const name = (call ? block.name : facts?.file?.path) || t('execution.tool.unknown')
   const message = call ? (ctx.index.resultForCall.get(op.key)?.text ?? '') : toolResultText(block.content)
   return (
