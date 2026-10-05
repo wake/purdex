@@ -164,8 +164,26 @@ func runServe(args []string) *reexecPlan {
 	// another daemon already owns this data_dir, so refuse to start rather
 	// than run two daemons against the same SQLite files.
 	pidPath := filepath.Join(cfg.DataDir, "pdx.pid")
-	pidFile := mustAcquirePidLock(pidPath, os.Getpid(), log.Fatalf)
-	defer releasePidLock(pidFile, pidPath)
+	var pidFile *os.File
+	if v, ok := os.LookupEnv(pidLockFDEnv); ok {
+		// Unset either way: children (tmux, nex turns) must not see a stale fd number.
+		os.Unsetenv(pidLockFDEnv)
+		if f, err := adoptPidLock(v, pidPath, os.Getpid()); err != nil {
+			log.Printf("pid lock: inherited fd not adopted (%v); acquiring", err)
+		} else {
+			log.Printf("pid lock: adopted from the previous image")
+			pidFile = f
+		}
+	}
+	if pidFile == nil {
+		pidFile = mustAcquirePidLock(pidPath, os.Getpid(), log.Fatalf)
+	}
+	handingOff := false
+	defer func() {
+		if !handingOff {
+			releasePidLock(pidFile, pidPath)
+		}
+	}()
 
 	// Files of modules that no longer exist (sync.db, device_state.db + -wal/-shm; #1303).
 	// After the PID lock, so only the daemon that owns this data_dir touches it.
@@ -285,6 +303,14 @@ func runServe(args []string) *reexecPlan {
 	err = serveAndWait(srv, listener, sigCh, restartCh, cancel, c, core.ShutdownBudget, log.Printf, os.Exit)
 	if errors.Is(err, errRestart) {
 		if restartStillWanted(sigCh, func() { signal.Stop(sigCh) }, log.Printf) {
+			// Keep the pid lock held through the exec: the new image adopts it.
+			if entry, err := handOffPidLock(pidFile); err != nil {
+				log.Printf("pid lock: hand-off failed (%v); the new image re-acquires it", err)
+			} else {
+				handingOff = true
+				boot.env = append(boot.env, entry)
+				boot.lock = pidFile // keeps the *os.File (and its fd) alive until exec
+			}
 			return boot
 		}
 		return nil

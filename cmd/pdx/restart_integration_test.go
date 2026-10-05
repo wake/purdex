@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -162,6 +163,33 @@ func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
 		t.Fatalf("before restart: /api/dev/daemon/check = %d, want 404 (PDX_DEV_MODE=0)", code)
 	}
 
+	// Lock-gap probe: from just before the POST until the new boot id answers,
+	// try a shared flock on pdx.pid every millisecond. A success means the
+	// lock was free — the window a concurrent `pdx start` could take.
+	var gaps atomic.Int32
+	stopProbe := make(chan struct{})
+	probeDone := make(chan struct{})
+	go func() {
+		defer close(probeDone)
+		pidPath := filepath.Join(dir, "pdx.pid")
+		for {
+			select {
+			case <-stopProbe:
+				return
+			case <-time.After(time.Millisecond):
+			}
+			fd, err := syscall.Open(pidPath, syscall.O_RDONLY, 0)
+			if err != nil {
+				continue
+			}
+			if syscall.Flock(fd, syscall.LOCK_SH|syscall.LOCK_NB) == nil {
+				gaps.Add(1)
+				syscall.Flock(fd, syscall.LOCK_UN)
+			}
+			syscall.Close(fd)
+		}
+	}()
+
 	req, _ := http.NewRequest("POST", base+"/api/daemon/restart", nil)
 	req.Header.Set("Authorization", "Bearer itest-token")
 	resp, err := itestClient.Do(req)
@@ -178,6 +206,11 @@ func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
 	}
 
 	second := waitBootID(t, base, first, 60*time.Second)
+	close(stopProbe)
+	<-probeDone
+	if n := gaps.Load(); n != 0 {
+		t.Fatalf("pid lock was free %d time(s) during the restart: it must be handed across the exec", n)
+	}
 	if second == first {
 		t.Fatal("boot id unchanged")
 	}
@@ -191,6 +224,9 @@ func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
 	// Same environment: dev routes are still off (D3).
 	if code := devCheckStatus(t, base); code != http.StatusNotFound {
 		t.Fatalf("after restart: /api/dev/daemon/check = %d, want 404 — the boot env (PDX_DEV_MODE=0) was not kept", code)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "serve.log")); !strings.Contains(string(b), "pid lock: adopted from the previous image") {
+		t.Fatalf("serve.log has no pid lock adoption line:\n%s", b)
 	}
 	pidData, err := os.ReadFile(filepath.Join(dir, "pdx.pid"))
 	if err != nil {
