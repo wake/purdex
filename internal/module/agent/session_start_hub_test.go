@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -47,28 +48,100 @@ func TestSessionStartHub_BlockedSubscriberDoesNotGrowGoroutines(t *testing.T) {
 	}
 }
 
-func TestSessionStartHub_QueueFullDropsWithoutBlocking(t *testing.T) {
-	var h sessionStartHub
-	release := make(chan struct{})
-	var delivered atomic.Int64
-	unsub := h.subscribe(func(SessionStartEvent) {
-		<-release
-		delivered.Add(1)
+// blockedHub returns a hub whose subscriber is parked inside the callback on
+// a "gate" event, so later publishes pile up behind it. release() lets it go;
+// got receives every non-gate event in delivery order.
+func blockedHub(t *testing.T) (h *sessionStartHub, got chan SessionStartEvent, release func()) {
+	t.Helper()
+	h = &sessionStartHub{}
+	got = make(chan SessionStartEvent, 1024)
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	unsub := h.subscribe(func(ev SessionStartEvent) {
+		if ev.SessionID == "gate" {
+			close(entered)
+			<-gate
+			return
+		}
+		got <- ev
 	})
-	defer unsub()
+	t.Cleanup(unsub)
+	h.publish(hubEvent("gate"))
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("consumer never entered the callback")
+	}
+	return h, got, func() { close(gate) }
+}
 
+func TestSessionStartHub_CoalescesPerSessionID(t *testing.T) {
+	h, got, release := blockedHub(t)
+	h.publish(SessionStartEvent{SessionID: "S1", Source: "resume"})
+	h.publish(SessionStartEvent{SessionID: "S2", Source: "startup"})
+	h.publish(SessionStartEvent{SessionID: "S1", Source: "startup"})
+	release()
+
+	var evs []SessionStartEvent
+	for len(evs) < 2 {
+		select {
+		case ev := <-got:
+			evs = append(evs, ev)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timeout; got %+v", evs)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if len(got) != 0 {
+		t.Fatalf("extra deliveries: %d", len(got))
+	}
+	if evs[0].SessionID != "S1" || evs[0].Source != "startup" || evs[1].SessionID != "S2" {
+		t.Fatalf("got %+v, want S1(startup) then S2", evs)
+	}
+}
+
+func TestSessionStartHub_NoLossUnderLoad(t *testing.T) {
+	h, got, release := blockedHub(t)
+	for i := 0; i < 500; i++ {
+		id := fmt.Sprintf("s%d", i%200)
+		h.publish(SessionStartEvent{SessionID: id, Source: fmt.Sprintf("n%d", i)})
+	}
+	release()
+
+	seen := map[string]string{}
+	deadline := time.After(3 * time.Second)
+	for len(seen) < 200 {
+		select {
+		case ev := <-got:
+			if _, dup := seen[ev.SessionID]; dup {
+				t.Fatalf("session %s delivered twice", ev.SessionID)
+			}
+			seen[ev.SessionID] = ev.Source
+		case <-deadline:
+			t.Fatalf("only %d/200 sessions delivered", len(seen))
+		}
+	}
+	for i := 0; i < 200; i++ {
+		// latest publish for session i%200 is the largest n with n%200==i
+		want := fmt.Sprintf("n%d", 400+i)
+		if i+400 >= 500 {
+			want = fmt.Sprintf("n%d", 200+i)
+		}
+		if got := seen[fmt.Sprintf("s%d", i)]; got != want {
+			t.Fatalf("s%d: got %s, want %s", i, got, want)
+		}
+	}
+}
+
+func TestSessionStartHub_PublishNeverBlocks(t *testing.T) {
+	h, _, release := blockedHub(t)
+	defer release()
 	start := time.Now()
-	for i := 0; i < sessionStartQueueSize+5; i++ {
-		h.publish(hubEvent("x"))
+	for i := 0; i < 1000; i++ {
+		h.publish(hubEvent(fmt.Sprintf("p%d", i)))
 	}
 	if d := time.Since(start); d > time.Second {
-		t.Fatalf("publish blocked for %v", d)
-	}
-	close(release)
-	time.Sleep(200 * time.Millisecond)
-	n := delivered.Load()
-	if n < int64(sessionStartQueueSize) || n > int64(sessionStartQueueSize)+1 {
-		t.Fatalf("delivered %d, want %d..%d", n, sessionStartQueueSize, sessionStartQueueSize+1)
+		t.Fatalf("1000 publishes took %v", d)
 	}
 }
 

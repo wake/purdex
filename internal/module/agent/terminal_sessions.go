@@ -43,44 +43,96 @@ type TerminalSessions interface {
 	SubscribeSessionStart(fn func(SessionStartEvent)) (unsubscribe func()) // Task 3
 }
 
-// sessionStartQueueSize bounds each subscriber's pending events.
-const sessionStartQueueSize = 64
-
 // sessionStartHub fans a granted SessionStart out to in-process subscribers.
 //
-// Delivery contract: every subscriber owns a bounded queue
-// (sessionStartQueueSize) and exactly one consumer goroutine, started at
-// subscribe time, which calls the callback for each event in publish order.
-// Each call has its own recover, so a panic is logged and the consumer moves
-// on to the next event. publish never blocks: when a subscriber's queue is
-// full the event is dropped for that subscriber and logged, so a stuck
-// subscriber costs one goroutine and 64 queued events, never the hook
-// response and never an unbounded number of goroutines.
+// Delivery contract: every subscriber owns a coalescing queue keyed by session
+// id and exactly one consumer goroutine, started at subscribe time. publish
+// never blocks and never drops a session: if the session id is already
+// pending for that subscriber the earlier event is replaced by the later one,
+// otherwise the id is appended to the pending order. The consumer wakes,
+// takes the whole pending set, and calls the callback once per session id.
 //
-// unsubscribe is idempotent. It closes the queue under the hub mutex (the
-// same lock publish sends under, so a send can never hit a closed channel);
-// the consumer drains what is already queued and exits, so events queued
-// before unsubscribe may still be delivered.
+// Coalescing is safe because subscribers must treat an event as "re-check
+// this session" (they re-read state), not as a counter: the latest event for
+// a session carries all the information the earlier ones did. Ordering is
+// preserved per session id; across sessions delivery follows first-pending
+// order. Memory is bounded by the number of distinct session ids pending, not
+// by the event count, and a stuck subscriber costs one goroutine.
+//
+// Each callback runs in its own recover, so a panic is logged and the
+// consumer moves on. unsubscribe is idempotent: it removes the subscriber
+// from the hub and stops the consumer. Events published before unsubscribe
+// may still be delivered; none are started after it returns (a callback already
+// in flight finishes).
 type sessionStartHub struct {
 	mu   sync.Mutex
 	next int
-	subs map[int]chan SessionStartEvent
+	subs map[int]*sessionStartSub
+}
+
+type sessionStartSub struct {
+	mu      sync.Mutex
+	pending map[string]SessionStartEvent
+	order   []string
+	wake    chan struct{} // capacity 1
+	done    chan struct{}
+}
+
+func (s *sessionStartSub) push(ev SessionStartEvent) {
+	s.mu.Lock()
+	if _, ok := s.pending[ev.SessionID]; !ok {
+		s.order = append(s.order, ev.SessionID)
+	}
+	s.pending[ev.SessionID] = ev
+	s.mu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *sessionStartSub) take() []SessionStartEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]SessionStartEvent, 0, len(s.order))
+	for _, id := range s.order {
+		out = append(out, s.pending[id])
+	}
+	s.order = nil
+	s.pending = map[string]SessionStartEvent{}
+	return out
 }
 
 func (h *sessionStartHub) subscribe(fn func(SessionStartEvent)) func() {
-	ch := make(chan SessionStartEvent, sessionStartQueueSize)
+	sub := &sessionStartSub{
+		pending: map[string]SessionStartEvent{},
+		wake:    make(chan struct{}, 1),
+		done:    make(chan struct{}),
+	}
 	h.mu.Lock()
 	if h.subs == nil {
-		h.subs = map[int]chan SessionStartEvent{}
+		h.subs = map[int]*sessionStartSub{}
 	}
 	id := h.next
 	h.next++
-	h.subs[id] = ch
+	h.subs[id] = sub
 	h.mu.Unlock()
 
 	go func() {
-		for ev := range ch {
-			deliverSessionStart(fn, ev)
+		for {
+			select {
+			case <-sub.wake:
+			case <-sub.done:
+				return
+			}
+			for _, ev := range sub.take() {
+				select {
+				case <-sub.done:
+					return
+				default:
+				}
+				deliverSessionStart(fn, ev)
+			}
 		}
 	}()
 
@@ -88,9 +140,9 @@ func (h *sessionStartHub) subscribe(fn func(SessionStartEvent)) func() {
 	return func() {
 		once.Do(func() {
 			h.mu.Lock()
-			defer h.mu.Unlock()
 			delete(h.subs, id)
-			close(ch)
+			h.mu.Unlock()
+			close(sub.done)
 		})
 	}
 }
@@ -106,13 +158,13 @@ func deliverSessionStart(fn func(SessionStartEvent), ev SessionStartEvent) {
 
 func (h *sessionStartHub) publish(ev SessionStartEvent) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, ch := range h.subs {
-		select {
-		case ch <- ev:
-		default:
-			log.Printf("[agent] session_start subscriber queue full; event dropped (session=%s source=%s)", ev.SessionID, ev.Source)
-		}
+	subs := make([]*sessionStartSub, 0, len(h.subs))
+	for _, sub := range h.subs {
+		subs = append(subs, sub)
+	}
+	h.mu.Unlock()
+	for _, sub := range subs {
+		sub.push(ev)
 	}
 }
 
