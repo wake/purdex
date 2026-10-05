@@ -38,7 +38,7 @@ The third item of the same report (how terminated workers are listed) is under d
 - **Covered buttons** (every `<button>` in these components):
   - `features/workspace/components/BottomNav.tsx` — all variants (wide rows, wide compact, narrow) and both compact toggles;
   - the new `worker-list-close` (§3);
-  - `components/TitleBar.tsx` — the layout buttons (`layout-buttons`);
+  - `components/TitleBar.tsx` — the layout buttons (`layout-buttons`) and the sidebar toggle it renders (`CollapseButton`, `features/workspace/components/CollapseButton.tsx`, every variant). The user's scope is the whole title bar; v1 of this spec named only the layout buttons, which the T1–T3 report caught;
   - `components/status/PaneModeButtons.tsx` — terminal / worker / chat;
   - `components/status/StatusSegments.tsx` — `CopySegment`;
   - `components/StatusBar.tsx` — `status-peer-refresh`.
