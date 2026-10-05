@@ -183,13 +183,11 @@ describe('registerBuiltinModules', () => {
     expect(iface?.component).toBeDefined()
   })
 
-  it('registers interface subsections: new-tab enabled, pane/sidebar disabled', () => {
+  it('registers New Tab as the only interface subsection, enabled', () => {
     registerBuiltinModules()
     const subs = getInterfaceSubsections()
-    expect(subs.map((s) => s.id)).toEqual(['new-tab', 'pane', 'sidebar'])
+    expect(subs.map((s) => s.id)).toEqual(['new-tab'])
     expect(subs[0].disabled).toBeFalsy()
-    expect(subs[1].disabled).toBe(true)
-    expect(subs[2].disabled).toBe(true)
   })
 })
 

@@ -12,7 +12,7 @@ const Pane = () => <div data-testid="pane-body">pane-body</div>
 beforeEach(() => {
   clearInterfaceSubsectionRegistry()
   registerInterfaceSubsection({ id: 'new-tab', label: 'settings.interface.new_tab', order: 0, component: NewTab })
-  registerInterfaceSubsection({ id: 'pane', label: 'settings.interface.pane', order: 1, component: Pane, disabled: true, disabledReason: 'settings.coming_soon' })
+  registerInterfaceSubsection({ id: 'pane', label: 'Pane', order: 1, component: Pane, disabled: true, disabledReason: 'settings.coming_soon' })
 })
 
 describe('InterfaceSection', () => {

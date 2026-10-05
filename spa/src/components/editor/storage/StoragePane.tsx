@@ -572,9 +572,8 @@ export function StoragePane({ pane }: PaneRendererProps) {
 
   // --- Drag-and-drop move (T1b-6b) ---
 
-  // Mirror RegionManager: a 5px activation distance so a stationary
-  // click/double-click never starts a drag — select/open/toggle coexist with
-  // dragging.
+  // A 5px activation distance so a stationary click/double-click never
+  // starts a drag — select/open/toggle coexist with dragging.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   const handleDragEnd = useCallback(

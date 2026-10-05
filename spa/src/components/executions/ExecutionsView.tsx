@@ -1,12 +1,11 @@
-// spa/src/components/executions/ExecutionsView.tsx — the sidebar "Executions"
-// view for the active host (P-C spec §4.3): header with the host's name and
+// spa/src/components/executions/ExecutionsView.tsx — one host's section of the
+// activity bar's worker list (`WorkerList`; P-C spec §4.3): header with the host's name and
 // its Nexen phase, then the host's non-archived executions from the shared
 // per-host list store (one site-wide SSE per host, shared with the Host → Nex
 // table). Nexen readiness comes from `useNexHostStore` only; this view never
 // reads `HostInfo.nex` itself.
 import { useEffect, useMemo, useState } from 'react'
 import { Circle, Spinner } from '@phosphor-icons/react'
-import type { ViewProps } from '../../lib/module-registry'
 import { useHostExecutions } from '../../hooks/useHostExecutions'
 import { useHostLook } from '../../lib/host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -35,7 +34,7 @@ function useNowTicker(): number {
   return now
 }
 
-export function ExecutionsView({ hostId }: ViewProps) {
+export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean }) {
   const id = hostId ?? ''
   const t = useI18nStore((s) => s.t)
   const hostName = useHostLook(id).name

@@ -226,8 +226,6 @@ describe('startCollector — changes that schedule nothing', () => {
   it('terminalSettingsVersion', () => expectIgnored(() => useUISettingsStore.getState().bumpTerminalSettingsVersion()))
   it('activeEditingPreset', () => expectIgnored(() => useNewTabLayoutStore.setState({ activeEditingPreset: '2col' })))
   it('knownIds', () => expectIgnored(() => useNewTabLayoutStore.setState({ knownIds: ['x'] })))
-  it('layout regions', () =>
-    expectIgnored(() => useLayoutStore.setState({ regions: { ...useLayoutStore.getState().regions } })))
   // per-workbench shown hosts §2: the shown store's `relabelStamp` is device-local, never projected
   it('the shown store\'s relabelStamp', () => expectIgnored(() => useShownHostsStore.setState({ relabelStamp: 7 })))
 })

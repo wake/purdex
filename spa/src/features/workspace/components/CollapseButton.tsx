@@ -9,8 +9,8 @@ interface Props {
 }
 
 // header-right and divider have explicit w/h so the icon needs flex centering;
-// topbar only wraps the icon in p-1, which matches the region-toggle buttons
-// byte-for-byte — leave flex classes off so class strings are identical.
+// topbar only wraps the icon in p-1, like the title bar's layout buttons — leave
+// flex classes off so the two sit on the same box.
 const VARIANT_CLASSES: Record<Variant, string> = {
   'header-right': 'w-6 h-6 rounded-md flex items-center justify-center',
   divider: 'absolute top-3 right-[-11px] w-[22px] h-[22px] rounded-full bg-surface-tertiary border border-border-subtle shadow-sm opacity-0 group-hover/narrow-bar:opacity-100 focus:opacity-100 transition-opacity z-10 flex items-center justify-center',
@@ -23,9 +23,9 @@ const ICON_SIZE: Record<Variant, number> = {
   topbar: 14,
 }
 
-// topbar mirrors the region-toggle buttons in TitleBar's right cluster: accent
-// tint when the activity bar is "visible as wide", neutral secondary styling
-// otherwise. Other variants keep the original hover-only treatment.
+// topbar: accent tint when the activity bar is "visible as wide", neutral
+// secondary styling otherwise. Other variants keep the original hover-only
+// treatment.
 function stateClasses(variant: Variant, locked: boolean, isWide: boolean): string {
   if (locked) return 'text-text-muted/50 cursor-not-allowed'
   if (variant === 'topbar' && isWide) {

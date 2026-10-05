@@ -1,14 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render } from '@testing-library/react'
 import { useEffect, useState } from 'react'
-import { registerBuiltinModules, resetFileOpenerRegistryForHmr } from '../index'
+import { resetFileOpenerRegistryForHmr } from '../index'
 import { getDefaultOpener, getRegisteredOpeners } from '../../file-opener-registry'
-import { getModule, getViewDefinition, resolvePaneRenderer } from '../../module-registry'
-import { useLayoutStore } from '../../../stores/useLayoutStore'
+import { getModule, resolvePaneRenderer } from '../../module-registry'
 import { useTabStore } from '../../../stores/useTabStore'
 import { createTab } from '../../../types/tab'
 import { getPrimaryPane } from '../../pane-tree'
-import { ExecutionsView } from '../../../components/executions/ExecutionsView'
 import ExecutionView from '../../../components/execution/ExecutionView'
 
 vi.mock('../../../components/execution/ExecutionView', () => ({ default: vi.fn(() => null) }))
@@ -58,30 +56,6 @@ describe('registerBuiltinModules orchestrator', () => {
     expect(getRegisteredOpeners().length).toBeGreaterThan(0)
     resetFileOpenerRegistryForHmr()
     expect(getRegisteredOpeners()).toEqual([])
-  })
-
-  it('registers the Executions sidebar view on the execution module', () => {
-    const view = getViewDefinition('executions')
-    expect(view).toBeDefined()
-    expect(view?.label).toBe('Executions')
-    expect(view?.scope).toBe('system')
-    expect(view?.component).toBe(ExecutionsView)
-    expect(getModule('execution')?.views?.map((v) => v.id)).toEqual(['executions'])
-  })
-
-  it('registration does not mutate any region\'s configured views', () => {
-    useLayoutStore.setState({ regions: {
-      ...useLayoutStore.getInitialState().regions,
-      'primary-sidebar': { views: ['file-tree-workspace'], activeViewId: 'file-tree-workspace', width: 240, mode: 'pinned' },
-    } })
-    const before = structuredClone(useLayoutStore.getState().regions)
-    clearAllBuiltinModuleRegistries()
-    registerBuiltinModules()
-    expect(getViewDefinition('executions')).toBeDefined()
-    expect(useLayoutStore.getState().regions).toEqual(before)
-    for (const region of Object.values(useLayoutStore.getState().regions)) {
-      expect(region.views).not.toContain('executions')
-    }
   })
 
   // P-C.3b task 4: the execution pane wrapper hands ExecutionView the pane's

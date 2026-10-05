@@ -7,7 +7,6 @@ import { TabBar } from './components/TabBar'
 import { TabContent } from './components/TabContent'
 import { StatusBar } from './components/StatusBar'
 import { TitleBar } from './components/TitleBar'
-import { SidebarRegion } from './components/SidebarRegion'
 import { useConfigStore } from './stores/useConfigStore'
 import { useTabStore } from './stores/useTabStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
@@ -214,7 +213,6 @@ export default function App() {
             onReorderWorkspaceTabs={handleReorderWorkspaceTabs}
             onAddTabToWorkspace={handleAddTabToWorkspace}
           />
-          <SidebarRegion region="primary-sidebar" resizeEdge="right" />
           <div className="flex-1 flex flex-col min-w-0">
             {tabPosition !== 'left' && (
               <TabBar
@@ -230,7 +228,6 @@ export default function App() {
               />
             )}
             <div className="flex-1 flex overflow-hidden">
-              <SidebarRegion region="primary-panel" resizeEdge="right" />
               {visibleTabIds.length === 0 && activeWorkspaceId !== null ? (
                 <WorkspaceEmptyState />
               ) : (
@@ -239,7 +236,6 @@ export default function App() {
                   allTabs={tabOrder.map((id) => tabs[id]).filter(Boolean)}
                 />
               )}
-              <SidebarRegion region="secondary-panel" resizeEdge="left" />
             </div>
             <StatusBar
               activeTab={activeTab ?? null}
@@ -247,7 +243,6 @@ export default function App() {
               onStartRename={openRenameForTab}
             />
           </div>
-          <SidebarRegion region="secondary-sidebar" resizeEdge="left" />
         {contextMenu && (
           <TabContextMenu
             tab={contextMenu.tab}

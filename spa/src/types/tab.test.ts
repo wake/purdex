@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { createTab, createWorkspace } from './tab'
-import type { SidebarRegion } from './layout'
 
 describe('createTab', () => {
   it('creates a tab with session content', () => {
@@ -53,17 +52,5 @@ describe('createWorkspace', () => {
     expect(ws.name).toBe('My Project')
     expect(ws.tabs).toEqual([])
     expect(ws.activeTabId).toBeNull()
-  })
-})
-
-describe('SidebarRegion type', () => {
-  it('accepts valid region values', () => {
-    const regions: SidebarRegion[] = [
-      'primary-sidebar',
-      'primary-panel',
-      'secondary-panel',
-      'secondary-sidebar',
-    ]
-    expect(regions).toHaveLength(4)
   })
 })
