@@ -7,6 +7,7 @@ import { derivePrelude, type PreludeView } from '../../../lib/nex/prelude'
 import { sanitizePreludePage, type PreludeItem } from '../../../lib/nex/prelude-wire'
 import type { StreamMessage } from '../../../lib/nex/message-types'
 import ChatTranscript from '../../chat/ChatTranscript'
+import golden from '../../../lib/nex/__fixtures__/prelude-golden-nexen.json'
 
 const m = (pos: string, type: 'user' | 'assistant', content: unknown[]): PreludeItem =>
   ({ pos, at: 1, kind: type, msg: { type, parent_tool_use_id: null, message: { role: type, content, stop_reason: null } } as unknown as StreamMessage })
@@ -376,4 +377,74 @@ describe('PreludeSection chat form', () => {
     expect(after[0].getAttribute('aria-expanded')).toBe('true')
     expect(after[1].getAttribute('aria-expanded')).toBe('false')
   })
+})
+
+// Nexen's early golden page (spec §4.6), drawn in both modes.
+describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection over Nexen\'s golden page in %s mode', (mode) => {
+  const view = derivePrelude(sanitizePreludePage(golden)!.items)
+  const draw = () => render(<PreludeSection {...base} mode={mode} view={view} status="ok" done />)
+
+  it('renders without throwing, with the D2 boundaries (three segments, one compaction)', () => {
+    expect(draw).not.toThrow()
+    expect(screen.getAllByTestId('prelude-segment').map((e) => e.getAttribute('aria-label'))).toEqual(['In the terminal', 'Headless (worker)', 'In the terminal'])
+    expect(screen.getAllByTestId('prelude-compaction').map((e) => e.getAttribute('aria-label'))).toEqual(['Conversation compacted here (auto)'])
+  })
+
+  it('draws the omitted image / PDF as placeholders with their sizes', () => {
+    draw()
+    expect(screen.getAllByTestId('prelude-media').map((e) => e.textContent))
+      .toEqual(['[image · png · 69 B]', '[document · pdf · 15 B]', '[image · png · 69 B]'])
+  })
+
+  it('draws every note source, the stderr one in the error tone', () => {
+    draw()
+    const ids = [...document.querySelectorAll('[data-testid^="prelude-note"],[data-testid="prelude-task"],[data-testid="prelude-bash-input"]')].map((e) => e.getAttribute('data-testid'))
+    expect(ids).toEqual(['prelude-note-command_output', 'prelude-bash-input', 'prelude-note-bash_output', 'prelude-note-bash_output',
+      'prelude-note-peer_message', 'prelude-task', 'prelude-note-peer_message', 'prelude-task', 'prelude-note-command_output'])
+    const [out, err] = screen.getAllByTestId('prelude-note-bash_output')
+    expect(out.innerHTML).not.toContain('text-status-error')
+    expect(err.innerHTML).toContain('text-status-error')
+    expect(screen.getByTestId('prelude-bash-input').textContent).toContain('! ls -la')
+    expect(screen.getByTestId('worker-prelude').textContent).toContain('Catch you later!')
+  })
+
+  if (mode === 'room') {
+    it('says so after every cut block: the 70000 text, the 90056 Write call and the 80000 result', () => {
+      draw()
+      expect(screen.getAllByTestId('prelude-truncated').map((h) => h.textContent)).toEqual([
+        'Too long — showing the first 64 KB of 68 KB',
+        'Too long — showing the first 32 KB of 88 KB',
+        'Too long — showing the first 64 KB of 78 KB',
+      ])
+    })
+
+    it('draws the denied Edit struck through with a warning dot, and the others as done', () => {
+      draw()
+      const ops = screen.getAllByTestId('operation-block').map((b) => [
+        b.querySelector('[data-testid="op-name"]')!.textContent,
+        b.querySelector('[data-testid="op-name"]')!.className.includes('line-through'),
+        b.querySelector('[data-testid="op-dot"]')!.className.match(/bg-status-\w+/)![0],
+      ])
+      expect(ops).toEqual([['Bash', false, 'bg-status-success'], ['Read', false, 'bg-status-success'], ['Edit', true, 'bg-status-warning'], ['Write', false, 'bg-status-success']])
+      expect(screen.getByTestId('op-non-text')).toBeTruthy()
+    })
+  } else {
+    it('hints only where chat draws the block: the cut text now, the cut Write call and result inside its tools line', () => {
+      draw()
+      // Thinking is not drawn in chat and the Write sits behind a folded tools line.
+      expect(screen.getAllByTestId('prelude-truncated').map((h) => h.textContent)).toEqual(['Too long — showing the first 64 KB of 68 KB'])
+      for (const line of screen.getAllByTestId('chat-tools-line')) fireEvent.click(line)
+      expect(screen.getAllByTestId('prelude-truncated').map((h) => h.textContent)).toEqual([
+        'Too long — showing the first 64 KB of 68 KB',
+        'Too long — showing the first 32 KB of 88 KB',
+        'Too long — showing the first 64 KB of 78 KB',
+      ])
+    })
+
+    it('shows the denied Edit as a failed line, never hidden, and counts only the other three tools', () => {
+      draw()
+      expect(screen.getAllByTestId('chat-failed-line').map((e) => e.textContent)).toEqual(["Edit · The user doesn't want to proceed with this tool use."])
+      expect(screen.getAllByTestId('chat-tools-line').map((e) => e.textContent)).toEqual(['Used 1 tool', 'Used 1 tool', 'Used 1 tool'])
+    })
+  }
 })

@@ -9,6 +9,8 @@ import { describe, it, expect } from 'vitest'
 import { act, render } from '@testing-library/react'
 import PreludeSection from './prelude/PreludeSection'
 import { derivePrelude, type PreludeView } from '../../lib/nex/prelude'
+import { sanitizePreludePage } from '../../lib/nex/prelude-wire'
+import golden from '../../lib/nex/__fixtures__/prelude-golden-nexen.json'
 import RoomTranscript from './RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
 import { FoldContext, useFoldMemory, type FoldStore } from './fold-context'
@@ -129,6 +131,15 @@ const withPrelude: Fixture = {
   ]),
 }
 
+// Nexen's early golden page above a short live list (spec §4.6): real wire
+// shapes — N2 pairs, cut blocks, omitted media, every note source.
+const goldenPrelude: Fixture = {
+  messages: [said('live question'), asst({ type: 'text', text: 'live answer' })],
+  turnStarts: [0],
+  tools: {},
+  prelude: derivePrelude(sanitizePreludePage(golden)!.items),
+}
+
 type View = 'room' | 'chat'
 
 function Harness({ fixture, view, registered, onStore }: {
@@ -202,7 +213,7 @@ describe.each<View>(['room', 'chat'])('search anchors in %s', (view) => {
   })
 })
 
-describe.each<[string, Fixture]>([['every kind', everyKind], ['edge shapes', edgeShapes], ['with a prelude', withPrelude]])('%s fixture', (_, fixture) => {
+describe.each<[string, Fixture]>([['every kind', everyKind], ['edge shapes', edgeShapes], ['with a prelude', withPrelude], ['golden prelude', goldenPrelude]])('%s fixture', (_, fixture) => {
   describe.each<View>(['room', 'chat'])('%s', (view) => {
     const units = unitsFor(fixture, view)
 
@@ -230,5 +241,14 @@ describe.each<[string, Fixture]>([['every kind', everyKind], ['edge shapes', edg
       const drawn = anchors().map((el) => el.getAttribute('data-search-unit'))
       expect(drawn).toEqual(units.map((u) => u.id))
     })
+  })
+})
+
+describe.each<View>(['room', 'chat'])('golden prelude units in %s', (view) => {
+  it('indexes the prelude\'s notes and messages, not just the live list', () => {
+    const ids = unitsFor(goldenPrelude, view).map((u) => u.id)
+    for (const pos of ['13569.1', '14108.1', '14558.1', '14558.2', '20300.1', '21398.1', '379249.1']) expect(ids, pos).toContain(`p${pos}:note:text`)
+    expect(ids).toContain('p329.1:0:text')
+    expect(ids.filter((id) => id.startsWith('p')).length).toBeGreaterThan(20)
   })
 })
