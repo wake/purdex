@@ -4,6 +4,7 @@ import { render, screen, fireEvent, act, waitFor, within } from '@testing-librar
 import ExecutionView from './ExecutionView'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useUndoToast } from '../../stores/useUndoToast'
@@ -18,7 +19,7 @@ import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
 
-vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn() }))
+vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
@@ -1849,5 +1850,26 @@ describe('ExecutionView — attachments', () => {
     fireEvent.drop(root, { dataTransfer: { types: ['Files'], files: [txt('a.txt')] } })
     expect(screen.queryAllByTestId('upload-chip')).toHaveLength(0)
     expect(api.uploadWorkerFile).not.toHaveBeenCalled()
+  })
+})
+
+describe('ExecutionView — worker prelude', () => {
+  const said = (text: string) =>
+    ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }) as Exec['messages'][number]
+
+  it('draws the prelude above the brief line (turn 1)', async () => {
+    useNexHostStore.setState({
+      byHost: { [H]: { phase: 'ready', capabilities: { transcript_prelude: { route: { method: 'GET', path: '/x' }, page_max_items: 500, page_max_bytes: 1, max_block_bytes: 1 } } } },
+    } as never)
+    useExecutionStore.getState().setSummary(H, E, summary({ resume_session_id: 'sid' }) as never)
+    patchExec({ messages: [said('the brief')], turnStarts: [0] })
+    vi.mocked(api.fetchExecutionPrelude).mockResolvedValue({
+      state: 'ok', prevCursor: null, totalBytes: null,
+      items: [{ pos: '2', at: 1, kind: 'user', msg: said('earlier') }],
+    } as never)
+    render(<ExecutionView {...base} isActive />)
+    const earlier = await screen.findByText('earlier')
+    const brief = screen.getByText('the brief')
+    expect(earlier.compareDocumentPosition(brief) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

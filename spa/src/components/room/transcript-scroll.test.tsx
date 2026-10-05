@@ -686,3 +686,61 @@ describe('transcript scroll memory', () => {
     expect(readScrollMemo(PANE)?.scrollTop).toBe(300)
   })
 })
+
+/** jsdom has no layout: the prelude wrapper is 100px per [data-row] child, everything else 0. */
+let offsetHeightDesc: PropertyDescriptor | undefined
+beforeEach(() => {
+  offsetHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get(this: HTMLElement) { return this.dataset?.testid === 'prelude-anchor' ? this.querySelectorAll('[data-row]').length * 100 : 0 },
+  })
+})
+afterEach(() => { if (offsetHeightDesc) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeightDesc) })
+
+const rows = (n: number) => <div>{Array.from({ length: n }, (_, i) => <div key={i} data-row />)}</div>
+
+describe.each(views)('%s: prepending the prelude keeps the reader in place (Review Focus 4)', (_name, View) => {
+  const props = { messages: [said('a')], keyPrefix: 'k', showThinking: false, showEmptyHint: false } as RoomTranscriptProps
+
+  it('mid-transcript: what is on screen does not move', () => {
+    const { container, rerender } = render(<View {...props} prelude={rows(1)} preludeVersion="1:ok" />)
+    const box = container.firstChild as HTMLElement
+    geometry(box, 1000, 400, 300)
+    fireEvent.scroll(box)
+    rerender(<View {...props} prelude={rows(7)} preludeVersion="2:ok" />)
+    expect(box.scrollTop).toBe(900)
+  })
+
+  it('at the bottom: the distance to the end is unchanged', () => {
+    const { container, rerender } = render(<View {...props} prelude={rows(1)} preludeVersion="1:ok" />)
+    const box = container.firstChild as HTMLElement
+    geometry(box, 1000, 400, 600)
+    fireEvent.scroll(box)
+    rerender(<View {...props} prelude={rows(7)} preludeVersion="2:ok" />)
+    expect(box.scrollTop).toBe(1200)
+  })
+
+  it('a live message in the same commit is not counted as growth above', () => {
+    const { container, rerender } = render(<View {...props} prelude={rows(1)} preludeVersion="1:ok" />)
+    const box = container.firstChild as HTMLElement
+    geometry(box, 1000, 400, 300)
+    fireEvent.scroll(box)
+    rerender(<View {...props} messages={[said('a'), said('b')]} prelude={rows(7)} preludeVersion="2:ok" />)
+    expect(box.scrollTop).toBe(900)
+  })
+
+  it('no version change, no correction', () => {
+    const { container, rerender } = render(<View {...props} prelude={rows(1)} preludeVersion="1:ok" />)
+    const box = container.firstChild as HTMLElement
+    geometry(box, 1000, 400, 300)
+    fireEvent.scroll(box)
+    rerender(<View {...props} prelude={rows(3)} preludeVersion="1:ok" />)
+    expect(box.scrollTop).toBe(300)
+  })
+
+  it('the box opts out of the browser’s own scroll anchoring', () => {
+    const { container } = render(<View messages={[]} keyPrefix="k" showThinking={false} showEmptyHint={false} />)
+    expect((container.firstChild as HTMLElement).className).toContain('[overflow-anchor:none]')
+  })
+})

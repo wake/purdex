@@ -35,6 +35,9 @@ import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { getWorkerTheme, workerThemeStyle } from '../../lib/worker-theme/registry'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useExecutionSubscription } from '../../hooks/useExecutionSubscription'
+import { useExecutionPrelude } from '../../hooks/useExecutionPrelude'
+import { derivePrelude } from '../../lib/nex/prelude'
+import PreludeSection from '../room/prelude/PreludeSection'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
 import { useExecutionActions, type SendOptions } from '../../hooks/useExecutionActions'
 import { useWorkerUploads } from '../../hooks/useWorkerUploads'
@@ -103,6 +106,8 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const workerTheme = getWorkerTheme(workerThemeId)
   const workerThemeVars = useMemo(() => workerThemeStyle(workerTheme), [workerTheme])
   const { problem } = useExecutionSubscription(hostId, executionId, isActive)
+  const preludeApi = useExecutionPrelude(hostId, executionId)
+  const preludeView = useMemo(() => derivePrelude(st.prelude.items), [st.prelude.items])
   const lease = useExecutionLease(hostId, executionId)
   const { draft, actionPending, handleSend, handleInterrupt, handleTerminate, restoreDraft } = useExecutionActions(hostId, executionId, lease)
   // Spec §9.2 (phase E): native images only when the host's capability
@@ -483,6 +488,11 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
   const pendingThumbs = pendingPreviews && pendingPreviews.length > 0
     ? <PendingAttachmentThumbs items={pendingPreviews} />
     : undefined
+  const preludeNode = (
+    <PreludeSection view={preludeView} status={st.prelude.status} done={st.prelude.done} error={st.prelude.error}
+      keyPrefix={executionId} now={now} mode={chat ? 'chat' : 'room'} pages={st.prelude.pages}
+      onLoadOlder={preludeApi.loadOlder} onRetry={preludeApi.retry} />
+  )
   const transcriptProps = {
     messages: st.messages, turnStarts: st.turnStarts, turnMeta: st.turnMeta, keyPrefix: executionId, showThinking,
     showEmptyHint: st.messages.length === 0 && !st.pendingLocal, emptyText: t('execution.empty'), scrollKey: st.pendingLocal ? 1 : 0,
@@ -496,6 +506,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
     // while keeping its paneId, and the old memo must not bleed into it
     // (fix round 1, finding 1).
     scrollMemoryKey: `${paneId}:${hostId}:${executionId}`,
+    prelude: preludeNode, preludeVersion: `${st.prelude.pages}:${st.prelude.status}`,
   }
 
   return (
