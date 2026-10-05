@@ -566,6 +566,31 @@ func snapshotProcesses(ctx context.Context) (agentpkg.ProcessView, error) {
 	return snap, nil
 }
 
+// snapshotWithin takes the pass's process snapshot under ctx, the inventory's
+// budget (spec R4): the snapshot's own ctx check cannot bound it, because
+// darwin's sysctl cannot be cancelled once it has started and x/sys retries it
+// on ENOMEM. When ctx ends first the answer is ctx's error, and the snapshot
+// is left to finish on its own goroutine with its result dropped. That is
+// safe because a snapshot holds no lock and has no side effect, and the
+// buffered channel lets the goroutine exit without a reader.
+func (m *Module) snapshotWithin(ctx context.Context) (agentpkg.ProcessView, error) {
+	type result struct {
+		view agentpkg.ProcessView
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		view, err := m.snapshotProcs(ctx)
+		done <- result{view, err}
+	}()
+	select {
+	case r := <-done:
+		return r.view, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // localEnvelope builds this host's own inventory from a caller-supplied
 // hostID/alias: the response body for scope unset/"local", and the local
 // row's peers/ok/partial/error for scope=all. It never touches CfgMu itself
@@ -574,11 +599,11 @@ func snapshotProcesses(ctx context.Context) (agentpkg.ProcessView, error) {
 // own Peers records are always built from the same values.
 func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers.Envelope {
 	// ONE budget for the whole local inventory (#1293 §3.2): both tmux-
-	// instance probes, the session list and every owner lookup run under
-	// invCtx, so a hung tmux costs the budget once, not once per read. It is
-	// wall-clock (context.WithTimeout), not m.now: m.now is the owner loop's
-	// clock and may be a test clock, which the per-session check below keeps
-	// using.
+	// instance probes, the session list, the process snapshot and every owner
+	// lookup run under invCtx, so a hung tmux costs the budget once, not once
+	// per read. It is wall-clock (context.WithTimeout), not m.now: m.now is
+	// the owner loop's clock and may be a test clock, which the per-session
+	// check below keeps using.
 	invCtx, cancel := context.WithTimeout(ctx, m.budget)
 	defer cancel()
 	deadline := m.now().Add(m.budget)
@@ -606,8 +631,9 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	// ONE read of the process table per pass, shared by the registry read and
 	// every owner lookup (spec R2 / D4). A failed read is not retried: the
 	// registry reads each process itself through m.liveness, and the owner
-	// pass is handed the same failure.
-	procs, procsErr := m.snapshotProcs(invCtx)
+	// pass is handed the same failure. A snapshot the budget cut off is such a
+	// failure.
+	procs, procsErr := m.snapshotWithin(invCtx)
 	live := m.liveness
 	if procsErr != nil {
 		m.logf("peers: inventory: process snapshot failed, the registry reads each process itself: %v", procsErr)

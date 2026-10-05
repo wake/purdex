@@ -2567,6 +2567,80 @@ func TestLocalEnvelope_SnapshotFailure(t *testing.T) {
 	}
 }
 
+// R4: the process snapshot runs under the inventory's budget too. darwin's
+// sysctl cannot be cancelled once it has started, so a snapshot that never
+// returns, whatever its context says, must still leave the inventory ending
+// at the budget: the registry reads each process itself, and the pass is
+// handed the budget's error, so the session is unresolved and the answer
+// partial, never "no owner" (#988).
+func TestLocalEnvelope_SnapshotBoundedByBudget(t *testing.T) {
+	dir := t.TempDir()
+	writeRegistryFixture(t, dir, "76973.json", fixture76973)
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "mt1code", Name: "mt1", Cwd: "/Users/wake/Workspace/wake/purdex"},
+	}}
+	owners := &passOwners{results: map[string]agent.OwnerResult{
+		"mt1code": {Owner: mt1Owner, Found: true},
+	}}
+	infoCalls := 0
+	live := allLiveLiveness(fixture76973ProcStart)
+	live.Info = func(pid int) (iagent.ProcessInfo, error) {
+		infoCalls++
+		return iagent.ProcessInfo{PID: pid, Argv: []string{"claude"}, StartTime: fixture76973ProcStart}, nil
+	}
+	const budget = 100 * time.Millisecond
+	f := newTestModuleWith(t, fixtureOpts{
+		core:        newTestCore(t, "mlab:abc123", "mlab"),
+		sessions:    sessions,
+		owners:      owners,
+		registryDir: dir,
+		liveness:    live,
+		budget:      budget,
+	})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	f.m.snapshotProcs = func(context.Context) (iagent.ProcessView, error) {
+		<-release
+		return nil, errors.New("snapshot released at the end of the test")
+	}
+
+	done := make(chan ipeers.Envelope, 1)
+	start := time.Now()
+	go func() { done <- f.m.localEnvelope(context.Background(), "mlab:abc123", "mlab") }()
+	var env ipeers.Envelope
+	select {
+	case env = <-done:
+	case <-time.After(budget + 3*time.Second):
+		unblock()
+		<-done
+		t.Fatal("localEnvelope never returned: the process snapshot is not bounded by the budget")
+	}
+
+	if elapsed := time.Since(start); elapsed > budget+inventorySlack {
+		t.Errorf("localEnvelope took %v, want at most the %v budget + %v", elapsed, budget, inventorySlack)
+	}
+	if infoCalls != 1 {
+		t.Errorf("per-PID Info calls = %d, want 1: the registry reads each process itself", infoCalls)
+	}
+	if len(env.UnknownRegistryFiles) != 0 {
+		t.Errorf("unknown registry files = %v, want the live entry classified by the per-PID reader", env.UnknownRegistryFiles)
+	}
+	if len(owners.srcs) != 1 {
+		t.Fatalf("owner passes = %d, want 1", len(owners.srcs))
+	}
+	if owners.views[0] != nil || !errors.Is(owners.viewErrs[0], context.DeadlineExceeded) {
+		t.Errorf("pass source returned (%v, %v), want the budget's error", owners.views[0], owners.viewErrs[0])
+	}
+	if !env.OK || !env.Partial {
+		t.Fatalf("ok=%v partial=%v error=%q, want ok and partial", env.OK, env.Partial, env.Error)
+	}
+	if rec := rowOf(t, env, "mt1code"); rec.Agent != nil || rec.Reason != "" || rec.Deliverable {
+		t.Errorf("mt1 row = %+v, want unresolved (agent nil, reason \"\")", rec)
+	}
+}
+
 // Confirm's map is the inventory's answer, mapped by today's rules: an error
 // is unresolved and marks the response partial (#988), Found is an owner row,
 // and neither is "no owner", which is what a code without either gets. A code
