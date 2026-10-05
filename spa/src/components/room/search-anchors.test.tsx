@@ -7,6 +7,8 @@
 import { useEffect, useMemo } from 'react'
 import { describe, it, expect } from 'vitest'
 import { act, render } from '@testing-library/react'
+import PreludeSection from './prelude/PreludeSection'
+import { derivePrelude, type PreludeView } from '../../lib/nex/prelude'
 import RoomTranscript from './RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
 import { FoldContext, useFoldMemory, type FoldStore } from './fold-context'
@@ -37,6 +39,7 @@ interface Fixture {
   messages: StreamMessage[]
   turnStarts: number[]
   tools: Record<string, ToolActivity>
+  prelude?: PreludeView
 }
 
 // Every kind of unit, folded several ways, across two turns.
@@ -101,6 +104,29 @@ const edgeShapes: Fixture = {
   tools: {},
 }
 
+// A prelude above a short live list: a turn with a folded output, every note
+// source, markers, and a second turn that opens with the human's line.
+const note = (pos: string, source: string, text: string) =>
+  ({ pos, at: 0, kind: 'prelude.note', source, text, truncated: false, totalBytes: null, stream: null }) as const
+const withPrelude: Fixture = {
+  messages: [said('live question'), asst({ type: 'text', text: 'live **answer**' })],
+  turnStarts: [0],
+  tools: {},
+  prelude: derivePrelude([
+    { pos: '1', at: 0, kind: 'user', msg: said('early question') },
+    { pos: '2', at: 0, kind: 'assistant', msg: asst({ type: 'text', text: 'early *answer*' }, call('pb', 'Bash', { command: 'ls' })) },
+    { pos: '3', at: 0, kind: 'user', msg: usr(res('pb', lines(60, 'pout'))) },
+    { pos: '4', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+    note('5', 'bash_input', 'ls -la'),
+    note('6', 'command_output', lines(40, 'cmd')),
+    note('7', 'peer_message', 'peer **says** hi'),
+    note('8', 'task_notification', 'task finished'),
+    { pos: '9', at: 0, kind: 'prelude.compaction', trigger: 'auto' },
+    { pos: '10', at: 0, kind: 'user', msg: said('second early question') },
+    { pos: '11', at: 0, kind: 'assistant', msg: asst({ type: 'text', text: 'second early answer' }) },
+  ]),
+}
+
 type View = 'room' | 'chat'
 
 function Harness({ fixture, view, registered, onStore }: {
@@ -116,7 +142,10 @@ function Harness({ fixture, view, registered, onStore }: {
   return (
     <FoldContext.Provider value={store}>
       <Transcript messages={fixture.messages} keyPrefix="k" showThinking={false} showEmptyHint={false}
-        turnStarts={fixture.turnStarts} tools={fixture.tools} />
+        turnStarts={fixture.turnStarts} tools={fixture.tools}
+        {...(fixture.prelude ? { prelude: (
+          <PreludeSection view={fixture.prelude} status="ok" done error={null} keyPrefix="k" mode={view} pages={1} onLoadOlder={() => {}} onRetry={() => {}} />
+        ), preludeVersion: '1' } : {})} />
     </FoldContext.Provider>
   )
 }
@@ -133,7 +162,7 @@ function mount(fixture: Fixture, view: View) {
 
 const unitsFor = (fixture: Fixture, view: View): SearchUnit[] => buildSearchUnits({
   messages: fixture.messages, index: indexOperations(fixture.messages), tools: fixture.tools,
-  view, keyPrefix: 'k', turnStarts: fixture.turnStarts,
+  view, keyPrefix: 'k', turnStarts: fixture.turnStarts, prelude: fixture.prelude,
 })
 
 /** Every unit's text is exactly what its anchor draws: prose as proseText, the rest verbatim. */
@@ -171,7 +200,7 @@ describe.each<View>(['room', 'chat'])('search anchors in %s', (view) => {
   })
 })
 
-describe.each<[string, Fixture]>([['every kind', everyKind], ['edge shapes', edgeShapes]])('%s fixture', (_, fixture) => {
+describe.each<[string, Fixture]>([['every kind', everyKind], ['edge shapes', edgeShapes], ['with a prelude', withPrelude]])('%s fixture', (_, fixture) => {
   describe.each<View>(['room', 'chat'])('%s', (view) => {
     const units = unitsFor(fixture, view)
 

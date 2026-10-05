@@ -20,7 +20,7 @@
 // A unit's text is what is drawn: agent prose is `proseText` of its markdown
 // (the rendered text), everything else is drawn verbatim.
 // Pure: no React, no store.
-import { blockKey, toolResultText, type BlockKey, type OperationIndex } from './operations'
+import { blockKey, indexOperations, toolResultText, type BlockKey, type OperationIndex } from './operations'
 import { classifyTurnOperations, toolEntryFor, type TurnOperation } from './operation-status'
 import { groupTurns, INTERRUPT_TEXT } from './turns'
 import { pathBasename, showsRawInput, toolSummary } from './tool-summary'
@@ -28,6 +28,7 @@ import { diffRows } from './diff-lines'
 import { proseText } from './markdown-text'
 import type { ContentBlock, StreamMessage } from './message-types'
 import type { ToolActivity } from './tool-activity'
+import { preludeBlocks, preludeId, type PreludeEntry, type PreludeView } from './prelude'
 
 /**
  * Which text of a block a unit is. `path` is a diff's full path on its stat
@@ -72,6 +73,8 @@ export interface SearchUnitOptions {
   keyPrefix: string
   /** ExecutionState.turnStarts — chat groups plain operations per turn. */
   turnStarts: readonly number[]
+  /** The loaded prelude: searched first, in the order PreludeSection draws it. */
+  prelude?: PreludeView
 }
 
 /** The fold key of a chat turn's tools line (ChatTranscript); `turn` is a turn index, or a prelude span's last message id. */
@@ -91,7 +94,11 @@ interface Walk {
   index: OperationIndex
   tools?: Record<string, ToolActivity>
   push: Push
+  /** The stable name of message `m` in keys (the prelude's `p<pos>`); default: the index. */
+  idOf?: (m: number) => string
 }
+
+const keyOf = (w: Walk, mi: number, bj: number): BlockKey => blockKey(w.idOf ? w.idOf(mi) : mi, bj)
 
 /**
  * A diff as ToolDiffView draws it: the path on the stat line when `showPath`
@@ -114,7 +121,7 @@ function operationUnits(w: Walk, mi: number, bj: number, reveal: string[]) {
   const msg = w.messages[mi]
   const block = blocksOf(msg)[bj]
   if (!block) return
-  const key = blockKey(mi, bj)
+  const key = keyOf(w, mi, bj)
 
   if (msg.type === 'assistant' && block.type === 'tool_use') {
     const entry = toolEntryFor(w.tools, block.id)
@@ -150,7 +157,7 @@ function messageUnits(w: Walk, mi: number, reveal: string[]) {
   const msg = w.messages[mi]
   if (!msg || !('message' in msg)) return
   blocksOf(msg).forEach((block, bj) => {
-    const key = blockKey(mi, bj)
+    const key = keyOf(w, mi, bj)
     if (msg.type === 'assistant') {
       if (block.type === 'thinking' && block.thinking?.trim()) {
         w.push(searchUnitId(key, 'thinking'), block.thinking, [...reveal, `${key}:thinking`])
@@ -171,13 +178,17 @@ function messageUnits(w: Walk, mi: number, reveal: string[]) {
 
 /** ChatTranscript's top level. */
 function chatUnits(w: Walk, keyPrefix: string, turnStarts: readonly number[]) {
-  const turns = groupTurns(w.messages, turnStarts)
+  chatTurnUnits(w, groupTurns(w.messages, turnStarts), (ti) => chatToolsKey(keyPrefix, ti))
+}
+
+/** Chat's rules over the given turns; `toolsKeyOf(ti)` is the fold key of turn `ti`'s tools line. */
+function chatTurnUnits(w: Walk, turns: readonly { start: number; end: number }[], toolsKeyOf: (ti: number) => string) {
   turns.forEach((turn, ti) => {
-    const ops = classifyTurnOperations(w.messages, turn, w.index, w.tools)
+    const ops = classifyTurnOperations(w.messages, turn, w.index, w.tools, w.idOf)
     const plain = ops.filter((o) => o.kind === 'plain')
     const lines = new Map<BlockKey, () => void>()
     if (plain.length > 0) {
-      const toolsKey = chatToolsKey(keyPrefix, ti)
+      const toolsKey = toolsKeyOf(ti)
       lines.set(plain[0].key, () => {
         for (const o of plain) operationUnits(w, o.msgIndex, o.blockIndex, [toolsKey])
       })
@@ -192,7 +203,7 @@ function chatUnits(w: Walk, keyPrefix: string, turnStarts: readonly number[]) {
       if (!('message' in msg)) continue
       const fromSubagent = (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id != null
       blocksOf(msg).forEach((block, bj) => {
-        const key = blockKey(mi, bj)
+        const key = keyOf(w, mi, bj)
         if (msg.type === 'assistant') {
           if (block.type === 'text' && block.text?.trim()) w.push(searchUnitId(key, 'text'), proseText(block.text), [])
           else if (block.type === 'tool_use') lines.get(key)?.()
@@ -226,6 +237,34 @@ function chatOperationLine(w: Walk, op: TurnOperation) {
   operationUnits(w, op.msgIndex, op.blockIndex, [`${op.key}:chat-failed`])
 }
 
+/** The prelude as PreludeSection draws it (spec 5.5): entries in order, notes by their own anchor. */
+function preludeUnits(opts: SearchUnitOptions, prelude: PreludeView, push: Push) {
+  const idOf = (m: number) => prelude.ids[m]
+  const w: Walk = { messages: prelude.messages, index: indexOperations(prelude.messages, idOf), tools: prelude.tools, push, idOf }
+  const note = (e: Extract<PreludeEntry, { kind: 'note' }>) => {
+    const id = preludeId(e.pos)
+    // As PreludeNote draws it: bash_input and task_notification whole (the
+    // anchor holds the text only, never the "! " prefix); peer_message as
+    // prose (never folded); the rest inside a fold.
+    if (e.source === 'peer_message') { push(searchUnitId(`${id}:note`, 'text'), proseText(e.text), []); return }
+    const folded = e.source !== 'bash_input' && e.source !== 'task_notification'
+    push(searchUnitId(`${id}:note`, 'text'), e.text, folded ? [`${id}:note`] : [])
+  }
+  if (opts.view === 'chat') {
+    for (const b of preludeBlocks(prelude)) {
+      if (b.kind === 'entry') { if (b.entry.kind === 'note') note(b.entry); continue }
+      // Keyed by the span's LAST message: pages grow only at the front, so a
+      // span's end never moves while its start can.
+      chatTurnUnits(w, [b], () => chatToolsKey(`${opts.keyPrefix}-prelude`, prelude.ids[b.end - 1]))
+    }
+    return
+  }
+  for (const e of prelude.entries) {
+    if (e.kind === 'message') { if (!w.index.childIndexes.has(e.m)) messageUnits(w, e.m, []) }
+    else if (e.kind === 'note') note(e)
+  }
+}
+
 /** Every searchable text of the transcript, in the order the view draws it. */
 export function buildSearchUnits(opts: SearchUnitOptions): SearchUnit[] {
   const units: SearchUnit[] = []
@@ -237,6 +276,7 @@ export function buildSearchUnits(opts: SearchUnitOptions): SearchUnit[] {
     // offsets into this text, whatever form the transcript arrived in.
     push: (id, text, reveal) => { if (text) units.push({ id, text: text.normalize('NFC'), reveal }) },
   }
+  if (opts.prelude) preludeUnits(opts, opts.prelude, w.push)
   if (opts.view === 'chat') {
     chatUnits(w, opts.keyPrefix, opts.turnStarts)
   } else {

@@ -40,6 +40,7 @@ import {
   type MatchIdentity, type SearchResult, type SearchUnit, type UnitAnchor,
 } from '../../lib/nex/transcript-search'
 import { clearSearchHighlights, firstUnitInView, highlightSearch } from '../../lib/nex/search-highlight'
+import type { PreludeView } from '../../lib/nex/prelude'
 import type { StreamMessage } from '../../lib/nex/message-types'
 import type { ToolActivity } from '../../lib/nex/tool-activity'
 import { useFoldStore } from './fold-context'
@@ -65,6 +66,11 @@ export interface TranscriptSearchProps {
    * bottom-follow (A F4), so a match on the last screen stays put.
    */
   onJump?: () => void
+  /** The loaded prelude, searched before the live list. */
+  prelude?: PreludeView
+  /** Every page of the prelude is loaded. */
+  preludeDone?: boolean
+  onLoadAll?: () => Promise<void>
 }
 
 const NO_RESULT: SearchResult = { matches: [], truncated: false, truncatedBefore: false, truncatedAfter: false }
@@ -107,7 +113,7 @@ function scrollToEnd(el: HTMLElement): void {
 const BUTTON = 'p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none'
 
 export default function TranscriptSearch({
-  owner, container, messages, tools, view, keyPrefix, turnStarts, onClose, focusRequest = 0, onJump,
+  owner, container, messages, tools, view, keyPrefix, turnStarts, onClose, focusRequest = 0, onJump, prelude, preludeDone, onLoadAll,
 }: TranscriptSearchProps) {
   const t = useI18nStore((s) => s.t)
   const foldStore = useFoldStore()
@@ -120,10 +126,11 @@ export default function TranscriptSearch({
   // Set by whatever moves to a match (typing, next, previous); the layout
   // effect scrolls once and clears it. Every other re-mark stays put.
   const wantScroll = useRef(false)
+  const [loadingAll, setLoadingAll] = useState(false)
 
   const index = useMemo(
-    () => searchIndex(() => buildSearchUnits({ messages, index: indexOperations(messages), tools, view, keyPrefix, turnStarts })),
-    [messages, tools, view, keyPrefix, turnStarts],
+    () => searchIndex(() => buildSearchUnits({ messages, index: indexOperations(messages), tools, view, keyPrefix, turnStarts, prelude })),
+    [messages, tools, view, keyPrefix, turnStarts, prelude],
   )
   const searching = normalizeQuery(query) !== null
   const units = searching ? index.units() : NO_UNITS
@@ -288,7 +295,8 @@ export default function TranscriptSearch({
 
   return (
     <div data-testid="transcript-search" role="search" onKeyDown={onBarKeyDown}
-      className="shrink-0 flex items-center gap-1.5 px-3 py-1 border-b border-border-subtle bg-surface-secondary">
+      className="shrink-0 border-b border-border-subtle bg-surface-secondary">
+      <div className="flex items-center gap-1.5 px-3 py-1">
       <MagnifyingGlass size={14} className="shrink-0 text-text-muted" />
       <input
         ref={inputRef}
@@ -317,6 +325,15 @@ export default function TranscriptSearch({
         onClick={onClose} title={t('room.search.close')} aria-label={t('room.search.close')}>
         <X size={14} />
       </button>
+      </div>
+      {prelude && preludeDone === false && (
+        <div data-testid="search-prelude-incomplete" className="flex items-center gap-2 px-3 pb-1 text-xs text-text-muted">
+          <span>{t('worker.prelude.search_incomplete')}</span>
+          <button type="button" disabled={loadingAll}
+            onClick={() => { setLoadingAll(true); void onLoadAll?.().finally(() => setLoadingAll(false)) }}
+            className="underline hover:text-text-primary disabled:opacity-50">{t('worker.prelude.load_all')}</button>
+        </div>
+      )}
     </div>
   )
 }

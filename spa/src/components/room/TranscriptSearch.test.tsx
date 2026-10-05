@@ -14,6 +14,7 @@ import type { PartialAssembly } from '../../lib/nex/partial'
 import type { ToolActivity } from '../../lib/nex/tool-activity'
 import type { TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
 import { buildSearchUnits, findMatches } from '../../lib/nex/transcript-search'
+import { derivePrelude } from '../../lib/nex/prelude'
 
 // Pass-throughs, counted (A F10).
 vi.mock('../../lib/nex/transcript-search', async (importOriginal) => {
@@ -492,5 +493,31 @@ describe('TranscriptSearch', () => {
     rerender(<Harness messages={messages} partial={textPartial('streaming… more')} />)
     expect(scrollTo).not.toHaveBeenCalled()
     expect(box.scrollTop).toBe(50)
+  })
+})
+
+describe('TranscriptSearch — prelude', () => {
+  function Bar(props: Partial<React.ComponentProps<typeof TranscriptSearch>>) {
+    const fold = useFoldMemory()
+    return (
+      <FoldContext.Provider value={fold}>
+        <TranscriptSearch owner="p1" container={null} messages={[]} view="room" keyPrefix="k" turnStarts={[]} onClose={() => {}} {...props} />
+      </FoldContext.Provider>
+    )
+  }
+  const bar = (props: Partial<React.ComponentProps<typeof TranscriptSearch>>) => render(<Bar {...props} />)
+
+  it('says the prelude is incomplete and loads it all on demand', async () => {
+    const onLoadAll = vi.fn(() => Promise.resolve())
+    bar({ prelude: derivePrelude([]), preludeDone: false, onLoadAll })
+    expect(screen.getByTestId('search-prelude-incomplete')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Load all' }))
+    expect(onLoadAll).toHaveBeenCalledTimes(1)
+    expect(onLoadAll).toHaveBeenCalledWith()
+  })
+
+  it('shows no banner once the prelude is complete, or when there is none', () => {
+    bar({ prelude: derivePrelude([]), preludeDone: true })
+    expect(screen.queryByTestId('search-prelude-incomplete')).toBeNull()
   })
 })
