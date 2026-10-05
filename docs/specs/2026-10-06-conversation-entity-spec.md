@@ -1,6 +1,6 @@
 # Conversation entity — one conversation, one thing, in one state — spec
 
-Status: **approved by the user 2026-10-06**, including the coordinator's derivations in §4.3, §5, §6, §8, §9 and §11. The implementer's derivations D1–D16 (blocks marked 統籌核准的推導, 2026-10-06) were approved by the coordinator; D16 is reported with the plan. It goes to codex review together with the plan. Coordinator: `mlab/purdex-9b` (`mlab/_0le0d2`). Implementer: `mlab/purdex-19` (`mlab/_oecdo4`). Origin: the user felt that a worker "never goes away", while a terminal agent has a clear lifecycle: cld-yolo running means it exists, exiting means it is gone, resuming brings it back (2026-10-06).
+Status: **approved by the user 2026-10-06**, including the coordinator's derivations in §4.3, §5, §6, §8, §9 and §11. The implementer's derivations D1–D16 (blocks marked 統籌核准的推導, 2026-10-06) were approved by the coordinator; D16 was approved with the plan. It goes to codex review together with the plan. Coordinator: `mlab/purdex-9b` (`mlab/_0le0d2`). Implementer: `mlab/purdex-19` (`mlab/_oecdo4`). Origin: the user felt that a worker "never goes away", while a terminal agent has a clear lifecycle: cld-yolo running means it exists, exiting means it is gone, resuming brings it back (2026-10-06).
 
 ## 1. Goal
 
@@ -125,7 +125,7 @@ The old lock ("archived means taken") becomes an **owner check**. A transfer of 
   | `idle` / `queued` | Terminate, then archive |
   | `failed` / `rejected` | Archive |
 - After exit, the worker's open tabs show the **exited screen** (§7) and the worker leaves the lists.
-- Exit is idempotent. If terminate succeeded but archive failed, the worker is shown as exited (a terminated execution is not live under §4.2), and archive is retried on the next exit or list refresh.
+- Exit is idempotent. If terminate succeeded but archive failed, the worker is shown as exited (a terminated execution is not live under §4.2), and archive is retried on the next exit (D16: not on a list refresh).
 
 > **統籌核准的推導（2026-10-06）**
 > - **D4 Exit lives in the daemon:** `POST /api/nex/executions/{id}/exit {lease_id?}`, steps as in the table above.
@@ -133,7 +133,7 @@ The old lock ("archived means taken") becomes an **owner check**. A transfer of 
 >   - When the holder is **not** a pdx principal (for example a Ploom agent token), exit answers 409 `held_by` with the holder, the UI shows "被 <principal> 控制中", and nothing is forced.
 >   - A failed terminate does not block the archive. "Exited" means terminated or archived; neither is live under §4.2.
 >   - The running confirmation is UI-only; the daemon takes no flag (Q1 interrupts a running turn on its own).
-> - **D16 Archive retry happens on the next exit only, not on a list refresh.** A terminated, unarchived row is already not live: the live lists drop it and the Exited tab counts it. A list refresh that archived every terminated row would also archive the Host → Nex admin table's raw terminates. *(Narrowing of the sentence above; reported to the coordinator with the plan.)*
+> - **D16 Archive retry happens on the next exit only, not on a list refresh.** A terminated, unarchived row is already not live: the live lists drop it and the Exited tab counts it. A list refresh that archived every terminated row would also archive the Host → Nex admin table's raw terminates. *(Approved by the coordinator 2026-10-06; the sentence above is rewritten to match.)*
 
 ## 6. Start failure (Q2)
 
