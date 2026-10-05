@@ -25,10 +25,10 @@
 ## Review Focus
 
 1. **Two panes open on the same worker at once.** Expected: one request per page, no duplicated rows. The store's `prelude.status === 'loading'` is the lock, and `applyPreludePage` dedupes by `pos`. Owner: Task 4 (`useExecutionPrelude` test "two hooks, one request").
-2. **A server bug returns a `prev_cursor` equal to the `before` it was given.** Expected: an error row with Retry, and never an automatic loop. Owner: Task 3 (`applyPreludePage` "stuck cursor") and Task 4 (sentinel ignored while `status === 'error'`).
-3. **The pane switches execution (handoff / take-back swap) or the host is removed while a page is in flight.** Expected: the late response is dropped and never lands on another entry. Owner: Task 4 ("late page after clearExecution is dropped").
-4. **A prepend lands while the reader is mid-transcript, or at the bottom.** Expected: the visible content does not move, so a reader at the bottom stays at the bottom. Owner: Task 7 (`preserveAbove` tests, both cases).
-5. **Hostile or malformed items.** Cases: `pos` with `:` or 200 chars, a duplicate `pos` within a page, string `content`, a missing `message`, an unknown kind, a `__proto__` tool id. Expected: dropped or normalized at the API boundary, and render never throws. Owner: Task 1 (sanitizer tests) and Task 3 (`__proto__` tool id in `derivePrelude`).
+2. **A server bug returns a `prev_cursor` equal to the `before` it was given.** Expected: an error row with Retry, and never an automatic loop. Owner: Task 3 (`applyPreludePage` "stuck cursor"), Task 4 (`loadOlder` ignored while `status === 'error'`), and Task 6 (the sentinel unmounts on `error` and disconnects its observer).
+3. **A late response arrives after the entry was cleared and recreated** (host remove + undo, a handoff swap, a second pane reopening it), possibly with a new request already in flight. Expected: only the request whose id is recorded lands; the old answer is dropped. Owner: Task 3 (request-id guard tests) and Task 4 ("clear → recreate → new request: the old answer is dropped").
+4. **A prepend lands while the reader is mid-transcript or at the bottom, including in the same commit as a new live message.** Expected: what is on screen does not move, and a reader at the bottom stays at the bottom. Owner: Task 7 (snapshot anchoring tests: mid, bottom, same-commit).
+5. **Hostile or malformed items and blocks.** Cases: `pos` with `:` or 200 chars, a duplicate `pos`, string `content`, a missing `message`, an unknown kind, a `__proto__` tool id, a block without a string `type`, a non-object `tool_use.input`, a numeric `tool_result.content`, a string image `source`, a non-boolean `truncated`. Expected: dropped or normalized at the API boundary, and render never throws. Owner: Task 1 (sanitizer tests), Task 3 (`__proto__`), Task 6 (render-level hostile fixture).
 
 ---
 
@@ -121,26 +121,61 @@ describe('sanitizePreludePage', () => {
     expect(page!.items[4]).toMatchObject({ source: 'command_output', text: 'ok', truncated: true })
     expect(page!.items[3]).toMatchObject({ trigger: 'auto' })
   })
+
+  it('cleans every content block so nothing downstream can throw (Review Focus 5)', () => {
+    const page = sanitizePreludePage({
+      state: 'ok', prev_cursor: null,
+      items: [{
+        pos: '1', kind: 'assistant', at: 1,
+        payload: { type: 'assistant', message: { role: 'assistant', content: [
+          { text: 'no type' },
+          { type: 'text', text: 42 },
+          { type: 'tool_use', id: 't', name: 'Bash', input: 'rm -rf' },
+          { type: 'tool_result', tool_use_id: 't', content: 7 },
+          { type: 'image', source: 'base64…' },
+          { type: 'text', text: 'ok', truncated: 'yes', total_bytes: -3 },
+        ] } },
+      }],
+    })
+    const it0 = page!.items[0]
+    if (it0.kind !== 'assistant') throw new Error('kind')
+    expect((it0.msg as { message: { content: unknown[] } }).message.content).toEqual([
+      { type: 'text' },
+      { type: 'tool_use', id: 't', name: 'Bash', input: {} },
+      { type: 'tool_result', tool_use_id: 't', content: '' },
+      { type: 'text', text: 'ok' },
+    ])
+  })
 })
-```
 
-Append to `spa/src/stores/useNexHostStore.test.ts`. Seed `byHost` the same way the existing `selectWorkerRollup` tests in that file do, and reuse their ready-entry helper:
-
-```ts
-describe('selectTranscriptPrelude', () => {
-  it('returns the capability object of a ready host, else null', () => {
-    const cap = { route: { method: 'GET', path: '/api/nex/v1/executions/{id}/prelude' }, page_max_items: 500, page_max_bytes: 1048576, max_block_bytes: 65536 }
-    // ready host whose capabilities carry transcript_prelude
-    expect(selectTranscriptPrelude('h')({ byHost: { h: readyEntry({ transcript_prelude: cap }) } })).toBe(cap)
-    // ready host without it (older daemon)
-    expect(selectTranscriptPrelude('h')({ byHost: { h: readyEntry({}) } })).toBeNull()
-    // unknown host
-    expect(selectTranscriptPrelude('h')({ byHost: {} })).toBeNull()
+describe('contract sample (spec §4.3)', () => {
+  it('every kind of the hand-written sample page survives the sanitiser unchanged', () => {
+    const page = sanitizePreludePage(sample)!
+    expect(page.state).toBe('ok')
+    expect(page.items).toHaveLength(sample.items.length)
+    expect(new Set(page.items.map((i) => i.kind))).toEqual(new Set(['prelude.segment', 'user', 'assistant', 'tool_use', 'tool_result', 'prelude.note', 'prelude.compaction']))
   })
 })
 ```
 
-(`readyEntry(extraCaps)` is the helper the existing `selectWorkerRollup` tests use. If that file names it differently, use its name. If it has none, add one that builds `{ phase: 'ready', capabilities: { ...baseCaps, ...extraCaps } }` from the fixture those tests already use.)
+Add `import sample from './__fixtures__/prelude-contract-sample.json'` at the top. Create `spa/src/lib/nex/__fixtures__/prelude-contract-sample.json`, **hand-written from spec §4.3**, holding one `ok` page in this order: a `prelude.segment` (`cli`); a human `user` prompt; an `assistant` text; an `assistant` `tool_use` (Bash, `input: {command:'ls'}`) plus its N2 `tool_use` item (`pos` `<offset>.1`); a `user` `tool_result` plus its N2 `tool_result` item (`status:'ok'`, `duration_ms`, `output: {text, total_lines, total_bytes, truncated:false}`); a `prelude.note` `command_output`; a `prelude.compaction` (`auto`); a `user` with an omitted image block; a `prelude.segment` (`sdk-cli`). Use the `pos` format `<byteOffset>` / `<byteOffset>.<n>` and a `prev_cursor` string. **When nexen-85 delivers the early golden page (spec §4.6), add it next to this sample as `prelude-golden-nexen.json` and run the same test over it.** Where the two disagree, the golden page wins and the spec is corrected.
+
+Append to `spa/src/stores/useNexHostStore.test.ts`, inside the describe that holds the `selectWorkerRollup` case. Mirror that case, using the file's own `seed()` and `caps()` helpers:
+
+```ts
+  it('selectTranscriptPrelude returns the capability object when present and ready, else null', () => {
+    const cap = { route: { method: 'GET', path: '/api/nex/v1/executions/{id}/prelude' }, page_max_items: 500, page_max_bytes: 1048576, max_block_bytes: 65536 }
+    seed({ capabilities: caps({ transcript_prelude: cap }) })
+    const got = selectTranscriptPrelude(H)(useNexHostStore.getState())
+    expect(got).toEqual(cap)
+    expect(selectTranscriptPrelude(H)(useNexHostStore.getState())).toBe(got)
+    seed({})
+    expect(selectTranscriptPrelude(H)(useNexHostStore.getState())).toBeNull()
+    seed({ phase: 'unavailable', capabilities: caps({ transcript_prelude: cap }) })
+    expect(selectTranscriptPrelude(H)(useNexHostStore.getState())).toBeNull()
+    expect(selectTranscriptPrelude('ghost')(useNexHostStore.getState())).toBeNull()
+  })
+```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -153,7 +188,7 @@ Expected: FAIL. The module is not found, and `selectTranscriptPrelude` is not ex
 
 ```ts
 export interface ContentBlock {
-  type: 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'image'
+  type: 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'image' | 'document'
   text?: string
   id?: string
   name?: string
@@ -162,7 +197,7 @@ export interface ContentBlock {
   is_error?: boolean
   thinking?: string
   tool_use_id?: string
-  /** `image` blocks. A prelude image is `{type:'omitted', media_type, bytes}` (spec §4.3): never data. */
+  /** `image` / `document` blocks. In the prelude: `{type:'omitted', media_type, bytes}` (spec §4.3), never data; `bytes` is the decoded size. */
   source?: { type: string; media_type?: string; bytes?: number }
   /** Prelude only (spec §4.3): the block was cut at `max_block_bytes`. */
   truncated?: boolean
@@ -222,7 +257,7 @@ export type PreludeItem =
   | { pos: string; at: number; kind: 'tool_use' | 'tool_result'; payload: Record<string, unknown> }
   | { pos: string; at: number; kind: 'prelude.segment'; entrypoint: string }
   | { pos: string; at: number; kind: 'prelude.compaction'; trigger: string }
-  | { pos: string; at: number; kind: 'prelude.note'; source: string; text: string; truncated: boolean }
+  | { pos: string; at: number; kind: 'prelude.note'; source: string; text: string; truncated: boolean; totalBytes: number | null; stream: string | null }
 
 export interface PreludePage {
   state: 'ok' | 'none' | 'gone'
@@ -237,14 +272,35 @@ function rec(v: unknown): Record<string, unknown> | null {
   return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null
 }
 
-/** A frame as the room reads it: `content` always an array, always top level (spec §4.3). */
+/**
+ * One content block, cleaned so no renderer can throw on it (spec §5.2):
+ * null drops it. Only the fields the room reads are checked; anything else
+ * on the block passes through untouched.
+ */
+function cleanBlock(raw: unknown): Record<string, unknown> | null {
+  const b = rec(raw)
+  if (!b || typeof b.type !== 'string') return null
+  const out: Record<string, unknown> = { ...b }
+  for (const k of ['text', 'thinking'] as const) if (k in out && typeof out[k] !== 'string') delete out[k]
+  if (out.type === 'tool_use' && rec(out.input) === null) out.input = {}
+  if (out.type === 'tool_result' && 'content' in out) {
+    const c = out.content
+    if (!(typeof c === 'string' || (Array.isArray(c) && c.every((x) => rec(x) !== null)))) out.content = ''
+  }
+  if ((out.type === 'image' || out.type === 'document') && rec(out.source) === null) return null
+  if ('truncated' in out && typeof out.truncated !== 'boolean') delete out.truncated
+  if ('total_bytes' in out && !(Number.isSafeInteger(out.total_bytes) && (out.total_bytes as number) >= 0)) delete out.total_bytes
+  return out
+}
+
+/** A frame as the room reads it: `content` always an array of clean blocks, always top level (spec §4.3). */
 function frame(kind: 'assistant' | 'user', payload: Record<string, unknown>): StreamMessage | null {
   const message = rec(payload.message)
   if (!message) return null
   const raw = message.content
   const content = typeof raw === 'string'
     ? [{ type: 'text', text: raw }]
-    : Array.isArray(raw) ? raw.filter((b) => rec(b) !== null) : null
+    : Array.isArray(raw) ? raw.map(cleanBlock).filter((b): b is Record<string, unknown> => b !== null) : null
   if (!content) return null
   return {
     ...payload,
@@ -272,9 +328,14 @@ function item(raw: unknown): PreludeItem | null {
   if (kind === 'prelude.segment') return typeof p.entrypoint === 'string' ? { pos, at, kind, entrypoint: p.entrypoint } : null
   if (kind === 'prelude.compaction') return { pos, at, kind, trigger: typeof p.trigger === 'string' ? p.trigger : '' }
   if (kind === 'prelude.note') {
-    return typeof p.source === 'string' && typeof p.text === 'string'
-      ? { pos, at, kind, source: p.source, text: p.text, truncated: p.truncated === true }
-      : null
+    if (typeof p.source !== 'string' || typeof p.text !== 'string') return null
+    const tb = p.total_bytes
+    return {
+      pos, at, kind, source: p.source, text: p.text, truncated: p.truncated === true,
+      totalBytes: Number.isSafeInteger(tb) && (tb as number) >= 0 ? (tb as number) : null,
+      // `bash_output` only (spec §4.3): which stream the text came from.
+      stream: typeof p.stream === 'string' ? p.stream : null,
+    }
   }
   return null
 }
@@ -313,7 +374,7 @@ Expected: PASS, no type errors. If widening `ContentBlock.type` breaks an exhaus
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit --only src/lib/nex/prelude-wire.ts src/lib/nex/prelude-wire.test.ts src/lib/nex/message-types.ts src/lib/nex/types.ts src/stores/useNexHostStore.ts src/stores/useNexHostStore.test.ts -m "feat(spa): prelude wire types, page sanitizer and capability selector"
+git commit --only src/lib/nex/prelude-wire.ts src/lib/nex/prelude-wire.test.ts src/lib/nex/__fixtures__/prelude-contract-sample.json src/lib/nex/message-types.ts src/lib/nex/types.ts src/stores/useNexHostStore.ts src/stores/useNexHostStore.test.ts -m "feat(spa): prelude wire types, page sanitizer and capability selector"
 ```
 
 ### Task 2: API client
@@ -406,18 +467,18 @@ git commit --only src/lib/nex/nex-api.ts src/lib/nex/nex-api.test.ts -m "feat(sp
 **Interfaces:**
 - Consumes: `PreludeItem`, `PreludePage` (Task 1).
 - Produces:
-  - `PreludeState { status: 'idle'|'loading'|'ok'|'none'|'gone'|'error'; items: PreludeItem[]; cursor: string|null; done: boolean; error: string|null; totalBytes: number|null }`
-  - `defaultPreludeState()`, `preludeLoading(p)`, `preludeFailed(p, message)`, `applyPreludePage(p, page, sentBefore: string|null)`
+  - `PreludeState { status: 'idle'|'loading'|'ok'|'none'|'gone'|'error'; items: PreludeItem[]; cursor: string|null; done: boolean; error: string|null; totalBytes: number|null; request: number|null; pages: number }`
+  - `defaultPreludeState()`, `preludeLoading(p, request: number)`, `preludeFailed(p, message, request: number)`, `applyPreludePage(p, page, sentBefore: string|null, request: number)`. Each of the last two returns `p` itself, unchanged, unless `p.request === request`.
   - `PreludeEntry`, `PreludeView { entries; messages: StreamMessage[]; ids: string[]; tools: Record<string, ToolActivity> }`, `derivePrelude(items): PreludeView`, `preludeId(pos): string`
   - In `tool-activity.ts`: `recordN2ToolUseIn(tools, p, at)` and `recordN2ToolResultIn(tools, p, at)`, both returning `Record<string, ToolActivity>` (the same object when unchanged).
-  - Store actions: `preludeLoading(h, e)`, `applyPreludePage(h, e, page, sentBefore)`, `preludeFailed(h, e, message)`.
+  - Store actions: `preludeLoading(h, e, request)`, `applyPreludePage(h, e, page, sentBefore, request)`, `preludeFailed(h, e, message, request)`, `resetPrelude(h, e)`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
 // spa/src/lib/nex/prelude.test.ts
 import { describe, it, expect } from 'vitest'
-import { applyPreludePage, defaultPreludeState, derivePrelude, preludeFailed, preludeLoading } from './prelude'
+import { applyPreludePage, defaultPreludeState, derivePrelude, preludeFailed, preludeLoading, type PreludeState } from './prelude'
 import type { PreludeItem, PreludePage } from './prelude-wire'
 import type { StreamMessage } from './message-types'
 
@@ -425,39 +486,54 @@ const msg = (pos: string, type: 'user' | 'assistant', content: unknown[]): Prelu
   ({ pos, at: 1000, kind: type, msg: { type, parent_tool_use_id: null, message: { role: type, content, stop_reason: null } } as unknown as StreamMessage })
 const ok = (items: PreludeItem[], prevCursor: string | null): PreludePage => ({ state: 'ok', items, prevCursor, totalBytes: null })
 
+/** Load one page as request `r` — the way the hook does it. */
+const load = (p: PreludeState, page: PreludePage, sentBefore: string | null, r: number) =>
+  applyPreludePage(preludeLoading(p, r), page, sentBefore, r)
+
 describe('applyPreludePage', () => {
   it('prepends an older page and moves the cursor', () => {
-    let p = applyPreludePage(preludeLoading(defaultPreludeState()), ok([msg('20', 'user', [])], 'c1'), null)
-    expect(p).toMatchObject({ status: 'ok', cursor: 'c1', done: false })
-    p = applyPreludePage(preludeLoading(p), ok([msg('10', 'user', [])], null), 'c1')
+    let p = load(defaultPreludeState(), ok([msg('20', 'user', [])], 'c1'), null, 1)
+    expect(p).toMatchObject({ status: 'ok', cursor: 'c1', done: false, request: null })
+    p = load(p, ok([msg('10', 'user', [])], null), 'c1', 2)
     expect(p.items.map((i) => i.pos)).toEqual(['10', '20'])
     expect(p).toMatchObject({ status: 'ok', cursor: null, done: true })
   })
 
   it('dedupes by pos', () => {
-    const p1 = applyPreludePage(defaultPreludeState(), ok([msg('10', 'user', []), msg('20', 'user', [])], 'c1'), null)
-    const p2 = applyPreludePage(p1, ok([msg('5', 'user', []), msg('10', 'user', [])], null), 'c1')
+    const p1 = load(defaultPreludeState(), ok([msg('10', 'user', []), msg('20', 'user', [])], 'c1'), null, 1)
+    const p2 = load(p1, ok([msg('5', 'user', []), msg('10', 'user', [])], null), 'c1', 2)
     expect(p2.items.map((i) => i.pos)).toEqual(['5', '10', '20'])
   })
 
+  it('only the recorded request lands (Review Focus 3)', () => {
+    const loading = preludeLoading(defaultPreludeState(), 2)
+    expect(applyPreludePage(loading, ok([msg('10', 'user', [])], null), null, 1)).toBe(loading)
+    expect(preludeFailed(loading, 'late', 1)).toBe(loading)
+    expect(applyPreludePage(defaultPreludeState(), ok([], null), null, 1)).toEqual(defaultPreludeState())
+  })
+
   it('stuck cursor: a prev_cursor equal to the before it answered is an error, not a loop', () => {
-    const p1 = applyPreludePage(defaultPreludeState(), ok([msg('10', 'user', [])], 'c1'), null)
-    const p2 = applyPreludePage(preludeLoading(p1), ok([], 'c1'), 'c1')
+    const p1 = load(defaultPreludeState(), ok([msg('10', 'user', [])], 'c1'), null, 1)
+    const p2 = load(p1, ok([], 'c1'), 'c1', 2)
     expect(p2.status).toBe('error')
     expect(p2.items).toBe(p1.items)
     expect(p2.cursor).toBe('c1')
   })
 
-  it('none / gone end the prelude and keep what was loaded', () => {
-    const p1 = applyPreludePage(defaultPreludeState(), ok([msg('10', 'user', [])], 'c1'), null)
-    const g = applyPreludePage(p1, { state: 'gone', items: [], prevCursor: null, totalBytes: null }, 'c1')
+  it('gone ends the prelude and keeps what was loaded; none on an older page is an error', () => {
+    const p1 = load(defaultPreludeState(), ok([msg('10', 'user', [])], 'c1'), null, 1)
+    const g = load(p1, { state: 'gone', items: [], prevCursor: null, totalBytes: null }, 'c1', 2)
     expect(g).toMatchObject({ status: 'gone', done: true, cursor: null })
     expect(g.items).toHaveLength(1)
+    const n = load(p1, { state: 'none', items: [], prevCursor: null, totalBytes: null }, 'c1', 3)
+    expect(n).toMatchObject({ status: 'error', cursor: 'c1' })
+    expect(load(defaultPreludeState(), { state: 'none', items: [], prevCursor: null, totalBytes: null }, null, 4))
+      .toMatchObject({ status: 'none', done: true })
   })
 
   it('preludeFailed keeps items and cursor', () => {
-    const p1 = applyPreludePage(defaultPreludeState(), ok([msg('10', 'user', [])], 'c1'), null)
-    expect(preludeFailed(preludeLoading(p1), 'boom')).toMatchObject({ status: 'error', error: 'boom', cursor: 'c1', items: p1.items })
+    const p1 = load(defaultPreludeState(), ok([msg('10', 'user', [])], 'c1'), null, 1)
+    expect(preludeFailed(preludeLoading(p1, 2), 'boom', 2)).toMatchObject({ status: 'error', error: 'boom', cursor: 'c1', items: p1.items, request: null })
   })
 })
 
@@ -466,7 +542,7 @@ describe('derivePrelude', () => {
     const v = derivePrelude([
       { pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
       msg('2', 'user', [{ type: 'text', text: 'hi' }]),
-      { pos: '3', at: 0, kind: 'prelude.note', source: 'command_output', text: 'out', truncated: false },
+      { pos: '3', at: 0, kind: 'prelude.note', source: 'command_output', text: 'out', truncated: false, totalBytes: null, stream: null },
       msg('4', 'assistant', [{ type: 'text', text: 'yo' }]),
     ])
     expect(v.entries.map((e) => e.kind)).toEqual(['segment', 'message', 'note', 'message'])
@@ -504,8 +580,8 @@ describe('prelude actions', () => {
     const s = useExecutionStore.getState()
     s.applyEvents('h', 'e', [{ seq: 1, execution_id: 'e', kind: 'execution.delegated', payload: { brief: 'b' }, created_at: 1 }])
     const before = useExecutionStore.getState().executions[executionKey('h', 'e')]
-    s.preludeLoading('h', 'e')
-    s.applyPreludePage('h', 'e', { state: 'ok', items: [], prevCursor: null, totalBytes: null }, null)
+    s.preludeLoading('h', 'e', 1)
+    s.applyPreludePage('h', 'e', { state: 'ok', items: [], prevCursor: null, totalBytes: null }, null, 1)
     const after = useExecutionStore.getState().executions[executionKey('h', 'e')]
     expect(after.prelude).toMatchObject({ status: 'ok', done: true })
     expect(after.messages).toBe(before.messages)
@@ -572,30 +648,50 @@ export interface PreludeState {
   done: boolean
   error: string | null
   totalBytes: number | null
+  /**
+   * The page request in flight (spec §5.2). An answer lands only while its
+   * id is still this one, so a late answer cannot land on an entry that
+   * was cleared and recreated in between (Review Focus 3).
+   */
+  request: number | null
+  /**
+   * Pages applied so far. The sentinel re-arms on it, not on the item count:
+   * a page may legally hold no items and still have a cursor (spec §4.3).
+   */
+  pages: number
 }
 
 export function defaultPreludeState(): PreludeState {
-  return { status: 'idle', items: [], cursor: null, done: false, error: null, totalBytes: null }
+  return { status: 'idle', items: [], cursor: null, done: false, error: null, totalBytes: null, request: null, pages: 0 }
 }
 
-export function preludeLoading(p: PreludeState): PreludeState {
-  return { ...p, status: 'loading', error: null }
+export function preludeLoading(p: PreludeState, request: number): PreludeState {
+  return { ...p, status: 'loading', error: null, request }
 }
 
-export function preludeFailed(p: PreludeState, message: string): PreludeState {
-  return { ...p, status: 'error', error: message }
+export function preludeFailed(p: PreludeState, message: string, request: number): PreludeState {
+  if (p.request !== request) return p
+  return { ...p, status: 'error', error: message, request: null }
 }
 
 /**
- * Fold one page in. `sentBefore` is the cursor the request carried (null for
- * the first page): a page that hands back the same cursor made no progress —
- * a server bug — and becomes an error the reader can retry, never a loop
- * (Review Focus 2).
+ * Fold one page in, if `request` is the one in flight. `sentBefore` is the
+ * cursor the request carried (null for the first page):
+ * - a page that hands back the same cursor made no progress (a server bug)
+ *   and becomes an error the reader can retry, never a loop (Review Focus 2);
+ * - `none` is only ever the first page's answer (spec §4.2); on an older
+ *   page it is a contract violation, so an error;
+ * - `gone` ends the prelude and keeps what was loaded (the D5 line is drawn
+ *   above it).
  */
-export function applyPreludePage(p: PreludeState, page: PreludePage, sentBefore: string | null): PreludeState {
-  if (page.state !== 'ok') return { ...p, status: page.state, cursor: null, done: true, error: null }
+export function applyPreludePage(p: PreludeState, page: PreludePage, sentBefore: string | null, request: number): PreludeState {
+  if (p.request !== request) return p
+  if (page.state === 'none' && sentBefore !== null) {
+    return { ...p, status: 'error', error: 'prelude: none on an older page', request: null }
+  }
+  if (page.state !== 'ok') return { ...p, status: page.state, cursor: null, done: true, error: null, request: null }
   if (page.prevCursor !== null && page.prevCursor === sentBefore) {
-    return { ...p, status: 'error', error: 'prelude cursor did not advance' }
+    return { ...p, status: 'error', error: 'prelude cursor did not advance', request: null }
   }
   const known = new Set(p.items.map((i) => i.pos))
   const fresh = page.items.filter((i) => !known.has(i.pos))
@@ -606,6 +702,8 @@ export function applyPreludePage(p: PreludeState, page: PreludePage, sentBefore:
     done: page.prevCursor === null,
     error: null,
     totalBytes: page.totalBytes ?? p.totalBytes,
+    request: null,
+    pages: p.pages + 1,
   }
 }
 
@@ -613,7 +711,7 @@ export type PreludeEntry =
   | { pos: string; kind: 'message'; m: number }
   | { pos: string; kind: 'segment'; entrypoint: string }
   | { pos: string; kind: 'compaction'; trigger: string }
-  | { pos: string; kind: 'note'; source: string; text: string; truncated: boolean }
+  | { pos: string; kind: 'note'; source: string; text: string; truncated: boolean; totalBytes: number | null; stream: string | null }
 
 export interface PreludeView {
   /** In drawing order. A message entry points into `messages` by `m`. */
@@ -653,7 +751,7 @@ export function derivePrelude(items: readonly PreludeItem[]): PreludeView {
         entries.push({ pos: it.pos, kind: 'compaction', trigger: it.trigger })
         break
       case 'prelude.note':
-        entries.push({ pos: it.pos, kind: 'note', source: it.source, text: it.text, truncated: it.truncated })
+        entries.push({ pos: it.pos, kind: 'note', source: it.source, text: it.text, truncated: it.truncated, totalBytes: it.totalBytes, stream: it.stream })
         break
     }
   }
@@ -680,19 +778,32 @@ and `prelude: defaultPreludeState(),` to `defaultExecutionState()`.
 `useExecutionStore.ts`: import `applyPreludePage as reducePreludePage, preludeFailed as failPrelude, preludeLoading as loadingPrelude` from `../lib/nex/prelude` and `type PreludePage` from `../lib/nex/prelude-wire`. Add these to the interface:
 
 ```ts
-  /** Worker prelude (spec §5.2): a page request is in flight — also the lock two panes share. */
-  preludeLoading: (hostId: string, executionId: string) => void
-  applyPreludePage: (hostId: string, executionId: string, page: PreludePage, sentBefore: string | null) => void
-  preludeFailed: (hostId: string, executionId: string, message: string) => void
+  /** Worker prelude (spec §5.2): request `request` is in flight — also the lock two panes share. */
+  preludeLoading: (hostId: string, executionId: string, request: number) => void
+  /** No-op unless `request` is the one in flight. */
+  applyPreludePage: (hostId: string, executionId: string, page: PreludePage, sentBefore: string | null, request: number) => void
+  /** No-op unless `request` is the one in flight. */
+  preludeFailed: (hostId: string, executionId: string, message: string, request: number) => void
+  /** Back to idle, which reloads from the first page (spec §5.2: a cursor rejected as foreign). */
+  resetPrelude: (hostId: string, executionId: string) => void
 ```
 
-and these to the implementation:
+and these to the implementation (`patch` already skips the write when the reducer hands back the same object):
 
 ```ts
-    preludeLoading: (h, e) => patch(h, e, (c) => ({ ...c, prelude: loadingPrelude(c.prelude) })),
-    applyPreludePage: (h, e, page, sentBefore) => patch(h, e, (c) => ({ ...c, prelude: reducePreludePage(c.prelude, page, sentBefore) })),
-    preludeFailed: (h, e, message) => patch(h, e, (c) => ({ ...c, prelude: failPrelude(c.prelude, message) })),
+    preludeLoading: (h, e, r) => patch(h, e, (c) => ({ ...c, prelude: loadingPrelude(c.prelude, r) })),
+    applyPreludePage: (h, e, page, sentBefore, r) => patch(h, e, (c) => {
+      const prelude = reducePreludePage(c.prelude, page, sentBefore, r)
+      return prelude === c.prelude ? c : { ...c, prelude }
+    }),
+    preludeFailed: (h, e, message, r) => patch(h, e, (c) => {
+      const prelude = failPrelude(c.prelude, message, r)
+      return prelude === c.prelude ? c : { ...c, prelude }
+    }),
+    resetPrelude: (h, e) => patch(h, e, (c) => ({ ...c, prelude: defaultPreludeState() })),
 ```
+
+(also import `defaultPreludeState` there.)
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -724,6 +835,7 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import type { PreludePage } from '../lib/nex/prelude-wire'
+import { NexApiError } from '../lib/nex/types'
 
 const fetchExecutionPrelude = vi.fn<(h: string, e: string, o?: { before?: string; limit?: number }) => Promise<PreludePage>>()
 vi.mock('../lib/nex/nex-api', () => ({ fetchExecutionPrelude: (...a: Parameters<typeof fetchExecutionPrelude>) => fetchExecutionPrelude(...a) }))
@@ -809,6 +921,46 @@ describe('useExecutionPrelude', () => {
     expect(useExecutionStore.getState().executions[executionKey('h', 'e')]).toBeUndefined()
   })
 
+  it('clear → recreate → new request: the old answer is dropped, the new one lands (Review Focus 3)', async () => {
+    seed()
+    let resolveOld!: (p: PreludePage) => void
+    let resolveNew!: (p: PreludePage) => void
+    fetchExecutionPrelude
+      .mockReturnValueOnce(new Promise((r) => { resolveOld = r }))
+      .mockReturnValueOnce(new Promise((r) => { resolveNew = r }))
+    const first = renderHook(() => useExecutionPrelude('h', 'e'))
+    await waitFor(() => expect(fetchExecutionPrelude).toHaveBeenCalledTimes(1))
+    first.unmount()
+    act(() => useExecutionStore.getState().clearExecution('h', 'e'))
+    seed()                                          // the entry comes back (undo / a new pane)
+    renderHook(() => useExecutionPrelude('h', 'e'))
+    await waitFor(() => expect(fetchExecutionPrelude).toHaveBeenCalledTimes(2))
+    await act(async () => { resolveOld(ok('OLD', null)) })
+    expect(prelude().status).toBe('loading')        // still waiting for its own request
+    await act(async () => { resolveNew(ok('NEW', null)) })
+    expect(prelude().items.map((i) => i.pos)).toEqual(['NEW'])
+  })
+
+  it('a 400 malformed_parameter on an older page restarts from the first page', async () => {
+    seed()
+    fetchExecutionPrelude.mockResolvedValueOnce(ok('20', 'c1'))
+    const { result } = renderHook(() => useExecutionPrelude('h', 'e'))
+    await waitFor(() => expect(prelude().status).toBe('ok'))
+    fetchExecutionPrelude
+      .mockRejectedValueOnce(new NexApiError(400, 'malformed_parameter', 'bad cursor'))
+      .mockResolvedValueOnce(ok('20', null))
+    await act(async () => { result.current.loadOlder() })
+    await waitFor(() => expect(prelude()).toMatchObject({ status: 'ok', done: true }))
+    expect(fetchExecutionPrelude).toHaveBeenLastCalledWith('h', 'e', { limit: PRELUDE_PAGE_LIMIT })
+  })
+
+  it('a page with no items but a cursor is not the end (spec §4.3)', async () => {
+    seed()
+    fetchExecutionPrelude.mockResolvedValueOnce({ state: 'ok', items: [], prevCursor: 'c1', totalBytes: null })
+    renderHook(() => useExecutionPrelude('h', 'e'))
+    await waitFor(() => expect(prelude()).toMatchObject({ status: 'ok', done: false, cursor: 'c1', pages: 1 }))
+  })
+
   it('loadAll pages until done', async () => {
     seed()
     fetchExecutionPrelude
@@ -840,12 +992,16 @@ Expected: FAIL (module missing).
 // two panes on the same worker never ask twice.
 import { useCallback, useEffect } from 'react'
 import { fetchExecutionPrelude } from '../lib/nex/nex-api'
+import { NexApiError } from '../lib/nex/types'
 import { executionKey, useExecutionStore } from '../stores/useExecutionStore'
 import { selectTranscriptPrelude, useNexHostStore } from '../stores/useNexHostStore'
 
 export const PRELUDE_PAGE_LIMIT = 200
-/** loadAll's safety stop: 1000 × 200 items is far past any real transcript. */
+/** loadAll's safety stop: far past any real transcript (a page may also hold 0 items, spec §4.3). */
 export const MAX_LOAD_ALL_PAGES = 1000
+
+/** Request ids, unique for the module's lifetime: a late answer is told apart by its id, not by the entry's status. */
+let nextRequest = 1
 
 export function useExecutionPrelude(hostId: string, executionId: string): {
   loadOlder: () => void
@@ -867,17 +1023,26 @@ export function useExecutionPrelude(hostId: string, executionId: string): {
     const p = store.executions[key]?.prelude
     if (!p || p.status === 'loading' || p.status === 'none' || p.status === 'gone' || p.done) return false
     const before = p.cursor
-    store.preludeLoading(hostId, executionId)
-    // Only the entry this request locked takes the answer: a cleared entry
-    // (host removed, the pane moved on) has no prelude to land on.
-    const stillOurs = () => useExecutionStore.getState().executions[key]?.prelude.status === 'loading'
+    const request = nextRequest++
+    store.preludeLoading(hostId, executionId, request)
+    // Only this request's own answer lands: the store actions are no-ops
+    // unless `request` is still the one recorded, so an entry that was
+    // cleared and recreated (with a new request in flight) never takes it.
+    const ours = () => useExecutionStore.getState().executions[key]?.prelude.request === request
     try {
       const page = await fetchExecutionPrelude(hostId, executionId, { ...(before !== null ? { before } : {}), limit: PRELUDE_PAGE_LIMIT })
-      if (!stillOurs()) return false
-      useExecutionStore.getState().applyPreludePage(hostId, executionId, page, before)
+      if (!ours()) return false
+      useExecutionStore.getState().applyPreludePage(hostId, executionId, page, before, request)
       return true
     } catch (e) {
-      if (stillOurs()) useExecutionStore.getState().preludeFailed(hostId, executionId, e instanceof Error ? e.message : String(e))
+      if (!ours()) return false
+      // Spec §4.2: the daemon rejected an older page's cursor (it was
+      // upgraded, or the file changed): start over from the first page.
+      if (before !== null && e instanceof NexApiError && e.code === 'malformed_parameter') {
+        useExecutionStore.getState().resetPrelude(hostId, executionId)
+        return false
+      }
+      useExecutionStore.getState().preludeFailed(hostId, executionId, e instanceof Error ? e.message : String(e), request)
       return false
     }
   }, [hostId, executionId, key])
@@ -1053,6 +1218,7 @@ git commit --only src/lib/nex/message-keys.ts src/lib/nex/operations.ts src/lib/
 - Create: `spa/src/components/room/prelude/PreludeMarker.tsx`
 - Create: `spa/src/components/room/prelude/PreludeNote.tsx`
 - Create: `spa/src/components/room/prelude/PreludeSentinel.tsx`
+- Create: `spa/src/components/room/prelude/Placeholders.tsx`
 - Create: `spa/src/components/room/prelude/PreludeSection.test.tsx`
 - Modify: `spa/src/components/room/MessageRow.tsx` (image placeholder + truncation hint)
 - Modify: `spa/src/lib/nex/format.ts` (add `formatBytes`) and `spa/src/lib/nex/format.test.ts`
@@ -1060,7 +1226,7 @@ git commit --only src/lib/nex/message-keys.ts src/lib/nex/operations.ts src/lib/
 
 **Interfaces:**
 - Consumes: `PreludeView`, `PreludeState['status']`, `preludeId` (Task 3); `keyAt`/`rowKey`/`RenderCtx.idOf` (Task 5).
-- Produces: `<PreludeSection view status done error keyPrefix now mode onLoadOlder onRetry />`, where `mode: 'room' | 'chat'` (chat lands in Task 8; until then `'chat'` renders the room form). Also `formatBytes(n: number): string`.
+- Produces: `<PreludeSection view status done error keyPrefix now mode pages onLoadOlder onRetry />`, plus `OmittedMedia`, `isOmittedMedia`, `TruncatedHint`, `blockShownBytes`, where `mode: 'room' | 'chat'` (chat lands in Task 8; until then `'chat'` renders the room form). Also `formatBytes(n: number): string`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1070,24 +1236,26 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import PreludeSection from './PreludeSection'
 import { derivePrelude } from '../../../lib/nex/prelude'
-import type { PreludeItem } from '../../../lib/nex/prelude-wire'
+import { sanitizePreludePage, type PreludeItem } from '../../../lib/nex/prelude-wire'
 import type { StreamMessage } from '../../../lib/nex/message-types'
 
 const m = (pos: string, type: 'user' | 'assistant', content: unknown[]): PreludeItem =>
   ({ pos, at: 1, kind: type, msg: { type, parent_tool_use_id: null, message: { role: type, content, stop_reason: null } } as unknown as StreamMessage })
 
 let observed: Array<(entries: Array<{ isIntersecting: boolean }>) => void> = []
+let disconnects = 0
 beforeEach(() => {
   observed = []
+  disconnects = 0
   vi.stubGlobal('IntersectionObserver', class {
     constructor(cb: (e: Array<{ isIntersecting: boolean }>) => void) { observed.push(cb) }
     observe() {}
-    disconnect() {}
+    disconnect() { disconnects++ }
   })
 })
 afterEach(() => vi.unstubAllGlobals())
 
-const base = { keyPrefix: 'exc', mode: 'room' as const, onLoadOlder: vi.fn(), onRetry: vi.fn(), error: null }
+const base = { keyPrefix: 'exc', mode: 'room' as const, onLoadOlder: vi.fn(), onRetry: vi.fn(), error: null, pages: 1 }
 
 describe('PreludeSection', () => {
   it('draws markers, user lines, prose and notes in order', () => {
@@ -1095,7 +1263,7 @@ describe('PreludeSection', () => {
       { pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
       m('2', 'user', [{ type: 'text', text: 'fix the build' }]),
       m('3', 'assistant', [{ type: 'text', text: 'on it' }]),
-      { pos: '4', at: 0, kind: 'prelude.note', source: 'command_output', text: 'Model set to opus', truncated: false },
+      { pos: '4', at: 0, kind: 'prelude.note', source: 'command_output', text: 'Model set to opus', truncated: false, totalBytes: null, stream: null },
       { pos: '5', at: 0, kind: 'prelude.compaction', trigger: 'auto' },
       { pos: '6', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
     ])
@@ -1117,6 +1285,27 @@ describe('PreludeSection', () => {
     expect(onLoadOlder).toHaveBeenCalledTimes(1)
     rerender(<PreludeSection {...base} onLoadOlder={onLoadOlder} view={view} status="ok" done />)
     expect(screen.queryByTestId('prelude-sentinel')).toBeNull()
+    expect(disconnects).toBe(1)
+  })
+
+  it('an error unmounts the sentinel and disconnects it (Review Focus 2)', () => {
+    const view = derivePrelude([m('2', 'user', [{ type: 'text', text: 'x' }])])
+    const { rerender } = render(<PreludeSection {...base} view={view} status="ok" done={false} />)
+    rerender(<PreludeSection {...base} view={view} status="error" error="stuck" done={false} />)
+    expect(screen.queryByTestId('prelude-sentinel')).toBeNull()
+    expect(disconnects).toBe(1)
+  })
+
+  it('re-arms after every page — even one with no items — so a short prelude keeps loading', () => {
+    const onLoadOlder = vi.fn()
+    const view = derivePrelude([m('2', 'user', [{ type: 'text', text: 'x' }])])
+    const { rerender } = render(<PreludeSection {...base} onLoadOlder={onLoadOlder} view={view} status="ok" done={false} pages={1} />)
+    expect(observed).toHaveLength(1)
+    // A page that brought no items still counts: same view, pages 2.
+    rerender(<PreludeSection {...base} onLoadOlder={onLoadOlder} view={view} status="ok" done={false} pages={2} />)
+    expect(observed).toHaveLength(2)
+    observed[1]([{ isIntersecting: true }])        // the fresh observer's first report: still in view
+    expect(onLoadOlder).toHaveBeenCalledTimes(1)
   })
 
   it('shows loading, error with retry, and gone', () => {
@@ -1138,14 +1327,52 @@ describe('PreludeSection', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('draws an omitted image as a placeholder and a cut block with its hint', () => {
+  it('draws omitted images / documents as placeholders in user and assistant content', () => {
     const view = derivePrelude([
       m('2', 'user', [{ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 122880 } }]),
-      m('3', 'assistant', [{ type: 'text', text: 'long…', truncated: true, total_bytes: 200000 }]),
+      m('3', 'assistant', [{ type: 'document', source: { type: 'omitted', media_type: 'application/pdf', bytes: 5 * 1024 * 1024 } }]),
     ])
     render(<PreludeSection {...base} view={view} status="ok" done />)
     expect(screen.getByText('[image · png · 120 KB]')).toBeTruthy()
-    expect(screen.getByTestId('prelude-truncated').textContent).toContain('195 KB')
+    expect(screen.getByText('[document · pdf · 5.0 MB]')).toBeTruthy()
+  })
+
+  it('every cut block and every cut note says so', () => {
+    const view = derivePrelude([
+      m('2', 'assistant', [
+        { type: 'text', text: 'long…', truncated: true, total_bytes: 200000 },
+        { type: 'thinking', thinking: 'mulling', truncated: true, total_bytes: 100000 },
+        { type: 'tool_use', id: 't', name: 'Write', input: { content: 'x' }, truncated: true, total_bytes: 90000 },
+      ]),
+      m('3', 'user', [{ type: 'tool_result', tool_use_id: 't', content: 'out', truncated: true, total_bytes: 80000 }]),
+      { pos: '4', at: 0, kind: 'prelude.note', source: 'command_output', text: 'big', truncated: true, totalBytes: 70000, stream: null },
+    ])
+    render(<PreludeSection {...base} view={view} status="ok" done />)
+    const hints = screen.getAllByTestId('prelude-truncated').map((h) => h.textContent)
+    expect(hints).toHaveLength(5)
+    expect(hints[0]).toContain('195 KB')
+    expect(hints[4]).toContain('68 KB')
+  })
+
+  it('a bash stderr note is drawn in the error tone', () => {
+    const view = derivePrelude([{ pos: '4', at: 0, kind: 'prelude.note', source: 'bash_output', text: 'boom', truncated: false, totalBytes: null, stream: 'stderr' }])
+    render(<PreludeSection {...base} view={view} status="ok" done />)
+    expect(screen.getByTestId('prelude-note-bash_output').innerHTML).toContain('text-status-error')
+  })
+
+  it('hostile blocks that passed the sanitiser still render (Review Focus 5)', () => {
+    const page = sanitizePreludePage({
+      state: 'ok', prev_cursor: null,
+      items: [{ pos: '9', kind: 'assistant', at: 1, payload: { type: 'assistant', message: { role: 'assistant', content: [
+        { type: 'tool_use', id: '__proto__', name: 'Bash', input: 'x' },
+        { type: 'text', text: 42 },
+        { type: 'mystery', blob: [1, 2] },
+      ] } } }, { pos: '10', kind: 'user', at: 1, payload: { type: 'user', message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: '__proto__', content: { not: 'an array' } },
+        { type: 'image', source: { type: 'omitted' } },
+      ] } } }],
+    })!
+    expect(() => render(<PreludeSection {...base} view={derivePrelude(page.items)} status="ok" done />)).not.toThrow()
   })
 })
 ```
@@ -1175,7 +1402,7 @@ Locale keys. Add both files, with the same keys:
 | `worker.prelude.loading` | Loading earlier conversation… | 載入更早的內容… |
 | `worker.prelude.error` | Couldn't load the earlier conversation: {{message}} | 更早的內容載入失敗：{{message}} |
 | `worker.prelude.retry` | Retry | 重試 |
-| `worker.prelude.gone` | The earlier conversation is no longer available (Claude Code removed its transcript) | 更早的內容已不存在（Claude Code 已清除這份 transcript） |
+| `worker.prelude.gone` | The earlier conversation can't be read (its transcript was removed, or is not reachable from this daemon) | 更早的內容無法讀取（transcript 已被清除，或這台 daemon 讀不到） |
 | `worker.prelude.segment_cli` | In the terminal | 在終端機 |
 | `worker.prelude.segment_headless` | Headless (worker) | Headless（worker） |
 | `worker.prelude.compaction_auto` | Conversation compacted here (auto) | 對話在此壓縮（自動） |
@@ -1184,6 +1411,7 @@ Locale keys. Add both files, with the same keys:
 | `worker.prelude.note_peer` | Peer message | Peer 訊息 |
 | `worker.prelude.note_task` | Background task | 背景工作 |
 | `worker.prelude.image` | [image · {{type}} · {{size}}] | [圖片 · {{type}} · {{size}}] |
+| `worker.prelude.document` | [document · {{type}} · {{size}}] | [文件 · {{type}} · {{size}}] |
 | `worker.prelude.truncated` | Too long — showing the first {{shown}} of {{total}} | 內容過長，只顯示前 {{shown}}（共 {{total}}） |
 | `worker.prelude.search_incomplete` | Earlier conversation not fully loaded | 更早的內容尚未全部載入 |
 | `worker.prelude.load_all` | Load all | 全部載入 |
@@ -1224,41 +1452,57 @@ export default function PreludeMarker({ label, testId }: { label: string; testId
 // the prelude (spec §4.3 `prelude.note`): a slash command's or `!` command's
 // output, the `!` input itself, a background-task notice, a peer message.
 import { TerminalWindow } from '@phosphor-icons/react'
-import { useMemo } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
-import { foldPlan } from '../../../lib/nex/fold'
+import { foldPlan, utf8Length } from '../../../lib/nex/fold'
 import { searchUnitId } from '../../../lib/nex/transcript-search'
 import { FoldedOutput } from '../FoldedOutput'
 import { useFold } from '../fold-context'
+import { TruncatedHint } from './Placeholders'
 
 export interface PreludeNoteProps {
   /** `p<pos>` — fold key `${id}:note`, search anchor `${id}:note:text`. */
   id: string
   source: string
   text: string
+  truncated: boolean
+  totalBytes: number | null
+  /** `bash_output` only: 'stdout' | 'stderr' (spec §4.3). */
+  stream: string | null
 }
 
-export default function PreludeNote({ id, source, text }: PreludeNoteProps) {
+export default function PreludeNote({ id, source, text, truncated, totalBytes, stream }: PreludeNoteProps) {
   const t = useI18nStore((s) => s.t)
   const [expanded, toggle] = useFold(`${id}:note`)
   const plan = useMemo(() => foldPlan({ text }), [text])
   const anchor = searchUnitId(`${id}:note`, 'text')
+  const hint: ReactNode = truncated ? <TruncatedHint shown={utf8Length(text)} total={totalBytes ?? 0} /> : null
   if (source === 'bash_input') {
     return (
-      <div data-testid="prelude-bash-input" className="flex items-center gap-1.5 text-[13px] text-status-warning font-mono">
-        <TerminalWindow size={14} weight="bold" />
-        <span data-search-unit={anchor}>! {text}</span>
+      <div data-testid="prelude-bash-input">
+        <div className="flex items-center gap-1.5 text-[13px] text-status-warning font-mono">
+          <TerminalWindow size={14} weight="bold" />
+          <span data-search-unit={anchor}>! {text}</span>
+        </div>
+        {hint}
       </div>
     )
   }
   if (source === 'task_notification') {
-    return <div data-testid="prelude-task" className="text-xs text-text-muted"><span>{t('worker.prelude.note_task')}: </span><span data-search-unit={anchor}>{text}</span></div>
+    return (
+      <div data-testid="prelude-task" className="text-xs text-text-muted">
+        <span>{t('worker.prelude.note_task')}: </span><span data-search-unit={anchor}>{text}</span>
+        {hint}
+      </div>
+    )
   }
   const label = source === 'peer_message' ? t('worker.prelude.note_peer') : null
   return (
     <div data-testid={`prelude-note-${source}`} className="space-y-1">
       {label && <div className="text-xs text-text-muted">{label}</div>}
-      <FoldedOutput text={text} plan={plan} expanded={expanded} onToggle={toggle} searchUnit={anchor} />
+      <FoldedOutput text={text} plan={plan} expanded={expanded} onToggle={toggle} searchUnit={anchor}
+        tone={stream === 'stderr' ? 'error' : 'normal'} />
+      {hint}
     </div>
   )
 }
@@ -1321,11 +1565,13 @@ export interface PreludeSectionProps {
   keyPrefix: string
   now?: number
   mode: 'room' | 'chat'
+  /** PreludeState.pages — re-arms the sentinel after every page, an empty one included. */
+  pages: number
   onLoadOlder: () => void
   onRetry: () => void
 }
 
-export default function PreludeSection({ view, status, done, error, keyPrefix, now, onLoadOlder, onRetry }: PreludeSectionProps) {
+export default function PreludeSection({ view, status, done, error, keyPrefix, now, pages, onLoadOlder, onRetry }: PreludeSectionProps) {
   const t = useI18nStore((s) => s.t)
   const idOf = useCallback((i: number) => view.ids[i], [view.ids])
   const index = useMemo(() => indexOperations(view.messages, idOf), [view.messages, idOf])
@@ -1345,7 +1591,7 @@ export default function PreludeSection({ view, status, done, error, keyPrefix, n
 
   return (
     <section data-testid="worker-prelude" className="space-y-4">
-      {status === 'ok' && !done && <PreludeSentinel onVisible={onLoadOlder} generation={view.entries.length} />}
+      {status === 'ok' && !done && <PreludeSentinel onVisible={onLoadOlder} generation={pages} />}
       {top}
       {view.entries.map((e) => {
         if (e.kind === 'message') return index.childIndexes.has(e.m) ? null : renderMessage(view.messages[e.m], e.m, ctx)
@@ -1362,36 +1608,76 @@ export default function PreludeSection({ view, status, done, error, keyPrefix, n
             : t('worker.prelude.compaction')
           return <PreludeMarker key={id} testId="prelude-compaction" label={label} />
         }
-        return <PreludeNote key={id} id={id} source={e.source} text={e.text} />
+        return <PreludeNote key={id} id={id} source={e.source} text={e.text} truncated={e.truncated} totalBytes={e.totalBytes} stream={e.stream} />
       })}
     </section>
   )
 }
 ```
 
-`MessageRow.tsx`. In the user branch, before the `text` arm:
+`Placeholders.tsx` (shared by the room and, in Task 8, chat):
 
 ```tsx
-          // Prelude (spec D6): an image the daemon left out — its kind and size, never data.
-          if (block.type === 'image' && block.source?.type === 'omitted') {
-            const type = (block.source.media_type ?? '').replace(/^image\//, '') || '?'
-            return <div key={j} data-testid="prelude-image" className="text-xs text-text-muted font-mono">
-              {t('worker.prelude.image', { type, size: formatBytes(block.source.bytes ?? 0) })}
-            </div>
-          }
+// spa/src/components/room/prelude/Placeholders.tsx — what the prelude draws
+// for content the daemon left out or cut (spec §4.3, D6): an image or
+// document as its kind and size (never data), and a one-line hint after
+// any block or note that was cut at max_block_bytes.
+import type { ContentBlock } from '../../../lib/nex/message-types'
+import { utf8Length } from '../../../lib/nex/fold'
+import { formatBytes } from '../../../lib/nex/format'
+import { toolResultText } from '../../../lib/nex/operations'
+import { useI18nStore } from '../../../stores/useI18nStore'
+
+/** An image / document block whose data the daemon omitted. */
+export function isOmittedMedia(block: ContentBlock): boolean {
+  return (block.type === 'image' || block.type === 'document') && block.source?.type === 'omitted'
+}
+
+export function OmittedMedia({ block }: { block: ContentBlock }) {
+  const t = useI18nStore((s) => s.t)
+  const type = (block.source?.media_type ?? '').replace(/^[a-z]+\//, '') || '?'
+  const size = formatBytes(block.source?.bytes ?? 0)
+  return (
+    <div data-testid="prelude-media" className="text-xs text-text-muted font-mono">
+      {t(block.type === 'document' ? 'worker.prelude.document' : 'worker.prelude.image', { type, size })}
+    </div>
+  )
+}
+
+/** How many bytes of a cut block are shown — what the daemon kept. */
+export function blockShownBytes(block: ContentBlock): number {
+  switch (block.type) {
+    case 'thinking': return utf8Length(block.thinking ?? '')
+    case 'tool_use': return utf8Length(JSON.stringify(block.input ?? {}))
+    case 'tool_result': return utf8Length(toolResultText(block.content))
+    default: return utf8Length(block.text ?? '')
+  }
+}
+
+export function TruncatedHint({ shown, total }: { shown: number; total: number }) {
+  const t = useI18nStore((s) => s.t)
+  return (
+    <div data-testid="prelude-truncated" className="text-xs text-text-muted">
+      {t('worker.prelude.truncated', { shown: formatBytes(shown), total: formatBytes(total) })}
+    </div>
+  )
+}
 ```
 
-In both the assistant `text` arm and the user text line, append the hint when `block.truncated`:
+`MessageRow.tsx`: move the bodies of the two `content.map` callbacks into local per-block functions, `assistantBlock(block, j)` and `userBlock(block, j)`, keeping today's bodies exactly. Then route both maps through one decorator, so **every** block kind gets the same treatment:
 
 ```tsx
-{block.truncated && (
-  <div data-testid="prelude-truncated" className="text-xs text-text-muted">
-    {t('worker.prelude.truncated', { shown: formatBytes(utf8Length(block.text ?? '')), total: formatBytes(block.total_bytes ?? 0) })}
-  </div>
-)}
+  /** Spec §5.3: omitted media becomes its placeholder; a cut block keeps its own drawing plus one hint line. */
+  const decorate = (block: ContentBlock, j: number, el: ReactNode): ReactNode => {
+    if (isOmittedMedia(block)) return <OmittedMedia key={j} block={block} />
+    if (!block.truncated) return el
+    return <Fragment key={j}>{el}<TruncatedHint shown={blockShownBytes(block)} total={block.total_bytes ?? 0} /></Fragment>
+  }
+  // assistant: {am.message.content.map((block, j) => decorate(block, j, assistantBlock(block, j)))}
+  // user:      {um.message.content.map((block, j) => decorate(block, j, userBlock(block, j)))}
 ```
 
-`utf8Length` is exported from `lib/nex/fold.ts`. Wrap each arm's existing element and the hint in a `<div key={j}>…</div>` so the key moves to the wrapper.
+The live list never carries `truncated` or omitted media, because Nexen sets them only on prelude items, so the live transcript renders exactly as before. A consumed `tool_result` draws `null`, because its call shows the output. Its hint still lands on the result's row, right after the call's block, which is where the reader looks.
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -1406,44 +1692,75 @@ git commit --only src/components/room/prelude src/components/room/MessageRow.tsx
 
 ### Task 7: Keep the reader's place on prepend; wire the prelude into the room
 
+The prelude section's height is snapshotted right before the commit that changes it, and `scrollTop` moves by exactly its growth (spec §5.4). Measuring the section, not the whole box, keeps a live message or typewriter frame landing in the **same** commit out of the correction (codex plan review #6).
+
 **Files:**
-- Modify: `spa/src/hooks/useTranscriptScroll.ts` (add `preserveAbove`, record the height)
-- Modify: `spa/src/components/room/RoomTranscript.tsx` (`prelude` / `preludeVersion` props, layout effect, `[overflow-anchor:none]`)
-- Modify: `spa/src/components/chat/ChatTranscript.tsx` (the same two props and the same effect, rendered before the turns. Task 8 swaps in the chat form.)
+- Create: `spa/src/components/room/prelude/PreludeAnchor.tsx`
+- Modify: `spa/src/hooks/useTranscriptScroll.ts` (add `shiftBy`)
+- Modify: `spa/src/components/room/RoomTranscript.tsx` (`prelude` / `preludeVersion` props, `PreludeAnchor`, `[overflow-anchor:none]`)
+- Modify: `spa/src/components/chat/ChatTranscript.tsx` (the same, rendered before the turns; Task 8 swaps in the chat form)
 - Modify: `spa/src/components/execution/ExecutionView.tsx` (call the hook, derive the view, pass the props)
 - Test: `spa/src/components/room/transcript-scroll.test.tsx` (append, `describe.each(views)`)
 - Test: `spa/src/components/execution/ExecutionView.test.tsx` (append one wiring test)
 
 **Interfaces:**
 - Consumes: `PreludeSection` (Task 6), `useExecutionPrelude` (Task 4), `derivePrelude` (Task 3).
-- Produces: `TranscriptScroll.preserveAbove(): void`; `RoomTranscriptProps.prelude?: ReactNode` and `RoomTranscriptProps.preludeVersion?: number` (also on chat through the shared props type).
+- Produces: `TranscriptScroll.shiftBy(delta: number): void`; `RoomTranscriptProps.prelude?: ReactNode` and `RoomTranscriptProps.preludeVersion?: string` (also on chat through the shared props type); `<PreludeAnchor version onGrow>`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```tsx
 // transcript-scroll.test.tsx (append)
-describe.each(views)('%s: prepending the prelude keeps the reader in place', (_name, View) => {
-  it('mid-transcript: the view does not move', () => {
-    const props = { messages: [said('a')], keyPrefix: 'k', showThinking: false, showEmptyHint: false } as RoomTranscriptProps
-    const { container, rerender } = render(<View {...props} prelude={<div />} preludeVersion={1} />)
+/** jsdom has no layout: the prelude wrapper is 100px per [data-row] child, everything else 0. */
+let offsetHeightDesc: PropertyDescriptor | undefined
+beforeEach(() => {
+  offsetHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get(this: HTMLElement) { return this.dataset?.testid === 'prelude-anchor' ? this.querySelectorAll('[data-row]').length * 100 : 0 },
+  })
+})
+afterEach(() => { if (offsetHeightDesc) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeightDesc) })
+
+const rows = (n: number) => <div>{Array.from({ length: n }, (_, i) => <div key={i} data-row />)}</div>
+
+describe.each(views)('%s: prepending the prelude keeps the reader in place (Review Focus 4)', (_name, View) => {
+  const props = { messages: [said('a')], keyPrefix: 'k', showThinking: false, showEmptyHint: false } as RoomTranscriptProps
+
+  it('mid-transcript: what is on screen does not move', () => {
+    const { container, rerender } = render(<View {...props} prelude={rows(1)} preludeVersion="1:ok" />)
     const box = container.firstChild as HTMLElement
     geometry(box, 1000, 400, 300)
-    fireEvent.scroll(box)                       // reader is mid-transcript
-    geometry(box, 1600, 400, 300)               // an older page made the box 600px taller above
-    rerender(<View {...props} prelude={<div />} preludeVersion={2} />)
+    fireEvent.scroll(box)
+    rerender(<View {...props} prelude={rows(7)} preludeVersion="2:ok" />)   // 600px more above
     expect(box.scrollTop).toBe(900)
   })
 
-  it('at the bottom: still at the bottom after the prepend', () => {
-    const props = { messages: [said('a')], keyPrefix: 'k', showThinking: false, showEmptyHint: false } as RoomTranscriptProps
-    const { container, rerender } = render(<View {...props} prelude={<div />} preludeVersion={1} />)
+  it('at the bottom: the distance to the end is unchanged', () => {
+    const { container, rerender } = render(<View {...props} prelude={rows(1)} preludeVersion="1:ok" />)
     const box = container.firstChild as HTMLElement
     geometry(box, 1000, 400, 600)
     fireEvent.scroll(box)
-    geometry(box, 1600, 400, 600)
-    rerender(<View {...props} prelude={<div />} preludeVersion={2} />)
+    rerender(<View {...props} prelude={rows(7)} preludeVersion="2:ok" />)
     expect(box.scrollTop).toBe(1200)
-    expect(box.scrollHeight - box.scrollTop - box.clientHeight).toBe(0)
+  })
+
+  it('a live message in the same commit is not counted as growth above', () => {
+    const { container, rerender } = render(<View {...props} prelude={rows(1)} preludeVersion="1:ok" />)
+    const box = container.firstChild as HTMLElement
+    geometry(box, 1000, 400, 300)
+    fireEvent.scroll(box)
+    rerender(<View {...props} messages={[said('a'), said('b')]} prelude={rows(7)} preludeVersion="2:ok" />)
+    expect(box.scrollTop).toBe(900)
+  })
+
+  it('no version change, no correction', () => {
+    const { container, rerender } = render(<View {...props} prelude={rows(1)} preludeVersion="1:ok" />)
+    const box = container.firstChild as HTMLElement
+    geometry(box, 1000, 400, 300)
+    fireEvent.scroll(box)
+    rerender(<View {...props} prelude={rows(3)} preludeVersion="1:ok" />)
+    expect(box.scrollTop).toBe(300)
   })
 
   it('the box opts out of the browser’s own scroll anchoring', () => {
@@ -1453,73 +1770,110 @@ describe.each(views)('%s: prepending the prelude keeps the reader in place', (_n
 })
 ```
 
-These cases rely on the file's existing `scrollTo` stub (jsdom has no `Element.prototype.scrollTo`, and `follow()` returns early without it, which would leave `preserveAbove` a no-op). Put them inside the same `beforeEach` scope the file's other `describe.each(views)` blocks use.
+These cases rely on the file's existing `scrollTo` stub. jsdom has no `Element.prototype.scrollTo`, and `follow()` returns early without it, which would leave the first placement undone and `shiftBy` a no-op. Put them inside the same `beforeEach` scope that the file's other `describe.each(views)` blocks use.
 
-`ExecutionView.test.tsx`. Follow the file's existing setup that seeds a loaded execution, give the summary `resume_session_id: 'sid'` and give the host capabilities `transcript_prelude`. Mock `fetchExecutionPrelude` in the existing `nex-api` mock to return one `ok` page holding `{ pos:'2', kind:'user', msg: said('earlier') }`. Then assert that `await screen.findByText('earlier')` appears **before** the brief line in document order, using `compareDocumentPosition`.
+`ExecutionView.test.tsx`: follow the file's existing setup that seeds a loaded execution. Give the summary `resume_session_id: 'sid'` and the host capabilities `transcript_prelude`. In the existing `nex-api` mock, make `fetchExecutionPrelude` return one `ok` page holding `{ pos: '2', kind: 'user', msg: said('earlier') }`. Then assert that `await screen.findByText('earlier')` comes **before** the brief line in document order (`compareDocumentPosition`).
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `npx vitest run src/components/room/transcript-scroll.test.tsx src/components/execution/ExecutionView.test.tsx`
-Expected: FAIL (props are ignored; no class).
+Expected: FAIL (props ignored; no class).
 
 - [ ] **Step 3: Implement**
 
-`useTranscriptScroll.ts`: add `const height = useRef(0)`. Set `height.current = el.scrollHeight` at the end of `observe()`, at the end of `follow()` (after its scroll), and at the end of `restore()`. Then add:
+`PreludeAnchor.tsx`:
+
+```tsx
+// spa/src/components/room/prelude/PreludeAnchor.tsx — keeps the reader's
+// place when the prelude grows above them (spec §5.4). React's documented
+// prepend pattern: getSnapshotBeforeUpdate reads the section's height right
+// before the commit that changes it; componentDidUpdate hands the growth to
+// the transcript's scroll. Measuring this wrapper, not the whole box, keeps
+// a live message landing in the same commit out of the correction.
+import { Component, createRef, type ReactNode } from 'react'
+
+interface PreludeAnchorProps {
+  /** Changes whenever the section may change height: pages applied + status (a loading row comes and goes). */
+  version: string
+  onGrow: (delta: number) => void
+  children: ReactNode
+}
+
+export default class PreludeAnchor extends Component<PreludeAnchorProps> {
+  private el = createRef<HTMLDivElement>()
+
+  getSnapshotBeforeUpdate(prev: PreludeAnchorProps): number | null {
+    return prev.version !== this.props.version ? (this.el.current?.offsetHeight ?? 0) : null
+  }
+
+  componentDidUpdate(_prev: PreludeAnchorProps, _state: unknown, before: number | null) {
+    if (before === null) return
+    const grown = (this.el.current?.offsetHeight ?? 0) - before
+    if (grown !== 0) this.props.onGrow(grown)
+  }
+
+  render() {
+    return <div ref={this.el} data-testid="prelude-anchor">{this.props.children}</div>
+  }
+}
+```
+
+`useTranscriptScroll.ts`: add to `TranscriptScroll` and to the returned `useMemo`:
 
 ```ts
   /**
-   * Content was added ABOVE the reader (the prelude's older page, spec
-   * §5.4): move scrollTop by exactly the growth, so what is on screen stays
-   * put — a reader at the bottom stays at the bottom (the distance to the
-   * end is unchanged). Before the first placement there is nothing to keep:
-   * only the height is recorded. The box opts out of the browser's own
-   * scroll anchoring (`overflow-anchor: none`), so this is the only
-   * correction.
+   * Content above the reader changed height by `delta` (the prelude, spec
+   * §5.4): move scrollTop by exactly that, so what is on screen stays put —
+   * and a reader at the bottom stays at the bottom, the distance to the end
+   * being unchanged (the at-bottom flag is left as it is). Before the first
+   * placement there is nothing to keep: `follow`'s first call places the
+   * reader. The box opts out of the browser's own anchoring
+   * (`overflow-anchor: none`), so this is the only correction.
    */
-  const preserveAbove = useCallback(() => {
+  const shiftBy = useCallback((delta: number) => {
     const el = box.current
-    if (!el) return
-    const grown = el.scrollHeight - height.current
-    height.current = el.scrollHeight
-    if (!scrolled.current || grown <= 0) return
-    el.scrollTop += grown
+    if (!el || !scrolled.current || delta === 0) return
+    el.scrollTop += delta
     lastTop.current = el.scrollTop
     if (released.current !== null) released.current = el.scrollTop
     remember(el)
   }, [remember])
 ```
 
-Add `preserveAbove` to `TranscriptScroll` and to the returned `useMemo`.
-
 `RoomTranscript.tsx`:
-- Add to `RoomTranscriptProps`: `prelude?: ReactNode` (spec §5.3: the conversation before turn 1, drawn first) and `preludeVersion?: number` (changes whenever the prelude grows; drives `preserveAbove`).
-- Destructure `preserveAbove` from `scroll`.
-- Add `useLayoutEffect(() => { preserveAbove() }, [preserveAbove, preludeVersion])` and import `useLayoutEffect`.
-- Render `{prelude}` right after the empty-hint block and before `shown.map(...)`.
+- Add to `RoomTranscriptProps`:
+  - `prelude?: ReactNode`: spec §5.3, the conversation before turn 1, drawn first.
+  - `preludeVersion?: string`: `${pages}:${status}`; drives `PreludeAnchor`.
+- Destructure `shiftBy` from `scroll`.
+- Right after the empty-hint block and before `shown.map(...)`, render `{prelude !== undefined && <PreludeAnchor version={preludeVersion ?? ''} onGrow={shiftBy}>{prelude}</PreludeAnchor>}`.
 - Change the box class to `"flex-1 overflow-y-auto p-4 space-y-4 [overflow-anchor:none]"`.
 
-`ChatTranscript.tsx`: the same: destructure the new props (the props type is shared), the same layout effect, `{prelude}` before the turns, and `[overflow-anchor:none]` on its box.
+`ChatTranscript.tsx`: the same changes: destructure the new props (the props type is shared), render `PreludeAnchor` with `{prelude}` before the turns, and add `[overflow-anchor:none]` to its box.
 
 `ExecutionView.tsx`:
 - Import `useExecutionPrelude`, `derivePrelude` and `PreludeSection`.
-- After `useExecutionSubscription(...)` (line 105):
+- After `useExecutionSubscription(...)` (line 105), add:
 
 ```tsx
   const preludeApi = useExecutionPrelude(hostId, executionId)
   const preludeView = useMemo(() => derivePrelude(st.prelude.items), [st.prelude.items])
 ```
 
-- Next to `transcriptProps`:
+- Next to `transcriptProps`, add:
 
 ```tsx
   const preludeNode = (
     <PreludeSection view={preludeView} status={st.prelude.status} done={st.prelude.done} error={st.prelude.error}
-      keyPrefix={executionId} now={now} mode={chat ? 'chat' : 'room'}
+      keyPrefix={executionId} now={now} mode={chat ? 'chat' : 'room'} pages={st.prelude.pages}
       onLoadOlder={preludeApi.loadOlder} onRetry={preludeApi.retry} />
   )
 ```
 
-- Add `prelude: preludeNode, preludeVersion: st.prelude.items.length` to `transcriptProps`.
+- Add to `transcriptProps`:
+
+```tsx
+    prelude: preludeNode, preludeVersion: `${st.prelude.pages}:${st.prelude.status}`,
+```
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -1529,7 +1883,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit --only src/hooks/useTranscriptScroll.ts src/components/room/RoomTranscript.tsx src/components/chat/ChatTranscript.tsx src/components/execution/ExecutionView.tsx src/components/room/transcript-scroll.test.tsx src/components/execution/ExecutionView.test.tsx -m "feat(spa): draw the prelude above turn 1 and keep the reader's place on prepend"
+git commit --only src/components/room/prelude/PreludeAnchor.tsx src/hooks/useTranscriptScroll.ts src/components/room/RoomTranscript.tsx src/components/chat/ChatTranscript.tsx src/components/execution/ExecutionView.tsx src/components/room/transcript-scroll.test.tsx src/components/execution/ExecutionView.test.tsx -m "feat(spa): draw the prelude above turn 1 and keep the reader's place on prepend"
 ```
 
 **PR-2 gate:** as PR-1. PR title "worker prelude P2: room rendering + scroll".
@@ -1568,7 +1922,7 @@ describe('preludeBlocks', () => {
       msg('2', 'user', [{ type: 'text', text: 'one' }]),
       msg('3', 'assistant', [{ type: 'text', text: 'a' }]),
       msg('4', 'user', [{ type: 'text', text: 'two' }]),
-      { pos: '5', at: 0, kind: 'prelude.note', source: 'task_notification', text: 'n', truncated: false },
+      { pos: '5', at: 0, kind: 'prelude.note', source: 'task_notification', text: 'n', truncated: false, totalBytes: null, stream: null },
       msg('6', 'assistant', [{ type: 'text', text: 'b' }]),
     ])
     expect(preludeBlocks(v)).toEqual([
@@ -1640,7 +1994,13 @@ export function preludeBlocks(view: PreludeView): PreludeBlock[] {
 - `partial` and `withPartial` (was `ti === lastTurn && hasPartial`)
 - `footer` (was the `TurnFooter` expression)
 
-`ChatMessage` gets `idOf={ctx.idOf}`. `ChatTranscript` keeps the `RoomTurnGroup` wrapper and renders:
+`ChatMessage` gets `idOf={ctx.idOf}`. It also gets the same prelude treatment as the room (Task 6 `Placeholders`):
+- an omitted media block becomes `<ChatBubble side={user ? 'user' : 'agent'}><OmittedMedia block={block} /></ChatBubble>`;
+- a text bubble whose block is `truncated` is followed by `<TruncatedHint shown={blockShownBytes(block)} total={block.total_bytes ?? 0} />`.
+
+Live frames never carry either, so the live chat is unchanged. Add one PreludeSection chat-mode test asserting `[image · png · 120 KB]` appears in a user bubble.
+
+`ChatTranscript` keeps the `RoomTurnGroup` wrapper and renders:
 
 ```tsx
 <ChatTurnBody messages={messages} turn={turn} ops={opsByTurn[ti] ?? []} ctx={ctx}
@@ -1693,7 +2053,7 @@ git commit --only src/lib/nex/prelude.ts src/lib/nex/prelude.test.ts src/lib/nex
 it('walks the loaded prelude first, by its stable ids, in both views', () => {
   const prelude = derivePrelude([
     { pos: '2', at: 0, kind: 'user', msg: said('needle early') },
-    { pos: '3', at: 0, kind: 'prelude.note', source: 'command_output', text: 'needle note', truncated: false },
+    { pos: '3', at: 0, kind: 'prelude.note', source: 'command_output', text: 'needle note', truncated: false, totalBytes: null, stream: null },
   ])
   for (const view of ['room', 'chat'] as const) {
     const units = buildSearchUnits({ messages: [said('needle late')], index: indexOperations([said('needle late')]), view, keyPrefix: 'k', turnStarts: [], prelude })
@@ -1891,4 +2251,4 @@ git commit --only go.mod go.sum spa/src/lib/nex/__fixtures__/prelude-<execId>.js
   - `preludeId`, `derivePrelude`, `PreludeView.ids` and `idOf` are used consistently in T3, T5, T6, T8 and T9.
   - `chatToolsKey` widened in T8 is used with a string in T8 and T9.
   - `ChatTurnBody` props (T8) match their use in `ChatTranscript` and `PreludeSection`.
-- **Known gap left to review:** if a prepend and a bottom growth land in one commit, `preserveAbove` adds both to scrollTop. React commits them separately in practice (different store writes). Review Focus 4 covers the separate cases.
+- **Anchoring:** a prepend and a live message in one commit are covered by measuring the prelude section only (Task 7, "same commit" test).
