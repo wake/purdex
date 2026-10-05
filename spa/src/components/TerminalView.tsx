@@ -3,6 +3,7 @@ import { UploadSimple, Spinner } from '@phosphor-icons/react'
 import { useTerminal } from '../hooks/useTerminal'
 import { useTerminalWs } from '../hooks/useTerminalWs'
 import { useHostConnection } from '../hooks/useHostConnection'
+import { useActivationFocus } from '../hooks/useActivationFocus'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useUploadStore } from '../stores/useUploadStore'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -13,6 +14,8 @@ import '@xterm/xterm/css/xterm.css'
 interface Props {
   wsUrl: string
   visible?: boolean
+  /** The pane is its tab's focus target (`PaneRendererProps.isFocusTarget`); absent reads as false. */
+  isFocusTarget?: boolean
   connectingMessage?: string
   hostId?: string
   sessionCode?: string
@@ -20,7 +23,7 @@ interface Props {
   getTicket?: () => Promise<string>
 }
 
-export default function TerminalView({ wsUrl, visible = true, connectingMessage, hostId, sessionCode, workspaceId, getTicket }: Props) {
+export default function TerminalView({ wsUrl, visible = true, isFocusTarget = false, connectingMessage, hostId, sessionCode, workspaceId, getTicket }: Props) {
   const setOscTitle = useAgentStore((s) => s.setOscTitle)
   const handleTitle = useCallback((title: string) => {
     if (hostId && sessionCode) setOscTitle(hostId, sessionCode, title)
@@ -42,6 +45,8 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
     fitAddonRef,
     containerRef,
     hostId,
+    active: visible,
+    isFocusTarget,
     onReady: handleReady,
     onDisconnect: handleDisconnect,
     onReconnect: handleReconnect,
@@ -120,7 +125,8 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
     setDisconnected(false)
   }, [wsUrl])
 
-  // Refit + focus when becoming visible after being hidden (keep-alive).
+  // Refit when becoming visible after being hidden (keep-alive). Focus is not
+  // part of this: it follows the activation rule below.
   // With offscreen positioning (left: -9999em) the terminal kept correct
   // dimensions the whole time, so no overlay or delay is needed.
   // Force ready=true to suppress any lingering connecting overlay —
@@ -134,11 +140,16 @@ export default function TerminalView({ wsUrl, visible = true, connectingMessage,
         const term = termRef.current
         const conn = connRef.current
         if (term && conn) conn.resize(term.cols, term.rows)
-        termRef.current?.focus()
       })
     }
     prevVisible.current = visible
   }, [visible, termRef, fitAddonRef, connRef])
+
+  // Spec §8.2: focus only at activation (shown again, or mounted visible) and
+  // only as the tab's focus target. Declared after the refit effect, so its
+  // frame runs after the fit. reveal() in useTerminalWs is the other
+  // first-mount path, under the same gate; a second focus() is harmless.
+  useActivationFocus(visible, isFocusTarget, () => termRef.current?.focus(), { raf: true })
 
   const showOverlay = !ready || disconnected
 

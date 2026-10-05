@@ -12,6 +12,13 @@ interface UseTerminalWsOpts {
   fitAddonRef: React.RefObject<FitAddon | null>
   containerRef: React.RefObject<HTMLDivElement | null>
   hostId?: string
+  /**
+   * The pane's tab is on screen, and the pane is its tab's focus target (shell cleanup spec §8.2). reveal() is a
+   * first-mount activation path, so it focuses the terminal only when both hold at reveal time. Read through refs,
+   * like the callbacks; an absent value reads as false.
+   */
+  active?: boolean
+  isFocusTarget?: boolean
   onReady: () => void
   onDisconnect: () => void
   onReconnect: () => void
@@ -33,7 +40,7 @@ export function canReconnectTerminal(hostId: string): boolean {
   return canAttachTerminal(hostId)
 }
 
-export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostId, onReady, onDisconnect, onReconnect, getTicket }: UseTerminalWsOpts) {
+export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostId, active = false, isFocusTarget = false, onReady, onDisconnect, onReconnect, getTicket }: UseTerminalWsOpts) {
   const connRef = useRef<ReturnType<typeof connectTerminal> | null>(null)
   const revealDelayRef = useRef(useUISettingsStore.getState().terminalRevealDelay)
 
@@ -41,10 +48,14 @@ export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostI
   const onReadyRef = useRef(onReady)
   const onDisconnectRef = useRef(onDisconnect)
   const onReconnectRef = useRef(onReconnect)
+  const activeRef = useRef(active)
+  const isFocusTargetRef = useRef(isFocusTarget)
   useEffect(() => {
     onReadyRef.current = onReady
     onDisconnectRef.current = onDisconnect
     onReconnectRef.current = onReconnect
+    activeRef.current = active
+    isFocusTargetRef.current = isFocusTarget
   })
 
   useEffect(() => {
@@ -82,7 +93,9 @@ export function useTerminalWs({ wsUrl, termRef, fitAddonRef, containerRef, hostI
       if (revealed) return
       revealed = true
       onReadyRef.current()
-      term.focus()
+      // Spec §8.2: focus only an on-screen tab's focus target. Another pane of the tab, or a pane of a hidden tab,
+      // that finishes connecting must not take focus from where the user is.
+      if (activeRef.current && isFocusTargetRef.current) term.focus()
     }
 
     const canReconnect = hostId ? () => canReconnectTerminal(hostId) : undefined
