@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Columns, Rows, Square } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
 import { useAgentStore } from '../stores/useAgentStore'
@@ -24,10 +24,19 @@ const BUTTON = 'p-1 rounded cursor-pointer disabled:opacity-40 disabled:pointer-
 const PRESSED = 'text-accent-base bg-accent-base/10'
 const IDLE = 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
 
+/**
+ * How long the Confirm of a dialog opened by a re-plan stays inert. The click that found the plan changed may be the
+ * first of a double-click, and the fresh dialog's Confirm sits where the old one was: the rest of that click must not
+ * apply a plan the user has not seen.
+ */
+export const REPLAN_CONFIRM_LOCK_MS = 500
+
 /** A layout change waiting on a dialog (cases 2 and 3 of rule D.1a), with the tab's leaves as they were planned. */
 type Pending = Exclude<LayoutChangePlan, { kind: 'apply' }> & {
   /** Keys the dialog, so a re-plan opens a fresh one (the picker's ticks start from the new plan). */
   seq: number
+  /** Opened by a re-plan at Confirm, not by a button press: its Confirm is inert for `REPLAN_CONFIRM_LOCK_MS`. */
+  replanned: boolean
   tabId: string
   pattern: LayoutPattern
   leaves: Pane[]
@@ -63,7 +72,7 @@ function startLayoutChange(tabId: string, pattern: LayoutPattern, planned = plan
     useTabStore.getState().applyLayout(tabId, pattern, plan.keepIds)
     return null
   }
-  return { ...plan, seq: ++pendingSeq, tabId, pattern, leaves }
+  return { ...plan, seq: ++pendingSeq, replanned: false, tabId, pattern, leaves }
 }
 
 /** Same panes, same contents: a content change replaces the pane object, so identity is enough. */
@@ -99,6 +108,15 @@ export function TitleBar({ title }: Props) {
     return tab ? currentLayoutPattern(tab.layout) : null
   })
   const [pending, setPending] = useState<Pending | null>(null)
+  // The guard window of a re-planned dialog, by its seq: the timer belongs to that dialog and is dropped with it.
+  const [unlockedSeq, setUnlockedSeq] = useState<number | null>(null)
+  const lockedSeq = pending?.replanned ? pending.seq : null
+  useEffect(() => {
+    if (lockedSeq === null) return
+    const timer = setTimeout(() => setUnlockedSeq(lockedSeq), REPLAN_CONFIRM_LOCK_MS)
+    return () => clearTimeout(timer)
+  }, [lockedSeq])
+  const confirmLocked = lockedSeq !== null && unlockedSeq !== lockedSeq
 
   // The dialog belongs to the tab it was opened for. Once another tab is shown (a shortcut, a notification, a deep
   // link, a closed tab) it is cancelled, not just hidden, so coming back does not revive it. Adjusted during render
@@ -112,7 +130,7 @@ export function TitleBar({ title }: Props) {
   }
 
   const finish = (keepIds: string[]) => {
-    if (!pending) return
+    if (!pending || confirmLocked) return
     // Read live, not from the render: the active tab can change in the same click, before this component re-renders.
     if (useTabStore.getState().activeTabId !== pending.tabId) {
       setPending(null)
@@ -121,10 +139,12 @@ export function TitleBar({ title }: Props) {
     // Plan again from the live stores. When the tab's panes changed, or the agent set did (detection, exit and
     // transfer touch only the agent store) so that rule D.1a now asks something else, what the user agreed to is no
     // longer what would happen: show the fresh plan instead (case 1 applies at once; a gone tab or a pattern it already
-    // has closes the dialog). A picker whose candidates are unchanged keeps the user's ticks.
+    // has closes the dialog). A picker whose candidates are unchanged keeps the user's ticks. The fresh dialog opens
+    // with its Confirm locked for a moment, so the second click of a double-click does not land on it.
     const planned = planNow(pending.tabId, pending.pattern)
     if (!planned || !sameLeaves(planned.leaves, pending.leaves) || !sameQuestion(planned.plan, pending)) {
-      setPending(startLayoutChange(pending.tabId, pending.pattern, planned))
+      const next = startLayoutChange(pending.tabId, pending.pattern, planned)
+      setPending(next && { ...next, replanned: true })
       return
     }
     setPending(null)
@@ -182,6 +202,7 @@ export function TitleBar({ title }: Props) {
           title={t('pane.layout_confirm_title')}
           body={t('pane.layout_confirm_body')}
           confirmLabel={t('pane.layout_apply')}
+          confirmDisabled={confirmLocked}
           onCancel={() => setPending(null)}
           onConfirm={() => finish(pending.keepIds)}
         >
@@ -194,6 +215,7 @@ export function TitleBar({ title }: Props) {
           k={pending.k}
           candidates={pending.candidates}
           preselected={pending.preselected}
+          confirmLocked={confirmLocked}
           onCancel={() => setPending(null)}
           onConfirm={finish}
         />

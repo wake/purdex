@@ -54,12 +54,14 @@ interface PickerProps {
   candidates: readonly Pane[]
   /** Ticked when the picker opens. */
   preselected: readonly string[]
+  /** Confirm stays inert while true, whatever the ticks (the caller's guard window). Cancel and the ticks stay live. */
+  confirmLocked?: boolean
   onCancel: () => void
   /** The ticked pane ids; called only with exactly `k`. */
   onConfirm: (keepIds: string[]) => void
 }
 
-export function LayoutKeepPicker({ k, candidates, preselected, onCancel, onConfirm }: PickerProps) {
+export function LayoutKeepPicker({ k, candidates, preselected, confirmLocked = false, onCancel, onConfirm }: PickerProps) {
   const t = useI18nStore((s) => s.t)
   const [ticked, setTicked] = useState<readonly string[]>(preselected)
   const full = ticked.length >= k
@@ -79,9 +81,9 @@ export function LayoutKeepPicker({ k, candidates, preselected, onCancel, onConfi
       title={t('pane.layout_keep_title')}
       body={t('pane.layout_keep_body', { count: k })}
       confirmLabel={t('pane.layout_apply')}
-      confirmDisabled={ticked.length !== k}
+      confirmDisabled={confirmLocked || ticked.length !== k}
       onCancel={onCancel}
-      onConfirm={() => { if (ticked.length === k) onConfirm([...ticked]) }}
+      onConfirm={() => { if (!confirmLocked && ticked.length === k) onConfirm([...ticked]) }}
     >
       <ul data-testid="layout-keep-options" className="mt-2 space-y-1">
         {candidates.map((p) => {

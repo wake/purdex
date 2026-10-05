@@ -63,6 +63,22 @@ describe('LayoutKeepPicker (shell cleanup spec §10, case 3)', () => {
     expect(confirmBtn().disabled).toBe(true)
   })
 
+  it('confirmLocked keeps confirm inert even at exactly k ticks; the ticks still work', () => {
+    const onConfirm = vi.fn()
+    const props = { k: 1, candidates: [terminal('a'), terminal('b')], preselected: ['a'], onConfirm, onCancel: vi.fn() }
+    const { rerender } = render(<LayoutKeepPicker {...props} confirmLocked />)
+    expect(confirmBtn().disabled).toBe(true)
+    fireEvent.click(box('b'))
+    expect(box('b').checked).toBe(true)
+    fireEvent.click(confirmBtn())
+    expect(onConfirm).not.toHaveBeenCalled()
+
+    rerender(<LayoutKeepPicker {...props} confirmLocked={false} />)
+    expect(confirmBtn().disabled).toBe(false)
+    fireEvent.click(confirmBtn())
+    expect(onConfirm).toHaveBeenCalledWith(['b'])
+  })
+
   it('confirm hands back the ticked pane ids', () => {
     const { onConfirm } = renderPicker(2, [terminal('a'), terminal('b'), terminal('c')], ['a', 'b'])
     fireEvent.click(box('a'))

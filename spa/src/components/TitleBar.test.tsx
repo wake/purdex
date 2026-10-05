@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, render, screen, fireEvent, within } from '@testing-library/react'
-import { TitleBar } from './TitleBar'
+import { TitleBar, REPLAN_CONFIRM_LOCK_MS } from './TitleBar'
 import { useTabStore } from '../stores/useTabStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { usePaneFocusStore } from '../stores/usePaneFocusStore'
@@ -130,9 +130,16 @@ describe('TitleBar layout buttons', () => {
   const SPLIT_H = 'Split Horizontal'
   const SPLIT_V = 'Split Vertical'
 
+  /** Let the guard window of a dialog opened by a re-plan run out. */
+  const waitOutLock = () => act(() => { vi.advanceTimersByTime(REPLAN_CONFIRM_LOCK_MS) })
+
   beforeEach(() => {
+    vi.useFakeTimers()
     useAgentStore.setState({ agentTypes: {} })
     usePaneFocusStore.setState({ recent: {} })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('labels the three buttons through i18n', () => {
@@ -246,6 +253,7 @@ describe('TitleBar layout buttons', () => {
       const closing = within(screen.getByTestId('layout-apply-closing')).getAllByRole('listitem').map((li) => li.textContent)
       expect(closing).toEqual(['notes.md'])
       expect(leafIds()).toEqual(['ed', 'cc'])
+      waitOutLock()
       fireEvent.click(screen.getByTestId('layout-apply-confirm'))
       expect(leafIds()).toEqual(['cc'])
     })
@@ -416,6 +424,7 @@ describe('TitleBar layout buttons', () => {
       expect(leafIds()).toEqual(['a', 'b', 'c'])
       expect(closingNow('layout-apply')).toEqual(['term-a', 'term-c'])
 
+      waitOutLock()
       fireEvent.click(screen.getByTestId('layout-apply-confirm'))
       expect(screen.queryByRole('dialog')).toBeNull()
       expect(leafIds()).toEqual(['b'])
@@ -447,6 +456,7 @@ describe('TitleBar layout buttons', () => {
       expect(screen.queryByTestId('layout-keep-dialog')).toBeNull()
       expect(closingNow('layout-apply')).toEqual(['term-b'])
 
+      waitOutLock()
       fireEvent.click(screen.getByTestId('layout-apply-confirm'))
       expect(leafIds()).toEqual(['a'])
     })
@@ -463,6 +473,133 @@ describe('TitleBar layout buttons', () => {
       fireEvent.click(screen.getByTestId('layout-keep-confirm'))
       expect(screen.queryByRole('dialog')).toBeNull()
       expect(leafIds()).toEqual(['b'])
+    })
+  })
+
+  // A double-click on Confirm sends two clicks. When the first finds the plan changed, the fresh dialog opens in the
+  // same place, so the second would land on its Confirm and apply a plan the user never saw (closing panes they were
+  // never shown). A dialog opened by a re-plan keeps its Confirm inert for a short guard window.
+  describe('a dialog opened by a re-plan ignores the rest of the click that opened it', () => {
+    const box = (id: string) => screen.getByTestId(`layout-keep-option-${id}`) as HTMLInputElement
+    const confirmButton = (prefix: string) => screen.getByTestId(`${prefix}-confirm`) as HTMLButtonElement
+    const closingNow = (prefix: string) =>
+      within(screen.getByTestId(`${prefix}-closing`)).getAllByRole('listitem').map((li) => li.textContent)
+    const agentsNow = (...codes: string[]) =>
+      act(() => useAgentStore.setState({ agentTypes: Object.fromEntries(codes.map((c) => [compositeKey(HOST, c), 'cc'])) }))
+    const threeTerminals = () => splitOf('h', leafOf('a', terminal('a')), leafOf('b', terminal('b')), leafOf('c', terminal('c')))
+    /** Two clicks at the same place: each finds whatever Confirm is there by then. */
+    const clickTwice = (prefix: string) => {
+      fireEvent.click(confirmButton(prefix))
+      fireEvent.click(confirmButton(prefix))
+    }
+
+    it('confirm → confirm: the second click applies nothing; once the window is over a click applies the new plan', () => {
+      setAgent('a')
+      showTab(threeTerminals())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+
+      agentsNow('b')
+      clickTwice('layout-apply')
+      expect(leafIds()).toEqual(['a', 'b', 'c'])
+      expect(closingNow('layout-apply')).toEqual(['term-a', 'term-c'])
+      expect(confirmButton('layout-apply').disabled).toBe(true)
+
+      act(() => { vi.advanceTimersByTime(REPLAN_CONFIRM_LOCK_MS - 1) })
+      fireEvent.click(confirmButton('layout-apply'))
+      expect(leafIds()).toEqual(['a', 'b', 'c'])
+
+      act(() => { vi.advanceTimersByTime(1) })
+      expect(confirmButton('layout-apply').disabled).toBe(false)
+      fireEvent.click(confirmButton('layout-apply'))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(leafIds()).toEqual(['b'])
+    })
+
+    it('a native double-click (two clicks, then dblclick) applies nothing either', () => {
+      setAgent('a')
+      showTab(threeTerminals())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+
+      agentsNow('b')
+      clickTwice('layout-apply')
+      fireEvent.dblClick(confirmButton('layout-apply'))
+      expect(leafIds()).toEqual(['a', 'b', 'c'])
+      expect(screen.getByTestId('layout-apply-dialog')).toBeTruthy()
+    })
+
+    it('picker → picker: a pane closed under the picker; the second click applies nothing; later the new picker applies', () => {
+      showTab(threeTerminals())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      expect(box('a').checked).toBe(true)
+
+      act(() => useTabStore.getState().closePane(TAB, 'c'))
+      clickTwice('layout-keep')
+      expect(leafIds()).toEqual(['a', 'b'])
+      expect(screen.getByTestId('layout-keep-dialog')).toBeTruthy()
+      expect(screen.queryByTestId('layout-keep-option-c')).toBeNull()
+      // The fresh picker has its full count ticked: only the guard window holds Confirm.
+      expect(box('a').checked).toBe(true)
+      expect(confirmButton('layout-keep').disabled).toBe(true)
+
+      waitOutLock()
+      expect(confirmButton('layout-keep').disabled).toBe(false)
+      fireEvent.click(confirmButton('layout-keep'))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(leafIds()).toEqual(['a'])
+    })
+
+    it('a dialog opened by a button press is not locked: an immediate Confirm applies', () => {
+      setAgent('a')
+      showTab(threeTerminals())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      expect(confirmButton('layout-apply').disabled).toBe(false)
+      fireEvent.click(confirmButton('layout-apply'))
+      expect(leafIds()).toEqual(['a'])
+    })
+
+    it('a picker opened by a button press is not locked either', () => {
+      showTab(threeTerminals())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      expect(confirmButton('layout-keep').disabled).toBe(false)
+      fireEvent.click(confirmButton('layout-keep'))
+      expect(leafIds()).toEqual(['a'])
+    })
+
+    it('cancelling a locked dialog drops its timer; the next button press opens an unlocked one', () => {
+      setAgent('a')
+      showTab(threeTerminals())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      agentsNow('b')
+      const othersTimers = vi.getTimerCount()
+      fireEvent.click(confirmButton('layout-apply'))
+      expect(confirmButton('layout-apply').disabled).toBe(true)
+      expect(vi.getTimerCount()).toBe(othersTimers + 1)
+
+      fireEvent.click(screen.getByTestId('layout-apply-cancel'))
+      expect(vi.getTimerCount()).toBe(othersTimers)
+      fireEvent.click(button(SINGLE))
+      expect(confirmButton('layout-apply').disabled).toBe(false)
+      fireEvent.click(confirmButton('layout-apply'))
+      expect(leafIds()).toEqual(['b'])
+    })
+
+    it('unmounting with a locked dialog up drops its timer', () => {
+      setAgent('a')
+      showTab(threeTerminals())
+      const { unmount } = render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      agentsNow('b')
+      const othersTimers = vi.getTimerCount()
+      fireEvent.click(confirmButton('layout-apply'))
+      expect(vi.getTimerCount()).toBe(othersTimers + 1)
+      unmount()
+      expect(vi.getTimerCount()).toBe(othersTimers)
     })
   })
 })
