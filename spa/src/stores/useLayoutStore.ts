@@ -7,6 +7,11 @@ import { getAllViews } from '../lib/module-registry'
 export const MIN_WIDTH = 120
 export const MAX_WIDTH = 600
 
+/** Worker list section height bounds in the wide activity bar (shell cleanup spec §4.1). */
+export const WORKER_LIST_MIN = 96
+export const WORKER_LIST_MAX = 800
+export const WORKER_LIST_DEFAULT = 240
+
 export type ActivityBarWidth = 'narrow' | 'wide'
 export type TabPosition = 'top' | 'left' | 'both'
 
@@ -41,6 +46,9 @@ interface LayoutState {
   tabPosition: TabPosition
   activityBarWideSize: number
   workspaceExpanded: Record<string, boolean>
+  workerListOpen: boolean
+  workerListHeight: number
+  bottomNavCompact: boolean
 
   setRegionMode: (region: SidebarRegion, mode: RegionState['mode']) => void
   setRegionWidth: (region: SidebarRegion, width: number) => void
@@ -58,6 +66,11 @@ interface LayoutState {
   setActivityBarWideSize: (size: number) => void
   toggleWorkspaceExpanded: (wsId: string) => void
   reconcileWorkspaceExpanded: (liveWsIds: string[]) => void
+  setWorkerListOpen: (open: boolean) => void
+  toggleWorkerListOpen: () => void
+  setWorkerListHeight: (height: number) => void
+  setBottomNavCompact: (compact: boolean) => void
+  toggleBottomNavCompact: () => void
 }
 
 function createDefaultRegions(): Record<SidebarRegion, RegionState> {
@@ -71,6 +84,10 @@ function createDefaultRegions(): Record<SidebarRegion, RegionState> {
 
 function clampWidth(w: number): number {
   return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, w))
+}
+
+function clampWorkerListHeight(h: number): number {
+  return Math.max(WORKER_LIST_MIN, Math.min(WORKER_LIST_MAX, h))
 }
 
 function updateRegion(
@@ -94,6 +111,9 @@ export const useLayoutStore = create<LayoutState>()(
       tabPosition: 'top',
       activityBarWideSize: 240,
       workspaceExpanded: {},
+      workerListOpen: false,
+      workerListHeight: WORKER_LIST_DEFAULT,
+      bottomNavCompact: false,
 
       setRegionMode: (region, mode) =>
         set((state) => updateRegion(state, region, { mode })),
@@ -231,6 +251,19 @@ export const useLayoutStore = create<LayoutState>()(
           if (!changed) return state
           return { workspaceExpanded: next }
         }),
+
+      setWorkerListOpen: (open) => set(() => ({ workerListOpen: open })),
+
+      toggleWorkerListOpen: () =>
+        set((state) => ({ workerListOpen: !state.workerListOpen })),
+
+      setWorkerListHeight: (height) =>
+        set(() => ({ workerListHeight: clampWorkerListHeight(height) })),
+
+      setBottomNavCompact: (compact) => set(() => ({ bottomNavCompact: compact })),
+
+      toggleBottomNavCompact: () =>
+        set((state) => ({ bottomNavCompact: !state.bottomNavCompact })),
     }),
     {
       name: STORAGE_KEYS.LAYOUT,
@@ -242,6 +275,10 @@ export const useLayoutStore = create<LayoutState>()(
         tabPosition: state.tabPosition,
         activityBarWideSize: state.activityBarWideSize,
         workspaceExpanded: state.workspaceExpanded,
+        // Device-local: synced across windows, never projected to Profile Sync (spec §4.1).
+        workerListOpen: state.workerListOpen,
+        workerListHeight: state.workerListHeight,
+        bottomNavCompact: state.bottomNavCompact,
       }),
       onRehydrateStorage: () => (state) => {
         if (state) healLayoutInvariant(state)

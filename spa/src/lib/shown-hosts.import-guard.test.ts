@@ -50,6 +50,7 @@ const READER_IMPORTERS = [
   'src/components/SessionPickerList.tsx',
   'src/components/StatusBar.tsx',
   'src/components/executions/ExecutionsView.tsx',
+  'src/components/executions/WorkerList.tsx',
   'src/components/hosts/HostSidebar.tsx',
   'src/components/hosts/OverviewSection.tsx',
   'src/components/hosts/SessionsSection.tsx',

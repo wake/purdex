@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Sliders, HardDrives } from '@phosphor-icons/react'
 import {
   DndContext,
   PointerSensor,
@@ -17,21 +16,20 @@ import {
   SortableContext,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import { useI18nStore } from '../../../stores/useI18nStore'
-import {
-  useLayoutStore,
-  MIN_WIDTH,
-  MAX_WIDTH,
-} from '../../../stores/useLayoutStore'
+import { useLayoutStore, MIN_WIDTH, MAX_WIDTH } from '../../../stores/useLayoutStore'
 import { useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
 import { RegionResize } from '../../../components/RegionResize'
+import { PaneSplitter } from '../../../components/PaneSplitter'
+import { WorkerList } from '../../../components/executions/WorkerList'
 import { WorkspaceRow } from './WorkspaceRow'
 import { HomeRow } from './HomeRow'
+import { BottomNav } from './BottomNav'
 import type { ActivityBarProps } from './activity-bar-props'
 import { computeDragEndAction, dispatchDragEndAction, type DragData } from '../lib/computeDragEndAction'
 import { useSpringLoad } from '../lib/useSpringLoad'
 import { useCrossWorkspaceDragOver } from '../lib/useCrossWorkspaceDragOver'
+import { useWorkerListResize } from '../lib/useWorkerListResize'
 
 // Each WorkspaceRow registers two overlapping droppables: the useSortable
 // wrapper (id = workspace.id) for workspace reordering, and a useDroppable
@@ -92,16 +90,27 @@ export function ActivityBarWide(props: ActivityBarProps) {
     onMoveTabToWorkspace,
   } = props
 
-  const t = useI18nStore((s) => s.t)
   const wideSize = useLayoutStore((s) => s.activityBarWideSize)
   const setWideSize = useLayoutStore((s) => s.setActivityBarWideSize)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
+  const workerListOpen = useLayoutStore((s) => s.workerListOpen)
+  const toggleWorkerListOpen = useLayoutStore((s) => s.toggleWorkerListOpen)
+  const bottomNavCompact = useLayoutStore((s) => s.bottomNavCompact)
+  const toggleBottomNavCompact = useLayoutStore((s) => s.toggleBottomNavCompact)
 
   // Ephemeral drag state for resize handle — avoid persisting + broadcasting on
   // every mousemove. Commit to store only on mouseup (see RegionResize.onResizeEnd).
   const [draftSize, setDraftSize] = useState<number | null>(null)
   const draftSizeRef = useRef<number | null>(null)
   const renderedSize = draftSize ?? wideSize
+
+  // The worker list's height follows the same draft-then-commit pattern as the width, capped by the split box.
+  const {
+    splitBoxRef,
+    height: workerListHeight,
+    onResize: handleListResize,
+    onResizeEnd: handleListResizeEnd,
+  } = useWorkerListResize(workerListOpen)
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -287,61 +296,69 @@ export function ActivityBarWide(props: ActivityBarProps) {
             <div data-testid="activity-bar-workspace-separator" className="mx-3 my-1 h-px shrink-0 bg-border-default" />
           )}
 
-          <div
-            ref={wsScrollRef}
-            data-testid="activity-bar-workspace-scroll"
-            className="activity-bar-workspace-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain py-0.5"
-          >
-            <SortableContext items={wsIds} strategy={verticalListSortingStrategy}>
-              <div className="flex flex-col gap-0.5">
-                {workspaces.map((ws) => (
-                  <WorkspaceRow
-                    key={ws.id}
-                    workspace={ws}
-                    isActive={activeWorkspaceId === ws.id}
-                    tabsById={tabsById}
-                    activeTabId={activeTabId}
-                    onSelectWorkspace={onSelectWorkspace}
-                    onContextMenuWorkspace={onContextMenuWorkspace}
-                    onSelectTab={selectTab}
-                    onCloseTab={closeTab}
-                    onMiddleClickTab={middleClickTab}
-                    onContextMenuTab={contextMenuTab}
-                    onRenameTab={renameTab}
-                    onAddTabToWorkspace={addTabToWs}
-                  />
-                ))}
-              </div>
-            </SortableContext>
+          {/* The split box holds exactly the workspace zone and the worker list, so its height is what they share
+              (spec §4.2). The list registers no draggables or droppables, and the workspace drag stays clamped to
+              wsScrollRef. */}
+          <div data-testid="worker-split-box" ref={splitBoxRef} className="flex min-h-0 flex-1 flex-col">
+            <div
+              ref={wsScrollRef}
+              data-testid="activity-bar-workspace-scroll"
+              className="activity-bar-workspace-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain py-0.5"
+            >
+              <SortableContext items={wsIds} strategy={verticalListSortingStrategy}>
+                <div className="flex flex-col gap-0.5">
+                  {workspaces.map((ws) => (
+                    <WorkspaceRow
+                      key={ws.id}
+                      workspace={ws}
+                      isActive={activeWorkspaceId === ws.id}
+                      tabsById={tabsById}
+                      activeTabId={activeTabId}
+                      onSelectWorkspace={onSelectWorkspace}
+                      onContextMenuWorkspace={onContextMenuWorkspace}
+                      onSelectTab={selectTab}
+                      onCloseTab={closeTab}
+                      onMiddleClickTab={middleClickTab}
+                      onContextMenuTab={contextMenuTab}
+                      onRenameTab={renameTab}
+                      onAddTabToWorkspace={addTabToWs}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </div>
+
+            {/* Nothing of the list mounts while it is closed: each host section holds an SSE stream. */}
+            {workerListOpen && (
+              <>
+                <PaneSplitter
+                  direction="v"
+                  testId="worker-list-divider"
+                  onResize={handleListResize}
+                  onResizeEnd={handleListResizeEnd}
+                />
+                <div
+                  data-testid="worker-list-section"
+                  className="min-h-0 shrink-0 overflow-y-auto overscroll-contain"
+                  style={{ height: workerListHeight }}
+                >
+                  <WorkerList />
+                </div>
+              </>
+            )}
           </div>
         </DndContext>
 
-        <div className="flex shrink-0 flex-col gap-1 px-2 pb-1 pt-2">
-          <button
-            title={t('nav.new_workspace')}
-            onClick={onAddWorkspace}
-            className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
-          >
-            <Plus size={16} />
-            <span className="truncate">{t('nav.new_workspace')}</span>
-          </button>
-          <button
-            title={t('nav.hosts')}
-            onClick={onOpenHosts}
-            className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
-          >
-            <HardDrives size={16} />
-            <span className="truncate">{t('nav.hosts')}</span>
-          </button>
-          <button
-            title={t('nav.settings')}
-            onClick={onOpenSettings}
-            className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
-          >
-            <Sliders size={16} />
-            <span className="truncate">{t('nav.settings')}</span>
-          </button>
-        </div>
+        <BottomNav
+          variant="wide"
+          compact={bottomNavCompact}
+          workersOpen={workerListOpen}
+          onAddWorkspace={onAddWorkspace}
+          onToggleWorkers={toggleWorkerListOpen}
+          onOpenHosts={onOpenHosts}
+          onOpenSettings={onOpenSettings}
+          onToggleCompact={toggleBottomNavCompact}
+        />
       </div>
       <div data-testid="activity-bar-resize" className="hidden lg:flex">
         <RegionResize

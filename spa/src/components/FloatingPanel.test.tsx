@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { useRef, useState } from 'react'
 import { FloatingPanel } from './FloatingPanel'
@@ -35,14 +35,14 @@ function mockElectron(isElectron: boolean) {
   } satisfies PlatformCapabilities)
 }
 
-function Harness({ onClose, open = true }: { onClose: () => void; open?: boolean }) {
+function Harness({ onClose, open = true, placement }: { onClose: () => void; open?: boolean; placement?: 'below' | 'right' }) {
   const anchor = useRef<HTMLButtonElement>(null)
   return (
     <div>
       <button ref={anchor} data-testid="anchor">anchor</button>
       <button data-testid="elsewhere">elsewhere</button>
       {open && (
-        <FloatingPanel title="Main" anchorRef={anchor} onClose={onClose}>
+        <FloatingPanel title="Main" anchorRef={anchor} onClose={onClose} placement={placement}>
           <input data-testid="inside" />
         </FloatingPanel>
       )}
@@ -454,6 +454,123 @@ describe('FloatingPanel', () => {
     // Unmounting the second: its remembered element (inside-1) is gone, so it falls back to its own anchor.
     rerender(<TwoPanelToggleHarness open1={false} open2={false} onCloseFirst={() => {}} onCloseSecond={() => {}} />)
     expect(document.activeElement).toBe(screen.getByTestId('anchor-2'))
+  })
+})
+
+// placement='right' sits beside the anchor with the bottom edges aligned, from the panel's MEASURED height — jsdom
+// has no layout, so the panel's height is stubbed on the prototype (the anchor keeps its own `rect()` override),
+// and ResizeObserver is a stub whose callbacks the test fires by hand.
+describe("FloatingPanel — placement='right'", () => {
+  let panelHeight = 0
+  let observers: { owner: object; el: Element; fire: () => void }[] = []
+
+  beforeEach(() => {
+    panelHeight = 200
+    observers = []
+    const original = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid !== 'floating-panel') return original.call(this)
+      const top = parseInt(this.style.top) || 0
+      return { left: 0, top, width: 320, height: panelHeight, right: 320, bottom: top + panelHeight, x: 0, y: top, toJSON() {} } as DOMRect
+    })
+    vi.stubGlobal('ResizeObserver', class {
+      private cb: ResizeObserverCallback
+      constructor(cb: ResizeObserverCallback) { this.cb = cb }
+      observe(el: Element) { observers.push({ owner: this, el, fire: () => this.cb([], this as unknown as ResizeObserver) }) }
+      unobserve() {}
+      disconnect() { observers = observers.filter((o) => o.owner !== this) }
+    })
+  })
+
+  afterEach(() => {
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockRestore()
+    vi.unstubAllGlobals()
+  })
+
+  /** Mount with the anchor's rect stubbed first, so the initial placement reads it. */
+  function openBeside(anchorRect: Partial<DOMRect>) {
+    const view = render(<Harness onClose={() => {}} open={false} placement="right" />)
+    rect(screen.getByTestId('anchor'), anchorRect)
+    view.rerender(<Harness onClose={() => {}} open placement="right" />)
+    return screen.getByTestId('floating-panel')
+  }
+  const resizePanel = (panel: HTMLElement) => observers.filter((o) => o.el === panel).forEach((o) => o.fire())
+
+  it('opens at anchor.right + 4, with the panel bottom aligned to the anchor bottom', () => {
+    const panel = openBeside({ left: 0, right: 48, top: 700, bottom: 740 })
+    expect(parseInt(panel.style.left)).toBe(48 + 4)
+    expect(parseInt(panel.style.top) + panelHeight).toBe(740)
+  })
+
+  it('bounds the panel by the whole viewport height below topInset, so its body scrolls past that', () => {
+    const panel = openBeside({ left: 0, right: 48, top: 700, bottom: 740 })
+    expect(panel.style.maxHeight).toBe(`${800 - 4 - 4}px`)
+  })
+
+  it('clamps to topInset when the anchor is too near the top for the panel to end at its bottom', () => {
+    const panel = openBeside({ left: 0, right: 48, top: 60, bottom: 100 })
+    expect(parseInt(panel.style.top)).toBe(4)
+  })
+
+  it('clamps to the Electron title bar under Electron, and leaves room for it in maxHeight', () => {
+    mockElectron(true)
+    const panel = openBeside({ left: 0, right: 48, top: 60, bottom: 100 })
+    expect(parseInt(panel.style.top)).toBe(36)
+    expect(panel.style.maxHeight).toBe(`${800 - 36 - 4}px`)
+  })
+
+  it('never lets the panel bottom pass the viewport bottom padding', () => {
+    const panel = openBeside({ left: 0, right: 48, top: 790, bottom: 800 })
+    expect(parseInt(panel.style.top)).toBe(800 - 4 - panelHeight)
+  })
+
+  it('clamps the left edge so the panel stays inside the viewport', () => {
+    // anchor.right + 4 = 704 would overflow; 'below' would have used anchor.left (600) instead.
+    const panel = openBeside({ left: 600, right: 700, top: 700, bottom: 740 })
+    expect(parseInt(panel.style.left)).toBe(1000 - 320 - 4)
+  })
+
+  it('observes the panel and re-places it, still bottom-aligned, when its content grows', () => {
+    const panel = openBeside({ left: 0, right: 48, top: 700, bottom: 740 })
+    expect(observers.some((o) => o.el === panel)).toBe(true)
+    panelHeight = 400
+    resizePanel(panel)
+    expect(parseInt(panel.style.top) + 400).toBe(740)
+    expect(parseInt(panel.style.left)).toBe(52)
+  })
+
+  it('stops following its content height once the user has dragged it', () => {
+    const panel = openBeside({ left: 0, right: 48, top: 700, bottom: 740 })
+    const handle = screen.getByTestId('floating-panel-handle')
+    handle.setPointerCapture = () => {}
+    handle.releasePointerCapture = () => {}
+    fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(handle, { clientX: 100, clientY: -100, pointerId: 1 })
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+    const left0 = panel.style.left, top0 = panel.style.top
+    panelHeight = 400
+    resizePanel(panel)
+    expect(panel.style.left).toBe(left0)
+    expect(panel.style.top).toBe(top0)
+  })
+
+  it('re-anchors beside the anchor on scroll while not dragged', () => {
+    const panel = openBeside({ left: 0, right: 48, top: 700, bottom: 740 })
+    rect(screen.getByTestId('anchor'), { left: 0, right: 64, top: 560, bottom: 600 })
+    fireEvent.scroll(document)
+    expect(parseInt(panel.style.left)).toBe(64 + 4)
+    expect(parseInt(panel.style.top) + panelHeight).toBe(600)
+  })
+
+  it('still places itself when ResizeObserver does not exist', () => {
+    vi.stubGlobal('ResizeObserver', undefined)
+    const panel = openBeside({ left: 0, right: 48, top: 700, bottom: 740 })
+    expect(parseInt(panel.style.top) + panelHeight).toBe(740)
+  })
+
+  it("'below' does not observe the panel", () => {
+    render(<Harness onClose={() => {}} />)
+    expect(observers).toHaveLength(0)
   })
 })
 

@@ -1,7 +1,6 @@
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent, type Modifier } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
-import { Plus, Sliders, HardDrives } from '@phosphor-icons/react'
 import type { Workspace } from '../../../types/tab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { WorkspaceIcon } from './WorkspaceIcon'
@@ -11,6 +10,9 @@ import type { ActivityBarProps } from './activity-bar-props'
 import { HoverTooltip } from '../../../components/HoverTooltip'
 import { useProfileSwitcherTrigger } from '../../../stores/useProfileSwitcherStore'
 import { ProfileIcon, ProfileSwitcher } from './ProfileSwitcher'
+import { BottomNav } from './BottomNav'
+import { FloatingPanel } from '../../../components/FloatingPanel'
+import { WorkerList } from '../../../components/executions/WorkerList'
 
 const PILL_COLORS: Record<ActiveStatus, string> = {
   running: '#4ade80',
@@ -106,6 +108,10 @@ export function ActivityBarNarrow({
   const wsZoneRef = useRef<HTMLDivElement>(null)
   const homeRef = useRef<HTMLButtonElement>(null)
   const switcher = useProfileSwitcherTrigger(onSelectHome)
+  const workersRef = useRef<HTMLButtonElement>(null)
+  const [workersPanelOpen, setWorkersPanelOpen] = useState(false)
+  const toggleWorkersPanel = useCallback(() => setWorkersPanelOpen((open) => !open), [])
+  const closeWorkersPanel = useCallback(() => setWorkersPanelOpen(false), [])
 
   const restrictToVertical: Modifier = useCallback(({ transform, activeNodeRect }) => {
     if (!activeNodeRect || !wsZoneRef.current) return { ...transform, x: 0 }
@@ -178,30 +184,31 @@ export function ActivityBarNarrow({
         </DndContext>
       </div>
 
-      {/* Add + Settings */}
-      <div className="flex shrink-0 flex-col items-center gap-2 pb-1">
-        <button
-          title={t('nav.new_workspace')}
-          onClick={onAddWorkspace}
-          className="w-[30px] h-[30px] rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
+      {/* New workspace, Workers, Hosts, Settings. Workers opens the list in a floating panel beside the bar
+          (spec §4.6, rule B.3): local state, not the wide bar's workerListOpen, and the bar stays narrow. The panel
+          portals to body — this bar is 44 px wide and overflow-hidden. */}
+      <BottomNav
+        variant="narrow"
+        compact={false}
+        workersOpen={workersPanelOpen}
+        workersRef={workersRef}
+        onAddWorkspace={onAddWorkspace}
+        onToggleWorkers={toggleWorkersPanel}
+        onOpenHosts={onOpenHosts}
+        onOpenSettings={onOpenSettings}
+      />
+      {workersPanelOpen && (
+        <FloatingPanel
+          title={t('nav.workers')}
+          anchorRef={workersRef}
+          placement="right"
+          width={320}
+          testId="workers-panel"
+          onClose={closeWorkersPanel}
         >
-          <Plus size={16} />
-        </button>
-        <button
-          title={t('nav.hosts')}
-          onClick={onOpenHosts}
-          className="w-[30px] h-[30px] rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
-        >
-          <HardDrives size={16} />
-        </button>
-        <button
-          title={t('nav.settings')}
-          onClick={onOpenSettings}
-          className="w-[30px] h-[30px] rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-secondary cursor-pointer"
-        >
-          <Sliders size={16} />
-        </button>
-      </div>
+          <WorkerList />
+        </FloatingPanel>
+      )}
       </div>
     </div>
   )
