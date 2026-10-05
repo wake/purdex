@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"lab.protype.tw/wake/nexen"
@@ -125,7 +126,9 @@ type Module struct {
 	isDir    func(string) bool // default statIsDir; test seam
 	logf     func(string, ...any)
 
-	unsubscribeStarts func() // SessionStart hub subscription (manual_resume.go)
+	unsubscribeStarts func()           // SessionStart hub subscription (manual_resume.go)
+	startsStopped     atomic.Bool      // set by Stop; manual-resume handlers bail out (manual_resume.go)
+	recheck           func(sid string) // test seam for recheckSession; nil launches the goroutine
 }
 
 // New returns a Module wired with production defaults.
@@ -391,6 +394,7 @@ func (m *Module) Stop(ctx context.Context) error {
 		m.unsubscribeStarts()
 		m.unsubscribeStarts = nil
 	}
+	m.startsStopped.Store(true)
 	if m.sys.shutdown == nil {
 		return nil
 	}

@@ -213,7 +213,7 @@ func waitArchived(t *testing.T, env *handoffEnv, exec string) {
 	}, 3*time.Second, 5*time.Millisecond, "the re-check must exit %s", exec)
 }
 
-func TestTakeToTerminal_SecondCheckAbortTriggersRecheckAfterUnlock(t *testing.T) {
+func TestTakeToTerminal_SecondCheckAbortRechecksEndToEnd(t *testing.T) {
 	env := newTTEnv(t)
 	env.terminals.byCall = ownerAfterFirstLook(tbSessionID)
 	env.store.listRows = []store.Execution{ttExec(store.StateIdle)}
@@ -222,13 +222,82 @@ func TestTakeToTerminal_SecondCheckAbortTriggersRecheckAfterUnlock(t *testing.T)
 	waitArchived(t, env.handoffEnv, tbExecID)
 }
 
-func TestTakeback_SecondCheckAbortTriggersRecheckAfterUnlock(t *testing.T) {
+// installRecheckSeam replaces the re-check launcher. At call time it asserts,
+// synchronously, that the sid lock and the execution lock are both free (the
+// re-check must start after every unlock), and records the session.
+func installRecheckSeam(t *testing.T, env *handoffEnv, execID string) *[]string {
+	t.Helper()
+	var calls []string
+	env.m.recheck = func(sid string) {
+		calls = append(calls, sid)
+		if env.m.locks.TryLock(sidLockKey(sid)) {
+			env.m.locks.Unlock(sidLockKey(sid))
+		} else {
+			t.Errorf("sid lock still held when the re-check was requested")
+		}
+		if env.m.locks.TryLock(takeToTerminalLockKey(execID)) {
+			env.m.locks.Unlock(takeToTerminalLockKey(execID))
+		} else {
+			t.Errorf("execution lock still held when the re-check was requested")
+		}
+	}
+	return &calls
+}
+
+func TestTakeToTerminal_SecondCheckAbortRechecksAfterEveryUnlock(t *testing.T) {
+	env := newTTEnv(t)
+	calls := installRecheckSeam(t, env.handoffEnv, tbExecID)
+	env.terminals.byCall = ownerAfterFirstLook(tbSessionID)
+	env.store.listRows = []store.Execution{ttExec(store.StateIdle)}
+	status, _ := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, []string{tbSessionID}, *calls)
+}
+
+func TestTakeback_SecondCheckAbortRechecksAfterEveryUnlock(t *testing.T) {
 	env := newTakebackEnv(t)
+	calls := installRecheckSeam(t, env.handoffEnv, tbExecID)
 	env.terminals.byCall = ownerAfterFirstLook(tbSessionID)
 	env.store.listRows = []store.Execution{idleExec()}
 	status, _ := env.post(t, hoCode, takebackBody())
 	require.Equal(t, http.StatusConflict, status)
-	waitArchived(t, env.handoffEnv, tbExecID)
+	assert.Equal(t, []string{tbSessionID}, *calls)
+}
+
+func TestTakeback_FirstCheckAbortTriggersNoRecheck(t *testing.T) {
+	env := newTakebackEnv(t)
+	calls := installRecheckSeam(t, env.handoffEnv, tbExecID)
+	env.terminals.byCall = func(int) []agent.TerminalSession {
+		return []agent.TerminalSession{{PaneID: "%9", SessionID: tbSessionID, AgentType: "cc", Verified: true}}
+	}
+	env.store.listRows = []store.Execution{idleExec()}
+	status, _ := env.post(t, hoCode, takebackBody())
+	require.Equal(t, http.StatusConflict, status)
+	assert.Empty(t, *calls)
+}
+
+func TestManualResume_StartupExitsALiveWorker(t *testing.T) {
+	env := newHandoffEnv(t)
+	liveTerminal(env, true)
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	env.m.onSessionStart(ev("startup"))
+	assert.Equal(t, []string{"E1"}, archivedIDs(env))
+}
+
+func TestManualResume_AfterStopDoesNothing(t *testing.T) {
+	env := newHandoffEnv(t)
+	require.NoError(t, env.m.Start(context.Background()))
+	_ = env.m.Stop(context.Background())
+	liveTerminal(env, true)
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	env.m.onSessionStart(ev("resume"))
+	env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
+	var rechecked bool
+	env.m.recheck = func(string) { rechecked = true }
+	env.m.recheckSession("S")
+	assert.Empty(t, env.svc.terminateCalls)
+	assert.Empty(t, env.svc.ArchiveCalls())
+	assert.False(t, rechecked, "no re-check launches after Stop")
 }
 
 func TestTakeToTerminal_FirstCheckAbortTriggersNoRecheck(t *testing.T) {

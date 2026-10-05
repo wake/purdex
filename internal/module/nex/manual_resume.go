@@ -13,8 +13,17 @@ import (
 // that resumes a session a live worker holds takes the conversation over,
 // and the worker exits — unless the resume is one of Purdex's own
 // transfers, which hold the session's sid lock for their whole run.
+//
+// Known, accepted trade-off: the handler and the transfers all use TryLock,
+// so a re-check that holds sid:<S> while a retried transfer holds exec:<id>
+// can make both back off (the worker stays live while S is in a terminal)
+// until the next SessionStart or overflow reconcile. The window is narrow
+// and neither side blocks, so there is no deadlock.
 
-const manualResumeTimeout = 90 * time.Second // > one exit's terminate budget
+// manualResumeTimeout bounds only the terminal lookup (LiveBySessionID).
+// scanLiveWorkers and exitWorker run under detachedContext, which strips this
+// deadline; each of those operations carries its own timeout.
+const manualResumeTimeout = 90 * time.Second
 
 // internalPrincipal is the bare host principal the daemon acts as.
 func (m *Module) internalPrincipal() string { return "pdx:" + m.opts.Config.HostID }
@@ -22,6 +31,9 @@ func (m *Module) internalPrincipal() string { return "pdx:" + m.opts.Config.Host
 // onSessionStart handles one SessionStart from the agent hub. The hub runs
 // subscribers off the hook path, so this is synchronous.
 func (m *Module) onSessionStart(ev agent.SessionStartEvent) {
+	if m.startsStopped.Load() {
+		return
+	}
 	if m.sys.service == nil || m.sys.store == nil || m.opts.Config == nil || m.terminals == nil {
 		return
 	}
@@ -98,6 +110,12 @@ func (m *Module) reconcileTerminalOwners() {
 				continue
 			}
 			seen[sid] = true
+			if m.startsStopped.Load() {
+				return
+			}
+			// The tmux session name is unknown on this path (agent.TerminalSession
+			// has no such field), so nex-worker-exited carries tmux_session "";
+			// the SPA toast (Task 18) must fall back when it is empty.
 			m.onSessionStart(agent.SessionStartEvent{AgentType: "cc", SessionID: sid, Source: "resume"})
 		}
 	}
@@ -106,8 +124,28 @@ func (m *Module) reconcileTerminalOwners() {
 // recheckSession asks for one Q1 re-check of S. A transfer that aborted at
 // its second owner check calls it from a defer registered before its
 // sid-lock unlock, so the re-check starts after the release.
+//
+// Stop deliberately does not wait for in-flight handlers or re-checks: one
+// exit can take a full terminate budget, and shutdown must not block on it.
+// startsStopped only stops new work from starting.
 func (m *Module) recheckSession(sid string) {
-	go m.onSessionStart(agent.SessionStartEvent{AgentType: "cc", SessionID: sid, Source: "resume"})
+	if m.startsStopped.Load() {
+		return
+	}
+	if m.recheck != nil {
+		m.recheck(sid)
+		return
+	}
+	// Same as the overflow path: the tmux session name is unknown here, so
+	// tmux_session is "" in the broadcast (the SPA toast must fall back).
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				m.logf("nex: manual resume re-check %s: panic: %v", sid, r)
+			}
+		}()
+		m.onSessionStart(agent.SessionStartEvent{AgentType: "cc", SessionID: sid, Source: "resume"})
+	}()
 }
 
 func (m *Module) broadcastWorkerExited(execID string, ev agent.SessionStartEvent) {
