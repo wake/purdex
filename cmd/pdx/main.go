@@ -259,7 +259,7 @@ func runServe(args []string) {
 	// CloseModules) and only return once it has finished, so the deferred
 	// store close and PID-lock release registered above run against closed
 	// modules.
-	if err := serveAndWait(srv, listener, sigCh, cancel, c, core.ShutdownBudget, log.Printf, os.Exit); err != nil {
+	if err := serveAndWait(srv, listener, sigCh, nil, cancel, c, core.ShutdownBudget, log.Printf, os.Exit); err != nil {
 		log.Printf("server error: %v", err)
 	}
 }

@@ -78,6 +78,7 @@ type fakeTarget struct {
 	stopHook  func(ctx context.Context) // runs inside StopModules after recording
 	closeErr  error
 	closeGate chan struct{} // if non-nil, CloseModules blocks until it is closed
+	closeHook func()        // runs at the start of CloseModules, before closeGate
 	stops     atomic.Int32
 }
 
@@ -91,6 +92,9 @@ func (t *fakeTarget) StopModules(ctx context.Context) error {
 }
 
 func (t *fakeTarget) CloseModules() error {
+	if t.closeHook != nil {
+		t.closeHook()
+	}
 	if t.closeGate != nil {
 		<-t.closeGate
 	}
@@ -138,12 +142,13 @@ func (s *fakeServer) Close() error {
 // harness wires a recorder, fake target, fake server, recording cancel
 // and a log sink so each test only states what differs.
 type harness struct {
-	rec    *recorder
-	target *fakeTarget
-	srv    *fakeServer
-	sig    chan os.Signal
-	logs   []string
-	logMu  sync.Mutex
+	rec     *recorder
+	target  *fakeTarget
+	srv     *fakeServer
+	sig     chan os.Signal
+	restart chan struct{}
+	logs    []string
+	logMu   sync.Mutex
 
 	exitMu    sync.Mutex
 	exitCalls []int // records exit() calls instead of ever calling real os.Exit
@@ -154,10 +159,11 @@ type harness struct {
 func newHarness() *harness {
 	rec := &recorder{}
 	return &harness{
-		rec:    rec,
-		target: &fakeTarget{rec: rec},
-		srv:    newFakeServer(rec),
-		sig:    make(chan os.Signal, 1),
+		rec:     rec,
+		target:  &fakeTarget{rec: rec},
+		srv:     newFakeServer(rec),
+		sig:     make(chan os.Signal, 1),
+		restart: make(chan struct{}, 1),
 	}
 }
 
@@ -196,7 +202,7 @@ func (h *harness) exited() []int {
 
 // run calls serveAndWait with the harness fakes and the given budget.
 func (h *harness) run(budget time.Duration) error {
-	return serveAndWait(h.srv, nil, h.sig, h.cancel, h.target, budget, h.logf, h.exit)
+	return serveAndWait(h.srv, nil, h.sig, h.restart, h.cancel, h.target, budget, h.logf, h.exit)
 }
 
 // runAsync calls run on a goroutine and returns a channel that yields
@@ -220,6 +226,42 @@ func equalSteps(got, want []string) bool {
 }
 
 const testBudget = time.Second
+
+// waitForLog polls the harness log until a line containing substr appears.
+func waitForLog(t *testing.T, h *harness, substr string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		for _, l := range h.logged() {
+			if strings.Contains(l, substr) {
+				return
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("log never contained %q; logs = %v", substr, h.logged())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+// waitForExit polls until the injected exit func has been called with code.
+func waitForExit(t *testing.T, h *harness, code int) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		for _, c := range h.exited() {
+			if c == code {
+				return
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("exit(%d) never called; exits = %v", code, h.exited())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
 
 func TestServeAndWait_SignalRunsSequenceInOrder(t *testing.T) {
 	h := newHarness()
@@ -810,7 +852,7 @@ func TestServeAndWait_RealServerStreamingHandlerTimesOutThenCloses(t *testing.T)
 
 	done := make(chan error, 1)
 	noExit := func(int) {}
-	go func() { done <- serveAndWait(srv, ln, sig, cancel, target, budget, t.Logf, noExit) }()
+	go func() { done <- serveAndWait(srv, ln, sig, nil, cancel, target, budget, t.Logf, noExit) }()
 
 	// Open a streaming request and wait until the handler has flushed
 	// headers — from then on the connection is "active" for Shutdown.
@@ -870,4 +912,75 @@ func ctxErr(ctx context.Context) error {
 		return nil
 	}
 	return ctx.Err()
+}
+
+func TestServeAndWait_RestartRunsSequenceAndReturnsErrRestart(t *testing.T) {
+	h := newHarness()
+	h.restart <- struct{}{}
+	err := h.run(testBudget)
+	if !errors.Is(err, errRestart) {
+		t.Fatalf("serveAndWait returned %v, want errRestart", err)
+	}
+	want := []string{"cancel", "StopModules", "Shutdown", "CloseModules"}
+	if got := h.rec.names(); !equalSteps(got, want) {
+		t.Fatalf("steps = %v, want %v", got, want)
+	}
+	if len(h.exited()) != 0 {
+		t.Fatalf("exit called: %v", h.exited())
+	}
+}
+
+func TestServeAndWait_SignalDuringRestartCancelsRestart(t *testing.T) {
+	h := newHarness()
+	unblock := make(chan struct{})
+	entered := make(chan struct{})
+	h.target.stopHook = func(context.Context) { close(entered); <-unblock }
+	h.restart <- struct{}{}
+	out := h.runAsync(testBudget)
+	<-entered
+	h.sig <- syscall.SIGTERM // `pdx stop` while the restart's shutdown runs
+	waitForLog(t, h, "exiting instead of restarting")
+	close(unblock)
+	if err := <-out; err != nil {
+		t.Fatalf("serveAndWait returned %v, want nil (a stop, not a restart)", err)
+	}
+	if len(h.exited()) != 0 {
+		t.Fatalf("first signal must not force exit: %v", h.exited())
+	}
+}
+
+func TestServeAndWait_TwoSignalsDuringRestartExitImmediately(t *testing.T) {
+	h := newHarness()
+	unblock := make(chan struct{})
+	entered := make(chan struct{})
+	h.target.stopHook = func(context.Context) { close(entered); <-unblock }
+	h.restart <- struct{}{}
+	out := h.runAsync(testBudget)
+	<-entered
+	h.sig <- syscall.SIGTERM
+	waitForLog(t, h, "exiting instead of restarting")
+	h.sig <- syscall.SIGTERM
+	waitForExit(t, h, 130)
+	close(unblock)
+	<-out
+}
+
+// A signal at the TAIL of the sequence (during CloseModules) must still
+// cancel the restart. The decision may only be read once the watcher has
+// exited, or a signal the watcher has taken but not yet recorded is lost
+// and the daemon re-execs under `pdx stop`.
+func TestServeAndWait_SignalDuringCloseModulesCancelsRestart(t *testing.T) {
+	h := newHarness()
+	unblock := make(chan struct{})
+	entered := make(chan struct{})
+	h.target.closeHook = func() { close(entered); <-unblock }
+	h.restart <- struct{}{}
+	out := h.runAsync(testBudget)
+	<-entered
+	h.sig <- syscall.SIGTERM
+	waitForLog(t, h, "exiting instead of restarting")
+	close(unblock)
+	if err := <-out; err != nil {
+		t.Fatalf("serveAndWait returned %v, want nil", err)
+	}
 }
