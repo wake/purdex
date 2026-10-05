@@ -244,11 +244,41 @@ describe.each<[string, Fixture]>([['every kind', everyKind], ['edge shapes', edg
   })
 })
 
+// The complete, ordered prelude units of Nexen's golden page, written out by
+// hand against the fixture (jq over `items`), not computed from the walk:
+// every user/assistant text block (329.1 … 378700.1; 3746.1 is thinking), the
+// nine notes, and the four tool calls — an `arg` unit each, an `input` unit
+// only where the call's input has more than one key (Bash, Edit, Write; Read
+// has just file_path), and an `output` unit for each paired result.
+const GOLDEN_CHAT_IDS = [
+  'p329.1:0:text',
+  'p6688.1:0:arg', 'p6688.1:0:input', 'p6688.1:0:output',
+  'p9403.1:0:text',
+  'p13008.1:0:text',
+  'p13569.1:note:text', 'p14108.1:note:text', 'p14558.1:note:text', 'p14558.2:note:text',
+  'p15108.1:0:text',
+  'p16045.1:0:arg', 'p16045.1:0:output',
+  'p18651.1:0:text',
+  'p19422.1:0:text',
+  'p20300.1:note:text', 'p21398.1:note:text',
+  'p31886.1:0:arg', 'p31886.1:0:input', 'p31886.1:0:output',
+  'p34358.1:note:text', 'p35280.1:note:text',
+  'p39088.1:0:text',
+  'p39688.1:0:text',
+  'p111120.1:0:arg', 'p111120.1:0:input', 'p111120.1:0:output',
+  'p373526.1:0:text',
+  'p374088.1:0:text',
+  'p375917.1:0:text',
+  'p376513.1:0:text',
+  'p378700.1:0:text',
+  'p379249.1:note:text',
+]
+// The one room/chat difference: the room draws the assistant's thinking (3746.1), chat does not.
+const GOLDEN_ROOM_IDS = [...GOLDEN_CHAT_IDS.slice(0, 1), 'p3746.1:0:thinking', ...GOLDEN_CHAT_IDS.slice(1)]
+
 describe.each<View>(['room', 'chat'])('golden prelude units in %s', (view) => {
-  it('indexes the prelude\'s notes and messages, not just the live list', () => {
-    const ids = unitsFor(goldenPrelude, view).map((u) => u.id)
-    for (const pos of ['13569.1', '14108.1', '14558.1', '14558.2', '20300.1', '21398.1', '379249.1']) expect(ids, pos).toContain(`p${pos}:note:text`)
-    expect(ids).toContain('p329.1:0:text')
-    expect(ids.filter((id) => id.startsWith('p')).length).toBeGreaterThan(20)
+  it('indexes the whole prelude, in drawing order — no span, note or call dropped', () => {
+    const ids = unitsFor(goldenPrelude, view).map((u) => u.id).filter((id) => id.startsWith('p'))
+    expect(ids).toEqual(view === 'room' ? GOLDEN_ROOM_IDS : GOLDEN_CHAT_IDS)
   })
 })

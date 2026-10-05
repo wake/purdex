@@ -134,13 +134,32 @@ describe('Nexen golden page (spec §4.6)', () => {
   const page = sanitizePreludePage(golden)!
   const view = derivePrelude(page.items)
 
-  it('pairs every tool_use with its result, denied included', () => {
+  it('pairs every tool_use with its result, denied included — and carries the N2 facts the SPA reads', () => {
     expect(Object.keys(view.tools).sort()).toEqual(['toolu_golden0001', 'toolu_golden0002', 'toolu_golden0003', 'toolu_golden0004'])
-    expect(Object.fromEntries(Object.entries(view.tools).map(([id, t]) => [id, [t.name, t.status]]))).toEqual({
-      toolu_golden0001: ['Bash', 'done'],
-      toolu_golden0002: ['Read', 'done'],
-      toolu_golden0003: ['Write', 'done'],
-      toolu_golden0004: ['Edit', 'denied'],
+    // Values read off the fixture's N2 items (tool_use 6688.2 / 16045.2 / 111120.2 / 31886.2 and their
+    // results 8399.2 / 17694.2 / 202834.2 / 33612.2): at → startedAt / endedAt, primary_arg, known,
+    // duration_ms, output counts. The N2 `output.text` is deliberately not kept (the user block has it).
+    expect(view.tools).toEqual({
+      toolu_golden0001: {
+        name: 'Bash', status: 'done', startedAt: 1790812804123, endedAt: 1790812805123,
+        primaryArg: { key: 'command', value: 'df -h /' }, known: true, durationMs: 1000,
+        output: { totalLines: 1, totalBytes: 200, truncated: false, hasNonText: false },
+      },
+      toolu_golden0002: {
+        name: 'Read', status: 'done', startedAt: 1790812815123, endedAt: 1790812816123,
+        primaryArg: { key: 'file_path', value: '/Users/dev/golden/shot.png' }, known: true, durationMs: 1000,
+        output: { totalLines: 0, totalBytes: 0, truncated: false, hasNonText: true },
+      },
+      toolu_golden0003: {
+        name: 'Write', status: 'done', startedAt: 1790812833123, endedAt: 1790812834123,
+        primaryArg: { key: 'file_path', value: '/Users/dev/golden/report.md' }, known: true, durationMs: 1000,
+        output: { totalLines: 1, totalBytes: 80000, truncated: true, hasNonText: false },
+      },
+      toolu_golden0004: {
+        name: 'Edit', status: 'denied', startedAt: 1790812823123, endedAt: 1790812824123,
+        primaryArg: { key: 'file_path', value: '/Users/dev/golden/a.txt' }, known: true, durationMs: 1000,
+        output: { totalLines: 1, totalBytes: 52, truncated: false, hasNonText: false },
+      },
     })
   })
 

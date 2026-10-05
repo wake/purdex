@@ -250,7 +250,8 @@ describe('Nexen golden page (spec §4.6)', () => {
   it('keeps the segments\' entrypoints in order and the compaction trigger', () => {
     expect(page.items.filter((i) => i.kind === 'prelude.segment').map((i) => [i.pos, (i as { entrypoint: string }).entrypoint]))
       .toEqual([['329.0', 'cli'], ['373526.0', 'sdk-cli'], ['375917.0', 'cli']])
-    expect(page.items.find((i) => i.kind === 'prelude.compaction')).toMatchObject({ pos: '37691.1', trigger: 'auto' })
+    // Closed shape: `pre_tokens` is dropped by design (spec §4.3 marks it optional; §5.3 draws only the trigger).
+    expect(page.items.find((i) => i.kind === 'prelude.compaction')).toEqual({ pos: '37691.1', at: 1790812829123, kind: 'prelude.compaction', trigger: 'auto' })
   })
 
   it('a cut block keeps truncated and total_bytes (text, tool_use, tool_result)', () => {
