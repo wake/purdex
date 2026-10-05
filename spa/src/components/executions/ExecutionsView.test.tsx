@@ -8,7 +8,7 @@ import { useNexHostStore, type NexHostEntry } from '../../stores/useNexHostStore
 import { useHostStore } from '../../stores/useHostStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useTabStore } from '../../stores/useTabStore'
+import { openWorkerTab } from '../../features/workspace/lib/open-worker-tab'
 import { subscriptionSlots } from '../../lib/nex/subscription-slots'
 import { STATE_DOT_CLASSES } from '../../lib/nex/state-dot'
 import type { ExecutionSummary } from '../../lib/nex/types'
@@ -18,6 +18,7 @@ import * as sse from '../../lib/nex/nex-sse'
 vi.mock('../../lib/nex/nex-api', () => ({ listExecutions: vi.fn(), attachControl: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), archiveExecution: vi.fn() }))
 vi.mock('../../lib/nex/nex-sse', () => ({ openNexSse: vi.fn() }))
 vi.mock('../../lib/deeplink/deeplinkResolver', () => ({ openExecutionDetailTab: vi.fn() }))
+vi.mock('../../features/workspace/lib/open-worker-tab', () => ({ openWorkerTab: vi.fn() }))
 
 const H = 'host-a'
 const OTHER = 'host-b'
@@ -39,9 +40,7 @@ function seedList(items: ExecutionSummary[], patch: Partial<{ phase: 'idle' | 'l
   useExecutionListStore.setState({ byHost: { [H]: { items, phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, ...patch } } })
 }
 
-type OpenSingletonTab = ReturnType<typeof useTabStore.getState>['openSingletonTab']
 let ensure: ReturnType<typeof vi.fn<(hostId: string) => Promise<void>>>
-let openSingletonTab: ReturnType<typeof vi.fn<OpenSingletonTab>>
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -59,8 +58,7 @@ beforeEach(() => {
     hostOrder: [H, OTHER], activeHostId: H, runtime: {},
   })
   useShownHostsStore.setState({ ids: [H, OTHER] }) // shown in this workbench unless a test hides one (H2d-2)
-  openSingletonTab = vi.fn<OpenSingletonTab>().mockReturnValue('tab-1')
-  useTabStore.setState({ openSingletonTab })
+  vi.mocked(openWorkerTab).mockReset().mockReturnValue('tab-1')
   vi.mocked(sse.openNexSse).mockReset().mockImplementation(() => ({ close: vi.fn() }))
   vi.mocked(api.listExecutions).mockReset().mockResolvedValue({ items: [], next_cursor: '' })
 })
@@ -192,12 +190,12 @@ describe('ExecutionsView', () => {
     expect(screen.getByTestId('executions-cost')).toHaveTextContent('$0.25')
   })
 
-  it('click opens the singleton tab', () => {
+  it('click opens the worker through openWorkerTab (spec §4.4: selected in place, else into the current workspace)', () => {
     seedList([row({ id: 'exc_click' })])
     render(<ExecutionsView hostId={H} isActive />)
     fireEvent.click(screen.getByTestId('executions-row'))
-    expect(openSingletonTab).toHaveBeenCalledTimes(1)
-    expect(openSingletonTab).toHaveBeenCalledWith({ kind: 'execution', executionId: 'exc_click', host: H })
+    expect(openWorkerTab).toHaveBeenCalledTimes(1)
+    expect(openWorkerTab).toHaveBeenCalledWith({ kind: 'execution', executionId: 'exc_click', host: H })
   })
 
   // H2d-2 T2 (plan §0.21, user rules 1 / 5): a host hidden in this workbench keeps its executions listed; opening one
@@ -217,7 +215,7 @@ describe('ExecutionsView', () => {
       fireEvent.click(el)
       fireEvent.keyDown(el, { key: 'Enter' })
     }
-    expect(openSingletonTab).not.toHaveBeenCalled()
+    expect(openWorkerTab).not.toHaveBeenCalled()
   })
 
   it('hidden host: each row is a list item inside a list, named with the full id, state, summary and age', () => {

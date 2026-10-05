@@ -11,7 +11,7 @@ import { useHostExecutions } from '../../hooks/useHostExecutions'
 import { useHostLook } from '../../lib/host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { selectRollupCostShown, useNexHostStore, type NexHostPhase } from '../../stores/useNexHostStore'
-import { useTabStore } from '../../stores/useTabStore'
+import { openWorkerTab } from '../../features/workspace/lib/open-worker-tab'
 import { groupBySource } from '../../lib/nex/execution-groups'
 import { isRefShownNow, useIsRefShown } from '../../lib/shown-hosts'
 import { ExecutionsGroup } from './ExecutionsGroup'
@@ -54,7 +54,7 @@ export function ExecutionsView({ hostId }: ViewProps) {
   // (plan H2d-2, §0.21 user rules 1 / 5) — its rows are plain, non-action rows and the hint says why.
   const open = (executionId: string) => {
     if (!isRefShownNow(id)) return
-    useTabStore.getState().openSingletonTab({ kind: 'execution', executionId, host: id })
+    openWorkerTab({ kind: 'execution', executionId, host: id })
   }
 
   let body: React.ReactNode
