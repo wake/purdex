@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.488] - 2026-10-06
+
+> 只動 daemon，目前沒有 UI 會呼叫它（SPA 的「退出」在 P1b-2）。**daemon 尚未部署**：跟 alpha.487 一起累積，由統籌安排重啟。SPA 與 Electron 都不必更新。
+
+### Internal：對話主體 P1a-2——退出 worker（#1578）
+
+- **新端點 `POST /api/nex/executions/{id}/exit`**，body 可選帶 `{lease_id}`。回 `{exited, terminated, archived, state}`。做法依 spec §5：
+  - running、idle、queued 先 terminate 再 archive；failed、rejected 只 archive；terminated 但沒 archive 的補 archive。
+  - 已經退出的再按一次，不會碰 engine。
+  - terminate 失敗也照樣嘗試 archive（D4），所以 worker 一樣會算成已退出。
+- **控制權（lease）**：
+  - 先用 caller 帶來的 lease，但會先驗證；過期就改走重新取得。
+  - 再來是自己取一把，用完就還。
+  - 被另一個 Purdex 分頁握著時，借用它當下的 lease（不歸還）。
+  - 被非 Purdex 的身分握著時，回 409 `held_by`，什麼都不動。
+  - 在讀取與使用之間換手時會重新判斷，並在 archive 前再確認一次持有者。
+- **找出某個對話所有活著的 worker**：分頁掃描 embedded Nexen（每頁 500、最多 20 頁）。同一個 session id 符合 `session_id` 或 `resume_session_id` 的、沒 archive 也沒 terminated 的，就算這個對話的 worker。
+- 已知限制：「確認持有者」和「archive」不是同一個原子操作。目前的部署裡所有 lease 持有者都是 Purdex 自己簽的身分，所以不會發生；真要完全封死，需要 Nexen 提供附 lease 圍欄的 archive。
+
 ## [1.0.0-alpha.487] - 2026-10-06
 
 > 只動 daemon，使用者看不到變化。這是「一個對話＝一個主體」的第一段，後續的 worker 退出與擁有者檢查會用到它。**daemon 尚未部署**：要等後面幾段累積完，由統籌跟使用者約時間一起重啟。SPA 與 Electron 都不必更新。
