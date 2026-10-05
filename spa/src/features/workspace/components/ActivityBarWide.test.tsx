@@ -44,6 +44,30 @@ function renderBar(over: Partial<ComponentProps<typeof ActivityBarWide>> = {}) {
   )
 }
 
+/** Replaces ResizeObserver; `fire(h)` reports a content height for the observed element. */
+function stubResizeObserver() {
+  let callback: ResizeObserverCallback | null = null
+  let observed: Element | null = null
+  const disconnect = vi.fn()
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      constructor(cb: ResizeObserverCallback) {
+        callback = cb
+      }
+      observe(el: Element) { observed = el }
+      unobserve() {}
+      disconnect = disconnect
+    },
+  )
+  return {
+    fire: (height: number) =>
+      callback!([{ target: observed, contentRect: { height } } as unknown as ResizeObserverEntry], {} as never),
+    observed: () => observed,
+    disconnect,
+  }
+}
+
 /** Every element under the bar root that scrolls vertically. */
 const scrollers = () =>
   Array.from(screen.getByTestId('activity-bar-wide').querySelectorAll('*')).filter((el) =>
@@ -205,33 +229,63 @@ describe('ActivityBarWide — worker list section', () => {
   })
 
   it('caps the rendered height so the workspace zone keeps 96px, without shrinking the stored height', () => {
-    let fire: ((height: number) => void) | null = null
-    let observed: Element | null = null
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        constructor(cb: ResizeObserverCallback) {
-          fire = (height) =>
-            cb([{ target: observed, contentRect: { height } } as unknown as ResizeObserverEntry], this as never)
-        }
-        observe(el: Element) { observed = el }
-        unobserve() {}
-        disconnect() {}
-      },
-    )
+    const ro = stubResizeObserver()
     useLayoutStore.setState({ workerListOpen: true })
     renderBar()
-    expect(observed).toBe(screen.getByTestId('worker-split-box'))
+    expect(ro.observed()).toBe(screen.getByTestId('worker-split-box'))
     const section = screen.getByTestId('worker-list-section')
 
     // available 300 → 300 − 96 (workspace zone) − 4 (divider) = 200 < 240
-    act(() => fire!(300))
+    act(() => ro.fire(300))
     expect(section.style.height).toBe('200px')
     expect(useLayoutStore.getState().workerListHeight).toBe(WORKER_LIST_DEFAULT)
 
     // Plenty of room → the stored height again.
-    act(() => fire!(1000))
+    act(() => ro.fire(1000))
     expect(section.style.height).toBe(`${WORKER_LIST_DEFAULT}px`)
+  })
+
+  // Spec §4.2: a short window only caps what is rendered; a drag stores what the user sees at mouseup.
+  describe('cap vs. stored height', () => {
+    function setup() {
+      const ro = stubResizeObserver()
+      const setWorkerListHeight = vi.fn(useLayoutStore.getState().setWorkerListHeight)
+      useLayoutStore.setState({ workerListOpen: true, workerListHeight: 800, setWorkerListHeight })
+      renderBar()
+      const section = screen.getByTestId('worker-list-section')
+      // available 300 → cap 300 − 96 − 4 = 200
+      act(() => ro.fire(300))
+      expect(section.style.height).toBe('200px')
+      return { ro, section, setWorkerListHeight }
+    }
+
+    it('a shrunk window alone never writes the stored height', () => {
+      const { setWorkerListHeight } = setup()
+      expect(setWorkerListHeight).not.toHaveBeenCalled()
+      expect(useLayoutStore.getState().workerListHeight).toBe(800)
+    })
+
+    it('a drag starts from the capped height: down 50 then mouseup stores 150, exactly once', () => {
+      const { section, setWorkerListHeight } = setup()
+      const divider = screen.getByTestId('worker-list-divider')
+      fireEvent.mouseDown(divider, { clientY: 500 })
+      fireEvent.mouseMove(document, { clientY: 550 })
+      expect(section.style.height).toBe('150px')
+      expect(setWorkerListHeight).not.toHaveBeenCalled()
+
+      fireEvent.mouseUp(document)
+      expect(setWorkerListHeight).toHaveBeenCalledTimes(1)
+      expect(setWorkerListHeight).toHaveBeenCalledWith(150)
+      expect(useLayoutStore.getState().workerListHeight).toBe(150)
+      expect(section.style.height).toBe('150px')
+    })
+
+    it('when the cap lifts without a drag, the rendered height returns to the stored value', () => {
+      const { ro, section, setWorkerListHeight } = setup()
+      act(() => ro.fire(1000))
+      expect(section.style.height).toBe('800px')
+      expect(setWorkerListHeight).not.toHaveBeenCalled()
+    })
   })
 })
 
