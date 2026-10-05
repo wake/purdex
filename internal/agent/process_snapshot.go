@@ -17,9 +17,9 @@ var (
 	ErrNotInSnapshot = errors.New("not in process snapshot")
 	// ErrProcessChanged marks a PID whose process exited, or was replaced by
 	// another one under the same PID, between the snapshot and the read of
-	// its arguments. The snapshot will not mix the two processes into one
-	// answer, and a caller can fall back to the per-PID reader for exactly
-	// this case.
+	// its arguments, or one the snapshot could not pin to a process in the
+	// first place. The snapshot will not mix two processes into one answer,
+	// and a caller can fall back to the per-PID reader for exactly this case.
 	ErrProcessChanged = errors.New("process changed since the snapshot")
 )
 

@@ -191,6 +191,110 @@ func TestProcessSnapshot_ForkCount(t *testing.T) {
 	}
 }
 
+func TestProcessSnapshot_IdentityRecheck_ProcessGone(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	pid := startProcess(t, cmd)
+	snap := takeSnapshot(t)
+	if !snap.Alive(pid) {
+		t.Fatalf("Alive(%d) = false before the kill", pid)
+	}
+
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+
+	_, err := snap.Read(pid)
+	if !errors.Is(err, ErrProcessChanged) {
+		t.Fatalf("Read of a pid that exited after the snapshot: err = %v, want ErrProcessChanged", err)
+	}
+	if !snap.Alive(pid) {
+		t.Fatal("Alive must keep describing the snapshot's moment")
+	}
+}
+
+func TestProcessSnapshot_IdentityRecheck_Seam(t *testing.T) {
+	sleepPID := startProcess(t, exec.Command("sleep", "30"))
+	orig := procStat
+
+	cases := []struct {
+		name string
+		fake func(pid int) (int, uint64, error)
+	}{
+		{"start ticks differ", func(pid int) (int, uint64, error) {
+			ppid, ticks, err := orig(pid)
+			return ppid, ticks + 1, err
+		}},
+		{"pid gone", func(int) (int, uint64, error) { return 0, 0, os.ErrNotExist }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			snap := takeSnapshot(t)
+			var calls atomic.Int64
+			procStat = func(pid int) (int, uint64, error) {
+				calls.Add(1)
+				return tc.fake(pid)
+			}
+			t.Cleanup(func() { procStat = orig })
+
+			for i := range 2 {
+				if _, err := snap.Read(sleepPID); !errors.Is(err, ErrProcessChanged) {
+					t.Fatalf("Read #%d: err = %v, want ErrProcessChanged", i+1, err)
+				}
+			}
+			if got := calls.Load(); got != 1 {
+				t.Fatalf("identity re-checked %d times over two Reads, want 1 (the failure is remembered)", got)
+			}
+		})
+	}
+}
+
+// A row whose stat cannot be read, or names another parent than ps did, is
+// one the snapshot cannot pin to a process. Read sends the caller to the
+// per-PID reader; what the table itself saw still answers.
+func TestProcessSnapshot_UnverifiableIdentity(t *testing.T) {
+	sleepPID := startProcess(t, exec.Command("sleep", "30"))
+	lstart, err := psColumn(sleepPID, "lstart")
+	if err != nil {
+		t.Fatalf("ps lstart: %v", err)
+	}
+	orig := procStat
+
+	cases := []struct {
+		name string
+		fake func(pid int) (int, uint64, error)
+	}{
+		{"stat names another parent", func(pid int) (int, uint64, error) {
+			ppid, ticks, err := orig(pid)
+			return ppid + 1, ticks, err
+		}},
+		{"stat unreadable", func(int) (int, uint64, error) { return 0, 0, os.ErrPermission }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			procStat = func(pid int) (int, uint64, error) {
+				if pid == sleepPID {
+					return tc.fake(pid)
+				}
+				return orig(pid)
+			}
+			t.Cleanup(func() { procStat = orig })
+			snap := takeSnapshot(t)
+			// The real stat agrees at Read time, so only the snapshot's
+			// verdict can fail it.
+			procStat = orig
+
+			if _, err := snap.Read(sleepPID); !errors.Is(err, ErrProcessChanged) {
+				t.Fatalf("Read: err = %v, want ErrProcessChanged", err)
+			}
+			if !snap.Alive(sleepPID) {
+				t.Fatal("Alive = false; the table saw the process")
+			}
+			if got, err := snap.StartTime(sleepPID); err != nil || got != lstart {
+				t.Fatalf("StartTime = %q, %v; want ps's %q", got, err, lstart)
+			}
+		})
+	}
+}
+
 func TestProcessSnapshot_ForkCount_PerPIDReaderIsCounted(t *testing.T) {
 	forks := countPSForks(t)
 	if _, err := ReadProcessInfo(os.Getpid()); err != nil {
