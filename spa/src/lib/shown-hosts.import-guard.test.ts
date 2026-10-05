@@ -43,7 +43,6 @@ const STORE_IMPORTERS = [
 /** Importers of `lib/shown-hosts` (non-test), verbatim. */
 const READER_IMPORTERS = [
   'src/components/HandoffConfirmDialog.tsx',
-  'src/components/HandoffDialogHost.tsx',
   'src/components/HistoryPage.tsx',
   'src/components/HostHiddenPane.tsx',
   'src/components/NewTabPage.tsx',

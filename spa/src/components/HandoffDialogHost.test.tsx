@@ -65,7 +65,8 @@ beforeEach(() => {
   } as never)
   useHostConfigStore.setState({ byHost: {}, ensureLoaded: vi.fn().mockResolvedValue(undefined) } as never)
   useSessionStore.setState({ sessions: {} })
-  useAgentStore.setState({ agentTypes: {} })
+  // Claude Code runs in every seeded session: the gate (§9.3) is open until a test closes it.
+  useAgentStore.setState({ agentTypes: { [`${H}:zk16vd`]: 'cc', [`${H}:second`]: 'cc' } })
   useUndoToast.setState({ toast: null })
   mockedHandoff.mockReset()
 })
@@ -161,6 +162,58 @@ describe('HandoffDialogHost', () => {
       open(target)
       act(() => { useTabStore.getState().setPaneContent(target.tabId, target.paneId, session({ cachedName: 'renamed' })) })
       expect(dialog()).toBeInTheDocument()
+    })
+  })
+
+  // P6 review A1: the dialog lives only while the shared gate (useHandoffGate) is open on the pane's LIVE content.
+  describe('closes when the handoff gate closes on the live pane', () => {
+    it('Claude Code exits (its agent type is cleared) → closes; nothing is sent', () => {
+      const target = seedPane()
+      render(<HandoffDialogHost />)
+      open(target)
+      expect(dialog()).toBeInTheDocument()
+      act(() => { useAgentStore.getState().clearSession(H, 'zk16vd') })
+      expect(dialog()).toBeNull()
+      expect(useHandoffDialogStore.getState().target).toBeNull()
+      expect(mockedHandoff).not.toHaveBeenCalled()
+    })
+
+    it('another agent now runs in the session → closes', () => {
+      const target = seedPane()
+      render(<HandoffDialogHost />)
+      open(target)
+      act(() => { useAgentStore.setState({ agentTypes: { [`${H}:zk16vd`]: 'codex' } }) })
+      expect(dialog()).toBeNull()
+      expect(useHandoffDialogStore.getState().target).toBeNull()
+    })
+
+    it('the pane\'s session is terminated (same identity) → closes', () => {
+      const target = seedPane()
+      render(<HandoffDialogHost />)
+      open(target)
+      act(() => { useTabStore.getState().setPaneContent(target.tabId, target.paneId, session({ terminated: 'session-closed' })) })
+      expect(dialog()).toBeNull()
+      expect(useHandoffDialogStore.getState().target).toBeNull()
+    })
+
+    it('Nex stops being ready on the host → closes', () => {
+      const target = seedPane()
+      render(<HandoffDialogHost />)
+      open(target)
+      act(() => {
+        useNexHostStore.setState((s) => ({ byHost: { ...s.byHost, [H]: { ...s.byHost[H], phase: 'unavailable' } } }) as never)
+      })
+      expect(dialog()).toBeNull()
+      expect(useHandoffDialogStore.getState().target).toBeNull()
+    })
+
+    it('a target the gate already refuses never shows', () => {
+      const target = seedPane()
+      useAgentStore.setState({ agentTypes: {} })
+      render(<HandoffDialogHost />)
+      open(target)
+      expect(dialog()).toBeNull()
+      expect(useHandoffDialogStore.getState().target).toBeNull()
     })
   })
 

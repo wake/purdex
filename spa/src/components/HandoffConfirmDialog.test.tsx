@@ -10,9 +10,10 @@ import { useUndoToast } from '../stores/useUndoToast'
 import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useNexHostStore } from '../stores/useNexHostStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
-import { createTab } from '../types/tab'
-import { getPrimaryPane } from '../lib/pane-tree'
+import { createTab, type PaneRebuildRecord, type TmuxSessionContent } from '../types/tab'
+import { collectLeaves, getPrimaryPane } from '../lib/pane-tree'
 import { useHostStore } from '../stores/useHostStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { setHostShown } from '../lib/shown-hosts'
@@ -25,6 +26,21 @@ vi.mock('../lib/nex/handoff', async (importOriginal) => ({
 const mockedHandToNex = vi.mocked(handToNex)
 
 const args = { hostId: 'h1', sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex', tabId: 't1', paneId: 'p1' }
+// Claude Code by the pane's rebuild record, so `agentTypes` can stay unclassified (the fromTitle tests need that).
+const CC_RECORD: PaneRebuildRecord = { sessionName: 'purdex', tmuxInstance: 'inst-1', agent: { type: 'cc', updatedAt: 0 }, capturedAt: 0 }
+/** The session `args` names, as a pane the handoff gate is open on. */
+const liveSession = (over: Partial<TmuxSessionContent> = {}): TmuxSessionContent => ({
+  kind: 'tmux-session', hostId: 'h1', sessionCode: 'zk16vd', mode: 'terminal', cachedName: 'purdex', tmuxInstance: 'inst-1', rebuild: CC_RECORD, ...over,
+})
+const readyNex = () => useNexHostStore.setState({
+  byHost: {
+    h1: {
+      info: null,
+      capabilities: { delegate: { resume_session_id: true }, sandbox_profiles: ['default', 'handoff'] } as never,
+      phase: 'ready', error: null, fetchedAt: 0, generation: 1, fingerprint: 'f',
+    },
+  },
+} as never)
 const ok = { execution_id: 'exc_1', state: 'running', effective_profile: 'handoff', session_id: 'sid-1', cwd: '/w', session_kept: true }
 
 function deferred<T>() {
@@ -57,6 +73,10 @@ beforeEach(() => {
   mockedHandToNex.mockReset()
   useUndoToast.setState({ toast: null })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+  // Confirm re-checks the live gate (P6 review A1): `args`' pane exists, holds the session, runs CC, and Nex is ready.
+  useTabStore.getState().addTab({ id: 't1', pinned: false, locked: false, createdAt: 0, layout: { type: 'leaf', pane: { id: 'p1', content: liveSession() } } })
+  useAgentStore.setState({ agentTypes: {} })
+  readyNex()
   useShownHostsStore.setState({ ids: ['h1'] }) // the host is shown (H2d-3 re-checks it)
 })
 afterEach(() => vi.restoreAllMocks())
@@ -131,6 +151,7 @@ describe('HandoffConfirmDialog — keep the tmux session (exec-to-terminal spec 
   it('names the other panes on this session (same host + code, this pane excluded); silent when there are none', () => {
     // This pane's own tab + two more tabs on the same session, one on another
     // session and one on the same code but another host.
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
     const own = sessionTab(args.hostId, args.sessionCode)
     const ownPane = getPrimaryPane(useTabStore.getState().tabs[own].layout).id
     sessionTab(args.hostId, args.sessionCode)
@@ -244,7 +265,7 @@ describe('HandoffConfirmDialog — the initial view mode (shell cleanup spec §9
 
 describe('HandoffConfirmDialog — records the session pane title (worker theme spec §8.4)', () => {
   function titledSessionTab(paneTitle: string) {
-    const tab = createTab({ kind: 'tmux-session', hostId: 'h1', sessionCode: 'zk16vd', mode: 'terminal', cachedName: 'purdex', tmuxInstance: 'inst-1' })
+    const tab = createTab(liveSession())
     useTabStore.getState().addTab(tab)
     useSessionStore.setState({ sessions: { h1: [{ code: 'zk16vd', name: 'fix-login', pane_title: paneTitle }] as never } })
     return { tabId: tab.id, paneId: getPrimaryPane(tab.layout).id }
@@ -273,18 +294,15 @@ describe('HandoffConfirmDialog — records the session pane title (worker theme 
     expect(mockedHandToNex.mock.calls[0][0].fromTitle).toBe('fix-login')
   })
 
-  it('no fromTitle when the session has no pane title, or the tab is gone', async () => {
+  // (A gone tab no longer reaches handToNex at all: Confirm re-checks the live pane — P6 review A1.)
+  it('no fromTitle when the session has no pane title', async () => {
     mockedHandToNex.mockResolvedValue({ result: ok, swapped: true })
-    const tab = createTab({ kind: 'tmux-session', hostId: 'h1', sessionCode: 'zk16vd', mode: 'terminal', cachedName: 'purdex', tmuxInstance: 'inst-1' })
+    const tab = createTab(liveSession())
     useTabStore.getState().addTab(tab)
     useSessionStore.setState({ sessions: { h1: [{ code: 'zk16vd', name: 'fix-login' }] as never } })
     render(<HandoffConfirmDialog {...args} tabId={tab.id} paneId={getPrimaryPane(tab.layout).id} onClose={vi.fn()} />)
     await act(async () => { fireEvent.click(confirmBtn()) })
     expect(mockedHandToNex.mock.calls[0][0].fromTitle).toBeUndefined()
-    cleanup()
-    render(<HandoffConfirmDialog {...args} tabId="gone" onClose={vi.fn()} />)
-    await act(async () => { fireEvent.click(confirmBtn()) })
-    expect(mockedHandToNex.mock.calls[1][0].fromTitle).toBeUndefined()
   })
 
   it('strips a known marker even when agentType is unclassified (review finding A2)', async () => {
@@ -310,8 +328,11 @@ describe('HandoffConfirmDialog — records the session pane title (worker theme 
     // pane is something else); the lookup is by (hostId, sessionCode), not by tab.
     const tab = createTab({ kind: 'tmux-session', hostId: 'h1', sessionCode: 'other-code', mode: 'terminal', cachedName: 'other', tmuxInstance: 'inst-2' })
     useTabStore.getState().addTab(tab)
+    const primaryId = getPrimaryPane(tab.layout).id
+    useTabStore.getState().splitPane(tab.id, primaryId, 'h', liveSession())
+    const secondId = collectLeaves(useTabStore.getState().tabs[tab.id].layout).find((p) => p.id !== primaryId)!.id
     useSessionStore.setState({ sessions: { h1: [{ code: 'zk16vd', name: 'fix-login', pane_title: 'fix-login' }] as never } })
-    render(<HandoffConfirmDialog {...args} tabId={tab.id} paneId="p2" onClose={vi.fn()} />)
+    render(<HandoffConfirmDialog {...args} tabId={tab.id} paneId={secondId} onClose={vi.fn()} />)
     await act(async () => { fireEvent.click(confirmBtn()) })
     expect(mockedHandToNex.mock.calls[0][0].fromTitle).toBe('fix-login')
   })
@@ -366,6 +387,67 @@ describe('HandoffConfirmDialog — a host hidden in the workbench (H2d-3)', () =
     toast()!.action!()
     expect(open.mock.calls.map((c) => c[0].kind)).toEqual(['hosts'])
     expect(useHostStore.getState().activeHostId).toBe('h1')
+  })
+})
+
+// P6 review A1 — the gate is re-read from the stores at the click, not taken from the last render: the host's close
+// is an effect after a render, so a click can land between the store change and that close. Blocked → the dialog
+// closes and nothing is sent. Most of these stores are ones the dialog does not even subscribe to (no re-render).
+describe('HandoffConfirmDialog — re-checks the live gate at Confirm (P6 review A1)', () => {
+  async function confirmAfter(change: () => void) {
+    const r = renderDialog()
+    change()
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    return r
+  }
+  const setPane = (content: Parameters<ReturnType<typeof useTabStore.getState>['setPaneContent']>[2]) =>
+    useTabStore.getState().setPaneContent('t1', 'p1', content)
+
+  it('open gate → handToNex is called (control)', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
+    const { onClose } = await confirmAfter(() => {})
+    expect(mockedHandToNex).toHaveBeenCalledTimes(1)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('another agent now runs in the session (the live type outranks the record) → not sent, closed', async () => {
+    const { onClose } = await confirmAfter(() => { useAgentStore.setState({ agentTypes: { 'h1:zk16vd': 'codex' } }) })
+    expect(mockedHandToNex).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('Claude Code exited and nothing else says it runs (no record) → not sent, closed', async () => {
+    useAgentStore.setState({ agentTypes: { 'h1:zk16vd': 'cc' } })
+    setPane(liveSession({ rebuild: undefined }))
+    const { onClose } = await confirmAfter(() => { useAgentStore.getState().clearSession('h1', 'zk16vd') })
+    expect(mockedHandToNex).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('the pane\'s session is terminated → not sent, closed', async () => {
+    const { onClose } = await confirmAfter(() => { setPane(liveSession({ terminated: 'session-closed' })) })
+    expect(mockedHandToNex).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('Nex is no longer ready on the host → not sent, closed', async () => {
+    const { onClose } = await confirmAfter(() => {
+      useNexHostStore.setState((s) => ({ byHost: { ...s.byHost, h1: { ...s.byHost.h1, phase: 'unavailable' } } }) as never)
+    })
+    expect(mockedHandToNex).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('the pane now holds another tmux process of the session → not sent, closed', async () => {
+    const { onClose } = await confirmAfter(() => { setPane(liveSession({ tmuxInstance: 'inst-2' })) })
+    expect(mockedHandToNex).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('the pane is gone → not sent, closed', async () => {
+    const { onClose } = await confirmAfter(() => { useTabStore.getState().closeTab('t1') })
+    expect(mockedHandToNex).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })
 
