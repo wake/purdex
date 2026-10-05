@@ -340,8 +340,11 @@ export default function TranscriptSearch({
         <div data-testid="search-prelude-incomplete" className="flex items-center gap-2 px-3 pb-1 text-xs text-text-muted">
           <span>{t(loadingAll ? 'worker.prelude.loading' : 'worker.prelude.search_incomplete')}</span>
           {onLoadAll && (
-            <button type="button" disabled={loadingAll} onClick={loadAll}
-              className="underline hover:text-text-primary disabled:opacity-50">{t('worker.prelude.load_all')}</button>
+            <>
+              <span data-testid="search-prelude-dot" aria-hidden="true">·</span>
+              <button type="button" disabled={loadingAll} onClick={loadAll}
+                className="underline hover:text-text-primary disabled:opacity-50">{t('worker.prelude.load_all')}</button>
+            </>
           )}
         </div>
       )}
