@@ -273,8 +273,9 @@ const TerminalSessionsKey = "agent.terminal-sessions"
 type TerminalSession struct {
 	FrameID, PaneID, AgentType, SessionID, Cwd, TranscriptPath string
 	// Verified is true when the pid is alive AND its start time matched the
-	// recorded one. False means "alive, start time unreadable": an owner check
-	// counts it (conservative), the Q1 handler does not act on it alone.
+	// recorded one. False means "alive, start time unreadable": not an owner
+	// under D1, but S is not provably free either — an owner check answers
+	// 503 owner_check_failed (retryable), and the Q1 handler does not act on it.
 	Verified bool
 }
 
@@ -1502,14 +1503,20 @@ func TestCheckOwners(t *testing.T) {
 			t.Fatal(herr)
 		}
 	})
-	t.Run("terminal elsewhere (verified or not)", func(t *testing.T) {
-		for _, v := range []bool{true, false} {
-			env := newHandoffEnv(t)
-			env.terminals.live = map[string][]agent.TerminalSession{"S": {ts("%9", v)}}
-			herr := env.m.checkOwners(context.Background(), "S", "", "")
-			if herr == nil || herr.status != 409 || herr.code != "session_owned" || herr.detail["owner"] != "terminal" || herr.detail["tmux_pane_id"] != "%9" {
-				t.Fatalf("verified=%v herr=%+v", v, herr)
-			}
+	t.Run("verified terminal elsewhere → 409 session_owned", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		env.terminals.live = map[string][]agent.TerminalSession{"S": {ts("%9", true)}}
+		herr := env.m.checkOwners(context.Background(), "S", "", "")
+		if herr == nil || herr.status != 409 || herr.code != "session_owned" || herr.detail["owner"] != "terminal" || herr.detail["tmux_pane_id"] != "%9" {
+			t.Fatalf("herr=%+v", herr)
+		}
+	})
+	t.Run("unverifiable terminal elsewhere → 503 owner_check_failed (D1: not an owner, but not provably free)", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		env.terminals.live = map[string][]agent.TerminalSession{"S": {ts("%9", false)}}
+		herr := env.m.checkOwners(context.Background(), "S", "", "")
+		if herr == nil || herr.status != 503 || herr.code != "owner_check_failed" || herr.detail["tmux_pane_id"] != "%9" {
+			t.Fatalf("herr=%+v", herr)
 		}
 	})
 	t.Run("terminal in the allowed pane", func(t *testing.T) {
@@ -1567,6 +1574,13 @@ func (m *Module) checkOwners(parent context.Context, sid, allowExec, allowPane s
 	for _, t := range terms {
 		if allowPane != "" && t.PaneID == allowPane {
 			continue
+		}
+		if !t.Verified {
+			// D1: an owner is a pid that still has its recorded start time. One
+			// we cannot read is not an owner — but S is not provably free either,
+			// so the transfer is refused as retryable (PR #1572 review A2).
+			return &handoffError{http.StatusServiceUnavailable, "owner_check_failed", "cannot verify a terminal process recorded for this conversation",
+				map[string]any{"session_id": sid, "tmux_pane_id": t.PaneID}}
 		}
 		return &handoffError{http.StatusConflict, "session_owned", "this conversation is open in a terminal",
 			map[string]any{"owner": "terminal", "session_id": sid, "tmux_pane_id": t.PaneID}}
