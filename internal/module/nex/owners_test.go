@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/wake/purdex/internal/module/agent"
 	"lab.protype.tw/wake/nexen/store"
 )
 
@@ -96,4 +97,63 @@ func TestLiveWorkersFor_CapAndErrors(t *testing.T) {
 	if got, err := env.m.liveWorkersFor(context.Background(), ""); err != nil || got != nil {
 		t.Fatalf("empty sid: %v %v", got, err)
 	}
+}
+
+func TestCheckOwners(t *testing.T) {
+	ts := func(pane string, verified bool) agent.TerminalSession {
+		return agent.TerminalSession{FrameID: "f" + pane, PaneID: pane, AgentType: "cc", SessionID: "S", Verified: verified}
+	}
+	t.Run("free", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		if herr := env.m.checkOwners(context.Background(), "S", "", ""); herr != nil {
+			t.Fatal(herr)
+		}
+	})
+	t.Run("verified terminal elsewhere → 409 session_owned", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.terminals.live = map[string][]agent.TerminalSession{"S": {ts("%9", true)}}
+		herr := env.m.checkOwners(context.Background(), "S", "", "")
+		if herr == nil || herr.status != 409 || herr.code != "session_owned" || herr.detail["owner"] != "terminal" || herr.detail["tmux_pane_id"] != "%9" {
+			t.Fatalf("herr=%+v", herr)
+		}
+	})
+	t.Run("unverifiable terminal elsewhere → 503 owner_check_failed (D1: not an owner, but not provably free)", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.terminals.live = map[string][]agent.TerminalSession{"S": {ts("%9", false)}}
+		herr := env.m.checkOwners(context.Background(), "S", "", "")
+		if herr == nil || herr.status != 503 || herr.code != "owner_check_failed" || herr.detail["tmux_pane_id"] != "%9" {
+			t.Fatalf("herr=%+v", herr)
+		}
+	})
+	t.Run("terminal in the allowed pane", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.terminals.live = map[string][]agent.TerminalSession{"S": {ts("%1", true)}}
+		if herr := env.m.checkOwners(context.Background(), "S", "", "%1"); herr != nil {
+			t.Fatal(herr)
+		}
+	})
+	t.Run("live worker other than the allowed one", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.listRows = []store.Execution{row("E1", "idle", false, "S", "", 1), row("E2", "failed", false, "S", "", 2)}
+		herr := env.m.checkOwners(context.Background(), "S", "E1", "")
+		if herr == nil || herr.detail["owner"] != "worker" || herr.detail["execution_id"] != "E2" {
+			t.Fatalf("herr = %+v", herr)
+		}
+		env.store.listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+		if herr := env.m.checkOwners(context.Background(), "S", "E1", ""); herr != nil {
+			t.Fatal(herr)
+		}
+	})
+	t.Run("lookup errors → 503", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.terminals.err = errors.New("db")
+		if herr := env.m.checkOwners(context.Background(), "S", "", ""); herr == nil || herr.status != 503 || herr.code != "owner_check_failed" {
+			t.Fatalf("herr = %+v", herr)
+		}
+		env.terminals.err = nil
+		env.store.listErr = errors.New("db")
+		if herr := env.m.checkOwners(context.Background(), "S", "", ""); herr == nil || herr.code != "owner_check_failed" {
+			t.Fatalf("herr = %+v", herr)
+		}
+	})
 }

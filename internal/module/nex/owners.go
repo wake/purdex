@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 
 	"lab.protype.tw/wake/nexen/store"
@@ -75,4 +76,48 @@ func sortNewestFirst(es []store.Execution) {
 		}
 		return es[i].ID > es[j].ID
 	})
+}
+
+// sidLockKey is the handoff-lock key for a Claude session id.
+func sidLockKey(sid string) string { return "sid:" + sid }
+
+// checkOwners: nil when nothing but the transferred owner holds S. allowExec /
+// allowPane name that owner ("" = none).
+// 409 session_owned {owner: "terminal", session_id, tmux_pane_id} |
+// {owner: "worker", session_id, execution_id, state};
+// 503 owner_check_failed when either lookup errs (a truncated worker scan
+// counts as an error).
+func (m *Module) checkOwners(parent context.Context, sid, allowExec, allowPane string) *handoffError {
+	ctx, cancel := detachedContext(parent, m.engineOpTimeout)
+	terms, err := m.terminals.LiveBySessionID(ctx, "cc", sid)
+	cancel()
+	if err != nil {
+		return &handoffError{http.StatusServiceUnavailable, "owner_check_failed", "checking terminal owners: " + err.Error(), map[string]any{"session_id": sid}}
+	}
+	for _, t := range terms {
+		if allowPane != "" && t.PaneID == allowPane {
+			continue
+		}
+		if !t.Verified {
+			// D1: an owner is a pid that still has its recorded start time. One
+			// we cannot read is not an owner — but S is not provably free either,
+			// so the transfer is refused as retryable (PR #1572 review A2).
+			return &handoffError{http.StatusServiceUnavailable, "owner_check_failed", "cannot verify a terminal process recorded for this conversation",
+				map[string]any{"session_id": sid, "tmux_pane_id": t.PaneID}}
+		}
+		return &handoffError{http.StatusConflict, "session_owned", "this conversation is open in a terminal",
+			map[string]any{"owner": "terminal", "session_id": sid, "tmux_pane_id": t.PaneID}}
+	}
+	workers, err := m.liveWorkersFor(parent, sid)
+	if err != nil {
+		return &handoffError{http.StatusServiceUnavailable, "owner_check_failed", "checking worker owners: " + err.Error(), map[string]any{"session_id": sid}}
+	}
+	for _, e := range workers {
+		if e.ID == allowExec {
+			continue
+		}
+		return &handoffError{http.StatusConflict, "session_owned", "this conversation already has a live worker",
+			map[string]any{"owner": "worker", "session_id": sid, "execution_id": e.ID, "state": string(e.State)}}
+	}
+	return nil
 }

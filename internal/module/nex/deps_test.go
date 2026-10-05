@@ -63,12 +63,20 @@ func (fakeCCOperator) GetStatus(context.Context, string) (*agentcc.StatusInfo, e
 	return nil, nil
 }
 
+type fakeTerminals struct{}
+
+func (fakeTerminals) LiveBySessionID(context.Context, string, string) ([]agent.TerminalSession, error) {
+	return nil, nil
+}
+func (fakeTerminals) SubscribeSessionStart(func(agent.SessionStartEvent)) func() { return func() {} }
+
 // Compile-time checks that the fakes satisfy exactly what Init looks up.
 var (
 	_ session.SessionProvider = fakeSessionProvider{}
 	_ agent.OwnerResolver     = fakeOwnerResolver{}
 	_ livenessProber          = fakeProber{}
 	_ agentcc.CCOperator      = fakeCCOperator{}
+	_ agent.TerminalSessions  = fakeTerminals{}
 )
 
 // requiredProviders is every registry entry Init demands, keyed as the
@@ -77,11 +85,12 @@ var (
 // provider like the others, not something Init builds.
 func requiredProviders() map[string]any {
 	return map[string]any{
-		session.RegistryKey:     fakeSessionProvider{},
-		session.HandoffLocksKey: session.NewHandoffLocks(),
-		agent.OwnerResolverKey:  fakeOwnerResolver{},
-		proberKey:               fakeProber{},
-		agentcc.OperatorKey:     fakeCCOperator{},
+		session.RegistryKey:       fakeSessionProvider{},
+		session.HandoffLocksKey:   session.NewHandoffLocks(),
+		agent.OwnerResolverKey:    fakeOwnerResolver{},
+		proberKey:                 fakeProber{},
+		agentcc.OperatorKey:       fakeCCOperator{},
+		agent.TerminalSessionsKey: fakeTerminals{},
 	}
 }
 

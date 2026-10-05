@@ -609,15 +609,46 @@ var _ nexStore = (*fakeNexStore)(nil)
 // does — so a test can hold the lock "as the stream module" through the
 // same instance.
 type handoffEnv struct {
-	m        *Module
-	tmux     *tmux.FakeExecutor
-	sessions *handoffSessions
-	owners   *stubOwnerResolver
-	ops      *recordingCCOperator
-	svc      *fakeNexService
-	srv      *httptest.Server
-	registry *core.ServiceRegistry
+	m         *Module
+	tmux      *tmux.FakeExecutor
+	sessions  *handoffSessions
+	owners    *stubOwnerResolver
+	ops       *recordingCCOperator
+	svc       *fakeNexService
+	srv       *httptest.Server
+	registry  *core.ServiceRegistry
+	terminals *stubTerminals
 }
+
+// stubTerminals is the agent.TerminalSessions provider.
+type stubTerminals struct {
+	mu         sync.Mutex
+	live       map[string][]agent.TerminalSession // by session id
+	err        error
+	subscribed func(agent.SessionStartEvent)
+}
+
+func (s *stubTerminals) LiveBySessionID(_ context.Context, _, sid string) ([]agent.TerminalSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]agent.TerminalSession(nil), s.live[sid]...), nil
+}
+
+func (s *stubTerminals) SubscribeSessionStart(fn func(agent.SessionStartEvent)) func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscribed = fn
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.subscribed = nil
+	}
+}
+
+var _ agent.TerminalSessions = (*stubTerminals)(nil)
 
 func newHandoffEnv(t *testing.T) *handoffEnv {
 	t.Helper()
@@ -639,6 +670,7 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 		found: true,
 	}
 	ops := &recordingCCOperator{tmux: fakeTx}
+	terminals := &stubTerminals{}
 	svc := &fakeNexService{result: execution.Result{ID: "exec-1", State: store.StateQueued, EffectiveProfile: "handoff"}}
 
 	m := &Module{
@@ -647,13 +679,14 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 			Config: &nexconfig.Config{HostID: "host1", Sandbox: sandbox.Policy{MaxProfile: "handoff", DefaultProfile: "trusted"}},
 			Auth:   principalAuth("host1"),
 		},
-		sessions: sessions,
-		owners:   owners,
-		prober:   &handoffProber{tmux: fakeTx, readiness: agentcc.NewReadinessChecker(fakeTx)},
-		ccOps:    ops,
-		tmux:     fakeTx,
-		locks:    registry.MustGet(session.HandoffLocksKey).(*session.HandoffLocks),
-		logf:     discardLogf,
+		sessions:  sessions,
+		owners:    owners,
+		prober:    &handoffProber{tmux: fakeTx, readiness: agentcc.NewReadinessChecker(fakeTx)},
+		ccOps:     ops,
+		terminals: terminals,
+		tmux:      fakeTx,
+		locks:     registry.MustGet(session.HandoffLocksKey).(*session.HandoffLocks),
+		logf:      discardLogf,
 
 		handoffResolveTimeout:   time.Second,
 		handoffInterruptTimeout: 100 * time.Millisecond,
@@ -672,7 +705,7 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	return &handoffEnv{m: m, tmux: fakeTx, sessions: sessions, owners: owners, ops: ops, svc: svc, srv: srv, registry: registry}
+	return &handoffEnv{m: m, tmux: fakeTx, sessions: sessions, owners: owners, ops: ops, svc: svc, srv: srv, registry: registry, terminals: terminals}
 }
 
 // post sends body (a value marshalled to JSON, or a raw string) and decodes
