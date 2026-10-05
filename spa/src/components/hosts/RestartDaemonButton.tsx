@@ -18,7 +18,9 @@ interface Props {
   className?: string
 }
 
-const btnClass = 'px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 aria-disabled:opacity-50 cursor-pointer disabled:cursor-default aria-disabled:cursor-default inline-flex items-center gap-1'
+const btnClass = 'px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default inline-flex items-center gap-1'
+// Appended to whatever class is in effect, so a caller's className keeps the counting dim.
+const dimClass = 'aria-disabled:opacity-50 aria-disabled:cursor-default'
 
 export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', className }: Props) {
   const t = useI18nStore((s) => s.t)
@@ -45,7 +47,7 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
 
   return (
     <>
-      <button type="button" data-testid={testId} disabled={restarting} aria-disabled={counting || undefined} aria-busy={counting || undefined} onClick={() => void open()} className={className ?? btnClass}>
+      <button type="button" data-testid={testId} disabled={restarting} aria-disabled={counting || undefined} aria-busy={counting || undefined} onClick={() => void open()} className={`${className ?? btnClass} ${dimClass}`}>
         {restarting
           ? <><ArrowsClockwise size={12} aria-hidden="true" className="animate-spin" />{t('hosts.restart.restarting')}</>
           : (label ?? t('hosts.restart.button'))}

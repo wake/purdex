@@ -53,6 +53,15 @@ describe('RestartDaemonButton', () => {
     expect(restart).not.toHaveBeenCalled()
   })
 
+  it('custom className keeps the counting dimming classes', () => {
+    render(<RestartDaemonButton hostId="h1" className="my-custom btn-x" />)
+    const cls = screen.getByTestId('restart-daemon').className
+    expect(cls).toContain('my-custom')
+    expect(cls).toContain('btn-x')
+    expect(cls).toContain('aria-disabled:opacity-50')
+    expect(cls).toContain('aria-disabled:cursor-default')
+  })
+
   it('while the host restarts: spinner text, disabled', () => {
     useDaemonRestartStore.setState({ restarting: { h1: true } })
     render(<RestartDaemonButton hostId="h1" />)
