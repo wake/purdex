@@ -635,6 +635,17 @@ type stubTerminals struct {
 	live       map[string][]agent.TerminalSession // by session id
 	err        error
 	subscribed func(agent.SessionStartEvent)
+	calls      int
+	// byCall, when set, answers the n-th (1-based) LiveBySessionID call
+	// instead of live: the seam for "an owner appears between two looks".
+	byCall func(n int) []agent.TerminalSession
+}
+
+// Calls is the number of LiveBySessionID lookups so far.
+func (s *stubTerminals) Calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
 }
 
 func (s *stubTerminals) LiveBySessionID(_ context.Context, _, sid string) ([]agent.TerminalSession, error) {
@@ -642,6 +653,10 @@ func (s *stubTerminals) LiveBySessionID(_ context.Context, _, sid string) ([]age
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return nil, s.err
+	}
+	s.calls++
+	if s.byCall != nil {
+		return s.byCall(s.calls), nil
 	}
 	return append([]agent.TerminalSession(nil), s.live[sid]...), nil
 }

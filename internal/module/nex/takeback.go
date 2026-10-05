@@ -265,6 +265,14 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// And the owners once more: the re-check narrows, but cannot close, the
+	// window against an external resume; manual resumes are reconciled by
+	// the Q1 handler (P1a-4). Nothing was created here, so nothing to kill.
+	if herr := m.checkOwners(parent, sid, exec.ID, ""); herr != nil {
+		fail(herr)
+		return
+	}
+
 	if herr := m.resumeInWindow(sess, expected, body.ResumeCommand, sid); herr != nil {
 		fail(herr)
 		return

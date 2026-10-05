@@ -244,6 +244,23 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Step 10b: look at the owners again, right before the keys. The lease,
+	// interrupt, renew and create above are a window in which an external
+	// terminal can resume S; the sid lock only coordinates Purdex transfers.
+	// This narrows that window but cannot close it: a manual resume is
+	// reconciled by the Q1 handler (P1a-4). The session just created goes.
+	if herr := m.checkOwners(parent, sid, allowExec, ""); herr != nil {
+		killed := m.killCreatedSession(execID, info, herr.code)
+		if herr.detail == nil {
+			herr.detail = map[string]any{}
+		}
+		herr.detail["session_name"] = name
+		herr.detail["session_killed"] = killed
+		herr.detail["exited"] = !wasLive
+		herr.write(w)
+		return
+	}
+
 	// Step 11: resume in window 0 of the session just created, guarded by
 	// the generation it was created under. On failure the session is
 	// killed again — by id, under that same generation, so a server that
