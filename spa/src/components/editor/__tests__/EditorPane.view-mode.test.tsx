@@ -59,6 +59,42 @@ describe('EditorPane', () => {
     expect(screen.getByTestId('monaco-wrapper')).toHaveAttribute('data-active', 'true')
   })
 
+  // Shell cleanup §8.2: the editors focus at activation only when the pane is its tab's focus target.
+  it('passes isFocusTarget through to Monaco (absent → false)', async () => {
+    const pane = createPane('/notes/target.txt', 'pane-target')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/target.txt'), 'hello', {
+      language: 'plaintext', languageSource: 'manual', eol: 'lf', encoding: 'utf8',
+    })
+    useEditorStore.getState().attachPane(pane.id, getBufferKey('/notes/target.txt'))
+
+    const { rerender } = renderEditorPane(pane)
+    await waitFor(() => screen.getByTestId('monaco-wrapper'))
+    expect(monacoPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ isActive: true, isFocusTarget: false }))
+
+    rerender(<EditorPane pane={pane} isActive isFocusTarget />)
+    expect(monacoPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ isActive: true, isFocusTarget: true }))
+  })
+
+  it('passes isFocusTarget through to TiptapEditor', async () => {
+    const pane = createPane('/notes/target.md', 'pane-target-md')
+    const backend = createBackend()
+    getFsBackendMock.mockReturnValue(backend)
+    useEditorStore.getState().openBuffer(getBufferKey('/notes/target.md'), '# hello', {
+      language: 'markdown', languageSource: 'manual', eol: 'lf', encoding: 'utf8',
+    })
+    useEditorStore.getState().attachPane(pane.id, getBufferKey('/notes/target.md'))
+    useEditorStore.getState().setEditorMode(pane.id, 'wysiwyg')
+
+    const { rerender } = renderEditorPane(pane)
+    await waitFor(() => screen.getByTestId('tiptap-editor'))
+    expect(tiptapPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ isActive: true, isFocusTarget: false }))
+
+    rerender(<EditorPane pane={pane} isActive isFocusTarget />)
+    expect(tiptapPropsSpy).toHaveBeenLastCalledWith(expect.objectContaining({ isActive: true, isFocusTarget: true }))
+  })
+
   it('keeps non-markdown files in source mode even if the pane state was previously live mode', async () => {
     const pane = createPane('/notes/plain.txt', 'pane-txt')
     const backend = createBackend()

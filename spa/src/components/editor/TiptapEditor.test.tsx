@@ -119,11 +119,11 @@ describe('TiptapEditor', () => {
   })
 
   it('focuses the editable content when the pane becomes active', () => {
-    const { rerender } = render(<TiptapEditor content="# Hello" isActive={false} onChange={() => {}} onSave={() => {}} />)
+    const { rerender } = render(<TiptapEditor content="# Hello" isActive={false} isFocusTarget onChange={() => {}} onSave={() => {}} />)
 
     focusSpy.mockClear()
 
-    rerender(<TiptapEditor content="# Hello" isActive={true} onChange={() => {}} onSave={() => {}} />)
+    rerender(<TiptapEditor content="# Hello" isActive={true} isFocusTarget onChange={() => {}} onSave={() => {}} />)
 
     expect(focusSpy).toHaveBeenCalledTimes(1)
     // Re-activation focus must not scroll the caret into view — otherwise a
@@ -133,10 +133,10 @@ describe('TiptapEditor', () => {
 
   it('focuses on the null→editor ready transition when active (AC2, M1)', () => {
     useEditorSpy.mockReturnValue(undefined) // editor 尚未 ready
-    const { rerender } = render(<TiptapEditor content="# Hi" isActive={true} onChange={() => {}} onSave={() => {}} />)
+    const { rerender } = render(<TiptapEditor content="# Hi" isActive={true} isFocusTarget onChange={() => {}} onSave={() => {}} />)
     focusSpy.mockClear()
     useEditorSpy.mockReturnValue(makeMockEditor()) // editor ready
-    rerender(<TiptapEditor content="# Hi" isActive={true} onChange={() => {}} onSave={() => {}} />)
+    rerender(<TiptapEditor content="# Hi" isActive={true} isFocusTarget onChange={() => {}} onSave={() => {}} />)
     expect(focusSpy).toHaveBeenCalled()
   })
 
@@ -197,7 +197,7 @@ describe('TiptapEditor', () => {
     })
     useEditorSpy.mockReturnValue(ed)
     render(
-      <TiptapEditor content="hi" isActive={true} initialViewState={initial}
+      <TiptapEditor content="hi" isActive={true} isFocusTarget initialViewState={initial}
         onChange={() => {}} onViewStateChange={() => {}} onSave={() => {}} />,
     )
     // selection restore goes through resolveRestoreSelection (mocked → {__fake})
@@ -308,5 +308,59 @@ describe('TiptapEditor', () => {
     unmount()
     // must not clobber the stored viewState with scrollTop:0/selection:null
     expect(onViewStateChange).not.toHaveBeenCalled()
+  })
+
+  // Shell cleanup §8.2: programmatic focus only at activation (mount active, the editor becoming ready while
+  // active, or isActive false→true), and only when this pane is its tab's focus target.
+  describe('activation-only focus', () => {
+    const view = (isActive: boolean, isFocusTarget: boolean) => (
+      <TiptapEditor content="# Hi" isActive={isActive} isFocusTarget={isFocusTarget} onChange={() => {}} onSave={() => {}} />
+    )
+
+    it('focuses at mount when active and the focus target', () => {
+      render(view(true, true))
+      expect(focusSpy).toHaveBeenCalled()
+      expect(focusSpy).toHaveBeenLastCalledWith({ preventScroll: true })
+    })
+
+    it('does not focus at mount when active but not the focus target', () => {
+      render(view(true, false))
+      expect(focusSpy).not.toHaveBeenCalled()
+    })
+
+    it('does not focus on the null→editor ready transition when active but not the focus target', () => {
+      useEditorSpy.mockReturnValue(undefined)
+      const { rerender } = render(view(true, false))
+      useEditorSpy.mockReturnValue(makeMockEditor())
+      rerender(view(true, false))
+      expect(focusSpy).not.toHaveBeenCalled()
+    })
+
+    it('reads the focus target at ready time: no focus if another pane became the target in that same render', () => {
+      useEditorSpy.mockReturnValue(undefined)
+      const { rerender } = render(view(true, true))
+      useEditorSpy.mockReturnValue(makeMockEditor())
+      rerender(view(true, false))
+      expect(focusSpy).not.toHaveBeenCalled()
+    })
+
+    it('does not focus on inactive→active when not the focus target', () => {
+      const { rerender } = render(view(false, false))
+      rerender(view(true, false))
+      expect(focusSpy).not.toHaveBeenCalled()
+    })
+
+    it('does not focus when it becomes the focus target while already active (a click in a visible tab)', () => {
+      const { rerender } = render(view(true, false))
+      rerender(view(true, true))
+      expect(focusSpy).not.toHaveBeenCalled()
+    })
+
+    it('focuses on inactive→active when the focus target', () => {
+      const { rerender } = render(view(false, true))
+      expect(focusSpy).not.toHaveBeenCalled()
+      rerender(view(true, true))
+      expect(focusSpy).toHaveBeenCalledTimes(1)
+    })
   })
 })
