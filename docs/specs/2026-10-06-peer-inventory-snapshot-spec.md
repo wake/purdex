@@ -57,10 +57,15 @@ It also prints `(partial: N sessions not resolved within budget)`.
   - The post-walk membership re-check is **one** batched tmux read for the pass, not one per pane.
   - The single-session `GET /api/sessions/{code}/provenance` uses the same machinery with its own snapshot.
 
-  > **統籌核准的推導（2026-10-06）— D4: the registry read in `/api/peers` uses the pass's snapshot too.**
-  > - Its `Liveness.PidAlive` and `Liveness.Info` are answered by the same snapshot the owner lookups use, so the pass is one process-table read, cost (b) in §2 included. `Stat` stays `os.Stat`.
-  > - Without this, R5's 300 ms is not safe under load.
-  > - The send path's registry read (`module.go:343`) is unchanged.
+  > **統籌核准的推導（2026-10-06）— D4: the registry read in the local inventory uses the pass's snapshot too.**
+  > - `localEnvelope` serves `/api/peers` and also the send, deliver and reply paths (`send.go:286`, `deliver.go:257`, `reply.go:109`). Its registry read answers `Liveness.Info` from the same snapshot the owner lookups use. That removes cost (b) in §2; without it, R5's 300 ms is not safe under load.
+  > - **Every registry verdict stays the same as today** (the coordinator's condition on D10):
+  >   - `PidAlive` stays today's `kill(pid, 0)`. That is a syscall, not a fork, and it is evaluated at the moment of the read.
+  >   - `Info` uses the snapshot only for a PID the snapshot contains and whose identity is unchanged (D10's re-check). A PID absent from the snapshot, or one whose process changed since it, gets today's per-PID `ReadProcessInfo`.
+  >   - So a process that exited, started, or was replaced between the snapshot and the read is judged exactly as today.
+  > - `ReadRegistryDiag` has no side effects: no file is removed, and nothing is cached across requests except a log-once warning set. A verdict only shapes that one response.
+  > - `Stat` stays `os.Stat`.
+  > - The helper manager's `LiveEntries` (`module.go:343`) and `titles.go:99` keep `m.liveness` unchanged.
 - **R3 — Darwin without per-PID forks.** The implementer picks one:
   - one `ps -A` with a format that parses unambiguously;
   - or sysctl `kern.proc.all` plus `kern.procargs2`, with no fork at all.
@@ -108,10 +113,11 @@ It also prints `(partial: N sessions not resolved within budget)`.
   >   - A CC started with a non-ASCII prompt argument costs 2 forks, and its fields are still exact.
   > - The fork-count test pins **zero** forks for readable plain-ASCII processes. The parity test pins the fallback against the per-PID reader for PID 1, for a zombie, and for every measured exotic argv.
   >
-  > **D10 — a snapshot is a point-in-time view** (from the codex plan review; 推導，待統籌確認).
-  > - `Alive`, the start time and `PPID` describe the process table at the moment of the snapshot. Frames and registry entries are judged as of that moment, as today's reader judged them as of its own read.
-  > - `ExePath` / `Argv` are read later, on first use. On darwin the reader then re-reads the PID's start time (`kern.proc.pid`, no fork). If the PID is gone or the start time changed, the read fails ("process changed since the snapshot"), so two processes are never mixed into one answer.
-  > - A registry entry whose process started in the milliseconds after the snapshot reads as dead for that one poll.
+  > **統籌核准的推導（2026-10-06）— D10: a snapshot is a point-in-time view** (from the codex plan review; approved on the D4 condition above).
+  > - For the owner lookups, `Alive`, the start time and `PPID` describe the process table at the moment of the snapshot. Frames are judged as of that moment, as today's reader judged them as of its own read.
+  >   - A frame needs its CC to start and to send a hook first. Both take far longer than the milliseconds between the snapshot and `ListAll`.
+  > - `ExePath` / `Argv` are read later, on first use. On darwin the reader then re-reads the PID's start time (`kern.proc.pid`, no fork). If the PID is gone or the start time changed, the read fails with `ErrProcessChanged`, so two processes are never mixed into one answer.
+  > - The registry never relies on point-in-time liveness (D4): it falls back to the per-PID reader for anything the snapshot cannot vouch for.
   >
   > **D3 — Linux forks per PID today** (`readProcessPPID` and `readProcessStartTime` are both `ps -p`). So Linux changes too:
   > - one `ps -A -o pid=,ppid=,lstart=` per snapshot (`lstart` is the last column);

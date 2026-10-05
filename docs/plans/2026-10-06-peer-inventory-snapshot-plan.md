@@ -75,13 +75,17 @@ D1–D8 are in the spec (R1 / R2 / R3 / §4 / §5 blocks). This section adds onl
   - In practice the walk and the registry reach CC (`node …/claude …`), shells and tmux, whose argv is plain ASCII, so they take zero forks. A CC started with a CJK prompt argument costs 2 forks when it is read. That is still exact, and still far below today's 4 per PID.
 - **D3 — Linux:** one `ps -A -o pid=,ppid=,lstart=` per snapshot. `/proc` exe and cmdline on first `Read`, with today's errors.
 - **D9 — `Executor.PaneSessionID` has no production caller after B.** It stays: removing it touches every fake. A follow-up issue is filed when B merges.
-- **D10 — a snapshot is a point-in-time view, and `Read` re-checks identity** (codex #5 and #8).
-  - `Alive`, `StartTime` and `PPID` describe the process table at the moment of the snapshot, by construction. This is what spec R2 asks for.
-  - A frame or registry entry is judged as of that moment, as today's reader judged it as of the moment of its own read.
-  - `ExePath` / `Argv` are read later, on first `Read`. To stop a PID reused in between from mixing two processes into one `ProcessInfo`:
-    - **darwin:** `Read` re-reads `kern.proc.pid.<pid>` (sysctl, no fork) **after** the args read. If the PID is gone or its start time differs from the snapshot's, `Read` returns an error: "process changed since the snapshot". The owner walk treats that as an unreadable process (Indeterminate → excluded). The registry treats it as unclassifiable (unknown), as it treats a failed `ReadProcessInfo` today.
-    - **Linux:** keeps today's level, where the per-PID reader also mixes a `ps` PPID with later `/proc` reads. That is noted in a code comment.
-  - A registry entry whose PID is absent from the snapshot (it started in the milliseconds after the snapshot) reads as dead for this poll, the same as a PID that has exited. The next poll sees it. B3 pins this.
+- **D10 (coordinator-approved, on the D4 condition) — the snapshot is a point-in-time view for the owner lookups. `Read` re-checks identity.** Codex #5 and #8.
+  - For the owner walk, `Alive`, `StartTime` and `PPID` describe the process table at the moment of the snapshot. That is what spec R2 asks for.
+  - `ExePath` / `Argv` are read later, on first `Read`.
+    - **darwin:** `Read` re-reads `kern.proc.pid.<pid>` (sysctl, no fork) **after** the args read. If the PID is gone or its start time differs, `Read` returns an error wrapping the exported `agent.ErrProcessChanged`. The owner walk treats that as an unreadable process (Indeterminate → excluded).
+    - **Linux:** keeps today's level, where the per-PID reader also mixes a `ps` PPID with later `/proc` reads (code comment).
+  - A PID absent from the snapshot gives an error wrapping the exported `agent.ErrNotInSnapshot`.
+  - **The registry never relies on point-in-time liveness.** That is the coordinator's condition: `localEnvelope` also serves send, deliver and reply (`send.go:286`, `deliver.go:257`, `reply.go:109`).
+    - `PidAlive` stays `kill(pid, 0)`, a syscall evaluated at the read.
+    - `Info` uses the snapshot only when `Read` succeeds. On `ErrNotInSnapshot` or `ErrProcessChanged` it calls today's per-PID `ReadProcessInfo`.
+    - So every registry verdict is today's. B3 pins each case.
+  - `ReadRegistryDiag` has no side effects (no file removed, only a log-once warning set). Checked 2026-10-06.
 
 ## Working rules
 
@@ -122,7 +126,8 @@ Files:
    - `SnapshotProcesses(ctx) (*ProcessSnapshot, error)` calls `snapshotProcessesPlatform(ctx)`.
    - It stores, per PID: `ppid`, `lstart`, `start`, and `startErr` (Linux).
    - `Read` builds `ExePath` / `Argv` on first use through `procArgsPlatform(pid, entry)` and remembers the result, failure included. A `sync.Mutex` guards the lazy fill.
-   - `Read` / `StartTime` of a PID not in the snapshot return an error. `Alive` returns `false`.
+   - `Read` / `StartTime` of a PID not in the snapshot return an error wrapping the exported `ErrNotInSnapshot`. `Alive` returns `false`.
+   - A failed identity re-check wraps the exported `ErrProcessChanged` (D10).
    - `pid <= 0` → `invalid pid`.
 4. **darwin.**
    - `unix.SysctlKinfoProcSlice("kern.proc.all")`. Use `P_pid`, `Eproc.Ppid`, `P_starttime.Sec` (D1).
@@ -349,7 +354,10 @@ Files:
 2. `localEnvelope`, after the session list:
    - call `procs, procsErr := m.snapshotProcs(invCtx)` **once**;
    - `live := m.liveness`;
-   - if `procsErr == nil`, use `inventoryLiveness(live, procs)` (D4: `PidAlive` = `procs.Alive`, `Info` = `procs.Read`, `StartTime` derived from `Read`, `Stat` kept);
+   - if `procsErr == nil`, use `inventoryLiveness(live, procs)` (D4 / D10):
+     - `PidAlive` and `Stat` are kept;
+     - `Info(pid)` = `procs.Read(pid)`, except that `ErrNotInSnapshot` / `ErrProcessChanged` fall back to `live.Info(pid)`;
+     - `StartTime` is derived from that `Info`;
    - on error, log it, and the registry keeps today's per-PID liveness: that is today's behaviour, used only on this failure path;
    - `ReadRegistryDiag(m.registryDir, live)`.
 3. `pass := m.ownerPass(func() (agentpkg.ProcessView, error) { return procs, procsErr })`. That means the pass reuses the inventory's one snapshot, or its error, and never takes a second.
@@ -367,13 +375,13 @@ Files:
 6. New tests:
    1. **One snapshot, shared.** Setup:
       - a counting `snapshotProcs`;
-      - `m.liveness.PidAlive` / `Info` / `StartTime` armed to `t.Fatal` (codex #10);
+      - `m.liveness.Info` / `StartTime` armed to `t.Fatal` (codex #10). `PidAlive` stays a fake answering alive: by D10 it is still the per-read `kill` check;
       - a fake pass resolver whose `NewOwnerPass` records `src` and calls it.
 
       Assert:
       - 1 snapshot;
       - `src()` returns that same view;
-      - a registry entry whose PID only the view knows is alive;
+      - a live registry entry the view knows is classified from the view (`Info` from the view; the armed base `Info` is never called);
       - `Confirm` is called once;
       - every session is resolved through the pass.
    2. **Snapshot failure.** `snapshotProcs` errors. Assert:
@@ -383,11 +391,20 @@ Files:
       - the inventory answers with those sessions unresolved and `partial`.
    3. **`Confirm` errors for one code** → that row is unresolved and the envelope is `partial`. A `Found` code → owner row.
    4. **Budget.** Sessions after the `m.now()` deadline never reach `Resolve`.
-   5. **D10.** A registry entry whose PID is alive per `kill` but absent from the view is counted dead for this poll.
+   5. **D10, registry verdicts equal today's.** A table over `inventoryLiveness` with a fake view and a counting fake `m.liveness`:
+      - in the view and unchanged → `Info` from the view, base `Info` not called;
+      - absent from the view (`ErrNotInSnapshot`) → base `Info` called, and its answer used;
+      - `ErrProcessChanged` → base `Info` called;
+      - any other view error → returned as is (unclassifiable, as today);
+      - `PidAlive` is always base `PidAlive`.
+
+      End to end through `ReadRegistryDiag`: an entry the view lacks but `kill` says is alive is classified exactly as base `Info` says, not "dead".
 7. Mutations:
    - snapshot inside the loop → test 1 turns red;
    - give the registry `m.liveness` while the snapshot succeeded → test 1 turns red;
-   - give the pass `nil` instead of `src` → test 2 turns red: the snapshot count becomes 2 through the real pass, which test 1 also covers with a counting resolver.
+   - give the pass `nil` instead of `src` → test 2 turns red: the snapshot count becomes 2 through the real pass, which test 1 also covers with a counting resolver;
+   - drop the `ErrNotInSnapshot` fallback → test 5 turns red;
+   - answer `PidAlive` from the view → test 5 turns red.
 
 ### B4 — gates, mutation report, PR B
 
