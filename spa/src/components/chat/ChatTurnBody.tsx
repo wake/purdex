@@ -26,6 +26,7 @@ import ChatToolsLine from './ChatToolsLine'
 import ChatEditedLine from './ChatEditedLine'
 import ChatFailedLine from './ChatFailedLine'
 import { OmittedMedia, TruncatedHint } from '../room/prelude/Placeholders'
+import PastedBlock from '../room/prelude/PastedBlock'
 import { blockShownBytes, isOmittedMedia } from '../room/prelude/placeholder-utils'
 
 function blockAt(messages: StreamMessage[], op: TurnOperation): ContentBlock | undefined {
@@ -117,6 +118,20 @@ function ChatMessage({ msg, i, interrupted, lineAt, idOf }: {
       if (block.type === 'tool_result') { line(j); return }
       if (!fromSubagent && isOmittedMedia(block)) {
         rows.push(<ChatBubble key={j} side="user"><OmittedMedia block={block} /></ChatBubble>)
+        return
+      }
+      // U3: a pasted body (the prelude's split) is the room's block, never
+      // your line's text — but on your side, in a bubble of its own, since
+      // chat tells speakers apart by side. Then its one cut hint.
+      if (!fromSubagent && block.type === 'text' && block.pasted) {
+        const key = keyAt({ idOf }, i, j)
+        rows.push(
+          <ChatBubble key={j} side="user">
+            <PastedBlock text={block.text ?? ''} lines={block.pasted.lines} cut={block.pasted.cut}
+              foldKey={`${key}:paste`} searchUnit={searchUnitId(key, 'text')} />
+          </ChatBubble>,
+        )
+        if (block.truncated) rows.push(<TruncatedHint key={`cut-${j}`} shown={blockShownBytes(block)} total={block.total_bytes ?? null} />)
         return
       }
       if (fromSubagent || block.type !== 'text' || !block.text) return

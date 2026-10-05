@@ -140,6 +140,21 @@ const goldenPrelude: Fixture = {
   prelude: derivePrelude(sanitizePreludePage(golden)!.items),
 }
 
+// U3: pasted text in the prelude — typed + a folded paste + typed, a short
+// paste that starts with `/`, and a paste the daemon cut.
+const pasted = (id: string, body: string) => `<pasted_content id="${id}">\n${body}\n</pasted_content id="${id}">`
+const withPaste: Fixture = {
+  messages: [said('live question')],
+  turnStarts: [0],
+  tools: {},
+  prelude: derivePrelude([
+    { pos: '1', at: 0, kind: 'user', msg: said(`look at this:\n${pasted('000a', lines(30, 'pasted'))}\nthanks`) },
+    { pos: '2', at: 0, kind: 'assistant', msg: asst({ type: 'text', text: 'seen' }) },
+    { pos: '3', at: 0, kind: 'user', msg: said(pasted('000b', '/compact short')) },
+    { pos: '4', at: 0, kind: 'user', msg: usr({ type: 'text', text: `cut <pasted_content id="000c">\n${lines(50, 'cut')}`, truncated: true, total_bytes: 99999 }) },
+  ]),
+}
+
 type View = 'room' | 'chat'
 
 function Harness({ fixture, view, registered, onStore }: {
@@ -213,7 +228,7 @@ describe.each<View>(['room', 'chat'])('search anchors in %s', (view) => {
   })
 })
 
-describe.each<[string, Fixture]>([['every kind', everyKind], ['edge shapes', edgeShapes], ['with a prelude', withPrelude], ['golden prelude', goldenPrelude]])('%s fixture', (_, fixture) => {
+describe.each<[string, Fixture]>([['every kind', everyKind], ['edge shapes', edgeShapes], ['with a prelude', withPrelude], ['golden prelude', goldenPrelude], ['pasted text', withPaste]])('%s fixture', (_, fixture) => {
   describe.each<View>(['room', 'chat'])('%s', (view) => {
     const units = unitsFor(fixture, view)
 

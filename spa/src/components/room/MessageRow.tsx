@@ -27,6 +27,7 @@ import { attachmentsOf } from '../../lib/nex/attachments'
 import SubagentBlock, { SubagentTaskSuffix } from './SubagentBlock'
 import type { RenderCtx } from './render-message'
 import { OmittedMedia, TruncatedHint } from './prelude/Placeholders'
+import PastedBlock from './prelude/PastedBlock'
 import { blockShownBytes, isOmittedMedia } from './prelude/placeholder-utils'
 
 export interface MessageRowProps {
@@ -215,6 +216,13 @@ export default function MessageRow({ msg, i, ctx, preludePos }: MessageRowProps)
       : -1
     const userBlock = (block: ContentBlock, j: number): ReactNode => {
       if (block.type === 'tool_result') return <OperationAt key={j} msg={msg} i={i} j={j} ctx={ctx} />
+
+      // U3: a pasted body (the prelude's split) is never a command or a user
+      // line, whatever it starts with. Its one cut hint comes from `decorate`.
+      if (block.type === 'text' && block.pasted) {
+        return <PastedBlock key={j} text={block.text ?? ''} lines={block.pasted.lines} cut={block.pasted.cut}
+          foldKey={`${keyAt(ctx, i, j)}:paste`} searchUnit={searchUnitId(keyAt(ctx, i, j), 'text')} />
+      }
 
       if (block.type === 'text' && block.text) {
         // The interrupt keeps its meaning, loses the bubble: an error-toned

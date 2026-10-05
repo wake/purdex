@@ -4,7 +4,8 @@ import { sanitizePreludePage } from './prelude-wire'
 import golden from './__fixtures__/prelude-golden-nexen.json'
 import { applyPreludePage, defaultPreludeState, derivePrelude, preludeBlocks, preludeFailed, preludeLoading, type PreludeState } from './prelude'
 import type { PreludeItem, PreludePage } from './prelude-wire'
-import type { StreamMessage } from './message-types'
+import type { ContentBlock, StreamMessage } from './message-types'
+import { isOpeningLine } from './turns'
 
 const msg = (pos: string, type: 'user' | 'assistant', content: unknown[]): PreludeItem =>
   ({ pos, at: 1000, kind: type, msg: { type, parent_tool_use_id: null, message: { role: type, content, stop_reason: null } } as unknown as StreamMessage })
@@ -127,6 +128,75 @@ describe('preludeBlocks', () => {
       { kind: 'entry', entry: v.entries[4] },
       { kind: 'span', start: 3, end: 4 },
     ])
+  })
+})
+
+describe('derivePrelude — pasted text (U3)', () => {
+  const PASTE = '<pasted_content id="bb1b">\nline 1\nline 2\n</pasted_content id="bb1b">'
+  const content = (v: ReturnType<typeof derivePrelude>, m: number) => (v.messages[m] as { message: { content: unknown[] } }).message.content
+
+  it('splits a human user text block into typed parts and pasted bodies', () => {
+    const v = derivePrelude([msg('1', 'user', [{ type: 'text', text: `look:\n${PASTE}` }, { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 3 } }])])
+    expect(content(v, 0)).toEqual([
+      { type: 'text', text: 'look:' },
+      { type: 'text', text: 'line 1\nline 2', pasted: { lines: 2, cut: false } },
+      { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 3 } },
+    ])
+  })
+
+  it('leaves a tool_result carrier, a subagent frame and assistant text untouched', () => {
+    const carrier = msg('1', 'user', [{ type: 'tool_result', tool_use_id: 't', content: PASTE }, { type: 'text', text: PASTE }])
+    const frame: PreludeItem = { pos: '2', at: 0, kind: 'user', msg: { type: 'user', parent_tool_use_id: 'task', message: { role: 'user', content: [{ type: 'text', text: PASTE }], stop_reason: null } } as unknown as StreamMessage }
+    const agent = msg('3', 'assistant', [{ type: 'text', text: PASTE }])
+    const v = derivePrelude([carrier, frame, agent])
+    expect(v.messages[0]).toBe((carrier as { msg: StreamMessage }).msg)
+    expect(v.messages[1]).toBe(frame.msg)
+    expect(v.messages[2]).toBe((agent as { msg: StreamMessage }).msg)
+  })
+
+  it('keeps a message with nothing to split as the same object', () => {
+    const plain = msg('1', 'user', [{ type: 'text', text: 'hi' }])
+    expect(derivePrelude([plain]).messages[0]).toBe((plain as { msg: StreamMessage }).msg)
+  })
+
+  describe('wire path, the live capture\'s shape (execution 06GGS9V6…)', () => {
+    // The CLI's wrapper (≤ 2 newlines before the opener and after the closer
+    // are its own) around 1501 filler lines of 50 chars; 76617 is the capture's total.
+    const lines = Array.from({ length: 1501 }, (_, k) => `filler line ${String(k).padStart(5, '0')} for the prelude truncation check`)
+    const full = `\n\n<pasted_content id="bb1b">\n${lines.join('\n')}\n</pasted_content id="bb1b">\n`
+    const through = (block: Record<string, unknown>) => content(derivePrelude(sanitizePreludePage({
+      state: 'ok', prev_cursor: null,
+      items: [{ pos: '9', kind: 'user', at: 1, payload: { type: 'user', message: { role: 'user', content: [block] } } }],
+    })!.items), 0) as ContentBlock[]
+
+    it('complete: a single pasted block of N lines, not cut, no typed parts', () => {
+      expect(through({ type: 'text', text: full })).toEqual([{ type: 'text', text: lines.join('\n'), pasted: { lines: 1501, cut: false } }])
+    })
+
+    it('cut at 64 KiB (closer gone): a cut paste carrying the hint flags and the whole block\'s shown size', () => {
+      const shown = full.slice(0, 65536)
+      const [pasted, ...rest] = through({ type: 'text', text: shown, truncated: true, total_bytes: 76617 })
+      expect(rest).toEqual([])
+      // 65536 − 29 wrapper chars before the body = 1284 whole 51-char lines + 23 chars.
+      expect(pasted).toMatchObject({ type: 'text', pasted: { lines: 1285, cut: true }, truncated: true, total_bytes: 76617, shown_bytes: 65536 })
+      expect(pasted.text!.startsWith('filler line 00000 ')).toBe(true)
+      expect(pasted.text!.endsWith('\nfiller line 01284 for t')).toBe(true)
+    })
+  })
+})
+
+describe('preludeBlocks — a pasted-only prompt (U3)', () => {
+  it('opens a new chat span; the agent\'s work before it stays in the previous span', () => {
+    const v = derivePrelude([
+      msg('1', 'user', [{ type: 'text', text: 'q1' }]),
+      msg('2', 'assistant', [{ type: 'tool_use', id: 't', name: 'Bash', input: {} }]),
+      msg('3', 'user', [{ type: 'tool_result', tool_use_id: 't', content: 'out' }]),
+      msg('4', 'assistant', [{ type: 'text', text: 'a1' }]),
+      msg('5', 'user', [{ type: 'text', text: '<pasted_content id="0a0a">\nonly pasted\n</pasted_content id="0a0a">' }]),
+      msg('6', 'assistant', [{ type: 'text', text: 'a2' }]),
+    ])
+    expect(isOpeningLine(v.messages[4])).toBe(true)
+    expect(preludeBlocks(v)).toEqual([{ kind: 'span', start: 0, end: 4 }, { kind: 'span', start: 4, end: 6 }])
   })
 })
 

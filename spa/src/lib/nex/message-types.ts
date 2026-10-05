@@ -20,6 +20,15 @@ export interface ContentBlock {
   /** Prelude only (spec §4.3): the block was cut at `max_block_bytes`. */
   truncated?: boolean
   total_bytes?: number
+  /** Prelude only (U3, spec §5.3): a `text` block that is one pasted body, wrapper removed; `cut` = its closing tag was cut off. */
+  pasted?: { lines: number; cut: boolean }
+  /**
+   * SPA-internal, never on the wire (the prelude sanitizer rebuilds blocks
+   * from known fields): set only by `splitPasted` on the last block it makes
+   * from a cut block — the whole block's shown bytes, so its one truncation
+   * hint reports what the block showed, not just that last part (§5.3).
+   */
+  shown_bytes?: number
 }
 
 export interface AssistantMessage {

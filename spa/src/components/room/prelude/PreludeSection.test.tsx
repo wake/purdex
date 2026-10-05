@@ -7,6 +7,7 @@ import { derivePrelude, type PreludeView } from '../../../lib/nex/prelude'
 import { sanitizePreludePage, type PreludeItem } from '../../../lib/nex/prelude-wire'
 import type { StreamMessage } from '../../../lib/nex/message-types'
 import ChatTranscript from '../../chat/ChatTranscript'
+import { useI18nStore } from '../../../stores/useI18nStore'
 import golden from '../../../lib/nex/__fixtures__/prelude-golden-nexen.json'
 
 const m = (pos: string, type: 'user' | 'assistant', content: unknown[]): PreludeItem =>
@@ -551,5 +552,110 @@ describe('PreludeSection scroll anchors (#1534)', () => {
     draw('chat')
     expect(document.querySelector('[data-prelude-poses~="11"]')?.getAttribute('data-prelude-pos')).toBe('9')
     expect(document.querySelector('[data-prelude-poses~="1"]')).toBeNull()
+  })
+})
+
+// U3 (spec §5.3 "Pasted text"): each pasted segment is a titled fold block, never a user line.
+describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection pasted text (U3) in %s mode', (mode) => {
+  const OPEN = '<pasted_content id="bb1b">'
+  const CLOSE = '</pasted_content id="bb1b">'
+  const body = (n: number) => Array.from({ length: n }, (_, k) => `pasted line ${k}`).join('\n')
+  const draw = (items: PreludeItem[]) => render(<PreludeSection {...base} mode={mode} view={derivePrelude(items)} status="ok" done />)
+  const titles = () => screen.getAllByTestId('prelude-pasted-title').map((e) => e.textContent)
+  // Your typed lines (chat: your bubbles, minus the ones a paste sits in).
+  const userLines = () => screen.queryAllByTestId(mode === 'room' ? 'room-user-line' : 'chat-bubble-user')
+    .filter((e) => !e.querySelector('[data-testid="prelude-pasted"]'))
+  const items = [
+    m('1', 'user', [{ type: 'text', text: `${OPEN}\nsolo\n${CLOSE}` }]),
+    m('2', 'assistant', [{ type: 'text', text: 'ok' }]),
+    m('3', 'user', [{ type: 'text', text: `${OPEN}\n${body(3)}\n${CLOSE}` }]),
+    m('4', 'user', [{ type: 'text', text: `${OPEN}\n${body(5)}`, truncated: true, total_bytes: 90000 }]),
+  ]
+
+  it('titles each paste by its line count: one line, several, and N+ when cut', () => {
+    draw(items)
+    expect(titles()).toEqual(['Pasted text · 1 line', 'Pasted text · 3 lines', 'Pasted text · 5+ lines'])
+  })
+
+  it('zh-TW: 「貼上的文字 · N 行」, 「N+ 行」 when cut', () => {
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    try {
+      draw(items)
+      expect(titles()).toEqual(['貼上的文字 · 1 行', '貼上的文字 · 3 行', '貼上的文字 · 5+ 行'])
+    } finally {
+      act(() => { useI18nStore.getState().setLocale('en') })
+    }
+  })
+
+  it('typed text around a paste draws as your lines; the paste folds, never inside one, and no wrapper shows', () => {
+    draw([m('1', 'user', [{ type: 'text', text: `fix this:\n${OPEN}\n${body(60)}\n${CLOSE}\nthanks` }])])
+    const section = screen.getByTestId('worker-prelude')
+    expect(section.textContent).not.toContain('pasted_content')
+    // The room's line carries a `›` prefix; chat's bubble does not.
+    expect(userLines().map((e) => e.textContent?.replace('›', '').trim())).toEqual(['fix this:', 'thanks'])
+    const pasted = screen.getByTestId('prelude-pasted')
+    expect(pasted.closest('[data-testid="room-user-line"]')).toBeNull()
+    if (mode === 'chat') {
+      // Chat tells speakers apart by side: your paste sits on your side, in a bubble of its own.
+      const bubble = pasted.closest('[data-testid="chat-bubble-user"]')
+      expect(bubble).not.toBeNull()
+      expect(bubble!.textContent).not.toContain('fix this:')
+      expect(bubble!.textContent).not.toContain('thanks')
+    } else {
+      expect(pasted.closest('[data-testid="chat-bubble-user"]')).toBeNull()
+    }
+    expect(pasted.textContent).not.toContain('pasted line 59')
+    expect(document.querySelector('[data-search-unit="p1:1:text"]')).toBeNull()
+    fireEvent.click(within(pasted).getByTestId('fold-more'))
+    expect(document.querySelector('[data-search-unit="p1:1:text"]')!.textContent).toBe(body(60))
+    expect(section.textContent).not.toContain('pasted_content')
+  })
+
+  it('a body that starts with / is pasted text, not a slash command', () => {
+    draw([m('1', 'user', [{ type: 'text', text: `${OPEN}\n/compact now\n${CLOSE}` }])])
+    expect(screen.queryByTestId('room-command')).toBeNull()
+    expect(userLines()).toHaveLength(0)
+    expect(screen.getByTestId('prelude-pasted').textContent).toContain('/compact now')
+  })
+
+  it('a cut paste shows exactly one truncation hint, after it, and the fold adds none — collapsed or expanded', () => {
+    draw([m('1', 'user', [{ type: 'text', text: `look ${OPEN}\n${body(60)}`, truncated: true, total_bytes: 200000 }])])
+    const once = () => {
+      const hints = screen.getAllByTestId('prelude-truncated')
+      expect(hints).toHaveLength(1)
+      expect(screen.queryAllByTestId('fold-daemon-truncated')).toHaveLength(0)
+      expect(screen.getByTestId('prelude-pasted').compareDocumentPosition(hints[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(hints[0].textContent).toContain('of 195 KB')
+    }
+    once()
+    fireEvent.click(screen.getByTestId('fold-more'))
+    once()
+  })
+
+  it('a closed paste then a short typed suffix in a cut block: the one hint reports the whole block (64 KB), not the suffix (10 B)', () => {
+    const head = `${OPEN}\n`
+    const tail = `\n${CLOSE}\n\nand thanks` // the typed suffix is 10 bytes
+    draw([m('1', 'user', [{ type: 'text', text: head + 'x'.repeat(65536 - head.length - tail.length) + tail, truncated: true, total_bytes: 70000 }])])
+    expect(titles()).toEqual(['Pasted text · 1 line'])
+    expect(userLines().map((e) => e.textContent?.replace('›', '').trim())).toEqual(['and thanks'])
+    expect(screen.getAllByTestId('prelude-truncated').map((e) => e.textContent)).toEqual(['Too long — showing the first 64 KB of 68 KB'])
+  })
+
+  it('wire path, the live capture\'s shape: N lines when complete; cut at 64 KiB, N+ and one hint for the whole block', () => {
+    const lines = Array.from({ length: 1501 }, (_, k) => `filler line ${String(k).padStart(5, '0')} for the prelude truncation check`)
+    const full = `\n\n${OPEN}\n${lines.join('\n')}\n${CLOSE}\n`
+    const wire = (block: Record<string, unknown>) => sanitizePreludePage({
+      state: 'ok', prev_cursor: null,
+      items: [{ pos: '1', kind: 'user', at: 1, payload: { type: 'user', message: { role: 'user', content: [block] } } }],
+    })!.items
+    const { unmount } = draw(wire({ type: 'text', text: full }))
+    expect(titles()).toEqual(['Pasted text · 1501 lines'])
+    expect(screen.queryAllByTestId('prelude-truncated')).toHaveLength(0)
+    unmount()
+    draw(wire({ type: 'text', text: full.slice(0, 65536), truncated: true, total_bytes: 76617 }))
+    expect(titles()).toEqual(['Pasted text · 1285+ lines'])
+    expect(userLines()).toHaveLength(0)
+    expect(screen.getAllByTestId('prelude-truncated').map((e) => e.textContent)).toEqual(['Too long — showing the first 64 KB of 75 KB'])
+    expect(screen.getByTestId('worker-prelude').textContent).not.toContain('pasted_content')
   })
 })

@@ -3,8 +3,9 @@
 // at the front); the view is derived from it on render and is what both
 // transcripts draw. Nothing here reads or writes the execution's own
 // messages, seq, turns or tools. Pure.
-import type { StreamMessage } from './message-types'
+import type { ContentBlock, StreamMessage, UserMessage } from './message-types'
 import { isOpeningLine } from './turns'
+import { splitPasted } from './pasted-text'
 import type { PreludeItem, PreludePage } from './prelude-wire'
 import { recordN2ToolResultIn, recordN2ToolUseIn, type ToolActivity } from './tool-activity'
 
@@ -100,6 +101,25 @@ export interface PreludeView {
 /** The prelude's message names: `p<pos>` never collides with the live list's `${i}`. */
 export const preludeId = (pos: string): string => `p${pos}`
 
+/**
+ * U3 (spec §5.3): a top-level human prompt's text blocks with each pasted
+ * segment split out (`splitPasted`). A tool_result carrier and a subagent's
+ * frame stay literal. The same object when nothing was split.
+ */
+function withPastes(msg: StreamMessage): StreamMessage {
+  if (msg.type !== 'user') return msg
+  const u = msg as UserMessage
+  const content = u.message?.content
+  if (u.parent_tool_use_id != null || !Array.isArray(content) || content.some((b) => b.type === 'tool_result')) return msg
+  let split = false
+  const next = content.flatMap((b): ContentBlock[] => {
+    const parts = splitPasted(b)
+    if (parts.length !== 1 || parts[0] !== b) split = true
+    return parts
+  })
+  return split ? ({ ...u, message: { ...u.message, content: next } } as StreamMessage) : msg
+}
+
 export function derivePrelude(items: readonly PreludeItem[]): PreludeView {
   const entries: PreludeEntry[] = []
   const messages: StreamMessage[] = []
@@ -110,7 +130,7 @@ export function derivePrelude(items: readonly PreludeItem[]): PreludeView {
       case 'assistant':
       case 'user':
         entries.push({ pos: it.pos, kind: 'message', m: messages.length })
-        messages.push(it.msg)
+        messages.push(it.kind === 'user' ? withPastes(it.msg) : it.msg)
         ids.push(preludeId(it.pos))
         break
       case 'tool_use':
