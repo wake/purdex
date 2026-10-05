@@ -214,6 +214,7 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register("agent.events", m.events)
 	c.Registry.Register("agent.module", m)
 	c.Registry.Register(OwnerResolverKey, OwnerResolver(m))
+	c.Registry.Register(TerminalSessionsKey, TerminalSessions(m))
 
 	if m.uploadDir == "" {
 		c.CfgMu.RLock()

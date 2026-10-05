@@ -339,6 +339,28 @@ func (s *FramesStore) ListByPane(paneID string) ([]Frame, error) {
 	return collectFrames(rows)
 }
 
+// ListRootsBySessionID returns the top-level frames whose recorded session id
+// is sessionID (conversation entity spec §4.2). No index: agent_frames holds
+// live runs only.
+func (s *FramesStore) ListRootsBySessionID(sessionID string) ([]Frame, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`
+		SELECT frame_id, pane_id, agent_type, pid, ppid, process_start_time,
+		       parent_frame_id, subagents_json, status, started_at, last_seen_at, verified,
+		       session_id, cwd, transcript_path
+		FROM agent_frames
+		WHERE session_id = ? AND (parent_frame_id IS NULL OR parent_frame_id = '')
+		ORDER BY started_at ASC
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectFrames(rows)
+}
+
 func (s *FramesStore) ListAll() ([]Frame, error) {
 	rows, err := s.db.Query(`
 		SELECT frame_id, pane_id, agent_type, pid, ppid, process_start_time,

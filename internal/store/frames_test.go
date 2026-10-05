@@ -1340,3 +1340,40 @@ func TestMigrateFramesDB_AddsTranscriptPathColumn(t *testing.T) {
 		t.Fatalf("ListAll = %+v err=%v", all, err)
 	}
 }
+
+func TestFramesStore_ListRootsBySessionID(t *testing.T) {
+	s := openTestFramesStore(t)
+	seed := func(pane string, pid int, parent, session string, startedAt int64) Frame {
+		f, err := s.Upsert(Frame{
+			PaneID: pane, AgentType: "cc", PID: pid, PPID: 1, ProcessStartTime: "st",
+			ParentFrameID: parent, Status: agentpkg.StatusIdle, StartedAt: startedAt,
+			LastSeenAt: startedAt, Verified: true, SessionID: session,
+			Cwd: "/w",
+		})
+		if err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+		return f
+	}
+	late := seed("%1", 1, "", "S", 20)
+	early := seed("%2", 2, "", "S", 10)
+	if err := s.SetTranscriptPath(early.FrameID, "/t/S.jsonl", 1<<40); err != nil {
+		t.Fatal(err)
+	}
+	seed("%3", 3, "", "OTHER", 5)
+	seed("%1", 4, late.FrameID, "S", 30)
+
+	got, err := s.ListRootsBySessionID("S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].FrameID != early.FrameID || got[1].FrameID != late.FrameID {
+		t.Fatalf("want [early, late] roots only, got %+v", got)
+	}
+	if got[0].TranscriptPath != "/t/S.jsonl" || got[0].Cwd != "/w" {
+		t.Errorf("columns not scanned: %+v", got[0])
+	}
+	if none, err := s.ListRootsBySessionID(""); err != nil || none != nil {
+		t.Fatalf("empty id: got %v, %v", none, err)
+	}
+}
