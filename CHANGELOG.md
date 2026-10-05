@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.487] - 2026-10-06
+
+> 只動 daemon，使用者看不到變化。這是「一個對話＝一個主體」的第一段，後續的 worker 退出與擁有者檢查會用到它。**daemon 尚未部署**：要等後面幾段累積完，由統籌跟使用者約時間一起重啟。SPA 與 Electron 都不必更新。
+
+### Internal：對話主體 P1a-1——終端機查詢、SessionStart 訂閱、transcript_path（#1572）
+
+- **transcript_path**：Claude Code 每個 hook 都帶 `transcript_path`，現在會存進 `agent_frames.transcript_path`（新欄位，啟動時自動補）。寫入順序跟 session identity 相同（`identity_seq`），也放進 provenance 信封與 `GET /api/sessions/{code}/provenance` 的回應。
+- **依 session id 查終端機**：新增 `agent.terminal-sessions` 服務，`LiveBySessionID(ctx, agentType, sid)` 回傳記錄著這個 session id 的 root frame。只回 pid 還活著、啟動時間對得上的；讀不到啟動時間的會標成 `Verified=false`，不算 owner（spec D1）。
+- **SessionStart 訂閱**：`SubscribeSessionStart(fn)`。只有真正的 SessionStart、拿到 provenance 信封、而且 session identity 確實寫進 frame，才會發出事件。每個訂閱者有自己的佇列和消費者：同一個 session 只留最新一筆，最多 1024 個 session，超過時送一筆 `Overflow` 事件代表「全部重查」。發布不會擋住 hook，事件也不會遺失。
+- spec／plan：`docs/specs/2026-10-06-conversation-entity-spec.md`、`docs/plans/2026-10-06-conversation-entity-plan.md`（#1571）。
+
 ## [1.0.0-alpha.486] - 2026-10-06
 
 > 只有 SPA，走 HMR；daemon 與 Electron 不必更新。標題列與狀態列 mode 鈕開出的確認框，請在 Electron 上點一次確認（見 #1566 的 review 紀錄）。
