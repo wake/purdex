@@ -1,0 +1,106 @@
+import { describe, it, expect } from 'vitest'
+import { sanitizePreludePage } from './prelude-wire'
+import sample from './__fixtures__/prelude-contract-sample.json'
+
+const asst = (pos: string, text: string) => ({
+  pos, kind: 'assistant', at: 1759651200123,
+  payload: { type: 'assistant', message: { id: 'msg_1', role: 'assistant', content: [{ type: 'text', text }] }, session_id: 's', uuid: 'u' },
+})
+
+describe('sanitizePreludePage', () => {
+  it('keeps a well-formed ok page in order and maps the cursor', () => {
+    const page = sanitizePreludePage({ state: 'ok', items: [asst('10.0', 'a'), asst('20.0', 'b')], prev_cursor: 'c1', total_bytes: 99 })
+    expect(page).not.toBeNull()
+    expect(page!.items.map((i) => i.pos)).toEqual(['10.0', '20.0'])
+    expect(page!.prevCursor).toBe('c1')
+    expect(page!.totalBytes).toBe(99)
+  })
+
+  it('reads none / gone as terminal states with no items and no cursor', () => {
+    expect(sanitizePreludePage({ state: 'none', items: [], prev_cursor: null })).toEqual({ state: 'none', items: [], prevCursor: null, totalBytes: null })
+    expect(sanitizePreludePage({ state: 'gone', items: [asst('1', 'x')], prev_cursor: 'c' })).toEqual({ state: 'gone', items: [], prevCursor: null, totalBytes: null })
+  })
+
+  it('rejects a body that is not a page', () => {
+    expect(sanitizePreludePage(null)).toBeNull()
+    expect(sanitizePreludePage({ state: 'weird' })).toBeNull()
+    expect(sanitizePreludePage({ state: 'ok', items: [], prev_cursor: 42 })).toBeNull()
+    expect(sanitizePreludePage({ state: 'ok', items: [], prev_cursor: 'x'.repeat(257) })).toBeNull()
+  })
+
+  it('drops items with a bad pos, an unknown kind, or no message, and keeps the first of a duplicated pos', () => {
+    const page = sanitizePreludePage({
+      state: 'ok', prev_cursor: null,
+      items: [
+        asst('a:b', 'colon'), asst('x'.repeat(65), 'long'), { ...asst('1', 'unknown'), kind: 'result' },
+        { pos: '2', kind: 'user', at: 1, payload: { type: 'user' } },
+        asst('3', 'first'), asst('3', 'second'),
+      ],
+    })
+    expect(page!.items).toHaveLength(1)
+    expect(page!.items[0]).toMatchObject({ pos: '3', kind: 'assistant' })
+  })
+
+  it('turns string content into one text block and forces a top-level frame', () => {
+    const page = sanitizePreludePage({
+      state: 'ok', prev_cursor: null,
+      items: [{ pos: '5', kind: 'user', at: 7, payload: { type: 'user', parent_tool_use_id: 'toolu_x', message: { role: 'user', content: 'hello' } } }],
+    })
+    const it0 = page!.items[0]
+    expect(it0.kind).toBe('user')
+    if (it0.kind !== 'user') throw new Error('kind')
+    expect(it0.msg).toMatchObject({ type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'text', text: 'hello' }], stop_reason: null } })
+    expect(it0.at).toBe(7)
+  })
+
+  it('reads N2, segment, compaction and note items', () => {
+    const page = sanitizePreludePage({
+      state: 'ok', prev_cursor: null,
+      items: [
+        { pos: '6.1', kind: 'tool_use', at: 1, payload: { tool_use_id: 'toolu_1', name: 'Bash' } },
+        { pos: '6.2', kind: 'tool_result', at: 2, payload: { tool_use_id: 'toolu_1', status: 'ok' } },
+        { pos: '7', kind: 'prelude.segment', at: 0, payload: { entrypoint: 'cli' } },
+        { pos: '8', kind: 'prelude.compaction', at: 0, payload: { trigger: 'auto', pre_tokens: 9 } },
+        { pos: '9', kind: 'prelude.note', at: 0, payload: { source: 'command_output', text: 'ok', truncated: true } },
+        { pos: '10', kind: 'tool_use', at: 1, payload: { name: 'NoId' } },
+      ],
+    })
+    expect(page!.items.map((i) => i.kind)).toEqual(['tool_use', 'tool_result', 'prelude.segment', 'prelude.compaction', 'prelude.note'])
+    expect(page!.items[4]).toMatchObject({ source: 'command_output', text: 'ok', truncated: true })
+    expect(page!.items[3]).toMatchObject({ trigger: 'auto' })
+  })
+
+  it('cleans every content block so nothing downstream can throw (Review Focus 5)', () => {
+    const page = sanitizePreludePage({
+      state: 'ok', prev_cursor: null,
+      items: [{
+        pos: '1', kind: 'assistant', at: 1,
+        payload: { type: 'assistant', message: { role: 'assistant', content: [
+          { text: 'no type' },
+          { type: 'text', text: 42 },
+          { type: 'tool_use', id: 't', name: 'Bash', input: 'rm -rf' },
+          { type: 'tool_result', tool_use_id: 't', content: 7 },
+          { type: 'image', source: 'base64…' },
+          { type: 'text', text: 'ok', truncated: 'yes', total_bytes: -3 },
+        ] } },
+      }],
+    })
+    const it0 = page!.items[0]
+    if (it0.kind !== 'assistant') throw new Error('kind')
+    expect((it0.msg as { message: { content: unknown[] } }).message.content).toEqual([
+      { type: 'text' },
+      { type: 'tool_use', id: 't', name: 'Bash', input: {} },
+      { type: 'tool_result', tool_use_id: 't', content: '' },
+      { type: 'text', text: 'ok' },
+    ])
+  })
+})
+
+describe('contract sample (spec §4.3)', () => {
+  it('every kind of the hand-written sample page survives the sanitiser unchanged', () => {
+    const page = sanitizePreludePage(sample)!
+    expect(page.state).toBe('ok')
+    expect(page.items).toHaveLength(sample.items.length)
+    expect(new Set(page.items.map((i) => i.kind))).toEqual(new Set(['prelude.segment', 'user', 'assistant', 'tool_use', 'tool_result', 'prelude.note', 'prelude.compaction']))
+  })
+})

@@ -1,0 +1,186 @@
+{
+  "state": "ok",
+  "items": [
+    {
+      "pos": "0",
+      "kind": "prelude.segment",
+      "at": 1759651200000,
+      "payload": {
+        "entrypoint": "cli"
+      }
+    },
+    {
+      "pos": "180",
+      "kind": "user",
+      "at": 1759651201000,
+      "payload": {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "List the files in this repo"
+            }
+          ]
+        },
+        "parent_tool_use_id": null,
+        "session_id": "0f6c1a52-7b1e-4c2a-9d3e-5a8b2c4d6e10",
+        "uuid": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "pos": "612",
+      "kind": "assistant",
+      "at": 1759651203000,
+      "payload": {
+        "type": "assistant",
+        "message": {
+          "id": "msg_01A",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "I will run ls."
+            }
+          ]
+        },
+        "parent_tool_use_id": null,
+        "session_id": "0f6c1a52-7b1e-4c2a-9d3e-5a8b2c4d6e10",
+        "uuid": "00000000-0000-4000-8000-000000000002"
+      }
+    },
+    {
+      "pos": "1024",
+      "kind": "assistant",
+      "at": 1759651204000,
+      "payload": {
+        "type": "assistant",
+        "message": {
+          "id": "msg_01B",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_01A",
+              "name": "Bash",
+              "input": {
+                "command": "ls"
+              }
+            }
+          ]
+        },
+        "parent_tool_use_id": null,
+        "session_id": "0f6c1a52-7b1e-4c2a-9d3e-5a8b2c4d6e10",
+        "uuid": "00000000-0000-4000-8000-000000000003"
+      }
+    },
+    {
+      "pos": "1024.1",
+      "kind": "tool_use",
+      "at": 1759651204000,
+      "payload": {
+        "tool_use_id": "toolu_01A",
+        "name": "Bash",
+        "input": {
+          "command": "ls"
+        }
+      }
+    },
+    {
+      "pos": "1530",
+      "kind": "user",
+      "at": 1759651205000,
+      "payload": {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_01A",
+              "content": "README.md\nspa\n"
+            }
+          ]
+        },
+        "parent_tool_use_id": null,
+        "session_id": "0f6c1a52-7b1e-4c2a-9d3e-5a8b2c4d6e10",
+        "uuid": "00000000-0000-4000-8000-000000000004"
+      }
+    },
+    {
+      "pos": "1530.1",
+      "kind": "tool_result",
+      "at": 1759651205000,
+      "payload": {
+        "tool_use_id": "toolu_01A",
+        "name": "Bash",
+        "status": "ok",
+        "duration_ms": 42,
+        "output": {
+          "text": "README.md\nspa\n",
+          "total_lines": 2,
+          "total_bytes": 14,
+          "truncated": false
+        }
+      }
+    },
+    {
+      "pos": "1802",
+      "kind": "prelude.note",
+      "at": 1759651206000,
+      "payload": {
+        "source": "command_output",
+        "text": "Compacted conversation",
+        "truncated": false
+      }
+    },
+    {
+      "pos": "2010",
+      "kind": "prelude.compaction",
+      "at": 1759651207000,
+      "payload": {
+        "trigger": "auto",
+        "pre_tokens": 168000
+      }
+    },
+    {
+      "pos": "2300",
+      "kind": "user",
+      "at": 1759651208000,
+      "payload": {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "What is in this screenshot?"
+            },
+            {
+              "type": "image",
+              "source": {
+                "type": "omitted",
+                "media_type": "image/png",
+                "bytes": 48213
+              }
+            }
+          ]
+        },
+        "parent_tool_use_id": null,
+        "session_id": "0f6c1a52-7b1e-4c2a-9d3e-5a8b2c4d6e10",
+        "uuid": "00000000-0000-4000-8000-000000000005"
+      }
+    },
+    {
+      "pos": "2700",
+      "kind": "prelude.segment",
+      "at": 1759651209000,
+      "payload": {
+        "entrypoint": "sdk-cli"
+      }
+    }
+  ],
+  "prev_cursor": "eyJvIjoxODB9",
+  "total_bytes": 2950
+}
