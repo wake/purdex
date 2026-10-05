@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,12 @@ import (
 )
 
 const psLstartLayout = "Mon Jan _2 15:04:05 2006"
+
+// runPS is the one way this package forks ps. Fork count is the cost the
+// process snapshot exists to remove, so tests swap this to count it.
+var runPS = func(ctx context.Context, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, "ps", args...).Output()
+}
 
 type ProcessInfo struct {
 	PID       int
@@ -27,7 +34,7 @@ func ReadProcessInfo(pid int) (ProcessInfo, error) {
 }
 
 func readProcessStartTime(pid int) (time.Time, error) {
-	out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "lstart=").Output()
+	out, err := runPS(context.Background(), "-p", fmt.Sprintf("%d", pid), "-o", "lstart=")
 	if err != nil {
 		return time.Time{}, fmt.Errorf("read start time for pid %d: %w", pid, err)
 	}
@@ -39,7 +46,7 @@ func readProcessStartTime(pid int) (time.Time, error) {
 }
 
 func readProcessPPID(pid int) (int, error) {
-	out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "ppid=").Output()
+	out, err := runPS(context.Background(), "-p", fmt.Sprintf("%d", pid), "-o", "ppid=")
 	if err != nil {
 		return 0, fmt.Errorf("read ppid for pid %d: %w", pid, err)
 	}
