@@ -160,7 +160,7 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
   const decorate = (block: ContentBlock, j: number, el: ReactNode): ReactNode => {
     if (isOmittedMedia(block)) return <OmittedMedia key={j} block={block} />
     if (!block.truncated) return el
-    return <Fragment key={j}>{el}<TruncatedHint shown={blockShownBytes(block)} total={block.total_bytes ?? 0} /></Fragment>
+    return <Fragment key={j}>{el}<TruncatedHint shown={blockShownBytes(block)} total={block.total_bytes ?? null} /></Fragment>
   }
 
   // --- Assistant messages ---
@@ -198,42 +198,42 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
       ? um.message.content.findIndex((b) => b.type === 'text' && !!b.text && b.text !== INTERRUPT_TEXT && !b.text.startsWith('/'))
       : -1
     const userBlock = (block: ContentBlock, j: number): ReactNode => {
-        if (block.type === 'tool_result') return <OperationAt key={j} msg={msg} i={i} j={j} ctx={ctx} />
+      if (block.type === 'tool_result') return <OperationAt key={j} msg={msg} i={i} j={j} ctx={ctx} />
 
-        if (block.type === 'text' && block.text) {
-          // The interrupt keeps its meaning, loses the bubble: an error-toned
-          // line at the edge, on theme tokens.
-          if (block.text === INTERRUPT_TEXT) {
-            return (
-              <div key={j} data-testid="interrupted-msg"
-                className="flex items-center gap-1.5 text-sm text-status-error italic">
-                <Prohibit size={14} />
-                <span>{t('stream.interrupted')}</span>
-              </div>
-            )
-          }
-
-          // The prompt an agent wrote for its subagent: not the human's
-          // line, whatever its first character is.
-          const anchor = searchUnitId(keyAt(ctx, i, j), 'text')
-          if (fromSubagent) return <RoomSubagentLine key={j} text={block.text} searchUnit={anchor} />
-
-          // A slash command: the human's line, told apart by its icon and face.
-          if (block.text.startsWith('/')) {
-            return (
-              <div key={j} data-testid="room-command"
-                className="flex items-center gap-1.5 text-[13px] text-status-warning font-mono">
-                <TerminalWindow size={14} weight="bold" />
-                <span data-search-unit={anchor}>{block.text}</span>
-              </div>
-            )
-          }
-
-          return <RoomUserLine key={j} text={block.text} searchUnit={anchor}
-            attachments={atts && j === attsAt ? <AttachmentThumbs items={atts} /> : undefined} />
+      if (block.type === 'text' && block.text) {
+        // The interrupt keeps its meaning, loses the bubble: an error-toned
+        // line at the edge, on theme tokens.
+        if (block.text === INTERRUPT_TEXT) {
+          return (
+            <div key={j} data-testid="interrupted-msg"
+              className="flex items-center gap-1.5 text-sm text-status-error italic">
+              <Prohibit size={14} />
+              <span>{t('stream.interrupted')}</span>
+            </div>
+          )
         }
 
-        return null
+        // The prompt an agent wrote for its subagent: not the human's
+        // line, whatever its first character is.
+        const anchor = searchUnitId(keyAt(ctx, i, j), 'text')
+        if (fromSubagent) return <RoomSubagentLine key={j} text={block.text} searchUnit={anchor} />
+
+        // A slash command: the human's line, told apart by its icon and face.
+        if (block.text.startsWith('/')) {
+          return (
+            <div key={j} data-testid="room-command"
+              className="flex items-center gap-1.5 text-[13px] text-status-warning font-mono">
+              <TerminalWindow size={14} weight="bold" />
+              <span data-search-unit={anchor}>{block.text}</span>
+            </div>
+          )
+        }
+
+        return <RoomUserLine key={j} text={block.text} searchUnit={anchor}
+          attachments={atts && j === attsAt ? <AttachmentThumbs items={atts} /> : undefined} />
+      }
+
+      return null
     }
     return (
       <div>

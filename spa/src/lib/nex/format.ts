@@ -15,6 +15,6 @@ export function firstLine(text: string, max = 80): string {
 /** A byte count for a label: B under 1 KiB, whole KB under 1 MiB, one decimal MB above. */
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  if (Math.round(n / 1024) < 1024) return `${Math.round(n / 1024)} KB`
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }

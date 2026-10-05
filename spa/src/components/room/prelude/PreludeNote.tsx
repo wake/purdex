@@ -8,6 +8,7 @@ import { foldPlan, utf8Length } from '../../../lib/nex/fold'
 import { searchUnitId } from '../../../lib/nex/transcript-search'
 import { FoldedOutput } from '../FoldedOutput'
 import { useFold } from '../fold-context'
+import RoomProse from '../RoomProse'
 import { TruncatedHint } from './Placeholders'
 
 export interface PreludeNoteProps {
@@ -26,13 +27,13 @@ export default function PreludeNote({ id, source, text, truncated, totalBytes, s
   const [expanded, toggle] = useFold(`${id}:note`)
   const plan = useMemo(() => foldPlan({ text }), [text])
   const anchor = searchUnitId(`${id}:note`, 'text')
-  const hint: ReactNode = truncated ? <TruncatedHint shown={utf8Length(text)} total={totalBytes ?? 0} /> : null
+  const hint: ReactNode = truncated ? <TruncatedHint shown={utf8Length(text)} total={totalBytes} /> : null
   if (source === 'bash_input') {
     return (
       <div data-testid="prelude-bash-input">
         <div className="flex items-center gap-1.5 text-[13px] text-status-warning font-mono">
           <TerminalWindow size={14} weight="bold" />
-          <span data-search-unit={anchor}>! {text}</span>
+          <span>! </span><span data-search-unit={anchor}>{text}</span>
         </div>
         {hint}
       </div>
@@ -46,12 +47,24 @@ export default function PreludeNote({ id, source, text, truncated, totalBytes, s
       </div>
     )
   }
-  const label = source === 'peer_message' ? t('worker.prelude.note_peer') : null
+  if (source === 'peer_message') {
+    // Spec §5.3: a labelled block whose body is drawn like agent prose
+    // (markdown, never folded).
+    return (
+      <div data-testid="prelude-note-peer_message" className="space-y-1">
+        <div className="text-xs text-text-muted">{t('worker.prelude.note_peer')}</div>
+        <RoomProse content={text} searchUnit={anchor} />
+        {hint}
+      </div>
+    )
+  }
+  // command_output / bash_output fold like tool output; any other source
+  // is unknown to this build and drawn muted.
+  const known = source === 'command_output' || source === 'bash_output'
   return (
-    <div data-testid={`prelude-note-${source}`} className="space-y-1">
-      {label && <div className="text-xs text-text-muted">{label}</div>}
+    <div data-testid={`prelude-note-${source}`}>
       <FoldedOutput text={text} plan={plan} expanded={expanded} onToggle={toggle} searchUnit={anchor}
-        tone={stream === 'stderr' ? 'error' : 'normal'} />
+        tone={stream === 'stderr' ? 'error' : known ? 'normal' : 'muted'} />
       {hint}
     </div>
   )

@@ -674,6 +674,7 @@
   "worker.prelude.image": "[圖片 · {{type}} · {{size}}]",
   "worker.prelude.document": "[文件 · {{type}} · {{size}}]",
   "worker.prelude.truncated": "內容過長，只顯示前 {{shown}}（共 {{total}}）",
+  "worker.prelude.truncated_unknown": "內容過長，只顯示前 {{shown}}",
   "worker.prelude.search_incomplete": "更早的內容尚未全部載入",
   "worker.prelude.load_all": "全部載入",
   "stream.permission.allow": "允許",

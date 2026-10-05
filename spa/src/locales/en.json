@@ -674,6 +674,7 @@
   "worker.prelude.image": "[image · {{type}} · {{size}}]",
   "worker.prelude.document": "[document · {{type}} · {{size}}]",
   "worker.prelude.truncated": "Too long — showing the first {{shown}} of {{total}}",
+  "worker.prelude.truncated_unknown": "Too long — showing the first {{shown}}",
   "worker.prelude.search_incomplete": "Earlier conversation not fully loaded",
   "worker.prelude.load_all": "Load all",
   "stream.permission.allow": "Allow",

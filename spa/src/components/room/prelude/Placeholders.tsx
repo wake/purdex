@@ -18,11 +18,13 @@ export function OmittedMedia({ block }: { block: ContentBlock }) {
   )
 }
 
-export function TruncatedHint({ shown, total }: { shown: number; total: number }) {
+export function TruncatedHint({ shown, total }: { shown: number; total: number | null }) {
   const t = useI18nStore((s) => s.t)
   return (
     <div data-testid="prelude-truncated" className="text-xs text-text-muted">
-      {t('worker.prelude.truncated', { shown: formatBytes(shown), total: formatBytes(total) })}
+      {total != null && total > 0
+        ? t('worker.prelude.truncated', { shown: formatBytes(shown), total: formatBytes(total) })
+        : t('worker.prelude.truncated_unknown', { shown: formatBytes(shown) })}
     </div>
   )
 }

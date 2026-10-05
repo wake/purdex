@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
+import { useEffect, type ReactNode } from 'react'
+import { FoldContext, useFoldMemory, type FoldStore } from '../fold-context'
 import PreludeSection from './PreludeSection'
 import { derivePrelude } from '../../../lib/nex/prelude'
 import { sanitizePreludePage, type PreludeItem } from '../../../lib/nex/prelude-wire'
@@ -139,5 +141,85 @@ describe('PreludeSection', () => {
       ] } } }],
     })!
     expect(() => render(<PreludeSection {...base} view={derivePrelude(page.items)} status="ok" done />)).not.toThrow()
+  })
+})
+
+const note = (pos: string, source: string, text: string, extra: Record<string, unknown> = {}): PreludeItem =>
+  ({ pos, at: 0, kind: 'prelude.note', source, text, truncated: false, totalBytes: null, stream: null, ...extra }) as unknown as PreludeItem
+
+describe('PreludeSection notes and labels', () => {
+  it('a bash_input line keeps "! " outside its anchor, which holds only the text', () => {
+    render(<PreludeSection {...base} view={derivePrelude([note('7', 'bash_input', 'ls')])} status="ok" done />)
+    expect(screen.getByTestId('prelude-bash-input').textContent).toContain('! ls')
+    expect(document.querySelector('[data-search-unit="p7:note:text"]')!.textContent).toBe('ls')
+  })
+
+  it('a task notification is a one-liner under its label', () => {
+    render(<PreludeSection {...base} view={derivePrelude([note('7', 'task_notification', 'build done')])} status="ok" done />)
+    const el = screen.getByTestId('prelude-task')
+    expect(el.textContent).toContain('Background task: build done')
+    expect(el.querySelector('[data-search-unit="p7:note:text"]')!.textContent).toBe('build done')
+  })
+
+  it('a peer message is labelled, markdown, and not folded', () => {
+    const long = Array.from({ length: 60 }, (_, i) => `line ${i}`).join('\n\n')
+    render(<PreludeSection {...base} view={derivePrelude([note('7', 'peer_message', `**bold**\n\n${long}`)])} status="ok" done />)
+    const el = screen.getByTestId('prelude-note-peer_message')
+    expect(el.textContent).toContain('Peer message')
+    expect(el.querySelector('strong')!.textContent).toBe('bold')
+    expect(screen.queryByTestId('fold-more')).toBeNull()
+    expect(el.textContent).toContain('line 59')
+    expect(el.querySelector('[data-search-unit="p7:note:text"]')).not.toBeNull()
+  })
+
+  it('an unknown note source is drawn muted, known ones are not', () => {
+    render(<PreludeSection {...base} view={derivePrelude([note('7', 'mystery', 'huh'), note('8', 'command_output', 'ok')])} status="ok" done />)
+    expect(screen.getByTestId('prelude-note-mystery').innerHTML).toContain('text-text-muted')
+    expect(screen.getByTestId('prelude-note-mystery').innerHTML).not.toContain('text-text-secondary')
+    expect(screen.getByTestId('prelude-note-command_output').innerHTML).toContain('text-text-secondary')
+  })
+
+  it('compaction manual and plain labels, and a raw entrypoint fallback', () => {
+    render(<PreludeSection {...base} status="ok" done view={derivePrelude([
+      { pos: '1', at: 0, kind: 'prelude.compaction', trigger: 'manual' },
+      { pos: '2', at: 0, kind: 'prelude.compaction', trigger: null },
+      { pos: '3', at: 0, kind: 'prelude.segment', entrypoint: 'vscode' },
+    ] as unknown as PreludeItem[])} />)
+    const text = screen.getByTestId('worker-prelude').textContent ?? ''
+    expect(text).toContain('Conversation compacted here (manual)')
+    expect(text).toContain('Conversation compacted here')
+    expect(screen.getAllByTestId('prelude-compaction').map((e) => e.getAttribute('aria-label'))).toContain('Conversation compacted here')
+    expect(screen.getByRole('separator', { name: 'vscode' })).toBeTruthy()
+  })
+
+  it('a note folds under the key p<pos>:note: expanding it shows the whole output', () => {
+    const held: { store?: FoldStore } = {}
+    function Wrapper({ children }: { children: ReactNode }) {
+      const store = useFoldMemory()
+      useEffect(() => { held.store = store }, [store])
+      return <FoldContext.Provider value={store}>{children}</FoldContext.Provider>
+    }
+    const text = Array.from({ length: 80 }, (_, i) => `row ${i}`).join('\n')
+    render(<Wrapper><PreludeSection {...base} view={derivePrelude([note('4', 'command_output', text)])} status="ok" done /></Wrapper>)
+    expect(screen.getByTestId('fold-more')).toBeTruthy()
+    expect(screen.getByTestId('fold-body').textContent).not.toContain('row 79')
+    act(() => held.store!.expand(['p4:note']))
+    expect(screen.getByTestId('fold-body').textContent).toContain('row 79')
+  })
+
+  it('a cut block or note without a usable total omits "of …"; the tool_use hint measures the serialized input', () => {
+    const view = derivePrelude([
+      m('2', 'assistant', [
+        { type: 'text', text: 'cut', truncated: true },
+        { type: 'tool_use', id: 't', name: 'Write', input: { content: 'x' }, truncated: true, total_bytes: 90000 },
+      ]),
+      note('4', 'command_output', 'big', { truncated: true, totalBytes: null }),
+    ])
+    render(<PreludeSection {...base} view={view} status="ok" done />)
+    const hints = screen.getAllByTestId('prelude-truncated').map((h) => h.textContent ?? '')
+    expect(hints).toHaveLength(3)
+    expect(hints[0]).toBe('Too long — showing the first 3 B')
+    expect(hints[1]).toBe('Too long — showing the first 15 B of 88 KB')   // {"content":"x"}
+    expect(hints[2]).toBe('Too long — showing the first 3 B')
   })
 })

@@ -41,4 +41,5 @@ it('formatBytes', () => {
   expect(formatBytes(512)).toBe('512 B')
   expect(formatBytes(122880)).toBe('120 KB')
   expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB')
+  expect(formatBytes(1048064)).toBe('1.0 MB')
 })
