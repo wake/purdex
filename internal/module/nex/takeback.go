@@ -52,7 +52,8 @@ func boundToSession(exec store.Execution, hostID, code string) bool {
 }
 
 // handleNexTakeback resumes an execution's Claude Code session in its tmux
-// pane and archives the execution. Every check that needs no execution
+// pane, then exits the worker (terminate + archive) under the control held
+// for the whole transfer (conversation entity D2/D5). Every check that needs no execution
 // access runs first — session, generation, "is CC already back?" — so a
 // stale tab cannot interrupt a running execution it can no longer resume
 // (spec §4.4 step 1). Only then is the row read, and a running execution
@@ -153,13 +154,22 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 1c: the execution lock (codex F1). Take-to-terminal names an
+	// Step 1c: the conversation id. Without one there is nothing to resume
+	// and nothing to lock; refused before any lock or lease.
+	sid := firstNonEmpty(exec.SessionID, exec.ResumeSessionID)
+	if sid == "" {
+		writeHandoffError(w, http.StatusConflict, "no_session_id", "execution has no Claude Code session id to resume", nil)
+		return
+	}
+
+	// Step 1d: the execution lock (codex F1). Take-to-terminal names an
 	// execution by path and holds only this key; the session lock above
-	// does not exclude it. Both handlers settle → resume → archive the
-	// same row, so without this a bound execution could be interrupted
-	// and resumed twice — into this pane and into a fresh session — at
-	// once. Order is fixed: session lock, then execution lock (the other
-	// handler takes only the latter), so the two cannot deadlock.
+	// does not exclude it. Both handlers settle → resume → exit the same
+	// row, so without this a bound execution could be interrupted and
+	// resumed twice — into this pane and into a fresh session — at once.
+	// Order is fixed: session lock, execution lock, then sid:<S> (the other
+	// handler takes the latter two in the same order), so they cannot
+	// deadlock.
 	execLock := takeToTerminalLockKey(execID)
 	if !m.locks.TryLock(execLock) {
 		writeHandoffError(w, http.StatusConflict, "takeback_in_progress", "a take-back is already in progress for this execution",
@@ -168,23 +178,79 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer m.locks.Unlock(execLock)
 
-	// Control for the interrupt, only when the row is running (interim until
-	// the take-back follows take-to-terminal's D5 order). Released on the
-	// way out — after the archive, as the sequence has always done. A
-	// caller-provided or borrowed lease is not ours to release (noRelease).
+	// Step 1e (D2): the conversation's lock; the manual-resume handler skips
+	// S while it is held.
+	sidKey := sidLockKey(sid)
+	if !m.locks.TryLock(sidKey) {
+		writeHandoffError(w, http.StatusConflict, "transfer_in_progress", "this conversation is being moved already",
+			map[string]any{"session_id": sid})
+		return
+	}
+	defer m.locks.Unlock(sidKey)
+
+	// Step 1f: an execution that is no longer live (archived or terminated)
+	// is not taken back — the SPA never offers it — and the owner check
+	// treats only a live row as S's owner.
+	if !isLiveExecution(exec) {
+		writeHandoffError(w, http.StatusConflict, "execution_archived", "execution is no longer live",
+			map[string]any{"execution_id": execID, "session_id": sid})
+		return
+	}
+	if herr := m.checkOwners(parent, sid, exec.ID, ""); herr != nil {
+		herr.write(w)
+		return
+	}
+
+	// From here the worker is live, so every failure leaves it live:
+	// exited:false in the detail (the worker's state when the call ends).
+	fail := func(herr *handoffError) {
+		if herr.detail == nil {
+			herr.detail = map[string]any{}
+		}
+		herr.detail["exited"] = false
+		herr.write(w)
+	}
+
+	// Control for the whole transfer (D5), for a row that takes sends
+	// (running or idle): the caller's lease, else one acquired here, else a
+	// pdx holder's borrowed. Held until after the exit; a caller-provided or
+	// borrowed lease is not ours to release (noRelease).
 	ctl := control{release: noRelease}
-	if exec.State == store.StateRunning {
+	if exec.State == store.StateRunning || exec.State == store.StateIdle {
 		var herr *handoffError
 		if ctl, herr = m.takeControl(parent, execID, body.LeaseID, principal); herr != nil {
-			herr.write(w)
+			fail(herr)
 			return
 		}
-		defer ctl.release()
+		defer func() { ctl.release() }() // ctl may be replaced by renewControl below
+		// The row read above predates the control: a turn may have started
+		// since, and the lease fences only sends made from now on. Settle
+		// what the row says under control.
+		fresh, gerr := m.getExecution(parent, execID)
+		if gerr != nil {
+			fail(&handoffError{http.StatusInternalServerError, "store_error", "re-reading execution: " + gerr.Error(), nil})
+			return
+		}
+		exec = fresh
+		if !isLiveExecution(exec) {
+			fail(&handoffError{http.StatusConflict, "execution_archived", "execution is no longer live",
+				map[string]any{"execution_id": execID, "session_id": sid}})
+			return
+		}
 	}
 	exec, sid, herr := m.settleForResume(parent, exec, ctl)
 	if herr != nil {
-		herr.write(w)
+		fail(herr)
 		return
+	}
+	if ctl.LeaseID != "" {
+		// A full TTL from here: the fence must outlive the resume, even when
+		// the lease was borrowed with seconds left. A lease lost since is
+		// re-taken, so the exit runs under a live one.
+		if ctl, herr = m.renewControl(parent, execID, ctl, principal); herr != nil {
+			fail(herr)
+			return
+		}
 	}
 
 	// Last look before a key goes out, lock still held: the store read and
@@ -193,26 +259,28 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 	// lands in CC's prompt as text. The execution is left as it is (settled,
 	// unarchived); the SPA learns which session is already up.
 	if m.prober.IsAliveFor("cc", target) {
-		writeHandoffError(w, http.StatusConflict, "cc_already_running", "Claude Code is already running in the pane",
-			map[string]any{"session_id": sid})
+		fail(&handoffError{http.StatusConflict, "cc_already_running", "Claude Code is already running in the pane",
+			map[string]any{"session_id": sid}})
 		return
 	}
 
 	if herr := m.resumeInWindow(sess, expected, body.ResumeCommand, sid); herr != nil {
-		herr.write(w)
+		fail(herr)
 		return
 	}
 
-	// The terminal is now the writer of that transcript; a second handoff
-	// creates a new execution. Failure to archive is logged, not fatal.
-	archived := true
-	if err := m.archiveExecution(parent, execution.ArchiveRequest{ExecutionID: execID, PrincipalID: principal, Archived: true}); err != nil {
-		m.logf("nex: takeback %s: archiving %s: %v", code, execID, err)
-		archived = false
+	// The terminal is now the writer of that transcript: the worker exits
+	// under the transfer's control (terminate + archive). The resume
+	// succeeded, so the answer is 200 either way; a worker that could not
+	// exit is reported as exited:false with exit_error.
+	out, herr := m.exitWorker(parent, exec, ctlPtr(ctl), principal)
+	resp := map[string]any{"session_id": sid, "archived": out.Archived, "exited": out.Exited()}
+	if herr != nil {
+		m.logf("nex: takeback %s: exiting %s after the resume: %s (%s)", code, execID, herr.code, herr.msg)
+		resp["exit_error"] = herr.code
 	}
-
-	m.logf("nex: takeback %s ← execution %s (session %s, archived=%v)", code, execID, sid, archived)
-	writeJSON(w, http.StatusOK, map[string]any{"session_id": sid, "archived": archived})
+	m.logf("nex: takeback %s ← execution %s (session %s, exited=%v)", code, execID, sid, out.Exited())
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handoffError is a step's structured failure — status, code, message and
