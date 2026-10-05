@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useState } from 'react'
-import { FolderOpen, Lightning } from '@phosphor-icons/react'
+import { Lightning } from '@phosphor-icons/react'
 import { getModules, registerModule } from '../module-registry'
 import { registerNewTabProvider, registerNewTabProviderSource } from '../new-tab-registry'
 import { registerSettingsSection } from '../settings-section-registry'
@@ -32,8 +32,6 @@ import { DevEnvironmentSection } from '../../components/settings/DevEnvironmentS
 import { ModulesSwitchboardSection } from '../../components/settings/ModulesSwitchboardSection'
 import { ProfileSection } from '../../components/settings/profile/ProfileSection'
 import { WorkerSettingsSection } from '../../components/settings/WorkerSettingsSection'
-import { FileTreeWorkspaceView } from '../../components/FileTreeView'
-import { FileTreeSessionView } from '../../components/FileTreeSessionView'
 import { useTabStore } from '../../stores/useTabStore'
 import type { ExecutionViewMode, PaneContent } from '../../types/tab'
 import type { PaneRendererProps } from '../module-registry'
@@ -69,7 +67,6 @@ import {
 } from './file-open-bootstrap'
 import { applyModuleFileOpeners } from './module-file-openers'
 import { clearAllForHmr as clearFileOpenerRegistryForHmr } from '../file-opener-registry'
-import { FilesWorkspaceSettingsSection } from '../../components/settings/FilesWorkspaceSettingsSection'
 import { PlaceholderSettingsSection } from '../../components/settings/PlaceholderSettingsSection'
 import { SETTINGS_ORDER } from '../settings-order'
 
@@ -282,50 +279,6 @@ export function registerBuiltinModules(): void {
 
   // FS backends
   registerBuiltinFsBackends(caps)
-
-  registerModule({
-    id: 'files',
-    name: 'Files',
-    disableable: true,
-    descriptionKey: 'modules.files.description',
-    settings: [
-      {
-        localId: 'workspace-files',
-        scope: 'workspace',
-        order: SETTINGS_ORDER.WORKSPACE_FILES,
-        labelKey: 'settings.section.files_workspace',
-        component: FilesWorkspaceSettingsSection,
-      },
-      // Spec §I1 — Files has workspace-scope settings but no global ones;
-      // the purdex placeholder keeps the Settings sidebar entry alongside
-      // the Modules Switchboard row.
-      {
-        localId: 'files',
-        scope: 'purdex',
-        order: SETTINGS_ORDER.MODULE_FILES,
-        labelKey: 'settings.section.files',
-        component: PlaceholderSettingsSection,
-      },
-    ],
-    views: [
-      {
-        id: 'file-tree-workspace',
-        label: 'Files (Workspace)',
-        labelKey: 'sidebar.view.files_workspace',
-        icon: FolderOpen,
-        scope: 'workspace',
-        component: FileTreeWorkspaceView,
-      },
-      {
-        id: 'file-tree-session',
-        label: 'Files (Session)',
-        labelKey: 'sidebar.view.files_session',
-        icon: FolderOpen,
-        scope: 'tab',
-        component: FileTreeSessionView,
-      },
-    ],
-  })
 
   // Settings sections
   registerSettingsSection({ id: 'appearance', label: 'settings.section.appearance', order: SETTINGS_ORDER.APPEARANCE, component: AppearanceSection })

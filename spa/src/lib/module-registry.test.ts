@@ -162,14 +162,14 @@ describe('workspaceConfig / globalConfig', () => {
     registerModule({
       id: 'files',
       name: 'Files',
-      workspaceConfig: [{ key: 'projectPath', type: 'string', label: '專案路徑' }],
+      workspaceConfig: [{ key: 'root', type: 'string', label: 'Root' }],
     })
     registerModule({ id: 'browser', name: 'Browser' })
 
     const result = getModulesWithWorkspaceConfig()
     expect(result).toHaveLength(1)
     expect(result[0].id).toBe('files')
-    expect(result[0].workspaceConfig![0].key).toBe('projectPath')
+    expect(result[0].workspaceConfig![0].key).toBe('root')
   })
 
   it('getModulesWithGlobalConfig returns modules that declared globalConfig', () => {

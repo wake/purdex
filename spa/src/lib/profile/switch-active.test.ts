@@ -85,7 +85,7 @@ function world(prefix: string, sentinel: string): ParkedWorld {
   const a = `${prefix}t1`
   const b = `${prefix}t2`
   const wsId = `${prefix}ws`
-  const ws: Workspace = { id: wsId, name: `${sentinel}-ws`, tabs: [a, b], activeTabId: b, moduleConfig: { files: { projectPath: `/${sentinel}` } } }
+  const ws: Workspace = { id: wsId, name: `${sentinel}-ws`, tabs: [a, b], activeTabId: b, moduleConfig: { files: { root: `/${sentinel}` } } }
   return { workspaces: [ws], tabs: { [a]: tab(a, sentinel), [b]: splitTab(b, sentinel, wsId) }, activeWorkspaceId: wsId, activeTabId: b }
 }
 
@@ -816,7 +816,7 @@ describe('copyMasterAsSlave', () => {
     const t = copy.tabs[copy.workspaces[0].tabs[0]]
     t.pinned = true
     if (t.layout.type === 'leaf' && t.layout.pane.content.kind === 'tmux-session') t.layout.pane.content.cachedName = 'changed'
-    ;(copy.workspaces[0].moduleConfig as Record<string, Record<string, unknown>>).files.projectPath = '/changed'
+    ;(copy.workspaces[0].moduleConfig as Record<string, Record<string, unknown>>).files.root = '/changed'
     expect(JSON.stringify(screen())).toBe(frozen)
   })
 

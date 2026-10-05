@@ -26,8 +26,8 @@ beforeEach(() => {
 
 describe('useGlobalSettingsStore', () => {
   it('set then get returns the merged value', () => {
-    useGlobalSettingsStore.getState().set('files', { projectPath: '/tmp' })
-    expect(useGlobalSettingsStore.getState().get('files')).toEqual({ projectPath: '/tmp' })
+    useGlobalSettingsStore.getState().set('files', { root: '/tmp' })
+    expect(useGlobalSettingsStore.getState().get('files')).toEqual({ root: '/tmp' })
   })
 
   it('shallow-merges top-level keys; nested objects are fully replaced', () => {
@@ -72,11 +72,11 @@ describe('useGlobalSettingsStore', () => {
   })
 
   it('persists to localStorage under STORAGE_KEYS.GLOBAL_SETTINGS', () => {
-    useGlobalSettingsStore.getState().set('files', { projectPath: '/tmp' })
+    useGlobalSettingsStore.getState().set('files', { root: '/tmp' })
     const raw = localStorage.getItem(STORAGE_KEYS.GLOBAL_SETTINGS)
     expect(raw).toBeTruthy()
     const parsed = JSON.parse(raw!)
-    expect(parsed.state.modules.files).toEqual({ projectPath: '/tmp' })
+    expect(parsed.state.modules.files).toEqual({ root: '/tmp' })
   })
 
   it('registers itself with syncManager', () => {
@@ -187,7 +187,7 @@ describe('useGlobalSettingsStore', () => {
     await rehydrateGlobalSettingsStore()
 
     expect(useGlobalSettingsStore.getState().modules).toEqual({})
-    useGlobalSettingsStore.getState().set('files', { projectPath: '/tmp' })
-    expect(useGlobalSettingsStore.getState().get('files')).toEqual({ projectPath: '/tmp' })
+    useGlobalSettingsStore.getState().set('files', { root: '/tmp' })
+    expect(useGlobalSettingsStore.getState().get('files')).toEqual({ root: '/tmp' })
   })
 })

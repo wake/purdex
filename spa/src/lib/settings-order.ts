@@ -4,9 +4,9 @@
  * Order values are **scoped per settings scope** (`purdex` / `workspace` /
  * `host`); the sidebar sorts each scope's contributions independently. The
  * tables below describe the visual bands within each scope. Numbers can
- * legitimately repeat across scopes (e.g. purdex `MODULE_CONFIG = 10` and
- * workspace `WORKSPACE_FILES = 10`) — they never compete because contribution
- * lists are filtered by scope before sorting.
+ * legitimately repeat across scopes (e.g. purdex `APPEARANCE = 0` and the
+ * editor's inline workspace home path `0`) — they never compete because
+ * contribution lists are filtered by scope before sorting.
  *
  * **purdex scope** — sidebar at `/settings`:
  *
@@ -15,7 +15,7 @@
  *   | Top built-in (core)         | 0 – 4  | Appearance / Terminal / Interface / Profile |
  *   | Top conditional built-in    | 5 – 9  | Electron (gated by canSystemTray)         |
  *   | Modules switchboard         | 10     | `module-config` (single header row)       |
- *   | Module-owned (alphabetical) | 11–19  | Browser / Editor / Files / Monitor / Worker |
+ *   | Module-owned (alphabetical) | 11–19  | Browser / Editor / Monitor / Worker       |
  *   | Tail built-in               | 20–29  | Dev Environment                           |
  *
  * The "Module-owned" band sorts by **English (default) sidebar short label**,
@@ -28,7 +28,7 @@
  *
  *   | Band                        | Range  | Examples                                  |
  *   |-----------------------------|--------|-------------------------------------------|
- *   | Module-owned                | 0 – 19 | Editor home path (inline 0) / Files (10)  |
+ *   | Module-owned                | 0 – 19 | Editor home path (inline 0)               |
  *
  * **host scope** — sidebar at `/settings/hosts/<id>`:
  *
@@ -59,15 +59,12 @@ export const SETTINGS_ORDER = {
   // Modules switchboard — single row, header of the modules group.
   MODULE_CONFIG: 10,
   // Module-owned (alphabetical by English sidebar short label —
-  // Browser / Editor / Files / Monitor). Constant name
+  // Browser / Editor / Monitor / Worker). Constant name
   // tracks module identity, value tracks display order (spec §I3).
   MODULE_BROWSER: 11,             // sidebar: "Browser"
   MODULE_EDITOR: 13,              // sidebar: "Editor"
-  MODULE_FILES: 14,               // sidebar: "Files"
   MODULE_PERFORMANCE_MONITOR: 15, // sidebar: "Monitor"
   MODULE_WORKER: 16,              // sidebar: "Worker"
   // Tail built-in — dev / debug surfaces.
   DEV_ENVIRONMENT: 20,
-  // ---- workspace scope ------------------------------------------------
-  WORKSPACE_FILES: 10,
 } as const

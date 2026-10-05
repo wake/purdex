@@ -26,8 +26,8 @@ beforeEach(() => {
 
 describe('useWorkspaceSettingsStore', () => {
   it('set then get returns the value', () => {
-    useWorkspaceSettingsStore.getState().set('wsA', 'files', { projectPath: '/a' })
-    expect(useWorkspaceSettingsStore.getState().get('wsA', 'files')).toEqual({ projectPath: '/a' })
+    useWorkspaceSettingsStore.getState().set('wsA', 'files', { root: '/a' })
+    expect(useWorkspaceSettingsStore.getState().get('wsA', 'files')).toEqual({ root: '/a' })
   })
 
   it('shallow-merges top-level keys; nested objects are fully replaced', () => {
@@ -74,11 +74,11 @@ describe('useWorkspaceSettingsStore', () => {
   })
 
   it('persists to localStorage under STORAGE_KEYS.WORKSPACE_SETTINGS', () => {
-    useWorkspaceSettingsStore.getState().set('wsA', 'files', { projectPath: '/a' })
+    useWorkspaceSettingsStore.getState().set('wsA', 'files', { root: '/a' })
     const raw = localStorage.getItem(STORAGE_KEYS.WORKSPACE_SETTINGS)
     expect(raw).toBeTruthy()
     const parsed = JSON.parse(raw!)
-    expect(parsed.state.workspaces.wsA.files).toEqual({ projectPath: '/a' })
+    expect(parsed.state.workspaces.wsA.files).toEqual({ root: '/a' })
   })
 
   it('registers itself with syncManager', () => {
@@ -92,7 +92,7 @@ describe('useWorkspaceSettingsStore', () => {
         state: {
           workspaces: {
             wsA: {
-              files: { projectPath: '/a' },
+              files: { root: '/a' },
               broken: null,
             },
             wsB: 42,
@@ -106,7 +106,7 @@ describe('useWorkspaceSettingsStore', () => {
 
     expect(useWorkspaceSettingsStore.getState().workspaces).toEqual({
       wsA: {
-        files: { projectPath: '/a' },
+        files: { root: '/a' },
       },
     })
 
@@ -174,10 +174,10 @@ describe('useWorkspaceSettingsStore', () => {
     it('leaves other modules under the same workspace alone', () => {
       const { set, removeKey, get } = useWorkspaceSettingsStore.getState()
       set('wsA', 'editor', { homePath: '/Users/x' })
-      set('wsA', 'files', { projectPath: '/Users/proj' })
+      set('wsA', 'files', { root: '/Users/proj' })
       removeKey('wsA', 'editor', 'homePath')
       expect(get('wsA', 'editor')).toBeUndefined()
-      expect(get('wsA', 'files')).toEqual({ projectPath: '/Users/proj' })
+      expect(get('wsA', 'files')).toEqual({ root: '/Users/proj' })
     })
 
     it('is a no-op when workspace, module, or key is absent', () => {
@@ -202,7 +202,7 @@ describe('useWorkspaceSettingsStore', () => {
     await rehydrateWorkspaceSettingsStore()
 
     expect(useWorkspaceSettingsStore.getState().workspaces).toEqual({})
-    useWorkspaceSettingsStore.getState().set('wsA', 'files', { projectPath: '/a' })
-    expect(useWorkspaceSettingsStore.getState().get('wsA', 'files')).toEqual({ projectPath: '/a' })
+    useWorkspaceSettingsStore.getState().set('wsA', 'files', { root: '/a' })
+    expect(useWorkspaceSettingsStore.getState().get('wsA', 'files')).toEqual({ root: '/a' })
   })
 })

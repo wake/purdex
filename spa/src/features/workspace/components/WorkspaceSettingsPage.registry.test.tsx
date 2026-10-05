@@ -255,7 +255,7 @@ describe('WorkspaceSettingsPage — workspace-scoped registry rendering', () => 
   })
 })
 
-describe('WorkspaceSettingsPage — Files module integration (SR-2)', () => {
+describe('WorkspaceSettingsPage — a disabled module hides its workspace setting (SR-2)', () => {
   let wsId: string
 
   beforeEach(() => {
@@ -274,33 +274,30 @@ describe('WorkspaceSettingsPage — Files module integration (SR-2)', () => {
     useModuleEnabledStore.setState({ enabled: {}, baseline: null })
   })
 
-  // CRITICAL: same-test before/after compare to prove SR-2 fix actually wires
-  // the disable filter (codex R1 P0). Reuse render() output to verify the
-  // legacy hardcoded `'專案路徑'` label is also gone — that string used to
-  // come from ConfigField + ModuleConfigSection's deprecated path; if it
-  // still shows up, the SR-2 mount removal is incomplete.
+  // CRITICAL: same-test before/after compare to prove the SR-2 fix actually
+  // wires the disable filter (codex R1 P0). This used to ride on the Files
+  // module; the shell cleanup (spec §5) deleted it, so the coverage now uses
+  // the editor module's `workspace-home-path` setting.
   //
-  // Asserted text uses the resolved en values ('Files' / 'Project path')
-  // because test-setup.ts registers built-in locales, so useI18nStore.t()
-  // returns translations rather than the raw keys (matches the user-visible
-  // contract).
-  it('reload-after-disable: Files header/input render when enabled, disappear when disabled before bootstrap', () => {
-    // Step 1 — Files enabled (default) → header + input rendered
+  // Asserted text uses the resolved en value ('Home Path (Workspace)', both
+  // the section heading and the input's aria-label) because test-setup.ts
+  // registers built-in locales, so useI18nStore.t() returns translations
+  // rather than the raw keys (matches the user-visible contract).
+  it('reload-after-disable: Editor home-path header/input render when enabled, disappear when disabled before bootstrap', () => {
+    // Step 1 — Editor enabled (default) → header + input rendered
     registerBuiltinModules()
     const { unmount } = render(<WorkspaceSettingsPage workspaceId={wsId} />)
-    expect(screen.getByRole('heading', { level: 3, name: /Files/i })).toBeInTheDocument()
-    expect(screen.getByLabelText('Project path')).toBeInTheDocument()
-    // Legacy hardcoded label from old ConfigField path must be gone
-    expect(screen.queryByText('專案路徑')).toBeNull()
+    expect(screen.getByRole('heading', { level: 3, name: 'Home Path (Workspace)' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Home Path (Workspace)')).toBeInTheDocument()
     unmount()
 
-    // Step 2 — reset registries + state, bootstrap with Files persisted-disabled
+    // Step 2 — reset registries + state, bootstrap with Editor persisted-disabled
     clearModuleRegistry()
     clearContributions()
-    useModuleEnabledStore.setState({ enabled: { files: false }, baseline: null })
+    useModuleEnabledStore.setState({ enabled: { editor: false }, baseline: null })
     registerBuiltinModules()
     render(<WorkspaceSettingsPage workspaceId={wsId} />)
-    expect(screen.queryByRole('heading', { level: 3, name: /Files/i })).toBeNull()
-    expect(screen.queryByLabelText('Project path')).toBeNull()
+    expect(screen.queryByRole('heading', { level: 3, name: 'Home Path (Workspace)' })).toBeNull()
+    expect(screen.queryByLabelText('Home Path (Workspace)')).toBeNull()
   })
 })
