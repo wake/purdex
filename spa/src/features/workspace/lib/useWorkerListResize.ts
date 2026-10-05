@@ -23,8 +23,9 @@ export interface WorkerListResize {
 /**
  * `available` is the split box's height, measured while the list is open. The rendered height is
  * `min(draft ?? stored, available − WORKSPACE_ZONE_MIN − WORKER_DIVIDER_HEIGHT)`; a short window only caps it and never
- * writes the store. A drag starts from the rendered height and commits what is on screen. Without a ResizeObserver
- * report (e.g. jsdom) there is no cap.
+ * writes the store. A drag starts from the rendered height and commits what is on screen. While the cap is below
+ * WORKER_LIST_MIN the box is too short to resize: a drag starts no draft and its end writes nothing, and the list
+ * renders at the cap until room comes back. Without a ResizeObserver report (e.g. jsdom) there is no cap.
  *
  * Unmount contract: closing the list or unmounting disconnects the observer and drops any draft; after that,
  * onResize and onResizeEnd do nothing, so nothing reaches the store.
@@ -63,10 +64,12 @@ export function useWorkerListResize(open: boolean): WorkerListResize {
   const cap = available === null ? null : Math.max(0, available - WORKSPACE_ZONE_MIN - WORKER_DIVIDER_HEIGHT)
   const uncapped = draft ?? stored
   const height = cap === null ? uncapped : Math.min(uncapped, cap)
+  // Below WORKER_LIST_MIN the screen shows a height the store cannot hold, so a drag could never store what is seen.
+  const resizable = cap === null || cap >= WORKER_LIST_MIN
 
   // Held inside what can be shown, so the divider tracks the pointer even while the cap applies.
   const onResize = (dy: number) => {
-    if (!liveRef.current) return
+    if (!liveRef.current || !resizable) return
     const base = draftRef.current ?? height
     const upper = cap === null ? WORKER_LIST_MAX : Math.min(WORKER_LIST_MAX, cap)
     const next = Math.min(Math.max(base - dy, WORKER_LIST_MIN), upper)
@@ -74,10 +77,12 @@ export function useWorkerListResize(open: boolean): WorkerListResize {
     setDraft(next)
   }
   const onResizeEnd = () => {
-    if (draftRef.current === null) return
-    setStored(draftRef.current)
+    const committed = draftRef.current
+    if (committed === null) return
     draftRef.current = null
     setDraft(null)
+    // The box shrank below the minimum mid-drag: drop the draft rather than store a height the screen does not show.
+    if (resizable) setStored(committed)
   }
 
   return { splitBoxRef, height, onResize, onResizeEnd }

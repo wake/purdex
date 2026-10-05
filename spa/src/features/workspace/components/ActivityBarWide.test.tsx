@@ -318,6 +318,29 @@ describe('ActivityBarWide — worker list section', () => {
       expect(section.style.height).toBe('800px')
       expect(setWorkerListHeight).not.toHaveBeenCalled()
     })
+
+    // Below the list minimum no storable height matches the screen, so the divider does nothing.
+    it.each(['mouseup', 'blur'] as const)(
+      'a split box too short for the list minimum: a drag ending on %s writes nothing and the list stays at the cap',
+      (end) => {
+        const { ro, section, setWorkerListHeight } = setup()
+        // available 150 → cap 150 − 96 − 4 = 50 < WORKER_LIST_MIN
+        act(() => ro.fire(150))
+        expect(section.style.height).toBe('50px')
+
+        fireEvent.mouseDown(screen.getByTestId('worker-list-divider'), { clientY: 500 })
+        fireEvent.mouseMove(document, { clientY: 450 })
+        expect(section.style.height).toBe('50px')
+        if (end === 'mouseup') fireEvent.mouseUp(document)
+        else fireEvent.blur(window)
+        expect(setWorkerListHeight).not.toHaveBeenCalled()
+        expect(useLayoutStore.getState().workerListHeight).toBe(800)
+        expect(section.style.height).toBe('50px')
+
+        act(() => ro.fire(1000))
+        expect(section.style.height).toBe('800px')
+      },
+    )
   })
 })
 

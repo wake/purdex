@@ -100,6 +100,79 @@ describe('useWorkerListResize', () => {
     expect(result.current.height).toBe(200)
   })
 
+  // Spec §4.2 "a drag stores what the user sees": below WORKER_LIST_MIN no storable height matches the screen.
+  describe('split box too short to resize (cap < WORKER_LIST_MIN)', () => {
+    // cap = available − 96 − 4
+    const availableFor = (cap: number) => cap + WORKSPACE_ZONE_MIN + WORKER_DIVIDER_HEIGHT
+
+    it('a drag starts no draft and its end writes nothing; the list stays at the cap and returns to stored when room comes back', () => {
+      const ro = stubResizeObserver()
+      useLayoutStore.setState({ workerListHeight: 800 })
+      const { result } = renderResize()
+      ro.fire(availableFor(50))
+      expect(result.current.height).toBe(50)
+
+      act(() => result.current.onResize(-30))
+      expect(result.current.height).toBe(50)
+      act(() => result.current.onResize(40))
+      expect(result.current.height).toBe(50)
+      act(() => result.current.onResizeEnd())
+      expect(setWorkerListHeight).not.toHaveBeenCalled()
+      expect(useLayoutStore.getState().workerListHeight).toBe(800)
+      expect(result.current.height).toBe(50)
+
+      ro.fire(1000)
+      expect(result.current.height).toBe(800)
+    })
+
+    it('room coming back mid-drag shows the stored height, not a draft left over from the short box', () => {
+      const ro = stubResizeObserver()
+      useLayoutStore.setState({ workerListHeight: 800 })
+      const { result } = renderResize()
+      ro.fire(availableFor(50))
+      act(() => result.current.onResize(-30))
+
+      ro.fire(1000)
+      expect(result.current.height).toBe(800)
+      act(() => result.current.onResizeEnd())
+      expect(setWorkerListHeight).not.toHaveBeenCalled()
+    })
+
+    it('a box that shrinks below the minimum mid-drag drops the draft without committing it', () => {
+      const ro = stubResizeObserver()
+      useLayoutStore.setState({ workerListHeight: 800 })
+      const { result } = renderResize()
+      ro.fire(availableFor(200))
+      act(() => result.current.onResize(50))
+      expect(result.current.height).toBe(150)
+
+      ro.fire(availableFor(50))
+      expect(result.current.height).toBe(50)
+      act(() => result.current.onResizeEnd())
+      expect(setWorkerListHeight).not.toHaveBeenCalled()
+      expect(useLayoutStore.getState().workerListHeight).toBe(800)
+
+      ro.fire(1000)
+      expect(result.current.height).toBe(800)
+    })
+
+    it('a cap of exactly WORKER_LIST_MIN still resizes and commits what is on screen', () => {
+      const ro = stubResizeObserver()
+      useLayoutStore.setState({ workerListHeight: 800 })
+      const { result } = renderResize()
+      ro.fire(availableFor(WORKER_LIST_MIN))
+      expect(result.current.height).toBe(WORKER_LIST_MIN)
+
+      act(() => result.current.onResize(-30))
+      act(() => result.current.onResize(30))
+      expect(result.current.height).toBe(WORKER_LIST_MIN)
+      act(() => result.current.onResizeEnd())
+      expect(setWorkerListHeight).toHaveBeenCalledTimes(1)
+      expect(setWorkerListHeight).toHaveBeenCalledWith(WORKER_LIST_MIN)
+      expect(useLayoutStore.getState().workerListHeight).toBe(WORKER_LIST_MIN)
+    })
+  })
+
   it('unmount disconnects the observer and a late resize call writes nothing', () => {
     const ro = stubResizeObserver()
     const { result, unmount } = renderResize()
