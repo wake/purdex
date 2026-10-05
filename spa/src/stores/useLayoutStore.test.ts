@@ -1,7 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useLayoutStore, healLayoutInvariant } from './useLayoutStore'
+import {
+  useLayoutStore,
+  healLayoutInvariant,
+  WORKER_LIST_MIN,
+  WORKER_LIST_MAX,
+  WORKER_LIST_DEFAULT,
+} from './useLayoutStore'
 import type { SidebarRegion } from '../types/layout'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
+import { STORAGE_KEYS } from '../lib/storage'
+import { PROJECTIONS } from '../lib/profile/projections'
 
 beforeEach(() => {
   useLayoutStore.setState(useLayoutStore.getInitialState())
@@ -225,6 +233,80 @@ describe('useLayoutStore', () => {
       expect(healLayoutInvariant({ activityBarWidth: 'wide', tabPosition: 'top' }).activityBarWidth).toBe('wide')
       expect(healLayoutInvariant({ activityBarWidth: 'wide', tabPosition: 'left' }).activityBarWidth).toBe('wide')
       expect(healLayoutInvariant({ activityBarWidth: 'wide', tabPosition: 'both' }).activityBarWidth).toBe('wide')
+    })
+  })
+
+  describe('worker list and compact bottom group', () => {
+    it('defaults: list closed, height 240, bottom group not compact', () => {
+      const state = useLayoutStore.getState()
+      expect(state.workerListOpen).toBe(false)
+      expect(state.workerListHeight).toBe(WORKER_LIST_DEFAULT)
+      expect(WORKER_LIST_DEFAULT).toBe(240)
+      expect(state.bottomNavCompact).toBe(false)
+    })
+
+    it('setWorkerListOpen sets the flag', () => {
+      useLayoutStore.getState().setWorkerListOpen(true)
+      expect(useLayoutStore.getState().workerListOpen).toBe(true)
+      useLayoutStore.getState().setWorkerListOpen(false)
+      expect(useLayoutStore.getState().workerListOpen).toBe(false)
+    })
+
+    it('toggleWorkerListOpen flips the flag', () => {
+      useLayoutStore.getState().toggleWorkerListOpen()
+      expect(useLayoutStore.getState().workerListOpen).toBe(true)
+      useLayoutStore.getState().toggleWorkerListOpen()
+      expect(useLayoutStore.getState().workerListOpen).toBe(false)
+    })
+
+    it('setWorkerListHeight stores an in-range value', () => {
+      useLayoutStore.getState().setWorkerListHeight(321)
+      expect(useLayoutStore.getState().workerListHeight).toBe(321)
+    })
+
+    it('setWorkerListHeight clamps below WORKER_LIST_MIN (96)', () => {
+      expect(WORKER_LIST_MIN).toBe(96)
+      useLayoutStore.getState().setWorkerListHeight(10)
+      expect(useLayoutStore.getState().workerListHeight).toBe(96)
+    })
+
+    it('setWorkerListHeight clamps above WORKER_LIST_MAX (800)', () => {
+      expect(WORKER_LIST_MAX).toBe(800)
+      useLayoutStore.getState().setWorkerListHeight(5000)
+      expect(useLayoutStore.getState().workerListHeight).toBe(800)
+    })
+
+    it('setBottomNavCompact sets the flag', () => {
+      useLayoutStore.getState().setBottomNavCompact(true)
+      expect(useLayoutStore.getState().bottomNavCompact).toBe(true)
+      useLayoutStore.getState().setBottomNavCompact(false)
+      expect(useLayoutStore.getState().bottomNavCompact).toBe(false)
+    })
+
+    it('toggleBottomNavCompact flips the flag', () => {
+      useLayoutStore.getState().toggleBottomNavCompact()
+      expect(useLayoutStore.getState().bottomNavCompact).toBe(true)
+      useLayoutStore.getState().toggleBottomNavCompact()
+      expect(useLayoutStore.getState().bottomNavCompact).toBe(false)
+    })
+
+    it('partialize persists the three fields', () => {
+      useLayoutStore.setState({ workerListOpen: true, workerListHeight: 333, bottomNavCompact: true })
+      const partialize = useLayoutStore.persist.getOptions().partialize!
+      expect(partialize(useLayoutStore.getState())).toMatchObject({
+        workerListOpen: true,
+        workerListHeight: 333,
+        bottomNavCompact: true,
+      })
+    })
+
+    it('Profile Sync still projects only tabPosition from the layout store', () => {
+      // The new fields are device-local: they must not join PROJECTIONS (spec §4.1).
+      const prefix = `${STORAGE_KEYS.LAYOUT}.`
+      const layoutPaths = Object.values(PROJECTIONS)
+        .flat()
+        .filter((path) => path.startsWith(prefix) || path.startsWith(`!${prefix}`))
+      expect(layoutPaths).toEqual(['purdex-layout.tabPosition'])
     })
   })
 
