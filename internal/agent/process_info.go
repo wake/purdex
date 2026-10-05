@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,12 @@ import (
 )
 
 const psLstartLayout = "Mon Jan _2 15:04:05 2006"
+
+// runPS is the one way this package forks ps. Fork count is the cost the
+// process snapshot exists to remove, so tests swap this to count it.
+var runPS = func(ctx context.Context, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, "ps", args...).Output()
+}
 
 type ProcessInfo struct {
 	PID       int
@@ -27,11 +34,20 @@ func ReadProcessInfo(pid int) (ProcessInfo, error) {
 }
 
 func readProcessStartTime(pid int) (time.Time, error) {
-	out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "lstart=").Output()
+	out, err := runPS(context.Background(), "-p", fmt.Sprintf("%d", pid), "-o", "lstart=")
 	if err != nil {
 		return time.Time{}, fmt.Errorf("read start time for pid %d: %w", pid, err)
 	}
-	parsed, err := time.ParseInLocation(psLstartLayout, strings.TrimSpace(string(out)), time.Local)
+	return parseLstart(pid, strings.TrimSpace(string(out)))
+}
+
+// parseLstart is the one way an lstart text becomes a StartTime, so the
+// process snapshot and the per-PID reader cannot disagree on it. The text has
+// no zone, so in a repeated local hour the parse picks one of the two instants
+// it names; frames store the text and the registry compares this parse, so
+// that choice is part of the answer and must stay the same in both readers.
+func parseLstart(pid int, lstart string) (time.Time, error) {
+	parsed, err := time.ParseInLocation(psLstartLayout, lstart, time.Local)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("parse start time for pid %d: %w", pid, err)
 	}
@@ -39,7 +55,7 @@ func readProcessStartTime(pid int) (time.Time, error) {
 }
 
 func readProcessPPID(pid int) (int, error) {
-	out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "ppid=").Output()
+	out, err := runPS(context.Background(), "-p", fmt.Sprintf("%d", pid), "-o", "ppid=")
 	if err != nil {
 		return 0, fmt.Errorf("read ppid for pid %d: %w", pid, err)
 	}
