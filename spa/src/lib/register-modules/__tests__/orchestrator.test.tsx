@@ -5,6 +5,7 @@ import { resetFileOpenerRegistryForHmr } from '../index'
 import { getDefaultOpener, getRegisteredOpeners } from '../../file-opener-registry'
 import { getModule, resolvePaneRenderer } from '../../module-registry'
 import { useTabStore } from '../../../stores/useTabStore'
+import { useHostStore } from '../../../stores/useHostStore'
 import { createTab } from '../../../types/tab'
 import { getPrimaryPane } from '../../pane-tree'
 import ExecutionView from '../../../components/execution/ExecutionView'
@@ -124,12 +125,39 @@ describe('registerBuiltinModules orchestrator', () => {
 
     it("switching keeps the pane's from", () => {
       const { tab, pane, current, lastProps } = mountWrapper()
-      // A concurrent write (a host remap, a new `from`) lands after render:
-      // the switch reads the content at call time and must not undo it.
+      // A concurrent write (a new `from`) lands after render: the switch
+      // reads the content at call time and must not undo it.
       const from2 = { ...from, cachedName: 'renamed' }
-      useTabStore.getState().setPaneContent(tab.id, pane.id, { kind: 'execution', executionId: 'exc_1', host: 'h2', from: from2 })
+      useTabStore.getState().setPaneContent(tab.id, pane.id, { kind: 'execution', executionId: 'exc_1', host: 'h1', from: from2 })
       act(() => { lastProps().onModeChange('chat') })
-      expect(current().content).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'h2', from: from2, mode: 'chat' })
+      expect(current().content).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'h1', from: from2, mode: 'chat' })
+    })
+
+    it('a pane with no host hint switches too: both sides resolve to the first host, as the view is keyed', () => {
+      const prev = useHostStore.getState().hostOrder
+      useHostStore.setState({ hostOrder: ['h1'] })
+      try {
+        useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+        vi.mocked(ExecutionView).mockClear()
+        const tab = createTab({ kind: 'execution', executionId: 'exc_1' })
+        useTabStore.getState().addTab(tab)
+        const resolution = resolvePaneRenderer('execution')
+        if (resolution.kind !== 'render') throw new Error('execution pane not registered')
+        const Component = resolution.component
+        render(<Component pane={getPrimaryPane(tab.layout)} isActive />)
+        act(() => { vi.mocked(ExecutionView).mock.calls.at(-1)![0].onModeChange('chat') })
+        expect(getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content).toEqual({ kind: 'execution', executionId: 'exc_1', mode: 'chat' })
+      } finally {
+        useHostStore.setState({ hostOrder: prev })
+      }
+    })
+
+    // P6 review A2: the same execution id on another host is another worker.
+    it('does not write when the pane now shows the same execution id on another host', () => {
+      const { tab, pane, current, lastProps } = mountWrapper()
+      useTabStore.getState().setPaneContent(tab.id, pane.id, { kind: 'execution', executionId: 'exc_1', host: 'h2', from })
+      act(() => { lastProps().onModeChange('chat') })
+      expect(current().content).toEqual({ kind: 'execution', executionId: 'exc_1', host: 'h2', from })
     })
 
     it('does not write when the pane no longer shows that execution', () => {

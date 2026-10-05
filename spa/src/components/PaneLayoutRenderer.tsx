@@ -1,19 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import { resolvePaneRenderer, type PaneRendererProps } from '../lib/module-registry'
 import { getLayoutKey, collectLeaves, swapPaneContent, countLeaves, findPane } from '../lib/pane-tree'
-import { compositeKey } from '../lib/composite-key'
-import { isHandoffCandidate } from '../lib/nex/handoff-gate'
 import { PaneSplitter } from './PaneSplitter'
 import { PaneHeader } from './PaneHeader'
 import { PaneContextMenu, type PaneMenuAction } from './PaneContextMenu'
-import { HandoffConfirmDialog } from './HandoffConfirmDialog'
 import { useTabStore } from '../stores/useTabStore'
 import { usePaneFocusStore } from '../stores/usePaneFocusStore'
 import { focusTargetOf } from '../lib/pane-focus'
 import { useWorkspaceStore } from '../features/workspace/store'
-import { useAgentStore } from '../stores/useAgentStore'
-import { useNexHostStore, selectHandoffReady } from '../stores/useNexHostStore'
+import { useHandoffDialogStore } from '../stores/useHandoffDialogStore'
+import { useHandoffCandidate } from '../hooks/useHandoffCandidate'
 import { useI18nStore } from '../stores/useI18nStore'
 import {
   useModuleEnabledStore,
@@ -22,9 +19,8 @@ import {
 import { DisabledModulePlaceholder } from './modules/DisabledModulePlaceholder'
 import { HostHiddenPane } from './HostHiddenPane'
 import { usePaneHostShown } from '../lib/shown-hosts'
-import type { PaneLayout, PaneContent, TmuxSessionContent } from '../types/tab'
+import type { PaneLayout, PaneContent } from '../types/tab'
 
-const notReady = () => false
 /** What a split node hands the pane gate: not host-bearing, so always shown. */
 const NO_HOST: PaneContent = { kind: 'dashboard' }
 
@@ -55,33 +51,18 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
   // instance, so this per-instance state is scoped to a single pane.
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
 
-  // "Hand to nex" (P-C.3b): a pane-local item, so a terminal pane anywhere
-  // in a split has it. The gate is pure; these subscriptions feed it the
-  // live agent type and the host's readiness.
-  // Non-session leaves and split nodes subscribe to constants.
   const leafContent = layout.type === 'leaf' ? layout.pane.content : null
   // The pane gate (host ownership H2d-4, §0.21): a leaf whose host is hidden in this workbench renders
   // `HostHiddenPane` instead of its renderer and opens no connection. LIVE (unlike `pinnedEnabled`): a shown-list
   // write, a synced apply or a daemonId learned re-renders the leaf; showing the host mounts the renderer again with
-  // the same pane. Read before the nex subscriptions: a hidden tmux leaf has no host for them — no `ensure` fetch,
-  // no "Hand to nex" item.
+  // the same pane.
   const hostShown = usePaneHostShown(leafContent ?? NO_HOST)
-  const tmux: TmuxSessionContent | null = leafContent?.kind === 'tmux-session' ? leafContent : null
-  const tmuxHostId = hostShown ? tmux?.hostId ?? null : null
-  const tmuxCode = tmux?.sessionCode ?? ''
-  const agentType = useAgentStore((s) => (tmuxHostId ? s.agentTypes[compositeKey(tmuxHostId, tmuxCode)] : undefined))
-  const handoffReady = useNexHostStore(tmuxHostId ? selectHandoffReady(tmuxHostId) : notReady)
+  // "Hand to nex" (P-C.3b): a pane-local item, so a terminal pane anywhere in a split has it. The gate is shared with
+  // the status bar (shell cleanup §9.4) and applies the same hidden-host rule: a hidden tmux leaf gets no `ensure`
+  // fetch and no item. Non-session leaves and split nodes subscribe to constants. The dialog itself is app-level
+  // (`HandoffDialogHost`), which also closes it when the host is hidden or the pane stops holding the session.
+  const handoffCandidate = useHandoffCandidate(leafContent)
   const t = useI18nStore((s) => s.t)
-  const [handoff, setHandoff] = useState<{ tabId: string; paneId: string; content: TmuxSessionContent } | null>(null)
-  useEffect(() => {
-    if (tmuxHostId) void useNexHostStore.getState().ensure(tmuxHostId)
-  }, [tmuxHostId])
-  // Hiding the host closes a handoff dialog opened on this pane: the pane is gated, so nothing may be handed off
-  // from it. A request already confirmed is not abortable — `handToNex` re-checks before it writes the pane (H2d-3).
-  useEffect(() => {
-    if (!hostShown) setHandoff(null)
-  }, [hostShown])
-  const handoffCandidate = tmux && tmuxHostId ? isHandoffCandidate(tmux, { agentType, handoffReady }) : false
 
   // Rule F (shell cleanup §8.2): is this leaf the pane that takes focus when its tab is shown? Not gated by `isActive`:
   // the renderers need both to tell an activation from a click. The selector yields only this tab's target id (null
@@ -171,7 +152,7 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
             // The live content, not the captured one: the dialog hands off
             // whatever the pane holds now.
             if (livePane.content.kind === 'tmux-session') {
-              setHandoff({ tabId, paneId, content: livePane.content })
+              useHandoffDialogStore.getState().open({ tabId, paneId, content: livePane.content })
             }
           } else if (action === 'split-h') {
             useTabStore.getState().splitPaneBlank(tabId, paneId, 'h')
@@ -188,18 +169,6 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
             }
           }
         }}
-      />
-    ) : null
-
-    const handoffDialog = handoff ? (
-      <HandoffConfirmDialog
-        hostId={handoff.content.hostId}
-        sessionCode={handoff.content.sessionCode}
-        tmuxInstance={handoff.content.tmuxInstance}
-        cachedName={handoff.content.cachedName}
-        tabId={handoff.tabId}
-        paneId={handoff.paneId}
-        onClose={() => setHandoff(null)}
       />
     ) : null
 
@@ -242,7 +211,6 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
           />
           {body}
           {paneMenu}
-          {handoffDialog}
         </div>
       )
     }
@@ -263,7 +231,6 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       >
         {body}
         {paneMenu}
-        {handoffDialog}
       </div>
     )
   }

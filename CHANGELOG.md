@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.482] - 2026-10-05
+
+> 殼層整理第五支（P6／7）是純 SPA。這個版本同時包含 #1554（daemon 內嵌 Nexen v0.16.0、`transcript_prelude`），它的部署與驗收由 worker prelude 那條線處理，見該 PR。
+
+### Feature：狀態列跟著 agent pane，並可切換 terminal／worker／chat（#1553）
+
+- 狀態列拿掉兩顆分割鈕（分割改用標題列或在 pane 上按右鍵），換成 **terminal／worker／chat** 三顆，目前是哪種就亮哪顆。
+  - 終端機 → worker／chat：開「交給 Nexen」對話框（chat 會在交接後直接用聊天模式）。只有跑著 Claude Code、而且這台主機的 Nexen 已就緒時才能按，否則灰掉並說明原因。
+  - worker → 終端機：跑這個 worker 自己的「接回終端機」（執行中會先確認）。
+  - 指揮室 ↔ 聊天：直接切換。
+- 分頁有分割時，狀態列**整條**跟著 agent pane（跑 Claude Code／Codex 的終端機、worker）：點純終端機或編輯器不會讓狀態列離開 agent pane；兩個 agent pane 時跟著你點的那個；分頁裡沒有 agent pane 時跟著最後點過的 pane。
+- worker 有自己的狀態列：主機、名稱、工作目錄。
+
+### Fix
+
+- 「交給 Nexen」確認框開著時，如果 Claude Code 退出、session 終止、或 Nexen 不再就緒，確認框會自動關閉；按下確認前也會再檢查一次，不會送出不該送的交接。右鍵選單在 Claude Code 退出後不再提供「交給 Nexen」。
+- 切換指揮室／聊天時同時核對主機，pane 剛好被換成另一台主機上同 ID 的 worker 時不會改到它。
+
+### Internal
+
+- `useStatusTargetPane`／`isAgentPane`、`components/status/*`（從 `StatusBar` 抽出的片段與 `WorkerStatusBar`、`PaneModeButtons`）、`useHandoffDialogStore`＋`HandoffDialogHost`（對話框拉到 App 層）、`useHandoffGate`（附原因）、`handoffBlockReasonNow`、`take-to-terminal-registry`、`setExecutionPaneMode`。
+
 ## [1.0.0-alpha.481] - 2026-10-05
 
 > 純 SPA，不必重新部署 daemon。殼層整理第四支（P5／7）。

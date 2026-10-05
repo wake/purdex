@@ -26,6 +26,10 @@
 import { useTabStore } from '../../stores/useTabStore'
 import { isRefShownNow } from '../shown-hosts'
 import { useNexHostStore, selectHandoffReady } from '../../stores/useNexHostStore'
+import { useAgentStore } from '../../stores/useAgentStore'
+import { compositeKey } from '../composite-key'
+import { findPane } from '../pane-tree'
+import { handoffBlockReason, type HandoffBlockReason } from './handoff-gate'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { checkHostPath, type HostProject } from '../host-config-api'
 import { useSessionStore } from '../../stores/useSessionStore'
@@ -33,7 +37,8 @@ import { resumeLookupFor, resumeTemplateFor } from '../resume-templates'
 import { nextProjectSessionName } from '../launch-session-name'
 import { slugForCwd } from './session-slug'
 import type { TFunction } from '../pane-labels'
-import type { ExecutionFrom, PaneContent } from '../../types/tab'
+import type { ExecutionContent, ExecutionFrom, ExecutionViewMode } from '../../types/tab'
+import { withViewMode } from './view-mode'
 import {
   HandoffApiError, nexHandoff, nexTakeback, nexTakeToTerminal,
   type NexHandoffResult, type NexTakebackResult, type NexTakeToTerminalResult,
@@ -63,6 +68,8 @@ export interface HandToNexArgs {
   keepSession?: boolean
   /** The source tab's title, recorded on the execution pane (worker theme spec §8.4). */
   fromTitle?: string
+  /** The view the execution pane opens in (shell cleanup spec §9.4); absent → no mode written (reads as room). */
+  mode?: ExecutionViewMode
 }
 
 export interface HandToNexOutcome {
@@ -76,15 +83,20 @@ export interface HandToNexOutcome {
  * the recovery toast opens). `from` is omitted when the session was not kept:
  * the pane then has nothing to return to, and "Take to terminal" creates a
  * new session instead. `fromTitle` (the source tab's title) is kept either
- * way; a blank one is omitted.
+ * way; a blank one is omitted. `mode`, when given, is the view the worker
+ * opens in — on both paths, so a chat handoff whose swap missed still opens
+ * in chat.
  */
-export function executionContentFor(hostId: string, executionId: string, from?: ExecutionFrom, fromTitle?: string): PaneContent {
+export function executionContentFor(
+  hostId: string, executionId: string, from?: ExecutionFrom, fromTitle?: string, mode?: ExecutionViewMode,
+): ExecutionContent {
   const title = fromTitle?.trim()
-  return {
+  const content: ExecutionContent = {
     kind: 'execution', executionId, host: hostId,
     ...(from ? { from } : {}),
     ...(title ? { fromTitle: title } : {}),
   }
+  return mode ? withViewMode(content, mode) : content
 }
 
 /** `from` for the execution pane, or undefined when the daemon says the session is gone. */
@@ -92,6 +104,31 @@ export function handoffFromFor(args: Pick<HandToNexArgs, 'sessionCode' | 'tmuxIn
   // An old daemon omits the field: it never kills, so the session is there.
   if (result.session_kept === false) return undefined
   return { sessionCode: args.sessionCode, tmuxInstance: args.tmuxInstance, cachedName: args.cachedName }
+}
+
+/** Why `handoffBlockReasonNow` refuses: the pure gate's reasons, the pane gate's, or the pane changed session. */
+export type HandoffBlockReasonNow = HandoffBlockReason | 'host_hidden' | 'session_changed'
+
+/**
+ * The handoff gate read from the stores NOW (P6 review A1), for the pane a confirm dialog was opened on — the
+ * action-time twin of `useHandoffGate`, which only answers as of the last render. `null` = open: the pane still holds
+ * `expected` (same host, session code and tmux instance — the identity `handToNex`'s checked swap compares), its host
+ * is shown in this workbench, and `handoffBlockReason` passes on that LIVE content with the live agent type and the
+ * host's Nex readiness (so a terminated pane, an exited Claude Code or a Nex gone unready all refuse).
+ */
+export function handoffBlockReasonNow(
+  tabId: string, paneId: string, expected: Pick<HandToNexArgs, 'hostId' | 'sessionCode' | 'tmuxInstance'>,
+): HandoffBlockReasonNow | null {
+  const tab = useTabStore.getState().tabs[tabId]
+  const content = tab ? findPane(tab.layout, paneId)?.content : undefined
+  if (content?.kind !== 'tmux-session') return 'not_session'
+  if (content.hostId !== expected.hostId || content.sessionCode !== expected.sessionCode
+    || content.tmuxInstance !== expected.tmuxInstance) return 'session_changed'
+  if (!isRefShownNow(content.hostId)) return 'host_hidden'
+  return handoffBlockReason(content, {
+    agentType: useAgentStore.getState().agentTypes[compositeKey(content.hostId, content.sessionCode)],
+    handoffReady: selectHandoffReady(content.hostId)(useNexHostStore.getState()),
+  })
 }
 
 export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> {
@@ -112,7 +149,7 @@ export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> 
       keep_session: keepSession,
     })
     const swapped = isRefShownNow(hostId) && useTabStore.getState().trySetPaneContent(
-      tabId, paneId, executionContentFor(hostId, result.execution_id, handoffFromFor(args, result), args.fromTitle),
+      tabId, paneId, executionContentFor(hostId, result.execution_id, handoffFromFor(args, result), args.fromTitle, args.mode),
       (c) => c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && c.tmuxInstance === tmuxInstance,
     )
     return { result, swapped }

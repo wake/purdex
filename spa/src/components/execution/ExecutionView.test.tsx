@@ -13,6 +13,7 @@ import { NexApiError } from '../../lib/nex/types'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { HandoffApiError, nexTakeback, nexTakeToTerminal } from '../../lib/nex/handoff-api'
 import { takeBack, takeToTerminal } from '../../lib/nex/handoff'
+import { getTakeToTerminal } from '../../lib/nex/take-to-terminal-registry'
 import { createTab } from '../../types/tab'
 import { getPrimaryPane } from '../../lib/pane-tree'
 import * as api from '../../lib/nex/nex-api'
@@ -1011,6 +1012,110 @@ describe('ExecutionView — take to terminal (no `from`)', () => {
     await clickTakeBack()
     expect(toast()?.message).toBe('Could not create the tmux session repo-1; check the session list.')
     expect(fetchHost).toHaveBeenCalledWith(H)
+  })
+})
+
+// ---- shell cleanup spec §9.5: the status bar runs the view's own take ----
+
+describe('ExecutionView — take-to-terminal registry (shell cleanup §9.5)', () => {
+  const entryOf = (paneId: string) => getTakeToTerminal(paneId)
+  beforeEach(() => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    useUndoToast.setState({ toast: null })
+    mockedTakeback.mockReset()
+    mockedToTerminal.mockReset()
+    mockedTakeBack.mockClear()
+    mockedTakeToTerminal.mockClear()
+    useSessionStore.setState({ sessions: {}, fetchHost: vi.fn().mockResolvedValue(undefined) } as never)
+    useExecutionStore.getState().setLease(H, E, { leaseId: 'ls_1', expiresAt: Date.now() + 100_000 })
+  })
+
+  it('canTake follows whether the header offers Take to terminal', () => {
+    // no `from`, no session id → not offered
+    const { unmount } = render(<ExecutionView {...base} isActive />)
+    expect(offersTerminal()).toBe(false)
+    expect(entryOf('p1')).toMatchObject({ canTake: false, busy: false })
+    unmount()
+    // with `from` → offered
+    const ids = executionTab()
+    const view = render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    expect(entryOf(ids.paneId)).toMatchObject({ canTake: true, busy: false })
+    view.unmount()
+    // headless claude execution with a session id → offered; once archived it is not
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid' }) as never)
+    const headless = headlessTab()
+    render(<ExecutionView {...base} {...headless} isActive />)
+    expect(entryOf(headless.paneId)).toMatchObject({ canTake: true })
+    act(() => { useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid', archived: true }) as never) })
+    expect(entryOf(headless.paneId)).toMatchObject({ canTake: false })
+  })
+
+  it('a pane showing a problem (no header) does not offer it', () => {
+    vi.mocked(sub.useExecutionSubscription).mockReturnValue({ problem: 'not_found', paused: false })
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    expect(screen.getByTestId('execution-problem')).toBeInTheDocument()
+    expect(entryOf(ids.paneId)).toMatchObject({ canTake: false })
+  })
+
+  it('busy while a write is in flight, and while the take itself is in flight', async () => {
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    expect(entryOf(ids.paneId)?.busy).toBe(false)
+    act(() => { patchExec({ pendingSend: true, pendingLocal: { text: 'hi', delivery: null } as Exec['pendingLocal'] }) })
+    expect(entryOf(ids.paneId)?.busy).toBe(true)
+    // the registered handler keeps the view's guard: nothing goes out meanwhile
+    act(() => { entryOf(ids.paneId)!.takeToTerminal() })
+    expect(mockedTakeback).not.toHaveBeenCalled()
+    act(() => { patchExec({ pendingSend: false, pendingLocal: null }) })
+    expect(entryOf(ids.paneId)?.busy).toBe(false)
+
+    const d = deferred<typeof takebackOk>()
+    mockedTakeback.mockReturnValueOnce(d.promise)
+    act(() => { entryOf(ids.paneId)!.takeToTerminal() })
+    await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
+    expect(entryOf(ids.paneId)?.busy).toBe(true)
+    // a second take meanwhile is refused by the view's single-flight guard
+    act(() => { entryOf(ids.paneId)!.takeToTerminal() })
+    expect(mockedTakeBack).toHaveBeenCalledTimes(1)
+    await act(async () => { d.resolve(takebackOk) })
+    expect(paneContent(ids.tabId).kind).toBe('tmux-session')
+  })
+
+  it('on a running turn the registered handler asks first, like the header item; Confirm runs the take', async () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'running', session_id: 'sid' }) as never)
+    mockedToTerminal.mockResolvedValueOnce(toTerminalOk)
+    const ids = headlessTab()
+    render(<ExecutionView {...base} {...ids} isActive />)
+    act(() => { entryOf(ids.paneId)!.takeToTerminal() })
+    expect(screen.getByTestId('takeback-dialog')).toBeInTheDocument()
+    expect(mockedTakeToTerminal).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('takeback-cancel'))
+    expect(mockedTakeToTerminal).not.toHaveBeenCalled()
+    act(() => { entryOf(ids.paneId)!.takeToTerminal() })
+    await act(async () => { fireEvent.click(screen.getByTestId('takeback-confirm')) })
+    expect(mockedTakeToTerminal).toHaveBeenCalledTimes(1)
+    expect(mockedTakeToTerminal.mock.calls[0][0]).toMatchObject({ tabId: ids.tabId, paneId: ids.paneId, leaseId: 'ls_1', forgetLease: forget })
+    expect(paneContent(ids.tabId).kind).toBe('tmux-session')
+  })
+
+  it('the registered handler runs the latest flow, even when the entry was not re-registered', async () => {
+    mockedTakeback.mockResolvedValueOnce(takebackOk)
+    const ids = executionTab()
+    const { rerender } = render(<ExecutionView {...base} paneId={ids.paneId} tabId="stale-tab" from={from} isActive />)
+    const entry = entryOf(ids.paneId)!
+    rerender(<ExecutionView {...base} {...ids} from={from} isActive />)
+    expect(entryOf(ids.paneId)).toBe(entry) // canTake / busy unchanged → same entry
+    await act(async () => { entry.takeToTerminal() })
+    expect(mockedTakeBack).toHaveBeenCalledWith(expect.objectContaining({ tabId: ids.tabId, paneId: ids.paneId }))
+  })
+
+  it('unregisters on unmount', () => {
+    const ids = executionTab()
+    const { unmount } = render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    expect(entryOf(ids.paneId)).not.toBeNull()
+    unmount()
+    expect(entryOf(ids.paneId)).toBeNull()
   })
 })
 

@@ -17,6 +17,7 @@ import { countPanesOnSession } from '../lib/pane-tree'
 import { HandoffApiError } from '../lib/nex/handoff-api'
 import {
   handToNex,
+  handoffBlockReasonNow,
   executionContentFor,
   handoffFromFor,
   handoffErrorMessage,
@@ -60,8 +61,11 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
 
   const confirm = async () => {
     if (inFlight.current) return
-    // Host ownership H2d-3: the host was hidden in the workbench while the dialog was open → nothing is handed off.
-    if (!isRefShownNow(args.hostId)) {
+    // The gate, re-read from the stores at the click (P6 review A1): the host closes this dialog when the gate closes,
+    // but only after a render, so a click can land in between. The pane no longer holds this session, its host was
+    // hidden in the workbench (H2d-3), it terminated, Claude Code no longer runs in it, or Nex stopped being ready →
+    // nothing is handed off; the dialog just closes, silently, as the host's own close does.
+    if (handoffBlockReasonNow(args.tabId, args.paneId, args) !== null) {
       onClose()
       return
     }
@@ -82,7 +86,8 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
           () => {
             // Re-checked at click (H2d-3): hidden since → the Hosts page on that host, never an execution tab.
             if (landOnHostsPageIfHidden(args.hostId)) return
-            useTabStore.getState().openSingletonTab(executionContentFor(args.hostId, result.execution_id, from, fromTitle))
+            // The same view the swap would have written (shell cleanup §9.4): a chat handoff opens in chat here too.
+            useTabStore.getState().openSingletonTab(executionContentFor(args.hostId, result.execution_id, from, fromTitle, args.mode))
           },
           t('handoff.open_execution'),
         )
