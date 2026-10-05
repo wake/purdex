@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.479] - 2026-10-05
+
+> 純 SPA，不必重新部署 daemon。殼層整理第二支（P2／7）。
+
+### Removed：工作區檔案樹與「專案路徑」設定（#1546）
+
+- 拿掉側欄的「檔案（工作區）」與「檔案（Session）」兩個 view，以及工作區設定裡的「專案路徑」。專案改由主機管理 › 專案維護（兩者資料不共用，主機的專案清單不受影響）。
+- 模組開關裡不再有「Files」。
+- 找不到檔案的彈窗拿掉「搜尋工作區」：它依賴上面那個專案路徑，而且 daemon 對這種搜尋本來就回 501。在 session 目錄裡搜尋照舊。
+
+### Internal
+
+- 整個 `files` module、`FileTreeView`／`FileTreeSessionView`／`FilesWorkspaceSettingsSection`、file-tree 專用的 open service、`PopupSpec.layer3Hits`、`fs-search` 的 `workspace-projectPath` root kind 與只為合併兩種搜尋存在的緩衝都已刪除；SR-2 測試改掛在 editor 的 `workspace-home-path`。
+
 ## [1.0.0-alpha.478] - 2026-10-05
 
 > 純 SPA，不必重新部署 daemon。殼層整理第一支（P1／7）。
