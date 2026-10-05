@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import type { ExecutionContent, ExecutionViewMode } from '../../types/tab'
-import { viewModeOf, withViewMode } from './view-mode'
+import { createTab } from '../../types/tab'
+import { collectLeaves, findPane, getPrimaryPane } from '../pane-tree'
+import { useTabStore } from '../../stores/useTabStore'
+import { setExecutionPaneMode, viewModeOf, withViewMode } from './view-mode'
 
 describe('viewModeOf', () => {
   it('reads an absent mode as room', () => {
@@ -23,5 +26,57 @@ describe('withViewMode', () => {
     expect(next).toEqual({ kind: 'execution', executionId: 'e1', host: 'h1', from, mode: 'chat' })
     expect(content.mode).toBeUndefined() // the input is not mutated
     expect(withViewMode(next, 'room')).toEqual({ kind: 'execution', executionId: 'e1', host: 'h1', from, mode: 'room' })
+  })
+})
+
+// Shell cleanup P6 (T6.5): one guarded write, shared by the pane wrapper's
+// view menu and the status bar's mode buttons.
+describe('setExecutionPaneMode', () => {
+  const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
+  let tabId: string
+  let primaryId: string
+  let secondId: string
+  const contentOf = (paneId: string) => findPane(useTabStore.getState().tabs[tabId].layout, paneId)!.content
+
+  beforeEach(() => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    const tab = createTab({ kind: 'execution', executionId: 'e1', host: 'h1', from })
+    useTabStore.getState().addTab(tab)
+    tabId = tab.id
+    primaryId = getPrimaryPane(tab.layout).id
+    useTabStore.getState().splitPane(tabId, primaryId, 'h', { kind: 'execution', executionId: 'e2', host: 'h1' })
+    secondId = collectLeaves(useTabStore.getState().tabs[tabId].layout).find((p) => p.id !== primaryId)!.id
+  })
+
+  it('writes the mode on the named pane only, keeping the rest of its content', () => {
+    setExecutionPaneMode(tabId, secondId, 'e2', 'chat')
+    expect(contentOf(secondId)).toEqual({ kind: 'execution', executionId: 'e2', host: 'h1', mode: 'chat' })
+    expect(contentOf(primaryId)).toEqual({ kind: 'execution', executionId: 'e1', host: 'h1', from })
+    setExecutionPaneMode(tabId, secondId, 'e2', 'room')
+    expect(contentOf(secondId)).toEqual({ kind: 'execution', executionId: 'e2', host: 'h1', mode: 'room' })
+  })
+
+  it('reads the content the store holds now, so a rewrite that landed since is kept', () => {
+    const from2 = { ...from, tmuxInstance: 'inst-2' }
+    useTabStore.getState().setPaneContent(tabId, primaryId, { kind: 'execution', executionId: 'e1', host: 'h2', from: from2 })
+    setExecutionPaneMode(tabId, primaryId, 'e1', 'chat')
+    expect(contentOf(primaryId)).toEqual({ kind: 'execution', executionId: 'e1', host: 'h2', from: from2, mode: 'chat' })
+  })
+
+  it('is a no-op when the pane no longer shows that execution, or is not an execution at all', () => {
+    setExecutionPaneMode(tabId, secondId, 'e1', 'chat') // the pane shows e2
+    expect(contentOf(secondId)).toEqual({ kind: 'execution', executionId: 'e2', host: 'h1' })
+    useTabStore.getState().setPaneContent(tabId, secondId, { kind: 'new-tab' })
+    const before = useTabStore.getState().tabs
+    setExecutionPaneMode(tabId, secondId, 'e2', 'chat')
+    expect(contentOf(secondId)).toEqual({ kind: 'new-tab' })
+    expect(useTabStore.getState().tabs).toBe(before)
+  })
+
+  it('is a no-op for a tab or pane that is gone', () => {
+    const before = useTabStore.getState().tabs
+    setExecutionPaneMode('no-such-tab', primaryId, 'e1', 'chat')
+    setExecutionPaneMode(tabId, 'no-such-pane', 'e1', 'chat')
+    expect(useTabStore.getState().tabs).toBe(before)
   })
 })

@@ -22,7 +22,7 @@ import { MemoryMonitorPage } from '../../components/MemoryMonitorPage'
 import { HostPage } from '../../components/HostPage'
 import ExecutionView from '../../components/execution/ExecutionView'
 import { resolveExecutionHostId } from '../nex/resolve-host'
-import { viewModeOf, withViewMode } from '../nex/view-mode'
+import { setExecutionPaneMode, viewModeOf } from '../nex/view-mode'
 import { AppearanceSection } from '../../components/settings/AppearanceSection'
 import { TerminalSection } from '../../components/settings/TerminalSection'
 import { ElectronSection } from '../../components/settings/ElectronSection'
@@ -109,19 +109,15 @@ function ExecutionPaneWrapper({ pane, isActive, isFocusTarget = false }: PaneRen
   // removed", never as another daemon (spec §4.3.2 step 5).
   const hostId = resolveExecutionHostId(content.host)
   // The view (room / chat, R2 plan T1.1) lives on the pane content, so it is
-  // persisted and travels with the tab (D1). The switch reads the content the
-  // store holds *now*, not this render's, so a `from` or host rewrite that
-  // landed since is kept; a pane that no longer shows this execution is left
-  // alone. The mode stays out of the `key`: switching must not remount the
-  // view (no resubscribe, no refetch).
+  // persisted and travels with the tab (D1). `setExecutionPaneMode` (shared
+  // with the status bar's mode buttons) reads the content the store holds
+  // *now*, so a `from` or host rewrite that landed since is kept, and leaves a
+  // pane that no longer shows this execution alone. The mode stays out of the
+  // `key`: switching must not remount the view (no resubscribe, no refetch).
   const executionId = content.executionId
   const onModeChange = (mode: ExecutionViewMode) => {
     if (!tabId) return
-    const store = useTabStore.getState()
-    const tab = store.tabs[tabId]
-    const current = tab ? findPane(tab.layout, pane.id)?.content : undefined
-    if (current?.kind !== 'execution' || current.executionId !== executionId) return
-    store.setPaneContent(tabId, pane.id, withViewMode(current, mode))
+    setExecutionPaneMode(tabId, pane.id, executionId, mode)
   }
   // No owning tab (should not happen for a rendered pane) → nothing to swap
   // back into, so no take-back is offered.
