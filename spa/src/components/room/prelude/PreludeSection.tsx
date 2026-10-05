@@ -5,7 +5,11 @@
 // never re-keys what is on screen; a chat span is keyed by its LAST message
 // (pages only grow at the front, so a span's end never moves). It
 // is not a RoomTurnGroup: no data-turn-index (the scroll memory's first
-// turn stays the worker's), no hover strip.
+// turn stays the worker's), no hover strip. Instead every drawn row, span,
+// note and marker carries the pos it starts at, `data-prelude-pos`, and a
+// chat span every pos it holds, `data-prelude-poses` — the scroll memory's
+// anchor inside the prelude (#1534). On the element's own root: a wrapper
+// would be one more box (and margin) above turn 1.
 import { useCallback, useMemo, type ReactNode } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { indexOperations } from '../../../lib/nex/operations'
@@ -42,6 +46,12 @@ export default function PreludeSection({ view, status, done, error, keyPrefix, n
   const folds = useInheritedFoldMemory()
   const idOf = useCallback((i: number) => view.ids[i], [view.ids])
   const index = useMemo(() => indexOperations(view.messages, idOf), [view.messages, idOf])
+  // Each message's entry pos, by its index in `view.messages`.
+  const posOf = useMemo(() => {
+    const out: string[] = []
+    for (const e of view.entries) if (e.kind === 'message') out[e.m] = e.pos
+    return out
+  }, [view.entries])
   // Chat's spans and each span's operations (hooks stay above the early return).
   const blocks = useMemo(() => (mode === 'chat' ? preludeBlocks(view) : []), [mode, view])
   const spanOps = useMemo(
@@ -68,15 +78,15 @@ export default function PreludeSection({ view, status, done, error, keyPrefix, n
       const label = e.entrypoint === 'cli' ? t('worker.prelude.segment_cli')
         : e.entrypoint.startsWith('sdk') ? t('worker.prelude.segment_headless')
         : e.entrypoint
-      return <PreludeMarker key={id} testId="prelude-segment" label={label} />
+      return <PreludeMarker key={id} testId="prelude-segment" label={label} pos={e.pos} />
     }
     if (e.kind === 'compaction') {
       const label = e.trigger === 'auto' ? t('worker.prelude.compaction_auto')
         : e.trigger === 'manual' ? t('worker.prelude.compaction_manual')
         : t('worker.prelude.compaction')
-      return <PreludeMarker key={id} testId="prelude-compaction" label={label} />
+      return <PreludeMarker key={id} testId="prelude-compaction" label={label} pos={e.pos} />
     }
-    return <PreludeNote key={id} id={id} source={e.source} text={e.text} truncated={e.truncated} totalBytes={e.totalBytes} stream={e.stream} />
+    return <PreludeNote key={id} id={id} pos={e.pos} source={e.source} text={e.text} truncated={e.truncated} totalBytes={e.totalBytes} stream={e.stream} />
   }
 
   return (
@@ -90,10 +100,10 @@ export default function PreludeSection({ view, status, done, error, keyPrefix, n
             : (
               <ChatTurnBody key={`${keyPrefix}-prelude-span-${view.ids[b.end - 1]}`} messages={view.messages} turn={b}
                 ops={spanOps[bi]} ctx={ctx} toolsKey={chatToolsKey(`${keyPrefix}-prelude`, view.ids[b.end - 1])}
-                interrupted={t('stream.interrupted')} />
+                interrupted={t('stream.interrupted')} preludePoses={posOf.slice(b.start, b.end)} />
             ))
           : view.entries.map((e) => (e.kind === 'message'
-            ? (index.childIndexes.has(e.m) ? null : renderMessage(view.messages[e.m], e.m, ctx))
+            ? (index.childIndexes.has(e.m) ? null : renderMessage(view.messages[e.m], e.m, ctx, e.pos))
             : entryNode(e)))}
         {/* The handoff into this worker is itself a switch (D2) and Nexen never sends a segment for the worker's own run. */}
         {view.entries.length > 0 && <PreludeMarker testId="prelude-handoff" label={t('worker.prelude.segment_headless')} />}

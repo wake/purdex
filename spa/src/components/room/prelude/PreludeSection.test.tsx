@@ -487,3 +487,69 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection closing h
     }
   })
 })
+
+// #1534 (spec §5.4): every drawn prelude element names the position it
+// starts at, so the scroll memory can anchor inside the prelude. The
+// attribute sits on the row / span / note / marker root itself — a wrapper
+// would add a box (and the section's space-y margin) above turn 1.
+describe('PreludeSection scroll anchors (#1534)', () => {
+  const items: PreludeItem[] = [
+    { pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+    m('2', 'user', [{ type: 'text', text: 'fix the build' }]),
+    m('3', 'assistant', [{ type: 'text', text: 'on it' }]),
+    note('4', 'command_output', 'Model set'),
+    note('5', 'bash_input', 'ls'),
+    note('6', 'task_notification', 'build done'),
+    note('7', 'peer_message', 'hi'),
+    { pos: '8', at: 0, kind: 'prelude.compaction', trigger: 'auto' },
+    m('9', 'user', [{ type: 'text', text: 'again' }]),
+    m('10', 'assistant', [{ type: 'tool_use', id: 'tk', name: 'Task', input: { description: 'look', subagent_type: 'Explore' } }]),
+    // A subagent's frame: drawn inside its Task (room), never a row of its own.
+    { pos: '11', at: 0, kind: 'user', msg: { type: 'user', parent_tool_use_id: 'tk', message: { role: 'user', content: [{ type: 'text', text: 'sub prompt' }], stop_reason: null } } as unknown as StreamMessage },
+    m('12', 'user', [{ type: 'tool_result', tool_use_id: 'tk', content: 'back' }]),
+    { pos: '13', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+  ]
+  /** The very same nodes, in order (identity, not isEqualNode). */
+  const sameNodes = (a: Element[], b: Element[]) => a.length === b.length && a.every((e, k) => e === b[k])
+  const draw = (mode: 'room' | 'chat') => {
+    render(<PreludeSection {...base} mode={mode} view={derivePrelude(items)} status="ok" done />)
+    const section = screen.getByTestId('worker-prelude')
+    const marked = [...section.querySelectorAll<HTMLElement>('[data-prelude-pos]')]
+    return { section, marked, poses: marked.map((e) => e.getAttribute('data-prelude-pos')) }
+  }
+
+  it('room: every row, note and marker carries its pos, on its own root, the handoff none', () => {
+    const { section, marked, poses } = draw('room')
+    expect(poses).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '12', '13'])
+    // Notes and markers: the attribute is on the element that carries the testid.
+    const byPos = (p: string) => marked.find((e) => e.getAttribute('data-prelude-pos') === p)!
+    expect(['1', '4', '5', '6', '7', '8', '13'].map((p) => byPos(p).getAttribute('data-testid'))).toEqual([
+      'prelude-segment', 'prelude-note-command_output', 'prelude-bash-input', 'prelude-task',
+      'prelude-note-peer_message', 'prelude-compaction', 'prelude-segment',
+    ])
+    expect(byPos('2').textContent).toContain('fix the build')
+    expect(screen.getByTestId('prelude-handoff').hasAttribute('data-prelude-pos')).toBe(false)
+    // No wrapper: the section's children are exactly the marked roots, then the handoff.
+    expect(sameNodes([...section.children], [...marked, screen.getByTestId('prelude-handoff')])).toBe(true)
+    expect(section.querySelector('[data-prelude-poses]')).toBeNull()
+  })
+
+  it('chat: each span carries its first pos and every message it holds; entries carry theirs', () => {
+    const { section, marked, poses } = draw('chat')
+    expect(poses).toEqual(['1', '2', '4', '5', '6', '7', '8', '9', '13'])
+    const spans = [...section.querySelectorAll<HTMLElement>('[data-prelude-poses]')]
+    expect(spans.map((s) => [s.getAttribute('data-prelude-pos'), s.getAttribute('data-prelude-poses')])).toEqual([
+      ['2', '2 3'], ['9', '9 10 11 12'],
+    ])
+    expect(spans[0].textContent).toContain('fix the build')
+    expect(spans[0].textContent).toContain('on it')
+    expect(screen.getByTestId('prelude-handoff').hasAttribute('data-prelude-pos')).toBe(false)
+    expect(sameNodes([...section.children], [...marked, screen.getByTestId('prelude-handoff')])).toBe(true)
+  })
+
+  it('a span word-matches a pos it holds, and only that', () => {
+    draw('chat')
+    expect(document.querySelector('[data-prelude-poses~="11"]')?.getAttribute('data-prelude-pos')).toBe('9')
+    expect(document.querySelector('[data-prelude-poses~="1"]')).toBeNull()
+  })
+})

@@ -32,6 +32,8 @@ export interface MessageRowProps {
   msg: StreamMessage
   i: number
   ctx: RenderCtx
+  /** A top-level prelude row's entry pos, on the root as `data-prelude-pos` (#1534). */
+  preludePos?: string
 }
 
 /** tool_use blocks in the given messages — a subagent's own calls, not its children's. */
@@ -161,7 +163,7 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
   return null
 }
 
-export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
+export default function MessageRow({ msg, i, ctx, preludePos }: MessageRowProps) {
   const t = useI18nStore((s) => s.t)
   // A subagent's own frame (#1263): whatever it says as `user`, the human did not say it.
   const fromSubagent = (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id != null
@@ -191,7 +193,7 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
       return null
     }
     return (
-      <div>
+      <div data-prelude-pos={preludePos}>
         {am.message.content.map((block, j) => decorate(block, j, assistantBlock(block, j)))}
       </div>
     )
@@ -247,7 +249,7 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
       return null
     }
     return (
-      <div>
+      <div data-prelude-pos={preludePos}>
         {um.message.content.map((block, j) => decorate(block, j, userBlock(block, j)))}
         {atts && attsAt < 0 && <RoomUserLine text="" attachments={<AttachmentThumbs items={atts} />} />}
       </div>

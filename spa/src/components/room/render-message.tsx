@@ -30,7 +30,10 @@ export interface RenderCtx {
   idOf?: MessageIdOf
 }
 
-/** The message at position `i` of `ctx.messages`. */
-export function renderMessage(msg: StreamMessage, i: number, ctx: RenderCtx) {
-  return <MessageRow key={rowKey(ctx, i)} msg={msg} i={i} ctx={ctx} />
+/**
+ * The message at position `i` of `ctx.messages`. `preludePos`: a prelude
+ * row's entry pos, put on the row's root (scroll anchor, #1534).
+ */
+export function renderMessage(msg: StreamMessage, i: number, ctx: RenderCtx, preludePos?: string) {
+  return <MessageRow key={rowKey(ctx, i)} msg={msg} i={i} ctx={ctx} preludePos={preludePos} />
 }
