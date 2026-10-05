@@ -3,6 +3,7 @@ package tmux
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -86,6 +87,7 @@ type FakeExecutor struct {
 	showGlobalOptionCalls []string
 	paneIDs               []string // global pane id list for HasPane
 	hasPaneErr            error    // simulated transient tmux error for HasPane
+	listAllPanesErr       error    // returned by ListAllPanes when non-nil
 	listCallCount         int      // how many times ListSessions was called
 	HooksOutput           string   // returned by ShowHooksGlobal
 	hookSets              []string // events passed to SetHookGlobal, failed calls included
@@ -632,6 +634,36 @@ func (f *FakeExecutor) PaneSessionID(ctx context.Context, target string) (string
 	return "", fmt.Errorf("pane session id not configured for %s", target)
 }
 
+// ListAllPanes lists the panes the fake knows a session id for, so a test
+// arranges the listing with SetPaneSessionID / ForgetPaneSessionID exactly as
+// it arranges PaneSessionID, and each pane's pid resolves as ActivePanePID's
+// does. Rows are sorted by pane id because map order is random and a test
+// must not depend on it.
+func (f *FakeExecutor) ListAllPanes(ctx context.Context) ([]PaneLocation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listAllPanesErr != nil {
+		return nil, f.listAllPanesErr
+	}
+	var panes []PaneLocation
+	for paneID, sessionID := range f.paneSessionIDs {
+		panes = append(panes, PaneLocation{PaneID: paneID, SessionID: sessionID, PanePID: f.activePanePIDLocked(paneID)})
+	}
+	sort.Slice(panes, func(i, j int) bool { return panes[i].PaneID < panes[j].PaneID })
+	return panes, nil
+}
+
+// SetListAllPanesError makes ListAllPanes fail with err, the shape of a
+// listing that could not be completed as a whole; nil clears it.
+func (f *FakeExecutor) SetListAllPanesError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listAllPanesErr = err
+}
+
 func (f *FakeExecutor) PanePID(target string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -650,14 +682,20 @@ func (f *FakeExecutor) SetActivePanePID(target, pid string) {
 func (f *FakeExecutor) ActivePanePID(target string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	return f.activePanePIDLocked(target), nil
+}
+
+// activePanePIDLocked is ActivePanePID's lookup, shared with ListAllPanes so
+// the two cannot drift. Caller holds f.mu.
+func (f *FakeExecutor) activePanePIDLocked(target string) string {
 	if pid, ok := f.activePanePIDs[target]; ok {
-		return pid, nil
+		return pid
 	}
 	// Fall through to panePIDs so tests that only set PanePID still work.
 	if pid, ok := f.panePIDs[target]; ok {
-		return pid, nil
+		return pid
 	}
-	return "fake-active-pid", nil
+	return "fake-active-pid"
 }
 
 func (f *FakeExecutor) PaneChildCommands(target string) ([]string, error) {

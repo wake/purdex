@@ -20,6 +20,14 @@ type TmuxSession struct {
 	Cwd  string
 }
 
+// PaneLocation is one pane as ListAllPanes reports it, every value as tmux
+// prints it.
+type PaneLocation struct {
+	PaneID    string // e.g. "%5"
+	SessionID string // e.g. "$0"
+	PanePID   string // pid of the pane's process
+}
+
 type TmuxPaneMetadata struct {
 	SessionID          string
 	SessionName        string
@@ -98,6 +106,17 @@ type Executor interface {
 	// and a tmux server that has stopped answering must not hold that request
 	// open past it. A caller with nothing to bound it passes context.Background().
 	PaneSessionID(ctx context.Context, target string) (string, error)
+	// ListAllPanes reads every pane of the server — its id, its session's id
+	// and its process's pid — in ONE tmux round trip, where PaneSessionID and
+	// PanePID cost one per pane. The peers inventory reads it twice per pass:
+	// once to enumerate the panes it walks, and once after the walk to
+	// re-confirm that those panes are still in the sessions they were found in.
+	//
+	// It takes a context for the reason PaneSessionID does: it is on a request
+	// path with a deadline, and a tmux server that has stopped answering must
+	// not hold that request open past it. When ctx ends the error wraps
+	// ctx.Err().
+	ListAllPanes(ctx context.Context) ([]PaneLocation, error)
 	PanePID(target string) (string, error)
 	ActivePanePID(target string) (string, error)
 	PaneChildCommands(target string) ([]string, error)
@@ -519,6 +538,38 @@ func (r *RealExecutor) PaneSessionID(ctx context.Context, target string) (string
 		return "", fmt.Errorf("tmux display-message session_id: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// listAllPanesFormat separates its fields with a space, not the TAB the other
+// listings use: tmux without a UTF-8 client locale rewrites a TAB in -F output
+// to "_" (alpha.340), which would leave every row one unparseable field. None
+// of the three values can contain a space, so a space is unambiguous.
+const listAllPanesFormat = "#{pane_id} #{session_id} #{pane_pid}"
+
+func (r *RealExecutor) ListAllPanes(ctx context.Context) ([]PaneLocation, error) {
+	out, err := boundedRead(ctx, "list-panes", "-a", "-F", listAllPanesFormat).Output()
+	if err != nil {
+		if cerr := readCtxErr(ctx, "tmux list-panes -a", err); cerr != nil {
+			return nil, cerr
+		}
+		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
+	}
+	return parsePaneLocations(out), nil
+}
+
+// parsePaneLocations parses list-panes output in listAllPanesFormat. A line
+// counts only with exactly three fields; any other line is skipped rather than
+// half-filled, so no caller is handed a pane with no session or no pid.
+func parsePaneLocations(out []byte) []PaneLocation {
+	var panes []PaneLocation
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			continue
+		}
+		panes = append(panes, PaneLocation{PaneID: fields[0], SessionID: fields[1], PanePID: fields[2]})
+	}
+	return panes
 }
 
 func (r *RealExecutor) PanePID(target string) (string, error) {
