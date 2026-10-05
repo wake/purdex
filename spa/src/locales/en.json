@@ -1165,6 +1165,11 @@
   "hosts.mode_pairing_hint": "Daemon is waiting for pairing",
   "hosts.mode_pending_hint": "Enter the token shown in the daemon terminal",
   "hosts.mode_normal_hint": "Daemon is running — enter the configured token",
+  "hosts.restart.done": "{{host}}: daemon restarted",
+  "hosts.restart.done_with_warnings": "{{host}}: daemon restarted, but its shutdown logged {{count}} warning(s) — see ~/.config/pdx/logs/pdx.log",
+  "hosts.restart.timeout": "{{host}}: the daemon did not come back within 60 seconds — check ~/.config/pdx/logs/pdx.log on that host",
+  "hosts.restart.failed": "{{host}}: restart failed ({{error}}) — check ~/.config/pdx/logs/pdx.log on that host",
+  "hosts.restart.unsupported": "{{host}}: this daemon is too old for remote restart — run pdx stop && pdx start on that host",
 
   "hosts.nex.label": "Nexen",
   "hosts.nex.retry": "Retry",

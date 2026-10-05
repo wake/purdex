@@ -1165,6 +1165,11 @@
   "hosts.mode_pairing_hint": "Daemon 等待配對中",
   "hosts.mode_pending_hint": "請輸入 daemon 終端機顯示的 Token",
   "hosts.mode_normal_hint": "Daemon 運作中，請輸入已設定的 Token",
+  "hosts.restart.done": "{{host}}：daemon 已重新啟動",
+  "hosts.restart.done_with_warnings": "{{host}}：daemon 已重新啟動，但關閉時有 {{count}} 個警告（見 ~/.config/pdx/logs/pdx.log）",
+  "hosts.restart.timeout": "{{host}}：daemon 沒有在 60 秒內回來，請查看該主機的 ~/.config/pdx/logs/pdx.log",
+  "hosts.restart.failed": "{{host}}：重啟失敗（{{error}}），請查看該主機的 ~/.config/pdx/logs/pdx.log",
+  "hosts.restart.unsupported": "{{host}}：這台 daemon 版本不支援遠端重啟，請在該主機執行 pdx stop && pdx start",
 
   "hosts.nex.label": "Nexen",
   "hosts.nex.retry": "重試",
