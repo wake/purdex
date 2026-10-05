@@ -85,6 +85,12 @@ type FrameTraceMeta struct {
 	// (agent-last-state spec §1); a proxy detach, a child frame and an orphan
 	// SessionEnd leave it nil.
 	Exit *Exit
+
+	// IdentityRecorded is set only on the sender's own-frame return that calls
+	// recordSessionIdentity: true when the frame now holds this event's
+	// identity (see recordSessionIdentity). handleEvent publishes a
+	// SessionStart to subscribers only when it is true.
+	IdentityRecorded bool
 }
 
 // recordSessionIdentity stores the sender's own agent session id and cwd on
@@ -121,35 +127,55 @@ type FrameTraceMeta struct {
 // newer event having already landed, or any other store error — is logged and
 // swallowed rather than failing the hook: the event's status meaning has
 // already been persisted by the mutation this follows.
-func (m *Module) recordSessionIdentity(req EventRequest, frameID string) {
+//
+// The result says whether the frame now holds this event's identity: true when
+// the write succeeded or was refused as ErrIdentityOutOfOrder (a newer event of
+// the same run already wrote its identity, so the row holds a current one);
+// false when the frame is gone, the write failed, or there was nothing to
+// write. A SessionStart is published to subscribers only on true.
+func (m *Module) recordSessionIdentity(req EventRequest, frameID string) bool {
 	if m == nil || m.frames == nil || m.registry == nil || frameID == "" {
-		return
+		return false
 	}
 	provider, ok := m.registry.Get(req.AgentType)
 	if !ok {
-		return
+		return false
 	}
 	identifier, ok := provider.(agentpkg.SessionIdentifier)
 	if !ok {
-		return
+		return false
 	}
 	sessionID, cwd := identifier.IdentifyEvent(req.PurdexName, req.RawEvent)
 	if sessionID == "" && cwd == "" {
-		return
+		return false
 	}
-	if err := m.frames.UpdateSessionIdentity(frameID, sessionID, cwd, req.identitySeq); err != nil {
+	if err := updateSessionIdentityFn(m.frames, frameID, sessionID, cwd, req.identitySeq); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			log.Printf("[agent] session_identity_frame_gone: frame=%s pane=%s", frameID, req.TmuxPaneID)
-			return
+			return false
 		}
 		if errors.Is(err, store.ErrIdentityOutOfOrder) {
 			// Not a failure: a newer event for the same frame already landed
 			// while this one was in flight, and its identity is the right one.
 			log.Printf("[agent] session_identity_stale_event: frame=%s pane=%s seq=%d", frameID, req.TmuxPaneID, req.identitySeq)
-			return
+			return true
 		}
 		log.Printf("[agent] session_identity_write_failed: frame=%s pane=%s err=%v", frameID, req.TmuxPaneID, err)
+		return false
 	}
+	if tp := agentpkg.ExtractTranscriptPath(req.RawEvent); tp != "" {
+		if err := m.frames.SetTranscriptPath(frameID, tp, req.identitySeq); err != nil &&
+			!errors.Is(err, sql.ErrNoRows) && !errors.Is(err, store.ErrIdentityOutOfOrder) {
+			log.Printf("[agent] transcript_path_write_failed: frame=%s pane=%s err=%v", frameID, req.TmuxPaneID, err)
+		}
+	}
+	return true
+}
+
+// updateSessionIdentityFn is the identity write, a seam so tests can inject a
+// store failure.
+var updateSessionIdentityFn = func(s *store.FramesStore, frameID, sessionID, cwd string, seq int64) error {
+	return s.UpdateSessionIdentity(frameID, sessionID, cwd, seq)
 }
 
 // payloadSessionID is the session id the hook payload itself carries — the
@@ -1088,7 +1114,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	// This is also the ordinary-event path, and therefore the one that
 	// matters most: a pre-deploy session's frame only ever sees ordinary
 	// events, and they take UpdateHookPath, never Upsert.
-	m.recordSessionIdentity(req, stored.FrameID)
+	identityRecorded := m.recordSessionIdentity(req, stored.FrameID)
 	projection, err := m.projectPane(req.TmuxPaneID)
 	// Phase 3 — three-state reason (plan §1.4):
 	//   parent_frame_found       → legacy lookup hit (line 220-228)
@@ -1128,6 +1154,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		After:            summarizeFrame(&stored),
 		MatchedAgentType: rebuiltAgentType,
 		Provenance:       prov,
+		IdentityRecorded: identityRecorded,
 	}, err
 }
 

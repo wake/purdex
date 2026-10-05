@@ -273,8 +273,9 @@ const TerminalSessionsKey = "agent.terminal-sessions"
 type TerminalSession struct {
 	FrameID, PaneID, AgentType, SessionID, Cwd, TranscriptPath string
 	// Verified is true when the pid is alive AND its start time matched the
-	// recorded one. False means "alive, start time unreadable": an owner check
-	// counts it (conservative), the Q1 handler does not act on it alone.
+	// recorded one. False means "alive, start time unreadable": not an owner
+	// under D1, but S is not provably free either — an owner check answers
+	// 503 owner_check_failed (retryable), and the Q1 handler does not act on it.
 	Verified bool
 }
 
@@ -685,6 +686,8 @@ func executionIsFor(e store.Execution, sid string) bool // sid != "" && (Session
 // liveWorkersFor returns S's live executions, newest first (CreatedAt desc, then ID desc).
 // On errOwnerScanTruncated it still returns what it found.
 func (m *Module) liveWorkersFor(parent context.Context, sid string) ([]store.Execution, error)
+// scanLiveWorkers is the shared pager; liveWorkersFor = scanLiveWorkers(keep = executionIsFor(·, sid)).
+func (m *Module) scanLiveWorkers(parent context.Context, keep func(store.Execution) bool) ([]store.Execution, error)
 ```
 
 - Fakes (test-only):
@@ -806,6 +809,13 @@ func (m *Module) liveWorkersFor(parent context.Context, sid string) ([]store.Exe
 	if sid == "" {
 		return nil, nil
 	}
+	return m.scanLiveWorkers(parent, func(e store.Execution) bool { return executionIsFor(e, sid) })
+}
+
+// scanLiveWorkers pages the non-archived executions and keeps the live ones
+// that keep accepts, newest first. Task 11's overflow reconcile calls it with
+// a keep-all filter.
+func (m *Module) scanLiveWorkers(parent context.Context, keep func(store.Execution) bool) ([]store.Execution, error) {
 	var out []store.Execution
 	cursor := ""
 	for page := 0; page < ownerScanMaxPages; page++ {
@@ -816,7 +826,7 @@ func (m *Module) liveWorkersFor(parent context.Context, sid string) ([]store.Exe
 			return nil, fmt.Errorf("nex: listing executions: %w", err)
 		}
 		for _, e := range res.Items {
-			if executionIsFor(e, sid) && isLiveExecution(e) {
+			if isLiveExecution(e) && keep(e) {
 				out = append(out, e)
 			}
 		}
@@ -1502,14 +1512,20 @@ func TestCheckOwners(t *testing.T) {
 			t.Fatal(herr)
 		}
 	})
-	t.Run("terminal elsewhere (verified or not)", func(t *testing.T) {
-		for _, v := range []bool{true, false} {
-			env := newHandoffEnv(t)
-			env.terminals.live = map[string][]agent.TerminalSession{"S": {ts("%9", v)}}
-			herr := env.m.checkOwners(context.Background(), "S", "", "")
-			if herr == nil || herr.status != 409 || herr.code != "session_owned" || herr.detail["owner"] != "terminal" || herr.detail["tmux_pane_id"] != "%9" {
-				t.Fatalf("verified=%v herr=%+v", v, herr)
-			}
+	t.Run("verified terminal elsewhere → 409 session_owned", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		env.terminals.live = map[string][]agent.TerminalSession{"S": {ts("%9", true)}}
+		herr := env.m.checkOwners(context.Background(), "S", "", "")
+		if herr == nil || herr.status != 409 || herr.code != "session_owned" || herr.detail["owner"] != "terminal" || herr.detail["tmux_pane_id"] != "%9" {
+			t.Fatalf("herr=%+v", herr)
+		}
+	})
+	t.Run("unverifiable terminal elsewhere → 503 owner_check_failed (D1: not an owner, but not provably free)", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		env.terminals.live = map[string][]agent.TerminalSession{"S": {ts("%9", false)}}
+		herr := env.m.checkOwners(context.Background(), "S", "", "")
+		if herr == nil || herr.status != 503 || herr.code != "owner_check_failed" || herr.detail["tmux_pane_id"] != "%9" {
+			t.Fatalf("herr=%+v", herr)
 		}
 	})
 	t.Run("terminal in the allowed pane", func(t *testing.T) {
@@ -1567,6 +1583,13 @@ func (m *Module) checkOwners(parent context.Context, sid, allowExec, allowPane s
 	for _, t := range terms {
 		if allowPane != "" && t.PaneID == allowPane {
 			continue
+		}
+		if !t.Verified {
+			// D1: an owner is a pid that still has its recorded start time. One
+			// we cannot read is not an owner — but S is not provably free either,
+			// so the transfer is refused as retryable (PR #1572 review A2).
+			return &handoffError{http.StatusServiceUnavailable, "owner_check_failed", "cannot verify a terminal process recorded for this conversation",
+				map[string]any{"session_id": sid, "tmux_pane_id": t.PaneID}}
 		}
 		return &handoffError{http.StatusConflict, "session_owned", "this conversation is open in a terminal",
 			map[string]any{"owner": "terminal", "session_id": sid, "tmux_pane_id": t.PaneID}}
@@ -2314,6 +2337,17 @@ func TestManualResume_SkipsAWorkerBeingMovedAndReportsOnlySuccesses(t *testing.T
 	}
 }
 
+func TestManualResume_OverflowReconcilesEverySession(t *testing.T) {
+	env := newHandoffEnv(t)
+	// S has a verified terminal; T has none. Both have a live worker.
+	env.terminals.live = map[string][]agent.TerminalSession{"S": {{FrameID: "F", PaneID: "%4", SessionID: "S", AgentType: "cc", Verified: true}}}
+	env.store.listRows = []store.Execution{row("E1", "idle", false, "S", "", 1), row("E2", "idle", false, "T", "", 2)}
+	env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
+	if len(env.svc.ArchiveCalls()) != 1 || env.svc.ArchiveCalls()[0].ExecutionID != "E1" {
+		t.Fatalf("archive calls = %+v; want only E1 (S is in a terminal, T is not)", env.svc.ArchiveCalls())
+	}
+}
+
 func TestManualResume_TruncatedScanStillExitsWhatItFound(t *testing.T) {
 	env := newHandoffEnv(t)
 	liveTerminal(env, true)
@@ -2370,6 +2404,10 @@ func (m *Module) onSessionStart(ev agent.SessionStartEvent) {
 	if m.sys.service == nil || m.sys.store == nil || m.opts.Config == nil {
 		return
 	}
+	if ev.Overflow {
+		m.reconcileTerminalOwners()
+		return
+	}
 	if ev.AgentType != "cc" || ev.SessionID == "" || (ev.Source != "startup" && ev.Source != "resume") {
 		return
 	}
@@ -2419,6 +2457,28 @@ func (m *Module) onSessionStart(ev agent.SessionStartEvent) {
 		}
 		m.logf("nex: manual resume %s in %s → worker %s exited", ev.SessionID, ev.TmuxSession, w.ID)
 		m.broadcastWorkerExited(w.ID, ev)
+	}
+}
+
+// reconcileTerminalOwners is the hub's overflow path (PR #1572 fix round 3):
+// SessionStarts were coalesced away while this subscriber lagged, so every
+// session that still has a live worker is re-checked as if it had just
+// resumed. The per-session path keeps every guard (sid lock, verified frame).
+func (m *Module) reconcileTerminalOwners() {
+	ctx, cancel := context.WithTimeout(context.Background(), manualResumeTimeout)
+	workers, err := m.scanLiveWorkers(ctx, func(store.Execution) bool { return true })
+	cancel()
+	if err != nil {
+		m.logf("nex: owner reconcile: worker scan: %v (re-checking %d found)", err, len(workers))
+	}
+	seen := map[string]bool{}
+	for _, w := range workers {
+		sid := firstNonEmpty(w.SessionID, w.ResumeSessionID)
+		if sid == "" || seen[sid] {
+			continue
+		}
+		seen[sid] = true
+		m.onSessionStart(agent.SessionStartEvent{AgentType: "cc", SessionID: sid, Source: "resume"})
 	}
 }
 

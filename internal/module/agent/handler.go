@@ -620,6 +620,19 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// existing meaning (the session projection winner) — the two identities
 	// coexist and never mix.
 	attachProvenance(&normalized, frameMeta)
+	// Conversation entity (spec §4.3, D3): a granted SessionStart is the
+	// moment "S is in a terminal" becomes true; subscribers (the nex module's
+	// manual-resume handler) run off the hook path.
+	// The lifecycle check is redundant today (frame_ops.go grants an envelope
+	// only on SessionStart) and kept on purpose: Q1 must never fire on any
+	// other event, whatever a later change does to the grant site.
+	// IdentityRecorded: a subscriber re-checks LiveBySessionID(S), which only
+	// sees S once the frame row holds it. If the identity write failed the
+	// event would be skipped there and never replayed, so do not publish it.
+	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil &&
+		frameMeta.Provenance.SessionID != "" && frameMeta.IdentityRecorded {
+		m.sessionStarts.publish(sessionStartEventFrom(req, *frameMeta.Provenance))
+	}
 	// Exit envelope (agent-last-state spec §1): granted only when a
 	// SessionEnd deleted the sender's own root frame.
 	attachExit(&normalized, frameMeta.Exit)
