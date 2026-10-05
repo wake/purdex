@@ -286,9 +286,7 @@ describe('useLayoutStore', () => {
         state: {
           regions: {
             'primary-sidebar': { views: ['file-tree-workspace'], activeViewId: 'file-tree-workspace', width: 240, mode: 'pinned' },
-            'primary-panel': { views: [], width: 200, mode: 'collapsed' },
-            'secondary-panel': { views: [], width: 200, mode: 'hidden', previousMode: 'collapsed' },
-            'secondary-sidebar': { views: ['executions'], width: 240, mode: 'collapsed' },
+            'secondary-panel': { views: ['executions'], width: 200, mode: 'hidden', previousMode: 'collapsed' },
           },
           activityBarWidth: 'wide',
           tabPosition: 'top',

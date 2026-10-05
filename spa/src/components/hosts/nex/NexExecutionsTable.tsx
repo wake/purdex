@@ -54,7 +54,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
 
   // Same gate as before the store migration: a host that is not nex-ready
   // subscribes nothing (the store would refuse to open anyway, but staying
-  // off it keeps the refcount honest for the sidebar view).
+  // off it keeps the refcount honest for the worker list).
   const shared = useHostExecutions(hostId, { enabled })
   const { refetch, refreshRevision } = shared
 

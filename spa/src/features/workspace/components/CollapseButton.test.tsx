@@ -103,9 +103,8 @@ describe('CollapseButton — icon', () => {
 })
 
 describe('CollapseButton — topbar variant active state', () => {
-  // Matches the visual treatment of the region-toggle buttons in TitleBar's
-  // right cluster: accent tint when the region is "visible" (here: activity
-  // bar is wide), neutral secondary styling otherwise.
+  // Accent tint when the activity bar is wide, neutral secondary styling
+  // otherwise.
   it('shows accent colors when wide (active)', () => {
     useLayoutStore.setState({ activityBarWidth: 'wide' })
     render(<CollapseButton variant="topbar" />)
@@ -121,15 +120,15 @@ describe('CollapseButton — topbar variant active state', () => {
     expect(btn.className).not.toMatch(/text-accent-base/)
   })
 
-  it('uses the p-1 rounded pattern shared with region toggles', () => {
+  it('uses the p-1 rounded pattern shared with the title bar layout buttons', () => {
     render(<CollapseButton variant="topbar" />)
     const btn = screen.getByRole('button')
     expect(btn.className).toMatch(/\bp-1\b/)
     expect(btn.className).toMatch(/\brounded\b/)
   })
 
-  it('matches region-toggle structure: no flex centering classes', () => {
-    // Region toggles in TitleBar don't use `flex items-center justify-center`;
+  it('matches the layout-button structure: no flex centering classes', () => {
+    // The layout buttons in TitleBar don't use `flex items-center justify-center`;
     // the svg centers naturally. Keeping the class list identical avoids subtle
     // layout drift between (a) and (b) buttons.
     render(<CollapseButton variant="topbar" />)
@@ -180,9 +179,8 @@ describe('CollapseButton — icon', () => {
 })
 
 describe('CollapseButton — topbar variant active state', () => {
-  // Matches the visual treatment of the region-toggle buttons in TitleBar's
-  // right cluster: accent tint when the region is "visible" (here: activity
-  // bar is wide), neutral secondary styling otherwise.
+  // Accent tint when the activity bar is wide, neutral secondary styling
+  // otherwise.
   it('shows accent colors when wide (active)', () => {
     useLayoutStore.setState({ activityBarWidth: 'wide' })
     render(<CollapseButton variant="topbar" />)
@@ -198,7 +196,7 @@ describe('CollapseButton — topbar variant active state', () => {
     expect(btn.className).not.toMatch(/text-accent-base/)
   })
 
-  it('uses the p-1 rounded pattern shared with region toggles', () => {
+  it('uses the p-1 rounded pattern shared with the title bar layout buttons', () => {
     render(<CollapseButton variant="topbar" />)
     const btn = screen.getByRole('button')
     expect(btn.className).toMatch(/\bp-1\b/)
