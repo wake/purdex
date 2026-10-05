@@ -515,6 +515,66 @@ func TestExitEndpoint(t *testing.T) {
 		if status != 200 || len(env.svc.terminateCalls) != 1 || env.svc.terminateCalls[0].LeaseID != "L-mine" || len(env.svc.acquires) != 0 {
 			t.Fatalf("%d %v calls=%+v acquires=%v", status, body, env.svc.terminateCalls, env.svc.acquires)
 		}
+		if len(env.svc.renewCalls) != 1 || env.svc.renewCalls[0].LeaseID != "L-mine" || len(env.svc.releases) != 0 {
+			t.Fatalf("caller lease must be validated by a renew and never released: renew=%+v releases=%+v", env.svc.renewCalls, env.svc.releases)
+		}
+	})
+	t.Run("B2-a: stale caller lease on a running row → re-acquired, 200, own lease released", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{exec: store.Execution{ID: "E1", State: store.StateRunning}}}
+		env.svc.enforceLease = true
+		env.svc.heldLease = store.Lease{ID: "L-stale", PrincipalID: "pdx:" + testHostID, ExpiresAt: nowMs() - 1}
+		env.svc.lease = store.Lease{ID: "L-new"}
+		status, body := exitPost(t, env, "E1", `{"lease_id":"L-stale"}`)
+		if status != 200 || body["exited"] != true || body["terminated"] != true || body["archived"] != true {
+			t.Fatalf("%d %v", status, body)
+		}
+		if len(env.svc.renewCalls) != 1 || env.svc.renewCalls[0].LeaseID != "L-stale" {
+			t.Fatalf("renew calls = %+v", env.svc.renewCalls)
+		}
+		if len(env.svc.terminateCalls) != 1 || env.svc.terminateCalls[0].LeaseID != "L-new" {
+			t.Fatalf("terminate calls = %+v", env.svc.terminateCalls)
+		}
+		if len(env.svc.releases) != 1 || env.svc.releases[0].LeaseID != "L-new" {
+			t.Fatalf("releases = %+v (the re-acquired lease must be released)", env.svc.releases)
+		}
+	})
+	t.Run("B2-b: idle row held by a non-pdx principal, any caller lease → 409 held_by, nothing changed", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		ploom := store.Lease{ID: "L-p", PrincipalID: "ploom:agent-7", ExpiresAt: nowMs() + 60_000}
+		env.store.results = []getResult{{exec: store.Execution{ID: "E1", State: store.StateIdle, LeaseID: ploom.ID, LeasePrincipalID: ploom.PrincipalID, LeaseExpiresAt: ploom.ExpiresAt}}}
+		env.svc.enforceLease = true
+		env.svc.heldLease = ploom
+		status, body := exitPost(t, env, "E1", `{"lease_id":"L-any"}`)
+		if status != 409 || body["code"] != "held_by" || body["principal"] != "ploom:agent-7" {
+			t.Fatalf("%d %v", status, body)
+		}
+		if len(env.svc.terminateCalls) != 0 || len(env.svc.ArchiveCalls()) != 0 {
+			t.Fatalf("terminate=%d archive=%d, want 0/0", len(env.svc.terminateCalls), len(env.svc.ArchiveCalls()))
+		}
+	})
+	t.Run("B2-c: failed row with a caller lease → no renew, archived, 200", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{exec: store.Execution{ID: "E1", State: store.StateFailed}}}
+		status, body := exitPost(t, env, "E1", `{"lease_id":"L-mine"}`)
+		if status != 200 || body["exited"] != true || body["archived"] != true || body["state"] != "failed" {
+			t.Fatalf("%d %v", status, body)
+		}
+		if len(env.svc.renewCalls) != 0 || len(env.svc.terminateCalls) != 0 || len(env.svc.ArchiveCalls()) != 1 {
+			t.Fatalf("renew=%d terminate=%d archive=%d", len(env.svc.renewCalls), len(env.svc.terminateCalls), len(env.svc.ArchiveCalls()))
+		}
+	})
+	t.Run("caller lease renew fails with an infra error → 500 lease_error, nothing changed", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{exec: store.Execution{ID: "E1", State: store.StateIdle}}}
+		env.svc.renewErr = errors.New("db locked")
+		status, body := exitPost(t, env, "E1", `{"lease_id":"L-mine"}`)
+		if status != 500 || body["code"] != "lease_error" {
+			t.Fatalf("%d %v", status, body)
+		}
+		if len(env.svc.terminateCalls) != 0 || len(env.svc.ArchiveCalls()) != 0 {
+			t.Fatalf("terminate=%d archive=%d", len(env.svc.terminateCalls), len(env.svc.ArchiveCalls()))
+		}
 	})
 	t.Run("malformed body -> 400", func(t *testing.T) {
 		env := newTakebackEnv(t)

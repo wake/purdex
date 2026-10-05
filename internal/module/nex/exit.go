@@ -171,9 +171,18 @@ func (m *Module) handleExitWorker(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusInternalServerError, "store_error", "reading execution: "+err.Error(), nil)
 		return
 	}
+	// A caller's lease is validated before it is acted under: renewControl
+	// renews it, and re-takes control (refusing a non-pdx holder) when it is
+	// stale or not the caller's. A row that needs no terminate ignores it.
 	var ctl *control
-	if body.LeaseID != "" {
-		ctl = &control{LeaseID: body.LeaseID, PrincipalID: principal, release: noRelease}
+	if body.LeaseID != "" && needsTerminate(exec.State) {
+		c, herr := m.renewControl(r.Context(), execID, control{LeaseID: body.LeaseID, PrincipalID: principal, release: noRelease}, principal)
+		defer c.release() // an own lease the re-take acquired; noRelease otherwise
+		if herr != nil {
+			herr.write(w)
+			return
+		}
+		ctl = &c
 	}
 	out, herr := m.exitWorker(r.Context(), exec, ctl, principal)
 	if herr != nil {
