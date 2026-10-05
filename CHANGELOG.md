@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.480] - 2026-10-05
+
+> 純 SPA，不必重新部署 daemon。殼層整理第三支（P3＋P4／7）。
+
+### Removed：4 區側欄（#1549）
+
+- 左一左二、右一右二四個可收合的側欄區塊整套拿掉，標題列左邊對應的 4 顆開關也一併拿掉；標題列右側只剩單一／左右／上下三顆版型鈕。
+- Worker 清單已在 478 搬到左側欄底部的 Workers 鈕，功能不受影響。
+- 設定 › 介面拿掉「Pane」「Sidebar」兩個「即將推出」的空分頁，只剩「新分頁」。
+
+### Internal
+
+- 刪除 `SidebarRegion`／`RegionManager`／`RegionContextMenu`、`types/layout.ts`、`useLayoutStore` 的 `regions` 與所有 region action、`module-registry` 的 views API（`ViewProps`／`ViewDefinition`／`getAllViews` 等）與相關 locale key。舊資料裡殘留的 `regions` 會在下一次寫入時自然消失，不需 migration。
+
 ## [1.0.0-alpha.479] - 2026-10-05
 
 > 純 SPA，不必重新部署 daemon。殼層整理第二支（P2／7）。
