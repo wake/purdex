@@ -35,12 +35,13 @@ type Pending = Exclude<LayoutChangePlan, { kind: 'apply' }> & {
 
 let pendingSeq = 0
 
+interface Planned { plan: LayoutChangePlan; leaves: Pane[] }
+
 /**
- * Change tab `tabId` to `pattern` under rule D.1a, read from the stores now (shell cleanup spec §10). Nothing happens
- * when the tab is gone or already has that pattern. Case 1 applies here; cases 2 and 3 come back as the dialog to
- * show.
+ * Rule D.1a for changing tab `tabId` to `pattern`, read from the stores now (shell cleanup spec §10): the tab's
+ * layout, the live agent set and the focus record. Null when the tab is gone or already has that pattern.
  */
-function startLayoutChange(tabId: string, pattern: LayoutPattern): Pending | null {
+function planNow(tabId: string, pattern: LayoutPattern): Planned | null {
   const tab = useTabStore.getState().tabs[tabId]
   if (!tab || currentLayoutPattern(tab.layout) === pattern) return null
   const { agentTypes } = useAgentStore.getState()
@@ -48,16 +49,46 @@ function startLayoutChange(tabId: string, pattern: LayoutPattern): Pending | nul
     isAgent: (content) => isAgentPane(content, agentTypes),
     recent: usePaneFocusStore.getState().recent[tabId],
   })
+  return { plan, leaves: collectLeaves(tab.layout) }
+}
+
+/**
+ * Carry out `planned` (default: planned now) for tab `tabId`. Nothing happens for null. Case 1 applies here; cases 2
+ * and 3 come back as the dialog to show.
+ */
+function startLayoutChange(tabId: string, pattern: LayoutPattern, planned = planNow(tabId, pattern)): Pending | null {
+  if (!planned) return null
+  const { plan, leaves } = planned
   if (plan.kind === 'apply') {
     useTabStore.getState().applyLayout(tabId, pattern, plan.keepIds)
     return null
   }
-  return { ...plan, seq: ++pendingSeq, tabId, pattern, leaves: collectLeaves(tab.layout) }
+  return { ...plan, seq: ++pendingSeq, tabId, pattern, leaves }
 }
 
 /** Same panes, same contents: a content change replaces the pane object, so identity is enough. */
 function sameLeaves(a: readonly Pane[], b: readonly Pane[]): boolean {
   return a.length === b.length && a.every((p, i) => p === b[i])
+}
+
+/** Same ids, in any order (ids are unique within a tab). */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id) => b.includes(id))
+}
+
+const idsOf = (panes: readonly Pane[]) => panes.map((p) => p.id)
+
+/**
+ * Whether two plans put the same question to the user: the same case, and the same survivors and closing panes (case
+ * 2) or the same candidates (case 3). The picker's preselection does not count: once the user is picking, their ticks
+ * stand.
+ */
+function sameQuestion(a: LayoutChangePlan, b: LayoutChangePlan): boolean {
+  if (a.kind === 'confirm' && b.kind === 'confirm') {
+    return sameIds(a.keepIds, b.keepIds) && sameIds(idsOf(a.closing), idsOf(b.closing))
+  }
+  if (a.kind === 'pick' && b.kind === 'pick') return a.k === b.k && sameIds(idsOf(a.candidates), idsOf(b.candidates))
+  return false
 }
 
 export function TitleBar({ title }: Props) {
@@ -82,20 +113,22 @@ export function TitleBar({ title }: Props) {
 
   const finish = (keepIds: string[]) => {
     if (!pending) return
-    const { tabs, activeTabId: shown } = useTabStore.getState()
     // Read live, not from the render: the active tab can change in the same click, before this component re-renders.
-    if (shown !== pending.tabId) {
+    if (useTabStore.getState().activeTabId !== pending.tabId) {
       setPending(null)
       return
     }
-    const tab = tabs[pending.tabId]
-    if (tab && !sameLeaves(collectLeaves(tab.layout), pending.leaves)) {
-      // The tab's panes changed under the dialog: what the user agreed to close is no longer what would close.
-      setPending(startLayoutChange(pending.tabId, pending.pattern))
+    // Plan again from the live stores. When the tab's panes changed, or the agent set did (detection, exit and
+    // transfer touch only the agent store) so that rule D.1a now asks something else, what the user agreed to is no
+    // longer what would happen: show the fresh plan instead (case 1 applies at once; a gone tab or a pattern it already
+    // has closes the dialog). A picker whose candidates are unchanged keeps the user's ticks.
+    const planned = planNow(pending.tabId, pending.pattern)
+    if (!planned || !sameLeaves(planned.leaves, pending.leaves) || !sameQuestion(planned.plan, pending)) {
+      setPending(startLayoutChange(pending.tabId, pending.pattern, planned))
       return
     }
     setPending(null)
-    if (tab) useTabStore.getState().applyLayout(pending.tabId, pending.pattern, keepIds)
+    useTabStore.getState().applyLayout(pending.tabId, pending.pattern, keepIds)
   }
 
   return (

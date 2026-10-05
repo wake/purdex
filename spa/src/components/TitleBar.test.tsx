@@ -249,6 +249,18 @@ describe('TitleBar layout buttons', () => {
       fireEvent.click(screen.getByTestId('layout-apply-confirm'))
       expect(leafIds()).toEqual(['cc'])
     })
+
+    it('a closing pane that shows something else by Confirm (same pane, same plan) is listed again before it closes', () => {
+      setAgent('cc1')
+      showTab(threePanes())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      act(() => useTabStore.getState().setPaneContent(TAB, 'ed', { ...editor, filePath: '/src/todo.md' }))
+      fireEvent.click(screen.getByTestId('layout-apply-confirm'))
+      const closing = within(screen.getByTestId('layout-apply-closing')).getAllByRole('listitem').map((li) => li.textContent)
+      expect(closing).toEqual(['todo.md', 'term-plain'])
+      expect(leafIds()).toEqual(['ed', 'cc', 'plain'])
+    })
   })
 
   describe('case 3: the keep picker', () => {
@@ -377,6 +389,80 @@ describe('TitleBar layout buttons', () => {
       expect(screen.queryByRole('dialog')).toBeNull()
       expect(layoutNow()).toBe(before)
       expect(otherLayout()).toBe(otherBefore)
+    })
+  })
+
+  // Agent detection, exit and transfer change only the agent store, never the panes, so Confirm plans again with the
+  // live agent set: what the dialog promised to keep must still be what rule D.1a keeps.
+  describe('Confirm plans again with the live agent set', () => {
+    const box = (id: string) => screen.getByTestId(`layout-keep-option-${id}`) as HTMLInputElement
+    const closingNow = (prefix: string) =>
+      within(screen.getByTestId(`${prefix}-closing`)).getAllByRole('listitem').map((li) => li.textContent)
+    /** Replace the whole agent set: these sessions have an agent, every other one has none. */
+    const agentsNow = (...codes: string[]) =>
+      act(() => useAgentStore.setState({ agentTypes: Object.fromEntries(codes.map((c) => [compositeKey(HOST, c), 'cc'])) }))
+    const threeTerminals = () => splitOf('h', leafOf('a', terminal('a')), leafOf('b', terminal('b')), leafOf('c', terminal('c')))
+    const twoTerminals = () => splitOf('h', leafOf('a', terminal('a')), leafOf('b', terminal('b')))
+
+    it('case 2: the agent moved from A to B under the confirm → Confirm does not close B; the dialog now keeps B', () => {
+      setAgent('a')
+      showTab(threeTerminals())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      expect(closingNow('layout-apply')).toEqual(['term-b', 'term-c'])
+
+      agentsNow('b')
+      fireEvent.click(screen.getByTestId('layout-apply-confirm'))
+      expect(leafIds()).toEqual(['a', 'b', 'c'])
+      expect(closingNow('layout-apply')).toEqual(['term-a', 'term-c'])
+
+      fireEvent.click(screen.getByTestId('layout-apply-confirm'))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(leafIds()).toEqual(['b'])
+    })
+
+    it('case 2: the only agent exited under the confirm → Confirm opens the picker instead of closing panes', () => {
+      setAgent('a')
+      showTab(threeTerminals())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+
+      agentsNow()
+      fireEvent.click(screen.getByTestId('layout-apply-confirm'))
+      expect(leafIds()).toEqual(['a', 'b', 'c'])
+      expect(screen.queryByTestId('layout-apply-dialog')).toBeNull()
+      expect(screen.getByTestId('layout-keep-dialog')).toBeTruthy()
+    })
+
+    it('case 3 → 2: a plain terminal became the only agent under the picker → Confirm asks to keep the agent, ignoring the stale tick', () => {
+      showTab(twoTerminals())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      fireEvent.click(box('b'))
+      expect(box('b').checked).toBe(true)
+
+      agentsNow('a')
+      fireEvent.click(screen.getByTestId('layout-keep-confirm'))
+      expect(leafIds()).toEqual(['a', 'b'])
+      expect(screen.queryByTestId('layout-keep-dialog')).toBeNull()
+      expect(closingNow('layout-apply')).toEqual(['term-b'])
+
+      fireEvent.click(screen.getByTestId('layout-apply-confirm'))
+      expect(leafIds()).toEqual(['a'])
+    })
+
+    it('still case 3 with the same candidates → neither the agent change nor a new preselection matters; the user\'s ticks apply', () => {
+      showTab(twoTerminals())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      fireEvent.click(box('b'))
+
+      agentsNow('a', 'b')
+      // A fresh plan would now preselect B instead of A; the picker is still the same question.
+      act(() => usePaneFocusStore.setState({ recent: { [TAB]: ['b'] } }))
+      fireEvent.click(screen.getByTestId('layout-keep-confirm'))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(leafIds()).toEqual(['b'])
     })
   })
 })
