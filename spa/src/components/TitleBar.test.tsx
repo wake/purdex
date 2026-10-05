@@ -1,8 +1,13 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, beforeEach } from 'vitest'
+import { act, render, screen, fireEvent, within } from '@testing-library/react'
 import { TitleBar } from './TitleBar'
 import { useTabStore } from '../stores/useTabStore'
+import { useAgentStore } from '../stores/useAgentStore'
+import { usePaneFocusStore } from '../stores/usePaneFocusStore'
+import { compositeKey } from '../lib/composite-key'
+import { collectLeaves } from '../lib/pane-tree'
 import { createTab } from '../types/tab'
+import type { PaneContent, PaneLayout, Tab } from '../types/tab'
 
 describe('TitleBar', () => {
   it('renders the title text', () => {
@@ -93,5 +98,232 @@ describe('TitleBar', () => {
   it('layout-buttons cluster is shifted down 2.5px', () => {
     render(<TitleBar title="test" />)
     expect(screen.getByTestId('layout-buttons').className).toMatch(/translate-y-\[2\.5px\]/)
+  })
+})
+
+// ── Layout buttons: "change this tab to this layout" (shell cleanup spec §10, rules D.1 / D.1a) ──
+describe('TitleBar layout buttons', () => {
+  const HOST = 'h1'
+  const leafOf = (id: string, content: PaneContent): PaneLayout => ({ type: 'leaf', pane: { id, content } })
+  const splitOf = (dir: 'h' | 'v', ...children: PaneLayout[]): PaneLayout => ({
+    type: 'split', id: `s-${children.length}-${dir}`, direction: dir, children, sizes: children.map(() => 100 / children.length),
+  })
+  const terminal = (code: string): PaneContent => ({
+    kind: 'tmux-session', hostId: HOST, sessionCode: code, mode: 'terminal', cachedName: `term-${code}`, tmuxInstance: '',
+  })
+  const editor: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/src/notes.md' }
+  const blank: PaneContent = { kind: 'new-tab' }
+
+  /** Claude Code detected in a tmux session, the way the agent event handler records it. */
+  const setAgent = (code: string) =>
+    useAgentStore.setState((s) => ({ agentTypes: { ...s.agentTypes, [compositeKey(HOST, code)]: 'cc' } }))
+
+  const TAB = 'tab-1'
+  const showTab = (layout: PaneLayout) => {
+    const tab: Tab = { id: TAB, pinned: false, locked: false, createdAt: 0, layout }
+    useTabStore.setState({ tabs: { [TAB]: tab }, tabOrder: [TAB], activeTabId: TAB, visitHistory: [] })
+  }
+  const layoutNow = () => useTabStore.getState().tabs[TAB].layout
+  const leafIds = () => collectLeaves(layoutNow()).map((p) => p.id)
+  const button = (name: string) => screen.getByTitle(name) as HTMLButtonElement
+  const SINGLE = 'Single Pane'
+  const SPLIT_H = 'Split Horizontal'
+  const SPLIT_V = 'Split Vertical'
+
+  beforeEach(() => {
+    useAgentStore.setState({ agentTypes: {} })
+    usePaneFocusStore.setState({ recent: {} })
+  })
+
+  it('labels the three buttons through i18n', () => {
+    showTab(leafOf('a', terminal('x')))
+    render(<TitleBar title="t" />)
+    expect(button(SINGLE)).toBeTruthy()
+    expect(button(SPLIT_H)).toBeTruthy()
+    expect(button(SPLIT_V)).toBeTruthy()
+    expect(screen.getByTestId('layout-buttons').querySelectorAll('button')).toHaveLength(3)
+  })
+
+  it.each([
+    ['single', leafOf('a', terminal('x')), SINGLE],
+    ['split-h', splitOf('h', leafOf('a', terminal('x')), leafOf('b', blank)), SPLIT_H],
+    ['split-v', splitOf('v', leafOf('a', terminal('x')), leafOf('b', blank)), SPLIT_V],
+  ] as const)('the %s button is pressed when the tab has that layout', (_name, layout, pressed) => {
+    showTab(layout)
+    render(<TitleBar title="t" />)
+    for (const name of [SINGLE, SPLIT_H, SPLIT_V]) {
+      const btn = button(name)
+      expect(btn.getAttribute('aria-pressed')).toBe(String(name === pressed))
+      expect(btn.className.includes('text-accent-base bg-accent-base/10')).toBe(name === pressed)
+    }
+  })
+
+  it('no button is pressed for a layout no pattern describes (three panes)', () => {
+    showTab(splitOf('h', leafOf('a', blank), leafOf('b', blank), leafOf('c', blank)))
+    render(<TitleBar title="t" />)
+    for (const name of [SINGLE, SPLIT_H, SPLIT_V]) expect(button(name).getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('the pressed state follows the layout as it changes', () => {
+    showTab(leafOf('a', terminal('x')))
+    render(<TitleBar title="t" />)
+    fireEvent.click(button(SPLIT_V))
+    expect(button(SPLIT_V).getAttribute('aria-pressed')).toBe('true')
+    expect(button(SINGLE).getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('clicking the pressed button does nothing', () => {
+    showTab(splitOf('h', leafOf('a', terminal('x')), leafOf('b', blank)))
+    const before = layoutNow()
+    render(<TitleBar title="t" />)
+    fireEvent.click(button(SPLIT_H))
+    expect(layoutNow()).toBe(before)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('case 1: one terminal + a blank pane → single applies at once, keeping the terminal', () => {
+    showTab(splitOf('h', leafOf('blank', blank), leafOf('term', terminal('x'))))
+    render(<TitleBar title="t" />)
+    fireEvent.click(button(SINGLE))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(leafIds()).toEqual(['term'])
+  })
+
+  describe('case 2: exactly k agent panes → confirm', () => {
+    const threePanes = () => splitOf('h', leafOf('ed', editor), leafOf('cc', terminal('cc1')), leafOf('plain', terminal('plain')))
+
+    it('one CC terminal + an editor + a plain terminal → single asks, listing what closes', () => {
+      setAgent('cc1')
+      showTab(threePanes())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      expect(screen.getByTestId('layout-apply-dialog')).toBeTruthy()
+      const closing = within(screen.getByTestId('layout-apply-closing')).getAllByRole('listitem').map((li) => li.textContent)
+      expect(closing).toEqual(['notes.md', 'term-plain'])
+      expect(screen.getByTestId('layout-apply-dialog').textContent).toContain('keep running')
+      expect(screen.getByTestId('layout-apply-editor-note')).toBeTruthy()
+      expect(layoutNow().type).toBe('split')
+    })
+
+    it('cancel leaves the layout untouched', () => {
+      setAgent('cc1')
+      showTab(threePanes())
+      const before = layoutNow()
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      fireEvent.click(screen.getByTestId('layout-apply-cancel'))
+      expect(screen.queryByTestId('layout-apply-dialog')).toBeNull()
+      expect(layoutNow()).toBe(before)
+    })
+
+    it('confirm keeps the CC terminal', () => {
+      setAgent('cc1')
+      showTab(threePanes())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      fireEvent.click(screen.getByTestId('layout-apply-confirm'))
+      expect(screen.queryByTestId('layout-apply-dialog')).toBeNull()
+      expect(leafIds()).toEqual(['cc'])
+    })
+
+    it('one CC terminal + an editor → single keeps the CC terminal after the confirm, even when it is second', () => {
+      setAgent('cc1')
+      showTab(splitOf('h', leafOf('ed', editor), leafOf('cc', terminal('cc1'))))
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      fireEvent.click(screen.getByTestId('layout-apply-confirm'))
+      expect(leafIds()).toEqual(['cc'])
+    })
+
+    it('a pane that closes while the confirm is up: confirm plans again instead of applying the stale plan', () => {
+      setAgent('cc1')
+      showTab(threePanes())
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      act(() => useTabStore.getState().closePane(TAB, 'plain'))
+      fireEvent.click(screen.getByTestId('layout-apply-confirm'))
+      // Still asking, now about the editor only; nothing applied yet.
+      const closing = within(screen.getByTestId('layout-apply-closing')).getAllByRole('listitem').map((li) => li.textContent)
+      expect(closing).toEqual(['notes.md'])
+      expect(leafIds()).toEqual(['ed', 'cc'])
+      fireEvent.click(screen.getByTestId('layout-apply-confirm'))
+      expect(leafIds()).toEqual(['cc'])
+    })
+  })
+
+  describe('case 3: the keep picker', () => {
+    const box = (id: string) => screen.getByTestId(`layout-keep-option-${id}`) as HTMLInputElement
+
+    it('two CC terminals → single opens the picker with the most recently focused one ticked', () => {
+      setAgent('cc-a')
+      setAgent('cc-b')
+      showTab(splitOf('h', leafOf('a', terminal('cc-a')), leafOf('b', terminal('cc-b'))))
+      usePaneFocusStore.setState({ recent: { [TAB]: ['b', 'a'] } })
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      expect(screen.getByTestId('layout-keep-dialog')).toBeTruthy()
+      expect(screen.queryByTestId('layout-apply-dialog')).toBeNull()
+      expect(box('b').checked).toBe(true)
+      expect(box('a').checked).toBe(false)
+    })
+
+    it('the preselection follows the focus record', () => {
+      setAgent('cc-a')
+      setAgent('cc-b')
+      showTab(splitOf('h', leafOf('a', terminal('cc-a')), leafOf('b', terminal('cc-b'))))
+      usePaneFocusStore.setState({ recent: { [TAB]: ['a', 'b'] } })
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      expect(box('a').checked).toBe(true)
+      expect(box('b').checked).toBe(false)
+    })
+
+    it('confirm is disabled at the wrong count, and the result keeps the ticked pane', () => {
+      setAgent('cc-a')
+      setAgent('cc-b')
+      showTab(splitOf('h', leafOf('a', terminal('cc-a')), leafOf('b', terminal('cc-b'))))
+      usePaneFocusStore.setState({ recent: { [TAB]: ['b'] } })
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      fireEvent.click(box('b'))
+      expect((screen.getByTestId('layout-keep-confirm') as HTMLButtonElement).disabled).toBe(true)
+      fireEvent.click(box('a'))
+      fireEvent.click(screen.getByTestId('layout-keep-confirm'))
+      expect(screen.queryByTestId('layout-keep-dialog')).toBeNull()
+      expect(leafIds()).toEqual(['a'])
+    })
+
+    it('three panes → a split keeps the two ticked ones, in layout order', () => {
+      setAgent('cc-a')
+      setAgent('cc-b')
+      setAgent('cc-c')
+      showTab(splitOf('v', leafOf('a', terminal('cc-a')), leafOf('b', terminal('cc-b')), leafOf('c', terminal('cc-c'))))
+      usePaneFocusStore.setState({ recent: { [TAB]: ['c', 'a'] } })
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SPLIT_H))
+      fireEvent.click(box('a'))
+      fireEvent.click(box('b'))
+      fireEvent.click(screen.getByTestId('layout-keep-confirm'))
+      const layout = layoutNow()
+      expect(layout.type === 'split' && layout.direction).toBe('h')
+      expect(leafIds()).toEqual(['b', 'c'])
+    })
+
+    it('an editor + a plain terminal (no agent) → single opens the picker', () => {
+      showTab(splitOf('h', leafOf('ed', editor), leafOf('plain', terminal('plain'))))
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      expect(screen.getByTestId('layout-keep-dialog')).toBeTruthy()
+    })
+
+    it('cancel leaves the layout untouched', () => {
+      showTab(splitOf('h', leafOf('ed', editor), leafOf('plain', terminal('plain'))))
+      const before = layoutNow()
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      fireEvent.click(screen.getByTestId('layout-keep-cancel'))
+      expect(screen.queryByTestId('layout-keep-dialog')).toBeNull()
+      expect(layoutNow()).toBe(before)
+    })
   })
 })
