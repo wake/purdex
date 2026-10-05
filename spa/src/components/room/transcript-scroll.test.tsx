@@ -10,6 +10,9 @@ import RoomTranscript, { type RoomTranscriptProps } from './RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
 import type { StreamMessage } from '../../lib/nex/message-types'
 import { forgetScrollMemo, readScrollMemo, writeScrollMemo } from '../../lib/nex/transcript-scroll-memory'
+import PreludeSection from './prelude/PreludeSection'
+import { derivePrelude } from '../../lib/nex/prelude'
+import type { PreludeItem } from '../../lib/nex/prelude-wire'
 
 const said = (text: string): StreamMessage =>
   ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }) as StreamMessage
@@ -489,7 +492,9 @@ describe('transcript scroll memory', () => {
     geometry(ref.current!, 1000, 200, 400)
     fireEvent.scroll(ref.current!)
     // Turn 0 ends at -100 (scrolled out); turn 1 is the first one visible.
-    expect(readScrollMemo(PANE)).toEqual({ scrollTop: 400, atBottom: false, view: 'room', firstTurn: 1 })
+    expect(readScrollMemo(PANE)).toEqual({
+      scrollTop: 400, atBottom: false, view: 'room', firstTurn: 1, anchor: { kind: 'turn', index: 1, offset: -100 },
+    })
   })
 
   it.each(views)('%s: remount restores scrollTop from memory', (view, Transcript) => {
@@ -796,5 +801,167 @@ describe.each(views)('%s: prepending the prelude keeps the reader in place (Revi
     withPrelude.unmount()
     const without = render(<View {...props} />)
     expect((without.container.firstChild as HTMLElement).className).not.toContain('overflow-anchor')
+  })
+})
+
+// #1534 (spec §5.4): the memo also records an anchor — the first prelude
+// element or turn still on screen, and its top's distance from the box's
+// top — so a reader inside the prelude keeps their place across a view
+// switch, and a page that landed above them while unmounted does not shift
+// them.
+describe('scroll memory anchors inside the prelude (#1534)', () => {
+  const PANE = 'pane-prelude-anchor'
+  const ANCHORS = '[data-prelude-pos], [data-turn-index]'
+  const pm = (pos: string, type: 'user' | 'assistant', text: string): PreludeItem => ({
+    pos, at: 0, kind: type,
+    msg: { type, parent_tool_use_id: null, message: { role: type, content: [{ type: 'text', text }], stop_reason: null } } as unknown as StreamMessage,
+  })
+  // Two pages: OLDER lands above NEWER. Room draws one row per item; chat
+  // draws 1, span 2 (2 3), 4, span 5 (5 6).
+  const OLDER: PreludeItem[] = [
+    { pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' }, pm('2', 'user', 'early question'), pm('3', 'assistant', 'early answer'),
+  ]
+  const NEWER: PreludeItem[] = [
+    { pos: '4', at: 0, kind: 'prelude.note', source: 'command_output', text: 'Model set', truncated: false, totalBytes: null, stream: null },
+    pm('5', 'user', 'second question'), pm('6', 'assistant', 'second answer'),
+  ]
+  const BOTH = [...OLDER, ...NEWER]
+
+  // jsdom has no layout: the anchors stack in DOM order under the box's own
+  // scrollTop — a turn 300px, a prelude element 100px per message it holds.
+  // Everything else (the box included) sits at 0.
+  const height = (el: HTMLElement) => (el.dataset.turnIndex !== undefined ? 300 : 100 * (el.dataset.preludePoses?.split(' ').length ?? 1))
+  let rectSpy: ReturnType<typeof vi.spyOn> | null = null
+  beforeEach(() => {
+    rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const box = this.closest<HTMLElement>('.overflow-y-auto')
+      if (!box || !this.matches(ANCHORS)) return { top: 0, bottom: 0 } as DOMRect
+      let top = -box.scrollTop
+      for (const el of box.querySelectorAll<HTMLElement>(ANCHORS)) {
+        if (el === this) return { top, bottom: top + height(el) } as DOMRect
+        top += height(el)
+      }
+      return { top: 0, bottom: 0 } as DOMRect
+    })
+  })
+  afterEach(() => {
+    forgetScrollMemo(PANE)
+    rectSpy?.mockRestore()
+    rectSpy = null
+  })
+
+  type View = 'room' | 'chat'
+  const mount = (view: View, items: PreludeItem[] | null) => {
+    const ref = createRef<HTMLDivElement>()
+    const Transcript = view === 'room' ? RoomTranscript : ChatTranscript
+    const out = render(
+      <Transcript keyPrefix="k" showThinking={false} showEmptyHint={false} messages={[said('a'), said('b')]} turnStarts={[0, 1]}
+        scrollMemoryKey={PANE} scrollRef={ref}
+        {...(items ? { prelude: (
+          <PreludeSection view={derivePrelude(items)} status="ok" done error={null} keyPrefix="k" mode={view} pages={1}
+            onLoadOlder={() => {}} onRetry={() => {}} />
+        ), preludeVersion: '1:ok' } : {})} />,
+    )
+    return { ...out, box: ref.current! }
+  }
+  /** The reader scrolls the box to `top` (well above the bottom); the scroll event writes the memo. */
+  const scrollAt = (box: HTMLElement, top: number) => {
+    geometry(box, 5000, 200, top)
+    fireEvent.scroll(box)
+  }
+  /** Read inside one view at `top`, then switch to (remount as) `next` — what does the restore ask for? */
+  const switchAt = (from: View, top: number, next: View, items: PreludeItem[] | null = BOTH, nextItems: PreludeItem[] | null = items) => {
+    const first = mount(from, items)
+    scrollAt(first.box, top)
+    first.unmount()
+    scrollTo.mockClear()
+    mount(next, nextItems)
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+    return scrollTo.mock.calls[0][0] as ScrollToOptions
+  }
+
+  describe('the memo records the first element still on screen', () => {
+    it.each<[View, number, unknown]>([
+      // Room rows 1–6 sit at 0…600: at 250, row 3 (200–300) is the first still showing.
+      ['room', 250, { kind: 'prelude', pos: '3', offset: -50 }],
+      // Chat's span 2 holds 2 and 3 (100–300).
+      ['chat', 250, { kind: 'prelude', pos: '2', offset: -150 }],
+      ['chat', 300, { kind: 'prelude', pos: '4', offset: 0 }],
+      // Past the prelude (600) the first turn is the anchor.
+      ['room', 700, { kind: 'turn', index: 0, offset: -100 }],
+      ['chat', 1000, { kind: 'turn', index: 1, offset: -100 }],
+    ])('%s at %i', (view, top, anchor) => {
+      const { box } = mount(view, BOTH)
+      scrollAt(box, top)
+      expect(readScrollMemo(PANE)).toMatchObject({ scrollTop: top, atBottom: false, view, anchor })
+    })
+
+    it('keeps firstTurn: the worker\'s first turn on screen, below a prelude element too', () => {
+      const { box } = mount('room', BOTH)
+      scrollAt(box, 250)
+      expect(readScrollMemo(PANE)?.firstTurn).toBe(0)
+      scrollAt(box, 1000)
+      expect(readScrollMemo(PANE)?.firstTurn).toBe(1)
+    })
+  })
+
+  describe('another view brings the prelude anchor to the top, not the brief', () => {
+    it('room → chat: a row inside a span finds the span holding it', () => {
+      // Room row 3 (the answer) lives in chat's span 2, at 100.
+      expect(switchAt('room', 250, 'chat')).toEqual({ top: 100, behavior: 'auto' })
+    })
+
+    it('room → chat: a note is found by its own pos', () => {
+      // Room note 4 at 300–400; chat draws it at 300 too, after span 2 (200 tall).
+      expect(switchAt('room', 320, 'chat')).toEqual({ top: 300, behavior: 'auto' })
+    })
+
+    it('chat → room: a span is found by its first pos', () => {
+      // Chat span 5 (400–600) → room row 5, at 400.
+      expect(switchAt('chat', 450, 'room')).toEqual({ top: 400, behavior: 'auto' })
+    })
+
+    it('a turn anchor keeps the firstTurn rule', () => {
+      // Room at 700: turn 0 first. Chat's turn 0 starts at 600 too.
+      expect(switchAt('room', 700, 'chat')).toEqual({ top: 600, behavior: 'auto' })
+    })
+
+    it('a prelude anchor the other view does not draw falls back to the firstTurn rule', () => {
+      // Chat has no prelude at all: turn 0 is at 0.
+      expect(switchAt('room', 250, 'chat', BOTH, null)).toEqual({ top: 0, behavior: 'auto' })
+    })
+  })
+
+  describe('the same view puts the anchor back at its offset', () => {
+    it.each<[View]>([['room'], ['chat']])('%s: a page that landed above while unmounted does not shift the reader', (view) => {
+      // NEWER alone: row / span 5 sits at 100–200 (room) or 100–300 (chat); at 150 it is 50px above the box's top.
+      // OLDER lands while unmounted: it now starts at 400 (room: 1 2 3; chat: 1 and span 2 3), so the restore asks for 450.
+      expect(switchAt(view, 150, view, NEWER, BOTH)).toEqual({ top: 450, behavior: 'auto' })
+    })
+
+    it.each<[View]>([['room'], ['chat']])('%s: nothing changed above → exactly the old scrollTop, prelude or turn', (view) => {
+      expect(switchAt(view, 250, view)).toEqual({ top: 250, behavior: 'auto' })
+      forgetScrollMemo(PANE)
+      expect(switchAt(view, 1000, view)).toEqual({ top: 1000, behavior: 'auto' })
+      forgetScrollMemo(PANE)
+      // No prelude at all: a turn anchor, as before #1534.
+      expect(switchAt(view, 400, view, null)).toEqual({ top: 400, behavior: 'auto' })
+    })
+
+    it('an anchor no longer drawn falls back to the raw scrollTop', () => {
+      expect(switchAt('room', 250, 'room', BOTH, null)).toEqual({ top: 250, behavior: 'auto' })
+    })
+  })
+
+  it.each<[View, View]>([['room', 'room'], ['room', 'chat'], ['chat', 'room']])('at the bottom (%s → %s) the reader opens at the bottom, anchor or not', (from, next) => {
+    writeScrollMemo(PANE, { scrollTop: 250, atBottom: true, view: from, firstTurn: 0, anchor: { kind: 'prelude', pos: '3', offset: -50 } })
+    const sh = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => 5000)
+    try {
+      mount(next, BOTH)
+      expect(scrollTo).toHaveBeenCalledTimes(1)
+      expect(scrollTo).toHaveBeenCalledWith({ top: 5000, behavior: 'auto' })
+    } finally {
+      sh.mockRestore()
+    }
   })
 })

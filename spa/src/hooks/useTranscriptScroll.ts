@@ -45,18 +45,23 @@
 // **Memory (spec §6).** Given `memory`, every observed position — and
 // `follow`'s own jump, mount's or a later catch-up alike, which never gets a
 // scroll event of its own to observe — is written to the pane's memo
-// (`lib/nex/transcript-scroll-memory`): scrollTop, the flag, the view and the
-// first turn still on screen. The first call after a mount reads it back: at
-// the bottom → the jump to the bottom as ever; elsewhere, the same view
-// restores scrollTop (the browser clamps it; a clamp that lands at the
-// bottom counts as the bottom, A4), and the other view — a
-// different height — brings the remembered first turn to the top.
+// (`lib/nex/transcript-scroll-memory`): scrollTop, the flag, the view, the
+// first turn still on screen, and the anchor — the first prelude element or
+// turn still on screen, with its offset from the box's top (#1534). The
+// first call after a mount reads it back: at the bottom → the jump to the
+// bottom as ever; elsewhere, the same view puts the anchor back at its
+// offset, so a prelude page that landed while the pane was unmounted does
+// not shift the reader (scrollTop when the anchor is not drawn), and the
+// other view — a different height — brings a prelude anchor (by its pos, or
+// the chat span holding it) or else the remembered first turn to the top.
+// Either way the browser clamps it, and a clamp that lands at the bottom
+// counts as the bottom (A4).
 // **Keying.** The caller's `memory.paneId` is whatever key it composes — a
 // worker pane's transcript keys it by pane *and* execution
 // (ExecutionView), since a handoff / take-back can swap a pane's content to
 // a different execution while keeping its paneId.
 import { useCallback, useImperativeHandle, useLayoutEffect, useMemo, useRef, type Ref, type UIEvent } from 'react'
-import { readScrollMemo, writeScrollMemo, type ScrollMemo } from '../lib/nex/transcript-scroll-memory'
+import { readScrollMemo, writeScrollMemo, type ScrollAnchor, type ScrollMemo } from '../lib/nex/transcript-scroll-memory'
 
 /** Within this many pixels of the end counts as the bottom (sub-pixel rounding, a last line's margin). */
 const NEAR_BOTTOM = 24
@@ -113,6 +118,39 @@ function firstVisibleTurn(el: HTMLElement): number | null {
   }
   return null
 }
+
+/** What the memory anchors to (#1534): the prelude's rows, spans, notes and markers, then the turns. */
+const ANCHORS = '[data-prelude-pos], [data-turn-index]'
+
+/**
+ * The first anchor whose bottom is below the box's top, with its top's
+ * offset from the box's top. Anchors are stacked rows, so their bottoms only
+ * grow in DOM order: a binary search, not a walk over a long prelude on
+ * every scroll event.
+ */
+function firstVisibleAnchor(el: HTMLElement): ScrollAnchor | undefined {
+  const top = el.getBoundingClientRect().top
+  const nodes = el.querySelectorAll<HTMLElement>(ANCHORS)
+  let lo = 0
+  let hi = nodes.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (nodes[mid].getBoundingClientRect().bottom > top) hi = mid
+    else lo = mid + 1
+  }
+  const node = nodes[lo]
+  if (!node) return undefined
+  const offset = node.getBoundingClientRect().top - top
+  const pos = node.dataset.preludePos
+  if (pos !== undefined) return { kind: 'prelude', pos, offset }
+  const index = Number(node.dataset.turnIndex)
+  return Number.isFinite(index) ? { kind: 'turn', index, offset } : undefined
+}
+
+// A pos is `^[A-Za-z0-9._-]{1,64}$` (prelude-wire), so it is safe inside a
+// quoted attribute value and as one word of `~=`.
+const preludeAt = (el: HTMLElement, pos: string) => el.querySelector<HTMLElement>(`[data-prelude-pos="${pos}"]`)
+const turnAt = (el: HTMLElement, index: number) => el.querySelector<HTMLElement>(`[data-turn-index="${index}"]`)
 
 /** A press on the box's own scrollbar gutter, not its content or padding (A3). */
 function onScrollbar(e: MouseEvent): boolean {
@@ -185,6 +223,7 @@ export function useTranscriptScroll(
     if (!m) return
     writeScrollMemo(m.paneId, {
       scrollTop: el.scrollTop, atBottom: atBottom.current, view: m.view, firstTurn: firstVisibleTurn(el),
+      anchor: firstVisibleAnchor(el),
     })
   }, [])
 
@@ -217,12 +256,25 @@ export function useTranscriptScroll(
     const m = mem.current
     const memo = m && readScrollMemo(m.paneId)
     if (!m || !memo || memo.atBottom) return false
+    // An element's offset inside the box, like scrollIntoView({ block: 'start' })
+    // but without scrolling any ancestor.
+    const boxTop = el.getBoundingClientRect().top
+    const offsetOf = (node: HTMLElement) => node.getBoundingClientRect().top - boxTop + el.scrollTop
+    const { anchor } = memo
     let top = memo.scrollTop
-    if (memo.view !== m.view && memo.firstTurn !== null) {
-      const turn = el.querySelector<HTMLElement>(`[data-turn-index="${memo.firstTurn}"]`)
-      // The turn's offset inside the box, like scrollIntoView({ block: 'start' })
-      // but without scrolling any ancestor.
-      if (turn) top = turn.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
+    if (memo.view === m.view) {
+      // Same view, same heights: the anchor back at its offset. Content that
+      // landed above it meanwhile (a prelude page, #1534) shifts nothing.
+      const node = anchor && (anchor.kind === 'prelude' ? preludeAt(el, anchor.pos) : turnAt(el, anchor.index))
+      if (anchor && node) top = offsetOf(node) - anchor.offset
+    } else {
+      // Another view, other heights: what was on screen goes to the top — a
+      // prelude anchor by its pos, or the chat span listing it; else (a turn
+      // anchor, or a pos this view does not draw) the first turn.
+      const node = (anchor?.kind === 'prelude'
+        ? preludeAt(el, anchor.pos) ?? el.querySelector<HTMLElement>(`[data-prelude-poses~="${anchor.pos}"]`)
+        : null) ?? (memo.firstTurn !== null ? turnAt(el, memo.firstTurn) : null)
+      if (node) top = offsetOf(node)
     }
     el.scrollTo({ top, behavior: 'auto' })
     // Read back where it landed: an instant scroll lands synchronously, and
