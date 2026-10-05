@@ -32,4 +32,28 @@ describe('PaneSplitter', () => {
     fireEvent.mouseUp(document)
     expect(onResize).toHaveBeenCalledWith(50)
   })
+
+  it('calls onResizeEnd once on mouseup, not on mousemove', () => {
+    const onResize = vi.fn()
+    const onResizeEnd = vi.fn()
+    const { container } = render(<PaneSplitter direction="v" onResize={onResize} onResizeEnd={onResizeEnd} />)
+    const handle = container.firstElementChild as HTMLElement
+    fireEvent.mouseDown(handle, { clientX: 100, clientY: 200 })
+    fireEvent.mouseMove(document, { clientX: 100, clientY: 230 })
+    fireEvent.mouseMove(document, { clientX: 100, clientY: 260 })
+    expect(onResize).toHaveBeenCalledTimes(2)
+    expect(onResizeEnd).not.toHaveBeenCalled()
+    fireEvent.mouseUp(document)
+    expect(onResizeEnd).toHaveBeenCalledTimes(1)
+    // Listeners are gone after mouseup: a stray mouseup does not fire it again.
+    fireEvent.mouseUp(document)
+    expect(onResizeEnd).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders testId as data-testid on the root', () => {
+    const { container, getByTestId } = render(
+      <PaneSplitter direction="v" onResize={vi.fn()} testId="worker-list-divider" />,
+    )
+    expect(getByTestId('worker-list-divider')).toBe(container.firstElementChild)
+  })
 })

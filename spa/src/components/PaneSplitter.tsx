@@ -3,12 +3,19 @@ import { useCallback, useEffect, useRef } from 'react'
 interface Props {
   direction: 'h' | 'v'
   onResize: (deltaPx: number) => void
+  /** Fires once when the drag ends (mouseup), e.g. to commit a draft size. */
+  onResizeEnd?: () => void
+  testId?: string
 }
 
-export function PaneSplitter({ direction, onResize }: Props) {
+export function PaneSplitter({ direction, onResize, onResizeEnd, testId }: Props) {
   const startPos = useRef(0)
   const onResizeRef = useRef(onResize)
-  useEffect(() => { onResizeRef.current = onResize })
+  const onResizeEndRef = useRef(onResizeEnd)
+  useEffect(() => {
+    onResizeRef.current = onResize
+    onResizeEndRef.current = onResizeEnd
+  })
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -26,6 +33,7 @@ export function PaneSplitter({ direction, onResize }: Props) {
       document.removeEventListener('mouseup', handleMouseUp)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
+      onResizeEndRef.current?.()
     }
 
     document.addEventListener('mousemove', handleMouseMove)
@@ -42,6 +50,7 @@ export function PaneSplitter({ direction, onResize }: Props) {
           : 'h-1 cursor-row-resize'
       }`}
       onMouseDown={handleMouseDown}
+      data-testid={testId}
     >
       {/* Visible bar */}
       <div className={`absolute ${
