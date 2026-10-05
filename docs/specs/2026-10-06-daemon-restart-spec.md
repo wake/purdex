@@ -25,7 +25,8 @@ Origin: after enabling Nexen on air26 the user found no way to restart. The only
   - `PUT /api/config` persists it, and nothing is applied live.
   - `GET /api/info` reports `nex.restart_required` (`internal/core/info_handler.go:65`).
   - `NexConfigForm.tsx:169` shows the hint.
-- **Host page:** `OverviewSection.tsx` has a "daemon config" section (`hosts.daemon_config`, around :279) showing `purdex_version` and `tmux_version`.
+- **Host page:** `OverviewSection.tsx` has a "daemon config" section (`hosts.daemon_config`, around :279) with sizing mode, detect commands and poll interval. `purdex_version` and `tmux_version` are in the separate "System Info" section (`hosts.system_info`, around :305). The R1 button still goes in "daemon config" (D8).
+- **The process env is mutated after boot:** `locale.EnsureUTF8` sets `LANG` (`internal/locale/locale.go:72`), `tmuxenv.Prepare` drops `TMUX`/`TMUX_PANE` and may append to `PATH` (`internal/tmuxenv/tmuxenv.go:113-146`), and nex's PATH policy prepends `path_prepend` (`internal/module/nex/pathpolicy.go:76`).
 - **A restart kills running worker turns.** Nexen is embedded in the daemon. A turn's process does not survive a restart: startup reconcile settles the turn as `orphaned`, puts the execution back to `idle`, and SIGKILLs a still-live orphan (Nexen `capability-matrix.md` #26 and #41). tmux sessions are a separate server and are unaffected. Terminal panes reconnect over WS.
 - Dev mode is env-only (`PDX_DEV_MODE=1`), so a restart must keep the environment.
 
@@ -43,6 +44,15 @@ Origin: after enabling Nexen on air26 the user found no way to restart. The only
 - While a restart is in progress, a second request gets `409 restart_in_progress`.
 - **Boot id:** `/api/health` (or `/api/info`; the plan picks one and says why) gains a `boot_id` that is new on every process start. The SPA uses it to know the restart really happened, not just that the host answered.
 - Logged as one line with the requester's address: `daemon restart requested by …`.
+
+**Coordinator-approved derivations (2026-10-06):**
+
+- **D1:** `boot_id` goes on **`/api/health`**. Health is unauthenticated, so it also answers in pairing mode. It is cheap, while `/api/info` execs `tmux -V`. It is also already the liveness probe the SPA and `pdx start` use.
+- **D2:** `boot_id` is 16 hex chars from `crypto/rand`, generated in `core.New`, so every process start (re-exec included) gets a new one.
+- **D3:** "The same argv and environment" means the ones the process **started with**. They are captured at the top of `serve`, before the env mutations listed in §2, together with the executable path. If the exec read `os.Environ()` at exec time instead, every restart would stack another `path_prepend`, and an old `path_prepend` would survive the very config change the restart applies.
+- **D4:** A SIGINT/SIGTERM that arrives while a restart's shutdown runs (for example `pdx stop`) turns the restart into a plain stop, with no re-exec. A second signal still exits immediately.
+- **D5:** The `409` body also carries `boot_id`. A client that gets 409 follows the restart already under way to the same finish line.
+- **D12:** When no restart hook is installed (for example `os.Executable` failed at boot), the endpoint answers `503 {"error":"restart_unavailable"}`. It must not give a 202 that nothing will honour.
 
 ### 3.2 SPA: one restart action, three entry points
 
@@ -62,12 +72,27 @@ Entry points:
 2. **R2, Development page:** in the local daemon section (`LocalDaemonSection`), the restart button shows whenever the local daemon is alive and managed, not only when `restartPending`. When the local daemon is `external` but a configured host points at it (same bind:port), show the button using the API path. Otherwise do not show it, and give the existing external reason. The existing "update" button and `restartPending` text stay as they are.
 3. **R3, Nex config:** next to the `restart_required` hint, a "立即重啟" button for that host.
 
+**Coordinator-approved derivations (2026-10-06):**
+
+- **D6:** A `404` from the endpoint means the daemon predates this feature. The SPA says: "這台 daemon 版本不支援遠端重啟，請在該主機執行 pdx stop && pdx start". This matters for Air26 and older hosts until they are updated.
+- **D7:** Running workers are counted fresh when the confirm opens: `GET /api/nex/v1/executions?state=running`, following `next_cursor`, within a 3 s budget.
+  - Nex is reported but not ready → 0.
+  - No Nex info, or the list fails or times out → unknown. The dialog then shows "無法確認是否有 worker 正在執行；若有，重啟會中斷它們這一輪（之後可以繼續對話）".
+  - Unknown is never shown as 0. The cached per-host list exists only while some view subscribes, so it cannot be relied on.
+- **D8:** The R1 button sits in the "Daemon 設定" section. It shows while the host is connected **or** while a restart of that host is in progress, so the spinner stays when the host drops to `reconnecting` mid-restart.
+- **D9:** R2: when the daemon is managed and alive, restart always shows, even next to "Update". This replaces the old "Update, else Restart — never both" rule.
+- **D10:** R2: when the daemon is managed and alive but **not in the host list**, R2 keeps today's direct IPC restart, with no confirm and no boot-id check. There is no `hostId`, so there is no per-host state and no health to poll, and this app has no terminals or workers on it.
+
 ### 3.3 While restarting, and after
 
 - The button shows a spinner and "重啟中…", and the other two entry points for the same host are disabled; the state is per host.
 - **Done** when the host answers health with a **different `boot_id`**: success toast "daemon 已重新啟動". For R3, the `restart_required` hint is gone once `/api/info` is re-read.
 - **Timeout 60 s** (the same window `pdx start` uses): error "daemon 沒有在 60 秒內回來" plus where to look: `~/.config/pdx/logs/pdx.log` on that host. Same if the API call itself fails, with its error.
 - A host's WS-driven views (terminals, worker panes) reconnect through their existing paths. No new reconnect logic.
+
+**Coordinator-approved derivation (2026-10-06):**
+
+- **D11:** The success toast and the failure notices name the host, for example "mlab：daemon 已重新啟動". The toast is global, and more than one host can be restarting at once.
 
 ## 4. Tests
 

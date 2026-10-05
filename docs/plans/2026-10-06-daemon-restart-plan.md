@@ -37,7 +37,7 @@
   - Never `go build ./cmd/pdx` into the repo root, because a tracked `pdx` binary lives there. Use `go build -o /dev/null ./cmd/pdx`.
 - Every Bash command in a subagent starts with `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/daemon-restart && `. Every Edit/Write path is absolute under that worktree.
 
-## Derived decisions (not spelled out by the spec; sent to the coordinator for veto)
+## Derived decisions (coordinator-approved 2026-10-06; recorded in the spec §2/§3.1/§3.2/§3.3)
 
 | # | Decision | Why |
 |---|---|---|
@@ -58,9 +58,11 @@
 
 1. **The old process keeps answering health with the old `boot_id`** for up to the 10 s shutdown budget (`StopModules` runs before `srv.Shutdown`). The SPA must not call that success. Pinned in Task 5: "health keeps returning the old boot id → timeout".
 2. **The env mutated after boot** (nex PATH prepend, `LANG`, `TMUX` dropped) must not leak into the re-exec. Pinned in Task 3: "a mutation after capture does not reach the plan".
-3. **`pdx stop` during a restart** must stop, not restart. Pinned in Task 2: "a signal during a restart-triggered sequence → nil, not errRestart".
+3. **`pdx stop` during a restart** must stop, not restart — including a signal at the very tail (during `CloseModules`, or after `serveAndWait` returned but before exec). Pinned in Task 2 ("signal during CloseModules → nil") and Task 3 (`restartStillWanted` drains a late signal after `signal.Stop`).
 4. **The host drops to `reconnecting` mid-restart.** The R1 button must stay visible with its spinner, not vanish. Pinned in Task 8.
 5. **A daemon too old for the endpoint (404)** must give a clear message, not a raw `HTTP 404`. Pinned in Task 5 (`unsupported`) and Task 6 (message text).
+6. **A hung step** (`localDaemonStatus` IPC or the POST never answering) must still end in the 60 s timeout, not spin forever. Pinned in Task 5 (one 60 s deadline over the whole action).
+7. **A host removed while its restart runs** must not send the POST or health probes to another daemon. `hostFetch` falls back to the active host for an unknown id; Task 5 uses `pinnedHostFetch`.
 
 ## Phases → PRs
 
@@ -375,7 +377,29 @@ func TestServeAndWait_TwoSignalsDuringRestartExitImmediately(t *testing.T) {
 }
 ```
 
-Before writing these, read the existing harness fakes (`fakeTarget`, `recorder.names`, and the blocking-StopModules tests around `shutdown_test.go:411`). Reuse the hook names they already have, and add `waitForLog`/`waitForExit` helpers only if equivalents are not there yet. The three tests above are the behaviour to pin. Adapt their hook plumbing to the harness as it exists.
+```go
+// codex plan review #1: a signal at the TAIL of the sequence (during
+// CloseModules) must still cancel the restart. The decision may only be
+// read once the watcher has exited, or a signal the watcher has taken but
+// not yet recorded is lost and the daemon re-execs under `pdx stop`.
+func TestServeAndWait_SignalDuringCloseModulesCancelsRestart(t *testing.T) {
+	h := newHarness()
+	unblock := make(chan struct{})
+	entered := make(chan struct{})
+	h.target.closeHook = func() { close(entered); <-unblock }
+	h.restart <- struct{}{}
+	out := h.runAsync(testBudget)
+	<-entered
+	h.sig <- syscall.SIGTERM
+	waitForLog(t, h, "exiting instead of restarting")
+	close(unblock)
+	if err := <-out; err != nil {
+		t.Fatalf("serveAndWait returned %v, want nil", err)
+	}
+}
+```
+
+Before writing these, read the existing harness fakes (`fakeTarget`, `recorder.names`, and the blocking-StopModules/CloseModules tests around `shutdown_test.go:373` and `:411`). Reuse the hook names they already have, and add `waitForLog`/`waitForExit` helpers only if equivalents are not there yet. The four tests above are the behaviour to pin. Adapt their hook plumbing to the harness as it exists.
 
 - [ ] **Step 2: Run them and confirm they fail.**
   Run: `go test ./cmd/pdx/ -run ServeAndWait`
@@ -427,15 +451,30 @@ Change the trigger select and the watcher like this:
 		}
 ```
 
-Then, after `CloseModules`:
+The watcher must be **joined** before the restart decision is read (codex plan review #1). Today `done` is closed by a `defer`. Replace that with an explicit close plus a wait on a `watcherDone` channel the watcher closes on every exit path:
 
 ```go
+	done := make(chan struct{})
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		// ... existing watcher body, with the restart branch above ...
+	}()
+```
+
+After `CloseModules`, replace the old `defer close(done)` behaviour with:
+
+```go
+	close(done)
+	<-watcherDone // a signal the watcher took is now recorded in restartCancelled
 	if restartTriggered && !restartCancelled.Load() {
 		return errRestart
 	}
 ```
 
 This goes before the existing `ErrServerClosed` check. In the restart path `err` is `http.ErrServerClosed` from `<-serveErr`.
+
+Make sure every early return in the function still closes `done`. Today there is none between the watcher start and the end. If you restructure, keep it that way, or the watcher join deadlocks. A signal that arrives **after** the watcher has exited stays buffered in `sig`. Task 3's `restartStillWanted` takes it.
 
 In `cmd/pdx/main.go`, temporarily pass `nil` as the new argument so the build stays green. Task 3 wires the real channel.
 
@@ -460,6 +499,7 @@ In `cmd/pdx/main.go`, temporarily pass `nil` as the new argument so the build st
   - `type reexecPlan struct{ path string; argv, env []string }`
   - `func captureReexecPlan(executable func() (string, error), args, env []string) (*reexecPlan, error)`
   - `func reexec(p *reexecPlan, execFn func(string, []string, []string) error, logf func(string, ...any), exit func(int))`
+  - `func restartStillWanted(sig <-chan os.Signal, stop func(), logf func(string, ...any)) bool`
   - `runServe` now returns `*reexecPlan` (nil means a normal exit).
 
 - [ ] **Step 1: Write the failing tests** in `cmd/pdx/reexec_test.go`.
@@ -530,6 +570,35 @@ func TestReexec_LogsFailure(t *testing.T) {
 
 If the package has no `containsStr` helper, use `strings.Contains`.
 
+```go
+// codex plan review #1: a signal that lands after serveAndWait's watcher
+// has exited sits in sigCh. The last gate before exec stops delivery first
+// (from then on SIGTERM takes its default action and ends the process),
+// then takes anything already buffered: one pending → stop, not restart.
+func TestRestartStillWanted_StopsDeliveryThenDrains(t *testing.T) {
+	sig := make(chan os.Signal, 1)
+	var order []string
+	stop := func() { order = append(order, "stop") }
+	if !restartStillWanted(sig, stop, func(string, ...any) {}) {
+		t.Fatal("no pending signal → restart still wanted")
+	}
+	if len(order) != 1 {
+		t.Fatalf("stop not called: %v", order)
+	}
+
+	sig <- syscall.SIGTERM
+	var logs []string
+	if restartStillWanted(sig, func() {}, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }) {
+		t.Fatal("a pending signal must turn the restart into a stop")
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0], "exiting instead of restarting") {
+		t.Fatalf("logs = %v", logs)
+	}
+}
+```
+
+Add `"os"`, `"strings"` and `"syscall"` to the test imports.
+
 - [ ] **Step 2: Run them and confirm they fail.**
   Run: `go test ./cmd/pdx/ -run 'Reexec'`
   Expected: compile error (undefined).
@@ -577,7 +646,26 @@ func reexec(p *reexecPlan, execFn func(string, []string, []string) error, logf f
 	logf("restart: exec %s failed: %v", p.path, err)
 	exit(1)
 }
+
+// restartStillWanted is the last gate before re-exec (spec D4). stop ends
+// signal delivery to sig — from then on SIGINT/SIGTERM take their default
+// action and end the process, so a `pdx stop` racing the exec still stops
+// it — and then any signal that arrived after serveAndWait's watcher had
+// exited is taken from the buffer: one pending means the operator asked to
+// stop, so no re-exec.
+func restartStillWanted(sig <-chan os.Signal, stop func(), logf func(string, ...any)) bool {
+	stop()
+	select {
+	case s := <-sig:
+		logf("received %v before restart; exiting instead of restarting", s)
+		return false
+	default:
+		return true
+	}
+}
 ```
+
+(add `import "os"` to `reexec.go`)
 
 Wire it in `cmd/pdx/main.go`:
 
@@ -616,7 +704,10 @@ At the end:
 ```go
 	err = serveAndWait(srv, listener, sigCh, restartCh, cancel, c, core.ShutdownBudget, log.Printf, os.Exit)
 	if errors.Is(err, errRestart) {
-		return boot
+		if restartStillWanted(sigCh, func() { signal.Stop(sigCh) }, log.Printf) {
+			return boot
+		}
+		return nil
 	}
 	if err != nil {
 		log.Printf("server error: %v", err)
@@ -666,6 +757,12 @@ import (
 	"testing"
 	"time"
 )
+
+// (codex plan review #3: codexbroker's default socket glob reads the real
+// /var/folders/*/*/T; PDX_CODEX_* point it at the temp dir. Before relying on
+// the env list in isolatedEnv, read registerServeModules (cmd/pdx/main.go
+// ~267-300) and add an override for anything else that reaches outside
+// HOME/TMUX_TMPDIR/data_dir.)
 
 // TestMain doubles as the daemon: the integration test starts this test
 // binary with PDX_RESTART_HELPER=1 and `serve` args, and a restart re-execs
@@ -717,11 +814,50 @@ func waitBootID(t *testing.T, base, not string, timeout time.Duration) string {
 	return ""
 }
 
+// isolatedEnv is os.Environ() minus every key the helper daemon must not
+// inherit, plus the overrides — built explicitly rather than appended so no
+// duplicate key decides which value wins (codex plan review #3).
+func isolatedEnv(dir string) []string {
+	drop := map[string]bool{"HOME": true, "TMUX": true, "TMUX_PANE": true, "TMUX_TMPDIR": true,
+		"PDX_DEV_MODE": true, "PDX_RESTART_HELPER": true, "PDX_CODEX_STATE_ROOT": true, "PDX_CODEX_SOCKET_ROOTS": true}
+	var env []string
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); !drop[k] {
+			env = append(env, kv)
+		}
+	}
+	codex := filepath.Join(dir, "codex")
+	os.MkdirAll(codex, 0700)
+	return append(env,
+		"PDX_RESTART_HELPER=1",
+		"HOME="+dir,               // every ~/... a module touches (~/.claude, ~/.codex, …)
+		"TMUX_TMPDIR="+dir,        // tmux calls hit a private, absent server — never the user's sessions
+		"PDX_CODEX_STATE_ROOT="+codex,   // codexbroker state …
+		"PDX_CODEX_SOCKET_ROOTS="+codex, // … and its socket glob (default globs the real /var/folders/*/*/T)
+		"PDX_DEV_MODE=0",          // observable env: dev routes stay off across the re-exec (D3)
+	)
+}
+
+func devCheckStatus(t *testing.T, base string) int {
+	t.Helper()
+	req, _ := http.NewRequest("GET", base+"/api/dev/daemon/check", nil)
+	req.Header.Set("Authorization", "Bearer itest-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
 func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
 	dir := t.TempDir()
 	port := freePort(t)
 	cfgPath := filepath.Join(dir, "config.toml")
-	cfg := fmt.Sprintf("bind = \"127.0.0.1\"\nport = %d\ndata_dir = %q\ntoken = \"itest-token\"\n", port, dir)
+	// [dev] update = true mounts the dev module; PDX_DEV_MODE=0 keeps its
+	// routes unregistered. If the re-exec lost the boot env, the new image
+	// would see PDX_DEV_MODE unset (= on) and /api/dev/daemon/check would appear.
+	cfg := fmt.Sprintf("bind = \"127.0.0.1\"\nport = %d\ndata_dir = %q\ntoken = \"itest-token\"\n\n[dev]\nupdate = true\nrepo_root = %q\n", port, dir, dir)
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -730,22 +866,22 @@ func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(os.Args[0], "serve", "--config", cfgPath)
-	// Isolate from the real machine: HOME for every ~/... the modules touch,
-	// TMUX_TMPDIR so tmux calls hit a private (absent) server, never the
-	// user's sessions.
-	cmd.Env = append(os.Environ(), "PDX_RESTART_HELPER=1", "HOME="+dir, "TMUX_TMPDIR="+dir)
+	cmd.Env = isolatedEnv(dir)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	// One waiter for the child's whole life: if the original process ever
+	// exits, this fires — exec keeps the process, a crash-and-respawn does not.
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
 	t.Cleanup(func() {
 		cmd.Process.Signal(syscall.SIGTERM)
-		done := make(chan struct{})
-		go func() { cmd.Wait(); close(done) }()
 		select {
-		case <-done:
+		case <-exited:
 		case <-time.After(15 * time.Second):
 			cmd.Process.Kill()
+			<-exited
 		}
 		if t.Failed() {
 			b, _ := os.ReadFile(filepath.Join(dir, "serve.log"))
@@ -755,6 +891,9 @@ func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
 
 	base := fmt.Sprintf("http://127.0.0.1:%d", port)
 	first := waitBootID(t, base, "", 30*time.Second)
+	if code := devCheckStatus(t, base); code != http.StatusNotFound {
+		t.Fatalf("before restart: /api/dev/daemon/check = %d, want 404 (PDX_DEV_MODE=0)", code)
+	}
 
 	req, _ := http.NewRequest("POST", base+"/api/daemon/restart", nil)
 	req.Header.Set("Authorization", "Bearer itest-token")
@@ -775,9 +914,16 @@ func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
 	if second == first {
 		t.Fatal("boot id unchanged")
 	}
-	// Same pid: the child we started is still the daemon (exec, not fork).
-	if err := syscall.Kill(cmd.Process.Pid, 0); err != nil {
-		t.Fatalf("original pid %d gone: %v", cmd.Process.Pid, err)
+	// Same process: the child we started never exited (exec replaces the
+	// image in place; a waiter on it would have fired on any exit).
+	select {
+	case err := <-exited:
+		t.Fatalf("original process exited during restart: %v", err)
+	default:
+	}
+	// Same environment: dev routes are still off (D3).
+	if code := devCheckStatus(t, base); code != http.StatusNotFound {
+		t.Fatalf("after restart: /api/dev/daemon/check = %d, want 404 — the boot env (PDX_DEV_MODE=0) was not kept", code)
 	}
 	pidData, err := os.ReadFile(filepath.Join(dir, "pdx.pid"))
 	if err != nil {
@@ -795,7 +941,11 @@ func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
   - If a module refuses to boot in the isolated HOME, fix it through the test env or config, not by weakening the assertions.
   - Then run plain `go test ./cmd/pdx/` and confirm the untagged suite does not see `TestMain`.
 
-- [ ] **Step 3: Commit.**
+- [ ] **Step 3: Mutation check.**
+  - Temporarily make `reexec` drop `PDX_DEV_MODE` from `p.env` before calling `execFn`. Rerun the integration test. The "after restart" dev-route assertion must FAIL.
+  - Revert. Record the red output for the PR body.
+
+- [ ] **Step 4: Commit.**
   `git add cmd/pdx/restart_integration_test.go`
   Then: `git commit -m "test(daemon): integration — restart keeps the pid and changes boot_id"`
 
@@ -818,150 +968,185 @@ Then open the PR, run codex R1 + R2, and merge.
 
 **Interfaces:**
 - Consumes:
-  - `hostFetch` (`lib/host-api`)
+  - `pinnedHostFetch` (`lib/host-api`). It is **not** `hostFetch`: `hostFetch` falls back to the active host for an unknown id, so a host removed mid-restart would send the POST or the probes to another daemon (codex plan review #5).
   - `findHostByEndpoint` and `useHostStore` (`stores/useHostStore`)
   - `useNexHostStore` (`ensure`, `byHost[id].info`)
   - `isNexReady` (`components/hosts/nex/nex-ready`)
   - `listExecutions` (`lib/nex/nex-api`)
   - `window.electronAPI.localDaemonStatus` / `localDaemonRestart`
 - Produces:
-  - `RESTART_TIMEOUT_MS = 60_000`, `RESTART_POLL_MS = 1_000`, `HEALTH_PROBE_TIMEOUT_MS = 3_000`, `WORKER_COUNT_TIMEOUT_MS = 3_000`
+  - `RESTART_TIMEOUT_MS = 60_000`, `RESTART_POLL_MS = 1_000`, `HEALTH_PROBE_TIMEOUT_MS = 3_000`, `WORKER_COUNT_TIMEOUT_MS = 3_000`, `MAX_WORKER_PAGES = 20`
   - `class DaemonRestartError extends Error { kind: 'timeout' | 'unsupported' | 'request' }`
-  - `interface RestartDeps { now(): number; sleep(ms: number): Promise<void>; readBootId(hostId: string): Promise<string | null>; postRestart(hostId: string): Promise<string>; isManagedLocal(hostId: string): Promise<boolean>; localRestart(): Promise<ElectronLocalDaemonResult> }`
+  - `interface RestartDeps { readBootId(hostId: string): Promise<string | null>; postRestart(hostId: string): Promise<string>; isManagedLocal(hostId: string): Promise<boolean>; localRestart(): Promise<ElectronLocalDaemonResult> }`
   - `readBootId(hostId): Promise<string | null>`
   - `postRestart(hostId): Promise<string>` resolves the pre-restart boot id and throws `DaemonRestartError`.
   - `isManagedLocal(hostId): Promise<boolean>`
   - `restartDaemon(hostId, deps?: Partial<RestartDeps>): Promise<ElectronLocalDaemonResult | null>`. It resolves once a **different** boot id answers health, and the value is the IPC result on the IPC path.
-  - `countRunningWorkers(hostId, timeoutMs?): Promise<number | null>`. `null` means unknown.
+    - **One 60 s deadline covers the whole action**: the status IPC, the POST or IPC restart, and the polling (codex plan review #4).
+    - Timing uses real `setTimeout`, so the tests use `vi.useFakeTimers()`.
+  - `countRunningWorkers(hostId, timeoutMs?): Promise<number | null>`.
+    - `null` means unknown.
+    - More than `MAX_WORKER_PAGES` pages also counts as unknown, because a truncated count would under-report (codex plan review #6).
 
 - [ ] **Step 1: Write the failing tests** in `spa/src/lib/daemon-restart.test.ts`.
 
 ```ts
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   restartDaemon, postRestart, readBootId, isManagedLocal, countRunningWorkers,
-  DaemonRestartError, RESTART_TIMEOUT_MS, RESTART_POLL_MS, type RestartDeps,
+  DaemonRestartError, RESTART_TIMEOUT_MS, RESTART_POLL_MS, MAX_WORKER_PAGES, type RestartDeps,
 } from './daemon-restart'
 import * as hostApi from './host-api'
 import * as nexApi from './nex/nex-api'
 import { useHostStore } from '../stores/useHostStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 
-vi.mock('./host-api', async (orig) => ({ ...(await orig<typeof import('./host-api')>()), hostFetch: vi.fn() }))
+vi.mock('./host-api', async (orig) => ({ ...(await orig<typeof import('./host-api')>()), pinnedHostFetch: vi.fn() }))
 vi.mock('./nex/nex-api', async (orig) => ({ ...(await orig<typeof import('./nex/nex-api')>()), listExecutions: vi.fn() }))
 
-/** A virtual clock: sleep advances it, so a 60 s window runs instantly. */
-function clockDeps(over: Partial<RestartDeps>): RestartDeps {
-  let t = 0
-  return {
-    now: () => t,
-    sleep: async (ms) => { t += ms },
-    readBootId: async () => null,
-    postRestart: async () => 'old',
-    isManagedLocal: async () => false,
-    localRestart: async () => { throw new Error('unused') },
-    ...over,
-  }
+const deps = (over: Partial<RestartDeps>): Partial<RestartDeps> => ({
+  readBootId: async () => null,
+  postRestart: async () => 'old',
+  isManagedLocal: async () => false,
+  localRestart: async () => { throw new Error('unused') },
+  ...over,
+})
+
+/** Settle-state probe that also attaches a handler at once (no unhandled-rejection noise). */
+function track<T>(p: Promise<T>) {
+  const s: { done: boolean; value?: T; error?: unknown } = { done: false }
+  p.then((v) => { s.done = true; s.value = v }, (e) => { s.done = true; s.error = e })
+  return s
 }
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
 
 beforeEach(() => {
-  vi.mocked(hostApi.hostFetch).mockReset()
+  vi.mocked(hostApi.pinnedHostFetch).mockReset()
   vi.mocked(nexApi.listExecutions).mockReset()
   useHostStore.getState().reset()
 })
 
 describe('restartDaemon — success needs a NEW boot id', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
   it('resolves once health answers a different boot id', async () => {
     const ids = ['old', 'old', 'new']
-    const deps = clockDeps({ readBootId: async () => ids.shift() ?? 'new' })
-    await expect(restartDaemon('h1', deps)).resolves.toBeNull()
+    const s = track(restartDaemon('h1', deps({ readBootId: async () => ids.shift() ?? 'new' })))
+    await vi.advanceTimersByTimeAsync(3 * RESTART_POLL_MS)
+    expect(s).toMatchObject({ done: true, value: null })
   })
 
   it('times out at 60 s when health keeps answering the old boot id', async () => {
     // The old process answers health through its whole shutdown budget.
     // Dropping the boot-id comparison turns this red (mutation deliverable).
-    const deps = clockDeps({ readBootId: async () => 'old' })
-    const err = await restartDaemon('h1', deps).catch((e) => e)
-    expect(err).toBeInstanceOf(DaemonRestartError)
-    expect(err.kind).toBe('timeout')
-    expect(deps.now()).toBeGreaterThanOrEqual(RESTART_TIMEOUT_MS)
-    expect(deps.now()).toBeLessThan(RESTART_TIMEOUT_MS + RESTART_POLL_MS + 1)
+    const s = track(restartDaemon('h1', deps({ readBootId: async () => 'old' })))
+    await vi.advanceTimersByTimeAsync(RESTART_TIMEOUT_MS - 1)
+    expect(s.done).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(s.error).toBeInstanceOf(DaemonRestartError)
+    expect((s.error as DaemonRestartError).kind).toBe('timeout')
   })
 
   it('an unreachable host (null) is not success', async () => {
-    const deps = clockDeps({ readBootId: async () => null })
-    await expect(restartDaemon('h1', deps)).rejects.toMatchObject({ kind: 'timeout' })
+    const s = track(restartDaemon('h1', deps({ readBootId: async () => null })))
+    await vi.advanceTimersByTimeAsync(RESTART_TIMEOUT_MS)
+    expect((s.error as DaemonRestartError).kind).toBe('timeout')
+  })
+
+  it.each([
+    ['the status IPC', { isManagedLocal: () => new Promise<boolean>(() => {}) }],
+    ['the POST', { postRestart: () => new Promise<string>(() => {}) }],
+    ['the IPC restart', { isManagedLocal: async () => true, localRestart: () => new Promise<ElectronLocalDaemonResult>(() => {}) }],
+  ])('%s hanging still ends in the 60 s timeout', async (_, over) => {
+    const s = track(restartDaemon('h1', deps(over)))
+    await vi.advanceTimersByTimeAsync(RESTART_TIMEOUT_MS)
+    expect((s.error as DaemonRestartError).kind).toBe('timeout')
+  })
+
+  it('stops probing health once timed out', async () => {
+    const probe = vi.fn(async () => 'old')
+    track(restartDaemon('h1', deps({ readBootId: probe })))
+    await vi.advanceTimersByTimeAsync(RESTART_TIMEOUT_MS)
+    const n = probe.mock.calls.length
+    await vi.advanceTimersByTimeAsync(10 * RESTART_POLL_MS)
+    expect(probe.mock.calls.length).toBe(n)
   })
 })
 
 describe('restartDaemon — path choice', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
   it('managed local daemon → IPC, never the API', async () => {
     const post = vi.fn()
     const result = { url: 'http://127.0.0.1:7860', token: 't', hash: 'h', version: 'v', hostname: 'air' }
     const ids = ['old', 'new']
-    const deps = clockDeps({
+    const s = track(restartDaemon('h1', deps({
       isManagedLocal: async () => true,
       localRestart: async () => result,
       postRestart: post,
       readBootId: async () => ids.shift() ?? 'new',
-    })
-    await expect(restartDaemon('h1', deps)).resolves.toBe(result)
+    })))
+    await vi.advanceTimersByTimeAsync(RESTART_POLL_MS)
+    expect(s.value).toBe(result)
     expect(post).not.toHaveBeenCalled()
   })
 
   it('any other host → API', async () => {
     const post = vi.fn(async () => 'old')
     const local = vi.fn()
-    const deps = clockDeps({ postRestart: post, localRestart: local, readBootId: async () => 'new' })
-    await restartDaemon('h1', deps)
+    track(restartDaemon('h1', deps({ postRestart: post, localRestart: local, readBootId: async () => 'new' })))
+    await vi.advanceTimersByTimeAsync(RESTART_POLL_MS)
     expect(post).toHaveBeenCalledWith('h1')
     expect(local).not.toHaveBeenCalled()
   })
 
   it('IPC failure → request error with its message', async () => {
-    const deps = clockDeps({ isManagedLocal: async () => true, localRestart: async () => { throw new Error('cannot restart: external') } })
-    await expect(restartDaemon('h1', deps)).rejects.toMatchObject({ kind: 'request', message: expect.stringContaining('cannot restart: external') })
+    const s = track(restartDaemon('h1', deps({ isManagedLocal: async () => true, localRestart: async () => { throw new Error('cannot restart: external') } })))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(s.error).toMatchObject({ kind: 'request', message: expect.stringContaining('cannot restart: external') })
   })
 })
 
 describe('postRestart', () => {
   it('202 → the pre-restart boot id', async () => {
-    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(json(202, { boot_id: 'b1' }))
+    vi.mocked(hostApi.pinnedHostFetch).mockResolvedValueOnce(json(202, { boot_id: 'b1' }))
     await expect(postRestart('h1')).resolves.toBe('b1')
-    expect(vi.mocked(hostApi.hostFetch).mock.calls[0].slice(0, 2)).toEqual(['h1', '/api/daemon/restart'])
-    expect(vi.mocked(hostApi.hostFetch).mock.calls[0][2]).toMatchObject({ method: 'POST' })
+    expect(vi.mocked(hostApi.pinnedHostFetch).mock.calls[0].slice(0, 2)).toEqual(['h1', '/api/daemon/restart'])
+    expect(vi.mocked(hostApi.pinnedHostFetch).mock.calls[0][2]).toMatchObject({ method: 'POST' })
   })
   it('409 with boot id → follows the restart already under way', async () => {
-    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(json(409, { error: 'restart_in_progress', boot_id: 'b1' }))
+    vi.mocked(hostApi.pinnedHostFetch).mockResolvedValueOnce(json(409, { error: 'restart_in_progress', boot_id: 'b1' }))
     await expect(postRestart('h1')).resolves.toBe('b1')
   })
   it('404 → unsupported (daemon predates the endpoint)', async () => {
-    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(new Response('404 page not found', { status: 404 }))
+    vi.mocked(hostApi.pinnedHostFetch).mockResolvedValueOnce(new Response('404 page not found', { status: 404 }))
     await expect(postRestart('h1')).rejects.toMatchObject({ kind: 'unsupported' })
   })
   it('503 → request error carrying the daemon error text', async () => {
-    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(json(503, { error: 'restart_unavailable' }))
+    vi.mocked(hostApi.pinnedHostFetch).mockResolvedValueOnce(json(503, { error: 'restart_unavailable' }))
     await expect(postRestart('h1')).rejects.toMatchObject({ kind: 'request', message: 'restart_unavailable' })
   })
-  it('network failure → request error', async () => {
-    vi.mocked(hostApi.hostFetch).mockRejectedValueOnce(new TypeError('Failed to fetch'))
-    await expect(postRestart('h1')).rejects.toMatchObject({ kind: 'request', message: 'Failed to fetch' })
+  it('a host no longer configured (pinned fetch rejects) → request error, nothing sent elsewhere', async () => {
+    vi.mocked(hostApi.pinnedHostFetch).mockRejectedValueOnce(new Error('host h1 is not configured'))
+    await expect(postRestart('h1')).rejects.toMatchObject({ kind: 'request', message: 'host h1 is not configured' })
   })
 })
 
 describe('readBootId', () => {
-  it('reads boot_id from /api/health', async () => {
-    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(json(200, { ok: true, boot_id: 'b9' }))
+  it('reads boot_id from /api/health through the pinned fetch', async () => {
+    vi.mocked(hostApi.pinnedHostFetch).mockResolvedValueOnce(json(200, { ok: true, boot_id: 'b9' }))
     await expect(readBootId('h1')).resolves.toBe('b9')
+    expect(vi.mocked(hostApi.pinnedHostFetch).mock.calls[0].slice(0, 2)).toEqual(['h1', '/api/health'])
   })
   it('no boot_id / non-200 / throw → null', async () => {
-    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(json(200, { ok: true }))
+    vi.mocked(hostApi.pinnedHostFetch).mockResolvedValueOnce(json(200, { ok: true }))
     await expect(readBootId('h1')).resolves.toBeNull()
-    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(json(500, {}))
+    vi.mocked(hostApi.pinnedHostFetch).mockResolvedValueOnce(json(500, {}))
     await expect(readBootId('h1')).resolves.toBeNull()
-    vi.mocked(hostApi.hostFetch).mockRejectedValueOnce(new Error('down'))
+    vi.mocked(hostApi.pinnedHostFetch).mockRejectedValueOnce(new Error('down'))
     await expect(readBootId('h1')).resolves.toBeNull()
   })
 })
@@ -969,7 +1154,7 @@ describe('readBootId', () => {
 describe('isManagedLocal', () => {
   const st = (o: Partial<ElectronLocalDaemonStatus>) => ({ managed: 'managed', config: { bind: '100.64.0.4', port: 7860, token: 't' }, ...o }) as ElectronLocalDaemonStatus
   it('true only when managed and the host is at the local daemon endpoint', async () => {
-    const id = useHostStore.getState().addHost({ name: 'air', ip: '100.64.0.4', port: 7860 })
+    const id = useHostStore.getState().registerLocalHost({ url: 'http://100.64.0.4:7860', token: 't', hostname: 'air' })
     window.electronAPI = { ...window.electronAPI!, localDaemonStatus: async () => st({}), localDaemonRestart: vi.fn() } as typeof window.electronAPI
     await expect(isManagedLocal(id)).resolves.toBe(true)
     window.electronAPI = { ...window.electronAPI!, localDaemonStatus: async () => st({ managed: 'external' }) } as typeof window.electronAPI
@@ -996,6 +1181,12 @@ describe('countRunningWorkers', () => {
     expect(vi.mocked(nexApi.listExecutions).mock.calls[0][1]).toMatchObject({ state: 'running' })
     expect(vi.mocked(nexApi.listExecutions).mock.calls[1][1]).toMatchObject({ state: 'running', cursor: 'c2' })
   })
+  it('more pages than MAX_WORKER_PAGES → null (a truncated count would under-report)', async () => {
+    setNex('h1', { ready: true, mounted: true, configured: true })
+    vi.mocked(nexApi.listExecutions).mockResolvedValue({ items: [{ state: 'running' }] as never, next_cursor: 'more' })
+    await expect(countRunningWorkers('h1')).resolves.toBeNull()
+    expect(nexApi.listExecutions).toHaveBeenCalledTimes(MAX_WORKER_PAGES)
+  })
   it('nex not ready → 0 (no workers can run)', async () => {
     setNex('h1', { ready: false, mounted: false, configured: false })
     await expect(countRunningWorkers('h1')).resolves.toBe(0)
@@ -1011,11 +1202,7 @@ describe('countRunningWorkers', () => {
 })
 ```
 
-Before writing, check two things in `useHostStore.ts`:
-- The exact host-creation action name (`addHost` or similar) and its argument shape.
-- The `NexHostEntry` fields in `lib/nex/nex-host-reducer.ts`. The `setNex` shortcut sets only `info`, and the real entry may need `phase` as well.
-
-Adapt the fixtures to the real shapes and keep the assertions.
+Before writing, check the `NexHostEntry` fields in `lib/nex/nex-host-reducer.ts`. The `setNex` shortcut sets only `info`, and the real entry may need `phase` as well. Adapt the fixtures to the real shapes and keep the assertions. `registerLocalHost` returns the host id (`useHostStore.ts:194`).
 
 - [ ] **Step 2: Run them and confirm they fail.**
   Run: `cd spa && npx vitest run src/lib/daemon-restart.test.ts`
@@ -1029,7 +1216,9 @@ Adapt the fixtures to the real shapes and keep the assertions.
 // through the Electron IPC, every other host through POST /api/daemon/restart.
 // Done means health answers with a DIFFERENT boot_id — the old process keeps
 // answering through its shutdown budget, so "the host answered" proves nothing.
-import { hostFetch } from './host-api'
+// Every request goes through pinnedHostFetch: a host removed mid-restart must
+// not have its POST or probes land on whatever host is active instead.
+import { pinnedHostFetch } from './host-api'
 import { listExecutions } from './nex/nex-api'
 import { findHostByEndpoint, useHostStore } from '../stores/useHostStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
@@ -1039,7 +1228,7 @@ export const RESTART_TIMEOUT_MS = 60_000 // the window `pdx start` waits for hea
 export const RESTART_POLL_MS = 1_000
 export const HEALTH_PROBE_TIMEOUT_MS = 3_000
 export const WORKER_COUNT_TIMEOUT_MS = 3_000
-const MAX_WORKER_PAGES = 20
+export const MAX_WORKER_PAGES = 20
 
 export type RestartFailure = 'timeout' | 'unsupported' | 'request'
 
@@ -1053,12 +1242,13 @@ export class DaemonRestartError extends Error {
 }
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err))
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 export async function readBootId(hostId: string): Promise<string | null> {
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), HEALTH_PROBE_TIMEOUT_MS)
   try {
-    const res = await hostFetch(hostId, '/api/health', { signal: ctl.signal })
+    const res = await pinnedHostFetch(hostId, '/api/health', { signal: ctl.signal })
     if (!res.ok) return null
     const body = (await res.json()) as { boot_id?: unknown }
     return typeof body.boot_id === 'string' && body.boot_id !== '' ? body.boot_id : null
@@ -1073,14 +1263,14 @@ export async function readBootId(hostId: string): Promise<string | null> {
 export async function postRestart(hostId: string): Promise<string> {
   let res: Response
   try {
-    res = await hostFetch(hostId, '/api/daemon/restart', { method: 'POST' })
+    res = await pinnedHostFetch(hostId, '/api/daemon/restart', { method: 'POST' })
   } catch (err) {
     throw new DaemonRestartError('request', errText(err))
   }
-  // A daemon older than the endpoint: the mux has no such route.
+  // A daemon older than the endpoint: the mux has no such route (spec D6).
   if (res.status === 404 || res.status === 405) throw new DaemonRestartError('unsupported', `HTTP ${res.status}`)
   const body = (await res.json().catch(() => null)) as { boot_id?: unknown; error?: unknown } | null
-  // 409: another client's restart is already under way — follow it to the same finish line.
+  // 409: another client's restart is already under way — follow it to the same finish line (spec D5).
   if ((res.status === 202 || res.status === 409) && typeof body?.boot_id === 'string') return body.boot_id
   throw new DaemonRestartError('request', typeof body?.error === 'string' ? body.error : `HTTP ${res.status}`)
 }
@@ -1095,8 +1285,6 @@ export async function isManagedLocal(hostId: string): Promise<boolean> {
 }
 
 export interface RestartDeps {
-  now: () => number
-  sleep: (ms: number) => Promise<void>
   readBootId: (hostId: string) => Promise<string | null>
   postRestart: (hostId: string) => Promise<string>
   isManagedLocal: (hostId: string) => Promise<boolean>
@@ -1104,8 +1292,6 @@ export interface RestartDeps {
 }
 
 const defaultDeps: RestartDeps = {
-  now: () => Date.now(),
-  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   readBootId,
   postRestart,
   isManagedLocal,
@@ -1122,39 +1308,47 @@ const TIMED_OUT = Symbol('timed-out')
  * IPC result on the managed-local path (the caller re-registers the host
  * with it, as the Development page always has), null on the API path.
  * Rejects with DaemonRestartError: 'request' (the call failed), 'unsupported'
- * (daemon too old), 'timeout' (no new boot id within 60 s).
+ * (daemon too old), 'timeout' (no new boot id within 60 s). The 60 s cover
+ * the whole action — a hung status IPC, POST or IPC restart included.
  */
 export async function restartDaemon(hostId: string, over: Partial<RestartDeps> = {}): Promise<ElectronLocalDaemonResult | null> {
   const d = { ...defaultDeps, ...over }
-  const deadline = d.now() + RESTART_TIMEOUT_MS
-  let before: string | null
-  let ipc: ElectronLocalDaemonResult | null = null
-  if (await d.isManagedLocal(hostId)) {
-    before = await d.readBootId(hostId)
-    const op = d.localRestart()
-    op.catch(() => {}) // a rejection after the deadline won the race is not unhandled
-    const r = await Promise.race([
-      op.catch((err) => { throw new DaemonRestartError('request', errText(err)) }),
-      d.sleep(Math.max(0, deadline - d.now())).then(() => TIMED_OUT),
-    ])
+  let expired = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<typeof TIMED_OUT>((r) => { timer = setTimeout(() => r(TIMED_OUT), RESTART_TIMEOUT_MS) })
+  const attempt = (async (): Promise<ElectronLocalDaemonResult | null | typeof TIMED_OUT> => {
+    let before: string | null
+    let ipc: ElectronLocalDaemonResult | null = null
+    if (await d.isManagedLocal(hostId)) {
+      before = await d.readBootId(hostId)
+      ipc = await d.localRestart().catch((err) => { throw new DaemonRestartError('request', errText(err)) })
+    } else {
+      before = await d.postRestart(hostId)
+    }
+    while (!expired) {
+      await sleep(RESTART_POLL_MS)
+      if (expired) break
+      const now = await d.readBootId(hostId)
+      if (now !== null && now !== before) return ipc
+    }
+    return TIMED_OUT
+  })()
+  attempt.catch(() => {}) // a failure after the deadline won the race is not unhandled
+  try {
+    const r = await Promise.race([attempt, deadline])
     if (r === TIMED_OUT) throw new DaemonRestartError('timeout')
-    ipc = r
-  } else {
-    before = await d.postRestart(hostId)
+    return r
+  } finally {
+    expired = true
+    clearTimeout(timer)
   }
-  while (d.now() < deadline) {
-    await d.sleep(RESTART_POLL_MS)
-    const now = await d.readBootId(hostId)
-    if (now !== null && now !== before) return ipc
-  }
-  throw new DaemonRestartError('timeout')
 }
 
 /**
- * Workers in `running` on the host, for the confirm text (spec §3.2).
- * Nex reported but not ready → 0 (no turn can run); no Nex info, or the list
- * failed / took longer than the budget → null: unknown, which the dialog
- * words as a warning rather than hiding it.
+ * Workers in `running` on the host, for the confirm text (spec §3.2, D7).
+ * Nex reported but not ready → 0 (no turn can run). No Nex info, the list
+ * failed, more than MAX_WORKER_PAGES pages, or over the budget → null:
+ * unknown, which the dialog words as a warning rather than hiding it.
  */
 export async function countRunningWorkers(hostId: string, timeoutMs = WORKER_COUNT_TIMEOUT_MS): Promise<number | null> {
   const work = (async (): Promise<number | null> => {
@@ -1170,7 +1364,7 @@ export async function countRunningWorkers(hostId: string, timeoutMs = WORKER_COU
       if (!p.next_cursor) return n
       cursor = p.next_cursor
     }
-    return n
+    return null
   })().catch(() => null)
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<null>((r) => { timer = setTimeout(() => r(null), timeoutMs) })
