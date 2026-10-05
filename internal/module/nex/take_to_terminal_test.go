@@ -1,10 +1,11 @@
 package nex
 
 // POST /api/nex/executions/{id}/take-to-terminal (exec-to-terminal spec
-// §4.1, plan T3): an execution with no origin session is taken to a fresh
-// tmux session the daemon creates in its cwd. Reuses the take-back fixtures;
-// the execution here is unbound (no handoff labels), a claude row with a
-// cwd and a session id.
+// §4.1, plan T3; conversation entity spec §4.3 D5/D6): an execution's
+// Claude Code session is brought to a fresh tmux session the daemon creates
+// in its cwd — resumed there first, and only then is the worker it was
+// exited. Reuses the take-back fixtures; the execution here is unbound (no
+// handoff labels), a claude row with a cwd and a session id.
 
 import (
 	"bytes"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"lab.protype.tw/wake/nexen/execution"
 	"lab.protype.tw/wake/nexen/store"
 
+	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -52,10 +55,80 @@ type ttEnv struct{ *takebackEnv }
 // 0 as soon as a resume key string lands anywhere.
 func newTTEnv(t *testing.T) *ttEnv {
 	t.Helper()
+	env := bareTTEnv(t)
+	reviveCCAfterKeysAt(env.handoffEnv, ttTarget)
+	return env
+}
+
+// bareTTEnv is newTTEnv without the reviver on the new session's window:
+// keys go out, Claude Code never comes up there.
+func bareTTEnv(t *testing.T) *ttEnv {
+	t.Helper()
 	env := newTakebackEnv(t)
 	env.store.results = []getResult{{exec: ttExec(store.StateIdle)}}
-	reviveCCAfterKeysAt(env.handoffEnv, ttTarget)
+	tl := &timeline{}
+	env.svc.onRecord = tl.add
+	env.m.tmux = &keysClock{Executor: env.tmux, tl: tl}
 	return &ttEnv{env}
+}
+
+// timeline is the merged order of the engine calls (the fake service's
+// names: "acquire", "interrupt", "renew", "terminate", "archive",
+// "release") and the delivered resume keys ("keys"). That order is what
+// take-to-terminal is about (conversation entity D5): the fence renewed
+// before the keys, the keys before the worker's exit.
+type timeline struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (tl *timeline) add(ev string) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	tl.events = append(tl.events, ev)
+}
+
+func (tl *timeline) snapshot() []string {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	return append([]string(nil), tl.events...)
+}
+
+// keysClock is the module's tmux with every delivered key string stamped
+// on the timeline (the reviver and the assertions keep reading the fake).
+type keysClock struct {
+	tmux.Executor
+	tl *timeline
+}
+
+func (k *keysClock) SendKeysIfInstanceTarget(sessionID, window, expectedInstance string, keys ...string) (bool, error) {
+	sent, err := k.Executor.SendKeysIfInstanceTarget(sessionID, window, expectedInstance, keys...)
+	if sent && err == nil {
+		k.tl.add("keys")
+	}
+	return sent, err
+}
+
+// timeline is the env's merged event order (newTTEnv / bareTTEnv only).
+func (e *ttEnv) timeline(t *testing.T) []string {
+	t.Helper()
+	k, ok := e.m.tmux.(*keysClock)
+	require.True(t, ok, "env not built by newTTEnv / bareTTEnv")
+	return k.tl.snapshot()
+}
+
+// at is where ev first happened on the timeline; the test fails when it
+// never did.
+func (e *ttEnv) at(t *testing.T, ev string) int {
+	t.Helper()
+	events := e.timeline(t)
+	for i, x := range events {
+		if x == ev {
+			return i
+		}
+	}
+	t.Fatalf("%q never happened; timeline %v", ev, events)
+	return -1
 }
 
 // reviveCCAfterKeysAt flips the given pane to CC idle once any key string
@@ -192,12 +265,14 @@ func TestTakeToTerminalLockKeysNeverCollide(t *testing.T) {
 }
 
 // TestTakeToTerminalLockReleasedAfterRequest: a second request gets past
-// TryLock once the first is done.
+// TryLock once the first is done — the execution's lock and the
+// conversation's (D2) alike.
 func TestTakeToTerminalLockReleasedAfterRequest(t *testing.T) {
 	env := newTTEnv(t)
 	status, body := env.post(t, tbExecID, ttBody())
 	require.Equal(t, http.StatusOK, status, "%v", body)
 	assert.True(t, env.m.locks.TryLock("exec:"+tbExecID))
+	assert.True(t, env.m.locks.TryLock(sidLockKey(tbSessionID)))
 }
 
 // --- execution lookup and row preflights ---
@@ -236,20 +311,19 @@ func TestTakeToTerminal409ProviderUnsupported(t *testing.T) {
 	env.assertNoSession(t)
 }
 
-func TestTakeToTerminal409NotSettledBeforeAnyLease(t *testing.T) {
-	for _, state := range []store.State{store.StateQueued, store.StateRejected} {
-		t.Run(string(state), func(t *testing.T) {
-			env := newTTEnv(t)
-			env.store.results = []getResult{{exec: ttExec(state)}}
-			status, body := env.post(t, tbExecID, ttBody())
-			assert.Equal(t, http.StatusConflict, status)
-			assert.Equal(t, "execution_not_settled", body["code"])
-			assert.Equal(t, string(state), body["state"])
-			assert.Empty(t, env.svc.Calls(), "no lease, no interrupt")
-			assert.Empty(t, env.sessions.CwdChecks(), "refused before the preflights")
-			env.assertNoSession(t)
-		})
-	}
+// Queued: nothing to resume yet. Refused before the conversation's lock,
+// the owner check and the preflights (rejected is accepted now — D6).
+func TestTakeToTerminal409QueuedNotSettledBeforeAnyLease(t *testing.T) {
+	env := newTTEnv(t)
+	env.store.results = []getResult{{exec: ttExec(store.StateQueued)}}
+	status, body := env.post(t, tbExecID, ttBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "execution_not_settled", body["code"])
+	assert.Equal(t, "queued", body["state"])
+	assert.Empty(t, env.svc.Calls(), "no lease, no interrupt")
+	assert.Equal(t, 0, env.store.listCalls, "no owner check")
+	assert.Empty(t, env.sessions.CwdChecks(), "refused before the preflights")
+	env.assertNoSession(t)
 }
 
 func TestTakeToTerminal409StillRunningAfterInterrupt(t *testing.T) {
@@ -272,6 +346,8 @@ func TestTakeToTerminal409NoSessionID(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, status)
 	assert.Equal(t, "no_session_id", body["code"])
 	assert.Empty(t, env.svc.Calls())
+	assert.Equal(t, 0, env.store.listCalls, "refused before the owner check")
+	assert.Empty(t, env.sessions.CwdChecks(), "refused before the preflights")
 	env.assertNoSession(t)
 }
 
@@ -285,6 +361,129 @@ func TestTakeToTerminalResumeSessionIDFallback(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "%v", body)
 	assert.Equal(t, "sid-resume", body["session_id"])
 	assert.Equal(t, []string{"claude --resume sid-resume\n"}, rawKeysText(env.tmux))
+}
+
+// --- D6: "bring this conversation to a terminal" ---
+
+// An exited execution (terminated, archived) owns nothing: its session is
+// resumed in a terminal with no control taken and nothing exited.
+func TestTakeToTerminal_ExitedExecutionIsRebuiltWithoutExit(t *testing.T) {
+	env := newTTEnv(t)
+	e := ttExec(store.StateTerminated)
+	e.ArchivedAt = 7
+	env.store.script(e)
+	status, body := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Empty(t, env.svc.Calls(), "an exited execution needs no control and no exit")
+	assert.Equal(t, true, body["exited"], "exited stays true")
+	assert.Equal(t, true, body["archived"])
+	assert.Nil(t, body["exit_error"])
+	assert.Equal(t, []string{"claude --resume " + tbSessionID + "\n"}, rawKeysText(env.tmux))
+}
+
+// Terminated but not yet archived is exited too (not live, §4.2): no
+// control, no exit — the archive is retried on the next exit only (D16).
+func TestTakeToTerminal_TerminatedUnarchivedIsNotArchived(t *testing.T) {
+	env := newTTEnv(t)
+	env.store.script(ttExec(store.StateTerminated))
+	status, body := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Empty(t, env.svc.Calls())
+	assert.Equal(t, true, body["exited"])
+	assert.Equal(t, false, body["archived"])
+}
+
+// Rejected (a start failure, still live under Q2) is resumed — from its
+// resume_session_id when it has no session id — and archived after.
+func TestTakeToTerminal_RejectedIsArchivedAfterResume(t *testing.T) {
+	env := newTTEnv(t)
+	e := ttExec(store.StateRejected)
+	e.SessionID, e.ResumeSessionID = "", "S"
+	env.store.script(e)
+	status, body := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Empty(t, env.svc.terminateCalls, "nothing to terminate")
+	assert.Equal(t, []string{"archive"}, env.svc.ArchiveCalls())
+	assert.Equal(t, []string{"claude --resume S\n"}, rawKeysText(env.tmux), "resume uses resume_session_id when session_id is empty")
+	assert.Less(t, env.at(t, "keys"), env.at(t, "archive"), "archived after the resume")
+	assert.Equal(t, true, body["exited"])
+	assert.Equal(t, true, body["archived"])
+}
+
+// --- owner check (§4.3, D2, D4, D6) ---
+
+func TestTakeToTerminal_OwnerConflicts(t *testing.T) {
+	t.Run("already in a terminal (second click after success)", func(t *testing.T) {
+		env := newTTEnv(t)
+		e := ttExec(store.StateTerminated)
+		e.ArchivedAt = 7
+		env.store.script(e)
+		env.terminals.live = map[string][]agent.TerminalSession{tbSessionID: {{PaneID: "%4", SessionID: tbSessionID, AgentType: "cc", Verified: true}}}
+		status, body := env.post(t, tbExecID, ttBody())
+		assert.Equal(t, http.StatusConflict, status)
+		assert.Equal(t, "session_owned", body["code"])
+		assert.Equal(t, "terminal", body["owner"])
+		assert.Equal(t, "%4", body["tmux_pane_id"])
+		assert.Empty(t, env.sessions.CwdChecks(), "refused before the preflights")
+		env.assertNoSession(t)
+	})
+	t.Run("another live worker for S", func(t *testing.T) {
+		env := newTTEnv(t)
+		env.store.script(ttExec(store.StateIdle))
+		env.store.listRows = []store.Execution{row(tbExecID, "idle", false, tbSessionID, "", 1), row("exec-other", "idle", false, tbSessionID, "", 2)}
+		status, body := env.post(t, tbExecID, ttBody())
+		assert.Equal(t, http.StatusConflict, status)
+		assert.Equal(t, "session_owned", body["code"])
+		assert.Equal(t, "worker", body["owner"])
+		assert.Equal(t, "exec-other", body["execution_id"])
+		assert.Empty(t, env.svc.Calls())
+		env.assertNoSession(t)
+	})
+	t.Run("the execution itself is not another owner", func(t *testing.T) {
+		env := newTTEnv(t)
+		env.store.script(ttExec(store.StateIdle))
+		env.store.listRows = []store.Execution{row(tbExecID, "idle", false, tbSessionID, "", 1)}
+		status, body := env.post(t, tbExecID, ttBody())
+		require.Equal(t, http.StatusOK, status, "%v", body)
+	})
+	t.Run("sid lock held", func(t *testing.T) {
+		env := newTTEnv(t)
+		env.store.script(ttExec(store.StateIdle))
+		require.True(t, env.m.locks.TryLock(sidLockKey(tbSessionID)))
+		status, body := env.post(t, tbExecID, ttBody())
+		assert.Equal(t, http.StatusConflict, status)
+		assert.Equal(t, "transfer_in_progress", body["code"])
+		assert.Equal(t, tbSessionID, body["session_id"])
+		assert.Empty(t, env.svc.Calls())
+		assert.Equal(t, 0, env.store.listCalls, "no owner check under somebody else's transfer")
+		env.assertNoSession(t)
+	})
+	t.Run("non-pdx holder → held_by before any session", func(t *testing.T) {
+		env := newTTEnv(t)
+		e := ttExec(store.StateIdle)
+		e.LeaseID, e.LeasePrincipalID, e.LeaseExpiresAt = "L-p", "ploom:agent-7", nowMs()+60_000
+		env.store.script(e, e)
+		env.svc.acquireErr = store.ErrLeaseHeld
+		status, body := env.post(t, tbExecID, ttBody())
+		assert.Equal(t, http.StatusConflict, status)
+		assert.Equal(t, "held_by", body["code"])
+		assert.Equal(t, "ploom:agent-7", body["principal"])
+		assert.Equal(t, []string{"acquire"}, env.svc.Calls(), "nothing done under a lease that is not ours")
+		env.assertNoSession(t)
+	})
+	t.Run("pdx holder's lease is borrowed", func(t *testing.T) {
+		env := newTTEnv(t)
+		e := ttExec(store.StateIdle)
+		e.LeaseID, e.LeasePrincipalID, e.LeaseExpiresAt = "L-b", "pdx:"+testHostID+"/tab2", nowMs()+60_000
+		env.store.script(e, e)
+		env.svc.acquireErr = store.ErrLeaseHeld
+		status, body := env.post(t, tbExecID, ttBody())
+		require.Equal(t, http.StatusOK, status, "%v", body)
+		require.Len(t, env.svc.terminateCalls, 1)
+		assert.Equal(t, "L-b", env.svc.terminateCalls[0].LeaseID)
+		assert.Equal(t, "pdx:"+testHostID+"/tab2", env.svc.terminateCalls[0].PrincipalID, "under the holder's principal")
+		assert.Empty(t, env.svc.releases, "a borrowed lease is never released")
+	})
 }
 
 // --- preflights that must not cost an interrupt (spec §4.1 step 4) ---
@@ -319,21 +518,80 @@ func TestTakeToTerminal409CwdMissingNoInterrupt(t *testing.T) {
 	env.assertNoSession(t)
 }
 
-// --- the engine: lease + interrupt through settleForResume ---
+// --- the engine: control for the whole transfer (D5) ---
 
-func TestTakeToTerminalRunningAcquiresInterruptsReleasesAfterArchive(t *testing.T) {
+// Idle: the transfer takes control (the fence that replaced "archive
+// first"), renews it, resumes, and only then exits the worker — terminate
+// under the held lease, archive — and releases its own lease last.
+func TestTakeToTerminal_ResumeThenExit_Idle(t *testing.T) {
 	env := newTTEnv(t)
-	env.scriptRunningThenIdle()
+	env.svc.lease = store.Lease{ID: "L-t"}
 	status, body := env.post(t, tbExecID, ttBody())
 	require.Equal(t, http.StatusOK, status, "%v", body)
-	assert.Equal(t, []string{"acquire", "interrupt", "archive", "release"}, env.svc.Calls())
+	assert.Equal(t, []string{"acquire", "renew", "keys", "terminate", "archive", "release"}, env.timeline(t),
+		"keys typed before the terminate; the transfer's own lease released after the exit")
+	require.Len(t, env.svc.terminateCalls, 1)
+	assert.Equal(t, execution.TerminateRequest{ExecutionID: tbExecID, LeaseID: "L-t", PrincipalID: tbPrincipal}, env.svc.terminateCalls[0])
+	assert.Equal(t, []string{"archive"}, env.svc.ArchiveCalls())
+	assert.Equal(t, []releaseCall{{tbExecID, "L-t", tbPrincipal}}, env.svc.releases)
+	assert.Equal(t, true, body["exited"])
+	assert.Equal(t, true, body["archived"])
+	assert.Nil(t, body["exit_error"])
+}
+
+// Running: interrupted under the transfer's control, re-read, then the same
+// order as idle — the interrupt, the terminate and the renew all under one lease.
+func TestTakeToTerminal_Running_InterruptsUnderControlThenExits(t *testing.T) {
+	env := newTTEnv(t)
+	env.scriptRunningThenIdle()
+	env.svc.lease = store.Lease{ID: "L-t"}
+	status, body := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, []string{"acquire", "interrupt", "renew", "keys", "terminate", "archive", "release"}, env.timeline(t))
 	assert.Equal(t, []string{tbPrincipal}, env.svc.acquires)
-	assert.Equal(t, []execution.InterruptRequest{{ExecutionID: tbExecID, LeaseID: tbLeaseID, PrincipalID: tbPrincipal}}, env.svc.interruptReqs)
-	assert.Equal(t, []releaseCall{{tbExecID, tbLeaseID, tbPrincipal}}, env.svc.releases)
+	assert.Equal(t, []execution.InterruptRequest{{ExecutionID: tbExecID, LeaseID: "L-t", PrincipalID: tbPrincipal}}, env.svc.interruptReqs)
+	require.Len(t, env.svc.terminateCalls, 1)
+	assert.Equal(t, "L-t", env.svc.terminateCalls[0].LeaseID)
+	assert.Equal(t, []releaseCall{{tbExecID, "L-t", tbPrincipal}}, env.svc.releases)
 	assert.Equal(t, 2, env.store.Calls(), "Get, then re-Get after the interrupt")
 	require.Len(t, env.svc.releaseCtxErrs, 1)
 	assert.NoError(t, env.svc.releaseCtxErrs[0])
 	assert.True(t, env.tmux.HasSession(ttName))
+}
+
+// The lease is renewed — a full TTL for the fence — after the settle and
+// before the resume keys go out, even when it was borrowed with seconds left
+// (plan review #2).
+func TestTakeToTerminal_RenewsTheFenceBeforeTheResume(t *testing.T) {
+	env := newTTEnv(t)
+	env.svc.lease = store.Lease{ID: "L-t"}
+	status, body := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, []renewCall{{tbExecID, "L-t", tbPrincipal}}, env.svc.renewCalls)
+	assert.Less(t, env.at(t, "renew"), env.at(t, "keys"), "the lease must be renewed before the resume keys go out")
+}
+
+// A renew that finds the lease gone re-takes control before anything is
+// created (renewControl): the new lease is the one the exit runs under, and
+// the old one is released at once.
+func TestTakeToTerminal_RenewLostLeaseRetakesControl(t *testing.T) {
+	env := newTTEnv(t)
+	env.svc.renewErr = store.ErrLeaseExpired
+	status, body := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, []string{"acquire", "renew", "release", "acquire", "keys", "terminate", "archive", "release"}, env.timeline(t))
+}
+
+// A renew that fails outright stops the transfer before any session: the
+// fence could not be guaranteed. The lease taken here is released.
+func TestTakeToTerminal_RenewFailureStopsBeforeAnySession(t *testing.T) {
+	env := newTTEnv(t)
+	env.svc.renewErr = errors.New("db locked")
+	status, body := env.post(t, tbExecID, ttBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "lease_error", body["code"])
+	assert.Equal(t, []string{"acquire", "renew", "release"}, env.svc.Calls())
+	env.assertNoSession(t)
 }
 
 func TestTakeToTerminalCallerLeaseNoAcquireNoRelease(t *testing.T) {
@@ -343,8 +601,12 @@ func TestTakeToTerminalCallerLeaseNoAcquireNoRelease(t *testing.T) {
 	b["lease_id"] = "lease-caller"
 	status, body := env.post(t, tbExecID, b)
 	require.Equal(t, http.StatusOK, status, "%v", body)
-	assert.Equal(t, []string{"interrupt", "archive"}, env.svc.Calls())
+	assert.Equal(t, []string{"interrupt", "renew", "terminate", "archive"}, env.svc.Calls())
 	assert.Equal(t, "lease-caller", env.svc.interruptReqs[0].LeaseID)
+	require.Len(t, env.svc.renewCalls, 1)
+	assert.Equal(t, "lease-caller", env.svc.renewCalls[0].LeaseID, "the caller's lease is renewed — validated — before the resume")
+	require.Len(t, env.svc.terminateCalls, 1)
+	assert.Equal(t, "lease-caller", env.svc.terminateCalls[0].LeaseID)
 	assert.Empty(t, env.svc.releases)
 }
 
@@ -359,14 +621,19 @@ func TestTakeToTerminal504InterruptUnconfirmedNoSession(t *testing.T) {
 	env.assertNoSession(t)
 }
 
+// A running execution under a non-pdx holder's lease is not interrupted
+// (D4): held_by from takeControl's re-read, nothing created.
 func TestTakeToTerminal409HeldBy(t *testing.T) {
 	env := newTTEnv(t)
-	env.scriptRunningThenIdle()
+	e := ttRunning()
+	e.LeaseID, e.LeasePrincipalID, e.LeaseExpiresAt = "L-p", "ploom:agent-7", nowMs()+60_000
+	env.store.script(e, e)
 	env.svc.acquireErr = store.ErrLeaseHeld
 	status, body := env.post(t, tbExecID, ttBody())
 	assert.Equal(t, http.StatusConflict, status)
 	assert.Equal(t, "held_by", body["code"])
-	assert.Equal(t, "pdx:host1/tab-3", body["principal"])
+	assert.Equal(t, "ploom:agent-7", body["principal"])
+	assert.Equal(t, []string{"acquire"}, env.svc.Calls(), "no interrupt")
 	env.assertNoSession(t)
 }
 
@@ -408,7 +675,7 @@ func TestTakeToTerminal500CreateFailedAfterNewSession(t *testing.T) {
 	assert.Contains(t, body["error"], "list exploded")
 	assert.True(t, env.tmux.HasSession(ttName), "the tmux session is left for the SPA to list (spec §4.1 step 6)")
 	assert.Empty(t, env.tmux.RawKeysSent())
-	assert.Equal(t, []string{"acquire", "interrupt", "release"}, env.svc.Calls(), "settled, unarchived, lease released")
+	assert.Equal(t, []string{"acquire", "interrupt", "renew", "release"}, env.svc.Calls(), "settled, not exited, lease released")
 }
 
 func TestTakeToTerminal500CreateFailedBeforeNewSession(t *testing.T) {
@@ -452,72 +719,19 @@ func TestTakeToTerminalKeysGoToNewSessionWindow0(t *testing.T) {
 	assert.Equal(t, []string{"cld-yolo --resume " + tbSessionID + " --verbose\n"}, rawKeysText(env.tmux))
 }
 
-// --- archive before resume (step 7, codex F2) ---
+// --- resume first, exit after (§4.3, D5) ---
 
-// The execution is archived BEFORE the resume command is typed: from the
-// moment the keys go out, the terminal may be writing the transcript, and
-// an execution that is still unarchived in that window is a second
-// writer the SPA can resume again. So the archive comes first; a resume
-// failure then kills the session and un-archives, and an archive failure
-// kills the session before any key is sent. Every kill is
+// The worker is exited only after the resume succeeded. Until then the
+// held lease is the fence (nobody can send into the worker), and the
+// exec / sid locks plus the owner check stop a second resume. A resume
+// failure kills the session just created and exits nothing — there is no
+// un-archive rollback any more, because nothing was archived. Every kill is
 // KillSessionIfInstance by the created session's id under the generation
 // it was created in — never by name.
 
-func TestTakeToTerminal500ArchiveFailedKillsSessionNoResume(t *testing.T) {
-	env := newTTEnv(t)
-	env.scriptRunningThenIdle()
-	env.svc.archiveErr = errors.New("archive exploded")
-	status, body := env.post(t, tbExecID, ttBody())
-	assert.Equal(t, http.StatusInternalServerError, status)
-	assert.Equal(t, "archive_failed", body["code"])
-	assert.Contains(t, body["error"], "archive exploded")
-	assert.Equal(t, tbSessionID, body["session_id"])
-	assert.Equal(t, ttName, body["session_name"])
-	assert.Equal(t, true, body["session_killed"])
-	assert.Empty(t, env.tmux.RawKeysSent(), "no resume was attempted")
-	assert.Len(t, env.sessions.Creates(), 1, "it was created…")
-	assert.False(t, env.tmux.HasSession(ttName), "…and killed again")
-	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: "$0", Expected: hoInstance}}, env.tmux.KillIfInstanceCalls())
-	assert.Equal(t, []string{"acquire", "interrupt", "archive", "release"}, env.svc.Calls(), "settled, archive attempted once, lease released")
-	assert.Equal(t, []string{"archive"}, env.svc.ArchiveCalls(), "nothing to un-archive")
-}
-
-func TestTakeToTerminalArchiveHappensBeforeResume(t *testing.T) {
-	env := newTTEnv(t)
-	status, body := env.post(t, tbExecID, ttBody())
-	require.Equal(t, http.StatusOK, status, "%v", body)
-	require.Len(t, env.svc.archiveCtxErrs, 1)
-	assert.NoError(t, env.svc.archiveCtxErrs[0], "archive ran under a live context of its own")
-	assert.Equal(t, []string{"archive"}, env.svc.ArchiveCalls())
-	assert.Len(t, env.tmux.RawKeysSent(), 1)
-	assert.Empty(t, env.tmux.KillIfInstanceCalls(), "nothing killed on success")
-}
-
-func TestTakeToTerminal500SendFailedKillsSessionAndUnarchives(t *testing.T) {
-	env := newTTEnv(t)
-	env.tmux.FailSendKeys = true
-	status, body := env.post(t, tbExecID, ttBody())
-	assert.Equal(t, http.StatusInternalServerError, status)
-	assert.Equal(t, "send_failed", body["code"])
-	assert.Equal(t, tbSessionID, body["session_id"])
-	assert.Equal(t, ttName, body["session_name"])
-	assert.Equal(t, true, body["session_killed"])
-	assert.Equal(t, true, body["unarchived"])
-	assert.Len(t, env.sessions.Creates(), 1, "it was created…")
-	assert.False(t, env.tmux.HasSession(ttName), "…and killed again (I3)")
-	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: "$0", Expected: hoInstance}}, env.tmux.KillIfInstanceCalls())
-	assert.Equal(t, []string{"archive", "unarchive"}, env.svc.ArchiveCalls())
-	assert.Equal(t, []execution.ArchiveRequest{
-		{ExecutionID: tbExecID, PrincipalID: tbPrincipal, Archived: true},
-		{ExecutionID: tbExecID, PrincipalID: tbPrincipal, Archived: false},
-	}, env.svc.archiveReqs)
-}
-
-func TestTakeToTerminal504CCStartTimeoutKillsSessionAndUnarchives(t *testing.T) {
-	// A bare take-back env: its reviver watches hoTarget (proj:0), so
-	// nothing ever runs claude in the new session's window.
-	env := &ttEnv{newTakebackEnv(t)}
-	env.store.results = []getResult{{exec: ttExec(store.StateIdle)}}
+func TestTakeToTerminal_ResumeFails_NothingExited(t *testing.T) {
+	// No reviver on the new session's window: CC never comes up.
+	env := bareTTEnv(t)
 	env.m.rollbackWait = 50 * time.Millisecond
 	status, body := env.post(t, tbExecID, ttBody())
 	assert.Equal(t, http.StatusGatewayTimeout, status)
@@ -525,24 +739,76 @@ func TestTakeToTerminal504CCStartTimeoutKillsSessionAndUnarchives(t *testing.T) 
 	assert.Equal(t, tbSessionID, body["session_id"])
 	assert.Equal(t, ttName, body["session_name"])
 	assert.Equal(t, true, body["session_killed"])
-	assert.Equal(t, true, body["unarchived"])
+	assert.Equal(t, false, body["exited"])
+	_, hasUnarchived := body["unarchived"]
+	assert.False(t, hasUnarchived, "unarchived is gone")
+	assert.Empty(t, env.svc.terminateCalls, "a failed resume must exit nothing")
+	assert.Empty(t, env.svc.ArchiveCalls(), "a failed resume must exit nothing")
+	assert.Equal(t, []string{"acquire", "renew", "keys", "release"}, env.timeline(t), "the transfer's own lease is released")
 	assert.Len(t, env.tmux.RawKeysSent(), 1, "keys were sent; CC just never came up")
 	assert.False(t, env.tmux.HasSession(ttName), "killed (I3)")
 	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: "$0", Expected: hoInstance}}, env.tmux.KillIfInstanceCalls())
-	assert.Equal(t, []string{"archive", "unarchive"}, env.svc.ArchiveCalls())
 }
 
-// The running case releases the lease last — after the un-archive, as
-// the archive has always been under the lease.
-func TestTakeToTerminalResumeFailureUnarchivesBeforeLeaseRelease(t *testing.T) {
+func TestTakeToTerminal500SendFailedKillsSessionExitsNothing(t *testing.T) {
+	env := newTTEnv(t)
+	env.tmux.FailSendKeys = true
+	status, body := env.post(t, tbExecID, ttBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "send_failed", body["code"])
+	assert.Equal(t, tbSessionID, body["session_id"])
+	assert.Equal(t, ttName, body["session_name"])
+	assert.Equal(t, true, body["session_killed"])
+	assert.Equal(t, false, body["exited"])
+	assert.Len(t, env.sessions.Creates(), 1, "it was created…")
+	assert.False(t, env.tmux.HasSession(ttName), "…and killed again (I3)")
+	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: "$0", Expected: hoInstance}}, env.tmux.KillIfInstanceCalls())
+	assert.Empty(t, env.svc.terminateCalls)
+	assert.Empty(t, env.svc.ArchiveCalls())
+}
+
+// Running: the interrupt happened, the resume failed — the worker stays (idle,
+// unarchived) and the transfer's lease is released last.
+func TestTakeToTerminalResumeFailureReleasesLeaseExitsNothing(t *testing.T) {
 	env := newTTEnv(t)
 	env.scriptRunningThenIdle()
 	env.tmux.FailSendKeys = true
 	status, body := env.post(t, tbExecID, ttBody())
 	assert.Equal(t, http.StatusInternalServerError, status)
 	assert.Equal(t, "send_failed", body["code"])
-	assert.Equal(t, []string{"acquire", "interrupt", "archive", "archive", "release"}, env.svc.Calls())
-	assert.Equal(t, []string{"archive", "unarchive"}, env.svc.ArchiveCalls())
+	assert.Equal(t, false, body["exited"])
+	assert.Equal(t, []string{"acquire", "interrupt", "renew", "release"}, env.svc.Calls())
+}
+
+// The resume succeeded, so the answer is 200 either way: the terminal runs
+// S now and the SPA must swap the pane to it. A worker that could not exit
+// (terminate and archive both failed) is reported as exited:false with the
+// reason, for the SPA to ask for a manual exit.
+func TestTakeToTerminal_ResumeOKButExitFails_Reports200WithExitError(t *testing.T) {
+	env := newTTEnv(t)
+	env.svc.terminateErr = errors.New("engine wedged")
+	env.svc.archiveErr = errors.New("db locked")
+	status, body := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, false, body["exited"])
+	assert.Equal(t, false, body["archived"])
+	assert.Equal(t, "terminate_failed", body["exit_error"])
+	assert.NotNil(t, body["session"])
+	assert.Equal(t, tbSessionID, body["session_id"])
+	assert.True(t, env.tmux.HasSession(ttName), "the terminal is kept: it runs S now")
+	assert.Empty(t, env.tmux.KillIfInstanceCalls())
+	assert.Less(t, env.at(t, "keys"), env.at(t, "terminate"))
+}
+
+// Terminate failed, archive succeeded: exited (writes blocked), no exit_error.
+func TestTakeToTerminal_TerminateFailsArchiveStands(t *testing.T) {
+	env := newTTEnv(t)
+	env.svc.terminateErr = errors.New("engine wedged")
+	status, body := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, true, body["exited"])
+	assert.Equal(t, true, body["archived"])
+	assert.Nil(t, body["exit_error"])
 }
 
 // TestTakeToTerminal409MismatchDoesNotKillByName (codex R1 P1): the tmux
@@ -550,7 +816,7 @@ func TestTakeToTerminalResumeFailureUnarchivesBeforeLeaseRelease(t *testing.T) {
 // the send, but `name` no longer identifies the session this call created
 // — a same-named session in the new generation belongs to someone else.
 // The kill is asked of the same generation guard and declined too, so the
-// stranger is left alone; the execution is un-archived for a retry.
+// stranger is left alone; nothing is exited, so the worker stays for a retry.
 func TestTakeToTerminal409MismatchDoesNotKillByName(t *testing.T) {
 	env := newTTEnv(t)
 	env.sessions.afterCreate = func() {
@@ -563,13 +829,14 @@ func TestTakeToTerminal409MismatchDoesNotKillByName(t *testing.T) {
 	assert.Equal(t, tbSessionID, body["session_id"])
 	assert.Equal(t, ttName, body["session_name"])
 	assert.Equal(t, false, body["session_killed"])
-	assert.Equal(t, true, body["unarchived"])
+	assert.Equal(t, false, body["exited"])
 	assert.True(t, env.tmux.HasSession(ttName), "the stranger's session is left alone")
 	for _, k := range env.tmux.KillIfInstanceCalls() {
 		assert.Equal(t, hoInstance, k.Expected, "any kill is guarded by the generation the session was created in")
 		assert.Equal(t, "$0", k.SessionID, "and names the created session by id, never by name")
 	}
-	assert.Equal(t, []string{"archive", "unarchive"}, env.svc.ArchiveCalls())
+	assert.Empty(t, env.svc.terminateCalls)
+	assert.Empty(t, env.svc.ArchiveCalls())
 }
 
 func TestTakeToTerminalKillFailureLoggedNotFatal(t *testing.T) {
@@ -582,37 +849,28 @@ func TestTakeToTerminalKillFailureLoggedNotFatal(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, status)
 	assert.Equal(t, "send_failed", body["code"], "the resume failure is what is reported")
 	assert.Equal(t, false, body["session_killed"])
-	assert.Equal(t, true, body["unarchived"], "the un-archive still happens")
+	assert.Equal(t, false, body["exited"], "still nothing exited")
 	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: "$0", Expected: hoInstance}}, env.tmux.KillIfInstanceCalls())
 	assert.True(t, env.tmux.HasSession(ttName), "kill failed: the session lingers")
 	assert.Contains(t, strings.Join(logged, "\n"), "kill", "the kill failure is logged")
 }
 
-func TestTakeToTerminalUnarchiveFailureLoggedNotFatal(t *testing.T) {
-	env := newTTEnv(t)
-	env.tmux.FailSendKeys = true
-	env.svc.unarchiveErr = errors.New("unarchive exploded")
-	var logged []string
-	env.m.logf = func(f string, a ...any) { logged = append(logged, f) }
-	status, body := env.post(t, tbExecID, ttBody())
-	assert.Equal(t, http.StatusInternalServerError, status)
-	assert.Equal(t, "send_failed", body["code"], "the resume failure is what is reported")
-	assert.Equal(t, true, body["session_killed"])
-	assert.Equal(t, false, body["unarchived"])
-	assert.Equal(t, []string{"archive", "unarchive"}, env.svc.ArchiveCalls(), "the un-archive was attempted")
-	assert.Contains(t, strings.Join(logged, "\n"), "unarchiv", "the un-archive failure is logged")
-}
-
-// --- response (step 8) ---
+// --- response (step 13) ---
 
 func TestTakeToTerminalSuccessResponse(t *testing.T) {
 	env := newTTEnv(t)
 	status, body := env.post(t, tbExecID, ttBody())
 	require.Equal(t, http.StatusOK, status, "%v", body)
 	assert.Equal(t, tbSessionID, body["session_id"])
-	assert.Equal(t, true, body["archived"], "a 200 is always archived: archive precedes the resume")
-	assert.Equal(t, []string{"archive"}, env.svc.Calls(), "idle execution: no lease, no interrupt")
+	assert.Equal(t, true, body["archived"], "kept for compatibility")
+	assert.Equal(t, true, body["exited"])
+	_, hasExitError := body["exit_error"]
+	assert.False(t, hasExitError, "exit_error only when the worker could not exit")
+	assert.Equal(t, []string{"acquire", "renew", "terminate", "archive", "release"}, env.svc.Calls(), "idle execution: control, no interrupt, exit after the resume")
 	assert.Equal(t, []execution.ArchiveRequest{{ExecutionID: tbExecID, PrincipalID: tbPrincipal, Archived: true}}, env.svc.archiveReqs)
+	require.Len(t, env.svc.archiveCtxErrs, 1)
+	assert.NoError(t, env.svc.archiveCtxErrs[0], "archive ran under a live context of its own")
+	assert.Empty(t, env.tmux.KillIfInstanceCalls(), "nothing killed on success")
 
 	sess, ok := body["session"].(map[string]any)
 	require.True(t, ok, "session is the SessionInfo object: %v", body["session"])

@@ -432,16 +432,35 @@ func TestTakebackCallerLeaseNoAcquireNoRelease(t *testing.T) {
 	assert.Empty(t, env.svc.releases, "a caller-provided lease is never released")
 }
 
+// held_by comes from takeControl's re-read of the row (conversation entity
+// D4): only a non-pdx holder refuses; a pdx holder's lease is borrowed.
 func TestTakeback409HeldBy(t *testing.T) {
 	env := newTakebackEnv(t)
-	env.scriptRunningThenIdle()
+	e := runningExec()
+	e.LeaseID, e.LeasePrincipalID, e.LeaseExpiresAt = "lease-other", "ploom:agent-7", nowMs()+60_000
+	env.store.script(e, e)
 	env.svc.acquireErr = store.ErrLeaseHeld
 	status, body := env.post(t, hoCode, takebackBody())
 	assert.Equal(t, http.StatusConflict, status)
 	assert.Equal(t, "held_by", body["code"])
-	assert.Equal(t, "pdx:host1/tab-3", body["principal"])
+	assert.Equal(t, "ploom:agent-7", body["principal"])
 	assert.Equal(t, []string{"acquire"}, env.svc.Calls(), "no interrupt, no release of a lease we never got")
 	assert.Empty(t, env.tmux.RawKeysSent())
+}
+
+// A running row whose lease another pdx client holds is interrupted under
+// that holder's lease (D4/D5) — borrowed, so never released.
+func TestTakebackRunningPdxHolderLeaseIsBorrowed(t *testing.T) {
+	env := newTakebackEnv(t)
+	e := runningExec()
+	e.LeaseExpiresAt = nowMs() + 60_000 // lease-other, held by pdx:host1/tab-3
+	env.store.script(e, e, idleExec())
+	env.svc.acquireErr = store.ErrLeaseHeld
+	status, body := env.post(t, hoCode, takebackBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, []string{"acquire", "interrupt", "archive"}, env.svc.Calls())
+	assert.Equal(t, []execution.InterruptRequest{{ExecutionID: tbExecID, LeaseID: "lease-other", PrincipalID: "pdx:host1/tab-3"}}, env.svc.interruptReqs)
+	assert.Empty(t, env.svc.releases)
 }
 
 func TestTakeback500LeaseError(t *testing.T) {
@@ -714,7 +733,9 @@ func TestTakebackRefusedWhileTakeToTerminalHoldsTheExecution(t *testing.T) {
 	close(env.svc.interruptGate)
 	r := <-first
 	require.Equal(t, http.StatusOK, r.status, "%v", r.body)
-	assert.Equal(t, []string{"acquire", "interrupt", "archive", "release"}, env.svc.Calls())
+	// Take-to-terminal's own sequence (conversation entity D5): renew the
+	// fence, resume, then exit the worker (terminate + archive).
+	assert.Equal(t, []string{"acquire", "interrupt", "renew", "terminate", "archive", "release"}, env.svc.Calls())
 	assert.Len(t, env.tmux.RawKeysSent(), 1, "one resume in total")
 
 	// Both locks released.

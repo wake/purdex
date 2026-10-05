@@ -1,24 +1,30 @@
 package nex
 
 // POST /api/nex/executions/{id}/take-to-terminal (exec-to-terminal spec
-// §4.1): take any claude execution — one with no origin session — to a
-// fresh tmux session the daemon creates in the execution's cwd, resume its
-// Claude Code session there, and archive the execution. The engine steps
-// are the take-back's (settleForResume, resumeInWindow in takeback.go);
-// what differs is the session — created here, and killed again (by id,
-// under the generation it was created in) if the archive or the resume
-// fails — and the order: the execution is archived before the resume is
-// typed, and un-archived if the resume fails, so a failed call never
-// leaves a second writer next to an unarchived execution, and a
-// succeeding one has no window in which the SPA could resume the
-// execution a second time.
+// §4.1; conversation entity spec §4.3, D5, D6): bring a claude execution's
+// conversation to a terminal — a fresh tmux session the daemon creates in
+// the execution's cwd — by resuming its Claude Code session there, and
+// only after that resume succeeded, exit the worker it was (terminate +
+// archive, exitWorker). The engine steps are the take-back's
+// (settleForResume, resumeInWindow in takeback.go); what differs is the
+// session — created here, and killed again (by id, under the generation it
+// was created in) if the resume fails.
+//
+// Resume first, exit after. What used to be the "archive first" fence is
+// now two things: the transfer holds the control lease from before the
+// settle until after the exit, so nobody can send into the worker while
+// the terminal resumes; and the exec:<id> and sid:<S> locks plus the owner
+// check stop a second resume of S. A failed resume exits nothing — there
+// is no un-archive rollback. An exited execution (archived or terminated)
+// and a rejected one are accepted too (D6: "rebuild as terminal"); the
+// owner check, not "archived", is what refuses a second click once S is in
+// a terminal. Only an execution that was live is exited.
 
 import (
 	"encoding/json"
 	"errors"
 	"net/http"
 
-	"lab.protype.tw/wake/nexen/execution"
 	"lab.protype.tw/wake/nexen/store"
 
 	"github.com/wake/purdex/internal/module/session"
@@ -37,9 +43,25 @@ type takeToTerminalRequest struct {
 // codes are base36 without a colon, so the prefix cannot name one.
 func takeToTerminalLockKey(execID string) string { return "exec:" + execID }
 
-// handleTakeToTerminal runs spec §4.1 steps 1–8 in order: lock, body,
-// row, row preflights (provider, state), the preflights that must not cost
-// an interrupt (name free, cwd usable), settle, create, archive, resume.
+// handleTakeToTerminal runs, in order:
+//
+//  1. engine, then principal;
+//  2. the exec:<id> lock (409 takeback_in_progress);
+//  3. body;
+//  4. the row, then the provider check;
+//  5. the session id S (409 no_session_id), then queued → 409
+//     execution_not_settled;
+//  6. the sid:<S> lock (409 transfer_in_progress);
+//  7. the owner check: nothing but this execution, and only while it is
+//     live, may own S (409 session_owned / 503 owner_check_failed);
+//  8. the preflights that must not cost an interrupt (name free, cwd usable);
+//  9. a live running / idle row: takeControl (held for the whole transfer,
+//     released on return), settleForResume, then renewControl — a full TTL
+//     for the fence;
+//  10. create the session;
+//  11. resume — on failure the session is killed and nothing is exited;
+//  12. a row that was live: exitWorker under the transfer's control;
+//  13. 200 {session, session_id, archived, exited, exit_error?}.
 func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 	execID := r.PathValue("id")
 
@@ -57,7 +79,7 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 1: one take-to-terminal per execution at a time.
+	// Step 2: one take-to-terminal per execution at a time.
 	lockKey := takeToTerminalLockKey(execID)
 	if !m.locks.TryLock(lockKey) {
 		writeHandoffError(w, http.StatusConflict, "takeback_in_progress", "a take-back is already in progress for this execution", nil)
@@ -65,7 +87,7 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer m.locks.Unlock(lockKey)
 
-	// Step 2: body.
+	// Step 3: body.
 	var body takeToTerminalRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeHandoffError(w, http.StatusBadRequest, "malformed_body", "invalid request body: "+err.Error(), nil)
@@ -85,7 +107,7 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	name := body.SessionName
 
-	// Step 3: the row, once (settleForResume re-reads only after an
+	// Step 4: the row, once (settleForResume re-reads only after an
 	// interrupt). Detached, bounded contexts as in the take-back.
 	parent := r.Context()
 	exec, err := m.getExecution(parent, execID)
@@ -102,24 +124,45 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"provider": exec.Provider})
 		return
 	}
-	// Archived: the terminal (or whoever archived it) owns that transcript
-	// now. A retried 200, or a second click from a pane whose swap failed,
-	// must not start a second `claude --resume` on the same session file.
-	if exec.ArchivedAt != 0 {
-		writeHandoffError(w, http.StatusConflict, "execution_archived", "execution is archived; its session is already resumed elsewhere",
-			map[string]any{"session_id": firstNonEmpty(exec.SessionID, exec.ResumeSessionID)})
+
+	// Step 5: the conversation, S. Without it there is nothing to resume
+	// and nothing to lock. Queued: nothing to resume yet — refused before
+	// any lock or lease (the SPA never shows the button there).
+	sid := firstNonEmpty(exec.SessionID, exec.ResumeSessionID)
+	if sid == "" {
+		writeHandoffError(w, http.StatusConflict, "no_session_id", "execution has no Claude Code session id to resume", nil)
 		return
 	}
-	// queued / rejected: nothing to interrupt and nothing to resume yet —
-	// refused before any lease (settleForResume would say the same, but
-	// after the preflights below, and the SPA never shows the button here).
-	if exec.State == store.StateQueued || exec.State == store.StateRejected {
-		writeHandoffError(w, http.StatusConflict, "execution_not_settled", "execution is "+string(exec.State)+", not settled",
-			map[string]any{"state": string(exec.State)})
+	if exec.State == store.StateQueued {
+		writeHandoffError(w, http.StatusConflict, "execution_not_settled", "execution is queued, not settled",
+			map[string]any{"state": string(store.StateQueued)})
 		return
 	}
 
-	// Step 4: preflights that must not cost an interrupt. A running turn
+	// Step 6 (D2): the conversation's lock. Every Purdex transfer of S
+	// holds it, and the manual-resume handler skips S while it is held.
+	sidKey := sidLockKey(sid)
+	if !m.locks.TryLock(sidKey) {
+		writeHandoffError(w, http.StatusConflict, "transfer_in_progress", "this conversation is being moved already",
+			map[string]any{"session_id": sid})
+		return
+	}
+	defer m.locks.Unlock(sidKey)
+
+	// Step 7 (§4.3, D6): S may move only if nothing but this execution owns
+	// it. An exited execution owns nothing; a second click after a success
+	// finds S in the terminal it just reached and stops here.
+	wasLive := isLiveExecution(exec)
+	allowExec := ""
+	if wasLive {
+		allowExec = exec.ID
+	}
+	if herr := m.checkOwners(parent, sid, allowExec, ""); herr != nil {
+		herr.write(w)
+		return
+	}
+
+	// Step 8: preflights that must not cost an interrupt. A running turn
 	// is left running when the name is taken or the cwd is gone.
 	if m.sessions.SessionExists(name) {
 		writeHandoffError(w, http.StatusConflict, "session_exists", "session already exists: "+name,
@@ -137,26 +180,44 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 5: settle — lease-if-running → interrupt → re-read → settled →
-	// session id. A lease acquired here is released after the archive.
-	exec, sid, release, herr := m.settleForResume(parent, exec, body.LeaseID, principal)
-	if herr != nil {
-		herr.write(w)
-		return
+	// Step 9 (D5): control for the whole transfer — the caller's lease,
+	// else one acquired here, else a pdx holder's borrowed (D4); a non-pdx
+	// holder answers held_by before anything is created. Holding it is the
+	// fence that replaced "archive first": nobody can send into the worker
+	// between the resume and the exit. Rows that take no sends (exited,
+	// failed, rejected) need none.
+	ctl := control{release: noRelease}
+	if wasLive && (exec.State == store.StateRunning || exec.State == store.StateIdle) {
+		var herr *handoffError
+		if ctl, herr = m.takeControl(parent, execID, body.LeaseID, principal); herr != nil {
+			herr.write(w)
+			return
+		}
+		defer func() { ctl.release() }() // ctl may be replaced by renewControl below
+		if exec, _, herr = m.settleForResume(parent, exec, ctl); herr != nil {
+			herr.write(w)
+			return
+		}
+		// A full TTL from here: the fence must outlive create + resume, even
+		// when the lease was borrowed with seconds left. A lease lost since
+		// is re-taken (renewControl), so the exit runs under a live one.
+		if ctl, herr = m.renewControl(parent, execID, ctl, principal); herr != nil {
+			herr.write(w)
+			return
+		}
 	}
-	defer release()
 
-	// Step 6: the session. Ours from here on.
+	// Step 10: the session. Ours from here on.
 	info, err := m.sessions.CreateSession(name, exec.Cwd)
 	if err != nil {
 		var ce *session.CreateError
 		switch {
 		case errors.Is(err, session.ErrSessionExists):
-			// Lost the race with step 4: somebody else's session, untouched.
+			// Lost the race with step 8: somebody else's session, untouched.
 			writeHandoffError(w, http.StatusConflict, "session_exists", "session already exists: "+name,
 				map[string]any{"session_name": name})
 		case errors.Is(err, session.ErrInvalidCwd):
-			// Vanished between step 4 and now.
+			// Vanished between step 8 and now.
 			writeHandoffError(w, http.StatusConflict, "cwd_missing", "execution cwd is not usable: "+err.Error(),
 				map[string]any{"cwd": exec.Cwd})
 		default:
@@ -168,46 +229,45 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 7: archive BEFORE the resume (codex F2). Once the keys go out
-	// the terminal may be writing the transcript, and an execution still
-	// unarchived in that window is one the SPA can resume a second time.
-	// A failure here kills the session just created — ours, nothing ran in
-	// it — and leaves the execution settled and unarchived for a retry.
-	if err := m.archiveExecution(parent, execution.ArchiveRequest{ExecutionID: execID, PrincipalID: principal, Archived: true}); err != nil {
-		m.logf("nex: take-to-terminal %s: archiving: %v", execID, err)
-		killed := m.killCreatedSession(execID, info, "archive_failed")
-		writeHandoffError(w, http.StatusInternalServerError, "archive_failed", "archiving execution: "+err.Error(),
-			map[string]any{"session_id": sid, "session_name": name, "session_killed": killed})
-		return
-	}
-
-	// Step 8: resume in window 0 of the session just created, guarded by
+	// Step 11: resume in window 0 of the session just created, guarded by
 	// the generation it was created under. On failure the session is
 	// killed again — by id, under that same generation, so a server that
 	// restarted in between (tmux_instance_mismatch, or a restart the send
 	// never got to see) declines the kill and a stranger who reused the
-	// name is left alone (I3) — and the execution is un-archived so it can
-	// be retried (a failure there is logged; the detail says which state
-	// the row is in). The detail carries the session id for a manual resume.
+	// name is left alone (I3) — and nothing is exited: the worker is as it
+	// was (settled), for a retry. The detail carries the session id for a
+	// manual resume.
 	if herr := m.resumeInWindow(info, info.TmuxInstance, body.ResumeCommand, sid); herr != nil {
 		killed := m.killCreatedSession(execID, info, herr.code)
-		unarchived := true
-		if err := m.archiveExecution(parent, execution.ArchiveRequest{ExecutionID: execID, PrincipalID: principal, Archived: false}); err != nil {
-			m.logf("nex: take-to-terminal %s: unarchiving after %s: %v", execID, herr.code, err)
-			unarchived = false
-		}
 		if herr.detail == nil {
 			herr.detail = map[string]any{}
 		}
 		herr.detail["session_name"] = name
 		herr.detail["session_killed"] = killed
-		herr.detail["unarchived"] = unarchived
+		herr.detail["exited"] = false
 		herr.write(w)
 		return
 	}
 
-	m.logf("nex: take-to-terminal %s → session %s/%s (session %s, archived)", execID, info.Code, info.Name, sid)
-	writeJSON(w, http.StatusOK, map[string]any{"session": info, "session_id": sid, "archived": true})
+	// Step 12 (§4.3): the terminal owns S now; the worker it was exits,
+	// under the transfer's control. The resume succeeded, so the answer is
+	// 200 either way: the SPA must swap the pane to the terminal that now
+	// runs S. A worker that could not exit (terminate and archive both
+	// failed) is reported as exited:false with exit_error, for the SPA to
+	// ask the user to exit it by hand.
+	resp := map[string]any{"session": info, "session_id": sid, "archived": exec.ArchivedAt != 0, "exited": !wasLive}
+	if wasLive {
+		out, herr := m.exitWorker(parent, exec, ctlPtr(ctl), principal)
+		if herr != nil {
+			m.logf("nex: take-to-terminal %s: exiting the worker after the resume: %s (%s)", execID, herr.code, herr.msg)
+			resp["exit_error"] = herr.code
+		}
+		resp["exited"], resp["archived"] = out.Exited(), out.Archived || exec.ArchivedAt != 0
+	}
+
+	// Step 13.
+	m.logf("nex: take-to-terminal %s → session %s/%s (session %s, exited=%v)", execID, info.Code, info.Name, sid, resp["exited"])
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // killCreatedSession kills the session this call created — by id, and

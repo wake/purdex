@@ -33,8 +33,9 @@ type takebackRequest struct {
 
 // settled reports whether an execution state is one a take-back may resume
 // from: the transcript has no writer, so the terminal can become one.
+// Rejected counts (conversation entity D6): a start failure never wrote.
 func settled(s store.State) bool {
-	return s == store.StateIdle || s == store.StateFailed || s == store.StateTerminated
+	return s == store.StateIdle || s == store.StateFailed || s == store.StateTerminated || s == store.StateRejected
 }
 
 // boundToSession reports whether exec is the execution a handoff of
@@ -167,15 +168,24 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer m.locks.Unlock(execLock)
 
-	exec, sid, release, herr := m.settleForResume(parent, exec, body.LeaseID, principal)
+	// Control for the interrupt, only when the row is running (interim until
+	// the take-back follows take-to-terminal's D5 order). Released on the
+	// way out — after the archive, as the sequence has always done. A
+	// caller-provided or borrowed lease is not ours to release (noRelease).
+	ctl := control{release: noRelease}
+	if exec.State == store.StateRunning {
+		var herr *handoffError
+		if ctl, herr = m.takeControl(parent, execID, body.LeaseID, principal); herr != nil {
+			herr.write(w)
+			return
+		}
+		defer ctl.release()
+	}
+	exec, sid, herr := m.settleForResume(parent, exec, ctl)
 	if herr != nil {
 		herr.write(w)
 		return
 	}
-	// Released on the way out — after the archive, as the sequence has
-	// always done. A caller-provided lease stays the caller's (release is
-	// then a no-op).
-	defer release()
 
 	// Last look before a key goes out, lock still held: the store read and
 	// the interrupt above are a window in which the user can resume by
@@ -221,80 +231,41 @@ func (e *handoffError) write(w http.ResponseWriter) {
 
 // settleForResume brings an already-read execution to a state a terminal
 // may resume from (exec-to-terminal spec §4.4): a running one is
-// interrupted under a lease — the caller's, or one acquired here as
-// principal — and re-read; the result must be settled and carry a session
-// id (SessionID, else ResumeSessionID). Shared by the session-bound
-// take-back and take-to-terminal, which each run their own preflights
-// before calling it.
+// interrupted under ctl and re-read; the result must be settled and carry
+// a session id (SessionID, else ResumeSessionID). Shared by the
+// session-bound take-back and take-to-terminal, which each run their own
+// preflights before calling it.
 //
-// Lease contract: a lease acquired here is released — under a fresh
-// detached context, so an expired interrupt budget cannot take the release
-// down with it — before any error return, and on success handed back as
-// release for the caller to defer (so it runs after the archive, as the
-// sequence always did). A caller-provided lease is never released; release
-// is then a no-op. On error, release is nil and sid empty.
-func (m *Module) settleForResume(parent context.Context, exec store.Execution, leaseID, principal string) (store.Execution, string, func(), *handoffError) {
-	execID := exec.ID
-	release := func() {}
-
+// Lease contract (conversation entity D5): the caller takes control
+// (takeControl — held_by / lease_error are its answers) and holds it for
+// the whole transfer; this helper only acts under ctl, and never acquires
+// or releases a lease, on any path. On error, sid is empty.
+func (m *Module) settleForResume(parent context.Context, exec store.Execution, ctl control) (store.Execution, string, *handoffError) {
 	if exec.State == store.StateRunning {
-		if leaseID == "" {
-			lease, err := m.acquireLease(parent, execID, principal)
-			if err != nil {
-				if errors.Is(err, store.ErrLeaseHeld) {
-					return exec, "", nil, &handoffError{http.StatusConflict, "held_by", "execution lease is held by " + exec.LeasePrincipalID,
-						map[string]any{"principal": exec.LeasePrincipalID}}
-				}
-				return exec, "", nil, &handoffError{http.StatusInternalServerError, "lease_error", "acquiring lease: " + err.Error(), nil}
-			}
-			leaseID = lease.ID
-			// Released on every path out of here — unconfirmed, failed,
-			// store error, success — so the daemon never sits on a lease
-			// the SPA would then have to wait out.
-			release = func() {
-				if err := m.releaseLease(parent, execID, leaseID, principal); err != nil {
-					m.logf("nex: settle %s: releasing lease %s: %v", execID, leaseID, err)
-				}
-			}
-		}
-		fail := func(h *handoffError) (store.Execution, string, func(), *handoffError) {
-			release()
-			return exec, "", nil, h
-		}
-
-		_, err := m.interruptExecution(parent, execution.InterruptRequest{ExecutionID: execID, LeaseID: leaseID, PrincipalID: principal})
+		_, err := m.interruptExecution(parent, execution.InterruptRequest{ExecutionID: exec.ID, LeaseID: ctl.LeaseID, PrincipalID: ctl.PrincipalID})
 		switch {
 		case err == nil, errors.Is(err, execution.ErrNoLiveTurn):
 			// Idle by the time the signal went out: nothing to stop.
 		case errors.Is(err, execution.ErrInterruptUnconfirmed):
-			return fail(&handoffError{http.StatusGatewayTimeout, "interrupt_unconfirmed", "interrupt not confirmed: " + err.Error(), nil})
+			return exec, "", &handoffError{http.StatusGatewayTimeout, "interrupt_unconfirmed", "interrupt not confirmed: " + err.Error(), nil}
 		default:
-			return fail(&handoffError{http.StatusInternalServerError, "interrupt_failed", "interrupting execution: " + err.Error(), nil})
+			return exec, "", &handoffError{http.StatusInternalServerError, "interrupt_failed", "interrupting execution: " + err.Error(), nil}
 		}
-
-		if exec, err = m.getExecution(parent, execID); err != nil {
-			return fail(&handoffError{http.StatusInternalServerError, "store_error", "re-reading execution: " + err.Error(), nil})
+		fresh, err := m.getExecution(parent, exec.ID)
+		if err != nil {
+			return exec, "", &handoffError{http.StatusInternalServerError, "store_error", "re-reading execution: " + err.Error(), nil}
 		}
+		exec = fresh
 	}
-	fail := func(h *handoffError) (store.Execution, string, func(), *handoffError) {
-		release()
-		return exec, "", nil, h
-	}
-
 	if !settled(exec.State) {
-		return fail(&handoffError{http.StatusConflict, "execution_not_settled", "execution is " + string(exec.State) + ", not settled",
-			map[string]any{"state": string(exec.State)}})
+		return exec, "", &handoffError{http.StatusConflict, "execution_not_settled", "execution is " + string(exec.State) + ", not settled",
+			map[string]any{"state": string(exec.State)}}
 	}
-
-	sid := exec.SessionID
+	sid := firstNonEmpty(exec.SessionID, exec.ResumeSessionID)
 	if sid == "" {
-		sid = exec.ResumeSessionID
+		return exec, "", &handoffError{http.StatusConflict, "no_session_id", "execution has no Claude Code session id to resume", nil}
 	}
-	if sid == "" {
-		return fail(&handoffError{http.StatusConflict, "no_session_id", "execution has no Claude Code session id to resume", nil})
-	}
-
-	return exec, sid, release, nil
+	return exec, sid, nil
 }
 
 // resumeInWindow types the rendered resume command into the session's

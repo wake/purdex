@@ -320,6 +320,11 @@ type fakeNexService struct {
 	renewCalls     []renewCall
 	renewErr       error
 
+	// onRecord runs after each call is recorded, outside mu, with the call's
+	// name: the seam that merges these calls with another fake's events into
+	// one ordered timeline (take-to-terminal's resume-before-exit order).
+	onRecord func(name string)
+
 	// Opt-in lease fence, off by default so existing tests are unaffected.
 	// With enforceLease, heldLease is the execution's lease as Nexen's store
 	// holds it: AcquireLease refuses a live lease of another principal and
@@ -360,8 +365,12 @@ type releaseCall struct{ ExecutionID, LeaseID, PrincipalID string }
 
 func (f *fakeNexService) record(name string) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, name)
+	hook := f.onRecord
+	f.mu.Unlock()
+	if hook != nil {
+		hook(name)
+	}
 }
 
 // record calls "archive" for every Archive; ArchiveCalls tells the two
