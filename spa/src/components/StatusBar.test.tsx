@@ -1085,10 +1085,12 @@ describe('StatusBar worker bar', () => {
   })
 
   // Shell polish spec §4 (rule F): the worker bar's segments are the same CopySegment, so they keep focus too.
-  it('a mouse press on the host or cwd segment keeps focus where it was', () => {
+  it('a mouse press on the host or cwd segment keeps focus where it was; both stay in the tab order', () => {
     render(<StatusBar activeTab={workerTab()} />)
     for (const testId of ['status-seg-host', 'status-seg-cwd']) {
-      expect(fireEvent.mouseDown(screen.getByTestId(testId)), testId).toBe(false)
+      const seg = screen.getByTestId(testId)
+      expect(fireEvent.mouseDown(seg), testId).toBe(false)
+      expect(seg.tabIndex, testId).toBeGreaterThanOrEqual(0)
     }
   })
 })
