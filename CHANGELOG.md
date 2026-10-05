@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.484] - 2026-10-06
+
+> SPA 走 HMR；daemon 要是內嵌 Nexen v0.16.0 的版本（#1554，482 起）。mlab 已在 2026-10-05 部署（`3d7390af`）。air26 的 Nexen 是關的，不受影響。
+
+### Feature：交接來的 worker 正式顯示交接前的對話（#1548 #1554 #1558 #1561）
+
+- 476／477 先上的「交接前對話」，在 daemon 換成內嵌 Nexen v0.16.0 後正式啟用：從終端機「Hand to nex」交出去的 worker，第 1 個 turn 上方會畫出這段對話在 transcript 裡更早的全部內容，往上捲到頂會自動載入更早的部分，room 和 chat 都有，搜尋（Cmd+F）也找得到。
+- 交接前內容的最下方、worker 第 1 個 turn 正上方，多一條「Headless（worker）」分界線，標出從終端機交接進這個 worker 的位置；中間來回交接過幾次，每個切換點都有一條線。
+- 在交接前內容中間切換 room ⇄ chat，會停在同一段內容，不再跳到最底（#1534）；pane 被收起時才載入的較舊內容，也不會讓回來時的位置跑掉。
+- 搜尋列的「更早的內容尚未全部載入 · 全部載入」補上中間的點。
+- 已知缺口：在終端機打的 `/model` 這類指令還不會出現在交接前內容裡，`!` 指令的大輸出會露出 `<persisted-output>` 標籤，這兩項等 Nexen v0.16.1；在終端機貼上的大段文字會連同 `<pasted_content>` 標籤整段畫出來，下一版改成可展開的「貼上的文字 · N 行」區塊。
+
+### Internal
+
+- Nexen pin v0.15.0 → v0.16.0（`GET /v1/executions/{id}/prelude`、`transcript_prelude` capability；schema 仍是 v6，不必刪 nex.db）。
+- 契約測試：Nexen 早期 golden page（`__fixtures__/prelude-golden-nexen.json`）與 mlab 真實 capture（`prelude-06GGS8J1….json`，兩段 assistant 文字去識別化）各一份 replay。
+- 捲動記憶加錨點（`ScrollMemo.anchor`）：prelude 元素帶 `data-prelude-pos`／`data-prelude-poses`，錨點元素共用 `scroll-anchor` class，從即時清單二分搜尋，不在每個 scroll 事件掃 DOM。
+- spec §7 真機驗收紀錄在 #1558；spec §4.3 補上 v0.16.1 的契約（`system`/`local_command`、`<persisted-output>`），§4.2／§8 的存取措辭改成與 `/events` 相同的信任模型。
+- follow-up #1543（ExecutionView 職責拆分）、#1557（封存的 worker 分頁標題）。
+
 ## [1.0.0-alpha.483] - 2026-10-05
 
 > 純 SPA，不必重新部署 daemon。殼層整理最後一支（P7／7）。這個版本同時包含 worker prelude 線的 #1558，內容見該 PR。
