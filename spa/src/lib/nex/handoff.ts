@@ -33,7 +33,8 @@ import { resumeLookupFor, resumeTemplateFor } from '../resume-templates'
 import { nextProjectSessionName } from '../launch-session-name'
 import { slugForCwd } from './session-slug'
 import type { TFunction } from '../pane-labels'
-import type { ExecutionFrom, PaneContent } from '../../types/tab'
+import type { ExecutionContent, ExecutionFrom, ExecutionViewMode } from '../../types/tab'
+import { withViewMode } from './view-mode'
 import {
   HandoffApiError, nexHandoff, nexTakeback, nexTakeToTerminal,
   type NexHandoffResult, type NexTakebackResult, type NexTakeToTerminalResult,
@@ -63,6 +64,8 @@ export interface HandToNexArgs {
   keepSession?: boolean
   /** The source tab's title, recorded on the execution pane (worker theme spec §8.4). */
   fromTitle?: string
+  /** The view the execution pane opens in (shell cleanup spec §9.4); absent → no mode written (reads as room). */
+  mode?: ExecutionViewMode
 }
 
 export interface HandToNexOutcome {
@@ -76,15 +79,20 @@ export interface HandToNexOutcome {
  * the recovery toast opens). `from` is omitted when the session was not kept:
  * the pane then has nothing to return to, and "Take to terminal" creates a
  * new session instead. `fromTitle` (the source tab's title) is kept either
- * way; a blank one is omitted.
+ * way; a blank one is omitted. `mode`, when given, is the view the worker
+ * opens in — on both paths, so a chat handoff whose swap missed still opens
+ * in chat.
  */
-export function executionContentFor(hostId: string, executionId: string, from?: ExecutionFrom, fromTitle?: string): PaneContent {
+export function executionContentFor(
+  hostId: string, executionId: string, from?: ExecutionFrom, fromTitle?: string, mode?: ExecutionViewMode,
+): ExecutionContent {
   const title = fromTitle?.trim()
-  return {
+  const content: ExecutionContent = {
     kind: 'execution', executionId, host: hostId,
     ...(from ? { from } : {}),
     ...(title ? { fromTitle: title } : {}),
   }
+  return mode ? withViewMode(content, mode) : content
 }
 
 /** `from` for the execution pane, or undefined when the daemon says the session is gone. */
@@ -112,7 +120,7 @@ export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> 
       keep_session: keepSession,
     })
     const swapped = isRefShownNow(hostId) && useTabStore.getState().trySetPaneContent(
-      tabId, paneId, executionContentFor(hostId, result.execution_id, handoffFromFor(args, result), args.fromTitle),
+      tabId, paneId, executionContentFor(hostId, result.execution_id, handoffFromFor(args, result), args.fromTitle, args.mode),
       (c) => c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && c.tmuxInstance === tmuxInstance,
     )
     return { result, swapped }

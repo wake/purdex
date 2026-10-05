@@ -32,7 +32,7 @@ export function HandoffDialogHost() {
 }
 
 function OpenHandoffDialog({ target }: { target: HandoffDialogTarget }) {
-  const { tabId, paneId, content } = target
+  const { tabId, paneId, content, mode } = target
   const hostShown = usePaneHostShown(content)
   const holds = useTabStore((s) => {
     const tab = s.tabs[tabId]
@@ -51,6 +51,7 @@ function OpenHandoffDialog({ target }: { target: HandoffDialogTarget }) {
       cachedName={content.cachedName}
       tabId={tabId}
       paneId={paneId}
+      {...(mode ? { mode } : {})}
       onClose={() => useHandoffDialogStore.getState().closeFor(target)}
     />
   )

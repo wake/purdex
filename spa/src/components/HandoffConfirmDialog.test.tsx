@@ -209,6 +209,39 @@ describe('HandoffConfirmDialog — confirm', () => {
   })
 })
 
+describe('HandoffConfirmDialog — the initial view mode (shell cleanup spec §9.4)', () => {
+  it('passes mode to handToNex', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
+    render(<HandoffConfirmDialog {...args} mode="chat" onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex).toHaveBeenCalledWith({ ...args, mode: 'chat', keepSession: true })
+  })
+
+  it('swapped:false with mode chat → "Open execution" opens the execution in chat', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: false })
+    const open = vi.spyOn(useTabStore.getState(), 'openSingletonTab').mockReturnValue('tab-x')
+    render(<HandoffConfirmDialog {...args} mode="chat" onClose={vi.fn()} />)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    toast()!.action!()
+    expect(open).toHaveBeenCalledWith({
+      kind: 'execution',
+      executionId: 'exc_1',
+      host: 'h1',
+      from: { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' },
+      mode: 'chat',
+    })
+  })
+
+  it('no mode → the recovery content has none (reads as room)', async () => {
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: false })
+    const open = vi.spyOn(useTabStore.getState(), 'openSingletonTab').mockReturnValue('tab-x')
+    renderDialog()
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    toast()!.action!()
+    expect(open.mock.calls[0][0]).not.toHaveProperty('mode')
+  })
+})
+
 describe('HandoffConfirmDialog — records the session pane title (worker theme spec §8.4)', () => {
   function titledSessionTab(paneTitle: string) {
     const tab = createTab({ kind: 'tmux-session', hostId: 'h1', sessionCode: 'zk16vd', mode: 'terminal', cachedName: 'purdex', tmuxInstance: 'inst-1' })

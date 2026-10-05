@@ -82,7 +82,8 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
           () => {
             // Re-checked at click (H2d-3): hidden since → the Hosts page on that host, never an execution tab.
             if (landOnHostsPageIfHidden(args.hostId)) return
-            useTabStore.getState().openSingletonTab(executionContentFor(args.hostId, result.execution_id, from, fromTitle))
+            // The same view the swap would have written (shell cleanup §9.4): a chat handoff opens in chat here too.
+            useTabStore.getState().openSingletonTab(executionContentFor(args.hostId, result.execution_id, from, fromTitle, args.mode))
           },
           t('handoff.open_execution'),
         )

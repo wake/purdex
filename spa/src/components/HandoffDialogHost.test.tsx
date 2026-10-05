@@ -164,6 +164,39 @@ describe('HandoffDialogHost', () => {
     })
   })
 
+  describe('the initial view mode (shell cleanup spec §9.4)', () => {
+    it('a target with mode chat → the pane becomes the execution in chat', async () => {
+      const target = seedPane()
+      mockedHandoff.mockResolvedValueOnce(ok)
+      render(<HandoffDialogHost />)
+      open({ ...target, mode: 'chat' })
+      await act(async () => { fireEvent.click(screen.getByTestId('handoff-confirm')) })
+      expect(paneContent(target)).toMatchObject({ kind: 'execution', executionId: 'exc_1', mode: 'chat' })
+    })
+
+    it('mode chat, the pane closed mid-request → the dialog closes; "Open execution" opens a chat tab', async () => {
+      const target = seedPane()
+      const d = deferred<NexHandoffResult>()
+      mockedHandoff.mockReturnValueOnce(d.promise)
+      render(<HandoffDialogHost />)
+      open({ ...target, mode: 'chat' })
+      await act(async () => { fireEvent.click(screen.getByTestId('handoff-confirm')) })
+      expect(mockedHandoff).toHaveBeenCalledTimes(1)
+      act(() => { useTabStore.getState().closeTab(target.tabId) })
+      expect(dialog()).toBeNull()
+      await act(async () => { d.resolve(ok) })
+      const toast = useUndoToast.getState().toast
+      expect(toast?.actionLabel).toBe('Open execution')
+      act(() => { toast!.action!() })
+      const opened = Object.values(useTabStore.getState().tabs).map((tab) => getPrimaryPane(tab.layout).content)
+      expect(opened).toEqual([{
+        kind: 'execution', executionId: 'exc_1', host: H,
+        from: { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' },
+        mode: 'chat',
+      }])
+    })
+  })
+
   it('a request that finishes after its dialog closed does not close a dialog opened since', async () => {
     const first = seedPane()
     const second = seedPane(session({ sessionCode: 'second' }))

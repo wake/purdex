@@ -189,6 +189,45 @@ describe('handToNex', () => {
     })
   })
 
+  describe('mode (shell cleanup spec §9.4 — the view the worker opens in)', () => {
+    it('mode chat → the pane is written in chat', async () => {
+      mockedHandoff.mockResolvedValueOnce(handoffOk)
+      const a = { ...args(), mode: 'chat' as const }
+      const out = await handToNex(a)
+      expect(out.swapped).toBe(true)
+      expect(paneContent(a.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from, mode: 'chat' })
+    })
+
+    it('mode room → room; no mode → no mode field (reads as room)', async () => {
+      mockedHandoff.mockResolvedValueOnce(handoffOk)
+      const room = { ...args(), mode: 'room' as const }
+      await handToNex(room)
+      expect(paneContent(room.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from, mode: 'room' })
+      mockedHandoff.mockResolvedValueOnce({ ...handoffOk, execution_id: 'exc_2' })
+      const none = args()
+      await handToNex(none)
+      expect(paneContent(none.tabId)).not.toHaveProperty('mode')
+    })
+
+    it('mode chat but the pane was closed mid-request → nothing written, swapped:false (the dialog offers "Open execution")', async () => {
+      const d = deferred<typeof handoffOk>()
+      mockedHandoff.mockReturnValueOnce(d.promise)
+      const a = { ...args(), mode: 'chat' as const }
+      const p = handToNex(a)
+      await vi.waitFor(() => expect(mockedHandoff).toHaveBeenCalledTimes(1))
+      useTabStore.getState().closeTab(a.tabId)
+      d.resolve(handoffOk)
+      await expect(p).resolves.toEqual({ result: handoffOk, swapped: false })
+      expect(Object.values(useTabStore.getState().tabs)).toHaveLength(0)
+    })
+
+    it('executionContentFor carries the mode it is given, and none when not', () => {
+      expect(executionContentFor(H, 'e', from, 'T', 'chat')).toEqual({ kind: 'execution', executionId: 'e', host: H, from, fromTitle: 'T', mode: 'chat' })
+      expect(executionContentFor(H, 'e', undefined, undefined, 'room')).toEqual({ kind: 'execution', executionId: 'e', host: H, mode: 'room' })
+      expect(executionContentFor(H, 'e', from, 'T')).not.toHaveProperty('mode')
+    })
+  })
+
   describe('keep_session (exec-to-terminal spec §4.3 / G4)', () => {
     it('keepSession:false is sent as keep_session:false; session_kept:false → the pane has no `from` (the button later takes it to a NEW terminal)', async () => {
       mockedHandoff.mockResolvedValueOnce({ ...handoffOk, session_kept: false })
