@@ -1976,26 +1976,42 @@ describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
     expect(screen.getByRole('textbox')).not.toHaveFocus()
   })
 
-  // P5 review A2: the input's `disabled` also covers stream loss and history
-  // load; the box enabling for either is not a send coming back.
-  it('the live stream coming back (input enabled again) does not take focus', async () => {
-    useExecutionStore.getState().setSse(H, E, 'closed', 'forbidden')
+  // P5 review A2: the input's `disabled` also covers stream loss; the box
+  // enabling again later in the session is not a send coming back.
+  it('the live stream lost and back (input enabled again) does not take focus', async () => {
     render(<ExecutionView {...base} isActive isFocusTarget />)
+    await nextFrame() // the activation lands
+    screen.getByRole('textbox').blur()
+    act(() => { useExecutionStore.getState().setSse(H, E, 'closed', 'forbidden') })
     expect(screen.getByRole('textbox')).toBeDisabled()
-    await nextFrame() // the activation frame: a no-op on the disabled box
+    await nextFrame()
     act(() => { useExecutionStore.getState().setSse(H, E, 'open', null) })
     expect(screen.getByRole('textbox')).not.toBeDisabled()
     await nextFrame()
     expect(screen.getByRole('textbox')).not.toHaveFocus()
   })
 
-  it('history finishing loading (input enabled) does not take focus', async () => {
+  // P5 review follow-up: opening a worker whose history is still loading —
+  // the activation finds the box disabled, and keeps its focus pending until
+  // the box is usable.
+  it('opened while its history loads: the reply box takes focus once the history has loaded', async () => {
     useExecutionStore.getState().setHistoryLoaded(H, E, false)
     render(<ExecutionView {...base} isActive isFocusTarget />)
     expect(screen.getByRole('textbox')).toBeDisabled()
     await nextFrame()
+    expect(screen.getByRole('textbox')).not.toHaveFocus()
     act(() => { useExecutionStore.getState().setHistoryLoaded(H, E, true) })
     expect(screen.getByRole('textbox')).not.toBeDisabled()
+    await nextFrame()
+    expect(screen.getByRole('textbox')).toHaveFocus()
+  })
+
+  it('opened while its history loads, the reader moved to another pane meanwhile: no focus when it loads', async () => {
+    useExecutionStore.getState().setHistoryLoaded(H, E, false)
+    const { rerender } = render(<ExecutionView {...base} isActive isFocusTarget />)
+    await nextFrame()
+    rerender(<ExecutionView {...base} isActive isFocusTarget={false} />)
+    act(() => { useExecutionStore.getState().setHistoryLoaded(H, E, true) })
     await nextFrame()
     expect(screen.getByRole('textbox')).not.toHaveFocus()
   })

@@ -391,6 +391,35 @@ describe('pane focus — first mount as the active tab (spec §8.3 path 2)', () 
     expect(domFocusOn(workerBox())).toBe(1)
     expect(monaco().focus).not.toHaveBeenCalled()
   })
+
+  // P5 review follow-up: the activation finds the reply box disabled while the history loads; its focus waits
+  // for the box to be usable, and is dropped if the user moved to another pane meanwhile.
+  it('worker + editor, no record, the history still loading → the reply box focuses once, when it has loaded', async () => {
+    useExecutionStore.getState().setHistoryLoaded(H, EXEC, false)
+    show(TW)
+    await settle()
+    expect(workerBox()).toBeDisabled()
+    expect(domFocusOn(workerBox())).toBe(0)
+
+    act(() => { useExecutionStore.getState().setHistoryLoaded(H, EXEC, true) })
+    await settle()
+    expect(domFocusOn(workerBox())).toBe(1)
+    expect(monaco().focus).not.toHaveBeenCalled()
+  })
+
+  it('worker + editor, the history still loading, a pointerdown on the editor before it loads → no focus from any site', async () => {
+    useExecutionStore.getState().setHistoryLoaded(H, EXEC, false)
+    show(TW)
+    await settle()
+    fireEvent.pointerDown(screen.getByTestId('monaco-editor'))
+    expect(usePaneFocusStore.getState().recent.tW?.[0]).toBe('editor')
+    clearFocusCalls()
+
+    act(() => { useExecutionStore.getState().setHistoryLoaded(H, EXEC, true) })
+    await settle()
+    expect(domFocusOn(workerBox())).toBe(0)
+    expect(monaco().focus).not.toHaveBeenCalled()
+  })
 })
 
 // --- 3. click inside a visible tab -------------------------------------------------------------------------------

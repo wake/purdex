@@ -80,13 +80,40 @@ export default function WorkerInput({
 
   // Shell cleanup spec §8.2: the reply box focuses itself only at activation
   // (its tab shown, or mounting in the active tab), as the tab's focus target.
-  // A disabled box cannot take focus (focus() is a no-op on it), and its
-  // enabling later does not focus it either: only a send coming back does.
   const focusInput = useCallback(() => {
     const ta = textareaRef.current
     if (ta && !typingElsewhere(ta)) ta.focus()
   }, [])
-  useActivationFocus(isActive, isFocusTarget, focusInput, { raf: true })
+  // A disabled box cannot take focus (history still loading, the stream not
+  // back yet), so an activation that finds it disabled stays pending: the
+  // first time the box is enabled, it takes focus unless the reader is typing
+  // elsewhere (P5 review follow-up). Leaving the tab or losing the target
+  // cancels it, so a pending focus always belongs to the active tab's focus
+  // target. No other enabling of the box focuses it; a send coming back does
+  // (below).
+  const pendingActivationRef = useRef(false)
+  const focusAtActivation = useCallback(() => {
+    if (textareaRef.current?.disabled) pendingActivationRef.current = true
+    else focusInput()
+  }, [focusInput])
+  useActivationFocus(isActive, isFocusTarget, focusAtActivation, { raf: true })
+  useEffect(() => {
+    if (!isActive || !isFocusTarget) pendingActivationRef.current = false
+  }, [isActive, isFocusTarget])
+  const prevDisabledRef = useRef(disabled)
+  useEffect(() => {
+    const enabled = prevDisabledRef.current && !disabled
+    prevDisabledRef.current = disabled
+    if (!enabled || !pendingActivationRef.current) return
+    // Checked again when the frame runs: a click on another pane before then cancelled it (P5 review A1).
+    const id = requestAnimationFrame(() => {
+      if (!pendingActivationRef.current) return
+      // This first enabling uses it up, focused or not (the reader typing elsewhere keeps their field).
+      pendingActivationRef.current = false
+      focusInput()
+    })
+    return () => cancelAnimationFrame(id)
+  }, [disabled, focusInput])
 
   // After this pane's own send comes back (`pendingSend` true → false; P5
   // review A2): refocus, but only when this pane is the focus target of the
@@ -94,10 +121,10 @@ export default function WorkerInput({
   // checked when the frame runs. A worker whose send returns after the reader
   // moved to another pane stays put; so does one still disabled for another
   // reason (the worker ended, the stream died), and its enabling later is
-  // not this send. The aggregated `disabled` never refocuses: its other
+  // not this send. The aggregated `disabled` never refocuses here: its other
   // causes (stream back, history loaded, encoding or take-back done) are not
-  // the reader's send. Mount is not a transition (the ref starts at the
-  // first value).
+  // the reader's send — only a pending activation (above) waits on it. Mount
+  // is not a transition (the ref starts at the first value).
   const prevPendingSendRef = useRef(pendingSend)
   const isActiveRef = useRef(isActive)
   const isFocusTargetRef = useRef(isFocusTarget)

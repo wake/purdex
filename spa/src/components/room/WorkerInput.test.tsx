@@ -125,18 +125,149 @@ describe('WorkerInput', () => {
     })
   })
 
+  // Spec §8.2 (P5 review follow-up): an activation that finds the box disabled
+  // (history still loading, the stream not back yet) cannot land, so it stays
+  // pending: the box takes focus the first time it is enabled — while the tab
+  // is still active, the pane still the target, and the reader not typing
+  // elsewhere. Deactivation or losing the target cancels it; so does that
+  // first enabling, whether or not it focused.
+  describe('an activation that finds the box disabled', () => {
+    it('focuses the box once, when it becomes usable', async () => {
+      const focus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus')
+      try {
+        const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+        await nextFrame()
+        expect(focus).not.toHaveBeenCalled()
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+        await nextFrame()
+        expect(focus).toHaveBeenCalledTimes(1)
+        expect(document.activeElement).toBe(screen.getByRole('textbox'))
+      } finally {
+        focus.mockRestore()
+      }
+    })
+
+    it('the tab shown again while the box is disabled: focuses it when it becomes usable', async () => {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive={false} isFocusTarget disabled />)
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).not.toHaveFocus()
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).toHaveFocus()
+    })
+
+    it('enabled before the activation frame runs: one focus, from the activation', async () => {
+      const focus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus')
+      try {
+        const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+        await nextFrame()
+        await nextFrame()
+        expect(focus).toHaveBeenCalledTimes(1)
+      } finally {
+        focus.mockRestore()
+      }
+    })
+
+    it('not when the reader moved to another pane before it became usable', async () => {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      await nextFrame()
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget={false} disabled />)
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget={false} disabled={false} />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).not.toHaveFocus()
+    })
+
+    // Same race as A1: a click on another pane between the enabling and the frame.
+    it('not when the reader moves to another pane after it became usable, before the frame runs', async () => {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      await nextFrame()
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget={false} disabled={false} />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).not.toHaveFocus()
+    })
+
+    // Losing the target cancels it for good: the reader clicking back into
+    // this pane put focus where they wanted it themselves.
+    it('not after the reader moved away and back while it was still disabled', async () => {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      await nextFrame()
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget={false} disabled />)
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).not.toHaveFocus()
+    })
+
+    it('not when the tab was left before it became usable', async () => {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      await nextFrame()
+      rerender(<WorkerInput onSend={vi.fn()} isActive={false} isFocusTarget disabled />)
+      rerender(<WorkerInput onSend={vi.fn()} isActive={false} isFocusTarget disabled={false} />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).not.toHaveFocus()
+    })
+
+    it('not when the reader is typing in another field as it becomes usable, nor at a later enabling', async () => {
+      const search = document.createElement('input')
+      document.body.appendChild(search)
+      try {
+        const { rerender, container } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+        const box = container.querySelector('textarea')!
+        await nextFrame()
+        search.focus()
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+        await nextFrame()
+        expect(document.activeElement).toBe(search)
+        // That first enabling used it up: the stream lost and back later is not the activation.
+        search.blur()
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+        await nextFrame()
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+        await nextFrame()
+        expect(box).not.toHaveFocus()
+      } finally {
+        search.remove()
+      }
+    })
+
+    it('once fulfilled, a later enabling (the stream back) does not focus again', async () => {
+      const focus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus')
+      try {
+        const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+        await nextFrame()
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+        await nextFrame()
+        expect(focus).toHaveBeenCalledTimes(1)
+        screen.getByRole('textbox').blur()
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+        await nextFrame()
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+        await nextFrame()
+        expect(focus).toHaveBeenCalledTimes(1)
+      } finally {
+        focus.mockRestore()
+      }
+    })
+  })
+
   // Spec §8.2 (P5 review A2): the refocus after a send is driven by the
   // pane's own send — `pendingSend` true → false — not by the aggregated
   // `disabled`, which also covers stream loss, history load, encoding and
   // take-back. It only lands for the focus target of the active tab — the
   // reader sent from this pane — and only on a box that is enabled when the
-  // frame runs.
+  // frame runs. The tests that expect a focus mount the box enabled and send
+  // after the activation landed: an activation on a disabled box would leave
+  // a pending focus of its own.
   describe('after a send comes back', () => {
     it('takes focus as the focus target of the active tab', async () => {
-      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget pendingSend disabled />)
-      // Let the mount's activation frame pass, so what follows tests the send coming back alone.
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget />)
+      // Let the mount's activation land, so what follows tests the send coming back alone.
       await nextFrame()
       ;(document.activeElement as HTMLElement | null)?.blur()
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget pendingSend disabled />)
       rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget pendingSend={false} disabled={false} />)
       await nextFrame()
       expect(document.activeElement).toBe(screen.getByRole('textbox'))
@@ -198,8 +329,9 @@ describe('WorkerInput', () => {
     it('a send that comes back while the box stays disabled: no focus, then or when it is enabled later', async () => {
       const focus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus')
       try {
-        const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget pendingSend disabled />)
+        const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget />)
         await nextFrame()
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget pendingSend disabled />)
         focus.mockClear()
         rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget pendingSend={false} disabled />)
         await nextFrame()
@@ -216,9 +348,10 @@ describe('WorkerInput', () => {
     // came back in: an image send that fails clears `pendingSend` a few
     // microtasks before its encoding flag, and still lands back in the box.
     it('a send that comes back while disabled, enabled before the frame runs, takes focus', async () => {
-      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget pendingSend disabled />)
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget />)
       await nextFrame()
       ;(document.activeElement as HTMLElement | null)?.blur()
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget pendingSend disabled />)
       rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget pendingSend={false} disabled />)
       rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget pendingSend={false} disabled={false} />)
       await nextFrame()
@@ -227,18 +360,19 @@ describe('WorkerInput', () => {
   })
 
   // P5 review A2: the input is disabled for more than this pane's send — the
-  // live stream lost and found again, history loading, image encoding, a
-  // take-back in flight. None of them ending is a send coming back.
-  it('the input enabling with no send of its own (stream back, history loaded, encoding or take-back done) does not take focus', async () => {
+  // live stream lost and found again, image encoding, a take-back in flight.
+  // None of them ending, after the activation landed, is a send coming back.
+  // (An activation that finds the box disabled is the one exception, above.)
+  it('the input enabling with no send of its own (stream back, encoding or take-back done) does not take focus', async () => {
     const focus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus')
     try {
-      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget />)
       await nextFrame()
       focus.mockClear()
       for (let i = 0; i < 2; i++) {
-        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
-        await nextFrame()
         rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+        await nextFrame()
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
         await nextFrame()
       }
       expect(focus).not.toHaveBeenCalled()
