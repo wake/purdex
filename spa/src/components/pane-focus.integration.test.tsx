@@ -255,6 +255,27 @@ describe('pane focus — keep-alive reactivation (spec §8.3 path 1)', () => {
     expect(domFocus).not.toHaveBeenCalled()
   })
 
+  // P5 review A1: the activation focus waits a frame; a click on the other pane inside that frame moves the target,
+  // and the frame must not pull focus back to the pane that was the target at activation.
+  it('two terminals, the right one recorded: a pointerdown on the left before the frame → the right does not focus', async () => {
+    show(TA)
+    await settle()
+    await firstData()
+    const { left, right } = terms()
+    fireEvent.pointerDown(right.el!)
+
+    show(TB)
+    await settle()
+    clearFocusCalls()
+
+    show(TA) // activation: the right terminal's focus is scheduled for the next frame
+    fireEvent.pointerDown(left.el!)
+    expect(usePaneFocusStore.getState().recent.tA).toEqual(['left', 'right'])
+    await settle()
+    expect(right.focus).not.toHaveBeenCalled()
+    expect(left.focus).not.toHaveBeenCalled()
+  })
+
   it('two terminals, no record → only the primary (left) terminal focuses', async () => {
     show(TA)
     await settle()

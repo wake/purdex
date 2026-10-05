@@ -6,7 +6,8 @@
 // is a click inside a visible tab, and the click already put focus where the user wanted it.
 //
 // So the effect depends on `isActive` ONLY; `isFocusTarget`, `focusFn` and the rAF option are read through refs at
-// activation time.
+// activation time. With the rAF option the frame checks both again before focusing: a click on another pane between
+// the activation and the frame moved the target there, and this pane must not take focus back (P5 review A1).
 import { useEffect, useRef } from 'react'
 
 export interface ActivationFocusOptions {
@@ -22,11 +23,13 @@ export function useActivationFocus(
 ): void {
   // false, so the first mount with isActive true counts as an activation.
   const prevActiveRef = useRef(false)
+  const isActiveRef = useRef(isActive)
   const isFocusTargetRef = useRef(isFocusTarget)
   const focusFnRef = useRef(focusFn)
   const rafRef = useRef(opts?.raf ?? false)
   // Declared before the activation effect, so it runs first in the same commit and the refs are current.
   useEffect(() => {
+    isActiveRef.current = isActive
     isFocusTargetRef.current = isFocusTarget
     focusFnRef.current = focusFn
     rafRef.current = opts?.raf ?? false
@@ -43,7 +46,7 @@ export function useActivationFocus(
     let fired = false
     const id = requestAnimationFrame(() => {
       fired = true
-      focusFnRef.current()
+      if (isActiveRef.current && isFocusTargetRef.current) focusFnRef.current()
     })
     return () => {
       cancelAnimationFrame(id)

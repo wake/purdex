@@ -129,6 +129,25 @@ describe('useActivationFocus', () => {
       expect(focus).not.toHaveBeenCalled()
     })
 
+    // P5 review A1: a click on another pane between the activation and its frame moves the target away; the
+    // frame must not then steal focus back into this pane.
+    it('no longer the target when the frame runs (a click elsewhere in between) → no focus', () => {
+      const focus = vi.fn()
+      const { rerender } = mount({ isActive: true, isFocusTarget: true, focusFn: focus }, { raf: true })
+      rerender({ isActive: true, isFocusTarget: false, focusFn: focus })
+      flush()
+      expect(focus).not.toHaveBeenCalled()
+    })
+
+    it('the target lost and regained before the frame runs → focuses once', () => {
+      const focus = vi.fn()
+      const { rerender } = mount({ isActive: true, isFocusTarget: true, focusFn: focus }, { raf: true })
+      rerender({ isActive: true, isFocusTarget: false, focusFn: focus })
+      rerender({ isActive: true, isFocusTarget: true, focusFn: focus })
+      flush()
+      expect(focus).toHaveBeenCalledTimes(1)
+    })
+
     it('unmounting before the frame runs does not focus', () => {
       const focus = vi.fn()
       const { unmount } = mount({ isActive: true, isFocusTarget: true, focusFn: focus }, { raf: true })
