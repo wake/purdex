@@ -44,13 +44,20 @@ type PaneOwner struct {
 //   - not a root — another surviving frame of this pane appears on the chain,
 //     which the walker reports as SameTypeAbove / ProxyParent.
 //
-// `read` is shared with every other call in the same request; Task 7 passes
-// newMemoProcReader(readProcessInfoFn) so that one PID costs one read for the
-// whole request (a single read is four `ps` forks on darwin — spec §3.4).
+// panePID is the pane's own current process, resolved by the caller: a pane
+// whose PID cannot be resolved contributes nothing (spec §5.3 step 2), and
+// that is the caller's to decide before it asks, because there is nothing to
+// check a chain against.
+//
+// `procs` is the owner pass's one process view, shared with every other call
+// in the same pass (owner_pass.go), so one process table serves every pane of
+// every session the pass is asked about. Every process question this function
+// asks goes to procs: Alive / StartTime for the survivor filter, PPID for the
+// frame's own parent and for each step of its walk.
 //
 // pidAncestorIncludesFn / probe.PidAncestorIncludes is deliberately NOT used
 // for the pane-tree half: it walks with no depth cap and calls
-// agentpkg.ReadProcessInfo directly, bypassing both this reader and the test
+// agentpkg.ReadProcessInfo directly, bypassing both this view and the test
 // seam. Its semantics are what the walk reproduces, including that a frame
 // whose PID equals the pane PID counts as inside the tree. The projection's
 // own pane filter (frame_ops.go:951-978) is not reused either: it KEEPS a
@@ -58,18 +65,11 @@ type PaneOwner struct {
 //
 // Read-only: no store writes, no envelope, no state between calls. The
 // returned error is either a frames-store failure or ctx's — both mean "no
-// answer", and the handler turns either into found:false. Owners decided
-// before the error are returned alongside it and must not be treated as a
-// result.
-func (m *Module) resolvePaneOwners(ctx context.Context, paneID string, read procReader) ([]PaneOwner, error) {
-	if m.frames == nil || m.tmux == nil {
-		return nil, nil
-	}
-	// A pane whose current process cannot be resolved contributes nothing
-	// (spec §5.3 step 2). That is not an error: the session's other panes may
-	// still have an answer.
-	panePID, err := resolvePanePIDFn(m.tmux, paneID)
-	if err != nil {
+// answer", and the owner pass reports either as the session's error. Owners
+// decided before the error are returned alongside it and must not be treated
+// as a result.
+func (m *Module) resolvePaneOwners(ctx context.Context, paneID string, panePID int, procs agentpkg.ProcessView) ([]PaneOwner, error) {
+	if m.frames == nil {
 		return nil, nil
 	}
 	frames, err := m.frames.ListByPane(paneID)
@@ -82,10 +82,10 @@ func (m *Module) resolvePaneOwners(ctx context.Context, paneID string, read proc
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if !isPidAliveFn(frame.PID) {
+		if !procs.Alive(frame.PID) {
 			continue
 		}
-		actualStart, serr := processStartTimeFn(frame.PID)
+		actualStart, serr := procs.StartTime(frame.PID)
 		if serr != nil {
 			continue
 		}
@@ -95,19 +95,19 @@ func (m *Module) resolvePaneOwners(ctx context.Context, paneID string, read proc
 		survivors = append(survivors, frame)
 	}
 
-	// ctx cannot interrupt a single process read — readProcessInfoPlatform has
-	// no context (process_info_darwin.go:9) — so the deadline is enforced at
-	// the only place it can be: immediately BEFORE each read. That is spec
-	// §5.3's wording, "checked between process reads", and it has to be per
-	// read rather than per frame because one frame's ancestry is itself a chain
-	// of up to proxyMaxDepth reads, four `ps` forks each (§3.4). A query can
-	// therefore spend its entire budget inside a single walk and never reach a
-	// second frame to be stopped at.
+	// ctx cannot interrupt a single process read — ProcessView takes no
+	// context — so the deadline is enforced at the only place it can be:
+	// immediately BEFORE each read. That is spec §5.3's wording, "checked
+	// between process reads", and it has to be per read rather than per frame
+	// because one frame's ancestry is itself a chain of up to proxyMaxDepth
+	// reads, and nothing in the interface promises any of them is cheap. A
+	// query can therefore spend its entire budget inside a single walk and
+	// never reach a second frame to be stopped at.
 	//
-	// The guard wraps whatever reader the caller passed, memo included, so a
-	// cache hit is checked too: the caller cannot tell which reads are memoized
-	// and "cheap" is not the same as "still allowed".
-	read = ctxGuardedReader(ctx, read)
+	// The guard wraps whatever view the caller passed, so an answer the view
+	// already holds is checked too: the caller cannot tell which reads are
+	// cached, and "cheap" is not the same as "still allowed".
+	procs = ctxGuardedProcs(ctx, procs)
 
 	owners := make([]PaneOwner, 0, len(survivors))
 	for _, frame := range survivors {
@@ -120,13 +120,13 @@ func (m *Module) resolvePaneOwners(ctx context.Context, paneID string, read proc
 		// PidAncestorIncludes counts that case too.
 		sawPanePID := frame.PID == panePID
 
-		info, rerr := read(frame.PID)
+		framePPID, rerr := procs.PPID(frame.PID)
 		if rerr != nil {
 			// The frame's own process became unreadable: no evidence, so no
 			// action for this frame. Other frames are unaffected.
 			continue
 		}
-		res, werr := m.walkPaneAncestry(paneID, info.PPID, frame.AgentType, read, ancestryOpts{
+		res, werr := m.walkPaneAncestry(paneID, framePPID, frame.AgentType, procs, ancestryOpts{
 			PanePID:   panePID,
 			CheckPane: true,
 		})
@@ -171,47 +171,48 @@ func (m *Module) resolvePaneOwners(ctx context.Context, paneID string, read proc
 	return owners, nil
 }
 
-// ctxGuardedReader refuses a read once ctx is done, and otherwise gets out of
-// the way.
+// ctxGuardedProcs refuses a process read — PPID or Read — once ctx is done, and
+// otherwise gets out of the way.
 //
 // The context error is deliberately NOT memoized: it is a fact about the clock,
-// not about the PID, so nothing downstream is poisoned by it. It does mean the
-// walker sees it as an ordinary read failure — see resolvePaneOwners, which
+// not about the PID, so nothing downstream is poisoned by it. The guard asks
+// ctx before it delegates and keeps nothing itself, so a memo inside procs is
+// never even consulted once the deadline has passed. It does mean the walker
+// sees the refusal as an ordinary read failure — see resolvePaneOwners, which
 // re-asks ctx after every walk for exactly that reason.
-func ctxGuardedReader(ctx context.Context, read procReader) procReader {
-	return func(pid int) (agentpkg.ProcessInfo, error) {
-		if err := ctx.Err(); err != nil {
-			return agentpkg.ProcessInfo{}, err
-		}
-		return read(pid)
-	}
+//
+// PPID is the one that matters: it is the walk's step, asked once per level of
+// a chain up to proxyMaxDepth long. Read is guarded as well so the view handed
+// to the walk refuses every process read, not only the kind the walk happens
+// to make. Alive and StartTime pass straight through: the walk asks them only
+// at a PID that carries a frame, and every level it goes on to climb costs a
+// PPID, so a walk cannot run past the deadline through them.
+func ctxGuardedProcs(ctx context.Context, procs agentpkg.ProcessView) agentpkg.ProcessView {
+	return ctxGuardedView{ctx: ctx, procs: procs}
 }
 
-// newMemoProcReader wraps base so that each PID costs at most one call for the
-// life of the returned reader, failures included — a PID that could not be read
-// is not retried within the same request.
-//
-// It MUST be created per request and never at package level: ancestry is
-// exactly the kind of thing that goes stale, and a shared memo would serve a
-// later request a process tree that no longer exists. It is used from a single
-// goroutine (one HTTP request) and is not safe for concurrent use.
-//
-// classifyAncestor must never be given one: provenance_test.go:170 deliberately
-// makes the sender's 1st/2nd/3rd read return different values to exercise the
-// post-Upsert reconcile, and a memo on the hook path would break that test's
-// premise while leaving it green for the wrong reason.
-func newMemoProcReader(base procReader) procReader {
-	type memoEntry struct {
-		info agentpkg.ProcessInfo
-		err  error
+// ctxGuardedView spells out all four methods rather than embedding the view it
+// wraps: a method added to ProcessView later must fail to compile here instead
+// of passing through unguarded without anyone deciding that it should.
+type ctxGuardedView struct {
+	ctx   context.Context
+	procs agentpkg.ProcessView
+}
+
+func (g ctxGuardedView) Alive(pid int) bool { return g.procs.Alive(pid) }
+
+func (g ctxGuardedView) StartTime(pid int) (string, error) { return g.procs.StartTime(pid) }
+
+func (g ctxGuardedView) PPID(pid int) (int, error) {
+	if err := g.ctx.Err(); err != nil {
+		return 0, err
 	}
-	cache := make(map[int]memoEntry)
-	return func(pid int) (agentpkg.ProcessInfo, error) {
-		if entry, ok := cache[pid]; ok {
-			return entry.info, entry.err
-		}
-		info, err := base(pid)
-		cache[pid] = memoEntry{info: info, err: err}
-		return info, err
+	return g.procs.PPID(pid)
+}
+
+func (g ctxGuardedView) Read(pid int) (agentpkg.ProcessInfo, error) {
+	if err := g.ctx.Err(); err != nil {
+		return agentpkg.ProcessInfo{}, err
 	}
+	return g.procs.Read(pid)
 }

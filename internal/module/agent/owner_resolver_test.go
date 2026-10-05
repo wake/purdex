@@ -90,11 +90,11 @@ func TestModule_ResolveSessionOwner_KnownOwner_DelegatesFields(t *testing.T) {
 }
 
 // TestModule_ResolveSessionOwner_PanesOfSessionFails_ReturnsErr pins that a
-// panesOfSession failure — here, the request deadline already expired before
-// the walk could look at a single frame — is reported through the returned
-// error, not silently folded into found:false. The peers module (Item 1,
-// #988) needs to tell "owner resolution failed" apart from "no owner" so a
-// session with a live agent is never reported to the SPA as no_agent.
+// failure to find the session's panes — here, the request deadline already
+// expired before the walk could look at a single frame — is reported through
+// the returned error, not silently folded into found:false. The peers module
+// (Item 1, #988) needs to tell "owner resolution failed" apart from "no owner"
+// so a session with a live agent is never reported to the SPA as no_agent.
 func TestModule_ResolveSessionOwner_PanesOfSessionFails_ReturnsErr(t *testing.T) {
 	m, fake, _ := newProvenanceQueryModule(t)
 	orig := provenanceTimeout
@@ -116,33 +116,32 @@ func TestModule_ResolveSessionOwner_PanesOfSessionFails_ReturnsErr(t *testing.T)
 	}
 }
 
-// blockingEnumerationExecutor blocks the panesOfSession enumeration's very
-// first PaneSessionID call until its context is cancelled, then returns
-// ctx.Err() — simulating a request whose deadline expires WHILE the
-// enumeration is in flight for the session's only pane, rather than before
-// the walk starts (that case is TestModule_ResolveSessionOwner_PanesOfSessionFails_ReturnsErr,
-// which never reaches PaneSessionID at all). panesOfSession used to fold that
-// returned error into "continue", finishing enumeration with an empty pane
-// list and err:nil, which read as "session has no root agent" rather than "the
-// walk timed out".
+// blockingEnumerationExecutor blocks the enumerating pane listing — the first
+// ListAllPanes of the query — until its context is cancelled, then returns
+// ctx.Err(): a request whose deadline expires WHILE the enumeration is in
+// flight, rather than before the walk starts (that case is
+// TestModule_ResolveSessionOwner_PanesOfSessionFails_ReturnsErr, which never
+// reaches the listing at all). An enumeration that read that error as "this
+// pane has no session" would finish with an empty pane list and err:nil, which
+// reads as "session has no root agent" rather than "the walk timed out".
 type blockingEnumerationExecutor struct {
 	*tmux.FakeExecutor
 }
 
-func (e *blockingEnumerationExecutor) PaneSessionID(ctx context.Context, target string) (string, error) {
+func (e *blockingEnumerationExecutor) ListAllPanes(ctx context.Context) ([]tmux.PaneLocation, error) {
 	select {
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return nil, ctx.Err()
 	case <-time.After(2 * time.Second):
 		// The context never reached the call: fail loudly rather than let the
 		// test pass on a timeout that looks like cancellation.
-		return "", errors.New("PaneSessionID was never cancelled")
+		return nil, errors.New("ListAllPanes was never cancelled")
 	}
 }
 
 // TestModule_ResolveSessionOwner_EnumerationTimesOut_ReturnsErr pins the fix
-// for the swallow above: a context that expires DURING panesOfSession's
-// enumeration of the session's only pane must surface as err != nil,
+// for the swallow above: a context that expires DURING the enumeration of the
+// session's only pane must surface as err != nil,
 // found:false — never as the "no owner" outcome a genuinely rootless session
 // produces (TestModule_ResolveSessionOwner_NoRootFrame_FoundFalseErrNil).
 func TestModule_ResolveSessionOwner_EnumerationTimesOut_ReturnsErr(t *testing.T) {

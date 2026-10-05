@@ -8,37 +8,18 @@ import (
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/store"
-	"github.com/wake/purdex/internal/tmux"
 )
 
 // ---------------------------------------------------------------------------
 // Fixtures for resolvePaneOwners (Task 6)
 //
 // These reuse the process-tree / liveness seams declared in ancestor_test.go
-// and add the two things the ownership query needs on top: a stubbed pane PID
-// and a frame seeded with the identity columns Phase 1 added.
+// (each test hands them to the query as liveProcs) and add the one thing the
+// ownership query needs on top: a frame seeded with the identity columns
+// Phase 1 added. The pane's own PID is an argument of the query, so each test
+// names it as `panePID`; resolving it through tmux is the caller's job, and
+// the caller's tests cover it.
 // ---------------------------------------------------------------------------
-
-// withPanePID makes resolvePanePIDFn answer `pid` for every pane. The real
-// implementation shells out through tmux; the query only cares about the
-// number.
-func withPanePID(t *testing.T, pid int) {
-	t.Helper()
-	orig := resolvePanePIDFn
-	resolvePanePIDFn = func(tmux.Executor, string) (int, error) { return pid, nil }
-	t.Cleanup(func() { resolvePanePIDFn = orig })
-}
-
-// withPanePIDError makes resolvePanePIDFn fail, i.e. the pane's current
-// process cannot be resolved at all.
-func withPanePIDError(t *testing.T) {
-	t.Helper()
-	orig := resolvePanePIDFn
-	resolvePanePIDFn = func(tmux.Executor, string) (int, error) {
-		return 0, fmt.Errorf("pane pid unresolvable: forced test error")
-	}
-	t.Cleanup(func() { resolvePanePIDFn = orig })
-}
 
 // seedIdentityFrame seeds a frame that has already reported its own session id
 // and cwd — the state a pane reaches after Phase 1's identity write.
@@ -92,11 +73,11 @@ func ownerFrameIDs(owners []PaneOwner) []string {
 func TestResolvePaneOwners_LiveRootWithSessionID_Returned(t *testing.T) {
 	m := newProxyTestModule(t)
 	frame := seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w/purdex")
-	withPanePID(t, 200)
+	panePID := 200
 	withProcessTree(t, map[int]int{100: 200, 200: 1})
 	withLivePids(t, map[int]string{100: "t100"})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -127,11 +108,11 @@ func TestResolvePaneOwners_LiveRootWithSessionID_Returned(t *testing.T) {
 func TestResolvePaneOwners_RootWithEmptySessionID_StillReturned(t *testing.T) {
 	m := newProxyTestModule(t)
 	frame := seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "", "")
-	withPanePID(t, 200)
+	panePID := 200
 	withProcessTree(t, map[int]int{100: 200, 200: 1})
 	withLivePids(t, map[int]string{100: "t100"})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -152,12 +133,12 @@ func TestResolvePaneOwners_RootWithEmptySessionID_StillReturned(t *testing.T) {
 func TestResolvePaneOwners_FramePIDEqualsPanePID_InsideTree(t *testing.T) {
 	m := newProxyTestModule(t)
 	frame := seedIdentityFrame(t, m, "%5", "cc", 200, "t200", 7, "sess-self", "/w")
-	withPanePID(t, 200)
+	panePID := 200
 	// 200 → 1 directly: the loop never sees 200, only PID 1.
 	withProcessTree(t, map[int]int{200: 1})
 	withLivePids(t, map[int]string{200: "t200"})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -178,12 +159,12 @@ func TestResolvePaneOwners_FramePIDEqualsPanePID_InsideTree(t *testing.T) {
 func TestResolvePaneOwners_ReusedPaneID_SurvivingOldAgent_Excluded(t *testing.T) {
 	m := newProxyTestModule(t)
 	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-old", "/w/old")
-	withPanePID(t, 900) // the pane's CURRENT shell, a different generation
+	panePID := 900 // the pane's CURRENT shell, a different generation
 	// The old agent still hangs off the old shell at 200.
 	withProcessTree(t, map[int]int{100: 200, 200: 1})
 	withLivePids(t, map[int]string{100: "t100"})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -198,11 +179,11 @@ func TestResolvePaneOwners_ReusedPaneID_SurvivingOldAgent_Excluded(t *testing.T)
 func TestResolvePaneOwners_RootWithoutPanePIDOnChain_Excluded(t *testing.T) {
 	m := newProxyTestModule(t)
 	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w")
-	withPanePID(t, 900)
+	panePID := 900
 	withProcessTree(t, map[int]int{100: 300, 300: 400, 400: 1})
 	withLivePids(t, map[int]string{100: "t100"})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -220,11 +201,11 @@ func TestResolvePaneOwners_NestedSameType_OnlyParentIsRoot(t *testing.T) {
 	m := newProxyTestModule(t)
 	parent := seedIdentityFrame(t, m, "%5", "cc", 200, "t200", 10, "sess-parent", "/w")
 	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 20, "sess-child", "/w")
-	withPanePID(t, 300)
+	panePID := 300
 	withProcessTree(t, map[int]int{100: 200, 200: 300, 300: 1})
 	withLivePids(t, map[int]string{100: "t100", 200: "t200"})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -239,11 +220,11 @@ func TestResolvePaneOwners_CrossTypeChildFrame_OnlyParentIsRoot(t *testing.T) {
 	m := newProxyTestModule(t)
 	parent := seedIdentityFrame(t, m, "%5", "cc", 200, "t200", 10, "sess-parent", "/w")
 	seedIdentityFrame(t, m, "%5", "codex", 100, "t100", 20, "sess-child", "/w")
-	withPanePID(t, 300)
+	panePID := 300
 	withProcessTree(t, map[int]int{100: 200, 200: 300, 300: 1})
 	withLivePids(t, map[int]string{100: "t100", 200: "t200"})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -259,12 +240,12 @@ func TestResolvePaneOwners_CrossTypeChildFrame_OnlyParentIsRoot(t *testing.T) {
 func TestResolvePaneOwners_ProxyCollapsedChildHasNoFrame_ParentIsRoot(t *testing.T) {
 	m := newProxyTestModule(t)
 	parent := seedIdentityFrame(t, m, "%5", "cc", 200, "t200", 10, "sess-parent", "/w")
-	withPanePID(t, 300)
+	panePID := 300
 	// 100 is the collapsed child process; it has no frame row at all.
 	withProcessTree(t, map[int]int{100: 200, 200: 300, 300: 1})
 	withLivePids(t, map[int]string{100: "t100", 200: "t200"})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -281,12 +262,12 @@ func TestResolvePaneOwners_StaleFrameDoesNotShadowLiveRoot(t *testing.T) {
 	m := newProxyTestModule(t)
 	seedIdentityFrame(t, m, "%5", "cc", 200, "t200-old", 5, "sess-stale", "/w")
 	live := seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 20, "sess-live", "/w")
-	withPanePID(t, 300)
+	panePID := 300
 	withProcessTree(t, map[int]int{100: 200, 200: 300, 300: 1})
 	// 200 is alive but reports a DIFFERENT start time than the row stored.
 	withLivePids(t, map[int]string{100: "t100", 200: "t200-new"})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -303,7 +284,7 @@ func TestResolvePaneOwners_StaleFrameDoesNotShadowLiveRoot(t *testing.T) {
 func TestResolvePaneOwners_ChainLongerThanDepthCap_Excluded(t *testing.T) {
 	m := newProxyTestModule(t)
 	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w")
-	withPanePID(t, 900)
+	panePID := 900
 	chain := map[int]int{100: 200}
 	pid := 200
 	for i := 0; i < proxyMaxDepth+3; i++ {
@@ -313,7 +294,7 @@ func TestResolvePaneOwners_ChainLongerThanDepthCap_Excluded(t *testing.T) {
 	withProcessTree(t, chain)
 	withLivePids(t, map[int]string{100: "t100"})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -329,7 +310,7 @@ func TestResolvePaneOwners_ChainLongerThanDepthCap_Excluded(t *testing.T) {
 func TestResolvePaneOwners_PanePIDSeenButCapExhausted_Excluded(t *testing.T) {
 	m := newProxyTestModule(t)
 	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w")
-	withPanePID(t, 200) // hit at the very first iteration
+	panePID := 200 // hit at the very first iteration
 	chain := map[int]int{100: 200}
 	pid := 200
 	for i := 0; i < proxyMaxDepth+3; i++ {
@@ -339,7 +320,7 @@ func TestResolvePaneOwners_PanePIDSeenButCapExhausted_Excluded(t *testing.T) {
 	withProcessTree(t, chain)
 	withLivePids(t, map[int]string{100: "t100"})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -354,7 +335,7 @@ func TestResolvePaneOwners_UnreadableProcessMidWalk_ExcludesOnlyThatFrame(t *tes
 	m := newProxyTestModule(t)
 	good := seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 10, "sess-good", "/w")
 	seedIdentityFrame(t, m, "%5", "codex", 500, "t500", 20, "sess-bad", "/w")
-	withPanePID(t, 900)
+	panePID := 900
 	withLivePids(t, map[int]string{100: "t100", 500: "t500"})
 
 	tree := map[int]int{100: 200, 200: 900, 900: 1, 500: 600}
@@ -371,7 +352,7 @@ func TestResolvePaneOwners_UnreadableProcessMidWalk_ExcludesOnlyThatFrame(t *tes
 	}
 	t.Cleanup(func() { readProcessInfoFn = orig })
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -384,11 +365,11 @@ func TestResolvePaneOwners_UnreadableProcessMidWalk_ExcludesOnlyThatFrame(t *tes
 func TestResolvePaneOwners_SelfParentGuard_Excluded(t *testing.T) {
 	m := newProxyTestModule(t)
 	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w")
-	withPanePID(t, 900)
+	panePID := 900
 	withProcessTree(t, map[int]int{100: 300, 300: 300})
 	withLivePids(t, map[int]string{100: "t100"})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -404,7 +385,7 @@ func TestResolvePaneOwners_CandidateIdentityUnverifiable_Excluded(t *testing.T) 
 	m := newProxyTestModule(t)
 	seedIdentityFrame(t, m, "%5", "cc", 200, "t200", 10, "sess-parent", "/w")
 	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 20, "sess-child", "/w")
-	withPanePID(t, 300)
+	panePID := 300
 	withProcessTree(t, map[int]int{100: 200, 200: 300, 300: 1})
 
 	origAlive := isPidAliveFn
@@ -421,7 +402,7 @@ func TestResolvePaneOwners_CandidateIdentityUnverifiable_Excluded(t *testing.T) 
 		processStartTimeFn = origStart
 	})
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", readProcessInfoFn)
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: readProcessInfoFn})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -452,12 +433,12 @@ func TestResolvePaneOwners_DeepestCompletingWalk_KeptWithExactReadSequence(t *te
 	}
 	m := newProxyTestModule(t)
 	frame := seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-deep", "/w")
-	withPanePID(t, 200)
+	panePID := 200
 	withProcessTree(t, map[int]int{100: 200, 200: 300, 300: 400, 400: 500, 500: 1})
 	withLivePids(t, map[int]string{100: "t100"})
 
 	var seen []int
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", recordingReader(&seen))
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: recordingReader(&seen)})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -476,31 +457,12 @@ func TestResolvePaneOwners_DeepestCompletingWalk_KeptWithExactReadSequence(t *te
 }
 
 // ---------------------------------------------------------------------------
-// Pane resolution, memoization, cancellation
+// Memoization, cancellation
+//
+// A pane whose own PID cannot be resolved never reaches this query; that case
+// is the caller's, pinned at the handler by
+// TestHandleSessionProvenance_PanePIDUnresolvable_PaneContributesNothing.
 // ---------------------------------------------------------------------------
-
-// TestResolvePaneOwners_PanePIDUnresolvable_EmptyResultNoError — a pane whose
-// current process cannot be resolved contributes nothing (spec §5.3 step 2).
-// It is not an error: the other panes of the session still have answers.
-func TestResolvePaneOwners_PanePIDUnresolvable_EmptyResultNoError(t *testing.T) {
-	m := newProxyTestModule(t)
-	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w")
-	withPanePIDError(t)
-	withProcessTree(t, map[int]int{100: 200, 200: 1})
-	withLivePids(t, map[int]string{100: "t100"})
-
-	var seen []int
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", recordingReader(&seen))
-	if err != nil {
-		t.Fatalf("err = %v, want nil — an unresolvable pane is not an error", err)
-	}
-	if len(owners) != 0 {
-		t.Fatalf("owners = %+v, want none", owners)
-	}
-	if len(seen) != 0 {
-		t.Fatalf("reads = %v, want none — there is nothing to walk against", seen)
-	}
-}
 
 // TestResolvePaneOwners_MemoizesEveryProcessRead asserts the cost contract
 // positively. "At most once per PID" would also pass for an implementation
@@ -519,7 +481,7 @@ func TestResolvePaneOwners_MemoizesEveryProcessRead(t *testing.T) {
 	b := seedIdentityFrame(t, m, "%5", "codex", 200, "t200", 20, "sess-b", "/w")
 	seedIdentityFrame(t, m, "%5", "cc", 500, "t500", 30, "sess-c", "/w")
 	seedIdentityFrame(t, m, "%5", "codex", 700, "t700", 40, "sess-d", "/w")
-	withPanePID(t, 400)
+	panePID := 400
 	withLivePids(t, map[int]string{100: "t100", 200: "t200", 500: "t500", 700: "t700"})
 
 	tree := map[int]int{100: 300, 200: 300, 300: 400, 400: 1, 500: 600, 700: 600}
@@ -536,7 +498,7 @@ func TestResolvePaneOwners_MemoizesEveryProcessRead(t *testing.T) {
 		return agentpkg.ProcessInfo{PID: pid, PPID: ppid}, nil
 	}
 
-	owners, err := m.resolvePaneOwners(context.Background(), "%5", newMemoProcReader(base))
+	owners, err := m.resolvePaneOwners(context.Background(), "%5", panePID, liveProcs{read: newMemoProcReader(base)})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -566,7 +528,7 @@ func TestResolvePaneOwners_CancelledContext_StopsBetweenReads(t *testing.T) {
 	t.Run("cancelled_before_the_first_read", func(t *testing.T) {
 		m := newProxyTestModule(t)
 		seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 10, "sess-a", "/w")
-		withPanePID(t, 200)
+		panePID := 200
 		withProcessTree(t, map[int]int{100: 200, 200: 1})
 		withLivePids(t, map[int]string{100: "t100"})
 
@@ -574,7 +536,7 @@ func TestResolvePaneOwners_CancelledContext_StopsBetweenReads(t *testing.T) {
 		cancel()
 
 		var seen []int
-		owners, err := m.resolvePaneOwners(ctx, "%5", recordingReader(&seen))
+		owners, err := m.resolvePaneOwners(ctx, "%5", panePID, liveProcs{read: recordingReader(&seen)})
 		if err == nil {
 			t.Fatalf("err = nil, want the context error; owners = %+v", owners)
 		}
@@ -587,7 +549,7 @@ func TestResolvePaneOwners_CancelledContext_StopsBetweenReads(t *testing.T) {
 		m := newProxyTestModule(t)
 		seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 10, "sess-a", "/w")
 		seedIdentityFrame(t, m, "%5", "codex", 500, "t500", 20, "sess-b", "/w")
-		withPanePID(t, 200)
+		panePID := 200
 		withProcessTree(t, map[int]int{100: 200, 200: 1, 500: 200})
 		withLivePids(t, map[int]string{100: "t100", 500: "t500"})
 
@@ -600,7 +562,7 @@ func TestResolvePaneOwners_CancelledContext_StopsBetweenReads(t *testing.T) {
 			return readProcessInfoFn(pid)
 		}
 
-		_, err := m.resolvePaneOwners(ctx, "%5", read)
+		_, err := m.resolvePaneOwners(ctx, "%5", panePID, liveProcs{read: read})
 		if err == nil {
 			t.Fatal("err = nil, want the context error")
 		}
@@ -630,7 +592,7 @@ func TestResolvePaneOwners_CancelledContext_StopsBetweenReads(t *testing.T) {
 func TestResolvePaneOwners_CancelledInsideOneWalk_IsNotAnAnswer(t *testing.T) {
 	m := newProxyTestModule(t)
 	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 10, "sess-a", "/w")
-	withPanePID(t, 400)
+	panePID := 400
 	withProcessTree(t, map[int]int{100: 200, 200: 300, 300: 400, 400: 1})
 	withLivePids(t, map[int]string{100: "t100"})
 
@@ -646,7 +608,7 @@ func TestResolvePaneOwners_CancelledInsideOneWalk_IsNotAnAnswer(t *testing.T) {
 		return readProcessInfoFn(pid)
 	}
 
-	owners, err := m.resolvePaneOwners(ctx, "%5", read)
+	owners, err := m.resolvePaneOwners(ctx, "%5", panePID, liveProcs{read: read})
 	if err == nil {
 		t.Fatalf("err = nil, want the context error; owners = %+v — a walk that outran the deadline is not evidence", owners)
 	}
