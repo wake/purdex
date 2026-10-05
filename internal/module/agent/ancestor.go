@@ -37,15 +37,48 @@ func (v AncestorVerdict) String() string {
 	}
 }
 
-// procReader is the seam the ancestry walk reads processes through.
+// procReader is the per-PID process read a liveProcs view is built on.
 //
-// classifyAncestor passes readProcessInfoFn directly and must keep doing so:
-// provenance_test.go:170 deliberately makes the sender's 1st/2nd/3rd process
-// read return different values to exercise the post-Upsert reconcile, so a memo
-// on the hook path would break that test's premise while leaving it green for
-// the wrong reason. The request-scoped memo belongs to the provenance query
-// alone.
+// classifyAncestor builds its view on readProcessInfoFn directly and must keep
+// doing so: provenance_test.go:170 deliberately makes the sender's 1st/2nd/3rd
+// process read return different values to exercise the post-Upsert reconcile,
+// so a memo on the hook path would break that test's premise while leaving it
+// green for the wrong reason. The request-scoped memo belongs to the
+// provenance query alone.
 type procReader func(pid int) (agentpkg.ProcessInfo, error)
+
+// liveProcs is the ProcessView over the per-PID seams, the one the hook path
+// walks through: every question is asked at the moment it is asked — Alive of
+// isPidAliveFn, StartTime of processStartTimeFn, PPID and Read of `read`, with
+// PPID taken from the ProcessInfo that read returns.
+//
+// It keeps nothing between calls, and that is the point. The hook path reads
+// the sender's PID more than once over one SessionStart — classifyAncestor
+// before the Upsert, the parentFrameID lookup, classifyAncestor again in the
+// post-Upsert reconcile — and TestProvenance_PostUpsertReconcile_NoEnvelope
+// (provenance_test.go) makes those reads answer differently on purpose. A view
+// that remembered the first answer would break that premise while leaving the
+// test green for the wrong reason. A memo is the caller's choice, made by the
+// `read` it passes, and the provenance query is the only caller that makes it.
+type liveProcs struct {
+	read procReader
+}
+
+var _ agentpkg.ProcessView = liveProcs{}
+
+func (p liveProcs) Alive(pid int) bool { return isPidAliveFn(pid) }
+
+func (p liveProcs) StartTime(pid int) (string, error) { return processStartTimeFn(pid) }
+
+func (p liveProcs) PPID(pid int) (int, error) {
+	info, err := p.read(pid)
+	if err != nil {
+		return 0, err
+	}
+	return info.PPID, nil
+}
+
+func (p liveProcs) Read(pid int) (agentpkg.ProcessInfo, error) { return p.read(pid) }
 
 // ancestryResult is what one walk reports. Frame is set for
 // VerdictSameTypeAbove and VerdictProxyParent only; every other verdict reports
@@ -88,11 +121,16 @@ type ancestryOpts struct {
 // classifyAncestor does. Non-nil error is returned only when the frames store
 // fails.
 //
+// Every process question goes to procs, never to a package-level seam: Alive
+// and StartTime for a candidate frame, PPID for each step up. The walk never
+// asks for Read, because nothing it decides depends on a process's executable
+// or arguments, so a view never has to read them on the walk's behalf.
+//
 // opts adds the pane-membership question resolvePaneOwners needs, and nothing
 // else: with opts.CheckPane false — which is what classifyAncestor passes — the
 // walk reads the same PIDs in the same order as before the option existed, and
 // SawPanePID stays false.
-func (m *Module) walkPaneAncestry(paneID string, startPID int, agentType string, read procReader, opts ancestryOpts) (ancestryResult, error) {
+func (m *Module) walkPaneAncestry(paneID string, startPID int, agentType string, procs agentpkg.ProcessView, opts ancestryOpts) (ancestryResult, error) {
 	sawPanePID := false
 	// result closes over sawPanePID so that every exit below — including the
 	// early ones — reports what the walk had already observed.
@@ -124,8 +162,8 @@ func (m *Module) walkPaneAncestry(paneID string, startPID int, agentType string,
 			// "re-session of an existing live sibling"; it must not
 			// hard-stop the walk or we'd strand a legitimate proxy attach
 			// to a live cross-type ancestor above it.
-			if isPidAliveFn(candidate.PID) {
-				actualStart, serr := processStartTimeFn(candidate.PID)
+			if procs.Alive(candidate.PID) {
+				actualStart, serr := procs.StartTime(candidate.PID)
 				if serr != nil {
 					// v5 rule: identity unverifiable → abort walk (consistent
 					// with verify.go's "lookup error → don't infer" convention).
@@ -154,16 +192,16 @@ func (m *Module) walkPaneAncestry(paneID string, startPID int, agentType string,
 			// Dead candidate: also continue walk; sweep will clear it.
 		}
 		// No frame at this PID — walk one more level up.
-		ancestorInfo, nerr := read(ppid)
+		ancestorPPID, nerr := procs.PPID(ppid)
 		if nerr != nil {
 			return result(VerdictIndeterminate, nil), nil
 		}
 		// Self-parent guard: without it the loop would re-query the same PID
 		// until the depth cap.
-		if ancestorInfo.PPID == ppid {
+		if ancestorPPID == ppid {
 			return result(VerdictIndeterminate, nil), nil
 		}
-		ppid = ancestorInfo.PPID
+		ppid = ancestorPPID
 	}
 	return result(VerdictIndeterminate, nil), nil
 }
@@ -185,6 +223,6 @@ func (m *Module) classifyAncestor(req EventRequest) (AncestorVerdict, *store.Fra
 	if err != nil {
 		return VerdictIndeterminate, nil, nil
 	}
-	res, err := m.walkPaneAncestry(req.TmuxPaneID, info.PPID, req.AgentType, readProcessInfoFn, ancestryOpts{})
+	res, err := m.walkPaneAncestry(req.TmuxPaneID, info.PPID, req.AgentType, liveProcs{read: readProcessInfoFn}, ancestryOpts{})
 	return res.Verdict, res.Frame, err
 }

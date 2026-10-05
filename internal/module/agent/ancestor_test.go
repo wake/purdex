@@ -241,7 +241,7 @@ func TestWalkPaneAncestry_NoFramedAncestor_Root(t *testing.T) {
 	// 999 has no frame and no tree entry, so the next hop reports PPID 1.
 	withProcessTree(t, map[int]int{200: 999})
 
-	res, err := m.walkPaneAncestry("%5", 999, "codex", readProcessInfoFn, ancestryOpts{})
+	res, err := m.walkPaneAncestry("%5", 999, "codex", liveProcs{read: readProcessInfoFn}, ancestryOpts{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -259,7 +259,7 @@ func TestWalkPaneAncestry_LiveSameTypeAncestor_SameTypeAbove(t *testing.T) {
 	withProcessTree(t, map[int]int{200: 100})
 	withLivePids(t, map[int]string{100: "t100"})
 
-	res, err := m.walkPaneAncestry("%5", 100, "cc", readProcessInfoFn, ancestryOpts{})
+	res, err := m.walkPaneAncestry("%5", 100, "cc", liveProcs{read: readProcessInfoFn}, ancestryOpts{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -277,7 +277,7 @@ func TestWalkPaneAncestry_LiveCrossTypeAncestor_ProxyParent(t *testing.T) {
 	withProcessTree(t, map[int]int{200: 100})
 	withLivePids(t, map[int]string{100: "t100"})
 
-	res, err := m.walkPaneAncestry("%5", 100, "codex", readProcessInfoFn, ancestryOpts{})
+	res, err := m.walkPaneAncestry("%5", 100, "codex", liveProcs{read: readProcessInfoFn}, ancestryOpts{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -299,7 +299,7 @@ func TestWalkPaneAncestry_StaleSameTypeBelowLiveCrossType_ProxyParent(t *testing
 	withProcessTree(t, map[int]int{200: 150, 150: 100})
 	withLivePids(t, map[int]string{100: "t100"}) // 150 absent = dead
 
-	res, err := m.walkPaneAncestry("%5", 150, "codex", readProcessInfoFn, ancestryOpts{})
+	res, err := m.walkPaneAncestry("%5", 150, "codex", liveProcs{read: readProcessInfoFn}, ancestryOpts{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -312,7 +312,7 @@ func TestWalkPaneAncestry_SelfParent_Indeterminate(t *testing.T) {
 	m := newProxyTestModule(t)
 	withProcessTree(t, map[int]int{200: 300, 300: 300})
 
-	res, err := m.walkPaneAncestry("%5", 300, "codex", readProcessInfoFn, ancestryOpts{})
+	res, err := m.walkPaneAncestry("%5", 300, "codex", liveProcs{read: readProcessInfoFn}, ancestryOpts{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -334,7 +334,7 @@ func TestWalkPaneAncestry_DepthCapExceeded_Indeterminate(t *testing.T) {
 	}
 	withProcessTree(t, chain)
 
-	res, err := m.walkPaneAncestry("%5", 201, "codex", readProcessInfoFn, ancestryOpts{})
+	res, err := m.walkPaneAncestry("%5", 201, "codex", liveProcs{read: readProcessInfoFn}, ancestryOpts{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -347,7 +347,7 @@ func TestWalkPaneAncestry_ProcessReadError_Indeterminate(t *testing.T) {
 	m := newProxyTestModule(t)
 	withProcessReadError(t, 300)
 
-	res, err := m.walkPaneAncestry("%5", 300, "codex", readProcessInfoFn, ancestryOpts{})
+	res, err := m.walkPaneAncestry("%5", 300, "codex", liveProcs{read: readProcessInfoFn}, ancestryOpts{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -357,11 +357,12 @@ func TestWalkPaneAncestry_ProcessReadError_Indeterminate(t *testing.T) {
 }
 
 // TestWalkPaneAncestry_UsesTheSuppliedReader pins the seam Task 6 depends on:
-// the walker reads through the `read` argument, never through the package-level
-// readProcessInfoFn. classifyAncestor passes readProcessInfoFn directly (a memo
-// on the hook path would break provenance_test.go:170's premise, which
-// deliberately makes the sender's successive reads differ); Task 6 passes a
-// request-scoped memo. Neither works if the walker ignores the argument.
+// the walker reads through the `procs` argument, never through the
+// package-level readProcessInfoFn. classifyAncestor hands it readProcessInfoFn
+// directly (a memo on the hook path would break provenance_test.go:170's
+// premise, which deliberately makes the sender's successive reads differ);
+// Task 6 hands it a request-scoped memo. Neither works if the walker ignores
+// the argument.
 func TestWalkPaneAncestry_UsesTheSuppliedReader(t *testing.T) {
 	m := newProxyTestModule(t)
 	// The package-level seam says 300 is its own parent — a tree that would
@@ -374,7 +375,7 @@ func TestWalkPaneAncestry_UsesTheSuppliedReader(t *testing.T) {
 		return agentpkg.ProcessInfo{PID: pid, PPID: 1}, nil
 	}
 
-	res, err := m.walkPaneAncestry("%5", 300, "codex", supplied, ancestryOpts{})
+	res, err := m.walkPaneAncestry("%5", 300, "codex", liveProcs{read: supplied}, ancestryOpts{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -450,7 +451,7 @@ func TestWalkPaneAncestry_CheckPaneDisabled_ZeroPPIDIsNotAPaneMatch(t *testing.T
 	m := newProxyTestModule(t)
 	withProcessTree(t, map[int]int{200: 0})
 
-	res, err := m.walkPaneAncestry("%5", 0, "codex", readProcessInfoFn, ancestryOpts{})
+	res, err := m.walkPaneAncestry("%5", 0, "codex", liveProcs{read: readProcessInfoFn}, ancestryOpts{})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -489,7 +490,7 @@ func TestWalkPaneAncestry_SawPanePID_SetAtEntryBeforeEarlyReturn(t *testing.T) {
 		withProcessTree(t, map[int]int{100: 200, 200: 300})
 		withLivePids(t, map[int]string{200: "t200"})
 
-		res, err := m.walkPaneAncestry("%5", 200, "cc", readProcessInfoFn, ancestryOpts{PanePID: 200, CheckPane: true})
+		res, err := m.walkPaneAncestry("%5", 200, "cc", liveProcs{read: readProcessInfoFn}, ancestryOpts{PanePID: 200, CheckPane: true})
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
@@ -505,7 +506,7 @@ func TestWalkPaneAncestry_SawPanePID_SetAtEntryBeforeEarlyReturn(t *testing.T) {
 		m := newProxyTestModule(t)
 		withProcessReadError(t, 200)
 
-		res, err := m.walkPaneAncestry("%5", 200, "codex", readProcessInfoFn, ancestryOpts{PanePID: 200, CheckPane: true})
+		res, err := m.walkPaneAncestry("%5", 200, "codex", liveProcs{read: readProcessInfoFn}, ancestryOpts{PanePID: 200, CheckPane: true})
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
@@ -539,7 +540,7 @@ func TestWalkPaneAncestry_AncestorHit_StopsBeforeReadingAbove(t *testing.T) {
 		return readProcessInfoFn(pid)
 	}
 
-	res, err := m.walkPaneAncestry("%5", 200, "cc", recording, ancestryOpts{PanePID: 900, CheckPane: true})
+	res, err := m.walkPaneAncestry("%5", 200, "cc", liveProcs{read: recording}, ancestryOpts{PanePID: 900, CheckPane: true})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}

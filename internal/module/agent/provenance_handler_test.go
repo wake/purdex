@@ -369,6 +369,38 @@ func TestHandleSessionProvenance_UnresolvablePaneSessionID_PaneExcluded(t *testi
 	}
 }
 
+// TestHandleSessionProvenance_PanePIDUnresolvable_PaneContributesNothing — a
+// pane whose current process cannot be resolved contributes nothing (spec §5.3
+// step 2). It is not an error: the other panes of the session may still have
+// answers. And it costs no process read: with no pane PID there is nothing to
+// check a chain against, so no frame of that pane is walked.
+//
+// "not-a-pid" is what tmux would have to print for the pane's PID to fail to
+// parse; the frame and the process tree are otherwise a complete, answering
+// root, so a found:true or a single recorded read means the pane was walked
+// anyway.
+func TestHandleSessionProvenance_PanePIDUnresolvable_PaneContributesNothing(t *testing.T) {
+	m, fake, _ := newProvenanceQueryModule(t)
+	fake.AddSession("work", "/w")
+	attachPane(fake, "%5", "$0", "not-a-pid")
+	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w")
+	withProcessTree(t, map[int]int{100: 200, 200: 1})
+	withLivePids(t, map[int]string{100: "t100"})
+	var seen []int
+	withRecordedReads(t, &seen)
+
+	owner, found, err := m.ResolveSessionOwner(context.Background(), codeOf(t, "$0"))
+	if err != nil {
+		t.Fatalf("err = %v, want nil — an unresolvable pane is not an error", err)
+	}
+	if found {
+		t.Fatalf("found = true (owner = %+v), want false — the pane has no PID to walk against", owner)
+	}
+	if len(seen) != 0 {
+		t.Fatalf("reads = %v, want none — there is nothing to walk against", seen)
+	}
+}
+
 // TestHandleSessionProvenance_RenameSwap_AnswersByID is the reason this query
 // goes through the tmux session ID.
 //

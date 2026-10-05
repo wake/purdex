@@ -108,11 +108,11 @@ func (m *Module) resolveSessionOwner(ctx context.Context, code string) (PaneOwne
 // #988) needs that distinction: reporting a lookup failure the same way as
 // "no agent" would tell the SPA a live session has none.
 //
-// ONE memoizing reader and ONE deadline serve the whole request: a process read
-// is four `ps` forks on darwin (spec §3.4), and the frames of a session share
-// almost all of their ancestry, so the memo turns O(frames × depth) reads into
-// roughly O(distinct PIDs). Both are built here and handed to every
-// resolvePaneOwners call — never one per pane.
+// ONE memoizing process view and ONE deadline serve the whole request: a
+// process read is four `ps` forks on darwin (spec §3.4), and the frames of a
+// session share almost all of their ancestry, so the memo turns
+// O(frames × depth) reads into roughly O(distinct PIDs). Both are built here
+// and handed to every resolvePaneOwners call — never one per pane.
 //
 // A non-nil error from resolvePaneOwners discards the owners it returned
 // alongside it: a partial walk is not an answer, and half a pane's frames can
@@ -130,11 +130,18 @@ func (m *Module) resolveSessionOwnerErr(ctx context.Context, code string) (PaneO
 		return PaneOwner{}, false, err
 	}
 
-	read := newMemoProcReader(readProcessInfoFn)
+	procs := liveProcs{read: newMemoProcReader(readProcessInfoFn)}
 	var best PaneOwner
 	found := false
 	for _, paneID := range panes {
-		owners, err := m.resolvePaneOwners(ctx, paneID, read)
+		// A pane whose current process cannot be resolved contributes nothing
+		// (spec §5.3 step 2). That is not an error: the session's other panes
+		// may still have an answer.
+		panePID, err := resolvePanePIDFn(m.tmux, paneID)
+		if err != nil {
+			continue
+		}
+		owners, err := m.resolvePaneOwners(ctx, paneID, panePID, procs)
 		if err != nil {
 			return PaneOwner{}, false, err
 		}
@@ -190,10 +197,10 @@ func (m *Module) resolveSessionOwnerErr(ctx context.Context, code string) (PaneO
 	// The loop above can finish — with panes exhausted, or never having had
 	// any to look at — in the same instant the deadline does: panesOfSession
 	// can swallow a mid-enumeration PaneSessionID failure into an empty pane
-	// list (see its own comment), and a pane whose owners came back empty
-	// skips the ctx.Err() check above entirely. Either way this would answer
-	// "no owner" (found=false, err=nil) for a request that in fact never
-	// finished the walk. So the deadline is read once more here, after the
+	// list (see its own comment), and a pane whose PID could not be resolved,
+	// or whose owners came back empty, skips the ctx.Err() check above
+	// entirely. Either way this would answer "no owner" (found=false,
+	// err=nil) for a request that in fact never finished the walk. So the deadline is read once more here, after the
 	// loop, the same as it is read inside it: an expired ctx overrides
 	// whatever the loop concluded, success included, because a "found" from a
 	// walk that ran out of time is exactly as untrustworthy as a "not found"
