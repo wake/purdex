@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useEffect } from 'react'
 import { render, screen, cleanup, fireEvent, createEvent, act, type RenderResult } from '@testing-library/react'
 import { PaneLayoutRenderer } from './PaneLayoutRenderer'
+import { HandoffDialogHost } from './HandoffDialogHost'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { countLeaves } from '../lib/pane-tree'
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
@@ -12,6 +13,7 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useUndoToast } from '../stores/useUndoToast'
+import { useHandoffDialogStore } from '../stores/useHandoffDialogStore'
 import { compositeKey } from '../lib/composite-key'
 import { handToNex } from '../lib/nex/handoff'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
@@ -738,7 +740,16 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     useSessionStore.setState({ sessions: {} })
     useUndoToast.setState({ toast: null })
     useShownHostsStore.setState({ ids: [H] }) // the host is shown (H2d-4: a hidden host's leaf is gated)
+    useHandoffDialogStore.setState({ target: null })
   })
+
+  /** The pane and the app-level dialog host (shell cleanup §9.4): the menu opens the store, the host renders it. */
+  const renderWithHost = (layout: PaneLayout) => render(
+    <>
+      <PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />
+      <HandoffDialogHost />
+    </>,
+  )
 
   it('shows "Hand to nex" when the live agent is cc and the host is ready', () => {
     seedTab(tmux('p1'))
@@ -817,7 +828,7 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     useShownHostsStore.setState({ ids: [H] })
     mockedHandToNex.mockResolvedValueOnce({ result: { execution_id: 'exc_1', state: 'running', session_id: 's', cwd: '/' }, swapped: true })
     const { act } = await import('react')
-    render(<PaneLayoutRenderer layout={split} tabId="t1" isActive={true} />)
+    renderWithHost(split)
 
     rightClick('dash-p1')
     expect(screen.queryByText('Hand to nex')).not.toBeInTheDocument()
@@ -825,6 +836,8 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
 
     rightClick('tmux-p2')
     fireEvent.click(screen.getByText('Hand to nex'))
+    expect(useHandoffDialogStore.getState().target).toMatchObject({ tabId: 't1', paneId: 'p2', content: { sessionCode: CODE } })
+    expect(useHandoffDialogStore.getState().target).not.toHaveProperty('mode')
     expect(screen.getByTestId('handoff-dialog')).toBeInTheDocument()
 
     await act(async () => { fireEvent.click(screen.getByTestId('handoff-confirm')) })
@@ -843,13 +856,44 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     const recorded = tmux('p1', { rebuild: { sessionName: 'purdex', tmuxInstance: 'inst-1', agent: { type: 'cc', updatedAt: 1 }, capturedAt: 1 } })
     seedTab(recorded)
     seedReady()
-    render(<PaneLayoutRenderer layout={recorded} tabId="t1" isActive={true} />)
+    renderWithHost(recorded)
     rightClick('tmux-p1')
     fireEvent.click(screen.getByText('Hand to nex'))
     expect(screen.getByTestId('handoff-dialog')).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('handoff-cancel'))
     expect(screen.queryByTestId('handoff-dialog')).not.toBeInTheDocument()
+    expect(useHandoffDialogStore.getState().target).toBeNull()
     expect(mockedHandToNex).not.toHaveBeenCalled()
+  })
+
+  // P6 re-review: the real SessionEnd clears the live type and marks the cc record exited — the record alone must not
+  // keep offering the item.
+  it('no longer offers it after Claude Code exits on a pane whose rebuild record says cc', async () => {
+    const recorded = tmux('p1', {
+      rebuild: { sessionName: 'purdex', tmuxInstance: 'inst-1', agent: { type: 'cc', sessionId: 'S1', frameId: 'F1', updatedAt: 1 }, capturedAt: 1 },
+    })
+    seedTab(recorded)
+    seedReady()
+    liveCc()
+    const { act } = await import('react')
+    const { rerender } = render(<PaneLayoutRenderer layout={recorded} tabId="t1" isActive={true} />)
+    rightClick('tmux-p1')
+    expect(screen.getByText('Hand to nex')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await act(async () => {
+      useAgentStore.getState().handleNormalizedEvent(H, CODE, {
+        agent_type: 'cc', status: 'clear', raw_event_name: 'PdxSessionEnd', broadcast_ts: 1, subagents: [],
+        detail: { pdx_exit: { agent_type: 'cc', session_id: 'S1', tmux_pane_id: '%1', tmux_instance: 'inst-1', frame_id: 'F1', reason: 'session-end', at: 7_000 } },
+      })
+    })
+    // The leaf renders the layout its tab hands it: the store's, now carrying the exit.
+    const layout = useTabStore.getState().tabs['t1'].layout
+    expect(layout.type === 'leaf' && layout.pane.content.kind === 'tmux-session' && layout.pane.content.rebuild?.agentExited)
+      .toEqual({ at: 7_000, reason: 'session-end' })
+    rerender(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+    rightClick('tmux-p1')
+    expect(screen.getByText('Split Horizontal')).toBeInTheDocument()
+    expect(screen.queryByText('Hand to nex')).not.toBeInTheDocument()
   })
 
   it('hiding the host closes an open handoff dialog (the pane is gated; nothing is sent)', async () => {
@@ -857,7 +901,7 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     seedTab(recorded)
     seedReady()
     const { act } = await import('react')
-    render(<PaneLayoutRenderer layout={recorded} tabId="t1" isActive={true} />)
+    renderWithHost(recorded)
     rightClick('tmux-p1')
     fireEvent.click(screen.getByText('Hand to nex'))
     expect(screen.getByTestId('handoff-dialog')).toBeInTheDocument()
@@ -887,6 +931,32 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     await act(async () => { useTabStore.getState().setTabLayout('t1', dash('p2')) })
     expect(useTabStore.getState().tabs['t1'].layout).toEqual(dash('p2'))
     fireEvent.click(screen.getByText('Hand to nex'))
+    expect(useHandoffDialogStore.getState().target).toBeNull()
+    expect(screen.queryByTestId('handoff-dialog')).not.toBeInTheDocument()
+  })
+
+  it('opens the dialog with the pane\'s LIVE content, not the one the leaf rendered', () => {
+    // The tab store already holds a renamed session behind the rendered layout prop.
+    seedTab(tmux('p1', { cachedName: 'renamed' }))
+    seedReady()
+    liveCc()
+    renderWithHost(tmux('p1'))
+    rightClick('tmux-p1')
+    fireEvent.click(screen.getByText('Hand to nex'))
+    expect(useHandoffDialogStore.getState().target).toEqual({
+      tabId: 't1', paneId: 'p1',
+      content: { kind: 'tmux-session', hostId: H, sessionCode: CODE, mode: 'terminal', cachedName: 'renamed', tmuxInstance: 'inst-1' },
+    })
+  })
+
+  it('the leaf itself renders no dialog: only the app-level host does', () => {
+    seedTab(tmux('p1'))
+    seedReady()
+    liveCc()
+    render(<PaneLayoutRenderer layout={tmux('p1')} tabId="t1" isActive={true} />)
+    rightClick('tmux-p1')
+    fireEvent.click(screen.getByText('Hand to nex'))
+    expect(useHandoffDialogStore.getState().target?.paneId).toBe('p1')
     expect(screen.queryByTestId('handoff-dialog')).not.toBeInTheDocument()
   })
 })

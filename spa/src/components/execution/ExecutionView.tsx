@@ -57,6 +57,7 @@ import { toolUseUnit } from '../../lib/nex/transcript-search'
 import { partialHasChatContent, partialHasVisibleContent } from '../../lib/nex/partial'
 import { HandoffApiError } from '../../lib/nex/handoff-api'
 import { takeBack, takeToTerminal, handoffErrorMessage, manualResumeHint } from '../../lib/nex/handoff'
+import { registerTakeToTerminal } from '../../lib/nex/take-to-terminal-registry'
 import type { ExecutionFrom, ExecutionViewMode } from '../../types/tab'
 
 export interface ExecutionViewProps {
@@ -192,6 +193,25 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
     if (useExecutionStore.getState().executions[key]?.summary?.state === 'running') setConfirmTakeBack(true)
     else void runTakeBack()
   }, [key, runTakeBack, writeInFlight])
+  // Spec §4.2: every claude execution with a session id can go to a terminal
+  // — a fresh one when there is no origin session to return to.
+  // Archived is excluded too: the daemon refuses it (`execution_archived`) —
+  // whoever archived it already resumed that transcript elsewhere.
+  const canTakeToTerminal = !from && !!st.summary && st.summary.provider === 'claude' && !st.summary.archived
+    && !!(st.summary.session_id || st.summary.resume_session_id) && TAKEABLE_STATES.has(st.summary.state)
+  // Shell cleanup §9.5: the status bar's terminal button runs this same flow
+  // (confirm, lease forget, busy guards) through the registry. Offered only
+  // where the header offers it — a problem pane has no header (and no confirm
+  // dialog) — and busy under the header's own busy condition. The entry calls
+  // through a ref, so a re-render that leaves canTake / busy alone still runs
+  // the latest closure without re-registering.
+  const takeOffered = !problem && (!!from || canTakeToTerminal)
+  const takeBusy = takeBackBusy || writeInFlight
+  const onTakeBackRef = useRef(onTakeBack)
+  useLayoutEffect(() => { onTakeBackRef.current = onTakeBack })
+  useEffect(() => registerTakeToTerminal(paneId, {
+    canTake: takeOffered, busy: takeBusy, takeToTerminal: () => onTakeBackRef.current(),
+  }), [paneId, takeOffered, takeBusy])
 
   const isMine = useCallback((p: string | undefined) => !!p && p.endsWith(`/${getNexClientId()}`), [])
   // P-B4 spec §4.2: null until history is loaded so the header shows `$…`
@@ -312,12 +332,6 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
 
   const terminal = !!st.summary && TERMINAL_STATES.has(st.summary.state)
   const ended = terminal || !!st.summary?.archived
-  // Spec §4.2: every claude execution with a session id can go to a terminal
-  // — a fresh one when there is no origin session to return to.
-  // Archived is excluded too: the daemon refuses it (`execution_archived`) —
-  // whoever archived it already resumed that transcript elsewhere.
-  const canTakeToTerminal = !from && !!st.summary && st.summary.provider === 'claude' && !st.summary.archived
-    && !!(st.summary.session_id || st.summary.resume_session_id) && TAKEABLE_STATES.has(st.summary.state)
   // The SSE handle can die terminally (401/403, or a non-retryable
   // structured error) after history has loaded, with no reconnect ever
   // coming — the pane looks live but a send would 2xx into the void with
@@ -520,7 +534,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       className="relative flex flex-col h-full">
       <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
         onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal || takeBackBusy}
-        onTakeBack={from || canTakeToTerminal ? onTakeBack : undefined} takeBackBusy={takeBackBusy || writeInFlight}
+        onTakeBack={takeOffered ? onTakeBack : undefined} takeBackBusy={takeBusy}
         mode={mode} onModeChange={onModeChange} />
       {confirmTakeBack && (
         <ConfirmDialog testIdPrefix="takeback" title={t('takeback.confirm_title')} body={t('takeback.confirm_running')}

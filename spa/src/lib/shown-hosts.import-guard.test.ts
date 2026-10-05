@@ -55,6 +55,7 @@ const READER_IMPORTERS = [
   'src/components/hosts/OverviewSection.tsx',
   'src/components/hosts/SessionsSection.tsx',
   'src/components/hosts/nex/NexExecutionsTable.tsx',
+  'src/hooks/useHandoffCandidate.ts',
   'src/hooks/useNotificationDispatcher.ts',
   'src/hooks/useRouteSync.ts',
   'src/hooks/useShortcuts.ts',

@@ -13,6 +13,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useHostConfigStore, emptyHostConfigEntry } from '../../stores/useHostConfigStore'
 import { useSessionStore } from '../../stores/useSessionStore'
+import { useAgentStore } from '../../stores/useAgentStore'
 import type { HostProject } from '../host-config-api'
 import { HandoffApiError, nexHandoff, nexTakeback, nexTakeToTerminal } from './handoff-api'
 import { checkHostPath } from '../host-config-api'
@@ -25,6 +26,7 @@ import {
   takeBack,
   takeToTerminal,
   handoffErrorMessage,
+  handoffBlockReasonNow,
   manualResumeHint,
   HANDOFF_ERROR_CODES,
   SESSION_ID_CODES,
@@ -186,6 +188,45 @@ describe('handToNex', () => {
       expect(executionContentFor(H, 'e', undefined, 'Title')).toEqual({ kind: 'execution', executionId: 'e', host: H, fromTitle: 'Title' })
       expect(executionContentFor(H, 'e', from, '  ')).not.toHaveProperty('fromTitle')
       expect(executionContentFor(H, 'e', from)).not.toHaveProperty('fromTitle')
+    })
+  })
+
+  describe('mode (shell cleanup spec §9.4 — the view the worker opens in)', () => {
+    it('mode chat → the pane is written in chat', async () => {
+      mockedHandoff.mockResolvedValueOnce(handoffOk)
+      const a = { ...args(), mode: 'chat' as const }
+      const out = await handToNex(a)
+      expect(out.swapped).toBe(true)
+      expect(paneContent(a.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from, mode: 'chat' })
+    })
+
+    it('mode room → room; no mode → no mode field (reads as room)', async () => {
+      mockedHandoff.mockResolvedValueOnce(handoffOk)
+      const room = { ...args(), mode: 'room' as const }
+      await handToNex(room)
+      expect(paneContent(room.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from, mode: 'room' })
+      mockedHandoff.mockResolvedValueOnce({ ...handoffOk, execution_id: 'exc_2' })
+      const none = args()
+      await handToNex(none)
+      expect(paneContent(none.tabId)).not.toHaveProperty('mode')
+    })
+
+    it('mode chat but the pane was closed mid-request → nothing written, swapped:false (the dialog offers "Open execution")', async () => {
+      const d = deferred<typeof handoffOk>()
+      mockedHandoff.mockReturnValueOnce(d.promise)
+      const a = { ...args(), mode: 'chat' as const }
+      const p = handToNex(a)
+      await vi.waitFor(() => expect(mockedHandoff).toHaveBeenCalledTimes(1))
+      useTabStore.getState().closeTab(a.tabId)
+      d.resolve(handoffOk)
+      await expect(p).resolves.toEqual({ result: handoffOk, swapped: false })
+      expect(Object.values(useTabStore.getState().tabs)).toHaveLength(0)
+    })
+
+    it('executionContentFor carries the mode it is given, and none when not', () => {
+      expect(executionContentFor(H, 'e', from, 'T', 'chat')).toEqual({ kind: 'execution', executionId: 'e', host: H, from, fromTitle: 'T', mode: 'chat' })
+      expect(executionContentFor(H, 'e', undefined, undefined, 'room')).toEqual({ kind: 'execution', executionId: 'e', host: H, mode: 'room' })
+      expect(executionContentFor(H, 'e', from, 'T')).not.toHaveProperty('mode')
     })
   })
 
@@ -677,6 +718,60 @@ describe('in-flight handoffs re-check the shown state at completion (H2d-3)', ()
     const out = await run
     expect(out.swapped, c.name).toBe(true)
     expect(paneContent(tabId).kind, c.name).not.toBe(kindBefore)
+  })
+})
+
+// P6 review A1: the Hand-to-Nex dialog's Confirm re-reads the gate from the stores at the click.
+describe('handoffBlockReasonNow', () => {
+  const expected = { hostId: H, sessionCode: from.sessionCode, tmuxInstance: from.tmuxInstance }
+  let t: { tabId: string; paneId: string }
+  const reason = () => handoffBlockReasonNow(t.tabId, t.paneId, expected)
+  const setPane = (over: Partial<Extract<PaneContent, { kind: 'tmux-session' }>>) => useTabStore.getState().setPaneContent(t.tabId, t.paneId, {
+    kind: 'tmux-session', hostId: H, sessionCode: from.sessionCode, mode: 'terminal', cachedName: from.cachedName, tmuxInstance: from.tmuxInstance, ...over,
+  })
+
+  beforeEach(() => {
+    t = sessionTab()
+    useAgentStore.setState({ agentTypes: { [`${H}:${from.sessionCode}`]: 'cc' } })
+  })
+  afterEach(() => useAgentStore.setState({ agentTypes: {} }))
+
+  it('null while the live pane holds the session, CC runs, Nex is ready and the host is shown', () => {
+    expect(reason()).toBeNull()
+  })
+
+  it('the pane or tab is gone, or holds something else → not_session', () => {
+    expect(handoffBlockReasonNow('gone', t.paneId, expected)).toBe('not_session')
+    expect(handoffBlockReasonNow(t.tabId, 'gone', expected)).toBe('not_session')
+    useTabStore.getState().setPaneContent(t.tabId, t.paneId, { kind: 'new-tab' })
+    expect(reason()).toBe('not_session')
+  })
+
+  it('another session, another tmux process of it, or the same code on another host → session_changed', () => {
+    setPane({ sessionCode: 'other' })
+    expect(reason()).toBe('session_changed')
+    setPane({ tmuxInstance: 'inst-2' })
+    expect(reason()).toBe('session_changed')
+    setPane({ hostId: 'h2' })
+    expect(reason()).toBe('session_changed')
+  })
+
+  it('the host is hidden in the workbench → host_hidden', () => {
+    useShownHostsStore.setState({ ids: [] })
+    expect(reason()).toBe('host_hidden')
+  })
+
+  it('terminated / not CC any more / Nex not ready → the pure gate\'s reason', () => {
+    setPane({ terminated: 'session-closed' })
+    expect(reason()).toBe('terminated')
+    setPane({})
+    useAgentStore.setState({ agentTypes: { [`${H}:${from.sessionCode}`]: 'codex' } })
+    expect(reason()).toBe('not_agent')
+    useAgentStore.getState().clearSession(H, from.sessionCode)
+    expect(reason()).toBe('not_agent')
+    useAgentStore.setState({ agentTypes: { [`${H}:${from.sessionCode}`]: 'cc' } })
+    seedNexHost({ phase: 'unavailable' })
+    expect(reason()).toBe('nex_not_ready')
   })
 })
 

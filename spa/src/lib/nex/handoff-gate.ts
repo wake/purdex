@@ -11,7 +11,8 @@
 //    even though the older rebuild record still says `cc`;
 // 2. the pane's rebuild record (`rebuild.agent.type`, written at
 //    SessionStart) — accepted even when `unverified`, because the daemon
-//    re-checks the CC identity before it hands anything off.
+//    re-checks the CC identity before it hands anything off; NOT accepted once
+//    `rebuild.agentExited` is set (the recorded run ended — P6 re-review).
 //
 // The relay id the daemon used to publish on the session row was a third
 // fallback until P-D.3b; the daemon stopped sending it in alpha.396.
@@ -24,11 +25,31 @@ export interface HandoffGateDeps {
   handoffReady: boolean
 }
 
+/**
+ * Why the pane may not be handed to nex (shell cleanup spec §9.3: the status
+ * bar's disabled worker / chat buttons say why).
+ * - `not_session`: not a tmux pane at all;
+ * - `terminated`: the pane's session is gone;
+ * - `not_agent`: nothing says the pane runs Claude Code (the two sources above);
+ * - `nex_not_ready`: it does, but the host cannot take a handoff now.
+ * The agent is asked before the host: for a plain shell, a ready Nexen would
+ * change nothing, so "not running Claude Code" is the answer that helps.
+ */
+export type HandoffBlockReason = 'not_session' | 'terminated' | 'not_agent' | 'nex_not_ready'
+
+export function handoffBlockReason(content: PaneContent, deps: HandoffGateDeps): HandoffBlockReason | null {
+  if (content.kind !== 'tmux-session') return 'not_session'
+  if (content.terminated) return 'terminated'
+  // An empty live type is no information and falls through to the record. The record counts only while its agent has
+  // not exited: Claude Code's exit clears the live type (`clearSession`) and marks the record `agentExited`
+  // (`writeExitRecord`), so an exited record is the one source left and must not keep saying `cc` (P6 re-review).
+  const recorded = content.rebuild?.agentExited ? undefined : content.rebuild?.agent?.type
+  const agent = deps.agentType || recorded
+  if (agent !== 'cc') return 'not_agent'
+  if (!deps.handoffReady) return 'nex_not_ready'
+  return null
+}
+
 export function isHandoffCandidate(content: PaneContent, deps: HandoffGateDeps): boolean {
-  if (content.kind !== 'tmux-session') return false
-  if (content.terminated) return false
-  if (!deps.handoffReady) return false
-  if (deps.agentType) return deps.agentType === 'cc'
-  const recorded = content.rebuild?.agent?.type
-  return recorded === 'cc'
+  return handoffBlockReason(content, deps) === null
 }
