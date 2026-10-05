@@ -20,7 +20,8 @@ import { Prohibit } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { AssistantMessage, ContentBlock, StreamMessage, UserMessage } from '../../lib/nex/message-types'
 import { partialBlockKey, partialChatVersionOf, partialToolUses } from '../../lib/nex/partial'
-import { blockKey, indexOperations, toolResultText, type BlockKey } from '../../lib/nex/operations'
+import { indexOperations, toolResultText, type BlockKey } from '../../lib/nex/operations'
+import { keyAt, rowKey, type MessageIdOf } from '../../lib/nex/message-keys'
 import { classifyTurnOperations, toolEntryFor, type TurnOperation } from '../../lib/nex/operation-status'
 import { groupTurns, INTERRUPT_TEXT, type RoomTurn } from '../../lib/nex/turns'
 import { chatToolsKey, searchUnitId } from '../../lib/nex/transcript-search'
@@ -83,12 +84,13 @@ function ChatOperationLine({ op, ctx }: { op: TurnOperation; ctx: RenderCtx }) {
  * One durable top-level message as chat rows; null when it has nothing chat
  * draws. `lineAt(j)` is the operation line (if any) that sits at block j.
  */
-function ChatMessage({ msg, i, interrupted, lineAt }: {
+function ChatMessage({ msg, i, interrupted, lineAt, idOf }: {
   msg: StreamMessage
   /** Its position in the transcript's messages (search anchors are named by it). */
   i: number
   interrupted: string
   lineAt: (j: number) => ReactNode
+  idOf?: MessageIdOf
 }) {
   const rows: ReactNode[] = []
   const line = (j: number) => {
@@ -100,7 +102,7 @@ function ChatMessage({ msg, i, interrupted, lineAt }: {
     ;(msg as AssistantMessage).message.content.forEach((block, j) => {
       // Thinking draws nothing in chat.
       if (block.type === 'text' && block.text?.trim()) {
-        rows.push(<ChatBubble key={j} side="agent"><RoomProse content={block.text} searchUnit={searchUnitId(blockKey(i, j), 'text')} /></ChatBubble>)
+        rows.push(<ChatBubble key={j} side="agent"><RoomProse content={block.text} searchUnit={searchUnitId(keyAt({ idOf }, i, j), 'text')} /></ChatBubble>)
       } else if (block.type === 'tool_use') {
         line(j)
       }
@@ -138,7 +140,7 @@ function ChatMessage({ msg, i, interrupted, lineAt }: {
         return
       }
       // Your line is never markdown; a slash command gets the mono face (ChatUserBubble).
-      rows.push(<ChatUserBubble key={j} text={block.text} searchUnit={searchUnitId(blockKey(i, j), 'text')}
+      rows.push(<ChatUserBubble key={j} text={block.text} searchUnit={searchUnitId(keyAt({ idOf }, i, j), 'text')}
         attachments={atts && j === attsAt ? <AttachmentThumbs items={atts} /> : undefined} />)
     })
     if (atts && attsAt < 0) rows.push(<ChatUserBubble key="attachments" text="" attachments={<AttachmentThumbs items={atts} />} />)
@@ -253,7 +255,7 @@ export default function ChatTranscript({
                   const i = turn.start + k
                   return index.childIndexes.has(i)
                     ? null
-                    : <ChatMessage key={`${keyPrefix}-${i}`} msg={msg} i={i} interrupted={interrupted} lineAt={(j) => lines.get(blockKey(i, j))} />
+                    : <ChatMessage key={rowKey(ctx, i)} msg={msg} i={i} interrupted={interrupted} lineAt={(j) => lines.get(keyAt(ctx, i, j))} />
                 })}
                 {ti === lastTurn && hasPartial && <ChatPartialGroup key={`${keyPrefix}-partial`} partial={partial} />}
                 {/* Only streaming calls so far: the line comes with them, after

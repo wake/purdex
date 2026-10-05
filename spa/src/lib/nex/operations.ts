@@ -11,7 +11,7 @@ export interface OperationResult {
 
 /** `${messageIndex}:${blockIndex}` — a block's position, which is unique even when a tool_use_id is not. */
 export type BlockKey = string
-export const blockKey = (m: number, b: number): BlockKey => `${m}:${b}`
+export const blockKey = (m: number | string, b: number): BlockKey => `${m}:${b}`
 
 export interface OperationIndex {
   /** The call block's own position → the result that answers THAT call. */
@@ -102,7 +102,8 @@ function blocksOf(message: StreamMessage): ContentBlock[] {
  * same-id Tasks running at once leave nothing in the frames to tell them
  * apart; the latest call takes them, and each frame is still drawn once.
  */
-export function indexOperations(messages: StreamMessage[]): OperationIndex {
+export function indexOperations(messages: StreamMessage[], idOf?: (m: number) => string): OperationIndex {
+  const key = (mi: number, bi: number) => blockKey(idOf ? idOf(mi) : mi, bi)
   const resultForCall = new Map<BlockKey, OperationResult>()
   const consumedResults = new Set<BlockKey>()
   // scope (parent_tool_use_id, '' for the main flow) → tool_use_id → FIFO of calls.
@@ -129,8 +130,8 @@ export function indexOperations(messages: StreamMessage[]): OperationIndex {
         const id = block.id
         if (!id) return
         const queue = waiting.get(id)
-        if (queue) queue.push(blockKey(mi, bi))
-        else waiting.set(id, [blockKey(mi, bi)])
+        if (queue) queue.push(key(mi, bi))
+        else waiting.set(id, [key(mi, bi)])
         return
       }
       if (block.type === 'tool_result') {
@@ -142,12 +143,12 @@ export function indexOperations(messages: StreamMessage[]): OperationIndex {
           text: toolResultText((block as { content?: unknown }).content),
           isError: block.is_error === true,
         })
-        consumedResults.add(blockKey(mi, bi))
+        consumedResults.add(key(mi, bi))
       }
     })
     // After the message, not during it: a call cannot parent its own message.
     blocksOf(message).forEach((block, bi) => {
-      if (block.type === 'tool_use' && block.id) latestEarlierCall.set(block.id, blockKey(mi, bi))
+      if (block.type === 'tool_use' && block.id) latestEarlierCall.set(block.id, key(mi, bi))
     })
   })
 

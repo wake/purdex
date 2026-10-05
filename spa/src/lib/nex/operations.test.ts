@@ -256,3 +256,16 @@ describe('toolResultText', () => {
     expect(toolResultText([{ type: 'image', source: 'x' }])).toBe('[{"type":"image","source":"x"}]')
   })
 })
+
+describe('idOf keys', () => {
+  it('names keys by idOf when given, by position otherwise', () => {
+    const msgs = [
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }], stop_reason: null } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }], stop_reason: null } },
+    ] as StreamMessage[]
+    expect([...indexOperations(msgs).resultForCall.keys()]).toEqual(['0:0'])
+    const byId = indexOperations(msgs, (m) => `p${m * 10}`)
+    expect([...byId.resultForCall.keys()]).toEqual(['p0:0'])
+    expect([...byId.consumedResults]).toEqual(['p10:0'])
+  })
+})

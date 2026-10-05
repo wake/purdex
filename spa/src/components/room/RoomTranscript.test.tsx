@@ -11,6 +11,10 @@ import type { PartialAssembly, PartialBlock } from '../../lib/nex/partial'
 import type { ToolActivity } from '../../lib/nex/tool-activity'
 import type { TurnMeta } from '../../lib/nex/event-reducer'
 import { sanitizePreludePage } from '../../lib/nex/prelude-wire'
+import { indexOperations } from '../../lib/nex/operations'
+import { renderMessage } from './render-message'
+import { FoldContext, useFoldMemory } from './fold-context'
+import type { ReactNode } from 'react'
 
 const assistantText: StreamMessage = { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Hi there' }], stop_reason: null } } as StreamMessage
 
@@ -694,5 +698,23 @@ describe('RoomTranscript with sanitized hostile prelude blocks (spec §5.2)', ()
     const msgs = page.items.flatMap((i) => (i.kind === 'assistant' || i.kind === 'user' ? [i.msg] : []))
     expect(msgs).toHaveLength(2)
     expect(() => render(<RoomTranscript messages={msgs} keyPrefix="k" showThinking={false} showEmptyHint={false} />)).not.toThrow()
+  })
+})
+
+// Fold store provider built the way fold-context.test.tsx builds one (useFoldMemory in a wrapper).
+function FoldProvider({ children }: { children: ReactNode }) {
+  return <FoldContext.Provider value={useFoldMemory()}>{children}</FoldContext.Provider>
+}
+
+describe('render context idOf', () => {
+  it('a render context with idOf names search anchors and fold keys by the id', () => {
+    const msgs = [asst({ type: 'text', text: 'hello' })]
+    const index = indexOperations(msgs, () => 'p42')
+    const { container } = render(
+      <FoldProvider>
+        {renderMessage(msgs[0], 0, { messages: msgs, index, keyPrefix: 'k', depth: 0, idOf: () => 'p42' })}
+      </FoldProvider>,
+    )
+    expect(container.querySelector('[data-search-unit="p42:0:text"]')).not.toBeNull()
   })
 })
