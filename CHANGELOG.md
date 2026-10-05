@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.0-alpha.490] - 2026-10-06
+
+> 只動 daemon。**daemon 尚未部署**：跟 alpha.487／488／489 累積在一起，由統籌安排一次重啟。SPA 的錯誤訊息要到 P1b-2 才會對應新錯誤碼，部署前 SPA 照舊運作。Electron 不必更新。
+
+### Changed：對話主體 P1a-3——「接到終端機」與「接回原終端機」改成先 resume、成功後才退出 worker（#1586）
+
+- **Take to terminal（take-to-terminal）**：
+  - 先確認這段對話沒有在別的終端機或另一個 worker 裡。否則回 409 `session_owned`，並寫明在哪裡（終端機 pane 或 worker）。
+  - 轉移期間持有 worker 的控制權，所以中途沒有人能送訊息進去。
+  - 終端機 resume 成功之後，worker 才退出（terminate＋archive）。resume 失敗就什麼都不退出，原本「先封存、失敗再取消封存」的作法拿掉了。
+  - 已退出或啟動失敗（rejected）的 worker 也接受，給下一段的「重建為終端機」用。
+- **Take back（接回原終端機）**：流程同上，一樣在 resume 成功後才退出 worker。
+- **控制權（D22）**：
+  - lease 被另一個 Purdex 分頁握著時，daemon 會先替它釋放、再取一把只屬於自己的 lease。原分頁之後送訊會失敗，轉移結束（失敗時一定歸還）後重新取得控制就好。
+  - 「退出」仍然只借用。
+  - 非 Purdex 的持有者照舊回 `held_by`，什麼都不動。
+- **防止同一段對話被 resume 兩次**：
+  - 送出 resume 指令前會再確認一次擁有者。
+  - 成功後最多等 3 秒，直到這段對話的終端機 frame 出現。
+  - 之後 10 秒內，同一段對話的轉移一律當作「已在終端機」擋下。
+- **回應**：多了 `exited`（呼叫結束時 worker 是否已退出），以及在 resume 成功但 worker 退不掉時才出現的 `exit_error`。`archived` 欄位保留。
+- 讀不到啟動時間的終端機程序不算擁有者，但也不能確定沒人在用，所以回可重試的 503 `owner_check_failed`。
+
 ## [1.0.0-alpha.489] - 2026-10-06
 
 > Both daemon and SPA change; Electron needs no update. **The daemon is not deployed yet.** The new binary has to go in with one restart, together with alpha.487/488 and scheduled by the coordinator. Only after that does the new "重新啟動 daemon" button work. On an older daemon the button reports「這台 daemon 版本不支援遠端重啟」. The SPA goes out through HMR.
