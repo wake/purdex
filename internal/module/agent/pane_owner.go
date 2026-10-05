@@ -49,12 +49,11 @@ type PaneOwner struct {
 // that is the caller's to decide before it asks, because there is nothing to
 // check a chain against.
 //
-// `procs` is shared with every other call in the same request; Task 7 passes
-// liveProcs over newMemoProcReader(readProcessInfoFn) so that one PID costs one
-// read for the whole request (a single read is four `ps` forks on darwin —
-// spec §3.4). Every process question this function asks goes to procs:
-// Alive / StartTime for the survivor filter, PPID for the frame's own parent
-// and for each step of its walk.
+// `procs` is the owner pass's one process view, shared with every other call
+// in the same pass (owner_pass.go), so one process table serves every pane of
+// every session the pass is asked about. Every process question this function
+// asks goes to procs: Alive / StartTime for the survivor filter, PPID for the
+// frame's own parent and for each step of its walk.
 //
 // pidAncestorIncludesFn / probe.PidAncestorIncludes is deliberately NOT used
 // for the pane-tree half: it walks with no depth cap and calls
@@ -66,9 +65,9 @@ type PaneOwner struct {
 //
 // Read-only: no store writes, no envelope, no state between calls. The
 // returned error is either a frames-store failure or ctx's — both mean "no
-// answer", and the handler turns either into found:false. Owners decided
-// before the error are returned alongside it and must not be treated as a
-// result.
+// answer", and the owner pass reports either as the session's error. Owners
+// decided before the error are returned alongside it and must not be treated
+// as a result.
 func (m *Module) resolvePaneOwners(ctx context.Context, paneID string, panePID int, procs agentpkg.ProcessView) ([]PaneOwner, error) {
 	if m.frames == nil {
 		return nil, nil
@@ -96,18 +95,18 @@ func (m *Module) resolvePaneOwners(ctx context.Context, paneID string, panePID i
 		survivors = append(survivors, frame)
 	}
 
-	// ctx cannot interrupt a single process read — readProcessInfoPlatform has
-	// no context (process_info_darwin.go:9) — so the deadline is enforced at
-	// the only place it can be: immediately BEFORE each read. That is spec
-	// §5.3's wording, "checked between process reads", and it has to be per
-	// read rather than per frame because one frame's ancestry is itself a chain
-	// of up to proxyMaxDepth reads, four `ps` forks each (§3.4). A query can
-	// therefore spend its entire budget inside a single walk and never reach a
-	// second frame to be stopped at.
+	// ctx cannot interrupt a single process read — ProcessView takes no
+	// context — so the deadline is enforced at the only place it can be:
+	// immediately BEFORE each read. That is spec §5.3's wording, "checked
+	// between process reads", and it has to be per read rather than per frame
+	// because one frame's ancestry is itself a chain of up to proxyMaxDepth
+	// reads, and nothing in the interface promises any of them is cheap. A
+	// query can therefore spend its entire budget inside a single walk and
+	// never reach a second frame to be stopped at.
 	//
-	// The guard wraps whatever view the caller passed, memo included, so a
-	// cache hit is checked too: the caller cannot tell which reads are memoized
-	// and "cheap" is not the same as "still allowed".
+	// The guard wraps whatever view the caller passed, so an answer the view
+	// already holds is checked too: the caller cannot tell which reads are
+	// cached, and "cheap" is not the same as "still allowed".
 	procs = ctxGuardedProcs(ctx, procs)
 
 	owners := make([]PaneOwner, 0, len(survivors))
@@ -216,33 +215,4 @@ func (g ctxGuardedView) Read(pid int) (agentpkg.ProcessInfo, error) {
 		return agentpkg.ProcessInfo{}, err
 	}
 	return g.procs.Read(pid)
-}
-
-// newMemoProcReader wraps base so that each PID costs at most one call for the
-// life of the returned reader, failures included — a PID that could not be read
-// is not retried within the same request.
-//
-// It MUST be created per request and never at package level: ancestry is
-// exactly the kind of thing that goes stale, and a shared memo would serve a
-// later request a process tree that no longer exists. It is used from a single
-// goroutine (one HTTP request) and is not safe for concurrent use.
-//
-// classifyAncestor's view must never be built on one: provenance_test.go:170
-// deliberately makes the sender's 1st/2nd/3rd read return different values to
-// exercise the post-Upsert reconcile, and a memo on the hook path would break
-// that test's premise while leaving it green for the wrong reason.
-func newMemoProcReader(base procReader) procReader {
-	type memoEntry struct {
-		info agentpkg.ProcessInfo
-		err  error
-	}
-	cache := make(map[int]memoEntry)
-	return func(pid int) (agentpkg.ProcessInfo, error) {
-		if entry, ok := cache[pid]; ok {
-			return entry.info, entry.err
-		}
-		info, err := base(pid)
-		cache[pid] = memoEntry{info: info, err: err}
-		return info, err
-	}
 }

@@ -592,23 +592,23 @@ func TestHandleSessionProvenance_DeadlineInsideOneWalk_FoundFalse(t *testing.T) 
 	}
 }
 
-// countingExecutor counts the pane→session lookups the pane enumeration makes,
-// which is the only externally visible thing that enumeration does.
+// countingExecutor counts the pane listings the query makes. They are its only
+// tmux reads — the first enumerates the session's panes, the second re-checks
+// them after the walk — so a count of zero means the query asked tmux nothing.
 type countingExecutor struct {
 	*tmux.FakeExecutor
-	sessionIDCalls int
+	listCalls int
 }
 
-func (c *countingExecutor) PaneSessionID(ctx context.Context, target string) (string, error) {
-	c.sessionIDCalls++
-	return c.FakeExecutor.PaneSessionID(ctx, target)
+func (c *countingExecutor) ListAllPanes(ctx context.Context) ([]tmux.PaneLocation, error) {
+	c.listCalls++
+	return c.FakeExecutor.ListAllPanes(ctx)
 }
 
 // TestHandleSessionProvenance_ExpiredDeadline_SkipsPaneEnumeration — the
 // deadline bounds the WHOLE query, and enumerating the session's panes is part
-// of it: one tmux round trip per distinct pane with a frame, before a single
-// process has been read. A request that is already out of time must not spend
-// any of them.
+// of it: a tmux round trip, before a single process has been read. A request
+// that is already out of time must not spend it.
 //
 // found:false is not enough to tell the two implementations apart — an expired
 // deadline ends in found:false either way — so this asserts the work itself.
@@ -632,8 +632,8 @@ func TestHandleSessionProvenance_ExpiredDeadline_SkipsPaneEnumeration(t *testing
 	if body.Found {
 		t.Fatalf("body = %+v, want found:false", body)
 	}
-	if counting.sessionIDCalls != 0 {
-		t.Fatalf("pane enumeration made %d tmux lookups after the deadline had expired, want 0", counting.sessionIDCalls)
+	if counting.listCalls != 0 {
+		t.Fatalf("pane enumeration made %d tmux lookups after the deadline had expired, want 0", counting.listCalls)
 	}
 }
 
@@ -701,9 +701,9 @@ func TestHandleSessionProvenance_MemoizesReadsAcrossPanes(t *testing.T) {
 // withProcessReadHook runs `hook` once, on the FIRST process read of the
 // request. Install it after withProcessTree so it wraps the tree rather than
 // replacing it. The first read is the moment ownership resolution begins — i.e.
-// strictly after panesOfSession has already decided which panes belong to the
-// session — so a fixture mutation made here is exactly a change that landed
-// inside the request's own window.
+// strictly after the first pane listing has decided which panes belong to the
+// session, and before the second one re-checks them — so a fixture mutation
+// made here is exactly a change that landed inside the request's own window.
 func withProcessReadHook(t *testing.T, hook func()) {
 	t.Helper()
 	orig := readProcessInfoFn
@@ -783,11 +783,11 @@ func TestHandleSessionProvenance_PaneStillInSession_StillAnswered(t *testing.T) 
 	}
 }
 
-// recheckExecutor instruments the pane→session re-read that
-// paneStillInSession makes: it records the context every call was handed, and
-// can make the LAST call (the re-check, as opposed to the enumeration that
-// precedes it) either block until its context is cancelled, or answer
-// correctly but only after the request's deadline has already passed.
+// recheckExecutor instruments the pane listing: call 1 is the enumeration and
+// call 2 the re-check that confirms the walk's candidates. It records the
+// context every call was handed, and can make the re-check either block until
+// its context is cancelled (blockAfter: 1), or answer correctly but only after
+// the request's deadline has already passed (sleepAfter: 1).
 //
 // Both are the same real shape — the last tmux round trip of a request being
 // the slow one — and they separate the two halves of the fix: the query has to
@@ -802,7 +802,7 @@ type recheckExecutor struct {
 	sleepDuration time.Duration
 }
 
-func (r *recheckExecutor) PaneSessionID(ctx context.Context, target string) (string, error) {
+func (r *recheckExecutor) ListAllPanes(ctx context.Context) ([]tmux.PaneLocation, error) {
 	r.mu.Lock()
 	r.calls++
 	call := r.calls
@@ -813,11 +813,11 @@ func (r *recheckExecutor) PaneSessionID(ctx context.Context, target string) (str
 	if r.blockAfter > 0 && call > r.blockAfter {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(2 * time.Second):
 			// The context never reached the command: fail loudly rather than
 			// letting the test pass on a timeout that looks like cancellation.
-			return "", errors.New("PaneSessionID was never cancelled")
+			return nil, errors.New("ListAllPanes was never cancelled")
 		}
 	}
 	if r.sleepAfter > 0 && call > r.sleepAfter {
@@ -827,9 +827,9 @@ func (r *recheckExecutor) PaneSessionID(ctx context.Context, target string) (str
 		// Output() returns the answer with no error. Hence context.Background()
 		// here — the point of the case is a SUCCESSFUL late answer.
 		time.Sleep(r.sleepDuration)
-		return r.FakeExecutor.PaneSessionID(context.Background(), target)
+		return r.FakeExecutor.ListAllPanes(context.Background())
 	}
-	return r.FakeExecutor.PaneSessionID(ctx, target)
+	return r.FakeExecutor.ListAllPanes(ctx)
 }
 
 func (r *recheckExecutor) everyCallHadADeadline() bool {
@@ -885,7 +885,7 @@ func TestHandleSessionProvenance_RecheckIsCancellable(t *testing.T) {
 		t.Fatalf("body = %+v, want found:false — the re-check was cancelled, so nothing was confirmed", body)
 	}
 	if !exec.everyCallHadADeadline() {
-		t.Fatalf("PaneSessionID was called with a context carrying no deadline: %v", exec.deadlines)
+		t.Fatalf("ListAllPanes was called with a context carrying no deadline: %v", exec.deadlines)
 	}
 }
 
@@ -921,52 +921,50 @@ func TestHandleSessionProvenance_RecheckAnswersAfterTheDeadline_NotAnAnswer(t *t
 	}
 }
 
-// paneTargetedRecheckExecutor blocks the re-check of ONE named pane until its
-// context is cancelled, and answers normally for every other pane. Blocking by
-// pane rather than by call index keeps the case readable with more than one
-// pane in play: the enumeration visits each pane once, so the second call for a
-// given pane is that pane's re-check.
+// paneTargetedRecheckExecutor blocks the re-check — the second pane listing,
+// which confirms every candidate of the session at once — until its context is
+// cancelled, and answers the enumeration before it normally. With the re-check
+// batched there is no per-pane call left to single out, so blockPane only names
+// the pane the case is about: the listing that never returns is the one that
+// would have confirmed it.
 type paneTargetedRecheckExecutor struct {
 	*tmux.FakeExecutor
 	mu        sync.Mutex
-	calls     map[string]int
+	calls     int
 	blockPane string
 }
 
-func (e *paneTargetedRecheckExecutor) PaneSessionID(ctx context.Context, target string) (string, error) {
+func (e *paneTargetedRecheckExecutor) ListAllPanes(ctx context.Context) ([]tmux.PaneLocation, error) {
 	e.mu.Lock()
-	if e.calls == nil {
-		e.calls = make(map[string]int)
-	}
-	e.calls[target]++
-	nth := e.calls[target]
+	e.calls++
+	nth := e.calls
 	e.mu.Unlock()
 
-	if target == e.blockPane && nth > 1 {
+	if nth > 1 {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(2 * time.Second):
 			// The context never reached the command: fail loudly rather than
 			// letting the test pass on a timeout that looks like cancellation.
-			return "", errors.New("PaneSessionID was never cancelled")
+			return nil, errors.New("ListAllPanes was never cancelled")
 		}
 	}
-	return e.FakeExecutor.PaneSessionID(ctx, target)
+	return e.FakeExecutor.ListAllPanes(ctx)
 }
 
 // TestHandleSessionProvenance_CancelledRecheckDiscardsEarlierOwner — a
-// cancelled re-check must end the whole query, not just skip its own pane.
+// candidate is never an answer without a re-check that completed in time.
 //
-// With two panes in the session, the first one can be adopted before the
-// second one's re-check is cancelled. Skipping the cancelled pane and
-// returning what was found so far answers a request that is already out of
-// time, and answers it with a candidate that may well have lost: the pane
-// whose confirmation never arrived is the one with the newer last_seen_at
-// here, so the "answer" is not merely late, it is the wrong root.
+// Both panes of the session are walked and both produce a root before the one
+// re-check that would confirm them is cancelled by the deadline. Answering
+// with what was found so far would answer a request that is already out of
+// time, and possibly with the wrong root: %6's, the newer last_seen_at, is as
+// unconfirmed as %5's, so neither may be reported.
 //
 // Panes are walked in pane-id order (FramesStore.ListAll is ORDER BY pane_id),
-// so %5 is adopted first and %6 is the one whose re-check never returns.
+// so %5's candidate is already held, un-adopted, when %6's walk ends and the
+// re-check blocks.
 func TestHandleSessionProvenance_CancelledRecheckDiscardsEarlierOwner(t *testing.T) {
 	m, fake, _ := newProvenanceQueryModule(t)
 	exec := &paneTargetedRecheckExecutor{FakeExecutor: fake, blockPane: "%6"}

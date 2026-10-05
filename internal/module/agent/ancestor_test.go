@@ -40,6 +40,37 @@ func withFixtureSnapshot(t *testing.T) {
 	t.Cleanup(func() { takeProcSnapshotFn = orig })
 }
 
+// newMemoProcReader wraps base so that each PID costs at most one call for the
+// life of the returned reader, failures included — a PID that could not be read
+// is not retried within the same pass. That is how a process snapshot answers
+// (agentpkg.ProcessSnapshot keeps each PID's answer for its own life), so the
+// fixture view built on it is read the way the production view is.
+//
+// It MUST be created per pass and never at package level: ancestry is exactly
+// the kind of thing that goes stale, and a shared memo would serve a later
+// pass a process tree that no longer exists. It is used from a single
+// goroutine and is not safe for concurrent use.
+//
+// classifyAncestor's view must never be built on one: provenance_test.go:170
+// deliberately makes the sender's 1st/2nd/3rd read return different values to
+// exercise the post-Upsert reconcile, and a memo on the hook path would break
+// that test's premise while leaving it green for the wrong reason.
+func newMemoProcReader(base procReader) procReader {
+	type memoEntry struct {
+		info agentpkg.ProcessInfo
+		err  error
+	}
+	cache := make(map[int]memoEntry)
+	return func(pid int) (agentpkg.ProcessInfo, error) {
+		if entry, ok := cache[pid]; ok {
+			return entry.info, entry.err
+		}
+		info, err := base(pid)
+		cache[pid] = memoEntry{info: info, err: err}
+		return info, err
+	}
+}
+
 // withProcessTree makes readProcessInfoFn resolve PPIDs from tree. A PID with
 // no entry reports PPID 1, i.e. the walk reaches the root on the next hop.
 func withProcessTree(t *testing.T, tree map[int]int) {

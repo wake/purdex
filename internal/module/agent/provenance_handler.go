@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
-
-	"github.com/wake/purdex/internal/module/session"
 )
 
 // provenanceTimeout bounds one provenance request, checked between process
@@ -103,21 +101,17 @@ func (m *Module) resolveSessionOwner(ctx context.Context, code string) (PaneOwne
 // resolveSessionOwnerErr is resolveSessionOwner's error-preserving form: it
 // tells a genuine "no root agent frame answers for this session"
 // (found=false, err=nil) apart from "the walk could not be completed"
-// (err != nil — a panesOfSession failure, a resolvePaneOwners failure, or a
-// context that expired or was cancelled mid-walk). The peers module (Item 1,
-// #988) needs that distinction: reporting a lookup failure the same way as
-// "no agent" would tell the SPA a live session has none.
+// (err != nil — a pane listing that failed, a frames-store or process-view
+// failure, or a context that expired or was cancelled mid-walk). The peers
+// module (Item 1, #988) needs that distinction: reporting a lookup failure the
+// same way as "no agent" would tell the SPA a live session has none.
 //
-// ONE memoizing process view and ONE deadline serve the whole request: a
-// process read is four `ps` forks on darwin (spec §3.4), and the frames of a
-// session share almost all of their ancestry, so the memo turns
-// O(frames × depth) reads into roughly O(distinct PIDs). Both are built here
-// and handed to every resolvePaneOwners call — never one per pane.
-//
-// A non-nil error from resolvePaneOwners discards the owners it returned
-// alongside it: a partial walk is not an answer, and half a pane's frames can
-// name a root that the rest of the walk would have rejected. Either way the
-// whole query answers "not found" rather than guessing.
+// It is an owner pass over one session (owner_pass.go): one process snapshot
+// of its own, the listing that finds the session's panes, and the listing
+// that re-checks them, all under ONE deadline that bounds the whole request.
+// The answer is the pass's, rules and all: the membership re-check against a
+// `join-pane` mid-walk, the clock read after it, and "a partial walk is not
+// an answer".
 func (m *Module) resolveSessionOwnerErr(ctx context.Context, code string) (PaneOwner, bool, error) {
 	if m.frames == nil || m.tmux == nil || code == "" {
 		return PaneOwner{}, false, nil
@@ -125,110 +119,13 @@ func (m *Module) resolveSessionOwnerErr(ctx context.Context, code string) (PaneO
 	ctx, cancel := context.WithTimeout(ctx, provenanceTimeout)
 	defer cancel()
 
-	panes, err := m.panesOfSession(ctx, code)
-	if err != nil {
-		return PaneOwner{}, false, err
+	pass := m.NewOwnerPass(nil)
+	pass.Resolve(ctx, code)
+	res := pass.Confirm(ctx)[code]
+	if res.Err != nil {
+		return PaneOwner{}, false, res.Err
 	}
-
-	procs := liveProcs{read: newMemoProcReader(readProcessInfoFn)}
-	var best PaneOwner
-	found := false
-	for _, paneID := range panes {
-		// A pane whose current process cannot be resolved contributes nothing
-		// (spec §5.3 step 2). That is not an error: the session's other panes
-		// may still have an answer.
-		panePID, err := resolvePanePIDFn(m.tmux, paneID)
-		if err != nil {
-			continue
-		}
-		owners, err := m.resolvePaneOwners(ctx, paneID, panePID, procs)
-		if err != nil {
-			return PaneOwner{}, false, err
-		}
-		if len(owners) == 0 {
-			continue
-		}
-		// The membership decided by panesOfSession is stale by the time the
-		// walk finishes: resolvePaneOwners is the slow part of the request
-		// (four `ps` forks per distinct PID), and a `join-pane` inside that
-		// window moves the pane — and whatever agent is now running in it —
-		// into a DIFFERENT session. Neither generation sample notices: both
-		// sessions live on the same tmux server, so the stamp is identical
-		// on both sides and the answer is reported as trustworthy.
-		//
-		// So the pane is asked again, at the point its answer is about to be
-		// used, and an answer that can no longer be confirmed as this
-		// session's is dropped rather than reported.
-		stillOurs := m.paneStillInSession(ctx, paneID, code)
-		// The re-check is itself a tmux round trip, and it is the LAST thing
-		// done before an owner is adopted — so the clock is read once more
-		// here, after it, and not only before. A round trip that completes as
-		// its context expires returns a perfectly good answer with no error
-		// (there is nothing left for CommandContext to kill), and adopting it
-		// would answer a request that is already out of time: exactly what the
-		// deadline is for. An expired ctx ends the walk as "no answer", the
-		// same as a store failure — never as the owners found so far.
-		//
-		// This check comes BEFORE the membership verdict is acted on, because
-		// the deadline is the reason a re-check fails most often: a cancelled
-		// round trip reports "not confirmed as ours", and skipping just that
-		// pane would let the walk finish and answer with whatever earlier pane
-		// it had already adopted — an out-of-time answer, and quite possibly
-		// the wrong root, since the pane that never got confirmed may be the
-		// one that would have won.
-		if err := ctx.Err(); err != nil {
-			return PaneOwner{}, false, err
-		}
-		if !stillOurs {
-			continue
-		}
-		for _, owner := range owners {
-			// The session-id filter lives HERE, not in resolvePaneOwners: a
-			// root that never reported an identity is still a root, it just
-			// cannot answer this question.
-			if owner.SessionID == "" {
-				continue
-			}
-			if !found || betterOwner(owner, best) {
-				best, found = owner, true
-			}
-		}
-	}
-	// The loop above can finish — with panes exhausted, or never having had
-	// any to look at — in the same instant the deadline does: panesOfSession
-	// can swallow a mid-enumeration PaneSessionID failure into an empty pane
-	// list (see its own comment), and a pane whose PID could not be resolved,
-	// or whose owners came back empty, skips the ctx.Err() check above
-	// entirely. Either way this would answer "no owner" (found=false,
-	// err=nil) for a request that in fact never finished the walk. So the deadline is read once more here, after the
-	// loop, the same as it is read inside it: an expired ctx overrides
-	// whatever the loop concluded, success included, because a "found" from a
-	// walk that ran out of time is exactly as untrustworthy as a "not found"
-	// from one.
-	if err := ctx.Err(); err != nil {
-		return PaneOwner{}, false, err
-	}
-	return best, found, nil
-}
-
-// paneStillInSession re-reads the pane's tmux session id and reports whether it
-// is still the session behind `code`. Matched by session ID and encoded with
-// the same pure function panesOfSession uses, for the same reason: a name would
-// reintroduce the rename window this route exists to avoid.
-//
-// Anything short of a confirmed match is a no: a pane that cannot be read, an
-// id that cannot be encoded, and an id that encodes to another code are all
-// "not confirmed as ours", and none of them may be answered with.
-func (m *Module) paneStillInSession(ctx context.Context, paneID, code string) bool {
-	tmuxID, err := m.tmux.PaneSessionID(ctx, paneID)
-	if err != nil {
-		return false
-	}
-	paneCode, err := session.EncodeSessionID(tmuxID)
-	if err != nil {
-		return false
-	}
-	return paneCode == code
+	return res.Owner, res.Found, nil
 }
 
 // betterOwner is the multi-root tie-break: most recently seen wins, and equal
@@ -239,71 +136,4 @@ func betterOwner(candidate, incumbent PaneOwner) bool {
 		return candidate.LastSeenAt > incumbent.LastSeenAt
 	}
 	return candidate.FrameID < incumbent.FrameID
-}
-
-// panesOfSession lists the panes of the session behind `code` that could
-// possibly answer — i.e. the panes that have at least one frame. The Executor
-// interface cannot enumerate a session's panes (ActivePaneMetadata is the
-// active pane only), and a pane with no frame has no agent to report, so
-// starting from the frames costs nothing.
-//
-// Each pane is matched by tmux session ID, never by name. m.resolvePaneSession
-// looks like exactly this function and must not be used: it goes through
-// LookupCodeByName, whose cache is deliberately stale for up to 250 ms after an
-// external mutation. That is fine on the hook hot path it was built for, and
-// wrong here — rename session1 away and session2 into its name inside that
-// window and a query for session1's code can be answered with session2's agent,
-// with the generation stamp matching and the pane-tree check passing too. A
-// session id is immutable for the life of the session and EncodeSessionID is a
-// pure function of it, so this route has no such window. It is the same reason
-// handler.go prefers TmuxSessionID over the name whenever a hook carries one.
-//
-// An error at either step excludes that pane, with no fallback to a name
-// lookup.
-//
-// Enumeration is under the request deadline like everything else: it is one
-// tmux round trip per distinct pane that has a frame, spent before a single
-// process has been read, and a request that is already out of time must not
-// spend any of them. ctx's error ends the enumeration, and the caller reads
-// that the same way it reads a store failure — no answer.
-func (m *Module) panesOfSession(ctx context.Context, code string) ([]string, error) {
-	frames, err := m.frames.ListAll()
-	if err != nil {
-		return nil, err
-	}
-	panes := make([]string, 0, len(frames))
-	seen := make(map[string]bool, len(frames))
-	for _, frame := range frames {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if seen[frame.PaneID] {
-			continue
-		}
-		seen[frame.PaneID] = true
-		tmuxID, err := m.tmux.PaneSessionID(ctx, frame.PaneID)
-		if err != nil {
-			// A lookup failure is ordinarily just this pane's exclusion (the
-			// UnresolvablePaneSessionID_PaneExcluded case), but a failure
-			// caused by the request's own deadline expiring mid-call is not
-			// "this pane has no session" — it is "the enumeration did not
-			// finish". Folding it into the same continue would return
-			// whatever panes were found so far, err:nil, and the caller
-			// would read that as a complete, if short, membership list
-			// rather than the incomplete walk it actually is.
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return nil, ctxErr
-			}
-			continue
-		}
-		paneCode, err := session.EncodeSessionID(tmuxID)
-		if err != nil {
-			continue
-		}
-		if paneCode != code {
-			continue
-		}
-		panes = append(panes, frame.PaneID)
-	}
-	return panes, nil
 }

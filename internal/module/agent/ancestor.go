@@ -43,8 +43,9 @@ func (v AncestorVerdict) String() string {
 // doing so: provenance_test.go:170 deliberately makes the sender's 1st/2nd/3rd
 // process read return different values to exercise the post-Upsert reconcile,
 // so a memo on the hook path would break that test's premise while leaving it
-// green for the wrong reason. The request-scoped memo belongs to the
-// provenance query alone.
+// green for the wrong reason. No production caller memoises a procReader: the
+// owner pass, which reads each PID once for the whole pass, does it through a
+// process snapshot (owner_pass.go), not through this type.
 type procReader func(pid int) (agentpkg.ProcessInfo, error)
 
 // liveProcs is the ProcessView over the per-PID seams, the one the hook path
@@ -59,7 +60,8 @@ type procReader func(pid int) (agentpkg.ProcessInfo, error)
 // (provenance_test.go) makes those reads answer differently on purpose. A view
 // that remembered the first answer would break that premise while leaving the
 // test green for the wrong reason. A memo is the caller's choice, made by the
-// `read` it passes, and the provenance query is the only caller that makes it.
+// `read` it passes; only the test fixtures make it, to stand a memoised view in
+// for the owner pass's snapshot.
 type liveProcs struct {
 	read procReader
 }
