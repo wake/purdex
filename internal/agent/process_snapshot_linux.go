@@ -6,6 +6,10 @@ import (
 	"fmt"
 )
 
+// procIdentity is empty: Linux keeps no identity to re-check (see
+// procArgsPlatform).
+type procIdentity struct{}
+
 // snapshotProcessesPlatform reads the whole table with one ps fork. PPID and
 // lstart come from the same columns the per-PID reader asks ps for, so the
 // start time text and its parse match it.

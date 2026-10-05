@@ -1,10 +1,8 @@
 package agent
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // parsePSTable turns `ps -A -o pid=,ppid=,lstart=` output into snapshot
@@ -31,10 +29,7 @@ func parsePSTable(out []byte) map[int]*snapshotEntry {
 			continue
 		}
 		e := &snapshotEntry{ppid: ppid, lstart: strings.TrimSpace(rest)}
-		e.start, err = time.ParseInLocation(psLstartLayout, e.lstart, time.Local)
-		if err != nil {
-			e.startErr = fmt.Errorf("parse start time for pid %d: %w", pid, err)
-		}
+		e.start, e.startErr = parseLstart(pid, e.lstart)
 		procs[pid] = e
 	}
 	return procs

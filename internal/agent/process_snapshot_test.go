@@ -338,6 +338,16 @@ func TestProcessSnapshot_IdentityRecheck_Seam(t *testing.T) {
 			kp.Proc.P_starttime.Sec++
 			return kp, nil
 		}},
+		// A PID can be reused within one second, so the second alone does
+		// not tell the two processes apart.
+		{"same second, different microsecond", func(pid int) (*unix.KinfoProc, error) {
+			kp, err := orig(pid)
+			if err != nil {
+				return nil, err
+			}
+			kp.Proc.P_starttime.Usec = (kp.Proc.P_starttime.Usec + 1) % 1_000_000
+			return kp, nil
+		}},
 		{"pid gone", func(pid int) (*unix.KinfoProc, error) { return nil, unix.EIO }},
 	}
 	for _, tc := range cases {
@@ -359,6 +369,76 @@ func TestProcessSnapshot_IdentityRecheck_Seam(t *testing.T) {
 				t.Fatalf("identity re-checked %d times over two Reads, want 1 (the failure is remembered)", got)
 			}
 		})
+	}
+}
+
+// In a fall-back hour one local text names two instants, and lstart is that
+// text. The public start must be the text parsed the way the per-PID reader
+// parses it, whichever instant that lands on, while the identity re-check
+// keeps comparing the exact instant and so still knows the process.
+func TestProcessSnapshot_StartTime_DSTFallBack(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("load America/New_York: %v", err)
+	}
+	origLocal := time.Local
+	time.Local = ny
+	t.Cleanup(func() { time.Local = origLocal })
+
+	// 2025-11-02 01:30 happens twice in New York: in EDT, then an hour later
+	// in EST.
+	const text = "Sun Nov  2 01:30:00 2025"
+	const usec = 123456
+	self := os.Getpid()
+	parsedElsewhere := 0
+	for _, at := range []time.Time{
+		time.Date(2025, time.November, 2, 5, 30, 0, 0, time.UTC),
+		time.Date(2025, time.November, 2, 6, 30, 0, 0, time.UTC),
+	} {
+		t.Run(at.Format(time.RFC3339), func(t *testing.T) {
+			e := newDarwinEntry(self, os.Getppid(), at.Unix(), usec)
+			if e.lstart != text {
+				t.Fatalf("lstart = %q, want the instant's local text %q", e.lstart, text)
+			}
+			want, err := time.ParseInLocation(psLstartLayout, e.lstart, time.Local)
+			if err != nil {
+				t.Fatalf("parse %q: %v", e.lstart, err)
+			}
+			if !want.Equal(at) {
+				parsedElsewhere++
+			}
+			if e.startErr != nil {
+				t.Fatalf("startErr = %v", e.startErr)
+			}
+			if !e.start.Equal(want) || e.start.Location() != time.Local {
+				t.Fatalf("start = %v (%v), want %v in time.Local, as ps's text parses", e.start, e.start.Location(), want)
+			}
+			if wantID := (procIdentity{sec: at.Unix(), usec: usec}); e.identity != wantID {
+				t.Fatalf("identity = %+v, want the exact %+v", e.identity, wantID)
+			}
+
+			orig := kernProcPid
+			kernProcPid = func(int) (*unix.KinfoProc, error) {
+				kp := &unix.KinfoProc{}
+				kp.Proc.P_starttime.Sec = at.Unix()
+				kp.Proc.P_starttime.Usec = usec
+				return kp, nil
+			}
+			t.Cleanup(func() { kernProcPid = orig })
+			snap := &ProcessSnapshot{procs: map[int]*snapshotEntry{self: e}}
+			info, err := snap.Read(self)
+			if err != nil {
+				t.Fatalf("Read with the kernel reporting the same exact start: %v", err)
+			}
+			if !info.StartTime.Equal(want) {
+				t.Fatalf("Read StartTime = %v, want %v", info.StartTime, want)
+			}
+		})
+	}
+	// Both occurrences share one text, so exactly one parses to another
+	// instant. Without that the re-check case above proves nothing.
+	if parsedElsewhere != 1 {
+		t.Fatalf("%d occurrences parse to another instant, want 1", parsedElsewhere)
 	}
 }
 

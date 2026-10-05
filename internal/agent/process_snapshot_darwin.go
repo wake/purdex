@@ -22,6 +22,13 @@ var kernProcArgs2 = func(pid int) ([]byte, error) {
 	return unix.SysctlRaw("kern.procargs2", pid)
 }
 
+// procIdentity is the kernel's full p_starttime. Seconds alone do not tell
+// two processes apart: a PID can be reused within the same second.
+type procIdentity struct {
+	sec  int64
+	usec int32
+}
+
 // snapshotProcessesPlatform reads the whole table with one sysctl, no fork.
 // PPID and start time are the same kinfo_proc fields ps prints for ppid and
 // lstart.
@@ -41,19 +48,27 @@ func snapshotProcessesPlatform(ctx context.Context) (map[int]*snapshotEntry, err
 		if pid <= 0 {
 			continue
 		}
-		// ps prints lstart from this field to the second, in the local zone.
-		// Frames store that text and the registry compares StartTime to the
-		// second, so the snapshot keeps exactly that precision and zone:
-		// whole seconds in time.Local, which is also what parsing lstart in
-		// time.Local gives the per-PID reader.
-		start := time.Unix(kps[i].Proc.P_starttime.Sec, 0)
-		procs[pid] = &snapshotEntry{
-			ppid:   int(kps[i].Eproc.Ppid),
-			lstart: start.Format(psLstartLayout),
-			start:  start,
-		}
+		st := kps[i].Proc.P_starttime
+		procs[pid] = newDarwinEntry(pid, int(kps[i].Eproc.Ppid), st.Sec, st.Usec)
 	}
 	return procs, nil
+}
+
+// newDarwinEntry builds the entry for one kinfo_proc row. ps prints lstart
+// from p_starttime to the second, in the local zone, and frames store that
+// text. StartTime is then that text parsed exactly as the per-PID reader
+// parses ps's, not the exact instant: in a fall-back hour the text names two
+// instants and the parse may pick the other one, and the registry compares
+// StartTime with what that parse gave. The exact instant is kept apart, as
+// the identity the re-check compares.
+func newDarwinEntry(pid, ppid int, sec int64, usec int32) *snapshotEntry {
+	e := &snapshotEntry{
+		ppid:     ppid,
+		lstart:   time.Unix(sec, 0).Format(psLstartLayout),
+		identity: procIdentity{sec: sec, usec: usec},
+	}
+	e.start, e.startErr = parseLstart(pid, e.lstart)
+	return e
 }
 
 // procArgsPlatform reads ExePath / Argv for a PID the snapshot saw, then
@@ -66,12 +81,12 @@ func procArgsPlatform(pid int, e *snapshotEntry) (string, []string, error) {
 	// the snapshot also fails the read, and the caller has to be able to tell
 	// "the snapshot's process went away" from "this process is unreadable".
 	kp, kerr := kernProcPid(pid)
-	switch {
-	case kerr != nil || kp == nil:
+	if kerr != nil || kp == nil {
 		return "", nil, fmt.Errorf("pid %d is gone: %w", pid, ErrProcessChanged)
-	case kp.Proc.P_starttime.Sec != e.start.Unix():
-		return "", nil, fmt.Errorf("pid %d now started %s, snapshot saw %s: %w",
-			pid, time.Unix(kp.Proc.P_starttime.Sec, 0).Format(psLstartLayout), e.lstart, ErrProcessChanged)
+	}
+	if now := (procIdentity{sec: kp.Proc.P_starttime.Sec, usec: kp.Proc.P_starttime.Usec}); now != e.identity {
+		return "", nil, fmt.Errorf("pid %d now started at %d.%06d, snapshot saw %d.%06d: %w",
+			pid, now.sec, now.usec, e.identity.sec, e.identity.usec, ErrProcessChanged)
 	}
 	if err != nil {
 		return "", nil, err

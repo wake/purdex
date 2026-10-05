@@ -58,6 +58,10 @@ type snapshotEntry struct {
 	// startErr is set where the platform reads lstart as text and the text
 	// did not parse; Read reports it rather than a zero StartTime.
 	startErr error
+	// identity is what procArgsPlatform re-reads to tell the process the
+	// table saw from one that took its PID since. It is the platform's exact
+	// record, never start: that is only as exact as ps's text.
+	identity procIdentity
 
 	argsRead bool
 	exePath  string
