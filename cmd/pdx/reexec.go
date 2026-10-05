@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"syscall"
 )
 
 // reexecPlan is how this serve process was started — captured at the top of
@@ -51,11 +52,20 @@ func captureReexecPlan(executable func() (string, error), args, env []string) (*
 // but handed across the exec (clearCloseOnExec), so there is no gap in which a
 // concurrent `pdx start` could take it. The pid
 // stays the same, so `pdx stop/status` and the App's ownership record stay
-// valid. exec returns only on failure: log it and exit non-zero (the SPA
-// then sees the host stay down and points at this log).
+// valid.
+//
+// syscall.ForkLock is held (exclusively) from just before the CLOEXEC clear
+// until execFn returns: os/exec forks under it, so a straggler goroutine
+// cannot fork in the window where the lock fd is inheritable and leave a
+// child that keeps the data dir locked after this process is gone. exec
+// itself does not take ForkLock, so holding it across the call is safe. exec
+// returns only on failure: close-on-exec is then restored before the unlock,
+// and we log it and exit non-zero (the SPA then sees the host stay down and
+// points at this log).
 func reexec(p *reexecPlan, execFn func(string, []string, []string) error, logf func(string, ...any), exit func(int)) {
 	logf("restart: exec %s", p.path)
 	if p.lock != nil {
+		syscall.ForkLock.Lock()
 		// As late as possible: until here the fd is close-on-exec, so a child
 		// forked while the stores closed cannot carry the lock past us. On
 		// failure the exec closes the fd and the new image re-acquires.
@@ -68,6 +78,12 @@ func reexec(p *reexecPlan, execFn func(string, []string, []string) error, logf f
 		}
 	}
 	err := execFn(p.path, p.argv, p.env)
+	if p.lock != nil {
+		// exec failed and this process lives on until exit(1): make the fd
+		// close-on-exec again before any fork can see it, then let forks resume.
+		syscall.CloseOnExec(int(p.lock.Fd()))
+		syscall.ForkLock.Unlock()
+	}
 	runtime.KeepAlive(p.lock)
 	logf("restart: exec %s failed: %v", p.path, err)
 	exit(1)

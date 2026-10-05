@@ -150,3 +150,61 @@ func TestRestartStillWanted_SignalLandingDuringStopIsSeen(t *testing.T) {
 		t.Fatalf("logs = %v", logs)
 	}
 }
+
+// J1: a fork between the CLOEXEC clear and the exec would hand the lock to a
+// child. syscall.ForkLock is held exclusively across both.
+func TestReexec_HoldsForkLockWhileExecRuns(t *testing.T) {
+	p := lockedPlan(t, func(*os.File) error { return nil })
+	var heldInExec bool
+	reexec(p, func(string, []string, []string) error {
+		if syscall.ForkLock.TryRLock() {
+			syscall.ForkLock.RUnlock()
+		} else {
+			heldInExec = true
+		}
+		return errors.New("x")
+	}, func(string, ...any) {}, func(int) {})
+	if !heldInExec {
+		t.Fatal("ForkLock was not held exclusively while execFn ran")
+	}
+	if !syscall.ForkLock.TryRLock() {
+		t.Fatal("ForkLock still held after reexec returned")
+	}
+	syscall.ForkLock.RUnlock()
+}
+
+func TestReexec_NoLockDoesNotTakeForkLock(t *testing.T) {
+	var free bool
+	reexec(&reexecPlan{path: "/x"}, func(string, []string, []string) error {
+		if free = syscall.ForkLock.TryRLock(); free {
+			syscall.ForkLock.RUnlock()
+		}
+		return errors.New("x")
+	}, func(string, ...any) {}, func(int) {})
+	if !free {
+		t.Fatal("ForkLock taken although there is no pid lock")
+	}
+}
+
+func TestReexec_FailedExecRestoresCloseOnExec(t *testing.T) {
+	p := lockedPlan(t, nil) // real clearCloseOnExec
+	var inExec int
+	reexec(p, func(string, []string, []string) error {
+		fl, _, errno := syscall.Syscall(syscall.SYS_FCNTL, p.lock.Fd(), syscall.F_GETFD, 0)
+		if errno != 0 {
+			t.Fatal(errno)
+		}
+		inExec = int(fl)
+		return errors.New("x")
+	}, func(string, ...any) {}, func(int) {})
+	if inExec&syscall.FD_CLOEXEC != 0 {
+		t.Fatal("fd still close-on-exec during exec; hand-off is broken")
+	}
+	fl, _, errno := syscall.Syscall(syscall.SYS_FCNTL, p.lock.Fd(), syscall.F_GETFD, 0)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	if int(fl)&syscall.FD_CLOEXEC == 0 {
+		t.Fatal("fd not close-on-exec again after a failed exec")
+	}
+}
