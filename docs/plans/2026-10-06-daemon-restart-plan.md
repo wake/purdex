@@ -1601,15 +1601,13 @@ export async function countRunningWorkers(hostId: string, timeoutMs = WORKER_COU
   ```
 
 - `RestartDeps` gains `readShutdownWarnings: (hostId: string, bootId: string) => Promise<number>`. The default is `readShutdownWarnings` below, and the test `deps()` default is `async () => 0`.
-- In the polling loop, success becomes:
+- Only "a new boot id was seen" races the 60 s deadline. The warnings read happens **after** the race, with its own timeout. A slow read must never turn a confirmed restart into "did not come back" (spec §3.3, D13). This was corrected after the Task 5 review; the first version read inside the race. The polling loop returns `{ ipc, bootId: now }`, and after the race:
 
   ```ts
-      if (now !== null && now !== before) {
-        return { ipc, shutdownWarnings: await d.readShutdownWarnings(hostId, now) }
-      }
+  if (r === TIMED_OUT) throw new DaemonRestartError('timeout')
+  // (finally: expired = true; clearTimeout(timer))
+  return { ipc: r.ipc, shutdownWarnings: await d.readShutdownWarnings(hostId, r.bootId) }
   ```
-
-  and `attempt`'s type becomes `Promise<RestartResult | typeof TIMED_OUT>`.
 - New export:
 
   ```ts
