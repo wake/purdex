@@ -21,6 +21,7 @@ import (
 	"lab.protype.tw/wake/nexen/execution"
 	"lab.protype.tw/wake/nexen/store"
 
+	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -318,7 +319,7 @@ func TestHandoffSuccessBodyAndRequest(t *testing.T) {
 		SandboxProfile:  "handoff",
 		Mounts:          []execution.Mount{{Path: hoCwd, Role: "cwd", Writable: true}},
 		Origin:          "purdex://host/host1/session/" + hoCode,
-		Labels:          map[string]string{"source": "purdex", "handoff_session": hoCode},
+		Labels:          map[string]string{"source": "purdex", "handoff_session": hoCode, "purdex.session_id": hoSessionID},
 		ResumeSessionID: hoSessionID,
 	}, reqs[0])
 	assert.Empty(t, env.tmux.RawKeysSent(), "no rollback on success")
@@ -635,4 +636,82 @@ func TestHandoffKeepSessionFalseGenerationMovedDuringDelegateKeeps(t *testing.T)
 	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: hoTmuxID, Expected: hoInstance}}, env.tmux.KillIfInstanceCalls(),
 		"the kill was asked of the generation the request verified, and declined")
 	assert.Contains(t, strings.Join(logged, "\n"), "generation", "the refusal is logged")
+}
+
+// --- conversation entity: owner check, sid lock, rejected row (D2, D7, D17) ---
+
+func (e *handoffEnv) untouched(t *testing.T) {
+	t.Helper()
+	assert.Empty(t, e.tmux.RawKeysSent(), "CC must be untouched")
+	assert.Empty(t, e.svc.Requests(), "no delegate")
+}
+
+func TestHandoff_RefusesWhenWorkerOwnsSession(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.m.sys.store.(*fakeNexStore).listRows = []store.Execution{{ID: "E7", State: store.StateIdle, SessionID: hoSessionID, CreatedAt: 1}}
+	status, body := env.post(t, hoCode, goodBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "session_owned", body["code"])
+	assert.Equal(t, "worker", body["owner"])
+	assert.Equal(t, "E7", body["execution_id"])
+	env.untouched(t)
+}
+
+func TestHandoff_TerminalOwnerChecks(t *testing.T) {
+	t.Run("another pane runs S", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		env.terminals.live = map[string][]agent.TerminalSession{hoSessionID: {{PaneID: "%99", SessionID: hoSessionID, AgentType: "cc", Verified: true}}}
+		status, body := env.post(t, hoCode, goodBody())
+		assert.Equal(t, http.StatusConflict, status)
+		assert.Equal(t, "session_owned", body["code"])
+		env.untouched(t)
+	})
+	t.Run("unverified other pane", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		env.terminals.live = map[string][]agent.TerminalSession{hoSessionID: {{PaneID: "%99", SessionID: hoSessionID, AgentType: "cc"}}}
+		status, body := env.post(t, hoCode, goodBody())
+		assert.Equal(t, http.StatusServiceUnavailable, status)
+		assert.Equal(t, "owner_check_failed", body["code"])
+		env.untouched(t)
+	})
+	t.Run("its own pane is the owner being transferred", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		env.terminals.live = map[string][]agent.TerminalSession{hoSessionID: {{PaneID: hoOwnerPane, SessionID: hoSessionID, AgentType: "cc", Verified: true}}}
+		status, body := env.post(t, hoCode, goodBody())
+		assert.Equal(t, http.StatusOK, status, "%v", body)
+	})
+	t.Run("sid lock held", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		require.True(t, env.m.locks.TryLock(sidLockKey(hoSessionID)))
+		status, body := env.post(t, hoCode, goodBody())
+		assert.Equal(t, http.StatusConflict, status)
+		assert.Equal(t, "transfer_in_progress", body["code"])
+		env.untouched(t)
+	})
+}
+
+func TestHandoff_RejectedRolledBackExitsTheRow(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.svc.result = execution.Result{ID: "R1", State: store.StateRejected, RejectReason: "session_expired"}
+	env.m.sys.store = &fakeNexStore{results: []getResult{{exec: store.Execution{ID: "R1", State: store.StateRejected, ResumeSessionID: hoSessionID}}}}
+	reviveCCAfterKeys(env)
+	status, body := env.post(t, hoCode, goodBody())
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "delegate_rejected", body["code"])
+	assert.Equal(t, true, body["rolled_back"])
+	assert.Equal(t, "R1", body["execution_id"])
+	assert.Equal(t, true, body["exited"])
+	assert.Len(t, env.svc.ArchiveCalls(), 1)
+}
+
+func TestHandoff_RejectedNotRolledBackKeepsTheRow(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.svc.result = execution.Result{ID: "R1", State: store.StateRejected, RejectReason: "session_expired"}
+	status, body := env.post(t, hoCode, map[string]any{"expected_tmux_instance": hoInstance})
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, false, body["rolled_back"])
+	assert.Equal(t, "R1", body["execution_id"])
+	assert.Empty(t, env.svc.ArchiveCalls())
+	_, has := body["exited"]
+	assert.False(t, has, "exited is only reported when rolled back")
 }

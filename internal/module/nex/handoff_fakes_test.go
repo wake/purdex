@@ -634,6 +634,8 @@ var _ nexStore = (*fakeNexStore)(nil)
 // session.HandoffLocksKey, and m.locks is resolved from it the way Init
 // does — so a test can hold the lock "as the stream module" through the
 // same instance.
+const hoOwnerPane = "%7" // the pane of the CC being handed off
+
 type handoffEnv struct {
 	m         *Module
 	tmux      *tmux.FakeExecutor
@@ -707,7 +709,7 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 		},
 	}
 	owners := &stubOwnerResolver{
-		owner: agent.PaneOwner{AgentType: "cc", SessionID: hoSessionID, Cwd: hoCwd},
+		owner: agent.PaneOwner{AgentType: "cc", SessionID: hoSessionID, Cwd: hoCwd, TmuxPaneID: hoOwnerPane},
 		found: true,
 	}
 	ops := &recordingCCOperator{tmux: fakeTx}
@@ -715,7 +717,7 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 	svc := &fakeNexService{result: execution.Result{ID: "exec-1", State: store.StateQueued, EffectiveProfile: "handoff"}}
 
 	m := &Module{
-		sys: engine{handler: http.NotFoundHandler(), service: svc},
+		sys: engine{handler: http.NotFoundHandler(), service: svc, store: &fakeNexStore{}},
 		opts: nexen.Options{
 			Config: &nexconfig.Config{HostID: "host1", Sandbox: sandbox.Policy{MaxProfile: "handoff", DefaultProfile: "trusted"}},
 			Auth:   principalAuth("host1"),

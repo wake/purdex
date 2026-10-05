@@ -81,6 +81,9 @@ func sortNewestFirst(es []store.Execution) {
 // sidLockKey is the handoff-lock key for a Claude session id.
 func sidLockKey(sid string) string { return "sid:" + sid }
 
+// purdexSessionLabel marks an execution with the Claude session it carries (D17).
+const purdexSessionLabel = "purdex.session_id"
+
 // checkOwners: nil when nothing but the transferred owner holds S. allowExec /
 // allowPane name that owner ("" = none).
 // 409 session_owned {owner: "terminal", session_id, tmux_pane_id} |
