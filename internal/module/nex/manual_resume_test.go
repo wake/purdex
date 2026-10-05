@@ -1,0 +1,248 @@
+package nex
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"lab.protype.tw/wake/nexen/store"
+
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/agent"
+)
+
+func ev(source string) agent.SessionStartEvent {
+	return agent.SessionStartEvent{AgentType: "cc", SessionID: "S", Source: source, TmuxSession: "proj-2", TmuxPaneID: "%4", FrameID: "F"}
+}
+
+func liveTerminal(env *handoffEnv, verified bool) {
+	env.terminals.live = map[string][]agent.TerminalSession{"S": {{FrameID: "F", PaneID: "%4", SessionID: "S", AgentType: "cc", Verified: verified}}}
+}
+
+// hostEventSink collects what the module broadcasts on the host-events bus.
+type hostEventSink struct {
+	t   *testing.T
+	sub *core.EventSubscriber
+}
+
+// captureHostEvents gives the env a real broadcaster (it has no core) and
+// subscribes a test reader to it.
+func (e *handoffEnv) captureHostEvents(t *testing.T) *hostEventSink {
+	t.Helper()
+	e.m.core = &core.Core{Events: core.NewEventsBroadcaster()}
+	sub := e.m.core.Events.AddTestSubscriber()
+	t.Cleanup(func() { e.m.core.Events.RemoveTestSubscriber(sub) })
+	return &hostEventSink{t: t, sub: sub}
+}
+
+// events drains what is queued now and returns the frames of one type.
+func (s *hostEventSink) events(typ string) []core.HostEvent {
+	var out []core.HostEvent
+	for {
+		select {
+		case raw := <-s.sub.SendCh():
+			var he core.HostEvent
+			require.NoError(s.t, json.Unmarshal(raw, &he))
+			if he.Type == typ {
+				out = append(out, he)
+			}
+		default:
+			return out
+		}
+	}
+}
+
+func archivedIDs(env *handoffEnv) []string {
+	env.svc.mu.Lock()
+	defer env.svc.mu.Unlock()
+	var ids []string
+	for _, r := range env.svc.archiveReqs {
+		ids = append(ids, r.ExecutionID)
+	}
+	return ids
+}
+
+func TestManualResume_ExitsLiveWorkersAndBroadcasts(t *testing.T) {
+	env := newHandoffEnv(t)
+	sub := env.captureHostEvents(t)
+	liveTerminal(env, true)
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1), row("E2", "running", false, "", "S", 2)}
+	env.svc.lease = store.Lease{ID: "L-d"}
+
+	env.m.onSessionStart(ev("resume"))
+
+	if len(env.svc.terminateCalls) != 2 || len(env.svc.ArchiveCalls()) != 2 {
+		t.Fatalf("terminate=%d archive=%d", len(env.svc.terminateCalls), len(env.svc.ArchiveCalls()))
+	}
+	got := sub.events("nex-worker-exited")
+	if len(got) != 2 {
+		t.Fatalf("events = %v", got)
+	}
+	var v map[string]string
+	_ = json.Unmarshal([]byte(got[0].Value), &v)
+	if v["reason"] != "manual_resume" || v["session_id"] != "S" || v["tmux_session"] != "proj-2" || v["execution_id"] == "" {
+		t.Fatalf("value = %v", v)
+	}
+	if got[0].Session != "proj-2" {
+		t.Fatalf("frame session = %q", got[0].Session)
+	}
+	if len(env.svc.acquires) == 0 || env.svc.acquires[0] != "pdx:"+testHostID {
+		t.Fatalf("the daemon acts as the bare host principal: %v", env.svc.acquires)
+	}
+}
+
+func TestManualResume_DoesNothingWhen(t *testing.T) {
+	cases := map[string]func(env *handoffEnv) agent.SessionStartEvent{
+		"source is clear":   func(env *handoffEnv) agent.SessionStartEvent { liveTerminal(env, true); return ev("clear") },
+		"source is compact": func(env *handoffEnv) agent.SessionStartEvent { liveTerminal(env, true); return ev("compact") },
+		"not cc": func(env *handoffEnv) agent.SessionStartEvent {
+			liveTerminal(env, true)
+			e := ev("resume")
+			e.AgentType = "codex"
+			return e
+		},
+		"a Purdex transfer holds S": func(env *handoffEnv) agent.SessionStartEvent {
+			liveTerminal(env, true)
+			env.m.locks.TryLock(sidLockKey("S"))
+			return ev("resume")
+		},
+		"the terminal is gone":     func(env *handoffEnv) agent.SessionStartEvent { return ev("resume") },
+		"only an unverified frame": func(env *handoffEnv) agent.SessionStartEvent { liveTerminal(env, false); return ev("resume") },
+		"no live worker": func(env *handoffEnv) agent.SessionStartEvent {
+			liveTerminal(env, true)
+			fakeStore(env).listRows = nil
+			return ev("startup")
+		},
+		"engine unavailable": func(env *handoffEnv) agent.SessionStartEvent {
+			liveTerminal(env, true)
+			env.m.sys = engine{}
+			return ev("resume")
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := newHandoffEnv(t)
+			fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+			e := setup(env)
+			env.m.onSessionStart(e)
+			if len(env.svc.terminateCalls)+len(env.svc.ArchiveCalls()) != 0 {
+				t.Fatal("must not exit")
+			}
+		})
+	}
+}
+
+func TestManualResume_SkipsAWorkerBeingMovedAndReportsOnlySuccesses(t *testing.T) {
+	env := newHandoffEnv(t)
+	sub := env.captureHostEvents(t)
+	liveTerminal(env, true)
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1), row("E2", "failed", false, "S", "", 2)}
+	env.m.locks.TryLock(takeToTerminalLockKey("E1")) // E1 is mid-exit elsewhere
+	env.svc.archiveErr = errors.New("db busy")       // E2's archive fails -> not exited
+	env.m.onSessionStart(ev("resume"))
+	if len(sub.events("nex-worker-exited")) != 0 {
+		t.Fatal("no event for a worker that did not exit")
+	}
+}
+
+func TestManualResume_OverflowReconcilesEverySession(t *testing.T) {
+	env := newHandoffEnv(t)
+	// S has a verified terminal; T has none. Both have a live worker.
+	env.terminals.live = map[string][]agent.TerminalSession{"S": {{FrameID: "F", PaneID: "%4", SessionID: "S", AgentType: "cc", Verified: true}}}
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1), row("E2", "idle", false, "T", "", 2)}
+	env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
+	if ids := archivedIDs(env); len(ids) != 1 || ids[0] != "E1" {
+		t.Fatalf("archived = %v; want only E1 (S is in a terminal, T is not)", ids)
+	}
+}
+
+func TestManualResume_TruncatedScanStillExitsWhatItFound(t *testing.T) {
+	env := newHandoffEnv(t)
+	liveTerminal(env, true)
+	rows := make([]store.Execution, ownerScanPageSize*ownerScanMaxPages+1)
+	for i := range rows {
+		rows[i] = row(fmt.Sprintf("%06d", i), "terminated", false, "OTHER", "", int64(i))
+	}
+	rows[0] = row("000000", "idle", false, "S", "", 0) // on page 1
+	fakeStore(env).listRows = rows
+	env.m.onSessionStart(ev("resume"))
+	if len(env.svc.ArchiveCalls()) != 1 {
+		t.Fatal("the worker found before the cap must still exit")
+	}
+}
+
+func TestManualResume_StartSubscribesStopUnsubscribes(t *testing.T) {
+	env := newHandoffEnv(t)
+	if err := env.m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if env.terminals.subscribed == nil {
+		t.Fatal("Start must subscribe")
+	}
+	_ = env.m.Stop(context.Background())
+	if env.terminals.subscribed != nil {
+		t.Fatal("Stop must unsubscribe")
+	}
+}
+
+func TestManualResume_StartSkipsSubscriptionWhenInitFailed(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.m.initErr = errors.New("no engine")
+	require.NoError(t, env.m.Start(context.Background()))
+	assert.Nil(t, env.terminals.subscribed)
+}
+
+// waitArchived waits for the fake's archive call of exec (the re-check runs
+// on its own goroutine).
+func waitArchived(t *testing.T, env *handoffEnv, exec string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		for _, id := range archivedIDs(env) {
+			if id == exec {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 5*time.Millisecond, "the re-check must exit %s", exec)
+}
+
+func TestTakeToTerminal_SecondCheckAbortTriggersRecheckAfterUnlock(t *testing.T) {
+	env := newTTEnv(t)
+	env.terminals.byCall = ownerAfterFirstLook(tbSessionID)
+	env.store.listRows = []store.Execution{ttExec(store.StateIdle)}
+	status, _ := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusConflict, status)
+	waitArchived(t, env.handoffEnv, tbExecID)
+}
+
+func TestTakeback_SecondCheckAbortTriggersRecheckAfterUnlock(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.terminals.byCall = ownerAfterFirstLook(tbSessionID)
+	env.store.listRows = []store.Execution{idleExec()}
+	status, _ := env.post(t, hoCode, takebackBody())
+	require.Equal(t, http.StatusConflict, status)
+	waitArchived(t, env.handoffEnv, tbExecID)
+}
+
+func TestTakeToTerminal_FirstCheckAbortTriggersNoRecheck(t *testing.T) {
+	env := newTTEnv(t)
+	env.terminals.byCall = func(int) []agent.TerminalSession {
+		return []agent.TerminalSession{{PaneID: "%9", SessionID: tbSessionID, AgentType: "cc", Verified: true}}
+	}
+	env.store.listRows = []store.Execution{ttExec(store.StateIdle)}
+	status, _ := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusConflict, status)
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, 1, env.terminals.Calls(), "no re-check lookup")
+	assert.Empty(t, env.svc.ArchiveCalls())
+}
+
+// fakeStore is the env engine store (handoffEnv does not expose it).
+func fakeStore(env *handoffEnv) *fakeNexStore { return env.m.sys.store.(*fakeNexStore) }

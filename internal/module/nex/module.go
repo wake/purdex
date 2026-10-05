@@ -124,6 +124,8 @@ type Module struct {
 	assemble assembleFn        // default realAssemble; test seam
 	isDir    func(string) bool // default statIsDir; test seam
 	logf     func(string, ...any)
+
+	unsubscribeStarts func() // SessionStart hub subscription (manual_resume.go)
 }
 
 // New returns a Module wired with production defaults.
@@ -358,6 +360,9 @@ func (m *Module) Start(context.Context) error {
 	}
 	m.logf("nex: serving %s (host_id=%s, data_dir=%s, claude_bin=%s, profiles=%s, path_prepend=%s)",
 		RoutePrefix, cfg.HostID, cfg.DataDir, claudeBin, profilesText(cfg.Sandbox.MaxProfile, cfg.Sandbox.DefaultProfile), m.pathPrefix)
+	if m.terminals != nil {
+		m.unsubscribeStarts = m.terminals.SubscribeSessionStart(m.onSessionStart)
+	}
 	return nil
 }
 
@@ -382,6 +387,10 @@ func profilesText(maxProfile, defaultProfile string) string {
 // Validate error from Init is fatal to the daemon; an engine-assembly error
 // soft-fails, spec §4.4.1, and the lifecycle still walks this Module).
 func (m *Module) Stop(ctx context.Context) error {
+	if m.unsubscribeStarts != nil {
+		m.unsubscribeStarts()
+		m.unsubscribeStarts = nil
+	}
 	if m.sys.shutdown == nil {
 		return nil
 	}

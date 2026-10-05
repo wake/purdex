@@ -163,6 +163,17 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A second-check abort asks for one Q1 re-check of S once every lock is
+	// released (manual_resume.go): the terminal that appeared mid-transfer had
+	// its SessionStart skipped while we held sid:<S>. Registered before the
+	// execution and sid locks so (LIFO) it runs after both unlock.
+	recheckSid := ""
+	defer func() {
+		if recheckSid != "" {
+			m.recheckSession(recheckSid)
+		}
+	}()
+
 	// Step 1d: the execution lock (codex F1). Take-to-terminal names an
 	// execution by path and holds only this key; the session lock above
 	// does not exclude it. Both handlers settle → resume → exit the same
@@ -270,6 +281,7 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 	// window against an external resume; manual resumes are reconciled by
 	// the Q1 handler (P1a-4). Nothing was created here, so nothing to kill.
 	if herr := m.checkOwners(parent, sid, exec.ID, ""); herr != nil {
+		recheckSid = sid
 		fail(herr)
 		return
 	}

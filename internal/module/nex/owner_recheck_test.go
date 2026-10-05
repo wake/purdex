@@ -5,6 +5,7 @@ package nex
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,6 +13,14 @@ import (
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/tmux"
 )
+
+// awaitRecheck: the two lookups of the transfer plus the one Q1 re-check it
+// asks for after releasing its locks (manual_resume.go). The terminal's
+// owner here is a stub with no live worker row, so the re-check exits nothing.
+func awaitRecheck(t *testing.T, env *handoffEnv) {
+	t.Helper()
+	require.Eventually(t, func() bool { return env.terminals.Calls() == 3 }, 3*time.Second, time.Millisecond)
+}
 
 // ownerAfterFirstLook: no terminal on the first lookup, a verified one on
 // every later lookup (an external resume landing in between).
@@ -40,9 +49,9 @@ func TestTakeToTerminal_OwnerAppearsBeforeResume(t *testing.T) {
 	assert.Len(t, env.sessions.Creates(), 1)
 	assert.False(t, env.tmux.HasSession(ttName), "created session killed")
 	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: "$0", Expected: hoInstance}}, env.tmux.KillIfInstanceCalls())
-	assert.Equal(t, 2, env.terminals.Calls())
+	awaitRecheck(t, env.handoffEnv)
 	assert.Equal(t, []releaseCall{{tbExecID, tbLeaseID, tbPrincipal}}, env.svc.releases, "lease released on the early return")
-	assert.True(t, env.m.locks.TryLock(sidLockKey(tbSessionID)), "sid lock released")
+	assert.Eventually(t, func() bool { return env.m.locks.TryLock(sidLockKey(tbSessionID)) }, time.Second, time.Millisecond, "sid lock released")
 }
 
 func TestTakeback_OwnerAppearsBeforeResume(t *testing.T) {
@@ -55,7 +64,7 @@ func TestTakeback_OwnerAppearsBeforeResume(t *testing.T) {
 	assert.Empty(t, env.tmux.RawKeysSent(), "no keys")
 	assert.Empty(t, env.svc.terminateCalls)
 	assert.Empty(t, env.svc.ArchiveCalls())
-	assert.Equal(t, 2, env.terminals.Calls())
+	awaitRecheck(t, env.handoffEnv)
 	assert.Equal(t, []releaseCall{{tbExecID, tbLeaseID, tbPrincipal}}, env.svc.releases)
-	assert.True(t, env.m.locks.TryLock(sidLockKey(tbSessionID)), "sid lock released")
+	assert.Eventually(t, func() bool { return env.m.locks.TryLock(sidLockKey(tbSessionID)) }, time.Second, time.Millisecond, "sid lock released")
 }

@@ -80,6 +80,17 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A second-check abort asks for one Q1 re-check of S once every lock is
+	// released (manual_resume.go): the terminal that appeared mid-transfer had
+	// its SessionStart skipped while we held sid:<S>. Registered before the
+	// execution and sid locks so (LIFO) it runs after both unlock.
+	recheckSid := ""
+	defer func() {
+		if recheckSid != "" {
+			m.recheckSession(recheckSid)
+		}
+	}()
+
 	// Step 2: one take-to-terminal per execution at a time.
 	lockKey := takeToTerminalLockKey(execID)
 	if !m.locks.TryLock(lockKey) {
@@ -251,6 +262,7 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 	// This narrows that window but cannot close it: a manual resume is
 	// reconciled by the Q1 handler (P1a-4). The session just created goes.
 	if herr := m.checkOwners(parent, sid, allowExec, ""); herr != nil {
+		recheckSid = sid
 		killed := m.killCreatedSession(execID, info, herr.code)
 		if herr.detail == nil {
 			herr.detail = map[string]any{}
