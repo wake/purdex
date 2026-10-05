@@ -44,6 +44,8 @@ Origin: after enabling Nexen on air26 the user found no way to restart. The only
     - its fd stays open, not close-on-exec, and is named in `PDX_PIDLOCK_FD`;
     - the new image adopts the lock it already holds, since a flock lives on the open file description;
     - if the hand-off fails, the new image re-acquires the lock through the existing retry.
+    - Close-on-exec is cleared only immediately before the exec, after the stores are closed. Before that point, a straggler goroutine's child process could inherit the lock.
+    - **Known limitation:** if the binary on disk was rolled back to a version older than this feature, it does not know `PDX_PIDLOCK_FD`. It tries to take the lock through a new open file description, conflicts with the one it inherited, and fatals with "already running". That remote restart then leaves the daemon down. Recover with `pdx start` on that host. The limitation applies only to downgrades across this feature.
   - If exec fails, log it and exit non-zero. The SPA then sees the host stay down (§3.3).
 - While a restart is in progress, a second request gets `409 restart_in_progress`.
 - Once the shutdown sequence has started for any other reason (a signal, or a Serve failure), the endpoint answers `503 {"error":"shutting_down"}`. It never gives a 202 that nothing will honour.
