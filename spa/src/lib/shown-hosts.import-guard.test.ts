@@ -43,6 +43,7 @@ const STORE_IMPORTERS = [
 /** Importers of `lib/shown-hosts` (non-test), verbatim. */
 const READER_IMPORTERS = [
   'src/components/HandoffConfirmDialog.tsx',
+  'src/components/HandoffDialogHost.tsx',
   'src/components/HistoryPage.tsx',
   'src/components/HostHiddenPane.tsx',
   'src/components/NewTabPage.tsx',
@@ -55,6 +56,7 @@ const READER_IMPORTERS = [
   'src/components/hosts/OverviewSection.tsx',
   'src/components/hosts/SessionsSection.tsx',
   'src/components/hosts/nex/NexExecutionsTable.tsx',
+  'src/hooks/useHandoffCandidate.ts',
   'src/hooks/useNotificationDispatcher.ts',
   'src/hooks/useRouteSync.ts',
   'src/hooks/useShortcuts.ts',

@@ -31,6 +31,7 @@ import {
 } from './features/workspace'
 import { TabContextMenu } from './components/TabContextMenu'
 import { RenamePopover } from './components/RenamePopover'
+import { HandoffDialogHost } from './components/HandoffDialogHost'
 import { ThemeInjector } from './components/ThemeInjector'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { getPlatformCapabilities } from './lib/platform'
@@ -278,6 +279,8 @@ export default function App() {
             onClose={handleCloseWsContextMenu}
           />
         )}
+        {/* The one "Hand to nex" dialog: the pane context menu and the status bar open it through its store. */}
+        <HandoffDialogHost />
         </div>
       </div>
       <GlobalUndoToast />
