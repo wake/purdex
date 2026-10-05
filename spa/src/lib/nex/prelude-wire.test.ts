@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { PRELUDE_MAX_PAGE_ITEMS, PRELUDE_MAX_STRING_BYTES, sanitizePreludePage } from './prelude-wire'
 import sample from './__fixtures__/prelude-contract-sample.json'
+import golden from './__fixtures__/prelude-golden-nexen.json'
 
 const asst = (pos: string, text: string) => ({
   pos, kind: 'assistant', at: 1759651200123,
@@ -216,5 +217,78 @@ describe('contract sample (spec §4.3)', () => {
     expect(img).toMatchObject({ source: { type: 'omitted', media_type: 'image/png', bytes: 48213 } })
     const res = page.items.find((i) => i.kind === 'tool_result')
     expect(res).toMatchObject({ payload: { output: { text: 'README.md\nspa\n', total_lines: 2, total_bytes: 14, truncated: false } } })
+  })
+})
+
+// Nexen's early golden page: a real body from its real handler over a golden
+// transcript (spec §4.6). Where it and the hand-written sample disagree, it wins.
+describe('Nexen golden page (spec §4.6)', () => {
+  type Blk = Record<string, unknown>
+  const page = sanitizePreludePage(golden)!
+  const content = (pos: string): Blk[] => {
+    const it = page.items.find((i) => i.pos === pos)
+    return (it as unknown as { msg: { message: { content: Blk[] } } }).msg.message.content
+  }
+  const payloadOf = (pos: string) => (page.items.find((i) => i.pos === pos) as unknown as { payload: Record<string, unknown> }).payload
+  const noteOf = (pos: string) => page.items.find((i) => i.pos === pos && i.kind === 'prelude.note') as Extract<(typeof page.items)[number], { kind: 'prelude.note' }>
+
+  it('survives the sanitiser with every item, in order, and the page envelope', () => {
+    expect(page.state).toBe('ok')
+    expect(page.prevCursor).toBeNull()
+    expect(page.totalBytes).toBe(379830)
+    expect(page.items).toHaveLength(golden.items.length)
+    expect(page.items.map((i) => i.pos)).toEqual(golden.items.map((i) => i.pos))
+    expect(new Set(page.items.map((i) => i.kind))).toEqual(new Set(['prelude.segment', 'user', 'assistant', 'tool_use', 'tool_result', 'prelude.note', 'prelude.compaction']))
+  })
+
+  it('has the expected number of items of each kind', () => {
+    const count: Record<string, number> = {}
+    for (const i of page.items) count[i.kind] = (count[i.kind] ?? 0) + 1
+    expect(count).toEqual({ user: 13, assistant: 9, 'prelude.note': 9, tool_use: 4, tool_result: 4, 'prelude.segment': 3, 'prelude.compaction': 1 })
+  })
+
+  it('keeps the segments\' entrypoints in order and the compaction trigger', () => {
+    expect(page.items.filter((i) => i.kind === 'prelude.segment').map((i) => [i.pos, (i as { entrypoint: string }).entrypoint]))
+      .toEqual([['329.0', 'cli'], ['373526.0', 'sdk-cli'], ['375917.0', 'cli']])
+    // Closed shape: `pre_tokens` is dropped by design (spec §4.3 marks it optional; §5.3 draws only the trigger).
+    expect(page.items.find((i) => i.kind === 'prelude.compaction')).toEqual({ pos: '37691.1', at: 1790812829123, kind: 'prelude.compaction', trigger: 'auto' })
+  })
+
+  it('a cut block keeps truncated and total_bytes (text, tool_use, tool_result)', () => {
+    expect(content('39688.1').find((b) => b.type === 'text')).toMatchObject({ truncated: true, total_bytes: 70000 })
+    expect(content('111120.1').find((b) => b.type === 'tool_use')).toMatchObject({ name: 'Write', truncated: true, total_bytes: 90056 })
+    expect(content('202834.1').find((b) => b.type === 'tool_result')).toMatchObject({ truncated: true, total_bytes: 80000 })
+  })
+
+  it('omitted media keeps type, media_type and bytes (never data)', () => {
+    const media = content('15108.1').filter((b) => b.type === 'image' || b.type === 'document')
+    expect(media).toEqual([
+      { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 69 } },
+      { type: 'document', source: { type: 'omitted', media_type: 'application/pdf', bytes: 15 } },
+    ])
+    expect(content('19422.1').find((b) => b.type === 'image')).toEqual({ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 69 } })
+    const nested = content('17694.1').find((b) => b.type === 'tool_result')!.content as Blk[]
+    expect(nested).toEqual([{ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 69 } }])
+  })
+
+  it('N2 pairs: Edit is denied, Write\'s output is cut at 80000, Read has a non-text result', () => {
+    expect(payloadOf('33612.2')).toMatchObject({ tool_use_id: 'toolu_golden0004', name: 'Edit', status: 'denied' })
+    expect(payloadOf('202834.2')).toMatchObject({ tool_use_id: 'toolu_golden0003', status: 'ok', output: { truncated: true, total_bytes: 80000 } })
+    expect(payloadOf('17694.2')).toMatchObject({ tool_use_id: 'toolu_golden0002', output: { has_non_text: true } })
+    expect(payloadOf('8399.2')).toMatchObject({ tool_use_id: 'toolu_golden0001', status: 'ok', duration_ms: 1000 })
+  })
+
+  it('notes keep their source, text and, for bash_output, the stream', () => {
+    const notes = page.items.filter((i) => i.kind === 'prelude.note') as Array<ReturnType<typeof noteOf>>
+    expect(notes.map((n) => [n.pos, n.source])).toEqual([
+      ['13569.1', 'command_output'], ['14108.1', 'bash_input'], ['14558.1', 'bash_output'], ['14558.2', 'bash_output'],
+      ['20300.1', 'peer_message'], ['21398.1', 'task_notification'], ['34358.1', 'peer_message'], ['35280.1', 'task_notification'],
+      ['379249.1', 'command_output'],
+    ])
+    expect(noteOf('14108.1').text).toBe('ls -la')
+    expect(noteOf('14558.1').stream).toBe('stdout')
+    expect(noteOf('14558.2').stream).toBe('stderr')
+    expect(noteOf('379249.1').text).toContain('Catch you later!')
+    expect(notes.filter((n) => n.source !== 'bash_output').every((n) => n.stream === null)).toBe(true)
   })
 })

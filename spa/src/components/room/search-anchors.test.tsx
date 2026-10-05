@@ -9,6 +9,8 @@ import { describe, it, expect } from 'vitest'
 import { act, render } from '@testing-library/react'
 import PreludeSection from './prelude/PreludeSection'
 import { derivePrelude, type PreludeView } from '../../lib/nex/prelude'
+import { sanitizePreludePage } from '../../lib/nex/prelude-wire'
+import golden from '../../lib/nex/__fixtures__/prelude-golden-nexen.json'
 import RoomTranscript from './RoomTranscript'
 import ChatTranscript from '../chat/ChatTranscript'
 import { FoldContext, useFoldMemory, type FoldStore } from './fold-context'
@@ -129,6 +131,15 @@ const withPrelude: Fixture = {
   ]),
 }
 
+// Nexen's early golden page above a short live list (spec §4.6): real wire
+// shapes — N2 pairs, cut blocks, omitted media, every note source.
+const goldenPrelude: Fixture = {
+  messages: [said('live question'), asst({ type: 'text', text: 'live answer' })],
+  turnStarts: [0],
+  tools: {},
+  prelude: derivePrelude(sanitizePreludePage(golden)!.items),
+}
+
 type View = 'room' | 'chat'
 
 function Harness({ fixture, view, registered, onStore }: {
@@ -202,7 +213,7 @@ describe.each<View>(['room', 'chat'])('search anchors in %s', (view) => {
   })
 })
 
-describe.each<[string, Fixture]>([['every kind', everyKind], ['edge shapes', edgeShapes], ['with a prelude', withPrelude]])('%s fixture', (_, fixture) => {
+describe.each<[string, Fixture]>([['every kind', everyKind], ['edge shapes', edgeShapes], ['with a prelude', withPrelude], ['golden prelude', goldenPrelude]])('%s fixture', (_, fixture) => {
   describe.each<View>(['room', 'chat'])('%s', (view) => {
     const units = unitsFor(fixture, view)
 
@@ -230,5 +241,44 @@ describe.each<[string, Fixture]>([['every kind', everyKind], ['edge shapes', edg
       const drawn = anchors().map((el) => el.getAttribute('data-search-unit'))
       expect(drawn).toEqual(units.map((u) => u.id))
     })
+  })
+})
+
+// The complete, ordered prelude units of Nexen's golden page, written out by
+// hand against the fixture (jq over `items`), not computed from the walk:
+// every user/assistant text block (329.1 … 378700.1; 3746.1 is thinking), the
+// nine notes, and the four tool calls — an `arg` unit each, an `input` unit
+// only where the call's input has more than one key (Bash, Edit, Write; Read
+// has just file_path), and an `output` unit for each paired result.
+const GOLDEN_CHAT_IDS = [
+  'p329.1:0:text',
+  'p6688.1:0:arg', 'p6688.1:0:input', 'p6688.1:0:output',
+  'p9403.1:0:text',
+  'p13008.1:0:text',
+  'p13569.1:note:text', 'p14108.1:note:text', 'p14558.1:note:text', 'p14558.2:note:text',
+  'p15108.1:0:text',
+  'p16045.1:0:arg', 'p16045.1:0:output',
+  'p18651.1:0:text',
+  'p19422.1:0:text',
+  'p20300.1:note:text', 'p21398.1:note:text',
+  'p31886.1:0:arg', 'p31886.1:0:input', 'p31886.1:0:output',
+  'p34358.1:note:text', 'p35280.1:note:text',
+  'p39088.1:0:text',
+  'p39688.1:0:text',
+  'p111120.1:0:arg', 'p111120.1:0:input', 'p111120.1:0:output',
+  'p373526.1:0:text',
+  'p374088.1:0:text',
+  'p375917.1:0:text',
+  'p376513.1:0:text',
+  'p378700.1:0:text',
+  'p379249.1:note:text',
+]
+// The one room/chat difference: the room draws the assistant's thinking (3746.1), chat does not.
+const GOLDEN_ROOM_IDS = [...GOLDEN_CHAT_IDS.slice(0, 1), 'p3746.1:0:thinking', ...GOLDEN_CHAT_IDS.slice(1)]
+
+describe.each<View>(['room', 'chat'])('golden prelude units in %s', (view) => {
+  it('indexes the whole prelude, in drawing order — no span, note or call dropped', () => {
+    const ids = unitsFor(goldenPrelude, view).map((u) => u.id).filter((id) => id.startsWith('p'))
+    expect(ids).toEqual(view === 'room' ? GOLDEN_ROOM_IDS : GOLDEN_CHAT_IDS)
   })
 })
