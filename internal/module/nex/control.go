@@ -19,7 +19,7 @@ import (
 
 type control struct {
 	LeaseID, PrincipalID string
-	release              func()
+	release              func() // never nil: noRelease when there is nothing to release, also on error returns
 }
 
 func noRelease() {}
@@ -35,6 +35,7 @@ func (m *Module) takeControl(parent context.Context, execID, callerLease, princi
 	if callerLease != "" {
 		return control{LeaseID: callerLease, PrincipalID: principal, release: noRelease}, nil
 	}
+	lastHolder := ""
 	for attempt := 0; attempt < 2; attempt++ {
 		lease, err := m.acquireLease(parent, execID, principal)
 		if err == nil {
@@ -46,22 +47,29 @@ func (m *Module) takeControl(parent context.Context, execID, callerLease, princi
 			}}, nil
 		}
 		if !errors.Is(err, store.ErrLeaseHeld) {
-			return control{}, &handoffError{http.StatusInternalServerError, "lease_error", "acquiring lease: " + err.Error(), nil}
+			return control{release: noRelease}, &handoffError{http.StatusInternalServerError, "lease_error", "acquiring lease: " + err.Error(), nil}
 		}
 		row, gerr := m.getExecution(parent, execID)
 		if gerr != nil {
-			return control{}, &handoffError{http.StatusInternalServerError, "store_error", "re-reading execution: " + gerr.Error(), nil}
+			return control{release: noRelease}, &handoffError{http.StatusInternalServerError, "store_error", "re-reading execution: " + gerr.Error(), nil}
+		}
+		if row.LeaseID != "" {
+			lastHolder = row.LeasePrincipalID
 		}
 		if row.LeaseID == "" || row.LeaseExpiresAt <= nowMs() {
 			continue // released or expired between the two reads
 		}
 		if !m.isPdxPrincipal(row.LeasePrincipalID) {
-			return control{}, &handoffError{http.StatusConflict, "held_by", "execution lease is held by " + row.LeasePrincipalID,
+			return control{release: noRelease}, &handoffError{http.StatusConflict, "held_by", "execution lease is held by " + row.LeasePrincipalID,
 				map[string]any{"principal": row.LeasePrincipalID}}
 		}
 		return control{LeaseID: row.LeaseID, PrincipalID: row.LeasePrincipalID, release: noRelease}, nil
 	}
-	return control{}, &handoffError{http.StatusConflict, "held_by", "execution lease kept changing hands", nil}
+	var detail map[string]any
+	if lastHolder != "" {
+		detail = map[string]any{"principal": lastHolder}
+	}
+	return control{release: noRelease}, &handoffError{http.StatusConflict, "lease_contended", "execution lease kept changing hands", detail}
 }
 
 func (m *Module) renewControl(parent context.Context, execID string, ctl control, principal string) (control, *handoffError) {

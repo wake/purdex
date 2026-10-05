@@ -79,6 +79,49 @@ func TestTakeControl(t *testing.T) {
 			t.Fatalf("%+v %v released=%v", got, herr, released)
 		}
 	})
+	t.Run("renewControl: re-take fails with an infra error → release never nil", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.renewErr = store.ErrLeaseExpired
+		env.svc.acquireErr = errors.New("db locked")
+		releasedOld := 0
+		got, herr := env.m.renewControl(context.Background(), "E1", control{LeaseID: "L-old", PrincipalID: "pdx:" + testHostID, release: func() { releasedOld++ }}, "pdx:"+testHostID)
+		if herr == nil || herr.code != "lease_error" || releasedOld != 1 {
+			t.Fatalf("herr=%+v releasedOld=%d", herr, releasedOld)
+		}
+		if got.release == nil {
+			t.Fatal("control.release must never be nil")
+		}
+		got.release()
+	})
+	t.Run("renewControl: re-take sees a non-pdx holder → held_by, release never nil", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.renewErr = store.ErrLeaseExpired
+		env.svc.acquireErr = store.ErrLeaseHeld
+		env.store.script(store.Execution{ID: "E1", State: store.StateIdle, LeaseID: "L-p", LeasePrincipalID: "ploom:agent-7", LeaseExpiresAt: nowMs() + 60_000})
+		got, herr := env.m.renewControl(context.Background(), "E1", control{LeaseID: "L-old", PrincipalID: "pdx:" + testHostID, release: noRelease}, "pdx:"+testHostID)
+		if herr == nil || herr.code != "held_by" {
+			t.Fatalf("herr=%+v", herr)
+		}
+		if got.release == nil {
+			t.Fatal("control.release must never be nil")
+		}
+		got.release()
+	})
+	t.Run("lease that keeps changing hands → lease_contended", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.acquireErr = store.ErrLeaseHeld
+		env.store.script(
+			store.Execution{ID: "E1", LeaseID: "L-1", LeasePrincipalID: pdxOther, LeaseExpiresAt: 1},
+			store.Execution{ID: "E1", LeaseID: "L-2", LeasePrincipalID: pdxOther, LeaseExpiresAt: 1},
+		)
+		ctl, herr := env.m.takeControl(context.Background(), "E1", "", "pdx:"+testHostID)
+		if herr == nil || herr.status != http.StatusConflict || herr.code != "lease_contended" || herr.detail["principal"] != pdxOther {
+			t.Fatalf("herr = %+v", herr)
+		}
+		if ctl.release == nil {
+			t.Fatal("control.release must never be nil")
+		}
+	})
 	t.Run("a pdx principal of another host is not ours", func(t *testing.T) {
 		env := newTakebackEnv(t)
 		env.svc.acquireErr = store.ErrLeaseHeld
@@ -191,6 +234,27 @@ func TestExitWorker_Failures(t *testing.T) {
 		out, herr := env.m.exitWorker(context.Background(), store.Execution{ID: "E", State: store.StateIdle}, nil, "pdx:"+testHostID)
 		if herr != nil || out.State != store.StateFailed || !out.Archived || out.Terminated {
 			t.Fatalf("out=%+v herr=%+v", out, herr)
+		}
+	})
+	t.Run("nil ctl: releases the lease it acquired itself", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.lease = store.Lease{ID: "L-own"}
+		if _, herr := env.m.exitWorker(context.Background(), store.Execution{ID: "E", State: store.StateIdle}, nil, "pdx:"+testHostID); herr != nil {
+			t.Fatal(herr)
+		}
+		if len(env.svc.releases) != 1 || env.svc.releases[0].LeaseID != "L-own" {
+			t.Fatalf("releases = %+v", env.svc.releases)
+		}
+	})
+	t.Run("nil ctl: a borrowed pdx lease is never released", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.acquireErr = store.ErrLeaseHeld
+		env.store.script(store.Execution{ID: "E", State: store.StateIdle, LeaseID: "L-b", LeasePrincipalID: pdxOther, LeaseExpiresAt: nowMs() + 60_000})
+		if _, herr := env.m.exitWorker(context.Background(), store.Execution{ID: "E", State: store.StateIdle}, nil, "pdx:"+testHostID); herr != nil {
+			t.Fatal(herr)
+		}
+		if len(env.svc.releases) != 0 || len(env.svc.terminateCalls) != 1 || env.svc.terminateCalls[0].LeaseID != "L-b" {
+			t.Fatalf("releases=%+v terminate=%+v", env.svc.releases, env.svc.terminateCalls)
 		}
 	})
 	t.Run("given control is used and not released", func(t *testing.T) {

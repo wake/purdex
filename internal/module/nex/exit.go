@@ -47,7 +47,11 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 				}
 			default:
 				termErr = terminateError(err)
-				m.logf("nex: exit %s: terminate: %v; archiving anyway (D4)", exec.ID, err)
+				if out.Archived {
+					m.logf("nex: exit %s: terminate failed on an already archived row: %v (still exited — archived)", exec.ID, err)
+				} else {
+					m.logf("nex: exit %s: terminate: %v; archiving anyway (D4)", exec.ID, err)
+				}
 			}
 		}
 	}
@@ -61,6 +65,7 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 		case termErr != nil:
 			// Typically archive_while_running: the turn the terminate could not
 			// stop is still running. The terminate's reason is the useful one.
+			m.logf("nex: exit %s: archive after a failed terminate: %v", exec.ID, err)
 			return out, termErr
 		default:
 			return out, &handoffError{http.StatusInternalServerError, "archive_failed", "archiving execution: " + err.Error(),
