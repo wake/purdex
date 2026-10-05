@@ -194,8 +194,9 @@ func runServe(args []string) *reexecPlan {
 	// D13); consumed here so /api/info reports it once, for this boot.
 	lastShutdown, lsErr := takeLastShutdown(cfg.DataDir)
 	if lsErr != nil {
-		log.Printf("last shutdown: record unreadable (%v)", lsErr)
-	} else if lastShutdown != nil {
+		log.Printf("last shutdown: record problem (%v)", lsErr)
+	}
+	if lastShutdown != nil {
 		log.Printf("last shutdown: %d error(s) recorded by the previous image", len(lastShutdown.Errors))
 	}
 

@@ -40,3 +40,38 @@ func TestLastShutdown_CorruptIsDeleted(t *testing.T) {
 		t.Fatal("a corrupt record must be deleted")
 	}
 }
+
+// K1: an unreadable record (here: a directory) is consumed, not re-reported.
+func TestLastShutdown_UnreadableIsDeleted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, lastShutdownFile)
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if rep, err := takeLastShutdown(dir); err == nil || rep != nil {
+		t.Fatalf("first take = (%v, %v), want (nil, error)", rep, err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("unreadable record must be removed, lstat err = %v", err)
+	}
+	if rep, err := takeLastShutdown(dir); rep != nil || err != nil {
+		t.Fatalf("second take = (%v, %v), want (nil, nil)", rep, err)
+	}
+}
+
+// K3: valid JSON with no errors is not a real record.
+func TestLastShutdown_EmptyRecordIsCorrupt(t *testing.T) {
+	for _, body := range []string{`{}`, `{"at":"2026-10-06T12:00:00Z","errors":[]}`, `{"errors":null}`} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, lastShutdownFile)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if rep, err := takeLastShutdown(dir); err == nil || rep != nil {
+			t.Fatalf("%s: take = (%v, %v), want (nil, error)", body, rep, err)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s: record must be gone, stat err = %v", body, err)
+		}
+	}
+}
