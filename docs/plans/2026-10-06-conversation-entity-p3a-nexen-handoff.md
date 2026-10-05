@@ -61,6 +61,7 @@ Line numbers refer to nexen `main` at `dda7c42` (v0.16.1). They come from a read
   - a delegated measurement that failed (simulate the timeout via `SetPreludeCaptureForTest`, export_test.go:203): the boundary is the turn-1 measurement after the first send, and the legacy scan (`SetScanLegacyBoundaryForTest` :194) is not called;
   - neither measurement exists: the legacy path, as today;
   - non-`start_idle` executions: unchanged, because their delegated payload has no measurement.
+- **No legacy scan for `start_idle`, ever (D19 intent).** A `start_idle` row (its `execution.delegated` carries `start_idle: true`) with neither measurement yet, because the delegate-time one failed and no turn has run, does **not** fall back to the legacy full-file scan. `Prelude` answers with a **provisional** boundary: `LastLineEnd(path)` under the same 2 s bound, computed per request and **not cached**. The first successful measurement (turn 1) becomes the boundary from then on. Test: delegated measurement failed, no send yet → `GET /prelude` succeeds with `total_bytes == current end`, and the legacy scan hook is not called. A second request after the transcript grew also returns the provisional current end. After the first send, the turn-1 value is returned and stays fixed. *(Implementer derivation, reported to the coordinator: the provisional answer exists only in the window D19 leaves open.)*
 
 ### A4 — API: wire, 400, capability
 
@@ -86,6 +87,7 @@ Line numbers refer to nexen `main` at `dda7c42` (v0.16.1). They come from a read
 - Each prelude item gains `offset` (int64, the start byte of the source transcript line). Derived N2 items and segment markers carry the offset of their source line. See the `prelude` package `page.go` / `classify.go` and the API view in `api/prelude.go:34-46`.
 - Capability `transcript_prelude.item_offset: true` (capabilities.go:349-366).
 - Tests: on the golden fixture, `offset` equals the line start byte for every kind, and it is monotonic within a page.
+- **API wire test:** `api/prelude.go` rebuilds each item field by field in `preludeItemView` (:25-33, :53-61), so `offset` must be added there too. An `api` package test asserts the JSON of `GET /prelude` has `offset` on every item kind, and the regenerated `api/testdata/prelude-golden-page.json` is the fixture Purdex copies in P3b-1.
 
 ### A7 — contract docs (same PR as the code they describe, per capability-matrix :1782)
 
