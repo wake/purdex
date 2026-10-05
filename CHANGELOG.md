@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.476] - 2026-10-05
+
+> 純 SPA，不必重新部署 daemon。功能要等 daemon 內嵌 Nexen v0.16.0（`transcript_prelude`）才會出現；在那之前畫面與 475 完全相同。
+
+### Feature（尚未啟用）：交接來的 worker 會顯示交接前的完整對話（#1533 #1536 #1537 #1535）
+
+- 從終端機「Hand to nex」交出去的 worker，第 1 個 turn 上方會直接畫出這段對話在 transcript 裡更早的全部內容，不管中間 terminal ↔ worker 來回過幾次。
+- 開啟時仍停在最底部；往上捲到頂會自動載入更早的部分，載入時畫面不會跳動。
+- 在終端機跑的段落和 headless（worker）跑的段落之間、對話被壓縮的位置，各畫一條細線標示。
+- 指令輸出、`!` 指令、背景工作通知、peer 訊息都會顯示；圖片和文件顯示成 `[圖片 · png · 120 KB]` 這樣的佔位；被 daemon 截斷的內容會註明只顯示了多少。
+- transcript 已被 Claude Code 清除或讀不到時，頂端會說明一行，worker 自己的對話不受影響。
+- 不是交接來的 worker（從 NewTab 開的）完全不變。
+- chat 模式的呈現與搜尋（Cmd+F）涵蓋交接前內容，下一版補上。
+
+### Internal
+
+- 資料層：`lib/nex/prelude-wire.ts`（API 邊界逐型別封閉清洗、client 資源預算）、`lib/nex/prelude.ts`（獨立的 `prelude` state slice，不碰 `messages`／`lastSeq`／`turnStarts`／成本；request id 守門、cursor 循環偵測）、`useExecutionPrelude`。
+- 畫面：transcript 的 key 改走 `idOf`（`lib/nex/message-keys.ts`，缺省時與原本逐位元組相同）；`PreludeSection`／`PreludeAnchor`（以 `getSnapshotBeforeUpdate` 量 prelude 區塊高度修正捲動）。
+- spec `docs/specs/2026-10-05-worker-prelude-spec.md`、plan `docs/plans/2026-10-05-worker-prelude-plan.md`；follow-up #1534。
+
 ## [1.0.0-alpha.475] - 2026-09-30
 
 > 純 SPA，不必重新部署 daemon。
