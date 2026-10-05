@@ -56,7 +56,8 @@ func takeToTerminalLockKey(execID string) string { return "exec:" + execID }
 //     live, may own S (409 session_owned / 503 owner_check_failed);
 //  8. the preflights that must not cost an interrupt (name free, cwd usable);
 //  9. a live running / idle row: takeControl (held for the whole transfer,
-//     released on return), settleForResume, then renewControl — a full TTL
+//     released on return), the row re-read under that control (gone → the
+//     exited path), settleForResume on it, then renewControl — a full TTL
 //     for the fence;
 //  10. create the session;
 //  11. resume — on failure the session is killed and nothing is exited;
@@ -107,8 +108,7 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	name := body.SessionName
 
-	// Step 4: the row, once (settleForResume re-reads only after an
-	// interrupt). Detached, bounded contexts as in the take-back.
+	// Step 4: the row (re-read once control is held, step 9). Detached, bounded contexts as in the take-back.
 	parent := r.Context()
 	exec, err := m.getExecution(parent, execID)
 	if err != nil {
@@ -194,16 +194,31 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer func() { ctl.release() }() // ctl may be replaced by renewControl below
-		if exec, _, herr = m.settleForResume(parent, exec, ctl); herr != nil {
-			herr.write(w)
+		// The row read at step 4 predates the control: a turn may have
+		// started since, and the lease fences only sends made from now on.
+		// Settle what the row says under control, not what it said before.
+		fresh, gerr := m.getExecution(parent, execID)
+		if gerr != nil {
+			writeHandoffError(w, http.StatusInternalServerError, "store_error", "re-reading execution: "+gerr.Error(), nil)
 			return
 		}
-		// A full TTL from here: the fence must outlive create + resume, even
-		// when the lease was borrowed with seconds left. A lease lost since
-		// is re-taken (renewControl), so the exit runs under a live one.
-		if ctl, herr = m.renewControl(parent, execID, ctl, principal); herr != nil {
-			herr.write(w)
-			return
+		exec = fresh
+		if !isLiveExecution(exec) {
+			// Exited meanwhile: the exited path — no settle, no renew, no
+			// exit afterwards. The deferred release still frees the lease.
+			wasLive = false
+		} else {
+			if exec, _, herr = m.settleForResume(parent, exec, ctl); herr != nil {
+				herr.write(w)
+				return
+			}
+			// A full TTL from here: the fence must outlive create + resume, even
+			// when the lease was borrowed with seconds left. A lease lost since
+			// is re-taken (renewControl), so the exit runs under a live one.
+			if ctl, herr = m.renewControl(parent, execID, ctl, principal); herr != nil {
+				herr.write(w)
+				return
+			}
 		}
 	}
 
@@ -244,7 +259,7 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 		herr.detail["session_name"] = name
 		herr.detail["session_killed"] = killed
-		herr.detail["exited"] = false
+		herr.detail["exited"] = !wasLive
 		herr.write(w)
 		return
 	}

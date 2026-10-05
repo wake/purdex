@@ -708,7 +708,7 @@ func TestTakebackRefusedWhileTakeToTerminalHoldsTheExecution(t *testing.T) {
 	env := &ttEnv{newTakebackEnv(t)}
 	running := ttExecBound(store.StateRunning)
 	running.LeaseID = "lease-other"
-	env.store.results = []getResult{{exec: running}, {exec: ttExecBound(store.StateIdle)}}
+	env.store.results = []getResult{{exec: running}, {exec: running}, {exec: ttExecBound(store.StateIdle)}}
 	reviveCCAfterKeysAt(env.handoffEnv, ttTarget)
 	env.svc.interruptGate = make(chan struct{})
 

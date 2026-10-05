@@ -146,7 +146,8 @@ func reviveCCAfterKeysAt(env *handoffEnv, target string) {
 }
 
 func (e *ttEnv) scriptRunningThenIdle() {
-	e.store.results = []getResult{{exec: ttRunning()}, {exec: ttExec(store.StateIdle)}}
+	// Get: step 4, the re-read once control is held, then after the interrupt.
+	e.store.results = []getResult{{exec: ttRunning()}, {exec: ttRunning()}, {exec: ttExec(store.StateIdle)}}
 }
 
 func (e *ttEnv) post(t *testing.T, id string, body any) (int, map[string]any) {
@@ -361,6 +362,8 @@ func TestTakeToTerminalResumeSessionIDFallback(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "%v", body)
 	assert.Equal(t, "sid-resume", body["session_id"])
 	assert.Equal(t, []string{"claude --resume sid-resume\n"}, rawKeysText(env.tmux))
+	assert.Equal(t, []string{"archive"}, env.svc.ArchiveCalls(), "a failed live row is archived")
+	assert.Less(t, env.at(t, "keys"), env.at(t, "archive"), "archived after the resume")
 }
 
 // --- D6: "bring this conversation to a terminal" ---
@@ -486,7 +489,7 @@ func TestTakeToTerminal_OwnerConflicts(t *testing.T) {
 	})
 }
 
-// --- preflights that must not cost an interrupt (spec §4.1 step 4) ---
+// --- preflights that must not cost an interrupt (spec §4.1 step 8) ---
 
 func TestTakeToTerminal409SessionExistsNoInterrupt(t *testing.T) {
 	env := newTTEnv(t)
@@ -553,7 +556,7 @@ func TestTakeToTerminal_Running_InterruptsUnderControlThenExits(t *testing.T) {
 	require.Len(t, env.svc.terminateCalls, 1)
 	assert.Equal(t, "L-t", env.svc.terminateCalls[0].LeaseID)
 	assert.Equal(t, []releaseCall{{tbExecID, "L-t", tbPrincipal}}, env.svc.releases)
-	assert.Equal(t, 2, env.store.Calls(), "Get, then re-Get after the interrupt")
+	assert.Equal(t, 3, env.store.Calls(), "Get, re-Get under control, re-Get after the interrupt")
 	require.Len(t, env.svc.releaseCtxErrs, 1)
 	assert.NoError(t, env.svc.releaseCtxErrs[0])
 	assert.True(t, env.tmux.HasSession(ttName))
@@ -577,9 +580,22 @@ func TestTakeToTerminal_RenewsTheFenceBeforeTheResume(t *testing.T) {
 func TestTakeToTerminal_RenewLostLeaseRetakesControl(t *testing.T) {
 	env := newTTEnv(t)
 	env.svc.renewErr = store.ErrLeaseExpired
+	env.svc.lease = store.Lease{ID: "L-1"}
+	// The second acquire hands out a different lease: the deferred release
+	// must free the CURRENT control, not the one captured at the first take.
+	tl := env.m.tmux.(*keysClock).tl
+	env.svc.onRecord = func(ev string) {
+		tl.add(ev)
+		if ev == "renew" {
+			env.svc.mu.Lock()
+			env.svc.lease = store.Lease{ID: "L-2"}
+			env.svc.mu.Unlock()
+		}
+	}
 	status, body := env.post(t, tbExecID, ttBody())
 	require.Equal(t, http.StatusOK, status, "%v", body)
 	assert.Equal(t, []string{"acquire", "renew", "release", "acquire", "keys", "terminate", "archive", "release"}, env.timeline(t))
+	assert.Equal(t, []releaseCall{{tbExecID, "L-1", tbPrincipal}, {tbExecID, "L-2", tbPrincipal}}, env.svc.releases)
 }
 
 // A renew that fails outright stops the transfer before any session: the
@@ -637,7 +653,7 @@ func TestTakeToTerminal409HeldBy(t *testing.T) {
 	env.assertNoSession(t)
 }
 
-// --- session creation (step 6) ---
+// --- session creation (step 10) ---
 
 func TestTakeToTerminalCreatesSessionInExecutionCwd(t *testing.T) {
 	env := newTTEnv(t)
@@ -673,7 +689,7 @@ func TestTakeToTerminal500CreateFailedAfterNewSession(t *testing.T) {
 	assert.Equal(t, ttName, body["session_name"])
 	assert.Equal(t, true, body["session_alive"])
 	assert.Contains(t, body["error"], "list exploded")
-	assert.True(t, env.tmux.HasSession(ttName), "the tmux session is left for the SPA to list (spec §4.1 step 6)")
+	assert.True(t, env.tmux.HasSession(ttName), "the tmux session is left for the SPA to list (spec §4.1 step 10)")
 	assert.Empty(t, env.tmux.RawKeysSent())
 	assert.Equal(t, []string{"acquire", "interrupt", "renew", "release"}, env.svc.Calls(), "settled, not exited, lease released")
 }
@@ -705,7 +721,7 @@ func TestTakeToTerminal500CreateUnconfirmedIsNotAlive(t *testing.T) {
 	env.assertNoArchive(t)
 }
 
-// --- resume in the new session (step 8): keys go by id to window 0 ---
+// --- resume in the new session (step 11): keys go by id to window 0 ---
 
 func TestTakeToTerminalKeysGoToNewSessionWindow0(t *testing.T) {
 	env := newTTEnv(t)
@@ -882,4 +898,68 @@ func TestTakeToTerminalSuccessResponse(t *testing.T) {
 	assert.Equal(t, code, sess["code"])
 	_, hasTmuxID := sess["TmuxID"]
 	assert.False(t, hasTmuxID, "the same JSON shape as GET /api/sessions")
+}
+
+// --- I1: settle the row read AFTER control is taken ---
+
+// The first read says idle; a turn starts before control is taken. The row
+// re-read under control says running, so it is interrupted — before the
+// resume keys, never next to them.
+func TestTakeToTerminal_TurnStartedBeforeControlIsInterruptedBeforeTheResume(t *testing.T) {
+	env := newTTEnv(t)
+	env.store.script(ttExec(store.StateIdle), ttRunning(), ttExec(store.StateIdle))
+	env.svc.lease = store.Lease{ID: "L-t"}
+	status, body := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, []string{"acquire", "interrupt", "renew", "keys", "terminate", "archive", "release"}, env.timeline(t))
+	assert.Less(t, env.at(t, "interrupt"), env.at(t, "keys"))
+	assert.Equal(t, []execution.InterruptRequest{{ExecutionID: tbExecID, LeaseID: "L-t", PrincipalID: tbPrincipal}}, env.svc.interruptReqs)
+	assert.Equal(t, 3, env.store.Calls(), "Get, re-Get under control, re-Get after the interrupt")
+}
+
+// A store error on the re-read under control: 500 store_error, nothing
+// created, the lease taken here released.
+func TestTakeToTerminal_ReReadUnderControlStoreError(t *testing.T) {
+	env := newTTEnv(t)
+	env.store.results = []getResult{{exec: ttExec(store.StateIdle)}, {err: errors.New("db locked")}}
+	status, body := env.post(t, tbExecID, ttBody())
+	assert.Equal(t, http.StatusInternalServerError, status)
+	assert.Equal(t, "store_error", body["code"])
+	assert.Equal(t, []string{"acquire", "release"}, env.svc.Calls())
+	env.assertNoSession(t)
+}
+
+// The worker exited between the first read and control: the exited path —
+// no renew, no terminate, no archive — and the lease taken here is still
+// released.
+func TestTakeToTerminal_ExitedUnderControlTakesTheExitedPath(t *testing.T) {
+	env := newTTEnv(t)
+	gone := ttExec(store.StateTerminated)
+	gone.ArchivedAt = 7
+	env.store.script(ttExec(store.StateIdle), gone)
+	env.svc.lease = store.Lease{ID: "L-t"}
+	status, body := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, []string{"acquire", "keys", "release"}, env.timeline(t))
+	assert.Empty(t, env.svc.renewCalls)
+	assert.Empty(t, env.svc.terminateCalls)
+	assert.Empty(t, env.svc.ArchiveCalls())
+	assert.Equal(t, true, body["exited"])
+	assert.Equal(t, true, body["archived"])
+	assert.Nil(t, body["exit_error"])
+}
+
+// --- M2: exited is the worker's state when the call ends, on every path ---
+
+func TestTakeToTerminal_ResumeFailsOnExitedRow_StaysExited(t *testing.T) {
+	env := bareTTEnv(t)
+	env.m.rollbackWait = 50 * time.Millisecond
+	e := ttExec(store.StateTerminated)
+	e.ArchivedAt = 7
+	env.store.script(e)
+	status, body := env.post(t, tbExecID, ttBody())
+	assert.Equal(t, http.StatusGatewayTimeout, status)
+	assert.Equal(t, "cc_start_timeout", body["code"])
+	assert.Equal(t, true, body["exited"], "an exited row stays exited")
+	assert.Empty(t, env.svc.Calls())
 }
