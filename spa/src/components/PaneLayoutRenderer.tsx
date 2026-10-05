@@ -9,6 +9,7 @@ import { PaneHeader } from './PaneHeader'
 import { PaneContextMenu, type PaneMenuAction } from './PaneContextMenu'
 import { HandoffConfirmDialog } from './HandoffConfirmDialog'
 import { useTabStore } from '../stores/useTabStore'
+import { usePaneFocusStore } from '../stores/usePaneFocusStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useNexHostStore, selectHandoffReady } from '../stores/useNexHostStore'
@@ -123,6 +124,9 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       e.stopPropagation()
       setMenu({ x: e.clientX, y: e.clientY })
     }
+    // The focus record (shell cleanup §8.1): a pointerdown or a focus anywhere inside this leaf makes it the tab's
+    // most recently focused pane. Capture phase, so a renderer that stops propagation still records.
+    const recordFocus = () => usePaneFocusStore.getState().touch(tabId, layout.pane.id)
 
     const paneMenu = menu ? (
       <PaneContextMenu
@@ -200,7 +204,12 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       const content = layout.pane.content
 
       return (
-        <div className="flex-1 flex flex-col overflow-hidden" onContextMenu={handleContextMenu}>
+        <div
+          className="flex-1 flex flex-col overflow-hidden"
+          onContextMenu={handleContextMenu}
+          onPointerDownCapture={recordFocus}
+          onFocusCapture={recordFocus}
+        >
           <PaneHeader
             title={content.kind}
             onClose={() => useTabStore.getState().closePane(tabId, layout.pane.id)}
@@ -235,7 +244,12 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
     // preserves the exact prior block context; the wrapper exists only to carry
     // onContextMenu.
     return (
-      <div className="h-full w-full" onContextMenu={handleContextMenu}>
+      <div
+        className="h-full w-full"
+        onContextMenu={handleContextMenu}
+        onPointerDownCapture={recordFocus}
+        onFocusCapture={recordFocus}
+      >
         {body}
         {paneMenu}
         {handoffDialog}

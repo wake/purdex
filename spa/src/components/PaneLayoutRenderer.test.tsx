@@ -6,6 +6,7 @@ import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { countLeaves } from '../lib/pane-tree'
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
 import { useTabStore } from '../stores/useTabStore'
+import { usePaneFocusStore } from '../stores/usePaneFocusStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useSessionStore } from '../stores/useSessionStore'
@@ -369,6 +370,81 @@ describe('PaneLayoutRenderer', () => {
     expect(screen.getByTestId('dash-br')).toBeTruthy()
     // The split introduced one extra leaf (a blank new-tab pane) → 5 leaves total.
     expect(countLeaves(layout)).toBe(5)
+  })
+})
+
+describe('PaneLayoutRenderer — the pane focus record (shell cleanup P5)', () => {
+  beforeEach(() => {
+    usePaneFocusStore.setState({ recent: {} })
+    registerModule({
+      id: 'dashboard',
+      name: 'Dashboard',
+      panes: [{
+        kind: 'dashboard',
+        component: ({ pane }) => (
+          <div data-testid={`dash-${pane.id}`}><button data-testid={`btn-${pane.id}`}>{pane.id}</button></div>
+        ),
+      }],
+    })
+  })
+  const splitLR: PaneLayout = {
+    type: 'split', id: 's1', direction: 'h',
+    children: [
+      { type: 'leaf', pane: { id: 'left', content: { kind: 'dashboard' } } },
+      { type: 'leaf', pane: { id: 'right', content: { kind: 'dashboard' } } },
+    ],
+    sizes: [50, 50],
+  }
+  function seed(layout: PaneLayout) {
+    const tab: Tab = { id: 't1', pinned: false, locked: false, createdAt: 0, layout }
+    useTabStore.setState({ tabs: { t1: tab }, tabOrder: ['t1'], activeTabId: 't1', visitHistory: [] })
+  }
+
+  it('a pointerdown in the right leaf of a split records it first', () => {
+    seed(splitLR)
+    render(<PaneLayoutRenderer layout={splitLR} tabId="t1" isActive={true} />)
+    fireEvent.pointerDown(screen.getByTestId('dash-left'))
+    fireEvent.pointerDown(screen.getByTestId('btn-right'))
+    expect(usePaneFocusStore.getState().recent.t1).toEqual(['right', 'left'])
+  })
+
+  it('a focus event inside a leaf records it (keyboard focus, not only clicks)', () => {
+    seed(splitLR)
+    render(<PaneLayoutRenderer layout={splitLR} tabId="t1" isActive={true} />)
+    act(() => screen.getByTestId('btn-right').focus())
+    expect(usePaneFocusStore.getState().recent.t1).toEqual(['right'])
+    act(() => screen.getByTestId('btn-left').focus())
+    expect(usePaneFocusStore.getState().recent.t1).toEqual(['left', 'right'])
+  })
+
+  it('the no-header single leaf records too', () => {
+    const single: PaneLayout = { type: 'leaf', pane: { id: 'only', content: { kind: 'dashboard' } } }
+    seed(single)
+    render(<PaneLayoutRenderer layout={single} tabId="t1" isActive={true} />)
+    fireEvent.pointerDown(screen.getByTestId('dash-only'))
+    expect(usePaneFocusStore.getState().recent.t1).toEqual(['only'])
+  })
+
+  it('a pointerdown in a nested leaf records only that leaf, not its ancestors\' siblings', () => {
+    const nested: PaneLayout = {
+      type: 'split', id: 's1', direction: 'h',
+      children: [
+        { type: 'leaf', pane: { id: 'a', content: { kind: 'dashboard' } } },
+        {
+          type: 'split', id: 's2', direction: 'v',
+          children: [
+            { type: 'leaf', pane: { id: 'b', content: { kind: 'dashboard' } } },
+            { type: 'leaf', pane: { id: 'c', content: { kind: 'dashboard' } } },
+          ],
+          sizes: [50, 50],
+        },
+      ],
+      sizes: [50, 50],
+    }
+    seed(nested)
+    render(<PaneLayoutRenderer layout={nested} tabId="t1" isActive={true} />)
+    fireEvent.pointerDown(screen.getByTestId('btn-c'))
+    expect(usePaneFocusStore.getState().recent.t1).toEqual(['c'])
   })
 })
 
