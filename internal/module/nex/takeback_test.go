@@ -894,6 +894,32 @@ func TestTakeback_RereadUnderControlInterruptsATurnThatStartedMeanwhile(t *testi
 	assert.Equal(t, []string{"acquire", "interrupt", "renew", "terminate", "archive", "release"}, env.svc.Calls())
 }
 
+func TestTakeback_CCAppearsAfterInterrupt_409ExitedFalse(t *testing.T) {
+	env := newTakebackEnv(t)
+	running := runningExec()
+	env.store.results = []getResult{
+		{exec: running},    // Initial Get (line 135)
+		{exec: running},    // Re-read under control (line 229)
+		{exec: idleExec()}, // After interrupt (line 322 in settleForResume)
+	}
+	// Track store Gets and set CC alive on the 3rd one (post-interrupt).
+	// This tests the cc_already_running check at line 261, after interrupt and settle.
+	callNum := 0
+	env.store.onGet = func(int) {
+		callNum++
+		if callNum >= 3 {
+			setPaneCCIdle(env.tmux, hoTarget)
+		}
+	}
+	status, body := env.post(t, hoCode, takebackBody())
+	assert.Equal(t, http.StatusConflict, status, "%v", body)
+	assert.Equal(t, "cc_already_running", body["code"])
+	assert.Equal(t, false, body["exited"], "the worker is still live")
+	assert.Equal(t, tbSessionID, body["session_id"])
+	assert.Empty(t, env.tmux.RawKeysSent())
+	env.assertNoArchive(t)
+}
+
 func TestTakeback_ArchivedMeanwhile_409AndReleases(t *testing.T) {
 	env := newTakebackEnv(t)
 	gone := idleExec()
@@ -902,7 +928,7 @@ func TestTakeback_ArchivedMeanwhile_409AndReleases(t *testing.T) {
 	status, body := env.post(t, hoCode, takebackBody())
 	assert.Equal(t, http.StatusConflict, status)
 	assert.Equal(t, "execution_archived", body["code"])
-	assert.Equal(t, false, body["exited"])
+	assert.Equal(t, true, body["exited"])
 	assert.Equal(t, []string{"acquire", "release"}, env.svc.Calls())
 	assert.Empty(t, env.tmux.RawKeysSent())
 }

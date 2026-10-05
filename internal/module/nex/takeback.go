@@ -56,8 +56,9 @@ func boundToSession(exec store.Execution, hostID, code string) bool {
 // for the whole transfer (conversation entity D2/D5). Every check that needs no execution
 // access runs first — session, generation, "is CC already back?" — so a
 // stale tab cannot interrupt a running execution it can no longer resume
-// (spec §4.4 step 1). Only then is the row read, and a running execution
-// interrupted under a lease.
+// (spec §4.4 step 1). Control is then taken for a running or idle row, the
+// row is re-read under that control, settled, renewed, resumed, and only
+// then is the worker exited.
 func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
 
@@ -233,8 +234,8 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 		}
 		exec = fresh
 		if !isLiveExecution(exec) {
-			fail(&handoffError{http.StatusConflict, "execution_archived", "execution is no longer live",
-				map[string]any{"execution_id": execID, "session_id": sid}})
+			(&handoffError{http.StatusConflict, "execution_archived", "execution is no longer live",
+				map[string]any{"execution_id": execID, "session_id": sid, "exited": true}}).write(w)
 			return
 		}
 	}
