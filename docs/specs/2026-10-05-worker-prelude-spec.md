@@ -195,7 +195,7 @@ Bump `lab.protype.tw/wake/nexen` to v0.16.0, then rebuild and redeploy the mlab 
   - `command_output` / `bash_output` render as an output block under the preceding command line, using the same fold plan as tool output. A `bash_output` with `stream: "stderr"` uses the error tone.
   - `bash_input` renders as a mono `! cmd` line.
   - `task_notification` renders as a muted one-liner.
-  - `peer_message` renders as a labelled block (「Peer 訊息」 / "Peer message"), folded by the prose rules.
+  - `peer_message` renders as a labelled block (「Peer 訊息」 / "Peer message") whose body is drawn like agent prose (`RoomProse`: markdown, not folded — prose is never folded in the room).
   - Unknown sources render as a muted generic note.
 - An image placeholder shows `[image · png · 120 KB]`, in user and assistant content alike. **Every** block the daemon cut (`truncated: true` on `text`, `thinking`, `tool_use`, or `tool_result`), and every truncated note, shows one hint line after it with the shown and total sizes.
 - The top of the section shows a loading row while a page is in flight, an error row with retry, the D5 line for `gone`, and nothing once done.
