@@ -1,6 +1,6 @@
 // spa/src/lib/nex/prelude.test.ts
 import { describe, it, expect } from 'vitest'
-import { applyPreludePage, defaultPreludeState, derivePrelude, preludeFailed, preludeLoading, type PreludeState } from './prelude'
+import { applyPreludePage, defaultPreludeState, derivePrelude, preludeBlocks, preludeFailed, preludeLoading, type PreludeState } from './prelude'
 import type { PreludeItem, PreludePage } from './prelude-wire'
 import type { StreamMessage } from './message-types'
 
@@ -105,5 +105,25 @@ describe('derivePrelude', () => {
     expect(Object.hasOwn(v.tools, '__proto__')).toBe(true)
     expect(Object.getOwnPropertyDescriptor(v.tools, '__proto__')?.value.status).toBe('done')
     expect(Object.getPrototypeOf(v.tools)).toBe(Object.prototype)
+  })
+})
+
+describe('preludeBlocks', () => {
+  it('cuts spans at opening lines and around non-message entries', () => {
+    const v = derivePrelude([
+      { pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+      msg('2', 'user', [{ type: 'text', text: 'one' }]),
+      msg('3', 'assistant', [{ type: 'text', text: 'a' }]),
+      msg('4', 'user', [{ type: 'text', text: 'two' }]),
+      { pos: '5', at: 0, kind: 'prelude.note', source: 'task_notification', text: 'n', truncated: false, totalBytes: null, stream: null },
+      msg('6', 'assistant', [{ type: 'text', text: 'b' }]),
+    ])
+    expect(preludeBlocks(v)).toEqual([
+      { kind: 'entry', entry: v.entries[0] },
+      { kind: 'span', start: 0, end: 2 },
+      { kind: 'span', start: 2, end: 3 },
+      { kind: 'entry', entry: v.entries[4] },
+      { kind: 'span', start: 3, end: 4 },
+    ])
   })
 })

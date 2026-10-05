@@ -222,4 +222,42 @@ describe('PreludeSection notes and labels', () => {
     expect(hints[1]).toBe('Too long — showing the first 15 B of 88 KB')   // {"content":"x"}
     expect(hints[2]).toBe('Too long — showing the first 3 B')
   })
+
+  it('chat: your lines are bubbles, an agent turn’s tools collapse into one line', () => {
+    const view = derivePrelude([
+      m('2', 'user', [{ type: 'text', text: 'run it' }]),
+      m('3', 'assistant', [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }]),
+      m('4', 'user', [{ type: 'tool_result', tool_use_id: 't1', content: 'a\nb' }]),
+      m('5', 'assistant', [{ type: 'text', text: 'done' }]),
+    ])
+    render(<PreludeSection {...base} mode="chat" view={view} status="ok" done />)
+    expect(document.querySelector('[data-search-unit="p2:0:text"]')).not.toBeNull()
+    expect(screen.getAllByTestId('chat-tools-line')).toHaveLength(1)
+    expect(screen.getByText('done')).toBeTruthy()
+  })
+
+  it('chat: an omitted image sits in a user bubble; a cut text block gets its hint', () => {
+    const view = derivePrelude([
+      m('2', 'user', [{ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 122880 } }]),
+      m('3', 'assistant', [{ type: 'text', text: 'abc', truncated: true, total_bytes: 90000 }]),
+    ])
+    render(<PreludeSection {...base} mode="chat" view={view} status="ok" done />)
+    const bubble = screen.getByTestId('chat-bubble-user')
+    expect(bubble.textContent).toContain('[image · png · 120 KB]')
+    expect(screen.getByTestId('prelude-truncated').textContent).toBe('Too long — showing the first 3 B of 88 KB')
+  })
+
+  it('chat: markers and notes keep entry order around the spans', () => {
+    const view = derivePrelude([
+      { pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+      m('2', 'user', [{ type: 'text', text: 'first' }]),
+      note('3', 'command_output', 'Model set'),
+      m('4', 'assistant', [{ type: 'text', text: 'last' }]),
+    ])
+    render(<PreludeSection {...base} mode="chat" view={view} status="ok" done />)
+    const text = screen.getByTestId('worker-prelude').textContent ?? ''
+    expect(text.indexOf('In the terminal')).toBeLessThan(text.indexOf('first'))
+    expect(text.indexOf('first')).toBeLessThan(text.indexOf('Model set'))
+    expect(text.indexOf('Model set')).toBeLessThan(text.indexOf('last'))
+  })
 })

@@ -75,8 +75,8 @@ export interface SearchUnitOptions {
 }
 
 /** The fold key of a chat turn's tools line (ChatTranscript). */
-export function chatToolsKey(keyPrefix: string, turnIndex: number): string {
-  return `${keyPrefix}-turn-${turnIndex}:chat-tools`
+export function chatToolsKey(keyPrefix: string, turn: number | string): string {
+  return `${keyPrefix}-turn-${turn}:chat-tools`
 }
 
 function blocksOf(message: StreamMessage | undefined): ContentBlock[] {

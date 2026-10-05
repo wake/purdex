@@ -23,6 +23,8 @@ import ChatPartialGroup from './ChatPartialGroup'
 import ChatToolsLine from './ChatToolsLine'
 import ChatEditedLine from './ChatEditedLine'
 import ChatFailedLine from './ChatFailedLine'
+import { OmittedMedia, TruncatedHint } from '../room/prelude/Placeholders'
+import { blockShownBytes, isOmittedMedia } from '../room/prelude/placeholder-utils'
 
 function blockAt(messages: StreamMessage[], op: TurnOperation): ContentBlock | undefined {
   return (messages[op.msgIndex] as { message?: { content?: ContentBlock[] } } | undefined)?.message?.content?.[op.blockIndex]
@@ -70,6 +72,10 @@ function ChatMessage({ msg, i, interrupted, lineAt, idOf }: {
       // Thinking draws nothing in chat.
       if (block.type === 'text' && block.text?.trim()) {
         rows.push(<ChatBubble key={j} side="agent"><RoomProse content={block.text} searchUnit={searchUnitId(keyAt({ idOf }, i, j), 'text')} /></ChatBubble>)
+        // Only a prelude block is ever cut (live frames carry no `truncated`).
+        if (block.truncated) rows.push(<TruncatedHint key={`cut-${j}`} shown={blockShownBytes(block)} total={block.total_bytes ?? null} />)
+      } else if (isOmittedMedia(block)) {
+        rows.push(<ChatBubble key={j} side="agent"><OmittedMedia block={block} /></ChatBubble>)
       } else if (block.type === 'tool_use') {
         line(j)
       }
@@ -95,6 +101,10 @@ function ChatMessage({ msg, i, interrupted, lineAt, idOf }: {
     um.message.content.forEach((block, j) => {
       // tool_result: its call's line carries it (an orphan has a line of its own); never a bubble.
       if (block.type === 'tool_result') { line(j); return }
+      if (!fromSubagent && isOmittedMedia(block)) {
+        rows.push(<ChatBubble key={j} side="user"><OmittedMedia block={block} /></ChatBubble>)
+        return
+      }
       if (fromSubagent || block.type !== 'text' || !block.text) return
       if (block.text === INTERRUPT_TEXT) {
         rows.push(
@@ -109,6 +119,7 @@ function ChatMessage({ msg, i, interrupted, lineAt, idOf }: {
       // Your line is never markdown; a slash command gets the mono face (ChatUserBubble).
       rows.push(<ChatUserBubble key={j} text={block.text} searchUnit={searchUnitId(keyAt({ idOf }, i, j), 'text')}
         attachments={atts && j === attsAt ? <AttachmentThumbs items={atts} /> : undefined} />)
+      if (block.truncated) rows.push(<TruncatedHint key={`cut-${j}`} shown={blockShownBytes(block)} total={block.total_bytes ?? null} />)
     })
     if (atts && attsAt < 0) rows.push(<ChatUserBubble key="attachments" text="" attachments={<AttachmentThumbs items={atts} />} />)
   }
@@ -169,7 +180,7 @@ export default function ChatTurnBody({ messages, turn, ops, ctx, toolsKey, inter
         const i = turn.start + k
         return index.childIndexes.has(i)
           ? null
-          : <ChatMessage key={rowKey(ctx, i)} msg={msg} i={i} interrupted={interrupted} lineAt={(j) => lines.get(keyAt(ctx, i, j))} />
+          : <ChatMessage key={rowKey(ctx, i)} msg={msg} i={i} interrupted={interrupted} lineAt={(j) => lines.get(keyAt(ctx, i, j))} idOf={ctx.idOf} />
       })}
       {withPartial && partial && <ChatPartialGroup key={`${keyPrefix}-partial`} partial={partial} />}
       {/* Only streaming calls so far: the line comes with them, after
