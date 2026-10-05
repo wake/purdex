@@ -15,12 +15,22 @@ beforeEach(() => {
   vi.mocked(restartLib.countRunningWorkers).mockReset()
 })
 
-async function openConfirm(workers: number | null) {
+async function openConfirm(workers: number | null, onActiveChange?: (active: boolean) => void) {
   vi.mocked(restartLib.countRunningWorkers).mockResolvedValueOnce(workers)
-  render(<RestartDaemonButton hostId="h1" />)
+  const view = render(<RestartDaemonButton hostId="h1" onActiveChange={onActiveChange} />)
   await act(async () => { fireEvent.click(screen.getByTestId('restart-daemon')) })
   await screen.findByTestId('restart-daemon-confirm-dialog')
+  return view
 }
+
+/** The next count stays pending; the returned function resolves it inside act. */
+function pendingCount() {
+  let resolve!: (n: number | null) => void
+  vi.mocked(restartLib.countRunningWorkers).mockReturnValueOnce(new Promise((r) => { resolve = r }))
+  return (n: number | null) => act(async () => { resolve(n) })
+}
+
+const dialog = () => screen.queryByTestId('restart-daemon-confirm-dialog')
 
 describe('RestartDaemonButton', () => {
   it('confirm names running workers when there are some', async () => {
@@ -129,5 +139,188 @@ describe('RestartDaemonButton', () => {
     useDaemonRestartStore.setState({ restarting: { h1: true } })
     render(<RestartDaemonButton hostId="h1" />)
     expect(screen.getByTestId('restart-daemon').querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
+  })
+})
+
+// PR #1579 review (R1-1, R1-2, A-1, A-2, critic C1): a count or an open dialog is valid only for the same host, while
+// that host is not restarting and has not finished a restart since the click, and while the caller has not locked.
+describe('RestartDaemonButton - a stale count or dialog is cancelled', () => {
+  it('host changes mid-count: the old count opens no dialog; clicking again counts for the new host', async () => {
+    const settle = pendingCount()
+    const view = render(<RestartDaemonButton hostId="h1" />)
+    fireEvent.click(screen.getByTestId('restart-daemon'))
+    view.rerender(<RestartDaemonButton hostId="h2" />)
+    await settle(2)
+    expect(dialog()).toBeNull()
+    vi.mocked(restartLib.countRunningWorkers).mockResolvedValueOnce(0)
+    await act(async () => { fireEvent.click(screen.getByTestId('restart-daemon')) })
+    expect(restartLib.countRunningWorkers).toHaveBeenCalledTimes(2)
+    expect(restartLib.countRunningWorkers).toHaveBeenLastCalledWith('h2')
+    await screen.findByTestId('restart-daemon-confirm-dialog')
+    await act(async () => { fireEvent.click(screen.getByTestId('restart-daemon-confirm-confirm')) })
+    expect(restart).toHaveBeenCalledTimes(1)
+    expect(restart).toHaveBeenCalledWith('h2', expect.any(String))
+  })
+
+  it('host changes while the dialog is open: the dialog is gone and does not come back', async () => {
+    const view = await openConfirm(2)
+    view.rerender(<RestartDaemonButton hostId="h2" />)
+    expect(dialog()).toBeNull()
+    expect(screen.queryByTestId('restart-daemon-confirm-confirm')).toBeNull()
+    view.rerender(<RestartDaemonButton hostId="h1" />)
+    expect(dialog()).toBeNull()
+    expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('another entry point restarts the host mid-count: no dialog, not even once the restart ends', async () => {
+    const settle = pendingCount()
+    render(<RestartDaemonButton hostId="h1" />)
+    fireEvent.click(screen.getByTestId('restart-daemon'))
+    act(() => useDaemonRestartStore.setState({ restarting: { h1: true } }))
+    await settle(2)
+    expect(dialog()).toBeNull()
+    act(() => useDaemonRestartStore.setState({ restarting: {}, settled: { h1: 1 } }))
+    expect(dialog()).toBeNull()
+    expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('another entry point restarts the host while the dialog is open: it closes and does not reappear', async () => {
+    await openConfirm(2)
+    act(() => useDaemonRestartStore.setState({ restarting: { h1: true } }))
+    expect(dialog()).toBeNull()
+    act(() => useDaemonRestartStore.setState({ restarting: {}, settled: { h1: 1 } }))
+    expect(dialog()).toBeNull()
+    expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('a restart elsewhere that started AND finished mid-count (settled bumped, restarting empty) drops the count (C1)', async () => {
+    const settle = pendingCount()
+    render(<RestartDaemonButton hostId="h1" />)
+    fireEvent.click(screen.getByTestId('restart-daemon'))
+    act(() => useDaemonRestartStore.setState({ settled: { h1: 1 } }))
+    await settle(2)
+    expect(dialog()).toBeNull()
+    expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('a restart elsewhere settling while the dialog is open closes it (C1)', async () => {
+    await openConfirm(2)
+    act(() => useDaemonRestartStore.setState({ settled: { h1: 1 } }))
+    expect(dialog()).toBeNull()
+    expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('a settled bump on another host leaves this dialog alone', async () => {
+    await openConfirm(2)
+    act(() => useDaemonRestartStore.setState({ settled: { h2: 1 } }))
+    expect(dialog()).not.toBeNull()
+  })
+
+  it('the caller locks mid-count: no dialog, not even once it unlocks', async () => {
+    const settle = pendingCount()
+    const view = render(<RestartDaemonButton hostId="h1" />)
+    fireEvent.click(screen.getByTestId('restart-daemon'))
+    view.rerender(<RestartDaemonButton hostId="h1" disabled />)
+    await settle(2)
+    expect(dialog()).toBeNull()
+    view.rerender(<RestartDaemonButton hostId="h1" />)
+    expect(dialog()).toBeNull()
+    expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('the caller locks while the dialog is open: it closes and does not reappear on unlock', async () => {
+    const view = await openConfirm(2)
+    view.rerender(<RestartDaemonButton hostId="h1" disabled />)
+    expect(dialog()).toBeNull()
+    view.rerender(<RestartDaemonButton hostId="h1" />)
+    expect(dialog()).toBeNull()
+    expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('Confirm re-reads the store: a restart begun elsewhere since the last render is not doubled', async () => {
+    await openConfirm(0)
+    const confirmBtn = screen.getByTestId('restart-daemon-confirm-confirm')
+    // One act: the click lands on the dialog as last rendered, before the store change re-renders it.
+    act(() => {
+      useDaemonRestartStore.setState({ restarting: { h1: true } })
+      fireEvent.click(confirmBtn)
+    })
+    expect(restart).not.toHaveBeenCalled()
+    expect(dialog()).toBeNull()
+  })
+
+  it('Confirm re-reads the generation: a restart that finished elsewhere since the last render is not repeated (C1)', async () => {
+    await openConfirm(0)
+    const confirmBtn = screen.getByTestId('restart-daemon-confirm-confirm')
+    act(() => {
+      useDaemonRestartStore.setState({ settled: { h1: 1 } })
+      fireEvent.click(confirmBtn)
+    })
+    expect(restart).not.toHaveBeenCalled()
+    expect(dialog()).toBeNull()
+  })
+
+  it('happy path unchanged: confirm calls restart(h1, name) exactly once', async () => {
+    await openConfirm(1)
+    await act(async () => { fireEvent.click(screen.getByTestId('restart-daemon-confirm-confirm')) })
+    expect(restart).toHaveBeenCalledTimes(1)
+    expect(restart).toHaveBeenCalledWith('h1', expect.any(String))
+  })
+})
+
+// Critic C2: the caller hears while a flow (count or dialog) is active, so it can lock its other controls.
+describe('RestartDaemonButton - onActiveChange', () => {
+  it('true when counting starts, no flip while the dialog opens, false after Cancel', async () => {
+    const onActive = vi.fn()
+    const settle = pendingCount()
+    render(<RestartDaemonButton hostId="h1" onActiveChange={onActive} />)
+    expect(onActive).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('restart-daemon'))
+    expect(onActive.mock.calls).toEqual([[true]])
+    await settle(0)
+    await screen.findByTestId('restart-daemon-confirm-dialog')
+    expect(onActive.mock.calls).toEqual([[true]])
+    fireEvent.click(screen.getByTestId('restart-daemon-confirm-cancel'))
+    expect(onActive.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('false after Confirm', async () => {
+    const onActive = vi.fn()
+    await openConfirm(0, onActive)
+    await act(async () => { fireEvent.click(screen.getByTestId('restart-daemon-confirm-confirm')) })
+    expect(onActive.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('false once a stale count is dropped', async () => {
+    const onActive = vi.fn()
+    const settle = pendingCount()
+    const view = render(<RestartDaemonButton hostId="h1" onActiveChange={onActive} />)
+    fireEvent.click(screen.getByTestId('restart-daemon'))
+    view.rerender(<RestartDaemonButton hostId="h2" onActiveChange={onActive} />)
+    await settle(2)
+    expect(onActive.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('false when a stale dialog is closed', async () => {
+    const onActive = vi.fn()
+    await openConfirm(2, onActive)
+    act(() => useDaemonRestartStore.setState({ restarting: { h1: true } }))
+    expect(onActive.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('false on unmount while active', async () => {
+    const onActive = vi.fn()
+    pendingCount()
+    const view = render(<RestartDaemonButton hostId="h1" onActiveChange={onActive} />)
+    fireEvent.click(screen.getByTestId('restart-daemon'))
+    view.unmount()
+    expect(onActive.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('a locked click never reports active', () => {
+    const onActive = vi.fn()
+    render(<RestartDaemonButton hostId="h1" disabled onActiveChange={onActive} />)
+    fireEvent.click(screen.getByTestId('restart-daemon'))
+    expect(onActive).not.toHaveBeenCalled()
   })
 })

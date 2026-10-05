@@ -4,6 +4,9 @@ import { LocalDaemonSection } from './LocalDaemonSection'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useDaemonRestartStore } from '../../stores/useDaemonRestartStore'
+import * as restartLib from '../../lib/daemon-restart'
+
+vi.mock('../../lib/daemon-restart', async (orig) => ({ ...(await orig<typeof import('../../lib/daemon-restart')>()), countRunningWorkers: vi.fn() }))
 
 const status = (o: Partial<ElectronLocalDaemonStatus> = {}): ElectronLocalDaemonStatus => ({
   managed: 'none', binPath: '/Users/t/.config/pdx/bin/pdx', installed: null, alive: null, running: null, config: null,
@@ -242,6 +245,73 @@ describe('LocalDaemonSection - restart (R2)', () => {
     const calls = mockStatus.mock.calls.length
     await act(async () => useDaemonRestartStore.setState({ restarting: {}, settled: { [id]: 1 } }))
     expect(mockStatus.mock.calls.length).toBe(calls + 1)
+  })
+
+  // PR #1579 review (R1-2, A-2, critic C2): a restart flow and an Update/Install never interleave, in either direction.
+  describe('restart flow vs the section lock', () => {
+    const realRestart = useDaemonRestartStore.getState().restart
+    const storeRestart = vi.fn(async () => {})
+    beforeEach(() => {
+      vi.mocked(restartLib.countRunningWorkers).mockReset()
+      storeRestart.mockClear()
+      useDaemonRestartStore.setState({ restart: storeRestart })
+    })
+    afterEach(() => { useDaemonRestartStore.setState({ restart: realRestart }) })
+
+    const pendingCount = () => {
+      let resolve!: (n: number | null) => void
+      vi.mocked(restartLib.countRunningWorkers).mockReturnValueOnce(new Promise((r) => { resolve = r }))
+      return (n: number | null) => act(async () => { resolve(n) })
+    }
+    const btn = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement
+
+    it('while the shared restart counts or confirms, Update and Refresh are disabled; Cancel re-enables them', async () => {
+      addLocalHost()
+      mockStatus.mockResolvedValue(managedAlive())
+      const settle = pendingCount()
+      await renderIt('ccc')
+      expect(btn('Update').disabled).toBe(false)
+      fireEvent.click(screen.getByTestId('local-daemon-restart'))
+      expect(btn('Update').disabled).toBe(true)
+      expect(btn('Refresh').disabled).toBe(true)
+      await settle(0)
+      await screen.findByTestId('local-daemon-restart-confirm-dialog')
+      expect(btn('Update').disabled).toBe(true)
+      fireEvent.click(screen.getByTestId('local-daemon-restart-confirm-cancel'))
+      expect(btn('Update').disabled).toBe(false)
+      expect(btn('Refresh').disabled).toBe(false)
+      expect(storeRestart).not.toHaveBeenCalled()
+    })
+
+    it('Update cannot be started during a pending restart count: it is disabled and a click installs nothing', async () => {
+      addLocalHost()
+      mockStatus.mockResolvedValue(managedAlive())
+      mockInstall.mockReturnValue(new Promise(() => {}))
+      const settle = pendingCount()
+      await renderIt('ccc')
+      fireEvent.click(screen.getByTestId('local-daemon-restart'))
+      expect(btn('Update').disabled).toBe(true)
+      await act(async () => { fireEvent.click(btn('Update')) })
+      expect(mockInstall).not.toHaveBeenCalled()
+      await settle(2)
+      // The section never went busy, so the flow is still valid: its dialog opens, and nothing restarts without Confirm.
+      expect(screen.getByTestId('local-daemon-restart-confirm-dialog')).toBeTruthy()
+      expect(storeRestart).not.toHaveBeenCalled()
+    })
+
+    it('reverse: with an Update in flight the shared restart is disabled and a click does not count', async () => {
+      addLocalHost()
+      mockStatus.mockResolvedValue(managedAlive())
+      mockInstall.mockReturnValue(new Promise(() => {}))
+      await renderIt('ccc')
+      await act(async () => { fireEvent.click(btn('Update')) })
+      const restartBtn = screen.getByTestId('local-daemon-restart') as HTMLButtonElement
+      expect(restartBtn.disabled).toBe(true)
+      await act(async () => { fireEvent.click(restartBtn) })
+      expect(restartLib.countRunningWorkers).not.toHaveBeenCalled()
+      expect(screen.queryByTestId('local-daemon-restart-confirm-dialog')).toBeNull()
+      expect(storeRestart).not.toHaveBeenCalled()
+    })
   })
 })
 

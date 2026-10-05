@@ -31,6 +31,8 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
   const api = window.electronAPI
   const [status, setStatus] = useState<ElectronLocalDaemonStatus | null>(null)
   const [busy, setBusy] = useState<Busy>(null)
+  // The shared restart button is counting or showing its confirm (PR #1579 critic C2): the section's other buttons wait.
+  const [restartFlow, setRestartFlow] = useState(false)
   const [step, setStep] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -128,7 +130,9 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
   const restartPending = !!installed && !!running && running.hash !== installed.hash
   // Spec 2026-10-06 §3.2 R2: managed + alive always offers restart (Update may show beside it).
   const showRestart = !!alive
-  const disabled = busy !== null || restartingLocal
+  // Locks every other button, so an Update/Install never interleaves with a restart flow. The shared restart button
+  // takes only `busy !== null` as its lock: restartFlow is its own flow, and would lock it out of it.
+  const disabled = busy !== null || restartingLocal || restartFlow
   const externalUrl = running?.url ?? (status?.config ? `http://${status.config.bind}:${status.config.port}` : '')
 
   return (
@@ -255,7 +259,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
               <button onClick={() => void run('start', () => api.localDaemonStart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.start')}</button>
             )}
             {showRestart && (registeredAs
-              ? <RestartDaemonButton hostId={registeredAs.id} label={t('settings.dev.local.btn.restart')} testId="local-daemon-restart" className={btnSecondary} disabled={busy !== null} />
+              ? <RestartDaemonButton hostId={registeredAs.id} label={t('settings.dev.local.btn.restart')} testId="local-daemon-restart" className={btnSecondary} disabled={busy !== null} onActiveChange={setRestartFlow} />
               : <button onClick={() => void run('restart', () => api.localDaemonRestart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.restart')}</button>)}
             {updateAvailable && (
               <button
@@ -268,7 +272,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
           </>
         )}
         {status?.managed === 'external' && registeredAs && (running || restartingLocal) && (
-          <RestartDaemonButton hostId={registeredAs.id} label={t('settings.dev.local.btn.restart')} testId="local-daemon-restart" className={btnSecondary} disabled={busy !== null} />
+          <RestartDaemonButton hostId={registeredAs.id} label={t('settings.dev.local.btn.restart')} testId="local-daemon-restart" className={btnSecondary} disabled={busy !== null} onActiveChange={setRestartFlow} />
         )}
       </div>
     </div>
