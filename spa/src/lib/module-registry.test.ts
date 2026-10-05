@@ -5,8 +5,6 @@ import {
   getModule,
   getModules,
   getPaneRenderer,
-  getViewDefinition,
-  getAllViews,
   getModulesWithWorkspaceConfig,
   getModulesWithGlobalConfig,
   clearModuleRegistry,
@@ -17,32 +15,15 @@ import type { ModuleDefinition } from './module-registry'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const DummyComponent = (() => null) as React.FC<any>
 
-const DummyIcon = DummyComponent
-const DummyView = DummyComponent
-
 const sessionModule: ModuleDefinition = {
   id: 'session',
   name: 'Session',
   panes: [{ kind: 'tmux-session', component: DummyComponent }],
-  views: [{
-    id: 'session-list',
-    label: 'Sessions',
-    icon: DummyComponent,
-    scope: 'system',
-    component: DummyComponent,
-  }],
 }
 
 const filesModule: ModuleDefinition = {
   id: 'files',
   name: 'Files',
-  views: [{
-    id: 'file-tree',
-    label: 'Files',
-    icon: DummyComponent,
-    scope: 'workspace',
-    component: DummyComponent,
-  }],
 }
 
 beforeEach(() => {
@@ -107,42 +88,6 @@ describe('module-registry', () => {
 
     it('returns undefined for unknown kind', () => {
       expect(getPaneRenderer('unknown')).toBeUndefined()
-    })
-  })
-
-  describe('getViewDefinition', () => {
-    it('returns view by id', () => {
-      registerModule(sessionModule)
-      const view = getViewDefinition('session-list')
-      expect(view?.label).toBe('Sessions')
-    })
-
-    it('returns undefined for unknown view id', () => {
-      expect(getViewDefinition('unknown')).toBeUndefined()
-    })
-  })
-
-  describe('getAllViews', () => {
-    it('returns all views from all modules', () => {
-      registerModule({
-        id: 'mod-a', name: 'A',
-        views: [{ id: 'view-1', label: 'V1', icon: DummyIcon, scope: 'system', component: DummyView }],
-      })
-      registerModule({
-        id: 'mod-b', name: 'B',
-        views: [
-          { id: 'view-2', label: 'V2', icon: DummyIcon, scope: 'workspace', component: DummyView },
-          { id: 'view-3', label: 'V3', icon: DummyIcon, scope: 'tab', component: DummyView },
-        ],
-      })
-      registerModule({ id: 'mod-c', name: 'C' })
-      const views = getAllViews()
-      expect(views).toHaveLength(3)
-      expect(views.map((v) => v.id)).toEqual(['view-1', 'view-2', 'view-3'])
-    })
-    it('returns empty array when no modules have views', () => {
-      registerModule({ id: 'mod-x', name: 'X' })
-      expect(getAllViews()).toEqual([])
     })
   })
 

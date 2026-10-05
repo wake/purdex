@@ -1,6 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useState } from 'react'
-import { Lightning } from '@phosphor-icons/react'
 import { getModules, registerModule } from '../module-registry'
 import { registerNewTabProvider, registerNewTabProviderSource } from '../new-tab-registry'
 import { registerSettingsSection } from '../settings-section-registry'
@@ -22,7 +21,6 @@ import { BrowserNewTabSection } from '../../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../../components/MemoryMonitorPage'
 import { HostPage } from '../../components/HostPage'
 import ExecutionView from '../../components/execution/ExecutionView'
-import { ExecutionsView } from '../../components/executions/ExecutionsView'
 import { resolveExecutionHostId } from '../nex/resolve-host'
 import { viewModeOf, withViewMode } from '../nex/view-mode'
 import { AppearanceSection } from '../../components/settings/AppearanceSection'
@@ -253,16 +251,6 @@ export function registerBuiltinModules(): void {
     id: 'execution',
     name: 'Execution',
     panes: [{ kind: 'execution', component: ExecutionPaneWrapper }],
-    views: [
-      {
-        id: 'executions',
-        label: 'Executions',
-        labelKey: 'sidebar.view.executions',
-        icon: Lightning,
-        scope: 'system',
-        component: ExecutionsView,
-      },
-    ],
     // Worker pane theme spec §4.2: "Worker → Appearance" — one purdex-scope
     // global setting (T1), not per pane.
     settings: [{
@@ -306,22 +294,6 @@ export function registerBuiltinModules(): void {
     label: 'settings.interface.new_tab',
     order: 0,
     component: NewTabSubsection,
-  })
-  registerInterfaceSubsection({
-    id: 'pane',
-    label: 'settings.interface.pane',
-    order: 1,
-    component: () => null,
-    disabled: true,
-    disabledReason: 'settings.coming_soon',
-  })
-  registerInterfaceSubsection({
-    id: 'sidebar',
-    label: 'settings.interface.sidebar',
-    order: 2,
-    component: () => null,
-    disabled: true,
-    disabledReason: 'settings.coming_soon',
   })
 
   // New-tab providers

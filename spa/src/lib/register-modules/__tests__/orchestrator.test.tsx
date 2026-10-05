@@ -3,11 +3,10 @@ import { act, render } from '@testing-library/react'
 import { useEffect, useState } from 'react'
 import { resetFileOpenerRegistryForHmr } from '../index'
 import { getDefaultOpener, getRegisteredOpeners } from '../../file-opener-registry'
-import { getModule, getViewDefinition, resolvePaneRenderer } from '../../module-registry'
+import { getModule, resolvePaneRenderer } from '../../module-registry'
 import { useTabStore } from '../../../stores/useTabStore'
 import { createTab } from '../../../types/tab'
 import { getPrimaryPane } from '../../pane-tree'
-import { ExecutionsView } from '../../../components/executions/ExecutionsView'
 import ExecutionView from '../../../components/execution/ExecutionView'
 
 vi.mock('../../../components/execution/ExecutionView', () => ({ default: vi.fn(() => null) }))
@@ -57,15 +56,6 @@ describe('registerBuiltinModules orchestrator', () => {
     expect(getRegisteredOpeners().length).toBeGreaterThan(0)
     resetFileOpenerRegistryForHmr()
     expect(getRegisteredOpeners()).toEqual([])
-  })
-
-  it('registers the Executions sidebar view on the execution module', () => {
-    const view = getViewDefinition('executions')
-    expect(view).toBeDefined()
-    expect(view?.label).toBe('Executions')
-    expect(view?.scope).toBe('system')
-    expect(view?.component).toBe(ExecutionsView)
-    expect(getModule('execution')?.views?.map((v) => v.id)).toEqual(['executions'])
   })
 
   // P-C.3b task 4: the execution pane wrapper hands ExecutionView the pane's

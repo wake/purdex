@@ -1,10 +1,8 @@
 import type React from 'react'
 import type { Pane } from '../types/tab'
-import type { SidebarRegion } from '../types/layout'
 import type { AnySettingsContributionDeclaration } from './settings-contribution-types'
 
 // Re-export for convenience
-export type { SidebarRegion } from '../types/layout'
 export type {
   AnySettingsContribution,
   AnySettingsContributionDeclaration,
@@ -27,25 +25,6 @@ export interface PaneDefinition {
   component: React.ComponentType<PaneRendererProps>
 }
 
-export interface ViewProps {
-  hostId?: string
-  workspaceId?: string
-  tabId?: string
-  isActive: boolean
-  region?: SidebarRegion
-}
-
-export interface ViewDefinition {
-  id: string
-  /** Fallback display name, used when `labelKey` is absent. */
-  label: string
-  /** i18n key for the display name; wins over `label` when set. */
-  labelKey?: string
-  icon: React.ComponentType<{ size?: number; className?: string }>
-  scope: 'system' | 'workspace' | 'tab'
-  component: React.ComponentType<ViewProps>
-}
-
 export interface ConfigDef {
   key: string
   type: 'string' | 'boolean' | 'number'
@@ -58,7 +37,6 @@ export interface ModuleDefinition {
   id: string
   name: string
   panes?: PaneDefinition[]
-  views?: ViewDefinition[]
   /** @deprecated Use `settings: [{ scope: 'workspace', localId }]` instead. Will be removed after the files module migrates. */
   workspaceConfig?: ConfigDef[]
   /** @deprecated Use `settings: [{ scope: 'purdex', localId }]` instead. Will be removed after all consumers migrate. */
@@ -174,24 +152,6 @@ export function resolvePaneRenderer(
     }
   }
   return { kind: 'unknown', paneKind }
-}
-
-export function getViewDefinition(viewId: string): ViewDefinition | undefined {
-  for (const m of modules.values()) {
-    if (!m.views) continue
-    const view = m.views.find((v) => v.id === viewId)
-    if (view) return view
-  }
-  return undefined
-}
-
-/** A view's display name in the active locale. */
-export function viewLabel(view: ViewDefinition, t: (key: string) => string): string {
-  return view.labelKey ? t(view.labelKey) : view.label
-}
-
-export function getAllViews(): ViewDefinition[] {
-  return [...modules.values()].flatMap((m) => m.views ?? [])
 }
 
 export function getModulesWithWorkspaceConfig(): ModuleDefinition[] {
