@@ -13,6 +13,7 @@ import { toolEntryFor, type TurnOperation } from '../../lib/nex/operation-status
 import { utf8Length } from '../../lib/nex/fold'
 import { INTERRUPT_TEXT } from '../../lib/nex/turns'
 import { searchUnitId } from '../../lib/nex/transcript-search'
+import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
 import RoomProse from '../room/RoomProse'
 import OperationBlock from '../room/OperationBlock'
 import { OperationAt } from '../room/MessageRow'
@@ -151,9 +152,15 @@ export interface ChatTurnBodyProps {
   /** The in-flight message belongs to this turn: draw the partial and its streaming calls. */
   withPartial?: boolean
   footer?: ReactNode
+  /**
+   * A prelude span's message poses, in order (#1534): the root carries the
+   * first as `data-prelude-pos` and all of them, space-separated, as
+   * `data-prelude-poses`, so a room row's pos finds the span holding it.
+   */
+  preludePoses?: readonly string[]
 }
 
-export default function ChatTurnBody({ messages, turn, ops, ctx, toolsKey, interrupted, partial, withPartial = false, footer }: ChatTurnBodyProps) {
+export default function ChatTurnBody({ messages, turn, ops, ctx, toolsKey, interrupted, partial, withPartial = false, footer, preludePoses }: ChatTurnBodyProps) {
   const t = useI18nStore((s) => s.t)
   const { index, keyPrefix } = ctx
   const plain = ops.filter((o) => o.kind === 'plain')
@@ -188,7 +195,8 @@ export default function ChatTurnBody({ messages, turn, ops, ctx, toolsKey, inter
     if (op.kind !== 'plain') lines.set(op.key, <ChatOperationLine op={op} ctx={ctx} />)
   }
   return (
-    <div className="space-y-3">
+    <div className={preludePoses?.[0] !== undefined ? `space-y-3 ${SCROLL_ANCHOR_CLASS}` : 'space-y-3'}
+      data-prelude-pos={preludePoses?.[0]} data-prelude-poses={preludePoses?.join(' ')}>
       {messages.slice(turn.start, turn.end).map((msg, k) => {
         const i = turn.start + k
         return index.childIndexes.has(i)

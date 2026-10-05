@@ -3,13 +3,34 @@
 // chat switch, the pane re-rendering from scratch) reads it back. Memory
 // only: a reload starts every transcript at the bottom again.
 
+/**
+ * What was on screen (worker prelude spec §5.4, #1534): the first prelude
+ * element (`data-prelude-pos`) or turn (`data-turn-index`) still showing,
+ * and its top's distance from the box's top (negative once partly scrolled
+ * past). Unlike `scrollTop`, it survives content landing above it.
+ */
+export type ScrollAnchor =
+  | { kind: 'prelude'; pos: string; offset: number }
+  | { kind: 'turn'; index: number; offset: number }
+
+/**
+ * The class every anchor element carries — each one with `data-prelude-pos`
+ * or `data-turn-index`, and nothing else — so the scroll hook keeps one live
+ * `getElementsByClassName` list per box instead of rescanning the DOM on
+ * every scroll event (spec §5.4). A marker, not a style: no CSS rule names it
+ * and Tailwind generates nothing for it.
+ */
+export const SCROLL_ANCHOR_CLASS = 'scroll-anchor'
+
 export interface ScrollMemo {
   scrollTop: number
   atBottom: boolean
-  /** The view that wrote it: only that view can reuse `scrollTop`. */
+  /** The view that wrote it: only that view can reuse `scrollTop` and the anchor's offset. */
   view: 'room' | 'chat'
   /** The first turn (`data-turn-index`) still on screen — both views share the index. */
   firstTurn: number | null
+  /** Absent when nothing anchorable was on screen. */
+  anchor?: ScrollAnchor
 }
 
 const memos = new Map<string, ScrollMemo>()

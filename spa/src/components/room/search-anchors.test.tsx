@@ -233,7 +233,9 @@ describe.each<[string, Fixture]>([['every kind', everyKind], ['edge shapes', edg
         expect(rendered(found[0]), unit.id).toBe(unit.text)
         unmount()
       }
-    })
+    // One full mount per unit: the golden prelude takes ~1.5 s alone, past the
+    // default 5 s under a loaded full-suite run.
+    }, 20_000)
 
     it('draws no anchor the index does not know', () => {
       const { expand, anchors } = mount(fixture, view)

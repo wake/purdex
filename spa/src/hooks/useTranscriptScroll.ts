@@ -45,18 +45,24 @@
 // **Memory (spec §6).** Given `memory`, every observed position — and
 // `follow`'s own jump, mount's or a later catch-up alike, which never gets a
 // scroll event of its own to observe — is written to the pane's memo
-// (`lib/nex/transcript-scroll-memory`): scrollTop, the flag, the view and the
-// first turn still on screen. The first call after a mount reads it back: at
-// the bottom → the jump to the bottom as ever; elsewhere, the same view
-// restores scrollTop (the browser clamps it; a clamp that lands at the
-// bottom counts as the bottom, A4), and the other view — a
-// different height — brings the remembered first turn to the top.
+// (`lib/nex/transcript-scroll-memory`): scrollTop, the flag, the view, the
+// first turn still on screen, and the anchor — the first prelude element or
+// turn still on screen, with its offset from the box's top (#1534). The
+// first call after a mount reads it back: at the bottom → the jump to the
+// bottom as ever; elsewhere, the same view puts the anchor back at its
+// offset, so a prelude page that landed while the pane was unmounted does
+// not shift the reader (an anchor whose pos a chat span now holds without
+// starting at it puts that span there; scrollTop when neither is drawn), and the
+// other view — a different height — brings a prelude anchor (by its pos, or
+// the chat span holding it) or else the remembered first turn to the top.
+// Either way the browser clamps it, and a clamp that lands at the bottom
+// counts as the bottom (A4).
 // **Keying.** The caller's `memory.paneId` is whatever key it composes — a
 // worker pane's transcript keys it by pane *and* execution
 // (ExecutionView), since a handoff / take-back can swap a pane's content to
 // a different execution while keeping its paneId.
 import { useCallback, useImperativeHandle, useLayoutEffect, useMemo, useRef, type Ref, type UIEvent } from 'react'
-import { readScrollMemo, writeScrollMemo, type ScrollMemo } from '../lib/nex/transcript-scroll-memory'
+import { readScrollMemo, writeScrollMemo, SCROLL_ANCHOR_CLASS, type ScrollAnchor, type ScrollMemo } from '../lib/nex/transcript-scroll-memory'
 
 /** Within this many pixels of the end counts as the bottom (sub-pixel rounding, a last line's margin). */
 const NEAR_BOTTOM = 24
@@ -114,6 +120,51 @@ function firstVisibleTurn(el: HTMLElement): number | null {
   return null
 }
 
+/**
+ * What the memory anchors to (#1534): the prelude's rows, spans, notes and
+ * markers, then the turns — every element carrying SCROLL_ANCHOR_CLASS, in
+ * DOM order. A live list the browser keeps current, taken once per box, so a
+ * page landing needs no new query (spec §5.4).
+ */
+type AnchorList = HTMLCollectionOf<HTMLElement>
+const anchorsIn = (el: HTMLElement) => el.getElementsByClassName(SCROLL_ANCHOR_CLASS) as AnchorList
+
+/**
+ * The first anchor whose bottom is below the box's top, with its top's
+ * offset from the box's top. This runs on every scroll event, so it never
+ * rescans the DOM: anchors are stacked rows, so their bottoms only grow in
+ * DOM order, and a binary search over the box's live list reads O(log n) of
+ * them, however long the prelude.
+ */
+function firstVisibleAnchor(el: HTMLElement, nodes: AnchorList): ScrollAnchor | undefined {
+  const top = el.getBoundingClientRect().top
+  let lo = 0
+  let hi = nodes.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (nodes[mid].getBoundingClientRect().bottom > top) hi = mid
+    else lo = mid + 1
+  }
+  const node = nodes[lo]
+  if (!node) return undefined
+  const offset = node.getBoundingClientRect().top - top
+  const pos = node.dataset.preludePos
+  if (pos !== undefined) return { kind: 'prelude', pos, offset }
+  const index = Number(node.dataset.turnIndex)
+  return Number.isFinite(index) ? { kind: 'turn', index, offset } : undefined
+}
+
+// A pos is `^[A-Za-z0-9._-]{1,64}$` (prelude-wire), so it is safe inside a
+// quoted attribute value and as one word of `~=`.
+/**
+ * The prelude element drawn for `pos`: the one starting at it, else the chat
+ * span listing it — a row of the other view, or a span that grew at the
+ * front when an older page ended with messages joining it (spec §5.4).
+ */
+const preludeAt = (el: HTMLElement, pos: string) =>
+  el.querySelector<HTMLElement>(`[data-prelude-pos="${pos}"]`) ?? el.querySelector<HTMLElement>(`[data-prelude-poses~="${pos}"]`)
+const turnAt = (el: HTMLElement, index: number) => el.querySelector<HTMLElement>(`[data-turn-index="${index}"]`)
+
 /** A press on the box's own scrollbar gutter, not its content or padding (A3). */
 function onScrollbar(e: MouseEvent): boolean {
   const el = e.currentTarget
@@ -127,6 +178,8 @@ export function useTranscriptScroll(
   memory?: TranscriptScrollMemory,
 ): TranscriptScroll {
   const box = useRef<HTMLDivElement | null>(null)
+  // The box's anchors, live (spec §5.4): taken when the box attaches.
+  const anchors = useRef<AnchorList | null>(null)
   const atBottom = useRef(true)
   const lastTop = useRef(0)
   const scrolled = useRef(false)
@@ -176,6 +229,7 @@ export function useTranscriptScroll(
       node.addEventListener('pointerdown', takeOver)
       node.addEventListener('keydown', takeOver)
     }
+    if (node !== prev) anchors.current = node ? anchorsIn(node) : null
     box.current = node
     assignRef(external, node)
   }, [external, takeOver])
@@ -185,6 +239,7 @@ export function useTranscriptScroll(
     if (!m) return
     writeScrollMemo(m.paneId, {
       scrollTop: el.scrollTop, atBottom: atBottom.current, view: m.view, firstTurn: firstVisibleTurn(el),
+      anchor: anchors.current ? firstVisibleAnchor(el, anchors.current) : undefined,
     })
   }, [])
 
@@ -217,12 +272,26 @@ export function useTranscriptScroll(
     const m = mem.current
     const memo = m && readScrollMemo(m.paneId)
     if (!m || !memo || memo.atBottom) return false
+    // An element's offset inside the box, like scrollIntoView({ block: 'start' })
+    // but without scrolling any ancestor.
+    const boxTop = el.getBoundingClientRect().top
+    const offsetOf = (node: HTMLElement) => node.getBoundingClientRect().top - boxTop + el.scrollTop
+    const { anchor } = memo
     let top = memo.scrollTop
-    if (memo.view !== m.view && memo.firstTurn !== null) {
-      const turn = el.querySelector<HTMLElement>(`[data-turn-index="${memo.firstTurn}"]`)
-      // The turn's offset inside the box, like scrollIntoView({ block: 'start' })
-      // but without scrolling any ancestor.
-      if (turn) top = turn.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
+    if (memo.view === m.view) {
+      // Same view, same heights: the anchor back at its offset. Content that
+      // landed above it meanwhile (a prelude page, #1534) shifts nothing. A
+      // chat span that grew at the front puts its own top there: the reader
+      // moves by what joined it, never more than raw scrollTop would.
+      const node = anchor && (anchor.kind === 'prelude' ? preludeAt(el, anchor.pos) : turnAt(el, anchor.index))
+      if (anchor && node) top = offsetOf(node) - anchor.offset
+    } else {
+      // Another view, other heights: what was on screen goes to the top — a
+      // prelude anchor by its pos, or the chat span listing it; else (a turn
+      // anchor, or a pos this view does not draw) the first turn.
+      const node = (anchor?.kind === 'prelude' ? preludeAt(el, anchor.pos) : null)
+        ?? (memo.firstTurn !== null ? turnAt(el, memo.firstTurn) : null)
+      if (node) top = offsetOf(node)
     }
     el.scrollTo({ top, behavior: 'auto' })
     // Read back where it landed: an instant scroll lands synchronously, and

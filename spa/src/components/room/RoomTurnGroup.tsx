@@ -12,6 +12,7 @@
 // silently fall behind (spec §3.2, codex plan review #6).
 import type { ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
 import { TurnIndexContext, useFoldStore } from './fold-context'
 
 export interface RoomTurnGroupProps {
@@ -32,7 +33,7 @@ export default function RoomTurnGroup({ index, children, chrome = true }: RoomTu
   const { setTurn } = useFoldStore()
 
   return (
-    <section data-testid="room-turn" data-turn-index={index} className="group relative">
+    <section data-testid="room-turn" data-turn-index={index} className={`group relative ${SCROLL_ANCHOR_CLASS}`}>
       {/*
         Hidden until the turn is hovered: the strip is a tool for the reader,
         not part of what the turn says. It sits over the turn's top-right
