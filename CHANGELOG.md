@@ -1,5 +1,66 @@
 # Changelog
 
+## [1.0.0-alpha.489] - 2026-10-06
+
+> Both daemon and SPA change; Electron needs no update. **The daemon is not deployed yet.** The new binary has to go in with one restart, together with alpha.487/488 and scheduled by the coordinator. Only after that does the new "重新啟動 daemon" button work. On an older daemon the button reports「這台 daemon 版本不支援遠端重啟」. The SPA goes out through HMR.
+
+### Feature: restart the daemon from the SPA (#1568 #1570 #1575 #1579)
+
+- **Three entry points:**
+  - On the host page: Overview → "Daemon 設定" →「重新啟動 daemon」(shown for a connected host).
+  - On the Nex config page: a「立即重啟」button next to the hint that says a restart is needed after saving.
+  - Settings → Development → local daemon. While the App-managed daemon is running, restart is always available and can sit next to "更新". A daemon not started by the App gets the button once it is in the host list and responding.
+- **Confirm first.** The dialog says terminal connections drop for a few seconds and reconnect by themselves, and tmux sessions are not affected. If workers are running it adds「N 個 worker 正在執行，重啟會中斷它們這一輪（之後可以繼續對話）」. If the count cannot be checked it shows「無法確認…」instead of hiding the warning.
+- **While restarting.** Every entry point for that host spins and is disabled.
+- **Done.** Done means the daemon answers with a new `boot_id`. The toast is「<主機>：daemon 已重新啟動」. If the shutdown hit cleanup errors, it adds「但關閉時有 N 個警告」.
+- **Failure.**
+  - If the daemon is not back within 60 seconds, an error points to `~/.config/pdx/logs/pdx.log` on that host.
+  - An old daemon gets "pdx stop && pdx start".
+- **Stale confirm dialogs are invalidated.** A pending count or an open dialog is cancelled when the host changes, when another entry point already restarted that host, or when the page locks it. It never restarts the wrong host or restarts twice.
+
+### Daemon: `POST /api/daemon/restart`, boot_id, re-exec in place (#1568 #1570)
+
+- **New endpoint** (host token). It replies `202 {boot_id}`, runs the normal shutdown, then re-execs in place with the executable path, argv and environment captured at startup.
+  - The pid stays the same, so the App ownership record and the pid file stay valid.
+  - `PDX_DEV_MODE` and similar settings are kept.
+  - A binary swapped on disk is picked up.
+  - Other responses: during a restart, `409 restart_in_progress`. Once shutdown has started, `503 shutting_down`. Without a hook, `503 restart_unavailable`.
+- **`/api/health`** gains `boot_id`, which is new on every process start.
+- **pid lock handed across the exec.** The fd stays open, and close-on-exec is cleared only right before the exec under ForkLock, so a concurrent `pdx start` cannot grab the lock. If `pdx stop` arrives during the restart's shutdown, it becomes a plain stop with no re-exec.
+- **Cleanup errors during shutdown.** The daemon still restarts, which is equivalent to `pdx stop` followed by `pdx start`.
+  - The errors are written to `<data_dir>/last-shutdown.json` (0600, exclusive tmp file, then rename).
+  - The new process consumes the file once by rename, then reports it on `/api/info` `last_shutdown`, tied to the new `boot_id`.
+- **Known limitation.** If the binary on disk is rolled back to a version before this one, a remote restart leaves the daemon down. Run `pdx start` on that host.
+
+### Internal
+
+- spec/plan: `docs/specs/2026-10-06-daemon-restart-spec.md`, `docs/plans/2026-10-06-daemon-restart-plan.md`.
+- Integration test `go test -tags integration ./cmd/pdx/ -run TestRestart_ReexecKeepsPidNewBootID` runs a real serve → restart. It checks:
+  - the pid is unchanged;
+  - `boot_id` is new;
+  - the env is kept;
+  - the lock never goes free.
+- Follow-ups (test hardening, edge cases): #1569.
+
+## [1.0.0-alpha.488] - 2026-10-06
+
+> 只動 daemon，目前沒有 UI 會呼叫它（SPA 的「退出」在 P1b-2）。**daemon 尚未部署**：跟 alpha.487 一起累積，由統籌安排重啟。SPA 與 Electron 都不必更新。
+
+### Internal：對話主體 P1a-2——退出 worker（#1578）
+
+- **新端點 `POST /api/nex/executions/{id}/exit`**，body 可選帶 `{lease_id}`。回 `{exited, terminated, archived, state}`。做法依 spec §5：
+  - running、idle、queued 先 terminate 再 archive；failed、rejected 只 archive；terminated 但沒 archive 的補 archive。
+  - 已經退出的再按一次，不會碰 engine。
+  - terminate 失敗也照樣嘗試 archive（D4），所以 worker 一樣會算成已退出。
+- **控制權（lease）**：
+  - 先用 caller 帶來的 lease，但會先驗證；過期就改走重新取得。
+  - 再來是自己取一把，用完就還。
+  - 被另一個 Purdex 分頁握著時，借用它當下的 lease（不歸還）。
+  - 被非 Purdex 的身分握著時，回 409 `held_by`，什麼都不動。
+  - 在讀取與使用之間換手時會重新判斷，並在 archive 前再確認一次持有者。
+- **找出某個對話所有活著的 worker**：分頁掃描 embedded Nexen（每頁 500、最多 20 頁）。同一個 session id 符合 `session_id` 或 `resume_session_id` 的、沒 archive 也沒 terminated 的，就算這個對話的 worker。
+- 已知限制：「確認持有者」和「archive」不是同一個原子操作。目前的部署裡所有 lease 持有者都是 Purdex 自己簽的身分，所以不會發生；真要完全封死，需要 Nexen 提供附 lease 圍欄的 archive。
+
 ## [1.0.0-alpha.487] - 2026-10-06
 
 > 只動 daemon，使用者看不到變化。這是「一個對話＝一個主體」的第一段，後續的 worker 退出與擁有者檢查會用到它。**daemon 尚未部署**：要等後面幾段累積完，由統籌跟使用者約時間一起重啟。SPA 與 Electron 都不必更新。

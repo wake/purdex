@@ -181,12 +181,108 @@ The worker option is offered only when the host's Nexen is ready and a session i
 
 ## 8. Switching must not write into the conversation
 
-A mode switch changes the owner, not the conversation. So handoff and worker rebuild must **not** send a synthetic prompt.
+> **統籌（2026-10-06）完整版**：本節由統籌 `mlab/purdex-9b` 撰寫，取代原 outline；§10 的方案由使用者於 2026-10-06 拍板（早段＝對話檔＋各自 execution 的事件補充；當前 stint＝事件紀錄；不做 transcript-to-now）。
 
-- **Nexen (new, v0.17):** `delegate` with `resume_session_id` and **no brief** creates the execution in `idle` with no turn. It waits for the first real message.
-  - `transcript_prelude` and `session_id` are set from `resume_session_id` at creation.
-  - Capability-detected.
-- **Purdex:** when the capability is present, handoff and worker rebuild delegate without a brief. When it is absent (an old daemon), today's placeholder brief stays.
+### 8.1 Facts
+
+- Handoff delegates with the placeholder brief `"(handed off from tmux session <name>)"`. Delegate turns the brief into turn 1, so the model answers it (`internal/module/nex/handoff.go:231`; nexen `execution/service.go:658-668`). Every switch adds a fake exchange to the transcript and costs a model call.
+- **An empty brief is not "no turn".**
+  - Delegate accepts `brief: ""` (nexen `store/execution.go:322-327`) and still creates and launches turn 1 with a `{text:""}` block (`execution/message.go:37-39`; `adapter/claude.go:283-288`).
+  - The API is expected to reject an empty text block (`message.go:26-29`, inference).
+  - The contract already defines `brief:""` as "this execution truly had no brief" (capability-matrix "what the human said").
+  - An old daemon would silently ignore a new field and run that turn anyway.
+
+  So the new behaviour needs **its own explicit field, behind a capability** (fail-closed, capability-matrix §0).
+- The launch path needs no change for a first turn that comes from `send`:
+  - a `send` on an execution with no turns creates turn idx 1 (`store/turn.go:305-314`);
+  - idx 1 already gets the resume branch (`launch.go:317-336`), the prelude measurement (`launch.go:756-771`), the turn-1 fatal rule (`launch.go:31-40`) and the reconcile rule (`reconcile.go:157-170`).
+  - `idle → running` is a legal transition, and `ClaimTurn` / `CreateTurn` accept `idle`.
+
+### 8.2 Nexen v0.17 — `start_idle`
+
+**Request:** `POST /v1/executions` takes an optional `start_idle: true`.
+
+**Preconditions**, else 400 `start_idle_conflict` naming the field:
+
+| Field | Requirement |
+|---|---|
+| `resume_session_id` | Present |
+| `provider` | `claude` |
+| `brief` | Absent or `""` |
+| attachments | Absent (there is no turn to attach them to) |
+
+**Admission is unchanged:**
+- cwd allowlist, profile, the resume transcript `stat` and account selection all run as today;
+- their rejections produce `rejected` exactly as today.
+
+**Effect:**
+- **Starts in `idle`.** The execution is created directly in `idle` (`create(..., StateIdle, ...)`). There is no turn and no advance, and `activity_since = created_at`.
+- **`transcript_path` is set at creation.** It is `transcriptPath(provider, canonical cwd, resume_session_id)` when computable, else empty. `session_id` stays empty until the first launch, so "`session_id` is what the CLI reported" keeps its meaning. Titles therefore appear before the first turn (`title.go:91`).
+- **The prelude boundary is measured at delegate.**
+  - It is measured with `LastLineEnd` under the same 2 s bound and carried on `execution.delegated` as `transcript_prelude_bytes`, next to `start_idle: true` and `brief: ""`.
+  - `Service.Prelude` resolves the boundary in this order:
+    1. the first `execution.running` with `turn_idx == 1`;
+    2. the `execution.delegated` measurement;
+    3. the legacy scan.
+  - So a `start_idle` execution never needs the legacy full-file scan.
+
+  > **統籌核准的推導（2026-10-06）D19 — supersedes the order above.**
+  >
+  > `Service.Prelude` resolves the boundary in this order:
+  > 1. the `execution.delegated` measurement;
+  > 2. the first `execution.running` with `turn_idx == 1`;
+  > 3. the legacy scan.
+  >
+  > Turn-1 launch keeps measuring, with no special case. A delegate-time measurement that failed (timeout or unreadable) is filled in by turn 1 instead of falling back to the full-file scan.
+  >
+  > Contract wording: "the boundary is the first successful measurement (delegated before turn 1); once set it never moves." This removes the conflict with capability-matrix :915 that the original order had: a later turn-1 measurement would have overridden the delegated one whenever the transcript grew in between.
+
+  > **統籌核准的推導（2026-10-06）D21 — the window before any measurement.**
+  > - Applies to a `start_idle` execution whose delegate-time measurement failed and which has no turn 1 yet.
+  > - `Prelude` never falls back to the legacy full-file scan in that window.
+  > - It answers with a **provisional** boundary: `LastLineEnd`, under the same 2 s bound, computed per request and not cached.
+  > - The first successful measurement (turn 1) is the boundary from then on.
+- **The first `send` creates turn idx 1** (`input_kind` `message`). Everything turn-1 applies from there: resume, measurement, fatal on a missing transcript → `failed`, reconcile.
+- **Lease.** `send` still needs the control lease. A consumer's flow is delegate (`start_idle`) → attach (control) → send.
+- **Capability:** `capabilities.delegate.start_idle: true`.
+
+**Also in v0.17 — list by session.** `GET /v1/executions?session_id=<uuid>` (validated and lowercased like `resume_session_id`, 400 on a bad value) matches any of:
+- `resume_session_id = S`;
+- `session_id = S`;
+- any turn with `session_id = S`.
+
+It adds `CREATE INDEX IF NOT EXISTS` on `executions(resume_session_id)`, `executions(session_id)` and `turns(session_id)`, with no schema bump. Capability: `capabilities.list.session_filter: true`.
+
+**Contract docs to update:**
+
+`capability-matrix`:
+- §0 `delegate` / `list`;
+- §1 verbs;
+- §1.8: point 5 and the "transcript gone before launch → failed" row, which now happens at the first `send` for `start_idle`;
+- §1.10 titles before turn 1;
+- §1.11: boundary order and the delegated measurement;
+- §2:
+  - #5 (`idle` may mean "never ran a turn");
+  - #48 (the resume guarantee is paid at the first send);
+  - #65 (legacy is not used for `start_idle`);
+- §3 `execution.delegated` keys.
+
+`consumer-guide`:
+- §4 table;
+- §6.3 the delegate → attach → send flow;
+- §9.7;
+- the change log.
+
+### 8.3 Purdex
+
+- **Handoff and worker rebuild** use `start_idle` when the host's Nexen advertises it, and the placeholder brief otherwise (today's behaviour). No other part of either flow changes. Owner lock, `sid:<S>`, and rollback stay as in §4.3 / D7 / D11.
+- After a `start_idle` handoff, the pane shows the worker **idle with the composer ready**. Its history is the conversation exactly as it was (prelude up to the delegated boundary). The first turn runs when the user sends.
+- The handoff confirm text drops "continues headless" wording that implies it starts working on its own. It says the conversation moves to a worker and waits for your next message.
+- **Labels.** Until `list.session_filter` is available, Purdex-created executions (handoff, worker rebuild) carry the label `purdex.session_id=<S>`, and Purdex lists an entity's stints with `label.purdex.session_id=`. Once the filter is advertised, Purdex uses it, which also covers stints created by others.
+
+> **統籌核准的推導（2026-10-06）**
+> - **D17 Where the `purdex.session_id` label starts.** It is written by every Purdex delegate for S as soon as that code path exists: handoff in P1a-4 (Task 10) and `worker-rebuild` in P1c-1 (Task 19). The key passes Nexen's label rules (only `nex.` is reserved). Executions created from then on are listable by label before v0.17.
+> - **D18 Labels are for listing stints, never for owner checks.** A label misses executions created before it existed, and executions created outside Purdex (headless launcher, `pdx nex`, Ploom). So the owner check and Q1 keep the full non-archived scan (D1) until P3b-1 pins v0.17, and then switch to `?session_id=`, which also matches `resume_session_id` and any turn's `session_id` (§8.2). The label is used only by P3b-2's stint list, and only while `list.session_filter` is absent.
 
 ## 9. Lists (Q3, Q5)
 
@@ -204,16 +300,84 @@ A mode switch changes the owner, not the conversation. So handoff and worker reb
 > - **D9 Paging:** the live list asks for `include_archived=false`, 500 rows per page, at most 20 pages.
 > - **D10 Exited tab (P2):** entities in no live state, each shown by its latest stint. An entity with any live stint is a worker under §4.2: it is listed live, never here. When the SPA knows that the session id is running in a terminal on that host (agent records), the row is marked "在終端機中" and offers no rebuild; the daemon's owner check refuses one anyway.
 
-## 10. Rendering (E6) — outline, specified in full before P3
+## 10. Rendering — one timeline, earlier segments enriched
 
-- **History** comes from the transcript, from the start to now. It covers terminal and worker stints alike: one timeline, segment markers where the entrypoint changes. That generalises the prelude.
-- **The in-flight turn** comes from the live event stream.
-- **Nexen data supplements:**
-  - tool status / duration by `tool_use_id`;
-  - per-turn cost by the user-prompt line;
-  - across **all** stints of the entity (earlier executions too).
-- **Nexen (v0.17):** a transcript page endpoint bounded by "now" instead of `prelude_end`, with the same item kinds and caps as the prelude.
-- **When the transcript is gone** (cleaned up after 30 days), worker stints fall back to their event logs.
+> **統籌（2026-10-06）完整版**：本節由統籌 `mlab/purdex-9b` 撰寫，取代原 outline；§10 的方案由使用者於 2026-10-06 拍板（早段＝對話檔＋各自 execution 的事件補充；當前 stint＝事件紀錄；不做 transcript-to-now）。
+
+### 10.1 Facts
+
+- **Each stint is a separate execution** (§4). So a pane's prelude, the transcript `[0, boundary of this stint)`, already holds the **whole** conversation before this stint: terminal segments and earlier worker stints. There is no gap to fill. A gap would only exist if one execution were reused across a terminal interlude, which this design never does.
+- **What differs is the look.** Earlier stints render from the transcript: no cost, tool status derived from transcript, image placeholders, no subagent internals. The current stint renders from its event log, which has everything.
+- **Join keys, verified on both sides:**
+  - `tool_use_id`: Nexen N2 events, and transcript-derived N2 items in the prelude;
+  - `message.id`: assistant lines in both.
+- **`uuid` is not a join key.** Its equality between stream-json frames and transcript lines is unverified, and the fixtures share none.
+- **Human prompt lines have no id** in the event log; the pane synthesises those bubbles.
+- **Data only the event log has:**
+  - per-turn cost (`result` frames);
+  - live tool status;
+  - subagent internals (task events by `tool_use_id`);
+  - image thumbnails (by execution + sha256).
+
+### 10.2 Layout
+
+Unchanged: the **prelude section** (transcript up to this stint's boundary) above **this stint** (event log, settled and live). There is no transcript-to-now endpoint, no per-turn transcript boundary, and no change to the live / partial / turn machinery.
+
+### 10.3 Which execution a transcript segment belongs to
+
+- Purdex lists the entity's stints: `session_id` filter, or the `purdex.session_id` label before v0.17 (§8.3).
+- For each stint `e` it knows the boundary `b(e)` from `GET /prelude` `total_bytes`, or from the delegated / running payload. Stints are ordered by `b(e)`, ties broken by `created_at`.
+- **Worker lines** (`entrypoint` starting `sdk-`) at offset `o` belong to the stint with the **largest `b(e) ≤ o`** among the earlier stints (not the current one).
+- **Terminal lines** (`cli`) belong to no stint.
+- No match (an execution Purdex cannot list) means a plain transcript segment.
+
+> **統籌核准的推導（2026-10-06）D20 — where the offset comes from.**
+> - Each prelude item carries an integer `offset`: the start byte of its source transcript line. A segment marker uses the start of the line it belongs to. Nexen adds it in v0.17 (P3a), in the contract and in `capabilities.transcript_prelude.item_offset`.
+> - `pos` stays opaque. Purdex never parses it.
+> - The "line at offset `o`" above is that field.
+> - Each line's entrypoint is the one of the nearest segment marker at or before it.
+> - Lines above the oldest loaded marker have an unknown entrypoint until the older page arrives. They render as plain segments until then.
+
+### 10.4 Enrichment of earlier worker segments
+
+Lazy: when a segment's first item renders. Cached per execution for the pane's lifetime.
+
+- Fetch that execution's events, paged (`/events`, archived executions included), and keep only:
+  - N2 `tool_result` / `tool_use`: status (`ok` / `error` / `denied` / aborted) and `duration_ms` by `tool_use_id` override the transcript-derived values;
+  - task events: subagent progress and inner frames, nested under the Task call by `tool_use_id`, as the live view does;
+  - `result` frames: per-turn cost and tokens. A result maps to the turn whose assistant lines carry the `message.id`s of that turn's assistant frames. The segment then shows a compact turn footer under the prompt span it belongs to.
+- **Attachments: thumbnails only when unambiguous.**
+  - The segment's k-th human prompt line maps to the stint's k-th `delegated` / `message_accepted` with attachments, and only when the counts match exactly.
+  - Otherwise placeholders stay.
+  - The thumbnails are fetched from that execution.
+- **Terminal segments get no enrichment.** No cost, image placeholders, no subagent internals. This is a documented, permanent limit: Nexen never ran them.
+
+### 10.5 When the current stint ends
+
+When a stint is exited and a new one starts in the same pane (a rebuild), the old stint becomes an earlier segment. It is now drawn from transcript + enrichment, and fold / search state for it resets. This happens once per stint switch, never per turn. Accepted.
+
+### 10.6 Failure modes
+
+| Failure | Result |
+|---|---|
+| Transcript gone (cleanup) | The prelude reports `gone`, with the existing banner; the current stint is unaffected |
+| Stint list unavailable | No attribution; plain transcript segments |
+| An enrichment fetch fails | That segment renders without enrichment, with no error toast; the retry is the next pane mount |
+| Events larger than a budget | Stop enriching that segment at the budget (default 5,000 events per stint) and say so in a muted line |
+
+### 10.7 Not in this design
+
+Opening an exited or dormant entity just to read it: the exited pane shows only the rebuild screen (E4). When P4 adds reading, the Purdex daemon reads the transcript itself with the embedded nexen `prelude` package and the hook's `transcript_path`. No Nexen endpoint is needed for that.
+
+### 10.8 Tests
+
+- **Attribution:** a fixture with terminal → worker A → terminal → worker B → current stint C, plus boundaries; each line goes to the right stint, or to none.
+- **Joins:** `tool_use_id` status / duration override; `message.id` → cost footer; subagent nesting.
+- **Attachment count guard:** a mismatch leaves placeholders.
+- **Lazy fetch and cache:** at most one fetch per stint per pane.
+- **Stint switch:** the old stint moves into the prelude section.
+- **Failure modes** as in §10.6.
+- **Mutation:** dropping the `b(e) ≤ o` ordering, or the count guard, turns a test red.
 
 ## 11. Phases (one phase = one PR ≤ 800 lines / 20 files; split further when larger)
 
@@ -223,8 +387,9 @@ A mode switch changes the owner, not the conversation. So handoff and worker reb
 | P1b | Purdex | Exit action (§5); live-list filtering, per-entity dedupe, cursor paging, one dot mapping (§9) |
 | P1c | Purdex | Exited and start-failed screens; rebuild mode choice for worker and terminal panes (§6, §7) |
 | P2 | Purdex | New Tab Sessions / Workers switch; Settings → Worker tabs (Workers, Exited) |
-| P3a | Nexen v0.17 | Delegate without a brief (§8); transcript-to-now endpoint (§10) |
-| P3b | Purdex | Pin v0.17; handoff / rebuild without a synthetic turn; transcript-first rendering |
+| P3a | Nexen v0.17 | `start_idle` delegate (§8.2); list by `session_id` with indexes; contract docs. **No transcript-to-now endpoint.** *(統籌 2026-10-06)* |
+| P3b-1 | Purdex | Pin v0.17; handoff / worker rebuild with `start_idle`; switch owner scans and stint lists to the `session_id` filter; confirm-text change *(統籌 2026-10-06)* |
+| P3b-2 | Purdex | §10: stint attribution and lazy enrichment of earlier worker segments *(統籌 2026-10-06)* |
 | P4 | Purdex | Dormant entities: daemon scans transcripts' metadata (`ai-title`, cwd, last activity) per host; Dormant tab + search |
 
 > **統籌核准的推導（2026-10-06）**

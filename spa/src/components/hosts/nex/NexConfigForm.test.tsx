@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import NexConfigForm from './NexConfigForm'
 import { emptyNexConfig } from './nex-config-diff'
 import * as hostApi from '../../../lib/host-api'
+import { useDaemonRestartStore } from '../../../stores/useDaemonRestartStore'
+import { useI18nStore } from '../../../stores/useI18nStore'
 
 vi.mock('../../../lib/host-api', async () => {
   const actual = await vi.importActual<typeof import('../../../lib/host-api')>('../../../lib/host-api')
@@ -153,5 +155,29 @@ describe('NexConfigForm save across a host change', () => {
       await pending.promise
     })
     expect(onSaved).not.toHaveBeenCalled()
+  })
+})
+
+describe('restart now (R3)', () => {
+  beforeEach(() => {
+    useI18nStore.getState().setLocale('zh-TW')
+    useDaemonRestartStore.setState({ restarting: {}, settled: {} })
+  })
+
+  it('appears inside the hint only when restart_required', () => {
+    render(<NexConfigForm hostId="h" config={saved} info={{ ...info, restart_required: true }} onSaved={() => {}} />)
+    const hint = screen.getByTestId('nex-restart-required')
+    expect(within(hint).getByTestId('nex-restart-now').textContent).toBe('立即重啟')
+  })
+
+  it('absent without restart_required', () => {
+    render(<NexConfigForm hostId="h" config={saved} info={{ ...info, restart_required: false }} onSaved={() => {}} />)
+    expect(screen.queryByTestId('nex-restart-now')).toBeNull()
+  })
+
+  it('disabled while this host restarts', () => {
+    useDaemonRestartStore.setState({ restarting: { h1: true } })
+    render(<NexConfigForm hostId="h1" config={saved} info={{ ...info, restart_required: true }} onSaved={() => {}} />)
+    expect((screen.getByTestId('nex-restart-now') as HTMLButtonElement).disabled).toBe(true)
   })
 })
