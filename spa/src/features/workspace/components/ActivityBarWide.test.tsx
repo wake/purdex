@@ -155,12 +155,13 @@ describe('ActivityBarWide', () => {
     expect(scrollers()).toEqual([workspaceScroll])
   })
 
-  it('with the worker list open, the only scrollers are the workspace zone and the worker list section', () => {
+  // Shell polish spec §3: the section's header stays put, so the section no longer scrolls — its scroll area does.
+  it('with the worker list open, the only scrollers are the workspace zone and the worker list scroll area', () => {
     useLayoutStore.setState({ workerListOpen: true })
     renderBar()
     expect(scrollers()).toEqual([
       screen.getByTestId('activity-bar-workspace-scroll'),
-      screen.getByTestId('worker-list-section'),
+      screen.getByTestId('worker-list-scroll'),
     ])
     expect(screen.getByTestId('activity-bar-wide')).toHaveClass('overflow-hidden')
   })
@@ -194,10 +195,16 @@ describe('ActivityBarWide — worker list section', () => {
       'worker-list-divider',
       'worker-list-section',
     ])
+    // The section is the sized column; the scroll area inside it is what scrolls (shell polish spec §3).
     const section = screen.getByTestId('worker-list-section')
-    expect(section).toHaveClass('min-h-0', 'shrink-0', 'overflow-y-auto', 'overscroll-contain')
+    expect(section).toHaveClass('flex', 'flex-col', 'min-h-0', 'shrink-0')
+    expect(section).not.toHaveClass('overflow-y-auto')
+    expect(section).not.toHaveClass('overscroll-contain')
     expect(section).toContainElement(screen.getByTestId('worker-list'))
     expect(section.style.height).toBe(`${WORKER_LIST_DEFAULT}px`)
+    const scroll = screen.getByTestId('worker-list-scroll')
+    expect(scroll).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto', 'overscroll-contain')
+    expect(scroll.style.height).toBe('')
 
     const home = screen.getByTestId('home-header')
     const separator = screen.getByTestId('activity-bar-workspace-separator')
@@ -366,6 +373,79 @@ describe('ActivityBarWide — worker list section', () => {
         expect(section.style.height).toBe('800px')
       },
     )
+  })
+})
+
+// Shell polish spec §3 (rule W): the docked list gets a header row — "Workers" and a × — that stays put while the
+// list scrolls, like the narrow bar's floating panel.
+describe('ActivityBarWide — worker list header', () => {
+  beforeEach(() => {
+    cleanup()
+    useLayoutStore.setState(useLayoutStore.getInitialState())
+  })
+
+  it('renders no header and no × while the list is closed', () => {
+    renderBar()
+    expect(screen.queryByTestId('worker-list-header')).toBeNull()
+    expect(screen.queryByTestId('worker-list-close')).toBeNull()
+  })
+
+  it('open: the header holds the title and a × button labelled Close', () => {
+    useLayoutStore.setState({ workerListOpen: true })
+    renderBar()
+    const header = screen.getByTestId('worker-list-header')
+    expect(header).toHaveClass('flex', 'items-center', 'justify-between', 'shrink-0')
+    const close = screen.getByTestId('worker-list-close')
+    expect(header).toContainElement(close)
+    expect(header.firstElementChild).toHaveTextContent('Workers')
+    expect(header.lastElementChild).toBe(close)
+    expect(close.tagName).toBe('BUTTON')
+    expect(close).toHaveAttribute('type', 'button')
+    expect(close).toHaveAttribute('aria-label', 'Close')
+    expect(close).toHaveAttribute('title', 'Close')
+    expect(screen.getByRole('button', { name: 'Close' })).toBe(close)
+  })
+
+  it('the header sits in the section above the scroll area, and the scroll area holds the list but not the header', () => {
+    useLayoutStore.setState({ workerListOpen: true })
+    renderBar()
+    const section = screen.getByTestId('worker-list-section')
+    const header = screen.getByTestId('worker-list-header')
+    const scroll = screen.getByTestId('worker-list-scroll')
+    const list = screen.getByTestId('worker-list')
+    expect(Array.from(section.children)).toEqual([header, scroll])
+    expect(section).toContainElement(header)
+    expect(section).toContainElement(list)
+    expect(scroll).toContainElement(list)
+    expect(scroll).not.toContainElement(header)
+    expect(header).not.toContainElement(list)
+  })
+
+  it('× closes the list: the store says closed, nothing of the list stays mounted, the stored height is untouched', () => {
+    useLayoutStore.setState({ workerListOpen: true, workerListHeight: 300 })
+    renderBar()
+    expect(screen.getByTestId('worker-list-section').style.height).toBe('300px')
+
+    fireEvent.click(screen.getByTestId('worker-list-close'))
+
+    expect(useLayoutStore.getState().workerListOpen).toBe(false)
+    expect(useLayoutStore.getState().workerListHeight).toBe(300)
+    for (const id of ['worker-list', 'worker-list-section', 'worker-list-header', 'worker-list-divider']) {
+      expect(screen.queryByTestId(id), id).toBeNull()
+    }
+    expect(screen.getByRole('button', { name: 'Workers' })).toHaveAttribute('aria-pressed', 'false')
+
+    // Reopening with the Workers button shows the same height again.
+    fireEvent.click(screen.getByRole('button', { name: 'Workers' }))
+    expect(screen.getByTestId('worker-list-section').style.height).toBe('300px')
+  })
+
+  it('× keeps focus where it was on a mouse press, and stays in the tab order', () => {
+    useLayoutStore.setState({ workerListOpen: true })
+    renderBar()
+    const close = screen.getByTestId('worker-list-close')
+    expect(fireEvent.mouseDown(close)).toBe(false)
+    expect(close.tabIndex).toBeGreaterThanOrEqual(0)
   })
 })
 
