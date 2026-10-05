@@ -171,6 +171,8 @@ function messageUnits(w: Walk, mi: number, reveal: string[]) {
       }
     } else if (msg.type === 'user') {
       if (block.type === 'tool_result') operationUnits(w, mi, bj, reveal)
+      // U3: a pasted body is drawn verbatim inside its own fold (PastedBlock).
+      else if (block.type === 'text' && block.pasted) w.push(searchUnitId(key, 'text'), block.text ?? '', [...reveal, `${key}:paste`])
       // The interrupt sentinel is drawn as a localized label, not its text.
       else if (block.type === 'text' && block.text && block.text !== INTERRUPT_TEXT) {
         w.push(searchUnitId(key, 'text'), block.text, reveal)
@@ -212,6 +214,7 @@ function chatTurnUnits(w: Walk, turns: readonly { start: number; end: number }[]
           else if (block.type === 'tool_use') lines.get(key)?.()
         } else if (msg.type === 'user') {
           if (block.type === 'tool_result') lines.get(key)?.()
+          else if (!fromSubagent && block.type === 'text' && block.pasted) w.push(searchUnitId(key, 'text'), block.text ?? '', [`${key}:paste`])
           else if (!fromSubagent && block.type === 'text' && block.text && block.text !== INTERRUPT_TEXT) {
             w.push(searchUnitId(key, 'text'), block.text, [])
           }
