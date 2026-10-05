@@ -516,6 +516,18 @@ describe('TranscriptSearch — prelude', () => {
     expect(onLoadAll).toHaveBeenCalledWith()
   })
 
+  it('separates the text and Load all with a muted dot, only when the button is shown', () => {
+    const { unmount } = bar({ prelude: derivePrelude([]), preludeDone: false, onLoadAll: vi.fn(() => Promise.resolve()) })
+    const box = screen.getByTestId('search-prelude-incomplete')
+    expect(box).toHaveTextContent('Earlier conversation not fully loaded·Load all')
+    const dot = box.querySelector('[data-testid="search-prelude-dot"]')!
+    expect(dot.textContent).toBe('·')
+    expect(dot.getAttribute('aria-hidden')).toBe('true')
+    unmount()
+    bar({ prelude: derivePrelude([]), preludeDone: false })
+    expect(screen.queryByTestId('search-prelude-dot')).toBeNull()
+  })
+
   it('shows progress and a disabled button while loading, then gives focus back to the input', async () => {
     let done: () => void = () => {}
     const onLoadAll = vi.fn(() => new Promise<void>((r) => { done = r }))

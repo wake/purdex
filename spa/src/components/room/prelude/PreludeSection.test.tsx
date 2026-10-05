@@ -448,3 +448,42 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection over Nexe
     })
   }
 })
+
+describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection closing handoff marker in %s mode', (mode) => {
+  const items = [
+    m('2', 'user', [{ type: 'text', text: 'fix the build' }]),
+    m('3', 'assistant', [{ type: 'text', text: 'on it' }]),
+  ]
+
+  it('ends the section with a Headless (worker) rule, as its last child', () => {
+    render(<PreludeSection {...base} mode={mode} view={derivePrelude(items)} status="ok" done />)
+    const section = screen.getByTestId('worker-prelude')
+    const last = section.lastElementChild as HTMLElement
+    expect(last.getAttribute('data-testid')).toBe('prelude-handoff')
+    expect(last.getAttribute('role')).toBe('separator')
+    expect(last.getAttribute('aria-label')).toBe('Headless (worker)')
+    expect(section.querySelectorAll('[data-testid="prelude-handoff"]')).toHaveLength(1)
+  })
+
+  it('is a marker, not a search unit', () => {
+    render(<PreludeSection {...base} mode={mode} view={derivePrelude(items)} status="ok" done />)
+    const h = screen.getByTestId('prelude-handoff')
+    expect(h.hasAttribute('data-search-unit')).toBe(false)
+    expect(h.querySelector('[data-search-unit]')).toBeNull()
+  })
+
+  it('follows a trailing sdk segment too (the worker is its own switch)', () => {
+    render(<PreludeSection {...base} mode={mode} view={derivePrelude([...items, { pos: '4', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' }])} status="ok" done />)
+    const section = screen.getByTestId('worker-prelude')
+    expect(section.lastElementChild?.getAttribute('data-testid')).toBe('prelude-handoff')
+    expect(screen.getAllByTestId('prelude-segment')).toHaveLength(1)
+  })
+
+  it('is absent for an empty view: idle, none, gone, loading', () => {
+    for (const status of ['idle', 'none', 'gone', 'loading'] as const) {
+      const { unmount } = render(<PreludeSection {...base} mode={mode} view={derivePrelude([])} status={status} done />)
+      expect(screen.queryByTestId('prelude-handoff')).toBeNull()
+      unmount()
+    }
+  })
+})

@@ -95,6 +95,8 @@ export default function PreludeSection({ view, status, done, error, keyPrefix, n
           : view.entries.map((e) => (e.kind === 'message'
             ? (index.childIndexes.has(e.m) ? null : renderMessage(view.messages[e.m], e.m, ctx))
             : entryNode(e)))}
+        {/* The handoff into this worker is itself a switch (D2) and Nexen never sends a segment for the worker's own run. */}
+        {view.entries.length > 0 && <PreludeMarker testId="prelude-handoff" label={t('worker.prelude.segment_headless')} />}
       </section>
     </FoldContext.Provider>
   )
