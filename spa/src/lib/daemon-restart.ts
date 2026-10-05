@@ -132,8 +132,12 @@ export async function restartDaemon(hostId: string, over: Partial<RestartDeps> =
   const attempt = (async (): Promise<{ ipc: ElectronLocalDaemonResult | null; bootId: string } | typeof TIMED_OUT> => {
     let before: string | null
     let ipc: ElectronLocalDaemonResult | null = null
-    if (await d.isManagedLocal(hostId)) {
+    // A restart is a side effect: past the deadline the caller was already told it failed, so never send one then.
+    const managed = await d.isManagedLocal(hostId)
+    if (expired) return TIMED_OUT
+    if (managed) {
       before = await d.readBootId(hostId)
+      if (expired) return TIMED_OUT
       ipc = await d.localRestart().catch((err) => { throw new DaemonRestartError('request', errText(err)) })
     } else {
       before = await d.postRestart(hostId)

@@ -110,6 +110,32 @@ describe('restartDaemon — success needs a NEW boot id', () => {
     await vi.advanceTimersByTimeAsync(10 * RESTART_POLL_MS)
     expect(probe.mock.calls.length).toBe(n)
   })
+
+  it.each([true, false])('a status IPC answering %s only after the deadline sends no restart', async (managed) => {
+    const localRestart = vi.fn(async () => ({}) as ElectronLocalDaemonResult)
+    const post = vi.fn(async () => 'old')
+    const s = track(restartDaemon('h1', deps({
+      isManagedLocal: () => new Promise<boolean>((r) => setTimeout(() => r(managed), RESTART_TIMEOUT_MS + 1_000)),
+      localRestart,
+      postRestart: post,
+    })))
+    await vi.advanceTimersByTimeAsync(RESTART_TIMEOUT_MS + 2_000)
+    expect((s.error as DaemonRestartError).kind).toBe('timeout')
+    expect(localRestart).not.toHaveBeenCalled()
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('an IPC before-read answering only after the deadline sends no restart', async () => {
+    const localRestart = vi.fn(async () => ({}) as ElectronLocalDaemonResult)
+    const s = track(restartDaemon('h1', deps({
+      isManagedLocal: async () => true,
+      readBootId: () => new Promise<string | null>((r) => setTimeout(() => r('old'), RESTART_TIMEOUT_MS + 1_000)),
+      localRestart,
+    })))
+    await vi.advanceTimersByTimeAsync(RESTART_TIMEOUT_MS + 2_000)
+    expect((s.error as DaemonRestartError).kind).toBe('timeout')
+    expect(localRestart).not.toHaveBeenCalled()
+  })
 })
 
 describe('restartDaemon — path choice', () => {
