@@ -2,6 +2,7 @@
 // transcript, as blocks. Reached through `renderMessage` (render-message.tsx),
 // which RoomTranscript and a subagent's nested rail both call.
 import { Prohibit, TerminalWindow } from '@phosphor-icons/react'
+import { Fragment, type ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import {
   type ContentBlock,
@@ -23,6 +24,8 @@ import AttachmentThumbs from './AttachmentThumbs'
 import { attachmentsOf } from '../../lib/nex/attachments'
 import SubagentBlock, { SubagentTaskSuffix } from './SubagentBlock'
 import type { RenderCtx } from './render-message'
+import { OmittedMedia, TruncatedHint } from './prelude/Placeholders'
+import { blockShownBytes, isOmittedMedia } from './prelude/placeholder-utils'
 
 export interface MessageRowProps {
   msg: StreamMessage
@@ -153,24 +156,32 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
   // A subagent's own frame (#1263): whatever it says as `user`, the human did not say it.
   const fromSubagent = (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id != null
 
+  /** Spec §5.3: omitted media becomes its placeholder; a cut block keeps its own drawing plus one hint line. */
+  const decorate = (block: ContentBlock, j: number, el: ReactNode): ReactNode => {
+    if (isOmittedMedia(block)) return <OmittedMedia key={j} block={block} />
+    if (!block.truncated) return el
+    return <Fragment key={j}>{el}<TruncatedHint shown={blockShownBytes(block)} total={block.total_bytes ?? null} /></Fragment>
+  }
+
   // --- Assistant messages ---
   if (msg.type === 'assistant' && 'message' in msg) {
     const am = msg as AssistantMessage
+    const assistantBlock = (block: ContentBlock, j: number): ReactNode => {
+      // Spec §4.3: a thought with no text draws nothing (RoomThinking
+      // returns null for it too; this keeps the list free of the slot).
+      if (block.type === 'thinking' && block.thinking?.trim()) {
+        return <RoomThinking key={j} content={block.thinking} foldKey={keyAt(ctx, i, j)}
+          searchUnit={searchUnitId(keyAt(ctx, i, j), 'thinking')} />
+      }
+      if (block.type === 'text' && block.text) {
+        return <RoomProse key={j} content={block.text} searchUnit={searchUnitId(keyAt(ctx, i, j), 'text')} />
+      }
+      if (block.type === 'tool_use') return <OperationAt key={j} msg={msg} i={i} j={j} ctx={ctx} />
+      return null
+    }
     return (
       <div>
-        {am.message.content.map((block, j) => {
-          // Spec §4.3: a thought with no text draws nothing (RoomThinking
-          // returns null for it too; this keeps the list free of the slot).
-          if (block.type === 'thinking' && block.thinking?.trim()) {
-            return <RoomThinking key={j} content={block.thinking} foldKey={keyAt(ctx, i, j)}
-              searchUnit={searchUnitId(keyAt(ctx, i, j), 'thinking')} />
-          }
-          if (block.type === 'text' && block.text) {
-            return <RoomProse key={j} content={block.text} searchUnit={searchUnitId(keyAt(ctx, i, j), 'text')} />
-          }
-          if (block.type === 'tool_use') return <OperationAt key={j} msg={msg} i={i} j={j} ctx={ctx} />
-          return null
-        })}
+        {am.message.content.map((block, j) => decorate(block, j, assistantBlock(block, j)))}
       </div>
     )
   }
@@ -186,46 +197,47 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
     const attsAt = atts
       ? um.message.content.findIndex((b) => b.type === 'text' && !!b.text && b.text !== INTERRUPT_TEXT && !b.text.startsWith('/'))
       : -1
+    const userBlock = (block: ContentBlock, j: number): ReactNode => {
+      if (block.type === 'tool_result') return <OperationAt key={j} msg={msg} i={i} j={j} ctx={ctx} />
+
+      if (block.type === 'text' && block.text) {
+        // The interrupt keeps its meaning, loses the bubble: an error-toned
+        // line at the edge, on theme tokens.
+        if (block.text === INTERRUPT_TEXT) {
+          return (
+            <div key={j} data-testid="interrupted-msg"
+              className="flex items-center gap-1.5 text-sm text-status-error italic">
+              <Prohibit size={14} />
+              <span>{t('stream.interrupted')}</span>
+            </div>
+          )
+        }
+
+        // The prompt an agent wrote for its subagent: not the human's
+        // line, whatever its first character is.
+        const anchor = searchUnitId(keyAt(ctx, i, j), 'text')
+        if (fromSubagent) return <RoomSubagentLine key={j} text={block.text} searchUnit={anchor} />
+
+        // A slash command: the human's line, told apart by its icon and face.
+        if (block.text.startsWith('/')) {
+          return (
+            <div key={j} data-testid="room-command"
+              className="flex items-center gap-1.5 text-[13px] text-status-warning font-mono">
+              <TerminalWindow size={14} weight="bold" />
+              <span data-search-unit={anchor}>{block.text}</span>
+            </div>
+          )
+        }
+
+        return <RoomUserLine key={j} text={block.text} searchUnit={anchor}
+          attachments={atts && j === attsAt ? <AttachmentThumbs items={atts} /> : undefined} />
+      }
+
+      return null
+    }
     return (
       <div>
-        {um.message.content.map((block, j) => {
-          if (block.type === 'tool_result') return <OperationAt key={j} msg={msg} i={i} j={j} ctx={ctx} />
-
-          if (block.type === 'text' && block.text) {
-            // The interrupt keeps its meaning, loses the bubble: an error-toned
-            // line at the edge, on theme tokens.
-            if (block.text === INTERRUPT_TEXT) {
-              return (
-                <div key={j} data-testid="interrupted-msg"
-                  className="flex items-center gap-1.5 text-sm text-status-error italic">
-                  <Prohibit size={14} />
-                  <span>{t('stream.interrupted')}</span>
-                </div>
-              )
-            }
-
-            // The prompt an agent wrote for its subagent: not the human's
-            // line, whatever its first character is.
-            const anchor = searchUnitId(keyAt(ctx, i, j), 'text')
-            if (fromSubagent) return <RoomSubagentLine key={j} text={block.text} searchUnit={anchor} />
-
-            // A slash command: the human's line, told apart by its icon and face.
-            if (block.text.startsWith('/')) {
-              return (
-                <div key={j} data-testid="room-command"
-                  className="flex items-center gap-1.5 text-[13px] text-status-warning font-mono">
-                  <TerminalWindow size={14} weight="bold" />
-                  <span data-search-unit={anchor}>{block.text}</span>
-                </div>
-              )
-            }
-
-            return <RoomUserLine key={j} text={block.text} searchUnit={anchor}
-              attachments={atts && j === attsAt ? <AttachmentThumbs items={atts} /> : undefined} />
-          }
-
-          return null
-        })}
+        {um.message.content.map((block, j) => decorate(block, j, userBlock(block, j)))}
         {atts && attsAt < 0 && <RoomUserLine text="" attachments={<AttachmentThumbs items={atts} />} />}
       </div>
     )

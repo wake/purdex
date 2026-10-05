@@ -1,6 +1,6 @@
 // spa/src/lib/nex/format.test.ts
 import { describe, it, expect } from 'vitest'
-import { firstLine, shortId } from './format'
+import { firstLine, formatBytes, shortId } from './format'
 
 describe('shortId', () => {
   it('keeps the first 12 chars of a 26-char ULID', () => {
@@ -35,4 +35,11 @@ describe('firstLine', () => {
   it('honours a custom max', () => {
     expect(firstLine('abcdefghij', 5)).toBe('abcd…')
   })
+})
+
+it('formatBytes', () => {
+  expect(formatBytes(512)).toBe('512 B')
+  expect(formatBytes(122880)).toBe('120 KB')
+  expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB')
+  expect(formatBytes(1048064)).toBe('1.0 MB')
 })

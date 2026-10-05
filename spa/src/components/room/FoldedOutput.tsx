@@ -15,8 +15,8 @@ export interface FoldedOutputProps {
   plan: FoldPlan
   expanded: boolean
   onToggle: () => void
-  /** 'error' tints the body text. */
-  tone?: 'normal' | 'error'
+  /** 'error' tints the body text; 'muted' dims it (prelude notes of an unknown source). */
+  tone?: 'normal' | 'error' | 'muted'
   /**
    * Drawn inline at the end of the text, and only while the text's end is on
    * screen (shown whole, or expanded) — the typewriter cursor of a streaming
@@ -33,7 +33,7 @@ const BUTTON_CLASS =
 
 export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal', trailing, searchUnit }: FoldedOutputProps) {
   const t = useI18nStore((s) => s.t)
-  const bodyClass = `${BODY_CLASS} ${tone === 'error' ? 'text-status-error' : 'text-text-secondary'}`
+  const bodyClass = `${BODY_CLASS} ${tone === 'error' ? 'text-status-error' : tone === 'muted' ? 'text-text-muted' : 'text-text-secondary'}`
 
   // A fact about the payload, not about the fold: the daemon cut the output
   // whether or not anything here is foldable. A truncated body the preview
