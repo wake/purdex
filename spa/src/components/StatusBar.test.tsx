@@ -11,6 +11,11 @@ import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { usePaneFocusStore } from '../stores/usePaneFocusStore'
+import { executionKey, useExecutionStore } from '../stores/useExecutionStore'
+import { useNexHostStore } from '../stores/useNexHostStore'
+import { defaultExecutionState } from '../lib/nex/event-reducer'
+import type { ExecutionSummary } from '../lib/nex/types'
+import type { ExecutionContent } from '../types/tab'
 import { emptyPeerHostEntry, usePeerStore, type PeerHostEntry, type PeerRow } from '../stores/usePeerStore'
 import { emptySessionCwdEntry, useSessionCwdStore, type SessionCwdEntry } from '../stores/useSessionCwdStore'
 import { copyText } from '../lib/copy-text'
@@ -902,8 +907,9 @@ describe('StatusBar status target pane', () => {
 
   it('D.4-1: worker + plain terminal → after a pointerdown on the plain terminal the bar still shows the worker', () => {
     render(<StatusBar activeTab={splitTab('t1', { id: 'term', content: plainTerminal }, { id: 'w', content: workerContent })} />)
-    expect(screen.queryByTestId('status-seg-session-name')).toBeNull()
+    expect(screen.getByTestId('status-seg-worker-name')).toBeInTheDocument()
     click('t1', 'term')
+    expect(screen.getByTestId('status-seg-worker-name')).toBeInTheDocument()
     expect(screen.queryByTestId('status-seg-session-name')).toBeNull()
     expect(screen.queryByText('plain-shell')).toBeNull()
   })
@@ -938,5 +944,97 @@ describe('StatusBar status target pane', () => {
   it('peer data is asked for the target session, not the primary pane', () => {
     render(<StatusBar activeTab={splitTab('t1', { id: 'ed', content: editorContent }, { id: 'cc', content: ccTerminal })} />)
     expect(cwdRefresh).toHaveBeenCalledWith(HOST_ID, CC_CODE)
+  })
+})
+
+// Shell cleanup P6 (spec §9.2): an `execution` target gets a worker bar — the host segment the tmux bar uses, the
+// worker name and its cwd from the execution summary, then the controls block (the mode buttons land there).
+describe('StatusBar worker bar', () => {
+  const EXEC_ID = 'exc_1'
+  const summary = (extra: Partial<ExecutionSummary> = {}): ExecutionSummary => ({
+    id: EXEC_ID, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/Users/w/repo', mount_kind: 'dev',
+    brief: 'Fix the login bug\nand more', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0,
+    observers: 1, archived: false, ...extra,
+  })
+  const seedSummary = (s: ExecutionSummary | null, hostId = HOST_ID) => {
+    useExecutionStore.setState({ executions: { [executionKey(hostId, EXEC_ID)]: { ...defaultExecutionState(), summary: s } } })
+  }
+  const workerTab = (extra: Partial<ExecutionContent> = {}) =>
+    makeTab('t1', { kind: 'execution', executionId: EXEC_ID, host: HOST_ID, ...extra })
+
+  beforeEach(() => {
+    setupStores()
+    usePaneFocusStore.setState({ recent: {} })
+    useUploadStore.setState({ sessions: {} })
+    useNexHostStore.setState({ byHost: {} })
+    seedSummary(summary())
+  })
+
+  it('shows the host, the worker name and its cwd', () => {
+    render(<StatusBar activeTab={workerTab()} />)
+    expect(screen.getByTestId('status-seg-host').textContent).toBe('mlab')
+    // The first line of the brief: the same primary the tab title uses, without the tab's cwd suffix (the cwd has
+    // its own segment).
+    expect(screen.getByTestId('status-seg-worker-name').textContent).toBe('Fix the login bug')
+    expect(screen.getByTestId('status-seg-cwd').textContent).toBe('/Users/w/repo')
+  })
+
+  it('has no tmux-only segments: no session name, peer, refresh, status or upload', () => {
+    render(<StatusBar activeTab={workerTab()} />)
+    for (const id of ['status-seg-session-name', 'status-seg-agent', 'status-seg-peer-id', 'status-peer-refresh', 'status-seg-status', 'upload-status']) {
+      expect(screen.queryByTestId(id), id).toBeNull()
+    }
+    expect(screen.queryByText('execution')).toBeNull()
+  })
+
+  it('lays out the same three containers, with exactly one ml-auto: the (empty) controls block', () => {
+    render(<StatusBar activeTab={workerTab()} />)
+    const bar = screen.getByTestId('status-bar')
+    expect(bar.querySelectorAll('.ml-auto').length).toBe(1)
+    const controls = screen.getByTestId('status-controls')
+    expect(controls.className).toContain('ml-auto')
+    expect(controls.className).toContain('shrink-0')
+    expect(screen.getByTestId('status-segments').className).toContain('min-w-0')
+    expect(screen.getByTestId('status-copy-feedback')).toBeInTheDocument()
+  })
+
+  it('prefers the handed-off terminal title over the brief', () => {
+    render(<StatusBar activeTab={workerTab({ fromTitle: 'cc-session' })} />)
+    expect(screen.getByTestId('status-seg-worker-name').textContent).toBe('cc-session')
+  })
+
+  it('no summary yet → the generic worker label and an empty cwd', () => {
+    seedSummary(null)
+    render(<StatusBar activeTab={workerTab()} />)
+    expect(screen.getByTestId('status-seg-worker-name').textContent).toBe('Execution')
+    const cwd = screen.getByTestId('status-seg-cwd')
+    expect(cwd.textContent).toBe('—')
+    expect(cwd).toBeDisabled()
+  })
+
+  it('a pane without a host hint reads the first host, like the worker pane itself', () => {
+    render(<StatusBar activeTab={workerTab({ host: undefined })} />)
+    expect(screen.getByTestId('status-seg-host').textContent).toBe('mlab')
+    expect(screen.getByTestId('status-seg-cwd').textContent).toBe('/Users/w/repo')
+  })
+
+  it('follows the summary live', () => {
+    render(<StatusBar activeTab={workerTab()} />)
+    act(() => seedSummary(summary({ cwd: '/Users/w/other' })))
+    expect(screen.getByTestId('status-seg-cwd').textContent).toBe('/Users/w/other')
+  })
+
+  it('the host segment double-clicks to host settings, like the tmux bar', () => {
+    const onNavigateToHost = vi.fn()
+    render(<StatusBar activeTab={workerTab()} onNavigateToHost={onNavigateToHost} />)
+    fireEvent.doubleClick(screen.getByTestId('status-seg-host'))
+    expect(onNavigateToHost).toHaveBeenCalledWith(HOST_ID)
+  })
+
+  it('clicking the cwd copies it and confirms in the feedback slot', async () => {
+    render(<StatusBar activeTab={workerTab()} />)
+    fireEvent.click(screen.getByTestId('status-seg-cwd'))
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('/Users/w/repo'))
+    await waitFor(() => expect(screen.getByTestId('status-copy-feedback').textContent).toBe('copied: cwd'))
   })
 })
