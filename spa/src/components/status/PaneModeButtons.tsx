@@ -16,6 +16,7 @@ import { ChatCircle, Robot, TerminalWindow } from '@phosphor-icons/react'
 import { useHandoffGate } from '../../hooks/useHandoffCandidate'
 import { useTakeToTerminal } from '../../lib/nex/take-to-terminal-registry'
 import { setExecutionPaneMode, viewModeOf } from '../../lib/nex/view-mode'
+import { resolveExecutionHostId } from '../../lib/nex/resolve-host'
 import { useHandoffDialogStore } from '../../stores/useHandoffDialogStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { ExecutionViewMode, Pane } from '../../types/tab'
@@ -64,9 +65,11 @@ export function PaneModeButtons({ tabId, pane }: { tabId: string; pane: Pane }) 
     states = { terminal: PRESSED, room: handOff(), chat: handOff('chat') }
   } else if (content.kind === 'execution') {
     const current = viewModeOf(content)
+    // The worker this bar shows, keyed as the pane keys its view (host + execution id, P6 review A2).
+    const worker = { executionId: content.executionId, host: resolveExecutionHostId(content.host) }
     const switchTo = (mode: ExecutionViewMode): ButtonState => (mode === current
       ? PRESSED
-      : { kind: 'action', run: () => setExecutionPaneMode(tabId, pane.id, content.executionId, mode) })
+      : { kind: 'action', run: () => setExecutionPaneMode(tabId, pane.id, worker, mode) })
     const terminal: ButtonState = !take || !take.canTake
       ? { kind: 'disabled', why: t('status.mode.cannot_take') }
       : take.busy

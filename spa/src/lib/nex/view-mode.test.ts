@@ -3,6 +3,7 @@ import type { ExecutionContent, ExecutionViewMode } from '../../types/tab'
 import { createTab } from '../../types/tab'
 import { collectLeaves, findPane, getPrimaryPane } from '../pane-tree'
 import { useTabStore } from '../../stores/useTabStore'
+import { useHostStore } from '../../stores/useHostStore'
 import { setExecutionPaneMode, viewModeOf, withViewMode } from './view-mode'
 
 describe('viewModeOf', () => {
@@ -49,34 +50,57 @@ describe('setExecutionPaneMode', () => {
   })
 
   it('writes the mode on the named pane only, keeping the rest of its content', () => {
-    setExecutionPaneMode(tabId, secondId, 'e2', 'chat')
+    setExecutionPaneMode(tabId, secondId, { executionId: 'e2', host: 'h1' }, 'chat')
     expect(contentOf(secondId)).toEqual({ kind: 'execution', executionId: 'e2', host: 'h1', mode: 'chat' })
     expect(contentOf(primaryId)).toEqual({ kind: 'execution', executionId: 'e1', host: 'h1', from })
-    setExecutionPaneMode(tabId, secondId, 'e2', 'room')
+    setExecutionPaneMode(tabId, secondId, { executionId: 'e2', host: 'h1' }, 'room')
     expect(contentOf(secondId)).toEqual({ kind: 'execution', executionId: 'e2', host: 'h1', mode: 'room' })
   })
 
-  it('reads the content the store holds now, so a rewrite that landed since is kept', () => {
+  it('reads the content the store holds now, so a `from` rewrite that landed since is kept', () => {
     const from2 = { ...from, tmuxInstance: 'inst-2' }
-    useTabStore.getState().setPaneContent(tabId, primaryId, { kind: 'execution', executionId: 'e1', host: 'h2', from: from2 })
-    setExecutionPaneMode(tabId, primaryId, 'e1', 'chat')
-    expect(contentOf(primaryId)).toEqual({ kind: 'execution', executionId: 'e1', host: 'h2', from: from2, mode: 'chat' })
+    useTabStore.getState().setPaneContent(tabId, primaryId, { kind: 'execution', executionId: 'e1', host: 'h1', from: from2 })
+    setExecutionPaneMode(tabId, primaryId, { executionId: 'e1', host: 'h1' }, 'chat')
+    expect(contentOf(primaryId)).toEqual({ kind: 'execution', executionId: 'e1', host: 'h1', from: from2, mode: 'chat' })
+  })
+
+  // P6 review A2: the execution store keys by host + execution id, so the same id on another host is another worker.
+  it('is a no-op when the pane now shows the same execution id on another host', () => {
+    useTabStore.getState().setPaneContent(tabId, primaryId, { kind: 'execution', executionId: 'e1', host: 'h2', from })
+    const before = useTabStore.getState().tabs
+    setExecutionPaneMode(tabId, primaryId, { executionId: 'e1', host: 'h1' }, 'chat')
+    expect(contentOf(primaryId)).toEqual({ kind: 'execution', executionId: 'e1', host: 'h2', from })
+    expect(useTabStore.getState().tabs).toBe(before)
+  })
+
+  it('resolves an absent host like the pane does (the first host)', () => {
+    const prev = useHostStore.getState().hostOrder
+    useHostStore.setState({ hostOrder: ['h1', 'h2'] })
+    try {
+      useTabStore.getState().setPaneContent(tabId, secondId, { kind: 'execution', executionId: 'e2' })
+      setExecutionPaneMode(tabId, secondId, { executionId: 'e2', host: 'h2' }, 'chat') // the pane resolves to h1
+      expect(contentOf(secondId)).toEqual({ kind: 'execution', executionId: 'e2' })
+      setExecutionPaneMode(tabId, secondId, { executionId: 'e2', host: 'h1' }, 'chat')
+      expect(contentOf(secondId)).toEqual({ kind: 'execution', executionId: 'e2', mode: 'chat' })
+    } finally {
+      useHostStore.setState({ hostOrder: prev })
+    }
   })
 
   it('is a no-op when the pane no longer shows that execution, or is not an execution at all', () => {
-    setExecutionPaneMode(tabId, secondId, 'e1', 'chat') // the pane shows e2
+    setExecutionPaneMode(tabId, secondId, { executionId: 'e1', host: 'h1' }, 'chat') // the pane shows e2
     expect(contentOf(secondId)).toEqual({ kind: 'execution', executionId: 'e2', host: 'h1' })
     useTabStore.getState().setPaneContent(tabId, secondId, { kind: 'new-tab' })
     const before = useTabStore.getState().tabs
-    setExecutionPaneMode(tabId, secondId, 'e2', 'chat')
+    setExecutionPaneMode(tabId, secondId, { executionId: 'e2', host: 'h1' }, 'chat')
     expect(contentOf(secondId)).toEqual({ kind: 'new-tab' })
     expect(useTabStore.getState().tabs).toBe(before)
   })
 
   it('is a no-op for a tab or pane that is gone', () => {
     const before = useTabStore.getState().tabs
-    setExecutionPaneMode('no-such-tab', primaryId, 'e1', 'chat')
-    setExecutionPaneMode(tabId, 'no-such-pane', 'e1', 'chat')
+    setExecutionPaneMode('no-such-tab', primaryId, { executionId: 'e1', host: 'h1' }, 'chat')
+    setExecutionPaneMode(tabId, 'no-such-pane', { executionId: 'e1', host: 'h1' }, 'chat')
     expect(useTabStore.getState().tabs).toBe(before)
   })
 })

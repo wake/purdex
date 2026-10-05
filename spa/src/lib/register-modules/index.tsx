@@ -111,13 +111,14 @@ function ExecutionPaneWrapper({ pane, isActive, isFocusTarget = false }: PaneRen
   // The view (room / chat, R2 plan T1.1) lives on the pane content, so it is
   // persisted and travels with the tab (D1). `setExecutionPaneMode` (shared
   // with the status bar's mode buttons) reads the content the store holds
-  // *now*, so a `from` or host rewrite that landed since is kept, and leaves a
-  // pane that no longer shows this execution alone. The mode stays out of the
-  // `key`: switching must not remount the view (no resubscribe, no refetch).
+  // *now*, so a `from` rewrite that landed since is kept, and leaves a pane
+  // that no longer shows this execution — this id on this host, the view's
+  // own key (P6 review A2) — alone. The mode stays out of the `key`:
+  // switching must not remount the view (no resubscribe, no refetch).
   const executionId = content.executionId
   const onModeChange = (mode: ExecutionViewMode) => {
     if (!tabId) return
-    setExecutionPaneMode(tabId, pane.id, executionId, mode)
+    setExecutionPaneMode(tabId, pane.id, { executionId, host: hostId }, mode)
   }
   // No owning tab (should not happen for a rendered pane) → nothing to swap
   // back into, so no take-back is offered.

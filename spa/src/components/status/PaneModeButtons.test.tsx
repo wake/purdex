@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { PaneModeButtons } from './PaneModeButtons'
 import { useTabStore } from '../../stores/useTabStore'
+import { useHostStore } from '../../stores/useHostStore'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
@@ -172,6 +173,27 @@ describe('PaneModeButtons — an execution target in room', () => {
     fireEvent.click(button('Chat'))
     expect(contentOf(TARGET)).toEqual(exec('exc_target', { mode: 'chat' }))
     expect(contentOf(PRIMARY)).toEqual(primary)
+  })
+
+  // P6 review A2: the switch is guarded by host + execution id (the execution store's key), not the id alone.
+  it('the target pane now shows the same execution id on another host → chat does not write it', () => {
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target'))} />)
+    const swapped = exec('exc_target', { host: 'h2' })
+    useTabStore.getState().setPaneContent(TAB, TARGET, swapped)
+    fireEvent.click(button('Chat'))
+    expect(contentOf(TARGET)).toEqual(swapped)
+  })
+
+  it('a target with no host hint switches too (it resolves to the first host, as the pane does)', () => {
+    const prev = useHostStore.getState().hostOrder
+    useHostStore.setState({ hostOrder: [H] })
+    try {
+      render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { host: undefined }))} />)
+      fireEvent.click(button('Chat'))
+      expect(contentOf(TARGET)).toEqual({ kind: 'execution', executionId: 'exc_target', host: undefined, mode: 'chat' })
+    } finally {
+      useHostStore.setState({ hostOrder: prev })
+    }
   })
 
   it('clicking the pressed worker button does nothing', () => {
