@@ -2,11 +2,15 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/wake/purdex/internal/core"
@@ -86,21 +90,24 @@ func takeLastShutdown(dataDir string) (*core.ShutdownReport, error) {
 		}
 		return nil, fmt.Errorf("record slot was a %s; removed", kind)
 	}
-	consumed := path + ".consumed"
+	var rnd [8]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
+		return nil, fmt.Errorf("consume record: %w", err)
+	}
+	// Unpredictable per-take name: nothing can squat on it in advance.
+	// A leftover from a crash between rename and remove is never read again.
+	consumed := path + ".consumed-" + hex.EncodeToString(rnd[:])
 	if err := os.Rename(path, consumed); err != nil {
 		return nil, fmt.Errorf("consume record: %w", err)
 	}
-	data, rerr := os.ReadFile(consumed)
-	rmErr := os.Remove(consumed)
-	if rmErr != nil {
-		if errors.Is(rmErr, os.ErrNotExist) {
-			rmErr = nil
-		} else {
-			rmErr = fmt.Errorf("remove consumed record: %w", rmErr)
-		}
+	data, rerr := readConsumed(consumed)
+	var rmErr error
+	if rerr != nil && data != nil {
+		// read succeeded; only the removal failed
+		rmErr, rerr = rerr, nil
 	}
 	if rerr != nil {
-		return nil, errors.Join(fmt.Errorf("read record: %w", rerr), rmErr)
+		return nil, fmt.Errorf("read record: %w", rerr)
 	}
 	var rec lastShutdownJSON
 	if err := json.Unmarshal(data, &rec); err != nil {
@@ -111,4 +118,29 @@ func takeLastShutdown(dataDir string) (*core.ShutdownReport, error) {
 		return nil, errors.Join(errors.New("record has no errors"), rmErr)
 	}
 	return &core.ShutdownReport{At: rec.At, Errors: rec.Errors}, rmErr
+}
+
+// readConsumed reads the already-renamed record without following a symlink
+// and removes the entry (os.Remove drops a link, never its target). On a read
+// failure it returns nil data. If only the removal fails it returns the data
+// together with that error.
+func readConsumed(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		os.Remove(path)
+		return nil, err
+	}
+	data, rerr := io.ReadAll(f)
+	f.Close()
+	if rerr != nil {
+		os.Remove(path)
+		return nil, rerr
+	}
+	if data == nil {
+		data = []byte{}
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return data, fmt.Errorf("remove consumed record: %w", err)
+	}
+	return data, nil
 }

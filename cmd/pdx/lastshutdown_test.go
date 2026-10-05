@@ -129,18 +129,29 @@ func TestLastShutdown_UnwritableDirNotPublished(t *testing.T) {
 	}
 }
 
-// L2: a stale .consumed with no record is never reported; take leaves no .consumed behind.
-func TestLastShutdown_StaleConsumedIgnored(t *testing.T) {
+// M1: a leftover consumed-* entry with no record is never reported or touched.
+func TestLastShutdown_LeftoverConsumedIgnored(t *testing.T) {
 	dir := t.TempDir()
-	stale := filepath.Join(dir, lastShutdownFile+".consumed")
+	left := filepath.Join(dir, lastShutdownFile+".consumed-abcd")
 	body := `{"at":"2026-10-06T12:00:00Z","errors":["old"]}`
-	if err := os.WriteFile(stale, []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(left, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if rep, err := takeLastShutdown(dir); rep != nil || err != nil {
 		t.Fatalf("take = (%v, %v), want (nil, nil)", rep, err)
 	}
-	// a real record overwrites the stale one and cleans up
+	if _, err := os.Lstat(left); err != nil {
+		t.Fatalf("leftover must be left alone, err = %v", err)
+	}
+}
+
+// M1: a non-empty directory squatting on the old fixed .consumed name cannot block the take.
+func TestLastShutdown_BlockedOldConsumedNameDoesNotBlock(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, lastShutdownFile+".consumed")
+	if err := os.MkdirAll(filepath.Join(blocker, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeLastShutdown(dir, []string{"new"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +159,50 @@ func TestLastShutdown_StaleConsumedIgnored(t *testing.T) {
 	if err != nil || rep == nil || rep.Errors[0] != "new" {
 		t.Fatalf("take = (%v, %v)", rep, err)
 	}
-	if _, err := os.Lstat(stale); !os.IsNotExist(err) {
-		t.Fatalf(".consumed must be gone, err = %v", err)
+	if _, err := os.Lstat(filepath.Join(dir, lastShutdownFile)); !os.IsNotExist(err) {
+		t.Fatalf("record must be gone, err = %v", err)
+	}
+	if rep, err := takeLastShutdown(dir); rep != nil || err != nil {
+		t.Fatalf("second take = (%v, %v)", rep, err)
+	}
+}
+
+// M2: the consumed entry is read without following symlinks, and removed on failure.
+func TestReadConsumed_SymlinkRefusedAndRemoved(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	body := []byte(`{"at":"2026-10-06T12:00:00Z","errors":["x"]}`)
+	if err := os.WriteFile(target, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "consumed-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := readConsumed(link); err == nil {
+		t.Fatalf("readConsumed followed symlink: %q", data)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("link must be removed, err = %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != string(body) {
+		t.Fatalf("target changed: %q, %v", got, err)
+	}
+}
+
+func TestReadConsumed_RegularFileReadAndRemoved(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "c")
+	if err := os.WriteFile(p, []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := readConsumed(p)
+	if err != nil || string(data) != "hi" {
+		t.Fatalf("got %q, %v", data, err)
+	}
+	if _, err := os.Lstat(p); !os.IsNotExist(err) {
+		t.Fatalf("must be removed, err = %v", err)
 	}
 }
 
