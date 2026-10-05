@@ -11,11 +11,21 @@ import (
 	"lab.protype.tw/wake/nexen/store"
 )
 
-// The lease an orchestration acts under (conversation entity D4/D5).
+// The lease an orchestration acts under (conversation entity D4/D5/D22).
 // Nexen fences every write — send, interrupt, terminate — behind one
 // control lease per execution, and an open worker pane keeps renewing its
-// own. The daemon mints every pdx principal, so it may act under a pdx
-// holder's lease; it never overrides anyone else's.
+// own. The daemon mints every pdx principal, so it may act on a pdx
+// holder's lease — borrow it (exit) or preempt it (transfers); it never
+// overrides anyone else's.
+
+// controlMode is what takeControlMode does with a live lease another pdx
+// client holds.
+type controlMode int
+
+const (
+	borrowPdx  controlMode = iota // exit (D4): act under a pdx holder's current lease
+	preemptPdx                    // transfers (D22): release the pdx holder's lease, acquire our own exclusive one
+)
 
 type control struct {
 	LeaseID, PrincipalID string
@@ -31,7 +41,19 @@ func (m *Module) isPdxPrincipal(p string) bool {
 	return p == base || strings.HasPrefix(p, base+"/")
 }
 
+// takeControl is takeControlMode in borrow mode (exit, D4).
 func (m *Module) takeControl(parent context.Context, execID, callerLease, principal string) (control, *handoffError) {
+	return m.takeControlMode(parent, execID, callerLease, principal, borrowPdx)
+}
+
+// takeControlMode returns the control to act under: the caller's lease as
+// is, else one acquired under principal, else — when a live lease is held —
+// held_by for a non-pdx holder, and for a pdx holder per mode: its lease
+// borrowed (borrowPdx), or released as the holder and replaced by an
+// exclusive one of ours (preemptPdx). An acquired lease carries a real
+// release; a caller's or a borrowed one carries noRelease. A lease that
+// changes hands under it is tried again once, then lease_contended.
+func (m *Module) takeControlMode(parent context.Context, execID, callerLease, principal string, mode controlMode) (control, *handoffError) {
 	if callerLease != "" {
 		return control{LeaseID: callerLease, PrincipalID: principal, release: noRelease}, nil
 	}
@@ -39,12 +61,7 @@ func (m *Module) takeControl(parent context.Context, execID, callerLease, princi
 	for attempt := 0; attempt < 2; attempt++ {
 		lease, err := m.acquireLease(parent, execID, principal)
 		if err == nil {
-			id := lease.ID
-			return control{LeaseID: id, PrincipalID: principal, release: func() {
-				if err := m.releaseLease(parent, execID, id, principal); err != nil {
-					m.logf("nex: releasing lease %s on %s: %v", id, execID, err)
-				}
-			}}, nil
+			return m.ownControl(parent, execID, lease.ID, principal), nil
 		}
 		if !errors.Is(err, store.ErrLeaseHeld) {
 			return control{release: noRelease}, &handoffError{http.StatusInternalServerError, "lease_error", "acquiring lease: " + err.Error(), nil}
@@ -62,7 +79,28 @@ func (m *Module) takeControl(parent context.Context, execID, callerLease, princi
 		if !m.isPdxPrincipal(row.LeasePrincipalID) {
 			return control{release: noRelease}, heldByError(row.LeasePrincipalID)
 		}
-		return control{LeaseID: row.LeaseID, PrincipalID: row.LeasePrincipalID, release: noRelease}, nil
+		if mode == borrowPdx {
+			return control{LeaseID: row.LeaseID, PrincipalID: row.LeasePrincipalID, release: noRelease}, nil
+		}
+		// D22: release the holder's lease as the holder (Nexen's release
+		// needs its lease id and principal), then take an exclusive one.
+		// The holder's next send or renew fails; its re-attach sees held_by
+		// until the transfer releases ours.
+		if err := m.releaseLease(parent, execID, row.LeaseID, row.LeasePrincipalID); err != nil {
+			if isLeaseErr(err) {
+				continue // the holder re-attached or released between our read and our release
+			}
+			return control{release: noRelease}, &handoffError{http.StatusInternalServerError, "lease_error", "releasing the holder's lease: " + err.Error(), nil}
+		}
+		m.logf("nex: %s: preempted lease %s of %s (D22)", execID, row.LeaseID, row.LeasePrincipalID)
+		lease, err = m.acquireLease(parent, execID, principal)
+		if err == nil {
+			return m.ownControl(parent, execID, lease.ID, principal), nil
+		}
+		if !errors.Is(err, store.ErrLeaseHeld) {
+			return control{release: noRelease}, &handoffError{http.StatusInternalServerError, "lease_error", "acquiring lease: " + err.Error(), nil}
+		}
+		// Somebody acquired between our release and our acquire: once more.
 	}
 	var detail map[string]any
 	if lastHolder != "" {
@@ -71,7 +109,25 @@ func (m *Module) takeControl(parent context.Context, execID, callerLease, princi
 	return control{release: noRelease}, &handoffError{http.StatusConflict, "lease_contended", "execution lease kept changing hands", detail}
 }
 
+// ownControl is a lease acquired under principal: ours to release.
+func (m *Module) ownControl(parent context.Context, execID, leaseID, principal string) control {
+	return control{LeaseID: leaseID, PrincipalID: principal, release: func() {
+		if err := m.releaseLease(parent, execID, leaseID, principal); err != nil {
+			m.logf("nex: releasing lease %s on %s: %v", leaseID, execID, err)
+		}
+	}}
+}
+
+// renewControl is renewControlMode in borrow mode (exit, D4).
 func (m *Module) renewControl(parent context.Context, execID string, ctl control, principal string) (control, *handoffError) {
+	return m.renewControlMode(parent, execID, ctl, principal, borrowPdx)
+}
+
+// renewControlMode renews ctl's lease under its holder. A lease-class
+// refusal (gone, expired, someone else's) releases ctl and re-takes
+// control in the same mode; any other error keeps ctl for the caller to
+// release.
+func (m *Module) renewControlMode(parent context.Context, execID string, ctl control, principal string, mode controlMode) (control, *handoffError) {
 	ctx, cancel := detachedContext(parent, m.engineOpTimeout)
 	_, err := m.sys.service.RenewLease(ctx, execID, ctl.LeaseID, ctl.PrincipalID)
 	cancel()
@@ -82,7 +138,7 @@ func (m *Module) renewControl(parent context.Context, execID string, ctl control
 		return ctl, &handoffError{http.StatusInternalServerError, "lease_error", "renewing lease: " + err.Error(), nil}
 	}
 	ctl.release()
-	return m.takeControl(parent, execID, "", principal)
+	return m.takeControlMode(parent, execID, "", principal, mode)
 }
 
 // isLeaseErr reports Nexen's CheckLease refusals: the control a caller acts
