@@ -1,6 +1,6 @@
 # Conversation entity — one conversation, one thing, in one state — spec
 
-Status: draft for the user's read, then codex review with the plan. Origin: the user felt that a worker "never goes away", while a terminal agent has a clear lifecycle: cld-yolo running means it exists, exiting means it is gone, resuming brings it back (2026-10-06).
+Status: **approved by the user 2026-10-06**, including the coordinator's derivations in §4.3, §5, §6, §8, §9 and §11. It goes to codex review together with the plan. Coordinator: `mlab/purdex-9b` (`mlab/_0le0d2`). Implementer: `mlab/purdex-19` (`mlab/_oecdo4`). Origin: the user felt that a worker "never goes away", while a terminal agent has a clear lifecycle: cld-yolo running means it exists, exiting means it is gone, resuming brings it back (2026-10-06).
 
 ## 1. Goal
 
