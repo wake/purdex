@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -20,6 +23,66 @@ var kernProcPid = func(pid int) (*unix.KinfoProc, error) {
 
 var kernProcArgs2 = func(pid int) ([]byte, error) {
 	return unix.SysctlRaw("kern.procargs2", pid)
+}
+
+// kernProcAll is one read of the whole process table: a size query, then the
+// read, with no retry; a table that grew in between comes back as ENOMEM.
+// Tests swap it to stage a table that keeps growing.
+var kernProcAll = func() ([]byte, error) {
+	return unix.SysctlRaw("kern.proc.all")
+}
+
+// procTableAttempts caps the reads of a table that keeps growing. The
+// snapshot runs in a goroutine the inventory may abandon at its deadline, so
+// it has to end on its own; x/sys's SysctlKinfoProcSlice retries ENOMEM
+// without limit, which under a sustained fork storm may be never.
+const procTableAttempts = 4
+
+func readProcTable() ([]byte, error) {
+	var err error
+	for range procTableAttempts {
+		var buf []byte
+		if buf, err = kernProcAll(); !errors.Is(err, unix.ENOMEM) {
+			return buf, err
+		}
+	}
+	return nil, fmt.Errorf("process table still growing after %d reads: %w", procTableAttempts, err)
+}
+
+// rawProc is the part of one kinfo_proc record the snapshot keeps.
+type rawProc struct {
+	pid, ppid int
+	sec       int64
+	usec      int32
+}
+
+// parseKinfoProcs reads the records of a kern.proc.all buffer field by field.
+// Casting the bytes to []unix.KinfoProc would do the same, but the struct
+// holds pointers (P_vmspace among them), and kernel bytes are not Go
+// pointers. The offsets are x/sys's own layout of the struct, which is the
+// kernel's.
+func parseKinfoProcs(buf []byte) ([]rawProc, error) {
+	if len(buf)%unix.SizeofKinfoProc != 0 {
+		return nil, fmt.Errorf("process table is %d bytes, not a multiple of %d", len(buf), unix.SizeofKinfoProc)
+	}
+	var k unix.KinfoProc
+	const (
+		pidOff   = unsafe.Offsetof(k.Proc) + unsafe.Offsetof(k.Proc.P_pid)
+		ppidOff  = unsafe.Offsetof(k.Eproc) + unsafe.Offsetof(k.Eproc.Ppid)
+		startOff = unsafe.Offsetof(k.Proc) + unsafe.Offsetof(k.Proc.P_starttime)
+		secOff   = startOff + unsafe.Offsetof(k.Proc.P_starttime.Sec)
+		usecOff  = startOff + unsafe.Offsetof(k.Proc.P_starttime.Usec)
+	)
+	procs := make([]rawProc, 0, len(buf)/unix.SizeofKinfoProc)
+	for rec := range slices.Chunk(buf, unix.SizeofKinfoProc) {
+		procs = append(procs, rawProc{
+			pid:  int(int32(binary.NativeEndian.Uint32(rec[pidOff:]))),
+			ppid: int(int32(binary.NativeEndian.Uint32(rec[ppidOff:]))),
+			sec:  int64(binary.NativeEndian.Uint64(rec[secOff:])),
+			usec: int32(binary.NativeEndian.Uint32(rec[usecOff:])),
+		})
+	}
+	return procs, nil
 }
 
 // procIdentity is the kernel's full p_starttime. Seconds alone do not tell
@@ -38,18 +101,20 @@ func snapshotProcessesPlatform(ctx context.Context) (map[int]*snapshotEntry, err
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	kps, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	buf, err := readProcTable()
 	if err != nil {
 		return nil, fmt.Errorf("read process table: %w", err)
 	}
-	procs := make(map[int]*snapshotEntry, len(kps))
-	for i := range kps {
-		pid := int(kps[i].Proc.P_pid)
-		if pid <= 0 {
+	recs, err := parseKinfoProcs(buf)
+	if err != nil {
+		return nil, fmt.Errorf("read process table: %w", err)
+	}
+	procs := make(map[int]*snapshotEntry, len(recs))
+	for _, r := range recs {
+		if r.pid <= 0 {
 			continue
 		}
-		st := kps[i].Proc.P_starttime
-		procs[pid] = newDarwinEntry(pid, int(kps[i].Eproc.Ppid), st.Sec, st.Usec)
+		procs[r.pid] = newDarwinEntry(r.pid, r.ppid, r.sec, r.usec)
 	}
 	return procs, nil
 }

@@ -3,13 +3,16 @@ package peers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	iagent "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
+	ipeers "github.com/wake/purdex/internal/peers"
 )
 
 // errFakeProvider is the sentinel error fakeSessions.ListSessions returns
@@ -193,4 +196,143 @@ type ctxRecordingOwners struct {
 func (o *ctxRecordingOwners) ResolveSessionOwner(ctx context.Context, _ string) (agent.PaneOwner, bool, error) {
 	o.record(ctx)
 	return agent.PaneOwner{}, false, nil
+}
+
+// livenessView is an agent.ProcessView that answers from a fake Liveness, the
+// way the test module's pass view does: Read is the fake's Info, or, for a
+// fake without one, a ProcessInfo carrying its StartTime. Every PID is in the
+// view, so the inventory's registry read gets exactly the fake's answers.
+type livenessView struct {
+	l ipeers.Liveness
+}
+
+func (v livenessView) Alive(pid int) bool { return v.l.PidAlive(pid) }
+
+func (v livenessView) Read(pid int) (iagent.ProcessInfo, error) {
+	if v.l.Info != nil {
+		return v.l.Info(pid)
+	}
+	start, err := v.l.StartTime(pid)
+	return iagent.ProcessInfo{PID: pid, StartTime: start}, err
+}
+
+func (v livenessView) StartTime(pid int) (string, error) {
+	info, err := v.Read(pid)
+	if err != nil {
+		return "", err
+	}
+	return info.StartTime.Format("Mon Jan _2 15:04:05 2006"), nil
+}
+
+func (v livenessView) PPID(pid int) (int, error) {
+	info, err := v.Read(pid)
+	if err != nil {
+		return 0, err
+	}
+	return info.PPID, nil
+}
+
+// mapView is an agent.ProcessView over fixed answers: Read returns errs[pid]
+// when set, else infos[pid], and any other PID is not in the view
+// (ErrNotInSnapshot), as with a real snapshot. reads counts Read calls.
+type mapView struct {
+	infos map[int]iagent.ProcessInfo
+	errs  map[int]error
+	reads int
+}
+
+func (v *mapView) Alive(pid int) bool {
+	_, ok := v.infos[pid]
+	return ok
+}
+
+func (v *mapView) Read(pid int) (iagent.ProcessInfo, error) {
+	v.reads++
+	if err, ok := v.errs[pid]; ok {
+		return iagent.ProcessInfo{}, err
+	}
+	if info, ok := v.infos[pid]; ok {
+		return info, nil
+	}
+	return iagent.ProcessInfo{}, fmt.Errorf("pid %d: %w", pid, iagent.ErrNotInSnapshot)
+}
+
+func (v *mapView) StartTime(pid int) (string, error) {
+	info, err := v.Read(pid)
+	if err != nil {
+		return "", err
+	}
+	return info.StartTime.Format("Mon Jan _2 15:04:05 2006"), nil
+}
+
+func (v *mapView) PPID(pid int) (int, error) {
+	info, err := v.Read(pid)
+	if err != nil {
+		return 0, err
+	}
+	return info.PPID, nil
+}
+
+// passOwners is an agent.OwnerPassResolver whose passes answer from results,
+// by code (absent ⇒ "no owner"). NewOwnerPass records the ProcessSource it is
+// handed and calls it once, as a real pass does on its first walk, keeping
+// what it returned; a source that failed is every session's answer, as in a
+// real pass. A pass's answers exist only in Confirm's map, so a caller that
+// read them from anywhere else would find nothing. Confirm leaves the codes in
+// omit out of its map. direct records ResolveSessionOwner calls, which an
+// inventory with a pass must not make.
+type passOwners struct {
+	results map[string]agent.OwnerResult
+	omit    map[string]bool
+
+	srcs     []agent.ProcessSource
+	views    []iagent.ProcessView
+	viewErrs []error
+	resolved []string
+	confirms int
+	direct   []string
+}
+
+func (o *passOwners) ResolveSessionOwner(_ context.Context, code string) (agent.PaneOwner, bool, error) {
+	o.direct = append(o.direct, code)
+	return agent.PaneOwner{}, false, errors.New("passOwners: per-session lookup")
+}
+
+func (o *passOwners) NewOwnerPass(src agent.ProcessSource) agent.OwnerPass {
+	o.srcs = append(o.srcs, src)
+	p := &fakePass{o: o}
+	if src != nil {
+		p.view, p.viewErr = src()
+	}
+	o.views = append(o.views, p.view)
+	o.viewErrs = append(o.viewErrs, p.viewErr)
+	return p
+}
+
+type fakePass struct {
+	o       *passOwners
+	view    iagent.ProcessView
+	viewErr error
+	codes   []string
+}
+
+func (p *fakePass) Resolve(_ context.Context, code string) {
+	p.o.resolved = append(p.o.resolved, code)
+	p.codes = append(p.codes, code)
+}
+
+func (p *fakePass) Confirm(context.Context) map[string]agent.OwnerResult {
+	p.o.confirms++
+	out := make(map[string]agent.OwnerResult, len(p.codes))
+	for _, code := range p.codes {
+		if p.o.omit[code] {
+			continue
+		}
+		if p.viewErr != nil {
+			out[code] = agent.OwnerResult{Err: p.viewErr}
+			continue
+		}
+		out[code] = p.o.results[code]
+	}
+	return out
 }
