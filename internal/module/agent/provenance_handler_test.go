@@ -924,14 +924,14 @@ func TestHandleSessionProvenance_RecheckAnswersAfterTheDeadline_NotAnAnswer(t *t
 // paneTargetedRecheckExecutor blocks the re-check — the second pane listing,
 // which confirms every candidate of the session at once — until its context is
 // cancelled, and answers the enumeration before it normally. With the re-check
-// batched there is no per-pane call left to single out, so blockPane only names
-// the pane the case is about: the listing that never returns is the one that
-// would have confirmed it.
+// batched there is no per-pane call left to single out: the one listing that
+// never returns is the one that would have confirmed every pane of the session.
+// What this case adds over RecheckIsCancellable is the second pane — a candidate
+// already held from an earlier pane must be dropped along with the last one.
 type paneTargetedRecheckExecutor struct {
 	*tmux.FakeExecutor
-	mu        sync.Mutex
-	calls     int
-	blockPane string
+	mu    sync.Mutex
+	calls int
 }
 
 func (e *paneTargetedRecheckExecutor) ListAllPanes(ctx context.Context) ([]tmux.PaneLocation, error) {
@@ -967,7 +967,7 @@ func (e *paneTargetedRecheckExecutor) ListAllPanes(ctx context.Context) ([]tmux.
 // re-check blocks.
 func TestHandleSessionProvenance_CancelledRecheckDiscardsEarlierOwner(t *testing.T) {
 	m, fake, _ := newProvenanceQueryModule(t)
-	exec := &paneTargetedRecheckExecutor{FakeExecutor: fake, blockPane: "%6"}
+	exec := &paneTargetedRecheckExecutor{FakeExecutor: fake}
 	m.tmux = exec
 	orig := provenanceTimeout
 	provenanceTimeout = 80 * time.Millisecond
