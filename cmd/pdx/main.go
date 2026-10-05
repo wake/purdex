@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -43,7 +44,9 @@ func main() {
 
 	switch os.Args[1] {
 	case "serve":
-		runServe(os.Args[2:])
+		if plan := runServe(os.Args[2:]); plan != nil {
+			reexec(plan, syscall.Exec, log.Printf, os.Exit)
+		}
 	case "hook":
 		runHook(os.Args[2:])
 	case "setup":
@@ -76,7 +79,7 @@ func main() {
 	}
 }
 
-func runServe(args []string) {
+func runServe(args []string) *reexecPlan {
 	defer func() {
 		if r := recover(); r != nil {
 			home, _ := os.UserHomeDir()
@@ -85,6 +88,10 @@ func runServe(args []string) {
 			panic(r)
 		}
 	}()
+
+	// Before locale.EnsureUTF8 / tmuxenv.Prepare / nex PATH policy mutate the
+	// process env: a restart must re-exec the boot command, not the mutated one.
+	boot, bootErr := captureReexecPlan(os.Executable, os.Args, os.Environ())
 
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/pdx/config.toml)")
@@ -192,6 +199,22 @@ func runServe(args []string) {
 		Tmux:   tx,
 	})
 
+	// POST /api/daemon/restart → restartCh → serveAndWait runs the normal
+	// shutdown; the re-exec happens in main once this function's defers
+	// (stores, pid lock) have run. No boot plan → no hook → the endpoint
+	// answers 503 rather than accepting a restart nothing can perform.
+	restartCh := make(chan struct{}, 1)
+	if bootErr != nil {
+		log.Printf("restart: unavailable (%v)", bootErr)
+	} else {
+		c.SetRestartHook(func() {
+			select {
+			case restartCh <- struct{}{}:
+			default:
+			}
+		})
+	}
+
 	// Set config path for persistence via PUT /api/config
 	c.CfgPath = resolvedCfgPath
 
@@ -259,9 +282,17 @@ func runServe(args []string) {
 	// CloseModules) and only return once it has finished, so the deferred
 	// store close and PID-lock release registered above run against closed
 	// modules.
-	if err := serveAndWait(srv, listener, sigCh, nil, cancel, c, core.ShutdownBudget, log.Printf, os.Exit); err != nil {
+	err = serveAndWait(srv, listener, sigCh, restartCh, cancel, c, core.ShutdownBudget, log.Printf, os.Exit)
+	if errors.Is(err, errRestart) {
+		if restartStillWanted(sigCh, func() { signal.Stop(sigCh) }, log.Printf) {
+			return boot
+		}
+		return nil
+	}
+	if err != nil {
 		log.Printf("server error: %v", err)
 	}
+	return nil
 }
 
 func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *store.AgentEventStore) error {
