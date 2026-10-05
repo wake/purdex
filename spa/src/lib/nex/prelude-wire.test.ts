@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sanitizePreludePage } from './prelude-wire'
+import { PRELUDE_MAX_PAGE_ITEMS, PRELUDE_MAX_STRING_BYTES, sanitizePreludePage } from './prelude-wire'
 import sample from './__fixtures__/prelude-contract-sample.json'
 
 const asst = (pos: string, text: string) => ({
@@ -168,6 +168,29 @@ describe('an ok page must carry an items array (spec §4.2)', () => {
   it('none / gone still ignore items', () => {
     expect(sanitizePreludePage({ state: 'none', items: 'x', prev_cursor: null })).not.toBeNull()
     expect(sanitizePreludePage({ state: 'gone', prev_cursor: null })).not.toBeNull()
+  })
+})
+
+describe('client resource budget (spec §4.3)', () => {
+  const note = (text: string) => ({ pos: '1', kind: 'prelude.note', at: 0, payload: { source: 'command_output', text } })
+
+  it('a page over the item budget is not a page', () => {
+    const items = new Array(PRELUDE_MAX_PAGE_ITEMS + 1).fill(null)
+    expect(sanitizePreludePage({ state: 'ok', items, prev_cursor: null })).toBeNull()
+    expect(sanitizePreludePage({ state: 'ok', items: items.slice(1), prev_cursor: null })).not.toBeNull()
+  })
+
+  it('a string over 4 MiB aborts the page; one byte under passes', () => {
+    expect(sanitizePreludePage({ state: 'ok', items: [note('a'.repeat(PRELUDE_MAX_STRING_BYTES + 1))], prev_cursor: null })).toBeNull()
+    expect(sanitizePreludePage({ state: 'ok', items: [note('a'.repeat(PRELUDE_MAX_STRING_BYTES - 1))], prev_cursor: null })).not.toBeNull()
+  })
+
+  it('counts UTF-8 bytes, not code units, and covers block text and tool_result content', () => {
+    // 3-byte chars: 1.4M of them is under 4M in length but over in bytes.
+    expect(sanitizePreludePage({ state: 'ok', items: [note('€'.repeat(1_500_000))], prev_cursor: null })).toBeNull()
+    expect(blocksPage([{ type: 'text', text: 'a'.repeat(PRELUDE_MAX_STRING_BYTES + 1) }])).toBeNull()
+    expect(blocksPage([{ type: 'tool_result', content: 'a'.repeat(PRELUDE_MAX_STRING_BYTES + 1) }])).toBeNull()
+    expect(blocksPage([{ type: 'tool_result', content: [{ type: 'text', text: 'a'.repeat(PRELUDE_MAX_STRING_BYTES + 1) }] }])).toBeNull()
   })
 })
 
