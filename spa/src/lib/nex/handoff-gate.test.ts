@@ -2,7 +2,7 @@
 // pane be handed to nex?" gate (plan Task 3; precedence from codex review 5).
 import { describe, it, expect } from 'vitest'
 import type { PaneContent, TmuxSessionContent } from '../../types/tab'
-import { isHandoffCandidate, type HandoffGateDeps } from './handoff-gate'
+import { handoffBlockReason, isHandoffCandidate, type HandoffGateDeps } from './handoff-gate'
 
 function terminal(over: Partial<TmuxSessionContent> = {}): TmuxSessionContent {
   return {
@@ -82,5 +82,55 @@ describe('isHandoffCandidate — structural checks', () => {
     const exec: PaneContent = { kind: 'execution', executionId: 'x' }
     expect(isHandoffCandidate(exec, cc)).toBe(false)
     expect(isHandoffCandidate({ kind: 'dashboard' }, cc)).toBe(false)
+  })
+})
+
+// Shell cleanup P6 (spec §9.3): the status bar's worker / chat buttons are disabled with a title that says why, so the
+// gate names its reason. `isHandoffCandidate` is exactly "no reason".
+describe('handoffBlockReason', () => {
+  const cc: HandoffGateDeps = { ...ready, agentType: 'cc' }
+
+  it('a candidate → null', () => {
+    expect(handoffBlockReason(terminal(), cc)).toBeNull()
+    expect(handoffBlockReason(withRebuildAgent('cc'), ready)).toBeNull()
+  })
+
+  it('non tmux-session content → not_session', () => {
+    expect(handoffBlockReason({ kind: 'execution', executionId: 'x' }, cc)).toBe('not_session')
+    expect(handoffBlockReason({ kind: 'dashboard' }, cc)).toBe('not_session')
+  })
+
+  it('a terminated pane → terminated, before anything about its agent or host', () => {
+    expect(handoffBlockReason(terminal({ terminated: 'session-closed' }), { agentType: 'codex', handoffReady: false })).toBe('terminated')
+  })
+
+  it('no Claude Code (live codex, a codex record, or nothing known) → not_agent', () => {
+    expect(handoffBlockReason(withRebuildAgent('cc'), { ...ready, agentType: 'codex' })).toBe('not_agent')
+    expect(handoffBlockReason(withRebuildAgent('codex'), ready)).toBe('not_agent')
+    expect(handoffBlockReason(terminal(), ready)).toBe('not_agent')
+  })
+
+  it('a plain shell on a host that is not ready says not_agent: Nexen being ready would not help it', () => {
+    expect(handoffBlockReason(terminal(), { agentType: undefined, handoffReady: false })).toBe('not_agent')
+  })
+
+  it('Claude Code on a host that is not handoff-ready → nex_not_ready', () => {
+    expect(handoffBlockReason(terminal(), { ...cc, handoffReady: false })).toBe('nex_not_ready')
+    expect(handoffBlockReason(withRebuildAgent('cc'), { agentType: '', handoffReady: false })).toBe('nex_not_ready')
+  })
+
+  it('isHandoffCandidate is exactly "no reason" over a grid of inputs', () => {
+    const contents: PaneContent[] = [
+      terminal(), withRebuildAgent('cc'), withRebuildAgent('codex'), terminal({ terminated: 'tmux-restarted' }),
+      { kind: 'dashboard' }, { kind: 'execution', executionId: 'x' },
+    ]
+    for (const content of contents) {
+      for (const agentType of [undefined, '', 'cc', 'codex']) {
+        for (const handoffReady of [true, false]) {
+          const deps = { agentType, handoffReady }
+          expect(isHandoffCandidate(content, deps)).toBe(handoffBlockReason(content, deps) === null)
+        }
+      }
+    }
   })
 })

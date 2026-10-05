@@ -2,7 +2,7 @@
 // `isHandoffCandidate` fed by the live agent type and the host's readiness, behind the hidden-host gate.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { useHandoffCandidate } from './useHandoffCandidate'
+import { useHandoffCandidate, useHandoffGate } from './useHandoffCandidate'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
@@ -101,5 +101,55 @@ describe('useHandoffCandidate', () => {
     expect(result.current).toBe(false)
     act(() => { useShownHostsStore.setState({ ids: [H] }) })
     expect(result.current).toBe(true)
+  })
+})
+
+// Shell cleanup P6 (spec §9.3): the same gate, saying why it is closed — the status bar's worker / chat buttons are
+// disabled with a title naming the reason.
+describe('useHandoffGate', () => {
+  const gate = (content: PaneContent | null) => renderHook(() => useHandoffGate(content)).result.current
+
+  it('a candidate → ok, no reason', () => {
+    seedReady()
+    liveAgent('cc')
+    expect(gate(tmux())).toEqual({ ok: true, reason: null })
+  })
+
+  it('a non-session pane, or none → not_session', () => {
+    seedReady()
+    expect(gate({ kind: 'execution', executionId: 'e1', host: H })).toEqual({ ok: false, reason: 'not_session' })
+    expect(gate(null)).toEqual({ ok: false, reason: 'not_session' })
+  })
+
+  it('a pane on a host hidden in this workbench → host_hidden, whatever else holds', () => {
+    useShownHostsStore.setState({ ids: [] })
+    seedReady()
+    liveAgent('cc')
+    expect(gate(tmux())).toEqual({ ok: false, reason: 'host_hidden' })
+    expect(gate(tmux({ terminated: 'session-closed' }))).toEqual({ ok: false, reason: 'host_hidden' })
+  })
+
+  it('a terminated session → terminated', () => {
+    seedReady()
+    liveAgent('cc')
+    expect(gate(tmux({ terminated: 'session-closed' }))).toEqual({ ok: false, reason: 'terminated' })
+  })
+
+  it('no Claude Code → not_agent; Claude Code on a host that is not ready → nex_not_ready', () => {
+    seedReady(false)
+    expect(gate(tmux())).toEqual({ ok: false, reason: 'not_agent' })
+    liveAgent('cc')
+    expect(gate(tmux())).toEqual({ ok: false, reason: 'nex_not_ready' })
+  })
+
+  it('is live, and useHandoffCandidate is its ok', () => {
+    const { result } = renderHook(() => ({ gate: useHandoffGate(tmux()), candidate: useHandoffCandidate(tmux()) }))
+    expect(result.current.gate.reason).toBe('not_agent')
+    act(() => { liveAgent('cc') })
+    expect(result.current.gate.reason).toBe('nex_not_ready')
+    expect(result.current.candidate).toBe(false)
+    act(() => { seedReady() })
+    expect(result.current.gate).toEqual({ ok: true, reason: null })
+    expect(result.current.candidate).toBe(true)
   })
 })

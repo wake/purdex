@@ -24,11 +24,28 @@ export interface HandoffGateDeps {
   handoffReady: boolean
 }
 
+/**
+ * Why the pane may not be handed to nex (shell cleanup spec §9.3: the status
+ * bar's disabled worker / chat buttons say why).
+ * - `not_session`: not a tmux pane at all;
+ * - `terminated`: the pane's session is gone;
+ * - `not_agent`: nothing says the pane runs Claude Code (the two sources above);
+ * - `nex_not_ready`: it does, but the host cannot take a handoff now.
+ * The agent is asked before the host: for a plain shell, a ready Nexen would
+ * change nothing, so "not running Claude Code" is the answer that helps.
+ */
+export type HandoffBlockReason = 'not_session' | 'terminated' | 'not_agent' | 'nex_not_ready'
+
+export function handoffBlockReason(content: PaneContent, deps: HandoffGateDeps): HandoffBlockReason | null {
+  if (content.kind !== 'tmux-session') return 'not_session'
+  if (content.terminated) return 'terminated'
+  // An empty live type is no information and falls through to the record.
+  const agent = deps.agentType || content.rebuild?.agent?.type
+  if (agent !== 'cc') return 'not_agent'
+  if (!deps.handoffReady) return 'nex_not_ready'
+  return null
+}
+
 export function isHandoffCandidate(content: PaneContent, deps: HandoffGateDeps): boolean {
-  if (content.kind !== 'tmux-session') return false
-  if (content.terminated) return false
-  if (!deps.handoffReady) return false
-  if (deps.agentType) return deps.agentType === 'cc'
-  const recorded = content.rebuild?.agent?.type
-  return recorded === 'cc'
+  return handoffBlockReason(content, deps) === null
 }
