@@ -179,6 +179,12 @@ export function fetchExecutionPrelude(
   const qs = q.toString()
   return nexFetch(hostId, `${execPath(executionId, '/prelude')}${qs ? `?${qs}` : ''}`)
     .then((r) => okJson<unknown>(r))
+    .catch((e) => {
+      // If the response was ok but JSON parse failed, it's a malformed page.
+      // HTTP errors (non-2xx) are already NexApiError from okJson → nexErrorFromResponse.
+      if (e instanceof SyntaxError) throw new NexApiError(0, 'malformed_response', 'malformed prelude page')
+      throw e
+    })
     .then((body) => {
       const page = sanitizePreludePage(body)
       if (!page) throw new NexApiError(0, 'malformed_response', 'malformed prelude page')

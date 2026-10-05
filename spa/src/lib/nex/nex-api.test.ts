@@ -84,6 +84,16 @@ describe('nex-api', () => {
     await expect(fetchExecutionPrelude(hostId, 'exc_1')).rejects.toMatchObject({ code: 'malformed_response' })
   })
 
+  it('fetchExecutionPrelude rejects a 200 with invalid JSON (e.g. HTML proxy page)', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(new Response('<html>oops', { status: 200, headers: { 'Content-Type': 'text/html' } }))
+    await expect(fetchExecutionPrelude(hostId, 'exc_1')).rejects.toMatchObject({ code: 'malformed_response', status: 0 })
+  })
+
+  it('fetchExecutionPrelude rejects a 404 JSON error with the daemon code, not malformed_response', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ error: 'not found', code: 'execution_not_found' }, 404))
+    await expect(fetchExecutionPrelude(hostId, 'exc_1')).rejects.toMatchObject({ status: 404, code: 'execution_not_found' })
+  })
+
   it('attachObserve / attachControl post the mode as JSON', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ mode: 'observe', stream_url: '/api/nex/v1/events?execution_id=exc_1', cursor: 7, state: 'idle' }))
     const obs = await attachObserve(hostId, 'exc_1')
