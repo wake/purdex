@@ -2237,6 +2237,28 @@ git commit --only go.mod go.sum spa/src/lib/nex/__fixtures__/prelude-<execId>.js
 
 ---
 
+### Task 11: Pasted text in the prelude (U3, spec §5.3 "Pasted text")
+
+Added 2026-10-06 after the live acceptance. One PR (P4e), ≤ 800 lines.
+
+**Files:**
+- Modify: `spa/src/lib/nex/prelude.ts` (split in `derivePrelude`), `spa/src/lib/nex/message-types.ts` (`ContentBlock.pasted?`)
+- Create: `spa/src/lib/nex/pasted-text.ts` (pure splitter) + test
+- Modify: `spa/src/components/room/MessageRow.tsx` (user branch), `spa/src/components/chat/ChatTurnBody.tsx` (user line), a shared `PastedBlock` component (room/prelude), `spa/src/lib/nex/transcript-search.ts` (reveal for pasted units, room and chat walks)
+- Modify: `spa/src/locales/en.json`, `zh-TW.json` (`worker.prelude.pasted_one/_other`, `worker.prelude.pasted_cut`)
+- Test: `pasted-text.test.ts`, `prelude.test.ts`, `PreludeSection.test.tsx`, `search-anchors.test.tsx` (a fixture with a paste joins the parity set), `transcript-search.test.ts`
+
+**Interfaces:**
+- `splitPasted(block: ContentBlock): ContentBlock[]` — pure. Input a `text` block; output `[block]` unchanged when it holds no well-formed opening tag. Otherwise typed parts (`{type:'text', text}`, empty ones dropped) and pasted bodies (`{type:'text', text: body, pasted: { lines, cut }}`) in order; `lines` = the body's line count (`splitLines` semantics used by `foldPlan`); `cut` = no closing tag (runs to the end). One `\n` after the opening tag and one before `</pasted_content>` belong to the wrapper. The input's `truncated` / `total_bytes` move to the LAST output block. A stray `</pasted_content>` without an opener stays literal.
+- `derivePrelude` applies it to every `text` block of a top-level human `user` message (not `tool_result` carriers, not frames with `parent_tool_use_id`), so `view.messages` carry the split blocks. Block indexes `j` therefore refer to the split list everywhere (keys, folds, search) — render and search both read `view.messages`, so they stay consistent.
+- Render: a `text` block with `pasted` draws `PastedBlock` — a muted title 「貼上的文字 · N 行」 (`worker.prelude.pasted`, plural; 「N+ 行」 via `worker.prelude.pasted_cut` when `cut`) over `FoldedOutput` with `foldPlan({ text, truncated: cut })`, fold key `${keyAt(ctx, i, j)}:paste`, search anchor `searchUnitId(key, 'text')` on the body. Checked BEFORE the slash-command / interrupt / user-line branches (a body starting with `/` is not a command). In chat, the same component inside the user line's place in ChatTurnBody (the opening line of a span may be a pasted-only message — it is still an opening line; `isOpeningLine` sees a `text` block).
+- Search: a `pasted` text block's unit stays `searchUnitId(key, 'text')`, text = body verbatim, reveal = the inherited reveal plus `${key}:paste` — in both the room walk (`messageUnits`) and the chat walk (`chatTurnUnits`).
+
+- [ ] **Step 1: failing tests** — splitter table (no tag; one paste whole message; typed + paste + typed; two pastes; unclosed → cut; stray closer literal; wrapper newlines; truncated flags moved to the last block; empty typed parts dropped); derive (only human user text blocks split; tool_result carrier and subagent frame untouched); render room + chat (title with count / N+, folded body, no wrapper text anywhere, a `/`-leading body not drawn as a command, truncation hint after the cut paste); search parity fixture with a paste (every unit has exactly one anchor; expanding reveal draws the text).
+- [ ] **Step 2: implement** to green.
+- [ ] **Step 3: mutation check** — splitter keeps the wrapper → tests fail; reveal key missing → parity "expanding reveal" fails; pasted check after the command branch → `/` body test fails.
+- [ ] **Step 4: gate** — vitest nex/room/chat/execution/hooks, lint, `tsc -p tsconfig.app.json`, build.
+
 ## Self-review notes (coordinator)
 
 - **Spec coverage:**
