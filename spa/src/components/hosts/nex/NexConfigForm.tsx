@@ -1,8 +1,10 @@
 // spa/src/components/hosts/nex/NexConfigForm.tsx — editor for the [nex]
 // config section. Nothing here is applied live (I9): PUT /api/config
 // persists it, and restartRequired() (nex-config-diff.ts) surfaces the
-// daemon's `restart_required` (spec §4.4.2) so the user knows a
-// `pdx stop && pdx start` is owed.
+// daemon's `restart_required` (spec §4.4.2). The hint offers "立即重啟"
+// (RestartDaemonButton); `pdx stop && pdx start` stays as the manual
+// fallback. The hint goes away once the restart store's invalidate()
+// re-reads /api/info.
 import { useEffect, useRef, useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { hostLabel, useHostLook } from '../../../lib/host-look'
@@ -11,6 +13,7 @@ import type { NexConfig, NexInfo, ConfigData } from '../../../lib/host-api'
 import { Field } from '../form-fields'
 import { emptyNexConfig, normalizeNexConfig, restartRequired, SANDBOX_PROFILES } from './nex-config-diff'
 import NexListEditor from './NexListEditor'
+import { RestartDaemonButton } from '../RestartDaemonButton'
 
 export interface NexConfigFormProps {
   hostId: string
@@ -165,8 +168,9 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
       <h3 className="text-sm font-semibold text-text-primary mb-3">{t('hosts.nex.config.title')}</h3>
 
       {needsRestart && (
-        <div data-testid="nex-restart-required" className="text-xs text-amber-400 bg-amber-500/10 rounded p-2 mb-3">
-          {t('hosts.nex.config.restart_required', { host: hostName })}
+        <div data-testid="nex-restart-required" className="flex items-center justify-between gap-2 text-xs text-amber-400 bg-amber-500/10 rounded p-2 mb-3">
+          <span>{t('hosts.nex.config.restart_required', { host: hostName })}</span>
+          <RestartDaemonButton hostId={hostId} label={t('hosts.restart.button_now')} testId="nex-restart-now" />
         </div>
       )}
 
