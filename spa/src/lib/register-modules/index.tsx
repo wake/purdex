@@ -96,7 +96,7 @@ function MemoryMonitorPaneWrapper() {
   return <MemoryMonitorPage />
 }
 
-function ExecutionPaneWrapper({ pane, isActive }: PaneRendererProps) {
+function ExecutionPaneWrapper({ pane, isActive, isFocusTarget = false }: PaneRendererProps) {
   // PaneRendererProps carries no tab id; reverse-lookup the owning tab from
   // the pane id (same as NewTabPaneWrapper). The selector returns the id
   // itself, so layout churn elsewhere does not re-render this pane.
@@ -127,7 +127,7 @@ function ExecutionPaneWrapper({ pane, isActive }: PaneRendererProps) {
   // back into, so no take-back is offered.
   return (
     <ExecutionView key={`${hostId}:${executionId}`} hostId={hostId} executionId={executionId} isActive={isActive}
-      tabId={tabId ?? ''} paneId={pane.id} from={tabId ? content.from : undefined}
+      isFocusTarget={isFocusTarget} tabId={tabId ?? ''} paneId={pane.id} from={tabId ? content.from : undefined}
       mode={viewModeOf(content)} onModeChange={onModeChange} />
   )
 }

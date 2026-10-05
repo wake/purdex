@@ -3,6 +3,7 @@ import { render, act, fireEvent } from '@testing-library/react'
 import TerminalView from './TerminalView'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useHostStore } from '../stores/useHostStore'
+import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { compositeKey } from '../lib/composite-key'
 
 const { mockClose, TerminalSpy, capturedCallbacks } = vi.hoisted(() => {
@@ -194,6 +195,90 @@ describe('TerminalView', () => {
     // fit() is called in next rAF — flush it
     await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
     expect(fit.fit).toHaveBeenCalled()
+  })
+
+  // Shell cleanup spec §8.2: programmatic focus only at activation, and only as the tab's focus target.
+  describe('activation focus', () => {
+    const URL = 'ws://localhost:7860/ws/terminal/test'
+    type TermMock = { focus: ReturnType<typeof vi.fn> }
+    const lastTerm = () => TerminalSpy.mock.results.at(-1)!.value as TermMock
+    const flushRaf = () => act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+
+    beforeEach(() => {
+      TerminalSpy.mockClear()
+      // an earlier test changes the reveal delay; reveal() here must land inside the 400ms wait
+      useUISettingsStore.setState({ terminalRevealDelay: 0 })
+    })
+
+    it('first mount as the active tab and the target → focuses', async () => {
+      render(<TerminalView wsUrl={URL} visible={true} isFocusTarget={true} />)
+      await flushRaf()
+      expect(lastTerm().focus).toHaveBeenCalledTimes(1)
+    })
+
+    it('first mount as the active tab but not the target → no focus', async () => {
+      render(<TerminalView wsUrl={URL} visible={true} isFocusTarget={false} />)
+      await flushRaf()
+      expect(lastTerm().focus).not.toHaveBeenCalled()
+    })
+
+    it('keep-alive reactivation as the target → refits and focuses', async () => {
+      const { FitAddon } = await import('@xterm/addon-fit')
+      vi.mocked(FitAddon).mockClear()
+      const { rerender } = render(<TerminalView wsUrl={URL} visible={false} isFocusTarget={true} />)
+      await flushRaf()
+      const fit = vi.mocked(FitAddon).mock.results[0]!.value as { fit: ReturnType<typeof vi.fn> }
+      fit.fit.mockClear()
+      expect(lastTerm().focus).not.toHaveBeenCalled()
+
+      rerender(<TerminalView wsUrl={URL} visible={true} isFocusTarget={true} />)
+      await flushRaf()
+      expect(fit.fit).toHaveBeenCalled()
+      expect(lastTerm().focus).toHaveBeenCalledTimes(1)
+    })
+
+    it('keep-alive reactivation while not the target → refits, no focus', async () => {
+      const { FitAddon } = await import('@xterm/addon-fit')
+      vi.mocked(FitAddon).mockClear()
+      const { rerender } = render(<TerminalView wsUrl={URL} visible={false} isFocusTarget={false} />)
+      await flushRaf()
+      const fit = vi.mocked(FitAddon).mock.results[0]!.value as { fit: ReturnType<typeof vi.fn> }
+      fit.fit.mockClear()
+
+      rerender(<TerminalView wsUrl={URL} visible={true} isFocusTarget={false} />)
+      await flushRaf()
+      expect(fit.fit).toHaveBeenCalled()
+      expect(lastTerm().focus).not.toHaveBeenCalled()
+    })
+
+    it('click inside a visible tab: isFocusTarget flipping while visible never focuses', async () => {
+      const { rerender } = render(<TerminalView wsUrl={URL} visible={true} isFocusTarget={false} />)
+      await flushRaf()
+      rerender(<TerminalView wsUrl={URL} visible={true} isFocusTarget={true} />)
+      await flushRaf()
+      rerender(<TerminalView wsUrl={URL} visible={true} isFocusTarget={false} />)
+      await flushRaf()
+      rerender(<TerminalView wsUrl={URL} visible={true} isFocusTarget={true} />)
+      await flushRaf()
+      expect(lastTerm().focus).not.toHaveBeenCalled()
+    })
+
+    it('reveal() on first data focuses only the active target', async () => {
+      const visibleTarget = render(<TerminalView wsUrl={URL} visible={true} isFocusTarget={true} />)
+      await flushRaf()
+      const target = lastTerm()
+      target.focus.mockClear()
+      act(() => capturedCallbacks.onData?.(new ArrayBuffer(1)))
+      await act(() => new Promise((r) => setTimeout(r, 20)))
+      expect(target.focus).toHaveBeenCalledTimes(1)
+      visibleTarget.unmount()
+
+      render(<TerminalView wsUrl={URL} visible={true} isFocusTarget={false} />)
+      const other = lastTerm()
+      act(() => capturedCallbacks.onData?.(new ArrayBuffer(1)))
+      await act(() => new Promise((r) => setTimeout(r, 20)))
+      expect(other.focus).not.toHaveBeenCalled()
+    })
   })
 
   it('registers terminal-link provider on mount', () => {

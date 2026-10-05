@@ -354,7 +354,7 @@ Because `isFocusTarget` is not a dependency, a click inside a visible tab cannot
 - `components/room/WorkerInput.tsx:70-76`:
   - replace `focused` with two props, `isActive` and `isFocusTarget`;
   - activation focus goes through the hook;
-  - the post-send refocus is a separate effect on `disabled` true→false, with a `prevDisabled` ref, gated by `isFocusTargetRef.current && isActive`;
+  - the post-send refocus is a separate effect on an explicit `pendingSend` prop going true→false (`prevPendingSend` ref), gated by `isFocusTargetRef.current && isActive`; the aggregated `disabled` never triggers focus (P5 review A2);
   - thread the props through `ExecutionView.tsx:568` and `ExecutionPaneWrapper` (`register-modules/index.tsx:104-138`).
 - `components/editor/MonacoWrapper.tsx:65-67, 86-89` and `components/editor/TiptapEditor.tsx:102, 120-123`: they take `isFocusTarget` from `EditorPane.tsx:342, 362`.
   - The on-ready/on-mount focus becomes "if `isActive && isFocusTarget`".

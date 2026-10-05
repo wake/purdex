@@ -67,13 +67,13 @@ function resolveWorkspaceId(paneId: string): string | null {
 }
 
 // Outer component does kind guard to avoid hooks-after-early-return
-export function EditorPane({ pane, isActive }: PaneRendererProps) {
+export function EditorPane({ pane, isActive, isFocusTarget = false }: PaneRendererProps) {
   const content = pane.content
   if (content.kind !== 'editor') return null
-  return <EditorPaneInner paneId={pane.id} source={content.source} filePath={content.filePath} untitled={content.untitled} isActive={isActive} />
+  return <EditorPaneInner paneId={pane.id} source={content.source} filePath={content.filePath} untitled={content.untitled} isActive={isActive} isFocusTarget={isFocusTarget} />
 }
 
-function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { paneId: string; source: FileSource; filePath: string; untitled?: UntitledDocumentState; isActive: boolean }) {
+function EditorPaneInner({ paneId, source, filePath, untitled, isActive, isFocusTarget }: { paneId: string; source: FileSource; filePath: string; untitled?: UntitledDocumentState; isActive: boolean; isFocusTarget: boolean }) {
   const t = useI18nStore((s) => s.t)
   const key = bufferKey(source, filePath)
   const sourceId = sourceIdentity(source)
@@ -340,6 +340,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
             language={buffer.language}
             modelId={buffer.modelId}
             isActive={isActive}
+            isFocusTarget={isFocusTarget}
             initialViewState={alignedPaneState?.monacoViewState ?? null}
             onChange={(value) => useEditorStore.getState().updateContent(key, value)}
             onCursorChange={handleCursorChange}
@@ -360,6 +361,7 @@ function EditorPaneInner({ paneId, source, filePath, untitled, isActive }: { pan
               key={buffer.modelId}
               content={buffer.content}
               isActive={isActive}
+              isFocusTarget={isFocusTarget}
               contentWidth={contentWidth}
               initialViewState={alignedPaneState?.tiptapViewState ?? null}
               // Spec 2.4: the serializer emits one canonical shape (LF, no

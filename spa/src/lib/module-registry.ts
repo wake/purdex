@@ -17,7 +17,18 @@ export type {
 
 export interface PaneRendererProps {
   pane: Pane
+  /** The pane's tab is the one on screen. */
   isActive: boolean
+  /**
+   * This pane is its tab's focus target (rule F, shell cleanup spec §8.2): the most recently focused live pane of the
+   * tab, else its primary pane. Independent of `isActive`. A renderer that focuses itself programmatically does so only
+   * at activation (`isActive` false→true, or mounting active) and only when this is true — see `useActivationFocus`.
+   * A change of this prop while `isActive` stays true never calls `focus()`.
+   *
+   * `PaneLayoutRenderer` always sets it. It is optional only so renderers mounted by hand (unit tests) keep compiling;
+   * a renderer reads an absent value as `false` (destructure with `isFocusTarget = false`).
+   */
+  isFocusTarget?: boolean
 }
 
 export interface PaneDefinition {

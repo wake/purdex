@@ -13,7 +13,7 @@ import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
 import type { PaneRendererProps } from '../lib/module-registry'
 
-export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
+export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: PaneRendererProps) {
   const content = pane.content
   const sessionCode = content.kind === 'tmux-session' ? content.sessionCode : ''
   const hostId = content.kind === 'tmux-session' ? content.hostId : ''
@@ -89,6 +89,7 @@ export function SessionPaneContent({ pane, isActive }: PaneRendererProps) {
       key={pane.id}
       wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(sessionCode)}`}
       visible={isActive}
+      isFocusTarget={isFocusTarget}
       hostId={hostId}
       sessionCode={sessionCode}
       workspaceId={workspaceId}

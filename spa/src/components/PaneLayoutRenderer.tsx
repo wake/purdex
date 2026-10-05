@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
-import { resolvePaneRenderer } from '../lib/module-registry'
+import { resolvePaneRenderer, type PaneRendererProps } from '../lib/module-registry'
 import { getLayoutKey, collectLeaves, swapPaneContent, countLeaves, findPane } from '../lib/pane-tree'
 import { compositeKey } from '../lib/composite-key'
 import { isHandoffCandidate } from '../lib/nex/handoff-gate'
@@ -9,6 +9,8 @@ import { PaneHeader } from './PaneHeader'
 import { PaneContextMenu, type PaneMenuAction } from './PaneContextMenu'
 import { HandoffConfirmDialog } from './HandoffConfirmDialog'
 import { useTabStore } from '../stores/useTabStore'
+import { usePaneFocusStore } from '../stores/usePaneFocusStore'
+import { focusTargetOf } from '../lib/pane-focus'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useNexHostStore, selectHandoffReady } from '../stores/useNexHostStore'
@@ -20,7 +22,7 @@ import {
 import { DisabledModulePlaceholder } from './modules/DisabledModulePlaceholder'
 import { HostHiddenPane } from './HostHiddenPane'
 import { usePaneHostShown } from '../lib/shown-hosts'
-import type { PaneLayout, Pane, PaneContent, TmuxSessionContent } from '../types/tab'
+import type { PaneLayout, PaneContent, TmuxSessionContent } from '../types/tab'
 
 const notReady = () => false
 /** What a split node hands the pane gate: not host-bearing, so always shown. */
@@ -31,9 +33,11 @@ interface Props {
   tabId: string
   isActive: boolean
   showHeader?: boolean
+  /** The whole tab's layout. Set by the recursion into split children; the top-level caller omits it. */
+  tabLayout?: PaneLayout
 }
 
-export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false }: Props) {
+export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false, tabLayout = layout }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // Snapshot the module-enabled map at component creation. The reload-required
   // contract — DisabledModulePlaceholder hint, file-opener registry only
@@ -79,6 +83,13 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
   }, [hostShown])
   const handoffCandidate = tmux && tmuxHostId ? isHandoffCandidate(tmux, { agentType, handoffReady }) : false
 
+  // Rule F (shell cleanup §8.2): is this leaf the pane that takes focus when its tab is shown? Not gated by `isActive`:
+  // the renderers need both to tell an activation from a click. The selector yields only this tab's target id (null
+  // for a split node), so a touch in another tab, or one that keeps this tab's target, does not re-render the leaf.
+  const leafId = layout.type === 'leaf' ? layout.pane.id : null
+  const focusTargetId = usePaneFocusStore((s) => (leafId ? focusTargetOf({ layout: tabLayout }, s.recent[tabId]) : null))
+  const isFocusTarget = leafId !== null && focusTargetId === leafId
+
   if (layout.type === 'leaf') {
     let body: ReactNode
     if (!hostShown) {
@@ -98,19 +109,20 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
           </div>
         )
       }
-      let Component: ComponentType<{ pane: Pane; isActive: boolean }>
+      let Component: ComponentType<PaneRendererProps>
       if (resolution.kind === 'render') {
         Component = resolution.component
       } else {
         // resolution.kind === 'disabled' — render the module-supplied custom
         // component or fall back to the generic placeholder, ignoring pane /
-        // isActive (the disabled state has nothing meaningful to do with them).
+        // isActive / isFocusTarget (the disabled state has nothing meaningful
+        // to do with them).
         const Custom = resolution.customComponent ?? DisabledModulePlaceholder
         const moduleId = resolution.moduleId
         const paneKind = resolution.paneKind
         Component = () => <Custom moduleId={moduleId} paneKind={paneKind} />
       }
-      body = <Component pane={layout.pane} isActive={isActive} />
+      body = <Component pane={layout.pane} isActive={isActive} isFocusTarget={isFocusTarget} />
     }
     // Right-click interception: editor(Monaco) panes are never intercepted so
     // their native menu survives; Shift+right-click is a universal escape hatch
@@ -123,6 +135,9 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       e.stopPropagation()
       setMenu({ x: e.clientX, y: e.clientY })
     }
+    // The focus record (shell cleanup §8.1): a pointerdown or a focus anywhere inside this leaf makes it the tab's
+    // most recently focused pane. Capture phase, so a renderer that stops propagation still records.
+    const recordFocus = () => usePaneFocusStore.getState().touch(tabId, layout.pane.id)
 
     const paneMenu = menu ? (
       <PaneContextMenu
@@ -200,7 +215,12 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
       const content = layout.pane.content
 
       return (
-        <div className="flex-1 flex flex-col overflow-hidden" onContextMenu={handleContextMenu}>
+        <div
+          className="flex-1 flex flex-col overflow-hidden"
+          onContextMenu={handleContextMenu}
+          onPointerDownCapture={recordFocus}
+          onFocusCapture={recordFocus}
+        >
           <PaneHeader
             title={content.kind}
             onClose={() => useTabStore.getState().closePane(tabId, layout.pane.id)}
@@ -235,7 +255,12 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
     // preserves the exact prior block context; the wrapper exists only to carry
     // onContextMenu.
     return (
-      <div className="h-full w-full" onContextMenu={handleContextMenu}>
+      <div
+        className="h-full w-full"
+        onContextMenu={handleContextMenu}
+        onPointerDownCapture={recordFocus}
+        onFocusCapture={recordFocus}
+      >
         {body}
         {paneMenu}
         {handoffDialog}
@@ -287,7 +312,7 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
             />
           )}
           <div style={{ flex: `${layout.sizes[i]} 0 0%` }} className="min-w-0 min-h-0 flex overflow-hidden">
-            <PaneLayoutRenderer layout={child} tabId={tabId} isActive={isActive} showHeader={true} />
+            <PaneLayoutRenderer layout={child} tabId={tabId} isActive={isActive} showHeader={true} tabLayout={tabLayout} />
           </div>
         </div>
       ))}

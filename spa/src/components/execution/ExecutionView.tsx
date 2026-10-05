@@ -63,6 +63,8 @@ export interface ExecutionViewProps {
   hostId: string
   executionId: string
   isActive: boolean
+  /** The pane is its tab's focus target (shell cleanup spec §8.2); the reply box focuses itself only then. Absent reads as false. */
+  isFocusTarget?: boolean
   /** The pane this view lives in — the take-back swaps its content. */
   tabId: string
   paneId: string
@@ -96,7 +98,7 @@ let lastInteractedPane: string | null = null
 
 const KNOWN_ERROR_KEYS = new Set(['invalid_text', 'execution_archived', 'execution_terminal', 'turn_failed_to_launch', 'turn_stalled', 'interrupt_unconfirmed'])
 
-export default function ExecutionView({ hostId, executionId, isActive, tabId, paneId, from, mode = 'room', onModeChange }: ExecutionViewProps) {
+export default function ExecutionView({ hostId, executionId, isActive, isFocusTarget = false, tabId, paneId, from, mode = 'room', onModeChange }: ExecutionViewProps) {
   const t = useI18nStore((s) => s.t)
   const key = executionKey(hostId, executionId)
   const st = useExecutionStore((s) => s.executions[key] ?? EMPTY)
@@ -580,7 +582,7 @@ export default function ExecutionView({ hostId, executionId, isActive, tabId, pa
       <QuickReplyDock replies={quickReplies} onSend={(text) => { sendWithAttachments(text, { restoreDraft: false }) }}
         disabled={inputDisabled || !attachGate.ok} />
       <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => sendWithAttachments(text, { draftText: text })}
-        disabled={inputDisabled} placeholder={placeholder} focused={isActive} onTextChange={onTextChange}
+        disabled={inputDisabled} pendingSend={st.pendingSend} placeholder={placeholder} isActive={isActive} isFocusTarget={isFocusTarget} onTextChange={onTextChange}
         chips={uploads.chips} onRemoveChip={removeChip} onAddFiles={canAttach ? uploads.add : undefined} />
       {dragging && (
         <div data-testid="drop-overlay"

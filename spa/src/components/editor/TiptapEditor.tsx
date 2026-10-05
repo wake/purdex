@@ -6,10 +6,13 @@ import { tiptapExtensions } from './tiptapExtensions'
 import { TableBubbleMenu } from './TableBubbleMenu'
 import type { TiptapViewState } from '../../stores/useEditorStore'
 import type { ContentWidthOption } from '../../stores/useEditorSettingsStore'
+import { useActivationFocus } from '../../hooks/useActivationFocus'
 
 interface Props {
   content: string // raw markdown
   isActive: boolean
+  /** This pane is its tab's focus target (`PaneRendererProps.isFocusTarget`); gates every programmatic focus. */
+  isFocusTarget?: boolean
   initialViewState?: TiptapViewState | null
   contentWidth?: ContentWidthOption
   onChange: (markdown: string) => void
@@ -17,10 +20,11 @@ interface Props {
   onSave: () => void
 }
 
-export function TiptapEditor({ content, isActive, initialViewState, contentWidth = 'narrow', onChange, onViewStateChange, onSave }: Props) {
+export function TiptapEditor({ content, isActive, isFocusTarget = false, initialViewState, contentWidth = 'narrow', onChange, onViewStateChange, onSave }: Props) {
   const onSaveRef = useRef(onSave)
   const containerRef = useRef<HTMLDivElement>(null)
   const isActiveRef = useRef(isActive)
+  const isFocusTargetRef = useRef(isFocusTarget)
   const didRestoreRef = useRef(false)
   const editorRef = useRef<Editor | null>(null)
   const onViewStateChangeRef = useRef(onViewStateChange)
@@ -42,9 +46,12 @@ export function TiptapEditor({ content, isActive, initialViewState, contentWidth
     onViewStateChangeRef.current = onViewStateChange
   }, [onViewStateChange])
 
-  useEffect(() => {
+  // Layout effect, declared before the ready handler below: that handler is a layout effect too and reads these refs
+  // in the same commit, so they must already hold this render's values.
+  useLayoutEffect(() => {
     isActiveRef.current = isActive
-  }, [isActive])
+    isFocusTargetRef.current = isFocusTarget
+  }, [isActive, isFocusTarget])
 
   // Track whether the latest content change came from user typing (onUpdate)
   // to prevent the sync useEffect from re-setting content that just came from the editor
@@ -99,7 +106,9 @@ export function TiptapEditor({ content, isActive, initialViewState, contentWidth
     if (vs && containerRef.current) {
       containerRef.current.scrollTop = vs.scrollTop
     }
-    if (isActiveRef.current) focusEditable()
+    // The editor becoming ready while active is the activation's focus (the activation effect below may have run
+    // with nothing to focus yet): taken iff this pane is the focus target right now (spec §8.2).
+    if (isActiveRef.current && isFocusTargetRef.current) focusEditable()
   }, [editor]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync external content changes (e.g., reload from disk).
@@ -117,10 +126,8 @@ export function TiptapEditor({ content, isActive, initialViewState, contentWidth
     editor.commands.setContent(content, { emitUpdate: false, contentType: 'markdown' })
   }, [content, editor])
 
-  useEffect(() => {
-    if (!isActive) return
-    focusEditable()
-  }, [isActive])
+  // Focus only at activation and only as the focus target; a target change inside a visible tab never focuses.
+  useActivationFocus(isActive, isFocusTarget, focusEditable)
 
   // Save viewState on unmount — useLayoutEffect cleanup runs before safelyDetachRef,
   // so containerRef.current is still valid when we read scrollTop (AC5, M2).

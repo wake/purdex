@@ -151,6 +151,27 @@ describe('SessionPaneContent', () => {
     expect(screen.getByText('Terminated: session-closed')).toBeInTheDocument()
   })
 
+  // Shell cleanup spec §8.2: the terminal needs both props to tell an activation from a click.
+  describe('activation focus props', () => {
+    it('passes isActive as visible and threads isFocusTarget', () => {
+      const pane = makePane()
+      setupTabStore(pane)
+      const view = render(<SessionPaneContent pane={pane} isActive={true} isFocusTarget={true} />)
+      expect(terminalViewProps.last?.visible).toBe(true)
+      expect(terminalViewProps.last?.isFocusTarget).toBe(true)
+      view.rerender(<SessionPaneContent pane={pane} isActive={false} isFocusTarget={false} />)
+      expect(terminalViewProps.last?.visible).toBe(false)
+      expect(terminalViewProps.last?.isFocusTarget).toBe(false)
+    })
+
+    it('reads an absent isFocusTarget as false', () => {
+      const pane = makePane()
+      setupTabStore(pane)
+      render(<SessionPaneContent pane={pane} isActive={true} />)
+      expect(terminalViewProps.last?.isFocusTarget).toBe(false)
+    })
+  })
+
   describe('TerminalView workspaceId plumbing (PR-5)', () => {
     it('passes workspaceId when pane belongs to a workspace tab', () => {
       const pane = makePane()

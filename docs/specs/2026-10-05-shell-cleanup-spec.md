@@ -215,13 +215,13 @@ Add `isFocusTarget: boolean` to `PaneRendererProps` (`lib/module-registry.ts:20-
 
 A single boolean cannot tell "the tab just became visible" from "the user clicked another pane in a visible tab", so each site keeps both props and applies one rule:
 
-> Programmatic focus happens only at **activation**: on the `isActive` false→true transition, or on first mount with `isActive` true. At that moment the pane focuses iff `isFocusTarget` is true. A change of `isFocusTarget` while `isActive` stays true never calls `focus()`; the user's click already put focus there.
+> Programmatic focus happens only at **activation**: on the `isActive` false→true transition, or on first mount with `isActive` true. At that moment the pane focuses iff `isFocusTarget` is true. When the focus is deferred to the next frame, the frame re-checks that the tab is still active and the pane still the target (P5 review A1). A change of `isFocusTarget` while `isActive` stays true never calls `focus()`; the user's click already put focus there.
 
 | Site | Today | After |
 |---|---|---|
 | `TerminalView.tsx:128-141` | focus when `visible` turns true | same trigger, plus `&& isFocusTarget` read at that moment |
 | `useTerminalWs.ts:81-86` `reveal()` | always `term.focus()` | reveal is a first-mount activation path: focus only if, at reveal time, the tab is active **and** the pane is its focus target (both read through refs, the way `onReadyRef` is) |
-| `WorkerInput.tsx:70-76` | `focused` = `isActive`; also refocuses when `disabled` flips back to false | activation rule above. The post-send refocus (`disabled` true→false) stays, gated by `isFocusTarget`: the user sent from this pane, so it is the target. |
+| `WorkerInput.tsx:70-76` | `focused` = `isActive`; also refocuses when `disabled` flips back to false | activation rule above. The post-send refocus stays, but it is driven by an explicit `pendingSend` signal from `ExecutionView` (true→false = this pane's own send completed), gated by `isActive && isFocusTarget`. The aggregated `disabled` also covers stream loss, history load, encoding and take-back, so its transitions never focus (P5 review A2). One exception keeps rule F whole: an activation that lands while the input is disabled (for example, history still loading) leaves a pending focus. It is fulfilled the first time the input becomes enabled, provided the tab is still active, the pane is still the target, and the user is not typing elsewhere. Deactivation or losing the target cancels it. |
 | `MonacoWrapper.tsx:65-67, 86-89` | `isActive` | activation rule; `isActive` alone for everything that is not focus |
 | `TiptapEditor.tsx:102, 120-123` | `isActive` | same as Monaco |
 

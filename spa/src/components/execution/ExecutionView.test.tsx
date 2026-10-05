@@ -739,6 +739,26 @@ describe('ExecutionView — take back to terminal', () => {
     expect(paneContent(ids.tabId).kind).toBe('execution')
   })
 
+  // P5 review A2: a take-back ending thaws the input; that is not a send
+  // coming back, so the reply box of the focus target stays unfocused.
+  it('a failed take-back thawing the input does not pull focus into the reply box', async () => {
+    let reject!: (e: unknown) => void
+    const failing = new Promise<typeof takebackOk>((_, rej) => { reject = rej })
+    mockedTakeback.mockReturnValueOnce(failing)
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive isFocusTarget />)
+    await act(() => new Promise<void>((r) => requestAnimationFrame(() => r()))) // the activation frame
+    fireEvent.click(takeBackBtn())
+    await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    await act(async () => { reject(new HandoffApiError(409, 'held_by', { code: 'held_by', principal: 'x' })) })
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+    expect(document.activeElement).toBe(document.body)
+    await act(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
+    expect(screen.getByRole('textbox')).not.toHaveFocus()
+  })
+
   it('swapped:false (pane closed while in flight) → the "archived, pane gone" toast', async () => {
     const d = deferred<typeof takebackOk>()
     mockedTakeback.mockReturnValueOnce(d.promise)
@@ -1908,5 +1928,110 @@ describe('ExecutionView — worker prelude', () => {
     fireEvent.scroll(box)
     await screen.findByText('earlier')
     expect(box.scrollTop).not.toBe(300)
+  })
+})
+
+// Shell cleanup spec §8.2 (P5, T5.4): ExecutionView hands `isActive` and
+// `isFocusTarget` to the reply box, which focuses itself only at activation
+// and after a send comes back, and only as its tab's focus target.
+describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
+  const nextFrame = () => act(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
+  const setSending = (v: boolean) => act(() => { useExecutionStore.getState().setPendingSend(H, E, v) })
+
+  it('mounting active as the focus target focuses the reply box', async () => {
+    render(<ExecutionView {...base} isActive isFocusTarget />)
+    await nextFrame()
+    expect(screen.getByRole('textbox')).toHaveFocus()
+  })
+
+  it('mounting active but not the focus target leaves focus alone', async () => {
+    render(<ExecutionView {...base} isActive isFocusTarget={false} />)
+    await nextFrame()
+    expect(screen.getByRole('textbox')).not.toHaveFocus()
+  })
+
+  it('a send coming back refocuses the reply box of the focus target', async () => {
+    render(<ExecutionView {...base} isActive isFocusTarget />)
+    // Let the mount's activation frame pass, so what follows tests the send coming back alone.
+    await nextFrame()
+    // The reader's focus leaves the box (blurred before it is disabled: jsdom
+    // keeps a disabled element focused internally).
+    screen.getByRole('textbox').blur()
+    setSending(true)
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    setSending(false)
+    expect(screen.getByRole('textbox')).not.toHaveFocus()
+    await nextFrame()
+    expect(screen.getByRole('textbox')).toHaveFocus()
+  })
+
+  it('a send that comes back after the reader moved to another pane does not take focus', async () => {
+    const { rerender } = render(<ExecutionView {...base} isActive isFocusTarget />)
+    await nextFrame()
+    screen.getByRole('textbox').blur()
+    setSending(true)
+    rerender(<ExecutionView {...base} isActive isFocusTarget={false} />)
+    setSending(false)
+    await nextFrame()
+    expect(screen.getByRole('textbox')).not.toHaveFocus()
+  })
+
+  // P5 review A2: the input's `disabled` also covers stream loss; the box
+  // enabling again later in the session is not a send coming back.
+  it('the live stream lost and back (input enabled again) does not take focus', async () => {
+    render(<ExecutionView {...base} isActive isFocusTarget />)
+    await nextFrame() // the activation lands
+    screen.getByRole('textbox').blur()
+    act(() => { useExecutionStore.getState().setSse(H, E, 'closed', 'forbidden') })
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    await nextFrame()
+    act(() => { useExecutionStore.getState().setSse(H, E, 'open', null) })
+    expect(screen.getByRole('textbox')).not.toBeDisabled()
+    await nextFrame()
+    expect(screen.getByRole('textbox')).not.toHaveFocus()
+  })
+
+  // P5 review follow-up: opening a worker whose history is still loading —
+  // the activation finds the box disabled, and keeps its focus pending until
+  // the box is usable.
+  it('opened while its history loads: the reply box takes focus once the history has loaded', async () => {
+    useExecutionStore.getState().setHistoryLoaded(H, E, false)
+    render(<ExecutionView {...base} isActive isFocusTarget />)
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    await nextFrame()
+    expect(screen.getByRole('textbox')).not.toHaveFocus()
+    act(() => { useExecutionStore.getState().setHistoryLoaded(H, E, true) })
+    expect(screen.getByRole('textbox')).not.toBeDisabled()
+    await nextFrame()
+    expect(screen.getByRole('textbox')).toHaveFocus()
+  })
+
+  it('opened while its history loads, the reader moved to another pane meanwhile: no focus when it loads', async () => {
+    useExecutionStore.getState().setHistoryLoaded(H, E, false)
+    const { rerender } = render(<ExecutionView {...base} isActive isFocusTarget />)
+    await nextFrame()
+    rerender(<ExecutionView {...base} isActive isFocusTarget={false} />)
+    act(() => { useExecutionStore.getState().setHistoryLoaded(H, E, true) })
+    await nextFrame()
+    expect(screen.getByRole('textbox')).not.toHaveFocus()
+  })
+
+  it('a send that comes back as the worker ends (input stays disabled) does not take focus', async () => {
+    render(<ExecutionView {...base} isActive isFocusTarget />)
+    await nextFrame()
+    screen.getByRole('textbox').blur()
+    setSending(true)
+    act(() => {
+      useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
+      useExecutionStore.getState().setPendingSend(H, E, false)
+    })
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    const focus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus')
+    try {
+      await nextFrame()
+      expect(focus).not.toHaveBeenCalled()
+    } finally {
+      focus.mockRestore()
+    }
   })
 })

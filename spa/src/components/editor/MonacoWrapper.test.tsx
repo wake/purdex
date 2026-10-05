@@ -1,5 +1,6 @@
-import { cleanup, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ReactElement } from 'react'
 import type { editor } from 'monaco-editor'
 import { MonacoWrapper } from './MonacoWrapper'
 import {
@@ -16,18 +17,49 @@ const editorMock = vi.hoisted(() => ({
   focus: vi.fn(),
 }))
 
-vi.mock('@monaco-editor/react', () => ({
-  default: (props: Record<string, unknown>) => {
-    editorPropsSpy(props)
-    const onMount = props.onMount as ((editor: typeof editorMock, monaco: { KeyMod: { CtrlCmd: number }; KeyCode: { KeyS: number } }) => void) | undefined
-    onMount?.(editorMock, { KeyMod: { CtrlCmd: 1 }, KeyCode: { KeyS: 2 } })
-    return <div data-testid="monaco-editor" />
-  },
-}))
+// Like the real @monaco-editor/react, the mock calls `onMount` ONCE per editor instance, from an effect. With
+// `mountControl.defer` set it holds the call in `pending` instead, so a test can model Monaco's asynchronous load:
+// the wrapper's own effects (activation focus included) run while the editor does not exist yet.
+const mountControl = vi.hoisted(() => ({ defer: false, pending: null as null | (() => void) }))
+
+vi.mock('@monaco-editor/react', async () => {
+  const { useEffect } = await import('react')
+  return {
+    default: function MonacoEditorMock(props: Record<string, unknown>) {
+      editorPropsSpy(props)
+      const onMount = props.onMount as ((editor: typeof editorMock, monaco: { KeyMod: { CtrlCmd: number }; KeyCode: { KeyS: number } }) => void) | undefined
+      useEffect(() => {
+        const fire = () => onMount?.(editorMock, { KeyMod: { CtrlCmd: 1 }, KeyCode: { KeyS: 2 } })
+        if (mountControl.defer) mountControl.pending = fire
+        else fire()
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- once per instance, like the real editor
+      }, [])
+      return <div data-testid="monaco-editor" />
+    },
+  }
+})
+
+function renderMonaco(isActive: boolean, isFocusTarget: boolean) {
+  return render(
+    <MonacoWrapper content="hello" language="markdown" modelId="model-1" isActive={isActive} isFocusTarget={isFocusTarget}
+      initialViewState={null} onChange={() => {}} onCursorChange={() => {}}
+      onViewStateChange={() => {}} onSave={() => {}} />,
+  )
+}
+
+function rerenderMonaco(rerender: (ui: ReactElement) => void, isActive: boolean, isFocusTarget: boolean) {
+  rerender(
+    <MonacoWrapper content="hello" language="markdown" modelId="model-1" isActive={isActive} isFocusTarget={isFocusTarget}
+      initialViewState={null} onChange={() => {}} onCursorChange={() => {}}
+      onViewStateChange={() => {}} onSave={() => {}} />,
+  )
+}
 
 describe('MonacoWrapper', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mountControl.defer = false
+    mountControl.pending = null
     // merge-mode reset so zustand actions stay on the store.
     useEditorSettingsStore.setState({ ...DEFAULT_EDITOR_SETTINGS })
   })
@@ -157,55 +189,74 @@ describe('MonacoWrapper', () => {
     expect(secondOnSave).toHaveBeenCalledTimes(1)
   })
 
-  // AC1 — MOCK-LIMITED COVERAGE (R2 health H2): this mock invokes `onMount`
-  // synchronously during render, so the pre-existing `[isActive]` effect already
-  // focuses at mount and this assertion cannot ISOLATE the new handleMount focus
-  // path — both satisfy `toHaveBeenCalled()`. It documents intent and guards
-  // against losing focus entirely, but the real late-ready bug (Monaco's async
-  // onMount firing after the `[isActive]` effect ran with a null editorRef) is
-  // only reproducible in production. Making the mock defer onMount would break the
-  // other 7 MonacoWrapper tests that rely on synchronous mount. See spec §5.0.
-  it('focuses the editor when it mounts while the pane is already active (AC1, mock-limited)', () => {
-    render(
-      <MonacoWrapper content="hello" language="markdown" modelId="model-1" isActive={true}
-        initialViewState={null} onChange={() => {}} onCursorChange={() => {}}
-        onViewStateChange={() => {}} onSave={() => {}} />,
-    )
-    expect(editorMock.focus).toHaveBeenCalled()
-  })
+  // Shell cleanup §8.2: programmatic focus only at activation (mount active, or isActive false→true), and only
+  // when this pane is its tab's focus target. `isActive` alone keeps driving everything that is not focus.
+  describe('activation-only focus', () => {
+    it('focuses at mount when active and the focus target', () => {
+      renderMonaco(true, true)
+      expect(editorMock.focus).toHaveBeenCalled()
+    })
 
-  it('focuses the editor when the pane becomes active', () => {
-    const { rerender } = render(
-      <MonacoWrapper
-        content="hello"
-        language="markdown"
-        modelId="model-1"
-        isActive={false}
-        initialViewState={null}
-        onChange={() => {}}
-        onCursorChange={() => {}}
-        onViewStateChange={() => {}}
-        onSave={() => {}}
-      />,
-    )
+    it('does not focus at mount when active but not the focus target', () => {
+      renderMonaco(true, false)
+      expect(editorMock.focus).not.toHaveBeenCalled()
+    })
 
-    editorMock.focus.mockClear()
+    it('does not focus at mount when the target but inactive', () => {
+      renderMonaco(false, true)
+      expect(editorMock.focus).not.toHaveBeenCalled()
+    })
 
-    rerender(
-      <MonacoWrapper
-        content="hello"
-        language="markdown"
-        modelId="model-1"
-        isActive={true}
-        initialViewState={null}
-        onChange={() => {}}
-        onCursorChange={() => {}}
-        onViewStateChange={() => {}}
-        onSave={() => {}}
-      />,
-    )
+    it('focuses on inactive→active when the focus target', () => {
+      const { rerender } = renderMonaco(false, true)
+      editorMock.focus.mockClear()
+      rerenderMonaco(rerender, true, true)
+      expect(editorMock.focus).toHaveBeenCalledTimes(1)
+    })
 
-    expect(editorMock.focus).toHaveBeenCalledTimes(1)
+    it('does not focus on inactive→active when not the focus target', () => {
+      const { rerender } = renderMonaco(false, false)
+      rerenderMonaco(rerender, true, false)
+      expect(editorMock.focus).not.toHaveBeenCalled()
+    })
+
+    it('does not focus when it becomes the focus target while already active (a click in a visible tab)', () => {
+      const { rerender } = renderMonaco(true, false)
+      rerenderMonaco(rerender, true, true)
+      expect(editorMock.focus).not.toHaveBeenCalled()
+    })
+
+    describe('editor mounts after activation (async Monaco load)', () => {
+      beforeEach(() => {
+        mountControl.defer = true
+      })
+
+      it('focuses on the late mount when active and the focus target', () => {
+        renderMonaco(true, true)
+        expect(editorMock.focus).not.toHaveBeenCalled() // no editor yet: the activation path had nothing to focus
+        act(() => mountControl.pending?.())
+        expect(editorMock.focus).toHaveBeenCalledTimes(1)
+      })
+
+      it('does not focus on the late mount when active but not the focus target', () => {
+        renderMonaco(true, false)
+        act(() => mountControl.pending?.())
+        expect(editorMock.focus).not.toHaveBeenCalled()
+      })
+
+      it('reads the focus target at mount time: no focus if another pane became the target meanwhile', () => {
+        const { rerender } = renderMonaco(true, true)
+        rerenderMonaco(rerender, true, false)
+        act(() => mountControl.pending?.())
+        expect(editorMock.focus).not.toHaveBeenCalled()
+      })
+
+      it('does not focus on the late mount when inactive', () => {
+        renderMonaco(false, true)
+        act(() => mountControl.pending?.())
+        expect(editorMock.focus).not.toHaveBeenCalled()
+      })
+    })
   })
 
   it('M1-1: Editor options reflect useEditorSettingsStore values', () => {
