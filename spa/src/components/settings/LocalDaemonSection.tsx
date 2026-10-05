@@ -24,7 +24,7 @@ const btnPrimary = 'px-3 py-1.5 text-xs rounded-md bg-accent text-text-inverse h
 // restart the daemon on the machine the app runs on (spec 2026-09-14 §3.4).
 // Restart is offered whenever the daemon is alive (spec 2026-10-06 §3.2 R2,
 // D9) — Update may show beside it; an external daemon gets it only when a
-// configured host sits at its bind:port.
+// configured host sits at its bind:port and the daemon answers (or is restarting).
 export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }: Props) {
   const t = useI18nStore((s) => s.t)
   const registerLocalHost = useHostStore((s) => s.registerLocalHost)
@@ -255,7 +255,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
               <button onClick={() => void run('start', () => api.localDaemonStart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.start')}</button>
             )}
             {showRestart && (registeredAs
-              ? <RestartDaemonButton hostId={registeredAs.id} label={t('settings.dev.local.btn.restart')} testId="local-daemon-restart" className={btnSecondary} />
+              ? <RestartDaemonButton hostId={registeredAs.id} label={t('settings.dev.local.btn.restart')} testId="local-daemon-restart" className={btnSecondary} disabled={busy !== null} />
               : <button onClick={() => void run('restart', () => api.localDaemonRestart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.restart')}</button>)}
             {updateAvailable && (
               <button
@@ -267,8 +267,8 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
             )}
           </>
         )}
-        {status?.managed === 'external' && registeredAs && (
-          <RestartDaemonButton hostId={registeredAs.id} label={t('settings.dev.local.btn.restart')} testId="local-daemon-restart" className={btnSecondary} />
+        {status?.managed === 'external' && registeredAs && (running || restartingLocal) && (
+          <RestartDaemonButton hostId={registeredAs.id} label={t('settings.dev.local.btn.restart')} testId="local-daemon-restart" className={btnSecondary} disabled={busy !== null} />
         )}
       </div>
     </div>

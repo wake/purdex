@@ -204,9 +204,26 @@ describe('LocalDaemonSection - restart (R2)', () => {
 
   it('external + configured host at its bind:port → restart via the shared button', async () => {
     addLocalHost()
-    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'not started by the app', config: { bind: '100.64.0.9', port: 7860, token: 'tok' } }))
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'not started by the app', running: { version: 'unknown', hash: 'unknown', url: 'http://100.64.0.9:7860' }, config: { bind: '100.64.0.9', port: 7860, token: 'tok' } }))
     await renderIt('bbb')
     expect(screen.getByTestId('local-daemon-restart')).toBeTruthy()
+  })
+
+  it('external + registered host but daemon not answering (running null) → no restart, reason kept', async () => {
+    addLocalHost()
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'custom data_dir', running: null, config: { bind: '100.64.0.9', port: 7860, token: 'tok' } }))
+    await renderIt('bbb')
+    expect(screen.queryByTestId('local-daemon-restart')).toBeNull()
+    expect(screen.getByText(/custom data_dir/)).toBeTruthy()
+  })
+
+  it('shared restart button is disabled while an install is in flight', async () => {
+    addLocalHost()
+    mockStatus.mockResolvedValue(managedAlive())
+    mockInstall.mockReturnValue(new Promise(() => {}))
+    await renderIt('ccc')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Update' })) })
+    expect((screen.getByTestId('local-daemon-restart') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('external without a configured host → no restart, external reason kept', async () => {

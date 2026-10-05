@@ -62,6 +62,19 @@ describe('RestartDaemonButton', () => {
     expect(cls).toContain('aria-disabled:cursor-default')
   })
 
+  it('custom className still gets the inline-flex layout', () => {
+    render(<RestartDaemonButton hostId="h1" className="my-custom" />)
+    expect(screen.getByTestId('restart-daemon').className).toContain('inline-flex')
+  })
+
+  it('disabled prop: real disabled attribute, click does not count workers', () => {
+    render(<RestartDaemonButton hostId="h1" disabled />)
+    const btn = screen.getByTestId('restart-daemon') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    fireEvent.click(btn)
+    expect(restartLib.countRunningWorkers).not.toHaveBeenCalled()
+  })
+
   it('while the host restarts: spinner text, disabled', () => {
     useDaemonRestartStore.setState({ restarting: { h1: true } })
     render(<RestartDaemonButton hostId="h1" />)

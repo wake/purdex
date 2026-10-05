@@ -16,13 +16,15 @@ interface Props {
   label?: string
   testId?: string
   className?: string
+  /** Caller-imposed lock (e.g. its section is busy); the restarting/counting states are unchanged. */
+  disabled?: boolean
 }
 
-const btnClass = 'px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default inline-flex items-center gap-1'
-// Appended to whatever class is in effect, so a caller's className keeps the counting dim.
-const dimClass = 'aria-disabled:opacity-50 aria-disabled:cursor-default'
+const btnClass = 'px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default'
+// Appended to whatever class is in effect, so a caller's className keeps the spinner layout and the counting dim.
+const dimClass = 'inline-flex items-center gap-1 aria-disabled:opacity-50 aria-disabled:cursor-default'
 
-export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', className }: Props) {
+export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', className, disabled }: Props) {
   const t = useI18nStore((s) => s.t)
   const name = hostLabel(hostId, useHostLook(hostId))
   const restarting = useDaemonRestartStore((s) => s.restarting[hostId] === true)
@@ -37,7 +39,7 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
   }, [])
 
   const open = async () => {
-    if (counting) return
+    if (counting || disabled) return
     setCounting(true)
     const workers = await countRunningWorkers(hostId)
     if (!mounted.current) return
@@ -47,7 +49,7 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
 
   return (
     <>
-      <button type="button" data-testid={testId} disabled={restarting} aria-disabled={counting || undefined} aria-busy={counting || undefined} onClick={() => void open()} className={`${className ?? btnClass} ${dimClass}`}>
+      <button type="button" data-testid={testId} disabled={restarting || disabled} aria-disabled={counting || undefined} aria-busy={counting || undefined} onClick={() => void open()} className={`${className ?? btnClass} ${dimClass}`}>
         {restarting
           ? <><ArrowsClockwise size={12} aria-hidden="true" className="animate-spin" />{t('hosts.restart.restarting')}</>
           : (label ?? t('hosts.restart.button'))}
