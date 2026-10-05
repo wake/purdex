@@ -51,7 +51,8 @@
 // first call after a mount reads it back: at the bottom → the jump to the
 // bottom as ever; elsewhere, the same view puts the anchor back at its
 // offset, so a prelude page that landed while the pane was unmounted does
-// not shift the reader (scrollTop when the anchor is not drawn), and the
+// not shift the reader (an anchor whose pos a chat span now holds without
+// starting at it puts that span there; scrollTop when neither is drawn), and the
 // other view — a different height — brings a prelude anchor (by its pos, or
 // the chat span holding it) or else the remembered first turn to the top.
 // Either way the browser clamps it, and a clamp that lands at the bottom
@@ -149,7 +150,13 @@ function firstVisibleAnchor(el: HTMLElement): ScrollAnchor | undefined {
 
 // A pos is `^[A-Za-z0-9._-]{1,64}$` (prelude-wire), so it is safe inside a
 // quoted attribute value and as one word of `~=`.
-const preludeAt = (el: HTMLElement, pos: string) => el.querySelector<HTMLElement>(`[data-prelude-pos="${pos}"]`)
+/**
+ * The prelude element drawn for `pos`: the one starting at it, else the chat
+ * span listing it — a row of the other view, or a span that grew at the
+ * front when an older page ended with messages joining it (spec §5.4).
+ */
+const preludeAt = (el: HTMLElement, pos: string) =>
+  el.querySelector<HTMLElement>(`[data-prelude-pos="${pos}"]`) ?? el.querySelector<HTMLElement>(`[data-prelude-poses~="${pos}"]`)
 const turnAt = (el: HTMLElement, index: number) => el.querySelector<HTMLElement>(`[data-turn-index="${index}"]`)
 
 /** A press on the box's own scrollbar gutter, not its content or padding (A3). */
@@ -264,16 +271,17 @@ export function useTranscriptScroll(
     let top = memo.scrollTop
     if (memo.view === m.view) {
       // Same view, same heights: the anchor back at its offset. Content that
-      // landed above it meanwhile (a prelude page, #1534) shifts nothing.
+      // landed above it meanwhile (a prelude page, #1534) shifts nothing. A
+      // chat span that grew at the front puts its own top there: the reader
+      // moves by what joined it, never more than raw scrollTop would.
       const node = anchor && (anchor.kind === 'prelude' ? preludeAt(el, anchor.pos) : turnAt(el, anchor.index))
       if (anchor && node) top = offsetOf(node) - anchor.offset
     } else {
       // Another view, other heights: what was on screen goes to the top — a
       // prelude anchor by its pos, or the chat span listing it; else (a turn
       // anchor, or a pos this view does not draw) the first turn.
-      const node = (anchor?.kind === 'prelude'
-        ? preludeAt(el, anchor.pos) ?? el.querySelector<HTMLElement>(`[data-prelude-poses~="${anchor.pos}"]`)
-        : null) ?? (memo.firstTurn !== null ? turnAt(el, memo.firstTurn) : null)
+      const node = (anchor?.kind === 'prelude' ? preludeAt(el, anchor.pos) : null)
+        ?? (memo.firstTurn !== null ? turnAt(el, memo.firstTurn) : null)
       if (node) top = offsetOf(node)
     }
     el.scrollTo({ top, behavior: 'auto' })

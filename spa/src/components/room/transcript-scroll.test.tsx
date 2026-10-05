@@ -951,6 +951,28 @@ describe('scroll memory anchors inside the prelude (#1534)', () => {
     it('an anchor no longer drawn falls back to the raw scrollTop', () => {
       expect(switchAt('room', 250, 'room', BOTH, null)).toEqual({ top: 250, behavior: 'auto' })
     })
+
+    // Nexen's edge snapping fell back (spec §4.3): the newer page starts
+    // with an answer, not a human line, and the older page's last messages
+    // join it in chat. The span holding the remembered pos now starts at an
+    // older pos and lists the remembered one only in data-prelude-poses.
+    describe('a span that grew at the front is found by the pos it holds (§5.4)', () => {
+      const LATER: PreludeItem[] = [
+        pm('5', 'assistant', 'continued answer'), pm('6', 'user', 'next question'), pm('7', 'assistant', 'next answer'),
+      ]
+      const JOINED = [...OLDER, ...LATER]
+
+      it('chat: the span\'s top goes back to the remembered offset', () => {
+        // LATER alone: span 5 at 0–100, span 6 7 at 100–300; at 50, span 5 is 50px above the box's top.
+        // OLDER lands: marker 1 at 0–100, span 2 3 5 at 100–400 — its top at -50 is 150 (raw scrollTop would say 50).
+        expect(switchAt('chat', 50, 'chat', LATER, JOINED)).toEqual({ top: 150, behavior: 'auto' })
+      })
+
+      it('room: rows are per message, so row 5 is found by its own pos', () => {
+        // LATER alone: row 5 at 0–100. OLDER lands: rows 1 2 3 at 0–300, row 5 at 300 → 350.
+        expect(switchAt('room', 50, 'room', LATER, JOINED)).toEqual({ top: 350, behavior: 'auto' })
+      })
+    })
   })
 
   it.each<[View, View]>([['room', 'room'], ['room', 'chat'], ['chat', 'room']])('at the bottom (%s → %s) the reader opens at the bottom, anchor or not', (from, next) => {
