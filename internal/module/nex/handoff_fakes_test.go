@@ -328,10 +328,11 @@ type fakeNexService struct {
 	// Opt-in lease fence, off by default so existing tests are unaffected.
 	// With enforceLease, heldLease is the execution's lease as Nexen's store
 	// holds it: AcquireLease refuses a live lease of another principal and
-	// otherwise mints f.lease.ID for the caller; RenewLease, ReleaseLease and
-	// Terminate check the request like store.CheckLease (store/lease.go).
-	// A hook (onTerminate, or a test between calls) may hand the lease over
-	// with setHeldLease.
+	// otherwise mints f.lease.ID for the caller; RenewLease, ReleaseLease,
+	// Interrupt and Terminate check the request like store.CheckLease
+	// (store/lease.go), and CheckLease stands in for a client's send.
+	// A hook (onTerminate, onRecord, or a test between calls) may hand the
+	// lease over with setHeldLease.
 	enforceLease bool
 	heldLease    store.Lease
 }
@@ -357,6 +358,15 @@ func (f *fakeNexService) checkLease(executionID, leaseID, principalID string) er
 		return fmt.Errorf("execution %s: %w", executionID, store.ErrLeaseMismatch)
 	}
 	return nil
+}
+
+// CheckLease is the fence a client's send meets (Nexen checks the lease
+// before every write): a probe for "can the holder still write?". It is
+// not recorded as a call.
+func (f *fakeNexService) CheckLease(executionID, leaseID, principalID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.checkLease(executionID, leaseID, principalID)
 }
 
 type renewCall struct{ ExecutionID, LeaseID, PrincipalID string }
@@ -454,7 +464,14 @@ func (f *fakeNexService) Interrupt(ctx context.Context, req execution.InterruptR
 	f.record("interrupt")
 	f.mu.Lock()
 	f.interruptReqs = append(f.interruptReqs, req)
+	var fenceErr error
+	if f.enforceLease {
+		fenceErr = f.checkLease(req.ExecutionID, req.LeaseID, req.PrincipalID)
+	}
 	f.mu.Unlock()
+	if fenceErr != nil {
+		return execution.InterruptResult{}, fenceErr
+	}
 	if err := wait(ctx, f.interruptGate); err != nil {
 		return execution.InterruptResult{}, err
 	}

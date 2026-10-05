@@ -214,16 +214,17 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 
 	// Control for the whole transfer (D5), for a row that takes sends
 	// (running or idle): the caller's lease, else one acquired here, else a
-	// pdx holder's borrowed. Held until after the exit; a caller-provided or
-	// borrowed lease is not ours to release (noRelease).
+	// pdx holder's preempted (D22: released as the holder, an exclusive one
+	// of ours acquired). Held until after the exit; a caller-provided lease
+	// is not ours to release (noRelease), an acquired or preempted one is.
 	ctl := control{release: noRelease}
 	if exec.State == store.StateRunning || exec.State == store.StateIdle {
 		var herr *handoffError
-		if ctl, herr = m.takeControl(parent, execID, body.LeaseID, principal); herr != nil {
+		if ctl, herr = m.takeControlMode(parent, execID, body.LeaseID, principal, preemptPdx); herr != nil {
 			fail(herr)
 			return
 		}
-		defer func() { ctl.release() }() // ctl may be replaced by renewControl below
+		defer func() { ctl.release() }() // the CURRENT ctl: renewControlMode below may replace it
 		// The row read above predates the control: a turn may have started
 		// since, and the lease fences only sends made from now on. Settle
 		// what the row says under control.
@@ -246,9 +247,9 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 	}
 	if ctl.LeaseID != "" {
 		// A full TTL from here: the fence must outlive the resume, even when
-		// the lease was borrowed with seconds left. A lease lost since is
-		// re-taken, so the exit runs under a live one.
-		if ctl, herr = m.renewControl(parent, execID, ctl, principal); herr != nil {
+		// the caller's lease had seconds left. A lease lost since is re-taken
+		// (preempting again), so the exit runs under a live one.
+		if ctl, herr = m.renewControlMode(parent, execID, ctl, principal, preemptPdx); herr != nil {
 			fail(herr)
 			return
 		}
@@ -317,7 +318,7 @@ func (e *handoffError) write(w http.ResponseWriter) {
 // preflights before calling it.
 //
 // Lease contract (conversation entity D5): the caller takes control
-// (takeControl — held_by / lease_error are its answers) and holds it for
+// (takeControlMode — held_by / lease_error are its answers) and holds it for
 // the whole transfer; this helper only acts under ctl, and never acquires
 // or releases a lease, on any path. On error, sid is empty.
 func (m *Module) settleForResume(parent context.Context, exec store.Execution, ctl control) (store.Execution, string, *handoffError) {

@@ -55,10 +55,10 @@ func takeToTerminalLockKey(execID string) string { return "exec:" + execID }
 //  7. the owner check: nothing but this execution, and only while it is
 //     live, may own S (409 session_owned / 503 owner_check_failed);
 //  8. the preflights that must not cost an interrupt (name free, cwd usable);
-//  9. a live running / idle row: takeControl (held for the whole transfer,
-//     released on return), the row re-read under that control (gone → the
-//     exited path), settleForResume on it, then renewControl — a full TTL
-//     for the fence;
+//  9. a live running / idle row: takeControlMode, preempting a pdx holder
+//     (D22; held for the whole transfer, released on return), the row
+//     re-read under that control (gone → the exited path), settleForResume
+//     on it, then renewControlMode — a full TTL for the fence;
 //  10. create the session;
 //  11. resume — on failure the session is killed and nothing is exited;
 //  12. a row that was live: exitWorker under the transfer's control;
@@ -181,7 +181,8 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Step 9 (D5): control for the whole transfer — the caller's lease,
-	// else one acquired here, else a pdx holder's borrowed (D4); a non-pdx
+	// else one acquired here, else a pdx holder's preempted (D22: its lease
+	// released as the holder, an exclusive one of ours acquired); a non-pdx
 	// holder answers held_by before anything is created. Holding it is the
 	// fence that replaced "archive first": nobody can send into the worker
 	// between the resume and the exit. Rows that take no sends (exited,
@@ -189,11 +190,11 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 	ctl := control{release: noRelease}
 	if wasLive && (exec.State == store.StateRunning || exec.State == store.StateIdle) {
 		var herr *handoffError
-		if ctl, herr = m.takeControl(parent, execID, body.LeaseID, principal); herr != nil {
+		if ctl, herr = m.takeControlMode(parent, execID, body.LeaseID, principal, preemptPdx); herr != nil {
 			herr.write(w)
 			return
 		}
-		defer func() { ctl.release() }() // ctl may be replaced by renewControl below
+		defer func() { ctl.release() }() // the CURRENT ctl: renewControlMode below may replace it
 		// The row read at step 4 predates the control: a turn may have
 		// started since, and the lease fences only sends made from now on.
 		// Settle what the row says under control, not what it said before.
@@ -213,9 +214,9 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			// A full TTL from here: the fence must outlive create + resume, even
-			// when the lease was borrowed with seconds left. A lease lost since
-			// is re-taken (renewControl), so the exit runs under a live one.
-			if ctl, herr = m.renewControl(parent, execID, ctl, principal); herr != nil {
+			// when the caller's lease had seconds left. A lease lost since is
+			// re-taken (preempting again), so the exit runs under a live one.
+			if ctl, herr = m.renewControlMode(parent, execID, ctl, principal, preemptPdx); herr != nil {
 				herr.write(w)
 				return
 			}

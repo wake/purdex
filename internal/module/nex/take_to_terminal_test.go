@@ -9,6 +9,7 @@ package nex
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -96,15 +97,21 @@ func (tl *timeline) snapshot() []string {
 
 // keysClock is the module's tmux with every delivered key string stamped
 // on the timeline (the reviver and the assertions keep reading the fake).
+// onKeys (when set) runs right after a delivery: the moment between the
+// resume and the worker's exit.
 type keysClock struct {
 	tmux.Executor
-	tl *timeline
+	tl     *timeline
+	onKeys func()
 }
 
 func (k *keysClock) SendKeysIfInstanceTarget(sessionID, window, expectedInstance string, keys ...string) (bool, error) {
 	sent, err := k.Executor.SendKeysIfInstanceTarget(sessionID, window, expectedInstance, keys...)
 	if sent && err == nil {
 		k.tl.add("keys")
+		if k.onKeys != nil {
+			k.onKeys()
+		}
 	}
 	return sent, err
 }
@@ -474,18 +481,85 @@ func TestTakeToTerminal_OwnerConflicts(t *testing.T) {
 		assert.Equal(t, []string{"acquire"}, env.svc.Calls(), "nothing done under a lease that is not ours")
 		env.assertNoSession(t)
 	})
-	t.Run("pdx holder's lease is borrowed", func(t *testing.T) {
+}
+
+// --- D22: the transfer preempts a pdx holder's lease ---
+
+// A transfer releases a pdx holder's lease as the holder and acquires an
+// exclusive one of its own, so the holder cannot send into the worker
+// between the resume and the exit (a borrowed lease could not stop it).
+func TestTakeToTerminal_D22PreemptsPdxHolder(t *testing.T) {
+	t.Run("released as the holder; the transfer runs under its own lease, released after the exit", func(t *testing.T) {
 		env := newTTEnv(t)
-		e := ttExec(store.StateIdle)
-		e.LeaseID, e.LeasePrincipalID, e.LeaseExpiresAt = "L-b", "pdx:"+testHostID+"/tab2", nowMs()+60_000
-		env.store.script(e, e)
-		env.svc.acquireErr = store.ErrLeaseHeld
+		lb := liveLease("L-b", tab2)
+		env.svc.enforceLease = true
+		env.svc.heldLease = lb
+		env.svc.lease = store.Lease{ID: "L-own"}
+		// Get: step 4, takeControl's re-read after ErrLeaseHeld, the re-read under control, after the interrupt.
+		env.store.script(withLease(ttExec(store.StateRunning), lb), withLease(ttExec(store.StateRunning), lb), ttExec(store.StateRunning), ttExec(store.StateIdle))
+		sendAfterResume := errors.New("probe never ran")
+		env.m.tmux.(*keysClock).onKeys = func() { sendAfterResume = env.svc.CheckLease(tbExecID, lb.ID, tab2) }
 		status, body := env.post(t, tbExecID, ttBody())
 		require.Equal(t, http.StatusOK, status, "%v", body)
-		require.Len(t, env.svc.terminateCalls, 1)
-		assert.Equal(t, "L-b", env.svc.terminateCalls[0].LeaseID)
-		assert.Equal(t, "pdx:"+testHostID+"/tab2", env.svc.terminateCalls[0].PrincipalID, "under the holder's principal")
-		assert.Empty(t, env.svc.releases, "a borrowed lease is never released")
+		assert.Equal(t, []string{"acquire", "release", "acquire", "interrupt", "renew", "keys", "terminate", "archive", "release"}, env.timeline(t))
+		assert.Equal(t, []string{tbPrincipal, tbPrincipal}, env.svc.acquires)
+		assert.Equal(t, []releaseCall{{tbExecID, lb.ID, tab2}, {tbExecID, "L-own", tbPrincipal}}, env.svc.releases,
+			"the holder's lease released as the holder; ours released after the exit")
+		assert.Equal(t, []execution.InterruptRequest{{ExecutionID: tbExecID, LeaseID: "L-own", PrincipalID: tbPrincipal}}, env.svc.interruptReqs)
+		assert.Equal(t, []execution.TerminateRequest{{ExecutionID: tbExecID, LeaseID: "L-own", PrincipalID: tbPrincipal}}, env.svc.terminateCalls)
+		assert.ErrorIs(t, sendAfterResume, store.ErrLeaseMismatch, "the preempted tab cannot send between the resume and the exit")
+		assert.Equal(t, true, body["exited"])
+		assert.Equal(t, store.Lease{}, env.svc.heldLease, "nothing left held")
+	})
+	t.Run("resume fails: our lease released, nothing exited, the tab re-attaches", func(t *testing.T) {
+		env := bareTTEnv(t) // CC never comes up in the new session
+		env.m.rollbackWait = 50 * time.Millisecond
+		lb := liveLease("L-b", tab2)
+		env.svc.enforceLease = true
+		env.svc.heldLease = lb
+		env.svc.lease = store.Lease{ID: "L-own"}
+		env.store.script(withLease(ttExec(store.StateIdle), lb))
+		status, body := env.post(t, tbExecID, ttBody())
+		assert.Equal(t, http.StatusGatewayTimeout, status)
+		assert.Equal(t, "cc_start_timeout", body["code"])
+		assert.Equal(t, false, body["exited"])
+		assert.Equal(t, []string{"acquire", "release", "acquire", "renew", "keys", "release"}, env.timeline(t))
+		assert.Equal(t, []releaseCall{{tbExecID, lb.ID, tab2}, {tbExecID, "L-own", tbPrincipal}}, env.svc.releases)
+		assert.Empty(t, env.svc.terminateCalls)
+		assert.Empty(t, env.svc.ArchiveCalls())
+		got, err := env.svc.AcquireLease(context.Background(), tbExecID, tab2)
+		require.NoError(t, err, "the original tab can re-attach and regain control")
+		assert.Equal(t, tab2, got.PrincipalID)
+	})
+	t.Run("non-pdx holder: held_by, its lease untouched, no session", func(t *testing.T) {
+		env := newTTEnv(t)
+		ploom := liveLease("L-p", "ploom:agent-7")
+		env.svc.enforceLease = true
+		env.svc.heldLease = ploom
+		env.store.script(withLease(ttExec(store.StateIdle), ploom))
+		status, body := env.post(t, tbExecID, ttBody())
+		assert.Equal(t, http.StatusConflict, status)
+		assert.Equal(t, "held_by", body["code"])
+		assert.Equal(t, "ploom:agent-7", body["principal"])
+		assert.Empty(t, env.svc.releases, "its lease is never released")
+		assert.Equal(t, []string{tbPrincipal}, env.svc.acquires, "no acquire after the refusal")
+		assert.Equal(t, ploom, env.svc.heldLease)
+		env.assertNoSession(t)
+	})
+	t.Run("a stale caller lease is re-taken by preempting", func(t *testing.T) {
+		env := newTTEnv(t)
+		lb := liveLease("L-b", tab2)
+		env.svc.enforceLease = true
+		env.svc.heldLease = lb
+		env.svc.lease = store.Lease{ID: "L-own"}
+		env.store.script(withLease(ttExec(store.StateIdle), lb))
+		b := ttBody()
+		b["lease_id"] = "L-stale"
+		status, body := env.post(t, tbExecID, b)
+		require.Equal(t, http.StatusOK, status, "%v", body)
+		assert.Equal(t, []string{"renew", "acquire", "release", "acquire", "keys", "terminate", "archive", "release"}, env.timeline(t))
+		assert.Equal(t, []releaseCall{{tbExecID, lb.ID, tab2}, {tbExecID, "L-own", tbPrincipal}}, env.svc.releases)
+		assert.Equal(t, "L-own", env.svc.terminateCalls[0].LeaseID)
 	})
 }
 

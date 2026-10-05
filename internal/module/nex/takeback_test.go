@@ -435,7 +435,7 @@ func TestTakebackCallerLeaseNoAcquireNoRelease(t *testing.T) {
 }
 
 // held_by comes from takeControl's re-read of the row (conversation entity
-// D4): only a non-pdx holder refuses; a pdx holder's lease is borrowed.
+// D4): only a non-pdx holder refuses; a pdx holder's lease is preempted (D22).
 func TestTakeback409HeldBy(t *testing.T) {
 	env := newTakebackEnv(t)
 	e := runningExec()
@@ -450,19 +450,27 @@ func TestTakeback409HeldBy(t *testing.T) {
 	assert.Empty(t, env.tmux.RawKeysSent())
 }
 
-// A running row whose lease another pdx client holds is interrupted under
-// that holder's lease (D4/D5) — borrowed, so never released.
-func TestTakebackRunningPdxHolderLeaseIsBorrowed(t *testing.T) {
+// D22: a running row whose lease another pdx client holds is preempted —
+// that lease released as its holder, the transfer run under an exclusive
+// lease of our own (so the holder cannot send between the resume and the
+// exit), and ours released after the exit.
+func TestTakebackPreemptsPdxHolderLease(t *testing.T) {
 	env := newTakebackEnv(t)
-	e := runningExec()
-	e.LeaseExpiresAt = nowMs() + 60_000 // lease-other, held by pdx:host1/tab-3
-	env.store.script(e, e, e, idleExec())
-	env.svc.acquireErr = store.ErrLeaseHeld
+	tl := env.tbTimeline()
+	lb := liveLease("L-b", tab2)
+	env.svc.enforceLease = true
+	env.svc.heldLease = lb
+	env.svc.lease = store.Lease{ID: "L-own"}
+	env.store.script(withLease(runningExec(), lb), withLease(runningExec(), lb), runningExec(), idleExec())
+	sendAfterResume := errors.New("probe never ran")
+	env.m.tmux.(*keysClock).onKeys = func() { sendAfterResume = env.svc.CheckLease(tbExecID, lb.ID, tab2) }
 	status, body := env.post(t, hoCode, takebackBody())
 	require.Equal(t, http.StatusOK, status, "%v", body)
-	assert.Equal(t, []string{"acquire", "interrupt", "renew", "terminate", "archive"}, env.svc.Calls())
-	assert.Equal(t, []execution.InterruptRequest{{ExecutionID: tbExecID, LeaseID: "lease-other", PrincipalID: "pdx:host1/tab-3"}}, env.svc.interruptReqs)
-	assert.Empty(t, env.svc.releases)
+	assert.Equal(t, []string{"acquire", "release", "acquire", "interrupt", "renew", "keys", "terminate", "archive", "release"}, tl.snapshot())
+	assert.Equal(t, []releaseCall{{tbExecID, lb.ID, tab2}, {tbExecID, "L-own", tbPrincipal}}, env.svc.releases)
+	assert.Equal(t, []execution.InterruptRequest{{ExecutionID: tbExecID, LeaseID: "L-own", PrincipalID: tbPrincipal}}, env.svc.interruptReqs)
+	assert.Equal(t, []execution.TerminateRequest{{ExecutionID: tbExecID, LeaseID: "L-own", PrincipalID: tbPrincipal}}, env.svc.terminateCalls)
+	assert.ErrorIs(t, sendAfterResume, store.ErrLeaseMismatch, "the preempted tab cannot send between the resume and the exit")
 }
 
 func TestTakeback500LeaseError(t *testing.T) {
