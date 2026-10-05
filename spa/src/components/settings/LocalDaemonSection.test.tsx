@@ -3,6 +3,7 @@ import { render, screen, waitFor, act, fireEvent, cleanup } from '@testing-libra
 import { LocalDaemonSection } from './LocalDaemonSection'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useDaemonRestartStore } from '../../stores/useDaemonRestartStore'
 
 const status = (o: Partial<ElectronLocalDaemonStatus> = {}): ElectronLocalDaemonStatus => ({
   managed: 'none', binPath: '/Users/t/.config/pdx/bin/pdx', installed: null, alive: null, running: null, config: null,
@@ -23,6 +24,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   useI18nStore.getState().setLocale('en')
   useHostStore.getState().reset()
+  useDaemonRestartStore.setState({ restarting: {}, settled: {} })
   window.electronAPI = {
     ...window.electronAPI!,
     localDaemonStatus: mockStatus,
@@ -60,6 +62,8 @@ describe('LocalDaemonSection', () => {
     await renderIt('bbb')
     expect(screen.getByText('Up to date')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Update' })).toBeNull()
+    // R2: Restart is offered whenever the daemon is alive, even when up to date.
+    expect(screen.getByRole('button', { name: 'Restart' })).toBeTruthy()
   })
 
   it('managed+running with on-disk ≠ running → Restart', async () => {
@@ -69,11 +73,11 @@ describe('LocalDaemonSection', () => {
     expect(screen.queryByRole('button', { name: 'Update' })).toBeNull()
   })
 
-  it('Update wins over Restart when both would apply', async () => {
+  it('Update and Restart are both offered when both apply (spec 2026-10-06 D9: no more "never both")', async () => {
     mockStatus.mockResolvedValue(status({ managed: 'managed', alive: { pid: 1 }, installed: { version: '9', hash: 'bbb', goos: 'darwin', goarch: 'arm64' }, running: { version: '9', hash: 'aaa', url: 'http://100.64.0.9:7860' } }))
     await renderIt('ccc')
     expect(screen.getByRole('button', { name: 'Update' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Restart' })).toBeTruthy()
   })
 
   it('re-queries status when refreshKey changes even with the same hash', async () => {
@@ -155,6 +159,72 @@ describe('LocalDaemonSection', () => {
     window.electronAPI = { ...window.electronAPI!, localDaemonStatus: undefined } as typeof window.electronAPI
     const { container } = render(<LocalDaemonSection daemonBase="x" latestHash={null} refreshKey={null} />)
     expect(container.innerHTML).toBe('')
+  })
+})
+
+describe('LocalDaemonSection - restart (R2)', () => {
+  const managedAlive = (o: Partial<ElectronLocalDaemonStatus> = {}) => status({
+    managed: 'managed', alive: { pid: 1 },
+    installed: { version: '9', hash: 'bbb', goos: 'darwin', goarch: 'arm64' },
+    running: { version: '9', hash: 'bbb', url: 'http://100.64.0.9:7860' },
+    config: { bind: '100.64.0.9', port: 7860, token: 'tok' }, ...o,
+  })
+  const addLocalHost = () => useHostStore.getState().registerLocalHost({ url: 'http://100.64.0.9:7860', token: 'tok', hostname: 'air-2026' })
+
+  it('managed + alive + up to date → restart shown (no longer only when restartPending)', async () => {
+    addLocalHost()
+    mockStatus.mockResolvedValue(managedAlive())
+    await renderIt('bbb')
+    expect(screen.getByTestId('local-daemon-restart')).toBeTruthy()
+  })
+
+  it('managed + alive + update available → restart AND update both shown', async () => {
+    addLocalHost()
+    mockStatus.mockResolvedValue(managedAlive())
+    await renderIt('ccc')
+    expect(screen.getByTestId('local-daemon-restart')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Update' })).toBeTruthy()
+  })
+
+  it('managed + not alive → no restart', async () => {
+    addLocalHost()
+    mockStatus.mockResolvedValue(managedAlive({ alive: null, running: null }))
+    await renderIt('bbb')
+    expect(screen.queryByTestId('local-daemon-restart')).toBeNull()
+  })
+
+  it('managed + alive + not in host list → the direct IPC restart, no confirm', async () => {
+    mockStatus.mockResolvedValue(managedAlive())
+    mockRestart.mockResolvedValue(result)
+    await renderIt('bbb')
+    expect(screen.queryByTestId('local-daemon-restart')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Restart' })) })
+    expect(mockRestart).toHaveBeenCalled()
+  })
+
+  it('external + configured host at its bind:port → restart via the shared button', async () => {
+    addLocalHost()
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'not started by the app', config: { bind: '100.64.0.9', port: 7860, token: 'tok' } }))
+    await renderIt('bbb')
+    expect(screen.getByTestId('local-daemon-restart')).toBeTruthy()
+  })
+
+  it('external without a configured host → no restart, external reason kept', async () => {
+    mockStatus.mockResolvedValue(status({ managed: 'external', reason: 'not started by the app', config: { bind: '100.64.0.9', port: 7860, token: 'tok' } }))
+    await renderIt('bbb')
+    expect(screen.queryByTestId('local-daemon-restart')).toBeNull()
+    expect(screen.getByText(/not started by the app/)).toBeTruthy()
+  })
+
+  it('other buttons disabled while the local host restarts; status re-read when it settles', async () => {
+    const id = addLocalHost()
+    mockStatus.mockResolvedValue(managedAlive())
+    await renderIt('bbb')
+    act(() => useDaemonRestartStore.setState({ restarting: { [id]: true } }))
+    expect((screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(true)
+    const calls = mockStatus.mock.calls.length
+    await act(async () => useDaemonRestartStore.setState({ restarting: {}, settled: { [id]: 1 } }))
+    expect(mockStatus.mock.calls.length).toBe(calls + 1)
   })
 })
 

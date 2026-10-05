@@ -4,6 +4,8 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { findHostByEndpoint, useHostStore } from '../../stores/useHostStore'
 import { hostLabel, useHostLook } from '../../lib/host-look'
 import { copyText } from '../../lib/copy-text'
+import { useDaemonRestartStore } from '../../stores/useDaemonRestartStore'
+import { RestartDaemonButton } from '../hosts/RestartDaemonButton'
 
 interface Props {
   daemonBase: string | null
@@ -20,6 +22,9 @@ const btnPrimary = 'px-3 py-1.5 text-xs rounded-md bg-accent text-text-inverse h
 
 // Settings → Development → "Local daemon": install / update / start /
 // restart the daemon on the machine the app runs on (spec 2026-09-14 §3.4).
+// Restart is offered whenever the daemon is alive (spec 2026-10-06 §3.2 R2,
+// D9) — Update may show beside it; an external daemon gets it only when a
+// configured host sits at its bind:port.
 export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }: Props) {
   const t = useI18nStore((s) => s.t)
   const registerLocalHost = useHostStore((s) => s.registerLocalHost)
@@ -42,6 +47,8 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
   // Spec §3.3: exact-endpoint membership only, via the same helper registerLocalHost uses.
   const registeredAs = cfg ? findHostByEndpoint(hosts, cfg.bind, cfg.port) : undefined
   const registeredLook = useHostLook(registeredAs?.id ?? null)
+  const restartingLocal = useDaemonRestartStore((s) => (registeredAs ? s.restarting[registeredAs.id] === true : false))
+  const settledLocal = useDaemonRestartStore((s) => (registeredAs ? s.settled[registeredAs.id] ?? 0 : 0))
 
   useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current) }, [])
 
@@ -77,7 +84,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
     }
   }, [api])
 
-  useEffect(() => { void refresh() }, [refresh, refreshKey])
+  useEffect(() => { void refresh() }, [refresh, refreshKey, settledLocal])
   useEffect(() => api?.onLocalDaemonProgress?.((s) => setStep(s)), [api])
 
   const run = useCallback(async (kind: Exclude<Busy, null>, op: () => Promise<ElectronLocalDaemonResult> | undefined) => {
@@ -119,9 +126,9 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
   const alive = status?.alive ?? null
   const updateAvailable = !!installed && !!latestHash && installed.hash !== latestHash
   const restartPending = !!installed && !!running && running.hash !== installed.hash
-  // Spec §3.4: Update, else Restart — never both.
-  const showRestart = !!alive && !updateAvailable && (!running || restartPending)
-  const disabled = busy !== null
+  // Spec 2026-10-06 §3.2 R2: managed + alive always offers restart (Update may show beside it).
+  const showRestart = !!alive
+  const disabled = busy !== null || restartingLocal
   const externalUrl = running?.url ?? (status?.config ? `http://${status.config.bind}:${status.config.port}` : '')
 
   return (
@@ -247,9 +254,9 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
             {!alive && (
               <button onClick={() => void run('start', () => api.localDaemonStart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.start')}</button>
             )}
-            {showRestart && (
-              <button onClick={() => void run('restart', () => api.localDaemonRestart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.restart')}</button>
-            )}
+            {showRestart && (registeredAs
+              ? <RestartDaemonButton hostId={registeredAs.id} label={t('settings.dev.local.btn.restart')} testId="local-daemon-restart" className={btnSecondary} />
+              : <button onClick={() => void run('restart', () => api.localDaemonRestart?.())} disabled={disabled} className={btnSecondary}>{t('settings.dev.local.btn.restart')}</button>)}
             {updateAvailable && (
               <button
                 onClick={() => void run('install', () => daemonBase ? api.localDaemonInstall?.(daemonBase, token) : undefined)}
@@ -259,6 +266,9 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
               >{t('settings.dev.local.btn.update')}</button>
             )}
           </>
+        )}
+        {status?.managed === 'external' && registeredAs && (
+          <RestartDaemonButton hostId={registeredAs.id} label={t('settings.dev.local.btn.restart')} testId="local-daemon-restart" className={btnSecondary} />
         )}
       </div>
     </div>
