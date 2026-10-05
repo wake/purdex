@@ -26,8 +26,8 @@ beforeEach(() => {
 
 describe('useHostSettingsStore', () => {
   it('set then get returns the value', () => {
-    useHostSettingsStore.getState().set('hostA', 'files', { projectPath: '/a' })
-    expect(useHostSettingsStore.getState().get('hostA', 'files')).toEqual({ projectPath: '/a' })
+    useHostSettingsStore.getState().set('hostA', 'files', { root: '/a' })
+    expect(useHostSettingsStore.getState().get('hostA', 'files')).toEqual({ root: '/a' })
   })
 
   it('shallow-merges top-level keys; nested objects are fully replaced', () => {
@@ -74,11 +74,11 @@ describe('useHostSettingsStore', () => {
   })
 
   it('persists to localStorage under STORAGE_KEYS.HOST_SETTINGS', () => {
-    useHostSettingsStore.getState().set('hostA', 'files', { projectPath: '/a' })
+    useHostSettingsStore.getState().set('hostA', 'files', { root: '/a' })
     const raw = localStorage.getItem(STORAGE_KEYS.HOST_SETTINGS)
     expect(raw).toBeTruthy()
     const parsed = JSON.parse(raw!)
-    expect(parsed.state.hosts.hostA.files).toEqual({ projectPath: '/a' })
+    expect(parsed.state.hosts.hostA.files).toEqual({ root: '/a' })
   })
 
   it('registers itself with syncManager', () => {
@@ -92,7 +92,7 @@ describe('useHostSettingsStore', () => {
         state: {
           hosts: {
             hostA: {
-              files: { projectPath: '/a' },
+              files: { root: '/a' },
               broken: null,
             },
             hostB: [],
@@ -106,7 +106,7 @@ describe('useHostSettingsStore', () => {
 
     expect(useHostSettingsStore.getState().hosts).toEqual({
       hostA: {
-        files: { projectPath: '/a' },
+        files: { root: '/a' },
       },
     })
 
@@ -174,10 +174,10 @@ describe('useHostSettingsStore', () => {
     it('leaves other modules under the same host alone', () => {
       const { set, removeKey, get } = useHostSettingsStore.getState()
       set('hostA', 'editor', { homePath: '/home/x' })
-      set('hostA', 'files', { projectPath: '/home/proj' })
+      set('hostA', 'files', { root: '/home/proj' })
       removeKey('hostA', 'editor', 'homePath')
       expect(get('hostA', 'editor')).toBeUndefined()
-      expect(get('hostA', 'files')).toEqual({ projectPath: '/home/proj' })
+      expect(get('hostA', 'files')).toEqual({ root: '/home/proj' })
     })
 
     it('is a no-op when host, module, or key is absent', () => {
@@ -202,7 +202,7 @@ describe('useHostSettingsStore', () => {
     await rehydrateHostSettingsStore()
 
     expect(useHostSettingsStore.getState().hosts).toEqual({})
-    useHostSettingsStore.getState().set('hostA', 'files', { projectPath: '/a' })
-    expect(useHostSettingsStore.getState().get('hostA', 'files')).toEqual({ projectPath: '/a' })
+    useHostSettingsStore.getState().set('hostA', 'files', { root: '/a' })
+    expect(useHostSettingsStore.getState().get('hostA', 'files')).toEqual({ root: '/a' })
   })
 })

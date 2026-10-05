@@ -9,7 +9,6 @@
   "common.open": "Open",
   "common.closed": "Closed",
   "common.remove": "remove",
-  "common.confirm": "Confirm",
 
   "settings.title": "Settings",
   "settings.coming_soon": "coming soon",
@@ -22,7 +21,6 @@
   "modules.editor.description": "Text and rich content editor with syntax highlighting",
   "modules.browser.description": "Embedded web browser pane (requires desktop app)",
   "modules.memory_monitor.description": "Host, pane, client, and daemon performance metrics",
-  "modules.files.description": "Workspace and session file tree, with click-to-open into the Editor",
   "module.disabled.title": "{{module}} module is disabled",
   "module.disabled.body": "Enable it and reload to restore this {{paneKind}} pane.",
   "module.disabled.enable": "Enable",
@@ -61,8 +59,6 @@
   "settings.section.agent": "Agent",
   "settings.section.browser": "Browser",
   "settings.section.editor": "Editor",
-  "settings.section.files": "Files",
-  "settings.section.files_workspace": "Files",
   "settings.section.monitor": "Monitor",
   "settings.section.worker": "Worker",
 
@@ -84,8 +80,6 @@
   "settings.agent.hook.install": "Install Hook",
   "settings.agent.hook.remove": "Remove Hook",
   "settings.agent.no_agents": "No agents detected yet. Start a Claude Code session to see agent settings.",
-
-  "settings.files.project_path.label": "Project path",
 
   "settings.editor.title": "Editor",
   "settings.editor.desc": "Preferences for the in-app Monaco code editor.",
@@ -320,7 +314,6 @@
   "sidebar.section_available": "Available",
   "sidebar.view.executions": "Executions",
   "sidebar.view.files_workspace": "Files (Workspace)",
-  "sidebar.view.files_session": "Files (Session)",
 
   "page.newtab.title": "New Tab",
   "page.newtab.empty": "No content providers registered",
@@ -1790,13 +1783,7 @@
   "settings.profile.wizard.sot.maybe_yours": "may be the one you just created",
 
   "file_not_found.search_session_cwd": "Search the current session's cwd",
-  "file_not_found.search_workspace_path": "Search the workspace project path",
   "file_not_found.search_session_cwd_label": "Search the current session's cwd ({{path}})",
-  "file_not_found.search_workspace_path_label": "Search the workspace project path ({{path}})",
-
-  "file_tree.select_workspace_first": "Select a workspace first",
-  "file_tree.set_project_path": "Set the project path to show the file tree",
-  "file_tree.session_not_implemented": "Session file tree not yet implemented (needs daemon cwd API)",
 
   "room.fold.more": "+{{n}} lines",
   "room.fold.less": "collapse",

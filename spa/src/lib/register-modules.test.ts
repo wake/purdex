@@ -14,7 +14,6 @@ import {
   registerModule,
   type ModuleDefinition,
 } from './module-registry'
-import { SETTINGS_ORDER } from './settings-order'
 import { clearNewTabRegistry, getNewTabProviders } from './new-tab-registry'
 import {
   clearSettingsSectionRegistry,
@@ -525,12 +524,6 @@ describe('ModuleDefinition.globalConfig / workspaceConfig deprecation (PR-5)', (
     expect(msgs.some((m: string) => m.includes('fakews') && m.includes('deprecated'))).toBe(true)
   })
 
-  it('does NOT emit any deprecation warning for the real Files bootstrap', () => {
-    registerBuiltinModules()
-    const msgs = (warnSpy.mock.calls as unknown[][]).map((c) => String(c[0]))
-    expect(msgs.some((m) => m.includes('files') && m.includes('deprecated'))).toBe(false)
-  })
-
   it('does NOT warn for modules using new `settings` field', () => {
     registerModule({
       id: 'newmod',
@@ -617,7 +610,10 @@ describe('ModuleDefinition.globalConfig / workspaceConfig deprecation (PR-5)', (
   })
 })
 
-describe('Files module — SR-2 fix (disable filter via settings contribution)', () => {
+// SR-2: a disabled module's workspace-scope setting is not registered. This
+// used to ride on the Files module; the shell cleanup (spec §5) deleted it, so
+// the coverage now uses the editor module's `workspace-home-path` setting.
+describe('SR-2 — a disabled module hides its workspace-scope setting', () => {
   beforeEach(() => {
     clearAll()
     useModuleEnabledStore.setState({ enabled: {}, baseline: null })
@@ -628,39 +624,30 @@ describe('Files module — SR-2 fix (disable filter via settings contribution)',
     useModuleEnabledStore.setState({ enabled: {}, baseline: null })
   })
 
-  it('Files registers with disableable: true + descriptionKey + no workspaceConfig', () => {
+  it('editor contributes a workspace-scope settings entry with correct localId/order', () => {
     registerBuiltinModules()
-    const filesMod = getModule('files')!
-    expect(filesMod.disableable).toBe(true)
-    expect(filesMod.descriptionKey).toBe('modules.files.description')
-    expect(filesMod.workspaceConfig).toBeUndefined()
+    const entry = listContributions('workspace').find((c) => c.id === 'editor.workspace-home-path')
+    expect(entry).toBeDefined()
+    expect(entry?.scope).toBe('workspace')
+    expect(entry?.order).toBe(0)
+    expect(entry?.labelKey).toBe('editor.settings.home_path.workspace')
+    expect(entry?.moduleId).toBe('editor')
   })
 
-  it('Files contributes a workspace-scope settings entry with correct localId/order', () => {
-    registerBuiltinModules()
-    const list = listContributions('workspace')
-    const filesEntry = list.find((c) => c.id === 'files.workspace-files')
-    expect(filesEntry).toBeDefined()
-    expect(filesEntry?.scope).toBe('workspace')
-    expect(filesEntry?.order).toBe(SETTINGS_ORDER.WORKSPACE_FILES)
-    expect(filesEntry?.labelKey).toBe('settings.section.files_workspace')
-    expect(filesEntry?.moduleId).toBe('files')
-  })
-
-  // CRITICAL: same-test before/after compare to avoid false-green from
-  // "Files never had a workspace contribution to begin with" (codex R1 P0).
-  it('reload-after-disable: Files contribution present when enabled, absent when disabled before bootstrap', () => {
-    // Step 1 — Files enabled (default) → Files contribution present
+  // CRITICAL: same-test before/after compare to avoid a false green from
+  // "the contribution never existed to begin with" (codex R1 P0).
+  it('reload-after-disable: editor workspace contribution present when enabled, absent when disabled before bootstrap', () => {
+    // Step 1 — Editor enabled (default) → contribution present
     registerBuiltinModules()
     const enabledList = listContributions('workspace')
-    expect(enabledList.find((c) => c.id === 'files.workspace-files')).toBeDefined()
+    expect(enabledList.find((c) => c.id === 'editor.workspace-home-path')).toBeDefined()
 
-    // Step 2 — reset state and bootstrap with Files persisted-disabled
+    // Step 2 — reset state and bootstrap with Editor persisted-disabled
     clearAll()
-    useModuleEnabledStore.setState({ enabled: { files: false }, baseline: null })
+    useModuleEnabledStore.setState({ enabled: { editor: false }, baseline: null })
     registerBuiltinModules()
     const disabledList = listContributions('workspace')
-    expect(disabledList.find((c) => c.id === 'files.workspace-files')).toBeUndefined()
+    expect(disabledList.find((c) => c.id === 'editor.workspace-home-path')).toBeUndefined()
   })
 })
 
@@ -818,15 +805,6 @@ describe('Settings sidebar alignment (spec §3 I1)', () => {
     expect(purdex?.component).toBe(PlaceholderSettingsSection)
   })
 
-  it('T5: files registers a purdex placeholder with settings.section.files label', () => {
-    registerBuiltinModules()
-    const files = getModule('files')
-    const purdex = files?.settings?.find((s) => s.scope === 'purdex')
-    expect(purdex).toBeDefined()
-    expect(purdex?.labelKey).toBe('settings.section.files')
-    expect(purdex?.component).toBe(PlaceholderSettingsSection)
-  })
-
   it('T6: memory-monitor purdex labelKey switched to settings.section.monitor', () => {
     registerBuiltinModules()
     const m = getModule('memory-monitor')
@@ -843,7 +821,6 @@ describe('Settings sidebar alignment (spec §3 I1)', () => {
   it('T9 / F6: locale JSON has new short-label keys + placeholder string in en + zh-TW', () => {
     const required = [
       'settings.section.browser',
-      'settings.section.files',
       'settings.section.monitor',
       'settings.module.no_purdex_settings',
     ] as const

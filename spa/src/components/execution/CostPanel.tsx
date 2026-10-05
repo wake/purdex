@@ -86,7 +86,7 @@ export default function CostPanel({ summary, hostId, anchorRef, onClose, priorHi
   const [host, setHost] = useState<NexHostInfo | null>(null)
   useEffect(() => {
     let cancelled = false
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync reset before async fetch (same as FileTreeView)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync reset before async fetch
     setHost(null)
     fetchNexHost(hostId)
       .then((h) => {

@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
+import { act } from 'react'
 import {
   showFileNotFoundPopup,
   hideFileNotFoundPopup,
@@ -19,11 +20,14 @@ const baseSpec: PopupSpec = {
 
 const baseUI = {
   sessionCwd: '/tmp',
-  projectPath: '/ws/project',
   onOpenPath: () => {},
   onSearchSessionCwd: () => {},
-  onSearchWorkspace: () => {},
 }
+
+const popupButtonLabels = (): string[] =>
+  Array.from(document.querySelectorAll('[data-pdx-popup-host="file-not-found"] button')).map(
+    (b) => b.getAttribute('aria-label') ?? b.textContent ?? '',
+  )
 
 describe('file-not-found-popup-service', () => {
   it('show creates a single host element in document', () => {
@@ -60,8 +64,8 @@ describe('file-not-found-popup-service', () => {
 
   it('R2-M1: consecutive show calls within an open popup REUSE the controller (controlled re-render)', () => {
     // R2 medium finding: previously each show() call aborted the prior token.
-    // That meant a layer-2 result arriving first would abort the in-flight
-    // layer-3 fetch via the popup token's `signal.addEventListener('abort')`.
+    // That meant a search result arriving first would abort a peer in-flight
+    // fs.search via the popup token's `signal.addEventListener('abort')`.
     // Now show() while a root is mounted re-renders without aborting; the
     // token only flips on user dismiss.
     const a = showFileNotFoundPopup(baseSpec, baseUI)
@@ -95,6 +99,21 @@ describe('file-not-found-popup-service', () => {
       showFileNotFoundPopup(baseSpec, baseUI)
     }
     expect(document.querySelectorAll('[data-pdx-popup-host="file-not-found"]').length).toBe(0)
+  })
+
+  it('neither render path offers a workspace search (shell cleanup §5)', () => {
+    // Fresh-mount path
+    act(() => {
+      showFileNotFoundPopup(baseSpec, baseUI)
+    })
+    expect(popupButtonLabels().some((l) => /workspace/i.test(l))).toBe(false)
+    expect(popupButtonLabels().some((l) => /session/i.test(l))).toBe(true)
+    // Controlled re-render path (root + token reused)
+    act(() => {
+      showFileNotFoundPopup(baseSpec, baseUI)
+    })
+    expect(popupButtonLabels().some((l) => /workspace/i.test(l))).toBe(false)
+    expect(popupButtonLabels().some((l) => /session/i.test(l))).toBe(true)
   })
 
   it('disposeForTests is the same as hide (alias)', () => {

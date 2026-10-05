@@ -11,9 +11,9 @@ import { useEditorSettingsStore } from '../../stores/useEditorSettingsStore'
 export interface OpenFileContext {
   /** Host ID where this file lives. Backend bound to this — see `createOpenFileService`. */
   hostId: string
-  /** Path-cache scope key (hostId, cwd). Captured per click; usually = workspace projectPath OR session cwd OR home. */
+  /** Path-cache scope key (hostId, cwd). Captured per click; usually = session cwd OR the file's directory. */
   cwd: string
-  /** Workspace whose context generated the click. Used for Layer-3 fs.search root + popup display. */
+  /** Workspace whose context generated the click. The opened tab lands in it. */
   sourceWorkspaceId: string
   /** Optional session origin; used as priority tag for path-cache lookup AND as Layer-2 capability. */
   sessionCode?: string
@@ -25,7 +25,7 @@ export interface FsBackendForOpen {
 }
 
 /**
- * Popup specs the popup mount service can render. Layer 1/2/3 progression:
+ * Popup specs the popup mount service can render. Layer 1/2 progression:
  * - `layer1-multi`: hook cache produced multiple verified candidates
  * - `ask-expand`: cache empty (or 0 verified) → user must opt into fs.search
  * - `expanded`: post-fs.search results (filled in by Task 5.8)
@@ -39,7 +39,6 @@ export type PopupSpec =
       source: FileSource
       ctx: OpenFileContext
       layer2Hits: { path: string; modTime: string; sizeBytes: number; root: string }[]
-      layer3Hits: { path: string; modTime: string; sizeBytes: number; root: string }[]
     }
 
 export interface PopupController {
@@ -106,7 +105,7 @@ function pruneCandidate(ctx: OpenFileContext, candidatePath: string): void {
 /**
  * Build the open-file service. The returned object is stateless aside from
  * its closures over `deps` — caller may keep a single instance for the
- * surface (terminal-link / FileTreeView / etc.) and reuse it across clicks.
+ * surface (e.g. terminal-link) and reuse it across clicks.
  */
 export function createOpenFileService(deps: OpenFileDeps): OpenFileService {
   return {
@@ -171,7 +170,7 @@ export function createOpenFileService(deps: OpenFileDeps): OpenFileService {
         }
       }
 
-      // 4. Fall through to ask-expand (Layer 2/3 picked up by 5.8).
+      // 4. Fall through to ask-expand (Layer 2 picked up by 5.8).
       deps.popupController.show({ mode: 'ask-expand', file, source, ctx })
     },
   }

@@ -9,7 +9,6 @@
   "common.open": "開啟",
   "common.closed": "已關閉",
   "common.remove": "移除",
-  "common.confirm": "確認",
 
   "settings.title": "設定",
   "settings.coming_soon": "即將推出",
@@ -22,7 +21,6 @@
   "modules.editor.description": "具語法高亮的文字與多樣內容編輯器",
   "modules.browser.description": "內嵌網頁瀏覽器面板（需桌面版）",
   "modules.memory_monitor.description": "主機、面板、client 與 daemon 效能指標",
-  "modules.files.description": "工作區與 Session 檔案樹，可點擊開啟至 Editor",
   "module.disabled.title": "{{module}} 模組目前已停用",
   "module.disabled.body": "啟用後重載即可恢復這個 {{paneKind}} 分頁。",
   "module.disabled.enable": "啟用",
@@ -61,8 +59,6 @@
   "settings.section.agent": "Agent",
   "settings.section.browser": "瀏覽器",
   "settings.section.editor": "編輯器",
-  "settings.section.files": "檔案",
-  "settings.section.files_workspace": "檔案",
   "settings.section.monitor": "監控",
   "settings.section.worker": "Worker",
 
@@ -84,8 +80,6 @@
   "settings.agent.hook.install": "安裝 Hook",
   "settings.agent.hook.remove": "移除 Hook",
   "settings.agent.no_agents": "尚未偵測到任何 Agent。啟動 Claude Code 後會出現設定。",
-
-  "settings.files.project_path.label": "專案路徑",
 
   "settings.editor.title": "編輯器",
   "settings.editor.desc": "應用程式內建 Monaco 程式碼編輯器的偏好設定。",
@@ -320,7 +314,6 @@
   "sidebar.section_available": "可加入",
   "sidebar.view.executions": "執行體",
   "sidebar.view.files_workspace": "檔案（工作區）",
-  "sidebar.view.files_session": "檔案（Session）",
 
   "page.newtab.title": "新增分頁",
   "page.newtab.empty": "尚未登錄任何內容提供者",
@@ -1790,13 +1783,7 @@
   "settings.profile.wizard.sot.maybe_yours": "可能是你剛才建立的",
 
   "file_not_found.search_session_cwd": "搜尋目前 session cwd",
-  "file_not_found.search_workspace_path": "搜尋 workspace projectPath",
   "file_not_found.search_session_cwd_label": "搜尋目前 session（cwd: {{path}}）",
-  "file_not_found.search_workspace_path_label": "搜尋 workspace（projectPath: {{path}}）",
-
-  "file_tree.select_workspace_first": "請先選擇 Workspace",
-  "file_tree.set_project_path": "設定專案路徑以顯示檔案樹",
-  "file_tree.session_not_implemented": "Session file tree 尚未實作（需 daemon cwd API）",
 
   "room.fold.more": "還有 {{n}} 行",
   "room.fold.less": "收合",

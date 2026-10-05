@@ -253,9 +253,9 @@ describe('useWorkspaceStore', () => {
         useWorkspaceStore.getState().addWorkspace('test-ws')
       }
       const ws0 = useWorkspaceStore.getState().workspaces[0]
-      useWorkspaceStore.getState().setModuleConfig(ws0.id, 'files', 'projectPath', '/home/user/project')
+      useWorkspaceStore.getState().setModuleConfig(ws0.id, 'files', 'root', '/home/user/project')
       const updated = useWorkspaceStore.getState().workspaces.find((w) => w.id === ws0.id)!
-      expect(updated.moduleConfig?.files?.projectPath).toBe('/home/user/project')
+      expect(updated.moduleConfig?.files?.root).toBe('/home/user/project')
     })
 
     it('preserves existing config when setting a new key', () => {
@@ -264,10 +264,10 @@ describe('useWorkspaceStore', () => {
         useWorkspaceStore.getState().addWorkspace('test-ws')
       }
       const ws0 = useWorkspaceStore.getState().workspaces[0]
-      useWorkspaceStore.getState().setModuleConfig(ws0.id, 'files', 'projectPath', '/path1')
+      useWorkspaceStore.getState().setModuleConfig(ws0.id, 'files', 'root', '/path1')
       useWorkspaceStore.getState().setModuleConfig(ws0.id, 'files', 'showHidden', true)
       const updated = useWorkspaceStore.getState().workspaces.find((w) => w.id === ws0.id)!
-      expect(updated.moduleConfig?.files?.projectPath).toBe('/path1')
+      expect(updated.moduleConfig?.files?.root).toBe('/path1')
       expect(updated.moduleConfig?.files?.showHidden).toBe(true)
     })
   })

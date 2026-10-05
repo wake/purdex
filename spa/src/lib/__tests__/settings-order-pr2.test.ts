@@ -9,10 +9,11 @@ import { isModuleOwnedContribution } from '../settings-contribution-types'
 import { SETTINGS_ORDER } from '../settings-order'
 
 // Spec §4.1.3 (PR-2) refined by 2026-05-03 settings-modules-order spec
-// §4.1, and by the 2026-09-28 worker pane theme spec (§4.2, Worker joins the
-// module-owned band): the module-owned band is now alphabetical by English
-// sidebar short label (Browser / Editor / Files / Monitor / Worker),
-// and Browser + Files declare a purdex-scope placeholder so every
+// §4.1, by the 2026-09-28 worker pane theme spec (§4.2, Worker joins the
+// module-owned band), and by the 2026-10-05 shell cleanup spec (§5, the Files
+// module is gone): the module-owned band is now alphabetical by English
+// sidebar short label (Browser / Editor / Monitor / Worker),
+// and Browser declares a purdex-scope placeholder so every
 // disableable module carries an entry (spec §I1). The always-on
 // purdex-scope sidebar order is:
 //
@@ -24,7 +25,6 @@ import { SETTINGS_ORDER } from '../settings-order'
 //   module-config(10)
 //   browser(11)
 //   editor(13)
-//   files(14)
 //   performance-monitor(15)
 //   worker(16)
 //   dev-environment(20)     — only when caps.devUpdateEnabled
@@ -67,7 +67,6 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
       { id: 'module-config',       order: SETTINGS_ORDER.MODULE_CONFIG },               // 10
       { id: 'browser',             order: SETTINGS_ORDER.MODULE_BROWSER },              // 11
       { id: 'editor',              order: SETTINGS_ORDER.MODULE_EDITOR },               // 13
-      { id: 'files',               order: SETTINGS_ORDER.MODULE_FILES },                // 14
       { id: 'performance-monitor', order: SETTINGS_ORDER.MODULE_PERFORMANCE_MONITOR },  // 15
       { id: 'worker',              order: SETTINGS_ORDER.MODULE_WORKER },               // 16
     ])
@@ -76,7 +75,7 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
     // explicitly allowed gated ids — nothing else.
     const expectedAlwaysOnIds = new Set([
       'appearance', 'terminal', 'interface', 'profile', 'module-config',
-      'browser', 'editor', 'files',
+      'browser', 'editor',
       'performance-monitor', 'worker',
     ])
     const unexpected = items
@@ -90,7 +89,8 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
     // this guard pins the *contents* of the band, not just relative order,
     // so a stray legacy section squeezed into 10.5 / 12.5 / 13.5 fails here.
     // Order is alphabetical by English sidebar short label
-    // (Browser / Editor / Files / Monitor / Worker — spec §3.1; Sync left with Profile Sync P3d-3).
+    // (Browser / Editor / Monitor / Worker — spec §3.1; Sync left with Profile Sync P3d-3;
+    // Files left with the shell cleanup).
     const moduleBand = listContributions('purdex')
       .slice()
       .sort((a, b) => a.order - b.order)
@@ -99,7 +99,6 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
     expect(moduleBand).toEqual([
       'browser',
       'editor',
-      'files',
       'performance-monitor',
       'worker',
     ])

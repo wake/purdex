@@ -24,23 +24,24 @@ describe('FileNotFoundPopup', () => {
     useI18nStore.getState().setLocale('en')
   })
 
-  it('renders missing file path and the two primary CTAs in ask-expand mode', () => {
+  it('renders missing file path and only the session-cwd CTA in ask-expand mode', () => {
     const spec: PopupSpec = { mode: 'ask-expand', file: baseFile, source: baseSource, ctx: baseCtx }
     render(
       <FileNotFoundPopup
         spec={spec}
         sessionCwd="/sess/cwd"
-        projectPath="/ws/project"
         onClose={vi.fn()}
         onOpenPath={vi.fn()}
         onSearchSessionCwd={vi.fn()}
-        onSearchWorkspace={vi.fn()}
       />,
     )
     expect(screen.getByText('/missing/foo.go')).toBeInTheDocument()
-    // Primary CTAs surface the root being searched.
+    // The CTA surfaces the root being searched.
     expect(screen.getByRole('button', { name: /session.*cwd|目前 session/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /workspace.*project ?path|workspace.*\/ws\/project/i })).toBeInTheDocument()
+    // The workspace search is gone (shell cleanup §5): only the session CTA and Cancel remain.
+    expect(screen.queryByRole('button', { name: /workspace/i })).toBeNull()
+    expect(screen.queryByText(/project ?path/i)).toBeNull()
+    expect(screen.getAllByRole('button')).toHaveLength(2)
   })
 
   it('calls onSearchSessionCwd when the session-cwd CTA is clicked', () => {
@@ -50,11 +51,9 @@ describe('FileNotFoundPopup', () => {
       <FileNotFoundPopup
         spec={spec}
         sessionCwd="/sess/cwd"
-        projectPath="/ws/project"
         onClose={vi.fn()}
         onOpenPath={vi.fn()}
         onSearchSessionCwd={onSearchSessionCwd}
-        onSearchWorkspace={vi.fn()}
       />,
     )
     fireEvent.click(screen.getByRole('button', { name: /session.*cwd|目前 session/i }))
@@ -72,34 +71,15 @@ describe('FileNotFoundPopup', () => {
       <FileNotFoundPopup
         spec={spec}
         sessionCwd={null}
-        projectPath="/ws/project"
         onClose={vi.fn()}
         onOpenPath={vi.fn()}
         onSearchSessionCwd={vi.fn()}
-        onSearchWorkspace={vi.fn()}
       />,
     )
     const btn = screen.getByRole('button', { name: /session.*cwd|目前 session/i })
     expect(btn.getAttribute('aria-disabled')).toBe('true')
     // Tooltip explains why
     expect(btn.getAttribute('title')).toMatch(/session/i)
-  })
-
-  it('disables workspace CTA when projectPath is missing', () => {
-    const spec: PopupSpec = { mode: 'ask-expand', file: baseFile, source: baseSource, ctx: baseCtx }
-    render(
-      <FileNotFoundPopup
-        spec={spec}
-        sessionCwd="/sess/cwd"
-        projectPath={null}
-        onClose={vi.fn()}
-        onOpenPath={vi.fn()}
-        onSearchSessionCwd={vi.fn()}
-        onSearchWorkspace={vi.fn()}
-      />,
-    )
-    const btn = screen.getByRole('button', { name: /workspace/i })
-    expect(btn.getAttribute('aria-disabled')).toBe('true')
   })
 
   it('layer1-multi mode renders candidate list and clicks call onOpenPath', () => {
@@ -115,15 +95,16 @@ describe('FileNotFoundPopup', () => {
       <FileNotFoundPopup
         spec={spec}
         sessionCwd="/sess/cwd"
-        projectPath="/ws/project"
         onClose={vi.fn()}
         onOpenPath={onOpenPath}
         onSearchSessionCwd={vi.fn()}
-        onSearchWorkspace={vi.fn()}
       />,
     )
     expect(screen.getByText('/a/foo.go')).toBeInTheDocument()
     expect(screen.getByText('/b/foo.go')).toBeInTheDocument()
+    // The session CTA still shows below the candidates; the workspace one is gone.
+    expect(screen.getByRole('button', { name: /session.*cwd|目前 session/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /workspace/i })).toBeNull()
     fireEvent.click(screen.getByText('/a/foo.go'))
     expect(onOpenPath).toHaveBeenCalledWith('/a/foo.go')
   })
@@ -142,11 +123,9 @@ describe('FileNotFoundPopup', () => {
       <FileNotFoundPopup
         spec={spec}
         sessionCwd="/sess/cwd"
-        projectPath="/ws/project"
         onClose={vi.fn()}
         onOpenPath={vi.fn()}
         onSearchSessionCwd={vi.fn()}
-        onSearchWorkspace={vi.fn()}
       />,
     )
     expect(screen.getByText('/a/foo.go')).toBeInTheDocument()
@@ -155,14 +134,28 @@ describe('FileNotFoundPopup', () => {
       <FileNotFoundPopup
         spec={spec}
         sessionCwd="/sess/cwd"
-        projectPath="/ws/project"
         onClose={vi.fn()}
         onOpenPath={vi.fn()}
         onSearchSessionCwd={vi.fn()}
-        onSearchWorkspace={vi.fn()}
       />,
     )
     expect(screen.getByText('/a/foo.go')).toBeInTheDocument()
+  })
+
+  it('Cancel button closes popup', () => {
+    const onClose = vi.fn()
+    const spec: PopupSpec = { mode: 'ask-expand', file: baseFile, source: baseSource, ctx: baseCtx }
+    render(
+      <FileNotFoundPopup
+        spec={spec}
+        sessionCwd="/sess/cwd"
+        onClose={onClose}
+        onOpenPath={vi.fn()}
+        onSearchSessionCwd={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 
   it('ESC key closes popup', () => {
@@ -172,18 +165,16 @@ describe('FileNotFoundPopup', () => {
       <FileNotFoundPopup
         spec={spec}
         sessionCwd="/sess/cwd"
-        projectPath="/ws/project"
         onClose={onClose}
         onOpenPath={vi.fn()}
         onSearchSessionCwd={vi.fn()}
-        onSearchWorkspace={vi.fn()}
       />,
     )
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalled()
   })
 
-  it('expanded mode renders both layer 2 and layer 3 sections', () => {
+  it('expanded mode renders the layer 2 (session) section and no workspace section', () => {
     const spec: PopupSpec = {
       mode: 'expanded',
       file: baseFile,
@@ -192,24 +183,20 @@ describe('FileNotFoundPopup', () => {
       layer2Hits: [
         { path: '/sess/cwd/x/foo.go', modTime: '2026-04-27', sizeBytes: 1, root: '/sess/cwd' },
       ],
-      layer3Hits: [
-        { path: '/ws/project/y/foo.go', modTime: '2026-04-26', sizeBytes: 1, root: '/ws/project' },
-      ],
     }
     const onOpenPath = vi.fn()
     render(
       <FileNotFoundPopup
         spec={spec}
         sessionCwd="/sess/cwd"
-        projectPath="/ws/project"
         onClose={vi.fn()}
         onOpenPath={onOpenPath}
         onSearchSessionCwd={vi.fn()}
-        onSearchWorkspace={vi.fn()}
       />,
     )
+    expect(screen.getByText('Session cwd: /sess/cwd')).toBeInTheDocument()
     expect(screen.getByText('/sess/cwd/x/foo.go')).toBeInTheDocument()
-    expect(screen.getByText('/ws/project/y/foo.go')).toBeInTheDocument()
+    expect(screen.queryByText(/workspace/i)).toBeNull()
     fireEvent.click(screen.getByText('/sess/cwd/x/foo.go'))
     expect(onOpenPath).toHaveBeenCalledWith('/sess/cwd/x/foo.go')
   })
@@ -222,11 +209,9 @@ describe('FileNotFoundPopup', () => {
         <FileNotFoundPopup
           spec={spec}
           sessionCwd="/sess/cwd"
-          projectPath="/ws/project"
           onClose={vi.fn()}
           onOpenPath={vi.fn()}
           onSearchSessionCwd={vi.fn()}
-          onSearchWorkspace={vi.fn()}
         />,
       )
       const btn = screen.getByRole('button', { name: /session.*cwd|目前 session/i })
@@ -239,48 +224,13 @@ describe('FileNotFoundPopup', () => {
         <FileNotFoundPopup
           spec={spec}
           sessionCwd="/sess/cwd"
-          projectPath="/ws/project"
           onClose={vi.fn()}
           onOpenPath={vi.fn()}
           onSearchSessionCwd={vi.fn()}
-          onSearchWorkspace={vi.fn()}
         />,
       )
       const btn = screen.getByRole('button', { name: /session.*cwd|目前 session/i })
       expect(btn).toHaveAccessibleName('搜尋目前 session cwd')
-    })
-
-    it('workspace CTA aria-label is English for the en locale', () => {
-      render(
-        <FileNotFoundPopup
-          spec={spec}
-          sessionCwd="/sess/cwd"
-          projectPath="/ws/project"
-          onClose={vi.fn()}
-          onOpenPath={vi.fn()}
-          onSearchSessionCwd={vi.fn()}
-          onSearchWorkspace={vi.fn()}
-        />,
-      )
-      const btn = screen.getByRole('button', { name: /workspace/i })
-      expect(btn).toHaveAccessibleName('Search the workspace project path')
-    })
-
-    it('workspace CTA aria-label is zh-TW for the zh-TW locale', () => {
-      useI18nStore.getState().setLocale('zh-TW')
-      render(
-        <FileNotFoundPopup
-          spec={spec}
-          sessionCwd="/sess/cwd"
-          projectPath="/ws/project"
-          onClose={vi.fn()}
-          onOpenPath={vi.fn()}
-          onSearchSessionCwd={vi.fn()}
-          onSearchWorkspace={vi.fn()}
-        />,
-      )
-      const btn = screen.getByRole('button', { name: /workspace/i })
-      expect(btn).toHaveAccessibleName('搜尋 workspace projectPath')
     })
   })
 
@@ -292,11 +242,9 @@ describe('FileNotFoundPopup', () => {
         <FileNotFoundPopup
           spec={spec}
           sessionCwd="/sess/cwd"
-          projectPath="/ws/project"
           onClose={vi.fn()}
           onOpenPath={vi.fn()}
           onSearchSessionCwd={vi.fn()}
-          onSearchWorkspace={vi.fn()}
         />,
       )
       expect(screen.getByText("Search the current session's cwd (/sess/cwd)")).toBeInTheDocument()
@@ -309,46 +257,12 @@ describe('FileNotFoundPopup', () => {
         <FileNotFoundPopup
           spec={spec}
           sessionCwd="/sess/cwd"
-          projectPath="/ws/project"
           onClose={vi.fn()}
           onOpenPath={vi.fn()}
           onSearchSessionCwd={vi.fn()}
-          onSearchWorkspace={vi.fn()}
         />,
       )
       expect(screen.getByText('搜尋目前 session（cwd: /sess/cwd）')).toBeInTheDocument()
-    })
-
-    it('workspace CTA visible label is English with the path interpolated, for the en locale', () => {
-      render(
-        <FileNotFoundPopup
-          spec={spec}
-          sessionCwd="/sess/cwd"
-          projectPath="/ws/project"
-          onClose={vi.fn()}
-          onOpenPath={vi.fn()}
-          onSearchSessionCwd={vi.fn()}
-          onSearchWorkspace={vi.fn()}
-        />,
-      )
-      expect(screen.getByText('Search the workspace project path (/ws/project)')).toBeInTheDocument()
-      expect(screen.queryByText(/搜尋 workspace/)).not.toBeInTheDocument()
-    })
-
-    it('workspace CTA visible label is zh-TW with the path interpolated, for the zh-TW locale', () => {
-      useI18nStore.getState().setLocale('zh-TW')
-      render(
-        <FileNotFoundPopup
-          spec={spec}
-          sessionCwd="/sess/cwd"
-          projectPath="/ws/project"
-          onClose={vi.fn()}
-          onOpenPath={vi.fn()}
-          onSearchSessionCwd={vi.fn()}
-          onSearchWorkspace={vi.fn()}
-        />,
-      )
-      expect(screen.getByText('搜尋 workspace（projectPath: /ws/project）')).toBeInTheDocument()
     })
   })
 })
