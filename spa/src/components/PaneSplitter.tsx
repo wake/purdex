@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef } from 'react'
 interface Props {
   direction: 'h' | 'v'
   onResize: (deltaPx: number) => void
-  /** Fires once when the drag ends (mouseup), e.g. to commit a draft size. */
+  /** Fires once when the drag ends (mouseup or window blur), e.g. to commit a draft size. Not on unmount. */
   onResizeEnd?: () => void
   testId?: string
 }
@@ -12,13 +12,19 @@ export function PaneSplitter({ direction, onResize, onResizeEnd, testId }: Props
   const startPos = useRef(0)
   const onResizeRef = useRef(onResize)
   const onResizeEndRef = useRef(onResizeEnd)
+  // Ends the drag in progress: detaches its listeners and restores the body styles; `commit` also fires onResizeEnd.
+  // Null while no drag is in progress.
+  const endDragRef = useRef<((commit: boolean) => void) | null>(null)
   useEffect(() => {
     onResizeRef.current = onResize
     onResizeEndRef.current = onResizeEnd
   })
+  // Unmount mid-drag cleans up without committing: the owner may be going away with it.
+  useEffect(() => () => endDragRef.current?.(false), [])
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
+    endDragRef.current?.(true)
     startPos.current = direction === 'h' ? e.clientX : e.clientY
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
@@ -28,16 +34,24 @@ export function PaneSplitter({ direction, onResize, onResizeEnd, testId }: Props
       startPos.current = current
     }
 
-    const handleMouseUp = () => {
+    // A window blur ends the drag like a mouseup: the mouseup may never reach this document, and the draft is
+    // already on screen, so committing it keeps the screen and the owner's store in step.
+    const handleEnd = () => endDrag(true)
+
+    const endDrag = (commit: boolean) => {
       document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
+      document.removeEventListener('mouseup', handleEnd)
+      window.removeEventListener('blur', handleEnd)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
-      onResizeEndRef.current?.()
+      endDragRef.current = null
+      if (commit) onResizeEndRef.current?.()
     }
 
     document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
+    document.addEventListener('mouseup', handleEnd)
+    window.addEventListener('blur', handleEnd)
+    endDragRef.current = endDrag
     document.body.style.cursor = direction === 'h' ? 'col-resize' : 'row-resize'
     document.body.style.userSelect = 'none'
   }, [direction])
