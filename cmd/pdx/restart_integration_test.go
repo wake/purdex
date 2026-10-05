@@ -1,0 +1,194 @@
+//go:build integration
+
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+// (codex plan review #3: codexbroker's default socket glob reads the real
+// /var/folders/*/*/T; PDX_CODEX_* point it at the temp dir. Before relying on
+// the env list in isolatedEnv, read registerServeModules (cmd/pdx/main.go
+// ~267-300) and add an override for anything else that reaches outside
+// HOME/TMUX_TMPDIR/data_dir.)
+
+// TestMain doubles as the daemon: the integration test starts this test
+// binary with PDX_RESTART_HELPER=1 and `serve` args, and a restart re-execs
+// the same argv+env, so the new image lands here again.
+func TestMain(m *testing.M) {
+	if os.Getenv("PDX_RESTART_HELPER") == "1" {
+		main()
+		return
+	}
+	os.Exit(m.Run())
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+func bootID(base string) (string, error) {
+	c := http.Client{Timeout: time.Second}
+	resp, err := c.Get(base + "/api/health")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var body struct {
+		BootID string `json:"boot_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", err
+	}
+	return body.BootID, nil
+}
+
+func waitBootID(t *testing.T, base, not string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if id, err := bootID(base); err == nil && id != "" && id != not {
+			return id
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("no boot id other than %q within %v", not, timeout)
+	return ""
+}
+
+// isolatedEnv is os.Environ() minus every key the helper daemon must not
+// inherit, plus the overrides — built explicitly rather than appended so no
+// duplicate key decides which value wins (codex plan review #3).
+func isolatedEnv(dir string) []string {
+	drop := map[string]bool{"HOME": true, "TMUX": true, "TMUX_PANE": true, "TMUX_TMPDIR": true,
+		"PDX_DEV_MODE": true, "PDX_RESTART_HELPER": true, "PDX_CODEX_STATE_ROOT": true, "PDX_CODEX_SOCKET_ROOTS": true}
+	var env []string
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); !drop[k] {
+			env = append(env, kv)
+		}
+	}
+	codex := filepath.Join(dir, "codex")
+	os.MkdirAll(codex, 0700)
+	return append(env,
+		"PDX_RESTART_HELPER=1",
+		"HOME="+dir,                     // every ~/... a module touches (~/.claude, ~/.codex, …)
+		"TMUX_TMPDIR="+dir,              // tmux calls hit a private, absent server — never the user's sessions
+		"PDX_CODEX_STATE_ROOT="+codex,   // codexbroker state …
+		"PDX_CODEX_SOCKET_ROOTS="+codex, // … and its socket glob (default globs the real /var/folders/*/*/T)
+		"PDX_DEV_MODE=0",                // observable env: dev routes stay off across the re-exec (D3)
+	)
+}
+
+func devCheckStatus(t *testing.T, base string) int {
+	t.Helper()
+	req, _ := http.NewRequest("GET", base+"/api/dev/daemon/check", nil)
+	req.Header.Set("Authorization", "Bearer itest-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
+	dir := t.TempDir()
+	port := freePort(t)
+	cfgPath := filepath.Join(dir, "config.toml")
+	// [dev] update = true mounts the dev module; PDX_DEV_MODE=0 keeps its
+	// routes unregistered. If the re-exec lost the boot env, the new image
+	// would see PDX_DEV_MODE unset (= on) and /api/dev/daemon/check would appear.
+	cfg := fmt.Sprintf("bind = \"127.0.0.1\"\nport = %d\ndata_dir = %q\ntoken = \"itest-token\"\n\n[dev]\nupdate = true\nrepo_root = %q\n", port, dir, dir)
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0600); err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := os.Create(filepath.Join(dir, "serve.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "serve", "--config", cfgPath)
+	cmd.Env = isolatedEnv(dir)
+	cmd.Stdout, cmd.Stderr = logFile, logFile
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// One waiter for the child's whole life: if the original process ever
+	// exits, this fires — exec keeps the process, a crash-and-respawn does not.
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	t.Cleanup(func() {
+		cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-exited:
+		case <-time.After(15 * time.Second):
+			cmd.Process.Kill()
+			<-exited
+		}
+		if t.Failed() {
+			b, _ := os.ReadFile(filepath.Join(dir, "serve.log"))
+			t.Logf("serve.log:\n%s", b)
+		}
+	})
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	first := waitBootID(t, base, "", 30*time.Second)
+	if code := devCheckStatus(t, base); code != http.StatusNotFound {
+		t.Fatalf("before restart: /api/dev/daemon/check = %d, want 404 (PDX_DEV_MODE=0)", code)
+	}
+
+	req, _ := http.NewRequest("POST", base+"/api/daemon/restart", nil)
+	req.Header.Set("Authorization", "Bearer itest-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var accepted struct {
+		BootID string `json:"boot_id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&accepted)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted || accepted.BootID != first {
+		t.Fatalf("restart: %d %q, want 202 with boot id %q", resp.StatusCode, accepted.BootID, first)
+	}
+
+	second := waitBootID(t, base, first, 60*time.Second)
+	if second == first {
+		t.Fatal("boot id unchanged")
+	}
+	// Same process: the child we started never exited (exec replaces the
+	// image in place; a waiter on it would have fired on any exit).
+	select {
+	case err := <-exited:
+		t.Fatalf("original process exited during restart: %v", err)
+	default:
+	}
+	// Same environment: dev routes are still off (D3).
+	if code := devCheckStatus(t, base); code != http.StatusNotFound {
+		t.Fatalf("after restart: /api/dev/daemon/check = %d, want 404 — the boot env (PDX_DEV_MODE=0) was not kept", code)
+	}
+	pidData, err := os.ReadFile(filepath.Join(dir, "pdx.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := strconv.Atoi(strings.TrimSpace(string(pidData))); got != cmd.Process.Pid {
+		t.Fatalf("pid file = %d, want %d (unchanged across restart)", got, cmd.Process.Pid)
+	}
+}
