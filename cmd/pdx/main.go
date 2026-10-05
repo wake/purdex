@@ -304,13 +304,10 @@ func runServe(args []string) *reexecPlan {
 	if errors.Is(err, errRestart) {
 		if restartStillWanted(sigCh, func() { signal.Stop(sigCh) }, log.Printf) {
 			// Keep the pid lock held through the exec: the new image adopts it.
-			if entry, err := handOffPidLock(pidFile); err != nil {
-				log.Printf("pid lock: hand-off failed (%v); the new image re-acquires it", err)
-			} else {
-				handingOff = true
-				boot.env = append(boot.env, entry)
-				boot.lock = pidFile // keeps the *os.File (and its fd) alive until exec
-			}
+			// reexec clears close-on-exec right before the exec.
+			handingOff = true
+			boot.env = append(boot.env, pidLockEnvEntry(pidFile))
+			boot.lock = pidFile // keeps the *os.File (and its fd) alive until exec
 			return boot
 		}
 		return nil

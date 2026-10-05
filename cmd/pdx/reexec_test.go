@@ -63,6 +63,54 @@ func TestReexec_LogsFailure(t *testing.T) {
 	}
 }
 
+func lockedPlan(t *testing.T, clear func(*os.File) error) *reexecPlan {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return &reexecPlan{path: "/x", lock: f, clearCLOEXEC: clear}
+}
+
+func TestReexec_ClearsCloseOnExecRightBeforeExec(t *testing.T) {
+	var order []string
+	p := lockedPlan(t, func(*os.File) error { order = append(order, "clear"); return nil })
+	reexec(p, func(string, []string, []string) error { order = append(order, "exec"); return errors.New("x") },
+		func(string, ...any) {}, func(int) {})
+	if !reflect.DeepEqual(order, []string{"clear", "exec"}) {
+		t.Fatalf("order = %v, want clear then exec", order)
+	}
+}
+
+func TestReexec_ClearFailureStillExecs(t *testing.T) {
+	var logs []string
+	execed := false
+	p := lockedPlan(t, func(*os.File) error { return errors.New("fcntl boom") })
+	reexec(p, func(string, []string, []string) error { execed = true; return errors.New("x") },
+		func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }, func(int) {})
+	if !execed {
+		t.Fatal("exec skipped after a clear failure")
+	}
+	want := "pid lock: hand-off failed (fcntl boom); the new image re-acquires it"
+	found := false
+	for _, l := range logs {
+		found = found || l == want
+	}
+	if !found {
+		t.Fatalf("logs = %v, want %q", logs, want)
+	}
+}
+
+func TestReexec_NoLockClearsNothing(t *testing.T) {
+	called := false
+	p := &reexecPlan{path: "/x", clearCLOEXEC: func(*os.File) error { called = true; return nil }}
+	reexec(p, func(string, []string, []string) error { return errors.New("x") }, func(string, ...any) {}, func(int) {})
+	if called {
+		t.Fatal("cleared close-on-exec with no lock")
+	}
+}
+
 // codex plan review #1: a signal that lands after serveAndWait's watcher
 // has exited sits in sigCh. The last gate before exec stops delivery first
 // (from then on SIGTERM takes its default action and ends the process),

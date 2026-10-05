@@ -11,17 +11,24 @@ import (
 // pidLockFDEnv names the pid-lock fd a restart hands to its new image.
 const pidLockFDEnv = "PDX_PIDLOCK_FD"
 
-// handOffPidLock clears close-on-exec on f (the held pid lock) and returns
-// the env entry that names its fd for the new image. flock locks belong to
+// pidLockEnvEntry is the env entry that names f's fd for the new image. It
+// has no side effect: the fd stays close-on-exec until reexec clears the flag
+// (clearCloseOnExec), so a child forked while the stores close cannot inherit
+// the lock.
+func pidLockEnvEntry(f *os.File) string {
+	return fmt.Sprintf("%s=%d", pidLockFDEnv, f.Fd())
+}
+
+// clearCloseOnExec lets f's fd survive the next exec. flock locks belong to
 // the open file description, which an exec keeps while the fd stays open, so
 // the lock is never free between the old image and the new one — a
-// concurrent `pdx start` cannot take it in that gap.
-func handOffPidLock(f *os.File) (string, error) {
-	fd := f.Fd()
-	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_SETFD, 0); errno != 0 {
-		return "", fmt.Errorf("clear close-on-exec: %w", errno)
+// concurrent `pdx start` cannot take it in that gap. Call it immediately
+// before exec and not earlier.
+func clearCloseOnExec(f *os.File) error {
+	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), syscall.F_SETFD, 0); errno != 0 {
+		return fmt.Errorf("clear close-on-exec: %w", errno)
 	}
-	return fmt.Sprintf("%s=%d", pidLockFDEnv, fd), nil
+	return nil
 }
 
 // adoptPidLock takes over a lock handed off by the previous image. fdStr

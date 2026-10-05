@@ -37,21 +37,51 @@ func getFD(t *testing.T, fd int) uintptr {
 	return r
 }
 
-func TestHandOffPidLock_ClearsCloseOnExecAndNamesFD(t *testing.T) {
+func TestPidLockEnvEntry_NamesFDWithoutTouchingFlags(t *testing.T) {
 	_, fd := rawLockedPidFile(t)
-	f := os.NewFile(uintptr(fd), "pid") // borrowed for the call; no finalizer-visible second owner is closed below
-	entry, err := handOffPidLock(f)
+	f := os.NewFile(uintptr(fd), "pid") // sole owner; its Close releases the fd
+	defer f.Close()
+	if want := pidLockFDEnv + "=" + strconv.Itoa(fd); pidLockEnvEntry(f) != want {
+		t.Fatalf("entry = %q, want %q", pidLockEnvEntry(f), want)
+	}
+	if got := getFD(t, fd); got&syscall.FD_CLOEXEC == 0 {
+		t.Fatal("pidLockEnvEntry cleared close-on-exec: it must be side-effect free")
+	}
+}
+
+func TestClearCloseOnExec_LeavesFlagsZero(t *testing.T) {
+	_, fd := rawLockedPidFile(t)
+	f := os.NewFile(uintptr(fd), "pid") // sole owner
+	defer f.Close()
+	if err := clearCloseOnExec(f); err != nil {
+		t.Fatal(err)
+	}
+	if got := getFD(t, fd); got != 0 {
+		t.Fatalf("F_GETFD = %d, want 0: the fd would not survive exec", got)
+	}
+}
+
+// H2: the lock is held by a different open file description, so adopt's
+// LOCK_EX|LOCK_NB must fail with EWOULDBLOCK; it closes the fd it wrapped
+// and leaves the holder's lock alone.
+func TestAdoptPidLock_RejectsLockHeldByAnotherDescription(t *testing.T) {
+	path, holder := rawLockedPidFile(t)
+	defer syscall.Close(holder)
+	other, err := syscall.Open(path, syscall.O_RDWR, 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := pidLockFDEnv + "=" + strconv.Itoa(fd); entry != want {
-		t.Fatalf("entry = %q, want %q", entry, want)
+	// adoptPidLock owns other from here on, success or not.
+	if f, err := adoptPidLock(strconv.Itoa(other), path, 1); err == nil {
+		f.Close()
+		t.Fatal("adopted a lock held by another open file description")
 	}
-	if got := getFD(t, fd); got&syscall.FD_CLOEXEC != 0 {
-		t.Fatalf("FD_CLOEXEC still set (%d): the fd would not survive exec", got)
+	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(other), syscall.F_GETFD, 0); errno != syscall.EBADF {
+		t.Fatalf("rejected fd still open (errno %v)", errno)
 	}
-	// f is the only owner (its finalizer closes the fd); do not also Close the raw fd.
-	f.Close()
+	if running, _ := isDaemonRunning(path); !running {
+		t.Fatal("holder's lock was lost")
+	}
 }
 
 func TestAdoptPidLock_AdoptsHeldLock(t *testing.T) {
