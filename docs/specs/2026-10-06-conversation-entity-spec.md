@@ -202,7 +202,7 @@ A mode switch changes the owner, not the conversation. So handoff and worker reb
 > **統籌核准的推導（2026-10-06）**
 > - **D8 Dot colours** follow the terminal agent badge: running green (`status-success`), queued yellow (`status-warning`), idle grey (`text-muted`), failed / rejected red (`status-error`), terminated grey. So the list's idle moves from amber to grey, and the header's terminated moves from red to grey.
 > - **D9 Paging:** the live list asks for `include_archived=false`, 500 rows per page, at most 20 pages.
-> - **D10 Exited tab (P2):** entities whose latest stint is exited. When the SPA knows that the session id is running in a terminal on that host (agent records), the row is marked "在終端機中" and offers no rebuild; the daemon's owner check refuses one anyway.
+> - **D10 Exited tab (P2):** entities in no live state, each shown by its latest stint. An entity with any live stint is a worker under §4.2: it is listed live, never here. When the SPA knows that the session id is running in a terminal on that host (agent records), the row is marked "在終端機中" and offers no rebuild; the daemon's owner check refuses one anyway.
 
 ## 10. Rendering (E6) — outline, specified in full before P3
 

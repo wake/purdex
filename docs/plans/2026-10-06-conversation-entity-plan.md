@@ -506,6 +506,7 @@ func TestSessionStartSubscription_NoEventWithoutEnvelope(t *testing.T) {
 	postRootSessionStart(t, m, `{"session_id":"S","cwd":"/w","source":"compact"}`) // compact_ignored
 	postChildSessionStart(t, m, `{"session_id":"S2","cwd":"/w","source":"startup"}`) // has a parent frame
 	postRootPrompt(t, m, `{"session_id":"S","cwd":"/w"}`)                          // not a SessionStart
+	postRootPrompt(t, m, `{"session_id":"S","cwd":"/w","source":"resume"}`)        // a non-SessionStart that carries source
 
 	select {
 	case ev := <-got:
@@ -617,7 +618,10 @@ Remove Task 2's stub. In `handler.go`, right after `attachProvenance(&normalized
 	// Conversation entity (spec §4.3, D3): a granted SessionStart is the
 	// moment "S is in a terminal" becomes true; subscribers (the nex module's
 	// manual-resume handler) run off the hook path.
-	if frameMeta.Provenance != nil && frameMeta.Provenance.SessionID != "" {
+	// The lifecycle check is redundant today (frame_ops.go:1116 grants an
+	// envelope only on SessionStart) and kept on purpose: Q1 must never fire
+	// on any other event, whatever a later change does to the grant site.
+	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil && frameMeta.Provenance.SessionID != "" {
 		m.sessionStarts.publish(sessionStartEventFrom(req, *frameMeta.Provenance))
 	}
 ```
@@ -663,6 +667,7 @@ type nexService interface {
 	Interrupt(ctx context.Context, req execution.InterruptRequest) (execution.InterruptResult, error)
 	Archive(ctx context.Context, req execution.ArchiveRequest) error
 	Terminate(ctx context.Context, req execution.TerminateRequest) error
+	RenewLease(ctx context.Context, executionID, leaseID, principalID string) (store.Lease, error) // execution/lease.go:78
 }
 type nexStore interface {
 	Get(ctx context.Context, id string) (store.Execution, error)
@@ -684,6 +689,7 @@ func (m *Module) liveWorkersFor(parent context.Context, sid string) ([]store.Exe
 
 - Fakes (test-only):
   - `fakeNexService` gains `Terminate` with `terminateCalls []execution.TerminateRequest`, `terminateErr error` and `onTerminate func(execution.TerminateRequest)`. `onTerminate` lets a test flip the fake store's row to `terminated`.
+  - `fakeNexService` gains `RenewLease` with `renewCalls []struct{ExecutionID, LeaseID, PrincipalID string}` and `renewErr error` (Task 5 consumes it).
   - `fakeNexStore` gains `listRows []store.Execution` and `listErr error`. Its `List` honours `IncludeArchived`, `Cursor` (id >) and `Limit`, returns rows in id order, and sets `NextCursor` to the last returned id only when more remain. Also add `listCalls int`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -872,6 +878,11 @@ func noRelease() {}
 func (m *Module) isPdxPrincipal(p string) bool // p == "pdx:"+HostID || prefix "pdx:"+HostID+"/"
 // takeControl: caller lease → acquired lease → borrowed pdx holder's lease; non-pdx holder → 409 held_by {principal}.
 func (m *Module) takeControl(parent context.Context, execID, callerLease, principal string) (control, *handoffError)
+// renewControl extends ctl's lease to a full TTL right before a transfer's resume, so the send fence (D5) outlives
+// create + resume (≤ rollbackWait 15 s, far under the 120 s TTL). A lease that expired or changed hands since
+// takeControl (ErrLeaseExpired / ErrLeaseMismatch / ErrLeaseRequired) is re-taken once with takeControl(…, "", principal);
+// the old ctl is released first. Returns the control to use from here on.
+func (m *Module) renewControl(parent context.Context, execID string, ctl control, principal string) (control, *handoffError)
 var nowMs = func() int64 { return time.Now().UnixMilli() } // test seam
 
 // exit.go
@@ -891,7 +902,7 @@ func (m *Module) terminateExecution(parent context.Context, req execution.Termin
 
   | Row | Terminate | Archive | Result |
   |---|---|---|---|
-  | `running` | under control | after terminate | terminate error → that error; no archive |
+  | `running` | under control | always attempted (D4: a failed terminate does not block it) | Nexen refuses to archive a row that is still running; then the **terminate** error is returned. A turn that ended meanwhile archives, and the row counts as exited |
   | `idle` / `queued` | under control | always (blocks writes even if terminate failed) | exited if either worked |
   | `failed` / `rejected` | — | yes | |
   | `terminated`, unarchived | — | yes (the D16 retry) | |
@@ -957,6 +968,24 @@ func TestTakeControl(t *testing.T) {
 			t.Fatalf("herr = %+v", herr)
 		}
 	})
+	t.Run("renewControl extends the lease under its holder", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		ctl := control{LeaseID: "L-b", PrincipalID: pdxOther, release: noRelease}
+		got, herr := env.m.renewControl(context.Background(), "E1", ctl, "pdx:"+testHostID)
+		if herr != nil || got.LeaseID != "L-b" || len(env.svc.renewCalls) != 1 || env.svc.renewCalls[0].PrincipalID != pdxOther {
+			t.Fatalf("%+v %v %+v", got, herr, env.svc.renewCalls)
+		}
+	})
+	t.Run("renewControl re-takes an expired lease once", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		env.svc.renewErr = store.ErrLeaseExpired
+		env.svc.acquireLeaseResult = store.Lease{ID: "L-new"}
+		released := false
+		got, herr := env.m.renewControl(context.Background(), "E1", control{LeaseID: "L-old", PrincipalID: "pdx:" + testHostID, release: func() { released = true }}, "pdx:"+testHostID)
+		if herr != nil || got.LeaseID != "L-new" || !released {
+			t.Fatalf("%+v %v released=%v", got, herr, released)
+		}
+	})
 	t.Run("a pdx principal of another host is not ours", func(t *testing.T) {
 		env := newHandoffEnv(t)
 		env.svc.acquireLeaseErr = store.ErrLeaseHeld
@@ -1017,15 +1046,24 @@ func TestExitWorker_Failures(t *testing.T) {
 			t.Fatalf("out=%+v herr=%+v", out, herr)
 		}
 	})
-	t.Run("running: terminate fails → error, no archive", func(t *testing.T) {
+	t.Run("running: terminate fails, archive still attempted; refused while running → the terminate error", func(t *testing.T) {
 		env := newHandoffEnv(t)
 		env.svc.terminateErr = execution.ErrInterruptUnconfirmed
+		env.svc.archiveErr = execution.ErrArchiveWhileRunning
 		_, herr := env.m.exitWorker(context.Background(), store.Execution{ID: "E", State: store.StateRunning}, nil, "pdx:"+testHostID)
 		if herr == nil || herr.status != http.StatusGatewayTimeout || herr.code != "interrupt_unconfirmed" {
 			t.Fatalf("herr = %+v", herr)
 		}
-		if len(env.svc.ArchiveCalls()) != 0 {
-			t.Fatal("archived a running execution")
+		if len(env.svc.ArchiveCalls()) != 1 {
+			t.Fatal("D4: a failed terminate must not skip the archive attempt")
+		}
+	})
+	t.Run("running: terminate fails but the turn ended meanwhile → archived, exited", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		env.svc.terminateErr = execution.ErrTerminateContended
+		out, herr := env.m.exitWorker(context.Background(), store.Execution{ID: "E", State: store.StateRunning}, nil, "pdx:"+testHostID)
+		if herr != nil || !out.Exited() || !out.Archived || out.Terminated {
+			t.Fatalf("out=%+v herr=%+v", out, herr)
 		}
 	})
 	t.Run("terminated but archive fails → still exited", func(t *testing.T) {
@@ -1141,6 +1179,29 @@ func (m *Module) takeControl(parent context.Context, execID, callerLease, princi
 	}
 	return control{}, &handoffError{http.StatusConflict, "held_by", "execution lease kept changing hands", nil}
 }
+
+func (m *Module) renewControl(parent context.Context, execID string, ctl control, principal string) (control, *handoffError) {
+	ctx, cancel := detachedContext(parent, m.engineOpTimeout)
+	_, err := m.sys.service.RenewLease(ctx, execID, ctl.LeaseID, ctl.PrincipalID)
+	cancel()
+	if err == nil {
+		return ctl, nil
+	}
+	if !errors.Is(err, store.ErrLeaseExpired) && !errors.Is(err, store.ErrLeaseMismatch) && !errors.Is(err, store.ErrLeaseRequired) {
+		return ctl, &handoffError{http.StatusInternalServerError, "lease_error", "renewing lease: " + err.Error(), nil}
+	}
+	ctl.release()
+	return m.takeControl(parent, execID, "", principal)
+}
+
+// ctlPtr hands exitWorker the transfer's control, or nil when the transfer
+// held none (an ended row): exitWorker then takes its own if it needs one.
+func ctlPtr(c control) *control {
+	if c.LeaseID == "" {
+		return nil
+	}
+	return &c
+}
 ```
 
 ```go
@@ -1155,14 +1216,16 @@ func needsTerminate(s store.State) bool {
 
 func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *control, principal string) (exitOutcome, *handoffError) {
 	out := exitOutcome{Terminated: exec.State == store.StateTerminated, Archived: exec.ArchivedAt != 0, State: exec.State}
+	var termErr *handoffError // a failed terminate; reported only if the archive cannot stand in for it
 	if needsTerminate(exec.State) {
 		c := ctl
 		if c == nil {
 			own, herr := m.takeControl(parent, exec.ID, "", principal)
 			if herr != nil {
-				if herr.code == "held_by" || exec.State == store.StateRunning {
-					return out, herr
+				if herr.code == "held_by" {
+					return out, herr // D4: a non-pdx holder is never overridden — nothing changes
 				}
+				termErr = herr
 				m.logf("nex: exit %s: no control (%s); archiving only", exec.ID, herr.msg)
 			} else {
 				defer own.release()
@@ -1180,10 +1243,9 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 					out.Terminated = fresh.State == store.StateTerminated
 					out.Archived = out.Archived || fresh.ArchivedAt != 0
 				}
-			case exec.State == store.StateRunning:
-				return out, terminateError(err)
 			default:
-				m.logf("nex: exit %s: terminate: %v; archiving anyway", exec.ID, err)
+				termErr = terminateError(err)
+				m.logf("nex: exit %s: terminate: %v; archiving anyway (D4)", exec.ID, err)
 			}
 		}
 	}
@@ -1194,6 +1256,10 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 			out.Archived = true
 		case out.Terminated:
 			m.logf("nex: exit %s: archive after terminate: %v (exited; retried on the next exit)", exec.ID, err)
+		case termErr != nil:
+			// Typically archive_while_running: the turn the terminate could not
+			// stop is still running. The terminate's reason is the useful one.
+			return out, termErr
 		default:
 			return out, &handoffError{http.StatusInternalServerError, "archive_failed", "archiving execution: " + err.Error(),
 				map[string]any{"execution_id": exec.ID}}
@@ -1547,7 +1613,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Consumes: `takeControl`, `exitWorker`, `checkOwners`, `sidLockKey`, `isLiveExecution`.
 - Produces:
   - `func (m *Module) settleForResume(parent context.Context, exec store.Execution, ctl control) (store.Execution, string, *handoffError)`, which interrupts a running execution under `ctl`, re-reads it, and returns `(exec, sid)`. Error codes are unchanged except that `held_by` / `lease_error` move to `takeControl`.
-  - Take-to-terminal 200 → `{session, session_id, archived, exited}`.
+  - Take-to-terminal 200 → `{session, session_id, archived, exited, exit_error?}`. `exit_error` is present only when the resume succeeded but the worker could not exit (terminate and archive both failed).
   - New 409s: `no_session_id` (now before any lock or preflight), `transfer_in_progress`, `session_owned`.
   - `execution_archived` is **no longer** returned: an exited execution is accepted (D6).
   - A resume failure detail no longer carries `unarchived`; it carries `exited: false`.
@@ -1561,7 +1627,7 @@ The new step order, which the handler comment must also state:
 6. `sid:<S>` lock (409 `transfer_in_progress`);
 7. `checkOwners(sid, allowExec = exec.ID if live else "", "")`;
 8. name / cwd preflights;
-9. if the row is live and `running` or `idle`: `takeControl`, deferring `release`, then `settleForResume`;
+9. if the row is live and `running` or `idle`: `takeControl`, deferring `release`, then `settleForResume`, then `renewControl` (a full TTL for the fence);
 10. create the session;
 11. resume (on failure kill the session; nothing is exited);
 12. if the row was live, `exitWorker(exec, &ctl or nil)`;
@@ -1795,8 +1861,14 @@ Take-to-terminal, from the row onward (replacing today's steps 3–8):
 			herr.write(w)
 			return
 		}
-		defer ctl.release()
+		defer func() { ctl.release() }() // ctl may be replaced by renewControl below
 		if exec, _, herr = m.settleForResume(parent, exec, ctl); herr != nil {
+			herr.write(w)
+			return
+		}
+		// A full TTL from here: the fence must outlive create + resume, even
+		// when the lease was borrowed with seconds left (plan review #2).
+		if ctl, herr = m.renewControl(parent, execID, ctl, principal); herr != nil {
 			herr.write(w)
 			return
 		}
@@ -1818,28 +1890,81 @@ Take-to-terminal, from the row onward (replacing today's steps 3–8):
 	}
 
 	// Step 8 (§4.3): the terminal owns S now; the worker it was exits.
-	exited, archived := !wasLive, exec.ArchivedAt != 0
+	// The resume succeeded, so the answer is 200 either way: the SPA must
+	// swap the pane to the terminal that now runs S. A worker that could not
+	// exit (terminate AND archive failed) is reported as exited:false plus
+	// exit_error, and the SPA tells the user to exit it by hand (Task 16).
+	resp := map[string]any{"session": info, "session_id": sid, "archived": exec.ArchivedAt != 0, "exited": !wasLive}
 	if wasLive {
-		var cp *control
-		if ctl.LeaseID != "" {
-			cp = &ctl
-		}
-		out, herr := m.exitWorker(parent, exec, cp, principal)
+		out, herr := m.exitWorker(parent, exec, ctlPtr(ctl), principal)
 		if herr != nil {
 			m.logf("nex: take-to-terminal %s: exiting the worker after the resume: %s (%s)", execID, herr.code, herr.msg)
+			resp["exit_error"] = herr.code
 		}
-		exited, archived = out.Exited(), out.Archived || archived
+		resp["exited"], resp["archived"] = out.Exited(), out.Archived || exec.ArchivedAt != 0
 	}
-	m.logf("nex: take-to-terminal %s → session %s/%s (session %s, exited=%v)", execID, info.Code, info.Name, sid, exited)
-	writeJSON(w, http.StatusOK, map[string]any{"session": info, "session_id": sid, "archived": archived, "exited": exited})
+	m.logf("nex: take-to-terminal %s → session %s/%s (session %s, exited=%v)", execID, info.Code, info.Name, sid, resp["exited"])
+	writeJSON(w, http.StatusOK, resp)
 ```
 
 Rewrite the file comment at the top to the new order (resume first, exit after; the held lease plus the locks are the fence; exited / rejected accepted). Remove the `execution_archived` refusal and the `archive_failed` step. Keep the session-create error handling exactly as it is.
 
+**Take-back's call site in this task (interim; Task 9 replaces it).** The new `settleForResume` signature breaks `handleNexTakeback`, so adapt it here in a way that keeps today's observable behaviour byte for byte: a lease only when the row is `running`, released on the way out, and no renew:
+
+```go
+	ctl := control{release: noRelease}
+	if exec.State == store.StateRunning {
+		var herr *handoffError
+		if ctl, herr = m.takeControl(parent, execID, body.LeaseID, principal); herr != nil {
+			herr.write(w)
+			return
+		}
+		defer ctl.release()
+	}
+	exec, sid, herr := m.settleForResume(parent, exec, ctl)
+```
+
+Existing `takeback_test.go` cases must pass **unchanged** in this commit. That is the proof the interim adaptation altered nothing. Two expected differences, both in the lease path:
+- the `held_by` detail now comes from `takeControl` (`principal` is the re-read holder);
+- a `running` row whose lease another **pdx** client holds is now borrowed instead of refused (D4/D5).
+
+Adjust only assertions that pinned exactly those.
+
+Also add these two take-to-terminal cases (plan review #2, #5):
+
+```go
+func TestTakeToTerminal_RenewsTheFenceBeforeTheResume(t *testing.T) {
+	env := newTTEnv(t)
+	env.store.script(ttExec(store.StateIdle))
+	env.svc.acquireLeaseResult = store.Lease{ID: "L-t"}
+	env.reviveCCAfterKeys()
+	rec := env.postTakeToTerminal(t, "E1", `{"session_name":"proj-1","resume_command":"claude --resume {id}"}`)
+	if rec.Code != 200 || len(env.svc.renewCalls) != 1 || env.svc.renewCalls[0].LeaseID != "L-t" {
+		t.Fatalf("%d renew=%+v", rec.Code, env.svc.renewCalls)
+	}
+	if env.svc.renewAt().After(env.keysSentAt()) {
+		t.Fatal("the lease must be renewed before the resume keys go out")
+	}
+}
+
+func TestTakeToTerminal_ResumeOKButExitFails_Reports200WithExitError(t *testing.T) {
+	env := newTTEnv(t)
+	env.store.script(ttExec(store.StateIdle))
+	env.svc.terminateErr = errors.New("engine wedged")
+	env.svc.archiveErr = errors.New("db locked")
+	env.reviveCCAfterKeys()
+	rec := env.postTakeToTerminal(t, "E1", `{"session_name":"proj-1","resume_command":"claude --resume {id}"}`)
+	body := decode(t, rec)
+	if rec.Code != 200 || body["exited"] != false || body["exit_error"] != "terminate_failed" || body["session"] == nil {
+		t.Fatalf("%d %v", rec.Code, body)
+	}
+}
+```
+
 - [ ] **Step 4: Run the tests**
 
 Run: `go test ./internal/module/nex/`
-Expected: PASS (take-back still compiles once Task 9 lands; if Task 9 is not done yet, adapt the take-back's `settleForResume` call minimally here so the package builds: `takeControl` + `defer release` before the call).
+Expected: PASS, with `takeback_test.go` untouched apart from the noted `held_by` detail.
 
 - [ ] **Step 5: Commit**
 
@@ -1858,9 +1983,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: as Task 8.
 - Produces:
-  - Take-back 200 → `{session_id, archived, exited}`.
+  - Take-back 200 → `{session_id, archived, exited, exit_error?}` (same meaning as take-to-terminal).
   - New 409s: `no_session_id` (before the locks), `transfer_in_progress`, `session_owned`, `execution_archived` (an execution that is no longer live; the SPA never offers take-back for one).
-  - The order after `boundToSession`: `exec:<id>` lock → `sid:<S>` lock → not live → 409 `execution_archived` → `checkOwners(sid, exec.ID, "")` → `takeControl` (if running or idle; defer release) → `settleForResume` → last `cc_already_running` look → resume → `exitWorker`.
+  - The order after `boundToSession`: `exec:<id>` lock → `sid:<S>` lock → not live → 409 `execution_archived` → `checkOwners(sid, exec.ID, "")` → `takeControl` (if running or idle; defer release) → `settleForResume` → `renewControl` → last `cc_already_running` look → resume → `exitWorker` (a failure → 200 with `exited:false`, `exit_error`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1925,14 +2050,16 @@ Expected: FAIL.
 
 ```go
 	out, herr := m.exitWorker(parent, exec, ctlPtr(ctl), principal)
+	resp := map[string]any{"session_id": sid, "archived": out.Archived, "exited": out.Exited()}
 	if herr != nil {
 		m.logf("nex: takeback %s: exiting %s after the resume: %s (%s)", code, execID, herr.code, herr.msg)
+		resp["exit_error"] = herr.code
 	}
 	m.logf("nex: takeback %s ← execution %s (session %s, exited=%v)", code, execID, sid, out.Exited())
-	writeJSON(w, http.StatusOK, map[string]any{"session_id": sid, "archived": out.Archived, "exited": out.Exited()})
+	writeJSON(w, http.StatusOK, resp)
 ```
 
-with a helper `func ctlPtr(c control) *control { if c.LeaseID == "" { return nil }; return &c }` in `control.go`. Use it in Task 8 too, replacing the inline `cp`.
+(`ctlPtr` and `renewControl` come from Task 5.) Add a take-back case mirroring `TestTakeToTerminal_ResumeOKButExitFails_Reports200WithExitError`, and one asserting that `renewCalls` happens before the keys.
 
 - [ ] **Step 4: Run the tests**
 
@@ -1942,7 +2069,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit --only internal/module/nex/takeback.go internal/module/nex/takeback_test.go internal/module/nex/control.go internal/module/nex/take_to_terminal.go -m "feat(daemon): take-back exits the worker after the terminal resumes
+git commit --only internal/module/nex/takeback.go internal/module/nex/takeback_test.go -m "feat(daemon): take-back exits the worker after the terminal resumes
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -2063,6 +2190,9 @@ In the rejection branch:
 		}
 		rolled := m.rollbackHandoff(sess, expected, body.RollbackCommand, owner.SessionID, target)
 		extra["rolled_back"] = rolled
+		// r.Context() is safe here: every engine call wraps it in detachedContext
+		// (context.WithoutCancel, handoff.go:42-44), so a client that hangs up
+		// cannot cut this cleanup short.
 		// D7: rolled back → the terminal owns S again, so the rejected row
 		// exits (one state). Not rolled back → it stays as the start-failed
 		// worker the SPA shows in the pane.
@@ -2184,6 +2314,21 @@ func TestManualResume_SkipsAWorkerBeingMovedAndReportsOnlySuccesses(t *testing.T
 	}
 }
 
+func TestManualResume_TruncatedScanStillExitsWhatItFound(t *testing.T) {
+	env := newHandoffEnv(t)
+	liveTerminal(env, true)
+	rows := make([]store.Execution, ownerScanPageSize*ownerScanMaxPages+1)
+	for i := range rows {
+		rows[i] = row(fmt.Sprintf("%06d", i), "terminated", false, "OTHER", "", int64(i))
+	}
+	rows[0] = row("000000", "idle", false, "S", "", 0) // on page 1
+	env.store.listRows = rows
+	env.m.onSessionStart(ev("resume"))
+	if len(env.svc.ArchiveCalls()) != 1 {
+		t.Fatal("the worker found before the cap must still exit")
+	}
+}
+
 func TestManualResume_StartSubscribesStopUnsubscribes(t *testing.T) {
 	env := newHandoffEnv(t)
 	if err := env.m.Start(context.Background()); err != nil {
@@ -2253,6 +2398,10 @@ func (m *Module) onSessionStart(ev agent.SessionStartEvent) {
 	}
 	workers, err := m.liveWorkersFor(ctx, ev.SessionID)
 	if err != nil {
+		// Unlike an owner check (which refuses a transfer on a partial scan),
+		// the terminal has ALREADY taken S over here: exiting the workers
+		// found is strictly better than exiting none. Logged loudly; the
+		// 10 000-row cap is far beyond any real host.
 		m.logf("nex: manual resume %s: worker scan: %v (acting on %d found)", ev.SessionID, err, len(workers))
 	}
 	principal := m.internalPrincipal()
@@ -2832,6 +2981,8 @@ In `ExecutionView`:
 
 Remove `handleTerminate` from `useExecutionActions` and its test.
 
+Also in `ExecutionView.runTakeBack` (plan review #5): when `takeBack` / `takeToTerminal` resolves with `result.exited === false`, call `useUndoToast.getState().show(t('worker.exit.after_transfer_failed'), undefined, undefined, { persistent: true })`. The terminal took over, but the worker is still live. Add the copy to both locales (zh-TW: `worker.exit.after_transfer_failed` 已在終端機接續，但 worker 未能退出，請到清單手動退出). Add `exited?: boolean; exit_error?: string` to `NexTakeToTerminalResult` and `NexTakebackResult` in `handoff-api.ts`. Test: a mocked `takeToTerminal` resolving `{ result: { …, exited: false }, swapped: true }` shows the notice; `exited: true` shows none.
+
 - [ ] **Step 4: Run the tests**
 
 Run: `npx vitest run src/components/execution src/hooks && npx tsc --noEmit -p tsconfig.app.json`
@@ -2840,7 +2991,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit --only spa/src/components/execution/ExecutionHeader.tsx spa/src/components/execution/ExecutionHeader.test.tsx spa/src/components/execution/ExecutionView.tsx spa/src/components/execution/ExecutionView.test.tsx spa/src/hooks/useExecutionActions.ts spa/src/hooks/useExecutionActions.test.ts -m "feat(spa): worker pane header offers 退出 instead of terminate
+git commit --only spa/src/components/execution/ExecutionHeader.tsx spa/src/components/execution/ExecutionHeader.test.tsx spa/src/components/execution/ExecutionView.tsx spa/src/components/execution/ExecutionView.test.tsx spa/src/hooks/useExecutionActions.ts spa/src/hooks/useExecutionActions.test.ts spa/src/lib/nex/handoff-api.ts spa/src/locales/en.json spa/src/locales/zh-TW.json -m "feat(spa): worker pane header offers 退出 instead of terminate
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -2919,6 +3070,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `spa/src/hooks/useMultiHostEventWs.ts:195-215` (handle `nex-worker-exited`)
+- Create: `spa/src/lib/nex/worker-label.ts` + `spa/src/lib/nex/worker-label.test.ts` (`workerLabel(row)`: `session_title?.text` → first line of brief → id)
 - Create: `spa/src/lib/nex/worker-exited-event.ts` (parse + name lookup; keeps the hook thin)
 - Create: `spa/src/lib/nex/worker-exited-event.test.ts`
 - Test: `spa/src/hooks/useMultiHostEventWs.test.ts` (append, or the hook's existing test file)
@@ -2929,7 +3081,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```ts
 export interface WorkerExitedEvent { executionId: string; sessionId: string; reason: string; tmuxSession: string }
 export function parseWorkerExited(value: unknown): WorkerExitedEvent | null // JSON text or object; requires string execution_id
-/** session_title, else the first line of brief, from the host's list store row; else the tmux session name. */
+/** session_title.text (types.ts:58 — an object `{text, source}`, never a string), else the first line of brief, from the host's list store row; else the tmux session name. */
 export function workerExitedName(hostId: string, ev: WorkerExitedEvent): string
 export function handleWorkerExited(hostId: string, value: unknown): void // toast worker.exit.manual_resume + refetch(hostId)
 ```
@@ -2946,7 +3098,7 @@ describe('nex-worker-exited', () => {
     expect(parseWorkerExited('{"session_id":"S"}')).toBeNull()
   })
   it('names the worker by its list row, else the tmux session', () => {
-    useExecutionListStore.setState({ byHost: { h1: listCacheOf([rowOf({ id: 'E1', session_title: '修 bug', brief: 'x' })]) } })
+    useExecutionListStore.setState({ byHost: { h1: listCacheOf([rowOf({ id: 'E1', session_title: { text: '修 bug', source: 'ai' }, brief: 'x' })]) } })
     expect(workerExitedName('h1', ev('E1'))).toBe('修 bug')
     expect(workerExitedName('h1', ev('E9'))).toBe('proj-2')
   })
@@ -2965,7 +3117,7 @@ The test locale is zh-TW only if `test-setup.ts` makes it so; otherwise assert a
 Run: `npx vitest run src/lib/nex/worker-exited-event.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement.** In the hook, before the `handoff`/`relay` fall-through comment, add: `if (event.type === 'nex-worker-exited') { handleWorkerExited(hostId, event.value); return }`. Check whether `session_title` exists on `ExecutionSummary` (`types.ts`); if not, read it as `(row as { session_title?: unknown }).session_title` with a string guard.
+- [ ] **Step 3: Implement.** In the hook, before the `handoff`/`relay` fall-through comment, add: `if (event.type === 'nex-worker-exited') { handleWorkerExited(hostId, event.value); return }`. `session_title` is `{ text: string; source: string } | undefined` (`types.ts:58`); read `row.session_title?.text`. Put the label rule in one helper, `workerLabel(row): string` (session_title.text → first line of brief → id) in `lib/nex/worker-label.ts`, with its own test. Task 26 reuses it.
 
 - [ ] **Step 4: Run the tests**
 
@@ -2975,7 +3127,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit --only spa/src/lib/nex/worker-exited-event.ts spa/src/lib/nex/worker-exited-event.test.ts spa/src/hooks/useMultiHostEventWs.ts spa/src/hooks/useMultiHostEventWs.test.ts -m "feat(spa): toast when a terminal resume exited a worker
+git commit --only spa/src/lib/nex/worker-label.ts spa/src/lib/nex/worker-label.test.ts spa/src/lib/nex/worker-exited-event.ts spa/src/lib/nex/worker-exited-event.test.ts spa/src/hooks/useMultiHostEventWs.ts spa/src/hooks/useMultiHostEventWs.test.ts -m "feat(spa): toast when a terminal resume exited a worker
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -3066,6 +3218,15 @@ func TestWorkerRebuild(t *testing.T) {
 		env = newHandoffEnv(t)
 		assertErrorCode(t, post(env, `{"cwd":"/w"}`), 400, "missing_session_id")
 		assertErrorCode(t, post(env, `{"session_id":"S"}`), 400, "missing_cwd")
+
+		// The replaced row is mid-exit / mid-transfer elsewhere: refused before any exit or delegate.
+		env = newHandoffEnv(t)
+		env.store.script(store.Execution{ID: "F1", State: store.StateFailed, SessionID: "S"})
+		env.m.locks.TryLock(takeToTerminalLockKey("F1"))
+		assertErrorCode(t, post(env, `{"session_id":"S","cwd":"/w","replace_execution_id":"F1"}`), 409, "transfer_in_progress")
+		if len(env.svc.ArchiveCalls())+len(env.svc.delegateCalls) != 0 {
+			t.Fatal("no exit and no delegate while the replaced row is locked")
+		}
 	})
 	t.Run("rejected is data", func(t *testing.T) {
 		env := newHandoffEnv(t)
@@ -3612,9 +3773,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ```ts
 // exited-entities.ts
-/** Entities with no live stint, each represented by its latest stint, newest updated_at first. */
+/** Entities in no live state (spec §4.2: any live stint means the entity IS a worker — it is listed live, never as exited), each represented by its latest stint, newest updated_at first. */
 export function exitedEntities(items: readonly ExecutionSummary[]): ExecutionSummary[]
-export function matchesExitedQuery(row: ExecutionSummary, q: string): boolean // case-insensitive over title/brief first line/cwd/session id
+export function matchesExitedQuery(row: ExecutionSummary, q: string): boolean // case-insensitive over workerLabel(row), cwd and session id
 // useExecutionHistory.ts
 export function useExecutionHistory(hostId: string): { items: ExecutionSummary[]; phase: 'loading' | 'ready' | 'error'; error: string | null; truncated: boolean; refetch: () => void }
 // refetches on mount, on hostId change, and whenever useExecutionListStore.byHost[hostId].refreshRevision changes
@@ -3625,7 +3786,7 @@ export function liveTerminalSessionIds(hostId: string): Set<string>
 
 - `WorkerExitedTab({ hostId })`:
   - a search input (`worker-exited-search`), then rows (`worker-exited-row`);
-  - each row shows the label (session_title, else the first line of brief, else id), the cwd basename and the relative age;
+  - each row shows the label (`workerLabel(row)` from Task 18), the cwd basename and the relative age;
   - a row whose session id is in `liveTerminalSessionIds` gets the badge `worker-exited-in-terminal` ("在終端機中") and **no** rebuild button;
   - otherwise the row has a `worker-exited-rebuild` button that opens `openWorkerTab({ kind: 'execution', executionId, host: hostId })`. The tab shows the exited screen, whose choices do the rest.
   - plus empty, loading and error states.
@@ -3644,6 +3805,13 @@ it('lists entities with no live stint, latest stint each, newest first', () => {
     r({ id: 'c1', session_id: 'C', state: 'terminated', created_at: 5, updated_at: 50 }), // terminated, unarchived = exited (D16)
   ]
   expect(exitedEntities(rows).map((x) => x.id)).toEqual(['c1', 'a2'])
+})
+it('an entity with an older live stint and a newer exited one is live, not exited (§4.2)', () => {
+  const rows = [
+    r({ id: 'o', session_id: 'S', state: 'idle', created_at: 1, updated_at: 1 }),
+    r({ id: 'n', session_id: 'S', state: 'terminated', archived: true, created_at: 2, updated_at: 2 }),
+  ]
+  expect(exitedEntities(rows)).toEqual([])
 })
 it('search matches title, brief, cwd and session id', () => {
   const row = r({ id: 'x', session_id: 'abc-123', cwd: '/Users/w/proj', brief: '修 bug\n細節' })
@@ -3737,4 +3905,19 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 | D15 | this section |
 | D16 | 5 |
 
-**Type consistency, checked across tasks:** `isLiveExecution` / `isLiveRow`, `entityKeyOf`, `sidLockKey`, `takeToTerminalLockKey`, `control` / `ctlPtr`, `exitOutcome.Exited()`, `TerminalSessions.LiveBySessionID` / `SubscribeSessionStart`, `SessionStartEvent`, `nexExitWorker`, `exitWorker`, `nexWorkerRebuild`, `rebuildAsWorker`, `workerEndedKind`, `RebuildMode`, `registerWorkerSettingsTab`.
+**Type consistency, checked across tasks:** `isLiveExecution` / `isLiveRow`, `entityKeyOf`, `sidLockKey`, `takeToTerminalLockKey`, `control` / `ctlPtr`, `exitOutcome.Exited()`, `TerminalSessions.LiveBySessionID` / `SubscribeSessionStart`, `SessionStartEvent`, `nexExitWorker`, `exitWorker`, `nexWorkerRebuild`, `rebuildAsWorker`, `workerEndedKind`, `RebuildMode`, `registerWorkerSettingsTab`, `renewControl`, `workerLabel`.
+
+## Plan review record (codex `task-muvrd2bb-vampfx`, gpt-5.6-sol, with the spec)
+
+| # | Finding (severity, confidence) | Disposition |
+|---|---|---|
+| 1 | `exitWorker` skipped the archive when a running row's terminate failed, against D4 (critical, 0.99) | **Fixed** (Task 5): the archive is always attempted. A refusal while running returns the terminate error; a turn that ended meanwhile archives. New tests. |
+| 2 | The send fence could lapse: a borrowed or own lease was never renewed across create + resume (critical, 0.97) | **Fixed**: `RenewLease` is added to the seam (Task 4) and `renewControl` to Task 5. Tasks 8 and 9 renew to a full TTL right before the resume (the resume waits ≤ 15 s against a 120 s TTL). An expired or changed lease is re-taken once. New tests assert renew-before-keys. |
+| 3 | The SessionStart publish did not check the lifecycle (important, 0.98) | **Fixed** (Task 3): an explicit `LifecycleSessionStart` guard, plus a test with a non-SessionStart payload that carries `source:"resume"`. Today the provenance grant already implies SessionStart (`frame_ops.go:1116`); the guard pins it. |
+| 4 | Q1 acts on a truncated worker scan (important, 0.96) | **Kept, documented, tested** (Task 11). The owner check fails closed because it gates a transfer that has not happened. Q1 runs after the terminal already took S, so exiting the workers found is strictly better than exiting none. The cap is 10 000 rows. |
+| 5 | Take-to-terminal and take-back answered 200 even when the worker failed to exit, untested (important, 0.94) | **Fixed**: 200 stays, because the terminal does run S and the SPA must swap the pane. The response carries `exited:false` and `exit_error`, and the SPA shows a persistent notice (Task 16). New tests in Tasks 8 and 9. |
+| 6 | Task 10's cleanup used `r.Context()` (important, 0.92) | **Rejected with evidence**: every engine call wraps the context in `detachedContext`, which is `context.WithTimeout(context.WithoutCancel(parent), d)` (`internal/module/nex/handoff.go:42-44`), so a disconnect cannot cancel it. A comment was added in Task 10. |
+| 7 | Exited was defined as "no live stint" rather than "latest stint exited" (important, 0.95) | **Rejected with evidence**: spec §4.2 makes an entity with any live execution a worker, and the live list shows it. Listing it as exited too would show one entity in two states (E2). The D10 wording in the spec was clarified, and a Task 26 test pins the "older live + newer exited" case. |
+| 8 | `session_title` is `{text, source}`, not a string (important, 0.99) | **Fixed**: `workerLabel(row)` in Task 18, reused by Task 26. Tests use the object shape. |
+| 9 | Task 19 lacked a replace-lock refusal test (important, 0.91) | **Fixed**: the replaced row's `exec:` lock held → 409, with no exit and no delegate. Every creator of a worker for S that goes through Purdex holds `sid:<S>`; that race is covered by the sid-lock test. |
+| 10 | The Task 8 / Task 9 boundary left take-back's interim behaviour unspecified (minor, 0.98) | **Fixed**: Task 8 specifies the interim take-back call site, which keeps today's behaviour. The existing take-back tests must pass unchanged except two named lease-path assertions. |
