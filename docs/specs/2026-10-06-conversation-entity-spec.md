@@ -225,6 +225,17 @@ The worker option is offered only when the host's Nexen is ready and a session i
     2. the `execution.delegated` measurement;
     3. the legacy scan.
   - So a `start_idle` execution never needs the legacy full-file scan.
+
+  > **統籌核准的推導（2026-10-06）D19 — supersedes the order above.**
+  >
+  > `Service.Prelude` resolves the boundary in this order:
+  > 1. the `execution.delegated` measurement;
+  > 2. the first `execution.running` with `turn_idx == 1`;
+  > 3. the legacy scan.
+  >
+  > Turn-1 launch keeps measuring, with no special case. A delegate-time measurement that failed (timeout or unreadable) is filled in by turn 1 instead of falling back to the full-file scan.
+  >
+  > Contract wording: "the boundary is the first successful measurement (delegated before turn 1); once set it never moves." This removes the conflict with capability-matrix :915 that the original order had: a later turn-1 measurement would have overridden the delegated one whenever the transcript grew in between.
 - **The first `send` creates turn idx 1** (`input_kind` `message`). Everything turn-1 applies from there: resume, measurement, fatal on a missing transcript → `failed`, reconcile.
 - **Lease.** `send` still needs the control lease. A consumer's flow is delegate (`start_idle`) → attach (control) → send.
 - **Capability:** `capabilities.delegate.start_idle: true`.
@@ -313,6 +324,13 @@ Unchanged: the **prelude section** (transcript up to this stint's boundary) abov
 - **Worker lines** (`entrypoint` starting `sdk-`) at offset `o` belong to the stint with the **largest `b(e) ≤ o`** among the earlier stints (not the current one).
 - **Terminal lines** (`cli`) belong to no stint.
 - No match (an execution Purdex cannot list) means a plain transcript segment.
+
+> **統籌核准的推導（2026-10-06）D20 — where the offset comes from.**
+> - Each prelude item carries an integer `offset`: the start byte of its source transcript line. A segment marker uses the start of the line it belongs to. Nexen adds it in v0.17 (P3a), in the contract and in `capabilities.transcript_prelude.item_offset`.
+> - `pos` stays opaque. Purdex never parses it.
+> - The "line at offset `o`" above is that field.
+> - Each line's entrypoint is the one of the nearest segment marker at or before it.
+> - Lines above the oldest loaded marker have an unknown entrypoint until the older page arrives. They render as plain segments until then.
 
 ### 10.4 Enrichment of earlier worker segments
 
