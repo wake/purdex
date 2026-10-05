@@ -10,6 +10,7 @@ import { useUploadStore } from '../stores/useUploadStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { usePaneFocusStore } from '../stores/usePaneFocusStore'
 import { emptyPeerHostEntry, usePeerStore, type PeerHostEntry, type PeerRow } from '../stores/usePeerStore'
 import { emptySessionCwdEntry, useSessionCwdStore, type SessionCwdEntry } from '../stores/useSessionCwdStore'
 import { copyText } from '../lib/copy-text'
@@ -851,5 +852,91 @@ describe('StatusBar peer info for a pane on a hidden host', () => {
     expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('purdex-b0 [q34psn]')
     act(() => { useShownHostsStore.setState({ ids: [] }) })
     expect(screen.queryByText(/purdex-b0/)).toBeNull()
+  })
+})
+
+// Shell cleanup P6 (spec §9.1, rule D.4): the whole bar shows one pane of the tab, the status target, not the
+// primary pane. "Clicking" a pane here is what PaneLayoutRenderer's pointerdown writer does: a `touch` on the focus
+// record.
+describe('StatusBar status target pane', () => {
+  const CC_CODE = 'dev001'
+  const ccTerminal: PaneContent = { kind: 'tmux-session', hostId: HOST_ID, sessionCode: CC_CODE, mode: 'terminal', cachedName: '', tmuxInstance: '' }
+  const plainTerminal: PaneContent = { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'plain01', mode: 'terminal', cachedName: '', tmuxInstance: '' }
+  const editorContent: PaneContent = { kind: 'editor', source: { type: 'inapp' }, filePath: '/notes/a.md' }
+  const workerContent: PaneContent = { kind: 'execution', executionId: 'exc_1', host: HOST_ID }
+
+  function splitTab(id: string, left: { id: string; content: PaneContent }, right: { id: string; content: PaneContent }): Tab {
+    const layout: PaneLayout = {
+      type: 'split', id: `${id}-split`, direction: 'h',
+      children: [{ type: 'leaf', pane: left }, { type: 'leaf', pane: right }],
+      sizes: [50, 50],
+    }
+    return { ...makeTab(id, { kind: 'new-tab' }), layout }
+  }
+
+  const click = (tabId: string, paneId: string) => act(() => usePaneFocusStore.getState().touch(tabId, paneId))
+
+  beforeEach(() => {
+    setupStores()
+    useUploadStore.setState({ sessions: {} })
+    usePaneFocusStore.setState({ recent: {} })
+    useSessionStore.setState({
+      sessions: {
+        [HOST_ID]: [
+          { code: CC_CODE, name: 'cc-session', cwd: '/tmp', mode: 'terminal', tmux_instance: GEN },
+          { code: 'plain01', name: 'plain-shell', cwd: '/tmp', mode: 'terminal', tmux_instance: GEN },
+        ],
+      },
+    })
+    useAgentStore.setState({ agentTypes: { [compositeKey(HOST_ID, CC_CODE)]: 'cc' } })
+  })
+
+  it('D.4-3: editor on the left, CC terminal on the right, never clicked → the terminal’s session name', () => {
+    useAgentStore.setState({ models: { [compositeKey(HOST_ID, CC_CODE)]: 'Claude Opus 4' } })
+    render(<StatusBar activeTab={splitTab('t1', { id: 'ed', content: editorContent }, { id: 'cc', content: ccTerminal })} />)
+    expect(screen.getByTestId('status-seg-session-name').textContent).toBe('cc-session')
+    expect(screen.getByTestId('status-seg-host').textContent).toBe('mlab')
+    // The agent decorations read the target as well, not the primary (editor) pane.
+    expect(screen.getByTestId('agent-label').textContent).toBe('Claude Opus 4')
+  })
+
+  it('D.4-1: worker + plain terminal → after a pointerdown on the plain terminal the bar still shows the worker', () => {
+    render(<StatusBar activeTab={splitTab('t1', { id: 'term', content: plainTerminal }, { id: 'w', content: workerContent })} />)
+    expect(screen.queryByTestId('status-seg-session-name')).toBeNull()
+    click('t1', 'term')
+    expect(screen.queryByTestId('status-seg-session-name')).toBeNull()
+    expect(screen.queryByText('plain-shell')).toBeNull()
+  })
+
+  it('D.4-2: two agent panes → follows the click', () => {
+    useAgentStore.setState({ agentTypes: { [compositeKey(HOST_ID, CC_CODE)]: 'cc', [compositeKey(HOST_ID, 'plain01')]: 'codex' } })
+    render(<StatusBar activeTab={splitTab('t1', { id: 'cc', content: ccTerminal }, { id: 'cx', content: plainTerminal })} />)
+    expect(screen.getByTestId('status-seg-session-name').textContent).toBe('cc-session')
+    click('t1', 'cx')
+    expect(screen.getByTestId('status-seg-session-name').textContent).toBe('plain-shell')
+    click('t1', 'cc')
+    expect(screen.getByTestId('status-seg-session-name').textContent).toBe('cc-session')
+  })
+
+  it('rule 3: no agent pane → the clicked pane; an editor target renders no bar', () => {
+    useAgentStore.setState({ agentTypes: {} })
+    const tab = splitTab('t1', { id: 'term', content: plainTerminal }, { id: 'ed', content: editorContent })
+    const { container } = render(<StatusBar activeTab={tab} />)
+    expect(screen.getByTestId('status-seg-session-name').textContent).toBe('plain-shell')
+    click('t1', 'ed')
+    expect(container).toBeEmptyDOMElement()
+    click('t1', 'term')
+    expect(screen.getByTestId('status-seg-session-name').textContent).toBe('plain-shell')
+  })
+
+  it('rule 4: no agent pane and no record → the primary pane', () => {
+    useAgentStore.setState({ agentTypes: {} })
+    const { container } = render(<StatusBar activeTab={splitTab('t1', { id: 'ed', content: editorContent }, { id: 'term', content: plainTerminal })} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('peer data is asked for the target session, not the primary pane', () => {
+    render(<StatusBar activeTab={splitTab('t1', { id: 'ed', content: editorContent }, { id: 'cc', content: ccTerminal })} />)
+    expect(cwdRefresh).toHaveBeenCalledWith(HOST_ID, CC_CODE)
   })
 })

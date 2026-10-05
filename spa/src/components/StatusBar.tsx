@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { CircleNotch, CheckCircle, XCircle, LockSimple, Columns, Rows, ArrowsClockwise } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
-import { getPrimaryPane } from '../lib/pane-tree'
 import { useTabStore } from '../stores/useTabStore'
+import { useStatusTargetPane } from '../hooks/useStatusTargetPane'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useHostLook } from '../lib/host-look'
@@ -266,12 +266,13 @@ function UploadStatus({ hostId, sessionCode, t }: { hostId: string | null; sessi
 export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props) {
   const t = useI18nStore((s) => s.t)
 
-  // Read agent event for the active session (hooks must be called unconditionally)
-  const primaryContent = activeTab?.layout
-    ? getPrimaryPane(activeTab.layout).content
-    : null
-  const agentHostId = primaryContent && primaryContent.kind === 'tmux-session' ? primaryContent.hostId : null
-  const agentSessionCode = primaryContent && 'sessionCode' in primaryContent ? primaryContent.sessionCode : null
+  // The whole bar shows one pane of the tab, the status target (spec §9.1, rule D.4), never simply the primary pane:
+  // clicking a plain terminal or an editor beside an agent pane does not move it. Everything below reads this pane.
+  // (Hooks must be called unconditionally, so the derivations tolerate a null tab.)
+  const target = useStatusTargetPane(activeTab)
+  const targetContent = target?.content ?? null
+  const agentHostId = targetContent && targetContent.kind === 'tmux-session' ? targetContent.hostId : null
+  const agentSessionCode = targetContent && 'sessionCode' in targetContent ? targetContent.sessionCode : null
   const agentCk = agentHostId && agentSessionCode ? compositeKey(agentHostId, agentSessionCode) : null
 
   const session = useSessionStore((s) =>
@@ -285,7 +286,7 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
   const agentType = useAgentStore((s) => agentCk ? s.agentTypes[agentCk] ?? null : null)
   const showAgentTitleInStatusBar = useUISettingsStore((s) => s.showAgentTitleInStatusBar)
 
-  // Peer data for the primary pane. The hook owns *when* anything is fetched
+  // Peer data for the target pane. The hook owns *when* anything is fetched
   // (spec §3.3); passing nulls — an editor tab, a dashboard, no tab at all —
   // is how this component says "nothing here needs peer data".
   // A terminated pane has no peer (spec §6), and its session code may already
@@ -301,9 +302,9 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
   //
   // A pane on a host hidden in this workbench (host ownership H2d-4, §0.21) renders a placeholder and opens no
   // connection; the bar declines to ask about it in the same way, live.
-  const primaryTerminated = !!(primaryContent && primaryContent.kind === 'tmux-session' && primaryContent.terminated)
-  const primaryHostShown = useIsRefShown(agentHostId)
-  const noPeer = primaryTerminated || !primaryHostShown
+  const targetTerminated = !!(targetContent && targetContent.kind === 'tmux-session' && targetContent.terminated)
+  const targetHostShown = useIsRefShown(agentHostId)
+  const noPeer = targetTerminated || !targetHostShown
   const peer = usePeerInfo(
     noPeer ? null : agentHostId,
     noPeer ? null : agentSessionCode,
@@ -337,7 +338,7 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
     onStartRename(activeTab, e.currentTarget)
   }, [activeTab, onStartRename])
 
-  if (!activeTab) {
+  if (!activeTab || !target) {
     return (
       <div className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted flex-shrink-0">
         {t('status.no_active')}
@@ -345,8 +346,7 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
     )
   }
 
-  const primary = getPrimaryPane(activeTab.layout)
-  const { content } = primary
+  const { content } = target
 
   if (content.kind === 'editor') {
     return null
@@ -524,14 +524,14 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
         <span data-testid="status-split-buttons" className="flex items-center gap-1 max-[500px]:hidden">
           <button
             title={t('pane.split_horizontal')}
-            onClick={() => useTabStore.getState().splitPaneBlank(activeTab.id, getPrimaryPane(activeTab.layout).id, 'h')}
+            onClick={() => useTabStore.getState().splitPaneBlank(activeTab.id, target.id, 'h')}
             className="flex items-center px-1 py-0.5 rounded border border-border-default text-text-secondary cursor-pointer transition-colors hover:bg-surface-hover"
           >
             <Columns size={12} />
           </button>
           <button
             title={t('pane.split_vertical')}
-            onClick={() => useTabStore.getState().splitPaneBlank(activeTab.id, getPrimaryPane(activeTab.layout).id, 'v')}
+            onClick={() => useTabStore.getState().splitPaneBlank(activeTab.id, target.id, 'v')}
             className="flex items-center px-1 py-0.5 rounded border border-border-default text-text-secondary cursor-pointer transition-colors hover:bg-surface-hover"
           >
             <Rows size={12} />
