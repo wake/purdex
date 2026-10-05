@@ -35,6 +35,9 @@ type Module struct {
 	uploadDir string
 	traceSink *hookTraceSink
 
+	// sessionStarts fans granted SessionStarts out to in-process subscribers.
+	sessionStarts sessionStartHub
+
 	prober    *probe.Prober
 	probeOrch *probeOrchestrator
 	tmux      tmux.Executor
