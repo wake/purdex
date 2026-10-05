@@ -126,6 +126,48 @@ describe('BottomNav — narrow', () => {
   })
 })
 
+// Shell polish spec §4 (rule F): a mouse press on a bottom button must not move focus off the pane. jsdom does not
+// focus on mousedown, so `fireEvent.mouseDown(...) === false` proves the button is wired to `keepFocus`; that the
+// helper keeps focus is proven in a real browser (spec §5).
+describe('BottomNav — mouse press keeps focus where it was', () => {
+  const variants = [
+    ['wide rows', { variant: 'wide', compact: false }, ['New workspace', 'Show as one row', 'Workers', 'Hosts', 'Settings']],
+    ['wide compact', { variant: 'wide', compact: true }, ['New workspace', 'Workers', 'Hosts', 'Settings', 'Show as list']],
+    ['narrow', { variant: 'narrow', compact: false }, ['New workspace', 'Workers', 'Hosts', 'Settings']],
+  ] as const
+
+  it.each(variants)('every button prevents the mousedown default (%s)', (_name, over, expected) => {
+    renderNav(over)
+    expect(titles()).toEqual(expected)
+    for (const b of buttons()) expect(fireEvent.mouseDown(b), b.getAttribute('title')!).toBe(false)
+  })
+
+  it.each(variants)('every button stays in the tab order (%s)', (_name, over) => {
+    renderNav(over)
+    for (const b of buttons()) expect(b.tabIndex, b.getAttribute('title')!).toBeGreaterThanOrEqual(0)
+  })
+
+  it.each(variants)('a press then a click still runs each handler once (%s)', (_name, over) => {
+    const p = renderNav(over)
+    const press = (b: HTMLElement) => {
+      fireEvent.mouseDown(b)
+      fireEvent.click(b)
+    }
+    for (const label of ['New workspace', 'Workers', 'Hosts', 'Settings']) press(screen.getByTitle(label))
+    expect(p.onAddWorkspace).toHaveBeenCalledTimes(1)
+    expect(p.onToggleWorkers).toHaveBeenCalledTimes(1)
+    expect(p.onOpenHosts).toHaveBeenCalledTimes(1)
+    expect(p.onOpenSettings).toHaveBeenCalledTimes(1)
+    const toggle = screen.queryByTestId('bottom-nav-compact-toggle')
+    if (toggle) {
+      press(toggle)
+      expect(p.onToggleCompact).toHaveBeenCalledTimes(1)
+    } else {
+      expect(over.variant).toBe('narrow')
+    }
+  })
+})
+
 describe('BottomNav — workersRef', () => {
   it.each([
     ['wide rows', { variant: 'wide', compact: false }],

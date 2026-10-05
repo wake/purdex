@@ -17,6 +17,7 @@ import { CopySegment, HostSegment, Separator, StatusBarLayout } from './status/S
 import { WorkerStatusBar } from './status/WorkerStatusBar'
 import { PaneModeButtons } from './status/PaneModeButtons'
 import { useCopyFeedback } from './status/useCopyFeedback'
+import { keepFocus } from '../lib/keep-focus'
 
 type T = (key: string, params?: Record<string, string | number>) => string
 
@@ -315,6 +316,8 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
           aria-label={t('peer.refresh')}
           data-stale={peerDim ? 'true' : undefined}
           disabled={!peer.connected || peer.loading}
+          // A mouse press leaves focus on the pane (shell polish spec §4).
+          onMouseDown={keepFocus}
           onClick={() => peer.refresh()}
           // This icon carries the uncertainty the text used to carry: amber
           // when the answer beside it may no longer hold, neutral otherwise.

@@ -304,6 +304,16 @@ describe('Auto-sync off: a choice takes effect only when sync runs (P3d-4c F3)',
 })
 
 describe('"sent" ends (R2)', () => {
+  /**
+   * Pending timers, once jsdom's own zero-delay ones have run: every `focus()` queues its `selectionchange` event on a
+   * `setTimeout(0)`, and the confirm dialog takes focus when it opens and hands it back when it closes (shell polish
+   * spec §4). The "sent" timer is `COMMAND_TTL_MS` long, so a zero-length tick never fires it.
+   */
+  const pendingTimers = () => {
+    act(() => { vi.advanceTimersByTime(0) })
+    return vi.getTimerCount()
+  }
+
   it('not written (requestResolve → false) → "could not be sent"', () => {
     vi.mocked(requestResolve).mockReturnValue(false)
     view(statusOf({ hosts: RESET }))
@@ -334,10 +344,10 @@ describe('"sent" ends (R2)', () => {
     const { update } = view(statusOf({ hosts: RESET }))
     openKeepLocal('hosts')
     fireEvent.click(screen.getByTestId('profile-resolve-confirm'))
-    expect(vi.getTimerCount()).toBe(1)
+    expect(pendingTimers()).toBe(1)
     update(statusOf({ hosts: { ...RESET, currentHash: H('1') } }))
     expect(screen.queryByTestId('profile-resolve-sent-hosts')).toBeNull()
-    expect(vi.getTimerCount()).toBe(0)
+    expect(pendingTimers()).toBe(0)
   })
 
   it('the section unlocks → its row is gone, and the timer too', async () => {
@@ -347,7 +357,7 @@ describe('"sent" ends (R2)', () => {
     fireEvent.click(screen.getByTestId('profile-resolve-confirm'))
     update(statusOf({ workspaces: CONFLICT }, { hosts: 'pending' }))
     expect(screen.queryByTestId('profile-resolve-row-hosts')).toBeNull()
-    expect(vi.getTimerCount()).toBe(0)
+    expect(pendingTimers()).toBe(0)
   })
 })
 

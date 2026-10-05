@@ -2,10 +2,12 @@
 // §4.5, rules B and C). One entry list, three looks: the wide bar's labelled rows (today's look, with a toggle to
 // compact at the end of the first row), the wide bar's compact single row of icon buttons (the toggle back is last;
 // it wraps onto a second line when the bar is too narrow), and the narrow bar's icon column (no toggle; it is
-// icon-only already).
+// icon-only already). A mouse press on any of these buttons leaves focus where it was (`keepFocus`, shell polish
+// spec §4).
 import type { Ref } from 'react'
 import { Plus, Lightning, HardDrives, Sliders, CaretDown, CaretUp, type Icon } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { keepFocus } from '../../../lib/keep-focus'
 
 export interface BottomNavProps {
   variant: 'wide' | 'narrow'
@@ -69,6 +71,7 @@ export function BottomNav({
         ref={refFor(e)}
         title={e.label}
         aria-pressed={e.pressed}
+        onMouseDown={keepFocus}
         onClick={e.onClick}
         className={`${ICON} ${tone(e, idle)}`}
       >
@@ -97,6 +100,7 @@ export function BottomNav({
           <button
             data-testid="bottom-nav-compact-toggle"
             title={t('nav.bottom_rows')}
+            onMouseDown={keepFocus}
             onClick={onToggleCompact}
             className={`${ICON} ${IDLE_WIDE}`}
           >
@@ -115,6 +119,7 @@ export function BottomNav({
         ref={refFor(e)}
         title={e.label}
         aria-pressed={e.pressed}
+        onMouseDown={keepFocus}
         onClick={e.onClick}
         className={`${ROW} ${tone(e, IDLE_WIDE)}${extra}`}
       >
@@ -133,6 +138,7 @@ export function BottomNav({
           <button
             data-testid="bottom-nav-compact-toggle"
             title={t('nav.bottom_compact')}
+            onMouseDown={keepFocus}
             onClick={onToggleCompact}
             className="shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover cursor-pointer"
           >

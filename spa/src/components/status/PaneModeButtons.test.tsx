@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { PaneModeButtons } from './PaneModeButtons'
+import { HandoffDialogHost } from '../HandoffDialogHost'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useAgentStore } from '../../stores/useAgentStore'
@@ -272,6 +273,67 @@ describe('PaneModeButtons — an execution target in chat', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'chat' }))} />)
     fireEvent.click(button('Terminal'))
     expect(entry.takeToTerminal).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Shell polish spec §4 (rule F): a mouse press on a mode button leaves focus on the pane. jsdom does not focus on
+// mousedown, so `fireEvent.mouseDown(...) === false` proves the wiring. Pressed and action buttons are probed; a disabled
+// one never sees the press (React drops mouse events on a disabled button, and a browser does not focus one).
+describe('PaneModeButtons — a mouse press keeps focus where it was', () => {
+  const ALL = ['Terminal', 'Worker room', 'Chat'] as const
+
+  it('tmux target: every button prevents the mousedown default and stays in the tab order; a click still opens the dialog', () => {
+    seedReady()
+    agents({ prim01: 'cc', targ01: 'cc' })
+    const target = tmux('targ01')
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(tmux('prim01'), target)} />)
+    for (const name of ALL) {
+      expect(fireEvent.mouseDown(button(name)), name).toBe(false)
+      expect(button(name).tabIndex, name).toBeGreaterThanOrEqual(0)
+    }
+    fireEvent.click(button('Worker room'))
+    expect(useHandoffDialogStore.getState().target).toEqual({ tabId: TAB, paneId: TARGET, content: target })
+  })
+
+  it('execution target: every button prevents the mousedown default; a press then a click still runs each action', () => {
+    const take = registerTake(TARGET)
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(exec('exc_primary'), exec('exc_target'))} />)
+    for (const name of ALL) {
+      expect(fireEvent.mouseDown(button(name)), name).toBe(false)
+      expect(button(name).tabIndex, name).toBeGreaterThanOrEqual(0)
+    }
+    fireEvent.mouseDown(button('Terminal'))
+    fireEvent.click(button('Terminal'))
+    expect(take.takeToTerminal).toHaveBeenCalledTimes(1)
+    fireEvent.mouseDown(button('Chat'))
+    fireEvent.click(button('Chat'))
+    expect(contentOf(TARGET)).toEqual(exec('exc_target', { mode: 'chat' }))
+  })
+
+  // Shell polish spec §4: the press leaves focus on the pane, so the Hand to Nex confirm (the app-level
+  // `HandoffDialogHost`, opened through the store) takes it itself — onto its panel, not a button, so Enter does not
+  // reach the pane's input — and gives it back to the pane when it closes. A textarea stands in for the pane.
+  it.each([
+    ['Cancel', () => fireEvent.click(screen.getByTestId('handoff-cancel'))],
+    ['Escape', () => fireEvent.keyDown(document.activeElement!, { key: 'Escape' })],
+  ] as const)('worker on a candidate: the dialog panel takes focus from the pane; %s gives it back', (_name, close) => {
+    seedReady()
+    agents({ prim01: 'cc', targ01: 'cc' })
+    render(
+      <>
+        <textarea data-testid="pane" />
+        <PaneModeButtons tabId={TAB} pane={seedTab(tmux('prim01'), tmux('targ01'))} />
+        <HandoffDialogHost />
+      </>,
+    )
+    const pane = screen.getByTestId('pane')
+    pane.focus()
+    expect(fireEvent.mouseDown(button('Worker room'))).toBe(false)
+    fireEvent.click(button('Worker room'))
+    expect(document.activeElement).toBe(screen.getByTestId('handoff-panel'))
+    close()
+    expect(screen.queryByTestId('handoff-dialog')).toBeNull()
+    expect(document.activeElement).toBe(pane)
   })
 })
 

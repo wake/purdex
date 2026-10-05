@@ -542,6 +542,37 @@ describe('StatusBar peer segments', () => {
     expect(cwdRefresh).toHaveBeenCalledTimes(1)
   })
 
+  // Shell polish spec §4 (rule F): a mouse press on a copy segment or the refresh control leaves focus on the pane.
+  // jsdom does not focus on mousedown, so `fireEvent.mouseDown(...) === false` proves the button is wired to
+  // `keepFocus`; the helper itself is proven in a real browser (spec §5).
+  it('a mouse press on a copy segment keeps focus where it was; a press then a click still copies', async () => {
+    render(<StatusBar activeTab={sessionTab()} />)
+    for (const testId of ['status-seg-host', 'status-seg-cwd', 'status-seg-agent', 'status-seg-peer-id']) {
+      const seg = screen.getByTestId(testId)
+      expect(fireEvent.mouseDown(seg), testId).toBe(false)
+      expect(seg.tabIndex, testId).toBeGreaterThanOrEqual(0)
+    }
+    const cwd = screen.getByTestId('status-seg-cwd')
+    await act(async () => {
+      fireEvent.mouseDown(cwd)
+      fireEvent.click(cwd)
+    })
+    expect(copyTextMock).toHaveBeenCalledWith('/Users/wake/Workspace/wake/purdex')
+    expect(screen.getByTestId('status-copy-feedback').textContent).toBe('copied: cwd')
+  })
+
+  it('a mouse press on the refresh control keeps focus where it was; a press then a click still refreshes', async () => {
+    render(<StatusBar activeTab={sessionTab()} />)
+    peerRefresh.mockClear()
+    cwdRefresh.mockClear()
+    const refresh = screen.getByTestId('status-peer-refresh')
+    expect(fireEvent.mouseDown(refresh)).toBe(false)
+    expect(refresh.tabIndex).toBeGreaterThanOrEqual(0)
+    fireEvent.click(refresh)
+    await waitFor(() => expect(peerRefresh).toHaveBeenCalledTimes(1))
+    expect(cwdRefresh).toHaveBeenCalledTimes(1)
+  })
+
   it('disables the refresh control while loading', () => {
     seedPeers({ loading: true })
     render(<StatusBar activeTab={sessionTab()} />)
@@ -1051,5 +1082,15 @@ describe('StatusBar worker bar', () => {
     fireEvent.click(screen.getByTestId('status-seg-cwd'))
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('/Users/w/repo'))
     await waitFor(() => expect(screen.getByTestId('status-copy-feedback').textContent).toBe('copied: cwd'))
+  })
+
+  // Shell polish spec §4 (rule F): the worker bar's segments are the same CopySegment, so they keep focus too.
+  it('a mouse press on the host or cwd segment keeps focus where it was; both stay in the tab order', () => {
+    render(<StatusBar activeTab={workerTab()} />)
+    for (const testId of ['status-seg-host', 'status-seg-cwd']) {
+      const seg = screen.getByTestId(testId)
+      expect(fireEvent.mouseDown(seg), testId).toBe(false)
+      expect(seg.tabIndex, testId).toBeGreaterThanOrEqual(0)
+    }
   })
 })

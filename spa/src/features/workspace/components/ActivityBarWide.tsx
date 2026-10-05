@@ -16,7 +16,10 @@ import {
   SortableContext,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
+import { X } from '@phosphor-icons/react'
 import { useLayoutStore, MIN_WIDTH, MAX_WIDTH } from '../../../stores/useLayoutStore'
+import { useI18nStore } from '../../../stores/useI18nStore'
+import { keepFocus } from '../../../lib/keep-focus'
 import { useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
 import { RegionResize } from '../../../components/RegionResize'
@@ -93,8 +96,10 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const wideSize = useLayoutStore((s) => s.activityBarWideSize)
   const setWideSize = useLayoutStore((s) => s.setActivityBarWideSize)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
+  const t = useI18nStore((s) => s.t)
   const workerListOpen = useLayoutStore((s) => s.workerListOpen)
   const toggleWorkerListOpen = useLayoutStore((s) => s.toggleWorkerListOpen)
+  const setWorkerListOpen = useLayoutStore((s) => s.setWorkerListOpen)
   const bottomNavCompact = useLayoutStore((s) => s.bottomNavCompact)
   const toggleBottomNavCompact = useLayoutStore((s) => s.toggleBottomNavCompact)
 
@@ -337,12 +342,34 @@ export function ActivityBarWide(props: ActivityBarProps) {
                   onResize={handleListResize}
                   onResizeEnd={handleListResizeEnd}
                 />
+                {/* The section is the sized box; inside it the header stays put and only the scroll area below it
+                    scrolls, so the header's height comes out of the list's (shell polish spec §3). The header mirrors
+                    the narrow bar's FloatingPanel title row. */}
                 <div
                   data-testid="worker-list-section"
-                  className="min-h-0 shrink-0 overflow-y-auto overscroll-contain"
+                  className="flex min-h-0 shrink-0 flex-col"
                   style={{ height: workerListHeight }}
                 >
-                  <WorkerList />
+                  <div
+                    data-testid="worker-list-header"
+                    className="flex shrink-0 items-center justify-between gap-2 px-3 py-1.5"
+                  >
+                    <span className="text-xs font-medium text-text-primary truncate">{t('nav.workers')}</span>
+                    <button
+                      type="button"
+                      data-testid="worker-list-close"
+                      aria-label={t('common.close')}
+                      title={t('common.close')}
+                      onMouseDown={keepFocus}
+                      onClick={() => setWorkerListOpen(false)}
+                      className="rounded p-0.5 text-text-muted hover:text-text-primary hover:bg-surface-hover cursor-pointer"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <div data-testid="worker-list-scroll" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                    <WorkerList />
+                  </div>
                 </div>
               </>
             )}
