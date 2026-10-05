@@ -1,7 +1,9 @@
 // spa/src/components/room/prelude/PreludeSection.tsx — the conversation
 // before this worker's first turn (worker prelude spec §5.3), drawn above
-// turn 1 with the room's own renderer. Its messages are named by stable ids
-// (`p<pos>`), so loading an older page never re-keys what is on screen. It
+// turn 1 with the room's renderer or, in chat mode, as spans of ChatTurnBody.
+// Its messages are named by stable ids (`p<pos>`), so loading an older page
+// never re-keys what is on screen; a chat span is keyed by its LAST message
+// (pages only grow at the front, so a span's end never moves). It
 // is not a RoomTurnGroup: no data-turn-index (the scroll memory's first
 // turn stays the worker's), no hover strip.
 import { useCallback, useMemo, type ReactNode } from 'react'
@@ -84,10 +86,10 @@ export default function PreludeSection({ view, status, done, error, keyPrefix, n
         {top}
         {mode === 'chat'
           ? blocks.map((b, bi) => b.kind === 'entry'
-            ? entryNode(b.entry as Exclude<PreludeEntry, { kind: 'message' }>)
+            ? entryNode(b.entry)
             : (
-              <ChatTurnBody key={`${keyPrefix}-prelude-span-${view.ids[b.start]}`} messages={view.messages} turn={b}
-                ops={spanOps[bi]} ctx={ctx} toolsKey={chatToolsKey(`${keyPrefix}-prelude`, view.ids[b.start])}
+              <ChatTurnBody key={`${keyPrefix}-prelude-span-${view.ids[b.end - 1]}`} messages={view.messages} turn={b}
+                ops={spanOps[bi]} ctx={ctx} toolsKey={chatToolsKey(`${keyPrefix}-prelude`, view.ids[b.end - 1])}
                 interrupted={t('stream.interrupted')} />
             ))
           : view.entries.map((e) => (e.kind === 'message'

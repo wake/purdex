@@ -12,6 +12,7 @@ import {
 } from '../../lib/nex/message-types'
 import { toToolCallActivity } from '../../lib/nex/tool-activity'
 import { toolResultText } from '../../lib/nex/operations'
+import { utf8Length } from '../../lib/nex/fold'
 import { keyAt, rowKey } from '../../lib/nex/message-keys'
 import { INTERRUPT_TEXT } from '../../lib/nex/turns'
 import { searchUnitId } from '../../lib/nex/transcript-search'
@@ -105,14 +106,16 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
         ))}
       />
     ) : undefined
+    const result = index.resultForCall.get(keyAt(ctx, i, j)) ?? null
     return (
+      <>
       <OperationBlock
         tool={block.name ?? t('execution.tool.unknown')}
         input={block.input ?? {}}
         activity={entry ? toToolCallActivity(entry, now ?? 0) : undefined}
         summaryEntry={entry}
         facts={entry}
-        result={index.resultForCall.get(keyAt(ctx, i, j)) ?? null}
+        result={result}
         foldKey={keyAt(ctx, i, j)}
         subagent={subagent}
         searchKey={keyAt(ctx, i, j)}
@@ -123,6 +126,10 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
           ? <SubagentTaskSuffix task={task} now={now} />
           : undefined}
       />
+      {/* Spec §5.3: a cut call and a cut result each carry one hint (room and chat share this). */}
+      {block.truncated && <TruncatedHint shown={blockShownBytes(block)} total={block.total_bytes ?? null} />}
+      {result?.truncated && <TruncatedHint shown={utf8Length(result.text)} total={result.totalBytes ?? null} />}
+      </>
     )
   }
 
@@ -137,14 +144,17 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
       ? tools[block.tool_use_id]
       : undefined
     return (
-      <OperationBlock
-        tool={facts?.file?.path ?? t('execution.tool.unknown')}
-        input={{}}
-        facts={facts}
-        result={{ text: toolResultText(block.content), isError: block.is_error ?? false }}
-        foldKey={keyAt(ctx, i, j)}
-        searchKey={keyAt(ctx, i, j)}
-      />
+      <>
+        <OperationBlock
+          tool={facts?.file?.path ?? t('execution.tool.unknown')}
+          input={{}}
+          facts={facts}
+          result={{ text: toolResultText(block.content), isError: block.is_error ?? false }}
+          foldKey={keyAt(ctx, i, j)}
+          searchKey={keyAt(ctx, i, j)}
+        />
+        {block.truncated && <TruncatedHint shown={blockShownBytes(block)} total={block.total_bytes ?? null} />}
+      </>
     )
   }
 
@@ -159,7 +169,8 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
   /** Spec §5.3: omitted media becomes its placeholder; a cut block keeps its own drawing plus one hint line. */
   const decorate = (block: ContentBlock, j: number, el: ReactNode): ReactNode => {
     if (isOmittedMedia(block)) return <OmittedMedia key={j} block={block} />
-    if (!block.truncated) return el
+    // Tool calls and results carry their hint inside OperationAt (shared with chat).
+    if (!block.truncated || block.type === 'tool_use' || block.type === 'tool_result') return el
     return <Fragment key={j}>{el}<TruncatedHint shown={blockShownBytes(block)} total={block.total_bytes ?? null} /></Fragment>
   }
 

@@ -7,6 +7,9 @@ export interface OperationResult {
   /** The result body as text; a structured content array is flattened to its text blocks. */
   text: string
   isError: boolean
+  /** The daemon cut the paired result block (prelude only); `totalBytes` is its full size when known. */
+  truncated?: boolean
+  totalBytes?: number | null
 }
 
 /** `${messageIndex}:${blockIndex}` — a block's position, which is unique even when a tool_use_id is not. */
@@ -142,6 +145,7 @@ export function indexOperations(messages: StreamMessage[], idOf?: (m: number) =>
         resultForCall.set(callKey, {
           text: toolResultText((block as { content?: unknown }).content),
           isError: block.is_error === true,
+          ...(block.truncated === true ? { truncated: true, totalBytes: block.total_bytes ?? null } : {}),
         })
         consumedResults.add(key(mi, bi))
       }

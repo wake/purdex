@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent, act, within } from '@testing-library/react'
 import { useEffect, type ReactNode } from 'react'
 import { FoldContext, useFoldMemory, type FoldStore } from '../fold-context'
 import PreludeSection from './PreludeSection'
-import { derivePrelude } from '../../../lib/nex/prelude'
+import { derivePrelude, type PreludeView } from '../../../lib/nex/prelude'
 import { sanitizePreludePage, type PreludeItem } from '../../../lib/nex/prelude-wire'
 import type { StreamMessage } from '../../../lib/nex/message-types'
+import ChatTranscript from '../../chat/ChatTranscript'
 
 const m = (pos: string, type: 'user' | 'assistant', content: unknown[]): PreludeItem =>
   ({ pos, at: 1, kind: type, msg: { type, parent_tool_use_id: null, message: { role: type, content, stop_reason: null } } as unknown as StreamMessage })
@@ -256,8 +257,106 @@ describe('PreludeSection notes and labels', () => {
     ])
     render(<PreludeSection {...base} mode="chat" view={view} status="ok" done />)
     const text = screen.getByTestId('worker-prelude').textContent ?? ''
-    expect(text.indexOf('In the terminal')).toBeLessThan(text.indexOf('first'))
-    expect(text.indexOf('first')).toBeLessThan(text.indexOf('Model set'))
-    expect(text.indexOf('Model set')).toBeLessThan(text.indexOf('last'))
+    const at = ['In the terminal', 'first', 'Model set', 'last'].map((x) => text.indexOf(x))
+    expect(at.every((x) => x >= 0)).toBe(true)
+    expect(at).toEqual([...at].sort((x, y) => x - y))
+    // Chat-only: the agent's prose sits in a bubble.
+    expect(screen.getByTestId('chat-bubble-agent').textContent).toContain('last')
+  })
+})
+
+describe('PreludeSection chat form', () => {
+  const chat = { ...base, mode: 'chat' as const }
+  const call = (id: string, extra: Record<string, unknown> = {}) => ({ type: 'tool_use', id, name: 'Bash', input: { command: 'ls' }, ...extra })
+  const result = (id: string, content: string, extra: Record<string, unknown> = {}) => ({ type: 'tool_result', tool_use_id: id, content, ...extra })
+
+  it('one span with two plain ops is one tools line of 2; two spans are two lines', () => {
+    const one = derivePrelude([
+      m('2', 'assistant', [call('a')]), m('3', 'user', [result('a', 'x')]),
+      m('4', 'assistant', [call('b')]), m('5', 'user', [result('b', 'y')]),
+    ])
+    const { unmount } = render(<PreludeSection {...chat} view={one} status="ok" done />)
+    expect(screen.getAllByTestId('chat-tools-line')).toHaveLength(1)
+    expect(screen.getByTestId('chat-tools-line').textContent).toContain('Used 2 tools')
+    unmount()
+    const two = derivePrelude([
+      m('2', 'user', [{ type: 'text', text: 'one' }]), m('3', 'assistant', [call('a')]), m('4', 'user', [result('a', 'x')]),
+      m('5', 'user', [{ type: 'text', text: 'two' }]), m('6', 'assistant', [call('b')]), m('7', 'user', [result('b', 'y')]),
+    ])
+    render(<PreludeSection {...chat} view={two} status="ok" done />)
+    expect(screen.getAllByTestId('chat-tools-line')).toHaveLength(2)
+  })
+
+  it('hides thinking', () => {
+    const view = derivePrelude([m('2', 'assistant', [{ type: 'thinking', thinking: 'deep thought' }, { type: 'text', text: 'answer' }])])
+    render(<PreludeSection {...chat} view={view} status="ok" done />)
+    expect(screen.queryByText(/deep thought/)).toBeNull()
+    expect(screen.getByText('answer')).toBeTruthy()
+  })
+
+  it('an edit and a failure get their own lines', () => {
+    const base0 = derivePrelude([
+      m('2', 'assistant', [call('e'), call('f')]),
+      m('3', 'user', [result('e', 'ok'), result('f', 'boom', { is_error: true })]),
+    ])
+    const view: PreludeView = {
+      ...base0,
+      tools: { e: { name: 'Edit', startedAt: 1, endedAt: 2, status: 'done', diff: { path: '/w/n.md', added: 1, removed: 0, truncated: false, hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: [' a', '+b'] }] } } },
+    }
+    render(<PreludeSection {...chat} view={view} status="ok" done />)
+    expect(screen.getByTestId('chat-edited-line').textContent).toContain('n.md')
+    expect(screen.getByTestId('chat-failed-line')).toBeTruthy()
+  })
+
+  it('an omitted image in an agent bubble; a cut user line gets its hint', () => {
+    const view = derivePrelude([
+      m('2', 'assistant', [{ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 2048 } }]),
+      m('3', 'user', [{ type: 'text', text: 'abc', truncated: true, total_bytes: 90000 }]),
+    ])
+    render(<PreludeSection {...chat} view={view} status="ok" done />)
+    expect(screen.getByTestId('chat-bubble-agent').textContent).toContain('[image · png · 2 KB]')
+    expect(screen.getByTestId('chat-bubble-user').textContent).toContain('abc')
+    expect(screen.getByTestId('prelude-truncated').textContent).toBe('Too long — showing the first 3 B of 88 KB')
+  })
+
+  it('a cut call and a cut result each show their hint inside the expanded tools line', () => {
+    const view = derivePrelude([
+      m('2', 'assistant', [call('a', { truncated: true, total_bytes: 90000 })]),
+      m('3', 'user', [result('a', 'abcd', { truncated: true, total_bytes: 50000 })]),
+    ])
+    render(<PreludeSection {...chat} view={view} status="ok" done />)
+    expect(screen.queryAllByTestId('prelude-truncated')).toHaveLength(0)
+    fireEvent.click(screen.getByTestId('chat-tools-line'))
+    const hints = within(screen.getByTestId('chat-tools-ops')).getAllByTestId('prelude-truncated').map((h) => h.textContent)
+    expect(hints).toEqual(['Too long — showing the first 16 B of 88 KB', 'Too long — showing the first 4 B of 49 KB'])
+  })
+
+  it('an expanded tools line survives an older page joining its span (keyed by the last message)', () => {
+    const tail = [m('4', 'assistant', [call('a')]), m('5', 'user', [result('a', 'x')])]
+    const { rerender } = render(<PreludeSection {...chat} view={derivePrelude(tail)} status="ok" done={false} />)
+    fireEvent.click(screen.getByTestId('chat-tools-line'))
+    expect(screen.getByTestId('chat-tools-line').getAttribute('aria-expanded')).toBe('true')
+    rerender(<PreludeSection {...chat} view={derivePrelude([m('3', 'assistant', [{ type: 'text', text: 'older' }]), ...tail])} status="ok" done={false} pages={2} />)
+    expect(screen.getByText('older')).toBeTruthy()
+    expect(screen.getByTestId('chat-tools-line').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('prelude and live fold keys are independent', () => {
+    const view = derivePrelude([m('2', 'assistant', [call('a')]), m('3', 'user', [result('a', 'x')])])
+    const live = [
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'q' }], stop_reason: null } },
+      { type: 'assistant', message: { id: 'm', role: 'assistant', content: [call('b')], stop_reason: null } },
+      { type: 'user', message: { role: 'user', content: [result('b', 'y')], stop_reason: null } },
+    ] as unknown as StreamMessage[]
+    render(
+      <ChatTranscript keyPrefix="exc" showThinking={false} showEmptyHint={false} messages={live}
+        prelude={<PreludeSection {...chat} view={view} status="ok" done />} />,
+    )
+    const lines = screen.getAllByTestId('chat-tools-line')
+    expect(lines).toHaveLength(2)
+    fireEvent.click(lines[0])
+    const after = screen.getAllByTestId('chat-tools-line')
+    expect(after[0].getAttribute('aria-expanded')).toBe('true')
+    expect(after[1].getAttribute('aria-expanded')).toBe('false')
   })
 })

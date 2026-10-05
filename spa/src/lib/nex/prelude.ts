@@ -145,7 +145,7 @@ export function derivePrelude(items: readonly PreludeItem[]): PreludeView {
   return { entries, messages, ids, tools }
 }
 
-export type PreludeBlock = { kind: 'span'; start: number; end: number } | { kind: 'entry'; entry: PreludeEntry }
+export type PreludeBlock = { kind: 'span'; start: number; end: number } | { kind: 'entry'; entry: Exclude<PreludeEntry, { kind: 'message' }> }
 
 /**
  * Chat's grouping of the prelude (spec §5.3): runs of consecutive messages,
