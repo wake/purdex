@@ -263,7 +263,7 @@ It adds `CREATE INDEX IF NOT EXISTS` on `executions(resume_session_id)`, `execut
 - The handoff confirm text drops "continues headless" wording that implies it starts working on its own. It says the conversation moves to a worker and waits for your next message.
 - **Labels.** Until `list.session_filter` is available, Purdex-created executions (handoff, worker rebuild) carry the label `purdex.session_id=<S>`, and Purdex lists an entity's stints with `label.purdex.session_id=`. Once the filter is advertised, Purdex uses it, which also covers stints created by others.
 
-> **實作者推導（2026-10-06，待統籌核准）**
+> **統籌核准的推導（2026-10-06）**
 > - **D17 Where the `purdex.session_id` label starts.** It is written by every Purdex delegate for S as soon as that code path exists: handoff in P1a-4 (Task 10) and `worker-rebuild` in P1c-1 (Task 19). The key passes Nexen's label rules (only `nex.` is reserved). Executions created from then on are listable by label before v0.17.
 > - **D18 Labels are for listing stints, never for owner checks.** A label misses executions created before it existed, and executions created outside Purdex (headless launcher, `pdx nex`, Ploom). So the owner check and Q1 keep the full non-archived scan (D1) until P3b-1 pins v0.17, and then switch to `?session_id=`, which also matches `resume_session_id` and any turn's `session_id` (§8.2). The label is used only by P3b-2's stint list, and only while `list.session_filter` is absent.
 
