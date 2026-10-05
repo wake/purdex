@@ -45,6 +45,11 @@ The third item of the same report (how terminated workers are listed) is under d
   The implementer lists any other `<button>` rendered directly by `StatusBar.tsx`, `components/status/*` or `TitleBar.tsx` and covers it too, unless it opens something that takes focus itself (then it is listed as not covered, with the reason).
 - **Not covered**: buttons inside dialogs, menus, floating panels (including `floating-panel-close`), the tab strip, pane headers, forms and inputs — they either own focus on purpose or are not shell chrome.
 - When nothing had focus (body), focus stays on body.
+- **A dialog opened from a covered button takes focus itself** (codex R2 attack, review `review-muvnvof3-nm7z5i`): the title bar's layout buttons open `ConfirmDialog` / `LayoutKeepPicker`, and the mode buttons open the handoff confirm — all on the shared `components/ConfirmDialog.tsx`, which had no focus handling at all. With the button no longer taking focus, keystrokes would reach the pane behind the dialog (Enter sends a WorkerInput draft, keys go to xterm). So `ConfirmDialog`:
+  - on mount, moves focus to the **dialog panel itself** (`tabIndex={-1}`), not to a button — typing or Enter must not confirm or cancel by accident; Escape still cancels; Tab reaches the buttons;
+  - keeps Tab / Shift+Tab inside the dialog while it is up;
+  - on unmount, if focus is still inside the dialog, returns it to whatever had it when the dialog opened (the pane, when opened from a covered button) — the same rule as `FloatingPanel`; if something else has taken focus meanwhile (e.g. a tab switch that cancelled the dialog and focused the new tab's pane), it leaves focus alone.
+  This also fixes the same gap for every other `ConfirmDialog` caller.
 - The narrow bar: pressing Workers no longer focuses the button, so when the floating panel closes it restores focus to what had it before (the pane), not to the Workers button.
 
 ## 5. Tests
