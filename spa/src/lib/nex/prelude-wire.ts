@@ -175,13 +175,14 @@ export function sanitizePreludePage(body: unknown): PreludePage | null {
     prevCursor = cursor
   }
   if (state !== 'ok') return { state, items: [], prevCursor: null, totalBytes: null }
+  // Spec §4.2: an ok page's `items` is an array. Anything else is a malformed
+  // body (retryable), never an empty finished page that hides the transcript.
+  if (!Array.isArray(b.items)) return null
   const items: PreludeItem[] = []
   const seen = new Set<string>()
-  if (Array.isArray(b.items)) {
-    for (const raw of b.items) {
-      const it = item(raw)
-      if (it && !seen.has(it.pos)) { seen.add(it.pos); items.push(it) }
-    }
+  for (const raw of b.items) {
+    const it = item(raw)
+    if (it && !seen.has(it.pos)) { seen.add(it.pos); items.push(it) }
   }
   const tb = b.total_bytes
   return { state, items, prevCursor, totalBytes: Number.isSafeInteger(tb) && (tb as number) >= 0 ? (tb as number) : null }

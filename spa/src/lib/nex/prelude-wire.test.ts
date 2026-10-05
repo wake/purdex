@@ -161,6 +161,16 @@ describe('closed per-type block cleaning (spec §5.2)', () => {
   })
 })
 
+describe('an ok page must carry an items array (spec §4.2)', () => {
+  it.each([[undefined], [null], [{}], ['x']])('items %j on an ok page is not a page', (items) => {
+    expect(sanitizePreludePage({ state: 'ok', ...(items === undefined ? {} : { items }), prev_cursor: null })).toBeNull()
+  })
+  it('none / gone still ignore items', () => {
+    expect(sanitizePreludePage({ state: 'none', items: 'x', prev_cursor: null })).not.toBeNull()
+    expect(sanitizePreludePage({ state: 'gone', prev_cursor: null })).not.toBeNull()
+  })
+})
+
 describe('contract sample (spec §4.3)', () => {
   it('every kind of the hand-written sample page survives the sanitiser unchanged', () => {
     const page = sanitizePreludePage(sample)!
