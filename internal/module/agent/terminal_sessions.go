@@ -36,6 +36,8 @@ type SessionStartEvent struct {
 	FrameID        string
 	Cwd            string
 	TranscriptPath string
+	// Overflow, when true, carries no session: events were coalesced away because the subscriber fell behind; the subscriber must re-check every session it cares about.
+	Overflow bool
 }
 
 type TerminalSessions interface {
@@ -56,8 +58,12 @@ type TerminalSessions interface {
 // this session" (they re-read state), not as a counter: the latest event for
 // a session carries all the information the earlier ones did. Ordering is
 // preserved per session id; across sessions delivery follows first-pending
-// order. Memory is bounded by the number of distinct session ids pending, not
-// by the event count, and a stuck subscriber costs one goroutine.
+// order. Memory is bounded: at most sessionStartPendingCap distinct session
+// ids are held per subscriber (cap x one event), and a stuck subscriber costs
+// one goroutine. No re-check signal is ever lost: a session id beyond the cap
+// is not stored, but the subscriber is flagged and, after the stored events,
+// receives one SessionStartEvent{Overflow: true}, meaning "re-check every
+// session you care about".
 //
 // Each callback runs in its own recover, so a panic is logged and the
 // consumer moves on. unsubscribe is idempotent: it removes the subscriber
@@ -70,20 +76,31 @@ type sessionStartHub struct {
 	subs map[int]*sessionStartSub
 }
 
+// sessionStartPendingCap bounds the distinct session ids pending per subscriber.
+const sessionStartPendingCap = 1024
+
 type sessionStartSub struct {
-	mu      sync.Mutex
-	pending map[string]SessionStartEvent
-	order   []string
-	wake    chan struct{} // capacity 1
-	done    chan struct{}
+	mu       sync.Mutex
+	overflow bool
+	pending  map[string]SessionStartEvent
+	order    []string
+	wake     chan struct{} // capacity 1
+	done     chan struct{}
 }
 
 func (s *sessionStartSub) push(ev SessionStartEvent) {
 	s.mu.Lock()
-	if _, ok := s.pending[ev.SessionID]; !ok {
+	if _, ok := s.pending[ev.SessionID]; ok {
+		s.pending[ev.SessionID] = ev
+	} else if len(s.order) < sessionStartPendingCap {
 		s.order = append(s.order, ev.SessionID)
+		s.pending[ev.SessionID] = ev
+	} else {
+		if !s.overflow {
+			log.Printf("[agent] session_start subscriber backlog full (cap %d); coalescing into a full re-check", sessionStartPendingCap)
+		}
+		s.overflow = true
 	}
-	s.pending[ev.SessionID] = ev
 	s.mu.Unlock()
 	select {
 	case s.wake <- struct{}{}:
@@ -98,7 +115,11 @@ func (s *sessionStartSub) take() []SessionStartEvent {
 	for _, id := range s.order {
 		out = append(out, s.pending[id])
 	}
+	if s.overflow {
+		out = append(out, SessionStartEvent{Overflow: true})
+	}
 	s.order = nil
+	s.overflow = false
 	s.pending = map[string]SessionStartEvent{}
 	return out
 }

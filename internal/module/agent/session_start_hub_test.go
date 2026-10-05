@@ -211,3 +211,69 @@ func TestSessionStartHub_PanicDoesNotStopLaterEventsOrOthers(t *testing.T) {
 		t.Fatal("panicking subscriber's consumer died after one panic")
 	}
 }
+
+func collectHubEvents(t *testing.T, got chan SessionStartEvent, n int) []SessionStartEvent {
+	t.Helper()
+	var evs []SessionStartEvent
+	deadline := time.After(3 * time.Second)
+	for len(evs) < n {
+		select {
+		case ev := <-got:
+			evs = append(evs, ev)
+		case <-deadline:
+			t.Fatalf("timeout: got %d/%d", len(evs), n)
+		}
+	}
+	return evs
+}
+
+func TestSessionStartHub_OverflowBecomesFullRecheck(t *testing.T) {
+	h, got, release := blockedHub(t)
+	for i := 0; i < sessionStartPendingCap+10; i++ {
+		h.publish(hubEvent(fmt.Sprintf("o%d", i)))
+	}
+	release()
+	evs := collectHubEvents(t, got, sessionStartPendingCap+1)
+	for i := 0; i < sessionStartPendingCap; i++ {
+		if evs[i].Overflow || evs[i].SessionID != fmt.Sprintf("o%d", i) {
+			t.Fatalf("event %d = %+v", i, evs[i])
+		}
+	}
+	last := evs[sessionStartPendingCap]
+	if !last.Overflow || last.SessionID != "" {
+		t.Fatalf("last = %+v, want Overflow with empty SessionID", last)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if len(got) != 0 {
+		t.Fatalf("extra deliveries: %d", len(got))
+	}
+
+	// the overflow flag resets
+	h.publish(hubEvent("after"))
+	evs = collectHubEvents(t, got, 1)
+	if evs[0].Overflow || evs[0].SessionID != "after" {
+		t.Fatalf("after = %+v", evs[0])
+	}
+	time.Sleep(50 * time.Millisecond)
+	if len(got) != 0 {
+		t.Fatalf("second overflow event delivered")
+	}
+}
+
+func TestSessionStartHub_PendingMemoryIsBounded(t *testing.T) {
+	h, _, release := blockedHub(t)
+	defer release()
+	for i := 0; i < sessionStartPendingCap+5000; i++ {
+		h.publish(hubEvent(fmt.Sprintf("m%d", i)))
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, sub := range h.subs {
+		sub.mu.Lock()
+		n, p := len(sub.order), len(sub.pending)
+		sub.mu.Unlock()
+		if n > sessionStartPendingCap || p > sessionStartPendingCap {
+			t.Fatalf("order=%d pending=%d, cap %d", n, p, sessionStartPendingCap)
+		}
+	}
+}
