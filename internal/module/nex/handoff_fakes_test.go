@@ -13,6 +13,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -311,7 +312,15 @@ type fakeNexService struct {
 	archiveCtxErrs []error // ctx.Err() as seen on entry to each Archive
 	archiveErr     error
 	unarchiveErr   error // answer to an Archive with Archived:false (archiveErr answers both when set)
+
+	terminateCalls []execution.TerminateRequest
+	terminateErr   error
+	onTerminate    func(execution.TerminateRequest) // runs before the answer; lets a test flip the store row to terminated
+	renewCalls     []renewCall
+	renewErr       error
 }
+
+type renewCall struct{ ExecutionID, LeaseID, PrincipalID string }
 
 type releaseCall struct{ ExecutionID, LeaseID, PrincipalID string }
 
@@ -412,6 +421,29 @@ func (f *fakeNexService) Archive(ctx context.Context, req execution.ArchiveReque
 	return nil
 }
 
+func (f *fakeNexService) Terminate(_ context.Context, req execution.TerminateRequest) error {
+	f.record("terminate")
+	f.mu.Lock()
+	f.terminateCalls = append(f.terminateCalls, req)
+	hook, err := f.onTerminate, f.terminateErr
+	f.mu.Unlock()
+	if hook != nil {
+		hook(req)
+	}
+	return err
+}
+
+func (f *fakeNexService) RenewLease(_ context.Context, executionID, leaseID, principalID string) (store.Lease, error) {
+	f.record("renew")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.renewCalls = append(f.renewCalls, renewCall{executionID, leaseID, principalID})
+	if f.renewErr != nil {
+		return store.Lease{}, f.renewErr
+	}
+	return f.lease, nil
+}
+
 var _ nexService = (*fakeNexService)(nil)
 
 // fakeNexStore answers Get with one scripted result per call, in order; the
@@ -426,6 +458,12 @@ type fakeNexStore struct {
 	calls   int
 	onGet   func(call int)
 	getGate chan struct{}
+
+	// List: listRows is the whole table (non-archived and archived alike);
+	// List filters, orders by id and pages it like store.Store.List.
+	listRows  []store.Execution
+	listErr   error
+	listCalls int
 }
 
 type getResult struct {
@@ -453,6 +491,39 @@ func (f *fakeNexStore) Get(ctx context.Context, _ string) (store.Execution, erro
 		return store.Execution{}, err
 	}
 	return res.exec, res.err
+}
+
+// List honours IncludeArchived, Cursor (id >) and Limit; rows come back in id
+// order and NextCursor is set only when more remain.
+func (f *fakeNexStore) List(_ context.Context, opts store.ListOptions) (store.ListPage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listCalls++
+	if f.listErr != nil {
+		return store.ListPage{}, f.listErr
+	}
+	var rows []store.Execution
+	for _, e := range f.listRows {
+		if opts.Cursor != "" && e.ID <= opts.Cursor {
+			continue
+		}
+		if !opts.IncludeArchived && e.ArchivedAt != 0 {
+			continue
+		}
+		rows = append(rows, e)
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	page := store.ListPage{}
+	if len(rows) > limit {
+		rows = rows[:limit]
+		page.NextCursor = rows[len(rows)-1].ID
+	}
+	page.Items = rows
+	return page, nil
 }
 
 func (f *fakeNexStore) Calls() int {
