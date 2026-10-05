@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/config"
@@ -73,6 +74,13 @@ type Core struct {
 	// restart_required (spec §4.4.2) whether nex is disabled, ready, or
 	// soft-failed. Never mutated after New.
 	bootNex config.NexConfig
+
+	// BootID is new on every process start (newBootID, set in New) and is
+	// reported by /api/health; never mutated after New.
+	BootID string
+	// restartHook / restarting back POST /api/daemon/restart (restart.go).
+	restartHook func()
+	restarting  atomic.Bool
 }
 
 // New creates a Core from the given dependencies.
@@ -87,6 +95,7 @@ func New(deps CoreDeps) *Core {
 	}
 	return &Core{
 		bootNex:      bootNex,
+		BootID:       newBootID(),
 		Cfg:          deps.Config,
 		Tmux:         deps.Tmux,
 		Registry:     reg,
@@ -251,6 +260,7 @@ func (c *Core) RegisterCoreRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/config", c.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", c.handlePutConfig)
 	mux.HandleFunc("POST /api/ws-ticket", c.handleWsTicket)
+	mux.HandleFunc("POST /api/daemon/restart", c.handleDaemonRestart)
 	mux.HandleFunc("GET /api/ready", c.handleReady)
 	mux.HandleFunc("POST /api/pair/verify", c.handlePairVerify)
 	mux.HandleFunc("POST /api/pair/setup", c.handlePairSetup)

@@ -726,3 +726,18 @@ func TestOuterChain_HostTransferTokenSetAfterOuterAuth(t *testing.T) {
 		})
 	}
 }
+
+func TestDaemonRestartRequiresHostToken(t *testing.T) {
+	c := newTestCore(&config.Config{Token: "host-token"})
+	c.SetRestartHook(func() {})
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	h := newOuterHandler(c, mux, nil)
+
+	if rec := doRequest(t, h, "POST", "/api/daemon/restart", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no token: got %d, want 401", rec.Code)
+	}
+	if rec := doRequest(t, h, "POST", "/api/daemon/restart", "host-token"); rec.Code != http.StatusAccepted {
+		t.Fatalf("host token: got %d, want 202", rec.Code)
+	}
+}
