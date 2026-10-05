@@ -89,6 +89,7 @@ type sessionStartSub struct {
 }
 
 func (s *sessionStartSub) push(ev SessionStartEvent) {
+	var logOverflow bool
 	s.mu.Lock()
 	if _, ok := s.pending[ev.SessionID]; ok {
 		s.pending[ev.SessionID] = ev
@@ -97,11 +98,14 @@ func (s *sessionStartSub) push(ev SessionStartEvent) {
 		s.pending[ev.SessionID] = ev
 	} else {
 		if !s.overflow {
-			log.Printf("[agent] session_start subscriber backlog full (cap %d); coalescing into a full re-check", sessionStartPendingCap)
+			logOverflow = true
 		}
 		s.overflow = true
 	}
 	s.mu.Unlock()
+	if logOverflow {
+		log.Printf("[agent] session_start subscriber backlog full (cap %d); coalescing into a full re-check", sessionStartPendingCap)
+	}
 	select {
 	case s.wake <- struct{}{}:
 	default:
