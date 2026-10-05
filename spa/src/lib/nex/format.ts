@@ -11,3 +11,10 @@ export function firstLine(text: string, max = 80): string {
   const line = text.split('\n', 1)[0] ?? ''
   return line.length > max ? `${line.slice(0, max - 1)}…` : line
 }
+
+/** A byte count for a label: B under 1 KiB, whole KB under 1 MiB, one decimal MB above. */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
