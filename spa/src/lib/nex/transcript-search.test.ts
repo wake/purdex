@@ -455,16 +455,16 @@ describe('buildSearchUnits — the loaded prelude (worker prelude P3b)', () => {
 describe('buildSearchUnits — pasted text in the prelude (U3)', () => {
   const body = 'needle 1\nneedle 2'
   const prelude = derivePrelude([
-    { pos: '1', at: 0, kind: 'user', msg: said(`before\n<pasted_content id="a">\n${body}\n</pasted_content>\nafter`) },
+    { pos: '1', at: 0, kind: 'user', msg: said(`before\n<pasted_content id="000a">\n${body}\n</pasted_content id="000a">\nafter`) },
   ])
 
   it('typed + paste + typed: three ordered, distinct block units; the paste is verbatim and reveals its fold', () => {
     for (const view of ['room', 'chat'] as const) {
       const list = buildSearchUnits({ messages: [], index: indexOperations([]), view, keyPrefix: 'k', turnStarts: [], prelude })
       expect(list.map((u) => [u.id, u.text, u.reveal]), view).toEqual([
-        ['p1:0:text', 'before\n', []],
+        ['p1:0:text', 'before', []],
         ['p1:1:text', body, ['p1:1:paste']],
-        ['p1:2:text', '\nafter', []],
+        ['p1:2:text', 'after', []],
       ])
     }
   })

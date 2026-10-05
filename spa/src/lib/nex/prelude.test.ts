@@ -132,13 +132,13 @@ describe('preludeBlocks', () => {
 })
 
 describe('derivePrelude — pasted text (U3)', () => {
-  const PASTE = '<pasted_content id="bb1b">\nline 1\nline 2\n</pasted_content>'
+  const PASTE = '<pasted_content id="bb1b">\nline 1\nline 2\n</pasted_content id="bb1b">'
   const content = (v: ReturnType<typeof derivePrelude>, m: number) => (v.messages[m] as { message: { content: unknown[] } }).message.content
 
   it('splits a human user text block into typed parts and pasted bodies', () => {
     const v = derivePrelude([msg('1', 'user', [{ type: 'text', text: `look:\n${PASTE}` }, { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 3 } }])])
     expect(content(v, 0)).toEqual([
-      { type: 'text', text: 'look:\n' },
+      { type: 'text', text: 'look:' },
       { type: 'text', text: 'line 1\nline 2', pasted: { lines: 2, cut: false } },
       { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 3 } },
     ])
@@ -159,22 +159,29 @@ describe('derivePrelude — pasted text (U3)', () => {
     expect(derivePrelude([plain]).messages[0]).toBe((plain as { msg: StreamMessage }).msg)
   })
 
-  it('wire path: a > 64 KB prompt whose closing tag the daemon cut stays a cut paste carrying the hint flags', () => {
-    const filler = Array.from({ length: 2000 }, (_, k) => `filler line ${String(k).padStart(5, '0')} ………………`).join('\n')
-    const shown = `Reply with this:\n<pasted_content id="bb1b">\nReply with just the word ok. …\n${filler}`
-    expect(new TextEncoder().encode(shown).length).toBeGreaterThan(64 * 1024)
-    const page = sanitizePreludePage({
+  describe('wire path, the live capture\'s shape (execution 06GGS9V6…)', () => {
+    // The CLI's wrapper (≤ 2 newlines before the opener and after the closer
+    // are its own) around 1501 filler lines of 50 chars; 76617 is the capture's total.
+    const lines = Array.from({ length: 1501 }, (_, k) => `filler line ${String(k).padStart(5, '0')} for the prelude truncation check`)
+    const full = `\n\n<pasted_content id="bb1b">\n${lines.join('\n')}\n</pasted_content id="bb1b">\n`
+    const through = (block: Record<string, unknown>) => content(derivePrelude(sanitizePreludePage({
       state: 'ok', prev_cursor: null,
-      items: [{ pos: '9', kind: 'user', at: 1, payload: { type: 'user', message: { role: 'user', content: [
-        { type: 'text', text: shown, truncated: true, total_bytes: 200_000 },
-      ] } } }],
-    })!
-    const [typedPart, pasted, ...rest] = content(derivePrelude(page.items), 0) as ContentBlock[]
-    expect(rest).toEqual([])
-    expect(typedPart).toEqual({ type: 'text', text: 'Reply with this:\n' })
-    expect(pasted).toMatchObject({ type: 'text', pasted: { lines: 2001, cut: true }, truncated: true, total_bytes: 200_000 })
-    expect(pasted.text!.startsWith('Reply with just the word ok.')).toBe(true)
-    expect(pasted.text).not.toContain('pasted_content')
+      items: [{ pos: '9', kind: 'user', at: 1, payload: { type: 'user', message: { role: 'user', content: [block] } } }],
+    })!.items), 0) as ContentBlock[]
+
+    it('complete: a single pasted block of N lines, not cut, no typed parts', () => {
+      expect(through({ type: 'text', text: full })).toEqual([{ type: 'text', text: lines.join('\n'), pasted: { lines: 1501, cut: false } }])
+    })
+
+    it('cut at 64 KiB (closer gone): a cut paste carrying the hint flags and the whole block\'s shown size', () => {
+      const shown = full.slice(0, 65536)
+      const [pasted, ...rest] = through({ type: 'text', text: shown, truncated: true, total_bytes: 76617 })
+      expect(rest).toEqual([])
+      // 65536 − 29 wrapper chars before the body = 1284 whole 51-char lines + 23 chars.
+      expect(pasted).toMatchObject({ type: 'text', pasted: { lines: 1285, cut: true }, truncated: true, total_bytes: 76617, shown_bytes: 65536 })
+      expect(pasted.text!.startsWith('filler line 00000 ')).toBe(true)
+      expect(pasted.text!.endsWith('\nfiller line 01284 for t')).toBe(true)
+    })
   })
 })
 
@@ -185,7 +192,7 @@ describe('preludeBlocks — a pasted-only prompt (U3)', () => {
       msg('2', 'assistant', [{ type: 'tool_use', id: 't', name: 'Bash', input: {} }]),
       msg('3', 'user', [{ type: 'tool_result', tool_use_id: 't', content: 'out' }]),
       msg('4', 'assistant', [{ type: 'text', text: 'a1' }]),
-      msg('5', 'user', [{ type: 'text', text: '<pasted_content id="x">\nonly pasted\n</pasted_content>' }]),
+      msg('5', 'user', [{ type: 'text', text: '<pasted_content id="0a0a">\nonly pasted\n</pasted_content id="0a0a">' }]),
       msg('6', 'assistant', [{ type: 'text', text: 'a2' }]),
     ])
     expect(isOpeningLine(v.messages[4])).toBe(true)

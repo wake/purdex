@@ -558,7 +558,7 @@ describe('PreludeSection scroll anchors (#1534)', () => {
 // U3 (spec §5.3 "Pasted text"): each pasted segment is a titled fold block, never a user line.
 describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection pasted text (U3) in %s mode', (mode) => {
   const OPEN = '<pasted_content id="bb1b">'
-  const CLOSE = '</pasted_content>'
+  const CLOSE = '</pasted_content id="bb1b">'
   const body = (n: number) => Array.from({ length: n }, (_, k) => `pasted line ${k}`).join('\n')
   const draw = (items: PreludeItem[]) => render(<PreludeSection {...base} mode={mode} view={derivePrelude(items)} status="ok" done />)
   const titles = () => screen.getAllByTestId('prelude-pasted-title').map((e) => e.textContent)
@@ -630,5 +630,32 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection pasted te
     once()
     fireEvent.click(screen.getByTestId('fold-more'))
     once()
+  })
+
+  it('a closed paste then a short typed suffix in a cut block: the one hint reports the whole block (64 KB), not the suffix (10 B)', () => {
+    const head = `${OPEN}\n`
+    const tail = `\n${CLOSE}\n\nand thanks` // the typed suffix is 10 bytes
+    draw([m('1', 'user', [{ type: 'text', text: head + 'x'.repeat(65536 - head.length - tail.length) + tail, truncated: true, total_bytes: 70000 }])])
+    expect(titles()).toEqual(['Pasted text · 1 line'])
+    expect(userLines().map((e) => e.textContent?.replace('›', '').trim())).toEqual(['and thanks'])
+    expect(screen.getAllByTestId('prelude-truncated').map((e) => e.textContent)).toEqual(['Too long — showing the first 64 KB of 68 KB'])
+  })
+
+  it('wire path, the live capture\'s shape: N lines when complete; cut at 64 KiB, N+ and one hint for the whole block', () => {
+    const lines = Array.from({ length: 1501 }, (_, k) => `filler line ${String(k).padStart(5, '0')} for the prelude truncation check`)
+    const full = `\n\n${OPEN}\n${lines.join('\n')}\n${CLOSE}\n`
+    const wire = (block: Record<string, unknown>) => sanitizePreludePage({
+      state: 'ok', prev_cursor: null,
+      items: [{ pos: '1', kind: 'user', at: 1, payload: { type: 'user', message: { role: 'user', content: [block] } } }],
+    })!.items
+    const { unmount } = draw(wire({ type: 'text', text: full }))
+    expect(titles()).toEqual(['Pasted text · 1501 lines'])
+    expect(screen.queryAllByTestId('prelude-truncated')).toHaveLength(0)
+    unmount()
+    draw(wire({ type: 'text', text: full.slice(0, 65536), truncated: true, total_bytes: 76617 }))
+    expect(titles()).toEqual(['Pasted text · 1285+ lines'])
+    expect(userLines()).toHaveLength(0)
+    expect(screen.getAllByTestId('prelude-truncated').map((e) => e.textContent)).toEqual(['Too long — showing the first 64 KB of 75 KB'])
+    expect(screen.getByTestId('worker-prelude').textContent).not.toContain('pasted_content')
   })
 })
