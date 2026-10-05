@@ -79,7 +79,8 @@ It also prints `(partial: N sessions not resolved within budget)`.
   > - Measured against `ps` on live processes, PPID, `lstart` and argv0/argv agree byte for byte.
   > - **The start time must stay comparable with what frames store**: `process_start_time` is the `ps -o lstart=` text, and the registry compares `ProcessInfo.StartTime` to the second.
   >   - The snapshot's start-time text is `time.Unix(p_starttime.tv_sec, 0)` formatted in `psLstartLayout`, in the local time zone.
-  >   - `ProcessInfo.StartTime` is that same instant: truncated to the second, location `time.Local`. That is exactly what parsing `ps` `lstart` gives today.
+  >   - `ProcessInfo.StartTime` is produced the way today's reader produces it: that text parsed with `time.ParseInLocation(psLstartLayout, …, time.Local)`. This gives whole seconds in `time.Local`, and in a repeated DST hour it resolves to the same offset as today (PR #1574 review).
+  >   - The exact start (darwin `p_starttime` seconds + microseconds) is kept privately as the process identity for D10.
   >   - The parity test asserts the text, the instant, and the location.
   > - `ps` prints `strftime("%c")` in the daemon's locale. Measured:
   >   - `en_US` gives the layout;
@@ -116,7 +117,12 @@ It also prints `(partial: N sessions not resolved within budget)`.
   > **統籌核准的推導（2026-10-06）— D10: a snapshot is a point-in-time view** (from the codex plan review; approved on the D4 condition above).
   > - For the owner lookups, `Alive`, the start time and `PPID` describe the process table at the moment of the snapshot. Frames are judged as of that moment, as today's reader judged them as of its own read.
   >   - A frame needs its CC to start and to send a hook first. Both take far longer than the milliseconds between the snapshot and `ListAll`.
-  > - `ExePath` / `Argv` are read later, on first use. On darwin the reader then re-reads the PID's start time (`kern.proc.pid`, no fork). If the PID is gone or the start time changed, the read fails with `ErrProcessChanged`, so two processes are never mixed into one answer.
+  > - The owner walk reads only `ProcessView.PPID`. That is the table's own row: no argument read, no fork, no re-check.
+  > - `ExePath` / `Argv` (`Read`) are read later, on first use, and then the identity is checked again (PR #1574 review):
+  >   - **darwin:** re-read `kern.proc.pid` (no fork) and compare the full `p_starttime`, seconds and microseconds.
+  >   - **Linux:** the snapshot also records `/proc/<pid>/stat` start ticks for every PID right after `ps -A`. An entry whose stat cannot be read, or whose stat PPID disagrees with `ps`, is unverifiable. `Read` re-reads the ticks after the `/proc` reads.
+  >
+  >   If the PID is gone, unverifiable, or its start changed, `Read` fails with `ErrProcessChanged`, so two processes are never mixed into one answer.
   > - The registry never relies on point-in-time liveness (D4): it falls back to the per-PID reader for anything the snapshot cannot vouch for.
   >
   > **D3 — Linux forks per PID today** (`readProcessPPID` and `readProcessStartTime` are both `ps -p`). So Linux changes too:
