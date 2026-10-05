@@ -194,6 +194,17 @@ describe('client resource budget (spec §4.3)', () => {
   })
 })
 
+describe('tool_use input budget (spec §4.3)', () => {
+  it('rejects the page when the serialized input exceeds 4 MiB, nested or not', () => {
+    expect(blocksPage([{ type: 'tool_use', id: 't', name: 'Write', input: { content: 'a'.repeat(PRELUDE_MAX_STRING_BYTES + 1) } }])).toBeNull()
+    expect(blocksPage([{ type: 'tool_use', id: 't', name: 'X', input: { a: [{ b: 'a'.repeat(PRELUDE_MAX_STRING_BYTES) }] } }])).toBeNull()
+  })
+  it('keeps a normal input unchanged', () => {
+    expect(contentOf(blocksPage([{ type: 'tool_use', id: 't', name: 'Bash', input: { command: 'ls', n: [1, { a: 'b' }] } }])))
+      .toEqual([{ type: 'tool_use', id: 't', name: 'Bash', input: { command: 'ls', n: [1, { a: 'b' }] } }])
+  })
+})
+
 describe('contract sample (spec §4.3)', () => {
   it('every kind of the hand-written sample page survives the sanitiser unchanged', () => {
     const page = sanitizePreludePage(sample)!

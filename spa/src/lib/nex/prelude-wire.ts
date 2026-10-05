@@ -101,7 +101,10 @@ function cleanBlock(raw: unknown): Record<string, unknown> | null {
       if (id !== undefined) out.id = id
       const name = str(b.name)
       if (name !== undefined) out.name = name
-      out.input = rec(b.input) ?? {}
+      // The input is kept whole, so it is budgeted whole: by its serialized size.
+      const input = rec(b.input) ?? {}
+      fit(JSON.stringify(input))
+      out.input = input
       break
     }
     case 'tool_result': {
