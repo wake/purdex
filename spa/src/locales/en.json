@@ -313,7 +313,6 @@
   "sidebar.section_enabled": "Enabled",
   "sidebar.section_available": "Available",
   "sidebar.view.executions": "Executions",
-  "sidebar.view.files_workspace": "Files (Workspace)",
 
   "page.newtab.title": "New Tab",
   "page.newtab.empty": "No content providers registered",
