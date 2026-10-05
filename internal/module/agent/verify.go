@@ -99,6 +99,13 @@ func resolvePanePID(exec tmux.Executor, paneID string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return parsePanePID(pid)
+}
+
+// parsePanePID turns a pane's pid as tmux prints it into a PID. It is shared by
+// resolvePanePID and the owner pass's pane listing, so a pid that one of them
+// would reject the other rejects too.
+func parsePanePID(pid string) (int, error) {
 	parsed, err := strconv.Atoi(strings.TrimSpace(pid))
 	if err != nil {
 		return 0, fmt.Errorf("parse pane pid %q: %w", pid, err)

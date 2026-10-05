@@ -14,12 +14,37 @@ import (
 // swap by hand (readProcessInfoFn / isPidAliveFn / processStartTimeFn) and
 // restore them via t.Cleanup, so a test can describe a PPID chain and a
 // liveness set declaratively.
+//
+// Each one also installs the owner pass's process source (withFixtureSnapshot),
+// so a pass in a test walks the fixture's process tree and never the real
+// process table.
 // ---------------------------------------------------------------------------
+
+// withFixtureSnapshot makes takeProcSnapshotFn hand the owner pass a view over
+// the per-PID seams, memoised for that one pass, the way a real snapshot
+// answers each PID once for the pass that took it.
+//
+// The view is built when the pass calls for it, not when this runs, so it reads
+// through whatever readProcessInfoFn is installed at that moment: wrappers a
+// test installs after its fixtures (withSlowReads, withRecordedReads,
+// withProcessReadHook) apply to the pass exactly as they apply to the seam.
+// Every fixture below calls it, so a test that sets up a process tree never
+// reaches the real table through the pass; installing it more than once is
+// harmless, since each install restores the previous one on cleanup.
+func withFixtureSnapshot(t *testing.T) {
+	t.Helper()
+	orig := takeProcSnapshotFn
+	takeProcSnapshotFn = func() (agentpkg.ProcessView, error) {
+		return liveProcs{read: newMemoProcReader(readProcessInfoFn)}, nil
+	}
+	t.Cleanup(func() { takeProcSnapshotFn = orig })
+}
 
 // withProcessTree makes readProcessInfoFn resolve PPIDs from tree. A PID with
 // no entry reports PPID 1, i.e. the walk reaches the root on the next hop.
 func withProcessTree(t *testing.T, tree map[int]int) {
 	t.Helper()
+	withFixtureSnapshot(t)
 	orig := readProcessInfoFn
 	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
 		ppid, ok := tree[pid]
@@ -36,6 +61,7 @@ func withProcessTree(t *testing.T, tree map[int]int) {
 // where processStartTimeFn is only ever consulted after isPidAliveFn passes.
 func withLivePids(t *testing.T, live map[int]string) {
 	t.Helper()
+	withFixtureSnapshot(t)
 	origAlive := isPidAliveFn
 	origStart := processStartTimeFn
 	isPidAliveFn = func(pid int) bool {
@@ -63,6 +89,7 @@ func withProcessReadError(t *testing.T, pids ...int) {
 	for _, pid := range pids {
 		failing[pid] = true
 	}
+	withFixtureSnapshot(t)
 	orig := readProcessInfoFn
 	readProcessInfoFn = func(pid int) (agentpkg.ProcessInfo, error) {
 		if failing[pid] {
@@ -85,6 +112,7 @@ func withProcessTreeSequence(t *testing.T, pid int, ppids []int) {
 	if len(ppids) == 0 {
 		t.Fatalf("withProcessTreeSequence: empty ppid sequence")
 	}
+	withFixtureSnapshot(t)
 	orig := readProcessInfoFn
 	calls := 0
 	readProcessInfoFn = func(queried int) (agentpkg.ProcessInfo, error) {
