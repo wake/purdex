@@ -686,3 +686,115 @@ describe('transcript scroll memory', () => {
     expect(readScrollMemo(PANE)?.scrollTop).toBe(300)
   })
 })
+
+/** jsdom has no layout: the prelude wrapper is 100px per [data-row] child, everything else 0. */
+let offsetHeightDesc: PropertyDescriptor | undefined
+beforeEach(() => {
+  offsetHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get(this: HTMLElement) { return this.dataset?.testid === 'prelude-anchor' ? this.querySelectorAll('[data-row]').length * 100 : 0 },
+  })
+})
+afterEach(() => { if (offsetHeightDesc) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeightDesc) })
+
+const rows = (n: number) => <div>{Array.from({ length: n }, (_, i) => <div key={i} data-row />)}</div>
+
+/** Like `geometry`, but scrollHeight is real-ish: `base` of content plus the prelude anchor's own height. */
+function liveGeometry(box: HTMLElement, base: { v: number }, clientHeight: number, scrollTop: number) {
+  Object.defineProperty(box, 'scrollHeight', {
+    configurable: true,
+    get() { return base.v + (box.querySelector<HTMLElement>('[data-testid="prelude-anchor"]')?.offsetHeight ?? 0) },
+  })
+  Object.defineProperty(box, 'clientHeight', { configurable: true, value: clientHeight })
+  Object.defineProperty(box, 'scrollTop', { configurable: true, writable: true, value: scrollTop })
+}
+
+describe.each(views)('%s: prepending the prelude keeps the reader in place (Review Focus 4)', (_name, View) => {
+  const props = { messages: [said('a')], keyPrefix: 'k', showThinking: false, showEmptyHint: false } as RoomTranscriptProps
+  const setup = (top: number, anchorRows = 1, extra: Partial<RoomTranscriptProps> = {}) => {
+    const base = { v: 1000 - anchorRows * 100 }
+    const out = render(<View {...props} {...extra} prelude={rows(anchorRows)} preludeVersion="1:ok" />)
+    const box = out.container.firstChild as HTMLElement
+    liveGeometry(box, base, 400, top)
+    fireEvent.scroll(box)
+    scrollTo.mockClear()
+    return { ...out, box, base }
+  }
+
+  it('mid-transcript: what is on screen does not move', () => {
+    const { rerender, box } = setup(300)
+    rerender(<View {...props} prelude={rows(7)} preludeVersion="2:ok" />)
+    expect(box.scrollTop).toBe(900)
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('at the bottom: pinned to the end, and a live message still follows', () => {
+    const { rerender, box, base } = setup(600)
+    rerender(<View {...props} prelude={rows(7)} preludeVersion="2:ok" />)
+    expect(box.scrollTop).toBe(box.scrollHeight)
+    expect(box.scrollHeight).toBe(1600)
+    base.v += 50
+    rerender(<View {...props} messages={[said('a'), said('b')]} prelude={rows(7)} preludeVersion="2:ok" />)
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 1650, behavior: 'smooth' })
+  })
+
+  it('a smooth follow still travelling is not stranded by the prepend: pinned to the bottom', () => {
+    const { rerender, box, base } = setup(600)
+    base.v += 50
+    rerender(<View {...props} messages={[said('a'), said('b')]} prelude={rows(1)} preludeVersion="1:ok" />)
+    expect(scrollTo).toHaveBeenCalledTimes(1)
+    rerender(<View {...props} messages={[said('a'), said('b')]} prelude={rows(7)} preludeVersion="2:ok" />)
+    expect(box.scrollTop).toBe(1650)
+  })
+
+  it('a live message in the same commit is not counted as growth above, and does not scroll a reader away from the middle', () => {
+    const { rerender, box, base } = setup(300)
+    base.v += 50
+    rerender(<View {...props} messages={[said('a'), said('b')]} prelude={rows(7)} preludeVersion="2:ok" />)
+    expect(box.scrollTop).toBe(900)
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('no version change, no correction', () => {
+    const { rerender, box } = setup(300)
+    rerender(<View {...props} prelude={rows(3)} preludeVersion="1:ok" />)
+    expect(box.scrollTop).toBe(300)
+  })
+
+  it('a status-only change that shrinks the section (loading row gone) shifts up by that much', () => {
+    const out = render(<View {...props} prelude={rows(7)} preludeVersion="2:loading" />)
+    const box = out.container.firstChild as HTMLElement
+    liveGeometry(box, { v: 2000 }, 400, 900)
+    fireEvent.scroll(box)
+    out.rerender(<View {...props} prelude={rows(1)} preludeVersion="2:ok" />)
+    expect(box.scrollTop).toBe(300)
+  })
+
+  it('before the first placement there is nothing to keep', () => {
+    delete (Element.prototype as { scrollTo?: unknown }).scrollTo
+    const { rerender, box } = setup(300)
+    rerender(<View {...props} prelude={rows(7)} preludeVersion="2:ok" />)
+    expect(box.scrollTop).toBe(300)
+  })
+
+  it('a released reader keeps their place and is not pulled to the bottom by later growth', () => {
+    const control = createRef<TranscriptScrollControl>()
+    const { rerender, box, base } = setup(300, 1, { scrollControl: control })
+    control.current!.release()
+    rerender(<View {...props} scrollControl={control} prelude={rows(7)} preludeVersion="2:ok" />)
+    expect(box.scrollTop).toBe(900)
+    base.v += 50
+    rerender(<View {...props} scrollControl={control} messages={[said('a'), said('b')]} prelude={rows(7)} preludeVersion="2:ok" />)
+    expect(box.scrollTop).toBe(900)
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('the box opts out of the browser’s own scroll anchoring only when it has a prelude', () => {
+    const withPrelude = render(<View {...props} prelude={rows(1)} preludeVersion="1:ok" />)
+    expect((withPrelude.container.firstChild as HTMLElement).className).toContain('[overflow-anchor:none]')
+    withPrelude.unmount()
+    const without = render(<View {...props} />)
+    expect((without.container.firstChild as HTMLElement).className).not.toContain('overflow-anchor')
+  })
+})

@@ -2097,7 +2097,11 @@ function preludeUnits(opts: SearchUnitOptions, prelude: PreludeView, push: Push)
   const w: Walk = { messages: prelude.messages, index: indexOperations(prelude.messages, idOf), tools: prelude.tools, push, idOf }
   const note = (e: Extract<PreludeEntry, { kind: 'note' }>) => {
     const id = preludeId(e.pos)
-    // bash_input and task_notification are drawn whole (PreludeNote); the rest sit in a fold.
+    // As PreludeNote draws it: bash_input and task_notification whole (the
+    // anchor holds the text only, never the "! " prefix); peer_message as
+    // prose (RoomProse: the rendered markdown, never folded); the rest
+    // (command / bash output, unknown sources) inside a fold.
+    if (e.source === 'peer_message') { push(searchUnitId(`${id}:note`, 'text'), proseText(e.text), []); return }
     const folded = e.source !== 'bash_input' && e.source !== 'task_notification'
     push(searchUnitId(`${id}:note`, 'text'), e.text, folded ? [`${id}:note`] : [])
   }

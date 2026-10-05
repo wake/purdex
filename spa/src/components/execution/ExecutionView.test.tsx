@@ -4,6 +4,7 @@ import { render, screen, fireEvent, act, waitFor, within } from '@testing-librar
 import ExecutionView from './ExecutionView'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useUndoToast } from '../../stores/useUndoToast'
@@ -18,7 +19,7 @@ import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
 
-vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn() }))
+vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
@@ -1849,5 +1850,63 @@ describe('ExecutionView — attachments', () => {
     fireEvent.drop(root, { dataTransfer: { types: ['Files'], files: [txt('a.txt')] } })
     expect(screen.queryAllByTestId('upload-chip')).toHaveLength(0)
     expect(api.uploadWorkerFile).not.toHaveBeenCalled()
+  })
+})
+
+describe('ExecutionView — worker prelude', () => {
+  const said = (text: string) =>
+    ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }], stop_reason: null } }) as Exec['messages'][number]
+  const CAP = { route: { method: 'GET', path: '/x' }, page_max_items: 500, page_max_bytes: 1, max_block_bytes: 1 }
+  const seed = (resume: boolean) => {
+    useNexHostStore.setState({ byHost: { [H]: { phase: 'ready', capabilities: { transcript_prelude: CAP } } } } as never)
+    useExecutionStore.getState().setSummary(H, E, summary(resume ? { resume_session_id: 'sid' } : {}) as never)
+    patchExec({ messages: [said('the brief')], turnStarts: [0] })
+    vi.mocked(api.fetchExecutionPrelude).mockResolvedValue({
+      state: 'ok', prevCursor: null, totalBytes: null,
+      items: [{ pos: '2', at: 1, kind: 'user', msg: said('earlier') }],
+    } as never)
+  }
+  let offsetHeightDesc: PropertyDescriptor | undefined
+  beforeEach(() => {
+    offsetHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+  })
+  afterEach(() => {
+    if (offsetHeightDesc) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeightDesc)
+    delete (Element.prototype as { scrollTo?: unknown }).scrollTo
+    useNexHostStore.setState({ byHost: {} })
+    vi.mocked(api.fetchExecutionPrelude).mockReset()
+  })
+
+  it('draws the prelude above the brief line (turn 1)', async () => {
+    seed(true)
+    render(<ExecutionView {...base} isActive />)
+    const earlier = await screen.findByText('earlier')
+    const brief = screen.getByText('the brief')
+    expect(earlier.compareDocumentPosition(brief) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('a worker without a resume session id gets no prelude markup and no request (D4)', () => {
+    seed(false)
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.queryByTestId('prelude-anchor')).toBeNull()
+    expect(api.fetchExecutionPrelude).not.toHaveBeenCalled()
+  })
+
+  it('the composed preludeVersion drives the scroll correction when the first page lands', async () => {
+    seed(true)
+    Element.prototype.scrollTo = vi.fn() as unknown as Element['scrollTo']
+    // jsdom has no layout: the anchor is as tall as its text.
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) { return this.dataset?.testid === 'prelude-anchor' ? (this.textContent ?? '').length : 0 },
+    })
+    render(<ExecutionView {...base} isActive />)
+    const box = screen.getByTestId('prelude-anchor').parentElement as HTMLElement
+    Object.defineProperty(box, 'scrollHeight', { configurable: true, value: 100000 })
+    Object.defineProperty(box, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(box, 'scrollTop', { configurable: true, writable: true, value: 300 })
+    fireEvent.scroll(box)
+    await screen.findByText('earlier')
+    expect(box.scrollTop).not.toBe(300)
   })
 })

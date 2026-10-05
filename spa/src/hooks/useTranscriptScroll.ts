@@ -75,6 +75,8 @@ export interface TranscriptScroll {
   follow: () => void
   /** Stop following where the box is now, until the reader is back at the bottom (A F4). */
   release: () => void
+  /** Content above the reader changed height by `delta` (the prelude): keep what is on screen where it is. */
+  shiftBy: (delta: number) => void
 }
 
 /** What a transcript hands its `scrollControl` ref (the search bar's handle). */
@@ -273,5 +275,32 @@ export function useTranscriptScroll(
     remember(el)
   }, [remember])
 
-  return useMemo(() => ({ attach, onScroll: observe, follow, release }), [attach, observe, follow, release])
+  /**
+   * Content above the reader changed height by `delta` (the prelude, spec
+   * §5.4). A reader scrolled up gets `scrollTop += delta`, so what is on
+   * screen stays put. A reader at the bottom, or one a smooth follow is still
+   * carrying there, is pinned to the end instead: writing `scrollTop` aborts
+   * an in-flight smooth scroll (CSSOM), which would strand a fresh pane
+   * mid-way, and the distance to the end is what they want kept. Before the
+   * first placement there is nothing to keep: `follow`'s first call places
+   * the reader. The box opts out of the browser's own anchoring
+   * (`overflow-anchor: none`) when it has a prelude, so this is the only
+   * correction.
+   */
+  const shiftBy = useCallback((delta: number) => {
+    const el = box.current
+    if (!el || !scrolled.current || delta === 0) return
+    if (atBottom.current || smoothTarget.current !== null) {
+      el.scrollTop = el.scrollHeight
+      smoothTarget.current = null
+      atBottom.current = true
+    } else {
+      el.scrollTop += delta
+    }
+    lastTop.current = el.scrollTop
+    if (released.current !== null) released.current = el.scrollTop
+    remember(el)
+  }, [remember])
+
+  return useMemo(() => ({ attach, onScroll: observe, follow, release, shiftBy }), [attach, observe, follow, release, shiftBy])
 }

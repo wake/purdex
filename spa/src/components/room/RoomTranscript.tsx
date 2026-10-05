@@ -24,6 +24,7 @@ import RoomTurnGroup from './RoomTurnGroup'
 import TurnFooter from './TurnFooter'
 import { renderMessage, type RenderCtx } from './render-message'
 import { FoldContext, useInheritedFoldMemory } from './fold-context'
+import PreludeAnchor from './prelude/PreludeAnchor'
 import { useScrollControl, useTranscriptScroll, type TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
 
 export interface RoomTranscriptProps {
@@ -62,6 +63,10 @@ export interface RoomTranscriptProps {
   scrollControl?: Ref<TranscriptScrollControl>
   /** The pane whose scroll position this transcript remembers and restores on mount (spec §6). */
   scrollMemoryKey?: string
+  /** The conversation before turn 1 (spec §5.3), drawn first. */
+  prelude?: ReactNode
+  /** `${pages}:${status}`; drives `PreludeAnchor`. */
+  preludeVersion?: string
 }
 
 const NO_STARTS: readonly number[] = []
@@ -90,10 +95,12 @@ export default function RoomTranscript({
   holdScroll = false,
   scrollControl,
   scrollMemoryKey,
+  prelude,
+  preludeVersion,
 }: RoomTranscriptProps) {
   const t = useI18nStore((s) => s.t)
   const scroll = useTranscriptScroll(scrollRef, holdScroll, scrollMemoryKey ? { paneId: scrollMemoryKey, view: 'room' } : undefined)
-  const { attach, onScroll, follow } = scroll
+  const { attach, onScroll, follow, shiftBy } = scroll
   useScrollControl(scrollControl, scroll)
   const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
   const hasPending = hasContent(children)
@@ -126,12 +133,15 @@ export default function RoomTranscript({
   return (
     // `p-4` — RoomUserLine's `-mx-4` bleeds the user band back out to this
     // container's edges (spec §5.4). If you change one, change the other.
-    <div ref={attach} onScroll={onScroll} className="flex-1 overflow-y-auto p-4 space-y-4">
+    <div ref={attach} onScroll={onScroll} className={`flex-1 overflow-y-auto p-4 space-y-4${prelude !== undefined ? ' [overflow-anchor:none]' : ''}`}>
       <FoldContext.Provider value={foldStore}>
         {showEmptyHint && (
           <div className="flex items-center justify-center h-full text-text-muted text-sm">
             {emptyText ?? t('stream.waiting')}
           </div>
+        )}
+        {prelude !== undefined && (
+          <PreludeAnchor version={preludeVersion ?? ''} onGrow={shiftBy}>{prelude}</PreludeAnchor>
         )}
         {shown.map((turn, ti) => (
           <RoomTurnGroup key={`${keyPrefix}-turn-${ti}`} index={ti}>

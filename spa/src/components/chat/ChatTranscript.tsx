@@ -33,6 +33,7 @@ import OperationBlock from '../room/OperationBlock'
 import { OperationAt } from '../room/MessageRow'
 import type { RenderCtx } from '../room/render-message'
 import { FoldContext, useInheritedFoldMemory } from '../room/fold-context'
+import PreludeAnchor from '../room/prelude/PreludeAnchor'
 import { useScrollControl, useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 import type { RoomTranscriptProps } from '../room/RoomTranscript'
 import ChatBubble, { ChatUserBubble } from './ChatBubble'
@@ -168,10 +169,12 @@ export default function ChatTranscript({
   holdScroll = false,
   scrollControl,
   scrollMemoryKey,
+  prelude,
+  preludeVersion,
 }: ChatTranscriptProps) {
   const t = useI18nStore((s) => s.t)
   const scroll = useTranscriptScroll(scrollRef, holdScroll, scrollMemoryKey ? { paneId: scrollMemoryKey, view: 'chat' } : undefined)
-  const { attach, onScroll, follow } = scroll
+  const { attach, onScroll, follow, shiftBy } = scroll
   useScrollControl(scrollControl, scroll)
   const hasPartial = !!partial && Object.keys(partial.blocks).length > 0
   const hasPending = hasContent(children)
@@ -208,12 +211,15 @@ export default function ChatTranscript({
   const ctx: RenderCtx = { messages, index, tools, now, keyPrefix, depth: 0, subagentTasks }
 
   return (
-    <div ref={attach} onScroll={onScroll} className="@container flex-1 overflow-y-auto p-4 space-y-3">
+    <div ref={attach} onScroll={onScroll} className={`@container flex-1 overflow-y-auto p-4 space-y-3${prelude !== undefined ? ' [overflow-anchor:none]' : ''}`}>
       <FoldContext.Provider value={foldStore}>
         {showEmptyHint && (
           <div className="flex items-center justify-center h-full text-text-muted text-sm">
             {emptyText ?? t('stream.waiting')}
           </div>
+        )}
+        {prelude !== undefined && (
+          <PreludeAnchor version={preludeVersion ?? ''} onGrow={shiftBy}>{prelude}</PreludeAnchor>
         )}
         {shown.map((turn, ti) => {
           const ops = opsByTurn[ti] ?? []
