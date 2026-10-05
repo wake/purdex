@@ -14,6 +14,8 @@ import type { HostColorMode } from '../../lib/host-color'
 import { hostLabel, hostLookOf, useHostLook } from '../../lib/host-look'
 import { setHostShown, useIsRefShown } from '../../lib/shown-hosts'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
+import { useDaemonRestartStore } from '../../stores/useDaemonRestartStore'
+import { RestartDaemonButton } from './RestartDaemonButton'
 
 interface Props {
   hostId: string
@@ -37,6 +39,8 @@ export function OverviewSection({ hostId }: Props) {
   const setHostName = useHostStore((s) => s.setHostName)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const shown = useIsRefShown(hostId)
+  const restarting = useDaemonRestartStore((s) => !!s.restarting[hostId])
+  const settled = useDaemonRestartStore((s) => s.settled[hostId])
 
   const [info, setInfo] = useState<HostInfo | null>(null)
   const [config, setConfig] = useState<ConfigData | null>(null)
@@ -77,7 +81,8 @@ export function OverviewSection({ hostId }: Props) {
       .catch(() => {})
 
     return () => { cancelled = true }
-  }, [hostId])
+    // settled: a restart may have swapped in a new binary — re-read the daemon's facts.
+  }, [hostId, settled])
 
   if (!host) return null
 
@@ -303,6 +308,11 @@ export function OverviewSection({ hostId }: Props) {
           </>
         ) : (
           <p className="text-xs text-text-muted">{t('hosts.loading')}</p>
+        )}
+        {(runtime?.status === 'connected' || restarting) && (
+          <div className="mt-3">
+            <RestartDaemonButton hostId={hostId} />
+          </div>
         )}
       </Section>
 

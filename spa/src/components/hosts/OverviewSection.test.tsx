@@ -9,6 +9,7 @@ import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
 import { syncIdOfSync } from '../../lib/profile/host-identity'
 import { STORAGE_KEYS } from '../../lib/storage'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useDaemonRestartStore } from '../../stores/useDaemonRestartStore'
 
 // HostIconField renders a Phosphor icon whose weight loader fetches
 // /icons/<weight>.json — that would consume this suite's fetch mocks.
@@ -749,5 +750,38 @@ describe('OverviewSection — the show in this workbench switch (H2d-2)', () => 
     fireEvent.click(theSwitch())
     expect(useTabStore.getState().tabs).toBe(tabs)
     expect(useWorkspaceStore.getState().workspaces).toBe(workspaces)
+  })
+})
+
+describe('restart daemon (R1)', () => {
+  beforeEach(() => {
+    useDaemonRestartStore.setState({ restarting: {}, settled: {} })
+  })
+
+  it('shows the restart button for a connected host', async () => {
+    render(<OverviewSection hostId={HOST_ID} />)
+    expect(await screen.findByTestId('restart-daemon')).toBeTruthy()
+  })
+
+  it('no button for a disconnected host', async () => {
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
+    render(<OverviewSection hostId={HOST_ID} />)
+    await screen.findByText(useI18nStore.getState().t('hosts.daemon_config'))
+    expect(screen.queryByTestId('restart-daemon')).toBeNull()
+  })
+
+  it('stays (spinning) while its restart runs even if the host drops to reconnecting', async () => {
+    useDaemonRestartStore.setState({ restarting: { [HOST_ID]: true } })
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'reconnecting' } } })
+    render(<OverviewSection hostId={HOST_ID} />)
+    expect(((await screen.findByTestId('restart-daemon')) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('re-reads /api/info after a restart settles', async () => {
+    render(<OverviewSection hostId={HOST_ID} />)
+    await waitFor(() => expect(mockFetchInfo).toHaveBeenCalled())
+    const before = mockFetchInfo.mock.calls.length
+    act(() => useDaemonRestartStore.setState({ settled: { [HOST_ID]: 1 } }))
+    await waitFor(() => expect(mockFetchInfo.mock.calls.length).toBe(before + 1))
   })
 })
