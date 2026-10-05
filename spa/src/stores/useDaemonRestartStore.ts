@@ -31,10 +31,17 @@ export const useDaemonRestartStore = create<DaemonRestartState>()((set, get) => 
     set((s) => ({ restarting: { ...s.restarting, [hostId]: true } }))
     try {
       const r = await restartDaemon(hostId)
+      // restartDaemon resolved: the restart succeeded. Follow-up steps must never turn that into a failure notice.
       // Same as the Development page's own restart always did: the IPC hands back the daemon's url/token.
-      if (r.ipc) useHostStore.getState().registerLocalHost({ url: r.ipc.url, token: r.ipc.token, hostname: r.ipc.hostname })
+      try {
+        if (r.ipc) useHostStore.getState().registerLocalHost({ url: r.ipc.url, token: r.ipc.token, hostname: r.ipc.hostname })
+      } catch (err) {
+        console.warn('[daemon-restart] re-register local host failed', err)
+      }
       // /api/info re-read: the Nex page's restart_required hint goes away (spec §3.3).
-      void useNexHostStore.getState().invalidate(hostId)
+      try {
+        void useNexHostStore.getState().invalidate(hostId).catch(() => {})
+      } catch { /* a synchronous throw is equally irrelevant to the outcome */ }
       const t = useI18nStore.getState().t
       useUndoToast.getState().show(
         r.shutdownWarnings > 0

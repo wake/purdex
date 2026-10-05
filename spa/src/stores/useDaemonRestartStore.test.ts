@@ -43,6 +43,7 @@ describe('useDaemonRestartStore', () => {
     await useDaemonRestartStore.getState().restart('h1', 'mlab')
     expect(useUndoToast.getState().toast?.message).toBe('mlab：daemon 已重新啟動')
     expect(invalidate).toHaveBeenCalledWith('h1')
+    expect(useUndoToast.getState().notice).toBeNull()
   })
 
   it('success with shutdown warnings → the warning toast', async () => {
@@ -50,6 +51,7 @@ describe('useDaemonRestartStore', () => {
     vi.mocked(restartLib.restartDaemon).mockResolvedValueOnce({ ipc: null, shutdownWarnings: 2 })
     await useDaemonRestartStore.getState().restart('h1', 'mlab')
     expect(useUndoToast.getState().toast?.message).toBe('mlab：daemon 已重新啟動，但關閉時有 2 個警告（見 ~/.config/pdx/logs/pdx.log）')
+    expect(useUndoToast.getState().notice).toBeNull()
   })
 
   it('IPC result re-registers the local host', async () => {
@@ -70,7 +72,34 @@ describe('useDaemonRestartStore', () => {
     vi.mocked(restartLib.restartDaemon).mockRejectedValueOnce(err)
     await useDaemonRestartStore.getState().restart('h1', 'mlab')
     expect(useUndoToast.getState().notice?.message).toBe(text)
+    expect(useUndoToast.getState().toast).toBeNull()
     expect(useDaemonRestartStore.getState().restarting.h1).toBeUndefined()
     expect(useDaemonRestartStore.getState().settled.h1).toBe(1)
+  })
+
+  it('a throwing re-register after a successful restart stays a success', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const reg = vi.spyOn(useHostStore.getState(), 'registerLocalHost').mockImplementation(() => { throw new TypeError('Invalid URL') })
+    vi.spyOn(useNexHostStore.getState(), 'invalidate').mockResolvedValue()
+    vi.mocked(restartLib.restartDaemon).mockResolvedValueOnce({
+      ipc: { url: 'not a url', token: 't', hash: 'x', version: 'v', hostname: 'air' },
+      shutdownWarnings: 0,
+    } as never)
+    await useDaemonRestartStore.getState().restart('h1', 'air')
+    expect(useUndoToast.getState().toast?.message).toBe('air：daemon 已重新啟動')
+    expect(useUndoToast.getState().notice).toBeNull()
+    expect(useDaemonRestartStore.getState().settled.h1).toBe(1)
+    expect(warn).toHaveBeenCalledWith('[daemon-restart] re-register local host failed', expect.any(TypeError))
+    reg.mockRestore(); warn.mockRestore()
+  })
+
+  it('a rejecting invalidate neither fails the restart nor goes unhandled', async () => {
+    const inv = vi.spyOn(useNexHostStore.getState(), 'invalidate').mockReturnValue(Promise.reject(new Error('x')))
+    vi.mocked(restartLib.restartDaemon).mockResolvedValueOnce(ok)
+    await useDaemonRestartStore.getState().restart('h1', 'mlab')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(useUndoToast.getState().toast?.message).toBe('mlab：daemon 已重新啟動')
+    expect(useUndoToast.getState().notice).toBeNull()
+    inv.mockRestore()
   })
 })
