@@ -27,10 +27,12 @@ export interface PreludeState {
    * a page may legally hold no items and still have a cursor (spec §4.3).
    */
   pages: number
+  /** Every cursor handed back so far: a cursor seen twice is a cycle (c1 -> c2 -> c1), not progress. */
+  seenCursors: string[]
 }
 
 export function defaultPreludeState(): PreludeState {
-  return { status: 'idle', items: [], cursor: null, done: false, error: null, totalBytes: null, request: null, pages: 0 }
+  return { status: 'idle', items: [], cursor: null, done: false, error: null, totalBytes: null, request: null, pages: 0, seenCursors: [] }
 }
 
 // Overwrites `request` unconditionally; the lock (refusing while status is
@@ -47,8 +49,9 @@ export function preludeFailed(p: PreludeState, message: string, request: number)
 /**
  * Fold one page in, if `request` is the one in flight. `sentBefore` is the
  * cursor the request carried (null for the first page):
- * - a page that hands back the same cursor made no progress (a server bug)
- *   and becomes an error the reader can retry, never a loop (Review Focus 2);
+ * - a page that hands back the same cursor, or any cursor already seen,
+ *   made no progress (a server bug) and becomes an error the reader can
+ *   retry, never a loop (Review Focus 2);
  * - `none` is only ever the first page's answer (spec §4.2); on an older
  *   page it is a contract violation, so an error;
  * - `gone` ends the prelude and keeps what was loaded (the D5 line is drawn
@@ -60,7 +63,7 @@ export function applyPreludePage(p: PreludeState, page: PreludePage, sentBefore:
     return { ...p, status: 'error', error: 'prelude: none on an older page', request: null }
   }
   if (page.state !== 'ok') return { ...p, status: page.state, cursor: null, done: true, error: null, request: null }
-  if (page.prevCursor !== null && page.prevCursor === sentBefore) {
+  if (page.prevCursor !== null && (page.prevCursor === sentBefore || p.seenCursors.includes(page.prevCursor))) {
     return { ...p, status: 'error', error: 'prelude cursor did not advance', request: null }
   }
   const known = new Set(p.items.map((i) => i.pos))
@@ -74,6 +77,7 @@ export function applyPreludePage(p: PreludeState, page: PreludePage, sentBefore:
     totalBytes: page.totalBytes ?? p.totalBytes,
     request: null,
     pages: p.pages + 1,
+    seenCursors: page.prevCursor !== null ? [...p.seenCursors, page.prevCursor] : p.seenCursors,
   }
 }
 

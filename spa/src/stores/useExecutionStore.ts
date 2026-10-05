@@ -64,6 +64,8 @@ interface ExecutionStore {
   applyPreludePage: (hostId: string, executionId: string, page: PreludePage, sentBefore: string | null, request: number) => void
   /** No-op unless `request` is the one in flight. */
   preludeFailed: (hostId: string, executionId: string, message: string, request: number) => void
+  /** The prelude stopped on a client limit (loadAll's page cap): an error with Retry. No-op while a request is in flight. */
+  preludeHalted: (hostId: string, executionId: string, message: string) => void
   /** Back to idle, which reloads from the first page (spec §5.2: a cursor rejected as foreign). */
   resetPrelude: (hostId: string, executionId: string) => void
   clearExecution: (hostId: string, executionId: string) => void
@@ -125,6 +127,9 @@ export const useExecutionStore = create<ExecutionStore>()(subscribeWithSelector(
       const prelude = failPrelude(c.prelude, message, r)
       return prelude === c.prelude ? c : { ...c, prelude }
     }),
+    preludeHalted: (h, e, message) => patch(h, e, (c) => (
+      c.prelude.status === 'loading' ? c : { ...c, prelude: { ...c.prelude, status: 'error', error: message, request: null } }
+    )),
     resetPrelude: (h, e) => patch(h, e, (c) => ({ ...c, prelude: defaultPreludeState() })),
 
     clearExecution: (h, e) => set((s) => {

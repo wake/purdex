@@ -148,6 +148,17 @@ describe('useExecutionPrelude', () => {
     expect(prelude().items.map((i) => i.pos)).toEqual(['10', '20', '30'])
   })
 
+  it('loadAll stopped by its page cap while pages remain ends in an error, not silently', async () => {
+    seed()
+    let n = 0
+    fetchExecutionPrelude.mockImplementation(async () => { n++; return ok(String(1000 - n), `c${n}`) })
+    const { result } = renderHook(() => useExecutionPrelude('h', 'e'))
+    await waitFor(() => expect(prelude().status).toBe('ok'))
+    await act(async () => { await result.current.loadAll(2) })
+    expect(fetchExecutionPrelude).toHaveBeenCalledTimes(3)
+    expect(prelude()).toMatchObject({ status: 'error', error: 'prelude: too many pages', done: false })
+  })
+
   it('loadAll started while the first page is in flight waits for it, then pages on without re-requesting it', async () => {
     seed()
     let resolveFirst!: (p: PreludePage) => void

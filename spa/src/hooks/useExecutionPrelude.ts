@@ -19,7 +19,7 @@ let nextRequest = 1
 
 export function useExecutionPrelude(hostId: string, executionId: string): {
   loadOlder: () => void
-  loadAll: () => Promise<void>
+  loadAll: (maxPages?: number) => Promise<void>
   retry: () => void
 } {
   const key = executionKey(hostId, executionId)
@@ -76,8 +76,8 @@ export function useExecutionPrelude(hostId: string, executionId: string): {
     if (useExecutionStore.getState().executions[key]?.prelude.status === 'error') void fetchOne()
   }, [key, fetchOne])
 
-  const loadAll = useCallback(async () => {
-    for (let i = 0; i < MAX_LOAD_ALL_PAGES; i++) {
+  const loadAll = useCallback(async (maxPages = MAX_LOAD_ALL_PAGES) => {
+    for (let i = 0; i < maxPages; i++) {
       const p = useExecutionStore.getState().executions[key]?.prelude
       if (!p || p.done || p.status === 'error' || p.status === 'none' || p.status === 'gone' || p.status === 'idle') return
       if (p.status === 'loading') {
@@ -92,7 +92,10 @@ export function useExecutionPrelude(hostId: string, executionId: string): {
       }
       if (!(await fetchOne())) return
     }
-  }, [key, fetchOne])
+    // The cap ended the loop with pages still to come: say so (error + Retry), never stop silently.
+    const p = useExecutionStore.getState().executions[key]?.prelude
+    if (p && p.status === 'ok' && !p.done) useExecutionStore.getState().preludeHalted(hostId, executionId, 'prelude: too many pages')
+  }, [key, hostId, executionId, fetchOne])
 
   return { loadOlder, loadAll, retry }
 }

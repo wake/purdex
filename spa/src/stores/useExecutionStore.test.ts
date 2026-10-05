@@ -254,6 +254,25 @@ describe('prelude actions', () => {
     expect(after.tools).toBe(before.tools)
   })
 
+  it('preludeHalted is a no-op while loading, and otherwise sets the error and frees the lock, keeping items and cursor', () => {
+    const s = useExecutionStore.getState()
+    const page = { state: 'ok' as const, items: [{ pos: '1', at: 1, kind: 'prelude.segment' as const, entrypoint: 'cli' }], prevCursor: 'c', totalBytes: null }
+    s.preludeLoading('h', 'e', 1)
+    s.applyPreludePage('h', 'e', page, null, 1)
+    s.preludeLoading('h', 'e', 2)
+    const loading = useExecutionStore.getState().executions[executionKey('h', 'e')]
+    s.preludeHalted('h', 'e', 'ignored')
+    expect(useExecutionStore.getState().executions[executionKey('h', 'e')]).toBe(loading)
+    s.preludeFailed('h', 'e', 'x', 2)
+    s.resetPrelude('h', 'e')
+    s.preludeLoading('h', 'e', 3)
+    s.applyPreludePage('h', 'e', page, null, 3)
+    s.preludeHalted('h', 'e', 'prelude: too many pages')
+    const p = useExecutionStore.getState().executions[executionKey('h', 'e')].prelude
+    expect(p).toMatchObject({ status: 'error', error: 'prelude: too many pages', request: null, cursor: 'c' })
+    expect(p.items).toHaveLength(1)
+  })
+
   it('a stale request id leaves the entry referentially identical (apply and fail)', () => {
     const s = useExecutionStore.getState()
     s.preludeLoading('h', 'e', 2)

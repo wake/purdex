@@ -42,6 +42,17 @@ describe('applyPreludePage', () => {
     expect(p2.cursor).toBe('c1')
   })
 
+  it('a cursor cycle c1 -> c2 -> c1 errors on the third page and keeps the items; seenCursors grows', () => {
+    const p1 = load(defaultPreludeState(), ok([msg('30', 'user', [])], 'c1'), null, 1)
+    expect(p1.seenCursors).toEqual(['c1'])
+    const p2 = load(p1, ok([msg('20', 'user', [])], 'c2'), 'c1', 2)
+    expect(p2.seenCursors).toEqual(['c1', 'c2'])
+    const p3 = load(p2, ok([msg('10', 'user', [])], 'c1'), 'c2', 3)
+    expect(p3).toMatchObject({ status: 'error', error: 'prelude cursor did not advance', request: null, cursor: 'c2' })
+    expect(p3.items).toBe(p2.items)
+    expect(p3.seenCursors).toEqual(['c1', 'c2'])
+  })
+
   it('gone ends the prelude and keeps what was loaded; none on an older page is an error', () => {
     const p1 = load(defaultPreludeState(), ok([msg('10', 'user', [])], 'c1'), null, 1)
     const g = load(p1, { state: 'gone', items: [], prevCursor: null, totalBytes: null }, 'c1', 2)
