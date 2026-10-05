@@ -77,12 +77,14 @@ export function useWorkerListResize(open: boolean): WorkerListResize {
     setDraft(next)
   }
   const onResizeEnd = () => {
-    const committed = draftRef.current
-    if (committed === null) return
+    const drafted = draftRef.current
+    if (drafted === null) return
     draftRef.current = null
     setDraft(null)
     // The box shrank below the minimum mid-drag: drop the draft rather than store a height the screen does not show.
-    if (resizable) setStored(committed)
+    if (!resizable) return
+    // The cap may have shrunk under the draft since the last move; store what is on screen.
+    setStored(cap === null ? drafted : Math.min(drafted, cap))
   }
 
   return { splitBoxRef, height, onResize, onResizeEnd }

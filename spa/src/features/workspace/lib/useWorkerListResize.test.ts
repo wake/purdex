@@ -100,6 +100,27 @@ describe('useWorkerListResize', () => {
     expect(result.current.height).toBe(200)
   })
 
+  it('a cap that shrinks mid-drag but stays resizable commits the on-screen height, not the larger draft', () => {
+    const ro = stubResizeObserver()
+    useLayoutStore.setState({ workerListHeight: 300 })
+    const { result } = renderResize()
+    ro.fire(400 + WORKSPACE_ZONE_MIN + WORKER_DIVIDER_HEIGHT)
+    expect(result.current.height).toBe(300)
+
+    act(() => result.current.onResize(-50))
+    expect(result.current.height).toBe(350)
+
+    // The box shrinks with the pointer still: cap 250 ≥ WORKER_LIST_MIN, so the screen shows 250 and spec §4.2
+    // ("a drag stores what the user sees") means the end stores 250, not the 350 draft.
+    ro.fire(250 + WORKSPACE_ZONE_MIN + WORKER_DIVIDER_HEIGHT)
+    expect(result.current.height).toBe(250)
+    act(() => result.current.onResizeEnd())
+    expect(setWorkerListHeight).toHaveBeenCalledTimes(1)
+    expect(setWorkerListHeight).toHaveBeenCalledWith(250)
+    expect(useLayoutStore.getState().workerListHeight).toBe(250)
+    expect(result.current.height).toBe(250)
+  })
+
   // Spec §4.2 "a drag stores what the user sees": below WORKER_LIST_MIN no storable height matches the screen.
   describe('split box too short to resize (cap < WORKER_LIST_MIN)', () => {
     // cap = available − 96 − 4
