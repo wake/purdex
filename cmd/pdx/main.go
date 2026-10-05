@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	"github.com/wake/purdex/internal/codexbroker"
 	"github.com/wake/purdex/internal/config"
@@ -189,6 +190,16 @@ func runServe(args []string) *reexecPlan {
 	// After the PID lock, so only the daemon that owns this data_dir touches it.
 	removeLegacyDataFiles(cfg.DataDir, log.Printf)
 
+	// What the previous image's restart shutdown could not clean up (spec
+	// D13); consumed here so /api/info reports it once, for this boot.
+	lastShutdown, lsErr := takeLastShutdown(cfg.DataDir)
+	if lsErr != nil {
+		log.Printf("last shutdown: record problem (%v)", lsErr)
+	}
+	if lastShutdown != nil {
+		log.Printf("last shutdown: %d error(s) recorded by the previous image", len(lastShutdown.Errors))
+	}
+
 	// Register token for crash log redaction
 	if cfg.Token != "" {
 		setRedactTokens([]string{cfg.Token})
@@ -216,6 +227,7 @@ func runServe(args []string) *reexecPlan {
 		Config: &cfg,
 		Tmux:   tx,
 	})
+	c.LastShutdown = lastShutdown
 
 	// POST /api/daemon/restart → restartCh → serveAndWait runs the normal
 	// shutdown; the re-exec happens in main once this function's defers
@@ -303,6 +315,14 @@ func runServe(args []string) *reexecPlan {
 	err = serveAndWait(srv, listener, sigCh, restartCh, cancel, c, core.ShutdownBudget, log.Printf, os.Exit)
 	if errors.Is(err, errRestart) {
 		if restartStillWanted(sigCh, func() { signal.Stop(sigCh) }, log.Printf) {
+			// The restart goes ahead despite cleanup errors; leave a record
+			// so the new image can report them (spec D13).
+			var rr *restartRequested
+			if errors.As(err, &rr) && len(rr.warnings) > 0 {
+				if werr := writeLastShutdown(cfg.DataDir, rr.warnings, time.Now()); werr != nil {
+					log.Printf("last shutdown: not recorded (%v)", werr)
+				}
+			}
 			// Keep the pid lock held through the exec: the new image adopts it.
 			// reexec clears close-on-exec right before the exec.
 			handingOff = true

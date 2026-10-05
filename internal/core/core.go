@@ -40,6 +40,14 @@ type CoreDeps struct {
 	Registry *ServiceRegistry
 }
 
+// ShutdownReport is what the previous image recorded when a restart's
+// shutdown had cleanup errors (spec D13); /api/info reports it once, tied
+// to this process's boot_id.
+type ShutdownReport struct {
+	At     time.Time
+	Errors []string
+}
+
 // Core holds shared infrastructure and manages module lifecycle.
 type Core struct {
 	Cfg           *config.Config
@@ -78,6 +86,9 @@ type Core struct {
 	// BootID is new on every process start (newBootID, set in New) and is
 	// reported by /api/health; never mutated after New.
 	BootID string
+	// LastShutdown is the previous image's restart-cleanup record, if any;
+	// set before serving, read-only afterwards.
+	LastShutdown *ShutdownReport
 	// restartHook / life back POST /api/daemon/restart (restart.go).
 	restartHook func()
 	life        atomic.Int32
