@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   restartDaemon, postRestart, readBootId, readShutdownWarnings, isManagedLocal, countRunningWorkers,
-  DaemonRestartError, RESTART_TIMEOUT_MS, RESTART_POLL_MS, MAX_WORKER_PAGES, type RestartDeps,
+  DaemonRestartError, RESTART_TIMEOUT_MS, RESTART_POLL_MS, MAX_WORKER_PAGES, WORKER_COUNT_TIMEOUT_MS, type RestartDeps,
 } from './daemon-restart'
 import * as hostApi from './host-api'
 import * as nexApi from './nex/nex-api'
@@ -45,8 +45,22 @@ describe('restartDaemon — success needs a NEW boot id', () => {
   it('resolves once health answers a different boot id', async () => {
     const ids = ['old', 'old', 'new']
     const s = track(restartDaemon('h1', deps({ readBootId: async () => ids.shift() ?? 'new' })))
-    await vi.advanceTimersByTimeAsync(3 * RESTART_POLL_MS)
+    await vi.advanceTimersByTimeAsync(2 * RESTART_POLL_MS)
+    expect(s.done).toBe(false) // two polls still saw the old boot id
+    await vi.advanceTimersByTimeAsync(RESTART_POLL_MS)
     expect(s).toMatchObject({ done: true, value: { ipc: null, shutdownWarnings: 0 } })
+  })
+
+  it('a slow shutdown-warnings read near the deadline cannot turn success into timeout (D13)', async () => {
+    const t0 = Date.now()
+    const s = track(restartDaemon('h1', deps({
+      readBootId: async () => (Date.now() - t0 >= 59_000 ? 'new' : 'old'),
+      readShutdownWarnings: () => new Promise<number>((r) => setTimeout(() => r(2), 2000)),
+    })))
+    await vi.advanceTimersByTimeAsync(59_000) // the poll that sees the new boot id
+    await vi.advanceTimersByTimeAsync(3_000) // the read finishes at ~61 s, past the 60 s deadline
+    expect(s.error).toBeUndefined()
+    expect(s).toMatchObject({ done: true, value: { ipc: null, shutdownWarnings: 2 } })
   })
 
   it("passes the new boot's shutdown warnings through", async () => {
@@ -72,7 +86,9 @@ describe('restartDaemon — success needs a NEW boot id', () => {
 
   it('an unreachable host (null) is not success', async () => {
     const s = track(restartDaemon('h1', deps({ readBootId: async () => null })))
-    await vi.advanceTimersByTimeAsync(RESTART_TIMEOUT_MS)
+    await vi.advanceTimersByTimeAsync(RESTART_TIMEOUT_MS - 1)
+    expect(s.done).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
     expect((s.error as DaemonRestartError).kind).toBe('timeout')
   })
 
@@ -103,12 +119,14 @@ describe('restartDaemon — path choice', () => {
   it('managed local daemon → IPC, never the API', async () => {
     const post = vi.fn()
     const result = { url: 'http://127.0.0.1:7860', token: 't', hash: 'h', version: 'v', hostname: 'air' }
-    const ids = ['old', 'new']
+    // State-based: the real IPC resolves only once the NEW daemon is up, so a
+    // `before` read taken after localRestart would already be the new id.
+    let restarted = false
     const s = track(restartDaemon('h1', deps({
       isManagedLocal: async () => true,
-      localRestart: async () => result,
+      localRestart: async () => { restarted = true; return result },
       postRestart: post,
-      readBootId: async () => ids.shift() ?? 'new',
+      readBootId: async () => (restarted ? 'new' : 'old'),
     })))
     await vi.advanceTimersByTimeAsync(RESTART_POLL_MS)
     expect(s.value).toEqual({ ipc: result, shutdownWarnings: 0 })
@@ -229,6 +247,30 @@ describe('countRunningWorkers', () => {
     vi.mocked(nexApi.listExecutions).mockResolvedValue({ items: [{ state: 'running' }] as never, next_cursor: 'more' })
     await expect(countRunningWorkers('h1')).resolves.toBeNull()
     expect(nexApi.listExecutions).toHaveBeenCalledTimes(MAX_WORKER_PAGES)
+  })
+  describe('budget', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+    it('a list that never answers → null after the budget', async () => {
+      setNex('h1', { ready: true, mounted: true, configured: true })
+      vi.mocked(nexApi.listExecutions).mockReturnValue(new Promise(() => {}))
+      const s = track(countRunningWorkers('h1'))
+      await vi.advanceTimersByTimeAsync(WORKER_COUNT_TIMEOUT_MS - 1)
+      expect(s.done).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(s).toMatchObject({ done: true, value: null })
+    })
+    it('stops paging once the budget is spent', async () => {
+      setNex('h1', { ready: true, mounted: true, configured: true })
+      vi.mocked(nexApi.listExecutions).mockImplementation(
+        () => new Promise((r) => setTimeout(() => r({ items: [{ state: 'running' }] as never, next_cursor: 'more' }), WORKER_COUNT_TIMEOUT_MS + 100)),
+      )
+      const s = track(countRunningWorkers('h1'))
+      await vi.advanceTimersByTimeAsync(WORKER_COUNT_TIMEOUT_MS)
+      expect(s).toMatchObject({ done: true, value: null })
+      await vi.advanceTimersByTimeAsync(10 * WORKER_COUNT_TIMEOUT_MS)
+      expect(nexApi.listExecutions).toHaveBeenCalledTimes(1)
+    })
   })
   it('nex not ready → 0 (no workers can run)', async () => {
     setNex('h1', { ready: false, mounted: false, configured: false })

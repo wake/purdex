@@ -128,7 +128,8 @@ export async function restartDaemon(hostId: string, over: Partial<RestartDeps> =
   let expired = false
   let timer: ReturnType<typeof setTimeout> | undefined
   const deadline = new Promise<typeof TIMED_OUT>((r) => { timer = setTimeout(() => r(TIMED_OUT), RESTART_TIMEOUT_MS) })
-  const attempt = (async (): Promise<RestartResult | typeof TIMED_OUT> => {
+  // Only "a new boot id was seen" races the deadline; the warnings read comes after it (D13).
+  const attempt = (async (): Promise<{ ipc: ElectronLocalDaemonResult | null; bootId: string } | typeof TIMED_OUT> => {
     let before: string | null
     let ipc: ElectronLocalDaemonResult | null = null
     if (await d.isManagedLocal(hostId)) {
@@ -141,21 +142,21 @@ export async function restartDaemon(hostId: string, over: Partial<RestartDeps> =
       await sleep(RESTART_POLL_MS)
       if (expired) break
       const now = await d.readBootId(hostId)
-      if (now !== null && now !== before) {
-        return { ipc, shutdownWarnings: await d.readShutdownWarnings(hostId, now) }
-      }
+      if (now !== null && now !== before) return { ipc, bootId: now }
     }
     return TIMED_OUT
   })()
   attempt.catch(() => {}) // a failure after the deadline won the race is not unhandled
+  let r: Awaited<typeof attempt>
   try {
-    const r = await Promise.race([attempt, deadline])
-    if (r === TIMED_OUT) throw new DaemonRestartError('timeout')
-    return r
+    r = await Promise.race([attempt, deadline])
   } finally {
     expired = true
     clearTimeout(timer)
   }
+  if (r === TIMED_OUT) throw new DaemonRestartError('timeout')
+  // Bounded by its own HEALTH_PROBE_TIMEOUT_MS and never rejects: a slow or failed read stays a plain success.
+  return { ipc: r.ipc, shutdownWarnings: await d.readShutdownWarnings(hostId, r.bootId) }
 }
 
 /**
@@ -165,6 +166,7 @@ export async function restartDaemon(hostId: string, over: Partial<RestartDeps> =
  * unknown, which the dialog words as a warning rather than hiding it.
  */
 export async function countRunningWorkers(hostId: string, timeoutMs = WORKER_COUNT_TIMEOUT_MS): Promise<number | null> {
+  let abandoned = false // `work` cannot be cancelled: past the budget it must not keep paging
   const work = (async (): Promise<number | null> => {
     await useNexHostStore.getState().ensure(hostId)
     const info = useNexHostStore.getState().byHost[hostId]?.info ?? null
@@ -173,6 +175,7 @@ export async function countRunningWorkers(hostId: string, timeoutMs = WORKER_COU
     let n = 0
     let cursor: string | undefined
     for (let page = 0; page < MAX_WORKER_PAGES; page++) {
+      if (abandoned) return null
       const p = await listExecutions(hostId, { state: 'running', cursor })
       n += p.items.filter((e) => e.state === 'running').length
       if (!p.next_cursor) return n
@@ -185,6 +188,7 @@ export async function countRunningWorkers(hostId: string, timeoutMs = WORKER_COU
   try {
     return await Promise.race([work, timeout])
   } finally {
+    abandoned = true
     clearTimeout(timer)
   }
 }
