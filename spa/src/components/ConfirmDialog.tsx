@@ -15,12 +15,14 @@ export interface ConfirmDialogProps {
   body: string
   confirmLabel: string
   busy?: boolean
+  /** The confirm button is inert (for example until a choice in `children` is complete). Cancel stays live. */
+  confirmDisabled?: boolean
   onCancel: () => void
   onConfirm: () => void
   children?: ReactNode
 }
 
-export function ConfirmDialog({ testIdPrefix, title, body, confirmLabel, busy = false, onCancel, onConfirm, children }: ConfirmDialogProps) {
+export function ConfirmDialog({ testIdPrefix, title, body, confirmLabel, busy = false, confirmDisabled = false, onCancel, onConfirm, children }: ConfirmDialogProps) {
   const t = useI18nStore((s) => s.t)
 
   // Escape is the dialog's while it is up — busy or not — also when it was opened from inside a FloatingPanel: taken
@@ -44,6 +46,8 @@ export function ConfirmDialog({ testIdPrefix, title, body, confirmLabel, busy = 
       aria-modal="true"
       aria-labelledby={titleId}
       data-testid={`${testIdPrefix}-dialog`}
+      // The backdrop also covers the Electron title bar, a window drag region that would otherwise swallow clicks there.
+      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       onClick={() => { if (!busy) onCancel() }}
     >
       <div
@@ -67,7 +71,7 @@ export function ConfirmDialog({ testIdPrefix, title, body, confirmLabel, busy = 
           <button
             data-testid={`${testIdPrefix}-confirm`}
             onClick={onConfirm}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
             className="px-3 py-1 rounded-md text-xs bg-accent text-white cursor-pointer disabled:opacity-50 disabled:cursor-default flex items-center gap-1.5"
           >
             {busy && <ArrowsClockwise size={12} className="animate-spin" />}

@@ -568,7 +568,8 @@ interface TabState {
   closePane: (tabId: string, paneId: string) => void
   remountPane: (tabId: string, paneId: string) => string | null
   resizePanes: (tabId: string, splitId: string, sizes: number[]) => void
-  applyLayout: (tabId: string, pattern: LayoutPattern) => void
+  /** Rebuild the tab as `pattern`. `keepIds`, when given, is the exact survivor set (`applyLayoutPattern`). */
+  applyLayout: (tabId: string, pattern: LayoutPattern, keepIds?: readonly string[]) => void
   setTabLayout: (tabId: string, layout: PaneLayout) => void
   detachPane: (tabId: string, paneId: string, afterTabId?: string) => string | null
   reorderTabs: (order: string[]) => void
@@ -819,11 +820,11 @@ export const useTabStore = create<TabState>()(
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
 
-      applyLayout: (tabId, pattern) =>
+      applyLayout: (tabId, pattern, keepIds) =>
         set((state) => {
           const tab = state.tabs[tabId]
           if (!tab) return state
-          const newLayout = applyLayoutPattern(tab.layout, pattern)
+          const newLayout = applyLayoutPattern(tab.layout, pattern, keepIds)
           return { tabs: { ...state.tabs, [tabId]: { ...tab, layout: newLayout } } }
         }),
 

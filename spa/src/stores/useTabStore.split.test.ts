@@ -171,6 +171,19 @@ describe('applyLayout', () => {
       expect(layout.pane.id).toBe(paneId)
     }
   })
+
+  it('with keepIds, keeps exactly those panes (shell cleanup spec §10)', () => {
+    const tab = addTab({ kind: 'dashboard' })
+    const firstId = (tab.layout as { pane: { id: string } }).pane.id
+    useTabStore.getState().splitPane(tab.id, firstId, 'h', { kind: 'history' })
+    const second = useTabStore.getState().tabs[tab.id].layout
+    const secondId = second.type === 'split' && second.children[1].type === 'leaf' ? second.children[1].pane.id : ''
+
+    useTabStore.getState().applyLayout(tab.id, 'single', [secondId])
+
+    const layout = useTabStore.getState().tabs[tab.id].layout
+    expect(layout.type === 'leaf' && layout.pane.id).toBe(secondId)
+  })
 })
 
 describe('detachPane', () => {

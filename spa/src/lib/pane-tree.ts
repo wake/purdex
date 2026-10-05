@@ -187,8 +187,28 @@ export function swapPaneContent(layout: PaneLayout, paneIdA: string, paneIdB: st
   return result
 }
 
-export function applyLayoutPattern(layout: PaneLayout, pattern: LayoutPattern): PaneLayout {
-  const leaves = collectLeaves(layout)
+/**
+ * The pattern `layout` already has (shell cleanup spec §10): a leaf → `single`; a split of exactly two **leaf**
+ * children → `split-h` / `split-v` by its direction; any other shape → null (no title-bar button is pressed).
+ */
+export function currentLayoutPattern(layout: PaneLayout): LayoutPattern | null {
+  if (layout.type === 'leaf') return 'single'
+  if (layout.children.length !== 2 || layout.children.some((c) => c.type !== 'leaf')) return null
+  return layout.direction === 'h' ? 'split-h' : 'split-v'
+}
+
+/**
+ * Rebuild `layout` as `pattern` (1 slot for `single`, 2 for a split).
+ *
+ * Without `keepIds` the first leaves in layout order fill the slots. With `keepIds` those panes are the exact
+ * survivor set (rule D.1a, worked out by `planLayoutChange`): every other leaf is dropped, the survivors keep their
+ * layout order whatever order `keepIds` lists them in, and ids that are not in the layout are ignored. In both forms
+ * a slot left over is filled with a fresh `new-tab` pane.
+ */
+export function applyLayoutPattern(layout: PaneLayout, pattern: LayoutPattern, keepIds?: readonly string[]): PaneLayout {
+  const all = collectLeaves(layout)
+  const keep = keepIds ? new Set(keepIds) : null
+  const leaves = keep ? all.filter((p) => keep.has(p.id)) : all
   const p = (i: number): Pane => leaves[i] ?? newTabPane()
   switch (pattern) {
     case 'single': return { type: 'leaf', pane: p(0) }
