@@ -84,7 +84,7 @@ On **turn 1 of an execution with a `resume_session_id`**, Nexen stats `transcrip
   2. Range, `0 < offset ≤ prelude_end`. Out of range returns 400 `malformed_parameter`.
   3. That it lands on a line start (the byte before it is `\n`). One that does not means the file was rewritten, so it returns `gone`.
 
-  It is not bound to the execution or a parser version. The caller is the same principal (no security meaning), and lines older than a cursor were never served, so a parser change cannot clash with what a client already holds. A client that gets the 400 for an older page restarts from the first page (no `before`). With the same `limit`, the same cursor returns the same page; adjacent pages never share a `pos`.
+  It is not bound to the execution or a parser version. The caller is in the same trust domain (the cursor carries no security meaning), and lines older than a cursor were never served, so a parser change cannot clash with what a client already holds. A client that gets the 400 for an older page restarts from the first page (no `before`). With the same `limit`, the same cursor returns the same page; adjacent pages never share a `pos`.
 - `limit` is the number of **items**: default 200, max 500. A malformed value returns 400 `malformed_parameter`.
 - Unknown execution: 404, same as `/events`.
 
@@ -241,7 +241,7 @@ P1–P3 can proceed in parallel with N against this contract. P4 waits for v0.16
 ## 8. Risks
 
 - **Transcript format drift.** The parser follows CLI-internal records. Nexen's classification table (§4.3) is the single place to adjust, and unknown line types are omitted rather than failing.
-- **Privacy.** The prelude exposes the interactive session's content to anyone who can read the execution. That is the same principal and token scope as the worker itself, and the content is not on any SSE stream (no site-wide strip needed).
+- **Privacy.** The prelude exposes the interactive session's content to anyone who can read the execution. That is the same access rule as `GET /v1/executions/{id}/events` (Nexen v1 has one trust domain and no per-execution ACL; `/events` already carries the worker's full conversation), and the content is not on any SSE stream (no site-wide strip needed).
 - **Large files.** Backward reads are bounded per page, and the 2.2 MB lines are handled by the block caps. The legacy fallback scan is a one-off per execution.
 
 ## 9. Follow-ups (not in this spec)
