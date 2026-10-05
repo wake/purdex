@@ -2108,7 +2108,9 @@ function preludeUnits(opts: SearchUnitOptions, prelude: PreludeView, push: Push)
   if (opts.view === 'chat') {
     for (const b of preludeBlocks(prelude)) {
       if (b.kind === 'entry') { if (b.entry.kind === 'note') note(b.entry); continue }
-      chatTurnUnits(w, [b], () => chatToolsKey(`${opts.keyPrefix}-prelude`, prelude.ids[b.start]))
+      // Keyed by the span's LAST message (Task 8 review): pages grow only at
+      // the front, so a span's end never moves while its start can.
+      chatTurnUnits(w, [b], () => chatToolsKey(`${opts.keyPrefix}-prelude`, prelude.ids[b.end - 1]))
     }
     return
   }
