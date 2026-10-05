@@ -69,6 +69,12 @@ export function TitleBar({ title }: Props) {
   })
   const [pending, setPending] = useState<Pending | null>(null)
 
+  // The dialog belongs to the tab it was opened for. Once another tab is shown (a shortcut, a notification, a deep
+  // link, a closed tab) it is cancelled, not just hidden, so coming back does not revive it. Adjusted during render
+  // (https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes), so it never paints
+  // over the other tab.
+  if (pending && pending.tabId !== activeTabId) setPending(null)
+
   const handlePattern = (pattern: LayoutPattern) => {
     if (!activeTabId || pattern === current) return
     setPending(startLayoutChange(activeTabId, pattern))
@@ -76,7 +82,13 @@ export function TitleBar({ title }: Props) {
 
   const finish = (keepIds: string[]) => {
     if (!pending) return
-    const tab = useTabStore.getState().tabs[pending.tabId]
+    const { tabs, activeTabId: shown } = useTabStore.getState()
+    // Read live, not from the render: the active tab can change in the same click, before this component re-renders.
+    if (shown !== pending.tabId) {
+      setPending(null)
+      return
+    }
+    const tab = tabs[pending.tabId]
     if (tab && !sameLeaves(collectLeaves(tab.layout), pending.leaves)) {
       // The tab's panes changed under the dialog: what the user agreed to close is no longer what would close.
       setPending(startLayoutChange(pending.tabId, pending.pattern))

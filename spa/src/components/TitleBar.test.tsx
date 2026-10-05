@@ -326,4 +326,57 @@ describe('TitleBar layout buttons', () => {
       expect(layoutNow()).toBe(before)
     })
   })
+
+  // The dialog belongs to the tab it was opened for: once another tab is shown (a shortcut, a notification, a deep
+  // link), applying it would rebuild a tab the user is not looking at.
+  describe('the dialog closes when its tab is no longer active', () => {
+    const OTHER = 'tab-2'
+    /** `TAB` (active, holding `layout`) plus a second tab with two plain terminals. */
+    const showTwoTabs = (layout: PaneLayout) => {
+      showTab(layout)
+      const other: Tab = {
+        id: OTHER, pinned: false, locked: false, createdAt: 0,
+        layout: splitOf('h', leafOf('o1', terminal('o1')), leafOf('o2', terminal('o2'))),
+      }
+      useTabStore.setState((s) => ({ tabs: { ...s.tabs, [OTHER]: other }, tabOrder: [TAB, OTHER] }))
+    }
+    const otherLayout = () => useTabStore.getState().tabs[OTHER].layout
+
+    it('switching to another tab while the picker is up closes it, and switching back does not bring it back', () => {
+      showTwoTabs(splitOf('h', leafOf('ed', editor), leafOf('plain', terminal('plain'))))
+      const before = layoutNow()
+      const otherBefore = otherLayout()
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      expect(screen.getByTestId('layout-keep-dialog')).toBeTruthy()
+
+      act(() => useTabStore.getState().setActiveTab(OTHER))
+      expect(screen.queryByTestId('layout-keep-dialog')).toBeNull()
+      expect(screen.queryByRole('dialog')).toBeNull()
+
+      act(() => useTabStore.getState().setActiveTab(TAB))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(layoutNow()).toBe(before)
+      expect(otherLayout()).toBe(otherBefore)
+    })
+
+    it('a tab switch that lands in the same click as Confirm applies nothing', () => {
+      setAgent('cc1')
+      showTwoTabs(splitOf('h', leafOf('ed', editor), leafOf('cc', terminal('cc1')), leafOf('plain', terminal('plain'))))
+      const before = layoutNow()
+      const otherBefore = otherLayout()
+      render(<TitleBar title="t" />)
+      fireEvent.click(button(SINGLE))
+      // The switch runs ahead of React's own click handling (a capture listener on the document), so the handler still
+      // sees the render from before it: only a live read of the store can tell.
+      const switchTab = () => useTabStore.getState().setActiveTab(OTHER)
+      document.addEventListener('click', switchTab, { capture: true, once: true })
+      fireEvent.click(screen.getByTestId('layout-apply-confirm'))
+      document.removeEventListener('click', switchTab, { capture: true })
+
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(layoutNow()).toBe(before)
+      expect(otherLayout()).toBe(otherBefore)
+    })
+  })
 })
