@@ -228,6 +228,38 @@ describe('ActivityBarWide — worker list section', () => {
     expect(section.style.height).toBe('290px')
   })
 
+  it('closing the list mid-drag commits nothing, and reopening shows the stored height', () => {
+    const setWorkerListHeight = vi.fn(useLayoutStore.getState().setWorkerListHeight)
+    useLayoutStore.setState({ workerListOpen: true, setWorkerListHeight })
+    renderBar()
+    fireEvent.mouseDown(screen.getByTestId('worker-list-divider'), { clientY: 500 })
+    fireEvent.mouseMove(document, { clientY: 450 })
+    expect(screen.getByTestId('worker-list-section').style.height).toBe('290px')
+
+    act(() => useLayoutStore.setState({ workerListOpen: false }))
+    fireEvent.mouseUp(document)
+    expect(setWorkerListHeight).not.toHaveBeenCalled()
+
+    act(() => useLayoutStore.setState({ workerListOpen: true }))
+    expect(screen.getByTestId('worker-list-section').style.height).toBe(`${WORKER_LIST_DEFAULT}px`)
+    fireEvent.mouseDown(screen.getByTestId('worker-list-divider'), { clientY: 500 })
+    fireEvent.mouseUp(document)
+    expect(setWorkerListHeight).not.toHaveBeenCalled()
+  })
+
+  it('unmounting the bar mid-drag writes nothing to the store', () => {
+    const setWorkerListHeight = vi.fn(useLayoutStore.getState().setWorkerListHeight)
+    useLayoutStore.setState({ workerListOpen: true, setWorkerListHeight })
+    const { unmount } = renderBar()
+    fireEvent.mouseDown(screen.getByTestId('worker-list-divider'), { clientY: 500 })
+    fireEvent.mouseMove(document, { clientY: 450 })
+    unmount()
+    fireEvent.mouseMove(document, { clientY: 400 })
+    fireEvent.mouseUp(document)
+    expect(setWorkerListHeight).not.toHaveBeenCalled()
+    expect(useLayoutStore.getState().workerListHeight).toBe(WORKER_LIST_DEFAULT)
+  })
+
   it('caps the rendered height so the workspace zone keeps 96px, without shrinking the stored height', () => {
     const ro = stubResizeObserver()
     useLayoutStore.setState({ workerListOpen: true })

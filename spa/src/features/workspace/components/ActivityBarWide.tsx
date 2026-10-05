@@ -16,13 +16,7 @@ import {
   SortableContext,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import {
-  useLayoutStore,
-  MIN_WIDTH,
-  MAX_WIDTH,
-  WORKER_LIST_MIN,
-  WORKER_LIST_MAX,
-} from '../../../stores/useLayoutStore'
+import { useLayoutStore, MIN_WIDTH, MAX_WIDTH } from '../../../stores/useLayoutStore'
 import { useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
 import { RegionResize } from '../../../components/RegionResize'
@@ -35,6 +29,7 @@ import type { ActivityBarProps } from './activity-bar-props'
 import { computeDragEndAction, dispatchDragEndAction, type DragData } from '../lib/computeDragEndAction'
 import { useSpringLoad } from '../lib/useSpringLoad'
 import { useCrossWorkspaceDragOver } from '../lib/useCrossWorkspaceDragOver'
+import { useWorkerListResize } from '../lib/useWorkerListResize'
 
 // Each WorkspaceRow registers two overlapping droppables: the useSortable
 // wrapper (id = workspace.id) for workspace reordering, and a useDroppable
@@ -72,11 +67,6 @@ const customCollisionDetection: CollisionDetection = (args) => {
 
 const NOOP = () => {}
 
-// The worker list never takes the workspace zone below this (shell cleanup spec §4.2).
-const WORKSPACE_ZONE_MIN = 96
-// PaneSplitter's 'v' bar is `h-1`.
-const WORKER_DIVIDER_HEIGHT = 4
-
 export function ActivityBarWide(props: ActivityBarProps) {
   const {
     workspaces,
@@ -104,9 +94,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const setWideSize = useLayoutStore((s) => s.setActivityBarWideSize)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
   const workerListOpen = useLayoutStore((s) => s.workerListOpen)
-  const workerListHeight = useLayoutStore((s) => s.workerListHeight)
   const toggleWorkerListOpen = useLayoutStore((s) => s.toggleWorkerListOpen)
-  const setWorkerListHeight = useLayoutStore((s) => s.setWorkerListHeight)
   const bottomNavCompact = useLayoutStore((s) => s.bottomNavCompact)
   const toggleBottomNavCompact = useLayoutStore((s) => s.toggleBottomNavCompact)
 
@@ -116,45 +104,13 @@ export function ActivityBarWide(props: ActivityBarProps) {
   const draftSizeRef = useRef<number | null>(null)
   const renderedSize = draftSize ?? wideSize
 
-  // The worker list's height follows the same draft-then-commit pattern as the width (spec §4.2).
-  const [draftListHeight, setDraftListHeight] = useState<number | null>(null)
-  const draftListHeightRef = useRef<number | null>(null)
-  // `available` = the split box's height (workspace zone + divider + list), measured while the list is open. The
-  // rendered list height is capped so the zone keeps WORKSPACE_ZONE_MIN; the stored height is never shrunk by a short
-  // window. Without a ResizeObserver report (e.g. jsdom) there is no cap.
-  const splitBoxRef = useRef<HTMLDivElement>(null)
-  const [splitBoxHeight, setSplitBoxHeight] = useState<number | null>(null)
-  useEffect(() => {
-    const el = splitBoxRef.current
-    if (!workerListOpen || !el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(([entry]) => {
-      if (entry) setSplitBoxHeight(entry.contentRect.height)
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [workerListOpen])
-  const listHeightCap =
-    splitBoxHeight === null
-      ? null
-      : Math.max(0, splitBoxHeight - WORKSPACE_ZONE_MIN - WORKER_DIVIDER_HEIGHT)
-  const capListHeight = (h: number) => (listHeightCap === null ? h : Math.min(h, listHeightCap))
-  const renderedListHeight = capListHeight(draftListHeight ?? workerListHeight)
-
-  // Dragging up (dy < 0) grows the list. The drag starts from the height on screen and is held inside what can be
-  // shown, so the divider tracks the pointer even while the cap applies.
-  const handleListResize = (dy: number) => {
-    const base = draftListHeightRef.current ?? renderedListHeight
-    const upper = listHeightCap === null ? WORKER_LIST_MAX : Math.min(WORKER_LIST_MAX, listHeightCap)
-    const next = Math.min(Math.max(base - dy, WORKER_LIST_MIN), upper)
-    draftListHeightRef.current = next
-    setDraftListHeight(next)
-  }
-  const handleListResizeEnd = () => {
-    if (draftListHeightRef.current === null) return
-    setWorkerListHeight(draftListHeightRef.current)
-    draftListHeightRef.current = null
-    setDraftListHeight(null)
-  }
+  // The worker list's height follows the same draft-then-commit pattern as the width, capped by the split box.
+  const {
+    splitBoxRef,
+    height: workerListHeight,
+    onResize: handleListResize,
+    onResizeEnd: handleListResizeEnd,
+  } = useWorkerListResize(workerListOpen)
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -384,7 +340,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
                 <div
                   data-testid="worker-list-section"
                   className="min-h-0 shrink-0 overflow-y-auto overscroll-contain"
-                  style={{ height: renderedListHeight }}
+                  style={{ height: workerListHeight }}
                 >
                   <WorkerList />
                 </div>
