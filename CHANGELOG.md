@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.481] - 2026-10-05
+
+> 純 SPA，不必重新部署 daemon。殼層整理第四支（P5／7）。
+
+### Fix：切換分頁時 focus 回到你最後點的 pane（#1551）
+
+- 以前分頁切回來時，每個 pane 各自搶 focus，最後一個（通常是右下）贏。現在只有「這個分頁最後點過的 pane」會拿到 focus；沒點過（新分頁、或那個 pane 已經關掉）就是主 pane。重新整理後一律從主 pane 開始。
+- 在同一個分頁裡點另一個 pane，不會再有任何 pane 主動把 focus 搶回去；切回分頁後在下一幀之前就點了別的 pane，也不會被搶回。
+- worker 的回覆框：只有**自己這次送出完成**時才回 focus；連線恢復、歷史載入完成、接回終端機結束等都不會搶 focus。打開一個還在載入的 worker 時，回覆框會在可以輸入的那一刻拿到 focus（若你沒在別處打字、也沒切走）。
+- 終端機、Monaco、Tiptap 都套用同樣的規則。
+
+### Internal
+
+- `usePaneFocusStore`（只在記憶體；分頁從 tab store 消失就清掉紀錄）、`lib/pane-focus.ts`（`focusTargetOf`、`statusTargetOf`，後者給下一支狀態列用）、`useActivationFocus` hook、`PaneRendererProps.isFocusTarget`。
+
 ## [1.0.0-alpha.480] - 2026-10-05
 
 > 純 SPA，不必重新部署 daemon。殼層整理第三支（P3＋P4／7）。
