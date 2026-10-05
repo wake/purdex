@@ -73,9 +73,24 @@ describe('registerBuiltinModules orchestrator', () => {
     render(<Component pane={pane} isActive />)
     expect(vi.mocked(ExecutionView)).toHaveBeenCalled()
     expect(vi.mocked(ExecutionView).mock.calls[0][0]).toEqual({
-      hostId: 'h1', executionId: 'exc_1', isActive: true, tabId: tab.id, paneId: pane.id, from,
+      hostId: 'h1', executionId: 'exc_1', isActive: true, isFocusTarget: false, tabId: tab.id, paneId: pane.id, from,
       mode: 'room', onModeChange: expect.any(Function),
     })
+  })
+
+  // Shell cleanup spec §8.2 (T5.4): the wrapper threads the pane's focus-target
+  // flag to ExecutionView (and on to the reply box); absent reads as false.
+  it('the execution pane wrapper passes isFocusTarget to ExecutionView', () => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    vi.mocked(ExecutionView).mockClear()
+    const tab = createTab({ kind: 'execution', executionId: 'exc_1', host: 'h1' })
+    useTabStore.getState().addTab(tab)
+    const pane = getPrimaryPane(tab.layout)
+    const resolution = resolvePaneRenderer('execution')
+    if (resolution.kind !== 'render') throw new Error('execution pane not registered')
+    const Component = resolution.component
+    render(<Component pane={pane} isActive isFocusTarget />)
+    expect(vi.mocked(ExecutionView).mock.calls.at(-1)![0]).toMatchObject({ isActive: true, isFocusTarget: true })
   })
 
   // R2 plan T1.1/T1.4: the view menu's choice is written to the pane content

@@ -8,6 +8,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { Plus } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { canSend, type Chip } from '../../lib/nex/worker-upload'
+import { useActivationFocus } from '../../hooks/useActivationFocus'
 import UploadChips from './UploadChips'
 
 /** Ceiling for the auto-grown textarea, so a long paste can't squeeze the transcript away. */
@@ -39,7 +40,10 @@ interface Props {
   onSend: (text: string) => void | boolean
   disabled?: boolean
   placeholder?: string
-  focused?: boolean
+  /** The pane's tab is the one on screen (`PaneRendererProps.isActive`). */
+  isActive?: boolean
+  /** The pane is its tab's focus target (`PaneRendererProps.isFocusTarget`, shell cleanup spec §8.2). */
+  isFocusTarget?: boolean
   /** Seeds the textarea (e.g. restoring text after a failed send). */
   initialValue?: string
   /** Files attached to the next message; one uploading or failed blocks the send. */
@@ -55,7 +59,8 @@ const NO_CHIPS: readonly Chip[] = []
 const noop = () => {}
 
 export default function WorkerInput({
-  onSend, disabled = false, placeholder, focused = false, initialValue, chips = NO_CHIPS, onRemoveChip, onAddFiles, onTextChange,
+  onSend, disabled = false, placeholder, isActive = false, isFocusTarget = false, initialValue, chips = NO_CHIPS, onRemoveChip, onAddFiles,
+  onTextChange,
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const resolvedPlaceholder = placeholder ?? t('worker.input.placeholder')
@@ -67,13 +72,35 @@ export default function WorkerInput({
 
   useEffect(() => { onTextChange?.(value) }, [value, onTextChange])
 
+  // Shell cleanup spec §8.2: the reply box focuses itself only at activation
+  // (its tab shown, or mounting in the active tab), as the tab's focus target.
+  // A disabled box cannot take focus (focus() is a no-op on it); the refocus
+  // below covers it once enabled.
+  const focusInput = useCallback(() => {
+    const ta = textareaRef.current
+    if (ta && !typingElsewhere(ta)) ta.focus()
+  }, [])
+  useActivationFocus(isActive, isFocusTarget, focusInput, { raf: true })
+
+  // After a send comes back (disabled true → false): refocus, but only when
+  // this pane is the focus target of the active tab — the reader sent from
+  // here. A worker whose send returns after the reader moved to another pane
+  // stays put. Mount is not a transition (the ref starts at the first value).
+  const prevDisabledRef = useRef(disabled)
+  const isActiveRef = useRef(isActive)
+  const isFocusTargetRef = useRef(isFocusTarget)
+  // Declared before the refocus effect, so the refs are current when it reads them.
   useEffect(() => {
-    if (focused && !disabled) {
-      requestAnimationFrame(() => {
-        if (!typingElsewhere(textareaRef.current)) textareaRef.current?.focus()
-      })
-    }
-  }, [focused, disabled])
+    isActiveRef.current = isActive
+    isFocusTargetRef.current = isFocusTarget
+  })
+  useEffect(() => {
+    const reenabled = prevDisabledRef.current && !disabled
+    prevDisabledRef.current = disabled
+    if (!reenabled || !isActiveRef.current || !isFocusTargetRef.current) return
+    const id = requestAnimationFrame(focusInput)
+    return () => cancelAnimationFrame(id)
+  }, [disabled, focusInput])
 
   const autoGrow = useCallback(() => {
     const ta = textareaRef.current

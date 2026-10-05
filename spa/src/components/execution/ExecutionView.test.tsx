@@ -1910,3 +1910,49 @@ describe('ExecutionView — worker prelude', () => {
     expect(box.scrollTop).not.toBe(300)
   })
 })
+
+// Shell cleanup spec §8.2 (P5, T5.4): ExecutionView hands `isActive` and
+// `isFocusTarget` to the reply box, which focuses itself only at activation
+// and after a send comes back, and only as its tab's focus target.
+describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
+  const nextFrame = () => act(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
+  const setSending = (v: boolean) => act(() => { useExecutionStore.getState().setPendingSend(H, E, v) })
+
+  it('mounting active as the focus target focuses the reply box', async () => {
+    render(<ExecutionView {...base} isActive isFocusTarget />)
+    await nextFrame()
+    expect(screen.getByRole('textbox')).toHaveFocus()
+  })
+
+  it('mounting active but not the focus target leaves focus alone', async () => {
+    render(<ExecutionView {...base} isActive isFocusTarget={false} />)
+    await nextFrame()
+    expect(screen.getByRole('textbox')).not.toHaveFocus()
+  })
+
+  it('a send coming back refocuses the reply box of the focus target', async () => {
+    render(<ExecutionView {...base} isActive isFocusTarget />)
+    // Let the mount's activation frame pass, so what follows tests the send coming back alone.
+    await nextFrame()
+    // The reader's focus leaves the box (blurred before it is disabled: jsdom
+    // keeps a disabled element focused internally).
+    screen.getByRole('textbox').blur()
+    setSending(true)
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    setSending(false)
+    expect(screen.getByRole('textbox')).not.toHaveFocus()
+    await nextFrame()
+    expect(screen.getByRole('textbox')).toHaveFocus()
+  })
+
+  it('a send that comes back after the reader moved to another pane does not take focus', async () => {
+    const { rerender } = render(<ExecutionView {...base} isActive isFocusTarget />)
+    await nextFrame()
+    screen.getByRole('textbox').blur()
+    setSending(true)
+    rerender(<ExecutionView {...base} isActive isFocusTarget={false} />)
+    setSending(false)
+    await nextFrame()
+    expect(screen.getByRole('textbox')).not.toHaveFocus()
+  })
+})

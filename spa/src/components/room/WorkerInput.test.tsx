@@ -8,6 +8,9 @@ beforeEach(() => {
   cleanup()
 })
 
+/** Waits past the rAF the focus sites schedule (jsdom runs frames in order). */
+const nextFrame = () => new Promise((r) => requestAnimationFrame(r))
+
 describe('WorkerInput', () => {
   it('renders textarea', () => {
     render(<WorkerInput onSend={vi.fn()} />)
@@ -53,20 +56,127 @@ describe('WorkerInput', () => {
     expect(onSend).not.toHaveBeenCalled()
   })
 
-  it('focuses textarea when focused prop becomes true', async () => {
-    const { rerender } = render(<WorkerInput onSend={vi.fn()} focused={false} />)
-    const textarea = screen.getByRole('textbox')
-    expect(document.activeElement).not.toBe(textarea)
-    rerender(<WorkerInput onSend={vi.fn()} focused={true} />)
-    // requestAnimationFrame delay
-    await new Promise((r) => requestAnimationFrame(r))
-    expect(document.activeElement).toBe(textarea)
+  // Shell cleanup spec §8.2: the reply box focuses itself only at ACTIVATION —
+  // its tab becoming active, or the pane mounting in the active tab — and only
+  // when it is the tab's focus target. A change of `isFocusTarget` while the
+  // tab stays active never focuses: that is a click, and the click already put
+  // focus where the reader wanted it.
+  describe('activation focus', () => {
+    it('mounting active as the focus target focuses the textarea', async () => {
+      render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).toHaveFocus()
+    })
+
+    it('mounting active but not the focus target does not', async () => {
+      render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget={false} />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).not.toHaveFocus()
+    })
+
+    it('mounting inactive does not, even as the focus target', async () => {
+      render(<WorkerInput onSend={vi.fn()} isActive={false} isFocusTarget />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).not.toHaveFocus()
+    })
+
+    it('becoming active as the focus target focuses the textarea', async () => {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive={false} isFocusTarget />)
+      const textarea = screen.getByRole('textbox')
+      expect(document.activeElement).not.toBe(textarea)
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget />)
+      await nextFrame()
+      expect(document.activeElement).toBe(textarea)
+    })
+
+    it('becoming active but not the focus target does not', async () => {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive={false} isFocusTarget={false} />)
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget={false} />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).not.toHaveFocus()
+    })
+
+    it('becoming the focus target while the tab stays active does not', async () => {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget={false} />)
+      await nextFrame()
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).not.toHaveFocus()
+    })
+
+    it('does not focus a disabled textarea at activation', async () => {
+      render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      await nextFrame()
+      expect(document.activeElement).not.toBe(screen.getByRole('textbox'))
+    })
+
+    it('does not take focus from a text field at activation', async () => {
+      const search = document.createElement('input')
+      document.body.appendChild(search)
+      try {
+        const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive={false} isFocusTarget />)
+        search.focus()
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget />)
+        await nextFrame()
+        expect(document.activeElement).toBe(search)
+      } finally {
+        search.remove()
+      }
+    })
   })
 
-  it('does not focus textarea when disabled even if focused=true', async () => {
-    render(<WorkerInput onSend={vi.fn()} focused={true} disabled />)
-    await new Promise((r) => requestAnimationFrame(r))
-    expect(document.activeElement).not.toBe(screen.getByRole('textbox'))
+  // Spec §8.2: the refocus after a send (disabled true → false) stays, but
+  // only for the focus target of the active tab — the reader sent from this
+  // pane. A worker whose send comes back after the reader moved to another
+  // pane does not take focus.
+  describe('after a send comes back', () => {
+    it('takes focus as the focus target of the active tab', async () => {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      // Let the mount's activation frame pass, so what follows tests the send coming back alone.
+      await nextFrame()
+      ;(document.activeElement as HTMLElement | null)?.blur()
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+      await nextFrame()
+      expect(document.activeElement).toBe(screen.getByRole('textbox'))
+    })
+
+    it('does not take focus when it is not the focus target', async () => {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget={false} disabled />)
+      await nextFrame()
+      ;(document.activeElement as HTMLElement | null)?.blur()
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget={false} disabled={false} />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).not.toHaveFocus()
+    })
+
+    it('does not take focus once the reader moved to another pane mid-send', async () => {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      await nextFrame()
+      ;(document.activeElement as HTMLElement | null)?.blur()
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget={false} disabled />)
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget={false} disabled={false} />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).not.toHaveFocus()
+    })
+
+    it('mounting enabled is not a send coming back: one focus, from the activation', async () => {
+      const focus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus')
+      try {
+        render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget />)
+        await nextFrame()
+        await nextFrame()
+        expect(focus).toHaveBeenCalledTimes(1)
+      } finally {
+        focus.mockRestore()
+      }
+    })
+
+    it('does not take focus while its tab is not active', async () => {
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive={false} isFocusTarget disabled />)
+      rerender(<WorkerInput onSend={vi.fn()} isActive={false} isFocusTarget disabled={false} />)
+      await nextFrame()
+      expect(screen.getByRole('textbox')).not.toHaveFocus()
+    })
   })
 
   // A F5: a send coming back (disabled → enabled) while the reader types in
@@ -76,10 +186,11 @@ describe('WorkerInput', () => {
     const search = document.createElement('input')
     document.body.appendChild(search)
     try {
-      const { rerender } = render(<WorkerInput onSend={vi.fn()} focused disabled />)
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      await nextFrame()
       search.focus()
-      rerender(<WorkerInput onSend={vi.fn()} focused disabled={false} />)
-      await new Promise((r) => requestAnimationFrame(r))
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+      await nextFrame()
       expect(document.activeElement).toBe(search)
     } finally {
       search.remove()
@@ -95,15 +206,15 @@ describe('WorkerInput', () => {
       ['a button', () => document.createElement('button')],
     ]
     for (const [name, make] of cases) {
-      it(`${name}, when it becomes focused`, async () => {
+      it(`${name}, when it becomes active`, async () => {
         const el = make()
         document.body.appendChild(el)
         try {
-          const { rerender } = render(<WorkerInput onSend={vi.fn()} focused={false} />)
+          const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive={false} isFocusTarget />)
           el.focus()
           expect(document.activeElement).toBe(el)
-          rerender(<WorkerInput onSend={vi.fn()} focused />)
-          await new Promise((r) => requestAnimationFrame(r))
+          rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget />)
+          await nextFrame()
           expect(document.activeElement).toBe(screen.getByRole('textbox'))
         } finally {
           el.remove()
@@ -116,13 +227,13 @@ describe('WorkerInput', () => {
       const field = document.createElement('textarea')
       hidden.appendChild(field)
       try {
-        const { rerender } = render(<WorkerInput onSend={vi.fn()} focused={false} />)
+        const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive={false} isFocusTarget />)
         const box = screen.getByRole('textbox')
         document.body.appendChild(hidden)
         field.focus()
         hidden.setAttribute('inert', '')
-        rerender(<WorkerInput onSend={vi.fn()} focused />)
-        await new Promise((r) => requestAnimationFrame(r))
+        rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget />)
+        await nextFrame()
         expect(document.activeElement).toBe(box)
       } finally {
         hidden.remove()
@@ -140,10 +251,11 @@ describe('WorkerInput', () => {
     panel.appendChild(item)
     document.body.appendChild(panel)
     try {
-      const { rerender } = render(<WorkerInput onSend={vi.fn()} focused disabled />)
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      await nextFrame()
       item.focus()
-      rerender(<WorkerInput onSend={vi.fn()} focused disabled={false} />)
-      await new Promise((r) => requestAnimationFrame(r))
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+      await nextFrame()
       expect(document.activeElement).toBe(item)
     } finally {
       panel.remove()
@@ -156,22 +268,15 @@ describe('WorkerInput', () => {
     editor.tabIndex = 0
     document.body.appendChild(editor)
     try {
-      const { rerender } = render(<WorkerInput onSend={vi.fn()} focused disabled />)
+      const { rerender } = render(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled />)
+      await nextFrame()
       editor.focus()
-      rerender(<WorkerInput onSend={vi.fn()} focused disabled={false} />)
-      await new Promise((r) => requestAnimationFrame(r))
+      rerender(<WorkerInput onSend={vi.fn()} isActive isFocusTarget disabled={false} />)
+      await nextFrame()
       expect(document.activeElement).toBe(editor)
     } finally {
       editor.remove()
     }
-  })
-
-  it('takes focus when enabled again with nothing focused', async () => {
-    const { rerender } = render(<WorkerInput onSend={vi.fn()} focused disabled />)
-    ;(document.activeElement as HTMLElement | null)?.blur()
-    rerender(<WorkerInput onSend={vi.fn()} focused disabled={false} />)
-    await new Promise((r) => requestAnimationFrame(r))
-    expect(document.activeElement).toBe(screen.getByRole('textbox'))
   })
 
   it('seeds the textarea value from initialValue', () => {
