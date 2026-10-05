@@ -236,6 +236,12 @@ The worker option is offered only when the host's Nexen is ready and a session i
   > Turn-1 launch keeps measuring, with no special case. A delegate-time measurement that failed (timeout or unreadable) is filled in by turn 1 instead of falling back to the full-file scan.
   >
   > Contract wording: "the boundary is the first successful measurement (delegated before turn 1); once set it never moves." This removes the conflict with capability-matrix :915 that the original order had: a later turn-1 measurement would have overridden the delegated one whenever the transcript grew in between.
+
+  > **統籌核准的推導（2026-10-06）D21 — the window before any measurement.**
+  > - Applies to a `start_idle` execution whose delegate-time measurement failed and which has no turn 1 yet.
+  > - `Prelude` never falls back to the legacy full-file scan in that window.
+  > - It answers with a **provisional** boundary: `LastLineEnd`, under the same 2 s bound, computed per request and not cached.
+  > - The first successful measurement (turn 1) is the boundary from then on.
 - **The first `send` creates turn idx 1** (`input_kind` `message`). Everything turn-1 applies from there: resume, measurement, fatal on a missing transcript → `failed`, reconcile.
 - **Lease.** `send` still needs the control lease. A consumer's flow is delegate (`start_idle`) → attach (control) → send.
 - **Capability:** `capabilities.delegate.start_idle: true`.
