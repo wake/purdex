@@ -39,6 +39,12 @@ interface Props {
   /** Returning false means the send was refused before going out (e.g. too large): the text stays in the box. */
   onSend: (text: string) => void | boolean
   disabled?: boolean
+  /**
+   * This pane's own send is in flight. Its end (true → false) is the only
+   * thing that refocuses the box after activation; `disabled` also covers
+   * stream loss, history load, encoding and take-back (P5 review A2).
+   */
+  pendingSend?: boolean
   placeholder?: string
   /** The pane's tab is the one on screen (`PaneRendererProps.isActive`). */
   isActive?: boolean
@@ -59,7 +65,7 @@ const NO_CHIPS: readonly Chip[] = []
 const noop = () => {}
 
 export default function WorkerInput({
-  onSend, disabled = false, placeholder, isActive = false, isFocusTarget = false, initialValue, chips = NO_CHIPS, onRemoveChip, onAddFiles,
+  onSend, disabled = false, pendingSend = false, placeholder, isActive = false, isFocusTarget = false, initialValue, chips = NO_CHIPS, onRemoveChip, onAddFiles,
   onTextChange,
 }: Props) {
   const t = useI18nStore((s) => s.t)
@@ -74,33 +80,43 @@ export default function WorkerInput({
 
   // Shell cleanup spec §8.2: the reply box focuses itself only at activation
   // (its tab shown, or mounting in the active tab), as the tab's focus target.
-  // A disabled box cannot take focus (focus() is a no-op on it); the refocus
-  // below covers it once enabled.
+  // A disabled box cannot take focus (focus() is a no-op on it), and its
+  // enabling later does not focus it either: only a send coming back does.
   const focusInput = useCallback(() => {
     const ta = textareaRef.current
     if (ta && !typingElsewhere(ta)) ta.focus()
   }, [])
   useActivationFocus(isActive, isFocusTarget, focusInput, { raf: true })
 
-  // After a send comes back (disabled true → false): refocus, but only when
-  // this pane is the focus target of the active tab — the reader sent from
-  // here. A worker whose send returns after the reader moved to another pane
-  // stays put. Mount is not a transition (the ref starts at the first value).
-  const prevDisabledRef = useRef(disabled)
+  // After this pane's own send comes back (`pendingSend` true → false; P5
+  // review A2): refocus, but only when this pane is the focus target of the
+  // active tab — the reader sent from here — and the box is enabled, all
+  // checked when the frame runs. A worker whose send returns after the reader
+  // moved to another pane stays put; so does one still disabled for another
+  // reason (the worker ended, the stream died), and its enabling later is
+  // not this send. The aggregated `disabled` never refocuses: its other
+  // causes (stream back, history loaded, encoding or take-back done) are not
+  // the reader's send. Mount is not a transition (the ref starts at the
+  // first value).
+  const prevPendingSendRef = useRef(pendingSend)
   const isActiveRef = useRef(isActive)
   const isFocusTargetRef = useRef(isFocusTarget)
+  const disabledRef = useRef(disabled)
   // Declared before the refocus effect, so the refs are current when it reads them.
   useEffect(() => {
     isActiveRef.current = isActive
     isFocusTargetRef.current = isFocusTarget
+    disabledRef.current = disabled
   })
   useEffect(() => {
-    const reenabled = prevDisabledRef.current && !disabled
-    prevDisabledRef.current = disabled
-    if (!reenabled || !isActiveRef.current || !isFocusTargetRef.current) return
-    const id = requestAnimationFrame(focusInput)
+    const sendCameBack = prevPendingSendRef.current && !pendingSend
+    prevPendingSendRef.current = pendingSend
+    if (!sendCameBack) return
+    const id = requestAnimationFrame(() => {
+      if (isActiveRef.current && isFocusTargetRef.current && !disabledRef.current) focusInput()
+    })
     return () => cancelAnimationFrame(id)
-  }, [disabled, focusInput])
+  }, [pendingSend, focusInput])
 
   const autoGrow = useCallback(() => {
     const ta = textareaRef.current
