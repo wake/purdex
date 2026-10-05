@@ -90,12 +90,13 @@ type Module struct {
 	// Hand-to-nex / take-back (spec §4.4) orchestrate a tmux pane's Claude
 	// Code around the embedded engine, so the module needs the session and
 	// agent modules' services. Init resolves them from the registry.
-	sessions session.SessionProvider
-	owners   agent.OwnerResolver
-	prober   livenessProber
-	ccOps    agentcc.CCOperator
-	tmux     tmux.Executor
-	locks    *session.HandoffLocks // per-session-code; same type the stream relay uses
+	sessions  session.SessionProvider
+	owners    agent.OwnerResolver
+	prober    livenessProber
+	ccOps     agentcc.CCOperator
+	terminals agent.TerminalSessions
+	tmux      tmux.Executor
+	locks     *session.HandoffLocks // per-session-code; same type the stream relay uses
 
 	// Handoff timing (handoff.go); zero values take the defaults in Init.
 	handoffResolveTimeout   time.Duration // ResolveSessionOwner
@@ -113,6 +114,12 @@ type Module struct {
 	engineInterruptTimeout time.Duration // Service.Interrupt; > Nexen's own interruptTimeout so its verdict wins
 	engineTerminateTimeout time.Duration // Service.Terminate (retries interrupt up to 3 times)
 	leaseCleanupTimeout    time.Duration // ReleaseLease, under its own fresh context
+
+	// After a successful resume (recent_resume.go): poll for the terminal's
+	// frame, and remember S as just resumed.
+	ownerVisiblePoll    time.Duration
+	ownerVisibleTimeout time.Duration
+	recentResumes       recentResumeSet
 
 	assemble assembleFn        // default realAssemble; test seam
 	isDir    func(string) bool // default statIsDir; test seam
@@ -261,6 +268,13 @@ func (m *Module) resolveProviders(c *core.Core) error {
 	}
 	if m.ccOps, ok = svc.(agentcc.CCOperator); !ok {
 		return fmt.Errorf("service %q does not implement cc.CCOperator (%T)", agentcc.OperatorKey, svc)
+	}
+
+	if svc, ok = c.Registry.Get(agent.TerminalSessionsKey); !ok {
+		return fmt.Errorf("service %q not registered", agent.TerminalSessionsKey)
+	}
+	if m.terminals, ok = svc.(agent.TerminalSessions); !ok {
+		return fmt.Errorf("service %q does not implement agent.TerminalSessions (%T)", agent.TerminalSessionsKey, svc)
 	}
 	return nil
 }

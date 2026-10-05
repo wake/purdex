@@ -320,13 +320,19 @@ type fakeNexService struct {
 	renewCalls     []renewCall
 	renewErr       error
 
+	// onRecord runs after each call is recorded, outside mu, with the call's
+	// name: the seam that merges these calls with another fake's events into
+	// one ordered timeline (take-to-terminal's resume-before-exit order).
+	onRecord func(name string)
+
 	// Opt-in lease fence, off by default so existing tests are unaffected.
 	// With enforceLease, heldLease is the execution's lease as Nexen's store
 	// holds it: AcquireLease refuses a live lease of another principal and
-	// otherwise mints f.lease.ID for the caller; RenewLease, ReleaseLease and
-	// Terminate check the request like store.CheckLease (store/lease.go).
-	// A hook (onTerminate, or a test between calls) may hand the lease over
-	// with setHeldLease.
+	// otherwise mints f.lease.ID for the caller; RenewLease, ReleaseLease,
+	// Interrupt and Terminate check the request like store.CheckLease
+	// (store/lease.go), and CheckLease stands in for a client's send.
+	// A hook (onTerminate, onRecord, or a test between calls) may hand the
+	// lease over with setHeldLease.
 	enforceLease bool
 	heldLease    store.Lease
 }
@@ -354,14 +360,27 @@ func (f *fakeNexService) checkLease(executionID, leaseID, principalID string) er
 	return nil
 }
 
+// CheckLease is the fence a client's send meets (Nexen checks the lease
+// before every write): a probe for "can the holder still write?". It is
+// not recorded as a call.
+func (f *fakeNexService) CheckLease(executionID, leaseID, principalID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.checkLease(executionID, leaseID, principalID)
+}
+
 type renewCall struct{ ExecutionID, LeaseID, PrincipalID string }
 
 type releaseCall struct{ ExecutionID, LeaseID, PrincipalID string }
 
 func (f *fakeNexService) record(name string) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, name)
+	hook := f.onRecord
+	f.mu.Unlock()
+	if hook != nil {
+		hook(name)
+	}
 }
 
 // record calls "archive" for every Archive; ArchiveCalls tells the two
@@ -445,7 +464,14 @@ func (f *fakeNexService) Interrupt(ctx context.Context, req execution.InterruptR
 	f.record("interrupt")
 	f.mu.Lock()
 	f.interruptReqs = append(f.interruptReqs, req)
+	var fenceErr error
+	if f.enforceLease {
+		fenceErr = f.checkLease(req.ExecutionID, req.LeaseID, req.PrincipalID)
+	}
 	f.mu.Unlock()
+	if fenceErr != nil {
+		return execution.InterruptResult{}, fenceErr
+	}
 	if err := wait(ctx, f.interruptGate); err != nil {
 		return execution.InterruptResult{}, err
 	}
@@ -609,15 +635,61 @@ var _ nexStore = (*fakeNexStore)(nil)
 // does — so a test can hold the lock "as the stream module" through the
 // same instance.
 type handoffEnv struct {
-	m        *Module
-	tmux     *tmux.FakeExecutor
-	sessions *handoffSessions
-	owners   *stubOwnerResolver
-	ops      *recordingCCOperator
-	svc      *fakeNexService
-	srv      *httptest.Server
-	registry *core.ServiceRegistry
+	m         *Module
+	tmux      *tmux.FakeExecutor
+	sessions  *handoffSessions
+	owners    *stubOwnerResolver
+	ops       *recordingCCOperator
+	svc       *fakeNexService
+	srv       *httptest.Server
+	registry  *core.ServiceRegistry
+	terminals *stubTerminals
 }
+
+// stubTerminals is the agent.TerminalSessions provider.
+type stubTerminals struct {
+	mu         sync.Mutex
+	live       map[string][]agent.TerminalSession // by session id
+	err        error
+	subscribed func(agent.SessionStartEvent)
+	calls      int
+	// byCall, when set, answers the n-th (1-based) LiveBySessionID call
+	// instead of live: the seam for "an owner appears between two looks".
+	byCall func(n int) []agent.TerminalSession
+}
+
+// Calls is the number of LiveBySessionID lookups so far.
+func (s *stubTerminals) Calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+func (s *stubTerminals) LiveBySessionID(_ context.Context, _, sid string) ([]agent.TerminalSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.calls++
+	if s.byCall != nil {
+		return s.byCall(s.calls), nil
+	}
+	return append([]agent.TerminalSession(nil), s.live[sid]...), nil
+}
+
+func (s *stubTerminals) SubscribeSessionStart(fn func(agent.SessionStartEvent)) func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscribed = fn
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.subscribed = nil
+	}
+}
+
+var _ agent.TerminalSessions = (*stubTerminals)(nil)
 
 func newHandoffEnv(t *testing.T) *handoffEnv {
 	t.Helper()
@@ -639,6 +711,7 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 		found: true,
 	}
 	ops := &recordingCCOperator{tmux: fakeTx}
+	terminals := &stubTerminals{}
 	svc := &fakeNexService{result: execution.Result{ID: "exec-1", State: store.StateQueued, EffectiveProfile: "handoff"}}
 
 	m := &Module{
@@ -647,19 +720,22 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 			Config: &nexconfig.Config{HostID: "host1", Sandbox: sandbox.Policy{MaxProfile: "handoff", DefaultProfile: "trusted"}},
 			Auth:   principalAuth("host1"),
 		},
-		sessions: sessions,
-		owners:   owners,
-		prober:   &handoffProber{tmux: fakeTx, readiness: agentcc.NewReadinessChecker(fakeTx)},
-		ccOps:    ops,
-		tmux:     fakeTx,
-		locks:    registry.MustGet(session.HandoffLocksKey).(*session.HandoffLocks),
-		logf:     discardLogf,
+		sessions:  sessions,
+		owners:    owners,
+		prober:    &handoffProber{tmux: fakeTx, readiness: agentcc.NewReadinessChecker(fakeTx)},
+		ccOps:     ops,
+		terminals: terminals,
+		tmux:      fakeTx,
+		locks:     registry.MustGet(session.HandoffLocksKey).(*session.HandoffLocks),
+		logf:      discardLogf,
 
 		handoffResolveTimeout:   time.Second,
 		handoffInterruptTimeout: 100 * time.Millisecond,
 		handoffExitTimeout:      100 * time.Millisecond,
 		rollbackWait:            2 * time.Second,
 		rollbackPoll:            5 * time.Millisecond,
+		ownerVisiblePoll:        2 * time.Millisecond,
+		ownerVisibleTimeout:     20 * time.Millisecond,
 		delegateTimeout:         2 * time.Second,
 		engineOpTimeout:         2 * time.Second,
 		engineInterruptTimeout:  2 * time.Second,
@@ -672,7 +748,7 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	return &handoffEnv{m: m, tmux: fakeTx, sessions: sessions, owners: owners, ops: ops, svc: svc, srv: srv, registry: registry}
+	return &handoffEnv{m: m, tmux: fakeTx, sessions: sessions, owners: owners, ops: ops, svc: svc, srv: srv, registry: registry, terminals: terminals}
 }
 
 // post sends body (a value marshalled to JSON, or a raw string) and decodes

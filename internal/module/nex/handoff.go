@@ -93,6 +93,12 @@ func (m *Module) applyHandoffDefaults() {
 	if m.leaseCleanupTimeout == 0 {
 		m.leaseCleanupTimeout = defaultLeaseCleanupTimeout
 	}
+	if m.ownerVisiblePoll == 0 {
+		m.ownerVisiblePoll = defaultOwnerVisiblePoll
+	}
+	if m.ownerVisibleTimeout == 0 {
+		m.ownerVisibleTimeout = defaultOwnerVisibleTimeout
+	}
 }
 
 // handoffRequest is the body of POST /api/sessions/{code}/nex-handoff.

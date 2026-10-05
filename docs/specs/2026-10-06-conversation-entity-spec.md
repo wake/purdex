@@ -110,6 +110,18 @@ The old lock ("archived means taken") becomes an **owner check**. A transfer of 
 >
 >   A failed resume exits nothing; the unarchive rollback is removed. The response gains `exited` and keeps `archived` for compatibility.
 > - **D6 Take-to-terminal means "bring this conversation to a terminal".** It also accepts an exited execution (archived or terminated) and a `rejected` one, which is what P1c's "rebuild as terminal" on a worker pane calls. The owner check runs first: S already in another terminal answers 409 `session_owned {owner: "terminal"}` — the same code family as D7, so the SPA maps one code (this replaces `execution_archived` as the double-submit guard). Only an execution that was live is exited after the resume. `queued` is still refused.
+> - **D22 Transfers preempt; they do not borrow (supersedes "borrowed under D4" in D5(a)).**
+>   - When another **pdx** client holds the lease, take-to-terminal and take-back release that holder's lease as the holder (`ReleaseLease` with its lease id and principal). They then acquire an **exclusive** lease under the daemon's own principal.
+>   - A borrowed lease cannot stop its original holder from sending into the worker between the resume and the exit; an exclusive one can (PR #1586 review).
+>   - The preempted tab's next send or renew fails. Its re-attach sees `held_by` until the transfer ends.
+>   - When the transfer fails (the resume did not succeed, nothing was exited), the daemon **always releases** the lease it took, so the original tab can re-attach and regain control.
+>   - On success the worker has exited and the lease ends with it.
+>   - Exit (§5, D4) keeps borrowing, because it ends the worker anyway.
+>   - A non-pdx holder still gets 409 `held_by`, and nothing changes.
+>   - Also from that review:
+>     - the owner check runs once more right before the resume keys;
+>     - on success the daemon waits up to 3 s for the verified terminal frame before releasing `sid:<S>`;
+>     - a 10 s "just resumed by Purdex" marker makes the owner check treat S as in a terminal.
 > - **D7 Handoff.** Before CC is stopped: a live worker for S answers 409 `session_owned {owner: "worker", execution_id}`; S live in a terminal frame of another pane answers 409 `session_owned {owner: "terminal"}`. When the delegate is rejected:
 >   - rolled back: the daemon exits (archives) the rejected execution, so S is back to the one state terminal;
 >   - not rolled back: the rejected execution is kept (start failed, red in the lists), and the response carries `execution_id` so the SPA turns the pane into that worker's start-failed screen (P1c).
