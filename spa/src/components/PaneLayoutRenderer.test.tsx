@@ -446,6 +446,79 @@ describe('PaneLayoutRenderer — the pane focus record (shell cleanup P5)', () =
     fireEvent.pointerDown(screen.getByTestId('btn-c'))
     expect(usePaneFocusStore.getState().recent.t1).toEqual(['c'])
   })
+
+  describe('isFocusTarget (T5.3)', () => {
+    const renders: Record<string, number> = {}
+    beforeEach(() => {
+      for (const k of Object.keys(renders)) delete renders[k]
+      clearModuleRegistry()
+      registerModule({
+        id: 'dashboard',
+        name: 'Dashboard',
+        panes: [{
+          kind: 'dashboard',
+          component: ({ pane, isFocusTarget }) => {
+            renders[pane.id] = (renders[pane.id] ?? 0) + 1
+            return <div data-testid={`dash-${pane.id}`} data-focus-target={String(isFocusTarget)} />
+          },
+        }],
+      })
+    })
+    const target = (id: string) => screen.getByTestId(`dash-${id}`).getAttribute('data-focus-target')
+
+    it('no record → the primary pane is the target, the other is not', () => {
+      seed(splitLR)
+      render(<PaneLayoutRenderer layout={splitLR} tabId="t1" isActive={true} />)
+      expect(target('left')).toBe('true')
+      expect(target('right')).toBe('false')
+    })
+
+    it('after touching the right pane, the right renderer gets true and the left false', () => {
+      seed(splitLR)
+      usePaneFocusStore.getState().touch('t1', 'right')
+      render(<PaneLayoutRenderer layout={splitLR} tabId="t1" isActive={true} />)
+      expect(target('right')).toBe('true')
+      expect(target('left')).toBe('false')
+    })
+
+    it('follows the record live: a pointerdown in the other pane moves the target', () => {
+      seed(splitLR)
+      render(<PaneLayoutRenderer layout={splitLR} tabId="t1" isActive={true} />)
+      fireEvent.pointerDown(screen.getByTestId('dash-right'))
+      expect(target('right')).toBe('true')
+      expect(target('left')).toBe('false')
+    })
+
+    it('does not include isActive: an inactive tab still names its target', () => {
+      seed(splitLR)
+      usePaneFocusStore.getState().touch('t1', 'right')
+      render(<PaneLayoutRenderer layout={splitLR} tabId="t1" isActive={false} />)
+      expect(target('right')).toBe('true')
+      expect(target('left')).toBe('false')
+    })
+
+    it('a recorded pane that left the layout → the primary pane again', () => {
+      seed(splitLR)
+      usePaneFocusStore.getState().touch('t1', 'gone')
+      render(<PaneLayoutRenderer layout={splitLR} tabId="t1" isActive={true} />)
+      expect(target('left')).toBe('true')
+    })
+
+    it('a single leaf is its own target', () => {
+      const single: PaneLayout = { type: 'leaf', pane: { id: 'only', content: { kind: 'dashboard' } } }
+      seed(single)
+      render(<PaneLayoutRenderer layout={single} tabId="t1" isActive={true} />)
+      expect(target('only')).toBe('true')
+    })
+
+    it('a touch on another tab does not re-render this tab\'s panes', () => {
+      seed(splitLR)
+      render(<PaneLayoutRenderer layout={splitLR} tabId="t1" isActive={true} />)
+      const before = { ...renders }
+      act(() => usePaneFocusStore.getState().touch('t2', 'elsewhere'))
+      expect(renders).toEqual(before)
+    })
+  })
 })
 
 describe('PaneLayoutRenderer context menu', () => {
