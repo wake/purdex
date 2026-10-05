@@ -7,6 +7,7 @@
 import { parseAttachmentMeta, type AttachmentMeta } from './attachments'
 import { isResultError } from './cost-summary'
 import type { StreamMessage } from './message-types'
+import { defaultPreludeState, type PreludeState } from './prelude'
 import { finalizeBlock, type PartialAssembly } from './partial'
 import type { NexSseFrame } from './sse-parser'
 import { endTurn, recordN2ToolResult, recordN2ToolUse, recordToolEnds, recordToolStarts, type ToolActivity } from './tool-activity'
@@ -124,6 +125,8 @@ export interface ExecutionState {
    * (nexen v0.13) and by `applyTasksSnapshot`; always `{}` on an older daemon.
    */
   tasks: TaskTable
+  /** The transcript before turn 1 (worker prelude spec §5.2). Its own slice: never read by the rules above. */
+  prelude: PreludeState
 }
 
 export function defaultExecutionState(): ExecutionState {
@@ -149,6 +152,7 @@ export function defaultExecutionState(): ExecutionState {
     turnEnds: [],
     tools: {},
     tasks: {},
+    prelude: defaultPreludeState(),
   }
 }
 

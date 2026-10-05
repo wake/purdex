@@ -8,6 +8,8 @@ import { subscribeWithSelector } from 'zustand/middleware'
 import { compositeKey } from '../lib/composite-key'
 import { applyDurableEvent, applyTasksSnapshot, defaultExecutionState, type ExecutionState } from '../lib/nex/event-reducer'
 import { applyTransientFrame } from '../lib/nex/partial'
+import { applyPreludePage as reducePreludePage, defaultPreludeState, preludeFailed as failPrelude, preludeLoading as loadingPrelude } from '../lib/nex/prelude'
+import type { PreludePage } from '../lib/nex/prelude-wire'
 import type { ExecutionSummary, NexEvent, WorkerTasksSnapshot } from '../lib/nex/types'
 
 export function executionKey(hostId: string, executionId: string): string {
@@ -56,6 +58,14 @@ interface ExecutionStore {
   setPendingLocal: (hostId: string, executionId: string, local: ExecutionState['pendingLocal']) => void
   setSendError: (hostId: string, executionId: string, err: ExecutionState['sendError']) => void
   setLastTurn: (hostId: string, executionId: string, turn: ExecutionState['lastTurn']) => void
+  /** Worker prelude (spec §5.2): request `request` is in flight — also the lock two panes share. */
+  preludeLoading: (hostId: string, executionId: string, request: number) => void
+  /** No-op unless `request` is the one in flight. */
+  applyPreludePage: (hostId: string, executionId: string, page: PreludePage, sentBefore: string | null, request: number) => void
+  /** No-op unless `request` is the one in flight. */
+  preludeFailed: (hostId: string, executionId: string, message: string, request: number) => void
+  /** Back to idle, which reloads from the first page (spec §5.2: a cursor rejected as foreign). */
+  resetPrelude: (hostId: string, executionId: string) => void
   clearExecution: (hostId: string, executionId: string) => void
   clearHost: (hostId: string) => void
 }
@@ -105,6 +115,17 @@ export const useExecutionStore = create<ExecutionStore>()(subscribeWithSelector(
     setSendError: (h, e, err) => patch(h, e, (c) => ({ ...c, sendError: err })),
 
     setLastTurn: (h, e, turn) => patch(h, e, (c) => ({ ...c, lastTurn: turn })),
+
+    preludeLoading: (h, e, r) => patch(h, e, (c) => ({ ...c, prelude: loadingPrelude(c.prelude, r) })),
+    applyPreludePage: (h, e, page, sentBefore, r) => patch(h, e, (c) => {
+      const prelude = reducePreludePage(c.prelude, page, sentBefore, r)
+      return prelude === c.prelude ? c : { ...c, prelude }
+    }),
+    preludeFailed: (h, e, message, r) => patch(h, e, (c) => {
+      const prelude = failPrelude(c.prelude, message, r)
+      return prelude === c.prelude ? c : { ...c, prelude }
+    }),
+    resetPrelude: (h, e) => patch(h, e, (c) => ({ ...c, prelude: defaultPreludeState() })),
 
     clearExecution: (h, e) => set((s) => {
       const { [executionKey(h, e)]: _dropped, ...rest } = s.executions

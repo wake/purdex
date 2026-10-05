@@ -236,3 +236,20 @@ describe('useExecutionStore — the optimistic line owns its preview URLs (phase
     expect(revoke.mock.calls).toEqual([['blob:a'], ['blob:b'], ['blob:c']])
   })
 })
+
+describe('prelude actions', () => {
+  beforeEach(() => useExecutionStore.setState({ executions: {} }))
+
+  it('loading → page → never touches messages, lastSeq or tools', () => {
+    const s = useExecutionStore.getState()
+    s.applyEvents('h', 'e', [{ seq: 1, execution_id: 'e', kind: 'execution.delegated', payload: { brief: 'b' }, created_at: 1 }])
+    const before = useExecutionStore.getState().executions[executionKey('h', 'e')]
+    s.preludeLoading('h', 'e', 1)
+    s.applyPreludePage('h', 'e', { state: 'ok', items: [], prevCursor: null, totalBytes: null }, null, 1)
+    const after = useExecutionStore.getState().executions[executionKey('h', 'e')]
+    expect(after.prelude).toMatchObject({ status: 'ok', done: true })
+    expect(after.messages).toBe(before.messages)
+    expect(after.lastSeq).toBe(before.lastSeq)
+    expect(after.tools).toBe(before.tools)
+  })
+})
