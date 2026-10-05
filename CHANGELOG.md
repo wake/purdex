@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.477] - 2026-10-05
+
+> 純 SPA，不必重新部署 daemon。和 476 一樣，要等 daemon 內嵌 Nexen v0.16.0（`transcript_prelude`）才會出現；在那之前畫面與 475 完全相同。
+
+### Feature（尚未啟用）：交接前的對話也支援 chat 模式和搜尋（#1541 #1542）
+
+- 切到 chat 模式時，交接前的內容也照 chat 的規則顯示：同一段的工具操作收成一行「使用了 N 個工具」，展開後逐條列出；thinking 不顯示，和 worker 自己的對話一致。
+- 被 daemon 截斷的工具呼叫與結果，在 room 和 chat 都會在該工具區塊裡註明只顯示了多少，包括 chat 的「編輯」行。
+- 搜尋（Cmd+F）會從已載入的交接前內容開始找，順序和畫面一致，跳到收合區塊裡的結果會自動展開。
+- 交接前的內容還沒全部載入時，搜尋列下方會顯示「更早的內容尚未全部載入 · 全部載入」。按「全部載入」會一路往前讀到最早，期間顯示「載入更早的內容…」；先前載入失敗的話會先重試。
+
+### Internal
+
+- chat：每一段的畫法抽到 `components/chat/ChatTurnBody.tsx`（純搬移，helper 逐位元組相同），由 `ChatTranscript` 和 `PreludeSection` 共用；prelude 段落的 key 用該段**最後一則**訊息的 id（頁面只會從前面長，段尾不動）。截斷提示移進 `OperationAt`，room 與 chat 共用。
+- 搜尋：`buildSearchUnits({ prelude })` 先走 prelude，id 用穩定的 `p<pos>`，畫法與 `PreludeSection` 對齊；room × chat 錨點一致性測試涵蓋 prelude。
+- spec §5.3 修正：截斷提示只出現在畫面有畫出的區塊（chat 不畫 thinking，就不提示）。
+- follow-up #1539（只有圖片的使用者訊息不會在 chat 開新段）、#1543（ExecutionView 職責拆分）。
+
 ## [1.0.0-alpha.476] - 2026-10-05
 
 > 純 SPA，不必重新部署 daemon。功能要等 daemon 內嵌 Nexen v0.16.0（`transcript_prelude`）才會出現；在那之前畫面與 475 完全相同。
