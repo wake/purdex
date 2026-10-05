@@ -78,7 +78,16 @@ type fakeTarget struct {
 	stopHook  func(ctx context.Context) // runs inside StopModules after recording
 	closeErr  error
 	closeGate chan struct{} // if non-nil, CloseModules blocks until it is closed
+	closeHook func()        // runs at the start of CloseModules, before closeGate
 	stops     atomic.Int32
+
+	restartAccepted bool         // what BeginShutdown reports (a restart 202 sent before the sequence)
+	beginCalls      atomic.Int32 // not in the step recorder: tests compare exact step lists
+}
+
+func (t *fakeTarget) BeginShutdown() bool {
+	t.beginCalls.Add(1)
+	return t.restartAccepted
 }
 
 func (t *fakeTarget) StopModules(ctx context.Context) error {
@@ -91,6 +100,9 @@ func (t *fakeTarget) StopModules(ctx context.Context) error {
 }
 
 func (t *fakeTarget) CloseModules() error {
+	if t.closeHook != nil {
+		t.closeHook()
+	}
 	if t.closeGate != nil {
 		<-t.closeGate
 	}
@@ -104,6 +116,7 @@ func (t *fakeTarget) CloseModules() error {
 type fakeServer struct {
 	rec         *recorder
 	serveErr    error
+	lateErr     error // if set, Serve returns it (not ErrServerClosed) once released
 	shutdownErr error
 	done        chan struct{}
 	closeOnce   sync.Once
@@ -120,6 +133,9 @@ func (s *fakeServer) Serve(net.Listener) error {
 		return s.serveErr
 	}
 	<-s.done
+	if s.lateErr != nil {
+		return s.lateErr
+	}
 	return http.ErrServerClosed
 }
 
@@ -138,12 +154,13 @@ func (s *fakeServer) Close() error {
 // harness wires a recorder, fake target, fake server, recording cancel
 // and a log sink so each test only states what differs.
 type harness struct {
-	rec    *recorder
-	target *fakeTarget
-	srv    *fakeServer
-	sig    chan os.Signal
-	logs   []string
-	logMu  sync.Mutex
+	rec     *recorder
+	target  *fakeTarget
+	srv     *fakeServer
+	sig     chan os.Signal
+	restart chan struct{}
+	logs    []string
+	logMu   sync.Mutex
 
 	exitMu    sync.Mutex
 	exitCalls []int // records exit() calls instead of ever calling real os.Exit
@@ -154,10 +171,11 @@ type harness struct {
 func newHarness() *harness {
 	rec := &recorder{}
 	return &harness{
-		rec:    rec,
-		target: &fakeTarget{rec: rec},
-		srv:    newFakeServer(rec),
-		sig:    make(chan os.Signal, 1),
+		rec:     rec,
+		target:  &fakeTarget{rec: rec},
+		srv:     newFakeServer(rec),
+		sig:     make(chan os.Signal, 1),
+		restart: make(chan struct{}, 1),
 	}
 }
 
@@ -196,7 +214,7 @@ func (h *harness) exited() []int {
 
 // run calls serveAndWait with the harness fakes and the given budget.
 func (h *harness) run(budget time.Duration) error {
-	return serveAndWait(h.srv, nil, h.sig, h.cancel, h.target, budget, h.logf, h.exit)
+	return serveAndWait(h.srv, nil, h.sig, h.restart, h.cancel, h.target, budget, h.logf, h.exit)
 }
 
 // runAsync calls run on a goroutine and returns a channel that yields
@@ -220,6 +238,55 @@ func equalSteps(got, want []string) bool {
 }
 
 const testBudget = time.Second
+
+// recvOrFail receives from ch, failing fast instead of hanging to the go
+// test timeout if a deadlock keeps the value from ever arriving.
+func recvOrFail[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		panic("unreachable")
+	}
+}
+
+// waitForLog polls the harness log until a line containing substr appears.
+func waitForLog(t *testing.T, h *harness, substr string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		for _, l := range h.logged() {
+			if strings.Contains(l, substr) {
+				return
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("log never contained %q; logs = %v", substr, h.logged())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+// waitForExit polls until the injected exit func has been called with code.
+func waitForExit(t *testing.T, h *harness, code int) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		for _, c := range h.exited() {
+			if c == code {
+				return
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("exit(%d) never called; exits = %v", code, h.exited())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
 
 func TestServeAndWait_SignalRunsSequenceInOrder(t *testing.T) {
 	h := newHarness()
@@ -810,7 +877,7 @@ func TestServeAndWait_RealServerStreamingHandlerTimesOutThenCloses(t *testing.T)
 
 	done := make(chan error, 1)
 	noExit := func(int) {}
-	go func() { done <- serveAndWait(srv, ln, sig, cancel, target, budget, t.Logf, noExit) }()
+	go func() { done <- serveAndWait(srv, ln, sig, nil, cancel, target, budget, t.Logf, noExit) }()
 
 	// Open a streaming request and wait until the handler has flushed
 	// headers — from then on the connection is "active" for Shutdown.
@@ -870,4 +937,141 @@ func ctxErr(ctx context.Context) error {
 		return nil
 	}
 	return ctx.Err()
+}
+
+func TestServeAndWait_RestartRunsSequenceAndReturnsErrRestart(t *testing.T) {
+	h := newHarness()
+	h.restart <- struct{}{}
+	err := h.run(testBudget)
+	if !errors.Is(err, errRestart) {
+		t.Fatalf("serveAndWait returned %v, want errRestart", err)
+	}
+	want := []string{"cancel", "StopModules", "Shutdown", "CloseModules"}
+	if got := h.rec.names(); !equalSteps(got, want) {
+		t.Fatalf("steps = %v, want %v", got, want)
+	}
+	if len(h.exited()) != 0 {
+		t.Fatalf("exit called: %v", h.exited())
+	}
+}
+
+func TestServeAndWait_SignalDuringRestartCancelsRestart(t *testing.T) {
+	h := newHarness()
+	unblock := make(chan struct{})
+	entered := make(chan struct{})
+	h.target.stopHook = func(context.Context) { close(entered); <-unblock }
+	h.restart <- struct{}{}
+	out := h.runAsync(testBudget)
+	recvOrFail(t, entered, "StopModules/CloseModules to start")
+	h.sig <- syscall.SIGTERM // `pdx stop` while the restart's shutdown runs
+	waitForLog(t, h, "exiting instead of restarting")
+	close(unblock)
+	if err := recvOrFail(t, out, "serveAndWait to return"); err != nil {
+		t.Fatalf("serveAndWait returned %v, want nil (a stop, not a restart)", err)
+	}
+	if h.rec.count("CloseModules") != 1 {
+		t.Fatalf("first signal must not skip CloseModules: steps = %v", h.rec.names())
+	}
+	if len(h.exited()) != 0 {
+		t.Fatalf("first signal must not force exit: %v", h.exited())
+	}
+}
+
+func TestServeAndWait_TwoSignalsDuringRestartExitImmediately(t *testing.T) {
+	h := newHarness()
+	unblock := make(chan struct{})
+	entered := make(chan struct{})
+	h.target.stopHook = func(context.Context) { close(entered); <-unblock }
+	h.restart <- struct{}{}
+	out := h.runAsync(testBudget)
+	recvOrFail(t, entered, "StopModules/CloseModules to start")
+	h.sig <- syscall.SIGTERM
+	waitForLog(t, h, "exiting instead of restarting")
+	h.sig <- syscall.SIGTERM
+	waitForExit(t, h, 130)
+	close(unblock)
+	if err := recvOrFail(t, out, "serveAndWait to return"); err != nil {
+		t.Fatalf("serveAndWait returned %v, want nil (restart cancelled by the first signal)", err)
+	}
+}
+
+// A signal at the TAIL of the sequence (during CloseModules) must still
+// cancel the restart. This pins that behaviour only; it does not prove the
+// watcher join (<-watcherDone before reading restartCancelled), which is
+// correct by construction — the log line happens-after the Store, so the
+// test passes with or without the join.
+func TestServeAndWait_SignalDuringCloseModulesCancelsRestart(t *testing.T) {
+	h := newHarness()
+	unblock := make(chan struct{})
+	entered := make(chan struct{})
+	h.target.closeHook = func() { close(entered); <-unblock }
+	h.restart <- struct{}{}
+	out := h.runAsync(testBudget)
+	recvOrFail(t, entered, "StopModules/CloseModules to start")
+	h.sig <- syscall.SIGTERM
+	waitForLog(t, h, "exiting instead of restarting")
+	close(unblock)
+	if err := recvOrFail(t, out, "serveAndWait to return"); err != nil {
+		t.Fatalf("serveAndWait returned %v, want nil", err)
+	}
+	if h.rec.count("CloseModules") != 1 {
+		t.Fatalf("CloseModules not recorded once: steps = %v", h.rec.names())
+	}
+}
+
+// A real Serve error that surfaces during a restart is logged, not lost
+// behind errRestart (F4).
+func TestServeAndWait_RestartLogsRealServeError(t *testing.T) {
+	h := newHarness()
+	h.srv.lateErr = errors.New("accept boom")
+	h.restart <- struct{}{}
+	out := h.runAsync(testBudget)
+	err := recvOrFail(t, out, "serveAndWait to return")
+	if !errors.Is(err, errRestart) {
+		t.Fatalf("serveAndWait returned %v, want errRestart", err)
+	}
+	waitForLog(t, h, "server error during restart: accept boom")
+}
+
+// A restart the endpoint accepted (202 sent) just before a Serve failure won
+// the trigger select is honoured, not lost behind the Serve error (G1).
+func TestServeAndWait_ServeErrorWithAcceptedRestartStillRestarts(t *testing.T) {
+	h := newHarness()
+	h.target.restartAccepted = true
+	h.srv.serveErr = errors.New("accept boom")
+	out := h.runAsync(testBudget)
+	err := recvOrFail(t, out, "serveAndWait to return")
+	if !errors.Is(err, errRestart) {
+		t.Fatalf("serveAndWait returned %v, want errRestart", err)
+	}
+	waitForLog(t, h, "restart accepted before shutdown began")
+	waitForLog(t, h, "server error during restart: accept boom")
+}
+
+// A signal still wins over an accepted restart (D4).
+func TestServeAndWait_SignalWithAcceptedRestartStops(t *testing.T) {
+	h := newHarness()
+	h.target.restartAccepted = true
+	h.sig <- syscall.SIGTERM
+	err := h.run(testBudget)
+	if err != nil {
+		t.Fatalf("serveAndWait returned %v, want nil (stop)", err)
+	}
+}
+
+func TestServeAndWait_CallsBeginShutdownOnce(t *testing.T) {
+	for name, trigger := range map[string]func(h *harness){
+		"signal":  func(h *harness) { h.sig <- syscall.SIGTERM },
+		"serve":   func(h *harness) { h.srv.serveErr = errors.New("boom") },
+		"restart": func(h *harness) { h.restart <- struct{}{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness()
+			trigger(h)
+			h.run(testBudget)
+			if n := h.target.beginCalls.Load(); n != 1 {
+				t.Fatalf("BeginShutdown called %d times, want 1", n)
+			}
+		})
+	}
 }
