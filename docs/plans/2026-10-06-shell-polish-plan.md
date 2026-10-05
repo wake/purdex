@@ -2,6 +2,8 @@
 
 Spec: `docs/specs/2026-10-06-shell-polish-spec.md`. Its §1 decisions are the user's and are not reopened here.
 
+Codex plan review (job `task-muvml2ew-m9919m`, gpt-5.6-sol, spec read with it) returned 3 findings, all applied: #1 existing scroller assertions (T2.3), #2 focus is only provable in a real browser (spec §5, T4 steps 2–4, 7, WebKit), #3 the 96 px claim is now measured (spec §3, T4 step 6).
+
 Anchors measured on `8d428d4f` (origin/main alpha.485) in worktree `shell-polish`. SPA paths are relative to `spa/src/`.
 
 ## Working rules
@@ -45,6 +47,7 @@ Files: `features/workspace/components/ActivityBarWide.tsx`, `features/workspace/
    - **Scroll area** `worker-list-scroll`: `min-h-0 flex-1 overflow-y-auto overscroll-contain`, containing `<WorkerList />`.
 2. `useWorkerListResize` and the `PaneSplitter` stay unchanged.
 3. Tests in `ActivityBarWide.test.tsx`:
+   - **existing assertions that the section itself scrolls must move to `worker-list-scroll`** (codex plan review #1): `ActivityBarWide.test.tsx:158-164` (the section as the second scroller) and `:187-200` (the section's own `overflow-y-auto overscroll-contain`). Update them to assert the classes on `worker-list-scroll`, and that `worker-list-section` no longer scrolls;
    - header and × absent while the list is closed, present while open;
    - × click → `useLayoutStore.getState().workerListOpen === false`, `worker-list` gone, `workerListHeight` unchanged;
    - `worker-list-scroll` contains `worker-list` and does not contain `worker-list-header`; `worker-list-section` contains both;
@@ -82,14 +85,23 @@ Files:
 
 ## T4 — acceptance (main session, after T1–T3)
 
-Run `playwright cli` (session `shell-polish`) against the worktree's own Vite dev server on a free port. Do not use :5174 (main checkout). Steps:
+Run `playwright cli` (session `shell-polish`) against the worktree's own Vite dev server on a free port. Do not use :5174 (main checkout). Run the whole list once with Chromium and once with `--browser webkit` (codex plan review #2). Steps:
 
 1. Set `purdex-layout` in localStorage: `activityBarWidth: 'wide'`, `bottomNavCompact: true`.
-2. Click Workers, press Shift: `activeElement` is not the Workers button and `:focus-visible` matches nothing.
-3. Press Space: `aria-pressed` does not change.
-4. Click × in the header: the list closes.
-5. Narrow bar: open and close the floating panel. Focus returns to what had it before, not to the Workers button.
-6. Close the session and stop the dev server.
+2. Append a probe `<textarea>`, focus it, and keep a handle to it (it stands in for the pane).
+3. Click Workers:
+   - `activeElement` **is the probe** (not merely "not the button");
+   - press Shift → `:focus-visible` matches nothing;
+   - press Space → `aria-pressed` does not change.
+4. Blur everything (`activeElement` is body), then click Workers: `activeElement` is still body.
+5. Click × in the header: the list closes.
+6. Set `workerListHeight: 96`, reload, and open the list:
+   - `worker-list-header` `offsetHeight` ≤ 32;
+   - `worker-list-scroll` `clientHeight` ≥ 64 (codex plan review #3).
+7. Narrow bar (`activityBarWidth: 'narrow'`): focus the probe, open the floating panel, then close it with Escape and with the Workers button. Each time focus returns to the probe.
+8. Close the session and stop the dev server.
+
+The title bar is Electron-only, and the status bar's mode buttons need a live agent pane. Those sites rest on their unit tests plus this browser proof of the shared helper; the user's Electron run is the final check.
 
 ## PR
 

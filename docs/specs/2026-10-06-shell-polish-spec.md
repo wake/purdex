@@ -26,7 +26,7 @@ The third item of the same report (how terminated workers are listed) is under d
 - The docked section becomes a column of exactly the stored/capped height (as today): a **header row** (not scrolling) and below it the **scroll area** that holds `WorkerList` and takes the rest (`min-h-0`, `flex-1`, `overflow-y-auto`, `overscroll-contain` — the classes the section has today move to it).
 - Header: the title `t('nav.workers')` and a × button, laid out and styled like `FloatingPanel`'s header (title `text-xs font-medium text-text-primary truncate`; × is Phosphor `X` 14, `rounded p-0.5 text-text-muted hover:text-text-primary hover:bg-surface-hover`, `aria-label={t('common.close')}`). Test ids: `worker-list-header`, `worker-list-close`. No new locale keys.
 - × sets the list closed (`setWorkerListOpen(false)` or the toggle — the list is open whenever the header exists). Closing unmounts the list exactly as the Workers button does today; the stored height is not touched.
-- The header is inside the section's height: the scroll area gets `height − header`. With the minimum of 96 the scroll area still shows at least one host header and one row.
+- The header is inside the section's height: the scroll area gets `height − header`. The header is at most 32 px tall, so at the minimum of 96 the scroll area is at least 64 px (measured in acceptance; jsdom has no layout).
 - The divider, its drag, the cap and the stored height keep their current behaviour (`useWorkerListResize` unchanged).
 - The narrow bar's floating panel is unchanged.
 
@@ -52,7 +52,14 @@ The third item of the same report (how terminated workers are listed) is under d
 - W: header and × render only while the list is open; × closes the list (store false, `worker-list` unmounted, stored height unchanged); the header is not inside the scroll container (the scroll area is a separate element that contains `worker-list` and not the header); the section's total height is still the rendered height from `useWorkerListResize`.
 - F: for every covered button, `fireEvent.mouseDown` returns `false` (default prevented) and the button is still focusable (no negative `tabIndex`); its click still runs its action. A negative control: a not-covered button (e.g. `floating-panel-close`) is not prevented.
 - Mutation (deliverable): removing the handler from one call site turns that site's test red; making the helper a no-op turns all of them red.
-- Real browser (acceptance, `playwright cli`, wide compact row and narrow bar): click Workers, press Shift → `activeElement` is not the Workers button and nothing matches `:focus-visible`; press Space → the list does not toggle. Click × in the header → the list closes.
+- What the unit tests can and cannot show: jsdom does not run the browser's native "focus on mousedown" default, so `fireEvent.mouseDown(...) === false` proves only that a site is wired to the helper. That the helper keeps focus is proven once, in a real browser, below; every site uses the same helper.
+- Real browser (acceptance, `playwright cli`, Chromium and WebKit, wide compact row and narrow bar):
+  - with a focusable element holding focus (a textarea standing in for the pane), click Workers → `activeElement` is **that same element**; press Shift → nothing matches `:focus-visible`; press Space → the list does not toggle;
+  - with nothing focused (body), click Workers → `activeElement` is still body;
+  - narrow bar: open and close the floating panel → focus returns to the element that had it before;
+  - click × in the header → the list closes;
+  - with `workerListHeight` 96: header `offsetHeight` ≤ 32 and the scroll area's `clientHeight` ≥ 64.
+  The title bar exists only under Electron, and the status bar's mode buttons need a live agent pane, so those sites rest on their unit tests plus the shared-helper argument; the user's Electron run is the final check.
 
 ## 6. Not in scope
 
