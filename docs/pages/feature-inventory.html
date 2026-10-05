@@ -252,7 +252,7 @@ footer{margin-top:50px;padding-top:14px;border-top:1px solid var(--line);color:v
 <p class="hint" style="margin-top:10px">
   <b>環境變數：</b><code>PDX_DEV_MODE</code>（預設開）· <code>PDX_TOKEN</code>（relay）· <code>PDX_NEX_ADDR/TOKEN</code> · <s><code>PDX_PLOOM_URL/TOKEN</code></s>（M0，P-D.1 已移除）· <code>PDX_CODEX_STATE_ROOT/SOCKET_ROOTS</code> · <code>PDX_STATUSLINE_TEST_SESSION</code><br>
   <b>CLI <code>pdx</code>：</b>serve · start · stop · status · token · setup · hook · statusline-proxy · peers · msg（send／log／deliver／selftest／name／whoami）· nex（delegate／ls／show／watch／events／attach／send／interrupt／archive／terminate／host）· <b>path（link／add-to-shell，alpha.364 新增）</b> · version · <span style="color:var(--pd)">relay（P-D 移除）</span> · peer-proxy（隱藏）<br>
-  <b>已移除（別再找）：</b><code>cswap_bin</code>（alpha.368）· <code>/api/agent/monitor/*</code> 三條與 Tmux Agent 監控頁（alpha.361）· 快速指令整組約 5900 行（alpha.359）· host color mark（alpha.362 換成 host badge）
+  <b>已移除（別再找）：</b><code>cswap_bin</code>（alpha.368）· <code>/api/agent/monitor/*</code> 三條與 Tmux Agent 監控頁（alpha.361）· 快速指令整組約 5900 行（alpha.359）· host color mark（alpha.362 換成 host badge） · 4 區側欄與 views 註冊（alpha.480）· 工作區檔案樹、files module、專案路徑設定（alpha.479）
 </p>
 
 <!-- ============ 收束建議 ============ -->
@@ -274,7 +274,7 @@ footer{margin-top:50px;padding-top:14px;border-top:1px solid var(--line);color:v
       <li><b>SPA 死碼共約 1.3k 行</b>（零非測試 import）：<code>SessionPanel</code> 132 ／ <code>SessionPicker</code> 67 ／ <code>NewPanePage</code> 33 ／ <code>useGlobalSettingsStore</code> 74 ／ <code>useIsMobile</code> 7 ／ <code>tab-state</code> 11 ／ <code>open-clustered-tab</code> 27 ／ <code>agent-ws-dispatch</code> 4 ／ <code>sync/providers/file-provider</code> 182</li>
       <li><b>statusline UI 整組約 750 行</b>：<code>AgentExtensionRow</code>（130）沒有任何 import，連帶 <code>StatuslineTestPanel</code> 94 ／ <code>StatuslineConflictDialog</code> 59 ／ <code>useStatuslineInstall</code> 116 ／ <code>useStatuslineTest</code> 350 全部到不了（daemon 端 API 仍在，要接回或一起清）</li>
       <li><b>Dashboard 模組</b>（12 行）：唯一能開它的 <code>NewPanePage</code> 本身就是死碼</li>
-      <li><b>Files 的 session 檔案樹</b>（14 行，寫著「尚未實作」）；<b>介面設定的 Pane／Sidebar 兩個分頁</b>（<code>() =&gt; null</code> ＋ coming soon）</li>
+      <li><s><b>Files 的 session 檔案樹</b>（14 行，寫著「尚未實作」）；<b>介面設定的 Pane／Sidebar 兩個分頁</b>（<code>() =&gt; null</code> ＋ coming soon）</s> <b>已移除</b>（alpha.479／480，殼層整理）</li>
       <li><b>桌面 App 頁的 3 個瀏覽器欄位</b>：uncontrolled、沒有 onChange、沒有 store，實際值寫死在 <code>browser-view-manager.ts</code></li>
       <li><b>ModuleConfigSection ＋ <code>workspaceConfig</code>／<code>globalConfig</code></b>：沒有模組宣告，永遠 render null，registry 還在印 deprecation 警告</li>
       <li><b>daemon 死路由／死鍵</b>：<code>/api/ready</code>、<s><code>/api/execution/{id}</code>、<code>/api/dispatch/reclaim</code></s>（P-D.1 已移除）、codexbroker 2 條、sync group／pair 6 條、<code>allowed_paths</code>、<code>[features]</code></li>
@@ -293,7 +293,7 @@ footer{margin-top:50px;padding-top:14px;border-top:1px solid var(--line);color:v
   <div class="ta decide">
     <h4>❓ D. 要你決定</h4>
     <ul>
-      <li><b>4 區 sidebar 版面</b>（737 行，04-18 後沒動）：四個區塊只註冊 2 個 view，其中一個還是空殼。補 view 還是縮成單一側欄</li>
+      <li><s><b>4 區 sidebar 版面</b>（737 行，04-18 後沒動）：四個區塊只註冊 2 個 view，其中一個還是空殼。補 view 還是縮成單一側欄</s> <b>已決定：整套拿掉，alpha.480 已移除</b>；Executions 清單改由左側欄底部的 Workers 鈕開（alpha.478），工作區檔案樹 alpha.479 已移除</li>
       <li><b>agent trace（trace_chains／steps）</b>：兩台都頂到 10000 chain 上限、mlab 佔 198 MB，但 alpha.361 把讀取端整個刪了，<b>現在只寫不讀</b>。Lights Phase 5「Dev Inspector」從未實作 → 要停寫、要縮上限，還是要把讀者做回來</li>
       <li><b>codexbroker</b>（4903 行 Go）：無 UI、只能 curl，P3 自動觸發從未實作</li>
       <li><b>內嵌瀏覽器</b>（SPA 430 ＋ Electron 640 行，只有桌面版）</li>
@@ -348,7 +348,7 @@ const F = [
  ['殼層與版面','tabbar','Tab bar','dnd 排序、釘選（36px 純圖示）、鎖定、中鍵關閉、overflow 捲動','上方','~560','09-16','在用','keep'],
  ['殼層與版面','tabmenu','分頁右鍵選單','切換 terminal/stream、改名、鎖定、釘選、開新視窗、併入成 pane、關閉其他／右側','右鍵分頁','136','04-10','「加入 … tab 成為 pane」是全 app 唯一沒 i18n 的選單字串','tidy'],
  ['殼層與版面','split','Pane 分割樹','水平／垂直分割、拖曳分隔線、pane header、swap、detach 成獨立 tab','pane 右鍵、狀態列','~800','09-16','在用','keep'],
- ['殼層與版面','region','4 區 sidebar 版面','四區各可釘選／收合／隱藏、可調寬、可選 view','區塊右鍵、TitleBar','737','04-18','只註冊 2 個 view（檔案樹 ×2，其中 session 版是空殼）；04-18 後沒動','decide'],
+ ['殼層與版面','region','4 區 sidebar 版面','四區各可釘選／收合／隱藏、可調寬、可選 view','—（alpha.480 已移除）','0（原 737）','10-05','<b>alpha.480 已移除</b>（使用者定案整套拿掉，含標題列 4 顆開關與 views 註冊機制）；Executions 清單改由左側欄 Workers 鈕（alpha.478）','remove'],
  ['殼層與版面','newtab','分頁首頁 ＋ layout 編輯器','provider 區塊（每台 host 一個 Sessions block、瀏覽器、最近檔案、Manage Buffers）；3／2／1 欄 profile','Cmd+T','684＋417','09-16','1 欄強制啟用，3／2 欄預設關','decide'],
  ['殼層與版面','launcher','Session Launcher','名稱欄 ＋ 專案卡片格（每卡帶該 host 的指令圖示），點指令＝建 session＋送指令；{slug}-{N} 自動命名含 409 重試','分頁首頁 host 的「+」、Host › Sessions','400+','09-17','alpha.360 新增、alpha.369 修 5 個缺陷；取代了舊的 cwd 輸入框','keep'],
  ['殼層與版面','history','History 頁','最近關閉的分頁、可重開','Cmd+Y','158','06-30','只顯示 raw kind 字串','decide'],
@@ -379,8 +379,8 @@ const F = [
  ['檔案與編輯','preview','圖片／PDF 預覽','依副檔名開啟','檔案 opener','196','08-19','—','keep'],
  ['檔案與編輯','fileopen','開檔管線','stat → 路徑快取 → 找不到彈窗 → fs 搜尋 → opener → singleton tab','終端連結、檔案樹、最近檔案','~700','04-28','—','keep'],
  ['檔案與編輯','fsb','FS backend（in-app／daemon／本機）','三種來源＋解析器；daemon 版對未知 host 一律拒絕','被動','~900','08-18','本機版只有 Electron','keep'],
- ['檔案與編輯','tree','檔案樹（workspace）','側欄檔案樹 view','sidebar region','186','05-03','要先開 region 才看得到','keep'],
- ['檔案與編輯','treesess','檔案樹（session）','—','sidebar region','14','05-03','空殼，寫著「尚未實作」（daemon cwd API 其實已經有了）','remove'],
+ ['檔案與編輯','tree','檔案樹（workspace）','側欄檔案樹 view','—（alpha.479 已移除）','0（原 186）','10-05','<b>alpha.479 已移除</b>（連同工作區「專案路徑」設定、files module、找不到檔案彈窗的搜尋工作區）；專案改由 Host › 專案維護','remove'],
+ ['檔案與編輯','treesess','檔案樹（session）','—','—（alpha.479 已移除）','0（原 14）','10-05','<b>alpha.479 已移除</b>','remove'],
  ['檔案與編輯','recent','最近檔案 ＋ 新建 .txt/.md','kind 篩選；新建會實際預留 /buffer/Untitled-N 並登記 placeholder','分頁首頁','336','08-19','—','keep'],
  ['檔案與編輯','home','Home Path（workspace／host 兩層）','編輯器預設目錄','workspace 設定、Host 頁','250','04-28','與「專案路徑」存法不一致','tidy'],
  ['檔案與編輯','browser','內嵌瀏覽器 ＋ mini 視窗','每個 pane 一個 WebContentsView：導覽、上下頁、列印、連結攔截、移到分頁','分頁首頁、終端 URL','430＋640','07-01','只有 Electron；設定頁是 placeholder ＋ 3 個無效欄位','decide'],
@@ -431,12 +431,12 @@ const S = {
  gset:[
   ['外觀','always',0,[['主題 ＋ 匯出／刪除','4 內建 ＋ 自訂','ok'],['自訂（主題編輯器、匯入）','與語系那列同名','split'],['語言 ＋ 匯出／刪除','en／zh-TW ＋ 自訂','ok'],['自訂（語系編輯器、匯入）','—','ok'],['分頁位置 top／left／both','選 left 會強制寬版活動列','ok']]],
   ['終端機','always',1,[['渲染器 webgl／dom','寫入時同時 bump version 並 clamp keep-alive','ok'],['背景保持連線數 ＋ 固定分頁保持連線','0–6（webgl）／0–10','ok'],['顯示延遲','0–2000 ms','ok'],['分頁 agent 指示樣式','icon／dot／iconDot／badge','ok'],['側欄 host 標記（7 個旋鈕）','啟用／host 或中性色／圖示不透明／底色不透明／方塊大小／內距／圓角','new'],['上方分頁 host 標記（7 個旋鈕）','同上，另一組','new'],['動態分頁名稱 ＋ 名稱 tooltip','tooltip 沒有加入同步','split'],['agent 標題顯示於狀態列','—','ok'],['Claude Code／Codex 圖示','—','ok'],['連結偵測 › 純檔名','另外 3 項在編輯器頁','split'],['終端字型大小','寫死 14，沒有設定','noui']]],
-  ['介面','always',1,[['分頁首頁 layout 編輯器','module palette ＋ 拖曳畫布 ＋ 3／2／1 欄 profile','ok'],['Pane 分頁','coming soon，component 是 () => null','stub'],['Sidebar 分頁','coming soon，同上','stub']]],
+  ['介面','always',1,[['分頁首頁 layout 編輯器','module palette ＋ 拖曳畫布 ＋ 3／2／1 欄 profile','ok'],['<s>Pane 分頁</s>','alpha.480 已移除','dead'],['<s>Sidebar 分頁</s>','alpha.480 已移除','dead']]],
   ['桌面應用程式','Electron',1,[['顯示於選單列','IPC → app-prefs.json；無 store','ok'],['瀏覽器分頁閒置逾時','uncontrolled、無 onChange，程式寫死 5 分','dead'],['瀏覽器分頁記憶體上限','寫死 512 MB','dead'],['背景分頁上限','寫死 3','dead']]],
   ['模組','always',0,[['4 個可停用模組開關','瀏覽器／編輯器／檔案／效能監控；改完需 reload','ok'],['需重新載入橫幅','與啟動時 baseline 比對','ok']]],
   ['瀏覽器','模組啟用',1,[['（無項目）','placeholder，只為滿足「可停用模組須有全域設定列」','stub']]],
   ['編輯器','模組啟用',1,[['Tab 寬度／空格／換行／行號／縮圖／字型','6 項中有 4 個是原生 checkbox','ok'],['開檔行為 › 找不到檔案時彈窗','—','ok'],['開檔行為 › 自動套用快取候選','—','ok'],['檔案路徑連結偵測 › 絕對／tilde／相對','存在終端 store、只作用於終端、未同步','split'],['內容寬度 narrow／wide','只能從編輯器狀態列切換','noui'],['Tiptap 註腳','「後續版本再整合」','stub']]],
-  ['檔案','模組啟用',1,[['（無項目）','placeholder','stub']]],
+  ['<s>檔案</s>','模組啟用',1,[['（整個 files module）','alpha.479 已移除','dead']]],
   ['監控','模組啟用',0,[['整個效能監控面板','不是設定表單；含 daemon 的刷新秒數／top N 表單','split']]],
   ['同步','always（不能停用）',1,[['Provider off／daemon／file','file 選得到，但 createFileProvider 從未被呼叫','dead'],['同步主機','provider = daemon 時顯示','hidden'],['立即同步','provider = file 時只會警告','dead'],['同步模組勾選（6 個 contributor）','顯示 raw contributor id','ok'],['匯出／匯入','.purdex-sync；匯入前自動存安全快照','ok'],['同步歷史子頁','Local／Remote、diff、還原對話框','ok']]],
   ['開發環境','Electron ＋ getAppInfo',0,[['開發主機','第 2 套 host 選擇器，同時是 device-state 目標','hidden'],['SPA 來源 dev／bundled','—','hidden'],['App 版本／hash、檢查／更新／重載','含串流 log','hidden'],['Daemon 檢查／重建','SSE log','hidden'],['本機 daemon：安裝／啟動／重啟／更新／加入 hosts','含 token 顯示與複製','hidden'],['pdx path link／add-to-shell','alpha.364；pdx 不可達時擋住啟動','new']]],
