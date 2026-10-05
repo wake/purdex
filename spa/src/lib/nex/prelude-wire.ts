@@ -82,6 +82,7 @@ function item(raw: unknown): PreludeItem | null {
     return msg ? { pos, at, kind, msg } : null
   }
   if (kind === 'tool_use' || kind === 'tool_result') {
+    // Only tool_use_id is checked here; the N2 readers in tool-activity.ts read every other field defensively.
     return typeof p.tool_use_id === 'string' && p.tool_use_id !== '' ? { pos, at, kind, payload: p } : null
   }
   if (kind === 'prelude.segment') return typeof p.entrypoint === 'string' ? { pos, at, kind, entrypoint: p.entrypoint } : null
@@ -105,6 +106,7 @@ export function sanitizePreludePage(body: unknown): PreludePage | null {
   if (!b) return null
   const state = b.state
   if (state !== 'ok' && state !== 'none' && state !== 'gone') return null
+  // An absent prev_cursor reads as null; a malformed one rejects the whole body, whatever the state.
   const cursor = b.prev_cursor
   let prevCursor: string | null = null
   if (cursor !== null && cursor !== undefined) {

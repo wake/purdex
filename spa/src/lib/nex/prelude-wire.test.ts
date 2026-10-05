@@ -28,6 +28,16 @@ describe('sanitizePreludePage', () => {
     expect(sanitizePreludePage({ state: 'ok', items: [], prev_cursor: 'x'.repeat(257) })).toBeNull()
   })
 
+  it('reads an absent prev_cursor key as null', () => {
+    const page = sanitizePreludePage({ state: 'ok', items: [asst('1', 'a')] })
+    expect(page).not.toBeNull()
+    expect(page!.prevCursor).toBeNull()
+  })
+
+  it('rejects a none page whose cursor is malformed', () => {
+    expect(sanitizePreludePage({ state: 'none', items: [], prev_cursor: 42 })).toBeNull()
+  })
+
   it('drops items with a bad pos, an unknown kind, or no message, and keeps the first of a duplicated pos', () => {
     const page = sanitizePreludePage({
       state: 'ok', prev_cursor: null,
@@ -119,5 +129,10 @@ describe('contract sample (spec §4.3)', () => {
     expect(page.state).toBe('ok')
     expect(page.items).toHaveLength(sample.items.length)
     expect(new Set(page.items.map((i) => i.kind))).toEqual(new Set(['prelude.segment', 'user', 'assistant', 'tool_use', 'tool_result', 'prelude.note', 'prelude.compaction']))
+    const img = page.items.flatMap((i) => (i.kind === 'user' ? [i.msg as unknown as { message: { content: Array<{ type: string }> } }] : []))
+      .flatMap((m) => m.message.content).find((b) => b.type === 'image')
+    expect(img).toMatchObject({ source: { type: 'omitted', media_type: 'image/png', bytes: 48213 } })
+    const res = page.items.find((i) => i.kind === 'tool_result')
+    expect(res).toMatchObject({ payload: { output: { text: 'README.md\nspa\n', total_lines: 2, total_bytes: 14, truncated: false } } })
   })
 })

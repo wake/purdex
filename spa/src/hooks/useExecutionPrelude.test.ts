@@ -37,9 +37,14 @@ describe('useExecutionPrelude', () => {
     expect(fetchExecutionPrelude).toHaveBeenCalledWith('h', 'e', { limit: PRELUDE_PAGE_LIMIT })
   })
 
-  it('makes no request without the capability or without resume_session_id', async () => {
+  it('makes no request without the capability', async () => {
     seed({ cap: false })
     renderHook(() => useExecutionPrelude('h', 'e'))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fetchExecutionPrelude).not.toHaveBeenCalled()
+  })
+
+  it('makes no request without resume_session_id', async () => {
     seed({ resume: null })
     renderHook(() => useExecutionPrelude('h', 'e'))
     await new Promise((r) => setTimeout(r, 0))
@@ -50,8 +55,8 @@ describe('useExecutionPrelude', () => {
     seed()
     let resolve!: (p: PreludePage) => void
     fetchExecutionPrelude.mockReturnValueOnce(new Promise((r) => { resolve = r }))
-    renderHook(() => useExecutionPrelude('h', 'e'))
-    renderHook(() => useExecutionPrelude('h', 'e'))
+    // Both panes mount in one commit, before any effect can resolve.
+    renderHook(() => { useExecutionPrelude('h', 'e'); useExecutionPrelude('h', 'e') })
     await act(async () => { resolve(ok('20', null)) })
     expect(fetchExecutionPrelude).toHaveBeenCalledTimes(1)
   })
@@ -141,5 +146,39 @@ describe('useExecutionPrelude', () => {
     await act(async () => { await result.current.loadAll() })
     expect(prelude()).toMatchObject({ done: true })
     expect(prelude().items.map((i) => i.pos)).toEqual(['10', '20', '30'])
+  })
+
+  it('loadAll started while the first page is in flight waits for it, then pages on without re-requesting it', async () => {
+    seed()
+    let resolveFirst!: (p: PreludePage) => void
+    fetchExecutionPrelude
+      .mockReturnValueOnce(new Promise((r) => { resolveFirst = r }))
+      .mockResolvedValueOnce(ok('20', 'c1'))
+      .mockResolvedValueOnce(ok('10', null))
+    const { result } = renderHook(() => useExecutionPrelude('h', 'e'))
+    await waitFor(() => expect(fetchExecutionPrelude).toHaveBeenCalledTimes(1))
+    expect(prelude().status).toBe('loading')
+    let all!: Promise<void>
+    act(() => { all = result.current.loadAll() })
+    await act(async () => { resolveFirst(ok('30', 'c2')) })
+    await act(async () => { await all })
+    expect(prelude()).toMatchObject({ done: true, pages: 3 })
+    expect(prelude().items.map((i) => i.pos)).toEqual(['10', '20', '30'])
+    expect(fetchExecutionPrelude.mock.calls.map((c) => c[2]?.before)).toEqual([undefined, 'c2', 'c1'])
+  })
+
+  it('loadAll waiting on an in-flight page returns when the execution is cleared', async () => {
+    seed()
+    let resolveFirst!: (p: PreludePage) => void
+    fetchExecutionPrelude.mockReturnValueOnce(new Promise((r) => { resolveFirst = r }))
+    const { result } = renderHook(() => useExecutionPrelude('h', 'e'))
+    await waitFor(() => expect(fetchExecutionPrelude).toHaveBeenCalledTimes(1))
+    let all!: Promise<void>
+    act(() => { all = result.current.loadAll() })
+    act(() => useExecutionStore.getState().clearExecution('h', 'e'))
+    await act(async () => { await all })
+    await act(async () => { resolveFirst(ok('20', null)) })
+    expect(fetchExecutionPrelude).toHaveBeenCalledTimes(1)
+    expect(useExecutionStore.getState().executions[executionKey('h', 'e')]).toBeUndefined()
   })
 })

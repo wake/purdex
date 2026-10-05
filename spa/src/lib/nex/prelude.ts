@@ -33,6 +33,8 @@ export function defaultPreludeState(): PreludeState {
   return { status: 'idle', items: [], cursor: null, done: false, error: null, totalBytes: null, request: null, pages: 0 }
 }
 
+// Overwrites `request` unconditionally; the lock (refusing while status is
+// 'loading') lives in the caller, useExecutionPrelude.
 export function preludeLoading(p: PreludeState, request: number): PreludeState {
   return { ...p, status: 'loading', error: null, request }
 }
@@ -126,9 +128,14 @@ export function derivePrelude(items: readonly PreludeItem[]): PreludeView {
   // Pages load newest first, so everything newer than any loaded call is
   // loaded too: a call still 'running' has no answer anywhere — it was cut
   // off (the session exited mid-call). Never a live clock (spec §5.2).
+  // Copy once, only if something is running. defineProperty, not assignment:
+  // a tool id may be '__proto__', which assignment would turn into the prototype.
+  let copied = false
   for (const id of Object.keys(tools)) {
     const t = tools[id]
-    if (t.status === 'running') tools = { ...tools, [id]: { ...t, status: 'aborted' } }
+    if (t.status !== 'running') continue
+    if (!copied) { tools = { ...tools }; copied = true }
+    Object.defineProperty(tools, id, { value: { ...t, status: 'aborted' }, enumerable: true, writable: true, configurable: true })
   }
   return { entries, messages, ids, tools }
 }

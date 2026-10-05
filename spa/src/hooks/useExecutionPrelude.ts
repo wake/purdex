@@ -50,6 +50,8 @@ export function useExecutionPrelude(hostId: string, executionId: string): {
       return true
     } catch (e) {
       if (!ours()) return false
+      // After this reset loadAll stops (fetchOne returns false); the effect
+      // reloads the first page and the user re-triggers "load all".
       // Spec §4.2: the daemon rejected an older page's cursor (it was
       // upgraded, or the file changed): start over from the first page.
       if (before !== null && e instanceof NexApiError && e.code === 'malformed_parameter') {

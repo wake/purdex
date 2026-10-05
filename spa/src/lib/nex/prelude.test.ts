@@ -87,8 +87,12 @@ describe('derivePrelude', () => {
   })
 
   it('a __proto__ tool id is an own key, never the prototype', () => {
-    const v = derivePrelude([{ pos: '1', at: 1, kind: 'tool_use', payload: { tool_use_id: '__proto__', name: 'X' } }])
+    const v = derivePrelude([
+      { pos: '1', at: 1, kind: 'tool_use', payload: { tool_use_id: '__proto__', name: 'X' } },
+      { pos: '2', at: 2, kind: 'tool_result', payload: { tool_use_id: '__proto__', status: 'ok' } },
+    ])
     expect(Object.hasOwn(v.tools, '__proto__')).toBe(true)
-    expect(({} as Record<string, unknown>).name).toBeUndefined()
+    expect(Object.getOwnPropertyDescriptor(v.tools, '__proto__')?.value.status).toBe('done')
+    expect(Object.getPrototypeOf(v.tools)).toBe(Object.prototype)
   })
 })
