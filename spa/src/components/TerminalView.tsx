@@ -127,8 +127,10 @@ export default function TerminalView({ wsUrl, visible = true, isFocusTarget = fa
 
   // Refit when becoming visible after being hidden (keep-alive). Focus is not
   // part of this: it follows the activation rule below.
-  // With offscreen positioning (left: -9999em) the terminal kept correct
-  // dimensions the whole time, so no overlay or delay is needed.
+  // TabContent hides an inactive tab in place (`visibility: hidden` + `inert`,
+  // same absolute inset-0 box), so the terminal kept its layout the whole
+  // time (useTerminal's ResizeObserver keeps fitting it) and no overlay or
+  // delay is needed; this refit is only a safety net.
   // Force ready=true to suppress any lingering connecting overlay —
   // the terminal was alive and connected the whole time.
   useEffect(() => {
