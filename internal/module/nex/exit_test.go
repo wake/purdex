@@ -2,8 +2,10 @@ package nex
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"lab.protype.tw/wake/nexen/execution"
@@ -266,6 +268,90 @@ func TestExitWorker_Failures(t *testing.T) {
 		}
 		if env.svc.terminateCalls[0].LeaseID != "L-t" || released || len(env.svc.acquires) != 0 {
 			t.Fatal("exitWorker must act under the given control without acquiring or releasing")
+		}
+	})
+}
+
+func exitPost(t *testing.T, env *takebackEnv, id, body string) (int, map[string]any) {
+	t.Helper()
+	resp, err := http.Post(env.srv.URL+"/api/nex/executions/"+id+"/exit", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("response is not JSON: %v", err)
+	}
+	return resp.StatusCode, out
+}
+
+func TestExitEndpoint(t *testing.T) {
+	t.Run("idle, empty body -> 200 exited", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{exec: store.Execution{ID: "E1", State: store.StateIdle}}}
+		env.svc.lease = store.Lease{ID: "L-own"}
+		status, body := exitPost(t, env, "E1", ``)
+		if status != 200 || body["exited"] != true || body["terminated"] != true || body["archived"] != true || body["state"] != "terminated" {
+			t.Fatalf("%d %v", status, body)
+		}
+	})
+	t.Run("caller lease is used", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{exec: store.Execution{ID: "E1", State: store.StateIdle}}}
+		status, body := exitPost(t, env, "E1", `{"lease_id":"L-mine"}`)
+		if status != 200 || len(env.svc.terminateCalls) != 1 || env.svc.terminateCalls[0].LeaseID != "L-mine" || len(env.svc.acquires) != 0 {
+			t.Fatalf("%d %v calls=%+v acquires=%v", status, body, env.svc.terminateCalls, env.svc.acquires)
+		}
+	})
+	t.Run("malformed body -> 400", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		status, body := exitPost(t, env, "E1", `{nope`)
+		if status != 400 || body["code"] != "malformed_body" {
+			t.Fatalf("%d %v", status, body)
+		}
+	})
+	t.Run("lock held -> 409 transfer_in_progress", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		if !env.m.locks.TryLock(takeToTerminalLockKey("E1")) {
+			t.Fatal("lock")
+		}
+		defer env.m.locks.Unlock(takeToTerminalLockKey("E1"))
+		status, body := exitPost(t, env, "E1", ``)
+		if status != 409 || body["code"] != "transfer_in_progress" {
+			t.Fatalf("%d %v", status, body)
+		}
+	})
+	t.Run("missing -> 404", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{err: store.ErrNotFound}}
+		status, body := exitPost(t, env, "NOPE", ``)
+		if status != 404 || body["code"] != "execution_not_found" {
+			t.Fatalf("%d %v", status, body)
+		}
+	})
+	t.Run("store error -> 500", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{err: errors.New("disk")}}
+		status, body := exitPost(t, env, "E1", ``)
+		if status != 500 || body["code"] != "store_error" {
+			t.Fatalf("%d %v", status, body)
+		}
+	})
+	t.Run("idempotent second call makes no engine call", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{exec: store.Execution{ID: "E1", State: store.StateTerminated, ArchivedAt: 5}}}
+		status, body := exitPost(t, env, "E1", ``)
+		if status != 200 || body["exited"] != true || len(env.svc.terminateCalls)+len(env.svc.ArchiveCalls()) != 0 {
+			t.Fatalf("%d %v", status, body)
+		}
+	})
+	t.Run("engine unavailable -> 503", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.m.sys.service = nil
+		status, body := exitPost(t, env, "E1", ``)
+		if status != 503 || body["code"] != "nex_unavailable" {
+			t.Fatalf("%d %v", status, body)
 		}
 	})
 }

@@ -311,6 +311,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	// more specific pattern than RoutePrefix+"/", so it wins either way.
 	mux.HandleFunc("POST "+RoutePrefix+"/executions/{id}/take-to-terminal", m.handleTakeToTerminal)
 	mux.HandleFunc("POST "+RoutePrefix+"/executions/{id}/uploads", m.handleExecutionUpload)
+	mux.HandleFunc("POST "+RoutePrefix+"/executions/{id}/exit", m.handleExitWorker)
 	if m.initErr != nil {
 		mux.Handle(RoutePrefix+"/", unavailableHandler(m.initErr))
 		return
