@@ -71,6 +71,7 @@ Each PR is ≤ 800 diff lines and ≤ 20 files.
 | Phase | PR | Tasks | Ships |
 |---|---|---|---|
 | A | daemon | 1–4 | endpoint, boot_id, re-exec, integration test |
+| A2 | daemon | 11 | last-shutdown record of a restart's cleanup errors, `/api/info.last_shutdown` (D13) |
 | B | SPA logic | 5–6 | `restartDaemon`, `countRunningWorkers`, `useDaemonRestartStore` (no UI yet) |
 | C | SPA UI | 7–10 | `RestartDaemonButton` + R1, R3, R2 + i18n |
 
@@ -958,6 +959,202 @@ Then open the PR, run codex R1 + R2, and merge.
 
 ---
 
+## Phase A2 — daemon: last-shutdown record (spec D13; separate PR after #1568)
+
+### Task 11: Record cleanup errors of a restart and report them on `/api/info`
+
+**Files:**
+- Modify: `cmd/pdx/shutdown.go` (collect the cleanup errors; the restart outcome carries them)
+- Modify: `cmd/pdx/shutdown_test.go`
+- Create: `cmd/pdx/lastshutdown.go`, `cmd/pdx/lastshutdown_test.go`
+- Modify: `cmd/pdx/main.go`. At boot it takes the record after the pid lock and puts it on Core. On the restart path it writes the record before the exec.
+- Modify: `internal/core/core.go` (the `ShutdownReport` type and the `LastShutdown` field), `internal/core/info_handler.go`, `internal/core/info_handler_test.go`
+
+**Interfaces:**
+- Consumes:
+  - `errRestart`, `serveAndWait` (Task 2, plus the PR #1568 fixes: lifecycle/`BeginShutdown`)
+  - `runServe`'s restart path (Task 3, plus the pid-lock hand-off)
+- Produces:
+  - `type restartRequested struct{ warnings []string }`, with `Error() string` and `Is(target error) bool` that is true for `errRestart`. `serveAndWait` returns `*restartRequested` instead of the bare `errRestart`, so `errors.Is(err, errRestart)` keeps working.
+  - `core.ShutdownReport{ At time.Time; Errors []string }`
+  - `(*core.Core).LastShutdown *ShutdownReport`, set before serving and read-only afterwards.
+  - `/api/info` gains `"last_shutdown": null | {"at": RFC3339, "errors": [...], "boot_id": "<this process's boot_id>"}`.
+  - `writeLastShutdown(dataDir string, errs []string, now time.Time) error`
+  - `takeLastShutdown(dataDir string) (*core.ShutdownReport, error)`
+  - File name: `last-shutdown.json`.
+
+Behaviour (spec D13):
+- `serveAndWait` appends one string per error it already logs:
+  - `stop modules: <err>`
+  - `http shutdown: <err>`
+  - `http close: <err>`
+  - `close modules: <err>`
+  - `server error during restart: <err>`
+- When it returns the restart outcome and the list is non-empty, it first logs `restart: continuing despite N cleanup error(s)`.
+- `runServe`, on the restart path (after `restartStillWanted` and before `return boot`), calls `writeLastShutdown` when there are warnings. If the write fails, it logs `last shutdown: not recorded (<err>)` and the restart still goes ahead.
+- `writeLastShutdown` writes `<dataDir>/last-shutdown.json.tmp` with mode 0600, then renames it into place.
+- At boot, after the pid lock and `removeLegacyDataFiles`, `runServe` calls `takeLastShutdown`:
+  - Missing file → `nil, nil`.
+  - Present → read it, delete it, and return it. Log `last shutdown: N error(s) recorded by the previous image`.
+  - Unparsable → delete it and return an error, which `runServe` logs.
+- The result is assigned to `c.LastShutdown` right after `core.New`.
+
+- [ ] **Step 1: Write the failing tests.**
+
+`cmd/pdx/lastshutdown_test.go`:
+
+```go
+func TestLastShutdown_RoundTripAndConsume(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	if err := writeLastShutdown(dir, []string{"stop modules: nex: timeout"}, at); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(filepath.Join(dir, "last-shutdown.json"))
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("stat = %v, %v; want 0600 file", st, err)
+	}
+	r, err := takeLastShutdown(dir)
+	if err != nil || r == nil || !r.At.Equal(at) || len(r.Errors) != 1 || r.Errors[0] != "stop modules: nex: timeout" {
+		t.Fatalf("take = %+v, %v", r, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "last-shutdown.json")); !os.IsNotExist(err) {
+		t.Fatal("take must delete the file")
+	}
+	if r, err := takeLastShutdown(dir); r != nil || err != nil {
+		t.Fatalf("second take = %+v, %v; want nil, nil", r, err)
+	}
+}
+
+func TestLastShutdown_CorruptIsDeleted(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "last-shutdown.json"), []byte("{not json"), 0o600)
+	if _, err := takeLastShutdown(dir); err == nil {
+		t.Fatal("want error for a corrupt record")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "last-shutdown.json")); !os.IsNotExist(err) {
+		t.Fatal("a corrupt record must be deleted")
+	}
+}
+```
+
+Additions to `cmd/pdx/shutdown_test.go`:
+
+```go
+func TestServeAndWait_RestartCarriesCleanupErrors(t *testing.T) {
+	h := newHarness()
+	h.target.stopErr = errors.New("nex: timeout") // use the harness's existing StopModules-error knob
+	h.restart <- struct{}{}
+	err := h.run(testBudget)
+	var rr *restartRequested
+	if !errors.Is(err, errRestart) || !errors.As(err, &rr) {
+		t.Fatalf("err = %v, want a restartRequested", err)
+	}
+	if len(rr.warnings) != 1 || rr.warnings[0] != "stop modules: nex: timeout" {
+		t.Fatalf("warnings = %v", rr.warnings)
+	}
+	waitForLog(t, h, "restart: continuing despite 1 cleanup error(s)")
+}
+
+func TestServeAndWait_CleanRestartHasNoWarnings(t *testing.T) {
+	h := newHarness()
+	h.restart <- struct{}{}
+	var rr *restartRequested
+	if err := h.run(testBudget); !errors.As(err, &rr) || len(rr.warnings) != 0 {
+		t.Fatalf("err = %v, warnings = %v", err, rr)
+	}
+}
+```
+
+The harness already has a StopModules-error test (`TestServeAndWait_StopModulesErrorIsLoggedAndSequenceContinues`). Use the same field it uses.
+
+Additions to `internal/core/info_handler_test.go`:
+
+```go
+func TestHandleInfo_LastShutdown(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{}})
+	get := func() map[string]any {
+		rec := httptest.NewRecorder()
+		c.handleInfo(rec, httptest.NewRequest("GET", "/api/info", nil))
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+		return body
+	}
+	assert.Nil(t, get()["last_shutdown"])
+
+	c.LastShutdown = &ShutdownReport{At: time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC), Errors: []string{"close modules: x"}}
+	ls := get()["last_shutdown"].(map[string]any)
+	assert.Equal(t, c.BootID, ls["boot_id"])
+	assert.Equal(t, []any{"close modules: x"}, ls["errors"])
+	assert.Equal(t, "2026-10-06T12:00:00Z", ls["at"])
+}
+```
+
+If `handleInfo` execs `tmux -V` and that is slow in tests, look at how the existing info tests handle it and follow that pattern.
+
+- [ ] **Step 2: Run the tests and confirm they fail.**
+  Run: `go test ./cmd/pdx/ ./internal/core/ -run 'LastShutdown|CleanupErrors|CleanRestart' -count=1`
+  Expected: compile errors.
+
+- [ ] **Step 3: Implement.**
+
+In `cmd/pdx/shutdown.go`, add the `restartRequested` type (its doc comment cites spec D13: the restart re-execs after a cleanup error but does not hide it). Keep a `warnings []string` slice. Append a string at every place that already calls `logf` for a StopModules, Shutdown, Close or CloseModules error, and for the server error during restart. Replace `return errRestart` with:
+
+```go
+	if restartTriggered && !restartCancelled.Load() {
+		if len(warnings) > 0 {
+			logf("restart: continuing despite %d cleanup error(s)", len(warnings))
+		}
+		return &restartRequested{warnings: warnings}
+	}
+```
+
+In `internal/core/core.go`:
+
+```go
+// ShutdownReport is what the previous image recorded when a restart's
+// shutdown had cleanup errors (spec D13); /api/info reports it once, tied
+// to this process's boot_id.
+type ShutdownReport struct {
+	At     time.Time
+	Errors []string
+}
+```
+
+Also add the `LastShutdown *ShutdownReport` field. In `handleInfo`, set `info["last_shutdown"]` to nil, or to `map[string]any{"at": r.At.UTC().Format(time.RFC3339), "errors": r.Errors, "boot_id": c.BootID}`.
+
+`cmd/pdx/lastshutdown.go`:
+
+```go
+const lastShutdownFile = "last-shutdown.json"
+
+type lastShutdownJSON struct {
+	At     time.Time `json:"at"`
+	Errors []string  `json:"errors"`
+}
+
+// writeLastShutdown records a restart's cleanup errors for the next image
+// (spec D13): tmp file 0600, then rename.
+func writeLastShutdown(dataDir string, errs []string, now time.Time) error
+
+// takeLastShutdown reads and deletes the record. Missing → nil, nil.
+// Unparsable → deleted, error.
+func takeLastShutdown(dataDir string) (*core.ShutdownReport, error)
+```
+
+Wire both into `runServe` as described above.
+
+- [ ] **Step 4: Run the tests and confirm they pass.**
+  Run: `go test ./cmd/pdx/ ./internal/core/ -count=1 && go vet ./cmd/pdx/ ./internal/core/ && go build -o /dev/null ./cmd/pdx && go test -tags integration ./cmd/pdx/ -run TestRestart_ReexecKeepsPidNewBootID -count=1`
+  Expected: PASS. The integration test has no cleanup errors, so `last_shutdown` stays null.
+
+- [ ] **Step 5: Commit.**
+  `git commit -m "feat(daemon): record a restart's cleanup errors and report them once on /api/info"`
+
+**Phase A2 gate:** `go test ./...`, the integration test, then a PR, codex R1 and R2, and merge.
+
+---
+
 ## Phase B — SPA logic (no UI)
 
 ### Task 5: `lib/daemon-restart.ts` — the shared restart action and worker count
@@ -1389,6 +1586,60 @@ export async function countRunningWorkers(hostId: string, timeoutMs = WORKER_COU
   `git add spa/src/lib/daemon-restart.ts spa/src/lib/daemon-restart.test.ts`
   Then: `git commit -m "feat(spa): restartDaemon — IPC for the managed local daemon, API otherwise; done on a new boot_id"`
 
+
+**Amendment (spec D13): report shutdown warnings.** This applies on top of the code above.
+
+- `restartDaemon` resolves to `RestartResult`, not the bare IPC result:
+
+  ```ts
+  export interface RestartResult {
+    /** The IPC result on the managed-local path (re-register with it), else null. */
+    ipc: ElectronLocalDaemonResult | null
+    /** Cleanup errors the previous image recorded for THIS boot (spec D13); 0 when none or unreadable. */
+    shutdownWarnings: number
+  }
+  ```
+
+- `RestartDeps` gains `readShutdownWarnings: (hostId: string, bootId: string) => Promise<number>`. The default is `readShutdownWarnings` below, and the test `deps()` default is `async () => 0`.
+- In the polling loop, success becomes:
+
+  ```ts
+      if (now !== null && now !== before) {
+        return { ipc, shutdownWarnings: await d.readShutdownWarnings(hostId, now) }
+      }
+  ```
+
+  and `attempt`'s type becomes `Promise<RestartResult | typeof TIMED_OUT>`.
+- New export:
+
+  ```ts
+  /** `/api/info.last_shutdown` of the boot that just answered: its error count, if it belongs to `bootId`. Any failure → 0. */
+  export async function readShutdownWarnings(hostId: string, bootId: string): Promise<number> {
+    const ctl = new AbortController()
+    const timer = setTimeout(() => ctl.abort(), HEALTH_PROBE_TIMEOUT_MS)
+    try {
+      const res = await pinnedHostFetch(hostId, '/api/info', { signal: ctl.signal })
+      if (!res.ok) return 0
+      const ls = ((await res.json()) as { last_shutdown?: { boot_id?: unknown; errors?: unknown } | null }).last_shutdown
+      return ls && ls.boot_id === bootId && Array.isArray(ls.errors) ? ls.errors.length : 0
+    } catch {
+      return 0
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  ```
+
+- Test updates:
+  - Success assertions become `toMatchObject({ done: true, value: { ipc: null, shutdownWarnings: 0 } })`.
+  - The IPC case expects `{ ipc: result, shutdownWarnings: 0 }`.
+  - Add `it('passes the new boot\'s shutdown warnings through', …)` with `readShutdownWarnings: async (_h, boot) => (boot === 'new' ? 2 : 0)`, expecting `shutdownWarnings: 2`.
+  - Add a `readShutdownWarnings` describe block:
+    - a matching `boot_id` with 2 errors → 2;
+    - another `boot_id` → 0;
+    - `last_shutdown: null` → 0;
+    - a fetch rejection → 0.
+
 ### Task 6: `useDaemonRestartStore` — per-host in-progress state, toast and notice
 
 **Files:**
@@ -1551,11 +1802,24 @@ Add the four i18n keys from the table above to both locale files, next to the ot
   `git add spa/src/stores/useDaemonRestartStore.ts spa/src/stores/useDaemonRestartStore.test.ts spa/src/locales/zh-TW.json spa/src/locales/en.json`
   Then: `git commit -m "feat(spa): useDaemonRestartStore — per-host restart state, result toast/notice"`
 
+**Amendment (spec D13): warning toast.** This applies on top of the code above.
+
+- Add the i18n key `hosts.restart.done_with_warnings`:
+  - zh-TW: `{{host}}：daemon 已重新啟動，但關閉時有 {{count}} 個警告（見 ~/.config/pdx/logs/pdx.log）`
+  - en: `{{host}}: daemon restarted, but its shutdown logged {{count}} warning(s) — see ~/.config/pdx/logs/pdx.log`
+- In `restart`, use `const r = await restartDaemon(hostId)`:
+  - re-register with `r.ipc` when it is set;
+  - the toast text is `r.shutdownWarnings > 0 ? t('hosts.restart.done_with_warnings', { host: hostName, count: r.shutdownWarnings }) : t('hosts.restart.done', { host: hostName })`.
+- Test updates:
+  - Mocks resolve `{ ipc: null, shutdownWarnings: 0 }`, and the IPC case resolves `{ ipc: {…}, shutdownWarnings: 0 }`.
+  - Add `it('success with shutdown warnings → the warning toast', …)` resolving `{ ipc: null, shutdownWarnings: 2 }`. It expects `'mlab：daemon 已重新啟動，但關閉時有 2 個警告（見 ~/.config/pdx/logs/pdx.log）'`.
+
 **Phase B gate:** `cd spa && npx vitest run && pnpm run lint && npx tsc --noEmit -p tsconfig.app.json`. Then open the PR, run codex R1 + R2, and merge.
 
 ---
 
 ## Phase C — SPA UI
+
 
 ### Task 7: `RestartDaemonButton` — the button, confirm and spinner
 

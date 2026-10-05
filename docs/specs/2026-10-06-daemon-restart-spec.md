@@ -39,9 +39,17 @@ Origin: after enabling Nexen on air26 the user found no way to restart. The only
   1. Graceful shutdown, the same path `pdx stop` takes: stop accepting, close the stores with a WAL checkpoint, and let embedded Nexen shut down as it does on a normal stop.
   2. **Re-exec in place**: the same executable path (whatever binary is on disk now, so a pending update gets picked up), the same argv, the same environment.
   - Re-exec, not "exit and let something restart it": nothing supervises `serve` (§2).
-  - Re-exec keeps the pid, so the App's ownership record and the pid file stay valid. The flock fd is close-on-exec, so the new image re-acquires the lock through the existing retry.
+  - Re-exec keeps the pid, so the App's ownership record and the pid file stay valid.
+  - The pid lock is **handed across the exec**, so no concurrent `pdx start` can take the data dir in between (PR #1568 review):
+    - its fd stays open, not close-on-exec, and is named in `PDX_PIDLOCK_FD`;
+    - the new image adopts the lock it already holds, since a flock lives on the open file description;
+    - if the hand-off fails, the new image re-acquires the lock through the existing retry.
   - If exec fails, log it and exit non-zero. The SPA then sees the host stay down (§3.3).
 - While a restart is in progress, a second request gets `409 restart_in_progress`.
+- Once the shutdown sequence has started for any other reason (a signal, or a Serve failure), the endpoint answers `503 {"error":"shutting_down"}`. It never gives a 202 that nothing will honour.
+  - A restart accepted just before that point is still performed if a Serve failure started the shutdown.
+  - If a signal started it, the signal wins (D4).
+  - (PR #1568 review.)
 - **Boot id:** `/api/health` (or `/api/info`; the plan picks one and says why) gains a `boot_id` that is new on every process start. The SPA uses it to know the restart really happened, not just that the host answered.
 - Logged as one line with the requester's address: `daemon restart requested by …`.
 
@@ -53,6 +61,12 @@ Origin: after enabling Nexen on air26 the user found no way to restart. The only
 - **D4:** A SIGINT/SIGTERM that arrives while a restart's shutdown runs (for example `pdx stop`) turns the restart into a plain stop, with no re-exec. A second signal still exits immediately.
 - **D5:** The `409` body also carries `boot_id`. A client that gets 409 follows the restart already under way to the same finish line.
 - **D12:** When no restart hook is installed (for example `os.Executable` failed at boot), the endpoint answers `503 {"error":"restart_unavailable"}`. It must not give a 202 that nothing will honour.
+- **D13: cleanup errors during a restart do not stop the re-exec, and they are not hidden** (coordinator-approved 2026-10-06, after the PR #1568 review). Cases: `StopModules` overruns the budget, a module's Stop or Close returns an error, or the HTTP shutdown is forced.
+  - The daemon still re-execs. That has the same outcome as `pdx stop` followed by `pdx start`: the stop path also just logs these errors and exits. SQLite recovers its WAL on open, and nex's startup reconcile settles orphaned turns. Aborting would leave a remote host down until someone logs in.
+  - It logs one warning line: `restart: continuing despite N cleanup error(s)`.
+  - Before the exec it writes `<data_dir>/last-shutdown.json` as `{"at": "<RFC3339>", "errors": ["…", …]}` (mode 0600, written as tmp then renamed), and only when there were errors. If the write fails, the failure is logged and the restart goes ahead.
+  - On start, the daemon reads the file once and deletes it. That happens after the pid lock, since only the owner of `data_dir` touches it. `GET /api/info` then reports `"last_shutdown": {"at", "errors", "boot_id": <this process's boot_id>}`, or `null` when there is nothing to report.
+  - A corrupt file is deleted and logged.
 
 ### 3.2 SPA: one restart action, three entry points
 
@@ -93,6 +107,9 @@ Entry points:
 **Coordinator-approved derivation (2026-10-06):**
 
 - **D11:** The success toast and the failure notices name the host, for example "mlab：daemon 已重新啟動". The toast is global, and more than one host can be restarting at once.
+- **D13 (SPA half):** after the new `boot_id` answers, the SPA reads `/api/info` once (coordinator-approved 2026-10-06).
+  - If `last_shutdown` is present, its `boot_id` equals the new boot id, and `errors` is non-empty, the success toast becomes "<主機>：daemon 已重新啟動，但關閉時有 N 個警告（見 ~/.config/pdx/logs/pdx.log）".
+  - If that read fails, the plain success toast stays.
 
 ## 4. Tests
 
