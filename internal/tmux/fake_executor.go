@@ -53,8 +53,8 @@ type FakeExecutor struct {
 	// lock. It is the seam for "the world moved while the daemon was reading
 	// metadata" — a tmux server restart being the case that matters.
 	activePaneMetaHook func(sessionName string)
-	// readHook runs at the start of every ListSessions / ActivePaneMetadata
-	// call with the caller's context; see SetReadHook.
+	// readHook runs at the start of every ListSessions / ActivePaneMetadata /
+	// ListAllPanes call with the caller's context; see SetReadHook.
 	readHook ReadHook
 	// createHook runs at the start of every HasSessionContext /
 	// NewSessionContext call with the caller's context; see SetCreateHook.
@@ -230,13 +230,14 @@ type ReadOp string
 const (
 	ReadListSessions ReadOp = "list-sessions"
 	ReadPaneMetadata ReadOp = "pane-metadata"
+	ReadListAllPanes ReadOp = "list-all-panes"
 )
 
 // ReadHook runs at the start of every FakeExecutor ListSessions /
-// ActivePaneMetadata call, outside the fake's lock, with the caller's
-// context. target is the session name for ReadPaneMetadata and "" for
-// ReadListSessions. A non-nil error is what the read returns — the seam for
-// "this tmux read hangs until its deadline" (#1293).
+// ActivePaneMetadata / ListAllPanes call, outside the fake's lock, with the
+// caller's context. target is the session name for ReadPaneMetadata and "" for
+// ReadListSessions and ReadListAllPanes. A non-nil error is what the read
+// returns — the seam for "this tmux read hangs until its deadline" (#1293).
 type ReadHook func(ctx context.Context, op ReadOp, target string) error
 
 // SetReadHook installs (or, with nil, removes) the read hook.
@@ -640,13 +641,14 @@ func (f *FakeExecutor) PaneSessionID(ctx context.Context, target string) (string
 // does. Rows are sorted by pane id because map order is random and a test
 // must not depend on it.
 func (f *FakeExecutor) ListAllPanes(ctx context.Context) ([]PaneLocation, error) {
-	if err := ctx.Err(); err != nil {
+	if err := f.beginRead(ctx, ReadListAllPanes, ""); err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	// Waiting for the lock is the fake's wait on tmux: a deadline that passed
-	// meanwhile ends the call, as it ends the real executor's bounded read.
+	// A deadline can pass while the hook or the lock waits. The real executor's
+	// bounded read ends there, so the caller must not get a listing it has
+	// stopped waiting for.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

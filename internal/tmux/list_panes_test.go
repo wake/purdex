@@ -261,8 +261,9 @@ func TestFakeExecutorListAllPanes_ExpiredContext(t *testing.T) {
 }
 
 // The real listing is a bounded read, so a deadline that passes while it waits
-// on tmux ends it. The fake's wait is its mutex: a deadline that passes there
-// must end the call too, not yield a listing the caller has stopped waiting for.
+// on tmux ends it. A deadline can also pass while the fake waits for its lock,
+// and that must end the call too, not yield a listing the caller has stopped
+// waiting for.
 func TestFakeExecutorListAllPanes_DeadlinePassesWhileWaitingForLock(t *testing.T) {
 	f := NewFakeExecutor()
 	f.SetPaneSessionID("%0", "$0")
@@ -293,6 +294,75 @@ func TestFakeExecutorListAllPanes_DeadlinePassesWhileWaitingForLock(t *testing.T
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("ListAllPanes did not return after the lock was released")
+	}
+}
+
+// A listing that hangs in flight is the case the real executor's bounded read
+// ends at the deadline, and the one a caller's tests need to stage ("listing 2
+// blocks until the request deadline"). The read hook is the fake's only place a
+// call can hang, so a parked listing must end with its context.
+func TestFakeExecutorListAllPanes_HungListingEndsAtDeadline(t *testing.T) {
+	f := NewFakeExecutor()
+	f.SetPaneSessionID("%0", "$0")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	f.SetReadHook(BlockReadsUntil(release, func(op ReadOp, _ string) bool { return op == ReadListAllPanes }))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	type result struct {
+		rows    []PaneLocation
+		err     error
+		elapsed time.Duration
+	}
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		rows, err := f.ListAllPanes(ctx)
+		done <- result{rows, err, time.Since(start)}
+	}()
+
+	select {
+	case r := <-done:
+		if !errors.Is(r.err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want %v", r.err, context.DeadlineExceeded)
+		}
+		if r.rows != nil {
+			t.Fatalf("rows = %+v, want none", r.rows)
+		}
+		if r.elapsed > time.Second {
+			t.Fatalf("returned after %v, want it to end at the 50ms deadline", r.elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ListAllPanes outlived its deadline: the parked listing never ended")
+	}
+}
+
+// A test that parks reads by op must be able to single out the listing, and a
+// hook that lets the read through must not cost the caller its rows.
+func TestFakeExecutorListAllPanes_ReadHookSeesOp(t *testing.T) {
+	f := NewFakeExecutor()
+	f.SetPaneSessionID("%0", "$0")
+	type call struct {
+		op     ReadOp
+		target string
+	}
+	var calls []call
+	f.SetReadHook(func(_ context.Context, op ReadOp, target string) error {
+		calls = append(calls, call{op, target})
+		return nil
+	})
+
+	got, err := f.ListAllPanes(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllPanes: %v", err)
+	}
+	if len(got) != 1 || got[0].PaneID != "%0" {
+		t.Fatalf("rows = %+v, want %%0", got)
+	}
+	if want := []call{{ReadListAllPanes, ""}}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("read hook calls = %+v, want %+v", calls, want)
 	}
 }
 

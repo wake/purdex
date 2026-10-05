@@ -587,6 +587,11 @@ func TestSessionIdentity_LastSeenAtIsNotTheVersion(t *testing.T) {
 // about where it came from or when it was taken.
 func postIdentityEvent(t *testing.T, m *Module, sessionID, cwd string) {
 	t.Helper()
+	postIdentityEventRaw(t, m, identityPayload(sessionID, cwd))
+}
+
+func postIdentityEventRaw(t *testing.T, m *Module, raw json.RawMessage) {
+	t.Helper()
 	body, err := json.Marshal(map[string]any{
 		"tmux_session":      "work",
 		"tmux_pane_id":      "%5",
@@ -594,7 +599,7 @@ func postIdentityEvent(t *testing.T, m *Module, sessionID, cwd string) {
 		"sender_start_time": "t100",
 		"purdex_name":       "PdxUserPromptSubmit",
 		"agent_type":        "cc",
-		"raw_event":         identityPayload(sessionID, cwd),
+		"raw_event":         raw,
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -653,4 +658,15 @@ func TestSessionIdentity_SlowVerificationDoesNotOvertakeANewerEvent(t *testing.T
 	<-aDone
 
 	assertIdentity(t, loadFrame(t, m, "%5", 100, "t100"), "sess-B", "/w/b")
+}
+
+func TestIdentityWrite_StoresTranscriptPathFromHook(t *testing.T) {
+	m := newIdentityTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	postIdentityEventRaw(t, m, json.RawMessage(`{"hook_event_name":"Stop","session_id":"s1","cwd":"/w","transcript_path":"/t/s1.jsonl"}`))
+	f := loadFrame(t, m, "%5", 100, "t100")
+	if f.TranscriptPath != "/t/s1.jsonl" {
+		t.Fatalf("TranscriptPath = %q", f.TranscriptPath)
+	}
+	assertIdentity(t, f, "s1", "/w")
 }

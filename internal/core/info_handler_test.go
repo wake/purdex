@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -355,4 +356,31 @@ func TestInfoEndpoint_ReporterCannotOverrideCoreNexFields(t *testing.T) {
 	assert.Equal(t, true, nex["mounted"])
 	assert.Equal(t, false, nex["restart_required"])
 	assert.Equal(t, true, nex["ready"], "reporter-owned keys still come through")
+}
+
+func TestHandleHealth_CarriesBootID(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{}})
+	rec := httptest.NewRecorder()
+	c.HandleHealth(rec, httptest.NewRequest("GET", "/api/health", nil))
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Equal(t, c.BootID, body["boot_id"])
+}
+
+func TestHandleInfo_LastShutdown(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{}})
+	get := func() map[string]any {
+		rec := httptest.NewRecorder()
+		c.handleInfo(rec, httptest.NewRequest("GET", "/api/info", nil))
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+		return body
+	}
+	assert.Nil(t, get()["last_shutdown"])
+
+	c.LastShutdown = &ShutdownReport{At: time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC), Errors: []string{"close modules: x"}}
+	ls := get()["last_shutdown"].(map[string]any)
+	assert.Equal(t, c.BootID, ls["boot_id"])
+	assert.Equal(t, []any{"close modules: x"}, ls["errors"])
+	assert.Equal(t, "2026-10-06T12:00:00Z", ls["at"])
 }

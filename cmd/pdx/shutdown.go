@@ -4,16 +4,37 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 )
+
+// errRestart is what serveAndWait returns when a restart request — not a
+// signal, not a Serve failure — started the sequence and no signal arrived
+// during it: the caller re-execs once its own deferred cleanup has run
+// (daemon restart spec §3.1). Like http.ErrServerClosed, it is an outcome,
+// not a failure.
+var errRestart = errors.New("restart requested")
+
+// restartRequested is the restart outcome serveAndWait returns; it is
+// errRestart to errors.Is. The restart still re-execs after a cleanup
+// error, but does not hide it: warnings (one per logged error) go to
+// last-shutdown.json for the next image to report (spec D13).
+type restartRequested struct{ warnings []string }
+
+func (*restartRequested) Error() string        { return errRestart.Error() }
+func (*restartRequested) Is(target error) bool { return target == errRestart }
 
 // shutdownTarget is the module side of the shutdown sequence (*core.Core).
 type shutdownTarget interface {
 	StopModules(context.Context) error
 	CloseModules() error
+	// BeginShutdown closes the restart endpoint to new requests and reports
+	// whether one had already been accepted (202 sent).
+	BeginShutdown() bool
 }
 
 // shutdownServer is the HTTP side of the shutdown sequence (*http.Server).
@@ -31,7 +52,7 @@ type server interface {
 
 // serveAndWait runs srv.Serve(ln) and guarantees the shutdown sequence
 // (spec §4.5) runs exactly once — triggered by the first of: a value on
-// sig, or Serve returning (error or http.ErrServerClosed) — and does not
+// sig, a value on restart, or Serve returning (error or http.ErrServerClosed) — and does not
 // return until the sequence's last step (CloseModules) has returned.
 //
 // Sequence:
@@ -45,7 +66,11 @@ type server interface {
 // StopModules that overruns the budget hands Shutdown an already-expired
 // ctx and Shutdown falls through to Close immediately.
 //
-// Returns Serve's error unless it is http.ErrServerClosed.
+// Returns Serve's error unless it is http.ErrServerClosed, and a
+// *restartRequested (errors.Is errRestart) when restart triggered the sequence and no signal cancelled it. A nil
+// restart channel never fires. A restart the endpoint accepted just before
+// a Serve failure won the trigger select still counts (target.BeginShutdown
+// reports it); a signal does not yield to it.
 //
 // A forced exit is always available while the sequence below is still
 // running (e.g. a slow or blocking StopModules): a SECOND signal exits
@@ -61,8 +86,12 @@ type server interface {
 // Nothing is ever drained from sig outside those two consumers, so a
 // keypress is never silently discarded (which would make the forced exit
 // need a third Ctrl-C).
+//
+// A restart trigger behaves like Serve-first for signal counting, except
+// that the first signal also cancels the restart: `pdx stop` during a
+// restart must stop the daemon, not see it come back.
 func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
-	cancel context.CancelFunc, target shutdownTarget, budget time.Duration,
+	restart <-chan struct{}, cancel context.CancelFunc, target shutdownTarget, budget time.Duration,
 	logf func(string, ...any), exit func(int)) error {
 
 	serveErr := make(chan error, 1)
@@ -73,10 +102,15 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	var err error
 	serveReturned := false
 	signalTriggered := false
+	restartTriggered := false
+	var restartCancelled atomic.Bool
 	select {
 	case s := <-sig:
 		signalTriggered = true
 		logf("received %v, shutting down...", s)
+	case <-restart:
+		restartTriggered = true
+		logf("restart requested, shutting down...")
 	case err = <-serveErr:
 		serveReturned = true
 		// A signal may already be sitting in sig (buffered, not yet
@@ -86,16 +120,32 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 		// signal arriving later.
 	}
 
+	// The restart endpoint stops accepting now, whatever started the
+	// sequence. A restart it accepted just before (202 already sent) is
+	// honoured even if a Serve failure won the select above; a signal
+	// still wins (D4).
+	if target.BeginShutdown() && !signalTriggered && !restartTriggered {
+		restartTriggered = true
+		logf("restart accepted before shutdown began; restarting")
+	}
+
 	done := make(chan struct{})
-	defer close(done)
+	watcherDone := make(chan struct{})
 	go func() {
+		defer close(watcherDone)
 		if !signalTriggered {
 			// Serve-first: the first value out of sig — buffered before
 			// the race or sent during the sequence — is the first signal
 			// the user sent; acknowledge it and keep going.
 			select {
 			case s := <-sig:
-				logf("received %v during shutdown; send again to exit immediately", s)
+				if restartTriggered {
+					restartCancelled.Store(true)
+					logf("received %v during restart; exiting instead of "+
+						"restarting (send again to exit immediately)", s)
+				} else {
+					logf("received %v during shutdown; send again to exit immediately", s)
+				}
 			case <-done:
 				return
 			}
@@ -112,13 +162,18 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	ctx, ctxCancel := context.WithTimeout(context.Background(), budget)
 	defer ctxCancel()
 
+	// Each error logged below is also kept for a restart's last-shutdown record.
+	var warnings []string
 	if e := target.StopModules(ctx); e != nil {
 		logf("stop modules: %v", e)
+		warnings = append(warnings, fmt.Sprintf("stop modules: %v", e))
 	}
 	if e := srv.Shutdown(ctx); e != nil {
 		logf("http shutdown: %v; closing connections", e)
+		warnings = append(warnings, fmt.Sprintf("http shutdown: %v", e))
 		if ce := srv.Close(); ce != nil {
 			logf("http close: %v", ce)
+			warnings = append(warnings, fmt.Sprintf("http close: %v", ce))
 		}
 	}
 	// Shutdown/Close makes Serve return; collect it so the accept loop is
@@ -128,6 +183,20 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	}
 	if e := target.CloseModules(); e != nil {
 		logf("close modules: %v", e)
+		warnings = append(warnings, fmt.Sprintf("close modules: %v", e))
+	}
+
+	close(done)
+	<-watcherDone // a signal the watcher took is now recorded in restartCancelled
+	if restartTriggered && !restartCancelled.Load() {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logf("server error during restart: %v", err)
+			warnings = append(warnings, fmt.Sprintf("server error during restart: %v", err))
+		}
+		if len(warnings) > 0 {
+			logf("restart: continuing despite %d cleanup error(s)", len(warnings))
+		}
+		return &restartRequested{warnings: warnings}
 	}
 
 	if errors.Is(err, http.ErrServerClosed) {

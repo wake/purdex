@@ -101,15 +101,16 @@ func (p *shiftingInstanceProvider) TmuxInstance() string {
 }
 
 type provenanceBody struct {
-	Found        bool   `json:"found"`
-	AgentType    string `json:"agent_type"`
-	SessionID    string `json:"session_id"`
-	Cwd          string `json:"cwd"`
-	TmuxPaneID   string `json:"tmux_pane_id"`
-	TmuxInstance string `json:"tmux_instance"`
-	LastSeenAt   int64  `json:"last_seen_at"`
-	StartedAt    int64  `json:"started_at"`
-	FrameID      string `json:"frame_id"`
+	Found          bool   `json:"found"`
+	AgentType      string `json:"agent_type"`
+	SessionID      string `json:"session_id"`
+	Cwd            string `json:"cwd"`
+	TmuxPaneID     string `json:"tmux_pane_id"`
+	TmuxInstance   string `json:"tmux_instance"`
+	LastSeenAt     int64  `json:"last_seen_at"`
+	StartedAt      int64  `json:"started_at"`
+	FrameID        string `json:"frame_id"`
+	TranscriptPath string `json:"transcript_path"`
 }
 
 // getProvenance drives the endpoint through the module's own route table, so a
@@ -959,5 +960,22 @@ func TestHandleSessionProvenance_CancelledRecheckDiscardsEarlierOwner(t *testing
 	}
 	if body.Found {
 		t.Fatalf("body = %+v, want found:false — the deadline expired during %%6's re-check, so nothing found so far is an answer", body)
+	}
+}
+
+func TestProvenanceHandler_ReturnsTranscriptPath(t *testing.T) {
+	m, fake, _ := newProvenanceQueryModule(t)
+	fake.AddSession("work", "/w")
+	attachPane(fake, "%5", "$0", "200")
+	seeded := seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w/purdex")
+	if err := m.frames.SetTranscriptPath(seeded.FrameID, "/t/s1.jsonl", 1); err != nil {
+		t.Fatal(err)
+	}
+	withProcessTree(t, map[int]int{100: 200, 200: 1})
+	withLivePids(t, map[int]string{100: "t100"})
+
+	_, body, _ := getProvenance(t, m, codeOf(t, "$0"))
+	if !body.Found || body.TranscriptPath != "/t/s1.jsonl" {
+		t.Fatalf("body = %+v", body)
 	}
 }

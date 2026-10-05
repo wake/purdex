@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	"github.com/wake/purdex/internal/codexbroker"
 	"github.com/wake/purdex/internal/config"
@@ -43,7 +45,9 @@ func main() {
 
 	switch os.Args[1] {
 	case "serve":
-		runServe(os.Args[2:])
+		if plan := runServe(os.Args[2:]); plan != nil {
+			reexec(plan, syscall.Exec, log.Printf, os.Exit)
+		}
 	case "hook":
 		runHook(os.Args[2:])
 	case "setup":
@@ -76,7 +80,7 @@ func main() {
 	}
 }
 
-func runServe(args []string) {
+func runServe(args []string) *reexecPlan {
 	defer func() {
 		if r := recover(); r != nil {
 			home, _ := os.UserHomeDir()
@@ -85,6 +89,10 @@ func runServe(args []string) {
 			panic(r)
 		}
 	}()
+
+	// Before locale.EnsureUTF8 / tmuxenv.Prepare / nex PATH policy mutate the
+	// process env: a restart must re-exec the boot command, not the mutated one.
+	boot, bootErr := captureReexecPlan(os.Executable, os.Args, os.Environ())
 
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/pdx/config.toml)")
@@ -157,12 +165,40 @@ func runServe(args []string) {
 	// another daemon already owns this data_dir, so refuse to start rather
 	// than run two daemons against the same SQLite files.
 	pidPath := filepath.Join(cfg.DataDir, "pdx.pid")
-	pidFile := mustAcquirePidLock(pidPath, os.Getpid(), log.Fatalf)
-	defer releasePidLock(pidFile, pidPath)
+	var pidFile *os.File
+	if v, ok := os.LookupEnv(pidLockFDEnv); ok {
+		// Unset either way: children (tmux, nex turns) must not see a stale fd number.
+		os.Unsetenv(pidLockFDEnv)
+		if f, err := adoptPidLock(v, pidPath, os.Getpid()); err != nil {
+			log.Printf("pid lock: inherited fd not adopted (%v); acquiring", err)
+		} else {
+			log.Printf("pid lock: adopted from the previous image")
+			pidFile = f
+		}
+	}
+	if pidFile == nil {
+		pidFile = mustAcquirePidLock(pidPath, os.Getpid(), log.Fatalf)
+	}
+	handingOff := false
+	defer func() {
+		if !handingOff {
+			releasePidLock(pidFile, pidPath)
+		}
+	}()
 
 	// Files of modules that no longer exist (sync.db, device_state.db + -wal/-shm; #1303).
 	// After the PID lock, so only the daemon that owns this data_dir touches it.
 	removeLegacyDataFiles(cfg.DataDir, log.Printf)
+
+	// What the previous image's restart shutdown could not clean up (spec
+	// D13); consumed here so /api/info reports it once, for this boot.
+	lastShutdown, lsErr := takeLastShutdown(cfg.DataDir)
+	if lsErr != nil {
+		log.Printf("last shutdown: record problem (%v)", lsErr)
+	}
+	if lastShutdown != nil {
+		log.Printf("last shutdown: %d error(s) recorded by the previous image", len(lastShutdown.Errors))
+	}
 
 	// Register token for crash log redaction
 	if cfg.Token != "" {
@@ -191,6 +227,23 @@ func runServe(args []string) {
 		Config: &cfg,
 		Tmux:   tx,
 	})
+	c.LastShutdown = lastShutdown
+
+	// POST /api/daemon/restart → restartCh → serveAndWait runs the normal
+	// shutdown; the re-exec happens in main once this function's defers
+	// (stores, pid lock) have run. No boot plan → no hook → the endpoint
+	// answers 503 rather than accepting a restart nothing can perform.
+	restartCh := make(chan struct{}, 1)
+	if bootErr != nil {
+		log.Printf("restart: unavailable (%v)", bootErr)
+	} else {
+		c.SetRestartHook(func() {
+			select {
+			case restartCh <- struct{}{}:
+			default:
+			}
+		})
+	}
 
 	// Set config path for persistence via PUT /api/config
 	c.CfgPath = resolvedCfgPath
@@ -259,9 +312,30 @@ func runServe(args []string) {
 	// CloseModules) and only return once it has finished, so the deferred
 	// store close and PID-lock release registered above run against closed
 	// modules.
-	if err := serveAndWait(srv, listener, sigCh, cancel, c, core.ShutdownBudget, log.Printf, os.Exit); err != nil {
+	err = serveAndWait(srv, listener, sigCh, restartCh, cancel, c, core.ShutdownBudget, log.Printf, os.Exit)
+	if errors.Is(err, errRestart) {
+		if restartStillWanted(sigCh, func() { signal.Stop(sigCh) }, log.Printf) {
+			// The restart goes ahead despite cleanup errors; leave a record
+			// so the new image can report them (spec D13).
+			var rr *restartRequested
+			if errors.As(err, &rr) && len(rr.warnings) > 0 {
+				if werr := writeLastShutdown(cfg.DataDir, rr.warnings, time.Now()); werr != nil {
+					log.Printf("last shutdown: not recorded (%v)", werr)
+				}
+			}
+			// Keep the pid lock held through the exec: the new image adopts it.
+			// reexec clears close-on-exec right before the exec.
+			handingOff = true
+			boot.env = append(boot.env, pidLockEnvEntry(pidFile))
+			boot.lock = pidFile // keeps the *os.File (and its fd) alive until exec
+			return boot
+		}
+		return nil
+	}
+	if err != nil {
 		log.Printf("server error: %v", err)
 	}
+	return nil
 }
 
 func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *store.AgentEventStore) error {

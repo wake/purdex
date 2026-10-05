@@ -22,13 +22,14 @@ var provenanceTimeout = 5 * time.Second
 // field. Everything else is omitted when there is no answer, so found:false is
 // the two-field object the spec shows.
 type provenanceResponse struct {
-	Found        bool   `json:"found"`
-	AgentType    string `json:"agent_type,omitempty"`
-	SessionID    string `json:"session_id,omitempty"`
-	Cwd          string `json:"cwd,omitempty"`
-	TmuxPaneID   string `json:"tmux_pane_id,omitempty"`
-	TmuxInstance string `json:"tmux_instance"`
-	LastSeenAt   int64  `json:"last_seen_at,omitempty"`
+	Found          bool   `json:"found"`
+	AgentType      string `json:"agent_type,omitempty"`
+	SessionID      string `json:"session_id,omitempty"`
+	Cwd            string `json:"cwd,omitempty"`
+	TranscriptPath string `json:"transcript_path,omitempty"`
+	TmuxPaneID     string `json:"tmux_pane_id,omitempty"`
+	TmuxInstance   string `json:"tmux_instance"`
+	LastSeenAt     int64  `json:"last_seen_at,omitempty"`
 	// StartedAt is the answering frame's start, in the same unit as LastSeenAt.
 	// Unlike LastSeenAt — which moves on every hook event — it is fixed for the
 	// life of the run, so every SPA client that backfills the same run stamps
@@ -70,6 +71,7 @@ func (m *Module) handleSessionProvenance(w http.ResponseWriter, r *http.Request)
 		resp.AgentType = owner.AgentType
 		resp.SessionID = owner.SessionID
 		resp.Cwd = owner.Cwd
+		resp.TranscriptPath = owner.TranscriptPath
 		resp.TmuxPaneID = owner.TmuxPaneID
 		resp.LastSeenAt = owner.LastSeenAt
 		resp.StartedAt = owner.StartedAt

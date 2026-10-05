@@ -24,6 +24,7 @@ func (c *Core) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		"mode":    c.Pairing.Get().String(),
 		"version": buildinfo.Version,
 		"hash":    buildinfo.Hash,
+		"boot_id": c.BootID,
 	})
 }
 
@@ -72,6 +73,14 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"os":             runtime.GOOS,
 		"arch":           runtime.GOARCH,
 		"nex":            nex,
+		"last_shutdown":  nil,
+	}
+	if r := c.LastShutdown; r != nil {
+		info["last_shutdown"] = map[string]any{
+			"at":      r.At.UTC().Format(time.RFC3339),
+			"errors":  r.Errors,
+			"boot_id": c.BootID,
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)

@@ -35,6 +35,9 @@ type Module struct {
 	uploadDir string
 	traceSink *hookTraceSink
 
+	// sessionStarts fans granted SessionStarts out to in-process subscribers.
+	sessionStarts sessionStartHub
+
 	prober    *probe.Prober
 	probeOrch *probeOrchestrator
 	tmux      tmux.Executor
@@ -214,6 +217,7 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register("agent.events", m.events)
 	c.Registry.Register("agent.module", m)
 	c.Registry.Register(OwnerResolverKey, OwnerResolver(m))
+	c.Registry.Register(TerminalSessionsKey, TerminalSessions(m))
 
 	if m.uploadDir == "" {
 		c.CfgMu.RLock()
