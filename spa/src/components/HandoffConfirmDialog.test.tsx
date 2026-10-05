@@ -424,6 +424,21 @@ describe('HandoffConfirmDialog — re-checks the live gate at Confirm (P6 review
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  // P6 re-review: the pane's rebuild record still says cc after the live type is cleared; the real SessionEnd also
+  // marks it exited, and an exited record no longer opens the gate.
+  it('Claude Code exited through the real SessionEnd path while the record says cc → not sent, closed', async () => {
+    useAgentStore.setState({ agentTypes: { 'h1:zk16vd': 'cc' } })
+    setPane(liveSession({ rebuild: { ...CC_RECORD, agent: { type: 'cc', sessionId: 'S1', frameId: 'F1', updatedAt: 0 } } }))
+    const { onClose } = await confirmAfter(() => {
+      useAgentStore.getState().handleNormalizedEvent('h1', 'zk16vd', {
+        agent_type: 'cc', status: 'clear', raw_event_name: 'PdxSessionEnd', broadcast_ts: 1, subagents: [],
+        detail: { pdx_exit: { agent_type: 'cc', session_id: 'S1', tmux_pane_id: '%1', tmux_instance: 'inst-1', frame_id: 'F1', reason: 'session-end', at: 7_000 } },
+      })
+    })
+    expect(mockedHandToNex).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('the pane\'s session is terminated → not sent, closed', async () => {
     const { onClose } = await confirmAfter(() => { setPane(liveSession({ terminated: 'session-closed' })) })
     expect(mockedHandToNex).not.toHaveBeenCalled()

@@ -178,6 +178,30 @@ describe('HandoffDialogHost', () => {
       expect(mockedHandoff).not.toHaveBeenCalled()
     })
 
+    // P6 re-review: with a cc rebuild record, clearing the live type alone leaves the record as the source. The real
+    // SessionEnd (a `clear` event carrying `pdx_exit`) marks that record exited AND clears the type → closes.
+    it('Claude Code exits on a pane whose rebuild record says cc (the real SessionEnd path) → closes; nothing is sent', () => {
+      const target = seedPane(session({
+        rebuild: { sessionName: 'purdex', tmuxInstance: 'inst-1', agent: { type: 'cc', sessionId: 'S1', frameId: 'F1', updatedAt: 1 }, capturedAt: 1 },
+      }))
+      render(<HandoffDialogHost />)
+      open(target)
+      expect(dialog()).toBeInTheDocument()
+      act(() => {
+        useAgentStore.getState().handleNormalizedEvent(H, 'zk16vd', {
+          agent_type: 'cc', status: 'clear', raw_event_name: 'PdxSessionEnd', broadcast_ts: 1, subagents: [],
+          detail: { pdx_exit: { agent_type: 'cc', session_id: 'S1', tmux_pane_id: '%1', tmux_instance: 'inst-1', frame_id: 'F1', reason: 'session-end', at: 7_000 } },
+        })
+      })
+      // The exit really landed through the store path, and the live type is gone.
+      const live = paneContent(target)
+      expect(live?.kind === 'tmux-session' && live.rebuild?.agentExited).toEqual({ at: 7_000, reason: 'session-end' })
+      expect(useAgentStore.getState().agentTypes[`${H}:zk16vd`]).toBeUndefined()
+      expect(dialog()).toBeNull()
+      expect(useHandoffDialogStore.getState().target).toBeNull()
+      expect(mockedHandoff).not.toHaveBeenCalled()
+    })
+
     it('another agent now runs in the session → closes', () => {
       const target = seedPane()
       render(<HandoffDialogHost />)

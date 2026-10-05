@@ -67,6 +67,40 @@ describe('isHandoffCandidate — precedence', () => {
   })
 })
 
+// P6 re-review: Claude Code's exit clears the live type (`clearSession`) and marks the record `agentExited`
+// (`writeExitRecord`) — so the record is the only source left, and an exited one must not keep the gate open.
+describe('isHandoffCandidate — an exited agent record', () => {
+  function exitedCc(): TmuxSessionContent {
+    const content = withRebuildAgent('cc')
+    content.rebuild!.agentExited = { at: 7_000, reason: 'session-end' }
+    return content
+  }
+
+  it('a cc record with no live type and no exit → candidate (unchanged)', () => {
+    expect(isHandoffCandidate(withRebuildAgent('cc'), ready)).toBe(true)
+  })
+
+  it('the same record marked exited → not a candidate, not_agent', () => {
+    expect(isHandoffCandidate(exitedCc(), ready)).toBe(false)
+    expect(handoffBlockReason(exitedCc(), ready)).toBe('not_agent')
+    expect(handoffBlockReason(exitedCc(), { ...ready, agentType: '' })).toBe('not_agent')
+  })
+
+  it('a process-dead exit (the pid sweep) blocks the same way', () => {
+    const content = exitedCc()
+    content.rebuild!.agentExited = { at: 7_000, reason: 'process-dead' }
+    expect(handoffBlockReason(content, ready)).toBe('not_agent')
+  })
+
+  it('a live cc still wins over an exited record (the live branch is unchanged)', () => {
+    expect(handoffBlockReason(exitedCc(), { ...ready, agentType: 'cc' })).toBeNull()
+  })
+
+  it('a live non-cc still blocks', () => {
+    expect(handoffBlockReason(exitedCc(), { ...ready, agentType: 'codex' })).toBe('not_agent')
+  })
+})
+
 describe('isHandoffCandidate — structural checks', () => {
   const cc: HandoffGateDeps = { ...ready, agentType: 'cc' }
 
@@ -120,8 +154,10 @@ describe('handoffBlockReason', () => {
   })
 
   it('isHandoffCandidate is exactly "no reason" over a grid of inputs', () => {
+    const exited = withRebuildAgent('cc')
+    exited.rebuild!.agentExited = { at: 1, reason: 'session-end' }
     const contents: PaneContent[] = [
-      terminal(), withRebuildAgent('cc'), withRebuildAgent('codex'), terminal({ terminated: 'tmux-restarted' }),
+      terminal(), withRebuildAgent('cc'), withRebuildAgent('codex'), exited, terminal({ terminated: 'tmux-restarted' }),
       { kind: 'dashboard' }, { kind: 'execution', executionId: 'x' },
     ]
     for (const content of contents) {

@@ -866,6 +866,36 @@ describe('PaneLayoutRenderer — Hand to nex (P-C.3b)', () => {
     expect(mockedHandToNex).not.toHaveBeenCalled()
   })
 
+  // P6 re-review: the real SessionEnd clears the live type and marks the cc record exited — the record alone must not
+  // keep offering the item.
+  it('no longer offers it after Claude Code exits on a pane whose rebuild record says cc', async () => {
+    const recorded = tmux('p1', {
+      rebuild: { sessionName: 'purdex', tmuxInstance: 'inst-1', agent: { type: 'cc', sessionId: 'S1', frameId: 'F1', updatedAt: 1 }, capturedAt: 1 },
+    })
+    seedTab(recorded)
+    seedReady()
+    liveCc()
+    const { act } = await import('react')
+    const { rerender } = render(<PaneLayoutRenderer layout={recorded} tabId="t1" isActive={true} />)
+    rightClick('tmux-p1')
+    expect(screen.getByText('Hand to nex')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await act(async () => {
+      useAgentStore.getState().handleNormalizedEvent(H, CODE, {
+        agent_type: 'cc', status: 'clear', raw_event_name: 'PdxSessionEnd', broadcast_ts: 1, subagents: [],
+        detail: { pdx_exit: { agent_type: 'cc', session_id: 'S1', tmux_pane_id: '%1', tmux_instance: 'inst-1', frame_id: 'F1', reason: 'session-end', at: 7_000 } },
+      })
+    })
+    // The leaf renders the layout its tab hands it: the store's, now carrying the exit.
+    const layout = useTabStore.getState().tabs['t1'].layout
+    expect(layout.type === 'leaf' && layout.pane.content.kind === 'tmux-session' && layout.pane.content.rebuild?.agentExited)
+      .toEqual({ at: 7_000, reason: 'session-end' })
+    rerender(<PaneLayoutRenderer layout={layout} tabId="t1" isActive={true} />)
+    rightClick('tmux-p1')
+    expect(screen.getByText('Split Horizontal')).toBeInTheDocument()
+    expect(screen.queryByText('Hand to nex')).not.toBeInTheDocument()
+  })
+
   it('hiding the host closes an open handoff dialog (the pane is gated; nothing is sent)', async () => {
     const recorded = tmux('p1', { rebuild: { sessionName: 'purdex', tmuxInstance: 'inst-1', agent: { type: 'cc', updatedAt: 1 }, capturedAt: 1 } })
     seedTab(recorded)
