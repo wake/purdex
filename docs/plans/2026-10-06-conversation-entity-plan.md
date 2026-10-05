@@ -1,4 +1,4 @@
-# Conversation entity Implementation Plan (P1a–P2)
+# Conversation entity Implementation Plan (P1a–P2, plan v2: P3b)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -2113,6 +2113,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Produces:
   - After `resolveHandoffOwner` (sid = `owner.SessionID`): `sid:<S>` lock (409 `transfer_in_progress`), then `checkOwners(sid, "", owner.TmuxPaneID)` (409 `session_owned` / 503 `owner_check_failed`). Both run **before** liveness, `stopCC` or any key.
   - `delegate_rejected` detail gains `execution_id` (when the engine created a row) and `exited` (bool, only when rolled back).
+  - **D17:** `const purdexSessionLabel = "purdex.session_id"` (in `owners.go`, next to `sidLockKey`). The handoff's delegate `Labels` add `purdexSessionLabel: owner.SessionID` beside the existing `source` / `handoff_session`. Test: the recorded delegate request carries `Labels["purdex.session_id"] == hoSessionID`, and keeps `source` and `handoff_session`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3220,7 +3221,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
     - `checkOwners` codes;
     - `exitWorker` codes, with `detail.step = "exit_replaced"`;
     - 500 `delegate_failed`.
-  - Delegate request: `Brief: "(rebuilt as worker)"` (`rebuildBrief`; P3b removes it), `SandboxProfile: body.Profile || handoffProfile`, a cwd mount, `Origin: "purdex://host/<hostID>/rebuild"`, `Labels: {"source": "purdex"}` plus `"rebuild_of": <replace id>` when one is given, and `ResumeSessionID: S`.
+  - Delegate request: `Brief: "(rebuilt as worker)"` (`rebuildBrief`; P3b removes it), `SandboxProfile: body.Profile || handoffProfile`, a cwd mount, `Origin: "purdex://host/<hostID>/rebuild"`, `Labels: {"source": "purdex", "purdex.session_id": S}` (D17, `purdexSessionLabel` from Task 10) plus `"rebuild_of": <replace id>` when one is given, and `ResumeSessionID: S`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3238,8 +3239,8 @@ func TestWorkerRebuild(t *testing.T) {
 			t.Fatalf("%d %s", rec.Code, rec.Body)
 		}
 		req := env.svc.delegateCalls[0]
-		if req.ResumeSessionID != "S" || req.Brief != rebuildBrief || req.SandboxProfile != "handoff" || req.Mounts[0].Path != "/w" || req.Labels["source"] != "purdex" {
-			t.Fatalf("req = %+v", req)
+		if req.ResumeSessionID != "S" || req.Brief != rebuildBrief || req.SandboxProfile != "handoff" || req.Mounts[0].Path != "/w" || req.Labels["source"] != "purdex" || req.Labels[purdexSessionLabel] != "S" {
+			t.Fatalf("req = %+v (D17: purdex.session_id label required)", req)
 		}
 		if _, ok := req.Labels["rebuild_of"]; ok {
 			t.Fatal("no rebuild_of without a replaced execution")
@@ -3913,18 +3914,313 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-## P3 / P4 — outline only (plan v2 follows once the coordinator completes spec §8 / §10, D15)
+## Plan v2 — P3 (spec §8 / §10 full text, D17–D20; written 2026-10-06)
 
-- **P3a — Nexen v0.17** (nexen repo, its own spec / plan / codex flow, merge + tag):
-  - `delegate` with `resume_session_id`, no brief and no attachments creates an `idle` row with **no turn**. It needs `store.CreateIdle`, sets `session_id` from the resume id at creation, and records the prelude boundary at creation. Capability: `delegate.idle_resume: true`.
-  - A transcript page endpoint bounded by "now" (`prelude.LastLineEnd`) instead of `prelude_end`, with the same item kinds and caps.
-  - A `session_id` filter on `GET /v1/executions` and `store.ListOptions`.
-- **P3b — Purdex:**
-  - pin v0.17;
-  - handoff and `worker-rebuild` delegate without a brief when the capability is present (placeholder otherwise);
-  - `liveWorkersFor` switches to the session filter;
-  - transcript-first rendering per §10, with Nexen supplements by `tool_use_id` and the user-prompt line, across all stints.
-- **P4 — Purdex:** the daemon scans transcript metadata (`ai-title`, cwd, last activity) per host; a Dormant tab (registered on the Task 25 registry) and search.
+**P3a — Nexen v0.17** is executed in the nexen repo by `mlab/_lsjkj6` (nexen-61), from `docs/plans/2026-10-06-conversation-entity-p3a-nexen-handoff.md`. That file is its scope: `start_idle`, list by `session_id` plus indexes, prelude item `offset`, boundary order D19, and the contract docs. Purdex starts P3b-1 once `v0.17.0` is tagged.
+
+**Global constraints added for P3:**
+- P3b-1 pins `lab.protype.tw/wake/nexen v0.17.0`. From then on the daemon *is* the capability: no runtime check for `start_idle` or the session filter in Go.
+- The SPA checks capabilities **by key presence**, as the prelude work did:
+  - `capabilities.delegate.start_idle === true`
+  - `capabilities.list.session_filter === true`
+  - `capabilities.transcript_prelude.item_offset === true`
+- The SPA never parses `pos` (D20). It uses `offset`.
+- An enrichment failure is silent: no toast and no error row (spec §10.6).
+
+### PR map (P3)
+
+| PR | Tasks | Side |
+|---|---|---|
+| P3b-1 | 27–28 | daemon + SPA: pin, `start_idle`, session filter, confirm text |
+| P3b-2a | 29–31 | SPA: wire, entity stints, attribution, tool status / subagent tasks enrichment |
+| P3b-2b | 32–33 | SPA: cost footers, attachment thumbnails, budget line |
+
+---
+
+### Task 27: Pin v0.17.0; handoff / worker rebuild with `start_idle`; owner scan by session
+
+**Files:**
+- Modify: `go.mod`, `go.sum` (`go get lab.protype.tw/wake/nexen@v0.17.0 && go mod tidy`; GOPRIVATE is set up by `scripts/check-goenv*`)
+- Modify: `internal/module/nex/handoff.go` (delegate request; the `keep_session` kill condition)
+- Modify: `internal/module/nex/worker_rebuild.go` (delegate request; drop `rebuildBrief`)
+- Modify: `internal/module/nex/owners.go` (`liveWorkersFor` → `store.ListOptions{SessionID: sid}`)
+- Modify: `internal/module/nex/deps_test.go` (pin assertions: `TestCapabilitiesPinResumeSessionIDAndHandoffProfile` gains `delegate.start_idle` and `list.session_filter`)
+- Test: `handoff_test.go`, `worker_rebuild_test.go`, `owners_test.go`, the fakes (`fakeNexStore.List` honours `SessionID` the way Nexen does: resume id, session id, or a scripted turn session id)
+
+**Interfaces:**
+- Consumes: Nexen v0.17 `execution.Request.StartIdle bool`, `store.ListOptions.SessionID string`, `Result.State == StateIdle`.
+- Produces:
+  - Handoff delegates with `StartIdle: true` and `Brief: ""`. All other fields are unchanged, including `purdexSessionLabel` (D17).
+  - **`keep_session:false` kills the tmux session when the delegate answered `running` OR `idle`.** Both mean "the engine accepted it and CC is gone from the pane". `queued` and `failed` still keep the session.
+  - The handoff 200 `state` is `idle`.
+  - `worker-rebuild` delegates with `StartIdle: true` and `Brief: ""`. The `rebuildBrief` constant is deleted.
+  - `liveWorkersFor(ctx, sid)` = `scanLiveWorkers` over `store.ListOptions{SessionID: sid}` (D18). The page and cap logic stays, and so do `errOwnerScanTruncated` and the newest-first order. The overflow reconcile keeps the unfiltered scan.
+
+- [ ] **Step 1: Write the failing tests**
+
+```go
+func TestHandoff_StartIdle(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.svc.delegateResult = execution.Result{ID: "N1", State: store.StateIdle, EffectiveProfile: "handoff"}
+	rec := env.postHandoff(t, `{"expected_tmux_instance":"`+hoInstance+`"}`)
+	if rec.Code != 200 || decode(t, rec)["state"] != "idle" {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	req := env.svc.delegateCalls[0]
+	if !req.StartIdle || req.Brief != "" || req.Labels[purdexSessionLabel] != hoSessionID {
+		t.Fatalf("req = %+v", req)
+	}
+}
+
+func TestHandoff_KeepSessionFalseKillsOnIdle(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.svc.delegateResult = execution.Result{ID: "N1", State: store.StateIdle}
+	rec := env.postHandoff(t, `{"expected_tmux_instance":"`+hoInstance+`","keep_session":false}`)
+	if decode(t, rec)["session_kept"] != false {
+		t.Fatal("a start_idle (idle) delegate must kill the emptied tmux session like a running one")
+	}
+}
+
+func TestWorkerRebuild_StartIdle(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.svc.delegateResult = execution.Result{ID: "N1", State: store.StateIdle}
+	_ = env.post(t, "/api/nex/worker-rebuild", `{"session_id":"S","cwd":"/w"}`)
+	if req := env.svc.delegateCalls[0]; !req.StartIdle || req.Brief != "" {
+		t.Fatalf("req = %+v", req)
+	}
+}
+
+func TestLiveWorkersFor_UsesSessionFilter(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.store.listRows = []store.Execution{row("E1", "idle", false, "S", "", 1), row("E2", "idle", false, "OTHER", "", 2)}
+	got, err := env.m.liveWorkersFor(context.Background(), "S")
+	if err != nil || len(got) != 1 || got[0].ID != "E1" {
+		t.Fatalf("%v %v", got, err)
+	}
+	if env.store.lastListOpts.SessionID != "S" {
+		t.Fatal("liveWorkersFor must ask the store for SessionID=S (D18)")
+	}
+}
+```
+
+- [ ] **Step 2: Run them to verify they fail.** Run: `go test ./internal/module/nex/ -run 'StartIdle|KeepSessionFalseKillsOnIdle|UsesSessionFilter'`. Expected: compile failure before the pin, then assertion failures.
+- [ ] **Step 3: Implement.** Pin, then make the changes listed in Interfaces. Add `lastListOpts` to the fake store, and give its `List` a `SessionID` filter.
+- [ ] **Step 4: Run** `go build ./... && go vet ./... && go test ./...`. Expected: PASS, including `mount_test.go` against the real v0.17 engine. Fix any compile break from the bump in the engine seam's verbatim assertions.
+- [ ] **Step 5: Commit**: `feat(daemon): pin nexen v0.17.0 — start_idle handoff and rebuild, owner scan by session`.
+
+### Task 28: SPA — handoff confirm text; capability types
+
+**Files:**
+- Modify: `spa/src/lib/nex/types.ts:228-246` (`NexCapabilities.delegate.start_idle?`, `list?: { session_filter?: boolean }`, `transcript_prelude.item_offset?`)
+- Modify: `spa/src/components/HandoffConfirmDialog.tsx` and both locales (`handoff.confirm_body` or the actual key the dialog uses)
+- Test: `HandoffConfirmDialog.test.tsx`, `components/execution/ExecutionView.test.tsx`
+
+**Interfaces:**
+- Copy (zh-TW): the confirm body says the conversation moves to a worker and **waits for your next message**. Remove any wording that implies it keeps working on its own ("繼續在背景執行" or equivalent). en: a faithful translation.
+- An idle execution with **zero turns** and a `resume_session_id` renders:
+  - the prelude (eligible: `historyLoaded && resume_session_id`);
+  - an **enabled** composer;
+  - no turn footers;
+  - no "loading" stuck state.
+
+  Test it with a seeded summary `{state: 'idle', turn_count: 0, resume_session_id: 'S'}` and empty history.
+
+Steps: TDD (the copy test asserts the new key's text, and that the old key is gone from both locales); `npx vitest run src/components`; `pnpm run lint`; `npx tsc --noEmit -p tsconfig.app.json`. Commit: `feat(spa): handoff waits for your next message (start_idle); capability types`.
+
+**PR P3b-1:** both tasks. Then codex R1 + R2. **Daemon deploy needed** (the Nexen pin): report to the coordinator.
+
+---
+
+### Task 29: Wire — list by session / label, prelude `offset`, capability selectors
+
+**Files:**
+- Modify: `spa/src/lib/nex/nex-api.ts:83-98` (`ListExecutionsOptions` gains `sessionId?: string` and `labels?: Record<string, string>`, sent as `session_id=` and `label.<k>=<v>`)
+- Modify: `spa/src/lib/nex/prelude-wire.ts:29-34, 186` (every item kind gains `offset: number | null`. Sanitize to a non-negative safe integer, else `null`; never reject the item.)
+- Modify: `spa/src/stores/useNexHostStore.ts` (`selectSessionFilter(hostId)`, `selectPreludeItemOffset(hostId)`, both by key presence)
+- Test: `nex-api.test.ts` (or the file covering `listExecutions`), `prelude-wire.test.ts`, `useNexHostStore.test.ts`
+
+**Interfaces:**
+
+```ts
+export interface ListExecutionsOptions { state?: string; includeArchived?: boolean; cursor?: string; limit?: number; sessionId?: string; labels?: Record<string, string> }
+// PreludeItem: every variant gains `offset: number | null`
+export const selectSessionFilter: (hostId: string) => (s: NexHostState) => boolean
+export const selectPreludeItemOffset: (hostId: string) => (s: NexHostState) => boolean
+```
+
+Tests:
+- the query strings: `session_id=` URL-encoded; repeated `label.` keys sorted for determinism;
+- `offset` cases: `12` → 12; `-1`, `1.5`, `"12"`, a value above `Number.MAX_SAFE_INTEGER`, or missing → `null`;
+- the selectors are false on a v0.16 capability object and true on a v0.17 one.
+
+Commit: `feat(spa): list executions by session or label; prelude item offset`.
+
+### Task 30: Entity stints — list and boundaries (§10.3)
+
+**Files:**
+- Create: `spa/src/lib/nex/entity-stints.ts` (pure)
+- Create: `spa/src/lib/nex/entity-stints.test.ts`
+- Create: `spa/src/hooks/useEntityStints.ts`
+- Create: `spa/src/hooks/useEntityStints.test.ts`
+
+**Interfaces:**
+
+```ts
+export interface Stint { id: string; boundary: number; createdAt: number }
+/** Earlier stints only (never `currentId`), sorted by boundary asc, then createdAt asc. Rows without a boundary are dropped. */
+export function orderStints(rows: Array<{ id: string; created_at: number; boundary: number | null }>, currentId: string): Stint[]
+export const MAX_STINTS = 50
+/**
+ * Lists the entity's stints, `include_archived` included:
+ * - `session_filter` → `sessionId = S`;
+ * - else the label `purdex.session_id = S` (D17).
+ * S is the current summary's resume_session_id || session_id. For each earlier stint (≤ MAX_STINTS, newest first)
+ * the boundary is fetched once via `fetchExecutionPrelude(host, id, { limit: 1 })` → `totalBytes` (state 'ok' only).
+ * One fetch per stint per pane (cache in a ref keyed by host:id).
+ * Returns { stints: Stint[], status: 'idle'|'loading'|'ok'|'unavailable' }.
+ * Any list failure → 'unavailable' (no attribution, §10.6). A boundary fetch failure drops that stint only.
+ */
+export function useEntityStints(hostId: string, summary: ExecutionSummary | null, enabled: boolean): { stints: Stint[]; status: 'idle' | 'loading' | 'ok' | 'unavailable' }
+```
+
+Tests:
+- `orderStints` excludes the current stint, sorts, and drops null boundaries;
+- the hook lists by `session_id` when the capability is present and by label otherwise, with `include_archived` in both cases;
+- a list failure → `unavailable`;
+- a boundary fetch per stint happens exactly once, even across re-renders and two consumers;
+- a stale host change drops the late answer;
+- disabled → no request.
+
+Commit: `feat(spa): list a conversation's earlier worker stints and their boundaries`.
+
+### Task 31: Attribution and tool / subagent enrichment of earlier worker segments (§10.3, §10.4)
+
+**Files:**
+- Create: `spa/src/lib/nex/stint-attribution.ts` (pure)
+- Create: `spa/src/lib/nex/stint-attribution.test.ts`
+- Create: `spa/src/lib/nex/stint-enrichment.ts` (pure reducer over a stint's events)
+- Create: `spa/src/lib/nex/stint-enrichment.test.ts`
+- Create: `spa/src/hooks/useStintEnrichment.ts` (lazy fetch, pane-lifetime cache)
+- Modify: `spa/src/components/room/prelude/PreludeSection.tsx` (merge tools / subagentTasks per attributed segment; trigger enrichment on first render of a segment; `PreludeAnchor` version gains the enrichment revision)
+- Modify: `spa/src/components/execution/ExecutionView.tsx:113-115, 509-527` (`useEntityStints`; enrichment cache provider; pass the attribution into the prelude node)
+- Test: `PreludeSection.test.tsx`, `ExecutionView.test.tsx` ("worker prelude" describe)
+
+**Interfaces:**
+
+```ts
+// stint-attribution.ts
+export type Attribution = ReadonlyMap<string /* pos */, string /* stint id */>
+/**
+ * Entrypoint of each item = the entrypoint of the nearest prelude.segment at or before it, in `items` order.
+ * An item before any loaded marker is unknown and never attributed (D20).
+ * A worker item (entrypoint starts with "sdk") with a non-null offset `o` goes to the stint with the largest boundary ≤ o.
+ * Terminal ("cli") items, items with a null offset, and items below the first stint's boundary are not attributed.
+ */
+export function attributeItems(items: readonly PreludeItem[], stints: readonly Stint[]): Attribution
+
+// stint-enrichment.ts
+export interface StintEnrichment {
+  tools: Readonly<Record<string, ToolActivity>>          // by tool_use_id, from N2 events (recordN2ToolUseIn / recordN2ToolResultIn)
+  subagentTasks: ReadonlyMap<string, WorkerTask>        // subagentTasksByToolUse(applyTaskEvent over task events)
+  truncated: boolean                                    // stopped at the budget
+}
+export const ENRICHMENT_EVENT_BUDGET = 5000
+export function enrichFromEvents(events: readonly NexEvent[], budget?: number): StintEnrichment
+
+// useStintEnrichment.ts
+/**
+ * Lazy: requested by PreludeSection when a segment's first item mounts.
+ * Pages fetchExecutionEvents(host, id, {after, limit: 500}) until next_cursor === 0 or the budget.
+ * One fetch per stint per pane: the cache lives in a context provided by ExecutionView.
+ * A failure caches `null` → the segment renders un-enriched, with no toast.
+ */
+export function useStintEnrichment(hostId: string, stintId: string | null): StintEnrichment | null | undefined // undefined = not loaded yet
+```
+
+Rendering rules:
+- For items attributed to stint `e`, the `RenderCtx.tools` is `{ ...view.tools, ...enrichment.tools }` (enrichment wins by `tool_use_id`). `subagentTasks` is `enrichment.subagentTasks`.
+- Items not attributed keep today's context exactly.
+- A truncated enrichment adds one muted line under the segment: `worker.prelude.enrichment_truncated` = 「這段 worker 的事件太多，只補充了前 {{n}} 筆」.
+- `PreludeAnchor`'s `preludeVersion` becomes `${pages}:${status}:${enrichmentRevision}`, so a height change from enrichment keeps the reader's place.
+
+Tests (§10.8; each is required):
+- **Attribution fixture:** terminal → worker A → terminal → worker B → current stint C, built from the real `prelude-06GGS8J1…json` shape plus synthetic sdk segments with offsets, and boundaries `b(A) < b(B)`.
+  - Every terminal line maps to none.
+  - A's lines map to A, B's lines map to B.
+  - Lines before the first marker map to none.
+  - Two consecutive worker stints with no marker between them (worker → worker rebuild) split exactly at `b(B)`.
+- **Mutation guard:** a test that fails if the comparison becomes `<` or picks the smallest boundary. Assert a line whose `offset === b(B)` maps to B.
+- **Enrichment:**
+  - an N2 `tool_result` with `status:'error', duration_ms: 1988` overrides the transcript-derived `done`;
+  - a task event nests under its `tool_use_id`;
+  - 5,001 events → `truncated` and exactly 5,000 applied.
+- **Lazy + cache:** two segments of one stint → one events fetch; a remount of the section within the same pane → no new fetch.
+- **Failure:** the events fetch rejects → the segment renders with transcript-derived status, and no toast.
+- **Unavailable stint list** → no attribution; identical to today's render (snapshot of testids).
+
+Commits:
+- `feat(spa): attribute earlier worker segments to their stints`
+- `feat(spa): enrich earlier worker segments with tool status and subagent tasks`
+
+**PR P3b-2a:** Tasks 29–31. Then codex R1 + R2.
+
+---
+
+### Task 32: Per-turn cost footers for earlier worker segments (§10.4 `result` frames)
+
+**Files:**
+- Modify: `spa/src/lib/nex/stint-enrichment.ts` (`costByMessageId: ReadonlyMap<string, TurnCost>`)
+- Create: `spa/src/components/room/prelude/PreludeCostFooter.tsx`
+- Modify: `PreludeSection.tsx` (room: a footer after the last item of a prompt span whose assistant `message.id`s map to a TurnCost; chat: the `ChatTurnBody` `footer` prop)
+- Test: `stint-enrichment.test.ts`, `PreludeSection.test.tsx`
+
+**Interfaces / rules:**
+- Walk the stint's reduced `messages` in order. Each top-level `result` closes a turn: the assistant `message.id`s seen since the previous top-level `result` map to that turn's `TurnCost`, which is computed with the same rules as `costSummary` (`cost-summary.ts:287`). Use `turn.index` and the same F4 cumulative correction (`prior-history.ts`).
+- A prompt span in the prelude shows the footer of the TurnCost that any of its assistant lines' `message.id` maps to. With no match there is no footer.
+- Footer text reuses the CostPanel row formatter (`CostPanel.tsx` `TurnRow`'s fields: usd, tokens out, duration), styled as the existing `TurnFooter`. It sits under the span, `data-testid="prelude-cost-footer"`.
+- Tests:
+  - two turns map to two footers under the right spans;
+  - an assistant `message.id` absent from the events gets no footer;
+  - turn 1 of a resumed stint applies the prior-history correction;
+  - mutation: mapping by position instead of `message.id` fails the test, with reordered fixture turns.
+
+Commit: `feat(spa): per-turn cost footers on earlier worker segments`.
+
+### Task 33: Attachment thumbnails with the count guard; budget line polish
+
+**Files:**
+- Modify: `spa/src/lib/nex/stint-enrichment.ts` (`attachmentsByPrompt: readonly (readonly AttachmentMeta[])[]`: the k-th entry is the k-th `delegated` / `message_accepted` that carried attachments)
+- Modify: `PreludeSection.tsx` (a nested `AttachmentSourceContext` with the stint's execution id; drop the `omitted` image placeholders of a prompt line that gets thumbnails)
+- Test: `stint-enrichment.test.ts`, `PreludeSection.test.tsx`
+
+**Rules:**
+- In a segment, the human prompt lines (`isOpeningLine`, `turns.ts:33-39`) that carry `omitted` image blocks are counted, in order.
+- Thumbnails are used **only when** that count equals `attachmentsByPrompt.length` for the stint. The k-th prompt then gets the k-th list.
+- Any mismatch: placeholders stay, for the whole segment.
+- Thumbnails fetch from the stint's execution id (`fetchAttachment(host, stintId, sha256, route)`).
+- Tests:
+  - an exact count → thumbnails with the stint id;
+  - off by one → all placeholders;
+  - a segment with no images → nothing changes;
+  - mutation: removing the count guard fails the mismatch test.
+
+Commit: `feat(spa): attachment thumbnails on earlier worker segments when unambiguous`.
+
+**PR P3b-2b:** Tasks 32–33. Then codex R1 + R2.
+
+### P3 review focus
+
+1. **A stint whose boundary equals a line's offset** (a rebuild right after a worker line). Expected: the line belongs to the later stint, because the rule is the largest `b(e) ≤ o`. Owner: Task 31, the mutation guard.
+2. **The current stint is listed among the stints.** Expected: it is never used for attribution; its own content is the event log. Owner: Task 30 (`orderStints` excludes `currentId`).
+3. **Two panes on the same conversation.** Expected: each pane fetches its stint boundaries and enrichment at most once (two panes: at most twice), and no request storm. Owner: Tasks 30 and 31, cache tests.
+4. **A pre-label execution created before D17.** Expected: on a v0.16 host it is simply not listed (a plain segment); on v0.17 the session filter finds it. Owner: Task 30, the label versus filter test.
+5. **A huge earlier stint.** Expected: enrichment stops at 5,000 events with the muted line, and the pane stays responsive. Owner: Task 31, the budget test.
+
+---
+
+## P4 — outline (unchanged; separate plan when started)
+
+The daemon scans transcript metadata (`ai-title`, cwd, last activity) per host using the embedded nexen `prelude` package and the hook's `transcript_path` (spec §10.7). A Dormant tab goes on the Task 25 registry, with search.
 
 ## Self-review record
 
