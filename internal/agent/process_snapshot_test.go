@@ -591,6 +591,142 @@ func TestProcessSnapshot_UnreadableProcArgs_FallsBackToPS(t *testing.T) {
 	}
 }
 
+// stageProcTable swaps the table read for one that fails with fail(n) on the
+// nth read, reading the real table whenever fail returns nil, and counts the
+// reads.
+func stageProcTable(t *testing.T, fail func(n int64) error) *atomic.Int64 {
+	t.Helper()
+	var reads atomic.Int64
+	orig := kernProcAll
+	kernProcAll = func() ([]byte, error) {
+		if err := fail(reads.Add(1)); err != nil {
+			return nil, err
+		}
+		return orig()
+	}
+	t.Cleanup(func() { kernProcAll = orig })
+	return &reads
+}
+
+// snapshotWithin takes a snapshot, failing the test if it has not returned
+// by the deadline: a read loop that never gives up must show up as a failure,
+// not as a test binary that hangs.
+func snapshotWithin(t *testing.T, d time.Duration) (*ProcessSnapshot, error) {
+	t.Helper()
+	type result struct {
+		snap *ProcessSnapshot
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		snap, err := SnapshotProcesses(context.Background())
+		done <- result{snap, err}
+	}()
+	select {
+	case r := <-done:
+		return r.snap, r.err
+	case <-time.After(d):
+		t.Fatalf("SnapshotProcesses did not return within %v", d)
+		return nil, nil
+	}
+}
+
+// A table that grew between the size query and the read (ENOMEM) is read
+// again, a bounded number of times; any other error ends the read at once.
+func TestProcessSnapshot_ProcTableRetries(t *testing.T) {
+	t.Run("grows twice, then reads", func(t *testing.T) {
+		reads := stageProcTable(t, func(n int64) error {
+			if n <= 2 {
+				return unix.ENOMEM
+			}
+			return nil
+		})
+		snap, err := snapshotWithin(t, 5*time.Second)
+		if err != nil {
+			t.Fatalf("SnapshotProcesses: %v", err)
+		}
+		if got := reads.Load(); got != 3 {
+			t.Fatalf("read the table %d times, want 3", got)
+		}
+		if !snap.Alive(os.Getpid()) {
+			t.Fatal("snapshot from the third read does not hold this process")
+		}
+	})
+
+	t.Run("keeps growing", func(t *testing.T) {
+		reads := stageProcTable(t, func(int64) error { return unix.ENOMEM })
+		_, err := snapshotWithin(t, 5*time.Second)
+		if !errors.Is(err, unix.ENOMEM) {
+			t.Fatalf("err = %v, want ENOMEM once the reads run out", err)
+		}
+		if got := reads.Load(); got != procTableAttempts {
+			t.Fatalf("read the table %d times, want %d", got, procTableAttempts)
+		}
+	})
+
+	t.Run("other error", func(t *testing.T) {
+		reads := stageProcTable(t, func(int64) error { return unix.EPERM })
+		_, err := snapshotWithin(t, 5*time.Second)
+		if !errors.Is(err, unix.EPERM) {
+			t.Fatalf("err = %v, want EPERM", err)
+		}
+		if got := reads.Load(); got != 1 {
+			t.Fatalf("read the table %d times, want 1 (only ENOMEM is retried)", got)
+		}
+	})
+}
+
+func TestParseKinfoProcs_NotWholeRecords(t *testing.T) {
+	for _, n := range []int{1, unix.SizeofKinfoProc - 1, unix.SizeofKinfoProc + 1, 2*unix.SizeofKinfoProc + 7} {
+		if got, err := parseKinfoProcs(make([]byte, n)); err == nil {
+			t.Errorf("parseKinfoProcs(%d bytes) = %d records, nil; want an error", n, len(got))
+		}
+	}
+}
+
+// The parser reads four fields at offsets of its own. x/sys reads the same
+// table into its struct; both must agree on every process present in both
+// reads (processes come and go between them).
+func TestParseKinfoProcs_AgreesWithXSys(t *testing.T) {
+	buf, err := unix.SysctlRaw("kern.proc.all")
+	if err != nil {
+		t.Fatalf("SysctlRaw: %v", err)
+	}
+	kps, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	if err != nil {
+		t.Fatalf("SysctlKinfoProcSlice: %v", err)
+	}
+	got, err := parseKinfoProcs(buf)
+	if err != nil {
+		t.Fatalf("parseKinfoProcs: %v", err)
+	}
+	if want := len(buf) / unix.SizeofKinfoProc; len(got) != want {
+		t.Fatalf("parsed %d records out of %d bytes, want %d", len(got), len(buf), want)
+	}
+
+	want := make(map[int]*unix.KinfoProc, len(kps))
+	for i := range kps {
+		want[int(kps[i].Proc.P_pid)] = &kps[i]
+	}
+	compared := 0
+	sawSelf := false
+	for _, p := range got {
+		k, ok := want[p.pid]
+		if !ok {
+			continue
+		}
+		compared++
+		sawSelf = sawSelf || p.pid == os.Getpid()
+		if p.ppid != int(k.Eproc.Ppid) || p.sec != k.Proc.P_starttime.Sec || p.usec != k.Proc.P_starttime.Usec {
+			t.Errorf("pid %d: parsed ppid %d start %d.%06d, x/sys has ppid %d start %d.%06d",
+				p.pid, p.ppid, p.sec, p.usec, k.Eproc.Ppid, k.Proc.P_starttime.Sec, k.Proc.P_starttime.Usec)
+		}
+	}
+	if !sawSelf {
+		t.Fatalf("this process (pid %d) is not among the %d compared", os.Getpid(), compared)
+	}
+}
+
 func TestProcessSnapshot_ForkCount_PerPIDReaderIsCounted(t *testing.T) {
 	forks := countPSForks(t)
 	if _, err := ReadProcessInfo(os.Getpid()); err != nil {
