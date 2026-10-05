@@ -354,3 +354,9 @@ func (m *Module) archiveExecution(parent context.Context, req execution.ArchiveR
 	defer cancel()
 	return m.sys.service.Archive(ctx, req)
 }
+
+func (m *Module) terminateExecution(parent context.Context, req execution.TerminateRequest) error {
+	ctx, cancel := detachedContext(parent, m.engineTerminateTimeout)
+	defer cancel()
+	return m.sys.service.Terminate(ctx, req)
+}

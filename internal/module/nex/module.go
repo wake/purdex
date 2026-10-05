@@ -111,6 +111,7 @@ type Module struct {
 	delegateTimeout        time.Duration // Service.Delegate
 	engineOpTimeout        time.Duration // Store.Get, AcquireLease, Archive
 	engineInterruptTimeout time.Duration // Service.Interrupt; > Nexen's own interruptTimeout so its verdict wins
+	engineTerminateTimeout time.Duration // Service.Terminate (retries interrupt up to 3 times)
 	leaseCleanupTimeout    time.Duration // ReleaseLease, under its own fresh context
 
 	assemble assembleFn        // default realAssemble; test seam
@@ -310,6 +311,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	// more specific pattern than RoutePrefix+"/", so it wins either way.
 	mux.HandleFunc("POST "+RoutePrefix+"/executions/{id}/take-to-terminal", m.handleTakeToTerminal)
 	mux.HandleFunc("POST "+RoutePrefix+"/executions/{id}/uploads", m.handleExecutionUpload)
+	mux.HandleFunc("POST "+RoutePrefix+"/executions/{id}/exit", m.handleExitWorker)
 	if m.initErr != nil {
 		mux.Handle(RoutePrefix+"/", unavailableHandler(m.initErr))
 		return
