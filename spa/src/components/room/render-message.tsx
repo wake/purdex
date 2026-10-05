@@ -6,6 +6,8 @@ import type { StreamMessage } from '../../lib/nex/message-types'
 import type { ToolActivity } from '../../lib/nex/tool-activity'
 import type { OperationIndex } from '../../lib/nex/operations'
 import type { WorkerTask } from '../../lib/nex/types'
+import type { MessageIdOf } from '../../lib/nex/message-keys'
+import { rowKey } from '../../lib/nex/message-keys'
 import MessageRow from './MessageRow'
 
 /** What every message of one transcript shares. */
@@ -21,9 +23,14 @@ export interface RenderCtx {
   depth: number
   /** R4 T3.3: subagent task rows by their Task call's tool_use_id (`subagentTasksByToolUse`). */
   subagentTasks?: ReadonlyMap<string, WorkerTask>
+  /**
+   * How this list names its messages in keys (`lib/nex/message-keys`). Absent
+   * = by position (the live list). The prelude passes its stable ids.
+   */
+  idOf?: MessageIdOf
 }
 
 /** The message at position `i` of `ctx.messages`. */
 export function renderMessage(msg: StreamMessage, i: number, ctx: RenderCtx) {
-  return <MessageRow key={`${ctx.keyPrefix}-${i}`} msg={msg} i={i} ctx={ctx} />
+  return <MessageRow key={rowKey(ctx, i)} msg={msg} i={i} ctx={ctx} />
 }

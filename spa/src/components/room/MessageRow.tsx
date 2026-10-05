@@ -10,7 +10,8 @@ import {
   type UserMessage,
 } from '../../lib/nex/message-types'
 import { toToolCallActivity } from '../../lib/nex/tool-activity'
-import { blockKey, toolResultText } from '../../lib/nex/operations'
+import { toolResultText } from '../../lib/nex/operations'
+import { keyAt, rowKey } from '../../lib/nex/message-keys'
 import { INTERRUPT_TEXT } from '../../lib/nex/turns'
 import { searchUnitId } from '../../lib/nex/transcript-search'
 import OperationBlock from './OperationBlock'
@@ -76,7 +77,7 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
     // Spec §4.5: a call whose subagent left frames on this list carries
     // them on a nested rail. Looked up by this call's position, not its
     // id: two calls reusing an id each own only their own frames.
-    const children = index.childrenByParent.get(blockKey(i, j))
+    const children = index.childrenByParent.get(keyAt(ctx, i, j))
     const subagentType = (block.input as { subagent_type?: unknown } | undefined)?.subagent_type
     const inner: RenderCtx = { ...ctx, depth: ctx.depth + 1 }
     // R4 T3.3: this call's subagent task row (nexen v0.13), by its id — a
@@ -90,14 +91,14 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
           ? subagentType
           : (block.name || t('execution.tool.unknown'))}
         toolCount={countToolCalls(children, ctx.messages)}
-        foldKey={blockKey(i, j)}
+        foldKey={keyAt(ctx, i, j)}
         depth={inner.depth}
         // Direct children only: a nested subagent's frames are listed
         // under its own Task, which draws them one rail further in.
         // Keys and fold keys stay positional, so they cannot collide
         // with the top level, which skips exactly these indexes.
         renderChildren={() => children.map((ci) => (
-          <MessageRow key={`${ctx.keyPrefix}-${ci}`} msg={ctx.messages[ci]} i={ci} ctx={inner} />
+          <MessageRow key={rowKey(ctx, ci)} msg={ctx.messages[ci]} i={ci} ctx={inner} />
         ))}
       />
     ) : undefined
@@ -108,10 +109,10 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
         activity={entry ? toToolCallActivity(entry, now ?? 0) : undefined}
         summaryEntry={entry}
         facts={entry}
-        result={index.resultForCall.get(blockKey(i, j)) ?? null}
-        foldKey={blockKey(i, j)}
+        result={index.resultForCall.get(keyAt(ctx, i, j)) ?? null}
+        foldKey={keyAt(ctx, i, j)}
         subagent={subagent}
-        searchKey={blockKey(i, j)}
+        searchKey={keyAt(ctx, i, j)}
         // No children to fold (backgrounded, or frames not here yet): the
         // close-out goes on the call's own header. A call still running as a
         // tool already shows its own clock there, so no second one.
@@ -125,7 +126,7 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
   if (msg.type === 'user' && block.type === 'tool_result') {
     // Its call already showed it (spec §4.2) — drawing it again
     // would be the second card the operation block replaces.
-    if (index.consumedResults.has(blockKey(i, j))) return null
+    if (index.consumedResults.has(keyAt(ctx, i, j))) return null
     // An orphan: no call on this list claimed it, so it carries the
     // whole operation on its own. P-B3 R4: the N2 entry for this
     // result's tool_use_id, by own key (ids are untrusted strings).
@@ -138,8 +139,8 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
         input={{}}
         facts={facts}
         result={{ text: toolResultText(block.content), isError: block.is_error ?? false }}
-        foldKey={blockKey(i, j)}
-        searchKey={blockKey(i, j)}
+        foldKey={keyAt(ctx, i, j)}
+        searchKey={keyAt(ctx, i, j)}
       />
     )
   }
@@ -161,11 +162,11 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
           // Spec §4.3: a thought with no text draws nothing (RoomThinking
           // returns null for it too; this keeps the list free of the slot).
           if (block.type === 'thinking' && block.thinking?.trim()) {
-            return <RoomThinking key={j} content={block.thinking} foldKey={blockKey(i, j)}
-              searchUnit={searchUnitId(blockKey(i, j), 'thinking')} />
+            return <RoomThinking key={j} content={block.thinking} foldKey={keyAt(ctx, i, j)}
+              searchUnit={searchUnitId(keyAt(ctx, i, j), 'thinking')} />
           }
           if (block.type === 'text' && block.text) {
-            return <RoomProse key={j} content={block.text} searchUnit={searchUnitId(blockKey(i, j), 'text')} />
+            return <RoomProse key={j} content={block.text} searchUnit={searchUnitId(keyAt(ctx, i, j), 'text')} />
           }
           if (block.type === 'tool_use') return <OperationAt key={j} msg={msg} i={i} j={j} ctx={ctx} />
           return null
@@ -205,7 +206,7 @@ export default function MessageRow({ msg, i, ctx }: MessageRowProps) {
 
             // The prompt an agent wrote for its subagent: not the human's
             // line, whatever its first character is.
-            const anchor = searchUnitId(blockKey(i, j), 'text')
+            const anchor = searchUnitId(keyAt(ctx, i, j), 'text')
             if (fromSubagent) return <RoomSubagentLine key={j} text={block.text} searchUnit={anchor} />
 
             // A slash command: the human's line, told apart by its icon and face.

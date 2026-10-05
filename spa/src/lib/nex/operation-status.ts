@@ -68,6 +68,7 @@ export function classifyTurnOperations(
   turn: { start: number; end: number },
   index: OperationIndex,
   tools: Record<string, ToolActivity> | undefined,
+  idOf?: (m: number) => string,
 ): TurnOperation[] {
   const ops: TurnOperation[] = []
   const end = Math.min(turn.end, messages.length)
@@ -76,7 +77,7 @@ export function classifyTurnOperations(
     const msg = messages[mi]
     if (msg.type !== 'assistant' && msg.type !== 'user') continue
     blocksOf(msg).forEach((block, bi) => {
-      const key = blockKey(mi, bi)
+      const key = blockKey(idOf ? idOf(mi) : mi, bi)
       let facts: ToolResultFacts | undefined
       let status: OpStatus
       if (msg.type === 'assistant' && block.type === 'tool_use') {
