@@ -10,6 +10,7 @@ import type { ContentBlock, StreamMessage } from '../../lib/nex/message-types'
 import type { PartialAssembly, PartialBlock } from '../../lib/nex/partial'
 import type { ToolActivity } from '../../lib/nex/tool-activity'
 import type { TurnMeta } from '../../lib/nex/event-reducer'
+import { sanitizePreludePage } from '../../lib/nex/prelude-wire'
 
 const assistantText: StreamMessage = { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Hi there' }], stop_reason: null } } as StreamMessage
 
@@ -671,5 +672,27 @@ describe('RoomTranscript', () => {
       }))
       expect(screen.queryByTestId('turn-footer')).toBeNull()
     })
+  })
+})
+
+describe('RoomTranscript with sanitized hostile prelude blocks (spec §5.2)', () => {
+  it('does not throw', () => {
+    const hostile = [
+      { type: 'tool_use', id: 5, name: { x: 1 }, input: {} },
+      { type: 'tool_result', tool_use_id: { a: 1 }, is_error: 'yes', content: [{ type: 'text', text: 5 }, 'x', { type: 'image', source: { type: 'omitted', media_type: {}, bytes: '9' } }] },
+      { type: 'image', source: { type: 3 } },
+      { type: 'weird', a: { b: 1 } },
+      { type: 'text', text: { x: 1 }, extra: {} },
+    ]
+    const page = sanitizePreludePage({
+      state: 'ok', prev_cursor: null,
+      items: [
+        { pos: '1', kind: 'assistant', at: 1, payload: { type: 'assistant', message: { role: 'assistant', content: hostile } } },
+        { pos: '2', kind: 'user', at: 1, payload: { type: 'user', message: { role: 'user', content: hostile } } },
+      ],
+    })!
+    const msgs = page.items.flatMap((i) => (i.kind === 'assistant' || i.kind === 'user' ? [i.msg] : []))
+    expect(msgs).toHaveLength(2)
+    expect(() => render(<RoomTranscript messages={msgs} keyPrefix="k" showThinking={false} showEmptyHint={false} />)).not.toThrow()
   })
 })

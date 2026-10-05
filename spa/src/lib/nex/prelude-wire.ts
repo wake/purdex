@@ -28,24 +28,85 @@ function rec(v: unknown): Record<string, unknown> | null {
   return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null
 }
 
+const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+const nonNegInt = (v: unknown): number | undefined => (Number.isSafeInteger(v) && (v as number) >= 0 ? (v as number) : undefined)
+
+/** `{type, media_type?, bytes?}`; null when `type` is not a string. */
+function cleanSource(raw: unknown): Record<string, unknown> | null {
+  const s = rec(raw)
+  if (!s || typeof s.type !== 'string') return null
+  const out: Record<string, unknown> = { type: s.type }
+  const mt = str(s.media_type)
+  if (mt !== undefined) out.media_type = mt
+  const bytes = nonNegInt(s.bytes)
+  if (bytes !== undefined) out.bytes = bytes
+  return out
+}
+
+/** An element of `tool_result.content` (spec §5.2): text keeps `text`, media follows the media rule, the rest keep `{type}`. */
+function cleanNested(raw: unknown): Record<string, unknown> | null {
+  const e = rec(raw)
+  if (!e || typeof e.type !== 'string') return null
+  if (e.type === 'text') {
+    const t = str(e.text)
+    return t !== undefined ? { type: 'text', text: t } : { type: 'text' }
+  }
+  if (e.type === 'image' || e.type === 'document') {
+    const source = cleanSource(e.source)
+    return source ? { type: e.type, source } : null
+  }
+  return { type: e.type }
+}
+
 /**
- * One content block, cleaned so no renderer can throw on it (spec §5.2):
- * null drops it. Only the fields the room reads are checked; anything else
- * on the block passes through untouched.
+ * One content block, rebuilt from known fields only so no renderer can throw
+ * on it (spec §5.2): null drops it. Nothing is spread from the wire; an
+ * unknown type keeps `{type}` alone (renderers return null for it).
  */
 function cleanBlock(raw: unknown): Record<string, unknown> | null {
   const b = rec(raw)
   if (!b || typeof b.type !== 'string') return null
-  const out: Record<string, unknown> = { ...b }
-  for (const k of ['text', 'thinking'] as const) if (k in out && typeof out[k] !== 'string') delete out[k]
-  if (out.type === 'tool_use' && rec(out.input) === null) out.input = {}
-  if (out.type === 'tool_result' && 'content' in out) {
-    const c = out.content
-    if (!(typeof c === 'string' || (Array.isArray(c) && c.every((x) => rec(x) !== null)))) out.content = ''
+  const out: Record<string, unknown> = { type: b.type }
+  switch (b.type) {
+    case 'text': {
+      const t = str(b.text)
+      if (t !== undefined) out.text = t
+      break
+    }
+    case 'thinking': {
+      const t = str(b.thinking)
+      if (t !== undefined) out.thinking = t
+      break
+    }
+    case 'tool_use': {
+      const id = str(b.id)
+      if (id !== undefined) out.id = id
+      const name = str(b.name)
+      if (name !== undefined) out.name = name
+      out.input = rec(b.input) ?? {}
+      break
+    }
+    case 'tool_result': {
+      const id = str(b.tool_use_id)
+      if (id !== undefined) out.tool_use_id = id
+      const c = b.content
+      out.content = typeof c === 'string' ? c
+        : Array.isArray(c) ? c.map(cleanNested).filter((x): x is Record<string, unknown> => x !== null)
+        : ''
+      if (typeof b.is_error === 'boolean') out.is_error = b.is_error
+      break
+    }
+    case 'image':
+    case 'document': {
+      const source = cleanSource(b.source)
+      if (!source) return null
+      out.source = source
+      break
+    }
   }
-  if ((out.type === 'image' || out.type === 'document') && rec(out.source) === null) return null
-  if ('truncated' in out && typeof out.truncated !== 'boolean') delete out.truncated
-  if ('total_bytes' in out && !(Number.isSafeInteger(out.total_bytes) && (out.total_bytes as number) >= 0)) delete out.total_bytes
+  if (typeof b.truncated === 'boolean') out.truncated = b.truncated
+  const tb = nonNegInt(b.total_bytes)
+  if (tb !== undefined) out.total_bytes = tb
   return out
 }
 

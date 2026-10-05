@@ -123,6 +123,44 @@ describe('sanitizePreludePage', () => {
   })
 })
 
+const contentOf = (page: ReturnType<typeof sanitizePreludePage>): unknown[] => {
+  const it0 = page!.items[0]
+  if (it0.kind !== 'assistant' && it0.kind !== 'user') throw new Error('kind')
+  return (it0.msg as unknown as { message: { content: unknown[] } }).message.content
+}
+const blocksPage = (content: unknown[]) => sanitizePreludePage({
+  state: 'ok', prev_cursor: null,
+  items: [{ pos: '1', kind: 'assistant', at: 1, payload: { type: 'assistant', message: { role: 'assistant', content } } }],
+})
+
+describe('closed per-type block cleaning (spec §5.2)', () => {
+  it('rebuilds tool_use from known fields only', () => {
+    expect(contentOf(blocksPage([{ type: 'tool_use', id: 5, name: { x: 1 }, input: [1], extra: 'x' }]))).toEqual([{ type: 'tool_use', input: {} }])
+    expect(contentOf(blocksPage([{ type: 'tool_use', id: 't', name: 'Bash', input: { a: 1 } }]))).toEqual([{ type: 'tool_use', id: 't', name: 'Bash', input: { a: 1 } }])
+  })
+
+  it('rebuilds tool_result, cleaning nested content with the nested rule', () => {
+    expect(contentOf(blocksPage([{
+      type: 'tool_result', tool_use_id: { a: 1 }, is_error: 'yes',
+      content: [{ type: 'text', text: 5 }, 'x', { type: 'image', source: { type: 'omitted', media_type: {}, bytes: '9' } }],
+    }]))).toEqual([{
+      type: 'tool_result', content: [{ type: 'text' }, { type: 'image', source: { type: 'omitted' } }],
+    }])
+    expect(contentOf(blocksPage([{ type: 'tool_result', tool_use_id: 't', is_error: true, content: 'out' }])))
+      .toEqual([{ type: 'tool_result', tool_use_id: 't', is_error: true, content: 'out' }])
+  })
+
+  it('rebuilds image sources and drops an image whose source.type is not a string', () => {
+    expect(contentOf(blocksPage([{ type: 'image', source: { type: 3 } }, { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 48213, junk: 1 } }])))
+      .toEqual([{ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 48213 } }])
+  })
+
+  it('keeps only {type} for an unknown type, and drops unknown fields on a text block', () => {
+    expect(contentOf(blocksPage([{ type: 'weird', a: 1, text: 'x' }, { type: 'text', text: 'ok', extra: 1 }])))
+      .toEqual([{ type: 'weird' }, { type: 'text', text: 'ok' }])
+  })
+})
+
 describe('contract sample (spec §4.3)', () => {
   it('every kind of the hand-written sample page survives the sanitiser unchanged', () => {
     const page = sanitizePreludePage(sample)!
