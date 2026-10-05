@@ -77,7 +77,11 @@ export function useExecutionPrelude(hostId: string, executionId: string): {
   }, [key, fetchOne])
 
   const loadAll = useCallback(async (maxPages = MAX_LOAD_ALL_PAGES) => {
-    for (let i = 0; i < maxPages; i++) {
+    // Only requests this call issued count against maxPages; waiting on
+    // someone else's in-flight page does not. The iteration hard stop keeps
+    // the loop finite regardless.
+    let fetched = 0
+    for (let i = 0; fetched < maxPages && i < maxPages * 2 + 10; i++) {
       const p = useExecutionStore.getState().executions[key]?.prelude
       if (!p || p.done || p.status === 'error' || p.status === 'none' || p.status === 'gone' || p.status === 'idle') return
       if (p.status === 'loading') {
@@ -91,6 +95,7 @@ export function useExecutionPrelude(hostId: string, executionId: string): {
         continue
       }
       if (!(await fetchOne())) return
+      fetched++
     }
     // The cap ended the loop with pages still to come: say so (error + Retry), never stop silently.
     const p = useExecutionStore.getState().executions[key]?.prelude

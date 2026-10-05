@@ -159,6 +159,22 @@ describe('useExecutionPrelude', () => {
     expect(prelude()).toMatchObject({ status: 'error', error: 'prelude: too many pages', done: false })
   })
 
+  it('loadAll(2) started while the first page is in flight: the wait does not use up the quota', async () => {
+    seed()
+    let resolveFirst!: (p: PreludePage) => void
+    fetchExecutionPrelude
+      .mockReturnValueOnce(new Promise((r) => { resolveFirst = r }))
+      .mockResolvedValueOnce(ok('20', 'c1'))
+      .mockResolvedValueOnce(ok('10', null))
+    const { result } = renderHook(() => useExecutionPrelude('h', 'e'))
+    await waitFor(() => expect(fetchExecutionPrelude).toHaveBeenCalledTimes(1))
+    let all!: Promise<void>
+    act(() => { all = result.current.loadAll(2) })
+    await act(async () => { resolveFirst(ok('30', 'c2')) })
+    await act(async () => { await all })
+    expect(prelude()).toMatchObject({ status: 'ok', done: true, error: null })
+  })
+
   it('loadAll started while the first page is in flight waits for it, then pages on without re-requesting it', async () => {
     seed()
     let resolveFirst!: (p: PreludePage) => void
