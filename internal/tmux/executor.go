@@ -8,6 +8,7 @@ import (
 	"log"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -116,6 +117,9 @@ type Executor interface {
 	// path with a deadline, and a tmux server that has stopped answering must
 	// not hold that request open past it. When ctx ends the error wraps
 	// ctx.Err().
+	//
+	// A successful listing is complete: a row that does not parse fails the
+	// whole call, so a pane absent from the answer is a pane that is gone.
 	ListAllPanes(ctx context.Context) ([]PaneLocation, error)
 	PanePID(target string) (string, error)
 	ActivePanePID(target string) (string, error)
@@ -554,22 +558,45 @@ func (r *RealExecutor) ListAllPanes(ctx context.Context) ([]PaneLocation, error)
 		}
 		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
 	}
-	return parsePaneLocations(out), nil
+	panes, err := parsePaneLocations(out)
+	if err != nil {
+		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
+	}
+	return panes, nil
 }
 
-// parsePaneLocations parses list-panes output in listAllPanesFormat. A line
-// counts only with exactly three fields; any other line is skipped rather than
-// half-filled, so no caller is handed a pane with no session or no pid.
-func parsePaneLocations(out []byte) []PaneLocation {
+var panePIDRe = regexp.MustCompile(`^[0-9]+$`)
+
+// maxQuotedRow bounds how much of a bad row an error repeats: enough to
+// recognise it, never a screenful of garbage in a log line.
+const maxQuotedRow = 64
+
+// parsePaneLocations parses list-panes output in listAllPanesFormat. Blank
+// lines are skipped; every other line must be exactly "%N $N N", or the whole
+// listing fails (spec D5). Skipping the line instead would return a listing
+// without that pane, which a caller reads as "the pane is gone" and drops its
+// owner, where the truth is that the listing cannot be trusted.
+func parsePaneLocations(out []byte) ([]PaneLocation, error) {
 	var panes []PaneLocation
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) != 3 {
+		if len(fields) == 0 {
 			continue
+		}
+		if len(fields) != 3 || !tmuxPaneIDRe.MatchString(fields[0]) ||
+			!tmuxSessionIDRe.MatchString(fields[1]) || !panePIDRe.MatchString(fields[2]) {
+			return nil, fmt.Errorf(`malformed row %s, want "%%N $N N"`, quoteRow(line))
 		}
 		panes = append(panes, PaneLocation{PaneID: fields[0], SessionID: fields[1], PanePID: fields[2]})
 	}
-	return panes
+	return panes, nil
+}
+
+func quoteRow(line string) string {
+	if len(line) <= maxQuotedRow {
+		return strconv.Quote(line)
+	}
+	return strconv.Quote(line[:maxQuotedRow]) + "..."
 }
 
 func (r *RealExecutor) PanePID(target string) (string, error) {

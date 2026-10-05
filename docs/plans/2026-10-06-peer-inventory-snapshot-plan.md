@@ -197,12 +197,12 @@ Files:
    - ONE round trip for every pane of the server;
    - the inventory reads it twice per pass, once to enumerate and once to re-confirm membership (spec R2);
    - it takes ctx for the reason `PaneSessionID` does.
-2. Real: `exec.CommandContext(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id} #{session_id} #{pane_pid}")`, parsed by a pure `parsePaneLocations(out []byte)`. Exactly three fields per line, otherwise the line is skipped. The separator is a space: tmux without a UTF-8 locale rewrites TAB in `-F` output to `_` (alpha.340), and none of the three values can contain a space.
+2. Real: `exec.CommandContext(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id} #{session_id} #{pane_pid}")`, parsed by a pure `parsePaneLocations(out []byte) ([]PaneLocation, error)`. Blank lines are skipped; any other line that is not exactly `%N $N N` makes the listing an error (spec D5), because skipping it would turn an untrustworthy listing into a pane that reads as gone. The separator is a space: tmux without a UTF-8 locale rewrites TAB in `-F` output to `_` (alpha.340), and none of the three values can contain a space.
 3. Fake:
    - rows come from `paneSessionIDs`;
    - `PanePID` uses `ActivePanePID`'s lookup (`activePanePIDs`, then `panePIDs`, then `"fake-active-pid"`);
    - sorted by pane id;
-   - `ctx.Err()` first;
+   - `ctx.Err()` first, and again after taking its lock, so a deadline that passes while it waits is honoured as the real bounded read honours it;
    - knob `SetListAllPanesError(err)`.
 4. Tests:
    - parser: good lines, a short line, a blank line, trailing newline;

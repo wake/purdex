@@ -645,6 +645,11 @@ func (f *FakeExecutor) ListAllPanes(ctx context.Context) ([]PaneLocation, error)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// Waiting for the lock is the fake's wait on tmux: a deadline that passed
+	// meanwhile ends the call, as it ends the real executor's bounded read.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if f.listAllPanesErr != nil {
 		return nil, f.listAllPanesErr
 	}
