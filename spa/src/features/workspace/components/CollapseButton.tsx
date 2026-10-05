@@ -1,6 +1,7 @@
 import { SidebarSimple } from '@phosphor-icons/react'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { keepFocus } from '../../../lib/keep-focus'
 
 type Variant = 'header-right' | 'divider' | 'topbar'
 
@@ -58,6 +59,7 @@ export function CollapseButton({ variant = 'header-right' }: Props) {
       aria-label={label}
       aria-pressed={isWide}
       data-variant={variant}
+      onMouseDown={keepFocus}
       onClick={toggle}
       className={`${VARIANT_CLASSES[variant]} transition-colors ${stateClasses(variant, locked, isWide)}`}
     >

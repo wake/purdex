@@ -203,3 +203,28 @@ describe('CollapseButton — topbar variant active state', () => {
     expect(btn.className).toMatch(/\brounded\b/)
   })
 })
+
+// Shell polish spec §4 (rule F): a mouse press on the sidebar toggle — every variant, the title bar's `topbar` included —
+// leaves focus on the pane. jsdom does not focus on mousedown, so `fireEvent.mouseDown(...) === false` proves the button
+// is wired to `keepFocus`; the helper itself is proven in a real browser (spec §5).
+describe('CollapseButton — a mouse press keeps focus', () => {
+  const VARIANTS = ['topbar', 'header-right', 'divider'] as const
+
+  it.each(VARIANTS)('%s: a mouse press keeps focus where it was; the button stays in the tab order', (variant) => {
+    render(<CollapseButton variant={variant} />)
+    const btn = screen.getByRole('button')
+    expect(fireEvent.mouseDown(btn)).toBe(false)
+    expect(btn.tabIndex).toBeGreaterThanOrEqual(0)
+  })
+
+  it.each(VARIANTS)('%s: a press then a click still toggles the activity bar width', (variant) => {
+    render(<CollapseButton variant={variant} />)
+    const btn = screen.getByRole('button')
+    fireEvent.mouseDown(btn)
+    fireEvent.click(btn)
+    expect(useLayoutStore.getState().activityBarWidth).toBe('wide')
+    fireEvent.mouseDown(btn)
+    fireEvent.click(btn)
+    expect(useLayoutStore.getState().activityBarWidth).toBe('narrow')
+  })
+})
