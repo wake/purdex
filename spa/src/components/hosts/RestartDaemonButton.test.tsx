@@ -162,6 +162,33 @@ describe('RestartDaemonButton - a stale count or dialog is cancelled', () => {
     expect(restart).toHaveBeenCalledWith('h2', expect.any(String))
   })
 
+  it('host changes mid-count: the count is dropped at once, the new host can be counted before the old one settles', async () => {
+    const settleOld = pendingCount()
+    const view = render(<RestartDaemonButton hostId="h1" />)
+    fireEvent.click(screen.getByTestId('restart-daemon'))
+    expect(screen.getByTestId('restart-daemon').getAttribute('aria-busy')).toBe('true')
+    view.rerender(<RestartDaemonButton hostId="h2" />)
+    expect(screen.getByTestId('restart-daemon').getAttribute('aria-busy')).toBeNull()
+    vi.mocked(restartLib.countRunningWorkers).mockResolvedValueOnce(0)
+    await act(async () => { fireEvent.click(screen.getByTestId('restart-daemon')) })
+    expect(restartLib.countRunningWorkers).toHaveBeenLastCalledWith('h2')
+    await screen.findByTestId('restart-daemon-confirm-dialog')
+    await settleOld(5)
+    // The late h1 result neither replaced the h2 dialog's count nor opened anything of its own.
+    expect(screen.queryByTestId('restart-daemon-workers')).toBeNull()
+  })
+
+  it('ABA: h1 -> h2 -> h1 mid-count still drops the original count', async () => {
+    const settle = pendingCount()
+    const view = render(<RestartDaemonButton hostId="h1" />)
+    fireEvent.click(screen.getByTestId('restart-daemon'))
+    view.rerender(<RestartDaemonButton hostId="h2" />)
+    view.rerender(<RestartDaemonButton hostId="h1" />)
+    await settle(2)
+    expect(dialog()).toBeNull()
+    expect(screen.getByTestId('restart-daemon').getAttribute('aria-busy')).toBeNull()
+  })
+
   it('host changes while the dialog is open: the dialog is gone and does not come back', async () => {
     const view = await openConfirm(2)
     view.rerender(<RestartDaemonButton hostId="h2" />)
@@ -299,6 +326,16 @@ describe('RestartDaemonButton - onActiveChange', () => {
     view.rerender(<RestartDaemonButton hostId="h2" onActiveChange={onActive} />)
     await settle(2)
     expect(onActive.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('false immediately when the host changes mid-count, before the old count settles', () => {
+    const onActiveChange = vi.fn()
+    pendingCount()
+    const view = render(<RestartDaemonButton hostId="h1" onActiveChange={onActiveChange} />)
+    fireEvent.click(screen.getByTestId('restart-daemon'))
+    expect(onActiveChange.mock.calls).toEqual([[true]])
+    view.rerender(<RestartDaemonButton hostId="h2" onActiveChange={onActiveChange} />)
+    expect(onActiveChange.mock.calls).toEqual([[true], [false]])
   })
 
   it('false when a stale dialog is closed', async () => {

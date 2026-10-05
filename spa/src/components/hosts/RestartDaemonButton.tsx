@@ -45,17 +45,26 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
   const restarting = useDaemonRestartStore((s) => s.restarting[hostId] === true)
   const settled = useDaemonRestartStore((s) => s.settled[hostId] ?? 0)
   const restart = useDaemonRestartStore((s) => s.restart)
-  const [counting, setCounting] = useState(false)
+  // The host and generation the pending count was started for; null = no count in flight.
+  const [countingFor, setCountingFor] = useState<{ hostId: string; gen: number } | null>(null)
+  const counting = countingFor !== null
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null)
 
   // An open confirm that no longer fits is cleared during render (the "adjust state when a prop changes" idiom,
   // as useNexHostData's prevStatus), not just hidden — a hidden one would reappear once the restart ends or the lock lifts.
   const stale = confirm !== null && (confirm.hostId !== hostId || confirm.gen !== settled || restarting || disabled)
   if (stale) setConfirm(null)
+  // Likewise a pending count: dropped at once (not when its request settles), so the button and the caller's lock free up now.
+  const staleCount = countingFor !== null && (countingFor.hostId !== hostId || countingFor.gen !== settled || restarting || disabled)
+  if (staleCount) setCountingFor(null)
 
   // The props as of the last commit, for the awaited count and for Confirm (synced before any await resumes).
   const latest = useRef({ hostId, disabled, onActiveChange })
   useLayoutEffect(() => { latest.current = { hostId, disabled, onActiveChange } })
+  // Request token: a count applies its result only if no invalidation happened since its click (also h1 -> h2 -> h1).
+  // Bumped in a layout effect (not during render, which react-hooks/refs forbids), i.e. at commit, before any awaited count resumes.
+  const requestRef = useRef(0)
+  useLayoutEffect(() => { requestRef.current++ }, [hostId, settled, restarting, disabled])
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -72,10 +81,12 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
     const target = hostId
     if (counting || disabled || useDaemonRestartStore.getState().restarting[target]) return
     const gen = useDaemonRestartStore.getState().settled[target] ?? 0
-    setCounting(true)
+    const mine = ++requestRef.current
+    setCountingFor({ hostId: target, gen })
     const workers = await countRunningWorkers(target)
-    if (!mounted.current) return
-    setCounting(false)
+    // Invalidated meanwhile: a newer state owns `countingFor`, touch nothing.
+    if (!mounted.current || requestRef.current !== mine) return
+    setCountingFor(null)
     if (stillValid(target, gen)) setConfirm({ hostId: target, gen, workers })
   }
 
