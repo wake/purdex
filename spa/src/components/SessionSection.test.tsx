@@ -594,6 +594,30 @@ describe('HostSessionSection Sessions / Workers switch', () => {
     expect(mockOnSelect).toHaveBeenCalledWith({ kind: 'execution', executionId: 'E1', host: HOST_ID })
   })
 
+  it('+ → Workers → + leaves the launcher visible on the Sessions view', () => {
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'ok' } } })
+    useNexHostStore.setState({ byHost: { [HOST_ID]: readyEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
+    render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    expect(screen.getByTestId(`launcher-stub-${HOST_ID}`)).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId(`host-view-workers-${HOST_ID}`))
+    expect(screen.queryByTestId(`launcher-stub-${HOST_ID}`)).toBeNull()
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    expect(screen.getByTestId(`host-view-sessions-${HOST_ID}`)).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId(`launcher-stub-${HOST_ID}`)).toBeInTheDocument()
+  })
+
+  it('falls back to Sessions and hides the switch when nex stops being ready', () => {
+    useNexHostStore.setState({ byHost: { [HOST_ID]: readyEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
+    useSessionStore.setState({ sessions: { [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' }] } })
+    render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`host-view-workers-${HOST_ID}`))
+    expect(screen.queryByText('dev')).toBeNull()
+    act(() => { useNexHostStore.setState({ byHost: { [HOST_ID]: disabledEntry } }) })
+    expect(screen.queryByTestId(`host-view-workers-${HOST_ID}`)).toBeNull()
+    expect(screen.getByText('dev')).toBeInTheDocument()
+  })
+
   it('hides the switch when nex is not ready', () => {
     useNexHostStore.setState({ byHost: { [HOST_ID]: disabledEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
     render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)

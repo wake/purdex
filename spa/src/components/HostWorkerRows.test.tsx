@@ -87,6 +87,18 @@ describe('HostWorkerRows', () => {
     expect(screen.getByTestId(`${P}-truncated`)).toBeInTheDocument()
   })
 
+  it('a hidden host renders plain rows: no open handler, no exit', () => {
+    useShownHostsStore.setState({ ids: [] })
+    seed([row({ id: 'E1' })])
+    const onOpen = vi.fn()
+    renderRows(onOpen)
+    const r = screen.getByTestId('executions-row')
+    expect(r.tagName).not.toBe('BUTTON')
+    fireEvent.click(r)
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('executions-row-exit')).toBeNull()
+  })
+
   it('exits an idle row at once', async () => {
     seed([row({ id: 'E1', state: 'idle' })])
     renderRows()

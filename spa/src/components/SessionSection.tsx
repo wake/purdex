@@ -142,11 +142,13 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
           data-testid={`new-session-${hostId}`}
           disabled={createDisabled}
           onClick={() => {
-            const opening = !creating
+            // From the Workers view the launcher is not visible, so "+" always opens it (and shows Sessions).
+            const opening = showWorkers || !creating
             setCreating(opening)
+            setView('sessions')
             // Opening on a collapsed host must reveal the launcher (which is
             // gated behind isExpanded) - expand so the "+" isn't a no-op.
-            if (opening) { setExpanded(true); setView('sessions') }
+            if (opening) setExpanded(true)
           }}
           className={`${nexReady ? '' : 'ml-auto '}p-1 rounded bg-accent text-white hover:bg-accent/80 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed`}
           title={t('hosts.new_session')}
