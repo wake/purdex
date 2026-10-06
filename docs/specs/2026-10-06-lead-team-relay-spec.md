@@ -1,6 +1,6 @@
 # Lead / member / team and context relay — spec
 
-Status: **passed review by `air26/_9iwyyv` on 2026-10-06** (c358cd65 plus the released-prompt note), then revised for U5b. **Paused 2026-10-07 by the user**: no plan, codex review or implementation until the user resumes it.
+Status: **passed review by `air26/_9iwyyv` on 2026-10-06** (c358cd65 plus the released-prompt note), then revised for U5b. Paused 2026-10-07 by the user, **resumed the same day** (handed by `air26/_9iwyyv` to `mlab/_81nu3d`, purdex-b1).
 - Spec writer: `mlab/purdex-4d` (`mlab/_v3o1ps`).
 - Source: the brief `docs/ideas/2026-10-06-lead-team/brief.md` (untracked on mlab's main checkout), with the prototype mod `relay-mod/` and its handoff `handoff-run1.md` beside it.
 - Research page: `https://pages.mlab.host/wake/purdex/context-relay.html`.

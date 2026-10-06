@@ -1,9 +1,6 @@
 # Lead / member / team and context relay — Implementation Plan (v1)
 
-> **DRAFT — paused 2026-10-07 by the user.** Do not execute.
-> - **Written:** the header, PR P0 and PR P1.
-> - **Not written yet:** PR P2a, P2b and P3 (the dialog). Nothing has been through codex review.
-> - **Before resuming:** a large development round was under way on main when this paused. Re-verify every `file:line` here against the then-current main, and rebase this branch first.
+> **Status (2026-10-07):** resumed. Written by `mlab/_v3o1ps` (header, P0, P1), continued by `mlab/_81nu3d` (P2a, P2b, P3). The branch is rebased onto origin/main `fb9fcbd8` (alpha.508); every `file:line` below was re-verified against that commit. Not yet through codex review.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -39,7 +36,7 @@
   - Go: `cd <worktree> && go test ./<pkg>/...`
   - SPA: `cd <worktree>/spa && npx vitest run <path>`, `pnpm run lint`, `pnpm run build`
   - pnpm, never npm.
-- **Commits.** Every commit ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Parallel subagents in one worktree commit with `git commit --only <files>`.
+- **Commits.** Every commit ends with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. Parallel subagents in one worktree commit with `git commit --only <files>`.
 - **Copy.** User-visible strings are Traditional Chinese, with an English twin. SPA strings go in both `spa/src/locales/en.json` and `spa/src/locales/zh-TW.json`; `locale-completeness.test.ts` enforces identical key sets. Daemon and CLI messages are written as the spec quotes them.
 - **Exit codes** (spec §14): 0 ok, 1 runtime/API error, 2 usage error, 10 denied, 11 timed out, 12 cancelled or abandoned, 13 refused by team rules, 14 member did not start or respond, 20 daemon unreachable through the 30 s grace, 21 daemon does not support the route (404).
 - **Restart grace** (spec §9.1):
@@ -110,7 +107,7 @@
   git add PRODUCT.md
   git commit -m "docs(product): vocabulary lead / member / team replaces operator
 
-  Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   ```
 
 ---
@@ -129,7 +126,7 @@ The first refresh has:
 
 **Files:**
 - Create: `internal/module/agent/context_usage.go`
-- Modify: `internal/module/agent/module.go:57-61` (new field next to `statusSnapshots`), `internal/module/agent/module.go:125` (init), `internal/module/agent/handler.go:1278-1281` (record after caching the snapshot)
+- Modify: `internal/module/agent/module.go:57-61` (new field next to `statusSnapshots`), `internal/module/agent/module.go:125` (init), `internal/module/agent/handler.go:1273` (record right before the `resolveSessionCode` early return, so an unresolved tmux name still records usage; the snapshot cache at :1278-1280 stays as is)
 - Test: `internal/module/agent/context_usage_test.go`
 
 **Interfaces:**
@@ -315,6 +312,7 @@ func (m *Module) ContextUsage(sessionID string) (ContextUsage, bool) {
 - In `module.go`, next to `statusSnapshots map[string]statusSnapshot`, add `contextUsage map[string]ContextUsage` and `usageSeq int64`.
 - At line 125, add `contextUsage: make(map[string]ContextUsage),`.
 - In `handler.go`, call `m.recordContextUsage(payload.RawStatus)` **before** the `code := m.resolveSessionCode(...)` early return, so an unresolved tmux name still records usage. The test-nonce branch at 1262-1271 returns before this point, and must keep doing so.
+- The statusline `remove` action (`handler.go:978-980`) clears `statusSnapshots` by session code. It does **not** clear `contextUsage`: that map is keyed by CC session id, which the remove payload does not carry, and the cap bounds it. A dead session's reading simply ages out.
 
 - [ ] **Step 4: Run the tests and verify they pass.**
   - Run: `go test ./internal/module/agent/ -run 'TestContextUsage|TestHandleAgentStatus' -v`
@@ -325,13 +323,13 @@ func (m *Module) ContextUsage(sessionID string) (ContextUsage, bool) {
   git add internal/module/agent/context_usage.go internal/module/agent/context_usage_test.go internal/module/agent/module.go internal/module/agent/handler.go
   git commit -m "feat(daemon): record statusline context usage per CC session id
 
-  Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   ```
 
 ### Task 1.2: Peer rows carry context usage and the session's own cwd
 
 **Files:**
-- Modify: `internal/peers/record.go:19-28` (`AgentInfo`), `:93-117` (`BuildInput`), `:119-146` (`Build`), `:163-258` (`buildSessionRecord`)
+- Modify: `internal/peers/record.go:19-28` (`AgentInfo`), `:93-115` (`BuildInput`), `:119-146` (`Build`; its slice is named `records`), `:163-259` (`buildSessionRecord`; the tmux cwd is the struct-literal field `Cwd: s.Cwd,` at `:173`)
 - Modify: `internal/module/peers/module.go:689-696` and `:760` (`localEnvelope` fills `Contexts`)
 - Test: `internal/peers/record_test.go`, `internal/module/peers/module_test.go`
 
@@ -406,7 +404,7 @@ func TestBuild_OwnerOnlyRowUsesOwnerCwd(t *testing.T) {
 }
 ```
 
-  Check `ccBuildInput` (`record_test.go:1385`) for the exact shape of `Owners` and `Entries` before writing. If `Owners` is keyed differently, adjust the two owner lines to its key. Keep the assertions unchanged.
+  `ccBuildInput` (`record_test.go:1385`) keys `Owners` by session code (`"s1"` = `Sessions[0].Code`), so `in.Owners[in.Sessions[0].Code]` is right; `Entries[0].Cwd` is `/w`, the same as the tmux cwd, and the owner `Cwd` is empty. `encoding/json` and `strings` are already imported there.
 
 - [ ] **Step 2: Run the tests and verify they fail.**
   - Run: `go test ./internal/peers/ -run 'TestBuild_Context|TestBuild_NoContext|TestBuild_SessionRowCwd|TestBuild_OwnerOnlyRowUsesOwnerCwd' -v`
@@ -428,7 +426,7 @@ func TestBuild_OwnerOnlyRowUsesOwnerCwd(t *testing.T) {
       	}
       }
       ```
-      Use the slice variable name `Build` already uses. Note that `out[i].Agent` is a pointer, so this mutates in place.
+      `Build`'s slice is named `records`, so write `records[i]`. `Agent` is a pointer, so this mutates in place. Entry rows are appended before the return, so the loop covers them too.
     - Add a helper:
       ```go
       // preferCwd sets rec.Cwd to the first non-empty candidate: the CC session's
@@ -444,8 +442,8 @@ func TestBuild_OwnerOnlyRowUsesOwnerCwd(t *testing.T) {
       }
       ```
     - Call `preferCwd` in `buildSessionRecord`:
-      - at the two entry-pinned returns (`:231`, `:249`): `preferCwd(&rec, <entry>.Cwd, owner.Cwd)`;
-      - at the owner-only exits (`:220`, `:226`, `:244`, `:254`) and in the non-cc branch (`:186-195`): `preferCwd(&rec, owner.Cwd)`.
+      - at the two entry-pinned returns (`:234`, `:252`; the `rec.Agent = agentInfoFromEntry(...)` lines just above are `:231`, `:249`): `preferCwd(&rec, <entry>.Cwd, owner.Cwd)`;
+      - at the owner-only exits (returns at `:223`, `:229`, `:247`, `:257`, each right after a `rec.Agent = ownerFallbackAgent` line) and in the non-cc branch (`:186-194`): `preferCwd(&rec, owner.Cwd)`.
   - **`internal/module/peers/module.go`, `localEnvelope`:** before the `ipeers.Build(...)` call at `:760`, collect the usage:
     ```go
     var contexts map[string]ipeers.ContextInfo
@@ -470,7 +468,7 @@ func TestBuild_OwnerOnlyRowUsesOwnerCwd(t *testing.T) {
     Then pass `Contexts: contexts` into the `BuildInput`. Use the local variable names `localEnvelope` already uses for the owners map and the registry entries. `m.owners` is nil in tests that build `&Module{}` literally; the type assertion on a nil interface is false, which is safe.
   - Add `var _ agent.ContextUsageReader = (*agent.Module)(nil)` next to the existing assertion at `module.go:453`.
 
-- [ ] **Step 4: Add the module-level test** in `internal/module/peers/module_test.go`. Make a fake owner resolver that also implements `ContextUsage(sid)`: embed the existing `fakeOwners` in a new struct `usageOwners{fakeOwners; usage map[string]agent.ContextUsage}`. Then build the module through `newTestModuleWith(t, fixtureOpts{...})`, using the same fixture as an existing deliverable-cc test. GET `/api/peers` and assert that `peers[0].agent.context.used_percentage == 72` in the JSON.
+- [ ] **Step 4: Add the module-level test** in `internal/module/peers/module_test.go`. Make a fake owner resolver that also implements `ContextUsage(sid)`: embed the existing `fakeOwners` (`internal/module/peers/fakes_test.go:142`; its `ResolveSessionOwner` has a pointer receiver) in a new struct `usageOwners{fakeOwners; usage map[string]agent.ContextUsage}`, and pass it as `&usageOwners{...}` in `fixtureOpts.owners` (`module_test.go:104`, typed `agent.OwnerResolver`). Then build the module through `newTestModuleWith(t, fixtureOpts{...})` (`module_test.go:147`), using the same fixture as the deliverable-cc test near `module_test.go:375`. GET `/api/peers` and assert that `peers[0].agent.context.used_percentage == 72` in the JSON.
 - [ ] **Step 5: Run.**
   - Run: `go test ./internal/peers/ ./internal/module/peers/ -v -run 'Context|Cwd'`, then the full packages: `go test ./internal/peers/ ./internal/module/peers/`
   - Expected: PASS. The JSON-key pin tests (`TestBuild_JSON_EveryRecordHasCoreKeys`, `TestPeerRecord_JSONKeys`) still pass, because `context` is omitempty.
@@ -478,7 +476,7 @@ func TestBuild_OwnerOnlyRowUsesOwnerCwd(t *testing.T) {
   ```bash
   git commit -m "feat(daemon): peer rows carry context usage and the session's own cwd
 
-  Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- internal/peers/record.go internal/peers/record_test.go internal/module/peers/module.go internal/module/peers/module_test.go
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -- internal/peers/record.go internal/peers/record_test.go internal/module/peers/module.go internal/module/peers/module_test.go
   ```
 
 ### Task 1.3: `pdx peers` gains a CTX column
@@ -493,7 +491,8 @@ func TestBuild_OwnerOnlyRowUsesOwnerCwd(t *testing.T) {
   - In `peersTableFixture()`, give the row `sess1` (cc, working) `Context: &peers.ContextInfo{UsedPercentage: ptr(72.4), Window: 1000000}`, and give `sess2` (codex) none. Add `func ptr(f float64) *float64 { return &f }` in the test file if absent.
   - Update `wantPeersTable`. The header becomes `TITLE  ADDRESS  AGENT  STATUS  CTX  DELIVERABLE  TMUX  CWD`, with tabwriter alignment. Rows show `72%` for `sess1` and `-` for the others.
   - Regenerate the expected string by running the test once, then **check every column by eye** against the fixture before pasting it.
-  - Do the same for `peersAllTableFixture()` and `wantPeersAllTable`: give one cc row a context, put CTX after STATUS, and keep the HOST, TITLE, ADDRESS order test at ~`:827` passing.
+  - Do the same for `peersAllTableFixture()` and `wantPeersAllTable`: give one cc row a context, put CTX after STATUS, and keep `TestFormatPeersAllTable_HostThenTitleThenAddress` (`:815`, assertion `:829`) passing.
+  - **Two column-pin tests break on purpose and must be updated in the same commit:** `TestFormatPeersTable_V4Columns` (`peers_test.go:1510`, `wantCols` at `:1515`) and `TestFormatPeersAllTable_V4Columns` (`:1603`, `wantCols` at `:1609`) list the exact header columns; insert `CTX` after `STATUS` in both `wantCols`. `TestFormatPeersTable_TmuxColumn` (`:1557`) counts from the right and is unaffected.
   - Add:
     ```go
     func TestCtxField(t *testing.T) {
@@ -536,7 +535,7 @@ func TestBuild_OwnerOnlyRowUsesOwnerCwd(t *testing.T) {
   ```bash
   git commit -m "feat(cli): pdx peers shows each session's context usage
 
-  Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- cmd/pdx/peers.go cmd/pdx/peers_test.go
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -- cmd/pdx/peers.go cmd/pdx/peers_test.go
   ```
 
 ### Task 1.4: The peer_not_found hint stops promising a ref never changes (spec M3)
@@ -554,7 +553,7 @@ func TestBuild_OwnerOnlyRowUsesOwnerCwd(t *testing.T) {
   	t.Errorf("hint must say what a ref survives: %q", detail)
   }
   ```
-  Use the variable that test already uses for the response detail.
+  The response detail variable in that test is `ae.Detail`.
 - [ ] **Step 2: Run and see FAIL.**
   - Run: `go test ./internal/module/peers/ -run TestSend_PeerNotFoundTeachesTheV4AddressForms -v`
 - [ ] **Step 3: Implement.** In `peerNotFoundHint`, replace `which never changes` with `which survives renames (a manual /clear starts a new ref)`. Leave the long history comment above it as is, and add one line: `// 2026-10-06: a ref changes on /clear (lead-team-relay spec M3).`
@@ -565,7 +564,7 @@ func TestBuild_OwnerOnlyRowUsesOwnerCwd(t *testing.T) {
   ```bash
   git commit -m "fix(daemon): peer_not_found hint no longer claims a ref never changes
 
-  Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- internal/module/peers/send.go internal/module/peers/send_test.go
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -- internal/module/peers/send.go internal/module/peers/send_test.go
   ```
 
   Spec §8.4's "and relays" wording waits for P5a, which is when relays exist.
