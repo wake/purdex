@@ -197,7 +197,11 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
     exitInFlight.current = true
     setExitBusy(true)
     try {
-      await exitWorker({ hostId, executionId, leaseId: useExecutionStore.getState().executions[key]?.lease?.leaseId, forgetLease: lease.forget })
+      const result = await exitWorker({ hostId, executionId, leaseId: useExecutionStore.getState().executions[key]?.lease?.leaseId, forgetLease: lease.forget })
+      // Patch the summary at once from the result (the SSE confirms later): no longer live,
+      // so exit stays disabled and the ended handling takes over.
+      const cur = useExecutionStore.getState().executions[key]?.summary
+      if (cur) useExecutionStore.getState().setSummary(hostId, executionId, { ...cur, state: result.state, archived: result.archived })
     } catch (err) {
       useUndoToast.getState().show(exitErrorMessage(err, t))
     } finally {
@@ -216,7 +220,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // the daemon re-verifies (#1171), and the SPA refuses to start the race.
   const writeInFlight = st.pendingSend || actionPending
   const onTakeBack = useCallback(() => {
-    if (takeBackInFlight.current || writeInFlight) return
+    if (takeBackInFlight.current || exitInFlight.current || writeInFlight) return
     if (useExecutionStore.getState().executions[key]?.summary?.state === 'running') setConfirmTakeBack(true)
     else void runTakeBack()
   }, [key, runTakeBack, writeInFlight])
@@ -233,7 +237,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // through a ref, so a re-render that leaves canTake / busy alone still runs
   // the latest closure without re-registering.
   const takeOffered = !problem && (!!from || canTakeToTerminal)
-  const takeBusy = takeBackBusy || writeInFlight
+  const takeBusy = takeBackBusy || exitBusy || writeInFlight
   const onTakeBackRef = useRef(onTakeBack)
   useLayoutEffect(() => { onTakeBackRef.current = onTakeBack })
   useEffect(() => registerTakeToTerminal(paneId, {
@@ -368,7 +372,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // this clears itself without redesigning the reconnect path.
   const streamDead = st.historyLoaded && st.sse === 'closed' && !!st.sseError
   // One gate for everything that sends: the input and the quick replies.
-  const inputDisabled = st.pendingSend || encodingBusy || ended || !st.historyLoaded || streamDead || takeBackBusy
+  const inputDisabled = st.pendingSend || encodingBusy || ended || !st.historyLoaded || streamDead || takeBackBusy || exitBusy
   const placeholder = st.summary?.archived ? t('execution.input.archived')
     : ended ? t('execution.input.terminal')
     : streamDead ? t('execution.input.disconnected')
@@ -483,7 +487,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // A file dragged over the pane must never fall through to the browser's
   // default (Electron would navigate to it), so every file drag is claimed;
   // an ended execution just shows no overlay and takes nothing.
-  const canAttach = !ended && !takeBackBusy
+  const canAttach = !ended && !takeBackBusy && !exitBusy
   // The drop target matches the disabled `+` button (worker.upload.attach):
   // while sending, mid-take-back, history still loading or the stream dead,
   // neither offers to attach.
@@ -560,7 +564,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
       className="relative flex flex-col h-full">
       <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
-        onInterrupt={() => void handleInterrupt()} onExit={onExit} exitDisabled={!exitable || exitBusy || takeBackBusy} busy={terminal || takeBackBusy}
+        onInterrupt={() => void handleInterrupt()} onExit={onExit} exitDisabled={!exitable || exitBusy || takeBackBusy || writeInFlight} busy={terminal || takeBackBusy || exitBusy}
         onTakeBack={takeOffered ? onTakeBack : undefined} takeBackBusy={takeBusy}
         mode={mode} onModeChange={onModeChange} />
       {confirmExit && (

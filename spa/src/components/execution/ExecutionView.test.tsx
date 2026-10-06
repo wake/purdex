@@ -268,6 +268,42 @@ describe('ExecutionView', () => {
     await waitFor(() => expect(screen.getByTestId('header-exit')).toBeEnabled())
   })
 
+  it('exit is disabled while a send is in flight', () => {
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.getByTestId('header-exit')).toBeEnabled()
+    act(() => { patchExec({ pendingSend: true, pendingLocal: { text: 'hi', delivery: null } as Exec['pendingLocal'] }) })
+    expect(screen.getByTestId('header-exit')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('header-exit'))
+    expect(exitWorker).not.toHaveBeenCalled()
+  })
+
+  it('freezes the composer, interrupt and exit while the exit is in flight', async () => {
+    let resolveExit!: (v: Awaited<ReturnType<typeof exitWorker>>) => void
+    vi.mocked(exitWorker).mockReturnValueOnce(new Promise((res) => { resolveExit = res }))
+    render(<ExecutionView {...base} isActive />)
+    const textbox = () => screen.getByRole('textbox') as HTMLTextAreaElement
+    const interrupt = () => screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement
+    expect(textbox().disabled).toBe(false)
+    expect(interrupt().disabled).toBe(false)
+    fireEvent.click(screen.getByTestId('header-exit'))
+    await waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
+    expect(textbox().disabled).toBe(true)
+    expect(interrupt().disabled).toBe(true)
+    expect(screen.getByTestId('header-exit')).toBeDisabled()
+    fireEvent.click(interrupt())
+    expect(api.interruptExecution).not.toHaveBeenCalled()
+    await act(async () => { resolveExit({ exited: true, terminated: true, archived: true, state: 'terminated' }) })
+  })
+
+  it('after a successful exit the summary is no longer live and exit stays disabled without any SSE', async () => {
+    vi.mocked(exitWorker).mockResolvedValueOnce({ exited: true, terminated: true, archived: true, state: 'terminated' })
+    render(<ExecutionView {...base} isActive />)
+    fireEvent.click(screen.getByTestId('header-exit'))
+    await waitFor(() => expect(useExecutionStore.getState().executions[KEY].summary?.state).toBe('terminated'))
+    expect(useExecutionStore.getState().executions[KEY].summary?.archived).toBe(true)
+    await waitFor(() => expect(screen.getByTestId('header-exit')).toBeDisabled())
+  })
+
   it('disables input with a reason when archived or ended', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ archived: true }) as never)
     const { rerender } = render(<ExecutionView {...base} isActive />)
