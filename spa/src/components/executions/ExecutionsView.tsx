@@ -16,13 +16,14 @@ import { liveEntityRows } from '../../lib/nex/live-workers'
 import { isRefShownNow, useIsRefShown } from '../../lib/shown-hosts'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { exitWorker, exitErrorMessage } from '../../lib/nex/exit-worker'
+import { executionKey, splitExecutionKey } from '../../stores/useExecutionStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import { ExecutionsGroup } from './ExecutionsGroup'
 
 export const AGE_TICK_MS = 60_000
 
-const pendingKey = (hostId: string, executionId: string) => `${hostId}:${executionId}`
+const pendingKey = executionKey
 
 function PhaseDot({ phase }: { phase: NexHostPhase }) {
   const common = { size: 8, 'data-testid': 'executions-phase-dot', 'data-phase': phase }
@@ -65,12 +66,12 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
     if (pendingRef.current.size === 0) return
     // Only this host's keys are judged against this host's list; other hosts' keys are left alone.
     const liveKeys = new Set(live.map((r) => pendingKey(id, r.id)))
-    const kept = new Set([...pendingRef.current].filter((x) => !x.startsWith(`${id}:`) || liveKeys.has(x)))
+    const kept = new Set([...pendingRef.current].filter((x) => splitExecutionKey(x).hostId !== id || liveKeys.has(x)))
     if (kept.size !== pendingRef.current.size) setPendingIds(kept)
   }, [live, id, setPendingIds])
 
   const pendingIds = useMemo(
-    () => new Set([...pending].filter((k) => k.startsWith(`${id}:`)).map((k) => k.slice(id.length + 1))),
+    () => new Set([...pending].map(splitExecutionKey).filter((k) => k.hostId === id).map((k) => k.executionId)),
     [pending, id],
   )
 

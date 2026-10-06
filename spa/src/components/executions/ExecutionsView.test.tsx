@@ -520,6 +520,26 @@ describe('ExecutionsView', () => {
     expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
   })
 
+  it('pending keys match the host exactly: host "a" cleanup leaves host "a:b" pending', async () => {
+    const A = 'a'
+    const AB = 'a:b'
+    useShownHostsStore.setState({ ids: [A, AB] })
+    useNexHostStore.setState({ byHost: { [A]: readyEntry, [AB]: readyEntry }, ensure })
+    vi.mocked(api.listExecutions).mockImplementation(async (h: string) => (
+      { items: h === AB ? [row({ id: 'I', state: 'idle' })] : [], next_cursor: '' }
+    ))
+    vi.mocked(exitWorker).mockImplementation(() => new Promise(() => {}))
+    const { rerender } = render(<ExecutionsView hostId={AB} isActive />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
+    rerender(<ExecutionsView hostId={A} isActive />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    rerender(<ExecutionsView hostId={AB} isActive />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
+  })
+
   it('confirming for a row that has disappeared sends no request', () => {
     seedList([row({ id: 'R', state: 'running' })])
     render(<ExecutionsView hostId={H} isActive />)
