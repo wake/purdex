@@ -11,6 +11,10 @@ export interface SanitizedExecutionsPage {
   items: ExecutionSummary[]
   /** Rows dropped for lacking `id`/`state`; `1` when the page itself was not a list. */
   dropped: number
+  /** Opaque Nexen cursor; '' = last page (or a malformed one). */
+  nextCursor: string
+  /** `true` only when the page itself was not `{ items: [...] }`; such a page is never a valid last page. */
+  malformed: boolean
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -114,7 +118,7 @@ export function sanitizeSummaryRollup(raw: unknown): ExecutionSummary {
 
 /** Never throws: a page that is not `{ items: [...] }` is an empty list with `dropped: 1`. */
 export function sanitizeExecutionsPage(raw: unknown): SanitizedExecutionsPage {
-  if (!isRecord(raw) || !Array.isArray(raw.items)) return { items: [], dropped: 1 }
+  if (!isRecord(raw) || !Array.isArray(raw.items)) return { items: [], dropped: 1, nextCursor: '', malformed: true }
   const items: ExecutionSummary[] = []
   let dropped = 0
   for (const entry of raw.items) {
@@ -122,5 +126,5 @@ export function sanitizeExecutionsPage(raw: unknown): SanitizedExecutionsPage {
     if (row) items.push(row)
     else dropped += 1
   }
-  return { items, dropped }
+  return { items, dropped, nextCursor: typeof raw.next_cursor === 'string' ? raw.next_cursor : '', malformed: false }
 }

@@ -11,6 +11,8 @@ export interface HostExecutions {
   items: ExecutionSummary[]
   phase: HostListPhase
   error: string | null
+  /** The list hit the page cap; the newest rows may be missing. */
+  truncated: boolean
   refetch: () => void
   /** Bumped by the store on every completed refresh attempt (success or failure); key follow-up queries on it. */
   refreshRevision: number
@@ -37,6 +39,7 @@ export function useHostExecutions(hostId: string, { enabled = true }: HostExecut
     items: cache?.items ?? EMPTY,
     phase: cache?.phase ?? 'idle',
     error: cache?.error ?? null,
+    truncated: cache?.truncated ?? false,
     refetch,
     refreshRevision: cache?.refreshRevision ?? 0,
   }

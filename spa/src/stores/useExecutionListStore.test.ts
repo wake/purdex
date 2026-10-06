@@ -98,7 +98,7 @@ describe('useExecutionListStore', () => {
     expect(subscriptionSlots.reserve).toHaveBeenCalledWith(A, 'site-wide')
     expect(capFor(A)).toBe(3)
     expect(api.listExecutions).toHaveBeenCalledTimes(1)
-    expect(api.listExecutions).toHaveBeenCalledWith(A, { includeArchived: false, limit: 100 })
+    expect(api.listExecutions).toHaveBeenCalledWith(A, { includeArchived: false, limit: 500 })
     expect(cache(A).phase).toBe('loading')
 
     await flush()
@@ -460,6 +460,50 @@ describe('useExecutionListStore', () => {
     expect(cache(A).items).toHaveLength(1)
   })
 
+  it('a truncated walk commits its rows ready with truncated, a later complete walk clears it, an error keeps it', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(api.listExecutions).mockImplementation(async (_h, opts) => {
+      const n = Number(opts?.cursor ?? 0)
+      return { items: [row(`exc_${n}`)], next_cursor: String(n + 1) }
+    })
+    useExecutionListStore.getState().subscribe(A)
+    await flush()
+    expect(cache(A).phase).toBe('ready')
+    expect(cache(A).truncated).toBe(true)
+    expect(cache(A).items.length).toBeGreaterThan(0)
+    const count = cache(A).items.length
+
+    vi.mocked(api.listExecutions).mockReset().mockRejectedValue(new NexApiError(503, 'nex_unavailable', 'down'))
+    useExecutionListStore.getState().refetch(A)
+    await flush()
+    expect(cache(A).phase).toBe('error')
+    expect(cache(A).truncated).toBe(true)
+    expect(cache(A).items).toHaveLength(count)
+
+    vi.mocked(api.listExecutions).mockReset().mockResolvedValue(page('exc_1'))
+    useExecutionListStore.getState().refetch(A)
+    await flush()
+    expect(cache(A).phase).toBe('ready')
+    expect(cache(A).truncated).toBe(false)
+  })
+
+  it('a repeated cursor commits the fetched rows ready, not truncated, and warns', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: [row('exc_9')], next_cursor: 'c' } as unknown as ExecutionsPage)
+    useExecutionListStore.getState().subscribe(A)
+    await flush()
+    expect(cache(A).items.map((r) => r.id)).toEqual(['exc_9'])
+    expect(cache(A).phase).toBe('ready')
+    expect(cache(A).error).toBeNull()
+    expect(cache(A).truncated).toBe(false)
+    expect(warn).toHaveBeenCalledWith('nex: executions cursor repeated', { hostId: A, page: 2 })
+  })
+
+  it('a fresh cache is not truncated', () => {
+    useExecutionListStore.getState().subscribe(A)
+    expect(cache(A).truncated).toBe(false)
+  })
+
   it('two hosts maintain independent SSEs, reservations, cursors, debounces, and teardown', async () => {
     const uA = useExecutionListStore.getState().subscribe(A)
     useExecutionListStore.getState().subscribe(B)
@@ -515,16 +559,26 @@ describe('useExecutionListStore', () => {
     expect(cache(A).refreshRevision).toBe(4)
   })
 
-  it('a page whose items is not a list commits an empty ready list and warns about the dropped page', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('a first page whose items is not a list is an error, not an empty ready list', async () => {
     vi.mocked(api.listExecutions).mockResolvedValueOnce({ items: {} } as unknown as ExecutionsPage)
     useExecutionListStore.getState().subscribe(A)
     await flush()
     expect(cache(A).items).toEqual([])
+    expect(cache(A).phase).toBe('error')
+    expect(cache(A).error).toContain('malformed executions page 1')
+  })
+
+  it('a refresh whose second page is malformed keeps the ready rows and sets phase error', async () => {
+    useExecutionListStore.getState().subscribe(A)
+    await flush()
     expect(cache(A).phase).toBe('ready')
-    expect(cache(A).error).toBeNull()
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn.mock.calls[0]).toEqual([expect.stringContaining('dropped'), expect.objectContaining({ hostId: A, dropped: 1 })])
+    vi.mocked(api.listExecutions)
+      .mockResolvedValueOnce({ ...page('exc_2'), next_cursor: 'c1' } as unknown as ExecutionsPage)
+      .mockResolvedValueOnce({ items: {} } as unknown as ExecutionsPage)
+    useExecutionListStore.getState().refetch(A)
+    await flush()
+    expect(cache(A).items.map((r) => r.id)).toEqual(['exc_1'])
+    expect(cache(A).phase).toBe('error')
   })
 
   it('a row with labels: null is kept with {} and a row without an id is dropped', async () => {

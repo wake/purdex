@@ -128,4 +128,32 @@ describe('ExecutionRowCompact — rollup fields', () => {
     expect(label).toContain('2 running')
     expect(label).toContain('$0.11')
   })
+
+  // D8: state dot colour matches the terminal agent badge
+  describe('state dot colours', () => {
+    it('running state has bg-status-success', () => {
+      renderRow(row({ state: 'running' }))
+      expect(screen.getByTestId('executions-state-dot')).toHaveClass('bg-status-success')
+    })
+
+    it('idle state has bg-text-muted', () => {
+      renderRow(row({ state: 'idle' }))
+      expect(screen.getByTestId('executions-state-dot')).toHaveClass('bg-text-muted')
+    })
+
+    it('terminated state has bg-text-muted', () => {
+      renderRow(row({ state: 'terminated' }))
+      expect(screen.getByTestId('executions-state-dot')).toHaveClass('bg-text-muted')
+    })
+
+    it('failed state has bg-status-error', () => {
+      renderRow(row({ state: 'failed' }))
+      expect(screen.getByTestId('executions-state-dot')).toHaveClass('bg-status-error')
+    })
+
+    it('queued state has bg-status-warning', () => {
+      renderRow(row({ state: 'queued' }))
+      expect(screen.getByTestId('executions-state-dot')).toHaveClass('bg-status-warning')
+    })
+  })
 })

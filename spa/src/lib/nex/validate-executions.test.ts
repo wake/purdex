@@ -8,14 +8,15 @@ describe('sanitizeExecutionsPage', () => {
   it('passes a well-formed page through untouched', () => {
     const out = sanitizeExecutionsPage({ items: [good], next_cursor: '' })
     expect(out.dropped).toBe(0)
+    expect(out.malformed).toBe(false)
     expect(out.items).toEqual([good])
   })
 
   it('a page whose items is not an array yields an empty list and one dropped page', () => {
-    expect(sanitizeExecutionsPage({ items: {} })).toEqual({ items: [], dropped: 1 })
-    expect(sanitizeExecutionsPage(null)).toEqual({ items: [], dropped: 1 })
-    expect(sanitizeExecutionsPage('nope')).toEqual({ items: [], dropped: 1 })
-    expect(sanitizeExecutionsPage({})).toEqual({ items: [], dropped: 1 })
+    expect(sanitizeExecutionsPage({ items: {} })).toEqual({ items: [], dropped: 1, nextCursor: '', malformed: true })
+    expect(sanitizeExecutionsPage(null)).toEqual({ items: [], dropped: 1, nextCursor: '', malformed: true })
+    expect(sanitizeExecutionsPage('nope')).toEqual({ items: [], dropped: 1, nextCursor: '', malformed: true })
+    expect(sanitizeExecutionsPage({})).toEqual({ items: [], dropped: 1, nextCursor: '', malformed: true })
   })
 
   it('drops rows without a string id or state, and non-object rows', () => {
@@ -165,5 +166,19 @@ describe('sanitizeExecutionsPage', () => {
       expect(sanitizeSummaryRollup(null)).toBeNull()
       expect(sanitizeSummaryRollup('x')).toBe('x')
     })
+  })
+})
+
+describe('sanitizeExecutionsPage nextCursor', () => {
+  it('passes a string next_cursor through', () => {
+    expect(sanitizeExecutionsPage({ items: [], next_cursor: 'x' }).nextCursor).toBe('x')
+  })
+  it('a non-string or missing next_cursor gives an empty string', () => {
+    expect(sanitizeExecutionsPage({ items: [], next_cursor: 5 }).nextCursor).toBe('')
+    expect(sanitizeExecutionsPage({ items: [] }).nextCursor).toBe('')
+  })
+  it('a malformed body gives an empty string', () => {
+    expect(sanitizeExecutionsPage(null).nextCursor).toBe('')
+    expect(sanitizeExecutionsPage({ items: {}, next_cursor: 'x' }).nextCursor).toBe('')
   })
 })

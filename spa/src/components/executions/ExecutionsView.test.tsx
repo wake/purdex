@@ -36,8 +36,8 @@ const readyEntry: NexHostEntry = {
 }
 const entryWith = (patch: Partial<NexHostEntry>): NexHostEntry => ({ ...readyEntry, ...patch })
 
-function seedList(items: ExecutionSummary[], patch: Partial<{ phase: 'idle' | 'loading' | 'ready' | 'error'; error: string | null }> = {}) {
-  useExecutionListStore.setState({ byHost: { [H]: { items, phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, ...patch } } })
+function seedList(items: ExecutionSummary[], patch: Partial<{ phase: 'idle' | 'loading' | 'ready' | 'error'; error: string | null; truncated: boolean }> = {}) {
+  useExecutionListStore.setState({ byHost: { [H]: { items, phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false, ...patch } } })
 }
 
 let ensure: ReturnType<typeof vi.fn<(hostId: string) => Promise<void>>>
@@ -65,6 +65,34 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('ExecutionsView', () => {
+  it('a truncated list shows the persistent notice; an untruncated one does not', () => {
+    seedList([row({ id: 'exc_1' })], { truncated: true })
+    const { unmount } = render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.getByTestId('executions-truncated')).toHaveTextContent('More than 10,000 unarchived executions; the newest may not be listed')
+    unmount()
+    seedList([row({ id: 'exc_1' })])
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.queryByTestId('executions-truncated')).toBeNull()
+  })
+
+  it('the truncated notice is zh-TW verbatim and coexists with the empty note', () => {
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    try {
+      seedList([], { truncated: true })
+      render(<ExecutionsView hostId={H} isActive />)
+      expect(screen.getByTestId('executions-truncated')).toHaveTextContent('未歸檔的執行紀錄超過 10,000 筆，最新的可能沒有列出')
+      expect(screen.getByTestId('executions-empty')).toBeInTheDocument()
+    } finally {
+      act(() => { useI18nStore.getState().setLocale('en') })
+    }
+  })
+
+  it('no truncated notice while disabled or on first load', () => {
+    seedList([], { truncated: true, phase: 'loading' })
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.queryByTestId('executions-truncated')).toBeNull()
+  })
+
   it('header shows host name + phase dot', () => {
     seedList([])
     render(<ExecutionsView hostId={H} isActive />)
@@ -79,11 +107,11 @@ describe('ExecutionsView', () => {
     expect(ensure).toHaveBeenCalledWith(H)
   })
 
-  it('only includeArchived: false, limit: 100 is requested', async () => {
+  it('only includeArchived: false, limit: 500 is requested', async () => {
     render(<ExecutionsView hostId={H} isActive />)
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(api.listExecutions).toHaveBeenCalledTimes(1)
-    expect(api.listExecutions).toHaveBeenCalledWith(H, { includeArchived: false, limit: 100 })
+    expect(api.listExecutions).toHaveBeenCalledWith(H, { includeArchived: false, limit: 500 })
   })
 
   it('grouping order and labels (local / purdex i18n, unknown raw), newest first within and across groups', () => {
@@ -282,6 +310,31 @@ describe('ExecutionsView', () => {
     render(<ExecutionsView hostId={H} isActive />)
     expect(screen.getByTestId('executions-empty')).toHaveTextContent('No executions on this host.')
     expect(screen.queryByTestId('executions-loading')).toBeNull()
+  })
+
+  it('lists live conversations only, one row each: terminated / archived rows hidden, the newer stint of a session wins', () => {
+    seedList([
+      row({ id: 'exc_dead', brief: 'dead', state: 'terminated', updated_at: NOW - 1 }),
+      row({ id: 'exc_gone', brief: 'gone', archived: true, updated_at: NOW - 2 }),
+      row({ id: 'exc_stint1', brief: 'stint one', session_id: 'S', created_at: 10, updated_at: NOW - 3 }),
+      row({ id: 'exc_stint2', brief: 'stint two', session_id: 'S', created_at: 20, updated_at: NOW - 4 }),
+    ])
+    render(<ExecutionsView hostId={H} isActive />)
+    const rows = screen.getAllByTestId('executions-row')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toHaveTextContent('stint two')
+    fireEvent.click(rows[0])
+    expect(openWorkerTab).toHaveBeenCalledWith({ kind: 'execution', executionId: 'exc_stint2', host: H })
+  })
+
+  it('items with no live row show the empty state', () => {
+    seedList([
+      row({ id: 'exc_dead', state: 'terminated' }),
+      row({ id: 'exc_gone', archived: true }),
+    ])
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.getByTestId('executions-empty')).toBeInTheDocument()
+    expect(screen.queryByTestId('executions-row')).toBeNull()
   })
 
   it('loading skeleton while the first fetch is out', () => {

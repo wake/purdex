@@ -35,6 +35,7 @@ import { FloatingPanel } from '../FloatingPanel'
 import CostPanel from './CostPanel'
 import WorkerInfoPanel from './WorkerInfoPanel'
 import ViewModeMenu, { ViewModeItems, ViewModeLabel } from './ViewModeMenu'
+import { stateDotClass } from '../../lib/nex/state-dot'
 import type { ExecutionViewMode } from '../../types/tab'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import type { CostSummary } from '../../lib/nex/cost-summary'
@@ -59,11 +60,6 @@ export interface ExecutionHeaderProps {
   mode?: ExecutionViewMode
   /** Switches the view (the pane writes it to its content). The view menu is therefore always offered. */
   onModeChange: (mode: ExecutionViewMode) => void
-}
-
-const STATE_DOT: Record<string, string> = {
-  running: 'bg-status-success', idle: 'bg-text-muted', queued: 'bg-status-warning',
-  failed: 'bg-status-error', rejected: 'bg-status-error', terminated: 'bg-status-error',
 }
 
 const ACTION = 'flex items-center gap-1 px-2 py-0.5 rounded hover:bg-surface-hover disabled:opacity-40'
@@ -210,7 +206,7 @@ export default function ExecutionHeader({
 
   return (
     <div ref={rootRef} className="@container flex items-center gap-2 px-4 py-2 border-b border-border-default text-xs text-text-muted">
-      <span className={`shrink-0 w-2 h-2 rounded-full ${STATE_DOT[state] ?? 'bg-text-muted'}`} />
+      <span className={`shrink-0 w-2 h-2 rounded-full ${stateDotClass(state)}`} />
       <span data-testid="execution-state" className="shrink-0 text-text-primary font-medium">{state}</span>
       {!chat && cwdBase && (
         <button type="button" data-testid="worker-name" ref={nameRef} title={summary?.cwd}

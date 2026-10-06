@@ -4,7 +4,7 @@
 // this file grows more per-cell formatting.
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { getNexClientId } from '../../../lib/nex/client-id'
-import { STATE_DOT_CLASSES } from '../../../lib/nex/state-dot'
+import { stateDotClass } from '../../../lib/nex/state-dot'
 import { firstLine, shortId } from '../../../lib/nex/format'
 import { formatUsd } from '../../../lib/nex/format-cost'
 import { rowCostIncludesPriorHistory } from '../../../lib/nex/prior-history'
@@ -66,7 +66,7 @@ export default function NexExecutionRow({
     <tr className="border-t border-border-subtle hover:bg-surface-secondary/30">
       <td className="px-3 py-2 whitespace-nowrap">
         <span
-          className={`inline-block w-2 h-2 rounded-full ${STATE_DOT_CLASSES[row.state] ?? 'bg-text-muted'}`}
+          className={`inline-block w-2 h-2 rounded-full ${stateDotClass(row.state)}`}
           title={row.state}
         />
         <span className="ml-1.5 text-xs text-text-muted">{row.state}</span>

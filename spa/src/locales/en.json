@@ -1434,6 +1434,7 @@
   "executions.group.purdex": "Purdex",
   "executions.empty": "No executions on this host.",
   "executions.error": "Could not load: {{message}}",
+  "executions.truncated": "More than 10,000 unarchived executions; the newest may not be listed",
   "executions.retry": "Retry",
   "executions.loading": "Loading executions…",
   "executions.age.just_now": "just now",

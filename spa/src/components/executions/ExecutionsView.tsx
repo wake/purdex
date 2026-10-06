@@ -1,6 +1,6 @@
 // spa/src/components/executions/ExecutionsView.tsx — one host's section of the
 // activity bar's worker list (`WorkerList`; P-C spec §4.3): header with the host's name and
-// its Nexen phase, then the host's non-archived executions from the shared
+// its Nexen phase, then the host's live conversations (one row each, `liveEntityRows`) from the shared
 // per-host list store (one site-wide SSE per host, shared with the Host → Nex
 // table). Nexen readiness comes from `useNexHostStore` only; this view never
 // reads `HostInfo.nex` itself.
@@ -12,6 +12,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { selectRollupCostShown, useNexHostStore, type NexHostPhase } from '../../stores/useNexHostStore'
 import { openWorkerTab } from '../../features/workspace/lib/open-worker-tab'
 import { groupBySource } from '../../lib/nex/execution-groups'
+import { liveEntityRows } from '../../lib/nex/live-workers'
 import { isRefShownNow, useIsRefShown } from '../../lib/shown-hosts'
 import { ExecutionsGroup } from './ExecutionsGroup'
 
@@ -41,9 +42,10 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
   const entry = useNexHostStore((s) => s.byHost[id])
   const daemonHostId = typeof entry?.capabilities?.host_id === 'string' ? entry.capabilities.host_id : null
   const showCost = useNexHostStore(selectRollupCostShown(id))
-  const { items, phase, error, refetch } = useHostExecutions(id, { enabled: id !== '' })
+  const { items, phase, error, truncated, refetch } = useHostExecutions(id, { enabled: id !== '' })
   const now = useNowTicker()
-  const groups = useMemo(() => groupBySource(items), [items])
+  const live = useMemo(() => liveEntityRows(items), [items])
+  const groups = useMemo(() => groupBySource(live), [live])
   const shown = useIsRefShown(id === '' ? null : id)
 
   if (id === '') return null
@@ -65,7 +67,7 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
         {t('newtab.headless.unavailable', { error: entry?.error ?? '' })}
       </p>
     )
-  } else if (items.length === 0 && phase !== 'ready' && phase !== 'error') {
+  } else if (live.length === 0 && phase !== 'ready' && phase !== 'error') {
     body = (
       <div data-testid="executions-loading" className="flex flex-col gap-1.5 px-3 py-2 animate-pulse" aria-busy="true">
         <span className="text-xs text-text-muted">{t('executions.loading')}</span>
@@ -89,7 +91,10 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
             </button>
           </div>
         )}
-        {items.length === 0 && phase !== 'error' && (
+        {truncated && (
+          <p data-testid="executions-truncated" className="px-3 py-1 text-xs text-text-muted">{t('executions.truncated')}</p>
+        )}
+        {live.length === 0 && phase !== 'error' && (
           <p data-testid="executions-empty" className="px-3 py-2 text-xs text-text-muted">{t('executions.empty')}</p>
         )}
         {groups.map((group) => (

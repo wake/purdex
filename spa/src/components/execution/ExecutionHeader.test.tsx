@@ -739,4 +739,19 @@ describe('ExecutionHeader', () => {
       expect(screen.queryByTestId('worker-info-panel')).toBeNull()
     })
   })
+
+  // D8: state dot colour matches the terminal agent badge
+  describe('state dot colours', () => {
+    it('terminated state has bg-text-muted', () => {
+      render(<ExecutionHeader {...baseProps} summary={summary({ state: 'terminated' })} onTakeBack={vi.fn()} />)
+      const dot = screen.getByTestId('execution-state').previousElementSibling
+      expect(dot).toHaveClass('bg-text-muted')
+    })
+
+    it('idle state has bg-text-muted', () => {
+      render(<ExecutionHeader {...baseProps} summary={summary({ state: 'idle' })} onTakeBack={vi.fn()} />)
+      const dot = screen.getByTestId('execution-state').previousElementSibling
+      expect(dot).toHaveClass('bg-text-muted')
+    })
+  })
 })

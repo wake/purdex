@@ -11,7 +11,7 @@
 // the brief instead of wrapping the row.
 import { Terminal } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { STATE_DOT_CLASSES } from '../../lib/nex/state-dot'
+import { stateDotClass } from '../../lib/nex/state-dot'
 import { firstLine } from '../../lib/nex/format'
 import { formatUsd } from '../../lib/nex/format-cost'
 import { normalizePhase } from '../../lib/nex/activity'
@@ -64,7 +64,7 @@ export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, 
     <>
       <span
         data-testid="executions-state-dot"
-        className={`shrink-0 inline-block w-2 h-2 rounded-full ${STATE_DOT_CLASSES[row.state] ?? 'bg-text-muted'}`}
+        className={`shrink-0 inline-block w-2 h-2 rounded-full ${stateDotClass(row.state)}`}
         title={dotTitle}
       />
       <span data-testid="executions-brief" className="flex-1 min-w-0 truncate text-xs text-text-primary">
