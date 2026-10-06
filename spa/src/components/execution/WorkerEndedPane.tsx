@@ -13,11 +13,9 @@ import { closeTab } from '../../lib/tab-lifecycle'
 import { isLiveRow } from '../../lib/nex/live-workers'
 import { takeToTerminal, handoffErrorMessage } from '../../lib/nex/handoff'
 import { HandoffApiError } from '../../lib/nex/handoff-api'
-import { rebuildAsWorker, rebuildErrorMessage } from '../../lib/nex/worker-rebuild'
+import { rebuildAsWorker, rebuildErrorMessage, announceRebuildOutcome } from '../../lib/nex/worker-rebuild'
 import { exitWorker, exitErrorMessage } from '../../lib/nex/exit-worker'
 import { announceTakeOutcome } from '../../lib/nex/take-outcome'
-import { useUndoToast } from '../../stores/useUndoToast'
-import { useExecutionListStore } from '../../stores/useExecutionListStore'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import type { ExecutionSummary } from '../../lib/nex/types'
 
@@ -69,17 +67,13 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
       if (mode === 'terminal') {
         announceTakeOutcome(t, await takeToTerminal({ hostId, executionId, cwd, tabId, paneId, forgetLease: () => {} }))
       } else {
-        const { swapped } = await rebuildAsWorker({
+        const outcome = await rebuildAsWorker({
           hostId, sessionId: sid, cwd, tabId, paneId,
           profile: summary.effective_profile,
           replaceExecutionId: isLiveRow(summary) ? executionId : undefined,
           expect: (c) => c.kind === 'execution' && c.executionId === executionId && (c.host ?? hostId) === hostId,
         })
-        if (!swapped) {
-          // The pane moved on while the request ran: the worker exists, say where to find it.
-          useUndoToast.getState().show(t('worker.rebuild.no_pane'))
-          useExecutionListStore.getState().refetch(hostId)
-        }
+        announceRebuildOutcome(t, hostId, outcome)
       }
     } catch (err) {
       setError(mode === 'terminal' && err instanceof HandoffApiError

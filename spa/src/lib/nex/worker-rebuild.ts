@@ -3,6 +3,8 @@
 // point the pane at the new execution. Single-flight per pane (a double click is
 // one request); the swap is a checked one, like handoff.ts's.
 import { useTabStore } from '../../stores/useTabStore'
+import { useUndoToast } from '../../stores/useUndoToast'
+import { useExecutionListStore } from '../../stores/useExecutionListStore'
 import { isRefShownNow } from '../shown-hosts'
 import type { TFunction } from '../pane-labels'
 import type { PaneContent } from '../../types/tab'
@@ -50,4 +52,14 @@ export function rebuildErrorMessage(err: unknown, t: TFunction): string {
     return t('worker.rebuild.failed', { reason: handoffErrorMessage(t, err) })
   }
   return t('worker.rebuild.failed', { reason: String(err) })
+}
+
+/**
+ * After a rebuild that returned: when the pane could not be swapped (it moved on
+ * while the request ran) the worker exists anyway — say where to find it.
+ */
+export function announceRebuildOutcome(t: TFunction, hostId: string, outcome: { swapped: boolean }): void {
+  if (outcome.swapped) return
+  useUndoToast.getState().show(t('worker.rebuild.no_pane'))
+  useExecutionListStore.getState().refetch(hostId)
 }
