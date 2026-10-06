@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.514] - 2026-10-07
+
+> 只新增 daemon 內部套件，**還沒有任何東西呼叫它**，不需要部署；下一個有行為的版本一起上。資料庫、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P2a-1（#1654）
+
+lead 申請（之後也包括自我接力的核准）的資料層，照 spec §6.2 的 state machine：
+
+- **`internal/team`**：wire 契約（leaf package）——申請的 kind、state、error code、上限（member 預設 3、最多 8；等待預設 9 分鐘、最長 10；lease 30 秒；輪詢 25 秒；重啟寬限 30 秒）、`Approval`／`Origin`／`Grant`／`Client` 等 JSON 形狀，以及 `approval.request` 事件的 opened／closed／snapshot 三種 value。
+- **`internal/module/team/store.go`**：`team.db` 的 `approval_requests` 表。建立是冪等的（同 id 同內容回同一筆；同 id 不同內容拒絕）；**關閉用 compare-and-set**，decide、逾時、取消三方同時關閉時恰好一個成功，落敗的一方拿回成功那方的完整結果（誰決定的、何時、grant）；lease 可續、重啟時整批延長。
+- 測試含 `-race` 的 16 路競爭與 mutation 驗證（拿掉 CAS 守衛測試即紅；落敗方缺欄位測試即紅）。
+
+路由、module 與 `pdx lead request` 指令在 P2a-2、P2a-3、P2b 接續。
+
 ## [1.0.0-alpha.513] - 2026-10-07
 
 > 只動 daemon 與 `pdx` 指令，**需要部署新的 `pdx` 執行檔並重啟 daemon**，由統籌安排。資料庫、SPA、Electron 都沒有改動。
