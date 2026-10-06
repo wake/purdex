@@ -553,8 +553,11 @@ type fakeNexStore struct {
 
 	// List: listRows is the whole table (non-archived and archived alike);
 	// List filters, orders by id and pages it like store.Store.List.
+	// listErr answers every List call, or, with listErrAt > 0, only the
+	// listErrAt-th call (1-based).
 	listRows  []store.Execution
 	listErr   error
+	listErrAt int
 	listCalls int
 }
 
@@ -591,7 +594,7 @@ func (f *fakeNexStore) List(_ context.Context, opts store.ListOptions) (store.Li
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listCalls++
-	if f.listErr != nil {
+	if f.listErr != nil && (f.listErrAt == 0 || f.listCalls == f.listErrAt) {
 		return store.ListPage{}, f.listErr
 	}
 	var rows []store.Execution

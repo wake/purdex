@@ -178,6 +178,24 @@ func TestManualResume_TruncatedScanStillExitsWhatItFound(t *testing.T) {
 	}
 }
 
+// PR #1590 R1-2: a page error must not drop the worker page 1 already found.
+func TestManualResume_PageErrorStillExitsWhatItFound(t *testing.T) {
+	env := newHandoffEnv(t)
+	liveTerminal(env, true)
+	pageTwoFails(fakeStore(env))
+	env.m.onSessionStart(ev("resume"))
+	assert.Equal(t, []string{"000000"}, archivedIDs(env))
+	assert.Equal(t, 2, fakeStore(env).listCalls)
+}
+
+func TestManualResume_OverflowPageErrorStillReconcilesWhatItFound(t *testing.T) {
+	env := newHandoffEnv(t)
+	liveTerminal(env, true)
+	pageTwoFails(fakeStore(env))
+	env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
+	assert.Equal(t, []string{"000000"}, archivedIDs(env))
+}
+
 func TestManualResume_StartSubscribesStopUnsubscribes(t *testing.T) {
 	env := newHandoffEnv(t)
 	if err := env.m.Start(context.Background()); err != nil {
