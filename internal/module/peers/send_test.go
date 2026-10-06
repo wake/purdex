@@ -1484,6 +1484,12 @@ func TestSend_PeerNotFoundTeachesTheV4AddressForms(t *testing.T) {
 			t.Errorf("detail = %q, still teaches the retired %q form", ae.Detail, gone)
 		}
 	}
+	if strings.Contains(ae.Detail, "never changes") {
+		t.Errorf("a ref changes on a manual /clear; the hint must not promise otherwise: %q", ae.Detail)
+	}
+	if !strings.Contains(ae.Detail, "survives renames") {
+		t.Errorf("hint must say what a ref survives: %q", ae.Detail)
+	}
 	if len(s.postCalls()) != 0 {
 		t.Errorf("posts = %d, want none", len(s.postCalls()))
 	}
