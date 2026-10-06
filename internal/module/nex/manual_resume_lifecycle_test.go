@@ -278,7 +278,9 @@ func TestManualResume_RetryCountResetsAfterACleanPass(t *testing.T) {
 	env.m.onSessionStart(ev("resume"))
 	require.Equal(t, 1, logs.count("re-checking in"))
 	env.m.locks.Unlock(sidLockKey("S"))
-	env.m.onSessionStart(ev("resume")) // no live worker: nothing to retry
+	// A scheduled pass (not a hub event, which resets on its own) with no
+	// live worker: nothing to retry.
+	env.m.handleSessionStart(context.Background(), ev("resume"))
 	env.m.q1Mu.Lock()
 	attempts := env.m.q1Retries["S"].attempts
 	env.m.q1Mu.Unlock()
@@ -323,4 +325,88 @@ func TestManualResume_RecheckSharesThePendingSlot(t *testing.T) {
 	waitArchived(t, env, "E1") // at once, not after the retry delay
 	time.Sleep(120 * time.Millisecond)
 	assert.Equal(t, 1, env.terminals.Calls(), "one pass: the retry was folded into the re-check")
+}
+
+// --- follow-up (concerns 3-4) ---
+
+// A transient failure (lookup error, re-read error, a failed scan page)
+// re-checks S like a contention does.
+func TestManualResume_RetriesAfterALookupError(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.m.retryDelay = 30 * time.Millisecond
+	liveTerminal(env, true)
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	env.terminals.err = errors.New("frames db busy")
+	env.m.onSessionStart(ev("resume"))
+	assert.True(t, pendingRecheck(env, "S"), "a re-check is scheduled")
+	env.terminals.mu.Lock()
+	env.terminals.err = nil // the lookup recovers
+	env.terminals.mu.Unlock()
+	waitArchived(t, env, "E1")
+}
+
+func TestManualResume_RetriesAfterAScanPageError(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.m.retryDelay = 30 * time.Millisecond
+	liveTerminal(env, true)
+	st := fakeStore(env)
+	st.listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	st.listErr, st.listErrAt = errors.New("db down"), 1 // the first scan's only page fails
+	env.m.onSessionStart(ev("resume"))
+	assert.Empty(t, env.svc.Calls())
+	assert.True(t, pendingRecheck(env, "S"), "a re-check is scheduled")
+	waitArchived(t, env, "E1")
+}
+
+func TestManualResume_RetriesAfterAReReadError(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.m.retryDelay = 30 * time.Millisecond
+	liveTerminal(env, true)
+	st := fakeStore(env)
+	live := row("E1", "idle", false, "S", "", 1)
+	st.listRows = []store.Execution{live}
+	st.results = []getResult{{err: errors.New("db busy")}, {exec: live}}
+	env.m.onSessionStart(ev("resume"))
+	assert.Empty(t, env.svc.Calls())
+	assert.True(t, pendingRecheck(env, "S"), "a re-check is scheduled")
+	waitArchived(t, env, "E1")
+}
+
+// A transient failure does not count as "nothing to retry".
+func TestManualResume_TransientFailureKeepsTheCount(t *testing.T) {
+	env := newHandoffEnv(t)
+	logs := captureLogs(env)
+	env.m.retryDelay = time.Hour
+	liveTerminal(env, true)
+	require.True(t, env.m.locks.TryLock(sidLockKey("S")))
+	env.m.onSessionStart(ev("resume")) // attempt 1 armed
+	env.m.locks.Unlock(sidLockKey("S"))
+	env.terminals.err = errors.New("frames db busy")
+	env.m.handleSessionStart(context.Background(), ev("resume")) // a scheduled pass that fails transiently
+	require.Equal(t, 1, logs.count("re-checking in"), "folded into the pending slot")
+	env.m.q1Mu.Lock()
+	attempts := env.m.q1Retries["S"].attempts
+	env.m.q1Mu.Unlock()
+	assert.Equal(t, 1, attempts, "not reset")
+}
+
+// Concern 4: a real hub SessionStart resets S's count, so a fresh manual
+// resume after the cap is handled normally; a re-check does not.
+func TestManualResume_HubEventAfterTheCapRetriesAgain(t *testing.T) {
+	env := newHandoffEnv(t)
+	logs := captureLogs(env)
+	env.m.retryDelay = time.Millisecond
+	liveTerminal(env, true)
+	require.True(t, env.m.locks.TryLock(sidLockKey("S"))) // contended throughout
+	env.m.onSessionStart(ev("resume"))
+	require.Eventually(t, func() bool { return logs.count("giving up") == 1 }, 3*time.Second, time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	require.Equal(t, manualResumeMaxRetries, logs.count("re-checking in"))
+
+	env.m.recheckSession("S") // a re-check still counts toward the cap
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, manualResumeMaxRetries, logs.count("re-checking in"), "no retry after a re-check at the cap")
+
+	env.m.onSessionStart(ev("resume")) // a fresh hub event
+	assert.GreaterOrEqual(t, logs.count("re-checking in"), manualResumeMaxRetries+1, "the hub event schedules a retry again")
 }

@@ -176,6 +176,7 @@ func TestManualResume_TruncatedScanStillExitsWhatItFound(t *testing.T) {
 	if len(env.svc.ArchiveCalls()) != 1 {
 		t.Fatal("the worker found before the cap must still exit")
 	}
+	assert.False(t, pendingRecheck(env, "S"), "truncation is persistent: no re-check")
 }
 
 // PR #1590 R1-2: a page error must not drop the worker page 1 already found.

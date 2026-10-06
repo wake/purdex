@@ -17,10 +17,12 @@ import (
 //
 // The handler and the transfers all use TryLock, so neither side ever
 // blocks (no deadlock), and the handler skips the current event when
-// sid:<S> or a worker's exec:<id> is held (D2). A skip, or an exit that
-// failed for any reason but a non-pdx holder's refusal (held_by), schedules
-// a re-check of S: one pending per session, after manualResumeRetryDelay,
-// at most manualResumeMaxRetries in a row. The re-check is the same
+// sid:<S> or a worker's exec:<id> is held (D2). A skip, a transient failure
+// (the terminal lookup, a candidate's re-read, or a worker-scan page erred;
+// not the scan's page cap), or an exit that failed for any reason but a
+// non-pdx holder's refusal (held_by) schedules a re-check of S: one pending
+// per session, after manualResumeRetryDelay, at most manualResumeMaxRetries
+// in a row (a real SessionStart for S resets the count). The re-check is the same
 // per-session pass with every guard — it acts only while a verified
 // terminal runs S, which is what makes a retry after a failed Purdex
 // transfer safe.
@@ -144,14 +146,25 @@ func (m *Module) q1Halted(ctx context.Context) bool {
 }
 
 // onSessionStart handles one SessionStart from the agent hub. The hub runs
-// subscribers off the hook path, so this is synchronous.
+// subscribers off the hook path, so this is synchronous. A real SessionStart
+// for S (not a scheduled retry, not a recheckSession) resets S's retry count
+// first: a fresh manual resume after the cap is handled normally.
 func (m *Module) onSessionStart(ev agent.SessionStartEvent) {
 	ctx, ok := m.q1Begin()
 	if !ok {
 		return
 	}
 	defer m.q1Work.Done()
+	if !ev.Overflow && isResumeStart(ev) {
+		m.resetRecheckCount(ev.SessionID)
+	}
 	m.handleSessionStart(ctx, ev)
+}
+
+// isResumeStart: a SessionStart Q1 acts on — Claude Code starting or
+// resuming a session (clear and compact keep the same process).
+func isResumeStart(ev agent.SessionStartEvent) bool {
+	return ev.AgentType == "cc" && ev.SessionID != "" && (ev.Source == "startup" || ev.Source == "resume")
 }
 
 // handleSessionStart is onSessionStart's body, inside one unit of Q1 work.
@@ -163,19 +176,25 @@ func (m *Module) handleSessionStart(ctx context.Context, ev agent.SessionStartEv
 		m.reconcileTerminalOwners(ctx)
 		return
 	}
-	if ev.AgentType != "cc" || ev.SessionID == "" || (ev.Source != "startup" && ev.Source != "resume") {
+	if !isResumeStart(ev) {
 		return
 	}
 	sid := ev.SessionID
-	_, retry := m.resolveManualResume(ctx, sid, ev.TmuxSession, func(ctx context.Context) []store.Execution {
+	_, retry := m.resolveManualResume(ctx, sid, ev.TmuxSession, func(ctx context.Context) ([]store.Execution, string) {
 		workers, err := m.liveWorkersFor(ctx, sid)
-		if err != nil {
-			// Unlike an owner check (which refuses a transfer on a partial scan),
-			// the terminal has ALREADY taken S over here: exiting the workers
-			// found is strictly better than exiting none.
-			m.logf("nex: manual resume %s: worker scan: %v (acting on %d found)", sid, err, len(workers))
+		if err == nil {
+			return workers, ""
 		}
-		return workers
+		// Unlike an owner check (which refuses a transfer on a partial scan),
+		// the terminal has ALREADY taken S over here: exiting the workers
+		// found is strictly better than exiting none. A failed page is
+		// transient and re-checks S; the page cap is not (the table stays
+		// that large), so a truncated scan does not.
+		m.logf("nex: manual resume %s: worker scan: %v (acting on %d found)", sid, err, len(workers))
+		if errors.Is(err, errOwnerScanTruncated) {
+			return workers, ""
+		}
+		return workers, "the worker scan failed"
 	})
 	m.settleRecheck(sid, retry)
 }
@@ -184,12 +203,13 @@ func (m *Module) handleSessionStart(ctx context.Context, ev agent.SessionStartEv
 // and the overflow reconcile. Under sid:<S> (TryLock: a Purdex transfer of
 // S holds it for its whole run), and only while a verified terminal frame
 // runs S, it exits each of S's live workers that workers returns — called
-// inside the lock, after the terminal check. Each candidate is re-read
+// inside the lock, after the terminal check, with a retry reason when its
+// result may be incomplete. Each candidate is re-read
 // under its exec:<id> lock and skipped unless it is still S's live worker
 // (the reconcile's rows can be stale by the time a later group runs).
 // It returns the ids it exited, and why S needs a re-check ("" when nothing
 // is left to retry).
-func (m *Module) resolveManualResume(parent context.Context, sid, tmuxSession string, workers func(context.Context) []store.Execution) (exited []string, retry string) {
+func (m *Module) resolveManualResume(parent context.Context, sid, tmuxSession string, workers func(context.Context) ([]store.Execution, string)) (exited []string, retry string) {
 	key := sidLockKey(sid)
 	if !m.locks.TryLock(key) {
 		return nil, "the session is busy" // a Purdex transfer of S is in flight, or another handler has S
@@ -207,7 +227,7 @@ func (m *Module) resolveManualResume(parent context.Context, sid, tmuxSession st
 	}
 	if err != nil {
 		m.logf("nex: manual resume %s: terminal lookup: %v", sid, err)
-		return nil, ""
+		return nil, "the terminal lookup failed"
 	}
 	verified := false
 	for _, t := range terms {
@@ -217,7 +237,8 @@ func (m *Module) resolveManualResume(parent context.Context, sid, tmuxSession st
 		return nil, ""
 	}
 	principal := m.internalPrincipal()
-	for _, w := range workers(parent) {
+	candidates, retry := workers(parent)
+	for _, w := range candidates {
 		if m.q1Halted(parent) {
 			break // after the scan, and between candidates
 		}
@@ -242,11 +263,12 @@ func (m *Module) exitManualResumeWorker(parent context.Context, sid, tmuxSession
 	}
 	defer m.locks.Unlock(lk)
 	w, err := m.getExecution(parent, execID)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, "" // gone since the scan
+	}
 	if err != nil {
-		if !errors.Is(err, store.ErrNotFound) {
-			m.logf("nex: manual resume %s: re-reading %s: %v", sid, execID, err)
-		}
-		return false, ""
+		m.logf("nex: manual resume %s: re-reading %s: %v", sid, execID, err)
+		return false, "re-reading " + execID + " failed"
 	}
 	if !isLiveExecution(w) || !executionIsFor(w, sid) {
 		return false, "" // exited or moved since the scan
@@ -304,14 +326,14 @@ func (m *Module) reconcileTerminalOwners(ctx context.Context) {
 		// The tmux session name is unknown on this path (agent.TerminalSession
 		// has no such field), so nex-worker-exited carries tmux_session "";
 		// the SPA toast (Task 18) must fall back when it is empty.
-		exited, retry := m.resolveManualResume(ctx, sid, "", func(context.Context) []store.Execution {
+		exited, retry := m.resolveManualResume(ctx, sid, "", func(context.Context) ([]store.Execution, string) {
 			var left []store.Execution
 			for _, w := range group {
 				if !done[w.ID] {
 					left = append(left, w)
 				}
 			}
-			return left
+			return left, ""
 		})
 		for _, id := range exited {
 			done[id] = true
@@ -342,6 +364,12 @@ func (m *Module) settleRecheck(sid, retry string) {
 		m.armRecheck(sid, retry)
 		return
 	}
+	m.resetRecheckCount(sid)
+}
+
+// resetRecheckCount clears S's attempt count (and give-up mark), keeping a
+// pending re-check.
+func (m *Module) resetRecheckCount(sid string) {
 	m.q1Mu.Lock()
 	defer m.q1Mu.Unlock()
 	if st := m.q1Retries[sid]; st != nil {
