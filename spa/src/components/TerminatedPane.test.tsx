@@ -546,6 +546,8 @@ describe('TerminatedPane — a conversation-ended pane', () => {
     renderConversation({ last_in: 'terminal' })
     expect(screen.getByRole('checkbox', { name: 'Run resume command' })).toBeChecked()
     expect(screen.getByTestId('rebuild-action-set')).toHaveTextContent(`claude --resume ${S}`)
+    // No "running when last seen": the agent never ran in this pane.
+    expect(screen.queryByTestId('rebuild-agent-state')).toBeNull()
   })
 
   it('last in a worker with Nexen ready: worker preselected, and the rebuild resumes S in its cwd without replacing anything', async () => {

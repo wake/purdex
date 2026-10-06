@@ -20,6 +20,7 @@ import type { ExecutionSummary } from '../lib/nex/types'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS, CC_COLOR_ICON_VARIANTS } from '../lib/agent-icons'
 import { ICON_MAP } from '../components/tab-icon-map'
+import { conversationRebuildContent } from '../lib/nex/open-conversation-rebuild'
 
 function makeTab(
   overrides: Partial<{ hostId: string; sessionCode: string; terminated: boolean; cachedName: string }> = {},
@@ -146,8 +147,25 @@ describe('useTabDisplay — agent title override', () => {
     useAgentStore.setState({
       agentTypes: { 'h1:sc1': 'cc' },
     })
+    // The closed-terminal suffix is UI copy (`page.pane.terminated`): read it in English, not through the key stub.
+    useI18nStore.getState().setLocale('en')
     const { result } = renderHook(() => useTabDisplay(makeTab({ terminated: true, cachedName: 'base' })))
     expect(result.current.displayTitle).toBe('base（Terminated）')
+  })
+
+  it('a conversation-ended tab is titled by its conversation, with the closed-terminal suffix', () => {
+    useUISettingsStore.setState({ dynamicTabName: true })
+    useI18nStore.getState().setLocale('en')
+    const tab: Tab = {
+      ...createTab(conversationRebuildContent('h1', {
+        session_id: 'aaaaaaaa-1111-2222-3333-444444444444', title: 'Fix the login bug', title_source: 'ai', cwd: '/w',
+        cwd_exists: true, last_activity_at: 5, last_in: 'terminal',
+      }, 'proj-2', 'i', 1)),
+      id: 't1',
+    }
+    const { result } = renderHook(() => useTabDisplay(tab))
+    expect(result.current.displayTitle).toBe('Fix the login bug（Terminated）')
+    expect(result.current.isTerminated).toBe(true)
   })
 
   it('strips the cc marker from pane_title by default', () => {

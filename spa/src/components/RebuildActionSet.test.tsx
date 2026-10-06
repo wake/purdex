@@ -491,6 +491,19 @@ describe('RebuildActionSet — the last agent state', () => {
     expect(screen.queryByTestId('rebuild-agent-state')).toBeNull()
   })
 
+  // A conversation's rebuild tab (conversation entity spec §13.4) never saw the agent run in this pane: its record
+  // only names S, so there is no last state to report. The resume itself is unaffected.
+  it('a conversation-ended pane shows no agent state, and still resumes', () => {
+    render(<RebuildActionSet tabId="t1" paneId="p1" record={running} terminated="conversation-ended" onRebuild={vi.fn()} />)
+    expect(screen.queryByTestId('rebuild-agent-state')).toBeNull()
+    expect(screen.getByRole('checkbox', { name: /resume/i })).toBeChecked()
+  })
+
+  it('a session-closed pane keeps its agent state', () => {
+    render(<RebuildActionSet tabId="t1" paneId="p1" record={running} terminated="session-closed" onRebuild={vi.fn()} />)
+    expect(stateText()).toBe(fill(en['rebuild.agent_state_running'], { agent: 'Claude Code', time: fmt(SEEN, 'en') }))
+  })
+
   it('an unknown agent type is named by its type', () => {
     render(<RebuildActionSet tabId="t1" paneId="p1" onRebuild={vi.fn()}
       record={{ ...exited('process-dead'), agent: { type: 'aider', frameId: 'F1', updatedAt: SEEN } }} />)
