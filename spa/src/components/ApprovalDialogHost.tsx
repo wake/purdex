@@ -6,10 +6,11 @@
 // It cannot be dismissed: no Escape, no backdrop click. A request ends by a decision — 核准 / 拒絕, one click each on any
 // Purdex.app (U5b) — or by the daemon closing it (decided elsewhere, timeout, cancel), which removes it from the store
 // and unmounts this. While the host is not connected (spec §9.4) the buttons dim under `daemon 重啟中…`; a click then is
-// queued in the store and sent when the reconnect snapshot re-adds the request (P3b).
+// queued in the store and sent when the reconnect snapshot re-adds the request (P3b). A send that fails on the network
+// while the host is still connected is not queued (nothing would resend it): it toasts and the buttons come back.
 //
 // Focus: the panel takes focus on open and Tab stays inside, as ConfirmDialog does, so a stray keystroke never
-// reaches the pane behind. The i18n strings are the spec's (§6.3).
+// reaches the pane behind; Escape is swallowed so a dialog beneath does not dismiss. The i18n strings are the spec's (§6.3).
 import { useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -65,7 +66,21 @@ function OpenApprovalDialog({ entry }: { entry: ApprovalEntry }) {
 
   useEffect(() => { panelRef.current?.focus() }, [])
 
-  // Tab stays inside the panel (ConfirmDialog's rule). No Escape handler, on purpose: nothing dismisses this dialog.
+  // Escape is swallowed, not handled: nothing dismisses this dialog, and nothing beneath it may be dismissed either
+  // (ConfirmDialog and FloatingPanel both listen for Escape on `document`; a handoff confirm under this modal would
+  // otherwise cancel). Capture phase on `window`, not `document`: capture listeners on one target run in registration
+  // order, and the dialog beneath registered first — `window` capture runs before every `document` listener regardless.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+    }
+    window.addEventListener('keydown', onKey, { capture: true })
+    return () => window.removeEventListener('keydown', onKey, { capture: true })
+  }, [])
+
+  // Tab stays inside the panel (ConfirmDialog's rule).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Tab' || e.ctrlKey || e.metaKey || e.altKey) return

@@ -1,11 +1,13 @@
 // spa/src/components/ApprovalDialogHost.test.tsx — the one app-level approval dialog (lead-team spec §6.3, §6.5, §9.4):
 // it renders the oldest open request from `useApprovalStore`, 核准 / 拒絕 are one click each (U5b), it never dismisses
-// on Escape, it queues a click while the host is not connected, and it closes with the "handled by" toast on a close
-// from elsewhere or a 409. Only the daemon call is mocked. The WS branch is P3b's; a `closed` from elsewhere is played
+// on Escape (and swallows it, so no dialog beneath dismisses either), it queues a click while the host is not connected
+// (never while it is — nothing would resend), and it closes with the "handled by" toast on a close from elsewhere or any
+// 409. Only the daemon call is mocked. The WS branch is P3b's; a `closed` from elsewhere is played
 // here as the branch will play it: `applyClosed` → `'elsewhere'` → `toastClosed`.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { ApprovalDialogHost } from './ApprovalDialogHost'
+import { ConfirmDialog } from './ConfirmDialog'
 import { approvalKey, useApprovalStore } from '../stores/useApprovalStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -241,8 +243,12 @@ describe('ApprovalDialogHost', () => {
       expect(screen.getByTestId('approval-deny')).toBeDisabled()
     })
 
-    it('a send that fails on the network (the socket dropped mid-click) is queued the same way', async () => {
-      mockedDecide.mockRejectedValueOnce(new ApprovalApiError(0, 'network', 'Failed to fetch'))
+    it('a send that fails on the network while the host went down mid-click (status no longer connected) is queued the same way', async () => {
+      // The click went out while connected; by the time fetch fails the WS has already moved to `reconnecting`.
+      mockedDecide.mockImplementationOnce(async () => {
+        useHostStore.getState().setRuntime(H, { status: 'reconnecting' })
+        throw new ApprovalApiError(0, 'network', 'Failed to fetch')
+      })
       render(<ApprovalDialogHost />)
       open(approval())
       await act(async () => { fireEvent.click(screen.getByTestId('approval-approve')) })
@@ -250,6 +256,26 @@ describe('ApprovalDialogHost', () => {
       expect(useApprovalStore.getState().queued[approvalKey(H, 'req-1')]).toMatchObject({ decision: 'approve' })
       expect(screen.getByTestId('approval-queued')).toBeInTheDocument()
       expect(useApprovalStore.getState().decidedHere).toEqual({})
+      expect(useUndoToast.getState().toast).toBeNull()
+    })
+
+    it('a network failure while the host is still connected is NOT queued (nothing would resend it): toast, buttons live again', async () => {
+      mockedDecide.mockRejectedValueOnce(new ApprovalApiError(0, 'network', 'Failed to fetch'))
+      render(<ApprovalDialogHost />)
+      open(approval())
+      await act(async () => { fireEvent.click(screen.getByTestId('approval-approve')) })
+      expect(dialog()).toBeInTheDocument()
+      expect(useApprovalStore.getState().queued).toEqual({})
+      expect(screen.queryByTestId('approval-queued')).toBeNull()
+      expect(useApprovalStore.getState().decidedHere).toEqual({})
+      expect(useUndoToast.getState().toast?.message).toBe('送出決定失敗（network: Failed to fetch）')
+      expect(screen.getByTestId('approval-approve')).not.toBeDisabled()
+      expect(screen.getByTestId('approval-deny')).not.toBeDisabled()
+      // The person can simply click again.
+      mockedDecide.mockResolvedValueOnce(approval({ state: 'approved' }))
+      await act(async () => { fireEvent.click(screen.getByTestId('approval-approve')) })
+      expect(mockedDecide).toHaveBeenCalledTimes(2)
+      expect(dialog()).toBeNull()
     })
 
     it('a send that fails because the host was removed drops the request: nothing queued, no toast', async () => {
@@ -299,14 +325,37 @@ describe('ApprovalDialogHost', () => {
       expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由 Purdex.app @ air26 拒絕')
     })
 
-    it('a 409 whose decided_by is this very app (the first answer was lost) closes it silently', async () => {
+    it('two clients with the same label (two windows on one machine): the loser\'s 409 still toasts who decided', async () => {
+      // Our own label is `Purdex.app` here too — the label is not an identity, so a 409 is never judged "ours".
       mockedDecide.mockRejectedValueOnce(new ApprovalApiError(409, 'already_decided', '', approval({ state: 'approved', decided_by: { kind: 'app', label: 'Purdex.app' } })))
       render(<ApprovalDialogHost />)
       open(approval())
-      await act(async () => { fireEvent.click(screen.getByTestId('approval-approve')) })
+      await act(async () => { fireEvent.click(screen.getByTestId('approval-deny')) })
+      expect(mockedDecide.mock.calls[0][2]).toMatchObject({ client: { kind: 'app', label: 'Purdex.app' } })
       expect(dialog()).toBeNull()
-      expect(useUndoToast.getState().toast).toBeNull()
+      expect(useApprovalStore.getState().decidedHere).toEqual({})
+      expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由 Purdex.app 核准')
     })
+  })
+
+  it('Escape does not leak to a dialog beneath: a ConfirmDialog mounted earlier keeps its onCancel uncalled', () => {
+    const onCancel = vi.fn()
+    // The handoff confirm was up first (its capture listener on `document` registered first); the request arrives on top.
+    render(
+      <>
+        <ConfirmDialog testIdPrefix="handoff" title="交接" body="確定？" confirmLabel="交接" onCancel={onCancel} onConfirm={() => {}} />
+        <ApprovalDialogHost />
+      </>,
+    )
+    open(approval())
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(dialog()).toBeInTheDocument()
+    // Once the request is gone, Escape reaches the confirm again.
+    closedFromWire(approval({ state: 'denied', decided_by: air26 }))
+    expect(dialog()).toBeNull()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
   })
 
   it('a 404 closes it with the failure toast; another error toasts and re-enables the buttons', async () => {
@@ -316,7 +365,7 @@ describe('ApprovalDialogHost', () => {
     await act(async () => { fireEvent.click(screen.getByTestId('approval-approve')) })
     expect(dialog()).toBeInTheDocument()
     expect(screen.getByTestId('approval-approve')).not.toBeDisabled()
-    expect(useUndoToast.getState().toast?.message).toBe('送出決定失敗（bad_request）')
+    expect(useUndoToast.getState().toast?.message).toBe('送出決定失敗（bad_request: roots must be absolute）')
     expect(useApprovalStore.getState().decidedHere).toEqual({})
     mockedDecide.mockRejectedValueOnce(new ApprovalApiError(404, 'not_found'))
     await act(async () => { fireEvent.click(screen.getByTestId('approval-deny')) })
