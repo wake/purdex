@@ -14,6 +14,10 @@ import { openWorkerTab } from '../../features/workspace/lib/open-worker-tab'
 import { groupBySource } from '../../lib/nex/execution-groups'
 import { liveEntityRows } from '../../lib/nex/live-workers'
 import { isRefShownNow, useIsRefShown } from '../../lib/shown-hosts'
+import { ConfirmDialog } from '../ConfirmDialog'
+import { exitWorker, exitErrorMessage } from '../../lib/nex/exit-worker'
+import { useUndoToast } from '../../stores/useUndoToast'
+import type { ExecutionSummary } from '../../lib/nex/types'
 import { ExecutionsGroup } from './ExecutionsGroup'
 
 export const AGE_TICK_MS = 60_000
@@ -47,6 +51,7 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
   const live = useMemo(() => liveEntityRows(items), [items])
   const groups = useMemo(() => groupBySource(live), [live])
   const shown = useIsRefShown(id === '' ? null : id)
+  const [confirmExitId, setConfirmExitId] = useState<string | null>(null)
 
   if (id === '') return null
 
@@ -56,6 +61,19 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
   const open = (executionId: string) => {
     if (!isRefShownNow(id)) return
     openWorkerTab({ kind: 'execution', executionId, host: id })
+  }
+
+  const runExit = async (executionId: string) => {
+    try {
+      await exitWorker({ hostId: id, executionId })
+    } catch (err) {
+      useUndoToast.getState().show(exitErrorMessage(err, t))
+    }
+  }
+  // A running worker is confirmed first; any other live worker exits at once.
+  const requestExit = (r: ExecutionSummary) => {
+    if (r.state === 'running') setConfirmExitId(r.id)
+    else void runExit(r.id)
   }
 
   let body: React.ReactNode
@@ -98,7 +116,7 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
           <p data-testid="executions-empty" className="px-3 py-2 text-xs text-text-muted">{t('executions.empty')}</p>
         )}
         {groups.map((group) => (
-          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={shown ? open : undefined} />
+          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={shown ? open : undefined} onExit={shown ? requestExit : undefined} />
         ))}
       </>
     )
@@ -114,6 +132,11 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
         <p data-testid="executions-open-hint" className="px-3 py-1 text-xs text-text-muted">{t('hosts.shown.open_executions_hint')}</p>
       )}
       {body}
+      {confirmExitId !== null && (
+        <ConfirmDialog testIdPrefix="exit" title={t('worker.exit.confirm_title')} body={t('worker.exit.confirm_running')}
+          confirmLabel={t('worker.exit.button')} onCancel={() => setConfirmExitId(null)}
+          onConfirm={() => { const eid = confirmExitId; setConfirmExitId(null); void runExit(eid) }} />
+      )}
     </div>
   )
 }

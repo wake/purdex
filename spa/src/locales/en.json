@@ -718,8 +718,6 @@
   "execution.cost.includesPriorHistory": "Includes spend from before the hand-over",
   "execution.interrupt": "Interrupt",
   "execution.more_actions": "More actions",
-  "execution.terminate": "Terminate",
-  "execution.terminate_confirm": "Confirm terminate",
   "execution.queued": "queued",
   "execution.sse.connecting": "connecting",
   "execution.sse.open": "live",

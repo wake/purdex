@@ -718,8 +718,6 @@
   "execution.cost.includesPriorHistory": "含接續前的費用",
   "execution.interrupt": "中斷",
   "execution.more_actions": "更多動作",
-  "execution.terminate": "終止",
-  "execution.terminate_confirm": "確認終止",
   "execution.queued": "已排隊",
   "execution.sse.connecting": "連線中",
   "execution.sse.open": "即時",

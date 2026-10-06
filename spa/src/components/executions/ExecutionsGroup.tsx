@@ -4,6 +4,7 @@
 // hook — no Aigora code).
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { ExecutionGroup } from '../../lib/nex/execution-groups'
+import type { ExecutionSummary } from '../../lib/nex/types'
 import { ExecutionRowCompact } from './ExecutionRowCompact'
 
 const KNOWN_SOURCES: Record<string, string> = {
@@ -20,9 +21,11 @@ interface Props {
   showCost: boolean
   /** Absent → the rows are listed but not openable (the host is hidden in this workbench — plan H2d-2). */
   onOpen?: (executionId: string) => void
+  /** Only passed for a shown host; rows get a 退出 action. */
+  onExit?: (row: ExecutionSummary) => void
 }
 
-export function ExecutionsGroup({ group, daemonHostId, now, showCost, onOpen }: Props) {
+export function ExecutionsGroup({ group, daemonHostId, now, showCost, onOpen, onExit }: Props) {
   const t = useI18nStore((s) => s.t)
   const key = KNOWN_SOURCES[group.source]
   const label = key ? t(key) : group.source
@@ -32,7 +35,7 @@ export function ExecutionsGroup({ group, daemonHostId, now, showCost, onOpen }: 
       <div className="px-3 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-text-muted truncate">{label}</div>
       {onOpen ? (
         group.rows.map((row) => (
-          <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={() => onOpen(row.id)} />
+          <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={() => onOpen(row.id)} onExit={onExit ? () => onExit(row) : undefined} />
         ))
       ) : (
         // Non-openable rows (a hidden host, plan H2d-2) are list items; this is their list.

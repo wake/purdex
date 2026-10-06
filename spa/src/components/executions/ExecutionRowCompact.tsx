@@ -9,7 +9,7 @@
 // as the state dot's tooltip. The brief is the only part that shrinks; every
 // other item is `shrink-0 whitespace-nowrap`, so a narrow sidebar truncates
 // the brief instead of wrapping the row.
-import { Terminal } from '@phosphor-icons/react'
+import { SignOut, Terminal } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { stateDotClass } from '../../lib/nex/state-dot'
 import { firstLine } from '../../lib/nex/format'
@@ -31,6 +31,8 @@ interface Props {
   showCost?: boolean
   /** Absent → the row is not an action (its host is hidden in this workbench — plan H2d-2): a plain, listed row. */
   onOpen?: () => void
+  /** Present → a sibling 退出 button beside the open button (shown hosts only). */
+  onExit?: () => void
 }
 
 const ROW_CLASS = 'flex items-center gap-1.5 w-full min-w-0 px-3 py-1 text-left'
@@ -47,7 +49,7 @@ function activityLabel(t: T, row: ExecutionSummary): string {
   return t(`executions.activity.${phase}`)
 }
 
-export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, onOpen }: Props) {
+export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, onOpen, onExit }: Props) {
   const t = useI18nStore((s) => s.t)
   const age = relativeAge(row.updated_at, now)
   const sessionCode = daemonHostId ? sameHostSessionCode(row.origin, daemonHostId) : null
@@ -109,7 +111,7 @@ export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, 
       </div>
     )
   }
-  return (
+  const openButton = (
     <button
       type="button"
       data-testid="executions-row"
@@ -119,5 +121,23 @@ export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, 
     >
       {content}
     </button>
+  )
+  if (!onExit) return openButton
+  // The exit button is a sibling, never nested in the open button. It is visually hidden until hover/focus, but
+  // stays in the tab order (opacity, not display:none).
+  return (
+    <div className="group relative flex items-center">
+      {openButton}
+      <button
+        type="button"
+        data-testid="executions-row-exit"
+        aria-label={t('worker.exit.button')}
+        title={t('worker.exit.button')}
+        onClick={onExit}
+        className="absolute right-1 shrink-0 p-1 rounded bg-surface-secondary text-text-muted hover:text-status-error opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer"
+      >
+        <SignOut size={12} aria-hidden="true" />
+      </button>
+    </div>
   )
 }
