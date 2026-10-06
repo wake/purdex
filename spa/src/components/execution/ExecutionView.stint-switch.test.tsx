@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
 import type { PreludeSegmentProps } from '../room/prelude/PreludeSegment'
+import { segmentPoses } from '../room/prelude/test-segment-poses'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
@@ -25,8 +26,7 @@ vi.mock('../room/prelude/PreludeSegment', async (importOriginal) => {
   const Real = (await importOriginal<typeof import('../room/prelude/PreludeSegment')>()).default
   return {
     default: (p: PreludeSegmentProps) => (
-      <div data-testid="prelude-run" data-stint={p.stintId ?? 'plain'}
-        data-poses={(p.mode === 'room' ? p.entries.map((e) => e.pos) : p.blocks.flatMap((b) => (b.kind === 'span' ? p.posOf.slice(b.start, b.end) : [b.entry.pos]))).join(' ')}>
+      <div data-testid="prelude-run" data-stint={p.stintId ?? 'plain'} data-poses={segmentPoses(p).join(' ')}>
         <Real {...p} />
       </div>
     ),

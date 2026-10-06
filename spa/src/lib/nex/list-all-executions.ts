@@ -1,7 +1,7 @@
 // spa/src/lib/nex/list-all-executions.ts — conversation entity spec §9 / D9:
 // follow Nexen's cursor (ids ascending, oldest first) so the newest rows are
 // never cut off; bounded, and a repeated cursor stops the walk with the rows so far (stuck, not truncated).
-import { listExecutions } from './nex-api'
+import { listExecutions, type ListExecutionsOptions } from './nex-api'
 import { sanitizeExecutionsPage } from './validate-executions'
 import type { ExecutionSummary } from './types'
 
@@ -23,7 +23,14 @@ export async function listAllExecutions(
   let cursor = ''
   for (let page = 0; page < LIST_MAX_PAGES; page += 1) {
     requested.add(cursor)
-    const raw = await listExecutions(hostId, { includeArchived: opts.includeArchived, limit: LIST_PAGE_LIMIT, ...(opts.sessionId ? { sessionId: opts.sessionId } : {}), ...(opts.labels ? { labels: opts.labels } : {}), ...(cursor ? { cursor } : {}) })
+    const pageOpts: ListExecutionsOptions = {
+      includeArchived: opts.includeArchived,
+      limit: LIST_PAGE_LIMIT,
+      ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+      ...(opts.labels ? { labels: opts.labels } : {}),
+      ...(cursor ? { cursor } : {}),
+    }
+    const raw = await listExecutions(hostId, pageOpts)
     if (!isCurrent()) return null
     const p = sanitizeExecutionsPage(raw)
     if (p.malformed) throw new Error(`nex: malformed executions page ${page + 1}`)

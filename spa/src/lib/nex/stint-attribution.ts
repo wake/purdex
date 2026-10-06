@@ -31,10 +31,13 @@ export function attributeItems(items: readonly PreludeItem[], stints: readonly S
   return out
 }
 
-/** The stint with the largest boundary ≤ `offset`; of equal boundaries the later in `stints` (sorted by createdAt, so the newer). */
+/** The stint with the largest boundary ≤ `offset`; of equal boundaries the newer by createdAt, in any input order. */
 function stintAt(stints: readonly Stint[], offset: number): string | null {
   let best: Stint | null = null
-  for (const s of stints) if (s.boundary <= offset && (best === null || s.boundary >= best.boundary)) best = s
+  for (const s of stints) {
+    if (s.boundary > offset) continue
+    if (best === null || s.boundary > best.boundary || (s.boundary === best.boundary && s.createdAt >= best.createdAt)) best = s
+  }
   return best?.id ?? null
 }
 
