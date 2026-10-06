@@ -618,6 +618,16 @@ describe('HostSessionSection Sessions / Workers switch', () => {
     expect(screen.getByText('dev')).toBeInTheDocument()
   })
 
+  it('does not jump back to Workers when Nexen recovers', () => {
+    useNexHostStore.setState({ byHost: { [HOST_ID]: readyEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
+    render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`host-view-workers-${HOST_ID}`))
+    act(() => { useNexHostStore.setState({ byHost: { [HOST_ID]: disabledEntry } }) })
+    act(() => { useNexHostStore.setState({ byHost: { [HOST_ID]: readyEntry } }) })
+    expect(screen.getByTestId(`host-view-sessions-${HOST_ID}`)).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId(`host-view-workers-${HOST_ID}`)).toHaveAttribute('aria-selected', 'false')
+  })
+
   it('hides the switch when nex is not ready', () => {
     useNexHostStore.setState({ byHost: { [HOST_ID]: disabledEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
     render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)

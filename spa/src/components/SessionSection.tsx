@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -86,6 +86,8 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
   const [view, setView] = useState<'sessions' | 'workers'>('sessions')
   // Not ready → the switch is hidden and the block is the sessions view.
   const showWorkers = nexReady && view === 'workers'
+  // Losing readiness resets the choice, so a recovery does not jump back to Workers by itself.
+  useEffect(() => { if (!nexReady) setView('sessions') }, [nexReady])
 
   if (!host) return null
 
