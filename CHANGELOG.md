@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.513] - 2026-10-07
+
+> 只動 daemon 與 `pdx` 指令，**需要部署新的 `pdx` 執行檔並重啟 daemon**，由統籌安排。資料庫、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P1（#1650）
+
+這是「lead / member / team 與 context 接力」規格的第一個程式 PR。規格與計畫在前一個純文件 PR（#1648）：`docs/specs/2026-10-06-lead-team-relay-spec.md`（使用者決策 U1–U18、量測事實 M1–M22、phase P0–P8）與 `docs/specs/2026-10-06-lead-team-relay-plan.md`（plan v1，P0–P3）。`PRODUCT.md` 的詞彙也在那個 PR 改為 lead / member / team（P0）。
+
+- **`pdx peers` 多一欄 `CTX`**：每個 Claude Code session 的 context 已用百分比（例如 `72%`），不知道時顯示 `-`。`--all` 的表格也有。`--json` 的每一列多 `agent.context {used_percentage, window, at}`。
+  - 數值來自 statusline 回報，**按 CC session id 保存**：同一個 tmux session 裡開兩個 Claude Code pane，各自顯示各自的用量，不再互相覆蓋。
+  - 一個 session 剛啟動、statusline 還沒回報百分比時顯示 `-`；移除 statusline 後也會清掉。
+  - 同一份資料也記下 session 目前的 model 與 effort 等級（給之後的接力與切換用，這版還沒顯示）。
+- **`pdx peers` 的 CWD 修正**：session 列的目錄現在跟著 Claude Code 自己回報的工作目錄走（進了 worktree 就顯示 worktree 路徑），其次才是 tmux 的 session 路徑。以前一律顯示 tmux 的路徑，進 worktree 的 session 會顯示錯。
+- **`peer_not_found` 的提示**不再說 ref「永遠不變」：ref 會在手動 `/clear` 後改變；它不變的是改名。
+
+### Fixed：U16 用詞（#1649）
+
+- SPA 的三條切換錯誤文案「交接」改為「切換」（`handoff.error.*`）。英文與程式識別字不變。
+
+### 待追蹤
+
+- #1652：statusline remove 與在途 status POST 交錯時可能重新留下過期 CTX（視窗極窄，與既有快取行為對稱）。
+- #1647／nexen #131：切換（handoff）沿用 session 的 model 與 effort（U18）。
+
 ## [1.0.0-alpha.512] - 2026-10-07
 
 > 只動 daemon 的內部程式碼，**目前沒有任何地方會呼叫到它，這一版本身不需要部署**（alpha.511 的 Nexen 升級若已排部署，照原計畫即可）。資料庫結構不變。SPA 與 Electron 都不必更新。
