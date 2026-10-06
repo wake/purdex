@@ -158,6 +158,52 @@ func TestSendSnapshot_FullBufferClosesSubscriber(t *testing.T) {
 	}
 }
 
+// A subscriber whose snapshot read fails is removed (spec §6.2: every new
+// subscriber gets the open set); keeping it would leave a client that never
+// sees the requests open before it connected. A healthy store sends the
+// snapshot and keeps the subscriber.
+func TestSnapshot_ListOpenFailureDropsTheSubscriber(t *testing.T) {
+	t.Run("store failing", func(t *testing.T) {
+		f := newFixture(t)
+		if err := f.m.store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		sub := f.core.Events.AddTestSubscriber()
+		f.m.sendSnapshot(sub)
+		select {
+		case <-sub.Done():
+		default:
+			t.Fatal("a subscriber whose snapshot read failed must be removed so the client reconnects")
+		}
+		select {
+		case data, ok := <-sub.SendCh():
+			if ok {
+				t.Fatalf("a frame was queued to a subscriber whose snapshot read failed: %s", data)
+			}
+		default:
+		}
+	})
+	t.Run("store healthy", func(t *testing.T) {
+		f := newFixture(t)
+		sub := f.core.Events.AddTestSubscriber()
+		defer f.core.Events.RemoveTestSubscriber(sub)
+		f.m.sendSnapshot(sub)
+		select {
+		case <-sub.Done():
+			t.Fatal("a subscriber that received its snapshot must be kept")
+		default:
+		}
+		select {
+		case data := <-sub.SendCh():
+			if !strings.Contains(string(data), `\"op\":\"snapshot\"`) {
+				t.Fatalf("first frame is not the snapshot: %s", data)
+			}
+		default:
+			t.Fatal("no snapshot frame was queued")
+		}
+	})
+}
+
 // Close releases team.db (core.Closer, PD6): a store call afterwards fails.
 func TestClose_ReleasesTheStore(t *testing.T) {
 	f := newFixture(t)

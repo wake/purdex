@@ -213,32 +213,36 @@ func (m *Module) broadcast(op string, a *team.Approval) {
 // (spec §6.2: late or reconnecting clients see the same open set). The
 // read and the send happen under eventMu, so every event the subscriber
 // receives afterwards is for a change the snapshot does not yet show. A
-// subscriber whose buffer is already full is closed so it reconnects (as
-// session/module.go does); one already removed is left alone.
+// subscriber that did not get the snapshot — the open set could not be
+// read, or its buffer is already full — is closed so it reconnects and
+// asks again (as session/module.go does); keeping it would leave a client
+// that never sees the requests open before it connected. One already
+// removed is left alone.
 func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
-	if m.snapshotUnderLock(sub) {
+	why := m.snapshotUnderLock(sub)
+	if why == "" {
 		return
 	}
 	select {
 	case <-sub.Done():
 	default:
-		m.logf("[team] OnSubscribe snapshot could not be queued (send buffer full); closing the connection so the client reconnects")
+		m.logf("[team] OnSubscribe snapshot %s; closing the connection so the client reconnects", why)
 		m.core.Events.Remove(sub)
 	}
 }
 
 // snapshotUnderLock reads the open set and queues it to sub, holding
-// eventMu from the read to the send. It returns false only when the send
-// did not queue (buffer full or subscriber gone); a read or encode error is
-// logged and reported as true, since there is nothing to retry by
-// reconnecting.
-func (m *Module) snapshotUnderLock(sub *core.EventSubscriber) bool {
+// eventMu from the read to the send. It returns "" when the snapshot was
+// queued, else why it was not (the open set could not be read; the send
+// buffer is full or the subscriber is gone), for the caller to close the
+// subscriber. An encode error is logged and reported as "", since
+// reconnecting would not change it.
+func (m *Module) snapshotUnderLock(sub *core.EventSubscriber) string {
 	m.eventMu.Lock()
 	defer m.eventMu.Unlock()
 	open, err := m.store.ListOpen()
 	if err != nil {
-		m.logf("[team] OnSubscribe list error: %v", err)
-		return true
+		return fmt.Sprintf("could not read the open set (%v)", err)
 	}
 	if m.afterSnapshotRead != nil {
 		m.afterSnapshotRead()
@@ -246,14 +250,17 @@ func (m *Module) snapshotUnderLock(sub *core.EventSubscriber) bool {
 	v, err := json.Marshal(team.EventValue{Op: "snapshot", Approvals: open})
 	if err != nil {
 		m.logf("[team] encode snapshot: %v", err)
-		return true
+		return ""
 	}
 	data, err := json.Marshal(core.HostEvent{Type: team.EventType, Value: string(v)})
 	if err != nil {
 		m.logf("[team] encode snapshot event: %v", err)
-		return true
+		return ""
 	}
-	return sub.TrySend(data)
+	if !sub.TrySend(data) {
+		return "could not be queued (send buffer full)"
+	}
+	return ""
 }
 
 // addWaiter registers a long-poll on id; the channel is closed by wake.
