@@ -730,9 +730,39 @@ func TestHandoff_StartIdle(t *testing.T) {
 	assert.True(t, reqs[0].StartIdle)
 	assert.Equal(t, "", reqs[0].Brief, "start_idle_conflict if a brief rode along")
 	assert.Equal(t, hoSessionID, reqs[0].Labels[purdexSessionLabel])
-	// PR #1599 A1: the delegate creates an idle row, never a turn.
-	assert.Equal(t, 1, countCalls(env.svc.Calls(), "delegate"))
-	assert.NotContains(t, env.svc.Calls(), "send")
+}
+
+// PR #1599 A1: a terminal resumes S during the delegate. The delegate made
+// an idle row (no turn: the fake refuses a StartIdle with a brief), so Q1
+// exits that row and no worker turn ever ran.
+func TestHandoff_StartIdleRaceWithTerminalResume(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.svc.result = execution.Result{ID: "N1", State: store.StateIdle, EffectiveProfile: "handoff"}
+	env.svc.lease = store.Lease{ID: "L-race"}
+	env.svc.onDelegate = func() {
+		fakeStore(env).mu.Lock()
+		fakeStore(env).listRows = []store.Execution{row("N1", "idle", false, hoSessionID, hoSessionID, 1)}
+		fakeStore(env).mu.Unlock()
+		env.terminals.mu.Lock()
+		env.terminals.live = map[string][]agent.TerminalSession{hoSessionID: {{FrameID: "F", PaneID: "%9", SessionID: hoSessionID, AgentType: "cc", Verified: true}}}
+		env.terminals.mu.Unlock()
+	}
+	status, body := env.post(t, hoCode, goodBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	reqs := env.svc.Requests()
+	require.Len(t, reqs, 1)
+	assert.True(t, reqs[0].StartIdle)
+	assert.Equal(t, "", reqs[0].Brief)
+
+	env.m.onSessionStart(agent.SessionStartEvent{AgentType: "cc", SessionID: hoSessionID, Source: "resume", TmuxSession: "proj-2", TmuxPaneID: "%9", FrameID: "F"})
+	assert.Equal(t, []string{"N1"}, archivedIDs(env), "the idle row is exited")
+	assert.Equal(t, 1, countCalls(env.svc.Calls(), "delegate"), "the only engine admission is the idle delegate")
+}
+
+func TestFakeService_RejectsStartIdleWithBrief(t *testing.T) {
+	svc := &fakeNexService{}
+	_, err := svc.Delegate(context.Background(), execution.Request{StartIdle: true, Brief: "x"})
+	require.Error(t, err)
 }
 
 func TestHandoff_KeepSessionFalseKillsOnIdle(t *testing.T) {

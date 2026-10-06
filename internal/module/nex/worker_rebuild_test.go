@@ -283,7 +283,29 @@ func TestWorkerRebuild_StartIdle(t *testing.T) {
 	req := env.svc.Requests()[0]
 	assert.True(t, req.StartIdle)
 	assert.Equal(t, "", req.Brief)
-	// PR #1599 A1: the delegate creates an idle row, never a turn.
+}
+
+// PR #1599 A1: a terminal resumes S during the delegate; Q1 exits the idle
+// row it made, and no worker turn ever ran.
+func TestWorkerRebuild_StartIdleRaceWithTerminalResume(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.svc.result = execution.Result{ID: "N1", State: store.StateIdle}
+	env.svc.lease = store.Lease{ID: "L-race"}
+	env.svc.onDelegate = func() {
+		rebuildStore(env).mu.Lock()
+		rebuildStore(env).listRows = []store.Execution{row("N1", "idle", false, rbS, rbS, 1)}
+		rebuildStore(env).mu.Unlock()
+		env.terminals.mu.Lock()
+		env.terminals.live = map[string][]agent.TerminalSession{rbS: {{FrameID: "F", PaneID: "%9", SessionID: rbS, AgentType: "cc", Verified: true}}}
+		env.terminals.mu.Unlock()
+	}
+	code, out := rebuildPost(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`)
+	require.Equal(t, 200, code, "%v", out)
+	req := env.svc.Requests()[0]
+	assert.True(t, req.StartIdle)
+	assert.Equal(t, "", req.Brief)
+
+	env.m.onSessionStart(agent.SessionStartEvent{AgentType: "cc", SessionID: rbS, Source: "resume", TmuxSession: "proj-2", TmuxPaneID: "%9", FrameID: "F"})
+	assert.Equal(t, []string{"N1"}, archivedIDs(env), "the idle row is exited")
 	assert.Equal(t, 1, countCalls(env.svc.Calls(), "delegate"))
-	assert.NotContains(t, env.svc.Calls(), "send")
 }

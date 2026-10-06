@@ -36,12 +36,17 @@ func executionIsFor(e store.Execution, sid string) bool {
 // liveWorkersFor returns S's live executions, newest first (CreatedAt desc,
 // then ID desc), with scanLiveWorkers' error contract.
 func (m *Module) liveWorkersFor(parent context.Context, sid string) ([]store.Execution, error) {
-	if sid == "" {
+	sid = store.NormalizeResumeSessionID(sid)
+	if sid == "" || store.ValidateResumeSessionID(sid) != nil {
+		// No execution can belong to a non-UUID session, and the store
+		// would refuse the filter.
 		return nil, nil
 	}
-	// D18: Nexen filters by session (resume id, session id or any turn's
-	// session id), so no client-side match is needed. Not IncludeArchived.
-	return m.scanLiveWorkers(parent, store.ListOptions{SessionID: sid}, func(store.Execution) bool { return true })
+	// D18: the server narrows the scan, but its match is WIDER than "for S":
+	// it also matches any turn's session id (a resume may mint a new one).
+	// The client keeps the exact rule, so such a row is not S's worker.
+	// Not IncludeArchived.
+	return m.scanLiveWorkers(parent, store.ListOptions{SessionID: sid}, func(e store.Execution) bool { return executionIsFor(e, sid) })
 }
 
 // scanLiveWorkers pages the non-archived executions and keeps the live ones

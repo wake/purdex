@@ -19,11 +19,11 @@ import (
 )
 
 func ev(source string) agent.SessionStartEvent {
-	return agent.SessionStartEvent{AgentType: "cc", SessionID: "S", Source: source, TmuxSession: "proj-2", TmuxPaneID: "%4", FrameID: "F"}
+	return agent.SessionStartEvent{AgentType: "cc", SessionID: tS, Source: source, TmuxSession: "proj-2", TmuxPaneID: "%4", FrameID: "F"}
 }
 
 func liveTerminal(env *handoffEnv, verified bool) {
-	env.terminals.live = map[string][]agent.TerminalSession{"S": {{FrameID: "F", PaneID: "%4", SessionID: "S", AgentType: "cc", Verified: verified}}}
+	env.terminals.live = map[string][]agent.TerminalSession{tS: {{FrameID: "F", PaneID: "%4", SessionID: tS, AgentType: "cc", Verified: verified}}}
 }
 
 // hostEventSink collects what the module broadcasts on the host-events bus.
@@ -73,7 +73,7 @@ func TestManualResume_ExitsLiveWorkersAndBroadcasts(t *testing.T) {
 	env := newHandoffEnv(t)
 	sub := env.captureHostEvents(t)
 	liveTerminal(env, true)
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1), row("E2", "running", false, "", "S", 2)}
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1), row("E2", "running", false, "", tS, 2)}
 	env.svc.lease = store.Lease{ID: "L-d"}
 
 	env.m.onSessionStart(ev("resume"))
@@ -87,7 +87,7 @@ func TestManualResume_ExitsLiveWorkersAndBroadcasts(t *testing.T) {
 	}
 	var v map[string]string
 	_ = json.Unmarshal([]byte(got[0].Value), &v)
-	if v["reason"] != "manual_resume" || v["session_id"] != "S" || v["tmux_session"] != "proj-2" || v["execution_id"] == "" {
+	if v["reason"] != "manual_resume" || v["session_id"] != tS || v["tmux_session"] != "proj-2" || v["execution_id"] == "" {
 		t.Fatalf("value = %v", v)
 	}
 	if got[0].Session != "proj-2" {
@@ -110,7 +110,7 @@ func TestManualResume_DoesNothingWhen(t *testing.T) {
 		},
 		"a Purdex transfer holds S": func(env *handoffEnv) agent.SessionStartEvent {
 			liveTerminal(env, true)
-			env.m.locks.TryLock(sidLockKey("S"))
+			env.m.locks.TryLock(sidLockKey(tS))
 			return ev("resume")
 		},
 		"the terminal is gone":     func(env *handoffEnv) agent.SessionStartEvent { return ev("resume") },
@@ -129,7 +129,7 @@ func TestManualResume_DoesNothingWhen(t *testing.T) {
 	for name, setup := range cases {
 		t.Run(name, func(t *testing.T) {
 			env := newHandoffEnv(t)
-			fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+			fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
 			e := setup(env)
 			env.m.onSessionStart(e)
 			if len(env.svc.terminateCalls)+len(env.svc.ArchiveCalls()) != 0 {
@@ -143,7 +143,7 @@ func TestManualResume_SkipsAWorkerBeingMovedAndReportsOnlySuccesses(t *testing.T
 	env := newHandoffEnv(t)
 	sub := env.captureHostEvents(t)
 	liveTerminal(env, true)
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1), row("E2", "failed", false, "S", "", 2)}
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1), row("E2", "failed", false, tS, "", 2)}
 	env.m.locks.TryLock(takeToTerminalLockKey("E1")) // E1 is mid-exit elsewhere
 	env.svc.archiveErr = errors.New("db busy")       // E2's archive fails -> not exited
 	env.m.onSessionStart(ev("resume"))
@@ -155,8 +155,8 @@ func TestManualResume_SkipsAWorkerBeingMovedAndReportsOnlySuccesses(t *testing.T
 func TestManualResume_OverflowReconcilesEverySession(t *testing.T) {
 	env := newHandoffEnv(t)
 	// S has a verified terminal; T has none. Both have a live worker.
-	env.terminals.live = map[string][]agent.TerminalSession{"S": {{FrameID: "F", PaneID: "%4", SessionID: "S", AgentType: "cc", Verified: true}}}
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1), row("E2", "idle", false, "T", "", 2)}
+	env.terminals.live = map[string][]agent.TerminalSession{tS: {{FrameID: "F", PaneID: "%4", SessionID: tS, AgentType: "cc", Verified: true}}}
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1), row("E2", "idle", false, tT, "", 2)}
 	env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
 	if ids := archivedIDs(env); len(ids) != 1 || ids[0] != "E1" {
 		t.Fatalf("archived = %v; want only E1 (S is in a terminal, T is not)", ids)
@@ -168,15 +168,15 @@ func TestManualResume_TruncatedScanStillExitsWhatItFound(t *testing.T) {
 	liveTerminal(env, true)
 	rows := make([]store.Execution, ownerScanPageSize*ownerScanMaxPages+1)
 	for i := range rows {
-		rows[i] = row(fmt.Sprintf("%06d", i), "terminated", false, "S", "", int64(i))
+		rows[i] = row(fmt.Sprintf("%06d", i), "terminated", false, tS, "", int64(i))
 	}
-	rows[0] = row("000000", "idle", false, "S", "", 0) // on page 1
+	rows[0] = row("000000", "idle", false, tS, "", 0) // on page 1
 	fakeStore(env).listRows = rows
 	env.m.onSessionStart(ev("resume"))
 	if len(env.svc.ArchiveCalls()) != 1 {
 		t.Fatal("the worker found before the cap must still exit")
 	}
-	assert.False(t, pendingRecheck(env, "S"), "truncation is persistent: no re-check")
+	assert.False(t, pendingRecheck(env, tS), "truncation is persistent: no re-check")
 }
 
 // PR #1590 R1-2: a page error must not drop the worker page 1 already found.
@@ -209,7 +209,7 @@ func verifiedTerminals(env *handoffEnv, sids ...string) {
 // session.
 func TestManualResume_OverflowScansOnce(t *testing.T) {
 	env := newHandoffEnv(t)
-	sids := []string{"S0", "S1", "S2", "S3", "S4"}
+	sids := []string{"0a1b2c3d-0000-4000-8000-0000000000a0", "0a1b2c3d-0000-4000-8000-0000000000a1", "0a1b2c3d-0000-4000-8000-0000000000a2", "0a1b2c3d-0000-4000-8000-0000000000a3", "0a1b2c3d-0000-4000-8000-0000000000a4"}
 	verifiedTerminals(env, sids...)
 	var rows []store.Execution
 	for i, sid := range sids {
@@ -227,8 +227,8 @@ func TestManualResume_OverflowScansOnce(t *testing.T) {
 // A row in two groups (session_id S, resume_session_id R) is exited once.
 func TestManualResume_OverflowExitsARowInTwoGroupsOnce(t *testing.T) {
 	env := newHandoffEnv(t)
-	verifiedTerminals(env, "S", "R")
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "R", 1)}
+	verifiedTerminals(env, tS, tR)
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, tR, 1)}
 	env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
 	assert.Equal(t, []string{"E1"}, archivedIDs(env))
 	assert.Len(t, env.svc.terminateCalls, 1)
@@ -237,8 +237,8 @@ func TestManualResume_OverflowExitsARowInTwoGroupsOnce(t *testing.T) {
 // Each candidate is re-read under its exec lock; one that is no longer S's
 // live worker is skipped.
 func TestManualResume_SkipsACandidateNoLongerLiveForS(t *testing.T) {
-	archived := row("E1", "idle", true, "S", "", 1)
-	terminated := row("E1", "terminated", false, "S", "", 1)
+	archived := row("E1", "idle", true, tS, "", 1)
+	terminated := row("E1", "terminated", false, tS, "", 1)
 	moved := row("E1", "idle", false, "OTHER", "", 1)
 	cases := map[string]struct {
 		overflow bool
@@ -256,7 +256,7 @@ func TestManualResume_SkipsACandidateNoLongerLiveForS(t *testing.T) {
 			env := newHandoffEnv(t)
 			liveTerminal(env, true)
 			st := fakeStore(env)
-			st.listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+			st.listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
 			st.results = []getResult{c.reread}
 			if c.overflow {
 				env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
@@ -370,7 +370,7 @@ func TestTakeback_FirstCheckAbortTriggersNoRecheck(t *testing.T) {
 func TestManualResume_StartupExitsALiveWorker(t *testing.T) {
 	env := newHandoffEnv(t)
 	liveTerminal(env, true)
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
 	env.m.onSessionStart(ev("startup"))
 	assert.Equal(t, []string{"E1"}, archivedIDs(env))
 }
@@ -380,12 +380,12 @@ func TestManualResume_AfterStopDoesNothing(t *testing.T) {
 	require.NoError(t, env.m.Start(context.Background()))
 	_ = env.m.Stop(context.Background())
 	liveTerminal(env, true)
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
 	env.m.onSessionStart(ev("resume"))
 	env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
 	var rechecked bool
 	env.m.recheck = func(string) { rechecked = true }
-	env.m.recheckSession("S")
+	env.m.recheckSession(tS)
 	assert.Empty(t, env.svc.terminateCalls)
 	assert.Empty(t, env.svc.ArchiveCalls())
 	assert.False(t, rechecked, "no re-check launches after Stop")

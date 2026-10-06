@@ -81,7 +81,7 @@ func (f *fakeNexStore) ListCalls() int {
 func TestManualResume_StopCancelsALookupInFlight(t *testing.T) {
 	env := newHandoffEnv(t)
 	liveTerminal(env, true)
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
 	gate, entered := make(chan struct{}), make(chan struct{})
 	env.terminals.gate, env.terminals.entered = gate, entered
 	require.NoError(t, env.m.Start(context.Background()))
@@ -105,7 +105,7 @@ func TestManualResume_StopBailsAfterALookupThatIgnoredTheCancel(t *testing.T) {
 	env := newHandoffEnv(t)
 	env.m.q1StopCap = 20 * time.Millisecond
 	liveTerminal(env, true)
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
 	gate, entered := make(chan struct{}), make(chan struct{})
 	env.terminals.gate, env.terminals.ignoreCtx, env.terminals.entered = gate, true, entered
 	require.NoError(t, env.m.Start(context.Background()))
@@ -124,7 +124,7 @@ func TestManualResume_StopBailsAfterTheWorkerScan(t *testing.T) {
 	env.m.q1StopCap = 20 * time.Millisecond
 	liveTerminal(env, true)
 	st := fakeStore(env)
-	st.listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	st.listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
 	gate, entered := make(chan struct{}), make(chan struct{})
 	st.listGate, st.listEntered = gate, entered
 	require.NoError(t, env.m.Start(context.Background()))
@@ -156,7 +156,7 @@ func TestManualResume_StopWaitIsBounded(t *testing.T) {
 			env.m.q1StopCap = c.cap
 			env.m.engineTerminateTimeout = time.Minute // the terminate blocks far longer than the bound
 			liveTerminal(env, true)
-			fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 2), row("E2", "idle", false, "S", "", 1)}
+			fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 2), row("E2", "idle", false, tS, "", 1)}
 			env.svc.terminateGate = make(chan struct{})
 			require.NoError(t, env.m.Start(context.Background()))
 			done := deliver(t, env, ev("resume"))
@@ -204,11 +204,11 @@ func TestManualResume_RetriesAfterSidContention(t *testing.T) {
 	env := newHandoffEnv(t)
 	env.m.retryDelay = 5 * time.Millisecond
 	liveTerminal(env, true)
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
-	require.True(t, env.m.locks.TryLock(sidLockKey("S")))
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
+	require.True(t, env.m.locks.TryLock(sidLockKey(tS)))
 	env.m.onSessionStart(ev("resume"))
 	assert.Zero(t, env.terminals.Calls(), "the event itself is skipped (D2)")
-	env.m.locks.Unlock(sidLockKey("S")) // the holder finished without exiting E1
+	env.m.locks.Unlock(sidLockKey(tS)) // the holder finished without exiting E1
 	waitArchived(t, env, "E1")
 }
 
@@ -216,7 +216,7 @@ func TestManualResume_RetriesAfterExecContention(t *testing.T) {
 	env := newHandoffEnv(t)
 	env.m.retryDelay = 5 * time.Millisecond
 	liveTerminal(env, true)
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
 	require.True(t, env.m.locks.TryLock(takeToTerminalLockKey("E1")))
 	env.m.onSessionStart(ev("resume"))
 	assert.Empty(t, env.svc.Calls())
@@ -228,7 +228,7 @@ func TestManualResume_RetriesAfterAFailedExit(t *testing.T) {
 	env := newHandoffEnv(t)
 	env.m.retryDelay = 5 * time.Millisecond
 	liveTerminal(env, true)
-	fakeStore(env).listRows = []store.Execution{row("E1", "failed", false, "S", "", 1)} // archive only
+	fakeStore(env).listRows = []store.Execution{row("E1", "failed", false, tS, "", 1)} // archive only
 	env.svc.archiveErr = errors.New("db busy")
 	env.m.onSessionStart(ev("resume"))
 	require.Equal(t, []string{"E1"}, archivedIDs(env), "the first archive failed")
@@ -243,12 +243,12 @@ func TestManualResume_NoRetryAfterHeldBy(t *testing.T) {
 	env := newHandoffEnv(t)
 	env.m.retryDelay = time.Millisecond
 	liveTerminal(env, true)
-	held := row("E1", "idle", false, "S", "", 1)
+	held := row("E1", "idle", false, tS, "", 1)
 	held.LeaseID, held.LeasePrincipalID, held.LeaseExpiresAt = "L-x", "cli:someone", nowMs()+600_000
 	fakeStore(env).listRows = []store.Execution{held}
 	env.svc.acquireErr = fmt.Errorf("execution E1: %w", store.ErrLeaseHeld)
 	env.m.onSessionStart(ev("resume"))
-	assert.False(t, pendingRecheck(env, "S"), "no re-check scheduled")
+	assert.False(t, pendingRecheck(env, tS), "no re-check scheduled")
 	time.Sleep(30 * time.Millisecond)
 	assert.Equal(t, 1, env.terminals.Calls(), "no later pass")
 	assert.Equal(t, []string{"acquire"}, env.svc.Calls())
@@ -259,13 +259,13 @@ func TestManualResume_RetriesStopAtTheCap(t *testing.T) {
 	logs := captureLogs(env)
 	env.m.retryDelay = time.Millisecond
 	liveTerminal(env, true)
-	require.True(t, env.m.locks.TryLock(sidLockKey("S"))) // never released
+	require.True(t, env.m.locks.TryLock(sidLockKey(tS))) // never released
 	env.m.onSessionStart(ev("resume"))
 	require.Eventually(t, func() bool { return logs.count("giving up") == 1 }, 3*time.Second, time.Millisecond)
 	time.Sleep(20 * time.Millisecond)
 	assert.Equal(t, manualResumeMaxRetries, logs.count("re-checking in"), "exactly the cap of retries")
 	assert.Equal(t, 1, logs.count("giving up"), "logged once")
-	assert.False(t, pendingRecheck(env, "S"))
+	assert.False(t, pendingRecheck(env, tS))
 }
 
 // A pass for S that ends with nothing to retry resets S's attempt count.
@@ -274,15 +274,15 @@ func TestManualResume_RetryCountResetsAfterACleanPass(t *testing.T) {
 	logs := captureLogs(env)
 	env.m.retryDelay = time.Hour // armed, never fired
 	liveTerminal(env, true)
-	require.True(t, env.m.locks.TryLock(sidLockKey("S")))
+	require.True(t, env.m.locks.TryLock(sidLockKey(tS)))
 	env.m.onSessionStart(ev("resume"))
 	require.Equal(t, 1, logs.count("re-checking in"))
-	env.m.locks.Unlock(sidLockKey("S"))
+	env.m.locks.Unlock(sidLockKey(tS))
 	// A scheduled pass (not a hub event, which resets on its own) with no
 	// live worker: nothing to retry.
 	env.m.handleSessionStart(context.Background(), ev("resume"))
 	env.m.q1Mu.Lock()
-	attempts := env.m.q1Retries["S"].attempts
+	attempts := env.m.q1Retries[tS].attempts
 	env.m.q1Mu.Unlock()
 	assert.Zero(t, attempts)
 }
@@ -291,20 +291,20 @@ func TestManualResume_StopCancelsAPendingRetry(t *testing.T) {
 	env := newHandoffEnv(t)
 	env.m.retryDelay = 30 * time.Millisecond
 	liveTerminal(env, true)
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
 	require.NoError(t, env.m.Start(context.Background()))
-	require.True(t, env.m.locks.TryLock(sidLockKey("S")))
+	require.True(t, env.m.locks.TryLock(sidLockKey(tS)))
 	env.m.onSessionStart(ev("resume"))
-	require.True(t, pendingRecheck(env, "S"))
+	require.True(t, pendingRecheck(env, tS))
 	env.m.q1Mu.Lock()
-	st := env.m.q1Retries["S"]
+	st := env.m.q1Retries[tS]
 	pending := st.timer
 	env.m.q1Mu.Unlock()
 	require.NoError(t, env.m.Stop(context.Background()))
-	assert.False(t, pendingRecheck(env, "S"), "Stop cleared the slot")
+	assert.False(t, pendingRecheck(env, tS), "Stop cleared the slot")
 	assert.False(t, pending.Stop(), "Stop stopped the pending timer")
-	env.m.locks.Unlock(sidLockKey("S"))
-	env.m.runRecheck("S", st) // a timer that fires after Stop does nothing
+	env.m.locks.Unlock(sidLockKey(tS))
+	env.m.runRecheck(tS, st) // a timer that fires after Stop does nothing
 	time.Sleep(80 * time.Millisecond)
 	assert.Zero(t, env.terminals.Calls(), "no pass after Stop")
 	assert.Empty(t, env.svc.Calls())
@@ -316,12 +316,12 @@ func TestManualResume_RecheckSharesThePendingSlot(t *testing.T) {
 	env := newHandoffEnv(t)
 	env.m.retryDelay = 50 * time.Millisecond
 	liveTerminal(env, true)
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
-	require.True(t, env.m.locks.TryLock(sidLockKey("S")))
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
+	require.True(t, env.m.locks.TryLock(sidLockKey(tS)))
 	env.m.onSessionStart(ev("resume"))
-	require.True(t, pendingRecheck(env, "S"))
-	env.m.locks.Unlock(sidLockKey("S"))
-	env.m.recheckSession("S")
+	require.True(t, pendingRecheck(env, tS))
+	env.m.locks.Unlock(sidLockKey(tS))
+	env.m.recheckSession(tS)
 	waitArchived(t, env, "E1") // at once, not after the retry delay
 	time.Sleep(120 * time.Millisecond)
 	assert.Equal(t, 1, env.terminals.Calls(), "one pass: the retry was folded into the re-check")
@@ -335,10 +335,10 @@ func TestManualResume_RetriesAfterALookupError(t *testing.T) {
 	env := newHandoffEnv(t)
 	env.m.retryDelay = 30 * time.Millisecond
 	liveTerminal(env, true)
-	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
 	env.terminals.err = errors.New("frames db busy")
 	env.m.onSessionStart(ev("resume"))
-	assert.True(t, pendingRecheck(env, "S"), "a re-check is scheduled")
+	assert.True(t, pendingRecheck(env, tS), "a re-check is scheduled")
 	env.terminals.mu.Lock()
 	env.terminals.err = nil // the lookup recovers
 	env.terminals.mu.Unlock()
@@ -350,11 +350,11 @@ func TestManualResume_RetriesAfterAScanPageError(t *testing.T) {
 	env.m.retryDelay = 30 * time.Millisecond
 	liveTerminal(env, true)
 	st := fakeStore(env)
-	st.listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	st.listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
 	st.listErr, st.listErrAt = errors.New("db down"), 1 // the first scan's only page fails
 	env.m.onSessionStart(ev("resume"))
 	assert.Empty(t, env.svc.Calls())
-	assert.True(t, pendingRecheck(env, "S"), "a re-check is scheduled")
+	assert.True(t, pendingRecheck(env, tS), "a re-check is scheduled")
 	waitArchived(t, env, "E1")
 }
 
@@ -363,12 +363,12 @@ func TestManualResume_RetriesAfterAReReadError(t *testing.T) {
 	env.m.retryDelay = 30 * time.Millisecond
 	liveTerminal(env, true)
 	st := fakeStore(env)
-	live := row("E1", "idle", false, "S", "", 1)
+	live := row("E1", "idle", false, tS, "", 1)
 	st.listRows = []store.Execution{live}
 	st.results = []getResult{{err: errors.New("db busy")}, {exec: live}}
 	env.m.onSessionStart(ev("resume"))
 	assert.Empty(t, env.svc.Calls())
-	assert.True(t, pendingRecheck(env, "S"), "a re-check is scheduled")
+	assert.True(t, pendingRecheck(env, tS), "a re-check is scheduled")
 	waitArchived(t, env, "E1")
 }
 
@@ -378,14 +378,14 @@ func TestManualResume_TransientFailureKeepsTheCount(t *testing.T) {
 	logs := captureLogs(env)
 	env.m.retryDelay = time.Hour
 	liveTerminal(env, true)
-	require.True(t, env.m.locks.TryLock(sidLockKey("S")))
+	require.True(t, env.m.locks.TryLock(sidLockKey(tS)))
 	env.m.onSessionStart(ev("resume")) // attempt 1 armed
-	env.m.locks.Unlock(sidLockKey("S"))
+	env.m.locks.Unlock(sidLockKey(tS))
 	env.terminals.err = errors.New("frames db busy")
 	env.m.handleSessionStart(context.Background(), ev("resume")) // a scheduled pass that fails transiently
 	require.Equal(t, 1, logs.count("re-checking in"), "folded into the pending slot")
 	env.m.q1Mu.Lock()
-	attempts := env.m.q1Retries["S"].attempts
+	attempts := env.m.q1Retries[tS].attempts
 	env.m.q1Mu.Unlock()
 	assert.Equal(t, 1, attempts, "not reset")
 }
@@ -397,13 +397,13 @@ func TestManualResume_HubEventAfterTheCapRetriesAgain(t *testing.T) {
 	logs := captureLogs(env)
 	env.m.retryDelay = time.Millisecond
 	liveTerminal(env, true)
-	require.True(t, env.m.locks.TryLock(sidLockKey("S"))) // contended throughout
+	require.True(t, env.m.locks.TryLock(sidLockKey(tS))) // contended throughout
 	env.m.onSessionStart(ev("resume"))
 	require.Eventually(t, func() bool { return logs.count("giving up") == 1 }, 3*time.Second, time.Millisecond)
 	time.Sleep(20 * time.Millisecond)
 	require.Equal(t, manualResumeMaxRetries, logs.count("re-checking in"))
 
-	env.m.recheckSession("S") // a re-check still counts toward the cap
+	env.m.recheckSession(tS) // a re-check still counts toward the cap
 	time.Sleep(20 * time.Millisecond)
 	assert.Equal(t, manualResumeMaxRetries, logs.count("re-checking in"), "no retry after a re-check at the cap")
 

@@ -46,7 +46,7 @@ const (
 	hoName      = "proj"
 	hoTarget    = hoName + ":0"
 	hoInstance  = "111:222"
-	hoSessionID = "sid-1234"
+	hoSessionID = "0a1b2c3d-0000-4000-8000-0000000000b1"
 	hoCwd       = "/work/proj"
 )
 
@@ -428,6 +428,10 @@ func (f *fakeNexService) Delegate(ctx context.Context, req execution.Request) (e
 	if err := wait(ctx, f.delegateGate); err != nil {
 		return execution.Result{}, err
 	}
+	// Nexen's CheckStartIdle: an idle start carries no brief.
+	if req.StartIdle && req.Brief != "" {
+		return execution.Result{}, errors.New("start_idle_conflict: brief")
+	}
 	return f.result, f.err
 }
 
@@ -576,6 +580,9 @@ type fakeNexStore struct {
 	listCalls int
 	// lastListOpts / allListOpts record the options of every List call.
 	lastListOpts store.ListOptions
+	// turnSessions: execution id -> session ids of its turns (the third arm of
+	// Nexen's SessionID filter).
+	turnSessions map[string][]string
 	allListOpts  []store.ListOptions
 	// listGate parks every List until it is closed or the call's ctx ends;
 	// listEntered is closed on the first List.
@@ -640,6 +647,12 @@ func (f *fakeNexStore) List(ctx context.Context, opts store.ListOptions) (store.
 	if f.listErr != nil && (f.listErrAt == 0 || f.listCalls == f.listErrAt) {
 		return store.ListPage{}, f.listErr
 	}
+	if opts.SessionID != "" {
+		if err := store.ValidateResumeSessionID(opts.SessionID); err != nil {
+			return store.ListPage{}, err
+		}
+		opts.SessionID = store.NormalizeResumeSessionID(opts.SessionID)
+	}
 	var rows []store.Execution
 	for _, e := range f.listRows {
 		if opts.Cursor != "" && e.ID <= opts.Cursor {
@@ -650,7 +663,7 @@ func (f *fakeNexStore) List(ctx context.Context, opts store.ListOptions) (store.
 		}
 		// v0.17: exact, case-insensitive match on session_id or
 		// resume_session_id (turn session ids are not modelled here).
-		if opts.SessionID != "" && !strings.EqualFold(e.SessionID, opts.SessionID) && !strings.EqualFold(e.ResumeSessionID, opts.SessionID) {
+		if opts.SessionID != "" && !strings.EqualFold(e.SessionID, opts.SessionID) && !strings.EqualFold(e.ResumeSessionID, opts.SessionID) && !f.turnMatches(e.ID, opts.SessionID) {
 			continue
 		}
 		rows = append(rows, e)
@@ -667,6 +680,15 @@ func (f *fakeNexStore) List(ctx context.Context, opts store.ListOptions) (store.
 	}
 	page.Items = rows
 	return page, nil
+}
+
+func (f *fakeNexStore) turnMatches(id, sid string) bool {
+	for _, t := range f.turnSessions[id] {
+		if strings.EqualFold(t, sid) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeNexStore) Calls() int {

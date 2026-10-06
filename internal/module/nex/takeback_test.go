@@ -28,7 +28,7 @@ import (
 
 const (
 	tbExecID    = "exec-9"
-	tbSessionID = "sid-exec-1"
+	tbSessionID = "0a1b2c3d-0000-4000-8000-0000000000c1"
 	tbLeaseID   = "lease-acquired"
 	tbPrincipal = "pdx:host1"
 )

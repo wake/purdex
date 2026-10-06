@@ -301,19 +301,19 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// keep_session:false (spec §4.3): once the engine has confirmed the
-	// execution running or idle (start_idle), the tmux session has nothing left in it — CC
-	// exited before the delegate, the shell is idle — so it is killed and
-	// the SPA records no origin session (the execution is later taken to a
-	// NEW terminal). A delegate that answered anything but running/idle (queued:
-	// somebody else is launching the first turn; failed) keeps the session
-	// — "confirmed running or idle" is the condition, and the SPA's `from` stays
-	// as today. The kill is by session id under the generation this
-	// request verified (KillSessionIfInstance, codex F4): a server that
-	// restarted during the delegate declines it, since the session this
-	// request checked died with the old server and whatever answers to its
-	// id or name now is somebody else's. A refusal and a failure are both
-	// logged and reported as kept: as far as this request knows a session
-	// is still there, so the SPA keeps its `from`.
+	// execution running or idle (start_idle), the tmux session has nothing
+	// left in it — CC exited before the delegate, the shell is idle — so it
+	// is killed and the SPA records no origin session (the execution is
+	// later taken to a NEW terminal). A delegate that answered anything
+	// else (queued: somebody else is launching the first turn; failed)
+	// keeps the session: "confirmed running or idle" is the condition, and
+	// the SPA's `from` stays as today. The kill is by session id under the
+	// generation this request verified (KillSessionIfInstance, codex F4): a
+	// server that restarted during the delegate declines it, since the
+	// session this request checked died with the old server and whatever
+	// answers to its id or name now is somebody else's. A refusal and a
+	// failure are both logged and reported as kept: as far as this request
+	// knows a session is still there, so the SPA keeps its `from`.
 	kept := true
 	if !body.keepSession() && (result.State == store.StateRunning || result.State == store.StateIdle) {
 		killed, err := m.tmux.KillSessionIfInstance(sess.TmuxID, expected)
