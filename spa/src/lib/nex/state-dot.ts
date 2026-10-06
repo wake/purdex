@@ -1,10 +1,14 @@
-// spa/src/lib/nex/state-dot.ts — the execution state → dot colour map shared
-// by the Nex table rows and the sidebar Executions view (spec §4.3).
+// spa/src/lib/nex/state-dot.ts — the one execution state → dot colour map
+// (conversation entity D8): the list rows, the Nex admin table and the pane
+// header all read it, and it matches the terminal agent badge (running green,
+// idle grey, error red).
 export const STATE_DOT_CLASSES: Record<string, string> = {
-  queued: 'bg-text-muted',
-  running: 'bg-green-400',
-  idle: 'bg-amber-400',
-  rejected: 'bg-red-400',
-  failed: 'bg-red-400',
+  running: 'bg-status-success',
+  queued: 'bg-status-warning',
+  idle: 'bg-text-muted',
+  failed: 'bg-status-error',
+  rejected: 'bg-status-error',
   terminated: 'bg-text-muted',
 }
+
+export const stateDotClass = (state: string): string => STATE_DOT_CLASSES[state] ?? 'bg-text-muted'
