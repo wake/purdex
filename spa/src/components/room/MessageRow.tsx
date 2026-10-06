@@ -11,7 +11,7 @@ import {
   type UserMessage,
 } from '../../lib/nex/message-types'
 import { toToolCallActivity } from '../../lib/nex/tool-activity'
-import { toolResultHasMedia, toolResultText } from '../../lib/nex/operations'
+import { mediaField, toolResultText } from '../../lib/nex/operations'
 import { utf8Length } from '../../lib/nex/fold'
 import { keyAt, rowKey } from '../../lib/nex/message-keys'
 import { INTERRUPT_TEXT } from '../../lib/nex/turns'
@@ -153,7 +153,7 @@ export function OperationAt({ msg, i, j, ctx }: OperationAtProps) {
           tool={facts?.file?.path ?? t('execution.tool.unknown')}
           input={{}}
           facts={facts}
-          result={{ text: toolResultText(block.content), isError: block.is_error ?? false, ...(toolResultHasMedia(block.content) ? { hasMedia: true } : {}) }}
+          result={{ text: toolResultText(block.content), isError: block.is_error ?? false, ...mediaField(block.content) }}
           foldKey={keyAt(ctx, i, j)}
           searchKey={keyAt(ctx, i, j)}
         />

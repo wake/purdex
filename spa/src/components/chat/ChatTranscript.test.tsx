@@ -63,7 +63,8 @@ describe('ChatTranscript', () => {
     expect(screen.getByTestId('operation-block')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('omitted')
     expect(document.body.textContent).not.toContain('"type"')
-    expect(screen.getByTestId('op-non-text')).toBeInTheDocument()
+    expect(screen.getByTestId('prelude-media')).toHaveTextContent('[image · png · 80 B]')
+    expect(screen.queryByTestId('op-non-text')).toBeNull()
   })
 
   it('hides thinking entirely', () => {

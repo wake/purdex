@@ -10,8 +10,8 @@ export interface OperationResult {
   /** The daemon cut the paired result block (prelude only); `totalBytes` is its full size when known. */
   truncated?: boolean
   totalBytes?: number | null
-  /** The content array carried an image / document block, which `text` leaves out (#1629). */
-  hasMedia?: boolean
+  /** The image / document blocks `text` leaves out, normalised for `OmittedMedia` (#1629); absent when none. */
+  media?: ContentBlock[]
 }
 
 /** `${messageIndex}:${blockIndex}` — a block's position, which is unique even when a tool_use_id is not. */
@@ -40,9 +40,33 @@ const isMediaBlock = (item: unknown): boolean => {
   return type === 'image' || type === 'document'
 }
 
-/** True when a content array holds an image / document block (which `toolResultText` leaves out of the text). */
-export function toolResultHasMedia(content: unknown): boolean {
-  return Array.isArray(content) && content.some(isMediaBlock)
+/** The decoded size of a base64 string, without decoding it. */
+function base64Bytes(data: string): number {
+  const pad = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0
+  return Math.floor((data.length * 3) / 4) - pad
+}
+
+/** A media block in the shape `OmittedMedia` draws: omitted source, `bytes` when known. */
+function toOmitted(item: unknown): ContentBlock {
+  const block = item as { type: 'image' | 'document'; source?: { type?: unknown; media_type?: unknown; bytes?: unknown; data?: unknown } }
+  const src = block.source && typeof block.source === 'object' ? block.source : {}
+  const media_type = typeof src.media_type === 'string' ? src.media_type : undefined
+  let bytes: number | undefined
+  if (src.type === 'omitted') bytes = typeof src.bytes === 'number' ? src.bytes : undefined
+  else if (src.type === 'base64' && typeof src.data === 'string') bytes = base64Bytes(src.data)
+  return { type: block.type, source: { type: 'omitted', ...(media_type !== undefined ? { media_type } : {}), ...(bytes !== undefined ? { bytes } : {}) } }
+}
+
+/**
+ * The image / document blocks of a content array `toolResultText` flattens
+ * (text + media only), in order. An array with any other block type is the
+ * JSON path (#1263) and has no media here: its text already shows everything.
+ */
+export function toolResultMedia(content: unknown): ContentBlock[] {
+  if (!Array.isArray(content)) return []
+  const flattenable = content.every((item) => isMediaBlock(item)
+    || (!!item && typeof item === 'object' && (item as { type?: unknown }).type === 'text' && typeof (item as { text?: unknown }).text === 'string'))
+  return flattenable ? content.filter(isMediaBlock).map(toOmitted) : []
 }
 
 /**
@@ -72,6 +96,12 @@ export function toolResultText(content: unknown): string {
     if (flattenable) return texts.join('\n')
   }
   return JSON.stringify(content) ?? ''
+}
+
+/** `{media}` when the content has any, else `{}` — so a result without media keeps its exact shape. */
+export function mediaField(content: unknown): { media?: ContentBlock[] } {
+  const media = toolResultMedia(content)
+  return media.length > 0 ? { media } : {}
 }
 
 function blocksOf(message: StreamMessage): ContentBlock[] {
@@ -165,7 +195,7 @@ export function indexOperations(messages: StreamMessage[], idOf?: (m: number) =>
         resultForCall.set(callKey, {
           text: toolResultText((block as { content?: unknown }).content),
           isError: block.is_error === true,
-          ...(toolResultHasMedia((block as { content?: unknown }).content) ? { hasMedia: true } : {}),
+          ...mediaField((block as { content?: unknown }).content),
           ...(block.truncated === true ? { truncated: true, totalBytes: block.total_bytes ?? null } : {}),
         })
         consumedResults.add(key(mi, bi))

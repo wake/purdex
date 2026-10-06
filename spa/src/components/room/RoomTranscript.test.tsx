@@ -693,14 +693,26 @@ describe('RoomTranscript — a tool result that carries an image (#1629)', () =>
   it('shows the non-text marker and no raw JSON without N2 facts', () => {
     render(T({ messages: readImage }))
     noRawJson()
-    expect(screen.getByTestId('op-non-text')).toBeInTheDocument()
+    expect(screen.getAllByTestId('prelude-media').map((e) => e.textContent)).toEqual(['[image · png · 80 B]'])
+    expect(screen.queryByTestId('op-non-text')).toBeNull()
     expect(screen.queryByTestId('fold-body')).toBeNull()
   })
 
   it('shows the non-text marker and no raw JSON with N2 facts', () => {
     render(T({ messages: readImage, tools: { r1: { name: 'Read', startedAt: 1, endedAt: 2, status: 'done', output: { totalLines: 0, totalBytes: 0, truncated: false, hasNonText: true } } } }))
     noRawJson()
-    expect(screen.getAllByTestId('op-non-text')).toHaveLength(1)
+    expect(screen.getAllByTestId('prelude-media')).toHaveLength(1)
+    expect(screen.queryByTestId('op-non-text')).toBeNull()
+  })
+
+  it('a live base64 image and a second image give two placeholders, sized like the prelude one', () => {
+    const live = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(107) + '=' } }
+    render(T({ messages: [
+      asst(use('r1', 'Read', { file_path: '/a.png' })),
+      usr({ type: 'tool_result', tool_use_id: 'r1', content: [live, image] } as unknown as ContentBlock),
+    ] }))
+    expect(screen.getAllByTestId('prelude-media').map((e) => e.textContent)).toEqual(['[image · png · 80 B]', '[image · png · 80 B]'])
+    expect(document.body.textContent).not.toContain('base64')
   })
 })
 

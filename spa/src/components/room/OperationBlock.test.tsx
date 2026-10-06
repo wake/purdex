@@ -26,6 +26,7 @@ const render = (ui: ReactElement) => rtlRender(<Harness>{ui}</Harness>)
 
 const ok = (text: string): OperationResult => ({ text, isError: false })
 const bad = (text: string): OperationResult => ({ text, isError: true })
+const PNG = { type: 'image' as const, source: { type: 'omitted', media_type: 'image/png', bytes: 80 } }
 const body = (n: number): string => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n')
 
 const hunk: DiffHunk = { oldStart: 1, oldLines: 3, newStart: 1, newLines: 3, lines: [' hello', '-world', '+nexen', ' three'] }
@@ -251,21 +252,44 @@ describe('OperationBlock', () => {
     expect(screen.getByTestId('op-rail').contains(marker)).toBe(true)
   })
 
-  it('marks a result that carried media even without N2 facts, and draws no empty output box (#1629)', () => {
+  it('draws one placeholder per media block instead of the non-text line, with and without N2 facts, and no empty output box (#1629)', () => {
+    for (const facts of [undefined, { output: { totalLines: 0, totalBytes: 0, truncated: false, hasNonText: true } }]) {
+      cleanup()
+      render(<OperationBlock tool="Read" input={{ file_path: '/x.png' }} foldKey="tu1"
+        activity={{ status: 'done', startedAt: 0, endedAt: 0 }} facts={facts}
+        result={{ text: '', isError: false, media: [PNG, { type: 'document', source: { type: 'omitted', media_type: 'application/pdf', bytes: 2048 } }] }} />)
+      const shown = screen.getAllByTestId('prelude-media').map((e) => e.textContent)
+      expect(shown).toEqual(['[image · png · 80 B]', '[document · pdf · 2 KB]'])
+      expect(screen.queryByTestId('op-non-text')).toBeNull()
+      expect(screen.queryByTestId('fold-body')).toBeNull()
+    }
+  })
+
+  it('draws the text first, then the placeholders (#1629)', () => {
     render(<OperationBlock tool="Read" input={{ file_path: '/x.png' }} foldKey="tu1"
       activity={{ status: 'done', startedAt: 0, endedAt: 0 }}
-      result={{ text: '', isError: false, hasMedia: true }} />)
-    expect(screen.getByTestId('op-non-text')).toHaveTextContent('non-text')
-    expect(screen.queryByTestId('fold-body')).toBeNull()
+      result={{ text: 'caption', isError: false, media: [PNG] }} />)
+    const text = screen.getByTestId('fold-body')
+    const ph = screen.getByTestId('prelude-media')
+    expect(!!(text.compareDocumentPosition(ph) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+  })
+
+  it('keeps the non-text line when N2 says non-text but the result has no media blocks', () => {
+    render(<OperationBlock tool="Read" input={{ file_path: '/x.png' }} foldKey="tu1"
+      activity={{ status: 'done', startedAt: 0, endedAt: 0 }}
+      facts={{ output: { totalLines: 1, totalBytes: 4, truncated: false, hasNonText: true } }}
+      result={ok('[{"type":"mystery"}]')} />)
+    expect(screen.getByTestId('op-non-text')).toBeInTheDocument()
+    expect(screen.queryByTestId('prelude-media')).toBeNull()
   })
 
   it('a media-only result the daemon cut keeps its truncation note (#1629)', () => {
     render(<OperationBlock tool="Read" input={{ file_path: '/x.png' }} foldKey="tu1"
       activity={{ status: 'done', startedAt: 0, endedAt: 0 }}
       facts={{ output: { totalLines: 0, totalBytes: 80000, truncated: true, hasNonText: true } }}
-      result={{ text: '', isError: false, hasMedia: true }} />)
+      result={{ text: '', isError: false, media: [PNG] }} />)
     expect(screen.getByTestId('fold-daemon-truncated')).toBeInTheDocument()
-    expect(screen.getByTestId('op-non-text')).toBeInTheDocument()
+    expect(screen.getByTestId('prelude-media')).toBeInTheDocument()
   })
 
   it('does not mark a text-only result', () => {
