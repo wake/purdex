@@ -122,4 +122,4 @@ A separate bump PR touching CHANGELOG.md only: `chore: bump v0.17.0 — start_id
 
 ## 3. Hand-back
 
-When `v0.17.0` is tagged, message `mlab/_oecdo4` (purdex-19) with the tag, the CHANGELOG entry and any contract decision taken during review that differs from this file.
+When `v0.17.0` is tagged, message `mlab/_e5vtux` (purdex-4a, who took over from purdex-19 on 2026-10-06) with the tag, the CHANGELOG entry and any contract decision taken during review that differs from this file.

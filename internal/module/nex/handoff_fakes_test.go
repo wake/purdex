@@ -317,6 +317,7 @@ type fakeNexService struct {
 	terminateCalls []execution.TerminateRequest
 	terminateErr   error
 	onTerminate    func(execution.TerminateRequest) // runs before the answer; lets a test flip the store row to terminated
+	terminateGate  chan struct{}                    // parks every Terminate until closed or its ctx ends
 	renewCalls     []renewCall
 	renewErr       error
 
@@ -395,6 +396,17 @@ func (f *fakeNexService) ArchiveCalls() []string {
 		} else {
 			out = append(out, "unarchive")
 		}
+	}
+	return out
+}
+
+// TerminateIDs returns the execution id of every Terminate so far.
+func (f *fakeNexService) TerminateIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, r := range f.terminateCalls {
+		out = append(out, r.ExecutionID)
 	}
 	return out
 }
@@ -499,14 +511,17 @@ func (f *fakeNexService) Archive(ctx context.Context, req execution.ArchiveReque
 // Terminate runs onTerminate first (so a hook can hand the lease over), then,
 // with enforceLease, fences the request as Nexen's Terminate does (CheckLease
 // before anything else), and otherwise answers terminateErr.
-func (f *fakeNexService) Terminate(_ context.Context, req execution.TerminateRequest) error {
+func (f *fakeNexService) Terminate(ctx context.Context, req execution.TerminateRequest) error {
 	f.record("terminate")
 	f.mu.Lock()
 	f.terminateCalls = append(f.terminateCalls, req)
-	hook := f.onTerminate
+	hook, gate := f.onTerminate, f.terminateGate
 	f.mu.Unlock()
 	if hook != nil {
 		hook(req)
+	}
+	if err := wait(ctx, gate); err != nil {
+		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -553,9 +568,16 @@ type fakeNexStore struct {
 
 	// List: listRows is the whole table (non-archived and archived alike);
 	// List filters, orders by id and pages it like store.Store.List.
+	// listErr answers every List call, or, with listErrAt > 0, only the
+	// listErrAt-th call (1-based).
 	listRows  []store.Execution
 	listErr   error
+	listErrAt int
 	listCalls int
+	// listGate parks every List until it is closed or the call's ctx ends;
+	// listEntered is closed on the first List.
+	listGate    chan struct{}
+	listEntered chan struct{}
 }
 
 type getResult struct {
@@ -563,7 +585,9 @@ type getResult struct {
 	err  error
 }
 
-func (f *fakeNexStore) Get(ctx context.Context, _ string) (store.Execution, error) {
+// With no script, Get answers the listRows row of that id (the zero row
+// when there is none), so a re-read sees the same table List pages.
+func (f *fakeNexStore) Get(ctx context.Context, id string) (store.Execution, error) {
 	f.mu.Lock()
 	call := f.calls
 	f.calls++
@@ -573,6 +597,13 @@ func (f *fakeNexStore) Get(ctx context.Context, _ string) (store.Execution, erro
 			res = f.results[call]
 		} else {
 			res = f.results[n-1]
+		}
+	} else {
+		for _, e := range f.listRows {
+			if e.ID == id {
+				res = getResult{exec: e}
+				break
+			}
 		}
 	}
 	f.mu.Unlock()
@@ -587,11 +618,21 @@ func (f *fakeNexStore) Get(ctx context.Context, _ string) (store.Execution, erro
 
 // List honours IncludeArchived, Cursor (id >) and Limit; rows come back in id
 // order and NextCursor is set only when more remain.
-func (f *fakeNexStore) List(_ context.Context, opts store.ListOptions) (store.ListPage, error) {
+func (f *fakeNexStore) List(ctx context.Context, opts store.ListOptions) (store.ListPage, error) {
+	f.mu.Lock()
+	gate := f.listGate
+	if f.listEntered != nil {
+		close(f.listEntered)
+		f.listEntered = nil
+	}
+	f.mu.Unlock()
+	if err := wait(ctx, gate); err != nil {
+		return store.ListPage{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listCalls++
-	if f.listErr != nil {
+	if f.listErr != nil && (f.listErrAt == 0 || f.listCalls == f.listErrAt) {
 		return store.ListPage{}, f.listErr
 	}
 	var rows []store.Execution
@@ -634,6 +675,8 @@ var _ nexStore = (*fakeNexStore)(nil)
 // session.HandoffLocksKey, and m.locks is resolved from it the way Init
 // does — so a test can hold the lock "as the stream module" through the
 // same instance.
+const hoOwnerPane = "%7" // the pane of the CC being handed off
+
 type handoffEnv struct {
 	m         *Module
 	tmux      *tmux.FakeExecutor
@@ -656,6 +699,12 @@ type stubTerminals struct {
 	// byCall, when set, answers the n-th (1-based) LiveBySessionID call
 	// instead of live: the seam for "an owner appears between two looks".
 	byCall func(n int) []agent.TerminalSession
+	// gate, when set, parks every lookup until it is closed or the lookup's
+	// ctx ends (ignoreCtx: only the gate releases it, like a lookup that
+	// checks its ctx only on entry). entered is closed on the first lookup.
+	gate      chan struct{}
+	ignoreCtx bool
+	entered   chan struct{}
 }
 
 // Calls is the number of LiveBySessionID lookups so far.
@@ -665,15 +714,30 @@ func (s *stubTerminals) Calls() int {
 	return s.calls
 }
 
-func (s *stubTerminals) LiveBySessionID(_ context.Context, _, sid string) ([]agent.TerminalSession, error) {
+func (s *stubTerminals) LiveBySessionID(ctx context.Context, _, sid string) ([]agent.TerminalSession, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.err != nil {
+		s.mu.Unlock()
 		return nil, s.err
 	}
 	s.calls++
+	n, gate, ignoreCtx := s.calls, s.gate, s.ignoreCtx
+	if s.entered != nil {
+		close(s.entered)
+		s.entered = nil
+	}
+	s.mu.Unlock()
+	if gate != nil {
+		if ignoreCtx {
+			<-gate
+		} else if err := wait(ctx, gate); err != nil {
+			return nil, err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.byCall != nil {
-		return s.byCall(s.calls), nil
+		return s.byCall(n), nil
 	}
 	return append([]agent.TerminalSession(nil), s.live[sid]...), nil
 }
@@ -707,7 +771,7 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 		},
 	}
 	owners := &stubOwnerResolver{
-		owner: agent.PaneOwner{AgentType: "cc", SessionID: hoSessionID, Cwd: hoCwd},
+		owner: agent.PaneOwner{AgentType: "cc", SessionID: hoSessionID, Cwd: hoCwd, TmuxPaneID: hoOwnerPane},
 		found: true,
 	}
 	ops := &recordingCCOperator{tmux: fakeTx}
@@ -715,7 +779,7 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 	svc := &fakeNexService{result: execution.Result{ID: "exec-1", State: store.StateQueued, EffectiveProfile: "handoff"}}
 
 	m := &Module{
-		sys: engine{handler: http.NotFoundHandler(), service: svc},
+		sys: engine{handler: http.NotFoundHandler(), service: svc, store: &fakeNexStore{}},
 		opts: nexen.Options{
 			Config: &nexconfig.Config{HostID: "host1", Sandbox: sandbox.Policy{MaxProfile: "handoff", DefaultProfile: "trusted"}},
 			Auth:   principalAuth("host1"),
@@ -747,6 +811,9 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 	m.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
+	// Q1 work a test left behind (a pending re-check, a re-check goroutine)
+	// must not outlive it: cancel and wait for it like Stop does.
+	t.Cleanup(func() { m.stopManualResume(context.Background()) })
 
 	return &handoffEnv{m: m, tmux: fakeTx, sessions: sessions, owners: owners, ops: ops, svc: svc, srv: srv, registry: registry, terminals: terminals}
 }

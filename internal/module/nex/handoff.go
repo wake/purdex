@@ -206,6 +206,20 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusConflict, "no_identity", "no Claude Code session identity for this pane", nil)
 		return
 	}
+	// Conversation entity (§4.3, D2, D7): S moves only if this pane's CC is
+	// its one owner. The sid lock also tells the manual-resume handler that
+	// a rollback resume below is ours.
+	sidKey := sidLockKey(owner.SessionID)
+	if !m.locks.TryLock(sidKey) {
+		writeHandoffError(w, http.StatusConflict, "transfer_in_progress", "this conversation is being moved already",
+			map[string]any{"session_id": owner.SessionID})
+		return
+	}
+	defer m.locks.Unlock(sidKey)
+	if herr := m.checkOwners(r.Context(), owner.SessionID, "", owner.TmuxPaneID); herr != nil {
+		herr.write(w)
+		return
+	}
 	target := paneTarget(sess)
 	if !m.prober.IsAliveFor("cc", target) {
 		writeHandoffError(w, http.StatusConflict, "no_cc", "no Claude Code running in the pane", nil)
@@ -243,7 +257,7 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		SandboxProfile:  profile,
 		Mounts:          []execution.Mount{{Path: owner.Cwd, Role: "cwd", Writable: true}},
 		Origin:          handoffOrigin(m.opts.Config.HostID, code),
-		Labels:          map[string]string{"source": "purdex", handoffSessionLabel: code},
+		Labels:          map[string]string{"source": "purdex", handoffSessionLabel: code, purdexSessionLabel: owner.SessionID},
 		ResumeSessionID: owner.SessionID,
 	}
 	// Detached from r.Context(): CC is already gone, and a client that
@@ -261,7 +275,25 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 			extra["infra_error"] = true
 		}
 		extra["reject_reason"] = reason
-		extra["rolled_back"] = m.rollbackHandoff(sess, expected, body.RollbackCommand, owner.SessionID, target)
+		if result.ID != "" {
+			extra["execution_id"] = result.ID
+		}
+		rolled := m.rollbackHandoff(sess, expected, body.RollbackCommand, owner.SessionID, target)
+		extra["rolled_back"] = rolled
+		// D7: rolled back, the terminal owns S again, so the rejected row
+		// exits (one state). Not rolled back, it stays as the start-failed
+		// worker the SPA shows in the pane. Engine calls are detached
+		// (detachedContext), so r.Context() cannot cut this short.
+		if rolled && result.ID != "" {
+			exited := false
+			if rej, gerr := m.getExecution(r.Context(), result.ID); gerr == nil {
+				out, herr := m.exitWorker(r.Context(), rej, nil, principal)
+				exited = herr == nil && out.Exited()
+			} else {
+				m.logf("nex: handoff %s: reading rejected execution %s: %v", code, result.ID, gerr)
+			}
+			extra["exited"] = exited
+		}
 		m.logf("nex: handoff %s rejected (%s); rolled_back=%v", code, reason, extra["rolled_back"])
 		writeHandoffError(w, http.StatusConflict, "delegate_rejected", "engine rejected the handoff: "+reason, extra)
 		return

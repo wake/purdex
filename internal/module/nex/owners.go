@@ -34,7 +34,7 @@ func executionIsFor(e store.Execution, sid string) bool {
 }
 
 // liveWorkersFor returns S's live executions, newest first (CreatedAt desc,
-// then ID desc). On errOwnerScanTruncated it still returns what it found.
+// then ID desc), with scanLiveWorkers' error contract.
 func (m *Module) liveWorkersFor(parent context.Context, sid string) ([]store.Execution, error) {
 	if sid == "" {
 		return nil, nil
@@ -44,6 +44,11 @@ func (m *Module) liveWorkersFor(parent context.Context, sid string) ([]store.Exe
 
 // scanLiveWorkers pages the non-archived executions and keeps the live ones
 // that keep accepts, newest first.
+//
+// On any error (a failed page, or errOwnerScanTruncated at the page cap) the
+// result holds every live match found before the failure. Callers that must
+// prove absence (the owner checks) fail closed on any error; Q1 and the
+// overflow reconcile act on what was found (manual_resume.go).
 func (m *Module) scanLiveWorkers(parent context.Context, keep func(store.Execution) bool) ([]store.Execution, error) {
 	var out []store.Execution
 	cursor := ""
@@ -52,7 +57,8 @@ func (m *Module) scanLiveWorkers(parent context.Context, keep func(store.Executi
 		res, err := m.sys.store.List(ctx, store.ListOptions{Cursor: cursor, Limit: ownerScanPageSize})
 		cancel()
 		if err != nil {
-			return nil, fmt.Errorf("nex: listing executions: %w", err)
+			sortNewestFirst(out)
+			return out, fmt.Errorf("nex: listing executions: %w", err)
 		}
 		for _, e := range res.Items {
 			if isLiveExecution(e) && keep(e) {
@@ -81,13 +87,17 @@ func sortNewestFirst(es []store.Execution) {
 // sidLockKey is the handoff-lock key for a Claude session id.
 func sidLockKey(sid string) string { return "sid:" + sid }
 
+// purdexSessionLabel marks an execution with the Claude session it carries (D17).
+const purdexSessionLabel = "purdex.session_id"
+
 // checkOwners: nil when nothing but the transferred owner holds S. allowExec /
 // allowPane name that owner ("" = none).
 // 409 session_owned {owner: "terminal", session_id, tmux_pane_id} |
 // {owner: "worker", session_id, execution_id, state};
 // {owner: "terminal", session_id, recent_resume: true} (just resumed, frame not yet recorded);
 // 503 owner_check_failed when either lookup errs (a truncated worker scan
-// counts as an error).
+// counts as an error, and the partial result it carries is ignored: a
+// partial scan cannot prove absence).
 func (m *Module) checkOwners(parent context.Context, sid, allowExec, allowPane string) *handoffError {
 	// A resume that just succeeded may not have its terminal frame recorded
 	// yet. Handoff (allowPane != "") transfers the terminal itself, so only

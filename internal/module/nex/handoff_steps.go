@@ -42,13 +42,14 @@ func (m *Module) resolveHandoffOwner(code string) (owner handoffOwner, ok bool) 
 	if !found || po.AgentType != "cc" || po.SessionID == "" {
 		return handoffOwner{}, false
 	}
-	return handoffOwner{SessionID: po.SessionID, Cwd: po.Cwd}, true
+	return handoffOwner{SessionID: po.SessionID, Cwd: po.Cwd, TmuxPaneID: po.TmuxPaneID}, true
 }
 
 // handoffOwner is the slice of agent.PaneOwner the handoff carries forward.
 type handoffOwner struct {
-	SessionID string
-	Cwd       string
+	SessionID  string
+	Cwd        string
+	TmuxPaneID string
 }
 
 // stopCC brings the pane's Claude Code to a stop: Interrupt first when it is

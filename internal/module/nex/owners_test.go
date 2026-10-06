@@ -99,6 +99,33 @@ func TestLiveWorkersFor_CapAndErrors(t *testing.T) {
 	}
 }
 
+// pageTwoFails: S's live worker "000000" sits on page 1 of a two-page table,
+// and the second List call fails.
+func pageTwoFails(st *fakeNexStore) {
+	rows := []store.Execution{row("000000", "idle", false, "S", "", 1)}
+	for i := 1; i <= ownerScanPageSize; i++ {
+		rows = append(rows, row(fmt.Sprintf("%06d", i), "terminated", false, "OTHER", "", int64(i+1)))
+	}
+	st.listRows, st.listErr, st.listErrAt = rows, errors.New("db down"), 2
+}
+
+// PR #1590 R1-2: a page error keeps the matches found before it (the
+// contract Q1 and the reconcile rely on); the error still comes back.
+func TestLiveWorkersFor_PageErrorKeepsWhatWasFound(t *testing.T) {
+	env := newTakebackEnv(t)
+	pageTwoFails(env.store)
+	got, err := env.m.liveWorkersFor(context.Background(), "S")
+	if err == nil || errors.Is(err, errOwnerScanTruncated) {
+		t.Fatalf("err = %v, want the store error", err)
+	}
+	if len(got) != 1 || got[0].ID != "000000" {
+		t.Fatalf("got %v, want the page-1 match", got)
+	}
+	if env.store.listCalls != 2 {
+		t.Fatalf("listCalls = %d, want 2", env.store.listCalls)
+	}
+}
+
 func TestCheckOwners(t *testing.T) {
 	ts := func(pane string, verified bool) agent.TerminalSession {
 		return agent.TerminalSession{FrameID: "f" + pane, PaneID: pane, AgentType: "cc", SessionID: "S", Verified: verified}
@@ -154,6 +181,19 @@ func TestCheckOwners(t *testing.T) {
 		env.store.listErr = errors.New("db")
 		if herr := env.m.checkOwners(context.Background(), "S", "", ""); herr == nil || herr.code != "owner_check_failed" {
 			t.Fatalf("herr = %+v", herr)
+		}
+	})
+	t.Run("a page error after a match → 503 (partial results never prove absence)", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		pageTwoFails(env.store)
+		herr := env.m.checkOwners(context.Background(), "S", "", "")
+		if herr == nil || herr.status != 503 || herr.code != "owner_check_failed" {
+			t.Fatalf("herr = %+v", herr)
+		}
+		// Even when the only match is the allowed execution: absence of others is unproven.
+		env.store.listCalls = 0 // page 1 answers again, page 2 fails again
+		if herr := env.m.checkOwners(context.Background(), "S", "000000", ""); herr == nil || herr.code != "owner_check_failed" {
+			t.Fatalf("allowed match, herr = %+v", herr)
 		}
 	})
 }
