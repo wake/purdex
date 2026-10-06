@@ -79,6 +79,15 @@ describe('nex-api', () => {
     expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc%20a/events?after=41&limit=500')
   })
 
+  it('fetchExecutionEvents hands its signal to the fetch, never to the query', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ items: [], next_cursor: 0 }))
+    const ctl = new AbortController()
+    await fetchExecutionEvents(hostId, 'exc_1', { after: 0, limit: 500, signal: ctl.signal })
+    const [url, init] = testGlobal.fetch.mock.calls[0]
+    expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1/events?after=0&limit=500')
+    expect(init.signal).toBe(ctl.signal)
+  })
+
   it('fetchExecutionPrelude GETs /prelude with before/limit and sanitises the page', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ state: 'ok', items: [], prev_cursor: 'c2', total_bytes: 5 }))
     const page = await fetchExecutionPrelude(hostId, 'exc_1', { before: 'c1', limit: 200 })

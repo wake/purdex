@@ -136,8 +136,18 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // §10.4: the pane's one enrichment cache (this view is keyed by host and
   // execution, so a stint switch gets a fresh one). Each settle may change the
   // prelude's height and redraw its rows: the anchor's version and search's
-  // redraw take its revision.
-  const [enrichment] = useState(() => createStintEnrichmentCache())
+  // redraw take its revision. Unmounting disposes it, aborting every walk
+  // still paging. StrictMode's dev double effect disposes it once while the
+  // instance lives on: the remount finds it disposed and takes a fresh one.
+  const [enrichment, setEnrichment] = useState(createStintEnrichmentCache)
+  useEffect(() => {
+    if (enrichment.isDisposed()) {
+      // Only after StrictMode's simulated unmount, never in production.
+      setEnrichment(createStintEnrichmentCache())
+      return
+    }
+    return () => enrichment.dispose()
+  }, [enrichment])
   const enrichmentRevision = useSyncExternalStore(enrichment.subscribe, enrichment.revision)
   const preludeRedraw = useMemo(() => ({ attribution, enrichmentRevision }), [attribution, enrichmentRevision])
   const lease = useExecutionLease(hostId, executionId)

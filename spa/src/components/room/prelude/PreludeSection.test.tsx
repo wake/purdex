@@ -839,7 +839,7 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection enrichmen
     // exc_B wrote a line that is not loaded: no segment of it is in the tree.
     draw(createStintEnrichmentCache(fetch), new Map([...A, ['99', 'exc_B']]))
     await act(async () => {})
-    expect(fetch.mock.calls).toEqual([['h', 'exc_A', { after: 0, limit: 500 }]])
+    expect(fetch.mock.calls).toEqual([['h', 'exc_A', { after: 0, limit: 500, signal: expect.any(AbortSignal) }]])
   })
 
   it('two segments of one stint share one fetch', async () => {
