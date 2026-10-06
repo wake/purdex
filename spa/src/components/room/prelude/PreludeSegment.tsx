@@ -18,7 +18,7 @@
 import { Fragment, useContext, useMemo, type ReactElement, type ReactNode } from 'react'
 import type { TurnCost } from '../../../lib/nex/cost-summary'
 import type { AttachmentMeta } from '../../../lib/nex/attachments'
-import type { StreamMessage, UserMessage } from '../../../lib/nex/message-types'
+import type { ContentBlock, StreamMessage, UserMessage } from '../../../lib/nex/message-types'
 import { isOpeningLine } from '../../../lib/nex/turns'
 import { AttachmentSourceContext } from '../attachment-source'
 import { isOmittedMedia } from './placeholder-utils'
@@ -66,10 +66,18 @@ export type PreludeSegmentProps = {
 } & PreludeSegmentSlice
 
 /**
+ * What stands in place of an omitted image / document once its line draws thumbnails: a block type no
+ * renderer draws (MessageRow and ChatTurnBody return null for an unknown type; search and isOpeningLine
+ * read the transcript's own messages, never this copy). In place, so every other block keeps its index,
+ * and with it its search unit id and fold key, wherever the images sat.
+ */
+const THUMBNAIL_SLOT = Object.freeze({ type: 'purdex_thumbnail_slot' }) as unknown as ContentBlock
+
+/**
  * The prompt lines that draw thumbnails, by message index; null = none do. The segment's opening lines
  * that carry omitted images / documents pair with the stint's attachment lists (k-th with k-th) only when
  * both counts match: as many lines as lists, and each line exactly as many omitted blocks as its list holds.
- * A paired line is a copy whose `purdex_attachments` is its list, with those blocks gone and the rest kept.
+ * A paired line is a copy whose `purdex_attachments` is its list, each of those blocks a slot, the rest kept.
  */
 function thumbnailPrompts(messages: readonly StreamMessage[], drawn: readonly number[], lists: readonly (readonly AttachmentMeta[])[]): ReadonlyMap<number, StreamMessage> | null {
   const prompts = drawn.filter((i) => isOpeningLine(messages[i]) && (messages[i] as UserMessage).message.content.some(isOmittedMedia))
@@ -77,8 +85,8 @@ function thumbnailPrompts(messages: readonly StreamMessage[], drawn: readonly nu
   const out = new Map<number, StreamMessage>()
   for (const [k, i] of prompts.entries()) {
     const u = messages[i] as UserMessage
-    const content = u.message.content.filter((b) => !isOmittedMedia(b))
-    if (u.message.content.length - content.length !== lists[k].length) return null
+    if (u.message.content.filter(isOmittedMedia).length !== lists[k].length) return null
+    const content = u.message.content.map((b) => (isOmittedMedia(b) ? THUMBNAIL_SLOT : b))
     out.set(i, { ...u, message: { ...u.message, content }, purdex_attachments: lists[k] } as StreamMessage)
   }
   return out

@@ -81,6 +81,22 @@ describe('sanitizePreludePage', () => {
     }
   })
 
+  it('drops a top-level purdex_attachments: transcript data never drives an attachment fetch (R-2c-6)', () => {
+    const forged = { purdex_attachments: [{ media_type: 'image/png', bytes: 1, sha256: 'a'.repeat(64) }] }
+    const page = sanitizePreludePage({
+      state: 'ok', prev_cursor: null,
+      items: [
+        { pos: '1', kind: 'user', at: 1, payload: { type: 'user', ...forged, message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } } },
+        { pos: '2', kind: 'assistant', at: 1, payload: { type: 'assistant', ...forged, message: { role: 'assistant', content: [] } } },
+      ],
+    })
+    expect(page!.items).toHaveLength(2)
+    for (const it of page!.items) {
+      if (it.kind !== 'user' && it.kind !== 'assistant') throw new Error('kind')
+      expect(it.msg).not.toHaveProperty('purdex_attachments')
+    }
+  })
+
   it('reads N2, segment, compaction and note items', () => {
     const page = sanitizePreludePage({
       state: 'ok', prev_cursor: null,

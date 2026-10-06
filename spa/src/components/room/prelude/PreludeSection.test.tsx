@@ -1130,12 +1130,29 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection attachmen
     expect(thumbs(row('2'))).toHaveLength(2)
     expect(thumbs(row('4'))).toHaveLength(1)
     expect(within(row('2') as HTMLElement).getByText('compare these')).toBeTruthy()
-    // The text keeps its search unit (the images trail it, so no block index moves).
+    // The text keeps its search unit: each image's block becomes a slot in place, so no block index moves.
     expect(document.querySelector('[data-search-unit="p2:0:text"]')!.textContent).toBe('compare these')
     // From the stint, never the pane's own execution.
     await waitFor(() => expect(fetched()).toHaveLength(3))
     expect(fetched().sort()).toEqual([['h', 'exc_A', 'a'.repeat(64)], ['h', 'exc_A', 'b'.repeat(64)], ['h', 'exc_A', 'c'.repeat(64)]])
     expect(vi.mocked(api.fetchAttachment).mock.calls.map((c) => c[3])).toEqual([ROUTE, ROUTE, ROUTE])
+  })
+
+  it('an image before its text (R-2c-5): every search unit id is the unmatched render\'s, and the thumbnail still shows', async () => {
+    const imageFirst = derivePrelude([
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+      m('2', 'user', [img(1), { type: 'text', text: 'what is this' }]),
+      m('3', 'assistant', [{ type: 'text', text: 'a cat' }]),
+    ])
+    const units = () => [...document.querySelectorAll('[data-search-unit]')].map((e) => [e.getAttribute('data-search-unit'), e.textContent])
+    const unmatched = draw(null, imageFirst)
+    const before = units()
+    unmatched.unmount()
+    expect(before).toContainEqual(['p2:1:text', 'what is this'])
+    draw(cacheOf([sent(1, [att('a')])]), imageFirst)
+    await waitFor(() => expect(thumbs(row('2'))).toHaveLength(1))
+    expect(placeholders()).toEqual([])
+    expect(units()).toEqual(before)
   })
 
   it('never mutates the transcript\'s own messages', async () => {
