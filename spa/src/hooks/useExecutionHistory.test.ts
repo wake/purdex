@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 
 const listAll = vi.fn()
 vi.mock('../lib/nex/list-all-executions', () => ({ listAllExecutions: (...a: unknown[]) => listAll(...a), LIST_PAGE_LIMIT: 500, LIST_MAX_PAGES: 20 }))
-import { useExecutionHistory } from './useExecutionHistory'
+import { useExecutionHistory, HISTORY_MIN_INTERVAL_MS } from './useExecutionHistory'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
 
 const row = (id: string) => ({ id }) as never
@@ -26,15 +26,66 @@ describe('useExecutionHistory', () => {
     expect(result.current.truncated).toBe(true)
   })
 
-  it('refetches when refreshRevision bumps', async () => {
-    listAll.mockResolvedValue(res([]))
-    const { result } = renderHook(() => useExecutionHistory('h1'))
-    await waitFor(() => expect(result.current.phase).toBe('ready'))
-    expect(listAll).toHaveBeenCalledTimes(1)
-    act(() => {
-      useExecutionListStore.setState({ byHost: { h1: { items: [], phase: 'ready', error: null, lastSeq: null, refreshRevision: 1, truncated: false } as never } })
+  const bump = (n: number) => act(() => {
+    useExecutionListStore.setState({ byHost: { h1: { items: [], phase: 'ready', error: null, lastSeq: null, refreshRevision: n, truncated: false } as never } })
+  })
+
+  describe('walk scheduling (fake timers)', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+    const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(0) })
+
+    it('refetches when refreshRevision bumps, after the minimum gap', async () => {
+      listAll.mockResolvedValue(res([]))
+      const { result } = renderHook(() => useExecutionHistory('h1'))
+      await settle()
+      expect(result.current.phase).toBe('ready')
+      expect(listAll).toHaveBeenCalledTimes(1)
+      bump(1)
+      await settle()
+      expect(listAll).toHaveBeenCalledTimes(1)
+      await act(async () => { await vi.advanceTimersByTimeAsync(HISTORY_MIN_INTERVAL_MS) })
+      expect(listAll).toHaveBeenCalledTimes(2)
     })
-    await waitFor(() => expect(listAll).toHaveBeenCalledTimes(2))
+
+    it('bumps inside the window coalesce into one walk after it', async () => {
+      listAll.mockResolvedValue(res([]))
+      renderHook(() => useExecutionHistory('h1'))
+      await settle()
+      bump(1); bump(2); bump(3)
+      await act(async () => { await vi.advanceTimersByTimeAsync(HISTORY_MIN_INTERVAL_MS - 1) })
+      expect(listAll).toHaveBeenCalledTimes(1)
+      await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+      expect(listAll).toHaveBeenCalledTimes(2)
+      await act(async () => { await vi.advanceTimersByTimeAsync(HISTORY_MIN_INTERVAL_MS * 3) })
+      expect(listAll).toHaveBeenCalledTimes(2)
+    })
+
+    it('three bumps during one walk give exactly one trailing walk', async () => {
+      let resolve1!: (v: unknown) => void
+      listAll.mockImplementationOnce(() => new Promise((r) => { resolve1 = r }))
+      listAll.mockResolvedValue(res([]))
+      renderHook(() => useExecutionHistory('h1'))
+      await settle()
+      bump(1); bump(2); bump(3)
+      await act(async () => { await vi.advanceTimersByTimeAsync(HISTORY_MIN_INTERVAL_MS * 2) })
+      expect(listAll).toHaveBeenCalledTimes(1) // still in flight: never a second concurrent walk
+      await act(async () => { resolve1(res([])) })
+      await settle()
+      expect(listAll).toHaveBeenCalledTimes(2)
+      await act(async () => { await vi.advanceTimersByTimeAsync(HISTORY_MIN_INTERVAL_MS * 3) })
+      expect(listAll).toHaveBeenCalledTimes(2)
+    })
+
+    it('a host change starts at once, ignoring the window', async () => {
+      listAll.mockResolvedValue(res([]))
+      const { rerender } = renderHook(({ h }) => useExecutionHistory(h), { initialProps: { h: 'a' } })
+      await settle()
+      rerender({ h: 'b' })
+      await settle()
+      expect(listAll).toHaveBeenCalledTimes(2)
+      expect(listAll.mock.calls[1][0]).toBe('b')
+    })
   })
 
   it('drops a stale response after the host changed, and passes isCurrent', async () => {
