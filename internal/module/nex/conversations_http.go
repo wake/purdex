@@ -214,27 +214,36 @@ func (m *Module) conversationSnapshot(ctx context.Context) (*convSnapshot, error
 // by convFlightTimeout, and publishes it to its waiters. Only a success
 // taken while the module runs is cached; a failure is not (the next request
 // retries), and nothing that ends after Stop began is cached or served.
+//
+// "After Stop began" is decided under convMu, where Stop cancels convCtx: a
+// check before taking the lock could pass, Stop cancel, and the snapshot
+// still be published. Either the publish precedes Stop's cancel, or the
+// snapshot is dropped.
 func (m *Module) runConversationFlight(f *convFlight) {
 	defer m.convWG.Done()
 	ctx, cancel := context.WithTimeout(m.convCtx, convFlightTimeout)
 	defer cancel()
 	start := time.Now()
 	snap, err := m.collectConversations(ctx)
+
+	if m.convBeforePublish != nil {
+		m.convBeforePublish()
+	}
+	m.convMu.Lock()
 	if err == nil && m.convCtx.Err() != nil {
 		snap, err = nil, errConversationsStopped
 	}
-	if err != nil {
-		m.logf("nex: conversations: snapshot failed after %v: %v", time.Since(start).Round(time.Millisecond), err)
-	}
-
-	m.convMu.Lock()
-	defer m.convMu.Unlock()
 	m.convFlight = nil
 	if err == nil {
 		m.convCached = snap
 	}
 	f.snap, f.err = snap, err
 	close(f.done)
+	m.convMu.Unlock()
+
+	if err != nil {
+		m.logf("nex: conversations: snapshot failed after %v: %v", time.Since(start).Round(time.Millisecond), err)
+	}
 }
 
 // collectConversations is one snapshot: scan the root (the index is brought

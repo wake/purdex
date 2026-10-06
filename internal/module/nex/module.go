@@ -163,6 +163,11 @@ type Module struct {
 	convCancel    context.CancelFunc // cancels convCtx
 	convWG        sync.WaitGroup     // the schedule goroutine and every flight
 	convStopCap   time.Duration      // 0 = convStopWait; test seam
+
+	// convBeforePublish, when set, runs in a flight between its collect and
+	// taking convMu to publish: a test seam for the Stop/publish race; nil in
+	// production.
+	convBeforePublish func()
 }
 
 // New returns a Module wired with production defaults. The conversation

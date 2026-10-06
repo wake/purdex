@@ -901,6 +901,60 @@ func TestConversationsHTTP_StopIsBoundedByItsCtx(t *testing.T) {
 	env.waitIdle(t)
 }
 
+// PR #1657 review: Stop lands between a flight's successful collect and its
+// publish. The publish decides under convMu (where Stop cancels), so the
+// snapshot is dropped: the waiter gets the stopped error, nothing is cached,
+// and Stop, waiting on the flight, returns as soon as it ends.
+func TestConversationsHTTP_NoPublishOnceStopBegan(t *testing.T) {
+	env := newConvEnv(t)
+	env.m.convStopCap = 2 * time.Second
+	env.writeTranscript(t, ceS1, time.UnixMilli(1_759_700_000_000), ceLine(t, cePrompt("/work/app", "hello")))
+	atPublish, release := make(chan struct{}), make(chan struct{})
+	env.m.convBeforePublish = func() {
+		close(atPublish)
+		<-release
+	}
+
+	type answer struct {
+		status int
+		res    convResponse
+		err    error
+	}
+	waiter := make(chan answer, 1)
+	go func() {
+		status, res, err := fetchConversations(env.srv.URL, "?state=ended")
+		waiter <- answer{status, res, err}
+	}()
+	waitClosed(t, atPublish, "the flight's publish")
+
+	stopped := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		_ = env.m.Stop(context.Background())
+		stopped <- time.Since(start)
+	}()
+	ceWaitFor(t, func() bool { return env.m.convCtx.Err() != nil }, "Stop to cancel")
+	close(release)
+
+	select {
+	case d := <-stopped:
+		assert.Less(t, d, env.m.convStopCap, "Stop returned when the flight ended, within its bound")
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop did not return")
+	}
+	select {
+	case a := <-waiter:
+		require.NoError(t, a.err)
+		assert.Equal(t, http.StatusServiceUnavailable, a.status)
+		assert.Equal(t, "conversations_unavailable", a.res.Code)
+		assert.Equal(t, errConversationsStopped.Error(), a.res.Error)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the waiter did not return")
+	}
+	assert.Nil(t, env.cached())
+	assert.Empty(t, env.logs.find("conversation scan still running"))
+}
+
 // A Stop ctx that already expired (Q1's wait used it up) must not report a
 // scan that is not running: select picks among ready cases at random.
 func TestConversationsHTTP_StopWithNothingRunningLogsNothing(t *testing.T) {
