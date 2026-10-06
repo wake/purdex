@@ -914,7 +914,7 @@ describe('handoffErrorMessage', () => {
       expect(zhMap[key], key).toBeTruthy()
       expect(placeholders(zhMap[key]), key).toEqual(placeholders(enMap[key]))
     }
-    for (const key of ['handoff.owner.terminal', 'handoff.owner.worker', 'handoff.rolled_back', 'handoff.not_rolled_back', 'handoff.menu', 'handoff.confirm_title', 'handoff.confirm_body', 'handoff.success', 'handoff.open_execution', 'handoff.keep_session', 'handoff.other_panes', 'takeback.button', 'takeback.confirm_running', 'takeback.success', 'takeback.manual_resume']) {
+    for (const key of ['handoff.owner.terminal', 'handoff.owner.worker', 'handoff.rolled_back', 'handoff.not_rolled_back', 'handoff.menu', 'handoff.confirm_title', 'handoff.confirm_body_idle', 'handoff.success', 'handoff.open_execution', 'handoff.keep_session', 'handoff.other_panes', 'takeback.button', 'takeback.confirm_running', 'takeback.success', 'takeback.manual_resume']) {
       expect(enMap[key], key).toBeTruthy()
       expect(zhMap[key], key).toBeTruthy()
       expect(placeholders(zhMap[key]), key).toEqual(placeholders(enMap[key]))

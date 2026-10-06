@@ -2235,3 +2235,29 @@ describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
     expect(screen.getByTestId('worker-ended-pane')).toBeInTheDocument()
   })
 })
+
+describe('ExecutionView — zero-turn idle execution (start_idle handoff)', () => {
+  const CAP = { route: { method: 'GET', path: '/x' }, page_max_items: 500, page_max_bytes: 1, max_block_bytes: 1 }
+  // `ensure` would re-resolve the (unregistered) test host and drop the seeded capabilities.
+  const realEnsure = useNexHostStore.getState().ensure
+  beforeEach(() => { useNexHostStore.setState({ ensure: async () => {} }) })
+  afterEach(() => {
+    useNexHostStore.setState({ byHost: {}, ensure: realEnsure })
+    vi.mocked(api.fetchExecutionPrelude).mockReset()
+  })
+
+  it('shows the prelude, an enabled composer, no turn footers and no loading state', async () => {
+    useNexHostStore.setState({ byHost: { [H]: { phase: 'ready', capabilities: { transcript_prelude: CAP } } } } as never)
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', turn_count: 0, resume_session_id: 'S' }) as never)
+    patchExec({ messages: [], turnStarts: [] })
+    vi.mocked(api.fetchExecutionPrelude).mockResolvedValue({
+      state: 'ok', prevCursor: null, totalBytes: null,
+      items: [{ pos: '2', at: 1, kind: 'user', msg: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'earlier talk' }], stop_reason: null } } }],
+    } as never)
+    render(<ExecutionView {...base} isActive />)
+    expect(await screen.findByText('earlier talk')).toBeInTheDocument()
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+    expect(screen.queryAllByTestId('turn-footer')).toHaveLength(0)
+    expect(screen.queryByTestId('execution-loading')).toBeNull()
+  })
+})

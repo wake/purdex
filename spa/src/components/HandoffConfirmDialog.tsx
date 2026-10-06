@@ -110,7 +110,7 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
     <ConfirmDialog
       testIdPrefix="handoff"
       title={t('handoff.confirm_title')}
-      body={t('handoff.confirm_body')}
+      body={t('handoff.confirm_body_idle')}
       confirmLabel={t('handoff.menu')}
       busy={busy}
       onCancel={onClose}

@@ -17,6 +17,8 @@ import { collectLeaves, getPrimaryPane } from '../lib/pane-tree'
 import { useHostStore } from '../stores/useHostStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { setHostShown } from '../lib/shown-hosts'
+import en from '../locales/en.json'
+import zh from '../locales/zh-TW.json'
 
 vi.mock('../lib/nex/handoff', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/nex/handoff')>()),
@@ -81,12 +83,23 @@ beforeEach(() => {
 })
 afterEach(() => vi.restoreAllMocks())
 
+describe('HandoffConfirmDialog — copy keys', () => {
+  it('has handoff.confirm_body_idle and no handoff.confirm_body in either locale', () => {
+    for (const loc of [en, zh] as Array<Record<string, string>>) {
+      expect(loc['handoff.confirm_body_idle']).toBeTruthy()
+      expect('handoff.confirm_body' in loc).toBe(false)
+    }
+    expect(zh['handoff.confirm_body_idle']).toContain('等待你的下一則訊息')
+  })
+})
+
 describe('HandoffConfirmDialog — rendering', () => {
   it('shows the localized title, body, Cancel and Confirm', () => {
     renderDialog()
     expect(screen.getByTestId('handoff-dialog')).toBeInTheDocument()
     expect(screen.getByText('Hand this session to nex?')).toBeInTheDocument()
-    expect(screen.getByText(/continues headless under nex/)).toBeInTheDocument()
+    expect(screen.getByText(/where it waits for your next message/)).toBeInTheDocument()
+    expect(screen.queryByText(/continues headless/)).toBeNull()
     expect(cancelBtn().textContent).toBe('Cancel')
     expect(confirmBtn().textContent).toContain('Hand to nex')
   })

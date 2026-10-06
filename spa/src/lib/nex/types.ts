@@ -130,6 +130,8 @@ export interface TranscriptPreludeCapability {
   page_max_items: number
   page_max_bytes: number
   max_block_bytes: number
+  /** Nexen v0.17: prelude items carry an integer `offset`. Check by key presence. */
+  item_offset?: boolean
 }
 
 export interface NexEvent {
@@ -217,7 +219,11 @@ export interface NexCapabilities {
     resume_session_id?: boolean
     /** This build accepts `attachments` on delegate's first turn; absent/false on a daemon that does not. */
     attachments?: boolean
+    /** Nexen v0.17: delegate accepts `start_idle` (worker starts idle with zero turns). Check by key presence. */
+    start_idle?: boolean
   }
+  /** Nexen v0.17: the execution list can be filtered by session. Check by key presence. */
+  list?: { session_filter?: boolean }
   /**
    * Presence = this build may put `session_title` on execution summaries and
    * emits `execution.title_changed` (nexen contract §0/§1.10). Absence =
