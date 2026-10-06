@@ -11,6 +11,7 @@ import { useUndoToast } from '../stores/useUndoToast'
 import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useNexHostStore } from '../stores/useNexHostStore'
 import { compositeKey } from '../lib/composite-key'
 import { stripAgentTitleMarker, stripAnyKnownAgentTitleMarker } from '../lib/agent-title-marker'
 import { countPanesOnSession } from '../lib/pane-tree'
@@ -21,6 +22,7 @@ import {
   executionContentFor,
   handoffFromFor,
   handoffErrorMessage,
+  handoffConfirmBodyKey,
   manualResumeHint,
   type HandToNexArgs,
 } from '../lib/nex/handoff'
@@ -37,7 +39,8 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
   // Plain state, so a fresh mount is a fresh default (user ruling 2026-09-19:
   // 預設保留、每次都問); nothing persists it.
   const [keepSession, setKeepSession] = useState(true)
-  const otherPanes = useTabStore((s) => countPanesOnSession(s.tabs, args.hostId, args.sessionCode, args.paneId))
+  const nexCapabilities = useNexHostStore((s) => s.byHost[args.hostId]?.capabilities)
+  const otherPanes =useTabStore((s) => countPanesOnSession(s.tabs, args.hostId, args.sessionCode, args.paneId))
   // The session's own pane title, recorded on the execution pane as its
   // pre-handoff title (worker theme spec §8.4), with the agent marker
   // stripped. Looked up by (hostId, sessionCode) directly — not through the
@@ -110,7 +113,7 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
     <ConfirmDialog
       testIdPrefix="handoff"
       title={t('handoff.confirm_title')}
-      body={t('handoff.confirm_body_idle')}
+      body={t(handoffConfirmBodyKey(nexCapabilities))}
       confirmLabel={t('handoff.menu')}
       busy={busy}
       onCancel={onClose}

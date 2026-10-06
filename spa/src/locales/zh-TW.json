@@ -764,6 +764,7 @@
   "execution.tool.unknown": "工具",
   "handoff.menu": "交給 nex",
   "handoff.confirm_title": "把這個 session 交給 nex？",
+  "handoff.confirm_body": "Claude Code 會在這個窗格結束，改由 nex 以 handoff profile 在背景接手執行——不會再有權限詢問。之後可以隨時接回終端機。",
   "handoff.confirm_body_idle": "Claude Code 會在這個窗格結束，這段對話改由 worker（nex，handoff profile，不會再有權限詢問）接手，並等待你的下一則訊息。之後可以隨時接回終端機。",
   "handoff.success": "已交給 nex。",
   "handoff.open_execution": "開啟執行",

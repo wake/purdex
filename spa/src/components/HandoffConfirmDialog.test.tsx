@@ -84,12 +84,30 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('HandoffConfirmDialog — copy keys', () => {
-  it('has handoff.confirm_body_idle and no handoff.confirm_body in either locale', () => {
+  it('has both handoff.confirm_body_idle and the legacy handoff.confirm_body in both locales', () => {
     for (const loc of [en, zh] as Array<Record<string, string>>) {
       expect(loc['handoff.confirm_body_idle']).toBeTruthy()
-      expect('handoff.confirm_body' in loc).toBe(false)
+      expect(loc['handoff.confirm_body']).toBeTruthy()
     }
     expect(zh['handoff.confirm_body_idle']).toContain('等待你的下一則訊息')
+  })
+})
+
+describe('HandoffConfirmDialog — start_idle capability picks the copy', () => {
+  it('a host advertising delegate.start_idle shows the idle copy', () => {
+    useNexHostStore.setState({
+      byHost: { h1: { info: null, capabilities: { delegate: { resume_session_id: true, start_idle: true }, sandbox_profiles: ['default', 'handoff'] } as never, phase: 'ready', error: null, fetchedAt: 0, generation: 1, fingerprint: 'f' } },
+    } as never)
+    renderDialog()
+    expect(screen.getByText(/where it waits for your next message/)).toBeInTheDocument()
+    expect(screen.queryByText(/continues headless/)).toBeNull()
+  })
+  it('a host without the key shows the legacy copy and can still confirm', async () => {
+    renderDialog()
+    expect(screen.getByText(/continues headless under nex/)).toBeInTheDocument()
+    mockedHandToNex.mockResolvedValueOnce({ result: { ...ok, session_kept: false }, swapped: true })
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -98,8 +116,9 @@ describe('HandoffConfirmDialog — rendering', () => {
     renderDialog()
     expect(screen.getByTestId('handoff-dialog')).toBeInTheDocument()
     expect(screen.getByText('Hand this session to nex?')).toBeInTheDocument()
-    expect(screen.getByText(/where it waits for your next message/)).toBeInTheDocument()
-    expect(screen.queryByText(/continues headless/)).toBeNull()
+    // v0.16 daemon (no delegate.start_idle): legacy copy, handoff still offered.
+    expect(screen.getByText(/continues headless under nex/)).toBeInTheDocument()
+    expect(screen.queryByText(/where it waits for your next message/)).toBeNull()
     expect(cancelBtn().textContent).toBe('Cancel')
     expect(confirmBtn().textContent).toContain('Hand to nex')
   })
