@@ -568,6 +568,21 @@ If a PR still exceeds 800 lines / 20 files, split it at a task boundary and say 
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4: Run** focused tests, then the full gate.
 - [ ] **Step 5: Commit** `feat(spa): rebuild a terminal-last conversation from a closed-terminal pane (P4)`.
 
+**As shipped (PR #1672; supersedes the parts of this task it names):**
+- **R-4-17 (plan errors found in implementation):**
+  - The seeded record carries **no** `agentExited`. With it, "Run resume command" defaulted off (`RebuildActionSet.tsx`) and Rebuild all skipped the resume (`batch.ts` `planForRecord`), so a rebuild opened an empty shell.
+  - `batch.ts` `groupKey` puts a pane whose `sessionCode` is empty in its own group, because two conversation panes would otherwise merge into one create. This is the only `batch.ts` change, and it replaces "Do **not** change `batch.ts`".
+- **R-4-18:** a dedupe hit refreshes the found pane's `conversation` snapshot from the row (`lastWriteAt`, `title`, `lastIn`). A mounted screen keeps the user's mode choice, and the notice re-bases on a changed `lastWriteAt`.
+- **Coordinator, 2026-10-07:**
+  - (B) a `conversation-ended` pane hides `RebuildActionSet`'s agent-state row;
+  - (C) its tab label is the conversation title plus the closed-terminal suffix. That suffix is now an i18n key (zh-TW「（已結束）」) shared with ordinary closed panes, and the label returns to the normal rule after a rebuild.
+- **PR review:**
+  - a future `lastWriteAt` (host clock ahead) is capped at the local mount or refresh time, so the notice ends within 120 s;
+  - the status bar falls back to `cachedName` when the session lookup finds nothing.
+- **Kept, by ruling:**
+  - unticking "Run resume command" stays possible, as on every closed pane (R-4-3); the conversation stays in 已退出;
+  - wiring into 已退出 is Task 41.
+
 ## Phase P4-2b — SPA: the 已退出 and 已消失 tabs
 
 ### Task 41: 已退出 on the endpoint
