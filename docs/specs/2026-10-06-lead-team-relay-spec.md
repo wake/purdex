@@ -9,6 +9,7 @@ Status: **passed review by `air26/_9iwyyv` on 2026-10-06** (c358cd65 plus the re
 - U13a and U14 followed the same day: self-relay approval is one click, and the browser SPA is retired, so every client is a Purdex.app.
 - U15 (2026-10-07) makes cross-host spawn a core need, with a host-selection rule. Its derivations are in §7.4, its measurements M13–M16, its phases P4b and P4c.
 - U17 (2026-10-07) brings the synchronous hook decision (`pdx hook` waits for the daemon on PreToolUse and PermissionRequest) from §11 into the phases: §6.6, M17–M21, phases P2c and P8.
+- U18 (2026-10-07) fixes the model tier: spawn uses the default model; a self relay keeps model and effort (measured: `/clear` already does, M21); handoff (切換) keeping them is tracked outside this spec (§16), and P1 records `model.id` / `effort.level` for it.
 - U16 (2026-10-07) fixes the Chinese vocabulary: 切換 (handoff, terminal ↔ worker) and 接力 (relay, a new conversation when context runs out); 交接 is retired. This spec's prompts and the 接力檔 follow it; English identifiers do not change.
 
 Every place where this spec departs from the brief's design draft (brief §5, D1–D8) is marked **⟲ changed from D…**, with the reason. §13 lists all of them.
@@ -111,6 +112,20 @@ Background the user gave: an iOS repo is about to be developed on a26; when the 
 - **Codex answers the same way** by its hooks documentation (M20); the plan probes it once before P8 ships.
 - `pdx hook` still exits 0 on every path and still prints nothing unless a decision was obtained; an unreachable daemon means no output, which is the normal permission flow, never a forced allow.
 
+**Eighth supplementary decision.** The user made it on 2026-10-07, and `air26/_9iwyyv` relayed it. Copied verbatim.
+
+| # | 決策 |
+|---|---|
+| U18 | 模型等級：<br>- lead → member 的 spawn：固定使用預設模型，不帶 --model/--effort，維持現狀。<br>- 自我接力：接手的新對話必須和原本同模型、同 effort 等級。<br>- 切換（handoff，terminal ↔ worker 雙向）：理論上也必須同模型、同 effort。 |
+
+air26's facts behind it (2026-10-07), re-verified here as M22: Nexen starts a worker without `--model` / `--effort`; the handoff profile passes `--setting-sources user,project,local`, so the worker takes the settings' defaults (mlab: `model: opus`, `effortLevel: high`; a26: no `model`, `effortLevel: high`). A terminal session on Opus 5.5 xhigh therefore comes back as Opus high after a switch, and a Fable session comes back as Opus.
+
+**How this spec reads U18** (measurements M21, M22):
+- **(a) Self relay needs no reset.** `/clear` keeps both the model and the effort level in the same process (M21: `claude-sonnet-5-5` / `low` survived into the new session id). The mod does nothing about them; the P5b acceptance checks the statusline before and after a relay shows the same `model.id` and `effort.level`. If a later Claude Code drops either, the mod re-applies them with `$.command.run('model …')` / `('effort …')` from values it captured at `session.start` — the plan notes this as the fallback, not as v1 code.
+- **(b) The daemon learns model and effort from the statusline, not from hooks.** The statusline payload carries `model.id` and `effort.level`; the hook payloads carry neither (M21). P1's parser records both beside the context usage, per CC session id (§8.5). Today nothing in Purdex or Nexen carries them (M22).
+- **(c) 切換 is outside lead/team.** It is tracked as two issues, not a phase here: Purdex `wake/purdex` (pass the session's model and effort on terminal → worker through `execution.Request`, and append `--model` / `--effort` to the worker → terminal resume and rollback commands from the execution's values) and Nexen `wake/nexen` (`Model` / `Effort` on `execution.Request`, persisted on the execution because every turn is a new process, emitted after `--resume`, with a test that the flags beat the three settings scopes). Links in §16. This spec's only part of it is P1 recording the values.
+- **Spawn** (§7.2) stays `claude --dangerously-skip-permissions --plugin-dir …` with no model flags.
+
 **How this spec reads U15** (derived in §7.4; the measurements are M13–M16):
 - U15 pulls **cross-host spawn, kill and relay** out of §11 into the phases (P4b, P4c in §12). It changes none of U1–U14.
 - "有相關的 repo" is decided by both the path convention and the git remote, and a docs-only sparse checkout does not count (§7.4 (a)).
@@ -192,6 +207,8 @@ A probe mod was loaded into a throwaway `claude` in tmux through `CLAUDE_CODE_PL
 - **M19 AskUserQuestion is answered by a PreToolUse hook in an interactive session** (2026-10-07, CC 2.1.291, Haiku, bypass permissions, tmux). A `PreToolUse` hook with matcher `AskUserQuestion` printed `permissionDecision: "allow"` and `updatedInput` = the original `tool_input` plus `answers: {"<question>": "<first option label>"}`; the TUI showed `User answered Claude's questions: 喜歡紅色還是藍色？ → 紅` with no dialog, and the model replied with the answer. The docs describe this for `-p` runs; it works interactively too. The hook's stdin carried `permission_mode: "bypassPermissions"` and `effort: null`.
 - **M20 Codex hooks** (learn.chatgpt.com/docs/hooks, read 2026-10-07): events include PreToolUse and PermissionRequest; both take stdout decisions with the **same JSON shapes** as Claude Code; config in `~/.codex/hooks.json` or `config.toml`; default timeout 600 s (1 s for SessionEnd and Interrupt); Codex waits unless `async: true`; payload fields `session_id`, `tool_name`, `tool_input`, `tool_use_id`, `permission_mode`, `turn_id` (matches the repo's fixtures, `internal/agent/codex/testdata/codex-0.153.4-payloads/`). **Unmeasured:** whether a changed command or `timeout` invalidates Codex's `[hooks.state] trusted_hash` and re-prompts the user; the plan probes it in P8.
 - **M21 Model and effort live in the statusline, not in hooks** (2026-10-07, CC 2.1.291): the statusline payload carries `model.id` and `effort.level` (`claude-opus-5-5` / `xhigh` at start; `/model sonnet` → `claude-sonnet-5-5` / `medium`; `/effort low` → `low`); the UserPromptSubmit hook payload had `effort: null` and no `model`. After `/clear` the new session id kept **both** (`claude-sonnet-5-5` / `low`), same pid. (Used by U18.)
+
+- **M22 Nothing carries model or effort across a switch today** (Nexen HEAD `3411bd1`; Purdex pins `nexen v0.17.0`, same argv): the worker argv is `<Bin> -p --input-format stream-json --output-format stream-json --verbose --include-hook-events --include-partial-messages [--resume <sid>] --setting-sources user,project,local --permission-mode bypassPermissions --tools default` (`nexen/adapter/claude.go:156-200`, `sandbox/profile.go:228-239`; env is `PATH HOME SHELL TMPDIR LANG` plus `CLAUDE_CODE_FORWARD_SUBAGENT_TEXT=1`, `account/env.go:15-73`). `execution.Request` (`execution/service.go:55-105`) and `adapter.StartParams` (`adapter/adapter.go:94-103`) have no model or effort; Purdex calls `Delegate(ctx, execution.Request{…})` in-process (`internal/module/nex/handoff.go:253-269`) and knows only `handoffOwner{SessionID, Cwd, TmuxPaneID}` (`handoff_steps.go:48-53`). Worker → terminal types the SPA's resume template, default `claude --resume {id}` (`takeback.go:372-373`, `spa/src/lib/resume-templates.ts:21`). The CC status derivation reads the model from a key `modelName` that only the opencode plugin sends (`internal/agent/cc/status.go:21,78`, `opencode/plugin_template.go:176`); `effort` is parsed nowhere. Settings: mlab `model: opus`, `effortLevel: high`; a26 `model` unset, `effortLevel: high`.
 
 ### 3.3 Code (re-verified on origin/main `de37a4e5`, alpha.505)
 
@@ -481,7 +498,7 @@ pdx spawn [--repo <key|org/repo>] [--host <alias>] [--cwd <dir>] [--title <t>] [
    - an existing session of that name is this op's, so the daemon continues;
    - nothing opens twice.
 4. **Create the tmux session and launch the member.** This goes through the session module's create path, then a generation-checked literal send to window 0. Each step is persisted.
-   - The launch command is the host config `team.member_command`, default `claude --dangerously-skip-permissions` (the expansion of `cld-yolo`, because the daemon cannot rely on a shell alias).
+   - The launch command is the host config `team.member_command`, default `claude --dangerously-skip-permissions` (the expansion of `cld-yolo`, because the daemon cannot rely on a shell alias). **No `--model` or `--effort` (U18):** a member runs the host's default model.
    - **A member always carries the Purdex mod:** the command always gets `--plugin-dir <data_dir>/cc-plugin/purdex`. Even with the global install the plugin loads once (M5), so spawn never depends on the user's settings.
 5. **Wait up to 20 s for the member to register.** Same shape as take-to-terminal: a verified frame for the pane with a session id, plus a registry entry, so the ref is known.
    - On timeout: kill the tmux session, fail `member_start_timeout`. The member does not count against the limit.
@@ -667,7 +684,7 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
 
 ### 8.5 Detection and notice to the lead (U9, D5.1)
 
-- **Parse context usage.** The agent module parses the statusline payload at ingest: `session_id`, `context_window.used_percentage`, `context_window_size`. It keeps the last value **per CC session id**, which also fixes the overwrite in a shared tmux session. Peers and the team module read it through an accessor.
+- **Parse context usage.** The agent module parses the statusline payload at ingest: `session_id`, `context_window.used_percentage`, `context_window_size`, and (U18) `model.id`, `effort.level`. It keeps the last value **per CC session id**, which also fixes the overwrite in a shared tmux session. Peers and the team module read it through an accessor.
 - **Persist it for teams only.** The team module stores the last value on member and lead rows, so it survives a restart.
   - Other sessions show `-` after a restart until their next refresh.
 - **Notice to the lead:**
@@ -723,7 +740,7 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
 - **核准 is one click on any App (U13a), the same as a lead request (U5b).** So is **拒絕**.
   - The layer of §6.5 applies: no `pdx` approve command, the skill forbids self-approval, and every decision is broadcast and audited.
 - **Deadline:** 10 minutes, absolute. The lease is renewed by the mod's wait (below). If the origin session is gone, the request is `abandoned`.
-- **Approved:** the op moves to `claimed`, and the mod runs §8.2 steps 4–8: write, clear, seed.
+- **Approved:** the op moves to `claimed`, and the mod runs §8.2 steps 4–8: write, clear, seed. The new conversation keeps the model and the effort level, because `/clear` does (U18, M21); the acceptance checks it.
 - **Denied or timed out:** the op becomes `cancelled{denied|timeout}`.
 
 **⟲ derived (b): the lock (U7) for a request the mod makes.** The request opens at a turn's end, so nothing is running. The lock means **no new turn starts until the request closes**.
@@ -865,7 +882,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | Phase | Content | Brief D8 |
 |---|---|---|
 | P0 | PRODUCT.md vocabulary (§4) | "separate small PR" |
-| P1 | Statusline usage parsed per session id + accessor; peers `CTX` column and `agent.context`; CWD fix; `peer_not_found` hint text (§8.5, §8.6) | 1 (part) |
+| P1 | Statusline usage parsed per session id + accessor, with `model.id` and `effort.level` beside it (U18); peers `CTX` column and `agent.context`; CWD fix; `peer_not_found` hint text (§8.5, §8.6) | 1 (part) |
 | P2 | `team` module skeleton and `team.db`; `daemonclient` with the restart rules (§9.1); lead requests: create, poll and lease, cancel, decide, sweeper, boot grace, `OnSubscribe` snapshot; `pdx lead request`; exit codes (§14) | 1 |
 | P3 | Approval dialog host, store, event branch, one-click approve and deny (U5b), reconnect queue, notifications; restart-confirm line for open requests (§6.3, §9.5) | 1 |
 | P2c | Hook decisions (U17, §6.6): flag-file gate, `pdx hook` decision path for PreToolUse / PermissionRequest (CC and Codex) with the 5 s grace, `POST /api/hooks/decide` with the lead-request lock answer, installer `timeout: 600` on the two events, flag written and removed by `pdx lead request`, sweeper of stale flags | U17 (uses 1) |
@@ -899,6 +916,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | D2 | Approve and deny are one click on any App; the `client` descriptor is an audit label | U5b (U5a withdrawn); one shared host token (§3.3) |
 | D2 | The grant has no host list; the host is chosen per spawn by the §7.4 rule, and the member host gates by its own `AllowTeam` flag | U15; the user picks hosts by rule, not per grant |
 | D4 | No `--worktree`; `--repo` and `--host` (U15); the brief is sent by the CLI from the lead's inbox; tmux name `tm-<op>`; start timeout kills and frees the slot | No worktree API and U10; U15 reinstated the host choice; replies reach the lead; D4's own idempotency idea; the limit counts only live members |
+| U18 | Spawn has no model flags; self relay relies on `/clear` keeping model and effort; 切換 tracked in issues, P1 records the values | M21, M22 |
 | §11 → §6.6 (U17) | `pdx hook` waits for the daemon on PreToolUse and PermissionRequest behind a flag file; lead and relay locks in P2c/P6; forwarded prompts as two more approval kinds in P8 | U17; M17–M20; one approval model serves the iOS line too |
 | §11 → §7.4 (U15) | Cross-host spawn, kill and relay are in P4b/P4c; trust = the paired lead host's inbound token plus the member host's `AllowTeam` flag; the grant does not travel | U15; `PeerAuth` already identifies the calling host; both daemons are the same user's |
 | D4 | Launch command is `team.member_command`, default `claude --dangerously-skip-permissions` | The daemon cannot rely on the `cld-yolo` alias |
@@ -1000,6 +1018,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 
 - Member visuals (U11).
 - Nexen worker relay: it goes through Nexen rebuild.
+- **切換 (handoff) keeping the session's model and effort (U18 (c)):** tracked as `wake/purdex` issue [#1647](https://github.com/wake/purdex/issues/1647) and `wake/nexen` issue [#131](https://lab.protype.tw/wake/nexen/issues/131); this spec only records the values (P1).
 - Cross-host hardening (signed grants, per-host scopes), adoption, Electron WebAuthn, and the handoff memory store: all in §11. The hard lock is **in** scope since U17 (§6.6, P2c); the Mac App dialog for forwarded `hook_*` kinds and the iOS client are not. Cross-host spawn, kill and relay themselves are **in** scope since U15 (§7.4, P4b/P4c).
 - Claude Code's built-in Agent Teams.
 - **Turning the browser SPA off (U14).** Here U14 is a premise only.
