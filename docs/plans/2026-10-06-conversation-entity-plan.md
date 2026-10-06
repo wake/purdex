@@ -4089,6 +4089,9 @@ export const MAX_STINTS = 50
  * Any list failure, or a truncated walk → 'unavailable' (§10.6: no attribution beats a wrong one).
  * A boundary fetch failure drops that stint only.
  */
+// As shipped (#1611, rulings R-2a-5 / R-2a-6 and the PR review):
+// - a walk that is truncated, stuck (repeated cursor) or dropped malformed rows is 'unavailable';
+// - a stint with no resume_session_id created the session, so its boundary is 0, with no prelude fetch.
 export function useEntityStints(hostId: string, summary: ExecutionSummary | null, enabled: boolean): { stints: Stint[]; status: 'idle' | 'loading' | 'ok' | 'unavailable' }
 ```
 
@@ -4110,7 +4113,7 @@ Commit: `feat(spa): list a conversation's earlier worker stints and their bounda
 - Create: `spa/src/lib/nex/stint-attribution.ts` (pure)
 - Create: `spa/src/lib/nex/stint-attribution.test.ts`
 - Create: `spa/src/components/room/prelude/PreludeSegment.tsx` (one component per contiguous run of entries with the same attribution; in this task it only renders its entries with the inherited context)
-- Modify: `spa/src/components/room/prelude/PreludeSection.tsx` (group entries into runs, render a `PreludeSegment` per run, keyed `${attributedStint ?? 'plain'}:${firstPos}`)
+- Modify: `spa/src/components/room/prelude/PreludeSection.tsx` (group entries into runs, render a `PreludeSegment` per run, keyed `${attributedStint ?? 'plain'}:${lastPos}`. *As shipped (#1613, ruling R-2a-8): `lastPos`, not `firstPos`. Older pages only prepend, so a first-pos key would remount the first run on every older page.*)
 - Modify: `spa/src/components/execution/ExecutionView.tsx:113-115, 509-527` (`useEntityStints`; pass `attributeItems(st.prelude.items, stints)` into the prelude node)
 - Test: `PreludeSection.test.tsx`, `ExecutionView.test.tsx` ("worker prelude" describe)
 
@@ -4145,6 +4148,13 @@ Tests (§10.8, required):
 Commit: `feat(spa): attribute earlier worker segments to their stints`.
 
 **PR P3b-2a:** Tasks 29, 30, 31a. Then codex R1 + R2. Size gate: if the diff exceeds 800 lines, move Task 31a to the next PR and say so.
+
+**As shipped (2026-10-06, implementer purdex-7c, coordinator purdex-18):** the gate tripped. Tasks 29–30 shipped as #1611 (alpha.501), and Task 31a as #1613 (alpha.502). Rulings that refine Task 31a:
+- **R-2a-1, when stints are listed:** only when the prelude is eligible, the host advertises `transcript_prelude.item_offset`, and a loaded `prelude.segment` has an `sdk` entrypoint.
+- **R-2a-2, chat mode:** `preludeBlocks` is unchanged. A span takes its first message's attribution, and an entry block takes its own.
+- **R-2a-3:** `PreludeSegment` is a Fragment, and the DOM is identical with or without attribution.
+- **R-2a-9:** `TranscriptSearch` gets `preludeRedraw` in its marking effect, so highlights survive a re-key.
+- **R-2a-11, a known limit until Task 33:** an attachment-only prompt is not an opening line. After a worker → worker rebuild whose first send is attachment-only, a chat span can straddle the stint boundary. Its later part then loses enrichment, but never gets a wrong one, because the joins are id-based and attachments are count-guarded. Tracked in #1614. Task 33 fixes the root cause.
 
 ### Task 31b: Lazy enrichment of earlier worker segments — tool status and subagent tasks (§10.4)
 
@@ -4250,6 +4260,10 @@ Commit: `feat(spa): per-turn cost footers on earlier worker segments`.
   - off by one → all placeholders;
   - a segment with no images → nothing changes;
   - mutation: removing the count guard fails the mismatch test.
+- **Added by the coordinator (2026-10-06, closes #1614): an attachment-only prompt opens a turn.**
+  - `isOpeningLine` (`spa/src/lib/nex/turns.ts`) also counts a top-level user line that has an image or document block. The line must not be a `tool_result` carrier or a subagent line (`parent_tool_use_id`), and needs no text block. The count above needs exactly this.
+  - Check every caller before changing it, the one at `turns.ts:59` included.
+  - Test: a worker → worker rebuild whose first send is attachment-only. In chat mode the span splits at the stint boundary, and the new stint's lines are attributed to it.
 
 Commit: `feat(spa): attachment thumbnails on earlier worker segments when unambiguous`.
 
