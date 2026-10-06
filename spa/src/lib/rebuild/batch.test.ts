@@ -10,7 +10,7 @@ import {
 } from './batch'
 import { defaultResumeLookup } from '../resume-templates'
 import { emptyHostConfigEntry, useHostConfigStore } from '../../stores/useHostConfigStore'
-import type { BatchCandidate } from './eligibility'
+import { batchCandidates, collectRecordRows, type BatchCandidate } from './eligibility'
 import { useRebuildStore, withOperationLock } from '../../stores/useRebuildStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -18,6 +18,8 @@ import { useSessionStore } from '../../stores/useSessionStore'
 import { rebuildPane } from './engine'
 import type { Session } from '../host-api'
 import type { ResumeTemplateOverrides } from '../host-config-api'
+import type { ConversationRow } from '../nex/conversations-api'
+import { conversationRebuildContent } from '../nex/open-conversation-rebuild'
 import type { PaneRebuildRecord, Tab, TmuxSessionContent } from '../../types/tab'
 
 // ---------------------------------------------------------------------------
@@ -607,4 +609,75 @@ describe('rebuildPane — a caller-supplied lock grant', () => {
     expect(report.steps.create.status).toBe('failed')
     expect(useRebuildStore.getState().lockedBy).toBe(BATCH_LOCK_OWNER)
   })
+})
+
+// ---------------------------------------------------------------------------
+// The conversation rebuild pane (conversation entity spec §13.4, R-4-3): an
+// ordinary closed terminal pane once opened — a Rebuild-all candidate when it
+// was opened on the host's generation, excluded like any other closed pane
+// without one, and rebuildable on its own either way.
+// ---------------------------------------------------------------------------
+
+describe('a conversation-ended pane', () => {
+  const S = 'aaaaaaaa-1111-2222-3333-444444444444'
+  const row: ConversationRow = {
+    session_id: S, title: 'Fix the login bug', title_source: 'ai', cwd: '/w/proj', cwd_exists: true,
+    last_activity_at: 5, last_in: 'terminal',
+  }
+
+  function seedConversation(tabId: string, paneId: string, tmuxInstance: string) {
+    const tab: Tab = {
+      id: tabId, pinned: false, locked: false, createdAt: 0,
+      layout: { type: 'leaf', pane: { id: paneId, content: conversationRebuildContent('h1', row, 'proj-2', tmuxInstance, 1) } },
+    }
+    const prev = useTabStore.getState()
+    useTabStore.setState({ tabs: { ...prev.tabs, [tabId]: tab }, tabOrder: [...prev.tabOrder, tabId], activeTabId: tabId })
+  }
+
+  const rebuildAllDrafts = () => groupForBatch(batchCandidates(collectRecordRows(useTabStore.getState().tabs)))
+
+  beforeEach(() => {
+    resetStores()
+    vi.unstubAllGlobals()
+    seedHost('h1')
+  })
+
+  it('opened on the host generation, it is a Rebuild-all candidate', () => {
+    seedConversation('t1', 'p1', '111:1000')
+    const { groups, excluded } = rebuildAllDrafts()
+    expect(excluded).toEqual([])
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toMatchObject({
+      sourcePaneId: 'p1', paneIds: ['p1'], hostId: 'h1', tmuxInstance: '111:1000',
+      record: { sessionName: 'proj-2', cwd: '/w/proj', agent: { type: 'cc', sessionId: S } },
+    })
+  })
+
+  it('opened without a generation, it is excluded exactly as any closed pane without one', () => {
+    seedConversation('t1', 'p1', '')
+    seedPane('h1', 't2', 'p2', {}, { tmuxInstance: '' })
+    const { groups, excluded } = rebuildAllDrafts()
+    expect(groups).toEqual([])
+    expect(excluded.map((c) => c.paneId)).toEqual(['p1', 'p2'])
+  })
+
+  for (const tmuxInstance of ['111:1000', '']) {
+    it(`a single rebuild creates the named session in the cwd, resumes S, and leaves a live terminal pane (generation "${tmuxInstance}")`, async () => {
+      seedConversation('t1', 'p1', tmuxInstance)
+      const create = vi.fn(async () => session({ code: 'new1', name: 'proj-2', cwd: '/w/proj', tmux_instance: '222:2000' }))
+      const sendKeys = vi.fn(async () => {})
+
+      const report = await rebuildPane('h1', 't1', 'p1', { createSession: true, applyCwd: true, runResume: true },
+        { createSession: create, sendKeys })
+
+      expect(create).toHaveBeenCalledWith('h1', 'proj-2', '/w/proj', 'terminal')
+      expect(sendKeys).toHaveBeenCalledWith('h1', 'new1', `claude --resume ${S}`, '222:2000')
+      expect(create.mock.invocationCallOrder[0]).toBeLessThan(sendKeys.mock.invocationCallOrder[0])
+      expect(report.repointed).toBe(true)
+      const c = paneContent('t1', 'p1')
+      expect(c).toMatchObject({ kind: 'tmux-session', hostId: 'h1', sessionCode: 'new1', cachedName: 'proj-2', tmuxInstance: '222:2000' })
+      expect(c.terminated).toBeUndefined()
+      expect(c.conversation).toBeUndefined()
+    })
+  }
 })

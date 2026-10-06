@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { SmileySad } from '@phosphor-icons/react'
+import { SmileySad, Warning } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { closeTab } from '../lib/tab-lifecycle'
@@ -23,6 +23,26 @@ const REASON_KEYS: Record<TerminatedReason, { title: string; desc: string }> = {
   'session-closed': { title: 'terminated.session_closed', desc: 'terminated.session_closed_desc' },
   'tmux-restarted': { title: 'terminated.tmux_restarted', desc: 'terminated.tmux_restarted_desc' },
   'host-removed': { title: 'terminated.host_removed', desc: 'terminated.host_removed_desc' },
+  'conversation-ended': { title: 'terminated.conversation_ended', desc: 'terminated.conversation_ended_desc' },
+}
+
+/** R-4-4: a transcript written this recently may still be in use outside Purdex (spec §13.4). */
+const RECENT_WRITE_MS = 120_000
+
+/**
+ * Whole seconds since `lastWriteAt` while that is under {@link RECENT_WRITE_MS}, re-counted every second; `null`
+ * once it is not (or when there is no write time). The ticking stops when the window closes.
+ */
+function useSecondsSinceRecentWrite(lastWriteAt: number | undefined): number | null {
+  const [now, setNow] = useState(() => Date.now())
+  const recent = lastWriteAt !== undefined && now - lastWriteAt < RECENT_WRITE_MS
+  useEffect(() => {
+    if (!recent) return
+    const id = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(id)
+  }, [recent])
+  // Clamped: a write time ahead of this clock (skew between the hosts) reads as "just now".
+  return recent ? Math.max(0, Math.floor((now - lastWriteAt) / 1_000)) : null
 }
 
 export function TerminatedPane({ content, tabId, paneId }: Props) {
@@ -55,7 +75,8 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
   }
 
   // Worker rebuild (conversation entity spec Q4 / D12): offered only when Nexen is
-  // ready and the record knows both the cc session and its cwd. Terminal stays preselected.
+  // ready and the record knows both the cc session and its cwd. Terminal is preselected,
+  // except on a conversation's rebuild tab, which preselects the mode it was last in (R-4-5).
   const handoffReady = useNexHostStore(selectHandoffReady(content.hostId))
   useEffect(() => {
     // A failed check leaves handoffReady false: the terminal screen, as without Nexen.
@@ -64,8 +85,9 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
   const sid = record.agent?.type === 'cc' ? record.agent.sessionId : undefined
   const cwd = record.cwd
   const showChoice = handoffReady && !!sid && !!cwd
-  const [choice, setChoice] = useState<RebuildMode>('terminal')
+  const [choice, setChoice] = useState<RebuildMode>(content.conversation?.lastIn ?? 'terminal')
   const mode: RebuildMode = showChoice ? choice : 'terminal'
+  const recentWriteSeconds = useSecondsSinceRecentWrite(content.conversation?.lastWriteAt)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inFlight = useRef(false)
@@ -124,7 +146,14 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
     <RebuildScreen
       icon={<SmileySad size={48} className="text-zinc-500 mb-4" />}
       title={t(keys.title)}
-      description={t(keys.desc, { name: content.cachedName })}
+      description={t(keys.desc, { name: content.cachedName, title: content.conversation?.title ?? '' })}
+      detail={recentWriteSeconds === null ? undefined : (
+        // Not a live region: it re-counts every second, and a screen reader would read every count out.
+        <p data-testid="terminated-recent-write" className="mb-6 flex items-center gap-1.5 text-sm text-status-warning">
+          <Warning size={16} className="shrink-0" />
+          {t('worker.rebuild.recent_write', { n: recentWriteSeconds })}
+        </p>
+      )}
       closeLabel={t('terminated.close_tab')}
       onClose={() => {
         closeTab(tabId)
