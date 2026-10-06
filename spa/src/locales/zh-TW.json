@@ -99,6 +99,10 @@
 
   "settings.worker.title": "Worker",
   "settings.worker.desc": "Worker pane（執行室 / 對話）的外觀",
+  "settings.worker.tabs.appearance": "外觀",
+  "settings.worker.tabs.workers": "Workers",
+  "settings.worker.tabs.exited": "已退出",
+  "settings.worker.no_hosts": "沒有顯示中的主機",
   "worker.theme.label": "主題",
   "worker.theme.desc": "Worker pane 的字級、清單、表格與側軌樣式",
   "worker.theme.purdex": "Purdex",

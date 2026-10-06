@@ -9,6 +9,7 @@ import { clearNewTabRegistry } from '../new-tab-registry'
 import { clearInterfaceSubsectionRegistry } from '../interface-subsection-registry'
 import { clearHostBuiltinSources } from '../host-builtin-sections'
 import { clearFsBackendRegistry } from '../fs-backend'
+import { clearWorkerSettingsTabs } from '../worker-settings-tabs'
 import { __resetBuiltinTerminalLinks } from '../terminal-link/register'
 import { useModuleEnabledStore } from '../../stores/useModuleEnabledStore'
 import { registerBuiltinModules } from '../register-modules'
@@ -38,6 +39,7 @@ export function clearAllBuiltinModuleRegistries(): void {
   clearInterfaceSubsectionRegistry()
   clearHostBuiltinSources()
   clearFsBackendRegistry()
+  clearWorkerSettingsTabs()
   // registerBuiltinTerminalLinks() guards against re-registration via a
   // private `registered` flag plus its own registry; without this reset a
   // subsequent registerBuiltinModules() would silently skip terminal-link

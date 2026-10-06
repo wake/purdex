@@ -56,6 +56,7 @@ const READER_IMPORTERS = [
   'src/components/hosts/OverviewSection.tsx',
   'src/components/hosts/SessionsSection.tsx',
   'src/components/hosts/nex/NexExecutionsTable.tsx',
+  'src/components/settings/WorkerSettingsPage.tsx', // the host picker lists the shown hosts only
   'src/hooks/useHandoffCandidate.ts',
   'src/hooks/useNotificationDispatcher.ts',
   'src/hooks/useRouteSync.ts',
