@@ -104,6 +104,21 @@ describe('approval-api', () => {
       expect(err.code).toBe('host_removed')
       expect(testGlobal.fetch).not.toHaveBeenCalled()
     })
+
+    // The pre-check passes, then the host is removed before the transport fails: `network` would make the dialog
+    // queue a decision for a daemon this device no longer has. Removing the host inside the stubbed fetch lands
+    // after `pinnedHostFetch` has resolved the base URL, so only the catch can see it.
+    it('maps a host removed between the check and the fetch to host_removed', async () => {
+      testGlobal.fetch.mockImplementationOnce(() => {
+        useHostStore.getState().removeHost(hostId)
+        return Promise.reject(new TypeError('Failed to fetch'))
+      })
+      const err = await rejection(decideApproval(hostId, 'req-1', { decision: 'deny', client }))
+      expect(testGlobal.fetch).toHaveBeenCalledTimes(1)
+      expect(err.status).toBe(0)
+      expect(err.code).toBe('host_removed')
+      expect(err.code).not.toBe('network')
+    })
   })
 
   describe('listOpenApprovals', () => {

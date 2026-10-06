@@ -58,13 +58,19 @@ async function errorFromResponse(res: Response): Promise<ApprovalApiError> {
   return new ApprovalApiError(res.status, code, detail, approval)
 }
 
+const hostConfigured = (hostId: string): boolean => Object.hasOwn(useHostStore.getState().hosts, hostId)
+
 async function send<T>(hostId: string, path: string, init: RequestInit): Promise<T> {
   // `pinnedHostFetch` rejects an unconfigured host too, but with a plain Error; the dialog switches on `code`.
-  if (!Object.hasOwn(useHostStore.getState().hosts, hostId)) throw new ApprovalApiError(0, 'host_removed')
+  if (!hostConfigured(hostId)) throw new ApprovalApiError(0, 'host_removed')
   let res: Response
   try {
     res = await pinnedHostFetch(hostId, path, init)
   } catch (e: unknown) {
+    // A host removed in the gap between the check above and the transport failing (pinnedHostFetch's own
+    // "not configured" Error, or a socket error racing the removal) is non-retryable: the dialog queues on
+    // `network` alone, and there is no daemon left to replay against. Same re-check as nex-api's uploadWorkerFile.
+    if (!hostConfigured(hostId)) throw new ApprovalApiError(0, 'host_removed')
     throw new ApprovalApiError(0, 'network', e instanceof Error ? e.message : String(e))
   }
   if (!res.ok) throw await errorFromResponse(res)
