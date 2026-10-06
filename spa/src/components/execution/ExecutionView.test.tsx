@@ -20,11 +20,18 @@ import { getPrimaryPane } from '../../lib/pane-tree'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
+import { useEntityStints } from '../../hooks/useEntityStints'
+import { defaultPreludeState } from '../../lib/nex/prelude'
 
 vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn(), fetchExecutionEvents: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
+// Passed through, and spied on: what the pane last learnt of its earlier stints.
+vi.mock('../../hooks/useEntityStints', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../hooks/useEntityStints')>()
+  return { ...real, useEntityStints: vi.fn(real.useEntityStints) }
+})
 // The take-back path runs the real orchestration (store swap, forget-before-
 // swap) against a mocked daemon call; `takeBack` itself is a pass-through spy
 // so the view's call shape (lease id, forgetLease identity) is observable.
@@ -2157,6 +2164,8 @@ describe('ExecutionView — worker prelude', () => {
       return render(strict ? <StrictMode><ExecutionView {...base} mode={mode} isActive /></StrictMode> : <ExecutionView {...base} mode={mode} isActive />)
     }
     const earlier = summary({ id: 'exc_0', state: 'terminated', resume_session_id: S, created_at: 1 })
+    /** The pane's stint listing as of its last render. */
+    const stintsNow = () => vi.mocked(useEntityStints).mock.results.at(-1)?.value
     afterEach(() => {
       useNexHostStore.setState({ ensure: realEnsure })
       vi.mocked(api.listExecutions).mockReset()
@@ -2185,7 +2194,8 @@ describe('ExecutionView — worker prelude', () => {
     })
 
     it('listed, unavailable or not listed at all: the very same prelude DOM (§10.6)', async () => {
-      const html = async (itemOffset: boolean, settled: () => void = () => {}) => {
+      // Each DOM is read only after a positive signal: what the listing settled as.
+      const html = async (itemOffset: boolean, settled: () => void) => {
         useExecutionStore.setState({ executions: {} })
         useExecutionStore.getState().setHistoryLoaded(H, E, true)
         const { unmount } = draw(itemOffset)
@@ -2196,12 +2206,32 @@ describe('ExecutionView — worker prelude', () => {
         unmount()
         return out
       }
-      const plain = await html(false)
+      const plain = await html(false, () => expect(stintsNow()).toEqual({ stints: [], status: 'idle' }))
       vi.mocked(api.listExecutions).mockRejectedValue(new Error('down'))
-      expect(await html(true, () => expect(api.listExecutions).toHaveBeenCalled())).toBe(plain)
-      // Listed: exc_0's boundary (500) attributes the worker segment to it, and still nothing shows.
+      expect(await html(true, () => expect(stintsNow()).toEqual({ stints: [], status: 'unavailable' }))).toBe(plain)
+      // Listed: exc_0's boundary (500) attributes the worker segment to it (its run asks for exc_0's
+      // events, still loading), and still nothing shows.
+      vi.mocked(api.fetchExecutionEvents).mockReset().mockReturnValue(new Promise(() => {}) as never)
       vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
-      expect(await html(true, () => expect(api.fetchExecutionPrelude).toHaveBeenCalledWith(H, 'exc_0', { limit: 1 }))).toBe(plain)
+      expect(await html(true, () => {
+        expect(stintsNow()).toMatchObject({ status: 'ok', stints: [{ id: 'exc_0', boundary: 500 }] })
+        expect(api.fetchExecutionEvents).toHaveBeenCalledWith(H, 'exc_0', expect.anything())
+      })).toBe(plain)
+    })
+
+    it('no request while the pane is not prelude-eligible (no resume id), a worker segment loaded or not', async () => {
+      vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
+      useNexHostStore.setState({
+        ensure: async () => {},
+        byHost: { [H]: { phase: 'ready', capabilities: { transcript_prelude: { ...CAP, item_offset: true }, list: { session_filter: true } } } },
+      } as never)
+      // A session id the listing could go by, but no resume id: not eligible (D4). The worker segment is in the store.
+      useExecutionStore.getState().setSummary(H, E, summary({ session_id: S }) as never)
+      patchExec({ messages: [said('the brief')], turnStarts: [0], prelude: { ...defaultPreludeState(), status: 'ok', items, done: true, pages: 1 } as never })
+      render(<ExecutionView {...base} isActive />)
+      await act(async () => {})
+      expect(stintsNow()).toEqual({ stints: [], status: 'idle' })
+      expect(api.listExecutions).not.toHaveBeenCalled()
     })
 
     // §10.4: the pane's one cache fetches the attributed segment's stint once;

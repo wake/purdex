@@ -4,7 +4,7 @@
 // to E1, and the new view's fold memory and search query start empty.
 // PreludeSegment is wrapped (in this file only) to show each run's stint.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, act, waitFor, within, cleanup } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
 import type { PreludeSegmentProps } from '../room/prelude/PreludeSegment'
 import { segmentPoses } from '../room/prelude/test-segment-poses'
@@ -17,11 +17,17 @@ import { getPrimaryPane } from '../../lib/pane-tree'
 import { executionContentFor } from '../../lib/nex/handoff'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
+import { useEntityStints } from '../../hooks/useEntityStints'
 
 vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
+// Passed through, and spied on: what the pane last learnt of its earlier stints.
+vi.mock('../../hooks/useEntityStints', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../hooks/useEntityStints')>()
+  return { ...real, useEntityStints: vi.fn(real.useEntityStints) }
+})
 vi.mock('../room/prelude/PreludeSegment', async (importOriginal) => {
   const Real = (await importOriginal<typeof import('../room/prelude/PreludeSegment')>()).default
   return {
@@ -69,6 +75,7 @@ function Pane({ tabId, paneId }: { tabId: string; paneId: string }) {
 }
 
 const realEnsure = useNexHostStore.getState().ensure
+const realEnsureLoaded = useHostConfigStore.getState().ensureLoaded
 beforeEach(() => {
   useExecutionStore.setState({ executions: {} })
   vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease: vi.fn(), release: vi.fn(), forget: vi.fn(), touch: vi.fn() })
@@ -91,9 +98,15 @@ beforeEach(() => {
   vi.mocked(api.listExecutions).mockReset().mockResolvedValue({ items: [summary(E1, 1), summary(E2, 2)], next_cursor: '' } as never)
 })
 afterEach(() => {
+  // Unmount first: the pane reads its tab from the store.
+  cleanup()
   useNexHostStore.setState({ byHost: {}, ensure: realEnsure })
+  useHostConfigStore.setState({ byHost: {}, ensureLoaded: realEnsureLoaded })
+  useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
 })
 
+/** The pane's stint listing as of its last render. */
+const stintsNow = () => vi.mocked(useEntityStints).mock.results.at(-1)?.value
 const runs = () => screen.queryAllByTestId('prelude-run').map((r) => [r.getAttribute('data-stint'), r.getAttribute('data-poses')])
 const noteFold = () => within(screen.getByTestId('prelude-note-command_output'))
 
@@ -140,8 +153,9 @@ describe('ExecutionView — stint switch (§10.5)', () => {
     vi.mocked(api.listExecutions).mockReset().mockRejectedValue(new Error('down'))
     mountOn(E2)
     await screen.findByText('E1 did the work')
-    await waitFor(() => expect(api.listExecutions).toHaveBeenCalled())
-    await act(async () => {})
+    // The list was asked for and its failure has settled, so the runs below are final.
+    await waitFor(() => expect(stintsNow()).toEqual({ stints: [], status: 'unavailable' }))
+    expect(api.listExecutions).toHaveBeenCalled()
     expect(runs()).toEqual([['plain', '1 2 3 4 5 6']])
   })
 })
