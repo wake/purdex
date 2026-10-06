@@ -12,7 +12,7 @@ Purdex 是一套 **人與 agent 協作平台**。
 
 - 使用者在 workspace 內與多個 terminal agent 並行協作；
 - Agent 模式為 **terminal / stream(wrap) / agent(對話)** 三種；
-- 任意 agent 皆可被賦予 **operator 角色**，協助跨 agent 的雜項管理與指揮（長期方向）。
+- 任意 agent 經使用者核准可成為 **lead**，帶領自己開出的 **member** 組成 **team**，協助跨 agent 的分工與指揮。
 
 Purdex 是上述三者交集處的 **agent 工作站**，不是 IDE 或純 terminal app。
 
@@ -72,8 +72,11 @@ Pane 渲染的具體內容；discriminated union。
 | **Mode** | `terminal` | 直接 tmux pty 操作 |
 |  | `stream(wrap)` | 觀察 wrap 的執行流（如 Claude Code `-p` stream-json） |
 |  | `agent(popup)` | 對話式互動（人 ↔ agent 主動對話） |
-| **Role** | `worker` | 預設角色：執行使用者下達的工作 |
-|  | `operator`（長期方向） | 升級角色：多了跨 agent 訪問能力 + 角色定義；控制走 MCP / message inject |
+| **Role** | （無） | 預設：一般 session，執行使用者下達的工作 |
+|  | `lead` | 經使用者核准（任一 Purdex.app 按一下）；可開 member、替 member 安排接力 |
+|  | `member` | 由 lead 開出；接力由 lead 決定 |
+
+`worker` 是 Nexen 無頭執行的用詞，不作為 Role。
 
 **Mode × Role 正交** — Mode（呈現方式）與 Role（能力範圍）獨立演化、互不約束。
 
@@ -145,8 +148,8 @@ Daemon 部署位置；infrastructure 資源層級。
 
 預留可能性 **≠** 提前建造 surface。
 
-- ✅ 為 Operator Agent role 在 agent metadata schema 留 capability / role 欄位
-- ❌ 為 Operator Agent 提前建 Voice Indicator / Mode Switcher / Activity Log surface
+- ✅ 為 lead / member role 在 agent metadata schema 留 capability / role 欄位
+- ❌ 為 lead 提前建 Voice Indicator / Mode Switcher / Activity Log surface
 - ✅ 為未來 hands-off 模式在 Layout primitive 留 density mode 屬性
 - ❌ 提前設計 dual visual language
 
@@ -200,13 +203,13 @@ Purdex 維持**一套**視覺語言；hands-off / mobile / wearable 等變體是
 > 任何 PR / 設計決策若會堵死下列任一方向，需重新討論。
 > 具體 SPA 銜接點與預留方式由 DESIGN.md 與個別 spec 決定，不在本文件鎖死。
 
-### 6.1 Operator Agent role
+### 6.1 Lead / team
 
-任何 agent 可被升級為 operator role；多了跨 agent 訪問能力 + 角色定義；控制其他 agent 走 MCP / message inject（daemon 層）。
+任何 agent 經使用者核准可成為 lead，帶領自己開出的 member 組成 team；控制 member 走 daemon 層的 message inject 與 pdx team 指令（spawn / relay / kill）。第一版見 `docs/specs/2026-10-06-lead-team-relay-spec.md`。
 
 ### 6.2 Voice / Hands-off Engagement
 
-與 Operator role 配套；使用者可語音指揮 operator、operator 操作其他 agent；hands-off 場景（開車、走路）下視覺降級為狀態板。
+與 lead 配套；使用者可語音指揮 lead、lead 操作其他 agent；hands-off 場景（開車、走路）下視覺降級為狀態板。
 
 ### 6.3 跨設備延伸（mobile / wearable companion）
 
