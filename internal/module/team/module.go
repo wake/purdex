@@ -100,8 +100,23 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)
 }
 
-// Start is filled in by Task 2.6 (boot lease grace, snapshot, sweeper).
-func (m *Module) Start(context.Context) error { return nil }
+// Start applies the boot lease grace (spec §9.2: every open request's
+// lease becomes max(lease_until, boot + 30 s), so its pdx can reconnect),
+// registers the snapshot for new subscribers and starts the sweeper.
+func (m *Module) Start(context.Context) error {
+	n, err := m.store.ExtendOpenLeases(m.now() + team.BootGraceS*1000)
+	if err != nil {
+		return fmt.Errorf("team: %w", err)
+	}
+	if n > 0 {
+		m.logf("[team] boot: extended the lease of %d open approval request(s) by %ds", n, team.BootGraceS)
+	}
+	m.core.Events.OnSubscribe(m.sendSnapshot)
+	m.sweepWG.Add(1)
+	go m.runSweeper()
+	m.logf("[team] endpoints enabled")
+	return nil
+}
 
 // Stop cancels stopCtx (long-polls return, create answers not_ready) and
 // joins the sweeper. Idempotent. The DB is closed in Close. The cancel is
@@ -160,6 +175,37 @@ func (m *Module) broadcast(op string, a *team.Approval) {
 		return
 	}
 	m.core.Events.BroadcastEvent(core.HostEvent{Type: team.EventType, Value: string(v)})
+}
+
+// sendSnapshot queues {op:"snapshot", approvals:[…]} to a new subscriber
+// (spec §6.2: late or reconnecting clients see the same open set). A
+// subscriber whose buffer is already full is closed so it reconnects (as
+// session/module.go does); one already removed is left alone.
+func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
+	open, err := m.store.ListOpen()
+	if err != nil {
+		m.logf("[team] OnSubscribe list error: %v", err)
+		return
+	}
+	v, err := json.Marshal(team.EventValue{Op: "snapshot", Approvals: open})
+	if err != nil {
+		m.logf("[team] encode snapshot: %v", err)
+		return
+	}
+	data, err := json.Marshal(core.HostEvent{Type: team.EventType, Value: string(v)})
+	if err != nil {
+		m.logf("[team] encode snapshot event: %v", err)
+		return
+	}
+	if sub.TrySend(data) {
+		return
+	}
+	select {
+	case <-sub.Done():
+	default:
+		m.logf("[team] OnSubscribe snapshot could not be queued (send buffer full); closing the connection so the client reconnects")
+		m.core.Events.Remove(sub)
+	}
 }
 
 // addWaiter registers a long-poll on id; the channel is closed by wake.
