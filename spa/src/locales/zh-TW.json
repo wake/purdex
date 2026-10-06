@@ -112,6 +112,7 @@
   "worker.rebuild.failed": "重建失敗：{{reason}}",
   "worker.rebuild.owned_terminal": "這段對話已在終端機中開啟",
   "worker.rebuild.owned_worker": "這段對話已有一個進行中的 worker",
+  "worker.rebuild.no_pane": "已重建為新的 worker，但原分頁已關閉或已更換；可從 Worker 清單開啟。",
   "worker.ended.exited_title": "這個 worker 已退出",
   "worker.ended.exited_desc": "可以在終端機或新的 worker 接續這段對話。",
   "worker.ended.failed_title": "啟動失敗",

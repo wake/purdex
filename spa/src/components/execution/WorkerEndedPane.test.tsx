@@ -11,6 +11,7 @@ import { rebuildAsWorker } from '../../lib/nex/worker-rebuild'
 import { exitWorker } from '../../lib/nex/exit-worker'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useUndoToast } from '../../stores/useUndoToast'
+import { useExecutionListStore } from '../../stores/useExecutionListStore'
 import type { ExecutionSummary, NexCapabilities } from '../../lib/nex/types'
 
 vi.mock('../../lib/nex/handoff', async (o) => ({ ...(await o<typeof import('../../lib/nex/handoff')>()), takeToTerminal: vi.fn() }))
@@ -206,6 +207,28 @@ describe('WorkerEndedPane', () => {
       vi.mocked(takeToTerminal).mockResolvedValue({ result: { exited: true }, swapped: false } as never)
       await take()
       await waitFor(() => expect(useUndoToast.getState().toast?.message).toMatch(/pane was already closed/))
+    })
+  })
+
+  describe('rebuild as worker outcome', () => {
+    const refetch = vi.fn()
+    beforeEach(() => { refetch.mockReset(); useExecutionListStore.setState({ refetch } as never) })
+    const rebuild = async () => {
+      renderPane(sum({ state: 'terminated', archived: true, session_id: 'S', cwd: '/w' }))
+      fireEvent.click(screen.getByTestId('worker-rebuild'))
+      await waitFor(() => expect(rebuildAsWorker).toHaveBeenCalled())
+    }
+    it('swapped:false toasts and refetches the list', async () => {
+      vi.mocked(rebuildAsWorker).mockResolvedValue({ result: { execution_id: 'n', state: 'running' }, swapped: false })
+      await rebuild()
+      await waitFor(() => expect(useUndoToast.getState().toast?.message).toMatch(/Rebuilt as a new worker, but the original tab/))
+      expect(refetch).toHaveBeenCalledWith(H)
+    })
+    it('swapped:true does neither', async () => {
+      await rebuild()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(useUndoToast.getState().toast).toBeNull()
+      expect(refetch).not.toHaveBeenCalled()
     })
   })
 })
