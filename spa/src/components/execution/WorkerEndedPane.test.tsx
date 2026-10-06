@@ -117,7 +117,8 @@ describe('WorkerEndedPane', () => {
     useNexHostStore.setState({ byHost: { [H]: entry({ phase: 'unavailable', capabilities: null }) } } as never)
     renderPane(sum({ state: 'terminated', archived: true, provider: 'codex', session_id: 'S', cwd: '/w' }))
     expect(screen.getByTestId('worker-rebuild')).toBeDisabled()
-    expect(screen.getByText(/not ready/)).toBeInTheDocument()
+    // The description and the group's visible hint both say why.
+    expect(screen.getAllByText(/not ready/).length).toBeGreaterThanOrEqual(1)
   })
 
   it('no session id: worker unavailable', () => {

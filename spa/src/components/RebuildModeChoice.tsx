@@ -1,3 +1,5 @@
+import { useId, useRef } from 'react'
+import type { KeyboardEvent } from 'react'
 import { useI18nStore } from '../stores/useI18nStore'
 
 export type RebuildMode = 'terminal' | 'worker'
@@ -10,6 +12,8 @@ export interface RebuildModeChoiceProps {
   workerUnavailableHint?: string
 }
 
+const ARROWS = new Set(['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'])
+
 export function RebuildModeChoice({
   value,
   onChange,
@@ -18,39 +22,62 @@ export function RebuildModeChoice({
   workerUnavailableHint,
 }: RebuildModeChoiceProps) {
   const t = useI18nStore((s) => s.t)
+  const hintId = useId()
+  const refs = useRef<Partial<Record<RebuildMode, HTMLButtonElement | null>>>({})
   const options: { mode: RebuildMode; label: string; available: boolean; hint?: string }[] = [
     { mode: 'terminal', label: t('worker.rebuild.terminal'), available: terminalAvailable },
     { mode: 'worker', label: t('worker.rebuild.worker'), available: workerAvailable, hint: workerUnavailableHint },
   ]
+  // Roving tabindex: the checked radio is the tab stop; a disabled checked one hands it to the first enabled.
+  const tabStop = options.find((o) => o.mode === value && o.available)?.mode ?? options.find((o) => o.available)?.mode
+  const showHint = !workerAvailable && !!workerUnavailableHint
+
+  const onKeyDown = (e: KeyboardEvent, from: RebuildMode) => {
+    if (!ARROWS.has(e.key)) return
+    // Two options: any arrow moves to the other one, if it is enabled.
+    const other = options.find((o) => o.mode !== from)
+    if (!other || !other.available) return
+    e.preventDefault()
+    onChange(other.mode)
+    refs.current[other.mode]?.focus()
+  }
+
   return (
-    <div
-      role="radiogroup"
-      aria-label={t('worker.rebuild.mode_label')}
-      className="inline-flex items-center gap-2 text-sm"
-    >
-      <span className="text-zinc-500">{t('worker.rebuild.mode_label')}</span>
-      {options.map((o) => {
-        const checked = value === o.mode
-        return (
-          <button
-            key={o.mode}
-            type="button"
-            role="radio"
-            aria-checked={checked}
-            data-testid={`rebuild-mode-${o.mode}`}
-            disabled={!o.available}
-            title={!o.available ? o.hint : undefined}
-            onClick={() => onChange(o.mode)}
-            className={`px-3 py-1 rounded border transition-colors ${
-              checked
-                ? 'border-zinc-400 bg-zinc-700 text-zinc-100'
-                : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'
-            } disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-zinc-400`}
-          >
-            {o.label}
-          </button>
-        )
-      })}
+    <div className="flex flex-col items-center gap-1">
+      <div
+        role="radiogroup"
+        aria-label={t('worker.rebuild.mode_label')}
+        aria-describedby={showHint ? hintId : undefined}
+        className="inline-flex items-center gap-2 text-sm"
+      >
+        <span className="text-zinc-500">{t('worker.rebuild.mode_label')}</span>
+        {options.map((o) => {
+          const checked = value === o.mode
+          return (
+            <button
+              key={o.mode}
+              ref={(el) => { refs.current[o.mode] = el }}
+              type="button"
+              role="radio"
+              aria-checked={checked}
+              tabIndex={o.mode === tabStop ? 0 : -1}
+              data-testid={`rebuild-mode-${o.mode}`}
+              disabled={!o.available}
+              title={!o.available ? o.hint : undefined}
+              onClick={() => onChange(o.mode)}
+              onKeyDown={(e) => onKeyDown(e, o.mode)}
+              className={`px-3 py-1 rounded border transition-colors ${
+                checked
+                  ? 'border-zinc-400 bg-zinc-700 text-zinc-100'
+                  : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'
+              } disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-zinc-400`}
+            >
+              {o.label}
+            </button>
+          )
+        })}
+      </div>
+      {showHint && <p id={hintId} className="text-xs text-zinc-500">{workerUnavailableHint}</p>}
     </div>
   )
 }
