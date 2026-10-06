@@ -22,6 +22,7 @@ import { indexOperations } from '../../../lib/nex/operations'
 import { classifyTurnOperations } from '../../../lib/nex/operation-status'
 import type { PreludeBlock, PreludeEntry, PreludeState, PreludeView } from '../../../lib/nex/prelude'
 import { preludeBlocks } from '../../../lib/nex/prelude'
+import type { Stint } from '../../../lib/nex/entity-stints'
 import { attributionRuns, NO_ATTRIBUTION, type Attribution, type PreludeRun } from '../../../lib/nex/stint-attribution'
 import type { RenderCtx } from '../render-message'
 import { FoldContext, useInheritedFoldMemory } from '../fold-context'
@@ -47,11 +48,13 @@ export interface PreludeSectionProps {
   onRetry: () => void
   /** Which earlier worker stint wrote each line, by pos (conversation entity spec §10.3); absent = none. */
   attribution?: Attribution
+  /** The conversation's earlier stints: an attributed segment reads its stint's summary from here. */
+  stints?: readonly Stint[]
 }
 
 const entryPoses = (e: PreludeEntry): [string, string] => [e.pos, e.pos]
 
-export default function PreludeSection({ hostId, view, status, done, error, keyPrefix, now, mode, pages, onLoadOlder, onRetry, attribution = NO_ATTRIBUTION }: PreludeSectionProps) {
+export default function PreludeSection({ hostId, view, status, done, error, keyPrefix, now, mode, pages, onLoadOlder, onRetry, attribution = NO_ATTRIBUTION, stints }: PreludeSectionProps) {
   const t = useI18nStore((s) => s.t)
   // Inherit the transcript's fold memory; a section mounted alone still folds.
   const folds = useInheritedFoldMemory()
@@ -103,7 +106,7 @@ export default function PreludeSection({ hostId, view, status, done, error, keyP
       <section data-testid="worker-prelude" className="space-y-4">
         {status === 'ok' && !done && <PreludeSentinel onVisible={onLoadOlder} generation={pages} />}
         {top}
-        {runs.map((r) => <PreludeSegment key={r.key} hostId={hostId} stintId={r.stintId} view={view} ctx={ctx} {...r.slice} />)}
+        {runs.map((r) => <PreludeSegment key={r.key} hostId={hostId} stintId={r.stintId} summary={stints?.find((x) => x.id === r.stintId)?.summary ?? null} view={view} ctx={ctx} {...r.slice} />)}
         {/* The handoff into this worker is itself a switch (D2) and Nexen never sends a segment for the worker's own run. */}
         {view.entries.length > 0 && <PreludeMarker testId="prelude-handoff" label={t('worker.prelude.segment_headless')} />}
       </section>

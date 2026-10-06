@@ -47,7 +47,7 @@ export function useEntityStints(hostId: string, summary: ExecutionSummary | null
         return
       }
       const withBoundary = await Promise.all(pickRecentStints(rows, currentId).map(async (r) => {
-        const base = { id: r.id, created_at: r.created_at }
+        const base = { id: r.id, created_at: r.created_at, summary: r }
         // A row without a resume id began the transcript itself.
         if (!r.resume_session_id) return { ...base, boundary: 0 as number | null }
         const key = `${hostId}:${r.id}`

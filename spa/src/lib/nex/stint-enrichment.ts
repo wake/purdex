@@ -2,8 +2,9 @@
 // an earlier worker stint's own event log adds to the prelude lines it wrote.
 // The live view's reducer (applyDurableEvent) over the stint's events, then
 // the parts a segment draws with: each call's real status and duration, its
-// subagent task rows, and the reduced messages (Task 32 reads the turns'
-// results from them). Pure.
+// subagent task rows, and the reduced messages and each turn's cost by the assistant
+// message ids it answered (§10.4 `result` frames). Pure.
+import { costSummary, type TurnCost } from './cost-summary'
 import { applyDurableEvent, defaultExecutionState } from './event-reducer'
 import type { StreamMessage } from './message-types'
 import { subagentTasksByToolUse, type TaskTable } from './tasks'
@@ -17,6 +18,11 @@ export interface StintEnrichment {
   subagentTasks: ReadonlyMap<string, WorkerTask>
   /** The stint's reduced messages. */
   messages: readonly StreamMessage[]
+  /**
+   * Each top-level assistant `message.id` -> the TurnCost of the top-level `result` that closed its turn
+   * (costSummary's own turns, paired positionally with the result-delimited id groups). An id after the last result maps to nothing.
+   */
+  costByMessageId: ReadonlyMap<string, TurnCost>
   /** The log ran past the budget: only its first `budget` events were applied. */
   truncated: boolean
 }
@@ -37,5 +43,26 @@ export function enrichFromEvents(events: readonly NexEvent[], budget = ENRICHMEN
   // fromEntries defines own data properties: a `__proto__` id stays an id.
   const tools = Object.fromEntries(Object.entries(s.tools).filter(([, t]) => t.status !== 'running'))
   const settled: TaskTable = Object.fromEntries(Object.entries(s.tasks).filter(([, row]) => row.status !== 'running'))
-  return { tools, subagentTasks: subagentTasksByToolUse(settled), messages: s.messages, truncated: events.length > budget }
+  return { tools, subagentTasks: subagentTasksByToolUse(settled), messages: s.messages, costByMessageId: costByMessageId(s.messages), truncated: events.length > budget }
+}
+
+/** costSummary's turns, each keyed by the top-level assistant message ids seen since the previous top-level result. */
+function costByMessageId(messages: readonly StreamMessage[]): ReadonlyMap<string, TurnCost> {
+  const turns = costSummary(messages).turns
+  const out = new Map<string, TurnCost>()
+  let pending: string[] = []
+  let turn = 0
+  for (const m of messages) {
+    const p = m as { type?: unknown; parent_tool_use_id?: unknown; message?: { id?: unknown } }
+    if (p.parent_tool_use_id != null) continue
+    if (p.type === 'assistant') {
+      if (typeof p.message?.id === 'string') pending.push(p.message.id)
+    } else if (p.type === 'result') {
+      // costSummary counts the same frames (C1), so the n-th result is turns[n].
+      for (const id of pending) out.set(id, turns[turn])
+      pending = []
+      turn++
+    }
+  }
+  return out
 }
