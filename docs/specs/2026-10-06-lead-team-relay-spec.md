@@ -316,7 +316,7 @@ The table is `approval_requests{id, kind: lead | self_relay, origin_session_id, 
   - `state=open`;
   - an absolute `deadline_at` = now + `wait_s`, capped at 10 min;
   - `lease_until` = now + 30 s.
-- Broadcasts host event `approval.request` `{op:"opened", request}`.
+- Broadcasts host event `approval.request` `{op:"opened", approval}` (the field is named `approval` because the wire type is `team.Approval`; the plan's daemon, CLI and SPA all use it).
 
 **Close.** Exactly one of these wins, by compare-and-set on `state=open`:
 
@@ -326,11 +326,11 @@ The table is `approval_requests{id, kind: lead | self_relay, origin_session_id, 
 | Deadline passes | sweeper | `timeout` (U7: counts as a denial) |
 | The requester gives up | `DELETE`, or the lease expires, or the origin session is gone | `cancelled` / `abandoned` |
 
-- Every close broadcasts `{op:"closed", request}`, carrying `decided_by` and `decided_at`.
+- Every close broadcasts `{op:"closed", approval}`, carrying `decided_by` and `decided_at`.
 - A late `decide` gets **409 `already_decided`** with the closed request, so its client can say who handled it.
 - Approval creates the team (§7.1) in the same transaction.
 
-**Snapshot.** The module registers `OnSubscribe` and sends every open request to each new subscriber. Late or reconnecting clients see the same set (D2).
+**Snapshot.** The module registers `OnSubscribe` and sends every open request to each new subscriber as one event `{op:"snapshot", approvals:[…]}` (`[]` when none). Late or reconnecting clients see the same set (D2).
 
 ### 6.3 SPA and App (U6)
 
@@ -609,7 +609,7 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
 
 - **Parse context usage.** The agent module parses the statusline payload at ingest: `session_id`, `context_window.used_percentage`, `context_window_size`. It keeps the last value **per CC session id**, which also fixes the overwrite in a shared tmux session. Peers and the team module read it through an accessor.
 - **Persist it for teams only.** The team module stores the last value on member and lead rows, so it survives a restart.
-  - Other sessions show `—` after a restart until their next refresh.
+  - Other sessions show `-` after a restart until their next refresh.
 - **Notice to the lead:**
   - when a member's usage reaches 70% and the member is idle (its `Stop`), the daemon sends the lead **one** notice: `[pdx team] member <address> [<ref>]「<title>」已用 72%，目前閒置。要接力請執行：pdx relay _<ref>`;
   - if the member is running when it crosses, the notice waits for its next `Stop`;
@@ -623,7 +623,7 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
 
 ### 8.6 Peers and the CWD fix
 
-- **Context column.** `pdx peers` gains `CTX` (`72%`, or `—`). `--json` rows gain `agent.context {used_percentage, window, at}`.
+- **Context column.** `pdx peers` gains `CTX` (`72%`, or `-`, the dash the table already uses for an unknown AGENT). `--json` rows gain `agent.context {used_percentage, window, at}`.
 - **CWD fix.** A session row's cwd prefers:
   1. the CC registry `cwd`, which follows `EnterWorktree` (M4);
   2. then the verified frame's cwd;
@@ -714,7 +714,7 @@ One shared client, `cmd/pdx/daemonclient`, is used by every new command and by t
 - a `/api/health` `boot_id` that differs from the one first seen.
 
 **Then:**
-- It prints `daemon 重啟中，繼續等待…` once on stderr.
+- It prints `daemon 重啟中，繼續等待…` once on stderr. When the daemon answers again with a different `boot_id`, it prints `daemon 已重新啟動（boot <id>）` once, so the log shows that a restart, not a pause, happened.
 - It retries with backoff 0.25 s → 1 s, for a **30 s grace**: three times the usual 5–10 s.
 - After the grace it exits 20, `daemon_unavailable`.
 - A daemon that accepts the connection but never answers is treated the same way: after three consecutive long-polls that run out their own 35 s without an answer, the CLI exits 20 with `daemon 沒有回應` (plan P2b, decided 2026-10-07).
@@ -759,7 +759,7 @@ See §6.3: the prompt stays, disabled; a click is queued and re-sent.
 **⟲ changed from D6** ("respond with the list; the caller waits or adds `--force`"). `POST /api/daemon/restart` is not refused.
 - Everything above survives a restart, so a 409 would only add friction.
 - Instead, the restart confirm dialog (daemon-restart spec §3.2) gains lines, each shown only when non-zero: `N 個申請等待核准、N 個接力進行中（重啟後會接續）`.
-- The counts come from `GET /api/team/inflight`, within the dialog's existing 3 s budget.
+- The counts come from `GET /api/team/inflight` → `{approvals_open: N, relays_active: N}`, within the dialog's existing 3 s budget; when the call fails the dialog falls back to the open requests its own store holds. P2a ships the route with `relays_active: 0`; P6 fills it.
 
 ## 10. The skill (D2's last point)
 
