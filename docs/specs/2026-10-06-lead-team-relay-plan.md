@@ -22,7 +22,7 @@
 **Spec:** `docs/specs/2026-10-06-lead-team-relay-spec.md` (passed review 2026-10-06). Read §2 (U1–U14), §6 and §9 before any task.
 
 **Scope of v1:**
-- PRs **P0, P1, P2a-1, P2a-2, P2a-3, P2b-1, P2b-2, P3a-1, P3a-2, P3b**, in that order (the splits are decided in each section's "Coordinator decisions").
+- PRs **P0, P1, P2a-1, P2a-2, P2a-3, P2b-1, P2b-2, P2b-3, P3a-1, P3a-2, P3b**, in that order (the splits are decided in each section's "Coordinator decisions").
 - The rest gets **plan v2**, with one codex round, after P3 merges:
   - P5a/P5b, self relay — next per spec §12's suggested order;
   - P4, team and spawn; then P4b host selection and P4c cross-host execution (U15, spec §7.4);
@@ -5467,7 +5467,7 @@ Both halves are independently green: P2b-1 adds a package nothing calls yet; P2b
 
 ### Coordinator decisions on P2b (2026-10-07, `mlab/_81nu3d`)
 
-- **Split into two PRs:** **P2b-1** = Tasks 2b.1, 2b.2 (`daemonclient`, exit codes; ≈ 820 lines as re-measured 2026-10-07 — the table above had under-counted `client.go` and its test by ≈ 160 lines — nothing calls it yet); **P2b-2** = Tasks 2b.3, 2b.4 (`pdx lead request`, dispatch; ≈ 780, the restart end-to-end test included). The 800-line bound governs; 20 files is the other bound, not an alternative. **Flag for the coordinator:** P2b-1 is over the bound by ≈ 20 lines, all of them `client_test.go`; the only cut is to ship that test file in two halves, which buys nothing — a ruling is needed, not a plan change.
+- **Split into three PRs (re-measured after the codex round; the 800-line bound governs, 20 files is the other bound, not an alternative):** **P2b-1** = Task 2b.1 (`daemonclient` and its tests; ≈ 770 lines, nothing calls it yet); **P2b-2** = Tasks 2b.2, 2b.3 without `TestLeadRequest_SurvivesDaemonRestartMidPoll` and its two helpers (exit codes, `pdx lead request`; ≈ 680); **P2b-3** = that restart end-to-end test plus Task 2b.4 (dispatch, build and vet gates; ≈ 170). Each is green on its own: P2b-3 only adds a test and the dispatch line on top of P2b-2.
 - **Hung-poll cap stays as written:** three consecutive 35 s polls with no answer exit 20 with `pdx lead: daemon 沒有回應`. A connected daemon that never answers is broken, and 105 s is enough to tell. Spec §9.1 gains one line for it when P2b-2 ships.
 - **`--max-members 0` means the daemon default (3)**, matching the wire's normalisation. No `fs.Visit`.
 - **Deviations 1–8 are accepted.** `msg.go` / `peers.go` are not retrofitted to the exit constants or to `resolveDaemonHost` in this PR.

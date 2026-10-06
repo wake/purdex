@@ -8,6 +8,7 @@ Status: **passed review by `air26/_9iwyyv` on 2026-10-06** (c358cd65 plus the re
 - U13 (self-relay switches and approval) was added the same day. Its derivations (a)–(d) are in §8.7, and air26's review points (e) and (f) are in §8.4 and §8.3.
 - U13a and U14 followed the same day: self-relay approval is one click, and the browser SPA is retired, so every client is a Purdex.app.
 - U15 (2026-10-07) makes cross-host spawn a core need, with a host-selection rule. Its derivations are in §7.4, its measurements M13–M16, its phases P4b and P4c.
+- U17 (2026-10-07) brings the synchronous hook decision (`pdx hook` waits for the daemon on PreToolUse and PermissionRequest) from §11 into the phases: §6.6, M17–M21, phases P2c and P8.
 - U16 (2026-10-07) fixes the Chinese vocabulary: 切換 (handoff, terminal ↔ worker) and 接力 (relay, a new conversation when context runs out); 交接 is retired. This spec's prompts and the 接力檔 follow it; English identifiers do not change.
 
 Every place where this spec departs from the brief's design draft (brief §5, D1–D8) is marked **⟲ changed from D…**, with the reason. §13 lists all of them.
@@ -97,6 +98,19 @@ Background the user gave: an iOS repo is about to be developed on a26; when the 
 - The live UI strings (`handoff.error.*` in `spa/src/locales/zh-TW.json`, three strings on 2026-10-07) change 交接 → 切換 in a small PR of their own right after P0, so P0 stays a PRODUCT.md-only PR.
 - English identifiers (`nex-handoff`, `HandoffDialogHost`, `relay_ops`, `handoff.*` i18n keys) do not change.
 
+**Seventh supplementary decision.** The user made it on 2026-10-07, and `air26/_9iwyyv` relayed it. Copied verbatim.
+
+| # | 決策 |
+|---|---|
+| U17 | 把「pdx hook 能同步等待 daemon 的決定」從 §11 拉進主線。<br>範圍（air26 在 alpha.510 盤點的事實，請重新驗證）：<br>- CC 裝了 12 種 hook，Codex 裝了 10 種，目前全部只送不等（cmd/pdx/hook.go）。CC 本來就會等每個 hook process 結束，所以延遲一直都在付；這次的改動只是讓 hook 讀取 daemon 的回覆，並輸出決定。<br>- 只有 PreToolUse 和 PermissionRequest 這兩種需要等待決定，其他維持現狀。<br>- 原則照 §11 的硬鎖：有本機旗標檔（有待決項目）時才連 daemon，沒有就照舊立刻結束；daemon 連不上一律放行，絕不能把所有 session 卡死。<br>用途（請在 spec 寫明，並決定哪些進第一版）：<br>1. lead 申請時的硬鎖（PreToolUse）：補上軟鎖「模型把指令丟背景執行」的漏洞。<br>2. member 接力時的鎖（PreToolUse）。<br>3. iOS App（另一條開發線，repo 是 wake/purdex-ios）要用：手機直接核准 PermissionRequest，以及可能透過 PreToolUse（matcher AskUserQuestion）把答案回填。後者能不能做到還沒查證，請對照當前 CC 的 hooks 文件或用 probe 實測，回報結果。這兩項是為 iOS 鋪路，daemon 端只需要「待決請求加長輪詢加回傳決定」的通用機制，手機端的 API 不在這份 spec 的範圍。<br>4. Codex 的 PreToolUse 和 PermissionRequest 能不能用同樣的方式回傳決定，也請確認。<br>請評估要放在哪個 phase（新開一個，或併進現有的），照 800 行／20 檔的上限拆分，改完回我 commit。不影響 U1–U16。 |
+
+**How this spec reads U17** (derived in §6.6; the measurements are M17–M21):
+- The facts hold, re-verified on `fb9fcbd8`: 12 CC hooks and 10 Codex hooks, all fire-and-forget, `pdx hook` never writes to stdout (M17).
+- **Use 1 (lead hard lock) and use 2 (member relay lock) are in v1**, as P2c and inside P6. **Use 3 is in v1 on the daemon side only**: two more `approval_requests` kinds (`hook_permission`, `hook_ask`), with the same long-poll and `decide` route the lead request uses, so the iOS line needs no new mechanism, only a client. The Mac App dialog for those two kinds is not in this spec. That is **P8**.
+- **AskUserQuestion can be answered through PreToolUse**: measured in an interactive session (M19), not only in `-p` mode as the docs describe.
+- **Codex answers the same way** by its hooks documentation (M20); the plan probes it once before P8 ships.
+- `pdx hook` still exits 0 on every path and still prints nothing unless a decision was obtained; an unreachable daemon means no output, which is the normal permission flow, never a forced allow.
+
 **How this spec reads U15** (derived in §7.4; the measurements are M13–M16):
 - U15 pulls **cross-host spawn, kill and relay** out of §11 into the phases (P4b, P4c in §12). It changes none of U1–U14.
 - "有相關的 repo" is decided by both the path convention and the git remote, and a docs-only sparse checkout does not count (§7.4 (a)).
@@ -172,6 +186,12 @@ A probe mod was loaded into a throwaway `claude` in tmux through `CLAUDE_CODE_PL
   - `purdex` is not checked out on a26 at all.
   - Remotes are a mix of `ssh://git@lab.protype.tw:9079/<Org>/<repo>.git`, `git@github.com:wake/purdex.git` and `https://github.com/...`. Org case differs between the path (`ntsu`) and the remote (`NTSU`).
 - **M16 Paired-daemon trust today:** see §7.4 (c), which cites the code.
+
+- **M17 Hooks today** (origin/main `fb9fcbd8`): `pdx hook --agent <cc|codex> <PdxEvent>` reads stdin with `io.ReadAll` and no timeout, POSTs `/api/agent/event` with a 2 s client timeout, never reads the body, never writes stdout, swallows every failure and exits 0 (`cmd/pdx/hook.go:45,86,136-139,170-179`); the only non-zero exit is a missing `--agent` (`:69-70`). CC has **12** hooks installed with **no `matcher` and no `timeout`** (`internal/agent/cc/events.go:25-245`, `hooks.go:213-221`), PreToolUse and PermissionRequest among them; Codex has **10** in `~/.codex/hooks.json` with `"timeout": 5` (3 for SessionEnd and Interrupt; `internal/agent/codex/hooks.go:20-32,327-335`). Ours are recognised by argv shape, not a marker (`cc/hooks.go:333-348`). The daemon's `handleEvent` answers `{"status":"ok"}` at once; CC PreToolUse is observe-only (`internal/module/agent/handler.go:238,272-293,412-454`). There is no per-session flag or lock file under the data dir, and no long-poll in the daemon.
+- **M18 Claude Code hooks reference** (code.claude.com/docs/en/hooks, read 2026-10-07): PreToolUse answers `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow|deny|ask|defer","permissionDecisionReason","updatedInput","additionalContext"}}`; several hooks combine as `deny > defer > ask > allow`; `defer` is honoured only in `-p`. PermissionRequest answers `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow|deny","updatedInput","updatedPermissions","message","interrupt"}}}`; "a hook that exits 2 without a `decision` object leaves the permission flow unchanged"; in a session that cannot show a prompt, "if no hook returns a decision, it denies the tool call"; with a permission host, "whichever decides first applies". Default timeout **600 s** for command hooks on these events (30 s on UserPromptSubmit, 10 s on MessageDisplay), per-hook `timeout` configurable; all matching hooks run in parallel and Claude waits; a timed-out PreToolUse hook does not block the call; exit 0 with empty stdout = no decision.
+- **M19 AskUserQuestion is answered by a PreToolUse hook in an interactive session** (2026-10-07, CC 2.1.291, Haiku, bypass permissions, tmux). A `PreToolUse` hook with matcher `AskUserQuestion` printed `permissionDecision: "allow"` and `updatedInput` = the original `tool_input` plus `answers: {"<question>": "<first option label>"}`; the TUI showed `User answered Claude's questions: 喜歡紅色還是藍色？ → 紅` with no dialog, and the model replied with the answer. The docs describe this for `-p` runs; it works interactively too. The hook's stdin carried `permission_mode: "bypassPermissions"` and `effort: null`.
+- **M20 Codex hooks** (learn.chatgpt.com/docs/hooks, read 2026-10-07): events include PreToolUse and PermissionRequest; both take stdout decisions with the **same JSON shapes** as Claude Code; config in `~/.codex/hooks.json` or `config.toml`; default timeout 600 s (1 s for SessionEnd and Interrupt); Codex waits unless `async: true`; payload fields `session_id`, `tool_name`, `tool_input`, `tool_use_id`, `permission_mode`, `turn_id` (matches the repo's fixtures, `internal/agent/codex/testdata/codex-0.153.4-payloads/`). **Unmeasured:** whether a changed command or `timeout` invalidates Codex's `[hooks.state] trusted_hash` and re-prompts the user; the plan probes it in P8.
+- **M21 Model and effort live in the statusline, not in hooks** (2026-10-07, CC 2.1.291): the statusline payload carries `model.id` and `effort.level` (`claude-opus-5-5` / `xhigh` at start; `/model sonnet` → `claude-sonnet-5-5` / `medium`; `/effort low` → `low`); the UserPromptSubmit hook payload had `effort: null` and no `model`. After `/clear` the new session id kept **both** (`claude-sonnet-5-5` / `low`), same pid. (Used by U18.)
 
 ### 3.3 Code (re-verified on origin/main `de37a4e5`, alpha.505)
 
@@ -378,7 +398,7 @@ What happens when that is not followed:
 | The model … | Result |
 |---|---|
 | uses the default 2 min Bash timeout | The Bash tool kills pdx. pdx cancels on the signal; on a SIGKILL the lease expires within 30 s. Either way the dialog closes on every client, and the session got no approval. |
-| backgrounds the call | Nothing stops it in v1. This is the soft lock's known hole. The hard lock (§11) closes it. |
+| backgrounds the call | Until P2c ships, nothing stops it. **From P2c (U17), the hard lock of §6.6 denies every tool call of that session while its request is open**, so a backgrounded `pdx lead request` leaves the model unable to do anything but wait. |
 
 ### 6.5 Who can approve (U5, U5b)
 
@@ -403,6 +423,33 @@ What happens when that is not followed:
   The broadcast and the audit are what remain. Hardening with human presence is in §11.
 
 **History.** A human-presence design for U5a was written on 2026-10-06: a Secure Enclave approver key per Mac in Purdex.app (this spec at commit `b9a6f239`, §6.5). U5b withdrew it the same day. The facts it rested on stay in §3.2 (M6–M10) for that hardening.
+
+### 6.6 Hook decisions: the hard lock and forwarded prompts (U17)
+
+**⟲ moved from §11.** `pdx hook` learns to **wait for the daemon's answer and print it** for exactly two events, `PreToolUse` and `PermissionRequest`, for both Claude Code and Codex. Every other event stays fire-and-forget (M17).
+
+**The gate: a flag file, else nothing changes.**
+- `<data_dir>/hooklocks/<agent>/<session_id>` exists ⇒ the hook asks the daemon. Otherwise it posts the event as today and exits 0 with no stdout, so a session with nothing pending pays no round trip beyond the existing one.
+- Who writes the flag: `pdx lead request` while its request is open (removed on close, best effort); the Purdex mod while a relay op runs on that session (§8); the daemon when forwarding is turned on for a session (below). The team sweeper deletes flags whose session is gone (registry), so a stale flag costs one answered `{}` and then disappears.
+- **An unreachable daemon, a 404, or any error ⇒ exit 0, no stdout.** That is the normal permission flow (M18: empty stdout = no decision), never a forced allow and never a block. The hook's client is the restart-aware one (§9.1) with a **5 s** grace here, not 30 s: a session must not stall on a daemon restart.
+
+**The daemon:** `POST /api/hooks/decide {agent, event, session_id, tool_name, tool_input, tool_use_id, permission_mode, raw}` answers one of:
+
+| Case | Answer | Where it comes from |
+|---|---|---|
+| The session has an **open lead request** (§6.2) | PreToolUse: `deny`, reason `lead 申請等待核准中（<id>），核准或拒絕前這個 session 不能執行工具；請在 Purdex 介面處理`. PermissionRequest: `{}` (the PreToolUse deny already stopped the call). | `approval_requests` by `origin_session_id`, in memory |
+| The session is in a **relay op** past `claimed` (§8.1) and the tool is not the handoff write | PreToolUse: `deny`, reason `接力進行中，這一輪只寫接力檔`; a `Write` to exactly `<data_dir>/relay/<op>.md` is `allow` (§8.3) | `relay_ops` |
+| **Forwarding is on** for the session (`PUT /api/hooks/sessions/{sid}/forward {on: true}`, written by a client such as the iOS App through its own API line) | PermissionRequest: open an `approval_requests` row of kind `hook_permission` (payload: tool, input, `permission_suggestions`), long-poll it (lease renewed by the hook's poll, deadline **9 min**), and answer `decision {behavior, updatedInput?, message?}` when a client decides; PreToolUse for `AskUserQuestion`: kind `hook_ask` (payload: `questions`), answered as `allow` + `updatedInput` = questions + `answers` (M19). Timeout or no client ⇒ `{}`, so Claude Code shows its own prompt. | §6.2's state machine, event `approval.request`, `decide` route |
+| None of the above | `{}` | |
+
+- The two new kinds reuse **everything** of §6.2: one table, one CAS, one `approval.request` event, one `decide` route, one snapshot. A decision on a `hook_*` kind carries the kind-specific payload (`behavior`/`updatedInput`/`message`, or `answers`) in `grant`'s place; the wire gains `HookDecision`. Any client that can call `decide` can answer — the iOS App is the intended one; **the Mac App dialog for `hook_*` kinds is not in this spec** (it ignores unknown kinds, so nothing breaks).
+- Precedence inside one answer follows M18: a lock `deny` is never softened by a forwarded `allow`.
+- **Hook timeouts.** The installer (`internal/agent/cc/hooks.go`, `codex/hooks.go`) adds `"timeout": 600` to the two decision events only (CC's default is already 600 s; Codex's 5 s would cut the wait). Codex's `trusted_hash` may re-prompt once after the change (M20, unmeasured); the plan measures it.
+- **What is unchanged:** exit codes (`pdx hook` still exits 0), the event POST (it still happens, before the decision call, so observe-only consumers see the same stream), every other hook event.
+
+**Why the flag file and not "always ask":** 12 CC hooks fire on every tool call; a daemon round trip on each would add latency to every session on the host, and a daemon restart would stall them all (M17, §9). The flag confines the cost to sessions that have something pending.
+
+**Phases:** **P2c** ships the gate, the client path in `pdx hook`, the lock answers for lead requests, the installer timeouts, and the flag written by `pdx lead request`. **P6** adds the relay lock answers and the mod-written flag. **P8** adds forwarding: the two kinds, the forward switch, the `HookDecision` wire, and the Codex probe. Order and sizes in §12.
 
 ## 7. Team, spawn, kill (U8, U10)
 
@@ -799,12 +846,7 @@ The skill ships in the plugin (`skills/pdx-team/SKILL.md`). It says:
 
 ## 11. Later (not in this spec's phases)
 
-- **Hard lock (D3).** `pdx hook` for `PreToolUse` gains a synchronous path:
-  - only when a local flag file for this session exists (written by `pdx lead request`, removed when it ends) does it ask the daemon, and on a pending request it writes a deny decision;
-  - with no flag it never contacts the daemon;
-  - an unreachable daemon allows.
-
-  A relay could later lock a member with the same flag.
+- **Hard lock (D3) — moved to §6.6 by U17.** What stays later: a hook decision for events other than PreToolUse and PermissionRequest, and the Mac App dialog for forwarded `hook_*` kinds.
 - **Human-presence approval (hardening; U5a, withdrawn by U5b).** The design written on 2026-10-06 (commit `b9a6f239`, §6.5):
   - a CryptoKit Secure Enclave key per Mac in Purdex.app, with `.userPresence` (Touch ID, or the login password);
   - enrolled per daemon host;
@@ -826,6 +868,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | P1 | Statusline usage parsed per session id + accessor; peers `CTX` column and `agent.context`; CWD fix; `peer_not_found` hint text (§8.5, §8.6) | 1 (part) |
 | P2 | `team` module skeleton and `team.db`; `daemonclient` with the restart rules (§9.1); lead requests: create, poll and lease, cancel, decide, sweeper, boot grace, `OnSubscribe` snapshot; `pdx lead request`; exit codes (§14) | 1 |
 | P3 | Approval dialog host, store, event branch, one-click approve and deny (U5b), reconnect queue, notifications; restart-confirm line for open requests (§6.3, §9.5) | 1 |
+| P2c | Hook decisions (U17, §6.6): flag-file gate, `pdx hook` decision path for PreToolUse / PermissionRequest (CC and Codex) with the 5 s grace, `POST /api/hooks/decide` with the lead-request lock answer, installer `timeout: 600` on the two events, flag written and removed by `pdx lead request`, sweeper of stale flags | U17 (uses 1) |
 | P4 | Teams and grants; `pdx spawn` / `kill` / `team` on this host; spawn reconciliation; team end on the lead's exit | 1 |
 | P4b | Host selection (U15): repo inventory and `developable` rule, `rate_limits` parsing and the per-account weekly reading, `GET /api/team/repos|hosts`, `GET /api/peers/team/repos|usage` for paired hosts, the selection rule and `pdx spawn --repo`, `team.repo_roots` / `team.min_weekly_remaining` / `team.preferred_host` host config | U15 |
 | P4c | Cross-host execution (U15): `AllowTeam` flag, CLI and Hosts toggle; `POST /api/peers/team/spawn|kill|relay|lead-moved` behind `HostRoutePolicy`; forwarding with op-id idempotency and the restart grace; `remote_members`; cross-host brief and notices; `remote_unsupported` / `host_not_allowed` / `remote_unreachable` | U15 |
@@ -833,12 +876,15 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | P5b | Plugin packaging (embed, extract, `CLAUDE_CODE_PLUGIN_DIRS` merge and uninstall) with the skill; mod self relay: `hello` / `begin` / `wait` / `report`, the prompt hold, asking again, the auto-compact rule, `/relay` | 2 (part), 4 (part), U13 |
 | P6 | Member relay: `pdx relay`, the daemon's virtual peer and control message, `claim`, timeouts, boot reconciliation of relay ops; completion and failure notices; restart-confirm line for relays | 2 |
 | P7 | Detection and the 70% notice to the lead; persisted usage on team rows; member auto-compact report | 3 |
+| P8 | Forwarded prompts (U17 use 3): kinds `hook_permission` and `hook_ask` on `approval_requests`, `HookDecision` on the wire, the per-session forward switch, the long-poll in `/api/hooks/decide`, the Codex `trusted_hash` probe; no Mac App dialog | U17 (uses 3, 4) |
 
 **Notes on the split:**
 - **P5a/P5b depend on P2 and P3.**
-- **Order:** P0, P1, P2, P3, P5a, P5b, P4, P4b, P4c, P6, P7.
+- **Order:** P0, P1, P2, P3, P2c, P5a, P5b, P4, P4b, P4c, P6, P7, P8.
+  - P2c needs P2 (the lead request it locks) and nothing from P3; it is small and closes the soft lock's hole before the skill (P5b) tells agents to use `pdx lead request`.
+  - P8 needs P2c and P3's event plumbing; it can move earlier if the iOS line needs it.
   - P4b needs P4 (team rows) and P1 (the statusline parser it extends). P4c needs P4b and the peers pairing that exists.
-  - P6 (member relay) rides on P4c for a member on another host: the lead host forwards `relay`, the member host runs §8.2.
+  - P6 (member relay) rides on P4c for a member on another host: the lead host forwards `relay`, the member host runs §8.2. It also carries U17 use 2: the relay lock answers in `/api/hooks/decide` and the flag the mod writes.
   - Self relay, goal 1, ships first.
   - P4 (team, spawn) needs P3, because a lead approval comes from the dialog.
 - P6 may split in two: daemon first, then mod.
@@ -853,6 +899,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | D2 | Approve and deny are one click on any App; the `client` descriptor is an audit label | U5b (U5a withdrawn); one shared host token (§3.3) |
 | D2 | The grant has no host list; the host is chosen per spawn by the §7.4 rule, and the member host gates by its own `AllowTeam` flag | U15; the user picks hosts by rule, not per grant |
 | D4 | No `--worktree`; `--repo` and `--host` (U15); the brief is sent by the CLI from the lead's inbox; tmux name `tm-<op>`; start timeout kills and frees the slot | No worktree API and U10; U15 reinstated the host choice; replies reach the lead; D4's own idempotency idea; the limit counts only live members |
+| §11 → §6.6 (U17) | `pdx hook` waits for the daemon on PreToolUse and PermissionRequest behind a flag file; lead and relay locks in P2c/P6; forwarded prompts as two more approval kinds in P8 | U17; M17–M20; one approval model serves the iOS line too |
 | §11 → §7.4 (U15) | Cross-host spawn, kill and relay are in P4b/P4c; trust = the paired lead host's inbound token plus the member host's `AllowTeam` flag; the grant does not travel | U15; `PeerAuth` already identifies the calling host; both daemons are the same user's |
 | D4 | Launch command is `team.member_command`, default `claude --dangerously-skip-permissions` | The daemon cannot rely on the `cld-yolo` alias |
 | D4 (air26 review) | A member is always launched with `--plugin-dir`; relay to a member without the mod is refused, not done by send-keys | Loads once even with the global install (M5); reasons in §8.2 |
@@ -905,6 +952,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 - **Host selection (U15):** a cone sparse checkout whose only pattern is `docs` is not developable; a plain checkout is; the canonical key normalises `ssh://git@host:port/Org/repo.git`, `git@host:org/repo.git` and `https://host/org/repo`; the rule refuses `no_host_for_repo` when every match is docs-only; same-account hosts tie and `preferred_host` wins; a host below the threshold loses to one above; `unknown` ranks between.
 - **Cross-host (U15):** a host principal without `AllowTeam` gets `host_not_allowed`; a kill from a host other than `lead_host_id` or with another `team_id` is refused; a forwarded spawn retried with the same op id opens one tmux session; a plain 404 from the member host becomes `remote_unsupported`; the routes are in `HostRoutePolicy` and nowhere else.
 - **CWD:** the precedence order.
+- **Hook decisions (U17):** no flag ⇒ no daemon call and empty stdout; flag + open lead request ⇒ PreToolUse `deny` with the reason, PermissionRequest `{}`; flag + daemon unreachable ⇒ exit 0, empty stdout, within 5 s; stale flag ⇒ `{}` and the sweeper removes it; a `hook_permission` row is decided through the same CAS as a lead request and the hook prints the `decision`; `hook_ask` prints `allow` + `updatedInput.answers`; the installer writes `timeout: 600` on exactly the two events and removes it with the hook.
 
 **CLI:**
 - `daemonclient`: refused, then a new `boot_id`, then a retry succeeds; the grace expires into exit 20; a 404 gives 21.
@@ -952,7 +1000,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 
 - Member visuals (U11).
 - Nexen worker relay: it goes through Nexen rebuild.
-- Cross-host hardening (signed grants, per-host scopes), adoption, the hard lock, Electron WebAuthn, and the handoff memory store: all in §11. Cross-host spawn, kill and relay themselves are **in** scope since U15 (§7.4, P4b/P4c).
+- Cross-host hardening (signed grants, per-host scopes), adoption, Electron WebAuthn, and the handoff memory store: all in §11. The hard lock is **in** scope since U17 (§6.6, P2c); the Mac App dialog for forwarded `hook_*` kinds and the iOS client are not. Cross-host spawn, kill and relay themselves are **in** scope since U15 (§7.4, P4b/P4c).
 - Claude Code's built-in Agent Teams.
 - **Turning the browser SPA off (U14).** Here U14 is a premise only.
   - The unmerged web version (branch `worktree-web-version`; `purdex.mlab.host` in front of the daemon) is affected.
