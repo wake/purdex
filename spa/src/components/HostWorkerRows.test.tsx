@@ -57,6 +57,20 @@ describe('HostWorkerRows', () => {
     expect(onOpen).toHaveBeenCalledWith('E1')
   })
 
+  it('a disabled host shows the disabled copy, not loading', () => {
+    useNexHostStore.setState({ byHost: { [H]: { ...readyEntry, phase: 'disabled' } } })
+    renderRows()
+    expect(screen.getByTestId(`${P}-disabled`)).toBeInTheDocument()
+    expect(screen.queryByTestId(`${P}-loading`)).toBeNull()
+  })
+
+  it('an unavailable host shows its error, not loading', () => {
+    useNexHostStore.setState({ byHost: { [H]: { ...readyEntry, phase: 'unavailable', error: 'down hard' } } })
+    renderRows()
+    expect(screen.getByTestId(`${P}-unavailable`)).toHaveTextContent('down hard')
+    expect(screen.queryByTestId(`${P}-loading`)).toBeNull()
+  })
+
   it('shows the empty state', () => {
     seed([row({ id: 'E2', state: 'terminated' })])
     renderRows()

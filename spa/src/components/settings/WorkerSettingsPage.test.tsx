@@ -1,4 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { useNexHostStore } from '../../stores/useNexHostStore'
+
+vi.mock('../../lib/nex/nex-api', () => ({ listExecutions: vi.fn().mockResolvedValue({ items: [], next_cursor: '' }), attachControl: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), archiveExecution: vi.fn() }))
+vi.mock('../../lib/nex/nex-sse', () => ({ openNexSse: vi.fn() }))
 import { render, screen, fireEvent } from '@testing-library/react'
 import { WorkerSettingsPage } from './WorkerSettingsPage'
 import { clearWorkerSettingsTabs, registerWorkerSettingsTab } from '../../lib/worker-settings-tabs'
@@ -39,6 +43,21 @@ describe('WorkerSettingsPage', () => {
     expect(screen.getByTestId('probe')).toHaveTextContent('a')
     fireEvent.click(screen.getByText('Beta'))
     expect(screen.getByTestId('probe')).toHaveTextContent('b')
+  })
+
+  it('the Workers tab shows a disabled / unavailable host state instead of loading', () => {
+    const base = { info: null, capabilities: null, error: null, fetchedAt: 1, generation: 1, fingerprint: 'x' }
+    useNexHostStore.setState({
+      byHost: { a: { ...base, phase: 'disabled' } as never, b: { ...base, phase: 'unavailable', error: 'nope' } as never },
+      ensure: vi.fn().mockResolvedValue(undefined),
+    })
+    render(<WorkerSettingsPage />)
+    fireEvent.click(screen.getByTestId('worker-settings-tab-workers'))
+    expect(screen.getByTestId('worker-settings-live-disabled')).toBeInTheDocument()
+    expect(screen.queryByTestId('worker-settings-live-loading')).toBeNull()
+    fireEvent.click(screen.getByText('Beta'))
+    expect(screen.getByTestId('worker-settings-live-unavailable')).toHaveTextContent('nope')
+    expect(screen.queryByTestId('worker-settings-live-loading')).toBeNull()
   })
 
   it('shows the no-hosts copy when no host is shown', () => {

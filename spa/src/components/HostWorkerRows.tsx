@@ -35,6 +35,19 @@ export function HostWorkerRows({ hostId, onOpen, testIdPrefix }: HostWorkerRowsP
     return () => clearInterval(id)
   }, [])
 
+  // Only a ready Nexen host has a list to load; the others get their state (same copy as `ExecutionsView`).
+  const nexPhase = entry?.phase ?? 'loading'
+  if (nexPhase === 'disabled') {
+    return <p data-testid={`${testIdPrefix}-disabled`} className="px-3 py-2 text-xs text-text-muted">{t('newtab.headless.disabled')}</p>
+  }
+  if (nexPhase === 'unavailable') {
+    return (
+      <p data-testid={`${testIdPrefix}-unavailable`} className="px-3 py-2 text-xs text-red-400">
+        {t('newtab.headless.unavailable', { error: entry?.error ?? '' })}
+      </p>
+    )
+  }
+
   if (live.length === 0 && phase !== 'ready' && phase !== 'error') {
     return (
       <div data-testid={`${testIdPrefix}-loading`} className="flex flex-col gap-1.5 px-3 py-2 animate-pulse" aria-busy="true">
