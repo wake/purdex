@@ -312,7 +312,7 @@ func (m *Module) ContextUsage(sessionID string) (ContextUsage, bool) {
 - In `module.go`, next to `statusSnapshots map[string]statusSnapshot`, add `contextUsage map[string]ContextUsage` and `usageSeq int64`.
 - At line 125, add `contextUsage: make(map[string]ContextUsage),`.
 - In `handler.go`, call `m.recordContextUsage(payload.RawStatus)` **before** the `code := m.resolveSessionCode(...)` early return, so an unresolved tmux name still records usage. The test-nonce branch at 1262-1271 returns before this point, and must keep doing so.
-- The statusline `remove` action (`handler.go:978-980`) clears `statusSnapshots` by session code. It does **not** clear `contextUsage`: that map is keyed by CC session id, which the remove payload does not carry, and the cap bounds it. A dead session's reading simply ages out.
+- The statusline `remove` action (`handler.go:978-980`) rebuilds `statusSnapshots`; it **also clears `contextUsage`** in the same critical section, so a removed statusline leaves no stale `CTX` on the peer rows (codex R2 finding, 2026-10-07; pinned by `TestContextUsage_ClearedByStatuslineRemove`).
 
 - [ ] **Step 4: Run the tests and verify they pass.**
   - Run: `go test ./internal/module/agent/ -run 'TestContextUsage|TestHandleAgentStatus' -v`

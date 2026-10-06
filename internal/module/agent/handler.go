@@ -977,6 +977,8 @@ func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
 			// sessions/tmux broadcasts).
 			m.snapshotMu.Lock()
 			m.statusSnapshots = make(map[string]statusSnapshot)
+			// a removed statusline must not leave a stale CTX on the peer rows (codex R2, 2026-10-07)
+			m.contextUsage = make(map[string]ContextUsage)
 			m.snapshotMu.Unlock()
 			if m.core != nil {
 				m.core.Events.Broadcast("", "agent.status.cleared", `{"agent_type":"cc"}`)
@@ -1269,6 +1271,11 @@ func (m *Module) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 		m.signalTestStage(payload.TmuxSession, testStageBroadcast)
 		return
 	}
+
+	// Context usage is keyed by the CC session id inside the payload, so it
+	// is recorded before (and regardless of) resolving the tmux name: an
+	// unresolved tmux session still reports its own usage (spec §8.5).
+	m.recordContextUsage(payload.RawStatus)
 
 	code := m.resolveSessionCode(payload.TmuxSession)
 	if code == "" {

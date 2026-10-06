@@ -36,6 +36,7 @@ func peersTableFixture() peers.Envelope {
 					Type:     "cc",
 					PeerName: "wake-cc",
 					Status:   "working",
+					Context:  &peers.ContextInfo{UsedPercentage: ptr(72.4), Window: 1000000},
 				},
 				Deliverable: true,
 				TmuxName:    "aigora2",
@@ -74,18 +75,22 @@ func peersTableFixture() peers.Envelope {
 	}
 }
 
+func ptr(f float64) *float64 { return &f }
+
 // wantPeersTable is the v4 column order: TITLE first, ADDRESS second (spec
 // §5.7 -- scan the title to find who you want, copy the address to reach
 // them), NAME gone because it IS the address's second segment, and TMUX added
 // between DELIVERABLE and CWD. Every row of the fixture is untitled, so every
 // TITLE cell is blank rather than "-": a dash reads as a value, and there is
 // nothing here to name. Only the cc row has a ref, so only it is bracketed;
-// the row with no tmux at all shows "-".
-const wantPeersTable = "TITLE  ADDRESS               AGENT  STATUS   DELIVERABLE  TMUX     CWD\n" +
-	"       alias/sess1 [q34psn]  cc     working  yes          aigora2  /home/wake/project\n" +
-	"       alias/sess2           codex  idle     not_cc       codex1   /home/wake/codex\n" +
-	"       alias/sess3           -      -        no_agent     shell1   /home/wake/shell\n" +
-	"       alias/sess4           -      -        -            -        \n" +
+// the row with no tmux at all shows "-". CTX (lead-team-relay spec §8.6)
+// sits after STATUS: the rounded context usage for the one row that has a
+// reading, and the table's usual "-" for every row that does not.
+const wantPeersTable = "TITLE  ADDRESS               AGENT  STATUS   CTX  DELIVERABLE  TMUX     CWD\n" +
+	"       alias/sess1 [q34psn]  cc     working  72%  yes          aigora2  /home/wake/project\n" +
+	"       alias/sess2           codex  idle     -    not_cc       codex1   /home/wake/codex\n" +
+	"       alias/sess3           -      -        -    no_agent     shell1   /home/wake/shell\n" +
+	"       alias/sess4           -      -        -    -            -        \n" +
 	"(partial: 1 sessions not resolved within budget)\n" +
 	"daemon (unknown)\n"
 
@@ -755,7 +760,7 @@ func peersAllTableFixture() peers.AllEnvelope {
 						Address:     "local/sess1",
 						RowKind:     "session",
 						Ref:         "_q34psn",
-						Agent:       &peers.AgentInfo{Type: "cc", PeerName: "wake-cc", Status: "working"},
+						Agent:       &peers.AgentInfo{Type: "cc", PeerName: "wake-cc", Status: "working", Context: &peers.ContextInfo{UsedPercentage: ptr(72.4), Window: 1000000}},
 						Deliverable: true,
 						TmuxName:    "aigora2",
 						Cwd:         "/home/wake/project",
@@ -792,9 +797,9 @@ func peersAllTableFixture() peers.AllEnvelope {
 // you need before either of the other two columns means anything -- and
 // then follows the single-host order exactly: TITLE, then ADDRESS, and TMUX
 // between DELIVERABLE and CWD (v4 spec §5.7).
-const wantPeersAllTable = "HOST   TITLE  ADDRESS               AGENT  STATUS   DELIVERABLE  TMUX     CWD\n" +
-	"local         local/sess1 [q34psn]  cc     working  yes          aigora2  /home/wake/project\n" +
-	"air           air/sess2             codex  idle     not_cc       codex1   /home/wake/codex\n" +
+const wantPeersAllTable = "HOST   TITLE  ADDRESS               AGENT  STATUS   CTX  DELIVERABLE  TMUX     CWD\n" +
+	"local         local/sess1 [q34psn]  cc     working  72%  yes          aigora2  /home/wake/project\n" +
+	"air           air/sess2             codex  idle     -    not_cc       codex1   /home/wake/codex\n" +
 	"down  (unreachable: connection refused)\n" +
 	"local  daemon (unknown)\n" +
 	"air  daemon (unknown)\n"
@@ -1512,7 +1517,7 @@ func TestFormatPeersTable_V4Columns(t *testing.T) {
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
 	header := lines[0]
 
-	wantCols := []string{"TITLE", "ADDRESS", "AGENT", "STATUS", "DELIVERABLE", "TMUX", "CWD"}
+	wantCols := []string{"TITLE", "ADDRESS", "AGENT", "STATUS", "CTX", "DELIVERABLE", "TMUX", "CWD"}
 	if cols := headerColumns(header); strings.Join(cols, "|") != strings.Join(wantCols, "|") {
 		t.Errorf("header columns = %v, want %v", cols, wantCols)
 	}
@@ -1606,7 +1611,7 @@ func TestFormatPeersAllTable_V4Columns(t *testing.T) {
 	}})
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
 
-	wantCols := []string{"HOST", "TITLE", "ADDRESS", "AGENT", "STATUS", "DELIVERABLE", "TMUX", "CWD"}
+	wantCols := []string{"HOST", "TITLE", "ADDRESS", "AGENT", "STATUS", "CTX", "DELIVERABLE", "TMUX", "CWD"}
 	if cols := headerColumns(lines[0]); strings.Join(cols, "|") != strings.Join(wantCols, "|") {
 		t.Errorf("--all header columns = %v, want %v", cols, wantCols)
 	}
@@ -2464,6 +2469,28 @@ func TestPeersUsage_ListsAliasForms(t *testing.T) {
 	} {
 		if !strings.Contains(peersUsage, line) {
 			t.Errorf("peersUsage lacks %q:\n%s", line, peersUsage)
+		}
+	}
+}
+
+// TestCtxField pins the CTX cell (lead-team-relay spec §8.6): the rounded
+// used percentage when the daemon has a reading, and the table's usual "-"
+// for no agent, no reading, or a reading whose percentage CC has not yet
+// reported (null early in a session).
+func TestCtxField(t *testing.T) {
+	p := 72.6
+	cases := []struct {
+		rec  peers.PeerRecord
+		want string
+	}{
+		{peers.PeerRecord{}, "-"},
+		{peers.PeerRecord{Agent: &peers.AgentInfo{Type: "cc"}}, "-"},
+		{peers.PeerRecord{Agent: &peers.AgentInfo{Type: "cc", Context: &peers.ContextInfo{}}}, "-"},
+		{peers.PeerRecord{Agent: &peers.AgentInfo{Type: "cc", Context: &peers.ContextInfo{UsedPercentage: &p}}}, "73%"},
+	}
+	for _, c := range cases {
+		if got := ctxField(c.rec); got != c.want {
+			t.Errorf("ctxField(%+v) = %q, want %q", c.rec, got, c.want)
 		}
 	}
 }

@@ -2933,3 +2933,90 @@ func TestInventoryLiveness_RegistryVerdictsEqualToday(t *testing.T) {
 		}
 	})
 }
+
+// usageOwners is fakeOwners plus the ContextUsageReader the P1 peers
+// module type-asserts on m.owners.
+type usageOwners struct {
+	*fakeOwners
+	usage map[string]agent.ContextUsage
+}
+
+func (u *usageOwners) ContextUsage(sessionID string) (agent.ContextUsage, bool) {
+	c, ok := u.usage[sessionID]
+	return c, ok
+}
+
+var _ agent.ContextUsageReader = (*usageOwners)(nil)
+
+// Review Focus 2: two CC panes in one tmux instance (inst1). mt1 has a
+// registry entry (fixture 76973) and is at 72 %; mt2 is owner-only (no
+// registry entry, so its row is inbox_dead) and is at 10 %. Each row must
+// carry its own session's usage, never the last writer's.
+func TestLocalEnvelope_AttachesContextUsageBySessionID(t *testing.T) {
+	dir := t.TempDir()
+	writeRegistryFixture(t, dir, "76973.json", fixture76973)
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "mt1code", Name: "mt1", Cwd: "/Users/wake/Workspace/wake/purdex", TmuxInstance: "inst1"},
+		{Code: "mt2code", Name: "mt2", Cwd: "/Users/wake/Workspace/wake/purdex", TmuxInstance: "inst1"},
+	}}
+	pct1, pct2 := 72.0, 10.0
+	owners := &usageOwners{
+		fakeOwners: &fakeOwners{owners: map[string]agent.PaneOwner{
+			"mt1code": {AgentType: "cc", SessionID: "fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c", Cwd: "/Users/wake/Workspace/wake/purdex", TmuxPaneID: "%10", LastSeenAt: 1789314156000, Status: "busy"},
+			"mt2code": {AgentType: "cc", SessionID: "second-session-id", Cwd: "/Users/wake/Workspace/wake/purdex", TmuxPaneID: "%11", LastSeenAt: 1789314156000, Status: "idle"},
+		}},
+		usage: map[string]agent.ContextUsage{
+			"fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c": {UsedPercentage: &pct1, WindowSize: 1000000, At: 5},
+			"second-session-id":                    {UsedPercentage: &pct2, WindowSize: 200000, At: 6},
+		},
+	}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	rr := doGetPeers(t, m, "/api/peers")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Peers []struct {
+			SessionCode string `json:"session_code"`
+			Agent       *struct {
+				SessionID string `json:"session_id"`
+				Context   *struct {
+					UsedPercentage *float64 `json:"used_percentage"`
+					Window         int      `json:"window"`
+				} `json:"context"`
+			} `json:"agent"`
+		} `json:"peers"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	type usage struct {
+		sessionID string
+		pct       *float64
+		window    int
+	}
+	seen := map[string]usage{} // by session code
+	for _, p := range got.Peers {
+		if p.Agent == nil || p.Agent.Context == nil {
+			continue
+		}
+		seen[p.SessionCode] = usage{p.Agent.SessionID, p.Agent.Context.UsedPercentage, p.Agent.Context.Window}
+	}
+	want := map[string]usage{
+		"mt1code": {sessionID: "fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c", pct: &pct1, window: 1000000},
+		"mt2code": {sessionID: "second-session-id", pct: &pct2, window: 200000},
+	}
+	for code, w := range want {
+		g, ok := seen[code]
+		if !ok || g.pct == nil || *g.pct != *w.pct || g.window != w.window || g.sessionID != w.sessionID {
+			t.Fatalf("%s agent.context = %+v, want used %v window %d for session %s (two CC panes in one tmux instance must each carry their own usage); body=%s",
+				code, g, *w.pct, w.window, w.sessionID, rr.Body.String())
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("rows with context = %d, want exactly mt1code and mt2code; body=%s", len(seen), rr.Body.String())
+	}
+}

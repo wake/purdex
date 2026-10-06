@@ -59,6 +59,12 @@ type Module struct {
 	// because hot-path agent.status POSTs shouldn't contend with hook writes).
 	snapshotMu      sync.RWMutex
 	statusSnapshots map[string]statusSnapshot
+	// contextUsage keeps the last statusline context reading per CC session
+	// id (not per session code: two CC panes in one tmux session must not
+	// overwrite each other). Bounded by contextUsageCap; also under
+	// snapshotMu. usageSeq breaks eviction ties within one millisecond.
+	contextUsage map[string]ContextUsage
+	usageSeq     int64
 
 	// testObservers: per-nonce channel for the statusline self-test endpoint.
 	// Guarded by testMu (separate from snapshotMu and mu so test traffic
@@ -123,6 +129,7 @@ func New(events *store.AgentEventStore) (*Module, error) {
 		activeWatchers:     make(map[string]string),
 		activeProbeIntents: make(map[string]map[agentpkg.ProbeIntentKind]activeIntent),
 		statusSnapshots:    make(map[string]statusSnapshot),
+		contextUsage:       make(map[string]ContextUsage),
 		testObservers:      make(map[string]*testObserver),
 		pathHintDedup:      NewPathHintDedupCache(5 * time.Second),
 		pathHintBuffer:     NewPathHintRingBuffer(200),

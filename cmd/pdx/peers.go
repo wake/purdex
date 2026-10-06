@@ -481,7 +481,7 @@ func renderPeersAll(body []byte, jsonOutput bool, stdout, stderr io.Writer) int 
 }
 
 // formatPeersTable renders resp.Peers as a text/tabwriter table with columns
-// TITLE ADDRESS AGENT STATUS DELIVERABLE TMUX CWD, followed by the
+// TITLE ADDRESS AGENT STATUS CTX DELIVERABLE TMUX CWD, followed by the
 // host's partial-cause lines (writeHostDiagnostics) and a trailer line
 // naming this daemon's version.
 //
@@ -500,14 +500,15 @@ func renderPeersAll(body []byte, jsonOutput bool, stdout, stderr io.Writer) int 
 func formatPeersTable(resp peers.Envelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "TITLE\tADDRESS\tAGENT\tSTATUS\tDELIVERABLE\tTMUX\tCWD")
+	fmt.Fprintln(w, "TITLE\tADDRESS\tAGENT\tSTATUS\tCTX\tDELIVERABLE\tTMUX\tCWD")
 
 	for _, rec := range resp.Peers {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			sanitizeCell(rec.Title),
 			addressField(rec),
 			sanitizeCell(agentField(rec)),
 			sanitizeCell(statusField(rec)),
+			sanitizeCell(ctxField(rec)),
 			sanitizeCell(deliverableField(rec)),
 			sanitizeCell(tmuxField(rec)),
 			sanitizeCell(rec.Cwd),
@@ -592,19 +593,20 @@ func writeHostDiagnostics(buf *strings.Builder, prefix string, peerRows []peers.
 func formatPeersAllTable(resp peers.AllEnvelope) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "HOST\tTITLE\tADDRESS\tAGENT\tSTATUS\tDELIVERABLE\tTMUX\tCWD")
+	fmt.Fprintln(w, "HOST\tTITLE\tADDRESS\tAGENT\tSTATUS\tCTX\tDELIVERABLE\tTMUX\tCWD")
 
 	for _, h := range resp.Hosts {
 		if !h.OK {
 			continue
 		}
 		for _, rec := range h.Peers {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				sanitizeCell(h.Alias),
 				sanitizeCell(rec.Title),
 				addressField(rec),
 				sanitizeCell(agentField(rec)),
 				sanitizeCell(statusField(rec)),
+				sanitizeCell(ctxField(rec)),
 				sanitizeCell(deliverableField(rec)),
 				sanitizeCell(tmuxField(rec)),
 				sanitizeCell(rec.Cwd),
@@ -712,6 +714,16 @@ func statusField(rec peers.PeerRecord) string {
 		return "-"
 	}
 	return rec.Agent.Status
+}
+
+// ctxField renders the session's context usage, rounded, or "-" when unknown
+// (no agent, no reading, or a reading whose percentage CC has not reported
+// yet; lead-team-relay spec §8.6).
+func ctxField(rec peers.PeerRecord) string {
+	if rec.Agent == nil || rec.Agent.Context == nil || rec.Agent.Context.UsedPercentage == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%.0f%%", *rec.Agent.Context.UsedPercentage)
 }
 
 // deliverableField renders DELIVERABLE: "yes" when the row is usable,
