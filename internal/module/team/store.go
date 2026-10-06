@@ -1,0 +1,259 @@
+// Package teammod is the daemon's team module (spec §6, §9): it owns
+// team.db and the approval_requests table — one state machine for every
+// approval kind, closed by compare-and-set — and serves /api/team/*.
+package teammod
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	_ "modernc.org/sqlite"
+
+	"github.com/wake/purdex/internal/team"
+)
+
+// ErrNoSuchApproval is returned by the per-id methods for an unknown id.
+var ErrNoSuchApproval = errors.New("no such approval")
+
+// Store is the SQLite persistence of approval requests.
+type Store struct {
+	db *sql.DB
+}
+
+// OpenStore opens (or creates) team.db at path. ":memory:" is for tests.
+func OpenStore(path string) (*Store, error) {
+	dsn := path
+	if path != ":memory:" {
+		// busy_timeout: a concurrent writer waits instead of failing with SQLITE_BUSY.
+		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)"
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open team db: %w", err)
+	}
+	if path == ":memory:" {
+		db.SetMaxOpenConns(1)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS approval_requests (
+			id                TEXT PRIMARY KEY,
+			kind              TEXT    NOT NULL,
+			host_id           TEXT    NOT NULL,
+			origin_session_id TEXT    NOT NULL,
+			origin_json       TEXT    NOT NULL,
+			payload_json      TEXT    NOT NULL,
+			request_hash      TEXT    NOT NULL,
+			state             TEXT    NOT NULL,
+			created_at        INTEGER NOT NULL,
+			deadline_at       INTEGER NOT NULL,
+			lease_until       INTEGER NOT NULL,
+			decided_by_json   TEXT,
+			decided_at        INTEGER NOT NULL DEFAULT 0,
+			grant_json        TEXT
+		);
+		CREATE INDEX IF NOT EXISTS approval_requests_state_created
+			ON approval_requests (state, created_at);`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
+// Close closes the database.
+func (s *Store) Close() error { return s.db.Close() }
+
+const selectCols = `id, kind, host_id, origin_json, payload_json, request_hash, state,
+	created_at, deadline_at, lease_until, decided_by_json, decided_at, grant_json`
+
+type rowScanner interface{ Scan(dest ...any) error }
+
+// scanRow decodes one approval_requests row and its request hash.
+func scanRow(r rowScanner) (team.Approval, string, error) {
+	var a team.Approval
+	var hash, originJSON, payloadJSON string
+	var decidedBy, grant sql.NullString
+	if err := r.Scan(&a.ID, &a.Kind, &a.HostID, &originJSON, &payloadJSON, &hash, &a.State,
+		&a.CreatedAt, &a.DeadlineAt, &a.LeaseUntil, &decidedBy, &a.DecidedAt, &grant); err != nil {
+		return team.Approval{}, "", err
+	}
+	if err := json.Unmarshal([]byte(originJSON), &a.Origin); err != nil {
+		return team.Approval{}, "", fmt.Errorf("decode origin of %s: %w", a.ID, err)
+	}
+	a.Payload = json.RawMessage(payloadJSON)
+	if decidedBy.Valid {
+		a.DecidedBy = new(team.Client)
+		if err := json.Unmarshal([]byte(decidedBy.String), a.DecidedBy); err != nil {
+			return team.Approval{}, "", fmt.Errorf("decode decided_by of %s: %w", a.ID, err)
+		}
+	}
+	if grant.Valid {
+		a.Grant = new(team.Grant)
+		if err := json.Unmarshal([]byte(grant.String), a.Grant); err != nil {
+			return team.Approval{}, "", fmt.Errorf("decode grant of %s: %w", a.ID, err)
+		}
+	}
+	return a, hash, nil
+}
+
+// getRow reads one row with its hash; ErrNoSuchApproval when absent.
+func (s *Store) getRow(id string) (team.Approval, string, error) {
+	a, hash, err := scanRow(s.db.QueryRow(`SELECT `+selectCols+` FROM approval_requests WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return team.Approval{}, "", ErrNoSuchApproval
+	}
+	if err != nil {
+		return team.Approval{}, "", fmt.Errorf("get approval %s: %w", id, err)
+	}
+	return a, hash, nil
+}
+
+// Get returns the approval with id; ok is false when there is none.
+func (s *Store) Get(id string) (team.Approval, bool, error) {
+	a, _, err := s.getRow(id)
+	if errors.Is(err, ErrNoSuchApproval) {
+		return team.Approval{}, false, nil
+	}
+	return a, err == nil, err
+}
+
+// Create inserts a (state open) if its id is new and returns it with
+// inserted=true. When the id exists it inserts nothing and returns the
+// stored row and the hash it was stored with, so the caller can tell an
+// idempotent retry (same hash) from a conflicting reuse of the id.
+func (s *Store) Create(a team.Approval, hash string) (stored team.Approval, storedHash string, inserted bool, err error) {
+	originJSON, err := json.Marshal(a.Origin)
+	if err != nil {
+		return team.Approval{}, "", false, fmt.Errorf("encode origin: %w", err)
+	}
+	res, err := s.db.Exec(`
+		INSERT INTO approval_requests
+			(id, kind, host_id, origin_session_id, origin_json, payload_json, request_hash, state, created_at, deadline_at, lease_until)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO NOTHING`,
+		a.ID, string(a.Kind), a.HostID, a.Origin.SessionID, string(originJSON), string(a.Payload), hash,
+		string(team.StateOpen), a.CreatedAt, a.DeadlineAt, a.LeaseUntil)
+	if err != nil {
+		return team.Approval{}, "", false, fmt.Errorf("insert approval %s: %w", a.ID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return team.Approval{}, "", false, fmt.Errorf("insert approval %s rows affected: %w", a.ID, err)
+	}
+	stored, storedHash, err = s.getRow(a.ID)
+	if err != nil {
+		return team.Approval{}, "", false, err
+	}
+	return stored, storedHash, n == 1, nil
+}
+
+// Close is how a request leaves the open state. DecidedBy is set for
+// approved/denied only, Grant for approved only.
+type Close struct {
+	State     team.State
+	DecidedAt int64
+	DecidedBy *team.Client
+	Grant     *team.Grant
+}
+
+// CloseIfOpen is the compare-and-set every close goes through: the UPDATE
+// is guarded by state='open', so of any number of concurrent closes
+// exactly one sees RowsAffected()==1 and won. It returns the row as it is
+// after the attempt (the winner's close, for a loser too) and
+// ErrNoSuchApproval for an unknown id.
+func (s *Store) CloseIfOpen(id string, c Close) (team.Approval, bool, error) {
+	var decidedBy, grant any // NULL unless set
+	if c.DecidedBy != nil {
+		b, err := json.Marshal(c.DecidedBy)
+		if err != nil {
+			return team.Approval{}, false, fmt.Errorf("encode decided_by: %w", err)
+		}
+		decidedBy = string(b)
+	}
+	if c.Grant != nil {
+		b, err := json.Marshal(c.Grant)
+		if err != nil {
+			return team.Approval{}, false, fmt.Errorf("encode grant: %w", err)
+		}
+		grant = string(b)
+	}
+	res, err := s.db.Exec(`
+		UPDATE approval_requests
+		SET state = ?, decided_at = ?, decided_by_json = ?, grant_json = ?
+		WHERE id = ? AND state = 'open'`,
+		string(c.State), c.DecidedAt, decidedBy, grant, id)
+	if err != nil {
+		return team.Approval{}, false, fmt.Errorf("close approval %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return team.Approval{}, false, fmt.Errorf("close approval %s rows affected: %w", id, err)
+	}
+	a, _, err := s.getRow(id)
+	if err != nil {
+		return team.Approval{}, false, err
+	}
+	return a, n == 1, nil
+}
+
+// RenewLease moves an open request's lease forward to until (never back).
+// A closed or unknown id is left alone and is not an error.
+func (s *Store) RenewLease(id string, until int64) error {
+	if _, err := s.db.Exec(`
+		UPDATE approval_requests SET lease_until = MAX(lease_until, ?)
+		WHERE id = ? AND state = 'open'`, until, id); err != nil {
+		return fmt.Errorf("renew lease %s: %w", id, err)
+	}
+	return nil
+}
+
+// ExtendOpenLeases is the boot grace (spec §9.2): every open request's
+// lease becomes max(lease_until, until). It returns how many rows changed.
+func (s *Store) ExtendOpenLeases(until int64) (int64, error) {
+	res, err := s.db.Exec(`
+		UPDATE approval_requests SET lease_until = ?
+		WHERE state = 'open' AND lease_until < ?`, until, until)
+	if err != nil {
+		return 0, fmt.Errorf("extend open leases: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("extend open leases rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// ListOpen returns every open request, oldest first (created_at, id).
+func (s *Store) ListOpen() ([]team.Approval, error) {
+	rows, err := s.db.Query(`SELECT ` + selectCols + ` FROM approval_requests WHERE state = 'open' ORDER BY created_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list open approvals: %w", err)
+	}
+	defer rows.Close()
+	out := []team.Approval{}
+	for rows.Next() {
+		a, _, err := scanRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list open approvals: %w", err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list open approvals: %w", err)
+	}
+	return out, nil
+}
+
+// OpenByOrigin returns the open request of kind for the origin session, if any.
+func (s *Store) OpenByOrigin(sessionID string, kind team.Kind) (team.Approval, bool, error) {
+	a, _, err := scanRow(s.db.QueryRow(`SELECT `+selectCols+` FROM approval_requests
+		WHERE origin_session_id = ? AND kind = ? AND state = 'open' ORDER BY created_at, id LIMIT 1`, sessionID, string(kind)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return team.Approval{}, false, nil
+	}
+	if err != nil {
+		return team.Approval{}, false, fmt.Errorf("open approval by origin %s: %w", sessionID, err)
+	}
+	return a, true, nil
+}
