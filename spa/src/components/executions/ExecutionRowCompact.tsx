@@ -33,6 +33,8 @@ interface Props {
   onOpen?: () => void
   /** Present → a sibling 退出 button beside the open button (shown hosts only). */
   onExit?: () => void
+  /** The exit is on its way: the button stays (layout) but is disabled. */
+  exitPending?: boolean
 }
 
 const ROW_CLASS = 'flex items-center gap-1.5 w-full min-w-0 px-3 py-1 text-left'
@@ -49,7 +51,7 @@ function activityLabel(t: T, row: ExecutionSummary): string {
   return t(`executions.activity.${phase}`)
 }
 
-export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, onOpen, onExit }: Props) {
+export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, onOpen, onExit, exitPending = false }: Props) {
   const t = useI18nStore((s) => s.t)
   const age = relativeAge(row.updated_at, now)
   const sessionCode = daemonHostId ? sameHostSessionCode(row.origin, daemonHostId) : null
@@ -133,8 +135,9 @@ export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, 
         data-testid="executions-row-exit"
         aria-label={t('worker.exit.button')}
         title={t('worker.exit.button')}
+        disabled={exitPending}
         onClick={onExit}
-        className="absolute right-1 shrink-0 p-1 rounded bg-surface-secondary text-text-muted hover:text-status-error opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer"
+        className="absolute right-1 shrink-0 p-1 rounded bg-surface-secondary text-text-muted hover:text-status-error opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer disabled:opacity-40 disabled:cursor-default"
       >
         <SignOut size={12} aria-hidden="true" />
       </button>

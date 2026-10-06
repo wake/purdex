@@ -466,6 +466,50 @@ describe('ExecutionsView', () => {
     await waitFor(() => expect(useUndoToast.getState().toast?.message).toContain('ploom:agent-7'))
   })
 
+  it('a second click while the exit is pending sends no second request', async () => {
+    seedList([row({ id: 'I', state: 'idle' })])
+    let resolveExit!: (v: Awaited<ReturnType<typeof exitWorker>>) => void
+    vi.mocked(exitWorker).mockReturnValueOnce(new Promise((res) => { resolveExit = res }))
+    render(<ExecutionsView hostId={H} isActive />)
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(exitWorker).toHaveBeenCalledTimes(1)
+    await act(async () => { resolveExit({ exited: true, terminated: true, archived: true, state: 'terminated' }) })
+  })
+
+  it('after the exit resolves but before the refetch removes the row, a click still sends nothing', async () => {
+    seedList([row({ id: 'I', state: 'idle' })])
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: [row({ id: 'I', state: 'idle' })], next_cursor: '' })
+    render(<ExecutionsView hostId={H} isActive />)
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(exitWorker).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed exit frees the row to be tried again', async () => {
+    seedList([row({ id: 'I', state: 'idle' })])
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: [row({ id: 'I', state: 'idle' })], next_cursor: '' })
+    vi.mocked(exitWorker).mockRejectedValueOnce(new HandoffApiError(409, 'held_by', { principal: 'x' }))
+    render(<ExecutionsView hostId={H} isActive />)
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    await waitFor(() => expect(screen.getByTestId('executions-row-exit')).toBeEnabled())
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(exitWorker).toHaveBeenCalledTimes(2)
+  })
+
+  it('confirming for a row that has disappeared sends no request', () => {
+    seedList([row({ id: 'R', state: 'running' })])
+    render(<ExecutionsView hostId={H} isActive />)
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    act(() => { seedList([]) })
+    fireEvent.click(screen.getByTestId('exit-confirm'))
+    expect(exitWorker).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('exit-confirm')).toBeNull()
+  })
+
   it('a host hidden in this workbench offers no exit', () => {
     useShownHostsStore.setState({ ids: [OTHER] })
     seedList([row({ id: 'I', state: 'idle' })])

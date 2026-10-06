@@ -23,9 +23,11 @@ interface Props {
   onOpen?: (executionId: string) => void
   /** Only passed for a shown host; rows get a 退出 action. */
   onExit?: (row: ExecutionSummary) => void
+  /** Execution ids whose exit is on its way: their 退出 button is disabled. */
+  exitPending?: ReadonlySet<string>
 }
 
-export function ExecutionsGroup({ group, daemonHostId, now, showCost, onOpen, onExit }: Props) {
+export function ExecutionsGroup({ group, daemonHostId, now, showCost, onOpen, onExit, exitPending }: Props) {
   const t = useI18nStore((s) => s.t)
   const key = KNOWN_SOURCES[group.source]
   const label = key ? t(key) : group.source
@@ -35,7 +37,7 @@ export function ExecutionsGroup({ group, daemonHostId, now, showCost, onOpen, on
       <div className="px-3 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-text-muted truncate">{label}</div>
       {onOpen ? (
         group.rows.map((row) => (
-          <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={() => onOpen(row.id)} onExit={onExit ? () => onExit(row) : undefined} />
+          <ExecutionRowCompact key={row.id} row={row} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={() => onOpen(row.id)} onExit={onExit ? () => onExit(row) : undefined} exitPending={exitPending?.has(row.id)} />
         ))
       ) : (
         // Non-openable rows (a hidden host, plan H2d-2) are list items; this is their list.

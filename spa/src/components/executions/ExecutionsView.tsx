@@ -4,7 +4,7 @@
 // per-host list store (one site-wide SSE per host, shared with the Host → Nex
 // table). Nexen readiness comes from `useNexHostStore` only; this view never
 // reads `HostInfo.nex` itself.
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Circle, Spinner } from '@phosphor-icons/react'
 import { useHostExecutions } from '../../hooks/useHostExecutions'
 import { useHostLook } from '../../lib/host-look'
@@ -52,6 +52,18 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
   const groups = useMemo(() => groupBySource(live), [live])
   const shown = useIsRefShown(id === '' ? null : id)
   const [confirmExitId, setConfirmExitId] = useState<string | null>(null)
+  // Exits on their way, by execution id (this view is one host's, so the id is enough). The ref is the
+  // same-tick guard; the state renders the disabled button. A failure frees the id at once; a success
+  // keeps it until the row is gone (or no longer live) from the list.
+  const pendingRef = useRef<Set<string>>(new Set())
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set())
+  const setPendingIds = useCallback((next: Set<string>) => { pendingRef.current = next; setPending(next) }, [])
+  useEffect(() => {
+    if (pendingRef.current.size === 0) return
+    const liveIds = new Set(live.map((r) => r.id))
+    const kept = new Set([...pendingRef.current].filter((x) => liveIds.has(x)))
+    if (kept.size !== pendingRef.current.size) setPendingIds(kept)
+  }, [live, setPendingIds])
 
   if (id === '') return null
 
@@ -64,10 +76,20 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
   }
 
   const runExit = async (executionId: string) => {
+    if (pendingRef.current.has(executionId)) return
+    setPendingIds(new Set(pendingRef.current).add(executionId))
+    let keep = false
     try {
-      await exitWorker({ hostId: id, executionId })
+      const result = await exitWorker({ hostId: id, executionId })
+      keep = result.exited !== false
     } catch (err) {
       useUndoToast.getState().show(exitErrorMessage(err, t))
+    } finally {
+      if (!keep) {
+        const next = new Set(pendingRef.current)
+        next.delete(executionId)
+        setPendingIds(next)
+      }
     }
   }
   // A running worker is confirmed first; any other live worker exits at once.
@@ -116,7 +138,7 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
           <p data-testid="executions-empty" className="px-3 py-2 text-xs text-text-muted">{t('executions.empty')}</p>
         )}
         {groups.map((group) => (
-          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={shown ? open : undefined} onExit={shown ? requestExit : undefined} />
+          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={shown ? open : undefined} onExit={shown ? requestExit : undefined} exitPending={pending} />
         ))}
       </>
     )
@@ -135,7 +157,7 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
       {confirmExitId !== null && (
         <ConfirmDialog testIdPrefix="exit" title={t('worker.exit.confirm_title')} body={t('worker.exit.confirm_running')}
           confirmLabel={t('worker.exit.button')} onCancel={() => setConfirmExitId(null)}
-          onConfirm={() => { const eid = confirmExitId; setConfirmExitId(null); void runExit(eid) }} />
+          onConfirm={() => { const eid = confirmExitId; setConfirmExitId(null); if (live.some((r) => r.id === eid)) void runExit(eid) }} />
       )}
     </div>
   )
