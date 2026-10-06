@@ -118,6 +118,14 @@ A probe mod was loaded into a throwaway `claude` in tmux through `CLAUDE_CODE_PL
 - **M10 Electron's Touch ID WebAuthn needs a real signing identity.** `app.configureWebAuthn({ touchID: { keychainAccessGroup } })` exists, but Chromium's Touch ID authenticator requires the `keychain-access-groups` entitlement and a matching provisioning profile (Electron docs).
   - Purdex.app is ad-hoc signed; the signing roadmap's Apple Developer stage is not done.
   - Keychain items created without that entitlement are reported to fail with `-34018` (Apple developer forums; not measured here).
+- **M11 Every new turn passes `prompt.submit`, and a hook can hold it past 10 s.** Probe mod, idle session; prompts whose text held `HOLD15` were held:
+  - **A peer message** (`pdx msg send`) raised `session.receive`, then `prompt.submit` with `origin {"kind":"peer"}`.
+  - **A typed prompt** raised `prompt.submit` with `origin {"kind":"composer"}`.
+  - In both cases the hook awaited `$.process.run(['/bin/sleep','15'])`, was released 15 s later, and only then did `turn.start` fire. The 10 s hook budget did not cut it.
+  - While held, the typed prompt shows as sent, with the busy spinner.
+- **M12 A plugin's re-submitted prompt is not the original** (2.1.291 types, `PromptSubmitArgs.asUser`).
+  - `asUser: true` removes the "The <plugin> plugin sent a message" frame.
+  - But "`@file` mentions and pasted images are not expanded for a plugin's prompt, `asUser` or not", and the transcript still names the plugin.
 
 ### 3.3 Code (re-verified on origin/main `de37a4e5`, alpha.505)
 
@@ -663,10 +671,15 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
 
 **⟲ derived (b): the lock (U7) for a request the mod makes.** The request opens at a turn's end, so nothing is running. The lock means **no new turn starts until the request closes**.
 - **The hold.** The mod's `prompt.submit` hook awaits `pdx relay wait <request>` through `$.process.run`.
-  - This applies to the main conversation, whatever the origin: the user, a peer message, or a queued prompt.
-  - A hook's 10 s budget counts only its own code, never a `$` call in flight (`HookBudget` in the 2.1.291 types; the mods reference: "a `next` or `$` call in flight does not count"). So the hold lasts until the request closes.
+  - This applies to the main conversation, whatever the origin. Typed prompts and peer messages both pass this hook (M11).
+  - A hook's 10 s budget counts only its own code, never a `$` call in flight (`HookBudget` in the 2.1.291 types; the mods reference: "a `next` or `$` call in flight does not count"). M11 measured a 15 s hold. So the hold lasts until the request closes.
+  - **Fallback, if a later Claude Code stops routing peer deliveries through `prompt.submit`** (air26 review): consume them in `session.receive` (M1), and replay them once the request closes. The mod's tests pin the current routing, so such a change turns a test red.
 - **While holding:** status line `接力等待核准中`, plus one toast naming where to approve.
-- **Approved:** the held prompt is dropped, with the reason `接力已核准，這則訊息會在接手後重送` (`{drop}`). After the seed turn, the mod re-submits its text, so it reaches the new conversation. A peer message keeps its envelope text.
+- **Approved:** the held prompts go through **into the current conversation** (`next(e)`), and the relay starts right after.
+  - The mod submits the write prompt once idle. It recognises its own write turn by the turn that `$.prompt.submit` started, not by "the next `turn.complete`". So queued prompts that run first do not trigger the handoff check early.
+  - **⟲ changed after air26's review (3), which asked to drop and then re-submit with `asUser: true`.** A re-submitted prompt loses its `@file` mentions and pasted images, and stays attributed to the plugin (M12). Letting the person's own prompt run in the old conversation keeps it whole. That costs one turn of context, which is affordable at 70–80% used.
+  - The handoff then records that turn too.
+  - If the plan finds the write turn cannot be told apart reliably, it falls back to air26's way: drop, then re-submit after the seed, `asUser: true` for a typed prompt and the envelope kept for a peer message. In that case, a prompt carrying `@file` mentions or images is released instead of dropped.
 - **Denied or timed out:** the held prompt goes through unchanged (`next(e)`).
 - **Esc:** it abandons that dispatch, so that prompt is not sent. The request stays open.
 - **No prompt arrives:** the mod also waits from a timer (`$.clock.after` → `pdx relay wait`), so an approval starts the relay at once.
@@ -800,7 +813,10 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | P7 | Detection and the 70% notice to the lead; persisted usage on team rows; member auto-compact report | 3 |
 
 **Notes on the split:**
-- P5a/P5b depend on P3a–P3c, because every self relay needs an approval with presence (U13).
+- **P5a/P5b depend on P2 and P3c only.** A self-relay approval is one click with no presence (U13a), so the hardest measurement, the Secure Enclave presence key (P3b step 0), never blocks self relay (air26 review).
+- **Suggested order:** P0, P1, P2, P3c, P5a, P5b, P3a, P3b, P4, P6, P7.
+  - Lead requests exist from P2, but before P3a/P3b nothing can approve one: it can only be denied or time out.
+  - P4 (team, spawn) and everything after it need P3a/P3b.
 - P6 may split in two: daemon first, then mod.
 - The mod has its own tests, run by `claude plugin test`.
 - Daemon deploys are batched with the other daemon lines (conversation-entity D14 practice).
@@ -828,6 +844,8 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | U13 (c) | Ask again after 10 more points; auto-compact never waits, and only an already-approved relay skips it | The session must never hang |
 | U13 (d) | No daemon: no ask, no relay, compaction runs | Approval lives on the daemon |
 | §8.4 (review e) | `previous_refs` uncapped; members told the lead's new ref | A cap breaks old lead refs |
+| §8.7 (review 3) | On approval, held prompts run in the current conversation, and the relay follows; no drop and re-submit | A re-submitted prompt loses `@file` and images, and stays attributed to the plugin (M12); air26's way is the fallback |
+| §12 (review 1) | P5 depends on P2 and P3c only; suggested order puts P5 before P3a/P3b | U13a: no presence for self relay |
 | §8.3 (review f) | Retention: 3 per chain, 14 days, 3 days for failed; the daemon cleans | The user does not want files piling up |
 
 ## 14. Exit codes (D7, extended)
@@ -883,7 +901,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 - headless does nothing;
 - **self relay under U13:**
   - a prompt that arrives while a request is open waits;
-  - on approval it is dropped and re-sent after the seed;
+  - on approval it runs in the current conversation, and the write turn is recognised by its own turn even with queued prompts ahead of it;
   - on denial it passes unchanged;
   - asking again only at +10 points;
   - auto-compact runs, and cancels the request, unless the relay is already approved;
@@ -903,6 +921,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 - dropping the claim's session check lets another session claim → red;
 - dropping `previous_refs` from Resolve leaves the old ref at `peer_not_found` → red;
 - dropping the prompt hold lets a prompt start a turn while a self-relay request is open → red;
+- treating "the next `turn.complete`" as the write turn makes a queued prompt trigger the handoff check early → red;
 - a `lead` request approved without a signature must fail, while a `self_relay` approve needs none → red if the check reads the request body instead of the stored kind.
 
 **Real acceptance (mlab, then air26):**
@@ -910,13 +929,13 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 2. A session requests lead; the user approves on air26's App with Touch ID; the dialog closes on a19's App at the same moment.
 3. The lead spawns two members, and relays one at 70% on a test threshold (`PDX_RELAY_THRESHOLD`, as in the prototype). The old ref still reaches it.
 4. Restart the daemon during a pending request and during a relay; both finish.
-5. Self relay on a solo session at a test threshold: the dialog appears on every client; deny, then see it ask again at +10 points; approve with one click, no Touch ID; a message typed during the wait reaches the new conversation.
+5. Self relay on a solo session at a test threshold: the dialog appears on every client; deny, then see it ask again at +10 points; approve with one click, no Touch ID; a message typed during the wait is answered first, intact, then the relay runs.
 
 ## 16. Not in scope
 
 - Member visuals (U11).
 - Nexen worker relay: it goes through Nexen rebuild.
-- Cross-host teams, adoption, the hard lock, human-presence approval, and the handoff memory store: all in §11.
+- Cross-host teams, adoption, the hard lock, Electron WebAuthn, and the handoff memory store: all in §11.
 - Claude Code's built-in Agent Teams.
 - **Turning the browser SPA off (U14).** Here U14 is a premise only.
   - The unmerged web version (branch `worktree-web-version`; `purdex.mlab.host` in front of the daemon) is affected.
