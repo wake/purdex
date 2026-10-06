@@ -32,6 +32,7 @@ import {
 import { TabContextMenu } from './components/TabContextMenu'
 import { RenamePopover } from './components/RenamePopover'
 import { HandoffDialogHost } from './components/HandoffDialogHost'
+import { ApprovalDialogHost } from './components/ApprovalDialogHost'
 import { ThemeInjector } from './components/ThemeInjector'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { getPlatformCapabilities } from './lib/platform'
@@ -281,6 +282,8 @@ export default function App() {
         )}
         {/* The one "Hand to nex" dialog: the pane context menu and the status bar open it through its store. */}
         <HandoffDialogHost />
+        {/* The one approval dialog (lead-team spec §6.3): fed by the approval.request WS branch and the daemon's snapshot. */}
+        <ApprovalDialogHost />
         </div>
       </div>
       <GlobalUndoToast />
