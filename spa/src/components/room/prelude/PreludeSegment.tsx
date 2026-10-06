@@ -22,7 +22,7 @@ import type { ContentBlock, StreamMessage, UserMessage } from '../../../lib/nex/
 import { isOpeningLine } from '../../../lib/nex/turns'
 import { AttachmentSourceContext } from '../attachment-source'
 import { isOmittedMedia } from './placeholder-utils'
-import { useI18nStore } from '../../../stores/useI18nStore'
+import { useDateLocale, useI18nStore } from '../../../stores/useI18nStore'
 import { classifyTurnOperations, type TurnOperation } from '../../../lib/nex/operation-status'
 import { chatToolsKey } from '../../../lib/nex/transcript-search'
 import type { PreludeBlock, PreludeEntry, PreludeView } from '../../../lib/nex/prelude'
@@ -66,7 +66,7 @@ export type PreludeSegmentProps = {
 } & PreludeSegmentSlice
 
 /**
- * What stands in place of an omitted image / document once its line draws thumbnails: a block type no
+ * What stands in place of an omitted image once its line draws thumbnails: a block type no
  * renderer draws (MessageRow and ChatTurnBody return null for an unknown type; search and isOpeningLine
  * read the transcript's own messages, never this copy). In place, so every other block keeps its index,
  * and with it its search unit id and fold key, wherever the images sat.
@@ -74,19 +74,25 @@ export type PreludeSegmentProps = {
 const THUMBNAIL_SLOT = Object.freeze({ type: 'purdex_thumbnail_slot' }) as unknown as ContentBlock
 
 /**
+ * An omitted image: the only kind a send's attachments carry (Nexen's `send.attachments.image`). An omitted
+ * document is never paired; it keeps its placeholder.
+ */
+const isOmittedImage = (b: ContentBlock): boolean => b.type === 'image' && isOmittedMedia(b)
+
+/**
  * The prompt lines that draw thumbnails, by message index; null = none do. The segment's opening lines
- * that carry omitted images / documents pair with the stint's attachment lists (k-th with k-th) only when
- * both counts match: as many lines as lists, and each line exactly as many omitted blocks as its list holds.
- * A paired line is a copy whose `purdex_attachments` is its list, each of those blocks a slot, the rest kept.
+ * that carry omitted images pair with the stint's attachment lists (k-th with k-th) only when both
+ * counts match: as many lines as lists, and each line exactly as many omitted images as its list holds.
+ * A paired line is a copy whose `purdex_attachments` is its list, each of those images a slot, the rest kept.
  */
 function thumbnailPrompts(messages: readonly StreamMessage[], drawn: readonly number[], lists: readonly (readonly AttachmentMeta[])[]): ReadonlyMap<number, StreamMessage> | null {
-  const prompts = drawn.filter((i) => isOpeningLine(messages[i]) && (messages[i] as UserMessage).message.content.some(isOmittedMedia))
+  const prompts = drawn.filter((i) => isOpeningLine(messages[i]) && (messages[i] as UserMessage).message.content.some(isOmittedImage))
   if (prompts.length === 0 || prompts.length !== lists.length) return null
   const out = new Map<number, StreamMessage>()
   for (const [k, i] of prompts.entries()) {
     const u = messages[i] as UserMessage
-    if (u.message.content.filter(isOmittedMedia).length !== lists[k].length) return null
-    const content = u.message.content.map((b) => (isOmittedMedia(b) ? THUMBNAIL_SLOT : b))
+    if (u.message.content.filter(isOmittedImage).length !== lists[k].length) return null
+    const content = u.message.content.map((b) => (isOmittedImage(b) ? THUMBNAIL_SLOT : b))
     out.set(i, { ...u, message: { ...u.message, content }, purdex_attachments: lists[k] } as StreamMessage)
   }
   return out
@@ -94,6 +100,8 @@ function thumbnailPrompts(messages: readonly StreamMessage[], drawn: readonly nu
 
 export default function PreludeSegment(props: PreludeSegmentProps) {
   const t = useI18nStore((s) => s.t)
+  // The UI language's tag (never the browser's): the budget line's count is grouped as the page's language does.
+  const uiLocale = useDateLocale()
   const { view } = props
   // null (failed) draws like undefined (loading, or a plain segment): the transcript's own.
   const enrichment = useStintEnrichment(props.hostId, props.stintId) ?? null
@@ -170,7 +178,7 @@ export default function PreludeSegment(props: PreludeSegmentProps) {
   const stintSource = useMemo(() => (props.stintId === null ? null : { hostId: props.hostId, executionId: props.stintId }), [props.hostId, props.stintId])
   const source = thumbed && stintSource ? stintSource : paneSource
   const budgetLine = enrichment?.truncated
-    ? <div data-testid="prelude-enrichment-truncated" className="text-xs text-text-muted">{t('worker.prelude.enrichment_truncated', { n: new Intl.NumberFormat().format(ENRICHMENT_EVENT_BUDGET) })}</div>
+    ? <div data-testid="prelude-enrichment-truncated" className="text-xs text-text-muted">{t('worker.prelude.enrichment_truncated', { n: new Intl.NumberFormat(uiLocale).format(ENRICHMENT_EVENT_BUDGET) })}</div>
     : null
 
   const entryNode = (e: Exclude<PreludeEntry, { kind: 'message' }>): ReactNode => {

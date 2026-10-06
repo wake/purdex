@@ -875,20 +875,32 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection enrichmen
     expect(screen.queryByTestId('prelude-enrichment-truncated')).toBeNull()
   })
 
-  it('a stint over the budget says so in one muted line, the last of its segment', async () => {
-    draw(createStintEnrichmentCache(vi.fn(async () => pageOf(many(5001)))))
-    const line = await screen.findByTestId('prelude-enrichment-truncated')
-    expect(line.textContent).toBe('This worker segment has too many events; only the first 5,000 were used.')
-    expect(line.className).toBe('text-xs text-text-muted')
-    // Right after the segment's last row, before the handoff that closes the section.
-    const kids = [...screen.getByTestId('worker-prelude').children]
-    expect(kids.at(-2)).toBe(line)
-    expect(kids.at(-3)!.getAttribute('data-prelude-pos')).toBe(mode === 'room' ? '7' : '4')
-    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+  it('a stint over the budget says so in one muted line, the last of its segment, its count in the UI language', async () => {
+    // A runner whose own default groups 5000 as "5.000": the count must follow the UI language, never the runner's.
+    const RealNumberFormat = Intl.NumberFormat
+    const numberFormat = vi.spyOn(Intl, 'NumberFormat').mockImplementation(function (locales?: string | string[], options?: Intl.NumberFormatOptions) {
+      return new RealNumberFormat(locales ?? 'de-DE', options)
+    } as unknown as typeof Intl.NumberFormat)
+    let custom: string | null = null
     try {
+      draw(createStintEnrichmentCache(vi.fn(async () => pageOf(many(5001)))))
+      const line = await screen.findByTestId('prelude-enrichment-truncated')
+      expect(line.textContent).toBe('This worker segment has too many events; only the first 5,000 were used.')
+      expect(line.className).toBe('text-xs text-text-muted')
+      // Right after the segment's last row, before the handoff that closes the section.
+      const kids = [...screen.getByTestId('worker-prelude').children]
+      expect(kids.at(-2)).toBe(line)
+      expect(kids.at(-3)!.getAttribute('data-prelude-pos')).toBe(mode === 'room' ? '7' : '4')
+      act(() => { useI18nStore.getState().setLocale('zh-TW') })
       expect(line.textContent).toBe('這段 worker 的事件太多，只補充了前 5,000 筆')
+      // A user-imported locale names no language: its missing keys are English, and so is its count.
+      custom = useI18nStore.getState().importLocale({ name: 'Mine', translations: {} })
+      act(() => { useI18nStore.getState().setLocale(custom!) })
+      expect(line.textContent).toBe('This worker segment has too many events; only the first 5,000 were used.')
     } finally {
+      numberFormat.mockRestore()
       act(() => { useI18nStore.getState().setLocale('en') })
+      if (custom) useI18nStore.getState().deleteCustomLocale(custom)
     }
   })
 
@@ -1206,5 +1218,70 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection attachmen
       r.unmount()
     }
     expect(api.fetchAttachment).not.toHaveBeenCalled()
+  })
+
+  // Codex R1-1: a send's attachments are images only (Nexen's `send.attachments.image`); an omitted document never pairs.
+  describe('documents never pair', () => {
+    const pdf = (kb: number) => ({ type: 'document', source: { type: 'omitted', media_type: 'application/pdf', bytes: kb * 1024 } })
+    const docPlaceholders = () => screen.queryAllByText(/^\[document · pdf · \d+ KB\]$/).map((e) => e.textContent)
+    const units = () => [...document.querySelectorAll('[data-search-unit]')].map((e) => [e.getAttribute('data-search-unit'), e.textContent])
+    // A prompt with an image AND a document (the document first), then an image-only one.
+    const mixed = derivePrelude([
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+      m('2', 'user', [pdf(5), { type: 'text', text: 'compare these' }, img(1)]),
+      m('3', 'assistant', [{ type: 'text', text: 'they differ' }]),
+      m('4', 'user', [img(3)]),
+      m('5', 'assistant', [{ type: 'text', text: 'a third' }]),
+    ])
+
+    it('a document-only prompt is unchanged: never counted, never replaced', async () => {
+      const docOnly = derivePrelude([
+        { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+        m('2', 'user', [{ type: 'text', text: 'read this' }, pdf(5)]),
+        m('3', 'assistant', [{ type: 'text', text: 'read it' }]),
+      ])
+      const plain = plainDom(docOnly)
+      for (const events of [[sent(1, [att('a')])], [sent(1, [])]]) {
+        const cache = cacheOf(events)
+        const r = draw(cache, docOnly)
+        await settled(cache)
+        expect(dom()).toBe(plain)
+        expect(docPlaceholders()).toEqual(['[document · pdf · 5 KB]'])
+        r.unmount()
+      }
+      expect(api.fetchAttachment).not.toHaveBeenCalled()
+    })
+
+    it('an image + document prompt whose image count matches: a thumbnail for the image, the document keeps its placeholder', async () => {
+      const r = draw(null, mixed)
+      const before = units()
+      r.unmount()
+      draw(cacheOf([sent(1, [att('a')]), sent(2, [att('c')])]), mixed)
+      await waitFor(() => expect(thumbs()).toHaveLength(2))
+      expect(thumbs(row('2'))).toHaveLength(1)
+      expect(thumbs(row('4'))).toHaveLength(1)
+      expect(placeholders()).toEqual([])
+      expect(docPlaceholders()).toEqual(['[document · pdf · 5 KB]'])
+      expect(row('2').contains(screen.getByText('[document · pdf · 5 KB]'))).toBe(true)
+      expect(units()).toEqual(before)
+      await waitFor(() => expect(fetched()).toHaveLength(2))
+      expect(fetched().sort()).toEqual([['h', 'exc_A', 'a'.repeat(64)], ['h', 'exc_A', 'c'.repeat(64)]])
+    })
+
+    it.each<[string, NexEvent[]]>([
+      ['one list too few', [sent(1, [att('a')])]],
+      ['one list too many', [sent(1, [att('a')]), sent(2, [att('c')]), sent(3, [att('d')])]],
+      // Two lists for the image AND the document of prompt 2: a document is no attachment, so this is a mismatch.
+      ['a list counting the document', [sent(1, [att('a'), att('b')]), sent(2, [att('c')])]],
+    ])('%s: today\'s DOM, nothing fetched', async (_, events) => {
+      const plain = plainDom(mixed)
+      const cache = cacheOf(events)
+      draw(cache, mixed)
+      await settled(cache)
+      expect(dom()).toBe(plain)
+      expect(placeholders()).toHaveLength(2)
+      expect(docPlaceholders()).toHaveLength(1)
+      expect(api.fetchAttachment).not.toHaveBeenCalled()
+    })
   })
 })
