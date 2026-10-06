@@ -1,6 +1,6 @@
 # Lead / member / team and context relay — Implementation Plan (v1)
 
-> **Status (2026-10-07):** resumed. Written by `mlab/_v3o1ps` (header, P0, P1), continued by `mlab/_81nu3d` (P2a, P2b, P3). The branch is rebased onto origin/main `fb9fcbd8` (alpha.508); every `file:line` below was re-verified against that commit. Not yet through codex review.
+> **Status (2026-10-07):** resumed. Written by `mlab/_v3o1ps` (header, P0, P1), continued by `mlab/_81nu3d` (P2a, P2b, P3). The branch is rebased onto origin/main `fb9fcbd8` (alpha.508); every `file:line` below was re-verified against that commit. First codex plan round done 2026-10-07; its five test/contract findings (F4 inflight route and SPA fetch, F5 two-pane usage test, F6 `pdx lead request` restart end-to-end test, F7 three-way CAS race, F8 closed-before-opened tombstones) are applied in this version, and every Go block of P2a/P2b plus the TS of Tasks 3.1, 3.2 and 3.7 was re-compiled and re-run in a scratch copy.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -53,8 +53,8 @@
 
 1. **A statusline payload without `session_id`, or with `used_percentage: null`** (every session's first refresh, measured 2026-10-06): no context is recorded, `pdx peers` shows `-`, and nothing panics. → Task 1.1, Task 1.3.
 2. **Two CC panes in one tmux session:** each row shows its own session's usage, not the last writer's. → Task 1.1, Task 1.2.
-3. **The daemon restarts while `pdx lead request` is long-polling:** the CLI prints the restart line once, re-polls the **same** request id after the new `boot_id` answers, and the request is still open, with its lease extended at boot. → Task 2.4 (`TestGet_LongPollReturnsOnStopAndOnTimer`), Task 2.6 (`TestStart_ExtendsLeasesAndSnapshotsOpenRequests`), Task 2b.1 (`TestDo_RefusedThenNewBootIDThenSucceeds`), Task 2b.3 (the poll loop re-polls the same id).
-4. **A decide racing the deadline sweeper and a cancel:** exactly one close wins. The loser gets `409 already_decided`, carrying the winner's `decided_by`, and one `closed` event is broadcast. → Task 2.2, Task 2.4.
+3. **The daemon restarts while `pdx lead request` is long-polling:** the CLI prints the restart line once, re-polls the **same** request id after the new `boot_id` answers, and the request is still open, with its lease extended at boot. → Task 2.4 (`TestGet_LongPollReturnsOnStopAndOnTimer`), Task 2.6 (`TestStart_ExtendsLeasesAndSnapshotsOpenRequests`), Task 2b.1 (`TestDo_RefusedThenNewBootIDThenSucceeds`), Task 2b.3 (`TestLeadRequest_SurvivesDaemonRestartMidPoll`: end to end through `lead.go`, two fake daemons on one port).
+4. **A decide racing the deadline sweeper and a cancel:** exactly one close wins. The losing decide gets `409 already_decided` carrying the winner's row (`decided_by` included when a decide won), the losing `DELETE` gets that same row as its `200` body, and one `closed` event is broadcast. → Task 2.2 (`TestStore_CloseIfOpenExactlyOneWinner`, timeout / denied / cancelled), Task 2.4 (`closeAs`), Task 2.5 (`TestTick_DecideSweeperAndCancelCloseOnce`).
 5. **A Purdex.app whose host socket drops while the dialog is open:**
    - the dialog stays, with its buttons disabled;
    - on reconnect, the snapshot neither duplicates the request nor revives one that closed meanwhile;
@@ -485,19 +485,26 @@ func (u *usageOwners) ContextUsage(sessionID string) (agent.ContextUsage, bool) 
 
 var _ agent.ContextUsageReader = (*usageOwners)(nil)
 
+// Review Focus 2: two CC panes in one tmux instance (inst1). mt1 has a
+// registry entry (fixture 76973) and is at 72 %; mt2 is owner-only (no
+// registry entry, so its row is inbox_dead) and is at 10 %. Each row must
+// carry its own session's usage, never the last writer's.
 func TestLocalEnvelope_AttachesContextUsageBySessionID(t *testing.T) {
 	dir := t.TempDir()
 	writeRegistryFixture(t, dir, "76973.json", fixture76973)
 	sessions := &fakeSessions{sessions: []session.SessionInfo{
 		{Code: "mt1code", Name: "mt1", Cwd: "/Users/wake/Workspace/wake/purdex", TmuxInstance: "inst1"},
+		{Code: "mt2code", Name: "mt2", Cwd: "/Users/wake/Workspace/wake/purdex", TmuxInstance: "inst1"},
 	}}
-	pct := 72.0
+	pct1, pct2 := 72.0, 10.0
 	owners := &usageOwners{
 		fakeOwners: &fakeOwners{owners: map[string]agent.PaneOwner{
 			"mt1code": {AgentType: "cc", SessionID: "fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c", Cwd: "/Users/wake/Workspace/wake/purdex", TmuxPaneID: "%10", LastSeenAt: 1789314156000, Status: "busy"},
+			"mt2code": {AgentType: "cc", SessionID: "second-session-id", Cwd: "/Users/wake/Workspace/wake/purdex", TmuxPaneID: "%11", LastSeenAt: 1789314156000, Status: "idle"},
 		}},
 		usage: map[string]agent.ContextUsage{
-			"fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c": {UsedPercentage: &pct, WindowSize: 1000000, At: 5},
+			"fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c": {UsedPercentage: &pct1, WindowSize: 1000000, At: 5},
+			"second-session-id":                    {UsedPercentage: &pct2, WindowSize: 200000, At: 6},
 		},
 	}
 	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
@@ -512,7 +519,8 @@ func TestLocalEnvelope_AttachesContextUsageBySessionID(t *testing.T) {
 		Peers []struct {
 			SessionCode string `json:"session_code"`
 			Agent       *struct {
-				Context *struct {
+				SessionID string `json:"session_id"`
+				Context   *struct {
 					UsedPercentage *float64 `json:"used_percentage"`
 					Window         int      `json:"window"`
 				} `json:"context"`
@@ -522,20 +530,36 @@ func TestLocalEnvelope_AttachesContextUsageBySessionID(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
+	type usage struct {
+		sessionID string
+		pct       *float64
+		window    int
+	}
+	seen := map[string]usage{} // by session code
 	for _, p := range got.Peers {
-		if p.SessionCode != "mt1code" {
+		if p.Agent == nil || p.Agent.Context == nil {
 			continue
 		}
-		if p.Agent == nil || p.Agent.Context == nil || p.Agent.Context.UsedPercentage == nil || *p.Agent.Context.UsedPercentage != 72 || p.Agent.Context.Window != 1000000 {
-			t.Fatalf("mt1 agent.context = %+v; body=%s", p.Agent, rr.Body.String())
-		}
-		return
+		seen[p.SessionCode] = usage{p.Agent.SessionID, p.Agent.Context.UsedPercentage, p.Agent.Context.Window}
 	}
-	t.Fatalf("mt1code not in peers: %s", rr.Body.String())
+	want := map[string]usage{
+		"mt1code": {sessionID: "fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c", pct: &pct1, window: 1000000},
+		"mt2code": {sessionID: "second-session-id", pct: &pct2, window: 200000},
+	}
+	for code, w := range want {
+		g, ok := seen[code]
+		if !ok || g.pct == nil || *g.pct != *w.pct || g.window != w.window || g.sessionID != w.sessionID {
+			t.Fatalf("%s agent.context = %+v, want used %v window %d for session %s (two CC panes in one tmux instance must each carry their own usage); body=%s",
+				code, g, *w.pct, w.window, w.sessionID, rr.Body.String())
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("rows with context = %d, want exactly mt1code and mt2code; body=%s", len(seen), rr.Body.String())
+	}
 }
 ```
 
-  If `session_code` is not the JSON key `PeerRecord` uses for `SessionCode`, read it from `internal/peers/record.go` and adjust the one tag; the assertion stays.
+  If `session_code` is not the JSON key `PeerRecord` uses for `SessionCode`, read it from `internal/peers/record.go` and adjust the one tag; the assertions stay. `AgentInfo.SessionID` is `json:"session_id,omitempty"` (`record.go:21`). The mt2 row has no registry entry, so it is the owner-only `inbox_dead` shape of `TestBuild_OwnerOnlyRowUsesOwnerCwd`; `ownerFallbackAgent` (`record.go:303-306`) carries `owner.SessionID`, which is what `Build`'s context loop keys on — so an owner-only pane shows its usage too. Dropping the per-session-id lookup in favour of "the last reading posted" turns this test red on whichever of the two rows got the other's number (mutation deliverable for Review Focus 2).
 
 - [ ] **Step 5: Run.**
   - Run: `go test ./internal/peers/ ./internal/module/peers/ -v -run 'Context|Cwd'`, then the full packages: `go test ./internal/peers/ ./internal/module/peers/`
@@ -641,7 +665,7 @@ func TestLocalEnvelope_AttachesContextUsageBySessionID(t *testing.T) {
 
 ## PR P2a — daemon: `team` module, `team.db`, approval requests (spec §6.2, §6.5, §9.2, §15)
 
-**Scope.** The daemon half of the lead request: a leaf wire package (`internal/team`), a new daemon module `internal/module/team` (package `teammod`) that owns `team.db` and the `approval_requests` table — one state machine, closed by compare-and-set — and serves the five `/api/team/approvals` routes behind `TokenAuth`; an exported origin resolver in the peers module that attributes a caller's `origin_inbox` to a live CC session; the `approval.request` host event (`opened` / `closed` / `snapshot`); a 1 s sweeper (deadline → `timeout`, lease → `abandoned`, origin gone → `abandoned` every 10th tick); the boot lease grace; and the module's registration in `cmd/pdx`. Nothing in `cmd/pdx/lead.go`, nothing in the SPA (P2b, P3). Approving a lead request only closes it as `approved` with a `grant` (PD3); the team itself arrives in P4. `self_relay` is refused with `400 unsupported_kind` until P5a.
+**Scope.** The daemon half of the lead request: a leaf wire package (`internal/team`), a new daemon module `internal/module/team` (package `teammod`) that owns `team.db` and the `approval_requests` table — one state machine, closed by compare-and-set — and serves the five `/api/team/approvals` routes and `GET /api/team/inflight` (spec §9.5) behind `TokenAuth`; an exported origin resolver in the peers module that attributes a caller's `origin_inbox` to a live CC session; the `approval.request` host event (`opened` / `closed` / `snapshot`); a 1 s sweeper (deadline → `timeout`, lease → `abandoned`, origin gone → `abandoned` every 10th tick); the boot lease grace; and the module's registration in `cmd/pdx`. Nothing in `cmd/pdx/lead.go`, nothing in the SPA (P2b, P3). Approving a lead request only closes it as `approved` with a `grant` (PD3); the team itself arrives in P4. `self_relay` is refused with `400 unsupported_kind` until P5a.
 
 **Every line below was compiled and run** (2026-10-07) in a scratch copy of the worktree at `d39886e8` (Go code identical to origin/main `fb9fcbd8`); the "Expected" outputs are the measured ones. Go 1.26.0, `modernc.org/sqlite v1.54.0`, `gorilla/websocket v1.5.3`, `testify v1.11.1`.
 
@@ -657,7 +681,7 @@ func TestLocalEnvelope_AttachesContextUsageBySessionID(t *testing.T) {
 - Snapshot-send precedent: `internal/module/session/module.go:247-266` (`TrySend`, else `Events.Remove(sub)` unless `sub.Done()`).
 - `cmd/pdx` must not import `internal/module/*` (`cmd/pdx/msg.go:26-28`); `internal/team` is the shared leaf.
 
-**Review Focus mapping.** Focus 3 (restart while long-polling) → Task 2.4 (long-poll ends on `stopCtx`, create answers `503 not_ready`), Task 2.6 (boot lease grace). Focus 4 (decide racing sweeper and cancel) → Task 2.2 (CAS), Task 2.4 (`closeAs` broadcasts for the winner only), Task 2.5 (race test).
+**Review Focus mapping.** Focus 3 (restart while long-polling) → Task 2.4 (long-poll ends on `stopCtx`, create answers `503 not_ready`), Task 2.6 (boot lease grace). Focus 4 (decide racing sweeper and cancel) → Task 2.2 (CAS, raced three ways), Task 2.4 (`closeAs` broadcasts for the winner only), Task 2.5 (`TestTick_DecideSweeperAndCancelCloseOnce`: decide, tick and DELETE concurrently).
 
 ---
 
@@ -668,7 +692,7 @@ func TestLocalEnvelope_AttachesContextUsageBySessionID(t *testing.T) {
 - Test: `internal/team/wire_test.go`
 
 **Interfaces:**
-- Produces: exactly the preamble's `package team` (constants `EventType`, `Kind*`, `State*`, `Err*`, limits; types `Origin`, `LeadPayload`, `Grant`, `Client`, `Approval`, `CreateApprovalRequest`, `DecideRequest`, `APIError`, `EventValue`) plus
+- Produces: exactly the preamble's `package team` (constants `EventType`, `Kind*`, `State*`, `Err*`, limits; types `Origin`, `LeadPayload`, `Grant`, `Client`, `Approval`, `CreateApprovalRequest`, `DecideRequest`, `APIError`, `InflightResponse`, `EventValue`) plus
   ```go
   func (v EventValue) MarshalJSON() ([]byte, error) // op "snapshot" → {"op":"snapshot","approvals":[...]}, [] when empty; other ops keep the struct tags
   ```
@@ -766,16 +790,29 @@ func TestApproval_JSONKeysAndRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// The restart confirm (spec §9.5) reads both counts; a zero must still be
+// on the wire, so neither field is omitempty.
+func TestInflightResponse_JSONKeys(t *testing.T) {
+	got, err := json.Marshal(InflightResponse{ApprovalsOpen: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"approvals_open":2,"relays_active":0}` {
+		t.Fatalf("inflight = %s, want both keys with relays_active 0", got)
+	}
+}
 ```
 
 - [ ] **Step 2: Run it and see it fail.**
   - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./internal/team/ -v`
   - Expected: build failure —
     ```
-    internal/team/wire_test.go:11:27: undefined: EventValue
-    internal/team/wire_test.go:18:62: undefined: Approval
-    internal/team/wire_test.go:35:29: undefined: LeadPayload
+    internal/team/wire_test.go:12:27: undefined: EventValue
+    internal/team/wire_test.go:19:62: undefined: Approval
+    internal/team/wire_test.go:36:29: undefined: LeadPayload
     ```
+    (first lines of ten; the compiler stops after ten errors, so `undefined: InflightResponse` at line 94 is not printed until the earlier ones are fixed).
 
 - [ ] **Step 3: Implement `wire.go`.** This is the preamble's contract verbatim (gofmt-aligned comments), plus the doc comment and `MarshalJSON`.
 
@@ -811,16 +848,16 @@ const (
 
 // Error codes (APIError.Error)
 const (
-	ErrBadRequest      = "bad_request"
-	ErrOriginUnknown   = "origin_unknown"
-	ErrUnsupportedKind = "unsupported_kind"
-	ErrIDConflict      = "id_conflict"     // same id, different hash
-	ErrRequestOpen     = "request_open"    // 409, carries the open Approval
-	ErrAlreadyLead     = "already_lead"       // 409, enforced from P4 (needs the teams table)
+	ErrBadRequest       = "bad_request"
+	ErrOriginUnknown    = "origin_unknown"
+	ErrUnsupportedKind  = "unsupported_kind"
+	ErrIDConflict       = "id_conflict"        // same id, different hash
+	ErrRequestOpen      = "request_open"       // 409, carries the open Approval
+	ErrAlreadyLead      = "already_lead"       // 409, enforced from P4 (needs the teams table)
 	ErrMemberCannotLead = "member_cannot_lead" // 409, enforced from P4
-	ErrAlreadyDecided  = "already_decided" // 409, carries the closed Approval
-	ErrNotFound        = "not_found"
-	ErrNotReady        = "not_ready" // 503 while stopping
+	ErrAlreadyDecided   = "already_decided"    // 409, carries the closed Approval
+	ErrNotFound         = "not_found"
+	ErrNotReady         = "not_ready" // 503 while stopping
 )
 
 // Limits (spec §6.1, §6.2, §9.1)
@@ -842,7 +879,7 @@ type Origin struct {
 	PID       int    `json:"pid"`
 	ProcStart string `json:"proc_start"`
 	Cwd       string `json:"cwd"`
-	Tmux      string `json:"tmux"` // "<session>:@<win>.%<pane>" or ""
+	Tmux      string `json:"tmux"`              // "<session>:@<win>.%<pane>" or ""
 	Title     string `json:"title,omitempty"`   // the session's title (pdx msg name), "" when none
 	Address   string `json:"address,omitempty"` // "<alias>/<name>" for a routable name, else "<alias>/_<ref>"
 }
@@ -907,6 +944,14 @@ type APIError struct {
 	Approval *Approval `json:"approval,omitempty"` // request_open, already_decided
 }
 
+// InflightResponse is GET /api/team/inflight (spec §9.5): what a restart of
+// this daemon would interrupt. Neither field is omitempty — the restart
+// confirm reads a zero too. RelaysActive is a literal 0 until P6.
+type InflightResponse struct {
+	ApprovalsOpen int `json:"approvals_open"`
+	RelaysActive  int `json:"relays_active"`
+}
+
 // EventValue is HostEvent.Value (JSON string) for EventType.
 //
 //	{op:"opened", approval}            on create
@@ -944,6 +989,7 @@ func (v EventValue) MarshalJSON() ([]byte, error) {
     ```
     --- PASS: TestEventValue_SnapshotEmitsEmptyArray (0.00s)
     --- PASS: TestApproval_JSONKeysAndRoundTrip (0.00s)
+    --- PASS: TestInflightResponse_JSONKeys (0.00s)
     ok  	github.com/wake/purdex/internal/team
     ```
 
@@ -1055,9 +1101,16 @@ func TestStore_CloseIfOpenExactlyOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			c := Close{State: team.StateDenied, DecidedAt: int64(2000 + i), DecidedBy: &team.Client{Kind: "app", Label: fmt.Sprintf("app-%d", i)}}
-			if i%2 == 0 {
+			// The three ways a request closes under contention (spec §15):
+			// a decision, the sweeper's timeout, the requester's cancel.
+			var c Close
+			switch i % 3 {
+			case 0:
 				c = Close{State: team.StateTimeout, DecidedAt: int64(2000 + i)}
+			case 1:
+				c = Close{State: team.StateDenied, DecidedAt: int64(2000 + i), DecidedBy: &team.Client{Kind: "app", Label: fmt.Sprintf("app-%d", i)}}
+			case 2:
+				c = Close{State: team.StateCancelled, DecidedAt: int64(2000 + i)}
 			}
 			after, won, err := s.CloseIfOpen("id-1", c)
 			if err != nil {
@@ -1087,6 +1140,9 @@ func TestStore_CloseIfOpenExactlyOneWinner(t *testing.T) {
 	}
 	if final.State == team.StateDenied && (final.DecidedBy == nil || final.DecidedBy.Kind != "app") {
 		t.Fatalf("denied without decided_by: %+v", final)
+	}
+	if final.State != team.StateDenied && final.DecidedBy != nil {
+		t.Fatalf("%s must not carry decided_by: %+v", final.State, final)
 	}
 	if _, _, err := s.CloseIfOpen("nope", Close{State: team.StateCancelled}); err != ErrNoSuchApproval {
 		t.Fatalf("unknown id: err=%v, want ErrNoSuchApproval", err)
@@ -1427,7 +1483,7 @@ func (s *Store) OpenByOrigin(sessionID string, kind team.Kind) (team.Approval, b
     --- PASS: TestStore_LeasesAndListing (0.01s)
     ok  	github.com/wake/purdex/internal/module/team
     ```
-  - Mutation check (spec §15 "dropping the CAS lets two decisions win → red"): change the UPDATE's `AND state = 'open'` to nothing and rerun — `TestStore_CloseIfOpenExactlyOneWinner` fails with `winners = [... ...], want exactly one`. Put it back.
+  - Mutation check (spec §15 "dropping the CAS lets two decisions win → red"): change the UPDATE's `AND state = 'open'` to nothing and rerun — `TestStore_CloseIfOpenExactlyOneWinner` fails with `winners = [... ...], want exactly one`. Put it back. The 16 goroutines cycle through timeout / denied / cancelled, so the mutation is caught whichever pair of close kinds lands together.
 
 - [ ] **Step 5: Commit.**
   ```bash
@@ -1741,7 +1797,7 @@ func (r *OriginResolver) LiveSession(sessionID string) bool {
 
 ---
 
-### Task 2.4: The module skeleton and the five routes
+### Task 2.4: The module skeleton and the six routes
 
 **Files:**
 - Create: `internal/module/team/module.go`, `internal/module/team/handler.go`
@@ -1765,7 +1821,7 @@ func (r *OriginResolver) LiveSession(sessionID string) bool {
   func (m *Module) Close() error                // store.Close() — core.Closer, PD6
   func (m *Module) closeAs(id string, c Close) (team.Approval, bool, error) // CAS, then for the winner only: broadcast "closed" + wake long-polls
   ```
-  Routes (Go method patterns): `POST /api/team/approvals`, `GET /api/team/approvals`, `GET /api/team/approvals/{id}`, `DELETE /api/team/approvals/{id}`, `POST /api/team/approvals/{id}/decide`. Non-2xx bodies are `team.APIError`; a `team.db` failure is `500 {"error":"storage_error"}` (a code outside the wire constants; clients treat it as a plain error).
+  Routes (Go method patterns): `POST /api/team/approvals`, `GET /api/team/approvals`, `GET /api/team/approvals/{id}`, `DELETE /api/team/approvals/{id}`, `POST /api/team/approvals/{id}/decide`, and `GET /api/team/inflight` → `200 team.InflightResponse{ApprovalsOpen: len(ListOpen()), RelaysActive: 0}` (spec §9.5; `relays_active` is a literal 0 until P6). Non-2xx bodies are `team.APIError`; a `team.db` failure is `500 {"error":"storage_error"}` (a code outside the wire constants; clients treat it as a plain error).
 - Consumes: `Store` (Task 2.2), `peersmod.OriginResolverKey` (Task 2.3), `core.Events.BroadcastEvent`, `core.HostEvent`, `r.PathValue`.
 - Behaviour pinned by the tests: idempotency hash = `sha256(kind \0 origin_session \0 wait_s \0 payload_json)`; normalisation `max_members 0→3 cap 8`, `wait_s 0→540 cap 600`, roots `Clean`ed and absolutised against `origin.Cwd`, default `[origin.Cwd]`; `reason` required; one open lead request per origin session (`409 request_open` carrying it, serialised by `createMu`); long-poll registers its waiter **before** reading the row, renews the lease on every GET by id, and selects on waiter / timer (≤ 25 s) / `r.Context()` / `stopCtx`, answering the row as it then is; `DELETE` answers the row as it now is (cancelled, or closed before as it was); `decide` stamps `client.addr = RemoteAddr`, builds the grant from the payload when `grant` is nil, and a late decide gets `409 already_decided` carrying the winner; `POST` create answers `503 not_ready` once `Stop` ran.
 
@@ -2186,10 +2242,34 @@ func TestList_OpenOnly(t *testing.T) {
 		t.Fatalf("state=closed: %d", code)
 	}
 }
+
+// GET /api/team/inflight (spec §9.5) feeds the restart confirm: open
+// requests only, and relays_active is on the wire as 0 until P6.
+func TestInflight_CountsOpenApprovals(t *testing.T) {
+	f := newFixture(t)
+	f.create("id-1")
+	second := f.createReq("id-2")
+	second.OriginInbox = "/tmp/20.sock"
+	if code, _ := f.do(http.MethodPost, "/api/team/approvals", second); code != 201 {
+		t.Fatal("second create")
+	}
+	if code, body := f.do(http.MethodGet, "/api/team/inflight", nil); code != 200 || !bytes.Contains(body, []byte(`"approvals_open":2`)) {
+		t.Fatalf("two open: %d %s", code, body)
+	}
+	f.do(http.MethodDelete, "/api/team/approvals/id-1", nil)
+	code, body := f.do(http.MethodGet, "/api/team/inflight", nil)
+	var got team.InflightResponse
+	if err := json.Unmarshal(body, &got); err != nil || code != 200 || got.ApprovalsOpen != 1 || got.RelaysActive != 0 {
+		t.Fatalf("one open: %d %s err=%v (want approvals_open 1, relays_active 0)", code, body, err)
+	}
+	if !bytes.Contains(body, []byte(`"relays_active":0`)) {
+		t.Fatalf("relays_active must be on the wire at zero: %s", body)
+	}
+}
 ```
 
 - [ ] **Step 2: Run it and see it fail.**
-  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./internal/module/team/ -run 'TestCreate|TestGet|TestDecide|TestList' -v`
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./internal/module/team/ -run 'TestCreate|TestGet|TestDecide|TestList|TestInflight' -v`
   - Expected: build failure —
     ```
     internal/module/team/handler_test.go:55:11: undefined: Module
@@ -2290,6 +2370,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/team/approvals/{id}", m.handleGet)
 	mux.HandleFunc("DELETE /api/team/approvals/{id}", m.handleDelete)
 	mux.HandleFunc("POST /api/team/approvals/{id}/decide", m.handleDecide)
+	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)
 }
 
 // Start is filled in by Task 2.6.
@@ -2592,6 +2673,20 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 	m.writeJSON(w, http.StatusOK, map[string]any{"approvals": open})
 }
 
+// handleInflight is GET /api/team/inflight (spec §9.5): what a restart of
+// this daemon would interrupt, for the App's restart confirm. Open requests
+// survive a restart (boot lease grace), so the count informs, it does not
+// block. relays_active is 0 until P6 adds relays.
+func (m *Module) handleInflight(w http.ResponseWriter, r *http.Request) {
+	open, err := m.store.ListOpen()
+	if err != nil {
+		m.logf("[team] inflight: %v", err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	m.writeJSON(w, http.StatusOK, team.InflightResponse{ApprovalsOpen: len(open), RelaysActive: 0})
+}
+
 // handleGet is GET /api/team/approvals/{id}?wait=N: it renews the lease
 // and, while the request is open and N > 0, waits for the close, N
 // seconds (≤ 25), the client going away, or Stop — whichever is first —
@@ -2752,6 +2847,7 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
     --- PASS: TestGet_LongPollReturnsOnStopAndOnTimer (1.07s)
     --- PASS: TestDecide_ApproveDenyAlreadyDecided (0.03s)
     --- PASS: TestList_OpenOnly (0.01s)
+    --- PASS: TestInflight_CountsOpenApprovals (0.01s)
     --- PASS: TestStore_CreateIsIdempotentAndReportsHashMismatch (0.01s)
     --- PASS: TestStore_CloseIfOpenExactlyOneWinner (0.02s)
     --- PASS: TestStore_LeasesAndListing (0.01s)
@@ -2767,10 +2863,10 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 
     Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
     ```
-  - **P2a-3 commit:** `handleGet` (long-poll, lease renewal, waiters), `handleDelete`, `handleDecide`, the three routes added to `RegisterRoutes`, and `TestList_OpenOnly`, `TestGet_*`, `TestDelete_*`, `TestDecide_*`.
+  - **P2a-3 commit:** `handleGet` (long-poll, lease renewal, waiters), `handleDelete`, `handleDecide`, `handleInflight`, the four routes added to `RegisterRoutes`, and `TestList_OpenOnly`, `TestGet_*`, `TestDelete_*`, `TestDecide_*`, `TestInflight_CountsOpenApprovals`.
     ```bash
     git add internal/module/team/module.go internal/module/team/handler.go internal/module/team/handler_test.go
-    git commit -m "feat(team): GET /api/team/approvals/{id} long-poll, DELETE, POST decide
+    git commit -m "feat(team): GET /api/team/approvals/{id} long-poll, DELETE, POST decide, GET inflight
 
     Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
     ```
@@ -2869,9 +2965,12 @@ func TestTick_OriginGoneIsCheckedEveryTenthTick(t *testing.T) {
 	}
 }
 
-// A decide racing the sweeper past the deadline: one wins, the other sees
-// the winner, and exactly one closed event is broadcast. Run with -race.
-func TestTick_DecideRacingSweeperClosesOnce(t *testing.T) {
+// Review Focus 4: a decide, the sweeper past the deadline and the
+// requester's DELETE all race for one close. Exactly one wins, the row
+// says which, every loser is answered with the winner's row (decided_by
+// included when a decide won), and exactly one closed event is broadcast.
+// Run with -race.
+func TestTick_DecideSweeperAndCancelCloseOnce(t *testing.T) {
 	f := newFixture(t)
 	req := f.createReq("id-1")
 	req.WaitS = 60
@@ -2880,39 +2979,128 @@ func TestTick_DecideRacingSweeperClosesOnce(t *testing.T) {
 	}
 	f.events()
 	f.clock.Add(60_000)
-	f.do(http.MethodGet, "/api/team/approvals/id-1?wait=0", nil) // keep the lease alive: the race is deadline vs decide
+	f.do(http.MethodGet, "/api/team/approvals/id-1?wait=0", nil) // keep the lease alive: the race is deadline vs decide vs cancel
+	client := team.Client{Kind: "app", Label: "Purdex.app @ air26"}
 	var wg sync.WaitGroup
-	var decideCode int
-	var decideBody []byte
-	wg.Add(2)
+	var decideCode, deleteCode int
+	var decideBody, deleteBody []byte
+	wg.Add(3)
 	go func() { defer wg.Done(); f.m.tick() }()
 	go func() {
 		defer wg.Done()
 		decideCode, decideBody = f.do(http.MethodPost, "/api/team/approvals/id-1/decide",
-			team.DecideRequest{Decision: "approve", Client: team.Client{Kind: "app", Label: "Purdex.app @ air26"}})
+			team.DecideRequest{Decision: "approve", Client: client})
+	}()
+	go func() {
+		defer wg.Done()
+		deleteCode, deleteBody = f.do(http.MethodDelete, "/api/team/approvals/id-1", nil)
 	}()
 	wg.Wait()
+
 	final, _, _ := f.m.store.Get("id-1")
-	switch decideCode {
-	case 200:
-		if final.State != team.StateApproved {
-			t.Fatalf("decide won but row is %s", final.State)
+	if final.State == team.StateOpen || final.DecidedAt != 1_060_000 {
+		t.Fatalf("row after three closes: %+v", final)
+	}
+	// Each competitor's own answer says whether it won; exactly one may.
+	decideWon := decideCode == 200
+	sweeperWon := final.State == team.StateTimeout
+	if deleteCode != 200 {
+		t.Fatalf("delete: %d %s (DELETE answers the row as it is, won or lost)", deleteCode, deleteBody)
+	}
+	deleted := decodeApproval(t, deleteBody)
+	cancelWon := deleted.State == team.StateCancelled
+	wins := 0
+	for _, w := range []bool{decideWon, sweeperWon, cancelWon} {
+		if w {
+			wins++
 		}
-	case 409:
-		if e := decodeErr(t, decideBody); e.Error != team.ErrAlreadyDecided || final.State != team.StateTimeout {
-			t.Fatalf("decide lost: %s, row %s", decideBody, final.State)
+	}
+	if wins != 1 {
+		t.Fatalf("winners = %d (decide=%v sweeper=%v cancel=%v), want exactly one; row %s", wins, decideWon, sweeperWon, cancelWon, final.State)
+	}
+	switch {
+	case decideWon && (final.State != team.StateApproved || final.DecidedBy == nil || final.DecidedBy.Label != client.Label):
+		t.Fatalf("decide won but row is %+v", final)
+	case cancelWon && (final.State != team.StateCancelled || final.DecidedBy != nil):
+		t.Fatalf("cancel won but row is %+v", final)
+	case sweeperWon && final.DecidedBy != nil:
+		t.Fatalf("sweeper won but row carries decided_by: %+v", final)
+	}
+	// Losers carry the full winner row: the decide loser inside its 409
+	// already_decided, the DELETE loser as its 200 body.
+	if !decideWon {
+		e := decodeErr(t, decideBody)
+		if decideCode != 409 || e.Error != team.ErrAlreadyDecided || e.Approval == nil ||
+			e.Approval.ID != "id-1" || e.Approval.State != final.State || e.Approval.DecidedAt != final.DecidedAt {
+			t.Fatalf("decide lost: %d %s, want 409 already_decided carrying the %s row", decideCode, decideBody, final.State)
 		}
-	default:
-		t.Fatalf("decide: %d %s", decideCode, decideBody)
+	}
+	if !cancelWon {
+		if deleted.ID != "id-1" || deleted.State != final.State || deleted.DecidedAt != final.DecidedAt {
+			t.Fatalf("delete lost: %s, want the %s row", deleteBody, final.State)
+		}
+		if decideWon && (deleted.DecidedBy == nil || deleted.DecidedBy.Label != client.Label) {
+			t.Fatalf("delete lost to a decide but its body has no decided_by: %s", deleteBody)
+		}
 	}
 	if n := f.countOps("closed"); n != 1 {
 		t.Fatalf("closed events = %d, want exactly 1 (final state %s)", n, final.State)
 	}
 }
+
+// The loser shapes, deterministically (the race above shows one ordering
+// per run — measured over 50 runs the in-process tick wins almost always):
+// a DELETE after a decide answers 200 with the approved row, decided_by and
+// grant included; a decide after a DELETE answers 409 already_decided with
+// the cancelled row; the sweeper past both deadlines changes neither; and
+// each request broadcast closed exactly once.
+func TestClose_LosersCarryTheWinnerRow(t *testing.T) {
+	f := newFixture(t)
+	f.create("id-1")
+	second := f.createReq("id-2")
+	second.OriginInbox = "/tmp/20.sock"
+	if code, _ := f.do(http.MethodPost, "/api/team/approvals", second); code != 201 {
+		t.Fatal("second create")
+	}
+	f.events()
+	client := team.Client{Kind: "app", Label: "Purdex.app @ air26"}
+
+	// id-1: decide wins, DELETE loses.
+	if code, _ := f.do(http.MethodPost, "/api/team/approvals/id-1/decide", team.DecideRequest{Decision: "approve", Client: client}); code != 200 {
+		t.Fatalf("decide id-1: %d", code)
+	}
+	code, body := f.do(http.MethodDelete, "/api/team/approvals/id-1", nil)
+	if a := decodeApproval(t, body); code != 200 || a.State != team.StateApproved || a.DecidedBy == nil || a.DecidedBy.Label != client.Label || a.Grant == nil {
+		t.Fatalf("delete after decide: %d %s (want the approved row with decided_by and grant)", code, body)
+	}
+
+	// id-2: DELETE wins, decide loses.
+	if code, body := f.do(http.MethodDelete, "/api/team/approvals/id-2", nil); code != 200 || decodeApproval(t, body).State != team.StateCancelled {
+		t.Fatalf("delete id-2: %d %s", code, body)
+	}
+	code, body = f.do(http.MethodPost, "/api/team/approvals/id-2/decide", team.DecideRequest{Decision: "deny", Client: client})
+	e := decodeErr(t, body)
+	if code != 409 || e.Error != team.ErrAlreadyDecided || e.Approval == nil || e.Approval.ID != "id-2" || e.Approval.State != team.StateCancelled || e.Approval.DecidedBy != nil {
+		t.Fatalf("decide after delete: %d %s (want 409 already_decided carrying the cancelled row)", code, body)
+	}
+
+	// The sweeper past both deadlines (540 s) finds nothing open.
+	f.clock.Add(600_000)
+	f.m.tick()
+	if a, _, _ := f.m.store.Get("id-1"); a.State != team.StateApproved {
+		t.Fatalf("sweeper changed a closed row: %+v", a)
+	}
+	if a, _, _ := f.m.store.Get("id-2"); a.State != team.StateCancelled {
+		t.Fatalf("sweeper changed a closed row: %+v", a)
+	}
+	if n := f.countOps("closed"); n != 2 {
+		t.Fatalf("closed events = %d, want exactly 2 (one per request)", n)
+	}
+}
 ```
 
 - [ ] **Step 2: Run it and see it fail.**
-  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./internal/module/team/ -run TestTick -v`
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./internal/module/team/ -run 'TestTick|TestClose_' -v`
   - Expected: build failure —
     ```
     internal/module/team/sweeper_test.go:21:6: f.m.tick undefined (type *Module has no field or method tick)
@@ -2995,17 +3183,19 @@ func (m *Module) tick() {
 }
 ```
 
-- [ ] **Step 4: Run and see it pass (race detector on: `TestTick_DecideRacingSweeperClosesOnce` runs `tick` and `decide` concurrently).**
-  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./internal/module/team/ -run TestTick -race -count=1 -v`
+- [ ] **Step 4: Run and see it pass (race detector on: `TestTick_DecideSweeperAndCancelCloseOnce` runs `tick`, `decide` and `DELETE` concurrently).**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./internal/module/team/ -run 'TestTick|TestClose_' -race -count=1 -v`
   - Expected:
     ```
     --- PASS: TestTick_DeadlineBecomesTimeout (0.01s)
     --- PASS: TestTick_LeaseExpiryBecomesAbandoned (0.01s)
     --- PASS: TestTick_OriginGoneIsCheckedEveryTenthTick (0.02s)
-    --- PASS: TestTick_DecideRacingSweeperClosesOnce (0.01s)
+    --- PASS: TestTick_DecideSweeperAndCancelCloseOnce (0.01s)
+    --- PASS: TestClose_LosersCarryTheWinnerRow (0.02s)
     ok  	github.com/wake/purdex/internal/module/team
     ```
-  - Run it ten times for the race: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./internal/module/team/ -run TestTick_DecideRacingSweeperClosesOnce -race -count=10` → `ok`.
+  - Run the race fifty times: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./internal/module/team/ -run TestTick_DecideSweeperAndCancelCloseOnce -race -count=50` → `ok`. (Measured 2026-10-07 in the scratch build: the in-process `tick` won 49 of 50, the DELETE once; that is why the loser shapes are also pinned sequentially in `TestClose_LosersCarryTheWinnerRow`.)
+  - Mutation check (Review Focus 4): in `closeAs`, broadcast and wake **outside** the `if won` guard and rerun — `TestTick_DecideSweeperAndCancelCloseOnce` fails with `closed events = 2, want exactly 1` (the decide loser returns 409 before `closeAs`, so two of the three reach the broadcast). Put it back.
 
 - [ ] **Step 5: Commit.**
   ```bash
@@ -3259,7 +3449,7 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 
 - [ ] **Step 4: Run and see it pass — the module, the new wiring test, the three existing wiring tests, the whole `cmd/pdx` package, `go vet`, `go build`.**
   - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./internal/module/team/ -race -count=1 -v`
-  - Expected: all 15 tests `PASS` (`TestStart_ExtendsLeasesAndSnapshotsOpenRequests (0.01s)`, `TestSendSnapshot_FullBufferClosesSubscriber (0.01s)` among them), `ok  	github.com/wake/purdex/internal/module/team	2.6s`.
+  - Expected: all 17 tests `PASS` (`TestStart_ExtendsLeasesAndSnapshotsOpenRequests (0.01s)`, `TestSendSnapshot_FullBufferClosesSubscriber (0.01s)` among them), `ok  	github.com/wake/purdex/internal/module/team	2.6s`.
   - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./cmd/pdx/ -run 'TestRegisterServeModules|TestRemovedRoutesAre404' -count=1 -v`
   - Expected:
     ```
@@ -3307,13 +3497,13 @@ Measured in the scratch build (`wc -l`), new files + edits:
 
 | Task | Files | Lines |
 |---|---|---|
-| 2.1 | `internal/team/wire.go` 152, `wire_test.go` 82 | 234 |
-| 2.2 | `store.go` 259, `store_test.go` 158 | 417 |
+| 2.1 | `internal/team/wire.go` 164, `wire_test.go` 101 | 265 |
+| 2.2 | `store.go` 259, `store_test.go` 168 | 427 |
 | 2.3 | `origin_resolver.go` 68, `origin_resolver_test.go` 89, `peers/module.go` +3 | 160 |
-| 2.4 | `module.go` (stub Start) ≈ 195, `handler.go` 349, `handler_test.go` 414 | ≈ 958 |
-| 2.5 | `sweeper.go` 72, `sweeper_test.go` 113 | 185 |
+| 2.4 | `module.go` (stub Start) ≈ 196, `handler.go` 363, `handler_test.go` 438 | ≈ 997 |
+| 2.5 | `sweeper.go` 72, `sweeper_test.go` 205 | 277 |
 | 2.6 | `module.go` +≈40, `module_test.go` 91, `team_register_test.go` 38, `cmd/pdx/main.go` +2 | ≈ 171 |
-| **Total** | 13 new files, 2 modified | **≈ 2 125 lines** |
+| **Total** | 13 new files, 2 modified | **≈ 2 300 lines** (re-measured 2026-10-07 after the codex plan round: inflight route and test, three-way CAS tests) |
 
 That is 2.6× the 800-line budget, so **P2a must be split**. Tests are ≈ 45 % of it and are not optional (Review Focus 3 and 4, spec §15's mutation deliverable). Proposed split, each PR independently green and reviewable:
 
@@ -3330,7 +3520,7 @@ None that the code or the spec cannot answer. Two decisions above are judgement 
 ### Coordinator decisions on P2a (2026-10-07, `mlab/_81nu3d`)
 
 - **Codex finding 1 (approval without a team) is a staged deferral, kept:** P2 closes a lead request as `approved` and stores the grant; P4 adds team creation in the same transaction, `already_lead` / `member_cannot_lead`, and `team_id` in `pdx lead request`'s stdout. Until P4 nothing advertises `pdx lead request` (the skill ships in P5b and tells agents when to use it), so no session can believe it is a lead. The wire already carries the two P4 error codes so the contract does not move again.
-- **Split into three PRs**, each under 800 lines: **P2a-1** = Tasks 2.1, 2.2 (wire, store; ≈ 651 lines); **P2a-2** = Tasks 2.3 and 2.4 create/list with the module skeleton (≈ 760); **P2a-3** = Task 2.4 get/delete/decide, 2.5, 2.6 (≈ 716). The module is mounted in `cmd/pdx` only by P2a-3, so no half-built route set ships.
+- **Split into three PRs**, each under 800 lines: **P2a-1** = Tasks 2.1, 2.2 (wire, store; ≈ 670 lines); **P2a-2** = Tasks 2.3 and 2.4 create/list with the module skeleton (≈ 760); **P2a-3** = Task 2.4 get/delete/decide/inflight, 2.5, 2.6 (≈ 790; the inflight route, its handler test and the three-way CAS race test from the codex plan round are counted). The module is mounted in `cmd/pdx` only by P2a-3, so no half-built route set ships.
 - **Amendment from P3 (open question 1): `team.Origin` gains two optional fields**, `Title string \`json:"title,omitempty"\`` and `Address string \`json:"address,omitempty"\``, after `Tmux`. Applied in Task 2.1's `wire.go` and round-trip test, and in Task 2.3's fixture, test and `ResolveOrigin` (`titleOf`); `Title` comes from the peers title store (`m.titles.Snapshot()`, `titles.go:123`; `""` when `m.titles` is nil) and `Address` with the same formatter `GET /api/peers` uses for `PeerRecordWire.address` (`<alias>/<name>` for a routable name, else `<alias>/_<ref>`), and its test asserts both for the fixture's `n10` entry. The dialog (P3 Task 3.4) prefers them and falls back to `name` → `ref` when absent.
 - **Deviations 1–15 are accepted** as written. Two of them bind the neighbours: a `Stop`-cut long-poll answers `200` with the row still `open` (P2b re-polls and meets the refused connection), and `500 storage_error` is outside `wire.go` (P2b maps any unlisted code to exit 1).
 
@@ -3815,7 +4005,11 @@ func TestDo_EOFIsRetried(t *testing.T) {
 	srv := httptest.NewServer(d)
 	defer srv.Close()
 	clock := newFakeClock()
-	c := newTestClient(srv.URL, clock, io.Discard)
+	// No keep-alive: on a REUSED connection Go's Transport retries an EOF'd
+	// GET by itself and this client would never see the failure. The daemon
+	// closing a fresh connection is what reaches Do (measured 2026-10-07).
+	c := New(srv.URL, "tok", WithClock(clock.now, clock.sleep), WithStderr(io.Discard),
+		WithHTTPClient(&http.Client{Transport: &http.Transport{DisableKeepAlives: true}}))
 
 	var ap team.Approval
 	status, err := c.Do(context.Background(), http.MethodGet, "/api/team/approvals/r1", nil, &ap)
@@ -4360,6 +4554,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -4373,11 +4568,18 @@ import (
 )
 
 // leadClock is a fake clock for daemonclient.WithClock: time advances only
-// when the client sleeps, so the 30 s grace costs no real time.
+// when the client sleeps, so the 30 s grace costs no real time. onSleep
+// (optional) runs after each sleep with its 1-based index; the restart test
+// brings the new daemon up from it.
 type leadClock struct {
-	mu sync.Mutex
-	t  time.Time
-	n  int
+	mu      sync.Mutex
+	t       time.Time
+	n       int
+	onSleep func(n int)
+}
+
+func newLeadClock() *leadClock {
+	return &leadClock{t: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)}
 }
 
 func (c *leadClock) now() time.Time {
@@ -4390,20 +4592,33 @@ func (c *leadClock) sleep(ctx context.Context, d time.Duration) error {
 	c.mu.Lock()
 	c.t = c.t.Add(d)
 	c.n++
+	n := c.n
+	hook := c.onSleep
 	c.mu.Unlock()
+	if hook != nil {
+		hook(n)
+	}
 	return ctx.Err()
 }
 
-func leadClockOpt() daemonclient.Option {
-	c := &leadClock{t: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)}
-	return daemonclient.WithClock(c.now, c.sleep)
+func (c *leadClock) sleeps() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
 }
+
+func (c *leadClock) opt() daemonclient.Option { return daemonclient.WithClock(c.now, c.sleep) }
+
+func leadClockOpt() daemonclient.Option { return newLeadClock().opt() }
 
 // fakeTeamDaemon speaks the P2 routes of spec §6.2 for one request id:
 // POST creates (createStatus 201, or a 409 request_open carrying openID),
 // the first GET answers open and the second answers final, DELETE records
 // the id and answers cancelled. When hold is set, GET blocks until the
-// client goes away and signals pollStarted on its first arrival.
+// client goes away and signals pollStarted on its first arrival. Health
+// answers bootID. When onFirstPoll is set, the first GET runs it and
+// answers `open` with `Connection: close` — a long-poll cut by Stop
+// (deviation 9 of P2a) on a daemon that is going down.
 type fakeTeamDaemon struct {
 	mu           sync.Mutex
 	creates      []team.CreateApprovalRequest
@@ -4416,16 +4631,21 @@ type fakeTeamDaemon struct {
 	hold         bool
 	pollStarted  chan struct{}
 	startOnce    sync.Once
+	bootID       string
+	onFirstPoll  func()
 }
 
 func newFakeTeamDaemon(final team.Approval) *fakeTeamDaemon {
-	return &fakeTeamDaemon{createStatus: http.StatusCreated, final: final, pollStarted: make(chan struct{})}
+	return &fakeTeamDaemon{createStatus: http.StatusCreated, final: final, pollStarted: make(chan struct{}), bootID: "b1"}
 }
 
 func (f *fakeTeamDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.URL.Path == "/api/health" {
-		json.NewEncoder(w).Encode(map[string]any{"ok": true, "boot_id": "b1"})
+		f.mu.Lock()
+		boot := f.bootID
+		f.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "boot_id": boot})
 		return
 	}
 	f.mu.Lock()
@@ -4456,6 +4676,7 @@ func (f *fakeTeamDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.polls = append(f.polls, r.URL.RequestURI())
 		n := len(f.polls)
 		hold := f.hold
+		onFirstPoll := f.onFirstPoll
 		f.mu.Unlock()
 		if hold {
 			f.startOnce.Do(func() { close(f.pollStarted) })
@@ -4463,6 +4684,10 @@ func (f *fakeTeamDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		id := strings.TrimPrefix(r.URL.Path, "/api/team/approvals/")
+		if n == 1 && onFirstPoll != nil {
+			onFirstPoll()
+			w.Header().Set("Connection", "close") // the client must not reuse this connection to a daemon that is gone
+		}
 		if n == 1 {
 			json.NewEncoder(w).Encode(team.Approval{ID: id, State: team.StateOpen})
 			return
@@ -4506,6 +4731,34 @@ func driveLead(t *testing.T, ctx context.Context, d http.Handler, args ...string
 	full := append(append([]string{"request"}, args...), "--config", cfgPath)
 	code := runLeadCmd(ctx, full, leadEnv(), &stdout, &stderr, fixedID(), leadClockOpt())
 	return code, stdout.String(), stderr.String()
+}
+
+// leadFreeAddr reserves and releases a 127.0.0.1 port, so two servers can
+// take it in turn (a daemon restart keeps its port).
+func leadFreeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
+}
+
+// leadServeOn starts an httptest.Server on a fixed address (Task 2b.1
+// measured that a closed port can be re-listened at once).
+func leadServeOn(t *testing.T, addr string, h http.Handler) *httptest.Server {
+	t.Helper()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("listen %s: %v", addr, err)
+	}
+	srv := httptest.NewUnstartedServer(h)
+	srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	return srv
 }
 
 func TestRunLeadCmd_UsageErrorsExit2BeforeConfig(t *testing.T) {
@@ -4712,17 +4965,99 @@ func TestRunLeadCmd_RefusedConnectionExit20(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runLeadCmd(context.Background(), []string{"request", "--reason", "r", "--config", cfgPath},
 		leadEnv(), &stdout, &stderr, fixedID(), leadClockOpt())
-	if code != ExitUnavailable || stdout != "" {
-		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	if code != ExitUnavailable || stdout.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if strings.Count(stderr.String(), daemonclient.MsgRestarting) != 1 {
 		t.Errorf("restart line count != 1: %q", stderr.String())
 	}
 }
+
+// Review Focus 3, end to end through lead.go: the daemon restarts while
+// `pdx lead request` is long-polling. The first daemon (boot b1) accepts
+// the create; its first poll is cut by Stop (answers `open`, connection
+// closed) and its listener is gone before the client re-polls. The
+// re-poll is refused, the client prints the restart line once, backs off
+// once, and the new daemon (boot b2, same port) answers the health probe:
+// the restarted line is printed once, the SAME request id is polled again,
+// found still open, then approved. No real time passes (fake clock).
+func TestLeadRequest_SurvivesDaemonRestartMidPoll(t *testing.T) {
+	addr := leadFreeAddr(t)
+	first := newFakeTeamDaemon(team.Approval{})
+	firstSrv := leadServeOn(t, addr, first)
+	first.onFirstPoll = func() { firstSrv.Listener.Close() } // the daemon is going down: no new connection is accepted
+	defer firstSrv.Close()
+
+	second := newFakeTeamDaemon(team.Approval{
+		State: team.StateApproved,
+		Grant: &team.Grant{MaxMembers: 3, Roots: []string{"/w"}},
+	})
+	second.bootID = "b2"
+	var secondSrv *httptest.Server
+	var once sync.Once
+	clock := newLeadClock()
+	clock.onSleep = func(n int) {
+		if n == 1 {
+			once.Do(func() { secondSrv = leadServeOn(t, addr, second) })
+		}
+	}
+	defer func() {
+		if secondSrv != nil {
+			secondSrv.Close()
+		}
+	}()
+
+	cfgPath := writeTestConfig(t, "http://"+addr, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runLeadCmd(context.Background(), []string{"request", "--reason", "r", "--config", cfgPath},
+		leadEnv(), &stdout, &stderr, fixedID(), clock.opt())
+	if code != ExitOK {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var out struct {
+		RequestID string     `json:"request_id"`
+		Grant     team.Grant `json:"grant"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil || out.RequestID != fixedID()() || out.Grant.MaxMembers != 3 {
+		t.Fatalf("stdout %q: %v", stdout.String(), err)
+	}
+	errText := stderr.String()
+	if n := strings.Count(errText, daemonclient.MsgRestarting); n != 1 {
+		t.Errorf("restart line count = %d, want 1: %q", n, errText)
+	}
+	if n := strings.Count(errText, "daemon 已重新啟動（boot b2）"); n != 1 {
+		t.Errorf("restarted line count = %d, want 1: %q", n, errText)
+	}
+	if clock.sleeps() != 1 {
+		t.Errorf("sleeps = %d, want exactly one backoff (the new daemon was up at the first retry)", clock.sleeps())
+	}
+
+	// One create on the first daemon, none on the second: the request id is
+	// never re-created, only re-polled.
+	creates1, polls1, deletes1, _ := first.snapshot()
+	creates2, polls2, deletes2, _ := second.snapshot()
+	if len(creates1) != 1 || creates1[0].ID != fixedID()() || len(creates2) != 0 {
+		t.Errorf("creates: first=%+v second=%+v", creates1, creates2)
+	}
+	if len(polls1) != 1 || len(polls2) != 2 {
+		t.Errorf("polls: first=%v second=%v, want 1 then 2", polls1, polls2)
+	}
+	wantPoll := "/api/team/approvals/" + fixedID()() + "?wait=25"
+	for _, p := range append(append([]string{}, polls1...), polls2...) {
+		if !strings.HasSuffix(p, wantPoll) {
+			t.Errorf("poll %q is not the same request id (%s)", p, wantPoll)
+		}
+	}
+	if len(deletes1)+len(deletes2) != 0 {
+		t.Errorf("a restart must not cancel the request: deletes=%v %v", deletes1, deletes2)
+	}
+}
 ```
 
+  The test adds `"net"` to the file's imports. `leadFreeAddr` / `leadServeOn` repeat `daemonclient`'s `freeAddr` / `serveOn` because that package's test helpers are not importable from `package main`.
+
 - [ ] **Step 2: Run the tests and verify they fail.**
-  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./cmd/pdx/ -run 'TestRunLeadCmd_' -v`
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./cmd/pdx/ -run 'TestRunLeadCmd_|TestLeadRequest_' -v`
   - Expected: compile failure `undefined: runLeadCmd`.
 
 - [ ] **Step 3: Implement `lead.go`.**
@@ -5006,8 +5341,9 @@ func leadDecidedBy(ap team.Approval) string {
 ```
 
 - [ ] **Step 4: Run the tests and verify they pass.**
-  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./cmd/pdx/ -run 'TestRunLeadCmd_|TestExitCodes_' -race -v`
-  - Expected: PASS for all 12 `TestRunLeadCmd_*` functions (and their subtests) plus `TestExitCodes_PinnedToSpec14`. `TestRunLeadCmd_RefusedConnectionExit20` finishes in well under a second (fake clock).
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go test ./cmd/pdx/ -run 'TestRunLeadCmd_|TestLeadRequest_|TestExitCodes_' -race -v`
+  - Expected: PASS for all 12 `TestRunLeadCmd_*` functions (and their subtests), `TestLeadRequest_SurvivesDaemonRestartMidPoll`, and `TestExitCodes_PinnedToSpec14`. `TestRunLeadCmd_RefusedConnectionExit20` and the restart test finish in well under a second (fake clock).
+  - Mutation check (Review Focus 3): in `runLeadCmd`'s poll loop, poll with `client.Once` instead of `client.Do` (a client that does not ride out the restart) and rerun — `TestLeadRequest_SurvivesDaemonRestartMidPoll` fails with `code=1 … connection refused` (the re-poll meets the closed port and `leadReportErr` exits 1). Put it back.
 
 - [ ] **Step 5: Commit.**
   ```bash
@@ -5108,14 +5444,14 @@ Then, from inside a Claude Code session (so `CLAUDE_CODE_MESSAGING_SOCKET` is se
 
 | File | Lines (approx.) |
 |---|---|
-| `cmd/pdx/daemonclient/client.go` | 240 |
-| `cmd/pdx/daemonclient/client_test.go` | 370 |
+| `cmd/pdx/daemonclient/client.go` | 340 |
+| `cmd/pdx/daemonclient/client_test.go` | 428 |
 | `cmd/pdx/exitcodes.go` | 20 |
 | `cmd/pdx/exitcodes_test.go` | 30 |
-| `cmd/pdx/lead.go` | 250 |
-| `cmd/pdx/lead_test.go` | 360 |
+| `cmd/pdx/lead.go` | 275 |
+| `cmd/pdx/lead_test.go` | 504 |
 | `cmd/pdx/main.go` | +3 / −1 |
-| **Total** | **~1 270 lines, 7 files** |
+| **Total** | **~1 600 lines, 7 files** (re-measured 2026-10-07 in the scratch build; the restart end-to-end test is counted) |
 
 Seven files is well inside the 20-file bound, but the line count is over 800. **Recommended split if the reviewer applies the line bound:**
 - **PR P2b-1:** Tasks 2b.1 + 2b.2 (`daemonclient` and exit codes) — ~660 lines, 4 files, no behaviour change for users.
@@ -5131,7 +5467,7 @@ Both halves are independently green: P2b-1 adds a package nothing calls yet; P2b
 
 ### Coordinator decisions on P2b (2026-10-07, `mlab/_81nu3d`)
 
-- **Split into two PRs:** **P2b-1** = Tasks 2b.1, 2b.2 (`daemonclient`, exit codes; ≈ 660 lines, nothing calls it yet); **P2b-2** = Tasks 2b.3, 2b.4 (`pdx lead request`, dispatch; ≈ 615). The 800-line bound governs; 20 files is the other bound, not an alternative.
+- **Split into two PRs:** **P2b-1** = Tasks 2b.1, 2b.2 (`daemonclient`, exit codes; ≈ 820 lines as re-measured 2026-10-07 — the table above had under-counted `client.go` and its test by ≈ 160 lines — nothing calls it yet); **P2b-2** = Tasks 2b.3, 2b.4 (`pdx lead request`, dispatch; ≈ 780, the restart end-to-end test included). The 800-line bound governs; 20 files is the other bound, not an alternative. **Flag for the coordinator:** P2b-1 is over the bound by ≈ 20 lines, all of them `client_test.go`; the only cut is to ship that test file in two halves, which buys nothing — a ruling is needed, not a plan change.
 - **Hung-poll cap stays as written:** three consecutive 35 s polls with no answer exit 20 with `pdx lead: daemon 沒有回應`. A connected daemon that never answers is broken, and 105 s is enough to tell. Spec §9.1 gains one line for it when P2b-2 ships.
 - **`--max-members 0` means the daemon default (3)**, matching the wire's normalisation. No `fs.Visit`.
 - **Deviations 1–8 are accepted.** `msg.go` / `peers.go` are not retrofitted to the exit constants or to `resolveDaemonHost` in this PR.
@@ -5186,10 +5522,13 @@ The Purdex.app side of spec §6.3 / §6.5 / §9.4 / §9.5 (U5b, U6, U13a, U14). 
   export interface DecideRequest { decision: 'approve' | 'deny'; grant?: Grant; client: Client }
   export interface APIError { error: string; detail?: string; approval?: Approval }
   export type ApprovalEventValue = { op: 'opened' | 'closed'; approval: Approval } | { op: 'snapshot'; approvals: Approval[] }
+  export interface InflightResponse { approvals_open: number; relays_active: number }   // GET /api/team/inflight (spec §9.5)
   export function leadPayloadOf(a: Approval): LeadPayload
   export class ApprovalApiError extends Error { readonly status: number; readonly code: string; readonly detail: string; readonly approval: Approval | null }
   export function decideApproval(hostId: string, id: string, body: DecideRequest): Promise<Approval>
   export function listOpenApprovals(hostId: string): Promise<Approval[]>
+  export const INFLIGHT_TIMEOUT_MS = 3_000
+  export function fetchInflight(hostId: string, timeoutMs?: number): Promise<InflightResponse>   // aborted after timeoutMs → code 'network'
   ```
   `Origin.title` and `Origin.address` are **optional additions** the wire does not carry yet (see `## Open questions`); the SPA falls back when they are absent.
 
@@ -5201,7 +5540,7 @@ The Purdex.app side of spec §6.3 / §6.5 / §9.4 / §9.5 (U5b, U6, U13a, U14). 
 // `{error, detail, approval}`; the 409s carry the Approval, so the caller can say who handled it.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
-import { ApprovalApiError, decideApproval, listOpenApprovals } from './approval-api'
+import { ApprovalApiError, decideApproval, fetchInflight, listOpenApprovals } from './approval-api'
 import { leadPayloadOf, type Approval } from './types'
 
 const testGlobal = globalThis as typeof globalThis & { fetch: ReturnType<typeof vi.fn> }
@@ -5322,6 +5661,44 @@ describe('approval-api', () => {
     })
   })
 
+  // GET /api/team/inflight (spec §9.5) feeds the restart confirm, which has a 3 s budget and falls back to its
+  // own store on any rejection — so the call must bound itself and must reject (never hang) past the budget.
+  describe('fetchInflight', () => {
+    it('GETs /api/team/inflight with the Bearer token and an abort signal, and returns both counts', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ approvals_open: 2, relays_active: 0 }))
+      expect(await fetchInflight(hostId)).toEqual({ approvals_open: 2, relays_active: 0 })
+      const [url, init] = testGlobal.fetch.mock.calls[0]
+      expect(url).toBe('http://100.64.0.2:7860/api/team/inflight')
+      expect(init.method).toBe('GET')
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer tok-1')
+      expect(init.signal).toBeInstanceOf(AbortSignal)
+    })
+
+    it('a missing or malformed count reads as 0', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ approvals_open: 'two' }))
+      expect(await fetchInflight(hostId)).toEqual({ approvals_open: 0, relays_active: 0 })
+    })
+
+    it('an older daemon (plain-text 404) is `unsupported`', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(new Response('404 page not found\n', { status: 404 }))
+      expect((await rejection(fetchInflight(hostId))).code).toBe('unsupported')
+    })
+
+    it('gives up after its budget: the fetch is aborted and the rejection is code `network`', async () => {
+      vi.useFakeTimers()
+      try {
+        testGlobal.fetch.mockImplementationOnce((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')))
+        }))
+        const settled = rejection(fetchInflight(hostId, 50))
+        await vi.advanceTimersByTimeAsync(50)
+        expect((await settled).code).toBe('network')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
   describe('leadPayloadOf', () => {
     it('reads the lead payload and normalises it like the daemon does (0 → 3, cap 8, roots default [cwd])', () => {
       expect(leadPayloadOf(approval())).toEqual({ reason: '要平行跑三個 PR', max_members: 3, roots: ['/w/purdex'] })
@@ -5429,6 +5806,12 @@ export type ApprovalEventValue =
   | { op: 'opened' | 'closed'; approval: Approval }
   | { op: 'snapshot'; approvals: Approval[] }
 
+/** `GET /api/team/inflight` (spec §9.5): what a restart of that daemon would interrupt. `relays_active` is 0 until P6. */
+export interface InflightResponse {
+  approvals_open: number
+  relays_active: number
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
@@ -5456,7 +5839,10 @@ export function leadPayloadOf(a: Approval): LeadPayload {
 // queues the decision on that code alone.
 import { pinnedHostFetch } from '../host-api'
 import { useHostStore } from '../../stores/useHostStore'
-import type { APIError, Approval, DecideRequest } from './types'
+import type { APIError, Approval, DecideRequest, InflightResponse } from './types'
+
+/** `fetchInflight`'s budget: the restart confirm's own (daemon-restart.ts `WORKER_COUNT_TIMEOUT_MS`). */
+export const INFLIGHT_TIMEOUT_MS = 3_000
 
 export class ApprovalApiError extends Error {
   readonly status: number
@@ -5527,11 +5913,29 @@ export async function listOpenApprovals(hostId: string): Promise<Approval[]> {
   const r = await send<{ approvals?: Approval[] | null }>(hostId, '/api/team/approvals?state=open', { method: 'GET' })
   return Array.isArray(r.approvals) ? r.approvals : []
 }
+
+const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.trunc(v) : 0)
+
+/**
+ * `GET /api/team/inflight` (spec §9.5), for the daemon-restart confirm. Bounded by its own AbortController so the
+ * dialog's 3 s budget holds even when the daemon accepts and never answers; an abort rejects as code `network`,
+ * like any other transport failure, and the caller falls back to its store. A missing count reads as 0.
+ */
+export async function fetchInflight(hostId: string, timeoutMs = INFLIGHT_TIMEOUT_MS): Promise<InflightResponse> {
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), timeoutMs)
+  try {
+    const r = await send<Partial<InflightResponse>>(hostId, '/api/team/inflight', { method: 'GET', signal: ctl.signal })
+    return { approvals_open: count(r.approvals_open), relays_active: count(r.relays_active) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
 ```
 
 - [ ] **Step 4: Run the test and verify it passes.**
   - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/lib/team/approval-api.test.ts`
-  - Expected: PASS, 10 tests.
+  - Expected: PASS, 14 tests.
 
 - [ ] **Step 5: Commit.**
   ```bash
@@ -5559,9 +5963,10 @@ export async function listOpenApprovals(hostId: string): Promise<Approval[]> {
     entries: Record<string, ApprovalEntry>        // open requests only
     queued: Record<string, QueuedDecision>        // decisions clicked while the host was not connected
     decidedHere: Record<string, true>             // ids this app sent a decide for (no "elsewhere" toast)
-    applySnapshot: (hostId: string, approvals: Approval[]) => string[]   // replaces the host's set; returns the ids that vanished
-    applyOpened: (hostId: string, approval: Approval) => boolean          // idempotent; true when it added
-    applyClosed: (hostId: string, approval: Approval) => 'absent' | 'ours' | 'elsewhere'
+    closedIds: Record<string, string[]>           // per host: ids closed in this socket generation, oldest first, ≤ 256 (tombstones)
+    applySnapshot: (hostId: string, approvals: Approval[]) => string[]   // replaces the host's set and clears its tombstones; returns the ids that vanished
+    applyOpened: (hostId: string, approval: Approval) => boolean          // idempotent; true when it added; false for a tombstoned id
+    applyClosed: (hostId: string, approval: Approval) => 'absent' | 'ours' | 'elsewhere'   // always records the tombstone, 'absent' included
     markDecidedHere: (hostId: string, id: string) => void
     unmarkDecidedHere: (hostId: string, id: string) => void
     queueDecision: (hostId: string, approval: Approval, decision: Decision, grant?: Grant) => void
@@ -5669,6 +6074,52 @@ describe('useApprovalStore', () => {
     })
   })
 
+  // A `closed` that reaches this app before its `opened` (a socket that connected between the two): the late
+  // `opened` must not revive a request the daemon already closed. The snapshot is authoritative and clears the marks.
+  describe('a closed arriving before its opened (tombstones)', () => {
+    it('applyClosed on an unknown id is `absent` and still tombstones it; the late applyOpened is ignored', () => {
+      expect(s().applyClosed('h1', approval({ id: 'a', state: 'denied' }))).toBe('absent')
+      expect(s().applyOpened('h1', approval({ id: 'a' }))).toBe(false)
+      expect(ids()).toEqual([])
+      expect(selectOpenCountFor('h1')(s())).toBe(0)
+    })
+
+    it('the snapshot clears the host\'s tombstones: a request the daemon lists as open is shown again', () => {
+      s().applyClosed('h1', approval({ id: 'a', state: 'denied' }))
+      s().applySnapshot('h1', [approval({ id: 'a' })])
+      expect(ids()).toEqual(['h1:a'])
+      expect(s().closedIds).toEqual({})
+    })
+
+    it('a close of a held request tombstones it too, so a duplicate opened after the close is ignored', () => {
+      s().applyOpened('h1', approval({ id: 'a' }))
+      s().applyClosed('h1', approval({ id: 'a', state: 'approved' }))
+      expect(s().applyOpened('h1', approval({ id: 'a' }))).toBe(false)
+      expect(ids()).toEqual([])
+    })
+
+    it('tombstones are per host', () => {
+      s().applyClosed('h1', approval({ id: 'a', state: 'denied' }))
+      expect(s().applyOpened('h2', approval({ id: 'a' }))).toBe(true)
+      expect(ids()).toEqual(['h2:a'])
+    })
+
+    it('keeps at most 256 ids per host, dropping the oldest', () => {
+      for (let i = 0; i < 257; i++) s().applyClosed('h1', approval({ id: `c${i}`, state: 'timeout' }))
+      expect(s().closedIds.h1).toHaveLength(256)
+      expect(s().applyOpened('h1', approval({ id: 'c0' }))).toBe(true) // evicted: oldest first
+      expect(s().applyOpened('h1', approval({ id: 'c1' }))).toBe(false)
+      expect(s().applyOpened('h1', approval({ id: 'c256' }))).toBe(false)
+    })
+
+    it('reset clears them', () => {
+      s().applyClosed('h1', approval({ id: 'a', state: 'denied' }))
+      s().reset()
+      expect(s().closedIds).toEqual({})
+      expect(s().applyOpened('h1', approval({ id: 'a' }))).toBe(true)
+    })
+  })
+
   describe('queued decisions', () => {
     it('queueDecision keeps one decision per request (the last click wins); takeQueued removes and returns that host\'s', () => {
       const a = approval({ id: 'a' })
@@ -5716,9 +6167,15 @@ describe('useApprovalStore', () => {
 // `decidedHere` marks the requests this app sent a decide for, so the `closed` that follows our own 200 does
 // not toast "已由 … 核准" at the person who clicked. `queued` holds a decision clicked while the host was not
 // connected (spec §9.4); the snapshot that arrives on reconnect either re-adds the request (the decision is
-// sent then, once) or shows it gone (toast). The store is pure data; the sending lives in lib/team.
+// sent then, once) or shows it gone (toast). `closedIds` are per-host tombstones: a `closed` that arrives
+// before its `opened` (a socket that connected between the two) must not let the late `opened` revive a
+// request the daemon already closed; the snapshot is authoritative and clears them. The store is pure data;
+// the sending lives in lib/team.
 import { create } from 'zustand'
 import type { Approval, Grant } from '../lib/team/types'
+
+/** Tombstones kept per host; past this the oldest is dropped (a request id is a UUID, 256 is hours of closes). */
+export const TOMBSTONES_PER_HOST = 256
 
 export type Decision = 'approve' | 'deny'
 
@@ -5741,11 +6198,13 @@ interface ApprovalStoreState {
   entries: Record<string, ApprovalEntry>
   queued: Record<string, QueuedDecision>
   decidedHere: Record<string, true>
-  /** Replace the host's whole open set from a snapshot; returns the ids held before that are not in it. */
+  /** Per host, the ids closed in this socket generation, oldest first, at most TOMBSTONES_PER_HOST. */
+  closedIds: Record<string, string[]>
+  /** Replace the host's whole open set from a snapshot and clear its tombstones; returns the ids held before that are not in it. */
   applySnapshot: (hostId: string, approvals: Approval[]) => string[]
-  /** Add an opened request; false when it was already held or is not open. */
+  /** Add an opened request; false when it was already held, is not open, or was closed before (tombstoned). */
   applyOpened: (hostId: string, approval: Approval) => boolean
-  /** Remove a request on any close. Tells whether the decision was ours, elsewhere, or the request unknown. */
+  /** Remove a request on any close and tombstone its id (absent or not). Tells whether the decision was ours, elsewhere, or the request unknown. */
   applyClosed: (hostId: string, approval: Approval) => 'absent' | 'ours' | 'elsewhere'
   markDecidedHere: (hostId: string, id: string) => void
   unmarkDecidedHere: (hostId: string, id: string) => void
@@ -5762,10 +6221,19 @@ function without<T>(record: Record<string, T>, key: string): Record<string, T> {
   return next
 }
 
+/** `closedIds` with `id` appended for `hostId` (once), the oldest dropped past the cap. */
+function tombstone(closedIds: Record<string, string[]>, hostId: string, id: string): Record<string, string[]> {
+  const had = closedIds[hostId] ?? []
+  if (had.includes(id)) return closedIds
+  const next = had.length >= TOMBSTONES_PER_HOST ? had.slice(had.length - TOMBSTONES_PER_HOST + 1) : had
+  return { ...closedIds, [hostId]: [...next, id] }
+}
+
 export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
   entries: {},
   queued: {},
   decidedHere: {},
+  closedIds: {},
 
   applySnapshot: (hostId, approvals) => {
     const open = approvals.filter((a) => a.state === 'open')
@@ -5784,24 +6252,33 @@ export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
       // Keep the held object when the same request is still open: the dialog is keyed on it.
       next[key] = get().entries[key] ?? { hostId, approval: a }
     }
-    set({ entries: next })
+    // The daemon's snapshot is authoritative: whatever it lists is open now, tombstones or not.
+    set({ entries: next, closedIds: without(get().closedIds, hostId) })
     return vanished
   },
 
   applyOpened: (hostId, approval) => {
     if (approval.state !== 'open') return false
     const key = approvalKey(hostId, approval.id)
-    if (Object.hasOwn(get().entries, key)) return false
+    const { entries, closedIds } = get()
+    if (Object.hasOwn(entries, key)) return false
+    // Its `closed` already came through this socket: the daemon closed it, this `opened` is late.
+    if (closedIds[hostId]?.includes(approval.id)) return false
     set((s) => ({ entries: { ...s.entries, [key]: { hostId, approval } } }))
     return true
   },
 
   applyClosed: (hostId, approval) => {
     const key = approvalKey(hostId, approval.id)
-    const { entries, queued, decidedHere } = get()
+    const { entries, queued, decidedHere, closedIds } = get()
     const had = Object.hasOwn(entries, key)
     const ours = Object.hasOwn(decidedHere, key)
-    set({ entries: without(entries, key), queued: without(queued, key), decidedHere: without(decidedHere, key) })
+    set({
+      entries: without(entries, key),
+      queued: without(queued, key),
+      decidedHere: without(decidedHere, key),
+      closedIds: tombstone(closedIds, hostId, approval.id),
+    })
     if (!had) return 'absent'
     return ours ? 'ours' : 'elsewhere'
   },
@@ -5823,7 +6300,7 @@ export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
     return taken
   },
 
-  reset: () => set({ entries: {}, queued: {}, decidedHere: {} }),
+  reset: () => set({ entries: {}, queued: {}, decidedHere: {}, closedIds: {} }),
 }))
 
 /** The request the dialog shows: the oldest `created_at` across hosts (spec §6.3 "oldest first"); ties by id, then host. */
@@ -5848,7 +6325,8 @@ export const selectOpenCountFor = (hostId: string) => (s: ApprovalStoreState): n
 
 - [ ] **Step 4: Run the test and verify it passes.**
   - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/stores/useApprovalStore.test.ts`
-  - Expected: PASS, 12 tests.
+  - Expected: PASS, 18 tests.
+  - Mutation check (Review Focus 5, "nor revives one that closed meanwhile"; measured 2026-10-07 in the scratch build): delete the `closedIds[hostId]?.includes(...)` line in `applyOpened` and rerun — three tombstone tests fail with `expected true to be false` (`applyClosed on an unknown id …`, `a close of a held request …`, `keeps at most 256 …`), 15 pass. Put it back.
 
 - [ ] **Step 5: Commit.**
   ```bash
@@ -7466,23 +7944,26 @@ and after the `case 'open-host': { … break }` block (line 409) add:
 ### Task 3.7: The daemon-restart confirm gains `N 個申請等待核准` (only when N > 0)
 
 **Files:**
-- Modify: `spa/src/components/hosts/RestartDaemonButton.tsx:13-17` (imports), `:42-47` (one more store read), `:124-130` (a second line under the workers line)
+- Modify: `spa/src/components/hosts/RestartDaemonButton.tsx:13-17` (imports), `:31-36` (`PendingConfirm` gains `approvals`), `:42-47` (one more store read), `:80-90` (`open()` fetches inflight beside the worker count), `:124-130` (a second line under the workers line)
 - Modify: `spa/src/locales/en.json`, `spa/src/locales/zh-TW.json` (one key after `approval.notify.title`)
-- Test: `spa/src/components/hosts/RestartDaemonButton.test.tsx:11-16` (reset the approval store in `beforeEach`), plus three new tests appended to the top-level `describe`.
+- Test: `spa/src/components/hosts/RestartDaemonButton.test.tsx:7-16` (mock `fetchInflight`, reset the approval store in `beforeEach`), plus five new tests appended to the top-level `describe`.
 
 **Interfaces:**
-- Consumes: `useApprovalStore` + `selectOpenCountFor(hostId)` (Task 3.2).
+- Consumes: `fetchInflight(hostId)` (Task 3.1; `GET /api/team/inflight`, self-bounded to 3 s); `useApprovalStore` + `selectOpenCountFor(hostId)` (Task 3.2) as the fallback.
 - Produces: `<p data-testid={`${testId}-approvals`}>` in the confirm dialog, rendered only when the **restarting host** has open requests. The count is per host, not global — the other hosts' requests do not survive or suffer this restart.
 
-Spec §9.5 says the counts come from `GET /api/team/inflight` within the dialog's 3 s budget; the handoff notes (P3) decide the store is enough until relays exist, and P6 adds the route. Recorded in `## Deviations`.
+Spec §9.5: the count comes from `GET /api/team/inflight`, fetched while the dialog counts running workers (both inside the same 3 s budget: `countRunningWorkers` races its own timer, `fetchInflight` aborts its own request), and when that call fails or times out the dialog falls back to the open requests its own store holds for that host. The daemon's answer wins over the store when both exist: the store lags the socket, the daemon is the source.
 
 - [ ] **Step 1: Write the failing tests.**
 
-In `spa/src/components/hosts/RestartDaemonButton.test.tsx`, add the import and the reset:
+In `spa/src/components/hosts/RestartDaemonButton.test.tsx`, add the imports and the module mock next to the existing `daemon-restart` mock (line 7), and the reset in `beforeEach`:
 
 ```ts
 import { useApprovalStore } from '../../stores/useApprovalStore'
 import type { Approval } from '../../lib/team/types'
+import * as approvalApi from '../../lib/team/approval-api'
+
+vi.mock('../../lib/team/approval-api', () => ({ fetchInflight: vi.fn() }))
 ```
 
 ```ts
@@ -7491,6 +7972,9 @@ beforeEach(() => {
   restart.mockClear()
   useDaemonRestartStore.setState({ restarting: {}, settled: {}, restart })
   vi.mocked(restartLib.countRunningWorkers).mockReset()
+  // Default: the inflight call fails (an older daemon, or one mid-restart); tests that want a daemon answer override it.
+  vi.mocked(approvalApi.fetchInflight).mockReset()
+  vi.mocked(approvalApi.fetchInflight).mockRejectedValue(new Error('inflight unavailable'))
   useApprovalStore.getState().reset()
 })
 ```
@@ -7505,24 +7989,44 @@ and append inside `describe('RestartDaemonButton', …)`:
       payload: { reason: 'r', max_members: 3, roots: ['/w'] },
       state: 'open', created_at: 1, deadline_at: 2, lease_until: 3,
     })
+    const daemonSays = (approvals_open: number) =>
+      vi.mocked(approvalApi.fetchInflight).mockResolvedValueOnce({ approvals_open, relays_active: 0 })
 
-    it('names this host\'s open requests when there are some', async () => {
-      // Dropping the count turns this red (mutation deliverable).
+    it('asks GET /api/team/inflight for THIS host and names its open requests', async () => {
+      // Dropping the fetch, or reading the wrong field, turns this red (mutation deliverable).
+      daemonSays(2)
+      await openConfirm(0)
+      expect(approvalApi.fetchInflight).toHaveBeenCalledTimes(1)
+      expect(approvalApi.fetchInflight).toHaveBeenCalledWith('h1')
+      expect(screen.getByTestId('restart-daemon-approvals').textContent).toBe('2 個申請等待核准')
+    })
+
+    it('the daemon\'s count wins over the store\'s when both exist', async () => {
+      useApprovalStore.getState().applyOpened('h1', approval('a'))
+      daemonSays(3)
+      await openConfirm(0)
+      expect(screen.getByTestId('restart-daemon-approvals').textContent).toBe('3 個申請等待核准')
+    })
+
+    it('when the inflight call rejects it falls back to the store\'s count for this host only', async () => {
+      // beforeEach leaves fetchInflight rejecting.
       useApprovalStore.getState().applyOpened('h1', approval('a'))
       useApprovalStore.getState().applyOpened('h1', approval('b'))
       useApprovalStore.getState().applyOpened('h2', approval('c'))
       await openConfirm(0)
+      expect(approvalApi.fetchInflight).toHaveBeenCalledWith('h1')
       expect(screen.getByTestId('restart-daemon-approvals').textContent).toBe('2 個申請等待核准')
     })
 
-    it('no line when this host has none, even if another host does', async () => {
+    it('no line when the daemon says none and the store has none for this host, even if another host does', async () => {
+      daemonSays(0)
       useApprovalStore.getState().applyOpened('h2', approval('c'))
       await openConfirm(0)
       expect(screen.queryByTestId('restart-daemon-approvals')).toBeNull()
     })
 
     it('shows both lines when workers run and requests wait', async () => {
-      useApprovalStore.getState().applyOpened('h1', approval('a'))
+      daemonSays(1)
       await openConfirm(2)
       expect(screen.getByTestId('restart-daemon-workers')).toBeInTheDocument()
       expect(screen.getByTestId('restart-daemon-approvals').textContent).toBe('1 個申請等待核准')
@@ -7530,9 +8034,11 @@ and append inside `describe('RestartDaemonButton', …)`:
   })
 ```
 
+  The existing tests keep passing: with the default rejection the fallback is a store that `beforeEach` emptied, so no `-approvals` line appears, and `openConfirm` still resolves because `Promise.all` settles once both the worker count and the (rejected → `null`) inflight call do.
+
 - [ ] **Step 2: Run the test and verify it fails.**
   - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/components/hosts/RestartDaemonButton.test.tsx`
-  - Expected: FAIL — `Unable to find an element by: [data-testid="restart-daemon-approvals"]` (2 of the 3 new tests; the "no line" one passes vacuously).
+  - Expected: FAIL — `Unable to find an element by: [data-testid="restart-daemon-approvals"]` in four of the five new tests and `expected "spy" to be called 1 times, but got 0 times` in the first; the "no line" one passes vacuously.
 
 - [ ] **Step 3: Implement.**
 
@@ -7540,14 +8046,55 @@ and append inside `describe('RestartDaemonButton', …)`:
 
 ```ts
 import { selectOpenCountFor, useApprovalStore } from '../../stores/useApprovalStore'
+import { fetchInflight } from '../../lib/team/approval-api'
+```
+
+in `PendingConfirm` (lines 30-36), after the `workers` field add:
+
+```ts
+  // GET /api/team/inflight's approvals_open (lead-team spec §9.5); null = the call failed or timed out, and the
+  // line falls back to the store's count for this host.
+  approvals: number | null
 ```
 
 after line 47 (`const restart = useDaemonRestartStore((s) => s.restart)`) add:
 
 ```ts
+  // Fallback for the inflight count (lead-team spec §9.5): the open requests the WS snapshot keeps for THIS host.
+  const storeOpenApprovals = useApprovalStore(selectOpenCountFor(hostId))
+```
+
+in `open()`, replace
+
+```ts
+    const workers = await countRunningWorkers(target)
+    // Invalidated meanwhile: a newer state owns `countingFor`, touch nothing.
+    if (!mounted.current || requestRef.current !== mine) return
+    setCountingFor(null)
+    if (stillValid(target, gen)) setConfirm({ hostId: target, gen, workers })
+```
+
+with
+
+```ts
+    // Both inside the dialog's 3 s budget: countRunningWorkers races its own timer, fetchInflight aborts its own
+    // request (approval-api.ts INFLIGHT_TIMEOUT_MS). Any inflight failure is null → the store's count below.
+    const [workers, approvals] = await Promise.all([
+      countRunningWorkers(target),
+      fetchInflight(target).then((r) => r.approvals_open, () => null),
+    ])
+    // Invalidated meanwhile: a newer state owns `countingFor`, touch nothing.
+    if (!mounted.current || requestRef.current !== mine) return
+    setCountingFor(null)
+    if (stillValid(target, gen)) setConfirm({ hostId: target, gen, workers, approvals })
+```
+
+before the `return (` add:
+
+```ts
   // Open approval requests on THIS host (lead-team spec §9.5): they survive the restart (leases are extended at
-  // boot), so the line informs, it does not block. Counted from the store the WS snapshot keeps current.
-  const openApprovals = useApprovalStore(selectOpenCountFor(hostId))
+  // boot), so the line informs, it does not block. The daemon's answer first; the store when it could not be asked.
+  const openApprovals = confirm === null ? 0 : (confirm.approvals ?? storeOpenApprovals)
 ```
 
 and replace lines 124-130 (the children of `ConfirmDialog`) with:
@@ -7581,7 +8128,8 @@ and replace lines 124-130 (the children of `ConfirmDialog`) with:
 
 - [ ] **Step 4: Run the tests and verify they pass.**
   - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/components/hosts/RestartDaemonButton.test.tsx src/locales/locale-completeness.test.ts`
-  - Expected: PASS (the whole `RestartDaemonButton` suite, 3 new).
+  - Expected: PASS (the whole `RestartDaemonButton` suite, 5 new).
+  - Mutation check (spec §9.5 fallback; measured 2026-10-07 in the scratch build): make `open()` ignore the inflight answer (`approvals: null` always) and rerun — three go red (`asks GET /api/team/inflight …`, `the daemon's count wins …`, `shows both lines …`) and the fallback test stays green. Then make it ignore the store (`confirm.approvals ?? 0`) — exactly one goes red, the fallback test. Put both back.
 
 - [ ] **Step 5: Commit.**
   ```bash
@@ -7703,7 +8251,7 @@ Insert before line 94 (`  // The Live Mode gate explains …`) of `spa/src/local
 2. **`queueDecision` takes the `Approval`, not the id** (`queueDecision(hostId, approval, decision, grant?)`). The `ended_while_away` toast needs the session and kind after the snapshot has already dropped the entry, so the queued record carries the approval. `markSent` from the notes does not exist: the resend path is `takeQueued` (consumed on take), and a resend that fails on the network re-queues itself inside `submitDecision`.
 3. **A `decidedHere` mark replaces an implicit "ours" check.** The notes did not say how the WS `closed` after our own 200 avoids toasting at the person who clicked. `markDecidedHere` before the send, `applyClosed` returns `'ours' | 'elsewhere' | 'absent'`. A 409 whose `decided_by.label` equals this app's label is also treated as ours (a lost answer, resent).
 4. **"Buttons disabled while disconnected" is `aria-disabled`, not `disabled`.** The task text asks for disabled buttons *and* for a click to be queued; a `disabled` button cannot be clicked. The dialog dims both buttons with `aria-disabled` (the same classes `RestartDaemonButton` uses for its counting state) and queues the click; once a decision is queued they become really `disabled`. The banner text is the spec's `daemon 重啟中…` exactly; the queued state adds a second line.
-5. **Per-host count in the restart confirm.** The task names `selectOpenCount`; the dialog uses `selectOpenCountFor(hostId)`, because the other hosts' requests are not affected by this host's restart. `selectOpenCount` (global) exists too and is what the dialog's "還有 N 個申請排隊中" line uses. Spec §9.5's `GET /api/team/inflight` is not called (the handoff notes defer it to P6; the store the WS snapshot keeps current is the same set).
+5. **Per-host count in the restart confirm.** The task names `selectOpenCount`; the dialog uses `selectOpenCountFor(hostId)`, because the other hosts' requests are not affected by this host's restart. `selectOpenCount` (global) exists too and is what the dialog's "還有 N 個申請排隊中" line uses. Spec §9.5's `GET /api/team/inflight` is called first (P2a ships it with `relays_active: 0`; `fetchInflight`, Task 3.1, bounds itself to the dialog's 3 s); the store's per-host count is the fallback when that call fails or times out (codex plan round, F4 — the handoff notes had deferred the call to P6).
 6. **`Origin` gains two optional fields in TS only: `title?` and `address?`.** Spec §6.3 wants "the session's title or name" and "address and ref"; the wire `Origin` has neither a title nor the formatted address. The SPA falls back to `name` → `ref` and builds `<host>/<name> [<ref6>]` locally with the SPA's host label as `<host>`. See `## Open questions`.
 7. **No browser `Notification` fallback, and no `shouldDispatch` localStorage dedup** for approvals: the request id already makes `applyOpened` idempotent, and Electron main dedups on `broadcastTs`. The existing `sendConnectionNotification` fallback is not extended (U14).
 8. **Line numbers re-verified.** The notes' `host-events.ts:4-15`, `useMultiHostEventWs.ts:172-235`, `App.tsx:283`, `electron.d.ts:54-62, :173`, `handoff-api.ts:129-150`, `host-api.ts:214`, `useNotificationDispatcher.ts:280-294`, `RestartDaemonButton.tsx:115-131` all still hold on `d39886e8`; only the inner line of the `nex-worker-exited` branch (213-217) and the import line (21) were added above.
@@ -7717,11 +8265,11 @@ Counted from the code blocks above (new files whole; modified files by lines add
 
 | File | Lines |
 |---|---|
-| `lib/team/types.ts` | ~95 |
-| `lib/team/approval-api.ts` | ~85 |
-| `lib/team/approval-api.test.ts` | ~120 |
-| `stores/useApprovalStore.ts` | ~140 |
-| `stores/useApprovalStore.test.ts` | ~130 |
+| `lib/team/types.ts` | ~105 |
+| `lib/team/approval-api.ts` | ~110 |
+| `lib/team/approval-api.test.ts` | ~165 |
+| `stores/useApprovalStore.ts` | ~165 |
+| `stores/useApprovalStore.test.ts` | ~180 |
 | `lib/team/approval-format.ts` | ~60 |
 | `lib/team/approval-ws.ts` | ~65 |
 | `lib/host-events.ts` | +1 |
@@ -7734,7 +8282,7 @@ Counted from the code blocks above (new files whole; modified files by lines add
 | `App.tsx` | +3 |
 | `locales/en.json` | +29 |
 | `locales/zh-TW.json` | +29 |
-| **Total** | **≈ 1 470 lines, 17 files** |
+| **Total** | **≈ 1 620 lines, 17 files** (re-counted 2026-10-07 after the codex plan round: `fetchInflight` and its tests, the tombstones and their tests) |
 
 **P3b (Tasks 3.5–3.8)** — 11 files:
 
@@ -7746,11 +8294,11 @@ Counted from the code blocks above (new files whole; modified files by lines add
 | `lib/team/approval-notify.test.ts` | ~85 |
 | `hooks/useNotificationDispatcher.ts` | +12 |
 | `hooks/useNotificationDispatcher.approval.test.ts` | ~50 |
-| `components/hosts/RestartDaemonButton.tsx` | +10 |
-| `components/hosts/RestartDaemonButton.test.tsx` | +35 |
+| `components/hosts/RestartDaemonButton.tsx` | +20 |
+| `components/hosts/RestartDaemonButton.test.tsx` | +65 |
 | `locales/en.json` / `zh-TW.json` | +3 each |
 | `locales/locale-completeness.test.ts` | +38 |
-| **Total** | **≈ 395 lines, 11 files** |
+| **Total** | **≈ 435 lines, 11 files** (re-counted 2026-10-07: the inflight fetch in the restart confirm and its five tests) |
 
 The Global Constraint is "≤ 800 lines **or** ≤ 20 files"; both PRs meet the file bound. P3a exceeds the line bound (about 55 % of it is test code). If the coordinator wants the line bound as well, split P3a once more at the natural seam: **P3a-1** = Tasks 3.1–3.3 (types, API, store, WS branch, toasts; ≈ 830 lines, 10 files) and **P3a-2** = Task 3.4 (dialog host, client label, decide path; ≈ 640 lines, 7 files). P3a-1 ships nothing user-visible except the "closed elsewhere" toast, which is harmless without the dialog.
 
@@ -7763,7 +8311,7 @@ The Global Constraint is "≤ 800 lines **or** ≤ 20 files"; both PRs meet the 
 
 ### Coordinator decisions on P3 (2026-10-07, `mlab/_81nu3d`)
 
-- **Split into three PRs, each under 800 lines (codex finding 9):** **P3a-1** = Tasks 3.1, 3.2 (types, API client, store; ≈ 570 lines); **P3a-2** = Task 3.4 (dialog host, client label, decide path; ≈ 640 — the dialog is store-driven, so it is tested without the WS branch); **P3b** = Tasks 3.3, 3.5–3.8 (WS branch and toasts, reconnect resend, notification, restart line, i18n block; ≈ 655). The dialog shows nothing until P3b lands; daemon deploys are batched anyway.
+- **Split into three PRs, each under 800 lines (codex finding 9):** **P3a-1** = Tasks 3.1, 3.2 (types, API client, store; ≈ 725 lines after the codex plan round added `fetchInflight` and the tombstones with their tests); **P3a-2** = Task 3.4 (dialog host, client label, decide path; ≈ 640 — the dialog is store-driven, so it is tested without the WS branch); **P3b** = Tasks 3.3, 3.5–3.8 (WS branch and toasts, reconnect resend, notification, restart line with the inflight fetch, i18n block; ≈ 695). The dialog shows nothing until P3b lands; daemon deploys are batched anyway.
 - **Open question 1 is taken into P2a:** `team.Origin` gains `Title string \`json:"title,omitempty"\`` and `Address string \`json:"address,omitempty"\`` (see "Coordinator decisions on P2a", amended). The TS `Origin.title?` / `address?` in Task 3.1 therefore match the wire, and the local fallback stays for an older daemon.
-- **Open questions 2–4 are accepted as v1 behaviour** (every window focuses on the notification click, as `open-host` does; `broadcastTs` stays `created_at`; a `closed` racing a late `opened` self-heals on the next snapshot or on the click's 409/404). Each is noted in the task that owns it; none needs code here.
+- **Open questions 2–3 are accepted as v1 behaviour** (every window focuses on the notification click, as `open-host` does; `broadcastTs` stays `created_at`); **open question 4 is closed by the store's per-host tombstones (Task 3.2, codex plan round F8):** a `closed` that arrives before its `opened` is recorded even when the entry is absent, the late `opened` is ignored, and the next snapshot — the daemon's authoritative list — clears the tombstones. Each is noted in the task that owns it.
 - **Deviations 1–9 are accepted.** Deviation 4 (`aria-disabled` plus queue, then `disabled` once queued) is the reading of spec §6.3 that lets "a click while disconnected is kept locally" work at all.
