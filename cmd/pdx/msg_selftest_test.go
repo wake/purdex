@@ -273,6 +273,7 @@ func newStFixture(t *testing.T) *stFixture {
 		now:         f.clock.now,
 		homeDir:     f.home,
 		readFile:    os.ReadFile,
+		lstat:       os.Lstat,
 		rmdir: func(path string) error {
 			err := syscall.Rmdir(path)
 			if err == nil {
@@ -1819,6 +1820,236 @@ func TestSelftest_Cleanup_TranscriptNonEmptyDirsKept(t *testing.T) {
 	})
 }
 
+// TestSelftest_Cleanup_TranscriptSwappedAfterReadKept (A1): the removal is
+// bound to the regular file that was verified — whatever sits at the path
+// after the read (another file, a symlink) is kept with a note, and so is
+// the file that was verified, wherever it went.
+func TestSelftest_Cleanup_TranscriptSwappedAfterReadKept(t *testing.T) {
+	cases := map[string]func(t *testing.T, path, moved string){
+		"replaced by another file": func(t *testing.T, path, _ string) {
+			if err := os.WriteFile(path, []byte(sidLine("user", stSessionID)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"replaced by a symlink": func(t *testing.T, path, moved string) {
+			if err := os.Symlink(moved, path); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, swap := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newStFixture(t)
+			f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
+			file, _, _ := f.transcriptPaths()
+			writeTranscript(t, file, sidLine("user", stSessionID))
+			moved := file + ".verified"
+			f.deps.readFile = func(path string) ([]byte, error) {
+				data, err := os.ReadFile(path)
+				if path == file {
+					if err := os.Rename(file, moved); err != nil {
+						t.Fatal(err)
+					}
+					swap(t, file, moved)
+				}
+				return data, err
+			}
+
+			code, out, _ := f.run(context.Background(), 5*time.Second)
+			if code != 0 {
+				t.Errorf("exit = %d, want 0 (a changed file is a note)\n%s", code, out)
+			}
+			if !proxyhelpertest.Exists(file) || !proxyhelpertest.Exists(moved) {
+				t.Errorf("a file swapped in after the read, or the verified one, was removed")
+			}
+			if want := "transcript kept: " + file + ": changed during cleanup\n"; !strings.Contains(out, want) {
+				t.Errorf("stdout lacks %q:\n%s", want, out)
+			}
+			if strings.Contains(out, "removed transcript") {
+				t.Errorf("stdout claims a removal:\n%s", out)
+			}
+			if f.lastLine(out) != "cleanup: ok" {
+				t.Errorf("last line = %q", f.lastLine(out))
+			}
+		})
+	}
+}
+
+// TestSelftest_Cleanup_TranscriptSymlinks (A2): the slug directory and the
+// transcript must be real — a symlink at either is kept, never read and
+// never removed, and neither is its target. The projects root above them
+// may be a symlink (followed by design).
+func TestSelftest_Cleanup_TranscriptSymlinks(t *testing.T) {
+	t.Run("slug dir is a symlink", func(t *testing.T) {
+		f := newStFixture(t)
+		f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
+		file, _, projDir := f.transcriptPaths()
+		elsewhere := filepath.Join(f.home, "elsewhere")
+		target := filepath.Join(elsewhere, stSessionID+".jsonl")
+		writeTranscript(t, target, sidLine("user", stSessionID))
+		mkdirs(t, filepath.Dir(projDir))
+		if err := os.Symlink(elsewhere, projDir); err != nil {
+			t.Fatal(err)
+		}
+		reads := f.recordReads()
+
+		code, out, _ := f.run(context.Background(), 5*time.Second)
+		if code != 0 {
+			t.Errorf("exit = %d, want 0\n%s", code, out)
+		}
+		if !proxyhelpertest.Exists(target) || !proxyhelpertest.Exists(projDir) {
+			t.Errorf("the symlinked slug dir or its target's transcript was removed")
+		}
+		if len(*reads) != 0 {
+			t.Errorf("transcript read through a symlinked slug dir: %v", *reads)
+		}
+		if want := "transcript kept: " + file + ": project directory " + projDir + " is a symlink\n"; !strings.Contains(out, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, out)
+		}
+		if strings.Contains(out, "removed transcript") {
+			t.Errorf("stdout claims a removal:\n%s", out)
+		}
+		if f.lastLine(out) != "cleanup: ok" {
+			t.Errorf("last line = %q", f.lastLine(out))
+		}
+	})
+	t.Run("transcript is a symlink", func(t *testing.T) {
+		f := newStFixture(t)
+		f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
+		file, _, projDir := f.transcriptPaths()
+		target := filepath.Join(f.home, "elsewhere", "t.jsonl")
+		writeTranscript(t, target, sidLine("user", stSessionID))
+		mkdirs(t, projDir)
+		if err := os.Symlink(target, file); err != nil {
+			t.Fatal(err)
+		}
+		reads := f.recordReads()
+
+		code, out, _ := f.run(context.Background(), 5*time.Second)
+		if code != 0 {
+			t.Errorf("exit = %d, want 0\n%s", code, out)
+		}
+		if !proxyhelpertest.Exists(target) || !proxyhelpertest.Exists(file) {
+			t.Errorf("the transcript symlink or its target was removed")
+		}
+		if len(*reads) != 0 {
+			t.Errorf("a symlinked transcript was read: %v", *reads)
+		}
+		if want := "transcript kept: " + file + ": a symlink, not a regular file\n"; !strings.Contains(out, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, out)
+		}
+		if strings.Contains(out, "removed transcript") {
+			t.Errorf("stdout claims a removal:\n%s", out)
+		}
+		if f.lastLine(out) != "cleanup: ok" {
+			t.Errorf("last line = %q", f.lastLine(out))
+		}
+	})
+	t.Run("projects root is a symlink", func(t *testing.T) {
+		f := newStFixture(t)
+		f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
+		file, _, projDir := f.transcriptPaths()
+		root := filepath.Dir(projDir) // <home>/.claude/projects
+		realRoot := filepath.Join(f.home, "real-projects")
+		realFile := filepath.Join(realRoot, stProjectSlug, stSessionID+".jsonl")
+		writeTranscript(t, realFile, sidLine("user", stSessionID))
+		mkdirs(t, filepath.Dir(root))
+		if err := os.Symlink(realRoot, root); err != nil {
+			t.Fatal(err)
+		}
+
+		code, out, _ := f.run(context.Background(), 5*time.Second)
+		if code != 0 {
+			t.Fatalf("exit = %d, stdout:\n%s", code, out)
+		}
+		if proxyhelpertest.Exists(realFile) {
+			t.Errorf("transcript under a symlinked projects root left behind:\n%s", out)
+		}
+		if !strings.Contains(out, "removed transcript: "+file+"\n") {
+			t.Errorf("stdout lacks the removed-transcript line:\n%s", out)
+		}
+		if fi, err := os.Lstat(root); err != nil || fi.Mode()&os.ModeSymlink == 0 || !proxyhelpertest.Exists(realRoot) {
+			t.Errorf("the projects root symlink or its target was touched (%v)", err)
+		}
+		if f.lastLine(out) != "cleanup: ok" {
+			t.Errorf("last line = %q", f.lastLine(out))
+		}
+	})
+}
+
+// TestSelftest_Cleanup_TranscriptCheckErrorIsIncomplete (A4): failing to
+// look at our own computed path — Lstat of the slug dir or the transcript,
+// before or after the read, or the read itself — is a cleanup problem
+// (exit 1 even after a PASS), and the file is kept. A missing file stays
+// silent and an unproven one a note (other tests).
+func TestSelftest_Cleanup_TranscriptCheckErrorIsIncomplete(t *testing.T) {
+	eacces := func(op, path string) error { return &os.PathError{Op: op, Path: path, Err: syscall.EACCES} }
+	cases := map[string]func(f *stFixture, file, projDir string){
+		"read error": func(f *stFixture, file, _ string) {
+			f.deps.readFile = func(path string) ([]byte, error) {
+				if path == file {
+					return nil, eacces("open", path)
+				}
+				return os.ReadFile(path)
+			}
+		},
+		"transcript lstat error": func(f *stFixture, file, _ string) {
+			f.deps.lstat = func(path string) (os.FileInfo, error) {
+				if path == file {
+					return nil, eacces("lstat", path)
+				}
+				return os.Lstat(path)
+			}
+		},
+		"transcript lstat error after the read": func(f *stFixture, file, _ string) {
+			n := 0
+			f.deps.lstat = func(path string) (os.FileInfo, error) {
+				if path == file {
+					if n++; n > 1 {
+						return nil, eacces("lstat", path)
+					}
+				}
+				return os.Lstat(path)
+			}
+		},
+		"slug dir lstat error": func(f *stFixture, _, projDir string) {
+			f.deps.lstat = func(path string) (os.FileInfo, error) {
+				if path == projDir {
+					return nil, eacces("lstat", path)
+				}
+				return os.Lstat(path)
+			}
+		},
+	}
+	for name, inject := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newStFixture(t)
+			f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
+			file, _, projDir := f.transcriptPaths()
+			writeTranscript(t, file, sidLine("user", stSessionID))
+			inject(f, file, projDir)
+
+			code, out, _ := f.run(context.Background(), 5*time.Second)
+			if !strings.Contains(out, "PASS: reply from ") {
+				t.Errorf("stdout:\n%s", out)
+			}
+			if code != 1 {
+				t.Errorf("exit = %d, want 1 (cleanup incomplete overrides PASS)", code)
+			}
+			if !proxyhelpertest.Exists(file) {
+				t.Errorf("transcript removed although it could not be checked")
+			}
+			if strings.Contains(out, "removed transcript") {
+				t.Errorf("stdout claims a removal:\n%s", out)
+			}
+			last := f.lastLine(out)
+			if !strings.HasPrefix(last, "cleanup incomplete: ") || !strings.Contains(last, "transcript not checked: "+file+": ") {
+				t.Errorf("last line = %q, want cleanup incomplete naming the transcript", last)
+			}
+		})
+	}
+}
+
 // TestSelftestSlug pins the copied Nexen rule, including a directory name
 // observed under ~/.claude/projects on mlab (2026-10-06).
 func TestSelftestSlug(t *testing.T) {
@@ -1936,7 +2167,7 @@ func TestSelftest_ProductionDepsAreWired(t *testing.T) {
 	if d.tmux == nil || d.readRegistry == nil || d.spawn == nil || d.writeFrame == nil ||
 		d.pidAlive == nil || d.procStart == nil || d.signal == nil || d.readPeerFeatures == nil ||
 		d.glob == nil || d.registryProcStart == nil || d.remove == nil || d.dialRefused == nil ||
-		d.sleep == nil || d.now == nil || d.readFile == nil || d.rmdir == nil {
+		d.sleep == nil || d.now == nil || d.readFile == nil || d.lstat == nil || d.rmdir == nil {
 		t.Fatalf("a production seam is nil: %+v", d)
 	}
 	if d.sockDir != ccuds.DefaultSockDir {

@@ -97,6 +97,9 @@ type selftestDeps struct {
 	// session's transcript lives under it (#1631).
 	homeDir  string
 	readFile func(path string) ([]byte, error)
+	// lstat never follows a final symlink: it pins the transcript the
+	// cleanup verified to the one it removes.
+	lstat func(path string) (fs.FileInfo, error)
 	// rmdir removes an empty directory and nothing else.
 	rmdir func(path string) error
 }
@@ -155,6 +158,7 @@ func newSelftestDeps(stderr io.Writer) (selftestDeps, error) {
 		now:      time.Now,
 		homeDir:  home,
 		readFile: os.ReadFile,
+		lstat:    os.Lstat,
 		rmdir:    syscall.Rmdir,
 	}, nil
 }
@@ -635,9 +639,12 @@ func selftestRemoveSock(deps selftestDeps, sock, owner string, problem func(stri
 // A path that cannot be computed with confidence is a skip note. Unless
 // the claude process is gone (targetID ProcDifferent) — still alive, or
 // of unknown identity — the transcript is kept, unread, with a note: it
-// may still be written. A missing transcript is silence; one that is not
-// proven ours is kept with a note, as a foreign registry file is. Only
-// failing to remove a verified transcript is a cleanup problem.
+// may still be written. A missing transcript is silence. One that is not
+// proven ours is kept with a note, as a foreign registry file is: a
+// symlinked slug directory, a transcript that is not a regular file, a
+// sessionId mismatch, or a file that changed between the check and the
+// removal. Failing to look at our own path (Lstat, read) or to remove a
+// verified transcript is a cleanup problem.
 func selftestRemoveTranscript(deps selftestDeps, st *selftestState, targetID ipeers.ProcIdentity,
 	problem func(string, ...any), stdout io.Writer) {
 	path, why := selftestTranscriptPath(deps.homeDir, st.targetCwd, st.targetSessionID)
@@ -657,16 +664,58 @@ func selftestRemoveTranscript(deps selftestDeps, st *selftestState, targetID ipe
 		fmt.Fprintf(stdout, "transcript kept: %s: claude pid %d of unknown identity may still write it\n", path, st.targetPID)
 		return
 	}
+	// The projects root may be a symlink — followed by design (mlab's
+	// setup) — but the slug directory under it must be a real one: a
+	// symlink there points the path at a directory that is not ours.
+	projDir := filepath.Dir(path)
+	switch fi, err := deps.lstat(projDir); {
+	case errors.Is(err, fs.ErrNotExist):
+		return
+	case err != nil:
+		problem("transcript not checked: %s: %v", path, err)
+		return
+	case fi.Mode()&fs.ModeSymlink != 0:
+		fmt.Fprintf(stdout, "transcript kept: %s: project directory %s is a symlink\n", path, projDir)
+		return
+	case !fi.IsDir():
+		fmt.Fprintf(stdout, "transcript kept: %s: project directory %s is not a directory\n", path, projDir)
+		return
+	}
+	// The transcript itself must be a regular file; its FileInfo pins the
+	// file verified below to the one removed (A1).
+	verified, err := deps.lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return
+	case err != nil:
+		problem("transcript not checked: %s: %v", path, err)
+		return
+	case !verified.Mode().IsRegular():
+		fmt.Fprintf(stdout, "transcript kept: %s: %s\n", path, selftestNotRegular(verified.Mode()))
+		return
+	}
 	data, err := deps.readFile(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return
 	case err != nil:
-		fmt.Fprintf(stdout, "transcript kept: %s: %v\n", path, err)
+		problem("transcript not checked: %s: %v", path, err)
 		return
 	}
 	if why := selftestTranscriptMismatch(data, st.targetSessionID); why != "" {
 		fmt.Fprintf(stdout, "transcript kept: %s: %s\n", path, why)
+		return
+	}
+	// Remove only the file that was verified: still a regular file, still
+	// the same one. Anything else at the path now is not proven ours.
+	switch now, err := deps.lstat(path); {
+	case errors.Is(err, fs.ErrNotExist):
+		return
+	case err != nil:
+		problem("transcript not checked: %s: %v", path, err)
+		return
+	case !now.Mode().IsRegular() || !os.SameFile(verified, now):
+		fmt.Fprintf(stdout, "transcript kept: %s: changed during cleanup\n", path)
 		return
 	}
 	switch err := deps.remove(path); {
@@ -678,7 +727,7 @@ func selftestRemoveTranscript(deps selftestDeps, st *selftestState, targetID ipe
 	}
 	fmt.Fprintf(stdout, "removed transcript: %s\n", path)
 
-	sidDir, projDir := strings.TrimSuffix(path, ".jsonl"), filepath.Dir(path)
+	sidDir := strings.TrimSuffix(path, ".jsonl")
 	for _, dir := range []string{sidDir, projDir} {
 		switch err := deps.rmdir(dir); {
 		case err == nil:
@@ -690,6 +739,17 @@ func selftestRemoveTranscript(deps selftestDeps, st *selftestState, targetID ipe
 			fmt.Fprintf(stdout, "directory kept: %s: %v\n", dir, err)
 		}
 	}
+}
+
+// selftestNotRegular says what a non-regular file at the transcript path is.
+func selftestNotRegular(mode fs.FileMode) string {
+	switch {
+	case mode&fs.ModeSymlink != 0:
+		return "a symlink, not a regular file"
+	case mode.IsDir():
+		return "a directory, not a regular file"
+	}
+	return fmt.Sprintf("not a regular file (mode %v)", mode.Type())
 }
 
 // selftestTranscriptPath returns where Claude Code writes the transcript
