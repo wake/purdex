@@ -1855,5 +1855,11 @@
   "room.search.none": "沒有符合的結果",
   "room.search.next": "下一個符合",
   "room.search.prev": "上一個符合",
-  "room.search.close": "關閉搜尋"
+  "room.search.close": "關閉搜尋",
+  "worker.exit.button": "退出",
+  "worker.exit.confirm_title": "退出 worker？",
+  "worker.exit.confirm_running": "這一輪會被中斷。",
+  "worker.exit.held_by": "被 {{principal}} 控制中，無法退出。",
+  "worker.exit.failed": "退出失敗：{{reason}}",
+  "worker.exit.manual_resume": "{{name}} 已在終端機接續，worker 已退出"
 }
