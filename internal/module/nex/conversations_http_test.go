@@ -552,15 +552,32 @@ func (s *repeatCursorStore) List(_ context.Context, opts store.ListOptions) (sto
 	return store.ListPage{Items: []store.Execution{ceStint(fmt.Sprintf("E%d", n), ceSID(n), "", int64(n))}, NextCursor: "C"}, nil
 }
 
-func TestConversationsHTTP_ARepeatedCursorEndsTheWalk(t *testing.T) {
+// R-4-2 (coordinator ruling, 2026-10-07): a repeated cursor means the walk
+// cannot see every execution, and a live one it missed would list a running
+// worker as ended. The walk stops at the repeat and the snapshot fails closed
+// (503, not cached); it never serves the rows it did see.
+func TestConversationsHTTP_ARepeatedCursorFailsClosed(t *testing.T) {
 	env := newConvEnv(t)
+	env.writeTranscript(t, ceS1, time.UnixMilli(1_759_700_000_000), ceLine(t, cePrompt("/work/app", "hello")))
 	rs := &repeatCursorStore{}
 	env.m.sys.store = rs
 
 	status, res := env.get(t, "?state=gone")
+	assert.Equal(t, http.StatusServiceUnavailable, status)
+	assert.Equal(t, "conversations_unavailable", res.Code)
+	assert.Contains(t, res.Error, `repeated cursor "C"`)
+	assert.Empty(t, res.Conversations, "no partial list")
+	assert.Equal(t, []string{"", "C"}, rs.cursors, "the walk stops at the repeat")
+	assert.Nil(t, env.cached())
+	assert.Len(t, env.logs.find(`repeated cursor "C"`), 1)
+
+	// Not cached: once the store pages properly, the next request (same
+	// clock) scans again and answers.
+	env.m.sys.store = &fakeNexStore{}
+	status, res = env.get(t, "?state=ended")
 	require.Equal(t, http.StatusOK, status, res.Error)
-	assert.Equal(t, []string{ceSID(2), ceSID(1)}, cvIDs(res.Conversations), "the rows seen are joined")
-	assert.Equal(t, []string{"", "C"}, rs.cursors)
+	assert.Equal(t, []string{ceS1}, cvIDs(res.Conversations))
+	assert.EqualValues(t, 2, env.scans.Load())
 }
 
 func TestConversationsHTTP_CapsEachStateAt2000NewestFirst(t *testing.T) {

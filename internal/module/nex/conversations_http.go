@@ -309,9 +309,10 @@ func (m *Module) logConversationScan(r conversations.ScanResult, d time.Duration
 // listAllExecutions pages every execution, archived included, to the end
 // (§13.6: no page cap; one missing row could show a live worker's
 // conversation as ended). Each page runs under detachedContext, bounded by
-// engineOpTimeout; ctx is checked before each page. The walk also ends when
-// the store hands back a cursor it already gave, so a store that repeats
-// itself cannot loop: the rows read so far are kept.
+// engineOpTimeout; ctx is checked before each page. A cursor the store
+// already gave fails the walk (R-4-2, fail closed): the walk cannot reach
+// every execution, so the rows read so far are never returned. The error
+// names the cursor; the failed flight logs it.
 func (m *Module) listAllExecutions(ctx context.Context) ([]store.Execution, error) {
 	var out []store.Execution
 	cursor := ""
@@ -332,8 +333,7 @@ func (m *Module) listAllExecutions(ctx context.Context) ([]store.Execution, erro
 			return out, nil
 		}
 		if seen[next] {
-			m.logf("nex: conversations: execution listing repeated cursor %q; ending the walk at %d rows", next, len(out))
-			return out, nil
+			return nil, fmt.Errorf("listing executions: repeated cursor %q after %d rows; the listing cannot see every execution", next, len(out))
 		}
 		seen[next] = true
 		cursor = next
