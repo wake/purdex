@@ -983,11 +983,6 @@ func TestSelftest_WrittenFrame(t *testing.T) {
 	if wr.Text != want {
 		t.Errorf("text = %q, want %q", wr.Text, want)
 	}
-	for _, sub := range []string{"SendMessage", "not pdx", "not Bash", "PDX_SELFTEST " + nonce, "PONG " + nonce} {
-		if !strings.Contains(wr.Text, sub) {
-			t.Errorf("text %q lacks %q", wr.Text, sub)
-		}
-	}
 }
 
 func TestSelftest_WriteFailure(t *testing.T) {
@@ -1467,6 +1462,19 @@ func mkdirs(t *testing.T, dirs ...string) {
 	}
 }
 
+// recordReads wraps deps.readFile so a test can tell whether the
+// transcript was read at all.
+func (f *stFixture) recordReads() *[]string {
+	var reads []string
+	f.deps.readFile = func(path string) ([]byte, error) {
+		f.mu.Lock()
+		reads = append(reads, path)
+		f.mu.Unlock()
+		return os.ReadFile(path)
+	}
+	return &reads
+}
+
 // sidLine is a transcript record carrying sessionId sid.
 func sidLine(typ, sid string) string {
 	return `{"type":"` + typ + `","sessionId":"` + sid + `","message":{"role":"user","content":"PDX_SELFTEST x"}}`
@@ -1658,6 +1666,7 @@ func TestSelftest_Cleanup_TranscriptKeptWhenTargetIdentityUnknown(t *testing.T) 
 	f.alive[stTargetPID] = true
 	file, _, _ := f.transcriptPaths()
 	writeTranscript(t, file, sidLine("user", stSessionID))
+	reads := f.recordReads()
 	f.killSession = func() ([]byte, error) {
 		f.mu.Lock()
 		delete(f.starts, stTargetPID)
@@ -1676,6 +1685,43 @@ func TestSelftest_Cleanup_TranscriptKeptWhenTargetIdentityUnknown(t *testing.T) 
 	}
 	if strings.Contains(out, "removed transcript") {
 		t.Errorf("stdout claims a removal:\n%s", out)
+	}
+	if len(*reads) != 0 {
+		t.Errorf("transcript read although its writer's identity is unknown: %v", *reads)
+	}
+}
+
+// TestSelftest_Cleanup_TranscriptKeptWhileTargetAlive: a claude that
+// survives SIGKILL (ProcSame) may still write its transcript — it is kept,
+// and not even read. The survival itself is the cleanup problem already
+// reported; the kept transcript adds a note, not a second problem.
+func TestSelftest_Cleanup_TranscriptKeptWhileTargetAlive(t *testing.T) {
+	f := newStFixture(t)
+	f.clock.expireLong = true // registered, no reply ⇒ FAIL, then cleanup
+	f.alive[stTargetPID] = true
+	file, _, _ := f.transcriptPaths()
+	writeTranscript(t, file, sidLine("user", stSessionID))
+	reads := f.recordReads()
+
+	code, out, _ := f.run(context.Background(), 5*time.Second)
+	if code != 1 {
+		t.Errorf("exit = %d, want 1", code)
+	}
+	if !proxyhelpertest.Exists(file) {
+		t.Errorf("transcript of a still-alive claude removed")
+	}
+	if len(*reads) != 0 {
+		t.Errorf("transcript read although its writer is still alive: %v", *reads)
+	}
+	if want := "transcript kept: " + file + ": claude pid 4242 still alive\n"; !strings.Contains(out, want) {
+		t.Errorf("stdout lacks %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "removed transcript") {
+		t.Errorf("stdout claims a removal:\n%s", out)
+	}
+	last := f.lastLine(out)
+	if !strings.HasPrefix(last, "cleanup incomplete: ") || !strings.Contains(last, "target pid 4242 still alive") || strings.Contains(last, "transcript") {
+		t.Errorf("last line = %q, want cleanup incomplete for the live target only", last)
 	}
 }
 

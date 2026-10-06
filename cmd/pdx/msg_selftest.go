@@ -548,9 +548,9 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 		selftestRemoveSock(deps, sock, "target", problem, stdout)
 	}
 
-	// e. the claude process's transcript (#1631) — after c, so nothing
-	// writes to it any more, and under d's rule: without a registry entry
-	// there is no session id to address it by.
+	// e. the claude process's transcript (#1631) — after c, and only once
+	// c proved the process gone, so nothing writes to it any more. Without
+	// a registry entry there is no session id to address it by.
 	if st.targetPID != 0 {
 		selftestRemoveTranscript(deps, st, targetID, problem, stdout)
 	}
@@ -632,10 +632,11 @@ func selftestRemoveSock(deps selftestDeps, sock, owner string, problem func(stri
 // proves it is that session's own; then the <sessionID>/ side directory
 // and the project directory, each only if empty (rmdir, never recursive).
 //
-// A path that cannot be computed with confidence is a skip note; a
-// transcript that is missing is silence; one that is not proven ours, or
-// whose writer's identity is unknown (d's rule — it may still be
-// running), is kept with a note, as a foreign registry file is. Only
+// A path that cannot be computed with confidence is a skip note. Unless
+// the claude process is gone (targetID ProcDifferent) — still alive, or
+// of unknown identity — the transcript is kept, unread, with a note: it
+// may still be written. A missing transcript is silence; one that is not
+// proven ours is kept with a note, as a foreign registry file is. Only
 // failing to remove a verified transcript is a cleanup problem.
 func selftestRemoveTranscript(deps selftestDeps, st *selftestState, targetID ipeers.ProcIdentity,
 	problem func(string, ...any), stdout io.Writer) {
@@ -644,16 +645,24 @@ func selftestRemoveTranscript(deps selftestDeps, st *selftestState, targetID ipe
 		fmt.Fprintf(stdout, "note: transcript cleanup skipped: %s\n", why)
 		return
 	}
+	// Only a writer that is gone leaves a transcript safe to judge: one
+	// still alive, or of unknown identity, may write to it yet — so it is
+	// kept without even being read. Its survival is already a problem (c).
+	switch targetID {
+	case ipeers.ProcDifferent:
+	case ipeers.ProcSame:
+		fmt.Fprintf(stdout, "transcript kept: %s: claude pid %d still alive\n", path, st.targetPID)
+		return
+	default:
+		fmt.Fprintf(stdout, "transcript kept: %s: claude pid %d of unknown identity may still write it\n", path, st.targetPID)
+		return
+	}
 	data, err := deps.readFile(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return
 	case err != nil:
 		fmt.Fprintf(stdout, "transcript kept: %s: %v\n", path, err)
-		return
-	}
-	if targetID == ipeers.ProcUnknown {
-		fmt.Fprintf(stdout, "transcript kept: %s: target pid %d of unknown identity may still write it\n", path, st.targetPID)
 		return
 	}
 	if why := selftestTranscriptMismatch(data, st.targetSessionID); why != "" {
