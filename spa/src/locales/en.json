@@ -1944,5 +1944,6 @@
   "approval.dialog.approve": "Approve",
   "approval.dialog.deny": "Deny",
   "approval.toast.ended_while_away": "{{host}}: the {{kind}} from {{session}} ended while this app was disconnected; your decision was not sent",
-  "approval.notify.title": "{{host}}: {{session}} requests to become lead"
+  "approval.notify.title": "{{host}}: {{session}} requests to become lead",
+  "approval.restart.pending": "{{count}} request(s) awaiting approval"
 }

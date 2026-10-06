@@ -1944,5 +1944,6 @@
   "approval.dialog.approve": "核准",
   "approval.dialog.deny": "拒絕",
   "approval.toast.ended_while_away": "{{host}}：{{session}} 的 {{kind}}已在離線期間結束，你的決定未送出",
-  "approval.notify.title": "{{host}}：{{session}} 申請成為 lead"
+  "approval.notify.title": "{{host}}：{{session}} 申請成為 lead",
+  "approval.restart.pending": "{{count}} 個申請等待核准"
 }

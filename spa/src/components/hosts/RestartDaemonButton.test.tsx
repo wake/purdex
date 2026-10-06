@@ -4,8 +4,12 @@ import { RestartDaemonButton } from './RestartDaemonButton'
 import { useDaemonRestartStore } from '../../stores/useDaemonRestartStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import * as restartLib from '../../lib/daemon-restart'
+import { useApprovalStore } from '../../stores/useApprovalStore'
+import type { Approval } from '../../lib/team/types'
+import * as approvalApi from '../../lib/team/approval-api'
 
 vi.mock('../../lib/daemon-restart', async (orig) => ({ ...(await orig<typeof import('../../lib/daemon-restart')>()), countRunningWorkers: vi.fn() }))
+vi.mock('../../lib/team/approval-api', () => ({ fetchInflight: vi.fn() }))
 
 const restart = vi.fn(async () => {})
 beforeEach(() => {
@@ -13,6 +17,10 @@ beforeEach(() => {
   restart.mockClear()
   useDaemonRestartStore.setState({ restarting: {}, settled: {}, restart })
   vi.mocked(restartLib.countRunningWorkers).mockReset()
+  // Default: the inflight call fails (an older daemon, or one mid-restart); tests that want a daemon answer override it.
+  vi.mocked(approvalApi.fetchInflight).mockReset()
+  vi.mocked(approvalApi.fetchInflight).mockRejectedValue(new Error('inflight unavailable'))
+  useApprovalStore.getState().reset()
 })
 
 async function openConfirm(workers: number | null, onActiveChange?: (active: boolean) => void) {
@@ -359,5 +367,56 @@ describe('RestartDaemonButton - onActiveChange', () => {
     render(<RestartDaemonButton hostId="h1" disabled onActiveChange={onActive} />)
     fireEvent.click(screen.getByTestId('restart-daemon'))
     expect(onActive).not.toHaveBeenCalled()
+  })
+
+  describe('open approval requests (lead-team spec §9.5)', () => {
+    const approval = (id: string): Approval => ({
+      id, kind: 'lead', host_id: 'd1',
+      origin: { session_id: 'S', ref: '_abcdef', name: 'n', pid: 1, proc_start: 'p', cwd: '/w', tmux: '' },
+      payload: { reason: 'r', max_members: 3, roots: ['/w'] },
+      state: 'open', created_at: 1, deadline_at: 2, lease_until: 3,
+    })
+    const daemonSays = (approvals_open: number) =>
+      vi.mocked(approvalApi.fetchInflight).mockResolvedValueOnce({ approvals_open, relays_active: 0 })
+
+    it('asks GET /api/team/inflight for THIS host and names its open requests', async () => {
+      // Dropping the fetch, or reading the wrong field, turns this red (mutation deliverable).
+      daemonSays(2)
+      await openConfirm(0)
+      expect(approvalApi.fetchInflight).toHaveBeenCalledTimes(1)
+      expect(approvalApi.fetchInflight).toHaveBeenCalledWith('h1')
+      expect(screen.getByTestId('restart-daemon-approvals').textContent).toBe('2 個申請等待核准')
+    })
+
+    it('the daemon\'s count wins over the store\'s when both exist', async () => {
+      useApprovalStore.getState().applyOpened('h1', approval('a'))
+      daemonSays(3)
+      await openConfirm(0)
+      expect(screen.getByTestId('restart-daemon-approvals').textContent).toBe('3 個申請等待核准')
+    })
+
+    it('when the inflight call rejects it falls back to the store\'s count for this host only', async () => {
+      // beforeEach leaves fetchInflight rejecting.
+      useApprovalStore.getState().applyOpened('h1', approval('a'))
+      useApprovalStore.getState().applyOpened('h1', approval('b'))
+      useApprovalStore.getState().applyOpened('h2', approval('c'))
+      await openConfirm(0)
+      expect(approvalApi.fetchInflight).toHaveBeenCalledWith('h1')
+      expect(screen.getByTestId('restart-daemon-approvals').textContent).toBe('2 個申請等待核准')
+    })
+
+    it('no line when the daemon says none and the store has none for this host, even if another host does', async () => {
+      daemonSays(0)
+      useApprovalStore.getState().applyOpened('h2', approval('c'))
+      await openConfirm(0)
+      expect(screen.queryByTestId('restart-daemon-approvals')).toBeNull()
+    })
+
+    it('shows both lines when workers run and requests wait', async () => {
+      daemonSays(1)
+      await openConfirm(2)
+      expect(screen.getByTestId('restart-daemon-workers')).toBeInTheDocument()
+      expect(screen.getByTestId('restart-daemon-approvals').textContent).toBe('1 個申請等待核准')
+    })
   })
 })
