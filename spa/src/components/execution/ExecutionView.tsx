@@ -153,11 +153,11 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   const preludeRedraw = useMemo(() => ({ attribution, enrichmentRevision }), [attribution, enrichmentRevision])
   // Search sorts the prelude's calls with the tools the screen draws them by
   // (#1617): every settled stint's entries over the transcript's. tool_use ids
-  // are unique across stints, so one map serves every segment.
+  // are unique across stints, so one map serves every segment. Keyed by
+  // `preludeRedraw`, which changes with the attribution and on every settle.
   const searchPrelude = useMemo(
-    () => withStintTools(preludeView, attribution, enrichment.get),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the cache is mutable: each settle bumps enrichmentRevision
-    [preludeView, attribution, enrichment, enrichmentRevision],
+    () => withStintTools(preludeView, preludeRedraw.attribution, enrichment.get),
+    [preludeView, preludeRedraw, enrichment],
   )
   const lease = useExecutionLease(hostId, executionId)
   const { draft, actionPending, handleSend, handleInterrupt, restoreDraft } = useExecutionActions(hostId, executionId, lease)

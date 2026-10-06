@@ -20,7 +20,7 @@ import { getPrimaryPane } from '../../lib/pane-tree'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
-import { useEntityStints } from '../../hooks/useEntityStints'
+import { clearStintsSpy, stintsNow } from '../room/prelude/test-prelude-helpers'
 import { defaultPreludeState } from '../../lib/nex/prelude'
 
 vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn(), fetchExecutionEvents: vi.fn() }))
@@ -28,10 +28,8 @@ vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscriptio
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
 // Passed through, and spied on: what the pane last learnt of its earlier stints.
-vi.mock('../../hooks/useEntityStints', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../../hooks/useEntityStints')>()
-  return { ...real, useEntityStints: vi.fn(real.useEntityStints) }
-})
+vi.mock('../../hooks/useEntityStints', async (importOriginal) =>
+  (await import('../room/prelude/test-prelude-helpers')).passThroughEntityStints(importOriginal))
 // The take-back path runs the real orchestration (store swap, forget-before-
 // swap) against a mocked daemon call; `takeBack` itself is a pass-through spy
 // so the view's call shape (lease id, forgetLease identity) is observable.
@@ -59,6 +57,7 @@ const ensureLease = vi.fn(), release = vi.fn(), touch = vi.fn(), forget = vi.fn(
 const summary = (extra = {}) => ({ id: E, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/Users/w/repo', mount_kind: 'dev', brief: 'b', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 2, archived: false, effective_profile: 'standard', turn_count: 3, ...extra })
 
 beforeEach(() => {
+  clearStintsSpy()
   useExecutionStore.setState({ executions: {} })
   ensureLease.mockReset().mockResolvedValue('ls_1'); release.mockReset(); touch.mockReset(); forget.mockReset()
   vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease, release, forget, touch })
@@ -2164,8 +2163,6 @@ describe('ExecutionView — worker prelude', () => {
       return render(strict ? <StrictMode><ExecutionView {...base} mode={mode} isActive /></StrictMode> : <ExecutionView {...base} mode={mode} isActive />)
     }
     const earlier = summary({ id: 'exc_0', state: 'terminated', resume_session_id: S, created_at: 1 })
-    /** The pane's stint listing as of its last render. */
-    const stintsNow = () => vi.mocked(useEntityStints).mock.results.at(-1)?.value
     afterEach(() => {
       useNexHostStore.setState({ ensure: realEnsure })
       vi.mocked(api.listExecutions).mockReset()
