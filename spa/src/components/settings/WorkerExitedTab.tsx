@@ -1,6 +1,7 @@
 // spa/src/components/settings/WorkerExitedTab.tsx — Settings → Worker → Exited: one host's conversations with no
 // live stint (spec §9 / D10), searchable. Rebuild opens the worker's ended screen in a tab; its choices do the rest.
 import { useEffect, useMemo, useState } from 'react'
+import { useHostExecutions } from '../../hooks/useHostExecutions'
 import { useExecutionHistory } from '../../hooks/useExecutionHistory'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -22,6 +23,8 @@ export function WorkerExitedTab({ hostId }: { hostId?: string }) {
 function ExitedList({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
   const { items, phase, error, truncated, refetch } = useExecutionHistory(hostId)
+  // Holds the host's shared live subscription: its refreshRevision is what tells the history hook to refetch.
+  useHostExecutions(hostId)
   const tabs = useTabStore((s) => s.tabs)
   const [query, setQuery] = useState('')
   const [now, setNow] = useState(() => Date.now())

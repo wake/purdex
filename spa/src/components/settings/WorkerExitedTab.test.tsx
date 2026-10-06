@@ -3,6 +3,8 @@ import { render, screen, fireEvent, within } from '@testing-library/react'
 
 const history = vi.fn()
 vi.mock('../../hooks/useExecutionHistory', () => ({ useExecutionHistory: (h: string) => history(h) }))
+const hostExecutions = vi.fn()
+vi.mock('../../hooks/useHostExecutions', () => ({ useHostExecutions: (h: string) => hostExecutions(h) }))
 const openWorkerTab = vi.fn()
 vi.mock('../../features/workspace/lib/open-worker-tab', () => ({ openWorkerTab: (c: unknown) => openWorkerTab(c) }))
 import { WorkerExitedTab } from './WorkerExitedTab'
@@ -24,6 +26,8 @@ const termTab = (rebuild: unknown) => ({
 describe('WorkerExitedTab', () => {
   beforeEach(() => {
     openWorkerTab.mockReset()
+    hostExecutions.mockReset()
+    hostExecutions.mockReturnValue({ items: [], phase: 'ready', error: null, truncated: false, refetch: vi.fn(), refreshRevision: 0 })
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null } as never)
   })
 
@@ -75,6 +79,12 @@ describe('WorkerExitedTab', () => {
     rerender(<WorkerExitedTab hostId="h1" />)
     expect(screen.getByTestId('worker-exited-error')).toBeInTheDocument()
     expect(screen.queryByTestId('worker-exited-empty')).toBeNull()
+  })
+
+  it('holds the host live-list subscription (so refreshRevision moves) while mounted', () => {
+    history.mockReturnValue(ready([]))
+    render(<WorkerExitedTab hostId="h1" />)
+    expect(hostExecutions).toHaveBeenCalledWith('h1')
   })
 
   it('renders nothing without a host', () => {
