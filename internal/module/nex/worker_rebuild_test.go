@@ -63,7 +63,7 @@ func TestWorkerRebuild(t *testing.T) {
 	t.Run("fresh stint for a free session", func(t *testing.T) {
 		env := newHandoffEnv(t)
 		env.svc.result = execution.Result{ID: "N1", State: store.StateRunning, EffectiveProfile: "handoff"}
-		code, out := rebuildPost(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w"}`)
+		code, out := rebuildPost(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`)
 		require.Equal(t, 200, code, "%v", out)
 		assert.Equal(t, "N1", out["execution_id"])
 		assert.Equal(t, "running", out["state"])
@@ -87,7 +87,7 @@ func TestWorkerRebuild(t *testing.T) {
 		rebuildStore(env).listRows = []store.Execution{row("F1", "failed", false, rbS, "", 1)}
 		archiveRemovesRows(env)
 		env.svc.result = execution.Result{ID: "N1", State: store.StateRunning}
-		code, out := rebuildPost(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w","profile":"readonly","replace_execution_id":"F1"}`)
+		code, out := rebuildPost(t, env, `{"session_id":"`+rbS+`","cwd":"/w","profile":"readonly","replace_execution_id":"F1"}`)
 		require.Equal(t, 200, code, "%v", out)
 		assert.Equal(t, []string{"archive"}, env.svc.ArchiveCalls())
 		ar := env.svc.archiveReqs[0]
@@ -105,7 +105,7 @@ func TestWorkerRebuild(t *testing.T) {
 		env := newHandoffEnv(t)
 		rebuildStore(env).script(store.Execution{ID: "T1", State: store.StateTerminated, SessionID: rbS})
 		env.svc.result = execution.Result{ID: "N1", State: store.StateRunning}
-		code, out := rebuildPost(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w","replace_execution_id":"T1"}`)
+		code, out := rebuildPost(t, env, `{"session_id":"`+rbS+`","cwd":"/w","replace_execution_id":"T1"}`)
 		require.Equal(t, 200, code, "%v", out)
 		assert.Empty(t, env.svc.ArchiveCalls())
 		assert.Empty(t, env.svc.TerminateIDs())
@@ -115,7 +115,7 @@ func TestWorkerRebuild(t *testing.T) {
 		env := newHandoffEnv(t)
 		rebuildStore(env).script(store.Execution{ID: "F1", State: store.StateFailed, SessionID: rbS})
 		env.svc.archiveErr = errors.New("boom")
-		out := rebuildErr(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w","replace_execution_id":"F1"}`, 500, "archive_failed")
+		out := rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w","replace_execution_id":"F1"}`, 500, "archive_failed")
 		assert.Equal(t, "exit_replaced", out["step"])
 		assert.Empty(t, env.svc.Requests())
 		assert.True(t, env.m.locks.TryLock(sidLockKey(rbS)))
@@ -123,13 +123,13 @@ func TestWorkerRebuild(t *testing.T) {
 	t.Run("refusals", func(t *testing.T) {
 		env := newHandoffEnv(t)
 		env.terminals.live = map[string][]agent.TerminalSession{rbS: {{PaneID: "%3", SessionID: rbS, AgentType: "cc", Verified: true}}}
-		rebuildErr(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w"}`, 409, "session_owned")
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`, 409, "session_owned")
 		assert.Empty(t, env.svc.Requests())
 		assert.True(t, env.m.locks.TryLock(sidLockKey(rbS)), "sid lock released after a refusal")
 
 		env = newHandoffEnv(t)
 		rebuildStore(env).listRows = []store.Execution{row("L1", "idle", false, rbS, "", 1)}
-		out := rebuildErr(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w"}`, 409, "session_owned")
+		out := rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`, 409, "session_owned")
 		assert.Equal(t, "worker", out["owner"])
 
 		// A live worker other than the replaced one still owns S.
@@ -139,39 +139,39 @@ func TestWorkerRebuild(t *testing.T) {
 			row("F1", "failed", false, rbS, "", 2),
 		}
 		rebuildStore(env).script(store.Execution{ID: "F1", State: store.StateFailed, SessionID: rbS})
-		out = rebuildErr(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w","replace_execution_id":"F1"}`, 409, "session_owned")
+		out = rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w","replace_execution_id":"F1"}`, 409, "session_owned")
 		assert.Equal(t, "L1", out["execution_id"])
 		assert.Empty(t, env.svc.ArchiveCalls(), "no exit before the owner check passes")
 
 		env = newHandoffEnv(t)
 		rebuildStore(env).script(store.Execution{ID: "X1", State: store.StateFailed, SessionID: "OTHER"})
-		rebuildErr(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w","replace_execution_id":"X1"}`, 409, "replace_mismatch")
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w","replace_execution_id":"X1"}`, 409, "replace_mismatch")
 
 		env = newHandoffEnv(t)
 		rs := rebuildStore(env)
 		rs.mu.Lock()
 		rs.results = []getResult{{err: store.ErrNotFound}}
 		rs.mu.Unlock()
-		rebuildErr(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w","replace_execution_id":"NOPE"}`, 404, "execution_not_found")
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w","replace_execution_id":"NOPE"}`, 404, "execution_not_found")
 
 		env = newHandoffEnv(t)
 		require.True(t, env.m.locks.TryLock(sidLockKey(rbS)))
-		rebuildErr(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w"}`, 409, "transfer_in_progress")
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`, 409, "transfer_in_progress")
 
 		env = newHandoffEnv(t)
 		rebuildErr(t, env, `{"cwd":"/w"}`, 400, "missing_session_id")
-		rebuildErr(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001"}`, 400, "missing_cwd")
+		rebuildErr(t, env, `{"session_id":"`+rbS+`"}`, 400, "missing_cwd")
 		rebuildErr(t, env, `{nope`, 400, "malformed_body")
 
 		env = newHandoffEnv(t)
 		env.sessions.cwdErr = errors.New("gone")
-		rebuildErr(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w"}`, 409, "cwd_missing")
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`, 409, "cwd_missing")
 
 		// The replaced row is mid-exit / mid-transfer elsewhere.
 		env = newHandoffEnv(t)
 		rebuildStore(env).script(store.Execution{ID: "F1", State: store.StateFailed, SessionID: rbS})
 		require.True(t, env.m.locks.TryLock(takeToTerminalLockKey("F1")))
-		rebuildErr(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w","replace_execution_id":"F1"}`, 409, "transfer_in_progress")
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w","replace_execution_id":"F1"}`, 409, "transfer_in_progress")
 		assert.Empty(t, env.svc.ArchiveCalls())
 		assert.Empty(t, env.svc.Requests())
 		assert.True(t, env.m.locks.TryLock(sidLockKey(rbS)), "sid lock released when the replace lock is busy")
@@ -179,7 +179,7 @@ func TestWorkerRebuild(t *testing.T) {
 	t.Run("rejected is data", func(t *testing.T) {
 		env := newHandoffEnv(t)
 		env.svc.result = execution.Result{ID: "R1", State: store.StateRejected, RejectReason: "session_expired"}
-		code, out := rebuildPost(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w"}`)
+		code, out := rebuildPost(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`)
 		require.Equal(t, 200, code)
 		assert.Equal(t, "rejected", out["state"])
 		assert.Equal(t, "session_expired", out["reject_reason"])
@@ -187,13 +187,13 @@ func TestWorkerRebuild(t *testing.T) {
 	t.Run("delegate error is 500", func(t *testing.T) {
 		env := newHandoffEnv(t)
 		env.svc.err = errors.New("spawn failed")
-		rebuildErr(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w"}`, 500, "delegate_failed")
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`, 500, "delegate_failed")
 		assert.True(t, env.m.locks.TryLock(sidLockKey(rbS)))
 	})
 	t.Run("engine unavailable", func(t *testing.T) {
 		env := newHandoffEnv(t)
 		env.m.sys.service = nil
-		rebuildErr(t, env, `{"session_id":"0a1b2c3d-0000-4000-8000-000000000001","cwd":"/w"}`, 503, "nex_unavailable")
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`, 503, "nex_unavailable")
 	})
 }
 

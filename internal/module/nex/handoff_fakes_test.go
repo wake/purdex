@@ -48,6 +48,7 @@ const (
 	hoInstance  = "111:222"
 	hoSessionID = "0a1b2c3d-0000-4000-8000-0000000000b1"
 	hoCwd       = "/work/proj"
+	hoOwnerPane = "%7" // the pane of the CC being handed off
 )
 
 // handoffSessions is a session provider over a map whose TmuxInstance()
@@ -580,10 +581,10 @@ type fakeNexStore struct {
 	listCalls int
 	// lastListOpts / allListOpts record the options of every List call.
 	lastListOpts store.ListOptions
+	allListOpts  []store.ListOptions
 	// turnSessions: execution id -> session ids of its turns (the third arm of
 	// Nexen's SessionID filter).
 	turnSessions map[string][]string
-	allListOpts  []store.ListOptions
 	// listGate parks every List until it is closed or the call's ctx ends;
 	// listEntered is closed on the first List.
 	listGate    chan struct{}
@@ -626,8 +627,9 @@ func (f *fakeNexStore) Get(ctx context.Context, id string) (store.Execution, err
 	return res.exec, res.err
 }
 
-// List honours IncludeArchived, Cursor (id >) and Limit; rows come back in id
-// order and NextCursor is set only when more remain.
+// List honours IncludeArchived, SessionID, Cursor (id >) and Limit (clamped
+// as Nexen clamps it); rows come back in id order and NextCursor is set only
+// when more remain.
 func (f *fakeNexStore) List(ctx context.Context, opts store.ListOptions) (store.ListPage, error) {
 	f.mu.Lock()
 	gate := f.listGate
@@ -661,17 +663,22 @@ func (f *fakeNexStore) List(ctx context.Context, opts store.ListOptions) (store.
 		if !opts.IncludeArchived && e.ArchivedAt != 0 {
 			continue
 		}
-		// v0.17: exact, case-insensitive match on session_id or
-		// resume_session_id (turn session ids are not modelled here).
+		// v0.17: exact, case-insensitive match on session_id,
+		// resume_session_id, or a turn's session id (turnSessions).
 		if opts.SessionID != "" && !strings.EqualFold(e.SessionID, opts.SessionID) && !strings.EqualFold(e.ResumeSessionID, opts.SessionID) && !f.turnMatches(e.ID, opts.SessionID) {
 			continue
 		}
 		rows = append(rows, e)
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	// Nexen's clampLimit (store/execution.go, v0.17.0): an unset limit is its
+	// defaultPageSize (100), and none exceeds store.MaxPageSize.
 	limit := opts.Limit
-	if limit <= 0 {
-		limit = 50
+	switch {
+	case limit <= 0:
+		limit = 100
+	case limit > store.MaxPageSize:
+		limit = store.MaxPageSize
 	}
 	page := store.ListPage{}
 	if len(rows) > limit {
@@ -707,8 +714,6 @@ var _ nexStore = (*fakeNexStore)(nil)
 // session.HandoffLocksKey, and m.locks is resolved from it the way Init
 // does — so a test can hold the lock "as the stream module" through the
 // same instance.
-const hoOwnerPane = "%7" // the pane of the CC being handed off
-
 type handoffEnv struct {
 	m         *Module
 	tmux      *tmux.FakeExecutor

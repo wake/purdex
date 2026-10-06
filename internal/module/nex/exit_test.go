@@ -15,7 +15,8 @@ import (
 // testHostID is the HostID newHandoffEnv configures.
 const testHostID = "host1"
 
-const pdxOther = "pdx:" + testHostID + "/other-tab" // testHostID: the HostID newTakebackEnv configures
+// pdxOther is another Purdex client of this host: a pdx principal the daemon minted.
+const pdxOther = "pdx:" + testHostID + "/other-tab"
 
 func TestTakeControl(t *testing.T) {
 	t.Run("caller lease is used as is", func(t *testing.T) {
@@ -551,6 +552,24 @@ func TestExitEndpoint(t *testing.T) {
 		}
 		if len(env.svc.terminateCalls) != 0 || len(env.svc.ArchiveCalls()) != 0 {
 			t.Fatalf("terminate=%d archive=%d, want 0/0", len(env.svc.terminateCalls), len(env.svc.ArchiveCalls()))
+		}
+	})
+	// #1624 Task 6: exitWorker's own held_by (no caller lease, so the handler
+	// renews nothing and exitWorker's takeControl meets the holder) reaches
+	// the caller as 409 held_by with the holder.
+	t.Run("idle row held by a non-pdx principal, no caller lease → exitWorker's 409 held_by, nothing changed", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.script(store.Execution{ID: "E1", State: store.StateIdle, LeaseID: "L-p", LeasePrincipalID: "ploom:agent-7", LeaseExpiresAt: nowMs() + 60_000})
+		env.svc.acquireErr = store.ErrLeaseHeld
+		status, body := exitPost(t, env, "E1", ``)
+		if status != 409 || body["code"] != "held_by" || body["principal"] != "ploom:agent-7" {
+			t.Fatalf("%d %v", status, body)
+		}
+		if len(env.svc.renewCalls) != 0 || len(env.svc.acquires) != 1 {
+			t.Fatalf("renew=%+v acquires=%v, want no renew and exitWorker's one acquire", env.svc.renewCalls, env.svc.acquires)
+		}
+		if len(env.svc.terminateCalls) != 0 || len(env.svc.ArchiveCalls()) != 0 || len(env.svc.releases) != 0 {
+			t.Fatalf("terminate=%d archive=%d releases=%+v, want nothing changed", len(env.svc.terminateCalls), len(env.svc.ArchiveCalls()), env.svc.releases)
 		}
 	})
 	t.Run("B2-c: failed row with a caller lease → no renew, archived, 200", func(t *testing.T) {

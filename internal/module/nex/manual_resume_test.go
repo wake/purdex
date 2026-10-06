@@ -163,6 +163,25 @@ func TestManualResume_OverflowReconcilesEverySession(t *testing.T) {
 	}
 }
 
+// #1624 Task 11: the overflow path does not know the tmux session name
+// (agent.TerminalSession has no such field). The worker still exits, and
+// nex-worker-exited carries tmux_session "" — the fallback the reconcile's
+// comment documents and the SPA toast handles.
+func TestManualResume_OverflowExitsWithAnEmptyTmuxSession(t *testing.T) {
+	env := newHandoffEnv(t)
+	sub := env.captureHostEvents(t)
+	liveTerminal(env, true)
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, tS, "", 1)}
+	env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
+	assert.Equal(t, []string{"E1"}, archivedIDs(env))
+	got := sub.events("nex-worker-exited")
+	require.Len(t, got, 1)
+	var v map[string]string
+	require.NoError(t, json.Unmarshal([]byte(got[0].Value), &v))
+	assert.Equal(t, map[string]string{"execution_id": "E1", "session_id": tS, "reason": "manual_resume", "tmux_session": ""}, v)
+	assert.Equal(t, "", got[0].Session, "the frame carries no session name either")
+}
+
 func TestManualResume_TruncatedScanStillExitsWhatItFound(t *testing.T) {
 	env := newHandoffEnv(t)
 	liveTerminal(env, true)
