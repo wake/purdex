@@ -44,6 +44,13 @@ func (m *Module) handleWorkerRebuild(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusBadRequest, "missing_session_id", "session_id is required", nil)
 		return
 	}
+	if err := store.ValidateResumeSessionID(body.SessionID); err != nil {
+		writeHandoffError(w, http.StatusBadRequest, "invalid_session_id", "invalid session_id: "+err.Error(), nil)
+		return
+	}
+	// Nexen lower-cases a resume id; so must every comparison here (sid lock,
+	// owner checks, executionIsFor, the D17 label).
+	sid := store.NormalizeResumeSessionID(body.SessionID)
 	if body.Cwd == "" {
 		writeHandoffError(w, http.StatusBadRequest, "missing_cwd", "cwd is required", nil)
 		return
@@ -62,14 +69,19 @@ func (m *Module) handleWorkerRebuild(w http.ResponseWriter, r *http.Request) {
 			"host sandbox policy does not allow the handoff profile", nil)
 		return
 	}
+	profile := body.Profile
+	if profile == "" {
+		profile = handoffProfile
+	}
+	if !slices.Contains(sandbox.UsableProfiles(m.opts.Config.Sandbox), profile) {
+		writeHandoffError(w, http.StatusBadRequest, "invalid_profile", "sandbox profile is not usable under the host policy",
+			map[string]any{"profile": profile})
+		return
+	}
 	principal, err := m.principal(r)
 	if err != nil {
 		writeHandoffError(w, http.StatusInternalServerError, "principal_unresolved", err.Error(), nil)
 		return
-	}
-	profile := body.Profile
-	if profile == "" {
-		profile = handoffProfile
 	}
 
 	if err := m.sessions.ValidateCwd(body.Cwd); err != nil {
@@ -78,8 +90,9 @@ func (m *Module) handleWorkerRebuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The conversation's lock first, then the replaced row's.
-	sid := body.SessionID
+	// The conversation's lock first, then the replaced row's. Take-to-terminal
+	// and take-back go exec -> sid; the order differs but every lock is a
+	// TryLock, so concurrent ones cannot deadlock, they answer 409.
 	sidKey := sidLockKey(sid)
 	if !m.locks.TryLock(sidKey) {
 		writeHandoffError(w, http.StatusConflict, "transfer_in_progress", "this conversation is being moved already",
@@ -135,6 +148,17 @@ func (m *Module) handleWorkerRebuild(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		exited = true
+		// Look at the owners once more right before the delegate (as
+		// take-to-terminal's step 10b): the exit is a window in which a
+		// terminal can resume S.
+		if herr := m.checkOwners(parent, sid, "", ""); herr != nil {
+			if herr.detail == nil {
+				herr.detail = map[string]any{}
+			}
+			herr.detail["replaced_exited"] = true
+			herr.write(w)
+			return
+		}
 	}
 
 	labels := map[string]string{"source": "purdex", purdexSessionLabel: sid}
