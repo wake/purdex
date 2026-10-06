@@ -15,6 +15,7 @@ import { takeToTerminal, handoffErrorMessage } from '../../lib/nex/handoff'
 import { HandoffApiError } from '../../lib/nex/handoff-api'
 import { rebuildAsWorker, rebuildErrorMessage } from '../../lib/nex/worker-rebuild'
 import { exitWorker, exitErrorMessage } from '../../lib/nex/exit-worker'
+import { announceTakeOutcome } from '../../lib/nex/take-outcome'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import type { ExecutionSummary } from '../../lib/nex/types'
 
@@ -64,7 +65,7 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
     setError(null)
     try {
       if (mode === 'terminal') {
-        await takeToTerminal({ hostId, executionId, cwd, tabId, paneId, forgetLease: () => {} })
+        announceTakeOutcome(t, await takeToTerminal({ hostId, executionId, cwd, tabId, paneId, forgetLease: () => {} }))
       } else {
         await rebuildAsWorker({
           hostId, sessionId: sid, cwd, tabId, paneId,

@@ -10,6 +10,7 @@ import { takeToTerminal } from '../../lib/nex/handoff'
 import { rebuildAsWorker } from '../../lib/nex/worker-rebuild'
 import { exitWorker } from '../../lib/nex/exit-worker'
 import { useExecutionStore } from '../../stores/useExecutionStore'
+import { useUndoToast } from '../../stores/useUndoToast'
 import type { ExecutionSummary, NexCapabilities } from '../../lib/nex/types'
 
 vi.mock('../../lib/nex/handoff', async (o) => ({ ...(await o<typeof import('../../lib/nex/handoff')>()), takeToTerminal: vi.fn() }))
@@ -40,6 +41,7 @@ beforeEach(() => {
   vi.mocked(rebuildAsWorker).mockReset().mockResolvedValue({ result: { execution_id: 'n', state: 'running' }, swapped: true })
   vi.mocked(exitWorker).mockReset().mockResolvedValue({ exited: true, terminated: true, archived: true, state: 'terminated' })
   useExecutionStore.setState({ executions: {} })
+  useUndoToast.setState({ toast: null, notice: null })
   useNexHostStore.setState({ byHost: { [H]: entry() } } as never)
   const tab = createTab({ kind: 'execution', executionId: E, host: H })
   tabId = tab.id
@@ -178,6 +180,32 @@ describe('WorkerEndedPane', () => {
       expect(screen.getByTestId('worker-rebuild')).toBeDisabled()
       done()
       await waitFor(() => expect(screen.getByTestId('worker-ended-exit')).toBeEnabled())
+    })
+  })
+
+  describe('terminal take outcome (as ExecutionView.runTakeBack)', () => {
+    const ended = () => sum({ state: 'terminated', archived: true, session_id: 'S', cwd: '/w' })
+    const take = async () => {
+      renderPane(ended())
+      fireEvent.click(screen.getByTestId('rebuild-mode-terminal'))
+      fireEvent.click(screen.getByTestId('worker-rebuild'))
+      await waitFor(() => expect(takeToTerminal).toHaveBeenCalled())
+    }
+    it('exited:false leaves the persistent notice', async () => {
+      vi.mocked(takeToTerminal).mockResolvedValue({ result: { exited: false }, swapped: true } as never)
+      await take()
+      await waitFor(() => expect(useUndoToast.getState().notice?.message).toBe('Resumed in the terminal, but the worker could not exit; exit it manually from the list.'))
+    })
+    it('exited:true shows no exit notice', async () => {
+      vi.mocked(takeToTerminal).mockResolvedValue({ result: { exited: true }, swapped: true } as never)
+      await take()
+      await waitFor(() => expect(useUndoToast.getState().toast?.message).toBe('In the terminal now; the execution is archived.'))
+      expect(useUndoToast.getState().notice).toBeNull()
+    })
+    it('swapped:false shows the no-pane notice', async () => {
+      vi.mocked(takeToTerminal).mockResolvedValue({ result: { exited: true }, swapped: false } as never)
+      await take()
+      await waitFor(() => expect(useUndoToast.getState().toast?.message).toMatch(/pane was already closed/))
     })
   })
 })

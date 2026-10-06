@@ -28,6 +28,7 @@ import TranscriptSearch from '../room/TranscriptSearch'
 import { isFindShortcut } from '../../lib/find-shortcut'
 import type { TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
 import { useQuickReplies } from '../../lib/quick-replies'
+import { announceTakeOutcome } from '../../lib/nex/take-outcome'
 import ExecutionHeader from './ExecutionHeader'
 import { WorkerEndedPane, workerEndedKind } from './WorkerEndedPane'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -170,11 +171,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       const { result, swapped } = from
         ? await takeBack({ ...common, from })
         : await takeToTerminal({ ...common, cwd: cwd! })
-      // On `swapped` this view is already unmounted (the pane is a terminal
-      // again); the toast is global, so it still lands.
-      toast.show(swapped ? t('takeback.success') : t('takeback.archived_no_pane'))
-      // The terminal took over, but the worker is still live: say so until dismissed.
-      if (result.exited === false) toast.show(t('worker.exit.after_transfer_failed'), undefined, undefined, { persistent: true })
+      announceTakeOutcome(t, { result, swapped })
     } catch (err) {
       if (err instanceof HandoffApiError) {
         const id = manualResumeHint(err)
