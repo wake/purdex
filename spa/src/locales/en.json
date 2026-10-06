@@ -708,6 +708,7 @@
   "worker.prelude.pasted_cut": "Pasted text · {{count}}+ lines",
   "worker.prelude.search_incomplete": "Earlier conversation not fully loaded",
   "worker.prelude.load_all": "Load all",
+  "worker.prelude.enrichment_truncated": "This worker segment has too many events; only the first {{n}} were used.",
   "stream.permission.allow": "Allow",
   "stream.permission.deny": "Deny",
   "stream.drop_files": "Drop files here",

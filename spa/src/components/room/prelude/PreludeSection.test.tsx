@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, act, within } from '@testing-library/react'
+import { render, screen, fireEvent, act, within, waitFor } from '@testing-library/react'
 import { useEffect, type ReactNode } from 'react'
 import { FoldContext, useFoldMemory, type FoldStore } from '../fold-context'
 import PreludeSection from './PreludeSection'
 import { derivePrelude, type PreludeView } from '../../../lib/nex/prelude'
 import { sanitizePreludePage, type PreludeItem } from '../../../lib/nex/prelude-wire'
 import type { StreamMessage } from '../../../lib/nex/message-types'
+import type { EventsPage, NexEvent } from '../../../lib/nex/types'
+import { createStintEnrichmentCache, type StintEnrichmentCache } from '../../../lib/nex/stint-enrichment-cache'
+import { StintEnrichmentContext } from '../../../hooks/useStintEnrichment'
 import ChatTranscript from '../../chat/ChatTranscript'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { useUndoToast } from '../../../stores/useUndoToast'
 import golden from '../../../lib/nex/__fixtures__/prelude-golden-nexen.json'
 import real from '../../../lib/nex/__fixtures__/prelude-06GGS8J1YKZCPF4BRXZTX764F4.json'
 
@@ -27,7 +31,7 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
-const base = { keyPrefix: 'exc', mode: 'room' as const, onLoadOlder: vi.fn(), onRetry: vi.fn(), error: null, pages: 1 }
+const base = { hostId: 'h', keyPrefix: 'exc', mode: 'room' as const, onLoadOlder: vi.fn(), onRetry: vi.fn(), error: null, pages: 1 }
 
 describe('PreludeSection', () => {
   it('draws markers, user lines, prose and notes in order', () => {
@@ -770,5 +774,135 @@ describe('PreludeSection runs of attribution (§10.3)', () => {
     expect(attributed.html).toBe(plain.html)
     // An empty attribution (the stint list unavailable) is the same as none.
     expect(draw(mode, new Map()).html).toBe(plain.html)
+  })
+})
+
+// Conversation entity spec §10.4: an attributed segment fetches its stint's
+// event log once per pane, the first time it is drawn, and draws its lines
+// with the stint's real tool status and subagent tasks.
+describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection enrichment of earlier worker segments (§10.4) in %s mode', (mode) => {
+  const n2 = (pos: string, kind: 'tool_use' | 'tool_result', payload: Record<string, unknown>): PreludeItem => ({ offset: null, pos, at: 1, kind, payload })
+  const view = derivePrelude([
+    { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+    m('2', 'user', [{ type: 'text', text: 'start' }]),
+    { offset: null, pos: '3', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+    m('4', 'user', [{ type: 'text', text: 'run it' }]),
+    m('5', 'assistant', [
+      { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'make' } },
+      { type: 'tool_use', id: 'toolu_T', name: 'Task', input: { subagent_type: 'Explore', description: 'look' } },
+    ]),
+    n2('5.1', 'tool_use', { tool_use_id: 'toolu_1', name: 'Bash' }),
+    m('6', 'user', [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'built' }, { type: 'tool_result', tool_use_id: 'toolu_T', content: 'found' }]),
+    // The transcript says the call succeeded in 5 s.
+    n2('6.1', 'tool_result', { tool_use_id: 'toolu_1', status: 'ok', duration_ms: 5000 }),
+    m('7', 'assistant', [{ type: 'text', text: 'done' }]),
+  ])
+  // The worker segment and its lines were written by exc_A.
+  const A = new Map(['3', '4', '5', '6', '7'].map((p) => [p, 'exc_A'] as const))
+  const ev = (seq: number, kind: string, payload: Record<string, unknown>): NexEvent => ({ seq, execution_id: 'exc_A', kind, payload, created_at: 1000 + seq })
+  // exc_A's own log: the call failed after 1988 ms, and its Task ran a subagent.
+  const stintEvents: NexEvent[] = [
+    ev(1, 'assistant', { type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', stop_reason: null, content: [
+      { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'make' } },
+      { type: 'tool_use', id: 'toolu_T', name: 'Task', input: { subagent_type: 'Explore', description: 'look' } },
+    ] } }),
+    ev(2, 'task_start', { task_id: 'tk1', kind: 'subagent', tool_use_id: 'toolu_T', description: 'look', started_at: 1000 }),
+    ev(3, 'task_end', { task_id: 'tk1', kind: 'subagent', tool_use_id: 'toolu_T', status: 'completed', ended_at: 13000, usage: { total_tokens: 26000, tool_uses: 8, duration_ms: 12000 } }),
+    ev(4, 'user', { type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'toolu_1', content: 'built', is_error: true },
+      { type: 'tool_result', tool_use_id: 'toolu_T', content: 'found' },
+    ] } }),
+    ev(5, 'tool_result', { tool_use_id: 'toolu_1', parent_tool_use_id: null, status: 'error', duration_ms: 1988 }),
+  ]
+  const many = (n: number) => Array.from({ length: n }, (_, i) => ev(i + 1, 'execution.observer_attached', { observers: 1 }))
+  const pageOf = (items: NexEvent[]): EventsPage => ({ items, next_cursor: 0 })
+  const draw = (cache: StintEnrichmentCache | null, attribution: ReadonlyMap<string, string> = A) => render(
+    <StintEnrichmentContext.Provider value={cache}>
+      <PreludeSection {...base} mode={mode} view={view} status="ok" done attribution={attribution} />
+    </StintEnrichmentContext.Provider>,
+  )
+  /** Bash as drawn: room, its dot and duration; chat, the failed lines and the tools lines. */
+  const bash = () => {
+    if (mode === 'chat') return [screen.queryAllByTestId('chat-failed-line').map((e) => e.textContent), screen.queryAllByTestId('chat-tools-line').map((e) => e.textContent)]
+    const block = screen.getAllByTestId('operation-block')[0]
+    return [block.querySelector('[data-testid="op-dot"]')!.className.match(/bg-status-\w+/)![0], block.querySelector('[data-testid="op-duration"]')?.textContent]
+  }
+  const transcriptBash = mode === 'room' ? ['bg-status-success', '5.0s'] : [[], ['Used 2 tools']]
+
+  it('lazy: only a stint whose segment is drawn is fetched; a plain segment fetches nothing', async () => {
+    const fetch = vi.fn(async () => pageOf(stintEvents))
+    // exc_B wrote a line that is not loaded: no segment of it is in the tree.
+    draw(createStintEnrichmentCache(fetch), new Map([...A, ['99', 'exc_B']]))
+    await act(async () => {})
+    expect(fetch.mock.calls).toEqual([['h', 'exc_A', { after: 0, limit: 500 }]])
+  })
+
+  it('two segments of one stint share one fetch', async () => {
+    const fetch = vi.fn(async () => pageOf(many(5001)))
+    // exc_A: the cli marker, then the sdk marker and what follows — two runs with a plain one between.
+    draw(createStintEnrichmentCache(fetch), new Map(['1', '3', '4'].map((p) => [p, 'exc_A'] as const)))
+    // Each enriched segment ends with its own budget line: two segments, one fetch.
+    expect(await screen.findAllByTestId('prelude-enrichment-truncated')).toHaveLength(2)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('draws the stint\'s tool status and duration over the transcript\'s, and its subagent task on the Task call', async () => {
+    let settle: (p: EventsPage) => void = () => {}
+    draw(createStintEnrichmentCache(vi.fn(() => new Promise<EventsPage>((resolve) => { settle = resolve }))))
+    // Still loading: exactly the transcript's.
+    expect(bash()).toEqual(transcriptBash)
+    expect(screen.queryByTestId('subagent-task-suffix')).toBeNull()
+    await act(async () => settle(pageOf(stintEvents)))
+    if (mode === 'room') {
+      expect(bash()).toEqual(['bg-status-error', '2.0s'])
+    } else {
+      // Chat recomputes the span's operations: the failure gets its own line.
+      expect(bash()).toEqual([['Bash · built'], ['Used 1 tool']])
+      fireEvent.click(screen.getByTestId('chat-tools-line'))
+    }
+    expect(screen.getByTestId('subagent-task-suffix').textContent).toContain('26k tokens')
+    expect(screen.queryByTestId('prelude-enrichment-truncated')).toBeNull()
+  })
+
+  it('a stint over the budget says so in one muted line, the last of its segment', async () => {
+    draw(createStintEnrichmentCache(vi.fn(async () => pageOf(many(5001)))))
+    const line = await screen.findByTestId('prelude-enrichment-truncated')
+    expect(line.textContent).toBe('This worker segment has too many events; only the first 5000 were used.')
+    expect(line.className).toBe('text-xs text-text-muted')
+    // Right after the segment's last row, before the handoff that closes the section.
+    const kids = [...screen.getByTestId('worker-prelude').children]
+    expect(kids.at(-2)).toBe(line)
+    expect(kids.at(-3)!.getAttribute('data-prelude-pos')).toBe(mode === 'room' ? '7' : '4')
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    try {
+      expect(line.textContent).toBe('這段 worker 的事件太多，只補充了前 5000 筆')
+    } finally {
+      act(() => { useI18nStore.getState().setLocale('en') })
+    }
+  })
+
+  it('a failed fetch draws the transcript\'s status: the same DOM as no enrichment, no toast, no error row', async () => {
+    const plain = draw(null)
+    const html = screen.getByTestId('worker-prelude').outerHTML
+    plain.unmount()
+    const error = vi.spyOn(console, 'error')
+    const warn = vi.spyOn(console, 'warn')
+    try {
+      const fetch = vi.fn(async () => { throw new Error('down') })
+      const cache = createStintEnrichmentCache(fetch)
+      draw(cache)
+      await waitFor(() => expect(cache.get('exc_A')).toBeNull())
+      await act(async () => {})
+      expect(bash()).toEqual(transcriptBash)
+      expect(screen.getByTestId('worker-prelude').outerHTML).toBe(html)
+      expect(screen.queryByTestId('prelude-error')).toBeNull()
+      expect(useUndoToast.getState().toast).toBeNull()
+      expect(useUndoToast.getState().notice).toBeNull()
+      expect(error).not.toHaveBeenCalled()
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+      warn.mockRestore()
+    }
   })
 })

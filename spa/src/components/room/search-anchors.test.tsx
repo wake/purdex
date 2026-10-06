@@ -172,7 +172,7 @@ function Harness({ fixture, view, registered, onStore }: {
       <Transcript messages={fixture.messages} keyPrefix="k" showThinking={false} showEmptyHint={false}
         turnStarts={fixture.turnStarts} tools={fixture.tools}
         {...(fixture.prelude ? { prelude: (
-          <PreludeSection view={fixture.prelude} status="ok" done error={null} keyPrefix="k" mode={view} pages={1} onLoadOlder={() => {}} onRetry={() => {}} />
+          <PreludeSection hostId="h" view={fixture.prelude} status="ok" done error={null} keyPrefix="k" mode={view} pages={1} onLoadOlder={() => {}} onRetry={() => {}} />
         ), preludeVersion: '1' } : {})} />
     </FoldContext.Provider>
   )
