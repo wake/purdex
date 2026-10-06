@@ -660,7 +660,8 @@ func TestTakebackSuccessArchives(t *testing.T) {
 	require.Equal(t, http.StatusOK, status, "%v", body)
 	assert.Equal(t, map[string]any{"session_id": tbSessionID, "archived": true, "exited": true}, body)
 	assert.Equal(t, []string{"acquire", "renew", "terminate", "archive", "release"}, env.svc.Calls(), "idle execution: control held, resumed, then terminated and archived")
-	assert.Equal(t, []execution.ArchiveRequest{{ExecutionID: tbExecID, PrincipalID: tbPrincipal, Archived: true}}, env.svc.archiveReqs)
+	// D23: the exit archives under the transfer's control — the lease the terminate ran under.
+	assert.Equal(t, []execution.ArchiveRequest{{ExecutionID: tbExecID, PrincipalID: tbPrincipal, Archived: true, LeaseID: tbLeaseID}}, env.svc.archiveReqs)
 }
 
 func TestTakebackArchiveFailureStill200(t *testing.T) {
