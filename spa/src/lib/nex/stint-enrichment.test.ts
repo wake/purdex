@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ENRICHMENT_EVENT_BUDGET, enrichFromEvents } from './stint-enrichment'
+import { ENRICHMENT_EVENT_BUDGET, enrichFromEvents, withStintTools, type StintEnrichment } from './stint-enrichment'
 import { derivePrelude } from './prelude'
 import { costSummary } from './cost-summary'
 import type { StreamMessage } from './message-types'
@@ -144,5 +144,28 @@ describe('enrichFromEvents', () => {
       const e = enrichFromEvents([noId, said(2, 'msg_a'), done(3, 0.5), said(4, 'msg_tail')])
       expect([...e.costByMessageId.keys()]).toEqual(['msg_a'])
     })
+  })
+})
+
+// #1617: search sorts the prelude's calls by the tools the segments draw them with.
+describe('withStintTools', () => {
+  const view = derivePrelude([
+    { offset: null, pos: '1', at: 1, kind: 'tool_result', payload: { tool_use_id: 'toolu_1', status: 'ok' } },
+    { offset: null, pos: '2', at: 2, kind: 'tool_result', payload: { tool_use_id: 'toolu_2', status: 'ok' } },
+  ])
+  const failed = (id: string) => enrichFromEvents([ev(1, 'tool_result', { tool_use_id: id, status: 'error' })])
+
+  it('lays every attributed stint\'s settled tools over the view\'s', () => {
+    const settled = new Map<string, StintEnrichment | null>([['exc_A', failed('toolu_1')], ['exc_B', null], ['exc_C', failed('toolu_2')]])
+    // exc_C has settled but attributes no line: it is left out.
+    const out = withStintTools(view, new Map([['1', 'exc_A'], ['2', 'exc_B']]), (id) => settled.get(id))
+    expect(out.tools.toolu_1.status).toBe('error')
+    expect(out.tools.toolu_2.status).toBe('done')
+    expect(out.messages).toBe(view.messages)
+  })
+
+  it('is the view itself while no attributed stint has settled with tools', () => {
+    expect(withStintTools(view, new Map([['1', 'exc_A']]), () => undefined)).toBe(view)
+    expect(withStintTools(view, new Map([['1', 'exc_A']]), () => enrichFromEvents([]))).toBe(view)
   })
 })

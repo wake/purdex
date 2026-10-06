@@ -11,6 +11,8 @@ import type { StreamMessage } from './message-types'
 import { subagentTasksByToolUse, type TaskTable } from './tasks'
 import type { ToolActivity } from './tool-activity'
 import type { NexEvent, WorkerTask } from './types'
+import type { PreludeView } from './prelude'
+import type { Attribution } from './stint-attribution'
 
 export interface StintEnrichment {
   /** By tool_use_id, from the raw frames and the N2 tool events; a segment's entry wins over the transcript's. Settled calls only. */
@@ -86,4 +88,21 @@ function costByMessageId(messages: readonly StreamMessage[]): ReadonlyMap<string
     }
   }
   return out
+}
+
+/**
+ * `view` with every settled enrichment's tools over its own, for the stints `attribution` names: the
+ * statuses the segments draw their calls by (#1617). tool_use ids are unique across stints, so one map
+ * serves every segment. `view` itself when no attributed stint has settled with tools.
+ */
+export function withStintTools(
+  view: PreludeView, attribution: Attribution, enrichmentOf: (stintId: string) => StintEnrichment | null | undefined,
+): PreludeView {
+  let tools: Record<string, ToolActivity> | null = null
+  for (const id of new Set(attribution.values())) {
+    const e = enrichmentOf(id)
+    // Own keys both sides: spread never touches the prototype (a `__proto__` id stays an id).
+    if (e && Object.keys(e.tools).length > 0) tools = { ...(tools ?? view.tools), ...e.tools }
+  }
+  return tools ? { ...view, tools } : view
 }

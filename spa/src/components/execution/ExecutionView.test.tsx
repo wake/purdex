@@ -2144,7 +2144,7 @@ describe('ExecutionView — worker prelude', () => {
     const seg = (pos: string, offset: number, entrypoint: string) => ({ pos, at: 1, offset, kind: 'prelude.segment', entrypoint })
     const line = (pos: string, offset: number, text: string) => ({ pos, at: 1, offset, kind: 'user', msg: said(text) })
     const items = [seg('1', 0, 'cli'), line('2', 0, 'in the terminal'), seg('3', 500, 'sdk-cli'), line('4', 500, 'in the worker')]
-    const draw = (itemOffset: boolean, prelude: unknown[] = items, strict = false) => {
+    const draw = (itemOffset: boolean, prelude: unknown[] = items, strict = false, mode: 'room' | 'chat' = 'room') => {
       // `ensure` would re-resolve the (unregistered) test host and drop the seeded capabilities.
       useNexHostStore.setState({
         ensure: async () => {},
@@ -2154,7 +2154,7 @@ describe('ExecutionView — worker prelude', () => {
       patchExec({ messages: [said('the brief')], turnStarts: [0] })
       // The pane's own first page; also the earlier stint's boundary answer (total_bytes 500).
       vi.mocked(api.fetchExecutionPrelude).mockResolvedValue({ state: 'ok', prevCursor: null, totalBytes: 500, items: prelude } as never)
-      return render(strict ? <StrictMode><ExecutionView {...base} isActive /></StrictMode> : <ExecutionView {...base} isActive />)
+      return render(strict ? <StrictMode><ExecutionView {...base} mode={mode} isActive /></StrictMode> : <ExecutionView {...base} mode={mode} isActive />)
     }
     const earlier = summary({ id: 'exc_0', state: 'terminated', resume_session_id: S, created_at: 1 })
     afterEach(() => {
@@ -2260,6 +2260,46 @@ describe('ExecutionView — worker prelude', () => {
         await act(async () => settle({ items: [], next_cursor: 0 }))
         expect(highlights.get('search-current')).not.toBe(marked)
         expect(highlights.get('search-current')?.ranges.map(String)).toEqual(['worker'])
+      } finally {
+        ;[g.CSS, g.Highlight] = saved
+      }
+    })
+
+    // #1617: chat draws an attributed call by the stint's enriched status, so
+    // search must sort it into the same fold, or a jump opens the wrong one.
+    it('chat: search reveals a call the enrichment failed in its failed line, not the tools line', async () => {
+      class FakeHighlight {
+        ranges: Range[] = []
+        add(range: Range) { this.ranges.push(range); return this }
+      }
+      const g = globalThis as unknown as { CSS?: unknown; Highlight?: unknown }
+      const saved = [g.CSS, g.Highlight]
+      const highlights = new Map<string, FakeHighlight>()
+      g.CSS = { highlights }
+      g.Highlight = FakeHighlight
+      Element.prototype.scrollTo = vi.fn() as unknown as Element['scrollTo']
+      try {
+        const assistant = { type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_x', name: 'Bash', input: { command: 'make deploy' } }], stop_reason: null } }
+        // The transcript's own result carries no is_error: the call reads done.
+        const result = { type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_x', content: 'deploy blew up' }], stop_reason: null } }
+        const call = [...items, { pos: '5', at: 1, offset: 600, kind: 'assistant', msg: assistant }, { pos: '6', at: 1, offset: 700, kind: 'user', msg: result }]
+        vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
+        // exc_0's own N2 event says the call failed.
+        vi.mocked(api.fetchExecutionEvents).mockReset().mockResolvedValue({
+          items: [{ seq: 1, execution_id: 'exc_0', kind: 'tool_result', payload: { tool_use_id: 'toolu_x', status: 'error' }, created_at: 1 }], next_cursor: 0,
+        } as never)
+        draw(true, call, false, 'chat')
+        // Settled: the call left the tools line for its own failed line.
+        await screen.findByTestId('chat-failed-line')
+        fireEvent.pointerDown(screen.getAllByRole('textbox').at(-1)!)
+        fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true })
+        fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'blew up' } })
+        expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('1 / 1')
+        // The jump opened the failed line, and the mark sits in its connected output.
+        const marks = highlights.get('search-current')?.ranges ?? []
+        expect(marks.map(String)).toEqual(['blew up'])
+        expect(marks[0].startContainer.isConnected).toBe(true)
+        expect(screen.getByTestId('chat-failed-op')).toContainElement(marks[0].startContainer.parentElement)
       } finally {
         ;[g.CSS, g.Highlight] = saved
       }
