@@ -72,4 +72,14 @@ describe('RebuildModeChoice', () => {
     fireEvent.keyDown(screen.getByTestId('rebuild-mode-terminal'), { key: 'ArrowRight' })
     expect(onChange).not.toHaveBeenCalled()
   })
+
+  it('every arrow key is default-prevented even with no other enabled option (the page never scrolls)', () => {
+    const onChange = vi.fn()
+    render(<RebuildModeChoice value="terminal" onChange={onChange} terminalAvailable workerAvailable={false} />)
+    for (const key of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']) {
+      // fireEvent returns false when the event was default-prevented.
+      expect(fireEvent.keyDown(screen.getByTestId('rebuild-mode-terminal'), { key })).toBe(false)
+    }
+    expect(onChange).not.toHaveBeenCalled()
+  })
 })

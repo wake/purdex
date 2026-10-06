@@ -34,10 +34,11 @@ export function RebuildModeChoice({
 
   const onKeyDown = (e: KeyboardEvent, from: RebuildMode) => {
     if (!ARROWS.has(e.key)) return
+    // A radio owns the arrow keys: never let them scroll the page, even when there is nowhere to move.
+    e.preventDefault()
     // Two options: any arrow moves to the other one, if it is enabled.
     const other = options.find((o) => o.mode !== from)
     if (!other || !other.available) return
-    e.preventDefault()
     onChange(other.mode)
     refs.current[other.mode]?.focus()
   }
