@@ -8,6 +8,7 @@ Status: **passed review by `air26/_9iwyyv` on 2026-10-06** (c358cd65 plus the re
 - U13 (self-relay switches and approval) was added the same day. Its derivations (a)–(d) are in §8.7, and air26's review points (e) and (f) are in §8.4 and §8.3.
 - U13a and U14 followed the same day: self-relay approval is one click, and the browser SPA is retired, so every client is a Purdex.app.
 - U15 (2026-10-07) makes cross-host spawn a core need, with a host-selection rule. Its derivations are in §7.4, its measurements M13–M16, its phases P4b and P4c.
+- U16 (2026-10-07) fixes the Chinese vocabulary: 切換 (handoff, terminal ↔ worker) and 接力 (relay, a new conversation when context runs out); 交接 is retired. This spec's prompts and the 接力檔 follow it; English identifiers do not change.
 
 Every place where this spec departs from the brief's design draft (brief §5, D1–D8) is marked **⟲ changed from D…**, with the reason. §13 lists all of them.
 
@@ -83,6 +84,18 @@ Also decided on the research page (§9 "已決定"): `session.compact` is a safe
 | U15 | 跨主機 spawn 是核心需求。起 team 時要「依需求挑合適的主機」，選擇規則依序：<br>1. 檢查哪台主機有相關的 repo；<br>2. 如果多台都有，比較各主機的 weekly usage 剩餘量；<br>3. 如果都還夠用，優先在 mlab 啟動。 |
 
 Background the user gave: an iOS repo is about to be developed on a26; when the daemon needs a change, the lead on a26 opens a member on mlab. That is the case "lead on a26, member on mlab".
+
+**Sixth supplementary decision.** The user made it on 2026-10-07, and `air26/_9iwyyv` relayed it. Copied verbatim.
+
+| # | 決策 |
+|---|---|
+| U16 | 用詞：terminal ↔ worker 的換手，中文叫「切換」，英文維持 handoff；context 用完換新對話，中文叫「接力」，英文維持 relay。「交接」這個中文詞不再使用：spec 裡的「交接檔」改成「接力檔」，寫給模型看的提示文字（接力 prompt、接手 prompt）也一併改。程式碼的英文識別字不動（nex-handoff、HandoffDialogHost、relay_ops 照舊）。<br>已上線 UI 文案裡的「交接到 worker」等改成「切換到 worker」，這部分在 P0（PRODUCT.md 詞彙）同一個 PR 或另一個小 PR 處理，由你判斷。不影響 U1–U15。 |
+
+**How this spec reads U16:**
+- U2 is quoted verbatim above, so its 「交接檔」 stays as the user wrote it on 2026-10-06; everywhere else this spec says **接力檔**, and the file is still `<data_dir>/relay/<op id>.md` (§8.3).
+- The prompts the mod sends (§8.2, §8.7) and the dialog copy (§6.3, §8.7) say 接力, never 交接. 接手 (take over) stays: `↪ 接手自 <old ref>`.
+- The live UI strings (`handoff.error.*` in `spa/src/locales/zh-TW.json`, three strings on 2026-10-07) change 交接 → 切換 in a small PR of their own right after P0, so P0 stays a PRODUCT.md-only PR.
+- English identifiers (`nex-handoff`, `HandoffDialogHost`, `relay_ops`, `handoff.*` i18n keys) do not change.
 
 **How this spec reads U15** (derived in §7.4; the measurements are M13–M16):
 - U15 pulls **cross-host spawn, kill and relay** out of §11 into the phases (P4b, P4c in §12). It changes none of U1–U14.
@@ -431,7 +444,7 @@ pdx spawn [--repo <key|org/repo>] [--host <alias>] [--cwd <dir>] [--title <t>] [
 - So the member sees the message from the lead, and its replies go to the lead.
 - No daemon-internal send is needed for spawn.
 
-The text is prefixed with one line: `[pdx team] 你是 <lead address> 的 member（team <id>）。接力由 lead 決定，不要自己交接。`
+The text is prefixed with one line: `[pdx team] 你是 <lead address> 的 member（team <id>）。接力由 lead 決定，不要自己接力。`
 
 **⟲ changed from D4 — no `--worktree` flag.**
 - The daemon has no worktree API (§3.3), and U10 says the lead arranges it.
@@ -526,7 +539,7 @@ Both kinds are rows in `relay_ops` and run the same steps in the session's mod.
 
 1. **Lead:** `pdx relay <ref>` sends `POST /api/team/relays {id, origin_inbox, target}`.
    - The daemon checks the target is an active member of the caller's team, and that the member's mod has said hello (§8.3) with a compatible version.
-   - **A member without the mod is refused:** **409 `relay_unsupported`** (exit 13). The lead is told why: `<ref> 沒有載入 Purdex mod（或版本不符），無法接力；請手動交接或重開這個 member`.
+   - **A member without the mod is refused:** **409 `relay_unsupported`** (exit 13). The lead is told why: `<ref> 沒有載入 Purdex mod（或版本不符），無法接力；請手動接力或重開這個 member`.
    - It stores the op as `requested`.
 2. **Daemon → member:** a control message `[pdx-relay:control] op=<id>` goes to the member's inbox from the daemon's own virtual peer (§8.5).
 3. **Member mod:** `session.receive`, matching that text, returns `{consumed}`. The model never sees it (M1).
@@ -539,7 +552,7 @@ Both kinds are rows in `relay_ops` and run the same steps in the session's mod.
 5. **Clear:** `$.command.run('clear')` from a timer (F3).
 6. **Cleared:** at `classic.SessionStart{source:clear}`, the mod reports `cleared` with the new session id. The daemon then records the lineage, in one transaction (§8.4).
 7. **Seed:** `$.prompt.submit` with the takeover prompt. Its first line is `↪ 接手自 <old ref>`.
-8. **Done:** at that turn's end, the mod reports `done`. The daemon tells the lead `[pdx team] <old ref> 已由 <new ref> 接手（交接檔 <path>）` (D5.6).
+8. **Done:** at that turn's end, the mod reports `done`. The daemon tells the lead `[pdx team] <old ref> 已由 <new ref> 接手（接力檔 <path>）` (D5.6).
 
 **⟲ Why refuse, rather than fall back to send-keys** (air26 asked for one of the two, with the reason):
 - A send-keys executor would be a second, untested path for the same steps. It types into the TUI (§5), and it reaches the agent by `pdx msg` instead of `$.prompt.submit`, which is U2's mechanism.
@@ -659,7 +672,7 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
   - host;
   - the session: title, address, ref and cwd;
   - usage: `已用 72%`;
-  - `核准後這個 session 會寫交接檔、清空並在原處接手（約 1 分鐘）`.
+  - `核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）`.
 - **核准 is one click on any App (U13a), the same as a lead request (U5b).** So is **拒絕**.
   - The layer of §6.5 applies: no `pdx` approve command, the skill forbids self-approval, and every decision is broadcast and audited.
 - **Deadline:** 10 minutes, absolute. The lease is renewed by the mod's wait (below). If the origin session is gone, the request is `abandoned`.
@@ -677,7 +690,7 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
   - **⟲ changed after air26's review (3), which asked to drop and then re-submit with `asUser: true`.** A re-submitted prompt loses its `@file` mentions and pasted images, and stays attributed to the plugin (M12). Letting the person's own prompt run in the old conversation keeps it whole. That costs one turn of context, which is affordable at 70–80% used.
   - The handoff then records that turn too.
   - **A note for the model on released prompts (air26 review).** The release is `next({ ...e, context: [...(e.context ?? []), NOTE] })`. `context` reaches the model beside the prompt and is never shown to the user (2.1.291 types, `PromptSubmitResult.context`). NOTE says:
-    > 接力已核准，這一輪只做簡短回應；如果這是一件新工作，不要開始做，把它寫進交接檔「下一步」的第一項，由接手後的新對話處理。
+    > 接力已核准，這一輪只做簡短回應；如果這是一件新工作，不要開始做，把它寫進接力檔「下一步」的第一項，由接手後的新對話處理。
 
     Why: without it, the old conversation could take on a large new task at its fullest (70–80%). That defeats relaying early, and could run into auto-compact.
     - `@file` mentions and images still expand in the old conversation, so the handoff can record their paths and gist.
