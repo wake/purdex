@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -278,6 +279,36 @@ func driveLeadHook(t *testing.T, ctx context.Context, d http.Handler, opts []dae
 	full := append(append([]string{"request"}, args...), "--config", cfgPath)
 	code := runLeadCmd(ctx, full, leadEnv(), &stdout, &stderr, fixedID(), onCancelled, opts...)
 	return code, stdout.String(), stderr.String()
+}
+
+// leadFreeAddr reserves and releases a 127.0.0.1 port, so two servers can
+// take it in turn (a daemon restart keeps its port).
+func leadFreeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
+}
+
+// leadServeOn starts an httptest.Server on a fixed address (Task 2b.1
+// measured that a closed port can be re-listened at once). It repeats
+// daemonclient's serveOn because that package's test helpers are not
+// importable from package main.
+func leadServeOn(t *testing.T, addr string, h http.Handler) *httptest.Server {
+	t.Helper()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("listen %s: %v", addr, err)
+	}
+	srv := httptest.NewUnstartedServer(h)
+	srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	return srv
 }
 
 func TestRunLeadCmd_UsageErrorsExit2BeforeConfig(t *testing.T) {
@@ -701,5 +732,85 @@ func TestRunLeadCmd_HungPollCountResetsOnAnswer(t *testing.T) {
 	}
 	if _, polls, _, _ := d.snapshot(); len(polls) != 5 {
 		t.Errorf("polls = %v, want 5 (hung, open, hung, hung, approved)", polls)
+	}
+}
+
+// Review Focus 3, end to end through lead.go: the daemon restarts while
+// `pdx lead request` is long-polling. The first daemon (boot b1) accepts
+// the create; its first poll is cut by Stop (answers `open`, connection
+// closed) and its listener is gone before the client re-polls. The
+// re-poll is refused, the client prints the restart line once, backs off
+// once, and the new daemon (boot b2, same port) answers the health probe:
+// the restarted line is printed once, the SAME request id is polled again,
+// found still open, then approved. No real time passes (fake clock).
+func TestLeadRequest_SurvivesDaemonRestartMidPoll(t *testing.T) {
+	addr := leadFreeAddr(t)
+	first := newFakeTeamDaemon(team.Approval{})
+	firstSrv := leadServeOn(t, addr, first)
+	first.onFirstPoll = func() { firstSrv.Listener.Close() } // the daemon is going down: no new connection is accepted
+	defer firstSrv.Close()
+
+	second := newFakeTeamDaemon(team.Approval{
+		State: team.StateApproved,
+		Grant: &team.Grant{MaxMembers: 3, Roots: []string{"/w"}},
+	})
+	second.bootID = "b2"
+	var secondSrv *httptest.Server
+	var once sync.Once
+	clock := newLeadClock()
+	clock.onSleep = func(n int) {
+		if n == 1 {
+			once.Do(func() { secondSrv = leadServeOn(t, addr, second) })
+		}
+	}
+	defer func() {
+		if secondSrv != nil {
+			secondSrv.Close()
+		}
+	}()
+
+	cfgPath := writeTestConfig(t, "http://"+addr, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runLeadCmd(context.Background(), []string{"request", "--reason", "r", "--config", cfgPath},
+		leadEnv(), &stdout, &stderr, fixedID(), nil, clock.opt())
+	if code != ExitOK {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var out struct {
+		RequestID string     `json:"request_id"`
+		Grant     team.Grant `json:"grant"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil || out.RequestID != fixedID()() || out.Grant.MaxMembers != 3 {
+		t.Fatalf("stdout %q: %v", stdout.String(), err)
+	}
+	errText := stderr.String()
+	if n := strings.Count(errText, daemonclient.MsgRestarting); n != 1 {
+		t.Errorf("restart line count = %d, want 1: %q", n, errText)
+	}
+	if n := strings.Count(errText, "daemon 已重新啟動（boot b2）"); n != 1 {
+		t.Errorf("restarted line count = %d, want 1: %q", n, errText)
+	}
+	if clock.sleeps() != 1 {
+		t.Errorf("sleeps = %d, want exactly one backoff (the new daemon was up at the first retry)", clock.sleeps())
+	}
+
+	// One create on the first daemon, none on the second: the request id is
+	// never re-created, only re-polled.
+	creates1, polls1, deletes1, _ := first.snapshot()
+	creates2, polls2, deletes2, _ := second.snapshot()
+	if len(creates1) != 1 || creates1[0].ID != fixedID()() || len(creates2) != 0 {
+		t.Errorf("creates: first=%+v second=%+v", creates1, creates2)
+	}
+	if len(polls1) != 1 || len(polls2) != 2 {
+		t.Errorf("polls: first=%v second=%v, want 1 then 2", polls1, polls2)
+	}
+	wantPoll := "/api/team/approvals/" + fixedID()() + "?wait=25"
+	for _, p := range append(append([]string{}, polls1...), polls2...) {
+		if !strings.HasSuffix(p, wantPoll) {
+			t.Errorf("poll %q is not the same request id (%s)", p, wantPoll)
+		}
+	}
+	if len(deletes1)+len(deletes2) != 0 {
+		t.Errorf("a restart must not cancel the request: deletes=%v %v", deletes1, deletes2)
 	}
 }
