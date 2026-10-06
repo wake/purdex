@@ -22,14 +22,16 @@ import { indexOperations } from '../../../lib/nex/operations'
 import { classifyTurnOperations } from '../../../lib/nex/operation-status'
 import type { PreludeBlock, PreludeEntry, PreludeState, PreludeView } from '../../../lib/nex/prelude'
 import { preludeBlocks } from '../../../lib/nex/prelude'
-import { attributionRuns, NO_ATTRIBUTION, type Attribution } from '../../../lib/nex/stint-attribution'
+import { attributionRuns, NO_ATTRIBUTION, type Attribution, type PreludeRun } from '../../../lib/nex/stint-attribution'
 import type { RenderCtx } from '../render-message'
 import { FoldContext, useInheritedFoldMemory } from '../fold-context'
 import PreludeMarker from './PreludeMarker'
-import PreludeSegment from './PreludeSegment'
+import PreludeSegment, { type PreludeSegmentSlice } from './PreludeSegment'
 import PreludeSentinel from './PreludeSentinel'
 
 export interface PreludeSectionProps {
+  /** The pane's host: an attributed segment fetches its stint's events from it (spec §10.4). */
+  hostId: string
   view: PreludeView
   status: PreludeState['status']
   done: boolean
@@ -49,7 +51,7 @@ export interface PreludeSectionProps {
 
 const entryPoses = (e: PreludeEntry): [string, string] => [e.pos, e.pos]
 
-export default function PreludeSection({ view, status, done, error, keyPrefix, now, mode, pages, onLoadOlder, onRetry, attribution = NO_ATTRIBUTION }: PreludeSectionProps) {
+export default function PreludeSection({ hostId, view, status, done, error, keyPrefix, now, mode, pages, onLoadOlder, onRetry, attribution = NO_ATTRIBUTION }: PreludeSectionProps) {
   const t = useI18nStore((s) => s.t)
   // Inherit the transcript's fold memory; a section mounted alone still folds.
   const folds = useInheritedFoldMemory()
@@ -71,11 +73,17 @@ export default function PreludeSection({ view, status, done, error, keyPrefix, n
   // Known limit (#1614): an attachment-only first send is no opening line, so after a worker →
   // worker rebuild a span can straddle the boundary and its later messages run under the earlier
   // stint. Spans stay whole (ChatTurnBody grouping, search's blocks); enrichment joins by unique id, so they lose it, never mismatch.
-  const runs = useMemo(() => {
-    if (mode !== 'chat') return attributionRuns(view.entries, entryPoses, attribution)
+  // Each run carries its slice, kept across renders: an enriched chat segment memoizes its spans' operations on it.
+  const runs = useMemo((): Array<PreludeRun & { slice: PreludeSegmentSlice }> => {
+    if (mode !== 'chat') {
+      return attributionRuns(view.entries, entryPoses, attribution)
+        .map((r) => ({ ...r, slice: { mode: 'room', entries: view.entries.slice(r.start, r.end) } }))
+    }
     const blockPoses = (b: PreludeBlock): [string, string] => (b.kind === 'span' ? [posOf[b.start], posOf[b.end - 1]] : entryPoses(b.entry))
-    return attributionRuns(blocks, blockPoses, attribution)
-  }, [mode, view.entries, blocks, posOf, attribution])
+    return attributionRuns(blocks, blockPoses, attribution).map((r) => ({
+      ...r, slice: { mode: 'chat', blocks: blocks.slice(r.start, r.end), spanOps: spanOps.slice(r.start, r.end), keyPrefix, posOf },
+    }))
+  }, [mode, view.entries, blocks, spanOps, keyPrefix, posOf, attribution])
   if (view.entries.length === 0 && (status === 'idle' || status === 'none')) return null
   const ctx: RenderCtx = { messages: view.messages, index, tools: view.tools, now, keyPrefix: `${keyPrefix}-prelude`, depth: 0, idOf }
 
@@ -95,12 +103,7 @@ export default function PreludeSection({ view, status, done, error, keyPrefix, n
       <section data-testid="worker-prelude" className="space-y-4">
         {status === 'ok' && !done && <PreludeSentinel onVisible={onLoadOlder} generation={pages} />}
         {top}
-        {runs.map((r) => (mode === 'chat'
-          ? (
-            <PreludeSegment key={r.key} stintId={r.stintId} view={view} ctx={ctx} mode="chat" blocks={blocks.slice(r.start, r.end)}
-              spanOps={spanOps.slice(r.start, r.end)} keyPrefix={keyPrefix} posOf={posOf} />
-          )
-          : <PreludeSegment key={r.key} stintId={r.stintId} view={view} ctx={ctx} mode="room" entries={view.entries.slice(r.start, r.end)} />))}
+        {runs.map((r) => <PreludeSegment key={r.key} hostId={hostId} stintId={r.stintId} view={view} ctx={ctx} {...r.slice} />)}
         {/* The handoff into this worker is itself a switch (D2) and Nexen never sends a segment for the worker's own run. */}
         {view.entries.length > 0 && <PreludeMarker testId="prelude-handoff" label={t('worker.prelude.segment_headless')} />}
       </section>

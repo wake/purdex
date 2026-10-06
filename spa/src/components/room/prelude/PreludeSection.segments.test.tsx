@@ -39,7 +39,7 @@ afterEach(() => vi.unstubAllGlobals())
 const items = sanitizePreludePage(real)!.items
 const from = (pos: string) => items.slice(items.findIndex((i) => i.pos === pos))
 const runs = () => screen.queryAllByTestId('prelude-run').map((r) => [r.getAttribute('data-stint'), r.getAttribute('data-poses')])
-const base = { keyPrefix: 'exc', onLoadOlder: () => {}, onRetry: () => {}, error: null, status: 'ok' as const, done: false }
+const base = { hostId: 'h', keyPrefix: 'exc', onLoadOlder: () => {}, onRetry: () => {}, error: null, status: 'ok' as const, done: false }
 // Worker A: the capture's own sdk segment and its two lines.
 const A = new Map(['394248.0', '394248.1', '411382.1'].map((p) => [p, 'exc_A'] as const))
 const poses = (a: string, b: string) => {

@@ -11,7 +11,7 @@
 // (`mode`, from the pane content). Chat has no dock and chat's header (see
 // ExecutionHeader); switching is local — the subscription, the store and the
 // lease are untouched, so nothing is refetched.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { CSSProperties, DragEvent } from 'react'
 import { UploadSimple } from '@phosphor-icons/react'
 import RoomTranscript from '../room/RoomTranscript'
@@ -41,6 +41,8 @@ import { useExecutionPrelude } from '../../hooks/useExecutionPrelude'
 import { derivePrelude } from '../../lib/nex/prelude'
 import { attributeItems, isWorkerEntrypoint, NO_ATTRIBUTION } from '../../lib/nex/stint-attribution'
 import { useEntityStints } from '../../hooks/useEntityStints'
+import { createStintEnrichmentCache } from '../../lib/nex/stint-enrichment-cache'
+import { StintEnrichmentContext } from '../../hooks/useStintEnrichment'
 import PreludeSection from '../room/prelude/PreludeSection'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
 import { useExecutionActions, type SendOptions } from '../../hooks/useExecutionActions'
@@ -131,6 +133,23 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
     () => (stintsStatus === 'ok' ? attributeItems(st.prelude.items, stints) : NO_ATTRIBUTION),
     [stintsStatus, st.prelude.items, stints],
   )
+  // §10.4: the pane's one enrichment cache (this view is keyed by host and
+  // execution, so a stint switch gets a fresh one). Each settle may change the
+  // prelude's height and redraw its rows: the anchor's version and search's
+  // redraw take its revision. Unmounting disposes it, aborting every walk
+  // still paging. StrictMode's dev double effect disposes it once while the
+  // instance lives on: the remount finds it disposed and takes a fresh one.
+  const [enrichment, setEnrichment] = useState(createStintEnrichmentCache)
+  useEffect(() => {
+    if (enrichment.isDisposed()) {
+      // Only after StrictMode's simulated unmount, never in production.
+      setEnrichment(createStintEnrichmentCache())
+      return
+    }
+    return () => enrichment.dispose()
+  }, [enrichment])
+  const enrichmentRevision = useSyncExternalStore(enrichment.subscribe, enrichment.revision)
+  const preludeRedraw = useMemo(() => ({ attribution, enrichmentRevision }), [attribution, enrichmentRevision])
   const lease = useExecutionLease(hostId, executionId)
   const { draft, actionPending, handleSend, handleInterrupt, restoreDraft } = useExecutionActions(hostId, executionId, lease)
   // Spec §9.2 (phase E): native images only when the host's capability
@@ -549,7 +568,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
     ? <PendingAttachmentThumbs items={pendingPreviews} />
     : undefined
   const preludeNode = (
-    <PreludeSection view={preludeView} status={st.prelude.status} done={st.prelude.done} error={st.prelude.error}
+    <PreludeSection hostId={hostId} view={preludeView} status={st.prelude.status} done={st.prelude.done} error={st.prelude.error}
       keyPrefix={executionId} now={now} mode={chat ? 'chat' : 'room'} pages={st.prelude.pages}
       onLoadOlder={preludeApi.loadOlder} onRetry={preludeApi.retry} attribution={attribution} />
   )
@@ -566,7 +585,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
     // while keeping its paneId, and the old memo must not bleed into it
     // (fix round 1, finding 1).
     scrollMemoryKey: `${paneId}:${hostId}:${executionId}`,
-    ...(preludeEligible ? { prelude: preludeNode, preludeVersion: `${st.prelude.pages}:${st.prelude.status}` } : {}),
+    ...(preludeEligible ? { prelude: preludeNode, preludeVersion: `${st.prelude.pages}:${st.prelude.status}:${enrichmentRevision}` } : {}),
   }
 
   return (
@@ -600,13 +619,14 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       ) : (
         <FoldContext.Provider value={foldStore}>
         <AttachmentSourceContext.Provider value={attachmentSource}>
+        <StintEnrichmentContext.Provider value={enrichment}>
           {searchOpen && (
             <TranscriptSearch owner={paneId} container={scrollBox} messages={st.messages} tools={st.tools}
               view={chat ? 'chat' : 'room'} keyPrefix={executionId} turnStarts={st.turnStarts}
               onClose={closeSearch} focusRequest={focusRequest} onJump={onSearchJump}
               prelude={preludeEligible && st.prelude.status !== 'idle' && st.prelude.status !== 'none' ? preludeView : undefined}
               preludeDone={st.prelude.done} onLoadAll={() => { preludeApi.retry(); return preludeApi.loadAll() }}
-              preludeRedraw={attribution} />
+              preludeRedraw={preludeRedraw} />
           )}
           {chat ? (
             <ChatTranscript {...transcriptProps}>
@@ -623,6 +643,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
               )}
             </RoomTranscript>
           )}
+        </StintEnrichmentContext.Provider>
         </AttachmentSourceContext.Provider>
         </FoldContext.Provider>
       )}

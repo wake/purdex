@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useEffect, useState } from 'react'
+import { StrictMode, useEffect, useState } from 'react'
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
 import { useExecutionStore } from '../../stores/useExecutionStore'
@@ -21,7 +21,7 @@ import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
 
-vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn() }))
+vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn(), fetchExecutionEvents: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
@@ -2144,7 +2144,7 @@ describe('ExecutionView — worker prelude', () => {
     const seg = (pos: string, offset: number, entrypoint: string) => ({ pos, at: 1, offset, kind: 'prelude.segment', entrypoint })
     const line = (pos: string, offset: number, text: string) => ({ pos, at: 1, offset, kind: 'user', msg: said(text) })
     const items = [seg('1', 0, 'cli'), line('2', 0, 'in the terminal'), seg('3', 500, 'sdk-cli'), line('4', 500, 'in the worker')]
-    const draw = (itemOffset: boolean, prelude: unknown[] = items) => {
+    const draw = (itemOffset: boolean, prelude: unknown[] = items, strict = false) => {
       // `ensure` would re-resolve the (unregistered) test host and drop the seeded capabilities.
       useNexHostStore.setState({
         ensure: async () => {},
@@ -2154,7 +2154,7 @@ describe('ExecutionView — worker prelude', () => {
       patchExec({ messages: [said('the brief')], turnStarts: [0] })
       // The pane's own first page; also the earlier stint's boundary answer (total_bytes 500).
       vi.mocked(api.fetchExecutionPrelude).mockResolvedValue({ state: 'ok', prevCursor: null, totalBytes: 500, items: prelude } as never)
-      return render(<ExecutionView {...base} isActive />)
+      return render(strict ? <StrictMode><ExecutionView {...base} isActive /></StrictMode> : <ExecutionView {...base} isActive />)
     }
     const earlier = summary({ id: 'exc_0', state: 'terminated', resume_session_id: S, created_at: 1 })
     afterEach(() => {
@@ -2202,6 +2202,108 @@ describe('ExecutionView — worker prelude', () => {
       // Listed: exc_0's boundary (500) attributes the worker segment to it, and still nothing shows.
       vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
       expect(await html(true, () => expect(api.fetchExecutionPrelude).toHaveBeenCalledWith(H, 'exc_0', { limit: 1 }))).toBe(plain)
+    })
+
+    // §10.4: the pane's one cache fetches the attributed segment's stint once;
+    // its settle moves the anchor's version, so the reader keeps their place.
+    it('enriches the attributed segment from its stint\'s events, and the anchor absorbs what that adds', async () => {
+      vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
+      let settle: (page: unknown) => void = () => {}
+      vi.mocked(api.fetchExecutionEvents).mockReset().mockReturnValue(new Promise((resolve) => { settle = resolve }) as never)
+      Element.prototype.scrollTo = vi.fn() as unknown as Element['scrollTo']
+      // jsdom has no layout: the anchor is as tall as its text.
+      Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+        configurable: true,
+        get(this: HTMLElement) { return this.dataset?.testid === 'prelude-anchor' ? (this.textContent ?? '').length : 0 },
+      })
+      draw(true)
+      const box = screen.getByTestId('prelude-anchor').parentElement as HTMLElement
+      Object.defineProperty(box, 'scrollHeight', { configurable: true, value: 100000 })
+      Object.defineProperty(box, 'clientHeight', { configurable: true, value: 400 })
+      Object.defineProperty(box, 'scrollTop', { configurable: true, writable: true, value: 300 })
+      fireEvent.scroll(box)
+      await screen.findByText('in the worker')
+      await waitFor(() => expect(api.fetchExecutionEvents).toHaveBeenCalledTimes(1))
+      expect(vi.mocked(api.fetchExecutionEvents).mock.calls[0]).toEqual([H, 'exc_0', { after: 0, limit: 500, signal: expect.any(AbortSignal) }])
+      const before = box.scrollTop
+      const events = Array.from({ length: 5001 }, (_, i) => ({ seq: i + 1, execution_id: 'exc_0', kind: 'execution.observer_attached', payload: {}, created_at: 1 }))
+      await act(async () => settle({ items: events, next_cursor: 0 }))
+      const line = screen.getByTestId('prelude-enrichment-truncated')
+      expect(box.scrollTop - before).toBe(line.textContent!.length)
+      expect(api.fetchExecutionEvents).toHaveBeenCalledTimes(1)
+    })
+
+    it('an enrichment settle re-marks the open search, as an attribution change does', async () => {
+      // jsdom has no CSS Custom Highlight API: stub it to observe the marks.
+      class FakeHighlight {
+        ranges: Range[] = []
+        add(range: Range) { this.ranges.push(range); return this }
+      }
+      const g = globalThis as unknown as { CSS?: unknown; Highlight?: unknown }
+      const saved = [g.CSS, g.Highlight]
+      const highlights = new Map<string, FakeHighlight>()
+      g.CSS = { highlights }
+      g.Highlight = FakeHighlight
+      try {
+        vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
+        let settle: (page: unknown) => void = () => {}
+        vi.mocked(api.fetchExecutionEvents).mockReset().mockReturnValue(new Promise((resolve) => { settle = resolve }) as never)
+        draw(true)
+        await screen.findByText('in the worker')
+        await waitFor(() => expect(api.fetchExecutionEvents).toHaveBeenCalledTimes(1))
+        fireEvent.pointerDown(screen.getAllByRole('textbox').at(-1)!)
+        fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true })
+        fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'worker' } })
+        // The one match is the current one.
+        const marked = highlights.get('search-current')
+        expect(marked?.ranges.map(String)).toEqual(['worker'])
+        await act(async () => settle({ items: [], next_cursor: 0 }))
+        expect(highlights.get('search-current')).not.toBe(marked)
+        expect(highlights.get('search-current')?.ranges.map(String)).toEqual(['worker'])
+      } finally {
+        ;[g.CSS, g.Highlight] = saved
+      }
+    })
+
+    // A stint's walk is up to ~11 pages; nobody may keep paging for a pane that is gone.
+    const walks = () => {
+      const signals: AbortSignal[] = []
+      let settle: (page: unknown) => void = () => {}
+      vi.mocked(api.fetchExecutionEvents).mockReset().mockImplementation(((_h: string, _id: string, opts: { signal?: AbortSignal }) => {
+        signals.push(opts.signal!)
+        return new Promise((resolve) => { settle = resolve })
+      }) as never)
+      return { signals, settle: (page: unknown) => settle(page) }
+    }
+
+    it('unmounting the pane aborts its walks, silently', async () => {
+      vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
+      const { signals } = walks()
+      const error = vi.spyOn(console, 'error')
+      try {
+        const { unmount } = draw(true)
+        await waitFor(() => expect(signals).toHaveLength(1))
+        expect(signals[0].aborted).toBe(false)
+        unmount()
+        expect(signals[0].aborted).toBe(true)
+        await act(async () => {})
+        expect(error).not.toHaveBeenCalled()
+        expect(useUndoToast.getState().toast).toBeNull()
+      } finally {
+        error.mockRestore()
+      }
+    })
+
+    it('StrictMode\'s dev double effect never leaves the pane on a disposed cache', async () => {
+      vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
+      const { signals, settle } = walks()
+      draw(true, items, true)
+      await screen.findByText('in the worker')
+      await waitFor(() => expect(signals.length).toBeGreaterThan(0))
+      expect(signals.at(-1)!.aborted).toBe(false)
+      const events = Array.from({ length: 5001 }, (_, i) => ({ seq: i + 1, execution_id: 'exc_0', kind: 'execution.observer_attached', payload: {}, created_at: 1 }))
+      await act(async () => settle({ items: events, next_cursor: 0 }))
+      expect(screen.getByTestId('prelude-enrichment-truncated')).toBeInTheDocument()
     })
   })
 })

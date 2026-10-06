@@ -858,7 +858,7 @@ describe('scroll memory anchors inside the prelude (#1534)', () => {
       <Transcript keyPrefix="k" showThinking={false} showEmptyHint={false} messages={[said('a'), said('b')]} turnStarts={[0, 1]}
         scrollMemoryKey={PANE} scrollRef={ref}
         {...(items ? { prelude: (
-          <PreludeSection view={derivePrelude(items)} status="ok" done error={null} keyPrefix="k" mode={view} pages={1}
+          <PreludeSection hostId="h" view={derivePrelude(items)} status="ok" done error={null} keyPrefix="k" mode={view} pages={1}
             onLoadOlder={() => {}} onRetry={() => {}} />
         ), preludeVersion: '1:ok' } : {})} />,
     )
@@ -1021,7 +1021,7 @@ describe('scroll memory anchors inside the prelude (#1534)', () => {
       const tree = (items: PreludeItem[], version: string) => (
         <Transcript keyPrefix="k" showThinking={false} showEmptyHint={false} messages={[said('a'), said('b')]} turnStarts={[0, 1]}
           scrollMemoryKey={PANE} scrollRef={ref}
-          prelude={<PreludeSection view={derivePrelude(items)} status="ok" done error={null} keyPrefix="k" mode={view} pages={1}
+          prelude={<PreludeSection hostId="h" view={derivePrelude(items)} status="ok" done error={null} keyPrefix="k" mode={view} pages={1}
             onLoadOlder={() => {}} onRetry={() => {}} />}
           preludeVersion={version} />
       )
@@ -1080,7 +1080,7 @@ describe.each(views)('%s: the scroll anchor class marks exactly the anchors', (n
     const { container } = render(
       <Transcript keyPrefix="k" showThinking={false} showEmptyHint={false}
         messages={[said('a'), message('assistant', 'b'), said('c'), message('assistant', 'd')]} turnStarts={[0, 2]}
-        prelude={<PreludeSection view={derivePrelude(ITEMS)} status="ok" done error={null} keyPrefix="k" mode={name} pages={1}
+        prelude={<PreludeSection hostId="h" view={derivePrelude(ITEMS)} status="ok" done error={null} keyPrefix="k" mode={name} pages={1}
           onLoadOlder={() => {}} onRetry={() => {}} />}
         preludeVersion="1:ok" />,
     )
