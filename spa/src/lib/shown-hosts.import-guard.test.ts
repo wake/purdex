@@ -62,6 +62,7 @@ const READER_IMPORTERS = [
   'src/lib/deeplink/deeplinkResolver.ts',
   'src/lib/host-reresolve.ts',
   'src/lib/nex/handoff.ts',
+  'src/lib/nex/worker-rebuild.ts',
   'src/lib/profile/switch-active.ts',
   'src/lib/rebuild/cwd-probe.ts',
   'src/lib/rebuild/host-reshow.ts',
