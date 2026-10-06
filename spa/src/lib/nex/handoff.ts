@@ -47,7 +47,7 @@ import {
 /** In-flight keys: `handoff:<host>:<session>` and `takeback:<host>:<execution>`. */
 const inFlight = new Set<string>()
 
-async function singleFlight<T>(key: string, run: () => Promise<T>): Promise<T> {
+export async function singleFlight<T>(key: string, run: () => Promise<T>): Promise<T> {
   if (inFlight.has(key)) throw new HandoffApiError(0, 'handoff_in_progress', {})
   inFlight.add(key)
   try {

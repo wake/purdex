@@ -29,6 +29,7 @@ import { isFindShortcut } from '../../lib/find-shortcut'
 import type { TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
 import { useQuickReplies } from '../../lib/quick-replies'
 import ExecutionHeader from './ExecutionHeader'
+import { WorkerEndedPane, workerEndedKind } from './WorkerEndedPane'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { useExecutionStore, executionKey } from '../../stores/useExecutionStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
@@ -358,6 +359,11 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       : problem === 'nex_disabled' ? t('execution.nex_disabled')
       : t('execution.nex_unavailable', { error: st.sseError ?? '' })
     return <div data-testid="execution-problem" className="flex items-center justify-center h-full text-sm text-text-muted">{text}</div>
+  }
+
+  // An exited / failed-to-start worker has its own screen (conversation entity spec §6, §7). Every hook is above.
+  if (st.summary && workerEndedKind(st.summary)) {
+    return <WorkerEndedPane hostId={hostId} executionId={executionId} summary={st.summary} tabId={tabId} paneId={paneId} />
   }
 
   const terminal = !!st.summary && TERMINAL_STATES.has(st.summary.state)

@@ -186,3 +186,28 @@ export interface NexExitWorkerResult {
 export function nexExitWorker(hostId: string, executionId: string, body: { lease_id?: string }): Promise<NexExitWorkerResult> {
   return postJson<NexExitWorkerResult>(hostId, `/api/nex/executions/${encodeURIComponent(executionId)}/exit`, body.lease_id ? { lease_id: body.lease_id } : {})
 }
+
+export interface NexWorkerRebuildRequest {
+  session_id: string
+  cwd: string
+  profile?: string
+  /** The failed (live-but-rejected) stint this rebuild replaces; the daemon exits it first. */
+  replace_execution_id?: string
+}
+
+export interface NexWorkerRebuildResult {
+  execution_id: string
+  state: string
+  effective_profile?: string
+  /** A rejected state is data, not an error: the new pane then shows "start failed". */
+  reject_reason?: string
+}
+
+/**
+ * `POST /api/nex/worker-rebuild` — start a new worker that resumes a conversation
+ * whose worker exited (or failed to start). Refusals (session_owned,
+ * transfer_in_progress, replace_mismatch, ...) arrive as `HandoffApiError`.
+ */
+export function nexWorkerRebuild(hostId: string, body: NexWorkerRebuildRequest): Promise<NexWorkerRebuildResult> {
+  return postJson<NexWorkerRebuildResult>(hostId, '/api/nex/worker-rebuild', { ...body })
+}

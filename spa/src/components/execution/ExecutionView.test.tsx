@@ -28,6 +28,10 @@ vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }
 // The take-back path runs the real orchestration (store swap, forget-before-
 // swap) against a mocked daemon call; `takeBack` itself is a pass-through spy
 // so the view's call shape (lease id, forgetLease identity) is observable.
+vi.mock('./WorkerEndedPane', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./WorkerEndedPane')>()),
+  WorkerEndedPane: () => <div data-testid="worker-ended-pane" />,
+}))
 vi.mock('../../lib/nex/exit-worker', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/nex/exit-worker')>()),
   exitWorker: vi.fn(),
@@ -251,13 +255,14 @@ describe('ExecutionView', () => {
     await waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
   })
 
-  it('lets a failed worker exit; a terminated or archived one cannot', () => {
+  it('a failed, terminated or archived worker has no exit control: the ended screen replaces the pane', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ state: 'failed' }) as never)
     const { rerender } = render(<ExecutionView {...base} isActive />)
-    expect(screen.getByTestId('header-exit')).toBeEnabled()
+    expect(screen.queryByTestId('header-exit')).toBeNull()
     useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
     rerender(<ExecutionView {...base} isActive />)
-    expect(screen.getByTestId('header-exit')).toBeDisabled()
+    expect(screen.queryByTestId('header-exit')).toBeNull()
+    expect(screen.getByTestId('worker-ended-pane')).toBeInTheDocument()
   })
 
   it('shows the held_by message on refusal and thaws the button', async () => {
@@ -301,7 +306,8 @@ describe('ExecutionView', () => {
     fireEvent.click(screen.getByTestId('header-exit'))
     await waitFor(() => expect(useExecutionStore.getState().executions[KEY].summary?.state).toBe('terminated'))
     expect(useExecutionStore.getState().executions[KEY].summary?.archived).toBe(true)
-    await waitFor(() => expect(screen.getByTestId('header-exit')).toBeDisabled())
+    await waitFor(() => expect(screen.getByTestId('worker-ended-pane')).toBeInTheDocument())
+    expect(screen.queryByTestId('header-exit')).toBeNull()
   })
 
   it('a summary fetch that started before the exit cannot revive the pane when it lands late', async () => {
@@ -311,17 +317,22 @@ describe('ExecutionView', () => {
     await waitFor(() => expect(useExecutionStore.getState().executions[KEY].summary?.state).toBe('terminated'))
     act(() => { useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', archived: false }) as never, 0, gen) })
     expect(useExecutionStore.getState().executions[KEY].summary?.state).toBe('terminated')
-    expect(screen.getByTestId('header-exit')).toBeDisabled()
+    expect(screen.getByTestId('worker-ended-pane')).toBeInTheDocument()
   })
 
-  it('disables input with a reason when archived or ended', () => {
-    useExecutionStore.getState().setSummary(H, E, summary({ archived: true }) as never)
-    const { rerender } = render(<ExecutionView {...base} isActive />)
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
-    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', expect.stringMatching(/archived/i))
-    useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
-    rerender(<ExecutionView {...base} isActive />)
-    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', expect.stringMatching(/ended/i))
+  it('renders WorkerEndedPane for terminated, archived and failed summaries; a live idle one keeps the transcript', () => {
+    const ended = [{ state: 'terminated' }, { archived: true }, { state: 'failed' }, { state: 'rejected' }]
+    for (const extra of ended) {
+      useExecutionStore.getState().setSummary(H, E, summary(extra) as never)
+      const { unmount } = render(<ExecutionView {...base} isActive />)
+      expect(screen.getByTestId('worker-ended-pane')).toBeInTheDocument()
+      expect(screen.queryByRole('textbox')).toBeNull()
+      unmount()
+    }
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle' }) as never)
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.queryByTestId('worker-ended-pane')).toBeNull()
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
   })
 
   it('disables the input until history has loaded', () => {
@@ -345,11 +356,12 @@ describe('ExecutionView', () => {
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
   })
 
-  it('archived: input and 退出 are disabled (not a live row)', () => {
+  it('archived: renders the ended screen, no input and no exit (not a live row)', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ archived: true }) as never)
     render(<ExecutionView {...base} isActive />)
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
-    expect(screen.getByTestId('header-exit')).toBeDisabled()
+    expect(screen.getByTestId('worker-ended-pane')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(screen.queryByTestId('header-exit')).toBeNull()
   })
 
   it('shows the thinking indicator once a delivered send has no reply yet', async () => {
@@ -991,13 +1003,10 @@ describe('ExecutionView — take to terminal (no `from`)', () => {
     const cases: Array<[string, Record<string, unknown>, boolean]> = [
       ['running + session_id', { state: 'running', session_id: 'sid' }, true],
       ['idle + resume_session_id only', { state: 'idle', resume_session_id: 'rsid' }, true],
-      ['failed + session_id', { state: 'failed', session_id: 'sid' }, true],
-      ['terminated + session_id', { state: 'terminated', session_id: 'sid' }, true],
+      // failed / terminated / rejected / archived rows render WorkerEndedPane (no header, no view menu) — covered there.
       ['queued + resume_session_id (daemon would answer execution_not_settled)', { state: 'queued', resume_session_id: 'rsid' }, false],
-      ['rejected + session_id', { state: 'rejected', session_id: 'sid' }, false],
       ['idle without any session id', { state: 'idle' }, false],
       ['idle + session_id but provider codex', { state: 'idle', session_id: 'sid', provider: 'codex' }, false],
-      ['idle + session_id but archived (daemon answers execution_archived; codex R1 P1)', { state: 'idle', session_id: 'sid', archived: true }, false],
     ]
     it.each(cases)('%s → %s', (_name, extra, shown) => {
       useExecutionStore.getState().setSummary(H, E, summary(extra) as never)
@@ -1468,15 +1477,12 @@ describe('ExecutionView — quick replies (R3 T2.1)', () => {
     await waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'run the tests'))
   })
 
-  it('is disabled while a send is pending / the worker ended', async () => {
-    const { rerender } = render(<ExecutionView {...base} isActive />)
+  it('is disabled while a send is pending', async () => {
+    render(<ExecutionView {...base} isActive />)
     act(() => useExecutionStore.getState().setPendingSend(H, E, true))
     for (const b of screen.getAllByTestId('quick-reply')) expect(b).toBeDisabled()
     act(() => useExecutionStore.getState().setPendingSend(H, E, false))
     for (const b of screen.getAllByTestId('quick-reply')) expect(b).not.toBeDisabled()
-    act(() => useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never))
-    rerender(<ExecutionView {...base} isActive />)
-    for (const b of screen.getAllByTestId('quick-reply')) expect(b).toBeDisabled()
   })
 
   it('does not clear what is typed in the input', async () => {
@@ -1597,14 +1603,6 @@ describe('ExecutionView — search (R3 T3.3)', () => {
   // record it, and searching an old transcript is what it is for.
   it('a lone pane opens on a body Mod+F with no interaction recorded', () => {
     render(<ExecutionView {...base} isActive />)
-    expect(modF(document.body)).toBe(false)
-    expect(bar()).toBeInTheDocument()
-  })
-
-  it('an ended execution, alone, opens on a body Mod+F', () => {
-    useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
-    render(<ExecutionView {...base} isActive />)
-    expect(screen.getByRole('textbox')).toBeDisabled()
     expect(modF(document.body)).toBe(false)
     expect(bar()).toBeInTheDocument()
   })
@@ -2016,11 +2014,11 @@ describe('ExecutionView — attachments', () => {
     expect(screen.getByTestId('upload-block')).toHaveTextContent('Waiting for uploads to finish…')
   })
 
-  it('an ended execution takes no drop', () => {
+  it('an ended execution renders the ended screen: no drop target at all', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
     render(<ExecutionView {...base} isActive />)
-    fireEvent.dragEnter(screen.getByTestId('execution-view'), { dataTransfer: { types: ['Files'], files: [txt('a.txt')] } })
-    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+    expect(screen.queryByTestId('execution-view')).toBeNull()
+    expect(screen.getByTestId('worker-ended-pane')).toBeInTheDocument()
   })
 
   // PR #1522 A1: a quick reply goes through the same attachment-aware send as
@@ -2224,7 +2222,7 @@ describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
     expect(screen.getByRole('textbox')).not.toHaveFocus()
   })
 
-  it('a send that comes back as the worker ends (input stays disabled) does not take focus', async () => {
+  it('a send that comes back as the worker ends swaps to the ended screen (no reply box left to focus)', async () => {
     render(<ExecutionView {...base} isActive isFocusTarget />)
     await nextFrame()
     screen.getByRole('textbox').blur()
@@ -2233,13 +2231,7 @@ describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
       useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
       useExecutionStore.getState().setPendingSend(H, E, false)
     })
-    expect(screen.getByRole('textbox')).toBeDisabled()
-    const focus = vi.spyOn(HTMLTextAreaElement.prototype, 'focus')
-    try {
-      await nextFrame()
-      expect(focus).not.toHaveBeenCalled()
-    } finally {
-      focus.mockRestore()
-    }
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(screen.getByTestId('worker-ended-pane')).toBeInTheDocument()
   })
 })
