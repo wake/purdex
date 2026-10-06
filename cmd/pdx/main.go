@@ -31,6 +31,7 @@ import (
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	profilesmod "github.com/wake/purdex/internal/module/profiles"
 	"github.com/wake/purdex/internal/module/session"
+	teammod "github.com/wake/purdex/internal/module/team"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
 	"github.com/wake/purdex/internal/tmuxenv"
@@ -363,6 +364,8 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(backupmod.New())
 	c.AddModule(monitor.New())
 	c.AddModule(codexbroker.New())
+	// team depends on peers (the origin resolver); InitModules topo-sorts.
+	c.AddModule(teammod.New())
 
 	c.CfgMu.RLock()
 	nexEnabled := c.Cfg.Nex.Enabled

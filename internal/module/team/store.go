@@ -163,6 +163,29 @@ type Close struct {
 // after the attempt (the winner's close, for a loser too) and
 // ErrNoSuchApproval for an unknown id.
 func (s *Store) CloseIfOpen(id string, c Close) (team.Approval, bool, error) {
+	return s.closeWhere(id, c, "", 0)
+}
+
+// CloseIfExpired is the sweeper's close (spec §9.2): CloseIfOpen whose
+// UPDATE also requires the row to still be overdue at now, in the same
+// statement — deadline_at <= now for a timeout, lease_until <= now for an
+// abandonment. A lease renewed between the sweeper's read and its close
+// therefore makes the close lose, and the row stays open. Any other
+// state is an error: it has no expiry to guard on.
+func (s *Store) CloseIfExpired(id string, now int64, c Close) (team.Approval, bool, error) {
+	switch c.State {
+	case team.StateTimeout:
+		return s.closeWhere(id, c, " AND deadline_at <= ?", now)
+	case team.StateAbandoned:
+		return s.closeWhere(id, c, " AND lease_until <= ?", now)
+	default:
+		return team.Approval{}, false, fmt.Errorf("close approval %s: state %q has no expiry guard", id, c.State)
+	}
+}
+
+// closeWhere runs the close UPDATE guarded by state='open' and, when guard
+// is non-empty, that extra SQL condition (one ? bound to guardArg).
+func (s *Store) closeWhere(id string, c Close, guard string, guardArg int64) (team.Approval, bool, error) {
 	var decidedBy, grant any // NULL unless set
 	if c.DecidedBy != nil {
 		b, err := json.Marshal(c.DecidedBy)
@@ -178,11 +201,14 @@ func (s *Store) CloseIfOpen(id string, c Close) (team.Approval, bool, error) {
 		}
 		grant = string(b)
 	}
+	args := []any{string(c.State), c.DecidedAt, decidedBy, grant, id}
+	if guard != "" {
+		args = append(args, guardArg)
+	}
 	res, err := s.db.Exec(`
 		UPDATE approval_requests
 		SET state = ?, decided_at = ?, decided_by_json = ?, grant_json = ?
-		WHERE id = ? AND state = 'open'`,
-		string(c.State), c.DecidedAt, decidedBy, grant, id)
+		WHERE id = ? AND state = 'open'`+guard, args...)
 	if err != nil {
 		return team.Approval{}, false, fmt.Errorf("close approval %s: %w", id, err)
 	}

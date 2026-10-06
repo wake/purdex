@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -236,4 +238,190 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.writeJSON(w, http.StatusOK, map[string]any{"approvals": open})
+}
+
+// handleInflight is GET /api/team/inflight (spec §9.5): what a restart of
+// this daemon would interrupt, for the App's restart confirm. Open requests
+// survive a restart (boot lease grace), so the count informs, it does not
+// block. relays_active is 0 until P6 adds relays.
+func (m *Module) handleInflight(w http.ResponseWriter, r *http.Request) {
+	open, err := m.store.ListOpen()
+	if err != nil {
+		m.logf("[team] inflight: %v", err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	m.writeJSON(w, http.StatusOK, team.InflightResponse{ApprovalsOpen: len(open), RelaysActive: 0})
+}
+
+// pollWait parses GET's ?wait= (seconds): "" is 0, a negative or non-numeric
+// value is an error, and anything above MaxPollWaitS is capped to it, so a
+// poll always returns well inside the 30 s lease the CLI renews with it.
+func pollWait(s string) (int, error) {
+	if s == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, errors.New("wait must be a non-negative number of seconds")
+	}
+	return min(n, team.MaxPollWaitS), nil
+}
+
+// handleGet is GET /api/team/approvals/{id}?wait=N: it renews the lease
+// and, while the request is open and N > 0, waits for the close, N
+// seconds (≤ 25), the client going away, or Stop — whichever is first —
+// then answers the row as it is. A poll cut by Stop therefore answers 200
+// with the row still open; the CLI re-polls and meets the restart. A poll
+// whose renewal failed answers 503 not_ready instead of a 200 that would
+// let the CLI believe the lease holds while the sweeper abandons it; the
+// restart-aware CLI retries a 503.
+func (m *Module) handleGet(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	wait, err := pollWait(r.URL.Query().Get("wait"))
+	if err != nil {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, err.Error(), nil)
+		return
+	}
+	// Register before the read, so a close between the read and the
+	// select cannot be missed.
+	ch := m.addWaiter(id)
+	defer m.removeWaiter(id, ch)
+	if err := m.store.RenewLease(id, m.now()+team.LeaseS*1000); err != nil {
+		m.logf("[team] get %s: %v", id, err)
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "storage error; retry", nil)
+		return
+	}
+	a, ok, err := m.store.Get(id)
+	if err != nil {
+		m.logf("[team] get %s: %v", id, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	if !ok {
+		m.writeErr(w, http.StatusNotFound, team.ErrNotFound, "no such approval request", nil)
+		return
+	}
+	if m.afterRead != nil {
+		m.afterRead(id)
+	}
+	if a.State == team.StateOpen && wait > 0 {
+		timer := time.NewTimer(time.Duration(wait) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ch:
+		case <-timer.C:
+		case <-r.Context().Done():
+		case <-m.stopCtx.Done():
+		}
+		if a, ok, err = m.store.Get(id); err != nil || !ok {
+			m.logf("[team] get %s after wait: ok=%v err=%v", id, ok, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return
+		}
+	}
+	m.writeJSON(w, http.StatusOK, a)
+}
+
+// handleDelete is DELETE /api/team/approvals/{id}: the requester gives up.
+// It answers the row as it now is — cancelled, or closed before as it was.
+func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	after, won, err := m.closeAs(id, Close{State: team.StateCancelled, DecidedAt: m.now()})
+	if errors.Is(err, ErrNoSuchApproval) {
+		m.writeErr(w, http.StatusNotFound, team.ErrNotFound, "no such approval request", nil)
+		return
+	}
+	if err != nil {
+		m.logf("[team] delete %s: %v", id, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	if won {
+		m.logf("[team] approval %s cancelled by its requester", id)
+	}
+	m.writeJSON(w, http.StatusOK, after)
+}
+
+// handleDecide is POST /api/team/approvals/{id}/decide (spec §6.5): one
+// click on any App; the client label and remote address are audit, and
+// every decision is one daemon log line. A late decide answers 409
+// already_decided carrying the closed row, so its client can say who
+// handled it.
+func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req team.DecideRequest
+	if !m.decodeBody(w, r, &req) {
+		return
+	}
+	var state team.State
+	switch req.Decision {
+	case "approve":
+		state = team.StateApproved
+	case "deny":
+		state = team.StateDenied
+	default:
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, `decision must be "approve" or "deny"`, nil)
+		return
+	}
+	if strings.TrimSpace(req.Client.Kind) == "" || strings.TrimSpace(req.Client.Label) == "" {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "client.kind and client.label are required", nil)
+		return
+	}
+	client := req.Client
+	client.Addr = r.RemoteAddr
+	a, ok, err := m.store.Get(id)
+	if err != nil {
+		m.logf("[team] decide %s: %v", id, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	if !ok {
+		m.writeErr(w, http.StatusNotFound, team.ErrNotFound, "no such approval request", nil)
+		return
+	}
+	if a.State != team.StateOpen {
+		m.writeErr(w, http.StatusConflict, team.ErrAlreadyDecided, "this request is already closed", &a)
+		return
+	}
+	var grant *team.Grant
+	if state == team.StateApproved {
+		var payload team.LeadPayload
+		if err := json.Unmarshal(a.Payload, &payload); err != nil {
+			m.logf("[team] decide %s: decode payload: %v", id, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return
+		}
+		// nil grant → the payload's values; an edit falls back to them
+		// field by field (max_members 0, no roots).
+		g := team.Grant{MaxMembers: payload.MaxMembers, Roots: payload.Roots}
+		if req.Grant != nil {
+			g.MaxMembers = normaliseMaxMembers(req.Grant.MaxMembers, payload.MaxMembers)
+			if len(req.Grant.Roots) > 0 {
+				roots, err := normaliseRoots(req.Grant.Roots, a.Origin.Cwd)
+				if err != nil {
+					m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, err.Error(), nil)
+					return
+				}
+				g.Roots = roots
+			}
+		}
+		grant = &g
+	}
+	after, won, err := m.closeAs(id, Close{State: state, DecidedAt: m.now(), DecidedBy: &client, Grant: grant})
+	if errors.Is(err, ErrNoSuchApproval) {
+		m.writeErr(w, http.StatusNotFound, team.ErrNotFound, "no such approval request", nil)
+		return
+	}
+	if err != nil {
+		m.logf("[team] decide %s: %v", id, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	if !won {
+		m.writeErr(w, http.StatusConflict, team.ErrAlreadyDecided, "this request was closed first by someone else", &after)
+		return
+	}
+	m.logf("[team] approval %s %s by %s %q from %s (origin %s)", id, after.State, client.Kind, client.Label, client.Addr, after.Origin.Ref)
+	m.writeJSON(w, http.StatusOK, after)
 }
