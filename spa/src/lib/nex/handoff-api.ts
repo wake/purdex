@@ -126,18 +126,19 @@ function compact(body: Record<string, unknown>): Record<string, unknown> {
   return out
 }
 
-async function postJson<T>(hostId: string, path: string, body: Record<string, unknown>): Promise<T> {
+async function requestJson<T>(hostId: string, path: string, method: 'GET' | 'POST', body?: Record<string, unknown>): Promise<T> {
   // A pane can outlive its host entry. `hostFetch` on an unknown host id
   // falls back to the active host (`getDaemonBase`), which would run a
   // handoff / take-back against a different daemon than the pane's.
   if (!useHostStore.getState().hosts[hostId]) throw new HandoffApiError(0, 'host_removed', {})
-  const headers = new Headers({ 'Content-Type': 'application/json', 'X-Pdx-Client': getNexClientId() })
+  const headers = new Headers({ 'X-Pdx-Client': getNexClientId() })
+  if (body) headers.set('Content-Type', 'application/json')
   let res: Response
   try {
     res = await hostFetch(hostId, path, {
-      method: 'POST',
+      method,
       headers,
-      body: JSON.stringify(compact(body)),
+      ...(body ? { body: JSON.stringify(compact(body)) } : {}),
     })
   } catch (e: unknown) {
     // Never reached the server (offline, DNS, Tailscale path down): same
@@ -147,6 +148,15 @@ async function postJson<T>(hostId: string, path: string, body: Record<string, un
   }
   if (!res.ok) throw await handoffErrorFromResponse(res)
   return (await res.json()) as T
+}
+
+function postJson<T>(hostId: string, path: string, body: Record<string, unknown>): Promise<T> {
+  return requestJson<T>(hostId, path, 'POST', body)
+}
+
+/** GET counterpart of `postJson`: same host check, X-Pdx-Client header and error mapping. */
+export function getJson<T>(hostId: string, path: string): Promise<T> {
+  return requestJson<T>(hostId, path, 'GET')
 }
 
 function postSessionJson<T>(hostId: string, code: string, verb: string, body: Record<string, unknown>): Promise<T> {
