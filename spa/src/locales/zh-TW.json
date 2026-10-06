@@ -1866,5 +1866,6 @@
   "worker.exit.confirm_running": "這一輪會被中斷。",
   "worker.exit.held_by": "被 {{principal}} 控制中，無法退出。",
   "worker.exit.failed": "退出失敗：{{reason}}",
-  "worker.exit.manual_resume": "{{name}} 已在終端機接續，worker 已退出"
+  "worker.exit.manual_resume": "{{name}} 已在終端機接續，worker 已退出",
+  "worker.exit.after_transfer_failed": "已在終端機接續，但 worker 未能退出，請到清單手動退出"
 }

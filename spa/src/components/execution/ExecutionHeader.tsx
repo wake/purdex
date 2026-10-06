@@ -26,9 +26,9 @@
 // The pane can always switch views, so the menu is always offered; only the
 // 終端機 item depends on `onTakeBack`.
 // Chat (`mode === 'chat'`, spec §5) keeps only state, cost and the overflow at
-// every width; interrupt, terminate and the view items live in the overflow.
+// every width; interrupt, exit and the view items live in the overflow.
 import { useEffect, useId, useRef, useState } from 'react'
-import { CurrencyDollar, DotsThree, Prohibit, Power } from '@phosphor-icons/react'
+import { CurrencyDollar, DotsThree, Prohibit, SignOut } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HoverTooltip } from '../HoverTooltip'
 import { FloatingPanel } from '../FloatingPanel'
@@ -50,8 +50,11 @@ export interface ExecutionHeaderProps {
   /** Forwarded to `CostPanel` (its quota row, P-B4 P5). */
   hostId: string
   onInterrupt: () => void
-  onTerminate: () => void
-  /** Gates interrupt/terminate (terminal execution, or a take-back in flight). Take-back has its own flag. */
+  /** 退出: ExecutionView confirms first when the worker is running. */
+  onExit: () => void
+  /** The worker is not live, or a take-back / exit is in flight. */
+  exitDisabled: boolean
+  /** Gates interrupt (terminal execution, or a take-back in flight). Take-back has its own flag. */
   busy: boolean
   /** Present when the execution can be taken to a terminal (ExecutionView decides). */
   onTakeBack?: () => void
@@ -65,8 +68,6 @@ export interface ExecutionHeaderProps {
 const ACTION = 'flex items-center gap-1 px-2 py-0.5 rounded hover:bg-surface-hover disabled:opacity-40'
 const MENU_ITEM = 'flex items-center gap-2 w-full px-2 py-1 rounded text-left hover:bg-surface-hover disabled:opacity-40'
 
-export const TERMINATE_CONFIRM_MS = 4000
-
 /** No layout box: `display:none` (the other side of `@md`), or not rendered. */
 const boxless = (el: HTMLElement | null) => {
   const r = el?.getBoundingClientRect()
@@ -74,11 +75,10 @@ const boxless = (el: HTMLElement | null) => {
 }
 
 export default function ExecutionHeader({
-  summary, cost, hostId, onInterrupt, onTerminate, busy, onTakeBack, takeBackBusy = false, mode = 'room', onModeChange,
+  summary, cost, hostId, onInterrupt, onExit, exitDisabled, busy, onTakeBack, takeBackBusy = false, mode = 'room', onModeChange,
 }: ExecutionHeaderProps) {
   const t = useI18nStore((s) => s.t)
   const chat = mode === 'chat'
-  const [confirming, setConfirming] = useState(false)
   const [viewOpen, setViewOpen] = useState(false)
   const viewRef = useRef<HTMLButtonElement>(null)
   const [costOpen, setCostOpen] = useState(false)
@@ -158,11 +158,6 @@ export default function ExecutionHeader({
     if (active && active !== document.body && active !== hidden) return
     focusVisibleTrigger()
   }, [costOpen, overflowOpen, viewOpen])
-  useEffect(() => {
-    if (!confirming) return
-    const id = setTimeout(() => setConfirming(false), TERMINATE_CONFIRM_MS)
-    return () => clearTimeout(id)
-  }, [confirming])
 
   const state = summary?.state ?? '…'
   const cwdBase = summary?.cwd ? summary.cwd.split('/').filter(Boolean).pop() ?? summary.cwd : ''
@@ -174,11 +169,6 @@ export default function ExecutionHeader({
   const costLabel = cost ? formatUsd(cost.totalUsd, 2) : t('execution.cost.loading')
   // Q3 (R4 T2.2): a hand-over's turn 1 bills the resumed session's earlier spend.
   const priorHistory = costIncludesPriorHistory(summary, cost)
-  const terminateClick = () => {
-    if (confirming) { setConfirming(false); onTerminate(); return true }
-    setConfirming(true)
-    return false
-  }
 
   const overflowTrigger = (
     <button type="button" data-testid="header-overflow" ref={overflowRef}
@@ -220,8 +210,8 @@ export default function ExecutionHeader({
           <button type="button" disabled={busy} onClick={onInterrupt} className={ACTION}>
             <Prohibit size={12} /> {t('execution.interrupt')}
           </button>
-          <button type="button" disabled={busy} onClick={terminateClick} className={`${ACTION} text-status-error`}>
-            <Power size={12} /> {confirming ? t('execution.terminate_confirm') : t('execution.terminate')}
+          <button type="button" data-testid="header-exit" disabled={exitDisabled} onClick={onExit} className={`${ACTION} text-status-error`}>
+            <SignOut size={12} /> {t('worker.exit.button')}
           </button>
         </div>
       )}
@@ -249,9 +239,9 @@ export default function ExecutionHeader({
               onClick={() => { setOverflowOpen(false); onInterrupt() }}>
               <Prohibit size={12} /> {t('execution.interrupt')}
             </button>
-            <button type="button" data-testid="overflow-terminate" disabled={busy} className={`${MENU_ITEM} text-status-error`}
-              onClick={() => { if (terminateClick()) setOverflowOpen(false) }}>
-              <Power size={12} /> {confirming ? t('execution.terminate_confirm') : t('execution.terminate')}
+            <button type="button" data-testid="overflow-exit" disabled={exitDisabled} className={`${MENU_ITEM} text-status-error`}
+              onClick={() => { setOverflowOpen(false); onExit() }}>
+              <SignOut size={12} /> {t('worker.exit.button')}
             </button>
             <div className="my-0.5 h-px bg-border-subtle" />
             <div className="px-2 pt-0.5 text-[10px] text-text-muted">{t('room.view.label')}</div>

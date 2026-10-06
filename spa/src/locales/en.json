@@ -1866,5 +1866,6 @@
   "worker.exit.confirm_running": "The current turn will be interrupted.",
   "worker.exit.held_by": "Controlled by {{principal}}; cannot exit.",
   "worker.exit.failed": "Exit failed: {{reason}}",
-  "worker.exit.manual_resume": "{{name}} resumed in a terminal; the worker has exited"
+  "worker.exit.manual_resume": "{{name}} resumed in a terminal; the worker has exited",
+  "worker.exit.after_transfer_failed": "Resumed in the terminal, but the worker could not exit; exit it manually from the list."
 }

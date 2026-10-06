@@ -66,6 +66,9 @@ export interface NexTakebackRequest {
 export interface NexTakebackResult {
   session_id: string
   archived: boolean
+  /** The worker was also exited; `false` means the terminal took over but the worker is still live. */
+  exited?: boolean
+  exit_error?: string
 }
 
 export interface NexTakeToTerminalRequest {
@@ -81,6 +84,9 @@ export interface NexTakeToTerminalResult {
   session: Session
   session_id: string
   archived: boolean
+  /** The worker was also exited; `false` means the terminal took over but the worker is still live. */
+  exited?: boolean
+  exit_error?: string
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
