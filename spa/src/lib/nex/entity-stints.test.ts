@@ -6,17 +6,12 @@ const sum = (id: string, created_at: number) => ({ id, created_at }) as Executio
 
 describe('orderStints', () => {
   it('excludes the current stint, sorts by boundary then createdAt, and drops null boundaries', () => {
-    const out = orderStints([
-      { id: 'c', created_at: 5, boundary: 100 },
-      { id: 'cur', created_at: 9, boundary: 300 },
-      { id: 'a', created_at: 7, boundary: 100 },
-      { id: 'n', created_at: 1, boundary: null },
-      { id: 'z', created_at: 2, boundary: 0 },
-    ], 'cur')
+    const row = (id: string, created_at: number, boundary: number | null) => ({ id, created_at, boundary, summary: sum(id, created_at) })
+    const out = orderStints([row('c', 5, 100), row('cur', 9, 300), row('a', 7, 100), row('n', 1, null), row('z', 2, 0)], 'cur')
     expect(out).toEqual([
-      { id: 'z', boundary: 0, createdAt: 2 },
-      { id: 'c', boundary: 100, createdAt: 5 },
-      { id: 'a', boundary: 100, createdAt: 7 },
+      { id: 'z', boundary: 0, createdAt: 2, summary: sum('z', 2) },
+      { id: 'c', boundary: 100, createdAt: 5, summary: sum('c', 5) },
+      { id: 'a', boundary: 100, createdAt: 7, summary: sum('a', 7) },
     ])
   })
 })

@@ -6,6 +6,9 @@ import real from './__fixtures__/prelude-06GGS8J1YKZCPF4BRXZTX764F4.json'
 import { sanitizePreludePage, type PreludeItem } from './prelude-wire'
 import { derivePrelude, preludeBlocks, type PreludeBlock } from './prelude'
 import type { Stint } from './entity-stints'
+import type { ExecutionSummary } from './types'
+
+const SUMMARY = { id: 'row' } as ExecutionSummary
 import { attributeItems, attributionRuns, type Attribution } from './stint-attribution'
 
 type RawItem = { pos: string; kind: string; at?: number; payload: Record<string, unknown> }
@@ -33,8 +36,8 @@ const posesOf = (from: string, to: string) => {
 }
 
 const A_AT = 394248 // the capture's own worker segment
-const A: Stint = { id: 'exc_A', boundary: A_AT, createdAt: 1 }
-const B: Stint = { id: 'exc_B', boundary: B_AT, createdAt: 2 }
+const A: Stint = { id: 'exc_A', boundary: A_AT, createdAt: 1, summary: SUMMARY }
+const B: Stint = { id: 'exc_B', boundary: B_AT, createdAt: 2, summary: SUMMARY }
 
 describe('attributeItems', () => {
   const at = attributeItems(items, [A, B])
@@ -70,7 +73,7 @@ describe('attributeItems', () => {
   })
 
   it('worker -> worker with no marker between (a rebuild): split exactly at b(next)', () => {
-    const A2: Stint = { id: 'exc_A2', boundary: 411382, createdAt: 2 }
+    const A2: Stint = { id: 'exc_A2', boundary: 411382, createdAt: 2, summary: SUMMARY }
     const t = attributeItems(items, [A, A2])
     expect(t.get('394248.0')).toBe(A.id)
     expect(t.get('394248.1')).toBe(A.id)
@@ -80,8 +83,8 @@ describe('attributeItems', () => {
   })
 
   it('equal boundaries: the later of the two in the list (the newer) takes the lines', () => {
-    const early: Stint = { id: 'exc_early', boundary: A_AT, createdAt: 1 }
-    const late: Stint = { id: 'exc_late', boundary: A_AT, createdAt: 2 }
+    const early: Stint = { id: 'exc_early', boundary: A_AT, createdAt: 1, summary: SUMMARY }
+    const late: Stint = { id: 'exc_late', boundary: A_AT, createdAt: 2, summary: SUMMARY }
     expect(attributeItems(items, [early, late]).get('394248.1')).toBe(late.id)
   })
 
@@ -97,7 +100,7 @@ describe('attributeItems', () => {
   })
 
   it('D21: a stint whose boundary is past every offset gets nothing; the others are unaffected', () => {
-    const Z: Stint = { id: 'exc_Z', boundary: 999999, createdAt: 3 }
+    const Z: Stint = { id: 'exc_Z', boundary: 999999, createdAt: 3, summary: SUMMARY }
     const t = attributeItems(items, [A, B, Z])
     expect([...t.values()].includes(Z.id)).toBe(false)
     expect([...t.entries()]).toEqual([...at.entries()])
@@ -150,7 +153,7 @@ describe('attributionRuns', () => {
   it('chat: a span takes its first message\'s attribution and is keyed by its last message', () => {
     // Worker A rebuilt into A2 at 411382 with no marker: the span [394248.1, 411382.1] straddles the split.
     // Known limit (#1614): the straddling tail runs under A; enrichment joins by unique id, so it loses enrichment, never mismatches.
-    const A2: Stint = { id: 'exc_A2', boundary: 411382, createdAt: 2 }
+    const A2: Stint = { id: 'exc_A2', boundary: 411382, createdAt: 2, summary: SUMMARY }
     const split = attributeItems(items, [A, A2])
     const blocks = preludeBlocks(view)
     const runs = attributionRuns(blocks, blockPoses, split)

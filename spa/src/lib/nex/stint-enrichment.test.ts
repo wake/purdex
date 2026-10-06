@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { ENRICHMENT_EVENT_BUDGET, enrichFromEvents } from './stint-enrichment'
 import { derivePrelude } from './prelude'
+import { costSummary } from './cost-summary'
 import type { StreamMessage } from './message-types'
 import type { NexEvent } from './types'
 
@@ -75,5 +76,39 @@ describe('enrichFromEvents', () => {
     expect(Object.hasOwn(e.tools, '__proto__')).toBe(true)
     expect(Object.getPrototypeOf(e.tools)).toBe(Object.prototype)
     expect((e.messages as StreamMessage[]).length).toBe(2)
+  })
+  describe('costByMessageId', () => {
+    const said = (seq: number, id: string, parent: string | null = null) =>
+      ev(seq, 'assistant', { type: 'assistant', parent_tool_use_id: parent, message: { id, role: 'assistant', content: [{ type: 'text', text: id }], stop_reason: null } })
+    const done = (seq: number, usd: number, extra: Record<string, unknown> = {}) =>
+      ev(seq, 'result', { type: 'result', subtype: 'success', total_cost_usd: usd, duration_ms: 1000 * seq, usage: { input_tokens: 1, output_tokens: seq * 10 }, ...extra })
+
+    it('pairs each top-level result with the assistant message ids since the previous one, equal to costSummary turns', () => {
+      const e = enrichFromEvents([
+        said(1, 'msg_a'), said(2, 'msg_b'), done(3, 0.5),
+        said(4, 'msg_c'), done(5, 0.7),
+      ])
+      const turns = costSummary(e.messages).turns
+      expect(turns).toHaveLength(2)
+      expect([...e.costByMessageId.keys()]).toEqual(['msg_a', 'msg_b', 'msg_c'])
+      expect(e.costByMessageId.get('msg_a')).toEqual(turns[0])
+      expect(e.costByMessageId.get('msg_b')).toEqual(turns[0])
+      expect(e.costByMessageId.get('msg_c')).toEqual(turns[1])
+    })
+
+    it('a subagent frame (parent_tool_use_id set) neither maps nor closes a turn', () => {
+      const e = enrichFromEvents([
+        said(1, 'msg_a'), said(2, 'msg_sub', 'toolu_T'), done(3, 0.1, { parent_tool_use_id: 'toolu_T' }), done(4, 0.5),
+      ])
+      expect(e.costByMessageId.has('msg_sub')).toBe(false)
+      expect(e.costByMessageId.get('msg_a')?.index).toBe(1)
+      expect(costSummary(e.messages).turns).toHaveLength(1)
+    })
+
+    it('assistant messages after the last result (a turn still running) and without an id map to nothing', () => {
+      const noId = ev(1, 'assistant', { type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'x' }], stop_reason: null } })
+      const e = enrichFromEvents([noId, said(2, 'msg_a'), done(3, 0.5), said(4, 'msg_tail')])
+      expect([...e.costByMessageId.keys()]).toEqual(['msg_a'])
+    })
   })
 })

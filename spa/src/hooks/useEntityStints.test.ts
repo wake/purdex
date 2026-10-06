@@ -101,7 +101,10 @@ describe('useEntityStints', () => {
     const { result } = renderHook(() => useEntityStints('h', cur(), true))
     await waitFor(() => expect(result.current.status).toBe('ok'))
     expect(vi.mocked(api.fetchExecutionPrelude).mock.calls.map((c) => c[1]).sort()).toEqual(['bad', 'none', 'ok'])
-    expect(result.current.stints).toEqual([{ id: 'fresh', boundary: 0, createdAt: 1 }, { id: 'ok', boundary: 50, createdAt: 4 }])
+    expect(result.current.stints).toEqual([
+      { id: 'fresh', boundary: 0, createdAt: 1, summary: row('fresh', 1, '') },
+      { id: 'ok', boundary: 50, createdAt: 4, summary: row('ok', 4) },
+    ])
   })
 
   it('lists and fetches once across re-renders, even with a new summary object; stints stay referentially stable', async () => {

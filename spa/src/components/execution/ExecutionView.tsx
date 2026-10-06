@@ -560,7 +560,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   const preludeNode = (
     <PreludeSection hostId={hostId} view={preludeView} status={st.prelude.status} done={st.prelude.done} error={st.prelude.error}
       keyPrefix={executionId} now={now} mode={chat ? 'chat' : 'room'} pages={st.prelude.pages}
-      onLoadOlder={preludeApi.loadOlder} onRetry={preludeApi.retry} attribution={attribution} />
+      onLoadOlder={preludeApi.loadOlder} onRetry={preludeApi.retry} attribution={attribution} stints={stints} />
   )
   const transcriptProps = {
     messages: st.messages, turnStarts: st.turnStarts, turnMeta: st.turnMeta, keyPrefix: executionId, showThinking,

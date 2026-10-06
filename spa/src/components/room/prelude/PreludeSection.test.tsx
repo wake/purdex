@@ -6,7 +6,12 @@ import PreludeSection from './PreludeSection'
 import { derivePrelude, type PreludeView } from '../../../lib/nex/prelude'
 import { sanitizePreludePage, type PreludeItem } from '../../../lib/nex/prelude-wire'
 import type { StreamMessage } from '../../../lib/nex/message-types'
-import type { EventsPage, NexEvent } from '../../../lib/nex/types'
+import type { EventsPage, ExecutionSummary, NexEvent } from '../../../lib/nex/types'
+import type { Stint } from '../../../lib/nex/entity-stints'
+import { costSummary } from '../../../lib/nex/cost-summary'
+import { enrichFromEvents } from '../../../lib/nex/stint-enrichment'
+import { formatTokens, formatUsd } from '../../../lib/nex/format-cost'
+import { formatDuration } from '../../../lib/nex/format-duration'
 import { createStintEnrichmentCache, type StintEnrichmentCache } from '../../../lib/nex/stint-enrichment-cache'
 import { StintEnrichmentContext } from '../../../hooks/useStintEnrichment'
 import ChatTranscript from '../../chat/ChatTranscript'
@@ -904,5 +909,116 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection enrichmen
       error.mockRestore()
       warn.mockRestore()
     }
+  })
+})
+
+describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection per-turn cost footers on earlier worker segments (§10.4 result frames) in %s mode', (mode) => {
+  const say = (pos: string, id: string, text: string): PreludeItem => ({
+    offset: null, pos, at: 1, kind: 'assistant',
+    msg: { type: 'assistant', parent_tool_use_id: null, message: { id, role: 'assistant', content: [{ type: 'text', text }], stop_reason: null } } as unknown as StreamMessage,
+  })
+  // Two prompt spans. The transcript lists the turn that ran SECOND first: its lines carry msg_B, the other's msg_A.
+  const view = derivePrelude([
+    { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+    m('2', 'user', [{ type: 'text', text: 'prompt one' }]),
+    say('3', 'msg_B', 'answer one'),
+    m('4', 'user', [{ type: 'text', text: 'prompt two' }]),
+    say('5', 'msg_A', 'answer two'),
+    m('6', 'user', [{ type: 'text', text: 'prompt three' }]),
+    say('7', 'msg_gone', 'answer three'),
+  ])
+  const A = new Map(['1', '2', '3', '4', '5', '6', '7'].map((p) => [p, 'exc_A'] as const))
+  const ev = (seq: number, kind: string, payload: Record<string, unknown>): NexEvent => ({ seq, execution_id: 'exc_A', kind, payload, created_at: 1000 + seq })
+  const said = (seq: number, id: string) => ev(seq, 'assistant', { type: 'assistant', parent_tool_use_id: null, message: { id, role: 'assistant', content: [{ type: 'text', text: id }], stop_reason: null } })
+  const result = (seq: number, usd: number, out: number, ms: number) =>
+    ev(seq, 'result', { type: 'result', subtype: 'success', total_cost_usd: usd, duration_ms: ms, usage: { input_tokens: 5, output_tokens: out } })
+  // exc_A ran msg_A first (turn 1), then msg_B (turn 2).
+  const events: NexEvent[] = [said(1, 'msg_A'), result(2, 0.5, 1200, 38000), said(3, 'msg_B'), result(4, 0.75, 300, 5000)]
+  const turns = costSummary(enrichFromEvents(events).messages).turns
+  const footerText = (t: (typeof turns)[number]) => `${formatUsd(t.costUsd)} · ${formatTokens(t.tokens!.output)} · ${formatDuration(t.durationMs ?? 0)}`
+  const summary = (extra: Record<string, unknown> = {}) => ({ id: 'exc_A', state: 'completed', ...extra }) as unknown as ExecutionSummary
+  const stintOf = (s: ExecutionSummary): Stint => ({ id: 'exc_A', boundary: 0, createdAt: 1, summary: s })
+  const draw = (cache: StintEnrichmentCache | null, s: ExecutionSummary = summary(), v: PreludeView = view) => render(
+    <StintEnrichmentContext.Provider value={cache}>
+      <PreludeSection {...base} mode={mode} view={v} status="ok" done attribution={A} stints={[stintOf(s)]} />
+    </StintEnrichmentContext.Provider>,
+  )
+  const cacheOf = (items: NexEvent[]) => createStintEnrichmentCache(vi.fn(async (): Promise<EventsPage> => ({ items, next_cursor: 0 })))
+  /** The last pos of the span a footer sits under. */
+  const owner = (f: HTMLElement) => mode === 'room'
+    ? f.previousElementSibling!.getAttribute('data-prelude-pos')
+    : f.closest('[data-prelude-poses]')!.getAttribute('data-prelude-poses')!.split(' ').at(-1)
+  const footers = () => screen.queryAllByTestId('prelude-cost-footer')
+
+  it('maps each turn to the span its assistant message ids are in, by id and not by position', async () => {
+    draw(cacheOf(events))
+    await waitFor(() => expect(footers()).toHaveLength(2))
+    // Pos 3 holds msg_B (turn 2); pos 5 holds msg_A (turn 1). Position pairing would swap them.
+    expect(footers().map((f) => [owner(f), f.textContent])).toEqual([
+      ['3', footerText(turns[1])],
+      ['5', footerText(turns[0])],
+    ])
+    expect(footers()[1].textContent).toBe('$0.5000 · 1.2k · 38.0s')
+  })
+
+  it('a span whose assistant message id is absent from the events has no footer', async () => {
+    draw(cacheOf(events))
+    await waitFor(() => expect(footers()).toHaveLength(2))
+    expect(footers().map(owner)).not.toContain('7')
+  })
+
+  it('is styled like TurnFooter and is not a search unit', async () => {
+    draw(cacheOf(events))
+    await waitFor(() => expect(footers()).toHaveLength(2))
+    const f = footers()[0]
+    expect(f.className).toBe('mt-1 text-[length:var(--wt-font-size)] text-[var(--wt-footer-color)] select-none')
+    expect(f.hasAttribute('data-search-unit')).toBe(false)
+  })
+
+  it('turn 1 of a resumed stint carries the prior-history tooltip, its numbers unchanged', async () => {
+    draw(cacheOf(events), summary({ resume_session_id: 's_prev' }))
+    await waitFor(() => expect(footers()).toHaveLength(2))
+    const [two, one] = footers()
+    expect(one.getAttribute('title')).toBe('Includes spend from before the hand-over')
+    expect(one.textContent).toBe(footerText(turns[0]))
+    expect(two.hasAttribute('title')).toBe(false)
+  })
+
+  it('a stint that did not resume has no tooltip', async () => {
+    draw(cacheOf(events))
+    await waitFor(() => expect(footers()).toHaveLength(2))
+    expect(footers().some((f) => f.hasAttribute('title'))).toBe(false)
+  })
+
+  it('a turn is drawn once, under the last span that holds one of its messages', async () => {
+    const odd = derivePrelude([
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+      m('2', 'user', [{ type: 'text', text: 'prompt one' }]),
+      say('3', 'msg_A', 'part one'),
+      m('4', 'user', [{ type: 'text', text: 'prompt two' }]),
+      say('5', 'msg_A', 'part two'),
+    ])
+    draw(cacheOf(events), summary(), odd)
+    await waitFor(() => expect(footers()).toHaveLength(1))
+    expect(owner(footers()[0])).toBe('5')
+  })
+
+  it('draws nothing while loading, for a plain segment, and when the fetch failed', async () => {
+    const plainDom = () => screen.getByTestId('worker-prelude').outerHTML
+    let settle: (p: EventsPage) => void = () => {}
+    const loading = draw(createStintEnrichmentCache(vi.fn(() => new Promise<EventsPage>((resolve) => { settle = resolve }))))
+    expect(footers()).toHaveLength(0)
+    await act(async () => settle({ items: events, next_cursor: 0 }))
+    expect(footers()).toHaveLength(2)
+    loading.unmount()
+    const plain = draw(null)
+    const html = plainDom()
+    expect(footers()).toHaveLength(0)
+    plain.unmount()
+    const failed = createStintEnrichmentCache(vi.fn(async () => { throw new Error('down') }))
+    draw(failed)
+    await waitFor(() => expect(failed.get('exc_A')).toBeNull())
+    expect(footers()).toHaveLength(0)
+    expect(plainDom()).toBe(html)
   })
 })
