@@ -21,6 +21,14 @@ const (
 
 // errOwnerScanTruncated: the scan stopped at its page cap with more rows
 // unread, so the result may be incomplete.
+//
+// The rows it misses are the NEWEST ones: Nexen lists in id order, and ids
+// are ULIDs, so oldest first. Since P3b-1 the owner scan (liveWorkersFor)
+// passes ?session_id=, which keeps it to one conversation's stints, far below
+// the cap (ownerScanPageSize × ownerScanMaxPages = 10,000 rows): truncation is
+// practically unreachable there. The overflow reconcile's unfiltered scan can
+// still reach it. wake/nexen#119 (newest-first listing) would remove the bias,
+// so that a truncated scan drops the oldest rows instead.
 var errOwnerScanTruncated = errors.New("nex: owner scan hit its page cap")
 
 // isLiveExecution: not archived and not terminated.

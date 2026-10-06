@@ -69,6 +69,38 @@ func TestLiveBySessionID_EmptySessionIDReturnsNothing(t *testing.T) {
 	}
 }
 
+func TestLiveBySessionID_EmptyAgentTypeDisablesTheFilter(t *testing.T) {
+	m := newTestModule(t)
+	cc := seedRootWithIdentity(t, m, "%1", "cc", 101, "st-101", "S")
+	codex := seedRootWithIdentity(t, m, "%2", "codex", 102, "st-102", "S")
+	withLivePids(t, map[int]string{101: "st-101", 102: "st-102"})
+
+	got, err := m.LiveBySessionID(context.Background(), "", "S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byFrame := map[string]bool{}
+	for _, g := range got {
+		byFrame[g.FrameID] = true
+	}
+	if len(got) != 2 || !byFrame[cc.FrameID] || !byFrame[codex.FrameID] {
+		t.Fatalf("got %+v, want the cc and the codex frame", got)
+	}
+}
+
+func TestLiveBySessionID_CancelledContext(t *testing.T) {
+	m := newTestModule(t)
+	_ = seedRootWithIdentity(t, m, "%1", "cc", 101, "st-101", "S")
+	withLivePids(t, map[int]string{101: "st-101"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got, err := m.LiveBySessionID(ctx, "cc", "S")
+	if !errors.Is(err, context.Canceled) || got != nil {
+		t.Fatalf("got %v, %v; want nil, context.Canceled", got, err)
+	}
+}
+
 // --- SessionStart subscription ----------------------------------------------
 
 // newSessionStartTestModule is newProvenanceTestModule whose fake cc provider

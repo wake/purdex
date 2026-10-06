@@ -1308,6 +1308,41 @@ func TestFrames_TranscriptPathColumnMigratesAndRoundTrips(t *testing.T) {
 	}
 }
 
+// Equal seq applies (as UpdateSessionIdentity's does): a second write for the
+// same event overwrites the path, and identity_seq stays where the identity
+// write put it.
+func TestFrames_SetTranscriptPathEqualSeqOverwrites(t *testing.T) {
+	s := openTestFramesStore(t)
+	f := seedIdentityFrame(t, s, "", "")
+	if err := s.UpdateSessionIdentity(f.FrameID, "sess-3", "/w", 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTranscriptPath(f.FrameID, "/first.jsonl", 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTranscriptPath(f.FrameID, "/second.jsonl", 7); err != nil {
+		t.Fatalf("equal seq refused: %v", err)
+	}
+	got, err := s.GetByIdentity(f.PaneID, f.PID, f.ProcessStartTime)
+	if err != nil || got == nil {
+		t.Fatalf("get: %v %v", got, err)
+	}
+	if got.TranscriptPath != "/second.jsonl" {
+		t.Fatalf("TranscriptPath = %q, want the equal-seq overwrite", got.TranscriptPath)
+	}
+	var seq int64
+	if err := s.db.QueryRow(`SELECT identity_seq FROM agent_frames WHERE frame_id = ?`, f.FrameID).Scan(&seq); err != nil {
+		t.Fatal(err)
+	}
+	if seq != 7 {
+		t.Fatalf("identity_seq = %d, want 7", seq)
+	}
+	// The identity write of the same event still applies after the path write.
+	if err := s.UpdateSessionIdentity(f.FrameID, "sess-3", "/w2", 7); err != nil {
+		t.Fatalf("same-seq identity write after the path write: %v", err)
+	}
+}
+
 func TestFrames_SetTranscriptPathRefusesOlderSeq(t *testing.T) {
 	s := openTestFramesStore(t)
 	f := seedIdentityFrame(t, s, "", "")
