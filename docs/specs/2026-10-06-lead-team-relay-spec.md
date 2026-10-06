@@ -5,6 +5,7 @@ Status: **draft, for review by `air26/_9iwyyv`** against the user decisions in �
 - Source: the brief `docs/ideas/2026-10-06-lead-team/brief.md` (untracked on mlab's main checkout), with the prototype mod `relay-mod/` and its handoff `handoff-run1.md` beside it.
 - Research page: `https://pages.mlab.host/wake/purdex/context-relay.html`.
 - The U5 strength question was answered by the user on 2026-10-06: human presence in v1 (U5a, §2). §6.5 is the design.
+- U13 (self-relay switches and approval) was added the same day. Its derivations (a)–(d) are in §8.7, and air26's review points (e) and (f) are in §8.4 and §8.3.
 - **One consequence still needs confirmation (§6.5.5):** in v1, browsers can view and deny, but only an enrolled Purdex.app can approve.
 
 Every place where this spec departs from the brief's design draft (brief §5, D1–D8) is marked **⟲ changed from D…**, with the reason. §13 lists all of them.
@@ -18,7 +19,7 @@ The user manages the context of long tasks by hand today:
 
 This spec makes two things automatic:
 
-1. **Self relay:** a single session hands off to itself, almost unnoticed.
+1. **Self relay:** a single session hands off to itself, almost unnoticed. U13 adds one visible step: each self relay is approved by the user first (§8.7). "Almost unnoticed" covers the relay itself.
 2. **Lead with a team:** a lead can open members, and can relay a member on the member's behalf.
 
 ## 2. User decisions (2026-10-06, do not reopen)
@@ -45,6 +46,12 @@ Copied verbatim from the brief §2.
 | # | 決策 |
 |---|---|
 | U5a | U5 第一版就要做**「人在場驗證」**，不能只做到「看得見」。「不提供核准路徑、所有決定廣播加稽核紀錄」照樣保留，當作附加的一層 |
+
+**Second supplementary decision.** The user made it on 2026-10-06, and `air26/_9iwyyv` relayed it. Copied verbatim.
+
+| # | 決策 |
+|---|---|
+| U13 | 自我接力的開關與核准<br>- 一般 session（不是 lead 也不是 member）：自我接力預設開，可以關閉。<br>- lead：自我接力預設開，可以關閉。<br>- member：自我接力預設關，接力必須由 lead 安排（和 U9 一致）。<br>- 自我接力（一般 session 與 lead）每次都要先經過人類核准，比照 lead 模式：走同一套 UI 多 client 推播與 U5a 的人在場驗證（已登記的 App 加 SE 金鑰）。<br>- lead 要求 member 接力（pdx relay）不需要核准，由 lead 自己安排。 |
 
 Also decided on the research page (§9 "已決定"): `session.compact` is a safety net, so that auto-compact cannot get in before the relay.
 
@@ -226,10 +233,10 @@ pdx lead request --reason <text> [--max-members N] [--root <dir>]... [--wait 9m]
 ```
 
 1. pdx generates the request id (UUID v4, the idempotency key). It prints one stderr line: `申請 lead 中（<id>），請在 Purdex 介面核准；這個呼叫必須在前景等待（Bash timeout 600000）`.
-2. `POST /api/team/lead-requests {id, origin_inbox, reason, max_members, roots, wait_s}`.
-3. Long-poll `GET /api/team/lead-requests/{id}?wait=25` until the request is closed. **Each poll renews the request's lease.**
+2. `POST /api/team/approvals {id, kind:"lead", origin_inbox, reason, max_members, roots, wait_s}`.
+3. Long-poll `GET /api/team/approvals/{id}?wait=25` until the request is closed. **Each poll renews the request's lease.**
 4. On approval it prints the grant on stdout (team id, max members, roots) and exits.
-5. On SIGINT or SIGTERM it sends `DELETE /api/team/lead-requests/{id}` (best effort), then exits 12.
+5. On SIGINT or SIGTERM it sends `DELETE /api/team/approvals/{id}` (best effort), then exits 12.
 
 Defaults:
 - `--max-members` 3, cap 8;
@@ -237,6 +244,13 @@ Defaults:
 - `--wait` 9 min, so it stays under the Bash tool's 10 min maximum (D3).
 
 ### 6.2 Daemon
+
+**⟲ derived (U13 (b)): one model for every approval.** Three kinds of request share one table, one state machine, one event (`approval.request`) and one dialog host:
+- lead requests (this section);
+- self-relay requests (§8.7);
+- approver enrollments (§6.5.4).
+
+The table is `approval_requests{id, kind: lead | self_relay | enroll, origin_session_id, payload, challenge, state, deadline_at, lease_until, decided_by, decided_at}`. What follows is the `lead` kind; the others differ only in payload, origin and grant.
 
 **Create** (idempotent on `id`):
 - The origin must be a live, deliverable CC session on this host. The existing `findOrigin` attributes it by inbox.
@@ -248,7 +262,7 @@ Defaults:
   - `state=open`;
   - an absolute `deadline_at` = now + `wait_s`, capped at 10 min;
   - `lease_until` = now + 30 s.
-- Broadcasts host event `team.lead-request` `{op:"opened", request}`.
+- Broadcasts host event `approval.request` `{op:"opened", request}`.
 
 **Close.** Exactly one of these wins, by compare-and-set on `state=open`:
 
@@ -266,7 +280,7 @@ Defaults:
 
 ### 6.3 SPA and App (U6)
 
-- A global `LeadRequestDialogHost`, next to `HandoffDialogHost`, driven by a store keyed `hostId + requestId`. It is fed by a new `team.lead-request` branch in `useMultiHostEventWs` and by the snapshot.
+- A global `ApprovalDialogHost`, next to `HandoffDialogHost`, driven by a store keyed `hostId + requestId`. It is fed by a new `approval.request` branch in `useMultiHostEventWs` and by the snapshot. The dialog body depends on the kind; this section describes `lead`, and §8.7 describes `self_relay`.
 - The dialog shows:
   - host;
   - the session's title or name, address and ref, cwd and tmux session;
@@ -276,7 +290,7 @@ Defaults:
   The user can edit the grant: max members, and the allowed roots (default the requested ones). Buttons: **核准** / **拒絕**.
 - **核准** works only on an enrolled Purdex.app; elsewhere it is replaced as in §6.5.5. Pressing it raises the system Touch ID / password prompt (§6.5.3).
 - Several requests queue, one dialog at a time, oldest first.
-- **Closed elsewhere:** the dialog closes everywhere, and other clients get a toast `<主機>：<session> 的 lead 申請已由 <client> 核准／拒絕` (U6).
+- **Closed elsewhere:** the dialog closes everywhere, and other clients get a toast `<主機>：<session> 的 <lead 申請／接力申請> 已由 <client> 核准／拒絕` (U6).
 - **Notification:**
   - Electron raises a system notification through the existing `showNotification` path (`<主機>：<session> 申請成為 lead`); clicking it focuses the window, where the dialog already is.
   - Browsers use the existing Notification fallback of `useNotificationDispatcher`.
@@ -285,6 +299,8 @@ Defaults:
   - A 409 then closes it with the "handled by" toast.
 
 ### 6.4 The soft lock (U7, D3)
+
+This section covers lead requests, which the agent makes through Bash. A self-relay request is made by the mod, which holds the session itself (§8.7).
 
 `pdx lead request` blocks the session's turn on one Bash call. The skill (§10) requires the call to run:
 - in the foreground;
@@ -335,7 +351,7 @@ What happens when that is not followed:
 **Challenge.** Each lead request gets a random 32-byte `challenge` at creation. The App signs:
 
 ```
-SHA-256("purdex/lead-approve/v1\0" ‖ host_id ‖ request_id ‖ challenge ‖ canonical_json(grant))
+SHA-256("purdex/approve/v1\0" ‖ kind ‖ host_id ‖ request_id ‖ challenge ‖ canonical_json(grant))
 ```
 
 The reason text names the host, the session, the reason and the grant: `核准 mlab 上 purdex-4d 的 lead 申請：最多 3 個 member，目錄 ~/Workspace/wake/purdex`.
@@ -364,7 +380,7 @@ A bad or missing signature is **403 `presence_required`**, and the request stays
 - **The first approver of a host** is accepted directly (trust on first use).
   - The host then records `approvers_initialized`, which no API ever clears.
   - The enrollment is broadcast to every client: `<主機>：已登記核准裝置「Purdex.app @ air26」`.
-- **Every later enrollment** is a request that an existing approver must approve with presence. It reuses the lead-request machinery with kind `enroll`.
+- **Every later enrollment** is a request that an existing approver must approve with presence. It is an `approval_requests` row of kind `enroll` (§6.2).
 - **Removing an approver** needs a presence signature from any approver. An empty list does **not** reopen trust on first use.
 - **Recovery** when every device is lost: `pdx approvers reset` on the host itself.
   - It refuses without an interactive TTY, asks for the host alias to be typed, and broadcasts the reset.
@@ -461,7 +477,7 @@ The skill tells the lead to recommend in the brief that the member run `EnterWor
   - Sets `state=killed`. Worktrees are the lead's business.
 - **`pdx team [--json]`:** the caller's team — each member's address and ref, title, status, context %, cwd and tmux session.
 
-## 8. Relay (U1, U2, U3, U9)
+## 8. Relay (U1, U2, U3, U9, U13)
 
 ### 8.1 One operation, two kinds
 
@@ -469,14 +485,17 @@ Both kinds are rows in `relay_ops` and run the same steps in the session's mod.
 
 | Kind | Started by | When |
 |---|---|---|
-| `self` | the session's own mod | at a turn's end with used ≥ 70% (U1), or when auto-compact is about to run |
+| `self` | the session's own mod | at a turn's end with used ≥ 70% (U1), **after the user approves** (U13, §8.7) |
 | `member` | the lead, with `pdx relay <ref>` | when the lead decides (U9) |
 
-**States:** `requested → claimed → writing → written → cleared → done`, or `failed{reason}` / `cancelled`. Each transition is a report from the mod (§8.3), stored with its time.
+**States:** `requested → claimed → writing → written → cleared → done`, or `failed{reason}` / `cancelled`. A self op starts in `awaiting_approval` and moves to `claimed` on approval. Each transition is a report from the mod (§8.3), stored with its time.
 
-**Self relay is refused for members.** `pdx relay begin --self` from a member answers **409 `member_relay_is_leads`**, and the mod does nothing (U9).
+**Self relay needs the switches and an approval (U13, §8.7).** `pdx relay begin --self` refuses with **409**, and the mod does nothing:
+- `member_relay_is_leads` for a member (U9);
+- `self_relay_off` when the host switch is off;
+- `self_relay_paused` when the session is paused.
 
-**No daemon, no relay.** If the daemon is unreachable, `begin` fails and the mod tries again at the next turn's end. So every relay is recorded, and the lineage (§8.4) is always written.
+**No daemon, no relay.** The approval and the record both live on the daemon. With the daemon unreachable, the mod cannot ask, so nothing relays; auto-compact runs as usual (§8.7). Every relay is therefore recorded, and the lineage (§8.4) is always written.
 
 **Loop guard:** a seeded conversation must grow by 20K tokens before it may self-relay again (prototype `MIN_GROWTH`).
 
@@ -520,6 +539,8 @@ The lead is told about every failure.
 |---|---|
 | `pdx relay hello --session <sid>` | at `session.start` and after each clear: says this session can relay, gives its version |
 | `pdx relay begin --self` | self relay; answers the op and handoff facts, or a refusal |
+| `pdx relay wait <request>` | self relay: long-polls the approval; renews its lease (§8.7) |
+| `pdx relay self off\|on\|status` | the per-session pause, also behind the mod's `/relay` command (§8.7) |
 | `pdx relay claim <op>` | member relay |
 | `pdx relay report <op> <state> [--new-session <sid>] [--error <e>]` | each transition; idempotent per (op, state) |
 
@@ -532,6 +553,14 @@ The mod reaches the daemon through `$.process.run` on `pdx`, as the prototype di
 - For a session without bypass permissions, the mod answers `tool.check` with allow for a write to exactly that path; the plan verifies the hook's shape.
 - Moving the content into a pdx memory store keyed by uuid is later (§11).
 
+**Retention (air26 review (f): the user does not want files piling up).**
+- **The daemon cleans, nobody else.** The team module's sweeper runs at boot and hourly. Neither the mod nor the agent deletes files in `<data_dir>/relay/`.
+- **What it keeps:**
+  - per lineage chain, the newest **3** handoff files;
+  - nothing older than **14 days**;
+  - the files of `failed` or `cancelled` ops for **3 days**, for debugging.
+- The `relay_ops` row keeps the path, marked `pruned` once deleted.
+
 ### 8.4 Lineage: the ref keeps working (U3)
 
 `session_lineage{session_id, predecessor_session_id, predecessor_ref, op_id, at}` is written when an op reaches `cleared`. In the same transaction:
@@ -539,7 +568,9 @@ The mod reaches the daemon through `$.process.run` on `pdx`, as the prototype di
 - if it was a member, the member row's session id moves;
 - the title moves to the new session id (titles are stored per session id, §3.3).
 
-**Peer rows** gain `previous_refs` (newest first, at most 10) for a live head.
+**Peer rows** gain `previous_refs` (newest first) for a live head: the **whole chain, uncapped.**
+- **⟲ changed after air26's review (e).** A cap of 10 would break a member's oldest lead ref after the lead's eleventh relay. A ref is 7 bytes, so even a hundred relays add under 1 KB to one row.
+- **When a lead relays,** the daemon also tells each active member: `[pdx team] 你的 lead 已換手：<new address> [<new ref>]（舊 ref 仍可用）`. So a member's own handoff records the current ref.
 
 **`ipeers.Resolve` gains one tier, after a live ref:** a `_ref` that matches no live row but appears in exactly one row's `previous_refs` delivers to that row.
 - Resolution runs on the sender's daemon over the target host's rows (§3.3), so this works across hosts.
@@ -563,7 +594,9 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
 - **The daemon decides nothing (U9).** Past 70% a member keeps working until its lead acts.
 - **Daemon notices come from the daemon's own virtual peer** (`ccuds.StartVirtualPeer`). A reply to it gets one line back: `這是 pdx daemon 的自動通知，不會讀取回覆`.
 
-**⟲ derived: auto-compact in a member is not intercepted.** For a solo session or a lead, the mod intercepts `session.compact{trigger:auto}` and self-relays instead (the research page's safety net). A member cannot self-relay (U9), so its mod lets compaction run and reports `compacted`. The lead hears: `[pdx team] <ref> 已自動壓縮（lead 未在 70% 時接力）`.
+**⟲ derived: auto-compact.**
+- **Solo session or lead:** see §8.7. Only an already-approved relay skips the compaction.
+- **Member:** never intercepted. It cannot self-relay (U9, U13), so its mod lets compaction run and reports `compacted`. The lead hears: `[pdx team] <ref> 已自動壓縮（lead 未在 70% 時接力）`.
 
 ### 8.6 Peers and the CWD fix
 
@@ -574,6 +607,64 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
   3. then tmux `session_path`.
 
   This fixes the side bug from the brief §4; it lands in P1.
+
+### 8.7 Self relay: switches, approval and the lock (U13)
+
+**Who may self-relay:**
+
+| Role | Default | Switch |
+|---|---|---|
+| (none) | on | host config `relay.self_solo` |
+| lead | on | host config `relay.self_lead` |
+| member | off | none: a member's relay is the lead's (U9, U13) |
+
+**⟲ derived (a): where the switches live.**
+- **Per host, in host config.** They are stored in `host_config.db` by the existing hostconfig module. The UI is Hosts → that host → a "接力" section with the two toggles and the line `member 的接力一律由 lead 安排`.
+  - Reason: the daemon answers `begin`, and the mod on a host asks that host's daemon. A setting kept only in the SPA would not reach it. Hosts may differ.
+- **Per session, a pause.**
+  - The mod registers `/relay off`, `/relay on` and `/relay status`. The same is available as `pdx relay self off|on|status`, for scripts.
+  - The daemon stores it per session id (`session_prefs`).
+  - A session switch only narrows: `on` lifts the session's own pause, never a host switch that is off.
+  - The self-relay dialog also offers **這個 session 不再詢問**, which sets the pause.
+- **A member has no switch.** U13 says "預設關" and "接力必須由 lead 安排"; read with U9, that is not switchable. `/relay on` in a member answers `member 的接力由 lead 安排`.
+
+**⟲ derived (b): approval.** U13 brings in U5, U5a and U6.
+- **Opening the request.** At a turn's end with used ≥ 70%, the mod calls `pdx relay begin --self`.
+  - The daemon checks role, switch and pause (§8.1).
+  - It then opens an `approval_requests` row of kind `self_relay` (§6.2) and a `relay_ops` row in `awaiting_approval`, and answers the request id.
+- **The dialog shows:**
+  - host;
+  - the session: title, address, ref and cwd;
+  - usage: `已用 72%`;
+  - `核准後這個 session 會寫交接檔、清空並在原處接手（約 1 分鐘）`.
+- **核准** needs the presence signature (§6.5.3, with kind `self_relay` and grant `{session_id, op_id}`); **拒絕** does not.
+  - Because the kind is inside the digest, a signature for one kind never approves another.
+- **Deadline:** 10 minutes, absolute. The lease is renewed by the mod's wait (below). If the origin session is gone, the request is `abandoned`.
+- **Approved:** the op moves to `claimed`, and the mod runs §8.2 steps 4–8: write, clear, seed.
+- **Denied or timed out:** the op becomes `cancelled{denied|timeout}`.
+
+**⟲ derived (b): the lock (U7) for a request the mod makes.** The request opens at a turn's end, so nothing is running. The lock means **no new turn starts until the request closes**.
+- **The hold.** The mod's `prompt.submit` hook awaits `pdx relay wait <request>` through `$.process.run`.
+  - This applies to the main conversation, whatever the origin: the user, a peer message, or a queued prompt.
+  - A hook's 10 s budget counts only its own code, never a `$` call in flight (`HookBudget` in the 2.1.291 types; the mods reference: "a `next` or `$` call in flight does not count"). So the hold lasts until the request closes.
+- **While holding:** status line `接力等待核准中`, plus one toast naming where to approve.
+- **Approved:** the held prompt is dropped, with the reason `接力已核准，這則訊息會在接手後重送` (`{drop}`). After the seed turn, the mod re-submits its text, so it reaches the new conversation. A peer message keeps its envelope text.
+- **Denied or timed out:** the held prompt goes through unchanged (`next(e)`).
+- **Esc:** it abandons that dispatch, so that prompt is not sent. The request stays open.
+- **No prompt arrives:** the mod also waits from a timer (`$.clock.after` → `pdx relay wait`), so an approval starts the relay at once.
+
+**⟲ derived (c): asking again, and auto-compact.**
+- **Asking again.** After a denial or a timeout, the mod asks again only when usage has grown **10 more points** since the last ask: 72 → 82 → 92. At most one open self-relay request per session.
+- **Auto-compact never waits for an approval.** At `session.compact{trigger:auto}`:
+  - **an approved relay not yet written:** skip the compaction (`{skip}`) and start writing;
+  - **anything else:** compaction runs. An open request becomes `cancelled{compacted}`, and its dialog closes on every client.
+  - Reason: an approval takes a person and minutes. Holding the compaction would hang the session when it is fullest.
+  - Unmeasured (brief §3): whether `{skip}` mid-turn lets the turn go on. The plan measures it. If it does not, the approved case also lets compaction run, and starts the relay at the turn's end.
+- **After a compaction**, the next ask needs usage ≥ 70% again.
+
+**(d) No daemon.** With the daemon unreachable, the mod cannot ask, so nothing relays, and auto-compact runs (§8.1).
+- `pdx relay wait` uses the restart-aware client (§9.1). A restart during the wait keeps the request.
+- After `daemon_unavailable` (exit 20), the mod releases the hold and treats the request as not approved. The daemon's lease then closes it.
 
 ## 9. Daemon restart (U12, D6)
 
@@ -615,6 +706,8 @@ The daemon reads actual state; it never waits for lost hooks.
 - if the tmux session exists, continue from the recorded step: launch, or wait for registration;
 - past the 20 s budget, kill it and fail.
 
+**Open approval requests of every kind** get the lease grace above. A self-relay request's lease is renewed by the mod's `pdx relay wait`.
+
 **Relay ops not finished:**
 - `requested`, not claimed: send the control message again. The claim is CAS, so a duplicate does nothing.
 - Past `claimed`: compare the op's old session id with the pane's current verified frame.
@@ -630,7 +723,7 @@ See §6.3: the prompt stays, disabled; a click is queued and re-sent.
 
 **⟲ changed from D6** ("respond with the list; the caller waits or adds `--force`"). `POST /api/daemon/restart` is not refused.
 - Everything above survives a restart, so a 409 would only add friction.
-- Instead, the restart confirm dialog (daemon-restart spec §3.2) gains lines, each shown only when non-zero: `N 個 lead 申請等待中、N 個接力進行中（重啟後會接續）`.
+- Instead, the restart confirm dialog (daemon-restart spec §3.2) gains lines, each shown only when non-zero: `N 個申請等待核准、N 個接力進行中（重啟後會接續）`.
 - The counts come from `GET /api/team/inflight`, within the dialog's existing 3 s budget.
 
 ## 10. The skill (D2's last point)
@@ -651,6 +744,10 @@ The skill ships in the plugin (`skills/pdx-team/SKILL.md`). It says:
 **As a member:**
 - never relay yourself;
 - report to the lead's address.
+
+**Self relay:**
+- the Purdex mod asks the user on its own; the agent never asks for one and never approves one;
+- `/relay off` is the user's switch, not the agent's.
 
 ## 11. Later (not in this spec's phases)
 
@@ -680,12 +777,14 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | P3b | `purdex-approver` Swift helper (arm64 + x86_64, both signing paths), Electron IPC, Settings "核准裝置" enrollment UI; plan step 0 measurements (§6.5.2, §6.5.6) | U5a |
 | P3c | Approval dialog host, store, event branch, client-capability buttons (§6.5.5), reconnect queue, notifications; restart-confirm line for open requests (§6.3, §9.5) | 1 |
 | P4 | Teams and grants; `pdx spawn` / `kill` / `team`; spawn reconciliation; team end on the lead's exit | 1 |
-| P5 | Plugin packaging (embed, extract, `CLAUDE_CODE_PLUGIN_DIRS` merge and uninstall) with the skill; mod **self relay** with `hello` / `begin` / `report`; `relay_ops`, `session_lineage`, title and team moves; `previous_refs` and the Resolve tier | 2 (part), 4 (part) |
+| P5a | Daemon relay core: `relay_ops`; `session_lineage` with uncapped `previous_refs` and the Resolve tier; title, team and lead-ref moves; the `self_relay` approval kind; host switches and Hosts UI toggles; session pause; handoff retention sweeper | 2 (part), U13 |
+| P5b | Plugin packaging (embed, extract, `CLAUDE_CODE_PLUGIN_DIRS` merge and uninstall) with the skill; mod self relay: `hello` / `begin` / `wait` / `report`, the prompt hold, asking again, the auto-compact rule, `/relay` | 2 (part), 4 (part), U13 |
 | P6 | Member relay: `pdx relay`, the daemon's virtual peer and control message, `claim`, timeouts, boot reconciliation of relay ops; completion and failure notices; restart-confirm line for relays | 2 |
 | P7 | Detection and the 70% notice to the lead; persisted usage on team rows; member auto-compact report | 3 |
 
 **Notes on the split:**
-- P5 and P6 may each split in two: daemon first, then mod.
+- P5a/P5b depend on P3a–P3c, because every self relay needs an approval with presence (U13).
+- P6 may split in two: daemon first, then mod.
 - The mod has its own tests, run by `claude plugin test`.
 - Daemon deploys are batched with the other daemon lines (conversation-entity D14 practice).
 
@@ -706,7 +805,13 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | D5 (new) | A member's auto-compact is not intercepted; the lead is told | U9 forbids a member self-relay |
 | D6 | No 409 / `--force` on restart; the confirm dialog lists in-flight work | Everything survives a restart (§9.5) |
 | D7 | Adds 13 and 14 (§14); keeps 1 and 2 as today | Spawn, kill and relay need refusal and start-failure codes |
-| D8 | Eight phases instead of four | The 800-line / 20-file limit |
+| D8 | Ten PRs instead of four phases | The 800-line / 20-file limit; U5a and U13 added work |
+| U13 (a) | Switches per host in host config; a per-session pause by `/relay` and `pdx relay self`; members not switchable | The daemon is what answers `begin`; U9 |
+| U13 (b) | One `approval_requests` table (kinds `lead`, `self_relay`, `enroll`); the self-relay lock holds `prompt.submit` inside a `$` wait | air26 asked for a shared model; a hook's budget excludes `$` waits |
+| U13 (c) | Ask again after 10 more points; auto-compact never waits, and only an already-approved relay skips it | The session must never hang |
+| U13 (d) | No daemon: no ask, no relay, compaction runs | Approval lives on the daemon |
+| §8.4 (review e) | `previous_refs` uncapped; members told the lead's new ref | A cap breaks old lead refs |
+| §8.3 (review f) | Retention: 3 per chain, 14 days, 3 days for failed; the daemon cleans | The user does not want files piling up |
 
 ## 14. Exit codes (D7, extended)
 
@@ -718,7 +823,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | 10 | Denied |
 | 11 | Timed out (counts as denied, U7) |
 | 12 | Cancelled or abandoned |
-| 13 | Refused by team rules: `not_lead`, `team_full`, `cwd_outside_grant`, `not_your_member`, `member_relay_is_leads`, `relay_unsupported`, `already_lead`, `member_cannot_lead`, `request_open` |
+| 13 | Refused by team rules: `not_lead`, `team_full`, `cwd_outside_grant`, `not_your_member`, `member_relay_is_leads`, `self_relay_off`, `self_relay_paused`, `relay_unsupported`, `already_lead`, `member_cannot_lead`, `request_open` |
 | 14 | The member did not start or did not respond: `member_start_timeout`, `member_unresponsive` |
 | 20 | Daemon unreachable through the 30 s grace |
 | 21 | Daemon does not support this (404) |
@@ -732,6 +837,9 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
   - deny needs no signature;
   - trust on first use applies once per host, and never again after the list empties;
   - adding an approver needs an existing approver's signature.
+- **Approvals of every kind:** they share one compare-and-set.
+- **Retention:** 3 per chain, 14 days, and 3 days for failed ops; nothing outside `<data_dir>/relay/` is touched.
+- **Lineage:** an uncapped chain still resolves a lead's oldest ref after 11 or more relays.
 - **Lead request:** create is idempotent; exactly one close wins under concurrent decide, timeout and cancel; the 409 carries `decided_by`; the snapshot reaches a late subscriber; the lease is extended on boot; abandonment fires when the origin dies.
 - **Spawn:** the limit, roots and symlink escape; retry after a mid-op restart opens nothing twice; the start timeout kills and frees the slot.
 - **Relay:**
@@ -755,7 +863,15 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 - the 20K loop guard;
 - a member does not self-relay;
 - auto-compact is intercepted for solo and lead, and passed through for a member;
-- headless does nothing.
+- headless does nothing;
+- **self relay under U13:**
+  - a prompt that arrives while a request is open waits;
+  - on approval it is dropped and re-sent after the seed;
+  - on denial it passes unchanged;
+  - asking again only at +10 points;
+  - auto-compact runs, and cancels the request, unless the relay is already approved;
+  - `self_relay_off` and `self_relay_paused` are respected;
+  - `/relay on` in a member is refused.
 
 **SPA:**
 - the dialog opens from the snapshot and the event;
@@ -768,14 +884,16 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 - accepting an approve without a valid signature, or with a signature over another grant, turns the presence tests red;
 - reopening trust on first use when the approver list empties → red;
 - dropping the claim's session check lets another session claim → red;
-- dropping `previous_refs` from Resolve leaves the old ref at `peer_not_found` → red.
+- dropping `previous_refs` from Resolve leaves the old ref at `peer_not_found` → red;
+- dropping the prompt hold lets a prompt start a turn while a self-relay request is open → red;
+- a lead-kind signature replayed on a self-relay request must fail → red if the kind leaves the digest.
 
 **Real acceptance (mlab, then air26):**
 1. Enroll air26's App on mlab (trust on first use), then a19's App, approved from air26 with Touch ID.
 2. A session requests lead; the user approves on air26's App with Touch ID; the dialog closes on mlab's browser tab, whose 核准 was not offered.
 3. The lead spawns two members, and relays one at 70% on a test threshold (`PDX_RELAY_THRESHOLD`, as in the prototype). The old ref still reaches it.
 4. Restart the daemon during a pending request and during a relay; both finish.
-5. Self relay on a solo session.
+5. Self relay on a solo session at a test threshold: the dialog appears on every client; deny, then see it ask again at +10 points; approve with Touch ID; a message typed during the wait reaches the new conversation.
 
 ## 16. Not in scope
 
