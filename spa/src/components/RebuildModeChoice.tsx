@@ -10,6 +10,8 @@ export interface RebuildModeChoiceProps {
   terminalAvailable: boolean
   workerAvailable: boolean
   workerUnavailableHint?: string
+  /** An operation is running: both options are frozen. */
+  disabled?: boolean
 }
 
 const ARROWS = new Set(['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'])
@@ -20,6 +22,7 @@ export function RebuildModeChoice({
   terminalAvailable,
   workerAvailable,
   workerUnavailableHint,
+  disabled = false,
 }: RebuildModeChoiceProps) {
   const t = useI18nStore((s) => s.t)
   const hintId = useId()
@@ -34,6 +37,7 @@ export function RebuildModeChoice({
 
   const onKeyDown = (e: KeyboardEvent, from: RebuildMode) => {
     if (!ARROWS.has(e.key)) return
+    if (disabled) { e.preventDefault(); return }
     // A radio owns the arrow keys: never let them scroll the page, even when there is nowhere to move.
     e.preventDefault()
     // Two options: any arrow moves to the other one, if it is enabled.
@@ -63,7 +67,7 @@ export function RebuildModeChoice({
               aria-checked={checked}
               tabIndex={o.mode === tabStop ? 0 : -1}
               data-testid={`rebuild-mode-${o.mode}`}
-              disabled={!o.available}
+              disabled={disabled || !o.available}
               title={!o.available ? o.hint : undefined}
               onClick={() => onChange(o.mode)}
               onKeyDown={(e) => onKeyDown(e, o.mode)}

@@ -1,9 +1,14 @@
+import { useEffect, useRef, useState } from 'react'
 import { SmileySad } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { closeTab } from '../lib/tab-lifecycle'
-import { rebuildPane, type RebuildPlan } from '../lib/rebuild/engine'
+import { rebuildPane, paneOwner, type RebuildPlan } from '../lib/rebuild/engine'
+import { useRebuildStore, withOperationLock } from '../stores/useRebuildStore'
+import { useNexHostStore, selectHandoffReady } from '../stores/useNexHostStore'
+import { rebuildAsWorker, rebuildErrorMessage, announceRebuildOutcome } from '../lib/nex/worker-rebuild'
 import { RebuildScreen } from './RebuildScreen'
+import { RebuildModeChoice, type RebuildMode } from './RebuildModeChoice'
 import { RebuildActionSet, type RebuildEditableField } from './RebuildActionSet'
 import { SessionPickerList, type SessionSelection } from './SessionPickerList'
 import type { PaneContent, PaneRebuildRecord, TerminatedReason } from '../types/tab'
@@ -49,6 +54,51 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
     capturedAt: 0,
   }
 
+  // Worker rebuild (conversation entity spec Q4 / D12): offered only when Nexen is
+  // ready and the record knows both the cc session and its cwd. Terminal stays preselected.
+  const handoffReady = useNexHostStore(selectHandoffReady(content.hostId))
+  useEffect(() => {
+    void useNexHostStore.getState().ensure(content.hostId)
+  }, [content.hostId])
+  const sid = record.agent?.type === 'cc' ? record.agent.sessionId : undefined
+  const cwd = record.cwd
+  const showChoice = handoffReady && !!sid && !!cwd
+  const [choice, setChoice] = useState<RebuildMode>('terminal')
+  const mode: RebuildMode = showChoice ? choice : 'terminal'
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const inFlight = useRef(false)
+
+  // Any held operation lock (a terminal rebuild of this pane, or a batch) freezes the choice.
+  const locked = useRebuildStore((s) => s.lockedBy !== null)
+
+  const rebuildWorker = async () => {
+    if (inFlight.current || !sid || !cwd) return
+    inFlight.current = true
+    setBusy(true)
+    setError(null)
+    try {
+      // The same pane-scoped lock `rebuildPane` takes: a terminal and a worker
+      // rebuild of one pane never run together. Held → refused, no request.
+      await withOperationLock(
+        paneOwner(paneId),
+        async () => {
+          const outcome = await rebuildAsWorker({
+            hostId: content.hostId, sessionId: sid, cwd, tabId, paneId,
+            expect: (c) => c.kind === 'tmux-session' && c.hostId === content.hostId && c.sessionCode === content.sessionCode,
+          })
+          announceRebuildOutcome(t, content.hostId, outcome)
+        },
+        () => undefined,
+      )
+    } catch (err) {
+      setError(rebuildErrorMessage(err, t))
+    } finally {
+      inFlight.current = false
+      setBusy(false)
+    }
+  }
+
   const handleRebuild = (plan: RebuildPlan) => {
     void rebuildPane(content.hostId, tabId, paneId, plan)
   }
@@ -74,6 +124,26 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
         closeTab(tabId)
       }}
     >
+      {showChoice && (
+        <div className="mb-6">
+          <RebuildModeChoice value={mode} onChange={setChoice} terminalAvailable workerAvailable disabled={locked || busy} />
+        </div>
+      )}
+      {mode === 'worker' ? (
+        <div className="flex flex-col items-center gap-3 w-full max-w-lg">
+          <p className="text-sm text-zinc-400 font-mono break-all">{cwd}</p>
+          <button
+            type="button"
+            data-testid="terminated-rebuild-worker"
+            disabled={busy || locked}
+            onClick={() => { void rebuildWorker() }}
+            className="px-4 py-1.5 text-sm rounded bg-zinc-700 text-zinc-100 hover:bg-zinc-600 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {t('worker.rebuild.button')}
+          </button>
+          {error && <p data-testid="terminated-rebuild-error" role="alert" className="text-sm text-red-400">{error}</p>}
+        </div>
+      ) : (<>
       <div className="w-full max-w-lg mb-8">
         <RebuildActionSet
           tabId={tabId}
@@ -88,6 +158,7 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
       <div className="w-full max-w-sm">
         <SessionPickerList onSelect={handleSelect} />
       </div>
+      </>)}
     </RebuildScreen>
   )
 }

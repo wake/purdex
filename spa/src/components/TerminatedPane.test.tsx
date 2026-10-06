@@ -1,13 +1,22 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import { TerminatedPane } from './TerminatedPane'
 import { useTabStore } from '../stores/useTabStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
+import { rebuildPane } from '../lib/rebuild/engine'
 import { findPane } from '../lib/pane-tree'
-import type { PaneContent, Tab } from '../types/tab'
+import { useNexHostStore } from '../stores/useNexHostStore'
+import { useUndoToast } from '../stores/useUndoToast'
+import { useExecutionListStore } from '../stores/useExecutionListStore'
+import { rebuildAsWorker } from '../lib/nex/worker-rebuild'
+import { HandoffApiError } from '../lib/nex/handoff-api'
+import type { NexCapabilities } from '../lib/nex/types'
+import type { PaneContent, Tab, PaneRebuildRecord } from '../types/tab'
+
+vi.mock('../lib/nex/worker-rebuild', async (o) => ({ ...(await o<typeof import('../lib/nex/worker-rebuild')>()), rebuildAsWorker: vi.fn() }))
 
 vi.mock('./SessionPickerList', () => ({
   SessionPickerList: ({ onSelect }: { onSelect: (sel: unknown) => void }) => (
@@ -315,5 +324,128 @@ describe('TerminatedPane rebuild operation scope', () => {
 
     expect(screen.getByRole('button', { name: 'Retry resume' })).toBeEnabled()
     expect(screen.getByTestId('rebuild-created-name')).toHaveTextContent('my-session-2')
+  })
+})
+
+describe('TerminatedPane rebuild as worker', () => {
+  const H = 'host-1'
+  const caps = {
+    phase: 'ga', host_id: H, verbs: [], providers: ['claude'], events: [], provider_events: [], transient_events: [],
+    sandbox_profiles: ['default', 'handoff'], sandbox_default_profile: 'default', sandbox_max_profile: 'handoff',
+    roots: [], send: { delivery: ['text'], max_text_bytes: 1 }, delegate: { resume_session_id: true },
+  } as unknown as NexCapabilities
+  const readyEntry = { info: null, capabilities: caps, phase: 'ready', error: null, fetchedAt: 0, generation: 1, fingerprint: 'f' }
+  const fullRecord: PaneRebuildRecord = { sessionName: 'p1', tmuxInstance: 'i', cwd: '/w', agent: { type: 'cc', sessionId: 'S', updatedAt: 1 }, capturedAt: 1 }
+  const refetch = vi.fn()
+  const ensure = vi.fn().mockResolvedValue(undefined)
+
+  function renderTerminated(rebuild: PaneRebuildRecord) {
+    const content = { ...makeContent('session-closed'), rebuild }
+    setupTab(content)
+    return render(<TerminatedPane content={content} tabId={TAB_ID} paneId={PANE_ID} />)
+  }
+
+  beforeEach(() => {
+    refetch.mockReset()
+    ensure.mockClear()
+    useExecutionListStore.setState({ refetch } as never)
+    useUndoToast.setState({ toast: null, notice: null })
+    useNexHostStore.setState({ byHost: { [H]: readyEntry }, ensure } as never)
+    vi.mocked(rebuildAsWorker).mockReset().mockResolvedValue({ result: { execution_id: 'n', state: 'running' }, swapped: true })
+  })
+
+  it('offers worker rebuild when nex is ready and the record knows the session', async () => {
+    renderTerminated(fullRecord)
+    expect(screen.getByTestId('rebuild-mode-terminal')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByTestId('session-picker')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+    expect(screen.queryByTestId('session-picker')).toBeNull()
+    expect(screen.getByText('/w')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('terminated-rebuild-worker'))
+    await waitFor(() => expect(rebuildAsWorker).toHaveBeenCalledWith(expect.objectContaining({ hostId: H, sessionId: 'S', cwd: '/w', tabId: TAB_ID, paneId: PANE_ID })))
+    const { expect: guard } = vi.mocked(rebuildAsWorker).mock.calls[0][0]
+    expect(guard(makeContent('session-closed'))).toBe(true)
+    expect(guard({ ...makeContent('session-closed'), sessionCode: 'other' })).toBe(false)
+  })
+
+  it('shows no choice without a session id, a cwd, or nex', () => {
+    renderTerminated({ sessionName: 'p1', tmuxInstance: 'i', capturedAt: 1 })
+    expect(screen.queryByTestId('rebuild-mode-worker')).toBeNull()
+    cleanup()
+    renderTerminated({ ...fullRecord, cwd: undefined })
+    expect(screen.queryByTestId('rebuild-mode-worker')).toBeNull()
+    cleanup()
+    useNexHostStore.setState({ byHost: {} } as never)
+    renderTerminated(fullRecord)
+    expect(screen.queryByTestId('rebuild-mode-worker')).toBeNull()
+  })
+
+  it('shows an owner refusal inline', async () => {
+    vi.mocked(rebuildAsWorker).mockRejectedValue(new HandoffApiError(409, 'session_owned', { owner: 'worker' }))
+    renderTerminated(fullRecord)
+    fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+    fireEvent.click(screen.getByTestId('terminated-rebuild-worker'))
+    expect(await screen.findByTestId('terminated-rebuild-error')).toHaveTextContent('already has a worker in progress')
+  })
+
+  it('swapped:false toasts and refetches through the shared helper', async () => {
+    vi.mocked(rebuildAsWorker).mockResolvedValue({ result: { execution_id: 'n', state: 'running' }, swapped: false })
+    renderTerminated(fullRecord)
+    fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+    fireEvent.click(screen.getByTestId('terminated-rebuild-worker'))
+    await waitFor(() => expect(useUndoToast.getState().toast?.message).toMatch(/Rebuilt as a new worker, but the original tab/))
+    expect(refetch).toHaveBeenCalledWith(H)
+  })
+
+  it('ensures nex readiness for the host on mount', () => {
+    renderTerminated(fullRecord)
+    expect(ensure).toHaveBeenCalledWith(H)
+  })
+
+  describe('one operation lock per pane', () => {
+    const lockOwner = `rebuild:${PANE_ID}`
+    it('a terminal rebuild in progress disables the choice and the worker button, and sends nothing', () => {
+      renderTerminated(fullRecord)
+      fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+      let grant: unknown
+      act(() => { grant = useRebuildStore.getState().acquireOperationLock(lockOwner) })
+      expect(screen.getByTestId('rebuild-mode-terminal')).toBeDisabled()
+      expect(screen.getByTestId('rebuild-mode-worker')).toBeDisabled()
+      expect(screen.getByTestId('terminated-rebuild-worker')).toBeDisabled()
+      fireEvent.click(screen.getByTestId('terminated-rebuild-worker'))
+      expect(rebuildAsWorker).not.toHaveBeenCalled()
+      // settles: controls re-enable
+      act(() => { useRebuildStore.getState().releaseOperationLock(grant as never) })
+      expect(screen.getByTestId('rebuild-mode-terminal')).toBeEnabled()
+      expect(screen.getByTestId('terminated-rebuild-worker')).toBeEnabled()
+    })
+
+    it('a lock taken between render and click refuses the worker request', async () => {
+      renderTerminated(fullRecord)
+      fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+      const btn = screen.getByTestId('terminated-rebuild-worker')
+      useRebuildStore.getState().acquireOperationLock('other')
+      fireEvent.click(btn)
+      await new Promise((r) => setTimeout(r, 0))
+      expect(rebuildAsWorker).not.toHaveBeenCalled()
+    })
+
+    it('a worker rebuild in progress holds the pane lock: choice disabled, rebuildPane refuses, then re-enables', async () => {
+      let done: (v: { result: { execution_id: string; state: string }; swapped: boolean }) => void = () => {}
+      vi.mocked(rebuildAsWorker).mockReturnValue(new Promise((r) => { done = r as never }))
+      renderTerminated(fullRecord)
+      fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+      fireEvent.click(screen.getByTestId('terminated-rebuild-worker'))
+      await waitFor(() => expect(rebuildAsWorker).toHaveBeenCalledTimes(1))
+      expect(useRebuildStore.getState().lockedBy).toBe(lockOwner)
+      expect(screen.getByTestId('rebuild-mode-terminal')).toBeDisabled()
+      expect(screen.getByTestId('terminated-rebuild-worker')).toBeDisabled()
+      const report = await rebuildPane('host-1', TAB_ID, PANE_ID, { createSession: true, applyCwd: false, runResume: false })
+      expect(report.steps.create.status).toBe('failed')
+      await act(async () => { done({ result: { execution_id: 'n', state: 'running' }, swapped: true }) })
+      await waitFor(() => expect(useRebuildStore.getState().lockedBy).toBeNull())
+      expect(screen.getByTestId('rebuild-mode-terminal')).toBeEnabled()
+      expect(screen.getByTestId('terminated-rebuild-worker')).toBeEnabled()
+    })
   })
 })
