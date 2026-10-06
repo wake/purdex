@@ -196,6 +196,78 @@ func TestManualResume_OverflowPageErrorStillReconcilesWhatItFound(t *testing.T) 
 	assert.Equal(t, []string{"000000"}, archivedIDs(env))
 }
 
+// verifiedTerminals gives each sid a verified terminal frame.
+func verifiedTerminals(env *handoffEnv, sids ...string) {
+	env.terminals.live = map[string][]agent.TerminalSession{}
+	for i, sid := range sids {
+		env.terminals.live[sid] = []agent.TerminalSession{{FrameID: "F" + sid, PaneID: fmt.Sprintf("%%%d", i+10), SessionID: sid, AgentType: "cc", Verified: true}}
+	}
+}
+
+// PR #1590 R1-1: the overflow reconcile scans the table once, not once per
+// session.
+func TestManualResume_OverflowScansOnce(t *testing.T) {
+	env := newHandoffEnv(t)
+	sids := []string{"S0", "S1", "S2", "S3", "S4"}
+	verifiedTerminals(env, sids...)
+	var rows []store.Execution
+	for i, sid := range sids {
+		rows = append(rows, row(fmt.Sprintf("E%d", i), "idle", false, sid, "", int64(1000+i)))
+	}
+	for i := 0; i < ownerScanPageSize; i++ { // a second page
+		rows = append(rows, row(fmt.Sprintf("0%05d", i), "terminated", false, "OTHER", "", int64(i)))
+	}
+	fakeStore(env).listRows = rows
+	env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
+	assert.Equal(t, 2, fakeStore(env).listCalls, "exactly the List calls of one scan")
+	assert.ElementsMatch(t, []string{"E0", "E1", "E2", "E3", "E4"}, archivedIDs(env))
+}
+
+// A row in two groups (session_id S, resume_session_id R) is exited once.
+func TestManualResume_OverflowExitsARowInTwoGroupsOnce(t *testing.T) {
+	env := newHandoffEnv(t)
+	verifiedTerminals(env, "S", "R")
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "R", 1)}
+	env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
+	assert.Equal(t, []string{"E1"}, archivedIDs(env))
+	assert.Len(t, env.svc.terminateCalls, 1)
+}
+
+// Each candidate is re-read under its exec lock; one that is no longer S's
+// live worker is skipped.
+func TestManualResume_SkipsACandidateNoLongerLiveForS(t *testing.T) {
+	archived := row("E1", "idle", true, "S", "", 1)
+	terminated := row("E1", "terminated", false, "S", "", 1)
+	moved := row("E1", "idle", false, "OTHER", "", 1)
+	cases := map[string]struct {
+		overflow bool
+		reread   getResult
+	}{
+		"overflow: archived since the scan":  {true, getResult{exec: archived}},
+		"overflow: terminated since the scan": {true, getResult{exec: terminated}},
+		"resume: archived since the scan":    {false, getResult{exec: archived}},
+		"resume: no longer for S":            {false, getResult{exec: moved}},
+		"resume: the re-read fails":          {false, getResult{err: errors.New("db busy")}},
+		"resume: gone":                       {false, getResult{err: store.ErrNotFound}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := newHandoffEnv(t)
+			liveTerminal(env, true)
+			st := fakeStore(env)
+			st.listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+			st.results = []getResult{c.reread}
+			if c.overflow {
+				env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
+			} else {
+				env.m.onSessionStart(ev("resume"))
+			}
+			assert.Equal(t, 1, st.Calls(), "one re-read")
+			assert.Empty(t, env.svc.Calls(), "nothing done to the worker")
+		})
+	}
+}
+
 func TestManualResume_StartSubscribesStopUnsubscribes(t *testing.T) {
 	env := newHandoffEnv(t)
 	if err := env.m.Start(context.Background()); err != nil {

@@ -3,6 +3,7 @@ package nex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/wake/purdex/internal/module/agent"
@@ -44,79 +45,136 @@ func (m *Module) onSessionStart(ev agent.SessionStartEvent) {
 	if ev.AgentType != "cc" || ev.SessionID == "" || (ev.Source != "startup" && ev.Source != "resume") {
 		return
 	}
-	key := sidLockKey(ev.SessionID)
+	sid := ev.SessionID
+	m.resolveManualResume(context.Background(), sid, ev.TmuxSession, func(ctx context.Context) []store.Execution {
+		workers, err := m.liveWorkersFor(ctx, sid)
+		if err != nil {
+			// Unlike an owner check (which refuses a transfer on a partial scan),
+			// the terminal has ALREADY taken S over here: exiting the workers
+			// found is strictly better than exiting none.
+			m.logf("nex: manual resume %s: worker scan: %v (acting on %d found)", sid, err, len(workers))
+		}
+		return workers
+	})
+}
+
+// resolveManualResume is Q1's per-session path, shared by a SessionStart
+// and the overflow reconcile. Under sid:<S> (TryLock: a Purdex transfer of
+// S holds it for its whole run), and only while a verified terminal frame
+// runs S, it exits each of S's live workers that workers returns — called
+// inside the lock, after the terminal check. Each candidate is re-read
+// under its exec:<id> lock and skipped unless it is still S's live worker
+// (the reconcile's rows can be stale by the time a later group runs).
+// It returns the ids it exited.
+func (m *Module) resolveManualResume(parent context.Context, sid, tmuxSession string, workers func(context.Context) []store.Execution) []string {
+	key := sidLockKey(sid)
 	if !m.locks.TryLock(key) {
-		return // a Purdex transfer of S is in flight, or another handler has S
+		return nil // a Purdex transfer of S is in flight, or another handler has S
 	}
 	defer m.locks.Unlock(key)
 
-	ctx, cancel := context.WithTimeout(context.Background(), manualResumeTimeout)
-	defer cancel()
 	// Act only on a terminal that is verifiably running S right now: a late
 	// hook from a session a failed transfer already killed must not exit the
 	// worker that transfer left alone.
-	terms, err := m.terminals.LiveBySessionID(ctx, "cc", ev.SessionID)
+	ctx, cancel := context.WithTimeout(parent, manualResumeTimeout)
+	terms, err := m.terminals.LiveBySessionID(ctx, "cc", sid)
+	cancel()
 	if err != nil {
-		m.logf("nex: manual resume %s: terminal lookup: %v", ev.SessionID, err)
-		return
+		m.logf("nex: manual resume %s: terminal lookup: %v", sid, err)
+		return nil
 	}
 	verified := false
 	for _, t := range terms {
 		verified = verified || t.Verified
 	}
 	if !verified {
-		return
-	}
-	workers, err := m.liveWorkersFor(ctx, ev.SessionID)
-	if err != nil {
-		// Unlike an owner check (which refuses a transfer on a partial scan),
-		// the terminal has ALREADY taken S over here: exiting the workers
-		// found is strictly better than exiting none.
-		m.logf("nex: manual resume %s: worker scan: %v (acting on %d found)", ev.SessionID, err, len(workers))
+		return nil
 	}
 	principal := m.internalPrincipal()
-	for _, w := range workers {
-		lk := takeToTerminalLockKey(w.ID)
-		if !m.locks.TryLock(lk) {
-			m.logf("nex: manual resume %s: %s is busy; left to its mover", ev.SessionID, w.ID)
-			continue
+	var exited []string
+	for _, w := range workers(parent) {
+		if m.exitManualResumeWorker(parent, sid, tmuxSession, w.ID, principal) {
+			exited = append(exited, w.ID)
 		}
-		out, herr := m.exitWorker(ctx, w, nil, principal)
-		m.locks.Unlock(lk)
-		if herr != nil || !out.Exited() {
-			m.logf("nex: manual resume %s: exiting %s failed: %v", ev.SessionID, w.ID, herr)
-			continue
-		}
-		m.logf("nex: manual resume %s in %s -> worker %s exited", ev.SessionID, ev.TmuxSession, w.ID)
-		m.broadcastWorkerExited(w.ID, ev)
 	}
+	return exited
+}
+
+// exitManualResumeWorker exits one candidate under its exec:<id> lock, after
+// re-reading it; true when it exited.
+func (m *Module) exitManualResumeWorker(parent context.Context, sid, tmuxSession, execID, principal string) bool {
+	lk := takeToTerminalLockKey(execID)
+	if !m.locks.TryLock(lk) {
+		m.logf("nex: manual resume %s: %s is busy; left to its mover", sid, execID)
+		return false
+	}
+	defer m.locks.Unlock(lk)
+	w, err := m.getExecution(parent, execID)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			m.logf("nex: manual resume %s: re-reading %s: %v", sid, execID, err)
+		}
+		return false
+	}
+	if !isLiveExecution(w) || !executionIsFor(w, sid) {
+		return false // exited or moved since the scan
+	}
+	out, herr := m.exitWorker(parent, w, nil, principal)
+	if herr != nil || !out.Exited() {
+		m.logf("nex: manual resume %s: exiting %s failed: %v", sid, execID, herr)
+		return false
+	}
+	m.logf("nex: manual resume %s in %s -> worker %s exited", sid, tmuxSession, execID)
+	m.broadcastWorkerExited(execID, sid, tmuxSession)
+	return true
 }
 
 // reconcileTerminalOwners is the hub's overflow path: SessionStarts were
 // coalesced away while this subscriber lagged, so every session that still
-// has a live worker is re-checked as if it had just resumed. The
-// per-session path keeps every guard (sid lock, verified frame).
+// has a live worker is re-checked as if it had just resumed. One scan of
+// the table; its live rows are grouped by session_id and by
+// resume_session_id (a row can sit in two groups), and each group goes
+// through the per-session path with every guard. A worker exited under one
+// key is not offered again under the other.
 func (m *Module) reconcileTerminalOwners() {
-	ctx, cancel := context.WithTimeout(context.Background(), manualResumeTimeout)
+	ctx := context.Background()
 	workers, err := m.scanLiveWorkers(ctx, func(store.Execution) bool { return true })
-	cancel()
 	if err != nil {
 		m.logf("nex: owner reconcile: worker scan: %v (re-checking %d found)", err, len(workers))
 	}
-	seen := map[string]bool{}
+	groups := map[string][]store.Execution{}
+	var order []string
 	for _, w := range workers {
-		for _, sid := range []string{w.SessionID, w.ResumeSessionID} {
-			if sid == "" || seen[sid] {
+		for i, sid := range []string{w.SessionID, w.ResumeSessionID} {
+			if sid == "" || (i == 1 && sid == w.SessionID) {
 				continue
 			}
-			seen[sid] = true
-			if m.startsStopped.Load() {
-				return
+			if _, ok := groups[sid]; !ok {
+				order = append(order, sid)
 			}
-			// The tmux session name is unknown on this path (agent.TerminalSession
-			// has no such field), so nex-worker-exited carries tmux_session "";
-			// the SPA toast (Task 18) must fall back when it is empty.
-			m.onSessionStart(agent.SessionStartEvent{AgentType: "cc", SessionID: sid, Source: "resume"})
+			groups[sid] = append(groups[sid], w)
+		}
+	}
+	done := map[string]bool{}
+	for _, sid := range order {
+		if m.startsStopped.Load() {
+			return
+		}
+		group := groups[sid]
+		// The tmux session name is unknown on this path (agent.TerminalSession
+		// has no such field), so nex-worker-exited carries tmux_session "";
+		// the SPA toast (Task 18) must fall back when it is empty.
+		exited := m.resolveManualResume(ctx, sid, "", func(context.Context) []store.Execution {
+			var left []store.Execution
+			for _, w := range group {
+				if !done[w.ID] {
+					left = append(left, w)
+				}
+			}
+			return left
+		})
+		for _, id := range exited {
+			done[id] = true
 		}
 	}
 }
@@ -148,12 +206,12 @@ func (m *Module) recheckSession(sid string) {
 	}()
 }
 
-func (m *Module) broadcastWorkerExited(execID string, ev agent.SessionStartEvent) {
+func (m *Module) broadcastWorkerExited(execID, sid, tmuxSession string) {
 	if m.core == nil || m.core.Events == nil {
 		return
 	}
 	value, _ := json.Marshal(map[string]string{
-		"execution_id": execID, "session_id": ev.SessionID, "reason": "manual_resume", "tmux_session": ev.TmuxSession,
+		"execution_id": execID, "session_id": sid, "reason": "manual_resume", "tmux_session": tmuxSession,
 	})
-	m.core.Events.Broadcast(ev.TmuxSession, "nex-worker-exited", string(value))
+	m.core.Events.Broadcast(tmuxSession, "nex-worker-exited", string(value))
 }

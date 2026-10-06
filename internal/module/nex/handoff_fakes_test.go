@@ -566,7 +566,9 @@ type getResult struct {
 	err  error
 }
 
-func (f *fakeNexStore) Get(ctx context.Context, _ string) (store.Execution, error) {
+// With no script, Get answers the listRows row of that id (the zero row
+// when there is none), so a re-read sees the same table List pages.
+func (f *fakeNexStore) Get(ctx context.Context, id string) (store.Execution, error) {
 	f.mu.Lock()
 	call := f.calls
 	f.calls++
@@ -576,6 +578,13 @@ func (f *fakeNexStore) Get(ctx context.Context, _ string) (store.Execution, erro
 			res = f.results[call]
 		} else {
 			res = f.results[n-1]
+		}
+	} else {
+		for _, e := range f.listRows {
+			if e.ID == id {
+				res = getResult{exec: e}
+				break
+			}
 		}
 	}
 	f.mu.Unlock()
