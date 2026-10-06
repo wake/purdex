@@ -224,7 +224,7 @@ describe('WorkerExitedTab', () => {
   it('the first load shows the loading line and no empty line', () => {
     conversations.mockReturnValue(hook({ phase: 'loading' }))
     render(<WorkerExitedTab hostId="h1" />)
-    expect(screen.getByTestId('worker-exited-loading')).toBeInTheDocument()
+    expect(screen.getByTestId('worker-exited-loading')).toHaveTextContent('載入中…')
     expect(screen.queryByTestId('worker-exited-empty')).toBeNull()
   })
 

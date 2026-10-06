@@ -70,7 +70,7 @@ function GoneList({ hostId }: { hostId: string }) {
       )}
       {/* The first load, or a retry after an error, which keeps its rows below this line. */}
       {phase === 'loading' && (
-        <p data-testid="worker-gone-loading" className="text-xs text-text-muted" aria-busy="true">{t('executions.loading')}</p>
+        <p data-testid="worker-gone-loading" className="text-xs text-text-muted" aria-busy="true">{t('settings.worker.conversations.loading')}</p>
       )}
       {phase === 'ready' && !rootError && rows.length === 0 && (
         <p data-testid="worker-gone-empty" className="text-xs text-text-muted">{t('settings.worker.gone.empty')}</p>

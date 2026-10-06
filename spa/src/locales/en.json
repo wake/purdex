@@ -110,6 +110,7 @@
   "settings.worker.gone.search": "Search gone conversations",
   "settings.worker.gone.empty": "No gone conversations",
   "settings.worker.gone.note": "Transcript cleaned up; it can no longer be started",
+  "settings.worker.conversations.loading": "Loading…",
   "settings.worker.conversations.age.just_now": "just now",
   "settings.worker.conversations.age.minutes": "{{n}}m ago",
   "settings.worker.conversations.age.hours": "{{n}}h ago",

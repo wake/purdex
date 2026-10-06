@@ -110,6 +110,7 @@
   "settings.worker.gone.search": "搜尋已消失的對話",
   "settings.worker.gone.empty": "沒有已消失的對話",
   "settings.worker.gone.note": "對話檔已清除，無法再啟動",
+  "settings.worker.conversations.loading": "載入中…",
   "settings.worker.conversations.age.just_now": "剛剛",
   "settings.worker.conversations.age.minutes": "{{n}} 分鐘前",
   "settings.worker.conversations.age.hours": "{{n}} 小時前",
