@@ -195,6 +195,23 @@ func (f *fixture) countOps(op string) int {
 	return n
 }
 
+// waitForWaiter blocks until a long-poll on id has registered its waiter
+// (so a close issued next is guaranteed to have someone to wake).
+func waitForWaiter(t *testing.T, f *fixture, id string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		f.m.mu.Lock()
+		n := len(f.m.waiters[id])
+		f.m.mu.Unlock()
+		if n > 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("no long-poll registered on %s within 5 s", id)
+}
+
 func TestCreate_NewThenIdempotentThenConflict(t *testing.T) {
 	f := newFixture(t)
 	a := f.create(uid(1))
