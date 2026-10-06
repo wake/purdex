@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+
+	"github.com/wake/purdex/internal/store"
 )
 
 // TerminalSessionsKey names the service the nex module uses for the
@@ -43,6 +45,12 @@ type SessionStartEvent struct {
 
 type TerminalSessions interface {
 	LiveBySessionID(ctx context.Context, agentType, sessionID string) ([]TerminalSession, error)
+	// LiveSessions returns every root frame of agentType ("" = all types) that
+	// carries a session id and passes LiveBySessionID's liveness rule: a dead
+	// pid or a start-time mismatch is dropped; an unreadable start time is
+	// returned with Verified=false, which is NOT an owner (TerminalSession's
+	// contract). Callers decide what an unverified frame means for them.
+	LiveSessions(ctx context.Context, agentType string) ([]TerminalSession, error)
 	SubscribeSessionStart(fn func(SessionStartEvent)) (unsubscribe func()) // Task 3
 }
 
@@ -249,20 +257,62 @@ func (m *Module) LiveBySessionID(ctx context.Context, agentType, sessionID strin
 		if agentType != "" && f.AgentType != agentType {
 			continue
 		}
-		if !isPidAliveFn(f.PID) {
-			continue
+		if ts, ok := liveFrame(f); ok {
+			out = append(out, ts)
 		}
-		verified := false
-		if st, err := processStartTimeFn(f.PID); err == nil {
-			if st != f.ProcessStartTime {
-				continue
-			}
-			verified = true
-		}
-		out = append(out, TerminalSession{
-			FrameID: f.FrameID, PaneID: f.PaneID, AgentType: f.AgentType, SessionID: f.SessionID,
-			Cwd: f.Cwd, TranscriptPath: f.TranscriptPath, Verified: verified,
-		})
 	}
 	return out, nil
+}
+
+// LiveSessions lists every live root terminal session of agentType ("" = all
+// types), applying LiveBySessionID's liveness rule to each root frame that
+// records a session id. Subagent frames and frames without a session id are
+// skipped. A frame whose start time cannot be read is returned with
+// Verified=false, which is NOT an owner (see TerminalSession): the caller
+// decides what "alive, owner unknown" means. A ctx already done returns its
+// error without reading the store.
+func (m *Module) LiveSessions(ctx context.Context, agentType string) ([]TerminalSession, error) {
+	if m == nil || m.frames == nil {
+		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	frames, err := m.frames.ListAll()
+	if err != nil {
+		return nil, err
+	}
+	var out []TerminalSession
+	for _, f := range frames {
+		if f.ParentFrameID != "" || f.SessionID == "" {
+			continue
+		}
+		if agentType != "" && f.AgentType != agentType {
+			continue
+		}
+		if ts, ok := liveFrame(f); ok {
+			out = append(out, ts)
+		}
+	}
+	return out, nil
+}
+
+// liveFrame is the liveness rule shared by LiveBySessionID and LiveSessions:
+// a dead pid or a start-time mismatch is a stale row (false); an unreadable
+// start time is kept with Verified=false.
+func liveFrame(f store.Frame) (TerminalSession, bool) {
+	if !isPidAliveFn(f.PID) {
+		return TerminalSession{}, false
+	}
+	verified := false
+	if st, err := processStartTimeFn(f.PID); err == nil {
+		if st != f.ProcessStartTime {
+			return TerminalSession{}, false
+		}
+		verified = true
+	}
+	return TerminalSession{
+		FrameID: f.FrameID, PaneID: f.PaneID, AgentType: f.AgentType, SessionID: f.SessionID,
+		Cwd: f.Cwd, TranscriptPath: f.TranscriptPath, Verified: verified,
+	}, true
 }

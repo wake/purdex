@@ -11,6 +11,7 @@ import (
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/store"
 )
 
 func TestLiveBySessionID(t *testing.T) {
@@ -96,6 +97,99 @@ func TestLiveBySessionID_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	got, err := m.LiveBySessionID(ctx, "cc", "S")
+	if !errors.Is(err, context.Canceled) || got != nil {
+		t.Fatalf("got %v, %v; want nil, context.Canceled", got, err)
+	}
+}
+
+// --- LiveSessions ------------------------------------------------------------
+
+type liveSessionsFixture struct {
+	m                               *Module
+	live1, live2, unreadable, codex store.Frame
+	dead, reused, child, noSession  store.Frame
+}
+
+func newLiveSessionsFixture(t *testing.T) liveSessionsFixture {
+	t.Helper()
+	m := newTestModule(t)
+	f := liveSessionsFixture{m: m}
+	f.live1 = seedRootWithIdentity(t, m, "%1", "cc", 101, "st-101", "S1")
+	f.live2 = seedRootWithIdentity(t, m, "%2", "cc", 102, "st-102", "S2")
+	f.dead = seedRootWithIdentity(t, m, "%3", "cc", 103, "st-103", "S3")
+	f.reused = seedRootWithIdentity(t, m, "%4", "cc", 104, "st-104", "S4")
+	f.noSession = seedRootWithIdentity(t, m, "%5", "cc", 105, "st-105", "")
+	f.codex = seedRootWithIdentity(t, m, "%6", "codex", 106, "st-106", "S6")
+	f.unreadable = seedRootWithIdentity(t, m, "%7", "cc", 107, "st-107", "S7")
+	f.child = seedChildFrame(t, m, "%1", "cc", 108, "st-108", f.live1.FrameID)
+	if err := m.frames.UpdateSessionIdentity(f.child.FrameID, "S8", "", 1<<40); err != nil {
+		t.Fatal(err)
+	}
+	withLivePids(t, map[int]string{101: "st-101", 102: "st-102", 104: "st-OTHER", 105: "st-105", 106: "st-106", 107: "st-107", 108: "st-108"})
+	prev := processStartTimeFn
+	processStartTimeFn = func(pid int) (string, error) {
+		if pid == 107 {
+			return "", errors.New("ps failed")
+		}
+		return prev(pid)
+	}
+	t.Cleanup(func() { processStartTimeFn = prev })
+	return f
+}
+
+func liveByFrame(got []TerminalSession) map[string]TerminalSession {
+	out := map[string]TerminalSession{}
+	for _, g := range got {
+		out[g.FrameID] = g
+	}
+	return out
+}
+
+func TestLiveSessions_AgentTypeCC(t *testing.T) {
+	f := newLiveSessionsFixture(t)
+	got, err := f.m.LiveSessions(context.Background(), "cc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := liveByFrame(got)
+	if len(got) != 3 {
+		t.Fatalf("got %d, want 3 (two verified + one unverified): %+v", len(got), got)
+	}
+	for _, fr := range []store.Frame{f.live1, f.live2} {
+		if g, ok := by[fr.FrameID]; !ok || !g.Verified || g.SessionID != fr.SessionID {
+			t.Errorf("frame %s: want verified, got %+v ok=%v", fr.FrameID, g, ok)
+		}
+	}
+	if g, ok := by[f.unreadable.FrameID]; !ok || g.Verified {
+		t.Errorf("unreadable start time: want present and unverified, got %+v ok=%v", g, ok)
+	}
+	for _, fr := range []store.Frame{f.dead, f.reused, f.child, f.noSession, f.codex} {
+		if _, ok := by[fr.FrameID]; ok {
+			t.Errorf("frame %s must not be returned", fr.FrameID)
+		}
+	}
+}
+
+func TestLiveSessions_EmptyAgentTypeIncludesCodex(t *testing.T) {
+	f := newLiveSessionsFixture(t)
+	got, err := f.m.LiveSessions(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := liveByFrame(got)
+	if len(got) != 4 {
+		t.Fatalf("got %d, want 4: %+v", len(got), got)
+	}
+	if g, ok := by[f.codex.FrameID]; !ok || !g.Verified || g.AgentType != "codex" {
+		t.Errorf("codex frame wrong: %+v ok=%v", g, ok)
+	}
+}
+
+func TestLiveSessions_CancelledContext(t *testing.T) {
+	f := newLiveSessionsFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got, err := f.m.LiveSessions(ctx, "cc")
 	if !errors.Is(err, context.Canceled) || got != nil {
 		t.Fatalf("got %v, %v; want nil, context.Canceled", got, err)
 	}
