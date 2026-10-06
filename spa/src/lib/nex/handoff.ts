@@ -44,7 +44,7 @@ import {
   type NexHandoffResult, type NexTakebackResult, type NexTakeToTerminalResult,
 } from './handoff-api'
 
-/** In-flight keys: `handoff:<host>:<session>` and `takeback:<host>:<execution>`. */
+/** In-flight keys: `handoff:<host>:<session>`, `takeback:<host>:<execution>` and `rebuild:<host>:<pane>` (worker-rebuild.ts). */
 const inFlight = new Set<string>()
 
 export async function singleFlight<T>(key: string, run: () => Promise<T>): Promise<T> {

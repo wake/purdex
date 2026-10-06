@@ -14,6 +14,8 @@ import { isLiveRow } from '../../lib/nex/live-workers'
 import { takeToTerminal, handoffErrorMessage } from '../../lib/nex/handoff'
 import { HandoffApiError } from '../../lib/nex/handoff-api'
 import { rebuildAsWorker, rebuildErrorMessage } from '../../lib/nex/worker-rebuild'
+import { exitWorker, exitErrorMessage } from '../../lib/nex/exit-worker'
+import { useExecutionStore } from '../../stores/useExecutionStore'
 import type { ExecutionSummary } from '../../lib/nex/types'
 
 export type WorkerEndedKind = 'exited' | 'failed'
@@ -41,6 +43,8 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inFlight = useRef(false)
+  const [exiting, setExiting] = useState(false)
+  const exitInFlight = useRef(false)
 
   const kind = workerEndedKind(summary) ?? 'exited'
   const sid = summary.session_id || summary.resume_session_id || ''
@@ -54,7 +58,7 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
   const nothingAvailable = !terminalAvailable && !workerAvailable
 
   const rebuild = async () => {
-    if (inFlight.current || nothingAvailable) return
+    if (inFlight.current || exitInFlight.current || nothingAvailable) return
     inFlight.current = true
     setBusy(true)
     setError(null)
@@ -76,6 +80,24 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
     } finally {
       inFlight.current = false
       setBusy(false)
+    }
+  }
+
+  // 退出 on a failed stint (spec §5/§6): archive only, no confirm, no lease (the daemon borrows, D4).
+  const exit = async () => {
+    if (exitInFlight.current || inFlight.current) return
+    exitInFlight.current = true
+    setExiting(true)
+    setError(null)
+    try {
+      const result = await exitWorker({ hostId, executionId })
+      // As ExecutionView.runExit: patch at once, the SSE confirms later; this pane turns into "exited".
+      useExecutionStore.getState().applySummaryPatch(hostId, executionId, { state: result.state, archived: result.archived })
+    } catch (err) {
+      setError(exitErrorMessage(err, t))
+    } finally {
+      exitInFlight.current = false
+      setExiting(false)
     }
   }
 
@@ -104,12 +126,23 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
         <button
           type="button"
           data-testid="worker-rebuild"
-          disabled={busy || nothingAvailable}
+          disabled={busy || exiting || nothingAvailable}
           onClick={() => { void rebuild() }}
           className="px-4 py-1.5 text-sm rounded bg-zinc-700 text-zinc-100 hover:bg-zinc-600 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {t('worker.rebuild.button')}
         </button>
+        {kind === 'failed' && (
+          <button
+            type="button"
+            data-testid="worker-ended-exit"
+            disabled={exiting || busy}
+            onClick={() => { void exit() }}
+            className="text-sm text-zinc-400 hover:text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {t('worker.exit.button')}
+          </button>
+        )}
         {error && <p data-testid="worker-rebuild-error" role="alert" className="text-sm text-red-400">{error}</p>}
       </div>
     </RebuildScreen>

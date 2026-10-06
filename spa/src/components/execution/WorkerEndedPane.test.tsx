@@ -8,9 +8,12 @@ import { getPrimaryPane } from '../../lib/pane-tree'
 import { HandoffApiError } from '../../lib/nex/handoff-api'
 import { takeToTerminal } from '../../lib/nex/handoff'
 import { rebuildAsWorker } from '../../lib/nex/worker-rebuild'
+import { exitWorker } from '../../lib/nex/exit-worker'
+import { useExecutionStore } from '../../stores/useExecutionStore'
 import type { ExecutionSummary, NexCapabilities } from '../../lib/nex/types'
 
 vi.mock('../../lib/nex/handoff', async (o) => ({ ...(await o<typeof import('../../lib/nex/handoff')>()), takeToTerminal: vi.fn() }))
+vi.mock('../../lib/nex/exit-worker', async (o) => ({ ...(await o<typeof import('../../lib/nex/exit-worker')>()), exitWorker: vi.fn() }))
 vi.mock('../../lib/nex/worker-rebuild', async (o) => ({ ...(await o<typeof import('../../lib/nex/worker-rebuild')>()), rebuildAsWorker: vi.fn() }))
 
 const H = 'h', E = 'exc_1'
@@ -35,6 +38,8 @@ function renderPane(summary: ExecutionSummary) {
 beforeEach(() => {
   vi.mocked(takeToTerminal).mockReset().mockResolvedValue({ result: {}, swapped: true } as never)
   vi.mocked(rebuildAsWorker).mockReset().mockResolvedValue({ result: { execution_id: 'n', state: 'running' }, swapped: true })
+  vi.mocked(exitWorker).mockReset().mockResolvedValue({ exited: true, terminated: true, archived: true, state: 'terminated' })
+  useExecutionStore.setState({ executions: {} })
   useNexHostStore.setState({ byHost: { [H]: entry() } } as never)
   const tab = createTab({ kind: 'execution', executionId: E, host: H })
   tabId = tab.id
@@ -130,5 +135,49 @@ describe('WorkerEndedPane', () => {
     fireEvent.click(screen.getByTestId('rebuild-mode-terminal'))
     fireEvent.click(screen.getByTestId('worker-rebuild'))
     expect(await screen.findByTestId('worker-rebuild-error')).toBeInTheDocument()
+  })
+
+  describe('exit on a failed stint', () => {
+    const failed = () => sum({ state: 'rejected', reject_reason: 'x', resume_session_id: 'S', cwd: '/w' })
+    // Reads the summary from the store like ExecutionView does, so the patch re-renders the pane.
+    function Live() {
+      const s = useExecutionStore((x) => x.executions[`${H}:${E}`]?.summary)
+      return <WorkerEndedPane hostId={H} executionId={E} summary={s as ExecutionSummary} tabId={tabId} paneId={paneId} />
+    }
+
+    it('failed offers exit; exited does not', () => {
+      const { unmount } = renderPane(failed())
+      expect(screen.getByTestId('worker-ended-exit')).toHaveTextContent('Exit')
+      unmount()
+      renderPane(sum({ state: 'terminated', archived: true, session_id: 'S', cwd: '/w' }))
+      expect(screen.queryByTestId('worker-ended-exit')).toBeNull()
+    })
+
+    it('calls exitWorker with host and execution only, then turns into the exited screen', async () => {
+      useExecutionStore.getState().setSummary(H, E, failed())
+      render(<Live />)
+      fireEvent.click(screen.getByTestId('worker-ended-exit'))
+      await waitFor(() => expect(screen.getByText('This worker has exited')).toBeInTheDocument())
+      expect(exitWorker).toHaveBeenCalledWith({ hostId: H, executionId: E })
+      expect(screen.queryByTestId('worker-ended-exit')).toBeNull()
+    })
+
+    it('held_by names the principal inline', async () => {
+      vi.mocked(exitWorker).mockRejectedValue(new HandoffApiError(409, 'held_by', { principal: 'ploom:agent-7' }))
+      renderPane(failed())
+      fireEvent.click(screen.getByTestId('worker-ended-exit'))
+      expect(await screen.findByTestId('worker-rebuild-error')).toHaveTextContent('ploom:agent-7')
+    })
+
+    it('disables exit and rebuild while the exit is in flight', async () => {
+      let done!: () => void
+      vi.mocked(exitWorker).mockReturnValue(new Promise((r) => { done = () => r({ exited: true, terminated: true, archived: true, state: 'terminated' }) }))
+      renderPane(failed())
+      fireEvent.click(screen.getByTestId('worker-ended-exit'))
+      await waitFor(() => expect(screen.getByTestId('worker-ended-exit')).toBeDisabled())
+      expect(screen.getByTestId('worker-rebuild')).toBeDisabled()
+      done()
+      await waitFor(() => expect(screen.getByTestId('worker-ended-exit')).toBeEnabled())
+    })
   })
 })
