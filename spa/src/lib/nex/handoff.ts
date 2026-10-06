@@ -320,7 +320,9 @@ export const HANDOFF_ERROR_CODES: readonly string[] = [
   'interrupt_failed', 'send_failed', 'interrupt_unconfirmed', 'cc_start_timeout',
   // take-to-terminal (codes not already above)
   'session_exists', 'missing_session_name', 'invalid_session_name', 'session_create_failed',
-  'cwd_missing', 'provider_unsupported', 'takeback_in_progress', 'execution_archived', 'archive_failed',
+  'cwd_missing', 'provider_unsupported', 'takeback_in_progress', 'execution_archived',
+  // conversation owner (P1a; owners.go / control.go / handoff.go / takeback.go / take_to_terminal.go)
+  'session_owned', 'transfer_in_progress', 'owner_check_failed', 'lease_contended',
   // client
   'network', 'host_removed',
 ]
@@ -362,9 +364,13 @@ function paramsFor(t: TFunction, err: HandoffApiError): Record<string, string | 
     case 'session_exists':
     case 'session_create_failed':
       return { session_name: str(b, 'session_name') }
+    case 'session_owned': {
+      const owner = b.owner
+      return { where: owner === 'terminal' ? t('handoff.owner.terminal') : owner === 'worker' ? t('handoff.owner.worker') : '?' }
+    }
     case 'execution_archived':
-      // Recovery contract (spec §4.5): name the session so the user can
-      // Unarchive under Host › Nex or resume by hand.
+      // The worker is no longer live: name the session so the user can
+      // resume it by hand (or take it to a terminal).
       return { session_id: str(b, 'session_id') }
     default:
       return undefined
