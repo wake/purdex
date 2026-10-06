@@ -83,6 +83,14 @@ describe('useEntityStints', () => {
     await waitFor(() => expect(result.current.status).toBe('unavailable'))
   })
 
+  it('a page with a dropped (malformed) row is unavailable and fetches no boundary', async () => {
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: [row('a', 1), { state: 'idle' }], next_cursor: '' } as never)
+    const { result } = renderHook(() => useEntityStints('h', cur(), true))
+    await waitFor(() => expect(result.current.status).toBe('unavailable'))
+    expect(result.current.stints).toEqual([])
+    expect(api.fetchExecutionPrelude).not.toHaveBeenCalled()
+  })
+
   it('a fresh-start row has boundary 0 with no prelude fetch; a failed boundary fetch drops only that stint', async () => {
     vi.mocked(api.listExecutions).mockResolvedValue({ items: [row('fresh', 1, ''), row('bad', 2), row('none', 3), row('ok', 4)], next_cursor: '' } as never)
     vi.mocked(api.fetchExecutionPrelude).mockImplementation(async (_h, id) => {

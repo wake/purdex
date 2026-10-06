@@ -15,7 +15,8 @@ const EMPTY: Stint[] = []
 /**
  * Lists ALL the entity's stints (includeArchived, cursor walked to the end:
  * the newest come last), then fetches one boundary per recent stint. Any
- * partial or failed walk is 'unavailable': no attribution beats a wrong one (§10.6).
+ * partial walk (truncated, stuck, or rows dropped as malformed) or failed
+ * walk is 'unavailable': no attribution beats a wrong one (§10.6).
  */
 export function useEntityStints(hostId: string, summary: ExecutionSummary | null, enabled: boolean): { stints: Stint[]; status: StintsStatus } {
   const sessionFilter = useNexHostStore(selectSessionFilter(hostId))
@@ -39,7 +40,7 @@ export function useEntityStints(hostId: string, summary: ExecutionSummary | null
           isCurrent,
         )
         if (!listed || cancelled) return
-        if (listed.truncated || listed.stuck) { setResult({ tuple, status: 'unavailable', stints: EMPTY }); return }
+        if (listed.truncated || listed.stuck || listed.dropped > 0) { setResult({ tuple, status: 'unavailable', stints: EMPTY }); return }
         rows = listed.items
       } catch {
         if (!cancelled) setResult({ tuple, status: 'unavailable', stints: EMPTY })
