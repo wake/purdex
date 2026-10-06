@@ -68,6 +68,18 @@ describe('useExecutionStore', () => {
     expect(st.summaryStale).toBe(false)
   })
 
+  it('a summary fetch that started before applySummaryPatch is dropped; a later one lands', () => {
+    const s = useExecutionStore.getState()
+    s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'idle', archived: false } as never)
+    const gen = useExecutionStore.getState().executions['h:exc_1'].summaryGen
+    s.applySummaryPatch('h', 'exc_1', { state: 'terminated', archived: true })
+    s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'idle', archived: false } as never, 0, gen)
+    expect(useExecutionStore.getState().executions['h:exc_1'].summary).toMatchObject({ state: 'terminated', archived: true })
+    const gen2 = useExecutionStore.getState().executions['h:exc_1'].summaryGen
+    s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'terminated', archived: true, brief: 'fresh' } as never, 0, gen2)
+    expect(useExecutionStore.getState().executions['h:exc_1'].summary).toMatchObject({ brief: 'fresh' })
+  })
+
   it('setSummary keeps summaryStale AND the existing summary untouched when a newer lifecycle event landed during the refetch', () => {
     // Seed an existing summary first — this is what a stale fetch must not
     // clobber; a null summary is the separate first-fetch case below.

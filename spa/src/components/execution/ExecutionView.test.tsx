@@ -304,6 +304,16 @@ describe('ExecutionView', () => {
     await waitFor(() => expect(screen.getByTestId('header-exit')).toBeDisabled())
   })
 
+  it('a summary fetch that started before the exit cannot revive the pane when it lands late', async () => {
+    render(<ExecutionView {...base} isActive />)
+    const gen = useExecutionStore.getState().executions[KEY].summaryGen
+    fireEvent.click(screen.getByTestId('header-exit'))
+    await waitFor(() => expect(useExecutionStore.getState().executions[KEY].summary?.state).toBe('terminated'))
+    act(() => { useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', archived: false }) as never, 0, gen) })
+    expect(useExecutionStore.getState().executions[KEY].summary?.state).toBe('terminated')
+    expect(screen.getByTestId('header-exit')).toBeDisabled()
+  })
+
   it('disables input with a reason when archived or ended', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ archived: true }) as never)
     const { rerender } = render(<ExecutionView {...base} isActive />)

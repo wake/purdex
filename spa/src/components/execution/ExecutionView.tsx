@@ -200,8 +200,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       const result = await exitWorker({ hostId, executionId, leaseId: useExecutionStore.getState().executions[key]?.lease?.leaseId, forgetLease: lease.forget })
       // Patch the summary at once from the result (the SSE confirms later): no longer live,
       // so exit stays disabled and the ended handling takes over.
-      const cur = useExecutionStore.getState().executions[key]?.summary
-      if (cur) useExecutionStore.getState().setSummary(hostId, executionId, { ...cur, state: result.state, archived: result.archived })
+      useExecutionStore.getState().applySummaryPatch(hostId, executionId, { state: result.state, archived: result.archived })
     } catch (err) {
       useUndoToast.getState().show(exitErrorMessage(err, t))
     } finally {

@@ -37,7 +37,12 @@ interface ExecutionStore {
    * that don't track a cursor may omit `asOfSeq`, which always adopts the
    * summary and clears `summaryStale` (today's behaviour).
    */
-  setSummary: (hostId: string, executionId: string, summary: ExecutionSummary | null, asOfSeq?: number) => void
+  setSummary: (hostId: string, executionId: string, summary: ExecutionSummary | null, asOfSeq?: number, gen?: number) => void
+  /**
+   * Merge a locally known summary change (the exit result) and bump `summaryGen`, so a summary
+   * fetch that started before it (`gen` older) is dropped when it lands. The SSE path is untouched.
+   */
+  applySummaryPatch: (hostId: string, executionId: string, change: Partial<ExecutionSummary>) => void
   applyEvents: (hostId: string, executionId: string, events: NexEvent[]) => void
   /**
    * Fold a batch of transient SSE frames (no id / no cursor: `stream_event`,
@@ -88,12 +93,16 @@ export const useExecutionStore = create<ExecutionStore>()(subscribeWithSelector(
   return {
     executions: {},
 
-    setSummary: (h, e, summary, asOfSeq) =>
+    setSummary: (h, e, summary, asOfSeq, gen) =>
       patch(h, e, (c) => {
+        if (gen != null && gen < c.summaryGen) return c
         if (asOfSeq == null) return { ...c, summary, summaryStale: false }
         const stale = c.lastSeq > asOfSeq
         return { ...c, summary: stale && c.summary !== null ? c.summary : summary, summaryStale: stale }
       }),
+
+    applySummaryPatch: (h, e, change) =>
+      patch(h, e, (c) => (c.summary ? { ...c, summary: { ...c.summary, ...change }, summaryGen: c.summaryGen + 1 } : c)),
 
     applyEvents: (h, e, events) => patch(h, e, (c) => events.reduce(applyDurableEvent, c)),
 
