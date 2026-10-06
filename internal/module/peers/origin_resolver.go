@@ -1,6 +1,8 @@
 package peers
 
 import (
+	"fmt"
+
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
@@ -18,21 +20,23 @@ const OriginResolverKey = "peers.origin-resolver"
 type OriginResolver struct{ m *Module }
 
 // ResolveOrigin returns the live, non-proxy registry entry whose inbox is
-// inbox, as a team.Origin. ok is false for an empty inbox, an unknown or
-// dead one, a proxy helper, and a registry read error (logged): none of
-// those can be attributed to a session.
-func (r *OriginResolver) ResolveOrigin(inbox string) (team.Origin, bool) {
+// inbox, as a team.Origin. ok is false (and err nil) for an empty inbox, an
+// unknown or dead one and a proxy helper: the registry was read and none of
+// those is a session. err is non-nil only when the registry could not be
+// read (logged) — the caller must not report that as an unknown origin; the
+// team handler answers 503 not_ready so the CLI retries.
+func (r *OriginResolver) ResolveOrigin(inbox string) (team.Origin, bool, error) {
 	if inbox == "" {
-		return team.Origin{}, false
+		return team.Origin{}, false, nil
 	}
 	entries, _, err := ipeers.ReadRegistry(r.m.registryDir, r.m.liveness)
 	if err != nil {
 		r.m.logf("peers: origin resolver: read registry: %v", err)
-		return team.Origin{}, false
+		return team.Origin{}, false, fmt.Errorf("read registry: %w", err)
 	}
 	e, found := findOriginEntry(entries, r.m.proxyPIDs(), inbox)
 	if !found {
-		return team.Origin{}, false
+		return team.Origin{}, false, nil
 	}
 	ref := ipeers.RefID(e.SessionID)
 	alias := r.m.configSnapshot().alias
@@ -50,7 +54,7 @@ func (r *OriginResolver) ResolveOrigin(inbox string) (team.Origin, bool) {
 		Tmux:      e.Tmux,
 		Title:     r.titleOf(e.SessionID),
 		Address:   addr,
-	}, true
+	}, true, nil
 }
 
 // titleOf is the session's title from the title store, or "" when there is

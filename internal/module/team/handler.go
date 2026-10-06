@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -103,10 +105,16 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if !m.decodeBody(w, r, &req) {
 		return
 	}
-	if req.ID == "" || len(req.ID) > 128 {
-		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "id is required (UUID v4) and at most 128 bytes", nil)
+	// id is the CLI-generated UUID v4 (spec §6.1). Any form uuid.Parse
+	// accepts is fine — hex case, braces or a urn: prefix — as long as it is
+	// version 4 of the RFC 4122 variant; it is stored canonical (lowercase,
+	// hyphenated), so a retry in another spelling is the same request.
+	u, err := uuid.Parse(req.ID)
+	if err != nil || u.Version() != 4 || u.Variant() != uuid.RFC4122 {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "id must be a UUID v4", nil)
 		return
 	}
+	req.ID = u.String()
 	switch req.Kind {
 	case team.KindLead:
 	case team.KindSelfRelay:
@@ -125,7 +133,14 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "reason is required", nil)
 		return
 	}
-	origin, ok := m.origins.ResolveOrigin(req.OriginInbox)
+	origin, ok, err := m.origins.ResolveOrigin(req.OriginInbox)
+	if err != nil {
+		// The registry could not be read (already logged by the resolver):
+		// not an unknown origin. 503 not_ready is what the restart-aware
+		// CLI retries; origin_unknown it would give up on.
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "registry unavailable; retry", nil)
+		return
+	}
 	if !ok {
 		m.writeErr(w, http.StatusBadRequest, team.ErrOriginUnknown, "origin_inbox is not a live Claude Code session on this host", nil)
 		return
@@ -149,18 +164,44 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := requestHash(req.Kind, origin.SessionID, waitS, payload)
 
+	// Everything from here to the insert is one critical section: Stop
+	// cancels stopCtx under the same lock, so a create that passed the
+	// entry check before Stop ran still sees stopping here and writes
+	// nothing (no row, no event).
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
+	if m.stopping() {
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon is stopping", nil)
+		return
+	}
+	// Idempotency on id comes first (spec §6.2 "Create (idempotent on id)"):
+	// a retry answers for the row it created, whatever state that row is in
+	// now and whatever else the origin has opened since. The request_open
+	// rule applies to new ids only.
+	existing, storedHash, err := m.store.getRow(req.ID)
+	switch {
+	case err == nil:
+		if storedHash != hash {
+			m.writeErr(w, http.StatusConflict, team.ErrIDConflict, "id already used by a different request", nil)
+			return
+		}
+		m.writeJSON(w, http.StatusOK, existing)
+		return
+	case !errors.Is(err, ErrNoSuchApproval):
+		m.logf("[team] create %s: %v", req.ID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
 	if open, found, err := m.store.OpenByOrigin(origin.SessionID, req.Kind); err != nil {
 		m.logf("[team] create %s: %v", req.ID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
-	} else if found && open.ID != req.ID {
+	} else if found {
 		m.writeErr(w, http.StatusConflict, team.ErrRequestOpen, "this session already has an open lead request", &open)
 		return
 	}
 	now := m.now()
-	stored, storedHash, inserted, err := m.store.Create(team.Approval{
+	stored, _, inserted, err := m.store.Create(team.Approval{
 		ID: req.ID, Kind: req.Kind, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
 		CreatedAt: now, DeadlineAt: now + int64(waitS)*1000, LeaseUntil: now + team.LeaseS*1000,
 	}, hash)
@@ -170,11 +211,11 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !inserted {
-		if storedHash != hash {
-			m.writeErr(w, http.StatusConflict, team.ErrIDConflict, "id already used by a different request", nil)
-			return
-		}
-		m.writeJSON(w, http.StatusOK, stored)
+		// Unreachable while create is the only inserter and runs under
+		// createMu after the getRow above; kept so a second writer could
+		// never make this path broadcast or 201 for a row it did not open.
+		m.logf("[team] create %s: id appeared between check and insert", req.ID)
+		m.writeErr(w, http.StatusConflict, team.ErrIDConflict, "id already used by a different request", nil)
 		return
 	}
 	m.logf("[team] approval %s opened: kind=%s origin=%s (%s) reason=%q", stored.ID, stored.Kind, origin.Ref, origin.SessionID, reason)

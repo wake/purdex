@@ -50,9 +50,9 @@ func (fakeTitles) Release(string, time.Time) (store.PeerLabel, bool, error) {
 
 func TestOriginResolver_ResolveOrigin(t *testing.T) {
 	r, dir := resolverFixture(t, allLiveLiveness(fixture76973ProcStart))
-	o, ok := r.ResolveOrigin(dir + "/10.sock")
-	if !ok {
-		t.Fatal("pid 10 must resolve")
+	o, ok, err := r.ResolveOrigin(dir + "/10.sock")
+	if !ok || err != nil {
+		t.Fatalf("pid 10 must resolve: ok=%v err=%v", ok, err)
 	}
 	if o.SessionID != "sid-1" || o.Ref != ipeers.RefID("sid-1") || o.Name != "n10" || o.PID != 10 ||
 		o.ProcStart != targetProcStart || o.Cwd != "/w" || o.Tmux != "mt0:@1.%1" {
@@ -61,23 +61,24 @@ func TestOriginResolver_ResolveOrigin(t *testing.T) {
 	if o.Title != "lead-team" || o.Address != "mlab/n10" {
 		t.Fatalf("title/address = %q/%q, want lead-team / mlab/n10", o.Title, o.Address)
 	}
-	if o2, ok := r.ResolveOrigin(dir + "/20.sock"); !ok || o2.Tmux != "" || o2.Name != "" || o2.Cwd != "/w2" ||
+	if o2, ok, err := r.ResolveOrigin(dir + "/20.sock"); !ok || err != nil || o2.Tmux != "" || o2.Name != "" || o2.Cwd != "/w2" ||
 		o2.Title != "" || o2.Address != "mlab/"+ipeers.RefID("sid-2") {
-		t.Fatalf("pid 20 = %+v ok=%v (no title; address falls back to the ref)", o2, ok)
+		t.Fatalf("pid 20 = %+v ok=%v err=%v (no title; address falls back to the ref)", o2, ok, err)
 	}
 	r.m.titles = nil
-	if o3, ok := r.ResolveOrigin(dir + "/10.sock"); !ok || o3.Title != "" || o3.Address != "mlab/n10" {
-		t.Fatalf("nil title store must give an empty title, not a panic: %+v ok=%v", o3, ok)
+	if o3, ok, err := r.ResolveOrigin(dir + "/10.sock"); !ok || err != nil || o3.Title != "" || o3.Address != "mlab/n10" {
+		t.Fatalf("nil title store must give an empty title, not a panic: %+v ok=%v err=%v", o3, ok, err)
 	}
 	r.m.titles = failingTitles{}
-	if o4, ok := r.ResolveOrigin(dir + "/10.sock"); !ok || o4.Title != "" {
-		t.Fatalf("a failing title store must give an empty title: %+v ok=%v", o4, ok)
+	if o4, ok, err := r.ResolveOrigin(dir + "/10.sock"); !ok || err != nil || o4.Title != "" {
+		t.Fatalf("a failing title store must give an empty title: %+v ok=%v err=%v", o4, ok, err)
 	}
-	if _, ok := r.ResolveOrigin(""); ok {
-		t.Fatal("empty inbox must not resolve")
+	// Not found is ok=false with no error: the registry was read and does not have it.
+	if _, ok, err := r.ResolveOrigin(""); ok || err != nil {
+		t.Fatalf("empty inbox must not resolve: ok=%v err=%v", ok, err)
 	}
-	if _, ok := r.ResolveOrigin(dir + "/99.sock"); ok {
-		t.Fatal("unknown inbox must not resolve")
+	if _, ok, err := r.ResolveOrigin(dir + "/99.sock"); ok || err != nil {
+		t.Fatalf("unknown inbox must not resolve: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -85,8 +86,8 @@ func TestOriginResolver_DeadAndProxyEntriesDoNotResolve(t *testing.T) {
 	live := allLiveLiveness(fixture76973ProcStart)
 	live.PidAlive = func(pid int) bool { return pid != 10 }
 	r, dir := resolverFixture(t, live)
-	if _, ok := r.ResolveOrigin(dir + "/10.sock"); ok {
-		t.Fatal("a dead pid must not resolve")
+	if _, ok, err := r.ResolveOrigin(dir + "/10.sock"); ok || err != nil {
+		t.Fatalf("a dead pid must not resolve: ok=%v err=%v", ok, err)
 	}
 	if !r.LiveSession("sid-2") || r.LiveSession("sid-1") || r.LiveSession("") {
 		t.Fatal("LiveSession must follow registry liveness")
@@ -102,8 +103,8 @@ func TestOriginResolver_DeadAndProxyEntriesDoNotResolve(t *testing.T) {
 		return iagent.ProcessInfo{PID: pid, Argv: argv, StartTime: fixture76973ProcStart}, nil
 	}
 	r2, dir2 := resolverFixture(t, proxy)
-	if _, ok := r2.ResolveOrigin(dir2 + "/20.sock"); ok {
-		t.Fatal("a proxy helper must not resolve as an origin")
+	if _, ok, err := r2.ResolveOrigin(dir2 + "/20.sock"); ok || err != nil {
+		t.Fatalf("a proxy helper must not resolve as an origin: ok=%v err=%v", ok, err)
 	}
 	if r2.LiveSession("sid-2") || !r2.LiveSession("sid-1") {
 		t.Fatal("a proxy helper's session id must not count as live")
@@ -122,7 +123,9 @@ func TestOriginResolver_RegistryReadErrorIsUnknownNotDead(t *testing.T) {
 	if !r.LiveSession("sid-1") {
 		t.Fatal("a registry read error must not report the session dead")
 	}
-	if _, ok := r.ResolveOrigin("/any.sock"); ok {
-		t.Fatal("a registry read error cannot attribute an origin")
+	// ResolveOrigin surfaces the read error (the handler answers 503 and the
+	// CLI retries) instead of ok=false, which would read as origin_unknown.
+	if _, ok, err := r.ResolveOrigin("/any.sock"); ok || err == nil {
+		t.Fatalf("a registry read error must be an error, not an unknown origin: ok=%v err=%v", ok, err)
 	}
 }

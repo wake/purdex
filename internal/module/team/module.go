@@ -19,8 +19,12 @@ import (
 // answers whether a session is still live. The peers module's
 // *OriginResolver is the production value (registry key
 // peersmod.OriginResolverKey); tests inject a fake.
+//
+// ResolveOrigin's error is a registry read failure only: the caller answers
+// it with 503 not_ready (retry), never origin_unknown. ok=false with a nil
+// error means the registry was read and the inbox is not a live session.
 type OriginResolver interface {
-	ResolveOrigin(inbox string) (team.Origin, bool)
+	ResolveOrigin(inbox string) (team.Origin, bool, error)
 	LiveSession(sessionID string) bool
 }
 
@@ -40,7 +44,10 @@ type Module struct {
 	sweepWG    sync.WaitGroup
 	tickN      int // sweeper ticks so far; only the sweeper goroutine (or a test) touches it
 
-	createMu sync.Mutex // serialises the request_open check with the insert
+	// createMu serialises create's check-then-insert (idempotent retry,
+	// request_open, insert) and Stop's cancel of stopCtx: a create either
+	// finishes before Stop, or takes the lock after it and sees stopping.
+	createMu sync.Mutex
 
 	mu      sync.Mutex
 	waiters map[string][]chan struct{} // long-polls per approval id; closed when it closes
@@ -95,9 +102,13 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 func (m *Module) Start(context.Context) error { return nil }
 
 // Stop cancels stopCtx (long-polls return, create answers not_ready) and
-// joins the sweeper. Idempotent. The DB is closed in Close.
+// joins the sweeper. Idempotent. The DB is closed in Close. The cancel is
+// taken under createMu so no create inserts after Stop returns: one that
+// is past its entry check waits for the lock and then re-checks stopping.
 func (m *Module) Stop(context.Context) error {
+	m.createMu.Lock()
 	m.stopCancel()
+	m.createMu.Unlock()
 	m.sweepWG.Wait()
 	return nil
 }
