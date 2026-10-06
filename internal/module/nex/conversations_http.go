@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"github.com/wake/purdex/internal/conversations"
@@ -60,10 +61,13 @@ type convSnapshot struct {
 // convFlight is the snapshot in progress. done is closed once snap and err
 // are set.
 type convFlight struct {
-	done    chan struct{}
-	snap    *convSnapshot
-	err     error
-	waiters int // callers that waited on it (under convMu)
+	done chan struct{}
+	snap *convSnapshot
+	err  error
+	// waiters counts the callers that waited on it (under convMu). It exists
+	// only so tests can wait deterministically for N waiters to have joined;
+	// production code never reads it.
+	waiters int
 }
 
 // conversationsResponse is the 200 body.
@@ -238,10 +242,12 @@ func (m *Module) runConversationFlight(f *convFlight) {
 // frames, join. A failure of the scan's index, the index, the List or
 // LiveSessions fails it; a root error does not (R-4-1, the result carries
 // it). ctx is checked at every boundary. It runs on a goroutine of its own,
-// so a panic is recovered into an error rather than taking the daemon down.
+// so a panic is recovered into an error rather than taking the daemon down;
+// the stack goes to the log only, never into the error a client sees.
 func (m *Module) collectConversations(ctx context.Context) (snap *convSnapshot, err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			m.logf("nex: conversations: snapshot panicked: %v\n%s", r, debug.Stack())
 			snap, err = nil, fmt.Errorf("panic: %v", r)
 		}
 	}()

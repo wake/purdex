@@ -470,6 +470,26 @@ func TestConversationsHTTP_FailuresAnswer503AndAreNotCached(t *testing.T) {
 	}
 }
 
+// The flight runs on its own goroutine: a panic there is recovered into a 503
+// (the daemon stays up), logged with its stack; the client gets no stack.
+func TestConversationsHTTP_AScanPanicIs503AndLogsItsStack(t *testing.T) {
+	env := newConvEnv(t)
+	env.m.convScan = func(context.Context, string, conversations.Index, func() time.Time) (conversations.ScanResult, error) {
+		panic("scan blew up")
+	}
+
+	status, res := env.get(t, "?state=ended")
+	assert.Equal(t, http.StatusServiceUnavailable, status)
+	assert.Equal(t, "conversations_unavailable", res.Code)
+	assert.Contains(t, res.Error, "panic: scan blew up")
+	assert.NotContains(t, res.Error, "goroutine ", "the stack stays in the log")
+	assert.Nil(t, env.cached())
+	lines := env.logs.find("nex: conversations: snapshot panicked: scan blew up")
+	require.Len(t, lines, 1)
+	assert.Contains(t, lines[0], "goroutine ")
+	assert.Contains(t, lines[0], "collectConversations")
+}
+
 func TestConversationsHTTP_NoIndexWiredAnswers503(t *testing.T) {
 	env := newHandoffEnv(t) // the module was never given an index
 	status, res := getConversations(t, env.srv.URL, "?state=ended")
