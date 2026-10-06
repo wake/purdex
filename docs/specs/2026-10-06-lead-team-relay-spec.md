@@ -1,6 +1,6 @@
 # Lead / member / team and context relay — spec
 
-Status: **draft, for review by `air26/_9iwyyv`** against the user decisions in §2.
+Status: **passed review by `air26/_9iwyyv` on 2026-10-06** (c358cd65 plus the released-prompt note). Next: the plan.
 - Spec writer: `mlab/purdex-4d` (`mlab/_v3o1ps`).
 - Source: the brief `docs/ideas/2026-10-06-lead-team/brief.md` (untracked on mlab's main checkout), with the prototype mod `relay-mod/` and its handoff `handoff-run1.md` beside it.
 - Research page: `https://pages.mlab.host/wake/purdex/context-relay.html`.
@@ -679,6 +679,12 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
   - The mod submits the write prompt once idle. It recognises its own write turn by the turn that `$.prompt.submit` started, not by "the next `turn.complete`". So queued prompts that run first do not trigger the handoff check early.
   - **⟲ changed after air26's review (3), which asked to drop and then re-submit with `asUser: true`.** A re-submitted prompt loses its `@file` mentions and pasted images, and stays attributed to the plugin (M12). Letting the person's own prompt run in the old conversation keeps it whole. That costs one turn of context, which is affordable at 70–80% used.
   - The handoff then records that turn too.
+  - **A note for the model on released prompts (air26 review).** The release is `next({ ...e, context: [...(e.context ?? []), NOTE] })`. `context` reaches the model beside the prompt and is never shown to the user (2.1.291 types, `PromptSubmitResult.context`). NOTE says:
+    > 接力已核准，這一輪只做簡短回應；如果這是一件新工作，不要開始做，把它寫進交接檔「下一步」的第一項，由接手後的新對話處理。
+
+    Why: without it, the old conversation could take on a large new task at its fullest (70–80%). That defeats relaying early, and could run into auto-compact.
+    - `@file` mentions and images still expand in the old conversation, so the handoff can record their paths and gist.
+    - This is a soft constraint: the model may not follow it. The backstop is §8.7(c): an approved relay not yet written skips auto-compact.
   - If the plan finds the write turn cannot be told apart reliably, it falls back to air26's way: drop, then re-submit after the seed, `asUser: true` for a typed prompt and the envelope kept for a peer message. In that case, a prompt carrying `@file` mentions or images is released instead of dropped.
 - **Denied or timed out:** the held prompt goes through unchanged (`next(e)`).
 - **Esc:** it abandons that dispatch, so that prompt is not sent. The request stays open.
@@ -902,6 +908,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 - **self relay under U13:**
   - a prompt that arrives while a request is open waits;
   - on approval it runs in the current conversation, and the write turn is recognised by its own turn even with queued prompts ahead of it;
+  - a released prompt carries NOTE in its `context`, appended after any context already attached; a prompt released after a denial or a timeout carries no NOTE;
   - on denial it passes unchanged;
   - asking again only at +10 points;
   - auto-compact runs, and cancels the request, unless the relay is already approved;
