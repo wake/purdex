@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.522] - 2026-10-07
+
+> 只新增 `pdx` 指令端的程式碼，**指令還沒接進 `pdx` 的入口**（下一個 PR 才會），不需要部署。daemon、資料庫、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P2b-2（#1677）
+
+- **exit code**（spec §14）：0 核准／完成、1 錯誤、2 用法、10 拒絕、11 逾時（視同拒絕）、12 取消或放棄、13 被 team 規則拒絕、14 member 未啟動或未回應、20 daemon 連不上、21 daemon 不支援這個指令。
+- **`pdx lead request --reason <text> [--max-members N] [--root <dir>]... [--wait 9m]`**（實作完成，待接入口）：向 daemon 提出 lead 申請並在前景等待核准。
+  - 先印一行「申請 lead 中（<id>），請在 Purdex 介面核准；這個呼叫必須在前景等待（Bash timeout 600000）」，然後每 25 秒輪詢一次、每次都續約；核准後 stdout 印出申請 id 與 grant（team id 要等 P4）。
+  - 等待期間 daemon 重啟會自動撐過（沿用上一版的 client）；daemon 接了連線卻連續三次不回應才放棄（exit 20「daemon 沒有回應」）。
+  - Ctrl-C 或被 kill 會先取消申請再結束（exit 12）。
+  - 用法錯誤立即 exit 2，不讀設定也不連 daemon。
+
 ## [1.0.0-alpha.521] - 2026-10-07
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。這一版畫面上還看不到變化（要等已退出分頁接上才會出現）。
