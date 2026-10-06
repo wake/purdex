@@ -2,10 +2,14 @@ package agent
 
 import (
 	"fmt"
+	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/tmux"
@@ -87,6 +91,42 @@ func TestContextUsage_RecordsModelAndEffort(t *testing.T) {
 	b, ok := m.ContextUsage("B")
 	if !ok || b.ModelID != "" || b.Effort != "" {
 		t.Fatalf("B = %+v ok=%v, want empty model and effort when the payload has neither", b, ok)
+	}
+}
+
+// codex R2 (2026-10-07): a successful statusline remove rebuilds
+// statusSnapshots; the per-session context usage must go with it, or
+// /api/peers and `pdx peers` keep showing a stale CTX after the statusline
+// is gone. Drives the remove exactly like
+// TestHandleStatuslineSetup_RemoveBroadcastsCleared does.
+func TestContextUsage_ClearedByStatuslineRemove(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"),
+		[]byte(`{"statusLine":{"type":"command","command":"/opt/bin/pdx statusline-proxy"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := usageModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+	postStatus(t, m, "sess1", `{"session_id":"A","context_window":{"used_percentage":90,"context_window_size":200000}}`)
+	if _, ok := m.ContextUsage("A"); !ok {
+		t.Fatal("precondition: usage for A must be recorded before the remove")
+	}
+
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", strings.NewReader(`{"action":"remove"}`))
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+	m.handleStatuslineSetup(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("remove status %d, body: %s", w.Code, w.Body.String())
+	}
+
+	if u, ok := m.ContextUsage("A"); ok {
+		t.Fatalf("usage for A = %+v still present after statusline remove; want cleared", u)
 	}
 }
 
