@@ -84,8 +84,37 @@ func TestReadTail_TitleBeforeTheWindowIsMissed(t *testing.T) {
 	if tail != (Tail{}) {
 		t.Errorf("tail = %+v, want empty", tail)
 	}
-	if n != TailWindow {
-		t.Errorf("n = %d, want %d", n, TailWindow)
+	// The byte before the window is read too, to tell a cut line from a
+	// whole one.
+	if n != TailWindow+1 {
+		t.Errorf("n = %d, want %d", n, TailWindow+1)
+	}
+}
+
+func TestReadTail_KeepsALineStartingExactlyAtTheWindowStart(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "t.jsonl")
+	before := join(lines(t, aiTitle("before")), padding(t, 4096))
+	edge := line(t, aiTitle("on the edge"))
+	writeFile(t, p, before, edge, padding(t, TailWindow-len(edge)))
+	if start := fileSize(t, p) - TailWindow; start != int64(len(before)) {
+		t.Fatalf("fixture: window starts at %d, want %d", start, len(before))
+	}
+
+	tail, n := readTail(t, p, -1)
+	if tail.AITitle != "on the edge" {
+		t.Errorf("AITitle = %q, want %q", tail.AITitle, "on the edge")
+	}
+	if n != TailWindow+1 {
+		t.Errorf("n = %d, want %d", n, TailWindow+1)
+	}
+}
+
+func TestReadTail_EmptyFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "t.jsonl")
+	writeFile(t, p)
+	tail, n := readTail(t, p, -1)
+	if tail != (Tail{}) || n != 0 {
+		t.Errorf("ReadTail(empty) = %+v, %d; want zero, 0", tail, n)
 	}
 }
 

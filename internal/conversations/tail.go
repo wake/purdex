@@ -26,25 +26,34 @@ type tailLine struct {
 
 // ReadTail parses the last TailWindow bytes of a file of the given size:
 // [max(0, size-TailWindow), size), read with ReadAt. When the window does
-// not start at byte 0 its first piece is dropped, as a line the window's
-// edge may cut. Every other piece, the final one without '\n' included, is
-// parsed and skipped when it is not a JSON object. LastEntrypoint is the
-// last entrypoint; CustomTitle and AITitle are the last non-empty
-// (TrimSpace'd) customTitle of a custom-title line and aiTitle of an
-// ai-title line. n is the number of bytes read; a file that shrank below
-// size gives what is left of the window.
+// not start at byte 0, the byte before it is read too, and everything up to
+// and including the first '\n' is dropped: a line the window's edge cuts is
+// skipped (§13.6), while a line that starts exactly at the window start
+// (the byte before it is that '\n') is kept whole. Every remaining piece,
+// the final one without '\n' included, is parsed and skipped when it is not
+// a JSON object. LastEntrypoint is the last entrypoint; CustomTitle and
+// AITitle are the last non-empty (TrimSpace'd) customTitle of a
+// custom-title line and aiTitle of an ai-title line. n is the number of
+// bytes read, the byte before the window included; a file that shrank below
+// size gives what is left.
 func ReadTail(f *os.File, size int64) (t Tail, n int64, err error) {
 	if size <= 0 {
 		return t, 0, nil
 	}
 	start := max(0, size-TailWindow)
-	buf := make([]byte, size-start)
-	m, err := f.ReadAt(buf, start)
+	from := start
+	if start > 0 {
+		from = start - 1
+	}
+	buf := make([]byte, size-from)
+	m, err := f.ReadAt(buf, from)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return t, int64(m), fmt.Errorf("conversations: read tail: %w", err)
 	}
 	buf = buf[:m]
 	if start > 0 {
+		// buf[0] is the byte before the window: when it is '\n', only it is
+		// dropped.
 		i := bytes.IndexByte(buf, '\n')
 		if i < 0 {
 			return t, int64(m), nil

@@ -252,3 +252,12 @@ func TestScanHead_DoneHeadIsNotReadAgain(t *testing.T) {
 		t.Errorf("ScanHead(done) = %+v, %d; want %+v, 0", h, n, prev)
 	}
 }
+
+func TestScanHead_EmptyFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "t.jsonl")
+	writeFile(t, p)
+	h, n := scanHead(t, p, Head{})
+	if h != (Head{}) || n != 0 {
+		t.Errorf("ScanHead(empty) = %+v, %d; want zero, 0", h, n)
+	}
+}
