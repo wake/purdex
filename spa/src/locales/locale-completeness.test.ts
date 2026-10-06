@@ -91,6 +91,40 @@ describe('locale completeness', () => {
     })
   })
 
+  // The approval namespace (lead-team spec §6.3, §9.5). The four strings the spec fixes word for word are pinned in
+  // zh-TW, and a translation that dropped a `{{client}}` would hide WHO approved — the one fact U6's toast exists for.
+  describe('the approval namespace', () => {
+    const approvalKeys = (o: Record<string, string>) => Object.keys(o).filter((k) => k.startsWith('approval.')).sort()
+    const enA = approvalKeys(en as Record<string, string>)
+    const zhA = approvalKeys(zhTW as Record<string, string>)
+
+    it('exists with identical key sets', () => {
+      expect(enA.length).toBeGreaterThan(0)
+      expect(zhA, 'approval.* keys differ').toEqual(enA)
+    })
+
+    it('keeps every placeholder in the translation', () => {
+      const placeholders = (v: string) => (v.match(/\{\{\w+\}\}/g) ?? []).sort()
+      for (const key of enA) {
+        expect(placeholders((zhTW as Record<string, string>)[key]), key).toEqual(placeholders((en as Record<string, string>)[key]))
+      }
+    })
+
+    it('carries the spec §6.3 / §9.5 strings in zh-TW', () => {
+      const zh = zhTW as Record<string, string>
+      expect(zh['approval.dialog.daemon_restarting']).toBe('daemon 重啟中…')
+      expect(zh['approval.toast.decided_elsewhere']).toBe('{{host}}：{{session}} 的 {{kind}} 已由 {{client}} {{decision}}')
+      expect(zh['approval.kind.lead']).toBe('lead 申請')
+      expect(zh['approval.kind.self_relay']).toBe('接力申請')
+      expect(zh['approval.notify.title']).toBe('{{host}}：{{session}} 申請成為 lead')
+      expect(zh['approval.restart.pending']).toBe('{{count}} 個申請等待核准')
+    })
+
+    it('has a state label for every closed state', () => {
+      for (const s of ['approved', 'denied', 'timeout', 'cancelled', 'abandoned']) expect(enA, s).toContain(`approval.state.${s}`)
+    })
+  })
+
   // The Live Mode gate explains to the user why their file opened raw, so it is
   // the one place a half-translated string is actively confusing. Capitalised
   // terms (HTML, Live Mode) are product/UI names this file keeps in English by

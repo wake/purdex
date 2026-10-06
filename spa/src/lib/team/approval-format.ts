@@ -15,11 +15,15 @@ export function approvalSessionLabel(o: Origin): string {
 /**
  * The pdx address, as `pdx peers` prints it: `<host>/<name> [<ref>]` with the ref's underscore dropped inside the
  * brackets, or `<host>/_<ref>` for a session without a routable name. The daemon's own `address` wins when present.
+ * Defensive on `ref` (the WS boundary validates it, but this renders inside the dialog, where a throw is a blank
+ * screen): a non-string ref falls back to `<host>/<name>`, or `<host>/?` with no name either.
  */
 export function formatOriginAddress(host: string, o: Origin): string {
   if (o.address) return o.address
+  const name = typeof o.name === 'string' ? o.name : ''
+  if (typeof o.ref !== 'string') return `${host}/${name !== '' ? name : '?'}`
   const ref6 = o.ref.startsWith('_') ? o.ref.slice(1) : o.ref
-  return o.name !== '' ? `${host}/${o.name} [${ref6}]` : `${host}/_${ref6}`
+  return name !== '' ? `${host}/${name} [${ref6}]` : `${host}/_${ref6}`
 }
 
 export function approvalKindLabel(t: T, kind: ApprovalKind): string {

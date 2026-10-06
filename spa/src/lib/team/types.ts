@@ -113,7 +113,10 @@ export interface APIError {
   approval?: Approval
 }
 
-/** `HostEvent.value` (JSON text) of an `approval.request` event. A snapshot's `approvals` is `[]` when empty, never null. */
+/**
+ * `HostEvent.value` (JSON text) of an `approval.request` event. A snapshot's `approvals` is `[]` when empty, never
+ * null: the parser (approval-ws.ts) drops a snapshot that is not an array of valid approvals rather than read it as empty.
+ */
 export type ApprovalEventValue =
   | { op: 'opened' | 'closed'; approval: Approval }
   | { op: 'snapshot'; approvals: Approval[] }
@@ -126,6 +129,47 @@ export interface InflightResponse {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+const APPROVAL_KINDS: readonly string[] = ['lead', 'self_relay'] satisfies ApprovalKind[]
+const APPROVAL_STATES: readonly string[] = ['open', 'approved', 'denied', 'timeout', 'cancelled', 'abandoned'] satisfies ApprovalState[]
+
+/** Absent (`omitempty`) or of the given type; `null` is neither. */
+const optional = (v: unknown, ok: (x: unknown) => boolean): boolean => v === undefined || ok(v)
+const isString = (v: unknown): v is string => typeof v === 'string'
+const isNumber = (v: unknown): v is number => typeof v === 'number'
+
+/** `Origin` as `wire.go` writes it: every required field present with its type (`name` / `cwd` / `tmux` may be ''). */
+export function isOrigin(v: unknown): v is Origin {
+  return isRecord(v)
+    && isString(v.session_id)
+    && isString(v.ref)
+    && isString(v.name)
+    && isString(v.cwd)
+    && isString(v.tmux)
+    && isNumber(v.pid)
+    && optional(v.title, isString)
+    && optional(v.address, isString)
+}
+
+/**
+ * The full `Approval` wire shape, checked at the trust boundary (the WS branch and the decide API): the dialog
+ * reads these fields without guards, so a frame that fails here is dropped whole rather than rendered.
+ */
+export function isApproval(v: unknown): v is Approval {
+  return isRecord(v)
+    && isString(v.id) && v.id !== ''
+    && isString(v.kind) && APPROVAL_KINDS.includes(v.kind)
+    && isString(v.state) && APPROVAL_STATES.includes(v.state)
+    && isString(v.host_id)
+    && isOrigin(v.origin)
+    && isRecord(v.payload)
+    && isNumber(v.created_at)
+    && isNumber(v.deadline_at)
+    && isNumber(v.lease_until)
+    && optional(v.decided_by, isRecord)
+    && optional(v.decided_at, isNumber)
+    && optional(v.grant, isRecord)
 }
 
 /** The lead payload, normalised as the daemon normalises it: `max_members` 0 → 3, cap 8; roots default `[origin.cwd]`. */

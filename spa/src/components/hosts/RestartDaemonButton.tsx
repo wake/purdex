@@ -12,6 +12,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useDaemonRestartStore } from '../../stores/useDaemonRestartStore'
+import { selectOpenCountFor, useApprovalStore } from '../../stores/useApprovalStore'
+import { fetchInflight } from '../../lib/team/approval-api'
 import { countRunningWorkers } from '../../lib/daemon-restart'
 import { hostLabel, useHostLook } from '../../lib/host-look'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -33,6 +35,9 @@ interface PendingConfirm {
   gen: number
   // null = the count is unknown (cautious line); 0 = nothing running (no line).
   workers: number | null
+  // GET /api/team/inflight's approvals_open (lead-team spec §9.5); null = the call failed or timed out, and the
+  // line falls back to the store's count for this host.
+  approvals: number | null
 }
 
 const btnClass = 'px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default'
@@ -45,6 +50,8 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
   const restarting = useDaemonRestartStore((s) => s.restarting[hostId] === true)
   const settled = useDaemonRestartStore((s) => s.settled[hostId] ?? 0)
   const restart = useDaemonRestartStore((s) => s.restart)
+  // Fallback for the inflight count (lead-team spec §9.5): the open requests the WS snapshot keeps for THIS host.
+  const storeOpenApprovals = useApprovalStore(selectOpenCountFor(hostId))
   // The host and generation the pending count was started for; null = no count in flight.
   const [countingFor, setCountingFor] = useState<{ hostId: string; gen: number } | null>(null)
   const counting = countingFor !== null
@@ -83,11 +90,16 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
     const gen = useDaemonRestartStore.getState().settled[target] ?? 0
     const mine = ++requestRef.current
     setCountingFor({ hostId: target, gen })
-    const workers = await countRunningWorkers(target)
+    // Both inside the dialog's 3 s budget: countRunningWorkers races its own timer, fetchInflight aborts its own
+    // request (approval-api.ts INFLIGHT_TIMEOUT_MS). Any inflight failure is null → the store's count below.
+    const [workers, approvals] = await Promise.all([
+      countRunningWorkers(target),
+      fetchInflight(target).then((r) => r.approvals_open, () => null),
+    ])
     // Invalidated meanwhile: a newer state owns `countingFor`, touch nothing.
     if (!mounted.current || requestRef.current !== mine) return
     setCountingFor(null)
-    if (stillValid(target, gen)) setConfirm({ hostId: target, gen, workers })
+    if (stillValid(target, gen)) setConfirm({ hostId: target, gen, workers, approvals })
   }
 
   const onConfirm = () => {
@@ -104,6 +116,10 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
     report?.(true)
     return () => report?.(false)
   }, [active])
+
+  // Open approval requests on THIS host (lead-team spec §9.5): they survive the restart (leases are extended at
+  // boot), so the line informs, it does not block. The daemon's answer first; the store when it could not be asked.
+  const openApprovals = confirm === null ? 0 : (confirm.approvals ?? storeOpenApprovals)
 
   return (
     <>
@@ -126,6 +142,11 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
               {confirm.workers === null
                 ? t('hosts.restart.confirm_workers_unknown')
                 : t('hosts.restart.confirm_workers', { count: confirm.workers })}
+            </p>
+          )}
+          {openApprovals > 0 && (
+            <p data-testid={`${testId}-approvals`} className="mt-1 text-xs text-amber-400">
+              {t('approval.restart.pending', { count: openApprovals })}
             </p>
           )}
         </ConfirmDialog>

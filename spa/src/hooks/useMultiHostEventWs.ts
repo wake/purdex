@@ -19,6 +19,7 @@ import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
 import { checkHealth, type HealthResult } from '../lib/host-connection'
 import { ConnectionStateMachine } from '../lib/connection-state-machine'
 import { handleWorkerExited } from '../lib/nex/worker-exited-event'
+import { handleApprovalEvent } from '../lib/team/approval-ws'
 
 /**
  * The operation lock's observer (#1309 + #1310 spec §3.1): every tree rewriter —
@@ -213,6 +214,12 @@ export function useMultiHostEventWs() {
           if (event.type === 'nex-worker-exited') {
             // A terminal resume exited a worker (Q1). `session` may be empty.
             handleWorkerExited(hostId, event.value)
+            return
+          }
+          if (event.type === 'approval.request') {
+            // Lead / self-relay approval requests (lead-team spec §6.2): snapshot on
+            // subscribe, opened, closed. `session` is empty; the value carries the host id.
+            handleApprovalEvent(hostId, event.value)
             return
           }
           // `handoff` / `relay` events: the daemon stopped emitting them in
