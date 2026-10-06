@@ -1094,3 +1094,29 @@ describe('StatusBar worker bar', () => {
     }
   })
 })
+
+// A conversation's rebuild tab (conversation entity spec §13.4) has no session code: the bar names it by the session
+// it would create, the pane's cached name, rather than by an empty string.
+describe('StatusBar — a conversation-ended pane', () => {
+  it('shows the pane cached name as the session name; the rest of the bar is a closed pane bar', () => {
+    render(<StatusBar activeTab={makeTab('t1', {
+      kind: 'tmux-session', hostId: HOST_ID, sessionCode: '', mode: 'terminal', cachedName: 'proj-2', tmuxInstance: GEN,
+      terminated: 'conversation-ended',
+    })} />)
+    expect(screen.getByTestId('status-seg-session-name').textContent).toBe('proj-2')
+    expect(screen.getByTestId('status-seg-peer-id')).toBeInTheDocument()
+    expect(peerRefresh).not.toHaveBeenCalled()
+  })
+
+  it('an ordinary closed pane is unchanged: its live session name, else its code', () => {
+    const closed = (sessionCode: string) => makeTab('t1', {
+      kind: 'tmux-session', hostId: HOST_ID, sessionCode, mode: 'terminal', cachedName: 'my-session', tmuxInstance: GEN,
+      terminated: 'session-closed',
+    })
+    render(<StatusBar activeTab={closed('dev001')} />)
+    expect(screen.getByTestId('status-seg-session-name').textContent).toBe('dev-server')
+    cleanup()
+    render(<StatusBar activeTab={closed('gone01')} />)
+    expect(screen.getByTestId('status-seg-session-name').textContent).toBe('gone01')
+  })
+})

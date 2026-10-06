@@ -595,6 +595,22 @@ describe('TerminatedPane — a conversation-ended pane', () => {
     })
   }
 
+  // A host clock ahead of this one: the write time is capped at the moment the screen started counting, so the notice
+  // reads 0 and closes 120 s later, not 120 s after the skew has run out.
+  it('a write time ahead of this clock: the notice reads 0, counts from now, and is gone 120 s later', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    renderConversation({ last_activity_at: NOW + 600_000 })
+
+    expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('0 seconds ago')
+    act(() => { vi.advanceTimersByTime(1_000) })
+    expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('1 seconds ago')
+    act(() => { vi.advanceTimersByTime(118_000) })
+    expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('119 seconds ago')
+    act(() => { vi.advanceTimersByTime(1_000) })
+    expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+  })
+
   it('written 200 s ago: no notice, and nothing ticking', () => {
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
@@ -640,6 +656,23 @@ describe('TerminatedPane — a conversation-ended pane', () => {
       act(() => { vi.advanceTimersByTime(1_000) })
       expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('21 seconds ago')
       act(() => { vi.advanceTimersByTime(99_000) })
+      expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+    })
+
+    it('a refresh with a new write time ahead of this clock re-bases once: 0 again, gone 120 s later', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+      mountLive({ last_activity_at: NOW + 600_000 })
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('0 seconds ago')
+      act(() => { vi.advanceTimersByTime(130_000) })
+      expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+
+      await act(async () => { await openConversationRebuild(H, row({ last_activity_at: NOW + 1_200_000 })) })
+
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('0 seconds ago')
+      act(() => { vi.advanceTimersByTime(119_000) })
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('119 seconds ago')
+      act(() => { vi.advanceTimersByTime(1_000) })
       expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
     })
 

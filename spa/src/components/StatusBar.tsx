@@ -233,7 +233,9 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
   }
 
   // Session pane — show host, session name, status
-  const sessionName = session?.name ?? content.sessionCode
+  // A conversation's rebuild tab (conversation entity spec §13.4) has no session code: it is named by the session it
+  // would create, its cached name. Every pane with a code shows what it showed before.
+  const sessionName = session?.name ?? (content.sessionCode || content.cachedName)
   const paneTitle = showAgentTitleInStatusBar && agentType && !content.terminated ? session?.pane_title : null
   const status = hostRuntime?.status ?? 'disconnected'
 

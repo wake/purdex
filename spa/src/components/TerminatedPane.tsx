@@ -36,19 +36,27 @@ const RECENT_WRITE_MS = 120_000
  * Mounted keyed by `lastWriteAt`: a reopen that refreshes the pane's last write (R-4-18) remounts it, so its clock
  * is read afresh — the count is right on the first render, not after a tick — and its interval starts again when
  * the window has reopened.
+ *
+ * A write time ahead of this clock (the host's clock runs ahead) is capped at the moment this notice mounted: it
+ * reads "0 seconds ago" and closes 120 s later, never kept open for the skew on top. The mount is that moment for
+ * every write time, the refreshed ones included, so each refresh re-bases once.
  */
 function RecentWriteNotice({ lastWriteAt }: { lastWriteAt: number }) {
   const t = useI18nStore((s) => s.t)
-  const [now, setNow] = useState(() => Date.now())
-  const recent = now - lastWriteAt < RECENT_WRITE_MS
+  const [mounted] = useState(() => {
+    const at = Date.now()
+    return { at, writeAt: Math.min(lastWriteAt, at) }
+  })
+  const [now, setNow] = useState(mounted.at)
+  const recent = now - mounted.writeAt < RECENT_WRITE_MS
   useEffect(() => {
     if (!recent) return
     const id = setInterval(() => setNow(Date.now()), 1_000)
     return () => clearInterval(id)
   }, [recent])
   if (!recent) return null
-  // Clamped: a write time ahead of this clock (skew between the hosts) reads as "just now".
-  const seconds = Math.max(0, Math.floor((now - lastWriteAt) / 1_000))
+  // Never negative: the write time is capped at the mount, and the clock only moves on from there.
+  const seconds = Math.max(0, Math.floor((now - mounted.writeAt) / 1_000))
   return (
     // Not a live region: it re-counts every second, and a screen reader would read every count out.
     <p data-testid="terminated-recent-write" className="mb-6 flex items-center gap-1.5 text-sm text-status-warning">
