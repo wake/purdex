@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { HandoffApiError } from '../lib/nex/handoff-api'
@@ -114,5 +115,48 @@ describe('useConversations', () => {
     const { result } = renderHook(() => useConversations('h', 'ended'))
     await waitFor(() => expect(result.current.phase).toBe('error'))
     expect(result.current.unavailable).toBe(true)
+  })
+
+  describe('shared pending request', () => {
+    it('StrictMode double mount issues one call and shows the page', async () => {
+      const d = deferred<ConversationsPage>()
+      mock.mockReturnValueOnce(d.promise)
+      const { result } = renderHook(() => useConversations('sm', 'ended'), { wrapper: StrictMode })
+      expect(mock).toHaveBeenCalledTimes(1)
+      await act(async () => { d.resolve(mk('a')) })
+      expect(result.current.phase).toBe('ready')
+      expect(result.current.page?.home).toBe('a')
+    })
+
+    it('two hooks for the same host and state share one call', async () => {
+      const d = deferred<ConversationsPage>()
+      mock.mockReturnValueOnce(d.promise)
+      const a = renderHook(() => useConversations('two', 'ended'))
+      const b = renderHook(() => useConversations('two', 'ended'))
+      expect(mock).toHaveBeenCalledTimes(1)
+      await act(async () => { d.resolve(mk('x')) })
+      expect(a.result.current.page?.home).toBe('x')
+      expect(b.result.current.page?.home).toBe('x')
+    })
+
+    it('a different state has its own call', async () => {
+      const d1 = deferred<ConversationsPage>()
+      const d2 = deferred<ConversationsPage>()
+      mock.mockReturnValueOnce(d1.promise).mockReturnValueOnce(d2.promise)
+      renderHook(() => useConversations('ds', 'ended'))
+      renderHook(() => useConversations('ds', 'gone'))
+      expect(mock).toHaveBeenCalledTimes(2)
+      await act(async () => { d1.resolve(mk('a')); d2.resolve(mk('b', 'gone')) })
+    })
+
+    it('refetch after settle starts a new call', async () => {
+      mock.mockResolvedValueOnce(mk('a')).mockResolvedValueOnce(mk('b'))
+      const { result } = renderHook(() => useConversations('rs', 'ended'), { wrapper: StrictMode })
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      expect(mock).toHaveBeenCalledTimes(1)
+      act(() => result.current.refetch())
+      expect(mock).toHaveBeenCalledTimes(2)
+      await waitFor(() => expect(result.current.page?.home).toBe('b'))
+    })
   })
 })

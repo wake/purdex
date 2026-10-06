@@ -20,8 +20,12 @@ func needsTerminate(s store.State) bool {
 func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *control, principal string) (exitOutcome, *handoffError) {
 	out := exitOutcome{Terminated: exec.State == store.StateTerminated, Archived: exec.ArchivedAt != 0, State: exec.State}
 	var termErr *handoffError // a failed terminate; reported only if the archive cannot stand in for it
+	// D23: the lease (and its principal) a successful terminate ran under.
+	// The archive carries it, so Nexen (≥ v0.18.0, #113) checks the lease in
+	// the archive's own UPDATE. Empty — no fence — for every other archive.
+	var fenceLease, fencePrincipal string
 	if needsTerminate(exec.State) {
-		own := control{release: noRelease} // a control exitWorker took itself; released on return
+		own := control{release: noRelease} // a control exitWorker took itself; released on return, after the archive
 		defer func() { own.release() }()
 		c := ctl
 		if c == nil {
@@ -37,7 +41,8 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 			}
 		}
 		if c != nil {
-			err := m.terminateExecution(parent, execution.TerminateRequest{ExecutionID: exec.ID, LeaseID: c.LeaseID, PrincipalID: c.PrincipalID})
+			leaseID, leasePrincipal := c.LeaseID, c.PrincipalID // the control the terminate runs under
+			err := m.terminateExecution(parent, execution.TerminateRequest{ExecutionID: exec.ID, LeaseID: leaseID, PrincipalID: leasePrincipal})
 			if isLeaseErr(err) && ctl == nil {
 				// The lease changed hands between takeControl's read and the
 				// terminate. Take control once more, as of now: a non-pdx
@@ -50,7 +55,8 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 				switch {
 				case herr == nil:
 					own = got
-					err = m.terminateExecution(parent, execution.TerminateRequest{ExecutionID: exec.ID, LeaseID: own.LeaseID, PrincipalID: own.PrincipalID})
+					leaseID, leasePrincipal = own.LeaseID, own.PrincipalID
+					err = m.terminateExecution(parent, execution.TerminateRequest{ExecutionID: exec.ID, LeaseID: leaseID, PrincipalID: leasePrincipal})
 				case herr.code == "held_by":
 					return out, herr
 				default:
@@ -60,6 +66,7 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 			switch {
 			case err == nil:
 				out.Terminated, out.State = true, store.StateTerminated
+				fenceLease, fencePrincipal = leaseID, leasePrincipal
 			case errors.Is(err, store.ErrExecutionTerminal):
 				if fresh, gerr := m.getExecution(parent, exec.ID); gerr == nil {
 					out.State = fresh.State
@@ -91,11 +98,19 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 				return out, held
 			}
 		}
-		err := m.archiveExecution(parent, execution.ArchiveRequest{ExecutionID: exec.ID, PrincipalID: principal, Archived: true})
+		req := execution.ArchiveRequest{ExecutionID: exec.ID, PrincipalID: principal, Archived: true}
+		if fenceLease != "" {
+			// D23: archive under the terminate's lease — a lease that changed
+			// hands since is refused (lease_* error) and nothing is written.
+			req.LeaseID, req.PrincipalID = fenceLease, fencePrincipal
+		}
+		err := m.archiveExecution(parent, req)
 		switch {
 		case err == nil:
 			out.Archived = true
 		case out.Terminated:
+			// Includes a fenced archive refused with a lease error (D23):
+			// terminated, not archived — the next exit retries the archive (D16).
 			m.logf("nex: exit %s: archive after terminate: %v (exited; retried on the next exit)", exec.ID, err)
 		case termErr != nil:
 			// Typically archive_while_running: the turn the terminate could not

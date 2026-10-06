@@ -332,7 +332,8 @@ type fakeNexService struct {
 	// holds it: AcquireLease refuses a live lease of another principal and
 	// otherwise mints f.lease.ID for the caller; RenewLease, ReleaseLease,
 	// Interrupt and Terminate check the request like store.CheckLease
-	// (store/lease.go), and CheckLease stands in for a client's send.
+	// (store/lease.go), and CheckLease stands in for a client's send. An
+	// Archive that carries a LeaseID is fenced the same way (v0.18.0).
 	// A hook (onTerminate, onRecord, or a test between calls) may hand the
 	// lease over with setHeldLease.
 	enforceLease bool
@@ -498,12 +499,29 @@ func (f *fakeNexService) Interrupt(ctx context.Context, req execution.InterruptR
 	return execution.InterruptResult{State: store.StateIdle}, nil
 }
 
+// ArchiveReqs returns every Archive request so far, in order.
+func (f *fakeNexService) ArchiveReqs() []execution.ArchiveRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]execution.ArchiveRequest(nil), f.archiveReqs...)
+}
+
+// Archive answers archiveErr / unarchiveErr. With enforceLease, a request
+// that carries a LeaseID is fenced first, as Nexen v0.18.0's
+// store.SetArchivedUnderLease does (issue #113): CheckLease's three answers
+// come before any other refusal (archive_while_running included), and a
+// refused archive writes nothing. An empty LeaseID is never fenced.
 func (f *fakeNexService) Archive(ctx context.Context, req execution.ArchiveRequest) error {
 	f.record("archive")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.archiveReqs = append(f.archiveReqs, req)
 	f.archiveCtxErrs = append(f.archiveCtxErrs, ctx.Err())
+	if f.enforceLease && req.LeaseID != "" {
+		if err := f.checkLease(req.ExecutionID, req.LeaseID, req.PrincipalID); err != nil {
+			return err
+		}
+	}
 	if f.archiveErr != nil {
 		return f.archiveErr
 	}

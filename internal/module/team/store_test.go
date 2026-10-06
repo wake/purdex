@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -237,5 +238,59 @@ func TestStore_LeasesAndListing(t *testing.T) {
 	}
 	if open, _ := s.ListOpen(); len(open) != 2 {
 		t.Fatalf("ListOpen after close = %d rows", len(open))
+	}
+}
+
+// CloseIfExpired is the sweeper's CAS (review F2): besides state='open' it
+// requires the row to still be overdue in the same statement — deadline_at
+// for a timeout, lease_until for an abandonment — so a lease renewed after
+// the sweeper's read makes the close lose and leaves the row open.
+func TestStore_CloseIfExpiredGuardsOnDeadlineOrLease(t *testing.T) {
+	s := openTestStore(t)
+	if _, _, _, err := s.Create(openApproval("a", "sid-1", 1000), "h"); err != nil { // lease 31000, deadline 541000
+		t.Fatal(err)
+	}
+	// Lease not yet out: an abandonment loses and the row stays open.
+	a, won, err := s.CloseIfExpired("a", 30_999, Close{State: team.StateAbandoned, DecidedAt: 30_999})
+	if err != nil || won || a.State != team.StateOpen {
+		t.Fatalf("abandon before the lease ran out: won=%v err=%v row=%+v", won, err, a)
+	}
+	// Lease out, but renewed in between: still loses.
+	if err := s.RenewLease("a", 60_000); err != nil {
+		t.Fatal(err)
+	}
+	a, won, err = s.CloseIfExpired("a", 31_000, Close{State: team.StateAbandoned, DecidedAt: 31_000})
+	if err != nil || won || a.State != team.StateOpen || a.LeaseUntil != 60_000 {
+		t.Fatalf("abandon after a renewal: won=%v err=%v row=%+v", won, err, a)
+	}
+	// Deadline not yet passed: a timeout loses too.
+	a, won, err = s.CloseIfExpired("a", 540_999, Close{State: team.StateTimeout, DecidedAt: 540_999})
+	if err != nil || won || a.State != team.StateOpen {
+		t.Fatalf("timeout before the deadline: won=%v err=%v row=%+v", won, err, a)
+	}
+	// Only the sweeper's two states have a guard.
+	if _, _, err := s.CloseIfExpired("a", 999_999, Close{State: team.StateCancelled, DecidedAt: 999_999}); err == nil {
+		t.Fatal("CloseIfExpired must refuse a state without an expiry guard")
+	}
+	// Lease out: abandoned, once.
+	a, won, err = s.CloseIfExpired("a", 60_000, Close{State: team.StateAbandoned, DecidedAt: 60_000})
+	if err != nil || !won || a.State != team.StateAbandoned || a.DecidedAt != 60_000 {
+		t.Fatalf("abandon after the renewed lease ran out: won=%v err=%v row=%+v", won, err, a)
+	}
+	if _, won, err := s.CloseIfExpired("a", 999_999, Close{State: team.StateTimeout, DecidedAt: 999_999}); err != nil || won {
+		t.Fatalf("closed row: won=%v err=%v", won, err)
+	}
+	if _, _, err := s.CloseIfExpired("nope", 1, Close{State: team.StateTimeout, DecidedAt: 1}); !errors.Is(err, ErrNoSuchApproval) {
+		t.Fatalf("unknown id: %v, want ErrNoSuchApproval", err)
+	}
+	// Deadline passed: timeout wins whatever the lease says.
+	if _, _, _, err := s.Create(openApproval("b", "sid-2", 1000), "h"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RenewLease("b", 999_999_999); err != nil {
+		t.Fatal(err)
+	}
+	if a, won, err := s.CloseIfExpired("b", 541_000, Close{State: team.StateTimeout, DecidedAt: 541_000}); err != nil || !won || a.State != team.StateTimeout {
+		t.Fatalf("timeout at the deadline: won=%v err=%v row=%+v", won, err, a)
 	}
 }

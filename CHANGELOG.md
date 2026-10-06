@@ -1,5 +1,64 @@
 # Changelog
 
+## [1.0.0-alpha.519] - 2026-10-07
+
+> 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。這一版畫面上還看不到變化。
+
+### Added：讀取已結束／已消失對話清單的前端程式（對話主體 P4-2a-1，#1668）
+
+- 新增呼叫 daemon `GET /api/nex/conversations` 的程式與對應的 hook，供之後的「設定 → Worker → 已退出／已消失」分頁使用。
+- 只在打開分頁與按「重試」時抓取；同一台主機、同一種清單同時只會有一個請求。這台主機沒有啟用 Nexen 時會標示為「不可用」。
+
+## [1.0.0-alpha.518] - 2026-10-07
+
+> 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。首次啟動會在 data dir 建立 `team.db`（新檔，不動既有資料庫）。SPA 與 Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P2a-3（#1662）
+
+lead 申請的 daemon 端自此完整並掛上路由（spec §6.2、§9.2、§9.5）；指令 `pdx lead request` 與 Purdex.app 的核准對話框在 P2b、P3 接續。
+
+- **`GET /api/team/approvals/{id}?wait=N`**：長輪詢一筆申請（最多 25 秒），每次輪詢都續約 30 秒的 lease；daemon 停止時立即回目前狀態，讓指令端等重啟後接著問同一筆。
+- **`DELETE /api/team/approvals/{id}`**：申請方放棄。**`POST /api/team/approvals/{id}/decide`**：任一 Purdex.app 按一下核准或拒絕（帶 client 標籤與來源位址，供廣播與稽核）；慢一步的那個 client 收到 409 與勝出的決定。
+- **`GET /api/team/inflight`**：等待核准的申請數（接力數先固定 0），給重啟確認對話框用。
+- **sweeper**：逾時視同拒絕（U7）、lease 過期或申請的 session 已不在 → 放棄；每一筆關閉恰好廣播一次 `approval.request {op: closed}`。
+- **啟動**：open 的申請在 daemon 啟動時 lease 一律延到啟動後 30 秒（U12）；新連上的 client 先收到一份 open 申請的 snapshot。
+
+review 期間修正：snapshot 與即時事件改為同一順序（新連線不會被過期 snapshot 蓋掉或復活已關閉的申請）；sweeper 只在 lease／deadline 仍然過期時才關閉（續約成功的申請不會被誤關）；續約寫入失敗回 503 讓指令端重試。
+
+### Docs
+
+- spec 新增 **U19（分流）**：終端機照常出現原生 AskUserQuestion／權限對話框，其他 client 顯示事件卡，任一邊回答後全部關閉；由 Purdex mod 讓原生框與 daemon 的答案賽跑（M24 實測）；沒有 mod 的 session 退化成唯讀卡；P8a／P8b。
+
+## [1.0.0-alpha.517] - 2026-10-07
+
+> **需要部署 daemon**（內嵌的 Nexen 升級，加上退出 worker 的行為變更）。資料庫結構不變（仍是 schema v6），不用清資料。SPA 與 Electron 都不必更新。
+
+### Changed：內嵌的 Nexen 升到 v0.18.1，退出 worker 時封存改帶同一把 lease（#1664，D23）
+
+- **退出 worker 不再有空檔**：退出分兩步，先停止、再封存。現在封存會帶上停止時用的那把控制權 lease，Nexen 會在同一句寫入裡確認 lease 還是自己的。如果兩步之間有別人拿走了控制權，封存會被擋下，不會替一個已經不歸自己管的 worker 做決定（Nexen #113）。被擋下時 worker 仍算已退出（已停止、未封存），下次退出時會補封存。
+- **其他 Nexen 改進**（v0.17.2～v0.18.1）：
+  - 站台級事件流改成白名單（#90），wire 不變；
+  - 開資料庫時會檢查所有資料表（#69）；
+  - 輸出過大時，bash 輸出的頭尾少一行空白（#112）；
+  - 使用者已離開的對話紀錄請求，不再被記成伺服器錯誤。
+- spec：對話主體 §5 新增 D23；worker prelude spec §4.3 記下 #112。
+- 後續追蹤：#1665（封存的補做重試還沒有 lease 圍欄；目前所有 lease 持有者都是 Purdex，碰不到）。
+
+## [1.0.0-alpha.516] - 2026-10-07
+
+> 只新增 daemon 內部程式碼，**還沒掛上任何路由**（P2a-3 才會），不需要部署；下一個有行為的版本一起上。資料庫、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P2a-2（#1660）
+
+- **peers 匯出 origin resolver**：由 Claude Code 的 inbox 找到提出申請的 session（ref、name、pid、cwd、tmux、title、address），給 team module 用來認定「誰在申請」。registry 讀不到時明確回報為暫時性錯誤，不會被當成「找不到這個 session」。
+- **team module 骨架與前兩條路由**：`POST /api/team/approvals`（建立 lead 申請）與 `GET /api/team/approvals?state=open`。
+  - 建立是冪等的：同一個 id 同樣內容重送回同一筆（即使同一個 session 後來又開了另一筆）；同 id 不同內容拒絕。
+  - 同一個 session 同時只能有一筆 open 的申請；並發送出時恰好一筆成立。
+  - id 必須是 UUID v4；daemon 正在停止時回 503 讓指令端等重啟。
+  - 成功建立會廣播 `approval.request {op: opened}` 事件（之後給 Purdex.app 的核准對話框用）。
+
+review 期間修正：冪等重試優先於「已有 open 申請」的檢查、UUID v4 驗證、停止與建立的競態、registry 讀取錯誤改回 503。
+
 ## [1.0.0-alpha.515] - 2026-10-07
 
 > 只動 daemon，**需要部署**，由統籌安排重啟。資料庫結構不變（`conversation_index` 表在 alpha.510 就已建立），不用清資料。SPA 與 Electron 都不必更新；畫面上的「已退出／已消失」分頁要等之後的 SPA 版本。
