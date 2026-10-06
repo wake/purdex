@@ -3,6 +3,7 @@ import { useTabStore } from '../stores/useTabStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { closeTab } from '../lib/tab-lifecycle'
 import { rebuildPane, type RebuildPlan } from '../lib/rebuild/engine'
+import { RebuildScreen } from './RebuildScreen'
 import { RebuildActionSet, type RebuildEditableField } from './RebuildActionSet'
 import { SessionPickerList, type SessionSelection } from './SessionPickerList'
 import type { PaneContent, PaneRebuildRecord, TerminatedReason } from '../types/tab'
@@ -64,15 +65,15 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center-safe h-full p-8 text-center overflow-y-auto">
-      <SmileySad size={48} className="text-zinc-500 mb-4" />
-      <h2 className="text-lg font-medium text-zinc-300 mb-1">{t(keys.title)}</h2>
-      <p className="text-sm text-zinc-500 mb-6">{t(keys.desc, { name: content.cachedName })}</p>
-      <button className="text-sm text-zinc-400 hover:text-zinc-200 mb-8" onClick={() => {
+    <RebuildScreen
+      icon={<SmileySad size={48} className="text-zinc-500 mb-4" />}
+      title={t(keys.title)}
+      description={t(keys.desc, { name: content.cachedName })}
+      closeLabel={t('terminated.close_tab')}
+      onClose={() => {
         closeTab(tabId)
-      }}>
-        {t('terminated.close_tab')}
-      </button>
+      }}
+    >
       <div className="w-full max-w-lg mb-8">
         <RebuildActionSet
           tabId={tabId}
@@ -87,6 +88,6 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
       <div className="w-full max-w-sm">
         <SessionPickerList onSelect={handleSelect} />
       </div>
-    </div>
+    </RebuildScreen>
   )
 }

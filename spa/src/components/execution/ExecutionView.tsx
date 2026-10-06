@@ -28,7 +28,9 @@ import TranscriptSearch from '../room/TranscriptSearch'
 import { isFindShortcut } from '../../lib/find-shortcut'
 import type { TranscriptScrollControl } from '../../hooks/useTranscriptScroll'
 import { useQuickReplies } from '../../lib/quick-replies'
+import { announceTakeOutcome } from '../../lib/nex/take-outcome'
 import ExecutionHeader from './ExecutionHeader'
+import { WorkerEndedPane, workerEndedKind } from './WorkerEndedPane'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { useExecutionStore, executionKey } from '../../stores/useExecutionStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
@@ -80,7 +82,6 @@ export interface ExecutionViewProps {
 }
 
 const EMPTY = defaultExecutionState()
-const TERMINAL_STATES = new Set(['rejected', 'failed', 'terminated'])
 /**
  * States the daemon's take-to-terminal can settle (spec §4.2): never `queued`
  * (it would answer `execution_not_settled`) nor `rejected`.
@@ -170,11 +171,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       const { result, swapped } = from
         ? await takeBack({ ...common, from })
         : await takeToTerminal({ ...common, cwd: cwd! })
-      // On `swapped` this view is already unmounted (the pane is a terminal
-      // again); the toast is global, so it still lands.
-      toast.show(swapped ? t('takeback.success') : t('takeback.archived_no_pane'))
-      // The terminal took over, but the worker is still live: say so until dismissed.
-      if (result.exited === false) toast.show(t('worker.exit.after_transfer_failed'), undefined, undefined, { persistent: true })
+      announceTakeOutcome(t, { result, swapped })
     } catch (err) {
       if (err instanceof HandoffApiError) {
         const id = manualResumeHint(err)
@@ -199,7 +196,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
     try {
       const result = await exitWorker({ hostId, executionId, leaseId: useExecutionStore.getState().executions[key]?.lease?.leaseId, forgetLease: lease.forget })
       // Patch the summary at once from the result (the SSE confirms later): no longer live,
-      // so exit stays disabled and the ended handling takes over.
+      // so the pane turns into WorkerEndedPane.
       useExecutionStore.getState().applySummaryPatch(hostId, executionId, { state: result.state, archived: result.archived })
     } catch (err) {
       useUndoToast.getState().show(exitErrorMessage(err, t))
@@ -360,22 +357,22 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
     return <div data-testid="execution-problem" className="flex items-center justify-center h-full text-sm text-text-muted">{text}</div>
   }
 
-  const terminal = !!st.summary && TERMINAL_STATES.has(st.summary.state)
-  const ended = terminal || !!st.summary?.archived
+  // An exited / failed-to-start worker has its own screen (conversation entity spec §6, §7). Every hook is above.
+  if (st.summary && workerEndedKind(st.summary)) {
+    return <WorkerEndedPane hostId={hostId} executionId={executionId} summary={st.summary} tabId={tabId} paneId={paneId} />
+  }
+
   // The SSE handle can die terminally (401/403, or a non-retryable
   // structured error) after history has loaded, with no reconnect ever
   // coming — the pane looks live but a send would 2xx into the void with
   // no message_accepted/result ever arriving. Gate input on
-  // it same as `ended`; `sse` flips back off 'closed' the moment the pane
+  // it; `sse` flips back off 'closed' the moment the pane
   // is reactivated (see useExecutionSubscription's activation effect), so
   // this clears itself without redesigning the reconnect path.
   const streamDead = st.historyLoaded && st.sse === 'closed' && !!st.sseError
   // One gate for everything that sends: the input and the quick replies.
-  const inputDisabled = st.pendingSend || encodingBusy || ended || !st.historyLoaded || streamDead || takeBackBusy || exitBusy
-  const placeholder = st.summary?.archived ? t('execution.input.archived')
-    : ended ? t('execution.input.terminal')
-    : streamDead ? t('execution.input.disconnected')
-    : undefined
+  const inputDisabled = st.pendingSend || encodingBusy || !st.historyLoaded || streamDead || takeBackBusy || exitBusy
+  const placeholder = streamDead ? t('execution.input.disconnected') : undefined
   const leaseHeld = st.leaseError?.code === 'lease_held'
 
   // Every user send — typed or a quick reply — goes through here (PR #1522
@@ -485,8 +482,8 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   }
   // A file dragged over the pane must never fall through to the browser's
   // default (Electron would navigate to it), so every file drag is claimed;
-  // an ended execution just shows no overlay and takes nothing.
-  const canAttach = !ended && !takeBackBusy && !exitBusy
+  // (an ended execution never gets here: WorkerEndedPane replaces the pane).
+  const canAttach = !takeBackBusy && !exitBusy
   // The drop target matches the disabled `+` button (worker.upload.attach):
   // while sending, mid-take-back, history still loading or the stream dead,
   // neither offers to attach.
@@ -563,7 +560,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
       className="relative flex flex-col h-full">
       <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
-        onInterrupt={() => void handleInterrupt()} onExit={onExit} exitDisabled={!exitable || exitBusy || takeBackBusy || writeInFlight} busy={terminal || takeBackBusy || exitBusy}
+        onInterrupt={() => void handleInterrupt()} onExit={onExit} exitDisabled={!exitable || exitBusy || takeBackBusy || writeInFlight} busy={takeBackBusy || exitBusy}
         onTakeBack={takeOffered ? onTakeBack : undefined} takeBackBusy={takeBusy}
         mode={mode} onModeChange={onModeChange} />
       {confirmExit && (
