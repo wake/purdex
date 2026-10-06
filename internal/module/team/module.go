@@ -52,10 +52,26 @@ type Module struct {
 	mu      sync.Mutex
 	waiters map[string][]chan struct{} // long-polls per approval id; closed when it closes
 
+	// eventMu orders the approval.request stream (spec §6.2): it is held
+	// across every opened/closed broadcast and across sendSnapshot's
+	// ListOpen + send, so no event is queued between a snapshot's read and
+	// its delivery. A client that replaces its set from the snapshot thus
+	// never loses a just-opened request or revives a just-closed one. No
+	// store write happens under it: each broadcast follows its own write.
+	eventMu sync.Mutex
+
 	// afterRead, when set, runs in handleGet right after the row is read
 	// and before the wait. Tests use it to close the row in that window
 	// and prove the waiter was registered before the read; nil in production.
 	afterRead func(id string)
+	// afterSnapshotRead, when set, runs in sendSnapshot between its ListOpen
+	// and its send; tests open or close a request in that window and prove
+	// the event is delivered after the snapshot. nil in production.
+	afterSnapshotRead func()
+	// afterListOpen, when set, runs in tick between its ListOpen and its
+	// closes; tests renew a lease in that window and prove the sweeper
+	// does not close on the stale copy. nil in production.
+	afterListOpen func()
 }
 
 // New returns a Module with production defaults.
@@ -162,7 +178,14 @@ func (m *Module) hostID() string {
 // only — the closed broadcast and the long-poll wake-up. So every close
 // produces exactly one closed event, whoever raced for it (spec §6.2).
 func (m *Module) closeAs(id string, c Close) (team.Approval, bool, error) {
-	after, won, err := m.store.CloseIfOpen(id, c)
+	return m.closeWith(id, func() (team.Approval, bool, error) { return m.store.CloseIfOpen(id, c) })
+}
+
+// closeWith is closeAs over a given store CAS — CloseIfOpen for decide,
+// DELETE and a vanished origin; CloseIfExpired for the sweeper's timeout
+// and lease paths. The winner alone broadcasts and wakes.
+func (m *Module) closeWith(id string, cas func() (team.Approval, bool, error)) (team.Approval, bool, error) {
+	after, won, err := cas()
 	if err != nil {
 		return team.Approval{}, false, err
 	}
@@ -173,36 +196,27 @@ func (m *Module) closeAs(id string, c Close) (team.Approval, bool, error) {
 	return after, won, nil
 }
 
+// broadcast queues one opened/closed event to every subscriber, under
+// eventMu so it cannot land between a snapshot's read and its send.
 func (m *Module) broadcast(op string, a *team.Approval) {
 	v, err := json.Marshal(team.EventValue{Op: op, Approval: a})
 	if err != nil {
 		m.logf("[team] encode %s event: %v", op, err)
 		return
 	}
+	m.eventMu.Lock()
+	defer m.eventMu.Unlock()
 	m.core.Events.BroadcastEvent(core.HostEvent{Type: team.EventType, Value: string(v)})
 }
 
 // sendSnapshot queues {op:"snapshot", approvals:[…]} to a new subscriber
-// (spec §6.2: late or reconnecting clients see the same open set). A
+// (spec §6.2: late or reconnecting clients see the same open set). The
+// read and the send happen under eventMu, so every event the subscriber
+// receives afterwards is for a change the snapshot does not yet show. A
 // subscriber whose buffer is already full is closed so it reconnects (as
 // session/module.go does); one already removed is left alone.
 func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
-	open, err := m.store.ListOpen()
-	if err != nil {
-		m.logf("[team] OnSubscribe list error: %v", err)
-		return
-	}
-	v, err := json.Marshal(team.EventValue{Op: "snapshot", Approvals: open})
-	if err != nil {
-		m.logf("[team] encode snapshot: %v", err)
-		return
-	}
-	data, err := json.Marshal(core.HostEvent{Type: team.EventType, Value: string(v)})
-	if err != nil {
-		m.logf("[team] encode snapshot event: %v", err)
-		return
-	}
-	if sub.TrySend(data) {
+	if m.snapshotUnderLock(sub) {
 		return
 	}
 	select {
@@ -211,6 +225,35 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 		m.logf("[team] OnSubscribe snapshot could not be queued (send buffer full); closing the connection so the client reconnects")
 		m.core.Events.Remove(sub)
 	}
+}
+
+// snapshotUnderLock reads the open set and queues it to sub, holding
+// eventMu from the read to the send. It returns false only when the send
+// did not queue (buffer full or subscriber gone); a read or encode error is
+// logged and reported as true, since there is nothing to retry by
+// reconnecting.
+func (m *Module) snapshotUnderLock(sub *core.EventSubscriber) bool {
+	m.eventMu.Lock()
+	defer m.eventMu.Unlock()
+	open, err := m.store.ListOpen()
+	if err != nil {
+		m.logf("[team] OnSubscribe list error: %v", err)
+		return true
+	}
+	if m.afterSnapshotRead != nil {
+		m.afterSnapshotRead()
+	}
+	v, err := json.Marshal(team.EventValue{Op: "snapshot", Approvals: open})
+	if err != nil {
+		m.logf("[team] encode snapshot: %v", err)
+		return true
+	}
+	data, err := json.Marshal(core.HostEvent{Type: team.EventType, Value: string(v)})
+	if err != nil {
+		m.logf("[team] encode snapshot event: %v", err)
+		return true
+	}
+	return sub.TrySend(data)
 }
 
 // addWaiter registers a long-poll on id; the channel is closed by wake.

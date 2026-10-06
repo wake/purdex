@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -808,5 +809,37 @@ func TestInflight_CountsOpenApprovals(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte(`"relays_active":0`)) {
 		t.Fatalf("relays_active must be on the wire at zero: %s", body)
+	}
+}
+
+// Review F3: a poll whose lease renewal failed must not answer 200 as if
+// the lease were renewed — the sweeper would abandon the request while
+// the CLI believes it is still polling. It answers 503 not_ready (the
+// restart-aware CLI retries) and the row is untouched. The failure is a
+// closed database; the row is checked through a fresh handle on the file.
+func TestGet_RenewLeaseFailureIs503(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1)) // lease 1_030_000
+	f.events()
+	f.clock.Add(10_000)
+	if err := f.m.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	code, body := f.do(http.MethodGet, "/api/team/approvals/"+uid(1)+"?wait=0", nil)
+	e := decodeErr(t, body)
+	if code != http.StatusServiceUnavailable || e.Error != team.ErrNotReady {
+		t.Fatalf("poll with a failing RenewLease: %d %s, want 503 not_ready", code, body)
+	}
+	s, err := OpenStore(filepath.Join(f.core.Cfg.DataDir, "team.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a, ok, err := s.Get(uid(1))
+	if err != nil || !ok || a.State != team.StateOpen || a.LeaseUntil != 1_030_000 {
+		t.Fatalf("row after the failed poll: %+v ok=%v err=%v, want untouched (open, lease 1030000)", a, ok, err)
+	}
+	if n := len(f.events()); n != 0 {
+		t.Fatalf("%d events after a failed poll", n)
 	}
 }

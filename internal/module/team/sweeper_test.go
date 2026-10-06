@@ -280,3 +280,50 @@ func TestTick_WakesTheLongPoll(t *testing.T) {
 		t.Fatalf("long-poll woke with %+v, want timeout", a)
 	}
 }
+
+// Review F2 / spec §9.2: the sweeper decides on a copy of the row; a poll
+// that renews the lease between that read and the close must win. The
+// afterListOpen hook renews in that window: the close's CAS requires the
+// lease to still be expired, so it loses, the row stays open, nothing is
+// broadcast, and the next tick after the renewed lease runs out abandons
+// it. With the unconditional CloseIfOpen the renewal is lost → red.
+func TestTick_RenewBetweenReadAndCloseKeepsTheRequestOpen(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1)) // lease 1_030_000, deadline 1_540_000
+	f.events()
+	f.clock.Add(30_000) // the lease has just run out
+	renewed := 0
+	f.m.afterListOpen = func() {
+		renewed++
+		// The CLI's poll, landing after the sweeper's read.
+		if code, body := f.do(http.MethodGet, "/api/team/approvals/"+uid(1)+"?wait=0", nil); code != 200 {
+			t.Errorf("poll in the window: %d %s", code, body)
+		}
+	}
+	f.m.tick()
+	if renewed != 1 {
+		t.Fatalf("hook ran %d times, want 1", renewed)
+	}
+	a, _, _ := f.m.store.Get(uid(1))
+	if a.State != team.StateOpen || a.LeaseUntil != 1_060_000 {
+		t.Fatalf("after a renewal inside the sweeper's window: %+v, want open with lease 1060000", a)
+	}
+	if n := f.countOps("closed"); n != 0 {
+		t.Fatalf("closed events = %d, want 0 (the request is still open)", n)
+	}
+	// Still open on the renewed lease; abandoned once that one runs out too.
+	f.m.afterListOpen = nil
+	f.clock.Add(29_999)
+	f.m.tick()
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
+		t.Fatalf("closed before the renewed lease ran out: %s", a.State)
+	}
+	f.clock.Add(1)
+	f.m.tick()
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateAbandoned || a.DecidedAt != 1_060_000 {
+		t.Fatalf("after the renewed lease ran out: %+v", a)
+	}
+	if n := f.countOps("closed"); n != 1 {
+		t.Fatalf("closed events = %d, want 1", n)
+	}
+}

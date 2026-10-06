@@ -35,8 +35,12 @@ func (m *Module) runSweeper() {
 // livenessEvery-th tick, only while something is open — a vanished origin
 // session is one too. A resolver that cannot read the registry answers
 // "live" (peers/origin_resolver.go), so a read error never abandons
-// anything. Each close goes through closeAs, so it competes fairly with
-// decide and cancel and broadcasts once.
+// anything. The deadline and lease paths close through CloseIfExpired:
+// the decision here is made on a copy, and a poll that renewed the lease
+// since the read must win, so the CAS re-checks the expiry in the same
+// statement and a lost CAS leaves the row open for the next tick. Every
+// close goes through closeWith, so it competes fairly with decide and
+// cancel and broadcasts once.
 func (m *Module) tick() {
 	m.tickN++
 	open, err := m.store.ListOpen()
@@ -47,21 +51,25 @@ func (m *Module) tick() {
 	if len(open) == 0 {
 		return
 	}
+	if m.afterListOpen != nil {
+		m.afterListOpen()
+	}
 	now := m.now()
 	checkLive := m.tickN%livenessEvery == 0
 	for _, a := range open {
-		var state team.State
+		var after team.Approval
+		var won bool
+		var err error
 		switch {
 		case a.DeadlineAt <= now:
-			state = team.StateTimeout
+			after, won, err = m.closeExpired(a.ID, now, team.StateTimeout)
 		case a.LeaseUntil <= now:
-			state = team.StateAbandoned
+			after, won, err = m.closeExpired(a.ID, now, team.StateAbandoned)
 		case checkLive && !m.origins.LiveSession(a.Origin.SessionID):
-			state = team.StateAbandoned
+			after, won, err = m.closeAs(a.ID, Close{State: team.StateAbandoned, DecidedAt: now})
 		default:
 			continue
 		}
-		after, won, err := m.closeAs(a.ID, Close{State: state, DecidedAt: now})
 		if err != nil {
 			m.logf("[team] sweep %s: %v", a.ID, err)
 			continue
@@ -70,4 +78,12 @@ func (m *Module) tick() {
 			m.logf("[team] approval %s %s by the sweeper (origin %s)", a.ID, after.State, a.Origin.Ref)
 		}
 	}
+}
+
+// closeExpired is the sweeper's close for a passed deadline or lease: the
+// store re-checks the expiry at now inside the CAS (CloseIfExpired).
+func (m *Module) closeExpired(id string, now int64, state team.State) (team.Approval, bool, error) {
+	return m.closeWith(id, func() (team.Approval, bool, error) {
+		return m.store.CloseIfExpired(id, now, Close{State: state, DecidedAt: now})
+	})
 }

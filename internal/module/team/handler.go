@@ -272,7 +272,10 @@ func pollWait(s string) (int, error) {
 // and, while the request is open and N > 0, waits for the close, N
 // seconds (≤ 25), the client going away, or Stop — whichever is first —
 // then answers the row as it is. A poll cut by Stop therefore answers 200
-// with the row still open; the CLI re-polls and meets the restart.
+// with the row still open; the CLI re-polls and meets the restart. A poll
+// whose renewal failed answers 503 not_ready instead of a 200 that would
+// let the CLI believe the lease holds while the sweeper abandons it; the
+// restart-aware CLI retries a 503.
 func (m *Module) handleGet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	wait, err := pollWait(r.URL.Query().Get("wait"))
@@ -286,6 +289,8 @@ func (m *Module) handleGet(w http.ResponseWriter, r *http.Request) {
 	defer m.removeWaiter(id, ch)
 	if err := m.store.RenewLease(id, m.now()+team.LeaseS*1000); err != nil {
 		m.logf("[team] get %s: %v", id, err)
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "storage error; retry", nil)
+		return
 	}
 	a, ok, err := m.store.Get(id)
 	if err != nil {

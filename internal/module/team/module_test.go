@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -169,5 +170,136 @@ func TestClose_ReleasesTheStore(t *testing.T) {
 	if err := f.m.Close(); err == nil {
 		// database/sql reports a second Close as an error; either way it must not panic.
 		t.Log("second Close returned nil")
+	}
+}
+
+// dialEvents connects a real WS subscriber (OnSubscribe callbacks run for
+// those only) and returns a reader of its approval.request frames, in
+// order, plus a closer for the connection.
+func dialEvents(t *testing.T, f *fixture) (read func() team.EventValue, closeConn func()) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(f.core.Events.HandleHostEvents))
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		srv.Close()
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	read = func() team.EventValue {
+		t.Helper()
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("read event: %v", err)
+			}
+			var ev core.HostEvent
+			if err := json.Unmarshal(raw, &ev); err != nil {
+				t.Fatal(err)
+			}
+			if ev.Type != team.EventType {
+				continue
+			}
+			var v team.EventValue
+			if err := json.Unmarshal([]byte(ev.Value), &v); err != nil {
+				t.Fatal(err)
+			}
+			return v
+		}
+	}
+	closeConn = func() {
+		conn.Close()
+		srv.Close()
+	}
+	return read, closeConn
+}
+
+// Review F1 / spec §6.2: a new subscriber's snapshot and the live
+// opened/closed events are one ordered stream. The afterSnapshotRead hook
+// pauses sendSnapshot between its ListOpen and its send; a create (then a
+// DELETE) issued in that window must reach the subscriber after the
+// snapshot — a client that replaces its set from the snapshot would
+// otherwise lose the just-opened request, or revive the just-closed one.
+// Without eventMu the event is queued first → red (mutation gate).
+func TestSnapshot_IsOrderedWithEvents(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.events()
+	var hookMu sync.Mutex
+	var hook func()
+	f.m.afterSnapshotRead = func() {
+		hookMu.Lock()
+		h := hook
+		hookMu.Unlock()
+		if h != nil {
+			h()
+		}
+	}
+	f.core.Events.OnSubscribe(f.m.sendSnapshot) // what Start does, without the sweeper
+
+	// inWindow subscribes with act running inside sendSnapshot's window:
+	// act is started, its store write is awaited (it precedes act's
+	// broadcast), and the broadcast is then given 200 ms to be queued —
+	// which the lock must prevent. Returns the first two frames.
+	inWindow := func(act func(), landed func() bool) (first, second team.EventValue) {
+		t.Helper()
+		var wg sync.WaitGroup
+		hookMu.Lock()
+		hook = func() {
+			wg.Add(1)
+			go func() { defer wg.Done(); act() }()
+			deadline := time.Now().Add(5 * time.Second)
+			for !landed() {
+				if time.Now().After(deadline) {
+					t.Error("the store write inside the snapshot window did not land within 5 s")
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		hookMu.Unlock()
+		read, closeConn := dialEvents(t, f)
+		first, second = read(), read()
+		closeConn()
+		wg.Wait()
+		return first, second
+	}
+
+	// A request opened inside the window: snapshot (without it), then opened.
+	second := f.createReq(uid(2))
+	second.OriginInbox = "/tmp/20.sock"
+	first, next := inWindow(
+		func() {
+			if code, body := f.do(http.MethodPost, "/api/team/approvals", second); code != 201 {
+				t.Errorf("create in the window: %d %s", code, body)
+			}
+		},
+		func() bool { _, ok, _ := f.m.store.Get(uid(2)); return ok },
+	)
+	if first.Op != "snapshot" || len(first.Approvals) != 1 || first.Approvals[0].ID != uid(1) {
+		t.Fatalf("first frame = %+v, want the snapshot taken before the create (uid(1) only)", first)
+	}
+	if next.Op != "opened" || next.Approval == nil || next.Approval.ID != uid(2) {
+		t.Fatalf("second frame = %+v, want opened uid(2) after the snapshot", next)
+	}
+	f.events()
+
+	// A request closed inside the window: snapshot (still carrying it open), then closed.
+	first, next = inWindow(
+		func() {
+			if code, body := f.do(http.MethodDelete, "/api/team/approvals/"+uid(1), nil); code != 200 {
+				t.Errorf("delete in the window: %d %s", code, body)
+			}
+		},
+		func() bool { a, _, _ := f.m.store.Get(uid(1)); return a.State != team.StateOpen },
+	)
+	if first.Op != "snapshot" || len(first.Approvals) != 2 || first.Approvals[0].ID != uid(1) || first.Approvals[0].State != team.StateOpen {
+		t.Fatalf("first frame = %+v, want the snapshot taken before the delete (uid(1) open, uid(2))", first)
+	}
+	if next.Op != "closed" || next.Approval == nil || next.Approval.ID != uid(1) || next.Approval.State != team.StateCancelled {
+		t.Fatalf("second frame = %+v, want closed uid(1) after the snapshot", next)
+	}
+	if n := f.countOps("closed"); n != 1 {
+		t.Fatalf("closed events = %d, want exactly 1", n)
 	}
 }
