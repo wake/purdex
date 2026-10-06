@@ -23,8 +23,8 @@ type ScanResult struct {
 	RootErr        error            // the root could not be listed; nothing was written
 	ScannedAt      int64            // Unix ms, the now() of the scan
 	Files          int              // entries listed
-	Reread         int              // entries whose head or tail was read into a written row
-	BytesRead      int64            // every byte read, a read that failed included
+	Reread         int              // rows written this round from a read of the head or tail (a failed read is not counted)
+	BytesRead      int64            // bytes read this round, including those of a read that failed midway
 }
 
 // openTranscript is OpenTranscript; a var only so tests can act between the
@@ -35,9 +35,11 @@ var openTranscript = OpenTranscript
 // opened and its fstat compared with its index row, in this order (§13.6
 // "How the index is kept"; transcripts are append-only):
 //
-//   - no row, a different inode, or a smaller size: the file was rewritten
-//     (or is new), so the head is scanned from byte 0 with every head field
-//     reset, and the tail is read;
+//   - no row, a different inode, or shorter than the length already known,
+//     max(Size, HeadOffset): the file was rewritten (or is new), so the head
+//     is scanned from byte 0 with every head field reset, and the tail is
+//     read. HeadOffset ends complete lines read on this inode, which an
+//     append-only file never drops below, even when it passed Size;
 //   - the same size and mtime: nothing is read, only LastSeenAt (and
 //     TranscriptPath, for a renamed slug dir) is updated;
 //   - otherwise it grew (or only its mtime moved): the head fields are kept
@@ -112,7 +114,7 @@ func scanFile(e Entry, prev store.ConversationIndexRow, has bool, nowMs int64) (
 
 	var head Head
 	switch {
-	case !has || fe.Inode != prev.Inode || fe.Size < prev.Size:
+	case !has || fe.Inode != prev.Inode || fe.Size < prev.Size || fe.Size < prev.HeadOffset:
 		row = store.ConversationIndexRow{FirstSeenAt: nowMs}
 		if has {
 			row.FirstSeenAt = prev.FirstSeenAt

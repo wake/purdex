@@ -474,6 +474,44 @@ func TestScan_FileAppendedAroundTheOpen(t *testing.T) {
 	}
 }
 
+func TestScan_FileShorterThanItsHeadOffsetIsRewritten(t *testing.T) {
+	// A growth during the scan stores HeadOffset > Size; a rewrite in place
+	// (same inode) to a length between them is not smaller than Size, but
+	// shorter than bytes already read: the head is read again from 0.
+	root := t.TempDir()
+	p := filepath.Join(root, "-w", sidA+".jsonl")
+	writeFile(t, p, line(t, obj{"type": "system", "cwd": "/w/old", "entrypoint": "cli"}))
+	hookOpen(t, func(path string) (*os.File, Entry, error) {
+		f, e, err := OpenTranscript(path)
+		appendFile(t, path, padding(t, 4<<10))
+		return f, e, err
+	})
+	idx := newFakeIndex()
+	runScan(t, root, idx, t0)
+	before := idx.rows[sidA]
+	hookOpen(t, OpenTranscript)
+
+	fresh := lines(t, obj{"type": "system", "cwd": "/w/new", "entrypoint": "sdk-cli"}, userText("new prompt"))
+	if err := os.Truncate(p, 0); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, p, fresh)
+	e := statEntry(t, sidA, p)
+	if e.Inode != before.Inode || e.Size <= before.Size || e.Size >= before.HeadOffset {
+		t.Fatalf("fixture: inode %d→%d, size %d; want the same inode and a size in (%d, %d)",
+			before.Inode, e.Inode, e.Size, before.Size, before.HeadOffset)
+	}
+
+	res := runScan(t, root, idx, t1)
+	h := Head{Cwd: "/w/new", FirstEntrypoint: "sdk-cli", FirstPrompt: "new prompt", Offset: int64(len(fresh)), Done: true}
+	if got, want := idx.rows[sidA], wantRow(t, sidA, p, h, Tail{LastEntrypoint: "sdk-cli"}, t0, t1); got != want {
+		t.Errorf("row = %+v\nwant  %+v", got, want)
+	}
+	if res.Reread != 1 || res.BytesRead != 2*int64(len(fresh)) {
+		t.Errorf("Reread %d, BytesRead %d; want 1, %d (head from 0 and tail)", res.Reread, res.BytesRead, 2*len(fresh))
+	}
+}
+
 func TestScan_CancelledContextStopsBetweenFiles(t *testing.T) {
 	root, _, _ := fixtureRoot(t)
 	writeFile(t, filepath.Join(root, "-w-three", sidC+".jsonl"), lines(t, userText("c")))
