@@ -17,8 +17,14 @@ import { StintEnrichmentContext } from '../../../hooks/useStintEnrichment'
 import ChatTranscript from '../../chat/ChatTranscript'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useUndoToast } from '../../../stores/useUndoToast'
+import { useNexHostStore } from '../../../stores/useNexHostStore'
+import { AttachmentSourceContext } from '../attachment-source'
+import * as api from '../../../lib/nex/nex-api'
 import golden from '../../../lib/nex/__fixtures__/prelude-golden-nexen.json'
 import real from '../../../lib/nex/__fixtures__/prelude-06GGS8J1YKZCPF4BRXZTX764F4.json'
+
+// Only the attachment fetch is replaced (the thumbnails' tests read which execution it asks); nothing else here calls it.
+vi.mock('../../../lib/nex/nex-api', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../../lib/nex/nex-api')>()), fetchAttachment: vi.fn() }))
 
 const m = (pos: string, type: 'user' | 'assistant', content: unknown[]): PreludeItem =>
   ({ offset: null, pos, at: 1, kind: type, msg: { type, parent_tool_use_id: null, message: { role: type, content, stop_reason: null } } as unknown as StreamMessage })
@@ -869,20 +875,32 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection enrichmen
     expect(screen.queryByTestId('prelude-enrichment-truncated')).toBeNull()
   })
 
-  it('a stint over the budget says so in one muted line, the last of its segment', async () => {
-    draw(createStintEnrichmentCache(vi.fn(async () => pageOf(many(5001)))))
-    const line = await screen.findByTestId('prelude-enrichment-truncated')
-    expect(line.textContent).toBe('This worker segment has too many events; only the first 5000 were used.')
-    expect(line.className).toBe('text-xs text-text-muted')
-    // Right after the segment's last row, before the handoff that closes the section.
-    const kids = [...screen.getByTestId('worker-prelude').children]
-    expect(kids.at(-2)).toBe(line)
-    expect(kids.at(-3)!.getAttribute('data-prelude-pos')).toBe(mode === 'room' ? '7' : '4')
-    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+  it('a stint over the budget says so in one muted line, the last of its segment, its count in the UI language', async () => {
+    // A runner whose own default groups 5000 as "5.000": the count must follow the UI language, never the runner's.
+    const RealNumberFormat = Intl.NumberFormat
+    const numberFormat = vi.spyOn(Intl, 'NumberFormat').mockImplementation(function (locales?: string | string[], options?: Intl.NumberFormatOptions) {
+      return new RealNumberFormat(locales ?? 'de-DE', options)
+    } as unknown as typeof Intl.NumberFormat)
+    let custom: string | null = null
     try {
-      expect(line.textContent).toBe('這段 worker 的事件太多，只補充了前 5000 筆')
+      draw(createStintEnrichmentCache(vi.fn(async () => pageOf(many(5001)))))
+      const line = await screen.findByTestId('prelude-enrichment-truncated')
+      expect(line.textContent).toBe('This worker segment has too many events; only the first 5,000 were used.')
+      expect(line.className).toBe('text-xs text-text-muted')
+      // Right after the segment's last row, before the handoff that closes the section.
+      const kids = [...screen.getByTestId('worker-prelude').children]
+      expect(kids.at(-2)).toBe(line)
+      expect(kids.at(-3)!.getAttribute('data-prelude-pos')).toBe(mode === 'room' ? '7' : '4')
+      act(() => { useI18nStore.getState().setLocale('zh-TW') })
+      expect(line.textContent).toBe('這段 worker 的事件太多，只補充了前 5,000 筆')
+      // A user-imported locale names no language: its missing keys are English, and so is its count.
+      custom = useI18nStore.getState().importLocale({ name: 'Mine', translations: {} })
+      act(() => { useI18nStore.getState().setLocale(custom!) })
+      expect(line.textContent).toBe('This worker segment has too many events; only the first 5,000 were used.')
     } finally {
+      numberFormat.mockRestore()
       act(() => { useI18nStore.getState().setLocale('en') })
+      if (custom) useI18nStore.getState().deleteCustomLocale(custom)
     }
   })
 
@@ -1004,7 +1022,7 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection per-turn 
   })
 
   it('a span holding lines of two turns (no opening line between) shows both footers, in turn order', async () => {
-    // An attachment-only prompt opens no span (#1614): msg_B's line follows msg_A's in one span.
+    // No opening line between two turns' lines (the later turn's prompt is not in the transcript): msg_B's line follows msg_A's in one span.
     const shared = derivePrelude([
       { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
       m('2', 'user', [{ type: 'text', text: 'prompt one' }]),
@@ -1042,5 +1060,228 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection per-turn 
     await waitFor(() => expect(failed.get('exc_A')).toBeNull())
     expect(footers()).toHaveLength(0)
     expect(plainDom()).toBe(html)
+  })
+})
+
+// Task 33 (R-2c-2 / R-2c-3): an earlier worker segment's omitted images become
+// thumbnails fetched from that stint, only when its prompts pair with the
+// stint's attachment-carrying events unambiguously; otherwise nothing changes.
+describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection attachment thumbnails on earlier worker segments in %s mode', (mode) => {
+  const ROUTE = { method: 'GET', path: '/api/nex/v1/executions/{id}/attachments/{sha256}' }
+  const att = (c: string) => ({ media_type: 'image/png', bytes: 10, sha256: c.repeat(64) })
+  const img = (kb: number) => ({ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: kb * 1024 } })
+  // Two prompts carry images, as Nexen writes them (text first, then each image); a third has none.
+  const makeView = () => derivePrelude([
+    { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+    m('2', 'user', [{ type: 'text', text: 'compare these' }, img(1), img(2)]),
+    m('3', 'assistant', [{ type: 'text', text: 'they differ' }]),
+    // An attachment-only send (#1614): an opening line, so chat starts a span here.
+    m('4', 'user', [img(3)]),
+    m('5', 'assistant', [{ type: 'text', text: 'a third' }]),
+    m('6', 'user', [{ type: 'text', text: 'thanks' }]),
+  ])
+  const view = makeView()
+  const A = new Map(['1', '2', '3', '4', '5', '6'].map((p) => [p, 'exc_A'] as const))
+  const ev = (seq: number, kind: string, payload: Record<string, unknown>): NexEvent => ({ seq, execution_id: 'exc_A', kind, payload, created_at: 1000 + seq })
+  const sent = (seq: number, attachments: unknown[]) => (seq === 1
+    ? ev(seq, 'execution.delegated', { brief: 'b', attachments })
+    : ev(seq, 'execution.message_accepted', { text: 't', turn_id: `t${seq}`, attachments }))
+  // The stint's sends: its brief with two images, an image-only message, a message with none.
+  const exact = [sent(1, [att('a'), att('b')]), sent(2, [att('c')]), sent(3, [])]
+  const cacheOf = (items: NexEvent[]) => createStintEnrichmentCache(vi.fn(async (): Promise<EventsPage> => ({ items, next_cursor: 0 })))
+  const draw = (cache: StintEnrichmentCache | null, v: PreludeView = view) => render(
+    // The pane's own source: an earlier stint's images must never be fetched from it.
+    <AttachmentSourceContext.Provider value={{ hostId: 'h', executionId: 'exc_now' }}>
+      <StintEnrichmentContext.Provider value={cache}>
+        <PreludeSection {...base} mode={mode} view={v} status="ok" done attribution={A} />
+      </StintEnrichmentContext.Provider>
+    </AttachmentSourceContext.Provider>,
+  )
+  const dom = () => screen.getByTestId('worker-prelude').outerHTML
+  const thumbs = (root: ParentNode = document) => root.querySelectorAll('[data-testid="attachment-thumb"]')
+  const placeholders = () => screen.queryAllByText(/^\[image · png · \d+ KB\]$/).map((e) => e.textContent)
+  const row = (pos: string) => document.querySelector(`[data-prelude-pos="${pos}"]`)!
+  /** Today's DOM: the same view with no enrichment at all. */
+  const plainDom = (v: PreludeView = view) => {
+    const r = draw(null, v)
+    const html = dom()
+    r.unmount()
+    return html
+  }
+  const settled = async (cache: StintEnrichmentCache) => {
+    await waitFor(() => expect(cache.get('exc_A')).toBeDefined())
+    await act(async () => {})
+  }
+  const fetched = () => vi.mocked(api.fetchAttachment).mock.calls.map((c) => [c[0], c[1], c[2]])
+
+  const origCreate = URL.createObjectURL, origRevoke = URL.revokeObjectURL
+  beforeEach(() => {
+    vi.mocked(api.fetchAttachment).mockReset()
+    vi.mocked(api.fetchAttachment).mockResolvedValue(new Blob(['x'], { type: 'image/png' }))
+    let n = 0
+    Object.assign(URL, { createObjectURL: vi.fn(() => `blob:t${++n}`), revokeObjectURL: vi.fn() })
+    const send = { delivery: ['delivered'], max_text_bytes: 1, max_request_bytes: 1, attachments: { image: { media_types: [], max_bytes: 1, max_count: 1, max_total_bytes: 1, providers: [], fetch: ROUTE } } }
+    useNexHostStore.setState({ byHost: { h: { phase: 'ready', capabilities: { send }, info: null, error: null, fetchedAt: 0, generation: 1, fingerprint: 'x' } } as never })
+  })
+  afterEach(() => {
+    Object.assign(URL, { createObjectURL: origCreate, revokeObjectURL: origRevoke })
+    useNexHostStore.setState({ byHost: {} })
+  })
+
+  it('an exact pairing: each prompt draws its list as thumbnails fetched from the stint, its text kept, its placeholders gone', async () => {
+    const plain = plainDom()
+    let settle: (p: EventsPage) => void = () => {}
+    draw(createStintEnrichmentCache(vi.fn(() => new Promise<EventsPage>((resolve) => { settle = resolve }))))
+    // Loading: today's DOM, placeholders and all.
+    expect(dom()).toBe(plain)
+    expect(placeholders()).toEqual(['[image · png · 1 KB]', '[image · png · 2 KB]', '[image · png · 3 KB]'])
+    await act(async () => settle({ items: exact, next_cursor: 0 }))
+    await waitFor(() => expect(thumbs()).toHaveLength(3))
+    expect(placeholders()).toEqual([])
+    // The k-th prompt gets the k-th list: two under the text, one on the image-only line's own.
+    expect(thumbs(row('2'))).toHaveLength(2)
+    expect(thumbs(row('4'))).toHaveLength(1)
+    expect(within(row('2') as HTMLElement).getByText('compare these')).toBeTruthy()
+    // The text keeps its search unit: each image's block becomes a slot in place, so no block index moves.
+    expect(document.querySelector('[data-search-unit="p2:0:text"]')!.textContent).toBe('compare these')
+    // From the stint, never the pane's own execution.
+    await waitFor(() => expect(fetched()).toHaveLength(3))
+    expect(fetched().sort()).toEqual([['h', 'exc_A', 'a'.repeat(64)], ['h', 'exc_A', 'b'.repeat(64)], ['h', 'exc_A', 'c'.repeat(64)]])
+    expect(vi.mocked(api.fetchAttachment).mock.calls.map((c) => c[3])).toEqual([ROUTE, ROUTE, ROUTE])
+  })
+
+  it('an image before its text (R-2c-5): every search unit id is the unmatched render\'s, and the thumbnail still shows', async () => {
+    const imageFirst = derivePrelude([
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+      m('2', 'user', [img(1), { type: 'text', text: 'what is this' }]),
+      m('3', 'assistant', [{ type: 'text', text: 'a cat' }]),
+    ])
+    const units = () => [...document.querySelectorAll('[data-search-unit]')].map((e) => [e.getAttribute('data-search-unit'), e.textContent])
+    const unmatched = draw(null, imageFirst)
+    const before = units()
+    unmatched.unmount()
+    expect(before).toContainEqual(['p2:1:text', 'what is this'])
+    draw(cacheOf([sent(1, [att('a')])]), imageFirst)
+    await waitFor(() => expect(thumbs(row('2'))).toHaveLength(1))
+    expect(placeholders()).toEqual([])
+    expect(units()).toEqual(before)
+  })
+
+  it('never mutates the transcript\'s own messages', async () => {
+    const fresh = makeView()
+    const before = JSON.stringify(fresh.messages)
+    const objects = [...fresh.messages]
+    draw(cacheOf(exact), fresh)
+    await waitFor(() => expect(thumbs()).toHaveLength(3))
+    expect(JSON.stringify(fresh.messages)).toBe(before)
+    expect(fresh.messages.every((msg, i) => msg === objects[i])).toBe(true)
+  })
+
+  it.each<[string, NexEvent[]]>([
+    // Mutation guard (count check): the first two lists pair, the extra one would be ignored without it.
+    ['one list too many', [...exact, sent(4, [att('d')])]],
+    ['one list too few', [sent(1, [att('a'), att('b')])]],
+    // Mutation guard (per-prompt check): as many lists as prompts, but the first holds one image, not two.
+    ['a list of the wrong length', [sent(1, [att('a')]), sent(2, [att('b'), att('c')])]],
+  ])('%s: placeholders stay for the whole segment, today\'s DOM, nothing fetched', async (_, events) => {
+    const plain = plainDom()
+    const cache = cacheOf(events)
+    draw(cache)
+    await settled(cache)
+    expect(thumbs()).toHaveLength(0)
+    expect(placeholders()).toHaveLength(3)
+    expect(dom()).toBe(plain)
+    expect(api.fetchAttachment).not.toHaveBeenCalled()
+  })
+
+  it('a failed fetch: today\'s DOM', async () => {
+    const plain = plainDom()
+    const cache = createStintEnrichmentCache(vi.fn(async () => { throw new Error('down') }))
+    draw(cache)
+    await waitFor(() => expect(cache.get('exc_A')).toBeNull())
+    await act(async () => {})
+    expect(dom()).toBe(plain)
+  })
+
+  it('a segment with no images is unchanged, whatever the stint sent', async () => {
+    const textOnly = derivePrelude([
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+      m('2', 'user', [{ type: 'text', text: 'compare these' }]),
+      m('3', 'assistant', [{ type: 'text', text: 'they differ' }]),
+    ])
+    const plain = plainDom(textOnly)
+    for (const events of [exact, [sent(1, [])]]) {
+      const cache = cacheOf(events)
+      const r = draw(cache, textOnly)
+      await settled(cache)
+      expect(dom()).toBe(plain)
+      r.unmount()
+    }
+    expect(api.fetchAttachment).not.toHaveBeenCalled()
+  })
+
+  // Codex R1-1: a send's attachments are images only (Nexen's `send.attachments.image`); an omitted document never pairs.
+  describe('documents never pair', () => {
+    const pdf = (kb: number) => ({ type: 'document', source: { type: 'omitted', media_type: 'application/pdf', bytes: kb * 1024 } })
+    const docPlaceholders = () => screen.queryAllByText(/^\[document · pdf · \d+ KB\]$/).map((e) => e.textContent)
+    const units = () => [...document.querySelectorAll('[data-search-unit]')].map((e) => [e.getAttribute('data-search-unit'), e.textContent])
+    // A prompt with an image AND a document (the document first), then an image-only one.
+    const mixed = derivePrelude([
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+      m('2', 'user', [pdf(5), { type: 'text', text: 'compare these' }, img(1)]),
+      m('3', 'assistant', [{ type: 'text', text: 'they differ' }]),
+      m('4', 'user', [img(3)]),
+      m('5', 'assistant', [{ type: 'text', text: 'a third' }]),
+    ])
+
+    it('a document-only prompt is unchanged: never counted, never replaced', async () => {
+      const docOnly = derivePrelude([
+        { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+        m('2', 'user', [{ type: 'text', text: 'read this' }, pdf(5)]),
+        m('3', 'assistant', [{ type: 'text', text: 'read it' }]),
+      ])
+      const plain = plainDom(docOnly)
+      for (const events of [[sent(1, [att('a')])], [sent(1, [])]]) {
+        const cache = cacheOf(events)
+        const r = draw(cache, docOnly)
+        await settled(cache)
+        expect(dom()).toBe(plain)
+        expect(docPlaceholders()).toEqual(['[document · pdf · 5 KB]'])
+        r.unmount()
+      }
+      expect(api.fetchAttachment).not.toHaveBeenCalled()
+    })
+
+    it('an image + document prompt whose image count matches: a thumbnail for the image, the document keeps its placeholder', async () => {
+      const r = draw(null, mixed)
+      const before = units()
+      r.unmount()
+      draw(cacheOf([sent(1, [att('a')]), sent(2, [att('c')])]), mixed)
+      await waitFor(() => expect(thumbs()).toHaveLength(2))
+      expect(thumbs(row('2'))).toHaveLength(1)
+      expect(thumbs(row('4'))).toHaveLength(1)
+      expect(placeholders()).toEqual([])
+      expect(docPlaceholders()).toEqual(['[document · pdf · 5 KB]'])
+      expect(row('2').contains(screen.getByText('[document · pdf · 5 KB]'))).toBe(true)
+      expect(units()).toEqual(before)
+      await waitFor(() => expect(fetched()).toHaveLength(2))
+      expect(fetched().sort()).toEqual([['h', 'exc_A', 'a'.repeat(64)], ['h', 'exc_A', 'c'.repeat(64)]])
+    })
+
+    it.each<[string, NexEvent[]]>([
+      ['one list too few', [sent(1, [att('a')])]],
+      ['one list too many', [sent(1, [att('a')]), sent(2, [att('c')]), sent(3, [att('d')])]],
+      // Two lists for the image AND the document of prompt 2: a document is no attachment, so this is a mismatch.
+      ['a list counting the document', [sent(1, [att('a'), att('b')]), sent(2, [att('c')])]],
+    ])('%s: today\'s DOM, nothing fetched', async (_, events) => {
+      const plain = plainDom(mixed)
+      const cache = cacheOf(events)
+      draw(cache, mixed)
+      await settled(cache)
+      expect(dom()).toBe(plain)
+      expect(placeholders()).toHaveLength(2)
+      expect(docPlaceholders()).toHaveLength(1)
+      expect(api.fetchAttachment).not.toHaveBeenCalled()
+    })
   })
 })

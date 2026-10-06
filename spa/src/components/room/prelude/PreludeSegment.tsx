@@ -1,7 +1,7 @@
 // spa/src/components/room/prelude/PreludeSegment.tsx — one run of the
 // prelude whose lines share an attribution (conversation entity spec §10.3):
 // the lines an earlier worker stint wrote, or a plain transcript segment.
-// A Fragment, never a box (see PreludeSection's header): it draws its entries
+// No element of its own, never a box (see PreludeSection's header): it draws its entries
 // (room) or blocks (chat) with the section's own ctx and span operations,
 // exactly as the section drew them before it was cut into runs.
 // A worker stint's segment is enriched from that stint's own events (§10.4):
@@ -9,11 +9,20 @@
 // chat re-sorts its spans' operations by them), its Task calls their subagent
 // task rows, and past the event budget one muted line says so. Each prompt span
 // (the spans chat draws, restricted to the run, in both modes) also gets its
-// turn's cost footer, found by the assistant message ids the span holds.
+// turn's cost footer, found by the assistant message ids the span holds. When
+// its prompts pair with the stint's sends unambiguously (`thumbnailPrompts`),
+// their omitted images become thumbnails fetched from the stint.
 // Until then, or when the fetch fails, it is drawn exactly as a plain one.
-import { Fragment, useMemo, type ReactElement, type ReactNode } from 'react'
+// A context provider wraps every segment (no DOM; a stable tree, so nothing
+// remounts when thumbnails arrive): the stint's source for thumbnails, else the pane's.
+import { Fragment, useContext, useMemo, type ReactElement, type ReactNode } from 'react'
 import type { TurnCost } from '../../../lib/nex/cost-summary'
-import { useI18nStore } from '../../../stores/useI18nStore'
+import type { AttachmentMeta } from '../../../lib/nex/attachments'
+import type { ContentBlock, StreamMessage, UserMessage } from '../../../lib/nex/message-types'
+import { isOpeningLine } from '../../../lib/nex/turns'
+import { AttachmentSourceContext } from '../attachment-source'
+import { isOmittedMedia } from './placeholder-utils'
+import { useDateLocale, useI18nStore } from '../../../stores/useI18nStore'
 import { classifyTurnOperations, type TurnOperation } from '../../../lib/nex/operation-status'
 import { chatToolsKey } from '../../../lib/nex/transcript-search'
 import type { PreludeBlock, PreludeEntry, PreludeView } from '../../../lib/nex/prelude'
@@ -56,8 +65,43 @@ export type PreludeSegmentProps = {
   ctx: RenderCtx
 } & PreludeSegmentSlice
 
+/**
+ * What stands in place of an omitted image once its line draws thumbnails: a block type no
+ * renderer draws (MessageRow and ChatTurnBody return null for an unknown type; search and isOpeningLine
+ * read the transcript's own messages, never this copy). In place, so every other block keeps its index,
+ * and with it its search unit id and fold key, wherever the images sat.
+ */
+const THUMBNAIL_SLOT = Object.freeze({ type: 'purdex_thumbnail_slot' }) as unknown as ContentBlock
+
+/**
+ * An omitted image: the only kind a send's attachments carry (Nexen's `send.attachments.image`). An omitted
+ * document is never paired; it keeps its placeholder.
+ */
+const isOmittedImage = (b: ContentBlock): boolean => b.type === 'image' && isOmittedMedia(b)
+
+/**
+ * The prompt lines that draw thumbnails, by message index; null = none do. The segment's opening lines
+ * that carry omitted images pair with the stint's attachment lists (k-th with k-th) only when both
+ * counts match: as many lines as lists, and each line exactly as many omitted images as its list holds.
+ * A paired line is a copy whose `purdex_attachments` is its list, each of those images a slot, the rest kept.
+ */
+function thumbnailPrompts(messages: readonly StreamMessage[], drawn: readonly number[], lists: readonly (readonly AttachmentMeta[])[]): ReadonlyMap<number, StreamMessage> | null {
+  const prompts = drawn.filter((i) => isOpeningLine(messages[i]) && (messages[i] as UserMessage).message.content.some(isOmittedImage))
+  if (prompts.length === 0 || prompts.length !== lists.length) return null
+  const out = new Map<number, StreamMessage>()
+  for (const [k, i] of prompts.entries()) {
+    const u = messages[i] as UserMessage
+    if (u.message.content.filter(isOmittedImage).length !== lists[k].length) return null
+    const content = u.message.content.map((b) => (isOmittedImage(b) ? THUMBNAIL_SLOT : b))
+    out.set(i, { ...u, message: { ...u.message, content }, purdex_attachments: lists[k] } as StreamMessage)
+  }
+  return out
+}
+
 export default function PreludeSegment(props: PreludeSegmentProps) {
   const t = useI18nStore((s) => s.t)
+  // The UI language's tag (never the browser's): the budget line's count is grouped as the page's language does.
+  const uiLocale = useDateLocale()
   const { view } = props
   // null (failed) draws like undefined (loading, or a plain segment): the transcript's own.
   const enrichment = useStintEnrichment(props.hostId, props.stintId) ?? null
@@ -116,8 +160,25 @@ export default function PreludeSegment(props: PreludeSegmentProps) {
     }
     return out
   }, [enrichment, chatBlocks, entries, view, props.summary, t])
+  // The prompt lines drawn with thumbnails instead of placeholders (null: none), from the messages this segment draws.
+  const thumbed = useMemo(() => {
+    if (!enrichment || enrichment.attachmentsByPrompt.length === 0) return null
+    const drawn = chatBlocks
+      ? chatBlocks.flatMap((b) => (b.kind === 'span' ? Array.from({ length: b.end - b.start }, (_, i) => b.start + i) : []))
+      : (entries ?? []).flatMap((e) => (e.kind === 'message' ? [e.m] : []))
+    return thumbnailPrompts(view.messages, drawn, enrichment.attachmentsByPrompt)
+  }, [enrichment, chatBlocks, entries, view.messages])
+  const chatMessages = useMemo(() => {
+    if (!thumbed) return view.messages
+    const out = view.messages.slice()
+    for (const [i, msg] of thumbed) out[i] = msg
+    return out
+  }, [thumbed, view.messages])
+  const paneSource = useContext(AttachmentSourceContext)
+  const stintSource = useMemo(() => (props.stintId === null ? null : { hostId: props.hostId, executionId: props.stintId }), [props.hostId, props.stintId])
+  const source = thumbed && stintSource ? stintSource : paneSource
   const budgetLine = enrichment?.truncated
-    ? <div data-testid="prelude-enrichment-truncated" className="text-xs text-text-muted">{t('worker.prelude.enrichment_truncated', { n: ENRICHMENT_EVENT_BUDGET })}</div>
+    ? <div data-testid="prelude-enrichment-truncated" className="text-xs text-text-muted">{t('worker.prelude.enrichment_truncated', { n: new Intl.NumberFormat(uiLocale).format(ENRICHMENT_EVENT_BUDGET) })}</div>
     : null
 
   const entryNode = (e: Exclude<PreludeEntry, { kind: 'message' }>): ReactNode => {
@@ -141,30 +202,30 @@ export default function PreludeSegment(props: PreludeSegmentProps) {
     const { blocks, keyPrefix, posOf } = props
     const spanOps = enrichedOps ?? props.spanOps
     return (
-      <>
+      <AttachmentSourceContext.Provider value={source}>
         {blocks.map((b, bi) => b.kind === 'entry'
           ? entryNode(b.entry)
           : (
-            <ChatTurnBody key={`${keyPrefix}-prelude-span-${view.ids[b.end - 1]}`} messages={view.messages} turn={b}
+            <ChatTurnBody key={`${keyPrefix}-prelude-span-${view.ids[b.end - 1]}`} messages={chatMessages} turn={b}
               ops={spanOps[bi]} ctx={ctx} toolsKey={chatToolsKey(`${keyPrefix}-prelude`, view.ids[b.end - 1])}
               interrupted={t('stream.interrupted')} preludePoses={posOf.slice(b.start, b.end)} footer={footerAt.get(b.end - 1)} />
           ))}
         {budgetLine}
-      </>
+      </AttachmentSourceContext.Provider>
     )
   }
   // A footer is a sibling right after its span's last row (the row's own key is untouched).
   const rows: ReactNode[] = []
   for (const e of props.entries) {
     if (e.kind !== 'message') { rows.push(entryNode(e)); continue }
-    rows.push(ctx.index.childIndexes.has(e.m) ? null : renderMessage(view.messages[e.m], e.m, ctx, e.pos))
+    rows.push(ctx.index.childIndexes.has(e.m) ? null : renderMessage(thumbed?.get(e.m) ?? view.messages[e.m], e.m, ctx, e.pos))
     const footer = footerAt.get(e.m)
     if (footer) rows.push(<Fragment key={`cost-${e.pos}`}>{footer}</Fragment>)
   }
   return (
-    <>
+    <AttachmentSourceContext.Provider value={source}>
       {rows}
       {budgetLine}
-    </>
+    </AttachmentSourceContext.Provider>
   )
 }

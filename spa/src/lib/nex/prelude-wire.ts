@@ -141,8 +141,10 @@ function frame(kind: 'assistant' | 'user', payload: Record<string, unknown>): St
     : Array.isArray(raw) ? raw.map(cleanBlock).filter((b): b is Record<string, unknown> => b !== null) : null
   if (!content) return null
   // Nexen's N2-derivation inputs, never sent to clients (spec §4.3); untrusted if present.
-  const { tool_use_result: _r, tool_result_meta: _m, ...rest } = payload
-  void _r; void _m
+  // `purdex_attachments` is the SPA's own side field: only the prelude's thumbnail pairing (PreludeSegment)
+  // may set it, so a transcript line carrying one must never drive an attachment fetch (R-2c-6).
+  const { tool_use_result: _r, tool_result_meta: _m, purdex_attachments: _a, ...rest } = payload
+  void _r; void _m; void _a
   return {
     ...rest,
     type: kind,
