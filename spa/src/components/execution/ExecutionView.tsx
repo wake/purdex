@@ -1,6 +1,6 @@
 // spa/src/components/execution/ExecutionView.tsx — the {kind:'execution'}
 // pane (spec §4.3.3). Composes the observe subscription, the lazy control
-// lease, the pane's actions (useExecutionActions: send/interrupt/terminate,
+// lease, the pane's actions (useExecutionActions: send/interrupt,
 // the only writes), the room transcript, the worker dock and WorkerInput. It also
 // owns "Take to terminal": confirm when a turn is running, then
 // `lib/nex/handoff.ts` does the request, the lease forget and the pane swap
@@ -56,6 +56,8 @@ import { indexOperations } from '../../lib/nex/operations'
 import { toolUseUnit } from '../../lib/nex/transcript-search'
 import { partialHasChatContent, partialHasVisibleContent } from '../../lib/nex/partial'
 import { HandoffApiError } from '../../lib/nex/handoff-api'
+import { exitWorker, exitErrorMessage } from '../../lib/nex/exit-worker'
+import { isLiveRow } from '../../lib/nex/live-workers'
 import { takeBack, takeToTerminal, handoffErrorMessage, manualResumeHint } from '../../lib/nex/handoff'
 import { registerTakeToTerminal } from '../../lib/nex/take-to-terminal-registry'
 import type { ExecutionFrom, ExecutionViewMode } from '../../types/tab'
@@ -114,7 +116,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   const preludeApi = useExecutionPrelude(hostId, executionId)
   const preludeView = useMemo(() => derivePrelude(st.prelude.items), [st.prelude.items])
   const lease = useExecutionLease(hostId, executionId)
-  const { draft, actionPending, handleSend, handleInterrupt, handleTerminate, restoreDraft } = useExecutionActions(hostId, executionId, lease)
+  const { draft, actionPending, handleSend, handleInterrupt, restoreDraft } = useExecutionActions(hostId, executionId, lease)
   // Spec §9.2 (phase E): native images only when the host's capability
   // exists AND lists this execution's provider — null otherwise (an older
   // daemon, a codex execution, the summary not in yet), and then every image
@@ -146,7 +148,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // Take-back: `takeBack` is single-flight per execution, but the busy flag
   // is what the header shows; the ref keeps a same-tick second click from
   // reaching it before React commits the state. While it is pending every
-  // write to the execution (send / interrupt / terminate) is frozen too: the
+  // write to the execution (send / interrupt / exit) is frozen too: the
   // daemon is interrupting and archiving it, and a write racing that would
   // land on an execution that is about to be gone.
   const [takeBackBusy, setTakeBackBusy] = useState(false)
@@ -165,12 +167,14 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
     try {
       const leaseId = exec?.lease?.leaseId
       const common = { hostId, executionId, leaseId, tabId, paneId, forgetLease: lease.forget }
-      const { swapped } = from
+      const { result, swapped } = from
         ? await takeBack({ ...common, from })
         : await takeToTerminal({ ...common, cwd: cwd! })
       // On `swapped` this view is already unmounted (the pane is a terminal
       // again); the toast is global, so it still lands.
       toast.show(swapped ? t('takeback.success') : t('takeback.archived_no_pane'))
+      // The terminal took over, but the worker is still live: say so until dismissed.
+      if (result.exited === false) toast.show(t('worker.exit.after_transfer_failed'), undefined, undefined, { persistent: true })
     } catch (err) {
       if (err instanceof HandoffApiError) {
         const id = manualResumeHint(err)
@@ -184,12 +188,38 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       setTakeBackBusy(false)
     }
   }, [from, hostId, executionId, key, tabId, paneId, lease.forget, t])
-  // A write already on its way to the daemon (send, interrupt, terminate)
+  // 退出: single-flight in `exitWorker`; the ref stops a same-tick second click.
+  const [exitBusy, setExitBusy] = useState(false)
+  const exitInFlight = useRef(false)
+  const [confirmExit, setConfirmExit] = useState(false)
+  const runExit = useCallback(async () => {
+    if (exitInFlight.current) return
+    exitInFlight.current = true
+    setExitBusy(true)
+    try {
+      const result = await exitWorker({ hostId, executionId, leaseId: useExecutionStore.getState().executions[key]?.lease?.leaseId, forgetLease: lease.forget })
+      // Patch the summary at once from the result (the SSE confirms later): no longer live,
+      // so exit stays disabled and the ended handling takes over.
+      useExecutionStore.getState().applySummaryPatch(hostId, executionId, { state: result.state, archived: result.archived })
+    } catch (err) {
+      useUndoToast.getState().show(exitErrorMessage(err, t))
+    } finally {
+      exitInFlight.current = false
+      setExitBusy(false)
+    }
+  }, [hostId, executionId, key, lease.forget, t])
+  const onExit = useCallback(() => {
+    if (exitInFlight.current) return
+    if (useExecutionStore.getState().executions[key]?.summary?.state === 'running') setConfirmExit(true)
+    else void runExit()
+  }, [key, runExit])
+  const exitable = !!st.summary && isLiveRow(st.summary)
+  // A write already on its way to the daemon (send, interrupt)
   // could land after the daemon's settled check and before its archive;
   // the daemon re-verifies (#1171), and the SPA refuses to start the race.
   const writeInFlight = st.pendingSend || actionPending
   const onTakeBack = useCallback(() => {
-    if (takeBackInFlight.current || writeInFlight) return
+    if (takeBackInFlight.current || exitInFlight.current || writeInFlight) return
     if (useExecutionStore.getState().executions[key]?.summary?.state === 'running') setConfirmTakeBack(true)
     else void runTakeBack()
   }, [key, runTakeBack, writeInFlight])
@@ -206,7 +236,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // through a ref, so a re-render that leaves canTake / busy alone still runs
   // the latest closure without re-registering.
   const takeOffered = !problem && (!!from || canTakeToTerminal)
-  const takeBusy = takeBackBusy || writeInFlight
+  const takeBusy = takeBackBusy || exitBusy || writeInFlight
   const onTakeBackRef = useRef(onTakeBack)
   useLayoutEffect(() => { onTakeBackRef.current = onTakeBack })
   useEffect(() => registerTakeToTerminal(paneId, {
@@ -341,7 +371,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // this clears itself without redesigning the reconnect path.
   const streamDead = st.historyLoaded && st.sse === 'closed' && !!st.sseError
   // One gate for everything that sends: the input and the quick replies.
-  const inputDisabled = st.pendingSend || encodingBusy || ended || !st.historyLoaded || streamDead || takeBackBusy
+  const inputDisabled = st.pendingSend || encodingBusy || ended || !st.historyLoaded || streamDead || takeBackBusy || exitBusy
   const placeholder = st.summary?.archived ? t('execution.input.archived')
     : ended ? t('execution.input.terminal')
     : streamDead ? t('execution.input.disconnected')
@@ -456,7 +486,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // A file dragged over the pane must never fall through to the browser's
   // default (Electron would navigate to it), so every file drag is claimed;
   // an ended execution just shows no overlay and takes nothing.
-  const canAttach = !ended && !takeBackBusy
+  const canAttach = !ended && !takeBackBusy && !exitBusy
   // The drop target matches the disabled `+` button (worker.upload.attach):
   // while sending, mid-take-back, history still loading or the stream dead,
   // neither offers to attach.
@@ -533,9 +563,14 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
       className="relative flex flex-col h-full">
       <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
-        onInterrupt={() => void handleInterrupt()} onTerminate={() => void handleTerminate()} busy={terminal || takeBackBusy}
+        onInterrupt={() => void handleInterrupt()} onExit={onExit} exitDisabled={!exitable || exitBusy || takeBackBusy || writeInFlight} busy={terminal || takeBackBusy || exitBusy}
         onTakeBack={takeOffered ? onTakeBack : undefined} takeBackBusy={takeBusy}
         mode={mode} onModeChange={onModeChange} />
+      {confirmExit && (
+        <ConfirmDialog testIdPrefix="exit" title={t('worker.exit.confirm_title')} body={t('worker.exit.confirm_running')}
+          confirmLabel={t('worker.exit.button')} onCancel={() => setConfirmExit(false)}
+          onConfirm={() => { setConfirmExit(false); void runExit() }} />
+      )}
       {confirmTakeBack && (
         <ConfirmDialog testIdPrefix="takeback" title={t('takeback.confirm_title')} body={t('takeback.confirm_running')}
           confirmLabel={t('takeback.button')} onCancel={() => setConfirmTakeBack(false)}

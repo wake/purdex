@@ -37,7 +37,8 @@ const baseProps = {
   cost: costSummary([]),
   hostId: 'h1',
   onInterrupt: vi.fn(),
-  onTerminate: vi.fn(),
+  onExit: vi.fn(),
+  exitDisabled: false,
   busy: false,
   onModeChange: vi.fn(),
 }
@@ -55,7 +56,7 @@ describe('ExecutionHeader', () => {
     expect(name.className).toMatch(/\btext-text-primary\b/)
     expect(screen.getByTestId('execution-cost')).toHaveTextContent('$0.00')
     expect(screen.getByRole('button', { name: /^interrupt$/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^terminate$/i })).toBeInTheDocument()
+    expect(screen.getByTestId('header-exit')).toBeInTheDocument()
     expect(screen.getByTestId('view-mode')).toBeInTheDocument()
   })
 
@@ -90,14 +91,20 @@ describe('ExecutionHeader', () => {
     expect(screen.queryByTestId('worker-info-panel')).toBeNull()
   })
 
-  it('styles terminate as destructive before the first click', () => {
-    render(<ExecutionHeader {...baseProps} summary={summary()} />)
-    const term = screen.getByRole('button', { name: /^terminate$/i })
-    expect(term.className).toMatch(/\btext-status-error\b/)
-    // The confirm step is unchanged: first click arms, the label changes.
-    fireEvent.click(term)
-    expect(screen.getByRole('button', { name: /confirm terminate/i }).className).toMatch(/\btext-status-error\b/)
-    expect(baseProps.onTerminate).not.toHaveBeenCalled()
+  it('offers 退出 (destructive) and calls onExit; no terminate control remains', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary({ state: 'idle' })} />)
+    const exit = screen.getByTestId('header-exit')
+    expect(exit.className).toMatch(/\btext-status-error\b/)
+    fireEvent.click(exit)
+    expect(baseProps.onExit).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(/terminate|終止/i)).toBeNull()
+  })
+
+  it('disables 退出 when exitDisabled, in the wide row and the overflow', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary({ state: 'terminated' })} exitDisabled />)
+    expect(screen.getByTestId('header-exit')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    expect(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-exit')).toBeDisabled()
   })
 
   // Spec §1: take-to-terminal changes the pane's binding, it does not interrupt
@@ -132,7 +139,7 @@ describe('ExecutionHeader', () => {
     expect(wide.className).toMatch(/@max-md:hidden/)
     expect(wide).toContainElement(screen.getByTestId('execution-cost'))
     expect(wide).toContainElement(screen.getByRole('button', { name: /^interrupt$/i }))
-    expect(wide).toContainElement(screen.getByRole('button', { name: /^terminate$/i }))
+    expect(wide).toContainElement(screen.getByTestId('header-exit'))
     expect(wide).not.toContainElement(screen.getByTestId('view-mode'))
     const trigger = screen.getByTestId('header-overflow')
     expect(trigger.className).toMatch(/(^|\s)hidden(\s|$)/)
@@ -146,12 +153,11 @@ describe('ExecutionHeader', () => {
     expect(baseProps.onInterrupt).toHaveBeenCalledTimes(1)
     // Acting from the menu closes it, like any menu.
     expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
-    // Terminate keeps its two-step confirm inside the menu too.
+    // 退出 is one click in the menu too (ExecutionView asks when it needs to).
     fireEvent.click(trigger)
-    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-terminate'))
-    expect(baseProps.onTerminate).not.toHaveBeenCalled()
-    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-terminate'))
-    expect(baseProps.onTerminate).toHaveBeenCalledTimes(1)
+    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-exit'))
+    expect(baseProps.onExit).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('header-overflow-panel')).toBeNull()
   })
 
   // R2 plan T1.2: "Take to terminal" is the terminal item of the view menu
@@ -265,11 +271,11 @@ describe('ExecutionHeader', () => {
     expect(screen.queryByTestId('header-wide-actions')).toBeNull()
     expect(screen.queryByTestId('view-mode')).toBeNull()
     expect(screen.queryByRole('button', { name: /^interrupt$/i })).toBeNull()
-    expect(screen.queryByRole('button', { name: /^terminate$/i })).toBeNull()
+    expect(screen.queryByTestId('header-exit')).toBeNull()
     expect(container.querySelectorAll('button')).toHaveLength(2)
   })
 
-  it("chat's overflow holds interrupt, terminate and the view items at wide widths too", () => {
+  it("chat's overflow holds interrupt, exit and the view items at wide widths too", () => {
     const onModeChange = vi.fn()
     render(<ExecutionHeader {...baseProps} summary={summary()} mode="chat" onModeChange={onModeChange} onTakeBack={vi.fn()} />)
     fireEvent.click(screen.getByTestId('header-overflow'))
@@ -280,9 +286,8 @@ describe('ExecutionHeader', () => {
     fireEvent.click(within(panel).getByTestId('overflow-interrupt'))
     expect(baseProps.onInterrupt).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByTestId('header-overflow'))
-    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-terminate'))
-    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-terminate'))
-    expect(baseProps.onTerminate).toHaveBeenCalledTimes(1)
+    fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-exit'))
+    expect(baseProps.onExit).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByTestId('header-overflow'))
     fireEvent.click(within(screen.getByTestId('header-overflow-panel')).getByTestId('view-mode-room'))
     expect(onModeChange).toHaveBeenCalledWith('room')
@@ -312,7 +317,7 @@ describe('ExecutionHeader', () => {
     expect(btn.disabled).toBe(true)
     fireEvent.click(btn)
     expect(onTakeBack).not.toHaveBeenCalled()
-    // `busy` (terminal execution) gates interrupt/terminate, not take-back:
+    // `busy` (terminal execution) gates interrupt, not take-back:
     // an ended execution can still go back to its terminal.
     rerender(<ExecutionHeader {...baseProps} summary={summary({ state: 'failed' })} busy onTakeBack={onTakeBack} />)
     expect((screen.getByTestId('view-mode-terminal') as HTMLButtonElement).disabled).toBe(false)

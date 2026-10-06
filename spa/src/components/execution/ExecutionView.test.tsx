@@ -13,6 +13,7 @@ import { NexApiError } from '../../lib/nex/types'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { HandoffApiError, nexTakeback, nexTakeToTerminal } from '../../lib/nex/handoff-api'
 import { takeBack, takeToTerminal } from '../../lib/nex/handoff'
+import { exitWorker } from '../../lib/nex/exit-worker'
 import { getTakeToTerminal } from '../../lib/nex/take-to-terminal-registry'
 import { createTab } from '../../types/tab'
 import { getPrimaryPane } from '../../lib/pane-tree'
@@ -27,6 +28,10 @@ vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }
 // The take-back path runs the real orchestration (store swap, forget-before-
 // swap) against a mocked daemon call; `takeBack` itself is a pass-through spy
 // so the view's call shape (lease id, forgetLease identity) is observable.
+vi.mock('../../lib/nex/exit-worker', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/nex/exit-worker')>()),
+  exitWorker: vi.fn(),
+}))
 vi.mock('../../lib/nex/handoff-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/nex/handoff-api')>()),
   nexTakeback: vi.fn(),
@@ -50,6 +55,8 @@ beforeEach(() => {
   vi.mocked(api.sendMessage).mockReset().mockResolvedValue({ turn_id: 't1', delivery: 'delivered' })
   vi.mocked(api.interruptExecution).mockReset().mockResolvedValue({ turn_id: 't1', state: 'idle' })
   vi.mocked(api.terminateExecution).mockReset().mockResolvedValue(undefined)
+  vi.mocked(exitWorker).mockReset().mockResolvedValue({ exited: true, terminated: true, archived: true, state: 'terminated' })
+  useUndoToast.setState({ toast: null, notice: null })
   useExecutionStore.getState().setSummary(H, E, summary() as never)
   useExecutionStore.getState().setHistoryLoaded(H, E, true)
   // Take back / Take to terminal re-point the pane only on a host shown in the workbench (host ownership H2d-3).
@@ -227,12 +234,84 @@ describe('ExecutionView', () => {
     expect(screen.queryByTestId('send-error')).not.toBeInTheDocument()
   })
 
-  it('terminate needs two clicks, then acquires the lease and posts', async () => {
+  it('exits an idle worker without a confirm and passes the held lease', async () => {
+    useExecutionStore.getState().setLease(H, E, { leaseId: 'L1', expiresAt: Date.now() + 100_000 })
     render(<ExecutionView {...base} isActive />)
-    fireEvent.click(screen.getByRole('button', { name: /^terminate$/i }))
-    expect(api.terminateExecution).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: /confirm terminate/i }))
-    await waitFor(() => expect(api.terminateExecution).toHaveBeenCalledWith(H, E, 'ls_1'))
+    fireEvent.click(screen.getByTestId('header-exit'))
+    await waitFor(() => expect(exitWorker).toHaveBeenCalledWith(expect.objectContaining({ hostId: H, executionId: E, leaseId: 'L1', forgetLease: forget })))
+    expect(screen.queryByTestId('exit-confirm')).toBeNull()
+  })
+
+  it('asks before exiting a running worker', async () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'running' }) as never)
+    render(<ExecutionView {...base} isActive />)
+    fireEvent.click(screen.getByTestId('header-exit'))
+    expect(exitWorker).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('exit-confirm'))
+    await waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
+  })
+
+  it('lets a failed worker exit; a terminated or archived one cannot', () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'failed' }) as never)
+    const { rerender } = render(<ExecutionView {...base} isActive />)
+    expect(screen.getByTestId('header-exit')).toBeEnabled()
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never)
+    rerender(<ExecutionView {...base} isActive />)
+    expect(screen.getByTestId('header-exit')).toBeDisabled()
+  })
+
+  it('shows the held_by message on refusal and thaws the button', async () => {
+    vi.mocked(exitWorker).mockRejectedValueOnce(new HandoffApiError(409, 'held_by', { principal: 'ploom:agent-7' }))
+    render(<ExecutionView {...base} isActive />)
+    fireEvent.click(screen.getByTestId('header-exit'))
+    await waitFor(() => expect(useUndoToast.getState().toast?.message).toContain('ploom:agent-7'))
+    await waitFor(() => expect(screen.getByTestId('header-exit')).toBeEnabled())
+  })
+
+  it('exit is disabled while a send is in flight', () => {
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.getByTestId('header-exit')).toBeEnabled()
+    act(() => { patchExec({ pendingSend: true, pendingLocal: { text: 'hi', delivery: null } as Exec['pendingLocal'] }) })
+    expect(screen.getByTestId('header-exit')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('header-exit'))
+    expect(exitWorker).not.toHaveBeenCalled()
+  })
+
+  it('freezes the composer, interrupt and exit while the exit is in flight', async () => {
+    let resolveExit!: (v: Awaited<ReturnType<typeof exitWorker>>) => void
+    vi.mocked(exitWorker).mockReturnValueOnce(new Promise((res) => { resolveExit = res }))
+    render(<ExecutionView {...base} isActive />)
+    const textbox = () => screen.getByRole('textbox') as HTMLTextAreaElement
+    const interrupt = () => screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement
+    expect(textbox().disabled).toBe(false)
+    expect(interrupt().disabled).toBe(false)
+    fireEvent.click(screen.getByTestId('header-exit'))
+    await waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
+    expect(textbox().disabled).toBe(true)
+    expect(interrupt().disabled).toBe(true)
+    expect(screen.getByTestId('header-exit')).toBeDisabled()
+    fireEvent.click(interrupt())
+    expect(api.interruptExecution).not.toHaveBeenCalled()
+    await act(async () => { resolveExit({ exited: true, terminated: true, archived: true, state: 'terminated' }) })
+  })
+
+  it('after a successful exit the summary is no longer live and exit stays disabled without any SSE', async () => {
+    vi.mocked(exitWorker).mockResolvedValueOnce({ exited: true, terminated: true, archived: true, state: 'terminated' })
+    render(<ExecutionView {...base} isActive />)
+    fireEvent.click(screen.getByTestId('header-exit'))
+    await waitFor(() => expect(useExecutionStore.getState().executions[KEY].summary?.state).toBe('terminated'))
+    expect(useExecutionStore.getState().executions[KEY].summary?.archived).toBe(true)
+    await waitFor(() => expect(screen.getByTestId('header-exit')).toBeDisabled())
+  })
+
+  it('a summary fetch that started before the exit cannot revive the pane when it lands late', async () => {
+    render(<ExecutionView {...base} isActive />)
+    const gen = useExecutionStore.getState().executions[KEY].summaryGen
+    fireEvent.click(screen.getByTestId('header-exit'))
+    await waitFor(() => expect(useExecutionStore.getState().executions[KEY].summary?.state).toBe('terminated'))
+    act(() => { useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', archived: false }) as never, 0, gen) })
+    expect(useExecutionStore.getState().executions[KEY].summary?.state).toBe('terminated')
+    expect(screen.getByTestId('header-exit')).toBeDisabled()
   })
 
   it('disables input with a reason when archived or ended', () => {
@@ -266,11 +345,11 @@ describe('ExecutionView', () => {
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
   })
 
-  it('archived: input is disabled but Terminate stays enabled (not a terminal state)', () => {
+  it('archived: input and 退出 are disabled (not a live row)', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ archived: true }) as never)
     render(<ExecutionView {...base} isActive />)
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
-    expect(screen.getByRole('button', { name: /^terminate$/i })).not.toBeDisabled()
+    expect(screen.getByTestId('header-exit')).toBeDisabled()
   })
 
   it('shows the thinking indicator once a delivered send has no reply yet', async () => {
@@ -696,14 +775,14 @@ describe('ExecutionView — take back to terminal', () => {
     expect(paneContent(ids.tabId).kind).toBe('tmux-session')
   })
 
-  it('freezes execution writes while the take-back is pending: input, Interrupt and Terminate are disabled (R1-1)', async () => {
+  it('freezes execution writes while the take-back is pending: input, Interrupt and 退出 are disabled (R1-1)', async () => {
     const d = deferred<typeof takebackOk>()
     mockedTakeback.mockReturnValueOnce(d.promise)
     const ids = executionTab()
     render(<ExecutionView {...base} {...ids} from={from} isActive />)
     const textbox = () => screen.getByRole('textbox') as HTMLTextAreaElement
     const interrupt = () => screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement
-    const terminate = () => screen.getByRole('button', { name: /^terminate$/i }) as HTMLButtonElement
+    const terminate = () => screen.getByTestId('header-exit') as HTMLButtonElement
     expect(textbox().disabled).toBe(false)
     expect(interrupt().disabled).toBe(false)
     expect(terminate().disabled).toBe(false)
@@ -717,13 +796,29 @@ describe('ExecutionView — take back to terminal', () => {
     fireEvent.click(interrupt())
     fireEvent.click(terminate())
     expect(api.interruptExecution).not.toHaveBeenCalled()
-    expect(api.terminateExecution).not.toHaveBeenCalled()
+    expect(exitWorker).not.toHaveBeenCalled()
 
     await act(async () => { d.resolve(takebackOk) })
     expect(paneContent(ids.tabId).kind).toBe('tmux-session')
   })
 
-  it('a failed take-back thaws the input, Interrupt and Terminate again (R1-1)', async () => {
+  it('a take-back whose worker could not exit leaves a persistent notice; exited:true leaves none', async () => {
+    mockedTakeback.mockResolvedValueOnce({ ...takebackOk, exited: false, exit_error: 'terminate_failed' } as never)
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    await clickTakeBack()
+    expect(useUndoToast.getState().notice?.message).toBe('Resumed in the terminal, but the worker could not exit; exit it manually from the list.')
+  })
+
+  it('a take-back with exited:true shows no notice', async () => {
+    mockedTakeback.mockResolvedValueOnce({ ...takebackOk, exited: true } as never)
+    const ids = executionTab()
+    render(<ExecutionView {...base} {...ids} from={from} isActive />)
+    await clickTakeBack()
+    expect(useUndoToast.getState().notice).toBeNull()
+  })
+
+  it('a failed take-back thaws the input, Interrupt and 退出 again (R1-1)', async () => {
     let reject!: (e: unknown) => void
     const failing = new Promise<typeof takebackOk>((_, rej) => { reject = rej })
     mockedTakeback.mockReturnValueOnce(failing)
@@ -736,7 +831,7 @@ describe('ExecutionView — take back to terminal', () => {
     expect(toast()?.message).toBe('The execution lease is held by x.')
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
     expect((screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement).disabled).toBe(false)
-    expect((screen.getByRole('button', { name: /^terminate$/i }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByTestId('header-exit') as HTMLButtonElement).disabled).toBe(false)
     expect(paneContent(ids.tabId).kind).toBe('execution')
   })
 
@@ -931,6 +1026,14 @@ describe('ExecutionView — take to terminal (no `from`)', () => {
       render(<ExecutionView {...base} {...executionTab()} from={from} isActive />)
       expect(takeBackBtn().textContent).toContain('Take to terminal')
     })
+  })
+
+  it('take to terminal whose worker could not exit leaves the persistent notice', async () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid' }) as never)
+    mockedToTerminal.mockResolvedValueOnce({ ...toTerminalOk, exited: false } as never)
+    render(<ExecutionView {...base} {...headlessTab()} isActive />)
+    await clickTakeBack()
+    expect(useUndoToast.getState().notice?.message).toMatch(/could not exit/)
   })
 
   it('idle → no confirm; takeToTerminal (not takeBack) called with the summary cwd, the held lease id and the hook\'s forget; pane becomes the new session; success toast', async () => {
@@ -1240,7 +1343,7 @@ describe('ExecutionView — room and chat (R2 T1.4)', () => {
     expect(screen.queryByTestId('view-mode')).toBeNull()
     fireEvent.click(screen.getByTestId('header-overflow'))
     const panel = screen.getByTestId('header-overflow-panel')
-    for (const id of ['overflow-interrupt', 'overflow-terminate', 'view-mode-room', 'view-mode-chat', 'view-mode-terminal']) {
+    for (const id of ['overflow-interrupt', 'overflow-exit', 'view-mode-room', 'view-mode-chat', 'view-mode-terminal']) {
       expect(within(panel).getByTestId(id)).toBeInTheDocument()
     }
     expect(within(panel).getByTestId('view-mode-chat')).toHaveAttribute('aria-pressed', 'true')

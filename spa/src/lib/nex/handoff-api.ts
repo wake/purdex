@@ -66,6 +66,9 @@ export interface NexTakebackRequest {
 export interface NexTakebackResult {
   session_id: string
   archived: boolean
+  /** The worker was also exited; `false` means the terminal took over but the worker is still live. */
+  exited?: boolean
+  exit_error?: string
 }
 
 export interface NexTakeToTerminalRequest {
@@ -81,6 +84,9 @@ export interface NexTakeToTerminalResult {
   session: Session
   session_id: string
   archived: boolean
+  /** The worker was also exited; `false` means the terminal took over but the worker is still live. */
+  exited?: boolean
+  exit_error?: string
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -163,4 +169,20 @@ export function nexTakeback(hostId: string, code: string, body: NexTakebackReque
  */
 export function nexTakeToTerminal(hostId: string, executionId: string, body: NexTakeToTerminalRequest): Promise<NexTakeToTerminalResult> {
   return postJson<NexTakeToTerminalResult>(hostId, `/api/nex/executions/${encodeURIComponent(executionId)}/take-to-terminal`, { ...body })
+}
+
+/**
+ * `POST /api/nex/executions/{id}/exit` — terminate the worker and archive its
+ * execution. Refusals (held_by, transfer_in_progress, terminate_contended,
+ * terminate_failed, archive_failed) arrive as `HandoffApiError`.
+ */
+export interface NexExitWorkerResult {
+  exited: boolean
+  terminated: boolean
+  archived: boolean
+  state: string
+}
+
+export function nexExitWorker(hostId: string, executionId: string, body: { lease_id?: string }): Promise<NexExitWorkerResult> {
+  return postJson<NexExitWorkerResult>(hostId, `/api/nex/executions/${encodeURIComponent(executionId)}/exit`, body.lease_id ? { lease_id: body.lease_id } : {})
 }

@@ -821,7 +821,11 @@ describe('handoffErrorMessage', () => {
     ['provider_unsupported', {}, null],
     ['takeback_in_progress', {}, null],
     ['execution_archived', { session_id: 'abc-123' }, { session_id: 'abc-123' }],
-    ['archive_failed', {}, null],
+    // conversation-owner codes (P1a)
+    ['session_owned', { owner: 'terminal' }, { where: '["handoff.owner.terminal",null]' }],
+    ['transfer_in_progress', {}, null],
+    ['owner_check_failed', {}, null],
+    ['lease_contended', {}, null],
     // client-side
     ['network', {}, null],
     ['host_removed', {}, null],
@@ -845,6 +849,25 @@ describe('handoffErrorMessage', () => {
     expect(params).toEqual({ code: 'http_500' })
   })
 
+  it('session_owned names where the conversation lives', () => {
+    const where = (owner: unknown) => decode(handoffErrorMessage(t, new HandoffApiError(409, 'session_owned', { owner, session_id: 's' })))[1]
+    expect(where('terminal')).toEqual({ where: '["handoff.owner.terminal",null]' })
+    expect(where('worker')).toEqual({ where: '["handoff.owner.worker",null]' })
+    expect(where('other')).toEqual({ where: '?' })
+    expect(where(undefined)).toEqual({ where: '?' })
+  })
+
+  it('archive_failed is no longer a handoff code and falls back to generic', () => {
+    expect(HANDOFF_ERROR_CODES).not.toContain('archive_failed')
+    expect(decode(handoffErrorMessage(t, new HandoffApiError(500, 'archive_failed', {})))[0]).toBe('handoff.error.generic')
+  })
+
+  it('execution_archived still interpolates the session id', () => {
+    const [key, params] = decode(handoffErrorMessage(t, new HandoffApiError(409, 'execution_archived', { session_id: 'abc-123' })))
+    expect(key).toBe('handoff.error.execution_archived')
+    expect(params).toEqual({ session_id: 'abc-123' })
+  })
+
   it('missing params fall back to placeholders, never `undefined`', () => {
     const [, params] = decode(handoffErrorMessage(t, new HandoffApiError(504, 'cc_exit_timeout', {})))
     expect(params).toEqual({ step: '?' })
@@ -862,11 +885,13 @@ describe('handoffErrorMessage', () => {
       expect(zhMap[key], key).toBeTruthy()
       expect(placeholders(zhMap[key]), key).toEqual(placeholders(enMap[key]))
     }
-    for (const key of ['handoff.rolled_back', 'handoff.not_rolled_back', 'handoff.menu', 'handoff.confirm_title', 'handoff.confirm_body', 'handoff.success', 'handoff.open_execution', 'handoff.keep_session', 'handoff.other_panes', 'takeback.button', 'takeback.confirm_running', 'takeback.success', 'takeback.manual_resume']) {
+    for (const key of ['handoff.owner.terminal', 'handoff.owner.worker', 'handoff.rolled_back', 'handoff.not_rolled_back', 'handoff.menu', 'handoff.confirm_title', 'handoff.confirm_body', 'handoff.success', 'handoff.open_execution', 'handoff.keep_session', 'handoff.other_panes', 'takeback.button', 'takeback.confirm_running', 'takeback.success', 'takeback.manual_resume']) {
       expect(enMap[key], key).toBeTruthy()
       expect(zhMap[key], key).toBeTruthy()
       expect(placeholders(zhMap[key]), key).toEqual(placeholders(enMap[key]))
     }
+    expect(enMap['handoff.error.archive_failed']).toBeUndefined()
+    expect(zhMap['handoff.error.archive_failed']).toBeUndefined()
     expect(enMap['takeback.manual_resume']).toContain('{{id}}')
     expect(enMap['handoff.other_panes']).toContain('{{count}}')
   })
@@ -879,6 +904,7 @@ describe('manualResumeHint', () => {
       if (SESSION_ID_CODES.has(code)) expect(hint, code).toBe('sid-7')
       else expect(hint, code).toBeNull()
     }
+    expect(manualResumeHint(new HandoffApiError(409, 'session_owned', { owner: 'terminal', session_id: 'sid-7' }))).toBeNull()
     expect([...SESSION_ID_CODES].sort()).toEqual(['cc_already_running', 'cc_start_timeout', 'delegate_rejected', 'send_failed', 'tmux_instance_mismatch'])
   })
 

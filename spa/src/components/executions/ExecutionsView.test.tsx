@@ -1,6 +1,6 @@
 // spa/src/components/executions/ExecutionsView.test.tsx
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, act, within } from '@testing-library/react'
+import { render, screen, fireEvent, act, within, waitFor } from '@testing-library/react'
 import { ExecutionsView } from './ExecutionsView'
 import NexExecutionsTable from '../hosts/nex/NexExecutionsTable'
 import { resetExecutionListForTests, useExecutionListStore } from '../../stores/useExecutionListStore'
@@ -12,10 +12,17 @@ import { openWorkerTab } from '../../features/workspace/lib/open-worker-tab'
 import { subscriptionSlots } from '../../lib/nex/subscription-slots'
 import { STATE_DOT_CLASSES } from '../../lib/nex/state-dot'
 import type { ExecutionSummary } from '../../lib/nex/types'
+import { exitWorker } from '../../lib/nex/exit-worker'
+import { useUndoToast } from '../../stores/useUndoToast'
+import { HandoffApiError } from '../../lib/nex/handoff-api'
 import * as api from '../../lib/nex/nex-api'
 import * as sse from '../../lib/nex/nex-sse'
 
 vi.mock('../../lib/nex/nex-api', () => ({ listExecutions: vi.fn(), attachControl: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), archiveExecution: vi.fn() }))
+vi.mock('../../lib/nex/exit-worker', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/nex/exit-worker')>()),
+  exitWorker: vi.fn(),
+}))
 vi.mock('../../lib/nex/nex-sse', () => ({ openNexSse: vi.fn() }))
 vi.mock('../../lib/deeplink/deeplinkResolver', () => ({ openExecutionDetailTab: vi.fn() }))
 vi.mock('../../features/workspace/lib/open-worker-tab', () => ({ openWorkerTab: vi.fn() }))
@@ -58,6 +65,8 @@ beforeEach(() => {
     hostOrder: [H, OTHER], activeHostId: H, runtime: {},
   })
   useShownHostsStore.setState({ ids: [H, OTHER] }) // shown in this workbench unless a test hides one (H2d-2)
+  vi.mocked(exitWorker).mockReset().mockResolvedValue({ exited: true, terminated: true, archived: true, state: 'terminated' })
+  useUndoToast.setState({ toast: null, notice: null })
   vi.mocked(openWorkerTab).mockReset().mockReturnValue('tab-1')
   vi.mocked(sse.openNexSse).mockReset().mockImplementation(() => ({ close: vi.fn() }))
   vi.mocked(api.listExecutions).mockReset().mockResolvedValue({ items: [], next_cursor: '' })
@@ -424,5 +433,127 @@ describe('ExecutionsView', () => {
     expect(within(screen.getByTestId('executions-header')).getByText('Air')).toBeInTheDocument()
     expect(ensure).toHaveBeenCalledWith(OTHER)
     expect(vi.mocked(sse.openNexSse).mock.calls.map((c) => c[0].hostId)).toEqual([H, OTHER])
+  })
+
+  it('exits an idle row directly and confirms a running one', async () => {
+    seedList([row({ id: 'I', state: 'idle', brief: 'idle one' }), row({ id: 'R', state: 'running', brief: 'run one' })])
+    render(<ExecutionsView hostId={H} isActive />)
+    const rows = screen.getAllByTestId('executions-row')
+    const exits = screen.getAllByTestId('executions-row-exit')
+    const idleIdx = rows.findIndex((r) => r.textContent?.includes('idle one'))
+    fireEvent.click(exits[idleIdx])
+    expect(exitWorker).toHaveBeenCalledWith({ hostId: H, executionId: 'I' })
+    fireEvent.click(exits[1 - idleIdx])
+    expect(exitWorker).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByTestId('exit-confirm'))
+    expect(exitWorker).toHaveBeenLastCalledWith({ hostId: H, executionId: 'R' })
+    expect(screen.queryByTestId('exit-dialog')).toBeNull()
+  })
+
+  it('cancelling the confirm exits nothing', () => {
+    seedList([row({ id: 'R', state: 'running' })])
+    render(<ExecutionsView hostId={H} isActive />)
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    fireEvent.click(screen.getByTestId('exit-cancel'))
+    expect(exitWorker).not.toHaveBeenCalled()
+  })
+
+  it('a failed exit shows a toast', async () => {
+    seedList([row({ id: 'I', state: 'idle' })])
+    vi.mocked(exitWorker).mockRejectedValueOnce(new HandoffApiError(409, 'held_by', { principal: 'ploom:agent-7' }))
+    render(<ExecutionsView hostId={H} isActive />)
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    await waitFor(() => expect(useUndoToast.getState().toast?.message).toContain('ploom:agent-7'))
+  })
+
+  it('a second click while the exit is pending sends no second request', async () => {
+    seedList([row({ id: 'I', state: 'idle' })])
+    let resolveExit!: (v: Awaited<ReturnType<typeof exitWorker>>) => void
+    vi.mocked(exitWorker).mockReturnValueOnce(new Promise((res) => { resolveExit = res }))
+    render(<ExecutionsView hostId={H} isActive />)
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(exitWorker).toHaveBeenCalledTimes(1)
+    await act(async () => { resolveExit({ exited: true, terminated: true, archived: true, state: 'terminated' }) })
+  })
+
+  it('after the exit resolves but before the refetch removes the row, a click still sends nothing', async () => {
+    seedList([row({ id: 'I', state: 'idle' })])
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: [row({ id: 'I', state: 'idle' })], next_cursor: '' })
+    render(<ExecutionsView hostId={H} isActive />)
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(exitWorker).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed exit frees the row to be tried again', async () => {
+    seedList([row({ id: 'I', state: 'idle' })])
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: [row({ id: 'I', state: 'idle' })], next_cursor: '' })
+    vi.mocked(exitWorker).mockRejectedValueOnce(new HandoffApiError(409, 'held_by', { principal: 'x' }))
+    render(<ExecutionsView hostId={H} isActive />)
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    await waitFor(() => expect(screen.getByTestId('executions-row-exit')).toBeEnabled())
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(exitWorker).toHaveBeenCalledTimes(2)
+  })
+
+  it('the pending guard is per host: a host switch does not inherit it and a late completion clears only its own key', async () => {
+    useNexHostStore.setState({ byHost: { [H]: readyEntry, [OTHER]: readyEntry }, ensure })
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: [row({ id: 'I', state: 'idle' })], next_cursor: '' })
+    const resolvers: Array<(v: Awaited<ReturnType<typeof exitWorker>>) => void> = []
+    vi.mocked(exitWorker).mockImplementation(() => new Promise((res) => { resolvers.push(res) }))
+    const { rerender } = render(<ExecutionsView hostId={H} isActive />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
+    rerender(<ExecutionsView hostId={OTHER} isActive />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByTestId('executions-row-exit')).toBeEnabled()
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(exitWorker).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(exitWorker).mock.calls[1][0]).toMatchObject({ hostId: OTHER, executionId: 'I' })
+    // Host A's exit completes late: host B's guard stays.
+    await act(async () => { resolvers[0]({ exited: false, terminated: false, archived: false, state: 'idle' }) })
+    expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
+  })
+
+  it('pending keys match the host exactly: host "a" cleanup leaves host "a:b" pending', async () => {
+    const A = 'a'
+    const AB = 'a:b'
+    useShownHostsStore.setState({ ids: [A, AB] })
+    useNexHostStore.setState({ byHost: { [A]: readyEntry, [AB]: readyEntry }, ensure })
+    vi.mocked(api.listExecutions).mockImplementation(async (h: string) => (
+      { items: h === AB ? [row({ id: 'I', state: 'idle' })] : [], next_cursor: '' }
+    ))
+    vi.mocked(exitWorker).mockImplementation(() => new Promise(() => {}))
+    const { rerender } = render(<ExecutionsView hostId={AB} isActive />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
+    rerender(<ExecutionsView hostId={A} isActive />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    rerender(<ExecutionsView hostId={AB} isActive />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
+  })
+
+  it('confirming for a row that has disappeared sends no request', () => {
+    seedList([row({ id: 'R', state: 'running' })])
+    render(<ExecutionsView hostId={H} isActive />)
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    act(() => { seedList([]) })
+    fireEvent.click(screen.getByTestId('exit-confirm'))
+    expect(exitWorker).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('exit-confirm')).toBeNull()
+  })
+
+  it('a host hidden in this workbench offers no exit', () => {
+    useShownHostsStore.setState({ ids: [OTHER] })
+    seedList([row({ id: 'I', state: 'idle' })])
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.queryByTestId('executions-row-exit')).toBeNull()
   })
 })

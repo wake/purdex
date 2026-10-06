@@ -65,6 +65,8 @@ export interface ExecutionState {
   historyLoaded: boolean
   /** A lifecycle event arrived; the summary is authoritative, so the hook refetches. */
   summaryStale: boolean
+  /** Bumped by a local summary patch (exit result); a summary fetch that started earlier is dropped. */
+  summaryGen: number
   /**
    * 'paused' (spec §4.3.2 step 4) is the store-only state P-B.2's
    * subscription-slot cap sets when this execution's SSE is deliberately
@@ -137,6 +139,7 @@ export function defaultExecutionState(): ExecutionState {
     lastEventAt: 0,
     historyLoaded: false,
     summaryStale: false,
+    summaryGen: 0,
     sse: 'idle',
     sseError: null,
     lease: null,

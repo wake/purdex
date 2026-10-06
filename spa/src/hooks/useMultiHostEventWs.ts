@@ -18,6 +18,7 @@ import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
 import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
 import { checkHealth, type HealthResult } from '../lib/host-connection'
 import { ConnectionStateMachine } from '../lib/connection-state-machine'
+import { handleWorkerExited } from '../lib/nex/worker-exited-event'
 
 /**
  * The operation lock's observer (#1309 + #1310 spec §3.1): every tree rewriter —
@@ -207,6 +208,11 @@ export function useMultiHostEventWs() {
             // Profile section change (spec §4.6). Own writes are NOT filtered
             // here or in the helper — the sync driver decides what "own" means.
             dispatchProfileWsEvent(hostId, event)
+            return
+          }
+          if (event.type === 'nex-worker-exited') {
+            // A terminal resume exited a worker (Q1). `session` may be empty.
+            handleWorkerExited(hostId, event.value)
             return
           }
           // `handoff` / `relay` events: the daemon stopped emitting them in

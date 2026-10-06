@@ -1,8 +1,8 @@
 // spa/src/components/executions/ExecutionRowCompact.test.tsx — R4 T4.1: the
 // worker_rollup fields on a sidebar row (cost behind the cost_basis gate,
 // running badge, activity as the dot's tooltip, hand-over note).
-import { describe, it, expect, afterEach } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { render, screen, act, fireEvent } from '@testing-library/react'
 import { ExecutionRowCompact } from './ExecutionRowCompact'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { ExecutionSummary } from '../../lib/nex/types'
@@ -155,5 +155,25 @@ describe('ExecutionRowCompact — rollup fields', () => {
       renderRow(row({ state: 'queued' }))
       expect(screen.getByTestId('executions-state-dot')).toHaveClass('bg-status-warning')
     })
+  })
+})
+
+describe('ExecutionRowCompact — exit action', () => {
+  it('renders an exit action beside the open button, not inside it', () => {
+    const onOpen = vi.fn(), onExit = vi.fn()
+    render(<ExecutionRowCompact row={row({ state: 'idle' })} daemonHostId={null} now={NOW} onOpen={onOpen} onExit={onExit} />)
+    const exit = screen.getByTestId('executions-row-exit')
+    expect(exit.closest('button[data-testid="executions-row"]')).toBeNull()
+    expect(exit).toHaveAttribute('aria-label', 'Exit')
+    expect(exit.className).toContain('opacity-0')
+    expect(exit.className).not.toContain('hidden')
+    fireEvent.click(exit)
+    expect(onExit).toHaveBeenCalledTimes(1)
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it('has no exit action without onExit', () => {
+    render(<ExecutionRowCompact row={row()} daemonHostId={null} now={NOW} onOpen={() => {}} />)
+    expect(screen.queryByTestId('executions-row-exit')).toBeNull()
   })
 })

@@ -5,7 +5,7 @@ import { useExecutionStore } from '../stores/useExecutionStore'
 import { NexApiError } from '../lib/nex/types'
 import * as api from '../lib/nex/nex-api'
 
-vi.mock('../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn() }))
+vi.mock('../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn() }))
 
 const H = 'h', E = 'exc_1', KEY = 'h:exc_1'
 type SendResult = { turn_id: string; delivery: 'delivered' | 'queued' }
@@ -82,13 +82,6 @@ describe('useExecutionActions — actionPending', () => {
     await vi.waitFor(() => expect(result.current.actionPending).toBe(true))
     await act(async () => { resolveInterrupt({ turn_id: 't1', state: 'idle' }); await Promise.resolve() })
     await vi.waitFor(() => expect(result.current.actionPending).toBe(false))
-  })
-
-  it('clears actionPending when a terminate request rejects', async () => {
-    vi.mocked(api.terminateExecution).mockReset().mockRejectedValueOnce(new Error('boom'))
-    const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
-    await act(async () => { await result.current.handleTerminate() })
-    expect(result.current.actionPending).toBe(false)
   })
 })
 

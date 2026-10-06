@@ -1,10 +1,10 @@
 // spa/src/hooks/useExecutionActions.ts — the writes an execution pane issues
-// (spec §4.3.3): send, interrupt, terminate. Every one goes through
+// (spec §4.3.3): send, interrupt. Every one goes through
 // ensureLease(). Owns the restored draft after a failed send; ExecutionView
 // composes this with the subscription/lease hooks and only renders.
 import { useCallback, useRef, useState } from 'react'
 import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
-import { interruptExecution, sendMessage, terminateExecution } from '../lib/nex/nex-api'
+import { interruptExecution, sendMessage } from '../lib/nex/nex-api'
 import { NexApiError } from '../lib/nex/types'
 import type { ExecutionLeaseApi } from './useExecutionLease'
 import type { WireImageAttachment } from '../lib/nex/worker-upload'
@@ -39,7 +39,7 @@ export interface SendOptions {
 export interface ExecutionActions {
   /** Text restored into the input after a failed send; null otherwise. */
   draft: string | null
-  /** An interrupt or terminate request is in flight (sends are tracked by the store's `pendingSend`). */
+  /** An interrupt request is in flight (sends are tracked by the store's `pendingSend`). */
   actionPending: boolean
   /**
    * Resolves true whenever the daemon accepted the message — including an
@@ -49,7 +49,6 @@ export interface ExecutionActions {
    */
   handleSend(text: string, opts?: SendOptions): Promise<boolean>
   handleInterrupt(): Promise<void>
-  handleTerminate(): Promise<void>
   /** Put text back into the input for a send that failed before reaching `handleSend` (an image that could not be read). */
   restoreDraft(text: string): void
 }
@@ -146,13 +145,7 @@ export function useExecutionActions(
     try { await interruptExecution(hostId, executionId, await ensureLease()) } catch (e) { fail(e) } finally { setActionPending(false) }
   }, [hostId, executionId, ensureLease, touch, fail])
 
-  const handleTerminate = useCallback(async () => {
-    touch()
-    setActionPending(true)
-    try { await terminateExecution(hostId, executionId, await ensureLease()) } catch (e) { fail(e) } finally { setActionPending(false) }
-  }, [hostId, executionId, ensureLease, touch, fail])
-
   const restoreDraft = useCallback((text: string) => setDraft(text), [])
 
-  return { draft, actionPending, handleSend, handleInterrupt, handleTerminate, restoreDraft }
+  return { draft, actionPending, handleSend, handleInterrupt, restoreDraft }
 }

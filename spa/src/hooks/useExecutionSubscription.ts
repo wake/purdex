@@ -83,10 +83,11 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
     let staleRefetchAttempts = 0
     const refetchSummary = async () => {
       const asOf = store().executions[key]?.lastSeq ?? 0
+      const gen = store().executions[key]?.summaryGen ?? 0
       try {
         const s = await getExecution(hostId, executionId)
         if (cancelled) return
-        store().setSummary(hostId, executionId, s, asOf)
+        store().setSummary(hostId, executionId, s, asOf, gen)
         // subscribeWithSelector only notifies on a boolean transition: a
         // second lifecycle event landing while this fetch was in flight
         // (lastSeq advancing past asOf again) leaves summaryStale true with
@@ -186,9 +187,10 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
       store().setSse(hostId, executionId, 'connecting')
       try {
         const asOf = store().executions[key]?.lastSeq ?? 0
+        const gen = store().executions[key]?.summaryGen ?? 0
         const s = await getExecution(hostId, executionId)
         if (cancelled) return
-        store().setSummary(hostId, executionId, s, asOf)
+        store().setSummary(hostId, executionId, s, asOf, gen)
         const obs = await attachObserve(hostId, executionId)
         if (cancelled) return
         // History: forward-only paging from 0; stop at the last page or once

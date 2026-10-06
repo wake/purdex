@@ -257,6 +257,30 @@ describe('useExecutionSubscription', () => {
     expect(api.getExecution).toHaveBeenCalledTimes(2)
   })
 
+  it('a refetch that started before an exit patch cannot bring the old summary back', async () => {
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    let resolveLate!: (v: ReturnType<typeof summary>) => void
+    vi.mocked(api.getExecution).mockReset().mockReturnValueOnce(new Promise((r) => { resolveLate = r }))
+    act(() => { sseOpts!.onFrame({ id: '3', event: 'execution.running', data: '{}' }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(SUMMARY_REFETCH_DEBOUNCE_MS + 1) })
+    expect(api.getExecution).toHaveBeenCalledTimes(1)
+    act(() => { useExecutionStore.getState().applySummaryPatch(H, E, { state: 'terminated', archived: true }) })
+    await act(async () => { resolveLate({ ...summary(), state: 'idle', archived: false } as ReturnType<typeof summary>) })
+    expect(useExecutionStore.getState().executions[KEY].summary).toMatchObject({ state: 'terminated', archived: true })
+  })
+
+  it('an initial summary fetch that started before an exit patch is dropped too', async () => {
+    let resolveLate!: (v: ReturnType<typeof summary>) => void
+    vi.mocked(api.getExecution).mockReset().mockReturnValueOnce(new Promise((r) => { resolveLate = r }))
+    useExecutionStore.getState().setSummary(H, E, summary() as never)
+    renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { useExecutionStore.getState().applySummaryPatch(H, E, { state: 'terminated', archived: true }) })
+    await act(async () => { resolveLate({ ...summary(), state: 'idle', archived: false } as ReturnType<typeof summary>) })
+    expect(useExecutionStore.getState().executions[KEY].summary).toMatchObject({ state: 'terminated', archived: true })
+  })
+
   it('reports not_found and opens nothing when the summary 404s', async () => {
     vi.mocked(api.getExecution).mockRejectedValueOnce(new NexApiError(404, 'execution_not_found', 'nope'))
     const { result } = renderHook(() => useExecutionSubscription(H, E, true))
