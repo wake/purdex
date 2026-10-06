@@ -40,7 +40,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, nex, path, version\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, lead, nex, path, version\n")
 		os.Exit(1)
 	}
 
@@ -67,6 +67,8 @@ func main() {
 		runPeers(os.Args[2:])
 	case "msg":
 		runMsg(os.Args[2:])
+	case "lead":
+		runLead(os.Args[2:])
 	case "nex":
 		runNexMain(os.Args[2:])
 	case "path":
