@@ -45,6 +45,7 @@ const READER_IMPORTERS = [
   'src/components/HandoffConfirmDialog.tsx',
   'src/components/HistoryPage.tsx',
   'src/components/HostHiddenPane.tsx',
+  'src/components/HostWorkerRows.tsx', // same rule as ExecutionsView: a hidden host's worker rows are plain, never open / exit
   'src/components/NewTabPage.tsx',
   'src/components/PaneLayoutRenderer.tsx',
   'src/components/SessionPickerList.tsx',

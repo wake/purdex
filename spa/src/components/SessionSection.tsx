@@ -9,6 +9,8 @@ import type { NewTabProviderProps } from '../lib/new-tab-registry'
 import { isHostLive } from '../lib/host-live'
 import { useHostLook } from '../lib/host-look'
 import type { Session } from '../lib/host-api'
+import { useNexHostStore, selectReady } from '../stores/useNexHostStore'
+import { HostWorkerRows } from './HostWorkerRows'
 import { SessionLauncher } from './session-launcher/SessionLauncher'
 import { TerminalWindow, Circle, Spinner, CaretDown, CaretRight, Plus } from '@phosphor-icons/react'
 
@@ -80,6 +82,10 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
   const t = useI18nStore((s) => s.t)
   const [isExpanded, setExpanded] = useState(true)
   const [creating, setCreating] = useState(false)
+  const nexReady = useNexHostStore(selectReady(hostId))
+  const [view, setView] = useState<'sessions' | 'workers'>('sessions')
+  // Not ready → the switch is hidden and the block is the sessions view.
+  const showWorkers = nexReady && view === 'workers'
 
   if (!host) return null
 
@@ -115,6 +121,23 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
         {isOffline && (
           <span className="text-xs text-text-muted">{t('session.reconnecting')}</span>
         )}
+        {nexReady && (
+          <div role="tablist" className="ml-auto flex items-center rounded bg-surface-secondary p-0.5 text-xs">
+            {(['sessions', 'workers'] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                role="tab"
+                data-testid={`host-view-${v}-${hostId}`}
+                aria-selected={view === v}
+                onClick={() => setView(v)}
+                className={`px-2 py-0.5 rounded cursor-pointer ${view === v ? 'bg-surface-hover text-text-primary' : 'text-text-muted hover:text-text-primary'}`}
+              >
+                {t(`newtab.view.${v}`)}
+              </button>
+            ))}
+          </div>
+        )}
         <button
           data-testid={`new-session-${hostId}`}
           disabled={createDisabled}
@@ -123,15 +146,22 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
             setCreating(opening)
             // Opening on a collapsed host must reveal the launcher (which is
             // gated behind isExpanded) - expand so the "+" isn't a no-op.
-            if (opening) setExpanded(true)
+            if (opening) { setExpanded(true); setView('sessions') }
           }}
-          className="ml-auto p-1 rounded bg-accent text-white hover:bg-accent/80 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          className={`${nexReady ? '' : 'ml-auto '}p-1 rounded bg-accent text-white hover:bg-accent/80 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed`}
           title={t('hosts.new_session')}
         >
           <Plus size={14} weight="bold" />
         </button>
       </div>
-      {isExpanded && creating && (
+      {isExpanded && showWorkers && (
+        <HostWorkerRows
+          hostId={hostId}
+          onOpen={(id) => onSelect({ kind: 'execution', executionId: id, host: hostId })}
+          testIdPrefix={`newtab-workers-${hostId}`}
+        />
+      )}
+      {isExpanded && !showWorkers && creating && (
         <div className="mx-3 my-1">
           <SessionLauncher
             hostId={hostId}
@@ -159,7 +189,7 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
           />
         </div>
       )}
-      {isExpanded && sessions.map((session) => (
+      {isExpanded && !showWorkers && sessions.map((session) => (
         <SessionRow
           key={`${hostId}:${session.code}`}
           hostId={hostId}
