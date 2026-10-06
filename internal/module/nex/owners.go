@@ -39,7 +39,9 @@ func (m *Module) liveWorkersFor(parent context.Context, sid string) ([]store.Exe
 	if sid == "" {
 		return nil, nil
 	}
-	return m.scanLiveWorkers(parent, func(e store.Execution) bool { return executionIsFor(e, sid) })
+	// D18: Nexen filters by session (resume id, session id or any turn's
+	// session id), so no client-side match is needed. Not IncludeArchived.
+	return m.scanLiveWorkers(parent, store.ListOptions{SessionID: sid}, func(store.Execution) bool { return true })
 }
 
 // scanLiveWorkers pages the non-archived executions and keeps the live ones
@@ -49,12 +51,14 @@ func (m *Module) liveWorkersFor(parent context.Context, sid string) ([]store.Exe
 // result holds every live match found before the failure. Callers that must
 // prove absence (the owner checks) fail closed on any error; Q1 and the
 // overflow reconcile act on what was found (manual_resume.go).
-func (m *Module) scanLiveWorkers(parent context.Context, keep func(store.Execution) bool) ([]store.Execution, error) {
+func (m *Module) scanLiveWorkers(parent context.Context, base store.ListOptions, keep func(store.Execution) bool) ([]store.Execution, error) {
 	var out []store.Execution
 	cursor := ""
 	for page := 0; page < ownerScanMaxPages; page++ {
 		ctx, cancel := detachedContext(parent, m.engineOpTimeout)
-		res, err := m.sys.store.List(ctx, store.ListOptions{Cursor: cursor, Limit: ownerScanPageSize})
+		opts := base
+		opts.Cursor, opts.Limit = cursor, ownerScanPageSize
+		res, err := m.sys.store.List(ctx, opts)
 		cancel()
 		if err != nil {
 			sortNewestFirst(out)

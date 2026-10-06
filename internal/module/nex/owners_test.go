@@ -53,7 +53,7 @@ func TestLiveWorkersFor_PagesFiltersAndOrders(t *testing.T) {
 	env := newTakebackEnv(t)
 	var rows []store.Execution
 	for i := 0; i < ownerScanPageSize+3; i++ { // forces a second page
-		rows = append(rows, row(fmt.Sprintf("01%04d", i), "terminated", false, "OTHER", "", int64(i)))
+		rows = append(rows, row(fmt.Sprintf("01%04d", i), "terminated", false, "S", "", int64(i)))
 	}
 	rows = append(rows,
 		row("09a", "idle", false, "S", "", 100),
@@ -104,7 +104,7 @@ func TestLiveWorkersFor_CapAndErrors(t *testing.T) {
 func pageTwoFails(st *fakeNexStore) {
 	rows := []store.Execution{row("000000", "idle", false, "S", "", 1)}
 	for i := 1; i <= ownerScanPageSize; i++ {
-		rows = append(rows, row(fmt.Sprintf("%06d", i), "terminated", false, "OTHER", "", int64(i+1)))
+		rows = append(rows, row(fmt.Sprintf("%06d", i), "terminated", false, "S", "", int64(i+1)))
 	}
 	st.listRows, st.listErr, st.listErrAt = rows, errors.New("db down"), 2
 }
@@ -196,4 +196,30 @@ func TestCheckOwners(t *testing.T) {
 			t.Fatalf("allowed match, herr = %+v", herr)
 		}
 	})
+}
+
+func TestLiveWorkersFor_UsesSessionFilter(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.store.listRows = []store.Execution{row("E1", "idle", false, "S", "", 1), row("E2", "idle", false, "OTHER", "", 2)}
+	got, err := env.m.liveWorkersFor(context.Background(), "S")
+	if err != nil || len(got) != 1 || got[0].ID != "E1" {
+		t.Fatalf("%v %v", got, err)
+	}
+	if env.store.lastListOpts.SessionID != "S" {
+		t.Fatal("liveWorkersFor must ask the store for SessionID=S (D18)")
+	}
+	if env.store.lastListOpts.IncludeArchived {
+		t.Fatal("the owner check stays non-archived")
+	}
+}
+
+func TestReconcileScanStaysUnfiltered(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.store.listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	if _, err := env.m.scanLiveWorkers(context.Background(), store.ListOptions{}, func(store.Execution) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	if env.store.lastListOpts.SessionID != "" {
+		t.Fatal("the overflow reconcile scan must not pass SessionID")
+	}
 }

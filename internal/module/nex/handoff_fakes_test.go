@@ -574,6 +574,9 @@ type fakeNexStore struct {
 	listErr   error
 	listErrAt int
 	listCalls int
+	// lastListOpts / allListOpts record the options of every List call.
+	lastListOpts store.ListOptions
+	allListOpts  []store.ListOptions
 	// listGate parks every List until it is closed or the call's ctx ends;
 	// listEntered is closed on the first List.
 	listGate    chan struct{}
@@ -632,6 +635,8 @@ func (f *fakeNexStore) List(ctx context.Context, opts store.ListOptions) (store.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listCalls++
+	f.lastListOpts = opts
+	f.allListOpts = append(f.allListOpts, opts)
 	if f.listErr != nil && (f.listErrAt == 0 || f.listCalls == f.listErrAt) {
 		return store.ListPage{}, f.listErr
 	}
@@ -641,6 +646,11 @@ func (f *fakeNexStore) List(ctx context.Context, opts store.ListOptions) (store.
 			continue
 		}
 		if !opts.IncludeArchived && e.ArchivedAt != 0 {
+			continue
+		}
+		// v0.17: exact, case-insensitive match on session_id or
+		// resume_session_id (turn session ids are not modelled here).
+		if opts.SessionID != "" && !strings.EqualFold(e.SessionID, opts.SessionID) && !strings.EqualFold(e.ResumeSessionID, opts.SessionID) {
 			continue
 		}
 		rows = append(rows, e)

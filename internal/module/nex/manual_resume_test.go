@@ -168,7 +168,7 @@ func TestManualResume_TruncatedScanStillExitsWhatItFound(t *testing.T) {
 	liveTerminal(env, true)
 	rows := make([]store.Execution, ownerScanPageSize*ownerScanMaxPages+1)
 	for i := range rows {
-		rows[i] = row(fmt.Sprintf("%06d", i), "terminated", false, "OTHER", "", int64(i))
+		rows[i] = row(fmt.Sprintf("%06d", i), "terminated", false, "S", "", int64(i))
 	}
 	rows[0] = row("000000", "idle", false, "S", "", 0) // on page 1
 	fakeStore(env).listRows = rows

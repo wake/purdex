@@ -70,7 +70,8 @@ func TestWorkerRebuild(t *testing.T) {
 		assert.Equal(t, "handoff", out["effective_profile"])
 		req := env.svc.Requests()[0]
 		assert.Equal(t, rbS, req.ResumeSessionID)
-		assert.Equal(t, rebuildBrief, req.Brief)
+		assert.Equal(t, "", req.Brief)
+		assert.True(t, req.StartIdle)
 		assert.Equal(t, "handoff", req.SandboxProfile)
 		assert.Equal(t, "/w", req.Mounts[0].Path)
 		assert.Equal(t, "purdex://host/host1/rebuild", req.Origin)
@@ -271,4 +272,18 @@ func TestWorkerRebuildFixRound1(t *testing.T) {
 		out := rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w","replace_execution_id":"F1"}`, 500, "delegate_failed")
 		assert.Equal(t, true, out["replaced_exited"])
 	})
+}
+
+func TestWorkerRebuild_StartIdle(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.svc.result = execution.Result{ID: "N1", State: store.StateIdle}
+	code, out := rebuildPost(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`)
+	require.Equal(t, 200, code, "%v", out)
+	assert.Equal(t, "idle", out["state"])
+	req := env.svc.Requests()[0]
+	assert.True(t, req.StartIdle)
+	assert.Equal(t, "", req.Brief)
+	// PR #1599 A1: the delegate creates an idle row, never a turn.
+	assert.Equal(t, 1, countCalls(env.svc.Calls(), "delegate"))
+	assert.NotContains(t, env.svc.Calls(), "send")
 }

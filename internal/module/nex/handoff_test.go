@@ -315,7 +315,8 @@ func TestHandoffSuccessBodyAndRequest(t *testing.T) {
 	assert.Equal(t, execution.Request{
 		PrincipalID:     "pdx:host1",
 		Provider:        "claude",
-		Brief:           "(handed off from tmux session " + hoName + ")",
+		Brief:           "",
+		StartIdle:       true,
 		SandboxProfile:  "handoff",
 		Mounts:          []execution.Mount{{Path: hoCwd, Role: "cwd", Writable: true}},
 		Origin:          "purdex://host/host1/session/" + hoCode,
@@ -714,4 +715,44 @@ func TestHandoff_RejectedNotRolledBackKeepsTheRow(t *testing.T) {
 	assert.Empty(t, env.svc.ArchiveCalls())
 	_, has := body["exited"]
 	assert.False(t, has, "exited is only reported when rolled back")
+}
+
+// --- Nexen v0.17 start_idle (spec §8; task 27) ---
+
+func TestHandoff_StartIdle(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.svc.result = execution.Result{ID: "N1", State: store.StateIdle, EffectiveProfile: "handoff"}
+	status, body := env.post(t, hoCode, goodBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, "idle", body["state"])
+	reqs := env.svc.Requests()
+	require.Len(t, reqs, 1)
+	assert.True(t, reqs[0].StartIdle)
+	assert.Equal(t, "", reqs[0].Brief, "start_idle_conflict if a brief rode along")
+	assert.Equal(t, hoSessionID, reqs[0].Labels[purdexSessionLabel])
+	// PR #1599 A1: the delegate creates an idle row, never a turn.
+	assert.Equal(t, 1, countCalls(env.svc.Calls(), "delegate"))
+	assert.NotContains(t, env.svc.Calls(), "send")
+}
+
+func TestHandoff_KeepSessionFalseKillsOnIdle(t *testing.T) {
+	env := newHandoffEnv(t)
+	withSessionInTmux(env)
+	env.svc.result = execution.Result{ID: "N1", State: store.StateIdle}
+	b := goodBody()
+	b["keep_session"] = false
+	status, body := env.post(t, hoCode, b)
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, false, body["session_kept"], "an idle (start_idle) delegate kills the emptied session like a running one")
+	assert.False(t, env.tmux.HasSession(hoName))
+}
+
+func countCalls(calls []string, name string) int {
+	n := 0
+	for _, c := range calls {
+		if c == name {
+			n++
+		}
+	}
+	return n
 }

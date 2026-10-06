@@ -278,10 +278,16 @@ func TestCapabilitiesPinResumeSessionIDAndHandoffProfile(t *testing.T) {
 	var body struct {
 		Delegate struct {
 			ResumeSessionID bool `json:"resume_session_id"`
+			StartIdle       bool `json:"start_idle"`
 		} `json:"delegate"`
+		List struct {
+			SessionFilter bool `json:"session_filter"`
+		} `json:"list"`
 		SandboxProfiles []string `json:"sandbox_profiles"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.True(t, body.Delegate.ResumeSessionID, "delegate.resume_session_id: %s", rec.Body.String())
+	assert.True(t, body.Delegate.StartIdle, "delegate.start_idle: %s", rec.Body.String())
+	assert.True(t, body.List.SessionFilter, "list.session_filter: %s", rec.Body.String())
 	assert.Contains(t, body.SandboxProfiles, "handoff", "sandbox_profiles: %s", strings.Join(body.SandboxProfiles, ","))
 }

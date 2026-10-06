@@ -297,7 +297,7 @@ func (m *Module) exitManualResumeWorker(parent context.Context, sid, tmuxSession
 // through the per-session path with every guard. A worker exited under one
 // key is not offered again under the other.
 func (m *Module) reconcileTerminalOwners(ctx context.Context) {
-	workers, err := m.scanLiveWorkers(ctx, func(store.Execution) bool { return true })
+	workers, err := m.scanLiveWorkers(ctx, store.ListOptions{}, func(store.Execution) bool { return true })
 	if m.q1Halted(ctx) {
 		return
 	}
