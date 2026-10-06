@@ -1003,6 +1003,28 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection per-turn 
     expect(owner(footers()[0])).toBe('5')
   })
 
+  it('a span holding lines of two turns (no opening line between) shows both footers, in turn order', async () => {
+    // An attachment-only prompt opens no span (#1614): msg_B's line follows msg_A's in one span.
+    const shared = derivePrelude([
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+      m('2', 'user', [{ type: 'text', text: 'prompt one' }]),
+      say('3', 'msg_B', 'turn two line'),
+      say('4', 'msg_A', 'turn one line'),
+    ])
+    draw(cacheOf(events), summary({ resume_session_id: 's_prev' }), shared)
+    await waitFor(() => expect(footers()).toHaveLength(2))
+    // Turn order (index ascending), not transcript order; the tooltip stays on turn 1 alone.
+    expect(footers().map((f) => f.textContent)).toEqual([footerText(turns[0]), footerText(turns[1])])
+    expect(footers().map((f) => f.hasAttribute('title'))).toEqual([true, false])
+    // Consecutive siblings right after the span's last row.
+    if (mode === 'room') {
+      expect(footers()[0].previousElementSibling!.getAttribute('data-prelude-pos')).toBe('4')
+      expect(footers()[0].nextElementSibling).toBe(footers()[1])
+    } else {
+      expect(footers()[0].closest('[data-prelude-poses]')).toBe(footers()[1].closest('[data-prelude-poses]'))
+    }
+  })
+
   it('draws nothing while loading, for a plain segment, and when the fetch failed', async () => {
     const plainDom = () => screen.getByTestId('worker-prelude').outerHTML
     let settle: (p: EventsPage) => void = () => {}

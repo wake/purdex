@@ -91,20 +91,28 @@ export default function PreludeSegment(props: PreludeSegmentProps) {
         if (held.length > 0) spans.push(held)
       }
     }
+    // Every distinct turn a span's assistant lines map to; a turn goes to the last span that holds one of its lines.
     const lastSpanOf = new Map<TurnCost, number>()
     for (const held of spans) {
-      // The turn of the span's last mapped assistant line.
-      for (let k = held.length - 1; k >= 0; k--) {
-        const msg = view.messages[held[k]] as { type?: unknown; parent_tool_use_id?: unknown; message?: { id?: unknown } }
+      for (const i of held) {
+        const msg = view.messages[i] as { type?: unknown; parent_tool_use_id?: unknown; message?: { id?: unknown } }
         const id = msg.type === 'assistant' && msg.parent_tool_use_id == null ? msg.message?.id : undefined
         const turn = typeof id === 'string' ? enrichment.costByMessageId.get(id) : undefined
-        if (turn) { lastSpanOf.set(turn, held[held.length - 1]); break }
+        if (turn) lastSpanOf.set(turn, held[held.length - 1])
       }
     }
     if (lastSpanOf.size === 0) return out
     const prior = costIncludesPriorHistory(props.summary, costSummary(enrichment.messages))
-    for (const [turn, last] of lastSpanOf) {
-      out.set(last, <PreludeCostFooter turn={turn} title={prior && turn.index === 1 ? t('execution.cost.includesPriorHistory') : undefined} />)
+    const byLast = new Map<number, TurnCost[]>()
+    for (const [turn, last] of lastSpanOf) byLast.set(last, [...(byLast.get(last) ?? []), turn])
+    for (const [last, held] of byLast) {
+      out.set(last, (
+        <>
+          {held.sort((x, y) => x.index - y.index).map((turn) => (
+            <PreludeCostFooter key={turn.index} turn={turn} title={prior && turn.index === 1 ? t('execution.cost.includesPriorHistory') : undefined} />
+          ))}
+        </>
+      ))
     }
     return out
   }, [enrichment, chatBlocks, entries, view, props.summary, t])
