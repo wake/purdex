@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.520] - 2026-10-07
+
+> 只新增 `pdx` 指令端的內部套件，**還沒有任何指令使用它**，不需要部署；下一個有行為的版本一起上。daemon、資料庫、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P2b-1（#1669）
+
+`cmd/pdx/daemonclient`：之後 `pdx lead request`、接力與分流用的 `pdx relay/ask …` 共用的 HTTP client，照 spec §9.1 撐過 daemon 重啟：
+
+- daemon 連線被拒、連線中斷、回 503「正在關閉／尚未就緒」時視為重啟中：印一次「daemon 重啟中，繼續等待…」，以 0.25 → 0.5 → 1 秒的間隔重試，**從第一次失敗起最多 30 秒**（硬上限，期限絕對），超過就回 `daemon_unavailable`（指令端 exit 20）。恢復後若 daemon 的 boot id 變了，印一次「daemon 已重新啟動（boot …）」。
+- 只有上述訊號會重試：DNS 失敗、主機或網路不可達、TLS 錯誤、pairing 模式的 503 都立即回報，不會白等 30 秒。
+- 沒有帶期限的呼叫每次嘗試最多等 60 秒；daemon 接了連線卻不回應回 `no_answer`，由指令端決定是否再問。
+- 寫入請求（POST／DELETE）送出後才斷線時，只有呼叫端標記為冪等（帶 client 產生的 id）才會重送，避免重複建立。
+- 舊 daemon 沒有該路由（非 JSON 的 404，含代理回的 HTML）→ `unsupported`（exit 21）；daemon 自己的 JSON 404 原樣回給呼叫端。
+
+review 期間修正：30 秒改為硬上限並加每次嘗試的逾時、重試訊號收窄為 allowlist、404 改以 body 判定、寫入重送需冪等標記。
+
 ## [1.0.0-alpha.519] - 2026-10-07
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。這一版畫面上還看不到變化。
