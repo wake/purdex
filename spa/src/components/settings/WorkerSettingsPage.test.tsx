@@ -45,6 +45,29 @@ describe('WorkerSettingsPage', () => {
     expect(screen.getByTestId('probe')).toHaveTextContent('b')
   })
 
+  it('the tab strip follows the tabs keyboard model', () => {
+    render(<WorkerSettingsPage />)
+    const a = screen.getByTestId('worker-settings-tab-appearance')
+    const w = screen.getByTestId('worker-settings-tab-workers')
+    expect(a).toHaveAttribute('tabindex', '0')
+    expect(w).toHaveAttribute('tabindex', '-1')
+    const panel = screen.getByRole('tabpanel')
+    expect(a).toHaveAttribute('aria-controls', panel.id)
+    expect(panel).toHaveAttribute('aria-labelledby', a.id)
+    fireEvent.keyDown(a, { key: 'ArrowRight' })
+    expect(w).toHaveAttribute('aria-selected', 'true')
+    expect(w).toHaveFocus()
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', w.id)
+    fireEvent.keyDown(w, { key: 'ArrowRight' })
+    expect(a).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(a, { key: 'End' })
+    expect(w).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(w, { key: 'Home' })
+    expect(a).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(a, { key: 'ArrowLeft' })
+    expect(w).toHaveAttribute('aria-selected', 'true')
+  })
+
   it('the Workers tab shows a disabled / unavailable host state instead of loading', () => {
     const base = { info: null, capabilities: null, error: null, fetchedAt: 1, generation: 1, fingerprint: 'x' }
     useNexHostStore.setState({

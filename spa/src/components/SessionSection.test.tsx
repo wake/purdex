@@ -628,6 +628,34 @@ describe('HostSessionSection Sessions / Workers switch', () => {
     expect(screen.getByTestId(`host-view-workers-${HOST_ID}`)).toHaveAttribute('aria-selected', 'false')
   })
 
+  it('the switch follows the tabs keyboard model', () => {
+    useNexHostStore.setState({ byHost: { [HOST_ID]: readyEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
+    render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)
+    const s = screen.getByTestId(`host-view-sessions-${HOST_ID}`)
+    const w = screen.getByTestId(`host-view-workers-${HOST_ID}`)
+    expect(s).toHaveAttribute('tabindex', '0')
+    expect(w).toHaveAttribute('tabindex', '-1')
+    const panel = screen.getByRole('tabpanel')
+    expect(s).toHaveAttribute('aria-controls', panel.id)
+    expect(w).toHaveAttribute('aria-controls', panel.id)
+    expect(panel).toHaveAttribute('aria-labelledby', s.id)
+    fireEvent.keyDown(s, { key: 'ArrowRight' })
+    expect(w).toHaveAttribute('aria-selected', 'true')
+    expect(w).toHaveFocus()
+    expect(w).toHaveAttribute('tabindex', '0')
+    expect(s).toHaveAttribute('tabindex', '-1')
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', w.id)
+    fireEvent.keyDown(w, { key: 'ArrowRight' }) // wraps
+    expect(s).toHaveAttribute('aria-selected', 'true')
+    expect(s).toHaveFocus()
+    fireEvent.keyDown(s, { key: 'End' })
+    expect(w).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(w, { key: 'Home' })
+    expect(s).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(s, { key: 'ArrowLeft' }) // wraps backwards
+    expect(w).toHaveAttribute('aria-selected', 'true')
+  })
+
   it('hides the switch when nex is not ready', () => {
     useNexHostStore.setState({ byHost: { [HOST_ID]: disabledEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
     render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)

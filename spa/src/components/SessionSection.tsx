@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -10,6 +10,7 @@ import { isHostLive } from '../lib/host-live'
 import { useHostLook } from '../lib/host-look'
 import type { Session } from '../lib/host-api'
 import { useNexHostStore, selectReady } from '../stores/useNexHostStore'
+import { useTabList } from '../hooks/useTabList'
 import { HostWorkerRows } from './HostWorkerRows'
 import { SessionLauncher } from './session-launcher/SessionLauncher'
 import { TerminalWindow, Circle, Spinner, CaretDown, CaretRight, Plus } from '@phosphor-icons/react'
@@ -66,6 +67,7 @@ function SessionRow({ hostId, session, disabled, onSelect }: {
   )
 }
 
+const VIEWS = ['sessions', 'workers'] as const
 const EMPTY_SESSIONS: Session[] = []
 
 export interface HostSessionSectionProps extends NewTabProviderProps {
@@ -87,7 +89,12 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
   // Not ready → the switch is hidden and the block is the sessions view.
   const showWorkers = nexReady && view === 'workers'
   // Losing readiness resets the choice, so a recovery does not jump back to Workers by itself.
-  useEffect(() => { if (!nexReady) setView('sessions') }, [nexReady])
+  const [prevReady, setPrevReady] = useState(nexReady)
+  if (prevReady !== nexReady) {
+    setPrevReady(nexReady)
+    if (!nexReady) setView('sessions')
+  }
+  const { tabProps, panelProps } = useTabList(VIEWS, view, setView)
 
   if (!host) return null
 
@@ -129,9 +136,8 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
               <button
                 key={v}
                 type="button"
-                role="tab"
+                {...tabProps(v)}
                 data-testid={`host-view-${v}-${hostId}`}
-                aria-selected={view === v}
                 onClick={() => setView(v)}
                 className={`px-2 py-0.5 rounded cursor-pointer ${view === v ? 'bg-surface-hover text-text-primary' : 'text-text-muted hover:text-text-primary'}`}
               >
@@ -158,6 +164,7 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
           <Plus size={14} weight="bold" />
         </button>
       </div>
+      <div {...(nexReady ? panelProps : {})} className="flex flex-col gap-1">
       {isExpanded && showWorkers && (
         <HostWorkerRows
           hostId={hostId}
@@ -202,6 +209,7 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
           onSelect={onSelect}
         />
       ))}
+      </div>
     </div>
   )
 }

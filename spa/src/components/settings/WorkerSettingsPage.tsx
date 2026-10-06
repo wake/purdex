@@ -6,6 +6,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useHostLookResolver } from '../../lib/host-look'
 import { useShownRefFilter } from '../../lib/shown-hosts'
 import { getWorkerSettingsTabs } from '../../lib/worker-settings-tabs'
+import { useTabList } from '../../hooks/useTabList'
 import { SegmentControl } from './SegmentControl'
 
 export function WorkerSettingsPage(_props: object) {
@@ -23,6 +24,7 @@ export function WorkerSettingsPage(_props: object) {
   )
 
   const active = tabs.find((x) => x.id === activeId) ?? tabs[0]
+  const { tabProps, panelProps } = useTabList(tabs.map((x) => x.id), active?.id ?? '', setActiveId)
   if (!active) return null
   const hostId = shownHosts.some((h) => h.value === pickedHost) ? (pickedHost as string) : shownHosts[0]?.value
   const Body = active.component
@@ -36,8 +38,7 @@ export function WorkerSettingsPage(_props: object) {
             <button
               key={tab.id}
               type="button"
-              role="tab"
-              aria-selected={on}
+              {...tabProps(tab.id)}
               data-testid={`worker-settings-tab-${tab.id}`}
               onClick={() => setActiveId(tab.id)}
               className={`px-1 py-1.5 text-xs cursor-pointer border-b-2 -mb-px ${
@@ -49,6 +50,7 @@ export function WorkerSettingsPage(_props: object) {
           )
         })}
       </div>
+      <div {...panelProps} className="flex flex-col gap-3">
       {active.hostScoped ? (
         shownHosts.length === 0 ? (
           <div data-testid="worker-settings-no-hosts" className="text-xs text-text-muted">{t('settings.worker.no_hosts')}</div>
@@ -63,6 +65,7 @@ export function WorkerSettingsPage(_props: object) {
       ) : (
         <Body />
       )}
+      </div>
     </div>
   )
 }
