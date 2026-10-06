@@ -3,8 +3,10 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 
 vi.mock('../../lib/nex/nex-api', () => ({ listExecutions: vi.fn().mockResolvedValue({ items: [], next_cursor: '' }), attachControl: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), archiveExecution: vi.fn() }))
 vi.mock('../../lib/nex/nex-sse', () => ({ openNexSse: vi.fn() }))
-import { render, screen, fireEvent } from '@testing-library/react'
+vi.mock('../../lib/nex/conversations-api', () => ({ listConversations: vi.fn(() => new Promise(() => {})) }))
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { WorkerSettingsPage } from './WorkerSettingsPage'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { clearWorkerSettingsTabs, registerWorkerSettingsTab } from '../../lib/worker-settings-tabs'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useHostStore } from '../../stores/useHostStore'
@@ -45,6 +47,28 @@ describe('WorkerSettingsPage', () => {
     expect(screen.getByTestId('probe')).toHaveTextContent('b')
   })
 
+  it('the tabs are 外觀 / Workers / 已退出 / 已消失, in that order (spec §13.3)', () => {
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    try {
+      render(<WorkerSettingsPage />)
+      const tabs = screen.getAllByRole('tab')
+      expect(tabs.map((x) => x.getAttribute('data-testid'))).toEqual([
+        'worker-settings-tab-appearance', 'worker-settings-tab-workers', 'worker-settings-tab-exited', 'worker-settings-tab-gone',
+      ])
+      expect(tabs.map((x) => x.textContent)).toEqual(['外觀', 'Workers', '已退出', '已消失'])
+    } finally {
+      act(() => { useI18nStore.getState().setLocale('en') })
+    }
+  })
+
+  it('已消失 is host-scoped: it gets the host picker and its host', () => {
+    render(<WorkerSettingsPage />)
+    fireEvent.click(screen.getByTestId('worker-settings-tab-gone'))
+    expect(screen.getByTestId('worker-settings-tab-gone')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('worker-settings-host-picker')).toBeInTheDocument()
+    expect(screen.getByTestId('worker-gone-search')).toBeInTheDocument()
+  })
+
   it('the tab strip follows the tabs keyboard model', () => {
     render(<WorkerSettingsPage />)
     const a = screen.getByTestId('worker-settings-tab-appearance')
@@ -59,16 +83,19 @@ describe('WorkerSettingsPage', () => {
     expect(w).toHaveFocus()
     expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', w.id)
     const x = screen.getByTestId('worker-settings-tab-exited')
+    const g = screen.getByTestId('worker-settings-tab-gone')
     fireEvent.keyDown(w, { key: 'ArrowRight' })
     expect(x).toHaveAttribute('aria-selected', 'true')
     fireEvent.keyDown(x, { key: 'ArrowRight' })
+    expect(g).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(g, { key: 'ArrowRight' })
     expect(a).toHaveAttribute('aria-selected', 'true')
     fireEvent.keyDown(a, { key: 'End' })
-    expect(x).toHaveAttribute('aria-selected', 'true')
-    fireEvent.keyDown(x, { key: 'Home' })
+    expect(g).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(g, { key: 'Home' })
     expect(a).toHaveAttribute('aria-selected', 'true')
     fireEvent.keyDown(a, { key: 'ArrowLeft' })
-    expect(x).toHaveAttribute('aria-selected', 'true')
+    expect(g).toHaveAttribute('aria-selected', 'true')
   })
 
   it('the Workers tab shows a disabled / unavailable host state instead of loading', () => {

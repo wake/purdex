@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent, act, within } from '@testing-library/react'
 import { ConversationRow } from './ConversationRow'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { ConversationRow as Row } from '../../lib/nex/conversations-api'
@@ -83,10 +83,44 @@ describe('ConversationRow', () => {
     expect(screen.getByTestId('conversation-row-cwd')).toHaveTextContent('~/Workspace/purdex')
   })
 
-  it('a gone row offers no rebuild', () => {
-    render(<ConversationRow row={row()} state="gone" home={HOME} now={NOW} onRebuild={vi.fn()} />)
-    expect(screen.getByTestId('conversation-row')).toHaveAttribute('data-state', 'gone')
-    expect(screen.queryByTestId('conversation-row-rebuild')).toBeNull()
+  it('an ended row is not aria-disabled and has no gone note, even with its button disabled', () => {
+    render(<ConversationRow row={row()} state="ended" home={HOME} now={NOW} disabled onRebuild={vi.fn()} />)
+    const el = screen.getByTestId('conversation-row')
+    expect(el).not.toHaveAttribute('aria-disabled')
+    expect(el).not.toHaveClass('opacity-60')
+    expect(screen.queryByTestId('conversation-row-gone-note')).toBeNull()
+  })
+
+  describe('gone (U3)', () => {
+    it('the whole row is disabled and muted, with no button, and ends with the note', () => {
+      const onRebuild = vi.fn()
+      render(<ConversationRow row={row()} state="gone" home={HOME} now={NOW} disabled onRebuild={onRebuild} />)
+      const el = screen.getByTestId('conversation-row')
+      expect(el).toHaveAttribute('data-state', 'gone')
+      expect(el).toHaveAttribute('aria-disabled', 'true')
+      expect(el).toHaveClass('opacity-60')
+      expect(screen.queryByTestId('conversation-row-rebuild')).toBeNull()
+      expect(within(el).queryByRole('button')).toBeNull()
+      const note = screen.getByTestId('conversation-row-gone-note')
+      expect(note).toHaveTextContent('對話檔已清除，無法再啟動')
+      expect(el.lastElementChild).toBe(note)
+      fireEvent.click(el)
+      expect(onRebuild).not.toHaveBeenCalled()
+    })
+
+    it('still shows the title, the ~ cwd, the age and the 上次在 chip', () => {
+      render(<ConversationRow row={row({ last_in: 'worker' })} state="gone" home={HOME} now={NOW} disabled />)
+      expect(screen.getByTestId('conversation-row')).toHaveTextContent('Fix the login flow')
+      expect(screen.getByTestId('conversation-row-cwd')).toHaveTextContent('~/Workspace/purdex')
+      expect(screen.getByTestId('conversation-row-age')).toHaveTextContent('3 小時前')
+      expect(screen.getByTestId('conversation-row-last-in')).toHaveTextContent('上次在 Worker')
+    })
+
+    it('a gone row whose cwd no longer exists shows only the note, not 工作目錄已不存在', () => {
+      render(<ConversationRow row={row({ cwd_exists: false })} state="gone" home={HOME} now={NOW} disabled />)
+      expect(screen.queryByTestId('conversation-row-cwd-missing')).toBeNull()
+      expect(screen.getByTestId('conversation-row-gone-note')).toBeInTheDocument()
+    })
   })
 
   it('en copy', () => {
@@ -95,5 +129,12 @@ describe('ConversationRow', () => {
     expect(screen.getByTestId('conversation-row-age')).toHaveTextContent('3h ago')
     expect(screen.getByTestId('conversation-row-last-in')).toHaveTextContent('Last in terminal')
     expect(screen.getByTestId('conversation-row-cwd-missing')).toHaveTextContent('Working directory no longer exists')
+  })
+
+  it('en copy of the gone note', () => {
+    act(() => { useI18nStore.getState().setLocale('en') })
+    render(<ConversationRow row={row()} state="gone" home={HOME} now={NOW} disabled />)
+    expect(screen.getByTestId('conversation-row-gone-note'))
+      .toHaveTextContent('Transcript cleaned up; it can no longer be started')
   })
 })
