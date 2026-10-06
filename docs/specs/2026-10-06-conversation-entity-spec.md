@@ -304,7 +304,7 @@ It adds `CREATE INDEX IF NOT EXISTS` on `executions(resume_session_id)`, `execut
 - **Settings → Worker** gets tabs, per host:
   - **Workers**: live, same as above.
   - **Exited**: entities whose latest stint was exited, newest first; rebuild from here.
-  - Later tabs: **Dormant** (§13, P4); Aigora (out of scope here). The tab bar is a registry, so a later tab plugs in without reshaping the page.
+  - Later tabs: **已消失** (gone, §13 P4; the P4 rewrite also widens Exited to every ended conversation); Aigora (out of scope here). The tab bar is a registry, so a later tab plugs in without reshaping the page.
 - **Fetching:** follow Nexen's cursor until done, bounded by D9. Over the cap, the list says so: it shows the rows it fetched and a persistent notice. One dot-colour mapping is shared by the list and the pane header.
 
 > **統籌核准的推導（2026-10-06）**
@@ -409,7 +409,7 @@ Opening an exited or dormant entity just to read it: the exited pane shows only 
 | P3a | Nexen v0.17 | `start_idle` delegate (§8.2); list by `session_id` with indexes; contract docs. **No transcript-to-now endpoint.** *(統籌 2026-10-06)* |
 | P3b-1 | Purdex | Pin v0.17; handoff / worker rebuild with `start_idle`; switch owner scans and stint lists to the `session_id` filter; confirm-text change *(統籌 2026-10-06)* |
 | P3b-2 | Purdex | §10: stint attribution and lazy enrichment of earlier worker segments *(統籌 2026-10-06)* |
-| P4 | Purdex | Dormant entities (§13): daemon scans transcripts' metadata (titles, cwd, last activity) per host; Dormant tab + search; Exited rows whose transcript is gone |
+| P4 | Purdex | Ended and gone conversations (§13): a daemon conversation index and scan; 已退出 lists every ended conversation (terminal or worker); a 已消失 tab; search |
 
 > **統籌核准的推導（2026-10-06）**
 > - **D14 Finer split** (each ≤ 800 lines / 20 files):
@@ -437,146 +437,226 @@ Opening an exited or dormant entity just to read it: the exited pane shows only 
 - Agents running outside Purdex's tmux.
 - Hot-reloading anything.
 
-## 13. Dormant entities (P4)
+## 13. Ended and gone conversations (P4)
 
-*(Written by the coordinator `mlab/purdex-18`, 2026-10-06. It replaces the P4 outline of §11; the plan for it goes through codex together with this section. Every rule here is derived from E1–E6, Q1–Q5, §9 D10 and §12. **The user-visible rules (§13.2–§13.5) await the user's confirmation**; implementation starts after it.)*
+*(Written by the coordinator `mlab/purdex-18` on 2026-10-06 and rewritten 2026-10-07 after the user's decisions U1–U3 below. It replaces the P4 outline of §11. The plan for it goes through codex together with this section.)*
+
+### 13.0 User decisions (2026-10-07, do not reopen)
+
+The user described a terminal conversation's life in three states and asked for a worker to map onto the same states. This is E2 seen from the user's side.
+
+| # | Decision |
+|---|---|
+| U1 | **Three states, the same for terminal and worker.**<br>(1) Running: cld-yolo is in, or a worker is live.<br>(2) Ended, can be resumed: `/exit`, or the worker's 退出; the transcript is still there.<br>(3) Gone: the transcript is gone, so it can never be started again. |
+| U2 | **Settings → Worker has one tab per state.**<br>Workers (state 1) stays as it is.<br>**已退出** lists every state-2 conversation, **whether it last ran in a terminal or in a worker**, and offers rebuild.<br>**已消失** lists state 3. |
+| U3 | **State-3 rows are listed but disabled.** Each one ends with「對話檔已清除，無法再啟動」. |
+
+The earlier draft split ownerless conversations by whether they had ever been a worker (Exited vs Dormant). The user found that distinction meaningless, so there is no Dormant tab.
 
 ### 13.1 Facts (measured 2026-10-06 on mlab, alpha.505, Claude Code 2.1.291)
 
-- **Where transcripts are.** `~/.claude/projects` on mlab is a **symlink** to `/Volumes/PD1KAVault/claude/projects` (a sparsebundle volume). It holds 79 project dirs and 383 top-level transcripts `<slug>/<session>.jsonl`. Another 2,241 nested `.jsonl` files live under `<session>/subagents/…`; those are not conversations of their own. The total is 2.6 GB: median 1.9 MB, p95 34 MB, max 122 MB.
-- **Retention bounds the list.** `cleanupPeriodDays` is unset, so Claude Code's default of 30 days applies. 382 of the 383 files were modified within 30 days.
-- **Title.** Titles are `{"type":"ai-title","aiTitle":…}` lines, repeated through the file; the latest one wins. A `/rename` writes `custom-title` (8 files). 300 of 383 files have an `ai-title`, and **in all 300 the last one lies within the final 256 KB**.
-- **cwd** appears within the first 64 KB in 380 of 383 files; the other 3 carry none.
-- **Origin.** The first line that has an `entrypoint` says who started the session: `cli` in 285 files, `sdk-*` in 98. First → last entrypoint: cli → cli 281, sdk → sdk 95, sdk → cli 3, cli → sdk 2.
-- **Most sdk-born sessions are not Purdex workers.** Nexen on mlab has about 10 executions in all. The sdk-born cwds are scratchpads and `/tmp` (33), `nex-acceptance-scratch` (18), `/` (9), Nexen dev checkouts, and Aigora work dirs: headless runs by other tools and tests.
+- **Where transcripts are.** `~/.claude/projects` on mlab is a **symlink** to `/Volumes/PD1KAVault/claude/projects`, a sparsebundle volume.
+  - It holds 79 project dirs and 383 top-level transcripts, `<slug>/<session>.jsonl`.
+  - Another 2,241 nested `.jsonl` files sit under `<session>/subagents/…`. They are not conversations of their own.
+  - Total 2.6 GB: median 1.9 MB, p95 34 MB, max 122 MB.
+- **Retention.** `cleanupPeriodDays` is unset, so Claude Code's default of 30 days applies. 382 of the 383 files were modified within 30 days. Every transcript therefore lives for at least 30 days after its last write.
+- **Title.**
+  - `{"type":"ai-title","aiTitle":…}` lines repeat through the file; the latest one wins.
+  - A `/rename` writes `custom-title` (8 files).
+  - 300 of 383 files have an `ai-title`, and in all 300 the last one lies within the final 256 KB.
+- **cwd** appears within the first 64 KB in 380 of 383 files. The other 3 carry none.
+- **Who started it.** The first line that carries an `entrypoint` says who started the session: `cli` in 285 files, `sdk-*` in 98.
+  - First → last entrypoint: cli → cli 281, sdk → sdk 95, sdk → cli 3, cli → sdk 2.
+- **Most sdk-born sessions are not Purdex workers.**
+  - Nexen on mlab has about 10 executions in all.
+  - The sdk-born cwds are scratchpads and `/tmp` (33), `nex-acceptance-scratch` (18), `/` (9), Nexen dev checkouts and Aigora work dirs. These are headless runs by other tools and tests.
 - **cwd that no longer exists:** 47 files (42 sdk-born, 5 cli-born).
 - **Cost.** Reading the first 64 KB and the last 256 KB of all 383 files takes 0.16 s warm and 0.35 s cold (Python probe).
-- **Owners outside tmux are invisible.** The CC hooks are global (`~/.claude/settings.json`), but `pdx hook` identifies the pane through tmux (`cmd/pdx/hook.go`). A Claude Code started outside tmux therefore has no Purdex frame and is not known to own its session.
+- **Owners outside tmux are invisible.** The CC hooks are global (`~/.claude/settings.json`), but `pdx hook` identifies the pane through tmux (`cmd/pdx/hook.go`). A Claude Code started outside tmux has no Purdex frame, so Purdex does not know it owns its session.
 - **Resume needs the original cwd.** `claude --resume S` finds S only under the project dir of the cwd it runs in.
 - **The daemon embeds Nexen.** The nex module lists executions in process through `engine.List(store.ListOptions)` (`internal/module/nex/engine_iface.go`), so no HTTP page cap applies.
 
-### 13.2 What the Dormant tab lists
+### 13.2 Which conversations count
 
-Settings → Worker gets a **"休眠" (Dormant)** tab after Workers and Exited, through the tab registry (§9).
+A conversation S on a host is in scope when **either** of these holds:
+- it was **born in a terminal**: the first `entrypoint` of its transcript is `cli`;
+- it has **a Nexen stint on this host**: any execution for S, archived or not.
 
-Per host, an entity S is listed when **all** of these hold:
+sdk-born sessions without a stint were started by a tool outside Purdex (Aigora, scripts, tests). They are out of scope (§12); Aigora gets its own tab later (Q3).
 
-1. **Its transcript exists** at `~/.claude/projects/<slug>/<S>.jsonl`, top level only.
-2. **Nothing owns it** under §4.2: no live terminal frame (D1) and no live worker.
-3. **It has no Nexen stint on this host**: no execution for S, archived or not. An entity with a stint belongs to Exited (§9 D10), so **Exited and Dormant never list the same entity**.
-4. **It was born in a terminal**: the first `entrypoint` is `cli`.
-   - A session born `sdk-*` without a Purdex stint was started by a tool outside Purdex (Aigora, scripts, tests). That is out of scope (§12). Aigora gets its own tab later (Q3).
+The state of an in-scope S:
 
-**Rows**
-- **Title**, in this order:
-  1. the latest `custom-title`;
-  2. the latest `ai-title`;
-  3. the first human prompt, cut to one line;
-  4. the first 8 characters of S.
-- **cwd**, with the home directory shortened to `~`.
-- **Last activity**: the file's mtime, shown relative ("3 小時前").
+| State | Rule |
+|---|---|
+| 1 Running | It has an owner under §4.2: a live terminal frame (D1) or a live worker. |
+| 2 Ended | No owner, and the transcript exists. |
+| 3 Gone | No owner, and the transcript does not exist. |
 
-Rows are sorted by last activity, newest first.
+**Where state 3 can be known from:**
+- **A worker-born or stinted S:** the Nexen execution records `transcript_path` and cwd. Purdex stats that path.
+- **A terminal-born S without a stint:** Purdex has no record unless it has seen the transcript. P4 therefore keeps a **conversation index** (§13.6).
+  - A terminal conversation whose transcript was cleaned up **before P4 shipped** was never seen, and cannot be listed. This is a documented limit.
 
-### 13.3 Search
+### 13.3 The tabs
 
-A search box filters case-insensitively by substring over:
-- title;
+The order stays 外觀 / Workers / 已退出, and P4 adds **已消失** after them through the tab registry (§9).
+
+**Workers (state 1).** Unchanged: live workers. Terminal-running conversations are not listed (E3).
+
+**已退出 (state 2).** Every state-2 conversation on the host, terminal or worker. It replaces the P2 Exited tab's source and rules:
+- **A conversation running in a terminal is state 1, not listed.** This supersedes D10's「在終端機中」marker. The daemon knows terminal owners reliably (§13.6), so this is an exclusion, not a guess.
+- **Row content:**
+  - **Title.** The first of these that exists:
+    1. the latest `custom-title`;
+    2. the latest `ai-title`;
+    3. Nexen's `session_title`;
+    4. the first human prompt, cut to one line;
+    5. the first 8 characters of S.
+  - **cwd**, with the home directory shortened to `~`.
+  - **Last activity**: the transcript's mtime, shown relative ("3 小時前").
+  - **上次在**: 終端機 or Worker. The last `entrypoint` decides: `cli` means terminal, `sdk-*` means worker.
+- **Order:** last activity, newest first.
+- **Rebuild:** each row offers 重建… (§13.4).
+
+**已消失 (state 3).**
+- **Row content:** the same as 已退出, but the whole row is **disabled** and ends with「對話檔已清除，無法再啟動」.
+- **Last activity** is the last mtime Purdex saw. For a worker-born S without an index row it is the execution's `updated_at`.
+- **Order:** newest first.
+
+**Both tabs:**
+- **Search.** A search box filters case-insensitively by substring over the title, cwd, first human prompt and session id. This is **metadata only**; full-text search over 2.6 GB of transcripts is out of scope.
+- **Cap.** At most 2,000 rows per tab, newest first. Over the cap, the tab shows「超過 2,000 筆，較舊的沒有列出」.
+- **Gating.** The tabs follow the per-host gating of Settings → Worker.
+
+### 13.4 Rebuild from 已退出
+
+重建… opens a tab whose pane is the rebuild screen of §7 for S.
+
+**Preselection (Q4, original mode).** The row's 上次在 decides: 終端機 preselects terminal, Worker preselects worker. The worker option is offered only when the host's Nexen is ready (§7).
+
+**Terminal-last rows:**
+- **Terminal rebuild** uses today's engine and resume templates, with the transcript's cwd.
+- **Worker rebuild** calls `POST /api/nex/worker-rebuild` with that cwd and without `replace_execution_id`.
+
+**Worker-last rows:**
+- 重建… opens that execution's exited screen, as P2-2 does.
+- From there, the two choices are §7's.
+
+**When rebuild is not offered:**
+- **The cwd no longer exists.** The row shows「工作目錄已不存在」and offers no rebuild. A resume from any other cwd would not find S (§13.1).
+- **No cwd is known.** The row offers no rebuild either.
+
+**Recently written.** If the transcript was written within the last 120 s, the rebuild screen warns before it acts:「這個對話 N 秒前還有寫入，可能正在 Purdex 以外的地方使用」. A Claude Code outside tmux is not a known owner (§13.1). The daemon's owner checks still run at rebuild, as for every rebuild.
+
+### 13.5 States are recomputed on every scan
+
+- **Nothing is stored as "gone".** A transcript that reappears, for example when the vault volume is mounted again, puts S back in state 2.
+- **Gone is decided only after a successful listing.** S is gone only when the projects root was listed successfully, so a missing file really means a missing file.
+- **A failed listing marks nothing gone.** When the root is missing or unreadable (the volume is not mounted, for example):
+  - the tabs show「無法讀取對話檔目錄」with the error;
+  - **no conversation is marked gone**;
+  - the lists are never empty or "all gone" because of it.
+
+### 13.6 The daemon side
+
+**Endpoint.** The nex module serves it, next to the owner checks it reuses: for example `GET /api/nex/conversations?state=ended|gone`. The plan fixes the exact shape.
+- **Each row carries:**
+  - session id and title fields;
+  - cwd, and whether that cwd exists;
+  - last activity and 上次在;
+  - first prompt, for search;
+  - `transcript_path`;
+  - the latest stint's id and `effective_profile`, when there is a stint.
+- **The response also carries** `scanned_at` and a root error, when there is one.
+
+**Root.** `$HOME/.claude/projects`, the same rule as Nexen's `transcriptPath` (`execution/addressing.go`). `CLAUDE_CONFIG_DIR` is not honoured, as in Nexen.
+- **A symlinked projects dir is followed** (mlab's case).
+- **A transcript that is itself a symlink, or not a regular file, is skipped.** This matches Nexen `prelude.openTranscript`'s `O_NOFOLLOW` / `O_NONBLOCK` rule.
+
+**Per file.** The scan reads the first 64 KB (cwd, first `entrypoint`, first human prompt) and the last 256 KB (titles, last `entrypoint`).
+- A line cut by a window edge is skipped.
+- A title older than the tail window is missed, and the title falls back as in §13.3. This never happened in the measurement.
+
+**Conversation index.** A table in the Purdex store holds one row per top-level transcript ever seen. Each row has:
+- session id;
+- `transcript_path`;
 - cwd;
-- first human prompt;
-- session id.
+- first and last `entrypoint`;
+- the titles;
+- first prompt;
+- size and mtime;
+- first seen and last seen.
 
-This is **metadata only**. Full-text search over 2.6 GB of transcripts is out of scope.
+How the index is kept:
+- A scan upserts every file it reads.
+- A file whose (size, mtime) did not change is not re-read.
+- Rows are never deleted in P4. They are tiny: retention adds about 400 a month on mlab.
 
-The Exited tab keeps its own search (P2-2).
+**When scans run:**
+- at daemon start;
+- every 6 hours;
+- on request, reusing a result up to 5 s old.
 
-### 13.4 Rebuild from Dormant
+Concurrent requests share one in-flight scan. Transcripts live at least 30 days (§13.1), so the 6-hour scan sees every terminal conversation before it can be cleaned up.
 
-A row offers **"重建…"**, as the Exited tab does. It opens a tab whose pane is the rebuild screen of §7 for S:
-- **cwd**: the transcript's cwd.
-- **Preselection (Q4, original mode)**: the last `entrypoint` decides. `cli` preselects terminal; `sdk-*` preselects worker.
-- **Choices**: the worker option follows §7, so it is offered only when the host's Nexen is ready.
-- **Terminal rebuild** uses today's engine and resume templates.
-- **Worker rebuild** uses `POST /api/nex/worker-rebuild` without `replace_execution_id`.
+**Joins happen in the daemon:**
+- terminal owners from live frames (D1);
+- live workers and every stint from an in-process `List` with archived rows included, paged to the end without a page cap.
 
-Rows that cannot be rebuilt:
-- **The cwd no longer exists**: the row shows「工作目錄已不存在」and offers no rebuild. A resume elsewhere would not find S (§13.1).
-- **No cwd in the transcript**: the row offers no rebuild either.
-
-**Recently written.** When the transcript was written within the last 120 s, the rebuild screen shows a warning before it acts:「這個對話 N 秒前還有寫入，可能正在 Purdex 以外的地方使用」. A Claude Code outside tmux is not a known owner (§13.1). The daemon's owner checks still run at rebuild, as for every rebuild.
-
-### 13.5 Exited rows whose transcript is gone
-
-The same scan tells which session ids that have a stint **no longer have a transcript**. That is E2's "gone".
-
-The Exited tab marks those rows「對話檔已清除」and offers no rebuild, so a 30-day cleanup no longer surfaces as a failed resume.
-
-### 13.6 The scan (daemon)
-
-- **Endpoint.** The nex module serves it, next to the owner checks it reuses: for example `GET /api/nex/conversations/dormant`. The response contains:
-  - the dormant rows;
-  - the session ids that have a stint but no transcript;
-  - `scanned_at`;
-  - a root error, when there is one.
-
-  The plan fixes the exact shape. The tab follows the per-host gating of the other Settings → Worker tabs.
-- **Root.** `$HOME/.claude/projects`, the same rule as Nexen's `transcriptPath` (`execution/addressing.go`). `CLAUDE_CONFIG_DIR` is not honoured, as in Nexen.
-  - A symlinked projects dir **is followed** (mlab's case).
-  - A transcript that is itself a symlink or not a regular file **is skipped**, matching Nexen `prelude.openTranscript`'s `O_NOFOLLOW` / `O_NONBLOCK` rule.
-- **Per file.** Read the first 64 KB (cwd, first `entrypoint`, first human prompt) and the last 256 KB (titles, last `entrypoint`).
-  - A line cut by a window edge is skipped.
-  - A title older than the tail window is missed, and the row falls back to the first prompt (§13.2). It never happened in the measurement.
-- **Cache.** Results are cached per file by (size, mtime). A scan re-reads only changed files.
-  - Scans run on request. Concurrent requests share one in-flight scan.
-  - A result up to 5 s old is reused.
-- **Owners and stints.** Owners and stints are joined **in the daemon**:
-  - terminal owners from live frames (D1);
-  - live workers and stints from an in-process `List` with archived rows included, paged to the end with no page cap.
-
-  **So wake/nexen#119 (newest-first listing) is not a P4 prerequisite.** It stays a follow-up for the SPA-side lists.
-- **Cap.** At most 2,000 rows, newest by mtime. Over the cap the tab shows「休眠的對話超過 2,000 筆，較舊的沒有列出」. Retention keeps mlab near 400.
-- **Root errors.** When the root is missing or unreadable (the vault volume is not mounted, for example), the tab shows「無法讀取對話檔目錄」with the error. It never shows an empty list in that case.
+Consequences:
+- **The 已退出 tab no longer pages Nexen from the SPA.** P2's 10,000-row notice (D9) does not apply to it.
+- **wake/nexen#119 (newest-first listing) is not needed for P4.** It stays a follow-up for the live lists.
 
 ### 13.7 Known limits
 
-- A Claude Code running outside Purdex's tmux has no frame, so its session can be listed as dormant while in use. The 120 s warning of §13.4 mitigates this but does not prevent it.
-- sdk-born conversations that Purdex never ran do not appear (§13.2 rule 4).
-- A title written more than 256 KB before the end of the file is not seen.
+- **Owners outside tmux.** A Claude Code running outside Purdex's tmux has no frame, so its session can be listed in 已退出 while in use. The 120 s warning of §13.4 mitigates this but does not prevent it.
+- **Gone before P4.** A terminal conversation cleaned up before P4 shipped cannot appear in 已消失 (§13.2).
+- **sdk-born conversations Purdex never ran** do not appear in any tab.
+- **Old titles.** A title written more than 256 KB before the end of the file is not seen.
 
 ### 13.8 Not in P4
 
-- **Reading a dormant or exited transcript without rebuilding it.** E4 keeps those panes rebuild-only. §10.7 records how reading would be built.
+- **Reading** an ended or gone conversation without rebuilding it. E4 keeps those panes rebuild-only, and §10.7 records how reading would be built.
 - **Full-text search.**
-- **Other providers**, the **Aigora tab**, and **deeplinks**.
+- **Other providers**, the **Aigora tab** and **deeplinks**.
+- **Pruning** the conversation index.
 
 ### 13.9 Tests
 
-- **Scan fixture.** A projects dir containing:
-  - a cli-born dormant conversation (listed);
-  - an sdk-born one with no stint (excluded);
-  - one with an archived stint (excluded here, listed in Exited);
-  - one owned by a terminal (excluded);
-  - one owned by a worker (excluded);
-  - one whose cwd is gone (listed, no rebuild);
-  - one whose title exists only before the tail window (first-prompt fallback);
-  - a line cut at each window edge (skipped);
-  - a symlinked projects dir (followed);
-  - a symlinked transcript (skipped);
-  - a missing root (root error, not an empty list).
-- **Cache.** An unchanged file is not re-read, and concurrent requests share one scan.
-- **Cap.** The notice appears at the cap.
-- **SPA.**
-  - the Dormant tab plugs into the registry;
-  - search over the four fields;
-  - preselection from the last `entrypoint`;
-  - the「工作目錄已不存在」and「對話檔已清除」states;
-  - the 120 s warning.
+**Scan and states (daemon).** A fixture projects dir with:
+- a terminal-born ended conversation → 已退出, 上次在 終端機;
+- a terminal-born conversation in a live terminal → not listed;
+- a worker-born one with an archived stint and the transcript present → 已退出, 上次在 Worker;
+- the same with the transcript removed → 已消失, with no index row needed;
+- a terminal-born one, indexed, then its file removed → 已消失;
+- after that, the file restored → back in 已退出;
+- an sdk-born one with no stint → never listed;
+- a cwd that is gone → listed, with no rebuild;
+- a title only before the tail window → fallback;
+- a line cut at each window edge → skipped;
+- a symlinked projects dir → followed;
+- a symlinked transcript → skipped;
+- a missing root → root error, with nothing marked gone and no empty list.
+
+**Index and scheduling:**
+- an unchanged file is not re-read;
+- concurrent requests share one scan;
+- the scan runs at start and on the 6-hour timer;
+- the cap notice.
+
+**SPA:**
+- the 已退出 tab on the daemon endpoint, with terminal and worker rows and 上次在;
+- search over the four fields;
+- preselection from 上次在;
+- the「工作目錄已不存在」state;
+- the 120 s warning;
+- the 已消失 tab: disabled rows with the note, in the registry.
 
 ### 13.10 Phases
 
 | PR | Content |
 |---|---|
-| P4-1 | Daemon: the scan, its cache and the endpoint, including the stint-without-transcript set |
-| P4-2 | SPA: the Dormant tab, search, rebuild entry and the 120 s warning; the Exited tab's「對話檔已清除」state |
+| P4-1 | Daemon: the conversation index (migration), the scan with its schedule and cache, the state rules and the endpoint |
+| P4-2 | SPA: 已退出 moves to the endpoint (terminal + worker rows, 上次在, search, terminal-row rebuild entry, cwd and 120 s states); the 已消失 tab |
 
-Each PR is ≤ 800 lines / 20 files, as in §11. P4-1 is a daemon deploy (coordinator).
+Each PR is ≤ 800 lines / 20 files (§11); P4-2 may split in two. P4-1 is a daemon deploy, done by the coordinator.
