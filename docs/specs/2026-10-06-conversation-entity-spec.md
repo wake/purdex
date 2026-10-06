@@ -305,11 +305,16 @@ It adds `CREATE INDEX IF NOT EXISTS` on `executions(resume_session_id)`, `execut
   - **Workers**: live, same as above.
   - **Exited**: entities whose latest stint was exited, newest first; rebuild from here.
   - Later tabs: **Dormant** (§11 P4); Aigora (out of scope here). The tab bar is a registry, so a later tab plugs in without reshaping the page.
-- **Fetching:** follow Nexen's cursor until done (bounded), so the newest rows are never cut off. One dot-colour mapping is shared by the list and the pane header.
+- **Fetching:** follow Nexen's cursor until done, bounded by D9. Over the cap, the list says so: it shows the rows it fetched and a persistent notice. One dot-colour mapping is shared by the list and the pane header.
 
 > **統籌核准的推導（2026-10-06）**
 > - **D8 Dot colours** follow the terminal agent badge: running green (`status-success`), queued yellow (`status-warning`), idle grey (`text-muted`), failed / rejected red (`status-error`), terminated grey. So the list's idle moves from amber to grey, and the header's terminated moves from red to grey.
 > - **D9 Paging:** the live list asks for `include_archived=false`, 500 rows per page, at most 20 pages.
+>   - Nexen v0.16.1 / v0.17 list ids ascending, oldest first, with no tail or reverse option. A host with more than 10,000 non-archived executions therefore loses its newest rows past the cap.
+>   - **Over the cap (PR #1592 review, A1, coordinator-approved 2026-10-06):** keep the cap and commit the rows fetched. The worker list shows a persistent notice,「未歸檔的執行紀錄超過 10,000 筆，最新的可能沒有列出」, and a console warning is logged.
+>   - A page that is not a list fails the refresh, and the previous rows stay. A repeated cursor ends the walk, and rows are de-duplicated by id.
+>   - Newest-first paging is a Nexen follow-up (wake/nexen#119).
+>   - In this model an exit archives its row, so non-archived rows are roughly the live workers, and the cap is practically out of reach.
 > - **D10 Exited tab (P2):** entities in no live state, each shown by its latest stint. An entity with any live stint is a worker under §4.2: it is listed live, never here. When the SPA knows that the session id is running in a terminal on that host (agent records), the row is marked "在終端機中" and offers no rebuild; the daemon's owner check refuses one anyway.
 
 ## 10. Rendering — one timeline, earlier segments enriched
