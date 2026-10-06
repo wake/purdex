@@ -6,7 +6,7 @@ Status: **draft, for review by `air26/_9iwyyv`** against the user decisions in �
 - Research page: `https://pages.mlab.host/wake/purdex/context-relay.html`.
 - The U5 strength question was answered by the user on 2026-10-06: human presence in v1 (U5a, §2). §6.5 is the design.
 - U13 (self-relay switches and approval) was added the same day. Its derivations (a)–(d) are in §8.7, and air26's review points (e) and (f) are in §8.4 and §8.3.
-- **One consequence still needs confirmation (§6.5.5):** in v1, browsers can view and deny, but only an enrolled Purdex.app can approve.
+- U13a and U14 followed the same day: self-relay approval is one click, and the browser SPA is retired. So every client is a Purdex.app, and the §6.5.5 question is closed.
 
 Every place where this spec departs from the brief's design draft (brief §5, D1–D8) is marked **⟲ changed from D…**, with the reason. §13 lists all of them.
 
@@ -51,7 +51,21 @@ Copied verbatim from the brief §2.
 
 | # | 決策 |
 |---|---|
-| U13 | 自我接力的開關與核准<br>- 一般 session（不是 lead 也不是 member）：自我接力預設開，可以關閉。<br>- lead：自我接力預設開，可以關閉。<br>- member：自我接力預設關，接力必須由 lead 安排（和 U9 一致）。<br>- 自我接力（一般 session 與 lead）每次都要先經過人類核准，比照 lead 模式：走同一套 UI 多 client 推播與 U5a 的人在場驗證（已登記的 App 加 SE 金鑰）。<br>- lead 要求 member 接力（pdx relay）不需要核准，由 lead 自己安排。 |
+| U13 | 自我接力的開關與核准<br>- 一般 session（不是 lead 也不是 member）：自我接力預設開，可以關閉。<br>- lead：自我接力預設開，可以關閉。<br>- member：自我接力預設關，接力必須由 lead 安排（和 U9 一致）。<br>- 自我接力（一般 session 與 lead）每次都要先經過人類核准，比照 lead 模式：走同一套 UI 多 client 推播與 U5a 的人在場驗證（已登記的 App 加 SE 金鑰）。**（此點已由 U13a 修正）**<br>- lead 要求 member 接力（pdx relay）不需要核准，由 lead 自己安排。 |
+
+**Third supplementary decisions.** The user made them on 2026-10-06, and `air26/_9iwyyv` relayed them.
+
+| # | 決策 |
+|---|---|
+| U13a | 修正 U13：自我接力的核准**只要按一下確認，不用 Touch ID，也不需要人在場驗證**；任一個 client 按下都算。人在場驗證（U5a）**只用在 lead 申請**。自我接力仍然走同一套多 client 推播與「任一個回應就全部結束」 |
+| U14 | 瀏覽器版 SPA 退役（使用者原話：「SPA 直接退役」） |
+
+**How this spec reads U14** (air26's reading):
+- Purdex.app is the only client.
+- The App still renders the same SPA code.
+- The Vite dev server stays for the App's HMR.
+
+In this spec, U14 is **a premise only**. Turning the browser version off is not in any phase here.
 
 Also decided on the research page (§9 "已決定"): `session.compact` is a safety net, so that auto-compact cannot get in before the relay.
 
@@ -293,7 +307,6 @@ The table is `approval_requests{id, kind: lead | self_relay | enroll, origin_ses
 - **Closed elsewhere:** the dialog closes everywhere, and other clients get a toast `<主機>：<session> 的 <lead 申請／接力申請> 已由 <client> 核准／拒絕` (U6).
 - **Notification:**
   - Electron raises a system notification through the existing `showNotification` path (`<主機>：<session> 申請成為 lead`); clicking it focuses the window, where the dialog already is.
-  - Browsers use the existing Notification fallback of `useNotificationDispatcher`.
 - **During a daemon restart (D6):** the dialog stays, with its buttons disabled and `daemon 重啟中…`.
   - A click while disconnected is kept locally and re-sent on reconnect. CAS makes the resend safe.
   - A 409 then closes it with the "handled by" toast.
@@ -322,7 +335,7 @@ What happens when that is not followed:
 
 | Path | Verdict for v1 | Why |
 |---|---|---|
-| **Browser WebAuthn** (Touch ID / passkey in the SPA) | **No** | WebAuthn needs a secure context and a domain RP ID. The SPA runs on `http://100.64.0.2:5174` and Purdex.app on `app://.` (M8); neither qualifies. Moving the SPA to `https://<name>.mlab.host` also needs https/wss for every daemon it talks to, or the browser blocks the calls as mixed content. That is the web-version line's job, not this spec's. |
+| **Browser WebAuthn** (Touch ID / passkey in the SPA) | **No** | WebAuthn needs a secure context and a domain RP ID. The SPA runs on `http://100.64.0.2:5174` and Purdex.app on `app://.` (M8); neither qualifies. Moving the SPA to `https://<name>.mlab.host` also needs https/wss for every daemon it talks to, or the browser blocks the calls as mixed content. That is the web-version line's job, not this spec's. Moot since U14 retired the browser. |
 | **Electron WebAuthn** (`app.configureWebAuthn`) | **No** | Needs the `keychain-access-groups` entitlement and a provisioning profile. Purdex.app is ad-hoc signed (M10). |
 | **Purdex.app + a Secure Enclave approver key** | **Yes** | Works with ad-hoc signing (M6). The user-presence variant is still unmeasured on an unlocked Mac (M7, §6.5.6). It does not depend on the page's origin, because signing happens in the App's main process. The key is bound to one Mac's Secure Enclave and unusable without the user's Touch ID or password. |
 
@@ -386,23 +399,24 @@ A bad or missing signature is **403 `presence_required`**, and the request stays
   - It refuses without an interactive TTY, asks for the host alias to be typed, and broadcasts the reset.
 - **A host with no approver** cannot approve lead requests: the dialog says so and offers enrollment. It fails closed.
 
-#### 6.5.5 Clients that cannot approve — ⚠ needs air26 / user confirmation
+#### 6.5.5 Which client can approve what (U6, U13a, U14)
 
-| Client | View | Deny | Approve |
-|---|---|---|---|
-| Enrolled Purdex.app (Touch ID or password) | ✓ | ✓ | ✓ |
-| Purdex.app on a Mac not yet enrolled | ✓ | ✓ | Shows "登記這台 Mac" |
-| Mac without a Secure Enclave (Intel without T2) | ✓ | ✓ | ✗ — cannot enroll |
-| Browser SPA, phone, other devices | ✓ | ✓ | ✗ — "請在已登記的 Purdex.app 核准" |
+Since U14, every client is a Purdex.app.
 
-This narrows U6 for **approve**:
-- the prompt still reaches every client;
-- any client's answer still closes it everywhere;
-- but only an enrolled App can say yes.
+| Client | View | Deny | Approve a self relay (U13a) | Approve a lead request / an enrollment (U5a) |
+|---|---|---|---|---|
+| Enrolled Purdex.app (Touch ID or password) | ✓ | ✓ | ✓ one click | ✓ with presence |
+| Purdex.app on a Mac not yet enrolled | ✓ | ✓ | ✓ one click | Shows "登記這台 Mac" |
+| Purdex.app on a Mac without a Secure Enclave (Intel without T2) | ✓ | ✓ | ✓ one click | ✗ — cannot enroll |
+
+**U6 holds in full:**
+- the prompt reaches every App;
+- any App's answer closes it everywhere;
+- for a lead request, the answer that approves comes from an enrolled App.
 
 air26's premise that a19 has no Touch ID does not hold (M9). It does have one. A Mac without Touch ID still approves with its password.
 
-**Alternative, if a browser's 核准 button must work in v1.** A browser click asks the daemon to push a "please sign" to every online enrolled App, and the person touches the sensor on whichever Mac they are at. This costs one more event type and a pending-signature state. It is not in the phases unless asked.
+The "browser click, App signs" alternative is no longer needed (U14).
 
 #### 6.5.6 Plan step 0: measure before building
 
@@ -628,7 +642,7 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
   - The self-relay dialog also offers **這個 session 不再詢問**, which sets the pause.
 - **A member has no switch.** U13 says "預設關" and "接力必須由 lead 安排"; read with U9, that is not switchable. `/relay on` in a member answers `member 的接力由 lead 安排`.
 
-**⟲ derived (b): approval.** U13 brings in U5, U5a and U6.
+**⟲ derived (b): approval.** U13 brings in U5 and U6; U13a removes U5a here.
 - **Opening the request.** At a turn's end with used ≥ 70%, the mod calls `pdx relay begin --self`.
   - The daemon checks role, switch and pause (§8.1).
   - It then opens an `approval_requests` row of kind `self_relay` (§6.2) and a `relay_ops` row in `awaiting_approval`, and answers the request id.
@@ -637,8 +651,12 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
   - the session: title, address, ref and cwd;
   - usage: `已用 72%`;
   - `核准後這個 session 會寫交接檔、清空並在原處接手（約 1 分鐘）`.
-- **核准** needs the presence signature (§6.5.3, with kind `self_relay` and grant `{session_id, op_id}`); **拒絕** does not.
-  - Because the kind is inside the digest, a signature for one kind never approves another.
+- **核准 is one click on any App, with no signature (U13a).** So is **拒絕**. Presence (U5a) stays for lead requests and enrollments only.
+  - `decide` for a `self_relay` request needs no `approver_id` or signature.
+  - `decide` for `lead` or `enroll` still refuses without one: the check depends on the stored kind, never on the request body.
+  - The cost: like U5 before U5a, a same-uid agent could approve its own self relay with the host token.
+    - The U5a layer still applies: no `pdx` command, the skill forbids it, and every decision is broadcast and audited.
+    - The stakes are one relay of the agent's own session.
 - **Deadline:** 10 minutes, absolute. The lease is renewed by the mod's wait (below). If the origin session is gone, the request is `abandoned`.
 - **Approved:** the op moves to `claimed`, and the mod runs §8.2 steps 4–8: write, clear, seed.
 - **Denied or timed out:** the op becomes `cancelled{denied|timeout}`.
@@ -757,7 +775,6 @@ The skill ships in the plugin (`skills/pdx-team/SKILL.md`). It says:
   - an unreachable daemon allows.
 
   A relay could later lock a member with the same flag.
-- **Browser approval:** WebAuthn once the SPA is served over https with https/wss daemons (the web-version line), or the "push to an enrolled App" alternative (§6.5.5).
 - **Electron WebAuthn / keychain items:** once the App has a Developer ID and provisioning profile (signing roadmap Stage 3).
 - **Cross-host teams:** spawn, kill and relay on another host, and a remote host's trust in a grant approved elsewhere.
 - **Adopting** an existing session as a member. Today's manual flow, where the user opens a session and hands its address to A, keeps working as plain messaging.
@@ -807,7 +824,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | D7 | Adds 13 and 14 (§14); keeps 1 and 2 as today | Spawn, kill and relay need refusal and start-failure codes |
 | D8 | Ten PRs instead of four phases | The 800-line / 20-file limit; U5a and U13 added work |
 | U13 (a) | Switches per host in host config; a per-session pause by `/relay` and `pdx relay self`; members not switchable | The daemon is what answers `begin`; U9 |
-| U13 (b) | One `approval_requests` table (kinds `lead`, `self_relay`, `enroll`); the self-relay lock holds `prompt.submit` inside a `$` wait | air26 asked for a shared model; a hook's budget excludes `$` waits |
+| U13 (b) | One `approval_requests` table (kinds `lead`, `self_relay`, `enroll`); the self-relay lock holds `prompt.submit` inside a `$` wait; a self-relay approve is one click with no signature (U13a) | air26 asked for a shared model; a hook's budget excludes `$` waits |
 | U13 (c) | Ask again after 10 more points; auto-compact never waits, and only an already-approved relay skips it | The session must never hang |
 | U13 (d) | No daemon: no ask, no relay, compaction runs | Approval lives on the daemon |
 | §8.4 (review e) | `previous_refs` uncapped; members told the lead's new ref | A cap breaks old lead refs |
@@ -886,14 +903,14 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 - dropping the claim's session check lets another session claim → red;
 - dropping `previous_refs` from Resolve leaves the old ref at `peer_not_found` → red;
 - dropping the prompt hold lets a prompt start a turn while a self-relay request is open → red;
-- a lead-kind signature replayed on a self-relay request must fail → red if the kind leaves the digest.
+- a `lead` request approved without a signature must fail, while a `self_relay` approve needs none → red if the check reads the request body instead of the stored kind.
 
 **Real acceptance (mlab, then air26):**
 1. Enroll air26's App on mlab (trust on first use), then a19's App, approved from air26 with Touch ID.
-2. A session requests lead; the user approves on air26's App with Touch ID; the dialog closes on mlab's browser tab, whose 核准 was not offered.
+2. A session requests lead; the user approves on air26's App with Touch ID; the dialog closes on a19's App at the same moment.
 3. The lead spawns two members, and relays one at 70% on a test threshold (`PDX_RELAY_THRESHOLD`, as in the prototype). The old ref still reaches it.
 4. Restart the daemon during a pending request and during a relay; both finish.
-5. Self relay on a solo session at a test threshold: the dialog appears on every client; deny, then see it ask again at +10 points; approve with Touch ID; a message typed during the wait reaches the new conversation.
+5. Self relay on a solo session at a test threshold: the dialog appears on every client; deny, then see it ask again at +10 points; approve with one click, no Touch ID; a message typed during the wait reaches the new conversation.
 
 ## 16. Not in scope
 
@@ -901,3 +918,6 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 - Nexen worker relay: it goes through Nexen rebuild.
 - Cross-host teams, adoption, the hard lock, human-presence approval, and the handoff memory store: all in §11.
 - Claude Code's built-in Agent Teams.
+- **Turning the browser SPA off (U14).** Here U14 is a premise only.
+  - The unmerged web version (branch `worktree-web-version`; `purdex.mlab.host` in front of the daemon) is affected.
+  - The user decides separately whether to drop it, keep it as a view-only client, or fold it into the App.
