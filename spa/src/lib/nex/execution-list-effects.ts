@@ -113,7 +113,8 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     listAllExecutions(hostId, { includeArchived: false }, stillCurrent)
       .then((result) => {
         if (!result || !stillCurrent()) return
-        const { items, dropped, truncated } = result
+        const { items, dropped, truncated, stuck, stuckPage } = result
+        if (stuck) console.warn('nex: executions cursor repeated', { hostId, page: stuckPage })
         if (truncated) console.warn('nex: executions list truncated', { hostId, pageLimit: LIST_PAGE_LIMIT, maxPages: LIST_MAX_PAGES })
         if (dropped > 0) console.warn('nex: executions page dropped malformed row(s)', { hostId, dropped })
         patchCache(hostId, (c) => ({ ...c, items, phase: 'ready', error: null, truncated, refreshRevision: c.refreshRevision + 1 }))

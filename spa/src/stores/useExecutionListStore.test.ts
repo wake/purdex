@@ -487,17 +487,16 @@ describe('useExecutionListStore', () => {
     expect(cache(A).truncated).toBe(false)
   })
 
-  it('a refresh that hits a repeated cursor keeps the ready rows, sets phase error and does not set truncated', async () => {
+  it('a repeated cursor commits the fetched rows ready, not truncated, and warns', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: [row('exc_9')], next_cursor: 'c' } as unknown as ExecutionsPage)
     useExecutionListStore.getState().subscribe(A)
     await flush()
+    expect(cache(A).items.map((r) => r.id)).toEqual(['exc_9'])
     expect(cache(A).phase).toBe('ready')
-    vi.mocked(api.listExecutions).mockReset().mockResolvedValue({ items: [row('exc_9')], next_cursor: 'c' } as unknown as ExecutionsPage)
-    useExecutionListStore.getState().refetch(A)
-    await flush()
-    expect(cache(A).items.map((r) => r.id)).toEqual(['exc_1'])
-    expect(cache(A).phase).toBe('error')
-    expect(cache(A).error).toContain('cursor repeated')
+    expect(cache(A).error).toBeNull()
     expect(cache(A).truncated).toBe(false)
+    expect(warn).toHaveBeenCalledWith('nex: executions cursor repeated', { hostId: A, page: 2 })
   })
 
   it('a fresh cache is not truncated', () => {
