@@ -957,7 +957,8 @@ func TestTakeToTerminalSuccessResponse(t *testing.T) {
 	_, hasExitError := body["exit_error"]
 	assert.False(t, hasExitError, "exit_error only when the worker could not exit")
 	assert.Equal(t, []string{"acquire", "renew", "terminate", "archive", "release"}, env.svc.Calls(), "idle execution: control, no interrupt, exit after the resume")
-	assert.Equal(t, []execution.ArchiveRequest{{ExecutionID: tbExecID, PrincipalID: tbPrincipal, Archived: true}}, env.svc.archiveReqs)
+	// D23: the exit archives under the transfer's control — the lease the terminate ran under.
+	assert.Equal(t, []execution.ArchiveRequest{{ExecutionID: tbExecID, PrincipalID: tbPrincipal, Archived: true, LeaseID: tbLeaseID}}, env.svc.archiveReqs)
 	require.Len(t, env.svc.archiveCtxErrs, 1)
 	assert.NoError(t, env.svc.archiveCtxErrs[0], "archive ran under a live context of its own")
 	assert.Empty(t, env.tmux.KillIfInstanceCalls(), "nothing killed on success")

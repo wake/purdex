@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -307,6 +308,255 @@ func TestFakeLeaseFence(t *testing.T) {
 	if _, err := f.AcquireLease(ctx, "E", "q"); !errors.Is(err, store.ErrLeaseHeld) {
 		t.Fatalf("acquire over a live lease: %v", err)
 	}
+
+	// Archive (v0.18.0, #113): fenced only when it carries a lease; the
+	// lease answer comes before archive_while_running.
+	arch := func(f *fakeNexService, lease, principal string) error {
+		return f.Archive(ctx, execution.ArchiveRequest{ExecutionID: "E", LeaseID: lease, PrincipalID: principal, Archived: true})
+	}
+	g := &fakeNexService{enforceLease: true, archiveErr: execution.ErrArchiveWhileRunning}
+	if err := arch(g, "L", "p"); !errors.Is(err, store.ErrLeaseRequired) {
+		t.Fatalf("fenced archive, no lease: %v", err)
+	}
+	if err := arch(g, "", "p"); !errors.Is(err, execution.ErrArchiveWhileRunning) {
+		t.Fatalf("unfenced archive: %v", err)
+	}
+	g.heldLease = store.Lease{ID: "L", PrincipalID: "p", ExpiresAt: nowMs() + 60_000}
+	if err := arch(g, "L", "q"); !errors.Is(err, store.ErrLeaseMismatch) {
+		t.Fatalf("fenced archive, other principal: %v", err)
+	}
+	g.archiveErr = nil
+	if err := arch(g, "L", "p"); err != nil {
+		t.Fatalf("fenced archive, holder: %v", err)
+	}
+}
+
+// D23 (Nexen ≥ v0.18.0, nexen#113): when exitWorker terminated the
+// execution under a control, the archive that follows carries that same
+// control's lease and principal, so Nexen checks the lease in the archive's
+// own UPDATE. Every other archive carries no lease.
+func TestExitWorker_ArchiveUnderTerminateLease(t *testing.T) {
+	const self = "pdx:" + testHostID
+	ctx := context.Background()
+	idle := store.Execution{ID: "E", State: store.StateIdle}
+	live := func(id, principal string) store.Lease {
+		return store.Lease{ID: id, PrincipalID: principal, ExpiresAt: nowMs() + 60_000}
+	}
+	rowHeld := func(l store.Lease) store.Execution {
+		return store.Execution{ID: "E", State: store.StateIdle, LeaseID: l.ID, LeasePrincipalID: l.PrincipalID, LeaseExpiresAt: l.ExpiresAt}
+	}
+	// onlyArchive is the single archive request exitWorker made.
+	onlyArchive := func(t *testing.T, env *takebackEnv) execution.ArchiveRequest {
+		t.Helper()
+		reqs := env.svc.ArchiveReqs()
+		if len(reqs) != 1 {
+			t.Fatalf("archive requests = %+v, want exactly one", reqs)
+		}
+		if !reqs[0].Archived || reqs[0].ExecutionID != "E" {
+			t.Fatalf("archive request = %+v", reqs[0])
+		}
+		return reqs[0]
+	}
+	// fencedBy asserts the archive carries the lease and principal of the
+	// last (the successful) terminate, and that it is the one named.
+	fencedBy := func(t *testing.T, env *takebackEnv, lease, principal string) {
+		t.Helper()
+		req := onlyArchive(t, env)
+		term := env.svc.terminateCalls[len(env.svc.terminateCalls)-1]
+		if req.LeaseID != term.LeaseID || req.PrincipalID != term.PrincipalID {
+			t.Fatalf("archive under %q/%q, terminate under %q/%q: D23 wants the same control", req.LeaseID, req.PrincipalID, term.LeaseID, term.PrincipalID)
+		}
+		if req.LeaseID != lease || req.PrincipalID != principal {
+			t.Fatalf("archive under %q/%q, want %q/%q", req.LeaseID, req.PrincipalID, lease, principal)
+		}
+	}
+	unfenced := func(t *testing.T, env *takebackEnv, principal string) {
+		t.Helper()
+		if req := onlyArchive(t, env); req.LeaseID != "" || req.PrincipalID != principal {
+			t.Fatalf("archive under %q/%q, want no lease and the caller %q", req.LeaseID, req.PrincipalID, principal)
+		}
+	}
+	exitedArchived := func(t *testing.T, out exitOutcome, herr *handoffError) {
+		t.Helper()
+		if herr != nil || !out.Terminated || !out.Archived || out.State != store.StateTerminated {
+			t.Fatalf("out=%+v herr=%+v", out, herr)
+		}
+	}
+
+	t.Run("a: idle, no caller control → archived under the lease exitWorker took, still held at archive time", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.enforceLease = true
+		env.svc.lease = store.Lease{ID: "L-own"}
+		out, herr := env.m.exitWorker(ctx, idle, nil, self)
+		exitedArchived(t, out, herr)
+		fencedBy(t, env, "L-own", self)
+		if got, want := strings.Join(env.svc.Calls(), ","), "acquire,terminate,archive,release"; got != want {
+			t.Fatalf("calls = %s, want %s (the own lease is released only after the archive)", got, want)
+		}
+	})
+	t.Run("a': idle, a pdx holder's lease borrowed → archived under the holder's lease and principal", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.enforceLease = true
+		borrowed := live("L-b", pdxOther)
+		env.svc.heldLease = borrowed
+		env.store.script(rowHeld(borrowed))
+		out, herr := env.m.exitWorker(ctx, idle, nil, self)
+		exitedArchived(t, out, herr)
+		fencedBy(t, env, "L-b", pdxOther)
+	})
+	t.Run("b: transfer's control → archived under ctl's lease and principal", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.enforceLease = true
+		env.svc.heldLease = live("L-t", pdxOther)
+		ctl := &control{LeaseID: "L-t", PrincipalID: pdxOther, release: noRelease}
+		out, herr := env.m.exitWorker(ctx, idle, ctl, self)
+		exitedArchived(t, out, herr)
+		fencedBy(t, env, "L-t", pdxOther)
+		if len(env.svc.acquires) != 0 || len(env.svc.releases) != 0 {
+			t.Fatalf("acquires=%v releases=%+v: a transfer's control is used as is", env.svc.acquires, env.svc.releases)
+		}
+	})
+	t.Run("c: lease lost before terminate, re-taken → archived under the re-taken lease", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		borrowed := live("L-b", pdxOther)
+		expired := borrowed
+		expired.ExpiresAt = nowMs() - 1
+		env.svc.enforceLease = true
+		env.svc.heldLease = borrowed
+		env.svc.lease = store.Lease{ID: "L-new"}
+		env.store.script(rowHeld(borrowed), rowHeld(expired))
+		env.svc.onTerminate = func(req execution.TerminateRequest) {
+			if req.LeaseID == "L-b" {
+				env.svc.setHeldLease(expired) // the other tab stopped renewing
+			}
+		}
+		out, herr := env.m.exitWorker(ctx, idle, nil, self)
+		exitedArchived(t, out, herr)
+		if len(env.svc.terminateCalls) != 2 {
+			t.Fatalf("terminate calls = %+v", env.svc.terminateCalls)
+		}
+		fencedBy(t, env, "L-new", self)
+		if got, want := strings.Join(env.svc.Calls(), ","), "acquire,terminate,acquire,terminate,archive,release"; got != want {
+			t.Fatalf("calls = %s, want %s", got, want)
+		}
+	})
+
+	noTerminate := []struct {
+		name string
+		row  store.Execution
+	}{
+		{"failed", store.Execution{ID: "E", State: store.StateFailed}},
+		{"rejected", store.Execution{ID: "E", State: store.StateRejected}},
+		{"terminated, unarchived", store.Execution{ID: "E", State: store.StateTerminated}},
+	}
+	for _, c := range noTerminate {
+		t.Run("d: "+c.name+" row, no terminate → unfenced archive", func(t *testing.T) {
+			env := newTakebackEnv(t)
+			env.svc.enforceLease = true
+			out, herr := env.m.exitWorker(ctx, c.row, nil, self)
+			if herr != nil || !out.Archived || len(env.svc.terminateCalls) != 0 {
+				t.Fatalf("out=%+v herr=%+v terminate=%d", out, herr, len(env.svc.terminateCalls))
+			}
+			unfenced(t, env, self)
+		})
+	}
+	t.Run("d: terminate answered ErrExecutionTerminal → unfenced archive", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.enforceLease = true
+		env.svc.lease = store.Lease{ID: "L-own"}
+		env.svc.terminateErr = store.ErrExecutionTerminal
+		env.store.script(store.Execution{ID: "E", State: store.StateFailed})
+		out, herr := env.m.exitWorker(ctx, idle, nil, self)
+		if herr != nil || !out.Archived || out.Terminated || out.State != store.StateFailed {
+			t.Fatalf("out=%+v herr=%+v", out, herr)
+		}
+		unfenced(t, env, self)
+	})
+
+	t.Run("e: terminate failed (D4, archive anyway) → unfenced archive", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.enforceLease = true
+		env.svc.lease = store.Lease{ID: "L-own"}
+		env.svc.terminateErr = execution.ErrTerminateContended
+		env.store.script(idle)
+		out, herr := env.m.exitWorker(ctx, idle, nil, self)
+		if herr != nil || !out.Archived || out.Terminated {
+			t.Fatalf("out=%+v herr=%+v", out, herr)
+		}
+		unfenced(t, env, self)
+	})
+	t.Run("e: lease lost and the re-take failed (D4, archive anyway) → unfenced archive", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.enforceLease = true
+		env.svc.lease = store.Lease{ID: "L-own"}
+		env.svc.onTerminate = func(execution.TerminateRequest) {
+			env.svc.setHeldLease(store.Lease{})
+			env.svc.mu.Lock()
+			env.svc.acquireErr = errors.New("db locked")
+			env.svc.mu.Unlock()
+		}
+		out, herr := env.m.exitWorker(ctx, idle, nil, self)
+		if herr != nil || !out.Archived || out.Terminated {
+			t.Fatalf("out=%+v herr=%+v", out, herr)
+		}
+		unfenced(t, env, self)
+	})
+
+	// f: the lease changes hands between the terminate and the archive (the
+	// window #113 closes). onRecord fires inside Archive, before its fence.
+	handovers := []struct {
+		name string
+		to   store.Lease
+		want error
+	}{
+		{"handed to a non-pdx principal", live("L-p", "ploom:agent-7"), store.ErrLeaseMismatch},
+		{"expired", store.Lease{ID: "L-own", PrincipalID: self, ExpiresAt: nowMs() - 1}, store.ErrLeaseExpired},
+		{"released", store.Lease{}, store.ErrLeaseRequired},
+	}
+	for _, h := range handovers {
+		t.Run("f: terminated, lease "+h.name+" before the archive → fenced archive refused, exited (terminated, not archived)", func(t *testing.T) {
+			env := newTakebackEnv(t)
+			env.svc.enforceLease = true
+			env.svc.lease = store.Lease{ID: "L-own"}
+			env.svc.onRecord = func(name string) {
+				if name == "archive" {
+					env.svc.setHeldLease(h.to)
+				}
+			}
+			var logs []string
+			env.m.logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+			out, herr := env.m.exitWorker(ctx, idle, nil, self)
+			if herr != nil {
+				t.Fatalf("herr = %+v, want none: the worker is exited", herr)
+			}
+			if !out.Exited() || !out.Terminated || out.Archived || out.State != store.StateTerminated {
+				t.Fatalf("out = %+v, want terminated, not archived", out)
+			}
+			fencedBy(t, env, "L-own", self)
+			// Logged as an archive failure after the terminate, with the fence's lease error.
+			logged := false
+			for _, l := range logs {
+				if strings.Contains(l, "archive after terminate") && strings.Contains(l, h.want.Error()) {
+					logged = true
+				}
+			}
+			if !logged {
+				t.Fatalf("no 'archive after terminate' log with %q: %q", h.want, logs)
+			}
+		})
+	}
+
+	t.Run("endpoint: the caller's lease fences the archive", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{exec: store.Execution{ID: "E", State: store.StateIdle}}}
+		env.svc.enforceLease = true
+		env.svc.heldLease = live("L-mine", self)
+		status, body := exitPost(t, env, "E", `{"lease_id":"L-mine"}`)
+		if status != 200 || body["terminated"] != true || body["archived"] != true {
+			t.Fatalf("%d %v", status, body)
+		}
+		fencedBy(t, env, "L-mine", self)
+	})
 }
 
 // PR #1578 B1: a lease that changes hands between takeControl's read and the
