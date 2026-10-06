@@ -3,7 +3,8 @@
 // The live view's reducer (applyDurableEvent) over the stint's events, then
 // the parts a segment draws with: each call's real status and duration, its
 // subagent task rows, and the reduced messages and each turn's cost by the assistant
-// message ids it answered (§10.4 `result` frames). Pure.
+// message ids it answered (§10.4 `result` frames), and the images each send carried. Pure.
+import { parseAttachmentMeta, type AttachmentMeta } from './attachments'
 import { costSummary, type TurnCost } from './cost-summary'
 import { applyDurableEvent, defaultExecutionState } from './event-reducer'
 import type { StreamMessage } from './message-types'
@@ -23,6 +24,11 @@ export interface StintEnrichment {
    * (costSummary's own turns, paired positionally with the result-delimited id groups). An id after the last result maps to nothing.
    */
   costByMessageId: ReadonlyMap<string, TurnCost>
+  /**
+   * The k-th entry is the k-th `execution.delegated` / `execution.message_accepted` that carried attachments, in event
+   * order: its `attachments` as parseAttachmentMeta keeps them. An event with no valid one adds nothing.
+   */
+  attachmentsByPrompt: readonly (readonly AttachmentMeta[])[]
   /** The log ran past the budget: only its first `budget` events were applied. */
   truncated: boolean
 }
@@ -39,11 +45,26 @@ export const ENRICHMENT_EVENT_BUDGET = 5000
  * stands for it then — never a live clock in the prelude (spec §5.2).
  */
 export function enrichFromEvents(events: readonly NexEvent[], budget = ENRICHMENT_EVENT_BUDGET): StintEnrichment {
-  const s = events.slice(0, budget).reduce(applyDurableEvent, defaultExecutionState())
+  const applied = events.slice(0, budget)
+  const s = applied.reduce(applyDurableEvent, defaultExecutionState())
   // fromEntries defines own data properties: a `__proto__` id stays an id.
   const tools = Object.fromEntries(Object.entries(s.tools).filter(([, t]) => t.status !== 'running'))
   const settled: TaskTable = Object.fromEntries(Object.entries(s.tasks).filter(([, row]) => row.status !== 'running'))
-  return { tools, subagentTasks: subagentTasksByToolUse(settled), messages: s.messages, costByMessageId: costByMessageId(s.messages), truncated: events.length > budget }
+  return {
+    tools, subagentTasks: subagentTasksByToolUse(settled), messages: s.messages, costByMessageId: costByMessageId(s.messages),
+    attachmentsByPrompt: attachmentsByPrompt(applied), truncated: events.length > budget,
+  }
+}
+
+/** Each send's attachments (`delegated` opens the stint, `message_accepted` every later turn), in event order; a send with none is skipped. */
+function attachmentsByPrompt(events: readonly NexEvent[]): AttachmentMeta[][] {
+  const out: AttachmentMeta[][] = []
+  for (const ev of events) {
+    if (ev.kind !== 'execution.delegated' && ev.kind !== 'execution.message_accepted') continue
+    const list = parseAttachmentMeta(ev.payload?.attachments)
+    if (list.length > 0) out.push(list)
+  }
+  return out
 }
 
 /** costSummary's turns, each keyed by the top-level assistant message ids seen since the previous top-level result. */

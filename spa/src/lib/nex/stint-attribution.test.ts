@@ -152,7 +152,9 @@ describe('attributionRuns', () => {
 
   it('chat: a span takes its first message\'s attribution and is keyed by its last message', () => {
     // Worker A rebuilt into A2 at 411382 with no marker: the span [394248.1, 411382.1] straddles the split.
-    // Known limit (#1614): the straddling tail runs under A; enrichment joins by unique id, so it loses enrichment, never mismatches.
+    // A real rebuild starts at its first send, an opening line even when it carries only attachments
+    // (#1614, fixed: next test), so it splits there. A boundary at an answer, as here, still straddles:
+    // the tail runs under A; enrichment joins by unique id, so it loses enrichment, never mismatches.
     const A2: Stint = { id: 'exc_A2', boundary: 411382, createdAt: 2, summary: SUMMARY }
     const split = attributeItems(items, [A, A2])
     const blocks = preludeBlocks(view)
@@ -163,6 +165,33 @@ describe('attributionRuns', () => {
     // A2 owns 411382.1 and every later worker line, but no block starts with one before B's marker.
     expect(runs.map((r) => r.stintId)).toEqual([null, A.id, null, A2.id])
     expect(blockPoses(blocks[runs[3].start])).toEqual([`${B_AT}.0`, `${B_AT}.0`])
+  })
+
+  it('chat: a worker -> worker rebuild whose first send is attachment-only splits its span at the boundary (#1614)', () => {
+    const say = (pos: string, role: 'user' | 'assistant', content: unknown[]) =>
+      ({ pos, offset: lineStart(pos), at: 1, kind: role, payload: { type: role, message: { role, content } } })
+    const rebuilt = sanitizePreludePage({ state: 'ok', items: [
+      { pos: '100.0', offset: 100, at: 1, kind: 'prelude.segment', payload: { entrypoint: 'sdk-cli' } },
+      say('100.1', 'user', [{ type: 'text', text: 'look at this' }]),
+      say('200.1', 'assistant', [{ type: 'text', text: 'A looked' }]),
+      // A2's first send: one image, no text. Nexen sends no marker for a worker -> worker rebuild.
+      say('300.1', 'user', [{ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 5000 } }]),
+      say('400.1', 'assistant', [{ type: 'text', text: 'A2 looked' }]),
+    ] })!.items
+    const A1: Stint = { id: 'exc_A1', boundary: 100, createdAt: 1, summary: SUMMARY }
+    const A2: Stint = { id: 'exc_A2', boundary: 300, createdAt: 2, summary: SUMMARY }
+    const split = attributeItems(rebuilt, [A1, A2])
+    expect([...split]).toEqual([['100.0', A1.id], ['100.1', A1.id], ['200.1', A1.id], ['300.1', A2.id], ['400.1', A2.id]])
+    const v = derivePrelude(rebuilt)
+    const blocks = preludeBlocks(v)
+    expect(blocks.filter((b) => b.kind === 'span')).toEqual([{ kind: 'span', start: 0, end: 2 }, { kind: 'span', start: 2, end: 4 }])
+    const posAt: string[] = []
+    for (const e of v.entries) if (e.kind === 'message') posAt[e.m] = e.pos
+    const runs = attributionRuns(blocks, (b) => (b.kind === 'span' ? [posAt[b.start], posAt[b.end - 1]] : [b.entry.pos, b.entry.pos]), split)
+    expect(runs).toEqual([
+      { stintId: A1.id, key: `${A1.id}:200.1`, start: 0, end: 2 },
+      { stintId: A2.id, key: `${A2.id}:400.1`, start: 2, end: 3 },
+    ])
   })
 
   it('chat: runs over the A/B attribution match the room\'s stints in order', () => {

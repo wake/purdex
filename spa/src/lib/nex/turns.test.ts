@@ -1,8 +1,11 @@
 // spa/src/lib/nex/turns.test.ts — spec §4.1: turns come from the boundaries
 // the reducer recorded, never from "the next user-looking message".
 import { describe, it, expect } from 'vitest'
-import type { StreamMessage } from './message-types'
+import type { ContentBlock, StreamMessage, UserMessage } from './message-types'
+import type { NexEvent } from './types'
 import { INTERRUPT_TEXT, groupTurns, isOpeningLine } from './turns'
+import { applyDurableEvent, defaultExecutionState } from './event-reducer'
+import { attachmentsOf } from './attachments'
 
 const user = (text: string, parent: string | null = null): StreamMessage => ({
   type: 'user',
@@ -141,5 +144,49 @@ describe('isOpeningLine', () => {
     expect(isOpeningLine(user(INTERRUPT_TEXT))).toBe(false)
     expect(isOpeningLine(toolResult())).toBe(false)
     expect(isOpeningLine(assistant('hi'))).toBe(false)
+  })
+
+  // #1614: a send with only attachments is a transcript line with no text block.
+  describe('an attachment-only prompt opens a turn', () => {
+    const img = { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 10 } } as const
+    const pdf = { type: 'document', source: { type: 'omitted', media_type: 'application/pdf', bytes: 10 } } as const
+    const line = (content: ContentBlock[], parent: string | null = null): StreamMessage =>
+      ({ type: 'user', parent_tool_use_id: parent, message: { role: 'user', content, stop_reason: null } })
+
+    it('a top-level user line with an image or a document block, with or without text', () => {
+      expect(isOpeningLine(line([img]))).toBe(true)
+      expect(isOpeningLine(line([pdf]))).toBe(true)
+      expect(isOpeningLine(line([img, img, pdf]))).toBe(true)
+      expect(isOpeningLine(line([{ type: 'text', text: 'see' }, img]))).toBe(true)
+    })
+
+    it('never a tool result\'s carrier, a subagent\'s line, or an assistant line', () => {
+      expect(isOpeningLine(line([{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }, img]))).toBe(false)
+      expect(isOpeningLine(line([img], 'toolu_1'))).toBe(false)
+      expect(isOpeningLine(line([pdf], 'toolu_1'))).toBe(false)
+      expect(isOpeningLine({ type: 'assistant', message: { role: 'assistant', content: [img], stop_reason: null } })).toBe(false)
+    })
+
+    it('the interrupt sentinel alone still opens nothing', () => {
+      expect(isOpeningLine(line([{ type: 'text', text: INTERRUPT_TEXT }]))).toBe(false)
+    })
+
+    it('live: the reducer\'s attachment-only bubble opens its turn exactly as before (an empty text block, images on the side)', () => {
+      const sha = 'a'.repeat(64)
+      const ev = (seq: number, kind: string, payload: Record<string, unknown>): NexEvent => ({ seq, execution_id: 'exc', kind, payload, created_at: seq })
+      const s = [
+        ev(1, 'execution.delegated', { brief: 'first' }),
+        ev(2, 'assistant', { type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }], stop_reason: null } }),
+        ev(3, 'execution.message_accepted', { text: '', turn_id: 't2', attachments: [{ media_type: 'image/png', bytes: 10, sha256: sha }] }),
+      ].reduce(applyDurableEvent, defaultExecutionState())
+      const bubble = s.messages[2] as UserMessage
+      expect(bubble.message.content).toEqual([{ type: 'text', text: '' }])
+      expect(attachmentsOf(bubble)).toEqual([{ media_type: 'image/png', bytes: 10, sha256: sha }])
+      expect(isOpeningLine(bubble)).toBe(true)
+      expect(groupTurns(s.messages, s.turnStarts)).toEqual([
+        { start: 0, end: 2, openerIndex: 0, boundary: 0 },
+        { start: 2, end: 3, openerIndex: 2, boundary: 1 },
+      ])
+    })
   })
 })

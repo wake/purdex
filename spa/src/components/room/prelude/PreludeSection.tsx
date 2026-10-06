@@ -73,9 +73,11 @@ export default function PreludeSection({ hostId, view, status, done, error, keyP
     [blocks, view, index, idOf],
   )
   // Room: runs of entries; chat: runs of blocks, a span by its first and last message.
-  // Known limit (#1614): an attachment-only first send is no opening line, so after a worker →
-  // worker rebuild a span can straddle the boundary and its later messages run under the earlier
-  // stint. Spans stay whole (ChatTurnBody grouping, search's blocks); enrichment joins by unique id, so they lose it, never mismatch.
+  // A worker → worker rebuild starts at its first send, an opening line even when it carries only
+  // attachments (#1614, fixed), so a span splits at the boundary and the new stint's lines run under it.
+  // Spans stay whole (ChatTurnBody grouping, search's blocks): a span that still straddles a boundary (one at
+  // a non-opening line) runs under its first line's stint; enrichment joins by unique id, so its tail loses it, never mismatches.
+  // The tail holds no opening line (one would have split the span), so the thumbnails' prompt pairing never counts it.
   // Each run carries its slice, kept across renders: an enriched chat segment memoizes its spans' operations on it.
   const runs = useMemo((): Array<PreludeRun & { slice: PreludeSegmentSlice }> => {
     if (mode !== 'chat') {

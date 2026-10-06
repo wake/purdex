@@ -27,13 +27,20 @@ export interface RoomTurn {
   boundary: number | null
 }
 
-/** A user message that reads as the human's own line (not a tool result, not the interrupt sentinel, not a subagent's prompt). */
+/**
+ * A user message that reads as the human's own line (not a tool result, not the interrupt sentinel, not a subagent's prompt).
+ * A line with an image or document block is one too, text or not (#1614: a send with only attachments has no text block
+ * in the transcript), unless it carries a tool_result. Live, an attachment-only send is the reducer's bubble, whose empty
+ * text block already opens it; CC's own top-level user frames there are tool results, so live grouping is unchanged.
+ */
 export function isOpeningLine(msg: StreamMessage): boolean {
   if (msg.type !== 'user') return false
   // StreamMessage's catch-all member defeats narrowing on `type`.
   const u = msg as UserMessage
   if (u.parent_tool_use_id != null) return false
-  return u.message.content.some(b => b.type === 'text' && b.text !== INTERRUPT_TEXT)
+  const content = u.message.content
+  if (content.some(b => b.type === 'text' && b.text !== INTERRUPT_TEXT)) return true
+  return content.some(b => b.type === 'image' || b.type === 'document') && !content.some(b => b.type === 'tool_result')
 }
 
 /**

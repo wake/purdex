@@ -77,6 +77,40 @@ describe('enrichFromEvents', () => {
     expect(Object.getPrototypeOf(e.tools)).toBe(Object.prototype)
     expect((e.messages as StreamMessage[]).length).toBe(2)
   })
+  describe('attachmentsByPrompt', () => {
+    const att = (c: string, media_type = 'image/png') => ({ media_type, bytes: 10, sha256: c.repeat(64) })
+
+    it('the k-th entry is the k-th delegated / message_accepted that carried attachments, in event order, parsed by parseAttachmentMeta', () => {
+      const e = enrichFromEvents([
+        ev(1, 'execution.delegated', { brief: 'two', attachments: [att('a'), att('b', 'image/jpeg')] }),
+        ev(2, 'execution.message_accepted', { text: 'none', turn_id: 't2' }),
+        ev(3, 'execution.message_accepted', { text: 'empty list', turn_id: 't3', attachments: [] }),
+        // Only the valid entries are kept; a list with none valid does not count.
+        ev(4, 'execution.message_accepted', { text: 'one valid', turn_id: 't4', attachments: [{ media_type: 'image/png', bytes: 1, sha256: 'NOT-HEX' }, att('c')] }),
+        ev(5, 'execution.message_accepted', { text: 'none valid', turn_id: 't5', attachments: [{ media_type: 'image/png', bytes: -1, sha256: 'd'.repeat(64) }] }),
+        ev(6, 'execution.message_accepted', { text: '', turn_id: 't6', attachments: [att('e')] }),
+      ])
+      expect(e.attachmentsByPrompt).toEqual([[att('a'), att('b', 'image/jpeg')], [att('c')], [att('e')]])
+    })
+
+    it('other kinds never count, even with an attachments field', () => {
+      const e = enrichFromEvents([
+        ev(1, 'user', { type: 'user', parent_tool_use_id: null, attachments: [att('a')], message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'x' }] } }),
+        ev(2, 'execution.running', { attachments: [att('b')] }),
+      ])
+      expect(e.attachmentsByPrompt).toEqual([])
+    })
+
+    it('only the applied events count: one past the budget is not read', () => {
+      const events = [
+        ev(1, 'execution.delegated', { brief: 'x', attachments: [att('a')] }),
+        ev(2, 'execution.message_accepted', { text: 'y', turn_id: 't2', attachments: [att('b')] }),
+      ]
+      expect(enrichFromEvents(events, 1).attachmentsByPrompt).toEqual([[att('a')]])
+      expect(enrichFromEvents(events, 2).attachmentsByPrompt).toEqual([[att('a')], [att('b')]])
+    })
+  })
+
   describe('costByMessageId', () => {
     const said = (seq: number, id: string, parent: string | null = null) =>
       ev(seq, 'assistant', { type: 'assistant', parent_tool_use_id: parent, message: { id, role: 'assistant', content: [{ type: 'text', text: id }], stop_reason: null } })
