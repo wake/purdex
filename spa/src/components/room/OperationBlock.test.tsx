@@ -259,6 +259,15 @@ describe('OperationBlock', () => {
     expect(screen.queryByTestId('fold-body')).toBeNull()
   })
 
+  it('a media-only result the daemon cut keeps its truncation note (#1629)', () => {
+    render(<OperationBlock tool="Read" input={{ file_path: '/x.png' }} foldKey="tu1"
+      activity={{ status: 'done', startedAt: 0, endedAt: 0 }}
+      facts={{ output: { totalLines: 0, totalBytes: 80000, truncated: true, hasNonText: true } }}
+      result={{ text: '', isError: false, hasMedia: true }} />)
+    expect(screen.getByTestId('fold-daemon-truncated')).toBeInTheDocument()
+    expect(screen.getByTestId('op-non-text')).toBeInTheDocument()
+  })
+
   it('does not mark a text-only result', () => {
     render(<OperationBlock tool="Read" input={{ file_path: '/x.ts' }} foldKey="tu1"
       activity={{ status: 'done', startedAt: 0, endedAt: 0 }}

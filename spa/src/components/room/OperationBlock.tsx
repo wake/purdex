@@ -220,8 +220,8 @@ export default function OperationBlock({
             file was touched, and there the stat is the only account of it.
           */}
           {hasDiff && <ToolDiffView diff={diff} foldKey={foldKey} showPath={summary !== diff.path} searchKey={searchKey} />}
-          {/* An image-only result has no text: the marker below is its whole account, not an empty box (#1629). */}
-          {result !== null && !(result.text === '' && hasNonText) && (
+          {/* An image-only result has no text: the marker below is its whole account, not an empty box (#1629); a daemon-cut one still draws, for its note. */}
+          {result !== null && !(result.text === '' && hasNonText && !plan.daemonTruncated) && (
             <FoldedOutput
               text={result.text}
               plan={plan}
