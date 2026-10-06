@@ -9,6 +9,14 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { emptyHostConfigEntry, useHostConfigStore } from '../stores/useHostConfigStore'
 import { compositeKey } from '../lib/composite-key'
 import type { HostProject } from '../lib/host-config-api'
+import { useNexHostStore, type NexHostEntry } from '../stores/useNexHostStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { useExecutionListStore, resetExecutionListForTests } from '../stores/useExecutionListStore'
+import { subscriptionSlots } from '../lib/nex/subscription-slots'
+import type { ExecutionSummary } from '../lib/nex/types'
+
+vi.mock('../lib/nex/nex-api', () => ({ listExecutions: vi.fn().mockResolvedValue({ items: [], next_cursor: '' }), attachControl: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), archiveExecution: vi.fn() }))
+vi.mock('../lib/nex/nex-sse', () => ({ openNexSse: vi.fn() }))
 
 vi.mock('../hooks/useSessionWatch', () => ({
   useSessionWatch: vi.fn(),
@@ -555,4 +563,102 @@ describe('SessionSection', () => {
     expect(screen.getByTestId(`host-header-${HOST_B}`)).toHaveAttribute('aria-expanded', 'true')
   })
 
+})
+
+describe('HostSessionSection Sessions / Workers switch', () => {
+  const readyEntry: NexHostEntry = {
+    info: { configured: true, mounted: true, ready: true, init_error: '', effective: null },
+    capabilities: null, phase: 'ready', error: null, fetchedAt: 1, generation: 1, fingerprint: '1:1:t',
+  }
+  const disabledEntry: NexHostEntry = { ...readyEntry, info: { configured: false, mounted: false, ready: false, init_error: '', effective: null }, phase: 'disabled' }
+  const wrow = (over: Partial<ExecutionSummary> & { id: string }): ExecutionSummary =>
+    ({ state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/w', mount_kind: 'dev', brief: 'b', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 0, archived: false, ...over }) as ExecutionSummary
+
+  beforeEach(() => {
+    subscriptionSlots.resetForTests()
+    resetExecutionListForTests()
+    useExecutionListStore.setState({ byHost: {} })
+    useShownHostsStore.setState({ ids: [HOST_ID] })
+  })
+
+  it('switches a host block to its live workers and opens one', () => {
+    useNexHostStore.setState({ byHost: { [HOST_ID]: readyEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
+    useExecutionListStore.setState({ byHost: { [HOST_ID]: { items: [wrow({ id: 'E1', session_id: 'S' }), wrow({ id: 'E2', state: 'terminated', session_id: 'T' })], phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false } } })
+    render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)
+    expect(screen.getByTestId(`host-view-sessions-${HOST_ID}`)).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByTestId(`host-view-workers-${HOST_ID}`))
+    expect(screen.getByTestId(`host-view-workers-${HOST_ID}`)).toHaveAttribute('aria-selected', 'true')
+    const rows = screen.getAllByTestId('executions-row')
+    expect(rows).toHaveLength(1)
+    fireEvent.click(rows[0])
+    expect(mockOnSelect).toHaveBeenCalledWith({ kind: 'execution', executionId: 'E1', host: HOST_ID })
+  })
+
+  it('+ → Workers → + leaves the launcher visible on the Sessions view', () => {
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'connected', tmuxState: 'ok' } } })
+    useNexHostStore.setState({ byHost: { [HOST_ID]: readyEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
+    render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    expect(screen.getByTestId(`launcher-stub-${HOST_ID}`)).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId(`host-view-workers-${HOST_ID}`))
+    expect(screen.queryByTestId(`launcher-stub-${HOST_ID}`)).toBeNull()
+    fireEvent.click(screen.getByTestId(`new-session-${HOST_ID}`))
+    expect(screen.getByTestId(`host-view-sessions-${HOST_ID}`)).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId(`launcher-stub-${HOST_ID}`)).toBeInTheDocument()
+  })
+
+  it('falls back to Sessions and hides the switch when nex stops being ready', () => {
+    useNexHostStore.setState({ byHost: { [HOST_ID]: readyEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
+    useSessionStore.setState({ sessions: { [HOST_ID]: [{ code: 'abc001', name: 'dev', cwd: '/tmp', mode: 'terminal' }] } })
+    render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`host-view-workers-${HOST_ID}`))
+    expect(screen.queryByText('dev')).toBeNull()
+    act(() => { useNexHostStore.setState({ byHost: { [HOST_ID]: disabledEntry } }) })
+    expect(screen.queryByTestId(`host-view-workers-${HOST_ID}`)).toBeNull()
+    expect(screen.getByText('dev')).toBeInTheDocument()
+  })
+
+  it('does not jump back to Workers when Nexen recovers', () => {
+    useNexHostStore.setState({ byHost: { [HOST_ID]: readyEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
+    render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)
+    fireEvent.click(screen.getByTestId(`host-view-workers-${HOST_ID}`))
+    act(() => { useNexHostStore.setState({ byHost: { [HOST_ID]: disabledEntry } }) })
+    act(() => { useNexHostStore.setState({ byHost: { [HOST_ID]: readyEntry } }) })
+    expect(screen.getByTestId(`host-view-sessions-${HOST_ID}`)).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId(`host-view-workers-${HOST_ID}`)).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('the switch follows the tabs keyboard model', () => {
+    useNexHostStore.setState({ byHost: { [HOST_ID]: readyEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
+    render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)
+    const s = screen.getByTestId(`host-view-sessions-${HOST_ID}`)
+    const w = screen.getByTestId(`host-view-workers-${HOST_ID}`)
+    expect(s).toHaveAttribute('tabindex', '0')
+    expect(w).toHaveAttribute('tabindex', '-1')
+    const panel = screen.getByRole('tabpanel')
+    expect(s).toHaveAttribute('aria-controls', panel.id)
+    expect(w).toHaveAttribute('aria-controls', panel.id)
+    expect(panel).toHaveAttribute('aria-labelledby', s.id)
+    fireEvent.keyDown(s, { key: 'ArrowRight' })
+    expect(w).toHaveAttribute('aria-selected', 'true')
+    expect(w).toHaveFocus()
+    expect(w).toHaveAttribute('tabindex', '0')
+    expect(s).toHaveAttribute('tabindex', '-1')
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', w.id)
+    fireEvent.keyDown(w, { key: 'ArrowRight' }) // wraps
+    expect(s).toHaveAttribute('aria-selected', 'true')
+    expect(s).toHaveFocus()
+    fireEvent.keyDown(s, { key: 'End' })
+    expect(w).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(w, { key: 'Home' })
+    expect(s).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(s, { key: 'ArrowLeft' }) // wraps backwards
+    expect(w).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('hides the switch when nex is not ready', () => {
+    useNexHostStore.setState({ byHost: { [HOST_ID]: disabledEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
+    render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)
+    expect(screen.queryByTestId(`host-view-workers-${HOST_ID}`)).toBeNull()
+  })
 })

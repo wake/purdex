@@ -30,6 +30,9 @@ import { DevEnvironmentSection } from '../../components/settings/DevEnvironmentS
 import { ModulesSwitchboardSection } from '../../components/settings/ModulesSwitchboardSection'
 import { ProfileSection } from '../../components/settings/profile/ProfileSection'
 import { WorkerSettingsSection } from '../../components/settings/WorkerSettingsSection'
+import { WorkerSettingsPage } from '../../components/settings/WorkerSettingsPage'
+import { WorkerLiveTab } from '../../components/settings/WorkerLiveTab'
+import { registerWorkerSettingsTab } from '../worker-settings-tabs'
 import { useTabStore } from '../../stores/useTabStore'
 import type { ExecutionViewMode, PaneContent } from '../../types/tab'
 import type { PaneRendererProps } from '../module-registry'
@@ -255,9 +258,12 @@ export function registerBuiltinModules(): void {
       scope: 'purdex',
       order: SETTINGS_ORDER.MODULE_WORKER,
       labelKey: 'settings.section.worker',
-      component: WorkerSettingsSection,
+      component: WorkerSettingsPage,
     }],
   })
+  // Settings → Worker tabs (later: Exited, Dormant, Aigora plug in the same way).
+  registerWorkerSettingsTab({ id: 'appearance', labelKey: 'settings.worker.tabs.appearance', order: 0, hostScoped: false, component: WorkerSettingsSection })
+  registerWorkerSettingsTab({ id: 'workers', labelKey: 'settings.worker.tabs.workers', order: 10, hostScoped: true, component: WorkerLiveTab })
 
   // Editor module
   registerModule(editorModuleDefinition)

@@ -45,6 +45,7 @@ const READER_IMPORTERS = [
   'src/components/HandoffConfirmDialog.tsx',
   'src/components/HistoryPage.tsx',
   'src/components/HostHiddenPane.tsx',
+  'src/components/HostWorkerRows.tsx', // same rule as ExecutionsView: a hidden host's worker rows are plain, never open / exit
   'src/components/NewTabPage.tsx',
   'src/components/PaneLayoutRenderer.tsx',
   'src/components/SessionPickerList.tsx',
@@ -55,6 +56,7 @@ const READER_IMPORTERS = [
   'src/components/hosts/OverviewSection.tsx',
   'src/components/hosts/SessionsSection.tsx',
   'src/components/hosts/nex/NexExecutionsTable.tsx',
+  'src/components/settings/WorkerSettingsPage.tsx', // the host picker lists the shown hosts only
   'src/hooks/useHandoffCandidate.ts',
   'src/hooks/useNotificationDispatcher.ts',
   'src/hooks/useRouteSync.ts',

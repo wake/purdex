@@ -9,6 +9,9 @@ import type { NewTabProviderProps } from '../lib/new-tab-registry'
 import { isHostLive } from '../lib/host-live'
 import { useHostLook } from '../lib/host-look'
 import type { Session } from '../lib/host-api'
+import { useNexHostStore, selectReady } from '../stores/useNexHostStore'
+import { useTabList } from '../hooks/useTabList'
+import { HostWorkerRows } from './HostWorkerRows'
 import { SessionLauncher } from './session-launcher/SessionLauncher'
 import { TerminalWindow, Circle, Spinner, CaretDown, CaretRight, Plus } from '@phosphor-icons/react'
 
@@ -64,6 +67,7 @@ function SessionRow({ hostId, session, disabled, onSelect }: {
   )
 }
 
+const VIEWS = ['sessions', 'workers'] as const
 const EMPTY_SESSIONS: Session[] = []
 
 export interface HostSessionSectionProps extends NewTabProviderProps {
@@ -80,6 +84,17 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
   const t = useI18nStore((s) => s.t)
   const [isExpanded, setExpanded] = useState(true)
   const [creating, setCreating] = useState(false)
+  const nexReady = useNexHostStore(selectReady(hostId))
+  const [view, setView] = useState<'sessions' | 'workers'>('sessions')
+  // Not ready → the switch is hidden and the block is the sessions view.
+  const showWorkers = nexReady && view === 'workers'
+  // Losing readiness resets the choice, so a recovery does not jump back to Workers by itself.
+  const [prevReady, setPrevReady] = useState(nexReady)
+  if (prevReady !== nexReady) {
+    setPrevReady(nexReady)
+    if (!nexReady) setView('sessions')
+  }
+  const { tabProps, panelProps } = useTabList(VIEWS, view, setView)
 
   if (!host) return null
 
@@ -115,23 +130,49 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
         {isOffline && (
           <span className="text-xs text-text-muted">{t('session.reconnecting')}</span>
         )}
+        {nexReady && (
+          <div role="tablist" className="ml-auto flex items-center rounded bg-surface-secondary p-0.5 text-xs">
+            {(['sessions', 'workers'] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                {...tabProps(v)}
+                data-testid={`host-view-${v}-${hostId}`}
+                onClick={() => setView(v)}
+                className={`px-2 py-0.5 rounded cursor-pointer ${view === v ? 'bg-surface-hover text-text-primary' : 'text-text-muted hover:text-text-primary'}`}
+              >
+                {t(`newtab.view.${v}`)}
+              </button>
+            ))}
+          </div>
+        )}
         <button
           data-testid={`new-session-${hostId}`}
           disabled={createDisabled}
           onClick={() => {
-            const opening = !creating
+            // From the Workers view the launcher is not visible, so "+" always opens it (and shows Sessions).
+            const opening = showWorkers || !creating
             setCreating(opening)
+            setView('sessions')
             // Opening on a collapsed host must reveal the launcher (which is
             // gated behind isExpanded) - expand so the "+" isn't a no-op.
             if (opening) setExpanded(true)
           }}
-          className="ml-auto p-1 rounded bg-accent text-white hover:bg-accent/80 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          className={`${nexReady ? '' : 'ml-auto '}p-1 rounded bg-accent text-white hover:bg-accent/80 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed`}
           title={t('hosts.new_session')}
         >
           <Plus size={14} weight="bold" />
         </button>
       </div>
-      {isExpanded && creating && (
+      <div {...(nexReady ? panelProps : {})} className="flex flex-col gap-1">
+      {isExpanded && showWorkers && (
+        <HostWorkerRows
+          hostId={hostId}
+          onOpen={(id) => onSelect({ kind: 'execution', executionId: id, host: hostId })}
+          testIdPrefix={`newtab-workers-${hostId}`}
+        />
+      )}
+      {isExpanded && !showWorkers && creating && (
         <div className="mx-3 my-1">
           <SessionLauncher
             hostId={hostId}
@@ -159,7 +200,7 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
           />
         </div>
       )}
-      {isExpanded && sessions.map((session) => (
+      {isExpanded && !showWorkers && sessions.map((session) => (
         <SessionRow
           key={`${hostId}:${session.code}`}
           hostId={hostId}
@@ -168,6 +209,7 @@ export function HostSessionSection({ hostId, onSelect }: HostSessionSectionProps
           onSelect={onSelect}
         />
       ))}
+      </div>
     </div>
   )
 }
