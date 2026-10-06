@@ -827,6 +827,45 @@ func TestTakeback_ResumeFailsExitsNothing(t *testing.T) {
 	assert.Equal(t, []string{"acquire", "renew", "release"}, env.svc.Calls())
 }
 
+// #1624 Task 9: the renew right before the resume keys fails. The worker is
+// left live (exited:false), no key goes out, nothing is exited, and the
+// lease the take-back acquired is released.
+func TestTakeback_RenewFailsBeforeKeys_NoKeysExitsNothing(t *testing.T) {
+	t.Run("infra error → 500 lease_error", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.svc.renewErr = errors.New("db locked")
+		status, body := env.post(t, hoCode, takebackBody())
+		assert.Equal(t, http.StatusInternalServerError, status)
+		assert.Equal(t, "lease_error", body["code"])
+		assert.Equal(t, false, body["exited"], "the worker is still live")
+		assert.Equal(t, []string{"acquire", "renew", "release"}, env.svc.Calls())
+		assert.Equal(t, []releaseCall{{tbExecID, tbLeaseID, tbPrincipal}}, env.svc.releases)
+		assert.Empty(t, env.tmux.RawKeysSent())
+		assert.Empty(t, env.svc.terminateCalls)
+		env.assertNoArchive(t)
+	})
+	t.Run("lease lost to a non-pdx holder → re-take refused, 409 held_by", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		ploom := liveLease("L-p", "ploom:agent-7")
+		env.svc.enforceLease = true
+		env.store.script(idleExec(), idleExec(), withLease(idleExec(), ploom))
+		env.svc.onRecord = func(ev string) {
+			if ev == "renew" {
+				env.svc.setHeldLease(ploom) // handed over between the acquire and the renew
+			}
+		}
+		status, body := env.post(t, hoCode, takebackBody())
+		assert.Equal(t, http.StatusConflict, status, "%v", body)
+		assert.Equal(t, "held_by", body["code"])
+		assert.Equal(t, "ploom:agent-7", body["principal"])
+		assert.Equal(t, false, body["exited"], "the worker is still live")
+		assert.Equal(t, []string{"acquire", "renew", "release", "acquire"}, env.svc.Calls())
+		assert.Empty(t, env.tmux.RawKeysSent())
+		assert.Empty(t, env.svc.terminateCalls)
+		env.assertNoArchive(t)
+	})
+}
+
 func TestTakeback_ResumeOKButExitFails_200WithExitError(t *testing.T) {
 	env := newTakebackEnv(t)
 	env.svc.terminateErr = errors.New("engine wedged")

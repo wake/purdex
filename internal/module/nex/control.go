@@ -1,4 +1,3 @@
-// internal/module/nex/control.go
 package nex
 
 import (

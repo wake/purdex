@@ -1,4 +1,3 @@
-// internal/module/nex/exit.go
 package nex
 
 import (

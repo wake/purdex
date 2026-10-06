@@ -19,8 +19,9 @@ type TerminalSession struct {
 	// recorded one. False means "alive, start time unreadable": it is NOT an
 	// owner under spec D1, but the session is not provably free either. An
 	// owner check therefore answers 503 owner_check_failed (retryable) rather
-	// than "owned" or "free", and the manual-resume handler does not act on it.
-	// (That behaviour lands in Task 7; this type only records the distinction.)
+	// than "owned" or "free" — unless another frame of the session is
+	// verified, which proves it owned (409 session_owned) — and the
+	// manual-resume handler does not act on it.
 	Verified bool
 }
 
@@ -68,8 +69,10 @@ type TerminalSessions interface {
 // Each callback runs in its own recover, so a panic is logged and the
 // consumer moves on. unsubscribe is idempotent: it removes the subscriber
 // from the hub and stops the consumer. Events published before unsubscribe
-// may still be delivered; none are started after it returns (a callback already
-// in flight finishes).
+// may still be delivered, and unsubscribe does not wait for the consumer: a
+// callback already in flight finishes, and one the consumer had begun (past
+// its stop check) may still start just after unsubscribe returns. Subscribers
+// tolerate this; see SubscribeSessionStart.
 type sessionStartHub struct {
 	mu   sync.Mutex
 	next int
@@ -193,7 +196,16 @@ func (h *sessionStartHub) publish(ev SessionStartEvent) {
 	}
 }
 
-// SubscribeSessionStart registers fn for every granted SessionStart.
+// SubscribeSessionStart registers fn for every granted SessionStart, under
+// sessionStartHub's delivery contract. Two things are NOT guaranteed:
+//   - ordering across subscribers: each one has its own consumer goroutine,
+//     so two subscribers may see the same event in either order;
+//   - a clean cut at unsubscribe: it may race a delivery in flight, so fn
+//     can still be called just after unsubscribe returns.
+//
+// Both are tolerated because an event only means "re-check this session":
+// the nex Q1 handler re-reads LiveBySessionID before it acts on one, and does
+// nothing once its Stop began (manual_resume.go).
 func (m *Module) SubscribeSessionStart(fn func(SessionStartEvent)) func() {
 	return m.sessionStarts.subscribe(fn)
 }
@@ -216,6 +228,11 @@ func sessionStartEventFrom(req EventRequest, prov Provenance) SessionStartEvent 
 // process is still the recorded one. A dead pid or a start-time mismatch is
 // a stale row the sweep will clear; it is not an owner. An unreadable start
 // time is kept with Verified=false (see TerminalSession).
+//
+// agentType filters by agent type ("cc", "codex", …); an empty agentType
+// disables the filter and returns the frames of every type. An empty
+// sessionID returns nothing, and a ctx already done returns its error
+// without reading the store.
 func (m *Module) LiveBySessionID(ctx context.Context, agentType, sessionID string) ([]TerminalSession, error) {
 	if m == nil || m.frames == nil || sessionID == "" {
 		return nil, nil

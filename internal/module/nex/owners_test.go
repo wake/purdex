@@ -100,6 +100,79 @@ func TestLiveWorkersFor_CapAndErrors(t *testing.T) {
 	}
 }
 
+// #1624 Task 4: exactly the cap's worth of rows. The last page has no peek
+// row, so its NextCursor is empty and the scan ends there: complete, not
+// truncated.
+func TestLiveWorkersFor_ExactlyAtThePageCapIsNotTruncated(t *testing.T) {
+	env := newTakebackEnv(t)
+	n := ownerScanPageSize * ownerScanMaxPages // 10,000
+	env.store.listRows = make([]store.Execution, n)
+	for i := range env.store.listRows {
+		env.store.listRows[i] = row(fmt.Sprintf("%06d", i), "idle", false, tS, "", int64(i))
+	}
+	got, err := env.m.liveWorkersFor(context.Background(), tS)
+	if err != nil || len(got) != n {
+		t.Fatalf("got %d, err %v; want all %d and no error", len(got), err, n)
+	}
+	if env.store.listCalls != ownerScanMaxPages {
+		t.Fatalf("listCalls = %d, want %d", env.store.listCalls, ownerScanMaxPages)
+	}
+}
+
+// stuckCursorStore pages like a store whose cursor stops advancing: the
+// first List answers E1 with NextCursor "E1", every later one answers E2
+// with the cursor it was given.
+type stuckCursorStore struct {
+	*fakeNexStore
+	calls int
+}
+
+func (s *stuckCursorStore) List(_ context.Context, opts store.ListOptions) (store.ListPage, error) {
+	s.calls++
+	if opts.Cursor == "" {
+		return store.ListPage{Items: []store.Execution{row("E1", "idle", false, tS, "", 1)}, NextCursor: "E1"}, nil
+	}
+	return store.ListPage{Items: []store.Execution{row("E2", "idle", false, tS, "", 2)}, NextCursor: opts.Cursor}, nil
+}
+
+// #1624 Task 4: a NextCursor equal to the cursor just sent ends the scan,
+// keeping what it found; it neither spins to the page cap nor reports
+// truncation.
+func TestLiveWorkersFor_RepeatedCursorStopsTheScan(t *testing.T) {
+	env := newTakebackEnv(t)
+	st := &stuckCursorStore{fakeNexStore: env.store}
+	env.m.sys.store = st
+	got, err := env.m.liveWorkersFor(context.Background(), tS)
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	ids := []string{}
+	for _, e := range got {
+		ids = append(ids, e.ID)
+	}
+	if !reflect.DeepEqual(ids, []string{"E2", "E1"}) {
+		t.Fatalf("ids = %v, want [E2 E1]", ids)
+	}
+	if st.calls != 2 {
+		t.Fatalf("List calls = %d, want 2", st.calls)
+	}
+}
+
+// TestFakeListClampsLimit pins the fake's page size to Nexen's clampLimit
+// (store/execution.go, v0.17.0): unset → 100, capped at store.MaxPageSize.
+func TestFakeListClampsLimit(t *testing.T) {
+	f := &fakeNexStore{}
+	for i := 0; i < store.MaxPageSize+1; i++ {
+		f.listRows = append(f.listRows, row(fmt.Sprintf("%06d", i), "idle", false, "", "", int64(i)))
+	}
+	for _, c := range []struct{ limit, want int }{{0, 100}, {-1, 100}, {7, 7}, {store.MaxPageSize, store.MaxPageSize}, {store.MaxPageSize + 1000, store.MaxPageSize}} {
+		page, err := f.List(context.Background(), store.ListOptions{Limit: c.limit})
+		if err != nil || len(page.Items) != c.want || page.NextCursor == "" {
+			t.Errorf("Limit %d: %d items, cursor %q, err %v; want %d and a next cursor", c.limit, len(page.Items), page.NextCursor, err, c.want)
+		}
+	}
+}
+
 // pageTwoFails: S's live worker "000000" sits on page 1 of a two-page table,
 // and the second List call fails.
 func pageTwoFails(st *fakeNexStore) {
@@ -153,11 +226,42 @@ func TestCheckOwners(t *testing.T) {
 			t.Fatalf("herr=%+v", herr)
 		}
 	})
+	// #1628: the answer must not depend on the order of the frames. A
+	// verified owner proves S is owned, so it wins over an unverified frame
+	// listed before it; the first verified frame is the one reported.
+	t.Run("unverified frame before a verified one → 409 for the first verified pane", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.terminals.live = map[string][]agent.TerminalSession{tS: {ts("%7", false), ts("%8", true), ts("%9", true)}}
+		herr := env.m.checkOwners(context.Background(), tS, "", "")
+		if herr == nil || herr.status != 409 || herr.code != "session_owned" || herr.detail["owner"] != "terminal" || herr.detail["tmux_pane_id"] != "%8" {
+			t.Fatalf("herr=%+v", herr)
+		}
+	})
 	t.Run("terminal in the allowed pane", func(t *testing.T) {
 		env := newTakebackEnv(t)
 		env.terminals.live = map[string][]agent.TerminalSession{tS: {ts("%1", true)}}
 		if herr := env.m.checkOwners(context.Background(), tS, "", "%1"); herr != nil {
 			t.Fatal(herr)
+		}
+	})
+	t.Run("the allowed pane is skipped among other frames", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		// Unverified allowed pane alone: not an owner, not a doubt.
+		env.terminals.live = map[string][]agent.TerminalSession{tS: {ts("%1", false)}}
+		if herr := env.m.checkOwners(context.Background(), tS, "", "%1"); herr != nil {
+			t.Fatalf("unverified allowed pane alone: %+v", herr)
+		}
+		// A verified allowed pane does not hide another pane's doubt.
+		env.terminals.live = map[string][]agent.TerminalSession{tS: {ts("%1", true), ts("%9", false)}}
+		herr := env.m.checkOwners(context.Background(), tS, "", "%1")
+		if herr == nil || herr.status != 503 || herr.code != "owner_check_failed" || herr.detail["tmux_pane_id"] != "%9" {
+			t.Fatalf("verified allowed + unverified other: herr=%+v", herr)
+		}
+		// An unverified allowed pane is not the doubt reported ahead of a verified owner.
+		env.terminals.live = map[string][]agent.TerminalSession{tS: {ts("%1", false), ts("%9", true)}}
+		herr = env.m.checkOwners(context.Background(), tS, "", "%1")
+		if herr == nil || herr.status != 409 || herr.code != "session_owned" || herr.detail["tmux_pane_id"] != "%9" {
+			t.Fatalf("unverified allowed + verified other: herr=%+v", herr)
 		}
 	})
 	t.Run("live worker other than the allowed one", func(t *testing.T) {

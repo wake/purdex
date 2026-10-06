@@ -647,6 +647,15 @@ func (e *handoffEnv) untouched(t *testing.T) {
 	assert.Empty(t, e.svc.Requests(), "no delegate")
 }
 
+// sidLockFree: the handoff released sid:<S> on its way out (#1624 Task 10),
+// so a second handoff for S can take it. The response is flushed only after
+// the handler returns, so its deferred unlock has run by now.
+func (e *handoffEnv) sidLockFree(t *testing.T) {
+	t.Helper()
+	require.True(t, e.m.locks.TryLock(sidLockKey(hoSessionID)), "sid:<S> still held after the handoff answered")
+	e.m.locks.Unlock(sidLockKey(hoSessionID))
+}
+
 func TestHandoff_RefusesWhenWorkerOwnsSession(t *testing.T) {
 	env := newHandoffEnv(t)
 	env.m.sys.store.(*fakeNexStore).listRows = []store.Execution{{ID: "E7", State: store.StateIdle, SessionID: hoSessionID, CreatedAt: 1}}
@@ -656,6 +665,7 @@ func TestHandoff_RefusesWhenWorkerOwnsSession(t *testing.T) {
 	assert.Equal(t, "worker", body["owner"])
 	assert.Equal(t, "E7", body["execution_id"])
 	env.untouched(t)
+	env.sidLockFree(t)
 }
 
 func TestHandoff_TerminalOwnerChecks(t *testing.T) {
@@ -666,6 +676,7 @@ func TestHandoff_TerminalOwnerChecks(t *testing.T) {
 		assert.Equal(t, http.StatusConflict, status)
 		assert.Equal(t, "session_owned", body["code"])
 		env.untouched(t)
+		env.sidLockFree(t)
 	})
 	t.Run("unverified other pane", func(t *testing.T) {
 		env := newHandoffEnv(t)
@@ -703,6 +714,7 @@ func TestHandoff_RejectedRolledBackExitsTheRow(t *testing.T) {
 	assert.Equal(t, "R1", body["execution_id"])
 	assert.Equal(t, true, body["exited"])
 	assert.Len(t, env.svc.ArchiveCalls(), 1)
+	env.sidLockFree(t)
 }
 
 func TestHandoff_RejectedNotRolledBackKeepsTheRow(t *testing.T) {
@@ -715,6 +727,7 @@ func TestHandoff_RejectedNotRolledBackKeepsTheRow(t *testing.T) {
 	assert.Empty(t, env.svc.ArchiveCalls())
 	_, has := body["exited"]
 	assert.False(t, has, "exited is only reported when rolled back")
+	env.sidLockFree(t)
 }
 
 // --- Nexen v0.17 start_idle (spec §8; task 27) ---

@@ -516,6 +516,14 @@ func (s *FramesStore) UpdateSessionIdentity(frameID, sessionID, cwd string, seq 
 // SetTranscriptPath records the transcript path for a frame. It follows
 // UpdateSessionIdentity's ordering rule: equal or newer seq applies, an older
 // one returns ErrIdentityOutOfOrder, and a missing frame returns sql.ErrNoRows.
+// An empty path runs no SQL and returns nil.
+//
+// It also sets identity_seq to seq. That is safe because its one caller
+// (the agent module's identity write) calls it only after
+// UpdateSessionIdentity succeeded with the same seq, so the row already holds
+// seq (or a newer one, which refuses this write) and the bump changes
+// nothing. Called on its own with a newer seq, it would make an older
+// identity write still in flight look stale.
 func (s *FramesStore) SetTranscriptPath(frameID, path string, seq int64) error {
 	if path == "" {
 		return nil
