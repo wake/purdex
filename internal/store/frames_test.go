@@ -1377,3 +1377,29 @@ func TestFramesStore_ListRootsBySessionID(t *testing.T) {
 		t.Fatalf("empty id: got %v, %v", none, err)
 	}
 }
+
+// Session ids are UUIDs: the lookup matches either casing.
+func TestFramesStore_ListRootsBySessionID_CaseInsensitive(t *testing.T) {
+	s := openTestFramesStore(t)
+	seed := func(pane string, pid int, session string) Frame {
+		f, err := s.Upsert(Frame{
+			PaneID: pane, AgentType: "cc", PID: pid, PPID: 1, ProcessStartTime: "st",
+			Status: agentpkg.StatusIdle, StartedAt: int64(pid), LastSeenAt: int64(pid),
+			Verified: true, SessionID: session, Cwd: "/w",
+		})
+		if err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+		return f
+	}
+	up := seed("%1", 1, "0A1B2C3D-0000-4000-8000-000000000001")
+	lo := seed("%2", 2, "0a1b2c3d-0000-4000-8000-000000000002")
+	got, err := s.ListRootsBySessionID("0a1b2c3d-0000-4000-8000-000000000001")
+	if err != nil || len(got) != 1 || got[0].FrameID != up.FrameID {
+		t.Fatalf("lower query for an upper-case frame: %+v, %v", got, err)
+	}
+	got, err = s.ListRootsBySessionID("0A1B2C3D-0000-4000-8000-000000000002")
+	if err != nil || len(got) != 1 || got[0].FrameID != lo.FrameID {
+		t.Fatalf("upper query for a lower-case frame: %+v, %v", got, err)
+	}
+}

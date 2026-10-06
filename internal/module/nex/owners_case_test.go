@@ -76,3 +76,19 @@ func TestReconcile_GroupsSessionIDsCaseInsensitively(t *testing.T) {
 		t.Fatalf("per-session scans = %d: the two cases formed two groups", lookups)
 	}
 }
+
+// (c) rows of one session in mixed casing, the terminal under the lower one:
+// the first row seen is upper-case.
+func TestReconcile_MixedCaseRowsOneSession(t *testing.T) {
+	env := newHandoffEnv(t)
+	verifiedTerminals(env, tS)
+	env.svc.lease = store.Lease{ID: "L"}
+	fakeStore(env).listRows = []store.Execution{
+		row("E1", "idle", false, strings.ToUpper(tS), "", 2),
+		row("E2", "idle", false, tS, "", 1),
+	}
+	env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
+	if ids := archivedIDs(env); len(ids) != 2 {
+		t.Fatalf("archived = %v, want E1 and E2", ids)
+	}
+}

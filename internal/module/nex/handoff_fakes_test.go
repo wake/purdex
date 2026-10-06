@@ -771,7 +771,14 @@ func (s *stubTerminals) LiveBySessionID(ctx context.Context, _, sid string) ([]a
 	if s.byCall != nil {
 		return s.byCall(n), nil
 	}
-	return append([]agent.TerminalSession(nil), s.live[sid]...), nil
+	// The store matches session ids case-insensitively (ListRootsBySessionID).
+	var out []agent.TerminalSession
+	for k, v := range s.live {
+		if strings.EqualFold(k, sid) {
+			out = append(out, v...)
+		}
+	}
+	return out, nil
 }
 
 func (s *stubTerminals) SubscribeSessionStart(fn func(agent.SessionStartEvent)) func() {
