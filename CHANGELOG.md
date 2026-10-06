@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.525] - 2026-10-07
+
+> 只新增 SPA 內部程式碼，**尚未掛上任何畫面**，透過 HMR 生效、不需部署。daemon、資料庫、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P3a-1（#1684）
+
+Purdex.app 核准對話框的資料層（spec §6.3、§9.4）：
+
+- **wire 型別與 API client**：對應 daemon `/api/team/approvals` 的型別（申請、來源 session、grant、決定、事件三種 op、inflight），以及 `decide`／列出 open 申請／查 inflight 的呼叫；錯誤都轉成帶 code 的型別化錯誤，409「已被處理」會帶整筆勝出的決定。
+- **`useApprovalStore`**：每台主機各自保存 open 的申請；daemon 的 snapshot 以整組取代（斷線期間關掉的申請會消失）；收到 closed 後同一筆再出現的 opened 會被忽略（tombstone，每台主機最多記 256 筆）；斷線時按下的決定先排隊、重連後只送一次；跨主機以最舊的申請優先。
+
 ## [1.0.0-alpha.524] - 2026-10-07
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。**需要 daemon ≥ alpha.515**（已部署在 mlab）。
