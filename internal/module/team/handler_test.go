@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
@@ -181,6 +182,17 @@ func (f *fixture) events() []team.EventValue {
 			return out
 		}
 	}
+}
+
+// countOps drains the events broadcast so far and counts those with op.
+func (f *fixture) countOps(op string) int {
+	n := 0
+	for _, ev := range f.events() {
+		if ev.Op == op {
+			n++
+		}
+	}
+	return n
 }
 
 func TestCreate_NewThenIdempotentThenConflict(t *testing.T) {
@@ -446,5 +458,306 @@ func TestCreate_ConcurrentSameOriginOpensOne(t *testing.T) {
 		if got := len(f.events()); got != 1 {
 			t.Fatalf("round %d: %d opened events, want 1", round, got)
 		}
+	}
+}
+
+func TestList_OpenOnly(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.clock.Add(1)
+	second := f.createReq(uid(2))
+	second.OriginInbox = "/tmp/20.sock"
+	if code, _ := f.do(http.MethodPost, "/api/team/approvals", second); code != 201 {
+		t.Fatal("second create")
+	}
+	f.do(http.MethodDelete, "/api/team/approvals/"+uid(1), nil)
+	code, body := f.do(http.MethodGet, "/api/team/approvals?state=open", nil)
+	var out struct {
+		Approvals []team.Approval `json:"approvals"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || code != 200 || len(out.Approvals) != 1 || out.Approvals[0].ID != uid(2) {
+		t.Fatalf("list: %d %s err=%v", code, body, err)
+	}
+	if code, _ := f.do(http.MethodGet, "/api/team/approvals?state=closed", nil); code != 400 {
+		t.Fatalf("state=closed: %d", code)
+	}
+}
+
+func TestGet_RenewsLeaseAndWakesOnDelete(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.events()
+	f.clock.Add(10_000)
+	code, body := f.do(http.MethodGet, "/api/team/approvals/"+uid(1)+"?wait=0", nil)
+	if a := decodeApproval(t, body); code != 200 || a.LeaseUntil != 1_010_000+30_000 {
+		t.Fatalf("poll must renew the lease: %d %+v", code, a)
+	}
+	if code, body := f.do(http.MethodGet, "/api/team/approvals/nope", nil); code != 404 || decodeErr(t, body).Error != team.ErrNotFound {
+		t.Fatalf("unknown id: %d %s", code, body)
+	}
+	if code, _ := f.do(http.MethodGet, "/api/team/approvals/"+uid(1)+"?wait=abc", nil); code != 400 {
+		t.Fatalf("bad wait: %d", code)
+	}
+	if code, _ := f.do(http.MethodGet, "/api/team/approvals/"+uid(1)+"?wait=-1", nil); code != 400 {
+		t.Fatalf("negative wait: %d", code)
+	}
+
+	done := make(chan team.Approval, 1)
+	go func() {
+		_, body := f.do(http.MethodGet, "/api/team/approvals/"+uid(1)+"?wait=20", nil)
+		done <- decodeApproval(t, body)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	start := time.Now()
+	code, body = f.do(http.MethodDelete, "/api/team/approvals/"+uid(1), nil)
+	if a := decodeApproval(t, body); code != 200 || a.State != team.StateCancelled || a.DecidedAt != 1_010_000 || a.DecidedBy != nil {
+		t.Fatalf("delete: %d %+v", code, a)
+	}
+	select {
+	case a := <-done:
+		if a.State != team.StateCancelled || time.Since(start) > 5*time.Second {
+			t.Fatalf("long-poll woke with %+v after %s", a, time.Since(start))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("long-poll did not wake on cancel")
+	}
+	if n := f.countOps("closed"); n != 1 {
+		t.Fatalf("closed events = %d, want 1", n)
+	}
+	// A closed row is answered at once, whatever wait says, and its lease
+	// is left alone (RenewLease only touches open rows).
+	start = time.Now()
+	code, body = f.do(http.MethodGet, "/api/team/approvals/"+uid(1)+"?wait=20", nil)
+	if a := decodeApproval(t, body); code != 200 || a.State != team.StateCancelled || a.LeaseUntil != 1_040_000 || time.Since(start) > 2*time.Second {
+		t.Fatalf("get after close: %d %+v after %s", code, a, time.Since(start))
+	}
+}
+
+func TestGet_LongPollReturnsOnStopAndOnTimer(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	start := time.Now()
+	if code, body := f.do(http.MethodGet, "/api/team/approvals/"+uid(1)+"?wait=1", nil); code != 200 || decodeApproval(t, body).State != team.StateOpen {
+		t.Fatalf("timer expiry: %d %s", code, body)
+	}
+	if d := time.Since(start); d < 900*time.Millisecond || d > 5*time.Second {
+		t.Fatalf("wait=1 returned after %s", d)
+	}
+
+	done := make(chan int, 1)
+	go func() {
+		code, _ := f.do(http.MethodGet, "/api/team/approvals/"+uid(1)+"?wait=20", nil)
+		done <- code
+	}()
+	time.Sleep(50 * time.Millisecond)
+	start = time.Now()
+	_ = f.m.Stop(context.Background())
+	select {
+	case code := <-done:
+		if code != 200 || time.Since(start) > 5*time.Second {
+			t.Fatalf("on stop: %d after %s", code, time.Since(start))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("long-poll did not return on Stop")
+	}
+	// The row is still open: Stop cuts the wait, it does not close anything.
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
+		t.Fatalf("row after a Stop-cut long-poll = %s, want open", a.State)
+	}
+}
+
+// TestGet_WaitIsCappedAndEndsWhenTheClientLeaves: wait=600 is accepted but
+// the timer is 25 s at most, so the CLI re-polls (and renews its lease)
+// well inside the 30 s lease; and a client that goes away (r.Context()
+// cancelled) ends the wait too, otherwise a stuck CLI pins a handler.
+func TestGet_WaitIsCappedAndEndsWhenTheClientLeaves(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	if got, err := pollWait("600"); err != nil || got != team.MaxPollWaitS {
+		t.Fatalf("pollWait(600) = %d, %v; want %d", got, err, team.MaxPollWaitS)
+	}
+	if got, err := pollWait("7"); err != nil || got != 7 {
+		t.Fatalf("pollWait(7) = %d, %v", got, err)
+	}
+	if got, err := pollWait(""); err != nil || got != 0 {
+		t.Fatalf("pollWait(\"\") = %d, %v", got, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/team/approvals/"+uid(1)+"?wait=20", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		f.mux.ServeHTTP(rec, req)
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+		if rec.Code != 200 || decodeApproval(t, rec.Body.Bytes()).State != team.StateOpen {
+			t.Fatalf("after the client left: %d %s", rec.Code, rec.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("long-poll did not end when the client went away")
+	}
+	// No waiter is left behind.
+	f.m.mu.Lock()
+	n := len(f.m.waiters[uid(1)])
+	f.m.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d waiters left after the poll ended", n)
+	}
+}
+
+func TestDelete_RepeatAndUnknown(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.events()
+	if code, body := f.do(http.MethodDelete, "/api/team/approvals/"+uid(1), nil); code != 200 || decodeApproval(t, body).State != team.StateCancelled {
+		t.Fatalf("delete: %d %s", code, body)
+	}
+	if n := f.countOps("closed"); n != 1 {
+		t.Fatalf("closed events = %d, want 1", n)
+	}
+	// A second DELETE answers the row as it is and emits nothing.
+	code, body := f.do(http.MethodDelete, "/api/team/approvals/"+uid(1), nil)
+	if code != 200 || decodeApproval(t, body).State != team.StateCancelled || len(f.events()) != 0 {
+		t.Fatalf("second delete: %d %s", code, body)
+	}
+	if code, body := f.do(http.MethodDelete, "/api/team/approvals/nope", nil); code != 404 || decodeErr(t, body).Error != team.ErrNotFound {
+		t.Fatalf("delete unknown: %d %s", code, body)
+	}
+	// The origin may open a new request once the old one is closed.
+	f.clock.Add(1)
+	f.create(uid(2))
+}
+
+func TestDecide_ApproveDenyAlreadyDecided(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	second := f.createReq(uid(2))
+	second.OriginInbox = "/tmp/20.sock"
+	if code, _ := f.do(http.MethodPost, "/api/team/approvals", second); code != 201 {
+		t.Fatal("second create")
+	}
+	f.events()
+	client := team.Client{Kind: "app", Label: "Purdex.app @ air26"}
+
+	code, body := f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide",
+		team.DecideRequest{Decision: "approve", Grant: &team.Grant{MaxMembers: 2, Roots: []string{"x", "/y/"}}, Client: client})
+	a := decodeApproval(t, body)
+	if code != 200 || a.State != team.StateApproved || a.Grant == nil || a.Grant.MaxMembers != 2 ||
+		len(a.Grant.Roots) != 2 || a.Grant.Roots[0] != "/w/x" || a.Grant.Roots[1] != "/y" ||
+		a.DecidedBy == nil || a.DecidedBy.Kind != "app" || a.DecidedBy.Label != client.Label || a.DecidedBy.Addr != "100.64.0.4:51234" || a.DecidedAt != 1_000_000 {
+		t.Fatalf("approve: %d %+v grant=%+v by=%+v", code, a, a.Grant, a.DecidedBy)
+	}
+	evs := f.events()
+	if len(evs) != 1 || evs[0].Op != "closed" || evs[0].Approval.State != team.StateApproved || evs[0].Approval.DecidedBy.Label != client.Label {
+		t.Fatalf("events after approve = %+v", evs)
+	}
+	code, body = f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", team.DecideRequest{Decision: "deny", Client: team.Client{Kind: "app", Label: "Purdex.app @ a19"}})
+	e := decodeErr(t, body)
+	if code != http.StatusConflict || e.Error != team.ErrAlreadyDecided || e.Approval == nil || e.Approval.DecidedBy == nil || e.Approval.DecidedBy.Label != client.Label {
+		t.Fatalf("late decide: %d %s (409 must carry who handled it)", code, body)
+	}
+	if n := len(f.events()); n != 0 {
+		t.Fatalf("%d events after a late decide", n)
+	}
+
+	// Deny without a grant edit; approve with a nil grant takes the payload's values.
+	code, body = f.do(http.MethodPost, "/api/team/approvals/"+uid(2)+"/decide", team.DecideRequest{Decision: "deny", Client: client})
+	if a := decodeApproval(t, body); code != 200 || a.State != team.StateDenied || a.Grant != nil || a.DecidedBy == nil {
+		t.Fatalf("deny: %d %+v", code, a)
+	}
+	f.clock.Add(1)
+	third := f.createReq(uid(3))
+	third.OriginInbox = "/tmp/20.sock"
+	if code, _ := f.do(http.MethodPost, "/api/team/approvals", third); code != 201 {
+		t.Fatal("third create")
+	}
+	code, body = f.do(http.MethodPost, "/api/team/approvals/"+uid(3)+"/decide", team.DecideRequest{Decision: "approve", Client: client})
+	if a := decodeApproval(t, body); code != 200 || a.Grant == nil || a.Grant.MaxMembers != 3 || len(a.Grant.Roots) != 1 || a.Grant.Roots[0] != "/w2" {
+		t.Fatalf("approve with nil grant: %d %+v grant=%+v", code, a, a.Grant)
+	}
+	// A grant edit with max_members over the cap is capped; no roots keeps the payload's.
+	f.clock.Add(1)
+	fourth := f.createReq(uid(4))
+	fourth.OriginInbox = "/tmp/20.sock"
+	if code, _ := f.do(http.MethodPost, "/api/team/approvals", fourth); code != 201 {
+		t.Fatal("fourth create")
+	}
+	code, body = f.do(http.MethodPost, "/api/team/approvals/"+uid(4)+"/decide", team.DecideRequest{Decision: "approve", Grant: &team.Grant{MaxMembers: 20}, Client: client})
+	if a := decodeApproval(t, body); code != 200 || a.Grant == nil || a.Grant.MaxMembers != 8 || len(a.Grant.Roots) != 1 || a.Grant.Roots[0] != "/w2" {
+		t.Fatalf("approve with a capped grant: %d %+v grant=%+v", code, a, a.Grant)
+	}
+	f.events()
+
+	for name, req := range map[string]any{
+		"bad decision": team.DecideRequest{Decision: "maybe", Client: client},
+		"no client":    team.DecideRequest{Decision: "approve"},
+		"no label":     team.DecideRequest{Decision: "approve", Client: team.Client{Kind: "app", Label: " "}},
+		"bad json":     `{`,
+	} {
+		if code, body := f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", req); code != 400 || decodeErr(t, body).Error != team.ErrBadRequest {
+			t.Errorf("%s: %d %s", name, code, body)
+		}
+	}
+	if code, body := f.do(http.MethodPost, "/api/team/approvals/nope/decide", team.DecideRequest{Decision: "deny", Client: client}); code != 404 || decodeErr(t, body).Error != team.ErrNotFound {
+		t.Fatalf("unknown id: %d %s", code, body)
+	}
+	if n := len(f.events()); n != 0 {
+		t.Fatalf("%d events after rejected decides", n)
+	}
+}
+
+// TestDecide_WakesLongPoll: a decide releases the requester's long-poll
+// with the decided row, as DELETE does.
+func TestDecide_WakesLongPoll(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	done := make(chan team.Approval, 1)
+	go func() {
+		_, body := f.do(http.MethodGet, "/api/team/approvals/"+uid(1)+"?wait=20", nil)
+		done <- decodeApproval(t, body)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	client := team.Client{Kind: "app", Label: "Purdex.app @ air26"}
+	if code, _ := f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", team.DecideRequest{Decision: "deny", Client: client}); code != 200 {
+		t.Fatalf("deny: %d", code)
+	}
+	select {
+	case a := <-done:
+		if a.State != team.StateDenied || a.DecidedBy == nil || a.DecidedBy.Label != client.Label {
+			t.Fatalf("long-poll woke with %+v", a)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("long-poll did not wake on decide")
+	}
+}
+
+// GET /api/team/inflight (spec §9.5) feeds the restart confirm: open
+// requests only, and relays_active is on the wire as 0 until P6.
+func TestInflight_CountsOpenApprovals(t *testing.T) {
+	f := newFixture(t)
+	if code, body := f.do(http.MethodGet, "/api/team/inflight", nil); code != 200 || !bytes.Contains(body, []byte(`"approvals_open":0`)) {
+		t.Fatalf("none open: %d %s", code, body)
+	}
+	f.create(uid(1))
+	second := f.createReq(uid(2))
+	second.OriginInbox = "/tmp/20.sock"
+	if code, _ := f.do(http.MethodPost, "/api/team/approvals", second); code != 201 {
+		t.Fatal("second create")
+	}
+	if code, body := f.do(http.MethodGet, "/api/team/inflight", nil); code != 200 || !bytes.Contains(body, []byte(`"approvals_open":2`)) {
+		t.Fatalf("two open: %d %s", code, body)
+	}
+	f.do(http.MethodDelete, "/api/team/approvals/"+uid(1), nil)
+	code, body := f.do(http.MethodGet, "/api/team/inflight", nil)
+	var got team.InflightResponse
+	if err := json.Unmarshal(body, &got); err != nil || code != 200 || got.ApprovalsOpen != 1 || got.RelaysActive != 0 {
+		t.Fatalf("one open: %d %s err=%v (want approvals_open 1, relays_active 0)", code, body, err)
+	}
+	if !bytes.Contains(body, []byte(`"relays_active":0`)) {
+		t.Fatalf("relays_active must be on the wire at zero: %s", body)
 	}
 }

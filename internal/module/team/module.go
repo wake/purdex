@@ -90,12 +90,14 @@ func (m *Module) Init(c *core.Core) error {
 	return nil
 }
 
-// RegisterRoutes mounts the create and list routes. The per-id routes
-// (GET long-poll, DELETE, POST decide) and GET /api/team/inflight follow
-// in the next PR; the module is not mounted in cmd/pdx until then.
+// RegisterRoutes mounts the six /api/team/* routes (Go method patterns).
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/team/approvals", m.handleCreate)
 	mux.HandleFunc("GET /api/team/approvals", m.handleList)
+	mux.HandleFunc("GET /api/team/approvals/{id}", m.handleGet)
+	mux.HandleFunc("DELETE /api/team/approvals/{id}", m.handleDelete)
+	mux.HandleFunc("POST /api/team/approvals/{id}/decide", m.handleDecide)
+	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)
 }
 
 // Start is filled in by Task 2.6 (boot lease grace, snapshot, sweeper).
@@ -136,6 +138,21 @@ func (m *Module) hostID() string {
 	return m.core.Cfg.HostID
 }
 
+// closeAs is the one close path: the store's CAS, then — for the winner
+// only — the closed broadcast and the long-poll wake-up. So every close
+// produces exactly one closed event, whoever raced for it (spec §6.2).
+func (m *Module) closeAs(id string, c Close) (team.Approval, bool, error) {
+	after, won, err := m.store.CloseIfOpen(id, c)
+	if err != nil {
+		return team.Approval{}, false, err
+	}
+	if won {
+		m.broadcast("closed", &after)
+		m.wake(id)
+	}
+	return after, won, nil
+}
+
 func (m *Module) broadcast(op string, a *team.Approval) {
 	v, err := json.Marshal(team.EventValue{Op: op, Approval: a})
 	if err != nil {
@@ -143,4 +160,42 @@ func (m *Module) broadcast(op string, a *team.Approval) {
 		return
 	}
 	m.core.Events.BroadcastEvent(core.HostEvent{Type: team.EventType, Value: string(v)})
+}
+
+// addWaiter registers a long-poll on id; the channel is closed by wake.
+func (m *Module) addWaiter(id string) chan struct{} {
+	ch := make(chan struct{})
+	m.mu.Lock()
+	m.waiters[id] = append(m.waiters[id], ch)
+	m.mu.Unlock()
+	return ch
+}
+
+// removeWaiter drops one long-poll's channel; a no-op once wake took it.
+func (m *Module) removeWaiter(id string, ch chan struct{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ws := m.waiters[id]
+	for i, w := range ws {
+		if w == ch {
+			ws = append(ws[:i], ws[i+1:]...)
+			break
+		}
+	}
+	if len(ws) == 0 {
+		delete(m.waiters, id)
+	} else {
+		m.waiters[id] = ws
+	}
+}
+
+// wake releases every long-poll on id.
+func (m *Module) wake(id string) {
+	m.mu.Lock()
+	ws := m.waiters[id]
+	delete(m.waiters, id)
+	m.mu.Unlock()
+	for _, ch := range ws {
+		close(ch)
+	}
 }
