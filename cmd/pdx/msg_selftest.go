@@ -5,8 +5,8 @@
 // tmux, spawns a REAL `pdx peer-proxy` helper through the same client the
 // daemon uses, delivers a nonce message into the session's inbox socket,
 // waits for the native reply to reach the helper, prints PASS/FAIL, and
-// always tears everything down: the target process, its registry files,
-// the helper and its files.
+// always tears everything down: the target process, its registry files
+// and transcript, the helper and its files.
 package main
 
 import (
@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -91,6 +92,13 @@ type selftestDeps struct {
 	dialRefused       func(sock string) bool
 	sleep             func(ctx context.Context, d time.Duration) error
 	now               func() time.Time
+
+	// homeDir is where Claude Code keeps .claude/ — the throwaway
+	// session's transcript lives under it (#1631).
+	homeDir  string
+	readFile func(path string) ([]byte, error)
+	// rmdir removes an empty directory and nothing else.
+	rmdir func(path string) error
 }
 
 // newSelftestDeps returns the production seams. stderr receives the
@@ -144,7 +152,10 @@ func newSelftestDeps(stderr io.Writer) (selftestDeps, error) {
 				return ctx.Err()
 			}
 		},
-		now: time.Now,
+		now:      time.Now,
+		homeDir:  home,
+		readFile: os.ReadFile,
+		rmdir:    syscall.Rmdir,
 	}, nil
 }
 
@@ -195,6 +206,10 @@ type selftestState struct {
 	targetPID       int    // the claude process; 0 ⇒ never identified
 	targetProcStart string // proves targetPID is still the same process
 	targetInbox     string // the registered inbox; "" ⇒ never registered
+	// targetSessionID / targetCwd are the registered entry's sessionId and
+	// cwd: they address the session's transcript (#1631).
+	targetSessionID string
+	targetCwd       string
 	h               selftestPeer
 }
 
@@ -227,13 +242,21 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 	// lands after tmux created the session must still be followed by
 	// kill-session (a session that never existed is tolerated there by
 	// selftestTmuxNoSession).
+	//
+	// Bash is disallowed so the native SendMessage is the only way to
+	// reply: a global CLAUDE.md that routes agent messages through
+	// `pdx msg send` would otherwise send the model to Bash, which -p
+	// refuses, and the reply leg would never be exercised (#1631). The
+	// flag takes a variadic list, so it goes last: nothing follows that it
+	// could swallow.
 	st.sessionStarted = true
 	if _, err := deps.tmux(ctx, "new-session", "-d", "-s", st.name, "--",
 		"sh", "-c", `sleep 2147483647 | exec claude "$@"`, "pdx-selftest",
 		"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--name", st.name,
-		"--settings", `{"crossSessionInbound":"accept"}`); err != nil {
+		"--settings", `{"crossSessionInbound":"accept"}`,
+		"--disallowedTools", "Bash"); err != nil {
 		fmt.Fprintf(stdout, "FAIL: tmux new-session: %v\n", err)
 		return 1
 	}
@@ -268,6 +291,7 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 	}
 	pid := target.PID
 	st.targetPID, st.targetProcStart, st.targetInbox = pid, targetProcStart, target.Inbox
+	st.targetSessionID, st.targetCwd = target.SessionID, target.Cwd
 
 	// Step 4: a real helper, impersonating one peer with the target's own
 	// feature list.
@@ -296,6 +320,9 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 	st.h = h
 
 	// Step 5: the probe frame, addressed for reply to the helper's socket.
+	// The text names the native tool and rules out the pdx / Bash detour a
+	// global CLAUDE.md may suggest (#1631); the reply is still matched on
+	// the nonce alone.
 	nonce, err := selftestHex(4)
 	if err != nil {
 		fmt.Fprintf(stdout, "FAIL: %v\n", err)
@@ -310,7 +337,8 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 		From:     "uds:" + h.Sock(),
 		FromName: selftestProbeName,
 		FromMode: ipeers.ModePrompting,
-		Text:     "PDX_SELFTEST " + nonce + ": reply with exactly: PONG " + nonce,
+		Text: "PDX_SELFTEST " + nonce +
+			": reply to the sender using the SendMessage tool (not pdx, not Bash), with exactly: PONG " + nonce,
 	})
 	if err != nil {
 		fmt.Fprintf(stdout, "FAIL: build frame: %v\n", err)
@@ -520,7 +548,14 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 		selftestRemoveSock(deps, sock, "target", problem, stdout)
 	}
 
-	// e. verdict.
+	// e. the claude process's transcript (#1631) — after c, so nothing
+	// writes to it any more, and under d's rule: without a registry entry
+	// there is no session id to address it by.
+	if st.targetPID != 0 {
+		selftestRemoveTranscript(deps, st, targetID, problem, stdout)
+	}
+
+	// f. verdict.
 	if len(remaining) == 0 {
 		fmt.Fprintln(stdout, "cleanup: ok")
 		return true
@@ -590,6 +625,146 @@ func selftestRemoveSock(deps selftestDeps, sock, owner string, problem func(stri
 	default:
 		problem("%s socket not removed: %s: %v", owner, sock, err)
 	}
+}
+
+// selftestRemoveTranscript removes the throwaway session's transcript,
+// <home>/.claude/projects/<slug(cwd)>/<sessionID>.jsonl, once its content
+// proves it is that session's own; then the <sessionID>/ side directory
+// and the project directory, each only if empty (rmdir, never recursive).
+//
+// A path that cannot be computed with confidence is a skip note; a
+// transcript that is missing is silence; one that is not proven ours, or
+// whose writer's identity is unknown (d's rule — it may still be
+// running), is kept with a note, as a foreign registry file is. Only
+// failing to remove a verified transcript is a cleanup problem.
+func selftestRemoveTranscript(deps selftestDeps, st *selftestState, targetID ipeers.ProcIdentity,
+	problem func(string, ...any), stdout io.Writer) {
+	path, why := selftestTranscriptPath(deps.homeDir, st.targetCwd, st.targetSessionID)
+	if path == "" {
+		fmt.Fprintf(stdout, "note: transcript cleanup skipped: %s\n", why)
+		return
+	}
+	data, err := deps.readFile(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return
+	case err != nil:
+		fmt.Fprintf(stdout, "transcript kept: %s: %v\n", path, err)
+		return
+	}
+	if targetID == ipeers.ProcUnknown {
+		fmt.Fprintf(stdout, "transcript kept: %s: target pid %d of unknown identity may still write it\n", path, st.targetPID)
+		return
+	}
+	if why := selftestTranscriptMismatch(data, st.targetSessionID); why != "" {
+		fmt.Fprintf(stdout, "transcript kept: %s: %s\n", path, why)
+		return
+	}
+	switch err := deps.remove(path); {
+	case errors.Is(err, fs.ErrNotExist):
+		return
+	case err != nil:
+		problem("transcript not removed: %s: %v", path, err)
+		return
+	}
+	fmt.Fprintf(stdout, "removed transcript: %s\n", path)
+
+	sidDir, projDir := strings.TrimSuffix(path, ".jsonl"), filepath.Dir(path)
+	for _, dir := range []string{sidDir, projDir} {
+		switch err := deps.rmdir(dir); {
+		case err == nil:
+			fmt.Fprintf(stdout, "removed transcript directory: %s\n", dir)
+		case errors.Is(err, fs.ErrNotExist):
+		case dir == projDir && (errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST)):
+			// Other sessions started in the same cwd share it: the usual case.
+		default:
+			fmt.Fprintf(stdout, "directory kept: %s: %v\n", dir, err)
+		}
+	}
+}
+
+// selftestTranscriptPath returns where Claude Code writes the transcript
+// of session sessionID started in cwd, or "" and why it cannot be said
+// with confidence: no home, cwd or session id; a session id that is not a
+// plain file name; a non-ASCII cwd, for which the slug rule was never
+// observed (Nexen's transcriptPath declines it for the same reason).
+func selftestTranscriptPath(home, cwd, sessionID string) (string, string) {
+	switch {
+	case home == "":
+		return "", "no home directory"
+	case sessionID == "":
+		return "", "the registry entry has no session id"
+	case cwd == "":
+		return "", "the registry entry has no cwd"
+	}
+	for i := 0; i < len(sessionID); i++ {
+		if c := sessionID[i]; !selftestIsAlnum(c) && c != '-' && c != '_' {
+			return "", fmt.Sprintf("session id %q is not a plain file name", sessionID)
+		}
+	}
+	for i := 0; i < len(cwd); i++ {
+		if cwd[i] > 127 {
+			return "", fmt.Sprintf("cwd %q is not ASCII (the project slug rule is unverified there)", cwd)
+		}
+	}
+	return filepath.Join(home, ".claude", "projects", selftestSlug(cwd), sessionID+".jsonl"), ""
+}
+
+// selftestSlug maps a cwd to Claude Code's project directory name: every
+// byte outside [A-Za-z0-9] becomes '-'. The rule is copied from Nexen's
+// execution/addressing.go slugify (unexported there), verified against
+// observed directory names; the result never contains a separator or a
+// dot, so it cannot leave .claude/projects.
+func selftestSlug(cwd string) string {
+	b := []byte(cwd)
+	for i, c := range b {
+		if !selftestIsAlnum(c) {
+			b[i] = '-'
+		}
+	}
+	return string(b)
+}
+
+func selftestIsAlnum(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+}
+
+// selftestTranscriptMismatch returns why data is not provably session
+// sessionID's transcript, or "" when it is: every JSON line carrying a
+// top-level "sessionId" must carry exactly sessionID (a non-string or
+// null value is a mismatch), and at least one line must. A line that does
+// not parse — blank, or cut short when the process was killed mid-write —
+// is no evidence either way.
+func selftestTranscriptMismatch(data []byte, sessionID string) string {
+	seen := false
+	for i, line := range bytes.Split(data, []byte("\n")) {
+		var rec map[string]json.RawMessage
+		if json.Unmarshal(line, &rec) != nil {
+			continue
+		}
+		raw, ok := rec["sessionId"]
+		if !ok {
+			continue
+		}
+		var sid string
+		if json.Unmarshal(raw, &sid) != nil || sid != sessionID {
+			return fmt.Sprintf("line %d carries sessionId %s, not %s", i+1, selftestClip(string(raw)), sessionID)
+		}
+		seen = true
+	}
+	if !seen {
+		return "no line carries the session id"
+	}
+	return ""
+}
+
+// selftestClip bounds a foreign value quoted in a note.
+func selftestClip(s string) string {
+	const limit = 80
+	if len(s) <= limit {
+		return s
+	}
+	return s[:limit] + "…"
 }
 
 // selftestWaitGone polls ident() at selftestPollInterval for ≤ d and
