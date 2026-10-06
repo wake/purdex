@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.508] - 2026-10-07
+
+> 只動 `pdx` 指令（`pdx msg selftest`），**需要部署新的 `pdx` 執行檔**，由統籌安排。daemon 程式碼、資料庫、SPA、Electron 都沒有改動。
+
+### Fixed：`pdx msg selftest` 誤判失敗（#1631、#1635）
+
+- **不再誤報「沒有回覆」**：自我測試會開一個拋棄式的 Claude Code，請它用內建的 SendMessage 回覆。
+  - 以前全域 CLAUDE.md 要求 agent 一律用 `pdx msg send` 回覆，拋棄式 session 就改走 Bash；可是這種模式下 Bash 不能核准，回覆根本送不出去，結果判成失敗。
+  - 現在只對這個拋棄式 session 關掉 Bash，並在訊息裡講明要用 SendMessage 回覆。你的 CLAUDE.md、平常的 session、`pdx msg send` 都不受影響。
+- **不再留下對話檔**：拋棄式 session 改成不寫對話檔，跑完 `~/.claude/projects` 底下不會多出檔案。
+- **啟動失敗講清楚**：若 Claude Code 不認得啟動參數、一啟動就結束，會顯示 `FAIL: claude failed to start: <它印出的最後一行>`，不再顯示成「沒有註冊」。
+- 已在 mlab 用 Claude Code 2.1.291 實測通過。
+
 ## [1.0.0-alpha.507] - 2026-10-06
 
 > 只動 daemon，**需要部署**，由統籌安排重啟。資料庫不變，不用清資料。SPA 與 Electron 都不必更新。
