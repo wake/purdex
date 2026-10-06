@@ -11,7 +11,7 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import golden from '../../../lib/nex/__fixtures__/prelude-golden-nexen.json'
 
 const m = (pos: string, type: 'user' | 'assistant', content: unknown[]): PreludeItem =>
-  ({ pos, at: 1, kind: type, msg: { type, parent_tool_use_id: null, message: { role: type, content, stop_reason: null } } as unknown as StreamMessage })
+  ({ offset: null, pos, at: 1, kind: type, msg: { type, parent_tool_use_id: null, message: { role: type, content, stop_reason: null } } as unknown as StreamMessage })
 
 let observed: Array<(entries: Array<{ isIntersecting: boolean }>) => void> = []
 let disconnects = 0
@@ -31,12 +31,12 @@ const base = { keyPrefix: 'exc', mode: 'room' as const, onLoadOlder: vi.fn(), on
 describe('PreludeSection', () => {
   it('draws markers, user lines, prose and notes in order', () => {
     const view = derivePrelude([
-      { pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
       m('2', 'user', [{ type: 'text', text: 'fix the build' }]),
       m('3', 'assistant', [{ type: 'text', text: 'on it' }]),
-      { pos: '4', at: 0, kind: 'prelude.note', source: 'command_output', text: 'Model set to opus', truncated: false, totalBytes: null, stream: null },
-      { pos: '5', at: 0, kind: 'prelude.compaction', trigger: 'auto' },
-      { pos: '6', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+      { offset: null, pos: '4', at: 0, kind: 'prelude.note', source: 'command_output', text: 'Model set to opus', truncated: false, totalBytes: null, stream: null },
+      { offset: null, pos: '5', at: 0, kind: 'prelude.compaction', trigger: 'auto' },
+      { offset: null, pos: '6', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
     ])
     render(<PreludeSection {...base} view={view} status="ok" done />)
     const text = screen.getByTestId('worker-prelude').textContent ?? ''
@@ -116,7 +116,7 @@ describe('PreludeSection', () => {
         { type: 'tool_use', id: 't', name: 'Write', input: { content: 'x' }, truncated: true, total_bytes: 90000 },
       ]),
       m('3', 'user', [{ type: 'tool_result', tool_use_id: 't', content: 'out', truncated: true, total_bytes: 80000 }]),
-      { pos: '4', at: 0, kind: 'prelude.note', source: 'command_output', text: 'big', truncated: true, totalBytes: 70000, stream: null },
+      { offset: null, pos: '4', at: 0, kind: 'prelude.note', source: 'command_output', text: 'big', truncated: true, totalBytes: 70000, stream: null },
     ])
     render(<PreludeSection {...base} view={view} status="ok" done />)
     const hints = screen.getAllByTestId('prelude-truncated').map((h) => h.textContent)
@@ -126,7 +126,7 @@ describe('PreludeSection', () => {
   })
 
   it('a bash stderr note is drawn in the error tone', () => {
-    const view = derivePrelude([{ pos: '4', at: 0, kind: 'prelude.note', source: 'bash_output', text: 'boom', truncated: false, totalBytes: null, stream: 'stderr' }])
+    const view = derivePrelude([{ offset: null, pos: '4', at: 0, kind: 'prelude.note', source: 'bash_output', text: 'boom', truncated: false, totalBytes: null, stream: 'stderr' }])
     render(<PreludeSection {...base} view={view} status="ok" done />)
     expect(screen.getByTestId('prelude-note-bash_output').innerHTML).toContain('text-status-error')
   })
@@ -252,7 +252,7 @@ describe('PreludeSection notes and labels', () => {
 
   it('chat: markers and notes keep entry order around the spans', () => {
     const view = derivePrelude([
-      { pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
       m('2', 'user', [{ type: 'text', text: 'first' }]),
       note('3', 'command_output', 'Model set'),
       m('4', 'assistant', [{ type: 'text', text: 'last' }]),
@@ -474,7 +474,7 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection closing h
   })
 
   it('follows a trailing sdk segment too (the worker is its own switch)', () => {
-    render(<PreludeSection {...base} mode={mode} view={derivePrelude([...items, { pos: '4', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' }])} status="ok" done />)
+    render(<PreludeSection {...base} mode={mode} view={derivePrelude([...items, { offset: null, pos: '4', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' }])} status="ok" done />)
     const section = screen.getByTestId('worker-prelude')
     expect(section.lastElementChild?.getAttribute('data-testid')).toBe('prelude-handoff')
     expect(screen.getAllByTestId('prelude-segment')).toHaveLength(1)
@@ -495,20 +495,20 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection closing h
 // would add a box (and the section's space-y margin) above turn 1.
 describe('PreludeSection scroll anchors (#1534)', () => {
   const items: PreludeItem[] = [
-    { pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+    { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
     m('2', 'user', [{ type: 'text', text: 'fix the build' }]),
     m('3', 'assistant', [{ type: 'text', text: 'on it' }]),
     note('4', 'command_output', 'Model set'),
     note('5', 'bash_input', 'ls'),
     note('6', 'task_notification', 'build done'),
     note('7', 'peer_message', 'hi'),
-    { pos: '8', at: 0, kind: 'prelude.compaction', trigger: 'auto' },
+    { offset: null, pos: '8', at: 0, kind: 'prelude.compaction', trigger: 'auto' },
     m('9', 'user', [{ type: 'text', text: 'again' }]),
     m('10', 'assistant', [{ type: 'tool_use', id: 'tk', name: 'Task', input: { description: 'look', subagent_type: 'Explore' } }]),
     // A subagent's frame: drawn inside its Task (room), never a row of its own.
-    { pos: '11', at: 0, kind: 'user', msg: { type: 'user', parent_tool_use_id: 'tk', message: { role: 'user', content: [{ type: 'text', text: 'sub prompt' }], stop_reason: null } } as unknown as StreamMessage },
+    { offset: null, pos: '11', at: 0, kind: 'user', msg: { type: 'user', parent_tool_use_id: 'tk', message: { role: 'user', content: [{ type: 'text', text: 'sub prompt' }], stop_reason: null } } as unknown as StreamMessage },
     m('12', 'user', [{ type: 'tool_result', tool_use_id: 'tk', content: 'back' }]),
-    { pos: '13', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+    { offset: null, pos: '13', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
   ]
   /** The very same nodes, in order (identity, not isEqualNode). */
   const sameNodes = (a: Element[], b: Element[]) => a.length === b.length && a.every((e, k) => e === b[k])

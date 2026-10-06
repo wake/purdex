@@ -8,7 +8,7 @@ import type { ContentBlock, StreamMessage } from './message-types'
 import { isOpeningLine } from './turns'
 
 const msg = (pos: string, type: 'user' | 'assistant', content: unknown[]): PreludeItem =>
-  ({ pos, at: 1000, kind: type, msg: { type, parent_tool_use_id: null, message: { role: type, content, stop_reason: null } } as unknown as StreamMessage })
+  ({ offset: null, pos, at: 1000, kind: type, msg: { type, parent_tool_use_id: null, message: { role: type, content, stop_reason: null } } as unknown as StreamMessage })
 const ok = (items: PreludeItem[], prevCursor: string | null): PreludePage => ({ state: 'ok', items, prevCursor, totalBytes: null })
 
 /** Load one page as request `r` — the way the hook does it. */
@@ -76,9 +76,9 @@ describe('applyPreludePage', () => {
 describe('derivePrelude', () => {
   it('lists messages and markers in order, with stable ids', () => {
     const v = derivePrelude([
-      { pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
       msg('2', 'user', [{ type: 'text', text: 'hi' }]),
-      { pos: '3', at: 0, kind: 'prelude.note', source: 'command_output', text: 'out', truncated: false, totalBytes: null, stream: null },
+      { offset: null, pos: '3', at: 0, kind: 'prelude.note', source: 'command_output', text: 'out', truncated: false, totalBytes: null, stream: null },
       msg('4', 'assistant', [{ type: 'text', text: 'yo' }]),
     ])
     expect(v.entries.map((e) => e.kind)).toEqual(['segment', 'message', 'note', 'message'])
@@ -90,11 +90,11 @@ describe('derivePrelude', () => {
   it('builds the tool overlay from N2 items and closes a call that was never answered', () => {
     const v = derivePrelude([
       msg('1', 'assistant', [{ type: 'tool_use', id: 'toolu_a', name: 'Bash', input: {} }]),
-      { pos: '1.1', at: 1000, kind: 'tool_use', payload: { tool_use_id: 'toolu_a', name: 'Bash' } },
+      { offset: null, pos: '1.1', at: 1000, kind: 'tool_use', payload: { tool_use_id: 'toolu_a', name: 'Bash' } },
       msg('2', 'assistant', [{ type: 'tool_use', id: 'toolu_b', name: 'Read', input: {} }]),
-      { pos: '2.1', at: 2000, kind: 'tool_use', payload: { tool_use_id: 'toolu_b', name: 'Read' } },
+      { offset: null, pos: '2.1', at: 2000, kind: 'tool_use', payload: { tool_use_id: 'toolu_b', name: 'Read' } },
       msg('3', 'user', [{ type: 'tool_result', tool_use_id: 'toolu_a', content: 'x' }]),
-      { pos: '3.1', at: 3000, kind: 'tool_result', payload: { tool_use_id: 'toolu_a', status: 'ok', duration_ms: 2000 } },
+      { offset: null, pos: '3.1', at: 3000, kind: 'tool_result', payload: { tool_use_id: 'toolu_a', status: 'ok', duration_ms: 2000 } },
     ])
     expect(v.tools.toolu_a.status).toBe('done')
     expect(v.tools.toolu_b.status).toBe('aborted')
@@ -102,8 +102,8 @@ describe('derivePrelude', () => {
 
   it('a __proto__ tool id is an own key, never the prototype', () => {
     const v = derivePrelude([
-      { pos: '1', at: 1, kind: 'tool_use', payload: { tool_use_id: '__proto__', name: 'X' } },
-      { pos: '2', at: 2, kind: 'tool_result', payload: { tool_use_id: '__proto__', status: 'ok' } },
+      { offset: null, pos: '1', at: 1, kind: 'tool_use', payload: { tool_use_id: '__proto__', name: 'X' } },
+      { offset: null, pos: '2', at: 2, kind: 'tool_result', payload: { tool_use_id: '__proto__', status: 'ok' } },
     ])
     expect(Object.hasOwn(v.tools, '__proto__')).toBe(true)
     expect(Object.getOwnPropertyDescriptor(v.tools, '__proto__')?.value.status).toBe('done')
@@ -114,11 +114,11 @@ describe('derivePrelude', () => {
 describe('preludeBlocks', () => {
   it('cuts spans at opening lines and around non-message entries', () => {
     const v = derivePrelude([
-      { pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
       msg('2', 'user', [{ type: 'text', text: 'one' }]),
       msg('3', 'assistant', [{ type: 'text', text: 'a' }]),
       msg('4', 'user', [{ type: 'text', text: 'two' }]),
-      { pos: '5', at: 0, kind: 'prelude.note', source: 'task_notification', text: 'n', truncated: false, totalBytes: null, stream: null },
+      { offset: null, pos: '5', at: 0, kind: 'prelude.note', source: 'task_notification', text: 'n', truncated: false, totalBytes: null, stream: null },
       msg('6', 'assistant', [{ type: 'text', text: 'b' }]),
     ])
     expect(preludeBlocks(v)).toEqual([
@@ -146,7 +146,7 @@ describe('derivePrelude — pasted text (U3)', () => {
 
   it('leaves a tool_result carrier, a subagent frame and assistant text untouched', () => {
     const carrier = msg('1', 'user', [{ type: 'tool_result', tool_use_id: 't', content: PASTE }, { type: 'text', text: PASTE }])
-    const frame: PreludeItem = { pos: '2', at: 0, kind: 'user', msg: { type: 'user', parent_tool_use_id: 'task', message: { role: 'user', content: [{ type: 'text', text: PASTE }], stop_reason: null } } as unknown as StreamMessage }
+    const frame: PreludeItem = { pos: '2', at: 0, offset: null, kind: 'user', msg: { type: 'user', parent_tool_use_id: 'task', message: { role: 'user', content: [{ type: 'text', text: PASTE }], stop_reason: null } } as unknown as StreamMessage }
     const agent = msg('3', 'assistant', [{ type: 'text', text: PASTE }])
     const v = derivePrelude([carrier, frame, agent])
     expect(v.messages[0]).toBe((carrier as { msg: StreamMessage }).msg)

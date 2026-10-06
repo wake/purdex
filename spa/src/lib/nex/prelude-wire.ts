@@ -27,11 +27,11 @@ function fit(s: string): string {
 }
 
 export type PreludeItem =
-  | { pos: string; at: number; kind: 'assistant' | 'user'; msg: StreamMessage }
-  | { pos: string; at: number; kind: 'tool_use' | 'tool_result'; payload: Record<string, unknown> }
-  | { pos: string; at: number; kind: 'prelude.segment'; entrypoint: string }
-  | { pos: string; at: number; kind: 'prelude.compaction'; trigger: string }
-  | { pos: string; at: number; kind: 'prelude.note'; source: string; text: string; truncated: boolean; totalBytes: number | null; stream: string | null }
+  | { pos: string; at: number; offset: number | null; kind: 'assistant' | 'user'; msg: StreamMessage }
+  | { pos: string; at: number; offset: number | null; kind: 'tool_use' | 'tool_result'; payload: Record<string, unknown> }
+  | { pos: string; at: number; offset: number | null; kind: 'prelude.segment'; entrypoint: string }
+  | { pos: string; at: number; offset: number | null; kind: 'prelude.compaction'; trigger: string }
+  | { pos: string; at: number; offset: number | null; kind: 'prelude.note'; source: string; text: string; truncated: boolean; totalBytes: number | null; stream: string | null }
 
 export interface PreludePage {
   state: 'ok' | 'none' | 'gone'
@@ -158,22 +158,23 @@ function item(raw: unknown): PreludeItem | null {
   if (!p) return null
   const at = Number.isSafeInteger(r.at) && (r.at as number) > 0 ? (r.at as number) : 0
   const pos = r.pos
+  const offset = nonNegInt(r.offset) ?? null
   const kind = r.kind
   if (kind === 'assistant' || kind === 'user') {
     const msg = frame(kind, p)
-    return msg ? { pos, at, kind, msg } : null
+    return msg ? { pos, at, offset, kind, msg } : null
   }
   if (kind === 'tool_use' || kind === 'tool_result') {
     // Only tool_use_id is checked here; the N2 readers in tool-activity.ts read every other field defensively.
-    return typeof p.tool_use_id === 'string' && p.tool_use_id !== '' ? { pos, at, kind, payload: p } : null
+    return typeof p.tool_use_id === 'string' && p.tool_use_id !== '' ? { pos, at, offset, kind, payload: p } : null
   }
-  if (kind === 'prelude.segment') return typeof p.entrypoint === 'string' ? { pos, at, kind, entrypoint: fit(p.entrypoint) } : null
-  if (kind === 'prelude.compaction') return { pos, at, kind, trigger: typeof p.trigger === 'string' ? p.trigger : '' }
+  if (kind === 'prelude.segment') return typeof p.entrypoint === 'string' ? { pos, at, offset, kind, entrypoint: fit(p.entrypoint) } : null
+  if (kind === 'prelude.compaction') return { pos, at, offset, kind, trigger: typeof p.trigger === 'string' ? p.trigger : '' }
   if (kind === 'prelude.note') {
     if (typeof p.source !== 'string' || typeof p.text !== 'string') return null
     const tb = p.total_bytes
     return {
-      pos, at, kind, source: fit(p.source), text: fit(p.text), truncated: p.truncated === true,
+      pos, at, offset, kind, source: fit(p.source), text: fit(p.text), truncated: p.truncated === true,
       totalBytes: Number.isSafeInteger(tb) && (tb as number) >= 0 ? (tb as number) : null,
       // `bash_output` only (spec §4.3): which stream the text came from.
       stream: typeof p.stream === 'string' ? p.stream : null,

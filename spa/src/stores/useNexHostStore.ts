@@ -36,6 +36,22 @@ export function selectReady(hostId: string): (s: Pick<NexHostState, 'byHost'>) =
   return (s) => s.byHost[hostId]?.phase === 'ready'
 }
 
+/** Nexen v0.17: `GET /v1/executions?session_id=` is honoured. Key presence, never a version compare. */
+export function selectSessionFilter(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
+  return (s) => {
+    const entry = s.byHost[hostId]
+    return entry?.phase === 'ready' && entry.capabilities?.list?.session_filter === true
+  }
+}
+
+/** Nexen v0.17: every prelude item carries an integer `offset`. */
+export function selectPreludeItemOffset(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
+  return (s) => {
+    const entry = s.byHost[hostId]
+    return entry?.phase === 'ready' && entry.capabilities?.transcript_prelude?.item_offset === true
+  }
+}
+
 export function selectHandoffReady(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
   return (s) => {
     const entry = s.byHost[hostId]

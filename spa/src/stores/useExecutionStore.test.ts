@@ -268,7 +268,7 @@ describe('prelude actions', () => {
 
   it('preludeHalted is a no-op while loading, and otherwise sets the error and frees the lock, keeping items and cursor', () => {
     const s = useExecutionStore.getState()
-    const page = { state: 'ok' as const, items: [{ pos: '1', at: 1, kind: 'prelude.segment' as const, entrypoint: 'cli' }], prevCursor: 'c', totalBytes: null }
+    const page = { state: 'ok' as const, items: [{ offset: null, pos: '1', at: 1, kind: 'prelude.segment' as const, entrypoint: 'cli' }], prevCursor: 'c', totalBytes: null }
     s.preludeLoading('h', 'e', 1)
     s.applyPreludePage('h', 'e', page, null, 1)
     s.preludeLoading('h', 'e', 2)
@@ -300,7 +300,7 @@ describe('prelude actions', () => {
     s.applyEvents('h', 'e', [{ seq: 1, execution_id: 'e', kind: 'execution.delegated', payload: { brief: 'b' }, created_at: 1 }])
     const before = useExecutionStore.getState().executions[executionKey('h', 'e')]
     s.preludeLoading('h', 'e', 1)
-    s.applyPreludePage('h', 'e', { state: 'ok', items: [{ pos: '1', at: 1, kind: 'prelude.segment', entrypoint: 'cli' }], prevCursor: 'c', totalBytes: 5 }, null, 1)
+    s.applyPreludePage('h', 'e', { state: 'ok', items: [{ offset: null, pos: '1', at: 1, kind: 'prelude.segment', entrypoint: 'cli' }], prevCursor: 'c', totalBytes: 5 }, null, 1)
     s.resetPrelude('h', 'e')
     const after = useExecutionStore.getState().executions[executionKey('h', 'e')]
     expect(after.prelude).toEqual(defaultPreludeState())

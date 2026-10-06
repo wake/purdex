@@ -9,6 +9,8 @@ import {
   selectReady,
   selectRollupCostShown,
   selectSessionTitleSupported,
+  selectSessionFilter,
+  selectPreludeItemOffset,
   selectTranscriptPrelude,
   selectWorkerRollup,
   startNexHostInvalidation,
@@ -512,6 +514,24 @@ describe('selectors', () => {
       }),
     })
     expect(selectHandoffReady(H)(useNexHostStore.getState())).toBe(expected)
+  })
+
+  it('selectSessionFilter / selectPreludeItemOffset go by key presence', () => {
+    const cap = { route: { method: 'GET', path: '/p' }, page_max_items: 1, page_max_bytes: 1, max_block_bytes: 1 }
+    const st = () => useNexHostStore.getState()
+    seed({ capabilities: caps({ transcript_prelude: cap }) })
+    expect(selectSessionFilter(H)(st())).toBe(false)
+    expect(selectPreludeItemOffset(H)(st())).toBe(false)
+    seed({ capabilities: caps({ list: { session_filter: true }, transcript_prelude: { ...cap, item_offset: true } }) })
+    expect(selectSessionFilter(H)(st())).toBe(true)
+    expect(selectPreludeItemOffset(H)(st())).toBe(true)
+    seed({ capabilities: caps({ list: { session_filter: false }, transcript_prelude: { ...cap, item_offset: false } }) })
+    expect(selectSessionFilter(H)(st())).toBe(false)
+    expect(selectPreludeItemOffset(H)(st())).toBe(false)
+    seed({ phase: 'unavailable', capabilities: caps({ list: { session_filter: true }, transcript_prelude: { ...cap, item_offset: true } }) })
+    expect(selectSessionFilter(H)(st())).toBe(false)
+    expect(selectPreludeItemOffset(H)(st())).toBe(false)
+    expect(selectSessionFilter('ghost')(st())).toBe(false)
   })
 
   it('selectWorkerRollup returns the capability object when present and ready, else null', () => {

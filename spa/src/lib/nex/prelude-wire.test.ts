@@ -241,6 +241,11 @@ describe('Nexen golden page (spec §4.6)', () => {
     expect(new Set(page.items.map((i) => i.kind))).toEqual(new Set(['prelude.segment', 'user', 'assistant', 'tool_use', 'tool_result', 'prelude.note', 'prelude.compaction']))
   })
 
+  it('keeps the wire offset on every item', () => {
+    expect(golden.items.every((i) => typeof (i as { offset?: unknown }).offset === 'number')).toBe(true)
+    expect(page.items.map((i) => i.offset)).toEqual(golden.items.map((i) => (i as { offset: number }).offset))
+  })
+
   it('has the expected number of items of each kind', () => {
     const count: Record<string, number> = {}
     for (const i of page.items) count[i.kind] = (count[i.kind] ?? 0) + 1
@@ -251,7 +256,7 @@ describe('Nexen golden page (spec §4.6)', () => {
     expect(page.items.filter((i) => i.kind === 'prelude.segment').map((i) => [i.pos, (i as { entrypoint: string }).entrypoint]))
       .toEqual([['329.0', 'cli'], ['373526.0', 'sdk-cli'], ['375917.0', 'cli']])
     // Closed shape: `pre_tokens` is dropped by design (spec §4.3 marks it optional; §5.3 draws only the trigger).
-    expect(page.items.find((i) => i.kind === 'prelude.compaction')).toEqual({ pos: '37691.1', at: 1790812829123, kind: 'prelude.compaction', trigger: 'auto' })
+    expect(page.items.find((i) => i.kind === 'prelude.compaction')).toEqual({ pos: '37691.1', at: 1790812829123, offset: 37691, kind: 'prelude.compaction', trigger: 'auto' })
   })
 
   it('a cut block keeps truncated and total_bytes (text, tool_use, tool_result)', () => {
@@ -290,5 +295,26 @@ describe('Nexen golden page (spec §4.6)', () => {
     expect(noteOf('14558.2').stream).toBe('stderr')
     expect(noteOf('379249.1').text).toContain('Catch you later!')
     expect(notes.filter((n) => n.source !== 'bash_output').every((n) => n.stream === null)).toBe(true)
+  })
+})
+
+describe('prelude item offset', () => {
+  const page = (offset?: unknown, kind = 'prelude.compaction', payload: unknown = { trigger: 'auto' }) =>
+    sanitizePreludePage({ state: 'ok', items: [{ pos: '1.0', at: 1, kind, payload, ...(offset === undefined ? {} : { offset }) }] })!.items[0]
+
+  it('keeps a non-negative safe integer', () => {
+    expect(page(12).offset).toBe(12)
+    expect(page(0).offset).toBe(0)
+  })
+
+  it.each([[-1], [1.5], ['12'], [Number.MAX_SAFE_INTEGER + 2], [null], [undefined]])('turns %s into null without dropping the item', (v) => {
+    expect(page(v)).toMatchObject({ pos: '1.0', offset: null })
+  })
+
+  it('is set on every item kind', () => {
+    expect(page(7, 'prelude.segment', { entrypoint: 'cli' }).offset).toBe(7)
+    expect(page(7, 'prelude.note', { source: 's', text: 't' }).offset).toBe(7)
+    expect(page(7, 'tool_use', { tool_use_id: 'x' }).offset).toBe(7)
+    expect(page(7, 'user', { message: { content: 'hi' } }).offset).toBe(7)
   })
 })
