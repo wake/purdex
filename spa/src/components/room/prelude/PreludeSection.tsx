@@ -68,6 +68,9 @@ export default function PreludeSection({ view, status, done, error, keyPrefix, n
     [blocks, view, index, idOf],
   )
   // Room: runs of entries; chat: runs of blocks, a span by its first and last message.
+  // Known limit (#1614): an attachment-only first send is no opening line, so after a worker →
+  // worker rebuild a span can straddle the boundary and its later messages run under the earlier
+  // stint. Spans stay whole (ChatTurnBody grouping, search's blocks); enrichment joins by unique id, so they lose it, never mismatch.
   const runs = useMemo(() => {
     if (mode !== 'chat') return attributionRuns(view.entries, entryPoses, attribution)
     const blockPoses = (b: PreludeBlock): [string, string] => (b.kind === 'span' ? [posOf[b.start], posOf[b.end - 1]] : entryPoses(b.entry))

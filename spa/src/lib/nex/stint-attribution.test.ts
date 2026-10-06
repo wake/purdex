@@ -149,6 +149,7 @@ describe('attributionRuns', () => {
 
   it('chat: a span takes its first message\'s attribution and is keyed by its last message', () => {
     // Worker A rebuilt into A2 at 411382 with no marker: the span [394248.1, 411382.1] straddles the split.
+    // Known limit (#1614): the straddling tail runs under A; enrichment joins by unique id, so it loses enrichment, never mismatches.
     const A2: Stint = { id: 'exc_A2', boundary: 411382, createdAt: 2 }
     const split = attributeItems(items, [A, A2])
     const blocks = preludeBlocks(view)
