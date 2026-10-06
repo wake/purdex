@@ -30,19 +30,32 @@ const REASON_KEYS: Record<TerminatedReason, { title: string; desc: string }> = {
 const RECENT_WRITE_MS = 120_000
 
 /**
- * Whole seconds since `lastWriteAt` while that is under {@link RECENT_WRITE_MS}, re-counted every second; `null`
- * once it is not (or when there is no write time). The ticking stops when the window closes.
+ * The R-4-4 notice: whole seconds since `lastWriteAt` while that is under {@link RECENT_WRITE_MS}, re-counted every
+ * second; nothing once it is not, and the ticking stops with the window.
+ *
+ * Mounted keyed by `lastWriteAt`: a reopen that refreshes the pane's last write (R-4-18) remounts it, so its clock
+ * is read afresh — the count is right on the first render, not after a tick — and its interval starts again when
+ * the window has reopened.
  */
-function useSecondsSinceRecentWrite(lastWriteAt: number | undefined): number | null {
+function RecentWriteNotice({ lastWriteAt }: { lastWriteAt: number }) {
+  const t = useI18nStore((s) => s.t)
   const [now, setNow] = useState(() => Date.now())
-  const recent = lastWriteAt !== undefined && now - lastWriteAt < RECENT_WRITE_MS
+  const recent = now - lastWriteAt < RECENT_WRITE_MS
   useEffect(() => {
     if (!recent) return
     const id = setInterval(() => setNow(Date.now()), 1_000)
     return () => clearInterval(id)
   }, [recent])
+  if (!recent) return null
   // Clamped: a write time ahead of this clock (skew between the hosts) reads as "just now".
-  return recent ? Math.max(0, Math.floor((now - lastWriteAt) / 1_000)) : null
+  const seconds = Math.max(0, Math.floor((now - lastWriteAt) / 1_000))
+  return (
+    // Not a live region: it re-counts every second, and a screen reader would read every count out.
+    <p data-testid="terminated-recent-write" className="mb-6 flex items-center gap-1.5 text-sm text-status-warning">
+      <Warning size={16} className="shrink-0" />
+      {t('worker.rebuild.recent_write', { n: seconds })}
+    </p>
+  )
 }
 
 export function TerminatedPane({ content, tabId, paneId }: Props) {
@@ -87,7 +100,7 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
   const showChoice = handoffReady && !!sid && !!cwd
   const [choice, setChoice] = useState<RebuildMode>(content.conversation?.lastIn ?? 'terminal')
   const mode: RebuildMode = showChoice ? choice : 'terminal'
-  const recentWriteSeconds = useSecondsSinceRecentWrite(content.conversation?.lastWriteAt)
+  const lastWriteAt = content.conversation?.lastWriteAt
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inFlight = useRef(false)
@@ -147,13 +160,7 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
       icon={<SmileySad size={48} className="text-zinc-500 mb-4" />}
       title={t(keys.title)}
       description={t(keys.desc, { name: content.cachedName, title: content.conversation?.title ?? '' })}
-      detail={recentWriteSeconds === null ? undefined : (
-        // Not a live region: it re-counts every second, and a screen reader would read every count out.
-        <p data-testid="terminated-recent-write" className="mb-6 flex items-center gap-1.5 text-sm text-status-warning">
-          <Warning size={16} className="shrink-0" />
-          {t('worker.rebuild.recent_write', { n: recentWriteSeconds })}
-        </p>
-      )}
+      detail={lastWriteAt === undefined ? undefined : <RecentWriteNotice key={lastWriteAt} lastWriteAt={lastWriteAt} />}
       closeLabel={t('terminated.close_tab')}
       onClose={() => {
         closeTab(tabId)

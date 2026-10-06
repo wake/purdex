@@ -188,6 +188,47 @@ describe('openConversationRebuild — one tab per (host, S)', () => {
     expect(conversationTabs()).toHaveLength(1)
   })
 
+  // R-4-18: the notice warns about the row as it is when the user acts, so a reopen re-reads it.
+  it('a reopen refreshes the pane conversation snapshot from the row, and keeps every other field', async () => {
+    const id = await openConversationRebuild(H, row())
+    const before = leafContent(id)
+    const other = createTab({ kind: 'new-tab' })
+    addTab(other)
+    useTabStore.getState().setActiveTab(other.id)
+
+    const again = await openConversationRebuild(H, row({ last_activity_at: NOW - 20_000, title: 'Renamed', last_in: 'worker' }))
+
+    expect(again).toBe(id)
+    expect(useTabStore.getState().activeTabId).toBe(id)
+    expect(leafContent(id)).toEqual({
+      ...before,
+      conversation: { sessionId: S, title: 'Renamed', lastIn: 'worker', lastWriteAt: NOW - 20_000 },
+    })
+  })
+
+  it('the refresh lands on the split leaf that holds the pane, nowhere else', async () => {
+    const pane = conversationRebuildContent(H, row(), 'proj-2', GEN, 1)
+    const split: Tab = {
+      id: 'split-tab', pinned: false, locked: false, createdAt: 1,
+      layout: {
+        type: 'split', id: 's1', direction: 'h', sizes: [50, 50],
+        children: [
+          { type: 'leaf', pane: { id: 'primary', content: { kind: 'new-tab' } } },
+          { type: 'leaf', pane: { id: 'conv', content: pane } },
+        ],
+      },
+    }
+    addTab(split)
+
+    await openConversationRebuild(H, row({ last_activity_at: NOW - 5_000 }))
+
+    const layout = useTabStore.getState().tabs['split-tab'].layout
+    if (layout.type !== 'split') throw new Error('fixture: a split')
+    expect(layout.children[0]).toEqual(split.layout.type === 'split' ? split.layout.children[0] : null)
+    const conv = layout.children[1]
+    expect(conv.type === 'leaf' && conv.pane.content).toEqual({ ...pane, conversation: { ...pane.conversation, lastWriteAt: NOW - 5_000 } })
+  })
+
   it('two clicks while the name is still being worked out make one tab', async () => {
     let release: (home: string) => void = () => {}
     vi.mocked(hostHomeFor).mockReturnValue(new Promise((r) => { release = r }))

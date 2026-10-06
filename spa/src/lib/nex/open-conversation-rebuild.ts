@@ -11,7 +11,8 @@
 // empty session code is no binding to share with another pane.
 //
 // One tab per (host, S): `openSingletonTab` never matches `tmux-session` content and looks only at primary
-// panes, so the pane is looked for here, in every leaf of every tab.
+// panes, so the pane is looked for here, in every leaf of every tab. Found, it is selected with its `conversation`
+// re-read from the row (R-4-18).
 import { useTabStore } from '../../stores/useTabStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
@@ -36,17 +37,48 @@ export function hostTmuxGeneration(hostId: string): string {
   return stamps.size === 1 ? [...stamps][0] : ''
 }
 
-/** The tab whose layout holds — in any leaf — the conversation-ended pane for (hostId, S); S is case-insensitive. */
-export function findConversationRebuildTab(hostId: string, sessionId: string): string | null {
+/** A conversation-ended pane, where it is and what it shows now. */
+interface FoundConversationPane {
+  tabId: string
+  paneId: string
+  content: TmuxSessionContent & { conversation: NonNullable<TmuxSessionContent['conversation']> }
+}
+
+/** The leaf — in any tab, at any depth — holding the conversation-ended pane for (hostId, S); S is case-insensitive. */
+export function findConversationRebuildPane(hostId: string, sessionId: string): FoundConversationPane | null {
   const want = sessionId.toLowerCase()
   for (const [tabId, tab] of Object.entries(useTabStore.getState().tabs)) {
     for (const leaf of collectLeaves(tab.layout)) {
       const c = leaf.content
       if (c.kind === 'tmux-session' && c.hostId === hostId && c.terminated === 'conversation-ended'
-        && c.conversation?.sessionId.toLowerCase() === want) return tabId
+        && c.conversation && c.conversation.sessionId.toLowerCase() === want) {
+        return { tabId, paneId: leaf.id, content: { ...c, conversation: c.conversation } }
+      }
     }
   }
   return null
+}
+
+/**
+ * A reopen re-reads the row (R-4-18): the recently-written notice warns about the transcript as it is when the user
+ * acts (R-4-4, "the row's value at open time"), so the found pane takes the row's last write, title and last mode.
+ * Only `conversation` changes. `lastIn` is the preselection, i.e. the screen's INITIAL state: a mounted screen keeps
+ * the mode its user is on. Synchronous from the find, so the write lands on the content it was read from.
+ */
+function refreshConversation(found: FoundConversationPane, row: ConversationRow): void {
+  const prev = found.content.conversation
+  if (prev.lastWriteAt === row.last_activity_at && prev.title === row.title && prev.lastIn === row.last_in) return
+  useTabStore.getState().setPaneContent(found.tabId, found.paneId, {
+    ...found.content,
+    conversation: { ...prev, title: row.title, lastIn: row.last_in, lastWriteAt: row.last_activity_at },
+  })
+}
+
+/** Select the tab of a found pane, after bringing its conversation snapshot up to date with the row. */
+function reopen(found: FoundConversationPane, row: ConversationRow): string {
+  refreshConversation(found, row)
+  focusTabInWorkspace(found.tabId)
+  return found.tabId
 }
 
 /** The pane content for a conversation's rebuild tab (R-4-3). Values from the row as it is now. */
@@ -85,22 +117,16 @@ export function conversationRebuildContent(
  * screen for the conversation (R-4-3), and brings it on screen in its workspace.
  */
 export async function openConversationRebuild(hostId: string, row: ConversationRow): Promise<string> {
-  const existing = findConversationRebuildTab(hostId, row.session_id)
-  if (existing) {
-    focusTabInWorkspace(existing)
-    return existing
-  }
+  const existing = findConversationRebuildPane(hostId, row.session_id)
+  if (existing) return reopen(existing, row)
   // The name, as take-to-terminal names its session (handoff.ts `takeToTerminal`): the host config carries the
   // projects the slug is looked up from, and a `~/…` project needs the host's home to compare against the cwd.
   await useHostConfigStore.getState().ensureLoaded(hostId)
   const projects = useHostConfigStore.getState().byHost[hostId]?.projects ?? []
   const home = await hostHomeFor(hostId, projects)
   // Looked for again after the waits: a second click that arrived meanwhile selects the tab the first one made.
-  const opened = findConversationRebuildTab(hostId, row.session_id)
-  if (opened) {
-    focusTabInWorkspace(opened)
-    return opened
-  }
+  const opened = findConversationRebuildPane(hostId, row.session_id)
+  if (opened) return reopen(opened, row)
   const liveNames = (useSessionStore.getState().sessions[hostId] ?? []).map((s) => s.name)
   const name = nextProjectSessionName(slugForCwd(row.cwd ?? '', projects, home), liveNames)
   // `tmux-session` content is never a singleton match, so this always makes a new tab.

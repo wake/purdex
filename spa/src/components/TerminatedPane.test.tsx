@@ -15,7 +15,7 @@ import { rebuildAsWorker } from '../lib/nex/worker-rebuild'
 import { HandoffApiError } from '../lib/nex/handoff-api'
 import type { NexCapabilities } from '../lib/nex/types'
 import type { ConversationRow } from '../lib/nex/conversations-api'
-import { conversationRebuildContent } from '../lib/nex/open-conversation-rebuild'
+import { conversationRebuildContent, openConversationRebuild } from '../lib/nex/open-conversation-rebuild'
 import type { PaneContent, Tab, PaneRebuildRecord } from '../types/tab'
 
 vi.mock('../lib/nex/worker-rebuild', async (o) => ({ ...(await o<typeof import('../lib/nex/worker-rebuild')>()), rebuildAsWorker: vi.fn() }))
@@ -608,5 +608,50 @@ describe('TerminatedPane — a conversation-ended pane', () => {
     render(<TerminatedPane content={content} tabId={TAB_ID} paneId={PANE_ID} />)
     expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
     expect(screen.getByTestId('rebuild-action-set')).toBeInTheDocument()
+  })
+
+  describe('reopened from the row (R-4-18)', () => {
+    /** The screen as the app mounts it: re-rendered from the tab store, never remounted by a content write. */
+    function LivePane() {
+      const content = useTabStore((s) => findPane(s.tabs[TAB_ID].layout, PANE_ID)!.content) as Extract<PaneContent, { kind: 'tmux-session' }>
+      return <TerminatedPane content={content} tabId={TAB_ID} paneId={PANE_ID} />
+    }
+
+    function mountLive(over: Partial<ConversationRow> = {}) {
+      useWorkspaceStore.getState().reset()
+      setupTab(conversationRebuildContent(H, row(over), 'proj-2', '111:1000', 1))
+      return render(<LivePane />)
+    }
+
+    it('a newer last write on the row: the mounted screen counts from it at once, under the new title', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+      mountLive({ last_activity_at: NOW - 600_000 })
+      expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+      // A minute on the screen with nothing ticking, then the row is opened again: written 20 s before now.
+      act(() => { vi.advanceTimersByTime(60_000) })
+
+      await act(async () => { await openConversationRebuild(H, row({ last_activity_at: NOW + 40_000, title: 'Renamed' })) })
+
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('20 seconds ago')
+      expect(screen.getByText('Renamed')).toBeInTheDocument()
+      act(() => { vi.advanceTimersByTime(1_000) })
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('21 seconds ago')
+      act(() => { vi.advanceTimersByTime(99_000) })
+      expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+    })
+
+    it('the user switched to worker: the refresh keeps worker (preselection is the initial state only)', async () => {
+      mountLive({ last_in: 'terminal', last_activity_at: Date.now() - 600_000 })
+      expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+      fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+      expect(screen.getByTestId('rebuild-mode-worker')).toHaveAttribute('aria-checked', 'true')
+
+      await act(async () => { await openConversationRebuild(H, row({ last_in: 'terminal', last_activity_at: Date.now() - 20_000 })) })
+
+      expect(screen.getByTestId('terminated-recent-write')).toBeInTheDocument()
+      expect(screen.getByTestId('rebuild-mode-worker')).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByTestId('terminated-rebuild-worker')).toBeInTheDocument()
+    })
   })
 })
