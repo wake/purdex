@@ -284,6 +284,31 @@ describe('ExecutionsView', () => {
     expect(screen.queryByTestId('executions-loading')).toBeNull()
   })
 
+  it('lists live conversations only, one row each: terminated / archived rows hidden, the newer stint of a session wins', () => {
+    seedList([
+      row({ id: 'exc_dead', brief: 'dead', state: 'terminated', updated_at: NOW - 1 }),
+      row({ id: 'exc_gone', brief: 'gone', archived: true, updated_at: NOW - 2 }),
+      row({ id: 'exc_stint1', brief: 'stint one', session_id: 'S', created_at: 10, updated_at: NOW - 3 }),
+      row({ id: 'exc_stint2', brief: 'stint two', session_id: 'S', created_at: 20, updated_at: NOW - 4 }),
+    ])
+    render(<ExecutionsView hostId={H} isActive />)
+    const rows = screen.getAllByTestId('executions-row')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toHaveTextContent('stint two')
+    fireEvent.click(rows[0])
+    expect(openWorkerTab).toHaveBeenCalledWith({ kind: 'execution', executionId: 'exc_stint2', host: H })
+  })
+
+  it('items with no live row show the empty state', () => {
+    seedList([
+      row({ id: 'exc_dead', state: 'terminated' }),
+      row({ id: 'exc_gone', archived: true }),
+    ])
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.getByTestId('executions-empty')).toBeInTheDocument()
+    expect(screen.queryByTestId('executions-row')).toBeNull()
+  })
+
   it('loading skeleton while the first fetch is out', () => {
     seedList([], { phase: 'loading' })
     render(<ExecutionsView hostId={H} isActive />)
