@@ -39,6 +39,8 @@ import { useUndoToast } from '../../stores/useUndoToast'
 import { useExecutionSubscription } from '../../hooks/useExecutionSubscription'
 import { useExecutionPrelude } from '../../hooks/useExecutionPrelude'
 import { derivePrelude } from '../../lib/nex/prelude'
+import { attributeItems, isWorkerEntrypoint, NO_ATTRIBUTION } from '../../lib/nex/stint-attribution'
+import { useEntityStints } from '../../hooks/useEntityStints'
 import PreludeSection from '../room/prelude/PreludeSection'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
 import { useExecutionActions, type SendOptions } from '../../hooks/useExecutionActions'
@@ -47,7 +49,7 @@ import {
   canSend, composeWithAttachments, encodeImage, isAttachmentError, planAttachments, requestBytes, uploadErrorKey,
   PER_IMAGE_ERRORS, type Chip, type WireImageAttachment,
 } from '../../lib/nex/worker-upload'
-import { selectImageAttachments, selectTranscriptPrelude, useNexHostStore } from '../../stores/useNexHostStore'
+import { selectImageAttachments, selectPreludeItemOffset, selectTranscriptPrelude, useNexHostStore } from '../../stores/useNexHostStore'
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
@@ -116,6 +118,19 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   const preludeEligible = useNexHostStore(selectTranscriptPrelude(hostId)) !== null && !!st.summary?.resume_session_id
   const preludeApi = useExecutionPrelude(hostId, executionId)
   const preludeView = useMemo(() => derivePrelude(st.prelude.items), [st.prelude.items])
+  // Conversation entity spec §10.3: which earlier worker stint wrote each
+  // prelude line. Listed only when items carry offsets and a worker segment
+  // is loaded: without one nothing could be attributed, so no request.
+  const itemOffsetCap = useNexHostStore(selectPreludeItemOffset(hostId))
+  const hasWorkerSegment = useMemo(
+    () => st.prelude.items.some((it) => it.kind === 'prelude.segment' && isWorkerEntrypoint(it.entrypoint)),
+    [st.prelude.items],
+  )
+  const { stints, status: stintsStatus } = useEntityStints(hostId, st.summary, preludeEligible && itemOffsetCap && hasWorkerSegment)
+  const attribution = useMemo(
+    () => (stintsStatus === 'ok' ? attributeItems(st.prelude.items, stints) : NO_ATTRIBUTION),
+    [stintsStatus, st.prelude.items, stints],
+  )
   const lease = useExecutionLease(hostId, executionId)
   const { draft, actionPending, handleSend, handleInterrupt, restoreDraft } = useExecutionActions(hostId, executionId, lease)
   // Spec §9.2 (phase E): native images only when the host's capability
@@ -536,7 +551,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   const preludeNode = (
     <PreludeSection view={preludeView} status={st.prelude.status} done={st.prelude.done} error={st.prelude.error}
       keyPrefix={executionId} now={now} mode={chat ? 'chat' : 'room'} pages={st.prelude.pages}
-      onLoadOlder={preludeApi.loadOlder} onRetry={preludeApi.retry} />
+      onLoadOlder={preludeApi.loadOlder} onRetry={preludeApi.retry} attribution={attribution} />
   )
   const transcriptProps = {
     messages: st.messages, turnStarts: st.turnStarts, turnMeta: st.turnMeta, keyPrefix: executionId, showThinking,
@@ -590,7 +605,8 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
               view={chat ? 'chat' : 'room'} keyPrefix={executionId} turnStarts={st.turnStarts}
               onClose={closeSearch} focusRequest={focusRequest} onJump={onSearchJump}
               prelude={preludeEligible && st.prelude.status !== 'idle' && st.prelude.status !== 'none' ? preludeView : undefined}
-              preludeDone={st.prelude.done} onLoadAll={() => { preludeApi.retry(); return preludeApi.loadAll() }} />
+              preludeDone={st.prelude.done} onLoadAll={() => { preludeApi.retry(); return preludeApi.loadAll() }}
+              preludeRedraw={attribution} />
           )}
           {chat ? (
             <ChatTranscript {...transcriptProps}>

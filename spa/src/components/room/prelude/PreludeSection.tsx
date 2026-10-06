@@ -10,18 +10,23 @@
 // chat span every pos it holds, `data-prelude-poses` — the scroll memory's
 // anchor inside the prelude (#1534). On the element's own root: a wrapper
 // would be one more box (and margin) above turn 1.
+// The rows are drawn in runs of one attribution (conversation entity spec
+// §10.3: the earlier worker stint that wrote them, or none), a PreludeSegment
+// each, keyed like a span by its LAST pos. A segment is a Fragment, never a
+// wrapper element: the section's `space-y-4` spaces its direct children, the
+// scroll anchor reads `data-prelude-pos` off each row's own root, and a box
+// would add one more above turn 1. So attribution never changes the DOM.
 import { useCallback, useMemo, type ReactNode } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { indexOperations } from '../../../lib/nex/operations'
 import { classifyTurnOperations } from '../../../lib/nex/operation-status'
-import { chatToolsKey } from '../../../lib/nex/transcript-search'
-import type { PreludeEntry, PreludeState, PreludeView } from '../../../lib/nex/prelude'
-import { preludeBlocks, preludeId } from '../../../lib/nex/prelude'
-import { renderMessage, type RenderCtx } from '../render-message'
+import type { PreludeBlock, PreludeEntry, PreludeState, PreludeView } from '../../../lib/nex/prelude'
+import { preludeBlocks } from '../../../lib/nex/prelude'
+import { attributionRuns, NO_ATTRIBUTION, type Attribution } from '../../../lib/nex/stint-attribution'
+import type { RenderCtx } from '../render-message'
 import { FoldContext, useInheritedFoldMemory } from '../fold-context'
-import ChatTurnBody from '../../chat/ChatTurnBody'
 import PreludeMarker from './PreludeMarker'
-import PreludeNote from './PreludeNote'
+import PreludeSegment from './PreludeSegment'
 import PreludeSentinel from './PreludeSentinel'
 
 export interface PreludeSectionProps {
@@ -38,9 +43,13 @@ export interface PreludeSectionProps {
   pages: number
   onLoadOlder: () => void
   onRetry: () => void
+  /** Which earlier worker stint wrote each line, by pos (conversation entity spec §10.3); absent = none. */
+  attribution?: Attribution
 }
 
-export default function PreludeSection({ view, status, done, error, keyPrefix, now, mode, pages, onLoadOlder, onRetry }: PreludeSectionProps) {
+const entryPoses = (e: PreludeEntry): [string, string] => [e.pos, e.pos]
+
+export default function PreludeSection({ view, status, done, error, keyPrefix, now, mode, pages, onLoadOlder, onRetry, attribution = NO_ATTRIBUTION }: PreludeSectionProps) {
   const t = useI18nStore((s) => s.t)
   // Inherit the transcript's fold memory; a section mounted alone still folds.
   const folds = useInheritedFoldMemory()
@@ -58,6 +67,15 @@ export default function PreludeSection({ view, status, done, error, keyPrefix, n
     () => blocks.map((b) => (b.kind === 'span' ? classifyTurnOperations(view.messages, b, index, view.tools, idOf) : [])),
     [blocks, view, index, idOf],
   )
+  // Room: runs of entries; chat: runs of blocks, a span by its first and last message.
+  // Known limit (#1614): an attachment-only first send is no opening line, so after a worker →
+  // worker rebuild a span can straddle the boundary and its later messages run under the earlier
+  // stint. Spans stay whole (ChatTurnBody grouping, search's blocks); enrichment joins by unique id, so they lose it, never mismatch.
+  const runs = useMemo(() => {
+    if (mode !== 'chat') return attributionRuns(view.entries, entryPoses, attribution)
+    const blockPoses = (b: PreludeBlock): [string, string] => (b.kind === 'span' ? [posOf[b.start], posOf[b.end - 1]] : entryPoses(b.entry))
+    return attributionRuns(blocks, blockPoses, attribution)
+  }, [mode, view.entries, blocks, posOf, attribution])
   if (view.entries.length === 0 && (status === 'idle' || status === 'none')) return null
   const ctx: RenderCtx = { messages: view.messages, index, tools: view.tools, now, keyPrefix: `${keyPrefix}-prelude`, depth: 0, idOf }
 
@@ -72,39 +90,17 @@ export default function PreludeSection({ view, status, done, error, keyPrefix, n
     : status === 'gone' ? <div data-testid="prelude-gone" className="text-xs text-text-muted text-center">{t('worker.prelude.gone')}</div>
     : null
 
-  const entryNode = (e: Exclude<PreludeEntry, { kind: 'message' }>): ReactNode => {
-    const id = preludeId(e.pos)
-    if (e.kind === 'segment') {
-      const label = e.entrypoint === 'cli' ? t('worker.prelude.segment_cli')
-        : e.entrypoint.startsWith('sdk') ? t('worker.prelude.segment_headless')
-        : e.entrypoint
-      return <PreludeMarker key={id} testId="prelude-segment" label={label} pos={e.pos} />
-    }
-    if (e.kind === 'compaction') {
-      const label = e.trigger === 'auto' ? t('worker.prelude.compaction_auto')
-        : e.trigger === 'manual' ? t('worker.prelude.compaction_manual')
-        : t('worker.prelude.compaction')
-      return <PreludeMarker key={id} testId="prelude-compaction" label={label} pos={e.pos} />
-    }
-    return <PreludeNote key={id} id={id} pos={e.pos} source={e.source} text={e.text} truncated={e.truncated} totalBytes={e.totalBytes} stream={e.stream} />
-  }
-
   return (
     <FoldContext.Provider value={folds}>
       <section data-testid="worker-prelude" className="space-y-4">
         {status === 'ok' && !done && <PreludeSentinel onVisible={onLoadOlder} generation={pages} />}
         {top}
-        {mode === 'chat'
-          ? blocks.map((b, bi) => b.kind === 'entry'
-            ? entryNode(b.entry)
-            : (
-              <ChatTurnBody key={`${keyPrefix}-prelude-span-${view.ids[b.end - 1]}`} messages={view.messages} turn={b}
-                ops={spanOps[bi]} ctx={ctx} toolsKey={chatToolsKey(`${keyPrefix}-prelude`, view.ids[b.end - 1])}
-                interrupted={t('stream.interrupted')} preludePoses={posOf.slice(b.start, b.end)} />
-            ))
-          : view.entries.map((e) => (e.kind === 'message'
-            ? (index.childIndexes.has(e.m) ? null : renderMessage(view.messages[e.m], e.m, ctx, e.pos))
-            : entryNode(e)))}
+        {runs.map((r) => (mode === 'chat'
+          ? (
+            <PreludeSegment key={r.key} stintId={r.stintId} view={view} ctx={ctx} mode="chat" blocks={blocks.slice(r.start, r.end)}
+              spanOps={spanOps.slice(r.start, r.end)} keyPrefix={keyPrefix} posOf={posOf} />
+          )
+          : <PreludeSegment key={r.key} stintId={r.stintId} view={view} ctx={ctx} mode="room" entries={view.entries.slice(r.start, r.end)} />))}
         {/* The handoff into this worker is itself a switch (D2) and Nexen never sends a segment for the worker's own run. */}
         {view.entries.length > 0 && <PreludeMarker testId="prelude-handoff" label={t('worker.prelude.segment_headless')} />}
       </section>

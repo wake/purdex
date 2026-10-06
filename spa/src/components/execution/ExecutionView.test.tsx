@@ -21,7 +21,7 @@ import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
 
-vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn() }))
+vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
@@ -2134,6 +2134,75 @@ describe('ExecutionView — worker prelude', () => {
     fireEvent.scroll(box)
     await screen.findByText('earlier')
     expect(box.scrollTop).not.toBe(300)
+  })
+
+  // Conversation entity spec §10.3 (R-2a-1): the conversation's earlier stints
+  // are listed only when a loaded worker segment could be attributed to one.
+  describe('earlier stints', () => {
+    const S = '0a1b2c3d-1111-4222-8333-444455556666'
+    const realEnsure = useNexHostStore.getState().ensure
+    const seg = (pos: string, offset: number, entrypoint: string) => ({ pos, at: 1, offset, kind: 'prelude.segment', entrypoint })
+    const line = (pos: string, offset: number, text: string) => ({ pos, at: 1, offset, kind: 'user', msg: said(text) })
+    const items = [seg('1', 0, 'cli'), line('2', 0, 'in the terminal'), seg('3', 500, 'sdk-cli'), line('4', 500, 'in the worker')]
+    const draw = (itemOffset: boolean, prelude: unknown[] = items) => {
+      // `ensure` would re-resolve the (unregistered) test host and drop the seeded capabilities.
+      useNexHostStore.setState({
+        ensure: async () => {},
+        byHost: { [H]: { phase: 'ready', capabilities: { transcript_prelude: { ...CAP, ...(itemOffset ? { item_offset: true } : {}) }, list: { session_filter: true } } } },
+      } as never)
+      useExecutionStore.getState().setSummary(H, E, summary({ resume_session_id: S }) as never)
+      patchExec({ messages: [said('the brief')], turnStarts: [0] })
+      // The pane's own first page; also the earlier stint's boundary answer (total_bytes 500).
+      vi.mocked(api.fetchExecutionPrelude).mockResolvedValue({ state: 'ok', prevCursor: null, totalBytes: 500, items: prelude } as never)
+      return render(<ExecutionView {...base} isActive />)
+    }
+    const earlier = summary({ id: 'exc_0', state: 'terminated', resume_session_id: S, created_at: 1 })
+    afterEach(() => {
+      useNexHostStore.setState({ ensure: realEnsure })
+      vi.mocked(api.listExecutions).mockReset()
+    })
+
+    it('lists them by session id, archived included, once a worker segment is loaded and items carry offsets', async () => {
+      vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
+      draw(true)
+      await screen.findByText('in the worker')
+      await waitFor(() => expect(api.listExecutions).toHaveBeenCalledTimes(1))
+      expect(vi.mocked(api.listExecutions).mock.calls[0]).toEqual([H, expect.objectContaining({ sessionId: S, includeArchived: true })])
+      await waitFor(() => expect(api.fetchExecutionPrelude).toHaveBeenCalledWith(H, 'exc_0', { limit: 1 }))
+    })
+
+    it('no request without a loaded worker segment, nor without the item_offset capability', async () => {
+      const { unmount } = draw(true, items.slice(0, 2))
+      await screen.findByText('in the terminal')
+      await act(async () => {})
+      unmount()
+      useExecutionStore.setState({ executions: {} })
+      useExecutionStore.getState().setHistoryLoaded(H, E, true)
+      draw(false)
+      await screen.findByText('in the worker')
+      await act(async () => {})
+      expect(api.listExecutions).not.toHaveBeenCalled()
+    })
+
+    it('listed, unavailable or not listed at all: the very same prelude DOM (§10.6)', async () => {
+      const html = async (itemOffset: boolean, settled: () => void = () => {}) => {
+        useExecutionStore.setState({ executions: {} })
+        useExecutionStore.getState().setHistoryLoaded(H, E, true)
+        const { unmount } = draw(itemOffset)
+        await screen.findByText('in the worker')
+        await waitFor(settled)
+        await act(async () => {})
+        const out = screen.getByTestId('worker-prelude').outerHTML
+        unmount()
+        return out
+      }
+      const plain = await html(false)
+      vi.mocked(api.listExecutions).mockRejectedValue(new Error('down'))
+      expect(await html(true, () => expect(api.listExecutions).toHaveBeenCalled())).toBe(plain)
+      // Listed: exc_0's boundary (500) attributes the worker segment to it, and still nothing shows.
+      vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
+      expect(await html(true, () => expect(api.fetchExecutionPrelude).toHaveBeenCalledWith(H, 'exc_0', { limit: 1 }))).toBe(plain)
+    })
   })
 })
 

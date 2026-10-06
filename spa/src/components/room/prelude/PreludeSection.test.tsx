@@ -9,6 +9,7 @@ import type { StreamMessage } from '../../../lib/nex/message-types'
 import ChatTranscript from '../../chat/ChatTranscript'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import golden from '../../../lib/nex/__fixtures__/prelude-golden-nexen.json'
+import real from '../../../lib/nex/__fixtures__/prelude-06GGS8J1YKZCPF4BRXZTX764F4.json'
 
 const m = (pos: string, type: 'user' | 'assistant', content: unknown[]): PreludeItem =>
   ({ offset: null, pos, at: 1, kind: type, msg: { type, parent_tool_use_id: null, message: { role: type, content, stop_reason: null } } as unknown as StreamMessage })
@@ -657,5 +658,117 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection pasted te
     expect(userLines()).toHaveLength(0)
     expect(screen.getAllByTestId('prelude-truncated').map((e) => e.textContent)).toEqual(['Too long — showing the first 64 KB of 75 KB'])
     expect(screen.getByTestId('worker-prelude').textContent).not.toContain('pasted_content')
+  })
+})
+
+// Conversation entity spec §10.3: the rows are drawn in runs of one
+// attribution, a PreludeSegment each — a Fragment, so the DOM never shows it.
+describe('PreludeSection runs of attribution (§10.3)', () => {
+  const view = derivePrelude(sanitizePreludePage(real)!.items)
+  // Worker A's segment (the capture's own) and its two lines, and two later lines given to B.
+  const attribution = new Map([
+    ...['394248.0', '394248.1', '411382.1'].map((p) => [p, 'exc_A'] as const),
+    ...['447031.1', '448274.1'].map((p) => [p, 'exc_B'] as const),
+  ])
+  /** Per row of the section: its testid, pos, poses and every testid inside it, in order. */
+  const rows = () => [...screen.getByTestId('worker-prelude').children].map((c) => [
+    c.getAttribute('data-testid') ?? '·',
+    c.getAttribute('data-prelude-pos') ?? '-',
+    ...(c.hasAttribute('data-prelude-poses') ? [`[${c.getAttribute('data-prelude-poses')}]`] : []),
+    ...[...c.querySelectorAll('[data-testid]')].map((e) => e.getAttribute('data-testid')),
+  ].join(' '))
+  const draw = (mode: 'room' | 'chat', a?: ReadonlyMap<string, string>) => {
+    const { unmount } = render(<PreludeSection {...base} mode={mode} view={view} status="ok" done={false} {...(a ? { attribution: a } : {})} />)
+    const out = { html: screen.getByTestId('worker-prelude').outerHTML, rows: rows() }
+    unmount()
+    return out
+  }
+
+  it('room: an unattributed prelude draws as it did before runs existed', () => {
+    expect(draw('room').rows).toMatchInlineSnapshot(`
+      [
+        "prelude-sentinel -",
+        "prelude-segment 22485.0",
+        "· 22485.1 room-user-line room-user-prefix",
+        "· 198497.1 operation-block op-dot op-name op-arg op-duration op-input-toggle op-rail fold-body",
+        "· 200316.1",
+        "· 322459.1 room-prose",
+        "prelude-bash-input 325664.1",
+        "prelude-note-bash_output 326143.1 fold-body",
+        "· 329531.1 room-prose",
+        "· 333903.1 room-user-line room-user-prefix",
+        "· 341355.1 operation-block op-dot op-name op-arg op-input-toggle op-rail fold-body",
+        "· 343241.1",
+        "· 348261.1 room-prose",
+        "· 351605.1 room-user-line room-user-prefix",
+        "· 355768.1 operation-block op-dot op-name op-arg op-input-toggle op-rail fold-body",
+        "· 358406.1",
+        "· 363145.1 room-prose",
+        "prelude-task 366929.1",
+        "· 368019.1 operation-block op-dot op-name op-arg op-input-toggle op-rail fold-body",
+        "· 370091.1",
+        "· 373374.1 room-prose",
+        "· 376642.1 room-user-line room-user-prefix",
+        "· 377974.1 operation-block op-dot op-name op-arg op-duration op-input-toggle op-rail fold-body",
+        "· 380381.1",
+        "· 381826.1 room-user-line room-user-prefix",
+        "· 383631.1 operation-block op-dot op-name op-arg op-input-toggle op-rail fold-body",
+        "· 385439.1",
+        "· 387451.1 room-prose",
+        "· 392609.1 room-command",
+        "prelude-note-command_output 393190.1 fold-body",
+        "prelude-segment 394248.0",
+        "· 394248.1 room-user-line room-user-prefix",
+        "· 411382.1 room-prose",
+        "prelude-segment 415815.0",
+        "· 415815.1 room-user-line room-user-prefix",
+        "· 437272.1 operation-block op-dot op-name op-arg op-duration op-input-toggle op-rail fold-body",
+        "· 439033.1",
+        "· 443629.1 room-prose",
+        "· 447031.1 room-user-line room-user-prefix",
+        "· 448274.1 room-prose",
+        "· 453523.1 room-command",
+        "prelude-note-command_output 454104.1 fold-body",
+        "prelude-handoff -",
+      ]
+    `)
+  })
+
+  it('chat: an unattributed prelude draws as it did before runs existed', () => {
+    expect(draw('chat').rows).toMatchInlineSnapshot(`
+      [
+        "prelude-sentinel -",
+        "prelude-segment 22485.0",
+        "· 22485.1 [22485.1 198497.1 200316.1 322459.1] chat-bubble-user chat-tools-line chat-bubble-agent room-prose",
+        "prelude-bash-input 325664.1",
+        "prelude-note-bash_output 326143.1 fold-body",
+        "· 329531.1 [329531.1] chat-bubble-agent room-prose",
+        "· 333903.1 [333903.1 341355.1 343241.1 348261.1] chat-bubble-user chat-tools-line chat-bubble-agent room-prose",
+        "· 351605.1 [351605.1 355768.1 358406.1 363145.1] chat-bubble-user chat-tools-line chat-bubble-agent room-prose",
+        "prelude-task 366929.1",
+        "· 368019.1 [368019.1 370091.1 373374.1] chat-tools-line chat-bubble-agent room-prose",
+        "· 376642.1 [376642.1 377974.1 380381.1] chat-bubble-user chat-tools-line",
+        "· 381826.1 [381826.1 383631.1 385439.1 387451.1] chat-bubble-user chat-tools-line chat-bubble-agent room-prose",
+        "· 392609.1 [392609.1] chat-bubble-user",
+        "prelude-note-command_output 393190.1 fold-body",
+        "prelude-segment 394248.0",
+        "· 394248.1 [394248.1 411382.1] chat-bubble-user chat-bubble-agent room-prose",
+        "prelude-segment 415815.0",
+        "· 415815.1 [415815.1 437272.1 439033.1 443629.1] chat-bubble-user chat-tools-line chat-bubble-agent room-prose",
+        "· 447031.1 [447031.1 448274.1] chat-bubble-user chat-bubble-agent room-prose",
+        "· 453523.1 [453523.1] chat-bubble-user",
+        "prelude-note-command_output 454104.1 fold-body",
+        "prelude-handoff -",
+      ]
+    `)
+  })
+
+  it.each<['room' | 'chat']>([['room'], ['chat']])('%s: an attributed prelude is the very same DOM: elements, testids, attributes, order', (mode) => {
+    const plain = draw(mode)
+    const attributed = draw(mode, attribution)
+    expect(attributed.rows).toEqual(plain.rows)
+    expect(attributed.html).toBe(plain.html)
+    // An empty attribution (the stint list unavailable) is the same as none.
+    expect(draw(mode, new Map()).html).toBe(plain.html)
   })
 })
