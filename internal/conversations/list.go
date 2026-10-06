@@ -7,6 +7,7 @@
 package conversations
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -45,7 +46,10 @@ func sessionIDFromName(name string) (string, bool) {
 // skipped. A root that cannot be read returns err (R-4-1). A slug dir that
 // cannot be read is skipped and returned in unreadable (R-4-7); so is a slug
 // symlink whose target cannot be stat'ed (a dangling link, an unmounted
-// volume), since nothing under it can be shown to be gone. When one session
+// volume), since nothing under it can be shown to be gone. A slug with a
+// "<uuid>.jsonl" member whose lstat fails other than with "not exist"
+// (EACCES, EIO, …) is returned in unreadable too, once, and the entries it
+// did read are kept: that member may be a live transcript. When one session
 // id appears twice, the larger MtimeMs wins (the first one listed on a tie).
 // Paths are under root as given, not resolved; entries are sorted by
 // SessionID and unreadable in listing order.
@@ -76,15 +80,8 @@ func ListRoot(root string) (entries []Entry, unreadable []string, err error) {
 			unreadable = append(unreadable, dir)
 			continue
 		}
-		for _, file := range files {
-			e, ok := transcriptEntry(dir, file)
-			if !ok {
-				continue
-			}
-			if old, dup := byID[e.SessionID]; dup && old.MtimeMs >= e.MtimeMs {
-				continue
-			}
-			byID[e.SessionID] = e
+		if addSlug(byID, dir, files) {
+			unreadable = append(unreadable, dir)
 		}
 	}
 	entries = make([]Entry, 0, len(byID))
@@ -95,19 +92,50 @@ func ListRoot(root string) (entries []Entry, unreadable []string, err error) {
 	return entries, unreadable, nil
 }
 
-// transcriptEntry is the Entry of one slug dir member, and false when it is
-// not a transcript: a name that is not "<uuid>.jsonl", a symlink, a dir or
-// any other non-regular file, or one gone before its lstat.
-func transcriptEntry(dir string, file fs.DirEntry) (Entry, bool) {
+// addSlug adds the transcripts among one slug dir's members to byID (the
+// larger MtimeMs wins on a duplicate id) and reports whether any member
+// could not be told apart (transcriptEntry's err), which makes the slug
+// unreadable. The other members are added either way.
+func addSlug(byID map[string]Entry, dir string, files []fs.DirEntry) (unknown bool) {
+	for _, file := range files {
+		e, ok, err := transcriptEntry(dir, file)
+		if err != nil {
+			unknown = true
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if old, dup := byID[e.SessionID]; dup && old.MtimeMs >= e.MtimeMs {
+			continue
+		}
+		byID[e.SessionID] = e
+	}
+	return unknown
+}
+
+// transcriptEntry is the Entry of one slug dir member. ok is false, with a
+// nil err, when the member is definitely not a transcript: a name that is
+// not "<uuid>.jsonl", a symlink, a dir or any other non-regular file, or a
+// file removed since the listing (its lstat says it does not exist). err is
+// set when that cannot be told: the lstat of a "<uuid>.jsonl" member failed
+// otherwise (EACCES, EIO, …).
+func transcriptEntry(dir string, file fs.DirEntry) (e Entry, ok bool, err error) {
 	id, ok := sessionIDFromName(file.Name())
 	if !ok {
-		return Entry{}, false
+		return Entry{}, false, nil
 	}
 	fi, err := file.Info() // lstat: a symlink is not followed
-	if err != nil || !fi.Mode().IsRegular() {
-		return Entry{}, false
+	if errors.Is(err, fs.ErrNotExist) {
+		return Entry{}, false, nil
 	}
-	return entryOf(id, filepath.Join(dir, file.Name()), fi), true
+	if err != nil {
+		return Entry{}, false, fmt.Errorf("conversations: stat %s: %w", filepath.Join(dir, file.Name()), err)
+	}
+	if !fi.Mode().IsRegular() {
+		return Entry{}, false, nil
+	}
+	return entryOf(id, filepath.Join(dir, file.Name()), fi), true, nil
 }
 
 func entryOf(id, path string, fi fs.FileInfo) Entry {
