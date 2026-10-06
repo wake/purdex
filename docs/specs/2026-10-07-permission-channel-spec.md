@@ -13,7 +13,7 @@ Today a handed-off conversation runs fully trusted: the `handoff` profile is `by
 | # | Decision |
 |---|---|
 | PC1 | **Build it.** A handoff offers a second mode, **「需要核准」**. **「完全放行」 stays the default.** |
-| PC2 | The user answers **in the worker pane**, with 同意 / 拒絕. The **tab label and the activity-bar list show 「等待核准」**. A phone works by opening Purdex in its browser. **No push notifications.** |
+| PC2 | The user answers **in the worker pane**, with 同意 / 拒絕. The **tab label and the activity-bar list show 「等待核准」**. ~~A phone works by opening Purdex in its browser.~~ **Amended 2026-10-07 (user):** Purdex ships only as the **Mac App** and an **iOS App**; the standalone web version is withdrawn. So v1 answers only in the Mac App, and the phone answers once the iOS App exists, using the same Nexen API. **No push notifications.** |
 | PC3 | **By default an unanswered request waits forever**, and the UI keeps showing 「等待核准中」. An **optional setting** denies a request automatically after N minutes. |
 | PC4 | **No "always allow this" in v1.** |
 
@@ -142,7 +142,7 @@ How it behaves:
 - After an answer, or on any N2 terminal event, the card goes away.
 - A 409 `permission_not_pending` closes the card quietly, because the request has already ended.
 
-It must work in a phone browser: the card stacks vertically, and both buttons are full width.
+The card targets the Mac App window. No phone-browser layout is required (PC2 as amended).
 
 **5.4 Showing 「等待核准」 (PC2), and the Q1 race.**
 - **Where it shows:**
@@ -172,6 +172,7 @@ When a request expires, the pane shows a muted line:「已逾時自動拒絕（N
 - Push notifications (PC2).
 - The asking mode for New Tab or other non-handoff starts.
 - Showing or editing `updatedInput`; an allow always sends the request's own input.
+- Answering from a phone. That comes with the iOS App, which consumes the same Nexen endpoints (§4 N3) and capability (N8).
 
 ## 6. Tests (both repos, each in its own plan)
 
@@ -195,11 +196,10 @@ Plus one gated real-CLI test, mirroring E2.
 - the tab-label and list state;
 - the timeout setting reaching the handoff body;
 - the Q1 / exit race tests of §5.4;
-- the phone layout.
 
 **Acceptance on mlab.** Hand off a throwaway session in 需要核准 mode, then:
 - ask it to run a Bash command;
-- approve it from a narrow viewport;
+- approve it in the Mac App;
 - deny a second one with a note, and confirm the model sees the note;
 - set a 5-minute timeout on a third, and confirm it expires.
 
