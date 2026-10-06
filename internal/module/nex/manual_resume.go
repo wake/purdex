@@ -305,26 +305,30 @@ func (m *Module) reconcileTerminalOwners(ctx context.Context) {
 	if err != nil {
 		m.logf("nex: owner reconcile: worker scan: %v (re-checking %d found)", err, len(workers))
 	}
+	// Grouped and de-duplicated by the normalized id; the terminal lookup is
+	// case-sensitive, so each group keeps the spelling of the first row seen.
 	groups := map[string][]store.Execution{}
+	spelling := map[string]string{}
 	var order []string
 	for _, w := range workers {
 		for i, sid := range []string{w.SessionID, w.ResumeSessionID} {
 			if sid == "" || (i == 1 && strings.EqualFold(sid, w.SessionID)) {
 				continue
 			}
-			sid = store.NormalizeResumeSessionID(sid)
-			if _, ok := groups[sid]; !ok {
-				order = append(order, sid)
+			key := store.NormalizeResumeSessionID(sid)
+			if _, ok := groups[key]; !ok {
+				order = append(order, key)
+				spelling[key] = sid
 			}
-			groups[sid] = append(groups[sid], w)
+			groups[key] = append(groups[key], w)
 		}
 	}
 	done := map[string]bool{}
-	for _, sid := range order {
+	for _, key := range order {
 		if m.q1Halted(ctx) {
 			return
 		}
-		group := groups[sid]
+		sid, group := spelling[key], groups[key]
 		// The tmux session name is unknown on this path (agent.TerminalSession
 		// has no such field), so nex-worker-exited carries tmux_session "";
 		// the SPA toast (Task 18) must fall back when it is empty.

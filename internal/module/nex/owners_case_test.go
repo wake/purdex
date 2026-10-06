@@ -36,6 +36,20 @@ func TestManualResume_ExitsAnUpperCaseStoredRow(t *testing.T) {
 	}
 }
 
+// The terminal lookup is case-sensitive (agent frames: WHERE session_id = ?),
+// so the reconcile must ask with the id as the row spells it.
+func TestReconcile_LooksTerminalUpByTheIDAsSeen(t *testing.T) {
+	up := strings.ToUpper(tS)
+	env := newHandoffEnv(t)
+	verifiedTerminals(env, up)
+	env.svc.lease = store.Lease{ID: "L"}
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, up, "", 1)}
+	env.m.onSessionStart(agent.SessionStartEvent{Overflow: true})
+	if ids := archivedIDs(env); len(ids) != 1 || ids[0] != "E1" {
+		t.Fatalf("archived = %v, want E1", ids)
+	}
+}
+
 // One session in two cases is one reconcile group, not two.
 func TestReconcile_GroupsSessionIDsCaseInsensitively(t *testing.T) {
 	env := newHandoffEnv(t)
