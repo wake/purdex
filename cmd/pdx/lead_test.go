@@ -140,6 +140,7 @@ type fakeTeamDaemon struct {
 	createStatus    int
 	dropFirstCreate bool
 	openID          string
+	refuseCode      string // the 409 body's error code; empty means request_open
 	final           team.Approval
 	openUntil       int
 	hold            bool
@@ -175,7 +176,7 @@ func (f *fakeTeamDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.creates = append(f.creates, req)
 		n := len(f.creates)
-		status, openID, drop := f.createStatus, f.openID, f.dropFirstCreate
+		status, openID, drop, refuse := f.createStatus, f.openID, f.dropFirstCreate, f.refuseCode
 		f.mu.Unlock()
 		if drop && n == 1 {
 			// The body was read: the daemon may have applied it. Then the
@@ -187,6 +188,10 @@ func (f *fakeTeamDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if status == http.StatusConflict {
 			w.WriteHeader(status)
+			if refuse != "" && refuse != team.ErrRequestOpen {
+				json.NewEncoder(w).Encode(team.APIError{Error: refuse})
+				return
+			}
 			json.NewEncoder(w).Encode(team.APIError{Error: team.ErrRequestOpen, Approval: &team.Approval{ID: openID, State: team.StateOpen}})
 			return
 		}
@@ -259,12 +264,19 @@ func driveLead(t *testing.T, ctx context.Context, d http.Handler, args ...string
 // driveLeadWith is driveLead with the client options chosen by the test.
 func driveLeadWith(t *testing.T, ctx context.Context, d http.Handler, opts []daemonclient.Option, args ...string) (int, string, string) {
 	t.Helper()
+	return driveLeadHook(t, ctx, d, opts, nil, args...)
+}
+
+// driveLeadHook is driveLeadWith with the onCancelled hook (production: the
+// signal.NotifyContext stop func) chosen by the test.
+func driveLeadHook(t *testing.T, ctx context.Context, d http.Handler, opts []daemonclient.Option, onCancelled func(), args ...string) (int, string, string) {
+	t.Helper()
 	srv := httptest.NewServer(d)
 	defer srv.Close()
 	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
 	var stdout, stderr bytes.Buffer
 	full := append(append([]string{"request"}, args...), "--config", cfgPath)
-	code := runLeadCmd(ctx, full, leadEnv(), &stdout, &stderr, fixedID(), opts...)
+	code := runLeadCmd(ctx, full, leadEnv(), &stdout, &stderr, fixedID(), onCancelled, opts...)
 	return code, stdout.String(), stderr.String()
 }
 
@@ -297,7 +309,7 @@ func TestRunLeadCmd_UsageErrorsExit2BeforeConfig(t *testing.T) {
 			before := atomic.LoadInt64(&reqCount)
 			args := append(append([]string{}, tc.args...), "--config", cfgPath)
 			var stdout, stderr bytes.Buffer
-			code := runLeadCmd(context.Background(), args, leadEnv(), &stdout, &stderr, fixedID(), leadClockOpt())
+			code := runLeadCmd(context.Background(), args, leadEnv(), &stdout, &stderr, fixedID(), nil, leadClockOpt())
 			if code != ExitUsage {
 				t.Errorf("exit code = %d, want %d; stderr=%q", code, ExitUsage, stderr.String())
 			}
@@ -323,7 +335,7 @@ func TestRunLeadCmd_NoInboxExit1(t *testing.T) {
 	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
 	var stdout, stderr bytes.Buffer
 	code := runLeadCmd(context.Background(), []string{"request", "--reason", "x", "--config", cfgPath},
-		fakeGetenv(nil), &stdout, &stderr, fixedID(), leadClockOpt())
+		fakeGetenv(nil), &stdout, &stderr, fixedID(), nil, leadClockOpt())
 	if code != ExitError || !strings.Contains(stderr.String(), "CLAUDE_CODE_MESSAGING_SOCKET") ||
 		!strings.HasPrefix(stderr.String(), "pdx lead:") {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
@@ -415,6 +427,44 @@ func TestRunLeadCmd_WaitFlagSetsWaitS(t *testing.T) {
 	}
 }
 
+// A positive --wait below one second would truncate to wait_s 0, which the
+// body omits (omitempty) and the daemon reads as its default. That is a
+// usage error (exit 2) before any config load or request; --wait 1s is the
+// smallest value and goes out as wait_s 1.
+func TestRunLeadCmd_WaitBelowOneSecondIsUsageError(t *testing.T) {
+	var reqCount int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&reqCount, 1)
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	for _, wait := range []string{"500ms", "999ms"} {
+		t.Run(wait, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runLeadCmd(context.Background(), []string{"request", "--reason", "r", "--wait", wait, "--config", cfgPath},
+				leadEnv(), &stdout, &stderr, fixedID(), nil, leadClockOpt())
+			if code != ExitUsage || stdout.String() != "" {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "pdx lead: --wait must be at least 1s") {
+				t.Errorf("stderr = %q, want the at-least-1s line", stderr.String())
+			}
+			if n := atomic.LoadInt64(&reqCount); n != 0 {
+				t.Errorf("server saw %d request(s), want 0", n)
+			}
+		})
+	}
+
+	d := newFakeTeamDaemon(team.Approval{State: team.StateApproved, Grant: &team.Grant{MaxMembers: 3}})
+	if code, _, stderr := driveLead(t, context.Background(), d, "--reason", "r", "--wait", "1s"); code != ExitOK {
+		t.Fatalf("--wait 1s: code=%d stderr=%q", code, stderr)
+	}
+	if creates, _, _, _ := d.snapshot(); len(creates) != 1 || creates[0].WaitS != 1 {
+		t.Errorf("--wait 1s: create body = %+v, want wait_s 1", creates)
+	}
+}
+
 func TestRunLeadCmd_ApprovedWithoutGrantFallsBackToPayload(t *testing.T) {
 	payload, _ := json.Marshal(team.LeadPayload{Reason: "r", MaxMembers: 3, Roots: []string{"/w"}})
 	d := newFakeTeamDaemon(team.Approval{State: team.StateApproved, Payload: payload})
@@ -460,6 +510,36 @@ func TestRunLeadCmd_RequestOpenExit13(t *testing.T) {
 	}
 }
 
+// Every team-rule refusal of spec §14 is exit 13 with a stderr line naming
+// the code; a 409 with a code the table does not know stays exit 1.
+func TestRunLeadCmd_RuleRefusalsExit13(t *testing.T) {
+	cases := []struct {
+		code string
+		want int
+	}{
+		{team.ErrRequestOpen, ExitRefused},
+		{team.ErrAlreadyLead, ExitRefused},
+		{team.ErrMemberCannotLead, ExitRefused},
+		{"some_future_rule", ExitError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.code, func(t *testing.T) {
+			d := newFakeTeamDaemon(team.Approval{})
+			d.createStatus, d.openID, d.refuseCode = http.StatusConflict, "open-1", tc.code
+			code, stdout, stderr := driveLead(t, context.Background(), d, "--reason", "r")
+			if code != tc.want || stdout != "" {
+				t.Fatalf("code=%d want %d stdout=%q stderr=%q", code, tc.want, stdout, stderr)
+			}
+			if !strings.Contains(stderr, tc.code) {
+				t.Errorf("stderr = %q, want it to name %q", stderr, tc.code)
+			}
+			if _, polls, _, _ := d.snapshot(); len(polls) != 0 {
+				t.Errorf("polled a refused request: %v", polls)
+			}
+		})
+	}
+}
+
 func TestRunLeadCmd_BadRequestExit1(t *testing.T) {
 	d := newFakeTeamDaemon(team.Approval{})
 	d.createStatus = http.StatusBadRequest
@@ -490,6 +570,40 @@ func TestRunLeadCmd_CancelOnCtxSendsDelete(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "已取消申請（"+fixedID()()+"）") {
 		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+// The first signal cancels ctx; before the best-effort DELETE goes out the
+// command must hand signal handling back to the runtime (onCancelled is the
+// signal.NotifyContext stop func in production), so a second Ctrl-C during
+// the 3 s DELETE terminates the process instead of being swallowed.
+func TestRunLeadCmd_FirstSignalRestoresDefaultHandling(t *testing.T) {
+	d := newFakeTeamDaemon(team.Approval{})
+	d.hold = true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-d.pollStarted
+		cancel()
+	}()
+	restored, deletesAtRestore := 0, -1
+	restore := func() {
+		restored++
+		_, _, deletes, _ := d.snapshot()
+		deletesAtRestore = len(deletes)
+	}
+	code, stdout, stderr := driveLeadHook(t, ctx, d, []daemonclient.Option{leadClockOpt()}, restore, "--reason", "r")
+	if code != ExitCancelled || stdout != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if restored != 1 {
+		t.Fatalf("onCancelled ran %d time(s), want exactly once", restored)
+	}
+	if deletesAtRestore != 0 {
+		t.Errorf("DELETE had already reached the daemon when onCancelled ran (deletes=%d), want 0", deletesAtRestore)
+	}
+	if _, _, deletes, _ := d.snapshot(); len(deletes) != 1 {
+		t.Errorf("deletes = %v, want the request id exactly once after onCancelled", deletes)
 	}
 }
 
@@ -535,7 +649,7 @@ func TestRunLeadCmd_RefusedConnectionExit20(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := runLeadCmd(context.Background(), []string{"request", "--reason", "r", "--config", cfgPath},
-		leadEnv(), &stdout, &stderr, fixedID(), leadClockOpt())
+		leadEnv(), &stdout, &stderr, fixedID(), nil, leadClockOpt())
 	if code != ExitUnavailable || stdout.Len() != 0 {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}

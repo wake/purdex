@@ -42,11 +42,23 @@ const (
 )
 
 // runLead is the `pdx lead` switch target. SIGINT and SIGTERM cancel ctx,
-// which runLeadCmd turns into a DELETE and exit 12.
+// which runLeadCmd turns into a DELETE and exit 12. stop is handed in as
+// onCancelled so the first signal restores default handling before the
+// DELETE: a second Ctrl-C then terminates the process instead of being
+// swallowed for the DELETE's 3 s.
 func runLead(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	os.Exit(runLeadCmd(ctx, args, os.Getenv, os.Stdout, os.Stderr, uuid.NewString))
+	os.Exit(runLeadCmd(ctx, args, os.Getenv, os.Stdout, os.Stderr, uuid.NewString, stop))
+}
+
+// leadRefusalCodes are the team-rule refusals of spec §14 that a create can
+// answer with (409): all of them are ExitRefused. Later rules this command
+// cannot receive are not listed; an unknown code stays ExitError.
+var leadRefusalCodes = map[string]bool{
+	team.ErrRequestOpen:      true,
+	team.ErrAlreadyLead:      true,
+	team.ErrMemberCannotLead: true,
 }
 
 // leadRequestArgs is the parsed, validated `pdx lead request` invocation.
@@ -96,6 +108,11 @@ func parseLeadRequestArgs(args []string, stderr io.Writer) (leadRequestArgs, boo
 	if a.wait <= 0 || a.wait > time.Duration(team.MaxWaitS)*time.Second {
 		return reject(fmt.Sprintf("--wait 必須大於 0 且不超過 %ds", team.MaxWaitS))
 	}
+	// wait_s is whole seconds and omitted when 0, so a sub-second --wait
+	// would silently become the daemon's default.
+	if a.wait < time.Second {
+		return reject("--wait must be at least 1s")
+	}
 	for _, r := range roots {
 		abs, err := filepath.Abs(r)
 		if err != nil {
@@ -108,10 +125,12 @@ func parseLeadRequestArgs(args []string, stderr io.Writer) (leadRequestArgs, boo
 
 // runLeadCmd implements `pdx lead request` (spec §6.1) and returns the exit
 // code (spec §14). Grammar rejections return 2 before any config load or
-// request. newID makes the request id; clientOpts are appended to the
-// daemonclient options so tests can inject a fake clock and transport.
+// request. newID makes the request id; onCancelled (may be nil) runs once
+// when ctx is cancelled, before the best-effort DELETE; clientOpts are
+// appended to the daemonclient options so tests can inject a fake clock and
+// transport.
 func runLeadCmd(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer,
-	newID func() string, clientOpts ...daemonclient.Option) int {
+	newID func() string, onCancelled func(), clientOpts ...daemonclient.Option) int {
 	if len(args) == 0 || args[0] != "request" {
 		fmt.Fprintln(stderr, leadUsage)
 		return ExitUsage
@@ -157,7 +176,7 @@ func runLeadCmd(ctx context.Context, args []string, getenv func(string) string, 
 	if err != nil {
 		if ctx.Err() != nil {
 			// The signal arrived mid-create; the row may exist, so cancel it.
-			return leadCancel(client, id, stderr)
+			return leadCancel(client, id, stderr, onCancelled)
 		}
 		return leadReportErr(err, stderr)
 	}
@@ -165,14 +184,14 @@ func runLeadCmd(ctx context.Context, args []string, getenv func(string) string, 
 	hung := 0
 	for ap.State == team.StateOpen {
 		if ctx.Err() != nil {
-			return leadCancel(client, id, stderr)
+			return leadCancel(client, id, stderr, onCancelled)
 		}
 		var polled team.Approval
 		_, err := client.Do(ctx, http.MethodGet,
 			fmt.Sprintf("/api/team/approvals/%s?wait=%d", id, team.MaxPollWaitS), nil, &polled)
 		if err != nil {
 			if ctx.Err() != nil {
-				return leadCancel(client, id, stderr)
+				return leadCancel(client, id, stderr, onCancelled)
 			}
 			if errors.Is(err, daemonclient.ErrNoAnswer) || errors.Is(err, context.DeadlineExceeded) {
 				// The poll ran out its own timeout with no answer at all.
@@ -193,8 +212,12 @@ func runLeadCmd(ctx context.Context, args []string, getenv func(string) string, 
 
 // leadCancel is spec §6.1 step 5: best-effort DELETE under a fresh 3 s
 // context with no retry, then exit 12. The parent ctx is already done, so
-// the DELETE gets its own.
-func leadCancel(client *daemonclient.Client, id string, stderr io.Writer) int {
+// the DELETE gets its own. onCancelled runs first so signal handling is back
+// to default while the DELETE is in flight.
+func leadCancel(client *daemonclient.Client, id string, stderr io.Writer, onCancelled func()) int {
+	if onCancelled != nil {
+		onCancelled()
+	}
 	dctx, cancel := context.WithTimeout(context.Background(), leadCancelTimeout)
 	defer cancel()
 	if _, err := client.Once(dctx, http.MethodDelete, "/api/team/approvals/"+id, nil, nil); err != nil {
@@ -214,12 +237,16 @@ func leadReportErr(err error, stderr io.Writer) int {
 	case errors.Is(err, daemonclient.ErrUnsupported):
 		fmt.Fprintln(stderr, "pdx lead: unsupported — 這個 daemon 沒有 /api/team 路由，請先更新 daemon")
 		return ExitUnsupported
-	case errors.As(err, &se) && se.API.Error == team.ErrRequestOpen:
-		openID := ""
-		if se.API.Approval != nil {
-			openID = sanitizeCell(se.API.Approval.ID)
+	case errors.As(err, &se) && leadRefusalCodes[se.API.Error]:
+		if se.API.Error == team.ErrRequestOpen {
+			openID := ""
+			if se.API.Approval != nil {
+				openID = sanitizeCell(se.API.Approval.ID)
+			}
+			fmt.Fprintf(stderr, "pdx lead: request_open — 已有一筆申請等待核准（%s）\n", openID)
+			return ExitRefused
 		}
-		fmt.Fprintf(stderr, "pdx lead: request_open — 已有一筆申請等待核准（%s）\n", openID)
+		fmt.Fprintf(stderr, "pdx lead: %s — team 規則拒絕這筆申請\n", se.API.Error)
 		return ExitRefused
 	default:
 		fmt.Fprintf(stderr, "pdx lead: %v\n", err)
