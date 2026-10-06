@@ -133,13 +133,15 @@ type Module struct {
 	// Add never races Stop's Wait. Stop sets startsStopped under q1Mu,
 	// unsubscribes, cancels q1Ctx and waits (bounded) for q1Work.
 	q1Mu              sync.Mutex
-	unsubscribeStarts func()             // SessionStart hub subscription
-	startsStopped     atomic.Bool        // set by Stop; Q1 work bails out between steps
-	q1Ctx             context.Context    // nil until Start subscribes; cancelled by Stop
-	q1Cancel          context.CancelFunc // cancels q1Ctx
-	q1Work            sync.WaitGroup     // Q1 work in flight
-	recheck           func(sid string)   // test seam for recheckSession; nil launches the goroutine
-	q1StopCap         time.Duration      // 0 = q1StopWait; test seam
+	unsubscribeStarts func()              // SessionStart hub subscription
+	startsStopped     atomic.Bool         // set by Stop; Q1 work bails out between steps
+	q1Ctx             context.Context     // nil until Start subscribes; cancelled by Stop
+	q1Cancel          context.CancelFunc  // cancels q1Ctx
+	q1Work            sync.WaitGroup      // Q1 work in flight
+	q1Retries         map[string]*q1Retry // per-session re-check slots, under q1Mu
+	recheck           func(sid string)    // test seam for recheckSession; nil arms S's re-check slot
+	q1StopCap         time.Duration       // 0 = q1StopWait; test seam
+	retryDelay        time.Duration       // 0 = manualResumeRetryDelay; test seam
 }
 
 // New returns a Module wired with production defaults.

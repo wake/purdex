@@ -5,6 +5,7 @@ package nex
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -187,4 +188,139 @@ func TestManualResume_StopWaitIsBounded(t *testing.T) {
 			assert.Equal(t, []string{"E1"}, archivedIDs(env))
 		})
 	}
+}
+
+// --- PR #1590 A3: contention schedules a bounded re-check ---
+
+// pendingRecheck reports whether sid's re-check slot holds a pending timer.
+func pendingRecheck(env *handoffEnv, sid string) bool {
+	env.m.q1Mu.Lock()
+	defer env.m.q1Mu.Unlock()
+	st := env.m.q1Retries[sid]
+	return st != nil && st.timer != nil
+}
+
+func TestManualResume_RetriesAfterSidContention(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.m.retryDelay = 5 * time.Millisecond
+	liveTerminal(env, true)
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	require.True(t, env.m.locks.TryLock(sidLockKey("S")))
+	env.m.onSessionStart(ev("resume"))
+	assert.Zero(t, env.terminals.Calls(), "the event itself is skipped (D2)")
+	env.m.locks.Unlock(sidLockKey("S")) // the holder finished without exiting E1
+	waitArchived(t, env, "E1")
+}
+
+func TestManualResume_RetriesAfterExecContention(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.m.retryDelay = 5 * time.Millisecond
+	liveTerminal(env, true)
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	require.True(t, env.m.locks.TryLock(takeToTerminalLockKey("E1")))
+	env.m.onSessionStart(ev("resume"))
+	assert.Empty(t, env.svc.Calls())
+	env.m.locks.Unlock(takeToTerminalLockKey("E1"))
+	waitArchived(t, env, "E1")
+}
+
+func TestManualResume_RetriesAfterAFailedExit(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.m.retryDelay = 5 * time.Millisecond
+	liveTerminal(env, true)
+	fakeStore(env).listRows = []store.Execution{row("E1", "failed", false, "S", "", 1)} // archive only
+	env.svc.archiveErr = errors.New("db busy")
+	env.m.onSessionStart(ev("resume"))
+	require.Equal(t, []string{"E1"}, archivedIDs(env), "the first archive failed")
+	env.svc.mu.Lock()
+	env.svc.archiveErr = nil
+	env.svc.mu.Unlock()
+	require.Eventually(t, func() bool { return len(archivedIDs(env)) == 2 }, 3*time.Second, time.Millisecond, "the re-check archives E1")
+}
+
+// D4: a non-pdx holder keeps refusing; that refusal is not retried.
+func TestManualResume_NoRetryAfterHeldBy(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.m.retryDelay = time.Millisecond
+	liveTerminal(env, true)
+	held := row("E1", "idle", false, "S", "", 1)
+	held.LeaseID, held.LeasePrincipalID, held.LeaseExpiresAt = "L-x", "cli:someone", nowMs()+600_000
+	fakeStore(env).listRows = []store.Execution{held}
+	env.svc.acquireErr = fmt.Errorf("execution E1: %w", store.ErrLeaseHeld)
+	env.m.onSessionStart(ev("resume"))
+	assert.False(t, pendingRecheck(env, "S"), "no re-check scheduled")
+	time.Sleep(30 * time.Millisecond)
+	assert.Equal(t, 1, env.terminals.Calls(), "no later pass")
+	assert.Equal(t, []string{"acquire"}, env.svc.Calls())
+}
+
+func TestManualResume_RetriesStopAtTheCap(t *testing.T) {
+	env := newHandoffEnv(t)
+	logs := captureLogs(env)
+	env.m.retryDelay = time.Millisecond
+	liveTerminal(env, true)
+	require.True(t, env.m.locks.TryLock(sidLockKey("S"))) // never released
+	env.m.onSessionStart(ev("resume"))
+	require.Eventually(t, func() bool { return logs.count("giving up") == 1 }, 3*time.Second, time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, manualResumeMaxRetries, logs.count("re-checking in"), "exactly the cap of retries")
+	assert.Equal(t, 1, logs.count("giving up"), "logged once")
+	assert.False(t, pendingRecheck(env, "S"))
+}
+
+// A pass for S that ends with nothing to retry resets S's attempt count.
+func TestManualResume_RetryCountResetsAfterACleanPass(t *testing.T) {
+	env := newHandoffEnv(t)
+	logs := captureLogs(env)
+	env.m.retryDelay = time.Hour // armed, never fired
+	liveTerminal(env, true)
+	require.True(t, env.m.locks.TryLock(sidLockKey("S")))
+	env.m.onSessionStart(ev("resume"))
+	require.Equal(t, 1, logs.count("re-checking in"))
+	env.m.locks.Unlock(sidLockKey("S"))
+	env.m.onSessionStart(ev("resume")) // no live worker: nothing to retry
+	env.m.q1Mu.Lock()
+	attempts := env.m.q1Retries["S"].attempts
+	env.m.q1Mu.Unlock()
+	assert.Zero(t, attempts)
+}
+
+func TestManualResume_StopCancelsAPendingRetry(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.m.retryDelay = 30 * time.Millisecond
+	liveTerminal(env, true)
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	require.NoError(t, env.m.Start(context.Background()))
+	require.True(t, env.m.locks.TryLock(sidLockKey("S")))
+	env.m.onSessionStart(ev("resume"))
+	require.True(t, pendingRecheck(env, "S"))
+	env.m.q1Mu.Lock()
+	st := env.m.q1Retries["S"]
+	pending := st.timer
+	env.m.q1Mu.Unlock()
+	require.NoError(t, env.m.Stop(context.Background()))
+	assert.False(t, pendingRecheck(env, "S"), "Stop cleared the slot")
+	assert.False(t, pending.Stop(), "Stop stopped the pending timer")
+	env.m.locks.Unlock(sidLockKey("S"))
+	env.m.runRecheck("S", st) // a timer that fires after Stop does nothing
+	time.Sleep(80 * time.Millisecond)
+	assert.Zero(t, env.terminals.Calls(), "no pass after Stop")
+	assert.Empty(t, env.svc.Calls())
+}
+
+// recheckSession (a transfer's second-check abort) shares S's slot: it pulls
+// a pending retry forward instead of adding a second pass.
+func TestManualResume_RecheckSharesThePendingSlot(t *testing.T) {
+	env := newHandoffEnv(t)
+	env.m.retryDelay = 50 * time.Millisecond
+	liveTerminal(env, true)
+	fakeStore(env).listRows = []store.Execution{row("E1", "idle", false, "S", "", 1)}
+	require.True(t, env.m.locks.TryLock(sidLockKey("S")))
+	env.m.onSessionStart(ev("resume"))
+	require.True(t, pendingRecheck(env, "S"))
+	env.m.locks.Unlock(sidLockKey("S"))
+	env.m.recheckSession("S")
+	waitArchived(t, env, "E1") // at once, not after the retry delay
+	time.Sleep(120 * time.Millisecond)
+	assert.Equal(t, 1, env.terminals.Calls(), "one pass: the retry was folded into the re-check")
 }

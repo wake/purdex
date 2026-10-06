@@ -15,11 +15,15 @@ import (
 // and the worker exits — unless the resume is one of Purdex's own
 // transfers, which hold the session's sid lock for their whole run.
 //
-// Known, accepted trade-off: the handler and the transfers all use TryLock,
-// so a re-check that holds sid:<S> while a retried transfer holds exec:<id>
-// can make both back off (the worker stays live while S is in a terminal)
-// until the next SessionStart or overflow reconcile. The window is narrow
-// and neither side blocks, so there is no deadlock.
+// The handler and the transfers all use TryLock, so neither side ever
+// blocks (no deadlock), and the handler skips the current event when
+// sid:<S> or a worker's exec:<id> is held (D2). A skip, or an exit that
+// failed for any reason but a non-pdx holder's refusal (held_by), schedules
+// a re-check of S: one pending per session, after manualResumeRetryDelay,
+// at most manualResumeMaxRetries in a row. The re-check is the same
+// per-session pass with every guard — it acts only while a verified
+// terminal runs S, which is what makes a retry after a failed Purdex
+// transfer safe.
 
 // manualResumeTimeout bounds only the terminal lookup (LiveBySessionID).
 // scanLiveWorkers and exitWorker run under detachedContext, which strips this
@@ -29,6 +33,20 @@ const manualResumeTimeout = 90 * time.Second
 
 // q1StopWait caps how long Stop waits for the Q1 work in flight.
 const q1StopWait = 3 * time.Second
+
+// A skipped or failed pass re-checks S later: after manualResumeRetryDelay,
+// at most manualResumeMaxRetries times in a row.
+const (
+	manualResumeRetryDelay = 3 * time.Second
+	manualResumeMaxRetries = 20
+)
+
+// q1Retry is one session's re-check slot.
+type q1Retry struct {
+	timer    *time.Timer // the pending re-check; nil when none
+	attempts int         // consecutive retries armed
+	gaveUp   bool        // the give-up line was logged
+}
 
 // internalPrincipal is the bare host principal the daemon acts as.
 func (m *Module) internalPrincipal() string { return "pdx:" + m.opts.Config.HostID }
@@ -73,6 +91,15 @@ func (m *Module) stopManualResume(ctx context.Context) {
 	if cancel != nil {
 		cancel()
 	}
+	m.q1Mu.Lock()
+	for _, st := range m.q1Retries {
+		if st.timer != nil {
+			st.timer.Stop() // one that already fired finds startsStopped set and does nothing
+			st.timer = nil
+		}
+	}
+	m.q1Retries = nil
+	m.q1Mu.Unlock()
 
 	done := make(chan struct{})
 	go func() {
@@ -140,7 +167,7 @@ func (m *Module) handleSessionStart(ctx context.Context, ev agent.SessionStartEv
 		return
 	}
 	sid := ev.SessionID
-	m.resolveManualResume(ctx, sid, ev.TmuxSession, func(ctx context.Context) []store.Execution {
+	_, retry := m.resolveManualResume(ctx, sid, ev.TmuxSession, func(ctx context.Context) []store.Execution {
 		workers, err := m.liveWorkersFor(ctx, sid)
 		if err != nil {
 			// Unlike an owner check (which refuses a transfer on a partial scan),
@@ -150,6 +177,7 @@ func (m *Module) handleSessionStart(ctx context.Context, ev agent.SessionStartEv
 		}
 		return workers
 	})
+	m.settleRecheck(sid, retry)
 }
 
 // resolveManualResume is Q1's per-session path, shared by a SessionStart
@@ -159,11 +187,12 @@ func (m *Module) handleSessionStart(ctx context.Context, ev agent.SessionStartEv
 // inside the lock, after the terminal check. Each candidate is re-read
 // under its exec:<id> lock and skipped unless it is still S's live worker
 // (the reconcile's rows can be stale by the time a later group runs).
-// It returns the ids it exited.
-func (m *Module) resolveManualResume(parent context.Context, sid, tmuxSession string, workers func(context.Context) []store.Execution) []string {
+// It returns the ids it exited, and why S needs a re-check ("" when nothing
+// is left to retry).
+func (m *Module) resolveManualResume(parent context.Context, sid, tmuxSession string, workers func(context.Context) []store.Execution) (exited []string, retry string) {
 	key := sidLockKey(sid)
 	if !m.locks.TryLock(key) {
-		return nil // a Purdex transfer of S is in flight, or another handler has S
+		return nil, "the session is busy" // a Purdex transfer of S is in flight, or another handler has S
 	}
 	defer m.locks.Unlock(key)
 
@@ -174,39 +203,42 @@ func (m *Module) resolveManualResume(parent context.Context, sid, tmuxSession st
 	terms, err := m.terminals.LiveBySessionID(ctx, "cc", sid)
 	cancel()
 	if m.q1Halted(parent) {
-		return nil
+		return nil, ""
 	}
 	if err != nil {
 		m.logf("nex: manual resume %s: terminal lookup: %v", sid, err)
-		return nil
+		return nil, ""
 	}
 	verified := false
 	for _, t := range terms {
 		verified = verified || t.Verified
 	}
 	if !verified {
-		return nil
+		return nil, ""
 	}
 	principal := m.internalPrincipal()
-	var exited []string
 	for _, w := range workers(parent) {
 		if m.q1Halted(parent) {
 			break // after the scan, and between candidates
 		}
-		if m.exitManualResumeWorker(parent, sid, tmuxSession, w.ID, principal) {
+		ok, why := m.exitManualResumeWorker(parent, sid, tmuxSession, w.ID, principal)
+		if ok {
 			exited = append(exited, w.ID)
+		} else if why != "" {
+			retry = why
 		}
 	}
-	return exited
+	return exited, retry
 }
 
 // exitManualResumeWorker exits one candidate under its exec:<id> lock, after
-// re-reading it; true when it exited.
-func (m *Module) exitManualResumeWorker(parent context.Context, sid, tmuxSession, execID, principal string) bool {
+// re-reading it. ok when it exited; otherwise retry says why S should be
+// re-checked ("" when a re-check cannot help).
+func (m *Module) exitManualResumeWorker(parent context.Context, sid, tmuxSession, execID, principal string) (ok bool, retry string) {
 	lk := takeToTerminalLockKey(execID)
 	if !m.locks.TryLock(lk) {
-		m.logf("nex: manual resume %s: %s is busy; left to its mover", sid, execID)
-		return false
+		m.logf("nex: manual resume %s: %s is busy", sid, execID)
+		return false, execID + " is busy"
 	}
 	defer m.locks.Unlock(lk)
 	w, err := m.getExecution(parent, execID)
@@ -214,22 +246,25 @@ func (m *Module) exitManualResumeWorker(parent context.Context, sid, tmuxSession
 		if !errors.Is(err, store.ErrNotFound) {
 			m.logf("nex: manual resume %s: re-reading %s: %v", sid, execID, err)
 		}
-		return false
+		return false, ""
 	}
 	if !isLiveExecution(w) || !executionIsFor(w, sid) {
-		return false // exited or moved since the scan
+		return false, "" // exited or moved since the scan
 	}
 	if m.q1Halted(parent) {
-		return false // Stop began: no new exit starts
+		return false, "" // Stop began: no new exit starts
 	}
 	out, herr := m.exitWorker(parent, w, nil, principal)
 	if herr != nil || !out.Exited() {
 		m.logf("nex: manual resume %s: exiting %s failed: %v", sid, execID, herr)
-		return false
+		if herr != nil && herr.code == "held_by" {
+			return false, "" // D4: a non-pdx holder keeps refusing; retrying cannot help
+		}
+		return false, "exiting " + execID + " failed"
 	}
 	m.logf("nex: manual resume %s in %s -> worker %s exited", sid, tmuxSession, execID)
 	m.broadcastWorkerExited(execID, sid, tmuxSession)
-	return true
+	return true, ""
 }
 
 // reconcileTerminalOwners is the hub's overflow path: SessionStarts were
@@ -269,7 +304,7 @@ func (m *Module) reconcileTerminalOwners(ctx context.Context) {
 		// The tmux session name is unknown on this path (agent.TerminalSession
 		// has no such field), so nex-worker-exited carries tmux_session "";
 		// the SPA toast (Task 18) must fall back when it is empty.
-		exited := m.resolveManualResume(ctx, sid, "", func(context.Context) []store.Execution {
+		exited, retry := m.resolveManualResume(ctx, sid, "", func(context.Context) []store.Execution {
 			var left []store.Execution
 			for _, w := range group {
 				if !done[w.ID] {
@@ -281,13 +316,14 @@ func (m *Module) reconcileTerminalOwners(ctx context.Context) {
 		for _, id := range exited {
 			done[id] = true
 		}
+		m.settleRecheck(sid, retry)
 	}
 }
 
-// recheckSession asks for one Q1 re-check of S. A transfer that aborted at
-// its second owner check calls it from a defer registered before its
-// sid-lock unlock, so the re-check starts after the release. The re-check
-// is one unit of Q1 work: Stop cancels and waits for it like a hub callback.
+// recheckSession asks for one Q1 re-check of S, at once. A transfer that
+// aborted at its second owner check calls it from a defer registered before
+// its sid-lock unlock, so the re-check starts after the release. It uses
+// S's re-check slot (armRecheck), so it folds into a retry already pending.
 func (m *Module) recheckSession(sid string) {
 	if m.startsStopped.Load() {
 		return
@@ -296,21 +332,90 @@ func (m *Module) recheckSession(sid string) {
 		m.recheck(sid)
 		return
 	}
-	ctx, ok := m.q1Begin()
-	if !ok {
+	m.armRecheck(sid, "")
+}
+
+// settleRecheck ends a pass for S: a retry reason arms S's re-check; a
+// pass with nothing to retry resets S's attempt count.
+func (m *Module) settleRecheck(sid, retry string) {
+	if retry != "" {
+		m.armRecheck(sid, retry)
 		return
 	}
+	m.q1Mu.Lock()
+	defer m.q1Mu.Unlock()
+	if st := m.q1Retries[sid]; st != nil {
+		st.attempts, st.gaveUp = 0, false
+		if st.timer == nil {
+			delete(m.q1Retries, sid)
+		}
+	}
+}
+
+// armRecheck fills S's one re-check slot. With a reason (a skip or a failed
+// exit) the re-check waits the retry delay and counts against
+// manualResumeMaxRetries; with none (recheckSession) it runs at once and is
+// not counted. A request that finds the slot taken folds into the pending
+// re-check — an immediate one pulls a delayed one forward.
+func (m *Module) armRecheck(sid, reason string) {
+	m.q1Mu.Lock()
+	defer m.q1Mu.Unlock()
+	if m.startsStopped.Load() {
+		return
+	}
+	if m.q1Retries == nil {
+		m.q1Retries = map[string]*q1Retry{}
+	}
+	st := m.q1Retries[sid]
+	if st == nil {
+		st = &q1Retry{}
+		m.q1Retries[sid] = st
+	}
+	if st.timer != nil {
+		if reason == "" && st.timer.Stop() {
+			st.timer = time.AfterFunc(0, func() { m.runRecheck(sid, st) })
+		}
+		return // the pending re-check (or one already firing) covers this request
+	}
+	var delay time.Duration
+	if reason != "" {
+		if st.attempts >= manualResumeMaxRetries {
+			if !st.gaveUp {
+				st.gaveUp = true
+				m.logf("nex: manual resume %s: %s after %d re-checks; giving up until a pass for S completes", sid, reason, st.attempts)
+			}
+			return
+		}
+		st.attempts++
+		delay = m.retryDelay
+		if delay <= 0 {
+			delay = manualResumeRetryDelay
+		}
+		m.logf("nex: manual resume %s: %s; re-checking in %v (%d/%d)", sid, reason, delay, st.attempts, manualResumeMaxRetries)
+	}
+	st.timer = time.AfterFunc(delay, func() { m.runRecheck(sid, st) })
+}
+
+// runRecheck is a fired re-check: one unit of Q1 work (Stop cancels and
+// waits for it like a hub callback) through the per-session path. Its
+// outcome settles S's slot again (settleRecheck).
+func (m *Module) runRecheck(sid string, st *q1Retry) {
+	m.q1Mu.Lock()
+	st.timer = nil
+	m.q1Mu.Unlock()
+	ctx, ok := m.q1Begin()
+	if !ok {
+		return // Stop began
+	}
+	defer m.q1Work.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			m.logf("nex: manual resume re-check %s: panic: %v", sid, r)
+		}
+	}()
 	// Same as the overflow path: the tmux session name is unknown here, so
 	// tmux_session is "" in the broadcast (the SPA toast must fall back).
-	go func() {
-		defer m.q1Work.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				m.logf("nex: manual resume re-check %s: panic: %v", sid, r)
-			}
-		}()
-		m.handleSessionStart(ctx, agent.SessionStartEvent{AgentType: "cc", SessionID: sid, Source: "resume"})
-	}()
+	m.handleSessionStart(ctx, agent.SessionStartEvent{AgentType: "cc", SessionID: sid, Source: "resume"})
 }
 
 func (m *Module) broadcastWorkerExited(execID, sid, tmuxSession string) {

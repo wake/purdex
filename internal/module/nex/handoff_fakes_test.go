@@ -811,6 +811,9 @@ func newHandoffEnv(t *testing.T) *handoffEnv {
 	m.RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
+	// Q1 work a test left behind (a pending re-check, a re-check goroutine)
+	// must not outlive it: cancel and wait for it like Stop does.
+	t.Cleanup(func() { m.stopManualResume(context.Background()) })
 
 	return &handoffEnv{m: m, tmux: fakeTx, sessions: sessions, owners: owners, ops: ops, svc: svc, srv: srv, registry: registry, terminals: terminals}
 }
