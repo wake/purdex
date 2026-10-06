@@ -922,6 +922,8 @@ func TestTakeback_NoSessionIDBeforeAnyLock(t *testing.T) {
 }
 
 // A rejected bound execution never wrote (D6): resumed, then archived by exit.
+// The transfer holds no control for a row that takes no sends (nothing
+// before the keys); the exit takes one for its archive only (#1665).
 func TestTakeback_RejectedIsAccepted(t *testing.T) {
 	env := newTakebackEnv(t)
 	tl := env.tbTimeline()
@@ -929,7 +931,30 @@ func TestTakeback_RejectedIsAccepted(t *testing.T) {
 	status, body := env.post(t, hoCode, takebackBody())
 	require.Equal(t, http.StatusOK, status, "%v", body)
 	assert.Equal(t, true, body["exited"])
-	assert.Equal(t, []string{"keys", "archive"}, tl.snapshot(), "no control for a row that takes no sends")
+	assert.Equal(t, []string{"keys", "acquire", "renew", "archive", "release"}, tl.snapshot(),
+		"no transfer control for a row that takes no sends; the exit's archive runs under its own, renewed first")
+	reqs := env.svc.ArchiveReqs()
+	require.Len(t, reqs, 1)
+	assert.Equal(t, tbLeaseID, reqs[0].LeaseID, "the archive is fenced by the exit's own lease")
+}
+
+// #1665: that archive losing a lease race leaves the rejected row
+// unarchived; the resume stands (200), and the answer reports the exit's
+// 409 classification as exit_error with exited:false — never archive_failed.
+func TestTakeback_RejectedLeaseRaceAtArchive(t *testing.T) {
+	env := newTakebackEnv(t)
+	env.store.results = []getResult{{exec: withSessionID(boundExec(store.StateRejected), tbSessionID)}}
+	env.svc.enforceLease = true
+	env.svc.onRecord = func(name string) {
+		if name == "archive" {
+			env.svc.setHeldLease(store.Lease{ID: "L-o", PrincipalID: pdxOther, ExpiresAt: nowMs() + 60_000})
+		}
+	}
+	status, body := env.post(t, hoCode, takebackBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, false, body["exited"])
+	assert.Equal(t, false, body["archived"])
+	assert.Equal(t, "lease_contended", body["exit_error"])
 }
 
 // The row read before control predates it: it is re-read once control is

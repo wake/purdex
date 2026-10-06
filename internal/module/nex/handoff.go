@@ -290,6 +290,12 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 			if rej, gerr := m.getExecution(r.Context(), result.ID); gerr == nil {
 				out, herr := m.exitWorker(r.Context(), rej, nil, principal)
 				exited = herr == nil && out.Exited()
+				if herr != nil {
+					// The row stays live (unarchived) for a later exit; the
+					// answer says why (a lease race is a retryable 409).
+					m.logf("nex: handoff %s: exiting rejected execution %s: %s (%s)", code, result.ID, herr.code, herr.msg)
+					extra["exit_error"] = herr.code
+				}
 			} else {
 				m.logf("nex: handoff %s: reading rejected execution %s: %v", code, result.ID, gerr)
 			}

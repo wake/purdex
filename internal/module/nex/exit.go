@@ -20,13 +20,16 @@ func needsTerminate(s store.State) bool {
 func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *control, principal string) (exitOutcome, *handoffError) {
 	out := exitOutcome{Terminated: exec.State == store.StateTerminated, Archived: exec.ArchivedAt != 0, State: exec.State}
 	var termErr *handoffError // a failed terminate; reported only if the archive cannot stand in for it
-	// D23: the lease (and its principal) a successful terminate ran under.
-	// The archive carries it, so Nexen (≥ v0.18.0, #113) checks the lease in
-	// the archive's own UPDATE. Empty — no fence — for every other archive.
+	// D23: the lease (and its principal) the archive runs under, so Nexen
+	// (≥ v0.18.0, #113) checks the lease in the archive's own UPDATE: the
+	// control a successful terminate ran under, or that answered
+	// ErrExecutionTerminal; for a row that needs no terminate, the control
+	// taken for the archive (#1665). Empty — no fence — only on D4's
+	// "terminate failed, archive anyway" path.
 	var fenceLease, fencePrincipal string
+	own := control{release: noRelease} // a control exitWorker took itself; released on return, after the archive
+	defer func() { own.release() }()
 	if needsTerminate(exec.State) {
-		own := control{release: noRelease} // a control exitWorker took itself; released on return, after the archive
-		defer func() { own.release() }()
 		c := ctl
 		if c == nil {
 			got, herr := m.takeControl(parent, exec.ID, "", principal)
@@ -68,6 +71,8 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 				out.Terminated, out.State = true, store.StateTerminated
 				fenceLease, fencePrincipal = leaseID, leasePrincipal
 			case errors.Is(err, store.ErrExecutionTerminal):
+				// The row ended on its own; the control is still ours to act under.
+				fenceLease, fencePrincipal = leaseID, leasePrincipal
 				if fresh, gerr := m.getExecution(parent, exec.ID); gerr == nil {
 					out.State = fresh.State
 					out.Terminated = fresh.State == store.StateTerminated
@@ -82,6 +87,34 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 				}
 			}
 		}
+	} else if !out.Archived {
+		// #1665: a row that needs no terminate — terminated but unarchived
+		// (D16's retry), failed, rejected — is archived under a control too:
+		// the caller's, else one taken as for a terminate. A non-pdx holder
+		// is never overridden (D4: held_by, nothing changes), and any other
+		// failure to take control archives nothing.
+		c := ctl
+		if c == nil {
+			got, herr := m.takeControl(parent, exec.ID, "", principal)
+			if herr != nil {
+				m.logf("nex: exit %s: no control for the archive (%s); not archiving", exec.ID, herr.msg)
+				return out, herr
+			}
+			// A borrowed lease may be near its end: renew it before the
+			// archive, or — gone, expired, someone else's — take control again
+			// (a non-pdx holder refused, D4). renewControl hands back the
+			// control to release: an own lease (the one taken, or the re-take's)
+			// carries its release, a borrowed one noRelease. A transfer's
+			// control (ctl) is the transfer's to renew.
+			renewed, herr := m.renewControl(parent, exec.ID, got, principal)
+			own = renewed
+			if herr != nil {
+				m.logf("nex: exit %s: renewing control for the archive (%s); not archiving", exec.ID, herr.msg)
+				return out, herr
+			}
+			c = &own
+		}
+		fenceLease, fencePrincipal = c.LeaseID, c.PrincipalID
 	}
 	if !out.Archived {
 		if termErr != nil {
@@ -100,7 +133,7 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 		}
 		req := execution.ArchiveRequest{ExecutionID: exec.ID, PrincipalID: principal, Archived: true}
 		if fenceLease != "" {
-			// D23: archive under the terminate's lease — a lease that changed
+			// D23: archive under the control's lease — a lease that changed
 			// hands since is refused (lease_* error) and nothing is written.
 			req.LeaseID, req.PrincipalID = fenceLease, fencePrincipal
 		}
@@ -117,6 +150,18 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 			// stop is still running. The terminate's reason is the useful one.
 			m.logf("nex: exit %s: archive after a failed terminate: %v", exec.ID, err)
 			return out, termErr
+		case isLeaseErr(err):
+			// D23 on a row that is not terminated (failed, rejected — also one
+			// that ended so on its own): the lease changed hands between the
+			// control and the archive, and the fence wrote nothing. A race, not
+			// a fault (#1665): 409 — the holder's held_by when the re-read finds
+			// a live non-pdx one (D4), else lease_contended, to try again.
+			m.logf("nex: exit %s: fenced archive refused: %v (not archived)", exec.ID, err)
+			if held, ok := m.heldByOther(parent, exec.ID); ok && held != nil {
+				return out, held
+			}
+			return out, &handoffError{http.StatusConflict, "lease_contended", "the lease changed hands during the exit; try again",
+				map[string]any{"execution_id": exec.ID}}
 		default:
 			return out, &handoffError{http.StatusInternalServerError, "archive_failed", "archiving execution: " + err.Error(),
 				map[string]any{"execution_id": exec.ID}}
@@ -187,7 +232,8 @@ func (m *Module) handleExitWorker(w http.ResponseWriter, r *http.Request) {
 	}
 	// A caller's lease is validated before it is acted under: renewControl
 	// renews it, and re-takes control (refusing a non-pdx holder) when it is
-	// stale or not the caller's. A row that needs no terminate ignores it.
+	// stale or not the caller's. A row that needs no terminate ignores it:
+	// exitWorker takes control for that archive itself (#1665).
 	var ctl *control
 	if body.LeaseID != "" && needsTerminate(exec.State) {
 		c, herr := m.renewControl(r.Context(), execID, control{LeaseID: body.LeaseID, PrincipalID: principal, release: noRelease}, principal)
