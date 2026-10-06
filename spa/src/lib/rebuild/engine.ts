@@ -114,7 +114,7 @@ function failed(err: unknown): StepResult {
  * Pane-specific on purpose: two panes may not rebuild at once either, but the
  * owner is what tells the UI whose button to keep enabled.
  */
-function paneOwner(paneId: string): string {
+export function paneOwner(paneId: string): string {
   return `rebuild:${paneId}`
 }
 

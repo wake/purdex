@@ -3,7 +3,8 @@ import { SmileySad } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { closeTab } from '../lib/tab-lifecycle'
-import { rebuildPane, type RebuildPlan } from '../lib/rebuild/engine'
+import { rebuildPane, paneOwner, type RebuildPlan } from '../lib/rebuild/engine'
+import { useRebuildStore, withOperationLock } from '../stores/useRebuildStore'
 import { useNexHostStore, selectHandoffReady } from '../stores/useNexHostStore'
 import { rebuildAsWorker, rebuildErrorMessage, announceRebuildOutcome } from '../lib/nex/worker-rebuild'
 import { RebuildScreen } from './RebuildScreen'
@@ -68,17 +69,28 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
   const [error, setError] = useState<string | null>(null)
   const inFlight = useRef(false)
 
+  // Any held operation lock (a terminal rebuild of this pane, or a batch) freezes the choice.
+  const locked = useRebuildStore((s) => s.lockedBy !== null)
+
   const rebuildWorker = async () => {
     if (inFlight.current || !sid || !cwd) return
     inFlight.current = true
     setBusy(true)
     setError(null)
     try {
-      const outcome = await rebuildAsWorker({
-        hostId: content.hostId, sessionId: sid, cwd, tabId, paneId,
-        expect: (c) => c.kind === 'tmux-session' && c.hostId === content.hostId && c.sessionCode === content.sessionCode,
-      })
-      announceRebuildOutcome(t, content.hostId, outcome)
+      // The same pane-scoped lock `rebuildPane` takes: a terminal and a worker
+      // rebuild of one pane never run together. Held → refused, no request.
+      await withOperationLock(
+        paneOwner(paneId),
+        async () => {
+          const outcome = await rebuildAsWorker({
+            hostId: content.hostId, sessionId: sid, cwd, tabId, paneId,
+            expect: (c) => c.kind === 'tmux-session' && c.hostId === content.hostId && c.sessionCode === content.sessionCode,
+          })
+          announceRebuildOutcome(t, content.hostId, outcome)
+        },
+        () => undefined,
+      )
     } catch (err) {
       setError(rebuildErrorMessage(err, t))
     } finally {
@@ -114,7 +126,7 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
     >
       {showChoice && (
         <div className="mb-6">
-          <RebuildModeChoice value={mode} onChange={setChoice} terminalAvailable workerAvailable />
+          <RebuildModeChoice value={mode} onChange={setChoice} terminalAvailable workerAvailable disabled={locked || busy} />
         </div>
       )}
       {mode === 'worker' ? (
@@ -123,7 +135,7 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
           <button
             type="button"
             data-testid="terminated-rebuild-worker"
-            disabled={busy}
+            disabled={busy || locked}
             onClick={() => { void rebuildWorker() }}
             className="px-4 py-1.5 text-sm rounded bg-zinc-700 text-zinc-100 hover:bg-zinc-600 disabled:opacity-40 disabled:cursor-not-allowed"
           >

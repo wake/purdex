@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import { TerminatedPane } from './TerminatedPane'
 import { useTabStore } from '../stores/useTabStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
+import { rebuildPane } from '../lib/rebuild/engine'
 import { findPane } from '../lib/pane-tree'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useUndoToast } from '../stores/useUndoToast'
@@ -399,5 +400,52 @@ describe('TerminatedPane rebuild as worker', () => {
   it('ensures nex readiness for the host on mount', () => {
     renderTerminated(fullRecord)
     expect(ensure).toHaveBeenCalledWith(H)
+  })
+
+  describe('one operation lock per pane', () => {
+    const lockOwner = `rebuild:${PANE_ID}`
+    it('a terminal rebuild in progress disables the choice and the worker button, and sends nothing', () => {
+      renderTerminated(fullRecord)
+      fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+      let grant: unknown
+      act(() => { grant = useRebuildStore.getState().acquireOperationLock(lockOwner) })
+      expect(screen.getByTestId('rebuild-mode-terminal')).toBeDisabled()
+      expect(screen.getByTestId('rebuild-mode-worker')).toBeDisabled()
+      expect(screen.getByTestId('terminated-rebuild-worker')).toBeDisabled()
+      fireEvent.click(screen.getByTestId('terminated-rebuild-worker'))
+      expect(rebuildAsWorker).not.toHaveBeenCalled()
+      // settles: controls re-enable
+      act(() => { useRebuildStore.getState().releaseOperationLock(grant as never) })
+      expect(screen.getByTestId('rebuild-mode-terminal')).toBeEnabled()
+      expect(screen.getByTestId('terminated-rebuild-worker')).toBeEnabled()
+    })
+
+    it('a lock taken between render and click refuses the worker request', async () => {
+      renderTerminated(fullRecord)
+      fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+      const btn = screen.getByTestId('terminated-rebuild-worker')
+      useRebuildStore.getState().acquireOperationLock('other')
+      fireEvent.click(btn)
+      await new Promise((r) => setTimeout(r, 0))
+      expect(rebuildAsWorker).not.toHaveBeenCalled()
+    })
+
+    it('a worker rebuild in progress holds the pane lock: choice disabled, rebuildPane refuses, then re-enables', async () => {
+      let done: (v: { result: { execution_id: string; state: string }; swapped: boolean }) => void = () => {}
+      vi.mocked(rebuildAsWorker).mockReturnValue(new Promise((r) => { done = r as never }))
+      renderTerminated(fullRecord)
+      fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+      fireEvent.click(screen.getByTestId('terminated-rebuild-worker'))
+      await waitFor(() => expect(rebuildAsWorker).toHaveBeenCalledTimes(1))
+      expect(useRebuildStore.getState().lockedBy).toBe(lockOwner)
+      expect(screen.getByTestId('rebuild-mode-terminal')).toBeDisabled()
+      expect(screen.getByTestId('terminated-rebuild-worker')).toBeDisabled()
+      const report = await rebuildPane('host-1', TAB_ID, PANE_ID, { createSession: true, applyCwd: false, runResume: false })
+      expect(report.steps.create.status).toBe('failed')
+      await act(async () => { done({ result: { execution_id: 'n', state: 'running' }, swapped: true }) })
+      await waitFor(() => expect(useRebuildStore.getState().lockedBy).toBeNull())
+      expect(screen.getByTestId('rebuild-mode-terminal')).toBeEnabled()
+      expect(screen.getByTestId('terminated-rebuild-worker')).toBeEnabled()
+    })
   })
 })
