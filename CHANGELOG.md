@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.523] - 2026-10-07
+
+> 只動 `pdx` 指令（新增 `pdx lead`），**需要部署新的 `pdx` 執行檔**，由統籌安排；daemon 程式碼、資料庫、SPA、Electron 都沒有改動（daemon 端的路由在 alpha.518 已上）。
+
+### Added：lead / member / team 與 context 接力 — P2b-3（#1680）
+
+- **`pdx lead request` 正式接進 `pdx` 入口**（spec §6.1）。這是 lead 申請的指令端：agent 在前景執行它、在 Purdex 介面核准後拿到 grant。核准對話框在 P3（SPA）接續；在那之前可以用 API 直接 decide 驗證。
+- **跨 daemon 重啟的端到端測試**：同一個 port 關掉再開、boot id 換新，指令印一次「daemon 重啟中，繼續等待…」與一次「daemon 已重新啟動（boot …）」，接著用**同一個申請 id** 繼續輪詢直到核准（spec §9.1、Review Focus 3）。
+
 ## [1.0.0-alpha.522] - 2026-10-07
 
 > 只新增 `pdx` 指令端的程式碼，**指令還沒接進 `pdx` 的入口**（下一個 PR 才會），不需要部署。daemon、資料庫、SPA、Electron 都沒有改動。
