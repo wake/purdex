@@ -1270,6 +1270,11 @@ func (m *Module) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Context usage is keyed by the CC session id inside the payload, so it
+	// is recorded before (and regardless of) resolving the tmux name: an
+	// unresolved tmux session still reports its own usage (spec §8.5).
+	m.recordContextUsage(payload.RawStatus)
+
 	code := m.resolveSessionCode(payload.TmuxSession)
 	if code == "" {
 		return
