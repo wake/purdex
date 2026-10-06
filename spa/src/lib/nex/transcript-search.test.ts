@@ -50,6 +50,22 @@ describe('buildSearchUnits — image attachments (phase E)', () => {
   })
 })
 
+describe('buildSearchUnits — a result that carries an image (#1629)', () => {
+  it('the media JSON is not a unit text', () => {
+    const image = { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 80 } }
+    const messages = [
+      said('go'), asst(use('t1', 'Read', { file_path: '/a.png' })),
+      usr({ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'caption' }, image] } as unknown as ContentBlock),
+    ]
+    for (const view of ['room', 'chat'] as const) {
+      const texts = units(messages, view).map((u) => u.text)
+      expect(texts.join('\n')).not.toContain('omitted')
+      expect(find(units(messages, view), 'omitted')).toHaveLength(0)
+    }
+    expect(find(units(messages, 'room'), 'caption')).toHaveLength(1)
+  })
+})
+
 describe('buildSearchUnits / findMatches', () => {
   it('finds a match in folded tool output and lists the key that reveals it', () => {
     const long = Array.from({ length: 50 }, (_, n) => `line ${n}`).join('\n') + '\nneedle here'

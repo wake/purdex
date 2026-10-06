@@ -52,6 +52,21 @@ describe('ChatTranscript', () => {
     expect(within(mine).queryByTestId('room-prose')).toBeNull()
   })
 
+  it('a Read result that carries an image shows no raw JSON (#1629)', () => {
+    render(T({ messages: [
+      said('q'),
+      asst(use('r1', 'Read', { file_path: '/a.png' })),
+      usr({ type: 'tool_result', tool_use_id: 'r1', content: [{ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 80 } }] } as unknown as ContentBlock),
+      reply('done'),
+    ] }))
+    fireEvent.click(screen.getByTestId('chat-tools-line'))
+    expect(screen.getByTestId('operation-block')).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('omitted')
+    expect(document.body.textContent).not.toContain('"type"')
+    expect(screen.getByTestId('prelude-media')).toHaveTextContent('[image · png · 80 B]')
+    expect(screen.queryByTestId('op-non-text')).toBeNull()
+  })
+
   it('hides thinking entirely', () => {
     render(T({ messages: [said('q'), asst({ type: 'thinking', thinking: 'deep thought' }, { type: 'text', text: 'Answer' })] }))
     expect(screen.queryByText(/deep thought/)).toBeNull()

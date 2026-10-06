@@ -10,10 +10,13 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 export function OmittedMedia({ block }: { block: ContentBlock }) {
   const t = useI18nStore((s) => s.t)
   const type = (block.source?.media_type ?? '').replace(/^[a-z]+\//, '') || '?'
-  const size = formatBytes(block.source?.bytes ?? 0)
+  const bytes = block.source?.bytes
+  const kind = block.type === 'document' ? 'document' : 'image'
   return (
     <div data-testid="prelude-media" className="text-xs text-text-muted font-mono">
-      {t(block.type === 'document' ? 'worker.prelude.document' : 'worker.prelude.image', { type, size })}
+      {typeof bytes === 'number'
+        ? t(`worker.prelude.${kind}`, { type, size: formatBytes(bytes) })
+        : t(`worker.prelude.${kind}_nosize`, { type })}
     </div>
   )
 }

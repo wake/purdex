@@ -701,6 +701,8 @@
   "worker.prelude.note_task": "Background task",
   "worker.prelude.image": "[image · {{type}} · {{size}}]",
   "worker.prelude.document": "[document · {{type}} · {{size}}]",
+  "worker.prelude.image_nosize": "[image · {{type}}]",
+  "worker.prelude.document_nosize": "[document · {{type}}]",
   "worker.prelude.truncated": "Too long — showing the first {{shown}} of {{total}}",
   "worker.prelude.truncated_unknown": "Too long — showing the first {{shown}}",
   "worker.prelude.pasted_one": "Pasted text · {{count}} line",

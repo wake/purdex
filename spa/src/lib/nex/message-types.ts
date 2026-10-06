@@ -16,7 +16,7 @@ export interface ContentBlock {
   thinking?: string
   tool_use_id?: string
   /** `image` / `document` blocks. In the prelude: `{type:'omitted', media_type, bytes}` (spec §4.3), never data; `bytes` is the decoded size. */
-  source?: { type: string; media_type?: string; bytes?: number }
+  source?: { type: string; media_type?: string; bytes?: number; data?: unknown }
   /** Prelude only (spec §4.3): the block was cut at `max_block_bytes`. */
   truncated?: boolean
   total_bytes?: number

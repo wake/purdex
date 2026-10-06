@@ -22,6 +22,7 @@ import { searchUnitId } from '../../lib/nex/transcript-search'
 import { resolveStatus, type OpStatus } from '../../lib/nex/operation-status'
 import { useFold } from './fold-context'
 import { FoldedOutput } from './FoldedOutput'
+import { OmittedMedia } from './prelude/Placeholders'
 import ToolDiffView from './ToolDiffView'
 
 export interface OperationBlockProps {
@@ -134,7 +135,10 @@ export default function OperationBlock({
   // The second fact the dismantled facts span carried (spec §3.1.1 #3): the
   // payload held something the transcript is not showing. A fold may hide
   // lines; it may not hide that.
-  const hasNonText = facts?.output?.hasNonText === true
+  const media = result?.media ?? []
+  // Placeholders say what the media were; the generic line is only for N2's word that there was some.
+  const hasNonText = facts?.output?.hasNonText === true && media.length === 0
+  const hasMedia = media.length > 0
 
   // `error` and `denied` fold one step less: a failure you have to expand is a
   // failure you will miss (spec §4.2).
@@ -147,7 +151,7 @@ export default function OperationBlock({
   })
 
   const railFill = RAIL_FILL[status] ?? ''
-  const showRail = subagent != null || result !== null || hasDiff || hasNonText || (hasRawInput && inputExpanded)
+  const showRail = subagent != null || result !== null || hasDiff || hasNonText || hasMedia || (hasRawInput && inputExpanded)
 
   return (
     <div data-testid="operation-block" className="text-sm my-1">
@@ -220,7 +224,8 @@ export default function OperationBlock({
             file was touched, and there the stat is the only account of it.
           */}
           {hasDiff && <ToolDiffView diff={diff} foldKey={foldKey} showPath={summary !== diff.path} searchKey={searchKey} />}
-          {result !== null && (
+          {/* An image-only result has no text: the marker below is its whole account, not an empty box (#1629); a daemon-cut one still draws, for its note. */}
+          {result !== null && !(result.text === '' && (hasMedia || facts?.output?.hasNonText === true) && !plan.daemonTruncated) && (
             <FoldedOutput
               text={result.text}
               plan={plan}
@@ -230,6 +235,7 @@ export default function OperationBlock({
               searchUnit={anchor('output')}
             />
           )}
+          {media.map((m, i) => <OmittedMedia key={i} block={m} />)}
           {hasNonText && (
             <span data-testid="op-non-text" className="block text-xs text-text-muted">
               {t('execution.tool.non_text')}

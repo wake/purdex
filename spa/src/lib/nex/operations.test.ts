@@ -3,7 +3,7 @@
 // boundary that separates them.
 import { describe, it, expect } from 'vitest'
 import type { StreamMessage } from './message-types'
-import { blockKey, indexOperations, toolResultText } from './operations'
+import { blockKey, indexOperations, toolResultMedia, toolResultText } from './operations'
 
 type Block = Record<string, unknown>
 
@@ -253,7 +253,77 @@ describe('toolResultText', () => {
   it('falls back to JSON for an unknown content shape', () => {
     // A subagent hand-back is exactly this shape (#1263).
     expect(toolResultText({ ok: true })).toBe('{"ok":true}')
-    expect(toolResultText([{ type: 'image', source: 'x' }])).toBe('[{"type":"image","source":"x"}]')
+    expect(toolResultText([{ type: 'tool_reference', tool_name: 'x' }])).toBe('[{"type":"tool_reference","tool_name":"x"}]')
+  })
+
+  const omittedImage = { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 80 } }
+
+  it('drops an image block and keeps the text beside it (#1629)', () => {
+    expect(toolResultText([{ type: 'text', text: 'caption' }, omittedImage])).toBe('caption')
+  })
+
+  it('gives the empty string for a media-only array (#1629)', () => {
+    expect(toolResultText([omittedImage])).toBe('')
+    expect(toolResultText([omittedImage, { type: 'document', source: { type: 'omitted' } }])).toBe('')
+  })
+
+  it('drops a document block and keeps the text (#1629)', () => {
+    expect(toolResultText([{ type: 'text', text: 'a' }, { type: 'document', source: { type: 'omitted' } }, { type: 'text', text: 'b' }])).toBe('a\nb')
+  })
+
+  it('still JSON-stringifies when an unknown block rides with the media (#1263)', () => {
+    const content = [{ type: 'text', text: 'a' }, omittedImage, { type: 'mystery', x: 1 }]
+    expect(toolResultText(content)).toBe(JSON.stringify(content))
+  })
+
+  it('leaves a text-only array, a string and null as they were', () => {
+    expect(toolResultText([{ type: 'text', text: 'a' }])).toBe('a')
+    expect(toolResultText('s')).toBe('s')
+    expect(toolResultText(null)).toBe('')
+  })
+})
+
+describe('toolResultMedia', () => {
+  const b64 = 'A'.repeat(107) + '='
+  it('normalises each media block to the omitted shape, in order', () => {
+    const omitted = { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 80 } }
+    expect(toolResultMedia([{ type: 'text', text: 'a' }, omitted, { type: 'document', source: { type: 'omitted', media_type: 'application/pdf', bytes: 5 } }])).toEqual([
+      omitted, { type: 'document', source: { type: 'omitted', media_type: 'application/pdf', bytes: 5 } },
+    ])
+  })
+
+  it('sizes a live base64 block from its data (108 chars -> 80 bytes; padding discounted)', () => {
+    expect(toolResultMedia([{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: b64 } }])).toEqual([
+      { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 80 } },
+    ])
+    expect(toolResultMedia([{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'QUJD' + 'QQ==' } }])[0].source?.bytes).toBe(4)
+  })
+
+  it('leaves bytes out for any other source', () => {
+    expect(toolResultMedia([{ type: 'image', source: { type: 'url', media_type: 'image/png', url: 'x' } }])).toEqual([
+      { type: 'image', source: { type: 'omitted', media_type: 'image/png' } },
+    ])
+    expect(toolResultMedia([{ type: 'image', source: { type: 'base64', media_type: 'image/png' } }])[0].source).not.toHaveProperty('bytes')
+    expect(toolResultMedia([{ type: 'image' }])).toEqual([{ type: 'image', source: { type: 'omitted' } }])
+  })
+
+  it('is empty for text-only, a string, null, and the #1263 JSON path', () => {
+    expect(toolResultMedia([{ type: 'text', text: 'a' }])).toEqual([])
+    expect(toolResultMedia('image')).toEqual([])
+    expect(toolResultMedia(null)).toEqual([])
+    expect(toolResultMedia([{ type: 'image', source: {} }, { type: 'mystery' }])).toEqual([])
+  })
+})
+
+describe('indexOperations media', () => {
+  it('carries the media blocks on the result, and nothing on a plain one', () => {
+    const msgs = [
+      msg('assistant', [call('t1', 'Read'), call('t2', 'Read')]),
+      msg('user', [result('t1', [{ type: 'image', source: { type: 'omitted', bytes: 3 } }]), result('t2', 'plain')]),
+    ]
+    const idx = indexOperations(msgs).resultForCall
+    expect(idx.get('0:0')).toMatchObject({ text: '', media: [{ type: 'image', source: { type: 'omitted', bytes: 3 } }] })
+    expect(idx.get('0:1')).toEqual({ text: 'plain', isError: false })
   })
 })
 

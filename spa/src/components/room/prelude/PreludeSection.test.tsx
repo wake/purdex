@@ -124,6 +124,24 @@ describe('PreludeSection', () => {
     expect(screen.getByText('[document · pdf · 5.0 MB]')).toBeTruthy()
   })
 
+  it('a Read result whose transcript block carries an omitted image shows no raw JSON (#1629)', () => {
+    const view = derivePrelude([
+      m('2', 'assistant', [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: '/a.png' } }]),
+      m('3', 'user', [{ type: 'tool_result', tool_use_id: 'r1', content: [{ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 80 } }] }]),
+    ])
+    render(<PreludeSection {...base} view={view} status="ok" done />)
+    expect(document.body.textContent).not.toContain('omitted')
+    expect(document.body.textContent).not.toContain('"type"')
+    expect(screen.getByText('[image · png · 80 B]')).toBeTruthy()
+    expect(screen.queryByTestId('op-non-text')).toBeNull()
+  })
+
+  it('a placeholder without a byte count draws no size', () => {
+    const view = derivePrelude([m('2', 'user', [{ type: 'image', source: { type: 'omitted', media_type: 'image/png' } }])])
+    render(<PreludeSection {...base} view={view} status="ok" done />)
+    expect(screen.getByText('[image · png]')).toBeTruthy()
+  })
+
   it('every cut block and every cut note says so', () => {
     const view = derivePrelude([
       m('2', 'assistant', [
@@ -425,7 +443,11 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection over Nexe
   it('draws the omitted image / PDF as placeholders with their sizes', () => {
     draw()
     expect(screen.getAllByTestId('prelude-media').map((e) => e.textContent))
-      .toEqual(['[image · png · 69 B]', '[document · pdf · 15 B]', '[image · png · 69 B]'])
+      .toEqual([
+        '[image · png · 69 B]', '[document · pdf · 15 B]', '[image · png · 69 B]',
+        // The Read result's image: room draws its operation open, chat folds it into the tools line.
+        ...(mode === 'room' ? ['[image · png · 69 B]'] : []),
+      ])
   })
 
   it('draws every note source, the stderr one in the error tone', () => {
@@ -458,7 +480,8 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection over Nexe
         b.querySelector('[data-testid="op-dot"]')!.className.match(/bg-status-\w+/)![0],
       ])
       expect(ops).toEqual([['Bash', false, 'bg-status-success'], ['Read', false, 'bg-status-success'], ['Edit', true, 'bg-status-warning'], ['Write', false, 'bg-status-success']])
-      expect(screen.getByTestId('op-non-text')).toBeTruthy()
+      // The Read's result carries an image: its placeholder replaces the generic non-text line (#1629).
+      expect(screen.queryByTestId('op-non-text')).toBeNull()
     })
   } else {
     it('hints only where chat draws the block: the cut text now, the cut Write call and result inside its tools line', () => {
