@@ -80,7 +80,6 @@ describe('openConversationRebuild — a new tab', () => {
       rebuild: {
         sessionName: 'proj-2', tmuxInstance: GEN, cwd: '/home/u/proj/sub', cwdSource: 'user',
         agent: { type: 'cc', sessionId: S, updatedAt: NOW - 30_000 },
-        agentExited: { at: NOW - 30_000, reason: 'session-end' },
         capturedAt: NOW,
       },
       conversation: { sessionId: S, title: 'Fix the login bug', lastIn: 'terminal', lastWriteAt: NOW - 30_000 },

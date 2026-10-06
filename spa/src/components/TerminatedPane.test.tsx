@@ -541,6 +541,13 @@ describe('TerminatedPane — a conversation-ended pane', () => {
     expect(screen.queryByTestId('terminated-rebuild-worker')).toBeNull()
   })
 
+  // The pane exists to resume S: Rebuild runs the resume without the user ticking anything.
+  it('the terminal rebuild resumes S by default', () => {
+    renderConversation({ last_in: 'terminal' })
+    expect(screen.getByRole('checkbox', { name: 'Run resume command' })).toBeChecked()
+    expect(screen.getByTestId('rebuild-action-set')).toHaveTextContent(`claude --resume ${S}`)
+  })
+
   it('last in a worker with Nexen ready: worker preselected, and the rebuild resumes S in its cwd without replacing anything', async () => {
     renderConversation({ last_in: 'worker' })
     expect(screen.getByTestId('rebuild-mode-worker')).toHaveAttribute('aria-checked', 'true')

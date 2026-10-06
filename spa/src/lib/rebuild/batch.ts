@@ -6,7 +6,8 @@
 //     instance stays in the key because the same code under two different
 //     non-empty instances is genuinely two different historical sessions.
 //     Two panes on ONE dead session must produce one create and one resume,
-//     not `name` plus `name-2` with the agent resumed twice.
+//     not `name` plus `name-2` with the agent resumed twice. A pane with no
+//     session code has no session to share and is a group of its own.
 //  2. **Unknown generation (`tmuxInstance === ''`) is excluded**, not merged
 //     by code alone — that is exactly the merge-two-different-sessions
 //     mistake the key exists to prevent. Those panes are surfaced as "needs
@@ -92,6 +93,12 @@ export function planForRecord(
 function groupKey(ref: PaneRef): string {
   // NUL cannot occur in a host id, an instance stamp or a session code, so
   // no pair of distinct triples can collide on the joined key.
+  //
+  // An empty session code is no tmux binding at all (a conversation-ended pane,
+  // conversation entity spec §13.4, never had a session of its own), so there is
+  // nothing for two such panes to share: each forms its own group, keyed by its
+  // pane id. The extra part keeps those keys apart from every triple.
+  if (ref.sessionCode === '') return [ref.hostId, ref.tmuxInstance, '', ref.paneId].join('\u0000')
   return [ref.hostId, ref.tmuxInstance, ref.sessionCode].join('\u0000')
 }
 

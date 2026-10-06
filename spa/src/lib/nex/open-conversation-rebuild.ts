@@ -7,7 +7,8 @@
 // name generated the way take-to-terminal generates one, and the host's current tmux generation — plus the
 // `conversation` the screen reads its title, preselection (R-4-5) and recently-written notice (R-4-4) from.
 // From then on it is an ordinary closed terminal pane: the host reconciler skips it (it is terminated), and
-// Rebuild all takes it when it carries a generation (`batch.ts` `groupForBatch`).
+// Rebuild all takes it when it carries a generation (`batch.ts` `groupForBatch`) — as a group of its own, since an
+// empty session code is no binding to share with another pane.
 //
 // One tab per (host, S): `openSingletonTab` never matches `tmux-session` content and looks only at primary
 // panes, so the pane is looked for here, in every leaf of every tab.
@@ -71,7 +72,8 @@ export function conversationRebuildContent(
       cwd: row.cwd,
       cwdSource: 'user',
       agent: { type: 'cc', sessionId, updatedAt: row.last_activity_at },
-      agentExited: { at: row.last_activity_at, reason: 'session-end' },
+      // No `agentExited`: an exited agent is not resumed by default (the panel's resume row starts unticked,
+      // `planForRecord` skips it), and this pane exists to resume S. Absent reads "running when last seen".
       capturedAt,
     },
     conversation: { sessionId, title: row.title, lastIn: row.last_in, lastWriteAt: row.last_activity_at },

@@ -4,6 +4,7 @@ import {
   BATCH_LOCK_OWNER,
   groupForBatch,
   planBatch,
+  planForRecord,
   planGroups,
   recordsDisagree,
   runBatchRebuild,
@@ -59,6 +60,11 @@ describe('groupForBatch', () => {
   it('keeps the same code under different generations apart', () => {
     const { groups } = groupForBatch([pane('p1'), pane('p2', { tmuxInstance: '222:2000' })])
     expect(groups).toHaveLength(2)
+  })
+
+  it('never merges two panes without a session code (no binding to share)', () => {
+    const { groups } = groupForBatch([pane('p1', { sessionCode: '' }), pane('p2', { sessionCode: '' })])
+    expect(groups.map((g) => g.paneIds)).toEqual([['p1'], ['p2']])
   })
 
   it('keeps the same code on different hosts apart', () => {
@@ -625,10 +631,10 @@ describe('a conversation-ended pane', () => {
     last_activity_at: 5, last_in: 'terminal',
   }
 
-  function seedConversation(tabId: string, paneId: string, tmuxInstance: string) {
+  function seedConversation(tabId: string, paneId: string, tmuxInstance: string, conv: ConversationRow = row, name = 'proj-2') {
     const tab: Tab = {
       id: tabId, pinned: false, locked: false, createdAt: 0,
-      layout: { type: 'leaf', pane: { id: paneId, content: conversationRebuildContent('h1', row, 'proj-2', tmuxInstance, 1) } },
+      layout: { type: 'leaf', pane: { id: paneId, content: conversationRebuildContent('h1', conv, name, tmuxInstance, 1) } },
     }
     const prev = useTabStore.getState()
     useTabStore.setState({ tabs: { ...prev.tabs, [tabId]: tab }, tabOrder: [...prev.tabOrder, tabId], activeTabId: tabId })
@@ -680,4 +686,41 @@ describe('a conversation-ended pane', () => {
       expect(c.conversation).toBeUndefined()
     })
   }
+
+  // The pane exists to resume S: its record reads "running when last seen", so the batch plan resumes it.
+  it('Rebuild all plans the resume for it', () => {
+    const record = conversationRebuildContent('h1', row, 'proj-2', '111:1000', 1).rebuild!
+    expect(record.agentExited).toBeUndefined()
+    expect(planForRecord(record, defaultResumeLookup)).toEqual({ createSession: true, applyCwd: true, runResume: true })
+  })
+
+  // No tmux binding to share: an empty session code is never a reason to merge two panes.
+  it('two of them on one host and generation are two groups: two creates, two resumes, each pane on its own session', async () => {
+    const S2 = 'bbbbbbbb-1111-2222-3333-444444444444'
+    seedConversation('t1', 'p1', '111:1000')
+    seedConversation('t2', 'p2', '111:1000', { ...row, session_id: S2, cwd: '/w/other' }, 'other-1')
+
+    const { groups } = rebuildAllDrafts()
+    expect(groups.map((g) => g.paneIds)).toEqual([['p1'], ['p2']])
+
+    const create = vi.fn(async (_h: string, name: string) => session({ code: `new-${name}`, name, tmux_instance: '222:2000' }))
+    const sendKeys = vi.fn(async () => {})
+    const report = await runBatchRebuild({ createSession: create, sendKeys })
+
+    expect(report.status).toBe('ok')
+    expect(create.mock.calls).toEqual([['h1', 'proj-2', '/w/proj', 'terminal'], ['h1', 'other-1', '/w/other', 'terminal']])
+    expect(sendKeys.mock.calls).toEqual([
+      ['h1', 'new-proj-2', `claude --resume ${S}`, '222:2000'],
+      ['h1', 'new-other-1', `claude --resume ${S2}`, '222:2000'],
+    ])
+    expect(sessionCodeOfPane('t1', 'p1')).toBe('new-proj-2')
+    expect(sessionCodeOfPane('t2', 'p2')).toBe('new-other-1')
+  })
+
+  it('two ordinary panes bound to one session code still form one group', () => {
+    seedPane('h1', 't1', 'p1', { sessionName: 'dev' })
+    seedPane('h1', 't2', 'p2', { sessionName: 'dev' })
+    const { groups } = rebuildAllDrafts()
+    expect(groups.map((g) => g.paneIds)).toEqual([['p1', 'p2']])
+  })
 })
