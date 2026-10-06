@@ -85,6 +85,10 @@ export interface ListExecutionsOptions {
   includeArchived?: boolean
   cursor?: string
   limit?: number
+  /** Nexen v0.17 (`capabilities.list.session_filter`). */
+  sessionId?: string
+  /** Exact-match label filters, sent as `label.<key>=<value>`. */
+  labels?: Record<string, string>
 }
 
 export function listExecutions(hostId: string, opts: ListExecutionsOptions = {}): Promise<ExecutionsPage> {
@@ -93,6 +97,8 @@ export function listExecutions(hostId: string, opts: ListExecutionsOptions = {})
   if (opts.includeArchived) q.set('include_archived', 'true')
   if (opts.cursor) q.set('cursor', opts.cursor)
   if (opts.limit) q.set('limit', String(opts.limit))
+  if (opts.sessionId) q.set('session_id', opts.sessionId)
+  for (const k of Object.keys(opts.labels ?? {}).sort()) q.set(`label.${k}`, opts.labels![k])
   const qs = q.toString()
   return nexFetch(hostId, `/v1/executions${qs ? `?${qs}` : ''}`).then((r) => okJson<ExecutionsPage>(r))
 }

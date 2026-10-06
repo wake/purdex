@@ -59,6 +59,19 @@ describe('nex-api', () => {
     expect(u.searchParams.get('limit')).toBe('20')
   })
 
+  it('listExecutions sends session_id encoded and label.<k> params sorted', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ items: [], next_cursor: '' }))
+    await listExecutions(hostId, { limit: 5, sessionId: 'a b&c', labels: { zeta: '1', alpha: 'x y' } })
+    const [url] = testGlobal.fetch.mock.calls[0]
+    expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions?limit=5&session_id=a+b%26c&label.alpha=x+y&label.zeta=1')
+  })
+
+  it('listExecutions adds nothing for an empty sessionId or empty labels', async () => {
+    testGlobal.fetch.mockResolvedValueOnce(json({ items: [], next_cursor: '' }))
+    await listExecutions(hostId, { sessionId: '', labels: {} })
+    expect(testGlobal.fetch.mock.calls[0][0]).toBe('http://100.64.0.2:7860/api/nex/v1/executions')
+  })
+
   it('fetchExecutionEvents passes after/limit and encodes the id', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ items: [], next_cursor: 0 }))
     await fetchExecutionEvents(hostId, 'exc a', { after: 41, limit: 500 })

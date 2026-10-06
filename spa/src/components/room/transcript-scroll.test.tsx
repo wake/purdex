@@ -812,17 +812,17 @@ describe.each(views)('%s: prepending the prelude keeps the reader in place (Revi
 describe('scroll memory anchors inside the prelude (#1534)', () => {
   const PANE = 'pane-prelude-anchor'
   const ANCHORS = '[data-prelude-pos], [data-turn-index]'
-  const pm = (pos: string, type: 'user' | 'assistant', text: string): PreludeItem => ({
+  const pm = (pos: string, type: 'user' | 'assistant', text: string): PreludeItem => ({ offset: null,
     pos, at: 0, kind: type,
     msg: { type, parent_tool_use_id: null, message: { role: type, content: [{ type: 'text', text }], stop_reason: null } } as unknown as StreamMessage,
   })
   // Two pages: OLDER lands above NEWER. Room draws one row per item; chat
   // draws 1, span 2 (2 3), 4, span 5 (5 6).
   const OLDER: PreludeItem[] = [
-    { pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' }, pm('2', 'user', 'early question'), pm('3', 'assistant', 'early answer'),
+    { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'cli' }, pm('2', 'user', 'early question'), pm('3', 'assistant', 'early answer'),
   ]
   const NEWER: PreludeItem[] = [
-    { pos: '4', at: 0, kind: 'prelude.note', source: 'command_output', text: 'Model set', truncated: false, totalBytes: null, stream: null },
+    { offset: null, pos: '4', at: 0, kind: 'prelude.note', source: 'command_output', text: 'Model set', truncated: false, totalBytes: null, stream: null },
     pm('5', 'user', 'second question'), pm('6', 'assistant', 'second answer'),
   ]
   const BOTH = [...OLDER, ...NEWER]
@@ -1058,16 +1058,16 @@ describe.each(views)('%s: the scroll anchor class marks exactly the anchors', (n
   const message = (type: 'user' | 'assistant', text: string) =>
     ({ type, parent_tool_use_id: null, message: { role: type, content: [{ type: 'text', text }], stop_reason: null } }) as unknown as StreamMessage
   const note = (pos: string, source: string, stream: string | null = null): PreludeItem =>
-    ({ pos, at: 0, kind: 'prelude.note', source, text: `${source} text`, truncated: false, totalBytes: null, stream })
+    ({ offset: null, pos, at: 0, kind: 'prelude.note', source, text: `${source} text`, truncated: false, totalBytes: null, stream })
   const ITEMS: PreludeItem[] = [
-    { pos: 'a', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
-    { pos: 'b', at: 0, kind: 'prelude.compaction', trigger: 'auto' },
+    { offset: null, pos: 'a', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+    { offset: null, pos: 'b', at: 0, kind: 'prelude.compaction', trigger: 'auto' },
     note('c', 'bash_input'), note('d', 'bash_output', 'stderr'), note('e', 'task_notification'),
     note('f', 'peer_message'), note('g', 'command_output'), note('h', 'something_new'),
-    { pos: 'i', at: 0, kind: 'user', msg: message('user', 'a question') },
-    { pos: 'j', at: 0, kind: 'assistant', msg: message('assistant', 'an answer') },
-    { pos: 'k', at: 0, kind: 'assistant', msg: message('assistant', 'more of it') },
-    { pos: 'l', at: 0, kind: 'user', msg: message('user', 'another question') },
+    { offset: null, pos: 'i', at: 0, kind: 'user', msg: message('user', 'a question') },
+    { offset: null, pos: 'j', at: 0, kind: 'assistant', msg: message('assistant', 'an answer') },
+    { offset: null, pos: 'k', at: 0, kind: 'assistant', msg: message('assistant', 'more of it') },
+    { offset: null, pos: 'l', at: 0, kind: 'user', msg: message('user', 'another question') },
   ]
   // Room: one row per message. Chat: span i (i j k), span l.
   const DRAWN = name === 'room'

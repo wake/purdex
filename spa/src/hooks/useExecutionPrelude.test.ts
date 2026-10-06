@@ -13,7 +13,7 @@ import { useExecutionPrelude, PRELUDE_PAGE_LIMIT } from './useExecutionPrelude'
 const CAP = { route: { method: 'GET', path: '/x' }, page_max_items: 500, page_max_bytes: 1, max_block_bytes: 1 }
 const ok = (pos: string, prevCursor: string | null): PreludePage => ({
   state: 'ok', prevCursor, totalBytes: null,
-  items: [{ pos, at: 1, kind: 'prelude.segment', entrypoint: 'cli' }],
+  items: [{ offset: null, pos, at: 1, kind: 'prelude.segment', entrypoint: 'cli' }],
 })
 
 /** A ready host with (or without) the capability, and an execution whose history is loaded. */

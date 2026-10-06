@@ -109,25 +109,25 @@ const edgeShapes: Fixture = {
 // A prelude above a short live list: a turn with a folded output, every note
 // source, markers, and a second turn that opens with the human's line.
 const note = (pos: string, source: string, text: string) =>
-  ({ pos, at: 0, kind: 'prelude.note', source, text, truncated: false, totalBytes: null, stream: null }) as const
+  ({ pos, at: 0, offset: null, kind: 'prelude.note', source, text, truncated: false, totalBytes: null, stream: null }) as const
 const withPrelude: Fixture = {
   messages: [said('live question'), asst({ type: 'text', text: 'live **answer**' })],
   turnStarts: [0],
   tools: {},
   prelude: derivePrelude([
-    { pos: '1', at: 0, kind: 'user', msg: said('early question') },
-    { pos: '2', at: 0, kind: 'assistant', msg: asst({ type: 'thinking', thinking: 'early thought' }, { type: 'text', text: 'early *answer*' }, { type: 'text', text: 'cut off', truncated: true, total_bytes: 9000 }, call('pb', 'Bash', { command: 'ls' })) },
-    { pos: '3', at: 0, kind: 'user', msg: usr(res('pb', lines(60, 'pout'))) },
-    { pos: '4', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
+    { offset: null, pos: '1', at: 0, kind: 'user', msg: said('early question') },
+    { offset: null, pos: '2', at: 0, kind: 'assistant', msg: asst({ type: 'thinking', thinking: 'early thought' }, { type: 'text', text: 'early *answer*' }, { type: 'text', text: 'cut off', truncated: true, total_bytes: 9000 }, call('pb', 'Bash', { command: 'ls' })) },
+    { offset: null, pos: '3', at: 0, kind: 'user', msg: usr(res('pb', lines(60, 'pout'))) },
+    { offset: null, pos: '4', at: 0, kind: 'prelude.segment', entrypoint: 'cli' },
     note('5', 'bash_input', 'ls -la'),
     note('6', 'command_output', lines(40, 'cmd')),
     note('7', 'peer_message', 'peer **says** hi'),
     note('8', 'task_notification', 'task finished'),
     { ...note('12', 'bash_output', 'stderr text'), stream: 'stderr' },
     note('13', 'future_source', 'unknown source text'),
-    { pos: '9', at: 0, kind: 'prelude.compaction', trigger: 'auto' },
-    { pos: '10', at: 0, kind: 'user', msg: said('second early question') },
-    { pos: '11', at: 0, kind: 'assistant', msg: asst({ type: 'text', text: 'second early answer' }) },
+    { offset: null, pos: '9', at: 0, kind: 'prelude.compaction', trigger: 'auto' },
+    { offset: null, pos: '10', at: 0, kind: 'user', msg: said('second early question') },
+    { offset: null, pos: '11', at: 0, kind: 'assistant', msg: asst({ type: 'text', text: 'second early answer' }) },
   ]),
 }
 
@@ -148,10 +148,10 @@ const withPaste: Fixture = {
   turnStarts: [0],
   tools: {},
   prelude: derivePrelude([
-    { pos: '1', at: 0, kind: 'user', msg: said(`look at this:\n${pasted('000a', lines(30, 'pasted'))}\nthanks`) },
-    { pos: '2', at: 0, kind: 'assistant', msg: asst({ type: 'text', text: 'seen' }) },
-    { pos: '3', at: 0, kind: 'user', msg: said(pasted('000b', '/compact short')) },
-    { pos: '4', at: 0, kind: 'user', msg: usr({ type: 'text', text: `cut <pasted_content id="000c">\n${lines(50, 'cut')}`, truncated: true, total_bytes: 99999 }) },
+    { offset: null, pos: '1', at: 0, kind: 'user', msg: said(`look at this:\n${pasted('000a', lines(30, 'pasted'))}\nthanks`) },
+    { offset: null, pos: '2', at: 0, kind: 'assistant', msg: asst({ type: 'text', text: 'seen' }) },
+    { offset: null, pos: '3', at: 0, kind: 'user', msg: said(pasted('000b', '/compact short')) },
+    { offset: null, pos: '4', at: 0, kind: 'user', msg: usr({ type: 'text', text: `cut <pasted_content id="000c">\n${lines(50, 'cut')}`, truncated: true, total_bytes: 99999 }) },
   ]),
 }
 
