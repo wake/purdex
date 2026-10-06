@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.519] - 2026-10-07
+
+> 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。這一版畫面上還看不到變化。
+
+### Added：讀取已結束／已消失對話清單的前端程式（對話主體 P4-2a-1，#1668）
+
+- 新增呼叫 daemon `GET /api/nex/conversations` 的程式與對應的 hook，供之後的「設定 → Worker → 已退出／已消失」分頁使用。
+- 只在打開分頁與按「重試」時抓取；同一台主機、同一種清單同時只會有一個請求。這台主機沒有啟用 Nexen 時會標示為「不可用」。
+
 ## [1.0.0-alpha.518] - 2026-10-07
 
 > 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。首次啟動會在 data dir 建立 `team.db`（新檔，不動既有資料庫）。SPA 與 Electron 都沒有改動。
