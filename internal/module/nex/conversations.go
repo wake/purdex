@@ -70,7 +70,7 @@ type conversationInputs struct {
 }
 
 type conversationsResult struct {
-	Ended, Gone  []conversationRow // each sorted LastActivityAt desc, then SessionID asc; uncapped
+	Ended, Gone  []conversationRow // never nil; each sorted LastActivityAt desc, then SessionID asc; uncapped
 	UnknownOwner int               // S skipped because only unverified frames hold them (R-4-9)
 }
 
@@ -154,7 +154,8 @@ func buildConversations(in conversationInputs) conversationsResult {
 		return path != "" && unreadable[filepath.Dir(path)]
 	}
 
-	var res conversationsResult
+	// Non-nil, so an empty list serializes as [] (never null).
+	res := conversationsResult{Ended: []conversationRow{}, Gone: []conversationRow{}}
 	for s := range candidates {
 		if running[s] {
 			continue
@@ -176,15 +177,15 @@ func buildConversations(in conversationInputs) conversationsResult {
 		r.Title, r.TitleSource = conversationTitle(s, row, stint.TitleText)
 		r.Cwd = firstNonEmpty(row.Cwd, stint.Cwd)
 		r.CwdExists = r.Cwd != "" && in.DirExists(r.Cwd)
+		// The listing, else the last the index saw (§13.3), else the stint.
 		switch {
 		case listed:
 			r.LastActivityAt, r.TranscriptPath = entry.MtimeMs, entry.Path
 		case hasRow:
-			r.LastActivityAt = row.MtimeMs
+			r.LastActivityAt, r.TranscriptPath = row.MtimeMs, firstNonEmpty(row.TranscriptPath, stint.TranscriptPath)
 		default:
-			r.LastActivityAt = stint.UpdatedAt
+			r.LastActivityAt, r.TranscriptPath = stint.UpdatedAt, stint.TranscriptPath
 		}
-		r.TranscriptPath = firstNonEmpty(r.TranscriptPath, firstNonEmpty(row.TranscriptPath, stint.TranscriptPath))
 		r.LastIn = conversationLastIn(row.FirstEntrypoint, row.LastEntrypoint, hasStint)
 		r.LatestExecutionID, r.EffectiveProfile = stint.ID, stint.EffectiveProfile
 

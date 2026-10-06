@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/wake/purdex/internal/conversations"
 	"github.com/wake/purdex/internal/module/agent"
 	pstore "github.com/wake/purdex/internal/store"
@@ -559,6 +560,47 @@ func TestConversations_Order(t *testing.T) {
 
 	g := newCVWorld().execs(cvEnded("E1", cvC, 1, 300), cvEnded("E2", cvA, 1, 900), cvEnded("E3", cvB, 1, 300))
 	cvExpect(t, g.build(), nil, []string{cvA, cvB, cvC}, 0)
+}
+
+// §13.3 "the last mtime Purdex saw": a gone S with both an index row and a
+// stint takes the index's values, not the stint's.
+func TestConversations_GoneStintedTakesIndexValues(t *testing.T) {
+	e := cvEnded("E1", cvA, 10, 9000)
+	e.TranscriptPath, e.Cwd = "/stint/"+cvA+".jsonl", "/work/stint"
+	res := newCVWorld().index(cvIndexRow(cvA, "cli", "cli")).execs(e).build()
+	cvExpect(t, res, nil, []string{cvA}, 0)
+	got := cvOne(t, res.Gone)
+	require.Equal(t, int64(1000), got.LastActivityAt, "last_activity_at = the index mtime")
+	require.Equal(t, cvPath(cvA), got.TranscriptPath, "transcript_path = the index path")
+	require.Equal(t, "/work/app", got.Cwd, "cwd = the index cwd")
+	require.Equal(t, "E1", got.LatestExecutionID)
+
+	// An index row without a path falls back to the stint's path only.
+	r := cvIndexRow(cvA, "cli", "cli")
+	r.TranscriptPath = ""
+	got = cvOne(t, newCVWorld().index(r).execs(e).build().Gone)
+	require.Equal(t, int64(1000), got.LastActivityAt)
+	require.Equal(t, e.TranscriptPath, got.TranscriptPath)
+}
+
+// Empty lists are non-nil, so the endpoint serializes [] and never null.
+func TestConversations_EmptyListsAreNotNil(t *testing.T) {
+	res := newCVWorld().build()
+	require.NotNil(t, res.Ended)
+	require.NotNil(t, res.Gone)
+	require.Len(t, res.Ended, 0)
+	require.Len(t, res.Gone, 0)
+	b, err := json.Marshal(res)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"Ended":[],"Gone":[],"UnknownOwner":0}`, string(b))
+
+	// One list filled, the other still [].
+	res = newCVWorld().index(cvIndexRow(cvA, "cli", "cli")).list(cvA, 2000).build()
+	require.Len(t, res.Ended, 1)
+	require.NotNil(t, res.Gone)
+	b, err = json.Marshal(res.Gone)
+	require.NoError(t, err)
+	require.Equal(t, "[]", string(b))
 }
 
 // The JSON tags are the wire format Task 38 serves and the SPA reads.
