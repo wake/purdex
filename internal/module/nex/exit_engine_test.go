@@ -162,3 +162,117 @@ func TestExitWorker_RealEngine_LeaseHandedOverAfterTerminateIsNotArchivedOver(t 
 		t.Fatalf("execution.archived events = %q, want none (a refused archive emits nothing)", got)
 	}
 }
+
+// d16Retry runs the first exit with the lease handed to handoverTo right
+// after the terminate (its fenced archive refused: terminated, unarchived)
+// and returns the row the next exit — the D16 retry — starts from.
+func d16Retry(t *testing.T, f *mountFixture, spy *engineSpy, exec store.Execution, handoverTo string) store.Execution {
+	t.Helper()
+	spy.handoverTo = handoverTo
+	out, herr := f.m.exitWorker(context.Background(), exec, nil, "pdx:"+f.hostID)
+	if spy.handoverErr != nil {
+		t.Fatalf("test setup: %v", spy.handoverErr)
+	}
+	if herr != nil || !out.Terminated || out.Archived {
+		t.Fatalf("first exit: out=%+v herr=%+v, want terminated, not archived", out, herr)
+	}
+	spy.handoverTo = ""
+	row, err := f.m.getExecution(context.Background(), exec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.State != store.StateTerminated || row.ArchivedAt != 0 || row.LeasePrincipalID != handoverTo {
+		t.Fatalf("row after the first exit = %+v, want terminated, unarchived, held by %q", row, handoverTo)
+	}
+	return row
+}
+
+// #1665: the D16 retry archives under a control too. A non-pdx holder
+// that took the lease after the terminate is refused (D4), not archived over.
+func TestExitWorker_RealEngine_D16RetryHeldByNonPdxIsRefused(t *testing.T) {
+	const ploom = "ploom:agent-7"
+	f, spy, exec := realIdleWorker(t, "")
+	row := d16Retry(t, f, spy, exec, ploom)
+
+	out, herr := f.m.exitWorker(context.Background(), row, nil, "pdx:"+f.hostID)
+	if herr == nil || herr.code != "held_by" || herr.detail["principal"] != ploom {
+		t.Fatalf("herr = %+v, want held_by %s", herr, ploom)
+	}
+	if out.Archived || len(spy.archives) != 1 {
+		t.Fatalf("out=%+v archives=%+v, want no archive attempted by the retry", out, spy.archives)
+	}
+	after, err := f.m.getExecution(context.Background(), exec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ArchivedAt != 0 || after.LeasePrincipalID != ploom || after.LeaseID != row.LeaseID {
+		t.Fatalf("row after the retry = %+v, want unarchived, lease %s of %s untouched", after, row.LeaseID, ploom)
+	}
+	if got := f.archivedPrincipals(t, exec.ID); len(got) != 0 {
+		t.Fatalf("execution.archived events = %q, want none", got)
+	}
+}
+
+// #1665: a pdx holder's lease is borrowed — the retry archives under the
+// holder's lease and principal, and the event names the holder.
+func TestExitWorker_RealEngine_D16RetryUnderPdxHolderLease(t *testing.T) {
+	f, spy, exec := realIdleWorker(t, "")
+	holder := "pdx:" + f.hostID + "/other-tab"
+	row := d16Retry(t, f, spy, exec, holder)
+
+	out, herr := f.m.exitWorker(context.Background(), row, nil, "pdx:"+f.hostID)
+	if herr != nil || !out.Terminated || !out.Archived {
+		t.Fatalf("out=%+v herr=%+v", out, herr)
+	}
+	if len(spy.archives) != 2 {
+		t.Fatalf("archives = %+v, want the refused one and the retry", spy.archives)
+	}
+	if arch := spy.archives[1]; arch.LeaseID != row.LeaseID || arch.PrincipalID != holder || spy.archiveErrs[1] != nil {
+		t.Fatalf("retry archive under %q/%q (err %v), want the holder's %q/%q", arch.LeaseID, arch.PrincipalID, spy.archiveErrs[1], row.LeaseID, holder)
+	}
+	after, err := f.m.getExecution(context.Background(), exec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ArchivedAt == 0 || after.LeaseID != row.LeaseID {
+		t.Fatalf("row after the retry = %+v, want archived, the borrowed lease never released", after)
+	}
+	if got := f.archivedPrincipals(t, exec.ID); len(got) != 1 || got[0] != holder {
+		t.Fatalf("execution.archived principals = %q, want [%q] (the lease holder)", got, holder)
+	}
+}
+
+// #1665: no holder — the retry acquires its own lease, archives under it,
+// and releases it after the archive.
+func TestExitWorker_RealEngine_D16RetryUnderOwnLease(t *testing.T) {
+	const ploom = "ploom:agent-7"
+	f, spy, exec := realIdleWorker(t, "")
+	self := "pdx:" + f.hostID
+	row := d16Retry(t, f, spy, exec, ploom)
+	ploomLease := row.LeaseID
+	if err := spy.nexService.ReleaseLease(context.Background(), exec.ID, ploomLease, ploom); err != nil {
+		t.Fatalf("test setup: releasing %s's lease: %v", ploom, err)
+	}
+	row.LeaseID, row.LeasePrincipalID, row.LeaseExpiresAt = "", "", 0
+
+	out, herr := f.m.exitWorker(context.Background(), row, nil, self)
+	if herr != nil || !out.Terminated || !out.Archived {
+		t.Fatalf("out=%+v herr=%+v", out, herr)
+	}
+	if len(spy.archives) != 2 {
+		t.Fatalf("archives = %+v, want the refused one and the retry", spy.archives)
+	}
+	if arch := spy.archives[1]; arch.LeaseID == "" || arch.LeaseID == ploomLease || arch.PrincipalID != self || spy.archiveErrs[1] != nil {
+		t.Fatalf("retry archive under %q/%q (err %v), want a fresh own lease of %q", arch.LeaseID, arch.PrincipalID, spy.archiveErrs[1], self)
+	}
+	after, err := f.m.getExecution(context.Background(), exec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ArchivedAt == 0 || after.LeaseID != "" {
+		t.Fatalf("row after the retry = %+v, want archived and the own lease released", after)
+	}
+	if got := f.archivedPrincipals(t, exec.ID); len(got) != 1 || got[0] != self {
+		t.Fatalf("execution.archived principals = %q, want [%q]", got, self)
+	}
+}

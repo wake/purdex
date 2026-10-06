@@ -20,13 +20,16 @@ func needsTerminate(s store.State) bool {
 func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *control, principal string) (exitOutcome, *handoffError) {
 	out := exitOutcome{Terminated: exec.State == store.StateTerminated, Archived: exec.ArchivedAt != 0, State: exec.State}
 	var termErr *handoffError // a failed terminate; reported only if the archive cannot stand in for it
-	// D23: the lease (and its principal) a successful terminate ran under.
-	// The archive carries it, so Nexen (≥ v0.18.0, #113) checks the lease in
-	// the archive's own UPDATE. Empty — no fence — for every other archive.
+	// D23: the lease (and its principal) the archive runs under, so Nexen
+	// (≥ v0.18.0, #113) checks the lease in the archive's own UPDATE: the
+	// control a successful terminate ran under, or that answered
+	// ErrExecutionTerminal; for a row that needs no terminate, the control
+	// taken for the archive (#1665). Empty — no fence — only on D4's
+	// "terminate failed, archive anyway" path.
 	var fenceLease, fencePrincipal string
+	own := control{release: noRelease} // a control exitWorker took itself; released on return, after the archive
+	defer func() { own.release() }()
 	if needsTerminate(exec.State) {
-		own := control{release: noRelease} // a control exitWorker took itself; released on return, after the archive
-		defer func() { own.release() }()
 		c := ctl
 		if c == nil {
 			got, herr := m.takeControl(parent, exec.ID, "", principal)
@@ -68,6 +71,8 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 				out.Terminated, out.State = true, store.StateTerminated
 				fenceLease, fencePrincipal = leaseID, leasePrincipal
 			case errors.Is(err, store.ErrExecutionTerminal):
+				// The row ended on its own; the control is still ours to act under.
+				fenceLease, fencePrincipal = leaseID, leasePrincipal
 				if fresh, gerr := m.getExecution(parent, exec.ID); gerr == nil {
 					out.State = fresh.State
 					out.Terminated = fresh.State == store.StateTerminated
@@ -82,6 +87,22 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 				}
 			}
 		}
+	} else if !out.Archived {
+		// #1665: a row that needs no terminate — terminated but unarchived
+		// (D16's retry), failed, rejected — is archived under a control too:
+		// the caller's, else one taken as for a terminate. A non-pdx holder
+		// is never overridden (D4: held_by, nothing changes), and any other
+		// failure to take control archives nothing.
+		c := ctl
+		if c == nil {
+			got, herr := m.takeControl(parent, exec.ID, "", principal)
+			if herr != nil {
+				m.logf("nex: exit %s: no control for the archive (%s); not archiving", exec.ID, herr.msg)
+				return out, herr
+			}
+			own, c = got, &own
+		}
+		fenceLease, fencePrincipal = c.LeaseID, c.PrincipalID
 	}
 	if !out.Archived {
 		if termErr != nil {
@@ -100,7 +121,7 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 		}
 		req := execution.ArchiveRequest{ExecutionID: exec.ID, PrincipalID: principal, Archived: true}
 		if fenceLease != "" {
-			// D23: archive under the terminate's lease — a lease that changed
+			// D23: archive under the control's lease — a lease that changed
 			// hands since is refused (lease_* error) and nothing is written.
 			req.LeaseID, req.PrincipalID = fenceLease, fencePrincipal
 		}
@@ -187,7 +208,8 @@ func (m *Module) handleExitWorker(w http.ResponseWriter, r *http.Request) {
 	}
 	// A caller's lease is validated before it is acted under: renewControl
 	// renews it, and re-takes control (refusing a non-pdx holder) when it is
-	// stale or not the caller's. A row that needs no terminate ignores it.
+	// stale or not the caller's. A row that needs no terminate ignores it:
+	// exitWorker takes control for that archive itself (#1665).
 	var ctl *control
 	if body.LeaseID != "" && needsTerminate(exec.State) {
 		c, herr := m.renewControl(r.Context(), execID, control{LeaseID: body.LeaseID, PrincipalID: principal, release: noRelease}, principal)

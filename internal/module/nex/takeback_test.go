@@ -922,6 +922,8 @@ func TestTakeback_NoSessionIDBeforeAnyLock(t *testing.T) {
 }
 
 // A rejected bound execution never wrote (D6): resumed, then archived by exit.
+// The transfer holds no control for a row that takes no sends (nothing
+// before the keys); the exit takes one for its archive only (#1665).
 func TestTakeback_RejectedIsAccepted(t *testing.T) {
 	env := newTakebackEnv(t)
 	tl := env.tbTimeline()
@@ -929,7 +931,11 @@ func TestTakeback_RejectedIsAccepted(t *testing.T) {
 	status, body := env.post(t, hoCode, takebackBody())
 	require.Equal(t, http.StatusOK, status, "%v", body)
 	assert.Equal(t, true, body["exited"])
-	assert.Equal(t, []string{"keys", "archive"}, tl.snapshot(), "no control for a row that takes no sends")
+	assert.Equal(t, []string{"keys", "acquire", "archive", "release"}, tl.snapshot(),
+		"no transfer control for a row that takes no sends; the exit's archive runs under its own")
+	reqs := env.svc.ArchiveReqs()
+	require.Len(t, reqs, 1)
+	assert.Equal(t, tbLeaseID, reqs[0].LeaseID, "the archive is fenced by the exit's own lease")
 }
 
 // The row read before control predates it: it is re-read once control is
