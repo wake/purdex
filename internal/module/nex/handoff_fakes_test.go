@@ -786,6 +786,20 @@ func (s *stubTerminals) LiveBySessionID(ctx context.Context, _, sid string) ([]a
 	return out, nil
 }
 
+// LiveSessions returns every session in live, flattened, or err when set.
+func (s *stubTerminals) LiveSessions(_ context.Context, _ string) ([]agent.TerminalSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
+	var out []agent.TerminalSession
+	for _, v := range s.live {
+		out = append(out, v...)
+	}
+	return out, nil
+}
+
 func (s *stubTerminals) SubscribeSessionStart(fn func(agent.SessionStartEvent)) func() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
