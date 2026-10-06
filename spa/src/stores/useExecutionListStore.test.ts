@@ -487,6 +487,19 @@ describe('useExecutionListStore', () => {
     expect(cache(A).truncated).toBe(false)
   })
 
+  it('a refresh that hits a repeated cursor keeps the ready rows, sets phase error and does not set truncated', async () => {
+    useExecutionListStore.getState().subscribe(A)
+    await flush()
+    expect(cache(A).phase).toBe('ready')
+    vi.mocked(api.listExecutions).mockReset().mockResolvedValue({ items: [row('exc_9')], next_cursor: 'c' } as unknown as ExecutionsPage)
+    useExecutionListStore.getState().refetch(A)
+    await flush()
+    expect(cache(A).items.map((r) => r.id)).toEqual(['exc_1'])
+    expect(cache(A).phase).toBe('error')
+    expect(cache(A).error).toContain('cursor repeated')
+    expect(cache(A).truncated).toBe(false)
+  })
+
   it('a fresh cache is not truncated', () => {
     useExecutionListStore.getState().subscribe(A)
     expect(cache(A).truncated).toBe(false)

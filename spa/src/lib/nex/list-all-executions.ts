@@ -1,6 +1,6 @@
 // spa/src/lib/nex/list-all-executions.ts — conversation entity spec §9 / D9:
 // follow Nexen's cursor (ids ascending, oldest first) so the newest rows are
-// never cut off; bounded, and any repeated cursor ends the walk.
+// never cut off; bounded, and a repeated cursor is a server fault and rejects.
 import { listExecutions } from './nex-api'
 import { sanitizeExecutionsPage } from './validate-executions'
 import type { ExecutionSummary } from './types'
@@ -10,7 +10,7 @@ export const LIST_MAX_PAGES = 20
 
 export interface ListAllResult { items: ExecutionSummary[]; dropped: number; truncated: boolean }
 
-/** Pages `listExecutions` until next_cursor is '' (or any cursor repeats, or LIST_MAX_PAGES). Resolves null as soon as `isCurrent()` is false after a page. */
+/** Pages `listExecutions` until next_cursor is '' (truncated only at LIST_MAX_PAGES; a repeated cursor or malformed page rejects). Resolves null as soon as `isCurrent()` is false after a page. */
 export async function listAllExecutions(
   hostId: string,
   opts: { includeArchived: boolean },
@@ -34,7 +34,7 @@ export async function listAllExecutions(
     }
     dropped += p.dropped
     if (p.nextCursor === '') return { items, dropped, truncated: false }
-    if (requested.has(p.nextCursor)) return { items, dropped, truncated: true }
+    if (requested.has(p.nextCursor)) throw new Error(`nex: executions cursor repeated at page ${page + 1}`)
     cursor = p.nextCursor
   }
   return { items, dropped, truncated: true }

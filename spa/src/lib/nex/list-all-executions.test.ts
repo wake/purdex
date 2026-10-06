@@ -19,14 +19,18 @@ describe('listAllExecutions', () => {
     expect(api.listExecutions).toHaveBeenNthCalledWith(2, 'h1', { includeArchived: false, limit: LIST_PAGE_LIMIT, cursor: 'b' })
   })
 
-  it('stops on a cursor that repeats (never loops) and marks it truncated', async () => {
+  it('rejects on a cursor that repeats (never loops)', async () => {
     vi.mocked(api.listExecutions).mockResolvedValue({ items: [row('a')], next_cursor: 'a' } as never)
-    const r = await listAllExecutions('h1', { includeArchived: true })
+    await expect(listAllExecutions('h1', { includeArchived: true })).rejects.toThrow('nex: executions cursor repeated at page 2')
     expect(api.listExecutions).toHaveBeenCalledTimes(2)
-    expect(r!.truncated).toBe(true)
   })
 
-  it('stops after LIST_MAX_PAGES', async () => {
+  it('stuck page (same cursor, same rows) rejects rather than reading as truncated', async () => {
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: [row('1'), row('2'), row('3')], next_cursor: '3' } as never)
+    await expect(listAllExecutions('h1', { includeArchived: false })).rejects.toThrow('nex: executions cursor repeated at page 2')
+  })
+
+  it('only the page cap sets truncated (LIST_MAX_PAGES)', async () => {
     let n = 0
     vi.mocked(api.listExecutions).mockImplementation((async () => { n += 1; return { items: [row(`r${n}`)], next_cursor: `r${n}` } }) as never)
     const r = await listAllExecutions('h1', { includeArchived: false })
@@ -48,26 +52,23 @@ describe('listAllExecutions', () => {
     expect(r!.dropped).toBe(1)
   })
 
-  it('stops on a multi-step cursor cycle A -> B -> A without duplicating ids', async () => {
+  it('rejects on a multi-step cursor cycle A -> B -> A after at most three requests', async () => {
     vi.mocked(api.listExecutions)
       .mockResolvedValueOnce({ items: [row('1')], next_cursor: 'A' } as never)
       .mockResolvedValueOnce({ items: [row('2')], next_cursor: 'B' } as never)
       .mockResolvedValueOnce({ items: [row('3')], next_cursor: 'A' } as never)
       .mockResolvedValue({ items: [row('x')], next_cursor: 'B' } as never)
-    const r = await listAllExecutions('h1', { includeArchived: false })
+    await expect(listAllExecutions('h1', { includeArchived: false })).rejects.toThrow('nex: executions cursor repeated at page 3')
     expect(vi.mocked(api.listExecutions).mock.calls.length).toBeLessThanOrEqual(3)
-    expect(r!.truncated).toBe(true)
-    const ids = r!.items.map((i) => i.id)
-    expect(new Set(ids).size).toBe(ids.length)
   })
 
-  it('keeps the first occurrence when a stuck page repeats the same rows', async () => {
+  it('de-dupes ids by first occurrence across pages', async () => {
     vi.mocked(api.listExecutions)
       .mockResolvedValueOnce({ items: [row('1'), row('2'), row('3')], next_cursor: '3' } as never)
-      .mockResolvedValue({ items: [row('1'), row('2'), row('3')], next_cursor: '3' } as never)
+      .mockResolvedValueOnce({ items: [row('3'), row('4')], next_cursor: '' } as never)
     const r = await listAllExecutions('h1', { includeArchived: false })
-    expect(r!.items.map((i) => i.id)).toEqual(['1', '2', '3'])
-    expect(r!.truncated).toBe(true)
+    expect(r!.items.map((i) => i.id)).toEqual(['1', '2', '3', '4'])
+    expect(r!.truncated).toBe(false)
   })
 
   it('rejects when a later page is malformed, naming the page', async () => {
