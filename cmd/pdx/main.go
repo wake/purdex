@@ -368,7 +368,13 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	nexEnabled := c.Cfg.Nex.Enabled
 	c.CfgMu.RUnlock()
 	if nexEnabled {
-		c.AddModule(nex.New())
+		nexMod := nex.New()
+		// A nil meta store (tests) leaves the conversation listing off: its
+		// Conversations() would dereference it.
+		if meta != nil {
+			nexMod.WithConversationIndex(meta.Conversations())
+		}
+		c.AddModule(nexMod)
 	} else {
 		log.Printf("nex: disabled")
 	}

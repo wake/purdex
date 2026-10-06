@@ -18,6 +18,7 @@ import (
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/agent/probe"
 	pdxconfig "github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/conversations"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
@@ -142,14 +143,44 @@ type Module struct {
 	recheck           func(sid string)    // test seam for recheckSession; nil arms S's re-check slot
 	q1StopCap         time.Duration       // 0 = q1StopWait; test seam
 	retryDelay        time.Duration       // 0 = manualResumeRetryDelay; test seam
+
+	// Ended and gone conversations (conversations_http.go). A nil convIdx
+	// keeps the feature off. The seams default in New(); convRoot, convHome
+	// and convCtx are set in Init. Under convMu: convCached, convFlight, and
+	// every convWG.Add, which happens only while convCtx is live (Stop
+	// cancels it under convMu before it waits).
+	convIdx       conversations.Index
+	convRoot      string             // $HOME/.claude/projects
+	convHome      string             // $HOME, for "~" display
+	convNow       func() time.Time   // default time.Now; the reuse window and the scan's clock
+	convIsRegular func(string) bool  // default lstatIsRegular
+	convDirExists func(string) bool  // default statIsDir
+	convScan      convScanFunc       // default conversations.Scan
+	convMu        sync.Mutex         // see above
+	convCached    *convSnapshot      // the last successful snapshot
+	convFlight    *convFlight        // the snapshot in progress, nil when none
+	convCtx       context.Context    // every scan runs under it; created in Init, cancelled by Stop
+	convCancel    context.CancelFunc // cancels convCtx
+	convWG        sync.WaitGroup     // the schedule goroutine and every flight
+	convStopCap   time.Duration      // 0 = convStopWait; test seam
+
+	// convBeforePublish, when set, runs in a flight between its collect and
+	// taking convMu to publish: a test seam for the Stop/publish race; nil in
+	// production.
+	convBeforePublish func()
 }
 
-// New returns a Module wired with production defaults.
+// New returns a Module wired with production defaults. The conversation
+// listing stays off until WithConversationIndex wires an index.
 func New() *Module {
 	return &Module{
-		assemble: realAssemble,
-		isDir:    statIsDir,
-		logf:     log.Printf,
+		assemble:      realAssemble,
+		isDir:         statIsDir,
+		logf:          log.Printf,
+		convNow:       time.Now,
+		convIsRegular: lstatIsRegular,
+		convDirExists: statIsDir,
+		convScan:      conversations.Scan,
 	}
 }
 
@@ -203,7 +234,8 @@ func (m *Module) Init(c *core.Core) error {
 	m.tmux = c.Tmux
 	m.applyHandoffDefaults()
 
-	home, _ := os.UserHomeDir() // "" when unset; Validate decides whether that matters
+	home, homeErr := os.UserHomeDir() // "" when unset; Validate decides whether that matters
+	m.initConversations(home, homeErr)
 	if err := c.Cfg.Nex.Validate(home); err != nil {
 		return fmt.Errorf("nex: init: %w", err)
 	}
@@ -335,7 +367,8 @@ func (m *Module) softFail(err error) error {
 // RoutePrefix (they orchestrate a tmux pane, the engine is only one step),
 // and are mounted whether or not the engine assembled: the handlers
 // themselves answer 503 nex_unavailable, so a client sees the structured
-// error rather than a 404 it would read as "old daemon".
+// error rather than a 404 it would read as "old daemon". The conversation
+// listing likewise answers 503 conversations_unavailable for itself.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{code}/nex-handoff", m.handleNexHandoff)
 	mux.HandleFunc("POST /api/sessions/{code}/nex-takeback", m.handleNexTakeback)
@@ -345,6 +378,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+RoutePrefix+"/executions/{id}/uploads", m.handleExecutionUpload)
 	mux.HandleFunc("POST "+RoutePrefix+"/executions/{id}/exit", m.handleExitWorker)
 	mux.HandleFunc("POST "+RoutePrefix+"/worker-rebuild", m.handleWorkerRebuild)
+	mux.HandleFunc("GET "+RoutePrefix+"/conversations", m.handleConversations)
 	if m.initErr != nil {
 		mux.Handle(RoutePrefix+"/", unavailableHandler(m.initErr))
 		return
@@ -363,9 +397,10 @@ func unavailableHandler(initErr error) http.Handler {
 	})
 }
 
-// Start logs what the module is serving. When Init soft-failed there is
-// nothing to log or serve. The engine is already live after a successful
-// Init; there is nothing further to start.
+// Start logs what the module is serving, starts the manual-resume handling
+// and, with an index wired, the conversation scans (one now, then every
+// convScanInterval). When Init soft-failed there is nothing to log or serve.
+// The engine is already live after a successful Init.
 func (m *Module) Start(context.Context) error {
 	if m.initErr != nil {
 		return nil
@@ -379,6 +414,9 @@ func (m *Module) Start(context.Context) error {
 		RoutePrefix, cfg.HostID, cfg.DataDir, claudeBin, profilesText(cfg.Sandbox.MaxProfile, cfg.Sandbox.DefaultProfile), m.pathPrefix)
 	if m.terminals != nil {
 		m.startManualResume()
+	}
+	if m.convIdx != nil {
+		m.startConversationScan()
 	}
 	return nil
 }
@@ -398,16 +436,19 @@ func profilesText(maxProfile, defaultProfile string) string {
 }
 
 // Stop ends the manual-resume handling (stopManualResume: no new work,
-// in-flight work cancelled and waited for, boundedly), then drains the
-// engine within ctx's budget (core.ShutdownBudget, shared with the HTTP
-// server's Shutdown).
+// in-flight work cancelled and waited for, boundedly) and the conversation
+// listing (stopConversations: the same shape), then drains the engine within
+// ctx's budget (core.ShutdownBudget, shared with the HTTP server's
+// Shutdown). Both stop before the engine does, so neither calls into a
+// draining engine unless its bounded wait ran out.
 //
 // The engine drain and Close are no-ops when Init never assembled an engine
 // (only a Validate error from Init is fatal to the daemon; an
 // engine-assembly error soft-fails, spec §4.4.1, and the lifecycle still
-// walks this Module); stopManualResume runs either way.
+// walks this Module); the two stop steps run either way.
 func (m *Module) Stop(ctx context.Context) error {
 	m.stopManualResume(ctx)
+	m.stopConversations(ctx)
 	if m.sys.shutdown == nil {
 		return nil
 	}
