@@ -113,6 +113,8 @@ useAgentStore.subscribe((state, prevState) => {
 export type NotificationAction =
   | { kind: 'open-session'; hostId: string; sessionCode: string }
   | { kind: 'open-host'; hostId: string }
+  /** An approval request (lead-team spec §6.3): the dialog is already on screen; the click only focuses the window. */
+  | { kind: 'open-approval'; hostId: string }
 
 /** Check if a notification should be dispatched based on broadcast_ts dedup.
  *  New sessions default to Infinity (sentinel), so their first event is recorded
@@ -284,6 +286,8 @@ export function useNotificationDispatcher(): void {
       if (!payload.action) return
       if (payload.action.kind === 'open-host') {
         handleNotificationClick({ kind: 'open-host', hostId: payload.action.hostId })
+      } else if (payload.action.kind === 'open-approval') {
+        handleNotificationClick({ kind: 'open-approval', hostId: payload.action.hostId })
       } else {
         handleNotificationClick({
           kind: 'open-session',
@@ -407,6 +411,13 @@ export function handleNotificationClick(action: NotificationAction): void {
       }
       break
     }
+    case 'open-approval': {
+      // The dialog is global and already shows the oldest open request; there is no tab to open or host to switch.
+      if (window.electronAPI?.focusMyWindow) {
+        window.electronAPI.focusMyWindow()
+      }
+      break
+    }
   }
 }
 
@@ -419,9 +430,9 @@ function sendConnectionNotification(message: string, action: NotificationAction)
       sessionCode: '',
       eventName: 'ConnectionStatus',
       broadcastTs: Date.now(),
-      action: action.kind === 'open-host'
-        ? { kind: 'open-host', hostId: action.hostId }
-        : { kind: 'open-session', hostId: action.hostId, sessionCode: action.sessionCode },
+      action: action.kind === 'open-session'
+        ? { kind: 'open-session', hostId: action.hostId, sessionCode: action.sessionCode }
+        : { kind: action.kind, hostId: action.hostId },
     })
   } else if ('Notification' in window && Notification.permission === 'granted') {
     const n = new Notification(message)

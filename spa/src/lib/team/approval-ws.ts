@@ -11,6 +11,7 @@ import { useUndoToast } from '../../stores/useUndoToast'
 import { hostLabel, hostLookOf } from '../host-look'
 import { submitDecision, toastClosed } from './approval-decide'
 import { approvalKindLabel, approvalSessionLabel } from './approval-format'
+import { notifyApprovalOpened } from './approval-notify'
 import type { Approval, ApprovalEventValue } from './types'
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -68,7 +69,8 @@ export function handleApprovalEvent(hostId: string, value: unknown): void {
     return
   }
   if (ev.op === 'opened') {
-    store.applyOpened(hostId, ev.approval)
+    // Announce only what was actually added: a duplicate opened (two sockets, a replay) is silent.
+    if (store.applyOpened(hostId, ev.approval)) notifyApprovalOpened(hostId, ev.approval)
     return
   }
   // closed: the dialog closes everywhere; only a decision made elsewhere is announced.
