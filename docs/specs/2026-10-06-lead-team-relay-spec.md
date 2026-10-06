@@ -7,6 +7,7 @@ Status: **passed review by `air26/_9iwyyv` on 2026-10-06** (c358cd65 plus the re
 - The U5 strength question went through two answers on 2026-10-06. First U5a (human presence in v1), which U5b then withdrew: an approval is one click on any App, and the U5a layer of no CLI path, broadcast and audit stays (§2, §6.5).
 - U13 (self-relay switches and approval) was added the same day. Its derivations (a)–(d) are in §8.7, and air26's review points (e) and (f) are in §8.4 and §8.3.
 - U13a and U14 followed the same day: self-relay approval is one click, and the browser SPA is retired, so every client is a Purdex.app.
+- U15 (2026-10-07) makes cross-host spawn a core need, with a host-selection rule. Its derivations are in §7.4, its measurements M13–M16, its phases P4b and P4c.
 
 Every place where this spec departs from the brief's design draft (brief §5, D1–D8) is marked **⟲ changed from D…**, with the reason. §13 lists all of them.
 
@@ -20,7 +21,7 @@ The user manages the context of long tasks by hand today:
 This spec makes two things automatic:
 
 1. **Self relay:** a single session hands off to itself, almost unnoticed. U13 adds one visible step: each self relay is approved by the user first (§8.7). "Almost unnoticed" covers the relay itself.
-2. **Lead with a team:** a lead can open members, and can relay a member on the member's behalf.
+2. **Lead with a team:** a lead can open members, on the host the rule picks for the repo (U15), and can relay a member on the member's behalf.
 
 ## 2. User decisions (2026-10-06, do not reopen)
 
@@ -74,6 +75,20 @@ In this spec, U14 is **a premise only**. Turning the browser version off is not 
 | U5b | lead 申請不需要 Touch ID 或人在場驗證，和自我接力一樣，任一個 App 按一下就核准。理由：cld-yolo 本來就能用 Bash 自己開 tmux 和 claude，lead 模式沒有給 agent 新的能力，核准的意義是「告知與同意」，不是安全邊界。U5a 原本那一層照樣保留：pdx 沒有核准指令、skill 明文禁止自我核准、每筆決定都廣播並寫稽核紀錄。Secure Enclave 方案移到 §11（之後硬化時再做）。 |
 
 Also decided on the research page (§9 "已決定"): `session.compact` is a safety net, so that auto-compact cannot get in before the relay.
+
+**Fifth supplementary decision.** The user made it on 2026-10-07, and `air26/_9iwyyv` relayed it. Copied verbatim.
+
+| # | 決策 |
+|---|---|
+| U15 | 跨主機 spawn 是核心需求。起 team 時要「依需求挑合適的主機」，選擇規則依序：<br>1. 檢查哪台主機有相關的 repo；<br>2. 如果多台都有，比較各主機的 weekly usage 剩餘量；<br>3. 如果都還夠用，優先在 mlab 啟動。 |
+
+Background the user gave: an iOS repo is about to be developed on a26; when the daemon needs a change, the lead on a26 opens a member on mlab. That is the case "lead on a26, member on mlab".
+
+**How this spec reads U15** (derived in §7.4; the measurements are M13–M16):
+- U15 pulls **cross-host spawn, kill and relay** out of §11 into the phases (P4b, P4c in §12). It changes none of U1–U14.
+- "有相關的 repo" is decided by both the path convention and the git remote, and a docs-only sparse checkout does not count (§7.4 (a)).
+- "weekly usage" is the statusline's `rate_limits.seven_day`, which is **per account**. Every host that is signed in to the same account reports the same number, so rule 2 can only separate hosts with different accounts; otherwise it is a tie and rule 3 decides (§7.4 (b), M14).
+- "優先在 mlab" is the host config `team.preferred_host`, whose default is the host named `mlab`.
 
 ## 3. Facts
 
@@ -132,6 +147,18 @@ A probe mod was loaded into a throwaway `claude` in tmux through `CLAUDE_CODE_PL
 - **M12 A plugin's re-submitted prompt is not the original** (2.1.291 types, `PromptSubmitArgs.asUser`).
   - `asUser: true` removes the "The <plugin> plugin sent a message" frame.
   - But "`@file` mentions and pasted images are not expanded for a plugin's prompt, `asUser` or not", and the transcript still names the plugin.
+
+- **M13 The statusline payload carries `rate_limits` from its second refresh on** (2026-10-07, Claude Code 2.1.291, mlab, Haiku, a one-word turn). The first refresh has no `rate_limits` key and a null `used_percentage`. After the first API response the payload has:
+  - `rate_limits.five_hour {used_percentage: 14, resets_at: 1791318000}` and `rate_limits.seven_day {used_percentage: 4, resets_at: 1791471600}`; `resets_at` is unix seconds;
+  - also new against M-series probes of 2026-10-06: `prompt_cache`, `prompt_id`.
+  - Top-level keys: `context_window, cost, cwd, exceeds_200k_tokens, fast_mode, model, output_style, prompt_cache, prompt_id, rate_limits, scratchpad_dir, session_id, thinking, transcript_path, version, workspace`.
+- **M14 mlab and a26 are signed in to the same Claude account** (`~/.claude.json` `oauthAccount.emailAddress`, both `wake@protype.tw`; both run Claude Code 2.1.291). Rate limits are per account, so the two hosts report the same `seven_day` figure.
+- **M15 Repo inventory under `~/Workspace/{org}/{repo}`** (2026-10-07):
+  - mlab: 47 git checkouts, none sparse. Scanning all 47 for `remote.origin.url` and `core.sparseCheckout` takes 0.76 s wall.
+  - a26: 10 git checkouts across orgs `ntsu, protype, tangency, wake`. One is sparse: `ntsu/istdc`, cone mode, `git sparse-checkout list` prints only `docs`. Its index still lists 1697 files (1484 outside `docs/`), so `git ls-files` cannot tell a docs-only checkout apart; `git sparse-checkout list` can.
+  - `purdex` is not checked out on a26 at all.
+  - Remotes are a mix of `ssh://git@lab.protype.tw:9079/<Org>/<repo>.git`, `git@github.com:wake/purdex.git` and `https://github.com/...`. Org case differs between the path (`ntsu`) and the remote (`NTSU`).
+- **M16 Paired-daemon trust today:** see §7.4 (c), which cites the code.
 
 ### 3.3 Code (re-verified on origin/main `de37a4e5`, alpha.505)
 
@@ -380,7 +407,7 @@ Created on approval.
 ### 7.2 Spawn
 
 ```
-pdx spawn [--cwd <dir>] [--title <t>] [--brief-file <f> | --brief <text>]
+pdx spawn [--repo <key|org/repo>] [--host <alias>] [--cwd <dir>] [--title <t>] [--brief-file <f> | --brief <text>]
 ```
 
 1. pdx generates the operation id, then calls `POST /api/team/spawns {id, origin_inbox, cwd, title}`.
@@ -412,7 +439,7 @@ The text is prefixed with one line: `[pdx team] 你是 <lead address> 的 member
 
 The skill tells the lead to recommend in the brief that the member run `EnterWorktree` itself, or to pass a `--cwd` it prepared.
 
-**⟲ changed from D4 — no `--host` in v1.** Spawning on another host needs that host's daemon to trust a grant approved on the lead's host. That is a new trust path; see §11.
+**⟲ changed again for U15 — `--repo` and `--host`.** Without `--host`, the daemon of the lead's host picks the host by the §7.4 rule from `--repo`; with neither, the member opens on this host in `--cwd`. On another host the spawn is forwarded to that host's daemon (§7.4 (c), P4c); steps 2–6 run there, and the member row on the lead's host records `host_id`. The 2026-10-06 note "no `--host` in v1" is withdrawn by U15.
 
 ### 7.3 Kill and list
 
@@ -420,6 +447,58 @@ The skill tells the lead to recommend in the brief that the member run `EnterWor
   - It kills the member's tmux session, so the member's CC exits.
   - Sets `state=killed`. Worktrees are the lead's business.
 - **`pdx team [--json]`:** the caller's team — each member's address and ref, title, status, context %, cwd and tmux session.
+
+### 7.4 Host selection and cross-host teams (U15)
+
+**⟲ changed from §11 and from the D4 note "no `--host` in v1".** U15 makes the host a choice the daemon makes for the lead, by rule, and makes spawn, kill and relay work on another paired host.
+
+**(a) "有相關的 repo": repo inventory per host.**
+- Each daemon scans its **repo roots** (host config `team.repo_roots`, default `["~/Workspace"]`) two levels deep, `{org}/{repo}`, for a `.git` entry (directory or file). Per checkout it records the path, `remote.origin.url`, and whether it is **developable**.
+- **Developable** means not a docs-only checkout: `core.sparseCheckout` is unset or false, **or** `git sparse-checkout list` prints at least one pattern other than `docs` or `docs/…`. M15: a26's `ntsu/istdc` prints only `docs`, so it is not developable; `git ls-files` cannot tell (it still lists 1484 files outside `docs/`), so the rule uses `sparse-checkout list` and nothing else.
+- **Canonical key** = the remote URL normalised to `host/org/repo`, lowercase host, `.git` dropped, user and port dropped (`ssh://git@lab.protype.tw:9079/NTSU/istdc.git` → `lab.protype.tw/NTSU/istdc`; `git@github.com:wake/purdex.git` → `github.com/wake/purdex`). Org case is kept as the remote has it. A checkout with no remote keys on its path `org/repo`.
+- **Both are looked at.** `pdx spawn --repo <x>` matches, in order: an exact canonical key; a case-insensitive `org/repo` suffix of the key; a case-insensitive `org/repo` of the path. Several checkouts of one repo on one host (clones, worktrees under `.claude/worktrees/` are **not** scanned) list all; the newest `mtime` of `.git` wins the default `cwd`.
+- **Cache.** The scan runs at boot and every 10 minutes, and on demand with `GET /api/team/repos?refresh=1`. M15: 47 checkouts take 0.76 s. Results are in memory only.
+- **Exposed** as `GET /api/team/repos` (this host) and inside `GET /api/team/hosts` (all paired hosts, fetched the way `/api/peers` rows are, §7.4 (c)).
+
+**(b) "weekly usage": the account's `rate_limits.seven_day`.**
+- The agent module parses `rate_limits` beside `context_window` (M13): `five_hour` and `seven_day`, each `{used_percentage, resets_at}`. It is absent on a session's first refresh.
+- **It is per account, not per host or session** (M14). The daemon reads the account from `~/.claude.json` `oauthAccount.emailAddress` once at boot and every 10 minutes, and keeps **one host-level reading per account**: the newest `seven_day` any session of that account reported, with its `at`.
+- **Stale after 60 minutes** without a refresh: an idle session does not refresh (§3.3), so a host whose sessions are all idle reports its last reading until then, and `unknown` afterwards.
+- **"還夠用"** = `100 - used_percentage ≥ team.min_weekly_remaining`, host config, default **20**. `unknown` is ranked between "enough" and "not enough".
+- **Hosts on the same account compare equal.** Today that is every host (M14), so rule 2 is a tie and rule 3 picks. The rule is still written, so it works the day a host signs in to another account.
+
+**The selection rule**, in the daemon of the lead's host, at `pdx spawn --repo <x>` with no `--host`:
+1. candidates = paired hosts (including this one) that are reachable, run a daemon with the team routes, and have a **developable** checkout matching `<x>`;
+2. if none: refuse `409 no_host_for_repo` (exit 13), listing the hosts that have a docs-only checkout, so the lead can tell the user;
+3. if one: that host;
+4. if several: drop the hosts whose weekly remaining is below the threshold (keep `unknown`); if **all** of them are "enough", pick `team.preferred_host` (default the host named `mlab`) when it is among them, else the one with the most remaining; if some are not enough, pick the most remaining among the rest;
+5. `pdx spawn --host <h>` skips the rule and only checks that `<h>` is a candidate for `<x>` when `--repo` is given.
+
+`pdx spawn` prints the chosen host and why on stderr: `選擇 mlab：有 github.com/wake/purdex 可開發的 checkout（a26 只有 docs）；weekly 剩餘 mlab 96% / a26 96%，同帳號，依偏好選 mlab`.
+
+**(c) Cross-host trust.** Written below from the code (M16).
+
+**What exists (M16, re-verified on origin/main `fb9fcbd8`):**
+- **Pairing is per host pair, with its own tokens.** `config.PeerHost{Alias, URL, HostID, Token, InboundToken, InboundTokenPrev, AllowBypass}` (`internal/config/config.go:46-58`): `Token` is what we present to that host, `InboundToken` what it must present to us. Nothing is signed; a token is `pdxp_` + 32 hex (`config.go:134`).
+- **The receiver knows who is calling.** `/api/peers*` runs behind `PeerAuth` (`cmd/pdx/http_chain.go:26-34`; `internal/middleware/peer_auth.go:73-106`), which maps the inbound token to `Principal{Kind: host, Alias, HostID}`. `handleDeliver` refuses an unverified host, re-checks that the alias still maps to the same `HostID`, and requires `req.From.HostID == principal.HostID` (`internal/module/peers/deliver.go:143-205`).
+- **A host principal may call exactly two routes:** `GET /api/peers` and `POST /api/peers/deliver` (`HostRoutePolicy`, `internal/module/peers/policy.go:37-50`). Every route outside `/api/peers/*` uses `TokenAuth`, which takes only the admin token.
+- **Per-host permission flags exist in one form:** `AllowBypass` (`deliver.go:36,203`); plus the global `Peers.Deliver` switch.
+- **Outbound calls** go to `entry.URL` with `Bearer entry.Token`, through a client that refuses redirects (`client.go:23-30`, `send.go:62-69`), with `InterDaemonTimeout = 10 s` (`internal/peers/wire.go:62`). Only two endpoint-specific helpers exist, `fetchRemote` (`client.go:39`) and `postDeliver` (`send.go:84`); there is no generic "call path X on host Y".
+- **No capability negotiation.** `daemon_version` in the peers envelope is display-only; the only gate is `remote_too_old`, inferred from row shape (`internal/peers/address.go:380-386`).
+- **Named repos per host already exist** in host config: `GET /api/hostconfig` → `projects[{id, name, slug, path}]` (`internal/module/hostconfig/validate.go:32-38`).
+
+**The minimal viable trust (derived):**
+- **Why the member host accepts a grant approved elsewhere.** Both hosts are the same user's daemons, paired by that user. The approval (§6) is the user's "told and agreed" (U5b), and the user saw it on every App, including the member host's. The member host therefore trusts **the paired lead host's daemon** to have enforced approval, in the same way it already trusts it to deliver messages: by its inbound token. The grant itself does not travel; the request carries `{team_id, lead_host_id, lead_session_id, lead_ref}` and the member host records them.
+- **One new per-host flag on the member host:** `PeerHost.AllowTeam` (`allow_team`, default **false**), set by `pdx peers hosts allow-team <alias> on|off` and a toggle in Hosts → that host → 「允許 <alias> 在這台開 member」. It gates spawn, kill and relay from that host. Read-only inventory (`repos`, `usage`) needs only a verified pairing, like `GET /api/peers`.
+- **Routes live under `/api/peers/team/…`**, because only `/api/peers/*` sees a host principal: `GET repos`, `GET usage`, `POST spawn`, `POST kill`, `POST relay`. `HostRoutePolicy` gains them, the two writes behind `AllowTeam`. The local admin routes of §6–§8 are unchanged; the team module forwards to `/api/peers/team/…` when the chosen host is not this one.
+- **The member host keeps `remote_members{member_session_id, team_id, lead_host_id, lead_session_id, spawn_op, state}`.** A `kill` or `relay` is accepted only when `principal.HostID == lead_host_id` and the `team_id` matches. The lead's own relays move `lead_session_id` on the lead host; the member host is told through the same route (`POST /api/peers/team/lead-moved {team_id, lead_session_id}`), and a stale value is not fatal: the check is host + team, not session.
+- **Idempotent by op id, like §7.2.** The lead host persists the forwarded op as `forwarding` and retries with the same id through the restart grace (§9.1 applied daemon-to-daemon, `InterDaemonTimeout` per try). The member host's spawn is CAS on the op id, so a retry opens nothing twice.
+- **Capability:** a plain 404 from the member host on `/api/peers/team/spawn` means an older daemon: `409 remote_unsupported` to the lead (exit 13), with the host's `daemon_version`. `AllowTeam` off answers `403 host_not_allowed` → `409 host_not_allowed` to the lead (exit 13). Unreachable through the grace: `remote_unreachable` (exit 14).
+- **The member's mod talks only to its own daemon** (`hello`, `claim`, `report`, §8.3). The relay op row and the lineage live on the member host. Notices to the lead (§8.5, §8.2 step 8) go through `POST /api/peers/send` from the member host's virtual peer to the lead's cross-host address, which works today.
+- **The brief** (§7.2) is sent by `pdx spawn` on the lead's host through `/api/peers/send` to the member's cross-host address; its first line names the lead's cross-host address, so replies route back.
+- **Not in this trust:** a remote host cannot start a team, approve, or read another host's `team.db`. Hardening (signed grants, per-root scopes per host) stays in §11.
+
+**(d) Phases.** P4 keeps local spawn, kill and team. **P4b** adds the inventory, the usage reading, `GET /api/team/hosts|repos`, and the selection rule with `--repo` (still local execution, i.e. the rule may answer "this host" or refuse). **P4c** adds cross-host execution: forwarding spawn, kill and relay to the chosen host, the remote member record, and the lead's host in the member's brief. P6's relay then works across hosts because it rides on P4c. Each stays under 800 lines or 20 files (§12).
 
 ## 8. Relay (U1, U2, U3, U9, U13)
 
@@ -718,7 +797,7 @@ The skill ships in the plugin (`skills/pdx-team/SKILL.md`). It says:
   - signing a challenge bound to the request and its grant.
 
   Alternatives, once available: Electron WebAuthn, after a Developer ID and provisioning profile (signing roadmap Stage 3). Facts: M6–M10.
-- **Cross-host teams:** spawn, kill and relay on another host, and a remote host's trust in a grant approved elsewhere.
+- **Cross-host hardening:** signed grants carried to the member host, per-host root scopes, and a capability handshake between daemons. The minimal trust of §7.4 (c) is in P4c; this is what comes after.
 - **Adopting** an existing session as a member. Today's manual flow, where the user opens a session and hands its address to A, keeps working as plain messaging.
 - **Handoff content in a pdx memory store** keyed by uuid.
 - **Member visuals** (U11): a separate design.
@@ -733,7 +812,9 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | P1 | Statusline usage parsed per session id + accessor; peers `CTX` column and `agent.context`; CWD fix; `peer_not_found` hint text (§8.5, §8.6) | 1 (part) |
 | P2 | `team` module skeleton and `team.db`; `daemonclient` with the restart rules (§9.1); lead requests: create, poll and lease, cancel, decide, sweeper, boot grace, `OnSubscribe` snapshot; `pdx lead request`; exit codes (§14) | 1 |
 | P3 | Approval dialog host, store, event branch, one-click approve and deny (U5b), reconnect queue, notifications; restart-confirm line for open requests (§6.3, §9.5) | 1 |
-| P4 | Teams and grants; `pdx spawn` / `kill` / `team`; spawn reconciliation; team end on the lead's exit | 1 |
+| P4 | Teams and grants; `pdx spawn` / `kill` / `team` on this host; spawn reconciliation; team end on the lead's exit | 1 |
+| P4b | Host selection (U15): repo inventory and `developable` rule, `rate_limits` parsing and the per-account weekly reading, `GET /api/team/repos|hosts`, `GET /api/peers/team/repos|usage` for paired hosts, the selection rule and `pdx spawn --repo`, `team.repo_roots` / `team.min_weekly_remaining` / `team.preferred_host` host config | U15 |
+| P4c | Cross-host execution (U15): `AllowTeam` flag, CLI and Hosts toggle; `POST /api/peers/team/spawn|kill|relay|lead-moved` behind `HostRoutePolicy`; forwarding with op-id idempotency and the restart grace; `remote_members`; cross-host brief and notices; `remote_unsupported` / `host_not_allowed` / `remote_unreachable` | U15 |
 | P5a | Daemon relay core: `relay_ops`; `session_lineage` with uncapped `previous_refs` and the Resolve tier; title, team and lead-ref moves; the `self_relay` approval kind; host switches and Hosts UI toggles; session pause; handoff retention sweeper | 2 (part), U13 |
 | P5b | Plugin packaging (embed, extract, `CLAUDE_CODE_PLUGIN_DIRS` merge and uninstall) with the skill; mod self relay: `hello` / `begin` / `wait` / `report`, the prompt hold, asking again, the auto-compact rule, `/relay` | 2 (part), 4 (part), U13 |
 | P6 | Member relay: `pdx relay`, the daemon's virtual peer and control message, `claim`, timeouts, boot reconciliation of relay ops; completion and failure notices; restart-confirm line for relays | 2 |
@@ -741,7 +822,9 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 
 **Notes on the split:**
 - **P5a/P5b depend on P2 and P3.**
-- **Order:** P0, P1, P2, P3, P5a, P5b, P4, P6, P7.
+- **Order:** P0, P1, P2, P3, P5a, P5b, P4, P4b, P4c, P6, P7.
+  - P4b needs P4 (team rows) and P1 (the statusline parser it extends). P4c needs P4b and the peers pairing that exists.
+  - P6 (member relay) rides on P4c for a member on another host: the lead host forwards `relay`, the member host runs §8.2.
   - Self relay, goal 1, ships first.
   - P4 (team, spawn) needs P3, because a lead approval comes from the dialog.
 - P6 may split in two: daemon first, then mod.
@@ -754,8 +837,9 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 |---|---|---|
 | D1 | The daemon stays the brain; in-session steps move to the Purdex mod | M1 proves the control channel; `command.run` beats send-keys; U2 literally; relays survive restarts; goal 1 needs the mod anyway (§5) |
 | D2 | Approve and deny are one click on any App; the `client` descriptor is an audit label | U5b (U5a withdrawn); one shared host token (§3.3) |
-| D2 | Grant has no host list in v1 | Cross-host is §11 |
-| D4 | No `--worktree`; no `--host`; the brief is sent by the CLI from the lead's inbox; tmux name `tm-<op>`; start timeout kills and frees the slot | No worktree API and U10; trust path; replies reach the lead; D4's own idempotency idea; the limit counts only live members |
+| D2 | The grant has no host list; the host is chosen per spawn by the §7.4 rule, and the member host gates by its own `AllowTeam` flag | U15; the user picks hosts by rule, not per grant |
+| D4 | No `--worktree`; `--repo` and `--host` (U15); the brief is sent by the CLI from the lead's inbox; tmux name `tm-<op>`; start timeout kills and frees the slot | No worktree API and U10; U15 reinstated the host choice; replies reach the lead; D4's own idempotency idea; the limit counts only live members |
+| §11 → §7.4 (U15) | Cross-host spawn, kill and relay are in P4b/P4c; trust = the paired lead host's inbound token plus the member host's `AllowTeam` flag; the grant does not travel | U15; `PeerAuth` already identifies the calling host; both daemons are the same user's |
 | D4 | Launch command is `team.member_command`, default `claude --dangerously-skip-permissions` | The daemon cannot rely on the `cld-yolo` alias |
 | D4 (air26 review) | A member is always launched with `--plugin-dir`; relay to a member without the mod is refused, not done by send-keys | Loads once even with the global install (M5); reasons in §8.2 |
 | D5 3–5 | The mod writes, clears and seeds; the daemon only sends a control wake-up | §5 |
@@ -784,8 +868,8 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | 10 | Denied |
 | 11 | Timed out (counts as denied, U7) |
 | 12 | Cancelled or abandoned |
-| 13 | Refused by team rules: `not_lead`, `team_full`, `cwd_outside_grant`, `not_your_member`, `member_relay_is_leads`, `self_relay_off`, `self_relay_paused`, `relay_unsupported`, `already_lead`, `member_cannot_lead`, `request_open` |
-| 14 | The member did not start or did not respond: `member_start_timeout`, `member_unresponsive` |
+| 13 | Refused by team rules: `not_lead`, `team_full`, `cwd_outside_grant`, `not_your_member`, `member_relay_is_leads`, `self_relay_off`, `self_relay_paused`, `relay_unsupported`, `already_lead`, `member_cannot_lead`, `request_open`, `no_host_for_repo`, `host_not_allowed`, `remote_unsupported` |
+| 14 | The member did not start or did not respond: `member_start_timeout`, `member_unresponsive`, `remote_unreachable` |
 | 20 | Daemon unreachable through the 30 s grace |
 | 21 | Daemon does not support this (404) |
 
@@ -803,7 +887,9 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
   - lineage moves title, lead and member in one transaction;
   - Resolve finds an old ref in exactly one row, and a live ref wins over `previous_refs`;
   - boot reconciliation from frames, with no hooks.
-- **Usage:** parsed per session id; two panes in one tmux session no longer overwrite; a null `used_percentage`.
+- **Usage:** parsed per session id; two panes in one tmux session no longer overwrite; a null `used_percentage`; `rate_limits` absent on the first refresh, present from the second; the per-account weekly reading goes `unknown` after 60 min.
+- **Host selection (U15):** a cone sparse checkout whose only pattern is `docs` is not developable; a plain checkout is; the canonical key normalises `ssh://git@host:port/Org/repo.git`, `git@host:org/repo.git` and `https://host/org/repo`; the rule refuses `no_host_for_repo` when every match is docs-only; same-account hosts tie and `preferred_host` wins; a host below the threshold loses to one above; `unknown` ranks between.
+- **Cross-host (U15):** a host principal without `AllowTeam` gets `host_not_allowed`; a kill from a host other than `lead_host_id` or with another `team_id` is refused; a forwarded spawn retried with the same op id opens one tmux session; a plain 404 from the member host becomes `remote_unsupported`; the routes are in `HostRoutePolicy` and nowhere else.
 - **CWD:** the precedence order.
 
 **CLI:**
@@ -852,7 +938,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 
 - Member visuals (U11).
 - Nexen worker relay: it goes through Nexen rebuild.
-- Cross-host teams, adoption, the hard lock, Electron WebAuthn, and the handoff memory store: all in §11.
+- Cross-host hardening (signed grants, per-host scopes), adoption, the hard lock, Electron WebAuthn, and the handoff memory store: all in §11. Cross-host spawn, kill and relay themselves are **in** scope since U15 (§7.4, P4b/P4c).
 - Claude Code's built-in Agent Teams.
 - **Turning the browser SPA off (U14).** Here U14 is a premise only.
   - The unmerged web version (branch `worktree-web-version`; `purdex.mlab.host` in front of the daemon) is affected.

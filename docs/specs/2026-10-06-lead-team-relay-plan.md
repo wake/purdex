@@ -25,7 +25,7 @@
 - PRs **P0, P1, P2a, P2b, P3**, in that order.
 - The rest gets **plan v2**, with one codex round, after P3 merges:
   - P5a/P5b, self relay — next per spec §12's suggested order;
-  - P4, team and spawn;
+  - P4, team and spawn; then P4b host selection and P4c cross-host execution (U15, spec §7.4);
   - P6, member relay;
   - P7, notices.
 
