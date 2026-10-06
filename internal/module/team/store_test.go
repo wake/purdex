@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -56,61 +57,133 @@ func TestStore_CreateIsIdempotentAndReportsHashMismatch(t *testing.T) {
 	}
 }
 
+// closeFields is the part of an Approval a Close writes; it is what every
+// contender in the CAS race must agree on afterwards.
+type closeFields struct {
+	State     team.State
+	DecidedAt int64
+	DecidedBy *team.Client
+	Grant     *team.Grant
+}
+
+func closeFieldsOf(a team.Approval) closeFields {
+	return closeFields{State: a.State, DecidedAt: a.DecidedAt, DecidedBy: a.DecidedBy, Grant: a.Grant}
+}
+
 func TestStore_CloseIfOpenExactlyOneWinner(t *testing.T) {
 	s := openTestStore(t)
 	if _, _, _, err := s.Create(openApproval("id-1", "sid-1", 1000), "h1"); err != nil {
 		t.Fatal(err)
 	}
+	// The four ways a request closes under contention (spec §15): the
+	// sweeper's timeout, a denial, the requester's cancel, and an approval
+	// that carries a grant. Every contender has a distinct DecidedAt so a
+	// leaked field from the wrong close is detectable.
 	const n = 16
+	type attempt struct {
+		in     Close
+		after  team.Approval
+		closed bool
+	}
+	results := make([]attempt, n)
 	var wg sync.WaitGroup
-	wins := make(chan team.State, n)
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			// The three ways a request closes under contention (spec §15):
-			// a decision, the sweeper's timeout, the requester's cancel.
 			var c Close
-			switch i % 3 {
+			switch i % 4 {
 			case 0:
 				c = Close{State: team.StateTimeout, DecidedAt: int64(2000 + i)}
 			case 1:
-				c = Close{State: team.StateDenied, DecidedAt: int64(2000 + i), DecidedBy: &team.Client{Kind: "app", Label: fmt.Sprintf("app-%d", i)}}
+				c = Close{State: team.StateDenied, DecidedAt: int64(2000 + i),
+					DecidedBy: &team.Client{Kind: "app", Label: fmt.Sprintf("Purdex.app @ test-%d", i)}}
 			case 2:
 				c = Close{State: team.StateCancelled, DecidedAt: int64(2000 + i)}
+			case 3:
+				c = Close{State: team.StateApproved, DecidedAt: int64(2000 + i),
+					DecidedBy: &team.Client{Kind: "app", Label: fmt.Sprintf("Purdex.app @ test-%d", i)},
+					Grant:     &team.Grant{MaxMembers: 2, Roots: []string{"/w"}}}
 			}
-			after, won, err := s.CloseIfOpen("id-1", c)
+			after, closed, err := s.CloseIfOpen("id-1", c)
 			if err != nil {
 				t.Errorf("close %d: %v", i, err)
 				return
 			}
-			if after.State == team.StateOpen {
-				t.Errorf("close %d: row still open after the attempt", i)
-			}
-			if won {
-				wins <- after.State
-			}
+			results[i] = attempt{in: c, after: after, closed: closed}
 		}(i)
 	}
 	wg.Wait()
-	close(wins)
-	var winners []team.State
-	for st := range wins {
-		winners = append(winners, st)
+	if t.Failed() {
+		t.Fatal("a close attempt errored")
 	}
-	if len(winners) != 1 {
-		t.Fatalf("winners = %v, want exactly one", winners)
+
+	winner := -1
+	for i, r := range results {
+		if r.closed {
+			if winner >= 0 {
+				t.Fatalf("two winners: %d and %d", winner, i)
+			}
+			winner = i
+		}
 	}
-	final, _, _ := s.Get("id-1")
-	if final.State != winners[0] {
-		t.Fatalf("final state %s, winner %s", final.State, winners[0])
+	if winner < 0 {
+		t.Fatal("no contender won")
 	}
-	if final.State == team.StateDenied && (final.DecidedBy == nil || final.DecidedBy.Kind != "app") {
-		t.Fatalf("denied without decided_by: %+v", final)
+	won := results[winner]
+	// The winner's returned row is its own close, field by field.
+	want := closeFields{State: won.in.State, DecidedAt: won.in.DecidedAt, DecidedBy: won.in.DecidedBy, Grant: won.in.Grant}
+	if got := closeFieldsOf(won.after); !reflect.DeepEqual(got, want) {
+		t.Fatalf("winner %d returned row %+v, want its own close %+v", winner, got, want)
 	}
-	if final.State != team.StateDenied && final.DecidedBy != nil {
-		t.Fatalf("%s must not carry decided_by: %+v", final.State, final)
+	// Every loser is handed the winner's close whole (spec §6.2: a late
+	// decide answers 409 already_decided carrying the closed request with
+	// decided_by — and the grant, when the winner approved).
+	for i, r := range results {
+		if i == winner {
+			continue
+		}
+		if r.closed {
+			t.Fatalf("loser %d reports closed=true", i)
+		}
+		if got := closeFieldsOf(r.after); !reflect.DeepEqual(got, want) {
+			t.Fatalf("loser %d (%s) returned row %+v, want winner %d's row %+v", i, r.in.State, got, winner, want)
+		}
 	}
+	final, ok, err := s.Get("id-1")
+	if err != nil || !ok {
+		t.Fatalf("get after race: ok=%v err=%v", ok, err)
+	}
+	if got := closeFieldsOf(final); !reflect.DeepEqual(got, want) {
+		t.Fatalf("stored row %+v, want winner %d's row %+v", got, winner, want)
+	}
+
+	// Deterministic counterpart of the race (the winner above is random): an
+	// approval wins, then a late deny loses and must be handed the approval
+	// whole — decided_by and grant included — regardless of its own input.
+	if _, _, _, err := s.Create(openApproval("id-2", "sid-2", 1000), "h2"); err != nil {
+		t.Fatal(err)
+	}
+	approve := Close{State: team.StateApproved, DecidedAt: 5000,
+		DecidedBy: &team.Client{Kind: "app", Label: "Purdex.app @ test"},
+		Grant:     &team.Grant{MaxMembers: 2, Roots: []string{"/w"}}}
+	first, closed, err := s.CloseIfOpen("id-2", approve)
+	if err != nil || !closed {
+		t.Fatalf("approve: closed=%v err=%v", closed, err)
+	}
+	wantApproved := closeFields{State: approve.State, DecidedAt: approve.DecidedAt, DecidedBy: approve.DecidedBy, Grant: approve.Grant}
+	if got := closeFieldsOf(first); !reflect.DeepEqual(got, wantApproved) {
+		t.Fatalf("approve returned %+v, want %+v", got, wantApproved)
+	}
+	late, closed, err := s.CloseIfOpen("id-2", Close{State: team.StateDenied, DecidedAt: 6000,
+		DecidedBy: &team.Client{Kind: "app", Label: "Purdex.app @ late"}})
+	if err != nil || closed {
+		t.Fatalf("late deny: closed=%v err=%v, want a loss", closed, err)
+	}
+	if got := closeFieldsOf(late); !reflect.DeepEqual(got, wantApproved) {
+		t.Fatalf("late deny returned %+v, want the approval %+v", got, wantApproved)
+	}
+
 	if _, _, err := s.CloseIfOpen("nope", Close{State: team.StateCancelled}); err != ErrNoSuchApproval {
 		t.Fatalf("unknown id: err=%v, want ErrNoSuchApproval", err)
 	}
