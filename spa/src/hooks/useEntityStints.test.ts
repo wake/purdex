@@ -135,6 +135,23 @@ describe('useEntityStints', () => {
     expect(result.current.stints.map((s) => s.id)).toEqual(['new'])
   })
 
+  it('re-enabled with the same tuple: loading until the new walk settles, never the old result as ok', async () => {
+    vi.mocked(api.listExecutions).mockResolvedValueOnce({ items: [row('a', 1)], next_cursor: '' } as never)
+    vi.mocked(api.fetchExecutionPrelude).mockResolvedValue(prelude(7))
+    const { result, rerender } = renderHook(({ on }) => useEntityStints('h', cur(), on), { initialProps: { on: true } })
+    await waitFor(() => expect(result.current.status).toBe('ok'))
+    rerender({ on: false })
+    expect(result.current.status).toBe('idle')
+    let release!: (v: unknown) => void
+    vi.mocked(api.listExecutions).mockImplementationOnce(() => new Promise((r) => { release = r }) as never)
+    rerender({ on: true })
+    expect(result.current).toEqual({ stints: [], status: 'loading' })
+    expect(api.listExecutions).toHaveBeenCalledTimes(2)
+    release({ items: [row('a', 1), row('b', 2)], next_cursor: '' })
+    await waitFor(() => expect(result.current.status).toBe('ok'))
+    expect(result.current.stints.map((s) => s.id)).toEqual(['a', 'b'])
+  })
+
   it('disabled, or without a session id, makes no request and stays idle', async () => {
     const a = renderHook(() => useEntityStints('h', cur(), false))
     const b = renderHook(() => useEntityStints('h', cur({ resume_session_id: undefined }), true))

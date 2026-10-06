@@ -26,6 +26,8 @@ export function useEntityStints(hostId: string, summary: ExecutionSummary | null
   const tuple = `${hostId}\n${sessionId}\n${currentId}\n${sessionFilter ? 'f' : 'l'}`
   const cache = useRef(new Map<string, number>())
   const [result, setResult] = useState<{ tuple: string; status: 'ok' | 'unavailable'; stints: Stint[] } | null>(null)
+  // Inactive drops the result: re-enabled with the same tuple re-lists, and is loading until that walk settles.
+  if (!active && result !== null) setResult(null)
 
   useEffect(() => {
     if (!active) return

@@ -58,7 +58,8 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
   // ready and the record knows both the cc session and its cwd. Terminal stays preselected.
   const handoffReady = useNexHostStore(selectHandoffReady(content.hostId))
   useEffect(() => {
-    void useNexHostStore.getState().ensure(content.hostId)
+    // A failed check leaves handoffReady false: the terminal screen, as without Nexen.
+    useNexHostStore.getState().ensure(content.hostId).catch(() => {})
   }, [content.hostId])
   const sid = record.agent?.type === 'cc' ? record.agent.sessionId : undefined
   const cwd = record.cwd
@@ -71,6 +72,11 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
 
   // Any held operation lock (a terminal rebuild of this pane, or a batch) freezes the choice.
   const locked = useRebuildStore((s) => s.lockedBy !== null)
+  // A rebuild error belongs to the mode it was tried in.
+  const changeMode = (m: RebuildMode) => {
+    if (m !== mode) setError(null)
+    setChoice(m)
+  }
 
   const rebuildWorker = async () => {
     if (inFlight.current || !sid || !cwd) return
@@ -126,7 +132,7 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
     >
       {showChoice && (
         <div className="mb-6">
-          <RebuildModeChoice value={mode} onChange={setChoice} terminalAvailable workerAvailable disabled={locked || busy} />
+          <RebuildModeChoice value={mode} onChange={changeMode} terminalAvailable workerAvailable disabled={locked || busy} />
         </div>
       )}
       {mode === 'worker' ? (

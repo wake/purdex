@@ -15,6 +15,13 @@ describe('RebuildModeChoice', () => {
     expect(onChange).toHaveBeenCalledWith('terminal')
   })
 
+  it('the group is named by its visible label (aria-labelledby), not a duplicate aria-label', () => {
+    render(<RebuildModeChoice value="worker" onChange={vi.fn()} terminalAvailable workerAvailable />)
+    const group = screen.getByRole('radiogroup', { name: 'Rebuild as' })
+    expect(group).not.toHaveAttribute('aria-label')
+    expect(document.getElementById(group.getAttribute('aria-labelledby')!)).toHaveTextContent('Rebuild as')
+  })
+
   it('disables an unavailable worker option with its hint', () => {
     const onChange = vi.fn()
     render(<RebuildModeChoice value="terminal" onChange={onChange} terminalAvailable workerAvailable={false} workerUnavailableHint="nope" />)
