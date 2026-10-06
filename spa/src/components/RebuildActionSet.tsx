@@ -273,7 +273,9 @@ export function RebuildActionSet({
   // The pane's last agent state (agent-last-state spec §3), in the UI language.
   // "Running when last seen" is the honest wording for a record without an
   // exit: an exit the SPA was not connected for never reached it (decision 3).
-  const agentState = !record.agent
+  // A conversation's rebuild tab (conversation entity spec §13.4) has no last
+  // state to report: the agent never ran in that pane, its record only names S.
+  const agentState = !record.agent || terminated === 'conversation-ended'
     ? ''
     : record.agentExited
       ? t(

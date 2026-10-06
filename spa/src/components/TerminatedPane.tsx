@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { SmileySad } from '@phosphor-icons/react'
+import { SmileySad, Warning } from '@phosphor-icons/react'
 import { useTabStore } from '../stores/useTabStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { closeTab } from '../lib/tab-lifecycle'
@@ -23,6 +23,47 @@ const REASON_KEYS: Record<TerminatedReason, { title: string; desc: string }> = {
   'session-closed': { title: 'terminated.session_closed', desc: 'terminated.session_closed_desc' },
   'tmux-restarted': { title: 'terminated.tmux_restarted', desc: 'terminated.tmux_restarted_desc' },
   'host-removed': { title: 'terminated.host_removed', desc: 'terminated.host_removed_desc' },
+  'conversation-ended': { title: 'terminated.conversation_ended', desc: 'terminated.conversation_ended_desc' },
+}
+
+/** R-4-4: a transcript written this recently may still be in use outside Purdex (spec §13.4). */
+const RECENT_WRITE_MS = 120_000
+
+/**
+ * The R-4-4 notice: whole seconds since `lastWriteAt` while that is under {@link RECENT_WRITE_MS}, re-counted every
+ * second; nothing once it is not, and the ticking stops with the window.
+ *
+ * Mounted keyed by `lastWriteAt`: a reopen that refreshes the pane's last write (R-4-18) remounts it, so its clock
+ * is read afresh — the count is right on the first render, not after a tick — and its interval starts again when
+ * the window has reopened.
+ *
+ * A write time ahead of this clock (the host's clock runs ahead) is capped at the moment this notice mounted: it
+ * reads "0 seconds ago" and closes 120 s later, never kept open for the skew on top. The mount is that moment for
+ * every write time, the refreshed ones included, so each refresh re-bases once.
+ */
+function RecentWriteNotice({ lastWriteAt }: { lastWriteAt: number }) {
+  const t = useI18nStore((s) => s.t)
+  const [mounted] = useState(() => {
+    const at = Date.now()
+    return { at, writeAt: Math.min(lastWriteAt, at) }
+  })
+  const [now, setNow] = useState(mounted.at)
+  const recent = now - mounted.writeAt < RECENT_WRITE_MS
+  useEffect(() => {
+    if (!recent) return
+    const id = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(id)
+  }, [recent])
+  if (!recent) return null
+  // Never negative: the write time is capped at the mount, and the clock only moves on from there.
+  const seconds = Math.max(0, Math.floor((now - mounted.writeAt) / 1_000))
+  return (
+    // Not a live region: it re-counts every second, and a screen reader would read every count out.
+    <p data-testid="terminated-recent-write" className="mb-6 flex items-center gap-1.5 text-sm text-status-warning">
+      <Warning size={16} className="shrink-0" />
+      {t('worker.rebuild.recent_write', { n: seconds })}
+    </p>
+  )
 }
 
 export function TerminatedPane({ content, tabId, paneId }: Props) {
@@ -55,7 +96,8 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
   }
 
   // Worker rebuild (conversation entity spec Q4 / D12): offered only when Nexen is
-  // ready and the record knows both the cc session and its cwd. Terminal stays preselected.
+  // ready and the record knows both the cc session and its cwd. Terminal is preselected,
+  // except on a conversation's rebuild tab, which preselects the mode it was last in (R-4-5).
   const handoffReady = useNexHostStore(selectHandoffReady(content.hostId))
   useEffect(() => {
     // A failed check leaves handoffReady false: the terminal screen, as without Nexen.
@@ -64,8 +106,9 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
   const sid = record.agent?.type === 'cc' ? record.agent.sessionId : undefined
   const cwd = record.cwd
   const showChoice = handoffReady && !!sid && !!cwd
-  const [choice, setChoice] = useState<RebuildMode>('terminal')
+  const [choice, setChoice] = useState<RebuildMode>(content.conversation?.lastIn ?? 'terminal')
   const mode: RebuildMode = showChoice ? choice : 'terminal'
+  const lastWriteAt = content.conversation?.lastWriteAt
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inFlight = useRef(false)
@@ -124,7 +167,8 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
     <RebuildScreen
       icon={<SmileySad size={48} className="text-zinc-500 mb-4" />}
       title={t(keys.title)}
-      description={t(keys.desc, { name: content.cachedName })}
+      description={t(keys.desc, { name: content.cachedName, title: content.conversation?.title ?? '' })}
+      detail={lastWriteAt === undefined ? undefined : <RecentWriteNotice key={lastWriteAt} lastWriteAt={lastWriteAt} />}
       closeLabel={t('terminated.close_tab')}
       onClose={() => {
         closeTab(tabId)

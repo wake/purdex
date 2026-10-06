@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import { TerminatedPane } from './TerminatedPane'
 import { useTabStore } from '../stores/useTabStore'
@@ -14,6 +14,8 @@ import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { rebuildAsWorker } from '../lib/nex/worker-rebuild'
 import { HandoffApiError } from '../lib/nex/handoff-api'
 import type { NexCapabilities } from '../lib/nex/types'
+import type { ConversationRow } from '../lib/nex/conversations-api'
+import { conversationRebuildContent, openConversationRebuild } from '../lib/nex/open-conversation-rebuild'
 import type { PaneContent, Tab, PaneRebuildRecord } from '../types/tab'
 
 vi.mock('../lib/nex/worker-rebuild', async (o) => ({ ...(await o<typeof import('../lib/nex/worker-rebuild')>()), rebuildAsWorker: vi.fn() }))
@@ -477,6 +479,214 @@ describe('TerminatedPane rebuild as worker', () => {
       await waitFor(() => expect(useRebuildStore.getState().lockedBy).toBeNull())
       expect(screen.getByTestId('rebuild-mode-terminal')).toBeEnabled()
       expect(screen.getByTestId('terminated-rebuild-worker')).toBeEnabled()
+    })
+  })
+})
+
+// The rebuild tab of an 已退出 conversation (conversation entity spec §13.4): R-4-3 copy, R-4-5 preselection of
+// the mode it was last in, and R-4-4's recently-written notice in both modes, counting live until 120 s have passed.
+describe('TerminatedPane — a conversation-ended pane', () => {
+  const H = 'host-1'
+  const S = 'aaaaaaaa-1111-2222-3333-444444444444'
+  const NOW = 1_800_000_000_000
+  const caps = {
+    phase: 'ga', host_id: H, verbs: [], providers: ['claude'], events: [], provider_events: [], transient_events: [],
+    sandbox_profiles: ['default', 'handoff'], sandbox_default_profile: 'default', sandbox_max_profile: 'handoff',
+    roots: [], send: { delivery: ['text'], max_text_bytes: 1 }, delegate: { resume_session_id: true },
+  } as unknown as NexCapabilities
+  const readyEntry = { info: null, capabilities: caps, phase: 'ready', error: null, fetchedAt: 0, generation: 1, fingerprint: 'f' }
+  const ensure = vi.fn().mockResolvedValue(undefined)
+
+  const row = (over: Partial<ConversationRow> = {}): ConversationRow => ({
+    session_id: S, title: 'Fix the login bug', title_source: 'ai', cwd: '/w/proj', cwd_exists: true,
+    last_activity_at: NOW - 600_000, last_in: 'terminal', ...over,
+  })
+
+  function renderConversation(over: Partial<ConversationRow> = {}) {
+    const content = conversationRebuildContent(H, row(over), 'proj-2', '111:1000', 1)
+    setupTab(content)
+    return render(<TerminatedPane content={content} tabId={TAB_ID} paneId={PANE_ID} />)
+  }
+
+  beforeEach(() => {
+    ensure.mockClear()
+    useNexHostStore.setState({ byHost: { [H]: readyEntry }, ensure } as never)
+    vi.mocked(rebuildAsWorker).mockReset().mockResolvedValue({ result: { execution_id: 'n', state: 'running' }, swapped: true })
+  })
+
+  // Spies on the fake timer functions come off before the real timers go back on.
+  const timerSpies: Array<{ mockRestore(): void }> = []
+  const spyTimer = <K extends 'setInterval' | 'clearInterval'>(name: K) => {
+    const spy = vi.spyOn(globalThis, name)
+    timerSpies.push(spy)
+    return spy
+  }
+
+  afterEach(() => {
+    for (const spy of timerSpies.splice(0)) spy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('says the conversation ended, under its title', () => {
+    renderConversation()
+    expect(screen.getByText('Conversation ended')).toBeInTheDocument()
+    expect(screen.getByText('Fix the login bug')).toBeInTheDocument()
+  })
+
+  it('last in a terminal: terminal preselected, the action set shown', () => {
+    renderConversation({ last_in: 'terminal' })
+    expect(screen.getByTestId('rebuild-mode-terminal')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByTestId('rebuild-action-set')).toBeInTheDocument()
+    expect(screen.getByTestId('rebuild-session-name-cell')).toHaveTextContent('proj-2')
+    expect(screen.queryByTestId('terminated-rebuild-worker')).toBeNull()
+  })
+
+  // The pane exists to resume S: Rebuild runs the resume without the user ticking anything.
+  it('the terminal rebuild resumes S by default', () => {
+    renderConversation({ last_in: 'terminal' })
+    expect(screen.getByRole('checkbox', { name: 'Run resume command' })).toBeChecked()
+    expect(screen.getByTestId('rebuild-action-set')).toHaveTextContent(`claude --resume ${S}`)
+    // No "running when last seen": the agent never ran in this pane.
+    expect(screen.queryByTestId('rebuild-agent-state')).toBeNull()
+  })
+
+  it('last in a worker with Nexen ready: worker preselected, and the rebuild resumes S in its cwd without replacing anything', async () => {
+    renderConversation({ last_in: 'worker' })
+    expect(screen.getByTestId('rebuild-mode-worker')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByTestId('rebuild-action-set')).toBeNull()
+    fireEvent.click(screen.getByTestId('terminated-rebuild-worker'))
+    await waitFor(() => expect(rebuildAsWorker).toHaveBeenCalledTimes(1))
+    const args = vi.mocked(rebuildAsWorker).mock.calls[0][0]
+    expect(args).toMatchObject({ hostId: H, sessionId: S, cwd: '/w/proj', tabId: TAB_ID, paneId: PANE_ID })
+    expect(args.replaceExecutionId).toBeUndefined()
+  })
+
+  it('last in a worker without Nexen: the terminal screen, as for any closed pane', () => {
+    useNexHostStore.setState({ byHost: {} } as never)
+    renderConversation({ last_in: 'worker' })
+    expect(screen.queryByTestId('rebuild-mode-worker')).toBeNull()
+    expect(screen.getByTestId('rebuild-action-set')).toBeInTheDocument()
+  })
+
+  for (const mode of ['terminal', 'worker'] as const) {
+    const control = mode === 'terminal' ? 'rebuild-action-set' : 'terminated-rebuild-worker'
+    it(`written 30 s ago, ${mode} mode: the notice counts with the ${control} before anything is clicked, and is gone at 120 s`, () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+      const ticker = spyTimer('setInterval')
+      const stopper = spyTimer('clearInterval')
+      renderConversation({ last_in: mode, last_activity_at: NOW - 30_000 })
+      const tick = ticker.mock.calls.findIndex(([, ms]) => ms === 1_000)
+      expect(tick).toBeGreaterThanOrEqual(0)
+
+      expect(screen.getByTestId(control)).toBeInTheDocument()
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent(
+        'This conversation was written to 30 seconds ago; it may be in use outside Purdex',
+      )
+      act(() => { vi.advanceTimersByTime(1_000) })
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('31 seconds ago')
+      act(() => { vi.advanceTimersByTime(88_000) })
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('119 seconds ago')
+      act(() => { vi.advanceTimersByTime(1_000) })
+      expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+      expect(screen.getByTestId(control)).toBeInTheDocument()
+      // The count stops with the window.
+      expect(stopper).toHaveBeenCalledWith(ticker.mock.results[tick].value)
+    })
+  }
+
+  // A host clock ahead of this one: the write time is capped at the moment the screen started counting, so the notice
+  // reads 0 and closes 120 s later, not 120 s after the skew has run out.
+  it('a write time ahead of this clock: the notice reads 0, counts from now, and is gone 120 s later', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    renderConversation({ last_activity_at: NOW + 600_000 })
+
+    expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('0 seconds ago')
+    act(() => { vi.advanceTimersByTime(1_000) })
+    expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('1 seconds ago')
+    act(() => { vi.advanceTimersByTime(118_000) })
+    expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('119 seconds ago')
+    act(() => { vi.advanceTimersByTime(1_000) })
+    expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+  })
+
+  it('written 200 s ago: no notice, and nothing ticking', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    const ticker = spyTimer('setInterval')
+    renderConversation({ last_activity_at: NOW - 200_000 })
+    expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+    expect(ticker.mock.calls.filter(([, ms]) => ms === 1_000)).toEqual([])
+  })
+
+  it('a closed pane that is not a conversation shows no notice', () => {
+    const content = makeContent('session-closed')
+    setupTab(content)
+    render(<TerminatedPane content={content} tabId={TAB_ID} paneId={PANE_ID} />)
+    expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+    expect(screen.getByTestId('rebuild-action-set')).toBeInTheDocument()
+  })
+
+  describe('reopened from the row (R-4-18)', () => {
+    /** The screen as the app mounts it: re-rendered from the tab store, never remounted by a content write. */
+    function LivePane() {
+      const content = useTabStore((s) => findPane(s.tabs[TAB_ID].layout, PANE_ID)!.content) as Extract<PaneContent, { kind: 'tmux-session' }>
+      return <TerminatedPane content={content} tabId={TAB_ID} paneId={PANE_ID} />
+    }
+
+    function mountLive(over: Partial<ConversationRow> = {}) {
+      useWorkspaceStore.getState().reset()
+      setupTab(conversationRebuildContent(H, row(over), 'proj-2', '111:1000', 1))
+      return render(<LivePane />)
+    }
+
+    it('a newer last write on the row: the mounted screen counts from it at once, under the new title', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+      mountLive({ last_activity_at: NOW - 600_000 })
+      expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+      // A minute on the screen with nothing ticking, then the row is opened again: written 20 s before now.
+      act(() => { vi.advanceTimersByTime(60_000) })
+
+      await act(async () => { await openConversationRebuild(H, row({ last_activity_at: NOW + 40_000, title: 'Renamed' })) })
+
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('20 seconds ago')
+      expect(screen.getByText('Renamed')).toBeInTheDocument()
+      act(() => { vi.advanceTimersByTime(1_000) })
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('21 seconds ago')
+      act(() => { vi.advanceTimersByTime(99_000) })
+      expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+    })
+
+    it('a refresh with a new write time ahead of this clock re-bases once: 0 again, gone 120 s later', async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(NOW)
+      mountLive({ last_activity_at: NOW + 600_000 })
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('0 seconds ago')
+      act(() => { vi.advanceTimersByTime(130_000) })
+      expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+
+      await act(async () => { await openConversationRebuild(H, row({ last_activity_at: NOW + 1_200_000 })) })
+
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('0 seconds ago')
+      act(() => { vi.advanceTimersByTime(119_000) })
+      expect(screen.getByTestId('terminated-recent-write')).toHaveTextContent('119 seconds ago')
+      act(() => { vi.advanceTimersByTime(1_000) })
+      expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+    })
+
+    it('the user switched to worker: the refresh keeps worker (preselection is the initial state only)', async () => {
+      mountLive({ last_in: 'terminal', last_activity_at: Date.now() - 600_000 })
+      expect(screen.queryByTestId('terminated-recent-write')).toBeNull()
+      fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+      expect(screen.getByTestId('rebuild-mode-worker')).toHaveAttribute('aria-checked', 'true')
+
+      await act(async () => { await openConversationRebuild(H, row({ last_in: 'terminal', last_activity_at: Date.now() - 20_000 })) })
+
+      expect(screen.getByTestId('terminated-recent-write')).toBeInTheDocument()
+      expect(screen.getByTestId('rebuild-mode-worker')).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByTestId('terminated-rebuild-worker')).toBeInTheDocument()
     })
   })
 })

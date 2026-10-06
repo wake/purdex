@@ -12,8 +12,11 @@ export interface WorkerTabTitleInput {
   cwd?: string
 }
 
-/** Single line, trimmed, not length-capped (the tab truncates by CSS); '' when there is nothing to show. */
-function oneLine(text: string | null | undefined): string {
+/**
+ * Single line, trimmed, not length-capped (the tab truncates by CSS); '' when there is nothing to show. The tab-title
+ * rule for text that comes from a conversation; the conversation rebuild tab's label uses it too (pane-labels.ts).
+ */
+export function oneLine(text: string | null | undefined): string {
   return firstLine((text ?? '').replace(/\r/g, ''), Number.POSITIVE_INFINITY).trim()
 }
 

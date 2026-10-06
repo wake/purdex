@@ -25,7 +25,25 @@ export interface Pane {
 }
 
 // === Pane Content (discriminated union) ===
-export type TerminatedReason = 'session-closed' | 'tmux-restarted' | 'host-removed'
+/**
+ * `conversation-ended`: the pane was opened from an 已退出 conversation (conversation entity spec §13.4, R-4-3).
+ * It never had a session of its own — `sessionCode` is `''` — and carries `conversation`.
+ */
+export type TerminatedReason = 'session-closed' | 'tmux-restarted' | 'host-removed' | 'conversation-ended'
+
+/**
+ * The 已退出 conversation a `conversation-ended` pane was opened for (spec §13.4). Values from the row at open
+ * time; dropped with `terminated` when the pane is rebuilt or re-pointed.
+ */
+export interface PaneConversation {
+  /** Claude Code session id, lowercase. */
+  sessionId: string
+  title: string
+  /** 上次在 (R-4-6): the rebuild mode preselected (R-4-5). */
+  lastIn: 'terminal' | 'worker'
+  /** Unix ms of the transcript's last write — the recently-written notice (R-4-4). */
+  lastWriteAt: number
+}
 
 export interface UntitledDocumentState {
   name: string
@@ -102,7 +120,7 @@ export type AgentExitReason = 'session-end' | 'process-dead'
 
 export type PaneContent =
   | { kind: 'new-tab' }
-  | { kind: 'tmux-session'; hostId: string; sessionCode: string; mode: 'terminal'; cachedName: string; tmuxInstance: string; terminated?: TerminatedReason; rebuild?: PaneRebuildRecord }
+  | { kind: 'tmux-session'; hostId: string; sessionCode: string; mode: 'terminal'; cachedName: string; tmuxInstance: string; terminated?: TerminatedReason; rebuild?: PaneRebuildRecord; conversation?: PaneConversation }
   | { kind: 'dashboard' }
   | { kind: 'hosts' }
   | { kind: 'history' }

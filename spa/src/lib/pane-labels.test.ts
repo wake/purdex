@@ -1,7 +1,13 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { getPaneLabel, getPaneIcon } from './pane-labels'
 import type { TFunction } from './pane-labels'
-import type { PaneContent } from '../types/tab'
+import type { PaneContent, Tab } from '../types/tab'
+import { useI18nStore } from '../stores/useI18nStore'
+import { useTabStore } from '../stores/useTabStore'
+import { findPane } from './pane-tree'
+import { repointPane } from './rebuild/engine'
+import type { ConversationRow } from './nex/conversations-api'
+import { conversationRebuildContent } from './nex/open-conversation-rebuild'
 
 const mockT: TFunction = (key, params) => {
   if (params) {
@@ -153,5 +159,55 @@ describe('getPaneIcon', () => {
 
   it('T3: leaves inapp editor diff mode as GitDiff', () => {
     expect(getPaneIcon({ kind: 'editor', filePath: '/buffer/x.md', source: { type: 'inapp' }, diff: { against: 'saved' } })).toBe('GitDiff')
+  })
+})
+
+// The closed-terminal label and the conversation rebuild tab's label (conversation entity spec §13.4): one suffix,
+// in the UI language; a conversation-ended pane is named by its conversation title.
+describe('getPaneLabel — closed terminal panes', () => {
+  const sessions = { getByCode: (code: string) => (code === 'new1' ? { name: 'proj-2' } : undefined) }
+  const workspaces = { getById: () => undefined }
+  const S = 'aaaaaaaa-1111-2222-3333-444444444444'
+  const row = (title: string): ConversationRow => ({
+    session_id: S, title, title_source: 'ai', cwd: '/w/proj', cwd_exists: true, last_activity_at: 5, last_in: 'terminal',
+  })
+  const closed: PaneContent = { kind: 'tmux-session', hostId: 'h1', sessionCode: 'c1', mode: 'terminal', cachedName: 'my-session', tmuxInstance: 'i', terminated: 'session-closed' }
+  const label = (c: PaneContent) => getPaneLabel(c, sessions, workspaces, useI18nStore.getState().t)
+
+  beforeEach(() => useI18nStore.getState().setLocale('en'))
+  afterEach(() => useI18nStore.getState().setLocale('en'))
+
+  it('an ordinary closed pane: its session name with the suffix, in each language', () => {
+    expect(label(closed)).toBe('my-session（Terminated）')
+    useI18nStore.getState().setLocale('zh-TW')
+    expect(label(closed)).toBe('my-session（已結束）')
+  })
+
+  it('a conversation-ended pane: the conversation title with the same suffix', () => {
+    const c = conversationRebuildContent('h1', row('Fix the login bug'), 'proj-2', 'i', 1)
+    expect(label(c)).toBe('Fix the login bug（Terminated）')
+    useI18nStore.getState().setLocale('zh-TW')
+    expect(label(c)).toBe('Fix the login bug（已結束）')
+  })
+
+  it('a long title: one line, not length-capped — the tab truncates it by CSS, as it does every label', () => {
+    const long = 'x'.repeat(300)
+    expect(label(conversationRebuildContent('h1', row(`  ${long}  \nsecond line`), 'proj-2', 'i', 1))).toBe(`${long}（Terminated）`)
+  })
+
+  it('a title with nothing on its first line falls back to the session name', () => {
+    expect(label(conversationRebuildContent('h1', row('   '), 'proj-2', 'i', 1))).toBe('proj-2（Terminated）')
+  })
+
+  it('after a rebuild the pane is an ordinary terminal pane: the conversation is gone and the label is the session name', () => {
+    const content = conversationRebuildContent('h1', row('Fix the login bug'), 'proj-2', 'i', 1)
+    const tab: Tab = { id: 't1', pinned: false, locked: false, createdAt: 0, layout: { type: 'leaf', pane: { id: 'p1', content } } }
+    useTabStore.setState({ tabs: { t1: tab }, tabOrder: ['t1'], activeTabId: 't1' })
+
+    repointPane('t1', 'p1', { code: 'new1', name: 'proj-2', cwd: '/w/proj', mode: 'terminal', tmux_instance: 'i2' })
+
+    const after = findPane(useTabStore.getState().tabs.t1.layout, 'p1')!.content
+    expect(after.kind === 'tmux-session' && after.conversation).toBeUndefined()
+    expect(label(after)).toBe('proj-2')
   })
 })

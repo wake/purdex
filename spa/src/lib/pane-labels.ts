@@ -1,5 +1,6 @@
 import type { PaneContent } from '../types/tab'
 import { fileIconForPath } from './file-icon'
+import { oneLine } from './nex/worker-tab-title'
 
 export type TFunction = (key: string, params?: Record<string, string | number>) => string
 
@@ -22,8 +23,10 @@ export function getPaneLabel(
       return t('page.pane.new_tab')
     case 'tmux-session': {
       if (content.terminated) {
-        const name = content.cachedName || content.sessionCode
-        return `${name}（Terminated）`
+        // A conversation's rebuild tab (conversation entity spec §13.4) is named by its conversation: it never had a
+        // session of its own, and its generated session name says nothing the user would recognise.
+        const title = content.terminated === 'conversation-ended' ? oneLine(content.conversation?.title) : ''
+        return t('page.pane.terminated', { name: title || content.cachedName || content.sessionCode })
       }
       const session = sessionStore.getByCode(content.sessionCode)
       return session?.name ?? (content.cachedName || content.sessionCode)

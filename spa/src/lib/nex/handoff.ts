@@ -190,7 +190,7 @@ export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> 
  * `~/…` projects are skipped (never guessed), so the name falls back to the
  * cwd basename.
  */
-async function hostHomeFor(hostId: string, projects: readonly HostProject[]): Promise<string | undefined> {
+export async function hostHomeFor(hostId: string, projects: readonly HostProject[]): Promise<string | undefined> {
   if (!projects.some((p) => p.path === '~' || p.path.startsWith('~/'))) return undefined
   try {
     const check = await checkHostPath(hostId, '~')
