@@ -570,3 +570,124 @@ func TestBuild_OwnerOnlyRowUsesOwnerCwd(t *testing.T) {
 
   Spec §8.4's "and relays" wording waits for P5a, which is when relays exist.
 
+
+
+---
+
+## Handoff notes: P2a, P2b and P3 as designed but not yet written (2026-10-07, already adjusted for U5b)
+
+These are the decisions and code facts gathered for the unwritten sections. Re-verify every `file:line` against the current main before using them.
+
+### P2a: the `team` module and approval requests
+
+**Plan decisions:**
+- **PD1. Wire types live in a leaf package, `internal/team`** (`wire.go`): kinds, states, ops, error codes, limits, `Approval`, `CreateApprovalRequest`, `DecideRequest`, `APIError{error, detail, approval}` and `EventValue{op, approval, approvals}`. `cmd/pdx` must not import `internal/module/*` (`cmd/pdx/msg.go:26-28`). The daemon module is `internal/module/team` (package `teammod`).
+- **PD2. The OnSubscribe snapshot is one event, `{op:"snapshot", approvals:[…]}`.** `approvals` is always present, `[]` when empty: give `EventValue` a custom `MarshalJSON`. The SPA replaces a host's whole set from it, so a request that closed while a client was disconnected disappears.
+- **PD3 (U5b). `decide` approve is one click.**
+  - Before P4 there is no teams table, so approving a lead request only closes it as `approved`, with `grant` = the payload as the user edited it.
+  - P4 adds team creation in the same transaction.
+- **PD4. `already_lead` and `member_cannot_lead` arrive with the teams table in P4.** P2 enforces `request_open` only: one open request per origin session and kind.
+- **PD5. Sweeper cadence.** It ticks every 1 s for the deadline and the lease. The origin-liveness check runs only every 10th tick, and only while requests are open: reading the CC registry forks `ps` four times per entry (`DefaultLiveness`). A registry read error never abandons a request.
+- **PD6. Close `team.db` in `Close()` (`core.Closer`), not `Stop()`.** The shutdown order is `cancel` → `StopModules` → `srv.Shutdown` (in-flight handlers) → `CloseModules` (`cmd/pdx/shutdown.go:161-186`). Long-polls must end on the module's own `stopCtx`, or they eat the 10 s shutdown budget. The nex module is the precedent (`nex/module.go:417-424`).
+
+**Store** (`internal/module/team/store.go`, modelled on `hostconfig/store.go:38-63`):
+- DSN `?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)`; `SetMaxOpenConns(1)` for `:memory:`.
+- Table `approval_requests`:
+  `id PK, kind, host_id, origin_session_id, origin_json, payload_json, request_hash, state, created_at, deadline_at, lease_until, decided_by_json, decided_at, grant_json`
+  plus an index on `(state, created_at)`.
+- Methods:
+  - `Create` uses `INSERT … ON CONFLICT(id) DO NOTHING`; when it inserts nothing, it returns the stored row and its hash.
+  - `CloseIfOpen` is the CAS: `UPDATE … WHERE id=? AND state='open'`, closed when `RowsAffected()==1`.
+  - `RenewLease` is `MAX(lease_until, ?)` while open.
+  - `ExtendOpenLeases(until)` is the boot grace.
+  - `ListOpen` orders by `created_at, id`.
+  - `OpenByOrigin(sessionID, kind)`.
+
+**Peers origin resolver** (`internal/module/peers/origin_resolver.go`):
+- Register `OriginResolverKey = "peers.origin-resolver"` in peers `Init`.
+- `ResolveOrigin(inbox)` = `ipeers.ReadRegistry(m.registryDir, m.liveness)` + `findOriginEntry(entries, m.proxyPIDs(), inbox)` (`titles.go:31`).
+- `LiveSession(sessionID)` matches on `SessionID`, `!IsProxy`, and the pid not in `proxyPIDs`.
+- Do **not** reuse `m.origin()`: it fails when the title store is nil.
+- Origin fields for the wire: `SessionID`, `ipeers.RefID(SessionID)`, `Name`, `PID`, `ProcStart`, `Cwd`, `Tmux` (from the registry `Entry`).
+
+**Module:**
+- `Name "team"`, `Dependencies {"peers"}`.
+- `Init`: resolver via registry type-assert, `team.db` in `c.Cfg.DataDir`, host id from the same source peers uses.
+- `Start`: `ExtendOpenLeases(now+30s)`, `OnSubscribe(sendSnapshot)`, the sweeper goroutine.
+- Snapshot send: `TrySend`, and on failure `Events.Remove(sub)`, as in `session/module.go:247-266`.
+- Wiring tests in `cmd/pdx` call the real `registerServeModules` + `InitModules` with a TempDir data dir: `monitor_module_test.go:15`, `nex_register_test.go:36,73`, `removed_routes_test.go:41`. `team` `Init` must succeed there.
+
+**Routes** (all behind TokenAuth; note that an empty token lets everything pass):
+
+| Route | Notes |
+|---|---|
+| `POST /api/team/approvals` | `201` new / `200` same id and same hash; `409 id_conflict`; `409 request_open` (+approval); `400 bad_request` / `origin_unknown`; `503 not_ready` when stopping. P2 accepts kind `lead` only. |
+| `GET /api/team/approvals?state=open` | |
+| `GET /api/team/approvals/{id}?wait=≤25` | Renews the lease. Waiters are a per-id `[]chan struct{}`, woken on close. It selects on the waiter, a timer, `r.Context()` and `stopCtx`. |
+| `DELETE /api/team/approvals/{id}` | Closes as `cancelled`. |
+| `POST /api/team/approvals/{id}/decide` | `{decision, grant, client}`. `client.addr` comes from `RemoteAddr`. A closed request gives `409 already_decided` with the row. |
+
+- No shared JSON helper exists; write a local `writeJSON` / `writeErr`.
+- The idempotency hash is sha256 of `kind \0 origin_session \0 wait_s \0` plus the normalised payload: roots `filepath.Clean`ed and absolute, defaulting to the origin's cwd; `max_members` 0 → 3, cap 8; `wait_s` 0 → 540, cap 600.
+
+**Tests to keep:**
+- one winner under concurrent close (file-backed DB, `-race`);
+- the long-poll wakes on cancel and returns on `stopCancel`;
+- the lease is renewed by a poll;
+- boot grace;
+- deadline → `timeout`;
+- lease → `abandoned`;
+- origin dead → `abandoned` on the 10th tick only;
+- decide racing the sweeper: exactly one `closed` event.
+
+### P2b: `daemonclient` and `pdx lead request`
+
+**`cmd/pdx/daemonclient`:**
+- **Retryable:** `ECONNREFUSED`, `ECONNRESET`, `io.EOF`, `io.ErrUnexpectedEOF`, any `*net.OpError` that is not a context error, and `503` with `error` equal to `shutting_down` or `not_ready`.
+- **Not retryable:** `503 {"reason":"pairing_mode"}` from `PairingGuard`.
+- **Backoff and grace:** 250 ms, 500 ms, 1 s, 1 s…, with a 30 s grace from the first failure; then `ErrUnavailable`.
+- **The one stderr line** `daemon 重啟中，繼續等待…` per client. On recovery, if `/api/health` `boot_id` changed, `daemon 已重新啟動（boot <id>）` once.
+- **404:** a plain-text 404 (Go's mux) → `ErrUnsupported`; a JSON 404 `{"error":"not_found"}` is returned to the caller.
+- **Base URL:** `resolveDaemonHost(cfg.Bind)` (`statusline_proxy.go:145`). `msg.go` uses the raw bind, which breaks on a wildcard bind.
+
+**`pdx lead request`** (`cmd/pdx/lead.go`):
+- Signature: `runLeadCmd(ctx, args, getenv, stdout, stderr, newID, sleep) int`.
+- Usage errors give exit 2 before any config load.
+- Origin from `CLAUDE_CODE_MESSAGING_SOCKET` (`msgOriginInbox`, `msg.go:673`).
+- The poll uses `?wait=25` with a 35 s client timeout.
+- Exit codes: approved 0 (grant JSON on stdout), denied 10, timeout 11, cancelled or abandoned 12, `request_open` 13, unavailable 20, unsupported 21.
+- On SIGINT/SIGTERM (`signal.NotifyContext`): `DELETE` with a fresh 3 s context and no retry, then exit 12.
+- Test helpers: `writeTestConfig` (`peers_test.go:349`), `fakeGetenv` (`msg_test.go:20`).
+- Smoke-test against a throwaway daemon on a spare port and data dir, never mlab's live daemon.
+
+### P3: the approval dialog (SPA)
+
+- **Store** (`useApprovalStore`): entries keyed `hostId\0id`.
+  - `applySnapshot` replaces the host's set and returns what vanished, along with any queued deny.
+  - Also `applyOpened` (idempotent), `applyClosed`, `queue`, `markSent`.
+  - `selectCurrent` = the oldest `created_at` across hosts.
+- **Routing:**
+  - Add `'approval.request'` to the union in `spa/src/lib/host-events.ts:4-15`.
+  - Branch in `useMultiHostEventWs.ts:172-235`, before `isAgentWsEvent`, like `nex-worker-exited`.
+  - `hostId` comes from the per-host closure.
+- **Dialog:**
+  - `ConfirmDialog` only has Cancel + Confirm, with a fixed label, so build a custom panel in the same style.
+  - Escape does not dismiss it.
+  - Both 核准 and 拒絕 are one click (U5b).
+  - Mount it after `<HandoffDialogHost />` (`App.tsx:283`).
+  - Show requests from hidden hosts too.
+- **While the host is not `connected`:**
+  - the buttons queue their decision and show a banner;
+  - queued decisions are sent once the snapshot has re-added the request;
+  - a vanished one gives the toast `approval.toast.ended_while_away`.
+- **The client label** is `Purdex.app @ <hostname>`, from `window.electronAPI.localDaemonStatus?.().hostname` (`electron.d.ts:54-62, :173`), read once.
+- **API:** follow `spa/src/lib/nex/handoff-api.ts:129-150` (`postJson`, which keeps the error body) and use `pinnedHostFetch` (`host-api.ts:214`).
+- **Notification:**
+  - `showNotification` with `action {kind:'open-approval', hostId}` and `broadcastTs: created_at` (Electron dedups on it), sent on `opened` only, never on a snapshot.
+  - The click listener in `useNotificationDispatcher.ts:280-294` treats unknown kinds as `open-session`, so add an `open-approval` branch that only calls `focusMyWindow`.
+- **Restart confirm:** `RestartDaemonButton.tsx:115-131` gains a line counted from the store (`selectOpenCount`). That is enough until relays exist; P6 adds `GET /api/team/inflight`.
+- **i18n:**
+  - `useI18nStore` `t(key, params)` with `{{param}}`;
+  - keys in both `spa/src/locales/en.json` and `zh-TW.json`, held to the same key set by `locale-completeness.test.ts`;
+  - plurals through `pluralKey(base, count)` → `_one` / `_other`.
+- **Tests:** the store-driven dialog follows `HandoffDialogHost.test.tsx`; the WS end to end follows `useMultiHostEventWs.worker-exited.test.ts` (`FakeSocket`, `checkHealth` mocked).

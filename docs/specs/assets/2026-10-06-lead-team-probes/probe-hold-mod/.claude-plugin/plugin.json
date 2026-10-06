@@ -1,0 +1,5 @@
+{
+  "name": "pdx-hold-probe",
+  "version": "0.0.1",
+  "description": "Probe (M11): every new turn passes prompt.submit, and a hook can hold it past 10 s inside a $ call."
+}

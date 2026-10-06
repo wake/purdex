@@ -1,0 +1,5 @@
+{
+  "name": "pdx-relay-probe",
+  "version": "0.0.1",
+  "description": "Probe (M1): consume a pdx control message in session.receive, then submit and clear."
+}
