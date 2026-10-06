@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.492] - 2026-10-06
+
+> 只動 daemon。**daemon 尚未部署**：跟 alpha.490／491 一起，由統籌安排一次重啟。對話主體 P1a 的 daemon 部分到這版全部完成。SPA 要到 P1b-2 才會對應新的錯誤碼和「worker 已退出」通知；在那之前 SPA 照舊運作，Electron 也不必更新。
+
+### Changed：對話主體 P1a-4——交接先確認擁有者，在終端機手動 resume 會讓 worker 自動退出（#1590）
+
+- **交接到 worker（handoff）**：
+  - 先確認這段對話沒有在別的終端機或另一個 worker 裡。否則回 409 `session_owned`；同一段對話正在轉移時回 409 `transfer_in_progress`；無法確認時回可重試的 503 `owner_check_failed`。這些檢查都在停掉 CC、送出任何按鍵之前。
+  - Nexen 拒絕時，回應多了 `execution_id` 與 `exited`。如果拒絕後已經回復原狀，那筆 worker 就直接退出；沒有回復原狀的就保留下來，之後讓 pane 顯示「啟動失敗」（P1c）。
+  - 新建的 worker 會帶 `purdex.session_id` 標籤，標明它屬於哪一段對話。
+- **在終端機手動 `claude --resume` 一段正被 worker 用的對話 → worker 自動退出（Q1）**：
+  - 只有在 daemon 再確認一次「這段對話現在確實在這個終端機裡」之後才動作。所以一次失敗的轉移剛關掉的終端機，就算之後才送來啟動訊號，也不會誤退 worker。
+  - Purdex 自己的轉移進行中時會先跳過，轉移結束後再重查。遇到鎖被占用或暫時性錯誤時，每 3 秒重查一次，最多 20 次。
+  - 每退出一個 worker，就廣播一次主機事件 `nex-worker-exited`（給 P1b-2 的 toast 用）。
+  - 啟動訊號積壓太多時，會改成整張表掃一次、逐段對話對帳，不會漏掉。
+- **其他**：
+  - 「接到終端機」與「接回原終端機」若在送鍵前發現有人接走，也會在放開鎖之後重查一次。
+  - daemon 關閉時會先停下這些背景工作，最多等 3 秒，不會拖住重啟。
+
 ## [1.0.0-alpha.491] - 2026-10-06
 
 > Daemon only; no SPA or Electron change. **The daemon is not deployed yet.** The coordinator batches the mlab restart with the other lines. Until then the status bar can still show `tmux:<name>` with agent「—」for sessions late in the alphabet.
