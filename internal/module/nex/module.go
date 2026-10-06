@@ -344,6 +344,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+RoutePrefix+"/executions/{id}/take-to-terminal", m.handleTakeToTerminal)
 	mux.HandleFunc("POST "+RoutePrefix+"/executions/{id}/uploads", m.handleExecutionUpload)
 	mux.HandleFunc("POST "+RoutePrefix+"/executions/{id}/exit", m.handleExitWorker)
+	mux.HandleFunc("POST "+RoutePrefix+"/worker-rebuild", m.handleWorkerRebuild)
 	if m.initErr != nil {
 		mux.Handle(RoutePrefix+"/", unavailableHandler(m.initErr))
 		return
