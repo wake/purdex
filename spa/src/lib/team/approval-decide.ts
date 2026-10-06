@@ -3,7 +3,10 @@
 //   200                      → closed (ours: no toast);
 //   409 + approval           → someone else got there first: close, toast who;
 //   network, host down       → the daemon is restarting: keep the decision for the reconnect snapshot;
-//   network, host connected  → nothing would resend it (the resend rides the reconnect snapshot): toast, leave it open;
+//   network, host connected  → nothing would resend it (the resend rides the reconnect snapshot): toast, leave it open —
+//                              except a resend FROM the queue (`fromQueue`), which always goes back to the queue: the
+//                              host runtime may still read `connected` when the daemon has just died again, and a
+//                              decision the person already made must not be lost to that window;
 //   host_removed             → this device no longer has the host: drop the request, nothing to replay against;
 //   404                      → the daemon no longer knows the request: close, toast the failure;
 //   anything else            → toast the failure, leave the request open.
@@ -38,7 +41,12 @@ function toastFailed(err: ApprovalApiError): void {
   useUndoToast.getState().show(t('approval.toast.failed', { code: err.detail !== '' ? `${err.code}: ${err.detail}` : err.code }))
 }
 
-export async function submitDecision(hostId: string, approval: Approval, decision: Decision, grant?: Grant): Promise<DecideOutcome> {
+export interface SubmitOptions {
+  /** The decision was taken from the reconnect queue (approval-ws.ts): a network failure re-queues it, whatever the host status. */
+  fromQueue?: boolean
+}
+
+export async function submitDecision(hostId: string, approval: Approval, decision: Decision, grant?: Grant, opts: SubmitOptions = {}): Promise<DecideOutcome> {
   const client = await clientDescriptor()
   // Before the send: the daemon's `closed` broadcast can outrun the HTTP answer, and it must read as ours.
   useApprovalStore.getState().markDecidedHere(hostId, approval.id)
@@ -56,9 +64,10 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
     if (err.code === 'network') {
       // Never reached the daemon (or the answer was lost): a `closed` that arrives meanwhile is someone else's.
       store.unmarkDecidedHere(hostId, approval.id)
-      // Queue only while the host is down: the queue is drained by the reconnect snapshot (P3b), so with the WS still
-      // `connected` nothing would ever resend it — the person clicks again instead.
-      if (useHostStore.getState().runtime[hostId]?.status !== 'connected') {
+      // Queue while the host is down: the queue is drained by the reconnect snapshot (P3b), so with the WS still
+      // `connected` nothing would ever resend a fresh click — the person clicks again instead. A decision that came
+      // FROM the queue is re-queued regardless: the runtime lags the daemon dying again, and it was already made.
+      if (opts.fromQueue || useHostStore.getState().runtime[hostId]?.status !== 'connected') {
         store.queueDecision(hostId, approval, decision, grant)
         return 'queued'
       }

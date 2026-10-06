@@ -1,12 +1,40 @@
 // spa/src/lib/team/approval-notify.ts — the system notification for a new approval request (lead-team spec §6.3):
 // `<主機>：<session> 申請成為 lead` through the existing Electron `showNotification` IPC. Raised on `opened` only; a
-// snapshot (reconnect) re-shows the dialog but must not re-announce. `broadcastTs` is the request's `created_at`:
-// Electron main dedups on it across this device's windows. U14: the App is the only client — no browser fallback.
+// snapshot (reconnect) re-shows the dialog but must not re-announce. Electron main dedups on the bare `broadcastTs`
+// number across this device's windows, so it must identify the REQUEST, not its `created_at`: two requests created
+// in the same millisecond (two hosts, or two sessions on one) would otherwise lose one notification. `approvalBroadcastTs`
+// hashes `<hostId>\0<approval.id>` — identical across the windows of one device, distinct per request. U14: the App is
+// the only client — no browser fallback.
 import { getPlatformCapabilities } from '../platform'
 import { hostLabel, hostLookOf } from '../host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { approvalSessionLabel } from './approval-format'
 import { leadPayloadOf, type Approval } from './types'
+
+const FNV_OFFSET_32 = 0x811c9dc5
+const FNV_PRIME_32 = 0x01000193
+
+/** FNV-1a over the string's UTF-16 code units, 32-bit, from the given basis. */
+function fnv1a32(s: string, basis: number): number {
+  let h = basis >>> 0
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, FNV_PRIME_32) >>> 0
+  }
+  return h
+}
+
+/**
+ * The dedup key Electron gets for a request's notification: a stable 53-bit non-negative integer (a safe integer, so
+ * it survives the IPC and a `Set<number>` unchanged) — the top 21 bits from a second FNV-1a basis, the low 32 from the
+ * standard one. Pure in (hostId, id): every window of this device computes the same value for the same request.
+ */
+export function approvalBroadcastTs(hostId: string, id: string): number {
+  const key = `${hostId}\u0000${id}`
+  const lo = fnv1a32(key, FNV_OFFSET_32)
+  const hi = fnv1a32(key, FNV_OFFSET_32 ^ 0x5bd1e995) >>> 11
+  return hi * 0x1_0000_0000 + lo
+}
 
 export function notifyApprovalOpened(hostId: string, approval: Approval): void {
   if (!getPlatformCapabilities().canNotification || !window.electronAPI?.showNotification) return
@@ -16,7 +44,7 @@ export function notifyApprovalOpened(hostId: string, approval: Approval): void {
     body: leadPayloadOf(approval).reason,
     sessionCode: '',
     eventName: 'ApprovalRequest',
-    broadcastTs: approval.created_at,
+    broadcastTs: approvalBroadcastTs(hostId, approval.id),
     action: { kind: 'open-approval', hostId },
   })
 }

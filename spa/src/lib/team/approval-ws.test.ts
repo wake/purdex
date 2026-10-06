@@ -9,7 +9,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { ApprovalApiError, decideApproval } from './approval-api'
 import { __resetClientDescriptorForTests } from './client-label'
-import { handleApprovalEvent } from './approval-ws'
+import { handleApprovalEvent, parseApprovalEvent } from './approval-ws'
 import type { Approval } from './types'
 
 vi.mock('./approval-api', async (importOriginal) => ({
@@ -104,6 +104,28 @@ describe('approval-ws reconnect (spec §9.4)', () => {
     expect(useApprovalStore.getState().queued).toEqual({})
   })
 
+  it('the resend fails on the network while the runtime still reads connected → re-queued anyway (F3), once, no toast; the next snapshot resends it', async () => {
+    // The daemon died again right after the snapshot, before the host runtime noticed: a decision taken from the
+    // queue must never be dropped on a network failure, whatever the runtime says.
+    expect(useHostStore.getState().runtime[H]?.status).toBe('connected')
+    const a = approval()
+    useApprovalStore.getState().applyOpened(H, a)
+    useApprovalStore.getState().queueDecision(H, a, 'deny')
+    mockedDecide.mockRejectedValueOnce(new ApprovalApiError(0, 'network', 'Failed to fetch'))
+    handleApprovalEvent(H, snapshot([a]))
+    await flush()
+    expect(mockedDecide).toHaveBeenCalledTimes(1)
+    expect(useApprovalStore.getState().queued).toEqual({ [approvalKey(H, 'req-1')]: { hostId: H, approval: a, decision: 'deny', grant: undefined } })
+    expect(useUndoToast.getState().toast).toBeNull()
+    expect(useApprovalStore.getState().decidedHere).toEqual({})
+    mockedDecide.mockResolvedValueOnce(approval({ state: 'denied' }))
+    handleApprovalEvent(H, snapshot([a]))
+    await flush()
+    expect(mockedDecide).toHaveBeenCalledTimes(2)
+    expect(useApprovalStore.getState().queued).toEqual({})
+    expect(useApprovalStore.getState().entries).toEqual({})
+  })
+
   it('another host\'s queue is left alone', async () => {
     const a = approval()
     useApprovalStore.getState().applyOpened('h2', a)
@@ -112,5 +134,85 @@ describe('approval-ws reconnect (spec §9.4)', () => {
     await flush()
     expect(mockedDecide).not.toHaveBeenCalled()
     expect(useApprovalStore.getState().queued[approvalKey('h2', 'req-1')]).toBeDefined()
+  })
+})
+
+describe('approval-ws trust boundary (F1 / F2)', () => {
+  let warn: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => warn.mockRestore())
+
+  it.each([
+    ['approvals: null', { op: 'snapshot', approvals: null }],
+    ['approvals: "x"', { op: 'snapshot', approvals: 'x' }],
+    ['approvals missing', { op: 'snapshot' }],
+    ['one bad element', { op: 'snapshot', approvals: [approval(), { id: 'bad', state: 'open', origin: {}, created_at: 1 }] }],
+  ])('a malformed snapshot (%s) is ignored as a whole: entries and the queue stay, no toast, no resend, one warning', async (_label, frame) => {
+    const a = approval()
+    useApprovalStore.getState().applyOpened(H, a)
+    useApprovalStore.getState().queueDecision(H, a, 'deny')
+    const before = useApprovalStore.getState()
+    handleApprovalEvent(H, JSON.stringify(frame))
+    await flush()
+    expect(useApprovalStore.getState().entries).toBe(before.entries)
+    expect(useApprovalStore.getState().queued).toBe(before.queued)
+    expect(useApprovalStore.getState().queued[approvalKey(H, 'req-1')]).toMatchObject({ decision: 'deny' })
+    expect(mockedDecide).not.toHaveBeenCalled()
+    expect(useUndoToast.getState().toast).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('a well-formed snapshot still parses to its approvals; an empty array is an authoritative empty set', () => {
+    const a = approval()
+    expect(parseApprovalEvent(snapshot([a]))).toEqual({ op: 'snapshot', approvals: [a] })
+    expect(parseApprovalEvent(snapshot([]))).toEqual({ op: 'snapshot', approvals: [] })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('an `opened` whose approval only has id/state/origin/created_at is rejected: the store stays empty', () => {
+    const value = JSON.stringify({ op: 'opened', approval: { id: 'x', state: 'open', origin: {}, created_at: 1 } })
+    expect(parseApprovalEvent(value)).toBeNull()
+    handleApprovalEvent(H, value)
+    expect(useApprovalStore.getState().entries).toEqual({})
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
+
+  it.each<[string, (a: Approval) => unknown]>([
+    ['id empty', (a) => ({ ...a, id: '' })],
+    ['kind unknown', (a) => ({ ...a, kind: 'boss' })],
+    ['state unknown', (a) => ({ ...a, state: 'pending' })],
+    ['host_id not a string', (a) => ({ ...a, host_id: 7 })],
+    ['origin missing', (a) => ({ ...a, origin: undefined })],
+    ['origin.ref not a string', (a) => ({ ...a, origin: { ...a.origin, ref: undefined } })],
+    ['origin.name not a string', (a) => ({ ...a, origin: { ...a.origin, name: null } })],
+    ['origin.cwd not a string', (a) => ({ ...a, origin: { ...a.origin, cwd: 1 } })],
+    ['origin.tmux not a string', (a) => ({ ...a, origin: { ...a.origin, tmux: undefined } })],
+    ['origin.session_id not a string', (a) => ({ ...a, origin: { ...a.origin, session_id: 1 } })],
+    ['origin.pid not a number', (a) => ({ ...a, origin: { ...a.origin, pid: '1' } })],
+    ['origin.title not a string', (a) => ({ ...a, origin: { ...a.origin, title: 1 } })],
+    ['origin.address not a string', (a) => ({ ...a, origin: { ...a.origin, address: {} } })],
+    ['payload not an object', (a) => ({ ...a, payload: 'r' })],
+    ['created_at missing', (a) => ({ ...a, created_at: undefined })],
+    ['deadline_at not a number', (a) => ({ ...a, deadline_at: '541000' })],
+    ['lease_until missing', (a) => ({ ...a, lease_until: undefined })],
+    ['decided_by not an object', (a) => ({ ...a, decided_by: 'me' })],
+    ['decided_at not a number', (a) => ({ ...a, decided_at: 'now' })],
+    ['grant not an object', (a) => ({ ...a, grant: [] })],
+  ])('rejects an approval with %s (opened and closed)', (_label, mutate) => {
+    const bad = mutate(approval())
+    expect(parseApprovalEvent(JSON.stringify({ op: 'opened', approval: bad }))).toBeNull()
+    expect(parseApprovalEvent(JSON.stringify({ op: 'closed', approval: bad }))).toBeNull()
+  })
+
+  it('accepts the full wire shape, with and without the optional fields', () => {
+    const a = approval()
+    expect(parseApprovalEvent(JSON.stringify({ op: 'opened', approval: a }))).toEqual({ op: 'opened', approval: a })
+    const closed = approval({ state: 'approved', decided_by: { kind: 'app', label: 'Purdex.app @ air26' }, decided_at: 5, grant: { max_members: 2, roots: ['/w'] } })
+    expect(parseApprovalEvent(JSON.stringify({ op: 'closed', approval: closed }))).toEqual({ op: 'closed', approval: closed })
+    const titled = approval({ origin: { ...a.origin, name: '', title: '修 #1450', address: 'mlab/_40iueq' } })
+    expect(parseApprovalEvent(JSON.stringify({ op: 'opened', approval: titled }))).toEqual({ op: 'opened', approval: titled })
+    expect(warn).not.toHaveBeenCalled()
   })
 })

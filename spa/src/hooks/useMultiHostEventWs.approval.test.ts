@@ -102,7 +102,8 @@ describe('useMultiHostEventWs approval.request', () => {
     view.unmount()
   })
 
-  it('unknown ops, malformed approvals and non-JSON values are ignored', async () => {
+  it('unknown ops, malformed approvals and non-JSON values are ignored; a malformed frame with a known op warns once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { view, ws } = await connected()
     act(() => { ws.emit(frame({ op: 'nope', approval: approval() })) })
     act(() => { ws.emit(frame({ op: 'opened', approval: { id: '' } })) })
@@ -111,6 +112,8 @@ describe('useMultiHostEventWs approval.request', () => {
     act(() => { ws.emit(frame({ op: 'snapshot', approvals: null })) })
     expect(held()).toEqual([])
     expect(useUndoToast.getState().toast).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(3)
+    warn.mockRestore()
     view.unmount()
   })
 

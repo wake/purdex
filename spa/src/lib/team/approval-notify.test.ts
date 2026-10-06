@@ -1,12 +1,13 @@
 // spa/src/lib/team/approval-notify.test.ts — the system notification for a new lead request (lead-team spec §6.3):
 // raised through the existing Electron `showNotification` path on `opened` only — never from a snapshot, never twice
-// for one request — with `action {kind:'open-approval', hostId}` and `broadcastTs = created_at`. U14: no browser path.
+// for one request — with `action {kind:'open-approval', hostId}` and a `broadcastTs` that identifies the request (host id +
+// request id hashed), not its `created_at`: two requests born in the same millisecond must both be announced. U14: no browser path.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useApprovalStore } from '../../stores/useApprovalStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { handleApprovalEvent } from './approval-ws'
-import { notifyApprovalOpened } from './approval-notify'
+import { approvalBroadcastTs, notifyApprovalOpened } from './approval-notify'
 import type { Approval } from './types'
 
 const H = 'h1'
@@ -39,7 +40,7 @@ afterEach(() => {
 })
 
 describe('notifyApprovalOpened', () => {
-  it('raises the Electron notification: title per spec §6.3, the reason as body, open-approval action, created_at as broadcastTs', () => {
+  it('raises the Electron notification: title per spec §6.3, the reason as body, open-approval action, a per-request broadcastTs', () => {
     notifyApprovalOpened(H, approval())
     expect(showNotification).toHaveBeenCalledTimes(1)
     expect(showNotification.mock.calls[0][0]).toEqual({
@@ -47,10 +48,35 @@ describe('notifyApprovalOpened', () => {
       body: '要平行跑三個 PR',
       sessionCode: '',
       eventName: 'ApprovalRequest',
-      broadcastTs: 1_696_000_000_000,
+      broadcastTs: approvalBroadcastTs(H, 'req-1'),
       action: { kind: 'open-approval', hostId: H },
     })
     expect(NotificationCtor).not.toHaveBeenCalled()
+  })
+
+  it('broadcastTs is the request\'s identity, not its created_at: two requests born in the same millisecond on two hosts get two keys (F4)', () => {
+    const a = approval({ id: 'same-ms-1', created_at: 1_696_000_000_000 })
+    const b = approval({ id: 'same-ms-2', created_at: 1_696_000_000_000 })
+    notifyApprovalOpened('h1', a)
+    notifyApprovalOpened('h2', b)
+    expect(showNotification).toHaveBeenCalledTimes(2)
+    const [ts1, ts2] = showNotification.mock.calls.map((c) => (c[0] as { broadcastTs: number }).broadcastTs)
+    expect(ts1).not.toBe(ts2)
+    expect(ts1).not.toBe(1_696_000_000_000)
+    for (const ts of [ts1, ts2]) {
+      expect(Number.isSafeInteger(ts)).toBe(true)
+      expect(ts).toBeGreaterThanOrEqual(0)
+    }
+    // The same request id on two hosts is two requests too.
+    expect(approvalBroadcastTs('h1', 'req-1')).not.toBe(approvalBroadcastTs('h2', 'req-1'))
+  })
+
+  it('the same request announced twice (two windows of one device) gets the same broadcastTs, so Electron dedups it', () => {
+    notifyApprovalOpened(H, approval())
+    notifyApprovalOpened(H, approval())
+    const [ts1, ts2] = showNotification.mock.calls.map((c) => (c[0] as { broadcastTs: number }).broadcastTs)
+    expect(ts1).toBe(ts2)
+    expect(approvalBroadcastTs(H, 'req-1')).toBe(ts1)
   })
 
   it('outside Electron it does nothing — no browser Notification fallback (U14)', () => {
