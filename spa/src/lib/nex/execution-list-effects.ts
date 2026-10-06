@@ -4,7 +4,7 @@
 // guards that decide whether a list answer may still be committed. Where
 // the rendered cache lives is the caller's business (`useExecutionListStore`),
 // reached through the small `ListSink`.
-import { listAllExecutions } from './list-all-executions'
+import { listAllExecutions, LIST_MAX_PAGES, LIST_PAGE_LIMIT } from './list-all-executions'
 import { openNexSse, type NexSseHandle, type NexSseStatus } from './nex-sse'
 import { fingerprintOf } from './nex-host-effects'
 import { subscriptionSlots } from './subscription-slots'
@@ -25,6 +25,8 @@ export interface HostListCache {
   lastSeq: number | null
   /** Bumped on every completed refresh attempt (success or failure); consumers key their own follow-up queries on it. */
   refreshRevision: number
+  /** The last successful walk hit the page cap (D9): the newest rows may be missing. An error keeps the previous value with the previous rows. */
+  truncated: boolean
 }
 
 export type HostListCaches = Record<string, HostListCache>
@@ -56,7 +58,7 @@ export interface ExecutionListEffects {
 }
 
 export const emptyListCache = (refreshRevision = 0): HostListCache =>
-  ({ items: [], phase: 'idle', error: null, lastSeq: null, refreshRevision })
+  ({ items: [], phase: 'idle', error: null, lastSeq: null, refreshRevision, truncated: false })
 
 const errorText = (err: unknown): string =>
   err instanceof NexApiError ? err.code : err instanceof Error ? err.message : String(err)
@@ -112,9 +114,9 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
       .then((result) => {
         if (!result || !stillCurrent()) return
         const { items, dropped, truncated } = result
-        if (truncated) console.warn('nex: executions list truncated', { hostId })
+        if (truncated) console.warn('nex: executions list truncated', { hostId, pageLimit: LIST_PAGE_LIMIT, maxPages: LIST_MAX_PAGES })
         if (dropped > 0) console.warn('nex: executions page dropped malformed row(s)', { hostId, dropped })
-        patchCache(hostId, (c) => ({ ...c, items, phase: 'ready', error: null, refreshRevision: c.refreshRevision + 1 }))
+        patchCache(hostId, (c) => ({ ...c, items, phase: 'ready', error: null, truncated, refreshRevision: c.refreshRevision + 1 }))
       })
       .catch((err: unknown) => {
         if (!stillCurrent()) return

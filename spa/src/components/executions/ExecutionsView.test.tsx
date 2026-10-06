@@ -36,8 +36,8 @@ const readyEntry: NexHostEntry = {
 }
 const entryWith = (patch: Partial<NexHostEntry>): NexHostEntry => ({ ...readyEntry, ...patch })
 
-function seedList(items: ExecutionSummary[], patch: Partial<{ phase: 'idle' | 'loading' | 'ready' | 'error'; error: string | null }> = {}) {
-  useExecutionListStore.setState({ byHost: { [H]: { items, phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, ...patch } } })
+function seedList(items: ExecutionSummary[], patch: Partial<{ phase: 'idle' | 'loading' | 'ready' | 'error'; error: string | null; truncated: boolean }> = {}) {
+  useExecutionListStore.setState({ byHost: { [H]: { items, phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false, ...patch } } })
 }
 
 let ensure: ReturnType<typeof vi.fn<(hostId: string) => Promise<void>>>
@@ -65,6 +65,34 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('ExecutionsView', () => {
+  it('a truncated list shows the persistent notice; an untruncated one does not', () => {
+    seedList([row({ id: 'exc_1' })], { truncated: true })
+    const { unmount } = render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.getByTestId('executions-truncated')).toHaveTextContent('More than 10,000 unarchived executions; the newest may not be listed')
+    unmount()
+    seedList([row({ id: 'exc_1' })])
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.queryByTestId('executions-truncated')).toBeNull()
+  })
+
+  it('the truncated notice is zh-TW verbatim and coexists with the empty note', () => {
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    try {
+      seedList([], { truncated: true })
+      render(<ExecutionsView hostId={H} isActive />)
+      expect(screen.getByTestId('executions-truncated')).toHaveTextContent('未歸檔的執行紀錄超過 10,000 筆，最新的可能沒有列出')
+      expect(screen.getByTestId('executions-empty')).toBeInTheDocument()
+    } finally {
+      act(() => { useI18nStore.getState().setLocale('en') })
+    }
+  })
+
+  it('no truncated notice while disabled or on first load', () => {
+    seedList([], { truncated: true, phase: 'loading' })
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.queryByTestId('executions-truncated')).toBeNull()
+  })
+
   it('header shows host name + phase dot', () => {
     seedList([])
     render(<ExecutionsView hostId={H} isActive />)

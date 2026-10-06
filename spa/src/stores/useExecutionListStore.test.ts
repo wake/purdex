@@ -460,6 +460,38 @@ describe('useExecutionListStore', () => {
     expect(cache(A).items).toHaveLength(1)
   })
 
+  it('a truncated walk commits its rows ready with truncated, a later complete walk clears it, an error keeps it', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(api.listExecutions).mockImplementation(async (_h, opts) => {
+      const n = Number(opts?.cursor ?? 0)
+      return { items: [row(`exc_${n}`)], next_cursor: String(n + 1) }
+    })
+    useExecutionListStore.getState().subscribe(A)
+    await flush()
+    expect(cache(A).phase).toBe('ready')
+    expect(cache(A).truncated).toBe(true)
+    expect(cache(A).items.length).toBeGreaterThan(0)
+    const count = cache(A).items.length
+
+    vi.mocked(api.listExecutions).mockReset().mockRejectedValue(new NexApiError(503, 'nex_unavailable', 'down'))
+    useExecutionListStore.getState().refetch(A)
+    await flush()
+    expect(cache(A).phase).toBe('error')
+    expect(cache(A).truncated).toBe(true)
+    expect(cache(A).items).toHaveLength(count)
+
+    vi.mocked(api.listExecutions).mockReset().mockResolvedValue(page('exc_1'))
+    useExecutionListStore.getState().refetch(A)
+    await flush()
+    expect(cache(A).phase).toBe('ready')
+    expect(cache(A).truncated).toBe(false)
+  })
+
+  it('a fresh cache is not truncated', () => {
+    useExecutionListStore.getState().subscribe(A)
+    expect(cache(A).truncated).toBe(false)
+  })
+
   it('two hosts maintain independent SSEs, reservations, cursors, debounces, and teardown', async () => {
     const uA = useExecutionListStore.getState().subscribe(A)
     useExecutionListStore.getState().subscribe(B)

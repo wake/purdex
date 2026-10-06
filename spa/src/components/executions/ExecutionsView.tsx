@@ -42,7 +42,7 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
   const entry = useNexHostStore((s) => s.byHost[id])
   const daemonHostId = typeof entry?.capabilities?.host_id === 'string' ? entry.capabilities.host_id : null
   const showCost = useNexHostStore(selectRollupCostShown(id))
-  const { items, phase, error, refetch } = useHostExecutions(id, { enabled: id !== '' })
+  const { items, phase, error, truncated, refetch } = useHostExecutions(id, { enabled: id !== '' })
   const now = useNowTicker()
   const live = useMemo(() => liveEntityRows(items), [items])
   const groups = useMemo(() => groupBySource(live), [live])
@@ -90,6 +90,9 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
               {t('executions.retry')}
             </button>
           </div>
+        )}
+        {truncated && (
+          <p data-testid="executions-truncated" className="px-3 py-1 text-xs text-text-muted">{t('executions.truncated')}</p>
         )}
         {live.length === 0 && phase !== 'error' && (
           <p data-testid="executions-empty" className="px-3 py-2 text-xs text-text-muted">{t('executions.empty')}</p>
