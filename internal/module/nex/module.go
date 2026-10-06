@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -126,9 +127,19 @@ type Module struct {
 	isDir    func(string) bool // default statIsDir; test seam
 	logf     func(string, ...any)
 
-	unsubscribeStarts func()           // SessionStart hub subscription (manual_resume.go)
-	startsStopped     atomic.Bool      // set by Stop; manual-resume handlers bail out (manual_resume.go)
-	recheck           func(sid string) // test seam for recheckSession; nil launches the goroutine
+	// Q1 lifecycle (manual_resume.go). Start creates q1Ctx and subscribes;
+	// every unit of Q1 work (a hub callback, a re-check) is counted in
+	// q1Work, and starts only under q1Mu while startsStopped is unset, so an
+	// Add never races Stop's Wait. Stop sets startsStopped under q1Mu,
+	// unsubscribes, cancels q1Ctx and waits (bounded) for q1Work.
+	q1Mu              sync.Mutex
+	unsubscribeStarts func()             // SessionStart hub subscription
+	startsStopped     atomic.Bool        // set by Stop; Q1 work bails out between steps
+	q1Ctx             context.Context    // nil until Start subscribes; cancelled by Stop
+	q1Cancel          context.CancelFunc // cancels q1Ctx
+	q1Work            sync.WaitGroup     // Q1 work in flight
+	recheck           func(sid string)   // test seam for recheckSession; nil launches the goroutine
+	q1StopCap         time.Duration      // 0 = q1StopWait; test seam
 }
 
 // New returns a Module wired with production defaults.
@@ -364,7 +375,7 @@ func (m *Module) Start(context.Context) error {
 	m.logf("nex: serving %s (host_id=%s, data_dir=%s, claude_bin=%s, profiles=%s, path_prepend=%s)",
 		RoutePrefix, cfg.HostID, cfg.DataDir, claudeBin, profilesText(cfg.Sandbox.MaxProfile, cfg.Sandbox.DefaultProfile), m.pathPrefix)
 	if m.terminals != nil {
-		m.unsubscribeStarts = m.terminals.SubscribeSessionStart(m.onSessionStart)
+		m.startManualResume()
 	}
 	return nil
 }
@@ -383,18 +394,17 @@ func profilesText(maxProfile, defaultProfile string) string {
 	return "max=" + name(maxProfile) + ",default=" + name(defaultProfile)
 }
 
-// Stop drains the engine within ctx's budget (core.ShutdownBudget, shared
-// with the HTTP server's Shutdown).
+// Stop ends the manual-resume handling (stopManualResume: no new work,
+// in-flight work cancelled and waited for, boundedly), then drains the
+// engine within ctx's budget (core.ShutdownBudget, shared with the HTTP
+// server's Shutdown).
 //
-// Stop and Close are no-ops when Init never assembled an engine (only a
-// Validate error from Init is fatal to the daemon; an engine-assembly error
-// soft-fails, spec §4.4.1, and the lifecycle still walks this Module).
+// The engine drain and Close are no-ops when Init never assembled an engine
+// (only a Validate error from Init is fatal to the daemon; an
+// engine-assembly error soft-fails, spec §4.4.1, and the lifecycle still
+// walks this Module); stopManualResume runs either way.
 func (m *Module) Stop(ctx context.Context) error {
-	if m.unsubscribeStarts != nil {
-		m.unsubscribeStarts()
-		m.unsubscribeStarts = nil
-	}
-	m.startsStopped.Store(true)
+	m.stopManualResume(ctx)
 	if m.sys.shutdown == nil {
 		return nil
 	}

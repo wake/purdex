@@ -317,6 +317,7 @@ type fakeNexService struct {
 	terminateCalls []execution.TerminateRequest
 	terminateErr   error
 	onTerminate    func(execution.TerminateRequest) // runs before the answer; lets a test flip the store row to terminated
+	terminateGate  chan struct{}                    // parks every Terminate until closed or its ctx ends
 	renewCalls     []renewCall
 	renewErr       error
 
@@ -395,6 +396,17 @@ func (f *fakeNexService) ArchiveCalls() []string {
 		} else {
 			out = append(out, "unarchive")
 		}
+	}
+	return out
+}
+
+// TerminateIDs returns the execution id of every Terminate so far.
+func (f *fakeNexService) TerminateIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, r := range f.terminateCalls {
+		out = append(out, r.ExecutionID)
 	}
 	return out
 }
@@ -499,14 +511,17 @@ func (f *fakeNexService) Archive(ctx context.Context, req execution.ArchiveReque
 // Terminate runs onTerminate first (so a hook can hand the lease over), then,
 // with enforceLease, fences the request as Nexen's Terminate does (CheckLease
 // before anything else), and otherwise answers terminateErr.
-func (f *fakeNexService) Terminate(_ context.Context, req execution.TerminateRequest) error {
+func (f *fakeNexService) Terminate(ctx context.Context, req execution.TerminateRequest) error {
 	f.record("terminate")
 	f.mu.Lock()
 	f.terminateCalls = append(f.terminateCalls, req)
-	hook := f.onTerminate
+	hook, gate := f.onTerminate, f.terminateGate
 	f.mu.Unlock()
 	if hook != nil {
 		hook(req)
+	}
+	if err := wait(ctx, gate); err != nil {
+		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -559,6 +574,10 @@ type fakeNexStore struct {
 	listErr   error
 	listErrAt int
 	listCalls int
+	// listGate parks every List until it is closed or the call's ctx ends;
+	// listEntered is closed on the first List.
+	listGate    chan struct{}
+	listEntered chan struct{}
 }
 
 type getResult struct {
@@ -599,7 +618,17 @@ func (f *fakeNexStore) Get(ctx context.Context, id string) (store.Execution, err
 
 // List honours IncludeArchived, Cursor (id >) and Limit; rows come back in id
 // order and NextCursor is set only when more remain.
-func (f *fakeNexStore) List(_ context.Context, opts store.ListOptions) (store.ListPage, error) {
+func (f *fakeNexStore) List(ctx context.Context, opts store.ListOptions) (store.ListPage, error) {
+	f.mu.Lock()
+	gate := f.listGate
+	if f.listEntered != nil {
+		close(f.listEntered)
+		f.listEntered = nil
+	}
+	f.mu.Unlock()
+	if err := wait(ctx, gate); err != nil {
+		return store.ListPage{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listCalls++
@@ -670,6 +699,12 @@ type stubTerminals struct {
 	// byCall, when set, answers the n-th (1-based) LiveBySessionID call
 	// instead of live: the seam for "an owner appears between two looks".
 	byCall func(n int) []agent.TerminalSession
+	// gate, when set, parks every lookup until it is closed or the lookup's
+	// ctx ends (ignoreCtx: only the gate releases it, like a lookup that
+	// checks its ctx only on entry). entered is closed on the first lookup.
+	gate      chan struct{}
+	ignoreCtx bool
+	entered   chan struct{}
 }
 
 // Calls is the number of LiveBySessionID lookups so far.
@@ -679,15 +714,30 @@ func (s *stubTerminals) Calls() int {
 	return s.calls
 }
 
-func (s *stubTerminals) LiveBySessionID(_ context.Context, _, sid string) ([]agent.TerminalSession, error) {
+func (s *stubTerminals) LiveBySessionID(ctx context.Context, _, sid string) ([]agent.TerminalSession, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.err != nil {
+		s.mu.Unlock()
 		return nil, s.err
 	}
 	s.calls++
+	n, gate, ignoreCtx := s.calls, s.gate, s.ignoreCtx
+	if s.entered != nil {
+		close(s.entered)
+		s.entered = nil
+	}
+	s.mu.Unlock()
+	if gate != nil {
+		if ignoreCtx {
+			<-gate
+		} else if err := wait(ctx, gate); err != nil {
+			return nil, err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.byCall != nil {
-		return s.byCall(s.calls), nil
+		return s.byCall(n), nil
 	}
 	return append([]agent.TerminalSession(nil), s.live[sid]...), nil
 }

@@ -243,12 +243,12 @@ func TestManualResume_SkipsACandidateNoLongerLiveForS(t *testing.T) {
 		overflow bool
 		reread   getResult
 	}{
-		"overflow: archived since the scan":  {true, getResult{exec: archived}},
+		"overflow: archived since the scan":   {true, getResult{exec: archived}},
 		"overflow: terminated since the scan": {true, getResult{exec: terminated}},
-		"resume: archived since the scan":    {false, getResult{exec: archived}},
-		"resume: no longer for S":            {false, getResult{exec: moved}},
-		"resume: the re-read fails":          {false, getResult{err: errors.New("db busy")}},
-		"resume: gone":                       {false, getResult{err: store.ErrNotFound}},
+		"resume: archived since the scan":     {false, getResult{exec: archived}},
+		"resume: no longer for S":             {false, getResult{exec: moved}},
+		"resume: the re-read fails":           {false, getResult{err: errors.New("db busy")}},
+		"resume: gone":                        {false, getResult{err: store.ErrNotFound}},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
