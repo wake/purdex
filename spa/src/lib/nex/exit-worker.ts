@@ -13,27 +13,34 @@ export interface ExitWorkerArgs {
   forgetLease?: () => void
 }
 
-/** In-flight exits by `exit:<host>:<execution>`; a second call shares the first's promise. */
+/**
+ * In-flight daemon requests by `<host>:<execution>`. Only the request is shared:
+ * every caller awaits it and then runs its own forgetLease. (Not handoff.ts's
+ * singleFlight: that rejects a second caller with handoff_in_progress, while a
+ * joined exit must resolve with the same result.)
+ */
 const inFlight = new Map<string, Promise<NexExitWorkerResult>>()
 
-/** Single-flight exit; refetches the host's list after; throws HandoffApiError. */
-export function exitWorker(args: ExitWorkerArgs): Promise<NexExitWorkerResult> {
+/** Exit via a shared request; the list is refetched once per request. Throws HandoffApiError. */
+export async function exitWorker(args: ExitWorkerArgs): Promise<NexExitWorkerResult> {
   const { hostId, executionId, leaseId, forgetLease } = args
-  const key = `exit:${hostId}:${executionId}`
-  const existing = inFlight.get(key)
-  if (existing) return existing
-  const p = (async () => {
-    try {
-      const result = await nexExitWorker(hostId, executionId, leaseId ? { lease_id: leaseId } : {})
-      forgetLease?.()
-      return result
-    } finally {
-      inFlight.delete(key)
-      useExecutionListStore.getState().refetch(hostId)
-    }
-  })()
-  inFlight.set(key, p)
-  return p
+  const key = `${hostId}:${executionId}`
+  let req = inFlight.get(key)
+  if (!req) {
+    const created = (async () => {
+      try {
+        return await nexExitWorker(hostId, executionId, leaseId ? { lease_id: leaseId } : {})
+      } finally {
+        inFlight.delete(key)
+        useExecutionListStore.getState().refetch(hostId)
+      }
+    })()
+    inFlight.set(key, created)
+    req = created
+  }
+  const result = await req
+  forgetLease?.()
+  return result
 }
 
 /** The toast text for a failed exit. */

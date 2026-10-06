@@ -40,6 +40,45 @@ describe('exitWorker', () => {
     expect(forgetLease).not.toHaveBeenCalled()
   })
 
+  it('runs the joining pane\'s own forgetLease with one request (list first)', async () => {
+    let resolve!: (v: api.NexExitWorkerResult) => void
+    vi.mocked(api.nexExitWorker).mockReturnValue(new Promise((r) => { resolve = r }))
+    const paneForget = vi.fn()
+    const a = exitWorker({ hostId: 'h1', executionId: 'E3' })
+    const b = exitWorker({ hostId: 'h1', executionId: 'E3', leaseId: 'L9', forgetLease: paneForget })
+    resolve({ exited: true, terminated: true, archived: true, state: 'terminated' })
+    await Promise.all([a, b])
+    expect(api.nexExitWorker).toHaveBeenCalledTimes(1)
+    expect(api.nexExitWorker).toHaveBeenCalledWith('h1', 'E3', {})
+    expect(paneForget).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs the first pane\'s forgetLease when the list joins after', async () => {
+    let resolve!: (v: api.NexExitWorkerResult) => void
+    vi.mocked(api.nexExitWorker).mockReturnValue(new Promise((r) => { resolve = r }))
+    const paneForget = vi.fn()
+    const a = exitWorker({ hostId: 'h1', executionId: 'E4', leaseId: 'L1', forgetLease: paneForget })
+    const b = exitWorker({ hostId: 'h1', executionId: 'E4' })
+    resolve({ exited: true, terminated: true, archived: true, state: 'terminated' })
+    await Promise.all([a, b])
+    expect(api.nexExitWorker).toHaveBeenCalledTimes(1)
+    expect(paneForget).toHaveBeenCalledTimes(1)
+  })
+
+  it('calls no forgetLease when the shared request fails', async () => {
+    let reject!: (e: unknown) => void
+    vi.mocked(api.nexExitWorker).mockReturnValue(new Promise((_, r) => { reject = r }))
+    const f1 = vi.fn()
+    const f2 = vi.fn()
+    const a = exitWorker({ hostId: 'h1', executionId: 'E5', forgetLease: f1 })
+    const b = exitWorker({ hostId: 'h1', executionId: 'E5', forgetLease: f2 })
+    reject(new HandoffApiError(409, 'held_by', {}))
+    await expect(a).rejects.toBeInstanceOf(HandoffApiError)
+    await expect(b).rejects.toBeInstanceOf(HandoffApiError)
+    expect(f1).not.toHaveBeenCalled()
+    expect(f2).not.toHaveBeenCalled()
+  })
+
   it('names the holder on held_by', () => {
     const t = useI18nStore.getState().t
     const msg = exitErrorMessage(new HandoffApiError(409, 'held_by', { principal: 'ploom:agent-7' }), t)
