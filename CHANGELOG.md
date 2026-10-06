@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.518] - 2026-10-07
+
+> 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。首次啟動會在 data dir 建立 `team.db`（新檔，不動既有資料庫）。SPA 與 Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P2a-3（#1662）
+
+lead 申請的 daemon 端自此完整並掛上路由（spec §6.2、§9.2、§9.5）；指令 `pdx lead request` 與 Purdex.app 的核准對話框在 P2b、P3 接續。
+
+- **`GET /api/team/approvals/{id}?wait=N`**：長輪詢一筆申請（最多 25 秒），每次輪詢都續約 30 秒的 lease；daemon 停止時立即回目前狀態，讓指令端等重啟後接著問同一筆。
+- **`DELETE /api/team/approvals/{id}`**：申請方放棄。**`POST /api/team/approvals/{id}/decide`**：任一 Purdex.app 按一下核准或拒絕（帶 client 標籤與來源位址，供廣播與稽核）；慢一步的那個 client 收到 409 與勝出的決定。
+- **`GET /api/team/inflight`**：等待核准的申請數（接力數先固定 0），給重啟確認對話框用。
+- **sweeper**：逾時視同拒絕（U7）、lease 過期或申請的 session 已不在 → 放棄；每一筆關閉恰好廣播一次 `approval.request {op: closed}`。
+- **啟動**：open 的申請在 daemon 啟動時 lease 一律延到啟動後 30 秒（U12）；新連上的 client 先收到一份 open 申請的 snapshot。
+
+review 期間修正：snapshot 與即時事件改為同一順序（新連線不會被過期 snapshot 蓋掉或復活已關閉的申請）；sweeper 只在 lease／deadline 仍然過期時才關閉（續約成功的申請不會被誤關）；續約寫入失敗回 503 讓指令端重試。
+
+### Docs
+
+- spec 新增 **U19（分流）**：終端機照常出現原生 AskUserQuestion／權限對話框，其他 client 顯示事件卡，任一邊回答後全部關閉；由 Purdex mod 讓原生框與 daemon 的答案賽跑（M24 實測）；沒有 mod 的 session 退化成唯讀卡；P8a／P8b。
+
 ## [1.0.0-alpha.517] - 2026-10-07
 
 > **需要部署 daemon**（內嵌的 Nexen 升級，加上退出 worker 的行為變更）。資料庫結構不變（仍是 schema v6），不用清資料。SPA 與 Electron 都不必更新。
