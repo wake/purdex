@@ -500,6 +500,26 @@ describe('ExecutionsView', () => {
     expect(exitWorker).toHaveBeenCalledTimes(2)
   })
 
+  it('the pending guard is per host: a host switch does not inherit it and a late completion clears only its own key', async () => {
+    useNexHostStore.setState({ byHost: { [H]: readyEntry, [OTHER]: readyEntry }, ensure })
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: [row({ id: 'I', state: 'idle' })], next_cursor: '' })
+    const resolvers: Array<(v: Awaited<ReturnType<typeof exitWorker>>) => void> = []
+    vi.mocked(exitWorker).mockImplementation(() => new Promise((res) => { resolvers.push(res) }))
+    const { rerender } = render(<ExecutionsView hostId={H} isActive />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
+    rerender(<ExecutionsView hostId={OTHER} isActive />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByTestId('executions-row-exit')).toBeEnabled()
+    fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(exitWorker).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(exitWorker).mock.calls[1][0]).toMatchObject({ hostId: OTHER, executionId: 'I' })
+    // Host A's exit completes late: host B's guard stays.
+    await act(async () => { resolvers[0]({ exited: false, terminated: false, archived: false, state: 'idle' }) })
+    expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
+  })
+
   it('confirming for a row that has disappeared sends no request', () => {
     seedList([row({ id: 'R', state: 'running' })])
     render(<ExecutionsView hostId={H} isActive />)

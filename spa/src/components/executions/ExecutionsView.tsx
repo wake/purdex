@@ -22,6 +22,8 @@ import { ExecutionsGroup } from './ExecutionsGroup'
 
 export const AGE_TICK_MS = 60_000
 
+const pendingKey = (hostId: string, executionId: string) => `${hostId}:${executionId}`
+
 function PhaseDot({ phase }: { phase: NexHostPhase }) {
   const common = { size: 8, 'data-testid': 'executions-phase-dot', 'data-phase': phase }
   if (phase === 'loading' || phase === 'unknown') return <Spinner {...common} className="text-yellow-400 animate-spin" />
@@ -52,7 +54,8 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
   const groups = useMemo(() => groupBySource(live), [live])
   const shown = useIsRefShown(id === '' ? null : id)
   const [confirmExitId, setConfirmExitId] = useState<string | null>(null)
-  // Exits on their way, by execution id (this view is one host's, so the id is enough). The ref is the
+  // Exits on their way, keyed `${hostId}:${executionId}` (a host switch rerenders this view, and the same
+  // execution id can exist on two hosts; a completion clears only its own key). The ref is the
   // same-tick guard; the state renders the disabled button. A failure frees the id at once; a success
   // keeps it until the row is gone (or no longer live) from the list.
   const pendingRef = useRef<Set<string>>(new Set())
@@ -60,10 +63,16 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
   const setPendingIds = useCallback((next: Set<string>) => { pendingRef.current = next; setPending(next) }, [])
   useEffect(() => {
     if (pendingRef.current.size === 0) return
-    const liveIds = new Set(live.map((r) => r.id))
-    const kept = new Set([...pendingRef.current].filter((x) => liveIds.has(x)))
+    // Only this host's keys are judged against this host's list; other hosts' keys are left alone.
+    const liveKeys = new Set(live.map((r) => pendingKey(id, r.id)))
+    const kept = new Set([...pendingRef.current].filter((x) => !x.startsWith(`${id}:`) || liveKeys.has(x)))
     if (kept.size !== pendingRef.current.size) setPendingIds(kept)
-  }, [live, setPendingIds])
+  }, [live, id, setPendingIds])
+
+  const pendingIds = useMemo(
+    () => new Set([...pending].filter((k) => k.startsWith(`${id}:`)).map((k) => k.slice(id.length + 1))),
+    [pending, id],
+  )
 
   if (id === '') return null
 
@@ -76,8 +85,9 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
   }
 
   const runExit = async (executionId: string) => {
-    if (pendingRef.current.has(executionId)) return
-    setPendingIds(new Set(pendingRef.current).add(executionId))
+    const pKey = pendingKey(id, executionId)
+    if (pendingRef.current.has(pKey)) return
+    setPendingIds(new Set(pendingRef.current).add(pKey))
     let keep = false
     try {
       const result = await exitWorker({ hostId: id, executionId })
@@ -87,7 +97,7 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
     } finally {
       if (!keep) {
         const next = new Set(pendingRef.current)
-        next.delete(executionId)
+        next.delete(pKey)
         setPendingIds(next)
       }
     }
@@ -138,7 +148,7 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
           <p data-testid="executions-empty" className="px-3 py-2 text-xs text-text-muted">{t('executions.empty')}</p>
         )}
         {groups.map((group) => (
-          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={shown ? open : undefined} onExit={shown ? requestExit : undefined} exitPending={pending} />
+          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={shown ? open : undefined} onExit={shown ? requestExit : undefined} exitPending={pendingIds} />
         ))}
       </>
     )
