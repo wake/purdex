@@ -47,6 +47,15 @@ import {
 /** In-flight keys: `handoff:<host>:<session>`, `takeback:<host>:<execution>` and `rebuild:<host>:<pane>` (worker-rebuild.ts). */
 const inFlight = new Set<string>()
 
+/**
+ * Spec §8.3: a daemon that advertises `delegate.start_idle` hands off idle
+ * (waits for the user's next message); an older one still delegates with the
+ * placeholder brief and runs a turn at once, so it gets the legacy copy.
+ */
+export function handoffConfirmBodyKey(capabilities: { delegate?: { start_idle?: boolean } } | null | undefined): 'handoff.confirm_body_idle' | 'handoff.confirm_body' {
+  return capabilities?.delegate?.start_idle === true ? 'handoff.confirm_body_idle' : 'handoff.confirm_body'
+}
+
 export async function singleFlight<T>(key: string, run: () => Promise<T>): Promise<T> {
   if (inFlight.has(key)) throw new HandoffApiError(0, 'handoff_in_progress', {})
   inFlight.add(key)

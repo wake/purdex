@@ -765,6 +765,7 @@
   "handoff.menu": "Hand to nex",
   "handoff.confirm_title": "Hand this session to nex?",
   "handoff.confirm_body": "Claude Code exits in this pane and continues headless under nex with the handoff profile — no permission prompts. You can take it back to the terminal later.",
+  "handoff.confirm_body_idle": "Claude Code exits in this pane and the conversation moves to a worker (nex, handoff profile, no permission prompts), where it waits for your next message. You can take it back to the terminal later.",
   "handoff.success": "Handed to nex.",
   "handoff.open_execution": "Open execution",
   "handoff.keep_session": "Keep the tmux session",

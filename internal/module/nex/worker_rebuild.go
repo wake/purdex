@@ -15,9 +15,6 @@ import (
 	"lab.protype.tw/wake/nexen/store"
 )
 
-// rebuildBrief is the placeholder brief of a rebuilt stint (P3b removes it).
-const rebuildBrief = "(rebuilt as worker)"
-
 // rebuildOfLabel names the execution a rebuilt stint replaced.
 const rebuildOfLabel = "rebuild_of"
 
@@ -168,7 +165,8 @@ func (m *Module) handleWorkerRebuild(w http.ResponseWriter, r *http.Request) {
 	req := execution.Request{
 		PrincipalID:     principal,
 		Provider:        "claude",
-		Brief:           rebuildBrief,
+		Brief:           "",
+		StartIdle:       true, // idle row, no turn (spec §8)
 		SandboxProfile:  profile,
 		Mounts:          []execution.Mount{{Path: body.Cwd, Role: "cwd", Writable: true}},
 		Origin:          "purdex://host/" + m.opts.Config.HostID + "/rebuild",

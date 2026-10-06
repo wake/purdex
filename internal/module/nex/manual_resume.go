@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/module/agent"
@@ -297,7 +298,7 @@ func (m *Module) exitManualResumeWorker(parent context.Context, sid, tmuxSession
 // through the per-session path with every guard. A worker exited under one
 // key is not offered again under the other.
 func (m *Module) reconcileTerminalOwners(ctx context.Context) {
-	workers, err := m.scanLiveWorkers(ctx, func(store.Execution) bool { return true })
+	workers, err := m.scanLiveWorkers(ctx, store.ListOptions{}, func(store.Execution) bool { return true })
 	if m.q1Halted(ctx) {
 		return
 	}
@@ -308,21 +309,22 @@ func (m *Module) reconcileTerminalOwners(ctx context.Context) {
 	var order []string
 	for _, w := range workers {
 		for i, sid := range []string{w.SessionID, w.ResumeSessionID} {
-			if sid == "" || (i == 1 && sid == w.SessionID) {
+			if sid == "" || (i == 1 && strings.EqualFold(sid, w.SessionID)) {
 				continue
 			}
-			if _, ok := groups[sid]; !ok {
-				order = append(order, sid)
+			key := store.NormalizeResumeSessionID(sid)
+			if _, ok := groups[key]; !ok {
+				order = append(order, key)
 			}
-			groups[sid] = append(groups[sid], w)
+			groups[key] = append(groups[key], w)
 		}
 	}
 	done := map[string]bool{}
-	for _, sid := range order {
+	for _, key := range order {
 		if m.q1Halted(ctx) {
 			return
 		}
-		group := groups[sid]
+		sid, group := key, groups[key]
 		// The tmux session name is unknown on this path (agent.TerminalSession
 		// has no such field), so nex-worker-exited carries tmux_session "";
 		// the SPA toast (Task 18) must fall back when it is empty.

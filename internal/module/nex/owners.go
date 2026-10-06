@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	"lab.protype.tw/wake/nexen/store"
 )
@@ -28,18 +29,26 @@ func isLiveExecution(e store.Execution) bool {
 }
 
 // executionIsFor: the row belongs to Claude session sid, as its own session
-// or as the one it resumes.
+// or as the one it resumes. Case-insensitive, as Nexen's SessionID filter is:
+// it stores a provider-reported session_id verbatim.
 func executionIsFor(e store.Execution, sid string) bool {
-	return sid != "" && (e.SessionID == sid || e.ResumeSessionID == sid)
+	return sid != "" && (strings.EqualFold(e.SessionID, sid) || strings.EqualFold(e.ResumeSessionID, sid))
 }
 
 // liveWorkersFor returns S's live executions, newest first (CreatedAt desc,
 // then ID desc), with scanLiveWorkers' error contract.
 func (m *Module) liveWorkersFor(parent context.Context, sid string) ([]store.Execution, error) {
-	if sid == "" {
+	sid = store.NormalizeResumeSessionID(sid)
+	if sid == "" || store.ValidateResumeSessionID(sid) != nil {
+		// No execution can belong to a non-UUID session, and the store
+		// would refuse the filter.
 		return nil, nil
 	}
-	return m.scanLiveWorkers(parent, func(e store.Execution) bool { return executionIsFor(e, sid) })
+	// D18: the server narrows the scan, but its match is WIDER than "for S":
+	// it also matches any turn's session id (a resume may mint a new one).
+	// The client keeps the exact rule, so such a row is not S's worker.
+	// Not IncludeArchived.
+	return m.scanLiveWorkers(parent, store.ListOptions{SessionID: sid}, func(e store.Execution) bool { return executionIsFor(e, sid) })
 }
 
 // scanLiveWorkers pages the non-archived executions and keeps the live ones
@@ -49,12 +58,14 @@ func (m *Module) liveWorkersFor(parent context.Context, sid string) ([]store.Exe
 // result holds every live match found before the failure. Callers that must
 // prove absence (the owner checks) fail closed on any error; Q1 and the
 // overflow reconcile act on what was found (manual_resume.go).
-func (m *Module) scanLiveWorkers(parent context.Context, keep func(store.Execution) bool) ([]store.Execution, error) {
+func (m *Module) scanLiveWorkers(parent context.Context, base store.ListOptions, keep func(store.Execution) bool) ([]store.Execution, error) {
 	var out []store.Execution
 	cursor := ""
 	for page := 0; page < ownerScanMaxPages; page++ {
 		ctx, cancel := detachedContext(parent, m.engineOpTimeout)
-		res, err := m.sys.store.List(ctx, store.ListOptions{Cursor: cursor, Limit: ownerScanPageSize})
+		opts := base
+		opts.Cursor, opts.Limit = cursor, ownerScanPageSize
+		res, err := m.sys.store.List(ctx, opts)
 		cancel()
 		if err != nil {
 			sortNewestFirst(out)

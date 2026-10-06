@@ -46,7 +46,7 @@ const (
 	hoName      = "proj"
 	hoTarget    = hoName + ":0"
 	hoInstance  = "111:222"
-	hoSessionID = "sid-1234"
+	hoSessionID = "0a1b2c3d-0000-4000-8000-0000000000b1"
 	hoCwd       = "/work/proj"
 )
 
@@ -428,6 +428,10 @@ func (f *fakeNexService) Delegate(ctx context.Context, req execution.Request) (e
 	if err := wait(ctx, f.delegateGate); err != nil {
 		return execution.Result{}, err
 	}
+	// Nexen's CheckStartIdle: an idle start carries no brief.
+	if req.StartIdle && req.Brief != "" {
+		return execution.Result{}, errors.New("start_idle_conflict: brief")
+	}
 	return f.result, f.err
 }
 
@@ -574,6 +578,12 @@ type fakeNexStore struct {
 	listErr   error
 	listErrAt int
 	listCalls int
+	// lastListOpts / allListOpts record the options of every List call.
+	lastListOpts store.ListOptions
+	// turnSessions: execution id -> session ids of its turns (the third arm of
+	// Nexen's SessionID filter).
+	turnSessions map[string][]string
+	allListOpts  []store.ListOptions
 	// listGate parks every List until it is closed or the call's ctx ends;
 	// listEntered is closed on the first List.
 	listGate    chan struct{}
@@ -632,8 +642,16 @@ func (f *fakeNexStore) List(ctx context.Context, opts store.ListOptions) (store.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listCalls++
+	f.lastListOpts = opts
+	f.allListOpts = append(f.allListOpts, opts)
 	if f.listErr != nil && (f.listErrAt == 0 || f.listCalls == f.listErrAt) {
 		return store.ListPage{}, f.listErr
+	}
+	if opts.SessionID != "" {
+		if err := store.ValidateResumeSessionID(opts.SessionID); err != nil {
+			return store.ListPage{}, err
+		}
+		opts.SessionID = store.NormalizeResumeSessionID(opts.SessionID)
 	}
 	var rows []store.Execution
 	for _, e := range f.listRows {
@@ -641,6 +659,11 @@ func (f *fakeNexStore) List(ctx context.Context, opts store.ListOptions) (store.
 			continue
 		}
 		if !opts.IncludeArchived && e.ArchivedAt != 0 {
+			continue
+		}
+		// v0.17: exact, case-insensitive match on session_id or
+		// resume_session_id (turn session ids are not modelled here).
+		if opts.SessionID != "" && !strings.EqualFold(e.SessionID, opts.SessionID) && !strings.EqualFold(e.ResumeSessionID, opts.SessionID) && !f.turnMatches(e.ID, opts.SessionID) {
 			continue
 		}
 		rows = append(rows, e)
@@ -657,6 +680,15 @@ func (f *fakeNexStore) List(ctx context.Context, opts store.ListOptions) (store.
 	}
 	page.Items = rows
 	return page, nil
+}
+
+func (f *fakeNexStore) turnMatches(id, sid string) bool {
+	for _, t := range f.turnSessions[id] {
+		if strings.EqualFold(t, sid) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeNexStore) Calls() int {
@@ -739,7 +771,14 @@ func (s *stubTerminals) LiveBySessionID(ctx context.Context, _, sid string) ([]a
 	if s.byCall != nil {
 		return s.byCall(n), nil
 	}
-	return append([]agent.TerminalSession(nil), s.live[sid]...), nil
+	// The store matches session ids case-insensitively (ListRootsBySessionID).
+	var out []agent.TerminalSession
+	for k, v := range s.live {
+		if strings.EqualFold(k, sid) {
+			out = append(out, v...)
+		}
+	}
+	return out, nil
 }
 
 func (s *stubTerminals) SubscribeSessionStart(fn func(agent.SessionStartEvent)) func() {
