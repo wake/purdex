@@ -321,6 +321,35 @@ describe('handToNex', () => {
     expect(paneContent(a.tabId).kind).toBe('tmux-session')
   })
 
+  describe('a rejected delegate (conversation entity D7)', () => {
+    it('a rejection that was not rolled back turns the pane into that worker, and still throws', async () => {
+      mockedHandoff.mockRejectedValueOnce(new HandoffApiError(409, 'delegate_rejected', { rolled_back: false, execution_id: 'R1', reject_reason: 'x' }))
+      const a = args()
+      const err = await rejection(handToNex(a))
+      expect(err.code).toBe('delegate_rejected')
+      expect(paneContent(a.tabId)).toMatchObject({ kind: 'execution', executionId: 'R1', host: H })
+    })
+    it('a rolled-back rejection leaves the terminal pane', async () => {
+      mockedHandoff.mockRejectedValueOnce(new HandoffApiError(409, 'delegate_rejected', { rolled_back: true, execution_id: 'R1', exited: true }))
+      const a = args()
+      await rejection(handToNex(a))
+      expect(paneContent(a.tabId).kind).toBe('tmux-session')
+    })
+    it('a rejection without an execution id leaves the pane', async () => {
+      mockedHandoff.mockRejectedValueOnce(new HandoffApiError(409, 'delegate_rejected', { rolled_back: false }))
+      const a = args()
+      await rejection(handToNex(a))
+      expect(paneContent(a.tabId).kind).toBe('tmux-session')
+    })
+    it('a pane that moved on is left alone (compare-and-swap)', async () => {
+      mockedHandoff.mockRejectedValueOnce(new HandoffApiError(409, 'delegate_rejected', { rolled_back: false, execution_id: 'R1' }))
+      const a = args()
+      useTabStore.getState().setPaneContent(a.tabId, a.paneId, { kind: 'tmux-session', hostId: H, sessionCode: 'other', mode: 'terminal', cachedName: 'o', tmuxInstance: 'i' })
+      await rejection(handToNex(a))
+      expect(paneContent(a.tabId)).toMatchObject({ kind: 'tmux-session', sessionCode: 'other' })
+    })
+  })
+
   describe('single-flight', () => {
     it('a second call for the same host+session while one is in flight rejects with handoff_in_progress without a request', async () => {
       const d = deferred<typeof handoffOk>()

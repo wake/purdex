@@ -142,12 +142,30 @@ export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> 
     // `resumeLookupFor` answers from defaults until the host config is in
     // the store; a load failure leaves it that way (defaults, as before).
     await useHostConfigStore.getState().ensureLoaded(hostId)
-    const result = await nexHandoff(hostId, sessionCode, {
-      expected_tmux_instance: tmuxInstance,
-      // `{id}` left for the daemon: it read the session id itself.
-      rollback_command: resumeTemplateFor(resumeLookupFor(hostId), 'cc'),
-      keep_session: keepSession,
-    })
+    let result: NexHandoffResult
+    try {
+      result = await nexHandoff(hostId, sessionCode, {
+        expected_tmux_instance: tmuxInstance,
+        // `{id}` left for the daemon: it read the session id itself.
+        rollback_command: resumeTemplateFor(resumeLookupFor(hostId), 'cc'),
+        keep_session: keepSession,
+      })
+    } catch (err) {
+      // D7: Nex rejected the delegate and the daemon did not roll the terminal back, so the
+      // execution row is kept — the pane becomes that worker (its start-failed screen). The
+      // error is still rethrown for the dialog. A rolled-back rejection leaves the pane alone.
+      if (err instanceof HandoffApiError && err.code === 'delegate_rejected'
+        && err.body.rolled_back !== true && typeof err.body.execution_id === 'string' && err.body.execution_id !== '') {
+        const executionId = err.body.execution_id
+        if (isRefShownNow(hostId)) {
+          useTabStore.getState().trySetPaneContent(
+            tabId, paneId, executionContentFor(hostId, executionId),
+            (c) => c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && c.tmuxInstance === tmuxInstance,
+          )
+        }
+      }
+      throw err
+    }
     const swapped = isRefShownNow(hostId) && useTabStore.getState().trySetPaneContent(
       tabId, paneId, executionContentFor(hostId, result.execution_id, handoffFromFor(args, result), args.fromTitle, args.mode),
       (c) => c.kind === 'tmux-session' && c.hostId === hostId && c.sessionCode === sessionCode && c.tmuxInstance === tmuxInstance,
