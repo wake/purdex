@@ -5471,6 +5471,12 @@ Both halves are independently green: P2b-1 adds a package nothing calls yet; P2b
 - **Hung-poll cap stays as written:** three consecutive 35 s polls with no answer exit 20 with `pdx lead: daemon 沒有回應`. A connected daemon that never answers is broken, and 105 s is enough to tell. Spec §9.1 gains one line for it when P2b-2 ships.
 - **`--max-members 0` means the daemon default (3)**, matching the wire's normalisation. No `fs.Visit`.
 - **Deviations 1–8 are accepted.** `msg.go` / `peers.go` are not retrofitted to the exit constants or to `resolveDaemonHost` in this PR.
+- **After P2b-1's review (PR #1669, 2026-10-07), the shipped `daemonclient` differs from Task 2b.1's text in four ways that Tasks 2b.3/2b.4 must follow:**
+  1. **Retryable errors are an allowlist**, not "any `*net.OpError`": `ECONNREFUSED` and `503 shutting_down|not_ready` (before send), `ECONNRESET` / `io.EOF` / `io.ErrUnexpectedEOF` (after send). DNS, `EHOSTUNREACH`, `ENETUNREACH`, TLS, pairing-mode 503 and context errors return at once.
+  2. **The 30 s grace is a hard bound**: retries, probes and sleeps run under `firstFailure + 30 s`, sleeps are truncated; a caller ctx without a deadline gets a per-attempt timeout (`DefaultAttemptTimeout` 60 s, `WithAttemptTimeout`), and a daemon that accepts the connection but never answers returns `ErrNoAnswer` without retrying — `pdx lead request` keeps its own "three consecutive polls without an answer → exit 20 `daemon 沒有回應`" count on top of it.
+  3. **A 404 is `ErrUnsupported` unless its body decodes to a `team.APIError` with a code**; a JSON `not_found` is a `*StatusError`.
+  4. **Writes replay only when marked**: `Do(ctx, method, path, body, out, daemonclient.Idempotent())`. **Task 2b.3's create `POST` must pass `Idempotent()`** (its id is a client UUID, so a replay is safe); the long-poll `GET` needs nothing; the SIGINT `DELETE` goes through `Once`. An unmarked write that fails after sending returns `ErrSentNoResponse` (the transport error stays on the chain).
+
 
 ---
 
