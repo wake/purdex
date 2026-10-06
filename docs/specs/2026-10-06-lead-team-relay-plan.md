@@ -22,7 +22,7 @@
 **Spec:** `docs/specs/2026-10-06-lead-team-relay-spec.md` (passed review 2026-10-06). Read §2 (U1–U14), §6 and §9 before any task.
 
 **Scope of v1:**
-- PRs **P0, P1, P2a-1, P2a-2, P2a-3, P2b-1, P2b-2, P3a, P3b**, in that order (the splits are decided in each section's "Coordinator decisions").
+- PRs **P0, P1, P2a-1, P2a-2, P2a-3, P2b-1, P2b-2, P3a-1, P3a-2, P3b**, in that order (the splits are decided in each section's "Coordinator decisions").
 - The rest gets **plan v2**, with one codex round, after P3 merges:
   - P5a/P5b, self relay — next per spec §12's suggested order;
   - P4, team and spawn; then P4b host selection and P4c cross-host execution (U15, spec §7.4);
@@ -84,7 +84,7 @@
 - [ ] **Step 2: Edit §3.5, lines 75-76.** Replace the two Role rows with:
   ```
   | **Role** | （無） | 預設：一般 session，執行使用者下達的工作 |
-  |  | `lead` | 經使用者核准（需人在場驗證）；可開 member、替 member 安排接力 |
+  |  | `lead` | 經使用者核准（任一 Purdex.app 按一下）；可開 member、替 member 安排接力 |
   |  | `member` | 由 lead 開出；接力由 lead 決定 |
   ```
   Then add this line after the table, before "**Mode × Role 正交**":
@@ -816,6 +816,8 @@ const (
 	ErrUnsupportedKind = "unsupported_kind"
 	ErrIDConflict      = "id_conflict"     // same id, different hash
 	ErrRequestOpen     = "request_open"    // 409, carries the open Approval
+	ErrAlreadyLead     = "already_lead"       // 409, enforced from P4 (needs the teams table)
+	ErrMemberCannotLead = "member_cannot_lead" // 409, enforced from P4
 	ErrAlreadyDecided  = "already_decided" // 409, carries the closed Approval
 	ErrNotFound        = "not_found"
 	ErrNotReady        = "not_ready" // 503 while stopping
@@ -3327,6 +3329,7 @@ None that the code or the spec cannot answer. Two decisions above are judgement 
 
 ### Coordinator decisions on P2a (2026-10-07, `mlab/_81nu3d`)
 
+- **Codex finding 1 (approval without a team) is a staged deferral, kept:** P2 closes a lead request as `approved` and stores the grant; P4 adds team creation in the same transaction, `already_lead` / `member_cannot_lead`, and `team_id` in `pdx lead request`'s stdout. Until P4 nothing advertises `pdx lead request` (the skill ships in P5b and tells agents when to use it), so no session can believe it is a lead. The wire already carries the two P4 error codes so the contract does not move again.
 - **Split into three PRs**, each under 800 lines: **P2a-1** = Tasks 2.1, 2.2 (wire, store; ≈ 651 lines); **P2a-2** = Tasks 2.3 and 2.4 create/list with the module skeleton (≈ 760); **P2a-3** = Task 2.4 get/delete/decide, 2.5, 2.6 (≈ 716). The module is mounted in `cmd/pdx` only by P2a-3, so no half-built route set ships.
 - **Amendment from P3 (open question 1): `team.Origin` gains two optional fields**, `Title string \`json:"title,omitempty"\`` and `Address string \`json:"address,omitempty"\``, after `Tmux`. Applied in Task 2.1's `wire.go` and round-trip test, and in Task 2.3's fixture, test and `ResolveOrigin` (`titleOf`); `Title` comes from the peers title store (`m.titles.Snapshot()`, `titles.go:123`; `""` when `m.titles` is nil) and `Address` with the same formatter `GET /api/peers` uses for `PeerRecordWire.address` (`<alias>/<name>` for a routable name, else `<alias>/_<ref>`), and its test asserts both for the fixture's `n10` entry. The dialog (P3 Task 3.4) prefers them and falls back to `name` → `ref` when absent.
 - **Deviations 1–15 are accepted** as written. Two of them bind the neighbours: a `Stop`-cut long-poll answers `200` with the row still `open` (P2b re-polls and meets the refused connection), and `500 storage_error` is outside `wire.go` (P2b maps any unlisted code to exit 1).
@@ -7760,7 +7763,7 @@ The Global Constraint is "≤ 800 lines **or** ≤ 20 files"; both PRs meet the 
 
 ### Coordinator decisions on P3 (2026-10-07, `mlab/_81nu3d`)
 
-- **Split into three PRs:** **P3a-1** = Tasks 3.1–3.3 (types, API client, store, WS branch and toasts; ≈ 830 lines, 10 files, borderline on lines with 55 % tests); **P3a-2** = Task 3.4 (dialog host, client label, decide path; ≈ 640); **P3b** = Tasks 3.5–3.8 (reconnect resend, notification, restart line, i18n block; ≈ 395).
+- **Split into three PRs, each under 800 lines (codex finding 9):** **P3a-1** = Tasks 3.1, 3.2 (types, API client, store; ≈ 570 lines); **P3a-2** = Task 3.4 (dialog host, client label, decide path; ≈ 640 — the dialog is store-driven, so it is tested without the WS branch); **P3b** = Tasks 3.3, 3.5–3.8 (WS branch and toasts, reconnect resend, notification, restart line, i18n block; ≈ 655). The dialog shows nothing until P3b lands; daemon deploys are batched anyway.
 - **Open question 1 is taken into P2a:** `team.Origin` gains `Title string \`json:"title,omitempty"\`` and `Address string \`json:"address,omitempty"\`` (see "Coordinator decisions on P2a", amended). The TS `Origin.title?` / `address?` in Task 3.1 therefore match the wire, and the local fallback stays for an older daemon.
 - **Open questions 2–4 are accepted as v1 behaviour** (every window focuses on the notification click, as `open-host` does; `broadcastTs` stays `created_at`; a `closed` racing a late `opened` self-heals on the next snapshot or on the click's 409/404). Each is noted in the task that owns it; none needs code here.
 - **Deviations 1–9 are accepted.** Deviation 4 (`aria-disabled` plus queue, then `disabled` once queued) is the reading of spec §6.3 that lets "a click while disconnected is kept locally" work at all.
