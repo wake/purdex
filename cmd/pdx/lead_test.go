@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -128,9 +131,10 @@ func leadNoKeepAlive() daemonclient.Option {
 // cancelled. A GET is held (blocks until the client goes away) when hold is
 // set or holdPoll(n) says so; the first held GET signals pollStarted, and
 // onPoll(n) runs on every GET before any of that. Health answers bootID.
-// When onFirstPoll is set, the first GET runs it and answers `open` with
-// `Connection: close` — a long-poll cut by Stop (deviation 9 of P2a) on a
-// daemon that is going down (P2b-3's restart test).
+// When onFirstPoll is set, the first GET runs it, then the connection is
+// hijacked and closed WITHOUT any response — the poll was in flight when
+// the daemon process died (P2b-3's restart test); the client sees EOF /
+// ECONNRESET, never a settled answer.
 type fakeTeamDaemon struct {
 	mu              sync.Mutex
 	creates         []team.CreateApprovalRequest
@@ -220,7 +224,12 @@ func (f *fakeTeamDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimPrefix(r.URL.Path, "/api/team/approvals/")
 		if n == 1 && onFirstPoll != nil {
 			onFirstPoll()
-			w.Header().Set("Connection", "close") // the client must not reuse this connection to a daemon that is gone
+			// The daemon died mid-poll: the request was read, nothing is
+			// written back, the socket just closes.
+			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				conn.Close()
+			}
+			return
 		}
 		if n <= openUntil {
 			json.NewEncoder(w).Encode(team.Approval{ID: id, State: team.StateOpen})
@@ -278,6 +287,54 @@ func driveLeadHook(t *testing.T, ctx context.Context, d http.Handler, opts []dae
 	full := append(append([]string{"request"}, args...), "--config", cfgPath)
 	code := runLeadCmd(ctx, full, leadEnv(), &stdout, &stderr, fixedID(), onCancelled, opts...)
 	return code, stdout.String(), stderr.String()
+}
+
+// leadReservePort listens on a free 127.0.0.1 port and KEEPS the listener:
+// the first daemon serves on it (leadServeOn), so no other process can take
+// the port between reserving it and serving on it.
+func leadReservePort(t *testing.T) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ln
+}
+
+// leadServeOn starts an httptest.Server on an already-bound listener. It
+// repeats daemonclient's serveOn because that package's test helpers are
+// not importable from package main.
+func leadServeOn(t *testing.T, ln net.Listener, h http.Handler) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(h)
+	srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	return srv
+}
+
+// leadRelisten binds addr again after the first daemon's listener closed —
+// a restarted daemon comes back on the same port, and that same-port
+// handoff is inherent to the scenario (the CLI's base URL is fixed). Task
+// 2b.1 measured that a closed port can be re-listened at once; the retry on
+// "address already in use" (up to 50 × 10 ms) bounds the residual race with
+// another process grabbing the port in between.
+func leadRelisten(t *testing.T, addr string) net.Listener {
+	t.Helper()
+	var err error
+	for i := 0; i < 50; i++ {
+		var ln net.Listener
+		ln, err = net.Listen("tcp", addr)
+		if err == nil {
+			return ln
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("re-listen %s: %v", addr, err)
+	return nil
 }
 
 func TestRunLeadCmd_UsageErrorsExit2BeforeConfig(t *testing.T) {
@@ -701,5 +758,106 @@ func TestRunLeadCmd_HungPollCountResetsOnAnswer(t *testing.T) {
 	}
 	if _, polls, _, _ := d.snapshot(); len(polls) != 5 {
 		t.Errorf("polls = %v, want 5 (hung, open, hung, hung, approved)", polls)
+	}
+}
+
+// Review Focus 3, end to end through lead.go: the daemon restarts while
+// `pdx lead request` is long-polling. The first daemon (boot b1) accepts
+// the create; its first poll is dropped MID-FLIGHT — the request was read,
+// the listener closes, then the socket closes with no response at all —
+// so the client sees EOF / ECONNRESET on a GET, not a settled answer. The
+// shipped client replays a GET after such an after-send failure (restart
+// line once, then backoff), and its health probes before each retry are
+// refused until the new daemon (boot b2, same port) is up: the restarted
+// line is printed once, the SAME request id is polled again, found still
+// open, then approved. No real time passes (fake clock).
+//
+// Each client request is a fresh connection (leadNoKeepAlive): on a reused
+// one Go's Transport would replay the EOF'd GET by itself and the client
+// under test would only ever see ECONNREFUSED — the retry under test would
+// not be exercised.
+//
+// Sleep count = the backoff sleep the new daemon comes up on. Sleep 1
+// follows the EOF (the GET's own failure); every refused health probe after
+// that adds one more. With the new daemon up from sleep n, the probe after
+// sleep n reaches it and no further backoff happens: sleeps == n.
+func TestLeadRequest_SurvivesDaemonRestartMidPoll(t *testing.T) {
+	t.Run("daemon2UpAtFirstBackoff", func(t *testing.T) { leadRestartScenario(t, 1) })
+	t.Run("daemon2StartsAfterSeveralBackoffs", func(t *testing.T) { leadRestartScenario(t, 3) })
+}
+
+// leadRestartScenario runs the restart scenario with the second daemon
+// bound on the upOnSleep-th backoff sleep and asserts the invariants above.
+func leadRestartScenario(t *testing.T, upOnSleep int) {
+	t.Helper()
+	ln := leadReservePort(t)
+	addr := ln.Addr().String()
+	first := newFakeTeamDaemon(team.Approval{})
+	firstSrv := leadServeOn(t, ln, first)
+	first.onFirstPoll = func() { firstSrv.Listener.Close() } // the daemon is going down: no new connection is accepted
+	defer firstSrv.Close()
+
+	second := newFakeTeamDaemon(team.Approval{
+		State: team.StateApproved,
+		Grant: &team.Grant{MaxMembers: 3, Roots: []string{"/w"}},
+	})
+	second.bootID = "b2"
+	var secondSrv *httptest.Server
+	var once sync.Once
+	clock := newLeadClock()
+	clock.onSleep = func(n int) {
+		if n == upOnSleep {
+			once.Do(func() { secondSrv = leadServeOn(t, leadRelisten(t, addr), second) })
+		}
+	}
+	defer func() {
+		if secondSrv != nil {
+			secondSrv.Close()
+		}
+	}()
+
+	cfgPath := writeTestConfig(t, "http://"+addr, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runLeadCmd(context.Background(), []string{"request", "--reason", "r", "--config", cfgPath},
+		leadEnv(), &stdout, &stderr, fixedID(), nil, clock.opt(), leadNoKeepAlive())
+	if code != ExitOK {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var out struct {
+		RequestID string     `json:"request_id"`
+		Grant     team.Grant `json:"grant"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil || out.RequestID != fixedID()() || out.Grant.MaxMembers != 3 {
+		t.Fatalf("stdout %q: %v", stdout.String(), err)
+	}
+	errText := stderr.String()
+	if n := strings.Count(errText, daemonclient.MsgRestarting); n != 1 {
+		t.Errorf("restart line count = %d, want 1: %q", n, errText)
+	}
+	if n := strings.Count(errText, "daemon 已重新啟動（boot b2）"); n != 1 {
+		t.Errorf("restarted line count = %d, want 1: %q", n, errText)
+	}
+	if clock.sleeps() != upOnSleep {
+		t.Errorf("sleeps = %d, want %d (one after the dropped poll, one per refused probe until the new daemon is up)", clock.sleeps(), upOnSleep)
+	}
+
+	// One create on the first daemon, none on the second: the request id is
+	// never re-created, only re-polled.
+	creates1, polls1, deletes1, _ := first.snapshot()
+	creates2, polls2, deletes2, _ := second.snapshot()
+	if len(creates1) != 1 || creates1[0].ID != fixedID()() || len(creates2) != 0 {
+		t.Errorf("creates: first=%+v second=%+v", creates1, creates2)
+	}
+	if len(polls1) != 1 || len(polls2) != 2 {
+		t.Errorf("polls: first=%v second=%v, want 1 then 2", polls1, polls2)
+	}
+	wantPoll := "/api/team/approvals/" + fixedID()() + "?wait=25"
+	for _, p := range append(append([]string{}, polls1...), polls2...) {
+		if !strings.HasSuffix(p, wantPoll) {
+			t.Errorf("poll %q is not the same request id (%s)", p, wantPoll)
+		}
+	}
+	if len(deletes1)+len(deletes2) != 0 {
+		t.Errorf("a restart must not cancel the request: deletes=%v %v", deletes1, deletes2)
 	}
 }
