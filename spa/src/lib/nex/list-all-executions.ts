@@ -13,7 +13,7 @@ export interface ListAllResult { items: ExecutionSummary[]; dropped: number; tru
 /** Pages `listExecutions` until next_cursor is '' (truncated only at LIST_MAX_PAGES; a repeated cursor resolves stuck; a malformed page rejects). Resolves null as soon as `isCurrent()` is false after a page. */
 export async function listAllExecutions(
   hostId: string,
-  opts: { includeArchived: boolean },
+  opts: { includeArchived: boolean; sessionId?: string; labels?: Record<string, string> },
   isCurrent: () => boolean = () => true,
 ): Promise<ListAllResult | null> {
   const items: ExecutionSummary[] = []
@@ -23,7 +23,7 @@ export async function listAllExecutions(
   let cursor = ''
   for (let page = 0; page < LIST_MAX_PAGES; page += 1) {
     requested.add(cursor)
-    const raw = await listExecutions(hostId, { includeArchived: opts.includeArchived, limit: LIST_PAGE_LIMIT, ...(cursor ? { cursor } : {}) })
+    const raw = await listExecutions(hostId, { includeArchived: opts.includeArchived, limit: LIST_PAGE_LIMIT, ...(opts.sessionId ? { sessionId: opts.sessionId } : {}), ...(opts.labels ? { labels: opts.labels } : {}), ...(cursor ? { cursor } : {}) })
     if (!isCurrent()) return null
     const p = sanitizeExecutionsPage(raw)
     if (p.malformed) throw new Error(`nex: malformed executions page ${page + 1}`)

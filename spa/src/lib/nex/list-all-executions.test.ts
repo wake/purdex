@@ -8,6 +8,15 @@ const row = (id: string) => ({ id, state: 'idle', provider: 'claude', principal_
 describe('listAllExecutions', () => {
   beforeEach(() => vi.mocked(api.listExecutions).mockReset())
 
+  it('passes sessionId and labels on every page', async () => {
+    vi.mocked(api.listExecutions)
+      .mockResolvedValueOnce({ items: [row('a')], next_cursor: 'a' } as never)
+      .mockResolvedValueOnce({ items: [row('b')], next_cursor: '' } as never)
+    await listAllExecutions('h1', { includeArchived: true, sessionId: 'S', labels: { k: 'v' } })
+    expect(api.listExecutions).toHaveBeenNthCalledWith(1, 'h1', { includeArchived: true, limit: LIST_PAGE_LIMIT, sessionId: 'S', labels: { k: 'v' } })
+    expect(api.listExecutions).toHaveBeenNthCalledWith(2, 'h1', { includeArchived: true, limit: LIST_PAGE_LIMIT, sessionId: 'S', labels: { k: 'v' }, cursor: 'a' })
+  })
+
   it('concatenates pages in order and passes the cursor and limit', async () => {
     vi.mocked(api.listExecutions)
       .mockResolvedValueOnce({ items: [row('a'), row('b')], next_cursor: 'b' } as never)
