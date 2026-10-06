@@ -358,6 +358,9 @@ func (m *Module) Init(c *core.Core) error {
 		Log:     m.logf,
 	})
 
+	// The team module attributes approval requests through this view.
+	c.Registry.Register(OriginResolverKey, &OriginResolver{m: m})
+
 	return nil
 }
 
