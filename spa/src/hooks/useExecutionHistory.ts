@@ -29,6 +29,7 @@ export function useExecutionHistory(hostId: string): ExecutionHistory {
     listAllExecutions(hostId, { includeArchived: true }, isCurrent)
       .then((result) => {
         if (!result || !isCurrent()) return
+        if (result.stuck) console.warn('nex: execution history cursor repeated', { hostId, page: result.stuckPage })
         setState({ hostId, items: result.items, phase: 'ready', error: null, truncated: result.truncated })
       })
       .catch((err: unknown) => {

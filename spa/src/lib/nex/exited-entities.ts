@@ -7,8 +7,10 @@ const newer = (a: ExecutionSummary, b: ExecutionSummary): boolean =>
   a.created_at !== b.created_at ? a.created_at > b.created_at : a.id > b.id
 
 /** Entities in no live state (spec §4.2: any live stint means the entity IS a worker — it is listed live, never as exited), each represented by its latest stint, newest updated_at first. */
-export function exitedEntities(items: readonly ExecutionSummary[]): ExecutionSummary[] {
+export function exitedEntities(items: readonly ExecutionSummary[], liveItems: readonly ExecutionSummary[] = []): ExecutionSummary[] {
+  // `liveItems` (the shared live list) covers a history walk that was cut short: its live stint may sit on an unfetched page.
   const live = new Set<string>()
+  for (const row of liveItems) if (isLiveRow(row)) live.add(entityKeyOf(row))
   const best = new Map<string, ExecutionSummary>()
   for (const row of items) {
     const key = entityKeyOf(row)

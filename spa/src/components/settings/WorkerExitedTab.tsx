@@ -24,7 +24,7 @@ function ExitedList({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
   const { items, phase, error, truncated, refetch } = useExecutionHistory(hostId)
   // Holds the host's shared live subscription: its refreshRevision is what tells the history hook to refetch.
-  useHostExecutions(hostId)
+  const { items: liveItems } = useHostExecutions(hostId)
   const tabs = useTabStore((s) => s.tabs)
   const [query, setQuery] = useState('')
   const [now, setNow] = useState(() => Date.now())
@@ -33,7 +33,7 @@ function ExitedList({ hostId }: { hostId: string }) {
     return () => clearInterval(id)
   }, [])
 
-  const exited = useMemo(() => exitedEntities(items), [items])
+  const exited = useMemo(() => exitedEntities(items, liveItems), [items, liveItems])
   // `tabs` is the dependency: the set is derived from the store's panes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const inTerminal = useMemo(() => liveTerminalSessionIds(hostId), [hostId, tabs])

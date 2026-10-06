@@ -81,6 +81,15 @@ describe('WorkerExitedTab', () => {
     expect(screen.queryByTestId('worker-exited-empty')).toBeNull()
   })
 
+  it('an entity with a live stint in the shared live list is not listed as exited', () => {
+    history.mockReturnValue(ready([r({ id: 'e1', session_id: 'S1', brief: 'one' }), r({ id: 'e2', session_id: 'S2', brief: 'two' })]))
+    hostExecutions.mockReturnValue({ items: [r({ id: 'l1', session_id: 'S1', state: 'idle', archived: false, created_at: 9 })], phase: 'ready', error: null, truncated: false, refetch: vi.fn(), refreshRevision: 0 })
+    render(<WorkerExitedTab hostId="h1" />)
+    const rows = screen.getAllByTestId('worker-exited-row')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].textContent).toContain('two')
+  })
+
   it('holds the host live-list subscription (so refreshRevision moves) while mounted', () => {
     history.mockReturnValue(ready([]))
     render(<WorkerExitedTab hostId="h1" />)

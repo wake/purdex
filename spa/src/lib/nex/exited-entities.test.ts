@@ -27,6 +27,15 @@ describe('exitedEntities', () => {
   })
 })
 
+describe('exitedEntities with the shared live list', () => {
+  it('an entity whose live stint is only in the live list (history partial) is not exited', () => {
+    const history = [r({ id: 'o', session_id: 'S', state: 'terminated', archived: true, created_at: 1, updated_at: 1 })]
+    const live = [r({ id: 'n', session_id: 'S', state: 'idle', created_at: 2, updated_at: 2 })]
+    expect(exitedEntities(history, live)).toEqual([])
+    expect(exitedEntities(history).map((x) => x.id)).toEqual(['o'])
+  })
+})
+
 describe('matchesExitedQuery', () => {
   it('matches title, brief, cwd and session id', () => {
     const row = r({ id: 'x', session_id: 'abc-123', cwd: '/Users/w/proj', brief: '修 bug\n細節' })

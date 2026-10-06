@@ -51,6 +51,16 @@ describe('useExecutionHistory', () => {
     expect(result.current.items.map((x) => x.id)).toEqual(['b'])
   })
 
+  it('a stuck walk logs the warning and is not truncation', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    listAll.mockResolvedValue(res([row('a')], { stuck: true, stuckPage: 3 }))
+    const { result } = renderHook(() => useExecutionHistory('h1'))
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    expect(warn).toHaveBeenCalledWith('nex: execution history cursor repeated', { hostId: 'h1', page: 3 })
+    expect(result.current.truncated).toBe(false)
+    warn.mockRestore()
+  })
+
   it('error keeps previous items', async () => {
     listAll.mockResolvedValueOnce(res([row('a')]))
     const { result } = renderHook(() => useExecutionHistory('h1'))
