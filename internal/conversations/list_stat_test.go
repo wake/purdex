@@ -22,23 +22,20 @@ func (e failingEntry) Info() (fs.FileInfo, error) { return nil, e.err }
 
 func TestTranscriptEntry_StatErrors(t *testing.T) {
 	cases := []struct {
-		name        string
-		err         error
-		wantUnknown bool
+		name string
+		err  error
+		want memberKind
 	}{
-		{"removed since the listing", fs.ErrNotExist, false},
-		{"ENOENT", syscall.ENOENT, false},
-		{"EIO", syscall.EIO, true},
-		{"permission", fs.ErrPermission, true},
+		{"removed since the listing", fs.ErrNotExist, memberVanished},
+		{"ENOENT", syscall.ENOENT, memberVanished},
+		{"EIO", syscall.EIO, memberUnknown},
+		{"permission", fs.ErrPermission, memberUnknown},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			e, ok, err := transcriptEntry("/r/-w", failingEntry{name: sidA + ".jsonl", err: c.err})
-			if ok || e != (Entry{}) {
-				t.Errorf("transcriptEntry = %+v, %v; want no entry", e, ok)
-			}
-			if gotUnknown := err != nil; gotUnknown != c.wantUnknown {
-				t.Errorf("err = %v, want unknown %v", err, c.wantUnknown)
+			e, kind := transcriptEntry("/r/-w", failingEntry{name: sidA + ".jsonl", err: c.err})
+			if e != (Entry{}) || kind != c.want {
+				t.Errorf("transcriptEntry = %+v, %d; want no entry, %d", e, kind, c.want)
 			}
 		})
 	}
@@ -73,6 +70,31 @@ func TestAddSlug_KeepsWhatItReadAndReportsUnknown(t *testing.T) {
 			t.Errorf("byID = %+v, want %+v", byID, want)
 		}
 	})
+}
+
+func TestAddSlug_MemberVanishedWithItsSlugDir(t *testing.T) {
+	// The slug dir itself went away after it was listed (renamed, unmounted,
+	// removed): every member's lstat says "not exist", but that proves
+	// nothing about the transcripts (R-4-7).
+	base := t.TempDir()
+	notADir := filepath.Join(base, "now-a-file")
+	writeFile(t, notADir, []byte("x"))
+	for name, dir := range map[string]string{
+		"dir gone":          filepath.Join(base, "gone"),
+		"dir now a file":    notADir,
+		"dir behind a file": filepath.Join(notADir, "slug"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			byID := map[string]Entry{}
+			files := []fs.DirEntry{failingEntry{name: sidA + ".jsonl", err: fs.ErrNotExist}}
+			if !addSlug(byID, dir, files) {
+				t.Error("addSlug = false, want true (the slug dir is not there to prove the file removed)")
+			}
+			if len(byID) != 0 {
+				t.Errorf("byID = %+v, want empty", byID)
+			}
+		})
+	}
 }
 
 func TestListRoot_SlugWhoseMembersCannotBeStatted(t *testing.T) {

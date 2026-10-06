@@ -48,8 +48,9 @@ func sessionIDFromName(name string) (string, bool) {
 // symlink whose target cannot be stat'ed (a dangling link, an unmounted
 // volume), since nothing under it can be shown to be gone. A slug with a
 // "<uuid>.jsonl" member whose lstat fails other than with "not exist"
-// (EACCES, EIO, …) is returned in unreadable too, once, and the entries it
-// did read are kept: that member may be a live transcript. When one session
+// (EACCES, EIO, …), or with a member that vanished while the slug dir
+// itself no longer stats as a directory, is returned in unreadable too,
+// once, and the entries it did read are kept (addSlug). When one session
 // id appears twice, the larger MtimeMs wins (the first one listed on a tie).
 // Paths are under root as given, not resolved; entries are sorted by
 // SessionID and unreadable in listing order.
@@ -93,49 +94,72 @@ func ListRoot(root string) (entries []Entry, unreadable []string, err error) {
 }
 
 // addSlug adds the transcripts among one slug dir's members to byID (the
-// larger MtimeMs wins on a duplicate id) and reports whether any member
-// could not be told apart (transcriptEntry's err), which makes the slug
-// unreadable. The other members are added either way.
+// larger MtimeMs wins on a duplicate id) and reports whether the slug is
+// unknown, i.e. unreadable for R-4-7: a member's lstat failed other than
+// with "not exist", or a member vanished ("not exist") and dir no longer
+// stats as a directory. A vanished member proves its transcript removed only
+// while its slug dir is still there; when the dir itself went away after
+// the listing (renamed, unmounted, removed), every member would vanish. dir
+// is stat'ed once, after the loop, and only when a member vanished. The
+// other members are added either way.
 func addSlug(byID map[string]Entry, dir string, files []fs.DirEntry) (unknown bool) {
+	vanished := false
 	for _, file := range files {
-		e, ok, err := transcriptEntry(dir, file)
-		if err != nil {
+		e, kind := transcriptEntry(dir, file)
+		switch kind {
+		case memberUnknown:
 			unknown = true
-			continue
+		case memberVanished:
+			vanished = true
+		case memberTranscript:
+			if old, dup := byID[e.SessionID]; !dup || e.MtimeMs > old.MtimeMs {
+				byID[e.SessionID] = e
+			}
 		}
-		if !ok {
-			continue
+	}
+	if vanished && !unknown {
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			unknown = true
 		}
-		if old, dup := byID[e.SessionID]; dup && old.MtimeMs >= e.MtimeMs {
-			continue
-		}
-		byID[e.SessionID] = e
 	}
 	return unknown
 }
 
-// transcriptEntry is the Entry of one slug dir member. ok is false, with a
-// nil err, when the member is definitely not a transcript: a name that is
-// not "<uuid>.jsonl", a symlink, a dir or any other non-regular file, or a
-// file removed since the listing (its lstat says it does not exist). err is
-// set when that cannot be told: the lstat of a "<uuid>.jsonl" member failed
-// otherwise (EACCES, EIO, …).
-func transcriptEntry(dir string, file fs.DirEntry) (e Entry, ok bool, err error) {
+// memberKind is what the lstat of one slug dir member tells.
+type memberKind int
+
+const (
+	// memberNotTranscript: a name that is not "<uuid>.jsonl", a symlink, a
+	// dir or any other non-regular file.
+	memberNotTranscript memberKind = iota
+	// memberTranscript: a regular "<uuid>.jsonl" file.
+	memberTranscript
+	// memberVanished: the lstat of a "<uuid>.jsonl" member said it does not
+	// exist: removed since the listing, unless its slug dir went away
+	// (addSlug tells which).
+	memberVanished
+	// memberUnknown: the lstat of a "<uuid>.jsonl" member failed otherwise
+	// (EACCES, EIO, …), so it may be a live transcript.
+	memberUnknown
+)
+
+// transcriptEntry classifies one slug dir member, with its Entry when it is
+// a transcript.
+func transcriptEntry(dir string, file fs.DirEntry) (Entry, memberKind) {
 	id, ok := sessionIDFromName(file.Name())
 	if !ok {
-		return Entry{}, false, nil
+		return Entry{}, memberNotTranscript
 	}
 	fi, err := file.Info() // lstat: a symlink is not followed
-	if errors.Is(err, fs.ErrNotExist) {
-		return Entry{}, false, nil
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return Entry{}, memberVanished
+	case err != nil:
+		return Entry{}, memberUnknown
+	case !fi.Mode().IsRegular():
+		return Entry{}, memberNotTranscript
 	}
-	if err != nil {
-		return Entry{}, false, fmt.Errorf("conversations: stat %s: %w", filepath.Join(dir, file.Name()), err)
-	}
-	if !fi.Mode().IsRegular() {
-		return Entry{}, false, nil
-	}
-	return entryOf(id, filepath.Join(dir, file.Name()), fi), true, nil
+	return entryOf(id, filepath.Join(dir, file.Name()), fi), memberTranscript
 }
 
 func entryOf(id, path string, fi fs.FileInfo) Entry {
