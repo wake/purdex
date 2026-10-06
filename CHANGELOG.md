@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.528] - 2026-10-07
+
+> 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動。目前部署環境裡所有 lease 持有者都是 pdx 自己，所以這版沒有可見的行為變化，是補一個之後才會碰到的缺口。
+
+### Fixed：「退出」的歸檔一律先取得控制權再做（對話主體，#1665／#1692）
+
+- 退出時，不需要終止的列（已終止但還沒歸檔、failed、rejected）以前會**不帶 lease 直接歸檔**。若終止之後有別的非 pdx 主體拿到 lease，下一次退出會蓋過它。現在這些列歸檔前一律先取得控制權、帶 lease 歸檔；有非 pdx 持有者就回 `held_by`，什麼都不改（D4）。
+- 借用 pdx 持有者的 lease 時，歸檔前會先續租，避免 lease 快到期時歸檔失敗。
+- 歸檔時 lease 易手：非 pdx 持有者回 409 `held_by`，其他回新的 409 `lease_contended`（以前是 500 `archive_failed`）。已終止的列照舊「不報錯、下次退出再歸檔」。
+- 交接回滾（rejected 列）遇到這種情況，回應會帶 `exit_error` 與 `exited: false`，不再吞掉。
+- 歸檔事件的 `principal_id` 在這些列上是 lease 持有者，不是 HTTP 呼叫者。
+
 ## [1.0.0-alpha.527] - 2026-10-07
 
 > 只動 SPA，透過 HMR 生效、不需部署 daemon。**從這版起 Purdex.app 會收到 lead 申請並跳出核准對話框**（daemon 需在 alpha.518 以上，mlab 已是 alpha.523）。資料庫、Electron 都沒有改動。
