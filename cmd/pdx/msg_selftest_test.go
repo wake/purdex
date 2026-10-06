@@ -31,14 +31,6 @@ const (
 	stTargetPID       = 4242
 	stTargetProcStart = "Mon Sep 14 01:02:03 2026"
 	stForeignStart    = "Mon Jan  1 00:00:00 2001"
-
-	// stSessionID / stTargetCwd are the registered entry's sessionId and
-	// cwd; stProjectSlug is stTargetCwd under Claude Code's slug rule (every
-	// byte outside [A-Za-z0-9] becomes '-'), written out by hand so the
-	// tests do not reuse the code under test.
-	stSessionID   = "cccccccc-3333-4333-8333-333333333333"
-	stTargetCwd   = "/work/pdx_selftest.d/repo"
-	stProjectSlug = "-work-pdx-selftest-d-repo"
 )
 
 // sigCall is one recorded deps.signal invocation.
@@ -123,7 +115,6 @@ type stFixture struct {
 
 	registryDir, sockDir string
 	inbox                string
-	home                 string // deps.homeDir: a temp dir, never the real ~
 
 	mu          sync.Mutex
 	tmuxCalls   []tmuxCall
@@ -137,6 +128,9 @@ type stFixture struct {
 	listPanes   func() ([]byte, error)
 	newSession  func() ([]byte, error)
 	killSession func() ([]byte, error)
+	capturePane func() ([]byte, error)
+	// children answers deps.childCommands: the pane wrapper's children.
+	children    func(pid int) ([]string, error)
 	removeErr   func(path string) error
 	dialRefused func(sock string) bool
 
@@ -165,7 +159,6 @@ func newStFixture(t *testing.T) *stFixture {
 		registryDir: registryDir,
 		sockDir:     sockDir,
 		inbox:       filepath.Join(sockDir, strconv.Itoa(stTargetPID)+".sock"),
-		home:        t.TempDir(),
 		alive:       map[int]bool{},
 		starts:      map[int]string{stPanePID: stPaneProcStart, stTargetPID: stTargetProcStart},
 	}
@@ -178,6 +171,9 @@ func newStFixture(t *testing.T) *stFixture {
 	f.listPanes = func() ([]byte, error) { return []byte(strconv.Itoa(stPanePID) + "\n"), nil }
 	f.newSession = func() ([]byte, error) { return nil, nil }
 	f.killSession = func() ([]byte, error) { return nil, nil }
+	f.capturePane = func() ([]byte, error) { return nil, nil }
+	// Default: claude is running under the wrapper, next to its stdin's sleep.
+	f.children = func(int) ([]string, error) { return []string{"sleep", "claude"}, nil }
 	f.dialRefused = func(string) bool { return true }
 	// Default: the entry appears on the very first poll.
 	f.entries = func(int) []ipeers.Entry { return []ipeers.Entry{f.targetEntry()} }
@@ -194,6 +190,8 @@ func newStFixture(t *testing.T) *stFixture {
 				return f.listPanes()
 			case "kill-session":
 				return f.killSession()
+			case "capture-pane":
+				return f.capturePane()
 			}
 			return nil, fmt.Errorf("unexpected tmux verb %q", args[0])
 		},
@@ -271,17 +269,11 @@ func newStFixture(t *testing.T) *stFixture {
 		dialRefused: func(sock string) bool { return f.dialRefused(sock) },
 		sleep:       f.clock.sleep,
 		now:         f.clock.now,
-		homeDir:     f.home,
-		readFile:    os.ReadFile,
-		lstat:       os.Lstat,
-		rmdir: func(path string) error {
-			err := syscall.Rmdir(path)
-			if err == nil {
-				f.mu.Lock()
-				f.removed = append(f.removed, path)
-				f.mu.Unlock()
+		childCommands: func(ctx context.Context, pid int) ([]string, error) {
+			if pid != stPanePID {
+				t.Errorf("childCommands(%d), want the pane pid %d", pid, stPanePID)
 			}
-			return err
+			return f.children(pid)
 		},
 	}
 	return f
@@ -290,8 +282,7 @@ func newStFixture(t *testing.T) *stFixture {
 func (f *stFixture) targetEntry() ipeers.Entry {
 	return ipeers.Entry{
 		PID:       stTargetPID,
-		SessionID: stSessionID,
-		Cwd:       stTargetCwd,
+		SessionID: "cccccccc-3333-4333-8333-333333333333",
 		Name:      "whatever",
 		Tmux:      "<name>:@1.%1", // rewritten per run in run()
 		Inbox:     f.inbox,
@@ -414,14 +405,16 @@ func TestSelftest_TmuxArgvGoldens(t *testing.T) {
 
 	// A pipe on stdin keeps `claude -p --input-format stream-json` alive
 	// (a tty stdin makes it exit at once); the claude arguments are
-	// positional to `sh -c` so nothing is re-quoted. Bash is disallowed so
-	// the native SendMessage is the only way to reply (#1631): the flag and
-	// its value are two argv elements, appended after the unchanged rest.
+	// positional to `sh -c` so nothing is re-quoted. #1631 appends, each
+	// as its own element: --no-session-persistence (no transcript is ever
+	// written, so cleanup has none to delete) and --disallowedTools Bash
+	// (the native SendMessage is the only way to reply).
 	wantNew := []string{"new-session", "-d", "-s", name, "--",
 		"sh", "-c", `sleep 2147483647 | exec claude "$@"`, "pdx-selftest",
 		"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--name", name, "--settings", `{"crossSessionInbound":"accept"}`,
+		"--no-session-persistence",
 		"--disallowedTools", "Bash"}
 	if got := f.calls("new-session"); len(got) != 1 || !equalArgs(got[0].args, wantNew) {
 		t.Errorf("new-session argv = %v\nwant %q", got, wantNew)
@@ -672,6 +665,9 @@ func TestSelftest_NeverRegisters_KillsAndSignalsPane(t *testing.T) {
 	if got := f.calls("kill-session"); len(got) != 1 {
 		t.Errorf("kill-session calls = %d, want 1", len(got))
 	}
+	if got := f.calls("capture-pane"); len(got) != 0 {
+		t.Errorf("pane captured although claude is still running: %v", got)
+	}
 	if f.spawned {
 		t.Errorf("helper spawned without registration")
 	}
@@ -693,6 +689,163 @@ func TestSelftest_NeverRegisters_KillsAndSignalsPane(t *testing.T) {
 	last := f.lastLine(out)
 	if !strings.HasPrefix(last, "cleanup incomplete: ") || !strings.Contains(last, "pane pid 4100 still alive") {
 		t.Errorf("last line = %q", last)
+	}
+}
+
+// TestSelftest_NeverRegisters_ClaudeExited_StartFailure: a claude that
+// rejects its arguments exits at once, but the pane's wrapper lives on,
+// waiting on the sleep that keeps claude's stdin open (observed on mlab).
+// Only that sleep left under the wrapper means claude is gone: the pane is
+// captured before kill-session and its last non-empty line reported as a
+// start failure — never as "did not register", nor as "no reply".
+func TestSelftest_NeverRegisters_ClaudeExited_StartFailure(t *testing.T) {
+	f := newStFixture(t)
+	f.entries = func(int) []ipeers.Entry { return nil }
+	f.alive[stPanePID] = true
+	f.children = func(int) ([]string, error) { return []string{"/bin/sleep"}, nil }
+	f.capturePane = func() ([]byte, error) {
+		return []byte("\nwarning: something earlier\nerror: unknown option '--no-session-persistence'\n\n\n"), nil
+	}
+	code, out, errOut := f.run(context.Background(), 5*time.Second)
+	if code != 1 {
+		t.Errorf("exit = %d, want 1", code)
+	}
+	if want := "FAIL: claude failed to start: error: unknown option '--no-session-persistence'\n"; !strings.Contains(out, want) {
+		t.Errorf("stdout lacks %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "did not register") || strings.Contains(out, "no reply") {
+		t.Errorf("a start failure reported as something else:\n%s", out)
+	}
+	if !strings.Contains(errOut, "pdx msg: pane: warning: something earlier\n") {
+		t.Errorf("stderr lacks the pane's last lines:\n%s", errOut)
+	}
+	name := f.sessionName()
+	if got := f.calls("capture-pane"); len(got) != 1 || !equalArgs(got[0].args, []string{"capture-pane", "-p", "-t", name}) {
+		t.Errorf("capture-pane calls = %v, want one capture-pane -p -t %s", got, name)
+	}
+	f.mu.Lock()
+	var verbs []string
+	for _, c := range f.tmuxCalls {
+		verbs = append(verbs, c.args[0])
+	}
+	f.mu.Unlock()
+	if want := []string{"new-session", "list-panes", "capture-pane", "kill-session"}; !equalArgs(verbs, want) {
+		t.Errorf("tmux verbs = %v, want %v (captured before kill-session)", verbs, want)
+	}
+}
+
+// TestSelftest_NeverRegisters_StartFailureVariants: the wrapper itself gone
+// is a start failure too (and a pane that cannot be captured says so);
+// claude still running, or a process list that cannot be read, keeps the
+// "did not register" message without capturing the pane.
+func TestSelftest_NeverRegisters_StartFailureVariants(t *testing.T) {
+	cases := []struct {
+		name      string
+		paneAlive bool
+		// paneUnknown makes the pane's identity unreadable after capture.
+		paneUnknown bool
+		children    func(int) ([]string, error)
+		capture     func() ([]byte, error)
+		want        string
+		captured    bool
+	}{
+		{
+			name:     "wrapper gone, pane not capturable",
+			capture:  func() ([]byte, error) { return nil, &exec.ExitError{Stderr: []byte("can't find session\n")} },
+			want:     "FAIL: claude failed to start (no pane output captured)\n",
+			captured: true,
+		},
+		{
+			name:      "only sleep left, blank pane",
+			paneAlive: true,
+			children:  func(int) ([]string, error) { return []string{"sleep"}, nil },
+			capture:   func() ([]byte, error) { return []byte("\n\n"), nil },
+			want:      "FAIL: claude failed to start (no pane output captured)\n",
+			captured:  true,
+		},
+		{
+			name:      "claude alive but unregistered",
+			paneAlive: true,
+			children:  func(int) ([]string, error) { return []string{"sleep", "claude"}, nil },
+			want:      "FAIL: session did not register (Claude Code ≥ 2.1.224 with peer messaging required)\n",
+		},
+		{
+			name:      "children unreadable",
+			paneAlive: true,
+			children:  func(int) ([]string, error) { return nil, errors.New("ps: exit status 1") },
+			want:      "FAIL: session did not register (Claude Code ≥ 2.1.224 with peer messaging required)\n",
+		},
+		{
+			name:        "wrapper identity unknown",
+			paneAlive:   true,
+			paneUnknown: true,
+			children:    func(int) ([]string, error) { return []string{"sleep"}, nil },
+			want:        "FAIL: session did not register (Claude Code ≥ 2.1.224 with peer messaging required)\n",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newStFixture(t)
+			f.entries = func(int) []ipeers.Entry {
+				if c.paneUnknown { // the pane's identity was captured before the first poll
+					f.mu.Lock()
+					delete(f.starts, stPanePID)
+					f.mu.Unlock()
+				}
+				return nil
+			}
+			f.alive[stPanePID] = c.paneAlive
+			if c.children != nil {
+				f.children = c.children
+			}
+			if c.capture != nil {
+				f.capturePane = c.capture
+			}
+			code, out, _ := f.run(context.Background(), 5*time.Second)
+			if code != 1 {
+				t.Errorf("exit = %d, want 1", code)
+			}
+			if !strings.Contains(out, c.want) {
+				t.Errorf("stdout lacks %q:\n%s", c.want, out)
+			}
+			if got := len(f.calls("capture-pane")); (got == 1) != c.captured {
+				t.Errorf("capture-pane calls = %d, want captured=%v", got, c.captured)
+			}
+		})
+	}
+}
+
+// TestSelftestParseChildren: `ps -A -o ppid= -o comm=` lines — padded
+// ppid, then a command that may hold spaces — filtered to pid's children.
+func TestSelftestParseChildren(t *testing.T) {
+	out := []byte("    1 /sbin/launchd\n 4100 sleep\n  4100 /Users/x/.local/bin/claude\n41000 not-a-child\n 4100 Google Chrome Helper\n\ngarbage\n")
+	got := selftestParseChildren(out, 4100)
+	want := []string{"sleep", "/Users/x/.local/bin/claude", "Google Chrome Helper"}
+	if !equalArgs(got, want) {
+		t.Errorf("children = %q, want %q", got, want)
+	}
+}
+
+// TestSelftestChildCommands_Live reads the real process table: a sleep this
+// test starts is listed among its own process's children.
+func TestSelftestChildCommands_Live(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	kids, err := selftestChildCommands(context.Background(), os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, k := range kids {
+		if filepath.Base(k) == "sleep" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("children of %d = %q, want a sleep", os.Getpid(), kids)
 	}
 }
 
@@ -980,8 +1133,7 @@ func TestSelftest_WrittenFrame(t *testing.T) {
 	}
 	// #1631: the text names the native tool and rules out the pdx / Bash
 	// detour a global CLAUDE.md may suggest, so the reply leg is exercised.
-	want := "PDX_SELFTEST " + nonce + ": reply to the sender using the SendMessage tool (not pdx, not Bash), with exactly: PONG " + nonce
-	if wr.Text != want {
+	if want := "PDX_SELFTEST " + nonce + ": reply to the sender using the SendMessage tool (not pdx, not Bash), with exactly: PONG " + nonce; wr.Text != want {
 		t.Errorf("text = %q, want %q", wr.Text, want)
 	}
 }
@@ -1424,648 +1576,6 @@ func TestSelftest_Cleanup_KillSessionOtherErrorIsIncomplete(t *testing.T) {
 	}
 }
 
-// --- step 7e: the throwaway transcript (#1631) ------------------------------
-
-// transcriptPaths returns the throwaway session's transcript, its
-// <sessionID>/ side directory and its project directory under f.home.
-func (f *stFixture) transcriptPaths() (file, sidDir, projDir string) {
-	projDir = filepath.Join(f.home, ".claude", "projects", stProjectSlug)
-	return filepath.Join(projDir, stSessionID+".jsonl"), filepath.Join(projDir, stSessionID), projDir
-}
-
-// withEntry makes the registry return the target entry as edited by edit.
-func (f *stFixture) withEntry(edit func(e *ipeers.Entry)) {
-	f.entries = func(int) []ipeers.Entry {
-		e := f.targetEntry()
-		edit(&e)
-		return []ipeers.Entry{e}
-	}
-}
-
-// writeTranscript writes lines, each newline-terminated, creating the
-// file's directory.
-func writeTranscript(t *testing.T, path string, lines ...string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func mkdirs(t *testing.T, dirs ...string) {
-	t.Helper()
-	for _, d := range dirs {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-// recordReads wraps deps.readFile so a test can tell whether the
-// transcript was read at all.
-func (f *stFixture) recordReads() *[]string {
-	var reads []string
-	f.deps.readFile = func(path string) ([]byte, error) {
-		f.mu.Lock()
-		reads = append(reads, path)
-		f.mu.Unlock()
-		return os.ReadFile(path)
-	}
-	return &reads
-}
-
-// sidLine is a transcript record carrying sessionId sid.
-func sidLine(typ, sid string) string {
-	return `{"type":"` + typ + `","sessionId":"` + sid + `","message":{"role":"user","content":"PDX_SELFTEST x"}}`
-}
-
-// TestSelftest_Cleanup_TranscriptRemoved: a transcript every sessionId
-// line of which is the throwaway session's is removed, then its empty
-// <sid>/ and project directories; the projects root is never touched.
-// Lines without a sessionId, and a last line cut short by the kill, are
-// not evidence either way.
-func TestSelftest_Cleanup_TranscriptRemoved(t *testing.T) {
-	f := newStFixture(t)
-	f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
-	file, sidDir, projDir := f.transcriptPaths()
-	writeTranscript(t, file,
-		`{"type":"summary","summary":"no sessionId here"}`,
-		sidLine("user", stSessionID),
-		sidLine("assistant", stSessionID),
-		`{"type":"assistant","sessionId":"`+stSessionID+`","message":{"con`,
-	)
-	mkdirs(t, sidDir)
-
-	code, out, _ := f.run(context.Background(), 5*time.Second)
-	if code != 0 {
-		t.Fatalf("exit = %d, stdout:\n%s", code, out)
-	}
-	for _, p := range []string{file, sidDir, projDir} {
-		if proxyhelpertest.Exists(p) {
-			t.Errorf("%s left behind", p)
-		}
-	}
-	if !proxyhelpertest.Exists(filepath.Dir(projDir)) {
-		t.Errorf("the projects root %s was removed", filepath.Dir(projDir))
-	}
-	if !strings.Contains(out, "removed transcript: "+file+"\n") {
-		t.Errorf("stdout lacks the removed-transcript line:\n%s", out)
-	}
-	if f.lastLine(out) != "cleanup: ok" {
-		t.Errorf("last line = %q", f.lastLine(out))
-	}
-}
-
-// TestSelftest_Cleanup_TranscriptAfterReap: the transcript is only
-// touched once the claude process is gone — it is still there when the
-// target is signalled.
-func TestSelftest_Cleanup_TranscriptAfterReap(t *testing.T) {
-	f := newStFixture(t)
-	f.clock.expireLong = true // registered, no reply ⇒ FAIL, then cleanup
-	f.alive[stTargetPID] = true
-	file, _, _ := f.transcriptPaths()
-	writeTranscript(t, file, sidLine("user", stSessionID))
-	var existedAtSignal []bool
-	origSignal := f.deps.signal
-	f.deps.signal = func(pid int, sig os.Signal) error {
-		existedAtSignal = append(existedAtSignal, proxyhelpertest.Exists(file))
-		f.mu.Lock()
-		f.alive[pid] = false
-		f.mu.Unlock()
-		return origSignal(pid, sig)
-	}
-	_, out, _ := f.run(context.Background(), 5*time.Second)
-	if len(existedAtSignal) != 1 || !existedAtSignal[0] {
-		t.Errorf("transcript present at signal time = %v, want [true] (removed only after the reap)", existedAtSignal)
-	}
-	if proxyhelpertest.Exists(file) {
-		t.Errorf("transcript left behind:\n%s", out)
-	}
-	if f.lastLine(out) != "cleanup: ok" {
-		t.Errorf("last line = %q", f.lastLine(out))
-	}
-}
-
-// TestSelftest_Cleanup_TranscriptKeptUnlessProven: anything that does
-// not prove the file is the throwaway session's keeps it, with a note —
-// never a cleanup problem (the exit code stays the run's own).
-func TestSelftest_Cleanup_TranscriptKeptUnlessProven(t *testing.T) {
-	cases := map[string][]string{
-		"mismatching sessionId": {sidLine("user", stSessionID), sidLine("user", "dddddddd-4444-4444-8444-444444444444")},
-		"no sessionId at all":   {`{"type":"summary","summary":"x"}`, `{"type":"user","message":{"content":"y"}}`},
-		"empty file":            {""},
-		"non-string sessionId":  {sidLine("user", stSessionID), `{"type":"user","sessionId":42}`},
-		"null sessionId":        {sidLine("user", stSessionID), `{"type":"user","sessionId":null}`},
-	}
-	for name, lines := range cases {
-		t.Run(name, func(t *testing.T) {
-			f := newStFixture(t)
-			f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
-			file, _, projDir := f.transcriptPaths()
-			writeTranscript(t, file, lines...)
-
-			code, out, _ := f.run(context.Background(), 5*time.Second)
-			if code != 0 {
-				t.Errorf("exit = %d, want 0 (a kept transcript is a note, not a problem)\n%s", code, out)
-			}
-			if !proxyhelpertest.Exists(file) || !proxyhelpertest.Exists(projDir) {
-				t.Errorf("unproven transcript or its directory removed")
-			}
-			if !strings.Contains(out, "transcript kept: "+file+": ") {
-				t.Errorf("stdout lacks the kept note:\n%s", out)
-			}
-			if strings.Contains(out, "removed transcript") {
-				t.Errorf("stdout claims a removal:\n%s", out)
-			}
-			if f.lastLine(out) != "cleanup: ok" {
-				t.Errorf("last line = %q", f.lastLine(out))
-			}
-		})
-	}
-}
-
-// TestSelftest_Cleanup_TranscriptMissingIsSilent: a session that never
-// wrote a transcript leaves nothing to say, and no directory is touched.
-func TestSelftest_Cleanup_TranscriptMissingIsSilent(t *testing.T) {
-	f := newStFixture(t)
-	f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
-	_, _, projDir := f.transcriptPaths()
-	mkdirs(t, projDir) // an empty project dir that is not ours to judge
-
-	code, out, _ := f.run(context.Background(), 5*time.Second)
-	if code != 0 {
-		t.Fatalf("exit = %d, stdout:\n%s", code, out)
-	}
-	if strings.Contains(out, "transcript") || strings.Contains(out, "directory") {
-		t.Errorf("a missing transcript produced output:\n%s", out)
-	}
-	if !proxyhelpertest.Exists(projDir) {
-		t.Errorf("project dir removed although no transcript was")
-	}
-	if f.lastLine(out) != "cleanup: ok" {
-		t.Errorf("last line = %q", f.lastLine(out))
-	}
-}
-
-// TestSelftest_Cleanup_TranscriptSkippedWithoutAddress: when the path
-// cannot be computed with confidence — a non-ASCII cwd (the slug rule is
-// unverified there), an empty session id or cwd, a session id that is not
-// a plain file name — the step is skipped with a note and nothing is
-// removed, not even a file a guessed path would hit.
-func TestSelftest_Cleanup_TranscriptSkippedWithoutAddress(t *testing.T) {
-	cases := []struct {
-		name  string
-		sid   string
-		cwd   string
-		plant string // relative to <home>/.claude/projects, "" ⇒ nothing planted
-	}{
-		// "/work/café": é is two bytes, each would become '-'.
-		{"non-ASCII cwd", stSessionID, "/work/café", "-work-caf--/" + stSessionID + ".jsonl"},
-		{"empty session id", "", stTargetCwd, ""},
-		{"empty cwd", stSessionID, "", ""},
-		{"session id with a separator", "../escape", stTargetCwd, "escape.jsonl"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			f := newStFixture(t)
-			f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
-			f.withEntry(func(e *ipeers.Entry) { e.SessionID, e.Cwd = c.sid, c.cwd })
-			var planted string
-			if c.plant != "" {
-				planted = filepath.Join(f.home, ".claude", "projects", filepath.FromSlash(c.plant))
-				writeTranscript(t, planted, sidLine("user", c.sid))
-			}
-
-			code, out, _ := f.run(context.Background(), 5*time.Second)
-			if code != 0 {
-				t.Errorf("exit = %d, want 0\n%s", code, out)
-			}
-			if planted != "" && !proxyhelpertest.Exists(planted) {
-				t.Errorf("%s removed although its path could not be computed", planted)
-			}
-			if !strings.Contains(out, "note: transcript cleanup skipped: ") {
-				t.Errorf("stdout lacks the skip note:\n%s", out)
-			}
-			if strings.Contains(out, "removed transcript") {
-				t.Errorf("stdout claims a removal:\n%s", out)
-			}
-			if f.lastLine(out) != "cleanup: ok" {
-				t.Errorf("last line = %q", f.lastLine(out))
-			}
-		})
-	}
-}
-
-// TestSelftest_Cleanup_TranscriptKeptWhenTargetIdentityUnknown: a live
-// claude whose identity could not be read may still be writing — its
-// transcript is kept, as its registry files are (step d's rule).
-func TestSelftest_Cleanup_TranscriptKeptWhenTargetIdentityUnknown(t *testing.T) {
-	f := newStFixture(t)
-	f.clock.expireLong = true
-	f.alive[stTargetPID] = true
-	file, _, _ := f.transcriptPaths()
-	writeTranscript(t, file, sidLine("user", stSessionID))
-	reads := f.recordReads()
-	f.killSession = func() ([]byte, error) {
-		f.mu.Lock()
-		delete(f.starts, stTargetPID)
-		f.mu.Unlock()
-		return nil, nil
-	}
-	code, out, _ := f.run(context.Background(), 5*time.Second)
-	if code != 1 {
-		t.Errorf("exit = %d, want 1", code)
-	}
-	if !proxyhelpertest.Exists(file) {
-		t.Errorf("transcript of a process of unknown identity removed")
-	}
-	if !strings.Contains(out, "transcript kept: "+file+": ") {
-		t.Errorf("stdout lacks the kept note:\n%s", out)
-	}
-	if strings.Contains(out, "removed transcript") {
-		t.Errorf("stdout claims a removal:\n%s", out)
-	}
-	if len(*reads) != 0 {
-		t.Errorf("transcript read although its writer's identity is unknown: %v", *reads)
-	}
-}
-
-// TestSelftest_Cleanup_TranscriptKeptWhileTargetAlive: a claude that
-// survives SIGKILL (ProcSame) may still write its transcript — it is kept,
-// and not even read. The survival itself is the cleanup problem already
-// reported; the kept transcript adds a note, not a second problem.
-func TestSelftest_Cleanup_TranscriptKeptWhileTargetAlive(t *testing.T) {
-	f := newStFixture(t)
-	f.clock.expireLong = true // registered, no reply ⇒ FAIL, then cleanup
-	f.alive[stTargetPID] = true
-	file, _, _ := f.transcriptPaths()
-	writeTranscript(t, file, sidLine("user", stSessionID))
-	reads := f.recordReads()
-
-	code, out, _ := f.run(context.Background(), 5*time.Second)
-	if code != 1 {
-		t.Errorf("exit = %d, want 1", code)
-	}
-	if !proxyhelpertest.Exists(file) {
-		t.Errorf("transcript of a still-alive claude removed")
-	}
-	if len(*reads) != 0 {
-		t.Errorf("transcript read although its writer is still alive: %v", *reads)
-	}
-	if want := "transcript kept: " + file + ": claude pid 4242 still alive\n"; !strings.Contains(out, want) {
-		t.Errorf("stdout lacks %q:\n%s", want, out)
-	}
-	if strings.Contains(out, "removed transcript") {
-		t.Errorf("stdout claims a removal:\n%s", out)
-	}
-	last := f.lastLine(out)
-	if !strings.HasPrefix(last, "cleanup incomplete: ") || !strings.Contains(last, "target pid 4242 still alive") || strings.Contains(last, "transcript") {
-		t.Errorf("last line = %q, want cleanup incomplete for the live target only", last)
-	}
-}
-
-// TestSelftest_Cleanup_TranscriptRemoveErrorIsIncomplete: failing to
-// remove a verified transcript is a cleanup problem — exit 1 even after a
-// PASS — like any other leftover of ours.
-func TestSelftest_Cleanup_TranscriptRemoveErrorIsIncomplete(t *testing.T) {
-	f := newStFixture(t)
-	f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
-	file, _, projDir := f.transcriptPaths()
-	writeTranscript(t, file, sidLine("user", stSessionID))
-	f.removeErr = func(path string) error {
-		if path == file {
-			return &os.PathError{Op: "remove", Path: path, Err: syscall.EACCES}
-		}
-		return nil
-	}
-	code, out, _ := f.run(context.Background(), 5*time.Second)
-	if !strings.Contains(out, "PASS: reply from ") {
-		t.Errorf("stdout:\n%s", out)
-	}
-	if code != 1 {
-		t.Errorf("exit = %d, want 1 (cleanup incomplete overrides PASS)", code)
-	}
-	if !proxyhelpertest.Exists(file) || !proxyhelpertest.Exists(projDir) {
-		t.Errorf("transcript or project dir gone although the remove failed")
-	}
-	last := f.lastLine(out)
-	if !strings.HasPrefix(last, "cleanup incomplete: ") || !strings.Contains(last, file) {
-		t.Errorf("last line = %q, want cleanup incomplete naming the transcript", last)
-	}
-}
-
-// TestSelftest_Cleanup_TranscriptNonEmptyDirsKept: directories are only
-// ever rmdir'ed — a project dir holding other sessions' files stays, and
-// so does a <sid>/ dir with content (reported, never recursed into).
-func TestSelftest_Cleanup_TranscriptNonEmptyDirsKept(t *testing.T) {
-	t.Run("project dir with other sessions", func(t *testing.T) {
-		f := newStFixture(t)
-		f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
-		file, sidDir, projDir := f.transcriptPaths()
-		writeTranscript(t, file, sidLine("user", stSessionID))
-		mkdirs(t, sidDir)
-		other := filepath.Join(projDir, "dddddddd-4444-4444-8444-444444444444.jsonl")
-		writeTranscript(t, other, sidLine("user", "dddddddd-4444-4444-8444-444444444444"))
-
-		code, out, _ := f.run(context.Background(), 5*time.Second)
-		if code != 0 {
-			t.Fatalf("exit = %d, stdout:\n%s", code, out)
-		}
-		if proxyhelpertest.Exists(file) || proxyhelpertest.Exists(sidDir) {
-			t.Errorf("own transcript or empty <sid>/ dir left behind")
-		}
-		if !proxyhelpertest.Exists(other) || !proxyhelpertest.Exists(projDir) {
-			t.Errorf("a non-empty project dir or another session's transcript was removed")
-		}
-		// Other sessions sharing the project dir is the usual case, not news.
-		if strings.Contains(out, "directory kept") {
-			t.Errorf("a shared project dir produced a note:\n%s", out)
-		}
-		if !strings.Contains(out, "removed transcript: "+file+"\n") || !strings.Contains(out, "removed transcript directory: "+sidDir+"\n") {
-			t.Errorf("stdout lacks the removal lines:\n%s", out)
-		}
-		if f.lastLine(out) != "cleanup: ok" {
-			t.Errorf("last line = %q", f.lastLine(out))
-		}
-	})
-	t.Run("sid dir with content", func(t *testing.T) {
-		f := newStFixture(t)
-		f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
-		file, sidDir, projDir := f.transcriptPaths()
-		writeTranscript(t, file, sidLine("user", stSessionID))
-		inner := filepath.Join(sidDir, "tool-results", "r1.txt")
-		writeTranscript(t, inner, "x")
-
-		code, out, _ := f.run(context.Background(), 5*time.Second)
-		if code != 0 {
-			t.Fatalf("exit = %d, stdout:\n%s", code, out)
-		}
-		if proxyhelpertest.Exists(file) {
-			t.Errorf("own transcript left behind")
-		}
-		if !proxyhelpertest.Exists(inner) || !proxyhelpertest.Exists(projDir) {
-			t.Errorf("a non-empty directory was recursed into")
-		}
-		if !strings.Contains(out, "directory kept: "+sidDir+": ") {
-			t.Errorf("stdout lacks the kept-directory note for %s:\n%s", sidDir, out)
-		}
-		if strings.Contains(out, "directory kept: "+projDir+":") {
-			t.Errorf("the (necessarily non-empty) project dir produced a note:\n%s", out)
-		}
-		if f.lastLine(out) != "cleanup: ok" {
-			t.Errorf("last line = %q", f.lastLine(out))
-		}
-	})
-}
-
-// TestSelftest_Cleanup_TranscriptSwappedAfterReadKept (A1): the removal is
-// bound to the regular file that was verified — whatever sits at the path
-// after the read (another file, a symlink) is kept with a note, and so is
-// the file that was verified, wherever it went.
-func TestSelftest_Cleanup_TranscriptSwappedAfterReadKept(t *testing.T) {
-	cases := map[string]func(t *testing.T, path, moved string){
-		"replaced by another file": func(t *testing.T, path, _ string) {
-			if err := os.WriteFile(path, []byte(sidLine("user", stSessionID)+"\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		},
-		"replaced by a symlink": func(t *testing.T, path, moved string) {
-			if err := os.Symlink(moved, path); err != nil {
-				t.Fatal(err)
-			}
-		},
-	}
-	for name, swap := range cases {
-		t.Run(name, func(t *testing.T) {
-			f := newStFixture(t)
-			f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
-			file, _, _ := f.transcriptPaths()
-			writeTranscript(t, file, sidLine("user", stSessionID))
-			moved := file + ".verified"
-			f.deps.readFile = func(path string) ([]byte, error) {
-				data, err := os.ReadFile(path)
-				if path == file {
-					if err := os.Rename(file, moved); err != nil {
-						t.Fatal(err)
-					}
-					swap(t, file, moved)
-				}
-				return data, err
-			}
-
-			code, out, _ := f.run(context.Background(), 5*time.Second)
-			if code != 0 {
-				t.Errorf("exit = %d, want 0 (a changed file is a note)\n%s", code, out)
-			}
-			if !proxyhelpertest.Exists(file) || !proxyhelpertest.Exists(moved) {
-				t.Errorf("a file swapped in after the read, or the verified one, was removed")
-			}
-			if want := "transcript kept: " + file + ": changed during cleanup\n"; !strings.Contains(out, want) {
-				t.Errorf("stdout lacks %q:\n%s", want, out)
-			}
-			if strings.Contains(out, "removed transcript") {
-				t.Errorf("stdout claims a removal:\n%s", out)
-			}
-			if f.lastLine(out) != "cleanup: ok" {
-				t.Errorf("last line = %q", f.lastLine(out))
-			}
-		})
-	}
-}
-
-// TestSelftest_Cleanup_TranscriptSymlinks (A2): the slug directory and the
-// transcript must be real — a symlink at either is kept, never read and
-// never removed, and neither is its target. The projects root above them
-// may be a symlink (followed by design).
-func TestSelftest_Cleanup_TranscriptSymlinks(t *testing.T) {
-	t.Run("slug dir is a symlink", func(t *testing.T) {
-		f := newStFixture(t)
-		f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
-		file, _, projDir := f.transcriptPaths()
-		elsewhere := filepath.Join(f.home, "elsewhere")
-		target := filepath.Join(elsewhere, stSessionID+".jsonl")
-		writeTranscript(t, target, sidLine("user", stSessionID))
-		mkdirs(t, filepath.Dir(projDir))
-		if err := os.Symlink(elsewhere, projDir); err != nil {
-			t.Fatal(err)
-		}
-		reads := f.recordReads()
-
-		code, out, _ := f.run(context.Background(), 5*time.Second)
-		if code != 0 {
-			t.Errorf("exit = %d, want 0\n%s", code, out)
-		}
-		if !proxyhelpertest.Exists(target) || !proxyhelpertest.Exists(projDir) {
-			t.Errorf("the symlinked slug dir or its target's transcript was removed")
-		}
-		if len(*reads) != 0 {
-			t.Errorf("transcript read through a symlinked slug dir: %v", *reads)
-		}
-		if want := "transcript kept: " + file + ": project directory " + projDir + " is a symlink\n"; !strings.Contains(out, want) {
-			t.Errorf("stdout lacks %q:\n%s", want, out)
-		}
-		if strings.Contains(out, "removed transcript") {
-			t.Errorf("stdout claims a removal:\n%s", out)
-		}
-		if f.lastLine(out) != "cleanup: ok" {
-			t.Errorf("last line = %q", f.lastLine(out))
-		}
-	})
-	t.Run("transcript is a symlink", func(t *testing.T) {
-		f := newStFixture(t)
-		f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
-		file, _, projDir := f.transcriptPaths()
-		target := filepath.Join(f.home, "elsewhere", "t.jsonl")
-		writeTranscript(t, target, sidLine("user", stSessionID))
-		mkdirs(t, projDir)
-		if err := os.Symlink(target, file); err != nil {
-			t.Fatal(err)
-		}
-		reads := f.recordReads()
-
-		code, out, _ := f.run(context.Background(), 5*time.Second)
-		if code != 0 {
-			t.Errorf("exit = %d, want 0\n%s", code, out)
-		}
-		if !proxyhelpertest.Exists(target) || !proxyhelpertest.Exists(file) {
-			t.Errorf("the transcript symlink or its target was removed")
-		}
-		if len(*reads) != 0 {
-			t.Errorf("a symlinked transcript was read: %v", *reads)
-		}
-		if want := "transcript kept: " + file + ": a symlink, not a regular file\n"; !strings.Contains(out, want) {
-			t.Errorf("stdout lacks %q:\n%s", want, out)
-		}
-		if strings.Contains(out, "removed transcript") {
-			t.Errorf("stdout claims a removal:\n%s", out)
-		}
-		if f.lastLine(out) != "cleanup: ok" {
-			t.Errorf("last line = %q", f.lastLine(out))
-		}
-	})
-	t.Run("projects root is a symlink", func(t *testing.T) {
-		f := newStFixture(t)
-		f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
-		file, _, projDir := f.transcriptPaths()
-		root := filepath.Dir(projDir) // <home>/.claude/projects
-		realRoot := filepath.Join(f.home, "real-projects")
-		realFile := filepath.Join(realRoot, stProjectSlug, stSessionID+".jsonl")
-		writeTranscript(t, realFile, sidLine("user", stSessionID))
-		mkdirs(t, filepath.Dir(root))
-		if err := os.Symlink(realRoot, root); err != nil {
-			t.Fatal(err)
-		}
-
-		code, out, _ := f.run(context.Background(), 5*time.Second)
-		if code != 0 {
-			t.Fatalf("exit = %d, stdout:\n%s", code, out)
-		}
-		if proxyhelpertest.Exists(realFile) {
-			t.Errorf("transcript under a symlinked projects root left behind:\n%s", out)
-		}
-		if !strings.Contains(out, "removed transcript: "+file+"\n") {
-			t.Errorf("stdout lacks the removed-transcript line:\n%s", out)
-		}
-		if fi, err := os.Lstat(root); err != nil || fi.Mode()&os.ModeSymlink == 0 || !proxyhelpertest.Exists(realRoot) {
-			t.Errorf("the projects root symlink or its target was touched (%v)", err)
-		}
-		if f.lastLine(out) != "cleanup: ok" {
-			t.Errorf("last line = %q", f.lastLine(out))
-		}
-	})
-}
-
-// TestSelftest_Cleanup_TranscriptCheckErrorIsIncomplete (A4): failing to
-// look at our own computed path — Lstat of the slug dir or the transcript,
-// before or after the read, or the read itself — is a cleanup problem
-// (exit 1 even after a PASS), and the file is kept. A missing file stays
-// silent and an unproven one a note (other tests).
-func TestSelftest_Cleanup_TranscriptCheckErrorIsIncomplete(t *testing.T) {
-	eacces := func(op, path string) error { return &os.PathError{Op: op, Path: path, Err: syscall.EACCES} }
-	cases := map[string]func(f *stFixture, file, projDir string){
-		"read error": func(f *stFixture, file, _ string) {
-			f.deps.readFile = func(path string) ([]byte, error) {
-				if path == file {
-					return nil, eacces("open", path)
-				}
-				return os.ReadFile(path)
-			}
-		},
-		"transcript lstat error": func(f *stFixture, file, _ string) {
-			f.deps.lstat = func(path string) (os.FileInfo, error) {
-				if path == file {
-					return nil, eacces("lstat", path)
-				}
-				return os.Lstat(path)
-			}
-		},
-		"transcript lstat error after the read": func(f *stFixture, file, _ string) {
-			n := 0
-			f.deps.lstat = func(path string) (os.FileInfo, error) {
-				if path == file {
-					if n++; n > 1 {
-						return nil, eacces("lstat", path)
-					}
-				}
-				return os.Lstat(path)
-			}
-		},
-		"slug dir lstat error": func(f *stFixture, _, projDir string) {
-			f.deps.lstat = func(path string) (os.FileInfo, error) {
-				if path == projDir {
-					return nil, eacces("lstat", path)
-				}
-				return os.Lstat(path)
-			}
-		},
-	}
-	for name, inject := range cases {
-		t.Run(name, func(t *testing.T) {
-			f := newStFixture(t)
-			f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
-			file, _, projDir := f.transcriptPaths()
-			writeTranscript(t, file, sidLine("user", stSessionID))
-			inject(f, file, projDir)
-
-			code, out, _ := f.run(context.Background(), 5*time.Second)
-			if !strings.Contains(out, "PASS: reply from ") {
-				t.Errorf("stdout:\n%s", out)
-			}
-			if code != 1 {
-				t.Errorf("exit = %d, want 1 (cleanup incomplete overrides PASS)", code)
-			}
-			if !proxyhelpertest.Exists(file) {
-				t.Errorf("transcript removed although it could not be checked")
-			}
-			if strings.Contains(out, "removed transcript") {
-				t.Errorf("stdout claims a removal:\n%s", out)
-			}
-			last := f.lastLine(out)
-			if !strings.HasPrefix(last, "cleanup incomplete: ") || !strings.Contains(last, "transcript not checked: "+file+": ") {
-				t.Errorf("last line = %q, want cleanup incomplete naming the transcript", last)
-			}
-		})
-	}
-}
-
-// TestSelftestSlug pins the copied Nexen rule, including a directory name
-// observed under ~/.claude/projects on mlab (2026-10-06).
-func TestSelftestSlug(t *testing.T) {
-	cases := map[string]string{
-		"/Users/wake/Workspace/wake/purdex/.claude/worktrees/conv-entity": "-Users-wake-Workspace-wake-purdex--claude-worktrees-conv-entity",
-		stTargetCwd:  stProjectSlug,
-		"/a b/c_d.e": "-a-b-c-d-e",
-		"/AZaz09":    "-AZaz09",
-	}
-	for in, want := range cases {
-		if got := selftestSlug(in); got != want {
-			t.Errorf("selftestSlug(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // --- through a real (in-process) helper -------------------------------------
 
 // TestSelftest_RealHelperRoundTrip backs the spawn seam with
@@ -2167,17 +1677,11 @@ func TestSelftest_ProductionDepsAreWired(t *testing.T) {
 	if d.tmux == nil || d.readRegistry == nil || d.spawn == nil || d.writeFrame == nil ||
 		d.pidAlive == nil || d.procStart == nil || d.signal == nil || d.readPeerFeatures == nil ||
 		d.glob == nil || d.registryProcStart == nil || d.remove == nil || d.dialRefused == nil ||
-		d.sleep == nil || d.now == nil || d.readFile == nil || d.lstat == nil || d.rmdir == nil {
+		d.sleep == nil || d.now == nil || d.childCommands == nil {
 		t.Fatalf("a production seam is nil: %+v", d)
 	}
 	if d.sockDir != ccuds.DefaultSockDir {
 		t.Errorf("sockDir = %q", d.sockDir)
-	}
-	if home, err := os.UserHomeDir(); err != nil || d.homeDir != home {
-		t.Errorf("homeDir = %q, want os.UserHomeDir() = %q (%v)", d.homeDir, home, err)
-	}
-	if d.registryDir != filepath.Join(d.homeDir, ".claude", "sessions") {
-		t.Errorf("registryDir = %q, want under homeDir %q", d.registryDir, d.homeDir)
 	}
 	if !strings.HasSuffix(d.registryDir, filepath.Join(".claude", "sessions")) {
 		t.Errorf("registryDir = %q", d.registryDir)

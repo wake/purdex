@@ -5,8 +5,8 @@
 // tmux, spawns a REAL `pdx peer-proxy` helper through the same client the
 // daemon uses, delivers a nonce message into the session's inbox socket,
 // waits for the native reply to reach the helper, prints PASS/FAIL, and
-// always tears everything down: the target process, its registry files
-// and transcript, the helper and its files.
+// always tears everything down: the target process, its registry files,
+// the helper and its files.
 package main
 
 import (
@@ -14,7 +14,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -92,16 +91,8 @@ type selftestDeps struct {
 	dialRefused       func(sock string) bool
 	sleep             func(ctx context.Context, d time.Duration) error
 	now               func() time.Time
-
-	// homeDir is where Claude Code keeps .claude/ — the throwaway
-	// session's transcript lives under it (#1631).
-	homeDir  string
-	readFile func(path string) ([]byte, error)
-	// lstat never follows a final symlink: it pins the transcript the
-	// cleanup verified to the one it removes.
-	lstat func(path string) (fs.FileInfo, error)
-	// rmdir removes an empty directory and nothing else.
-	rmdir func(path string) error
+	// childCommands lists the command names of pid's direct children.
+	childCommands func(ctx context.Context, pid int) ([]string, error)
 }
 
 // newSelftestDeps returns the production seams. stderr receives the
@@ -155,12 +146,38 @@ func newSelftestDeps(stderr io.Writer) (selftestDeps, error) {
 				return ctx.Err()
 			}
 		},
-		now:      time.Now,
-		homeDir:  home,
-		readFile: os.ReadFile,
-		lstat:    os.Lstat,
-		rmdir:    syscall.Rmdir,
+		now:           time.Now,
+		childCommands: selftestChildCommands,
 	}, nil
+}
+
+// selftestChildCommands lists pid's direct children by command name (ps's
+// comm, which is argv[0]) from one read of the process table.
+func selftestChildCommands(ctx context.Context, pid int) ([]string, error) {
+	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "ppid=", "-o", "comm=").Output()
+	if err != nil {
+		return nil, fmt.Errorf("ps: %w", err)
+	}
+	return selftestParseChildren(out, pid), nil
+}
+
+// selftestParseChildren picks pid's children out of `ps -o ppid= -o comm=`
+// output: a padded ppid, then a command that may hold spaces.
+func selftestParseChildren(out []byte, pid int) []string {
+	var kids []string
+	for _, line := range strings.Split(string(out), "\n") {
+		ppid, comm, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		if n, err := strconv.Atoi(ppid); err != nil || n != pid {
+			continue
+		}
+		if comm = strings.TrimSpace(comm); comm != "" {
+			kids = append(kids, comm)
+		}
+	}
+	return kids
 }
 
 // selftestTimeout parses --timeout: "" ⇒ selftestDefaultTimeout; anything
@@ -210,10 +227,6 @@ type selftestState struct {
 	targetPID       int    // the claude process; 0 ⇒ never identified
 	targetProcStart string // proves targetPID is still the same process
 	targetInbox     string // the registered inbox; "" ⇒ never registered
-	// targetSessionID / targetCwd are the registered entry's sessionId and
-	// cwd: they address the session's transcript (#1631).
-	targetSessionID string
-	targetCwd       string
 	h               selftestPeer
 }
 
@@ -247,12 +260,18 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 	// kill-session (a session that never existed is tolerated there by
 	// selftestTmuxNoSession).
 	//
-	// Bash is disallowed so the native SendMessage is the only way to
-	// reply: a global CLAUDE.md that routes agent messages through
-	// `pdx msg send` would otherwise send the model to Bash, which -p
-	// refuses, and the reply leg would never be exercised (#1631). The
-	// flag takes a variadic list, so it goes last: nothing follows that it
-	// could swallow.
+	// #1631 adds two flags, each its own argv element:
+	//   - --no-session-persistence: the throwaway session never writes a
+	//     transcript, so cleanup has none to delete — and no window between
+	//     verifying a file and unlinking it to defend.
+	//   - --disallowedTools Bash: the native SendMessage is the only way to
+	//     reply. A global CLAUDE.md that routes agent messages through
+	//     `pdx msg send` would otherwise send the model to Bash, which -p
+	//     refuses, and the reply leg would never be exercised. The flag
+	//     takes a variadic list, so it goes last: nothing follows that it
+	//     could swallow.
+	// A claude that rejects either exits at once: step 3 reports that as a
+	// start failure, with what claude printed.
 	st.sessionStarted = true
 	if _, err := deps.tmux(ctx, "new-session", "-d", "-s", st.name, "--",
 		"sh", "-c", `sleep 2147483647 | exec claude "$@"`, "pdx-selftest",
@@ -260,6 +279,7 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--name", st.name,
 		"--settings", `{"crossSessionInbound":"accept"}`,
+		"--no-session-persistence",
 		"--disallowedTools", "Bash"); err != nil {
 		fmt.Fprintf(stdout, "FAIL: tmux new-session: %v\n", err)
 		return 1
@@ -284,6 +304,14 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 		fmt.Fprintln(stdout, "FAIL: interrupted")
 		return 1
 	case selftestNotRegistered:
+		// A claude that rejects its arguments exits at once. Reported as
+		// "did not register", that would read like a missing feature; so
+		// when claude is gone the pane is captured here, before cleanup's
+		// kill-session, and the FAIL line carries what claude printed.
+		if selftestClaudeExited(ctx, deps, st) {
+			fmt.Fprintln(stdout, selftestStartFailure(ctx, deps, st.name, stderr))
+			return 1
+		}
 		fmt.Fprintln(stdout, "FAIL: session did not register (Claude Code ≥ 2.1.224 with peer messaging required)")
 		return 1
 	}
@@ -295,7 +323,6 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 	}
 	pid := target.PID
 	st.targetPID, st.targetProcStart, st.targetInbox = pid, targetProcStart, target.Inbox
-	st.targetSessionID, st.targetCwd = target.SessionID, target.Cwd
 
 	// Step 4: a real helper, impersonating one peer with the target's own
 	// feature list.
@@ -374,6 +401,60 @@ func selftestIdentifyPane(ctx context.Context, deps selftestDeps, name string) (
 		return 0, "", err
 	}
 	return pid, procStart, nil
+}
+
+// selftestPaneTail is how many of the pane's last non-empty lines a start
+// failure echoes to stderr.
+const selftestPaneTail = 5
+
+// selftestClaudeExited reports whether the throwaway claude, which never
+// registered, is gone: its pane's wrapper is gone, or every process left
+// under the wrapper is the sleep that feeds claude's stdin. The wrapper
+// outlives a claude that exited at once — it waits on that sleep (observed
+// with a rejected flag on mlab) — so its own liveness proves nothing. An
+// identity or a process list that cannot be read proves nothing either.
+func selftestClaudeExited(ctx context.Context, deps selftestDeps, st *selftestState) bool {
+	switch selftestIdentify(deps, st.panePID, st.paneProcStart) {
+	case ipeers.ProcDifferent:
+		return true
+	case ipeers.ProcUnknown:
+		return false
+	}
+	kids, err := deps.childCommands(ctx, st.panePID)
+	if err != nil {
+		return false
+	}
+	for _, k := range kids {
+		if filepath.Base(k) != "sleep" {
+			return false
+		}
+	}
+	return true
+}
+
+// selftestStartFailure captures the throwaway pane, echoes its last few
+// non-empty lines to stderr, and returns the FAIL line naming the last one.
+func selftestStartFailure(ctx context.Context, deps selftestDeps, name string, stderr io.Writer) string {
+	out, err := deps.tmux(ctx, "capture-pane", "-p", "-t", name)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx msg: tmux capture-pane: %s\n", selftestTmuxErr(err))
+	}
+	var lines []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, strings.TrimRight(l, " \t\r"))
+		}
+	}
+	if len(lines) == 0 {
+		return "FAIL: claude failed to start (no pane output captured)"
+	}
+	if len(lines) > selftestPaneTail {
+		lines = lines[len(lines)-selftestPaneTail:]
+	}
+	for _, l := range lines {
+		fmt.Fprintf(stderr, "pdx msg: pane: %s\n", l)
+	}
+	return "FAIL: claude failed to start: " + strings.TrimSpace(lines[len(lines)-1])
 }
 
 type selftestRegStatus int
@@ -552,14 +633,7 @@ func selftestCleanup(ctx context.Context, deps selftestDeps, st *selftestState, 
 		selftestRemoveSock(deps, sock, "target", problem, stdout)
 	}
 
-	// e. the claude process's transcript (#1631) — after c, and only once
-	// c proved the process gone, so nothing writes to it any more. Without
-	// a registry entry there is no session id to address it by.
-	if st.targetPID != 0 {
-		selftestRemoveTranscript(deps, st, targetID, problem, stdout)
-	}
-
-	// f. verdict.
+	// e. verdict.
 	if len(remaining) == 0 {
 		fmt.Fprintln(stdout, "cleanup: ok")
 		return true
@@ -629,211 +703,6 @@ func selftestRemoveSock(deps selftestDeps, sock, owner string, problem func(stri
 	default:
 		problem("%s socket not removed: %s: %v", owner, sock, err)
 	}
-}
-
-// selftestRemoveTranscript removes the throwaway session's transcript,
-// <home>/.claude/projects/<slug(cwd)>/<sessionID>.jsonl, once its content
-// proves it is that session's own; then the <sessionID>/ side directory
-// and the project directory, each only if empty (rmdir, never recursive).
-//
-// A path that cannot be computed with confidence is a skip note. Unless
-// the claude process is gone (targetID ProcDifferent) — still alive, or
-// of unknown identity — the transcript is kept, unread, with a note: it
-// may still be written. A missing transcript is silence. One that is not
-// proven ours is kept with a note, as a foreign registry file is: a
-// symlinked slug directory, a transcript that is not a regular file, a
-// sessionId mismatch, or a file that changed between the check and the
-// removal. Failing to look at our own path (Lstat, read) or to remove a
-// verified transcript is a cleanup problem.
-func selftestRemoveTranscript(deps selftestDeps, st *selftestState, targetID ipeers.ProcIdentity,
-	problem func(string, ...any), stdout io.Writer) {
-	path, why := selftestTranscriptPath(deps.homeDir, st.targetCwd, st.targetSessionID)
-	if path == "" {
-		fmt.Fprintf(stdout, "note: transcript cleanup skipped: %s\n", why)
-		return
-	}
-	// Only a writer that is gone leaves a transcript safe to judge: one
-	// still alive, or of unknown identity, may write to it yet — so it is
-	// kept without even being read. Its survival is already a problem (c).
-	switch targetID {
-	case ipeers.ProcDifferent:
-	case ipeers.ProcSame:
-		fmt.Fprintf(stdout, "transcript kept: %s: claude pid %d still alive\n", path, st.targetPID)
-		return
-	default:
-		fmt.Fprintf(stdout, "transcript kept: %s: claude pid %d of unknown identity may still write it\n", path, st.targetPID)
-		return
-	}
-	// The projects root may be a symlink — followed by design (mlab's
-	// setup) — but the slug directory under it must be a real one: a
-	// symlink there points the path at a directory that is not ours.
-	projDir := filepath.Dir(path)
-	switch fi, err := deps.lstat(projDir); {
-	case errors.Is(err, fs.ErrNotExist):
-		return
-	case err != nil:
-		problem("transcript not checked: %s: %v", path, err)
-		return
-	case fi.Mode()&fs.ModeSymlink != 0:
-		fmt.Fprintf(stdout, "transcript kept: %s: project directory %s is a symlink\n", path, projDir)
-		return
-	case !fi.IsDir():
-		fmt.Fprintf(stdout, "transcript kept: %s: project directory %s is not a directory\n", path, projDir)
-		return
-	}
-	// The transcript itself must be a regular file; its FileInfo pins the
-	// file verified below to the one removed (A1).
-	verified, err := deps.lstat(path)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return
-	case err != nil:
-		problem("transcript not checked: %s: %v", path, err)
-		return
-	case !verified.Mode().IsRegular():
-		fmt.Fprintf(stdout, "transcript kept: %s: %s\n", path, selftestNotRegular(verified.Mode()))
-		return
-	}
-	data, err := deps.readFile(path)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return
-	case err != nil:
-		problem("transcript not checked: %s: %v", path, err)
-		return
-	}
-	if why := selftestTranscriptMismatch(data, st.targetSessionID); why != "" {
-		fmt.Fprintf(stdout, "transcript kept: %s: %s\n", path, why)
-		return
-	}
-	// Remove only the file that was verified: still a regular file, still
-	// the same one. Anything else at the path now is not proven ours.
-	switch now, err := deps.lstat(path); {
-	case errors.Is(err, fs.ErrNotExist):
-		return
-	case err != nil:
-		problem("transcript not checked: %s: %v", path, err)
-		return
-	case !now.Mode().IsRegular() || !os.SameFile(verified, now):
-		fmt.Fprintf(stdout, "transcript kept: %s: changed during cleanup\n", path)
-		return
-	}
-	switch err := deps.remove(path); {
-	case errors.Is(err, fs.ErrNotExist):
-		return
-	case err != nil:
-		problem("transcript not removed: %s: %v", path, err)
-		return
-	}
-	fmt.Fprintf(stdout, "removed transcript: %s\n", path)
-
-	sidDir := strings.TrimSuffix(path, ".jsonl")
-	for _, dir := range []string{sidDir, projDir} {
-		switch err := deps.rmdir(dir); {
-		case err == nil:
-			fmt.Fprintf(stdout, "removed transcript directory: %s\n", dir)
-		case errors.Is(err, fs.ErrNotExist):
-		case dir == projDir && (errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST)):
-			// Other sessions started in the same cwd share it: the usual case.
-		default:
-			fmt.Fprintf(stdout, "directory kept: %s: %v\n", dir, err)
-		}
-	}
-}
-
-// selftestNotRegular says what a non-regular file at the transcript path is.
-func selftestNotRegular(mode fs.FileMode) string {
-	switch {
-	case mode&fs.ModeSymlink != 0:
-		return "a symlink, not a regular file"
-	case mode.IsDir():
-		return "a directory, not a regular file"
-	}
-	return fmt.Sprintf("not a regular file (mode %v)", mode.Type())
-}
-
-// selftestTranscriptPath returns where Claude Code writes the transcript
-// of session sessionID started in cwd, or "" and why it cannot be said
-// with confidence: no home, cwd or session id; a session id that is not a
-// plain file name; a non-ASCII cwd, for which the slug rule was never
-// observed (Nexen's transcriptPath declines it for the same reason).
-func selftestTranscriptPath(home, cwd, sessionID string) (string, string) {
-	switch {
-	case home == "":
-		return "", "no home directory"
-	case sessionID == "":
-		return "", "the registry entry has no session id"
-	case cwd == "":
-		return "", "the registry entry has no cwd"
-	}
-	for i := 0; i < len(sessionID); i++ {
-		if c := sessionID[i]; !selftestIsAlnum(c) && c != '-' && c != '_' {
-			return "", fmt.Sprintf("session id %q is not a plain file name", sessionID)
-		}
-	}
-	for i := 0; i < len(cwd); i++ {
-		if cwd[i] > 127 {
-			return "", fmt.Sprintf("cwd %q is not ASCII (the project slug rule is unverified there)", cwd)
-		}
-	}
-	return filepath.Join(home, ".claude", "projects", selftestSlug(cwd), sessionID+".jsonl"), ""
-}
-
-// selftestSlug maps a cwd to Claude Code's project directory name: every
-// byte outside [A-Za-z0-9] becomes '-'. The rule is copied from Nexen's
-// execution/addressing.go slugify (unexported there), verified against
-// observed directory names; the result never contains a separator or a
-// dot, so it cannot leave .claude/projects.
-func selftestSlug(cwd string) string {
-	b := []byte(cwd)
-	for i, c := range b {
-		if !selftestIsAlnum(c) {
-			b[i] = '-'
-		}
-	}
-	return string(b)
-}
-
-func selftestIsAlnum(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
-}
-
-// selftestTranscriptMismatch returns why data is not provably session
-// sessionID's transcript, or "" when it is: every JSON line carrying a
-// top-level "sessionId" must carry exactly sessionID (a non-string or
-// null value is a mismatch), and at least one line must. A line that does
-// not parse — blank, or cut short when the process was killed mid-write —
-// is no evidence either way.
-func selftestTranscriptMismatch(data []byte, sessionID string) string {
-	seen := false
-	for i, line := range bytes.Split(data, []byte("\n")) {
-		var rec map[string]json.RawMessage
-		if json.Unmarshal(line, &rec) != nil {
-			continue
-		}
-		raw, ok := rec["sessionId"]
-		if !ok {
-			continue
-		}
-		var sid string
-		if json.Unmarshal(raw, &sid) != nil || sid != sessionID {
-			return fmt.Sprintf("line %d carries sessionId %s, not %s", i+1, selftestClip(string(raw)), sessionID)
-		}
-		seen = true
-	}
-	if !seen {
-		return "no line carries the session id"
-	}
-	return ""
-}
-
-// selftestClip bounds a foreign value quoted in a note.
-func selftestClip(s string) string {
-	const limit = 80
-	if len(s) <= limit {
-		return s
-	}
-	return s[:limit] + "…"
 }
 
 // selftestWaitGone polls ident() at selftestPollInterval for ≤ d and
