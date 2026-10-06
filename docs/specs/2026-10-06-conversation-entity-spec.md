@@ -465,6 +465,10 @@ The earlier draft split ownerless conversations by whether they had ever been a 
   - A `/rename` writes `custom-title` (8 files).
   - 300 of 383 files have an `ai-title`, and in all 300 the last one lies within the final 256 KB.
 - **cwd** appears within the first 64 KB in 380 of 383 files. The other 3 carry none.
+- **The first human prompt is often far from the start** (measured 2026-10-07; a human prompt here means a user line that is not meta, not a tool result, and whose text does not start with `<`, which excludes command wrappers).
+  - 367 files have one.
+  - Its line starts beyond 64 KB in 84 files, beyond 1 MB in 46, beyond 4 MB in 20, and beyond 16 MB in none. The maximum is 13.5 MB.
+  - Reading every file forward until that line, or to the end when there is none, reads 373 MB in 1.9 s warm (Python probe).
 - **Who started it.** The first line that carries an `entrypoint` says who started the session: `cli` in 285 files, `sdk-*` in 98.
   - First → last entrypoint: cli → cli 281, sdk → sdk 95, sdk → cli 3, cli → sdk 2.
 - **Most sdk-born sessions are not Purdex workers.**
@@ -573,8 +577,13 @@ The order stays 外觀 / Workers / 已退出, and P4 adds **已消失** after th
 - **A symlinked projects dir is followed** (mlab's case).
 - **A transcript that is itself a symlink, or not a regular file, is skipped.** This matches Nexen `prelude.openTranscript`'s `O_NOFOLLOW` / `O_NONBLOCK` rule.
 
-**Per file.** The scan reads the first 64 KB (cwd, first `entrypoint`, first human prompt) and the last 256 KB (titles, last `entrypoint`).
-- A line cut by a window edge is skipped.
+**Per file.** The scan reads two parts of each file.
+- **The head:** forward, line by line, to collect cwd, the first `entrypoint` and the first human prompt.
+  - It **stops at the first human prompt**, and never reads past 16 MB.
+  - With no human prompt within 16 MB, the row has none. This is the known limit, and none was measured.
+  - *(Amended 2026-10-07: a 64 KB head missed the first prompt in 84 of 367 files, which would have hurt both the title fallback and search.)*
+- **The tail:** the last 256 KB, for the titles and the last `entrypoint`.
+- A line cut by the tail window's edge, or by the 16 MB cap, is skipped.
 - A title older than the tail window is missed, and the title falls back as in §13.3. This never happened in the measurement.
 
 **Conversation index.** A table in the Purdex store holds one row per top-level transcript ever seen. Each row has:
@@ -590,6 +599,11 @@ The order stays 外觀 / Workers / 已退出, and P4 adds **已消失** after th
 How the index is kept:
 - A scan upserts every file it reads.
 - A file whose (size, mtime) did not change is not re-read.
+- A transcript only ever grows, so the head facts (cwd, first `entrypoint`, first prompt) are kept once found.
+  - A file that grew re-reads only its tail.
+  - A head scan that has not found the prompt yet resumes from the stored offset instead of starting over.
+  - The head is read again from byte 0 only when the file shrank or its inode changed, because that means it was rewritten.
+  - So the cost of the head is paid about once per file.
 - Rows are never deleted in P4. They are tiny: retention adds about 400 a month on mlab.
 
 **When scans run:**
@@ -613,6 +627,7 @@ Consequences:
 - **Gone before P4.** A terminal conversation cleaned up before P4 shipped cannot appear in 已消失 (§13.2).
 - **sdk-born conversations Purdex never ran** do not appear in any tab.
 - **Old titles.** A title written more than 256 KB before the end of the file is not seen.
+- **Late first prompts.** A first human prompt more than 16 MB into the file is not found. The title falls back to the session id and search loses that field. None was measured.
 
 ### 13.8 Not in P4
 
@@ -633,6 +648,11 @@ Consequences:
 - an sdk-born one with no stint → never listed;
 - a cwd that is gone → listed, with no rebuild;
 - a title only before the tail window → fallback;
+- a first prompt beyond 64 KB → found;
+- no prompt within the 16 MB cap → no prompt, and the scan stops at the cap;
+- a grown file → only the tail is re-read;
+- a head scan without a prompt yet → it resumes from the stored offset;
+- a rewritten file (it shrank, or its inode changed) → the head is read again from byte 0;
 - a line cut at each window edge → skipped;
 - a symlinked projects dir → followed;
 - a symlinked transcript → skipped;
