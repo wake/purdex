@@ -108,7 +108,9 @@ const purdexSessionLabel = "purdex.session_id"
 // {owner: "terminal", session_id, recent_resume: true} (just resumed, frame not yet recorded);
 // 503 owner_check_failed when either lookup errs (a truncated worker scan
 // counts as an error, and the partial result it carries is ignored: a
-// partial scan cannot prove absence).
+// partial scan cannot prove absence), or when a terminal frame cannot be
+// verified and no other frame is a verified owner (a verified one wins:
+// the 409 above, whatever the frame order).
 func (m *Module) checkOwners(parent context.Context, sid, allowExec, allowPane string) *handoffError {
 	// A resume that just succeeded may not have its terminal frame recorded
 	// yet. Handoff (allowPane != "") transfers the terminal itself, so only
@@ -123,19 +125,28 @@ func (m *Module) checkOwners(parent context.Context, sid, allowExec, allowPane s
 	if err != nil {
 		return &handoffError{http.StatusServiceUnavailable, "owner_check_failed", "checking terminal owners: " + err.Error(), map[string]any{"session_id": sid}}
 	}
+	// Every frame but the allowed pane is looked at, so the answer does not
+	// depend on their order (#1628): a verified owner proves S is owned and
+	// wins over any unverified frame; the first verified one is reported.
+	unverified, unverifiedPane := false, ""
 	for _, t := range terms {
 		if allowPane != "" && t.PaneID == allowPane {
 			continue
 		}
-		if !t.Verified {
-			// D1: an owner is a pid that still has its recorded start time. One
-			// we cannot read is not an owner — but S is not provably free either,
-			// so the transfer is refused as retryable (PR #1572 review A2).
-			return &handoffError{http.StatusServiceUnavailable, "owner_check_failed", "cannot verify a terminal process recorded for this conversation",
-				map[string]any{"session_id": sid, "tmux_pane_id": t.PaneID}}
+		if t.Verified {
+			return &handoffError{http.StatusConflict, "session_owned", "this conversation is open in a terminal",
+				map[string]any{"owner": "terminal", "session_id": sid, "tmux_pane_id": t.PaneID}}
 		}
-		return &handoffError{http.StatusConflict, "session_owned", "this conversation is open in a terminal",
-			map[string]any{"owner": "terminal", "session_id": sid, "tmux_pane_id": t.PaneID}}
+		if !unverified {
+			unverified, unverifiedPane = true, t.PaneID
+		}
+	}
+	if unverified {
+		// D1: an owner is a pid that still has its recorded start time. One
+		// we cannot read is not an owner — but S is not provably free either,
+		// so the transfer is refused as retryable (PR #1572 review A2).
+		return &handoffError{http.StatusServiceUnavailable, "owner_check_failed", "cannot verify a terminal process recorded for this conversation",
+			map[string]any{"session_id": sid, "tmux_pane_id": unverifiedPane}}
 	}
 	workers, err := m.liveWorkersFor(parent, sid)
 	if err != nil {

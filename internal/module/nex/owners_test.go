@@ -153,11 +153,42 @@ func TestCheckOwners(t *testing.T) {
 			t.Fatalf("herr=%+v", herr)
 		}
 	})
+	// #1628: the answer must not depend on the order of the frames. A
+	// verified owner proves S is owned, so it wins over an unverified frame
+	// listed before it; the first verified frame is the one reported.
+	t.Run("unverified frame before a verified one → 409 for the first verified pane", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.terminals.live = map[string][]agent.TerminalSession{tS: {ts("%7", false), ts("%8", true), ts("%9", true)}}
+		herr := env.m.checkOwners(context.Background(), tS, "", "")
+		if herr == nil || herr.status != 409 || herr.code != "session_owned" || herr.detail["owner"] != "terminal" || herr.detail["tmux_pane_id"] != "%8" {
+			t.Fatalf("herr=%+v", herr)
+		}
+	})
 	t.Run("terminal in the allowed pane", func(t *testing.T) {
 		env := newTakebackEnv(t)
 		env.terminals.live = map[string][]agent.TerminalSession{tS: {ts("%1", true)}}
 		if herr := env.m.checkOwners(context.Background(), tS, "", "%1"); herr != nil {
 			t.Fatal(herr)
+		}
+	})
+	t.Run("the allowed pane is skipped among other frames", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		// Unverified allowed pane alone: not an owner, not a doubt.
+		env.terminals.live = map[string][]agent.TerminalSession{tS: {ts("%1", false)}}
+		if herr := env.m.checkOwners(context.Background(), tS, "", "%1"); herr != nil {
+			t.Fatalf("unverified allowed pane alone: %+v", herr)
+		}
+		// A verified allowed pane does not hide another pane's doubt.
+		env.terminals.live = map[string][]agent.TerminalSession{tS: {ts("%1", true), ts("%9", false)}}
+		herr := env.m.checkOwners(context.Background(), tS, "", "%1")
+		if herr == nil || herr.status != 503 || herr.code != "owner_check_failed" || herr.detail["tmux_pane_id"] != "%9" {
+			t.Fatalf("verified allowed + unverified other: herr=%+v", herr)
+		}
+		// An unverified allowed pane is not the doubt reported ahead of a verified owner.
+		env.terminals.live = map[string][]agent.TerminalSession{tS: {ts("%1", false), ts("%9", true)}}
+		herr = env.m.checkOwners(context.Background(), tS, "", "%1")
+		if herr == nil || herr.status != 409 || herr.code != "session_owned" || herr.detail["tmux_pane_id"] != "%9" {
+			t.Fatalf("unverified allowed + verified other: herr=%+v", herr)
 		}
 	})
 	t.Run("live worker other than the allowed one", func(t *testing.T) {
