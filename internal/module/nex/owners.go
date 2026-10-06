@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	"lab.protype.tw/wake/nexen/store"
 )
@@ -28,9 +29,10 @@ func isLiveExecution(e store.Execution) bool {
 }
 
 // executionIsFor: the row belongs to Claude session sid, as its own session
-// or as the one it resumes.
+// or as the one it resumes. Case-insensitive, as Nexen's SessionID filter is:
+// it stores a provider-reported session_id verbatim.
 func executionIsFor(e store.Execution, sid string) bool {
-	return sid != "" && (e.SessionID == sid || e.ResumeSessionID == sid)
+	return sid != "" && (strings.EqualFold(e.SessionID, sid) || strings.EqualFold(e.ResumeSessionID, sid))
 }
 
 // liveWorkersFor returns S's live executions, newest first (CreatedAt desc,

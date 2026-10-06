@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/module/agent"
@@ -308,9 +309,10 @@ func (m *Module) reconcileTerminalOwners(ctx context.Context) {
 	var order []string
 	for _, w := range workers {
 		for i, sid := range []string{w.SessionID, w.ResumeSessionID} {
-			if sid == "" || (i == 1 && sid == w.SessionID) {
+			if sid == "" || (i == 1 && strings.EqualFold(sid, w.SessionID)) {
 				continue
 			}
+			sid = store.NormalizeResumeSessionID(sid)
 			if _, ok := groups[sid]; !ok {
 				order = append(order, sid)
 			}
