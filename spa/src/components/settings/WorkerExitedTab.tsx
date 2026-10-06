@@ -1,31 +1,41 @@
-// spa/src/components/settings/WorkerExitedTab.tsx — Settings → Worker → Exited: one host's conversations with no
-// live stint (spec §9 / D10), searchable. Rebuild opens the worker's ended screen in a tab; its choices do the rest.
+// spa/src/components/settings/WorkerExitedTab.tsx — Settings → Worker → 已退出: every ended conversation on one host,
+// terminal or worker (conversation entity spec §13.3), from the daemon's GET /api/nex/conversations?state=ended.
+// Fetched on mount and on retry only (R-4-12): no live-execution subscription. Searchable over title, cwd (as shown
+// and as it is), first prompt and session id.
+//
+// 重建… (§13.4): a worker-last row with a stint opens that stint's exited screen, as P2-2 does; every other row opens
+// the conversation's closed-terminal rebuild tab (R-4-3, R-4-5). A root the daemon could not list keeps the rows but
+// disables every rebuild while the error stands (R-4-1). Conversations whose owner could not be verified are listed
+// nowhere and counted under the list (R-4-15).
 import { useEffect, useMemo, useState } from 'react'
-import { useHostExecutions } from '../../hooks/useHostExecutions'
-import { useExecutionHistory } from '../../hooks/useExecutionHistory'
+import { useConversations } from '../../hooks/useConversations'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useTabStore } from '../../stores/useTabStore'
-import { exitedEntities, matchesExitedQuery } from '../../lib/nex/exited-entities'
-import { liveTerminalSessionIds } from '../../lib/nex/terminal-session-ids'
-import { LIST_MAX_PAGES, LIST_PAGE_LIMIT } from '../../lib/nex/list-all-executions'
-import { relativeAge } from '../../lib/nex/relative-age'
-import { workerLabel } from '../../lib/nex/worker-label'
+import { matchesConversationQuery } from '../../lib/nex/conversation-search'
+import { openConversationRebuild } from '../../lib/nex/open-conversation-rebuild'
 import { openWorkerTab } from '../../features/workspace/lib/open-worker-tab'
+import type { ConversationRow as ConversationRowData } from '../../lib/nex/conversations-api'
+import { ConversationRow } from './ConversationRow'
 
 const AGE_TICK_MS = 60_000
-const basename = (p: string): string => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p
+
+/** 重建… on an ended row: the latest stint's exited screen for a worker-last row that has one, else the rebuild tab. */
+function rebuildConversation(hostId: string, row: ConversationRowData): void {
+  if (row.last_in === 'worker' && row.latest_execution_id) {
+    openWorkerTab({ kind: 'execution', executionId: row.latest_execution_id, host: hostId })
+    return
+  }
+  // Never rejects: the host-config load and the home lookup it waits on swallow their own failures.
+  void openConversationRebuild(hostId, row)
+}
 
 export function WorkerExitedTab({ hostId }: { hostId?: string }) {
   if (!hostId) return null
-  return <ExitedList hostId={hostId} />
+  return <ExitedList key={hostId} hostId={hostId} />
 }
 
 function ExitedList({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
-  const { items, phase, error, truncated, refetch } = useExecutionHistory(hostId)
-  // Holds the host's shared live subscription: its refreshRevision is what tells the history hook to refetch.
-  const { items: liveItems } = useHostExecutions(hostId)
-  const tabs = useTabStore((s) => s.tabs)
+  const { page, phase, error, unavailable, refetch } = useConversations(hostId, 'ended')
   const [query, setQuery] = useState('')
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -33,11 +43,13 @@ function ExitedList({ hostId }: { hostId: string }) {
     return () => clearInterval(id)
   }, [])
 
-  const exited = useMemo(() => exitedEntities(items, liveItems), [items, liveItems])
-  // `tabs` is the dependency: the set is derived from the store's panes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const inTerminal = useMemo(() => liveTerminalSessionIds(hostId), [hostId, tabs])
-  const rows = useMemo(() => exited.filter((r) => matchesExitedQuery(r, query)), [exited, query])
+  const home = page?.home ?? ''
+  const rows = useMemo(
+    () => (page?.conversations ?? []).filter((r) => matchesConversationQuery(r, query, home)),
+    [page, query, home],
+  )
+  const rootError = page?.root_error
+  const unknownOwner = page?.unknown_owner ?? 0
 
   return (
     <div className="flex flex-col gap-2">
@@ -50,7 +62,11 @@ function ExitedList({ hostId }: { hostId: string }) {
         aria-label={t('settings.worker.exited.search')}
         className="w-full rounded border border-border-default bg-surface-secondary px-2 py-1 text-sm text-text-primary"
       />
-      {phase === 'error' && (
+      {unavailable ? (
+        <p data-testid="worker-exited-unavailable" className="text-xs text-text-muted">
+          {t('settings.worker.conversations.unavailable')}
+        </p>
+      ) : phase === 'error' && (
         <div data-testid="worker-exited-error" className="flex items-center gap-2 text-xs text-red-400">
           <span className="flex-1 min-w-0 truncate">{t('newtab.workers.error', { error: error ?? '' })}</span>
           <button type="button" data-testid="worker-exited-retry" onClick={refetch}
@@ -59,44 +75,35 @@ function ExitedList({ hostId }: { hostId: string }) {
           </button>
         </div>
       )}
-      {truncated && (
-        <p data-testid="worker-exited-truncated" className="text-xs text-text-muted">
-          {t('settings.worker.exited.truncated', { n: LIST_PAGE_LIMIT * LIST_MAX_PAGES })}
+      {rootError && (
+        <p data-testid="worker-exited-root-error" className="text-xs text-amber-400 break-words">
+          {t('settings.worker.conversations.root_error', { error: rootError })}
         </p>
       )}
-      {/* The first walk, or a retry after an error, which keeps its rows below this line (a background walk stays 'ready'). */}
+      {page?.truncated && (
+        <p data-testid="worker-exited-truncated" className="text-xs text-text-muted">
+          {t('settings.worker.conversations.truncated')}
+        </p>
+      )}
+      {/* The first load, or a retry after an error, which keeps its rows below this line. */}
       {phase === 'loading' && (
-        <p data-testid="worker-exited-loading" className="text-xs text-text-muted" aria-busy="true">{t('executions.loading')}</p>
+        <p data-testid="worker-exited-loading" className="text-xs text-text-muted" aria-busy="true">{t('settings.worker.conversations.loading')}</p>
       )}
       {phase === 'ready' && rows.length === 0 && (
         <p data-testid="worker-exited-empty" className="text-xs text-text-muted">{t('settings.worker.exited.empty')}</p>
       )}
       {rows.length > 0 && (
         <div role="list" aria-busy={phase === 'loading' ? 'true' : undefined} className="flex flex-col">
-          {rows.map((row) => {
-            const age = relativeAge(row.updated_at, now)
-            const running = !!row.session_id && inTerminal.has(row.session_id)
-            return (
-              <div key={row.id} role="listitem" data-testid="worker-exited-row"
-                className="flex items-center gap-2 px-2 py-1.5 text-sm border-b border-border-subtle">
-                <span className="flex-1 min-w-0 truncate text-text-primary">{workerLabel(row)}</span>
-                <span className="shrink-0 max-w-[10rem] truncate text-xs text-text-muted" title={row.cwd}>{basename(row.cwd)}</span>
-                <span className="shrink-0 text-xs text-text-muted">{t(`executions.age.${age.key}`, { n: age.n })}</span>
-                {running ? (
-                  <span data-testid="worker-exited-in-terminal" className="shrink-0 text-xs text-text-secondary">
-                    {t('settings.worker.exited.in_terminal')}
-                  </span>
-                ) : (
-                  <button type="button" data-testid="worker-exited-rebuild"
-                    onClick={() => { openWorkerTab({ kind: 'execution', executionId: row.id, host: hostId }) }}
-                    className="shrink-0 px-1.5 py-0.5 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer">
-                    {t('settings.worker.exited.rebuild')}
-                  </button>
-                )}
-              </div>
-            )
-          })}
+          {rows.map((row) => (
+            <ConversationRow key={row.session_id} row={row} state="ended" home={home} now={now}
+              disabled={!!rootError} onRebuild={() => rebuildConversation(hostId, row)} />
+          ))}
         </div>
+      )}
+      {unknownOwner > 0 && (
+        <p data-testid="worker-exited-unknown-owner" className="text-xs text-text-muted">
+          {t('settings.worker.exited.unknown_owner', { n: unknownOwner })}
+        </p>
       )}
     </div>
   )

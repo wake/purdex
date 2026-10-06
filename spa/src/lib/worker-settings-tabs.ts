@@ -1,12 +1,12 @@
 // spa/src/lib/worker-settings-tabs.ts — the tabs of Settings → Worker (conversation entity spec §9).
-// Appearance and Workers are built in; Exited, Dormant and Aigora plug in through `registerWorkerSettingsTab`.
+// Appearance and Workers are built in; Exited, Gone and Aigora plug in through `registerWorkerSettingsTab`.
 import type { ComponentType } from 'react'
 
 export interface WorkerSettingsTab {
   id: string
   labelKey: string
   order: number
-  /** Host-scoped tabs get a host picker and receive hostId. Later tabs (Dormant, Aigora) plug in here (spec §9). */
+  /** Host-scoped tabs get a host picker and receive hostId. Later tabs (Exited, Gone, Aigora) plug in here (spec §9). */
   hostScoped: boolean
   component: ComponentType<{ hostId?: string }>
 }
