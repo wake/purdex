@@ -4,11 +4,10 @@
 // guards that decide whether a list answer may still be committed. Where
 // the rendered cache lives is the caller's business (`useExecutionListStore`),
 // reached through the small `ListSink`.
-import { listExecutions } from './nex-api'
+import { listAllExecutions } from './list-all-executions'
 import { openNexSse, type NexSseHandle, type NexSseStatus } from './nex-sse'
 import { fingerprintOf } from './nex-host-effects'
 import { subscriptionSlots } from './subscription-slots'
-import { sanitizeExecutionsPage } from './validate-executions'
 import { NexApiError, type ExecutionSummary } from './types'
 import { isNexReady } from '../../components/hosts/nex/nex-ready'
 import { useNexHostStore } from '../../stores/useNexHostStore'
@@ -109,10 +108,11 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
       && infoReady(hostId)
       && rt.subscribers.size > 0
 
-    listExecutions(hostId, { includeArchived: false, limit: 100 })
-      .then((page) => {
-        if (!stillCurrent()) return
-        const { items, dropped } = sanitizeExecutionsPage(page)
+    listAllExecutions(hostId, { includeArchived: false }, stillCurrent)
+      .then((result) => {
+        if (!result || !stillCurrent()) return
+        const { items, dropped, truncated } = result
+        if (truncated) console.warn('nex: executions list truncated', { hostId })
         if (dropped > 0) console.warn('nex: executions page dropped malformed row(s)', { hostId, dropped })
         patchCache(hostId, (c) => ({ ...c, items, phase: 'ready', error: null, refreshRevision: c.refreshRevision + 1 }))
       })

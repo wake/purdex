@@ -12,10 +12,10 @@ describe('sanitizeExecutionsPage', () => {
   })
 
   it('a page whose items is not an array yields an empty list and one dropped page', () => {
-    expect(sanitizeExecutionsPage({ items: {} })).toEqual({ items: [], dropped: 1 })
-    expect(sanitizeExecutionsPage(null)).toEqual({ items: [], dropped: 1 })
-    expect(sanitizeExecutionsPage('nope')).toEqual({ items: [], dropped: 1 })
-    expect(sanitizeExecutionsPage({})).toEqual({ items: [], dropped: 1 })
+    expect(sanitizeExecutionsPage({ items: {} })).toEqual({ items: [], dropped: 1, nextCursor: '' })
+    expect(sanitizeExecutionsPage(null)).toEqual({ items: [], dropped: 1, nextCursor: '' })
+    expect(sanitizeExecutionsPage('nope')).toEqual({ items: [], dropped: 1, nextCursor: '' })
+    expect(sanitizeExecutionsPage({})).toEqual({ items: [], dropped: 1, nextCursor: '' })
   })
 
   it('drops rows without a string id or state, and non-object rows', () => {
@@ -165,5 +165,19 @@ describe('sanitizeExecutionsPage', () => {
       expect(sanitizeSummaryRollup(null)).toBeNull()
       expect(sanitizeSummaryRollup('x')).toBe('x')
     })
+  })
+})
+
+describe('sanitizeExecutionsPage nextCursor', () => {
+  it('passes a string next_cursor through', () => {
+    expect(sanitizeExecutionsPage({ items: [], next_cursor: 'x' }).nextCursor).toBe('x')
+  })
+  it('a non-string or missing next_cursor gives an empty string', () => {
+    expect(sanitizeExecutionsPage({ items: [], next_cursor: 5 }).nextCursor).toBe('')
+    expect(sanitizeExecutionsPage({ items: [] }).nextCursor).toBe('')
+  })
+  it('a malformed body gives an empty string', () => {
+    expect(sanitizeExecutionsPage(null).nextCursor).toBe('')
+    expect(sanitizeExecutionsPage({ items: {}, next_cursor: 'x' }).nextCursor).toBe('')
   })
 })

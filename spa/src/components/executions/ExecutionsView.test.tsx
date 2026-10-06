@@ -79,11 +79,11 @@ describe('ExecutionsView', () => {
     expect(ensure).toHaveBeenCalledWith(H)
   })
 
-  it('only includeArchived: false, limit: 100 is requested', async () => {
+  it('only includeArchived: false, limit: 500 is requested', async () => {
     render(<ExecutionsView hostId={H} isActive />)
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(api.listExecutions).toHaveBeenCalledTimes(1)
-    expect(api.listExecutions).toHaveBeenCalledWith(H, { includeArchived: false, limit: 100 })
+    expect(api.listExecutions).toHaveBeenCalledWith(H, { includeArchived: false, limit: 500 })
   })
 
   it('grouping order and labels (local / purdex i18n, unknown raw), newest first within and across groups', () => {

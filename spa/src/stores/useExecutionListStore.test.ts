@@ -98,7 +98,7 @@ describe('useExecutionListStore', () => {
     expect(subscriptionSlots.reserve).toHaveBeenCalledWith(A, 'site-wide')
     expect(capFor(A)).toBe(3)
     expect(api.listExecutions).toHaveBeenCalledTimes(1)
-    expect(api.listExecutions).toHaveBeenCalledWith(A, { includeArchived: false, limit: 100 })
+    expect(api.listExecutions).toHaveBeenCalledWith(A, { includeArchived: false, limit: 500 })
     expect(cache(A).phase).toBe('loading')
 
     await flush()
