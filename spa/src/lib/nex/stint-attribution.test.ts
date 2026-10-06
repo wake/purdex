@@ -82,10 +82,11 @@ describe('attributeItems', () => {
     expect(t.get(`${B_AT}.1`)).toBe(A2.id)
   })
 
-  it('equal boundaries: the later of the two in the list (the newer) takes the lines', () => {
+  it('equal boundaries: the newer (later createdAt) takes the lines, whatever the list order', () => {
     const early: Stint = { id: 'exc_early', boundary: A_AT, createdAt: 1, summary: SUMMARY }
     const late: Stint = { id: 'exc_late', boundary: A_AT, createdAt: 2, summary: SUMMARY }
     expect(attributeItems(items, [early, late]).get('394248.1')).toBe(late.id)
+    expect(attributeItems(items, [late, early]).get('394248.1')).toBe(late.id)
   })
 
   it('a worker line below the first stint\'s boundary, or with no offset, is not attributed', () => {

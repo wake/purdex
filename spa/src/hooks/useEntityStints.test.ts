@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
+import { renderHook, waitFor, act } from '@testing-library/react'
 
 vi.mock('../lib/nex/nex-api', () => ({ listExecutions: vi.fn(), fetchExecutionPrelude: vi.fn() }))
 import * as api from '../lib/nex/nex-api'
@@ -133,6 +133,69 @@ describe('useEntityStints', () => {
     release({ items: [row('old', 1)], next_cursor: '' })
     await new Promise((r) => setTimeout(r, 0))
     expect(result.current.stints.map((s) => s.id)).toEqual(['new'])
+  })
+
+  // Task 30: a tuple change (here the current stint: a new summary id) restarts the walk.
+  describe('tuple changes', () => {
+    const second = cur({ id: 'cur2' })
+
+    it('boundary answers that land after a tuple change are dropped', async () => {
+      const late: Record<string, (v: unknown) => void> = {}
+      vi.mocked(api.listExecutions)
+        .mockResolvedValueOnce({ items: [row('old', 1)], next_cursor: '' } as never)
+        .mockResolvedValueOnce({ items: [row('new', 2)], next_cursor: '' } as never)
+      vi.mocked(api.fetchExecutionPrelude).mockImplementation((_h, id) => (id === 'old'
+        ? new Promise((r) => { late.old = r }) as never
+        : Promise.resolve(prelude(9))))
+      const { result, rerender } = renderHook(({ s }) => useEntityStints('h', s, true), { initialProps: { s: cur() } })
+      await waitFor(() => expect(late.old).toBeDefined())
+      rerender({ s: second })
+      await waitFor(() => expect(result.current.status).toBe('ok'))
+      expect(result.current.stints.map((s) => s.id)).toEqual(['new'])
+      await act(async () => { late.old(prelude(5)) })
+      expect(result.current).toMatchObject({ status: 'ok', stints: [{ id: 'new', boundary: 9 }] })
+    })
+
+    it('the boundary cache outlives a tuple change: the same stint is not fetched twice', async () => {
+      vi.mocked(api.listExecutions).mockResolvedValue({ items: [row('a', 1)], next_cursor: '' } as never)
+      vi.mocked(api.fetchExecutionPrelude).mockResolvedValue(prelude(7))
+      const { result, rerender } = renderHook(({ s }) => useEntityStints('h', s, true), { initialProps: { s: cur() } })
+      await waitFor(() => expect(result.current.status).toBe('ok'))
+      rerender({ s: second })
+      await waitFor(() => expect(api.listExecutions).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(result.current.status).toBe('ok'))
+      expect(result.current.stints).toMatchObject([{ id: 'a', boundary: 7 }])
+      expect(api.fetchExecutionPrelude).toHaveBeenCalledTimes(1)
+    })
+
+    it('unavailable, then ok once the tuple changes and the new walk lists', async () => {
+      vi.mocked(api.listExecutions)
+        .mockRejectedValueOnce(new Error('down'))
+        .mockResolvedValueOnce({ items: [row('a', 1)], next_cursor: '' } as never)
+      vi.mocked(api.fetchExecutionPrelude).mockResolvedValue(prelude(7))
+      const { result, rerender } = renderHook(({ s }) => useEntityStints('h', s, true), { initialProps: { s: cur() } })
+      await waitFor(() => expect(result.current.status).toBe('unavailable'))
+      rerender({ s: second })
+      await waitFor(() => expect(result.current.status).toBe('ok'))
+      expect(result.current.stints.map((s) => s.id)).toEqual(['a'])
+    })
+  })
+
+  it('re-enabled with the same tuple: loading until the new walk settles, never the old result as ok', async () => {
+    vi.mocked(api.listExecutions).mockResolvedValueOnce({ items: [row('a', 1)], next_cursor: '' } as never)
+    vi.mocked(api.fetchExecutionPrelude).mockResolvedValue(prelude(7))
+    const { result, rerender } = renderHook(({ on }) => useEntityStints('h', cur(), on), { initialProps: { on: true } })
+    await waitFor(() => expect(result.current.status).toBe('ok'))
+    rerender({ on: false })
+    expect(result.current.status).toBe('idle')
+    let release!: (v: unknown) => void
+    vi.mocked(api.listExecutions).mockImplementationOnce(() => new Promise((r) => { release = r }) as never)
+    rerender({ on: true })
+    expect(result.current).toEqual({ stints: [], status: 'loading' })
+    expect(api.listExecutions).toHaveBeenCalledTimes(2)
+    release({ items: [row('a', 1), row('b', 2)], next_cursor: '' })
+    await waitFor(() => expect(result.current.status).toBe('ok'))
+    expect(result.current.stints.map((s) => s.id)).toEqual(['a', 'b'])
   })
 
   it('disabled, or without a session id, makes no request and stays idle', async () => {

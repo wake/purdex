@@ -20,11 +20,16 @@ import { getPrimaryPane } from '../../lib/pane-tree'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
+import { clearStintsSpy, stintsNow } from '../room/prelude/test-prelude-helpers'
+import { defaultPreludeState } from '../../lib/nex/prelude'
 
 vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn(), fetchExecutionEvents: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 vi.mock('../../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
+// Passed through, and spied on: what the pane last learnt of its earlier stints.
+vi.mock('../../hooks/useEntityStints', async (importOriginal) =>
+  (await import('../room/prelude/test-prelude-helpers')).passThroughEntityStints(importOriginal))
 // The take-back path runs the real orchestration (store swap, forget-before-
 // swap) against a mocked daemon call; `takeBack` itself is a pass-through spy
 // so the view's call shape (lease id, forgetLease identity) is observable.
@@ -52,6 +57,7 @@ const ensureLease = vi.fn(), release = vi.fn(), touch = vi.fn(), forget = vi.fn(
 const summary = (extra = {}) => ({ id: E, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/Users/w/repo', mount_kind: 'dev', brief: 'b', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 2, archived: false, effective_profile: 'standard', turn_count: 3, ...extra })
 
 beforeEach(() => {
+  clearStintsSpy()
   useExecutionStore.setState({ executions: {} })
   ensureLease.mockReset().mockResolvedValue('ls_1'); release.mockReset(); touch.mockReset(); forget.mockReset()
   vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease, release, forget, touch })
@@ -2144,7 +2150,7 @@ describe('ExecutionView — worker prelude', () => {
     const seg = (pos: string, offset: number, entrypoint: string) => ({ pos, at: 1, offset, kind: 'prelude.segment', entrypoint })
     const line = (pos: string, offset: number, text: string) => ({ pos, at: 1, offset, kind: 'user', msg: said(text) })
     const items = [seg('1', 0, 'cli'), line('2', 0, 'in the terminal'), seg('3', 500, 'sdk-cli'), line('4', 500, 'in the worker')]
-    const draw = (itemOffset: boolean, prelude: unknown[] = items, strict = false) => {
+    const draw = (itemOffset: boolean, prelude: unknown[] = items, strict = false, mode: 'room' | 'chat' = 'room') => {
       // `ensure` would re-resolve the (unregistered) test host and drop the seeded capabilities.
       useNexHostStore.setState({
         ensure: async () => {},
@@ -2154,7 +2160,7 @@ describe('ExecutionView — worker prelude', () => {
       patchExec({ messages: [said('the brief')], turnStarts: [0] })
       // The pane's own first page; also the earlier stint's boundary answer (total_bytes 500).
       vi.mocked(api.fetchExecutionPrelude).mockResolvedValue({ state: 'ok', prevCursor: null, totalBytes: 500, items: prelude } as never)
-      return render(strict ? <StrictMode><ExecutionView {...base} isActive /></StrictMode> : <ExecutionView {...base} isActive />)
+      return render(strict ? <StrictMode><ExecutionView {...base} mode={mode} isActive /></StrictMode> : <ExecutionView {...base} mode={mode} isActive />)
     }
     const earlier = summary({ id: 'exc_0', state: 'terminated', resume_session_id: S, created_at: 1 })
     afterEach(() => {
@@ -2185,7 +2191,8 @@ describe('ExecutionView — worker prelude', () => {
     })
 
     it('listed, unavailable or not listed at all: the very same prelude DOM (§10.6)', async () => {
-      const html = async (itemOffset: boolean, settled: () => void = () => {}) => {
+      // Each DOM is read only after a positive signal: what the listing settled as.
+      const html = async (itemOffset: boolean, settled: () => void) => {
         useExecutionStore.setState({ executions: {} })
         useExecutionStore.getState().setHistoryLoaded(H, E, true)
         const { unmount } = draw(itemOffset)
@@ -2196,12 +2203,32 @@ describe('ExecutionView — worker prelude', () => {
         unmount()
         return out
       }
-      const plain = await html(false)
+      const plain = await html(false, () => expect(stintsNow()).toEqual({ stints: [], status: 'idle' }))
       vi.mocked(api.listExecutions).mockRejectedValue(new Error('down'))
-      expect(await html(true, () => expect(api.listExecutions).toHaveBeenCalled())).toBe(plain)
-      // Listed: exc_0's boundary (500) attributes the worker segment to it, and still nothing shows.
+      expect(await html(true, () => expect(stintsNow()).toEqual({ stints: [], status: 'unavailable' }))).toBe(plain)
+      // Listed: exc_0's boundary (500) attributes the worker segment to it (its run asks for exc_0's
+      // events, still loading), and still nothing shows.
+      vi.mocked(api.fetchExecutionEvents).mockReset().mockReturnValue(new Promise(() => {}) as never)
       vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
-      expect(await html(true, () => expect(api.fetchExecutionPrelude).toHaveBeenCalledWith(H, 'exc_0', { limit: 1 }))).toBe(plain)
+      expect(await html(true, () => {
+        expect(stintsNow()).toMatchObject({ status: 'ok', stints: [{ id: 'exc_0', boundary: 500 }] })
+        expect(api.fetchExecutionEvents).toHaveBeenCalledWith(H, 'exc_0', expect.anything())
+      })).toBe(plain)
+    })
+
+    it('no request while the pane is not prelude-eligible (no resume id), a worker segment loaded or not', async () => {
+      vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
+      useNexHostStore.setState({
+        ensure: async () => {},
+        byHost: { [H]: { phase: 'ready', capabilities: { transcript_prelude: { ...CAP, item_offset: true }, list: { session_filter: true } } } },
+      } as never)
+      // A session id the listing could go by, but no resume id: not eligible (D4). The worker segment is in the store.
+      useExecutionStore.getState().setSummary(H, E, summary({ session_id: S }) as never)
+      patchExec({ messages: [said('the brief')], turnStarts: [0], prelude: { ...defaultPreludeState(), status: 'ok', items, done: true, pages: 1 } as never })
+      render(<ExecutionView {...base} isActive />)
+      await act(async () => {})
+      expect(stintsNow()).toEqual({ stints: [], status: 'idle' })
+      expect(api.listExecutions).not.toHaveBeenCalled()
     })
 
     // §10.4: the pane's one cache fetches the attributed segment's stint once;
@@ -2260,6 +2287,46 @@ describe('ExecutionView — worker prelude', () => {
         await act(async () => settle({ items: [], next_cursor: 0 }))
         expect(highlights.get('search-current')).not.toBe(marked)
         expect(highlights.get('search-current')?.ranges.map(String)).toEqual(['worker'])
+      } finally {
+        ;[g.CSS, g.Highlight] = saved
+      }
+    })
+
+    // #1617: chat draws an attributed call by the stint's enriched status, so
+    // search must sort it into the same fold, or a jump opens the wrong one.
+    it('chat: search reveals a call the enrichment failed in its failed line, not the tools line', async () => {
+      class FakeHighlight {
+        ranges: Range[] = []
+        add(range: Range) { this.ranges.push(range); return this }
+      }
+      const g = globalThis as unknown as { CSS?: unknown; Highlight?: unknown }
+      const saved = [g.CSS, g.Highlight]
+      const highlights = new Map<string, FakeHighlight>()
+      g.CSS = { highlights }
+      g.Highlight = FakeHighlight
+      Element.prototype.scrollTo = vi.fn() as unknown as Element['scrollTo']
+      try {
+        const assistant = { type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_x', name: 'Bash', input: { command: 'make deploy' } }], stop_reason: null } }
+        // The transcript's own result carries no is_error: the call reads done.
+        const result = { type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_x', content: 'deploy blew up' }], stop_reason: null } }
+        const call = [...items, { pos: '5', at: 1, offset: 600, kind: 'assistant', msg: assistant }, { pos: '6', at: 1, offset: 700, kind: 'user', msg: result }]
+        vi.mocked(api.listExecutions).mockResolvedValue({ items: [earlier], next_cursor: '' } as never)
+        // exc_0's own N2 event says the call failed.
+        vi.mocked(api.fetchExecutionEvents).mockReset().mockResolvedValue({
+          items: [{ seq: 1, execution_id: 'exc_0', kind: 'tool_result', payload: { tool_use_id: 'toolu_x', status: 'error' }, created_at: 1 }], next_cursor: 0,
+        } as never)
+        draw(true, call, false, 'chat')
+        // Settled: the call left the tools line for its own failed line.
+        await screen.findByTestId('chat-failed-line')
+        fireEvent.pointerDown(screen.getAllByRole('textbox').at(-1)!)
+        fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true })
+        fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'blew up' } })
+        expect(screen.getByTestId('transcript-search-count')).toHaveTextContent('1 / 1')
+        // The jump opened the failed line, and the mark sits in its connected output.
+        const marks = highlights.get('search-current')?.ranges ?? []
+        expect(marks.map(String)).toEqual(['blew up'])
+        expect(marks[0].startContainer.isConnected).toBe(true)
+        expect(screen.getByTestId('chat-failed-op')).toContainElement(marks[0].startContainer.parentElement)
       } finally {
         ;[g.CSS, g.Highlight] = saved
       }

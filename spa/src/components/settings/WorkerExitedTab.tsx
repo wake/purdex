@@ -64,14 +64,15 @@ function ExitedList({ hostId }: { hostId: string }) {
           {t('settings.worker.exited.truncated', { n: LIST_PAGE_LIMIT * LIST_MAX_PAGES })}
         </p>
       )}
-      {phase === 'loading' && items.length === 0 && (
+      {/* The first walk, or a retry after an error, which keeps its rows below this line (a background walk stays 'ready'). */}
+      {phase === 'loading' && (
         <p data-testid="worker-exited-loading" className="text-xs text-text-muted" aria-busy="true">{t('executions.loading')}</p>
       )}
       {phase === 'ready' && rows.length === 0 && (
         <p data-testid="worker-exited-empty" className="text-xs text-text-muted">{t('settings.worker.exited.empty')}</p>
       )}
       {rows.length > 0 && (
-        <div role="list" className="flex flex-col">
+        <div role="list" aria-busy={phase === 'loading' ? 'true' : undefined} className="flex flex-col">
           {rows.map((row) => {
             const age = relativeAge(row.updated_at, now)
             const running = !!row.session_id && inTerminal.has(row.session_id)

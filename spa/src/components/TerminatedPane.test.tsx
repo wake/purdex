@@ -402,6 +402,37 @@ describe('TerminatedPane rebuild as worker', () => {
     expect(ensure).toHaveBeenCalledWith(H)
   })
 
+  it('a mode toggle clears a stale rebuild error', async () => {
+    vi.mocked(rebuildAsWorker).mockRejectedValue(new HandoffApiError(409, 'session_owned', { owner: 'worker' }))
+    renderTerminated(fullRecord)
+    fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+    fireEvent.click(screen.getByTestId('terminated-rebuild-worker'))
+    await screen.findByTestId('terminated-rebuild-error')
+    fireEvent.click(screen.getByTestId('rebuild-mode-terminal'))
+    fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+    expect(screen.queryByTestId('terminated-rebuild-error')).toBeNull()
+  })
+
+  it('a failing readiness check is handled: the terminal screen stays in charge', async () => {
+    // jsdom's types leave out Node's process; the rejection would surface there.
+    const proc = (globalThis as unknown as { process: { on(e: string, f: () => void): void; off(e: string, f: () => void): void } }).process
+    const unhandled = vi.fn()
+    proc.on('unhandledRejection', unhandled)
+    try {
+      // A plain function, not vi.fn: a mock's own settledResults bookkeeping would handle the rejection.
+      let asked = 0
+      useNexHostStore.setState({ byHost: {}, ensure: () => { asked++; return Promise.reject(new Error('down')) } } as never)
+      renderTerminated(fullRecord)
+      expect(asked).toBe(1)
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+      expect(unhandled).not.toHaveBeenCalled()
+      expect(screen.queryByTestId('rebuild-mode-worker')).toBeNull()
+      expect(screen.getByTestId('session-picker')).toBeInTheDocument()
+    } finally {
+      proc.off('unhandledRejection', unhandled)
+    }
+  })
+
   describe('one operation lock per pane', () => {
     const lockOwner = `rebuild:${PANE_ID}`
     it('a terminal rebuild in progress disables the choice and the worker button, and sends nothing', () => {

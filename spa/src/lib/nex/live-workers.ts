@@ -4,7 +4,7 @@
 import type { ExecutionSummary } from './types'
 
 /** Spec §4.2: live = not archived and not terminated (failed / rejected still count as live). */
-export const isLiveRow = (row: ExecutionSummary): boolean => !row.archived && row.state !== 'terminated'
+export const isLiveRow = (row: Pick<ExecutionSummary, 'archived' | 'state'>): boolean => !row.archived && row.state !== 'terminated'
 
 /** A conversation's identity: its session id, else the one it resumes (before turn 1), else the row id. */
 export const entityKeyOf = (row: ExecutionSummary): string => row.session_id || row.resume_session_id || row.id

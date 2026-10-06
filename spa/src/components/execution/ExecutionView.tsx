@@ -42,6 +42,7 @@ import { derivePrelude } from '../../lib/nex/prelude'
 import { attributeItems, isWorkerEntrypoint, NO_ATTRIBUTION } from '../../lib/nex/stint-attribution'
 import { useEntityStints } from '../../hooks/useEntityStints'
 import { createStintEnrichmentCache } from '../../lib/nex/stint-enrichment-cache'
+import { withStintTools } from '../../lib/nex/stint-enrichment'
 import { StintEnrichmentContext } from '../../hooks/useStintEnrichment'
 import PreludeSection from '../room/prelude/PreludeSection'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
@@ -150,6 +151,14 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   }, [enrichment])
   const enrichmentRevision = useSyncExternalStore(enrichment.subscribe, enrichment.revision)
   const preludeRedraw = useMemo(() => ({ attribution, enrichmentRevision }), [attribution, enrichmentRevision])
+  // Search sorts the prelude's calls with the tools the screen draws them by
+  // (#1617): every settled stint's entries over the transcript's. tool_use ids
+  // are unique across stints, so one map serves every segment. Keyed by
+  // `preludeRedraw`, which changes with the attribution and on every settle.
+  const searchPrelude = useMemo(
+    () => withStintTools(preludeView, preludeRedraw.attribution, enrichment.get),
+    [preludeView, preludeRedraw, enrichment],
+  )
   const lease = useExecutionLease(hostId, executionId)
   const { draft, actionPending, handleSend, handleInterrupt, restoreDraft } = useExecutionActions(hostId, executionId, lease)
   // Spec §9.2 (phase E): native images only when the host's capability
@@ -624,7 +633,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
             <TranscriptSearch owner={paneId} container={scrollBox} messages={st.messages} tools={st.tools}
               view={chat ? 'chat' : 'room'} keyPrefix={executionId} turnStarts={st.turnStarts}
               onClose={closeSearch} focusRequest={focusRequest} onJump={onSearchJump}
-              prelude={preludeEligible && st.prelude.status !== 'idle' && st.prelude.status !== 'none' ? preludeView : undefined}
+              prelude={preludeEligible && st.prelude.status !== 'idle' && st.prelude.status !== 'none' ? searchPrelude : undefined}
               preludeDone={st.prelude.done} onLoadAll={() => { preludeApi.retry(); return preludeApi.loadAll() }}
               preludeRedraw={preludeRedraw} />
           )}

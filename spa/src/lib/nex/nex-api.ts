@@ -98,7 +98,9 @@ export function listExecutions(hostId: string, opts: ListExecutionsOptions = {})
   if (opts.cursor) q.set('cursor', opts.cursor)
   if (opts.limit) q.set('limit', String(opts.limit))
   if (opts.sessionId) q.set('session_id', opts.sessionId)
-  for (const k of Object.keys(opts.labels ?? {}).sort()) q.set(`label.${k}`, opts.labels![k])
+  // By key in code-unit order, as `.sort()` orders the keys alone.
+  const labels = Object.entries(opts.labels ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  for (const [k, v] of labels) q.set(`label.${k}`, v)
   const qs = q.toString()
   return nexFetch(hostId, `/v1/executions${qs ? `?${qs}` : ''}`).then((r) => okJson<ExecutionsPage>(r))
 }

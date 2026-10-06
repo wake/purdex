@@ -27,8 +27,21 @@ describe('nex-worker-exited', () => {
     expect(parseWorkerExited(value({ execution_id: 'E1' })))
       .toEqual({ executionId: 'E1', sessionId: 'S', reason: 'manual_resume', tmuxSession: 'proj-2' })
     expect(parseWorkerExited({ execution_id: 'E1' })).toMatchObject({ executionId: 'E1', tmuxSession: '' })
-    expect(parseWorkerExited('nope')).toBeNull()
     expect(parseWorkerExited('{"session_id":"S"}')).toBeNull()
+  })
+
+  it('a value that is not JSON logs a debug line naming the event, never the value', () => {
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    try {
+      expect(parseWorkerExited('nope')).toBeNull()
+      expect(parseWorkerExited('{"execution_id":"E1","secret')).toBeNull()
+      expect(debug).toHaveBeenCalledTimes(2)
+      const line = debug.mock.calls[1].map(String).join(' ')
+      expect(line).toContain('nex-worker-exited')
+      expect(line).not.toContain('secret')
+    } finally {
+      debug.mockRestore()
+    }
   })
 
   it('names the worker by its list row, else the tmux session, else the execution id', () => {

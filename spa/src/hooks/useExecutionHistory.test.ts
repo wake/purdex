@@ -122,4 +122,19 @@ describe('useExecutionHistory', () => {
     expect(result.current.error).toContain('malformed')
     expect(result.current.items).toHaveLength(1)
   })
+
+  it('a retry after an error reports loading until its walk settles', async () => {
+    listAll.mockRejectedValueOnce(new Error('down'))
+    const { result } = renderHook(() => useExecutionHistory('h1'))
+    await waitFor(() => expect(result.current.phase).toBe('error'))
+    let answer!: (v: unknown) => void
+    listAll.mockReturnValueOnce(new Promise((r) => { answer = r }))
+    act(() => { result.current.refetch() })
+    expect(listAll).toHaveBeenCalledTimes(2)
+    expect(result.current.phase).toBe('loading')
+    expect(result.current.error).toBeNull()
+    await act(async () => { answer(res([row('a')])) })
+    expect(result.current.phase).toBe('ready')
+    expect(result.current.items).toHaveLength(1)
+  })
 })

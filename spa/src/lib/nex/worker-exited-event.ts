@@ -14,7 +14,13 @@ const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 export function parseWorkerExited(value: unknown): WorkerExitedEvent | null {
   let o: unknown = value
   if (typeof value === 'string') {
-    try { o = JSON.parse(value) } catch { return null }
+    try {
+      o = JSON.parse(value)
+    } catch {
+      // The event's name only: the value (and the parse error, which quotes it) may carry a session id.
+      console.debug('nex-worker-exited: value is not JSON; ignored')
+      return null
+    }
   }
   if (!o || typeof o !== 'object') return null
   const r = o as Record<string, unknown>

@@ -141,6 +141,16 @@ describe('WorkerEndedPane', () => {
     expect(await screen.findByTestId('worker-rebuild-error')).toBeInTheDocument()
   })
 
+  it('a mode toggle clears a stale rebuild error', async () => {
+    vi.mocked(takeToTerminal).mockRejectedValue(new HandoffApiError(409, 'session_owned', { owner: 'worker' }))
+    renderPane(sum({ state: 'terminated', archived: true, session_id: 'S', cwd: '/w' }))
+    fireEvent.click(screen.getByTestId('rebuild-mode-terminal'))
+    fireEvent.click(screen.getByTestId('worker-rebuild'))
+    await screen.findByTestId('worker-rebuild-error')
+    fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+    expect(screen.queryByTestId('worker-rebuild-error')).toBeNull()
+  })
+
   describe('exit on a failed stint', () => {
     const failed = () => sum({ state: 'rejected', reject_reason: 'x', resume_session_id: 'S', cwd: '/w' })
     // Reads the summary from the store like ExecutionView does, so the patch re-renders the pane.
@@ -171,6 +181,15 @@ describe('WorkerEndedPane', () => {
       renderPane(failed())
       fireEvent.click(screen.getByTestId('worker-ended-exit'))
       expect(await screen.findByTestId('worker-rebuild-error')).toHaveTextContent('ploom:agent-7')
+    })
+
+    it('an exit error is not a rebuild error: a mode toggle leaves it', async () => {
+      vi.mocked(exitWorker).mockRejectedValue(new HandoffApiError(409, 'held_by', { principal: 'ploom:agent-7' }))
+      renderPane(failed())
+      fireEvent.click(screen.getByTestId('worker-ended-exit'))
+      await screen.findByTestId('worker-rebuild-error')
+      fireEvent.click(screen.getByTestId('rebuild-mode-terminal'))
+      expect(screen.getByTestId('worker-rebuild-error')).toHaveTextContent('ploom:agent-7')
     })
 
     it('disables exit and rebuild while the exit is in flight', async () => {

@@ -58,6 +58,23 @@ describe('listAllExecutions', () => {
     expect(api.listExecutions).toHaveBeenCalledTimes(1)
   })
 
+  it('a rejection mid-walk (page 2) rejects the walk', async () => {
+    vi.mocked(api.listExecutions)
+      .mockResolvedValueOnce({ items: [row('a')], next_cursor: 'a' } as never)
+      .mockRejectedValueOnce(new Error('down'))
+    await expect(listAllExecutions('h1', { includeArchived: true })).rejects.toThrow('down')
+    expect(api.listExecutions).toHaveBeenCalledTimes(2)
+  })
+
+  it('the caller going stale during page 2 resolves null and asks for no page 3', async () => {
+    let current = true
+    vi.mocked(api.listExecutions)
+      .mockResolvedValueOnce({ items: [row('a')], next_cursor: 'a' } as never)
+      .mockImplementationOnce((async () => { current = false; return { items: [row('b')], next_cursor: 'b' } }) as never)
+    expect(await listAllExecutions('h1', { includeArchived: true }, () => current)).toBeNull()
+    expect(api.listExecutions).toHaveBeenCalledTimes(2)
+  })
+
   it('counts malformed rows and keeps going', async () => {
     vi.mocked(api.listExecutions).mockResolvedValueOnce({ items: [row('a'), { nope: 1 }], next_cursor: '' } as never)
     const r = await listAllExecutions('h1', { includeArchived: false })

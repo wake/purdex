@@ -26,6 +26,7 @@ export function RebuildModeChoice({
 }: RebuildModeChoiceProps) {
   const t = useI18nStore((s) => s.t)
   const hintId = useId()
+  const labelId = useId()
   const refs = useRef<Partial<Record<RebuildMode, HTMLButtonElement | null>>>({})
   const options: { mode: RebuildMode; label: string; available: boolean; hint?: string }[] = [
     { mode: 'terminal', label: t('worker.rebuild.terminal'), available: terminalAvailable },
@@ -51,11 +52,11 @@ export function RebuildModeChoice({
     <div className="flex flex-col items-center gap-1">
       <div
         role="radiogroup"
-        aria-label={t('worker.rebuild.mode_label')}
+        aria-labelledby={labelId}
         aria-describedby={showHint ? hintId : undefined}
         className="inline-flex items-center gap-2 text-sm"
       >
-        <span className="text-zinc-500">{t('worker.rebuild.mode_label')}</span>
+        <span id={labelId} className="text-zinc-500">{t('worker.rebuild.mode_label')}</span>
         {options.map((o) => {
           const checked = value === o.mode
           return (

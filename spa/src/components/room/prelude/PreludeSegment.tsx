@@ -79,6 +79,9 @@ const THUMBNAIL_SLOT = Object.freeze({ type: 'purdex_thumbnail_slot' }) as unkno
  */
 const isOmittedImage = (b: ContentBlock): boolean => b.type === 'image' && isOmittedMedia(b)
 
+/** A span's message indexes, in order. */
+const spanIndexes = (b: { start: number; end: number }): number[] => Array.from({ length: b.end - b.start }, (_, i) => b.start + i)
+
 /**
  * The prompt lines that draw thumbnails, by message index; null = none do. The segment's opening lines
  * that carry omitted images pair with the stint's attachment lists (k-th with k-th) only when both
@@ -125,13 +128,13 @@ export default function PreludeSegment(props: PreludeSegmentProps) {
     if (!enrichment) return out
     const spans: number[][] = []
     if (chatBlocks) {
-      for (const b of chatBlocks) if (b.kind === 'span') spans.push(Array.from({ length: b.end - b.start }, (_, i) => b.start + i))
+      for (const b of chatBlocks) if (b.kind === 'span') spans.push(spanIndexes(b))
     } else if (entries) {
       const inRun = new Set<number>()
       for (const e of entries) if (e.kind === 'message') inRun.add(e.m)
       for (const b of preludeBlocks(view)) {
         if (b.kind !== 'span') continue
-        const held = Array.from({ length: b.end - b.start }, (_, i) => b.start + i).filter((i) => inRun.has(i))
+        const held = spanIndexes(b).filter((i) => inRun.has(i))
         if (held.length > 0) spans.push(held)
       }
     }
@@ -164,16 +167,17 @@ export default function PreludeSegment(props: PreludeSegmentProps) {
   const thumbed = useMemo(() => {
     if (!enrichment || enrichment.attachmentsByPrompt.length === 0) return null
     const drawn = chatBlocks
-      ? chatBlocks.flatMap((b) => (b.kind === 'span' ? Array.from({ length: b.end - b.start }, (_, i) => b.start + i) : []))
+      ? chatBlocks.flatMap((b) => (b.kind === 'span' ? spanIndexes(b) : []))
       : (entries ?? []).flatMap((e) => (e.kind === 'message' ? [e.m] : []))
     return thumbnailPrompts(view.messages, drawn, enrichment.attachmentsByPrompt)
   }, [enrichment, chatBlocks, entries, view.messages])
+  // Chat only: the room swaps a thumbed line in row by row.
   const chatMessages = useMemo(() => {
-    if (!thumbed) return view.messages
+    if (!chatBlocks || !thumbed) return view.messages
     const out = view.messages.slice()
     for (const [i, msg] of thumbed) out[i] = msg
     return out
-  }, [thumbed, view.messages])
+  }, [chatBlocks, thumbed, view.messages])
   const paneSource = useContext(AttachmentSourceContext)
   const stintSource = useMemo(() => (props.stintId === null ? null : { hostId: props.hostId, executionId: props.stintId }), [props.hostId, props.stintId])
   const source = thumbed && stintSource ? stintSource : paneSource

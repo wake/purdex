@@ -171,6 +171,11 @@ describe('isOpeningLine', () => {
       expect(isOpeningLine(line([{ type: 'text', text: INTERRUPT_TEXT }]))).toBe(false)
     })
 
+    it('the interrupt sentinel with an image opens a turn: the image is the prompt', () => {
+      expect(isOpeningLine(line([{ type: 'text', text: INTERRUPT_TEXT }, img]))).toBe(true)
+      expect(isOpeningLine(line([img, { type: 'text', text: INTERRUPT_TEXT }]))).toBe(true)
+    })
+
     it('live: the reducer\'s attachment-only bubble opens its turn exactly as before (an empty text block, images on the side)', () => {
       const sha = 'a'.repeat(64)
       const ev = (seq: number, kind: string, payload: Record<string, unknown>): NexEvent => ({ seq, execution_id: 'exc', kind, payload, created_at: seq })

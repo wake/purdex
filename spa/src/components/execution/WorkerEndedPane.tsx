@@ -42,7 +42,8 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
   const handoffReady = useNexHostStore(selectHandoffReady(hostId))
   const [choice, setChoice] = useState<RebuildMode>('worker')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // What failed last: a rebuild (in the mode it was tried in) or the exit.
+  const [error, setError] = useState<{ message: string; from: 'rebuild' | 'exit' } | null>(null)
   const inFlight = useRef(false)
   const [exiting, setExiting] = useState(false)
   const exitInFlight = useRef(false)
@@ -57,6 +58,11 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
     ? (workerAvailable || !terminalAvailable ? 'worker' : 'terminal')
     : (terminalAvailable || !workerAvailable ? 'terminal' : 'worker')
   const nothingAvailable = !terminalAvailable && !workerAvailable
+  // A rebuild error belongs to the mode it was tried in; an exit error is not about the mode.
+  const changeMode = (m: RebuildMode) => {
+    if (m !== mode) setError((e) => (e?.from === 'rebuild' ? null : e))
+    setChoice(m)
+  }
 
   const rebuild = async () => {
     if (inFlight.current || exitInFlight.current || nothingAvailable) return
@@ -76,9 +82,10 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
         announceRebuildOutcome(t, hostId, outcome)
       }
     } catch (err) {
-      setError(mode === 'terminal' && err instanceof HandoffApiError
+      const message = mode === 'terminal' && err instanceof HandoffApiError
         ? (err.code === 'session_owned' ? rebuildErrorMessage(err, t) : t('worker.rebuild.failed', { reason: handoffErrorMessage(t, err) }))
-        : rebuildErrorMessage(err, t))
+        : rebuildErrorMessage(err, t)
+      setError({ message, from: 'rebuild' })
     } finally {
       inFlight.current = false
       setBusy(false)
@@ -96,7 +103,7 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
       // As ExecutionView.runExit: patch at once, the SSE confirms later; this pane turns into "exited".
       useExecutionStore.getState().applySummaryPatch(hostId, executionId, { state: result.state, archived: result.archived })
     } catch (err) {
-      setError(exitErrorMessage(err, t))
+      setError({ message: exitErrorMessage(err, t), from: 'exit' })
     } finally {
       exitInFlight.current = false
       setExiting(false)
@@ -120,7 +127,7 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
       <div className="flex flex-col items-center gap-3 w-full max-w-lg">
         <RebuildModeChoice
           value={mode}
-          onChange={setChoice}
+          onChange={changeMode}
           terminalAvailable={terminalAvailable}
           workerAvailable={workerAvailable}
           workerUnavailableHint={t('worker.rebuild.worker_unavailable')}
@@ -145,7 +152,7 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
             {t('worker.exit.button')}
           </button>
         )}
-        {error && <p data-testid="worker-rebuild-error" role="alert" className="text-sm text-red-400">{error}</p>}
+        {error && <p data-testid="worker-rebuild-error" role="alert" className="text-sm text-red-400">{error.message}</p>}
       </div>
     </RebuildScreen>
   )

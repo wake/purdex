@@ -109,7 +109,11 @@ export function useExecutionHistory(hostId: string): ExecutionHistory {
     api.current.request(hostId, true)
   }, [hostId, revision])
 
-  const refetch = useCallback(() => api.current.request(hostId, false), [hostId])
+  // A retry after an error is loading again (the tab's loading state) until its walk settles.
+  const refetch = useCallback(() => {
+    setState((cur) => (cur.hostId === hostId && cur.phase === 'error' ? { ...cur, phase: 'loading', error: null } : cur))
+    api.current.request(hostId, false)
+  }, [hostId])
 
   // A different host's rows never show for this one, even for the render before its effect runs.
   const cur = state.hostId === hostId ? state : fresh(hostId)

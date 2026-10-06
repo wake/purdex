@@ -305,6 +305,21 @@ describe('PreludeSection chat form', () => {
     expect(screen.getAllByTestId('chat-tools-line')).toHaveLength(2)
   })
 
+  // #1539: an image-only prompt opens its own span, so the work it asked for is drawn after it, never folded above it.
+  it('an image-only prompt: the tools line that follows it is drawn after its bubble', () => {
+    const view = derivePrelude([
+      m('2', 'user', [{ type: 'text', text: 'one' }]), m('3', 'assistant', [call('a')]), m('4', 'user', [result('a', 'x')]),
+      m('5', 'user', [{ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 2048 } }]),
+      m('6', 'assistant', [call('b')]), m('7', 'user', [result('b', 'y')]),
+    ])
+    render(<PreludeSection {...chat} view={view} status="ok" done />)
+    const [before, after] = screen.getAllByTestId('chat-tools-line')
+    const image = screen.getByText('[image · png · 2 KB]')
+    expect(screen.getAllByTestId('chat-tools-line')).toHaveLength(2)
+    expect(before.compareDocumentPosition(image) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(image.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('hides thinking', () => {
     const view = derivePrelude([m('2', 'assistant', [{ type: 'thinking', thinking: 'deep thought' }, { type: 'text', text: 'answer' }])])
     render(<PreludeSection {...chat} view={view} status="ok" done />)
@@ -1165,6 +1180,18 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection attachmen
     await waitFor(() => expect(thumbs(row('2'))).toHaveLength(1))
     expect(placeholders()).toEqual([])
     expect(units()).toEqual(before)
+  })
+
+  it('the thumbnail slot itself draws nothing: a row with slots is the row without them', () => {
+    const slot = { type: 'purdex_thumbnail_slot' }
+    const prompt = (content: unknown[]) => derivePrelude([
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+      m('2', 'user', [{ type: 'text', text: 'compare these' }, ...content]),
+      m('3', 'assistant', [{ type: 'text', text: 'they differ' }]),
+    ])
+    const withSlots = plainDom(prompt([slot, slot]))
+    expect(withSlots).toBe(plainDom(prompt([])))
+    expect(withSlots).toContain('compare these')
   })
 
   it('never mutates the transcript\'s own messages', async () => {

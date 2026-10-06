@@ -4,6 +4,7 @@
 // `useAgentStore`'s consumers are reused unchanged (spec §8.1–8.2).
 import type { TurnOutcome } from './event-reducer'
 import type { SubagentRef } from '../../stores/useAgentStore'
+import { isLiveRow } from './live-workers'
 
 /**
  * The `useAgentStore` key namespace for a worker tab (spec §8.1): the agent
@@ -50,7 +51,7 @@ export interface WorkerProjection {
 /**
  * Worker state → the same agent-light status terminal tabs use (spec §8.2).
  * Rules apply in order, first match wins:
- * 1. `archived`, or execution `state === 'terminated'` → `clear`.
+ * 1. not live (`isLiveRow`: `archived`, or execution `state === 'terminated'`) → `clear`.
  * 2. `state === 'rejected'` (rejected before any turn ran) → `error`.
  * 3. a live turn, or `state` `queued`/`running` → `running`. This is also
  *    the error guard: it is checked before rule 4, so a stale `error` is
@@ -71,7 +72,7 @@ export function projectWorkerStatus(input: WorkerStatusInput): WorkerProjection 
   }))
 
   let status: WorkerProjection['status']
-  if (input.archived || input.state === 'terminated') {
+  if (!isLiveRow(input)) {
     status = 'clear'
   } else if (input.state === 'rejected') {
     status = 'error'

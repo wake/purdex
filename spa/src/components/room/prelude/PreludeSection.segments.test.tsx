@@ -7,19 +7,15 @@ import { render, screen } from '@testing-library/react'
 import { useEffect, useState } from 'react'
 import PreludeSection from './PreludeSection'
 import type { PreludeSegmentProps } from './PreludeSegment'
+import { segmentPoses } from './test-prelude-helpers'
 import { derivePrelude } from '../../../lib/nex/prelude'
 import { sanitizePreludePage } from '../../../lib/nex/prelude-wire'
 import real from '../../../lib/nex/__fixtures__/prelude-06GGS8J1YKZCPF4BRXZTX764F4.json'
 
 const events: string[] = []
-/** Every pos a run draws (a span: each message's) and its last one. */
-function posesOf(p: PreludeSegmentProps): string[] {
-  if (p.mode === 'room') return p.entries.map((e) => e.pos)
-  return p.blocks.flatMap((b) => (b.kind === 'span' ? p.posOf.slice(b.start, b.end) : [b.entry.pos]))
-}
 vi.mock('./PreludeSegment', () => ({
   default: function MockSegment(p: PreludeSegmentProps) {
-    const poses = posesOf(p)
+    const poses = segmentPoses(p)
     // Named once, at mount: a run's first pos moves when an older page joins it.
     const [name] = useState(() => `${p.stintId ?? 'plain'}@${poses[0]}`)
     useEffect(() => {

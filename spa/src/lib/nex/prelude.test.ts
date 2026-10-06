@@ -200,6 +200,20 @@ describe('preludeBlocks — a pasted-only prompt (U3)', () => {
   })
 })
 
+describe('preludeBlocks — an image-only prompt (#1539)', () => {
+  it('opens a new chat span; the agent\'s work before it stays in the previous span', () => {
+    const v = derivePrelude([
+      msg('1', 'user', [{ type: 'text', text: 'q1' }]),
+      msg('2', 'assistant', [{ type: 'tool_use', id: 'a', name: 'Bash', input: {} }]),
+      msg('3', 'user', [{ type: 'tool_result', tool_use_id: 'a', content: 'out' }]),
+      msg('4', 'user', [{ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 3 } }]),
+      msg('5', 'assistant', [{ type: 'tool_use', id: 'b', name: 'Bash', input: {} }]),
+      msg('6', 'user', [{ type: 'tool_result', tool_use_id: 'b', content: 'out' }]),
+    ])
+    expect(preludeBlocks(v)).toEqual([{ kind: 'span', start: 0, end: 3 }, { kind: 'span', start: 3, end: 6 }])
+  })
+})
+
 describe('Nexen golden page (spec §4.6)', () => {
   const page = sanitizePreludePage(golden)!
   const view = derivePrelude(page.items)
