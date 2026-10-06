@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.527] - 2026-10-07
+
+> 只動 SPA，透過 HMR 生效、不需部署 daemon。**從這版起 Purdex.app 會收到 lead 申請並跳出核准對話框**（daemon 需在 alpha.518 以上，mlab 已是 alpha.523）。資料庫、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P3b（#1689）
+
+lead 申請的核准流程在 App 端接通（spec §6.3、§9.4、§9.5）：
+
+- **事件接線**：daemon 的 `approval.request` 事件（新連線時整組 snapshot、申請開啟、申請關閉）進入 store；別的 client 先回應時，這邊關掉對話框並提示「<主機>：<session> 的 lead 申請 已由 <client> 核准／拒絕」。
+- **重連**：daemon 重啟期間按下的決定，重連拿到 snapshot 後只送出一次；若申請已在斷線期間結束，提示「等待期間已結束」。
+- **系統通知**：申請開啟時跳「<主機>：<session> 申請成為 lead」，點了只把 App 視窗帶到前面（對話框已經在那裡）；snapshot 不會重複通知。
+- **重啟確認對話框**多一行「N 個申請等待核准」（向 daemon 查 inflight，3 秒內查不到就用本地數字；為 0 時不顯示）。
+- `approval.*` 文案 en／zh-TW 完整對齊，由測試鎖定。
+
+至此 **lead 申請（P2＋P3）端到端可用**：agent 跑 `pdx lead request` → 任一台 Purdex.app 按一下核准 → CLI 拿到 grant。team 與 spawn 在 P4。
+
 ## [1.0.0-alpha.526] - 2026-10-07
 
 > 只動 SPA，透過 HMR 生效、不需部署 daemon。**對話框已掛上畫面，但要等 P3b 接上事件之後才會收到申請**（這版開著 App 不會看到任何變化）。資料庫、Electron 都沒有改動。
