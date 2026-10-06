@@ -71,6 +71,12 @@ export interface TranscriptSearchProps {
   /** Every page of the prelude is loaded. */
   preludeDone?: boolean
   onLoadAll?: () => Promise<void>
+  /**
+   * Any value whose identity changes when the prelude is redrawn while its
+   * view stays the same: its runs re-keyed by attribution (conversation
+   * entity spec §10.3) or, later, its segments enriched. Only re-marks.
+   */
+  preludeRedraw?: unknown
 }
 
 const NO_RESULT: SearchResult = { matches: [], truncated: false, truncatedBefore: false, truncatedAfter: false }
@@ -113,7 +119,7 @@ function scrollToEnd(el: HTMLElement): void {
 const BUTTON = 'p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none'
 
 export default function TranscriptSearch({
-  owner, container, messages, tools, view, keyPrefix, turnStarts, onClose, focusRequest = 0, onJump, prelude, preludeDone, onLoadAll,
+  owner, container, messages, tools, view, keyPrefix, turnStarts, onClose, focusRequest = 0, onJump, prelude, preludeDone, onLoadAll, preludeRedraw,
 }: TranscriptSearchProps) {
   const t = useI18nStore((s) => s.t)
   const foldStore = useFoldStore()
@@ -167,7 +173,9 @@ export default function TranscriptSearch({
   // data, its folds (foldStore changes with them), the view, the query and
   // the current match. `messages`, `tools` and `view` are listed even though
   // `matches` follows them, because a commit that redraws a unit without
-  // changing any match still replaces its text nodes.
+  // changing any match still replaces its text nodes. `preludeRedraw` is such
+  // a commit with nothing else changing: re-keyed prelude runs remount their
+  // rows, and the old ranges would collapse with the old nodes.
   // A view switch remounts the transcript: take the reader back to the
   // current match in the new one — or, with none, to its bottom, where a
   // transcript opens (it does not jump there itself while the bar holds it).
@@ -205,7 +213,7 @@ export default function TranscriptSearch({
     highlightSearch(owner, container, query, matches, current, { scroll: wantScroll.current })
     wantScroll.current = false
     if (jump) onJump?.()
-  }, [owner, container, searching, query, matches, current, sel, foldStore, messages, tools, view, onJump])
+  }, [owner, container, searching, query, matches, current, sel, foldStore, messages, tools, view, preludeRedraw, onJump])
 
   useLayoutEffect(() => () => clearSearchHighlights(owner), [owner])
 

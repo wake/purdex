@@ -145,3 +145,50 @@ describe('ExecutionView — stint switch (§10.5)', () => {
     expect(runs()).toEqual([['plain', '1 2 3 4 5 6']])
   })
 })
+
+// R-2a-9: the stint list arriving re-keys the prelude's runs, so the rows that
+// move into a new run remount with the view unchanged; the open search must
+// mark them again, or its highlight collapses with the old text nodes.
+describe('ExecutionView — search over a prelude redrawn by attribution', () => {
+  class FakeHighlight {
+    ranges: Range[] = []
+    add(range: Range) { this.ranges.push(range); return this }
+  }
+  const g = globalThis as unknown as { CSS?: unknown; Highlight?: unknown }
+  let highlights: Map<string, FakeHighlight>
+  let saved: [unknown, unknown]
+  beforeEach(() => {
+    saved = [g.CSS, g.Highlight]
+    highlights = new Map()
+    g.CSS = { highlights }
+    g.Highlight = FakeHighlight
+  })
+  afterEach(() => {
+    ;[g.CSS, g.Highlight] = saved
+    delete (Element.prototype as { scrollTo?: unknown }).scrollTo
+  })
+  /** The current match's marked text, and the prelude row it sits in (null once its node is gone). */
+  const current = () => highlights.get('search-current')?.ranges.map((r) => [
+    String(r), r.startContainer.isConnected ? r.startContainer.parentElement?.closest('[data-prelude-pos]')?.getAttribute('data-prelude-pos') ?? null : null,
+  ])
+
+  it('the highlight on a line that moves into E1\'s new segment survives the list arriving', async () => {
+    Element.prototype.scrollTo = vi.fn() as unknown as Element['scrollTo']
+    let answer!: (v: unknown) => void
+    vi.mocked(api.listExecutions).mockReset().mockReturnValue(new Promise((r) => { answer = r }) as never)
+    mountOn(E2)
+    await screen.findByText('E1 did the work')
+    expect(runs()).toEqual([['plain', '1 2 3 4 5 6']])
+    fireEvent.pointerDown(screen.getByRole('textbox'))
+    fireEvent.keyDown(document.body, { key: 'f', ctrlKey: true })
+    fireEvent.change(screen.getByTestId('transcript-search-input'), { target: { value: 'did the work' } })
+    expect(current()).toEqual([['did the work', '6']])
+
+    // The list and E1's boundary resolve: line 6 moves into E1's run, a remount.
+    const line = screen.getByText('E1 did the work')
+    await act(async () => { answer({ items: [summary(E1, 1), summary(E2, 2)], next_cursor: '' }) })
+    await waitFor(() => expect(runs()).toEqual([['plain', '1 2 3'], [E1, '4 5 6']]))
+    expect(screen.getByText('E1 did the work')).not.toBe(line)
+    expect(current()).toEqual([['did the work', '6']])
+  })
+})
