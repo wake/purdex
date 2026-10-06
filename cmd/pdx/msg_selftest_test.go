@@ -128,6 +128,9 @@ type stFixture struct {
 	listPanes   func() ([]byte, error)
 	newSession  func() ([]byte, error)
 	killSession func() ([]byte, error)
+	capturePane func() ([]byte, error)
+	// children answers deps.childCommands: the pane wrapper's children.
+	children    func(pid int) ([]string, error)
 	removeErr   func(path string) error
 	dialRefused func(sock string) bool
 
@@ -168,6 +171,9 @@ func newStFixture(t *testing.T) *stFixture {
 	f.listPanes = func() ([]byte, error) { return []byte(strconv.Itoa(stPanePID) + "\n"), nil }
 	f.newSession = func() ([]byte, error) { return nil, nil }
 	f.killSession = func() ([]byte, error) { return nil, nil }
+	f.capturePane = func() ([]byte, error) { return nil, nil }
+	// Default: claude is running under the wrapper, next to its stdin's sleep.
+	f.children = func(int) ([]string, error) { return []string{"sleep", "claude"}, nil }
 	f.dialRefused = func(string) bool { return true }
 	// Default: the entry appears on the very first poll.
 	f.entries = func(int) []ipeers.Entry { return []ipeers.Entry{f.targetEntry()} }
@@ -184,6 +190,8 @@ func newStFixture(t *testing.T) *stFixture {
 				return f.listPanes()
 			case "kill-session":
 				return f.killSession()
+			case "capture-pane":
+				return f.capturePane()
 			}
 			return nil, fmt.Errorf("unexpected tmux verb %q", args[0])
 		},
@@ -261,6 +269,12 @@ func newStFixture(t *testing.T) *stFixture {
 		dialRefused: func(sock string) bool { return f.dialRefused(sock) },
 		sleep:       f.clock.sleep,
 		now:         f.clock.now,
+		childCommands: func(ctx context.Context, pid int) ([]string, error) {
+			if pid != stPanePID {
+				t.Errorf("childCommands(%d), want the pane pid %d", pid, stPanePID)
+			}
+			return f.children(pid)
+		},
 	}
 	return f
 }
@@ -359,7 +373,7 @@ func (f *stFixture) writtenNonce() string {
 	if !ok {
 		f.t.Fatalf("written content is not a wrapper: %q", fr.Message.Content)
 	}
-	// "PDX_SELFTEST <nonce>: reply with exactly: PONG <nonce>"
+	// "PDX_SELFTEST <nonce>: reply to the sender using the SendMessage tool …: PONG <nonce>"
 	fields := strings.Fields(w.Text)
 	if len(fields) < 2 || fields[0] != "PDX_SELFTEST" {
 		f.t.Fatalf("unexpected text %q", w.Text)
@@ -391,12 +405,17 @@ func TestSelftest_TmuxArgvGoldens(t *testing.T) {
 
 	// A pipe on stdin keeps `claude -p --input-format stream-json` alive
 	// (a tty stdin makes it exit at once); the claude arguments are
-	// positional to `sh -c` so nothing is re-quoted.
+	// positional to `sh -c` so nothing is re-quoted. #1631 appends, each
+	// as its own element: --no-session-persistence (no transcript is ever
+	// written, so cleanup has none to delete) and --disallowedTools Bash
+	// (the native SendMessage is the only way to reply).
 	wantNew := []string{"new-session", "-d", "-s", name, "--",
 		"sh", "-c", `sleep 2147483647 | exec claude "$@"`, "pdx-selftest",
 		"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
-		"--name", name, "--settings", `{"crossSessionInbound":"accept"}`}
+		"--name", name, "--settings", `{"crossSessionInbound":"accept"}`,
+		"--no-session-persistence",
+		"--disallowedTools", "Bash"}
 	if got := f.calls("new-session"); len(got) != 1 || !equalArgs(got[0].args, wantNew) {
 		t.Errorf("new-session argv = %v\nwant %q", got, wantNew)
 	}
@@ -646,6 +665,9 @@ func TestSelftest_NeverRegisters_KillsAndSignalsPane(t *testing.T) {
 	if got := f.calls("kill-session"); len(got) != 1 {
 		t.Errorf("kill-session calls = %d, want 1", len(got))
 	}
+	if got := f.calls("capture-pane"); len(got) != 0 {
+		t.Errorf("pane captured although claude is still running: %v", got)
+	}
 	if f.spawned {
 		t.Errorf("helper spawned without registration")
 	}
@@ -667,6 +689,163 @@ func TestSelftest_NeverRegisters_KillsAndSignalsPane(t *testing.T) {
 	last := f.lastLine(out)
 	if !strings.HasPrefix(last, "cleanup incomplete: ") || !strings.Contains(last, "pane pid 4100 still alive") {
 		t.Errorf("last line = %q", last)
+	}
+}
+
+// TestSelftest_NeverRegisters_ClaudeExited_StartFailure: a claude that
+// rejects its arguments exits at once, but the pane's wrapper lives on,
+// waiting on the sleep that keeps claude's stdin open (observed on mlab).
+// Only that sleep left under the wrapper means claude is gone: the pane is
+// captured before kill-session and its last non-empty line reported as a
+// start failure — never as "did not register", nor as "no reply".
+func TestSelftest_NeverRegisters_ClaudeExited_StartFailure(t *testing.T) {
+	f := newStFixture(t)
+	f.entries = func(int) []ipeers.Entry { return nil }
+	f.alive[stPanePID] = true
+	f.children = func(int) ([]string, error) { return []string{"/bin/sleep"}, nil }
+	f.capturePane = func() ([]byte, error) {
+		return []byte("\nwarning: something earlier\nerror: unknown option '--no-session-persistence'\n\n\n"), nil
+	}
+	code, out, errOut := f.run(context.Background(), 5*time.Second)
+	if code != 1 {
+		t.Errorf("exit = %d, want 1", code)
+	}
+	if want := "FAIL: claude failed to start: error: unknown option '--no-session-persistence'\n"; !strings.Contains(out, want) {
+		t.Errorf("stdout lacks %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "did not register") || strings.Contains(out, "no reply") {
+		t.Errorf("a start failure reported as something else:\n%s", out)
+	}
+	if !strings.Contains(errOut, "pdx msg: pane: warning: something earlier\n") {
+		t.Errorf("stderr lacks the pane's last lines:\n%s", errOut)
+	}
+	name := f.sessionName()
+	if got := f.calls("capture-pane"); len(got) != 1 || !equalArgs(got[0].args, []string{"capture-pane", "-p", "-t", name}) {
+		t.Errorf("capture-pane calls = %v, want one capture-pane -p -t %s", got, name)
+	}
+	f.mu.Lock()
+	var verbs []string
+	for _, c := range f.tmuxCalls {
+		verbs = append(verbs, c.args[0])
+	}
+	f.mu.Unlock()
+	if want := []string{"new-session", "list-panes", "capture-pane", "kill-session"}; !equalArgs(verbs, want) {
+		t.Errorf("tmux verbs = %v, want %v (captured before kill-session)", verbs, want)
+	}
+}
+
+// TestSelftest_NeverRegisters_StartFailureVariants: the wrapper itself gone
+// is a start failure too (and a pane that cannot be captured says so);
+// claude still running, or a process list that cannot be read, keeps the
+// "did not register" message without capturing the pane.
+func TestSelftest_NeverRegisters_StartFailureVariants(t *testing.T) {
+	cases := []struct {
+		name      string
+		paneAlive bool
+		// paneUnknown makes the pane's identity unreadable after capture.
+		paneUnknown bool
+		children    func(int) ([]string, error)
+		capture     func() ([]byte, error)
+		want        string
+		captured    bool
+	}{
+		{
+			name:     "wrapper gone, pane not capturable",
+			capture:  func() ([]byte, error) { return nil, &exec.ExitError{Stderr: []byte("can't find session\n")} },
+			want:     "FAIL: claude failed to start (no pane output captured)\n",
+			captured: true,
+		},
+		{
+			name:      "only sleep left, blank pane",
+			paneAlive: true,
+			children:  func(int) ([]string, error) { return []string{"sleep"}, nil },
+			capture:   func() ([]byte, error) { return []byte("\n\n"), nil },
+			want:      "FAIL: claude failed to start (no pane output captured)\n",
+			captured:  true,
+		},
+		{
+			name:      "claude alive but unregistered",
+			paneAlive: true,
+			children:  func(int) ([]string, error) { return []string{"sleep", "claude"}, nil },
+			want:      "FAIL: session did not register (Claude Code ≥ 2.1.224 with peer messaging required)\n",
+		},
+		{
+			name:      "children unreadable",
+			paneAlive: true,
+			children:  func(int) ([]string, error) { return nil, errors.New("ps: exit status 1") },
+			want:      "FAIL: session did not register (Claude Code ≥ 2.1.224 with peer messaging required)\n",
+		},
+		{
+			name:        "wrapper identity unknown",
+			paneAlive:   true,
+			paneUnknown: true,
+			children:    func(int) ([]string, error) { return []string{"sleep"}, nil },
+			want:        "FAIL: session did not register (Claude Code ≥ 2.1.224 with peer messaging required)\n",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newStFixture(t)
+			f.entries = func(int) []ipeers.Entry {
+				if c.paneUnknown { // the pane's identity was captured before the first poll
+					f.mu.Lock()
+					delete(f.starts, stPanePID)
+					f.mu.Unlock()
+				}
+				return nil
+			}
+			f.alive[stPanePID] = c.paneAlive
+			if c.children != nil {
+				f.children = c.children
+			}
+			if c.capture != nil {
+				f.capturePane = c.capture
+			}
+			code, out, _ := f.run(context.Background(), 5*time.Second)
+			if code != 1 {
+				t.Errorf("exit = %d, want 1", code)
+			}
+			if !strings.Contains(out, c.want) {
+				t.Errorf("stdout lacks %q:\n%s", c.want, out)
+			}
+			if got := len(f.calls("capture-pane")); (got == 1) != c.captured {
+				t.Errorf("capture-pane calls = %d, want captured=%v", got, c.captured)
+			}
+		})
+	}
+}
+
+// TestSelftestParseChildren: `ps -A -o ppid= -o comm=` lines — padded
+// ppid, then a command that may hold spaces — filtered to pid's children.
+func TestSelftestParseChildren(t *testing.T) {
+	out := []byte("    1 /sbin/launchd\n 4100 sleep\n  4100 /Users/x/.local/bin/claude\n41000 not-a-child\n 4100 Google Chrome Helper\n\ngarbage\n")
+	got := selftestParseChildren(out, 4100)
+	want := []string{"sleep", "/Users/x/.local/bin/claude", "Google Chrome Helper"}
+	if !equalArgs(got, want) {
+		t.Errorf("children = %q, want %q", got, want)
+	}
+}
+
+// TestSelftestChildCommands_Live reads the real process table: a sleep this
+// test starts is listed among its own process's children.
+func TestSelftestChildCommands_Live(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	kids, err := selftestChildCommands(context.Background(), os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, k := range kids {
+		if filepath.Base(k) == "sleep" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("children of %d = %q, want a sleep", os.Getpid(), kids)
 	}
 }
 
@@ -952,7 +1131,9 @@ func TestSelftest_WrittenFrame(t *testing.T) {
 	if len(nonce) != 8 {
 		t.Errorf("nonce = %q, want 8 hex", nonce)
 	}
-	if want := "PDX_SELFTEST " + nonce + ": reply with exactly: PONG " + nonce; wr.Text != want {
+	// #1631: the text names the native tool and rules out the pdx / Bash
+	// detour a global CLAUDE.md may suggest, so the reply leg is exercised.
+	if want := "PDX_SELFTEST " + nonce + ": reply to the sender using the SendMessage tool (not pdx, not Bash), with exactly: PONG " + nonce; wr.Text != want {
 		t.Errorf("text = %q, want %q", wr.Text, want)
 	}
 }
@@ -1496,7 +1677,7 @@ func TestSelftest_ProductionDepsAreWired(t *testing.T) {
 	if d.tmux == nil || d.readRegistry == nil || d.spawn == nil || d.writeFrame == nil ||
 		d.pidAlive == nil || d.procStart == nil || d.signal == nil || d.readPeerFeatures == nil ||
 		d.glob == nil || d.registryProcStart == nil || d.remove == nil || d.dialRefused == nil ||
-		d.sleep == nil || d.now == nil {
+		d.sleep == nil || d.now == nil || d.childCommands == nil {
 		t.Fatalf("a production seam is nil: %+v", d)
 	}
 	if d.sockDir != ccuds.DefaultSockDir {

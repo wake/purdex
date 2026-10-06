@@ -91,6 +91,8 @@ type selftestDeps struct {
 	dialRefused       func(sock string) bool
 	sleep             func(ctx context.Context, d time.Duration) error
 	now               func() time.Time
+	// childCommands lists the command names of pid's direct children.
+	childCommands func(ctx context.Context, pid int) ([]string, error)
 }
 
 // newSelftestDeps returns the production seams. stderr receives the
@@ -144,8 +146,38 @@ func newSelftestDeps(stderr io.Writer) (selftestDeps, error) {
 				return ctx.Err()
 			}
 		},
-		now: time.Now,
+		now:           time.Now,
+		childCommands: selftestChildCommands,
 	}, nil
+}
+
+// selftestChildCommands lists pid's direct children by command name (ps's
+// comm, which is argv[0]) from one read of the process table.
+func selftestChildCommands(ctx context.Context, pid int) ([]string, error) {
+	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "ppid=", "-o", "comm=").Output()
+	if err != nil {
+		return nil, fmt.Errorf("ps: %w", err)
+	}
+	return selftestParseChildren(out, pid), nil
+}
+
+// selftestParseChildren picks pid's children out of `ps -o ppid= -o comm=`
+// output: a padded ppid, then a command that may hold spaces.
+func selftestParseChildren(out []byte, pid int) []string {
+	var kids []string
+	for _, line := range strings.Split(string(out), "\n") {
+		ppid, comm, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		if n, err := strconv.Atoi(ppid); err != nil || n != pid {
+			continue
+		}
+		if comm = strings.TrimSpace(comm); comm != "" {
+			kids = append(kids, comm)
+		}
+	}
+	return kids
 }
 
 // selftestTimeout parses --timeout: "" ⇒ selftestDefaultTimeout; anything
@@ -227,13 +259,28 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 	// lands after tmux created the session must still be followed by
 	// kill-session (a session that never existed is tolerated there by
 	// selftestTmuxNoSession).
+	//
+	// #1631 adds two flags, each its own argv element:
+	//   - --no-session-persistence: the throwaway session never writes a
+	//     transcript, so cleanup has none to delete — and no window between
+	//     verifying a file and unlinking it to defend.
+	//   - --disallowedTools Bash: the native SendMessage is the only way to
+	//     reply. A global CLAUDE.md that routes agent messages through
+	//     `pdx msg send` would otherwise send the model to Bash, which -p
+	//     refuses, and the reply leg would never be exercised. The flag
+	//     takes a variadic list, so it goes last: nothing follows that it
+	//     could swallow.
+	// A claude that rejects either exits at once: step 3 reports that as a
+	// start failure, with what claude printed.
 	st.sessionStarted = true
 	if _, err := deps.tmux(ctx, "new-session", "-d", "-s", st.name, "--",
 		"sh", "-c", `sleep 2147483647 | exec claude "$@"`, "pdx-selftest",
 		"-p", "--verbose",
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--name", st.name,
-		"--settings", `{"crossSessionInbound":"accept"}`); err != nil {
+		"--settings", `{"crossSessionInbound":"accept"}`,
+		"--no-session-persistence",
+		"--disallowedTools", "Bash"); err != nil {
 		fmt.Fprintf(stdout, "FAIL: tmux new-session: %v\n", err)
 		return 1
 	}
@@ -257,6 +304,14 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 		fmt.Fprintln(stdout, "FAIL: interrupted")
 		return 1
 	case selftestNotRegistered:
+		// A claude that rejects its arguments exits at once. Reported as
+		// "did not register", that would read like a missing feature; so
+		// when claude is gone the pane is captured here, before cleanup's
+		// kill-session, and the FAIL line carries what claude printed.
+		if selftestClaudeExited(ctx, deps, st) {
+			fmt.Fprintln(stdout, selftestStartFailure(ctx, deps, st.name, stderr))
+			return 1
+		}
 		fmt.Fprintln(stdout, "FAIL: session did not register (Claude Code ≥ 2.1.224 with peer messaging required)")
 		return 1
 	}
@@ -296,6 +351,9 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 	st.h = h
 
 	// Step 5: the probe frame, addressed for reply to the helper's socket.
+	// The text names the native tool and rules out the pdx / Bash detour a
+	// global CLAUDE.md may suggest (#1631); the reply is still matched on
+	// the nonce alone.
 	nonce, err := selftestHex(4)
 	if err != nil {
 		fmt.Fprintf(stdout, "FAIL: %v\n", err)
@@ -310,7 +368,8 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 		From:     "uds:" + h.Sock(),
 		FromName: selftestProbeName,
 		FromMode: ipeers.ModePrompting,
-		Text:     "PDX_SELFTEST " + nonce + ": reply with exactly: PONG " + nonce,
+		Text: "PDX_SELFTEST " + nonce +
+			": reply to the sender using the SendMessage tool (not pdx, not Bash), with exactly: PONG " + nonce,
 	})
 	if err != nil {
 		fmt.Fprintf(stdout, "FAIL: build frame: %v\n", err)
@@ -342,6 +401,60 @@ func selftestIdentifyPane(ctx context.Context, deps selftestDeps, name string) (
 		return 0, "", err
 	}
 	return pid, procStart, nil
+}
+
+// selftestPaneTail is how many of the pane's last non-empty lines a start
+// failure echoes to stderr.
+const selftestPaneTail = 5
+
+// selftestClaudeExited reports whether the throwaway claude, which never
+// registered, is gone: its pane's wrapper is gone, or every process left
+// under the wrapper is the sleep that feeds claude's stdin. The wrapper
+// outlives a claude that exited at once — it waits on that sleep (observed
+// with a rejected flag on mlab) — so its own liveness proves nothing. An
+// identity or a process list that cannot be read proves nothing either.
+func selftestClaudeExited(ctx context.Context, deps selftestDeps, st *selftestState) bool {
+	switch selftestIdentify(deps, st.panePID, st.paneProcStart) {
+	case ipeers.ProcDifferent:
+		return true
+	case ipeers.ProcUnknown:
+		return false
+	}
+	kids, err := deps.childCommands(ctx, st.panePID)
+	if err != nil {
+		return false
+	}
+	for _, k := range kids {
+		if filepath.Base(k) != "sleep" {
+			return false
+		}
+	}
+	return true
+}
+
+// selftestStartFailure captures the throwaway pane, echoes its last few
+// non-empty lines to stderr, and returns the FAIL line naming the last one.
+func selftestStartFailure(ctx context.Context, deps selftestDeps, name string, stderr io.Writer) string {
+	out, err := deps.tmux(ctx, "capture-pane", "-p", "-t", name)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx msg: tmux capture-pane: %s\n", selftestTmuxErr(err))
+	}
+	var lines []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, strings.TrimRight(l, " \t\r"))
+		}
+	}
+	if len(lines) == 0 {
+		return "FAIL: claude failed to start (no pane output captured)"
+	}
+	if len(lines) > selftestPaneTail {
+		lines = lines[len(lines)-selftestPaneTail:]
+	}
+	for _, l := range lines {
+		fmt.Fprintf(stderr, "pdx msg: pane: %s\n", l)
+	}
+	return "FAIL: claude failed to start: " + strings.TrimSpace(lines[len(lines)-1])
 }
 
 type selftestRegStatus int
