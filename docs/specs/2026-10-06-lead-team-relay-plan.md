@@ -53,14 +53,14 @@
 
 1. **A statusline payload without `session_id`, or with `used_percentage: null`** (every session's first refresh, measured 2026-10-06): no context is recorded, `pdx peers` shows `-`, and nothing panics. → Task 1.1, Task 1.3.
 2. **Two CC panes in one tmux session:** each row shows its own session's usage, not the last writer's. → Task 1.1, Task 1.2.
-3. **The daemon restarts while `pdx lead request` is long-polling:** the CLI prints the restart line once, re-polls the **same** request id after the new `boot_id` answers, and the request is still open, with its lease extended at boot. → Task 2.4, Task 2.6, Task 2.7.
+3. **The daemon restarts while `pdx lead request` is long-polling:** the CLI prints the restart line once, re-polls the **same** request id after the new `boot_id` answers, and the request is still open, with its lease extended at boot. → Task 2.4 (`TestGet_LongPollReturnsOnStopAndOnTimer`), Task 2.6 (`TestStart_ExtendsLeasesAndSnapshotsOpenRequests`), Task 2b.1 (`TestDo_RefusedThenNewBootIDThenSucceeds`), Task 2b.3 (the poll loop re-polls the same id).
 4. **A decide racing the deadline sweeper and a cancel:** exactly one close wins. The loser gets `409 already_decided`, carrying the winner's `decided_by`, and one `closed` event is broadcast. → Task 2.2, Task 2.4.
 5. **A Purdex.app whose host socket drops while the dialog is open:**
    - the dialog stays, with its buttons disabled;
    - on reconnect, the snapshot neither duplicates the request nor revives one that closed meanwhile;
    - a deny clicked while disconnected is sent once on reconnect.
 
-   → Task 3.2, Task 3.3.
+   → Task 3.4 (dialog stays, buttons `aria-disabled`), Task 3.2 and Task 3.3 (snapshot neither duplicates nor revives), Task 3.5 (queued deny sent once).
 
 ---
 
@@ -468,7 +468,75 @@ func TestBuild_OwnerOnlyRowUsesOwnerCwd(t *testing.T) {
     Then pass `Contexts: contexts` into the `BuildInput`. Use the local variable names `localEnvelope` already uses for the owners map and the registry entries. `m.owners` is nil in tests that build `&Module{}` literally; the type assertion on a nil interface is false, which is safe.
   - Add `var _ agent.ContextUsageReader = (*agent.Module)(nil)` next to the existing assertion at `module.go:453`.
 
-- [ ] **Step 4: Add the module-level test** in `internal/module/peers/module_test.go`. Make a fake owner resolver that also implements `ContextUsage(sid)`: embed the existing `fakeOwners` (`internal/module/peers/fakes_test.go:142`; its `ResolveSessionOwner` has a pointer receiver) in a new struct `usageOwners{fakeOwners; usage map[string]agent.ContextUsage}`, and pass it as `&usageOwners{...}` in `fixtureOpts.owners` (`module_test.go:104`, typed `agent.OwnerResolver`). Then build the module through `newTestModuleWith(t, fixtureOpts{...})` (`module_test.go:147`), using the same fixture as the deliverable-cc test near `module_test.go:375`. GET `/api/peers` and assert that `peers[0].agent.context.used_percentage == 72` in the JSON.
+- [ ] **Step 4: Add the module-level test** in `internal/module/peers/module_test.go`. It wraps the existing `fakeOwners` (`internal/module/peers/fakes_test.go:142`; pointer receiver) so the module's `m.owners` also satisfies `agent.ContextUsageReader`, builds the module with the same shape as the deliverable-cc test at `module_test.go:322-376`, and reads `/api/peers` through `doGetPeers`:
+
+```go
+// usageOwners is fakeOwners plus the ContextUsageReader the P1 peers
+// module type-asserts on m.owners.
+type usageOwners struct {
+	*fakeOwners
+	usage map[string]agent.ContextUsage
+}
+
+func (u *usageOwners) ContextUsage(sessionID string) (agent.ContextUsage, bool) {
+	c, ok := u.usage[sessionID]
+	return c, ok
+}
+
+var _ agent.ContextUsageReader = (*usageOwners)(nil)
+
+func TestLocalEnvelope_AttachesContextUsageBySessionID(t *testing.T) {
+	dir := t.TempDir()
+	writeRegistryFixture(t, dir, "76973.json", fixture76973)
+	sessions := &fakeSessions{sessions: []session.SessionInfo{
+		{Code: "mt1code", Name: "mt1", Cwd: "/Users/wake/Workspace/wake/purdex", TmuxInstance: "inst1"},
+	}}
+	pct := 72.0
+	owners := &usageOwners{
+		fakeOwners: &fakeOwners{owners: map[string]agent.PaneOwner{
+			"mt1code": {AgentType: "cc", SessionID: "fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c", Cwd: "/Users/wake/Workspace/wake/purdex", TmuxPaneID: "%10", LastSeenAt: 1789314156000, Status: "busy"},
+		}},
+		usage: map[string]agent.ContextUsage{
+			"fa5d4c07-d9d9-4184-9e13-e491f2f4bf7c": {UsedPercentage: &pct, WindowSize: 1000000, At: 5},
+		},
+	}
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
+
+	rr := doGetPeers(t, m, "/api/peers")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Peers []struct {
+			SessionCode string `json:"session_code"`
+			Agent       *struct {
+				Context *struct {
+					UsedPercentage *float64 `json:"used_percentage"`
+					Window         int      `json:"window"`
+				} `json:"context"`
+			} `json:"agent"`
+		} `json:"peers"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	for _, p := range got.Peers {
+		if p.SessionCode != "mt1code" {
+			continue
+		}
+		if p.Agent == nil || p.Agent.Context == nil || p.Agent.Context.UsedPercentage == nil || *p.Agent.Context.UsedPercentage != 72 || p.Agent.Context.Window != 1000000 {
+			t.Fatalf("mt1 agent.context = %+v; body=%s", p.Agent, rr.Body.String())
+		}
+		return
+	}
+	t.Fatalf("mt1code not in peers: %s", rr.Body.String())
+}
+```
+
+  If `session_code` is not the JSON key `PeerRecord` uses for `SessionCode`, read it from `internal/peers/record.go` and adjust the one tag; the assertion stays.
+
 - [ ] **Step 5: Run.**
   - Run: `go test ./internal/peers/ ./internal/module/peers/ -v -run 'Context|Cwd'`, then the full packages: `go test ./internal/peers/ ./internal/module/peers/`
   - Expected: PASS. The JSON-key pin tests (`TestBuild_JSON_EveryRecordHasCoreKeys`, `TestPeerRecord_JSONKeys`) still pass, because `context` is omitempty.
@@ -646,7 +714,7 @@ func TestApproval_JSONKeysAndRoundTrip(t *testing.T) {
 	payload, _ := json.Marshal(LeadPayload{Reason: "split the work", MaxMembers: 3, Roots: []string{"/w"}})
 	in := Approval{
 		ID: "11111111-1111-4111-8111-111111111111", Kind: KindLead, HostID: "h:1",
-		Origin:  Origin{SessionID: "sid-1", Ref: "_abc123", Name: "n10", PID: 10, ProcStart: "Sun Sep 13 15:22:36 2026", Cwd: "/w", Tmux: "mt0:@1.%1"},
+		Origin:  Origin{SessionID: "sid-1", Ref: "_abc123", Name: "n10", PID: 10, ProcStart: "Sun Sep 13 15:22:36 2026", Cwd: "/w", Tmux: "mt0:@1.%1", Title: "lead-team", Address: "mlab/n10"},
 		Payload: payload, State: StateApproved, CreatedAt: 1000, DeadlineAt: 541000, LeaseUntil: 31000,
 		DecidedBy: &Client{Kind: "app", Label: "Purdex.app @ air26", Addr: "100.64.0.4:5"}, DecidedAt: 2000,
 		Grant: &Grant{MaxMembers: 2, Roots: []string{"/w"}},
@@ -667,6 +735,12 @@ func TestApproval_JSONKeysAndRoundTrip(t *testing.T) {
 	want := []string{"created_at", "deadline_at", "decided_at", "decided_by", "grant", "host_id", "id", "kind", "lease_until", "origin", "payload", "state"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys = %v, want %v", got, want)
+	}
+	if !strings.Contains(string(keys["origin"]), `"title":"lead-team"`) || !strings.Contains(string(keys["origin"]), `"address":"mlab/n10"`) {
+		t.Fatalf("origin must carry title and address: %s", keys["origin"])
+	}
+	if bare, _ := json.Marshal(Origin{SessionID: "x"}); strings.Contains(string(bare), `"title"`) || strings.Contains(string(bare), `"address"`) {
+		t.Fatalf("empty title/address must be omitted: %s", bare)
 	}
 	var out Approval
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -766,6 +840,8 @@ type Origin struct {
 	ProcStart string `json:"proc_start"`
 	Cwd       string `json:"cwd"`
 	Tmux      string `json:"tmux"` // "<session>:@<win>.%<pane>" or ""
+	Title     string `json:"title,omitempty"`   // the session's title (pdx msg name), "" when none
+	Address   string `json:"address,omitempty"` // "<alias>/<name>" for a routable name, else "<alias>/_<ref>"
 }
 
 // LeadPayload is Approval.Payload for KindLead.
@@ -1383,12 +1459,15 @@ func (s *Store) OpenByOrigin(sessionID string, kind team.Kind) (team.Approval, b
 package peers
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	iagent "github.com/wake/purdex/internal/agent"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/store"
 )
 
 // resolverFixture is a registry dir with two live entries (pid 10 in tmux,
@@ -1399,8 +1478,32 @@ func resolverFixture(t *testing.T, live ipeers.Liveness) (*OriginResolver, strin
 	dir := t.TempDir()
 	writeRegistryFixture(t, dir, "10.json", `{"pid":10,"sessionId":"sid-1","cwd":"/w","procStart":"`+targetProcStart+`","version":"2.1.270","tmux":"mt0:@1.%1","messagingSocketPath":"`+dir+`/10.sock","name":"n10","status":"idle"}`)
 	writeRegistryFixture(t, dir, "20.json", `{"pid":20,"sessionId":"sid-2","cwd":"/w2","procStart":"`+targetProcStart+`","version":"2.1.270","messagingSocketPath":"`+dir+`/20.sock","name":"","status":"idle"}`)
-	m := &Module{registryDir: dir, liveness: live, logf: func(string, ...any) {}}
+	m := &Module{
+		core:        newTestCore(t, "mlab:abc123", "mlab"), // alias "mlab" for Address
+		registryDir: dir,
+		liveness:    live,
+		titles:      fakeTitles{"sid-1": "lead-team"},
+		logf:        func(string, ...any) {},
+	}
 	return &OriginResolver{m: m}, dir
+}
+
+// fakeTitles is a TitleStore whose Snapshot lists one label per entry;
+// Claim and Release are never reached by the resolver.
+type fakeTitles map[string]string
+
+func (f fakeTitles) Snapshot() ([]store.PeerLabel, error) {
+	out := make([]store.PeerLabel, 0, len(f))
+	for sid, label := range f {
+		out = append(out, store.PeerLabel{SessionID: sid, Label: label, Rev: 1})
+	}
+	return out, nil
+}
+func (fakeTitles) Claim(string, string, time.Time) (store.PeerLabel, error) {
+	return store.PeerLabel{}, errors.New("not used")
+}
+func (fakeTitles) Release(string, time.Time) (store.PeerLabel, bool, error) {
+	return store.PeerLabel{}, false, errors.New("not used")
 }
 
 func TestOriginResolver_ResolveOrigin(t *testing.T) {
@@ -1413,8 +1516,20 @@ func TestOriginResolver_ResolveOrigin(t *testing.T) {
 		o.ProcStart != targetProcStart || o.Cwd != "/w" || o.Tmux != "mt0:@1.%1" {
 		t.Fatalf("origin = %+v", o)
 	}
-	if o2, ok := r.ResolveOrigin(dir + "/20.sock"); !ok || o2.Tmux != "" || o2.Name != "" || o2.Cwd != "/w2" {
-		t.Fatalf("pid 20 = %+v ok=%v", o2, ok)
+	if o.Title != "lead-team" || o.Address != "mlab/n10" {
+		t.Fatalf("title/address = %q/%q, want lead-team / mlab/n10", o.Title, o.Address)
+	}
+	if o2, ok := r.ResolveOrigin(dir + "/20.sock"); !ok || o2.Tmux != "" || o2.Name != "" || o2.Cwd != "/w2" ||
+		o2.Title != "" || o2.Address != "mlab/"+ipeers.RefID("sid-2") {
+		t.Fatalf("pid 20 = %+v ok=%v (no title; address falls back to the ref)", o2, ok)
+	}
+	r.m.titles = nil
+	if o3, ok := r.ResolveOrigin(dir + "/10.sock"); !ok || o3.Title != "" || o3.Address != "mlab/n10" {
+		t.Fatalf("nil title store must give an empty title, not a panic: %+v ok=%v", o3, ok)
+	}
+	r.m.titles = failingTitles{}
+	if o4, ok := r.ResolveOrigin(dir + "/10.sock"); !ok || o4.Title != "" {
+		t.Fatalf("a failing title store must give an empty title: %+v ok=%v", o4, ok)
 	}
 	if _, ok := r.ResolveOrigin(""); ok {
 		t.Fatal("empty inbox must not resolve")
@@ -1518,15 +1633,42 @@ func (r *OriginResolver) ResolveOrigin(inbox string) (team.Origin, bool) {
 	if !found {
 		return team.Origin{}, false
 	}
+	ref := ipeers.RefID(e.SessionID)
+	alias := r.m.configSnapshot().alias
+	addr := alias + "/" + ref
+	if ipeers.RoutableName(e.Name) { // the rule GET /api/peers uses (internal/peers/record.go:294-297)
+		addr = alias + "/" + e.Name
+	}
 	return team.Origin{
 		SessionID: e.SessionID,
-		Ref:       ipeers.RefID(e.SessionID),
+		Ref:       ref,
 		Name:      e.Name,
 		PID:       e.PID,
 		ProcStart: e.ProcStart,
 		Cwd:       e.Cwd,
 		Tmux:      e.Tmux,
+		Title:     r.titleOf(e.SessionID),
+		Address:   addr,
 	}, true
+}
+
+// titleOf is the session's title from the title store, or "" when there is
+// no store, the read fails, or the session has none. The dialog shows the
+// title or falls back to the name, so a missing title is never an error.
+func (r *OriginResolver) titleOf(sessionID string) string {
+	if r.m.titles == nil {
+		return ""
+	}
+	rows, err := r.m.titles.Snapshot()
+	if err != nil {
+		return ""
+	}
+	for _, row := range rows {
+		if row.SessionID == sessionID {
+			return row.Label
+		}
+	}
+	return ""
 }
 
 // LiveSession reports whether a live, non-proxy registry entry has this
@@ -2614,13 +2756,21 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
     ```
   - Also: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team && go vet ./internal/module/team/` → no output.
 
-- [ ] **Step 5: Commit.**
-  ```bash
-  git add internal/module/team/module.go internal/module/team/handler.go internal/module/team/handler_test.go
-  git commit -m "feat(team): team module with /api/team/approvals create, list, long-poll get, delete, decide
+- [ ] **Step 5: Commit — in two parts, because P2a-2 and P2a-3 are separate PRs.**
+  - **P2a-2 commit:** `module.go` (skeleton, `RegisterRoutes` registering only `POST /api/team/approvals` and `GET /api/team/approvals`), `handler.go` with `handleCreate`, `handleList`, `writeJSON`, `writeErr`, the normaliser and the hash, and `handler_test.go` with the fixture and the `TestCreate_*` tests. `TestList_OpenOnly` closes a row through `DELETE`, so it travels with P2a-3.
+    ```bash
+    git add internal/module/team/module.go internal/module/team/handler.go internal/module/team/handler_test.go
+    git commit -m "feat(team): team module skeleton; POST and GET /api/team/approvals (create, list)
 
-  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
-  ```
+    Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+    ```
+  - **P2a-3 commit:** `handleGet` (long-poll, lease renewal, waiters), `handleDelete`, `handleDecide`, the three routes added to `RegisterRoutes`, and `TestList_OpenOnly`, `TestGet_*`, `TestDelete_*`, `TestDecide_*`.
+    ```bash
+    git add internal/module/team/module.go internal/module/team/handler.go internal/module/team/handler_test.go
+    git commit -m "feat(team): GET /api/team/approvals/{id} long-poll, DELETE, POST decide
+
+    Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+    ```
 
 ---
 
@@ -3177,7 +3327,7 @@ None that the code or the spec cannot answer. Two decisions above are judgement 
 ### Coordinator decisions on P2a (2026-10-07, `mlab/_81nu3d`)
 
 - **Split into three PRs**, each under 800 lines: **P2a-1** = Tasks 2.1, 2.2 (wire, store; ≈ 651 lines); **P2a-2** = Tasks 2.3 and 2.4 create/list with the module skeleton (≈ 760); **P2a-3** = Task 2.4 get/delete/decide, 2.5, 2.6 (≈ 716). The module is mounted in `cmd/pdx` only by P2a-3, so no half-built route set ships.
-- **Amendment from P3 (open question 1): `team.Origin` gains two optional fields**, `Title string \`json:"title,omitempty"\`` and `Address string \`json:"address,omitempty"\``, after `Tmux`. Task 2.1's `wire.go` adds them; Task 2.3's `ResolveOrigin` fills `Title` from the peers title store (`m.titles.Snapshot()`, `titles.go:123`; `""` when `m.titles` is nil) and `Address` with the same formatter `GET /api/peers` uses for `PeerRecordWire.address` (`<alias>/<name>` for a routable name, else `<alias>/_<ref>`), and its test asserts both for the fixture's `n10` entry. The dialog (P3 Task 3.4) prefers them and falls back to `name` → `ref` when absent.
+- **Amendment from P3 (open question 1): `team.Origin` gains two optional fields**, `Title string \`json:"title,omitempty"\`` and `Address string \`json:"address,omitempty"\``, after `Tmux`. Applied in Task 2.1's `wire.go` and round-trip test, and in Task 2.3's fixture, test and `ResolveOrigin` (`titleOf`); `Title` comes from the peers title store (`m.titles.Snapshot()`, `titles.go:123`; `""` when `m.titles` is nil) and `Address` with the same formatter `GET /api/peers` uses for `PeerRecordWire.address` (`<alias>/<name>` for a routable name, else `<alias>/_<ref>`), and its test asserts both for the fixture's `n10` entry. The dialog (P3 Task 3.4) prefers them and falls back to `name` → `ref` when absent.
 - **Deviations 1–15 are accepted** as written. Two of them bind the neighbours: a `Stop`-cut long-poll answers `200` with the row still `open` (P2b re-polls and meets the refused connection), and `500 storage_error` is outside `wire.go` (P2b maps any unlisted code to exit 1).
 
 ---

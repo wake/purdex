@@ -717,6 +717,7 @@ One shared client, `cmd/pdx/daemonclient`, is used by every new command and by t
 - It prints `daemon 重啟中，繼續等待…` once on stderr.
 - It retries with backoff 0.25 s → 1 s, for a **30 s grace**: three times the usual 5–10 s.
 - After the grace it exits 20, `daemon_unavailable`.
+- A daemon that accepts the connection but never answers is treated the same way: after three consecutive long-polls that run out their own 35 s without an answer, the CLI exits 20 with `daemon 沒有回應` (plan P2b, decided 2026-10-07).
 - Deadlines are absolute, so a restart's time counts against them.
 
 **By kind of call:**
