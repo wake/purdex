@@ -3177,6 +3177,7 @@ None that the code or the spec cannot answer. Two decisions above are judgement 
 ### Coordinator decisions on P2a (2026-10-07, `mlab/_81nu3d`)
 
 - **Split into three PRs**, each under 800 lines: **P2a-1** = Tasks 2.1, 2.2 (wire, store; ≈ 651 lines); **P2a-2** = Tasks 2.3 and 2.4 create/list with the module skeleton (≈ 760); **P2a-3** = Task 2.4 get/delete/decide, 2.5, 2.6 (≈ 716). The module is mounted in `cmd/pdx` only by P2a-3, so no half-built route set ships.
+- **Amendment from P3 (open question 1): `team.Origin` gains two optional fields**, `Title string \`json:"title,omitempty"\`` and `Address string \`json:"address,omitempty"\``, after `Tmux`. Task 2.1's `wire.go` adds them; Task 2.3's `ResolveOrigin` fills `Title` from the peers title store (`m.titles.Snapshot()`, `titles.go:123`; `""` when `m.titles` is nil) and `Address` with the same formatter `GET /api/peers` uses for `PeerRecordWire.address` (`<alias>/<name>` for a routable name, else `<alias>/_<ref>`), and its test asserts both for the fixture's `n10` entry. The dialog (P3 Task 3.4) prefers them and falls back to `name` → `ref` when absent.
 - **Deviations 1–15 are accepted** as written. Two of them bind the neighbours: a `Stop`-cut long-poll answers `200` with the row still `open` (P2b re-polls and meets the refused connection), and `500 storage_error` is outside `wire.go` (P2b maps any unlisted code to exit 1).
 
 ---
@@ -4980,3 +4981,2635 @@ Both halves are independently green: P2b-1 adds a package nothing calls yet; P2b
 - **Hung-poll cap stays as written:** three consecutive 35 s polls with no answer exit 20 with `pdx lead: daemon 沒有回應`. A connected daemon that never answers is broken, and 105 s is enough to tell. Spec §9.1 gains one line for it when P2b-2 ships.
 - **`--max-members 0` means the daemon default (3)**, matching the wire's normalisation. No `fs.Visit`.
 - **Deviations 1–8 are accepted.** `msg.go` / `peers.go` are not retrofitted to the exit constants or to `resolveDaemonHost` in this PR.
+
+---
+
+## PR P3 — SPA: approval dialog host, store, event branch, one-click approve/deny, reconnect queue, notification, restart-confirm line
+
+The Purdex.app side of spec §6.3 / §6.5 / §9.4 / §9.5 (U5b, U6, U13a, U14). A new `approval.request` branch in `useMultiHostEventWs` feeds `useApprovalStore` (entries keyed `hostId\0id`, never persisted); one global `ApprovalDialogHost`, mounted after `HandoffDialogHost`, renders the oldest open request across hosts with 核准 / 拒絕 as one click each; a decision clicked while the host is not `connected` is queued and sent once the reconnect snapshot re-adds the request; `closed` from elsewhere closes the dialog with the "已由 <client> 核准／拒絕" toast; `opened` raises one Electron notification whose click only focuses the window; the daemon-restart confirm gains `N 個申請等待核准`. Nothing in Go. All line numbers below were read on the worktree at `d39886e8` (origin/main `fb9fcbd8` + docs commits).
+
+**Measured facts this section rests on** (worktree, 2026-10-07):
+- `spa/src/lib/host-events.ts:4-15` is the `HostEvent['type']` union; `nex-worker-exited` is its last member (line 15). `spa/src/lib/agent-ws/index.ts:14` constrains `AGENT_WS_EVENT_TYPES` with `satisfies readonly HostEvent['type'][]`, so a new union member compiles without touching it.
+- `spa/src/hooks/useMultiHostEventWs.ts:169-236` is the per-host `onEvent` closure; `hostId` is the loop variable of line 110; the `nex-worker-exited` branch is lines 213-217 and delegates to a lib function (`handleWorkerExited(hostId, event.value)`, `spa/src/lib/nex/worker-exited-event.ts:42-50`); `isAgentWsEvent` follows at line 224. Imports end at line 21.
+- The WS test harness is `spa/src/hooks/useMultiHostEventWs.worker-exited.test.ts`: `vi.mock('../lib/host-connection', …checkHealth…)` before a dynamic import of the hook, `FakeSocket` with `emit(data)`, `useHostStore.setState({hosts, hostOrder, runtime: {}, activeHostId})`, `useSessionStore.setState({ fetchHost: vi.fn(async () => {}), replaceHost: vi.fn() } as never)`.
+- `HandoffDialogHost` (`spa/src/components/HandoffDialogHost.tsx:31-36`) renders from a non-persisted zustand store (`useHandoffDialogStore.ts:29-36`, plain `create`, no `persist`) and keys the open dialog so a new target is a fresh mount. Its test seeds stores with `setState` and asserts through `data-testid`.
+- `ConfirmDialog` (`spa/src/components/ConfirmDialog.tsx:91-99`) binds Escape → `onCancel` in the capture phase and the backdrop click → `onCancel` (line 111); it has only Cancel + Confirm. The approval dialog must not dismiss on Escape, so it is a custom panel reusing the same classes (`fixed inset-0 z-50 … bg-black/50`, panel `rounded-lg border border-border-default bg-surface-primary shadow-lg outline-none`, buttons at lines 126-142) and the same focus-on-open + Tab trap (lines 50-86), without the Escape effect.
+- `App.tsx:34` imports `HandoffDialogHost`; `App.tsx:282-283` mounts it (`{/* The one "Hand to nex" dialog … */}` then `<HandoffDialogHost />`).
+- Host connection state: `useHostStore` `runtime[hostId].status` is `'connected' | 'disconnected' | 'reconnecting' | 'auth-error'` (`useHostStore.ts:82-83`); the WS hook sets `reconnecting` on socket close (`useMultiHostEventWs.ts:245`) and `connected` on open (`:251-254`). Tests flip it with `useHostStore.getState().setRuntime(H, { status })` (`useNexHostStore.test.ts:428-429`).
+- API helpers: `pinnedHostFetch(hostId, path, init)` (`host-api.ts:214-219`) rejects an unconfigured host and otherwise adds the Bearer header via `hostFetch`; `postJson` in `handoff-api.ts:129-150` keeps the decoded error body on a typed error (`HandoffApiError`, lines 18-30) — the approval API copies that shape. The handoff-api test stubs `fetch` with `vi.stubGlobal('fetch', vi.fn())` and seeds `useHostStore.getState().addHost({ id: 'host-mlab', name: 'mlab', ip: '100.64.0.2', port: 7860, token: 'tok-1' })` (`handoff-api.test.ts:33-37`).
+- Notifications: `window.electronAPI.showNotification({ title, body, sessionCode, eventName, broadcastTs, action?: { kind: string; hostId: string; sessionCode?: string } })` (`electron.d.ts:135`); Electron main dedups on `broadcastTs` alone, 5 s window (`electron/main.ts:155-165`), and forwards `action` unchanged on click (`:174-183`). The SPA click listener (`useNotificationDispatcher.ts:278-295`) routes `open-host` and treats every other kind as `open-session`; `NotificationAction` is the union at lines 113-115; `handleNotificationClick` is the switch at 349-411. `getPlatformCapabilities().canNotification` is `!!window.electronAPI` (`platform.ts:14-27`). Tests stub Electron with `Object.defineProperty(window, 'electronAPI', { value: {...}, writable: true, configurable: true })` (`useNotificationDispatcher.test.ts:170, 208-215`).
+- `window.electronAPI.localDaemonStatus?: () => Promise<ElectronLocalDaemonStatus>` (`electron.d.ts:173`) — a **Promise**, with `hostname: string` (`:62`). `device-name.ts:63-79` already reads it once with a 1.5 s race; the client label copies that pattern.
+- `RestartDaemonButton.tsx:115-131` renders the confirm `ConfirmDialog` with a children `<p data-testid={`${testId}-workers`}>` at 124-130; its test sets `useI18nStore.getState().setLocale('zh-TW')` and reads `restart-daemon-workers` (`RestartDaemonButton.test.tsx:11-16, 36-51`).
+- i18n: `t(key, params?)` replaces `{{param}}` and falls back to `en`, then to the key (`useI18nStore.ts:41-52`); `pluralKey(base, count)` → `_one`/`_other` (`plural.ts:7-9`; zh-TW has no plural, so this section does not use it: the spec strings are count-agnostic). `locale-completeness.test.ts:5-107` pins identical key sets and has per-namespace blocks (`peer.`, `hosts.transfer.`). Both locale files are 1897 lines; the last key is `"worker.exit.after_transfer_failed"` at line 1896, `}` at 1897. Neighbouring features name keys `<feature>.<area>.<name>` (`hosts.restart.confirm_workers`, `worker.exit.manual_resume`).
+- Toast: `useUndoToast.getState().show(message, action?, actionLabel?, opts?)` (`useUndoToast.ts:24, 34-35`); features read it back in tests as `useUndoToast.getState().toast?.message`.
+- Host display name in non-hook code: `hostLabel(hostId, hostLookOf(hostId))` (`host-look.ts:116-123, 149-151`); in components `hostLabel(hostId, useHostLook(hostId))` (`RestartDaemonButton.tsx:44`). With no look entry it is the host's configured `name` (`host-look.ts:42-47`).
+- `tsconfig.app.json` has `strict`, `noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax`, `erasableSyntaxOnly` (no `enum`). ESLint runs `react-refresh/only-export-components`, so `.tsx` component files export components only; helpers live in `lib/`.
+- Vitest 4.1 / `@testing-library/react` 16.3 / jsdom; `src/test-setup.ts` registers the built-in locales and auto-cleans up.
+
+**Split.** P3 is two PRs (see `## Size estimate`): **P3a** = Tasks 3.1–3.4 (types + API, store, WS branch, dialog host); **P3b** = Tasks 3.5–3.8 (reconnect resend, notification, restart line, i18n consolidation). Each stays ≤ 20 files. Tasks add their own i18n keys as they need them (so their tests assert real strings); Task 3.8 is the consolidated key table, the namespace completeness block, lint and build.
+
+### Task 3.1: Wire types and the approval API client
+
+**Files:**
+- Create: `spa/src/lib/team/types.ts`
+- Create: `spa/src/lib/team/approval-api.ts`
+- Test: `spa/src/lib/team/approval-api.test.ts`
+
+**Interfaces:**
+- Consumes: `pinnedHostFetch(hostId: string, path: string, init?: RequestInit): Promise<Response>` (`spa/src/lib/host-api.ts:214`); `useHostStore.getState().hosts` (`useHostStore.ts:122`).
+- Produces (TypeScript mirror of `internal/team/wire.go`, JSON names are the contract):
+  ```ts
+  export const APPROVAL_EVENT_TYPE = 'approval.request'
+  export type ApprovalKind = 'lead' | 'self_relay'
+  export type ApprovalState = 'open' | 'approved' | 'denied' | 'timeout' | 'cancelled' | 'abandoned'
+  export const DEFAULT_MAX_MEMBERS = 3
+  export const MAX_MAX_MEMBERS = 8
+  export interface Origin { session_id: string; ref: string; name: string; pid: number; proc_start: string; cwd: string; tmux: string; title?: string; address?: string }
+  export interface LeadPayload { reason: string; max_members: number; roots: string[] }
+  export interface Grant { max_members: number; roots: string[] }
+  export interface Client { kind: 'app'; label: string; addr?: string }
+  export interface Approval { id: string; kind: ApprovalKind; host_id: string; origin: Origin; payload: unknown; state: ApprovalState; created_at: number; deadline_at: number; lease_until: number; decided_by?: Client; decided_at?: number; grant?: Grant }
+  export interface DecideRequest { decision: 'approve' | 'deny'; grant?: Grant; client: Client }
+  export interface APIError { error: string; detail?: string; approval?: Approval }
+  export type ApprovalEventValue = { op: 'opened' | 'closed'; approval: Approval } | { op: 'snapshot'; approvals: Approval[] }
+  export function leadPayloadOf(a: Approval): LeadPayload
+  export class ApprovalApiError extends Error { readonly status: number; readonly code: string; readonly detail: string; readonly approval: Approval | null }
+  export function decideApproval(hostId: string, id: string, body: DecideRequest): Promise<Approval>
+  export function listOpenApprovals(hostId: string): Promise<Approval[]>
+  ```
+  `Origin.title` and `Origin.address` are **optional additions** the wire does not carry yet (see `## Open questions`); the SPA falls back when they are absent.
+
+- [ ] **Step 1: Write the failing test.**
+
+```ts
+// spa/src/lib/team/approval-api.test.ts — the SPA client for POST /api/team/approvals/{id}/decide and
+// GET /api/team/approvals?state=open (lead-team spec §6.2, plan preamble "Routes"). A non-2xx body is
+// `{error, detail, approval}`; the 409s carry the Approval, so the caller can say who handled it.
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { useHostStore } from '../../stores/useHostStore'
+import { ApprovalApiError, decideApproval, listOpenApprovals } from './approval-api'
+import { leadPayloadOf, type Approval } from './types'
+
+const testGlobal = globalThis as typeof globalThis & { fetch: ReturnType<typeof vi.fn> }
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
+async function rejection(p: Promise<unknown>): Promise<ApprovalApiError> {
+  try {
+    await p
+  } catch (e) {
+    expect(e).toBeInstanceOf(ApprovalApiError)
+    return e as ApprovalApiError
+  }
+  throw new Error('expected rejection')
+}
+
+const approval = (over: Partial<Approval> = {}): Approval => ({
+  id: 'req-1', kind: 'lead', host_id: 'd1',
+  origin: { session_id: 'S1', ref: '_40iueq', name: 'purdex-7c', pid: 4242, proc_start: 'Tue Oct  7 10:00:00 2026', cwd: '/w/purdex', tmux: 'purdex:@1.%2' },
+  payload: { reason: '要平行跑三個 PR', max_members: 3, roots: ['/w/purdex'] },
+  state: 'open', created_at: 1_000, deadline_at: 541_000, lease_until: 31_000,
+  ...over,
+})
+const client = { kind: 'app' as const, label: 'Purdex.app @ mlab' }
+
+describe('approval-api', () => {
+  let hostId: string
+
+  beforeEach(() => {
+    useHostStore.getState().reset()
+    hostId = useHostStore.getState().addHost({ id: 'host-mlab', name: 'mlab', ip: '100.64.0.2', port: 7860, token: 'tok-1' })
+    vi.stubGlobal('fetch', vi.fn())
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  describe('decideApproval', () => {
+    it('POSTs the DecideRequest as JSON to /api/team/approvals/{id}/decide with the Bearer token', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(approval({ state: 'approved', decided_by: client, decided_at: 2_000, grant: { max_members: 3, roots: ['/w/purdex'] } })))
+      const r = await decideApproval(hostId, 'req-1', { decision: 'approve', grant: { max_members: 3, roots: ['/w/purdex'] }, client })
+      expect(testGlobal.fetch).toHaveBeenCalledTimes(1)
+      const [url, init] = testGlobal.fetch.mock.calls[0]
+      expect(url).toBe('http://100.64.0.2:7860/api/team/approvals/req-1/decide')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(init.body)).toEqual({ decision: 'approve', grant: { max_members: 3, roots: ['/w/purdex'] }, client })
+      const h = new Headers(init.headers)
+      expect(h.get('Content-Type')).toBe('application/json')
+      expect(h.get('Authorization')).toBe('Bearer tok-1')
+      expect(r.state).toBe('approved')
+      expect(r.decided_by?.label).toBe('Purdex.app @ mlab')
+    })
+
+    it('URL-encodes the id', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(approval({ id: 'a/b c', state: 'denied' })))
+      await decideApproval(hostId, 'a/b c', { decision: 'deny', client })
+      expect(testGlobal.fetch.mock.calls[0][0]).toBe('http://100.64.0.2:7860/api/team/approvals/a%2Fb%20c/decide')
+    })
+
+    it('a 409 already_decided is surfaced as a typed error carrying the closed approval', async () => {
+      const closed = approval({ state: 'denied', decided_by: { kind: 'app', label: 'Purdex.app @ air26', addr: '100.64.0.4:51234' }, decided_at: 3_000 })
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'already_decided', detail: 'closed at 3000', approval: closed }, 409))
+      const err = await rejection(decideApproval(hostId, 'req-1', { decision: 'approve', client }))
+      expect(err.status).toBe(409)
+      expect(err.code).toBe('already_decided')
+      expect(err.detail).toBe('closed at 3000')
+      expect(err.approval?.state).toBe('denied')
+      expect(err.approval?.decided_by?.label).toBe('Purdex.app @ air26')
+    })
+
+    it('a JSON 404 not_found keeps the daemon code; a plain-text 404 (old daemon, no route) is `unsupported`', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'not_found' }, 404))
+      const a = await rejection(decideApproval(hostId, 'gone', { decision: 'deny', client }))
+      expect(a.code).toBe('not_found')
+      expect(a.approval).toBeNull()
+      testGlobal.fetch.mockResolvedValueOnce(new Response('404 page not found\n', { status: 404 }))
+      const b = await rejection(decideApproval(hostId, 'gone', { decision: 'deny', client }))
+      expect(b.status).toBe(404)
+      expect(b.code).toBe('unsupported')
+    })
+
+    it('a non-JSON 5xx falls back to http_<status>', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(new Response('<html>boom</html>', { status: 502 }))
+      const err = await rejection(decideApproval(hostId, 'req-1', { decision: 'deny', client }))
+      expect(err.code).toBe('http_502')
+    })
+
+    it('a fetch rejection (socket refused mid-restart) is code `network`, status 0', async () => {
+      testGlobal.fetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      const err = await rejection(decideApproval(hostId, 'req-1', { decision: 'deny', client }))
+      expect(err.status).toBe(0)
+      expect(err.code).toBe('network')
+      expect(err.detail).toBe('Failed to fetch')
+    })
+
+    it('an unconfigured host is refused before any request (`host_removed`)', async () => {
+      const err = await rejection(decideApproval('no-such-host', 'req-1', { decision: 'deny', client }))
+      expect(err.code).toBe('host_removed')
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('listOpenApprovals', () => {
+    it('GETs /api/team/approvals?state=open and returns the list', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ approvals: [approval(), approval({ id: 'req-2' })] }))
+      const list = await listOpenApprovals(hostId)
+      const [url, init] = testGlobal.fetch.mock.calls[0]
+      expect(url).toBe('http://100.64.0.2:7860/api/team/approvals?state=open')
+      expect(init.method).toBe('GET')
+      expect(list.map((a) => a.id)).toEqual(['req-1', 'req-2'])
+    })
+
+    it('a null or missing `approvals` is an empty list', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ approvals: null }))
+      expect(await listOpenApprovals(hostId)).toEqual([])
+      testGlobal.fetch.mockResolvedValueOnce(json({}))
+      expect(await listOpenApprovals(hostId)).toEqual([])
+    })
+  })
+
+  describe('leadPayloadOf', () => {
+    it('reads the lead payload and normalises it like the daemon does (0 → 3, cap 8, roots default [cwd])', () => {
+      expect(leadPayloadOf(approval())).toEqual({ reason: '要平行跑三個 PR', max_members: 3, roots: ['/w/purdex'] })
+      expect(leadPayloadOf(approval({ payload: { reason: 'r', max_members: 0, roots: [] } }))).toEqual({ reason: 'r', max_members: 3, roots: ['/w/purdex'] })
+      expect(leadPayloadOf(approval({ payload: { reason: 'r', max_members: 99, roots: ['/a', 7, ''] } }))).toEqual({ reason: 'r', max_members: 8, roots: ['/a'] })
+      expect(leadPayloadOf(approval({ payload: 'garbage' }))).toEqual({ reason: '', max_members: 3, roots: ['/w/purdex'] })
+    })
+  })
+})
+```
+
+- [ ] **Step 2: Run the test and verify it fails.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/lib/team/approval-api.test.ts`
+  - Expected: FAIL — `Failed to resolve import "./approval-api"` (the module does not exist).
+
+- [ ] **Step 3: Implement `types.ts` and `approval-api.ts`.**
+
+```ts
+// spa/src/lib/team/types.ts — TypeScript mirror of the daemon's `internal/team/wire.go` (lead-team plan
+// preamble "The wire contract"). JSON names are the contract; nothing here is persisted. Time fields are
+// unix milliseconds. `payload` stays `unknown` (it is `json.RawMessage` on the wire and differs per kind);
+// `leadPayloadOf` reads the lead shape with the daemon's normalisation, so a payload an older daemon left
+// un-normalised still renders.
+
+/** `HostEvent.type` of every approval event. */
+export const APPROVAL_EVENT_TYPE = 'approval.request'
+
+export type ApprovalKind = 'lead' | 'self_relay'
+
+export type ApprovalState = 'open' | 'approved' | 'denied' | 'timeout' | 'cancelled' | 'abandoned'
+
+/** Spec §6.1–§6.2 limits (`team.DefaultMaxMembers`, `team.MaxMaxMembers`). */
+export const DEFAULT_MAX_MEMBERS = 3
+export const MAX_MAX_MEMBERS = 8
+
+/**
+ * The requesting CC session, attributed by inbox (spec §6.2). `ref` is `_xxxxxx`; `name` may be ''.
+ * `title` and `address` are not on the wire yet (P2a may add them); the SPA falls back to `name` / `ref`
+ * and to `<host>/<name> [<ref>]` built locally (approval-format.ts) when they are absent.
+ */
+export interface Origin {
+  session_id: string
+  ref: string
+  name: string
+  pid: number
+  proc_start: string
+  cwd: string
+  /** `<session>:@<win>.%<pane>` or ''. */
+  tmux: string
+  title?: string
+  address?: string
+}
+
+/** `Approval.payload` for kind `lead`. */
+export interface LeadPayload {
+  reason: string
+  max_members: number
+  roots: string[]
+}
+
+/** What the user approved, as edited in the dialog. */
+export interface Grant {
+  max_members: number
+  roots: string[]
+}
+
+/** The audit label of whoever decided (spec §6.5). `addr` is set by the daemon from RemoteAddr. */
+export interface Client {
+  kind: 'app'
+  label: string
+  addr?: string
+}
+
+export interface Approval {
+  id: string
+  kind: ApprovalKind
+  host_id: string
+  origin: Origin
+  payload: unknown
+  state: ApprovalState
+  created_at: number
+  deadline_at: number
+  lease_until: number
+  decided_by?: Client
+  decided_at?: number
+  grant?: Grant
+}
+
+/** `POST /api/team/approvals/{id}/decide`. `grant` is approve-only; absent → the payload's values. */
+export interface DecideRequest {
+  decision: 'approve' | 'deny'
+  grant?: Grant
+  client: Client
+}
+
+/** Every non-2xx body on `/api/team/*`. */
+export interface APIError {
+  error: string
+  detail?: string
+  approval?: Approval
+}
+
+/** `HostEvent.value` (JSON text) of an `approval.request` event. */
+export type ApprovalEventValue =
+  | { op: 'opened' | 'closed'; approval: Approval }
+  | { op: 'snapshot'; approvals: Approval[] }
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/** The lead payload, normalised as the daemon normalises it: `max_members` 0 → 3, cap 8; roots default `[origin.cwd]`. */
+export function leadPayloadOf(a: Approval): LeadPayload {
+  const p = isRecord(a.payload) ? a.payload : {}
+  const reason = typeof p.reason === 'string' ? p.reason : ''
+  const rawMembers = typeof p.max_members === 'number' && Number.isFinite(p.max_members) ? Math.trunc(p.max_members) : 0
+  const max_members = rawMembers <= 0 ? DEFAULT_MAX_MEMBERS : Math.min(rawMembers, MAX_MAX_MEMBERS)
+  const roots = Array.isArray(p.roots) ? p.roots.filter((r): r is string => typeof r === 'string' && r !== '') : []
+  return { reason, max_members, roots: roots.length > 0 ? roots : [a.origin.cwd] }
+}
+```
+
+```ts
+// spa/src/lib/team/approval-api.ts — SPA wrappers for the daemon's approval routes (lead-team spec §6.2,
+// plan preamble "Routes"): decide one request, list the open ones. Pinned to a host THIS device has
+// (`pinnedHostFetch`), never the active-host fallback — a request names a specific daemon.
+//
+// Errors: every non-2xx body is `{error, detail, approval}`; the two 409s (`request_open`,
+// `already_decided`) carry the Approval, so the whole body is kept on the error instead of being
+// flattened. A plain-text 404 (Go's mux, no such route) means an older daemon: code `unsupported`.
+// A rejected fetch (refused, reset — the daemon is restarting) is code `network`, status 0: the dialog
+// queues the decision on that code alone.
+import { pinnedHostFetch } from '../host-api'
+import { useHostStore } from '../../stores/useHostStore'
+import type { APIError, Approval, DecideRequest } from './types'
+
+export class ApprovalApiError extends Error {
+  readonly status: number
+  readonly code: string
+  readonly detail: string
+  readonly approval: Approval | null
+
+  constructor(status: number, code: string, detail = '', approval: Approval | null = null) {
+    super(detail !== '' ? `approval: ${code}: ${detail}` : `approval: ${code} (HTTP ${status})`)
+    this.name = 'ApprovalApiError'
+    this.status = status
+    this.code = code
+    this.detail = detail
+    this.approval = approval
+  }
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+async function errorFromResponse(res: Response): Promise<ApprovalApiError> {
+  const fallback = `http_${res.status}`
+  let text = ''
+  try {
+    text = await res.text()
+  } catch {
+    return new ApprovalApiError(res.status, fallback)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    // Not our JSON: Go's mux answers a missing route with text — an older daemon without the team module.
+    return new ApprovalApiError(res.status, res.status === 404 ? 'unsupported' : fallback)
+  }
+  if (!isRecord(parsed)) return new ApprovalApiError(res.status, fallback)
+  const body = parsed as Partial<APIError>
+  const code = typeof body.error === 'string' && body.error !== '' ? body.error : fallback
+  const detail = typeof body.detail === 'string' ? body.detail : ''
+  const approval = isRecord(body.approval) ? (body.approval as unknown as Approval) : null
+  return new ApprovalApiError(res.status, code, detail, approval)
+}
+
+async function send<T>(hostId: string, path: string, init: RequestInit): Promise<T> {
+  if (!Object.hasOwn(useHostStore.getState().hosts, hostId)) throw new ApprovalApiError(0, 'host_removed')
+  let res: Response
+  try {
+    res = await pinnedHostFetch(hostId, path, init)
+  } catch (e: unknown) {
+    throw new ApprovalApiError(0, 'network', e instanceof Error ? e.message : String(e))
+  }
+  if (!res.ok) throw await errorFromResponse(res)
+  return (await res.json()) as T
+}
+
+/** `POST /api/team/approvals/{id}/decide` — one click (U5b). 200 → the closed Approval; 409 `already_decided` → error with `approval`. */
+export function decideApproval(hostId: string, id: string, body: DecideRequest): Promise<Approval> {
+  return send<Approval>(hostId, `/api/team/approvals/${encodeURIComponent(id)}/decide`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+/** `GET /api/team/approvals?state=open`. `approvals` is `[]` from the daemon, but null is tolerated. */
+export async function listOpenApprovals(hostId: string): Promise<Approval[]> {
+  const r = await send<{ approvals?: Approval[] | null }>(hostId, '/api/team/approvals?state=open', { method: 'GET' })
+  return Array.isArray(r.approvals) ? r.approvals : []
+}
+```
+
+- [ ] **Step 4: Run the test and verify it passes.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/lib/team/approval-api.test.ts`
+  - Expected: PASS, 10 tests.
+
+- [ ] **Step 5: Commit.**
+  ```bash
+  git add spa/src/lib/team/types.ts spa/src/lib/team/approval-api.ts spa/src/lib/team/approval-api.test.ts
+  git commit -m "feat(spa): approval wire types and API client for /api/team/approvals
+
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+  ```
+
+### Task 3.2: `useApprovalStore` — open requests per host, queued decisions, oldest-first selector
+
+**Files:**
+- Create: `spa/src/stores/useApprovalStore.ts`
+- Test: `spa/src/stores/useApprovalStore.test.ts`
+
+**Interfaces:**
+- Consumes: `Approval`, `Grant` from `spa/src/lib/team/types.ts` (Task 3.1).
+- Produces:
+  ```ts
+  export type Decision = 'approve' | 'deny'
+  export interface ApprovalEntry { hostId: string; approval: Approval }
+  export interface QueuedDecision { hostId: string; approval: Approval; decision: Decision; grant?: Grant }
+  export function approvalKey(hostId: string, id: string): string            // `${hostId}\u0000${id}`
+  interface ApprovalStoreState {
+    entries: Record<string, ApprovalEntry>        // open requests only
+    queued: Record<string, QueuedDecision>        // decisions clicked while the host was not connected
+    decidedHere: Record<string, true>             // ids this app sent a decide for (no "elsewhere" toast)
+    applySnapshot: (hostId: string, approvals: Approval[]) => string[]   // replaces the host's set; returns the ids that vanished
+    applyOpened: (hostId: string, approval: Approval) => boolean          // idempotent; true when it added
+    applyClosed: (hostId: string, approval: Approval) => 'absent' | 'ours' | 'elsewhere'
+    markDecidedHere: (hostId: string, id: string) => void
+    unmarkDecidedHere: (hostId: string, id: string) => void
+    queueDecision: (hostId: string, approval: Approval, decision: Decision, grant?: Grant) => void
+    takeQueued: (hostId: string) => QueuedDecision[]                      // removes and returns the host's queue
+    reset: () => void
+  }
+  export const useApprovalStore: UseBoundStore<StoreApi<ApprovalStoreState>>
+  export const selectCurrent: (s: ApprovalStoreState) => ApprovalEntry | null     // oldest created_at across hosts
+  export const selectOpenCount: (s: ApprovalStoreState) => number
+  export const selectOpenCountFor: (hostId: string) => (s: ApprovalStoreState) => number
+  ```
+  Never persisted (plain `create`, as `useHandoffDialogStore`): it is what is on screen right now; the daemon's snapshot rebuilds it on every connection.
+
+- [ ] **Step 1: Write the failing test.**
+
+```ts
+// spa/src/stores/useApprovalStore.test.ts — the open approval requests this app shows (lead-team spec §6.3),
+// per host, oldest first, with the decisions clicked while a host was not connected (spec §9.4).
+import { beforeEach, describe, expect, it } from 'vitest'
+import { approvalKey, selectCurrent, selectOpenCount, selectOpenCountFor, useApprovalStore } from './useApprovalStore'
+import type { Approval } from '../lib/team/types'
+
+const approval = (over: Partial<Approval> = {}): Approval => ({
+  id: 'req-1', kind: 'lead', host_id: 'd1',
+  origin: { session_id: 'S1', ref: '_40iueq', name: 'purdex-7c', pid: 1, proc_start: 'p', cwd: '/w', tmux: '' },
+  payload: { reason: 'r', max_members: 3, roots: ['/w'] },
+  state: 'open', created_at: 1_000, deadline_at: 541_000, lease_until: 31_000,
+  ...over,
+})
+const s = () => useApprovalStore.getState()
+const ids = () => Object.values(s().entries).map((e) => `${e.hostId}:${e.approval.id}`).sort()
+
+beforeEach(() => s().reset())
+
+describe('useApprovalStore', () => {
+  it('keys entries by hostId NUL id, so the same request id on two hosts never collides', () => {
+    expect(approvalKey('h1', 'req-1')).toBe('h1\u0000req-1')
+    s().applyOpened('h1', approval())
+    s().applyOpened('h2', approval())
+    expect(ids()).toEqual(['h1:req-1', 'h2:req-1'])
+    expect(selectOpenCount(s())).toBe(2)
+    expect(selectOpenCountFor('h1')(s())).toBe(1)
+  })
+
+  describe('applySnapshot', () => {
+    it('replaces that host\'s set only and returns the ids that vanished', () => {
+      s().applyOpened('h1', approval({ id: 'a' }))
+      s().applyOpened('h1', approval({ id: 'b' }))
+      s().applyOpened('h2', approval({ id: 'c' }))
+      const vanished = s().applySnapshot('h1', [approval({ id: 'b' }), approval({ id: 'd' })])
+      expect(vanished).toEqual(['a'])
+      expect(ids()).toEqual(['h1:b', 'h1:d', 'h2:c'])
+    })
+
+    it('an empty snapshot clears the host (a request that closed while disconnected disappears)', () => {
+      s().applyOpened('h1', approval({ id: 'a' }))
+      expect(s().applySnapshot('h1', [])).toEqual(['a'])
+      expect(ids()).toEqual([])
+    })
+
+    it('does not duplicate a request already held, and keeps only open ones', () => {
+      s().applyOpened('h1', approval({ id: 'a' }))
+      s().applySnapshot('h1', [approval({ id: 'a' }), approval({ id: 'z', state: 'denied' })])
+      expect(ids()).toEqual(['h1:a'])
+    })
+  })
+
+  describe('applyOpened', () => {
+    it('adds once: a second opened for the same request is ignored and reports false', () => {
+      expect(s().applyOpened('h1', approval())).toBe(true)
+      expect(s().applyOpened('h1', approval({ created_at: 999 }))).toBe(false)
+      expect(s().entries[approvalKey('h1', 'req-1')].approval.created_at).toBe(1_000)
+    })
+
+    it('ignores a non-open approval', () => {
+      expect(s().applyOpened('h1', approval({ state: 'timeout' }))).toBe(false)
+      expect(ids()).toEqual([])
+    })
+  })
+
+  describe('applyClosed', () => {
+    it('removes the entry and tells whether the decision was ours, elsewhere, or for an unknown request', () => {
+      s().applyOpened('h1', approval({ id: 'a' }))
+      s().applyOpened('h1', approval({ id: 'b' }))
+      s().markDecidedHere('h1', 'a')
+      expect(s().applyClosed('h1', approval({ id: 'a', state: 'approved' }))).toBe('ours')
+      expect(s().applyClosed('h1', approval({ id: 'b', state: 'denied' }))).toBe('elsewhere')
+      expect(s().applyClosed('h1', approval({ id: 'b', state: 'denied' }))).toBe('absent')
+      expect(ids()).toEqual([])
+      expect(s().decidedHere).toEqual({})
+    })
+
+    it('drops a queued decision for the closed request too', () => {
+      s().applyOpened('h1', approval({ id: 'a' }))
+      s().queueDecision('h1', approval({ id: 'a' }), 'deny')
+      s().applyClosed('h1', approval({ id: 'a', state: 'timeout' }))
+      expect(s().takeQueued('h1')).toEqual([])
+    })
+
+    it('unmarkDecidedHere undoes the mark (a send that never reached the daemon)', () => {
+      s().applyOpened('h1', approval({ id: 'a' }))
+      s().markDecidedHere('h1', 'a')
+      s().unmarkDecidedHere('h1', 'a')
+      expect(s().applyClosed('h1', approval({ id: 'a', state: 'approved' }))).toBe('elsewhere')
+    })
+  })
+
+  describe('queued decisions', () => {
+    it('queueDecision keeps one decision per request (the last click wins); takeQueued removes and returns that host\'s', () => {
+      const a = approval({ id: 'a' })
+      s().applyOpened('h1', a)
+      s().applyOpened('h2', approval({ id: 'c' }))
+      s().queueDecision('h1', a, 'approve', { max_members: 2, roots: ['/w'] })
+      s().queueDecision('h1', a, 'deny')
+      s().queueDecision('h2', approval({ id: 'c' }), 'approve')
+      expect(s().takeQueued('h1')).toEqual([{ hostId: 'h1', approval: a, decision: 'deny', grant: undefined }])
+      expect(s().takeQueued('h1')).toEqual([])
+      expect(s().takeQueued('h2')).toHaveLength(1)
+    })
+  })
+
+  describe('selectCurrent', () => {
+    it('is the oldest created_at across hosts, ties broken by id; null when empty', () => {
+      expect(selectCurrent(s())).toBeNull()
+      s().applyOpened('h2', approval({ id: 'late', created_at: 3_000 }))
+      s().applyOpened('h1', approval({ id: 'b', created_at: 2_000 }))
+      s().applyOpened('h3', approval({ id: 'a', created_at: 2_000 }))
+      expect(selectCurrent(s())).toMatchObject({ hostId: 'h3', approval: { id: 'a' } })
+      s().applyClosed('h3', approval({ id: 'a', state: 'denied' }))
+      expect(selectCurrent(s())).toMatchObject({ hostId: 'h1', approval: { id: 'b' } })
+    })
+
+    it('returns the stored entry object itself, so a zustand selector sees a stable reference', () => {
+      s().applyOpened('h1', approval())
+      expect(selectCurrent(s())).toBe(s().entries[approvalKey('h1', 'req-1')])
+    })
+  })
+})
+```
+
+- [ ] **Step 2: Run the test and verify it fails.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/stores/useApprovalStore.test.ts`
+  - Expected: FAIL — `Failed to resolve import "./useApprovalStore"`.
+
+- [ ] **Step 3: Implement the store.**
+
+```ts
+// spa/src/stores/useApprovalStore.ts — the open approval requests this app shows (lead-team spec §6.3), one
+// entry per (host, request id), fed by the `approval.request` WS branch and the daemon's OnSubscribe snapshot.
+// Never persisted: it is what is on screen right now, and every new connection replays the open set.
+//
+// `decidedHere` marks the requests this app sent a decide for, so the `closed` that follows our own 200 does
+// not toast "已由 … 核准" at the person who clicked. `queued` holds a decision clicked while the host was not
+// connected (spec §9.4); the snapshot that arrives on reconnect either re-adds the request (the decision is
+// sent then, once) or shows it gone (toast). The store is pure data; the sending lives in lib/team.
+import { create } from 'zustand'
+import type { Approval, Grant } from '../lib/team/types'
+
+export type Decision = 'approve' | 'deny'
+
+export interface ApprovalEntry {
+  hostId: string
+  approval: Approval
+}
+
+export interface QueuedDecision {
+  hostId: string
+  approval: Approval
+  decision: Decision
+  grant?: Grant
+}
+
+/** NUL-joined, as the pane-keyed dialogs do: a host id or a request id may contain any printable separator. */
+export const approvalKey = (hostId: string, id: string): string => `${hostId}\u0000${id}`
+
+interface ApprovalStoreState {
+  entries: Record<string, ApprovalEntry>
+  queued: Record<string, QueuedDecision>
+  decidedHere: Record<string, true>
+  /** Replace the host's whole open set from a snapshot; returns the ids held before that are not in it. */
+  applySnapshot: (hostId: string, approvals: Approval[]) => string[]
+  /** Add an opened request; false when it was already held or is not open. */
+  applyOpened: (hostId: string, approval: Approval) => boolean
+  /** Remove a request on any close. Tells whether the decision was ours, elsewhere, or the request unknown. */
+  applyClosed: (hostId: string, approval: Approval) => 'absent' | 'ours' | 'elsewhere'
+  markDecidedHere: (hostId: string, id: string) => void
+  unmarkDecidedHere: (hostId: string, id: string) => void
+  queueDecision: (hostId: string, approval: Approval, decision: Decision, grant?: Grant) => void
+  /** Remove and return the host's queued decisions (each is sent at most once). */
+  takeQueued: (hostId: string) => QueuedDecision[]
+  reset: () => void
+}
+
+function without<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!Object.hasOwn(record, key)) return record
+  const next = { ...record }
+  delete next[key]
+  return next
+}
+
+export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
+  entries: {},
+  queued: {},
+  decidedHere: {},
+
+  applySnapshot: (hostId, approvals) => {
+    const open = approvals.filter((a) => a.state === 'open')
+    const keep = new Set(open.map((a) => approvalKey(hostId, a.id)))
+    const next: Record<string, ApprovalEntry> = {}
+    const vanished: string[] = []
+    for (const [key, entry] of Object.entries(get().entries)) {
+      if (entry.hostId !== hostId) {
+        next[key] = entry
+      } else if (!keep.has(key)) {
+        vanished.push(entry.approval.id)
+      }
+    }
+    for (const a of open) {
+      const key = approvalKey(hostId, a.id)
+      // Keep the held object when the same request is still open: the dialog is keyed on it.
+      next[key] = get().entries[key] ?? { hostId, approval: a }
+    }
+    set({ entries: next })
+    return vanished
+  },
+
+  applyOpened: (hostId, approval) => {
+    if (approval.state !== 'open') return false
+    const key = approvalKey(hostId, approval.id)
+    if (Object.hasOwn(get().entries, key)) return false
+    set((s) => ({ entries: { ...s.entries, [key]: { hostId, approval } } }))
+    return true
+  },
+
+  applyClosed: (hostId, approval) => {
+    const key = approvalKey(hostId, approval.id)
+    const { entries, queued, decidedHere } = get()
+    const had = Object.hasOwn(entries, key)
+    const ours = Object.hasOwn(decidedHere, key)
+    set({ entries: without(entries, key), queued: without(queued, key), decidedHere: without(decidedHere, key) })
+    if (!had) return 'absent'
+    return ours ? 'ours' : 'elsewhere'
+  },
+
+  markDecidedHere: (hostId, id) => set((s) => ({ decidedHere: { ...s.decidedHere, [approvalKey(hostId, id)]: true } })),
+  unmarkDecidedHere: (hostId, id) => set((s) => ({ decidedHere: without(s.decidedHere, approvalKey(hostId, id)) })),
+
+  queueDecision: (hostId, approval, decision, grant) =>
+    set((s) => ({ queued: { ...s.queued, [approvalKey(hostId, approval.id)]: { hostId, approval, decision, grant } } })),
+
+  takeQueued: (hostId) => {
+    const taken: QueuedDecision[] = []
+    const rest: Record<string, QueuedDecision> = {}
+    for (const [key, q] of Object.entries(get().queued)) {
+      if (q.hostId === hostId) taken.push(q)
+      else rest[key] = q
+    }
+    if (taken.length > 0) set({ queued: rest })
+    return taken
+  },
+
+  reset: () => set({ entries: {}, queued: {}, decidedHere: {} }),
+}))
+
+/** The request the dialog shows: the oldest `created_at` across hosts (spec §6.3 "oldest first"); ties by id, then host. */
+export const selectCurrent = (s: ApprovalStoreState): ApprovalEntry | null => {
+  let best: ApprovalEntry | null = null
+  for (const e of Object.values(s.entries)) {
+    if (best === null) { best = e; continue }
+    const a = e.approval, b = best.approval
+    if (a.created_at < b.created_at || (a.created_at === b.created_at && (a.id < b.id || (a.id === b.id && e.hostId < best.hostId)))) best = e
+  }
+  return best
+}
+
+export const selectOpenCount = (s: ApprovalStoreState): number => Object.keys(s.entries).length
+
+export const selectOpenCountFor = (hostId: string) => (s: ApprovalStoreState): number => {
+  let n = 0
+  for (const e of Object.values(s.entries)) if (e.hostId === hostId) n++
+  return n
+}
+```
+
+- [ ] **Step 4: Run the test and verify it passes.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/stores/useApprovalStore.test.ts`
+  - Expected: PASS, 12 tests.
+
+- [ ] **Step 5: Commit.**
+  ```bash
+  git add spa/src/stores/useApprovalStore.ts spa/src/stores/useApprovalStore.test.ts
+  git commit -m "feat(spa): useApprovalStore — open approval requests per host, queued decisions
+
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+  ```
+
+### Task 3.3: The `approval.request` WS branch — snapshot / opened / closed into the store, "closed elsewhere" toast
+
+**Files:**
+- Create: `spa/src/lib/team/approval-format.ts`
+- Create: `spa/src/lib/team/approval-ws.ts`
+- Modify: `spa/src/lib/host-events.ts:15` (union member after `| 'nex-worker-exited'`)
+- Modify: `spa/src/hooks/useMultiHostEventWs.ts:21` (import), `spa/src/hooks/useMultiHostEventWs.ts:213-217` (branch inserted right after the `nex-worker-exited` branch, before the `handoff` / `relay` comment at 218)
+- Modify: `spa/src/locales/en.json:1896-1897`, `spa/src/locales/zh-TW.json:1896-1897` (keys appended after `worker.exit.after_transfer_failed`)
+- Test: `spa/src/hooks/useMultiHostEventWs.approval.test.ts`
+
+**Interfaces:**
+- Consumes: `connectHostEvents`'s `onEvent` closure (`useMultiHostEventWs.ts:171`), `useApprovalStore` (Task 3.2), `useUndoToast.getState().show`, `useI18nStore.getState().t`, `hostLabel` / `hostLookOf` (`host-look.ts:116, 149`).
+- Produces:
+  ```ts
+  // approval-format.ts
+  export type T = (key: string, params?: Record<string, string | number>) => string
+  export function approvalSessionLabel(o: Origin): string                 // title, else name, else ref
+  export function formatOriginAddress(host: string, o: Origin): string    // o.address, else `<host>/<name> [<ref6>]`, else `<host>/_<ref6>`
+  export function approvalKindLabel(t: T, kind: ApprovalKind): string     // 'lead 申請' / '接力申請'
+  export function closedToastText(t: T, host: string, a: Approval): string
+  export function formatCountdown(ms: number): string                     // 'm:ss', floored at 0:00
+  // approval-ws.ts
+  export function parseApprovalEvent(value: unknown): ApprovalEventValue | null
+  export function toastClosed(hostId: string, approval: Approval): void
+  export function handleApprovalEvent(hostId: string, value: unknown): void
+  ```
+  `host-events.ts`: `HostEvent['type']` gains `'approval.request'`.
+
+- [ ] **Step 1: Write the failing test.**
+
+```ts
+// spa/src/hooks/useMultiHostEventWs.approval.test.ts — the `approval.request` host event (lead-team spec §6.2–§6.3):
+// the snapshot a new subscriber gets populates the host's open set, `opened` adds, `closed` removes — and a close
+// decided on another client toasts who handled it (U6). Harness as useMultiHostEventWs.worker-exited.test.ts.
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { renderHook, act, waitFor } from '@testing-library/react'
+import { useHostStore } from '../stores/useHostStore'
+import { useSessionStore } from '../stores/useSessionStore'
+import { useApprovalStore, approvalKey } from '../stores/useApprovalStore'
+import { useUndoToast } from '../stores/useUndoToast'
+import { useI18nStore } from '../stores/useI18nStore'
+import type { Approval } from '../lib/team/types'
+
+vi.mock('../lib/host-connection', () => ({
+  checkHealth: vi.fn(async () => ({ daemon: 'connected', latency: 3, ticket: 'tk' })),
+}))
+
+const { useMultiHostEventWs } = await import('./useMultiHostEventWs')
+
+const HOST = 'h1'
+
+class FakeSocket {
+  static OPEN = 1
+  readyState = 0
+  binaryType = ''
+  url: string
+  onopen: (() => void) | null = null
+  onclose: (() => void) | null = null
+  onmessage: ((e: { data: unknown }) => void) | null = null
+  onerror: (() => void) | null = null
+  send = vi.fn()
+  close = vi.fn(() => { this.readyState = 3 })
+  constructor(url: string) { this.url = url; sockets.push(this) }
+  emit(data: string) { this.onmessage?.({ data }) }
+}
+
+let sockets: FakeSocket[] = []
+
+const approval = (over: Partial<Approval> = {}): Approval => ({
+  id: 'req-1', kind: 'lead', host_id: 'd1',
+  origin: { session_id: 'S1', ref: '_40iueq', name: 'purdex-7c', pid: 1, proc_start: 'p', cwd: '/w/purdex', tmux: 'purdex:@1.%2' },
+  payload: { reason: '要平行跑三個 PR', max_members: 3, roots: ['/w/purdex'] },
+  state: 'open', created_at: 1_000, deadline_at: 541_000, lease_until: 31_000,
+  ...over,
+})
+const frame = (value: unknown) => JSON.stringify({ type: 'approval.request', session: '', value: typeof value === 'string' ? value : JSON.stringify(value) })
+const held = () => Object.values(useApprovalStore.getState().entries).map((e) => e.approval.id).sort()
+
+beforeEach(() => {
+  sockets = []
+  vi.stubGlobal('WebSocket', FakeSocket)
+  useI18nStore.getState().setLocale('zh-TW')
+  useHostStore.setState({
+    hosts: { [HOST]: { id: HOST, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 } },
+    hostOrder: [HOST],
+    runtime: {},
+    activeHostId: HOST,
+  })
+  useSessionStore.setState({ fetchHost: vi.fn(async () => {}), replaceHost: vi.fn() } as never)
+  useApprovalStore.getState().reset()
+  useUndoToast.setState({ toast: null, notice: null })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  useHostStore.getState().reset()
+})
+
+async function connected() {
+  const view = renderHook(() => useMultiHostEventWs())
+  await waitFor(() => expect(sockets).toHaveLength(1))
+  return { view, ws: sockets[0] }
+}
+
+describe('useMultiHostEventWs approval.request', () => {
+  it('snapshot populates the host\'s set, keyed by this host id; opened adds; closed removes', async () => {
+    const { view, ws } = await connected()
+    act(() => { ws.emit(frame({ op: 'snapshot', approvals: [approval({ id: 'a' }), approval({ id: 'b', created_at: 2_000 })] })) })
+    expect(held()).toEqual(['a', 'b'])
+    expect(useApprovalStore.getState().entries[approvalKey(HOST, 'a')]).toMatchObject({ hostId: HOST, approval: { id: 'a', host_id: 'd1' } })
+    act(() => { ws.emit(frame({ op: 'opened', approval: approval({ id: 'c', created_at: 3_000 }) })) })
+    expect(held()).toEqual(['a', 'b', 'c'])
+    act(() => { ws.emit(frame({ op: 'closed', approval: approval({ id: 'b', state: 'timeout', decided_at: 4_000 }) })) })
+    expect(held()).toEqual(['a', 'c'])
+    view.unmount()
+  })
+
+  it('a snapshot replaces the set: a request closed while this client was away disappears, and nothing is duplicated', async () => {
+    const { view, ws } = await connected()
+    act(() => { ws.emit(frame({ op: 'snapshot', approvals: [approval({ id: 'a' }), approval({ id: 'gone' })] })) })
+    act(() => { ws.emit(frame({ op: 'snapshot', approvals: [approval({ id: 'a' })] })) })
+    expect(held()).toEqual(['a'])
+    act(() => { ws.emit(frame({ op: 'snapshot', approvals: [] })) })
+    expect(held()).toEqual([])
+    view.unmount()
+  })
+
+  it('a duplicate opened is ignored', async () => {
+    const { view, ws } = await connected()
+    act(() => { ws.emit(frame({ op: 'opened', approval: approval() })) })
+    act(() => { ws.emit(frame({ op: 'opened', approval: approval() })) })
+    expect(held()).toEqual(['req-1'])
+    view.unmount()
+  })
+
+  it('unknown ops, malformed approvals and non-JSON values are ignored', async () => {
+    const { view, ws } = await connected()
+    act(() => { ws.emit(frame({ op: 'nope', approval: approval() })) })
+    act(() => { ws.emit(frame({ op: 'opened', approval: { id: '' } })) })
+    act(() => { ws.emit(frame({ op: 'opened' })) })
+    act(() => { ws.emit(frame('not json')) })
+    act(() => { ws.emit(frame({ op: 'snapshot', approvals: null })) })
+    expect(held()).toEqual([])
+    expect(useUndoToast.getState().toast).toBeNull()
+    view.unmount()
+  })
+
+  it('closed by another client → toast "<主機>：<session> 的 lead 申請 已由 <client> 核准"', async () => {
+    const { view, ws } = await connected()
+    act(() => { ws.emit(frame({ op: 'opened', approval: approval() })) })
+    act(() => {
+      ws.emit(frame({ op: 'closed', approval: approval({ state: 'approved', decided_by: { kind: 'app', label: 'Purdex.app @ air26', addr: '100.64.0.4:5' }, decided_at: 5_000 }) }))
+    })
+    expect(held()).toEqual([])
+    expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由 Purdex.app @ air26 核准')
+    view.unmount()
+  })
+
+  it('denied elsewhere says 拒絕; a timeout says it ended; a close for a request never shown toasts nothing', async () => {
+    const { view, ws } = await connected()
+    act(() => { ws.emit(frame({ op: 'opened', approval: approval({ id: 'a' }) })) })
+    act(() => { ws.emit(frame({ op: 'closed', approval: approval({ id: 'a', state: 'denied', decided_by: { kind: 'app', label: 'Purdex.app @ a19' } }) })) })
+    expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由 Purdex.app @ a19 拒絕')
+    act(() => { ws.emit(frame({ op: 'opened', approval: approval({ id: 'b' }) })) })
+    act(() => { ws.emit(frame({ op: 'closed', approval: approval({ id: 'b', state: 'timeout' }) })) })
+    expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請已結束（逾時）')
+    useUndoToast.setState({ toast: null })
+    act(() => { ws.emit(frame({ op: 'closed', approval: approval({ id: 'never-held', state: 'approved', decided_by: { kind: 'app', label: 'x' } }) })) })
+    expect(useUndoToast.getState().toast).toBeNull()
+    view.unmount()
+  })
+
+  it('a close for a request this app decided itself does not toast', async () => {
+    const { view, ws } = await connected()
+    act(() => { ws.emit(frame({ op: 'opened', approval: approval() })) })
+    useApprovalStore.getState().markDecidedHere(HOST, 'req-1')
+    act(() => { ws.emit(frame({ op: 'closed', approval: approval({ state: 'approved', decided_by: { kind: 'app', label: 'Purdex.app @ mlab' } }) })) })
+    expect(held()).toEqual([])
+    expect(useUndoToast.getState().toast).toBeNull()
+    view.unmount()
+  })
+})
+```
+
+- [ ] **Step 2: Run the test and verify it fails.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/hooks/useMultiHostEventWs.approval.test.ts`
+  - Expected: FAIL — the first test's `expect(held()).toEqual(['a', 'b'])` receives `[]` (the hook has no branch for the type; the frame falls through `isAgentWsEvent` untouched).
+
+- [ ] **Step 3: Implement.**
+
+`spa/src/lib/team/approval-format.ts`:
+
+```ts
+// spa/src/lib/team/approval-format.ts — the strings the approval dialog and its toasts are built from
+// (lead-team spec §6.3, §6.5). Pure; the i18n `t` is passed in so lib code and tests do not depend on the
+// store's locale.
+import type { Approval, ApprovalKind, Origin } from './types'
+
+export type T = (key: string, params?: Record<string, string | number>) => string
+
+/** What to call the requesting session: its title (not on the wire yet), else its registry name, else its ref. */
+export function approvalSessionLabel(o: Origin): string {
+  const title = o.title?.trim() ?? ''
+  if (title !== '') return title
+  return o.name !== '' ? o.name : o.ref
+}
+
+/**
+ * The pdx address, as `pdx peers` prints it: `<host>/<name> [<ref>]` with the ref's underscore dropped inside the
+ * brackets, or `<host>/_<ref>` for a session without a routable name. The daemon's own `address` wins when present.
+ */
+export function formatOriginAddress(host: string, o: Origin): string {
+  if (o.address) return o.address
+  const ref6 = o.ref.startsWith('_') ? o.ref.slice(1) : o.ref
+  return o.name !== '' ? `${host}/${o.name} [${ref6}]` : `${host}/_${ref6}`
+}
+
+export function approvalKindLabel(t: T, kind: ApprovalKind): string {
+  return t(kind === 'self_relay' ? 'approval.kind.self_relay' : 'approval.kind.lead')
+}
+
+/**
+ * The toast for a request closed by someone else (spec §6.3 / §6.5): `<主機>：<session> 的 <kind> 已由 <client> 核准／拒絕`;
+ * a timeout, cancel or abandonment names the state instead.
+ */
+export function closedToastText(t: T, host: string, a: Approval): string {
+  const session = approvalSessionLabel(a.origin)
+  const kind = approvalKindLabel(t, a.kind)
+  if ((a.state === 'approved' || a.state === 'denied') && a.decided_by) {
+    const decision = t(a.state === 'approved' ? 'approval.decision.approved' : 'approval.decision.denied')
+    return t('approval.toast.decided_elsewhere', { host, session, kind, client: a.decided_by.label, decision })
+  }
+  return t('approval.toast.ended', { host, session, kind, state: t(`approval.state.${a.state}`) })
+}
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n)
+}
+
+/** `m:ss` to the deadline, never below `0:00`; ceil so the last second shows `0:01`, not `0:00` early. */
+export function formatCountdown(ms: number): string {
+  const s = Number.isFinite(ms) && ms > 0 ? Math.ceil(ms / 1000) : 0
+  return `${Math.floor(s / 60)}:${pad2(s % 60)}`
+}
+```
+
+`spa/src/lib/team/approval-ws.ts`:
+
+```ts
+// spa/src/lib/team/approval-ws.ts — the daemon's `approval.request` host event (lead-team spec §6.2):
+//   {op:"snapshot", approvals:[…]}  to each new subscriber — replaces this host's open set (PD2);
+//   {op:"opened", approval}         on create;
+//   {op:"closed", approval}         on every close, carrying decided_by / decided_at.
+// Called from useMultiHostEventWs with the per-host closure's hostId. Store first, then the side effects.
+import { useApprovalStore } from '../../stores/useApprovalStore'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { useUndoToast } from '../../stores/useUndoToast'
+import { hostLabel, hostLookOf } from '../host-look'
+import { closedToastText } from './approval-format'
+import type { Approval, ApprovalEventValue } from './types'
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+function isApproval(v: unknown): v is Approval {
+  return isRecord(v)
+    && typeof v.id === 'string' && v.id !== ''
+    && typeof v.state === 'string'
+    && isRecord(v.origin)
+    && typeof v.created_at === 'number'
+}
+
+/** The event's `value`: JSON text or an object; null when it is not an approval event we understand. */
+export function parseApprovalEvent(value: unknown): ApprovalEventValue | null {
+  let o: unknown = value
+  if (typeof value === 'string') {
+    try {
+      o = JSON.parse(value)
+    } catch {
+      return null
+    }
+  }
+  if (!isRecord(o)) return null
+  if ((o.op === 'opened' || o.op === 'closed') && isApproval(o.approval)) return { op: o.op, approval: o.approval }
+  if (o.op === 'snapshot') return { op: 'snapshot', approvals: Array.isArray(o.approvals) ? o.approvals.filter(isApproval) : [] }
+  return null
+}
+
+/** The "handled elsewhere" toast (spec §6.3): who closed it, on which host, for which session. */
+export function toastClosed(hostId: string, approval: Approval): void {
+  const t = useI18nStore.getState().t
+  useUndoToast.getState().show(closedToastText(t, hostLabel(hostId, hostLookOf(hostId)), approval))
+}
+
+export function handleApprovalEvent(hostId: string, value: unknown): void {
+  const ev = parseApprovalEvent(value)
+  if (!ev) return
+  const store = useApprovalStore.getState()
+  if (ev.op === 'snapshot') {
+    store.applySnapshot(hostId, ev.approvals)
+    return
+  }
+  if (ev.op === 'opened') {
+    store.applyOpened(hostId, ev.approval)
+    return
+  }
+  // closed: the dialog closes everywhere; only a decision made elsewhere is announced.
+  if (store.applyClosed(hostId, ev.approval) === 'elsewhere') toastClosed(hostId, ev.approval)
+}
+```
+
+`spa/src/lib/host-events.ts` — line 15 becomes two lines:
+
+```ts
+    | 'nex-worker-exited'
+    | 'approval.request'
+```
+
+`spa/src/hooks/useMultiHostEventWs.ts` — after line 21 (`import { handleWorkerExited } from '../lib/nex/worker-exited-event'`) add:
+
+```ts
+import { handleApprovalEvent } from '../lib/team/approval-ws'
+```
+
+and after line 217 (the closing `}` of the `nex-worker-exited` branch), before the `// \`handoff\` / \`relay\` events:` comment, add:
+
+```ts
+          if (event.type === 'approval.request') {
+            // Lead / self-relay approval requests (lead-team spec §6.2): snapshot on
+            // subscribe, opened, closed. `session` is empty; the value carries the host id.
+            handleApprovalEvent(hostId, event.value)
+            return
+          }
+```
+
+`spa/src/locales/en.json` — replace line 1896-1897:
+
+```json
+  "worker.exit.after_transfer_failed": "Resumed in the terminal, but the worker could not exit; exit it manually from the list.",
+  "approval.kind.lead": "lead request",
+  "approval.kind.self_relay": "relay request",
+  "approval.decision.approved": "approved",
+  "approval.decision.denied": "denied",
+  "approval.state.approved": "approved",
+  "approval.state.denied": "denied",
+  "approval.state.timeout": "timed out",
+  "approval.state.cancelled": "cancelled",
+  "approval.state.abandoned": "abandoned",
+  "approval.toast.decided_elsewhere": "{{host}}: {{client}} {{decision}} the {{kind}} from {{session}}",
+  "approval.toast.ended": "{{host}}: the {{kind}} from {{session}} ended ({{state}})"
+}
+```
+
+`spa/src/locales/zh-TW.json` — replace line 1896-1897:
+
+```json
+  "worker.exit.after_transfer_failed": "已在終端機接續，但 worker 未能退出，請到清單手動退出",
+  "approval.kind.lead": "lead 申請",
+  "approval.kind.self_relay": "接力申請",
+  "approval.decision.approved": "核准",
+  "approval.decision.denied": "拒絕",
+  "approval.state.approved": "已核准",
+  "approval.state.denied": "已拒絕",
+  "approval.state.timeout": "逾時",
+  "approval.state.cancelled": "已取消",
+  "approval.state.abandoned": "已放棄",
+  "approval.toast.decided_elsewhere": "{{host}}：{{session}} 的 {{kind}} 已由 {{client}} {{decision}}",
+  "approval.toast.ended": "{{host}}：{{session}} 的 {{kind}}已結束（{{state}}）"
+}
+```
+
+(`approval.toast.decided_elsewhere` with kind `lead 申請` renders exactly the spec's `<主機>：<session> 的 lead 申請 已由 <client> 核准／拒絕`.)
+
+- [ ] **Step 4: Run the tests and verify they pass.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/hooks/useMultiHostEventWs.approval.test.ts src/hooks/useMultiHostEventWs.worker-exited.test.ts src/lib/host-events.test.ts src/locales/locale-completeness.test.ts`
+  - Expected: PASS (7 new tests; the neighbouring WS tests and locale completeness still green).
+
+- [ ] **Step 5: Commit.**
+  ```bash
+  git add spa/src/lib/team/approval-format.ts spa/src/lib/team/approval-ws.ts spa/src/lib/host-events.ts spa/src/hooks/useMultiHostEventWs.ts spa/src/hooks/useMultiHostEventWs.approval.test.ts spa/src/locales/en.json spa/src/locales/zh-TW.json
+  git commit -m "feat(spa): route approval.request host events into useApprovalStore; toast a close decided elsewhere
+
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+  ```
+
+### Task 3.4: `ApprovalDialogHost` — one dialog, oldest first, one-click 核准 / 拒絕, disconnected banner, queued click
+
+**Files:**
+- Create: `spa/src/lib/team/client-label.ts`
+- Create: `spa/src/lib/team/approval-decide.ts`
+- Create: `spa/src/components/ApprovalDialogHost.tsx`
+- Modify: `spa/src/App.tsx:34` (import after `HandoffDialogHost`), `spa/src/App.tsx:282-283` (mount after `<HandoffDialogHost />`)
+- Modify: `spa/src/locales/en.json`, `spa/src/locales/zh-TW.json` (keys appended after `approval.toast.ended`, the last key from Task 3.3)
+- Test: `spa/src/components/ApprovalDialogHost.test.tsx`
+
+**Interfaces:**
+- Consumes: `useApprovalStore` + `selectCurrent` + `approvalKey` (Task 3.2); `decideApproval` / `ApprovalApiError` (Task 3.1); `toastClosed`, `approvalSessionLabel`, `formatOriginAddress`, `formatCountdown`, `approvalKindLabel` (Task 3.3); `useHostStore` `runtime[hostId].status`; `hostLabel` / `useHostLook`; `window.electronAPI?.localDaemonStatus?.()` (`electron.d.ts:173`).
+- Produces:
+  ```ts
+  // client-label.ts
+  export function clientDescriptor(): Promise<Client>            // { kind:'app', label:'Purdex.app @ <hostname>' } or 'Purdex.app'; resolved once
+  export function __resetClientDescriptorForTests(): void
+  // approval-decide.ts
+  export type DecideOutcome = 'closed' | 'decided_elsewhere' | 'queued' | 'failed'
+  export function submitDecision(hostId: string, approval: Approval, decision: Decision, grant?: Grant): Promise<DecideOutcome>
+  // ApprovalDialogHost.tsx
+  export function ApprovalDialogHost(): JSX.Element | null
+  ```
+  Test ids: `approval-dialog` (backdrop), `approval-panel`, `approval-host`, `approval-session`, `approval-address`, `approval-cwd`, `approval-tmux`, `approval-reason`, `approval-countdown`, `approval-max-members`, `approval-roots`, `approval-max-members-error`, `approval-roots-error`, `approval-disconnected`, `approval-queued`, `approval-more`, `approval-approve`, `approval-deny`.
+
+**Behaviour decided here (from spec §6.3 / §9.4 and the handoff notes):**
+- The dialog renders `selectCurrent` (oldest `created_at` across hosts, hidden hosts included); it is keyed by `approvalKey`, so the next request is a fresh mount with the payload's defaults.
+- No Escape handler and no backdrop dismiss: a request can only end by a decision or by the daemon closing it. Focus moves onto the panel on open and Tab stays inside (as `ConfirmDialog` does).
+- 核准 sends `grant` = the edited max members (integer 1–8) and roots (one per line, trimmed, blanks dropped; at least one). An invalid grant disables 核准 only; 拒絕 never needs the grant.
+- While `runtime[hostId].status !== 'connected'`: the banner `daemon 重啟中…`; both buttons are `aria-disabled` (dimmed, same classes as `RestartDaemonButton`'s counting state) but still clickable — a click **queues** the decision (`queueDecision`) and does not send. Once a decision is queued the buttons are really `disabled` (one click each), and the line `已記下「核准／拒絕」，恢復連線後送出` shows. The resend is Task 3.5.
+- A send that fails with code `network` (the socket dropped between the status flip and the click) queues the same way.
+- A 200 closes the dialog (store `applyClosed`, no toast — it was ours). A 409 with an approval closes it and toasts "已由 <client> …" unless that client label is this app's own (a response lost on the wire and resent). A 404 closes it with the failure toast (the daemon no longer knows the request). Any other error toasts and re-enables the buttons.
+
+- [ ] **Step 1: Write the failing test.**
+
+```tsx
+// spa/src/components/ApprovalDialogHost.test.tsx — the one app-level approval dialog (lead-team spec §6.3, §6.5, §9.4):
+// it renders the oldest open request from `useApprovalStore`, 核准 / 拒絕 are one click each (U5b), it never dismisses
+// on Escape, it queues a click while the host is not connected, and it closes with the "handled by" toast on a close
+// from elsewhere or a 409. Only the daemon call is mocked.
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, act } from '@testing-library/react'
+import { ApprovalDialogHost } from './ApprovalDialogHost'
+import { approvalKey, useApprovalStore } from '../stores/useApprovalStore'
+import { useHostStore } from '../stores/useHostStore'
+import { useI18nStore } from '../stores/useI18nStore'
+import { useUndoToast } from '../stores/useUndoToast'
+import { ApprovalApiError, decideApproval } from '../lib/team/approval-api'
+import { handleApprovalEvent } from '../lib/team/approval-ws'
+import { __resetClientDescriptorForTests } from '../lib/team/client-label'
+import type { Approval } from '../lib/team/types'
+
+vi.mock('../lib/team/approval-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/team/approval-api')>()),
+  decideApproval: vi.fn(),
+}))
+const mockedDecide = vi.mocked(decideApproval)
+
+const H = 'h1'
+const approval = (over: Partial<Approval> = {}): Approval => ({
+  id: 'req-1', kind: 'lead', host_id: 'd1',
+  origin: { session_id: 'S1', ref: '_40iueq', name: 'purdex-7c', pid: 4242, proc_start: 'p', cwd: '/w/purdex', tmux: 'purdex:@1.%2' },
+  payload: { reason: '要平行跑三個 PR', max_members: 3, roots: ['/w/purdex'] },
+  state: 'open', created_at: 1_000, deadline_at: 1_000 + 125_000, lease_until: 31_000,
+  ...over,
+})
+const air26 = { kind: 'app' as const, label: 'Purdex.app @ air26' }
+
+const dialog = () => screen.queryByTestId('approval-dialog')
+const open = (a: Approval, hostId = H) => act(() => { useApprovalStore.getState().applyOpened(hostId, a) })
+const setStatus = (status: 'connected' | 'reconnecting' | 'disconnected') => act(() => { useHostStore.getState().setRuntime(H, { status }) })
+
+beforeEach(() => {
+  useI18nStore.getState().setLocale('zh-TW')
+  useApprovalStore.getState().reset()
+  useHostStore.setState({
+    hosts: {
+      [H]: { id: H, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 },
+      h2: { id: 'h2', name: 'air26', ip: '1.2.3.5', port: 7860, order: 1 },
+    },
+    hostOrder: [H, 'h2'],
+    runtime: { [H]: { status: 'connected' }, h2: { status: 'connected' } },
+    activeHostId: H,
+  })
+  useUndoToast.setState({ toast: null, notice: null })
+  mockedDecide.mockReset()
+  __resetClientDescriptorForTests()
+  Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+})
+afterEach(() => {
+  vi.useRealTimers()
+  useHostStore.getState().reset()
+})
+
+describe('ApprovalDialogHost', () => {
+  it('renders nothing until a request is open', () => {
+    render(<ApprovalDialogHost />)
+    expect(dialog()).toBeNull()
+  })
+
+  it('shows host, session, address, cwd, tmux and reason; the countdown ticks toward deadline_at', () => {
+    vi.useFakeTimers({ now: 1_000 })
+    render(<ApprovalDialogHost />)
+    open(approval())
+    expect(dialog()).toBeInTheDocument()
+    expect(screen.getByTestId('approval-host').textContent).toBe('mlab')
+    expect(screen.getByTestId('approval-session').textContent).toBe('purdex-7c')
+    expect(screen.getByTestId('approval-address').textContent).toBe('mlab/purdex-7c [40iueq]')
+    expect(screen.getByTestId('approval-cwd').textContent).toBe('/w/purdex')
+    expect(screen.getByTestId('approval-tmux').textContent).toBe('purdex:@1.%2')
+    expect(screen.getByTestId('approval-reason').textContent).toBe('要平行跑三個 PR')
+    expect(screen.getByTestId('approval-countdown').textContent).toBe('2:05')
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(screen.getByTestId('approval-countdown').textContent).toBe('1:05')
+    act(() => { vi.advanceTimersByTime(120_000) })
+    expect(screen.getByTestId('approval-countdown').textContent).toBe('0:00')
+    expect(screen.getByTestId('approval-approve')).not.toBeDisabled()
+  })
+
+  it('a session without a routable name shows the ref as address; a title (when the wire carries one) wins as the session label', () => {
+    render(<ApprovalDialogHost />)
+    open(approval({ origin: { ...approval().origin, name: '', title: '修 #1450 的側欄' } }))
+    expect(screen.getByTestId('approval-session').textContent).toBe('修 #1450 的側欄')
+    expect(screen.getByTestId('approval-address').textContent).toBe('mlab/_40iueq')
+    expect(screen.getByTestId('approval-tmux').textContent).toBe('purdex:@1.%2')
+  })
+
+  it('核准 is one click: POSTs approve with the payload\'s grant and the app client, then closes without a toast', async () => {
+    mockedDecide.mockResolvedValueOnce(approval({ state: 'approved', decided_by: { kind: 'app', label: 'Purdex.app' }, grant: { max_members: 3, roots: ['/w/purdex'] } }))
+    render(<ApprovalDialogHost />)
+    open(approval())
+    await act(async () => { fireEvent.click(screen.getByTestId('approval-approve')) })
+    expect(mockedDecide).toHaveBeenCalledTimes(1)
+    expect(mockedDecide.mock.calls[0]).toEqual([H, 'req-1', {
+      decision: 'approve',
+      grant: { max_members: 3, roots: ['/w/purdex'] },
+      client: { kind: 'app', label: 'Purdex.app' },
+    }])
+    expect(dialog()).toBeNull()
+    expect(useApprovalStore.getState().entries).toEqual({})
+    expect(useUndoToast.getState().toast).toBeNull()
+  })
+
+  it('the grant is editable: max members and roots (one per line) go out as typed', async () => {
+    mockedDecide.mockResolvedValueOnce(approval({ state: 'approved' }))
+    render(<ApprovalDialogHost />)
+    open(approval())
+    fireEvent.change(screen.getByTestId('approval-max-members'), { target: { value: '5' } })
+    fireEvent.change(screen.getByTestId('approval-roots'), { target: { value: '/w/purdex\n\n  /w/ploom  \n' } })
+    await act(async () => { fireEvent.click(screen.getByTestId('approval-approve')) })
+    expect(mockedDecide.mock.calls[0][2]).toMatchObject({ decision: 'approve', grant: { max_members: 5, roots: ['/w/purdex', '/w/ploom'] } })
+  })
+
+  it('an invalid grant disables 核准 only (0, 9, 2.5, blank roots); 拒絕 stays live', () => {
+    render(<ApprovalDialogHost />)
+    open(approval())
+    for (const bad of ['0', '9', '2.5', '']) {
+      fireEvent.change(screen.getByTestId('approval-max-members'), { target: { value: bad } })
+      expect(screen.getByTestId('approval-approve')).toBeDisabled()
+      expect(screen.getByTestId('approval-max-members-error')).toBeInTheDocument()
+      expect(screen.getByTestId('approval-deny')).not.toBeDisabled()
+    }
+    fireEvent.change(screen.getByTestId('approval-max-members'), { target: { value: '8' } })
+    expect(screen.getByTestId('approval-approve')).not.toBeDisabled()
+    fireEvent.change(screen.getByTestId('approval-roots'), { target: { value: ' \n' } })
+    expect(screen.getByTestId('approval-approve')).toBeDisabled()
+    expect(screen.getByTestId('approval-roots-error')).toBeInTheDocument()
+    expect(mockedDecide).not.toHaveBeenCalled()
+  })
+
+  it('拒絕 is one click: POSTs deny with no grant, then closes', async () => {
+    mockedDecide.mockResolvedValueOnce(approval({ state: 'denied' }))
+    render(<ApprovalDialogHost />)
+    open(approval())
+    await act(async () => { fireEvent.click(screen.getByTestId('approval-deny')) })
+    expect(mockedDecide.mock.calls[0][2]).toEqual({ decision: 'deny', client: { kind: 'app', label: 'Purdex.app' } })
+    expect(dialog()).toBeNull()
+  })
+
+  it('a double click sends once', async () => {
+    let resolve!: (a: Approval) => void
+    mockedDecide.mockReturnValueOnce(new Promise<Approval>((r) => { resolve = r }))
+    render(<ApprovalDialogHost />)
+    open(approval())
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('approval-deny'))
+      fireEvent.click(screen.getByTestId('approval-deny'))
+    })
+    expect(mockedDecide).toHaveBeenCalledTimes(1)
+    await act(async () => { resolve(approval({ state: 'denied' })) })
+    expect(dialog()).toBeNull()
+  })
+
+  it('several requests queue, oldest first, across hosts; the next one shows after the first closes', async () => {
+    mockedDecide.mockResolvedValueOnce(approval({ id: 'old', state: 'denied' }))
+    render(<ApprovalDialogHost />)
+    open(approval({ id: 'newer', created_at: 5_000 }))
+    open(approval({ id: 'old', created_at: 2_000, origin: { ...approval().origin, name: 'nexen-c1' } }), 'h2')
+    expect(screen.getByTestId('approval-session').textContent).toBe('nexen-c1')
+    expect(screen.getByTestId('approval-host').textContent).toBe('air26')
+    expect(screen.getByTestId('approval-more').textContent).toBe('還有 1 個申請排隊中')
+    await act(async () => { fireEvent.click(screen.getByTestId('approval-deny')) })
+    expect(mockedDecide.mock.calls[0].slice(0, 2)).toEqual(['h2', 'old'])
+    expect(screen.getByTestId('approval-session').textContent).toBe('purdex-7c')
+    expect(screen.queryByTestId('approval-more')).toBeNull()
+  })
+
+  it('Escape and a backdrop click do not dismiss it', () => {
+    render(<ApprovalDialogHost />)
+    open(approval())
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(dialog()).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('approval-dialog'))
+    expect(dialog()).toBeInTheDocument()
+    expect(mockedDecide).not.toHaveBeenCalled()
+  })
+
+  it('takes focus onto the panel when it opens', () => {
+    render(<ApprovalDialogHost />)
+    open(approval())
+    expect(document.activeElement).toBe(screen.getByTestId('approval-panel'))
+  })
+
+  describe('while the host is not connected (spec §9.4)', () => {
+    it('shows `daemon 重啟中…`, dims the buttons, and a click is queued instead of sent', () => {
+      render(<ApprovalDialogHost />)
+      open(approval())
+      setStatus('reconnecting')
+      expect(screen.getByTestId('approval-disconnected').textContent).toBe('daemon 重啟中…')
+      expect(screen.getByTestId('approval-deny').getAttribute('aria-disabled')).toBe('true')
+      expect(screen.getByTestId('approval-approve').getAttribute('aria-disabled')).toBe('true')
+      fireEvent.click(screen.getByTestId('approval-deny'))
+      expect(mockedDecide).not.toHaveBeenCalled()
+      expect(useApprovalStore.getState().queued[approvalKey(H, 'req-1')]).toMatchObject({ hostId: H, decision: 'deny', approval: { id: 'req-1' } })
+      expect(dialog()).toBeInTheDocument()
+      expect(screen.getByTestId('approval-queued').textContent).toBe('已記下「拒絕」，恢復連線後送出')
+      expect(screen.getByTestId('approval-deny')).toBeDisabled()
+      expect(screen.getByTestId('approval-approve')).toBeDisabled()
+    })
+
+    it('a queued approve carries the edited grant', () => {
+      render(<ApprovalDialogHost />)
+      open(approval())
+      fireEvent.change(screen.getByTestId('approval-max-members'), { target: { value: '2' } })
+      setStatus('disconnected')
+      fireEvent.click(screen.getByTestId('approval-approve'))
+      expect(useApprovalStore.getState().queued[approvalKey(H, 'req-1')]).toMatchObject({ decision: 'approve', grant: { max_members: 2, roots: ['/w/purdex'] } })
+    })
+
+    it('the banner goes away when the host is connected again; the queued decision stays locked in', () => {
+      render(<ApprovalDialogHost />)
+      open(approval())
+      setStatus('reconnecting')
+      fireEvent.click(screen.getByTestId('approval-deny'))
+      setStatus('connected')
+      expect(screen.queryByTestId('approval-disconnected')).toBeNull()
+      expect(screen.getByTestId('approval-queued')).toBeInTheDocument()
+      expect(screen.getByTestId('approval-deny')).toBeDisabled()
+    })
+
+    it('a send that fails on the network (the socket dropped mid-click) is queued the same way', async () => {
+      mockedDecide.mockRejectedValueOnce(new ApprovalApiError(0, 'network', 'Failed to fetch'))
+      render(<ApprovalDialogHost />)
+      open(approval())
+      await act(async () => { fireEvent.click(screen.getByTestId('approval-approve')) })
+      expect(dialog()).toBeInTheDocument()
+      expect(useApprovalStore.getState().queued[approvalKey(H, 'req-1')]).toMatchObject({ decision: 'approve' })
+      expect(screen.getByTestId('approval-queued')).toBeInTheDocument()
+      expect(useApprovalStore.getState().decidedHere).toEqual({})
+    })
+  })
+
+  describe('closed elsewhere (U6)', () => {
+    it('a `closed` event from another client closes it with the toast', () => {
+      render(<ApprovalDialogHost />)
+      open(approval())
+      act(() => {
+        handleApprovalEvent(H, JSON.stringify({ op: 'closed', approval: approval({ state: 'approved', decided_by: air26, decided_at: 9_000 }) }))
+      })
+      expect(dialog()).toBeNull()
+      expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由 Purdex.app @ air26 核准')
+    })
+
+    it('a 409 already_decided closes it with the same toast', async () => {
+      mockedDecide.mockRejectedValueOnce(new ApprovalApiError(409, 'already_decided', '', approval({ state: 'denied', decided_by: air26 })))
+      render(<ApprovalDialogHost />)
+      open(approval())
+      await act(async () => { fireEvent.click(screen.getByTestId('approval-approve')) })
+      expect(dialog()).toBeNull()
+      expect(useApprovalStore.getState().entries).toEqual({})
+      expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由 Purdex.app @ air26 拒絕')
+    })
+
+    it('a 409 whose decided_by is this very app (the first answer was lost) closes it silently', async () => {
+      mockedDecide.mockRejectedValueOnce(new ApprovalApiError(409, 'already_decided', '', approval({ state: 'approved', decided_by: { kind: 'app', label: 'Purdex.app' } })))
+      render(<ApprovalDialogHost />)
+      open(approval())
+      await act(async () => { fireEvent.click(screen.getByTestId('approval-approve')) })
+      expect(dialog()).toBeNull()
+      expect(useUndoToast.getState().toast).toBeNull()
+    })
+  })
+
+  it('a 404 closes it with the failure toast; another error toasts and re-enables the buttons', async () => {
+    mockedDecide.mockRejectedValueOnce(new ApprovalApiError(400, 'bad_request', 'roots must be absolute'))
+    render(<ApprovalDialogHost />)
+    open(approval())
+    await act(async () => { fireEvent.click(screen.getByTestId('approval-approve')) })
+    expect(dialog()).toBeInTheDocument()
+    expect(screen.getByTestId('approval-approve')).not.toBeDisabled()
+    expect(useUndoToast.getState().toast?.message).toBe('送出決定失敗（bad_request）')
+    expect(useApprovalStore.getState().decidedHere).toEqual({})
+    mockedDecide.mockRejectedValueOnce(new ApprovalApiError(404, 'not_found'))
+    await act(async () => { fireEvent.click(screen.getByTestId('approval-deny')) })
+    expect(dialog()).toBeNull()
+    expect(useUndoToast.getState().toast?.message).toBe('送出決定失敗（not_found）')
+  })
+
+  it('the client label is `Purdex.app @ <hostname>` from localDaemonStatus, read once', async () => {
+    const localDaemonStatus = vi.fn(async () => ({ hostname: 'mlab' }))
+    Object.defineProperty(window, 'electronAPI', { value: { localDaemonStatus }, writable: true, configurable: true })
+    mockedDecide.mockResolvedValue(approval({ state: 'denied' }))
+    render(<ApprovalDialogHost />)
+    open(approval({ id: 'a' }))
+    await act(async () => { fireEvent.click(screen.getByTestId('approval-deny')) })
+    open(approval({ id: 'b', created_at: 2_000 }))
+    await act(async () => { fireEvent.click(screen.getByTestId('approval-deny')) })
+    expect(mockedDecide.mock.calls[0][2]).toMatchObject({ client: { kind: 'app', label: 'Purdex.app @ mlab' } })
+    expect(mockedDecide.mock.calls[1][2]).toMatchObject({ client: { kind: 'app', label: 'Purdex.app @ mlab' } })
+    expect(localDaemonStatus).toHaveBeenCalledTimes(1)
+  })
+})
+```
+
+- [ ] **Step 2: Run the test and verify it fails.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/components/ApprovalDialogHost.test.tsx`
+  - Expected: FAIL — `Failed to resolve import "./ApprovalDialogHost"`.
+
+- [ ] **Step 3: Implement.**
+
+`spa/src/lib/team/client-label.ts`:
+
+```ts
+// spa/src/lib/team/client-label.ts — the audit label this app signs its decisions with (lead-team spec §6.5):
+// `Purdex.app @ <hostname>`, the hostname from Electron's local-daemon status (device-name.ts reads the same
+// field the same way), else `Purdex.app`. Resolved once per renderer: the daemon adds the remote address.
+// U14: there is no browser label — the App is the only client.
+import type { Client } from './types'
+
+const HOSTNAME_TIMEOUT_MS = 1500
+const APP = 'Purdex.app'
+
+let cached: Promise<Client> | null = null
+
+async function resolve(): Promise<Client> {
+  const status = window.electronAPI?.localDaemonStatus
+  if (!status) return { kind: 'app', label: APP }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<null>((done) => {
+    timer = setTimeout(() => done(null), HOSTNAME_TIMEOUT_MS)
+  })
+  try {
+    const result = await Promise.race([Promise.resolve().then(() => status()), timeout])
+    const hostname: unknown = result?.hostname
+    const name = typeof hostname === 'string' ? hostname.trim() : ''
+    return { kind: 'app', label: name !== '' ? `${APP} @ ${name}` : APP }
+  } catch {
+    return { kind: 'app', label: APP }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** This app's `Client` descriptor, resolved on first use and then reused. */
+export function clientDescriptor(): Promise<Client> {
+  if (cached === null) cached = resolve()
+  return cached
+}
+
+export function __resetClientDescriptorForTests(): void {
+  cached = null
+}
+```
+
+`spa/src/lib/team/approval-decide.ts`:
+
+```ts
+// spa/src/lib/team/approval-decide.ts — one decision, sent once (lead-team spec §6.3, §6.5, §9.4). Shared by the
+// dialog's click and by the reconnect resend, so both agree on what each answer means:
+//   200                      → closed (ours: no toast);
+//   409 + approval           → someone else got there first: close, toast who (unless it was this app's own lost answer);
+//   network (status 0)       → the daemon is restarting: keep the decision for the reconnect snapshot;
+//   404                      → the daemon no longer knows the request: close, toast the failure;
+//   anything else            → toast the failure, leave the request open.
+import { useApprovalStore, type Decision } from '../../stores/useApprovalStore'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { useUndoToast } from '../../stores/useUndoToast'
+import { ApprovalApiError, decideApproval } from './approval-api'
+import { toastClosed } from './approval-ws'
+import { clientDescriptor } from './client-label'
+import type { Approval, Grant } from './types'
+
+export type DecideOutcome = 'closed' | 'decided_elsewhere' | 'queued' | 'failed'
+
+export async function submitDecision(hostId: string, approval: Approval, decision: Decision, grant?: Grant): Promise<DecideOutcome> {
+  const client = await clientDescriptor()
+  useApprovalStore.getState().markDecidedHere(hostId, approval.id)
+  try {
+    const closed = await decideApproval(hostId, approval.id, {
+      decision,
+      ...(decision === 'approve' && grant ? { grant } : {}),
+      client,
+    })
+    useApprovalStore.getState().applyClosed(hostId, closed)
+    return 'closed'
+  } catch (e: unknown) {
+    const err = e instanceof ApprovalApiError ? e : new ApprovalApiError(0, 'unknown', e instanceof Error ? e.message : String(e))
+    const store = useApprovalStore.getState()
+    if (err.code === 'network') {
+      // Never reached the daemon (or the answer was lost): a `closed` that arrives meanwhile is someone else's.
+      store.unmarkDecidedHere(hostId, approval.id)
+      store.queueDecision(hostId, approval, decision, grant)
+      return 'queued'
+    }
+    if (err.status === 409 && err.approval) {
+      store.applyClosed(hostId, err.approval)
+      if (err.approval.decided_by?.label !== client.label) toastClosed(hostId, err.approval)
+      return 'decided_elsewhere'
+    }
+    if (err.status === 404) {
+      store.applyClosed(hostId, approval)
+    } else {
+      store.unmarkDecidedHere(hostId, approval.id)
+    }
+    const t = useI18nStore.getState().t
+    useUndoToast.getState().show(t('approval.toast.failed', { code: err.code }))
+    return 'failed'
+  }
+}
+```
+
+`spa/src/components/ApprovalDialogHost.tsx`:
+
+```tsx
+// spa/src/components/ApprovalDialogHost.tsx — the one approval dialog (lead-team spec §6.3), mounted once with the
+// app-level overlays, next to HandoffDialogHost. It renders the oldest open request across hosts from
+// `useApprovalStore`, which the `approval.request` WS branch and the daemon's snapshot feed; several requests queue,
+// one dialog at a time. The body here is the `lead` kind (self relay arrives with P5).
+//
+// It cannot be dismissed: no Escape, no backdrop click. A request ends by a decision — 核准 / 拒絕, one click each on any
+// Purdex.app (U5b) — or by the daemon closing it (decided elsewhere, timeout, cancel), which removes it from the store
+// and unmounts this. While the host is not connected (spec §9.4) the buttons dim under `daemon 重啟中…`; a click then is
+// queued in the store and sent when the reconnect snapshot re-adds the request (lib/team/approval-ws.ts).
+//
+// Focus: the panel takes focus on open and Tab stays inside, as ConfirmDialog does, so a stray keystroke never
+// reaches the pane behind. The i18n strings are the spec's (§6.3).
+import { useEffect, useRef, useState } from 'react'
+import { ArrowsClockwise } from '@phosphor-icons/react'
+import { useI18nStore } from '../stores/useI18nStore'
+import { useHostStore } from '../stores/useHostStore'
+import { approvalKey, selectCurrent, selectOpenCount, useApprovalStore, type ApprovalEntry, type Decision } from '../stores/useApprovalStore'
+import { hostLabel, useHostLook } from '../lib/host-look'
+import { leadPayloadOf, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { approvalSessionLabel, formatCountdown, formatOriginAddress } from '../lib/team/approval-format'
+import { submitDecision } from '../lib/team/approval-decide'
+
+const FOCUSABLE_SELECTOR = 'input, button, textarea, [tabindex]:not([tabindex="-1"])'
+
+function tabStops(panel: HTMLElement): HTMLElement[] {
+  return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+    .filter((el) => !(el as HTMLButtonElement).disabled && el.tabIndex >= 0)
+}
+
+function parseRoots(text: string): string[] {
+  return text.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+}
+
+const fieldClass = 'rounded-md border border-border-default bg-surface-input px-2 py-1 text-xs text-text-primary disabled:opacity-50'
+const buttonBase = 'px-3 py-1 rounded-md text-xs cursor-pointer disabled:opacity-50 disabled:cursor-default aria-disabled:opacity-50 flex items-center gap-1.5'
+
+export function ApprovalDialogHost() {
+  const current = useApprovalStore(selectCurrent)
+  if (!current) return null
+  // Keyed by the request: the next one is a fresh dialog (the payload's defaults, nothing in flight).
+  return <OpenApprovalDialog key={approvalKey(current.hostId, current.approval.id)} entry={current} />
+}
+
+function OpenApprovalDialog({ entry }: { entry: ApprovalEntry }) {
+  const { hostId, approval } = entry
+  const t = useI18nStore((s) => s.t)
+  const hostName = hostLabel(hostId, useHostLook(hostId))
+  const connected = useHostStore((s) => s.runtime[hostId]?.status === 'connected')
+  const queued = useApprovalStore((s) => s.queued[approvalKey(hostId, approval.id)])
+  const openCount = useApprovalStore(selectOpenCount)
+  const payload = leadPayloadOf(approval)
+  const [maxMembers, setMaxMembers] = useState(String(payload.max_members))
+  const [rootsText, setRootsText] = useState(payload.roots.join('\n'))
+  const [busy, setBusy] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
+  // Ref, not state: two clicks in one event burst both see `busy === false` before React commits the first setBusy.
+  const inFlight = useRef(false)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  useEffect(() => { panelRef.current?.focus() }, [])
+
+  // Tab stays inside the panel (ConfirmDialog's rule). No Escape handler, on purpose: nothing dismisses this dialog.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || e.ctrlKey || e.metaKey || e.altKey) return
+      const panel = panelRef.current
+      if (!panel) return
+      e.preventDefault()
+      const stops = tabStops(panel)
+      if (stops.length === 0) {
+        panel.focus()
+        return
+      }
+      const at = stops.indexOf(document.activeElement as HTMLElement)
+      const next = at === -1
+        ? (e.shiftKey ? stops.length - 1 : 0)
+        : (at + (e.shiftKey ? stops.length - 1 : 1)) % stops.length
+      stops[next].focus()
+    }
+    document.addEventListener('keydown', onKey, { capture: true })
+    return () => document.removeEventListener('keydown', onKey, { capture: true })
+  }, [])
+
+  const members = maxMembers.trim() === '' ? NaN : Number(maxMembers)
+  const membersOk = Number.isInteger(members) && members >= 1 && members <= MAX_MAX_MEMBERS
+  const roots = parseRoots(rootsText)
+  const rootsOk = roots.length > 0
+  const grantOk = membersOk && rootsOk
+  const locked = busy || queued !== undefined
+  const session = approvalSessionLabel(approval.origin)
+
+  const decide = async (decision: Decision) => {
+    if (inFlight.current || locked) return
+    if (decision === 'approve' && !grantOk) return
+    const grant: Grant | undefined = decision === 'approve' ? { max_members: members, roots } : undefined
+    if (!connected) {
+      // Spec §9.4: kept locally, sent on reconnect (the snapshot re-adds the request, or shows it gone).
+      useApprovalStore.getState().queueDecision(hostId, approval, decision, grant)
+      return
+    }
+    inFlight.current = true
+    setBusy(true)
+    const outcome = await submitDecision(hostId, approval, decision, grant)
+    // 'closed' and 'decided_elsewhere' unmount this dialog through the store; the other two keep it.
+    if (outcome === 'failed' || outcome === 'queued') {
+      inFlight.current = false
+      setBusy(false)
+    }
+  }
+
+  const titleId = 'approval-dialog-title'
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      data-testid="approval-dialog"
+      // The backdrop also covers the Electron title bar, a window drag region that would otherwise swallow clicks there.
+      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+    >
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        data-testid="approval-panel"
+        className="w-[480px] rounded-lg border border-border-default bg-surface-primary shadow-lg outline-none"
+      >
+        <div className="border-b border-border-subtle px-4 py-3">
+          <h3 id={titleId} className="text-sm font-medium text-text-primary">{t('approval.dialog.title_lead', { host: hostName, session })}</h3>
+          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+            <dt className="text-text-muted">{t('approval.dialog.host')}</dt>
+            <dd data-testid="approval-host" className="text-text-primary">{hostName}</dd>
+            <dt className="text-text-muted">{t('approval.dialog.session')}</dt>
+            <dd data-testid="approval-session" className="text-text-primary">{session}</dd>
+            <dt className="text-text-muted">{t('approval.dialog.address')}</dt>
+            <dd data-testid="approval-address" className="font-mono text-text-primary">{formatOriginAddress(hostName, approval.origin)}</dd>
+            <dt className="text-text-muted">{t('approval.dialog.cwd')}</dt>
+            <dd data-testid="approval-cwd" className="font-mono break-all text-text-primary">{approval.origin.cwd}</dd>
+            <dt className="text-text-muted">{t('approval.dialog.tmux')}</dt>
+            <dd data-testid="approval-tmux" className="font-mono text-text-primary">{approval.origin.tmux !== '' ? approval.origin.tmux : '—'}</dd>
+            <dt className="text-text-muted">{t('approval.dialog.reason')}</dt>
+            <dd data-testid="approval-reason" className="whitespace-pre-wrap text-text-primary">{payload.reason}</dd>
+            <dt className="text-text-muted">{t('approval.dialog.deadline')}</dt>
+            <dd data-testid="approval-countdown" className="font-mono text-text-primary">{formatCountdown(approval.deadline_at - now)}</dd>
+          </dl>
+          <label className="mt-3 flex items-center gap-2 text-xs text-text-secondary">
+            {t('approval.dialog.max_members')}
+            <input
+              type="number"
+              min={1}
+              max={MAX_MAX_MEMBERS}
+              step={1}
+              value={maxMembers}
+              disabled={locked}
+              onChange={(e) => setMaxMembers(e.target.value)}
+              data-testid="approval-max-members"
+              className={`w-16 ${fieldClass}`}
+            />
+          </label>
+          {!membersOk && (
+            <p data-testid="approval-max-members-error" className="mt-1 text-xs text-status-warning">{t('approval.dialog.max_members_range', { max: MAX_MAX_MEMBERS })}</p>
+          )}
+          <label className="mt-2 block text-xs text-text-secondary">
+            {t('approval.dialog.roots')}
+            <textarea
+              rows={3}
+              value={rootsText}
+              disabled={locked}
+              onChange={(e) => setRootsText(e.target.value)}
+              data-testid="approval-roots"
+              className={`mt-1 block w-full font-mono ${fieldClass}`}
+            />
+          </label>
+          {!rootsOk && (
+            <p data-testid="approval-roots-error" className="mt-1 text-xs text-status-warning">{t('approval.dialog.roots_required')}</p>
+          )}
+          {!connected && (
+            <p data-testid="approval-disconnected" className="mt-2 text-xs text-amber-400">{t('approval.dialog.daemon_restarting')}</p>
+          )}
+          {queued && (
+            <p data-testid="approval-queued" className="mt-1 text-xs text-text-muted">
+              {t('approval.dialog.queued', { decision: t(queued.decision === 'approve' ? 'approval.dialog.approve' : 'approval.dialog.deny') })}
+            </p>
+          )}
+          {openCount > 1 && (
+            <p data-testid="approval-more" className="mt-2 text-xs text-text-muted">{t('approval.dialog.more_pending', { count: openCount - 1 })}</p>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 px-4 py-3">
+          <button
+            type="button"
+            data-testid="approval-deny"
+            disabled={locked}
+            aria-disabled={!connected || undefined}
+            onClick={() => void decide('deny')}
+            className={`${buttonBase} text-text-secondary hover:bg-surface-hover`}
+          >
+            {t('approval.dialog.deny')}
+          </button>
+          <button
+            type="button"
+            data-testid="approval-approve"
+            disabled={locked || !grantOk}
+            aria-disabled={!connected || undefined}
+            onClick={() => void decide('approve')}
+            className={`${buttonBase} bg-accent text-white`}
+          >
+            {busy && <ArrowsClockwise size={12} aria-hidden="true" className="animate-spin" />}
+            {t('approval.dialog.approve')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+```
+
+`spa/src/App.tsx` — after line 34 (`import { HandoffDialogHost } from './components/HandoffDialogHost'`) add:
+
+```tsx
+import { ApprovalDialogHost } from './components/ApprovalDialogHost'
+```
+
+and after line 283 (`        <HandoffDialogHost />`) add:
+
+```tsx
+        {/* The one approval dialog (lead-team spec §6.3): fed by the approval.request WS branch and the daemon's snapshot. */}
+        <ApprovalDialogHost />
+```
+
+`spa/src/locales/en.json` — after `"approval.toast.ended": …` (the last key) add:
+
+```json
+  "approval.toast.failed": "Could not send the decision ({{code}})",
+  "approval.dialog.title_lead": "{{host}}: {{session}} requests to become lead",
+  "approval.dialog.host": "Host",
+  "approval.dialog.session": "Session",
+  "approval.dialog.address": "Address",
+  "approval.dialog.cwd": "Directory",
+  "approval.dialog.tmux": "tmux",
+  "approval.dialog.reason": "Reason",
+  "approval.dialog.deadline": "Time left",
+  "approval.dialog.max_members": "Max members (1–8)",
+  "approval.dialog.max_members_range": "Enter a whole number from 1 to {{max}}",
+  "approval.dialog.roots": "Allowed roots (one per line)",
+  "approval.dialog.roots_required": "At least one root is required",
+  "approval.dialog.daemon_restarting": "daemon restarting…",
+  "approval.dialog.queued": "“{{decision}}” noted; it is sent once the connection is back",
+  "approval.dialog.more_pending": "{{count}} more request(s) waiting",
+  "approval.dialog.approve": "Approve",
+  "approval.dialog.deny": "Deny"
+```
+
+`spa/src/locales/zh-TW.json` — after `"approval.toast.ended": …` add:
+
+```json
+  "approval.toast.failed": "送出決定失敗（{{code}}）",
+  "approval.dialog.title_lead": "{{host}}：{{session}} 申請成為 lead",
+  "approval.dialog.host": "主機",
+  "approval.dialog.session": "Session",
+  "approval.dialog.address": "位址",
+  "approval.dialog.cwd": "目錄",
+  "approval.dialog.tmux": "tmux",
+  "approval.dialog.reason": "理由",
+  "approval.dialog.deadline": "剩餘時間",
+  "approval.dialog.max_members": "member 上限（1–8）",
+  "approval.dialog.max_members_range": "請輸入 1 到 {{max}} 的整數",
+  "approval.dialog.roots": "允許的目錄（一行一個）",
+  "approval.dialog.roots_required": "至少要有一個目錄",
+  "approval.dialog.daemon_restarting": "daemon 重啟中…",
+  "approval.dialog.queued": "已記下「{{decision}}」，恢復連線後送出",
+  "approval.dialog.more_pending": "還有 {{count}} 個申請排隊中",
+  "approval.dialog.approve": "核准",
+  "approval.dialog.deny": "拒絕"
+```
+
+(Keep the previous last line's trailing comma and the file's closing `}`; `locale-completeness.test.ts` fails on a key present in one file only.)
+
+- [ ] **Step 4: Run the tests and verify they pass.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/components/ApprovalDialogHost.test.tsx src/components/HandoffDialogHost.test.tsx src/locales/locale-completeness.test.ts && pnpm run lint && pnpm run build`
+  - Expected: PASS, 22 new tests; lint clean (no non-component export in the `.tsx`); `tsc -b` clean.
+
+- [ ] **Step 5: Commit.**
+  ```bash
+  git add spa/src/lib/team/client-label.ts spa/src/lib/team/approval-decide.ts spa/src/components/ApprovalDialogHost.tsx spa/src/components/ApprovalDialogHost.test.tsx spa/src/App.tsx spa/src/locales/en.json spa/src/locales/zh-TW.json
+  git commit -m "feat(spa): ApprovalDialogHost — one-click 核准/拒絕 for lead requests, queued while the daemon restarts
+
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+  ```
+
+**P3a ends here: open the PR, run R1 / R2 per the project CLAUDE.md, merge, then start P3b from main.**
+
+### Task 3.5: Reconnect — the snapshot re-sends a queued decision once, or says the request ended while away
+
+**Files:**
+- Modify: `spa/src/lib/team/approval-ws.ts` (the `snapshot` branch of `handleApprovalEvent`; imports)
+- Modify: `spa/src/locales/en.json`, `spa/src/locales/zh-TW.json` (one key after `approval.dialog.deny`)
+- Test: `spa/src/lib/team/approval-ws.test.ts`
+
+**Interfaces:**
+- Consumes: `useApprovalStore.takeQueued` / `applySnapshot` (Task 3.2), `submitDecision` (Task 3.4).
+- Produces: `handleApprovalEvent` unchanged in signature; new exported helper for tests and reuse:
+  ```ts
+  export function toastEndedWhileAway(hostId: string, approval: Approval): void
+  ```
+
+**Why the snapshot is the trigger.** The daemon sends `{op:"snapshot"}` to each new subscriber (`OnSubscribe`, PD2), and the SPA opens a new socket exactly when a host returns to `connected` (`useMultiHostEventWs.ts:150-163`). So "the host is connected again AND the daemon's current open set is known" is one event, and the queue is consumed there: `takeQueued` empties it, so a later snapshot (the next restart) sends nothing twice. A resend that fails on the network again re-queues itself inside `submitDecision`, for the snapshot after that.
+
+- [ ] **Step 1: Write the failing test.**
+
+```ts
+// spa/src/lib/team/approval-ws.test.ts — the reconnect snapshot and the decisions queued while the host was away
+// (lead-team spec §6.3 "During a daemon restart", §9.4): the snapshot re-adds the request → the queued decision
+// is sent, once; the snapshot shows it gone → toast `approval.toast.ended_while_away`; a resend that fails on the
+// network stays queued for the next snapshot.
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useApprovalStore, approvalKey } from '../../stores/useApprovalStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { useUndoToast } from '../../stores/useUndoToast'
+import { ApprovalApiError, decideApproval } from './approval-api'
+import { __resetClientDescriptorForTests } from './client-label'
+import { handleApprovalEvent } from './approval-ws'
+import type { Approval } from './types'
+
+vi.mock('./approval-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./approval-api')>()),
+  decideApproval: vi.fn(),
+}))
+const mockedDecide = vi.mocked(decideApproval)
+
+const H = 'h1'
+const approval = (over: Partial<Approval> = {}): Approval => ({
+  id: 'req-1', kind: 'lead', host_id: 'd1',
+  origin: { session_id: 'S1', ref: '_40iueq', name: 'purdex-7c', pid: 1, proc_start: 'p', cwd: '/w/purdex', tmux: '' },
+  payload: { reason: 'r', max_members: 3, roots: ['/w/purdex'] },
+  state: 'open', created_at: 1_000, deadline_at: 541_000, lease_until: 31_000,
+  ...over,
+})
+const snapshot = (approvals: Approval[]) => JSON.stringify({ op: 'snapshot', approvals })
+const flush = () => new Promise<void>((r) => setTimeout(r, 0))
+
+beforeEach(() => {
+  useI18nStore.getState().setLocale('zh-TW')
+  useApprovalStore.getState().reset()
+  useHostStore.setState({
+    hosts: { [H]: { id: H, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 } },
+    hostOrder: [H],
+    runtime: { [H]: { status: 'connected' } },
+    activeHostId: H,
+  })
+  useUndoToast.setState({ toast: null, notice: null })
+  mockedDecide.mockReset()
+  __resetClientDescriptorForTests()
+  Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+})
+afterEach(() => useHostStore.getState().reset())
+
+describe('approval-ws reconnect (spec §9.4)', () => {
+  it('the snapshot re-adds the request → the queued decision is sent once, with its grant; a second snapshot sends nothing', async () => {
+    const a = approval()
+    useApprovalStore.getState().applyOpened(H, a)
+    useApprovalStore.getState().queueDecision(H, a, 'approve', { max_members: 2, roots: ['/w/purdex'] })
+    mockedDecide.mockResolvedValueOnce(approval({ state: 'approved' }))
+    handleApprovalEvent(H, snapshot([a]))
+    await flush()
+    expect(mockedDecide).toHaveBeenCalledTimes(1)
+    expect(mockedDecide.mock.calls[0]).toEqual([H, 'req-1', { decision: 'approve', grant: { max_members: 2, roots: ['/w/purdex'] }, client: { kind: 'app', label: 'Purdex.app' } }])
+    expect(useApprovalStore.getState().entries).toEqual({})
+    expect(useApprovalStore.getState().queued).toEqual({})
+    expect(useUndoToast.getState().toast).toBeNull()
+    handleApprovalEvent(H, snapshot([]))
+    await flush()
+    expect(mockedDecide).toHaveBeenCalledTimes(1)
+  })
+
+  it('the snapshot shows the request gone → toast ended_while_away, nothing sent, the queue is empty', async () => {
+    const a = approval()
+    useApprovalStore.getState().applyOpened(H, a)
+    useApprovalStore.getState().queueDecision(H, a, 'deny')
+    handleApprovalEvent(H, snapshot([approval({ id: 'other', created_at: 2_000 })]))
+    await flush()
+    expect(mockedDecide).not.toHaveBeenCalled()
+    expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請已在離線期間結束，你的決定未送出')
+    expect(useApprovalStore.getState().queued).toEqual({})
+    expect(Object.keys(useApprovalStore.getState().entries)).toEqual([approvalKey(H, 'other')])
+  })
+
+  it('the resend answers 409 already_decided → closed with the "handled by" toast', async () => {
+    const a = approval()
+    useApprovalStore.getState().applyOpened(H, a)
+    useApprovalStore.getState().queueDecision(H, a, 'deny')
+    mockedDecide.mockRejectedValueOnce(new ApprovalApiError(409, 'already_decided', '', approval({ state: 'approved', decided_by: { kind: 'app', label: 'Purdex.app @ air26' } })))
+    handleApprovalEvent(H, snapshot([a]))
+    await flush()
+    expect(useApprovalStore.getState().entries).toEqual({})
+    expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由 Purdex.app @ air26 核准')
+  })
+
+  it('the resend fails on the network again → it stays queued for the next snapshot', async () => {
+    const a = approval()
+    useApprovalStore.getState().applyOpened(H, a)
+    useApprovalStore.getState().queueDecision(H, a, 'deny')
+    mockedDecide.mockRejectedValueOnce(new ApprovalApiError(0, 'network', 'ECONNREFUSED'))
+    handleApprovalEvent(H, snapshot([a]))
+    await flush()
+    expect(useApprovalStore.getState().queued[approvalKey(H, 'req-1')]).toMatchObject({ decision: 'deny' })
+    mockedDecide.mockResolvedValueOnce(approval({ state: 'denied' }))
+    handleApprovalEvent(H, snapshot([a]))
+    await flush()
+    expect(mockedDecide).toHaveBeenCalledTimes(2)
+    expect(useApprovalStore.getState().queued).toEqual({})
+  })
+
+  it('another host\'s queue is left alone', async () => {
+    const a = approval()
+    useApprovalStore.getState().applyOpened('h2', a)
+    useApprovalStore.getState().queueDecision('h2', a, 'deny')
+    handleApprovalEvent(H, snapshot([]))
+    await flush()
+    expect(mockedDecide).not.toHaveBeenCalled()
+    expect(useApprovalStore.getState().queued[approvalKey('h2', 'req-1')]).toBeDefined()
+  })
+})
+```
+
+- [ ] **Step 2: Run the test and verify it fails.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/lib/team/approval-ws.test.ts`
+  - Expected: FAIL — first test: `expect(mockedDecide).toHaveBeenCalledTimes(1)` receives 0 (the snapshot only replaces the set).
+
+- [ ] **Step 3: Implement.**
+
+In `spa/src/lib/team/approval-ws.ts`, extend the imports:
+
+```ts
+import { approvalKindLabel, approvalSessionLabel, closedToastText } from './approval-format'
+import { submitDecision } from './approval-decide'
+```
+
+add after `toastClosed`:
+
+```ts
+/** The request a decision was queued for is gone from the reconnect snapshot (spec §9.4): say so, send nothing. */
+export function toastEndedWhileAway(hostId: string, approval: Approval): void {
+  const t = useI18nStore.getState().t
+  useUndoToast.getState().show(t('approval.toast.ended_while_away', {
+    host: hostLabel(hostId, hostLookOf(hostId)),
+    session: approvalSessionLabel(approval.origin),
+    kind: approvalKindLabel(t, approval.kind),
+  }))
+}
+```
+
+and replace the `snapshot` branch of `handleApprovalEvent`:
+
+```ts
+  if (ev.op === 'snapshot') {
+    // A new connection (the daemon came back): the queue was filled while it was gone. Take it BEFORE the
+    // snapshot replaces the set, so each queued decision is sent at most once per reconnect.
+    const queued = store.takeQueued(hostId)
+    const vanished = new Set(store.applySnapshot(hostId, ev.approvals))
+    for (const q of queued) {
+      if (vanished.has(q.approval.id)) toastEndedWhileAway(hostId, q.approval)
+      else void submitDecision(hostId, q.approval, q.decision, q.grant)
+    }
+    return
+  }
+```
+
+(`approval-decide.ts` imports `toastClosed` from this file and this file now imports `submitDecision` from it: both are function-level uses, resolved at call time, so the cycle is harmless under ESM; the lint has no `import/no-cycle` rule.)
+
+`spa/src/locales/en.json` — after `"approval.dialog.deny": "Deny"` add (with the comma on the previous line):
+
+```json
+  "approval.toast.ended_while_away": "{{host}}: the {{kind}} from {{session}} ended while this app was disconnected; your decision was not sent"
+```
+
+`spa/src/locales/zh-TW.json`:
+
+```json
+  "approval.toast.ended_while_away": "{{host}}：{{session}} 的 {{kind}}已在離線期間結束，你的決定未送出"
+```
+
+- [ ] **Step 4: Run the tests and verify they pass.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/lib/team/approval-ws.test.ts src/hooks/useMultiHostEventWs.approval.test.ts src/components/ApprovalDialogHost.test.tsx src/locales/locale-completeness.test.ts`
+  - Expected: PASS (5 new).
+
+- [ ] **Step 5: Commit.**
+  ```bash
+  git add spa/src/lib/team/approval-ws.ts spa/src/lib/team/approval-ws.test.ts spa/src/locales/en.json spa/src/locales/zh-TW.json
+  git commit -m "feat(spa): re-send a decision queued during a daemon restart once the snapshot re-adds the request
+
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+  ```
+
+### Task 3.6: Notification on `opened` — `<主機>：<session> 申請成為 lead`; its click only focuses the window
+
+**Files:**
+- Create: `spa/src/lib/team/approval-notify.ts`
+- Modify: `spa/src/lib/team/approval-ws.ts` (the `opened` branch)
+- Modify: `spa/src/hooks/useNotificationDispatcher.ts:113-115` (`NotificationAction` union), `:280-294` (click listener), `:402-409` (new `case` after `open-host`)
+- Modify: `spa/src/locales/en.json`, `spa/src/locales/zh-TW.json` (one key after `approval.toast.ended_while_away`)
+- Test: `spa/src/lib/team/approval-notify.test.ts`, `spa/src/hooks/useNotificationDispatcher.approval.test.ts`
+
+**Interfaces:**
+- Consumes: `window.electronAPI.showNotification` (`electron.d.ts:135`), `getPlatformCapabilities().canNotification` (`platform.ts:14`), `window.electronAPI.onNotificationClicked` / `focusMyWindow` (`electron.d.ts:136-137`).
+- Produces:
+  ```ts
+  // approval-notify.ts
+  export function notifyApprovalOpened(hostId: string, approval: Approval): void
+  // useNotificationDispatcher.ts
+  export type NotificationAction =
+    | { kind: 'open-session'; hostId: string; sessionCode: string }
+    | { kind: 'open-host'; hostId: string }
+    | { kind: 'open-approval'; hostId: string }
+  ```
+  **U14:** no browser `Notification` fallback for approvals. `broadcastTs` is `approval.created_at` (Electron main dedups across this device's windows on it, `electron/main.ts:163-165`). The body is the reason.
+
+- [ ] **Step 1: Write the failing tests.**
+
+```ts
+// spa/src/lib/team/approval-notify.test.ts — the system notification for a new lead request (lead-team spec §6.3):
+// raised through the existing Electron `showNotification` path on `opened` only — never from a snapshot, never twice
+// for one request — with `action {kind:'open-approval', hostId}` and `broadcastTs = created_at`. U14: no browser path.
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useApprovalStore } from '../../stores/useApprovalStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { handleApprovalEvent } from './approval-ws'
+import { notifyApprovalOpened } from './approval-notify'
+import type { Approval } from './types'
+
+const H = 'h1'
+const approval = (over: Partial<Approval> = {}): Approval => ({
+  id: 'req-1', kind: 'lead', host_id: 'd1',
+  origin: { session_id: 'S1', ref: '_40iueq', name: 'purdex-7c', pid: 1, proc_start: 'p', cwd: '/w/purdex', tmux: '' },
+  payload: { reason: '要平行跑三個 PR', max_members: 3, roots: ['/w/purdex'] },
+  state: 'open', created_at: 1_696_000_000_000, deadline_at: 1_696_000_540_000, lease_until: 0,
+  ...over,
+})
+const showNotification = vi.fn()
+const NotificationCtor = vi.fn()
+
+beforeEach(() => {
+  useI18nStore.getState().setLocale('zh-TW')
+  useApprovalStore.getState().reset()
+  useHostStore.setState({
+    hosts: { [H]: { id: H, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 } },
+    hostOrder: [H], runtime: {}, activeHostId: H,
+  })
+  showNotification.mockClear()
+  NotificationCtor.mockClear()
+  Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
+  vi.stubGlobal('Notification', Object.assign(NotificationCtor, { permission: 'granted' }))
+})
+afterEach(() => {
+  vi.unstubAllGlobals()
+  Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+  useHostStore.getState().reset()
+})
+
+describe('notifyApprovalOpened', () => {
+  it('raises the Electron notification: title per spec §6.3, the reason as body, open-approval action, created_at as broadcastTs', () => {
+    notifyApprovalOpened(H, approval())
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    expect(showNotification.mock.calls[0][0]).toEqual({
+      title: 'mlab：purdex-7c 申請成為 lead',
+      body: '要平行跑三個 PR',
+      sessionCode: '',
+      eventName: 'ApprovalRequest',
+      broadcastTs: 1_696_000_000_000,
+      action: { kind: 'open-approval', hostId: H },
+    })
+    expect(NotificationCtor).not.toHaveBeenCalled()
+  })
+
+  it('outside Electron it does nothing — no browser Notification fallback (U14)', () => {
+    Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+    notifyApprovalOpened(H, approval())
+    expect(showNotification).not.toHaveBeenCalled()
+    expect(NotificationCtor).not.toHaveBeenCalled()
+  })
+})
+
+describe('handleApprovalEvent → notification', () => {
+  it('fires on `opened` once per request; a duplicate opened does not fire again', () => {
+    handleApprovalEvent(H, JSON.stringify({ op: 'opened', approval: approval() }))
+    handleApprovalEvent(H, JSON.stringify({ op: 'opened', approval: approval() }))
+    expect(showNotification).toHaveBeenCalledTimes(1)
+  })
+
+  it('never fires from a snapshot (a reconnect must not re-announce what is already on screen)', () => {
+    handleApprovalEvent(H, JSON.stringify({ op: 'snapshot', approvals: [approval(), approval({ id: 'b' })] }))
+    expect(showNotification).not.toHaveBeenCalled()
+  })
+
+  it('does not fire on closed', () => {
+    handleApprovalEvent(H, JSON.stringify({ op: 'opened', approval: approval() }))
+    handleApprovalEvent(H, JSON.stringify({ op: 'closed', approval: approval({ state: 'timeout' }) }))
+    expect(showNotification).toHaveBeenCalledTimes(1)
+  })
+})
+```
+
+```ts
+// spa/src/hooks/useNotificationDispatcher.approval.test.ts — the click on an approval notification (lead-team spec
+// §6.3): it only focuses the window, where the dialog already is. It must not fall into the open-session path
+// (no session code to route to) nor open the Hosts page.
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { renderHook } from '@testing-library/react'
+import { handleNotificationClick, useNotificationDispatcher } from './useNotificationDispatcher'
+import { useTabStore } from '../stores/useTabStore'
+import { useHostStore } from '../stores/useHostStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
+
+type ClickPayload = { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } }
+
+describe('useNotificationDispatcher open-approval', () => {
+  let clickHandler: ((payload: ClickPayload) => void) | null
+  const focusMyWindow = vi.fn()
+
+  beforeEach(() => {
+    clickHandler = null
+    focusMyWindow.mockClear()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useHostStore.setState({ hostOrder: ['host-a', 'host-b'], activeHostId: 'host-a' })
+    // Both shown: the open-session fallback's "hidden host → Hosts page" branch must not be what makes this pass.
+    useShownHostsStore.setState({ ids: ['host-a', 'host-b'] })
+    Object.defineProperty(window, 'electronAPI', {
+      value: {
+        onNotificationClicked: (cb: (payload: ClickPayload) => void) => { clickHandler = cb; return () => { clickHandler = null } },
+        focusMyWindow,
+      },
+      writable: true,
+      configurable: true,
+    })
+  })
+
+  afterEach(() => {
+    Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+  })
+
+  it('a click with action open-approval focuses the window and nothing else', () => {
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    expect(clickHandler).not.toBeNull()
+    clickHandler!({ sessionCode: '', action: { kind: 'open-approval', hostId: 'host-b' } })
+    expect(focusMyWindow).toHaveBeenCalledTimes(1)
+    expect(useTabStore.getState().tabOrder).toEqual([])
+    expect(useHostStore.getState().activeHostId).toBe('host-a')
+    unmount()
+  })
+
+  it('handleNotificationClick({kind: open-approval}) is the same no-op-plus-focus', () => {
+    handleNotificationClick({ kind: 'open-approval', hostId: 'host-b' })
+    expect(focusMyWindow).toHaveBeenCalledTimes(1)
+    expect(useTabStore.getState().tabOrder).toEqual([])
+  })
+})
+```
+
+- [ ] **Step 2: Run the tests and verify they fail.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/lib/team/approval-notify.test.ts src/hooks/useNotificationDispatcher.approval.test.ts`
+  - Expected: FAIL — `Failed to resolve import "./approval-notify"`; and in the dispatcher test the click with `open-approval` falls into the `open-session` branch: with both hosts shown and no tab, `handled` stays false and `focusMyWindow` is never called (`expected 1, received 0`). `handleNotificationClick({ kind: 'open-approval', … })` is also rejected by `tsc -b` (not in the union) — vitest does not type-check, so that one shows up in `pnpm run build`.
+
+- [ ] **Step 3: Implement.**
+
+`spa/src/lib/team/approval-notify.ts`:
+
+```ts
+// spa/src/lib/team/approval-notify.ts — the system notification for a new approval request (lead-team spec §6.3):
+// `<主機>：<session> 申請成為 lead` through the existing Electron `showNotification` IPC. Raised on `opened` only; a
+// snapshot (reconnect) re-shows the dialog but must not re-announce. `broadcastTs` is the request's `created_at`:
+// Electron main dedups on it across this device's windows. U14: the App is the only client — no browser fallback.
+import { getPlatformCapabilities } from '../platform'
+import { hostLabel, hostLookOf } from '../host-look'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { approvalSessionLabel } from './approval-format'
+import { leadPayloadOf, type Approval } from './types'
+
+export function notifyApprovalOpened(hostId: string, approval: Approval): void {
+  if (!getPlatformCapabilities().canNotification || !window.electronAPI?.showNotification) return
+  const t = useI18nStore.getState().t
+  window.electronAPI.showNotification({
+    title: t('approval.notify.title', { host: hostLabel(hostId, hostLookOf(hostId)), session: approvalSessionLabel(approval.origin) }),
+    body: leadPayloadOf(approval).reason,
+    sessionCode: '',
+    eventName: 'ApprovalRequest',
+    broadcastTs: approval.created_at,
+    action: { kind: 'open-approval', hostId },
+  })
+}
+```
+
+`spa/src/lib/team/approval-ws.ts` — add the import and change the `opened` branch:
+
+```ts
+import { notifyApprovalOpened } from './approval-notify'
+```
+
+```ts
+  if (ev.op === 'opened') {
+    // Announce only what was actually added: a duplicate opened (two sockets, a replay) is silent.
+    if (store.applyOpened(hostId, ev.approval)) notifyApprovalOpened(hostId, ev.approval)
+    return
+  }
+```
+
+`spa/src/hooks/useNotificationDispatcher.ts` — lines 113-115 become:
+
+```ts
+export type NotificationAction =
+  | { kind: 'open-session'; hostId: string; sessionCode: string }
+  | { kind: 'open-host'; hostId: string }
+  /** An approval request (lead-team spec §6.3): the dialog is already on screen; the click only focuses the window. */
+  | { kind: 'open-approval'; hostId: string }
+```
+
+lines 284-293 (inside the `onNotificationClicked` callback) become:
+
+```ts
+      if (!payload.action) return
+      if (payload.action.kind === 'open-host') {
+        handleNotificationClick({ kind: 'open-host', hostId: payload.action.hostId })
+      } else if (payload.action.kind === 'open-approval') {
+        handleNotificationClick({ kind: 'open-approval', hostId: payload.action.hostId })
+      } else {
+        handleNotificationClick({
+          kind: 'open-session',
+          hostId: payload.action.hostId,
+          sessionCode: payload.action.sessionCode ?? payload.sessionCode,
+        })
+      }
+```
+
+and after the `case 'open-host': { … break }` block (line 409) add:
+
+```ts
+    case 'open-approval': {
+      // The dialog is global and already shows the oldest open request; there is no tab to open or host to switch.
+      if (window.electronAPI?.focusMyWindow) {
+        window.electronAPI.focusMyWindow()
+      }
+      break
+    }
+```
+
+`spa/src/locales/en.json` — after `approval.toast.ended_while_away`:
+
+```json
+  "approval.notify.title": "{{host}}: {{session}} requests to become lead"
+```
+
+`spa/src/locales/zh-TW.json`:
+
+```json
+  "approval.notify.title": "{{host}}：{{session}} 申請成為 lead"
+```
+
+- [ ] **Step 4: Run the tests and verify they pass.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/lib/team/approval-notify.test.ts src/hooks/useNotificationDispatcher.approval.test.ts src/hooks/useNotificationDispatcher.test.ts src/hooks/useMultiHostEventWs.approval.test.ts src/locales/locale-completeness.test.ts`
+  - Expected: PASS (7 new; the existing dispatcher suite unchanged).
+
+- [ ] **Step 5: Commit.**
+  ```bash
+  git add spa/src/lib/team/approval-notify.ts spa/src/lib/team/approval-notify.test.ts spa/src/lib/team/approval-ws.ts spa/src/hooks/useNotificationDispatcher.ts spa/src/hooks/useNotificationDispatcher.approval.test.ts spa/src/locales/en.json spa/src/locales/zh-TW.json
+  git commit -m "feat(spa): system notification on a new lead request; its click only focuses the window
+
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+  ```
+
+### Task 3.7: The daemon-restart confirm gains `N 個申請等待核准` (only when N > 0)
+
+**Files:**
+- Modify: `spa/src/components/hosts/RestartDaemonButton.tsx:13-17` (imports), `:42-47` (one more store read), `:124-130` (a second line under the workers line)
+- Modify: `spa/src/locales/en.json`, `spa/src/locales/zh-TW.json` (one key after `approval.notify.title`)
+- Test: `spa/src/components/hosts/RestartDaemonButton.test.tsx:11-16` (reset the approval store in `beforeEach`), plus three new tests appended to the top-level `describe`.
+
+**Interfaces:**
+- Consumes: `useApprovalStore` + `selectOpenCountFor(hostId)` (Task 3.2).
+- Produces: `<p data-testid={`${testId}-approvals`}>` in the confirm dialog, rendered only when the **restarting host** has open requests. The count is per host, not global — the other hosts' requests do not survive or suffer this restart.
+
+Spec §9.5 says the counts come from `GET /api/team/inflight` within the dialog's 3 s budget; the handoff notes (P3) decide the store is enough until relays exist, and P6 adds the route. Recorded in `## Deviations`.
+
+- [ ] **Step 1: Write the failing tests.**
+
+In `spa/src/components/hosts/RestartDaemonButton.test.tsx`, add the import and the reset:
+
+```ts
+import { useApprovalStore } from '../../stores/useApprovalStore'
+import type { Approval } from '../../lib/team/types'
+```
+
+```ts
+beforeEach(() => {
+  useI18nStore.getState().setLocale('zh-TW')
+  restart.mockClear()
+  useDaemonRestartStore.setState({ restarting: {}, settled: {}, restart })
+  vi.mocked(restartLib.countRunningWorkers).mockReset()
+  useApprovalStore.getState().reset()
+})
+```
+
+and append inside `describe('RestartDaemonButton', …)`:
+
+```ts
+  describe('open approval requests (lead-team spec §9.5)', () => {
+    const approval = (id: string): Approval => ({
+      id, kind: 'lead', host_id: 'd1',
+      origin: { session_id: 'S', ref: '_abcdef', name: 'n', pid: 1, proc_start: 'p', cwd: '/w', tmux: '' },
+      payload: { reason: 'r', max_members: 3, roots: ['/w'] },
+      state: 'open', created_at: 1, deadline_at: 2, lease_until: 3,
+    })
+
+    it('names this host\'s open requests when there are some', async () => {
+      // Dropping the count turns this red (mutation deliverable).
+      useApprovalStore.getState().applyOpened('h1', approval('a'))
+      useApprovalStore.getState().applyOpened('h1', approval('b'))
+      useApprovalStore.getState().applyOpened('h2', approval('c'))
+      await openConfirm(0)
+      expect(screen.getByTestId('restart-daemon-approvals').textContent).toBe('2 個申請等待核准')
+    })
+
+    it('no line when this host has none, even if another host does', async () => {
+      useApprovalStore.getState().applyOpened('h2', approval('c'))
+      await openConfirm(0)
+      expect(screen.queryByTestId('restart-daemon-approvals')).toBeNull()
+    })
+
+    it('shows both lines when workers run and requests wait', async () => {
+      useApprovalStore.getState().applyOpened('h1', approval('a'))
+      await openConfirm(2)
+      expect(screen.getByTestId('restart-daemon-workers')).toBeInTheDocument()
+      expect(screen.getByTestId('restart-daemon-approvals').textContent).toBe('1 個申請等待核准')
+    })
+  })
+```
+
+- [ ] **Step 2: Run the test and verify it fails.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/components/hosts/RestartDaemonButton.test.tsx`
+  - Expected: FAIL — `Unable to find an element by: [data-testid="restart-daemon-approvals"]` (2 of the 3 new tests; the "no line" one passes vacuously).
+
+- [ ] **Step 3: Implement.**
+
+`spa/src/components/hosts/RestartDaemonButton.tsx` — after line 14 (`import { useDaemonRestartStore } …`) add:
+
+```ts
+import { selectOpenCountFor, useApprovalStore } from '../../stores/useApprovalStore'
+```
+
+after line 47 (`const restart = useDaemonRestartStore((s) => s.restart)`) add:
+
+```ts
+  // Open approval requests on THIS host (lead-team spec §9.5): they survive the restart (leases are extended at
+  // boot), so the line informs, it does not block. Counted from the store the WS snapshot keeps current.
+  const openApprovals = useApprovalStore(selectOpenCountFor(hostId))
+```
+
+and replace lines 124-130 (the children of `ConfirmDialog`) with:
+
+```tsx
+          {confirm.workers !== 0 && (
+            <p data-testid={`${testId}-workers`} className="mt-2 text-xs text-amber-400">
+              {confirm.workers === null
+                ? t('hosts.restart.confirm_workers_unknown')
+                : t('hosts.restart.confirm_workers', { count: confirm.workers })}
+            </p>
+          )}
+          {openApprovals > 0 && (
+            <p data-testid={`${testId}-approvals`} className="mt-1 text-xs text-amber-400">
+              {t('approval.restart.pending', { count: openApprovals })}
+            </p>
+          )}
+```
+
+`spa/src/locales/en.json` — after `approval.notify.title`:
+
+```json
+  "approval.restart.pending": "{{count}} request(s) awaiting approval"
+```
+
+`spa/src/locales/zh-TW.json`:
+
+```json
+  "approval.restart.pending": "{{count}} 個申請等待核准"
+```
+
+- [ ] **Step 4: Run the tests and verify they pass.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/components/hosts/RestartDaemonButton.test.tsx src/locales/locale-completeness.test.ts`
+  - Expected: PASS (the whole `RestartDaemonButton` suite, 3 new).
+
+- [ ] **Step 5: Commit.**
+  ```bash
+  git add spa/src/components/hosts/RestartDaemonButton.tsx spa/src/components/hosts/RestartDaemonButton.test.tsx spa/src/locales/en.json spa/src/locales/zh-TW.json
+  git commit -m "feat(spa): restart confirm lists the host's approval requests awaiting a decision
+
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+  ```
+
+### Task 3.8: i18n — the `approval.` namespace pinned, every key listed, lint and build
+
+**Files:**
+- Modify: `spa/src/locales/locale-completeness.test.ts:93` (a new `describe` block inserted before the Live Mode test at line 94-106)
+- Verify: `spa/src/locales/en.json`, `spa/src/locales/zh-TW.json` carry exactly the keys below (added by Tasks 3.3–3.7; nothing new is added here unless a key is found missing).
+
+**Interfaces:** none new. This task is the consolidated contract for the strings.
+
+**Every `approval.*` key (both files; zh-TW strings are the spec's where the spec quotes one):**
+
+| Key | en | zh-TW | Added in |
+|---|---|---|---|
+| `approval.kind.lead` | lead request | lead 申請 | 3.3 |
+| `approval.kind.self_relay` | relay request | 接力申請 | 3.3 |
+| `approval.decision.approved` | approved | 核准 | 3.3 |
+| `approval.decision.denied` | denied | 拒絕 | 3.3 |
+| `approval.state.approved` | approved | 已核准 | 3.3 |
+| `approval.state.denied` | denied | 已拒絕 | 3.3 |
+| `approval.state.timeout` | timed out | 逾時 | 3.3 |
+| `approval.state.cancelled` | cancelled | 已取消 | 3.3 |
+| `approval.state.abandoned` | abandoned | 已放棄 | 3.3 |
+| `approval.toast.decided_elsewhere` | {{host}}: {{client}} {{decision}} the {{kind}} from {{session}} | {{host}}：{{session}} 的 {{kind}} 已由 {{client}} {{decision}} | 3.3 |
+| `approval.toast.ended` | {{host}}: the {{kind}} from {{session}} ended ({{state}}) | {{host}}：{{session}} 的 {{kind}}已結束（{{state}}） | 3.3 |
+| `approval.toast.failed` | Could not send the decision ({{code}}) | 送出決定失敗（{{code}}） | 3.4 |
+| `approval.dialog.title_lead` | {{host}}: {{session}} requests to become lead | {{host}}：{{session}} 申請成為 lead | 3.4 |
+| `approval.dialog.host` | Host | 主機 | 3.4 |
+| `approval.dialog.session` | Session | Session | 3.4 |
+| `approval.dialog.address` | Address | 位址 | 3.4 |
+| `approval.dialog.cwd` | Directory | 目錄 | 3.4 |
+| `approval.dialog.tmux` | tmux | tmux | 3.4 |
+| `approval.dialog.reason` | Reason | 理由 | 3.4 |
+| `approval.dialog.deadline` | Time left | 剩餘時間 | 3.4 |
+| `approval.dialog.max_members` | Max members (1–8) | member 上限（1–8） | 3.4 |
+| `approval.dialog.max_members_range` | Enter a whole number from 1 to {{max}} | 請輸入 1 到 {{max}} 的整數 | 3.4 |
+| `approval.dialog.roots` | Allowed roots (one per line) | 允許的目錄（一行一個） | 3.4 |
+| `approval.dialog.roots_required` | At least one root is required | 至少要有一個目錄 | 3.4 |
+| `approval.dialog.daemon_restarting` | daemon restarting… | daemon 重啟中… | 3.4 |
+| `approval.dialog.queued` | “{{decision}}” noted; it is sent once the connection is back | 已記下「{{decision}}」，恢復連線後送出 | 3.4 |
+| `approval.dialog.more_pending` | {{count}} more request(s) waiting | 還有 {{count}} 個申請排隊中 | 3.4 |
+| `approval.dialog.approve` | Approve | 核准 | 3.4 |
+| `approval.dialog.deny` | Deny | 拒絕 | 3.4 |
+| `approval.toast.ended_while_away` | {{host}}: the {{kind}} from {{session}} ended while this app was disconnected; your decision was not sent | {{host}}：{{session}} 的 {{kind}}已在離線期間結束，你的決定未送出 | 3.5 |
+| `approval.notify.title` | {{host}}: {{session}} requests to become lead | {{host}}：{{session}} 申請成為 lead | 3.6 |
+| `approval.restart.pending` | {{count}} request(s) awaiting approval | {{count}} 個申請等待核准 | 3.7 |
+
+Spec quotes honoured verbatim: `daemon 重啟中…` (§6.3), `<主機>：<session> 的 lead 申請 已由 <client> 核准／拒絕` (§6.3, via `decided_elsewhere` with kind `lead 申請`), `<主機>：<session> 申請成為 lead` (§6.3), `N 個申請等待核准` (§9.5). No `pluralKey` here: zh-TW has no plural forms and the spec strings are count-agnostic; the en strings use "(s)" like `hosts.restart.confirm_workers`.
+
+- [ ] **Step 1: Write the failing test.**
+
+Insert before line 94 (`  // The Live Mode gate explains …`) of `spa/src/locales/locale-completeness.test.ts`:
+
+```ts
+  // The approval namespace (lead-team spec §6.3, §9.5). The four strings the spec fixes word for word are pinned in
+  // zh-TW, and a translation that dropped a `{{client}}` would hide WHO approved — the one fact U6's toast exists for.
+  describe('the approval namespace', () => {
+    const approvalKeys = (o: Record<string, string>) => Object.keys(o).filter((k) => k.startsWith('approval.')).sort()
+    const enA = approvalKeys(en as Record<string, string>)
+    const zhA = approvalKeys(zhTW as Record<string, string>)
+
+    it('exists with identical key sets', () => {
+      expect(enA.length).toBeGreaterThan(0)
+      expect(zhA).toEqual(enA)
+    })
+
+    it('keeps every placeholder in the translation', () => {
+      const placeholders = (v: string) => (v.match(/\{\{\w+\}\}/g) ?? []).sort()
+      for (const key of enA) {
+        expect(placeholders((zhTW as Record<string, string>)[key]), key).toEqual(placeholders((en as Record<string, string>)[key]))
+      }
+    })
+
+    it('carries the spec §6.3 / §9.5 strings in zh-TW', () => {
+      const zh = zhTW as Record<string, string>
+      expect(zh['approval.dialog.daemon_restarting']).toBe('daemon 重啟中…')
+      expect(zh['approval.toast.decided_elsewhere']).toBe('{{host}}：{{session}} 的 {{kind}} 已由 {{client}} {{decision}}')
+      expect(zh['approval.kind.lead']).toBe('lead 申請')
+      expect(zh['approval.kind.self_relay']).toBe('接力申請')
+      expect(zh['approval.notify.title']).toBe('{{host}}：{{session}} 申請成為 lead')
+      expect(zh['approval.restart.pending']).toBe('{{count}} 個申請等待核准')
+    })
+
+    it('has a state label for every closed state', () => {
+      for (const s of ['approved', 'denied', 'timeout', 'cancelled', 'abandoned']) expect(enA, s).toContain(`approval.state.${s}`)
+    })
+  })
+
+```
+
+- [ ] **Step 2: Run the test and verify it fails if any key is missing.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/locales/locale-completeness.test.ts`
+  - Expected: PASS when Tasks 3.3–3.7 added every key above. To see the block bite before trusting it, temporarily delete `"approval.state.abandoned"` from `zh-TW.json`, run again (expected: `approval.* keys differ` and `has a state label …` red), then restore it. This is the mutation check for the namespace block.
+
+- [ ] **Step 3: Implement.** Nothing beyond the test block, unless Step 2 showed a missing or misspelled key — then fix it in both locale files to match the table.
+
+- [ ] **Step 4: Run everything that P3 touched, then lint and build.**
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team/spa && npx vitest run src/lib/team src/stores/useApprovalStore.test.ts src/hooks/useMultiHostEventWs.approval.test.ts src/hooks/useMultiHostEventWs.worker-exited.test.ts src/hooks/useNotificationDispatcher.test.ts src/hooks/useNotificationDispatcher.approval.test.ts src/components/ApprovalDialogHost.test.tsx src/components/HandoffDialogHost.test.tsx src/components/hosts/RestartDaemonButton.test.tsx src/locales/locale-completeness.test.ts && pnpm run lint && pnpm run build`
+  - Expected: all PASS; `eslint .` reports nothing; `tsc -b && vite build` succeeds.
+
+- [ ] **Step 5: Commit.**
+  ```bash
+  git add spa/src/locales/locale-completeness.test.ts
+  git commit -m "test(spa): pin the approval i18n namespace and the spec's zh-TW strings
+
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+  ```
+
+### Deviations from the handoff notes
+
+1. **`applySnapshot` returns only the vanished ids, not "along with any queued deny".** The notes had the snapshot return the queue too; here the store stays pure: `takeQueued(hostId)` removes and returns the host's queue, and `handleApprovalEvent`'s snapshot branch (Task 3.5) takes the queue first, applies the snapshot, then matches the two. Same behaviour, two calls instead of one compound return.
+2. **`queueDecision` takes the `Approval`, not the id** (`queueDecision(hostId, approval, decision, grant?)`). The `ended_while_away` toast needs the session and kind after the snapshot has already dropped the entry, so the queued record carries the approval. `markSent` from the notes does not exist: the resend path is `takeQueued` (consumed on take), and a resend that fails on the network re-queues itself inside `submitDecision`.
+3. **A `decidedHere` mark replaces an implicit "ours" check.** The notes did not say how the WS `closed` after our own 200 avoids toasting at the person who clicked. `markDecidedHere` before the send, `applyClosed` returns `'ours' | 'elsewhere' | 'absent'`. A 409 whose `decided_by.label` equals this app's label is also treated as ours (a lost answer, resent).
+4. **"Buttons disabled while disconnected" is `aria-disabled`, not `disabled`.** The task text asks for disabled buttons *and* for a click to be queued; a `disabled` button cannot be clicked. The dialog dims both buttons with `aria-disabled` (the same classes `RestartDaemonButton` uses for its counting state) and queues the click; once a decision is queued they become really `disabled`. The banner text is the spec's `daemon 重啟中…` exactly; the queued state adds a second line.
+5. **Per-host count in the restart confirm.** The task names `selectOpenCount`; the dialog uses `selectOpenCountFor(hostId)`, because the other hosts' requests are not affected by this host's restart. `selectOpenCount` (global) exists too and is what the dialog's "還有 N 個申請排隊中" line uses. Spec §9.5's `GET /api/team/inflight` is not called (the handoff notes defer it to P6; the store the WS snapshot keeps current is the same set).
+6. **`Origin` gains two optional fields in TS only: `title?` and `address?`.** Spec §6.3 wants "the session's title or name" and "address and ref"; the wire `Origin` has neither a title nor the formatted address. The SPA falls back to `name` → `ref` and builds `<host>/<name> [<ref6>]` locally with the SPA's host label as `<host>`. See `## Open questions`.
+7. **No browser `Notification` fallback, and no `shouldDispatch` localStorage dedup** for approvals: the request id already makes `applyOpened` idempotent, and Electron main dedups on `broadcastTs`. The existing `sendConnectionNotification` fallback is not extended (U14).
+8. **Line numbers re-verified.** The notes' `host-events.ts:4-15`, `useMultiHostEventWs.ts:172-235`, `App.tsx:283`, `electron.d.ts:54-62, :173`, `handoff-api.ts:129-150`, `host-api.ts:214`, `useNotificationDispatcher.ts:280-294`, `RestartDaemonButton.tsx:115-131` all still hold on `d39886e8`; only the inner line of the `nex-worker-exited` branch (213-217) and the import line (21) were added above.
+9. **i18n keys are added task by task, not all in 3.8.** Each task's test asserts the real zh-TW string, so the keys must exist when that task's test runs; Task 3.8 is the consolidated table plus the namespace completeness block, lint and build.
+
+### Size estimate
+
+Counted from the code blocks above (new files whole; modified files by lines added).
+
+**P3a (Tasks 3.1–3.4)** — 17 files:
+
+| File | Lines |
+|---|---|
+| `lib/team/types.ts` | ~95 |
+| `lib/team/approval-api.ts` | ~85 |
+| `lib/team/approval-api.test.ts` | ~120 |
+| `stores/useApprovalStore.ts` | ~140 |
+| `stores/useApprovalStore.test.ts` | ~130 |
+| `lib/team/approval-format.ts` | ~60 |
+| `lib/team/approval-ws.ts` | ~65 |
+| `lib/host-events.ts` | +1 |
+| `hooks/useMultiHostEventWs.ts` | +7 |
+| `hooks/useMultiHostEventWs.approval.test.ts` | ~130 |
+| `lib/team/client-label.ts` | ~40 |
+| `lib/team/approval-decide.ts` | ~55 |
+| `components/ApprovalDialogHost.tsx` | ~200 |
+| `components/ApprovalDialogHost.test.tsx` | ~280 |
+| `App.tsx` | +3 |
+| `locales/en.json` | +29 |
+| `locales/zh-TW.json` | +29 |
+| **Total** | **≈ 1 470 lines, 17 files** |
+
+**P3b (Tasks 3.5–3.8)** — 11 files:
+
+| File | Lines |
+|---|---|
+| `lib/team/approval-ws.ts` | +25 |
+| `lib/team/approval-ws.test.ts` | ~110 |
+| `lib/team/approval-notify.ts` | ~25 |
+| `lib/team/approval-notify.test.ts` | ~85 |
+| `hooks/useNotificationDispatcher.ts` | +12 |
+| `hooks/useNotificationDispatcher.approval.test.ts` | ~50 |
+| `components/hosts/RestartDaemonButton.tsx` | +10 |
+| `components/hosts/RestartDaemonButton.test.tsx` | +35 |
+| `locales/en.json` / `zh-TW.json` | +3 each |
+| `locales/locale-completeness.test.ts` | +38 |
+| **Total** | **≈ 395 lines, 11 files** |
+
+The Global Constraint is "≤ 800 lines **or** ≤ 20 files"; both PRs meet the file bound. P3a exceeds the line bound (about 55 % of it is test code). If the coordinator wants the line bound as well, split P3a once more at the natural seam: **P3a-1** = Tasks 3.1–3.3 (types, API, store, WS branch, toasts; ≈ 830 lines, 10 files) and **P3a-2** = Task 3.4 (dialog host, client label, decide path; ≈ 640 lines, 7 files). P3a-1 ships nothing user-visible except the "closed elsewhere" toast, which is harmless without the dialog.
+
+### Open questions for the coordinator
+
+1. **Two `Origin` fields the dialog wants that the wire does not carry.** Spec §6.3 lists "the session's title or name" and "address and ref". `team.Origin` has `name` and `ref` but no `title` and no pre-formatted `address`; the peers module already computes both for `GET /api/peers` (`PeerRecordWire.title`, `.address`, `host-api.ts:87-108`). Proposal for P2a, zero cost on this side: add `Title string \`json:"title,omitempty"\`` and `Address string \`json:"address,omitempty"\`` to `team.Origin`, filled by the origin resolver. The TS type already has them optional and prefers them when present; without them the SPA shows `name`→`ref` and builds `<SPA host label>/<name> [<ref6>]`, which differs from pdx's `<daemon host name>/…` only when the user renamed the host in the App. Not a blocker for P3.
+2. **Multi-window focus on the notification click.** Electron broadcasts `notification:clicked` to every window (`electron/main.ts:178-182`); the `open-approval` handler calls `focusMyWindow` in each, exactly as `open-host` does today. Acceptable for v1 (same as the existing behaviour); flag if a single-window focus is wanted.
+3. **Electron's `broadcastTs` dedup is a bare `Set<number>` of timestamps** (`main.ts:155-165`). Two approvals created in the same millisecond on two hosts would dedup into one notification on this device. Negligible; noted so nobody "fixes" it by changing `broadcastTs` away from `created_at`, which is what makes two windows of one device dedup correctly.
+4. **A dialog opened by a `closed` racing a late `opened`.** If the daemon's `closed` for a request reaches a client before that client ever saw `opened` (a socket that connected between the two), `applyClosed` returns `'absent'` and `applyOpened` later adds a request that is already closed on the daemon; it stays until the next snapshot or until a click answers 409/404 (both close it). P2a could make `opened` carry nothing new; the SPA could call `listOpenApprovals` after each `opened` to confirm — not done here to keep the event path single-source. Flagging as a known, self-healing edge.
+
+### Coordinator decisions on P3 (2026-10-07, `mlab/_81nu3d`)
+
+- **Split into three PRs:** **P3a-1** = Tasks 3.1–3.3 (types, API client, store, WS branch and toasts; ≈ 830 lines, 10 files, borderline on lines with 55 % tests); **P3a-2** = Task 3.4 (dialog host, client label, decide path; ≈ 640); **P3b** = Tasks 3.5–3.8 (reconnect resend, notification, restart line, i18n block; ≈ 395).
+- **Open question 1 is taken into P2a:** `team.Origin` gains `Title string \`json:"title,omitempty"\`` and `Address string \`json:"address,omitempty"\`` (see "Coordinator decisions on P2a", amended). The TS `Origin.title?` / `address?` in Task 3.1 therefore match the wire, and the local fallback stays for an older daemon.
+- **Open questions 2–4 are accepted as v1 behaviour** (every window focuses on the notification click, as `open-host` does; `broadcastTs` stays `created_at`; a `closed` racing a late `opened` self-heals on the next snapshot or on the click's 409/404). Each is noted in the task that owns it; none needs code here.
+- **Deviations 1–9 are accepted.** Deviation 4 (`aria-disabled` plus queue, then `disabled` once queued) is the reading of spec §6.3 that lets "a click while disconnected is kept locally" work at all.
