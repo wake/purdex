@@ -483,7 +483,7 @@ The earlier draft split ownerless conversations by whether they had ever been a 
 ### 13.2 Which conversations count
 
 A conversation S on a host is in scope when **either** of these holds:
-- it was **born in a terminal**: the first `entrypoint` of its transcript is `cli`;
+- it was **born interactively**: the first `entrypoint` of its transcript is not `sdk-*` (`cli`, or another interactive entrypoint such as an IDE extension);
 - it has **a Nexen stint on this host**: any execution for S, archived or not.
 
 sdk-born sessions without a stint were started by a tool outside Purdex (Aigora, scripts, tests). They are out of scope (§12); Aigora gets its own tab later (Q3).
@@ -518,7 +518,7 @@ The order stays 外觀 / Workers / 已退出, and P4 adds **已消失** after th
     5. the first 8 characters of S.
   - **cwd**, with the home directory shortened to `~`.
   - **Last activity**: the transcript's mtime, shown relative ("3 小時前").
-  - **上次在**: 終端機 or Worker. The last `entrypoint` decides: `cli` means terminal, `sdk-*` means worker.
+  - **上次在**: 終端機 or Worker. The last `entrypoint` decides: `cli` means terminal, `sdk-*` means worker. Fallbacks (R-4-6, coordinator 2026-10-07): no `entrypoint` in the tail window → the first one; none at all → Worker when the host has a stint for S, else 終端機; any value other than `cli` / `sdk-*` → 終端機.
 - **Order:** last activity, newest first.
 - **Rebuild:** each row offers 重建… (§13.4).
 
