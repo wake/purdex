@@ -626,6 +626,38 @@ func TestGet_WaitIsCappedAndEndsWhenTheClientLeaves(t *testing.T) {
 	}
 }
 
+// TestGet_WaiterIsRegisteredBeforeTheRead is the mutation gate for the
+// long-poll's ordering (plan deviation 11): the row is closed in the window
+// between handleGet's read and its wait, through the afterRead hook. With
+// the waiter registered before the read, the close wakes it and the poll
+// answers the cancelled row at once; registered after the read, the wake is
+// lost and the poll would sit out its timer.
+func TestGet_WaiterIsRegisteredBeforeTheRead(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.events()
+	var once sync.Once
+	f.m.afterRead = func(id string) {
+		once.Do(func() {
+			if code, _ := f.do(http.MethodDelete, "/api/team/approvals/"+id, nil); code != 200 {
+				t.Errorf("delete inside the window: %d", code)
+			}
+		})
+	}
+	start := time.Now()
+	code, body := f.do(http.MethodGet, "/api/team/approvals/"+uid(1)+"?wait=5", nil)
+	elapsed := time.Since(start)
+	if a := decodeApproval(t, body); code != 200 || a.State != team.StateCancelled {
+		t.Fatalf("poll: %d %+v", code, a)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("poll took %s: the close between read and wait was not seen (waiter registered too late)", elapsed)
+	}
+	if n := f.countOps("closed"); n != 1 {
+		t.Fatalf("closed events = %d, want 1", n)
+	}
+}
+
 func TestDelete_RepeatAndUnknown(t *testing.T) {
 	f := newFixture(t)
 	f.create(uid(1))

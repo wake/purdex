@@ -297,6 +297,9 @@ func (m *Module) handleGet(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusNotFound, team.ErrNotFound, "no such approval request", nil)
 		return
 	}
+	if m.afterRead != nil {
+		m.afterRead(id)
+	}
 	if a.State == team.StateOpen && wait > 0 {
 		timer := time.NewTimer(time.Duration(wait) * time.Second)
 		defer timer.Stop()

@@ -51,6 +51,11 @@ type Module struct {
 
 	mu      sync.Mutex
 	waiters map[string][]chan struct{} // long-polls per approval id; closed when it closes
+
+	// afterRead, when set, runs in handleGet right after the row is read
+	// and before the wait. Tests use it to close the row in that window
+	// and prove the waiter was registered before the read; nil in production.
+	afterRead func(id string)
 }
 
 // New returns a Module with production defaults.
