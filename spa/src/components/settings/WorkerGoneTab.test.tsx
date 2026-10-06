@@ -198,4 +198,13 @@ describe('WorkerGoneTab', () => {
     expect(container).toBeEmptyDOMElement()
     expect(conversations).not.toHaveBeenCalled()
   })
+
+  it('resets the search when the host changes', () => {
+    conversations.mockImplementation((h: string) => ready([h === 'hA' ? TERM : WORKER]))
+    const { rerender } = render(<WorkerGoneTab hostId="hA" />)
+    fireEvent.change(screen.getByTestId('worker-gone-search'), { target: { value: 'Terminal' } })
+    rerender(<WorkerGoneTab hostId="hB" />)
+    expect((screen.getByTestId('worker-gone-search') as HTMLInputElement).value).toBe('')
+    expect(screen.getByText('Worker chat')).toBeTruthy()
+  })
 })

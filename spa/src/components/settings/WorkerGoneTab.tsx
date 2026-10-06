@@ -14,7 +14,7 @@ const AGE_TICK_MS = 60_000
 
 export function WorkerGoneTab({ hostId }: { hostId?: string }) {
   if (!hostId) return null
-  return <GoneList hostId={hostId} />
+  return <GoneList key={hostId} hostId={hostId} />
 }
 
 function GoneList({ hostId }: { hostId: string }) {

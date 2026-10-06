@@ -254,4 +254,13 @@ describe('WorkerExitedTab', () => {
     expect(container).toBeEmptyDOMElement()
     expect(conversations).not.toHaveBeenCalled()
   })
+
+  it('resets the search when the host changes', () => {
+    conversations.mockImplementation((h: string) => ready([h === 'hA' ? TERM : WORKER]))
+    const { rerender } = render(<WorkerExitedTab hostId="hA" />)
+    fireEvent.change(screen.getByTestId('worker-exited-search'), { target: { value: 'Terminal' } })
+    rerender(<WorkerExitedTab hostId="hB" />)
+    expect((screen.getByTestId('worker-exited-search') as HTMLInputElement).value).toBe('')
+    expect(screen.getByText('Worker chat')).toBeTruthy()
+  })
 })

@@ -30,7 +30,7 @@ function rebuildConversation(hostId: string, row: ConversationRowData): void {
 
 export function WorkerExitedTab({ hostId }: { hostId?: string }) {
   if (!hostId) return null
-  return <ExitedList hostId={hostId} />
+  return <ExitedList key={hostId} hostId={hostId} />
 }
 
 function ExitedList({ hostId }: { hostId: string }) {
