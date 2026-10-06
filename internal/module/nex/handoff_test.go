@@ -713,8 +713,54 @@ func TestHandoff_RejectedRolledBackExitsTheRow(t *testing.T) {
 	assert.Equal(t, true, body["rolled_back"])
 	assert.Equal(t, "R1", body["execution_id"])
 	assert.Equal(t, true, body["exited"])
+	assert.NotContains(t, body, "exit_error")
 	assert.Len(t, env.svc.ArchiveCalls(), 1)
 	env.sidLockFree(t)
+}
+
+// #1665: the rejected row's exit archives under a control; a lease that
+// changes hands at that archive leaves the row unarchived, and the answer
+// says so — exited:false with the exit's 409 classification as exit_error,
+// for the SPA to offer the exit again — instead of dropping it.
+func TestHandoff_RejectedRolledBackLeaseRaceAtArchive(t *testing.T) {
+	cases := []struct {
+		name   string
+		holder store.Lease
+		code   string
+	}{
+		{"another pdx client", store.Lease{ID: "L-o", PrincipalID: pdxOther}, "lease_contended"},
+		{"a non-pdx principal", store.Lease{ID: "L-p", PrincipalID: "ploom:agent-7"}, "held_by"},
+	}
+	for _, c := range cases {
+		t.Run(c.name+" → exit_error "+c.code, func(t *testing.T) {
+			env := newHandoffEnv(t)
+			env.svc.result = execution.Result{ID: "R1", State: store.StateRejected, RejectReason: "session_expired"}
+			rejected := store.Execution{ID: "R1", State: store.StateRejected, ResumeSessionID: hoSessionID}
+			st := &fakeNexStore{results: []getResult{{exec: rejected}}}
+			env.m.sys.store = st
+			env.svc.enforceLease = true
+			env.svc.lease = store.Lease{ID: "L-own"}
+			holder := c.holder
+			holder.ExpiresAt = nowMs() + 60_000
+			env.svc.onRecord = func(name string) {
+				if name == "archive" {
+					env.svc.setHeldLease(holder)
+					held := rejected
+					held.LeaseID, held.LeasePrincipalID, held.LeaseExpiresAt = holder.ID, holder.PrincipalID, holder.ExpiresAt
+					st.script(held)
+				}
+			}
+			reviveCCAfterKeys(env)
+			status, body := env.post(t, hoCode, goodBody())
+			assert.Equal(t, http.StatusConflict, status)
+			assert.Equal(t, "delegate_rejected", body["code"])
+			assert.Equal(t, true, body["rolled_back"])
+			assert.Equal(t, false, body["exited"])
+			assert.Equal(t, c.code, body["exit_error"])
+			assert.Equal(t, []string{"archive"}, env.svc.ArchiveCalls(), "one fenced archive, refused")
+			env.sidLockFree(t)
+		})
+	}
 }
 
 func TestHandoff_RejectedNotRolledBackKeepsTheRow(t *testing.T) {

@@ -100,7 +100,19 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 				m.logf("nex: exit %s: no control for the archive (%s); not archiving", exec.ID, herr.msg)
 				return out, herr
 			}
-			own, c = got, &own
+			// A borrowed lease may be near its end: renew it before the
+			// archive, or — gone, expired, someone else's — take control again
+			// (a non-pdx holder refused, D4). renewControl hands back the
+			// control to release: an own lease (the one taken, or the re-take's)
+			// carries its release, a borrowed one noRelease. A transfer's
+			// control (ctl) is the transfer's to renew.
+			renewed, herr := m.renewControl(parent, exec.ID, got, principal)
+			own = renewed
+			if herr != nil {
+				m.logf("nex: exit %s: renewing control for the archive (%s); not archiving", exec.ID, herr.msg)
+				return out, herr
+			}
+			c = &own
 		}
 		fenceLease, fencePrincipal = c.LeaseID, c.PrincipalID
 	}
@@ -138,6 +150,18 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 			// stop is still running. The terminate's reason is the useful one.
 			m.logf("nex: exit %s: archive after a failed terminate: %v", exec.ID, err)
 			return out, termErr
+		case isLeaseErr(err):
+			// D23 on a row that is not terminated (failed, rejected — also one
+			// that ended so on its own): the lease changed hands between the
+			// control and the archive, and the fence wrote nothing. A race, not
+			// a fault (#1665): 409 — the holder's held_by when the re-read finds
+			// a live non-pdx one (D4), else lease_contended, to try again.
+			m.logf("nex: exit %s: fenced archive refused: %v (not archived)", exec.ID, err)
+			if held, ok := m.heldByOther(parent, exec.ID); ok && held != nil {
+				return out, held
+			}
+			return out, &handoffError{http.StatusConflict, "lease_contended", "the lease changed hands during the exit; try again",
+				map[string]any{"execution_id": exec.ID}}
 		default:
 			return out, &handoffError{http.StatusInternalServerError, "archive_failed", "archiving execution: " + err.Error(),
 				map[string]any{"execution_id": exec.ID}}

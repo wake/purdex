@@ -579,9 +579,18 @@ func TestExitWorker_NoTerminateArchiveUnderControl(t *testing.T) {
 		{"failed", store.Execution{ID: "E", State: store.StateFailed}},
 		{"rejected", store.Execution{ID: "E", State: store.StateRejected}},
 	}
+	// renewedUnder asserts exitWorker renewed exactly once, under the named
+	// lease and principal (#1665: the taken control is renewed before the
+	// archive, so a borrowed lease near its end cannot expire under it).
+	renewedUnder := func(t *testing.T, env *takebackEnv, lease, principal string) {
+		t.Helper()
+		if len(env.svc.renewCalls) != 1 || env.svc.renewCalls[0].LeaseID != lease || env.svc.renewCalls[0].PrincipalID != principal {
+			t.Fatalf("renews = %+v, want exactly one under %q/%q", env.svc.renewCalls, lease, principal)
+		}
+	}
 	for _, c := range rows {
 		terminated := c.row.State == store.StateTerminated
-		t.Run(c.name+": no holder → own lease acquired, archived under it, released after the archive", func(t *testing.T) {
+		t.Run(c.name+": no holder → own lease acquired, renewed, archived under it, released after the archive", func(t *testing.T) {
 			env := newTakebackEnv(t)
 			env.svc.enforceLease = true
 			env.svc.lease = store.Lease{ID: "L-own"}
@@ -590,12 +599,13 @@ func TestExitWorker_NoTerminateArchiveUnderControl(t *testing.T) {
 				t.Fatalf("out=%+v herr=%+v", out, herr)
 			}
 			archivedUnder(t, env, "L-own", self)
-			calls(t, env, "acquire,archive,release")
+			renewedUnder(t, env, "L-own", self)
+			calls(t, env, "acquire,renew,archive,release")
 			if r := env.svc.releases[0]; r.LeaseID != "L-own" || r.PrincipalID != self {
 				t.Fatalf("released %+v, want the own lease L-own", r)
 			}
 		})
-		t.Run(c.name+": pdx holder → its lease borrowed, archived under the holder's lease and principal, never released", func(t *testing.T) {
+		t.Run(c.name+": pdx holder → its lease borrowed and renewed, archived under the holder's lease and principal, never released", func(t *testing.T) {
 			env := newTakebackEnv(t)
 			env.svc.enforceLease = true
 			borrowed := live("L-b", pdxOther)
@@ -606,7 +616,65 @@ func TestExitWorker_NoTerminateArchiveUnderControl(t *testing.T) {
 				t.Fatalf("out=%+v herr=%+v", out, herr)
 			}
 			archivedUnder(t, env, "L-b", pdxOther)
-			calls(t, env, "acquire,archive")
+			renewedUnder(t, env, "L-b", pdxOther)
+			calls(t, env, "acquire,renew,archive")
+		})
+		t.Run(c.name+": borrowed pdx lease expires between the take and the archive → re-taken as our own, archived under it, released", func(t *testing.T) {
+			env := newTakebackEnv(t)
+			env.svc.enforceLease = true
+			env.svc.lease = store.Lease{ID: "L-own"}
+			borrowed := live("L-b", pdxOther)
+			env.svc.heldLease = borrowed
+			env.store.script(withLease(c.row, borrowed))
+			env.svc.onRecord = func(name string) {
+				if name == "renew" {
+					expired := borrowed
+					expired.ExpiresAt = nowMs() - 1
+					env.svc.setHeldLease(expired) // the other tab stopped renewing
+				}
+			}
+			out, herr := env.m.exitWorker(ctx, c.row, nil, self)
+			if herr != nil || !out.Archived || out.Terminated != terminated {
+				t.Fatalf("out=%+v herr=%+v", out, herr)
+			}
+			renewedUnder(t, env, "L-b", pdxOther)
+			archivedUnder(t, env, "L-own", self)
+			calls(t, env, "acquire,renew,acquire,archive,release")
+			if len(env.svc.releases) != 1 || env.svc.releases[0].LeaseID != "L-own" {
+				t.Fatalf("releases = %+v, want only the re-taken own lease", env.svc.releases)
+			}
+		})
+		t.Run(c.name+": a non-pdx principal takes the lease between the take and the renew → held_by, nothing archived", func(t *testing.T) {
+			env := newTakebackEnv(t)
+			env.svc.enforceLease = true
+			borrowed := live("L-b", pdxOther)
+			env.svc.heldLease = borrowed
+			env.store.script(withLease(c.row, borrowed))
+			env.svc.onRecord = func(name string) {
+				if name == "renew" {
+					env.svc.setHeldLease(ploom)
+					env.store.script(withLease(c.row, ploom))
+				}
+			}
+			out, herr := env.m.exitWorker(ctx, c.row, nil, self)
+			if herr == nil || herr.status != http.StatusConflict || herr.code != "held_by" || herr.detail["principal"] != "ploom:agent-7" {
+				t.Fatalf("herr = %+v", herr)
+			}
+			if out.Archived {
+				t.Fatalf("out = %+v, want not archived", out)
+			}
+			calls(t, env, "acquire,renew,acquire")
+		})
+		t.Run(c.name+": renew fails with an infra error → lease_error, nothing archived, own lease released", func(t *testing.T) {
+			env := newTakebackEnv(t)
+			env.svc.enforceLease = true
+			env.svc.lease = store.Lease{ID: "L-own"}
+			env.svc.renewErr = errors.New("db locked")
+			out, herr := env.m.exitWorker(ctx, c.row, nil, self)
+			if herr == nil || herr.code != "lease_error" || out.Archived {
+				t.Fatalf("out=%+v herr=%+v", out, herr)
+			}
+			calls(t, env, "acquire,renew,release")
 		})
 		t.Run(c.name+": non-pdx holder → held_by, nothing archived (D4)", func(t *testing.T) {
 			env := newTakebackEnv(t)
@@ -622,30 +690,65 @@ func TestExitWorker_NoTerminateArchiveUnderControl(t *testing.T) {
 			}
 			calls(t, env, "acquire")
 		})
-		t.Run(c.name+": lease handed over between the take and the archive → fenced archive refused, nothing archived", func(t *testing.T) {
-			env := newTakebackEnv(t)
-			env.svc.enforceLease = true
-			env.svc.lease = store.Lease{ID: "L-own"}
-			env.svc.onRecord = func(name string) {
-				if name == "archive" {
-					env.svc.setHeldLease(ploom)
+		// A fenced archive refused with a lease error: a terminated row is
+		// still exited (the next exit retries the archive, D16); a failed or
+		// rejected row answers 409 — the holder's held_by when the re-read
+		// finds a live non-pdx holder, else lease_contended — never a 500.
+		handedOver := []struct {
+			name   string
+			reread func(env *takebackEnv) // the row heldByOther re-reads after the refusal
+			code   string
+		}{
+			{"to a non-pdx principal → 409 held_by", func(env *takebackEnv) { env.store.script(withLease(c.row, ploom)) }, "held_by"},
+			{"to another pdx client → 409 lease_contended", func(env *takebackEnv) { env.store.script(withLease(c.row, live("L-o", pdxOther))) }, "lease_contended"},
+			{"and the re-read fails → 409 lease_contended", func(env *takebackEnv) {
+				env.store.mu.Lock()
+				env.store.results, env.store.calls = []getResult{{err: errors.New("disk")}}, 0
+				env.store.mu.Unlock()
+			}, "lease_contended"},
+		}
+		for _, h := range handedOver {
+			t.Run(c.name+": lease handed over between the renew and the archive "+h.name+", nothing archived", func(t *testing.T) {
+				env := newTakebackEnv(t)
+				env.svc.enforceLease = true
+				env.svc.lease = store.Lease{ID: "L-own"}
+				env.svc.onRecord = func(name string) {
+					if name == "archive" {
+						if h.code == "held_by" {
+							env.svc.setHeldLease(ploom)
+						} else {
+							env.svc.setHeldLease(live("L-o", pdxOther))
+						}
+						h.reread(env)
+					}
 				}
-			}
-			out, herr := env.m.exitWorker(ctx, c.row, nil, self)
-			if out.Archived {
-				t.Fatalf("out = %+v, want not archived", out)
-			}
-			if terminated {
-				// Still exited (terminated); the next exit retries the archive (D16).
-				if herr != nil || !out.Exited() || !out.Terminated {
-					t.Fatalf("out=%+v herr=%+v, want exited, not archived", out, herr)
+				out, herr := env.m.exitWorker(ctx, c.row, nil, self)
+				if out.Archived {
+					t.Fatalf("out = %+v, want not archived", out)
 				}
-			} else if herr == nil || herr.code != "archive_failed" || !strings.Contains(herr.msg, store.ErrLeaseMismatch.Error()) {
-				t.Fatalf("herr = %+v, want archive_failed with the fence's lease_mismatch", herr)
-			}
-			archivedUnder(t, env, "L-own", self)
-			calls(t, env, "acquire,archive,release")
-		})
+				if terminated {
+					// Still exited (terminated); the next exit retries the archive (D16).
+					if herr != nil || !out.Exited() || !out.Terminated {
+						t.Fatalf("out=%+v herr=%+v, want exited, not archived", out, herr)
+					}
+				} else {
+					if herr == nil || herr.status != http.StatusConflict || herr.code != h.code {
+						t.Fatalf("herr = %+v, want 409 %s", herr, h.code)
+					}
+					if h.code == "held_by" && herr.detail["principal"] != "ploom:agent-7" {
+						t.Fatalf("held_by detail = %+v", herr.detail)
+					}
+					if h.code == "lease_contended" && herr.detail["execution_id"] != "E" {
+						t.Fatalf("lease_contended detail = %+v", herr.detail)
+					}
+					if out.Exited() {
+						t.Fatalf("out = %+v, want not exited", out)
+					}
+				}
+				archivedUnder(t, env, "L-own", self)
+				calls(t, env, "acquire,renew,archive,release")
+			})
+		}
 		t.Run(c.name+": take fails with an infra error → that error, nothing archived (fail closed)", func(t *testing.T) {
 			env := newTakebackEnv(t)
 			env.svc.enforceLease = true
@@ -658,7 +761,7 @@ func TestExitWorker_NoTerminateArchiveUnderControl(t *testing.T) {
 		})
 	}
 
-	t.Run("a transfer's control: archived under it, nothing acquired, never released", func(t *testing.T) {
+	t.Run("a transfer's control: archived under it, nothing acquired, never renewed or released", func(t *testing.T) {
 		env := newTakebackEnv(t)
 		env.svc.enforceLease = true
 		env.svc.heldLease = live("L-t", self)
@@ -698,19 +801,21 @@ func TestExitWorker_NoTerminateArchiveUnderControl(t *testing.T) {
 		archivedUnder(t, env, "L-own", self)
 		calls(t, env, "acquire,terminate,archive,release")
 	})
-	t.Run("ErrExecutionTerminal, lease handed to a non-pdx principal before the archive → refused, nothing archived", func(t *testing.T) {
+	t.Run("ErrExecutionTerminal, lease handed to a non-pdx principal before the archive → 409 held_by, nothing archived", func(t *testing.T) {
 		env := newTakebackEnv(t)
 		env.svc.enforceLease = true
 		env.svc.lease = store.Lease{ID: "L-own"}
 		env.svc.terminateErr = store.ErrExecutionTerminal
-		env.store.script(store.Execution{ID: "E", State: store.StateFailed})
+		failed := store.Execution{ID: "E", State: store.StateFailed}
+		env.store.script(failed)
 		env.svc.onRecord = func(name string) {
 			if name == "archive" {
 				env.svc.setHeldLease(ploom)
+				env.store.script(withLease(failed, ploom))
 			}
 		}
 		out, herr := env.m.exitWorker(ctx, idle, nil, self)
-		if herr == nil || herr.code != "archive_failed" || out.Archived {
+		if herr == nil || herr.status != http.StatusConflict || herr.code != "held_by" || herr.detail["principal"] != "ploom:agent-7" || out.Archived {
 			t.Fatalf("out=%+v herr=%+v", out, herr)
 		}
 		archivedUnder(t, env, "L-own", self)
@@ -996,15 +1101,41 @@ func TestExitEndpoint(t *testing.T) {
 			t.Fatalf("archive=%d terminate=%d releases=%+v, want nothing changed", len(env.svc.ArchiveCalls()), len(env.svc.terminateCalls), env.svc.releases)
 		}
 	})
-	t.Run("B2-c: failed row with a caller lease → no renew, archived, 200", func(t *testing.T) {
+	// #1665: a failed row whose fenced archive loses a lease race answers
+	// 409 (retryable), never the generic 500 archive_failed.
+	t.Run("failed row, lease changes hands at the archive → 409 lease_contended, nothing archived", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		env.store.results = []getResult{{exec: store.Execution{ID: "E1", State: store.StateFailed}}}
+		env.svc.enforceLease = true
+		env.svc.onRecord = func(name string) {
+			if name == "archive" {
+				env.svc.setHeldLease(store.Lease{ID: "L-o", PrincipalID: pdxOther, ExpiresAt: nowMs() + 60_000})
+			}
+		}
+		status, body := exitPost(t, env, "E1", ``)
+		if status != 409 || body["code"] != "lease_contended" || body["execution_id"] != "E1" {
+			t.Fatalf("%d %v", status, body)
+		}
+	})
+	t.Run("B2-c: failed row with a caller lease → the caller's lease is not used, archived under the exit's own, 200", func(t *testing.T) {
 		env := newTakebackEnv(t)
 		env.store.results = []getResult{{exec: store.Execution{ID: "E1", State: store.StateFailed}}}
 		status, body := exitPost(t, env, "E1", `{"lease_id":"L-mine"}`)
 		if status != 200 || body["exited"] != true || body["archived"] != true || body["state"] != "failed" {
 			t.Fatalf("%d %v", status, body)
 		}
-		if len(env.svc.renewCalls) != 0 || len(env.svc.terminateCalls) != 0 || len(env.svc.ArchiveCalls()) != 1 {
-			t.Fatalf("renew=%d terminate=%d archive=%d", len(env.svc.renewCalls), len(env.svc.terminateCalls), len(env.svc.ArchiveCalls()))
+		if len(env.svc.terminateCalls) != 0 || len(env.svc.ArchiveCalls()) != 1 {
+			t.Fatalf("terminate=%d archive=%d", len(env.svc.terminateCalls), len(env.svc.ArchiveCalls()))
+		}
+		// #1665: exitWorker takes (and renews) its own control for this
+		// archive; the caller's lease is neither renewed nor archived under.
+		for _, r := range env.svc.renewCalls {
+			if r.LeaseID == "L-mine" {
+				t.Fatalf("renews = %+v, the caller's lease must not be renewed", env.svc.renewCalls)
+			}
+		}
+		if reqs := env.svc.ArchiveReqs(); reqs[0].LeaseID != tbLeaseID {
+			t.Fatalf("archive under %q, want the exit's own %q", reqs[0].LeaseID, tbLeaseID)
 		}
 	})
 	t.Run("caller lease renew fails with an infra error → 500 lease_error, nothing changed", func(t *testing.T) {

@@ -35,6 +35,8 @@ import (
 	"time"
 
 	"lab.protype.tw/wake/nexen"
+
+	pdxconfig "github.com/wake/purdex/internal/config"
 )
 
 // fakeTurnClaude is the plan's "Fake claude fixture": consume the turn's
@@ -93,6 +95,14 @@ type mountFixture struct {
 // the spec's lifecycle order: Stop (drain) → HTTP server stops → Close.
 func newMountFixture(t *testing.T) *mountFixture {
 	t.Helper()
+	return newMountFixtureWith(t, nil)
+}
+
+// newMountFixtureWith is newMountFixture with adjust (when non-nil) applied
+// to the config before the engine is assembled — a different claude
+// script, for instance.
+func newMountFixtureWith(t *testing.T, adjust func(*pdxconfig.Config)) *mountFixture {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", launchdPath)
@@ -100,6 +110,9 @@ func newMountFixture(t *testing.T) *mountFixture {
 
 	cfg := baseConfig(t)
 	cfg.Nex.ClaudeBin = writeScript(t, t.TempDir(), "claude", fakeTurnClaude)
+	if adjust != nil {
+		adjust(&cfg)
+	}
 
 	m := New()
 	m.logf = discardLogf
