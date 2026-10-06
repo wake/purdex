@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.516] - 2026-10-07
+
+> 只新增 daemon 內部程式碼，**還沒掛上任何路由**（P2a-3 才會），不需要部署；下一個有行為的版本一起上。資料庫、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P2a-2（#1660）
+
+- **peers 匯出 origin resolver**：由 Claude Code 的 inbox 找到提出申請的 session（ref、name、pid、cwd、tmux、title、address），給 team module 用來認定「誰在申請」。registry 讀不到時明確回報為暫時性錯誤，不會被當成「找不到這個 session」。
+- **team module 骨架與前兩條路由**：`POST /api/team/approvals`（建立 lead 申請）與 `GET /api/team/approvals?state=open`。
+  - 建立是冪等的：同一個 id 同樣內容重送回同一筆（即使同一個 session 後來又開了另一筆）；同 id 不同內容拒絕。
+  - 同一個 session 同時只能有一筆 open 的申請；並發送出時恰好一筆成立。
+  - id 必須是 UUID v4；daemon 正在停止時回 503 讓指令端等重啟。
+  - 成功建立會廣播 `approval.request {op: opened}` 事件（之後給 Purdex.app 的核准對話框用）。
+
+review 期間修正：冪等重試優先於「已有 open 申請」的檢查、UUID v4 驗證、停止與建立的競態、registry 讀取錯誤改回 503。
+
 ## [1.0.0-alpha.515] - 2026-10-07
 
 > 只動 daemon，**需要部署**，由統籌安排重啟。資料庫結構不變（`conversation_index` 表在 alpha.510 就已建立），不用清資料。SPA 與 Electron 都不必更新；畫面上的「已退出／已消失」分頁要等之後的 SPA 版本。
