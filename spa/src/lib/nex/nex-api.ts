@@ -159,14 +159,16 @@ export async function fetchExecutionTasks(
   return { items, cursor }
 }
 
+/** `signal` aborts the request (a stint's enrichment walk whose pane is gone). */
 export function fetchExecutionEvents(
   hostId: string,
   executionId: string,
-  opts: { after: number; limit?: number },
+  opts: { after: number; limit?: number; signal?: AbortSignal },
 ): Promise<EventsPage> {
   const q = new URLSearchParams({ after: String(opts.after) })
   if (opts.limit) q.set('limit', String(opts.limit))
-  return nexFetch(hostId, `${execPath(executionId, '/events')}?${q.toString()}`).then((r) => okJson<EventsPage>(r))
+  const init = opts.signal ? { signal: opts.signal } : undefined
+  return nexFetch(hostId, `${execPath(executionId, '/events')}?${q.toString()}`, init).then((r) => okJson<EventsPage>(r))
 }
 
 /**

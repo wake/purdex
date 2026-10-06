@@ -24,7 +24,7 @@ describe('createStintEnrichmentCache', () => {
     cache.request('h', 'exc_A')
     await flush()
     expect(fetch).toHaveBeenCalledTimes(1)
-    expect(fetch).toHaveBeenCalledWith('h', 'exc_A', { after: 0, limit: 500 })
+    expect(fetch).toHaveBeenCalledWith('h', 'exc_A', { after: 0, limit: 500, signal: expect.any(AbortSignal) })
   })
 
   it('get is undefined until the fetch settles, then the enrichment', async () => {
@@ -83,7 +83,7 @@ describe('createStintEnrichmentCache', () => {
     const cache = createStintEnrichmentCache(fetch)
     cache.request('h', 'exc_A')
     await flush()
-    expect(fetch.mock.calls.map((c) => c[2])).toEqual([{ after: 0, limit: 500 }, { after: 500, limit: 500 }])
+    expect(fetch.mock.calls.map((c) => ({ ...c[2], signal: undefined }))).toEqual([{ after: 0, limit: 500 }, { after: 500, limit: 500 }])
     expect(cache.get('exc_A')).toMatchObject({ truncated: false })
     expect(cache.get('exc_A')?.messages).toHaveLength(520)
   })
@@ -106,5 +106,72 @@ describe('createStintEnrichmentCache', () => {
     await flush()
     expect(fetch).toHaveBeenCalledTimes(2)
     expect(cache.get('exc_A')).toBeNull()
+  })
+})
+
+// The pane is gone (ExecutionView unmounted): no walk keeps paging for nobody.
+describe('createStintEnrichmentCache — dispose', () => {
+  it('a first page that lands after dispose asks for no second one, and nothing settles or notifies', async () => {
+    const { fn, pending } = deferredFetch()
+    const cache = createStintEnrichmentCache(fn)
+    const listener = vi.fn()
+    cache.subscribe(listener)
+    cache.request('h', 'exc_A')
+    cache.dispose()
+    expect(cache.isDisposed()).toBe(true)
+    // The fetch ignored its signal: the page lands anyway, with more to come.
+    pending[0].resolve(page(1, 500, 500))
+    await flush()
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(cache.revision()).toBe(0)
+    expect(listener).not.toHaveBeenCalled()
+    expect(cache.get('exc_A')).toBeUndefined()
+  })
+
+  it('aborts the signal every walk in flight was given', async () => {
+    const signals: AbortSignal[] = []
+    const fetch = vi.fn((_h: string, _id: string, opts: { signal?: AbortSignal }) => {
+      signals.push(opts.signal!)
+      return new Promise<EventsPage>(() => {})
+    })
+    const cache = createStintEnrichmentCache(fetch)
+    cache.request('h', 'exc_A')
+    cache.request('h', 'exc_B')
+    expect(signals.map((s) => s.aborted)).toEqual([false, false])
+    cache.dispose()
+    expect(signals.map((s) => s.aborted)).toEqual([true, true])
+  })
+
+  it('an aborted fetch rejecting is silent: no console, no settle', async () => {
+    const error = vi.spyOn(console, 'error')
+    const warn = vi.spyOn(console, 'warn')
+    try {
+      const fetch = vi.fn((_h: string, _id: string, opts: { signal?: AbortSignal }) => new Promise<EventsPage>((_, reject) => {
+        opts.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+      }))
+      const cache = createStintEnrichmentCache(fetch)
+      const listener = vi.fn()
+      cache.subscribe(listener)
+      cache.request('h', 'exc_A')
+      cache.dispose()
+      await flush()
+      expect([cache.revision(), listener.mock.calls.length, cache.get('exc_A')]).toEqual([0, 0, undefined])
+      expect(error).not.toHaveBeenCalled()
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+      warn.mockRestore()
+    }
+  })
+
+  it('request after dispose makes no request; dispose before any request, or twice, is harmless', async () => {
+    const fetch = vi.fn(async () => page(1, 1, 0))
+    const cache = createStintEnrichmentCache(fetch)
+    cache.dispose()
+    cache.dispose()
+    cache.request('h', 'exc_A')
+    await flush()
+    expect(fetch).not.toHaveBeenCalled()
+    expect([cache.get('exc_A'), cache.revision()]).toEqual([undefined, 0])
   })
 })
