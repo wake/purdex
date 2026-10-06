@@ -10,6 +10,8 @@ export interface OperationResult {
   /** The daemon cut the paired result block (prelude only); `totalBytes` is its full size when known. */
   truncated?: boolean
   totalBytes?: number | null
+  /** The content array carried an image / document block, which `text` leaves out (#1629). */
+  hasMedia?: boolean
 }
 
 /** `${messageIndex}:${blockIndex}` — a block's position, which is unique even when a tool_use_id is not. */
@@ -33,13 +35,29 @@ export interface OperationIndex {
   childIndexes: Set<number>
 }
 
-/** `string` → itself; `[{type:'text',text}]` → the texts joined by '\n'; anything else → JSON. */
+const isMediaBlock = (item: unknown): boolean => {
+  const type = item && typeof item === 'object' ? (item as { type?: unknown }).type : undefined
+  return type === 'image' || type === 'document'
+}
+
+/** True when a content array holds an image / document block (which `toolResultText` leaves out of the text). */
+export function toolResultHasMedia(content: unknown): boolean {
+  return Array.isArray(content) && content.some(isMediaBlock)
+}
+
+/**
+ * `string` → itself; an array of text blocks, with or without image / document
+ * blocks → the texts joined by '\n' (media contributes nothing: the output fold
+ * shows text only, and `toolResultHasMedia` says there was more); anything
+ * else → JSON.
+ */
 export function toolResultText(content: unknown): string {
   if (content == null) return ''
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
     const texts: string[] = []
-    const allText = content.every((item) => {
+    const flattenable = content.every((item) => {
+      if (isMediaBlock(item)) return true
       if (!item || typeof item !== 'object') return false
       const block = item as { type?: unknown; text?: unknown }
       if (block.type !== 'text' || typeof block.text !== 'string') return false
@@ -47,9 +65,11 @@ export function toolResultText(content: unknown): string {
       return true
     })
     // A subagent hand-back is a content array, and JSON.stringify of it is
-    // exactly the raw-JSON leak #1263 is about — but only a text-block array
-    // can be flattened without losing what the other shapes carry.
-    if (allText) return texts.join('\n')
+    // exactly the raw-JSON leak #1263 is about — but an array of any other
+    // shape is still stringified rather than flattened, because flattening
+    // would lose what that shape carries. Only text and media (which the fold
+    // cannot draw anyway, #1629) are safe to flatten.
+    if (flattenable) return texts.join('\n')
   }
   return JSON.stringify(content) ?? ''
 }
@@ -145,6 +165,7 @@ export function indexOperations(messages: StreamMessage[], idOf?: (m: number) =>
         resultForCall.set(callKey, {
           text: toolResultText((block as { content?: unknown }).content),
           isError: block.is_error === true,
+          ...(toolResultHasMedia((block as { content?: unknown }).content) ? { hasMedia: true } : {}),
           ...(block.truncated === true ? { truncated: true, totalBytes: block.total_bytes ?? null } : {}),
         })
         consumedResults.add(key(mi, bi))

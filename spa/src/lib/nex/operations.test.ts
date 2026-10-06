@@ -3,7 +3,7 @@
 // boundary that separates them.
 import { describe, it, expect } from 'vitest'
 import type { StreamMessage } from './message-types'
-import { blockKey, indexOperations, toolResultText } from './operations'
+import { blockKey, indexOperations, toolResultHasMedia, toolResultText } from './operations'
 
 type Block = Record<string, unknown>
 
@@ -253,7 +253,58 @@ describe('toolResultText', () => {
   it('falls back to JSON for an unknown content shape', () => {
     // A subagent hand-back is exactly this shape (#1263).
     expect(toolResultText({ ok: true })).toBe('{"ok":true}')
-    expect(toolResultText([{ type: 'image', source: 'x' }])).toBe('[{"type":"image","source":"x"}]')
+    expect(toolResultText([{ type: 'tool_reference', tool_name: 'x' }])).toBe('[{"type":"tool_reference","tool_name":"x"}]')
+  })
+
+  const omittedImage = { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 80 } }
+
+  it('drops an image block and keeps the text beside it (#1629)', () => {
+    expect(toolResultText([{ type: 'text', text: 'caption' }, omittedImage])).toBe('caption')
+  })
+
+  it('gives the empty string for a media-only array (#1629)', () => {
+    expect(toolResultText([omittedImage])).toBe('')
+    expect(toolResultText([omittedImage, { type: 'document', source: { type: 'omitted' } }])).toBe('')
+  })
+
+  it('drops a document block and keeps the text (#1629)', () => {
+    expect(toolResultText([{ type: 'text', text: 'a' }, { type: 'document', source: { type: 'omitted' } }, { type: 'text', text: 'b' }])).toBe('a\nb')
+  })
+
+  it('still JSON-stringifies when an unknown block rides with the media (#1263)', () => {
+    const content = [{ type: 'text', text: 'a' }, omittedImage, { type: 'mystery', x: 1 }]
+    expect(toolResultText(content)).toBe(JSON.stringify(content))
+  })
+
+  it('leaves a text-only array, a string and null as they were', () => {
+    expect(toolResultText([{ type: 'text', text: 'a' }])).toBe('a')
+    expect(toolResultText('s')).toBe('s')
+    expect(toolResultText(null)).toBe('')
+  })
+})
+
+describe('toolResultHasMedia', () => {
+  it('is true for an image or a document element', () => {
+    expect(toolResultHasMedia([{ type: 'image', source: {} }])).toBe(true)
+    expect(toolResultHasMedia([{ type: 'text', text: 'a' }, { type: 'document', source: {} }])).toBe(true)
+  })
+
+  it('is false for text-only, a string, null and a non-array', () => {
+    expect(toolResultHasMedia([{ type: 'text', text: 'a' }])).toBe(false)
+    expect(toolResultHasMedia('image')).toBe(false)
+    expect(toolResultHasMedia(null)).toBe(false)
+    expect(toolResultHasMedia({ type: 'image' })).toBe(false)
+  })
+})
+
+describe('indexOperations hasMedia', () => {
+  it('marks a result whose content carried media', () => {
+    const msgs = [
+      msg('assistant', [call('t1', 'Read')]),
+      msg('user', [result('t1', [{ type: 'image', source: { type: 'omitted' } }])]),
+    ]
+    const r = indexOperations(msgs).resultForCall.get('0:0')
+    expect(r).toMatchObject({ text: '', hasMedia: true })
   })
 })
 

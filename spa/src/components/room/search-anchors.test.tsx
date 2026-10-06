@@ -274,7 +274,7 @@ const GOLDEN_CHAT_IDS = [
   'p13008.1:0:text',
   'p13569.1:note:text', 'p14108.1:note:text', 'p14558.1:note:text', 'p14558.2:note:text',
   'p15108.1:0:text',
-  'p16045.1:0:arg', 'p16045.1:0:output',
+  'p16045.1:0:arg',   // its result is an omitted image: no text, so no output unit (#1629)
   'p18651.1:0:text',
   'p19422.1:0:text',
   'p20300.1:note:text', 'p21398.1:note:text',

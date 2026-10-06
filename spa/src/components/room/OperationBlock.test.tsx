@@ -251,6 +251,14 @@ describe('OperationBlock', () => {
     expect(screen.getByTestId('op-rail').contains(marker)).toBe(true)
   })
 
+  it('marks a result that carried media even without N2 facts, and draws no empty output box (#1629)', () => {
+    render(<OperationBlock tool="Read" input={{ file_path: '/x.png' }} foldKey="tu1"
+      activity={{ status: 'done', startedAt: 0, endedAt: 0 }}
+      result={{ text: '', isError: false, hasMedia: true }} />)
+    expect(screen.getByTestId('op-non-text')).toHaveTextContent('non-text')
+    expect(screen.queryByTestId('fold-body')).toBeNull()
+  })
+
   it('does not mark a text-only result', () => {
     render(<OperationBlock tool="Read" input={{ file_path: '/x.ts' }} foldKey="tu1"
       activity={{ status: 'done', startedAt: 0, endedAt: 0 }}

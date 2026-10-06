@@ -679,6 +679,31 @@ describe('RoomTranscript', () => {
   })
 })
 
+describe('RoomTranscript — a tool result that carries an image (#1629)', () => {
+  const image = { type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 80 } }
+  const readImage = [
+    asst(use('r1', 'Read', { file_path: '/a.png' })),
+    usr({ type: 'tool_result', tool_use_id: 'r1', content: [image] } as unknown as ContentBlock),
+  ]
+  const noRawJson = () => {
+    expect(document.body.textContent).not.toContain('omitted')
+    expect(document.body.textContent).not.toContain('"type"')
+  }
+
+  it('shows the non-text marker and no raw JSON without N2 facts', () => {
+    render(T({ messages: readImage }))
+    noRawJson()
+    expect(screen.getByTestId('op-non-text')).toBeInTheDocument()
+    expect(screen.queryByTestId('fold-body')).toBeNull()
+  })
+
+  it('shows the non-text marker and no raw JSON with N2 facts', () => {
+    render(T({ messages: readImage, tools: { r1: { name: 'Read', startedAt: 1, endedAt: 2, status: 'done', output: { totalLines: 0, totalBytes: 0, truncated: false, hasNonText: true } } } }))
+    noRawJson()
+    expect(screen.getAllByTestId('op-non-text')).toHaveLength(1)
+  })
+})
+
 describe('RoomTranscript with sanitized hostile prelude blocks (spec §5.2)', () => {
   it('does not throw', () => {
     const hostile = [

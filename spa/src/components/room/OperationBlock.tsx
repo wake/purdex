@@ -134,7 +134,7 @@ export default function OperationBlock({
   // The second fact the dismantled facts span carried (spec §3.1.1 #3): the
   // payload held something the transcript is not showing. A fold may hide
   // lines; it may not hide that.
-  const hasNonText = facts?.output?.hasNonText === true
+  const hasNonText = facts?.output?.hasNonText === true || result?.hasMedia === true
 
   // `error` and `denied` fold one step less: a failure you have to expand is a
   // failure you will miss (spec §4.2).
@@ -220,7 +220,8 @@ export default function OperationBlock({
             file was touched, and there the stat is the only account of it.
           */}
           {hasDiff && <ToolDiffView diff={diff} foldKey={foldKey} showPath={summary !== diff.path} searchKey={searchKey} />}
-          {result !== null && (
+          {/* An image-only result has no text: the marker below is its whole account, not an empty box (#1629). */}
+          {result !== null && !(result.text === '' && hasNonText) && (
             <FoldedOutput
               text={result.text}
               plan={plan}

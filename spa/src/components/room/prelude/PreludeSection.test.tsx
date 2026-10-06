@@ -124,6 +124,17 @@ describe('PreludeSection', () => {
     expect(screen.getByText('[document · pdf · 5.0 MB]')).toBeTruthy()
   })
 
+  it('a Read result whose transcript block carries an omitted image shows no raw JSON (#1629)', () => {
+    const view = derivePrelude([
+      m('2', 'assistant', [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: '/a.png' } }]),
+      m('3', 'user', [{ type: 'tool_result', tool_use_id: 'r1', content: [{ type: 'image', source: { type: 'omitted', media_type: 'image/png', bytes: 80 } }] }]),
+    ])
+    render(<PreludeSection {...base} view={view} status="ok" done />)
+    expect(document.body.textContent).not.toContain('omitted')
+    expect(document.body.textContent).not.toContain('"type"')
+    expect(screen.getByTestId('op-non-text')).toBeTruthy()
+  })
+
   it('every cut block and every cut note says so', () => {
     const view = derivePrelude([
       m('2', 'assistant', [
