@@ -1525,3 +1525,58 @@ func TestBuild_TmuxName_EmptyOutsideTmux(t *testing.T) {
 		t.Errorf("TmuxName = %q, want empty for an agent outside tmux", got.TmuxName)
 	}
 }
+
+// --- P1: context usage and the session's own cwd (lead-team-relay §8.6) --
+
+func TestBuild_ContextAttachedBySessionID(t *testing.T) {
+	in := ccBuildInput("purdex-b0", "sess-x")
+	p := 72.0
+	in.Contexts = map[string]ContextInfo{"sess-x": {UsedPercentage: &p, Window: 1000000, At: 5}}
+	r := Build(in)[0]
+	if r.Agent == nil || r.Agent.Context == nil || *r.Agent.Context.UsedPercentage != 72 || r.Agent.Context.Window != 1000000 {
+		t.Fatalf("context not attached: %+v", r.Agent)
+	}
+}
+
+func TestBuild_NoContextWhenUnknown(t *testing.T) {
+	r := Build(ccBuildInput("purdex-b0", "sess-x"))[0]
+	if r.Agent == nil || r.Agent.Context != nil {
+		t.Fatalf("want nil context, got %+v", r.Agent)
+	}
+	b, _ := json.Marshal(r)
+	if strings.Contains(string(b), `"context"`) {
+		t.Fatalf("context key must be omitted when unknown: %s", b)
+	}
+}
+
+func TestBuild_SessionRowCwdPrefersRegistryThenOwnerThenTmux(t *testing.T) {
+	in := ccBuildInput("purdex-b0", "sess-x") // tmux Cwd "/w"
+	in.Entries[0].Cwd = "/repo/.claude/worktrees/wt"
+	owner := in.Owners[in.Sessions[0].Code]
+	owner.Cwd = "/repo"
+	in.Owners[in.Sessions[0].Code] = owner
+	if got := Build(in)[0].Cwd; got != "/repo/.claude/worktrees/wt" {
+		t.Fatalf("registry cwd first: got %q", got)
+	}
+	in.Entries[0].Cwd = ""
+	if got := Build(in)[0].Cwd; got != "/repo" {
+		t.Fatalf("owner cwd second: got %q", got)
+	}
+	owner.Cwd = ""
+	in.Owners[in.Sessions[0].Code] = owner
+	if got := Build(in)[0].Cwd; got != "/w" {
+		t.Fatalf("tmux session_path last: got %q", got)
+	}
+}
+
+func TestBuild_OwnerOnlyRowUsesOwnerCwd(t *testing.T) {
+	in := ccBuildInput("purdex-b0", "sess-x")
+	in.Entries = nil // owner only → inbox_dead
+	owner := in.Owners[in.Sessions[0].Code]
+	owner.Cwd = "/repo"
+	in.Owners[in.Sessions[0].Code] = owner
+	r := Build(in)[0]
+	if r.Reason != "inbox_dead" || r.Cwd != "/repo" {
+		t.Fatalf("got reason=%q cwd=%q", r.Reason, r.Cwd)
+	}
+}

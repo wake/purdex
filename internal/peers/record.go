@@ -15,6 +15,16 @@ type Owner struct {
 	Status                                string // Purdex agent status of the owning frame (Task 4)
 }
 
+// ContextInfo is the last context-window reading a CC session's statusline
+// reported, as the peers wire carries it (lead-team-relay spec §8.6:
+// `agent.context {used_percentage, window, at}`). UsedPercentage is nil
+// when CC has not reported one yet (null early in a session).
+type ContextInfo struct {
+	UsedPercentage *float64 `json:"used_percentage"`
+	Window         int      `json:"window"`
+	At             int64    `json:"at"`
+}
+
 // AgentInfo describes the agent that owns a peer row, when known.
 type AgentInfo struct {
 	Type      string `json:"type"` // cc | codex | opencode | proxy
@@ -25,6 +35,9 @@ type AgentInfo struct {
 	Inbox     string `json:"inbox,omitempty"`
 	Status    string `json:"status,omitempty"`
 	Version   string `json:"version"` // ALWAYS present; "" when unknown (spec §4.2)
+	// Context is the session's own context usage, looked up by its CC
+	// session id at Build time; absent when the daemon has no reading.
+	Context *ContextInfo `json:"context,omitempty"`
 }
 
 // PeerRecord is one row of GET /api/peers: one per tmux session, plus one
@@ -112,6 +125,11 @@ type BuildInput struct {
 	// this field at all. It is kept because it rides on the wire envelope,
 	// where it still tells a consumer why the title column is blank.)
 	TitlesUnavailable bool
+	// Contexts is the last statusline context reading per CC session id
+	// (lead-team-relay spec §8.5). Build attaches each to whichever row
+	// carries that session id, so two CC panes in one tmux session each
+	// show their own usage.
+	Contexts map[string]ContextInfo // by CC session id; nil means unknown for every row
 }
 
 // Build joins sessions, owners and registry entries into PeerRecords. It is
@@ -142,7 +160,31 @@ func Build(in BuildInput) []PeerRecord {
 	entryRecords := buildEntryRecords(in, consumed)
 	records = append(records, entryRecords...)
 
+	// Context usage is keyed by CC session id, which every cc Agent carries
+	// (full entry info and the owner-only fallback alike), so the lookup is
+	// the same for session rows and entry rows.
+	for i := range records {
+		if a := records[i].Agent; a != nil && a.SessionID != "" {
+			if c, ok := in.Contexts[a.SessionID]; ok {
+				c := c
+				a.Context = &c
+			}
+		}
+	}
+
 	return records
+}
+
+// preferCwd sets rec.Cwd to the first non-empty candidate: the CC session's
+// own cwd (registry, which follows EnterWorktree), then the hook-reported
+// frame cwd, then the tmux session_path already in rec.Cwd (spec §8.6).
+func preferCwd(rec *PeerRecord, candidates ...string) {
+	for _, c := range candidates {
+		if c != "" {
+			rec.Cwd = c
+			return
+		}
+	}
 }
 
 // buildSessionRecord implements rules 2-4 for one tmux session. When rule 4
@@ -191,6 +233,7 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 			Version:   "",
 		}
 		rec.Reason = "not_cc"
+		preferCwd(&rec, owner.Cwd)
 		return rec, Entry{}, false
 	}
 
@@ -218,17 +261,20 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 	switch len(candidates) {
 	case 0:
 		rec.Agent = ownerFallbackAgent(owner)
+		preferCwd(&rec, owner.Cwd)
 		rec.Reason = "inbox_dead"
 		applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), "")
 		return rec, Entry{}, false
 	case 1:
 		if consumed[candidates[0]] {
 			rec.Agent = ownerFallbackAgent(owner)
+			preferCwd(&rec, owner.Cwd)
 			rec.Reason = "ambiguous"
 			applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), "")
 			return rec, Entry{}, false
 		}
 		rec.Agent = agentInfoFromEntry(candidates[0])
+		preferCwd(&rec, candidates[0].Cwd, owner.Cwd)
 		rec.Deliverable = true
 		applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), candidates[0].Name)
 		return rec, candidates[0], true
@@ -242,16 +288,19 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 		if len(paneMatches) == 1 {
 			if consumed[paneMatches[0]] {
 				rec.Agent = ownerFallbackAgent(owner)
+				preferCwd(&rec, owner.Cwd)
 				rec.Reason = "ambiguous"
 				applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), "")
 				return rec, Entry{}, false
 			}
 			rec.Agent = agentInfoFromEntry(paneMatches[0])
+			preferCwd(&rec, paneMatches[0].Cwd, owner.Cwd)
 			rec.Deliverable = true
 			applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), paneMatches[0].Name)
 			return rec, paneMatches[0], true
 		}
 		rec.Agent = ownerFallbackAgent(owner)
+		preferCwd(&rec, owner.Cwd)
 		rec.Reason = "ambiguous"
 		applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), "")
 		return rec, Entry{}, false

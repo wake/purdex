@@ -452,6 +452,9 @@ var (
 // inventory back to one owner lookup, with its own process reads, per session.
 var _ agent.OwnerPassResolver = (*agent.Module)(nil)
 
+// localEnvelope type-asserts the same resolver for context usage (P1).
+var _ agent.ContextUsageReader = (*agent.Module)(nil)
+
 // listSessionsWithin reads the session list under ctx — the inventory's
 // budget context (#1293 §3.2): a hung tmux read ends at the budget with an
 // error, and the inventory answers ok:false instead of holding the request.
@@ -757,6 +760,29 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		proxyPIDs = m.helpers.ProxyPIDs()
 	}
 
+	// Context usage lives in the agent module, keyed by CC session id
+	// (lead-team-relay spec §8.5). The owner resolver we already hold is
+	// that module, so it is type-asserted rather than looked up anew; a nil
+	// or foreign resolver simply yields no contexts and every row shows "-".
+	var contexts map[string]ipeers.ContextInfo
+	if r, ok := m.owners.(agent.ContextUsageReader); ok {
+		contexts = map[string]ipeers.ContextInfo{}
+		add := func(sid string) {
+			if sid == "" {
+				return
+			}
+			if u, ok := r.ContextUsage(sid); ok {
+				contexts[sid] = ipeers.ContextInfo{UsedPercentage: u.UsedPercentage, Window: u.WindowSize, At: u.At}
+			}
+		}
+		for _, o := range owners {
+			add(o.SessionID)
+		}
+		for _, e := range entries {
+			add(e.SessionID)
+		}
+	}
+
 	peerRecords := ipeers.Build(ipeers.BuildInput{
 		HostID:     hostID,
 		Alias:      alias,
@@ -766,6 +792,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		Entries:    entries,
 		ProxyPIDs:  proxyPIDs,
 		Titles:     titles,
+		Contexts:   contexts,
 		// An empty title map means "unreadable", not "no user titles".
 		// Build does not branch on this: it is passed through so the flag
 		// travels with the rows it explains, telling a consumer why their
