@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.543] - 2026-10-07
+
+> 動 `pdx` 指令與 daemon（begin 的 `request_id` 重送），**需要部署新 binary 並重啟**（由統籌安排）。mod 在 P5b 才會呼叫這些指令，現有使用者流程不受影響。SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-2c（#1726）
+
+mod 要用的 `pdx relay` 指令（spec §8.3、§14；plan v2 Task 5a.9）。
+
+- **`pdx relay hello | begin | wait | self | report | op`**：跑在會等 daemon 重啟的 client 上，exit code 照 spec §14（核准 0、拒絕 10、逾時 11、取消／中斷 12、被規則拒絕 13、daemon 不在 20／送出沒回應 21、用法錯 2）。
+- **`wait`** 每輪長輪詢續租；`--wait` 用完申請還開著 → exit 0 並印出 `state:"open"` 的核准單（mod 看到就再呼叫一次）；到期那一刻剛好核准下來的話，會多讀一次拿到真實結果，不會因為時間差印成「還開著」；daemon 三次沒回應 → 20。
+- **被規則拒絕時** 把 409 的代碼印在 stderr 最後一個字（mod 直接讀）；`relay_open`／`bad_transition` 把 daemon 回的 op 印在 stdout。
+- **`begin` 可以安全重送**：CLI 先產生一個 request id 帶上去，daemon 看到同一個 id（同一 session、同樣的用量與 window）就回原來那個 op，不會因為回應在半路掉了而開第二筆申請；不同 payload 拿舊 id 來用是 409。
+- **`report claimed`** 在本地就擋（用法錯）；`cleared` 時 daemon 若還沒看到新 session 回 503，CLI 回 20 讓 mod 下個回合重送。
+- spec §14 的 exit 13 清單補上 `relay_open`、`bad_transition`。
+
+Review 後補強：`--window` 必填、`--used` 拒 NaN／Inf（R1）；request id 重送與到期短讀（攻擊方）；重送要同 payload（critic）。`cmd/pdx/relay.go` 的職責拆分列 #1730。
+
 ## [1.0.0-alpha.542] - 2026-10-08
 
 > 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動，桌機上沒有使用者可見的變化。修正 alpha.540 的終端機鏡像連線（purdex-ios 實測回報）。
