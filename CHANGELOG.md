@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.529] - 2026-10-07
+
+> 動 daemon 與 `pdx` 指令，**需要部署新 binary 並重啟 daemon**，由統籌安排。Codex 使用者要重跑一次 `pdx setup --agent codex` 才會拿到新的 hook timeout。資料庫結構不變（只多 `<data_dir>/hooklocks/` 目錄）。SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P2c-1（#1695）
+
+硬鎖的 daemon 端（spec §6.6；plan v2 `docs/specs/2026-10-06-lead-team-relay-plan-v2.md`，本版也併入該 plan 的文件 PR #1694）：
+
+- **`POST /api/hooks/decide`**：hook 問「這個 session 現在能不能執行工具」。該 session 有尚未核准的 lead 申請時回「拒絕」與原因（「lead 申請等待核准中（<id>），核准或拒絕前這個 session 不能執行工具；請在 Purdex 介面處理」）；其他情況回空（照常執行）。
+- **旗標檔目錄 `<data_dir>/hooklocks/<agent>/<session_id>`**：只有存在旗標的 session，hook 才會來問；旗標的 session 已不存在時由 sweeper 清掉。
+- `pdx` 的 daemon client 多了可調的重啟寬限（hook 路徑用 5 秒，不是 30 秒）。
+- Codex 的 `PreToolUse` hook timeout 從 5 秒調到 10 秒（給硬鎖路徑用）；Claude Code 的 hook 設定不變。
+
+`pdx hook` 真正去問 daemon、`pdx lead request` 寫旗標，在下一個 PR（P2c-2）。
+
 ## [1.0.0-alpha.528] - 2026-10-07
 
 > 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動。目前部署環境裡所有 lease 持有者都是 pdx 自己，所以這版沒有可見的行為變化，是補一個之後才會碰到的缺口。
