@@ -1,10 +1,12 @@
 package session
 
 import (
+	"context"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -40,6 +42,21 @@ func TestTerminalRelaySetup_NonMirrorUnchanged(t *testing.T) {
 		assert.Equal(t, c.args, args, c.mode)
 		assert.Equal(t, c.wantOnStart, onStart != nil, c.mode)
 	}
+}
+
+func TestNewTerminalRelay_WindowSizeOnlyForMirror(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+	fake.SetWindowSize(132, 43)
+
+	normal := newTerminalRelay(fake, "dev", "auto", false)
+	assert.Nil(t, normal.WindowSize)
+
+	mirror := newTerminalRelay(fake, "dev", "auto", true)
+	require.NotNil(t, mirror.WindowSize)
+	assert.Nil(t, mirror.OnStart)
+	c, r, err := mirror.WindowSize(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, [2]uint16{132, 43}, [2]uint16{c, r})
 }
 
 func TestTerminalRelaySetup_MirrorIgnoresSizeNoOnStart(t *testing.T) {

@@ -261,10 +261,7 @@ func (m *SessionModule) HandleTerminalWS(w http.ResponseWriter, r *http.Request,
 	// Build tmux attach-session command and args.
 	target := info.Name
 	mirror := isMirrorRequest(r)
-	args, onStart := terminalRelaySetup(m.tmux, target, sizingMode, mirror)
-
-	relay := terminal.NewRelay("tmux", args, "/")
-	relay.OnStart = onStart
+	relay := newTerminalRelay(m.tmux, target, sizingMode, mirror)
 
 	relay.HandleWebSocket(w, r)
 }
@@ -273,6 +270,20 @@ func (m *SessionModule) HandleTerminalWS(w http.ResponseWriter, r *http.Request,
 // connection. Only the literal "1" counts.
 func isMirrorRequest(r *http.Request) bool {
 	return r.URL.Query().Get("mirror") == "1"
+}
+
+// newTerminalRelay builds the relay for a terminal connection. Only a mirror
+// connection reports the window's actual size to the client.
+func newTerminalRelay(ex tmux.Executor, target, sizingMode string, mirror bool) *terminal.Relay {
+	args, onStart := terminalRelaySetup(ex, target, sizingMode, mirror)
+	relay := terminal.NewRelay("tmux", args, "/")
+	relay.OnStart = onStart
+	if mirror {
+		relay.WindowSize = func(ctx context.Context) (uint16, uint16, error) {
+			return ex.WindowSize(ctx, target)
+		}
+	}
+	return relay
 }
 
 // terminalRelaySetup returns the tmux attach args and the optional OnStart hook
