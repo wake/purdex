@@ -202,6 +202,17 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrRequestOpen, "this session already has an open lead request", &open)
 		return
 	}
+	// One live team per lead (spec §6.2); an ended team does not count. The
+	// approve inserts the team in the transaction that closes its row, so a
+	// request that is no longer open has its team already.
+	if t, found, err := m.store.LiveTeamByLead(origin.SessionID); err != nil {
+		m.logf("[team] create %s: %v", req.ID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	} else if found {
+		m.writeErr(w, http.StatusConflict, team.ErrAlreadyLead, "this session already leads team "+t.ID, nil)
+		return
+	}
 	now := m.now()
 	stored, _, inserted, err := m.store.Create(team.Approval{
 		ID: req.ID, Kind: req.Kind, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
@@ -355,6 +366,7 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		m.decideHook(w, a, req, state, client)
 		return
 	}
+	now := m.now()
 	var grant *team.Grant
 	// A self_relay approval carries no grant (its payload is a
 	// SelfRelayPayload); its op moves in afterClose.
@@ -381,9 +393,28 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		}
 		grant = &g
 	}
-	after, won, err := m.closeAs(id, Close{State: state, DecidedAt: m.now(), DecidedBy: &client, Grant: grant})
+	c := Close{State: state, DecidedAt: now, DecidedBy: &client, Grant: grant}
+	var after team.Approval
+	var won bool
+	if grant != nil {
+		// Spec §6.2: the approval creates the team (§7.1) in the same
+		// transaction. Its id is the request's id (plan v3 deviation 1).
+		t := team.Team{ID: id, HostID: a.HostID, LeadSessionID: a.Origin.SessionID, LeadRef: a.Origin.Ref,
+			Grant: *grant, RequestID: id, CreatedAt: now}
+		after, won, err = m.closeWith(id, func() (team.Approval, bool, error) { return m.store.CloseLeadApproved(id, c, t) })
+	} else {
+		after, won, err = m.closeAs(id, c)
+	}
 	if errors.Is(err, ErrNoSuchApproval) {
 		m.writeErr(w, http.StatusNotFound, team.ErrNotFound, "no such approval request", nil)
+		return
+	}
+	if errors.Is(err, ErrLeadHasTeam) {
+		// Both writes rolled back: the row is still open (the user may deny
+		// it, or it times out). No approval in the body: a 409 carrying one
+		// reads as "closed elsewhere" to the App.
+		m.logf("[team] approval %s: approve by %s %q from %s refused: origin %s already leads a live team", id, client.Kind, client.Label, client.Addr, a.Origin.Ref)
+		m.writeErr(w, http.StatusConflict, team.ErrAlreadyLead, "this session already leads a live team; the request stays open", nil)
 		return
 	}
 	if err != nil {
@@ -395,6 +426,10 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrAlreadyDecided, "this request was closed first by someone else", &after)
 		return
 	}
-	m.logf("[team] approval %s %s by %s %q from %s (origin %s)", id, after.State, client.Kind, client.Label, client.Addr, after.Origin.Ref)
+	teamNote := ""
+	if grant != nil {
+		teamNote = fmt.Sprintf("; team %s created (max_members %d, roots %v)", id, grant.MaxMembers, grant.Roots)
+	}
+	m.logf("[team] approval %s %s by %s %q from %s (origin %s)%s", id, after.State, client.Kind, client.Label, client.Addr, after.Origin.Ref, teamNote)
 	m.writeJSON(w, http.StatusOK, after)
 }
