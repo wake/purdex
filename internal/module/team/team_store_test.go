@@ -55,6 +55,103 @@ func seedTeam(t *testing.T, s *Store, id, sid string, at int64) {
 	}
 }
 
+// newMember is an active member row of team teamID for session sid.
+func newMember(spawnOp, teamID, sid, ref string, at int64) memberRow {
+	return memberRow{SpawnOp: spawnOp, TeamID: teamID, HostID: "h:1", SessionID: sid, Ref: ref, Title: "worker",
+		Cwd: "/w/x", TmuxSession: "tm-" + spawnOp, PID: 42, Model: "sonnet", Effort: "high",
+		State: team.MemberActive, CreatedAt: at, UpdatedAt: at}
+}
+
+// seedMember stores an active member row of team teamID for session sid.
+func seedMember(t *testing.T, s *Store, spawnOp, teamID, sid string, at int64) memberRow {
+	t.Helper()
+	m := newMember(spawnOp, teamID, sid, "_mem"+spawnOp, at)
+	if err := s.InsertMember(m); err != nil {
+		t.Fatalf("seed member %s: %v", spawnOp, err)
+	}
+	return m
+}
+
+// The member store (spec §7.2 step 6, §7.3): an insert is idempotent on its
+// spawn op (a spawn retried after a restart stores one row); a session is
+// an active member at most once (team_members_one_active), and a row that
+// is no longer active frees its session; MembersOf lists every state.
+func TestStore_InsertMemberIsIdempotentOnSpawnOp(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, "team-1", "lead-1", 1000)
+	m := seedMember(t, s, "op-1", "team-1", "sid-m1", 2000)
+	again := m
+	again.Title, again.UpdatedAt = "other", 3000
+	if err := s.InsertMember(again); err != nil {
+		t.Fatalf("a replayed insert: %v", err)
+	}
+	got, err := s.MembersOf("team-1")
+	if err != nil || len(got) != 1 || !reflect.DeepEqual(got[0], m) {
+		t.Fatalf("members = %+v err=%v, want only %+v", got, err, m)
+	}
+	if err := s.InsertMember(newMember("op-2", "team-1", "sid-m1", "_x", 4000)); err == nil {
+		t.Fatal("a second active row for one session was stored")
+	}
+	if err := s.SetMemberState("op-1", team.MemberKilled, 5000); err != nil {
+		t.Fatal(err)
+	}
+	seedMember(t, s, "op-2", "team-1", "sid-m1", 6000) // the killed row frees the session
+	got, err = s.MembersOf("team-1")
+	if err != nil || len(got) != 2 || got[0].State != team.MemberKilled || got[0].UpdatedAt != 5000 || got[1].SpawnOp != "op-2" {
+		t.Fatalf("members after the kill = %+v err=%v", got, err)
+	}
+	if none, err := s.MembersOf("team-9"); err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("members of an unknown team = %#v err=%v (must be [] not nil)", none, err)
+	}
+	if err := s.SetMemberState("nope", team.MemberGone, 1); !errors.Is(err, ErrNoSuchMember) {
+		t.Fatalf("unknown spawn op: err=%v, want ErrNoSuchMember", err)
+	}
+	for _, bad := range []memberRow{
+		newMember("", "team-1", "sid-x", "_x", 1),
+		newMember("op-x", "", "sid-x", "_x", 1),
+		newMember("op-x", "team-1", "", "_x", 1),
+		{SpawnOp: "op-x", TeamID: "team-1", SessionID: "sid-x", State: "zombie"},
+	} {
+		if err := s.InsertMember(bad); err == nil {
+			t.Errorf("InsertMember(%+v) stored a malformed row", bad)
+		}
+	}
+	if err := s.SetMemberState("op-2", "zombie", 1); err == nil {
+		t.Fatal("SetMemberState took an unknown state")
+	}
+}
+
+// ActiveMemberInLiveTeam is the member half of relayRole (spec §8.7) and of
+// member_cannot_lead (§6.2): only an active row whose team is live counts —
+// a killed or gone member, or a member of an ended team (D4), is no member.
+func TestStore_ActiveMemberInLiveTeam(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, "team-1", "lead-1", 1000)
+	m := seedMember(t, s, "op-1", "team-1", "sid-m1", 2000)
+	got, tm, ok, err := s.ActiveMemberInLiveTeam("sid-m1")
+	if err != nil || !ok || !reflect.DeepEqual(got, m) || tm.ID != "team-1" || tm.LeadSessionID != "lead-1" || tm.Grant.MaxMembers != 3 {
+		t.Fatalf("member of a live team: %+v %+v ok=%v err=%v", got, tm, ok, err)
+	}
+	for _, sid := range []string{"lead-1", "sid-zz"} {
+		if _, _, ok, err := s.ActiveMemberInLiveTeam(sid); err != nil || ok {
+			t.Fatalf("%s: ok=%v err=%v, want no member", sid, ok, err)
+		}
+	}
+	if err := s.SetMemberState("op-1", team.MemberGone, 3000); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, _ := s.ActiveMemberInLiveTeam("sid-m1"); ok {
+		t.Fatal("a gone member still counts")
+	}
+	seedMember(t, s, "op-2", "team-1", "sid-m2", 4000)
+	if ended, err := s.EndTeam("team-1", "lead-1", team.TeamEndLeadGone, 5000); err != nil || !ended {
+		t.Fatalf("end: ended=%v err=%v", ended, err)
+	}
+	if _, _, ok, err := s.ActiveMemberInLiveTeam("sid-m2"); err != nil || ok {
+		t.Fatalf("member of an ended team: ok=%v err=%v, want none (D4)", ok, err)
+	}
+}
+
 // Spec §6.2 "Approval creates the team (§7.1) in the same transaction":
 // the approved row and the team row land together; a second approve loses
 // the CAS and adds no second team.
@@ -254,5 +351,32 @@ func TestOpenStore_AddsTeamsToAnExistingDB(t *testing.T) {
 	}
 	if _, ok, err := s.LiveTeamByLead("sid-1"); err != nil || !ok {
 		t.Fatalf("team on the migrated db: ok=%v err=%v", ok, err)
+	}
+}
+
+// The P4-3 deploy path: a team.db written by P4-2 has teams but no
+// team_members. OpenStore adds the table and its indexes and keeps the teams.
+func TestOpenStore_AddsTeamMembersToAnExistingDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "team.db")
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedTeam(t, s, "team-1", "lead-1", 1000)
+	if _, err := s.db.Exec(`DROP INDEX team_members_one_active; DROP INDEX team_members_team; DROP TABLE team_members`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = OpenStore(path)
+	if err != nil {
+		t.Fatalf("reopen a P4-2 db: %v", err)
+	}
+	defer s.Close()
+	if _, ok, err := s.LiveTeamByLead("lead-1"); err != nil || !ok {
+		t.Fatalf("existing team after the migration: ok=%v err=%v", ok, err)
+	}
+	seedMember(t, s, "op-1", "team-1", "sid-m1", 2000)
+	if err := s.InsertMember(newMember("op-2", "team-1", "sid-m1", "_x", 3000)); err == nil {
+		t.Fatal("the migrated db lacks team_members_one_active")
 	}
 }
