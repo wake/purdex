@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.540] - 2026-10-08
+
+> 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動，桌機上沒有使用者可見的變化。這是 purdex-ios 需要的三項 daemon 小改動的第 2、3 項（第 1 項在 alpha.538）。
+
+### Added：終端機鏡像連線 `/ws/terminal/{code}?mirror=1`（#1721）
+
+- 手機以前一連上終端機，tmux window 就被縮成手機的大小，桌機的畫面跟著變小。鏡像連線以 `-f ignore-size` attach，不參與 window 大小計算，**也不論 `terminal.sizing_mode` 為何都不會去改 window 大小**；只有這條連線自己的 PTY 大小會變。實測同樣是 40x20 的 client，一般 attach 把 120x40 的 window 縮成 40x19，鏡像連線維持 120x40。
+- 鏡像連線會收到 text frame `{"type":"window","cols":N,"rows":N}`（binary frame 仍是終端機輸出）：連線建立後、第一筆終端機輸出**之前**先送一次，之後每秒檢查，大小變了才再送，手機據此用桌機的欄數渲染。tmux 查詢卡住時，單次查詢 2 秒就放棄、下一輪重試，不會拖住輸出。
+- 沒帶 `mirror=1`（或值不是字面的 `1`）的連線行為完全不變。
+
+### Added：`/api/info` 的 `capabilities`（#1722）
+
+- 回傳這台 daemon 提供哪些選用功能，目前是 `["transcript.v1","terminal.mirror.v1"]`。client 依此開關功能，不再比對 `purdex_version`（使用者有多台主機，版本可能不同）。
+
 ## [1.0.0-alpha.539] - 2026-10-07
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。接力的回報路由上線，但還沒有 mod 或 `pdx relay` 指令去呼叫（P5a-2c／P5b），現有使用者流程不受影響。`pdx` 指令、SPA、Electron 都沒有改動。
