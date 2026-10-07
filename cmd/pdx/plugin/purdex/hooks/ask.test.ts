@@ -129,7 +129,8 @@ test('headless (no surface) ⇒ plain next(e), no pdx at all', async ($, on) => 
 // Mutation gate 4: (a) build `{ result }` from the native answers instead of returning the
 // native object → red (ref / isReadOnly missing); (b) drop the report → red on `await reported`.
 // A healthy daemon's report lands before the answer goes back (`landed`): the mod waits for it
-// up to its settle cap, so the report is sent while the dispatch is still alive.
+// up to its settle cap, so the report is sent while the dispatch is still alive. Mutation gate:
+// never wait for the report (fire and forget) → `landed` is false → red.
 test('terminal first ⇒ the native result is returned unchanged and answered_local is reported with its answers', async ($, on) => {
   session(on)
   let releaseWait: Resolver = null
@@ -141,7 +142,8 @@ test('terminal first ⇒ the native result is returned unchanged and answered_lo
       if (sub(a) === 'begin') return ok('{"id":"r2"}\n')
       // The person answers while the first wait round is in flight (the race proper, not the early branch).
       if (sub(a) === 'wait') { setTimeout(() => answerNative && answerNative(NATIVE_RED), 20); return new Promise((res) => { releaseWait = res }) }
-      if (sub(a) === 'report') { resolve([...a]); landed = true; return ok('{}') }
+      // A healthy daemon: the report takes 100 ms and lands; the answer goes back after it.
+      if (sub(a) === 'report') { resolve([...a]); return new Promise((res) => setTimeout(() => { landed = true; res(ok('{}')) }, 100)) }
       return ok('')
     })
   })
@@ -162,7 +164,9 @@ test('terminal first ⇒ the native result is returned unchanged and answered_lo
 // result (紅) and report answered_local; the late remote answer is ignored (the daemon, which saw
 // the remote decide win its CAS first, records terminal_override — the terminal still stands).
 // Mutation gate 8: consult `remote` again after the race (prefer a remote answer that arrived
-// after the native one) → `answers` is 藍 and no answered_local report → red.
+// after the native one) and drop the loop's `if (stopped) break` → `answers` is 藍 and no
+// answered_local report → red. Either guard alone keeps the terminal's answer: the race takes
+// the native result first, and the loop discards a round that returns after the race.
 test('interleaving: answered_remote arrives after the terminal already answered ⇒ native result, answered_local reported, the late remote ignored', async ($, on) => {
   session(on)
   let answerNative: Resolver = null
