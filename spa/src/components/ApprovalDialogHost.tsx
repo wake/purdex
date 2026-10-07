@@ -13,12 +13,19 @@
 // Focus: the panel takes focus on open and Tab stays inside, as ConfirmDialog does, so a stray keystroke never
 // reaches the pane behind; focus that something behind takes anyway (a tab switch, a terminal's late focus) is pulled
 // back; Escape is swallowed so a dialog beneath does not dismiss. The i18n strings are the spec's.
+//
+// 縮小 (U22 (b)): the dialog can be minimized to a corner pill (ApprovalPill). Minimized, it stays MOUNTED and hidden —
+// the grant edits and the 不再詢問 tick live in this component's state — and it is not modal: the Escape swallow, the
+// Tab trap and the focus guard are off, and the keyboard goes back to where it was before the dialog took it. Only a
+// click restores it (the pill, or the approval notification); a new request never does. `minimized` is per window and
+// not persisted (useApprovalStore).
 import { useEffect, useRef, useState } from 'react'
-import { ArrowsClockwise } from '@phosphor-icons/react'
+import { ArrowsClockwise, ArrowsInSimple } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { approvalKey, selectCurrent, selectOpenCount, useApprovalStore, type ApprovalEntry, type Decision } from '../stores/useApprovalStore'
+import { ApprovalPill } from './ApprovalPill'
 import { hostLabel, useHostLook } from '../lib/host-look'
 import { leadPayloadOf, selfRelayPayloadOf, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress } from '../lib/team/approval-format'
@@ -42,12 +49,19 @@ const buttonBase = 'px-3 py-1 rounded-md text-xs cursor-pointer disabled:opacity
 
 export function ApprovalDialogHost() {
   const current = useApprovalStore(selectCurrent)
+  const minimized = useApprovalStore((s) => s.minimized)
   if (!current) return null
-  // Keyed by the request: the next one is a fresh dialog (the payload's defaults, nothing in flight).
-  return <OpenApprovalDialog key={approvalKey(current.hostId, current.approval.id)} entry={current} />
+  // Keyed by the request: the next one is a fresh dialog (the payload's defaults, nothing in flight). Minimizing does
+  // not change the key, so the dialog is hidden, not unmounted.
+  return (
+    <>
+      <OpenApprovalDialog key={approvalKey(current.hostId, current.approval.id)} entry={current} minimized={minimized} />
+      {minimized && <ApprovalPill />}
+    </>
+  )
 }
 
-function OpenApprovalDialog({ entry }: { entry: ApprovalEntry }) {
+function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimized: boolean }) {
   const { hostId, approval } = entry
   const t = useI18nStore((s) => s.t)
   const hostName = hostLabel(hostId, useHostLook(hostId))
@@ -65,20 +79,44 @@ function OpenApprovalDialog({ entry }: { entry: ApprovalEntry }) {
   const [now, setNow] = useState(() => Date.now())
   // Ref, not state: two clicks in one event burst both see `busy === false` before React commits the first setBusy.
   const inFlight = useRef(false)
+  const overlayRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  // Where the keyboard was when the panel last took it; null while the panel has not taken it (mounted minimized).
+  const focusBefore = useRef<{ el: Element | null } | null>(null)
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
   }, [])
 
-  useEffect(() => { panelRef.current?.focus() }, [])
+  // Shown (on open, or restored from the pill): remember where the keyboard was, then take it. Minimized: give it back
+  // to that element when it is still in the document, else drop it — a hidden panel must not keep the focus. A dialog
+  // that mounts already minimized (the current request changed behind the pill) never took it, so it touches nothing.
+  useEffect(() => {
+    if (!minimized) {
+      focusBefore.current = { el: document.activeElement }
+      panelRef.current?.focus()
+      return
+    }
+    const took = focusBefore.current
+    focusBefore.current = null
+    if (!took) return
+    const back = took.el
+    if (back instanceof HTMLElement && back !== document.body && back.isConnected) {
+      back.focus()
+      if (document.activeElement === back) return
+    }
+    const active = document.activeElement
+    if (active instanceof HTMLElement && overlayRef.current?.contains(active)) active.blur()
+  }, [minimized])
 
   // Escape is swallowed, not handled: nothing dismisses this dialog, and nothing beneath it may be dismissed either
   // (ConfirmDialog and FloatingPanel both listen for Escape on `document`; a handoff confirm under this modal would
   // otherwise cancel). Capture phase on `window`, not `document`: capture listeners on one target run in registration
   // order, and the dialog beneath registered first — `window` capture runs before every `document` listener regardless.
+  // Not while minimized: Escape then belongs to the tabs (U22 (b)), as do Tab and focus below.
   useEffect(() => {
+    if (minimized) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       e.preventDefault()
@@ -86,10 +124,11 @@ function OpenApprovalDialog({ entry }: { entry: ApprovalEntry }) {
     }
     window.addEventListener('keydown', onKey, { capture: true })
     return () => window.removeEventListener('keydown', onKey, { capture: true })
-  }, [])
+  }, [minimized])
 
   // Tab stays inside the panel (ConfirmDialog's rule).
   useEffect(() => {
+    if (minimized) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Tab' || e.ctrlKey || e.metaKey || e.altKey) return
       const panel = panelRef.current
@@ -108,15 +147,17 @@ function OpenApprovalDialog({ entry }: { entry: ApprovalEntry }) {
     }
     document.addEventListener('keydown', onKey, { capture: true })
     return () => document.removeEventListener('keydown', onKey, { capture: true })
-  }, [])
+  }, [minimized])
 
   // Focus stays inside the panel (P9b-1 review). Something behind this modal can still take focus: the switch to the
   // requester after a decision (U22, approval-goto.ts) shows a tab while the next request's dialog is already up, a
   // notification click does the same, and a terminal focuses in the NEXT animation frame (TerminalView's
   // `useActivationFocus(…, { raf: true })`) — after this panel took focus. Its keystrokes would reach the shell under
   // the overlay, so any focus that lands outside the panel is pulled back. `panel.focus()` fires a `focusin` inside the
-  // panel, which this leaves alone, so the two cannot ping-pong. Same lifetime as the Escape swallow and the Tab trap.
+  // panel, which this leaves alone, so the two cannot ping-pong. Same lifetime as the Escape swallow and the Tab trap:
+  // off while minimized, where a terminal the person clicks keeps the focus (U22 (b)).
   useEffect(() => {
+    if (minimized) return
     const panel = panelRef.current
     if (!panel) return
     const onFocusIn = (e: FocusEvent) => {
@@ -125,7 +166,7 @@ function OpenApprovalDialog({ entry }: { entry: ApprovalEntry }) {
     }
     document.addEventListener('focusin', onFocusIn, { capture: true })
     return () => document.removeEventListener('focusin', onFocusIn, { capture: true })
-  }, [])
+  }, [minimized])
 
   const members =maxMembers.trim() === '' ? NaN : Number(maxMembers)
   const membersOk = Number.isInteger(members) && members >= 1 && members <= MAX_MAX_MEMBERS
@@ -173,6 +214,9 @@ function OpenApprovalDialog({ entry }: { entry: ApprovalEntry }) {
   const titleId = 'approval-dialog-title'
   return (
     <div
+      ref={overlayRef}
+      // Minimized: hidden, not unmounted (Tailwind's preflight keeps `[hidden]` at display:none over `flex`).
+      hidden={minimized}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       role="dialog"
       aria-modal="true"
@@ -189,9 +233,21 @@ function OpenApprovalDialog({ entry }: { entry: ApprovalEntry }) {
         className="w-[480px] rounded-lg border border-border-default bg-surface-primary shadow-lg outline-none"
       >
         <div className="border-b border-border-subtle px-4 py-3">
-          <h3 id={titleId} className="text-sm font-medium text-text-primary">
-            {t(isSelfRelay ? 'approval.dialog.title_self_relay' : 'approval.dialog.title_lead', { host: hostName, session })}
-          </h3>
+          <div className="flex items-start justify-between gap-3">
+            <h3 id={titleId} className="text-sm font-medium text-text-primary">
+              {t(isSelfRelay ? 'approval.dialog.title_self_relay' : 'approval.dialog.title_lead', { host: hostName, session })}
+            </h3>
+            {/* Never disabled: minimizing during a send is harmless (the outcome lands in the store either way). */}
+            <button
+              type="button"
+              data-testid="approval-minimize"
+              onClick={() => useApprovalStore.getState().setMinimized(true)}
+              className={`${buttonBase} shrink-0 text-text-secondary hover:bg-surface-hover`}
+            >
+              <ArrowsInSimple size={12} aria-hidden="true" />
+              {t('approval.dialog.minimize')}
+            </button>
+          </div>
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
             <dt className="text-text-muted">{t('approval.dialog.host')}</dt>
             <dd data-testid="approval-host" className="text-text-primary">{hostName}</dd>

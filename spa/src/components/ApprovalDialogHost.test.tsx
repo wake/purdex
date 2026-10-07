@@ -197,13 +197,17 @@ describe('ApprovalDialogHost', () => {
     render(<ApprovalDialogHost />)
     open(approval())
     expect(document.activeElement).toBe(screen.getByTestId('approval-panel'))
+    // The header's 縮小 (U22 (b)) is the first stop, then the grant fields.
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(document.activeElement).toBe(screen.getByTestId('approval-minimize'))
     fireEvent.keyDown(document, { key: 'Tab' })
     expect(document.activeElement).toBe(screen.getByTestId('approval-max-members'))
     // Wraps at either end instead of leaving the dialog.
     fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
     expect(document.activeElement).toBe(screen.getByTestId('approval-approve'))
     fireEvent.keyDown(document, { key: 'Tab' })
-    expect(document.activeElement).toBe(screen.getByTestId('approval-max-members'))
+    expect(document.activeElement).toBe(screen.getByTestId('approval-minimize'))
   })
 
   describe('while the host is not connected (spec §9.4)', () => {
