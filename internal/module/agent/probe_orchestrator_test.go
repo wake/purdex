@@ -323,8 +323,9 @@ func TestOrchestrator_NilProberStartStopNoOp(t *testing.T) {
 
 // OR8 — ScreenStable independent bottom-capture for shell-prompt classifier
 // (R14 fix #1 regression). Two sub-cases:
-//   (i) bottomContent is shell prompt + dead PID → sweepOnce called
-//   (ii) bottomContent is not shell prompt → status broadcast as Idle, no sweep
+//
+//	(i) bottomContent is shell prompt + dead PID → sweepOnce called
+//	(ii) bottomContent is not shell prompt → status broadcast as Idle, no sweep
 func TestOrchestrator_ScreenStableUsesBottomCaptureForShellPrompt(t *testing.T) {
 	t.Run("shellprompt_deadPID_triggersSweep", func(t *testing.T) {
 		m, _, fake := orchTestModule(t)
@@ -743,7 +744,6 @@ func TestDevMode_LogsGatedByEnv(t *testing.T) {
 	})
 }
 
-
 // recordingProber is a test fake that captures Watch/StopWatch invocations.
 // Implements the orchestrator's internal proberWatcher interface.
 type recordingProber struct {
@@ -770,4 +770,3 @@ func (r *recordingProber) StopWatch(target string) {
 	defer r.mu.Unlock()
 	r.stops = append(r.stops, target)
 }
-

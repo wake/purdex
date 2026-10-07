@@ -315,13 +315,13 @@ func TestProbeIntent_Expvar_DroppedCounterByReason(t *testing.T) {
 		// active map empty → StaleCheck returns false on first lock.
 		before := snapshotProbeIntentMetrics()
 		applied, _ := applyProbeGuards(m, probeGuardArgs{
-			Session:   "work",
-			AgentType: "codex",
-			Reason:    "probe-intent:process_dead",
-			Signal:    agentpkg.Signal{Kind: agentpkg.ProbeIntentKindProcessDead},
-			Mapping:   func(agentpkg.Signal) agentpkg.Status { return agentpkg.StatusError },
+			Session:    "work",
+			AgentType:  "codex",
+			Reason:     "probe-intent:process_dead",
+			Signal:     agentpkg.Signal{Kind: agentpkg.ProbeIntentKindProcessDead},
+			Mapping:    func(agentpkg.Signal) agentpkg.Status { return agentpkg.StatusError },
 			StaleCheck: func(*Module) bool { return false },
-			OnDrop:    nil, // dispatcher-only field; pass nil here, set via reason argument below
+			OnDrop:     nil, // dispatcher-only field; pass nil here, set via reason argument below
 		})
 		// We need a way to actually count "stale" → use the dispatcher route.
 		_ = applied

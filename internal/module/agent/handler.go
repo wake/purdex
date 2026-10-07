@@ -92,14 +92,14 @@ type EventRequest struct {
 	// alias the old code via a stale cache entry. Empty string falls
 	// through to the existing name-based path for backward compat with
 	// older pdx hook binaries.
-	TmuxSessionID   string          `json:"tmux_session_id,omitempty"`
-	TmuxPaneID      string          `json:"tmux_pane_id"`
+	TmuxSessionID string `json:"tmux_session_id,omitempty"`
+	TmuxPaneID    string `json:"tmux_pane_id"`
 	// SessionID is the agent's own session id (CC `session_id`). Optional and
 	// additive: only the non-tmux path (no TmuxSession/TmuxPaneID) uses it, so
 	// older daemons ignore it and older hooks (which omit it) fall back to the
 	// id inside RawEvent.
 	SessionID       string          `json:"session_id,omitempty"`
-	PurdexName     string          `json:"purdex_name"`
+	PurdexName      string          `json:"purdex_name"`
 	RawEvent        json.RawMessage `json:"raw_event"`
 	AgentType       string          `json:"agent_type"`
 	SenderPID       int             `json:"sender_pid"`

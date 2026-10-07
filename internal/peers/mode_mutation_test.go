@@ -27,8 +27,8 @@ func TestMutationDefaultModeBackToPrompting_MustFail(t *testing.T) {
 
 	// This assertion MUST fail if the mutation happens (default changed to ModePrompting).
 	if mode == ModePrompting {
-		t.Errorf("MUTATION DETECTED: ValidateMode(\"\") returned ModePrompting. "+
-			"This is the bug from issue #1124 — the default should be ModeUnknown. "+
+		t.Errorf("MUTATION DETECTED: ValidateMode(\"\") returned ModePrompting. " +
+			"This is the bug from issue #1124 — the default should be ModeUnknown. " +
 			"Restore ValidateMode to return ModeUnknown for empty input.",
 		)
 	}
