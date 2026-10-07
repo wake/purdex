@@ -1099,3 +1099,30 @@ func TestServeAndWait_CleanRestartHasNoWarnings(t *testing.T) {
 		t.Fatalf("err = %v, warnings = %v", err, rr)
 	}
 }
+
+// #1569: a panic out of the shutdown sequence must not leak the signal
+// watcher — a later signal would otherwise reach a watcher that calls
+// exit(130) for a process that is already unwinding.
+func TestServeAndWait_PanicInSequenceStopsTheSignalWatcher(t *testing.T) {
+	h := newHarness()
+	h.target.stopHook = func(context.Context) { panic("stop modules blew up") }
+	h.sig <- syscall.SIGTERM
+
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("serveAndWait did not re-panic")
+			}
+		}()
+		_ = h.run(testBudget)
+	}()
+
+	h.sig <- syscall.SIGTERM // a watcher still alive would take this and exit(130)
+	time.Sleep(100 * time.Millisecond)
+	if got := h.exited(); len(got) != 0 {
+		t.Fatalf("exit calls = %v, want none: the watcher outlived the panic", got)
+	}
+	if len(h.sig) != 1 {
+		t.Fatalf("sig holds %d value(s), want 1: the watcher consumed it", len(h.sig))
+	}
+}

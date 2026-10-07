@@ -5,9 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"time"
 )
 
@@ -18,9 +18,14 @@ func newBootID() string {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		// crypto/rand does not fail on supported platforms; time still differs per start.
-		return strconv.FormatInt(time.Now().UnixNano(), 16)
+		return timeBootID(time.Now())
 	}
 	return hex.EncodeToString(b[:])
+}
+
+// timeBootID is newBootID's fallback, zero-padded so it keeps the 16-char shape.
+func timeBootID(now time.Time) string {
+	return fmt.Sprintf("%016x", uint64(now.UnixNano()))
 }
 
 // Core lifecycle as the restart endpoint sees it (spec §3.1).
