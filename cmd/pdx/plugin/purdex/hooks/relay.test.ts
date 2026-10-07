@@ -133,6 +133,8 @@ test('a hello that hangs never holds the session start or a /clear', async ($, o
 // clock before it looks at what was called — and before it asserts that
 // nothing was, or a call made from a timer would never be seen.
 
+type PdxAnswer = { exitCode: number; stdout?: string; stderr?: string }
+
 type Fake = {
   argvs: string[][]
   timeouts: (number | undefined)[] // each pdx call's $.process.run timeoutMs, beside argvs
@@ -145,8 +147,9 @@ type Fake = {
   pdxJSON?: string
   pdx: (argv: string[]) => { exitCode: number; stdout?: string; stderr?: string } | Promise<{ exitCode: number; stdout?: string; stderr?: string }>
   // How `pdx relay prompts` answers (P9a-2), handed the call's $.process.run
-  // init; absent, f.pdx answers it like any other call.
-  prompts?: (argv: string[], init?: { timeoutMs?: number }) => { exitCode: number; stdout?: string; stderr?: string } | Promise<{ exitCode: number; stdout?: string; stderr?: string }>
+  // init; absent, f.pdx answers it like any other call. `{ deny }` makes the
+  // mod's $.process.run reject with that reason.
+  prompts?: (argv: string[], init?: { timeoutMs?: number }) => PdxAnswer | { deny: string } | Promise<PdxAnswer | { deny: string }>
   sessionId: string
   usage: { tokens?: number; window: number; percent?: number }
   clock: any
@@ -201,6 +204,7 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
     f.timeouts.push(e.init?.timeoutMs)
     const argv = [...e.argv].slice(1)
     const r = await (f.prompts && argv[0] === 'relay' && argv[1] === 'prompts' ? f.prompts(argv, e.init) : f.pdx(argv))
+    if ('deny' in r) return { deny: r.deny }
     return { value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', async () => ({ value: f.sessionId }))
@@ -2072,11 +2076,12 @@ test('a pdx relay prompts that never answers holds no hook: turn.complete and cl
 // rejects (2.1.293 d.ts: ProcessRunInit.timeoutMs "How long the child may run
 // before it is killed and the call rejects"; $.process.run "Rejects when the
 // command cannot start or is still running then"; 30 s when absent). The fake
-// does exactly that on the kit's clock, at each of the three steps.
+// does exactly that on the kit's clock, at each of the three steps: it
+// answers `{ deny }` at timeoutMs, so the mod's $.process.run rejects.
 // Mutation gate: await the run with no bound → it ends at 30 s, not 8 → red.
 test('a pdx relay prompts that runs into its 8 s timeoutMs gives the built-in body, and the relay reports writing, written, cleared and done', async ($, on) => {
   const f = relayWorld(on, { pdx: pdxWith([{ exitCode: 0, stdout: APPROVAL('approved') }]), usage: AT72 })
-  f.prompts = (_argv, init) => f.clock.sleep(init?.timeoutMs ?? 30_000).then(() => { throw new Error('process.run: still running at its timeout; killed') })
+  f.prompts = (_argv, init) => f.clock.sleep(init?.timeoutMs ?? 30_000).then(() => ({ deny: 'still running at its timeout; killed' }))
   const step = async (n: number) => {
     await f.clock.advance(50) // the step's timer: pdx relay prompts goes out
     expect(promptsCalls(f).length).toBe(n)
@@ -2108,4 +2113,6 @@ test('a pdx relay prompts that runs into its 8 s timeoutMs gives the built-in bo
   await turnAndSettle($, f, 'ts')
   expect(reports(f)).toEqual(DONE)
   expect(promptsCalls(f).map((c) => c.timeoutMs)).toEqual([8000, 8000, 8000])
+  // a rejected run reads as 20 (run()), and each fallback says so once
+  expect(f.logs.filter((l) => l.includes('relay prompts'))).toEqual(['write', 'fix', 'seed'].map((k) => 'pdx-relay: relay prompts: the built-in ' + k + ' body (exit 20)'))
 })
