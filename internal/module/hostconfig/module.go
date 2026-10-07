@@ -15,6 +15,8 @@ type Module struct {
 	core  *core.Core
 	store *Store
 	home  func() (string, error) // daemon user's home; injectable for tests
+
+	beforeUnattendedPut func() // test seam: between SetUnattended's read and its CAS; nil in production
 }
 
 // New returns a new Module ready for registration.
@@ -35,8 +37,11 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(RelaySwitchesKey, m)
 	// ... the relay prompt bodies through this one (spec §8.8) ...
 	c.Registry.Register(RelayPromptsKey, m)
-	// ... and the member launch command through this one (spec §7.2 step 4).
+	// ... the member launch command through this one (spec §7.2 step 4) ...
 	c.Registry.Register(TeamSettingsKey, m)
+	// ... and reads and writes the unattended switch through this one
+	// (unattended spec D-U23-1), its only writer.
+	c.Registry.Register(UnattendedKey, m)
 	return nil
 }
 
