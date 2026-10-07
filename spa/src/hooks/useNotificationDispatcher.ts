@@ -16,7 +16,7 @@ import { executionIdOfAgentCode, isExecAgentCode } from '../lib/nex/worker-agent
 import { isNonTmuxAgentCode } from '../lib/non-tmux-agent'
 import { readWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
 import { useHostStore } from '../stores/useHostStore'
-import { useApprovalStore } from '../stores/useApprovalStore'
+import { approvalKey, useApprovalStore } from '../stores/useApprovalStore'
 import { selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
 import { landOnHostsPageIfHidden } from '../lib/shown-hosts'
@@ -116,8 +116,9 @@ export type NotificationAction =
   | { kind: 'open-session'; hostId: string; sessionCode: string }
   | { kind: 'open-host'; hostId: string }
   /** An approval request (lead-team spec §6.3): the dialog is already on screen; the click focuses the window and
-   *  restores the dialog when it was minimized (U22 (b)). */
-  | { kind: 'open-approval'; hostId: string }
+   *  restores the dialog when it was minimized and this request is still open (U22 (b)). No `requestId` (a payload
+   *  from before it was carried) reads as ended. */
+  | { kind: 'open-approval'; hostId: string; requestId?: string }
 
 /** Check if a notification should be dispatched based on broadcast_ts dedup.
  *  New sessions default to Infinity (sentinel), so their first event is recorded
@@ -383,7 +384,8 @@ export function useNotificationDispatcher(): void {
       if (payload.action.kind === 'open-host') {
         handleNotificationClick({ kind: 'open-host', hostId: payload.action.hostId })
       } else if (payload.action.kind === 'open-approval') {
-        handleNotificationClick({ kind: 'open-approval', hostId: payload.action.hostId })
+        const { requestId } = payload.action
+        handleNotificationClick({ kind: 'open-approval', hostId: payload.action.hostId, ...(typeof requestId === 'string' ? { requestId } : {}) })
       } else {
         handleNotificationClick({
           kind: 'open-session',
@@ -512,8 +514,12 @@ export function handleNotificationClick(action: NotificationAction): void {
     case 'open-approval': {
       // The dialog is global and already shows the oldest open request; there is no tab to open or host to switch.
       // Minimized in this window (U22 (b)): the click is the person's own action, so it restores the dialog (plan P9
-      // open question 4) — never an automatic expansion.
-      useApprovalStore.getState().setMinimized(false)
+      // open question 4) — never an automatic expansion. Only while the clicked request is still open: a notification
+      // outlives its request, and a stale one must not expand another request's dialog (P9b-2 review).
+      const approvals = useApprovalStore.getState()
+      if (action.requestId !== undefined && Object.hasOwn(approvals.entries, approvalKey(action.hostId, action.requestId))) {
+        approvals.setMinimized(false)
+      }
       if (window.electronAPI?.focusMyWindow) {
         window.electronAPI.focusMyWindow()
       }

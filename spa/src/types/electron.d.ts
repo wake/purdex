@@ -132,8 +132,9 @@ interface Window {
     onMetricsUpdate: (callback: (metrics: ElectronTabMetrics[]) => void) => () => void
 
     // Notifications
-    showNotification: (opts: { title: string; body: string; sessionCode: string; eventName: string; broadcastTs: number; action?: { kind: string; hostId: string; sessionCode?: string } }) => Promise<void>
-    onNotificationClicked: (callback: (payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } }) => void) => () => void
+    // `requestId` names an approval request (open-approval); Electron main forwards `action` as the renderer sent it.
+    showNotification: (opts: { title: string; body: string; sessionCode: string; eventName: string; broadcastTs: number; action?: { kind: string; hostId: string; sessionCode?: string; requestId?: string } }) => Promise<void>
+    onNotificationClicked: (callback: (payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string; requestId?: string } }) => void) => () => void
     focusMyWindow: () => void
 
     // Deeplink (purdex://execution/<id>[?host=<hint>]) — consumed by the P.12 resolver

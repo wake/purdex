@@ -1,6 +1,6 @@
 // spa/src/lib/team/approval-notify.test.ts — the system notification for a new lead request (lead-team spec §6.3):
 // raised through the existing Electron `showNotification` path on `opened` only — never from a snapshot, never twice
-// for one request — with `action {kind:'open-approval', hostId}` and a `broadcastTs` that identifies the request (host id +
+// for one request — with `action {kind:'open-approval', hostId, requestId}` and a `broadcastTs` that identifies the request (host id +
 // request id hashed), not its `created_at`: two requests born in the same millisecond must both be announced. U14: no browser path.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useApprovalStore } from '../../stores/useApprovalStore'
@@ -49,7 +49,7 @@ describe('notifyApprovalOpened', () => {
       sessionCode: '',
       eventName: 'ApprovalRequest',
       broadcastTs: approvalBroadcastTs(H, 'req-1'),
-      action: { kind: 'open-approval', hostId: H },
+      action: { kind: 'open-approval', hostId: H, requestId: 'req-1' },
     })
     expect(NotificationCtor).not.toHaveBeenCalled()
   })
@@ -60,7 +60,7 @@ describe('notifyApprovalOpened', () => {
     expect(showNotification.mock.calls[0][0]).toMatchObject({
       title: 'mlab：purdex-7c 申請接力（已用 73%）',
       body: '核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）',
-      action: { kind: 'open-approval', hostId: H },
+      action: { kind: 'open-approval', hostId: H, requestId: 'req-1' },
     })
   })
 
