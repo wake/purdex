@@ -176,7 +176,24 @@ func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
 	return m.CreateSessionContext(context.Background(), name, cwd)
 }
 
-// CreateSessionContext is CreateSession whose caller context governs only
+// SessionTag is a session user option the create itself sets, in the same
+// tmux invocation as new-session, so the session carries it from birth: a
+// caller that must later prove a session is the one it created (the team
+// spawn's ownership token, lead-team P4-5 review H3) reads it back with
+// tmux.Executor.PaneIdentity.
+type SessionTag struct{ Option, Value string }
+
+// CreateSessionTagged is CreateSession with tag set at birth.
+func (m *SessionModule) CreateSessionTagged(name, cwd string, tag SessionTag) (*SessionInfo, error) {
+	return m.createSession(context.Background(), name, cwd, &tag)
+}
+
+// CreateSessionContext is createSession without a tag.
+func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd string) (*SessionInfo, error) {
+	return m.createSession(ctx, name, cwd, nil)
+}
+
+// createSession is CreateSession whose caller context governs only
 // the part before `tmux new-session` (#1293): a caller that gives up while
 // waiting for createMu, during the has-session check or the generation
 // probe — or at any point before new-session runs — gets
@@ -196,8 +213,8 @@ func (m *SessionModule) CreateSession(name, cwd string) (*SessionInfo, error) {
 // write) runs to completion under ONE further context, detached from the
 // caller's cancellation but capped at listReadTimeout: abandoning it would
 // leave a tmux session without a meta row, and a hung tmux still cannot hold
-// createMu forever.
-func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd string) (*SessionInfo, error) {
+// createMu forever. A tag is set by new-session's own invocation.
+func (m *SessionModule) createSession(ctx context.Context, name, cwd string, tag *SessionTag) (*SessionInfo, error) {
 	fail := func(stage CreateStage, err error) (*SessionInfo, error) {
 		return nil, &CreateError{Stage: stage, Name: name, Err: err}
 	}
@@ -271,13 +288,18 @@ func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd stri
 	}
 
 	// new-session runs on its own cap, never the caller's (see
-	// CreateSessionContext).
+	// createSession).
 	newCtx, cancelNew := context.WithTimeout(context.Background(), m.readTimeout())
-	newErr := m.tmux.NewSessionContext(newCtx, name, cwd)
+	var newErr error
+	if tag != nil {
+		newErr = m.tmux.NewSessionTaggedContext(newCtx, name, cwd, tag.Option, tag.Value)
+	} else {
+		newErr = m.tmux.NewSessionContext(newCtx, name, cwd)
+	}
 	cancelNew()
 
 	// From here on the session exists (or may): finish the create regardless
-	// of the caller (see CreateSessionContext), under one bounded context
+	// of the caller (see createSession), under one bounded context
 	// (#1293) — a hung tmux must not hold the create critical section
 	// (createMu) forever.
 	postCtx, cancel := context.WithTimeout(context.Background(), m.readTimeout())

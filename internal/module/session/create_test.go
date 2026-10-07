@@ -55,6 +55,24 @@ func TestCreateSession_ReturnsInfo(t *testing.T) {
 	assert.Equal(t, dir, m.Cwd)
 }
 
+// A tagged create is the same create path whose new-session also sets the
+// tag (lead-team spawn ownership, P4-5 review H3): the session is born
+// carrying it, readable back from its pane in one tmux invocation.
+func TestCreateSessionTagged_TheSessionIsBornWithItsTag(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mod.tmuxInstanceFn = func(context.Context) string { return "4471:1788740000" }
+	tag := SessionTag{Option: "@pdx_spawn_op", Value: "11111111-2222-4333-8444-555555555555"}
+	info, err := mod.CreateSessionTagged("tm-1111111122", t.TempDir(), tag)
+	require.NoError(t, err)
+	assert.Equal(t, "$0", info.TmuxID)
+	fake.SetActivePaneMetadata("tm-1111111122", tmux.TmuxPaneMetadata{SessionID: "$0", PaneID: "%0"})
+	id, err := fake.PaneIdentity(t.Context(), "%0", tag.Option)
+	require.NoError(t, err)
+	assert.Equal(t, tag.Value, id.Tag)
+	_, err = mod.CreateSessionTagged("tm-1111111122", t.TempDir(), tag)
+	assert.ErrorIs(t, err, ErrSessionExists, "the same checks as an untagged create")
+}
+
 func TestCreateSession_ExpandsTilde(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 	home := t.TempDir()
