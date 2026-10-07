@@ -80,6 +80,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (spawn ops): %w", err)
 	}
+	if err := migrateUsage(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (usage): %w", err)
+	}
 	return &Store{db: db}, nil
 }
 
