@@ -182,9 +182,13 @@ test('interleaving: answered_remote arrives after the terminal already answered 
     })
   })
   nativeDone = new Promise((done) => {
-    on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => { answerNative = (v) => { res(v); done(v) } }))
+    on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => {
+      answerNative = (v) => { res(v); done(v) }
+      // the person answers 20 ms after the dialog is up (a timer started before the plugins
+      // load could fire before there is a dialog to answer, and the test would hang)
+      setTimeout(() => answerNative && answerNative(NATIVE_RED), 20)
+    }))
   })
-  setTimeout(() => answerNative && answerNative(NATIVE_RED), 20)
   const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
   expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, isReadOnly: true, ref: 1 }))
   expect(r.result.answers).toEqual({ '紅還是藍？': '紅' }) // the terminal's, not the phone's
