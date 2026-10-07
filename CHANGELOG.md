@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.588] - 2026-10-08
+
+> 只動 daemon 的依賴（內嵌 Nexen），**需要部署新 binary 並重啟**才會生效；但這版本身沒有任何使用者可見的變化，可以跟下一個 daemon 版本一起部署。
+
+### Changed：內嵌 Nexen 升到 v0.20.0（#1874）
+
+- Nexen v0.20.0 新增「peer 信箱」：其他 session 可以把訊息送進 worker，閒置的 worker 會被喚醒處理。這個功能在 Nexen 預設關閉，Purdex 這版也沒有打開，行為與之前相同。
+- v0.19.0 → v0.20.0 之間只有 peer 信箱這一項（nexen #158、#159）；資料庫 schema 沒有升版，不需要遷移。
+- 接下來會加上 `[nex.peer]` 設定、`pdx msg send` 送給 worker 的路徑，以及 worker 畫面上 peer 訊息的顯示。
+
 ## [1.0.0-alpha.587] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。
