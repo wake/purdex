@@ -492,14 +492,20 @@ test('a daemon that does not answer begin (down: exit 20 only after its 30 s gra
 // The same bound for the report: the row is open, the person answers, and the daemon then stops
 // answering. The report is sent (its call is out before the answer goes back), but the answer is
 // back within 5 s. Mutation gate: wait for the report without the cap (an unbounded wait) → red.
-test('a daemon that does not answer the report never holds the terminal answer: back within 5 s, the report sent', { timeoutMs: 15000 }, async ($, on) => {
+// A report still out after SETTLE_MS is handed to `pdx ask report --detach` (a process of
+// its own that lands it after the hook returned — P8a-2 R2: a report lost after a remote
+// CAS would leave the cards on the remote answer). Mutation gate: drop the detach → the
+// `detached` assertions are red.
+test('a daemon that does not answer the report never holds the terminal answer: back within 5 s, the report detached', { timeoutMs: 15000 }, async ($, on) => {
   session(on)
   let answerNative: Resolver = null
   let report: Call | null = null
+  let detached: Call | null = null
   on('process.run', (_$: any, e: any) => {
     const a = e.argv
     if (sub(a) === 'begin') return ok('{"id":"r6"}')
     if (sub(a) === 'wait') { setTimeout(() => answerNative && answerNative(NATIVE_RED), 20); return never() }
+    if (sub(a) === 'report' && a.includes('--detach')) { detached = [...a]; return ok('') }
     if (sub(a) === 'report') { report = [...a]; return never() }
     return ok('')
   })
@@ -511,6 +517,45 @@ test('a daemon that does not answer the report never holds the terminal answer: 
   expect(ms).toBeLessThan(5000)
   expect(report).not.toBeNull()
   expect(report!.slice(2, 5)).toEqual(['report', 'r6', 'answered_local'])
+  expect(detached).not.toBeNull()
+  expect(detached!.slice(2, 5)).toEqual(['report', 'r6', 'answered_local'])
+  expect(detached!).toContain('--hook')
+  expect(JSON.parse(detached![detached!.indexOf('--hook') + 1])).toEqual({ answers: { '紅還是藍？': '紅' } })
+})
+
+test('answered before begin returned, then a report that hangs ⇒ back within 5 s and the report detached', { timeoutMs: 15000 }, async ($, on) => {
+  session(on)
+  let detached: Call | null = null
+  on('process.run', (_$: any, e: any) => {
+    const a = e.argv
+    if (sub(a) === 'begin') return new Promise((res) => setTimeout(() => res(ok('{"id":"r7"}')), 300))
+    if (sub(a) === 'report' && a.includes('--detach')) { detached = [...a]; return ok('') }
+    if (sub(a) === 'report') return never()
+    return ok('')
+  })
+  on('tool.call', { tool: 'AskUserQuestion' }, () => Promise.resolve(NATIVE_RED)) // answered at once
+  const t0 = Date.now()
+  const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
+  expect(Date.now() - t0).toBeLessThan(5000)
+  expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, ref: 1 }))
+  expect(detached).not.toBeNull()
+  expect(detached!.slice(2, 5)).toEqual(['report', 'r7', 'answered_local'])
+})
+
+test('a healthy report is not detached', async ($, on) => {
+  session(on)
+  const calls: Call[] = []
+  let answerNative: Resolver = null
+  on('process.run', (_$: any, e: any) => {
+    calls.push([...e.argv])
+    const a = e.argv
+    if (sub(a) === 'begin') return ok('{"id":"r8"}')
+    if (sub(a) === 'wait') { setTimeout(() => answerNative && answerNative(NATIVE_RED), 20); return never() }
+    return ok('{}')
+  })
+  on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => { answerNative = res }))
+  await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
+  expect(calls.filter((c) => c.includes('--detach'))).toEqual([])
 })
 
 // The mod's own failure: its `.catch` answers next(e), which replays the native call as it

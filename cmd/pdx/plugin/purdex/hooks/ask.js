@@ -25,9 +25,9 @@ const CALL_TIMEOUT_MS = 40_000 // begin / report: the daemon client's 30 s resta
 // on by itself and is not awaited. The trade-off: a healthy daemon answers in tens of
 // milliseconds, so the report lands while the dispatch is alive and the answer is delayed
 // by that much only; a daemon that is down or restarting (its client waits 30 s) costs
-// the person SETTLE_MS at most, and the report then lands later or never (the row is
-// abandoned 30 s after the wait polls stop renewing its lease, so it never lingers).
-// Every report's child is started before the answer goes back, so it is sent either way.
+// the person SETTLE_MS at most (plus the few milliseconds of `report --detach`), and the
+// report is then handed to a process of its own that lands it after the hook returned
+// (detachReport below) — the engine may end a hook's children once it returns.
 const SETTLE_MS = 3_000
 
 const parse = (s) => { try { return JSON.parse(s) } catch { return null } }
@@ -114,6 +114,33 @@ function report($, cfg, id, outcome) {
   }, (err) => log($, 'report ' + outcome.state + ' failed: ' + String(err)))
 }
 
+// DETACH_TIMEOUT_MS bounds the `report --detach` call: it only starts the detached
+// report and exits (milliseconds), so this is a guard, not a wait.
+const DETACH_TIMEOUT_MS = 2_000
+
+// detachReport hands the report to a process of its own (`pdx ask report --detach`,
+// setsid): it lands after this hook has returned, whatever the engine then does with the
+// hook's children. Used when the in-dispatch report has not landed within SETTLE_MS — a
+// report lost after a remote CAS would leave the cards on the remote answer for good
+// (spec §6.6 step 5, terminal_override; P8a-2 R2). Reports are idempotent on the daemon,
+// so the duplicate (should the first land too) is harmless. Never rejects.
+function detachReport($, cfg, id, outcome) {
+  const args = ['report', id, outcome.state]
+  if (outcome.hook) args.push('--hook', JSON.stringify(outcome.hook))
+  args.push('--detach')
+  return ask($, cfg, args, DETACH_TIMEOUT_MS).then((r) => {
+    if (r.exitCode !== 0) log($, 'report --detach exit ' + r.exitCode + ' ' + stderrCode(r))
+  }, (err) => log($, 'report --detach failed: ' + String(err)))
+}
+
+// reportSettled reports, waits at most SETTLE_MS, and detaches the report when it has
+// not finished by then. Never rejects.
+async function reportSettled($, cfg, next, id, outcome) {
+  let done = false
+  await settle($, next, report($, cfg, id, outcome).then(() => { done = true }))
+  if (!done) await detachReport($, cfg, id, outcome)
+}
+
 // settle waits for `work` (begin's answer, the report) at most SETTLE_MS, and less when
 // the dispatch is abandoned (next.signal: the person interrupted). Never rejects; a sleep
 // the host refuses ends the wait at once.
@@ -149,8 +176,17 @@ export function register(on) {
     const first = await Promise.race([dialog, begin])
     if (first.who === 'native' || first.who === 'native-error') {
       // The person answered (or dismissed) before the daemon even replied: the native
-      // outcome stands. A row begin does open is told, within SETTLE_MS or after.
-      await settle($, next, begin.then((b) => { const id = openedId(b); return id ? report($, cfg, id, nativeOutcome(first)) : undefined }))
+      // outcome stands. A row begin does open is told, within SETTLE_MS or detached.
+      // A begin still out after SETTLE_MS (a daemon restarting, so no client is connected
+      // to answer either) leaves its row to the lease: abandoned 30 s after it opens.
+      const outcome = nativeOutcome(first)
+      let opened = '', reported = false
+      await settle($, next, begin.then((b) => {
+        opened = openedId(b)
+        if (!opened) { reported = true; return undefined }
+        return report($, cfg, opened, outcome).then(() => { reported = true })
+      }))
+      if (opened && !reported) await detachReport($, cfg, opened, outcome)
       return native(first)
     }
     const id = openedId(first)
@@ -187,7 +223,7 @@ export function register(on) {
     if (w.who === 'native' || w.who === 'native-error') {
       // Step 3 / 6 (and step 5: if a remote decide won the CAS meanwhile, the daemon
       // records terminal_override — the terminal's answer still stands).
-      await settle($, next, report($, cfg, id, nativeOutcome(w)))
+      await reportSettled($, cfg, next, id, nativeOutcome(w))
       return native(w)
     }
     if (w.who === 'remote') {
@@ -199,7 +235,7 @@ export function register(on) {
     // terminal settled it, as on step 3.
     log($, w.why + ': native dialog only')
     const n = await dialog
-    if (w.who !== 'remote-closed') await settle($, next, report($, cfg, id, nativeOutcome(n)))
+    if (w.who !== 'remote-closed') await reportSettled($, cfg, next, id, nativeOutcome(n))
     return native(n)
   }).catch(($, e, next) => next(e)) // any failure of ours: the engine's own dialog, as without the mod (replayed, never run twice)
 }
