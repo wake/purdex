@@ -34,7 +34,7 @@ var ErrRegistryFull = errors.New("modevents: registry full")
 type StreamInfo struct {
 	Stream       string
 	Agent        string
-	SID          string // the latest event's sid (moves on /clear)
+	SID          string // the latest event's sid (moves on session.switch)
 	CWD          string // from session.start
 	Interactive  bool   // a session.start was seen
 	CCVersion    string
@@ -45,7 +45,7 @@ type StreamInfo struct {
 	Gaps         int64
 	DroppedTotal int64
 	Rejected     int64
-	Ended        bool
+	Ended        bool // a session.end other than /clear or /resume; a later event clears it
 	EndedAt      time.Time
 	Counts       map[string]int64
 }
@@ -157,11 +157,9 @@ func (r *Registry) Apply(b Batch) (ack int64, err error) {
 		}
 		in.LastSeq = e.Seq
 		in.SID = e.SID
-		// session.end also fires on /clear and /resume, after which the
-		// same mod load keeps reporting: any later event reopens the stream.
-		if in.Ended && e.Type != TypeSessionEnd {
-			in.Ended, in.EndedAt = false, time.Time{}
-		}
+		// A stream that reports again after it ended is alive: any later
+		// event reopens it (an ending session.end ends it again below).
+		in.Ended, in.EndedAt = false, time.Time{}
 		switch e.Type {
 		case TypeSessionStart:
 			var d struct {
@@ -172,7 +170,9 @@ func (r *Registry) Apply(b Batch) (ack int64, err error) {
 			}
 			in.Interactive = true
 		case TypeSessionEnd:
-			in.Ended, in.EndedAt = true, now
+			if endsStream(e.Data) {
+				in.Ended, in.EndedAt = true, now
+			}
 		}
 		if !IsKnownType(e.Type) {
 			in.Counts[CountUnknown]++
@@ -188,6 +188,18 @@ func (r *Registry) Apply(b Batch) (ack int64, err error) {
 
 	r.deliver(out) // still under s.order
 	return ack, nil
+}
+
+// endsStream reports whether a session.end ends its stream. It also fires
+// on /clear and /resume (reason clear / resume), after which the same
+// process and stream go on with a session.switch; every other reason,
+// including a missing one, ends it.
+func endsStream(data json.RawMessage) bool {
+	var d struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.Unmarshal(data, &d)
+	return d.Reason != "clear" && d.Reason != "resume"
 }
 
 // Reject counts a 400-rejected batch on a valid stream id, creating the
