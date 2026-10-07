@@ -233,8 +233,9 @@ func (m *Module) Start(context.Context) error {
 	}
 	m.reconcileRelays()
 	m.core.Events.OnSubscribe(m.sendSnapshot)
-	m.sweepWG.Add(1)
+	m.sweepWG.Add(2)
 	go m.runSweeper()
+	go m.runRetention()
 	m.logf("[team] endpoints enabled")
 	return nil
 }
