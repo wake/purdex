@@ -45,6 +45,15 @@ type Relay struct {
 	// WindowQueryTimeout bounds each single WindowSize call (default 2s) so one
 	// stuck tmux query cannot stall reporting for the rest of the connection.
 	WindowQueryTimeout time.Duration
+
+	// PTYSize, when set, slaves the PTY to the window: the PTY starts at the
+	// returned size, the client's own resize messages are ignored, and every
+	// poll tick re-applies the size if it changed. The caller returns window
+	// size plus status rows: tmux sizes a window from even a lone ignore-size
+	// client, so any other PTY size would shrink the desktop window. If the
+	// size cannot be learned at start the connection is refused (1011) rather
+	// than started at a guessed size.
+	PTYSize func(ctx context.Context) (cols, rows uint16, err error)
 }
 
 // WindowMsg is sent to the client when the window's actual size is (re)reported.
@@ -70,7 +79,22 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	c.Dir = r.cwd
 	c.Env = append(os.Environ(), "TERM=xterm-256color")
 
-	ptmx, err := pty.StartWithSize(c, &pty.Winsize{Cols: 80, Rows: 24})
+	startSize := pty.Winsize{Cols: 80, Rows: 24}
+	if r.PTYSize != nil {
+		qctx, qcancel := context.WithTimeout(req.Context(), r.queryTimeout())
+		cols, rows, err := r.PTYSize(qctx)
+		qcancel()
+		if err != nil {
+			log.Printf("pty size: %v", err)
+			_ = conn.WriteControl(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "window size unavailable"),
+				time.Now().Add(time.Second))
+			return
+		}
+		startSize = pty.Winsize{Cols: cols, Rows: rows}
+	}
+
+	ptmx, err := pty.StartWithSize(c, &startSize)
 	if err != nil {
 		log.Printf("pty start: %v", err)
 		return
@@ -123,13 +147,21 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 			var once sync.Once
 			ready := func() { once.Do(func() { close(firstWindow) }) }
 			defer ready()
+			curPTY := startSize // only this goroutine touches it
+			applyPTY := func(cols, rows uint16) {
+				if cols == curPTY.Cols && rows == curPTY.Rows {
+					return
+				}
+				curPTY = pty.Winsize{Cols: cols, Rows: rows}
+				pty.Setsize(ptmx, &curPTY)
+			}
 			r.pollWindowSize(ctx, ready, func(m WindowMsg) error {
 				data, _ := json.Marshal(m)
 				writeMu.Lock()
 				err := conn.WriteMessage(websocket.TextMessage, data)
 				writeMu.Unlock()
 				return err
-			}, ptmx)
+			}, applyPTY, ptmx)
 		}()
 		defer func() {
 			cancel()
@@ -204,7 +236,9 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 			// Check if it's a resize message
 			var resize ResizeMsg
 			if json.Unmarshal(msg, &resize) == nil && resize.Type == "resize" {
-				pty.Setsize(ptmx, &pty.Winsize{Cols: resize.Cols, Rows: resize.Rows})
+				if r.PTYSize == nil { // a slaved PTY follows the window, not the client
+					pty.Setsize(ptmx, &pty.Winsize{Cols: resize.Cols, Rows: resize.Rows})
+				}
 				continue
 			}
 			// Regular input
@@ -215,27 +249,43 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	wg.Wait()
 }
 
+// queryTimeout bounds each single window/PTY size query (default 2s).
+func (r *Relay) queryTimeout() time.Duration {
+	if r.WindowQueryTimeout > 0 {
+		return r.WindowQueryTimeout
+	}
+	return 2 * time.Second
+}
+
 // pollWindowSize reports the window size through send: always the first
 // successful reading, then only changes. A failed send closes ptmx so both
 // I/O goroutines wake up and the connection ends, like a failed batcher write.
 // ready is called once the first reading has been attempted.
-func (r *Relay) pollWindowSize(ctx context.Context, ready func(), send func(WindowMsg) error, ptmx io.Closer) {
+//
+// With PTYSize set, applyPTY is called on every tick (before the frame, and
+// even when the window size is unchanged — the status bar may have changed)
+// with the size the PTY must have; it is the caller's job to skip no-ops.
+func (r *Relay) pollWindowSize(ctx context.Context, ready func(), send func(WindowMsg) error, applyPTY func(cols, rows uint16), ptmx io.Closer) {
 	interval := r.WindowPollInterval
 	if interval <= 0 {
 		interval = time.Second
 	}
-	queryTimeout := r.WindowQueryTimeout
-	if queryTimeout <= 0 {
-		queryTimeout = 2 * time.Second
-	}
 	var last WindowMsg
 	have := false
 	tick := func() bool {
-		qctx, qcancel := context.WithTimeout(ctx, queryTimeout)
+		qctx, qcancel := context.WithTimeout(ctx, r.queryTimeout())
 		cols, rows, err := r.WindowSize(qctx)
+		var pcols, prows uint16
+		var perr error
+		if err == nil && r.PTYSize != nil {
+			pcols, prows, perr = r.PTYSize(qctx)
+		}
 		qcancel()
 		if err != nil || ctx.Err() != nil {
 			return true
+		}
+		if r.PTYSize != nil && perr == nil && applyPTY != nil {
+			applyPTY(pcols, prows)
 		}
 		if have && last.Cols == cols && last.Rows == rows {
 			return true
