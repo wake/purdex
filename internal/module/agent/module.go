@@ -85,6 +85,10 @@ type Module struct {
 
 	pathHintDedup  *PathHintDedupCache
 	pathHintBuffer *PathHintRingBuffer
+
+	// listFramesFn is a test seam for liveFrameProjections' frames.ListAll
+	// (fault injection); nil in production.
+	listFramesFn func() ([]store.Frame, error)
 }
 
 // Test seams for Module.New. framesInitFn failure is fatal (hook processing
@@ -651,7 +655,11 @@ func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
 	if m.frames == nil {
 		return nil, nil
 	}
-	frames, err := m.frames.ListAll()
+	listAll := m.frames.ListAll
+	if m.listFramesFn != nil {
+		listAll = m.listFramesFn
+	}
+	frames, err := listAll()
 	if err != nil {
 		return nil, err
 	}

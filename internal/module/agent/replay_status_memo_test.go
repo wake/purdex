@@ -113,6 +113,7 @@ func (c *countingSessions) counts() (list, lookup int) {
 // currentStatus Running for every session.
 type replayFixture struct {
 	m    *Module
+	fake *tmux.FakeExecutor
 	tmx  *countingTmux
 	sess *countingSessions
 	// panes is the flat list of every seeded pane id.
@@ -127,7 +128,7 @@ func newReplayFixture(t *testing.T, sessions, panesPerSession int) *replayFixtur
 	m.tmux = ct
 	cs := &countingSessions{SessionProvider: &fakeSessionProvider{}}
 	m.sessions = cs
-	fx := &replayFixture{m: m, tmx: ct, sess: cs}
+	fx := &replayFixture{m: m, fake: fake, tmx: ct, sess: cs}
 	pid := 5000
 	for s := 0; s < sessions; s++ {
 		name := fmt.Sprintf("s%d", s)
