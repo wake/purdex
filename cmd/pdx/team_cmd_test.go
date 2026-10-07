@@ -500,7 +500,7 @@ func TestDispatch_SpawnKillTeam(t *testing.T) {
 			usage = l
 		}
 	}
-	for cmd, target := range map[string]string{"spawn": "runSpawn"} {
+	for cmd, target := range map[string]string{"spawn": "runSpawn", "kill": "runKill", "team": "runTeam"} {
 		if !strings.Contains(s, "case \""+cmd+"\":\n\t\t"+target+"(os.Args[2:])\n") {
 			t.Errorf("main.go does not dispatch %q to %s", cmd, target)
 		}
