@@ -14,20 +14,22 @@ import (
 // launchLine is the line the spawn runner types into a member's window 0
 // (spec §7.2 step 4, U20 (a)), without the newline the runner adds:
 //
-//	<member_command> --plugin-dir '<dir>'[ --model '<m>'][ --effort <e>]
+//	NAME='v'… 'cmd' 'arg'… --plugin-dir '<dir>'[ --model '<m>'][ --effort <e>]
 //
-// The trust boundary, since the line runs in the member's shell:
-//   - memberCommand is the owner's shell text (team.member_command, an
-//     admin-only PUT), typed as it is; it must end with the command that
-//     takes the flags. It is re-checked to be one non-blank line
-//     (hostconfig.ValidateMemberCommand), so it cannot end the line early.
-//   - What the daemon appends is single-quoted for a POSIX-family shell
-//     (sh, bash, zsh): pluginDir (an absolute path of one line) and the model
-//     (ValidModel; "[1m]" would glob). The effort is a bare enum. A refused
-//     model or effort is an error and composes nothing.
+// Everything is single-quoted for a POSIX-family shell (sh, bash, zsh) but
+// the flag names, the effort enum and assignment names, so nothing in the
+// line is read as anything but literal words:
+//   - memberCommand (team.member_command, the owner's text through an
+//     admin-only PUT) is parsed again here as one simple command
+//     (hostconfig.ParseMemberCommand) and each word re-quoted, so it cannot
+//     comment out, redirect or end early the flags after it (R2 finding 1);
+//   - pluginDir must be an absolute path of one line; the model passes
+//     ValidModel ("[1m]" would glob unquoted) and the effort ValidEffort.
+//
+// Anything refused is an error and composes nothing.
 func launchLine(memberCommand, pluginDir, model, effort string) (string, error) {
-	cmd := strings.TrimSpace(memberCommand)
-	if err := hostconfig.ValidateMemberCommand(cmd); err != nil {
+	argv, err := hostconfig.ParseMemberCommand(strings.TrimSpace(memberCommand))
+	if err != nil {
 		return "", fmt.Errorf("launch line: %w", err)
 	}
 	if !filepath.IsAbs(pluginDir) || !utf8.ValidString(pluginDir) || strings.IndexFunc(pluginDir, unicode.IsControl) >= 0 {
@@ -39,14 +41,22 @@ func launchLine(memberCommand, pluginDir, model, effort string) (string, error) 
 	if effort != "" && !team.ValidEffort(effort) {
 		return "", fmt.Errorf("launch line: invalid effort %q", effort)
 	}
-	line := cmd + " --plugin-dir " + shellQuote(pluginDir)
+	words := make([]string, 0, len(argv.Env)+len(argv.Args)+6)
+	for _, kv := range argv.Env {
+		name, value, _ := strings.Cut(kv, "=") // name is [A-Za-z_][A-Za-z0-9_]*
+		words = append(words, name+"="+shellQuote(value))
+	}
+	for _, a := range argv.Args {
+		words = append(words, shellQuote(a))
+	}
+	words = append(words, "--plugin-dir", shellQuote(pluginDir))
 	if model != "" {
-		line += " --model " + shellQuote(model)
+		words = append(words, "--model", shellQuote(model))
 	}
 	if effort != "" {
-		line += " --effort " + effort
+		words = append(words, "--effort", effort)
 	}
-	return line, nil
+	return strings.Join(words, " "), nil
 }
 
 // shellQuote single-quotes s for a POSIX-family shell. Inside single quotes

@@ -10,13 +10,16 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-// shellArgv composes a line whose member command prints each word it gets
-// on its own line, runs it in dir under each POSIX-family shell found (rc
-// files off) and checks the words are exactly want: no word split, glob
-// (dir holds bait for an unquoted "opus[1m]") or command substitution.
-func shellArgv(t *testing.T, dir, pluginDir, model, effort string, want []string) {
+// printArgv is a member command that prints each word it gets on its own line.
+const printArgv = `printf '%s\n'`
+
+// shellArgv composes a line, runs it in dir under each POSIX-family shell
+// found (rc files off) and checks the output is exactly want: no word
+// split, glob (dir holds bait for an unquoted "opus[1m]") or command
+// substitution.
+func shellArgv(t *testing.T, dir, cmd, pluginDir, model, effort string, want []string) {
 	t.Helper()
-	line, err := launchLine(`printf '%s\n'`, pluginDir, model, effort)
+	line, err := launchLine(cmd, pluginDir, model, effort)
 	if err != nil || strings.HasSuffix(line, "\n") {
 		t.Fatalf("%q: line %q err %v (the runner adds the newline)", pluginDir, line, err)
 	}
@@ -43,12 +46,13 @@ func shellArgv(t *testing.T, dir, pluginDir, model, effort string, want []string
 	}
 }
 
-// Spec §7.2 step 4 and U20 (a): the member command, then --plugin-dir and
-// --model single-quoted ("[1m]" would glob), then the effort enum bare. A
-// plugin dir with a space or a single quote stays one word.
+// Spec §7.2 step 4 and U20 (a): the member command's words re-quoted (R2
+// finding 1), then --plugin-dir and --model single-quoted ("[1m]" would
+// glob), then the effort enum bare. A plugin dir with a space or a single
+// quote stays one word.
 func TestLaunchLine_QuotesModelAndPluginDir(t *testing.T) {
 	line, err := launchLine(team.DefaultMemberCommand, "/Users/w/.config/pdx/cc-plugin/purdex", "opus[1m]", "high")
-	if want := `claude --dangerously-skip-permissions --plugin-dir '/Users/w/.config/pdx/cc-plugin/purdex' --model 'opus[1m]' --effort high`; err != nil || line != want {
+	if want := `'claude' '--dangerously-skip-permissions' --plugin-dir '/Users/w/.config/pdx/cc-plugin/purdex' --model 'opus[1m]' --effort high`; err != nil || line != want {
 		t.Fatalf("line = %q (err %v)\nwant   %q", line, err, want)
 	}
 	for dir, quoted := range map[string]string{
@@ -57,7 +61,7 @@ func TestLaunchLine_QuotesModelAndPluginDir(t *testing.T) {
 		"/tmp/''/cc-plugin/purdex":                                     `'/tmp/'\'''\''/cc-plugin/purdex'`,
 	} {
 		line, err := launchLine("cld", dir, "sonnet", "")
-		if want := "cld --plugin-dir " + quoted + " --model 'sonnet'"; err != nil || line != want {
+		if want := "'cld' --plugin-dir " + quoted + " --model 'sonnet'"; err != nil || line != want {
 			t.Errorf("line = %q (err %v)\nwant   %q", line, err, want)
 		}
 	}
@@ -68,24 +72,38 @@ func TestLaunchLine_QuotesModelAndPluginDir(t *testing.T) {
 		{dir + "/it's/cc-plugin/purdex", "claude-opus-5-5[1m]", "max"},
 		{dir + "/a  b/'x'/$(touch pwned1)/`touch pwned2`/;touch pwned3;/*/\\\"/cc-plugin/purdex", "fable", "low"},
 	} {
-		shellArgv(t, dir, c.pluginDir, c.model, c.effort, []string{"--plugin-dir", c.pluginDir, "--model", c.model, "--effort", c.effort})
+		shellArgv(t, dir, printArgv, c.pluginDir, c.model, c.effort, []string{"--plugin-dir", c.pluginDir, "--model", c.model, "--effort", c.effort})
 	}
+}
+
+// A member command with an assignment, quoted words and characters that are
+// special only unquoted: the shell runs it with the assignment, its words
+// as written, and every appended flag as its own word (R2 finding 1).
+func TestLaunchLine_RequotesTheMemberCommand(t *testing.T) {
+	line, err := launchLine(`FOO='a b' X=1 claude "--x=y z" 'p # q' =c %d`, "/d", "", "")
+	if want := `FOO='a b' X='1' 'claude' '--x=y z' 'p # q' '=c' '%d' --plugin-dir '/d'`; err != nil || line != want {
+		t.Fatalf("line = %q (err %v)\nwant   %q", line, err, want)
+	}
+	dir := t.TempDir()
+	cmd := `FOO='a b' sh -c 'printf "%s\n" "$FOO" "$0" "$@"' "x;y" 'it'"'"'s'`
+	shellArgv(t, dir, cmd, dir+"/p d", "opus[1m]", "max",
+		[]string{"a b", "x;y", "it's", "--plugin-dir", dir + "/p d", "--model", "opus[1m]", "--effort", "max"})
 }
 
 // Without --model / --effort the member runs the host's defaults (U20 (a)),
 // and --plugin-dir is still always there (spec §7.2 step 4).
 func TestLaunchLine_NoModelNoEffort(t *testing.T) {
 	for _, c := range []struct{ model, effort, want string }{
-		{"", "", `claude --dangerously-skip-permissions --plugin-dir '/d/cc-plugin/purdex'`},
-		{"opus", "", `claude --dangerously-skip-permissions --plugin-dir '/d/cc-plugin/purdex' --model 'opus'`},
-		{"", "medium", `claude --dangerously-skip-permissions --plugin-dir '/d/cc-plugin/purdex' --effort medium`},
+		{"", "", `'claude' '--dangerously-skip-permissions' --plugin-dir '/d/cc-plugin/purdex'`},
+		{"opus", "", `'claude' '--dangerously-skip-permissions' --plugin-dir '/d/cc-plugin/purdex' --model 'opus'`},
+		{"", "medium", `'claude' '--dangerously-skip-permissions' --plugin-dir '/d/cc-plugin/purdex' --effort medium`},
 	} {
 		if line, err := launchLine(" claude --dangerously-skip-permissions ", "/d/cc-plugin/purdex", c.model, c.effort); err != nil || line != c.want {
 			t.Errorf("model %q effort %q: line = %q (err %v), want %q", c.model, c.effort, line, err, c.want)
 		}
 	}
 	dir := t.TempDir()
-	shellArgv(t, dir, dir+"/x y/cc-plugin/purdex", "", "", []string{"--plugin-dir", dir + "/x y/cc-plugin/purdex"})
+	shellArgv(t, dir, printArgv, dir+"/x y/cc-plugin/purdex", "", "", []string{"--plugin-dir", dir + "/x y/cc-plugin/purdex"})
 }
 
 // The daemon checks again what the CLI checked (U20 (a), 400 at the
@@ -122,7 +140,7 @@ func TestLaunchLine_RefusesBadModelOrEffort(t *testing.T) {
 	for _, d := range []string{"", "relative/cc-plugin/purdex", "/a\nb", "/a\x00b", "/a\tb", "/a\x1bb", "/a\xffb"} {
 		refuse("plugin dir "+d, team.DefaultMemberCommand, d, "", "")
 	}
-	for _, c := range []string{"", "   ", "claude\nrm -rf ~", "claude\r--x", "claude \\"} {
+	for _, c := range []string{"", "   ", "claude\nrm -rf ~", "claude\r--x", "claude \\", "claude #", "claude >/tmp/log #", "claude 'x"} {
 		refuse("member command "+c, c, pd, "", "")
 	}
 }

@@ -15,8 +15,8 @@ import (
 )
 
 // Spec §7.2 step 4: team.member_command defaults to cld-yolo's expansion; a
-// field left out keeps it. Unknown fields, null, blank, control characters,
-// a trailing backslash and > 512 bytes are refused: it is typed into a shell.
+// field left out keeps it. Unknown fields, null, and a command
+// ParseMemberCommand refuses are refused: it is typed into a shell.
 func TestNormalizeTeam_DefaultsUnknownFieldNullAndBlank(t *testing.T) {
 	assert.Equal(t, team.DefaultMemberCommand, DefaultTeamSettings.MemberCommand)
 	for raw, want := range map[string]string{
@@ -34,17 +34,45 @@ func TestNormalizeTeam_DefaultsUnknownFieldNullAndBlank(t *testing.T) {
 		`{"member_command":""}`, `{"member_command":"   "}`,
 		`{"member_command":"claude\nrm -rf ~"}`, `{"member_command":"claude\r--x"}`, `{"member_command":"a\tb"}`,
 		`{"member_command":"a\u0000b"}`, `{"member_command":"a\u007fb"}`, `{"member_command":"a\u0085b"}`,
-		`{"member_command":"claude \\"}`,
+		`{"member_command":"claude \\"}`, `{"member_command":"claude #"}`, `{"member_command":"claude; rm"}`,
 		`{"member_command":"` + strings.Repeat("a", 513) + `"}`,
 		`{"membercommand":"claude"}`, `{"member_command":"claude","extra":1}`,
 	} {
 		_, err := normalizeTeam(json.RawMessage(raw))
 		assert.Error(t, err, raw)
 	}
-	// The exported rule (the launch line's re-check) takes a trimmed value only.
-	assert.NoError(t, ValidateMemberCommand("claude --x"))
-	for _, s := range []string{" claude", "claude ", "a\xffb"} {
-		assert.Error(t, ValidateMemberCommand(s), s)
+}
+
+// member_command is one simple command (R2 finding 1): leading NAME=value
+// assignments, then the command and its words, split on spaces, with single
+// quotes and double quotes (no $, ` or \ inside). Anything that would make
+// the shell read the appended flags differently is refused: a comment, an
+// operator, a redirection, an expansion, a glob, an escape, an unterminated
+// quote, no command.
+func TestParseMemberCommand_OneSimpleCommand(t *testing.T) {
+	for s, want := range map[string]MemberArgv{
+		team.DefaultMemberCommand:  {Args: []string{"claude", "--dangerously-skip-permissions"}},
+		"  cld   --x  ":            {Args: []string{"cld", "--x"}},
+		"FOO=bar B_2='x y' claude": {Env: []string{"FOO=bar", "B_2=x y"}, Args: []string{"claude"}},
+		`claude --append-system-prompt 'be terse; no # $(x) ~' "a b" '' it"'"s a=b`: {
+			Args: []string{"claude", "--append-system-prompt", "be terse; no # $(x) ~", "a b", "", "it's", "a=b"}},
+		`'FOO=bar' claude`:        {Args: []string{"FOO=bar", "claude"}}, // a quoted name is no assignment (as in sh)
+		`F"OO"=bar claude`:        {Args: []string{"FOO=bar", "claude"}},
+		`claude x]y a%b @c +d ,e`: {Args: []string{"claude", "x]y", "a%b", "@c", "+d", ",e"}},
+	} {
+		got, err := ParseMemberCommand(strings.TrimSpace(s))
+		require.NoError(t, err, s)
+		assert.Equal(t, want, got, s)
+	}
+	for _, s := range []string{
+		"claude #", "claude >/tmp/log #", "claude > /tmp/x", "claude; rm", "claude | tee", "claude $(x)", "claude &",
+		"claude *", "claude a?", "claude [x]", "claude {a,b}", "claude !x", "(claude)", "claude `x`", "claude $HOME",
+		"~/bin/claude", "claude --x=~/y", "claude a\\ b", "claude 'x", `claude "x`, `claude "$HOME"`, "claude \"`x`\"",
+		`claude "a\b"`, "claude <x", "FOO=bar", "FOO=bar ''", "'' --x",
+		"", " claude", "claude ", "claude\nrm", "a\xffb", strings.Repeat("a", 513),
+	} {
+		_, err := ParseMemberCommand(s)
+		assert.Error(t, err, s)
 	}
 }
 
