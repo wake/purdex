@@ -12,7 +12,7 @@ import (
 // The read slot (spec 2026-10-08 §3.1, #1866).
 //
 // Every nex read whose result reaches a client goes through one module-wide
-// slot: the projector's single-row reads (PR1b), each list page the list
+// slot: the projector's single-row reads (projector.go), each list page the list
 // wrapper serves (listwrap.go), and the safety reconcile's pages (PR1c). A
 // read that succeeded is stamped, inside the slot, with ver — a counter that
 // never resets within the process. Because no read can straddle another,
@@ -50,8 +50,8 @@ var errSlotBusy = errors.New("nex read slot busy")
 //   - Ver orders this read against every other stamped read (rule V);
 //   - Bseq is the broadcast high-water mark at that moment: every delta with
 //     bseq ≤ Bseq was enqueued before this read finished (§8 R3-1, the SPA
-//     reconcile waits for them before judging a mismatch). It stays 0 until
-//     PR1b starts broadcasting.
+//     reconcile waits for them before judging a mismatch). The projector
+//     advances it, inside the slot, with every delta it broadcasts.
 //
 // The JSON tags are the list wrapper's "pdx" object; no omitempty, so a
 // zero bseq is spelled out rather than lost (the §3.5 hello lesson).
@@ -75,7 +75,7 @@ type readSlot struct {
 	// operations order every access, so they need no lock of their own.
 	epoch string
 	ver   uint64 // never resets within the process (rule V)
-	bseq  uint64 // broadcast high-water mark; PR1b advances it inside the slot
+	bseq  uint64 // broadcast high-water mark; the projector advances it (nextBseq)
 
 	logf      func(string, ...any)
 	now       func() time.Time // time.Now in production; test seam
@@ -164,6 +164,19 @@ func (s *readSlot) release() { <-s.sem }
 // measured up to the release and logged after it, so logging never extends
 // the hold.
 func (s *readSlot) read(ctx context.Context, who string, maxWait time.Duration, fn func(context.Context) error) (slotStamp, error) {
+	return s.readThen(ctx, who, maxWait, fn, nil)
+}
+
+// readThen is read with one more step inside the same hold: once fn has
+// succeeded and its ver was taken, then (when non-nil) runs with that
+// stamp, before the slot is released. It is how the projector numbers and
+// sends a delta (spec §3.3, §3.5): it takes the next bseq (nextBseq) and
+// broadcasts while still holding the slot, so broadcast order is bseq order
+// and every stamp taken later carries a high-water mark that includes it.
+// then never runs for a read that failed or never got the slot — such a
+// read consumes neither ver nor bseq. The hold measured and logged covers
+// then too: it held the slot all the same.
+func (s *readSlot) readThen(ctx context.Context, who string, maxWait time.Duration, fn func(context.Context) error, then func(slotStamp)) (slotStamp, error) {
 	start := s.now()
 	err := s.acquire(ctx, maxWait)
 	acquired := s.now()
@@ -181,7 +194,26 @@ func (s *readSlot) read(ctx context.Context, who string, maxWait time.Duration, 
 		return slotStamp{}, err
 	}
 	s.ver++
-	return slotStamp{Epoch: s.epoch, Ver: s.ver, Bseq: s.bseq}, nil
+	st := slotStamp{Epoch: s.epoch, Ver: s.ver, Bseq: s.bseq}
+	if then != nil {
+		then(st)
+	}
+	return st, nil
+}
+
+// nextBseq consumes the next broadcast sequence number. Only a holder of the
+// slot may call it — in practice readThen's then, right before the
+// broadcast it numbers — so bseq stays contiguous and in broadcast order
+// (§3.5).
+//
+// bseq would rotate the epoch at 2^53−1 (§3.5, as the session module's seq
+// does), but a rotation is a new epoch every client must be told about with
+// a hello to all — the same broadcast PR1c's resubscribe adds (§3.6). At a
+// million deltas a second that is 285 years away, so the rotation lands
+// with it. TODO(PR1c): rotate here once the epoch-start hello exists.
+func (s *readSlot) nextBseq() uint64 {
+	s.bseq++
+	return s.bseq
 }
 
 // noteWait records a wait for the slot and logs it when it ran past the
