@@ -2195,11 +2195,15 @@ func TestHandleEvent_ProxyBroadcastCarriesIsProxyTrue(t *testing.T) {
 	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
 	m.registry.Register(&fakeAgentProvider{
 		typeName: "cc",
-		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
 	})
 	m.registry.Register(&fakeAgentProvider{
 		typeName: "codex",
-		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
 	})
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
@@ -2296,7 +2300,9 @@ func rebuildIntegrationModule(t *testing.T) *Module {
 	m.prober = probe.New(fakeTmux)
 	m.registry.Register(&fakeAgentProvider{
 		typeName: "cc",
-		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
 	})
 	return m
 }
