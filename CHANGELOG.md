@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.586] - 2026-10-08
+
+> 動 daemon 與 `pdx` 指令，**需要部署新 binary 並重啟**（不需要重跑 `pdx setup`，mod 沒有改動）。daemon 的 team.db 新增 `teams`、`team_members` 兩張表（`CREATE TABLE IF NOT EXISTS`，不改既有表；舊版 binary 會忽略它們）。使用者可見的變化：核准 lead 申請後真的建立 team；同一個 lead 不能再開第二個 team；team 的 member 不能自我接力。還不能 spawn member（P4-5 起）。
+
+### Added：lead / member / team 與 context 接力 — P4-1～P4-3（#1849、#1854、#1855、#1859、#1860）
+
+- **team 的建立與結束**：核准 lead 申請時，在同一筆交易裡建立 team（使用者在對話框改過的 member 上限與根目錄為準）。lead 的對話結束時 team 跟著結束；lead 自我接力時 team 跟著新的對話走，不會結束。daemon 重啟後 30 秒內不判斷，判斷 lead 是否還在一律以 lead 自己的程序為準，無法確認時保留 team。
+- **角色規則**：已是 lead 的對話再申請 → `already_lead`；team 的 member 申請 lead → `member_cannot_lead`（申請時與核准時都檢查）。**member 不能自我接力**：member 的 relay hello 一律回 `self_relay=off`，申請一律回 `member_relay_is_leads`；已開著的自我接力申請，若對話在核准前成為 member，核准時會在同一筆交易裡取消。
+- **`pdx lead request`**：核准後輸出包含 `team_id`。
+- wire 契約（team、member、spawn、kill）與 U20 的 `--model`／`--effort` 驗證規則先行定義，供 P4-4 起的 spawn 使用。
+
+### 追蹤
+- #1856（殘留的壞 registry 檔可能讓 team 不結束）、#1857（其他路徑仍把無法確認當成不在）。
+
 ## [1.0.0-alpha.585] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。
