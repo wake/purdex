@@ -82,10 +82,45 @@ type conversationsResponse struct {
 	Conversations []conversationRow `json:"conversations"`        // ≤ conversationRowCap, newest first
 }
 
+// conversationScope is the endpoint's ?scope=: which rows by cwd. A "test"
+// conversation lives at or under /tmp (conversations.IsTestCwd).
+type conversationScope string
+
+const (
+	scopeAll    conversationScope = "all" // the default; every row
+	scopeTest   conversationScope = "test"
+	scopeNormal conversationScope = "normal"
+)
+
+// filterRowsByScope returns the rows of scope as a newly allocated slice;
+// rows (the snapshot's) is only read.
+func filterRowsByScope(rows []conversationRow, scope conversationScope) []conversationRow {
+	out := make([]conversationRow, 0, len(rows))
+	for _, r := range rows {
+		if conversations.IsTestCwd(r.Cwd) == (scope == scopeTest) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // WithConversationIndex wires the conversation index; nil keeps the feature
 // off (the endpoint answers 503). Returns m.
 func (m *Module) WithConversationIndex(idx conversations.Index) *Module {
 	m.convIdx = idx
+	return m
+}
+
+// ConversationNameReader reads the registry names recorded for conversations
+// (store.ConversationNameStore).
+type ConversationNameReader interface {
+	All(ctx context.Context) (map[string]string, error)
+}
+
+// WithConversationNames wires the registry-name reader the title fallback
+// uses; nil (the default) means no names. Returns m.
+func (m *Module) WithConversationNames(r ConversationNameReader) *Module {
+	m.convNames = r
 	return m
 }
 
@@ -147,6 +182,14 @@ func (m *Module) handleConversations(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusBadRequest, "bad_state", `state must be "ended" or "gone"`, nil)
 		return
 	}
+	scope := conversationScope(r.URL.Query().Get("scope"))
+	if scope == "" {
+		scope = scopeAll
+	}
+	if scope != scopeAll && scope != scopeTest && scope != scopeNormal {
+		writeHandoffError(w, http.StatusBadRequest, "bad_scope", `scope must be "test", "normal" or "all"`, nil)
+		return
+	}
 	if why := m.conversationsUnavailable(); why != "" {
 		writeHandoffError(w, http.StatusServiceUnavailable, "conversations_unavailable", why, nil)
 		return
@@ -160,6 +203,17 @@ func (m *Module) handleConversations(w http.ResponseWriter, r *http.Request) {
 	if state == conversationGone {
 		rows = snap.res.Gone
 	}
+	unknown := snap.res.UnknownOwner
+	if scope != scopeAll {
+		// The snapshot is shared across requests: filter into a new slice.
+		rows = filterRowsByScope(rows, scope)
+		unknown = 0
+		for _, cwd := range snap.res.UnknownOwnerCwds {
+			if conversations.IsTestCwd(cwd) == (scope == scopeTest) {
+				unknown++
+			}
+		}
+	}
 	total := len(rows)
 	if total > conversationRowCap {
 		rows = rows[:conversationRowCap]
@@ -171,7 +225,7 @@ func (m *Module) handleConversations(w http.ResponseWriter, r *http.Request) {
 		Home:          m.convHome,
 		Total:         total,
 		Truncated:     total > conversationRowCap,
-		UnknownOwner:  snap.res.UnknownOwner,
+		UnknownOwner:  unknown,
 		Conversations: rows,
 	})
 }
@@ -274,6 +328,15 @@ func (m *Module) collectConversations(ctx context.Context) (snap *convSnapshot, 
 	if err != nil {
 		return nil, fmt.Errorf("reading the conversation index: %w", err)
 	}
+	// Names are only a title fallback: a failure logs and lists without them.
+	var names map[string]string
+	if m.convNames != nil {
+		var nerr error
+		if names, nerr = m.convNames.All(ctx); nerr != nil {
+			m.logf("nex: conversations: reading registry names: %v", nerr)
+			names = nil
+		}
+	}
 	execs, err := m.listAllExecutions(ctx)
 	if err != nil {
 		return nil, err
@@ -289,6 +352,7 @@ func (m *Module) collectConversations(ctx context.Context) (snap *convSnapshot, 
 		IndexRows: rows,
 		Scan:      scan,
 		Execs:     execs,
+		Names:     names,
 		Terminals: terms,
 		IsRegular: m.convIsRegular,
 		DirExists: m.convDirExists,

@@ -1,0 +1,16 @@
+[
+  {"cwd": "/tmp/x", "want": true},
+  {"cwd": "/tmp", "want": true},
+  {"cwd": "/private/tmp", "want": true},
+  {"cwd": "/private/tmp/a/b", "want": true},
+  {"cwd": "/private/tmpfoo", "want": false},
+  {"cwd": "/tmpfoo", "want": false},
+  {"cwd": "/private/tmp/a/../../etc", "want": false},
+  {"cwd": "/private/tmp/../tmp/x", "want": true},
+  {"cwd": "", "want": false},
+  {"cwd": "/var/folders/ab/T/x", "want": false},
+  {"cwd": "/Users/w/tmp", "want": false},
+  {"cwd": "tmp/x", "want": false},
+  {"cwd": "/tmp/", "want": true},
+  {"cwd": "/tmp//x", "want": true}
+]

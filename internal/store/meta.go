@@ -141,7 +141,10 @@ func migrateMetaDB(db *sql.DB) error {
 		return err
 	}
 
-	return migrateConversationIndex(db)
+	if err := migrateConversationIndex(db); err != nil {
+		return err
+	}
+	return migrateConversationNames(db)
 }
 
 // dropPeerLabelsLabelUnique removes the UNIQUE on peer_labels.label from a

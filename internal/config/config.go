@@ -274,6 +274,12 @@ type Config struct {
 	Dev          DevConfig      `toml:"dev"            json:"dev"`
 	Peers        PeersConfig    `toml:"peers"          json:"peers"`
 	Nex          NexConfig      `toml:"nex"            json:"nex"`
+
+	// Path is the file Load read (or would have read: a missing file still
+	// sets it), so a caller can name this daemon's config to a child — the
+	// Claude Code mod passes it as `pdx relay --config`. Runtime only: it is
+	// never encoded to config.toml nor to the JSON view.
+	Path string `toml:"-" json:"-"`
 }
 
 func defaults() Config {
@@ -303,6 +309,12 @@ func Load(path string) (Config, error) {
 
 	if path == "" {
 		path = filepath.Join(cfg.DataDir, "config.toml")
+	}
+	// Absolute, so a child started in another cwd (the mod's `pdx relay
+	// --config`) still names this file.
+	cfg.Path = path
+	if abs, err := filepath.Abs(path); err == nil {
+		cfg.Path = abs
 	}
 
 	data, err := os.ReadFile(path)

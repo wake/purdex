@@ -1,0 +1,6 @@
+{
+  "name": "purdex",
+  "version": "1.0.0",
+  "description": "Purdex mod: context relay for this session (self relay with approval, member relay on the lead's order) and the pdx-team skill.",
+  "author": { "name": "Purdex", "url": "https://github.com/wake/purdex" }
+}

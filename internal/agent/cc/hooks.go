@@ -2,30 +2,127 @@ package cc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/buildinfo"
+	"github.com/wake/purdex/internal/config"
 )
 
 const ccHooksSupportedVersion = "2.1.114"
 
+// The two settings.json writers InstallHooks and RemoveHooks run; tests
+// swap them to fail one step.
+var (
+	mergeHooksFn = mergeClaudeHooks
+	mergeEnvFn   = mergePluginDirs
+)
+
+// InstallHooks runs plugin extraction → plugin env → hooks, so a failure
+// never leaves hooks installed without their plugin; a failed hooks write
+// takes the env entry back out before returning its error.
 func (p *Provider) InstallHooks(pdxPath string) error {
 	settingsPath, err := ccSettingsPath()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return mergeClaudeHooks(settingsPath, pdxPath, false)
+	// The env value as it was, so a failed hooks write puts back exactly that
+	// (critic on PR #1752): a still-working entry of an older install must not
+	// be lost because this install failed half way.
+	prevDirs, prevPresent, snapErr := readPluginDirs(settingsPath)
+	root, err := p.installPlugin(settingsPath, pdxPath)
+	if err != nil {
+		return err
+	}
+	if err := mergeHooksFn(settingsPath, pdxPath, false); err != nil {
+		if root != "" {
+			var rerr error
+			if snapErr == nil {
+				rerr = restorePluginDirs(settingsPath, prevDirs, prevPresent)
+			} else {
+				rerr = mergeEnvFn(settingsPath, root, true)
+			}
+			if rerr != nil {
+				return errors.Join(err, fmt.Errorf("undo plugin env: %w", rerr))
+			}
+		}
+		return err
+	}
+	return nil
 }
 
+// RemoveHooks tries all three steps (hooks, plugin env, plugin dir) even
+// when one fails, and returns their errors joined.
 func (p *Provider) RemoveHooks(pdxPath string) error {
 	settingsPath, err := ccSettingsPath()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return mergeClaudeHooks(settingsPath, pdxPath, true)
+	hooksErr := mergeHooksFn(settingsPath, pdxPath, true)
+	return errors.Join(hooksErr, p.removePlugin(settingsPath))
+}
+
+// installTarget is the data dir and config file the plugin is installed
+// for: the daemon's when the provider has a config (the daemon's own
+// provider, module.go:242), else the default config's
+// ($HOME/.config/pdx[/config.toml]) — the case of `pdx setup` without a
+// daemon (cmd/pdx/setup.go:114 builds the provider with nil deps).
+func (p *Provider) installTarget() (dataDir, cfgPath string) {
+	if p.cfg != nil {
+		if p.cfgMu != nil {
+			p.cfgMu.RLock()
+		}
+		dataDir, cfgPath = p.cfg.DataDir, p.cfg.Path
+		if p.cfgMu != nil {
+			p.cfgMu.RUnlock()
+		}
+	}
+	if dataDir == "" || cfgPath == "" {
+		def, _ := config.Load("")
+		if dataDir == "" {
+			dataDir = def.DataDir
+		}
+		if cfgPath == "" {
+			cfgPath = def.Path
+		}
+	}
+	return dataDir, cfgPath
+}
+
+func (p *Provider) dataDir() string {
+	dataDir, _ := p.installTarget()
+	return dataDir
+}
+
+// installPlugin extracts the embedded plugin (spec §5 "Shipping") and names
+// it in settings.json env, returning the root it named. Without an embedded
+// tree it does nothing and returns "", so the hook installer's own tests are
+// unaffected.
+func (p *Provider) installPlugin(settingsPath, pdxPath string) (string, error) {
+	if PluginSource == nil {
+		return "", nil
+	}
+	dataDir, cfgPath := p.installTarget()
+	root, _, err := ExtractPlugin(PluginSource, dataDir, buildinfo.Version, pdxPath, cfgPath)
+	if err != nil {
+		return "", fmt.Errorf("extract plugin: %w", err)
+	}
+	if err := mergeEnvFn(settingsPath, root, false); err != nil {
+		return "", err
+	}
+	return root, nil
+}
+
+// removePlugin takes the plugin out of settings.json env and deletes the
+// extracted folder; both are tried, the errors joined.
+func (p *Provider) removePlugin(settingsPath string) error {
+	dataDir := p.dataDir()
+	envErr := mergeEnvFn(settingsPath, PluginRoot(dataDir), true)
+	return errors.Join(envErr, RemovePluginDir(dataDir))
 }
 
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {
@@ -85,6 +182,15 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			allInstalled = false
 		}
 	}
+	// With a plugin to ship, the hooks alone are not "installed": a user who
+	// installed before the plugin existed (or before this version's) must
+	// see Install again, or the mod never reaches their sessions.
+	if PluginSource != nil {
+		if issue := pluginIssue(settings, p.dataDir()); issue != "" {
+			issues = append(issues, issue)
+			allInstalled = false
+		}
+	}
 	managed := ccHooksManaged(hooks, allSpecs)
 	return agent.HookStatus{
 		Installed:         allInstalled,
@@ -96,6 +202,39 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		SupportedVersion:  ccHooksSupportedVersion,
 		ExceedsSupport:    agent.CompareHookAgentVersions(agentVersion, ccHooksSupportedVersion) > 0,
 	}, nil
+}
+
+// pluginIssue says why the Purdex plugin is not usable as installed, or ""
+// when it is: settings env CLAUDE_CODE_PLUGIN_DIRS must name
+// PluginRoot(dataDir), and the tree there must hold hooks/register.js and a
+// VERSION equal to this binary's (a dev build, "unknown", accepts any).
+func pluginIssue(settings map[string]any, dataDir string) string {
+	const notInstalled = "Purdex plugin not installed"
+	root := PluginRoot(dataDir)
+	env, _ := settings["env"].(map[string]any)
+	dirs, _ := env[pluginDirsEnv].(string)
+	listed := false
+	for _, d := range strings.Split(dirs, string(os.PathListSeparator)) {
+		if d != "" && filepath.Clean(d) == root {
+			listed = true
+			break
+		}
+	}
+	if !listed {
+		return notInstalled
+	}
+	if _, err := os.Stat(filepath.Join(root, "hooks", "register.js")); err != nil {
+		return notInstalled
+	}
+	b, err := os.ReadFile(filepath.Join(root, "VERSION"))
+	if err != nil {
+		return notInstalled
+	}
+	got, want := strings.TrimSpace(string(b)), buildinfo.Version
+	if want != "" && want != "unknown" && got != want {
+		return fmt.Sprintf("Purdex plugin outdated (installed %s, want %s)", got, want)
+	}
+	return ""
 }
 
 // ccHooksManaged reports whether settings.json has any pdx-owned hook

@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
+
+	agentcc "github.com/wake/purdex/internal/agent/cc"
 )
 
 func TestLocalSetup(t *testing.T) {
@@ -32,6 +35,42 @@ func TestLocalSetup(t *testing.T) {
 		}
 		if _, ok := settings["hooks"]; !ok {
 			t.Fatal("settings.json missing 'hooks' key")
+		}
+	})
+
+	t.Run("cc install extracts the plugin under $HOME/.config/pdx and names it in env", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		t.Setenv("HOME", tmpHome)
+		old := agentcc.PluginSource
+		agentcc.PluginSource = fstest.MapFS{
+			".claude-plugin/plugin.json": {Data: []byte(`{"name":"purdex","version":"0"}`)},
+			"hooks/hooks.json":           {Data: []byte(`{"modules":["./register.js"]}`)},
+			"hooks/register.js":          {Data: []byte("export function register() {}")},
+		}
+		t.Cleanup(func() { agentcc.PluginSource = old })
+
+		if err := localSetup("cc", false); err != nil {
+			t.Fatalf("localSetup cc install: %v", err)
+		}
+		root := filepath.Join(tmpHome, ".config", "pdx", "cc-plugin", "purdex")
+		if _, err := os.Stat(filepath.Join(root, "VERSION")); err != nil {
+			t.Fatalf("VERSION: %v", err)
+		}
+		data, _ := os.ReadFile(filepath.Join(tmpHome, ".claude", "settings.json"))
+		var settings map[string]any
+		if err := json.Unmarshal(data, &settings); err != nil {
+			t.Fatal(err)
+		}
+		env, _ := settings["env"].(map[string]any)
+		if env["CLAUDE_CODE_PLUGIN_DIRS"] != root {
+			t.Fatalf("CLAUDE_CODE_PLUGIN_DIRS = %v, want %s", env["CLAUDE_CODE_PLUGIN_DIRS"], root)
+		}
+
+		if err := localSetup("cc", true); err != nil {
+			t.Fatalf("localSetup cc remove: %v", err)
+		}
+		if _, err := os.Stat(root); !os.IsNotExist(err) {
+			t.Fatal("remove must delete the extracted plugin")
 		}
 	})
 

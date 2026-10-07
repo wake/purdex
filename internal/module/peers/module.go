@@ -252,6 +252,10 @@ type Module struct {
 	// guarding it. Zero value is ready to use.
 	warnedVersions sync.Map
 
+	// names records registry names for the conversation list (names.go);
+	// inert until WithNameSink wires a sink.
+	names *nameWriter
+
 	// putHostAfterSnapshot is a test seam: called by handlePutHost right
 	// after its pre-lock snapshot, so a test can force a concurrent
 	// mutation into that window. No-op in production.
@@ -291,6 +295,7 @@ func New(audit AuditStore, titles TitleStore) *Module {
 		replySem:             make(chan struct{}, replyWorkerCap),
 		putHostAfterSnapshot: func() {},
 	}
+	m.names = newNameWriter()
 	m.dedup = newDedupSet(ipeers.DedupWindow, m.now)
 	m.pairs = newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, m.now)
 	m.hostLimit = newHostLimiter(ipeers.HostRateLimit, ipeers.HostRateWindow, m.now)
@@ -653,6 +658,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		return writeError(err.Error())
 	}
 	m.warnNewerCCVersions(entries)
+	m.observeNames(entries)
 
 	summaries := make([]ipeers.SessionSummary, 0, len(sessions))
 	owners := make(map[string]ipeers.Owner, len(sessions))
