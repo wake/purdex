@@ -744,8 +744,9 @@ func TestDaemonRestartRequiresHostToken(t *testing.T) {
 	}
 }
 
-// PUT /api/hostconfig/team (R2 note) through the daemon's outer chain with the
-// real hostconfig routes: only the admin token reaches the handler. A peer
+// PUT /api/hostconfig/team (R2 note) and PUT /api/hostconfig/relay with a
+// prompt body (spec §8.8) through the daemon's outer chain with the real
+// hostconfig routes: only the admin token reaches the handler. A peer
 // host's token is refused like a wrong one (401): /api/hostconfig is on the
 // general chain, whose TokenAuth knows the admin token alone, so
 // HostRoutePolicy (403 on /api/peers/*) is never consulted. The refusals
@@ -761,18 +762,23 @@ func TestNewOuterHandler_HostConfigTeamPutIsAdminOnly(t *testing.T) {
 	mux := http.NewServeMux()
 	hc.RegisterRoutes(mux)
 	outer := newOuterHandler(c, mux, nil)
-	for _, tc := range []struct {
-		bearer string
-		want   int
-	}{{"host-a-token", 401}, {"wrong-token", 401}, {"", 401}, {"admin-secret", 200}} {
-		req := httptest.NewRequest(http.MethodPut, "/api/hostconfig/team", strings.NewReader(`{"items":{"member_command":"claude"},"baseRevision":0}`))
-		if tc.bearer != "" {
-			req.Header.Set("Authorization", "Bearer "+tc.bearer)
-		}
-		rec := httptest.NewRecorder()
-		outer.ServeHTTP(rec, req)
-		if rec.Code != tc.want {
-			t.Errorf("bearer %q: got %d %s, want %d", tc.bearer, rec.Code, rec.Body.String(), tc.want)
+	for path, body := range map[string]string{
+		"/api/hostconfig/team":  `{"items":{"member_command":"claude"},"baseRevision":0}`,
+		"/api/hostconfig/relay": `{"items":{"self_solo":true,"self_lead":true,"prompt_write":"寫接力檔 {{path}}"},"baseRevision":0}`,
+	} {
+		for _, tc := range []struct {
+			bearer string
+			want   int
+		}{{"host-a-token", 401}, {"wrong-token", 401}, {"", 401}, {"admin-secret", 200}} {
+			req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+			if tc.bearer != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.bearer)
+			}
+			rec := httptest.NewRecorder()
+			outer.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Errorf("%s bearer %q: got %d %s, want %d", path, tc.bearer, rec.Code, rec.Body.String(), tc.want)
+			}
 		}
 	}
 }
