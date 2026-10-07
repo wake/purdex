@@ -26,6 +26,11 @@ import { compositeKey } from '../lib/composite-key'
 import type { PaneLayout } from '../types/tab'
 
 vi.mock('../lib/copy-text', () => ({ copyText: vi.fn(async () => {}) }))
+// The worker bar reads the host quota through `fetchNexHost`; no test here may reach a real network.
+vi.mock('../lib/nex/nex-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/nex/nex-api')>()
+  return { ...actual, fetchNexHost: vi.fn(async () => ({ active_account: 'a', quota: { five_hour_pct: 41, seven_day_pct: 72, resets_at: 0, source: 'usage_api' } })) }
+})
 const copyTextMock = vi.mocked(copyText)
 
 const HOST_ID = 'test-host'
@@ -255,6 +260,21 @@ describe('StatusBar agent label badge', () => {
     const badge = screen.getByTestId('agent-label')
     expect(badge.textContent).toBe('Claude Opus 4')
     expect(badge.className).toContain('border')
+  })
+
+  it('shows the pane session\'s context and limits from its statusLine snapshot, and nothing without one', () => {
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    render(<StatusBar activeTab={tab} />)
+    expect(screen.queryByTestId('status-seg-usage-context')).toBeNull()
+    act(() => {
+      useAgentStore.getState().setCcStatus(HOST_ID, 'dev001', {
+        context_window: { used_percentage: 36 },
+        rate_limits: { five_hour: { used_percentage: 25, resets_at: Date.now() / 1000 + 3600 }, seven_day: { used_percentage: 73, resets_at: Date.now() / 1000 + 86400 } },
+      })
+    })
+    expect(screen.getByTestId('status-seg-usage-context').textContent).toBe('ctx 36%')
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('5h 25%')
+    expect(screen.getByTestId('status-seg-usage-seven-day').textContent).toBe('7d 73%')
   })
 
   it('reactively shows badge when models updates after mount', async () => {
@@ -910,6 +930,14 @@ describe('StatusBar status target pane', () => {
     expect(screen.getByTestId('status-seg-host').textContent).toBe('mlab')
     // The agent decorations read the target as well, not the primary (editor) pane.
     expect(screen.getByTestId('agent-label').textContent).toBe('Claude Opus 4')
+  })
+
+  it('a worker pane shows the host quota, and a terminal beside it does not leak ccStatus into it', async () => {
+    render(<StatusBar activeTab={splitTab('t1', { id: 'term', content: plainTerminal }, { id: 'w', content: workerContent })} />)
+    await act(async () => {})
+    expect(screen.getByTestId('status-seg-quota-five-hour').textContent).toBe('5h 41%')
+    expect(screen.getByTestId('status-seg-quota-seven-day').textContent).toBe('7d 72%')
+    expect(screen.queryByTestId('status-seg-usage-context')).toBeNull()
   })
 
   it('D.4-1: worker + plain terminal → after a pointerdown on the plain terminal the bar still shows the worker', () => {
