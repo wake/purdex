@@ -7,6 +7,7 @@ import { useNexHostStore } from '../stores/useNexHostStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useExecutionStore } from '../stores/useExecutionStore'
 import { NexApiError } from '../lib/nex/types'
+import { clearAllPermissionCards, isPermissionCardClosed, permissionCardKey } from '../lib/nex/permission-card-memory'
 import * as api from '../lib/nex/nex-api'
 
 vi.mock('../lib/nex/nex-api', () => ({
@@ -34,6 +35,8 @@ describe('usePermissionAnswer', () => {
     touch.mockReset()
     vi.mocked(api.answerPermission).mockReset().mockResolvedValue({ request_id: 'req_a', outcome: 'allowed' })
     useNexHostStore.setState({ byHost: { [H]: { phase: 'ready', capabilities: caps } } as never })
+    // "Closed by this pane" lives in module memory now (A2): one test's close must not seed the next.
+    clearAllPermissionCards()
   })
 
   it('allow: ensureLease, then exactly one answer with the pane lease and the host capabilities; the request closes', async () => {
@@ -61,10 +64,11 @@ describe('usePermissionAnswer', () => {
     const { result } = render()
     await act(async () => { await result.current.answer(req, 'deny', '  不要動 prod ') })
     expect(vi.mocked(api.answerPermission).mock.calls[0][3]).toEqual({ decision: 'deny', message: '不要動 prod', leaseId: 'ls_1' })
-    for (const note of [undefined, '', '   ']) {
+    // One request per note: a request this pane closed is never answered again, not even by a fresh hook (A2).
+    for (const [i, note] of [undefined, '', '   '].entries()) {
       vi.mocked(api.answerPermission).mockClear()
       const other = render()
-      await act(async () => { await other.result.current.answer({ requestId: 'req_b' }, 'deny', note) })
+      await act(async () => { await other.result.current.answer({ requestId: `req_b${i}` }, 'deny', note) })
       expect(vi.mocked(api.answerPermission).mock.calls[0][3]).toEqual({ decision: 'deny', leaseId: 'ls_1' })
     }
   })
@@ -176,6 +180,34 @@ describe('usePermissionAnswer', () => {
     await act(async () => { await result.current.answer(req, 'deny') })
     expect(api.answerPermission).toHaveBeenCalledTimes(1)
   })
+
+  // A2: the pane unmounts on a tab switch; the hook that comes back must still know what it closed.
+  it.each([
+    ['answered', () => vi.mocked(api.answerPermission).mockResolvedValueOnce({ request_id: 'req_a', outcome: 'allowed' })],
+    ['found already ended (409)', () => vi.mocked(api.answerPermission).mockRejectedValueOnce(err(409, 'permission_not_pending'))],
+  ])('a request %s before a remount stays closed in the remounted hook and is never answered again', async (_label, arrange) => {
+    arrange()
+    const first = render()
+    await act(async () => { await first.result.current.answer(req, 'allow') })
+    first.unmount()
+    const second = render()
+    expect(second.result.current.closed.has('req_a')).toBe(true)
+    await act(async () => { await second.result.current.answer(req, 'deny') })
+    expect(api.answerPermission).toHaveBeenCalledTimes(1)
+    expect(isPermissionCardClosed(permissionCardKey(H, E, 'req_a'))).toBe(true)
+  })
+
+  it('a close is this execution\'s and this host\'s only: the same request id elsewhere is still answered', async () => {
+    const first = render()
+    await act(async () => { await first.result.current.answer(req, 'allow') })
+    useNexHostStore.setState({ byHost: { [H]: { phase: 'ready', capabilities: caps }, h2: { phase: 'ready', capabilities: caps } } as never })
+    for (const [h, e] of [[H, 'exc_2'], ['h2', E]] as const) {
+      const other = renderHook(() => usePermissionAnswer(h, e, lease))
+      expect(other.result.current.closed.has('req_a')).toBe(false)
+      await act(async () => { await other.result.current.answer(req, 'allow') })
+    }
+    expect(vi.mocked(api.answerPermission).mock.calls.map((c) => [c[0], c[1], c[2]])).toEqual([[H, E, 'req_a'], [H, 'exc_2', 'req_a'], ['h2', E, 'req_a']])
+  })
 })
 
 describe('usePermissionAnswer with the real lease (hold)', () => {
@@ -190,6 +222,7 @@ describe('usePermissionAnswer with the real lease (hold)', () => {
     vi.mocked(api.renewLease).mockReset().mockImplementation(async () => ({ mode: 'control', lease_id: 'ls_1', expires_at: Date.now() + 30_000 }))
     vi.mocked(api.releaseLease).mockReset().mockResolvedValue(undefined)
     vi.mocked(api.answerPermission).mockReset().mockResolvedValue({ request_id: 'req_a', outcome: 'allowed' })
+    clearAllPermissionCards()
   })
   afterEach(() => { vi.useRealTimers() })
 

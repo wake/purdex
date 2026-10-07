@@ -193,15 +193,15 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   const onTextChange = useCallback((text: string) => { draftText.current = text; writeWorkerDraft(draftKey, text) }, [draftKey])
   const workerEnded = !!st.summary && !!workerEndedKind(st.summary)
   useEffect(() => { if (workerEnded) forgetWorkerDraft(draftKey) }, [workerEnded, draftKey])
-  // The request card's note / open / expanded outlive a tab switch the same way (permission-card-memory). A
-  // request that no longer waits here — this pane answered it, or it resolved, was cancelled or expired — drops
-  // its entry, and an ended worker drops them all. Only once the history is in: before that the table may not
-  // have replayed a request yet.
-  const permissionClosed = permission.closed
+  // The request card's note / open / expanded outlive a tab switch the same way (permission-card-memory), and so
+  // does "this pane closed it" (an answer whose resolution has not arrived yet — closing drops the draft itself).
+  // One rule drops both: a request the store no longer lists as pending — resolved, cancelled, expired — and every
+  // request of an ended worker. Only once the history is in: before that the table may not have replayed a request
+  // yet, and a closed request dropped then would come back as a card when it does.
   useEffect(() => {
     if (workerEnded) prunePermissionCards(hostId, executionId)
-    else if (st.historyLoaded) prunePermissionCards(hostId, executionId, (id) => permissions[id]?.status === 'pending' && !permissionClosed.has(id))
-  }, [hostId, executionId, workerEnded, st.historyLoaded, permissions, permissionClosed])
+    else if (st.historyLoaded) prunePermissionCards(hostId, executionId, (id) => permissions[id]?.status === 'pending')
+  }, [hostId, executionId, workerEnded, st.historyLoaded, permissions])
   const getDraftText = useCallback(() => draftText.current, [])
   // Spec §9.1: attachments. The chips live here, not in WorkerInput — the
   // input is re-keyed on the restored draft and remounts after a failed send —

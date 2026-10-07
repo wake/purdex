@@ -18,7 +18,8 @@ import { createTab } from '../../types/tab'
 import type { ExecutionViewMode, Tab } from '../../types/tab'
 import { readScrollMemo, forgetScrollMemo } from '../../lib/nex/transcript-scroll-memory'
 import { readWorkerDraft, forgetWorkerDraft } from '../../lib/nex/worker-draft-memory'
-import { clearAllPermissionCards, permissionCardCount, permissionCardKey, readPermissionCard, writePermissionCard } from '../../lib/nex/permission-card-memory'
+import { clearAllPermissionCards, isPermissionCardClosed, permissionCardCount, permissionCardKey, readPermissionCard, writePermissionCard } from '../../lib/nex/permission-card-memory'
+import { NexApiError } from '../../lib/nex/types'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
@@ -287,5 +288,140 @@ describe('the permission request card across tab switches', () => {
     act(() => { useExecutionStore.getState().setHistoryLoaded(H, E, true) })
     rerender(<TabContent activeTab={execTab} allTabs={all} />)
     expect(note().value).toBe('typed before the reload of history')
+  })
+
+  // A2 / spec §5.3: after an answer the card goes away — and stays away across the switch that remounts the pane,
+  // in the window where the answer succeeded but its `permission.resolved` has not arrived yet (the store still
+  // reads pending), until the store settles the request.
+  describe('a request this pane answered', () => {
+    const KEY_A = permissionCardKey(H, E, 'req_a')
+    const statusOf = (id: string, executionId = E) => useExecutionStore.getState().executions[`${H}:${executionId}`].permissions[id]?.status
+    const allow = async () => { await act(async () => { fireEvent.click(screen.getByTestId('permission-allow')) }) }
+    type Rerender = ReturnType<typeof render>['rerender']
+    const away = (rerender: Rerender) => {
+      rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+      expect(screen.queryByTestId('execution-view')).toBeNull()
+    }
+    const back = (rerender: Rerender) => {
+      rerender(<TabContent activeTab={execTab} allTabs={all} />)
+      expect(screen.getByTestId('execution-view')).toBeInTheDocument()
+    }
+    const answeredIds = () => vi.mocked(api.answerPermission).mock.calls.map((c) => c[2])
+
+    beforeEach(() => {
+      vi.mocked(api.answerPermission).mockReset().mockResolvedValue({ request_id: 'req_a', outcome: 'allowed' })
+    })
+
+    it('stays closed across a tab switch before its resolution arrives, and is not answered again', async () => {
+      const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
+      ask('req_a')
+      work('typed, then allowed instead')
+      await allow()
+      expect(answeredIds()).toEqual(['req_a'])
+      expect(screen.queryByTestId('permission-card')).toBeNull()
+      expect(statusOf('req_a')).toBe('pending')
+
+      away(rerender)
+      back(rerender)
+      expect(screen.queryByTestId('permission-card')).toBeNull()
+      expect(statusOf('req_a')).toBe('pending')
+      // A second round trip changes nothing, and nothing was sent again.
+      away(rerender)
+      back(rerender)
+      expect(screen.queryByTestId('permission-card')).toBeNull()
+      expect(answeredIds()).toEqual(['req_a'])
+      expect(isPermissionCardClosed(KEY_A)).toBe(true)
+      // The draft went with the answer.
+      expect(readPermissionCard(KEY_A).note).toBe('')
+    })
+
+    it('a 409 permission_not_pending close holds across the switch too', async () => {
+      vi.mocked(api.answerPermission).mockReset().mockRejectedValue(new NexApiError(409, 'permission_not_pending', 'gone'))
+      const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
+      ask('req_a')
+      await allow()
+      expect(screen.queryByTestId('permission-card')).toBeNull()
+      away(rerender)
+      back(rerender)
+      expect(screen.queryByTestId('permission-card')).toBeNull()
+      expect(answeredIds()).toEqual(['req_a'])
+    })
+
+    it.each([
+      ['resolved while the pane shows', 'shown'],
+      ['resolved while the pane is away', 'away'],
+    ] as const)('the closed mark is dropped once the request is %s', async (_label, when) => {
+      const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
+      ask('req_a')
+      await allow()
+      away(rerender)
+      if (when === 'shown') back(rerender)
+      expect(isPermissionCardClosed(KEY_A)).toBe(true)
+      apply(E, 'permission.resolved', { request_id: 'req_a', turn_id: 'trn_1', outcome: 'allowed' })
+      if (when === 'away') back(rerender)
+      expect(isPermissionCardClosed(KEY_A)).toBe(false)
+      expect(screen.queryByTestId('permission-card')).toBeNull()
+    })
+
+    it('the closed mark is dropped once the worker has ended', async () => {
+      const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
+      ask('req_a')
+      await allow()
+      away(rerender)
+      back(rerender)
+      expect(isPermissionCardClosed(KEY_A)).toBe(true)
+      act(() => { useExecutionStore.getState().applySummaryPatch(H, E, { state: 'terminated', archived: true }) })
+      rerender(<TabContent activeTab={execTab} allTabs={all} />)
+      expect(isPermissionCardClosed(KEY_A)).toBe(false)
+    })
+
+    it('another request is unaffected: the next one of this worker, and the same id of another worker', async () => {
+      const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
+      ask('req_a')
+      ask('req_b')
+      await allow()
+      expect(answeredIds()).toEqual(['req_a'])
+      // req_b is now the card on screen — before and after the switch — and it answers as itself.
+      expect(screen.getByTestId('permission-card')).toBeInTheDocument()
+      away(rerender)
+      back(rerender)
+      expect(screen.getByTestId('permission-card')).toBeInTheDocument()
+      vi.mocked(api.answerPermission).mockResolvedValueOnce({ request_id: 'req_b', outcome: 'allowed' })
+      await allow()
+      expect(answeredIds()).toEqual(['req_a', 'req_b'])
+
+      // Another worker whose request carries the same id as the one this pane closed.
+      const E2 = 'exc_2'
+      useExecutionStore.getState().setSummary(H, E2, { ...summary, id: E2, state: 'running', effective_profile: 'handoff_ask' } as never)
+      useExecutionStore.getState().setHistoryLoaded(H, E2, true)
+      const other: Tab = { ...createTab({ kind: 'execution', executionId: E2, host: H }), id: 't-exec2' }
+      rerender(<TabContent activeTab={other} allTabs={[...all, other]} />)
+      ask('req_a', E2)
+      expect(screen.getByTestId('permission-card')).toBeInTheDocument()
+      expect(isPermissionCardClosed(permissionCardKey(H, E2, 'req_a'))).toBe(false)
+    })
+
+    it('the closed mark is kept while a remount has not replayed the history yet', async () => {
+      const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
+      ask('req_a')
+      await allow()
+      away(rerender)
+      // The pane comes back to a store that reloads the history: the request is not in the table yet.
+      act(() => {
+        useExecutionStore.getState().clearExecution(H, E)
+        useExecutionStore.getState().setSummary(H, E, { ...summary, state: 'running', effective_profile: 'handoff_ask' } as never)
+      })
+      back(rerender)
+      expect(screen.getByTestId('execution-loading')).toBeInTheDocument()
+      expect(isPermissionCardClosed(KEY_A)).toBe(true)
+      ask('req_a')
+      act(() => { useExecutionStore.getState().setHistoryLoaded(H, E, true) })
+      expect(statusOf('req_a')).toBe('pending')
+      expect(screen.queryByTestId('permission-card')).toBeNull()
+      away(rerender)
+      back(rerender)
+      expect(screen.queryByTestId('permission-card')).toBeNull()
+      expect(answeredIds()).toEqual(['req_a'])
+    })
   })
 })

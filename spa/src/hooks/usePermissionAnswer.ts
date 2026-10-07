@@ -17,10 +17,16 @@
 //   the pane used a wrong one — shown and warned, a bug to surface.
 // - `lease_held` / `lease_abandoned` stay silent here, as for a send: the
 //   pane's lease notice already says who holds it.
+//
+// "Closed here" outlives the pane (A2): a tab switch right after an answer,
+// before its `permission.resolved` arrives, unmounts the pane while the store
+// still reads pending. The mark lives in `lib/nex/permission-card-memory`, read
+// on mount and on every answer; ExecutionView prunes it with the card drafts.
 import { useCallback, useRef, useState } from 'react'
 import { answerPermission } from '../lib/nex/nex-api'
 import { NexApiError } from '../lib/nex/types'
 import type { PermissionRequestState } from '../lib/nex/permissions'
+import { closePermissionCard, closedPermissionRequests, isPermissionCardClosed, permissionCardKey } from '../lib/nex/permission-card-memory'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import type { ExecutionLeaseApi } from './useExecutionLease'
 
@@ -58,21 +64,21 @@ export function usePermissionAnswer(
   const { ensureLease, forget, touch } = lease
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<PermissionAnswerError | undefined>(undefined)
-  const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set())
+  // The render copy of the memory's marks for this execution (the memory is not reactive). A mark the pane's
+  // pruning drops later may linger here; it only ever names a request the store no longer lists as pending, or
+  // one of a worker that has ended (whose pane is the ended screen, with no card).
+  const [closed, setClosed] = useState<ReadonlySet<string>>(() => closedPermissionRequests(hostId, executionId))
   // Same-tick guard: a double click reaches here twice before `busy` renders.
   const inFlight = useRef(false)
-  const closedRef = useRef(closed)
 
   const close = useCallback((requestId: string) => {
-    const next = new Set(closedRef.current)
-    next.add(requestId)
-    closedRef.current = next
-    setClosed(next)
-  }, [])
+    closePermissionCard(permissionCardKey(hostId, executionId, requestId))
+    setClosed(closedPermissionRequests(hostId, executionId))
+  }, [hostId, executionId])
 
   const answer = useCallback(async (req: Pick<PermissionRequestState, 'requestId'>, decision: 'allow' | 'deny', message?: string) => {
     const { requestId } = req
-    if (inFlight.current || closedRef.current.has(requestId)) return
+    if (inFlight.current || isPermissionCardClosed(permissionCardKey(hostId, executionId, requestId))) return
     inFlight.current = true
     setBusy(true)
     setError(undefined)

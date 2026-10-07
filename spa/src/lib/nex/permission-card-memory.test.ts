@@ -2,6 +2,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import {
   permissionCardKey, readPermissionCard, writePermissionCard, prunePermissionCards, permissionCardCount, clearAllPermissionCards,
+  closePermissionCard, isPermissionCardClosed, closedPermissionRequests,
 } from './permission-card-memory'
 
 afterEach(() => clearAllPermissionCards())
@@ -59,5 +60,48 @@ describe('permission-card-memory', () => {
     prunePermissionCards('h', 'exc_1')
     expect(permissionCardCount()).toBe(1)
     expect(readPermissionCard(permissionCardKey('h', 'exc_2', 'req_a')).note).toBe('stays')
+  })
+})
+
+// A2: "this pane closed the request" outlives the pane too, until the store stops listing it as pending.
+describe('permission-card-memory — requests closed by the pane', () => {
+  const A = permissionCardKey('h', 'exc_1', 'req_a')
+
+  it('closing marks the request closed and drops its draft at once', () => {
+    writePermissionCard(A, { note: 'no prod', noteOpen: true, expanded: true })
+    closePermissionCard(A)
+    expect(isPermissionCardClosed(A)).toBe(true)
+    expect(readPermissionCard(A)).toEqual({ note: '', noteOpen: false, expanded: false })
+    expect(permissionCardCount()).toBe(0)
+  })
+
+  it('lists the closed request ids of one execution only — not another request, execution or host', () => {
+    closePermissionCard(A)
+    closePermissionCard(permissionCardKey('h', 'exc_1', 'req_c'))
+    closePermissionCard(permissionCardKey('h', 'exc_2', 'req_b'))
+    closePermissionCard(permissionCardKey('h', 'exc_10', 'req_x'))
+    closePermissionCard(permissionCardKey('h2', 'exc_1', 'req_y'))
+    expect([...closedPermissionRequests('h', 'exc_1')].sort()).toEqual(['req_a', 'req_c'])
+    expect(isPermissionCardClosed(permissionCardKey('h', 'exc_1', 'req_b'))).toBe(false)
+    expect(isPermissionCardClosed(permissionCardKey('h', 'exc_2', 'req_a'))).toBe(false)
+    expect(isPermissionCardClosed(permissionCardKey('h2', 'exc_1', 'req_a'))).toBe(false)
+  })
+
+  it('prune drops a closed mark by the same rule as a draft: `keep` rejects it, or there is no `keep`', () => {
+    closePermissionCard(A)
+    closePermissionCard(permissionCardKey('h', 'exc_1', 'req_b'))
+    closePermissionCard(permissionCardKey('h', 'exc_2', 'req_a'))
+    prunePermissionCards('h', 'exc_1', (id) => id === 'req_b')
+    expect(isPermissionCardClosed(A)).toBe(false)
+    expect(isPermissionCardClosed(permissionCardKey('h', 'exc_1', 'req_b'))).toBe(true)
+    prunePermissionCards('h', 'exc_1')
+    expect(isPermissionCardClosed(permissionCardKey('h', 'exc_1', 'req_b'))).toBe(false)
+    expect(isPermissionCardClosed(permissionCardKey('h', 'exc_2', 'req_a'))).toBe(true)
+  })
+
+  it('clearAll forgets the closed marks too', () => {
+    closePermissionCard(A)
+    clearAllPermissionCards()
+    expect(isPermissionCardClosed(A)).toBe(false)
   })
 })
