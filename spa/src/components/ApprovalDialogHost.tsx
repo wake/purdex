@@ -92,9 +92,13 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   // Shown (on open, or restored from the pill): remember where the keyboard was, then take it. Minimized: give it back
   // to that element when it is still in the document, else drop it — a hidden panel must not keep the focus. A dialog
   // that mounts already minimized (the current request changed behind the pill) never took it, so it touches nothing.
+  // Focus already inside the dialog is never "where it was": StrictMode (the dev server the app loads) runs this effect
+  // twice, and the second run finds the panel focused by the first.
   useEffect(() => {
+    const inDialog = (el: Element | null) => el !== null && overlayRef.current?.contains(el) === true
     if (!minimized) {
-      focusBefore.current = { el: document.activeElement }
+      const active = document.activeElement
+      focusBefore.current = { el: inDialog(active) ? (focusBefore.current?.el ?? null) : active }
       panelRef.current?.focus()
       return
     }
@@ -102,12 +106,12 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
     focusBefore.current = null
     if (!took) return
     const back = took.el
-    if (back instanceof HTMLElement && back !== document.body && back.isConnected) {
+    if (back instanceof HTMLElement && back !== document.body && back.isConnected && !inDialog(back)) {
       back.focus()
       if (document.activeElement === back) return
     }
     const active = document.activeElement
-    if (active instanceof HTMLElement && overlayRef.current?.contains(active)) active.blur()
+    if (active instanceof HTMLElement && inDialog(active)) active.blur()
   }, [minimized])
 
   // Escape is swallowed, not handled: nothing dismisses this dialog, and nothing beneath it may be dismissed either

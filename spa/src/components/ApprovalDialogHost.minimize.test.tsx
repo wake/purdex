@@ -4,6 +4,7 @@
 // dialog took it. A new request updates N and flashes the pill but never expands it; only a click on the pill does.
 // The last close ends the minimize, so the next request opens the dialog. Both kinds, `lead` and `self_relay` (U22 (c)).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { StrictMode } from 'react'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { ApprovalDialogHost } from './ApprovalDialogHost'
 import { useApprovalStore } from '../stores/useApprovalStore'
@@ -113,6 +114,19 @@ describe('ApprovalDialogHost — 縮小 (U22 b)', () => {
     expect(fireEvent.keyDown(terminal(), { key: 'Tab' })).toBe(true)
     expect(fireEvent.keyDown(terminal(), { key: 'Tab', shiftKey: true })).toBe(true)
     expect(fireEvent.keyDown(terminal(), { key: 'Escape' })).toBe(true)
+    expect(document.activeElement).toBe(terminal())
+  })
+
+  it('under StrictMode (the dev server the app loads) focus still returns to the terminal, not to the hidden panel', () => {
+    render(<StrictMode><textarea data-testid="terminal" /><ApprovalDialogHost /></StrictMode>)
+    terminal().focus()
+    open('h1', request('lead', 'a', NOW, NOW + 500_000))
+    expect(document.activeElement).toBe(screen.getByTestId('approval-panel'))
+    minimize()
+    expect(document.activeElement).toBe(terminal())
+    fireEvent.click(pill()!)
+    expect(document.activeElement).toBe(screen.getByTestId('approval-panel'))
+    minimize()
     expect(document.activeElement).toBe(terminal())
   })
 
