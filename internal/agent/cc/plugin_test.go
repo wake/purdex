@@ -2,6 +2,7 @@ package cc
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -477,4 +478,119 @@ func TestInstallHooks_PdxJSONNamesTheInstallingConfig(t *testing.T) {
 	if got, want := readPdxJSON(t, defDataDir)["config"], filepath.Join(defDataDir, "config.toml"); got != want {
 		t.Fatalf("no-config provider: pdx.json config = %q, want %q", got, want)
 	}
+}
+
+// failHooks / failEnv swap a settings.json writer for one that fails when
+// remove == onRemove (restored at cleanup), to break one step.
+func failHooks(t *testing.T, onRemove bool) {
+	t.Helper()
+	old := mergeHooksFn
+	t.Cleanup(func() { mergeHooksFn = old })
+	mergeHooksFn = func(path, pdxPath string, remove bool) error {
+		if remove == onRemove {
+			return errors.New("injected hooks write failure")
+		}
+		return old(path, pdxPath, remove)
+	}
+}
+
+func failEnv(t *testing.T, onRemove bool) {
+	t.Helper()
+	old := mergeEnvFn
+	t.Cleanup(func() { mergeEnvFn = old })
+	mergeEnvFn = func(path, root string, remove bool) error {
+		if remove == onRemove {
+			return errors.New("injected env write failure")
+		}
+		return old(path, root, remove)
+	}
+}
+
+func hasPdxHook(t *testing.T, settingsPath string) bool {
+	t.Helper()
+	b, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return false
+	}
+	var s map[string]any
+	if err := json.Unmarshal(b, &s); err != nil {
+		t.Fatal(err)
+	}
+	hooks, _ := s["hooks"].(map[string]any)
+	for _, entries := range hooks {
+		for _, e := range toEntrySlice(entries) {
+			if entryIsPdx(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Attacker high: install is plugin → env → hooks, and a failed hooks write
+// takes the env entry back out, so a failure never leaves the plugin named
+// without its hooks (nor the hooks without the plugin).
+func TestInstallHooks_PartialFailureLeavesNoHalfInstall(t *testing.T) {
+	t.Run("hooks write fails: env is taken back out, other entries kept", func(t *testing.T) {
+		p, home, _ := pluginProvider(t, "1.0.0-alpha.600")
+		settingsPath := filepath.Join(home, ".claude", "settings.json")
+		os.MkdirAll(filepath.Dir(settingsPath), 0o755)
+		os.WriteFile(settingsPath, []byte(`{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"/Users/x/mods/a"}}`), 0o644)
+		failHooks(t, false)
+		if err := p.InstallHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("a failed hooks write must fail the install")
+		}
+		if v, _ := envDirs(t, readSettings(t, settingsPath)); v != "/Users/x/mods/a" {
+			t.Fatalf("CLAUDE_CODE_PLUGIN_DIRS = %q, want the Purdex entry taken back out", v)
+		}
+	})
+	t.Run("extraction fails: settings.json is not touched", func(t *testing.T) {
+		p, home, dataDir := pluginProvider(t, "1.0.0-alpha.600")
+		// A file where cc-plugin/ must go makes the extraction fail.
+		os.WriteFile(filepath.Join(dataDir, PluginDirName), []byte("x"), 0o644)
+		if err := p.InstallHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("a failed extraction must fail the install")
+		}
+		if hasPdxHook(t, filepath.Join(home, ".claude", "settings.json")) {
+			t.Fatal("hooks must not be installed without the plugin")
+		}
+	})
+}
+
+// Attacker high: remove tries all three steps (hooks, env, plugin dir) and
+// joins the errors; one failing never strands the others.
+func TestRemoveHooks_TriesEveryStepAndJoinsErrors(t *testing.T) {
+	install := func(t *testing.T) (*Provider, string, string) {
+		p, home, dataDir := pluginProvider(t, "1.0.0-alpha.600")
+		if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+			t.Fatal(err)
+		}
+		return p, filepath.Join(home, ".claude", "settings.json"), dataDir
+	}
+	t.Run("env write fails: hooks and plugin dir still go", func(t *testing.T) {
+		p, settingsPath, dataDir := install(t)
+		failEnv(t, true)
+		if err := p.RemoveHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("a failed env write must fail the remove")
+		}
+		if hasPdxHook(t, settingsPath) {
+			t.Fatal("hooks must still be removed")
+		}
+		if _, err := os.Stat(PluginRoot(dataDir)); !os.IsNotExist(err) {
+			t.Fatalf("plugin dir must still be removed (%v)", err)
+		}
+	})
+	t.Run("hooks write fails: env and plugin dir still go", func(t *testing.T) {
+		p, settingsPath, dataDir := install(t)
+		failHooks(t, true)
+		if err := p.RemoveHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("a failed hooks write must fail the remove")
+		}
+		if _, ok := envDirs(t, readSettings(t, settingsPath)); ok {
+			t.Fatal("env must still be cleaned")
+		}
+		if _, err := os.Stat(PluginRoot(dataDir)); !os.IsNotExist(err) {
+			t.Fatalf("plugin dir must still be removed (%v)", err)
+		}
+	})
 }

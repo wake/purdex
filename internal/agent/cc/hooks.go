@@ -2,6 +2,7 @@ package cc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,26 +15,45 @@ import (
 
 const ccHooksSupportedVersion = "2.1.114"
 
+// The two settings.json writers InstallHooks and RemoveHooks run; tests
+// swap them to fail one step.
+var (
+	mergeHooksFn = mergeClaudeHooks
+	mergeEnvFn   = mergePluginDirs
+)
+
+// InstallHooks runs plugin extraction → plugin env → hooks, so a failure
+// never leaves hooks installed without their plugin; a failed hooks write
+// takes the env entry back out before returning its error.
 func (p *Provider) InstallHooks(pdxPath string) error {
 	settingsPath, err := ccSettingsPath()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	if err := mergeClaudeHooks(settingsPath, pdxPath, false); err != nil {
+	root, err := p.installPlugin(settingsPath, pdxPath)
+	if err != nil {
 		return err
 	}
-	return p.installPlugin(settingsPath, pdxPath)
+	if err := mergeHooksFn(settingsPath, pdxPath, false); err != nil {
+		if root != "" {
+			if rerr := mergeEnvFn(settingsPath, root, true); rerr != nil {
+				return errors.Join(err, fmt.Errorf("undo plugin env: %w", rerr))
+			}
+		}
+		return err
+	}
+	return nil
 }
 
+// RemoveHooks tries all three steps (hooks, plugin env, plugin dir) even
+// when one fails, and returns their errors joined.
 func (p *Provider) RemoveHooks(pdxPath string) error {
 	settingsPath, err := ccSettingsPath()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	if err := mergeClaudeHooks(settingsPath, pdxPath, true); err != nil {
-		return err
-	}
-	return p.removePlugin(settingsPath)
+	hooksErr := mergeHooksFn(settingsPath, pdxPath, true)
+	return errors.Join(hooksErr, p.removePlugin(settingsPath))
 }
 
 // installTarget is the data dir and config file the plugin is installed
@@ -69,26 +89,30 @@ func (p *Provider) dataDir() string {
 }
 
 // installPlugin extracts the embedded plugin (spec §5 "Shipping") and names
-// it in settings.json env. Without an embedded tree it does nothing, so the
-// hook installer's own tests are unaffected.
-func (p *Provider) installPlugin(settingsPath, pdxPath string) error {
+// it in settings.json env, returning the root it named. Without an embedded
+// tree it does nothing and returns "", so the hook installer's own tests are
+// unaffected.
+func (p *Provider) installPlugin(settingsPath, pdxPath string) (string, error) {
 	if PluginSource == nil {
-		return nil
+		return "", nil
 	}
 	dataDir, cfgPath := p.installTarget()
 	root, _, err := ExtractPlugin(PluginSource, dataDir, buildinfo.Version, pdxPath, cfgPath)
 	if err != nil {
-		return fmt.Errorf("extract plugin: %w", err)
+		return "", fmt.Errorf("extract plugin: %w", err)
 	}
-	return mergePluginDirs(settingsPath, root, false)
+	if err := mergeEnvFn(settingsPath, root, false); err != nil {
+		return "", err
+	}
+	return root, nil
 }
 
+// removePlugin takes the plugin out of settings.json env and deletes the
+// extracted folder; both are tried, the errors joined.
 func (p *Provider) removePlugin(settingsPath string) error {
 	dataDir := p.dataDir()
-	if err := mergePluginDirs(settingsPath, PluginRoot(dataDir), true); err != nil {
-		return err
-	}
-	return RemovePluginDir(dataDir)
+	envErr := mergeEnvFn(settingsPath, PluginRoot(dataDir), true)
+	return errors.Join(envErr, RemovePluginDir(dataDir))
 }
 
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {
