@@ -959,7 +959,7 @@ func TestApplyIntentLifecycle_UnsupportedKind_FailsClosed(t *testing.T) {
 	}
 
 	before := snapshotProbeIntentMetrics()
-	m.probeIntentDisp.applyIntentLifecycle("work", "codex", agentpkg.StatusRunning, futureIntent)
+	m.probeIntentDisp.applyIntentLifecycle("work", "codex", agentpkg.StatusRunning, futureIntent, nil)
 	after := snapshotProbeIntentMetrics()
 
 	if rec.startCount() != 0 {
