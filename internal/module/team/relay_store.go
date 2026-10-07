@@ -382,3 +382,73 @@ func (s *Store) SelfRelayPaused(sessionID string) (bool, error) {
 	}
 	return v != 0, nil
 }
+
+// ListUnprunedRelayOps returns every op whose file has not been pruned, in
+// any state, oldest first. The retention sweeper's input.
+func (s *Store) ListUnprunedRelayOps() ([]team.RelayOp, error) {
+	rows, err := s.db.Query(`SELECT ` + relayCols + ` FROM relay_ops WHERE pruned = 0 ORDER BY created_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list unpruned relay ops: %w", err)
+	}
+	defer rows.Close()
+	out := []team.RelayOp{}
+	for rows.Next() {
+		op, err := scanRelayOp(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list unpruned relay ops: %w", err)
+		}
+		out = append(out, op)
+	}
+	return out, rows.Err()
+}
+
+// MarkRelayPruned records that op's handoff file is gone (spec §8.3
+// retention: "the row keeps the path, marked pruned").
+func (s *Store) MarkRelayPruned(id string) error {
+	// Only an op that has ended is ever pruned: the guard beside the rule in
+	// retentionVictims, so a row that is (somehow) still in flight keeps
+	// pruned = 0 and stays visible to the next sweep.
+	if _, err := s.db.Exec(`UPDATE relay_ops SET pruned = 1 WHERE id = ? AND state IN ('done', 'failed', 'cancelled')`, id); err != nil {
+		return fmt.Errorf("mark relay op %s pruned: %w", id, err)
+	}
+	return nil
+}
+
+// ChainRoots maps every session id that appears in session_lineage (as a
+// head or a predecessor) to the root of its chain — the one session with
+// no predecessor. Two ops whose sessions share a root are in one chain.
+func (s *Store) ChainRoots() (map[string]string, error) {
+	rows, err := s.db.Query(`SELECT session_id, predecessor_session_id FROM session_lineage`)
+	if err != nil {
+		return nil, fmt.Errorf("read lineage: %w", err)
+	}
+	defer rows.Close()
+	pred := map[string]string{}
+	for rows.Next() {
+		var sid, p string
+		if err := rows.Scan(&sid, &p); err != nil {
+			return nil, fmt.Errorf("read lineage: %w", err)
+		}
+		pred[sid] = p
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read lineage: %w", err)
+	}
+	roots := make(map[string]string, len(pred)*2)
+	rootOf := func(sid string) string {
+		seen := map[string]bool{sid: true}
+		for {
+			p, ok := pred[sid]
+			if !ok || seen[p] {
+				return sid
+			}
+			seen[p] = true
+			sid = p
+		}
+	}
+	for sid, p := range pred {
+		roots[sid] = rootOf(sid)
+		roots[p] = rootOf(p)
+	}
+	return roots, nil
+}

@@ -1291,6 +1291,7 @@
   "hosts.nex.config.error": "無法儲存：{{message}}",
   "hosts.nex.executions.title": "執行體",
   "hosts.nex.executions.empty": "尚無執行體，用 pdx nex delegate 建立。",
+  "hosts.nex.executions.show_more": "顯示更多（{{shown}} / {{total}}）",
   "hosts.nex.executions.include_archived": "顯示已歸檔",
   "hosts.nex.executions.open": "開啟",
   "hosts.nex.executions.terminate": "終止",

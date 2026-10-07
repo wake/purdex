@@ -5,8 +5,12 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useDaemonRestartStore } from '../../stores/useDaemonRestartStore'
 import * as restartLib from '../../lib/daemon-restart'
+import * as approvalApi from '../../lib/team/approval-api'
 
 vi.mock('../../lib/daemon-restart', async (orig) => ({ ...(await orig<typeof import('../../lib/daemon-restart')>()), countRunningWorkers: vi.fn() }))
+// The restart confirm also asks the daemon for its open approvals (RestartDaemonButton); unmocked it is a real
+// request that outlives findBy's 1 s, so the dialog would not be there in time.
+vi.mock('../../lib/team/approval-api', () => ({ fetchInflight: vi.fn() }))
 
 const status = (o: Partial<ElectronLocalDaemonStatus> = {}): ElectronLocalDaemonStatus => ({
   managed: 'none', binPath: '/Users/t/.config/pdx/bin/pdx', installed: null, alive: null, running: null, config: null,
@@ -253,6 +257,7 @@ describe('LocalDaemonSection - restart (R2)', () => {
     const storeRestart = vi.fn(async () => {})
     beforeEach(() => {
       vi.mocked(restartLib.countRunningWorkers).mockReset()
+      vi.mocked(approvalApi.fetchInflight).mockReset().mockRejectedValue(new Error('inflight unavailable'))
       storeRestart.mockClear()
       useDaemonRestartStore.setState({ restart: storeRestart })
     })

@@ -695,6 +695,8 @@ The mod reaches the daemon through `$.process.run` on `pdx`, as the prototype di
   - per lineage chain, the newest **3** handoff files;
   - nothing older than **14 days**;
   - the files of `failed` or `cancelled` ops for **3 days**, for debugging.
+- **Only an op that has ended loses its file.** An op still in flight (awaiting approval through `cleared`) keeps its handoff however old it is: that file is the only copy of the conversation the relay carries, and after a `/clear` it is what seeds the new session. A stuck op must be ended by the state machine first, and its file then follows the rule of the state it ended in. Today that covers `awaiting_approval` (the approval's deadline, lease and boot reconciliation) and `cleared` (the mod's `done`); an op stuck in `claimed`, `writing` or `written` because its process died is ended only by **P6**'s boot reconciliation from frames (it may in fact have reached `/clear`, so it cannot simply be failed) — until then its file stays (issue #1735).
+- Only `<data_dir>/relay/<op id>.md` is ever removed: the op id must be a single path element, the relay directory must be a real directory (not a symlink), and the target a regular file or a symlink (unlinked, never followed).
 - The `relay_ops` row keeps the path, marked `pruned` once deleted.
 
 ### 8.4 Lineage: the ref keeps working (U3)

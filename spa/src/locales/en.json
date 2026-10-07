@@ -1291,6 +1291,7 @@
   "hosts.nex.config.error": "Could not save: {{message}}",
   "hosts.nex.executions.title": "Executions",
   "hosts.nex.executions.empty": "No executions yet — start one with pdx nex delegate.",
+  "hosts.nex.executions.show_more": "Show more ({{shown}} of {{total}})",
   "hosts.nex.executions.include_archived": "Show archived",
   "hosts.nex.executions.open": "Open",
   "hosts.nex.executions.terminate": "Terminate",

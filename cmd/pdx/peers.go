@@ -663,9 +663,18 @@ func aliasDriftField(h peers.HostResult) string {
 	return h.SelfAlias
 }
 
-// displayAddress renders one peer row's address through addressWithRef.
+// displayAddress renders one peer row's address through addressWithRef,
+// followed by "(was _xxxxxx)" for a conversation that relayed (lead-team-
+// relay spec §8.4): the NEWEST previous ref only — the one an operator is
+// most likely to still hold — even though the row carries the whole chain
+// and every ref in it still resolves. Not sanitized here: addressField
+// does that for the table, and previous refs are RefID output anyway.
 func displayAddress(rec peers.PeerRecord) string {
-	return addressWithRef(rec.Address, rec.Ref)
+	addr := addressWithRef(rec.Address, rec.Ref)
+	if len(rec.PreviousRefs) > 0 {
+		addr += " (was " + rec.PreviousRefs[0] + ")"
+	}
+	return addr
 }
 
 // addressField renders displayAddress through sanitizeCell first, then — only
