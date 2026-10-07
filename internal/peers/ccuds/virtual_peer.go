@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/peers"
 )
 
@@ -81,7 +82,9 @@ func DefaultProcStart(pid int) (string, error) {
 		}
 	}
 	cmd.Env = append(env, "TZ=UTC")
+	t0 := time.Now()
 	out, err := cmd.Output()
+	execstat.PS.Observe(time.Since(t0))
 	if err != nil {
 		return "", fmt.Errorf("ps -p %d: %w", pid, err)
 	}

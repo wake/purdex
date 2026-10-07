@@ -19,6 +19,7 @@ import (
 	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
@@ -316,6 +317,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 // (per spec §6.3 / §6.4).
 func (m *Module) Start(_ context.Context) error {
 	// Step timings (#1767): observation only, same order as before.
+	execBase := execstat.Take()
 	st := core.NewStepTimer(nil)
 	st.Run("sweepOnce", func() {
 		if err := m.sweepOnce(); err != nil {
@@ -330,6 +332,7 @@ func (m *Module) Start(_ context.Context) error {
 		}
 	})
 	log.Printf("[agent] start: %s", st)
+	log.Print(startExecLine(execBase))
 
 	if m.core != nil {
 		m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {

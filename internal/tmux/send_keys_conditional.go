@@ -19,7 +19,6 @@ package tmux
 import (
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -123,7 +122,7 @@ func (r *RealExecutor) SendKeysIfInstanceTarget(sessionID, window, expectedInsta
 	if err != nil {
 		return false, err
 	}
-	cmd := exec.Command("tmux", args...)
+	cmd := tmuxCmd(args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

@@ -8,14 +8,23 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/wake/purdex/internal/execstat"
 )
 
 const psLstartLayout = "Mon Jan _2 15:04:05 2006"
 
 // runPS is the one way this package forks ps. Fork count is the cost the
 // process snapshot exists to remove, so tests swap this to count it.
-var runPS = func(ctx context.Context, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, "ps", args...).Output()
+var runPS = defaultRunPS
+
+// defaultRunPS forks ps and records the fork in execstat.PS (count and wall
+// time, success or failure; never the arguments or output).
+func defaultRunPS(ctx context.Context, args ...string) ([]byte, error) {
+	t0 := time.Now()
+	out, err := exec.CommandContext(ctx, "ps", args...).Output()
+	execstat.PS.Observe(time.Since(t0))
+	return out, err
 }
 
 type ProcessInfo struct {

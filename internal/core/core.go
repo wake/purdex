@@ -211,11 +211,17 @@ func (c *Core) StartModules(ctx context.Context) error {
 // All modules are stopped even if some return errors.
 func (c *Core) StopModules(ctx context.Context) error {
 	var errs []error
+	begin := c.clock()
+	durs := make([]moduleTiming, 0, len(c.modules))
 	for i := len(c.modules) - 1; i >= 0; i-- {
-		if err := c.modules[i].Stop(ctx); err != nil {
+		t0 := c.clock()
+		err := c.modules[i].Stop(ctx)
+		durs = append(durs, moduleTiming{c.modules[i].Name(), c.clock().Sub(t0)})
+		if err != nil {
 			errs = append(errs, fmt.Errorf("module %s stop: %w", c.modules[i].Name(), err))
 		}
 	}
+	c.logShutdownTimings("stop", durs, c.clock().Sub(begin))
 	return errors.Join(errs...)
 }
 
@@ -223,15 +229,21 @@ func (c *Core) StopModules(ctx context.Context) error {
 // registration order, joining errors; modules without Closer are skipped.
 func (c *Core) CloseModules() error {
 	var errs []error
+	begin := c.clock()
+	var durs []moduleTiming
 	for i := len(c.modules) - 1; i >= 0; i-- {
 		closer, ok := c.modules[i].(Closer)
 		if !ok {
 			continue
 		}
-		if err := closer.Close(); err != nil {
+		t0 := c.clock()
+		err := closer.Close()
+		durs = append(durs, moduleTiming{c.modules[i].Name(), c.clock().Sub(t0)})
+		if err != nil {
 			errs = append(errs, fmt.Errorf("module %s close: %w", c.modules[i].Name(), err))
 		}
 	}
+	c.logShutdownTimings("close", durs, c.clock().Sub(begin))
 	return errors.Join(errs...)
 }
 
