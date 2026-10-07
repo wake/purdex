@@ -13,6 +13,7 @@ import { startHostReresolve } from './lib/host-reresolve'
 import { startPeerCacheInvalidation } from './lib/host-lifecycle'
 import { startNexHostInvalidation } from './stores/useNexHostStore'
 import { startExecutionListInvalidation } from './stores/useExecutionListStore'
+import { startWorkerTitlePrefetch } from './lib/nex/worker-title-prefetch'
 import { startProfileSync } from './lib/profile/start'
 import { bootHostLooks } from './lib/host-look-migration'
 import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalone'
@@ -50,6 +51,9 @@ startPeerCacheInvalidation()
 startNexHostInvalidation()
 // Execution lists: open/close a host's site-wide stream on nex readiness, drop its rows on identity change.
 startExecutionListInvalidation()
+// Worker tabs with neither a live summary nor a list row (an archived worker after a reload): fetch each one's summary
+// once, for its title (#1557, app lifetime).
+startWorkerTitlePrefetch()
 // Profile Sync: with no master set this is one subscription to useProfileStore and nothing else (app lifetime).
 // It starts behind the host-look gate (plan §0.16): after the host and look stores hydrated and the first-run look
 // migration returned — the collector exists only inside it, so no `settings` build precedes the migration. With

@@ -12,6 +12,7 @@ vi.mock('./lib/host-config-loader', () => ({ startHostConfigLoader: vi.fn() }))
 vi.mock('./lib/host-lifecycle', () => ({ startPeerCacheInvalidation: vi.fn() }))
 vi.mock('./stores/useNexHostStore', () => ({ startNexHostInvalidation: vi.fn() }))
 vi.mock('./stores/useExecutionListStore', () => ({ startExecutionListInvalidation: vi.fn() }))
+vi.mock('./lib/nex/worker-title-prefetch', () => ({ startWorkerTitlePrefetch: vi.fn() }))
 vi.mock('./lib/profile/start', () => ({ startProfileSync: vi.fn() }))
 vi.mock('./features/workspace/lib/adopt-standalone', () => ({ startStandaloneAdoption: vi.fn() }))
 vi.mock('./lib/legacy-residue-cleanup', () => ({ scheduleLegacyResidueCleanup: vi.fn() }))
@@ -34,6 +35,13 @@ describe('boot', () => {
     const { scheduleLegacyResidueCleanup } = await import('./lib/legacy-residue-cleanup')
     await import('./main')
     expect(scheduleLegacyResidueCleanup).toHaveBeenCalledTimes(1)
+  })
+
+  // #1557: an unopened worker tab with neither a live summary nor a list row gets its title — app lifetime, once.
+  it('starts the worker title prefetch once', async () => {
+    const { startWorkerTitlePrefetch } = await import('./lib/nex/worker-title-prefetch')
+    await import('./main')
+    expect(startWorkerTitlePrefetch).toHaveBeenCalledTimes(1)
   })
 
   // H2c-2 (plan §0.16): the host-look migration runs after BOTH the host store and the look store hydrated, and
