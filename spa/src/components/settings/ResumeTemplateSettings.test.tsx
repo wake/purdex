@@ -69,6 +69,8 @@ function seedTemplates(resumeTemplates: ResumeTemplateOverrides) {
 }
 const overrides = () => useHostConfigStore.getState().byHost[H1].resumeTemplates
 const saveMock = () => vi.mocked(useHostConfigStore.getState().saveResumeTemplates)
+// The store's own load and save, before `seedTemplates` replaces the save with a local one.
+const { load: realLoad, saveResumeTemplates: realSave } = useHostConfigStore.getState()
 
 beforeEach(() => {
   vi.restoreAllMocks()
@@ -562,6 +564,35 @@ describe('ResumeTemplateSettings — host scoped', () => {
     fireEvent.blur(input('cc', 'exact'))
     expect(await screen.findByTestId('resume-template-save-error')).toHaveTextContent('Changed elsewhere')
     expect(input('cc', 'exact').value).toBe('server {id}')
+  })
+
+  // #1489: the section shows only the known agents but PUTs the whole map, and the daemon refuses the whole map
+  // over one entry it would not take — so an entry nobody can see or fix here never reaches the PUT.
+  it('a stored entry the daemon would refuse is not sent back with an edit', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const cc = { exact: 'mine --resume {id}', fallback: 'mine -c' }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => init?.method === 'PUT'
+      ? jsonResponse({ items: JSON.parse(String(init.body)).items, revision: 4 })
+      : jsonResponse({
+        projects: { items: [], revision: 0 },
+        commands: { items: [], revision: 0 },
+        resumeTemplates: { items: { 'Bad Agent': { exact: 'x {id}', fallback: 'x' }, cc }, revision: 3 },
+      }))
+    useHostConfigStore.setState({ byHost: {}, load: realLoad, saveResumeTemplates: realSave })
+    await act(async () => { await useHostConfigStore.getState().load(H1) })
+    render(<ResumeTemplateSettings hostId={H1} />)
+    expect(input('cc', 'fallback').value).toBe('mine -c')
+
+    fireEvent.change(input('cc', 'exact'), { target: { value: 'edited --resume {id}' } })
+    fireEvent.blur(input('cc', 'exact'))
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2))
+    const [url, init] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    expect(url).toContain('/api/hostconfig/resume-templates')
+    expect(JSON.parse(String(init.body))).toEqual({
+      items: { cc: { exact: 'edited --resume {id}', fallback: 'mine -c' } },
+      baseRevision: 3,
+    })
   })
 
   it('a host whose config is not ready renders defaults read-only', () => {

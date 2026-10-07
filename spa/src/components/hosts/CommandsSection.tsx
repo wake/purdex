@@ -7,7 +7,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { ResumeTemplateSettings } from '../settings/ResumeTemplateSettings'
 import { CommandEditDialog } from './CommandEditDialog'
 import { CommandIconView } from './CommandIconView'
-import { HostConfigNotice } from './HostConfigNotice'
+import { HostConfigNotice, HostConfigProblemNotice } from './HostConfigNotice'
 import { QuickReplySettings } from './QuickReplySettings'
 import { useHostConfigCollection } from './useHostConfigCollection'
 
@@ -20,7 +20,7 @@ export function CommandsSection({ hostId }: { hostId: string }) {
   // dialog's lifecycle, the delete confirmation and the queued, id-addressed
   // saves. What is left here is what a COMMAND is: its fields, its icon, its rows.
   const {
-    items: commands, editable, notice, atLimit, pending, saveError,
+    items: commands, editable, notice, problem, atLimit, pending, saveError,
     editing, isNew, openEditor, closeEditor, submit,
     deleting, askDelete, cancelDelete, confirmDelete, move,
   } = useHostConfigCollection<HostCommand>(hostId, 'commands')
@@ -60,6 +60,8 @@ export function CommandsSection({ hostId }: { hostId: string }) {
         <QuickReplySettings hostId={hostId} />
       ) : (
         <>
+          {/* Each tab names its own collection's problem; this one is the commands'. */}
+          <HostConfigProblemNotice problem={problem} title="hosts.commands" />
           {atLimit && (
             <p data-testid="commands-limit" className="mb-3 text-xs text-text-muted">{t('host_config.limit', { max: MAX_CONFIG_ITEMS })}</p>
           )}

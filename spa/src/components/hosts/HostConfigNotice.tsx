@@ -1,8 +1,15 @@
 import { useEffect } from 'react'
 import { WarningCircle } from '@phosphor-icons/react'
 import { useHostStore } from '../../stores/useHostStore'
-import { EMPTY_HOST_CONFIG, useHostConfigStore, type HostConfigEntry } from '../../stores/useHostConfigStore'
+import {
+  EMPTY_HOST_CONFIG,
+  useHostConfigStore,
+  type HostConfigEntry,
+  type HostConfigProblem,
+} from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+
+const NOTICE = 'flex items-center gap-1.5 text-xs text-text-secondary'
 
 export interface GateNotice { key: string; params?: Record<string, string> }
 
@@ -34,9 +41,32 @@ export function HostConfigNotice({ notice }: { notice: GateNotice | null }) {
   const t = useI18nStore((s) => s.t)
   if (!notice) return null
   return (
-    <div data-testid="host-config-notice" data-notice={notice.key} className="mb-3 flex items-center gap-1.5 text-xs text-text-secondary">
+    <div data-testid="host-config-notice" data-notice={notice.key} className={`mb-3 ${NOTICE}`}>
       <WarningCircle size={14} className="shrink-0" />
       {t(notice.key, notice.params)}
+    </div>
+  )
+}
+
+/**
+ * #1489: the host's stored copy of this section's collection was malformed,
+ * and what the section made of it. Editing stays open — saving is the repair.
+ * `title` is the section's own title key, named in the sentence.
+ */
+export function HostConfigProblemNotice({ problem, title, className = 'mb-3' }: {
+  problem: HostConfigProblem | undefined
+  title: string
+  className?: string
+}) {
+  const t = useI18nStore((s) => s.t)
+  if (!problem) return null
+  const text = problem.kind === 'relay' ? t('host_config.problem.relay')
+    : problem.kind === 'rows' ? t('host_config.problem.rows', { collection: t(title), count: problem.count })
+    : t('host_config.problem.shape', { collection: t(title) })
+  return (
+    <div data-testid="host-config-problem" data-problem={problem.kind} className={`${className} ${NOTICE}`}>
+      <WarningCircle size={14} className="shrink-0" />
+      {text}
     </div>
   )
 }

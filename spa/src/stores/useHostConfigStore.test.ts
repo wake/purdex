@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { emptyHostConfigEntry, useHostConfigStore } from './useHostConfigStore'
 import { useHostStore } from './useHostStore'
 import * as api from '../lib/host-config-api'
@@ -27,9 +27,9 @@ function registerHost(ip = '1.2.3.4', port = 7860, token: string | null = 't') {
 
 /** A fetch nobody has answered yet, plus the switch that answers it. */
 function pendingFetch() {
-  let settle!: (p: typeof payload) => void
-  vi.mocked(api.fetchHostConfig).mockReturnValueOnce(new Promise<typeof payload>((resolve) => { settle = resolve }))
-  return { settle: (p: typeof payload = payload) => settle(p) }
+  let settle!: (p: unknown) => void
+  vi.mocked(api.fetchHostConfig).mockReturnValueOnce(new Promise<unknown>((resolve) => { settle = resolve }))
+  return { settle: (p: unknown = payload) => settle(p) }
 }
 
 beforeEach(() => {
@@ -51,6 +51,7 @@ describe('load', () => {
     expect(e.revisions).toEqual({ projects: 3, commands: 0, resumeTemplates: 1, quickReplies: 0, relay: 0 })
     expect(e.relaySupported).toBe(false)
     expect(e.relay).toEqual({ self_solo: true, self_lead: true })
+    expect(e.problems).toEqual({})
   })
 
   it('404 → unsupported; never throws', async () => {
@@ -148,6 +149,77 @@ describe('save*', () => {
   })
 })
 
+// The daemon's GET hands back whatever a row holds (#1489): a hand-edited row
+// must reach the sections sanitised, with the section told why.
+describe('malformed collections', () => {
+  const C1 = { id: 'c1', name: 'Claude', command: 'claude', icon: { kind: 'agent', value: 'cc-bot' } }
+  const malformed = {
+    ...payload,
+    projects: { items: {}, revision: 3 },
+    commands: { items: [C1, { id: 'c2', command: 'x' }], revision: 2 },
+    quickReplies: { items: [{ id: 'q1', text: 42 }], revision: 5 },
+    relay: { items: { self_solo: null }, revision: 1 },
+  }
+
+  beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+  afterEach(() => { vi.mocked(console.warn).mockRestore() })
+
+  it('load: ready and sanitised; each bad collection carries its problem, the good one is intact', async () => {
+    vi.mocked(api.fetchHostConfig).mockResolvedValue(malformed)
+    await useHostConfigStore.getState().load(H)
+    const e = useHostConfigStore.getState().byHost[H]
+    expect(e.status).toBe('ready')
+    expect(e.projects).toEqual([])
+    expect(e.commands).toEqual([C1])
+    expect(e.quickReplies).toEqual([])
+    // Fails closed like the daemon, which refuses self relay on a value it cannot read.
+    expect(e.relay).toEqual({ self_solo: false, self_lead: false })
+    expect(e.resumeTemplates).toEqual(payload.resumeTemplates.items)
+    expect(e.revisions).toEqual({ projects: 3, commands: 2, resumeTemplates: 1, quickReplies: 5, relay: 1 })
+    expect(e.problems).toEqual({
+      projects: { kind: 'shape' },
+      commands: { kind: 'rows', count: 1 },
+      quickReplies: { kind: 'rows', count: 1 },
+      relay: { kind: 'relay' },
+    })
+  })
+
+  it('a body that is not an object is still a load error', async () => {
+    vi.mocked(api.fetchHostConfig).mockResolvedValue(null)
+    await useHostConfigStore.getState().load(H)
+    expect(useHostConfigStore.getState().byHost[H].status).toBe('error')
+  })
+
+  it('a successful save clears that field\'s problem and no other', async () => {
+    vi.mocked(api.fetchHostConfig).mockResolvedValue(malformed)
+    await useHostConfigStore.getState().load(H)
+    const next = [{ id: 'p2', name: 'B', slug: 'b', path: '/b' }]
+    vi.mocked(api.putHostConfig).mockResolvedValue({ items: next, revision: 4 })
+    await useHostConfigStore.getState().saveProjects(H, next)
+    const e = useHostConfigStore.getState().byHost[H]
+    expect(e.projects).toEqual(next)
+    expect(Object.keys(e.problems).sort()).toEqual(['commands', 'quickReplies', 'relay'])
+  })
+
+  it('a 409 whose current copy is malformed is sanitised and sets the problem; a clean one clears it', async () => {
+    vi.mocked(api.fetchHostConfig).mockResolvedValue(payload)
+    await useHostConfigStore.getState().load(H)
+    const ok = { id: 'q1', text: 'ok' }
+    vi.mocked(api.putHostConfig).mockRejectedValueOnce(new HostConfigConflictError({ items: [ok, { id: 'q2' }], revision: 9 }))
+    await expect(useHostConfigStore.getState().saveQuickReplies(H, [])).rejects.toBeInstanceOf(HostConfigConflictError)
+    let e = useHostConfigStore.getState().byHost[H]
+    expect(e.quickReplies).toEqual([ok])
+    expect(e.revisions.quickReplies).toBe(9)
+    expect(e.problems).toEqual({ quickReplies: { kind: 'rows', count: 1 } })
+
+    vi.mocked(api.putHostConfig).mockRejectedValueOnce(new HostConfigConflictError({ items: [ok], revision: 10 }))
+    await expect(useHostConfigStore.getState().saveQuickReplies(H, [])).rejects.toBeInstanceOf(HostConfigConflictError)
+    e = useHostConfigStore.getState().byHost[H]
+    expect(e.revisions.quickReplies).toBe(10)
+    expect(e.problems).toEqual({})
+  })
+})
+
 // A response belongs to the endpoint it was asked of. Anything that can make
 // that endpoint a different daemon — the host being removed, its address or
 // token changing — must make every answer already in flight unusable, or the
@@ -194,6 +266,92 @@ describe('stale responses', () => {
     const e = useHostConfigStore.getState().byHost[H]
     expect(e.projects).toEqual(payload.projects.items)
     expect(e.revisions.projects).toBe(3)
+  })
+
+  // A refresh and a save share one host token, so the token cannot tell them apart: a GET read before a save
+  // landed carries the copy the save replaced. Only the field the save wrote is held; the rest is the GET's.
+  describe('a refresh sent before a save lands after it', () => {
+    const C1 = { id: 'c1', name: 'Claude', command: 'claude', icon: { kind: 'agent', value: 'cc-bot' } }
+    const P2 = { id: 'p2', name: 'B', slug: 'b', path: '/b' }
+    const Q1 = { id: 'q1', text: 'ok' }
+    // What the daemon held before the save: projects malformed, quick replies with a bad row.
+    const before = {
+      ...payload,
+      projects: { items: {}, revision: 4 },
+      quickReplies: { items: [Q1, { id: 'q2' }], revision: 6 },
+    }
+
+    beforeEach(async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.mocked(api.fetchHostConfig).mockResolvedValueOnce(before)
+      await useHostConfigStore.getState().load(H)
+    })
+    afterEach(() => { vi.mocked(console.warn).mockRestore() })
+
+    it('a successful save keeps its items, revision and cleared problem; another field takes the GET', async () => {
+      const refresh = pendingFetch()
+      const load = useHostConfigStore.getState().load(H)
+      vi.mocked(api.putHostConfig).mockResolvedValueOnce({ items: [P2], revision: 5 })
+      await useHostConfigStore.getState().saveProjects(H, [P2])
+      refresh.settle({ ...before, commands: { items: [C1], revision: 2 } })
+      await load
+
+      const e = useHostConfigStore.getState().byHost[H]
+      expect(e.projects).toEqual([P2])
+      expect(e.revisions.projects).toBe(5)
+      expect(e.problems.projects).toBeUndefined()
+      expect(e.commands).toEqual([C1])
+      expect(e.revisions.commands).toBe(2)
+      expect(e.problems.quickReplies).toEqual({ kind: 'rows', count: 1 })
+    })
+
+    it('a 409 keeps the daemon copy it carried, and the field stays supported', async () => {
+      const refresh = pendingFetch()
+      const load = useHostConfigStore.getState().load(H)
+      vi.mocked(api.putHostConfig).mockRejectedValueOnce(new HostConfigConflictError({ items: [Q1], revision: 8 }))
+      await expect(useHostConfigStore.getState().saveQuickReplies(H, [])).rejects.toBeInstanceOf(HostConfigConflictError)
+      // The stale answer even lacks the collection: the field the save wrote is held whole, its flag included.
+      const { quickReplies: _gone, ...stale } = before
+      refresh.settle({ ...stale, commands: { items: [C1], revision: 2 } })
+      await load
+
+      const e = useHostConfigStore.getState().byHost[H]
+      expect(e.quickReplies).toEqual([Q1])
+      expect(e.revisions.quickReplies).toBe(8)
+      expect(e.problems.quickReplies).toBeUndefined()
+      expect(e.quickRepliesSupported).toBe(true)
+      expect(e.commands).toEqual([C1])
+      expect(e.revisions.commands).toBe(2)
+      expect(e.problems.projects).toEqual({ kind: 'shape' })
+    })
+
+    it('a save that failed without a copy holds nothing back', async () => {
+      const refresh = pendingFetch()
+      const load = useHostConfigStore.getState().load(H)
+      vi.mocked(api.putHostConfig).mockRejectedValueOnce(new HostConfigApiError(500, 'unwell'))
+      await expect(useHostConfigStore.getState().saveProjects(H, [P2])).rejects.toThrow('unwell')
+      refresh.settle({ ...before, projects: { items: [P2], revision: 7 } })
+      await load
+
+      const e = useHostConfigStore.getState().byHost[H]
+      expect(e.projects).toEqual([P2])
+      expect(e.revisions.projects).toBe(7)
+      expect(e.problems.projects).toBeUndefined()
+    })
+
+    it('a GET sent after the save applies to every field', async () => {
+      vi.mocked(api.putHostConfig).mockResolvedValueOnce({ items: [P2], revision: 5 })
+      await useHostConfigStore.getState().saveProjects(H, [P2])
+      const refresh = pendingFetch()
+      const load = useHostConfigStore.getState().load(H)
+      refresh.settle({ ...before, projects: { items: [], revision: 9 } })
+      await load
+
+      const e = useHostConfigStore.getState().byHost[H]
+      expect(e.projects).toEqual([])
+      expect(e.revisions.projects).toBe(9)
+      expect(e.problems.projects).toBeUndefined()
+    })
   })
 
   it('a load for a host that is not configured touches nothing', async () => {

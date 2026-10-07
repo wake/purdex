@@ -13,20 +13,20 @@ export interface HostProject { id: string; name: string; slug: string; path: str
 export interface HostCommand { id: string; name: string; command: string; icon: CommandIcon }
 export type ResumeTemplateOverrides = Record<string, { exact: string; fallback: string }>
 export interface QuickReply { id: string; text: string }
-/** Host config `relay` (lead-team-relay spec §8.7 (a)): the two self-relay switches; a member has none (U13). */
-export interface RelaySwitches { self_solo: boolean; self_lead: boolean }
+/**
+ * Host config `relay` (lead-team-relay spec §8.7 (a)): the two self-relay switches; a member has none (U13). The same
+ * row holds the three relay prompt bodies (§8.8, P9a-1; absent = the built-in default) — carried along untouched, so
+ * a switch toggle, which PUTs the whole row, never wipes them.
+ */
+export interface RelaySwitches {
+  self_solo: boolean
+  self_lead: boolean
+  prompt_write?: string
+  prompt_fix?: string
+  prompt_seed?: string
+}
 
 export interface Versioned<T> { items: T; revision: number }
-
-export interface HostConfigPayload {
-  projects: Versioned<HostProject[]>
-  commands: Versioned<HostCommand[]>
-  resumeTemplates: Versioned<ResumeTemplateOverrides>
-  /** Absent on a daemon that predates the collection (R3-A). */
-  quickReplies?: Versioned<QuickReply[]>
-  /** Absent on a daemon that predates P5a. */
-  relay?: Versioned<RelaySwitches>
-}
 
 export type PathCheckStatus = 'dir' | 'not_dir' | 'missing' | 'error' | 'unverifiable'
 export interface PathCheck { status: PathCheckStatus; resolved: string; reason?: string }
@@ -77,19 +77,24 @@ async function failure(res: Response): Promise<HostConfigApiError> {
   return new HostConfigApiError(res.status, text || `${res.status} ${res.statusText}`.trim())
 }
 
-export async function fetchHostConfig(hostId: string, signal?: AbortSignal): Promise<HostConfigPayload> {
+/**
+ * The body exactly as the daemon sent it. Its GET does not re-validate a stored
+ * row (#1489), so this is unchecked JSON: `parseHostConfig` reads it.
+ */
+export async function fetchHostConfig(hostId: string, signal?: AbortSignal): Promise<unknown> {
   assertKnownHost(hostId)
   const res = await hostFetch(hostId, '/api/hostconfig', { signal })
   if (!res.ok) throw await failure(res)
-  return (await res.json()) as HostConfigPayload
+  return await res.json()
 }
 
+/** Resolves to the stored copy, unchecked like `fetchHostConfig`'s (`parseHostConfigField` reads it). */
 export async function putHostConfig<C extends HostConfigCollection>(
   hostId: string,
   collection: C,
   items: HostConfigCollectionItems[C],
   baseRevision: number,
-): Promise<Versioned<HostConfigCollectionItems[C]>> {
+): Promise<unknown> {
   assertKnownHost(hostId)
   const res = await hostFetch(hostId, `/api/hostconfig/${collection}`, {
     method: 'PUT',
@@ -100,7 +105,7 @@ export async function putHostConfig<C extends HostConfigCollection>(
     throw new HostConfigConflictError((await res.json()) as Versioned<unknown>)
   }
   if (!res.ok) throw await failure(res)
-  return (await res.json()) as Versioned<HostConfigCollectionItems[C]>
+  return await res.json()
 }
 
 const UNVERIFIABLE: PathCheck = { status: 'unverifiable', resolved: '' }

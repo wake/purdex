@@ -25,6 +25,21 @@ describe('effectiveQuickReplies', () => {
     expect(effectiveQuickReplies(ready([], 0))).toBe(DEFAULT_QUICK_REPLIES)
   })
 
+  // #1489: revision 0 is only "never written" when the row holds nothing. A row edited by hand back to 0 may still
+  // hold replies, and showing the defaults over them would make the first edit PUT defaults + that edit, wiping them.
+  it('revision 0 with stored items shows the items', () => {
+    const items = [{ id: 'go', text: 'go on' }]
+    expect(effectiveQuickReplies(ready(items, 0))).toEqual(items)
+    expect(effectiveQuickReplies({ ...ready(items, 0), problems: { quickReplies: { kind: 'rows', count: 1 } } })).toEqual(items)
+  })
+
+  it.each([
+    ['a shape problem', { kind: 'shape' } as const],
+    ['every row malformed', { kind: 'rows', count: 2 } as const],
+  ])('revision 0 with nothing readable but %s shows nothing, not the defaults', (_name, problem) => {
+    expect(effectiveQuickReplies({ ...ready([], 0), problems: { quickReplies: problem } })).toEqual([])
+  })
+
   // Q1 (a tap sends at once) + Q3 (an emptied list shows no dock): a list the
   // host is not known to hold must never be the defaults, or a stray
   // `continue` appears — and one tap sends it.

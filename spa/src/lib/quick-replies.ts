@@ -21,18 +21,7 @@ const NO_QUICK_REPLIES: readonly QuickReply[] = Object.freeze([])
 
 const utf8 = new TextEncoder()
 
-/**
- * Go's `unicode.IsSpace` — the Unicode White_Space property — which the
- * daemon's `strings.TrimSpace` strips before storing a quick reply. JS
- * `trim()` is not the same set: it keeps U+0085 (NEL) and strips U+FEFF (BOM).
- */
-const GO_SPACE = '\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000'
-const GO_TRIM = new RegExp(`^[${GO_SPACE}]+|[${GO_SPACE}]+$`, 'g')
-
-/** `strings.TrimSpace`, so the SPA checks and sends exactly what the daemon stores. */
-export function trimLikeGo(text: string): string {
-  return text.replace(GO_TRIM, '')
-}
+export { trimLikeGo } from './go-trim'
 
 /**
  * Why `text` (already trimmed) cannot be saved, as a locale key, or `null`.
@@ -52,8 +41,11 @@ export function validateQuickReplyText(text: string): string | null {
  *
  * - The collection loaded once (`quickRepliesSupported`) → what it held,
  *   whatever the current status: a failed or running reload keeps the last
- *   known copy. Revision 0 (never written) → the defaults; otherwise the
- *   stored items, **even an empty list**.
+ *   known copy. Never written — revision 0, no items AND no problem reading
+ *   them — → the defaults; otherwise the stored items, **even an empty list**,
+ *   and even at revision 0: a row edited by hand may still hold replies, or
+ *   hold only ones that did not read (#1489), and defaults shown over them
+ *   would be PUT back with the first edit.
  * - The daemon predates the collection (`unsupported`, or loaded without it)
  *   → the defaults.
  * - Anything else — no entry, idle, loading, an error before any success —
@@ -62,7 +54,8 @@ export function validateQuickReplyText(text: string): string | null {
 export function effectiveQuickReplies(entry: HostConfigEntry | undefined): readonly QuickReply[] {
   if (!entry) return NO_QUICK_REPLIES
   if (entry.quickRepliesSupported) {
-    return entry.revisions.quickReplies === 0 ? DEFAULT_QUICK_REPLIES : entry.quickReplies
+    const neverWritten = entry.revisions.quickReplies === 0 && entry.quickReplies.length === 0 && !entry.problems.quickReplies
+    return neverWritten ? DEFAULT_QUICK_REPLIES : entry.quickReplies
   }
   if (entry.status === 'unsupported' || entry.status === 'ready') return DEFAULT_QUICK_REPLIES
   return NO_QUICK_REPLIES
