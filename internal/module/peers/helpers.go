@@ -199,10 +199,9 @@ type helperManager struct {
 	onFrame func(h *helper, line string)
 	log     func(format string, args ...any)
 
-	swept      bool
-	sweepDone  chan struct{} // non-nil while a Sweep has claimed the scan; closed when it finishes
-	sweepErr   error         // the result of the scan sweepDone belongs to, read after it closes
-	unresolved []unresolvedRecord
+	swept       bool
+	sweepFlight *sweepFlight // non-nil while a Sweep has claimed the scan
+	unresolved  []unresolvedRecord
 }
 
 // newHelperManager builds a manager; nil seams take production defaults.

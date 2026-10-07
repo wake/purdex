@@ -49,7 +49,7 @@
 - **真殭屍**：測試行程 `exec` `sh -c 'exit 0'`，**不 Wait**；以有期限的 polling（`waitFor`，參考 `internal/agent/process_snapshot_test.go:238` 的既有模式）等到 `ps` 狀態以 `Z` 開頭；`t.Cleanup` 兜底 `cmd.Wait()`。以真實 `pidAlive`／`procStart`／`procState`／`reap`／`signal` 建 manager，寫該 pid 的 `proxies.json` 紀錄（真 `procStart`），`Sweep`：不以耗時為主要斷言，而是斷言 **未送 SIGTERM/SIGKILL**（用包一層記錄的 `signal`）、`kill(pid,0)` 之後回 ESRCH（殭屍已被收）、紀錄已清。
 - **`defaultReap` 的三個真 syscall 分支**：(i) 仍在跑的直系子行程（`sleep 30`，`t.Cleanup` kill＋Wait）→ `reap` 回 false 且該行程仍在；(ii) 非子行程（例如 `os.Getppid()` 或 pid 1）→ `ECHILD` → false；(iii) 已退出的直系子行程（殭屍）→ true。
 - **「同 pid 有 `Cmd.Wait` 在等」不被搶**（Z 複查機制）：啟動一個子行程並讓一個 goroutine `cmd.Wait()`；子行程退出的瞬間，Wait 會收走它，`procState` 的複查看不到持續的 Z → `tryReapZombie` 回 false，且 `cmd.Wait()` 回傳 nil（不是 `ECHILD`）。為了讓時序確定，以 `procState` 假件包真實 `ps`：第一次呼叫回 `Z`（模擬剛退出）、複查前讓 Wait goroutine 完成，複查回「查無此行程」。斷言 `reap` 從未被呼叫。
-- **claim-before-scan**：兩個 goroutine 同時 `Sweep`，第二個在第一個進行中進入 ⇒ 第二個立即回 nil、`proxies.json` 只被處理一次（以計數的 `identity` 假件鎖定）；第一個失敗後可重試（沿用既有測試）。
+- **claim-before-scan**：兩個 goroutine 同時 `Sweep`，第二個在第一個進行中進入 ⇒ 第二個**等待**第一個完成並取得同一個結果（含失敗）、`proxies.json` 只被處理一次（以計數的 `identity` 假件鎖定）；第一個失敗後可重試（沿用既有測試）；結果存在 per-flight 結構（`sweepFlight`），不會被下一輪重試覆寫，並有多 caller 交錯的壓力測試。
 
 ### Z3 日誌
 - 回收成功時記：`peers: sweep: reaped zombie pid %d (identity same)`；部署後重啟日誌可直接驗收。

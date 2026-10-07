@@ -65,33 +65,37 @@ func (m *helperManager) waitGone(r proxyRecord) (alive bool, id ipeers.ProcIdent
 // second call after a successful one is a no-op: from then on
 // proxies.json names the daemon's OWN live helpers, which must never be
 // signalled.
+// sweepFlight is one in-flight Sweep: err is set before done closes and never changes after.
+type sweepFlight struct {
+	done chan struct{}
+	err  error
+}
+
 func (m *helperManager) Sweep() error {
 	m.mu.Lock()
 	if m.swept {
 		m.mu.Unlock()
 		return nil
 	}
-	if done := m.sweepDone; done != nil {
-		// A scan is in flight: wait for it and share its result (a failure included), so a second caller can
-		// neither run it twice nor read an unfinished or failed scan as success.
+	if f := m.sweepFlight; f != nil {
+		// A scan is in flight: wait for it and share ITS result (a failure included), so a second caller can
+		// neither run it twice nor read an unfinished or failed scan as success. The result lives in the flight
+		// itself, so a later retry cannot overwrite what this waiter reads.
 		m.mu.Unlock()
-		<-done
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return m.sweepErr
+		<-f.done
+		return f.err
 	}
-	done := make(chan struct{})
-	m.sweepDone = done // claim the scan before reading proxies.json
-	m.sweepErr = nil
+	f := &sweepFlight{done: make(chan struct{})}
+	m.sweepFlight = f // claim the scan before reading proxies.json
 	m.mu.Unlock()
 
 	var result error
 	defer func() { // a failed Sweep stays retryable: the claim is released either way
+		f.err = result // before close: the waiters read it after <-f.done
 		m.mu.Lock()
-		m.sweepErr = result
-		m.sweepDone = nil
+		m.sweepFlight = nil
 		m.mu.Unlock()
-		close(done)
+		close(f.done)
 	}()
 
 	records := m.readProxies()

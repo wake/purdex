@@ -301,6 +301,54 @@ func TestSweep_ConcurrentCallGetsTheScansError(t *testing.T) {
 	}
 }
 
+// Waiters of a failing scan keep reading THAT scan's error even while a later retry starts and succeeds
+// (codex R2: the result must be per-flight, not a field the next scan resets).
+func TestSweep_WaitersKeepTheirScansErrorAcrossARetry(t *testing.T) {
+	for i := 0; i < 30; i++ {
+		tm := newTestManager(t)
+		zombieSweepSetup(t, tm)
+		good := tm.m.proxiesPath
+		bad := filepath.Join(tm.sockDir, "missing", "proxies.json")
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		tm.m.procStart = func(pid int) (string, error) {
+			once.Do(func() { close(entered); <-release })
+			return tm.os.procStart(pid)
+		}
+		tm.os.onSignal = func(pid int, sig os.Signal) {
+			if sig == syscall.SIGTERM {
+				tm.os.set(func() { tm.os.alive[pid] = false })
+			}
+		}
+		first := make(chan error, 1)
+		go func() { first <- tm.m.Sweep() }()
+		<-entered
+		const waiters = 4
+		got := make(chan error, waiters)
+		for w := 0; w < waiters; w++ {
+			go func() { got <- tm.m.Sweep() }()
+		}
+		time.Sleep(20 * time.Millisecond) // let the waiters join the flight
+		tm.m.mu.Lock()
+		tm.m.proxiesPath = bad // the final write of the first scan fails
+		tm.m.mu.Unlock()
+		close(release)
+		if err := <-first; err == nil {
+			t.Fatalf("iter %d: first Sweep: want a write error", i)
+		}
+		tm.m.mu.Lock()
+		tm.m.proxiesPath = good // a retry may now succeed
+		tm.m.mu.Unlock()
+		go func() { _ = tm.m.Sweep() }() // the retry races the waiters' reads
+		for w := 0; w < waiters; w++ {
+			if err := <-got; err == nil {
+				t.Fatalf("iter %d: a waiter of the failed scan read it as success", i)
+			}
+		}
+	}
+}
+
 func TestSweep_FailureReleasesClaim(t *testing.T) {
 	tm := newTestManager(t)
 	good := tm.m.proxiesPath
