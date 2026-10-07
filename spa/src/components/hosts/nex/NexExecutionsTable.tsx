@@ -35,6 +35,9 @@ interface ArchivedList {
   error: string | null
 }
 
+// Rows rendered per step; the shared list can hold up to 10,000 (#1593).
+const ROW_PAGE = 100
+
 function errorCode(err: unknown): string {
   return err instanceof NexApiError ? err.code : 'network'
 }
@@ -46,6 +49,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
   const [actionError, setActionError] = useState<ActionError | null>(null)
   const [confirmTerminateId, setConfirmTerminateId] = useState<string | null>(null)
   const [pendingId, setPendingId] = useState<string | null>(null)
+  const [visibleCount, setVisibleCount] = useState(ROW_PAGE)
   // A host hidden in this workbench keeps its executions listed and manageable; only "open" (it creates a tab) is
   // not offered (plan H2d-2, §0.21 user rules 1 / 5).
   const shown = useIsRefShown(hostId)
@@ -95,6 +99,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
     setActionError(null)
     setConfirmTerminateId(null)
     setPendingId(null)
+    setVisibleCount(ROW_PAGE)
   }, [hostId])
 
   // Table-local archived query (plan task 3): keyed on `refreshRevision` so
@@ -126,6 +131,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
 
   const handleIncludeArchived = (checked: boolean) => {
     setIncludeArchived(checked)
+    setVisibleCount(ROW_PAGE)
     if (!checked) {
       archivedTokenRef.current += 1
       setArchived(null)
@@ -255,7 +261,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
               </tr>
             </thead>
             <tbody>
-              {items.map((row) => (
+              {items.slice(0, visibleCount).map((row) => (
                 <NexExecutionRow
                   key={row.id}
                   row={row}
@@ -270,6 +276,17 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
               ))}
             </tbody>
           </table>
+          {items.length > visibleCount && (
+            <div className="px-3 py-2 border-t border-border-subtle text-center">
+              <button
+                type="button"
+                className="text-xs text-accent hover:underline"
+                onClick={() => setVisibleCount((n) => n + ROW_PAGE)}
+              >
+                {t('hosts.nex.executions.show_more', { shown: visibleCount, total: items.length })}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
