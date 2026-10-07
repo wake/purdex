@@ -87,9 +87,17 @@ func nextNewline(r io.ReaderAt, lo, hi, maxScan int64) (idx int64, found, exceed
 // completeEnd is the offset just past the last '\n' in [0,size) (0 if none):
 // everything before it is complete lines, the rest is an unfinished line.
 func completeEnd(r io.ReaderAt, size int64) (int64, error) {
-	i, found, _, err := lastNewline(r, 0, size, size)
-	if err != nil || !found {
+	// The unfinished tail is bounded by the same hard cap as any line, so a
+	// huge newline-free file cannot make every request scan all of it.
+	i, found, exceeded, err := lastNewline(r, 0, size, MaxLineBytes)
+	if err != nil {
 		return 0, err
+	}
+	if exceeded {
+		return 0, ErrLineTooLarge
+	}
+	if !found {
+		return 0, nil
 	}
 	return i + 1, nil
 }

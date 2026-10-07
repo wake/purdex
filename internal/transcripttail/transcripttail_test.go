@@ -188,6 +188,17 @@ func TestAfterOversizeLine(t *testing.T) {
 	}
 }
 
+// A huge newline-free tail must be refused in bounded work by both readers.
+func TestHugeUnfinishedTailIsBounded(t *testing.T) {
+	s := "a\n" + strings.Repeat("x", MaxLineBytes+(1<<20))
+	if _, err := Tail(rd(s), int64(len(s)), 10, 1<<20); !errors.Is(err, ErrLineTooLarge) {
+		t.Fatalf("Tail err = %v", err)
+	}
+	if _, err := After(rd(s), int64(len(s)), 0, 1<<20); !errors.Is(err, ErrLineTooLarge) {
+		t.Fatalf("After err = %v", err)
+	}
+}
+
 // An arbitrary offset inside a line longer than the hard cap must be refused
 // rather than scanned to the end of the file.
 func TestAfterMidHugeLineIsBounded(t *testing.T) {
