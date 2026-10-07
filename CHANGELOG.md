@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.530] - 2026-10-07
+
+> 只動 `pdx` 指令，**需要部署新的 `pdx` 執行檔**（與 alpha.529 的 daemon 變更一起重啟即可），由統籌安排。資料庫、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P2c-2（#1697）
+
+硬鎖（U17）完成：lead 申請等待核准期間，該 session 的每一次工具呼叫都會被 Claude Code 的 hook 擋下（spec §6.4、§6.6），補上軟鎖「模型把指令丟背景執行」的漏洞。
+
+- **`pdx lead request`** 建立申請成功後，在 `<data_dir>/hooklocks/cc/<session_id>` 寫下旗標；不論核准、拒絕、逾時、Ctrl-C 或 kill，結束時都會移除。寫不了旗標時印一行提醒並退回軟鎖。
+- **`pdx hook`**：只有該 session 有旗標時才去問 daemon（沒有旗標的 session 跟以前一樣零成本）。`PreToolUse` 收到「拒絕」就印出 Claude Code 讀得懂的 deny 與原因（「lead 申請等待核准中（<id>），核准或拒絕前這個 session 不能執行工具；請在 Purdex 介面處理」）；`PermissionRequest` 與其他情況不印。**整條路徑最多 5 秒**（事件回報與詢問並行、共用一個預算），daemon 連不上就當沒事、照常放行；永遠 exit 0，不會卡住任何 session。
+- Review 後的補強：旗標內容是申請 id，結束時只在仍屬於自己時才移除（flock 保證跨程序原子），同 session 緊接著的下一個申請不會被前一個的收尾誤刪；hook 的 stdin 讀取也納入同一個 5 秒預算；事件回報與詢問並行、不互相等待（spec §6.6 措辭同步修正）。
+
 ## [1.0.0-alpha.529] - 2026-10-07
 
 > 動 daemon 與 `pdx` 指令，**需要部署新 binary 並重啟 daemon**，由統籌安排。Codex 使用者要重跑一次 `pdx setup --agent codex` 才會拿到新的 hook timeout。資料庫結構不變（只多 `<data_dir>/hooklocks/` 目錄）。SPA、Electron 都沒有改動。
