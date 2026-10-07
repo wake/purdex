@@ -73,6 +73,11 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
       client,
     })
     useApprovalStore.getState().applyClosed(hostId, closed)
+    if (pauseLeft) {
+      // The pause hit the network but the decision went through (PR #1742 attacker A-1): say so, as the
+      // connected path does — the session was not paused and may ask again.
+      useUndoToast.getState().show(useI18nStore.getState().t('approval.dialog.pause_failed', { code: 'network' }))
+    }
     return 'closed'
   } catch (e: unknown) {
     const err = e instanceof ApprovalApiError ? e : new ApprovalApiError(0, 'unknown', e instanceof Error ? e.message : String(e))

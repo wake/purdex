@@ -123,6 +123,9 @@ function OpenApprovalDialog({ entry }: { entry: ApprovalEntry }) {
     if (decision === 'approve' && !grantOk) return
     const grant: Grant | undefined = !isSelfRelay && decision === 'approve' ? { max_members: members, roots } : undefined
     if (!connected) {
+      // A second click in the same tick still sees locked=false (React has not re-rendered the queued state):
+      // the store is read synchronously so the FIRST queued decision wins (PR #1742 attacker A-2).
+      if (useApprovalStore.getState().queued[approvalKey(hostId, approval.id)]) return
       // Spec §9.4: kept locally, sent on reconnect (the snapshot re-adds the request, or shows it gone). A ticked
       // 「這個 session 不再詢問」 is queued WITH the decision and sent before it on reconnect (PR #1742 R1): the
       // person asked for it, and dropping it would let the session ask again.

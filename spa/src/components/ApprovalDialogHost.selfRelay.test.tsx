@@ -115,6 +115,26 @@ describe('ApprovalDialogHost — self_relay', () => {
     expect(mockedPause.mock.invocationCallOrder.at(-1)!).toBeLessThan(mockedDecide.mock.invocationCallOrder.at(-1)!)
   })
 
+  it('a queued pause that hits the network while its decision goes through is not silent (PR #1742 A-1)', async () => {
+    const { submitDecision } = await import('../lib/team/approval-decide')
+    mockedPause.mockRejectedValueOnce(new ApprovalApiError(0, 'network', 'Failed to fetch'))
+    mockedDecide.mockResolvedValueOnce(relay({ state: 'denied', decided_by: { kind: 'app', label: 'Purdex.app' } }))
+    expect(await submitDecision(H, relay(), 'deny', undefined, { fromQueue: true, pauseSession: 'S9' })).toBe('closed')
+    expect(useUndoToast.getState().toast?.message).toContain('無法暫停')
+  })
+
+  it('offline, two decision clicks in one tick: the FIRST queued decision wins (PR #1742 A-2)', async () => {
+    render(<ApprovalDialogHost />)
+    open(relay())
+    act(() => { useHostStore.getState().setRuntime(H, { status: 'reconnecting' }) })
+    act(() => {
+      fireEvent.click(screen.getByTestId('approval-approve'))
+      fireEvent.click(screen.getByTestId('approval-deny'))
+    })
+    await waitFor(() => expect(Object.keys(useApprovalStore.getState().queued)).toHaveLength(1))
+    expect(Object.values(useApprovalStore.getState().queued)[0].decision).toBe('approve')
+  })
+
   it('a pause that fails toasts and the decision still goes out', async () => {
     mockedPause.mockRejectedValueOnce(new ApprovalApiError(0, 'network', 'Failed to fetch'))
     mockedDecide.mockResolvedValueOnce(relay({ state: 'denied', decided_by: { kind: 'app', label: 'Purdex.app' } }))
