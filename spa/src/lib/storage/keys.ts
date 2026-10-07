@@ -27,6 +27,10 @@ export const STORAGE_KEYS = {
   SHOWN_HOSTS: 'purdex-shown-hosts',
   /** 手動管理（非 Zustand store），直接操作 localStorage，不走 browserStorage/syncManager */
   NOTIFICATION_SEEN: 'purdex-notification-seen',
+  /** 手動管理（非 Zustand store）：hooks/useNotificationDispatcher.ts —— `{ [compositeKey]: requestId[] }`，等待核准的 worker
+   *  已看過的 request id（通知以 request id 去重，同一毫秒的兩個 request 才不會互吃），每個 key 只留最近 20 個；
+   *  跟 NOTIFICATION_SEEN 同時清。device-local，直接操作 localStorage，不走 browserStorage/syncManager */
+  NOTIFICATION_SEEN_REQUESTS: 'purdex-notification-seen-requests',
   MODULE_CONFIG: 'purdex-module-config',
   MODULE_ENABLED: 'purdex-module-enabled',
   EDITOR_SETTINGS: 'purdex-editor-settings',

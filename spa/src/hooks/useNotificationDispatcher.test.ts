@@ -938,6 +938,7 @@ describe('worker (execution) tabs in the notification dispatcher', () => {
   afterEach(() => {
     Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
     localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN)
+    localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN_REQUESTS)
   })
 
   it('worker idle builds notification content (title = worker title, body = last assistant text)', () => {
@@ -963,6 +964,23 @@ describe('worker (execution) tabs in the notification dispatcher', () => {
     expect(showNotification).toHaveBeenCalledTimes(1)
     expect(showNotification.mock.calls[0][0].title).toBe('Fix the bug - repo')
     expect(showNotification.mock.calls[0][0].body).toBe('rate limited')
+    unmount()
+  })
+
+  // PC2 as amended 2026-10-07: a worker awaiting approval notifies like a terminal agent's ask (same event, same
+  // content rule) — titled like its tab, the body naming the tool.
+  it('worker waiting builds the PermissionRequest content (title = worker title, body = the tool)', () => {
+    openExecTab()
+    setLiveSummary({ pending_permission: { request_id: 'r1', tool_name: 'Bash', since: 2 } })
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    dispatch({ status: 'waiting', raw_event_name: 'PermissionRequest', broadcast_ts: 2, detail: { tool_name: 'Bash', request_id: 'r1' } })
+
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    const payload = showNotification.mock.calls[0][0]
+    expect(payload.title).toBe('Fix the bug - repo')
+    expect(payload.body).toBe('Permission required: Bash')
+    expect(payload.eventName).toBe('PermissionRequest')
+    expect(payload.action).toEqual({ kind: 'open-session', hostId: HOST, sessionCode: CODE })
     unmount()
   })
 

@@ -8,8 +8,9 @@
 // the host's execution list row (a frozen live entry is still used when no
 // row exists). Every host with a worker tab
 // holds one list subscription so a row exists for an evicted pane. A dispatch
-// happens only when the projection (status, subagent ids, agent type) changes;
-// closing the last pane of a worker dispatches `clear`.
+// happens only when the projection (status, subagent ids, agent type, and the
+// pending request while waiting) changes; closing the last pane of a worker
+// dispatches `clear`.
 import { useEffect } from 'react'
 import { useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
 import { useTabStore } from '../stores/useTabStore'
@@ -31,8 +32,10 @@ import type { Tab } from '../types/tab'
 
 /**
  * Names the notification pipeline already understands (notification-content.ts, event-name.ts). `waiting` is a
- * worker awaiting approval: it is named for what it is, and `detailOf` marks it `notification_silent` so the
- * dispatcher never pushes it (permission channel PC2: no push notifications).
+ * worker awaiting approval. Permission channel PC2 as amended 2026-10-07 (user): that is an event of the same level as
+ * a terminal agent's ask, so it carries the ask's name — a terminal Claude Code agent's `PdxPermissionRequest`
+ * normalizes to `PermissionRequest` — and the dispatcher applies the same rules and the same setting
+ * (`agents[agentType].events.PermissionRequest`, `agentType` from `providerAgentType`: `cc` for a Claude worker).
  */
 const RAW_EVENT_NAME: Record<WorkerProjection['status'], string> = {
   running: 'UserPromptSubmit',
@@ -204,9 +207,19 @@ function failureReason(src: Source): string {
  * summary's `updated_at`; the clock only as a last resort. Waiting (awaiting
  * approval) → the pending request's `since` (Unix ms, the daemon's clock).
  *
+ * The request's `since` is the same on the live summary and on a list row, so
+ * unlike the turn stamps it never depends on the source, and it is used even
+ * for the first projection after a reload. It is not what dedupes the request,
+ * though: two requests can share a millisecond, so the dispatcher dedupes a
+ * waiting event by its `detail.request_id` (`shouldDispatchRequest`) — quiet
+ * for a request it already saw, once for one it has not (also one that came
+ * while the App was closed), and only a baseline for a key it never saw — and
+ * keeps the newest stamp for the key's other events.
+ *
  * `firstInSession`: this engine has not dispatched the key yet. A list-row
- * source then stamps 0 instead of `updated_at`. The live and list-row sources
- * stamp the same state differently (turn endAt vs `updated_at`), and Nexen
+ * source (any status but waiting, above) then stamps 0 instead of
+ * `updated_at`. The live and list-row sources stamp the same state
+ * differently (turn endAt vs `updated_at`), and Nexen
  * advances `updated_at` on lease acquire / renew / release and on
  * last_turn_reason writes with no status change — so after a reload the first
  * list-row projection would carry a stamp above the one the dispatcher stored
@@ -218,11 +231,11 @@ function failureReason(src: Source): string {
  * its turn-derived stamps.
  */
 function stateStamp(status: WorkerProjection['status'], src: Source, firstInSession: boolean): number {
-  if (!src.live && firstInSession) return 0
   if (status === 'waiting') {
     const since = src.summary.pending_permission?.since
     if (typeof since === 'number' && since > 0) return since
   }
+  if (!src.live && firstInSession) return 0
   const meta = src.live?.turnMeta.at(-1)
   const t = status === 'running' ? meta?.startAt : meta?.endAt
   if (typeof t === 'number' && t > 0) return t
@@ -235,15 +248,32 @@ function detailOf(status: WorkerProjection['status'], src: Source): Record<strin
     return text !== undefined ? { last_assistant_message: text } : {}
   }
   if (status === 'error') return { error: failureReason(src) }
-  // PC2 forbids push notifications for 「等待核准」. The guard lives here, not in the notification module: the
-  // dispatcher's `shouldNotify` drops a `notification_silent` event (the same flag opencode's idle uses). The tab
-  // still marks unread like any `waiting` agent — that is not a push.
-  if (status === 'waiting') return { notification_silent: true }
+  // 「等待核准」 notifies like a terminal agent's ask (PC2 as amended 2026-10-07), so it carries the ask's detail shape:
+  // `tool_name`, which the PermissionRequest notification body names (notification-content.ts). And `request_id`: the
+  // dispatcher dedupes such an event by the request it is about, not by its stamp (`since`), which two requests can
+  // share (useNotificationDispatcher.ts, `shouldDispatchRequest`).
+  if (status === 'waiting') {
+    const pending = src.summary.pending_permission
+    const detail: Record<string, unknown> = {}
+    if (typeof pending?.tool_name === 'string' && pending.tool_name !== '') detail.tool_name = pending.tool_name
+    if (typeof pending?.request_id === 'string' && pending.request_id !== '') detail.request_id = pending.request_id
+    return detail
+  }
   return {}
 }
 
-const signatureOf = (agentType: string, p: WorkerProjection): string =>
-  `${agentType}|${p.status}|${p.subagents.map((s) => s.id).join(',')}`
+/** The pending request a waiting projection is about; '' for any other status. */
+function requestIdOf(status: WorkerProjection['status'], src: Source): string {
+  return status === 'waiting' ? (src.summary.pending_permission?.request_id ?? '') : ''
+}
+
+/**
+ * What makes a projection a new dispatch. While waiting it includes the pending request's id: a new request is a new
+ * event even when the worker never left `waiting` (back-to-back requests), and the same request seen again through a
+ * refetch, a reconnect or a live <-> row source switch is not (both sources carry the same `pending_permission`).
+ */
+const signatureOf = (agentType: string, p: WorkerProjection, requestId: string): string =>
+  `${agentType}|${p.status}|${p.subagents.map((s) => s.id).join(',')}|${requestId}`
 
 interface Dispatched {
   hostId: string
@@ -286,7 +316,7 @@ export function startWorkerAgentProjection(): () => void {
       if (!src) continue
       const projection = projectWorkerStatus(src.input)
       const agentType = src.provider ? providerAgentType(src.provider) : ''
-      const sig = signatureOf(agentType, projection)
+      const sig = signatureOf(agentType, projection, requestIdOf(projection.status, src))
       const prev = dispatched.get(key)
       // A list row knows only the current state and its refreshes are debounced, so a running -> idle between two
       // refreshes leaves the status signature unchanged and the second Stop would be swallowed. `turn_count` still
