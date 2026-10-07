@@ -291,6 +291,12 @@ func (d *probeIntentDispatcher) setParentCtx(ctx context.Context) {
 // (agentType, declaredKinds) tuple BEFORE running the per-intent
 // lifecycle so cross-provider switches don't leave stranded entries.
 func (d *probeIntentDispatcher) applyStatus(session, agentType string, newStatus agentpkg.Status) {
+	d.applyStatusWith(session, agentType, newStatus, nil)
+}
+
+// applyStatusWith is applyStatus with an optional replay cache (nil = the
+// per-call behaviour every non-replay caller uses).
+func (d *probeIntentDispatcher) applyStatusWith(session, agentType string, newStatus agentpkg.Status, rc *replayProjectionCache) {
 	provider, ok := d.parent.registry.Get(agentType)
 	if !ok {
 		// Unknown agent → reconcile clears every active entry for the
@@ -310,7 +316,7 @@ func (d *probeIntentDispatcher) applyStatus(session, agentType string, newStatus
 	d.reconcileSessionActive(session, agentType, declaredKinds)
 
 	for _, intent := range intents {
-		d.applyIntentLifecycle(session, agentType, newStatus, intent)
+		d.applyIntentLifecycle(session, agentType, newStatus, intent, rc)
 	}
 }
 
@@ -461,6 +467,7 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 	session, agentType string,
 	newStatus agentpkg.Status,
 	intent agentpkg.ProbeIntent,
+	rc *replayProjectionCache,
 ) {
 	shouldActive := slices.Contains(intent.OnEntryStatus, newStatus)
 
@@ -491,7 +498,7 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 			}
 			break
 		}
-		paneID, senderPID, hasFrame := d.parent.lookupTopFrameForSessionLocked(session)
+		paneID, senderPID, hasFrame := d.lookupArmTarget(session, rc)
 		if !hasFrame || paneID == "" || senderPID == 0 {
 			if wasActive {
 				if meta, ok := d.stopActiveIntentInLock(session, intent.Kind, 0, "lifecycle-frame-miss"); ok {
@@ -885,10 +892,32 @@ func probeIntentsOf(p agentpkg.AgentProvider) []agentpkg.ProbeIntent {
 // canonical issue #698 fix: daemon restart correctly discovers the
 // missing process and flips lights without waiting for the next hook.
 func (d *probeIntentDispatcher) replayStatus() {
-	snapshot := d.parent.snapshotStatuses()
+	rc := &replayProjectionCache{}
+	snapshot := d.parent.snapshotStatuses(rc)
 	for session, entry := range snapshot {
-		d.applyStatus(session, entry.agentType, entry.status)
+		d.applyStatusWith(session, entry.agentType, entry.status, rc)
 	}
+}
+
+// lookupArmTarget resolves the top frame (paneID, pid) to arm a detector for.
+// CALLER MUST hold m.mu. With rc == nil it is exactly
+// lookupTopFrameForSessionLocked. With a replay cache the projection may be
+// older than the sweep's DB delete (clearFrame deletes the row BEFORE it takes
+// m.mu to sync currentStatus), so the chosen frame's identity is re-read from
+// the DB (one SQL row, no tmux) and a vanished row counts as a frame miss —
+// otherwise we could arm a detector for an already-deleted frame (#1767 A1).
+func (d *probeIntentDispatcher) lookupArmTarget(session string, rc *replayProjectionCache) (paneID string, pid int, ok bool) {
+	frame, ok := d.parent.lookupTopFrameWith(session, rc)
+	if !ok {
+		return "", 0, false
+	}
+	if rc != nil && d.parent.frames != nil {
+		fresh, err := d.parent.frames.GetByIdentity(frame.PaneID, frame.PID, frame.ProcessStartTime)
+		if err != nil || fresh == nil {
+			return "", 0, false
+		}
+	}
+	return frame.PaneID, frame.PID, true
 }
 
 // stopAll cancels every active ProbeIntent detector and clears the map.
