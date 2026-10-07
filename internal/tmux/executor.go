@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wake/purdex/internal/execstat"
 )
 
 var ErrNoSession = errors.New("no such session")
@@ -170,6 +172,41 @@ type Executor interface {
 
 // --- Real Executor ---
 
+// observedCmd is an *exec.Cmd whose Output/Run record the fork in an execstat
+// counter (count and wall time, success or failure; never arguments or output,
+// #1767). Everything else (Stdin, Stderr, Env, WaitDelay) is the embedded
+// Cmd's, so call sites keep their own setup.
+type observedCmd struct {
+	*exec.Cmd
+	counter *execstat.Counter
+}
+
+func tmuxCmd(args ...string) *observedCmd {
+	return &observedCmd{exec.Command("tmux", args...), &execstat.Tmux}
+}
+
+func tmuxCmdContext(ctx context.Context, args ...string) *observedCmd {
+	return &observedCmd{exec.CommandContext(ctx, "tmux", args...), &execstat.Tmux}
+}
+
+func psCmd(args ...string) *observedCmd {
+	return &observedCmd{exec.Command("ps", args...), &execstat.PS}
+}
+
+func (c *observedCmd) Output() ([]byte, error) {
+	t0 := time.Now()
+	out, err := c.Cmd.Output()
+	c.counter.Observe(time.Since(t0))
+	return out, err
+}
+
+func (c *observedCmd) Run() error {
+	t0 := time.Now()
+	err := c.Cmd.Run()
+	c.counter.Observe(time.Since(t0))
+	return err
+}
+
 type RealExecutor struct{}
 
 func NewRealExecutor() *RealExecutor { return &RealExecutor{} }
@@ -182,8 +219,8 @@ const readWaitDelay = 500 * time.Millisecond
 
 // boundedRead builds a tmux invocation that is killed when ctx ends — the
 // reads above, and new-session, whose caller bounds it with a cap of its own.
-func boundedRead(ctx context.Context, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "tmux", args...)
+func boundedRead(ctx context.Context, args ...string) *observedCmd {
+	cmd := tmuxCmdContext(ctx, args...)
 	cmd.WaitDelay = readWaitDelay
 	return cmd
 }
@@ -417,7 +454,7 @@ func sanitizeTmuxMetadata(s string) string {
 }
 
 func (r *RealExecutor) NewSession(name, cwd string) error {
-	return exec.Command("tmux", "new-session", "-d", "-s", name, "-c", cwd).Run()
+	return tmuxCmd("new-session", "-d", "-s", name, "-c", cwd).Run()
 }
 
 func (r *RealExecutor) NewSessionContext(ctx context.Context, name, cwd string) error {
@@ -432,7 +469,7 @@ func (r *RealExecutor) NewSessionContext(ctx context.Context, name, cwd string) 
 }
 
 func (r *RealExecutor) KillSession(name string) error {
-	err := exec.Command("tmux", "kill-session", "-t", "="+name).Run()
+	err := tmuxCmd("kill-session", "-t", "="+name).Run()
 	if err != nil {
 		return ErrNoSession
 	}
@@ -440,7 +477,7 @@ func (r *RealExecutor) KillSession(name string) error {
 }
 
 func (r *RealExecutor) RenameSession(oldName, newName string) error {
-	err := exec.Command("tmux", "rename-session", "-t", "="+oldName, newName).Run()
+	err := tmuxCmd("rename-session", "-t", "="+oldName, newName).Run()
 	if err != nil {
 		return fmt.Errorf("tmux rename-session: %w", err)
 	}
@@ -450,7 +487,7 @@ func (r *RealExecutor) RenameSession(oldName, newName string) error {
 func (r *RealExecutor) HasSession(name string) bool {
 	// Use "=" prefix for exact name matching (tmux 3.2+).
 	// Without it, "has-session -t foo" matches "foobar" via prefix.
-	return exec.Command("tmux", "has-session", "-t", "="+name).Run() == nil
+	return tmuxCmd("has-session", "-t", "="+name).Run() == nil
 }
 
 func (r *RealExecutor) HasSessionContext(ctx context.Context, name string) (bool, error) {
@@ -475,7 +512,7 @@ func (r *RealExecutor) HasPane(paneID string) (bool, error) {
 	if paneID == "" {
 		return false, nil
 	}
-	cmd := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id}")
+	cmd := tmuxCmd("list-panes", "-a", "-F", "#{pane_id}")
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -500,13 +537,13 @@ func (r *RealExecutor) HasPane(paneID string) (bool, error) {
 }
 
 func (r *RealExecutor) SendKeys(target, keys string) error {
-	return exec.Command("tmux", "send-keys", "-t", target, keys, "Enter").Run()
+	return tmuxCmd("send-keys", "-t", target, keys, "Enter").Run()
 }
 
 func (r *RealExecutor) SendKeysRaw(target string, keys ...string) error {
 	args := []string{"send-keys", "-t", target}
 	args = append(args, keys...)
-	return exec.Command("tmux", args...).Run()
+	return tmuxCmd(args...).Run()
 }
 
 func (r *RealExecutor) PasteText(target, text string) error {
@@ -514,7 +551,7 @@ func (r *RealExecutor) PasteText(target, text string) error {
 	// concurrently (the default anonymous buffer is shared globally).
 	bufName := fmt.Sprintf("pdx-%d", time.Now().UnixNano())
 
-	cmd := exec.Command("tmux", "load-buffer", "-b", bufName, "-")
+	cmd := tmuxCmd("load-buffer", "-b", bufName, "-")
 	cmd.Stdin = strings.NewReader(text)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("tmux load-buffer: %w", err)
@@ -524,11 +561,11 @@ func (r *RealExecutor) PasteText(target, text string) error {
 	//     so the receiving application (e.g. Claude Code) recognises it as
 	//     a paste event rather than typed input.
 	// -r  preserves LF as-is (default converts LF → CR).
-	return exec.Command("tmux", "paste-buffer", "-b", bufName, "-t", target, "-d", "-p", "-r").Run()
+	return tmuxCmd("paste-buffer", "-b", bufName, "-t", target, "-d", "-p", "-r").Run()
 }
 
 func (r *RealExecutor) PaneCurrentPath(target string) (string, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_current_path}").Output()
+	out, err := tmuxCmd("display-message", "-p", "-t", target, "#{pane_current_path}").Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux display-message pane_current_path: %w", err)
 	}
@@ -536,7 +573,7 @@ func (r *RealExecutor) PaneCurrentPath(target string) (string, error) {
 }
 
 func (r *RealExecutor) PaneSessionName(target string) (string, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{session_name}").Output()
+	out, err := tmuxCmd("display-message", "-p", "-t", target, "#{session_name}").Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux display-message session_name: %w", err)
 	}
@@ -544,7 +581,7 @@ func (r *RealExecutor) PaneSessionName(target string) (string, error) {
 }
 
 func (r *RealExecutor) PaneSessionID(ctx context.Context, target string) (string, error) {
-	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", target, "#{session_id}").Output()
+	out, err := tmuxCmdContext(ctx, "display-message", "-p", "-t", target, "#{session_id}").Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux display-message session_id: %w", err)
 	}
@@ -607,7 +644,7 @@ func quoteRow(line string) string {
 }
 
 func (r *RealExecutor) PanePID(target string) (string, error) {
-	out, err := exec.Command("tmux", "list-panes", "-t", target, "-F", "#{pane_pid}").Output()
+	out, err := tmuxCmd("list-panes", "-t", target, "-F", "#{pane_pid}").Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux list-panes pid: %w", err)
 	}
@@ -620,7 +657,7 @@ func (r *RealExecutor) PanePID(target string) (string, error) {
 // when a value must come from the pane the user is looking at (e.g. shell
 // HOME for tilde-path expansion).
 func (r *RealExecutor) ActivePanePID(target string) (string, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_pid}").Output()
+	out, err := tmuxCmd("display-message", "-p", "-t", target, "#{pane_pid}").Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux display-message pane_pid: %w", err)
 	}
@@ -641,7 +678,7 @@ func (r *RealExecutor) paneProcessCommands(target string, recursive bool) ([]str
 		return nil, err
 	}
 	// Build a process tree from ps output, then walk the pane shell's descendants.
-	out, err := exec.Command("ps", "-ax", "-o", "pid=,ppid=,comm=").Output()
+	out, err := psCmd("-ax", "-o", "pid=,ppid=,comm=").Output()
 	if err != nil {
 		return nil, fmt.Errorf("ps: %w", err)
 	}
@@ -680,7 +717,7 @@ func (r *RealExecutor) paneProcessCommands(target string, recursive bool) ([]str
 
 func (r *RealExecutor) CapturePaneContent(target string, lastN int) (string, error) {
 	arg := fmt.Sprintf("-%d", lastN)
-	out, err := exec.Command("tmux", "capture-pane", "-e", "-t", target, "-p", "-S", arg).Output()
+	out, err := tmuxCmd("capture-pane", "-e", "-t", target, "-p", "-S", arg).Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux capture-pane: %w", err)
 	}
@@ -695,7 +732,7 @@ func (r *RealExecutor) CapturePaneRange(target string, start, endInclusive int) 
 	// highlights) hash to the same content as the previous tick — so a
 	// TopLines watcher would miss "running" signals on agents that animate
 	// purely via color (cc's spinner is one). Mirrors CapturePaneContent.
-	out, err := exec.Command("tmux", "capture-pane", "-e", "-p", "-t", target, "-S", startArg, "-E", endArg).Output()
+	out, err := tmuxCmd("capture-pane", "-e", "-p", "-t", target, "-S", startArg, "-E", endArg).Output()
 	if err != nil {
 		return "", fmt.Errorf("tmux capture-pane range: %w", err)
 	}
@@ -710,7 +747,7 @@ func (r *RealExecutor) CapturePaneTopLines(target string, n int) (string, error)
 }
 
 func (r *RealExecutor) PaneSize(target string) (cols, rows int, err error) {
-	out, err := exec.Command("tmux", "list-panes", "-t", target, "-F", "#{pane_width} #{pane_height}").Output()
+	out, err := tmuxCmd("list-panes", "-t", target, "-F", "#{pane_width} #{pane_height}").Output()
 	if err != nil {
 		return 0, 0, fmt.Errorf("tmux list-panes size: %w", err)
 	}
@@ -723,12 +760,12 @@ func (r *RealExecutor) PaneSize(target string) (cols, rows int, err error) {
 }
 
 func (r *RealExecutor) ResizeWindow(target string, cols, rows int) error {
-	return exec.Command("tmux", "resize-window", "-t", target,
+	return tmuxCmd("resize-window", "-t", target,
 		"-x", fmt.Sprintf("%d", cols), "-y", fmt.Sprintf("%d", rows)).Run()
 }
 
 func (r *RealExecutor) ResizeWindowAuto(target string) error {
-	return exec.Command("tmux", "resize-window", "-A", "-t", target).Run()
+	return tmuxCmd("resize-window", "-A", "-t", target).Run()
 }
 
 func (r *RealExecutor) WindowSize(ctx context.Context, target string) (uint16, uint16, error) {
@@ -785,15 +822,15 @@ func parseWindowSize(s string) (uint16, uint16, error) {
 }
 
 func (r *RealExecutor) SetWindowOption(target, option, value string) error {
-	return exec.Command("tmux", "set-window-option", "-t", target, option, value).Run()
+	return tmuxCmd("set-window-option", "-t", target, option, value).Run()
 }
 
 func (r *RealExecutor) SetWindowOptionGlobal(option, value string) error {
-	return exec.Command("tmux", "set-window-option", "-g", option, value).Run()
+	return tmuxCmd("set-window-option", "-g", option, value).Run()
 }
 
 func (r *RealExecutor) ShowWindowOption(option string) (string, error) {
-	out, err := exec.Command("tmux", "show-options", "-w", "-g", "-q", "-v", option).Output()
+	out, err := tmuxCmd("show-options", "-w", "-g", "-q", "-v", option).Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			stderr := string(exitErr.Stderr)
@@ -807,7 +844,7 @@ func (r *RealExecutor) ShowWindowOption(option string) (string, error) {
 }
 
 func (r *RealExecutor) ShowGlobalOption(ctx context.Context, option string) (string, error) {
-	out, err := exec.CommandContext(ctx, "tmux", "show-options", "-g", "-q", "-v", option).Output()
+	out, err := tmuxCmdContext(ctx, "show-options", "-g", "-q", "-v", option).Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			stderr := string(exitErr.Stderr)
@@ -821,15 +858,15 @@ func (r *RealExecutor) ShowGlobalOption(ctx context.Context, option string) (str
 }
 
 func (r *RealExecutor) SetHookGlobal(event, command string) error {
-	return exec.Command("tmux", "set-hook", "-g", event, command).Run()
+	return tmuxCmd("set-hook", "-g", event, command).Run()
 }
 
 func (r *RealExecutor) RemoveHookGlobal(event string) error {
-	return exec.Command("tmux", "set-hook", "-gu", event).Run()
+	return tmuxCmd("set-hook", "-gu", event).Run()
 }
 
 func (r *RealExecutor) ShowHooksGlobal() (string, error) {
-	out, err := exec.Command("tmux", "show-hooks", "-g").Output()
+	out, err := tmuxCmd("show-hooks", "-g").Output()
 	if err != nil {
 		// "no hooks" is a normal condition — return empty string
 		if exitErr, ok := err.(*exec.ExitError); ok {

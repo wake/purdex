@@ -20,6 +20,7 @@ import (
 	"github.com/wake/purdex/internal/codexbroker"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/locale"
 	"github.com/wake/purdex/internal/module/agent"
 	backupmod "github.com/wake/purdex/internal/module/backup"
@@ -318,7 +319,7 @@ func runServe(args []string) *reexecPlan {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	log.Print(startupReadyLine(time.Since(bootStart), initDur, startDur))
+	log.Print(startupReadyLine(time.Since(bootStart), initDur, startDur, execstat.Take()))
 	log.Printf("pdx daemon listening on %s", addr)
 	listener, err := listenWithReuseAddr(addr)
 	if err != nil {
