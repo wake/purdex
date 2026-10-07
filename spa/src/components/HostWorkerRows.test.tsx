@@ -29,7 +29,7 @@ const readyEntry: NexHostEntry = {
 }
 
 function seed(items: ExecutionSummary[], patch: Record<string, unknown> = {}) {
-  useExecutionListStore.setState({ byHost: { [H]: { items, phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false, ...patch } } })
+  useExecutionListStore.setState({ byHost: { [H]: { items, phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false, complete: true, ...patch } } })
 }
 
 beforeEach(() => {

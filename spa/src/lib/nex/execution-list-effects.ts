@@ -86,6 +86,12 @@ export interface HostListCache {
   refreshRevision: number
   /** The last successful walk hit the page cap (D9): the newest rows may be missing. An error keeps the previous value with the previous rows. */
   truncated: boolean
+  /**
+   * The last successful walk answered in FULL: it reached the last page, no row was dropped as malformed, no cursor
+   * repeated (so not `truncated` either). Only then does a missing row say the execution is not listed. False until a
+   * walk answers. An error keeps the previous value with the previous rows.
+   */
+  complete: boolean
 }
 
 export type HostListCaches = Record<string, HostListCache>
@@ -117,7 +123,7 @@ export interface ExecutionListEffects {
 }
 
 export const emptyListCache = (refreshRevision = 0): HostListCache =>
-  ({ items: [], phase: 'idle', error: null, lastSeq: null, refreshRevision, truncated: false })
+  ({ items: [], phase: 'idle', error: null, lastSeq: null, refreshRevision, truncated: false, complete: false })
 
 const errorText = (err: unknown): string =>
   err instanceof NexApiError ? err.code : err instanceof Error ? err.message : String(err)
@@ -176,7 +182,8 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
         if (stuck) console.warn('nex: executions cursor repeated', { hostId, page: stuckPage })
         if (truncated) console.warn('nex: executions list truncated', { hostId, pageLimit: LIST_PAGE_LIMIT, maxPages: LIST_MAX_PAGES })
         if (dropped > 0) console.warn('nex: executions page dropped malformed row(s)', { hostId, dropped })
-        patchCache(hostId, (c) => ({ ...c, items, phase: 'ready', error: null, truncated, refreshRevision: c.refreshRevision + 1 }))
+        const complete = dropped === 0 && !stuck && !truncated
+        patchCache(hostId, (c) => ({ ...c, items, phase: 'ready', error: null, truncated, complete, refreshRevision: c.refreshRevision + 1 }))
       })
       .catch((err: unknown) => {
         if (!stillCurrent()) return

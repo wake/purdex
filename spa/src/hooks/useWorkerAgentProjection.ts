@@ -17,9 +17,9 @@
 // decides a status. The one fallback to it: a list cut at its page cap that has
 // no row for the worker. A status dispatch happens only when the status
 // signature (status, agent type, the pending request while waiting) changes or a
-// counted turn was missed; a decoration-only change writes the refs alone.
-// Closing the last pane of a worker, or its row leaving a list that answered in
-// full (archived), dispatches `clear`.
+// counted turn was missed while the row reads ended; a decoration-only change
+// writes the refs alone. Closing the last pane of a worker, or its row leaving a
+// list that answered in full (`complete`: archived), dispatches `clear`.
 import { useEffect } from 'react'
 import { useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
 import { useTabStore } from '../stores/useTabStore'
@@ -109,7 +109,7 @@ interface Source {
   decor: ExecutionState | null
 }
 
-/** No row for the worker in a host list that answered in full: the worker is not live there any more. */
+/** No row for the worker in a host list that answered in full (`HostListCache.complete`): the worker is not live there any more. */
 const GONE = 'gone'
 
 function runningSubagentsOf(live: ExecutionState | null): WorkerStatusInput['runningSubagents'] {
@@ -119,6 +119,13 @@ function runningSubagentsOf(live: ExecutionState | null): WorkerStatusInput['run
     .map((t) => ({ task_id: t.task_id, subagent_type: t.subagent_type, started_at: t.started_at }))
 }
 
+/**
+ * Where a worker's status is read from. The single source is for STATUS-class data only — state, archived, the pending
+ * request (pending_permission), turn_count, the dedupe stamps and so every transition dispatched here — and it is the
+ * host's list row. The TITLE is not status: it may fall back row → live summary → the #1557 prefetch
+ * (`readWorkerSummary`, worker-summary.ts). Never extend that fallback order to status: the live entry is a source
+ * here only under the truncated fallback below, and the prefetch never is.
+ */
 function deriveSource({ hostId, executionId }: WorkerRef): Source | typeof GONE | null {
   const live = useExecutionStore.getState().executions[executionKey(hostId, executionId)]
   const list = useExecutionListStore.getState().byHost[hostId]
@@ -166,8 +173,10 @@ function deriveSource({ hostId, executionId }: WorkerRef): Source | typeof GONE 
     }
   }
   // The list asks for unarchived executions only (execution-list-effects.ts): a row missing from a list that answered
-  // in full is a worker archived (or gone) since. Not before the list answered, nor from a list cut at its page cap.
-  if (list?.phase === 'ready' && !list.truncated) return GONE
+  // in full (`complete`) is a worker archived (or gone) since. Not before the list answered, nor from a walk that did
+  // not answer in full — cut at its page cap, a malformed row dropped, stopped on a repeated cursor: there a missing
+  // row says nothing, and the previous projection stands (no clear, no transition).
+  if (list?.phase === 'ready' && list.complete) return GONE
   return null
 }
 
@@ -356,8 +365,14 @@ export function startWorkerAgentProjection(): () => void {
       // deliberately not part of `sig`: a switch between the row and the truncated fallback must not look like a Stop.
       const rowTurns = src.live ? null : (src.summary.turn_count ?? 0)
       const missedTurn = prev !== undefined && prev.rowTurns !== null && rowTurns !== null && rowTurns !== prev.rowTurns
+      // Re-dispatched, a missed turn is a real Stop / StopFailure only while the row reads ended (idle, error). Still
+      // running (running -> idle -> running inside one debounce window), a re-dispatch would be `running` again: no Stop
+      // for the turn that ended, and running clears the key's unread in the agent store. So then only the count moves.
+      // Known limitation: a full turn completed inside one debounce window yields no Stop — #1866 (state deltas on the
+      // site stream) closes it.
+      const missedStop = missedTurn && projection.status !== 'running'
       const code = execAgentCode(w.executionId)
-      if (prev?.sig === sig && !missedTurn) {
+      if (prev?.sig === sig && !missedStop) {
         // Same status: at most the decoration moved (refs from the live stream) — written alone, never dispatched.
         if (prev.subs !== subs && projection.status !== 'clear') useAgentStore.getState().setSubagents(w.hostId, code, projection.subagents)
         if (prev.subs !== subs || prev.rowTurns !== rowTurns) dispatched.set(key, { ...prev, subs, rowTurns })

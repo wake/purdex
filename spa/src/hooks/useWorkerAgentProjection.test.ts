@@ -44,9 +44,13 @@ function setLive(patch: Partial<ExecutionState>) {
 const listRow = (over: Partial<ExecutionSummary>) =>
   useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), phase: 'ready', items: [summary({ turn_count: 1, ...over })] } } })
 
-/** The host's list answered without this worker's row; `truncated`: the walk hit its page cap. */
+/** The host's list answered without this worker's row; `truncated`: the walk hit its page cap (so not complete). */
 const listWithoutRow = (truncated = false) =>
-  useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), phase: 'ready', truncated, items: [summary({ id: 'E-other' })] } } })
+  useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), phase: 'ready', truncated, complete: !truncated, items: [summary({ id: 'E-other' })] } } })
+
+/** The host's list answered ready but not in full — a malformed row dropped, or a repeated cursor — without this worker's row. */
+const incompleteListWithoutRow = () =>
+  useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), phase: 'ready', truncated: false, complete: false, items: [summary({ id: 'E-other' })] } } })
 
 const assistant = (text: string, parent: string | null = null): StreamMessage =>
   ({ type: 'assistant', parent_tool_use_id: parent, message: { role: 'assistant', content: [{ type: 'text', text }], stop_reason: null } }) as StreamMessage
@@ -534,6 +538,22 @@ describe('useWorkerAgentProjection', () => {
       // Unarchived: back.
       listRow({ state: 'idle', updated_at: 20 })
       expect(useAgentStore.getState().statuses[KEY]).toBe('idle')
+      stop()
+    })
+
+    it('a row missing from a list that answered ready but not in full (a malformed row dropped, a repeated cursor) keeps the light: no clear, no dispatch', () => {
+      const spy = spyDispatch()
+      const stop = startWorkerAgentProjection()
+      listRow({ state: 'running', updated_at: 10 })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+      expect(names(spy)).toEqual(['UserPromptSubmit'])
+      incompleteListWithoutRow()
+      expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+      expect(names(spy)).toEqual(['UserPromptSubmit'])
+      // The row back in the next answer: the same projection, still nothing new.
+      listRow({ state: 'running', updated_at: 10 })
+      expect(names(spy)).toEqual(['UserPromptSubmit'])
       stop()
     })
   })

@@ -27,6 +27,26 @@ export const SUMMARY_REFETCH_DEBOUNCE_MS = 300
 // a persistently failing daemon doesn't retry every debounce indefinitely.
 const MAX_CONSECUTIVE_STALE_REFETCHES = 5
 
+/**
+ * Mounted instances of this hook per execution (its store key). The same execution shown in two panes (a split, or
+ * two tabs) runs two instances that share the store entry and the subscription-slot key (the slot registry holds one
+ * slot per key, however many instances touch it). Each instance closes its own stream; only the LAST one to go
+ * releases the slot and leaves the entry streamless — until then another pane's stream still feeds it. Counted per
+ * main-effect run that has a cleanup (a pane whose host is missing has none).
+ */
+const instancesByKey = new Map<string, number>()
+
+/** One instance of `key` going away; true when it was the last. */
+function dropInstance(key: string): boolean {
+  const left = (instancesByKey.get(key) ?? 1) - 1
+  if (left > 0) {
+    instancesByKey.set(key, left)
+    return false
+  }
+  instancesByKey.delete(key)
+  return true
+}
+
 export function useExecutionSubscription(hostId: string, executionId: string, active: boolean): { problem: SubscriptionProblem; paused: boolean } {
   const [problem, setProblem] = useState<SubscriptionProblem>(null)
   const [paused, setPaused] = useState(false)
@@ -79,6 +99,8 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
       store().setSse(hostId, executionId, 'closed', 'host_removed')
       return
     }
+    // From here on this run has a cleanup, which drops it again (`instancesByKey`).
+    instancesByKey.set(key, (instancesByKey.get(key) ?? 0) + 1)
 
     let staleRefetchAttempts = 0
     const refetchSummary = async () => {
@@ -321,8 +343,12 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
       unsubEvict?.()
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
       openStreamRef.current = null
-      subscriptionSlots.release(hostId, key)
+      // This instance's own stream always closes. The shared slot and entry are another pane's while it still shows
+      // this execution (`instancesByKey`): only the last instance releases the one and idles the other.
+      const last = dropInstance(key)
+      if (last) subscriptionSlots.release(hostId, key)
       teardown()
+      if (!last) return
       // The entry outlives the pane (the next mount starts from it), but no stream of this hook feeds it any more, and
       // `cancelled` keeps the closing stream from saying so: mark it streamless (`idle`, what a fresh mount begins
       // from) so it is never taken for a live one. A terminal problem (`closed` with its reason) or an eviction

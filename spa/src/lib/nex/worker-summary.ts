@@ -1,10 +1,12 @@
 // spa/src/lib/nex/worker-summary.ts — where a worker (execution) tab reads its
-// summary. Its STATUS (the light, 等待核准) is the host's list row only — the one
-// source of truth the worker projection reads too (useWorkerAgentProjection.ts);
-// the live pane state only when the list is truncated and has no row for it
-// (`hostListTruncated`). Its TITLE, which is not status, is the row, else the
-// live pane state, else the summary prefetched for it (#1557,
-// worker-title-prefetch.ts) — freshest first (`readWorkerSummary`). The tab
+// summary. The boundary: the single source is for STATUS-class data only —
+// state, archived, pending_permission (the light, 等待核准), turn_count, the
+// dedupe stamps, the transitions — and it is the host's list row, the one the
+// worker projection reads too (useWorkerAgentProjection.ts); the live pane state
+// only when the list is truncated and has no row for it (`hostListTruncated`).
+// The TITLE is not status: it may fall back row → live pane state → the summary
+// prefetched for it (#1557, worker-title-prefetch.ts), freshest first
+// (`readWorkerSummary`). Never extend that fallback order to status. The tab
 // (`useTabDisplay`) and the notification dispatcher both go through these, so
 // the tab title and the notification title cannot read different sources
 // (worker-pane theme spec §8.2 / §8.4).
@@ -52,7 +54,8 @@ export function hostListTruncated(byHost: HostListCaches, hostId: string): boole
  * Imperative read for a worker's TITLE (notification title, pane labels), same order as the tab's: the list row, else
  * the live summary, else the prefetch. Freshest first: the prefetch is fetched only while there is no live summary, and
  * a live entry is never dropped, so when both exist the live one is newer. A title is not status — the live summary
- * stays a fallback here, or a worker archived while its tab is open (no row, no prefetch) would lose its title.
+ * stays a fallback here, or a worker archived while its tab is open (no row, no prefetch) would lose its title. Never
+ * read status (state, archived, pending_permission, turn_count) through this: status is the row alone.
  */
 export function readWorkerSummary(hostId: string, executionId: string): ExecutionSummary | null {
   return rowWorkerSummary(useExecutionListStore.getState().byHost, hostId, executionId)

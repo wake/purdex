@@ -27,7 +27,7 @@ beforeEach(() => {
     byHost: { [H]: { items: [
       row({ id: 'N1', session_id: 'SN', cwd: '/Users/w/proj', brief: 'normal one' }),
       row({ id: 'T1', session_id: 'ST', cwd: '/tmp/x', brief: 'test one' }),
-    ], phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false } },
+    ], phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false, complete: true } },
   })
   useShownHostsStore.setState({ ids: [H] })
 })

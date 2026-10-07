@@ -79,10 +79,12 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
     return rt ? rt.status !== 'connected' : false
   })
 
-  // Worker summary (worker-summary.ts). Status — the hand — is the host's list row, the one source the projection
+  // Worker summary (worker-summary.ts). The single source is for STATUS-class data only (state, archived,
+  // pending_permission — the hand —, turn_count, stamps, transitions): the host's list row, the one the projection
   // reads too; the live pane state only when the list is truncated and has no row (`hostListTruncated`). The title
-  // and icon, which are not status, read the row, else the live pane state, else (an archived worker's unopened tab
-  // after a reload, #1557) the summary prefetched for it (`readWorkerSummary`'s order).
+  // and icon are not status and may fall back: the row, else the live pane state, else (an archived worker's unopened
+  // tab after a reload, #1557) the summary prefetched for it (`readWorkerSummary`'s order). Never extend that fallback
+  // order to status (`statusSummary` below).
   const execRow = useExecutionListStore((s): ExecutionSummary | null =>
     exec && hostId ? rowWorkerSummary(s.byHost, hostId, exec.executionId) : null)
   const listTruncated = useExecutionListStore((s) => (exec && hostId ? hostListTruncated(s.byHost, hostId) : false))

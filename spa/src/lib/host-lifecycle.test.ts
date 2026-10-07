@@ -203,7 +203,7 @@ describe('host delete cascade — this device only (host ownership spec §3.4)',
   })
 
   it('deleteHostCascade clears the execution-list host while preserving the other host', () => {
-    const listCache: HostListCache = { items: [], phase: 'ready', error: null, lastSeq: 4, refreshRevision: 2, truncated: false }
+    const listCache: HostListCache = { items: [], phase: 'ready', error: null, lastSeq: 4, refreshRevision: 2, truncated: false, complete: true }
     useExecutionListStore.setState({ byHost: { [HOST_A]: listCache, [HOST_B]: listCache } })
 
     deleteHostCascade(HOST_A)
@@ -561,7 +561,7 @@ describe('host delete cascade — a write fails half-way', () => {
     useAgentStore.getState().handleNormalizedEvent(HOST_A, 'dev001', { agent_type: 'cc', status: 'running', model: 'm', raw_event_name: 'PdxUserPromptSubmit', broadcast_ts: 1 })
     useExecutionStore.getState().applyEvents(HOST_A, 'exc_1', [{ seq: 1, execution_id: 'exc_1', kind: 'assistant', payload: { type: 'assistant' }, created_at: 0 }])
     useExecutionStore.getState().setLease(HOST_A, 'exc_1', { leaseId: 'ls_1', expiresAt: 9_999_999_999_999 })
-    const listCache: HostListCache = { items: [], phase: 'ready', error: null, lastSeq: 4, refreshRevision: 2, truncated: false }
+    const listCache: HostListCache = { items: [], phase: 'ready', error: null, lastSeq: 4, refreshRevision: 2, truncated: false, complete: true }
     useExecutionListStore.setState({ byHost: { [HOST_A]: listCache, [HOST_B]: listCache } })
     const nexEntry: NexHostEntry = { info: null, capabilities: null, phase: 'unavailable', error: 'x', fetchedAt: 1, generation: 1, fingerprint: '' }
     useNexHostStore.setState({ byHost: { [HOST_A]: nexEntry, [HOST_B]: nexEntry } })

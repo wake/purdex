@@ -34,6 +34,14 @@ const execTab = (): Tab => ({
 const listRow = (over: Partial<ExecutionSummary>) =>
   useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), items: [summary({ turn_count: 1, ...over })] } } })
 
+const spyDispatch = () => {
+  const spy = vi.spyOn(useAgentStore.getState(), 'handleNormalizedEvent')
+  spy.mockClear()
+  return spy
+}
+const names = (spy: { mock: { calls: unknown[][] } }) =>
+  spy.mock.calls.map((c) => (c[2] as { raw_event_name: string }).raw_event_name)
+
 let showNotification: ReturnType<typeof vi.fn>
 let dispatcher: { unmount: () => void }
 
@@ -75,10 +83,50 @@ describe('row-sourced projection: a turn missed between two refreshes', () => {
     listRow({ state: 'idle', turn_count: 1, updated_at: 100 })
     expect(useAgentStore.getState().statuses[KEY]).toBe('idle')
     expect(showNotification).not.toHaveBeenCalled() // the 0 baseline of a first row projection
+    const spy = spyDispatch()
 
     // The debounced refresh missed the running state: same status, one more turn.
     listRow({ state: 'idle', turn_count: 2, updated_at: 300 })
+    expect(names(spy)).toEqual(['Stop'])
     expect(useAgentStore.getState().lastEvents[KEY].broadcast_ts).toBe(300)
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    stop()
+  })
+
+  it('failed → (running → failed unseen) → failed with a higher turn_count fires a fresh StopFailure', () => {
+    const stop = startWorkerAgentProjection()
+    useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'], activeTabId: null })
+    listRow({ state: 'failed', turn_count: 1, updated_at: 100, last_turn_reason: 'orphaned' })
+    expect(useAgentStore.getState().statuses[KEY]).toBe('error')
+    const spy = spyDispatch()
+    listRow({ state: 'failed', turn_count: 2, updated_at: 300, last_turn_reason: 'orphaned' })
+    expect(names(spy)).toEqual(['StopFailure'])
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    stop()
+  })
+
+  // Known limitation (until #1866's state deltas): a whole turn inside one debounce window — running → idle → running
+  // between two refreshes — yields no Stop. Re-dispatching `running` would not bring it back, and it would clear an
+  // unread the user has not seen yet (running is user activity to the agent store).
+  it('running → (idle → running unseen) → running with a higher turn_count dispatches nothing: an existing unread stays', () => {
+    const stop = startWorkerAgentProjection()
+    useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'], activeTabId: null })
+    listRow({ state: 'running', turn_count: 1, updated_at: 100 })
+    expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+    useAgentStore.setState((s) => ({ unread: { ...s.unread, [KEY]: true } }))
+    const spy = spyDispatch()
+
+    listRow({ state: 'running', turn_count: 2, updated_at: 300 })
+    expect(spy).not.toHaveBeenCalled()
+    expect(useAgentStore.getState().unread[KEY]).toBe(true)
+    expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+    expect(showNotification).not.toHaveBeenCalled()
+
+    // The count it saw is kept: the same row again is no missed turn, and the turn's real end is one Stop.
+    listRow({ state: 'running', turn_count: 2, updated_at: 350 })
+    expect(spy).not.toHaveBeenCalled()
+    listRow({ state: 'idle', turn_count: 2, updated_at: 400 })
+    expect(names(spy)).toEqual(['Stop'])
     expect(showNotification).toHaveBeenCalledTimes(1)
     stop()
   })
@@ -173,7 +221,7 @@ describe('terminated', () => {
     useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'], activeTabId: null })
     listRow({ state: 'idle', updated_at: 60 })
     expect(showNotification).toHaveBeenCalledTimes(1) // the Stop
-    useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), phase: 'ready', items: [] } } })
+    useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), phase: 'ready', complete: true, items: [] } } })
     expect(showNotification).toHaveBeenCalledTimes(1)
     expect(useAgentStore.getState().statuses[KEY]).toBeUndefined()
     stop()

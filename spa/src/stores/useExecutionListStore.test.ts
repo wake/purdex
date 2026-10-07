@@ -551,6 +551,86 @@ describe('useExecutionListStore', () => {
     expect(cache(A).truncated).toBe(false)
   })
 
+  // `complete`: the last successful walk answered in FULL, so a row missing from it says the execution is not listed
+  // (the worker projection clears such a worker's light). A walk that dropped a malformed row, stopped on a repeated
+  // cursor or hit the page cap is committed ready with its rows, but a missing row there says nothing.
+  describe('complete', () => {
+    it('a fresh cache is not complete (nothing answered yet)', () => {
+      useExecutionListStore.getState().subscribe(A)
+      expect(cache(A).complete).toBe(false)
+    })
+
+    it('a walk to the last page with every row well-formed is complete', async () => {
+      useExecutionListStore.getState().subscribe(A)
+      await flush()
+      expect(cache(A).phase).toBe('ready')
+      expect(cache(A).complete).toBe(true)
+    })
+
+    it('a walk that dropped a malformed row is ready but not complete; the next full walk is complete again', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.mocked(api.listExecutions).mockResolvedValueOnce({
+        items: [row('exc_ok'), { ...row('exc_bad'), state: 42 }],
+        next_cursor: '',
+      } as unknown as ExecutionsPage)
+      useExecutionListStore.getState().subscribe(A)
+      await flush()
+      expect(cache(A).phase).toBe('ready')
+      expect(cache(A).items.map((r) => r.id)).toEqual(['exc_ok'])
+      expect(cache(A).complete).toBe(false)
+
+      useExecutionListStore.getState().refetch(A)
+      await flush()
+      expect(cache(A).complete).toBe(true)
+    })
+
+    it('a walk stopped by a repeated cursor is ready but not complete', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.mocked(api.listExecutions)
+        .mockResolvedValueOnce({ items: [row('exc_1')], next_cursor: 'c1' } as unknown as ExecutionsPage)
+        .mockResolvedValueOnce({ items: [], next_cursor: 'c1' } as unknown as ExecutionsPage)
+      useExecutionListStore.getState().subscribe(A)
+      await flush()
+      expect(cache(A).phase).toBe('ready')
+      expect(cache(A).truncated).toBe(false)
+      expect(cache(A).complete).toBe(false)
+    })
+
+    it('a walk cut at the page cap is not complete', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.mocked(api.listExecutions).mockImplementation(async (_h, opts) => {
+        const n = Number(opts?.cursor ?? 0)
+        return { items: [row(`exc_${n}`)], next_cursor: String(n + 1) }
+      })
+      useExecutionListStore.getState().subscribe(A)
+      await flush()
+      expect(cache(A).truncated).toBe(true)
+      expect(cache(A).complete).toBe(false)
+    })
+
+    it('a failed refresh keeps the previous value with the previous rows, either way', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      useExecutionListStore.getState().subscribe(A)
+      await flush()
+      expect(cache(A).complete).toBe(true)
+      vi.mocked(api.listExecutions).mockRejectedValueOnce(new NexApiError(503, 'nex_unavailable', 'down'))
+      useExecutionListStore.getState().refetch(A)
+      await flush()
+      expect(cache(A).phase).toBe('error')
+      expect(cache(A).complete).toBe(true)
+
+      vi.mocked(api.listExecutions).mockResolvedValueOnce({ items: [{ ...row('exc_bad'), state: 42 }], next_cursor: '' } as unknown as ExecutionsPage)
+      useExecutionListStore.getState().refetch(A)
+      await flush()
+      expect(cache(A).complete).toBe(false)
+      vi.mocked(api.listExecutions).mockRejectedValueOnce(new NexApiError(503, 'nex_unavailable', 'down'))
+      useExecutionListStore.getState().refetch(A)
+      await flush()
+      expect(cache(A).phase).toBe('error')
+      expect(cache(A).complete).toBe(false)
+    })
+  })
+
   it('two hosts maintain independent SSEs, reservations, cursors, debounces, and teardown', async () => {
     const uA = useExecutionListStore.getState().subscribe(A)
     useExecutionListStore.getState().subscribe(B)
