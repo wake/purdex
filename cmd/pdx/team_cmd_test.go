@@ -303,6 +303,31 @@ func TestSpawnCmd_RefusalsExit13CodeLast(t *testing.T) {
 	}
 }
 
+// main.go dispatches the lead's commands to their switch targets and its
+// hand-written Commands line names them (the TestMainUsageListsPath pattern:
+// main() exits, so the switch is read from source).
+func TestDispatch_SpawnKillTeam(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	usage := ""
+	for _, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, "Commands:") {
+			usage = l
+		}
+	}
+	for cmd, target := range map[string]string{"spawn": "runSpawn"} {
+		if !strings.Contains(s, "case \""+cmd+"\":\n\t\t"+target+"(os.Args[2:])\n") {
+			t.Errorf("main.go does not dispatch %q to %s", cmd, target)
+		}
+		if !strings.Contains(usage, " "+cmd+",") {
+			t.Errorf("the Commands line does not list %q: %s", cmd, usage)
+		}
+	}
+}
+
 // The lead's commands run inside a Claude Code session: no inbox is exit 1
 // before any request.
 func TestTeamCmds_NoInboxExit1(t *testing.T) {
