@@ -291,9 +291,11 @@ func (m *Module) handleAskWait(w http.ResponseWriter, r *http.Request) {
 // handleAskReport is POST /api/ask/report/{id} (spec §6.6 steps 3, 5, 6).
 // answered_local closes an open row through the CAS; when a remote decide
 // already won (approved or denied), the terminal's answer still stands: the
-// row becomes terminal_override and a second closed is broadcast. dismissed closes an
-// open row; against a closed one it is a no-op. Both answer the row as it
-// now is, so a repeat is idempotent.
+// row becomes terminal_override and a second closed is broadcast. The
+// terminal's answer is required and checked by kind first (localHookFor):
+// without it the report is 400 and touches nothing. dismissed closes an
+// open row (any hook it carries is ignored); against a closed one it is a
+// no-op. Both answer the row as it now is, so a repeat is idempotent.
 func (m *Module) handleAskReport(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req team.AskReportRequest
@@ -321,8 +323,15 @@ func (m *Module) handleAskReport(w http.ResponseWriter, r *http.Request) {
 	now := m.now()
 	c := Close{State: req.State, DecidedAt: now}
 	if req.State == team.StateAnsweredLocal {
+		// Validated before any CAS: a hookless answer must neither close an
+		// open row nor override a remote answer (P8a-1b review).
+		hook, bad := localHookFor(a.Kind, req.Hook)
+		if bad != "" {
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, bad, nil)
+			return
+		}
 		c.DecidedBy = terminalClient()
-		c.Hook = req.Hook
+		c.Hook = hook
 	}
 	after, won, err := m.closeAs(id, c)
 	if err != nil {
@@ -339,7 +348,7 @@ func (m *Module) handleAskReport(w http.ResponseWriter, r *http.Request) {
 		// Step 5: the remote decide won the CAS — an approve, or a
 		// hook_permission deny — but the terminal had already shown its
 		// answer. Record the override and tell every card.
-		over, won, err := m.store.OverrideIfDecided(id, now, req.Hook)
+		over, won, err := m.store.OverrideIfDecided(id, now, c.Hook)
 		if err != nil {
 			m.logf("[team] ask report %s: %v", id, err)
 			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
@@ -353,6 +362,34 @@ func (m *Module) handleAskReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.writeJSON(w, http.StatusOK, after)
+}
+
+// localHookFor checks the terminal's answer of an answered_local report for
+// kind and returns it in the kind's shape (as decideHook shapes a remote
+// one): non-empty answers for a hook_ask; behavior allow (with
+// updated_input) or deny (with message) for a hook_permission. A non-empty
+// string names what is wrong (a 400).
+func localHookFor(kind team.Kind, h *team.HookDecision) (*team.HookDecision, string) {
+	if h == nil {
+		h = &team.HookDecision{}
+	}
+	switch kind {
+	case team.KindHookAsk:
+		if len(h.Answers) == 0 {
+			return nil, "answered_local of a hook_ask needs hook.answers"
+		}
+		return &team.HookDecision{Answers: h.Answers}, ""
+	case team.KindHookPermission:
+		switch h.Behavior {
+		case "allow":
+			return &team.HookDecision{Behavior: "allow", UpdatedInput: h.UpdatedInput}, ""
+		case "deny":
+			return &team.HookDecision{Behavior: "deny", Message: h.Message}, ""
+		}
+		return nil, `answered_local of a hook_permission needs hook.behavior "allow" or "deny"`
+	default:
+		return nil, "not a hook request"
+	}
 }
 
 func labelOf(c *team.Client) string {

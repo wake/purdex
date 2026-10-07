@@ -597,6 +597,65 @@ func TestAskBegin_TerminalOnlyTakeoverIsAtomic(t *testing.T) {
 	}
 }
 
+// Fix note (P8a-1b R2, attacker high): answered_local carries the terminal's
+// answer, validated by kind before any CAS — a hook_ask needs non-empty
+// answers, a hook_permission behavior allow or deny. A report without one is
+// 400 and changes nothing: it can neither close an open row with no answer
+// nor override a remote answer with an empty one. A hook on dismissed is
+// ignored. Mutation gate: drop the check ⇒ the remote answers are wiped by
+// a hookless override ⇒ red.
+func TestAskReport_AnsweredLocalValidatesTheHookByKind(t *testing.T) {
+	f := newFixture(t)
+	report := func(id string, hook *team.HookDecision) (int, []byte) {
+		return f.do(http.MethodPost, "/api/ask/report/"+id, team.AskReportRequest{State: team.StateAnsweredLocal, Hook: hook})
+	}
+	// Remote first: a hookless answered_local must not override the remote answers.
+	approved := f.askBegin("toolu_v1")
+	if code, body := f.do(http.MethodPost, "/api/team/approvals/"+approved+"/decide",
+		team.DecideRequest{Decision: "approve", Hook: &team.HookDecision{Answers: map[string]string{"紅還是藍？": "藍"}}, Client: appClient()}); code != http.StatusOK {
+		t.Fatalf("decide = %d %s", code, body)
+	}
+	f.events()
+	for _, h := range []*team.HookDecision{nil, {}, {Behavior: "allow"}} {
+		if code, body := report(approved, h); code != http.StatusBadRequest || decodeErr(t, body).Error != team.ErrBadRequest {
+			t.Fatalf("answered_local of a hook_ask with hook %+v = %d %s, want 400", h, code, body)
+		}
+	}
+	if a, _, _ := f.m.store.Get(approved); a.State != team.StateApproved || a.Hook == nil || a.Hook.Answers["紅還是藍？"] != "藍" || a.DecidedBy.Kind == team.ClientKindTerminal {
+		t.Fatalf("remote answer after hookless reports = %+v hook=%+v", a, a.Hook)
+	}
+	// Open rows stay open.
+	open := f.askBegin("toolu_v2")
+	perm := f.askBeginPermission("toolu_v3")
+	f.events()
+	if code, body := report(open, nil); code != http.StatusBadRequest {
+		t.Fatalf("hookless answered_local of an open hook_ask = %d %s, want 400", code, body)
+	}
+	for _, h := range []*team.HookDecision{nil, {}, {Behavior: "maybe"}, {Answers: map[string]string{"q": "a"}}} {
+		if code, body := report(perm, h); code != http.StatusBadRequest {
+			t.Fatalf("answered_local of a hook_permission with hook %+v = %d %s, want 400", h, code, body)
+		}
+	}
+	for _, id := range []string{open, perm} {
+		if a, _, _ := f.m.store.Get(id); a.State != team.StateOpen {
+			t.Fatalf("%s after rejected reports = %s, want open", id, a.State)
+		}
+	}
+	if evs := f.events(); len(evs) != 0 {
+		t.Fatalf("rejected reports broadcast %+v", evs)
+	}
+	// A valid permission answer closes, stored as the kind's shape.
+	code, body := report(perm, &team.HookDecision{Behavior: "deny", Message: "不要", Answers: map[string]string{"x": "y"}})
+	if a := decodeApproval(t, body); code != 200 || a.State != team.StateAnsweredLocal || a.Hook == nil || a.Hook.Behavior != "deny" || a.Hook.Message != "不要" || len(a.Hook.Answers) != 0 {
+		t.Fatalf("valid permission answer = %d %+v hook=%+v", code, a, a.Hook)
+	}
+	// dismissed ignores a hook.
+	code, body = f.do(http.MethodPost, "/api/ask/report/"+open, team.AskReportRequest{State: team.StateDismissed, Hook: &team.HookDecision{Answers: map[string]string{"q": "a"}}})
+	if a := decodeApproval(t, body); code != 200 || a.State != team.StateDismissed || a.Hook != nil {
+		t.Fatalf("dismissed with a hook = %d %+v hook=%+v", code, a, a.Hook)
+	}
+}
+
 // A takeover whose old row something else closed first (between begin's
 // lookup and its replace) inserts the new row and broadcasts only its
 // opened: the close it lost is not announced twice.
