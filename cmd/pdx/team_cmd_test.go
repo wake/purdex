@@ -15,13 +15,15 @@ import (
 	"time"
 
 	"github.com/wake/purdex/cmd/pdx/daemonclient"
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
-// U20 (c)'s line, spelled out here rather than read from internal/team,
-// so dropping or rewording it is red here too.
+// U20 (c)'s line and spec §7.2's brief prefix, spelled out here rather than
+// read from internal/team, so dropping or rewording them is red here too.
 const (
 	spawnNoModelReminder = "提醒：沒有指定 --model，member 會用這台主機當下的預設模型。"
+	spawnBriefPrefix     = "[pdx team] 你是 mlab/purdex-lead 的 member（team " + fakeTeamID + "）。接力由 lead 決定，不要自己接力。"
 	fakeTeamID           = "8f2c0f8e-3b1a-4c6e-9d2a-0e5b7c1d9a44"
 )
 
@@ -50,6 +52,9 @@ type fakeTeamCmdDaemon struct {
 	spawns   []func(team.SpawnRequest) answer
 	hold     func(n int) bool
 	onSpawn  func(n int)
+	sendReq  []ipeers.SendRequest
+	send     answer
+	dropSend bool
 	killReq  []team.KillRequest
 	kill     answer
 	queries  []string
@@ -81,6 +86,17 @@ func (f *fakeTeamCmdDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		write(w, f.spawns[min(n, len(f.spawns))-1](req))
+	case r.Method == http.MethodPost && r.URL.Path == "/api/peers/send":
+		var req ipeers.SendRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		f.sendReq = append(f.sendReq, req)
+		if f.dropSend {
+			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				conn.Close()
+			}
+			return
+		}
+		write(w, f.send)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/team/kill":
 		var req team.KillRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -155,15 +171,21 @@ func lastToken(s string) string {
 	return f[len(f)-1]
 }
 
-// U20 (a), spec §15: a model or effort the daemon would refuse, a bad
-// title and stray arguments are exit 2
+// U20 (a), spec §15: a model or effort the daemon would refuse, both briefs,
+// an unreadable brief file, a bad title and stray arguments are exit 2
 // before the config is read or the daemon is asked; the daemon here would
 // accept anything.
 func TestSpawnCmd_UsageErrorsExit2(t *testing.T) {
 	d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnDone}}
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	if err := os.WriteFile(brief, []byte("do it"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, args := range [][]string{
 		{"--model", "a b"}, {"--model", "'x'"}, {"--model", "x;y"}, {"--model", "$(x)"}, {"--model", ""},
 		{"--model", "opus[2m]"}, {"--effort", "High"}, {"--effort", "ultra"},
+		{"--brief", "x", "--brief-file", brief}, {"--brief-file", filepath.Join(t.TempDir(), "missing.md")},
+		{"--brief", " \n"}, {"--brief", strings.Repeat("x", ipeers.MaxTextBytes)},
 		{"--title", "bad\x1btitle"}, {"--title", ""}, {"extra"}, {"--bogus"},
 	} {
 		code, stdout, stderr := driveTeamCmd(t, runSpawnCmd, d, args...)
@@ -284,13 +306,14 @@ func TestSpawnCmd_AnOpThatNeverSettlesEndsAtTheBound(t *testing.T) {
 }
 
 // Spec §14: member_start_timeout exits 14 with the hooks hint; any other
-// failure reason exits 1; the reason is the last stderr token.
+// failure reason exits 1. Neither sends the brief; the reason is the last
+// stderr token.
 func TestSpawnCmd_StartTimeoutExits14(t *testing.T) {
 	for reason, want := range map[string]int{team.SpawnReasonStartTimeout: ExitMemberFailed, team.SpawnReasonLaunchFailed: ExitError} {
 		d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnFailed(reason)}}
-		code, stdout, stderr := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet")
-		if code != want || stdout != "" || lastToken(stderr) != reason {
-			t.Errorf("%s: code=%d stdout=%q stderr=%q", reason, code, stdout, stderr)
+		code, stdout, stderr := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet", "--brief", "hi")
+		if code != want || stdout != "" || lastToken(stderr) != reason || len(d.sendReq) != 0 {
+			t.Errorf("%s: code=%d stdout=%q stderr=%q sends=%d", reason, code, stdout, stderr, len(d.sendReq))
 		}
 		hint := "member 沒有在 20 秒內啟動（這台主機需要 Purdex hooks：pdx setup --agent cc）"
 		if strings.Contains(stderr, hint) != (reason == team.SpawnReasonStartTimeout) {
@@ -323,6 +346,57 @@ func TestSpawnCmd_RefusalsExit13CodeLast(t *testing.T) {
 	code, _, stderr := driveTeamCmd(t, runSpawnCmd, http.NotFoundHandler(), "--model", "sonnet")
 	if code != ExitUnsupported || lastToken(stderr) != "unsupported" {
 		t.Errorf("plain 404: code=%d stderr=%q", code, stderr)
+	}
+}
+
+// Spec §7.2: after done the CLI sends the brief once, from the lead's inbox
+// to the member's address, with the one-line prefix; --brief-file reads the
+// file; without a brief nothing is sent.
+func TestSpawnCmd_BriefFromTheLeadInboxWithThePrefix(t *testing.T) {
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	if err := os.WriteFile(brief, []byte("line one\nline two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		args []string
+		text string
+	}{
+		{[]string{"--brief", "做 P4-7"}, "做 P4-7"},
+		{[]string{"--brief-file", brief}, "line one\nline two\n"},
+	} {
+		d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnDone}, send: answer{body: ipeers.SendResponse{MsgID: "m1"}}}
+		code, stdout, stderr := driveTeamCmd(t, runSpawnCmd, d, append([]string{"--model", "sonnet"}, tc.args...)...)
+		if code != ExitOK || !strings.Contains(stdout, `"ref":"_m1m1m1"`) {
+			t.Fatalf("%q: code=%d stdout=%q stderr=%q", tc.args, code, stdout, stderr)
+		}
+		want := ipeers.SendRequest{To: "mlab/_m1m1m1", Text: spawnBriefPrefix + "\n" + tc.text, OriginInbox: "/tmp/cc-socks/1.sock"}
+		if len(d.sendReq) != 1 || d.sendReq[0] != want {
+			t.Errorf("%q: sends = %+v, want %+v", tc.args, d.sendReq, want)
+		}
+	}
+	d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnDone}}
+	if code, _, _ := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet"); code != ExitOK || len(d.sendReq) != 0 {
+		t.Errorf("no brief: code=%d sends=%d", code, len(d.sendReq))
+	}
+}
+
+// Coordinator decision 14: a brief that fails after the spawn is exit 1, the
+// member stays on stdout, stderr says how to send it by hand, and the send
+// is never replayed (a dropped connection is one send).
+func TestSpawnCmd_BriefFailureExits1KeepsStdout(t *testing.T) {
+	for name, d := range map[string]*fakeTeamCmdDaemon{
+		"refused": {send: answer{status: http.StatusBadRequest, body: ipeers.APIError{Error: "text_invalid", Detail: "bad"}}},
+		"dropped": {dropSend: true},
+	} {
+		d.spawns = []func(team.SpawnRequest) answer{spawnDone}
+		code, stdout, stderr := driveTeamCmdWith(t, runSpawnCmd, d, leadEnv(), []daemonclient.Option{leadClockOpt(), leadNoKeepAlive()},
+			"--model", "sonnet", "--brief", "hi")
+		if code != ExitError || !strings.Contains(stdout, `"ref":"_m1m1m1"`) || len(d.sendReq) != 1 {
+			t.Errorf("%s: code=%d stdout=%q sends=%d", name, code, stdout, len(d.sendReq))
+		}
+		if !strings.Contains(stderr, "pdx spawn: member 已開啟，但 brief 沒送出：") || !strings.Contains(stderr, "；請用 pdx msg send mlab/_m1m1m1 手動送") {
+			t.Errorf("%s: stderr = %q", name, stderr)
+		}
 	}
 }
 

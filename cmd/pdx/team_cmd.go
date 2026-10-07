@@ -26,7 +26,7 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-const spawnUsage = "usage: pdx spawn [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--config <path>]\n" +
+const spawnUsage = "usage: pdx spawn [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--brief-file <f> | --brief <text>] [--config <path>]\n" +
 	"       (--cwd defaults to this directory; --effort is low, medium, high, xhigh or max;\n" +
 	"        without --model the member runs this host's default model, which is not fixed)"
 
@@ -36,6 +36,9 @@ const (
 	teamAttemptTimeout = 35 * time.Second
 	// teamMaxHungPolls: consecutive spawn POSTs with no answer at all before exit 20 (spec §9.1).
 	teamMaxHungPolls = 3
+	// briefPrefixRoom is what the brief's first line may take of the peers
+	// text limit: its fixed text, the lead's address and the team id.
+	briefPrefixRoom = 1024
 	// spawnStartTimeoutHint is the stderr hint of member_start_timeout: a
 	// member that never registers ran on a host without the Purdex hooks.
 	spawnStartTimeoutHint = "member 沒有在 20 秒內啟動（這台主機需要 Purdex hooks：pdx setup --agent cc）"
@@ -131,6 +134,8 @@ func teamReportErr(cmd string, err error, stderr io.Writer) int {
 // spawnArgs is a parsed, validated `pdx spawn`.
 type spawnArgs struct {
 	cfgPath, cwd, title, model, effort string
+	brief                              string
+	hasBrief                           bool
 }
 
 // parseSpawnArgs checks the grammar, U20 (a)'s model and effort included,
@@ -138,11 +143,14 @@ type spawnArgs struct {
 func parseSpawnArgs(args []string, stderr io.Writer) (spawnArgs, bool) {
 	fs := flag.NewFlagSet("pdx spawn", flag.ContinueOnError)
 	var a spawnArgs
+	var briefFile string
 	fs.StringVar(&a.cfgPath, "config", "", "")
 	fs.StringVar(&a.cwd, "cwd", "", "")
 	fs.StringVar(&a.title, "title", "", "")
 	fs.StringVar(&a.model, "model", "", "")
 	fs.StringVar(&a.effort, "effort", "", "")
+	fs.StringVar(&a.brief, "brief", "", "")
+	fs.StringVar(&briefFile, "brief-file", "", "")
 	reject := func(msg string) (spawnArgs, bool) {
 		fmt.Fprintf(stderr, "pdx spawn: %s\n%s\n", msg, spawnUsage)
 		return a, false
@@ -162,12 +170,33 @@ func parseSpawnArgs(args []string, stderr io.Writer) (spawnArgs, bool) {
 		return reject(fmt.Sprintf("--effort %q 必須是 %s 之一", a.effort, strings.Join(team.Efforts, "、")))
 	case set["title"] && ipeers.ValidateTitle(a.title) != nil:
 		return reject("--title: " + ipeers.ValidateTitle(a.title).Error())
+	case set["brief"] && set["brief-file"]:
+		return reject("--brief 與 --brief-file 只能擇一")
+	}
+	a.hasBrief = set["brief"] || set["brief-file"]
+	if set["brief-file"] {
+		b, err := os.ReadFile(briefFile)
+		if err != nil {
+			return reject("--brief-file: " + err.Error())
+		}
+		a.brief = string(b)
+	}
+	if a.hasBrief {
+		// Checked now so a brief the daemon would refuse fails before a
+		// member opens, not after.
+		if strings.TrimSpace(a.brief) == "" {
+			return reject("brief 不能為空")
+		}
+		if err := ipeers.ValidateText(a.brief); err != nil || len(a.brief) > ipeers.MaxTextBytes-briefPrefixRoom {
+			return reject(fmt.Sprintf("brief 必須是不超過 %d bytes 的 UTF-8 文字", ipeers.MaxTextBytes-briefPrefixRoom))
+		}
 	}
 	return a, true
 }
 
 // runSpawnCmd implements `pdx spawn` (spec §7.2): one op id, POSTed again
-// while the op runs (the daemon joins it), then the member on stdout.
+// while the op runs (the daemon joins it), then the member on stdout and
+// the brief from the lead's inbox.
 func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer, clientOpts ...daemonclient.Option) int {
 	a, ok := parseSpawnArgs(args, stderr)
 	if !ok {
@@ -205,7 +234,10 @@ func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string,
 	out, _ := json.Marshal(spawnOutput{Ref: m.Ref, Address: m.Address, TmuxSession: m.TmuxSession,
 		SessionID: m.SessionID, HostID: m.HostID, SpawnOp: op.ID}) // strings only: cannot fail
 	fmt.Fprintln(stdout, string(out))
-	return ExitOK
+	if !a.hasBrief {
+		return ExitOK
+	}
+	return sendBrief(ctx, client, inbox, op, a.brief, stderr)
 }
 
 // spawnSettle POSTs req until its op leaves running: the same id each time,
@@ -251,4 +283,22 @@ type spawnOutput struct {
 	SessionID   string `json:"session_id"`
 	HostID      string `json:"host_id"`
 	SpawnOp     string `json:"spawn_op"`
+}
+
+// sendBrief sends the brief to the new member through POST
+// /api/peers/send, from the lead's inbox so the member's replies go to the
+// lead, after the one-line prefix (spec §7.2). One request, never replayed:
+// a send that may have arrived must not arrive twice. A failure is exit 1
+// with the member already on stdout (coordinator decision 14).
+func sendBrief(ctx context.Context, client *daemonclient.Client, inbox string, op team.SpawnOp, brief string, stderr io.Writer) int {
+	text := fmt.Sprintf(team.MemberBriefPrefixFmt, op.LeadAddress, op.TeamID) + "\n" + brief
+	sctx, cancel := context.WithTimeout(ctx, msgSendTimeout)
+	defer cancel()
+	req := ipeers.SendRequest{To: op.Member.Address, Text: text, OriginInbox: inbox}
+	if _, err := client.Once(sctx, http.MethodPost, "/api/peers/send", req, nil); err != nil {
+		fmt.Fprintf(stderr, "pdx spawn: member 已開啟，但 brief 沒送出：%s；請用 pdx msg send %s 手動送\n",
+			sanitizeCell(err.Error()), sanitizeCell(op.Member.Address))
+		return ExitError
+	}
+	return ExitOK
 }
