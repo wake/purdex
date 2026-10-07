@@ -12,6 +12,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { NexApiError, type NexEvent } from '../../lib/nex/types'
 import { exitWorker } from '../../lib/nex/exit-worker'
 import { takeBack } from '../../lib/nex/handoff'
+import { clearAllPermissionCards } from '../../lib/nex/permission-card-memory'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
@@ -65,6 +66,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   seq = 0
+  clearAllPermissionCards()
   useI18nStore.getState().setLocale('en')
   useExecutionStore.setState({ executions: {} })
   ensureLease.mockReset().mockResolvedValue('ls_1'); release.mockReset(); touch.mockReset(); forget.mockReset()
