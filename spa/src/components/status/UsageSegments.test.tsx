@@ -116,6 +116,8 @@ describe('HostQuotaSegments', () => {
     const week = screen.getByTestId('status-seg-quota-seven-day')
     expect(week.textContent).toBe('7d 72%')
     expect(week.dataset.tone).toBe('warn')
+    // Nexen reports one reset time; it is not claimed for the weekly window.
+    expect(week.title).not.toContain('resets in')
   })
 
   it('is hidden when the host has no quota, a non-finite one, or the fetch fails', async () => {
