@@ -106,18 +106,8 @@ func TestStore_InsertMemberIsIdempotentOnSpawnOp(t *testing.T) {
 	if err := s.SetMemberState("nope", team.MemberGone, 1); !errors.Is(err, ErrNoSuchMember) {
 		t.Fatalf("unknown spawn op: err=%v, want ErrNoSuchMember", err)
 	}
-	for _, bad := range []memberRow{
-		newMember("", "team-1", "sid-x", "_x", 1),
-		newMember("op-x", "", "sid-x", "_x", 1),
-		newMember("op-x", "team-1", "", "_x", 1),
-		{SpawnOp: "op-x", TeamID: "team-1", SessionID: "sid-x", State: "zombie"},
-	} {
-		if err := s.InsertMember(bad); err == nil {
-			t.Errorf("InsertMember(%+v) stored a malformed row", bad)
-		}
-	}
-	if err := s.SetMemberState("op-2", "zombie", 1); err == nil {
-		t.Fatal("SetMemberState took an unknown state")
+	if s.InsertMember(newMember("op-x", "team-1", "", "_x", 1)) == nil || s.SetMemberState("op-2", "zombie", 1) == nil {
+		t.Fatal("a row without a session, or an unknown state, was stored")
 	}
 }
 

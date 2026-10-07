@@ -111,28 +111,15 @@ func scanTeam(r rowScanner) (team.Team, error) {
 }
 
 // memberRow is one team_members row: the lead host's record of a member
-// (spec §7.2 step 6, §7.3), keyed by the spawn op that started it. The
-// spawn runner (P4-5) stores it once the member registered; the cleared
-// transaction moves its session id and ref (§8.4).
+// (spec §7.2 step 6, §7.3), stored by the spawn runner (P4-5) once the
+// member registered.
 type memberRow struct {
-	SpawnOp      string
-	TeamID       string
-	HostID       string
-	SessionID    string
-	Ref          string
-	Title        string
-	Cwd          string
-	TmuxSession  string
-	TmuxID       string
-	TmuxInstance string
-	PaneID       string
-	PID          int
-	ProcStart    string
-	Model        string
-	Effort       string
-	State        team.MemberState
-	CreatedAt    int64
-	UpdatedAt    int64
+	SpawnOp, TeamID, HostID, SessionID, Ref, Title, Cwd string
+	TmuxSession, TmuxID, TmuxInstance, PaneID           string
+	PID                                                 int
+	ProcStart, Model, Effort                            string
+	State                                               team.MemberState
+	CreatedAt, UpdatedAt                                int64
 }
 
 func (m *memberRow) dest() []any {
@@ -149,12 +136,10 @@ func validMemberState(s team.MemberState) bool {
 	return false
 }
 
-// InsertMember stores m. It is idempotent on the spawn op: a row with that
-// spawn op already stored is left as it is and nil is returned (a spawn
-// retried after a restart stores one row). A second active row for one
-// session violates team_members_one_active and is an error. A row without
-// spawn op, team id or session id, or with an unknown state, is an error
-// and writes nothing.
+// InsertMember stores m, idempotent on the spawn op (a spawn retried after
+// a restart stores one row; a stored row is left as it is). A second
+// active row for one session (team_members_one_active), or a row missing
+// spawn op, team or session or with an unknown state, is an error.
 func (s *Store) InsertMember(m memberRow) error {
 	if m.SpawnOp == "" || m.TeamID == "" || m.SessionID == "" || !validMemberState(m.State) {
 		return fmt.Errorf("insert member: spawn op %q, team %q, session %q and state %q must all be set and the state known",
