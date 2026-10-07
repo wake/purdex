@@ -3,6 +3,7 @@
 // $.session.*, $.fs.read, $.ui.*, and the bottom of every event a test
 // raises. The P5b-1 hello tests come first, the P5b-2 relay after them.
 import { test, expect, mock } from 'claude-code/testing'
+import { FIXED } from './prompts.js'
 
 // The pdx.json the extractor writes: the installing daemon's config is the
 // `--config` every `pdx relay` call carries (P5b-1 review).
@@ -132,6 +133,8 @@ test('a hello that hangs never holds the session start or a /clear', async ($, o
 // clock before it looks at what was called — and before it asserts that
 // nothing was, or a call made from a timer would never be seen.
 
+type PdxAnswer = { exitCode: number; stdout?: string; stderr?: string }
+
 type Fake = {
   argvs: string[][]
   timeouts: (number | undefined)[] // each pdx call's $.process.run timeoutMs, beside argvs
@@ -143,6 +146,10 @@ type Fake = {
   files: Record<string, string>
   pdxJSON?: string
   pdx: (argv: string[]) => { exitCode: number; stdout?: string; stderr?: string } | Promise<{ exitCode: number; stdout?: string; stderr?: string }>
+  // How `pdx relay prompts` answers (P9a-2), handed the call's $.process.run
+  // init; absent, f.pdx answers it like any other call. `{ deny }` makes the
+  // mod's $.process.run reject with that reason.
+  prompts?: (argv: string[], init?: { timeoutMs?: number }) => PdxAnswer | { deny: string } | Promise<PdxAnswer | { deny: string }>
   sessionId: string
   usage: { tokens?: number; window: number; percent?: number }
   clock: any
@@ -195,7 +202,9 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
     }
     f.argvs.push([...e.argv])
     f.timeouts.push(e.init?.timeoutMs)
-    const r = await f.pdx([...e.argv].slice(1))
+    const argv = [...e.argv].slice(1)
+    const r = await (f.prompts && argv[0] === 'relay' && argv[1] === 'prompts' ? f.prompts(argv, e.init) : f.pdx(argv))
+    if ('deny' in r) return { deny: r.deny }
     return { value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', async () => ({ value: f.sessionId }))
@@ -417,7 +426,7 @@ test('file check: missing headings get two fix rounds, then failed{handoff_incom
   await turn($, 'tw')
   await clock.advance(50)
   expect(f.submits.length).toBe(2)
-  expect(f.submits[1].text).toContain('不完整，缺少段落：## 2.、## 3.')
+  expect(f.submits[1].text).toContain('不完整。\n缺少段落：## 2.、## 3.') // P9a deviation 3: the fixed tail is a line of its own
   await $.turn.start({ text: f.submits[1].text, turnId: 'tf1' })
   await turn($, 'tf1')
   await clock.advance(50)
@@ -1769,4 +1778,363 @@ test('/relay runs the installed pdx with --config and an 8 s bound; a timeout, 2
     answer = a
     expect((await relayCmd($, 'off')).text).toBe('Purdex daemon 連不上，無法變更自我接力')
   }
+})
+
+// ---------- P9a-2: the prompts are read at use (U21, spec §8.8) ----------
+// Each write / fix / seed prompt is the mod's fixed head, the body `pdx relay
+// prompts` answers (or the built-in one) and the mod's fixed tail.
+
+// The pre-P9a prompts for OP, written out literally (register.js before P9a):
+// the default bodies must compose to exactly these bytes. `who` is the
+// pdx msg whoami answer, `n` the nonce of that one prompt.
+const PRE_P9A_WRITE = (n: string, who = 'mlab/purdex-x [abc123]') => [
+  '[pdx-relay op=op-1 n=' + n + '] 這個 session 的 context 已達接力門檻，使用者已核准接力（之後會 /clear）。',
+  '請先停下手邊工作，用你完整的工具撰寫接力檔：/data/relay/op-1.md',
+  '',
+  '要求：',
+  '- 自己跑 `git status`、`git diff --stat`、`git log --oneline -10` 取得檔案狀態，不要憑記憶寫。',
+  '- 接力檔必須自成一體：讀它的是一個完全沒有這段對話記憶的新對話。',
+  '- 寫完後只回一行「HANDOFF-WRITTEN」，不要繼續原本的工作。',
+  '',
+  '格式（每一段都要有，沒有內容就寫「無」）：',
+  '# HANDOFF',
+  '## 1. 目標與完成定義（使用者要的是什麼、怎樣算完成、範圍外）',
+  '## 2. 進度（已完成且驗證 / 進行中停在哪 / 下一步第一個動作具體到指令）',
+  '## 3. 檔案異動（git status 與 diff --stat 的結果，加上每個檔案的用途）',
+  '## 4. 決策紀錄（選了什麼、為什麼、否決了什麼）',
+  '## 5. 死路（試過失敗、不要再試的）',
+  '## 6. 環境與指令（測試 / 執行方式）',
+  '## 7. 未決問題與需要使用者決定的事',
+  '## 8. 協作關係（下面的 pdx 身分；我的 lead 與我管理的 members，沒有就寫無）',
+  '',
+  '機器提供的事實（請照抄進對應段落）：',
+  '- 舊 session id：sid-old',
+  '- 舊 ref：_abc123',
+  '- 接力時 context：144000 tokens / 200000 (72%)',
+  '- pdx 身分：' + who,
+].join('\n')
+const PRE_P9A_SEED = (n: string) => [
+  '↪ 接手自 _abc123',
+  '[pdx-relay seed op=op-1 n=' + n + '] 你是接手的新對話：前一段對話 context 已滿並已清空。',
+  '請先讀接力檔 /data/relay/op-1.md，然後：',
+  '1. 用三行複述：目標、下一步第一個動作、目前有哪些檔案異動。',
+  '2. 跑 `git status` 確認與接力檔一致，不一致就指出來。',
+  '3. 接著從「下一步」繼續原本的工作。',
+  '回覆的第一行請寫「↪ 接手自 _abc123」。',
+].join('\n')
+
+test('with the defaults, the write and seed prompts equal the pre-P9a text byte for byte', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  expect(f.submits[0].text).toBe(PRE_P9A_WRITE(nonceOf(f.submits[0].text)))
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  f.sessionId = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await clock.advance(50)
+  expect(f.submits[1].text).toBe(PRE_P9A_SEED(nonceOf(f.submits[1].text)))
+})
+
+// P9a deviation 3: one composition rule (head + body + '\n' + tail) puts the
+// fixed 缺少段落 line on a line of its own, after the body's 不完整。.
+test('the fix prompt is head, body, then 缺少段落 and the reply rule on the next line', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  f.files['/data/relay/op-1.md'] = '# HANDOFF\n## 1. a\n## 4. d\n' + 'x'.repeat(300)
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  const text = f.submits[1].text
+  expect(text).toBe('[pdx-relay op=op-1 n=' + nonceOf(text) + '] 接力檔 /data/relay/op-1.md 不完整。\n缺少段落：## 2.、## 3.、## 5.、## 6.、## 7.、## 8.。請補齊後只回「HANDOFF-WRITTEN」。')
+  f.files['/data/relay/op-1.md'] = ''
+  await $.turn.start({ text, turnId: 'tf' })
+  await turn($, 'tf')
+  await clock.advance(50)
+  expect(f.submits[2].text).toBe('[pdx-relay op=op-1 n=' + nonceOf(f.submits[2].text) + '] 接力檔 /data/relay/op-1.md 不完整。\n缺少段落：## 1.、## 2.、## 3.、## 4.、## 5.、## 6.、## 7.、## 8.。請補齊後只回「HANDOFF-WRITTEN」。')
+})
+
+// A guard between the check (REQUIRED, register.js) and the generated
+// prompts.js: a handoff holding only the heading lines the write tail asks
+// for, each with some text, passes the check — no fix round. Mutation gate:
+// a REQUIRED heading the tail does not carry → a fix prompt → red.
+test('every REQUIRED heading and # HANDOFF are in FIXED.write.tail', async ($, on) => {
+  const headings = FIXED.write.tail.split('\n').filter((l: string) => l.startsWith('#'))
+  expect(headings[0]).toBe('# HANDOFF')
+  expect(headings.slice(1).map((h: string) => h.slice(0, 5))).toEqual(['## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.', '## 8.'])
+  const { f, clock } = await approvedRelay($, on)
+  f.files['/data/relay/op-1.md'] = headings.map((h: string) => h + '\nx').join('\n')
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  expect(f.submits.length).toBe(1)
+  expect(reports(f)).toEqual(['relay report op-1 writing', 'relay report op-1 written'])
+  expect(f.commands).toEqual(['clear'])
+})
+
+// ---- the bodies come from `pdx relay prompts`, asked right before each prompt ----
+
+const answers = (b: Record<string, unknown>) => () => ({ exitCode: 0, stdout: JSON.stringify(b) })
+const INCOMPLETE = '# HANDOFF\n## 1. a\n' + 'x'.repeat(300) // ## 2.–## 8. missing
+const MISSING = '缺少段落：## 2.、## 3.、## 4.、## 5.、## 6.、## 7.、## 8.。請補齊後只回「HANDOFF-WRITTEN」。'
+const DEFAULT_FIX = (n: string) => '[pdx-relay op=op-1 n=' + n + '] 接力檔 /data/relay/op-1.md 不完整。\n' + MISSING
+const WRITE_TAIL = (who = 'mlab/purdex-x [abc123]') => PRE_P9A_WRITE('-', who).split('\n').slice(6).join('\n') // the fixed write tail, filled for OP
+const DONE = ['relay report op-1 writing', 'relay report op-1 written', 'relay report op-1 cleared --new-session sid-new', 'relay report op-1 done']
+const promptsCalls = (f: Fake) => f.argvs.flatMap((a, i) => (a[1] === 'relay' && a[2] === 'prompts' ? [{ argv: a, timeoutMs: f.timeouts[i] }] : []))
+const BIG = '接'.repeat(5000) + 'x'.repeat(1384) // 16 384 UTF-8 bytes: the daemon's limit, still used
+const OVER = '接'.repeat(5461) + 'xx' // 16 385 UTF-8 bytes in 5 463 characters: the built-in body
+
+// toDone drives a relay on from its submitted write prompt: `fixes`
+// incomplete handoffs, each answered by a fix prompt, then a complete one,
+// the /clear, the seed and the seed turn.
+async function toDone($: any, f: Fake, fixes = 0) {
+  for (let i = 0; i <= fixes; i++) {
+    f.files['/data/relay/op-1.md'] = i < fixes ? INCOMPLETE : GOOD_FILE
+    await $.turn.start({ text: f.submits.at(-1).text, turnId: 'tw' + i })
+    await turn($, 'tw' + i)
+    await f.clock.advance(50)
+  }
+  f.sessionId = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await f.clock.advance(50)
+  await $.turn.start({ text: f.submits.at(-1).text, turnId: 'ts' })
+  await turnAndSettle($, f, 'ts')
+}
+
+// U21 (c). Mutation gate: skip the tail when a body is set → red.
+test('an edited write body lands between the fixed head and tail; the tag, the reply rule, # HANDOFF, ## 1.–## 8. and the facts are there for a one-word body', async ($, on) => {
+  const { f } = await approvedRelay($, on, undefined, { prompts: answers({ write: '接力', fix: '', seed: '' }) })
+  const text = f.submits[0].text
+  expect(text).toBe('[pdx-relay op=op-1 n=' + nonceOf(text) + '] 接力\n' + WRITE_TAIL())
+  for (const s of ['寫完後只回一行「HANDOFF-WRITTEN」', '\n# HANDOFF\n', '## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.', '## 8.', '- 舊 session id：sid-old', '- 舊 ref：_abc123', '- 接力時 context：144000 tokens / 200000 (72%)', '- pdx 身分：mlab/purdex-x [abc123]']) expect(text).toContain(s)
+  expect(text).not.toContain('這個 session 的 context 已達接力門檻')
+  await toDone($, f) // the nonce in the head is still how the turns are told
+  expect(reports(f)).toEqual(DONE)
+})
+
+// U21 (c), spec §8.2 step 7. Mutation gates: drop the seed head's first
+// line, or the fix tail, for a custom body → red.
+for (const [name, body] of [['a one-word body', '補'], ['a 16 384-byte body', BIG]] as const) {
+  test(`an edited fix body keeps the tag head and the 缺少段落 + HANDOFF-WRITTEN tail; an edited seed body keeps both fixed head lines (↪ 接手自 <old ref>, then the seed tag with the nonce) — ${name}`, async ($, on) => {
+    const { f } = await approvedRelay($, on, undefined, { prompts: answers({ fix: body, seed: body }) })
+    await toDone($, f, 1)
+    const [write, fix, seed] = f.submits.map((x) => x.text)
+    expect(write).toBe(PRE_P9A_WRITE(nonceOf(write))) // its field is missing: the built-in body
+    expect(fix).toBe('[pdx-relay op=op-1 n=' + nonceOf(fix) + '] ' + body + '\n' + MISSING)
+    expect(seed).toBe('↪ 接手自 _abc123\n[pdx-relay seed op=op-1 n=' + nonceOf(seed) + '] ' + body)
+    expect(reports(f)).toEqual(DONE)
+  })
+}
+
+// Spec §8.8, open question 9: one call right before every prompt, so even the
+// next fix round uses an edit made a moment ago. Mutation gate: read once per
+// relay → one call, and the second fix round still says F1 → red.
+test('pdx relay prompts runs before the write, before each fix and before the seed, each with --config and timeoutMs 8000', async ($, on) => {
+  let fix = 'F1'
+  const { f, clock } = await approvedRelay($, on, undefined, { pdxJSON: PDX_JSON, prompts: () => answers({ write: 'W', fix, seed: 'S' })() })
+  expect(promptsCalls(f).length).toBe(1)
+  expect(f.submits.map((x) => x.text.split('] ')[1].split('\n')[0])).toEqual(['W'])
+  f.files['/data/relay/op-1.md'] = INCOMPLETE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  expect(promptsCalls(f).length).toBe(2)
+  fix = 'F2'
+  await $.turn.start({ text: f.submits[1].text, turnId: 'tf1' })
+  await turn($, 'tf1')
+  await clock.advance(50)
+  expect(promptsCalls(f).length).toBe(3)
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[2].text, turnId: 'tf2' })
+  await turn($, 'tf2')
+  await clock.advance(50)
+  expect(promptsCalls(f).length).toBe(3) // the /clear asks for nothing
+  expect(f.commands).toEqual(['clear'])
+  f.sessionId = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await clock.advance(50)
+  expect(promptsCalls(f).length).toBe(4)
+  expect(f.submits.map((x) => x.text.split('] ')[1].split('\n')[0])).toEqual(['W', 'F1', 'F2', 'S'])
+  for (const c of promptsCalls(f)) expect(c).toEqual({ argv: ['/opt/pdx/bin/pdx', 'relay', 'prompts', '--config', '/tmp/pdx b/config.toml'], timeoutMs: 8000 })
+  await $.turn.start({ text: f.submits[3].text, turnId: 'ts' })
+  await turnAndSettle($, f, 'ts')
+  expect(reports(f)).toEqual(DONE.map((c) => c + ' --config /tmp/pdx b/config.toml'))
+})
+
+// U21 (b): a relay never fails because of its prompts. Mutation gate: fall
+// back only on a non-zero exit → junk stdout at exit 0 throws → red.
+for (const [name, answer] of [
+  ['exit 20 (daemon unreachable)', () => ({ exitCode: 20, stderr: 'pdx relay: daemon unavailable' })],
+  ['exit 21 (a daemon from before P9a-1: plain 404)', () => ({ exitCode: 21, stderr: 'pdx relay: this daemon has no relay prompts' })],
+  ['exit 1', () => ({ exitCode: 1, stderr: 'pdx relay: host config read failed storage_error' })],
+  ['a rejected run', () => Promise.reject(new Error('spawn pdx ENOENT'))],
+  ['junk stdout at exit 0', () => ({ exitCode: 0, stdout: 'not json {' })],
+  ['a JSON null at exit 0', () => ({ exitCode: 0, stdout: 'null' })],
+  ['missing fields', answers({ defaults: { write: 'x' } })],
+  ['non-string fields', answers({ write: 5, fix: null, seed: ['x'] })],
+  ['empty bodies', answers({ write: '', fix: '', seed: '' })],
+  ['whitespace-only bodies', answers({ write: ' \n\t', fix: '\n', seed: '  ' })],
+  ['bodies over 16 384 UTF-8 bytes', answers({ write: OVER, fix: OVER, seed: OVER })],
+  // What the daemon refuses on write (internal/team ValidateRelayPromptBody),
+  // answered anyway — a damaged host_config.db, a schema drift (P9a-2 review).
+  // Mutation gates: drop the tag check / the control check → red.
+  ['bodies holding NUL', answers({ write: 'a\u0000b', fix: '\u0000', seed: 'seed\u0000' })],
+  ['bodies holding \\r', answers({ write: 'a\r\nb', fix: 'f\r', seed: '\rs' })],
+  ['bodies holding U+0085 (C1) or DEL', answers({ write: 'a\u0085b', fix: 'f\u007f', seed: 's\u009f' })],
+  ['bodies holding [pdx-relay', answers({ write: 'see [pdx-relay op=fake n=fake] here', fix: '[pdx-relay:control] op=x', seed: 'x [pdx-relay seed op=fake n=fake]' })],
+  ['bodies that are not UTF-8 (a lone surrogate)', answers({ write: 'a\ud800b', fix: '\udc00', seed: 's\ud83d' })],
+] as const) {
+  test(`pdx relay prompts with ${name} gives the built-in bodies, logged; the relay reports writing, written, cleared and done`, async ($, on) => {
+    const { f } = await approvedRelay($, on, undefined, { prompts: answer })
+    await toDone($, f, 1)
+    const [write, fix, seed] = f.submits.map((x) => x.text)
+    expect(write).toBe(PRE_P9A_WRITE(nonceOf(write)))
+    expect(fix).toBe(DEFAULT_FIX(nonceOf(fix)))
+    expect(seed).toBe(PRE_P9A_SEED(nonceOf(seed)))
+    expect(reports(f)).toEqual(DONE)
+    expect(f.logs.filter((l) => l.includes('relay prompts')).length).toBe(3) // one line per prompt
+  })
+}
+
+// U21 (d). Mutation gate: fill recursively → the path's {{path}} or the
+// whoami's {{old_ref}} is expanded again → red.
+test('variables are filled once: {{path}} {{old_ref}} {{old_session}} {{context}} {{whoami}}; {{foo}} and {{nonce}} in a body stay as typed; a path holding {{path}} is not expanded again', async ($, on) => {
+  const base = pdxWith([{ exitCode: 0, stdout: APPROVAL('approved') }])
+  const op = { ...OP, handoff_path: '/data/relay/{{path}}.md' }
+  const who = 'mlab/{{old_ref}} {{nonce}} $& $1'
+  const { f } = await approvedRelay($, on, undefined, {
+    pdx: (argv) => (argv[1] === 'begin' ? { exitCode: 0, stdout: JSON.stringify({ op, request_id: 'req-1' }) } : argv[0] === 'msg' ? { exitCode: 0, stdout: who + '\n' } : base(argv)),
+    prompts: answers({ write: 'P={{path}} R={{old_ref}} S={{old_session}} C={{context}} W={{whoami}}\n{{foo}} {{nonce}} {{op}} {{missing}} {{PATH}} {{ path }} {path}' }),
+  })
+  const text = f.submits[0].text
+  expect(text).toBe([
+    '[pdx-relay op=op-1 n=' + nonceOf(text) + '] P=/data/relay/{{path}}.md R=_abc123 S=sid-old C=144000 tokens / 200000 (72%) W=' + who,
+    '{{foo}} {{nonce}} {{op}} {{missing}} {{PATH}} {{ path }} {path}',
+    WRITE_TAIL(who),
+  ].join('\n'))
+})
+
+// The daemon's rule allows \n and \t; Go's unicode.IsControl ends at U+009F,
+// so U+00A0 and a pair of surrogates (one emoji) are text. Mutation gate: a
+// control check that refuses \t or \n, or runs past U+009F → red.
+test('a body with \\n, \\t, U+00A0 and an emoji is still used', async ($, on) => {
+  const { f } = await approvedRelay($, on, undefined, { prompts: answers({ write: 'A\tB\nC D', fix: 'F\tG 🙂', seed: 'S\n\tT' }) })
+  await toDone($, f, 1)
+  const [write, fix, seed] = f.submits.map((x) => x.text)
+  expect(write).toBe('[pdx-relay op=op-1 n=' + nonceOf(write) + '] A\tB\nC D\n' + WRITE_TAIL())
+  expect(fix).toBe('[pdx-relay op=op-1 n=' + nonceOf(fix) + '] F\tG 🙂\n' + MISSING)
+  expect(seed).toBe('↪ 接手自 _abc123\n[pdx-relay seed op=op-1 n=' + nonceOf(seed) + '] S\n\tT')
+  expect(reports(f)).toEqual(DONE)
+  expect(f.logs.filter((l) => l.includes('relay prompts'))).toEqual([])
+})
+
+test('trailing newlines of a body give one newline before the tail', async ($, on) => {
+  const { f } = await approvedRelay($, on, undefined, { prompts: answers({ write: 'A\n\nB\n\n\n', fix: 'F\n', seed: 'S\n\n' }) })
+  await toDone($, f, 1)
+  const [write, fix, seed] = f.submits.map((x) => x.text)
+  expect(write).toBe('[pdx-relay op=op-1 n=' + nonceOf(write) + '] A\n\nB\n' + WRITE_TAIL())
+  expect(fix).toBe('[pdx-relay op=op-1 n=' + nonceOf(fix) + '] F\n' + MISSING)
+  expect(seed).toBe('↪ 接手自 _abc123\n[pdx-relay seed op=op-1 n=' + nonceOf(seed) + '] S') // the seed tail is '': nothing after the body
+})
+
+// Behaviour rule 2: the next relay reads the daemon again (U21 (b)).
+test('a second relay uses the body the daemon answers then', async ($, on) => {
+  let write = 'ONE'
+  const approved = { exitCode: 0, stdout: APPROVAL('approved') }
+  const { f } = await approvedRelay($, on, [approved, approved], { prompts: () => answers({ write })() })
+  expect(f.submits[0].text.split('\n')[0]).toMatch(/\] ONE$/)
+  await toDone($, f)
+  expect(reports(f)).toEqual(DONE)
+  write = 'TWO'
+  f.usage = AT82 // 20K over the floor the seed turn set
+  await turn($, 't2')
+  await f.clock.advance(50) // begin, then the wait: approved
+  await f.clock.advance(50) // the write step
+  expect(count(f, 'begin')).toBe(2)
+  expect(f.submits.at(-1).text.split('\n')[0]).toMatch(/^\[pdx-relay op=op-1 n=[0-9a-f]+\] TWO$/)
+})
+
+// The calls run from timers, never inside a hook (register.js's own rule):
+// no turn end or session start waits for the daemon. Mutation gate: await the
+// fix or seed body inside turn.complete / classic.SessionStart → red.
+test('a pdx relay prompts that never answers holds no hook: turn.complete and classic.SessionStart return before it', async ($, on) => {
+  const held: Array<() => void> = []
+  let calls = 0
+  const { f, clock } = await approvedRelay($, on, undefined, { prompts: () => (++calls === 1 ? { exitCode: 20 } : new Promise((r) => { held.push(() => r({ exitCode: 20 })) })) })
+  expect(f.submits.length).toBe(1)
+  f.files['/data/relay/op-1.md'] = INCOMPLETE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  let done = false
+  const t = turn($, 'tw').then(() => { done = true })
+  await clock.advance(50) // the fix step: its pdx relay prompts hangs
+  expect(done).toBe(true)
+  expect(calls).toBe(2)
+  expect(f.submits.length).toBe(1) // the fix prompt waits for its body
+  held.shift()!()
+  await clock.settle()
+  expect(f.submits.length).toBe(2)
+  await t
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[1].text, turnId: 'tf' })
+  await turn($, 'tf')
+  await clock.advance(50)
+  expect(f.commands).toEqual(['clear'])
+  f.sessionId = 'sid-new'
+  let cleared = false
+  const c = $.classic.SessionStart({ source: 'clear' }).then(() => { cleared = true })
+  await clock.advance(50) // the seed step: its pdx relay prompts hangs
+  expect(cleared).toBe(true)
+  expect(calls).toBe(3)
+  expect(f.submits.length).toBe(2)
+  held.shift()!()
+  await clock.settle()
+  expect(f.submits.length).toBe(3)
+  await c
+  await $.turn.start({ text: f.submits[2].text, turnId: 'ts' })
+  await turnAndSettle($, f, 'ts')
+  expect(reports(f)).toEqual(DONE)
+})
+
+// The engine kills a child still running at its timeoutMs and the call
+// rejects (2.1.293 d.ts: ProcessRunInit.timeoutMs "How long the child may run
+// before it is killed and the call rejects"; $.process.run "Rejects when the
+// command cannot start or is still running then"; 30 s when absent). The fake
+// does exactly that on the kit's clock, at each of the three steps: it
+// answers `{ deny }` at timeoutMs, so the mod's $.process.run rejects.
+// Mutation gate: await the run with no bound → it ends at 30 s, not 8 → red.
+test('a pdx relay prompts that runs into its 8 s timeoutMs gives the built-in body, and the relay reports writing, written, cleared and done', async ($, on) => {
+  const f = relayWorld(on, { pdx: pdxWith([{ exitCode: 0, stdout: APPROVAL('approved') }]), usage: AT72 })
+  f.prompts = (_argv, init) => f.clock.sleep(init?.timeoutMs ?? 30_000).then(() => ({ deny: 'still running at its timeout; killed' }))
+  const step = async (n: number) => {
+    await f.clock.advance(50) // the step's timer: pdx relay prompts goes out
+    expect(promptsCalls(f).length).toBe(n)
+    await f.clock.advance(7_999)
+    expect(f.submits.length).toBe(n - 1)
+    await f.clock.advance(1) // the engine kills it and the call rejects: the built-in body
+    expect(f.submits.length).toBe(n)
+  }
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(50) // begin, then the wait: approved
+  await step(1)
+  expect(f.submits[0].text).toBe(PRE_P9A_WRITE(nonceOf(f.submits[0].text)))
+  f.files['/data/relay/op-1.md'] = INCOMPLETE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await step(2)
+  expect(f.submits[1].text).toBe(DEFAULT_FIX(nonceOf(f.submits[1].text)))
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[1].text, turnId: 'tf' })
+  await turn($, 'tf')
+  await f.clock.advance(50)
+  expect(f.commands).toEqual(['clear'])
+  f.sessionId = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await step(3)
+  expect(f.submits[2].text).toBe(PRE_P9A_SEED(nonceOf(f.submits[2].text)))
+  await $.turn.start({ text: f.submits[2].text, turnId: 'ts' })
+  await turnAndSettle($, f, 'ts')
+  expect(reports(f)).toEqual(DONE)
+  expect(promptsCalls(f).map((c) => c.timeoutMs)).toEqual([8000, 8000, 8000])
+  // a rejected run reads as 20 (run()), and each fallback says so once
+  expect(f.logs.filter((l) => l.includes('relay prompts'))).toEqual(['write', 'fix', 'seed'].map((k) => 'pdx-relay: relay prompts: the built-in ' + k + ' body (exit 20)'))
 })

@@ -30,10 +30,20 @@
 // state) and failing open; and /relay, on its daemon call (the person waits
 // for its output; 8 s bound).
 //
+// Each write / fix / seed prompt is composed at use (U21, spec §8.8): the
+// mod's own fixed head and tail (prompts.js) around the body that `pdx relay
+// prompts` answers right before the prompt goes out, from the step's timer
+// (8 s bound); a call that fails, times out or answers junk gives the
+// built-in body, and the relay goes on.
+//
 // This file is the plugin's one hooks module (hooks/hooks.json names a single
-// path); it also registers ask.js, the AskUserQuestion 分流 (P8a-2).
+// path); it also registers ask.js, the AskUserQuestion 分流 (P8a-2), and
+// imports prompts.js, the copy of the daemon's relay prompts generated from
+// internal/team/relay_prompts.go (P9a): the fixed head and tail of each
+// prompt, and the built-in bodies.
 
 import { register as registerAsk } from './ask.js'
+import { DEFAULT_BODIES, FIXED } from './prompts.js'
 
 const VERSION = '1' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
 const DEFAULT_THRESHOLD = 70
@@ -43,6 +53,8 @@ const MAX_FIX_ROUNDS = 2
 const WAIT_TIMEOUT_MS = 590_000 // $.process.run caps at 10 min (M24); pdx relay wait bounds itself to 9
 const CALL_TIMEOUT_MS = 35_000 // one daemonclient grace (30 s) plus slack
 const SELF_TIMEOUT_MS = 8_000 // /relay waits in its hook for `pdx relay self`: the person waits for the answer
+const PROMPTS_TIMEOUT_MS = 8_000 // `pdx relay prompts` before each write / fix / seed prompt (spec §8.8); then the built-in body
+const MAX_BODY_BYTES = 16_384 // a body's limit in UTF-8 bytes, the daemon's (internal/team RelayPromptMaxBytes)
 const HOLD_SLEEP = ['/bin/sleep', '5'] // the prompt hold's own `$` call, again while it waits: local, it asks the daemon nothing
 const HOLD_SLEEP_TIMEOUT_MS = 10_000 // its $.process.run bound
 const HOLD_MAX_MS = 660_000 // a held prompt waits for the request's answer at most 11 min: its 10 min deadline and slack
@@ -275,51 +287,76 @@ function arm(p, state) {
   else s.seedTurnId = undefined
 }
 
-const tag = (p) => '[pdx-relay op=' + p.op.id + ' n=' + p.nonce + ']'
-
-function writePrompt(p) {
-  return [
-    tag(p) + ' 這個 session 的 context 已達接力門檻，使用者已核准接力（之後會 /clear）。',
-    '請先停下手邊工作，用你完整的工具撰寫接力檔：' + p.path,
-    '',
-    '要求：',
-    '- 自己跑 `git status`、`git diff --stat`、`git log --oneline -10` 取得檔案狀態，不要憑記憶寫。',
-    '- 接力檔必須自成一體：讀它的是一個完全沒有這段對話記憶的新對話。',
-    '- 寫完後只回一行「HANDOFF-WRITTEN」，不要繼續原本的工作。',
-    '',
-    '格式（每一段都要有，沒有內容就寫「無」）：',
-    '# HANDOFF',
-    '## 1. 目標與完成定義（使用者要的是什麼、怎樣算完成、範圍外）',
-    '## 2. 進度（已完成且驗證 / 進行中停在哪 / 下一步第一個動作具體到指令）',
-    '## 3. 檔案異動（git status 與 diff --stat 的結果，加上每個檔案的用途）',
-    '## 4. 決策紀錄（選了什麼、為什麼、否決了什麼）',
-    '## 5. 死路（試過失敗、不要再試的）',
-    '## 6. 環境與指令（測試 / 執行方式）',
-    '## 7. 未決問題與需要使用者決定的事',
-    '## 8. 協作關係（下面的 pdx 身分；我的 lead 與我管理的 members，沒有就寫無）',
-    '',
-    '機器提供的事實（請照抄進對應段落）：',
-    '- 舊 session id：' + p.oldSession,
-    '- 舊 ref：' + p.oldRef,
-    '- 接力時 context：' + p.before,
-    '- pdx 身分：' + p.who,
-  ].join('\n')
+// fill replaces each {{name}} of `vars` in one pass: a value is never
+// expanded again, and a {{name}} that `vars` does not hold stays as typed
+// (U21 (d)).
+function fill(text, vars) {
+  return text.replace(/\{\{([a-z_]+)\}\}/g, (m, k) => (Object.hasOwn(vars, k) ? String(vars[k]) : m))
 }
 
-function fixPrompt(p, missing) {
-  return tag(p) + ' 接力檔 ' + p.path + ' 不完整，缺少段落：' + (missing.join('、') || '(內容過短)') + '。請補齊後只回「HANDOFF-WRITTEN」。'
+// compose builds the write, fix or seed prompt of request p (U21 (c)): the
+// fixed head, the body, and the fixed tail on the next line —
+//   fill(head, all) + fill(body, public) + (tail === '' ? '' : '\n' + fill(tail, all))
+// The head and tail are always the mod's own (FIXED, never the daemon's):
+// the machine tag with the nonce, the reply rule, the eight headings the
+// check reads and the facts. The body gets only the five public variables;
+// the mod's own op, nonce and missing are for the fixed parts. A body's
+// trailing newlines are dropped, so one newline stands before the tail.
+function compose(kind, body, p, extra = {}) {
+  const pub = { path: p.path, old_ref: p.oldRef, old_session: p.oldSession, context: p.before, whoami: p.who }
+  const all = { ...pub, op: p.op.id, nonce: p.nonce, ...extra }
+  const { head, tail } = FIXED[kind]
+  return fill(head, all) + fill(body.replace(/\n+$/, ''), pub) + (tail === '' ? '' : '\n' + fill(tail, all))
 }
 
-function seedPrompt(p) {
-  return [
-    '↪ 接手自 ' + p.oldRef,
-    '[pdx-relay seed op=' + p.op.id + ' n=' + p.nonce + '] 你是接手的新對話：前一段對話 context 已滿並已清空。',
-    '請先讀接力檔 ' + p.path + '，然後：',
-    '1. 用三行複述：目標、下一步第一個動作、目前有哪些檔案異動。',
-    '2. 跑 `git status` 確認與接力檔一致，不一致就指出來。',
-    '3. 接著從「下一步」繼續原本的工作。',
-    '回覆的第一行請寫「↪ 接手自 ' + p.oldRef + '」。',
-  ].join('\n')
+// utf8Bytes is text's length in UTF-8, as the daemon counts a body.
+function utf8Bytes(text) {
+  let n = 0
+  for (const ch of text) {
+    const c = ch.codePointAt(0)
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4
+  }
+  return n
+}
+
+// refusal is why the daemon would have refused text as a body on write
+// (internal/team ValidateRelayPromptBody), '' when it would not: not UTF-8
+// (in a JS string, a lone surrogate), a control character other than \n and
+// \t (Go's unicode.IsControl: U+0000–U+001F, U+007F–U+009F; so \r, NUL, DEL
+// and C1), or the machine tag anywhere — the tag is the mod's alone. A
+// daemon answers only what it validated; this holds against a damaged store
+// or a schema drift (P9a-2 review).
+function refusal(text) {
+  for (const ch of text) {
+    const c = ch.codePointAt(0)
+    if (c >= 0xd800 && c <= 0xdfff) return 'a lone surrogate (not UTF-8)'
+    if (c !== 0x0a && c !== 0x09 && (c <= 0x1f || (c >= 0x7f && c <= 0x9f))) return 'control character U+' + c.toString(16).toUpperCase().padStart(4, '0')
+  }
+  return text.includes('[pdx-relay') ? 'the machine tag [pdx-relay' : ''
+}
+
+// bodyFor asks the daemon for the body of the `kind` prompt about to go out
+// (U21 (b), spec §8.8): read afresh for every prompt, so an edit applies from
+// the next one with no `pdx setup`. Only an answer at exit 0 whose `kind` is
+// a string with text, of at most MAX_BODY_BYTES, that the daemon's own rule
+// (refusal) passes is used. Anything else gives the built-in body and one log
+// line — 20 (unreachable, or a run that rejected: PROMPTS_TIMEOUT_MS ran
+// out), 21 (a daemon from before the route), 1, junk, a missing field, a
+// wrong type: a relay never fails because of its prompts. Called from the
+// step's timer, never inside a hook.
+async function bodyFor($, kind) {
+  const r = await pdx($, ['relay', 'prompts'], PROMPTS_TIMEOUT_MS)
+  const answer = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
+  const body = answer && typeof answer === 'object' ? answer[kind] : undefined
+  let why
+  if (r.exitCode !== 0) why = 'exit ' + r.exitCode
+  else if (typeof body !== 'string') why = 'no string ' + kind + ' in the answer'
+  else if (body.trim() === '') why = kind + ' is empty'
+  else if (utf8Bytes(body) > MAX_BODY_BYTES) why = kind + ' is over ' + MAX_BODY_BYTES + ' bytes'
+  else if (refusal(body)) why = kind + ' holds ' + refusal(body)
+  else return body
+  log($, 'relay prompts: the built-in ' + kind + ' body (' + why + ')')
+  return DEFAULT_BODIES[kind]
 }
 
 function usageLine(u) {
@@ -493,11 +530,13 @@ function settle($, p, outcome) {
   if (outcome !== 'approved') return toIdle()
   s.state = 'approved'
   later($, STEP_MS, async () => {
-    p.who = await whoami($)
-    if (s.pending !== p) return
+    // both bounded (10 s, 8 s) and asked together: the step waits no longer than whoami did
+    const [who, body] = await Promise.all([whoami($), bodyFor($, 'write')])
+    p.who = who
+    if (s.pending !== p || s.state !== 'approved') return // the await may span the user's /clear
     arm(p, 'approved')
     try {
-      await submit($, writePrompt(p))
+      await submit($, compose('write', body, p))
     } catch (err) {
       giveUp($, p, 'approved', 'failed', 'handoff_incomplete', 'write prompt: ' + String(err))
       return
@@ -555,9 +594,11 @@ async function onWriteTurnDone($) {
     s.fixRounds += 1
     later($, STEP_MS, async () => {
       if (s.pending !== p) return
+      const body = await bodyFor($, 'fix') // every round asks again (open question 9)
+      if (s.pending !== p || s.state !== 'approved') return
       arm(p, 'approved')
       try {
-        await submit($, fixPrompt(p, c.missing))
+        await submit($, compose('fix', body, p, { missing: c.missing.join('、') || '(內容過短)' }))
       } catch (err) {
         giveUp($, p, 'approved', 'failed', 'handoff_incomplete', 'fix prompt: ' + String(err))
       }
@@ -645,9 +686,13 @@ export function register(on) {
       helloLater($)
       later($, STEP_MS, async () => {
         if (s.pending !== p) return
+        // The new conversation is idle while the body is asked for (≤ 8 s;
+        // M29 with the daemon up): a prompt typed meanwhile runs first.
+        const body = await bodyFor($, 'seed')
+        if (s.pending !== p || s.state !== 'seeding') return // the user's own /clear meanwhile
         arm(p, 'seeding')
         try {
-          await submit($, seedPrompt(p))
+          await submit($, compose('seed', body, p))
         } catch (err) {
           if (!giveUp($, p, 'seeding', 'failed', 'handoff_incomplete', 'seed prompt: ' + String(err))) return
           // the /clear did happen: this is a new conversation, asked afresh
