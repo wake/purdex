@@ -26,6 +26,10 @@ type Store struct {
 	// insert; a non-nil error fails the replace there. Tests use it to
 	// prove the close rolls back with a failed insert. nil in production.
 	beforeReplaceInsert func() error
+	// beforeMemberCancelOp, when set, runs in CloseSelfRelayApproved's
+	// transaction after the row's cancel and before the op's; an error
+	// fails the call there (tests). nil in production.
+	beforeMemberCancelOp func() error
 }
 
 // OpenStore opens (or creates) team.db at path. ":memory:" is for tests.

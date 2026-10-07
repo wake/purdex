@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -214,6 +215,27 @@ func TestDecide_SelfRelayOfANewMemberIsCancelled(t *testing.T) {
 	}
 	if op := f.op(out.Op.ID); op.State != team.RelayCancelled || op.Reason != team.ErrMemberRelayIsLeads {
 		t.Fatalf("op = %s (%s), want cancelled (%s)", op.State, op.Reason, team.ErrMemberRelayIsLeads)
+	}
+}
+
+// H2 is one transaction (P4-3 critic): when the op's cancel fails, the row's
+// cancel rolls back with it — 500, the request still open, the op still
+// awaiting, no event. Mutation gate: commit the row before the op → red.
+func TestDecide_SelfRelayMemberCancelIsOneTx(t *testing.T) {
+	f := newFixture(t)
+	out := f.begin("sid-1")
+	f.makeMember("sid-1")
+	f.events()
+	f.m.store.beforeMemberCancelOp = func() error { return errors.New("injected") }
+	code, body := f.decide(out.RequestID, "approve")
+	if e := decodeErr(t, body); code != http.StatusInternalServerError || e.Error != errStorage {
+		t.Fatalf("approve with a failing op cancel: %d %s, want 500", code, body)
+	}
+	if a, _, _ := f.m.store.Get(out.RequestID); a.State != team.StateOpen || len(f.events()) != 0 {
+		t.Fatalf("row = %s (want open) or an event was sent", a.State)
+	}
+	if op := f.op(out.Op.ID); op.State != team.RelayAwaitingApproval {
+		t.Fatalf("op = %s, want awaiting_approval", op.State)
 	}
 }
 

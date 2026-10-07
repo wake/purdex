@@ -24,10 +24,6 @@ var ErrNoSuchMember = errors.New("no such member")
 // writes rolled back, the row is still open.
 var ErrMemberCannotLead = errors.New("the session is an active member of a live team")
 
-// ErrMemberRelayIsLeads is returned by CloseSelfRelayApproved when the
-// origin is an active member of a live team: its relay is the lead's (U13).
-var ErrMemberRelayIsLeads = errors.New("a member's relay is the lead's")
-
 // teamSchema is the P4 teams table (spec §7.1) and, from P4-3, the
 // team_members table (§7.2 step 6, §7.3). It is run by OpenStore after
 // relaySchema; every statement is idempotent, so it is safe on a team.db
@@ -178,24 +174,38 @@ func (s *Store) ActiveMemberInLiveTeam(sessionID string) (memberRow, team.Team, 
 	return m, t, true, nil
 }
 
-// CloseSelfRelayApproved is the approve of a self_relay row (spec §8.7 (b)):
-// the open CAS, refused in the same transaction with ErrMemberRelayIsLeads
-// — the row left open — when sessionID is an active member of a live team
-// (U13; P4-3 review H2). Otherwise as CloseIfOpen.
-func (s *Store) CloseSelfRelayApproved(id string, c Close, sessionID string) (team.Approval, bool, error) {
+// CloseSelfRelayApproved is the approve of a self_relay row (spec §8.7 (b))
+// in one write transaction (P4-3 review H2). Unless sessionID is an active
+// member of a live team it is CloseIfOpen(c). If it is (U13), the row
+// closes cancelled instead and its awaiting op becomes
+// cancelled{member_relay_is_leads}, both or neither; memberCancelled says
+// that committed. The row and won are as CloseIfOpen's.
+func (s *Store) CloseSelfRelayApproved(id string, c Close, sessionID string) (a team.Approval, won, memberCancelled bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return team.Approval{}, false, fmt.Errorf("approve self relay %s: begin: %w", id, err)
+		return team.Approval{}, false, false, fmt.Errorf("approve self relay %s: begin: %w", id, err)
 	}
 	defer tx.Rollback()
-	n, err := closeRowIn(tx, id, c, "", 0)
-	if err == nil && n == 1 {
-		var member bool
-		if member, err = isLiveMemberIn(tx, sessionID); err == nil && member {
-			err = ErrMemberRelayIsLeads
-		}
+	// A write first, so SQLite takes the write lock before the member read.
+	_, err = tx.Exec(`UPDATE approval_requests SET id = id WHERE id = ?`, id)
+	var member bool
+	if err == nil {
+		member, err = isLiveMemberIn(tx, sessionID)
 	}
-	var a team.Approval
+	if member {
+		c = Close{State: team.StateCancelled, DecidedAt: c.DecidedAt}
+	}
+	var n int64
+	if err == nil {
+		n, err = closeRowIn(tx, id, c, "", 0)
+	}
+	if err == nil && member && n == 1 && s.beforeMemberCancelOp != nil {
+		err = s.beforeMemberCancelOp()
+	}
+	if err == nil && member && n == 1 {
+		_, err = tx.Exec(`UPDATE relay_ops SET state = ?, reason = ?, updated_at = ? WHERE request_id = ? AND state = ?`,
+			string(team.RelayCancelled), team.ErrMemberRelayIsLeads, c.DecidedAt, id, string(team.RelayAwaitingApproval))
+	}
 	if err == nil {
 		a, _, err = getRowIn(tx, id)
 	}
@@ -203,9 +213,9 @@ func (s *Store) CloseSelfRelayApproved(id string, c Close, sessionID string) (te
 		err = tx.Commit()
 	}
 	if err != nil {
-		return team.Approval{}, false, fmt.Errorf("approve self relay %s: %w", id, err)
+		return team.Approval{}, false, false, fmt.Errorf("approve self relay %s: %w", id, err)
 	}
-	return a, n == 1, nil
+	return a, n == 1, member && n == 1, nil
 }
 
 // isLiveMemberIn reports, on q (a transaction's read under its write lock),
