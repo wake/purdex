@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.600] - 2026-10-08
+
+> 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。
+
+### Fixed：peer 建立的 turn 也會刷新 worker 清單（#1866，#1932）
+
+- Nexen v0.20.0 由 peer 建立 turn 時發的是 `peer_message`，不是 `execution.message_accepted`。alpha.587 的站台事件流白名單是照 v0.19.0 寫的，漏了它，清單因此不會因 peer 的 turn 刷新。現在補上了。
+
 ## [1.0.0-alpha.599] - 2026-10-08
 
 > 只動 SPA，而且是純內部整理：使用者看不到任何變化，不用部署 daemon。
