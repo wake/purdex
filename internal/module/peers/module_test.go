@@ -206,6 +206,8 @@ func newTestModuleWith(t *testing.T, opts fixtureOpts) *moduleFixture {
 		dedup:            newDedupSet(ipeers.DedupWindow, now),
 		pairs:            newPairLimiter(ipeers.PairRateLimit, ipeers.PairRateWindow, now),
 		hostLimit:        newHostLimiter(ipeers.HostRateLimit, ipeers.HostRateWindow, now),
+		peerNames:        meta.PeerNames(),
+		convNames:        meta.ConversationNames(),
 		writeFrame:       ccuds.WriteFrame,
 		sockWriteTimeout: opts.sockWriteTimeout,
 		newMsgID:         uuid.NewString,
@@ -1278,7 +1280,7 @@ func TestHandlePeers_ScopeAll_PeerEchoesOurTokenIsRedacted(t *testing.T) {
 			Alias: "self-" + tok, DaemonVersion: "v-" + tok,
 			UnknownRegistryFiles: []string{"/tmp/" + tok},
 			Peers: []ipeers.PeerRecord{{
-				RowKind: "session", SessionCode: "s1", SessionName: "sess-" + tok, Title: "t-" + tok, Cwd: "/w/" + tok,
+				RowKind: "session", SessionCode: "s1", SessionName: "sess-" + tok, Title: "t-" + tok, Cwd: "/w/" + tok, Name: "n-" + tok,
 				Agent: &ipeers.AgentInfo{Type: "cc", PeerName: "pn-" + tok, Version: "1"},
 			}},
 		})

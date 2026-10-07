@@ -350,3 +350,62 @@ func TestNamer_DuplicateCandidatesShareOneName(t *testing.T) {
 		t.Fatalf("names = %v, want {%s: %s}", got, vnNew, want)
 	}
 }
+
+// whoami, the origin resolver (lead and team notices are built from its
+// Address: team spawn_handler.go, team_handler.go) and GET /api/peers give a
+// conversation one address — the same namer over the same store — whichever
+// of them sees the conversation first.
+func TestVirtualAddress_WhoamiOriginAndEnvelopeAgree(t *testing.T) {
+	f := newTitleFixture(t)
+	want := map[int]string{
+		10: "a/" + vname(t, "n10", "sid-1"),
+		20: "a/" + vname(t, "n20", "sid-2"),
+	}
+	// pid 20 is first seen by whoami, pid 10 by the inventory.
+	if res := f.m.whoami(f.inbox(20)); res.err != nil || res.rec.Address != want[20] || res.rec.Name != want[20][2:] {
+		t.Fatalf("whoami(20) = %+v / %+v, want %s", res.rec, res.err, want[20])
+	}
+	snap := f.m.configSnapshot()
+	env := f.m.localEnvelope(context.Background(), snap.hostID, snap.alias)
+	r := &OriginResolver{m: f.m}
+	for pid, sid := range map[int]string{10: "sid-1", 20: "sid-2"} {
+		var row *ipeers.PeerRecord
+		for i := range env.Peers {
+			if a := env.Peers[i].Agent; a != nil && a.SessionID == sid && a.PID == pid {
+				row = &env.Peers[i]
+			}
+		}
+		if row == nil || row.Address != want[pid] || row.Agent.PeerName != fmt.Sprintf("n%d", pid) {
+			t.Fatalf("envelope row for %s = %+v, want address %s", sid, row, want[pid])
+		}
+		if res := f.m.whoami(f.inbox(pid)); res.rec.Address != want[pid] {
+			t.Errorf("whoami(%d) = %q, want %q", pid, res.rec.Address, want[pid])
+		}
+		if o, ok, err := r.ResolveOrigin(f.inbox(pid)); !ok || err != nil || o.Address != want[pid] || o.Name != row.Agent.PeerName {
+			t.Errorf("ResolveOrigin(%d) = %+v ok=%v err=%v, want address %s", pid, o, ok, err, want[pid])
+		}
+		if o, ok, err := r.ResolveOriginBySession(sid); !ok || err != nil || o.Address != want[pid] {
+			t.Errorf("ResolveOriginBySession(%s) = %+v ok=%v err=%v, want address %s", sid, o, ok, err, want[pid])
+		}
+	}
+}
+
+// A store that cannot be read costs the names, never correctness: every
+// row, whoami and the origin resolver fall back to the ref form together.
+func TestVirtualAddress_StoreErrorFallsBackToRef(t *testing.T) {
+	f := newTitleFixture(t)
+	f.m.WithPeerNames(failingNames{PeerNameStore: f.m.peerNames, lookup: errors.New("boom")}, nil)
+	want := "a/" + ipeers.RefID("sid-1")
+	snap := f.m.configSnapshot()
+	for _, row := range f.m.localEnvelope(context.Background(), snap.hostID, snap.alias).Peers {
+		if row.Agent != nil && row.Agent.SessionID == "sid-1" && (row.Address != want || row.Name != "") {
+			t.Errorf("row name/address = %q/%q, want \"\"/%s", row.Name, row.Address, want)
+		}
+	}
+	if res := f.m.whoami(f.inbox(10)); res.rec.Address != want {
+		t.Errorf("whoami = %q, want %q", res.rec.Address, want)
+	}
+	if o, _, _ := (&OriginResolver{m: f.m}).ResolveOrigin(f.inbox(10)); o.Address != want {
+		t.Errorf("origin address = %q, want %q", o.Address, want)
+	}
+}

@@ -1,6 +1,7 @@
 package peers
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -67,13 +68,16 @@ func (r *OriginResolver) ResolveOriginBySession(sessionID string) (team.Origin, 
 }
 
 // originOf renders a registry entry as a team.Origin: ref, address (the
-// rule GET /api/peers uses, record.go applyIdentity) and title.
+// rule GET /api/peers uses, record.go applyIdentity) and title. Name stays
+// the registry name; the address is the conversation's virtual name, from
+// the same namer and store the listing reads, else its ref — so a lead or
+// team notice built from it names the conversation as `pdx peers` does.
 func (r *OriginResolver) originOf(e ipeers.Entry) team.Origin {
 	ref := ipeers.RefID(e.SessionID)
 	alias := r.m.configSnapshot().alias
 	addr := alias + "/" + ref
-	if ipeers.RoutableName(e.Name) { // the rule GET /api/peers uses (internal/peers/record.go applyIdentity)
-		addr = alias + "/" + e.Name
+	if vn := r.m.virtualNamesOf(context.Background(), e)[e.SessionID]; ipeers.RoutableName(vn) {
+		addr = alias + "/" + vn
 	}
 	return team.Origin{
 		SessionID: e.SessionID,

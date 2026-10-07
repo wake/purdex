@@ -1,6 +1,7 @@
 package peers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -126,11 +127,13 @@ func (m *Module) whoami(inbox string) selfResult {
 	}
 	snap := m.configSnapshot()
 	row, has := titleRows(rows)[e.SessionID]
-	// The entry origin() validated is all whoami needs: the address is
-	// RefID of that entry's own sessionId, so this answer is
-	// identical to the listing's by construction (spec §4.5) rather than by
-	// resolving over the same population.
-	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, infoOf(row, has))}
+	// The entry origin() validated is all whoami needs: the address is the
+	// conversation's virtual name from the store the listing reads (else
+	// RefID of that entry's own sessionId), so this answer is identical to
+	// the listing's (spec §4.5) rather than resolved over the same
+	// population.
+	vn := m.virtualNamesOf(context.Background(), e)[e.SessionID]
+	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, infoOf(row, has), vn)}
 }
 
 // claim gives the caller's own conversation a title. A title another live
@@ -243,12 +246,19 @@ func (m *Module) claim(inbox, title string) selfResult {
 	sort.Strings(liveTitles)
 
 	snap := m.configSnapshot()
+	// One naming pass for the caller and every other holder, so each record
+	// below carries the address the listing shows for it.
+	named := []ipeers.Entry{e}
+	for _, o := range others {
+		named = append(named, liveEntry[o.SessionID])
+	}
+	vnames := m.virtualNamesOf(context.Background(), named...)
 	var warn *ipeers.SelfWarning
 	if len(others) > 0 {
 		holders := make([]ipeers.PeerRecord, 0, len(others))
 		for _, o := range others {
 			he := liveEntry[o.SessionID]
-			holders = append(holders, ipeers.EntryRecord(snap.alias, snap.hostID, he, false, ipeers.TitleInfo{Title: o.Label, Rev: o.Rev}))
+			holders = append(holders, ipeers.EntryRecord(snap.alias, snap.hostID, he, false, ipeers.TitleInfo{Title: o.Label, Rev: o.Rev}, vnames[he.SessionID]))
 		}
 		warn = &ipeers.SelfWarning{
 			Code:       ipeers.WarnTitleInUse,
@@ -271,7 +281,7 @@ func (m *Module) claim(inbox, title string) selfResult {
 	}
 	return selfResult{
 		status: http.StatusOK,
-		rec:    ipeers.EntryRecord(snap.alias, snap.hostID, e, false, ipeers.TitleInfo{Title: row.Label, Rev: row.Rev}),
+		rec:    ipeers.EntryRecord(snap.alias, snap.hostID, e, false, ipeers.TitleInfo{Title: row.Label, Rev: row.Rev}, vnames[e.SessionID]),
 		warn:   warn,
 	}
 }
@@ -319,7 +329,8 @@ func (m *Module) release(inbox string) selfResult {
 		info.Rev = row.Rev
 	}
 	snap := m.configSnapshot()
-	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, info)}
+	vn := m.virtualNamesOf(context.Background(), e)[e.SessionID]
+	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, info, vn)}
 }
 
 // handleSelf serves POST /api/peers/self: whoami.

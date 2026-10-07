@@ -1294,14 +1294,22 @@ func TestE2E_LocalSameNameToldApartByRef(t *testing.T) {
 	inboxByRef := map[string]*fakeInbox{ref1: dupe1, ref2: dupe2}
 	otherByRef := map[string]*fakeInbox{ref1: dupe2, ref2: dupe1}
 
+	// Peer Address v5 shows each conversation under its own virtual name
+	// (the registry name plus its ref's first two digits); until resolution
+	// moves to virtual names (P3b), the shared registry name still routes —
+	// and is still ambiguous, which steps 2 and 3 pin.
 	wantAddress := a.alias + "/" + dupeName
+	virtualAddress := func(ref string) string {
+		n, _ := ipeers.VirtualName(dupeName, ref)
+		return a.alias + "/" + n
+	}
 	env := a.peers()
 	if env.Partial || len(env.UnknownRegistryFiles) != 0 {
 		t.Fatalf("step 1: A's inventory partial=%v unknown=%v, want complete", env.Partial, env.UnknownRegistryFiles)
 	}
 	for ref, sock := range map[string]string{ref1: dupe1Sock, ref2: dupe2Sock} {
-		if rec := a.peerByInbox(env, sock); rec.Address != wantAddress || rec.Ref != ref || rec.RowKind != "entry" {
-			t.Fatalf("step 1: row for %s = %+v, want entry row %q with ref %q", filepath.Base(sock), rec, wantAddress, ref)
+		if rec := a.peerByInbox(env, sock); rec.Address != virtualAddress(ref) || rec.Ref != ref || rec.RowKind != "entry" {
+			t.Fatalf("step 1: row for %s = %+v, want entry row %q with ref %q", filepath.Base(sock), rec, virtualAddress(ref), ref)
 		}
 	}
 
@@ -1312,8 +1320,8 @@ func TestE2E_LocalSameNameToldApartByRef(t *testing.T) {
 		t.Fatalf("step 2: candidates = %+v, want 2", ae.Candidates)
 	}
 	for i, c := range ae.Candidates {
-		if c.Address != wantAddress {
-			t.Errorf("step 2: candidate %d address = %q, want %q — the two SHARE an address, which is this test's premise", i, c.Address, wantAddress)
+		if c.Address != virtualAddress(c.Ref) {
+			t.Errorf("step 2: candidate %d address = %q, want its own %q", i, c.Address, virtualAddress(c.Ref))
 		}
 	}
 	// Identical addresses mean everything rests on the refs: pid and cwd are

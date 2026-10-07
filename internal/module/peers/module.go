@@ -138,6 +138,7 @@ func redactRecord(rec *ipeers.PeerRecord, secret string) {
 	rec.Address = redactSecret(rec.Address, secret)
 	rec.RowKind = redactSecret(rec.RowKind, secret)
 	rec.Ref = redactSecret(rec.Ref, secret)
+	rec.Name = redactSecret(rec.Name, secret)
 	rec.Title = redactSecret(rec.Title, secret)
 	rec.TitleSource = redactSecret(rec.TitleSource, secret)
 	rec.SessionCode = redactSecret(rec.SessionCode, secret)
@@ -753,8 +754,8 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 
 	// The title snapshot (Task 3's peer_labels table) is joined the same
 	// way: a nil store or a read failure never blocks the inventory build
-	// (every row still gets its address, which is derived from the
-	// registry and owes the store nothing), but a failed read is reported
+	// (every row still gets its address, which comes from the virtual-name
+	// store and the ref and owes this store nothing), but a failed read is reported
 	// the same way a failed owner lookup is — this response is showing a
 	// blank title column it cannot vouch for — and signalled on its own as
 	// titles_unavailable, so a consumer (pdx peers, the SPA) names the
@@ -800,6 +801,11 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	}
 
 	previousRefs, lineageUnavailable := m.previousRefs()
+	// Virtual names (Peer Address v5): every live conversation is named once,
+	// at first sighting, and the row pinned to its live entry is addressed by
+	// that name. Under the request's ctx rather than invCtx: a pass that spent
+	// its budget on tmux must not also cost every row its name.
+	virtualNames := m.resolveNames(ctx, entryNameCandidates(entries, proxyPIDs, previousRefs))
 	peerRecords := ipeers.Build(ipeers.BuildInput{
 		HostID:       hostID,
 		Alias:        alias,
@@ -811,6 +817,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		Titles:       titles,
 		Contexts:     contexts,
 		PreviousRefs: previousRefs,
+		VirtualNames: virtualNames,
 		// An empty title map means "unreadable", not "no user titles".
 		// Build does not branch on this: it is passed through so the flag
 		// travels with the rows it explains, telling a consumer why their

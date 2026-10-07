@@ -311,7 +311,7 @@ func TestBuild_CC_PaneMatchWrongSessionID_InboxDeadAndOutsideRow(t *testing.T) {
 		},
 		Entries: []Entry{entry},
 	}
-	got := Build(in)
+	got := Build(registryAsVirtual(in))
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2 (session row + outside row)", len(got))
 	}
@@ -355,7 +355,7 @@ func TestBuild_OutsideTmuxRow(t *testing.T) {
 		Sessions: []SessionSummary{{Code: "s1", Name: "mt1"}},
 		Entries:  []Entry{entry},
 	}
-	got := Build(in)
+	got := Build(registryAsVirtual(in))
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
@@ -581,7 +581,7 @@ func TestBuild_AmbiguousCandidates_StillGetOutsideRows(t *testing.T) {
 		},
 		Entries: []Entry{e1, e2},
 	}
-	got := Build(in)
+	got := Build(registryAsVirtual(in))
 	// session row (ambiguous) + two outside rows (neither entry consumed).
 	if len(got) != 3 {
 		t.Fatalf("len = %d, want 3 (session row + 2 outside rows)", len(got))
@@ -599,20 +599,16 @@ func TestBuild_AmbiguousCandidates_StillGetOutsideRows(t *testing.T) {
 		t.Fatalf("sessionRow = %+v, want reason ambiguous", sessionRow)
 	}
 	// Both entries belong to sess-x, so both entry rows carry that one
-	// conversation's ref; their registry names are what tell them apart,
-	// and under v4 that is exactly what each is addressed by.
+	// conversation's ref — and, under v5, its one virtual name: the
+	// registry names that told them apart under v4 address nothing now.
 	head := RefID("sess-x")
 	for _, r := range got {
 		if r.RowKind == "entry" && r.Ref != head {
 			t.Errorf("entry row %q ref = %q, want %q", r.Address, r.Ref, head)
 		}
 	}
-	wantAddrs := map[string]bool{
-		"mini-lab/one": true,
-		"mini-lab/two": true,
-	}
-	if len(outsideAddrs) != 2 || !wantAddrs[outsideAddrs[0]] || !wantAddrs[outsideAddrs[1]] {
-		t.Fatalf("outsideAddrs = %v, want both entry-row addresses in %v", outsideAddrs, wantAddrs)
+	if len(outsideAddrs) != 2 || outsideAddrs[0] != "mini-lab/one" || outsideAddrs[1] != "mini-lab/one" {
+		t.Fatalf("outsideAddrs = %v, want both mini-lab/one", outsideAddrs)
 	}
 }
 
@@ -755,7 +751,7 @@ func TestBuild_GoldenMlabReproduction(t *testing.T) {
 		Entries: []Entry{mt1Entry, outsideEntry},
 	}
 
-	got := Build(in)
+	got := Build(registryAsVirtual(in))
 	if len(got) != 4 {
 		t.Fatalf("len = %d, want 4 (mt1, aigora3, codexy, outside)", len(got))
 	}
@@ -819,7 +815,7 @@ func TestBuild_LabelsAndAddresses(t *testing.T) {
 		},
 		Titles: map[string]TitleInfo{"sid-1": {Title: "purdex-dev", Rev: 7}},
 	}
-	recs := Build(in)
+	recs := Build(registryAsVirtual(in))
 	byAddr := map[string]PeerRecord{}
 	for _, r := range recs {
 		byAddr[r.Address] = r
@@ -892,12 +888,12 @@ func TestBuild_SessionRowTracksLiveTmuxRename(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			recs := Build(BuildInput{
+			recs := Build(registryAsVirtual(BuildInput{
 				HostID: "h:1", Alias: "mini-lab",
 				Sessions: []SessionSummary{{Code: "c1", Name: liveName}},
 				Owners:   map[string]Owner{"c1": {AgentType: "cc", SessionID: "sid-1", TmuxPaneID: "%5"}},
 				Entries:  tc.entries,
-			})
+			}))
 
 			var row PeerRecord
 			var found bool
@@ -933,7 +929,7 @@ func TestBuild_SessionRowTracksLiveTmuxRename(t *testing.T) {
 // frozen value was ever shown: an entry row is addressed by its registry NAME,
 // and where the registry thinks it sits reaches nothing.
 func TestBuild_EntryRowAddressIgnoresRegistryTmuxName(t *testing.T) {
-	recs := Build(BuildInput{
+	recs := Build(registryAsVirtual(BuildInput{
 		HostID: "h:1", Alias: "mini-lab",
 		Sessions: []SessionSummary{{Code: "c1", Name: "aigora2zz"}},
 		Owners:   map[string]Owner{"c1": {AgentType: "cc", SessionID: "sid-1", TmuxPaneID: "%5"}},
@@ -943,7 +939,7 @@ func TestBuild_EntryRowAddressIgnoresRegistryTmuxName(t *testing.T) {
 			// session the inventory does not list at all.
 			{PID: 20, SessionID: "sid-9", Name: "n9", Tmux: "gone-box:@1.%1", Inbox: "/s/20"},
 		},
-	})
+	}))
 
 	var row PeerRecord
 	var found bool
@@ -980,7 +976,7 @@ func TestBuild_EntryRow_NonOwnerEntryInsideListedSession(t *testing.T) {
 			{PID: 11, SessionID: "sid-9", Name: "n9", Tmux: "mt0:@1.%2", Inbox: "/s/11"},
 		},
 	}
-	recs := Build(in)
+	recs := Build(registryAsVirtual(in))
 	if len(recs) != 2 {
 		t.Fatalf("got %d rows, want 2: %+v", len(recs), recs)
 	}
@@ -1003,12 +999,12 @@ func TestEntryRecord_MatchesBuild(t *testing.T) {
 	// Under v3 the direct call needs no population argument at all: both
 	// paths derive the head from the entry's own sessionId, so agreeing is
 	// structural rather than a matter of being handed the same map.
-	one := EntryRecord("a", "h:1", e, false, info)
-	all := Build(BuildInput{HostID: "h:1", Alias: "a", Entries: []Entry{e}, Titles: titles})
+	one := EntryRecord("a", "h:1", e, false, info, "n9-k3")
+	all := Build(BuildInput{HostID: "h:1", Alias: "a", Entries: []Entry{e}, Titles: titles, VirtualNames: map[string]string{"sid-9": "n9-k3"}})
 	if len(all) != 1 || !reflect.DeepEqual(all[0], one) {
 		t.Errorf("EntryRecord ≠ Build row:\n%+v\n%+v", one, all)
 	}
-	p := EntryRecord("a", "h:1", e, true, info)
+	p := EntryRecord("a", "h:1", e, true, info, "n9-k3")
 	if p.Agent.Type != "proxy" || p.Deliverable || p.Reason != "proxy" || p.Address != "a/cc:n9" || p.Title != "" {
 		t.Errorf("proxy entry record = %+v", p)
 	}
@@ -1124,7 +1120,7 @@ func TestBuild_UserLabelDoesNotMoveTheAddress(t *testing.T) {
 		Entries:  []Entry{entry},
 		Titles:   map[string]TitleInfo{"sess-x": {Title: "purdex-tester", Rev: 4}},
 	}
-	r := Build(in)[0]
+	r := Build(registryAsVirtual(in))[0]
 	if r.Title != "purdex-tester" || r.TitleSource != TitleSourceUser || r.TitleRev != 4 {
 		t.Errorf("label/source/rev = %q/%q/%d, want purdex-tester/%s/4", r.Title, r.TitleSource, r.TitleRev, TitleSourceUser)
 	}
@@ -1134,7 +1130,7 @@ func TestBuild_UserLabelDoesNotMoveTheAddress(t *testing.T) {
 	// And it is byte for byte the address the same conversation had with no
 	// label at all.
 	in.Titles = nil
-	if unnamed := Build(in)[0].Address; unnamed != r.Address {
+	if unnamed := Build(registryAsVirtual(in))[0].Address; unnamed != r.Address {
 		t.Errorf("address without a label = %q, with one = %q; want identical", unnamed, r.Address)
 	}
 }
@@ -1166,7 +1162,7 @@ func TestBuild_TwoConversationsOneTmuxSession_DistinctCanonicals(t *testing.T) {
 			{PID: 11, SessionID: "sid-2", Name: "n2", Tmux: "purdex1:@1.%2", Inbox: "/s/11"},
 		},
 	}
-	recs := Build(in)
+	recs := Build(registryAsVirtual(in))
 	if len(recs) != 2 {
 		t.Fatalf("got %d rows, want 2", len(recs))
 	}
@@ -1211,7 +1207,24 @@ func v3Fixture() BuildInput {
 			{PID: 30, SessionID: "sid-proxy", Name: "helper-1", Tmux: "", IsProxy: true},
 		},
 		Titles: map[string]TitleInfo{"sid-labelled": {Title: "purdex-tester", Rev: 7}},
+		// sid-outside has a routable registry name but no virtual name: under
+		// v5 its address is the ref form.
+		VirtualNames: map[string]string{"sid-labelled": "purdex-54-k3", "sid-plain": "purdex-4a-x2"},
 	}
+}
+
+// registryAsVirtual names every entry's conversation after its first entry's
+// registry name. Build takes virtual names as plain input (v5); the fixtures
+// below pin which ROW carries the name form, so any stand-in will do, and the
+// registry name keeps their expectations readable.
+func registryAsVirtual(in BuildInput) BuildInput {
+	in.VirtualNames = map[string]string{}
+	for _, e := range in.Entries {
+		if _, ok := in.VirtualNames[e.SessionID]; !ok && e.Name != "" {
+			in.VirtualNames[e.SessionID] = e.Name
+		}
+	}
+	return in
 }
 
 // bySessionID indexes built rows by the agent session id they carry, and
@@ -1229,10 +1242,11 @@ func bySessionID(recs []PeerRecord) (map[string]PeerRecord, []PeerRecord) {
 	return byID, agentless
 }
 
-// TestBuild_V4FieldInvariants asserts v4 §5.2/§5.3's table on EVERY row whose
-// agent is a live cc entry: the ref is non-empty and derived from the
-// sessionId, the address is the registry name when that name is routable and
-// the ref otherwise, and title_source is "user" exactly when a label is set.
+// TestBuild_V4FieldInvariants asserts v4 §5.2/§5.3's table, as v5 amends it,
+// on EVERY row whose agent is a live cc entry: the ref is non-empty and
+// derived from the sessionId, the address is the virtual name when the
+// conversation has one and the ref otherwise — never the registry name — and
+// title_source is "user" exactly when a label is set.
 // One loop over the whole fixture, because that is a property of every such
 // row rather than of a chosen one.
 func TestBuild_V4FieldInvariants(t *testing.T) {
@@ -1250,12 +1264,12 @@ func TestBuild_V4FieldInvariants(t *testing.T) {
 		if want := RefID(r.Agent.SessionID); r.Ref != want {
 			t.Errorf("row %s: ref = %q, want %q", r.Address, r.Ref, want)
 		}
-		want := "mini-lab/" + r.Ref
-		if RoutableName(r.Agent.PeerName) {
-			want = "mini-lab/" + r.Agent.PeerName
+		want, wantName := "mini-lab/"+r.Ref, v3Fixture().VirtualNames[r.Agent.SessionID]
+		if wantName != "" {
+			want = "mini-lab/" + wantName
 		}
-		if r.Address != want {
-			t.Errorf("row: address = %q, want %q", r.Address, want)
+		if r.Address != want || r.Name != wantName {
+			t.Errorf("row: name/address = %q/%q, want %q/%q", r.Name, r.Address, wantName, want)
 		}
 		wantSource := ""
 		if r.Title != "" {
@@ -1279,7 +1293,7 @@ func TestBuild_NoLabel_EmptyLabelAndNameAddress(t *testing.T) {
 	if plain.Title != "" || plain.TitleSource != "" {
 		t.Errorf("unlabelled row label/source = %q/%q, want \"\"/\"\"", plain.Title, plain.TitleSource)
 	}
-	want := "mini-lab/purdex-4a"
+	want := "mini-lab/purdex-4a-x2"
 	if plain.Address != want {
 		t.Errorf("unlabelled row address = %q, want %q", plain.Address, want)
 	}
@@ -1288,14 +1302,14 @@ func TestBuild_NoLabel_EmptyLabelAndNameAddress(t *testing.T) {
 // TestBuild_UserLabel_AddressStaysPut is D3's pin, and the single most
 // important assertion in this change: setting a label names the conversation,
 // it does not move it. The label is reported, title_source says "user", and
-// the address is STILL the registry name.
+// the address is STILL the conversation's name.
 func TestBuild_UserLabel_AddressStaysPut(t *testing.T) {
 	byID, _ := bySessionID(Build(v3Fixture()))
 	labelled := byID["sid-labelled"]
 	if labelled.Title != "purdex-tester" || labelled.TitleSource != TitleSourceUser {
 		t.Errorf("labelled row label/source = %q/%q, want purdex-tester/%s", labelled.Title, labelled.TitleSource, TitleSourceUser)
 	}
-	want := "mini-lab/purdex-49"
+	want := "mini-lab/purdex-54-k3"
 	if labelled.Address != want {
 		t.Errorf("labelled row address = %q, want %q — a label is not an address (D3)", labelled.Address, want)
 	}
@@ -1396,13 +1410,57 @@ func ccBuildInput(name, sessionID string) BuildInput {
 	}
 }
 
+// Peer Address v5 (peer mailbox spec §3): the address names the
+// conversation by its pdx-assigned virtual name, and the registry name stays
+// on the agent for display only.
 func TestApplyIdentity_NameAddress(t *testing.T) {
-	got := Build(ccBuildInput("purdex-b0", "sess-x"))[0]
-	if want := "mlab/purdex-b0"; got.Address != want {
-		t.Errorf("Address = %q, want %q", got.Address, want)
+	in := ccBuildInput("purdex-b0", "sess-x")
+	in.VirtualNames = map[string]string{"sess-x": "purdex-54-k3"}
+	got := Build(in)[0]
+	if got.Name != "purdex-54-k3" || got.Address != "mlab/purdex-54-k3" {
+		t.Errorf("Name/Address = %q/%q, want purdex-54-k3/mlab/purdex-54-k3", got.Name, got.Address)
+	}
+	if got.Agent.PeerName != "purdex-b0" {
+		t.Errorf("Agent.PeerName = %q, want the registry name purdex-b0", got.Agent.PeerName)
 	}
 	if want := RefID("sess-x"); got.Ref != want {
 		t.Errorf("Ref = %q, want %q", got.Ref, want)
+	}
+}
+
+// A routable registry name alone is no longer an address: a row without a
+// virtual name (none assigned yet, or the store failed) takes the ref form.
+func TestApplyIdentity_RegistryNameAloneIsNotAnAddress(t *testing.T) {
+	got := Build(ccBuildInput("purdex-b0", "sess-x"))[0]
+	if want := "mlab/" + RefID("sess-x"); got.Address != want || got.Name != "" {
+		t.Errorf("Name/Address = %q/%q, want \"\"/%q", got.Name, got.Address, want)
+	}
+	in := ccBuildInput("purdex-b0", "sess-x")
+	in.VirtualNames = map[string]string{"sess-x": "Bad/Name"}
+	if got := Build(in)[0]; got.Address != "mlab/"+RefID("sess-x") || got.Name != "" {
+		t.Errorf("unroutable virtual name: Name/Address = %q/%q, want the ref form", got.Name, got.Address)
+	}
+}
+
+// Only a row pinned to one live entry carries the virtual name: an
+// owner-fallback row keeps the ref form, as it did under v4.
+func TestBuild_FallbackRowTakesNoVirtualName(t *testing.T) {
+	in := ccBuildInput("purdex-b0", "sess-x")
+	in.Entries = nil
+	in.VirtualNames = map[string]string{"sess-x": "purdex-54-k3"}
+	got := Build(in)[0]
+	if got.Reason != "inbox_dead" || got.Name != "" || got.Address != "mlab/"+RefID("sess-x") {
+		t.Errorf("fallback row reason/name/address = %q/%q/%q, want inbox_dead/\"\"/ref form", got.Reason, got.Name, got.Address)
+	}
+}
+
+func TestEntryRecord_VirtualName(t *testing.T) {
+	e := Entry{PID: 9, SessionID: "sid-9", Name: "n9", Inbox: "/tmp/9.sock"}
+	if got := EntryRecord("a", "h", e, false, TitleInfo{}, "n9-k3"); got.Name != "n9-k3" || got.Address != "a/n9-k3" {
+		t.Errorf("entry row Name/Address = %q/%q, want n9-k3 a/n9-k3", got.Name, got.Address)
+	}
+	if got := EntryRecord("a", "h", e, true, TitleInfo{}, "n9-k3"); got.Name != "" || got.Address != "a/cc:n9" {
+		t.Errorf("proxy row Name/Address = %q/%q, want \"\" a/cc:n9", got.Name, got.Address)
 	}
 }
 

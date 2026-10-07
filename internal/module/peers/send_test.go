@@ -779,6 +779,9 @@ func TestSend_LocalTarget(t *testing.T) {
 // while Wrapper.From is an attribute inside the rendered content, which is
 // what the receiving agent reads. A test on one would not catch the other
 // being wrong.
+//
+// The from-name is the origin row's address, so under Peer Address v5 it is
+// the sender's virtual address (spec §3.4), not its registry name.
 func TestSend_LocalDeliveryCarriesBothFroms(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	p := s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
@@ -794,8 +797,8 @@ func TestSend_LocalDeliveryCarriesBothFroms(t *testing.T) {
 	if w.From != "uds:"+s.targetSock {
 		t.Errorf("wrapper from = %q, want %q", w.From, "uds:"+s.targetSock)
 	}
-	if w.FromName != localAlias+"/"+targetPeerName {
-		t.Errorf("wrapper from-name = %q, want the origin's own address %q", w.FromName, localAlias+"/"+targetPeerName)
+	if want := localAlias + "/" + vname(t, targetPeerName, targetSessionID); w.FromName != want {
+		t.Errorf("wrapper from-name = %q, want the origin's own virtual address %q", w.FromName, want)
 	}
 	if w.FromMode != ipeers.ModeUnknown {
 		t.Errorf("wrapper from-mode = %q, want %q", w.FromMode, ipeers.ModeUnknown) // #1124: default mode is now unknown
@@ -847,7 +850,7 @@ func TestSend_LocalDeliverySendResponse(t *testing.T) {
 	want := ipeers.SendResponse{
 		MsgID:         resp.MsgID,
 		ToHostID:      localHostID,
-		ToAddress:     localAlias + "/" + localPeerName,
+		ToAddress:     localAlias + "/" + vname(t, localPeerName, localPeerSessionID), // the row's (virtual) address
 		To:            ipeers.WireTo{AgentSessionID: localPeerSessionID, PID: localPeerPID, ProcStart: targetProcStart},
 		Result:        ipeers.ResultDelivered,
 		EffectiveMode: ipeers.ModeUnknown, // #1124: default mode when caller doesn't specify --mode is now unknown
