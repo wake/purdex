@@ -522,6 +522,90 @@ func TestPutConfigNexWithPeerReplacesPeer(t *testing.T) {
 	assert.Equal(t, want, loaded.Nex.Peer, "persisted [nex.peer]")
 }
 
+// TestPutConfigNexPeerIsPresenceAware: a "peer" object replaces only the
+// keys it carries; every absent key keeps the current value (no "peer" key
+// at all is the special case where every key is absent). An omitted
+// "enabled" must never decode to false and switch the mailbox off (U4),
+// matching TOML Load, where a missing key keeps the default.
+func TestPutConfigNexPeerIsPresenceAware(t *testing.T) {
+	current := config.NexPeerConfig{Enabled: true, MaxPending: 5, WakeTemplate: "X {{.Text}}", ReplyLine: "R {{.ReplyTo}}"}
+	cases := []struct {
+		name string
+		peer string // the raw "peer" member of the nex body
+		want config.NexPeerConfig
+	}{
+		{"empty object keeps everything", `{}`, current},
+		{"only max_pending changes only it", `{"max_pending":4}`,
+			config.NexPeerConfig{Enabled: true, MaxPending: 4, WakeTemplate: "X {{.Text}}", ReplyLine: "R {{.ReplyTo}}"}},
+		{"only enabled changes only it", `{"enabled":false}`,
+			config.NexPeerConfig{Enabled: false, MaxPending: 5, WakeTemplate: "X {{.Text}}", ReplyLine: "R {{.ReplyTo}}"}},
+		{"all four keys replace everything", `{"enabled":false,"max_pending":0,"wake_template":"","reply_line":""}`,
+			config.NexPeerConfig{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, cfgPath := newPeerTestCore(t, current)
+			rec := httptest.NewRecorder()
+			body := `{"nex":{"enabled":false,"peer":` + tc.peer + `}}`
+			c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(body)))
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+			c.CfgMu.RLock()
+			assert.Equal(t, tc.want, c.Cfg.Nex.Peer, "in memory")
+			c.CfgMu.RUnlock()
+			loaded, err := config.Load(cfgPath)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, loaded.Nex.Peer, "persisted and reloaded")
+			var got config.Config
+			require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+			assert.Equal(t, tc.want, got.Nex.Peer, "response body")
+		})
+	}
+}
+
+// TestPutConfigNexNullPeerIs400: "peer": null is not "absent" — it is a
+// malformed section, refused before anything is written.
+func TestPutConfigNexNullPeerIs400(t *testing.T) {
+	current := config.NexPeerConfig{Enabled: true, MaxPending: 5, WakeTemplate: "X {{.Text}}"}
+	c, cfgPath := newPeerTestCore(t, current)
+	before, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(`{"nex":{"enabled":false,"peer":null}}`)))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.True(t, strings.HasPrefix(rec.Body.String(), "nex.peer:"), "body %q", rec.Body.String())
+
+	after, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "config.toml untouched")
+	c.CfgMu.RLock()
+	assert.Equal(t, current, c.Cfg.Nex.Peer)
+	c.CfgMu.RUnlock()
+}
+
+// TestPutConfigNexMergedPeerIsValidated: Validate runs on the merged
+// section, not only on the keys the body carried. A current value that is
+// invalid (only reachable by building the Core directly) plus a partial
+// body that is valid on its own must still be refused, and nothing written.
+func TestPutConfigNexMergedPeerIsValidated(t *testing.T) {
+	c, cfgPath := newPeerTestCore(t, config.NexPeerConfig{Enabled: true})
+	c.CfgMu.Lock()
+	c.Cfg.Nex.Peer.WakeTemplate = "no text marker"
+	c.CfgMu.Unlock()
+	before, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(`{"nex":{"enabled":false,"peer":{"max_pending":4}}}`)))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.True(t, strings.HasPrefix(rec.Body.String(), "nex.peer.wake_template:"), "body %q", rec.Body.String())
+
+	after, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "config.toml untouched")
+}
+
 // TestPutConfigWithFullNexSectionPersistsNexByteIdentical pins I15: a PUT
 // that does not touch nex must leave the persisted [nex] TOML block
 // byte-identical, since nex is not editable via this API at all.
