@@ -4,7 +4,8 @@
 import { useExecutionListStore } from '../../stores/useExecutionListStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useUndoToast } from '../../stores/useUndoToast'
-import { workerLabel } from './worker-label'
+import { selectSessionTitleSupported, useNexHostStore } from '../../stores/useNexHostStore'
+import { workerRowName } from './worker-row-name'
 
 export interface WorkerExitedEvent { executionId: string; sessionId: string; reason: string; tmuxSession: string }
 
@@ -29,12 +30,16 @@ export function parseWorkerExited(value: unknown): WorkerExitedEvent | null {
 }
 
 /**
- * The list row's label when the host's list has the row; else the tmux session
+ * The list row's name (`workerRowName`, the #1771 rule, with the host's fail-closed session_title
+ * capability — #1788) when the host's list has the row and it has a name; else the tmux session
  * (empty on the daemon's re-check / retry / overflow paths); else the execution id.
  */
 export function workerExitedName(hostId: string, ev: WorkerExitedEvent): string {
   const row = useExecutionListStore.getState().byHost[hostId]?.items.find((r) => r.id === ev.executionId)
-  if (row) return workerLabel(row)
+  if (row) {
+    const name = workerRowName(row, selectSessionTitleSupported(hostId)(useNexHostStore.getState()))
+    if (name) return name
+  }
   return ev.tmuxSession || ev.executionId
 }
 
