@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { WorkerSettingsSection } from './WorkerSettingsSection'
 import { useWorkerSettingsStore, DEFAULT_WORKER_SETTINGS } from '../../stores/useWorkerSettingsStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { useNexHostStore } from '../../stores/useNexHostStore'
 import type { WorkerTheme } from '../../lib/worker-theme/types'
+import en from '../../locales/en.json'
+import zh from '../../locales/zh-TW.json'
 
 // `alt` lists a second theme AHEAD of `purdex`: with a value no option matches,
 // React selects the first option — so without it the fallback bug is invisible
@@ -37,7 +41,7 @@ vi.mock('../../lib/worker-theme/registry', async (importOriginal) => {
 
 describe('WorkerSettingsSection', () => {
   beforeEach(() => {
-    useWorkerSettingsStore.setState({ ...DEFAULT_WORKER_SETTINGS })
+    useWorkerSettingsStore.setState({ ...DEFAULT_WORKER_SETTINGS, permissionTimeoutMin: 0 })
   })
 
   afterEach(() => {
@@ -89,6 +93,77 @@ describe('WorkerSettingsSection', () => {
       fireEvent.change(iconSelect(), { target: { value: 'mono' } })
       fireEvent.change(iconSelect(), { target: { value: 'custom' } })
       expect(screen.getByTestId('worker-icon-picker-toggle')).toHaveAttribute('aria-expanded', 'false')
+    })
+  })
+
+  // Permission channel spec §5.5 / plan Task 6: 「等待核准逾時」 is offered only when some ready host can honour
+  // `permission_timeout_s` (capabilities.permissions.timeout) — an older daemon ignores it silently.
+  describe('approval timeout (permission channel §5.5)', () => {
+    const PERMS = {
+      profiles: ['handoff_ask'],
+      answer: { method: 'POST', path: '/api/nex/v1/executions/{id}/permissions/{request_id}' },
+      timeout: { max_s: 86400 },
+    }
+    const timeoutSelect = () => screen.queryByTestId('worker-permission-timeout') as HTMLSelectElement | null
+    const nexEntry = (capabilities: Record<string, unknown> | null, phase = 'ready') =>
+      ({ info: null, capabilities, phase, error: null, fetchedAt: 0, generation: 1, fingerprint: 'f' })
+
+    beforeEach(() => {
+      useHostStore.getState().reset()
+      useHostStore.getState().addHost({ id: 'h1', name: 'h1', ip: '1.2.3.4', port: 7860, token: 't' })
+      useHostStore.getState().addHost({ id: 'h2', name: 'h2', ip: '1.2.3.5', port: 7860, token: 't' })
+      useNexHostStore.setState({ byHost: {} })
+    })
+
+    it('is hidden while no host reports the timeout capability', () => {
+      useNexHostStore.setState({
+        byHost: {
+          h1: nexEntry({ sandbox_profiles: ['handoff_ask', 'handoff'], permissions: { profiles: PERMS.profiles, answer: PERMS.answer } }),
+          // the capability is there but the host is not ready
+          h2: nexEntry({ sandbox_profiles: ['handoff_ask', 'handoff'], permissions: PERMS }, 'unavailable'),
+        },
+      } as never)
+      render(<WorkerSettingsSection />)
+      expect(timeoutSelect()).toBeNull()
+      expect(screen.queryByText('Approval timeout')).toBeNull()
+    })
+
+    it('is hidden when only a host this device no longer has reports it', () => {
+      useNexHostStore.setState({ byHost: { gone: nexEntry({ sandbox_profiles: ['handoff_ask'], permissions: PERMS }) } } as never)
+      render(<WorkerSettingsSection />)
+      expect(timeoutSelect()).toBeNull()
+    })
+
+    it('shows when one ready host reports it: label, the "new handoffs only" note, never / 5 / 15 / 30 / 60, the stored value', () => {
+      useWorkerSettingsStore.setState({ permissionTimeoutMin: 30 })
+      useNexHostStore.setState({ byHost: { h2: nexEntry({ sandbox_profiles: ['handoff_ask', 'handoff'], permissions: PERMS }) } } as never)
+      render(<WorkerSettingsSection />)
+      const select = timeoutSelect()!
+      expect(select).toBeInTheDocument()
+      expect(screen.getByRole('combobox', { name: 'Approval timeout' })).toBe(select)
+      expect(screen.getByText(/applies to new handoffs only/)).toBeInTheDocument()
+      expect([...select.options].map((o) => o.value)).toEqual(['0', '5', '15', '30', '60'])
+      expect([...select.options].map((o) => o.textContent)).toEqual(['Never', '5 minutes', '15 minutes', '30 minutes', '60 minutes'])
+      expect(select.value).toBe('30')
+    })
+
+    it('choosing a value writes the store as a number', () => {
+      useNexHostStore.setState({ byHost: { h1: nexEntry({ sandbox_profiles: ['handoff_ask'], permissions: PERMS }) } } as never)
+      render(<WorkerSettingsSection />)
+      fireEvent.change(timeoutSelect()!, { target: { value: '15' } })
+      expect(useWorkerSettingsStore.getState().permissionTimeoutMin).toBe(15)
+      fireEvent.change(timeoutSelect()!, { target: { value: '0' } })
+      expect(useWorkerSettingsStore.getState().permissionTimeoutMin).toBe(0)
+    })
+
+    it('has its copy in both locales (zh-TW: 等待核准逾時 / 只影響之後的交接 / 不逾時 / N 分鐘)', () => {
+      const keys = ['worker.permission_timeout.label', 'worker.permission_timeout.desc', 'worker.permission_timeout.never', 'worker.permission_timeout.minutes']
+      for (const loc of [en, zh] as Array<Record<string, string>>) for (const k of keys) expect(loc[k], k).toBeTruthy()
+      const z = zh as Record<string, string>
+      expect(z['worker.permission_timeout.label']).toBe('等待核准逾時')
+      expect(z['worker.permission_timeout.desc']).toContain('只影響之後的交接')
+      expect(z['worker.permission_timeout.never']).toBe('不逾時')
+      expect(z['worker.permission_timeout.minutes']).toBe('{{n}} 分鐘')
     })
   })
 

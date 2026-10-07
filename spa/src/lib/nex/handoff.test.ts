@@ -19,6 +19,7 @@ import { HandoffApiError, nexHandoff, nexTakeback, nexTakeToTerminal } from './h
 import { checkHostPath } from '../host-config-api'
 import { useHostStore } from '../../stores/useHostStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { setHostShown } from '../shown-hosts'
 import {
   handToNex,
@@ -347,6 +348,96 @@ describe('handToNex', () => {
       useTabStore.getState().setPaneContent(a.tabId, a.paneId, { kind: 'tmux-session', hostId: H, sessionCode: 'other', mode: 'terminal', cachedName: 'o', tmuxInstance: 'i' })
       await rejection(handToNex(a))
       expect(paneContent(a.tabId)).toMatchObject({ kind: 'tmux-session', sessionCode: 'other' })
+    })
+  })
+
+  // Permission channel spec §5.2 / plan Task 7. 完全放行 is today's body byte for byte; 需要核准 adds profile
+  // handoff_ask, and the timeout only when the setting is on AND the host declares permissions.timeout.
+  describe('需要核准 (askApproval)', () => {
+    const PERMS = { profiles: ['handoff_ask'], answer: { method: 'POST', path: '/api/nex/v1/executions/{id}/permissions/{request_id}' }, timeout: { max_s: 86400 } }
+    const ASK_PROFILES = ['default', 'handoff_ask', 'handoff']
+    const TODAY = { expected_tmux_instance: from.tmuxInstance, rollback_command: 'claude --resume {id}', keep_session: true }
+    const sent = () => mockedHandoff.mock.calls[0][2]
+    beforeEach(() => {
+      seedNexHost({ capabilities: caps({ sandbox_profiles: ASK_PROFILES, permissions: PERMS }) })
+      useWorkerSettingsStore.setState({ permissionTimeoutMin: 15 })
+    })
+    afterEach(() => useWorkerSettingsStore.setState({ permissionTimeoutMin: 0 }))
+
+    it('完全放行 sends today\'s body byte for byte — no profile, no timeout, even with the setting on and the capability there', async () => {
+      mockedHandoff.mockResolvedValueOnce(handoffOk)
+      await handToNex(args())
+      expect(JSON.stringify(sent())).toBe(JSON.stringify(TODAY))
+    })
+
+    it('需要核准 with the timeout capability and the setting at 15 → profile handoff_ask + permission_timeout_s 900', async () => {
+      mockedHandoff.mockResolvedValueOnce(handoffOk)
+      await handToNex({ ...args(), askApproval: true })
+      expect(sent()).toStrictEqual({ ...TODAY, profile: 'handoff_ask', permission_timeout_s: 900 })
+    })
+
+    it('需要核准, setting 15, but no permissions.timeout (an older build ignores the field) → no timeout key', async () => {
+      seedNexHost({ capabilities: caps({ sandbox_profiles: ASK_PROFILES, permissions: { profiles: PERMS.profiles, answer: PERMS.answer } }) })
+      mockedHandoff.mockResolvedValueOnce(handoffOk)
+      await handToNex({ ...args(), askApproval: true })
+      expect(sent()).toStrictEqual({ ...TODAY, profile: 'handoff_ask' })
+    })
+
+    it('需要核准 with the setting at 不逾時 → no timeout key', async () => {
+      useWorkerSettingsStore.setState({ permissionTimeoutMin: 0 })
+      mockedHandoff.mockResolvedValueOnce(handoffOk)
+      await handToNex({ ...args(), askApproval: true })
+      expect(sent()).toStrictEqual({ ...TODAY, profile: 'handoff_ask' })
+    })
+
+    describe('the host max_s', () => {
+      const withMax = (max_s: number) => seedNexHost({ capabilities: caps({ sandbox_profiles: ASK_PROFILES, permissions: { ...PERMS, timeout: { max_s } } }) })
+      it('setting above max_s (15 min vs 300 s) is refused unsent, naming the host limit in minutes', async () => {
+        withMax(300)
+        const a = { ...args(), askApproval: true }
+        const err = await rejection(handToNex(a))
+        expect(err.code).toBe('permission_timeout_exceeds_host')
+        expect(err.body.max_minutes).toBe(5)
+        expect(mockedHandoff).not.toHaveBeenCalled()
+        expect(paneContent(a.tabId).kind).toBe('tmux-session')
+      })
+      it('setting equal to max_s (5 min vs 300 s) is sent as the integer 300', async () => {
+        withMax(300)
+        useWorkerSettingsStore.setState({ permissionTimeoutMin: 5 })
+        mockedHandoff.mockResolvedValueOnce(handoffOk)
+        await handToNex({ ...args(), askApproval: true })
+        expect(sent()).toMatchObject({ permission_timeout_s: 300 })
+        expect(Number.isInteger(sent().permission_timeout_s)).toBe(true)
+      })
+      it('max_s 86400 with the setting at 60 sends 3600', async () => {
+        useWorkerSettingsStore.setState({ permissionTimeoutMin: 60 })
+        mockedHandoff.mockResolvedValueOnce(handoffOk)
+        await handToNex({ ...args(), askApproval: true })
+        expect(sent()).toMatchObject({ permission_timeout_s: 3600 })
+      })
+      it('完全放行 is unaffected by a low max_s', async () => {
+        withMax(300)
+        mockedHandoff.mockResolvedValueOnce(handoffOk)
+        await handToNex(args())
+        expect(JSON.stringify(sent())).toBe(JSON.stringify(TODAY))
+      })
+    })
+
+    it('需要核准 on a host that cannot ask (no handoff_ask in sandbox_profiles) is refused unsent — never downgraded', async () => {
+      seedNexHost({ capabilities: caps({ sandbox_profiles: ['default', 'handoff'], permissions: PERMS }) })
+      const a = { ...args(), askApproval: true }
+      const err = await rejection(handToNex(a))
+      expect(err.code).toBe('handoff_unsupported')
+      expect(mockedHandoff).not.toHaveBeenCalled()
+      expect(paneContent(a.tabId).kind).toBe('tmux-session')
+    })
+
+    it('a rejected asking delegate is rethrown after exactly one request, with profile handoff_ask', async () => {
+      mockedHandoff.mockRejectedValueOnce(new HandoffApiError(409, 'delegate_rejected', { rolled_back: true, reject_reason: 'permission channel unavailable' }))
+      const err = await rejection(handToNex({ ...args(), askApproval: true }))
+      expect(err.code).toBe('delegate_rejected')
+      expect(mockedHandoff).toHaveBeenCalledTimes(1)
+      expect(sent()).toMatchObject({ profile: 'handoff_ask' })
     })
   })
 
@@ -858,6 +949,7 @@ describe('handoffErrorMessage', () => {
     // client-side
     ['network', {}, null],
     ['host_removed', {}, null],
+    ['permission_timeout_exceeds_host', { max_minutes: 5 }, { n: 5 }],
   ]
 
   it.each(table)('%s → handoff.error.%s with params', (code, body, params) => {

@@ -6,7 +6,7 @@ import {
   attachObserve, attachControl, sendMessage, releaseLease, archiveExecution, resolveExecutionHostId,
   getExecution, fetchNexHost, renewLease, interruptExecution, terminateExecution,
   delegateExecution, pinnedLeaseRelease, fetchExecutionTasks, uploadWorkerFile, fetchAttachment,
-  fetchExecutionPrelude,
+  fetchExecutionPrelude, answerPermission,
 } from './nex-api'
 import { NexApiError } from './types'
 import { NEX_CLIENT_ID_RE } from './client-id'
@@ -504,6 +504,90 @@ describe('nex-api', () => {
       ]) {
         await expect(fetchAttachment(hostId, 'exc_1', SHA, bad)).rejects.toMatchObject({ code: 'attachment_route_invalid' })
       }
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('answerPermission (contract §1.14, consumer-guide §9.8)', () => {
+    // The real shape, read from GET /api/nex/v1/capabilities on mlab (alpha.541, Nexen v0.19.0) on 2026-10-07: the path
+    // already carries the daemon's RoutePrefix (= Nexen's PublicPrefix), like `lease.renew` and the attachment fetch.
+    const MLAB_PERMISSIONS = {
+      profiles: ['handoff_ask'],
+      answer: { method: 'POST', path: '/api/nex/v1/executions/{id}/permissions/{request_id}' },
+      timeout: { max_s: 86400 },
+    }
+    const caps = { permissions: MLAB_PERMISSIONS }
+    const allowed = { request_id: 'req/1', outcome: 'allowed' }
+
+    it('POSTs to the capability path against the daemon origin (the /api/nex prefix once, ids encoded) with auth and client id', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(allowed))
+      const r = await answerPermission(hostId, 'exc 1', 'req/1', { decision: 'allow', leaseId: 'L1' }, caps)
+      expect(r).toEqual(allowed)
+      expect(testGlobal.fetch).toHaveBeenCalledTimes(1)
+      const [url, init] = testGlobal.fetch.mock.calls[0]
+      expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc%201/permissions/req%2F1')
+      expect(url).not.toContain('/api/nex/api/nex')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(init.body)).toEqual({ decision: 'allow', lease_id: 'L1' })
+      const h = new Headers(init.headers)
+      expect(h.get('Authorization')).toBe('Bearer tok-1')
+      expect(h.get('X-Pdx-Client')).toMatch(NEX_CLIENT_ID_RE)
+      expect(h.get('Content-Type')).toBe('application/json')
+    })
+
+    it('reads the template from the capability, not a hard-coded route', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(allowed))
+      await answerPermission(hostId, 'exc_1', 'r1', { decision: 'allow', leaseId: 'L1' }, {
+        permissions: { ...MLAB_PERMISSIONS, answer: { method: 'POST', path: '/elsewhere/{request_id}/of/{id}' } },
+      })
+      expect(testGlobal.fetch.mock.calls[0][0]).toBe('http://100.64.0.2:7860/elsewhere/r1/of/exc_1')
+    })
+
+    it('a deny carries its message; the body is exactly {decision, message, lease_id}', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ request_id: 'r1', outcome: 'denied' }))
+      const r = await answerPermission(hostId, 'exc_1', 'r1', { decision: 'deny', message: '不要動 prod', leaseId: 'L2' }, caps)
+      expect(r).toEqual({ request_id: 'r1', outcome: 'denied' })
+      expect(JSON.parse(testGlobal.fetch.mock.calls[0][1].body)).toEqual({ decision: 'deny', message: '不要動 prod', lease_id: 'L2' })
+    })
+
+    it.each([
+      [409, 'permission_not_pending'],
+      [404, 'permission_not_found'],
+      [400, 'invalid_permission_answer'],
+      [409, 'lease_expired'],
+      [409, 'lease_mismatch'],
+      [409, 'lease_required'],
+    ])('a %s %s keeps its status and code', async (status, code) => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'nope', code, field: 'message' }, status))
+      await expect(answerPermission(hostId, 'exc_1', 'r1', { decision: 'allow', leaseId: 'L1' }, caps))
+        .rejects.toMatchObject({ status, code })
+    })
+
+    it('maps a fetch that never reached the daemon to `network`', async () => {
+      testGlobal.fetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      await expect(answerPermission(hostId, 'exc_1', 'r1', { decision: 'allow', leaseId: 'L1' }, caps)).rejects.toMatchObject({ code: 'network' })
+    })
+
+    it('a host without permissions.answer (older build, or capabilities not fetched) is refused locally; nothing is sent', async () => {
+      for (const c of [null, undefined, {}, { permissions: undefined }, { permissions: { profiles: ['handoff_ask'] } }]) {
+        await expect(answerPermission(hostId, 'exc_1', 'r1', { decision: 'allow', leaseId: 'L1' }, c as never))
+          .rejects.toMatchObject({ status: 0, code: 'permission_unsupported' })
+      }
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+
+    it('a route that is not an origin-relative POST is refused unsent; so is an unknown host', async () => {
+      for (const bad of [
+        { method: 'POST', path: 'https://evil.example/{id}/{request_id}' },
+        { method: 'POST', path: '//evil.example/{id}/{request_id}' },
+        { method: 'POST', path: 'v1/executions/{id}/permissions/{request_id}' },
+        { method: 'GET', path: MLAB_PERMISSIONS.answer.path },
+        { method: 1, path: MLAB_PERMISSIONS.answer.path },
+      ]) {
+        await expect(answerPermission(hostId, 'exc_1', 'r1', { decision: 'allow', leaseId: 'L1' }, { permissions: { ...MLAB_PERMISSIONS, answer: bad } } as never))
+          .rejects.toMatchObject({ code: 'permission_route_invalid' })
+      }
+      await expect(answerPermission('nope', 'exc_1', 'r1', { decision: 'allow', leaseId: 'L1' }, caps)).rejects.toMatchObject({ code: 'host_removed' })
       expect(testGlobal.fetch).not.toHaveBeenCalled()
     })
   })

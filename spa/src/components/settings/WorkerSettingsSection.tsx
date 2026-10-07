@@ -1,7 +1,11 @@
 import { useState } from 'react'
 import { SettingItem } from './SettingItem'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useWorkerSettingsStore, type WorkerIconStyle } from '../../stores/useWorkerSettingsStore'
+import {
+  useWorkerSettingsStore, isPermissionTimeoutMin, PERMISSION_TIMEOUT_MINUTES, type WorkerIconStyle,
+} from '../../stores/useWorkerSettingsStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { useNexHostStore, selectPermissionTimeoutMax } from '../../stores/useNexHostStore'
 import { getWorkerTheme, listWorkerThemes } from '../../lib/worker-theme/registry'
 import { WorkspaceIcon } from '../../features/workspace/components/WorkspaceIcon'
 import { WorkspaceIconPicker } from '../../features/workspace/components/WorkspaceIconPicker'
@@ -13,7 +17,9 @@ const SELECT_CLASS =
 
 // Worker pane spec §4.2 — "Worker → Appearance": the theme select and the
 // worker tab icon (§8.3 / L2: provider logo mono / colour, or a custom
-// Phosphor icon picked with the workspace icon picker).
+// Phosphor icon picked with the workspace icon picker). Plus the device-local
+// approval timeout (permission channel spec §5.5), shown only when one of this
+// device's hosts is ready and can honour `permission_timeout_s`.
 export function WorkerSettingsSection() {
   const t = useI18nStore((s) => s.t)
   const theme = useWorkerSettingsStore((s) => s.theme)
@@ -22,6 +28,10 @@ export function WorkerSettingsSection() {
   const setIconStyle = useWorkerSettingsStore((s) => s.setIconStyle)
   const customIcon = useWorkerSettingsStore((s) => s.customIcon)
   const setCustomIcon = useWorkerSettingsStore((s) => s.setCustomIcon)
+  const permissionTimeoutMin = useWorkerSettingsStore((s) => s.permissionTimeoutMin)
+  const setPermissionTimeoutMin = useWorkerSettingsStore((s) => s.setPermissionTimeoutMin)
+  const hostOrder = useHostStore((s) => s.hostOrder)
+  const timeoutOffered = useNexHostStore((s) => hostOrder.some((hostId) => selectPermissionTimeoutMax(hostId)(s) !== null))
   const [picking, setPicking] = useState(false)
   const themes = listWorkerThemes()
   // An unregistered persisted id (e.g. synced from a peer that has more themes) shows the theme it renders as.
@@ -83,6 +93,27 @@ export function WorkerSettingsSection() {
             inline
           />
         </div>
+      )}
+
+      {timeoutOffered && (
+        <SettingItem label={t('worker.permission_timeout.label')} description={t('worker.permission_timeout.desc')}>
+          <select
+            aria-label={t('worker.permission_timeout.label')}
+            data-testid="worker-permission-timeout"
+            value={String(permissionTimeoutMin)}
+            onChange={(e) => {
+              const min = Number(e.target.value)
+              if (isPermissionTimeoutMin(min)) setPermissionTimeoutMin(min)
+            }}
+            className={SELECT_CLASS}
+          >
+            {PERMISSION_TIMEOUT_MINUTES.map((min) => (
+              <option key={min} value={String(min)}>
+                {min === 0 ? t('worker.permission_timeout.never') : t('worker.permission_timeout.minutes', { n: min })}
+              </option>
+            ))}
+          </select>
+        </SettingItem>
       )}
     </div>
   )

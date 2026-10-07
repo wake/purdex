@@ -62,6 +62,36 @@ export function selectHandoffReady(hostId: string): (s: Pick<NexHostState, 'byHo
 }
 
 /**
+ * Whether 「需要核准」 can be offered for a handoff on this host (permission channel plan Task 6; nexen consumer-guide
+ * §9.8): the host is ready AND its build has the channel (`capabilities.permissions`) AND its `max_profile` lets
+ * `handoff_ask` through (`sandbox_profiles`). Only the first two together are not enough: Nexen rejects — never
+ * downgrades — a `handoff_ask` delegate on a host whose `max_profile` is below it.
+ */
+export function selectPermissionAskReady(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
+  return (s) => {
+    const entry = s.byHost[hostId]
+    if (entry?.phase !== 'ready' || !entry.capabilities) return false
+    const { permissions, sandbox_profiles: profiles } = entry.capabilities
+    return typeof permissions === 'object' && permissions !== null
+      && Array.isArray(profiles) && profiles.includes('handoff_ask')
+  }
+}
+
+/**
+ * `capabilities.permissions.timeout.max_s` of a ready host, or null (not ready, unknown host, a build without the
+ * timeout — Nexen v0.19.0 PR-B or older — or a malformed number). Non-null is the ONLY licence to send
+ * `permission_timeout_s`: an older daemon silently ignores it, and the worker would wait forever.
+ */
+export function selectPermissionTimeoutMax(hostId: string): (s: Pick<NexHostState, 'byHost'>) => number | null {
+  return (s) => {
+    const entry = s.byHost[hostId]
+    if (entry?.phase !== 'ready' || !entry.capabilities) return null
+    const max = entry.capabilities.permissions?.timeout?.max_s
+    return typeof max === 'number' && Number.isFinite(max) && max > 0 ? max : null
+  }
+}
+
+/**
  * `capabilities.worker_rollup` of a ready host, or null (not ready, unknown
  * host, or an older daemon without task events / rollup fields). Presence is
  * the only feature detect (nexen contract §0) — never a version compare.

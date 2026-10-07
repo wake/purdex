@@ -3,7 +3,8 @@
 // restart-required check (which the daemon computes — spec §4.4.2).
 import type { NexConfig, NexInfo } from '../../../lib/host-api'
 
-export const SANDBOX_PROFILES = ['', 'readonly', 'standard', 'trusted', 'handoff'] as const
+// Rank order (Nexen v0.19.0): `handoff_ask` is rank 3, below `handoff` (4).
+export const SANDBOX_PROFILES = ['', 'readonly', 'standard', 'trusted', 'handoff_ask', 'handoff'] as const
 
 export function emptyNexConfig(): NexConfig {
   return {

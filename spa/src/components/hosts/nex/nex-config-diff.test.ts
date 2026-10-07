@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { restartRequired, emptyNexConfig } from './nex-config-diff'
+import { restartRequired, emptyNexConfig, SANDBOX_PROFILES } from './nex-config-diff'
 import type { NexInfo } from '../../../lib/host-api'
 
 const info = (over: Partial<NexInfo> = {}): NexInfo => ({ configured: true, mounted: true, ready: true, init_error: '', effective: null, ...over })
+
+describe('SANDBOX_PROFILES', () => {
+  it('lists Nexen v0.19 profiles in rank order — handoff_ask (rank 3) between trusted and handoff', () => {
+    expect([...SANDBOX_PROFILES]).toEqual(['', 'readonly', 'standard', 'trusted', 'handoff_ask', 'handoff'])
+  })
+})
 
 describe('restartRequired', () => {
   it('follows the daemon-computed info.restart_required', () => {

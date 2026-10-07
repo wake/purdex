@@ -304,6 +304,19 @@ describe('PROJECTIONS', () => {
     expect(settingsFieldsByStore()[STORAGE_KEYS.EDITOR_SETTINGS]).toBeUndefined()
   })
 
+  // The approval timeout (permission channel spec §5.5) is a per-client choice: it lives in the worker settings store
+  // (persisted, so it survives a reload) but never leaves the device — precedent useEditorSettingsStore.
+  it('purdex-worker-settings projects only theme, iconStyle and customIcon — permissionTimeoutMin stays on the device', () => {
+    expect(STORAGE_KEYS.WORKER_SETTINGS).toBe('purdex-worker-settings')
+    expect(Object.keys(useWorkerSettingsStore.getState())).toContain('permissionTimeoutMin') // the field exists; it is unlisted on purpose
+    expect([...settingsFieldsByStore()[STORAGE_KEYS.WORKER_SETTINGS]].sort()).toEqual(['customIcon', 'iconStyle', 'theme'])
+    const out = project(
+      { [STORAGE_KEYS.WORKER_SETTINGS]: { theme: 'purdex', iconStyle: 'mono', customIcon: '', permissionTimeoutMin: 15 } },
+      PROJECTIONS.settings,
+    )
+    expect(out).toEqual({ [STORAGE_KEYS.WORKER_SETTINGS]: { theme: 'purdex', iconStyle: 'mono', customIcon: '' } })
+  })
+
   it('never lists the three persisted non-preference fields', () => {
     const fields = settingsFieldsByStore()
     expect(fields[STORAGE_KEYS.UI_SETTINGS]).not.toContain('terminalSettingsVersion')

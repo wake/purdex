@@ -25,7 +25,10 @@
 //   keeps its old content (gated) and the true state shows on re-show.
 import { useTabStore } from '../../stores/useTabStore'
 import { isRefShownNow } from '../shown-hosts'
-import { useNexHostStore, selectHandoffReady } from '../../stores/useNexHostStore'
+import {
+  useNexHostStore, selectHandoffReady, selectPermissionAskReady, selectPermissionTimeoutMax,
+} from '../../stores/useNexHostStore'
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { compositeKey } from '../composite-key'
 import { findPane } from '../pane-tree'
@@ -79,6 +82,27 @@ export interface HandToNexArgs {
   fromTitle?: string
   /** The view the execution pane opens in (shell cleanup spec §9.4); absent → no mode written (reads as room). */
   mode?: ExecutionViewMode
+  /** 需要核准 (permission channel §5.2): delegate with `handoff_ask`. Absent → 完全放行, today's request. */
+  askApproval?: boolean
+}
+
+/** The asking sandbox profile (Nexen v0.19.0). */
+export const ASK_PROFILE = 'handoff_ask'
+
+/**
+ * `permission_timeout_s` for an asking handoff or rebuild on `hostId`, read NOW: the device-local setting in seconds,
+ * only when it is on AND the host declares `capabilities.permissions.timeout` — an older daemon ignores the field
+ * silently, and its worker would wait forever. `undefined` = the field is not sent. A setting above the host's
+ * `max_s` is refused (`permission_timeout_exceeds_host`, naming the limit in minutes) rather than clamped: the wait the
+ * user chose must not be silently shortened, and Nexen would answer 400 anyway.
+ */
+export function permissionTimeoutFor(hostId: string): number | undefined {
+  const min = useWorkerSettingsStore.getState().permissionTimeoutMin
+  const maxS = selectPermissionTimeoutMax(hostId)(useNexHostStore.getState())
+  if (min <= 0 || maxS === null) return undefined
+  const seconds = Math.round(min * 60)
+  if (seconds > maxS) throw new HandoffApiError(0, 'permission_timeout_exceeds_host', { max_minutes: Math.floor(maxS / 60) })
+  return seconds
 }
 
 export interface HandToNexOutcome {
@@ -148,6 +172,12 @@ export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> 
     if (!selectHandoffReady(hostId)(useNexHostStore.getState())) {
       throw new HandoffApiError(0, 'handoff_unsupported', {})
     }
+    // 需要核准 on a host that cannot ask (the capability went away after the choice) is refused here, never sent as
+    // 完全放行 (permission channel §5.1).
+    if (args.askApproval && !selectPermissionAskReady(hostId)(useNexHostStore.getState())) {
+      throw new HandoffApiError(0, 'handoff_unsupported', {})
+    }
+    const timeout = args.askApproval ? permissionTimeoutFor(hostId) : undefined
     // `resumeLookupFor` answers from defaults until the host config is in
     // the store; a load failure leaves it that way (defaults, as before).
     await useHostConfigStore.getState().ensureLoaded(hostId)
@@ -158,6 +188,9 @@ export async function handToNex(args: HandToNexArgs): Promise<HandToNexOutcome> 
         // `{id}` left for the daemon: it read the session id itself.
         rollback_command: resumeTemplateFor(resumeLookupFor(hostId), 'cc'),
         keep_session: keepSession,
+        // 完全放行 adds nothing: today's body, byte for byte.
+        ...(args.askApproval ? { profile: ASK_PROFILE } : {}),
+        ...(timeout !== undefined ? { permission_timeout_s: timeout } : {}),
       })
     } catch (err) {
       // D7: Nex rejected the delegate and the daemon did not roll the terminal back, so the
@@ -352,6 +385,8 @@ export const HANDOFF_ERROR_CODES: readonly string[] = [
   'session_owned', 'transfer_in_progress', 'owner_check_failed', 'lease_contended',
   // client
   'network', 'host_removed',
+  // permission channel (client-side refusal: the chosen wait is above the host's max_s)
+  'permission_timeout_exceeds_host',
 ]
 
 const KNOWN = new Set(HANDOFF_ERROR_CODES)
@@ -395,6 +430,8 @@ function paramsFor(t: TFunction, err: HandoffApiError): Record<string, string | 
       const owner = b.owner
       return { where: owner === 'terminal' ? t('handoff.owner.terminal') : owner === 'worker' ? t('handoff.owner.worker') : '?' }
     }
+    case 'permission_timeout_exceeds_host':
+      return { n: typeof b.max_minutes === 'number' ? b.max_minutes : '?' }
     case 'execution_archived':
       // The worker is no longer live: name the session so the user can
       // resume it by hand (or take it to a terminal).

@@ -5,13 +5,13 @@
 // session" choice (G4: checked on every open, never remembered) and the
 // toasts; the request, the pane swap and the single-flight live in
 // `lib/nex/handoff.ts`; the modal shell is the shared `ConfirmDialog`.
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore } from '../stores/useAgentStore'
-import { useNexHostStore } from '../stores/useNexHostStore'
+import { useNexHostStore, selectPermissionAskReady } from '../stores/useNexHostStore'
 import { compositeKey } from '../lib/composite-key'
 import { stripAgentTitleMarker, stripAnyKnownAgentTitleMarker } from '../lib/agent-title-marker'
 import { countPanesOnSession } from '../lib/pane-tree'
@@ -29,7 +29,7 @@ import {
 import { isRefShownNow, landOnHostsPageIfHidden } from '../lib/shown-hosts'
 import { ConfirmDialog } from './ConfirmDialog'
 
-interface Props extends Omit<HandToNexArgs, 'keepSession' | 'fromTitle'> {
+interface Props extends Omit<HandToNexArgs, 'keepSession' | 'fromTitle' | 'askApproval'> {
   onClose: () => void
 }
 
@@ -39,6 +39,11 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
   // Plain state, so a fresh mount is a fresh default (user ruling 2026-09-19:
   // 預設保留、每次都問); nothing persists it.
   const [keepSession, setKeepSession] = useState(true)
+  // 完全放行（預設）/ 需要核准 (permission channel §5.2, PC1): offered only when the host can run handoff_ask; a fresh
+  // default on every open. A 需要核准 the host can no longer run is refused by handToNex, never sent as 完全放行.
+  const askReady = useNexHostStore(selectPermissionAskReady(args.hostId))
+  const [askApproval, setAskApproval] = useState(false)
+  const approvalName = useId()
   const nexCapabilities = useNexHostStore((s) => s.byHost[args.hostId]?.capabilities)
   const otherPanes =useTabStore((s) => countPanesOnSession(s.tabs, args.hostId, args.sessionCode, args.paneId))
   // The session's own pane title, recorded on the execution pane as its
@@ -76,7 +81,7 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
     setBusy(true)
     const toast = useUndoToast.getState()
     try {
-      const { result, swapped } = await handToNex({ ...args, keepSession, fromTitle })
+      const { result, swapped } = await handToNex({ ...args, keepSession, fromTitle, ...(askApproval ? { askApproval: true } : {}) })
       if (swapped) {
         toast.show(t('handoff.success'))
       } else if (!isRefShownNow(args.hostId)) {
@@ -130,6 +135,26 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
         />
         {t('handoff.keep_session')}
       </label>
+      {askReady && (
+        <fieldset data-testid="handoff-approval" className="mt-2 flex flex-col gap-1 text-xs text-text-secondary">
+          <legend className="sr-only">{t('handoff.approval.label')}</legend>
+          {([['full', false], ['ask', true]] as const).map(([key, ask]) => (
+            <label key={key} className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name={approvalName}
+                data-testid={`handoff-approval-${key}`}
+                checked={askApproval === ask}
+                disabled={busy}
+                onChange={() => setAskApproval(ask)}
+                className="accent-accent"
+              />
+              {t(`handoff.approval.${key}`)}
+            </label>
+          ))}
+          <p data-testid="handoff-approval-hint" className="text-text-muted">{t('handoff.approval.ask_hint')}</p>
+        </fieldset>
+      )}
       {otherPanes > 0 && (
         <p data-testid="handoff-other-panes" className="mt-1 text-xs text-status-warning">
           {t('handoff.other_panes', { count: otherPanes })}

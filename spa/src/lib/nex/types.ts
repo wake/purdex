@@ -56,6 +56,18 @@ export interface ExecutionSummary {
    * could in principle send a value outside today's three.
    */
   session_title?: { text: string; source: 'custom' | 'agent_name' | 'ai' | string }
+  /**
+   * The request a `handoff_ask` worker is waiting on (nexen contract §1.14, Nexen v0.19.0): the earliest pending one.
+   * `null` is an answer (nothing pending); an absent key means a daemon older than v0.19.0.
+   */
+  pending_permission?: PendingPermission | null
+}
+
+/** `pending_permission` on an execution summary. `since` is Unix **milliseconds**, like `activity.tool.since`. */
+export interface PendingPermission {
+  request_id: string
+  tool_name: string
+  since: number
 }
 
 /** `activity` on an execution summary. `phase` is an open set — read it through `normalizePhase`. */
@@ -155,6 +167,25 @@ export interface EventsPage {
 }
 
 /**
+ * `capabilities.permissions` (nexen contract §1.14, Nexen v0.19.0). Presence = this build has the permission channel;
+ * whether THIS host can use it is `sandbox_profiles` including `handoff_ask` (`selectPermissionAskReady`).
+ */
+export interface PermissionsCapability {
+  /** Sandbox profiles that carry the channel (today only `handoff_ask`). */
+  profiles: string[]
+  /** The answer route; `path` is origin-relative, carries the public prefix, and has `{id}` / `{request_id}` to fill. */
+  answer: { method: string; path: string }
+  /** Delegate accepts `permission_timeout_s` up to `max_s`. Absent (an older build) = never send it. */
+  timeout?: { max_s: number }
+}
+
+/** The answer endpoint's 200 body: exactly these two keys. */
+export interface PermissionAnswerResult {
+  request_id: string
+  outcome: 'allowed' | 'denied'
+}
+
+/**
  * `capabilities.send.attachments.image` (nexen contract §0/§1.9). The whole
  * object being absent = this daemon does not accept images; presence plus
  * `providers` including the execution's `provider` is the ONLY feature
@@ -248,6 +279,8 @@ export interface NexCapabilities {
   worker_rollup?: WorkerRollupCapability
   /** Presence = `GET /v1/executions/{id}/prelude` exists (worker prelude spec §4). */
   transcript_prelude?: TranscriptPreludeCapability
+  /** Presence = the permission channel exists in this build (nexen contract §1.14). */
+  permissions?: PermissionsCapability
   [key: string]: unknown
 }
 
