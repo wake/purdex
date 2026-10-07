@@ -36,22 +36,36 @@ func (p *Provider) RemoveHooks(pdxPath string) error {
 	return p.removePlugin(settingsPath)
 }
 
-// dataDir is the daemon's data dir when the provider has a config (the
-// daemon's own provider, module.go:242), else the default config's
-// ($HOME/.config/pdx) — the case of `pdx setup` without a daemon
-// (cmd/pdx/setup.go:114 builds the provider with nil deps).
-func (p *Provider) dataDir() string {
+// installTarget is the data dir and config file the plugin is installed
+// for: the daemon's when the provider has a config (the daemon's own
+// provider, module.go:242), else the default config's
+// ($HOME/.config/pdx[/config.toml]) — the case of `pdx setup` without a
+// daemon (cmd/pdx/setup.go:114 builds the provider with nil deps).
+func (p *Provider) installTarget() (dataDir, cfgPath string) {
 	if p.cfg != nil {
 		if p.cfgMu != nil {
 			p.cfgMu.RLock()
-			defer p.cfgMu.RUnlock()
 		}
-		if p.cfg.DataDir != "" {
-			return p.cfg.DataDir
+		dataDir, cfgPath = p.cfg.DataDir, p.cfg.Path
+		if p.cfgMu != nil {
+			p.cfgMu.RUnlock()
 		}
 	}
-	cfg, _ := config.Load("")
-	return cfg.DataDir
+	if dataDir == "" || cfgPath == "" {
+		def, _ := config.Load("")
+		if dataDir == "" {
+			dataDir = def.DataDir
+		}
+		if cfgPath == "" {
+			cfgPath = def.Path
+		}
+	}
+	return dataDir, cfgPath
+}
+
+func (p *Provider) dataDir() string {
+	dataDir, _ := p.installTarget()
+	return dataDir
 }
 
 // installPlugin extracts the embedded plugin (spec §5 "Shipping") and names
@@ -61,8 +75,8 @@ func (p *Provider) installPlugin(settingsPath, pdxPath string) error {
 	if PluginSource == nil {
 		return nil
 	}
-	dataDir := p.dataDir()
-	root, _, err := ExtractPlugin(PluginSource, dataDir, buildinfo.Version, pdxPath)
+	dataDir, cfgPath := p.installTarget()
+	root, _, err := ExtractPlugin(PluginSource, dataDir, buildinfo.Version, pdxPath, cfgPath)
 	if err != nil {
 		return fmt.Errorf("extract plugin: %w", err)
 	}

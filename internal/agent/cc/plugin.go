@@ -50,11 +50,11 @@ const (
 
 // ExtractPlugin writes src into PluginRoot(dataDir) when the VERSION stamp
 // there differs from version (or is missing), then writes VERSION and
-// pdx.json {pdx, data_dir}. It returns the root and whether files were
+// pdx.json {pdx, data_dir, config}. It returns the root and whether files were
 // written. Extraction goes to a fresh staging sibling and is swapped into
 // place (publishDir), so a session loading the folder sees the old tree or
 // the new one, never a half-written or missing one.
-func ExtractPlugin(src fs.FS, dataDir, version, pdxPath string) (root string, changed bool, err error) {
+func ExtractPlugin(src fs.FS, dataDir, version, pdxPath, cfgPath string) (root string, changed bool, err error) {
 	root = PluginRoot(dataDir)
 	if src == nil {
 		return root, false, errors.New("plugin source is nil")
@@ -64,7 +64,7 @@ func ExtractPlugin(src fs.FS, dataDir, version, pdxPath string) (root string, ch
 	// A binary built without ldflags reports "unknown"; such a dev build always
 	// re-extracts, so an edited mod reaches the next session without a bump.
 	if cur, err := os.ReadFile(filepath.Join(root, "VERSION")); err == nil && version != "" && version != "unknown" && strings.TrimSpace(string(cur)) == version {
-		if err := writePdxJSON(root, pdxPath, dataDir); err != nil {
+		if err := writePdxJSON(root, pdxPath, dataDir, cfgPath); err != nil {
 			return root, false, err
 		}
 		return root, false, nil
@@ -77,7 +77,7 @@ func ExtractPlugin(src fs.FS, dataDir, version, pdxPath string) (root string, ch
 	if err != nil {
 		return root, false, fmt.Errorf("create staging dir: %w", err)
 	}
-	if err := fillStaging(staging, src, dataDir, version, pdxPath); err != nil {
+	if err := fillStaging(staging, src, dataDir, version, pdxPath, cfgPath); err != nil {
 		_ = os.RemoveAll(staging)
 		return root, false, err
 	}
@@ -90,7 +90,7 @@ func ExtractPlugin(src fs.FS, dataDir, version, pdxPath string) (root string, ch
 
 // fillStaging writes the whole tree into staging: the embedded files,
 // VERSION, pdx.json and the stamped manifest.
-func fillStaging(staging string, src fs.FS, dataDir, version, pdxPath string) error {
+func fillStaging(staging string, src fs.FS, dataDir, version, pdxPath, cfgPath string) error {
 	// MkdirTemp makes 0700; the published folder keeps the 0755 it always had.
 	if err := os.Chmod(staging, 0o755); err != nil {
 		return fmt.Errorf("chmod %s: %w", staging, err)
@@ -101,7 +101,7 @@ func fillStaging(staging string, src fs.FS, dataDir, version, pdxPath string) er
 	if err := os.WriteFile(filepath.Join(staging, "VERSION"), []byte(version+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write VERSION: %w", err)
 	}
-	if err := writePdxJSON(staging, pdxPath, dataDir); err != nil {
+	if err := writePdxJSON(staging, pdxPath, dataDir, cfgPath); err != nil {
 		return err
 	}
 	return stampManifest(staging, version)
@@ -169,8 +169,16 @@ func stampManifest(root, version string) error {
 
 var semverRe = regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
 
-func writePdxJSON(root, pdxPath, dataDir string) error {
-	b, _ := json.Marshal(map[string]string{"pdx": pdxPath, "data_dir": dataDir})
+// writePdxJSON writes what the mod needs to call back: the pdx binary, the
+// data dir and — when known — the config file of the daemon that installed
+// it, which the mod passes as `pdx relay --config` so it reaches that
+// daemon rather than whatever the default config names.
+func writePdxJSON(root, pdxPath, dataDir, cfgPath string) error {
+	m := map[string]string{"pdx": pdxPath, "data_dir": dataDir}
+	if cfgPath != "" {
+		m["config"] = cfgPath
+	}
+	b, _ := json.Marshal(m)
 	return os.WriteFile(filepath.Join(root, "pdx.json"), append(b, '\n'), 0o644)
 }
 

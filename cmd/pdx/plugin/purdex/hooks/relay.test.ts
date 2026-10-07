@@ -2,7 +2,11 @@
 // stand for the engine beneath the mod (a fake pdx behind $.process.run).
 import { test, expect, mock } from 'claude-code/testing'
 
-function world(on: any, ids: { sid: string } = { sid: 'sid-1' }) {
+// The pdx.json the extractor writes: the installing daemon's config is the
+// `--config` every `pdx relay` call carries (P5b-1 review).
+const PDX_JSON = '{"pdx":"/opt/pdx/bin/pdx","data_dir":"/tmp/pdx","config":"/tmp/pdx b/config.toml"}'
+
+function world(on: any, ids: { sid: string } = { sid: 'sid-1' }, pdxJSON: string = PDX_JSON) {
   const argvs: string[][] = []
   const clock = mock.clock(on) // hello goes out from $.clock.after(0): tests settle it
   on('process.run', async (_$: any, e: any) => {
@@ -10,7 +14,7 @@ function world(on: any, ids: { sid: string } = { sid: 'sid-1' }) {
     return { value: { exitCode: 0, stdout: '{"ok":true,"role":"none","self_relay":"on","threshold":70,"min_growth":20000}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', async () => ({ value: ids.sid }))
-  on('fs.read', async (_$: any, e: any) => (e.path.endsWith('/pdx.json') ? { value: '{"pdx":"/opt/pdx/bin/pdx","data_dir":"/tmp/pdx"}' } : { deny: 'ENOENT' }))
+  on('fs.read', async (_$: any, e: any) => (e.path.endsWith('/pdx.json') ? { value: pdxJSON } : { deny: 'ENOENT' }))
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
   on('classic.SessionStart', async () => ({}))
   return Object.assign(argvs, { settle: () => clock.settle() })
@@ -18,8 +22,16 @@ function world(on: any, ids: { sid: string } = { sid: 'sid-1' }) {
 
 const sub = (a: string[]) => a.slice(1).join(' ')
 
-test('an interactive session.start says hello through the pdx named in pdx.json', async ($, on) => {
+test('an interactive session.start says hello through the pdx and to the daemon named in pdx.json', async ($, on) => {
   const argvs = world(on)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await argvs.settle()
+  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '1', '--agent', 'cc', '--config', '/tmp/pdx b/config.toml']])
+})
+
+// Mutation gate: always append --config → this test fails.
+test('a pdx.json without config adds no --config (pdx falls back to its default)', async ($, on) => {
+  const argvs = world(on, { sid: 'sid-1' }, '{"pdx":"/opt/pdx/bin/pdx","data_dir":"/tmp/pdx"}')
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   await argvs.settle()
   expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '1', '--agent', 'cc']])
@@ -42,7 +54,7 @@ test('after /clear the mod says hello again with the new session id', async ($, 
   ids.sid = 'sid-2'
   await $.classic.SessionStart({ source: 'clear' })
   await argvs.settle()
-  expect(argvs.map(sub)).toEqual(['relay hello --session sid-1 --version 1 --agent cc', 'relay hello --session sid-2 --version 1 --agent cc'])
+  expect(argvs.map(sub)).toEqual(['relay hello --session sid-1 --version 1 --agent cc --config /tmp/pdx b/config.toml', 'relay hello --session sid-2 --version 1 --agent cc --config /tmp/pdx b/config.toml'])
 })
 
 test('a SessionStart that is not a clear adds no hello (startup / resume are session.start’s)', async ($, on) => {

@@ -6,7 +6,9 @@
 const VERSION = '1' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
 const CALL_TIMEOUT_MS = 35_000 // one daemonclient grace (30 s) plus slack
 
-const s = { interactive: false, pdx: 'pdx' }
+// config: the installing daemon's config file (pdx.json "config"); '' lets
+// pdx fall back to its default one.
+const s = { interactive: false, pdx: 'pdx', config: '' }
 
 function parseJSON(text) {
   try { return JSON.parse(text) } catch { return undefined }
@@ -20,9 +22,16 @@ async function run($, argv, timeoutMs) {
   }
 }
 
+// relay runs `pdx relay <args>` against the daemon that installed the mod:
+// with a config in pdx.json every call carries `--config <path>`, so a
+// second daemon on this machine (another data dir) is never the one asked.
+function relay($, args, timeoutMs) {
+  return run($, ['relay', ...args, ...(s.config ? ['--config', s.config] : [])], timeoutMs)
+}
+
 async function hello($) {
   const sid = await $.session.id()
-  await run($, ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
+  await relay($, ['hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
 }
 
 // helloLater sends hello from a timer, never inside the hook: a daemon that
@@ -38,6 +47,7 @@ export function register(on) {
     if (!s.interactive) return next(e) // a Nexen worker's `claude -p`: the mod does nothing (spec §5)
     const cfg = parseJSON(await $.fs.read($.plugin.root + '/pdx.json').catch(() => ''))
     if (cfg && cfg.pdx) s.pdx = cfg.pdx // written beside VERSION by the extractor; absent in `claude plugin test`
+    s.config = cfg && typeof cfg.config === 'string' ? cfg.config : ''
     helloLater($)
     return next(e)
   })

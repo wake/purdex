@@ -34,7 +34,7 @@ func envDirs(t *testing.T, settings map[string]any) (string, bool) {
 
 func TestExtractPlugin_WritesTreeVersionAndPdxJSON(t *testing.T) {
 	dataDir := t.TempDir()
-	root, changed, err := ExtractPlugin(fakePlugin("1.0.0-alpha.530"), dataDir, "1.0.0-alpha.530", "/opt/pdx")
+	root, changed, err := ExtractPlugin(fakePlugin("1.0.0-alpha.530"), dataDir, "1.0.0-alpha.530", "/opt/pdx", "/etc/pdx/config.toml")
 	if err != nil || !changed {
 		t.Fatalf("first extract: changed=%v err=%v", changed, err)
 	}
@@ -52,7 +52,7 @@ func TestExtractPlugin_WritesTreeVersionAndPdxJSON(t *testing.T) {
 	}
 	var pj map[string]string
 	b, _ := os.ReadFile(filepath.Join(root, "pdx.json"))
-	if err := json.Unmarshal(b, &pj); err != nil || pj["pdx"] != "/opt/pdx" || pj["data_dir"] != dataDir {
+	if err := json.Unmarshal(b, &pj); err != nil || pj["pdx"] != "/opt/pdx" || pj["data_dir"] != dataDir || pj["config"] != "/etc/pdx/config.toml" {
 		t.Fatalf("pdx.json = %s (%v)", b, err)
 	}
 	assertOnlyRoot(t, dataDir)
@@ -97,7 +97,7 @@ func assertWholeTree(t *testing.T, dataDir, version string) {
 // replaced. A failed staging → root rename puts the old tree back.
 func TestExtractPlugin_FailedPublishRestoresTheOldTree(t *testing.T) {
 	dataDir := t.TempDir()
-	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx"); err != nil {
+	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", ""); err != nil {
 		t.Fatal(err)
 	}
 	root := PluginRoot(dataDir)
@@ -109,7 +109,7 @@ func TestExtractPlugin_FailedPublishRestoresTheOldTree(t *testing.T) {
 		}
 		return old(from, to)
 	}
-	if _, changed, err := ExtractPlugin(fakePlugin("b"), dataDir, "b", "/opt/pdx"); err == nil || changed {
+	if _, changed, err := ExtractPlugin(fakePlugin("b"), dataDir, "b", "/opt/pdx", ""); err == nil || changed {
 		t.Fatalf("a failed publish must error: changed=%v err=%v", changed, err)
 	}
 	assertWholeTree(t, dataDir, "a")
@@ -122,7 +122,7 @@ func TestExtractPlugin_FailedPublishRestoresTheOldTree(t *testing.T) {
 func TestExtractPlugin_ConcurrentExtractionsLeaveOneWholeTree(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		dataDir := t.TempDir()
-		if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx"); err != nil {
+		if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", ""); err != nil {
 			t.Fatal(err)
 		}
 		var wg sync.WaitGroup
@@ -131,7 +131,7 @@ func TestExtractPlugin_ConcurrentExtractionsLeaveOneWholeTree(t *testing.T) {
 			wg.Add(1)
 			go func(j int, v string) {
 				defer wg.Done()
-				_, _, errs[j] = ExtractPlugin(fakePlugin(v), dataDir, v, "/opt/pdx")
+				_, _, errs[j] = ExtractPlugin(fakePlugin(v), dataDir, v, "/opt/pdx", "")
 			}(j, v)
 		}
 		wg.Wait()
@@ -150,7 +150,7 @@ func TestExtractPlugin_ConcurrentExtractionsLeaveOneWholeTree(t *testing.T) {
 
 func TestRemovePluginDir_TakesLeftoverStagingAndBackupToo(t *testing.T) {
 	dataDir := t.TempDir()
-	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx"); err != nil {
+	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", ""); err != nil {
 		t.Fatal(err)
 	}
 	parent := filepath.Dir(PluginRoot(dataDir))
@@ -169,12 +169,12 @@ func TestRemovePluginDir_TakesLeftoverStagingAndBackupToo(t *testing.T) {
 
 func TestExtractPlugin_SameVersionIsNoop_NewVersionReplaces(t *testing.T) {
 	dataDir := t.TempDir()
-	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx"); err != nil {
+	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", ""); err != nil {
 		t.Fatal(err)
 	}
 	stale := filepath.Join(PluginRoot(dataDir), "hooks", "stale.js")
 	os.WriteFile(stale, []byte("old"), 0o644)
-	_, changed, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx")
+	_, changed, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", "")
 	if err != nil || changed {
 		t.Fatalf("same version: changed=%v err=%v", changed, err)
 	}
@@ -183,13 +183,13 @@ func TestExtractPlugin_SameVersionIsNoop_NewVersionReplaces(t *testing.T) {
 	}
 	// …but it refreshes pdx.json: a binary moved since the last install is
 	// found by the mod (the rule's one exception).
-	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/usr/local/bin/pdx"); err != nil {
+	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/usr/local/bin/pdx", ""); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(PluginRoot(dataDir), "pdx.json")); !strings.Contains(string(b), `"/usr/local/bin/pdx"`) {
 		t.Fatalf("same-version extract must refresh pdx.json: %s", b)
 	}
-	_, changed, err = ExtractPlugin(fakePlugin("b"), dataDir, "b", "/opt/pdx")
+	_, changed, err = ExtractPlugin(fakePlugin("b"), dataDir, "b", "/opt/pdx", "")
 	if err != nil || !changed {
 		t.Fatalf("new version: changed=%v err=%v", changed, err)
 	}
@@ -205,7 +205,7 @@ func TestExtractPlugin_SameVersionIsNoop_NewVersionReplaces(t *testing.T) {
 func TestExtractPlugin_UnknownVersionAlwaysReextracts_AndSemverStampsManifest(t *testing.T) {
 	dataDir := t.TempDir()
 	for i := 0; i < 2; i++ {
-		_, changed, err := ExtractPlugin(fakePlugin("x"), dataDir, "unknown", "/opt/pdx")
+		_, changed, err := ExtractPlugin(fakePlugin("x"), dataDir, "unknown", "/opt/pdx", "")
 		if err != nil || !changed {
 			t.Fatalf("run %d with version unknown: changed=%v err=%v (a dev build must always re-extract)", i, changed, err)
 		}
@@ -214,7 +214,7 @@ func TestExtractPlugin_UnknownVersionAlwaysReextracts_AndSemverStampsManifest(t 
 	if !strings.Contains(string(b), `"version":"unknown"`) && strings.Contains(string(b), `"unknown"`) {
 		t.Fatalf("unknown must not be stamped into plugin.json: %s", b)
 	}
-	if _, _, err := ExtractPlugin(fakePlugin("x"), dataDir, "1.0.0-alpha.530", "/opt/pdx"); err != nil {
+	if _, _, err := ExtractPlugin(fakePlugin("x"), dataDir, "1.0.0-alpha.530", "/opt/pdx", ""); err != nil {
 		t.Fatal(err)
 	}
 	b, _ = os.ReadFile(filepath.Join(PluginRoot(dataDir), ".claude-plugin", "plugin.json"))
@@ -225,7 +225,7 @@ func TestExtractPlugin_UnknownVersionAlwaysReextracts_AndSemverStampsManifest(t 
 }
 
 func TestExtractPlugin_NilSourceErrors(t *testing.T) {
-	if _, _, err := ExtractPlugin(nil, t.TempDir(), "v", "/opt/pdx"); err == nil {
+	if _, _, err := ExtractPlugin(nil, t.TempDir(), "v", "/opt/pdx", ""); err == nil {
 		t.Fatal("nil source must error")
 	}
 }
@@ -431,5 +431,50 @@ func TestCCCheckHooks_PluginMissingOrOutdatedIsNotInstalled(t *testing.T) {
 	status, _ = p.CheckHooks()
 	if status.Installed || len(pluginIssues(status.Issues)) != 1 {
 		t.Fatalf("env no longer names the plugin: Installed=%v issues=%v", status.Installed, status.Issues)
+	}
+}
+
+func readPdxJSON(t *testing.T, dataDir string) map[string]string {
+	t.Helper()
+	var pj map[string]string
+	b, err := os.ReadFile(filepath.Join(PluginRoot(dataDir), "pdx.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &pj); err != nil {
+		t.Fatalf("pdx.json = %s: %v", b, err)
+	}
+	return pj
+}
+
+// Attacker high: the mod must reach the daemon that installed it, not
+// whatever the default config names — pdx.json carries that daemon's config
+// path (the provider's cfg.Path; the default config's without one).
+func TestInstallHooks_PdxJSONNamesTheInstallingConfig(t *testing.T) {
+	p, home, dataDir := pluginProvider(t, "1.0.0-alpha.600")
+	p.cfg.Path = "/srv/pdx-b/config.toml"
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPdxJSON(t, dataDir)["config"]; got != "/srv/pdx-b/config.toml" {
+		t.Fatalf("daemon provider: pdx.json config = %q", got)
+	}
+	// Same version, another config: the refresh rewrites it too.
+	p.cfg.Path = "/srv/pdx-c/config.toml"
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPdxJSON(t, dataDir)["config"]; got != "/srv/pdx-c/config.toml" {
+		t.Fatalf("same-version refresh: pdx.json config = %q", got)
+	}
+
+	// `pdx setup` builds the provider without a config: the default one.
+	bare := NewProvider(nil, nil, nil, nil)
+	if err := bare.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	defDataDir := filepath.Join(home, ".config", "pdx")
+	if got, want := readPdxJSON(t, defDataDir)["config"], filepath.Join(defDataDir, "config.toml"); got != want {
+		t.Fatalf("no-config provider: pdx.json config = %q, want %q", got, want)
 	}
 }
