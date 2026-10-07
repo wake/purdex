@@ -550,3 +550,30 @@ func TestScan_IndexErrorsAreReturned(t *testing.T) {
 		})
 	}
 }
+
+// #1655: rows are written in chunks while the scan runs, so a scan cut off by
+// its deadline keeps the progress it made instead of writing nothing.
+func TestScan_ChunksSurviveAScanCutOffMidway(t *testing.T) {
+	old := scanChunk
+	scanChunk = 2
+	t.Cleanup(func() { scanChunk = old })
+	root, _, _ := fixtureRoot(t)
+	writeFile(t, filepath.Join(root, "-w-three", sidC+".jsonl"), lines(t, userText("c")))
+	writeFile(t, filepath.Join(root, "-w-four", "dddddddd-dddd-4ddd-8ddd-dddddddddddd.jsonl"), lines(t, userText("d")))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opens := 0
+	hookOpen(t, func(path string) (*os.File, Entry, error) {
+		if opens++; opens == 3 {
+			cancel()
+		}
+		return OpenTranscript(path)
+	})
+	idx := newFakeIndex()
+	if _, err := Scan(ctx, root, idx, at(t0)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if len(idx.upserts) != 1 || len(idx.upserts[0]) != 2 {
+		t.Errorf("upserts = %d batches, want one chunk of 2 written before the cut-off", len(idx.upserts))
+	}
+}
