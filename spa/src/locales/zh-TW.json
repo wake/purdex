@@ -2015,5 +2015,9 @@
   "approval.dialog.self_relay_note": "核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）",
   "approval.dialog.no_more_asking": "這個 session 不再詢問",
   "approval.dialog.pause_failed": "無法暫停這個 session 的接力詢問（{{code}}），決定照常送出",
-  "approval.notify.title_self_relay": "{{host}}：{{session}} 申請接力（已用 {{pct}}%）"
+  "approval.notify.title_self_relay": "{{host}}：{{session}} 申請接力（已用 {{pct}}%）",
+  "approval.dialog.minimize": "縮小",
+  "approval.pill.label": "待核准 {{count}} · {{countdown}}",
+  "approval.pill.restore": "{{label}}，點一下還原核准對話框",
+  "approval.pill.announce": "新的核准申請，待核准 {{count}} 筆"
 }

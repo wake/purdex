@@ -9,6 +9,10 @@
 // before its `opened` (a socket that connected between the two) must not let the late `opened` revive a
 // request the daemon already closed; the snapshot is authoritative and clears them. The store is pure data;
 // the sending lives in lib/team.
+//
+// `minimized` (U22 (b)) is this window's 縮小: the dialog is hidden behind a corner pill. Per renderer and never
+// persisted, so a reload shows the dialog again. It is temporary: whatever leaves nothing open clears it, so the next
+// request opens the dialog; a new request (`applyOpened`) never does — only a click restores.
 import { create } from 'zustand'
 import type { Approval, Grant } from '../lib/team/types'
 
@@ -40,6 +44,10 @@ export interface ApprovalStoreState {
   decidedHere: Record<string, true>
   /** Per host, the ids closed in this socket generation, oldest first, at most TOMBSTONES_PER_HOST. */
   closedIds: Record<string, string[]>
+  /** The dialog is minimized to the corner pill (U22 (b)); only ever true while `entries` is non-empty. */
+  minimized: boolean
+  /** `true` takes effect only while a request is open. */
+  setMinimized: (v: boolean) => void
   /** Replace the host's whole open set from a snapshot and clear its tombstones; returns the ids held before that are not in it. */
   applySnapshot: (hostId: string, approvals: Approval[]) => string[]
   /** Add an opened request; false when it was already held, is not open, or was closed before (tombstoned). */
@@ -69,11 +77,19 @@ function tombstone(closedIds: Record<string, string[]>, hostId: string, id: stri
   return { ...closedIds, [hostId]: [...next, id] }
 }
 
+/** The `minimized` patch for an update that leaves `entries` as given: nothing open ends the minimize, else no change. */
+function endMinimizeIfEmpty(entries: Record<string, ApprovalEntry>): { minimized?: false } {
+  return Object.keys(entries).length === 0 ? { minimized: false } : {}
+}
+
 export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
   entries: {},
   queued: {},
   decidedHere: {},
   closedIds: {},
+  minimized: false,
+
+  setMinimized: (v) => set((s) => ({ minimized: v && Object.keys(s.entries).length > 0 })),
 
   applySnapshot: (hostId, approvals) => {
     const open = approvals.filter((a) => a.state === 'open')
@@ -93,7 +109,7 @@ export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
       next[key] = get().entries[key] ?? { hostId, approval: a }
     }
     // The daemon's snapshot is authoritative: whatever it lists is open now, tombstones or not.
-    set({ entries: next, closedIds: without(get().closedIds, hostId) })
+    set({ entries: next, closedIds: without(get().closedIds, hostId), ...endMinimizeIfEmpty(next) })
     return vanished
   },
 
@@ -113,11 +129,13 @@ export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
     const { entries, queued, decidedHere, closedIds } = get()
     const had = Object.hasOwn(entries, key)
     const ours = Object.hasOwn(decidedHere, key)
+    const rest = without(entries, key)
     set({
-      entries: without(entries, key),
+      entries: rest,
       queued: without(queued, key),
       decidedHere: without(decidedHere, key),
       closedIds: tombstone(closedIds, hostId, approval.id),
+      ...endMinimizeIfEmpty(rest),
     })
     if (!had) return 'absent'
     return ours ? 'ours' : 'elsewhere'
@@ -140,7 +158,7 @@ export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
     return taken
   },
 
-  reset: () => set({ entries: {}, queued: {}, decidedHere: {}, closedIds: {} }),
+  reset: () => set({ entries: {}, queued: {}, decidedHere: {}, closedIds: {}, minimized: false }),
 }))
 
 /** The request the dialog shows: the oldest `created_at` across hosts (spec §6.3 "oldest first"); ties by id, then host. */
@@ -159,6 +177,13 @@ export const selectCurrent = (s: ApprovalStoreState): ApprovalEntry | null => {
 }
 
 export const selectOpenCount = (s: ApprovalStoreState): number => Object.keys(s.entries).length
+
+/** The deadline the pill counts down to (U22 (b)): the smallest `deadline_at` across hosts; null when nothing is open. */
+export const selectNearestDeadline = (s: ApprovalStoreState): number | null => {
+  let nearest: number | null = null
+  for (const e of Object.values(s.entries)) if (nearest === null || e.approval.deadline_at < nearest) nearest = e.approval.deadline_at
+  return nearest
+}
 
 export const selectOpenCountFor = (hostId: string) => (s: ApprovalStoreState): number => {
   let n = 0
