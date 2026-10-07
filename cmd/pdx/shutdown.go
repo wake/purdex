@@ -167,6 +167,11 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 		}
 		select {
 		case <-sig:
+			select {
+			case <-done: // the sequence ended (or panicked) while this watcher was busy: no exit from here
+				return
+			default:
+			}
 			logf("received second signal, exiting immediately")
 			exit(130)
 		case <-done:
