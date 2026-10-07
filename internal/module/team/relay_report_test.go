@@ -336,3 +336,29 @@ func TestRelayReport_ClearedAcrossRestartIsIdempotentEndToEnd(t *testing.T) {
 		t.Fatalf("Resolve(old ref) after restart = %+v err=%v; want the sid-1b row", rec, err)
 	}
 }
+
+// PR #1716 codex R1: `claimed` is not a reportable state. Reporting it on
+// an awaiting_approval self op would step past the person's approval
+// (the store's awaiting_approval → claimed transition exists for
+// afterClose); the handler refuses it with 400 and the op stays awaiting
+// with its row open.
+func TestRelayReport_ClaimedIsNotReportable(t *testing.T) {
+	f := newFixture(t)
+	out := f.begin("sid-1")
+	code, _, ae := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayClaimed})
+	if code != http.StatusBadRequest || ae.Error != team.ErrBadRequest {
+		t.Fatalf("report claimed: %d %+v", code, ae)
+	}
+	if got := f.op(out.Op.ID); got.State != team.RelayAwaitingApproval {
+		t.Fatalf("op after a refused claimed report = %s, want awaiting_approval", got.State)
+	}
+	row, ok, _ := f.m.store.Get(out.RequestID)
+	if !ok || row.State != team.StateOpen {
+		t.Fatalf("approval row = %+v ok=%v, want still open", row, ok)
+	}
+	// The approval still claims it the legitimate way.
+	f.decide(out.RequestID, "approve")
+	if got := f.op(out.Op.ID); got.State != team.RelayClaimed {
+		t.Fatalf("op after approve = %s, want claimed", got.State)
+	}
+}

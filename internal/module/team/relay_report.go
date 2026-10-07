@@ -50,7 +50,13 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch req.State {
-	case team.RelayClaimed, team.RelayWriting, team.RelayWritten, team.RelayDone:
+	case team.RelayWriting, team.RelayWritten, team.RelayDone:
+	case team.RelayClaimed:
+		// Only the approval's close claims a self op (afterClose), and only
+		// P6's claim route claims a member op: a report of `claimed` would
+		// let a buggy or hostile mod step past the person's approval.
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "claimed is not reportable: a self op is claimed by its approval, a member op by pdx relay claim", nil)
+		return
 	case team.RelayCleared:
 		if strings.TrimSpace(req.NewSessionID) == "" {
 			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "new_session_id is required for cleared", nil)
