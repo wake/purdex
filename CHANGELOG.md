@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.578] - 2026-10-07
+
+> 只動 daemon 原始碼的排版（gofmt），編出來的程式行為完全相同，**不需要部署或重啟**。SPA、`pdx` 指令、Electron 都沒有改動。
+
+### Changed：Go 原始碼排版整理，第一批（#1651，#1829）
+
+- 15 個 Go 檔照 `gofmt` 重新排版；逐檔比對程式碼 token，與原本完全一致，沒有行為變化。
+- `shellSingleQuote` 的註解改寫：gofmt 會把註解裡的 shell 跳脫寫法 `'\''` 改成彎引號，把範例改錯；改成程式碼區塊後就不受影響。
+- 剩下的 12 個檔（agent／nex／peers 模組）與 `make lint` 的 gofmt 檢查在第二批。
+
 ## [1.0.0-alpha.577] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。
