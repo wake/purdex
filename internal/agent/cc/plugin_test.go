@@ -55,8 +55,115 @@ func TestExtractPlugin_WritesTreeVersionAndPdxJSON(t *testing.T) {
 	if err := json.Unmarshal(b, &pj); err != nil || pj["pdx"] != "/opt/pdx" || pj["data_dir"] != dataDir {
 		t.Fatalf("pdx.json = %s (%v)", b, err)
 	}
-	if _, err := os.Stat(root + ".tmp"); !os.IsNotExist(err) {
-		t.Fatal("the .tmp sibling must not remain")
+	assertOnlyRoot(t, dataDir)
+}
+
+// assertOnlyRoot fails when <data_dir>/cc-plugin holds anything but purdex/
+// (a staging or backup sibling left behind).
+func assertOnlyRoot(t *testing.T, dataDir string) {
+	t.Helper()
+	ents, err := os.ReadDir(filepath.Dir(PluginRoot(dataDir)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range ents {
+		names = append(names, e.Name())
+	}
+	if len(names) != 1 || names[0] != PluginName {
+		t.Fatalf("cc-plugin/ holds %v, want only %s", names, PluginName)
+	}
+}
+
+// assertWholeTree fails unless the extracted tree is fakePlugin(version)
+// complete: every file, register.js of that version, VERSION of it.
+func assertWholeTree(t *testing.T, dataDir, version string) {
+	t.Helper()
+	root := PluginRoot(dataDir)
+	for rel := range fakePlugin(version) {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("%s: %v", rel, err)
+		}
+	}
+	if v, _ := os.ReadFile(filepath.Join(root, "VERSION")); strings.TrimSpace(string(v)) != version {
+		t.Errorf("VERSION = %q, want %s", v, version)
+	}
+	if js, _ := os.ReadFile(filepath.Join(root, "hooks", "register.js")); !strings.HasSuffix(string(js), "// "+version) {
+		t.Errorf("register.js = %q, want version %s", js, version)
+	}
+}
+
+// Attacker high: the swap must never leave the folder missing or half
+// replaced. A failed staging → root rename puts the old tree back.
+func TestExtractPlugin_FailedPublishRestoresTheOldTree(t *testing.T) {
+	dataDir := t.TempDir()
+	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	root := PluginRoot(dataDir)
+	old := renameFn
+	t.Cleanup(func() { renameFn = old })
+	renameFn = func(from, to string) error {
+		if to == root && strings.Contains(filepath.Base(from), ".staging-") {
+			return os.ErrPermission
+		}
+		return old(from, to)
+	}
+	if _, changed, err := ExtractPlugin(fakePlugin("b"), dataDir, "b", "/opt/pdx"); err == nil || changed {
+		t.Fatalf("a failed publish must error: changed=%v err=%v", changed, err)
+	}
+	assertWholeTree(t, dataDir, "a")
+	assertOnlyRoot(t, dataDir)
+}
+
+// Attacker critical: two extractions at once (daemon route + pdx setup, two
+// clicks) must not interleave — the result is one whole version, with no
+// staging or backup left. Run with -race.
+func TestExtractPlugin_ConcurrentExtractionsLeaveOneWholeTree(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		dataDir := t.TempDir()
+		if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx"); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for j, v := range []string{"b", "c"} {
+			wg.Add(1)
+			go func(j int, v string) {
+				defer wg.Done()
+				_, _, errs[j] = ExtractPlugin(fakePlugin(v), dataDir, v, "/opt/pdx")
+			}(j, v)
+		}
+		wg.Wait()
+		if errs[0] != nil || errs[1] != nil {
+			t.Fatalf("round %d: errs = %v", i, errs)
+		}
+		v, _ := os.ReadFile(filepath.Join(PluginRoot(dataDir), "VERSION"))
+		got := strings.TrimSpace(string(v))
+		if got != "b" && got != "c" {
+			t.Fatalf("round %d: VERSION = %q", i, got)
+		}
+		assertWholeTree(t, dataDir, got)
+		assertOnlyRoot(t, dataDir)
+	}
+}
+
+func TestRemovePluginDir_TakesLeftoverStagingAndBackupToo(t *testing.T) {
+	dataDir := t.TempDir()
+	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Dir(PluginRoot(dataDir))
+	for _, n := range []string{"purdex.staging-1", "purdex.old-2", "purdex.tmp"} {
+		os.MkdirAll(filepath.Join(parent, n, "hooks"), 0o755)
+	}
+	os.MkdirAll(filepath.Join(parent, "custom"), 0o755)
+	if err := RemovePluginDir(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	ents, _ := os.ReadDir(parent)
+	if len(ents) != 1 || ents[0].Name() != "custom" {
+		t.Fatalf("cc-plugin/ after remove: %v (only someone else's folder may stay)", ents)
 	}
 }
 

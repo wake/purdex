@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // PluginDirName is the folder under <data_dir> that holds extracted Claude
@@ -32,16 +33,34 @@ func PluginRoot(dataDir string) string {
 	return filepath.Join(dataDir, PluginDirName, PluginName)
 }
 
+// extractMu serialises ExtractPlugin and RemovePluginDir in this process:
+// the daemon's setup route and a second click (or the route and its own
+// boot) must not swap the folder under each other.
+var extractMu sync.Mutex
+
+// renameFn is os.Rename; tests swap it to fail one step of the publish.
+var renameFn = os.Rename
+
+// Sibling name patterns under <data_dir>/cc-plugin/ (os.MkdirTemp's * is
+// a random suffix, so concurrent processes never share one).
+const (
+	stagingPattern = PluginName + ".staging-*"
+	backupPattern  = PluginName + ".old-*"
+)
+
 // ExtractPlugin writes src into PluginRoot(dataDir) when the VERSION stamp
 // there differs from version (or is missing), then writes VERSION and
 // pdx.json {pdx, data_dir}. It returns the root and whether files were
-// written. Extraction goes to a sibling .tmp dir and is renamed into place
-// so a session loading the folder never sees a half-written tree.
+// written. Extraction goes to a fresh staging sibling and is swapped into
+// place (publishDir), so a session loading the folder sees the old tree or
+// the new one, never a half-written or missing one.
 func ExtractPlugin(src fs.FS, dataDir, version, pdxPath string) (root string, changed bool, err error) {
 	root = PluginRoot(dataDir)
 	if src == nil {
 		return root, false, errors.New("plugin source is nil")
 	}
+	extractMu.Lock()
+	defer extractMu.Unlock()
 	// A binary built without ldflags reports "unknown"; such a dev build always
 	// re-extracts, so an edited mod reaches the next session without a bump.
 	if cur, err := os.ReadFile(filepath.Join(root, "VERSION")); err == nil && version != "" && version != "unknown" && strings.TrimSpace(string(cur)) == version {
@@ -50,33 +69,79 @@ func ExtractPlugin(src fs.FS, dataDir, version, pdxPath string) (root string, ch
 		}
 		return root, false, nil
 	}
-	tmp := root + ".tmp"
-	_ = os.RemoveAll(tmp)
-	if err := os.MkdirAll(tmp, 0o755); err != nil {
-		return root, false, fmt.Errorf("create %s: %w", tmp, err)
+	parent := filepath.Dir(root)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return root, false, fmt.Errorf("create %s: %w", parent, err)
 	}
-	if err := copyFS(tmp, src); err != nil {
-		_ = os.RemoveAll(tmp)
+	staging, err := os.MkdirTemp(parent, stagingPattern)
+	if err != nil {
+		return root, false, fmt.Errorf("create staging dir: %w", err)
+	}
+	if err := fillStaging(staging, src, dataDir, version, pdxPath); err != nil {
+		_ = os.RemoveAll(staging)
 		return root, false, err
 	}
-	if err := os.WriteFile(filepath.Join(tmp, "VERSION"), []byte(version+"\n"), 0o644); err != nil {
-		_ = os.RemoveAll(tmp)
-		return root, false, fmt.Errorf("write VERSION: %w", err)
-	}
-	if err := writePdxJSON(tmp, pdxPath, dataDir); err != nil {
-		_ = os.RemoveAll(tmp)
+	if err := publishDir(staging, root); err != nil {
+		_ = os.RemoveAll(staging)
 		return root, false, err
-	}
-	if err := stampManifest(tmp, version); err != nil {
-		_ = os.RemoveAll(tmp)
-		return root, false, err
-	}
-	_ = os.RemoveAll(root)
-	if err := os.Rename(tmp, root); err != nil {
-		_ = os.RemoveAll(tmp)
-		return root, false, fmt.Errorf("rename %s: %w", tmp, err)
 	}
 	return root, true, nil
+}
+
+// fillStaging writes the whole tree into staging: the embedded files,
+// VERSION, pdx.json and the stamped manifest.
+func fillStaging(staging string, src fs.FS, dataDir, version, pdxPath string) error {
+	// MkdirTemp makes 0700; the published folder keeps the 0755 it always had.
+	if err := os.Chmod(staging, 0o755); err != nil {
+		return fmt.Errorf("chmod %s: %w", staging, err)
+	}
+	if err := copyFS(staging, src); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(staging, "VERSION"), []byte(version+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write VERSION: %w", err)
+	}
+	if err := writePdxJSON(staging, pdxPath, dataDir); err != nil {
+		return err
+	}
+	return stampManifest(staging, version)
+}
+
+// publishDir swaps staging in as root: an existing root is first renamed
+// to a unique backup sibling, then staging is renamed to root. When that
+// second rename fails the backup is renamed back, so root is never left
+// missing; on success the backup is deleted. The caller removes staging
+// when an error is returned.
+func publishDir(staging, root string) error {
+	var backup string
+	if _, err := os.Lstat(root); err == nil {
+		b, err := os.MkdirTemp(filepath.Dir(root), backupPattern)
+		if err != nil {
+			return fmt.Errorf("reserve backup name: %w", err)
+		}
+		if err := os.Remove(b); err != nil {
+			return fmt.Errorf("reserve backup name: %w", err)
+		}
+		if err := renameFn(root, b); err != nil {
+			return fmt.Errorf("move %s aside: %w", root, err)
+		}
+		backup = b
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", root, err)
+	}
+	if err := renameFn(staging, root); err != nil {
+		err = fmt.Errorf("publish %s: %w", root, err)
+		if backup != "" {
+			if rerr := renameFn(backup, root); rerr != nil {
+				return errors.Join(err, fmt.Errorf("restore %s from %s: %w", root, backup, rerr))
+			}
+		}
+		return err
+	}
+	if backup != "" {
+		_ = os.RemoveAll(backup)
+	}
+	return nil
 }
 
 // stampManifest sets .claude-plugin/plugin.json "version" to the pdx version
@@ -126,10 +191,21 @@ func copyFS(dst string, src fs.FS) error {
 	})
 }
 
-// RemovePluginDir deletes the extracted tree (and its .tmp sibling).
+// RemovePluginDir deletes the extracted tree and any staging or backup
+// sibling a crashed extraction left (plus the pre-review .tmp one). Other
+// folders under cc-plugin/ are not ours and stay.
 func RemovePluginDir(dataDir string) error {
+	extractMu.Lock()
+	defer extractMu.Unlock()
 	root := PluginRoot(dataDir)
-	_ = os.RemoveAll(root + ".tmp")
+	leftovers := []string{root + ".tmp"}
+	for _, pat := range []string{stagingPattern, backupPattern} {
+		m, _ := filepath.Glob(filepath.Join(filepath.Dir(root), pat))
+		leftovers = append(leftovers, m...)
+	}
+	for _, p := range leftovers {
+		_ = os.RemoveAll(p)
+	}
 	if err := os.RemoveAll(root); err != nil {
 		return fmt.Errorf("remove %s: %w", root, err)
 	}
