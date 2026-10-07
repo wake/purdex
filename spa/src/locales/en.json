@@ -147,7 +147,7 @@
   "worker.icon.custom": "Custom icon",
   "worker.icon.pick": "Choose icon…",
   "worker.permission_timeout.label": "Approval timeout",
-  "worker.permission_timeout.desc": "Deny an unanswered approval request automatically after this long; applies to new handoffs only",
+  "worker.permission_timeout.desc": "Deny an unanswered approval request automatically after this long; applies to new handoffs only (a host may impose a lower limit)",
   "worker.permission_timeout.never": "Never",
   "worker.permission_timeout.minutes": "{{n}} minutes",
 
@@ -807,6 +807,7 @@
   "handoff.error.invalid_instance": "This pane's tmux instance is invalid; reopen the session and try again.",
   "handoff.error.session_missing": "The tmux session no longer exists.",
   "handoff.error.handoff_unsupported": "This host cannot hand sessions to nex (handoff profile or resume support missing).",
+  "handoff.error.permission_timeout_exceeds_host": "This host waits at most {{n}} minutes for approval; lower \"Approval timeout\" in Settings → Worker.",
   "handoff.error.handoff_in_progress": "A handoff or take-back is already in progress for this session.",
   "handoff.error.tmux_instance_mismatch": "The tmux session was replaced since this pane opened; reopen it and try again.",
   "handoff.error.no_identity": "Could not read the Claude Code session id from this pane.",

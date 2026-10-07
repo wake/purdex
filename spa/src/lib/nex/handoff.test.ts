@@ -390,6 +390,39 @@ describe('handToNex', () => {
       expect(sent()).toStrictEqual({ ...TODAY, profile: 'handoff_ask' })
     })
 
+    describe('the host max_s', () => {
+      const withMax = (max_s: number) => seedNexHost({ capabilities: caps({ sandbox_profiles: ASK_PROFILES, permissions: { ...PERMS, timeout: { max_s } } }) })
+      it('setting above max_s (15 min vs 300 s) is refused unsent, naming the host limit in minutes', async () => {
+        withMax(300)
+        const a = { ...args(), askApproval: true }
+        const err = await rejection(handToNex(a))
+        expect(err.code).toBe('permission_timeout_exceeds_host')
+        expect(err.body.max_minutes).toBe(5)
+        expect(mockedHandoff).not.toHaveBeenCalled()
+        expect(paneContent(a.tabId).kind).toBe('tmux-session')
+      })
+      it('setting equal to max_s (5 min vs 300 s) is sent as the integer 300', async () => {
+        withMax(300)
+        useWorkerSettingsStore.setState({ permissionTimeoutMin: 5 })
+        mockedHandoff.mockResolvedValueOnce(handoffOk)
+        await handToNex({ ...args(), askApproval: true })
+        expect(sent()).toMatchObject({ permission_timeout_s: 300 })
+        expect(Number.isInteger(sent().permission_timeout_s)).toBe(true)
+      })
+      it('max_s 86400 with the setting at 60 sends 3600', async () => {
+        useWorkerSettingsStore.setState({ permissionTimeoutMin: 60 })
+        mockedHandoff.mockResolvedValueOnce(handoffOk)
+        await handToNex({ ...args(), askApproval: true })
+        expect(sent()).toMatchObject({ permission_timeout_s: 3600 })
+      })
+      it('完全放行 is unaffected by a low max_s', async () => {
+        withMax(300)
+        mockedHandoff.mockResolvedValueOnce(handoffOk)
+        await handToNex(args())
+        expect(JSON.stringify(sent())).toBe(JSON.stringify(TODAY))
+      })
+    })
+
     it('需要核准 on a host that cannot ask (no handoff_ask in sandbox_profiles) is refused unsent — never downgraded', async () => {
       seedNexHost({ capabilities: caps({ sandbox_profiles: ['default', 'handoff'], permissions: PERMS }) })
       const a = { ...args(), askApproval: true }
@@ -916,6 +949,7 @@ describe('handoffErrorMessage', () => {
     // client-side
     ['network', {}, null],
     ['host_removed', {}, null],
+    ['permission_timeout_exceeds_host', { max_minutes: 5 }, { n: 5 }],
   ]
 
   it.each(table)('%s → handoff.error.%s with params', (code, body, params) => {

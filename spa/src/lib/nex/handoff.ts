@@ -92,12 +92,17 @@ export const ASK_PROFILE = 'handoff_ask'
 /**
  * `permission_timeout_s` for an asking handoff or rebuild on `hostId`, read NOW: the device-local setting in seconds,
  * only when it is on AND the host declares `capabilities.permissions.timeout` — an older daemon ignores the field
- * silently, and its worker would wait forever. `undefined` = the field is not sent.
+ * silently, and its worker would wait forever. `undefined` = the field is not sent. A setting above the host's
+ * `max_s` is refused (`permission_timeout_exceeds_host`, naming the limit in minutes) rather than clamped: the wait the
+ * user chose must not be silently shortened, and Nexen would answer 400 anyway.
  */
 export function permissionTimeoutFor(hostId: string): number | undefined {
   const min = useWorkerSettingsStore.getState().permissionTimeoutMin
-  if (min <= 0 || selectPermissionTimeoutMax(hostId)(useNexHostStore.getState()) === null) return undefined
-  return min * 60
+  const maxS = selectPermissionTimeoutMax(hostId)(useNexHostStore.getState())
+  if (min <= 0 || maxS === null) return undefined
+  const seconds = Math.round(min * 60)
+  if (seconds > maxS) throw new HandoffApiError(0, 'permission_timeout_exceeds_host', { max_minutes: Math.floor(maxS / 60) })
+  return seconds
 }
 
 export interface HandToNexOutcome {
@@ -380,6 +385,8 @@ export const HANDOFF_ERROR_CODES: readonly string[] = [
   'session_owned', 'transfer_in_progress', 'owner_check_failed', 'lease_contended',
   // client
   'network', 'host_removed',
+  // permission channel (client-side refusal: the chosen wait is above the host's max_s)
+  'permission_timeout_exceeds_host',
 ]
 
 const KNOWN = new Set(HANDOFF_ERROR_CODES)
@@ -423,6 +430,8 @@ function paramsFor(t: TFunction, err: HandoffApiError): Record<string, string | 
       const owner = b.owner
       return { where: owner === 'terminal' ? t('handoff.owner.terminal') : owner === 'worker' ? t('handoff.owner.worker') : '?' }
     }
+    case 'permission_timeout_exceeds_host':
+      return { n: typeof b.max_minutes === 'number' ? b.max_minutes : '?' }
     case 'execution_archived':
       // The worker is no longer live: name the session so the user can
       // resume it by hand (or take it to a terminal).

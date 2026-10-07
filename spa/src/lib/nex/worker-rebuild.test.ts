@@ -67,6 +67,27 @@ describe('rebuildAsWorker', () => {
       expect(mocked.mock.calls[0][1]).toStrictEqual({ session_id: 'S', cwd: '/w', profile: 'handoff_ask', replace_execution_id: OLD, permission_timeout_s: 900 })
     })
 
+    it('a handoff_ask row with the setting above max_s is refused unsent, naming the limit in minutes', async () => {
+      seedNex({ ...PERMS, timeout: { max_s: 300 } })
+      let err: unknown
+      try { await rebuildAsWorker(args({ profile: 'handoff_ask' })) } catch (e) { err = e }
+      expect(err).toMatchObject({ code: 'permission_timeout_exceeds_host', body: { max_minutes: 5 } })
+      expect(mocked).not.toHaveBeenCalled()
+    })
+
+    it('a handoff_ask row with the setting equal to max_s sends 300', async () => {
+      seedNex({ ...PERMS, timeout: { max_s: 300 } })
+      useWorkerSettingsStore.setState({ permissionTimeoutMin: 5 })
+      await rebuildAsWorker(args({ profile: 'handoff_ask' }))
+      expect(mocked.mock.calls[0][1]).toMatchObject({ permission_timeout_s: 300 })
+    })
+
+    it('a non-handoff_ask row never sends a timeout nor refuses, even above max_s', async () => {
+      seedNex({ ...PERMS, timeout: { max_s: 300 } })
+      await rebuildAsWorker(args({ profile: 'handoff' }))
+      expect(mocked.mock.calls[0][1]).toStrictEqual({ session_id: 'S', cwd: '/w', profile: 'handoff' })
+    })
+
     it('a handoff row sends no timeout', async () => {
       await rebuildAsWorker(args({ profile: 'handoff' }))
       expect(mocked.mock.calls[0][1]).toStrictEqual({ session_id: 'S', cwd: '/w', profile: 'handoff' })

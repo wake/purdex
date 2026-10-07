@@ -147,7 +147,7 @@
   "worker.icon.custom": "自訂圖示",
   "worker.icon.pick": "選擇圖示…",
   "worker.permission_timeout.label": "等待核准逾時",
-  "worker.permission_timeout.desc": "核准請求沒人回答時，過了這段時間就自動拒絕；只影響之後的交接",
+  "worker.permission_timeout.desc": "核准請求沒人回答時，過了這段時間就自動拒絕；只影響之後的交接（主機可能有較低的上限）",
   "worker.permission_timeout.never": "不逾時",
   "worker.permission_timeout.minutes": "{{n}} 分鐘",
 
@@ -807,6 +807,7 @@
   "handoff.error.invalid_instance": "這個窗格的 tmux instance 無效；請重新開啟 session 再試。",
   "handoff.error.session_missing": "tmux session 已不存在。",
   "handoff.error.handoff_unsupported": "這台主機無法把 session 交給 nex（缺 handoff profile 或 resume 支援）。",
+  "handoff.error.permission_timeout_exceeds_host": "這台主機最長只能等 {{n}} 分鐘；請到 設定 → Worker 調低「等待核准逾時」。",
   "handoff.error.handoff_in_progress": "這個 session 已有切換或接回正在進行。",
   "handoff.error.tmux_instance_mismatch": "tmux session 在這個窗格開啟後已被換掉；請重新開啟再試。",
   "handoff.error.no_identity": "讀不到這個窗格的 Claude Code session id。",
