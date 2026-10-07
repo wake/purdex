@@ -84,9 +84,10 @@ U1-1 (a + b) is the first development segment; it ends with a deploy and a live 
 ### 6.1 Socket
 
 - Path: `ModSocketPath(dataDir) = <dataDir>/mod.sock`. If the absolute path is longer than 100 bytes the channel is **disabled** (logged once, reported by the read API as `reason: "path_too_long"`); there is no `/tmp` fallback. Default mlab path `/Users/wake/.config/pdx/mod.sock` (31 bytes).
-- Start (module `Start`): if the path exists, `Lstat`: a socket that accepts a connection within 200 ms → another daemon owns it → disabled (`reason: "in_use"`); a socket that refuses → removed and rebound; anything that is not a socket → disabled (`reason: "not_a_socket"`), never removed. After bind, `chmod 0600`.
-- Every accepted connection's peer uid (`getpeereid` / `SO_PEERCRED` via `golang.org/x/sys/unix`) must equal the daemon's uid; otherwise the connection is closed before any byte is read. No token: file mode + peer uid are the authentication.
-- Stop (module `Stop`): close the listener (which unlinks the file). A daemon restart re-binds; the mod retries with backoff (§6.5).
+- The socket's directory must be owned by the daemon's effective uid and not group- or other-writable (mlab: `~/.config/pdx` is `drwx------`); otherwise disabled (`reason: "unsafe_dir"`). This makes the stale-file check below race-free against other users: only the same user can swap the path between the check and the remove.
+- Start (module `Start`): if the path exists, `Lstat`: a socket that accepts a connection within 200 ms → another daemon owns it → disabled (`reason: "in_use"`); a socket that refuses → removed and rebound; anything that is not a socket → disabled (`reason: "not_a_socket"`), never removed. After bind, `chmod 0600` (defence in depth).
+- **The peer-uid check is the gate**: every accepted connection's peer uid (`LOCAL_PEERCRED` on darwin / `SO_PEERCRED` on linux, `golang.org/x/sys/unix`) must equal the daemon's **effective** uid; otherwise the connection is closed before any byte is read. It wraps `Accept`, so a connection made in the window between bind and chmod is checked like any other. No token.
+- Stop (module `Stop`): close the listener first (stops accepts, unlinks the file), then shut the server down within the shutdown budget, then join the module's goroutines; `Stop` returns only after all three. Listener fds are close-on-exec, so an exec-self restart that skipped `Stop` leaves only a dead socket file, which the new image's stale check removes.
 - Its own `http.Server`: `ReadHeaderTimeout 5 s`, `ReadTimeout 10 s`, `WriteTimeout 10 s`, `MaxHeaderBytes 16 KiB`. Only `POST /mod/v1/events`; any other method or path → 404/405. Body cap 1 MiB → 413.
 
 ### 6.2 Wire v1
@@ -98,13 +99,14 @@ POST /mod/v1/events
   "agent": "cc",
   "cc_version": "2.1.293",             // $.session.version()
   "mod_version": "1.0.0-alpha.596",    // the extracted VERSION file; "" if unreadable
-  "dropped": 0,                        // events the mod's queue lost since the last ack
+  "dropped_total": 0,                  // events this stream lost so far (queue overflow + 400-rejected batches), cumulative
   "events": [ { "seq": 1, "at": 1791409762960, "sid": "<lowercase uuid>",
                 "type": "turn.start", "data": { … } } ] }
 ```
 
 - 200 `{"ack": N}` — N is the highest seq of this stream the daemon has applied (including earlier batches). The mod removes every queued event with `seq ≤ N`.
-- 400 `{"error": "<code>"}` for: `v` ≠ 1 (`unsupported_version`), bad JSON (`bad_json`), bad stream id (`bad_stream`), 0 or > 500 events (`bad_events`), seq not strictly increasing within the batch (`bad_seq`), a bad `sid` (`bad_sid`). The mod drops a batch answered 400 (no poison loop) and counts it.
+- 400 `{"error": "<code>"}` for: `v` ≠ 1 (`unsupported_version`), bad JSON or trailing data after the object (`bad_json`), bad stream id (`bad_stream`), 0 or > 500 events (`bad_events`), seq not strictly increasing within the batch (`bad_seq`), a bad `sid` (`bad_sid`). The mod drops a batch answered 400 (no poison loop) and adds its event count to `dropped_total`; the daemon counts the rejection on the stream when the stream id itself was valid.
+- `dropped_total` is cumulative and never reset by the mod; the daemon keeps `max(stored, received)`, so a resent batch (a 200 whose response was lost) or a batch in flight while more events are lost cannot double-count or erase a loss.
 - Events whose `seq ≤` the stream's last applied seq are skipped (retries). `seq > last + 1` increments the stream's `gaps` and is applied.
 - Unknown `type`s are accepted, counted under `unknown`, and not delivered (a newer mod against an older daemon).
 - `at` is the mod's `Date.now()` in ms; the daemon keeps it but orders only by seq.
@@ -130,7 +132,7 @@ Conversation content (`turn.step`, prompt text, `session.append`) is **not** in 
 
 ### 6.4 Daemon registry and bus (U1-1a)
 
-- `modevents.Registry`, in memory: per stream `{stream, agent, sid (latest), cwd, interactive, cc_version, mod_version, first_seen, last_seen, last_seq, gaps, dropped, rejected, counts{type→n}, ended}` and a ring of its last 256 applied events.
+- `modevents.Registry`, in memory: per stream `{stream, agent, sid (latest), cwd, interactive, cc_version, mod_version, first_seen (set once), last_seen, last_seq, gaps, dropped_total, rejected, counts{type→n}, ended}` and a ring of its last 256 applied events.
 - Delivery: `Subscribe(func(Event)) (cancel)`; events are delivered synchronously in seq order per stream (one mutex per stream), across streams concurrently. Subscribers must not block.
 - Eviction: a stream is removed 30 min after `session.end`, or after 2 h without events; at most 256 streams (oldest `last_seen` evicted first).
 - Not persisted: a daemon restart starts empty, and the next heartbeat (≤ 10 s) repopulates every live stream.
@@ -143,16 +145,17 @@ Conversation content (`turn.step`, prompt text, `session.append`) is **not** in 
 - A Go test over the embedded JS fails when any event is registered without a matcher in more than one place across `register.js`, `ask.js` and `events.js`, so a later change cannot break module loading unnoticed.
 - Reports only interactive sessions (`session.start.isInteractive`); headless runs report nothing until U4.
 - Socket path from `pdx.json` `mod_socket` (written by the extractor, U1-1a). Absent → the reporter stays off (an install older than U1-1a).
-- Hooks only observe: each calls `next(e)` and returns its result unchanged; a reporter failure never changes the engine's behaviour (every registration has `.catch` that passes through).
-- Queue: enqueue stamps `{seq: ++seq, at: Date.now(), sid: current sid}`; a flush is scheduled 150 ms later with `$.clock.after` (never awaited inside a hook). One request in flight at a time; ≤ 200 events per request; on 200 drop acked events; on failure retry with backoff 1 s, 2 s, 4 s … capped at 30 s; on 400 drop the batch and count it. Queue cap 1 000 events: overflow drops the oldest and adds to `dropped`.
+- Hooks only observe: each calls `next(e)` and returns its result unchanged; a reporter failure never changes the engine's behaviour. Every registration has `.catch(($, e, next) => next(e))`: inside a `.catch` handler `next` is replay-safe — when the hook had already called it, `next(e)` resolves to that call's settled result and nothing beneath runs again [d.ts L1158–1170] — so a reporter that throws after the tool ran neither re-runs the tool nor changes its result. Enqueueing itself never throws (guarded internally).
+- Timer callbacks are arrows that only call a top-level function with `$` (`$.clock.after(150, () => flushTick($))`), the form M-U1-2's check accepts (the probe's `$.clock.after(0, () => afterStart($, res))` loaded).
+- Queue: enqueue stamps `{seq: ++seq, at: Date.now(), sid: current sid}`; a flush is scheduled 150 ms later with `$.clock.after` (never awaited inside a hook). One request in flight at a time; ≤ 200 events per request; each request races a 5 s deadline (a request that misses it counts as failed and its late answer is ignored — resent events are deduplicated by seq). 200 → drop `seq ≤ ack`, reset backoff; failure → retry with backoff 1 s, 2 s, 4 s … capped at 30 s; 400 → drop the batch and add its size to `dropped_total`. Queue cap 1 000 events: overflow drops the oldest and adds to `dropped_total`.
 - Heartbeat every 10 s from `$.clock.every`; it is queued like any event.
-- `session.end`: queue the event, then flush **inside** the hook (awaited; the 1.5 s bound applies).
+- `session.end`: queue the event, then a **final flush inside the hook** that ignores backoff and any request in flight: one POST of every unacked event from the lowest queued seq (so a slower in-flight batch arriving later is all duplicates), at most the newest 500 (older ones add to `dropped_total`). Awaited; the 1.5 s bound cuts it if the daemon does not answer. The heartbeat is cancelled.
 - Session id: read with `$.session.id()` at `session.start` and on `classic.SessionStart{source:'clear'}`; `session.end` uses its own `sessionId`.
 - The reporter keeps the mirror state the heartbeat needs (running main turn id, open asks by tool_use_id, compacting); it derives no status.
 
 ### 6.6 Read API (U1-1b)
 
-`GET /api/mod/streams` (token auth, TCP): `{socket: {path, enabled, reason?}, streams: [ {stream, agent, sid, cwd, interactive, cc_version, mod_version, first_seen, last_seen, last_seq, gaps, dropped, rejected, ended, counts} ]}`.
+`GET /api/mod/streams` (token auth, TCP): `{socket: {path, enabled, reason?}, streams: [ {stream, agent, sid, cwd, interactive, cc_version, mod_version, first_seen, last_seen, last_seq, gaps, dropped_total, rejected, ended, counts} ]}`.
 `GET /api/mod/streams/{stream}/events?after=<seq>`: that stream's ring after `seq` (acceptance and fixture capture).
 
 ### 6.7 Acceptance and deploy (end of U1-1b)
