@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.598] - 2026-10-08
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。現有使用者沒有可見變化：目前的 SPA 連 host-events 時不帶 `nex=v1`，daemon 不會對它送出任何新事件，既有事件的行為也完全不變。SPA、`pdx` 指令、Electron 都沒有改動。
+
+### Added：worker 狀態改由主機推送的第二步 — daemon 端推送有變動的那一列（#1866 PR1b：#1905、#1906、#1907、#1908、#1911、#1916）
+
+- **推送**：daemon 監聽 Nexen 內部事件，某個 worker 的狀態、權限請求、工具進度、費用、封存等有變動時，合併 75–250 ms 後重讀那一列，經 `/ws/host-events` 推出 `nex.execution` 事件。每筆都帶連續序號，client 能察覺有沒有漏收。
+- **只送給要的人**：只有連線時帶 `?nex=v1` 的 client 才收得到；舊版 SPA 與其他 client 完全看不到這些事件，也不會因為它們被斷線。
+- **不會默默漏收**：帶 `nex=v1` 的連線，任何一則事件塞不進送出佇列就直接斷線，讓 client 重連後重新拿到完整狀態；它的佇列也加大到 1024 格，能吸收一次多個 worker 同時變動的突發。
+- **連線時的基準點**：新連線一連上就收到 `nex.executions.hello`，告訴 client 從哪個序號開始接。
+- **補抓靜默的狀態轉換**：Nexen 在 worker 跑完後轉成 idle 時不發事件（nexen#162），daemon 會在 +150 ms、+600 ms、+2 s 補讀，直到狀態不再是 running。
+- **涵蓋 Nexen v0.20.0 的 `peer_message`**：由 peer 建立的 turn 也會觸發推送；另加測試，Nexen 日後新增的事件種類都必須先分類才能通過。
+
 ## [1.0.0-alpha.597] - 2026-10-08
 
 > 動 daemon 與 SPA：**需要部署新 binary 並重啟 daemon**（SPA 部分走 HMR）。config.toml 的 `[nex]` 多一段 `[nex.peer]`，舊設定檔沒有這段時自動視為開啟；不改資料庫。
