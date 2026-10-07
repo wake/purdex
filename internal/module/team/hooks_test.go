@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -180,20 +181,137 @@ func TestTick_PrunesStaleFlagsOnTheTenthTick(t *testing.T) {
 	}
 }
 
-// Start prunes too (the registry is read on boot; a flag left by a session
-// that died while the daemon was down must not outlive the restart).
-func TestStart_PrunesStaleFlags(t *testing.T) {
+// Review F2: Start must not prune. The boot lease grace exists because a
+// CC session may not have re-registered yet (spec §9.2); a one-shot
+// registry snapshot taken then says "dead" for a session whose lead
+// request is open, and pruning on it would switch the hard lock off
+// silently. Nothing is pruned at boot — not the open request's flag, and
+// not even a flag with no row behind it: that one goes on the sweeper's
+// 10th tick as usual.
+func TestStart_DoesNotPruneFlags(t *testing.T) {
 	f := newFixture(t)
-	dead := touchLock(t, f, "cc", "sid-dead")
-	live := touchLock(t, f, "cc", "sid-1")
+	f.create(uid(1)) // sid-1 has an open lead request
+	withRow := touchLock(t, f, "cc", "sid-1")
+	noRow := touchLock(t, f, "cc", "sid-dead")
+	f.origins.markDead("sid-1") // the registry has not seen sid-1 re-register yet
 	f.origins.markDead("sid-dead")
 	if err := f.m.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if exists(dead) || !exists(live) {
-		t.Fatalf("after Start: dead=%v live=%v, want false/true", exists(dead), exists(live))
+	if !exists(withRow) {
+		t.Fatal("after Start: the flag of a session with an open lead request was pruned on a stale registry")
 	}
-	if n := f.m.pruneHookLocks(); n != 0 {
-		t.Fatalf("second prune removed %d, want 0", n)
+	if !exists(noRow) {
+		t.Fatal("after Start: a flag was pruned at boot; pruning belongs to the sweeper's 10th tick only")
+	}
+}
+
+// Review F2: the 10th-tick prune keeps a flag whose session has an open
+// lead request, whatever the registry says about the session — the open
+// request is the lock, and the flag is what makes the hook ask. Once that
+// request is closed (here: the same tick's liveness check abandons it), the
+// flag is stale and the next 10th tick removes it.
+func TestTick_KeepsFlagWithOpenRequestEvenWhenRegistrySaysDead(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1)) // sid-1 has an open lead request
+	withRow := touchLock(t, f, "cc", "sid-1")
+	noRow := touchLock(t, f, "cc", "sid-dead")
+	f.origins.markDead("sid-1")
+	f.origins.markDead("sid-dead")
+	for i := 0; i < 10; i++ {
+		f.m.tick()
+	}
+	if !exists(withRow) {
+		t.Fatal("10th tick: the flag of a session with an open lead request must stay even when the registry says the session is dead")
+	}
+	if exists(noRow) {
+		t.Fatal("10th tick: a flag with no open request behind it must be pruned")
+	}
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateAbandoned {
+		t.Fatalf("the liveness check of the same tick should have abandoned the request; state = %s", a.State)
+	}
+	for i := 0; i < 10; i++ {
+		f.m.tick()
+	}
+	if exists(withRow) {
+		t.Fatal("20th tick: the request is closed, so its flag is stale and must be pruned")
+	}
+}
+
+// Review F1: a stale hook answer must not delete a freshly created
+// request's flag. Without serialisation: the old request closes, an
+// in-flight hook's OpenByOrigin finds none, the same session creates a new
+// lead request (201) and the CLI rewrites the flag, then the stale hook's
+// removal deletes the new flag — the hard lock is silently off. The decide
+// handler therefore holds createMu from its OpenByOrigin to its removal:
+// either it finishes before the create (it removes a flag the CLI will
+// rewrite after its 201) or it sees the new request (deny, no removal).
+// afterOpenByOrigin pauses the handler in that window; the create for the
+// same origin must block until the handler releases the lock.
+func TestHookDecide_RemovalIsSerialisedWithCreate(t *testing.T) {
+	f := newFixture(t)
+	flag := touchLock(t, f, "cc", "sid-1") // stale: no open request behind it
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	f.m.afterOpenByOrigin = func() {
+		close(entered)
+		<-release
+	}
+	decided := make(chan team.HookDecideResponse, 1)
+	go func() {
+		code, body := f.do(http.MethodPost, "/api/hooks/decide", decideReq("cc", "PreToolUse", "sid-1"))
+		if code != http.StatusOK {
+			t.Errorf("decide: %d %s", code, body)
+		}
+		decided <- decodeDecide(t, body)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the decide handler did not reach afterOpenByOrigin")
+	}
+	f.m.afterOpenByOrigin = nil // only the paused handler uses the barrier
+	created := make(chan int, 1)
+	go func() {
+		code, body := f.do(http.MethodPost, "/api/team/approvals", f.createReq(uid(1)))
+		if code != http.StatusCreated {
+			t.Errorf("create: %d %s", code, body)
+		}
+		created <- code
+	}()
+	select {
+	case code := <-created:
+		t.Fatalf("create answered %d while the decide handler was between its lookup and its removal; it must wait for createMu", code)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if !exists(flag) {
+		t.Fatal("the paused handler must not have removed the flag yet")
+	}
+	close(release)
+	if d := <-decided; d.Decision != "" {
+		t.Fatalf("decide before the create = %+v, want {}", d)
+	}
+	select {
+	case <-created:
+	case <-time.After(5 * time.Second):
+		t.Fatal("create did not finish after the decide handler released createMu")
+	}
+	// The removal happened before the create: the CLI's flag, written after
+	// its 201, is a new file the stale answer cannot touch.
+	if exists(flag) {
+		t.Fatal("the stale answer's removal was not applied before the create")
+	}
+	touchLock(t, f, "cc", "sid-1")
+	if !exists(flag) {
+		t.Fatal("the flag written after the 201 must still be there")
+	}
+	// Opposite order: the request is open, so a hook sees it, denies and
+	// removes nothing.
+	code, body := f.do(http.MethodPost, "/api/hooks/decide", decideReq("cc", "PreToolUse", "sid-1"))
+	if code != http.StatusOK || decodeDecide(t, body).Decision != "deny" {
+		t.Fatalf("decide after the create: %d %s, want deny", code, body)
+	}
+	if !exists(flag) {
+		t.Fatal("a deny must leave the flag alone")
 	}
 }

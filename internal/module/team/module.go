@@ -78,6 +78,11 @@ type Module struct {
 	// closes; tests renew a lease in that window and prove the sweeper
 	// does not close on the stale copy. nil in production.
 	afterListOpen func()
+	// afterOpenByOrigin, when set, runs in handleHookDecide between its
+	// OpenByOrigin and its flag removal; tests run a create for the same
+	// origin in that window and prove it waits for createMu. nil in
+	// production.
+	afterOpenByOrigin func()
 }
 
 // New returns a Module with production defaults.
@@ -132,7 +137,11 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 
 // Start applies the boot lease grace (spec §9.2: every open request's
 // lease becomes max(lease_until, boot + 30 s), so its pdx can reconnect),
-// registers the snapshot for new subscribers and starts the sweeper.
+// registers the snapshot for new subscribers and starts the sweeper. It
+// does not prune hook lock flags: during that same grace a CC session may
+// not have re-registered, so a registry snapshot taken here would call it
+// dead and the prune would delete the flag of an open lead request. The
+// sweeper prunes on its 10th tick, and never a flag whose request is open.
 func (m *Module) Start(context.Context) error {
 	n, err := m.store.ExtendOpenLeases(m.now() + team.BootGraceS*1000)
 	if err != nil {
@@ -141,7 +150,6 @@ func (m *Module) Start(context.Context) error {
 	if n > 0 {
 		m.logf("[team] boot: extended the lease of %d open approval request(s) by %ds", n, team.BootGraceS)
 	}
-	m.pruneHookLocks()
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.sweepWG.Add(1)
 	go m.runSweeper()

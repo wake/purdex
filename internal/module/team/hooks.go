@@ -50,14 +50,21 @@ func (m *Module) handleHookDecide(w http.ResponseWriter, r *http.Request) {
 		m.writeJSON(w, http.StatusOK, team.HookDecideResponse{})
 		return
 	}
-	open, found, err := m.store.OpenByOrigin(req.SessionID, team.KindLead)
+	// The lookup and the removal are one critical section under createMu,
+	// the lock create holds across its own OpenByOrigin and insert. Without
+	// it a stale answer could delete a fresh flag: the old request closes,
+	// this lookup finds none, the same session creates a new request (201)
+	// and its CLI rewrites the flag, then the removal below deletes that new
+	// flag and the hard lock is silently off. Under the lock the answer
+	// either completes before the create (the removed flag is one the CLI
+	// rewrites after its 201) or sees the new request (deny, no removal).
+	open, found, err := m.openLeadAndRemoveStaleFlag(req)
 	if err != nil {
 		m.logf("[team] hook decide %s: %v", req.SessionID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
 	if !found {
-		m.removeHookLock(req.Agent, req.SessionID)
 		m.writeJSON(w, http.StatusOK, team.HookDecideResponse{})
 		return
 	}
@@ -72,6 +79,23 @@ func (m *Module) handleHookDecide(w http.ResponseWriter, r *http.Request) {
 		Lock:     team.HookLockLeadRequest,
 		ID:       open.ID,
 	})
+}
+
+// openLeadAndRemoveStaleFlag looks the session's open lead request up and,
+// when there is none, removes its flag — both under createMu, so no create
+// for the same origin can insert between the two (see handleHookDecide).
+func (m *Module) openLeadAndRemoveStaleFlag(req team.HookDecideRequest) (team.Approval, bool, error) {
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+	open, found, err := m.store.OpenByOrigin(req.SessionID, team.KindLead)
+	if m.afterOpenByOrigin != nil {
+		m.afterOpenByOrigin()
+	}
+	if err != nil || found {
+		return open, found, err
+	}
+	m.removeHookLock(req.Agent, req.SessionID)
+	return team.Approval{}, false, nil
 }
 
 // removeHookLock deletes the session's flag file; a missing file is fine.
@@ -91,6 +115,15 @@ func (m *Module) removeHookLock(agent, sessionID string) {
 // check and codex flags have no liveness oracle yet (nobody writes them in
 // P2c; a stale one goes through handleHookDecide's removal instead). A
 // missing directory is nothing to prune. Returns how many were removed.
+//
+// Two guards keep a valid flag alive. A registry that could not be read
+// answers "live" (peers/origin_resolver.go), so a read error prunes
+// nothing. And a flag whose session has an open lead request is never
+// pruned, whatever the registry says: the open request is the lock, the
+// flag is what makes the hook ask, and the registry can lag the session
+// (boot grace, spec §9.2 — which is also why Start does not prune). That
+// check and the removal run under createMu, like handleHookDecide's, so a
+// create cannot open a request and rewrite the flag between the two.
 func (m *Module) pruneHookLocks() int {
 	if m.dataDir == "" {
 		return 0
@@ -112,14 +145,31 @@ func (m *Module) pruneHookLocks() int {
 		if m.origins.LiveSession(sid) {
 			continue
 		}
-		if err := os.Remove(filepath.Join(dir, sid)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			m.logf("[team] prune hook lock %s: %v", sid, err)
-			continue
+		if m.pruneUnlessLeadOpen(filepath.Join(dir, sid), sid) {
+			n++
 		}
-		n++
 	}
 	if n > 0 {
 		m.logf("[team] pruned %d stale hook lock flag(s)", n)
 	}
 	return n
+}
+
+// pruneUnlessLeadOpen removes the flag at p unless its session has an open
+// lead request (or the store could not say), under createMu. Reports
+// whether the file was removed.
+func (m *Module) pruneUnlessLeadOpen(p, sid string) bool {
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+	if _, found, err := m.store.OpenByOrigin(sid, team.KindLead); err != nil {
+		m.logf("[team] prune hook lock %s: %v", sid, err)
+		return false
+	} else if found {
+		return false
+	}
+	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+		m.logf("[team] prune hook lock %s: %v", sid, err)
+		return false
+	}
+	return true
 }
