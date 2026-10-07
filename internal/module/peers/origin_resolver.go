@@ -2,6 +2,7 @@ package peers
 
 import (
 	"fmt"
+	"time"
 
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
@@ -104,6 +105,91 @@ func (r *OriginResolver) titleOf(sessionID string) string {
 		}
 	}
 	return ""
+}
+
+// Presence is what the registry and the process table say about a team's
+// lead, for a decision that cannot be undone (lead-team spec §7.1: a team
+// ends when its lead's conversation ends). Unlike LiveSession's bool it
+// keeps "could not tell" apart from "gone".
+type Presence int
+
+const (
+	PresenceUnknown Presence = iota // nothing proves the conversation ended, nor that it lives
+	PresenceLive                    // a live, non-proxy entry has the lead's session id
+	PresenceGone                    // the lead's process is dead or reused, or alive in another conversation
+)
+
+// LeadPresence is the presence of the lead whose conversation is sessionID
+// and whose process is pid, started at procStart, as its lead request
+// recorded them. A relay's /clear keeps the process, so they still name the
+// lead after its session id moves. Gone comes only from that process —
+// never from the registry alone, never from another session's file (P4-2
+// review H-3). In order:
+//  1. a live, non-proxy registry entry has sessionID: live, in whatever
+//     process;
+//  2. the lead's own process, from the process table and never the
+//     registry: no process recorded, or a start time that cannot be read,
+//     is unknown; pid dead, or alive with another start time (reused), is
+//     gone — whether or not the registry could be read;
+//  3. that process alive: its own verified entry under another session
+//     (a manual /clear began a new conversation) is gone; anything else —
+//     no entry of its own (file missing, truncated, unreadable), or a
+//     registry that is missing, empty or unlistable — is unknown.
+//
+// A relay's own /clear also leaves the pid in another conversation;
+// EndTeam's relay guard and P4-3's cleared transaction cover that.
+func (r *OriginResolver) LeadPresence(sessionID string, pid int, procStart string) Presence {
+	// A missing dir reads as empty and an error leaves entries nil: either
+	// way no entry, so only step 2 can say gone.
+	entries, _, readErr := ipeers.ReadRegistry(r.m.registryDir, r.m.liveness)
+	if readErr != nil {
+		r.m.logf("peers: origin resolver: read registry: %v", readErr)
+	}
+	proxies := r.m.proxyPIDs()
+	ownEntry := false // pid's own verified entry, under another session id
+	for _, e := range entries {
+		if e.IsProxy || proxies[e.PID] {
+			continue
+		}
+		if sessionID != "" && e.SessionID == sessionID {
+			return PresenceLive
+		}
+		ownEntry = ownEntry || e.PID == pid
+	}
+	want, err := ipeers.ParseProcStart(procStart)
+	if pid <= 0 || err != nil {
+		return PresenceUnknown
+	}
+	if !r.m.liveness.PidAlive(pid) {
+		return PresenceGone
+	}
+	got, ok := r.startTime(pid)
+	if !ok {
+		return PresenceUnknown
+	}
+	if !got.Truncate(time.Second).Equal(want.Truncate(time.Second)) {
+		return PresenceGone
+	}
+	if ownEntry {
+		return PresenceGone
+	}
+	return PresenceUnknown
+}
+
+// startTime reads pid's start time as ReadRegistryDiag does (Info when set,
+// else StartTime); ok is false when it cannot be read.
+func (r *OriginResolver) startTime(pid int) (time.Time, bool) {
+	live := r.m.liveness
+	var t time.Time
+	var err error
+	switch {
+	case live.Info != nil:
+		info, infoErr := live.Info(pid)
+		t, err = info.StartTime, infoErr
+	case live.StartTime != nil:
+		t, err = live.StartTime(pid)
+	}
+	return t, err == nil && !t.IsZero()
 }
 
 // LiveSession reports whether a live, non-proxy registry entry has this

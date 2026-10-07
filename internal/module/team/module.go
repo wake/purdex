@@ -35,6 +35,11 @@ type OriginResolver interface {
 	// inbox (P5a). Same ok/err contract.
 	ResolveOriginBySession(sessionID string) (team.Origin, bool, error)
 	LiveSession(sessionID string) bool
+	// LeadPresence is a team lead's presence for the team end (spec §7.1),
+	// which cannot be undone: tied to the lead's own process (pid and start
+	// time as its request recorded them), PresenceGone only when that
+	// process is dead, reused, or in another conversation.
+	LeadPresence(sessionID string, pid int, procStart string) peersmod.Presence
 }
 
 // Module owns team.db and serves /api/team/*.
@@ -78,6 +83,10 @@ type Module struct {
 	stopCancel context.CancelFunc
 	sweepWG    sync.WaitGroup
 	tickN      int // sweeper ticks so far; only the sweeper goroutine (or a test) touches it
+	// bootAt is when Start ran (unix ms): no team ends before bootAt +
+	// BootGraceS, the grace open requests get (spec §9.2). 0 for a module
+	// that never started (most tests): no grace.
+	bootAt int64
 
 	// createMu serialises create's check-then-insert (idempotent retry,
 	// request_open, insert) and Stop's cancel of stopCtx: a create either
@@ -131,6 +140,10 @@ type Module struct {
 	// beforeTerminalClose is a test seam run by a terminal relay report just
 	// before it closes the op's approval row (the approve that races it).
 	beforeTerminalClose func(opID string)
+	// beforeEndTeam, when set, runs in endGoneTeams after it decided the
+	// team's lead is gone and just before EndTeam; tests move a relay op of
+	// that lead in this window and prove the end loses. nil in production.
+	beforeEndTeam func(t team.Team)
 	// clearedWait / clearedPoll bound how long a cleared report waits for
 	// the registry to show the new session id (checkClearedTarget).
 	clearedWait, clearedPoll time.Duration
@@ -234,13 +247,15 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 }
 
 // Start applies the boot lease grace (spec §9.2: every open request's
-// lease becomes max(lease_until, boot + 30 s), so its pdx can reconnect),
+// lease becomes max(lease_until, boot + 30 s), so its pdx can reconnect;
+// teams get the same 30 s before an absent lead ends one, bootAt),
 // registers the snapshot for new subscribers and starts the sweeper. It
 // does not prune hook lock flags: during that same grace a CC session may
 // not have re-registered, so a registry snapshot taken here would call it
 // dead and the prune would delete the flag of an open lead request. The
 // sweeper prunes on its 10th tick, and never a flag whose request is open.
 func (m *Module) Start(context.Context) error {
+	m.bootAt = m.now() // before the sweeper starts: endGoneTeams reads it
 	// <data_dir>/relay/ exists from boot (spec §8.3); begin re-creates it
 	// too. A failure is logged, not fatal: begin reports its own.
 	if err := os.MkdirAll(m.relayDir, 0o700); err != nil {
