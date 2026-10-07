@@ -140,6 +140,9 @@ type Fake = {
   sessionId: string
   usage: { tokens?: number; window: number; percent?: number }
   clock: any
+  logs: string[]
+  failSubmit?: (text: string) => 'reject' | 'drop' | undefined // how the engine refuses a plugin's prompt
+  failCommand?: string // $.command.run rejects with this
 }
 
 const OP = { id: 'op-1', kind: 'self', host_id: 'h', session_id: 'sid-old', ref: '_abc123', state: 'awaiting_approval', handoff_path: '/data/relay/op-1.md', created_at: 1, updated_at: 1 }
@@ -151,7 +154,7 @@ const AT72 = { tokens: 144000, window: 200000, percent: 72 }
 
 function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, string> = {}): Fake {
   const f: Fake = {
-    argvs: [], submits: [], commands: [], toasts: [], statuses: [], files: {},
+    argvs: [], submits: [], commands: [], toasts: [], statuses: [], files: {}, logs: [],
     pdx: () => ({ exitCode: 0, stdout: HELLO() }),
     sessionId: 'sid-old',
     usage: { tokens: 10000, window: 200000, percent: 5 },
@@ -173,13 +176,23 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
   })
   on('ui.toast', async (_$: any, e: any) => { f.toasts.push(e.text); return { value: undefined } })
   on('ui.status', async (_$: any, e: any) => { f.statuses.push(e.text); return { value: undefined } })
-  on('ui.log', async () => ({ value: undefined }))
+  on('ui.log', async (_$: any, e: any) => { f.logs.push(e.text); return { value: undefined } })
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
   on('turn.start', async (_$: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', async (_$: any, e: any) => ({ text: e.answer }))
   on('classic.SessionStart', async () => ({}))
-  on('prompt.submit', async (_$: any, e: any) => { f.submits.push(e); return { text: e.text, context: e.context } })
-  on('command.run', async (_$: any, e: any) => { f.commands.push(e.command); return { text: 'ran ' + e.command } })
+  on('prompt.submit', async (_$: any, e: any) => {
+    f.submits.push(e)
+    const fail = f.failSubmit?.(e.text)
+    if (fail === 'drop') return { drop: 'blocked by a settings hook' }
+    if (fail === 'reject') throw new Error('the session refused the prompt')
+    return { text: e.text, context: e.context }
+  })
+  on('command.run', async (_$: any, e: any) => {
+    f.commands.push(e.command)
+    if (f.failCommand) throw new Error(f.failCommand)
+    return { text: 'ran ' + e.command }
+  })
   on('session.compact', async (_$: any, e: any) => ({ messages: e.messages }))
   return f
 }
@@ -745,4 +758,73 @@ test('after /clear nothing is asked until the new session’s hello answers', as
   await f.clock.settle()
   await turnAndSettle($, f, 't2')
   expect(count(f, 'begin')).toBe(1)
+})
+
+// Item 3 (attacker high): a step deferred to a timer that fails ends the
+// relay — the same request still in the same state reports and goes idle —
+// instead of leaving the mod in approved / clearing / seeding for good.
+// Mutation gates: drop the catch of the step → the report is missing and the
+// mod stays where it was (the handoff path still allowed, no new begin).
+const AT82 = { tokens: 164000, window: 200000, percent: 82 }
+
+for (const how of ['reject', 'drop'] as const) {
+  test(`a write prompt the session refuses (${how}) reports failed{handoff_incomplete} and the mod is idle again`, async ($, on) => {
+    const { f } = await approvedRelay($, on, undefined, { failSubmit: () => how })
+    expect(f.submits.length).toBe(1)
+    await f.clock.settle()
+    expect(reports(f)).toEqual(['relay report op-1 failed --error handoff_incomplete'])
+    expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
+    f.usage = AT82
+    await turnAndSettle($, f, 't2') // idle: +10 points asks again
+    expect(count(f, 'begin')).toBe(2)
+  })
+}
+
+test('a fix prompt the session refuses reports failed{handoff_incomplete} and the mod is idle again', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  f.failSubmit = (text) => (text.includes('不完整') ? 'reject' : undefined)
+  f.files['/data/relay/op-1.md'] = '# HANDOFF\n## 1. a\n' + 'x'.repeat(300)
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  expect(f.submits.length).toBe(2)
+  expect(reports(f)).toEqual(['relay report op-1 writing', 'relay report op-1 failed --error handoff_incomplete'])
+  expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
+  f.usage = AT82
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(2)
+})
+
+test('a /clear the session refuses reports cancelled{abandoned} (written → cancelled) and the mod is idle again', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on, undefined, { failCommand: 'a turn is running' })
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  expect(f.commands).toEqual(['clear'])
+  await clock.settle()
+  expect(reports(f)).toEqual(['relay report op-1 writing', 'relay report op-1 written', 'relay report op-1 cancelled --error abandoned'])
+  expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
+  f.usage = AT82
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(2)
+})
+
+test('a seed prompt the session refuses reports failed{handoff_incomplete}, toasts where the handoff is, and the new conversation is asked afresh', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  f.failSubmit = (text) => (text.startsWith('↪') ? 'reject' : undefined)
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  f.sessionId = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await clock.advance(50)
+  expect(f.submits.length).toBe(2)
+  await clock.settle()
+  expect(reports(f)).toEqual(['relay report op-1 writing', 'relay report op-1 written', 'relay report op-1 cleared --new-session sid-new', 'relay report op-1 failed --error handoff_incomplete'])
+  expect(f.toasts).toContain('接力未完成：接力檔在 /data/relay/op-1.md，可手動貼給新 session')
+  expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
+  await turnAndSettle($, f, 't2') // a cleared conversation: 72 % asks again (the old +10 guard was the old conversation's)
+  expect(count(f, 'begin')).toBe(2)
 })

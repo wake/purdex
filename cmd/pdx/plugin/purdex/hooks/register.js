@@ -8,6 +8,8 @@
 //   clearing ──(classic.SessionStart source=clear)──▶ seeding: report cleared --new-session, hello, seed prompt
 //   seeding ──(turn.complete of the seed turn)──▶ idle: report done, floor = tokens now
 //   awaiting ──denied / timeout / cancelled / unavailable──▶ idle (ask again at +10 points)
+//   a deferred step that fails (prompt refused, /clear refused) ──▶ idle: write / fix / seed report
+//   failed{handoff_incomplete}, /clear reports cancelled{abandoned}
 //
 // Everything that starts a turn, runs a command or waits on the daemon goes
 // out from a $.clock.after timer, never inside a hook: $.command.run rejects
@@ -28,6 +30,7 @@ const REQUIRED = ['## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.',
 const STATUS_WAITING = '接力等待核准中'
 const TOAST_WAITING = '接力等待核准：請在 Purdex App 按核准或拒絕'
 const TOAST_GAVE_UP = '接力檔不完整，已放棄接力；對話照常繼續'
+const toastSeedFailed = (path) => '接力未完成：接力檔在 ' + path + '，可手動貼給新 session'
 
 const fresh = () => ({
   interactive: false,
@@ -323,9 +326,35 @@ function settle($, p, outcome) {
   later($, STEP_MS, async () => {
     p.who = await whoami($)
     if (s.pending !== p) return
-    await $.prompt.submit({ text: writePrompt(p) })
+    try {
+      await submit($, writePrompt(p))
+    } catch (err) {
+      giveUp($, p, 'approved', 'failed', 'handoff_incomplete', 'write prompt: ' + String(err))
+      return
+    }
     report($, p.op.id, 'writing')
   })
+}
+
+// submit sends a prompt of the mod's; a prompt that did not enter — the
+// call rejected, or a hook beneath dropped it — throws, since no turn of it
+// will ever start.
+async function submit($, text) {
+  const r = await $.prompt.submit({ text })
+  if (r && r.drop !== undefined) throw new Error('prompt dropped: ' + r.drop)
+}
+
+// giveUp ends a relay whose step, deferred to a timer, failed: when the
+// same request is still in the state the step was taken in, it reports and
+// goes back to idle (asked again at +10 points), rather than leaving the
+// mod waiting for a turn or a /clear that will never come. False when the
+// relay had moved on meanwhile (nothing is reported then).
+function giveUp($, p, inState, state, error, why) {
+  log($, why)
+  if (s.pending !== p || s.state !== inState) return false
+  report($, p.op.id, state, ['--error', error])
+  toIdle()
+  return true
 }
 
 async function checkHandoff($, p) {
@@ -342,14 +371,24 @@ async function onWriteTurnDone($) {
     s.state = 'clearing'
     report($, p.op.id, 'written')
     later($, STEP_MS, async () => {
-      if (s.pending === p && s.state === 'clearing') await $.command.run({ command: 'clear' })
+      if (s.pending !== p || s.state !== 'clearing') return
+      try {
+        await $.command.run({ command: 'clear' })
+      } catch (err) {
+        giveUp($, p, 'clearing', 'cancelled', 'abandoned', '/clear: ' + String(err)) // written → cancelled
+      }
     })
     return
   }
   if (s.fixRounds < MAX_FIX_ROUNDS) {
     s.fixRounds += 1
     later($, STEP_MS, async () => {
-      if (s.pending === p) await $.prompt.submit({ text: fixPrompt(p, c.missing) })
+      if (s.pending !== p) return
+      try {
+        await submit($, fixPrompt(p, c.missing))
+      } catch (err) {
+        giveUp($, p, 'approved', 'failed', 'handoff_incomplete', 'fix prompt: ' + String(err))
+      }
     })
     return
   }
@@ -423,7 +462,16 @@ export function register(on) {
       report($, p.op.id, 'cleared', ['--new-session', await $.session.id()])
       helloLater($)
       later($, STEP_MS, async () => {
-        if (s.pending === p) await $.prompt.submit({ text: seedPrompt(p) })
+        if (s.pending !== p) return
+        try {
+          await submit($, seedPrompt(p))
+        } catch (err) {
+          if (!giveUp($, p, 'seeding', 'failed', 'handoff_incomplete', 'seed prompt: ' + String(err))) return
+          // the /clear did happen: this is a new conversation, asked afresh
+          s.floor = undefined
+          s.lastAskPct = undefined
+          $.ui.toast(toastSeedFailed(p.path))
+        }
       })
       return r
     }
