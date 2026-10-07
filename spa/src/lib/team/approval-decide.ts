@@ -1,6 +1,6 @@
 // spa/src/lib/team/approval-decide.ts — one decision, sent once (lead-team spec §6.3, §6.5, §9.4). Shared by the
 // dialog's click and by the reconnect resend (P3b), so both agree on what each answer means:
-//   200                      → closed (ours: no toast);
+//   200                      → closed (ours: no toast), then back to the requester's tab (U22, approval-goto.ts);
 //   409 + approval           → someone else got there first: close, toast who;
 //   network, host down       → the daemon is restarting: keep the decision for the reconnect snapshot;
 //   network, host connected  → nothing would resend it (the resend rides the reconnect snapshot): toast, leave it open —
@@ -24,6 +24,7 @@ import { useUndoToast } from '../../stores/useUndoToast'
 import { hostLabel, hostLookOf } from '../host-look'
 import { ApprovalApiError, decideApproval, setSelfRelayPause } from './approval-api'
 import { closedToastText } from './approval-format'
+import { gotoRequester } from './approval-goto'
 import { clientDescriptor } from './client-label'
 import type { Approval, Grant } from './types'
 
@@ -73,6 +74,14 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
       client,
     })
     useApprovalStore.getState().applyClosed(hostId, closed)
+    // U22 (a): a decision made here — a click, or a queued one resent on reconnect — goes back to the requester's tab,
+    // behind the next dialog when another request is open. Only this 200 does: never a 409, a network failure or the
+    // WS `closed` branch. A navigation that fails must not turn a decision the daemon took into a failure.
+    try {
+      gotoRequester(hostId, closed)
+    } catch (e: unknown) {
+      console.warn('[approval-decide] could not switch to the requester:', e)
+    }
     if (pauseLeft) {
       // The pause hit the network but the decision went through (PR #1742 attacker A-1): say so, as the
       // connected path does — the session was not paused and may ask again.

@@ -2,14 +2,13 @@ import { useState } from 'react'
 import { Plus, Play, Trash, PencilSimple, Check, X } from '@phosphor-icons/react'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useHostStore } from '../../stores/useHostStore'
-import { useTabStore } from '../../stores/useTabStore'
-import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useAgentStore, type AgentStatus } from '../../stores/useAgentStore'
 import { hostFetch, renameSession } from '../../lib/host-api'
 import { compositeKey } from '../../lib/composite-key'
 import { connectionErrorMessage } from '../../lib/host-utils'
-import { isRefShownNow, useIsRefShown } from '../../lib/shown-hosts'
+import { useIsRefShown } from '../../lib/shown-hosts'
+import { openSessionTab } from '../../lib/open-session-tab'
 import { SessionLauncher } from '../session-launcher/SessionLauncher'
 import type { Session } from '../../lib/host-api'
 
@@ -76,20 +75,9 @@ export function SessionsSection({ hostId }: Props) {
   // (plan H2d-2, §0.21 user rules 1 / 5). "New session" creates no tab and stays (§0.29).
   const shown = useIsRefShown(hostId)
 
+  // The hidden-host gate re-checked at the click lives in `openSessionTab` (shared with the approval switch, U22).
   const handleOpen = (session: Session) => {
-    if (!isRefShownNow(hostId)) return
-    const tabId = useTabStore.getState().openSingletonTab({
-      kind: 'tmux-session',
-      hostId,
-      sessionCode: session.code,
-      mode: 'terminal',
-      cachedName: session.name,
-      // Generation from the session payload we are opening, never from
-      // ambient host state (spec §4.5).
-      tmuxInstance: session.tmux_instance ?? '',
-    })
-    useWorkspaceStore.getState().insertTab(tabId)
-    useTabStore.getState().setActiveTab(tabId)
+    openSessionTab(hostId, session)
   }
 
   const handleDelete = async (code: string) => {

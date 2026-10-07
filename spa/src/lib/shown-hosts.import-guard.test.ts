@@ -65,11 +65,13 @@ const READER_IMPORTERS = [
   'src/lib/host-reresolve.ts',
   'src/lib/nex/handoff.ts',
   'src/lib/nex/worker-rebuild.ts',
+  'src/lib/open-session-tab.ts', // SessionsSection's open, moved with its hidden-host gate (lead-team plan v3 P9b-1)
   'src/lib/profile/switch-active.ts',
   'src/lib/rebuild/cwd-probe.ts',
   'src/lib/rebuild/host-reshow.ts',
   'src/lib/rebuild/reconcile-host.ts',
   'src/lib/rebuild/revive.ts',
+  'src/lib/team/approval-goto.ts', // U22: a decision for a host hidden here switches nothing (P9 addendum decision 1)
 ]
 
 /** Tab-closing references per file at `6858fb1f` (files absent here referenced none, or did not exist). */
