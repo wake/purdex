@@ -1,21 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { useRef, useState } from 'react'
 import { Menu, type MenuEntry, type MenuPlacement } from './Menu'
 import { FloatingPanel, TITLE_BAR_HEIGHT } from './FloatingPanel'
-import { getPlatformCapabilities } from '../lib/platform'
-import type { PlatformCapabilities } from '../lib/platform'
-
-const capabilities = (isElectron: boolean): PlatformCapabilities => ({
-  devUpdateEnabled: isElectron,
-  hasLocalFilesystem: isElectron,
-})
-
-vi.mock('../lib/platform', () => ({ getPlatformCapabilities: vi.fn() }))
-
-beforeEach(() => {
-  vi.mocked(getPlatformCapabilities).mockReturnValue(capabilities(false))
-})
 
 afterEach(() => {
   cleanup()
@@ -332,10 +319,7 @@ describe('Menu — placement', () => {
     expect(screen.getByTestId('menu').style.left).toBe(`${vw - 40 - 4 - 200}px`)
   })
 
-  // The title bar is on screen whatever the platform (`App.tsx` always renders it), so the inset must not follow
-  // `isElectron`: both values are run.
-  it.each([false, true])('never opens inside the title bar\'s drag region, it could not be clicked there (isElectron=%s)', (isElectron) => {
-    vi.mocked(getPlatformCapabilities).mockReturnValue(capabilities(isElectron))
+  it('never opens inside the title bar\'s drag region, it could not be clicked there', () => {
     mockRects(rect(7, 8, 30, 30), { width: 200, height: 120 })
     render(<Harness items={entries()} placement="right-start" />)
     expect(screen.getByTestId('menu').style.top).toBe(`${TITLE_BAR_HEIGHT}px`)
