@@ -90,7 +90,7 @@ type readSlot struct {
 
 	// The longest hold and the longest wait since the slot was built, in
 	// ms (nex_delta_slot_max_hold_ms / _max_wait_ms, which the safety
-	// reconcile prints in PR1c). Atomics: waiters record their waits
+	// reconcile prints with its counters). Atomics: waiters record their waits
 	// concurrently, and a releasing holder records its hold while the next
 	// holder may already be running.
 	maxHoldMs atomic.Int64

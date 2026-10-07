@@ -64,6 +64,8 @@ type projectorTiming struct {
 	backoffMax time.Duration   // resubscribeBackoffMax (projector_bus.go)
 	walkLimit  int             // walkPageLimit (projector_walk.go)
 	walkPages  int             // walkMaxPages (projector_walk.go)
+	reconcile  time.Duration   // reconcileInterval (projector_reconcile.go)
+	grace      time.Duration   // reconcileGrace (projector_reconcile.go)
 }
 
 func (t projectorTiming) withDefaults() projectorTiming {
@@ -93,6 +95,12 @@ func (t projectorTiming) withDefaults() projectorTiming {
 	}
 	if t.walkPages <= 0 {
 		t.walkPages = walkMaxPages
+	}
+	if t.reconcile <= 0 {
+		t.reconcile = reconcileInterval
+	}
+	if t.grace <= 0 {
+		t.grace = reconcileGrace
 	}
 	return t
 }
@@ -187,6 +195,15 @@ type projector struct {
 	kick      chan struct{}  // capacity 1: a mark changed what the worker waits for
 	maintKick chan struct{}  // capacity 1: epoch work was asked for (projector_epoch.go)
 	seeds     atomic.Int64   // seed walks finished, whatever their outcome; tests wait on it
+
+	// walkMu is held by a whole seed and a whole reconcile tick: neither
+	// ever overlaps the other or itself. Both run in the maintenance
+	// goroutine, so it only ever waits for a test calling reconcile itself.
+	walkMu sync.Mutex
+	// The safety reconcile's counters (projector_reconcile.go), since start:
+	// nex_delta_mismatch_total and nex_delta_reconcile_unseen_total.
+	mismatchTotal atomic.Int64
+	unseenTotal   atomic.Int64
 
 	mu         sync.Mutex
 	sub        *bus.Subscription     // the live subscription: set by subscribe, replaced by a resubscribe
@@ -462,7 +479,7 @@ func digestOf(row json.RawMessage) (rowDigest, error) {
 // readFailed re-marks a batch whose read failed, once, after retryDelay,
 // carrying its cause — it was never delivered — and its recheck. A batch
 // already retried is dropped with a log line (a recheck it carried ends
-// with it): its next change marks it again, and PR1c's safety reconcile
+// with it): its next change marks it again, and the safety reconcile
 // catches one that never comes.
 func (p *projector) readFailed(id string, b *dirtyExec, err error) {
 	if b.attempt > 0 {

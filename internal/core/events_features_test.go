@@ -44,6 +44,26 @@ func TestSubscriber_OptedInGetsTheBurstSizedBuffer(t *testing.T) {
 	assert.Equal(t, 1024, cap(opted.send))
 }
 
+// #1866 PR1c: HasSubscribersWanting counts only subscribers that opted into
+// the feature, and only while they are registered (the nex safety
+// reconcile runs only while someone consumes the deltas).
+func TestHasSubscribersWanting_CountsOnlyOptedInSubscribers(t *testing.T) {
+	eb := NewEventsBroadcaster()
+	assert.False(t, eb.HasSubscribersWanting(FeatureNexV1), "no subscribers")
+
+	plain := eb.AddTestSubscriber()
+	defer eb.RemoveTestSubscriber(plain)
+	assert.True(t, eb.HasSubscribers())
+	assert.False(t, eb.HasSubscribersWanting(FeatureNexV1), "a subscriber without nex counted")
+
+	opted := eb.AddTestSubscriberWith(FeatureNexV1)
+	assert.True(t, eb.HasSubscribersWanting(FeatureNexV1))
+	assert.False(t, eb.HasSubscribersWanting("other.v1"))
+
+	eb.Remove(opted)
+	assert.False(t, eb.HasSubscribersWanting(FeatureNexV1), "a removed subscriber counted")
+}
+
 // dialQuery connects to /ws/host-events with a raw query string and returns
 // the connection and the subscriber the server registered for it.
 func dialQuery(t *testing.T, server *httptest.Server, subs <-chan *EventSubscriber, query string) (*websocket.Conn, *EventSubscriber) {

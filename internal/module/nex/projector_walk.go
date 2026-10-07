@@ -15,8 +15,8 @@ import (
 // The projector's list walk (spec 2026-10-08 §3.6, §3.7, §8 R3-2): every
 // execution the list shows, page by page, through the engine's own handler.
 // It is what the projector knows the clients hold. An epoch start seeds
-// lastPushed from it (projector_epoch.go), and the safety reconcile (§3.7)
-// compares lastPushed with it.
+// lastPushed from it (projector_epoch.go), and the safety reconcile
+// (projector_reconcile.go) compares lastPushed with it.
 //
 // Each page is its own read inside the slot, with its own ver, exactly like
 // a page the list wrapper serves a client (§3.4): the slot is released

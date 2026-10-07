@@ -2,6 +2,7 @@ package nex
 
 import (
 	"context"
+	"time"
 
 	"github.com/wake/purdex/internal/core"
 )
@@ -52,11 +53,18 @@ func (p *projector) takeEpochWork() (seed, rotate bool) {
 }
 
 // maintain is the maintenance goroutine: it does the epoch work asked for,
-// one request at a time. It runs apart from the bus consumer (which must
-// never wait on the slot, §3.2) and from the flush worker (which must keep
-// flushing while a walk is between pages), and it is the only goroutine
-// that walks, so walks never overlap.
+// one request at a time, and runs the safety reconcile every reconcile
+// interval (projector_reconcile.go). It runs apart from the bus consumer
+// (which must never wait on the slot, §3.2) and from the flush worker
+// (which must keep flushing while a walk is between pages), and it is the
+// only goroutine that walks, so walks never overlap.
+//
+// Epoch work goes first, but it does not interrupt a reconcile tick in
+// progress: a resubscribe's hello can wait for one tick — its pages and its
+// grace, a second or so — which is far less than the backoff before it.
 func (p *projector) maintain() {
+	tick := time.NewTicker(p.timing.reconcile)
+	defer tick.Stop()
 	for {
 		if seed, rotate := p.takeEpochWork(); seed {
 			if rotate && !p.rotateAfterResubscribe() {
@@ -69,6 +77,8 @@ func (p *projector) maintain() {
 		case <-p.ctx.Done():
 			return
 		case <-p.maintKick:
+		case <-tick.C:
+			p.reconcile()
 		}
 	}
 }
@@ -113,6 +123,8 @@ func (p *projector) startEpochLocked() string {
 // ends the wait.
 func (p *projector) seed() {
 	defer p.seeds.Add(1)
+	p.walkMu.Lock()
+	defer p.walkMu.Unlock()
 	prev := ""
 	err := p.walk(p.ctx, "seed", 0, func(pg walkPage) error {
 		p.seedPage(pg, prev)
