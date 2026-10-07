@@ -163,6 +163,12 @@ function TestSections({ hostId }: { hostId: string }) {
         </div>
       )}
 
+      {(ended.page?.unknown_owner ?? 0) > 0 && (
+        <p data-testid="worker-test-unknown-owner" className="text-xs text-text-muted">
+          {t('settings.worker.exited.unknown_owner', { n: ended.page?.unknown_owner ?? 0 })}
+        </p>
+      )}
+
       {allEmpty && (
         <p data-testid="worker-test-empty" className="text-xs text-text-muted">{t('settings.worker.test.empty')}</p>
       )}

@@ -91,6 +91,12 @@ describe('WorkerTestTab', () => {
     expect(screen.queryByTestId('worker-test-empty')).toBeNull()
   })
 
+  it('shows the test scope\'s unknown-owner count (the normal tabs cannot see it, codex R1)', () => {
+    answer(hook({ page: page('ended', [], { unknown_owner: 3 }) }), hook({ page: page('gone', []) }))
+    render(<WorkerTestTab hostId={H} />)
+    expect(screen.getByTestId('worker-test-unknown-owner')).toHaveTextContent('3')
+  })
+
   it('an empty section is not shown', () => {
     answer(hook({ page: page('ended', [ENDED]) }), hook({ page: page('gone', []) }))
     render(<WorkerTestTab hostId={H} />)
