@@ -536,6 +536,39 @@ describe('SortableTab — worker awaiting approval', () => {
     expect(light).toHaveAttribute('aria-label', '等待核准')
   })
 
+  describe("tabIndicatorStyle 'icon' (status lights off): awaiting is still shown", () => {
+    beforeEach(() => { useUISettingsStore.setState({ tabIndicatorStyle: 'icon' }) })
+
+    it.each([false, true])('pinned=%s: the hand, titled and labelled 等待核准', (pinned) => {
+      act(() => { useI18nStore.getState().setLocale('zh-TW') })
+      seedWorker({ pending_permission: pending })
+      render(<SortableTab {...defaultProps} tab={workerTab(pinned)} pinned={pinned} />)
+      expect(screen.getByTestId('tab-status-awaiting-hand')).toBeTruthy()
+      const light = screen.getByTestId('tab-status-awaiting')
+      expect(light).toHaveAttribute('title', '等待核准')
+      expect(light).toHaveAttribute('aria-label', '等待核准')
+    })
+
+    it('cold load: a pending summary shows the hand', () => {
+      seedSummary({ pending_permission: pending })
+      render(<SortableTab {...defaultProps} tab={workerTab()} />)
+      expect(screen.getByTestId('tab-status-awaiting-hand')).toBeTruthy()
+    })
+
+    it('an ended awaiting worker: nothing', () => {
+      seedWorker({ pending_permission: pending, state: 'terminated' })
+      render(<SortableTab {...defaultProps} tab={workerTab()} />)
+      expect(screen.queryByTestId('tab-status-awaiting')).toBeNull()
+      expect(screen.queryByTestId('tab-status-indicator')).toBeNull()
+    })
+
+    it('waiting without a pending request: nothing', () => {
+      seedWorker({ pending_permission: null })
+      render(<SortableTab {...defaultProps} tab={workerTab()} />)
+      expect(screen.queryByTestId('tab-status-indicator')).toBeNull()
+    })
+  })
+
   it('no pending request: the plain waiting dot', () => {
     seedWorker({ pending_permission: null })
     render(<SortableTab {...defaultProps} tab={workerTab()} />)

@@ -79,9 +79,25 @@ describe('TabIcon — awaiting approval', () => {
     expect(screen.queryByTestId('tab-status-awaiting')).toBeNull()
   })
 
-  it('icon style shows no light at all, awaiting or not (the user turned indicators off)', () => {
+  // User decision 2026-10-08: awaiting approval is a must-show exception that overrides the lights-off ('icon') choice.
+  it('icon style: an awaiting worker still shows the hand, titled 等待核准', () => {
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
     renderIcon('icon', { awaitingApproval: true })
+    expect(screen.getByTestId('tab-status-awaiting-hand')).toBeTruthy()
+    const light = screen.getByTestId('tab-status-awaiting')
+    expect(light).toHaveAttribute('title', '等待核准')
+    expect(light).toHaveAttribute('aria-label', '等待核准')
+  })
+
+  it('icon style + awaiting + no agentStatus yet (cold start): the hand', () => {
+    renderIcon('icon', { agentStatus: undefined, awaitingApproval: true })
+    expect(screen.getByTestId('tab-status-awaiting-hand')).toBeTruthy()
+  })
+
+  it.each(['running', 'idle', 'error', 'waiting'] as const)('icon style + %s, not awaiting: nothing', (agentStatus) => {
+    renderIcon('icon', { agentStatus, isUnread: true })
     expect(screen.queryByTestId('tab-status-awaiting')).toBeNull()
     expect(screen.queryByTestId('tab-status-indicator')).toBeNull()
+    expect(screen.queryByTestId('tab-unread-pip')).toBeNull()
   })
 })

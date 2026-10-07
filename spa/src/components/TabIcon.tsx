@@ -55,7 +55,10 @@ export function TabIcon({
   // already carries the pending request while useWorkerAgentProjection (an App-level effect) has not written it.
   const status: AgentStatus | undefined = awaitingApproval ? 'waiting' : agentStatus
 
-  if (tabIndicatorStyle === 'icon' || !status) return iconBox
+  // Lights off ('icon'): only an awaiting worker still shows its light (user decision 2026-10-08 — a pending approval
+  // is a must-show exception); it falls through to the overlay layout below, with no unread tint / subagent dots.
+  const lightsOff = tabIndicatorStyle === 'icon'
+  if (!status || (lightsOff && !awaitingApproval)) return iconBox
 
   // error warning diamond suppresses the overlayed unread pip on dot wrappers —
   // error itself is already a louder signal than unread. The 「等待核准」 hand
@@ -98,10 +101,10 @@ export function TabIcon({
         status={status}
         mode="overlay"
         isActive={isActive}
-        isUnread={isUnread && !isActive}
+        isUnread={isUnread && !isActive && !lightsOff}
         awaitingApproval={awaitingApproval}
       />
-      {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} left={-4} />}
+      {!lightsOff && subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} left={-4} />}
     </span>
   )
 }
