@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.580] - 2026-10-07
+
+> 只動 daemon 原始碼的排版（gofmt）與 `make lint`，編出來的程式行為完全相同，**不需要另外部署或重啟**（579 本身要部署，照 579 的說明即可）。SPA、`pdx` 指令、Electron 都沒有改動。
+
+### Changed：Go 原始碼排版整理，第二批，main 已全數 gofmt-clean（#1651，#1833）
+
+- 剩下的 12 個 Go 檔（agent／nex／peers 模組）照 `gofmt` 重新排版；逐檔比對程式碼 token 與註解，與原本完全一致，沒有行為變化。
+- `make lint` 會先檢查 `cmd/`、`internal/` 有沒有沒排版的 Go 檔，有就列出檔名並失敗，之後才跑 `go vet`。repo 沒有 CI 也沒有 pre-commit，這個檢查只在有人跑 `make lint` 時生效。
+
 ## [1.0.0-alpha.579] - 2026-10-07
 
 > 動 daemon，**需要部署新 binary 並重啟**。沒有裝接力 mod 的 session 從這版起，跳出選擇題或權限詢問時，連線中的客戶端會看到一張「只能在終端機回答」的唯讀卡片；目前 Mac App 還不畫這種卡片（spec U19(b)），要等 iOS App 才看得到，所以 Mac App 使用者無可見變化。`pdx` 指令、SPA、Electron 都沒有改動。
