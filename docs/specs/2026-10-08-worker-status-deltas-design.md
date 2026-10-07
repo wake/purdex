@@ -148,8 +148,12 @@ Author: purdex-6d. Base: main (alpha.587). Nexen pinned v0.19.0.
 - When the consumer's channel closes while `ctx` is live (slow-subscriber kick, or the bus closing):
   - back off (100 ms, doubling to 5 s);
   - `Subscribe` again;
-  - **after** the new subscription is registered, under the slot: new epoch, `bseq = 0`, broadcast a hello to every opted-in subscriber (`nex.v1`, §3.5), and mark every execution in `lastPushed` dirty.
-  - Every client then reconciles with list pages read after the new subscription existed, so nothing between the old channel's close and the re-registration is lost.
+  - **after** the new subscription is registered, under the slot: new epoch, `bseq = 0`, broadcast a hello to every opted-in subscriber (`nex.v1`, §3.5).
+  - Then **seed `lastPushed`** from a full walk (per page, inside the slot, §8 R3-2) **without pushing**. This replaces the earlier "mark every execution dirty", which would push every row at once and overflow subscribers. A seed never overwrites a `lastPushed` entry with a newer `ver` (a delta flushed between pages).
+  - Every client then reconciles with list pages read after the new subscription existed, so nothing between the old channel's close and the re-registration is lost. The seed read is also after it, so the daemon's own baseline is current too.
+  - A subscription that is already closed when it is returned (a closed bus) is detected before the epoch rotates, so a shutdown race does not spray hellos.
+- **Daemon start** is an epoch start too: the projector seeds `lastPushed` the same way right after its first subscription.
+- **`bseq` reaching 2^53−1:** inside the slot, rotate the epoch, broadcast the hello (`bseq` 0), then number the delta 1 in the new epoch.
 - A closed bus returns an already-closed channel. The backoff keeps that from busy-looping, and `ctx` ends it.
 - An engine rebuild starts a new projector bound to the new bus.
 
