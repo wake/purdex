@@ -298,6 +298,9 @@ func leadFinish(ap team.Approval, stdout, stderr io.Writer) int {
 			return ExitError
 		}
 		fmt.Fprintln(stdout, string(out))
+		// U20 (b): the new lead is told to choose each member's model. It
+		// goes to stderr, so stdout stays the grant JSON alone.
+		fmt.Fprintln(stderr, team.ReminderAtActivation)
 		return ExitOK
 	case team.StateDenied:
 		fmt.Fprintf(stderr, "pdx lead: 申請已被拒絕%s\n", leadDecidedBy(ap))
