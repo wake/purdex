@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"lab.protype.tw/wake/nexen/api"
+	nexconfig "lab.protype.tw/wake/nexen/config"
 	"lab.protype.tw/wake/nexen/sandbox"
 
 	pdxconfig "github.com/wake/purdex/internal/config"
@@ -33,6 +34,12 @@ func TestBuildOptionsFullMapping(t *testing.T) {
 			LeaseTTL:  "30s",
 			Interrupt: "5s",
 			Turn:      "10m",
+		},
+		Peer: pdxconfig.NexPeerConfig{
+			Enabled:      true,
+			MaxPending:   0, // = Nexen's default once cfg.Validate() ran
+			WakeTemplate: "peer {{.FromName}}:\n{{.Text}}\n{{.ReplyLine}}",
+			ReplyLine:    "reply: pdx msg send {{.ReplyTo}}",
 		},
 	}
 
@@ -76,6 +83,16 @@ func TestBuildOptionsFullMapping(t *testing.T) {
 		t.Errorf("Config.ShutdownTimeout = %v, want %v", time.Duration(cfg.ShutdownTimeout), 7*time.Second)
 	}
 
+	wantPeer := nexconfig.PeerConfig{
+		Enabled:      true,
+		MaxPending:   nexconfig.DefaultPeerMaxPending,
+		WakeTemplate: n.Peer.WakeTemplate,
+		ReplyLine:    n.Peer.ReplyLine,
+	}
+	if cfg.Peer != wantPeer {
+		t.Errorf("Config.Peer = %+v, want %+v", cfg.Peer, wantPeer)
+	}
+
 	if opts.PublicPrefix != RoutePrefix {
 		t.Errorf("opts.PublicPrefix = %q, want %q", opts.PublicPrefix, RoutePrefix)
 	}
@@ -93,6 +110,31 @@ func TestBuildOptionsFullMapping(t *testing.T) {
 	}
 	if principal != "pdx:host1" {
 		t.Errorf("opts.Auth.Authenticate() principal = %q, want %q", principal, "pdx:host1")
+	}
+}
+
+// TestBuildOptionsPeerMailboxOffAndDefaults: a switched-off mailbox maps to
+// Enabled=false (Nexen then builds no mailbox), an explicit max_pending is
+// carried as is, and empty templates come back as Nexen's own wording.
+func TestBuildOptionsPeerMailboxOffAndDefaults(t *testing.T) {
+	n := pdxconfig.NexConfig{
+		RepoRoots: []string{"/repo/a"},
+		Peer:      pdxconfig.NexPeerConfig{Enabled: false, MaxPending: 5},
+	}
+
+	opts, err := buildOptions("host1", "/data", n, 0)
+	if err != nil {
+		t.Fatalf("buildOptions() error = %v, want nil", err)
+	}
+
+	want := nexconfig.PeerConfig{
+		Enabled:      false,
+		MaxPending:   5,
+		WakeTemplate: nexconfig.DefaultPeerWakeTemplate,
+		ReplyLine:    nexconfig.DefaultPeerReplyLine,
+	}
+	if opts.Config.Peer != want {
+		t.Errorf("Config.Peer = %+v, want %+v", opts.Config.Peer, want)
 	}
 }
 
