@@ -95,14 +95,12 @@ describe('ExecutionView — permission request card', () => {
     expect(holds().every((h) => h === false)).toBe(true)
   })
 
-  it('a pending request shows the card between the worker dock and the input, and holds the lease', () => {
+  it('a pending request shows the card above the input, and holds the lease', () => {
     render(<ExecutionView {...base} isActive />)
     ask('req_a')
     const card = screen.getByTestId('permission-card')
     expect(card).toHaveTextContent('echo req_a')
-    const dock = screen.getByTestId('worker-dock')
     const input = screen.getByRole('textbox')
-    expect(dock.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(card.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(holds().at(-1)).toBe(true)
   })

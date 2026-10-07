@@ -3,7 +3,7 @@
 // basename), the cost, the two lease-backed actions, and "Take to terminal"
 // (P-C.3 spec §4.4 for the session-bound path, exec-to-terminal spec §4.2 for
 // every other claude execution). Observers, lease and SSE live in the dock
-// (§4.6, `room/WorkerDock`); the turn count is gone. Pure presentation;
+// (§4.6, chips next to the state label, `HeaderStatusChips`); the turn count is gone. Pure presentation;
 // ExecutionView owns the network and decides when the control is offered.
 // The cost is an anchor button with a one-line hover summary (P-B4 spec §4.2
 // H1–H2); `cost === null` means history is not loaded yet. The button is

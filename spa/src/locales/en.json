@@ -1952,6 +1952,8 @@
   "room.dock.running_other": "{{count}} running",
   "room.dock.tasks": "Running tasks",
   "room.dock.inspect": "Show in conversation",
+  "room.tasks.main_running": "running",
+  "room.tasks.main_idle": "idle",
   "room.search.placeholder": "Search this conversation",
   "room.search.count": "{{current}} / {{total}}",
   "room.search.count_more": "{{current}} / {{total}}+",

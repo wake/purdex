@@ -21,7 +21,7 @@ import { FoldContext, useFoldMemory } from '../room/fold-context'
 import RoomUserLine from '../room/RoomUserLine'
 import { PendingAttachmentThumbs } from '../room/AttachmentThumbs'
 import { AttachmentSourceContext } from '../room/attachment-source'
-import WorkerDock from '../room/WorkerDock'
+import WorkerTaskList from '../room/WorkerTaskList'
 import WorkerInput from '../room/WorkerInput'
 import QuickReplyDock from '../room/QuickReplyDock'
 import TranscriptSearch from '../room/TranscriptSearch'
@@ -68,7 +68,7 @@ import { getNexClientId } from '../../lib/nex/client-id'
 import { defaultExecutionState, hasOpenTurn } from '../../lib/nex/event-reducer'
 import { costSummary } from '../../lib/nex/cost-summary'
 import { useThinkingGate } from './useThinkingGate'
-import { anyRunningSubagent, anyRunningTask, runningTasks, subagentTasksByToolUse } from '../../lib/nex/tasks'
+import { allTasks, anyRunningSubagent, anyRunningTask, subagentTasksByToolUse } from '../../lib/nex/tasks'
 import { indexOperations } from '../../lib/nex/operations'
 import { toolUseUnit } from '../../lib/nex/transcript-search'
 import { partialHasChatContent, partialHasVisibleContent } from '../../lib/nex/partial'
@@ -397,7 +397,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // bottom-follow, as a search jump does (the release holds with the search
   // bar closed too, until the reader is back at the bottom). The target waits in a ref so a later
   // re-render (a view switch handing over a new scroll box) never replays it.
-  const dockTasks = useMemo(() => runningTasks(st.tasks), [st.tasks])
+  const taskRows = useMemo(() => allTasks(st.tasks), [st.tasks])
   const inspectTarget = useRef<string | null>(null)
   const [inspectRequest, setInspectRequest] = useState(0)
   const onInspectTask = useCallback((toolUseId: string) => {
@@ -791,8 +791,9 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
         </AttachmentSourceContext.Provider>
         </FoldContext.Provider>
       )}
-      {/* Worker pane spec §4.6 (Q3): the worker's current state, inside the pane, above the input. Chat has none (spec §5). */}
-      {!chat && <WorkerDock sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} isMine={isMine} tasks={dockTasks} onInspect={onInspectTask} />}
+      {/* The room's task list (terminal style), between the transcript and the input. Chat has none (spec §5);
+          the stream / observers / lease facts live in the header. */}
+      {!chat && <WorkerTaskList tasks={taskRows} mainRunning={st.turnLive || st.summary?.state === 'running'} onInspect={onInspectTask} />}
       {leaseHeld && (
         <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning">
           {t('execution.lease_held', { principal: st.leaseError?.heldBy ?? '' })}
