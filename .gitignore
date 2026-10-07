@@ -2,6 +2,7 @@
 .superpowers/
 .worktrees/
 bin/
+/pdx
 node_modules/
 spa/node_modules/
 spa/dist/
@@ -11,3 +12,7 @@ dist/
 .impeccable/
 go.work
 go.work.sum
+
+# Laid in by Claude Code when the plugin folder is loaded in place (--plugin-dir)
+/cmd/pdx/plugin/purdex/tsconfig.json
+/cmd/pdx/plugin/purdex/.claude-plugin/types/
