@@ -201,3 +201,32 @@ func TestValidEffort_Table(t *testing.T) {
 		}
 	}
 }
+
+// §7.2 step 3 (D4): the tmux name derives from the op id alone, so a retry
+// after a restart names the same session.
+func TestSpawnTmuxName_FromUUID(t *testing.T) {
+	const id = "0f8e2c4a-91b3-4d5e-a6f7-1234567890ab"
+	if got := SpawnTmuxName(id); got != "tm-0f8e2c4a91" {
+		t.Fatalf("SpawnTmuxName(%q) = %q, want tm-0f8e2c4a91", id, got)
+	}
+	if SpawnTmuxName(id) != SpawnTmuxName(id) {
+		t.Fatal("not deterministic")
+	}
+	// The dash after the 8th digit is skipped; only the first 10 digits count.
+	if a, b := SpawnTmuxName("01234567-89ab-4cde-8f01-23456789abcd"), SpawnTmuxName("01234567-89ff-4fff-bfff-ffffffffffff"); a != "tm-0123456789" || a != b {
+		t.Fatalf("names = %q / %q, want tm-0123456789 for both", a, b)
+	}
+	// Callers pass validated UUIDs; anything else still yields tm- plus its
+	// first 10 non-dash characters, never a panic.
+	for in, want := range map[string]string{
+		"":                 "tm-",
+		"abc":              "tm-abc",
+		"--a-b-":           "tm-ab",
+		"0123456789abcdef": "tm-0123456789",
+		"日本語0123456789":    "tm-日本語0123456",
+	} {
+		if got := SpawnTmuxName(in); got != want {
+			t.Errorf("SpawnTmuxName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

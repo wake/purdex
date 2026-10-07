@@ -103,6 +103,28 @@ func ValidEffort(s string) bool {
 	return false
 }
 
+// SpawnTmuxName is a member's tmux session name: "tm-" plus the first 10
+// hex digits of its spawn op id with the dashes removed (spec §7.2 step 3,
+// D4). It derives from the id alone, so a retry after a restart finds the
+// session this op created. Callers pass a validated UUID v4; any other
+// string still yields "tm-" plus its first 10 non-dash characters.
+func SpawnTmuxName(opID string) string {
+	const digits = 10
+	name := []rune("tm-")
+	n := 0
+	for _, r := range opID {
+		if n == digits {
+			break
+		}
+		if r == '-' {
+			continue
+		}
+		name = append(name, r)
+		n++
+	}
+	return string(name)
+}
+
 // Team is one lead's team (spec §7.1), created in the transaction that
 // approves the lead request. Its id is that request's id (plan v3
 // deviation 1), so RequestID == ID.
