@@ -59,6 +59,33 @@ func TestNewTerminalRelay_WindowSizeOnlyForMirror(t *testing.T) {
 	assert.Equal(t, [2]uint16{132, 43}, [2]uint16{c, r})
 }
 
+// The mirror PTY is window size + status rows: tmux sizes the window from even
+// a lone ignore-size client, and a client that is exactly window-high loses the
+// status row from the window (observed: 150x44 client -> 150x43 window).
+func TestNewTerminalRelay_MirrorReadsStatusRowsOthersDont(t *testing.T) {
+	fake := tmux.NewFakeExecutor()
+
+	assert.Nil(t, newTerminalRelay(fake, "dev", "auto", false).StatusRows, "non-mirror keeps client-driven sizing")
+
+	mirror := newTerminalRelay(fake, "dev", "auto", true)
+	require.NotNil(t, mirror.StatusRows)
+	n, err := mirror.StatusRows(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, uint16(1), n)
+
+	fake.SetStatusRows(0)
+	n, _ = mirror.StatusRows(context.Background())
+	assert.Equal(t, uint16(0), n, "status off")
+
+	fake.SetStatusRows(2)
+	n, _ = mirror.StatusRows(context.Background())
+	assert.Equal(t, uint16(2), n)
+
+	fake.SetWindowSizeErr(assert.AnError)
+	_, err = mirror.StatusRows(context.Background())
+	assert.Error(t, err, "an unknown size must surface, never default")
+}
+
 func TestTerminalRelaySetup_MirrorIgnoresSizeNoOnStart(t *testing.T) {
 	fake := tmux.NewFakeExecutor()
 	for _, mode := range []string{"auto", "", "minimal-first", "terminal-first", "bogus"} {

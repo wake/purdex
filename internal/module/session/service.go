@@ -282,6 +282,11 @@ func newTerminalRelay(ex tmux.Executor, target, sizingMode string, mirror bool) 
 		relay.WindowSize = func(ctx context.Context) (uint16, uint16, error) {
 			return ex.WindowSize(ctx, target)
 		}
+		// With StatusRows the relay slaves the PTY to window + status rows,
+		// so a lone mirror client can never resize the window.
+		relay.StatusRows = func(ctx context.Context) (uint16, error) {
+			return ex.StatusRows(ctx, target)
+		}
 	}
 	return relay
 }

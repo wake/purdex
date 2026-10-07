@@ -83,6 +83,8 @@ type FakeExecutor struct {
 	windowSizeRows       uint16
 	windowSizeErr        error
 	windowSizeBlock      bool
+	statusRowsSet        bool
+	statusRows           uint16
 	// Server/global options live in their own map. Sharing windowOptions
 	// would let a caller that reaches for ShowWindowOption find a value only
 	// ShowGlobalOption can really read, and hide the bug.
@@ -896,6 +898,33 @@ func (f *FakeExecutor) WindowSize(ctx context.Context, target string) (uint16, u
 		return 0, 0, err
 	}
 	return cols, rows, nil
+}
+
+// SetStatusRows programs what StatusRows returns (default 1, tmux's usual).
+func (f *FakeExecutor) SetStatusRows(n uint16) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statusRowsSet, f.statusRows = true, n
+}
+
+// StatusRows fails and blocks exactly like WindowSize, so one programmed fault
+// covers both queries.
+func (f *FakeExecutor) StatusRows(ctx context.Context, target string) (uint16, error) {
+	f.mu.Lock()
+	block, err := f.windowSizeBlock, f.windowSizeErr
+	n := uint16(1)
+	if f.statusRowsSet {
+		n = f.statusRows
+	}
+	f.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func (f *FakeExecutor) SetWindowOption(target, option, value string) error {
