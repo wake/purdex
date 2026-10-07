@@ -41,8 +41,11 @@ export function validateQuickReplyText(text: string): string | null {
  *
  * - The collection loaded once (`quickRepliesSupported`) → what it held,
  *   whatever the current status: a failed or running reload keeps the last
- *   known copy. Revision 0 (never written) → the defaults; otherwise the
- *   stored items, **even an empty list**.
+ *   known copy. Never written — revision 0, no items AND no problem reading
+ *   them — → the defaults; otherwise the stored items, **even an empty list**,
+ *   and even at revision 0: a row edited by hand may still hold replies, or
+ *   hold only ones that did not read (#1489), and defaults shown over them
+ *   would be PUT back with the first edit.
  * - The daemon predates the collection (`unsupported`, or loaded without it)
  *   → the defaults.
  * - Anything else — no entry, idle, loading, an error before any success —
@@ -51,7 +54,8 @@ export function validateQuickReplyText(text: string): string | null {
 export function effectiveQuickReplies(entry: HostConfigEntry | undefined): readonly QuickReply[] {
   if (!entry) return NO_QUICK_REPLIES
   if (entry.quickRepliesSupported) {
-    return entry.revisions.quickReplies === 0 ? DEFAULT_QUICK_REPLIES : entry.quickReplies
+    const neverWritten = entry.revisions.quickReplies === 0 && entry.quickReplies.length === 0 && !entry.problems.quickReplies
+    return neverWritten ? DEFAULT_QUICK_REPLIES : entry.quickReplies
   }
   if (entry.status === 'unsupported' || entry.status === 'ready') return DEFAULT_QUICK_REPLIES
   return NO_QUICK_REPLIES
