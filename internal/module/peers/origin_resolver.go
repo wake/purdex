@@ -38,6 +38,36 @@ func (r *OriginResolver) ResolveOrigin(inbox string) (team.Origin, bool, error) 
 	if !found {
 		return team.Origin{}, false, nil
 	}
+	return r.originOf(e), true, nil
+}
+
+// ResolveOriginBySession is ResolveOrigin keyed by the CC session id the
+// relay mod reports (lead-team-relay spec §8.3): the live, non-proxy
+// registry entry with that session id. Two live entries for one session id
+// (a process pair mid-resume) answer the first in registry order; both
+// describe the same conversation, and the Origin fields that differ (pid,
+// inbox) are display and liveness only.
+func (r *OriginResolver) ResolveOriginBySession(sessionID string) (team.Origin, bool, error) {
+	if sessionID == "" {
+		return team.Origin{}, false, nil
+	}
+	entries, _, err := ipeers.ReadRegistry(r.m.registryDir, r.m.liveness)
+	if err != nil {
+		r.m.logf("peers: origin resolver: read registry: %v", err)
+		return team.Origin{}, false, fmt.Errorf("read registry: %w", err)
+	}
+	proxies := r.m.proxyPIDs()
+	for _, e := range entries {
+		if e.SessionID == sessionID && !e.IsProxy && !proxies[e.PID] {
+			return r.originOf(e), true, nil
+		}
+	}
+	return team.Origin{}, false, nil
+}
+
+// originOf renders a registry entry as a team.Origin: ref, address (the
+// rule GET /api/peers uses, record.go applyIdentity) and title.
+func (r *OriginResolver) originOf(e ipeers.Entry) team.Origin {
 	ref := ipeers.RefID(e.SessionID)
 	alias := r.m.configSnapshot().alias
 	addr := alias + "/" + ref
@@ -54,7 +84,7 @@ func (r *OriginResolver) ResolveOrigin(inbox string) (team.Origin, bool, error) 
 		Tmux:      e.Tmux,
 		Title:     r.titleOf(e.SessionID),
 		Address:   addr,
-	}, true, nil
+	}
 }
 
 // titleOf is the session's title from the title store, or "" when there is

@@ -51,7 +51,10 @@ const maxSendBodyBytes = 1 << 20
 // is unaffected.
 //
 // 2026-10-06: a ref changes on /clear (lead-team-relay spec M3).
-const peerNotFoundHint = "an address is `<host>/<name>`, where <name> is the session's own name — not the title it calls itself; add its ref as `<host>/<name> [<ref>]` when two sessions share a name, or use `<host>/_<ref>` alone, which survives renames (a manual /clear starts a new ref) — run `pdx peers --all` for the current addresses, or `pdx msg whoami` for your own"
+// 2026-10-07 (P5a): a relay keeps the old ref reachable through the
+// lineage (spec §8.4), so the hint says "renames and relays"; a manual
+// /clear still does not.
+const peerNotFoundHint = "an address is `<host>/<name>`, where <name> is the session's own name — not the title it calls itself; add its ref as `<host>/<name> [<ref>]` when two sessions share a name, or use `<host>/_<ref>` alone, which survives renames and relays (a manual /clear starts a new ref) — run `pdx peers --all` for the current addresses, or `pdx msg whoami` for your own"
 
 // maxDeliverRespBytes caps a remote daemon's /deliver answer: a
 // DeliverResponse or an APIError is a few hundred bytes at most, and the
