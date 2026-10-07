@@ -48,7 +48,9 @@ describe('load', () => {
     expect(e.status).toBe('ready')
     expect(e.projects).toEqual(payload.projects.items)
     expect(e.resumeTemplates).toEqual(payload.resumeTemplates.items)
-    expect(e.revisions).toEqual({ projects: 3, commands: 0, resumeTemplates: 1, quickReplies: 0 })
+    expect(e.revisions).toEqual({ projects: 3, commands: 0, resumeTemplates: 1, quickReplies: 0, relay: 0 })
+    expect(e.relaySupported).toBe(false)
+    expect(e.relay).toEqual({ self_solo: true, self_lead: true })
   })
 
   it('404 → unsupported; never throws', async () => {

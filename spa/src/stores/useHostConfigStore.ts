@@ -13,6 +13,7 @@ import {
   type HostConfigCollectionItems,
   type HostProject,
   type QuickReply,
+  type RelaySwitches,
   type ResumeTemplateOverrides,
 } from '../lib/host-config-api'
 import { useHostStore } from './useHostStore'
@@ -30,9 +31,15 @@ export interface HostConfigEntry {
    * rest of host config but not this collection, so `status` alone cannot tell.
    */
   quickRepliesSupported: boolean
-  revisions: { projects: number; commands: number; resumeTemplates: number; quickReplies: number }
+  /** Lead-team-relay spec §8.7 (a). Defaults (both on) until the daemon's copy loads. */
+  relay: RelaySwitches
+  /** The daemon's GET carried a `relay` field (P5a+). */
+  relaySupported: boolean
+  revisions: { projects: number; commands: number; resumeTemplates: number; quickReplies: number; relay: number }
   error?: string
 }
+
+export const DEFAULT_RELAY_SWITCHES: RelaySwitches = Object.freeze({ self_solo: true, self_lead: true }) as RelaySwitches
 
 export function emptyHostConfigEntry(status: HostConfigStatus = 'idle'): HostConfigEntry {
   return {
@@ -42,7 +49,9 @@ export function emptyHostConfigEntry(status: HostConfigStatus = 'idle'): HostCon
     resumeTemplates: {},
     quickReplies: [],
     quickRepliesSupported: false,
-    revisions: { projects: 0, commands: 0, resumeTemplates: 0, quickReplies: 0 },
+    relay: DEFAULT_RELAY_SWITCHES,
+    relaySupported: false,
+    revisions: { projects: 0, commands: 0, resumeTemplates: 0, quickReplies: 0, relay: 0 },
   }
 }
 
@@ -59,6 +68,7 @@ interface HostConfigState {
   saveCommands: (hostId: string, items: HostCommand[]) => Promise<void>
   saveResumeTemplates: (hostId: string, items: ResumeTemplateOverrides) => Promise<void>
   saveQuickReplies: (hostId: string, items: QuickReply[]) => Promise<void>
+  saveRelay: (hostId: string, items: RelaySwitches) => Promise<void>
   forget: (hostId: string) => void
 }
 
@@ -173,11 +183,14 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
             resumeTemplates: p.resumeTemplates.items ?? {},
             quickReplies: p.quickReplies?.items ?? [],
             quickRepliesSupported: p.quickReplies !== undefined,
+            relay: p.relay?.items ?? DEFAULT_RELAY_SWITCHES,
+            relaySupported: p.relay !== undefined,
             revisions: {
               projects: p.projects.revision,
               commands: p.commands.revision,
               resumeTemplates: p.resumeTemplates.revision,
               quickReplies: p.quickReplies?.revision ?? 0,
+              relay: p.relay?.revision ?? 0,
             },
           })
         } catch (err) {
@@ -208,6 +221,7 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
     saveCommands: (hostId, items) => save(hostId, 'commands', 'commands', items),
     saveResumeTemplates: (hostId, items) => save(hostId, 'resume-templates', 'resumeTemplates', items),
     saveQuickReplies: (hostId, items) => save(hostId, 'quick-replies', 'quickReplies', items),
+    saveRelay: (hostId, items) => save(hostId, 'relay', 'relay', items),
 
     forget: (hostId) => {
       // Dropping the entry is only half of it: an answer already in flight

@@ -76,11 +76,11 @@ func waitBootID(t *testing.T, base, not string, timeout time.Duration) string {
 // inherit, plus the overrides — built explicitly rather than appended so no
 // duplicate key decides which value wins (codex plan review #3).
 func isolatedEnv(dir, tmuxDir string) []string {
-	drop := map[string]bool{"HOME": true, "TMUX": true, "TMUX_PANE": true, "TMUX_TMPDIR": true,
-		"PDX_DEV_MODE": true, "PDX_RESTART_HELPER": true, "PDX_CODEX_STATE_ROOT": true, "PDX_CODEX_SOCKET_ROOTS": true}
+	drop := map[string]bool{"HOME": true, "TMUX": true, "TMUX_PANE": true, "TMUX_TMPDIR": true}
 	var env []string
 	for _, kv := range os.Environ() {
-		if k, _, _ := strings.Cut(kv, "="); !drop[k] {
+		// Every inherited PDX_* goes (#1569): the ones the helper needs are set below.
+		if k, _, _ := strings.Cut(kv, "="); !drop[k] && !strings.HasPrefix(k, "PDX_") {
 			env = append(env, kv)
 		}
 	}

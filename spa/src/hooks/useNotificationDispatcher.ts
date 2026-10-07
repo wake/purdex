@@ -267,9 +267,6 @@ export function useNotificationDispatcher(): void {
             broadcastTs: event.broadcast_ts,
             action: { kind: 'open-session', hostId, sessionCode },
           })
-        } else if ('Notification' in window && Notification.permission === 'granted') {
-          const n = new Notification(content.title, { body: content.body })
-          n.onclick = () => handleNotificationClick({ kind: 'open-session', hostId, sessionCode })
         }
       }
     })
@@ -434,8 +431,5 @@ function sendConnectionNotification(message: string, action: NotificationAction)
         ? { kind: 'open-session', hostId: action.hostId, sessionCode: action.sessionCode }
         : { kind: action.kind, hostId: action.hostId },
     })
-  } else if ('Notification' in window && Notification.permission === 'granted') {
-    const n = new Notification(message)
-    n.onclick = () => handleNotificationClick(action)
   }
 }

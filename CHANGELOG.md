@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.0.0-alpha.550] - 2026-10-07
+
+> 只動 SPA（快轉主 checkout 即可），daemon 不用重啟。Electron 行為不變。
+
+### Changed：SPA 純瀏覽器路徑收斂 — 第 2 批（#1746）
+
+移除通知派送在沒有 Electron 時退回 Web Notification 的兩處 fallback（`useNotificationDispatcher`），以及開發環境頁「重新載入 SPA」按鈕的 `location.reload()` fallback（該區段只在 Electron 才註冊）。
+
+## [1.0.0-alpha.549] - 2026-10-07
+
+> 純 SPA：主 checkout 快轉後 dev server 立即生效（Mac App 走 dev server 時自動帶到）；daemon、`pdx` 指令、Electron 都沒有改動，不需要重啟。
+
+### Added：lead / member / team 與 context 接力 — P5a-3b（#1742）
+
+接力的介面（spec §8.7、§6.7；plan v2 Tasks 5a.12–5a.14）。至此 P5a（daemon 接力核心）全部完成。
+
+- **Hosts › 接力**：每台主機兩個開關——「solo 的 session 自己接力」與「lead 自己接力」，預設都開；下方註明「member 的接力一律由 lead 安排」。daemon 太舊時顯示不支援、離線時鎖住；連點兩下會正確地切回原值。
+- **接力申請對話框**：session 用量到門檻時跳出，顯示主機、session、位址、ref、工作目錄、「已用 72%」與說明「核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）」，一鍵核准／拒絕（不像 lead 申請要選人數與目錄）。
+- **「這個 session 不再詢問」**：勾選後在送出決定前先暫停這個 session 的接力詢問；暫停失敗會跳提示、決定照送。daemon 重啟中（斷線）時，決定連同暫停一起排隊，重連後先暫停再送決定。
+- **通知標題**：「mlab：purdex-tester 申請接力（已用 72%）」。
+
+Review 後補強：斷線時暫停隨決定排隊、開關連點（R1）；重連時暫停失敗不再靜默、離線連點不覆寫先按的決定（攻擊方）。
+
+## [1.0.0-alpha.548] - 2026-10-07
+
+> 只動 SPA（快轉主 checkout 即可），daemon 不用重啟。Electron 行為不變。
+
+### Changed：SPA 純瀏覽器路徑收斂 — 第 1 批（#1744）
+
+產品只有 Mac App 與 iOS App，一般瀏覽器不是目標（見 project_product_platforms）。移除兩處純瀏覽器 fallback：終端機連結開啟器非 Electron 時的 `window.open`（連同 `isElectron` 參數），以及 BrowserPane 沒有 Electron 時顯示的「需要桌面版本」placeholder。其餘 `window.electronAPI` 守衛是 jsdom／Playwright 驗收的安全網，刻意不動。
+
+## [1.0.0-alpha.547] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。沒有使用者看得到的變化。
+
+### Fixed：daemon 重啟 Phase A 的幾個小後續（#1569，#1740）
+
+- boot id 的時間回退值補零到 16 碼（`crypto/rand` 失敗才會走到，實務上不會）。
+- 關機流程若 panic，不再留下偵測第二個訊號的 goroutine；它在 panic 路徑最多等 1 秒收尾，且 `done` 關閉後絕不會再呼叫 exit。
+- 重啟整合測試改為剔除所有繼承來的 `PDX_*` 環境變數。
+- #1569 其餘項目（free-port TOCTOU、boot-plan 捕捉位置的測試、`signal.Stop` 順序）仍開著。
+
 ## [1.0.0-alpha.546] - 2026-10-07
 
 > 只動 SPA（快轉主 checkout 即可），daemon 不用重啟。

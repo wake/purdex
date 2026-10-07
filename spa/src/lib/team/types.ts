@@ -68,6 +68,15 @@ export interface LeadPayload {
   roots: string[]
 }
 
+/** `Approval.payload` for kind `self_relay` (spec §8.7): the usage the mod reported when it asked. */
+export interface SelfRelayPayload {
+  op_id: string
+  used_percentage: number
+  window: number
+  model_id?: string
+  effort?: string
+}
+
 /** What the user approved, as edited in the dialog. */
 export interface Grant {
   max_members: number
@@ -170,6 +179,20 @@ export function isApproval(v: unknown): v is Approval {
     && optional(v.decided_by, isRecord)
     && optional(v.decided_at, isNumber)
     && optional(v.grant, isRecord)
+}
+
+/** The self-relay payload, defensively: a missing or non-finite percentage reads as 0, strings as ''. */
+export function selfRelayPayloadOf(a: Approval): SelfRelayPayload {
+  const p = isRecord(a.payload) ? a.payload : {}
+  const pct = typeof p.used_percentage === 'number' && Number.isFinite(p.used_percentage) ? p.used_percentage : 0
+  const window = typeof p.window === 'number' && Number.isFinite(p.window) ? Math.trunc(p.window) : 0
+  return {
+    op_id: typeof p.op_id === 'string' ? p.op_id : '',
+    used_percentage: pct,
+    window,
+    ...(typeof p.model_id === 'string' && p.model_id !== '' ? { model_id: p.model_id } : {}),
+    ...(typeof p.effort === 'string' && p.effort !== '' ? { effort: p.effort } : {}),
+  }
 }
 
 /** The lead payload, normalised as the daemon normalises it: `max_members` 0 → 3, cap 8; roots default `[origin.cwd]`. */

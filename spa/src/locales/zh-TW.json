@@ -1347,6 +1347,13 @@
   "hosts.snapshots": "快照",
   "hosts.snapshots.host_desc": "此主機上分頁的重建紀錄。",
   "hosts.peers": "對等主機",
+  "hosts.relay": "接力",
+  "hosts.relay.desc": "已用超過 70% 時，session 會先申請核准再接力；接力申請會推到所有 Purdex.app。",
+  "hosts.relay.self_solo": "一般 session 自我接力",
+  "hosts.relay.self_lead": "lead 自我接力",
+  "hosts.relay.member": "member 自我接力",
+  "hosts.relay.member_note": "member 的接力一律由 lead 安排",
+  "hosts.relay.unsupported": "這台主機的 daemon 太舊，不支援接力設定。請更新這台主機上的 pdx。",
   "peers.desc": "此主機設定的 daemon 對 daemon 配對。每次重新整理都會即時驗證兩個方向，不做快取。",
   "peers.refresh": "重新整理",
   "peers.checking": "檢查中…",
@@ -1972,5 +1979,13 @@
   "approval.dialog.deny": "拒絕",
   "approval.toast.ended_while_away": "{{host}}：{{session}} 的 {{kind}}已在離線期間結束，你的決定未送出",
   "approval.notify.title": "{{host}}：{{session}} 申請成為 lead",
-  "approval.restart.pending": "{{count}} 個申請等待核准"
+  "approval.restart.pending": "{{count}} 個申請等待核准",
+  "approval.dialog.title_self_relay": "{{host}}：{{session}} 申請接力",
+  "approval.dialog.ref": "Ref",
+  "approval.dialog.usage": "用量",
+  "approval.dialog.usage_value": "已用 {{pct}}%",
+  "approval.dialog.self_relay_note": "核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）",
+  "approval.dialog.no_more_asking": "這個 session 不再詢問",
+  "approval.dialog.pause_failed": "無法暫停這個 session 的接力詢問（{{code}}），決定照常送出",
+  "approval.notify.title_self_relay": "{{host}}：{{session}} 申請接力（已用 {{pct}}%）"
 }
