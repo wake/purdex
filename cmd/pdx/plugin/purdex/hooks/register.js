@@ -3,7 +3,7 @@
 //   idle ──(turn.complete: used ≥ threshold, growth ≥ minGrowth, +10 since last ask)──▶ beginning
 //   beginning: `pdx relay begin --self` runs from a timer ──▶ awaiting, or back to idle on a refusal
 //   awaiting: a timer loops `pdx relay wait`; every prompt.submit waits on that loop (P5b-3)
-//   awaiting ──approved──▶ approved: write prompt submitted (nonce = op id), report writing
+//   awaiting ──approved──▶ approved: write prompt submitted (a fresh nonce), report writing
 //   approved ──(turn.complete of the write turn, file ok)──▶ clearing: report written, timer → /clear
 //   clearing ──(classic.SessionStart source=clear)──▶ seeding: report cleared --new-session, hello, seed prompt
 //   seeding ──(turn.complete of the seed turn)──▶ idle: report done, floor = tokens now
@@ -45,7 +45,7 @@ const fresh = () => ({
   helloBusy: false, // the newest hello has not answered yet
   gen: 0, // bumped at every return to idle and every session change: a begin answers only for its own
   state: 'idle', // idle | beginning | awaiting | approved | clearing | seeding
-  pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, seedNonce, who, wait }
+  pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait }
   lastAskPct: undefined,
   floor: undefined,
   fixRounds: 0,
@@ -170,9 +170,29 @@ function pump($) {
   })
 }
 
+// newNonce mints the tag of one prompt of the mod's: 20 hex characters from
+// Math.random and the clock (no crypto: the module's environment is not
+// promised to have it). Unpredictable, so no other prompt can carry it.
+function newNonce() {
+  const r = () => Math.floor(Math.random() * 0x100000000).toString(16).padStart(8, '0')
+  return r() + r() + (Date.now() & 0xffff).toString(16).padStart(4, '0')
+}
+
+// arm mints the nonce of the next write / fix / seed prompt. turn.start
+// takes the turn whose text carries it, only while the mod is in `state`
+// (approved for write and fix, seeding for the seed), and only once.
+function arm(p, state) {
+  p.nonce = newNonce()
+  p.nonceState = state
+  if (state === 'approved') s.writeTurnId = undefined
+  else s.seedTurnId = undefined
+}
+
+const tag = (p) => '[pdx-relay op=' + p.op.id + ' n=' + p.nonce + ']'
+
 function writePrompt(p) {
   return [
-    '[pdx-relay op=' + p.op.id + '] 這個 session 的 context 已達接力門檻，使用者已核准接力（之後會 /clear）。',
+    tag(p) + ' 這個 session 的 context 已達接力門檻，使用者已核准接力（之後會 /clear）。',
     '請先停下手邊工作，用你完整的工具撰寫接力檔：' + p.path,
     '',
     '要求：',
@@ -200,13 +220,13 @@ function writePrompt(p) {
 }
 
 function fixPrompt(p, missing) {
-  return '[pdx-relay op=' + p.op.id + '] 接力檔 ' + p.path + ' 不完整，缺少段落：' + (missing.join('、') || '(內容過短)') + '。請補齊後只回「HANDOFF-WRITTEN」。'
+  return tag(p) + ' 接力檔 ' + p.path + ' 不完整，缺少段落：' + (missing.join('、') || '(內容過短)') + '。請補齊後只回「HANDOFF-WRITTEN」。'
 }
 
 function seedPrompt(p) {
   return [
     '↪ 接手自 ' + p.oldRef,
-    '[pdx-relay seed op=' + p.op.id + '] 你是接手的新對話：前一段對話 context 已滿並已清空。',
+    '[pdx-relay seed op=' + p.op.id + ' n=' + p.nonce + '] 你是接手的新對話：前一段對話 context 已滿並已清空。',
     '請先讀接力檔 ' + p.path + '，然後：',
     '1. 用三行複述：目標、下一步第一個動作、目前有哪些檔案異動。',
     '2. 跑 `git status` 確認與接力檔一致，不一致就指出來。',
@@ -273,8 +293,8 @@ async function begin($, sid, gen, u) {
     oldSession: sid,
     oldRef: body.op.ref,
     before: usageLine(u),
-    nonce: '[pdx-relay op=' + body.op.id + ']',
-    seedNonce: '[pdx-relay seed op=' + body.op.id + ']',
+    nonce: undefined, // minted per prompt (arm)
+    nonceState: undefined,
     who: '',
   }
   s.state = 'awaiting'
@@ -326,6 +346,7 @@ function settle($, p, outcome) {
   later($, STEP_MS, async () => {
     p.who = await whoami($)
     if (s.pending !== p) return
+    arm(p, 'approved')
     try {
       await submit($, writePrompt(p))
     } catch (err) {
@@ -365,6 +386,7 @@ async function checkHandoff($, p) {
 
 async function onWriteTurnDone($) {
   const p = s.pending
+  s.writeTurnId = undefined // checked once
   const c = await checkHandoff($, p)
   if (s.pending !== p) return
   if (c.ok) {
@@ -384,6 +406,7 @@ async function onWriteTurnDone($) {
     s.fixRounds += 1
     later($, STEP_MS, async () => {
       if (s.pending !== p) return
+      arm(p, 'approved')
       try {
         await submit($, fixPrompt(p, c.missing))
       } catch (err) {
@@ -422,12 +445,18 @@ export function register(on) {
   })
 
   // Own-turn recognition (MP3): a plugin's own prompt.submit hook never sees
-  // its own $.prompt.submit, so the write / seed turn is told by its nonce
-  // at turn.start, and acted on at the turn.complete carrying that turnId.
+  // its own $.prompt.submit, so the write / fix / seed turn is told at
+  // turn.start by the nonce minted for that prompt (arm), and acted on at the
+  // turn.complete carrying that turnId. The nonce is accepted only in the
+  // state it was minted for and only once: the turnId is sealed, and a later
+  // turn carrying the same text (an echo, a paste, another plugin) is not
+  // the relay's.
   on('turn.start', async ($, e, next) => {
-    if (s.interactive && s.pending) {
-      if (e.text.includes(s.pending.nonce)) s.writeTurnId = e.turnId
-      else if (e.text.includes(s.pending.seedNonce)) s.seedTurnId = e.turnId
+    const p = s.pending
+    if (s.interactive && p && p.nonce && s.state === p.nonceState && typeof e.text === 'string' && e.text.includes(p.nonce)) {
+      if (s.state === 'approved') s.writeTurnId = e.turnId
+      else s.seedTurnId = e.turnId
+      p.nonce = undefined
     }
     return next(e)
   })
@@ -438,8 +467,8 @@ export function register(on) {
     try {
       if (!s.helloOK && !s.helloBusy) helloLater($) // the last hello failed (daemon down): say it again
       if (s.outbox.length) { s.held.clear(); pump($) } // re-send what did not land (§8.3)
-      if (s.pending && e.turnId === s.writeTurnId) await onWriteTurnDone($)
-      else if (s.pending && e.turnId === s.seedTurnId) await onSeedTurnDone($)
+      if (s.pending && s.writeTurnId !== undefined && e.turnId === s.writeTurnId) await onWriteTurnDone($)
+      else if (s.pending && s.seedTurnId !== undefined && e.turnId === s.seedTurnId) await onSeedTurnDone($)
       else if (s.state === 'idle') await maybeBegin($)
     } catch (err) {
       log($, 'turn.complete failed: ' + String(err))
@@ -463,6 +492,7 @@ export function register(on) {
       helloLater($)
       later($, STEP_MS, async () => {
         if (s.pending !== p) return
+        arm(p, 'seeding')
         try {
           await submit($, seedPrompt(p))
         } catch (err) {
