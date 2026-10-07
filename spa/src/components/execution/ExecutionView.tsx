@@ -739,7 +739,8 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
         onInterrupt={() => void handleInterrupt()} onExit={onExit} exitDisabled={!exitable || exitBusy || takeBackBusy || exitWriteInFlight} busy={takeBackBusy || exitBusy}
         onTakeBack={takeOffered ? onTakeBack : undefined} takeBackBusy={takeBusy}
-        mode={mode} onModeChange={onModeChange} />
+        mode={mode} onModeChange={onModeChange}
+        status={chat ? undefined : { sse: st.sse, observers: st.summary?.observers ?? 0, lease: st.summary?.lease, isMine }} />
       {confirmExit && (
         <ConfirmDialog testIdPrefix="exit" title={t('worker.exit.confirm_title')} body={t('worker.exit.confirm_running')}
           confirmLabel={t('worker.exit.button')} onCancel={() => setConfirmExit(false)}

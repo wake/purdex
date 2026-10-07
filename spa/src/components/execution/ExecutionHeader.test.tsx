@@ -837,3 +837,53 @@ describe('ExecutionHeader', () => {
     })
   })
 })
+
+describe('ExecutionHeader — status chips (stream, observers, lease)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+  const mine = (p: string | undefined) => p === 'pdx:mlab/t-me'
+  const status = (over: Record<string, unknown> = {}) => ({
+    sse: 'open' as const, observers: 2, lease: { principal_id: 'pdx:mlab/t-me', expires_at: 1 }, isMine: mine, ...over,
+  })
+
+  it('room: draws the live state, observer count and lease as chips beside the state label', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} status={status()} />)
+    const chips = screen.getByTestId('header-status-chips')
+    expect(screen.getByTestId('execution-state').compareDocumentPosition(chips) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(chips).getByTestId('header-sse')).toHaveTextContent('live')
+    expect(within(chips).getByTestId('header-sse-dot').className).toMatch(/\bbg-status-success\b/)
+    expect(within(chips).getByTestId('header-observers')).toHaveTextContent('2 observers')
+    expect(within(chips).getByTestId('header-lease')).toHaveTextContent('lease: you')
+  })
+
+  it('follows the sse state and names another lease holder', () => {
+    const { rerender } = render(<ExecutionHeader {...baseProps} summary={summary()} status={status({ sse: 'idle', lease: null })} />)
+    expect(screen.getByTestId('header-sse')).toHaveTextContent('connecting')
+    expect(screen.getByTestId('header-lease')).toHaveTextContent('no lease')
+    rerender(<ExecutionHeader {...baseProps} summary={summary()} status={status({ sse: 'closed', lease: { principal_id: 'pdx:mlab/t-other', expires_at: 1 } })} />)
+    expect(screen.getByTestId('header-sse')).toHaveTextContent('disconnected')
+    expect(screen.getByTestId('header-sse-dot').className).toMatch(/\bbg-status-error\b/)
+    expect(screen.getByTestId('header-lease')).toHaveTextContent('lease: pdx:mlab/t-other')
+  })
+
+  it('the chips hide at narrow widths (@max-md) and the overflow panel carries the same facts', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} status={status({ lease: { principal_id: 'pdx:mlab/t-other', expires_at: 1 } })} />)
+    expect(screen.getByTestId('header-status-chips').className).toMatch(/@max-md:hidden/)
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    const panel = screen.getByTestId('overflow-status')
+    expect(within(panel).getByTestId('overflow-sse')).toHaveTextContent('live')
+    expect(within(panel).getByTestId('overflow-observers')).toHaveTextContent('2')
+    expect(within(panel).getByTestId('overflow-lease')).toHaveTextContent('pdx:mlab/t-other')
+  })
+
+  it('chat shows neither the chips nor the overflow rows', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} mode="chat" status={status()} />)
+    expect(screen.queryByTestId('header-status-chips')).toBeNull()
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    expect(screen.queryByTestId('overflow-status')).toBeNull()
+  })
+
+  it('draws nothing without a status', () => {
+    render(<ExecutionHeader {...baseProps} summary={summary()} />)
+    expect(screen.queryByTestId('header-status-chips')).toBeNull()
+  })
+})

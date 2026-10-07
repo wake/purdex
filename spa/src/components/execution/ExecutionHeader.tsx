@@ -34,6 +34,7 @@ import { HoverTooltip } from '../HoverTooltip'
 import { FloatingPanel } from '../FloatingPanel'
 import CostPanel from './CostPanel'
 import WorkerInfoPanel from './WorkerInfoPanel'
+import { HeaderStatusChips, HeaderStatusRows, type HeaderStatus } from './HeaderStatusChips'
 import ViewModeMenu, { ViewModeItems, ViewModeLabel } from './ViewModeMenu'
 import { workerDotClass } from '../../lib/nex/state-dot'
 import { isAwaitingApproval } from '../../lib/nex/worker-summary'
@@ -64,6 +65,11 @@ export interface ExecutionHeaderProps {
   mode?: ExecutionViewMode
   /** Switches the view (the pane writes it to its content). The view menu is therefore always offered. */
   onModeChange: (mode: ExecutionViewMode) => void
+  /**
+   * The stream state, observer count and lease holder, drawn as chips next to the state label
+   * (the overflow panel at `@max-md`). Room only — chat never shows them, and absent draws none.
+   */
+  status?: HeaderStatus
 }
 
 const ACTION = 'flex items-center gap-1 px-2 py-0.5 rounded hover:bg-surface-hover disabled:opacity-40'
@@ -76,7 +82,7 @@ const boxless = (el: HTMLElement | null) => {
 }
 
 export default function ExecutionHeader({
-  summary, cost, hostId, onInterrupt, onExit, exitDisabled, busy, onTakeBack, takeBackBusy = false, mode = 'room', onModeChange,
+  summary, cost, hostId, onInterrupt, onExit, exitDisabled, busy, onTakeBack, takeBackBusy = false, mode = 'room', onModeChange, status,
 }: ExecutionHeaderProps) {
   const t = useI18nStore((s) => s.t)
   const chat = mode === 'chat'
@@ -208,6 +214,7 @@ export default function ExecutionHeader({
         )}
         {awaiting ? t('executions.activity.awaiting_approval') : state}
       </span>
+      {!chat && status && <HeaderStatusChips {...status} />}
       {!chat && cwdBase && (
         <button type="button" data-testid="worker-name" ref={nameRef} title={summary?.cwd}
           aria-expanded={infoOpen} onClick={() => setInfoOpen((v) => !v)}
@@ -253,6 +260,12 @@ export default function ExecutionHeader({
               onClick={() => { setOverflowOpen(false); onExit() }}>
               <SignOut size={12} /> {t('worker.exit.button')}
             </button>
+            {!chat && status && (
+              <>
+                <div className="my-0.5 h-px bg-border-subtle" />
+                <HeaderStatusRows {...status} />
+              </>
+            )}
             <div className="my-0.5 h-px bg-border-subtle" />
             <div className="px-2 pt-0.5 text-[10px] text-text-muted">{t('room.view.label')}</div>
             <div role="group" aria-label={t('room.view.label')} className="flex flex-col gap-0.5">
