@@ -24,6 +24,10 @@ export const LIST_REFRESH_DEBOUNCE_MS = 500
  * Token deltas, snapshots, `lease.renewed` and the other raw provider frames
  * change nothing a row shows. Each of them used to push the trailing debounce
  * back, so a host with one streaming worker never refreshed its list (#1866).
+ * `peer_message` (Nexen v0.20.0) opens a peer turn in place of
+ * `execution.message_accepted`, so a peer wake must refresh the list too; its
+ * site-wide frame is stripped to msg_id / template_version / turn_id and only
+ * refreshes — it never reaches a pane's reducer (peer mailbox spec §7).
  * Review this list when re-pinning Nexen.
  */
 export const SITE_STREAM_KINDS = [

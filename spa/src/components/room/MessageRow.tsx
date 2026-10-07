@@ -5,11 +5,13 @@ import { Prohibit, TerminalWindow } from '@phosphor-icons/react'
 import { Fragment, type ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import {
+  isPeerMessage,
   type ContentBlock,
   type StreamMessage,
   type AssistantMessage,
   type UserMessage,
 } from '../../lib/nex/message-types'
+import PeerMessageBlock from '../peer/PeerMessageBlock'
 import { toToolCallActivity } from '../../lib/nex/tool-activity'
 import { mediaField, toolResultText } from '../../lib/nex/operations'
 import { utf8Length } from '../../lib/nex/fold'
@@ -178,6 +180,14 @@ export default function MessageRow({ msg, i, ctx, preludePos }: MessageRowProps)
     // Tool calls and results carry their hint inside OperationAt (shared with chat).
     if (!block.truncated || block.type === 'tool_use' || block.type === 'tool_result') return el
     return <Fragment key={j}>{el}<TruncatedHint shown={blockShownBytes(block)} total={block.total_bytes ?? null} /></Fragment>
+  }
+
+  // --- A peer's message (peer mailbox spec §7): its own block, never the user band ---
+  if (isPeerMessage(msg)) {
+    return (
+      <PeerMessageBlock fromName={msg.from_name} text={msg.text} at={msg.at}
+        searchUnit={searchUnitId(keyAt(ctx, i, 0), 'text')} />
+    )
   }
 
   // --- Assistant messages ---

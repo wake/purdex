@@ -6,7 +6,7 @@
 // alike.
 import { parseAttachmentMeta, type AttachmentMeta } from './attachments'
 import { isResultError } from './cost-summary'
-import type { StreamMessage } from './message-types'
+import type { PurdexPeerMessage, StreamMessage } from './message-types'
 import { defaultPreludeState, type PreludeState } from './prelude'
 import { finalizeBlock, type PartialAssembly } from './partial'
 import { applyPermissionEvent, isPermissionEventKind, settlePendingPermissions, type PermissionTable } from './permissions'
@@ -40,7 +40,8 @@ export interface TurnMeta {
  * `execution.interrupted` already decided the outcome from its `source`.
  * `resulted`: a top-level `result` stamped it, so `durationMs` is the
  * result's (or the fallback when it carried none) and no later event may
- * replace it.
+ * replace it. `peer`: a `peer_message` opened it, so none of its ends
+ * settles this pane's own send (see `endsPeerTurn`).
  */
 export interface TurnEnd {
   /** The daemon's turn_id; null for turn 1 (execution.delegated carries none) until a keyed end binds it. */
@@ -48,6 +49,7 @@ export interface TurnEnd {
   state: null | 'soft' | 'sealed'
   bySource: boolean
   resulted: boolean
+  peer: boolean
 }
 
 export interface ExecutionState {
@@ -110,7 +112,7 @@ export interface ExecutionState {
   /**
    * Index into `messages` where each turn begins, in ascending order
    * (spec §4.1). Written when the daemon says a turn opened
-   * (execution.message_accepted / execution.delegated), **before** the
+   * (execution.message_accepted / execution.delegated / peer_message), **before** the
    * bubble those events may or may not append — so the boundary is exact
    * even when the payload carried no text.
    */
@@ -228,6 +230,15 @@ export function isTaskEventKind(kind: string): boolean {
 }
 
 /**
+ * Nexen's peer mailbox kind (v0.20.0, `capabilities.peer_message`): another
+ * conversation's message opened a turn. It replaces `execution.message_accepted`
+ * for that turn and, like the provider kinds, does not start with
+ * `execution.` — so it is handled before the passthrough, which would
+ * otherwise append its raw payload as a message (peer mailbox spec §7).
+ */
+export const PEER_MESSAGE_KIND = 'peer_message'
+
+/**
  * Merge a `GET /v1/executions/{id}/tasks` snapshot into the task table (the
  * #83 correction after every SSE (re)open). Not an event: `lastSeq` and
  * everything else stay as they are. Merge rules in `tasks.ts`.
@@ -308,15 +319,40 @@ function turnBubble(text: string | undefined, rawAttachments: unknown): StreamMe
  * impossible, so a dedupe here would protect nothing. Consumers therefore
  * have to tolerate an empty turn range (`start === end`).
  */
-function markTurnStart(s: ExecutionState, createdAt: number, turnId: string | null): ExecutionState {
+function markTurnStart(s: ExecutionState, createdAt: number, turnId: string | null, peer = false): ExecutionState {
   return {
     ...s,
     // A new turn retires the last turn's 「已逾時自動拒絕」 line.
     expiredNotice: null,
     turnStarts: [...s.turnStarts, s.messages.length],
     turnMeta: [...s.turnMeta, { startAt: createdAt, endAt: null, outcome: null, durationMs: null }],
-    turnEnds: [...s.turnEnds, { turnId, state: null, bySource: false, resulted: false }],
+    turnEnds: [...s.turnEnds, { turnId, state: null, bySource: false, resulted: false, peer }],
   }
+}
+
+/**
+ * A `peer_message` (peer mailbox spec §7): the daemon opened a turn for
+ * another conversation's message. The turn starts exactly as a send's does
+ * (`message_accepted`: boundary, meta, turn_id, summary refetch), but it is
+ * not this pane's send, so `pendingLocal` / `sendLocked` / `pendingSend` are
+ * left alone — an own send still waiting is settled by its own
+ * `message_accepted` — and the turn is marked `peer`, so its ends leave them
+ * alone too (`endsPeerTurn`). The line is a synthetic `purdex_peer`, never a
+ * user bubble; a payload without `text` (the site-wide shape, which never
+ * reaches this reducer, or anything malformed) opens the turn and draws nothing.
+ */
+function applyPeerMessage(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): ExecutionState {
+  const next = markTurnStart({ ...s, summaryStale: true }, ev.created_at, str(p, 'turn_id') || null, true)
+  const text = str(p, 'text')
+  if (text === undefined) return next
+  const line: PurdexPeerMessage = {
+    type: 'purdex_peer',
+    from_name: str(p, 'from_name') ?? '',
+    text,
+    msg_id: str(p, 'msg_id') ?? '',
+    at: ev.created_at,
+  }
+  return { ...next, messages: [...next.messages, line] }
 }
 
 /**
@@ -426,6 +462,25 @@ function findEndTarget(s: ExecutionState, ev: NexEvent, p: Record<string, unknow
 }
 
 /**
+ * The main-turn end `ev` belongs to a turn a `peer_message` opened — the turn
+ * `findEndTarget` resolves (by turn_id, or the oldest unsealed for a
+ * `result`), read before the end stamps it. Such an end never settles this
+ * pane's own send (peer mailbox spec §7, PR #1923 review A-1): with the POST
+ * still unanswered, unlocking the box would let a second send overwrite
+ * `pendingLocal`, and the first `message_accepted` would then clear the wrong
+ * line. Execution-scoped ends (terminated / archived) are not exempt — the
+ * execution is over, whatever turn was running. Ends of other turns keep
+ * today's behaviour.
+ */
+function endsPeerTurn(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): boolean {
+  if (!TURN_ENDING_KINDS.has(ev.kind) || EXECUTION_SCOPED_ENDS.has(ev.kind)) return false
+  // A subagent's own result is not a main-turn end (applyTurnRules).
+  if (!isLifecycleKind(ev.kind) && p.parent_tool_use_id != null) return false
+  const target = findEndTarget(s, ev, p)
+  return target !== null && s.turnEnds[target.i].peer
+}
+
+/**
  * Stamp a turn's meta at a main-turn end (spec §7.1). The outcome is written
  * once, except that a turn-scoped lifecycle end may refine it: `interrupted`
  * wins (CC emits a result after an interrupt) and `failed` beats `ok` (a
@@ -472,6 +527,7 @@ function stampTurnEnd(s: ExecutionState, ev: NexEvent, p: Record<string, unknown
     state: end.state === 'sealed' || (!isResult && !execScoped) ? 'sealed' : 'soft',
     bySource: end.bySource || isInterrupt,
     resulted: end.resulted || isResult,
+    peer: end.peer,
   }
   return { ...s, turnMeta, turnEnds }
 }
@@ -511,7 +567,7 @@ function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unkno
     return s
   }
   if (TURN_ENDING_KINDS.has(ev.kind)) return stampTurnEnd(endTurn(s, ev.created_at), ev, p)
-  if (ev.kind === 'execution.running' || ev.kind === 'execution.message_accepted') return { ...s, turnLive: true }
+  if (ev.kind === 'execution.running' || ev.kind === 'execution.message_accepted' || ev.kind === PEER_MESSAGE_KIND) return { ...s, turnLive: true }
   if (ev.kind === 'assistant') return finalizeBlock(recordToolStarts(s, p, ev.created_at), p)
   if (ev.kind === 'user') return recordToolEnds(s, p, ev.created_at)
   return s
@@ -565,6 +621,11 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
     return { ...s, lastSeq: ev.seq, lastEventAt, permissions, expiredNotice, summaryStale: true }
   }
 
+  // Read before applyTurnRules stamps the end: does it end a peer's turn?
+  const peerEnd = endsPeerTurn(s, ev, p)
+  /** A main-turn end settles this pane's own send — unless the turn was a peer's (`endsPeerTurn`). */
+  const settle = (x: ExecutionState): ExecutionState => (peerEnd ? x : { ...x, pendingSend: false, sendLocked: false })
+
   let next: ExecutionState = applyTurnRules({ ...s, lastSeq: ev.seq, lastEventAt }, ev, p)
 
   // The N2 tool kinds are consumed by applyTurnRules alone: not a message
@@ -573,9 +634,11 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
   // are untouched.
   if (isToolEventKind(ev.kind)) return next
 
+  if (ev.kind === PEER_MESSAGE_KIND) return applyPeerMessage(next, ev, p)
+
   if (!isLifecycleKind(ev.kind)) {
     next = { ...next, messages: [...next.messages, p as StreamMessage] }
-    if (ev.kind === 'result' && p.parent_tool_use_id == null) next = { ...next, pendingSend: false, sendLocked: false }
+    if (ev.kind === 'result' && p.parent_tool_use_id == null) next = settle(next)
     return next
   }
 
@@ -608,7 +671,7 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // execution/turn.go:568 — {turn_id, reason, state, detail?}; state is
       // the execution's state after the turn ended (idle, or failed, or a
       // terminal state that outranked it), so take it rather than assume idle.
-      next = { ...next, pendingSend: false, sendLocked: false }
+      next = settle(next)
       const reason = str(p, 'reason')
       const state = str(p, 'state') ?? 'idle'
       // A request still pending when its turn ends was cancelled (turn_ended) by nexen; settle it
@@ -622,13 +685,14 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       })
     }
     case 'execution.error':
-      return patchSummary({ ...next, pendingSend: false, sendLocked: false }, {})
+      return patchSummary(settle(next), {})
     case 'execution.rejected':
       return patchSummary({ ...next, permissions: settlePendingPermissions(next.permissions) }, { state: 'rejected', pending_permission: null, ...(str(p, 'reason') ? { reject_reason: str(p, 'reason') } : {}) })
     case 'execution.terminated':
       // execution/service.go:1184 — {principal_id} only; terminal_reason is
       // the summary's business, the refetch brings it.
-      return patchSummary({ ...next, pendingSend: false, sendLocked: false, permissions: settlePendingPermissions(next.permissions) }, { state: 'terminated', pending_permission: null })
+      // Execution-scoped, so never a peer turn's end (`endsPeerTurn`): it always settles.
+      return patchSummary({ ...settle(next), permissions: settlePendingPermissions(next.permissions) }, { state: 'terminated', pending_permission: null })
     case 'execution.archived':
       return patchSummary({ ...next, permissions: settlePendingPermissions(next.permissions) }, { archived: true, pending_permission: null })
     case 'execution.unarchived':
@@ -653,12 +717,13 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // the input must not stay locked forever, so clear pendingSend;
       // pendingLocal (the optimistic bubble) is left alone — the turn is
       // still live, just orphaned from this client's view.
-      return { ...next, pendingSend: false, sendLocked: false, summaryStale: true }
+      return { ...settle(next), summaryStale: true }
     case 'execution.turn_stalled':
       // Same restart reconcile, but for a queued turn the daemon withdraws
       // outright: both the pending flag and the optimistic bubble must
-      // clear, or the input stays locked and a bubble is stuck forever.
-      return { ...next, pendingSend: false, sendLocked: false, pendingLocal: null, summaryStale: true }
+      // clear, or the input stays locked and a bubble is stuck forever. A
+      // peer's withdrawn turn was never this pane's send: its bubble stays.
+      return peerEnd ? { ...next, summaryStale: true } : { ...settle(next), pendingLocal: null, summaryStale: true }
     default:
       // interrupt_requested / interrupted …: nothing to render in P-B; the
       // summary refetch carries the state.

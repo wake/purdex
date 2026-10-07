@@ -5,7 +5,8 @@
 import type { ReactNode } from 'react'
 import { Prohibit } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import type { AssistantMessage, ContentBlock, StreamMessage, UserMessage } from '../../lib/nex/message-types'
+import { isPeerMessage, type AssistantMessage, type ContentBlock, type StreamMessage, type UserMessage } from '../../lib/nex/message-types'
+import PeerMessageBlock from '../peer/PeerMessageBlock'
 import { partialBlockKey, partialToolUses, type PartialAssembly } from '../../lib/nex/partial'
 import { toolResultText, type BlockKey } from '../../lib/nex/operations'
 import { keyAt, rowKey, type MessageIdOf } from '../../lib/nex/message-keys'
@@ -82,7 +83,16 @@ function ChatMessage({ msg, i, interrupted, lineAt, idOf }: {
     if (node) rows.push(<div key={`op-${j}`}>{node}</div>)
   }
 
-  if (msg.type === 'assistant' && 'message' in msg) {
+  if (isPeerMessage(msg)) {
+    // Peer mailbox spec §7: the room's peer block, on the left like everyone
+    // who is not you, capped like a bubble — never your right-hand bubble.
+    rows.push(
+      <div key="peer" className="flex justify-start">
+        <PeerMessageBlock fromName={msg.from_name} text={msg.text} at={msg.at}
+          searchUnit={searchUnitId(keyAt({ idOf }, i, 0), 'text')} className="w-fit max-w-[85%] @md:max-w-[70ch]" />
+      </div>,
+    )
+  } else if (msg.type === 'assistant' && 'message' in msg) {
     ;(msg as AssistantMessage).message.content.forEach((block, j) => {
       // Thinking draws nothing in chat.
       if (block.type === 'text' && block.text?.trim()) {

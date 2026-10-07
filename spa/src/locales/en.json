@@ -1594,6 +1594,8 @@
   "peer.reason.inbox_dead": "the agent's inbox is not responding",
   "peer.reason.proxy": "reached through a proxy",
   "peer.reason.ambiguous": "several agents share this session",
+  "peer.message.from": "From {{name}} · {{time}}",
+  "peer.message.from_untimed": "From {{name}}",
   "profile.master": "Master",
   "profile.switcher.trigger": "{{name}} — switch profile",
   "profile.switcher.label": "Switch profile",

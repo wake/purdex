@@ -1594,6 +1594,8 @@
   "peer.reason.inbox_dead": "agent 的 inbox 沒有回應",
   "peer.reason.proxy": "經由 proxy 連接",
   "peer.reason.ambiguous": "多個 agent 共用此 session",
+  "peer.message.from": "來自 {{name}} · {{time}}",
+  "peer.message.from_untimed": "來自 {{name}}",
   "profile.master": "工作台主檔",
   "profile.switcher.trigger": "{{name}}：切換工作台",
   "profile.switcher.label": "切換工作台",
