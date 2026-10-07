@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.547] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。沒有使用者看得到的變化。
+
+### Fixed：daemon 重啟 Phase A 的幾個小後續（#1569，#1740）
+
+- boot id 的時間回退值補零到 16 碼（`crypto/rand` 失敗才會走到，實務上不會）。
+- 關機流程若 panic，不再留下偵測第二個訊號的 goroutine；它在 panic 路徑最多等 1 秒收尾，且 `done` 關閉後絕不會再呼叫 exit。
+- 重啟整合測試改為剔除所有繼承來的 `PDX_*` 環境變數。
+- #1569 其餘項目（free-port TOCTOU、boot-plan 捕捉位置的測試、`signal.Stop` 順序）仍開著。
+
 ## [1.0.0-alpha.546] - 2026-10-07
 
 > 只動 SPA（快轉主 checkout 即可），daemon 不用重啟。
