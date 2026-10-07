@@ -42,8 +42,12 @@ type Module struct {
 	core    *core.Core
 	store   *Store
 	origins OriginResolver
-	now     func() int64 // unix ms; injectable for tests
-	logf    func(format string, args ...any)
+	// responders answers "can anyone remote answer a hook_ask right now?"
+	// (spec §6.6 step 1): the WS half (core.Events.HasSubscribers) in P8a;
+	// the iOS line adds the push registry behind the same interface.
+	responders RemoteResponders
+	now        func() int64 // unix ms; injectable for tests
+	logf       func(format string, args ...any)
 
 	// P5a: the relay switches (host config), the title mover (meta.db; nil
 	// without a meta store), the op/request id minter, the handoff
@@ -185,6 +189,9 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("team: %w", err)
 	}
 	m.store = store
+	if m.responders == nil {
+		m.responders = wsResponders{events: c.Events}
+	}
 	m.dataDir = c.Cfg.DataDir
 	m.relayDir = filepath.Join(c.Cfg.DataDir, team.RelayDir)
 	// The peers inventory reads the relay lineage through this (spec §8.4).

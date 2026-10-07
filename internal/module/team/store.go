@@ -93,9 +93,19 @@ func scanRow(r rowScanner) (team.Approval, string, error) {
 		}
 	}
 	if grant.Valid {
-		a.Grant = new(team.Grant)
-		if err := json.Unmarshal([]byte(grant.String), a.Grant); err != nil {
-			return team.Approval{}, "", fmt.Errorf("decode grant of %s: %w", a.ID, err)
+		// grant_json holds the Grant of a lead row and, in its place, the
+		// HookDecision of a hook row (the wire says the decision "rides in
+		// Grant's place"); the kind says which (P8a).
+		if team.IsHookKind(a.Kind) {
+			a.Hook = new(team.HookDecision)
+			if err := json.Unmarshal([]byte(grant.String), a.Hook); err != nil {
+				return team.Approval{}, "", fmt.Errorf("decode hook decision of %s: %w", a.ID, err)
+			}
+		} else {
+			a.Grant = new(team.Grant)
+			if err := json.Unmarshal([]byte(grant.String), a.Grant); err != nil {
+				return team.Approval{}, "", fmt.Errorf("decode grant of %s: %w", a.ID, err)
+			}
 		}
 	}
 	return a, hash, nil
@@ -159,6 +169,7 @@ type Close struct {
 	DecidedAt int64
 	DecidedBy *team.Client
 	Grant     *team.Grant
+	Hook      *team.HookDecision // hook kinds: stored in grant_json in Grant's place
 }
 
 // CloseIfOpen is the compare-and-set every close goes through: the UPDATE
@@ -202,6 +213,13 @@ func (s *Store) closeWhere(id string, c Close, guard string, guardArg int64) (te
 		b, err := json.Marshal(c.Grant)
 		if err != nil {
 			return team.Approval{}, false, fmt.Errorf("encode grant: %w", err)
+		}
+		grant = string(b)
+	}
+	if c.Hook != nil {
+		b, err := json.Marshal(c.Hook)
+		if err != nil {
+			return team.Approval{}, false, fmt.Errorf("encode hook decision: %w", err)
 		}
 		grant = string(b)
 	}

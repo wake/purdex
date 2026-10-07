@@ -98,6 +98,7 @@ type Approval struct {
 	DecidedBy  *Client         `json:"decided_by,omitempty"` // approved / denied only
 	DecidedAt  int64           `json:"decided_at,omitempty"` // any close
 	Grant      *Grant          `json:"grant,omitempty"`      // approved only
+	Hook       *HookDecision   `json:"hook,omitempty"`       // hook kinds: the answer (approved = remote, answered_local / terminal_override = terminal)
 }
 
 // CreateApprovalRequest is POST /api/team/approvals.
@@ -113,9 +114,10 @@ type CreateApprovalRequest struct {
 
 // DecideRequest is POST /api/team/approvals/{id}/decide.
 type DecideRequest struct {
-	Decision string `json:"decision"`        // "approve" | "deny"
-	Grant    *Grant `json:"grant,omitempty"` // approve only; nil → the payload's values
-	Client   Client `json:"client"`
+	Decision string        `json:"decision"`        // "approve" | "deny"
+	Grant    *Grant        `json:"grant,omitempty"` // approve only; nil → the payload's values
+	Hook     *HookDecision `json:"hook,omitempty"`  // hook kinds only: answers (hook_ask, required on approve) or behavior (hook_permission)
+	Client   Client        `json:"client"`
 }
 
 // APIError is every non-2xx body on /api/team/*.
