@@ -4,6 +4,7 @@
 // activity bar list. Loading, error-with-retry, truncation and empty states are shown here.
 import { useEffect, useMemo, useState } from 'react'
 import { useHostExecutions } from '../hooks/useHostExecutions'
+import { useListRetry } from '../hooks/useListRetry'
 import { useI18nStore } from '../stores/useI18nStore'
 import { selectRollupCostShown, selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
 import { filterLiveRows } from '../lib/nex/live-workers'
@@ -38,6 +39,8 @@ export function HostWorkerRows({ hostId, onOpen, testIdPrefix, filter, query, ho
   const live = useMemo(() => filterLiveRows(items, { filter, query, home, titleSupported }), [items, filter, query, home, titleSupported])
   const shown = useIsRefShown(hostId)
   const { requestExit, pendingIds, dialog } = useRowExit(hostId, live)
+  // The retry keeps its button (busy) while it runs and hands focus on when it settles (#1627 C).
+  const { busy: retrying, error: retryError, onRetry, bindButton: bindRetry, bindList } = useListRetry(phase, error, refetch)
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), AGE_TICK_MS)
@@ -57,7 +60,7 @@ export function HostWorkerRows({ hostId, onOpen, testIdPrefix, filter, query, ho
     )
   }
 
-  if (live.length === 0 && phase !== 'ready' && phase !== 'error') {
+  if (live.length === 0 && phase !== 'ready' && phase !== 'error' && !retrying) {
     return (
       <div data-testid={`${testIdPrefix}-loading`} className="flex flex-col gap-1.5 px-3 py-2 animate-pulse" aria-busy="true">
         <span className="text-xs text-text-muted">{t('executions.loading')}</span>
@@ -69,27 +72,33 @@ export function HostWorkerRows({ hostId, onOpen, testIdPrefix, filter, query, ho
 
   return (
     <div className="flex flex-col">
-      {phase === 'error' && (
+      {(phase === 'error' || retrying) && (
         <div data-testid={`${testIdPrefix}-error`} className="flex items-center gap-2 px-3 py-1.5 text-xs text-red-400">
-          <span className="flex-1 min-w-0 truncate">{t('newtab.workers.error', { error: error ?? '' })}</span>
+          <span className="flex-1 min-w-0 truncate">{t('newtab.workers.error', { error: retryError ?? '' })}</span>
           <button
+            ref={bindRetry}
             type="button"
             data-testid={`${testIdPrefix}-retry`}
-            onClick={refetch}
-            className="shrink-0 px-1.5 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
+            onClick={onRetry}
+            disabled={retrying}
+            aria-busy={retrying}
+            className="shrink-0 px-1.5 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-50 disabled:cursor-default"
           >
             {t('newtab.workers.retry')}
           </button>
         </div>
       )}
+      {retrying && (
+        <p data-testid={`${testIdPrefix}-loading`} role="status" className="px-3 py-1 text-xs text-text-muted">{t('executions.loading')}</p>
+      )}
       {truncated && (
         <p data-testid={`${testIdPrefix}-truncated`} className="px-3 py-1 text-xs text-text-muted">{t('executions.truncated')}</p>
       )}
-      {live.length === 0 && phase !== 'error' && !hideEmpty && (
-        <p data-testid={`${testIdPrefix}-empty`} className="px-3 py-2 text-xs text-text-muted">{t('newtab.workers.empty')}</p>
+      {live.length === 0 && phase !== 'error' && !retrying && !hideEmpty && (
+        <p ref={bindList} tabIndex={-1} data-testid={`${testIdPrefix}-empty`} className="px-3 py-2 text-xs text-text-muted outline-none">{t('newtab.workers.empty')}</p>
       )}
       {live.length > 0 && (
-        <div role="list" className="flex flex-col">
+        <div ref={bindList} tabIndex={-1} role="list" className="flex flex-col outline-none">
           {live.map((row) => (
             <ExecutionRowCompact
               key={row.id}

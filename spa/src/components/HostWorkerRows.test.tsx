@@ -91,6 +91,46 @@ describe('HostWorkerRows', () => {
     expect(screen.queryByTestId(`${P}-error`)).toBeNull()
   })
 
+  // #1627 C: a keyboard retry keeps focus — the button stays (disabled, aria-busy) while its retry runs, with a status
+  // line; a failure keeps focus on it, a success moves it to the list.
+  describe('a keyboard retry keeps its focus', () => {
+    async function failThenPress() {
+      vi.mocked(listExecutions).mockRejectedValueOnce(new Error('boom'))
+      renderRows()
+      await waitFor(() => expect(screen.getByTestId(`${P}-error`)).toBeInTheDocument())
+      let settle!: { resolve: (v: Awaited<ReturnType<typeof listExecutions>>) => void; reject: (e: unknown) => void }
+      vi.mocked(listExecutions).mockReturnValueOnce(new Promise((resolve, reject) => { settle = { resolve, reject } }))
+      screen.getByTestId(`${P}-retry`).focus()
+      fireEvent.click(screen.getByTestId(`${P}-retry`)) // Enter / Space on the focused button
+      return settle
+    }
+
+    it('the button stays, busy, with a status line while the retry runs; a failure keeps focus on it', async () => {
+      const settle = await failThenPress()
+      const retry = screen.getByTestId(`${P}-retry`)
+      expect(retry).toBeDisabled()
+      expect(retry).toHaveAttribute('aria-busy', 'true')
+      expect(screen.getByTestId(`${P}-error`)).toHaveTextContent('boom')
+      expect(screen.getByTestId(`${P}-loading`)).toHaveAttribute('role', 'status')
+      expect(screen.queryByTestId(`${P}-empty`)).toBeNull()
+      // A browser drops focus from a button that turns disabled; jsdom keeps it — so the failure must refocus it itself.
+      const refocus = vi.spyOn(retry, 'focus')
+      await act(async () => { settle.reject(new Error('again')) })
+      expect(screen.getByTestId(`${P}-retry`)).toBe(retry)
+      expect(retry).toBeEnabled()
+      expect(screen.getByTestId(`${P}-error`)).toHaveTextContent('again')
+      expect(refocus).toHaveBeenCalled()
+      expect(document.activeElement).toBe(retry)
+    })
+
+    it('a success moves focus to the list', async () => {
+      const settle = await failThenPress()
+      await act(async () => { settle.resolve({ items: [row({ id: 'E9', brief: 'fresh' })], next_cursor: '' }) })
+      expect(screen.queryByTestId(`${P}-retry`)).toBeNull()
+      expect(document.activeElement).toBe(screen.getByRole('list'))
+    })
+  })
+
   it('shows a loading state before the first page', () => {
     seed([], { phase: 'loading' })
     renderRows()

@@ -19,8 +19,9 @@ const page = (rows: ConversationRow[]): ConversationsPage => ({
 })
 function deferred<T>() {
   let resolve!: (v: T) => void
-  const promise = new Promise<T>((a) => { resolve = a })
-  return { promise, resolve }
+  let reject!: (e: unknown) => void
+  const promise = new Promise<T>((a, b) => { resolve = a; reject = b })
+  return { promise, resolve, reject }
 }
 const flush = () => act(async () => { await Promise.resolve() })
 
@@ -39,13 +40,75 @@ describe('WorkerExitedTab retry (real hook)', () => {
     listConversations.mockReturnValueOnce(d.promise)
     fireEvent.click(screen.getByTestId('worker-exited-retry'))
     expect(listConversations).toHaveBeenCalledTimes(2)
-    expect(screen.queryByTestId('worker-exited-error')).toBeNull()
-    expect(screen.getByTestId('worker-exited-loading')).toHaveAttribute('aria-busy', 'true')
+    // #1627 C: the error line and its button stay while the retry runs (the button busy); the loading line is a status.
+    expect(screen.getByTestId('worker-exited-error')).toHaveTextContent('conversations_unavailable')
+    expect(screen.getByTestId('worker-exited-loading')).toHaveAttribute('role', 'status')
 
     await act(async () => { d.resolve(page([row({ session_id: 's1', title: 'one' }), row({ session_id: 's2', title: 'two' })])) })
     expect(screen.queryByTestId('worker-exited-loading')).toBeNull()
+    expect(screen.queryByTestId('worker-exited-error')).toBeNull()
     expect(screen.getAllByTestId('conversation-row')).toHaveLength(2)
     expect(screen.getByRole('list')).not.toHaveAttribute('aria-busy')
+  })
+
+  // #1627 C: a keyboard retry keeps keyboard focus. The button stays mounted (disabled, aria-busy) while the retry
+  // runs; a failure keeps focus on it, a success moves it to the list — only when the button had focus at the press
+  // and focus has not gone elsewhere since.
+  describe('focus', () => {
+    const failed = async () => {
+      listConversations.mockRejectedValueOnce(new HandoffApiError(503, 'conversations_unavailable', {}, 'down'))
+      render(<WorkerExitedTab hostId="h1" />)
+      await flush()
+      const d = deferred<ConversationsPage>()
+      listConversations.mockReturnValueOnce(d.promise)
+      return d
+    }
+    const retryBtn = () => screen.getByTestId('worker-exited-retry')
+    // Enter / Space on a focused button is a click on it.
+    const pressByKeyboard = () => { retryBtn().focus(); fireEvent.click(retryBtn()) }
+
+    it('the button stays, busy, while the retry runs; a failure keeps focus on it', async () => {
+      const d = await failed()
+      pressByKeyboard()
+      const btn = retryBtn()
+      expect(btn).toBeDisabled()
+      expect(btn).toHaveAttribute('aria-busy', 'true')
+      // A browser drops focus from a button that turns disabled (ConfirmDialog's note); jsdom keeps it, so what proves
+      // the failure path is that it focuses the button again itself.
+      const refocus = vi.spyOn(btn, 'focus')
+      await act(async () => { d.reject(new HandoffApiError(503, 'still_down', {}, 'down')) })
+      expect(retryBtn()).toBe(btn)
+      expect(btn).toBeEnabled()
+      expect(btn).toHaveAttribute('aria-busy', 'false')
+      expect(screen.getByTestId('worker-exited-error')).toHaveTextContent('still_down')
+      expect(refocus).toHaveBeenCalled()
+      expect(document.activeElement).toBe(btn)
+    })
+
+    it('a success moves focus to the list', async () => {
+      const d = await failed()
+      pressByKeyboard()
+      await act(async () => { d.resolve(page([row({ session_id: 's1', title: 'one' })])) })
+      expect(screen.queryByTestId('worker-exited-retry')).toBeNull()
+      expect(document.activeElement).toBe(screen.getByRole('list'))
+    })
+
+    it('a press without focus on the button (a pointer that does not focus it) moves no focus', async () => {
+      const d = await failed()
+      expect(document.activeElement).toBe(document.body)
+      fireEvent.click(retryBtn())
+      await act(async () => { d.resolve(page([row({ session_id: 's1', title: 'one' })])) })
+      expect(document.activeElement).toBe(document.body)
+    })
+
+    it('focus moved elsewhere while the retry ran is left alone', async () => {
+      const d = await failed()
+      pressByKeyboard()
+      const search = screen.getByTestId('worker-exited-search')
+      search.focus()
+      await act(async () => { d.resolve(page([row({ session_id: 's1', title: 'one' })])) })
+      expect(document.activeElement).toBe(search)
+    })
   })
 
   it('a 404 (Nexen disabled) shows the unavailable notice, not the error line', async () => {
