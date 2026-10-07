@@ -78,6 +78,11 @@ type FakeExecutor struct {
 	autoResizeCalls      []string              // targets passed to ResizeWindowAuto
 	setWindowOptionCalls []SetWindowOptionCall // calls to SetWindowOption
 	windowOptions        map[string]string
+	windowSizeSet        bool
+	windowSizeCols       uint16
+	windowSizeRows       uint16
+	windowSizeErr        error
+	windowSizeBlock      bool
 	// Server/global options live in their own map. Sharing windowOptions
 	// would let a caller that reaches for ShowWindowOption find a value only
 	// ShowGlobalOption can really read, and hide the bug.
@@ -852,6 +857,45 @@ func (f *FakeExecutor) AutoResizeCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.autoResizeCalls
+}
+
+// SetWindowSize programs what WindowSize returns (default 80x24).
+func (f *FakeExecutor) SetWindowSize(cols, rows uint16) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.windowSizeSet, f.windowSizeCols, f.windowSizeRows = true, cols, rows
+}
+
+// SetWindowSizeErr makes WindowSize fail with err (nil clears it).
+func (f *FakeExecutor) SetWindowSizeErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.windowSizeErr = err
+}
+
+// BlockWindowSize makes WindowSize block until its ctx is cancelled.
+func (f *FakeExecutor) BlockWindowSize(block bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.windowSizeBlock = block
+}
+
+func (f *FakeExecutor) WindowSize(ctx context.Context, target string) (uint16, uint16, error) {
+	f.mu.Lock()
+	block, err := f.windowSizeBlock, f.windowSizeErr
+	cols, rows := uint16(80), uint16(24)
+	if f.windowSizeSet {
+		cols, rows = f.windowSizeCols, f.windowSizeRows
+	}
+	f.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return 0, 0, ctx.Err()
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	return cols, rows, nil
 }
 
 func (f *FakeExecutor) SetWindowOption(target, option, value string) error {

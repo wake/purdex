@@ -138,6 +138,9 @@ type Executor interface {
 	PaneSize(target string) (cols, rows int, err error)
 	ResizeWindow(target string, cols, rows int) error
 	ResizeWindowAuto(target string) error
+	// WindowSize returns the actual size of the target's current window
+	// (`#{window_width} #{window_height}`). ctx cancels a stuck query.
+	WindowSize(ctx context.Context, target string) (cols, rows uint16, err error)
 	SetWindowOption(target, option, value string) error
 	SetWindowOptionGlobal(option, value string) error
 	ShowWindowOption(option string) (string, error)
@@ -722,6 +725,29 @@ func (r *RealExecutor) ResizeWindow(target string, cols, rows int) error {
 
 func (r *RealExecutor) ResizeWindowAuto(target string) error {
 	return exec.Command("tmux", "resize-window", "-A", "-t", target).Run()
+}
+
+func (r *RealExecutor) WindowSize(ctx context.Context, target string) (uint16, uint16, error) {
+	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", target,
+		"#{window_width} #{window_height}").Output()
+	if err != nil {
+		return 0, 0, fmt.Errorf("tmux display-message window size: %w", err)
+	}
+	return parseWindowSize(string(out))
+}
+
+// parseWindowSize parses "<cols> <rows>"; both must be in 1..65535.
+func parseWindowSize(s string) (uint16, uint16, error) {
+	f := strings.Fields(s)
+	if len(f) != 2 {
+		return 0, 0, fmt.Errorf("parse window size: %q", s)
+	}
+	c, err1 := strconv.ParseUint(f[0], 10, 16)
+	r, err2 := strconv.ParseUint(f[1], 10, 16)
+	if err1 != nil || err2 != nil || c == 0 || r == 0 {
+		return 0, 0, fmt.Errorf("parse window size: %q", s)
+	}
+	return uint16(c), uint16(r), nil
 }
 
 func (r *RealExecutor) SetWindowOption(target, option, value string) error {
