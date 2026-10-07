@@ -37,6 +37,7 @@ import (
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/agent/codex"
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
@@ -64,18 +65,17 @@ func setupScreenChangeIntegration(
 		sessions: []session.SessionInfo{{Code: "code-work", Name: "work"}},
 	}
 
-	// Replace the registry so the codex provider declares ONLY
-	// ScreenChange. Skipping ProcessDead avoids a goroutine leak
-	// (its consumeSignals teardown writes to traceSink, and the test
-	// cleanup ordering closes the sink before the polling goroutine
-	// drains, causing send-on-closed-channel panic). For W6-6 path
-	// coverage ProcessDead is irrelevant — its dispatcher routing is
-	// already covered by W6-3 wire/integration tests.
+	// The codex provider declares BOTH intents, as in production. The
+	// ProcessDead detector is held to "always alive" so it never emits; its
+	// consumeSignals teardown may still write a trace after the test body
+	// ends, which is now safe: the sink drops (not panics) once closed.
 	m.registry = agentpkg.NewRegistry()
 	m.registry.Register(&fakeProbeIntentAgentProvider{
 		fakeAgentProvider: fakeAgentProvider{typeName: "codex"},
-		intents:           []agentpkg.ProbeIntent{screenChangeIntent()},
+		intents:           []agentpkg.ProbeIntent{processDeadIntent(), screenChangeIntent()},
 	})
+	t.Cleanup(codex.SetProcessDeadPollIntervalForTest(50 * time.Millisecond))
+	t.Cleanup(codex.SetIsPidAliveFnForTest(func(int) bool { return true }))
 
 	if fake, ok := getFakeTmux(t, m); ok {
 		fake.SetPanes([]string{"%5"})
@@ -92,19 +92,6 @@ func setupScreenChangeIntegration(
 	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
 	sub := m.core.Events.AddTestSubscriber()
 	t.Cleanup(func() { m.core.Events.RemoveTestSubscriber(sub) })
-
-	// Drain consumeSignals goroutine before traceSink.Close() runs in
-	// newTestModule's cleanup. waitFor predicates in tests key off the
-	// active intent map, which empties at probe_intent_dispatcher.go
-	// stopActiveIntentInLock — but consumeSignals continues for a few
-	// more lines (emitStopObservability → traceSink.AppendProbeIntent
-	// → for-range exit). Without this drain, traceSink.Close() can
-	// race the still-running goroutine and panic with send-on-closed.
-	//
-	// LIFO cleanup order: this registers AFTER newTestModule's
-	// traceSink.Close cleanup but FIRST in execution; so this drain
-	// runs before Close.
-	t.Cleanup(func() { time.Sleep(50 * time.Millisecond) })
 
 	return m, fw, sub
 }

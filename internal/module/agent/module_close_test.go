@@ -103,3 +103,44 @@ func TestHandleEvent_AfterTraceSinkClosed_StillProcessesHook(t *testing.T) {
 		t.Fatalf("dropped = %d, want >= 1 (the hook's trace)", n)
 	}
 }
+
+// T4: real shutdown order (Stop -> Close). A probe-intent consumer's tail
+// trace written after Stop but before Close must still be persisted, and a
+// straggler after Close must be dropped without panicking.
+func TestModule_ShutdownOrder_StopThenClose_PersistsConsumerTail(t *testing.T) {
+	m, rec := newWiringTestModule(t)
+	if fake, ok := m.tmux.(*tmux.FakeExecutor); ok {
+		fake.SetPaneSessionName("%5", "work")
+	}
+	seedRunningFrame(t, m, "work", "%5", "codex", 4242)
+	m.manageActivityWatch("work", "codex", agentpkg.StatusRunning)
+	<-rec.started
+
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	// What consumeSignals' tail does after stopAll cancelled its context.
+	m.traceSink.AppendProbeIntent(probeIntentTraceArgs{
+		TmuxSession: "work", AgentType: "codex",
+		Kind: "process-dead", Decision: "stop", Reason: "consumer-tail",
+	})
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reasons := map[string]bool{}
+	for _, c := range listAllChains(t, m.traces) {
+		reasons[c.TerminalReason] = true
+	}
+	for _, want := range []string{"module-stop", "consumer-tail"} {
+		if !reasons[want] {
+			t.Errorf("trace with reason %q not persisted; got %v", want, reasons)
+		}
+	}
+
+	captureLog(t)
+	m.traceSink.AppendProbeIntent(probeIntentTraceArgs{
+		TmuxSession: "work", AgentType: "codex",
+		Kind: "process-dead", Decision: "stop", Reason: "straggler",
+	}) // must not panic
+}
