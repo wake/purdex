@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.545] - 2026-10-07
+
+> 動 daemon 與 `pdx` 指令，**需要部署新 binary 並重啟**（由統籌安排）。SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-3a（#1733）
+
+接力檔的清理與 `pdx peers` 的舊 ref 顯示（spec §8.3「Retention」、§8.4；plan v2 Tasks 5a.10–5a.11）。
+
+- **接力檔自動清理**：daemon 啟動時與每小時掃一次 `<data_dir>/relay/`。每條接力鏈只留最新 3 份、完成超過 14 天的刪、失敗或取消的留 3 天方便除錯；刪掉的 op 在資料庫標成 pruned（路徑保留）。
+- **只清已結束的 op**：還在進行中的接力（等核准到 `cleared`）不論多久都保留檔案——那是接力內容的唯一副本，`/clear` 之後還要拿來帶入新 session。行程中途死掉而卡在 `claimed`／`writing`／`written` 的 op，要等 P6 的重啟收斂把它結束後才會清（#1735）。
+- **只刪 `<data_dir>/relay/<op id>.md`**：op id 必須是單一路徑元素、relay 目錄必須是真目錄（不是 symlink）、目標必須是一般檔或 symlink（只解除連結、不跟隨）；其餘一律不碰，只標 pruned 或留待下次。
+- **`pdx peers`**：接力過的對話在位址後面顯示 `(was _xxxxxx)`（最新的那個舊 ref）。
+
+Review 後補強：路徑穿越與 symlink 目錄、進行中 op 的檔案保護（攻擊方）；spec §8.3 措辭不再宣稱卡住的 op 已都會被結束（critic）。
+
 ## [1.0.0-alpha.544] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。**需要 daemon ≥ alpha.537**（已部署在 mlab）。
