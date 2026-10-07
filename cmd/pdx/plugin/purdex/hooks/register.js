@@ -140,8 +140,14 @@ function helloLater($) {
 // PAST this state (a later report landed first, or the op was closed), and
 // 1 (a runtime error), 2 (usage) or any other code would fail the same way
 // again; those are dropped (all but 13 with a log line).
+// A report worth sending again: 20 / 21 (daemon unreachable / no answer)
+// and 1 — the CLI's exit for every other daemon or runtime error, a
+// transient 500 storage_error included (cmd/pdx/relay.go relayReportErr), so
+// 1 is not proof the report can never land (critic on PR #1763). Re-sends are
+// bounded (MAX_RESENDS, MAX_OUTBOX); 13 (bad_transition: the daemon is past
+// it) and any other code (2: usage) are dropped at once.
 function transientReport(r) {
-  return r.exitCode === 20 || r.exitCode === 21
+  return r.exitCode === 20 || r.exitCode === 21 || r.exitCode === 1
 }
 
 // report queues `pdx relay report <op> <state> …`; pump sends it from a
@@ -191,9 +197,17 @@ function pump($) {
 }
 
 // newNonce mints the tag of one prompt of the mod's: 20 hex characters from
-// Math.random and the clock (no crypto: the module's environment is not
-// promised to have it). Unpredictable, so no other prompt can carry it.
+// Web Crypto's getRandomValues when the module's environment has it (a
+// CSPRNG: critic on PR #1763); otherwise Math.random and the clock, which a
+// person typing cannot guess but which is not a security boundary. The nonce
+// is also only accepted once, in the state that expects it (arm / turn.start).
 function newNonce() {
+  const c = globalThis.crypto
+  if (c && typeof c.getRandomValues === 'function') {
+    const b = new Uint8Array(12)
+    c.getRandomValues(b)
+    return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+  }
   const r = () => Math.floor(Math.random() * 0x100000000).toString(16).padStart(8, '0')
   return r() + r() + (Date.now() & 0xffff).toString(16).padStart(4, '0')
 }

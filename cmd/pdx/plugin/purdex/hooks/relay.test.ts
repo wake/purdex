@@ -964,15 +964,16 @@ test('the user’s /clear while seeding reports failed{handoff_incomplete}; the 
   expect(reports(f)).toEqual([...before, 'relay report op-1 failed --error handoff_incomplete'])
 })
 
-// Item 6 (attacker medium): only a transient failure (20 / 21, or a
-// $.process.run that rejected, read as 20) is re-sent, and only so often;
-// the queue is bounded. Mutation gates: re-send exit 1 → it goes out again
-// at `tx`; drop the re-send cap → 26 sends; drop the queue cap → op-1 is
-// held and re-sent at `tz`.
-test('a report that fails with 1 is dropped and logged, never re-sent; the op’s later reports go on', async ($, on) => {
+// Item 6 (attacker medium) as corrected by the critic: a report that fails
+// with 20 / 21 / 1 is re-sent (1 covers a transient daemon 500), only so
+// often, and the queue is bounded; any other code (2: usage) is dropped at
+// once. Mutation gates: re-send exit 2 → it goes out again at `tx`; drop the
+// re-send cap → 26 sends; drop the queue cap → op-1 is held and re-sent at
+// `tz`; drop 1 from the transient set → the exit-1 test sees one send.
+test('a report that fails with 2 (usage) is dropped and logged, never re-sent; the op’s later reports go on', async ($, on) => {
   const { f, clock } = await approvedRelay($, on)
   const inner = f.pdx
-  f.pdx = (argv) => (argv[1] === 'report' && argv[3] === 'written' ? { exitCode: 1, stderr: 'pdx relay: boom' } : inner(argv))
+  f.pdx = (argv) => (argv[1] === 'report' && argv[3] === 'written' ? { exitCode: 2, stderr: 'pdx relay: usage' } : inner(argv))
   f.files['/data/relay/op-1.md'] = GOOD_FILE
   await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
   await turn($, 'tw')
@@ -981,11 +982,30 @@ test('a report that fails with 1 is dropped and logged, never re-sent; the op’
   await turnAndSettle($, f, 'tx')
   await turnAndSettle($, f, 'ty')
   expect(reports(f).filter((c) => c === 'relay report op-1 written').length).toBe(1)
-  expect(f.logs.some((l) => l.includes('exit 1') && l.includes('relay report op-1 written'))).toBe(true)
+  expect(f.logs.some((l) => l.includes('exit 2') && l.includes('relay report op-1 written'))).toBe(true)
   f.sessionId = 'sid-new'
   await $.classic.SessionStart({ source: 'clear' })
   await clock.settle()
   expect(reports(f).at(-1)).toBe('relay report op-1 cleared --new-session sid-new') // not held behind the dropped one
+})
+
+test('a report that fails once with 1 (a transient daemon 500) is re-sent and lands', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  const inner = f.pdx
+  let failed = false
+  f.pdx = (argv) => {
+    if (argv[1] === 'report' && argv[3] === 'written' && !failed) {
+      failed = true
+      return { exitCode: 1, stderr: 'pdx relay: team.db failed; see the daemon log storage_error' }
+    }
+    return inner(argv)
+  }
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  await turnAndSettle($, f, 'tx')
+  expect(reports(f).filter((c) => c === 'relay report op-1 written').length).toBe(2)
 })
 
 test('a report that keeps failing with 20 is re-sent 20 times, then dropped and logged', async ($, on) => {
