@@ -1044,7 +1044,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | Code | Meaning |
 |---|---|
 | 0 | Approved / done / accepted |
-| 1 | Other runtime or API error (existing convention) |
+| 1 | Other runtime or API error (existing convention). Includes `spawn_wait_timeout` (PR P4-7 review): `pdx spawn` stopped waiting after 9 min while the daemon still reported the op `running`; stderr carries the op id, and the lead checks `pdx team` before spawning again (the op may still finish). Exit 14 is only the daemon's own `failed{member_start_timeout}`. |
 | 2 | Usage error (existing convention) |
 | 10 | Denied |
 | 11 | Timed out (counts as denied, U7) |
