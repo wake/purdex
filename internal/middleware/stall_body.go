@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// UploadStallTimeout is how long an upload body may go without delivering a
+// byte before the read fails.
+const UploadStallTimeout = 30 * time.Second
+
 // StallTimeoutBody wraps r.Body so that every Read first pushes the
 // connection's read deadline to now+d. Data that keeps flowing never trips
 // it, however long the whole upload takes; a client that goes silent for
