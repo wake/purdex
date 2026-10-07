@@ -325,6 +325,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		rsnap = ipeers.ResolveSnapshot{
 			Partial:            local.Partial,
 			RegistryIncomplete: len(local.UnknownRegistryFiles) > 0,
+			LineageUnavailable: local.LineageUnavailable,
 		}
 	} else {
 		remoteRefused := func(text string) {
@@ -370,6 +371,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		rsnap = ipeers.ResolveSnapshot{
 			Partial:            env.Partial,
 			RegistryIncomplete: len(env.UnknownRegistryFiles) > 0,
+			LineageUnavailable: env.LineageUnavailable,
 		}
 	}
 

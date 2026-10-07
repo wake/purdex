@@ -66,6 +66,28 @@ func TestResolve_PreviousRefsTier(t *testing.T) {
 	if _, err := Resolve(bare, refA, ResolveSnapshot{Partial: true}); !errors.Is(err, ErrResolveNotReady) {
 		t.Fatalf("lineage miss under Partial: err=%v", err)
 	}
+	// Lineage unavailable (the reader failed): a ref miss is not-ready, not
+	// not-found, and never the tmux tier — even when a tmux session carries
+	// the ref as its name (PR #1705 attacker A-1). Live hits still resolve.
+	tmuxNamedLikeRef := []PeerRecord{liveRow(refB, "purdex-b0", refA, refA, 2)}
+	if rec, err := Resolve(tmuxNamedLikeRef, refA, ResolveSnapshot{}); err != nil || rec.Agent.PID != 2 {
+		t.Fatalf("sanity: without the flag the ref-shaped tmux name is tier 4: pid=%d err=%v", pidOf(rec), err)
+	}
+	if _, err := Resolve(tmuxNamedLikeRef, refA, ResolveSnapshot{LineageUnavailable: true}); !errors.Is(err, ErrResolveNotReady) {
+		t.Fatalf("ref miss under LineageUnavailable: err=%v, want ErrResolveNotReady", err)
+	}
+	if _, err := Resolve(bare, refA[1:], ResolveSnapshot{LineageUnavailable: true}); !errors.Is(err, ErrResolveNotReady) {
+		t.Fatalf("bare-form ref miss under LineageUnavailable: err=%v, want ErrResolveNotReady", err)
+	}
+	if _, err := Resolve(bare, "purdex-b0 ["+refA[1:]+"]", ResolveSnapshot{LineageUnavailable: true}); !errors.Is(err, ErrResolveNotReady) {
+		t.Fatalf("combined-form ref miss under LineageUnavailable: err=%v, want ErrResolveNotReady", err)
+	}
+	if rec, err := Resolve(bare, refB, ResolveSnapshot{LineageUnavailable: true}); err != nil || rec.Agent.PID != 2 {
+		t.Fatalf("a live ref still resolves under LineageUnavailable: pid=%d err=%v", pidOf(rec), err)
+	}
+	if rec, err := Resolve(bare, "purdex-b0", ResolveSnapshot{LineageUnavailable: true}); err != nil || rec.Agent.PID != 2 {
+		t.Fatalf("a name still resolves under LineageUnavailable: pid=%d err=%v", pidOf(rec), err)
+	}
 }
 
 func pidOf(r PeerRecord) int {

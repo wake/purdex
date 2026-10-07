@@ -46,6 +46,12 @@ func normalizeRelay(raw json.RawMessage) (RelaySwitches, error) {
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return RelaySwitches{}, errors.New("items must be a JSON object")
 	}
+	for k := range fields {
+		if k != "self_solo" && k != "self_lead" {
+			// A misspelt switch must not save as "left out = on" (fail-open).
+			return RelaySwitches{}, errors.New("unknown relay field " + k + "; only self_solo and self_lead")
+		}
+	}
 	out := DefaultRelaySwitches
 	for _, f := range []struct {
 		key string

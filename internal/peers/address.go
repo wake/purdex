@@ -37,7 +37,16 @@ type ResolveSnapshot struct {
 	// process may belong to the same conversation and make the name
 	// ambiguous. A caller setting RegistryIncomplete should set Partial
 	// too; Resolve does not require it.
+	//
+	// LineageUnavailable is the envelope's lineage_unavailable flag: the
+	// relay lineage could not be read, so rows carry no previous_refs. It
+	// does not make the inventory Partial (names and live refs are whole),
+	// but a REF that matches no live row is ErrResolveNotReady under it,
+	// not ErrNotFound: the ref may be a relayed-from one that the missing
+	// lineage would have answered, and a miss must never fall through to
+	// the tmux-name tier or be reported as gone (lead-team-relay spec §8.4).
 	RegistryIncomplete bool
+	LineageUnavailable bool
 }
 
 // ErrLegacyCC is returned (wrapped under ErrNotFound) by Resolve for the
@@ -385,7 +394,7 @@ func resolveRefHead(records []PeerRecord, ref string, snap ResolveSnapshot) (Pee
 	if err == nil && snap.RegistryIncomplete {
 		return PeerRecord{}, ErrResolveNotReady
 	}
-	if errors.Is(err, ErrNotFound) && snap.Partial {
+	if errors.Is(err, ErrNotFound) && (snap.Partial || snap.LineageUnavailable) {
 		return PeerRecord{}, ErrResolveNotReady
 	}
 	return rec, err

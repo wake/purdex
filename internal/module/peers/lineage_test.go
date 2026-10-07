@@ -25,7 +25,8 @@ var _ team.LineageReader = (*fakeLineage)(nil)
 
 // Lead-team-relay spec §8.4: the row whose CC session id heads a relay
 // chain carries previous_refs (newest first); a reader error leaves every
-// row without the field and the envelope NOT partial.
+// row without the field, the envelope NOT partial but lineage_unavailable
+// (PR #1705 attacker A-1: a ref miss is then not-ready, see address_lineage_test.go).
 func TestLocalEnvelope_AttachesPreviousRefsFromLineageReader(t *testing.T) {
 	dir := t.TempDir()
 	writeRegistryFixture(t, dir, "76973.json", fixture76973)
@@ -41,6 +42,7 @@ func TestLocalEnvelope_AttachesPreviousRefsFromLineageReader(t *testing.T) {
 	c.Registry.Register(team.LineageReaderKey, lineage)
 	m := newTestModule(t, c, sessions, owners, dir, allLiveLiveness(fixture76973ProcStart), clock, 2*time.Second)
 
+	var lineageUnavailable bool
 	read := func() (refs []string, partial bool) {
 		t.Helper()
 		rr := doGetPeers(t, m, "/api/peers")
@@ -48,8 +50,9 @@ func TestLocalEnvelope_AttachesPreviousRefsFromLineageReader(t *testing.T) {
 			t.Fatalf("status = %d; body=%s", rr.Code, rr.Body.String())
 		}
 		var got struct {
-			Partial bool `json:"partial"`
-			Peers   []struct {
+			Partial            bool `json:"partial"`
+			LineageUnavailable bool `json:"lineage_unavailable"`
+			Peers              []struct {
 				SessionCode  string   `json:"session_code"`
 				PreviousRefs []string `json:"previous_refs"`
 			} `json:"peers"`
@@ -57,6 +60,7 @@ func TestLocalEnvelope_AttachesPreviousRefsFromLineageReader(t *testing.T) {
 		if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 			t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 		}
+		lineageUnavailable = got.LineageUnavailable
 		for _, p := range got.Peers {
 			if p.SessionCode == "mt1code" {
 				return p.PreviousRefs, got.Partial
@@ -67,13 +71,13 @@ func TestLocalEnvelope_AttachesPreviousRefsFromLineageReader(t *testing.T) {
 	}
 
 	refs, partial := read()
-	if len(refs) != 2 || refs[0] != "_b1xxxx" || refs[1] != "_a0xxxx" || partial {
-		t.Fatalf("previous_refs = %v partial=%v", refs, partial)
+	if len(refs) != 2 || refs[0] != "_b1xxxx" || refs[1] != "_a0xxxx" || partial || lineageUnavailable {
+		t.Fatalf("previous_refs = %v partial=%v lineage_unavailable=%v", refs, partial, lineageUnavailable)
 	}
 
 	lineage.err = errors.New("team.db locked")
 	refs, partial = read()
-	if refs != nil || partial {
-		t.Fatalf("after a reader error: previous_refs = %v partial=%v (want absent, not partial)", refs, partial)
+	if refs != nil || partial || !lineageUnavailable {
+		t.Fatalf("after a reader error: previous_refs = %v partial=%v lineage_unavailable=%v (want absent, not partial, unavailable)", refs, partial, lineageUnavailable)
 	}
 }
