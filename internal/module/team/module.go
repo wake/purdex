@@ -162,9 +162,15 @@ type Module struct {
 	spawnPoll   time.Duration
 	spawnSleep  func(ctx context.Context, d time.Duration)
 	spawnBudget int64
+	// spawnWait is how long POST /api/team/spawns waits for its op to leave
+	// running (team.SpawnPollWaitS).
+	spawnWait time.Duration
 	// beforeSpawnStep, when set, runs before each runner step with the op as
-	// read; tests hold or steer a runner there. nil in production.
-	beforeSpawnStep func(op spawnRow)
+	// read; tests hold or steer a runner there. afterSpawnTeamRead, when
+	// set, runs in the spawn POST between its team read and the op's write;
+	// tests end the team there and prove the write sees it. nil in production.
+	beforeSpawnStep    func(op spawnRow)
+	afterSpawnTeamRead func()
 }
 
 // New returns a Module with production defaults.
@@ -185,6 +191,7 @@ func New() *Module {
 		spawnPoll:   250 * time.Millisecond,
 		spawnSleep:  sleepCtx,
 		spawnBudget: team.SpawnRegisterS * 1000,
+		spawnWait:   team.SpawnPollWaitS * time.Second,
 	}
 }
 
@@ -256,6 +263,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/team/approvals/{id}", m.handleDelete)
 	mux.HandleFunc("POST /api/team/approvals/{id}/decide", m.handleDecide)
 	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)
+	mux.HandleFunc("POST /api/team/spawns", m.handleSpawn) // P4-5, spec §7.2
 	mux.HandleFunc("POST /api/hooks/decide", m.handleHookDecide)
 	// P5a relay routes (spec §8.3, §8.7); all under TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/relay/hello", m.handleRelayHello)
