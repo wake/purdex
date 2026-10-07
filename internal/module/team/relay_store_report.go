@@ -61,7 +61,8 @@ func checkLineage(tx *sql.Tx, cur team.RelayOp, r RelayReport) error {
 // moveTeamRoles is the team half of a cleared (spec §8.4), run in its
 // lineage transaction after the lineage insert: the live team the old
 // session leads now follows the new session and ref, and so does the old
-// session's active member row. An ended team stays as it ended (D4). A
+// session's active member row of a live team. An ended team, and the rows
+// of its members, stay as they ended (D4; P4-3 review H3). A
 // move that fails (the new session already leads a live team or is an
 // active member: a unique index) fails the whole cleared.
 func moveTeamRoles(tx *sql.Tx, oldSessionID string, r RelayReport) error {
@@ -70,7 +71,9 @@ func moveTeamRoles(tx *sql.Tx, oldSessionID string, r RelayReport) error {
 		return fmt.Errorf("move lead: %w", err)
 	}
 	if _, err := tx.Exec(`UPDATE team_members SET session_id = ?, ref = ?, updated_at = ?
-		WHERE session_id = ? AND state = 'active'`, r.NewSessionID, r.NewRef, r.At, oldSessionID); err != nil {
+		WHERE session_id = ? AND state = 'active'
+		  AND EXISTS (SELECT 1 FROM teams WHERE teams.id = team_members.team_id AND teams.ended_at = 0)`,
+		r.NewSessionID, r.NewRef, r.At, oldSessionID); err != nil {
 		return fmt.Errorf("move member: %w", err)
 	}
 	return nil

@@ -386,6 +386,33 @@ func TestRelayStore_ClearedThatFailsLineageMovesNothing(t *testing.T) {
 	}
 }
 
+// P4-3 review H3 (D4): a former member of an ended team is an ordinary
+// session and may self-relay. Its cleared leaves its old member row as it
+// is, and another active row of the new session does not roll the cleared
+// back. Mutation gate: drop the live-team condition from the member move →
+// red (the row moves, or collides with the new session's row).
+func TestRelayStore_ClearedLeavesAnEndedTeamsMemberRowAlone(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, "team-1", "L1", 1000)
+	a := seedMember(t, s, "sp-a", "team-1", "A", 1000)
+	if ended, err := s.EndTeam("team-1", "L1", team.TeamEndLeadGone, 2000); err != nil || !ended {
+		t.Fatalf("end: ended=%v err=%v", ended, err)
+	}
+	claimedOp(t, s, "op-a", "A", a.Ref)
+	mustReport(t, s, "op-a", RelayReport{State: team.RelayCleared, NewSessionID: "A2", NewRef: "_aaa222", At: 3000})
+	seedTeam(t, s, "team-2", "L2", 1000)
+	b := seedMember(t, s, "sp-b", "team-2", "B", 1000)
+	claimedOp(t, s, "op-a2", "A2", "_aaa222")
+	if got := memberBySpawn(t, s, "sp-a"); got != a {
+		t.Fatalf("the ended team's member row moved: %+v → %+v", a, got)
+	}
+	// A2 has no live role, so its cleared into B (B: an active row) moves nothing.
+	mustReport(t, s, "op-a2", RelayReport{State: team.RelayCleared, NewSessionID: "B", NewRef: "_bbbbbb", At: 4000})
+	if memberBySpawn(t, s, "sp-a") != a || memberBySpawn(t, s, "sp-b") != b {
+		t.Fatal("a solo cleared moved a member row")
+	}
+}
+
 // D4 / spec §7.1: an ended team stays as it ended. A relay of a session that
 // once led an ended team (and leads a live one now) moves only the live
 // team. Mutation gate: drop ended_at = 0 from the move → red.
