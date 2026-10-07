@@ -277,7 +277,7 @@ function detailOf(status: WorkerProjection['status'], src: Source): Record<strin
   // 「等待核准」 notifies like a terminal agent's ask (PC2 as amended 2026-10-07), so it carries the ask's detail shape:
   // `tool_name`, which the PermissionRequest notification body names (notification-content.ts). And `request_id`: the
   // dispatcher dedupes such an event by the request it is about, not by its stamp (`since`), which two requests can
-  // share (useNotificationDispatcher.ts, `shouldDispatchRequest`).
+  // share (lib/notification-dedup.ts, `shouldDispatchRequest`).
   if (status === 'waiting') {
     const pending = src.summary.pending_permission
     const detail: Record<string, unknown> = {}
