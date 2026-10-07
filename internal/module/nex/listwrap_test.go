@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -290,20 +291,39 @@ func TestListWrapper_AbortHandlerPropagates(t *testing.T) {
 		"the aborted page consumed a ver")
 }
 
-func TestListWrapper_SlotBusyIs503NexBusy(t *testing.T) {
+// serveBehindHeldSlot runs one request while the test holds the slot, and
+// fails the test if the page never gives up on it.
+func serveBehindHeldSlot(t *testing.T, mux http.Handler, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- serve(mux, context.Background(), http.MethodGet, target) }()
+	select {
+	case w := <-done:
+		return w
+	case <-time.After(5 * time.Second):
+		t.Fatal("a page behind a held slot never gave up")
+		return nil
+	}
+}
+
+// pdxParamOf reports whether a recorded request's query carries a pdx
+// parameter, parsed strictly as the engine parses it.
+func pdxParamOf(t *testing.T, req recordedRequest) bool {
+	t.Helper()
+	q, err := url.ParseQuery(req.rawQuery)
+	require.NoError(t, err, "query %q", req.rawQuery)
+	return q.Has("pdx")
+}
+
+// A client that opted in (pdx=retry) gets 503 nex_busy once the slot was
+// not acquired in time, and the page never reaches the engine.
+func TestListWrapper_SlotBusyIs503NexBusyForAnOptedInClient(t *testing.T) {
 	inner := &recordingHandler{respond: answer(http.StatusOK, listPage)}
 	m, mux := newListEnv(t, inner)
 	m.listWait = 30 * time.Millisecond
 	require.NoError(t, m.reads().acquire(context.Background(), 0))
 
-	done := make(chan *httptest.ResponseRecorder, 1)
-	go func() { done <- serve(mux, context.Background(), http.MethodGet, "/api/nex/v1/executions") }()
-	var w *httptest.ResponseRecorder
-	select {
-	case w = <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("a page behind a held slot never gave up")
-	}
+	w := serveBehindHeldSlot(t, mux, "/api/nex/v1/executions?limit=100&pdx=retry")
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 	msg, code := nexErrorOf(t, w)
 	assert.Equal(t, "nex_busy", code)
@@ -311,7 +331,136 @@ func TestListWrapper_SlotBusyIs503NexBusy(t *testing.T) {
 	assert.Empty(t, inner.requests(), "a page that never got the slot reached the engine")
 
 	m.reads().release()
-	assert.Equal(t, uint64(1), stampOf(t, serve(mux, context.Background(), http.MethodGet, "/api/nex/v1/executions")).Ver)
+	assert.Equal(t, uint64(1), stampOf(t, serve(mux, context.Background(), http.MethodGet, "/api/nex/v1/executions?pdx=retry")).Ver)
+}
+
+// A client that did not opt in — the live SPA has no 503 retry until #1866
+// PR2a — is never answered 503 nex_busy: it gets the page, served outside
+// the slot, as the engine wrote it (no pdx, no ver consumed), and the log
+// says so once. Only pdx=retry opts in; any other pdx value is removed all
+// the same.
+func TestListWrapper_SlotBusyServesAnUnstampedPageWithoutOptIn(t *testing.T) {
+	for _, query := range []string{"?limit=100", "?limit=100&pdx=later"} {
+		t.Run(query, func(t *testing.T) {
+			inner := &recordingHandler{respond: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Nex-Probe", "inner")
+				answer(http.StatusOK, listPage)(w, r)
+			}}
+			m, mux := newListEnv(t, inner)
+			logs := &logRecorder{}
+			m.logf = logs.logf
+			m.listWait = 30 * time.Millisecond
+			require.NoError(t, m.reads().acquire(context.Background(), 0))
+
+			w := serveBehindHeldSlot(t, mux, "/api/nex/v1/executions"+query)
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, listPage, w.Body.String(), "the unstamped page was rewritten")
+			assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+			assert.Equal(t, "inner", w.Header().Get("X-Nex-Probe"))
+			reqs := inner.requests()
+			require.Len(t, reqs, 1, "the engine must serve the page exactly once")
+			assert.Equal(t, "/v1/executions", reqs[0].path)
+			assert.False(t, pdxParamOf(t, reqs[0]), "the engine saw a pdx parameter: %q", reqs[0].rawQuery)
+			assert.Equal(t, "limit=100", reqs[0].rawQuery)
+
+			var served []string
+			for _, line := range logs.all() {
+				if strings.Contains(line, "served unstamped") {
+					served = append(served, line)
+				}
+			}
+			require.Len(t, served, 1, "%q", logs.all())
+			assert.Regexp(t, regexp.MustCompile(`^nex-delta: list page served unstamped after \d+ms slot wait$`), served[0])
+
+			require.False(t, readSlotFree(m.reads()), "the unstamped page touched the slot")
+			m.reads().release()
+			assert.Equal(t, uint64(1), stampOf(t, serve(mux, context.Background(), http.MethodGet, "/api/nex/v1/executions")).Ver,
+				"the unstamped page consumed a ver")
+		})
+	}
+}
+
+// The unstamped page is contained exactly like a stamped one: a panic is 500
+// nex_list_panicked (never the buffered body) and http.ErrAbortHandler
+// propagates to net/http.
+func TestListWrapper_UnstampedPagePanics(t *testing.T) {
+	t.Run("late panic", func(t *testing.T) {
+		inner := &recordingHandler{respond: func(w http.ResponseWriter, r *http.Request) {
+			answer(http.StatusOK, listPage)(w, r)
+			panic("late explosion")
+		}}
+		m, mux := newListEnv(t, inner)
+		m.listWait = 30 * time.Millisecond
+		require.NoError(t, m.reads().acquire(context.Background(), 0))
+		defer m.reads().release()
+
+		w := serveBehindHeldSlot(t, mux, "/api/nex/v1/executions")
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		_, code := nexErrorOf(t, w)
+		assert.Equal(t, "nex_list_panicked", code)
+		assert.NotContains(t, w.Body.String(), "exc_a", "the buffered body reached the client")
+		assert.Len(t, inner.requests(), 1)
+	})
+	t.Run("abort", func(t *testing.T) {
+		aborting := true
+		inner := &recordingHandler{respond: func(w http.ResponseWriter, r *http.Request) {
+			answer(http.StatusOK, listPage)(w, r)
+			if aborting {
+				panic(http.ErrAbortHandler)
+			}
+		}}
+		m, mux := newListEnv(t, inner)
+		m.listWait = 30 * time.Millisecond
+		require.NoError(t, m.reads().acquire(context.Background(), 0))
+
+		w := httptest.NewRecorder()
+		var rec any
+		func() {
+			defer func() { rec = recover() }()
+			mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/nex/v1/executions", nil))
+		}()
+		assert.Equal(t, http.ErrAbortHandler, rec, "the abort did not propagate")
+		assert.Empty(t, w.Body.String(), "an aborted page reached the client")
+
+		m.reads().release()
+		aborting = false
+		assert.Equal(t, uint64(1), stampOf(t, serve(mux, context.Background(), http.MethodGet, "/api/nex/v1/executions")).Ver,
+			"the aborted unstamped page consumed a ver")
+	})
+}
+
+// With the slot free, an opted-in client gets a stamped page like any
+// other, and the engine never sees the pdx parameter: every other pair —
+// repeated label values included — arrives byte for byte as sent.
+func TestListWrapper_OptInParamNeverReachesTheEngine(t *testing.T) {
+	inner := &recordingHandler{respond: answer(http.StatusOK, listPage)}
+	_, mux := newListEnv(t, inner)
+	const rest = "limit=100&cursor=exc_0042&include_archived=true&label.a=x%20y&label.a=z"
+
+	assert.Equal(t, uint64(1), stampOf(t, serve(mux, context.Background(), http.MethodGet,
+		"/api/nex/v1/executions?limit=100&pdx=retry&cursor=exc_0042&include_archived=true&label.a=x%20y&label.a=z")).Ver)
+	reqs := inner.requests()
+	require.Len(t, reqs, 1)
+	assert.False(t, pdxParamOf(t, reqs[0]), "the engine saw a pdx parameter: %q", reqs[0].rawQuery)
+	assert.Equal(t, rest, reqs[0].rawQuery)
+	got, err := url.ParseQuery(reqs[0].rawQuery)
+	require.NoError(t, err)
+	assert.Equal(t, url.Values{
+		"limit": {"100"}, "cursor": {"exc_0042"}, "include_archived": {"true"}, "label.a": {"x y", "z"},
+	}, got)
+}
+
+// A query the engine's strict parse rejects is handed over untouched, pdx
+// and all: removing pairs from it could turn it into one that parses — the
+// broken filter quietly dropped — instead of the engine's 400.
+func TestListWrapper_MalformedQueryReachesTheEngineUntouched(t *testing.T) {
+	inner := &recordingHandler{respond: answer(http.StatusOK, listPage)}
+	_, mux := newListEnv(t, inner)
+	const q = "pdx=retry&label.a=%zz&limit=100"
+
+	serve(mux, context.Background(), http.MethodGet, "/api/nex/v1/executions?"+q)
+	require.Len(t, inner.requests(), 1)
+	assert.Equal(t, q, inner.requests()[0].rawQuery)
 }
 
 // The default wait is the spec's 2 s.
@@ -340,24 +489,30 @@ func TestListWrapper_OversizePageIs502(t *testing.T) {
 	assert.Less(t, w.Body.Len(), 1024, "the oversize page leaked into the response")
 }
 
+// A request whose context ended while it waited gets no answer at all,
+// opted in or not: it is neither a 503 nor an unstamped page.
 func TestListWrapper_CancelWhileWaitingWritesNothing(t *testing.T) {
-	inner := &recordingHandler{respond: answer(http.StatusOK, listPage)}
-	m, mux := newListEnv(t, inner)
-	require.NoError(t, m.reads().acquire(context.Background(), 0))
-	defer m.reads().release()
+	for _, target := range []string{"/api/nex/v1/executions", "/api/nex/v1/executions?pdx=retry"} {
+		t.Run(target, func(t *testing.T) {
+			inner := &recordingHandler{respond: answer(http.StatusOK, listPage)}
+			m, mux := newListEnv(t, inner)
+			require.NoError(t, m.reads().acquire(context.Background(), 0))
+			defer m.reads().release()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan *httptest.ResponseRecorder, 1)
-	go func() { done <- serve(mux, ctx, http.MethodGet, "/api/nex/v1/executions") }()
-	cancel()
-	select {
-	case w := <-done:
-		assert.Empty(t, w.Body.String(), "a response was written for a client that is gone")
-		assert.Empty(t, w.Header().Get("Content-Type"))
-	case <-time.After(5 * time.Second):
-		t.Fatal("a waiting page did not give up when its request ended")
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() { done <- serve(mux, ctx, http.MethodGet, target) }()
+			cancel()
+			select {
+			case w := <-done:
+				assert.Empty(t, w.Body.String(), "a response was written for a client that is gone")
+				assert.Empty(t, w.Header().Get("Content-Type"))
+			case <-time.After(5 * time.Second):
+				t.Fatal("a waiting page did not give up when its request ended")
+			}
+			assert.Empty(t, inner.requests())
+		})
 	}
-	assert.Empty(t, inner.requests())
 }
 
 // A client that goes away mid-page frees the slot (the next acquire takes
@@ -480,5 +635,18 @@ func TestListWrapper_RealEngine(t *testing.T) {
 	status, body = f.do(t, http.MethodGet, "/api/nex/v1/executions?state=bogus", nil)
 	require.Equal(t, http.StatusBadRequest, status, "body %s", body)
 	assert.Equal(t, "bad_state", errorCode(body))
+	assert.NotContains(t, decodeTop(t, body), "pdx")
+
+	// The opt-in is the module's, not Nexen's: a page asked for with it is
+	// stamped like any other, and a query Nexen's strict parse rejects is
+	// still Nexen's own 400 with it.
+	status, body = f.do(t, http.MethodGet, "/api/nex/v1/executions?pdx=retry&limit=100", nil)
+	require.Equal(t, http.StatusOK, status, "body %s", body)
+	require.NoError(t, json.Unmarshal(body, &next))
+	assert.Equal(t, page.Pdx.Ver+2, next.Pdx.Ver)
+
+	status, body = f.do(t, http.MethodGet, "/api/nex/v1/executions?pdx=retry&label.a=%zz", nil)
+	require.Equal(t, http.StatusBadRequest, status, "body %s", body)
+	assert.Equal(t, "malformed_parameter", errorCode(body))
 	assert.NotContains(t, decodeTop(t, body), "pdx")
 }
