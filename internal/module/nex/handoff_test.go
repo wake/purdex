@@ -397,6 +397,101 @@ func TestHandoffProfileCheckUsesTheRequestedProfile(t *testing.T) {
 	}
 }
 
+// --- permission_timeout_s (permission channel plan Task 3) ---
+
+// timeoutBody is goodBody plus profile (when non-empty) and
+// permission_timeout_s as the raw JSON text given (when non-empty).
+func timeoutBody(profile, raw string) map[string]any {
+	b := goodBody()
+	if profile != "" {
+		b["profile"] = profile
+	}
+	if raw != "" {
+		b["permission_timeout_s"] = json.RawMessage(raw)
+	}
+	return b
+}
+
+// TestHandoffPermissionTimeoutRefusals: anything but a JSON integer in
+// 0..86400, or a positive value next to a profile without the permission
+// channel, is a 400 invalid_permission_timeout naming the field — never
+// malformed_body — before any side effect: no lock, no identity, no key, no
+// delegate.
+func TestHandoffPermissionTimeoutRefusals(t *testing.T) {
+	cases := []struct{ name, profile, raw string }{
+		{"negative", "handoff_ask", `-1`},
+		{"above 86400", "handoff_ask", `86401`},
+		{"string", "handoff_ask", `"600"`},
+		{"fraction", "handoff_ask", `1.5`},
+		{"exponent", "handoff_ask", `1e3`},
+		{"bool", "handoff_ask", `true`},
+		{"beyond int64", "handoff_ask", `99999999999999999999`},
+		{"object", "handoff_ask", `{}`},
+		{"positive with explicit handoff", "handoff", `600`},
+		{"positive with the default profile", "", `600`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newHandoffEnv(t)
+			status, body := env.post(t, hoCode, timeoutBody(tc.profile, tc.raw))
+			assert.Equal(t, http.StatusBadRequest, status, "%v", body)
+			assert.Equal(t, "invalid_permission_timeout", body["code"])
+			assert.Equal(t, "permission_timeout_s", body["field"])
+			assert.Empty(t, env.svc.Requests(), "nothing delegated")
+			assert.Empty(t, env.ops.Calls(), "Claude Code never stopped")
+			assert.Empty(t, env.tmux.RawKeysSent(), "tmux untouched")
+			assert.Equal(t, 0, env.owners.calls, "identity never resolved")
+			assert.True(t, env.m.locks.TryLock(hoCode), "lock never taken")
+			env.m.locks.Unlock(hoCode)
+		})
+	}
+}
+
+func TestHandoffPermissionTimeoutReachesTheDelegate(t *testing.T) {
+	cases := []struct {
+		name, profile, raw string
+		want               int
+	}{
+		{"600 with handoff_ask", "handoff_ask", `600`, 600},
+		{"86400 with handoff_ask", "handoff_ask", `86400`, 86400},
+		{"0 with handoff_ask is not sent", "handoff_ask", `0`, 0},
+		{"0 with handoff is not sent", "handoff", `0`, 0},
+		{"absent", "", "", 0},
+		{"null is absent", "handoff", `null`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newHandoffEnv(t)
+			status, body := env.post(t, hoCode, timeoutBody(tc.profile, tc.raw))
+			require.Equal(t, http.StatusOK, status, "%v", body)
+			reqs := env.svc.Requests()
+			require.Len(t, reqs, 1)
+			assert.Equal(t, tc.want, reqs[0].PermissionTimeoutS)
+		})
+	}
+}
+
+// TestHandoffPermissionChannelUnavailableRollsBack: Nexen answering
+// rejected (its max_profile narrowed handoff_ask to a profile without the
+// channel) is today's 409 delegate_rejected with the reason, rolled back like
+// any rejected row — never retried as plain handoff.
+func TestHandoffPermissionChannelUnavailableRollsBack(t *testing.T) {
+	env := newHandoffEnv(t)
+	reason := "permission channel unavailable: host max_profile narrows handoff_ask to trusted"
+	env.svc.result = execution.Result{State: store.StateRejected, RejectReason: reason}
+	reviveCCAfterKeys(env)
+	status, body := env.post(t, hoCode, timeoutBody("handoff_ask", `600`))
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "delegate_rejected", body["code"])
+	assert.Equal(t, reason, body["reject_reason"])
+	assert.Equal(t, true, body["rolled_back"])
+	assert.Equal(t, []string{"claude --resume " + hoSessionID + "\n"}, rawKeysText(env.tmux))
+	reqs := env.svc.Requests()
+	require.Len(t, reqs, 1, "exactly one delegate: no retry under another profile")
+	assert.Equal(t, "handoff_ask", reqs[0].SandboxProfile)
+	assert.Equal(t, 600, reqs[0].PermissionTimeoutS)
+}
+
 // --- rejection and rollback ---
 
 func rejectingEnv(t *testing.T) *handoffEnv {

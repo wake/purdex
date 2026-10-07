@@ -23,9 +23,12 @@ type workerRebuildRequest struct {
 	Cwd                string `json:"cwd"`
 	Profile            string `json:"profile,omitempty"`
 	ReplaceExecutionID string `json:"replace_execution_id,omitempty"`
+	// Raw for the same reason as handoffRequest.PermissionTimeoutS.
+	PermissionTimeoutS json.RawMessage `json:"permission_timeout_s,omitempty"`
 }
 
-// handleWorkerRebuild runs, in order: body; engine and handoff profile; cwd;
+// handleWorkerRebuild runs, in order: body; engine and handoff profile;
+// permission_timeout_s (validatePermissionTimeout); cwd;
 // the sid:<S> lock; with a replaced row, its exec:<id> lock, the row (404
 // execution_not_found) and its ownership (409 replace_mismatch); the owner
 // check (the replaced row does not count); the exit of the replaced row if
@@ -76,6 +79,11 @@ func (m *Module) handleWorkerRebuild(w http.ResponseWriter, r *http.Request) {
 	if !slices.Contains(sandbox.UsableProfiles(m.opts.Config.Sandbox), profile) {
 		writeHandoffError(w, http.StatusBadRequest, "invalid_profile", "sandbox profile is not usable under the host policy",
 			map[string]any{"profile": profile})
+		return
+	}
+	permissionTimeout, herr := validatePermissionTimeout(profile, body.PermissionTimeoutS)
+	if herr != nil {
+		herr.write(w)
 		return
 	}
 	principal, err := m.principal(r)
@@ -175,6 +183,8 @@ func (m *Module) handleWorkerRebuild(w http.ResponseWriter, r *http.Request) {
 		Origin:          "purdex://host/" + m.opts.Config.HostID + "/rebuild",
 		Labels:          labels,
 		ResumeSessionID: sid,
+		// An asking row's rebuild resends its timeout (plan Task 7); 0 leaves it unset.
+		PermissionTimeoutS: permissionTimeout,
 	}
 	ctx, cancel := detachedContext(parent, m.delegateTimeout)
 	result, err := m.sys.service.Delegate(ctx, req)

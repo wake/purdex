@@ -3,8 +3,11 @@ package nex
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"lab.protype.tw/wake/nexen/execution"
@@ -136,11 +139,51 @@ type handoffRequest struct {
 	Profile              string `json:"profile,omitempty"`
 	RollbackCommand      string `json:"rollback_command,omitempty"`
 	KeepSession          *bool  `json:"keep_session,omitempty"`
+	// PermissionTimeoutS is kept raw: decoding into an int would turn a
+	// string, a fraction, an exponent, a bool or an over-int64 number into
+	// malformed_body; validatePermissionTimeout answers each of them as
+	// invalid_permission_timeout instead.
+	PermissionTimeoutS json.RawMessage `json:"permission_timeout_s,omitempty"`
 }
 
 // keepSession is the request's KeepSession with the default applied.
 func (r handoffRequest) keepSession() bool {
 	return r.KeepSession == nil || *r.KeepSession
+}
+
+// permissionTimeoutField is the wire name of the auto-deny timeout, reported
+// in an invalid_permission_timeout's field.
+const permissionTimeoutField = "permission_timeout_s"
+
+// validatePermissionTimeout reads permission_timeout_s as sent (raw) for a
+// handoff or rebuild that will run under profile (permission channel plan
+// Task 3, Nexen's delegate rule). Absent and null mean none (0, which the
+// delegate request then leaves unset). Anything else must be a JSON integer
+// in 0..store.MaxPermissionTimeoutS; a string, a fraction, an exponent, a
+// bool or a number beyond int64 is refused, never coerced, and so is a
+// positive value next to a profile without the permission channel. A
+// refusal is 400 invalid_permission_timeout with field; the caller answers
+// it before any side effect.
+func validatePermissionTimeout(profile string, raw json.RawMessage) (int, *handoffError) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return 0, nil
+	}
+	refuse := func(msg string) (int, *handoffError) {
+		return 0, &handoffError{status: http.StatusBadRequest, code: "invalid_permission_timeout", msg: msg,
+			detail: map[string]any{"field": permissionTimeoutField}}
+	}
+	n, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil {
+		return refuse(permissionTimeoutField + " must be an integer number of seconds")
+	}
+	if n < 0 || n > store.MaxPermissionTimeoutS {
+		return refuse(fmt.Sprintf("%s %d is outside 0..%d", permissionTimeoutField, n, store.MaxPermissionTimeoutS))
+	}
+	if n > 0 && !hasPermissionChannel(profile) {
+		return refuse(fmt.Sprintf("%s needs a permission-channel profile, got %q", permissionTimeoutField, profile))
+	}
+	return int(n), nil
 }
 
 // writeJSON writes v as the response body with the given status.
@@ -195,6 +238,11 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusConflict, "handoff_unsupported",
 			"host sandbox policy does not allow a handoff under the "+profile+" profile",
 			map[string]any{"profile": profile})
+		return
+	}
+	permissionTimeout, herr := validatePermissionTimeout(profile, body.PermissionTimeoutS)
+	if herr != nil {
+		herr.write(w)
 		return
 	}
 	if !tmux.ValidInstance(body.ExpectedTmuxInstance) {
@@ -287,6 +335,8 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		Origin:          handoffOrigin(m.opts.Config.HostID, code),
 		Labels:          map[string]string{"source": "purdex", handoffSessionLabel: code, purdexSessionLabel: owner.SessionID},
 		ResumeSessionID: owner.SessionID,
+		// 0 (absent) leaves it unset: a request that never asked waits forever.
+		PermissionTimeoutS: permissionTimeout,
 	}
 	// Detached from r.Context(): CC is already gone, and a client that
 	// disconnects mid-delegate must not cancel the admission and leave the
