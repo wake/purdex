@@ -1961,5 +1961,13 @@
   "approval.dialog.deny": "Deny",
   "approval.toast.ended_while_away": "{{host}}: the {{kind}} from {{session}} ended while this app was disconnected; your decision was not sent",
   "approval.notify.title": "{{host}}: {{session}} requests to become lead",
-  "approval.restart.pending": "{{count}} request(s) awaiting approval"
+  "approval.restart.pending": "{{count}} request(s) awaiting approval",
+  "approval.dialog.title_self_relay": "{{host}}: {{session}} requests a relay",
+  "approval.dialog.ref": "Ref",
+  "approval.dialog.usage": "Usage",
+  "approval.dialog.usage_value": "{{pct}}% used",
+  "approval.dialog.self_relay_note": "Once approved, this session writes its relay file, clears, and takes over in place (about 1 minute)",
+  "approval.dialog.no_more_asking": "Stop asking for this session",
+  "approval.dialog.pause_failed": "Could not pause relay requests for this session ({{code}}); the decision is sent anyway",
+  "approval.notify.title_self_relay": "{{host}}: {{session}} requests a relay ({{pct}}% used)"
 }

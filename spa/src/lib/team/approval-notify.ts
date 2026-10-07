@@ -9,7 +9,7 @@ import { getPlatformCapabilities } from '../platform'
 import { hostLabel, hostLookOf } from '../host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { approvalSessionLabel } from './approval-format'
-import { leadPayloadOf, type Approval } from './types'
+import { leadPayloadOf, selfRelayPayloadOf, type Approval } from './types'
 
 const FNV_OFFSET_32 = 0x811c9dc5
 const FNV_PRIME_32 = 0x01000193
@@ -39,9 +39,14 @@ export function approvalBroadcastTs(hostId: string, id: string): number {
 export function notifyApprovalOpened(hostId: string, approval: Approval): void {
   if (!getPlatformCapabilities().canNotification || !window.electronAPI?.showNotification) return
   const t = useI18nStore.getState().t
+  const host = hostLabel(hostId, hostLookOf(hostId))
+  const session = approvalSessionLabel(approval.origin)
+  // The kind decides the words (spec §8.7): a relay request names the usage, a lead request its reason.
+  const selfRelay = approval.kind === 'self_relay'
+  const pct = selfRelay ? Math.round(selfRelayPayloadOf(approval).used_percentage) : 0
   void window.electronAPI.showNotification({
-    title: t('approval.notify.title', { host: hostLabel(hostId, hostLookOf(hostId)), session: approvalSessionLabel(approval.origin) }),
-    body: leadPayloadOf(approval).reason,
+    title: selfRelay ? t('approval.notify.title_self_relay', { host, session, pct }) : t('approval.notify.title', { host, session }),
+    body: selfRelay ? t('approval.dialog.self_relay_note') : leadPayloadOf(approval).reason,
     sessionCode: '',
     eventName: 'ApprovalRequest',
     broadcastTs: approvalBroadcastTs(hostId, approval.id),

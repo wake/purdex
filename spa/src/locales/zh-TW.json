@@ -1961,5 +1961,13 @@
   "approval.dialog.deny": "拒絕",
   "approval.toast.ended_while_away": "{{host}}：{{session}} 的 {{kind}}已在離線期間結束，你的決定未送出",
   "approval.notify.title": "{{host}}：{{session}} 申請成為 lead",
-  "approval.restart.pending": "{{count}} 個申請等待核准"
+  "approval.restart.pending": "{{count}} 個申請等待核准",
+  "approval.dialog.title_self_relay": "{{host}}：{{session}} 申請接力",
+  "approval.dialog.ref": "Ref",
+  "approval.dialog.usage": "用量",
+  "approval.dialog.usage_value": "已用 {{pct}}%",
+  "approval.dialog.self_relay_note": "核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）",
+  "approval.dialog.no_more_asking": "這個 session 不再詢問",
+  "approval.dialog.pause_failed": "無法暫停這個 session 的接力詢問（{{code}}），決定照常送出",
+  "approval.notify.title_self_relay": "{{host}}：{{session}} 申請接力（已用 {{pct}}%）"
 }
