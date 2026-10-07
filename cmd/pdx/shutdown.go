@@ -27,7 +27,10 @@ const watcherJoinCap = time.Second
 // errRestart to errors.Is. The restart still re-execs after a cleanup
 // error, but does not hide it: warnings (one per logged error) go to
 // last-shutdown.json for the next image to report (spec D13).
-type restartRequested struct{ warnings []string }
+type restartRequested struct {
+	warnings []string
+	elapsed  time.Duration // shutdown sequence wall time (observation only)
+}
 
 func (*restartRequested) Error() string        { return errRestart.Error() }
 func (*restartRequested) Is(target error) bool { return target == errRestart }
@@ -96,7 +99,12 @@ type server interface {
 // restart must stop the daemon, not see it come back.
 func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	restart <-chan struct{}, cancel context.CancelFunc, target shutdownTarget, budget time.Duration,
-	logf func(string, ...any), exit func(int)) error {
+	logf func(string, ...any), exit func(int), opts ...shutdownOption) error {
+
+	var so shutdownOpts
+	for _, o := range opts {
+		o(&so)
+	}
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
@@ -123,6 +131,8 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 		// it as the FIRST signal (hint, no exit), exactly as it would a
 		// signal arriving later.
 	}
+
+	seqStart := time.Now() // monotonic; feeds the shutdown timing lines (#1767)
 
 	// The restart endpoint stops accepting now, whatever started the
 	// sequence. A restart it accepted just before (202 already sent) is
@@ -184,11 +194,20 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 
 	// Each error logged below is also kept for a restart's last-shutdown record.
 	var warnings []string
-	if e := target.StopModules(ctx); e != nil {
+	tStop := time.Now()
+	e := target.StopModules(ctx)
+	stopDur := time.Since(tStop)
+	if e != nil {
 		logf("stop modules: %v", e)
 		warnings = append(warnings, fmt.Sprintf("stop modules: %v", e))
 	}
+	if so.inflight != nil {
+		logf("shutdown: in-flight requests: %d %s", so.inflight.Total(), so.inflight.Summary())
+	}
+	tHTTP := time.Now()
+	httpForced := false
 	if e := srv.Shutdown(ctx); e != nil {
+		httpForced = true
 		logf("http shutdown: %v; closing connections", e)
 		warnings = append(warnings, fmt.Sprintf("http shutdown: %v", e))
 		if ce := srv.Close(); ce != nil {
@@ -196,12 +215,29 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 			warnings = append(warnings, fmt.Sprintf("http close: %v", ce))
 		}
 	}
+	httpDur := time.Since(tHTTP)
+	if so.inflight != nil {
+		logf("shutdown: in-flight after http shutdown: %d", so.inflight.Total())
+	}
 	// Shutdown/Close makes Serve return; collect it so the accept loop is
 	// fully gone before modules release their resources.
+	tServe := time.Now()
 	if !serveReturned {
 		err = <-serveErr
 	}
-	if e := target.CloseModules(); e != nil {
+	serveDur := time.Since(tServe)
+	tClose := time.Now()
+	e = target.CloseModules()
+	closeDur := time.Since(tClose)
+	elapsed := time.Since(seqStart)
+	forced := ""
+	if httpForced {
+		forced = " http-forced-close"
+	}
+	logf("shutdown: stop-modules=%dms http-shutdown=%dms serve-return=%dms close-modules=%dms total=%dms%s",
+		stopDur.Milliseconds(), httpDur.Milliseconds(), serveDur.Milliseconds(),
+		closeDur.Milliseconds(), elapsed.Milliseconds(), forced)
+	if e != nil {
 		logf("close modules: %v", e)
 		warnings = append(warnings, fmt.Sprintf("close modules: %v", e))
 	}
@@ -216,11 +252,28 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 		if len(warnings) > 0 {
 			logf("restart: continuing despite %d cleanup error(s)", len(warnings))
 		}
-		return &restartRequested{warnings: warnings}
+		return &restartRequested{warnings: warnings, elapsed: elapsed}
 	}
 
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+// shutdownOpts carries serveAndWait's optional observers.
+type shutdownOpts struct{ inflight inflightSource }
+
+// shutdownOption configures serveAndWait; existing callers pass none.
+type shutdownOption func(*shutdownOpts)
+
+// withInflight makes serveAndWait log the in-flight request count (and the
+// busiest keys) before and after the HTTP shutdown.
+func withInflight(src inflightSource) shutdownOption {
+	return func(o *shutdownOpts) { o.inflight = src }
+}
+
+// shutdownDoneLine is logged by runServe just before a restart's exec.
+func shutdownDoneLine(elapsed time.Duration) string {
+	return fmt.Sprintf("shutdown: done, restarting after %dms", elapsed.Milliseconds())
 }
