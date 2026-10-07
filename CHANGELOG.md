@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.555] - 2026-10-08
+
+> 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。**需要 daemon ≥ alpha.552**（已部署在 mlab）；更舊的 daemon 上一切照舊，只是「測試用」分頁會說明此主機尚未支援。
+
+### Added：Worker「測試用」分頁（#1762）
+
+- **設定 → Worker 新增「測試用」分頁**：cwd 在 `/private/tmp`（含 `/tmp`）底下的對話放這裡，分「執行中」「已退出」「已不見」三段，一個搜尋框；動作與一般分頁相同。這些對話不再出現在 Workers、已退出、Gone 三個一般分頁；New Tab 的 Workers 與活動列不受影響。
+- 已退出／Gone 改以 `scope=normal` 讀清單，測試用分頁以 `scope=test`。主機的 daemon 沒有 `conversations.scope.v1` 時，三個一般分頁行為完全不變。
+- 標題來源多了 `registry` 的型別（daemon 端的 registry 名稱退路，alpha.552 起；歷史對話無法回填）。
+
 ## [1.0.0-alpha.554] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。**需要 daemon ≥ alpha.541**（已部署在 mlab）。權限通道（「需要核准」）的畫面到這版齊全。
