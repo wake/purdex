@@ -21,6 +21,17 @@ export function forgetRelayPromptDraft(key: string): void {
   drafts.delete(key)
 }
 
+/**
+ * Every draft of one host: the host was removed, or its id now names another daemon (address, port or token
+ * changed). Called from the host config store's `forget`, so a host re-added under the same id starts clean. The kind
+ * never holds ':', so the host id is everything before the key's last one.
+ */
+export function forgetRelayPromptDrafts(hostId: string): void {
+  for (const key of drafts.keys()) {
+    if (key.slice(0, key.lastIndexOf(':')) === hostId) drafts.delete(key)
+  }
+}
+
 /** Tests only: module state outlives a test. */
 export function clearAllRelayPromptDrafts(): void {
   drafts.clear()

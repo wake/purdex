@@ -22,6 +22,7 @@ import {
   type HostConfigProblem,
   type ParsedHostConfig,
 } from '../lib/host-config-parse'
+import { forgetRelayPromptDrafts } from '../lib/relay-prompt-draft-memory'
 import { useHostStore } from './useHostStore'
 
 export type { HostConfigProblem } from '../lib/host-config-parse'
@@ -317,6 +318,8 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
       invalidate(hostId)
       // Its write counts go too: every answer that could compare against them was just abandoned.
       writes.delete(hostId)
+      // So do the unsaved relay prompt texts typed for it (module memory, P9a-3): they were meant for that daemon.
+      forgetRelayPromptDrafts(hostId)
       set((s) => {
         if (!(hostId in s.byHost)) return s
         const rest = { ...s.byHost }
