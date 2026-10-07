@@ -42,6 +42,19 @@ func countTeams(t *testing.T, s *Store) int {
 	return n
 }
 
+// seedTeam makes sid the lead of live team id: an open row, approved
+// through the store (no request_open / already_lead checks).
+func seedTeam(t *testing.T, s *Store, id, sid string, at int64) {
+	t.Helper()
+	g := team.Grant{MaxMembers: 3, Roots: []string{"/w"}}
+	if _, _, _, err := s.Create(openApproval(id, sid, at), "seed-"+id); err != nil {
+		t.Fatal(err)
+	}
+	if _, won, err := s.CloseLeadApproved(id, approveClose(at, g), leadTeam(id, sid, "_abc123", g, at)); err != nil || !won {
+		t.Fatalf("seed team %s for %s: won=%v err=%v", id, sid, won, err)
+	}
+}
+
 // Spec §6.2 "Approval creates the team (§7.1) in the same transaction":
 // the approved row and the team row land together; a second approve loses
 // the CAS and adds no second team.
@@ -101,23 +114,17 @@ func TestStore_CloseLeadApprovedRefusesAMisuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := team.Grant{MaxMembers: 3, Roots: []string{"/w"}}
-	for name, call := range map[string]func() error{
-		"a deny": func() error {
-			_, _, err := s.CloseLeadApproved("id-1", Close{State: team.StateDenied, DecidedAt: 2000}, leadTeam("id-1", "sid-1", "_abc123", g, 2000))
-			return err
-		},
-		"no grant": func() error {
-			c := approveClose(2000, g)
-			c.Grant = nil
-			_, _, err := s.CloseLeadApproved("id-1", c, leadTeam("id-1", "sid-1", "_abc123", g, 2000))
-			return err
-		},
-		"another team id": func() error {
-			_, _, err := s.CloseLeadApproved("id-1", approveClose(2000, g), leadTeam("id-9", "sid-1", "_abc123", g, 2000))
-			return err
-		},
+	noGrant := approveClose(2000, g)
+	noGrant.Grant = nil
+	for name, tc := range map[string]struct {
+		c  Close
+		tm team.Team
+	}{
+		"a deny":          {Close{State: team.StateDenied, DecidedAt: 2000}, leadTeam("id-1", "sid-1", "_abc123", g, 2000)},
+		"no grant":        {noGrant, leadTeam("id-1", "sid-1", "_abc123", g, 2000)},
+		"another team id": {approveClose(2000, g), leadTeam("id-9", "sid-1", "_abc123", g, 2000)},
 	} {
-		if err := call(); err == nil {
+		if _, _, err := s.CloseLeadApproved("id-1", tc.c, tc.tm); err == nil {
 			t.Errorf("%s: no error", name)
 		}
 	}
@@ -176,16 +183,8 @@ func TestStore_CloseLeadApprovedRollsBackWhenTheLeadHasATeam(t *testing.T) {
 // cannot end the team its new lead now holds.
 func TestStore_EndTeamOnceAndOnlyForTheLeadItSaw(t *testing.T) {
 	s := openTestStore(t)
-	g := team.Grant{MaxMembers: 3, Roots: []string{"/w"}}
-	for i, sid := range []string{"sid-1", "sid-2"} {
-		id := []string{"id-1", "id-2"}[i]
-		if _, _, _, err := s.Create(openApproval(id, sid, 1000), "h-"+id); err != nil {
-			t.Fatal(err)
-		}
-		if _, won, err := s.CloseLeadApproved(id, approveClose(2000, g), leadTeam(id, sid, "_r"+id, g, 2000)); err != nil || !won {
-			t.Fatalf("approve %s: won=%v err=%v", id, won, err)
-		}
-	}
+	seedTeam(t, s, "id-1", "sid-1", 2000)
+	seedTeam(t, s, "id-2", "sid-2", 2000)
 	ended, err := s.EndTeam("id-1", "sid-1", team.TeamEndLeadGone, 3000)
 	if err != nil || !ended {
 		t.Fatalf("end: ended=%v err=%v", ended, err)

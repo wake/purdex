@@ -8,22 +8,6 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-// seedLiveTeam makes sid the lead of a live team with id, written straight
-// through the store — as a team approved before this request would be —
-// so a test can reach the states the handler's own checks keep it from
-// producing.
-func seedLiveTeam(t *testing.T, f *fixture, id, sid string) {
-	t.Helper()
-	now := f.clock.Load()
-	if _, _, _, err := f.m.store.Create(openApproval(id, sid, now), "seed-"+id); err != nil {
-		t.Fatal(err)
-	}
-	g := team.Grant{MaxMembers: 3, Roots: []string{"/w"}}
-	if _, won, err := f.m.store.CloseLeadApproved(id, approveClose(now, g), leadTeam(id, sid, "_abc123", g, now)); err != nil || !won {
-		t.Fatalf("seed team %s for %s: won=%v err=%v", id, sid, won, err)
-	}
-}
-
 func appApprove(g *team.Grant) team.DecideRequest {
 	return team.DecideRequest{Decision: "approve", Grant: g, Client: team.Client{Kind: "app", Label: "Purdex.app @ air26"}}
 }
@@ -71,7 +55,7 @@ func TestDecide_ApproveCreatesTheTeamWithTheEditedGrant(t *testing.T) {
 func TestDecide_AlreadyLeadLeavesTheRowOpen(t *testing.T) {
 	f := newFixture(t)
 	f.create(uid(1))
-	seedLiveTeam(t, f, uid(9), "sid-1")
+	seedTeam(t, f.m.store, uid(9), "sid-1", f.clock.Load())
 	f.events()
 
 	code, body := f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", appApprove(nil))
@@ -143,7 +127,7 @@ func TestCreate_AlreadyLeadIs409_EndedTeamDoesNotCount(t *testing.T) {
 	if code, body := f.do(http.MethodPost, "/api/team/approvals", open); code != 201 {
 		t.Fatalf("sid-2 create: %d %s", code, body)
 	}
-	seedLiveTeam(t, f, uid(8), "sid-2")
+	seedTeam(t, f.m.store, uid(8), "sid-2", f.clock.Load())
 	next := f.createReq(uid(5))
 	next.OriginInbox = "/tmp/20.sock"
 	code, body = f.do(http.MethodPost, "/api/team/approvals", next)
