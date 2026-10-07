@@ -129,6 +129,22 @@ describe('HostWorkerRows', () => {
     expect(screen.queryByTestId('executions-row-exit')).toBeNull()
   })
 
+  // #1771 (New Tab / Settings Workers): the host id reaches the row, so the session_title capability gate is this host's.
+  describe('a handoff row (empty brief) is named (#1771)', () => {
+    const handoff = () => row({ id: 'E1', brief: '', cwd: '/w/repo', session_title: { text: 'Zebrafinch', source: 'ai' } })
+    it('with the host\'s session_title capability: the conversation title', () => {
+      useNexHostStore.setState({ byHost: { [H]: { ...readyEntry, capabilities: { session_title: { sources: ['ai'], max_bytes: 200 } } as never } } })
+      seed([handoff()])
+      renderRows()
+      expect(screen.getByTestId('executions-brief').textContent).toBe('Zebrafinch')
+    })
+    it('without it: the cwd basename', () => {
+      seed([handoff()])
+      renderRows()
+      expect(screen.getByTestId('executions-brief').textContent).toBe('repo')
+    })
+  })
+
   it('exits an idle row at once', async () => {
     seed([row({ id: 'E1', state: 'idle' })])
     renderRows()

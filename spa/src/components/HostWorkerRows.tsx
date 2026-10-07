@@ -93,6 +93,7 @@ export function HostWorkerRows({ hostId, onOpen, testIdPrefix, filter, query, ho
             <ExecutionRowCompact
               key={row.id}
               row={row}
+              hostId={hostId}
               daemonHostId={daemonHostId}
               now={now}
               showCost={showCost}
