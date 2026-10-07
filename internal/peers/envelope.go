@@ -22,6 +22,14 @@ package peers
 // now is.
 type Envelope struct {
 	HostID string `json:"host_id"`
+	// AddressVersion states which address rules Peers follow, so a reader
+	// never infers them from the rows. AddressVersionV5 (every current
+	// daemon) means a row is named only by PeerRecord.Name, and the registry
+	// name in agent.peer_name routes nothing — not even when no row carries a
+	// Name (the name store failed that pass). Absent (0) is a daemon from
+	// before v5, whose registry names still route. Self-reported, like every
+	// field here: it decides only how the reader treats this host's own rows.
+	AddressVersion int `json:"address_version,omitempty"`
 	// Alias is what this host calls ITSELF (config PeerAlias()). A reader uses
 	// it to name a newly paired peer the way that peer names itself, so an
 	// address means the same string on both machines. It is self-reported and
@@ -37,6 +45,10 @@ type Envelope struct {
 	TitlesUnavailable    bool         `json:"titles_unavailable"`     // the title store could not be read: every row renders without its title. Addresses are unaffected
 	LineageUnavailable   bool         `json:"lineage_unavailable"`    // the relay lineage could not be read: rows carry no previous_refs, and a ref that matches no live row is not-ready rather than not-found (lead-team-relay spec §8.4)
 }
+
+// AddressVersionV5 is Envelope.AddressVersion for Peer Address v5 (peer
+// mailbox spec §3): rows are addressed by the pdx-assigned virtual name.
+const AddressVersionV5 = 5
 
 // HostResult is one host's row in a scope=all response: like Envelope, plus
 // the alias/host_id identifying which peer host it came from.

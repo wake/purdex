@@ -632,6 +632,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	writeError := func(errMsg string) ipeers.Envelope {
 		return ipeers.Envelope{
 			HostID:               hostID,
+			AddressVersion:       ipeers.AddressVersionV5,
 			Alias:                alias,
 			OK:                   false,
 			Error:                errMsg,
@@ -831,6 +832,10 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 
 	return ipeers.Envelope{
 		HostID: hostID,
+		// Stated, not left for a peer to infer from the rows: a pass whose
+		// name store failed has no named row and must still not read as a
+		// pre-v5 daemon (normalizeRemoteRows).
+		AddressVersion: ipeers.AddressVersionV5,
 		// The caller's snapshot alias, published so a peer pairing with this
 		// host can adopt the name this host uses for itself (spec §7) rather
 		// than inventing a local one that makes addresses unportable.
@@ -978,15 +983,13 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 // can never be one.
 //
 // Name is settled before the address is derived from it (Peer Address v5,
-// peer mailbox spec §3.3): see remoteName.
-func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string) []ipeers.PeerRecord {
-	preV5 := true
-	for _, rec := range rows {
-		if isLiveCC(rec) && rec.Name != "" {
-			preV5 = false
-			break
-		}
-	}
+// peer mailbox spec §3.3): see remoteName. addressVersion is the remote
+// envelope's own statement of its rules. It is read, never inferred from the
+// rows: a v5 daemon whose name store failed sends no named row at all, and
+// taking that for a pre-v5 daemon made its registry names routable here — a
+// fail-open onto whichever conversation holds that CLI name now.
+func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string, addressVersion int) []ipeers.PeerRecord {
+	preV5 := addressVersion < ipeers.AddressVersionV5
 	out := make([]ipeers.PeerRecord, len(rows))
 	for i, rec := range rows {
 		rec.Host = alias
@@ -1002,13 +1005,11 @@ func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string) []ipeer
 // its daemon assigned, when it is routable and the row carries a live cc entry
 // (the rows Resolve's name tier decides on), else none.
 //
-// preV5 says no live row of the batch carried a name at all: the remote
-// predates Peer Address v5 and still routes by registry name, so that name
-// stands in (spec §3.3: mixed versions keep working). It is decided per batch,
-// not per row, because one batch is one daemon: a current remote's row that
-// merely has no name is addressed by its ref there, and must be here too —
-// promoting its registry name would print an address that remote no longer
-// routes by.
+// preV5 says the remote's envelope stated no address_version: it predates
+// Peer Address v5 and still routes by registry name, so that name stands in
+// (spec §3.3: mixed versions keep working). A v5 remote's row that has no
+// name is addressed by its ref there, and must be here too — promoting its
+// registry name would print an address that remote no longer routes by.
 func remoteName(rec ipeers.PeerRecord, preV5 bool) string {
 	if !isLiveCC(rec) {
 		return ""
@@ -1147,7 +1148,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		resultHostID = env.HostID
 	}
 
-	peers := normalizeRemoteRows(env.Peers, h.Alias, resultHostID)
+	peers := normalizeRemoteRows(env.Peers, h.Alias, resultHostID, env.AddressVersion)
 	for i := range peers {
 		redactRecord(&peers[i], h.Token)
 	}

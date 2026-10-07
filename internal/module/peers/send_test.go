@@ -335,6 +335,15 @@ func remoteEnvelope(rows ...ipeers.PeerRecord) ipeers.Envelope {
 	return ipeers.Envelope{HostID: remoteHostID, OK: true, Peers: rows}
 }
 
+// v5Envelope is remoteEnvelope from a daemon that states Peer Address v5:
+// its rows route by their virtual names only. remoteEnvelope, which states
+// no version, is a pre-v5 daemon's.
+func v5Envelope(rows ...ipeers.PeerRecord) ipeers.Envelope {
+	env := remoteEnvelope(rows...)
+	env.AddressVersion = ipeers.AddressVersionV5
+	return env
+}
+
 func newSendEnv(t *testing.T, o envOpts) *sendEnv {
 	t.Helper()
 	s := &sendEnv{
@@ -2099,7 +2108,7 @@ func TestSend_PeerEchoesOurTokenIsRedacted(t *testing.T) {
 		{name: "name mismatch detail", prepare: func(s *sendEnv) {
 			row := remoteRow(remoteSession, "fooc")
 			row.Name = "pn-" + remoteToken
-			s.env = remoteEnvelope(row)
+			s.env = v5Envelope(row)
 		}, to: remoteAlias + "/decoy-name [" + strings.TrimPrefix(canonical, "_") + "]", status: http.StatusConflict, dropped: true},
 	}
 	for _, c := range cases {
@@ -2206,11 +2215,11 @@ func TestSend_CombinedNameMismatchRefused(t *testing.T) {
 	}
 }
 
-// TestSend_RemoteRoutesByVirtualName is spec §3.3 on the sending side. A
-// current remote's row carries its virtual name, and that is what routes to
-// it; its registry name does not, exactly as on that remote itself. A pre-v5
-// remote (no name on any row) is still reached by registry name, so mixed
-// versions keep working.
+// TestSend_RemoteRoutesByVirtualName is spec §3.3 on the sending side. A v5
+// remote's row carries its virtual name, and that is what routes to it; its
+// registry name does not, exactly as on that remote itself — even when that
+// remote could name no row this pass. A pre-v5 remote (no address_version) is
+// still reached by registry name, so mixed versions keep working.
 func TestSend_RemoteRoutesByVirtualName(t *testing.T) {
 	t.Run("current remote", func(t *testing.T) {
 		s := newSendEnv(t, envOpts{})
@@ -2218,7 +2227,7 @@ func TestSend_RemoteRoutesByVirtualName(t *testing.T) {
 		// tmux-name tier cannot answer for the registry name below.
 		row := remoteRow("air-main", "fooc")
 		row.Name = "foo-9z"
-		s.set(func(s *sendEnv) { s.env = remoteEnvelope(row) })
+		s.set(func(s *sendEnv) { s.env = v5Envelope(row) })
 
 		req := s.sendReq()
 		req.To = remoteAlias + "/foo-9z"
@@ -2231,8 +2240,26 @@ func TestSend_RemoteRoutesByVirtualName(t *testing.T) {
 			t.Errorf("posts = %d, want 1: the registry name must not deliver", n)
 		}
 	})
+	// The name store on a v5 remote failed this pass, so no row has a name.
+	// Inferring "old daemon" from that made the registry name routable here:
+	// a fail-open onto whichever conversation holds that CLI name now.
+	t.Run("v5 remote with no names this pass", func(t *testing.T) {
+		s := newSendEnv(t, envOpts{})
+		s.set(func(s *sendEnv) { s.env = v5Envelope(remoteRow("air-main", "fooc")) })
+
+		req := s.sendReq()
+		req.To = remoteAlias + "/" + remoteSession
+		assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
+		if n := len(s.postCalls()); n != 0 {
+			t.Fatalf("posts = %d, want none: the registry name must not deliver", n)
+		}
+		req.To = remoteAlias + "/" + ipeers.RefID(remoteSessionID)
+		if resp := s.sendOK(req); resp.To.AgentSessionID != remoteSessionID {
+			t.Errorf("ref form sent to %+v, want the remote row", resp.To)
+		}
+	})
 	t.Run("pre-v5 remote", func(t *testing.T) {
-		s := newSendEnv(t, envOpts{}) // remoteRow carries no name
+		s := newSendEnv(t, envOpts{}) // remoteEnvelope states no address_version
 		if resp := s.sendOK(s.sendReq()); resp.ToAddress != remoteAlias+"/"+remoteSession {
 			t.Errorf("to_address = %q, want %s/%s by the old rule", resp.ToAddress, remoteAlias, remoteSession)
 		}
@@ -2263,7 +2290,7 @@ func TestSend_RegistryNameNotFoundPointsAtTheVirtualAddress(t *testing.T) {
 		named, nameless := remoteRow("air-main", "fooc"), remoteRow("air-two", "twoc")
 		named.Name = "foo-9z"
 		nameless.Agent.PeerName, nameless.Agent.PID, nameless.Ref = "bar", 778, "_bar123"
-		s.set(func(s *sendEnv) { s.env = remoteEnvelope(named, nameless) })
+		s.set(func(s *sendEnv) { s.env = v5Envelope(named, nameless) })
 
 		req := s.sendReq()
 		req.To = remoteAlias + "/" + remoteSession

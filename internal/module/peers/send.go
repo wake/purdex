@@ -408,7 +408,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		for i := range env.Peers {
 			redactRecord(&env.Peers[i], entry.Token)
 		}
-		rows = normalizeRemoteRows(env.Peers, targetAlias, targetHostID)
+		rows = normalizeRemoteRows(env.Peers, targetAlias, targetHostID, env.AddressVersion)
 		rsnap = ipeers.ResolveSnapshot{
 			Partial:            env.Partial,
 			RegistryIncomplete: len(env.UnknownRegistryFiles) > 0,
