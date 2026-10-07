@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -411,6 +412,48 @@ func TestSpawnCmd_BriefLimitIsExact(t *testing.T) {
 	code, _, stderr := driveTeamCmd(t, runSpawnCmd, over, "--model", "sonnet", "--brief", strings.Repeat("x", limit+1))
 	if code != ExitUsage || over.count() != 0 || !strings.Contains(stderr, strconv.Itoa(limit)) {
 		t.Errorf("one byte over: code=%d requests=%d stderr=%q", code, over.count(), stderr)
+	}
+}
+
+// --brief-file reads at most one byte past the limit (PR P4-7 R1): a FIFO
+// whose writer never closes, /dev/zero and a 1 GiB file are exit 2 naming
+// the limit, without waiting for an EOF or holding the file in memory; a
+// FIFO nobody writes to gives up after briefReadTimeout. No request is made.
+func TestSpawnCmd_BriefFileReadIsBounded(t *testing.T) {
+	defer func(d time.Duration) { briefReadTimeout = d }(briefReadTimeout)
+	briefReadTimeout = 2 * time.Second
+	dir := t.TempDir()
+	held, idle, big := filepath.Join(dir, "held"), filepath.Join(dir, "idle"), filepath.Join(dir, "big")
+	for _, p := range []string{held, idle} {
+		if err := syscall.Mkfifo(p, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release := make(chan struct{})
+	defer close(release)
+	go func() { // writes one byte past the limit and never closes until the test ends
+		if w, err := os.OpenFile(held, os.O_WRONLY, 0); err == nil {
+			_, _ = w.Write(bytes.Repeat([]byte("x"), briefMaxBytes+1))
+			<-release
+			w.Close()
+		}
+	}()
+	if f, err := os.Create(big); err != nil || f.Truncate(1<<30) != nil || f.Close() != nil {
+		t.Fatal("sparse file", err)
+	}
+	d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnDone}}
+	for _, p := range []string{held, "/dev/zero", big} { // held first: an unbounded read fails here, before /dev/zero
+		code, _, stderr := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet", "--brief-file", p)
+		if code != ExitUsage || !strings.Contains(stderr, strconv.Itoa(briefMaxBytes)) {
+			t.Fatalf("%s: code=%d stderr=%q", p, code, stderr)
+		}
+	}
+	code, _, stderr := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet", "--brief-file", idle)
+	if code != ExitUsage || !strings.Contains(stderr, "--brief-file") || d.count() != 0 {
+		t.Errorf("idle FIFO: code=%d requests=%d stderr=%q", code, d.count(), stderr)
+	}
+	if w, err := os.OpenFile(idle, os.O_WRONLY, 0); err == nil { // lets the abandoned open return
+		w.Close()
 	}
 }
 

@@ -83,6 +83,10 @@ var spawnSettleBound = 9 * time.Minute
 var briefMaxBytes = ipeers.MaxTextBytes - len("\n") - len(fmt.Sprintf(team.MemberBriefPrefixFmt,
 	strings.Repeat("a", maxLeadAddressBytes), strings.Repeat("0", teamIDBytes)))
 
+// briefReadTimeout bounds reading --brief-file, whose open blocks on a FIFO
+// nobody writes to. A var only so tests can shorten it.
+var briefReadTimeout = 10 * time.Second
+
 // briefTimeout bounds the brief's one POST (as `pdx msg send`). A var only
 // so tests can shorten it.
 var briefTimeout = msgSendTimeout
@@ -193,11 +197,9 @@ func parseSpawnArgs(args []string, stderr io.Writer) (spawnArgs, bool) {
 	}
 	a.hasBrief = set["brief"] || set["brief-file"]
 	if set["brief-file"] {
-		b, err := os.ReadFile(briefFile)
-		if err != nil {
+		if a.brief, err = readBriefFile(briefFile); err != nil {
 			return reject("--brief-file: " + err.Error())
 		}
-		a.brief = string(b)
 	}
 	if a.hasBrief {
 		// Checked now so a brief the daemon would refuse fails before a
@@ -210,6 +212,35 @@ func parseSpawnArgs(args []string, stderr io.Writer) (spawnArgs, bool) {
 		}
 	}
 	return a, true
+}
+
+// readBriefFile reads at most one byte past briefMaxBytes of path, so a huge
+// file, /dev/zero or a FIFO whose writer never closes costs one bounded read
+// (the caller refuses anything longer). An open or read that has not ended
+// within briefReadTimeout (a FIFO nobody writes to) is an error; its
+// goroutine is left behind, and the process exits soon after.
+func readBriefFile(path string) (string, error) {
+	type result struct {
+		b   []byte
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		f, err := os.Open(path)
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		defer f.Close()
+		b, err := io.ReadAll(io.LimitReader(f, int64(briefMaxBytes)+1))
+		done <- result{b, err}
+	}()
+	select {
+	case r := <-done:
+		return string(r.b), r.err
+	case <-time.After(briefReadTimeout):
+		return "", fmt.Errorf("%s 內沒有讀完（沒有寫入端的 FIFO？）", briefReadTimeout)
+	}
 }
 
 // runSpawnCmd implements `pdx spawn` (spec §7.2): one op id, POSTed again
