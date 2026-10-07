@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -65,11 +67,21 @@ func (m *helperManager) waitGone(r proxyRecord) (alive bool, id ipeers.ProcIdent
 // signalled.
 func (m *helperManager) Sweep() error {
 	m.mu.Lock()
-	swept := m.swept
-	m.mu.Unlock()
-	if swept {
+	if m.swept || m.sweeping {
+		m.mu.Unlock()
 		return nil
 	}
+	m.sweeping = true // claim the scan before reading proxies.json
+	m.mu.Unlock()
+
+	swept := false
+	defer func() {
+		if !swept { // a failed Sweep stays retryable
+			m.mu.Lock()
+			m.sweeping = false
+			m.mu.Unlock()
+		}
+	}()
 
 	records := m.readProxies()
 	var unresolved []unresolvedRecord
@@ -86,6 +98,7 @@ func (m *helperManager) Sweep() error {
 		return fmt.Errorf("peers: write %s: %w", m.proxiesPath, err)
 	}
 	m.swept = true
+	swept = true
 	return nil
 }
 
@@ -180,13 +193,33 @@ func fileExists(path string) bool {
 // before Sweep reaps it (see tryReapZombie).
 const defaultZombieSettle = 200 * time.Millisecond
 
-// defaultProcState is ps -o stat=,ppid= -p pid. (stub)
+// defaultProcState is `ps -o stat=,ppid= -p pid` (BSD ps, as macOS ships):
+// the first field is the state letters, the second the parent pid. Anything
+// that does not parse is an error.
 func defaultProcState(pid int) (string, int, error) {
-	return "", 0, errors.New("not implemented")
+	out, err := exec.Command("ps", "-o", "stat=,ppid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return "", 0, fmt.Errorf("ps -p %d: %w", pid, err)
+	}
+	f := strings.Fields(string(out))
+	if len(f) != 2 {
+		return "", 0, fmt.Errorf("ps -p %d: unexpected output %q", pid, strings.TrimSpace(string(out)))
+	}
+	ppid, err := strconv.Atoi(f[1])
+	if err != nil {
+		return "", 0, fmt.Errorf("ps -p %d: ppid %q: %w", pid, f[1], err)
+	}
+	return f[0], ppid, nil
 }
 
-// defaultReap is a non-blocking wait4. (stub)
-func defaultReap(pid int) bool { return false }
+// defaultReap is a non-blocking wait4 on pid. Only "collected exactly this
+// pid" is true: r == 0 is a direct child still running, ECHILD means not our
+// child, anything else is a failure — all false.
+func defaultReap(pid int) bool {
+	var ws syscall.WaitStatus
+	r, err := syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
+	return err == nil && r == pid
+}
 
 // isOurZombie reports whether pid currently shows as a zombie whose
 // parent is this daemon, returning the ppid it saw.
