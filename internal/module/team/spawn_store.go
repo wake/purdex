@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -42,33 +43,60 @@ func (r *spawnRow) dest() []any {
 		&r.LaunchedAt, &r.CreatedAt, &r.UpdatedAt}
 }
 
-// nextSpawnStep is each step's one successor; registered is followed by done.
-var nextSpawnStep = map[string]string{
-	team.StepAccepted:       team.StepSessionCreated,
-	team.StepSessionCreated: team.StepLaunched,
-	team.StepLaunched:       team.StepRegistered,
-}
+// spawnStepRank orders the steps. A running row at rank n holds the
+// milestones of ranks 1..n and none later (R2 finding 2): the three tmux
+// ids (session_created), launched_at (launched), the session id (registered).
+var spawnStepRank = map[string]int{team.StepAccepted: 0, team.StepSessionCreated: 1, team.StepLaunched: 2, team.StepRegistered: 3}
 
 var spawnReasons = map[string]bool{team.SpawnReasonStartTimeout: true, team.SpawnReasonCreateFailed: true,
 	team.SpawnReasonLaunchFailed: true, team.SpawnReasonNameTaken: true, team.SpawnReasonAbandoned: true}
 
+// milestones reports, by step rank, which milestones a row or an update
+// holds, and whether any is half there (some tmux ids only) or negative.
+func milestones(tmuxID, tmuxInstance, paneID string, launchedAt int64, sessionID string) (has [4]bool, partial bool) {
+	has[1] = tmuxID != "" && tmuxInstance != "" && paneID != ""
+	partial = !has[1] && (tmuxID != "" || tmuxInstance != "" || paneID != "") || launchedAt < 0
+	has[2], has[3] = launchedAt > 0, sessionID != ""
+	return has, partial
+}
+
+// checkRunning says what a running row lacks or holds wrongly (R2 findings
+// 2 and 3): the tmux name of its id, what its runner needs, a valid model
+// and effort, no reason, and exactly the milestones of its step.
+func (r spawnRow) checkRunning() error {
+	name, err := team.SpawnTmuxName(r.ID)
+	rank, known := spawnStepRank[r.Step]
+	has, partial := milestones(r.TmuxID, r.TmuxInstance, r.PaneID, r.LaunchedAt, r.SessionID)
+	switch {
+	case err != nil || r.TmuxName != name:
+		return fmt.Errorf("tmux name %q is not its id's", r.TmuxName)
+	case r.TeamID == "" || r.HostID == "" || r.OriginSessionID == "" || r.Cwd == "" || r.CreatedAt <= 0 || r.UpdatedAt <= 0:
+		return errors.New("team, host, origin, cwd and both times must be set")
+	case (r.Model != "" && !team.ValidModel(r.Model)) || (r.Effort != "" && !team.ValidEffort(r.Effort)):
+		return fmt.Errorf("invalid model %q or effort %q", r.Model, r.Effort)
+	case r.State != team.SpawnRunning || r.Reason != "" || !known:
+		return fmt.Errorf("state %q, reason %q, step %q is no running step", r.State, r.Reason, r.Step)
+	case partial || has[1] != (rank >= 1) || has[2] != (rank >= 2) || has[3] != (rank >= 3):
+		return fmt.Errorf("its milestones do not match step %s", r.Step)
+	}
+	return nil
+}
+
 // CreateSpawnOp inserts op if its id is new (inserted=true); otherwise it
 // inserts nothing. Either way it returns the stored row and hash, so the
 // caller tells a retry (same hash) from a reuse of the id. A new op must be
-// accepted and running with its team, origin and cwd, named SpawnTmuxName
-// of its id (what a restarted runner looks for); else nothing is written.
+// accepted and pass checkRunning (named SpawnTmuxName of its id, what a
+// restarted runner looks for; no milestone yet) and carry its request hash;
+// else nothing is written.
 func (s *Store) CreateSpawnOp(op spawnRow, hash string) (stored spawnRow, storedHash string, inserted bool, err error) {
 	fail := func(err error) (spawnRow, string, bool, error) {
 		return spawnRow{}, "", false, fmt.Errorf("create spawn op %s: %w", op.ID, err)
 	}
-	name, err := team.SpawnTmuxName(op.ID)
-	if err != nil {
-		return fail(err)
+	if hash == "" || op.Step != team.StepAccepted || op.UpdatedAt < op.CreatedAt {
+		return fail(fmt.Errorf("a new op needs a request hash, step accepted (got %q) and updated_at >= created_at", op.Step))
 	}
-	if op.TmuxName != name || op.TeamID == "" || op.OriginSessionID == "" || op.Cwd == "" ||
-		op.Step != team.StepAccepted || op.State != team.SpawnRunning {
-		return fail(fmt.Errorf("a new op needs tmux name %q (got %q), a team, an origin and a cwd, step accepted and state running (got %s, %s)",
-			name, op.TmuxName, op.Step, op.State))
+	if err := op.checkRunning(); err != nil {
+		return fail(err)
 	}
 	res, err := s.db.Exec(`INSERT INTO spawn_ops (request_hash, `+spawnCols+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
@@ -98,8 +126,9 @@ func (s *Store) GetSpawnOp(id string) (spawnRow, bool, error) {
 	return r, true, nil
 }
 
-// spawnUpdate is what one runner step records (a zero field keeps the
-// stored value). State is "" to stay running, or SpawnDone from registered.
+// spawnUpdate is what one runner step records: the facts of the step it
+// reaches and no other (a zero field keeps the stored value). State is ""
+// to stay running, or SpawnDone from registered.
 type spawnUpdate struct {
 	Step                         string
 	State                        team.SpawnState
@@ -109,18 +138,50 @@ type spawnUpdate struct {
 	At                           int64  // updated_at
 }
 
+// fits says whether u is the next step from fromStep with exactly that
+// step's facts (R2 finding 2): the three tmux ids to session_created, a
+// positive launched_at to launched, the session id to registered, nothing
+// to done; and a positive time.
+func (u spawnUpdate) fits(fromStep string) bool {
+	from, known := spawnStepRank[fromStep]
+	has, partial := milestones(u.TmuxID, u.TmuxInstance, u.PaneID, u.LaunchedAt, u.SessionID)
+	want := from + 1 // the rank whose milestone u carries; 4 = done, none
+	switch {
+	case !known || u.At <= 0 || partial:
+		return false
+	case u.State == team.SpawnDone:
+		if from != 3 || u.Step != team.StepRegistered {
+			return false
+		}
+	case u.State != "" || from == 3 || spawnStepRank[u.Step] != want:
+		return false
+	}
+	return has[1] == (want == 1) && has[2] == (want == 2) && has[3] == (want == 3)
+}
+
 // AdvanceSpawnOp moves a running op from fromStep to the next step (or from
 // registered to done) in one compare-and-set on the step and the running
 // state: a second runner, or a retry after a restart, that read the same
 // step loses (won false, nothing changed), as does an unknown or ended op.
-// Any other transition is an error.
+// An update that does not fit the step, or a stored row that fails
+// checkRunning, is an error and changes nothing.
 func (s *Store) AdvanceSpawnOp(id, fromStep string, upd spawnUpdate) (bool, error) {
-	toDone := fromStep == team.StepRegistered && upd.Step == team.StepRegistered && upd.State == team.SpawnDone
-	if !toDone && (upd.State != "" || nextSpawnStep[fromStep] == "" || nextSpawnStep[fromStep] != upd.Step) {
-		return false, fmt.Errorf("advance spawn op %s: %s → %s (state %q) is not a step", id, fromStep, upd.Step, upd.State)
+	if !upd.fits(fromStep) {
+		return false, fmt.Errorf("advance spawn op %s: %+v is not the step after %s with its facts", id, upd, fromStep)
+	}
+	// The read only vets the row this step would build on; the CAS below
+	// alone decides who wins.
+	cur, ok, err := s.GetSpawnOp(id)
+	if err != nil {
+		return false, err
+	}
+	if ok && cur.Step == fromStep && cur.State == team.SpawnRunning {
+		if err := cur.checkRunning(); err != nil {
+			return false, fmt.Errorf("advance spawn op %s: the stored row is corrupt: %w", id, err)
+		}
 	}
 	state := team.SpawnRunning
-	if toDone {
+	if upd.State == team.SpawnDone {
 		state = team.SpawnDone
 	}
 	res, err := s.db.Exec(`UPDATE spawn_ops SET step = ?, state = ?,
@@ -158,23 +219,36 @@ func oneRow(res sql.Result, err error, what string) (bool, error) {
 }
 
 // ListRunningSpawnOps returns every running op, oldest first: what boot
-// resumes (spec §9.3). Never nil.
-func (s *Store) ListRunningSpawnOps() ([]spawnRow, error) {
+// resumes (spec §9.3). A row that fails checkRunning is failed abandoned at
+// now and logged instead (R2 finding 2): resuming it would act on facts it
+// does not hold, again on every start. Never nil.
+func (s *Store) ListRunningSpawnOps(now int64) ([]spawnRow, error) {
 	rows, err := s.db.Query(`SELECT ` + spawnCols + ` FROM spawn_ops WHERE state = 'running' ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list running spawn ops: %w", err)
 	}
 	defer rows.Close()
-	out := []spawnRow{}
+	out, corrupt := []spawnRow{}, map[string]error{}
 	for rows.Next() {
 		var r spawnRow
 		if err := rows.Scan(r.dest()...); err != nil {
 			return nil, fmt.Errorf("list running spawn ops: %w", err)
 		}
-		out = append(out, r)
+		if bad := r.checkRunning(); bad != nil {
+			corrupt[r.ID] = bad
+		} else {
+			out = append(out, r)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list running spawn ops: %w", err)
+	}
+	rows.Close() // before writing: an in-memory store has one connection
+	for id, bad := range corrupt {
+		if _, err := s.FailSpawnOp(id, team.SpawnReasonAbandoned, now); err != nil {
+			return nil, err
+		}
+		log.Printf("[team] spawn op %s: stored row is corrupt (%v); failed %s", id, bad, team.SpawnReasonAbandoned)
 	}
 	return out, nil
 }
