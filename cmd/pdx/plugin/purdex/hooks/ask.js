@@ -88,6 +88,23 @@ function nativeOutcome(n) {
     : { state: 'dismissed' }
 }
 
+// answersFit reports whether a remote answer answers exactly the questions asked: one
+// non-empty string per question text and no other key. A multi-select is the comma-joined
+// labels and free text is any string (M24 P-A: both pass the output schema), so the value
+// is not checked against the options. A remote answer that does not fit must not close the
+// dialog: the person would lose it for an incomplete or wrong answer.
+function answersFit(questions, answers) {
+  if (!Array.isArray(questions) || questions.length === 0 || !isObject(answers)) return false
+  const asked = new Set()
+  for (const q of questions) {
+    if (!isObject(q) || typeof q.question !== 'string' || q.question === '') return false
+    asked.add(q.question)
+  }
+  const keys = Object.keys(answers)
+  if (keys.length !== asked.size) return false
+  return keys.every((k) => asked.has(k) && typeof answers[k] === 'string' && answers[k].trim() !== '')
+}
+
 // report tells the daemon how the terminal settled the row. Never rejects.
 function report($, cfg, id, outcome) {
   const args = ['report', id, outcome.state]
@@ -155,8 +172,8 @@ export function register(on) {
         if (isObject(out) && out.state === 'still_open') continue // another bounded round; the dialog stays up
         if (isObject(out) && out.state === 'answered_remote') {
           const answers = isObject(out.hook) && out.hook.answers
-          if (isObject(answers) && Object.keys(answers).length > 0) return { who: 'remote', answers }
-          return { who: 'remote-error', why: 'answered_remote without answers' }
+          if (answersFit(e.questions, answers)) return { who: 'remote', answers }
+          return { who: 'remote-error', why: 'answered_remote whose answers do not fit the questions' }
         }
         if (isObject(out) && out.state === 'closed') return { who: 'remote-closed', why: 'closed ' + out.reason }
         // A body the mod cannot read ends the race; it never loops on one (no spin).

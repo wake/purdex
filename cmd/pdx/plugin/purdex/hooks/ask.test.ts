@@ -231,6 +231,55 @@ test('remote first ⇒ { result: { questions, answers } } in the shape M24 measu
   expect(calls.map(sub)).toEqual(['begin', 'wait']) // the daemon closed the row itself: nothing to report
 })
 
+// Several questions (R2 attacker): a remote answer is taken only when it answers every
+// question asked and nothing else, each with a non-empty string — a multi-select is the
+// comma-joined labels and free text is any string (M24 P-A: both pass the output schema).
+// Mutation gate: accept any non-empty answers object → the partial case returns the remote
+// answer (red on `result: NATIVE2.result`).
+const Q2 = [
+  { question: '要哪些顏色？', header: '顏色', options: [{ label: '紅', description: 'r' }, { label: '藍', description: 'b' }], multiSelect: true },
+  { question: '取什麼名字？', header: '名字', options: [{ label: '甲', description: 'a' }, { label: '乙', description: 'b' }], multiSelect: false },
+]
+const NATIVE2 = { ref: 2, result: { questions: Q2, answers: { '要哪些顏色？': '紅', '取什麼名字？': '甲' }, annotations: {} }, text: 'Your questions have been answered', isReadOnly: true }
+
+test('remote first with several questions: a multi-select and a free-text answer are taken as given', async ($, on) => {
+  session(on)
+  const full = { '要哪些顏色？': '紅, 藍', '取什麼名字？': '小綠（自由填寫）' }
+  on('process.run', (_$: any, e: any) => {
+    const a = e.argv
+    if (sub(a) === 'begin') return ok('{"id":"r2q"}')
+    if (sub(a) === 'wait') return ok(JSON.stringify({ state: 'answered_remote', hook: { answers: full } }))
+    return ok('')
+  })
+  on('tool.call', { tool: 'AskUserQuestion' }, never)
+  const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q2 })
+  expect(r.result).toEqual({ questions: Q2, answers: full })
+})
+
+test('remote first answering only some of the questions ⇒ the native dialog runs on and the terminal answer is reported', async ($, on) => {
+  session(on)
+  const calls: Call[] = []
+  let answerNative: Resolver = null
+  const reported = new Promise<Call>((resolve) => {
+    on('process.run', (_$: any, e: any) => {
+      calls.push([...e.argv])
+      const a = e.argv
+      if (sub(a) === 'begin') return ok('{"id":"r2p"}')
+      if (sub(a) === 'wait') {
+        setTimeout(() => answerNative && answerNative(NATIVE2), 50)
+        return ok('{"state":"answered_remote","hook":{"answers":{"要哪些顏色？":"藍"}}}')
+      }
+      if (sub(a) === 'report') { resolve([...a]); return ok('{}') }
+      return ok('')
+    })
+  })
+  on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => { answerNative = res }))
+  const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q2 })
+  expect(r).toEqual(expect.objectContaining({ result: NATIVE2.result, ref: 2 }))
+  expect((await reported).slice(2, 5)).toEqual(['report', 'r2p', 'answered_local'])
+  expect(calls.map(sub)).toEqual(['begin', 'wait', 'report'])
+})
+
 // Mutation gate 5: replace `continue` with a return → red (`expected 12, received 1`).
 test('still_open loops without returning: N rounds, then the remote answer', async ($, on) => {
   session(on)
@@ -369,6 +418,10 @@ for (const [name, answer] of [
   ['exits 0 with a body that is not JSON', ok('not json')],
   ['exits 0 with a state the mod does not know', ok('{"state":"weird"}')],
   ['exits 0 with answered_remote but no answers', ok('{"state":"answered_remote","hook":{}}')],
+  // R2 attacker: a remote answer that does not match the questions must not close the dialog.
+  ['exits 0 with answered_remote for a question that was not asked', ok('{"state":"answered_remote","hook":{"answers":{"別的題目？":"藍"}}}')],
+  ['exits 0 with answered_remote whose answer is not a string', ok('{"state":"answered_remote","hook":{"answers":{"紅還是藍？":1}}}')],
+  ['exits 0 with answered_remote whose answer is empty', ok('{"state":"answered_remote","hook":{"answers":{"紅還是藍？":"  "}}}')],
   ['is refused by the host (the call rejects)', 'reject'],
 ] as const) {
   test(`wait that ${name} ⇒ the native dialog runs on alone, no second wait, its answer reported`, async ($, on) => {
