@@ -3,6 +3,7 @@ package teammod
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"testing"
@@ -535,5 +536,83 @@ func TestAskReport_AnsweredLocalOverridesARemoteDeny(t *testing.T) {
 	}
 	if stored, _, _ := f.m.store.Get(id); stored.State != team.StateTerminalOverride || stored.Hook == nil || stored.Hook.Behavior != "allow" {
 		t.Fatalf("stored row = %+v hook=%+v", stored, stored.Hook)
+	}
+}
+
+// openTerminalOnly opens a terminal_only hook_ask for sid-1 / toolUse the way
+// the settings-hook path does (P8a-1d) and returns it.
+func (f *fixture) openTerminalOnly(toolUse string) team.Approval {
+	f.t.Helper()
+	payload, bad := hookPayloadFor(team.KindHookAsk, toolUse, json.RawMessage(`{"questions":`+askQuestions+`}`), true)
+	if bad != "" {
+		f.t.Fatal(bad)
+	}
+	f.m.createMu.Lock()
+	defer f.m.createMu.Unlock()
+	ro, err := f.m.openHookRow(fixtureOrigins["/tmp/10.sock"], team.KindHookAsk, payload, true)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return ro
+}
+
+// Fix note (P8a-1b R2, attacker high): the mod's begin takes over a
+// terminal_only row atomically — the old row's close and the new row's
+// insert are one transaction (Store.ReplaceTerminalOnly). A failed insert
+// leaves the read-only card open, broadcasts nothing and answers 500; a
+// takeover that commits broadcasts the old row's closed, then the new
+// row's opened. Mutation gate: the close outside the transaction ⇒ the old
+// row is dismissed although begin failed ⇒ red.
+func TestAskBegin_TerminalOnlyTakeoverIsAtomic(t *testing.T) {
+	f := newFixture(t)
+	ro := f.openTerminalOnly("toolu_t1")
+	f.events()
+	f.m.store.beforeReplaceInsert = func() error { return errors.New("disk I/O error") }
+	code, body := f.do(http.MethodPost, "/api/ask/begin", askBeginBody("sid-1", "toolu_t1"))
+	if code != http.StatusInternalServerError || decodeErr(t, body).Error != errStorage {
+		t.Fatalf("begin with a failing insert = %d %s, want 500 %s", code, body, errStorage)
+	}
+	if a, _, _ := f.m.store.Get(ro.ID); a.State != team.StateOpen {
+		t.Fatalf("terminal_only row after a failed takeover = %s, want still open", a.State)
+	}
+	if open, err := f.m.store.ListOpen(); err != nil || len(open) != 1 || open[0].ID != ro.ID {
+		t.Fatalf("open rows = %+v err=%v, want only the terminal_only row", open, err)
+	}
+	if evs := f.events(); len(evs) != 0 {
+		t.Fatalf("a failed takeover broadcast %+v, want nothing", evs)
+	}
+	// The same begin once the insert works: closed(old) then opened(new).
+	f.m.store.beforeReplaceInsert = nil
+	newID := f.askBegin("toolu_t1")
+	evs := f.events()
+	if len(evs) != 2 || evs[0].Op != "closed" || evs[0].Approval.ID != ro.ID || evs[0].Approval.State != team.StateDismissed ||
+		evs[1].Op != "opened" || evs[1].Approval.ID != newID || evs[1].Approval.State != team.StateOpen {
+		t.Fatalf("takeover events = %+v, want closed(%s) then opened(%s)", evs, ro.ID, newID)
+	}
+	if a, _, _ := f.m.store.Get(ro.ID); a.State != team.StateDismissed {
+		t.Fatalf("old row = %s, want dismissed", a.State)
+	}
+	if a, _, _ := f.m.store.Get(newID); a.State != team.StateOpen || isTerminalOnly(a) {
+		t.Fatalf("new row = %+v, want open and answerable", a)
+	}
+}
+
+// A takeover whose old row something else closed first (between begin's
+// lookup and its replace) inserts the new row and broadcasts only its
+// opened: the close it lost is not announced twice.
+func TestAskBegin_TakeoverOfAnAlreadyClosedRowOnlyOpens(t *testing.T) {
+	f := newFixture(t)
+	ro := f.openTerminalOnly("toolu_t2")
+	f.m.afterOpenByToolUse = func() {
+		// The settings hook's PostToolUse backstop closes it first (store only: no event).
+		if _, won, err := f.m.store.CloseIfOpen(ro.ID, Close{State: team.StateDismissed, DecidedAt: 1}); err != nil || !won {
+			t.Errorf("backstop close: won=%v err=%v", won, err)
+		}
+	}
+	f.events()
+	newID := f.askBegin("toolu_t2")
+	evs := f.events()
+	if len(evs) != 1 || evs[0].Op != "opened" || evs[0].Approval.ID != newID {
+		t.Fatalf("events = %+v, want only opened(%s)", evs, newID)
 	}
 }

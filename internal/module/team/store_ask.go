@@ -52,6 +52,59 @@ func (s *Store) OpenTerminalOnlyBySession(sessionID string) ([]team.Approval, er
 	return out, nil
 }
 
+// terminalOnlyGuard narrows closeRowIn's open CAS to an open terminal_only
+// hook row (its one ? is bound to 1).
+const terminalOnlyGuard = ` AND kind IN ('hook_ask', 'hook_permission') AND json_extract(payload_json, '$.terminal_only') = ?`
+
+// ReplaceTerminalOnly is the takeover of spec §6.6 step 1: the mod's begin
+// for a tool use whose read-only (terminal_only) card the settings hook
+// opened first. In one transaction it closes the old row by the open CAS
+// (guarded to an open terminal_only hook row) and inserts newRow (state
+// open; an existing id is an error). Any error rolls both back: the old row
+// stays open and the caller announces nothing. won says whether this call
+// closed the old row and closedOld is that row after the close; when
+// something else closed it first, won is false, closedOld is zero and only
+// newRow is inserted. newStored is the inserted row.
+func (s *Store) ReplaceTerminalOnly(oldID string, c Close, newRow team.Approval, hash string) (closedOld team.Approval, won bool, newStored team.Approval, err error) {
+	fail := func(err error) (team.Approval, bool, team.Approval, error) {
+		return team.Approval{}, false, team.Approval{}, fmt.Errorf("replace terminal_only %s with %s: %w", oldID, newRow.ID, err)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fail(fmt.Errorf("begin: %w", err))
+	}
+	defer tx.Rollback()
+	// The first statement is a write, so SQLite takes the write lock at once.
+	n, err := closeRowIn(tx, oldID, c, terminalOnlyGuard, 1)
+	if err != nil {
+		return fail(err)
+	}
+	if s.beforeReplaceInsert != nil {
+		if err := s.beforeReplaceInsert(); err != nil {
+			return fail(err)
+		}
+	}
+	ins, err := insertRowIn(tx, newRow, hash, "")
+	if err != nil {
+		return fail(err)
+	}
+	if ins != 1 {
+		return fail(fmt.Errorf("insert affected %d rows", ins))
+	}
+	if n == 1 {
+		if closedOld, _, err = getRowIn(tx, oldID); err != nil {
+			return fail(err)
+		}
+	}
+	if newStored, _, err = getRowIn(tx, newRow.ID); err != nil {
+		return fail(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fail(fmt.Errorf("commit: %w", err))
+	}
+	return closedOld, n == 1, newStored, nil
+}
+
 // OverrideIfDecided is the second CAS of spec §6.6 step 5: a hook row a
 // remote decide already closed — approved, or denied (a hook_permission
 // deny) — becomes terminal_override, carrying the terminal's answer and

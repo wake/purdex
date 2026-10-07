@@ -74,31 +74,63 @@ func hookPayloadFor(kind team.Kind, toolUseID string, raw json.RawMessage, termi
 	}
 }
 
-// openHookRow inserts and announces a hook row for origin. A terminal_only
-// row has no lease (nobody polls it); a mod-raised one keeps the usual
-// lease, renewed by each /api/ask/wait. Neither has a deadline (NoExpiryAt):
-// the row lives as long as the native dialog. Callers hold createMu.
-func (m *Module) openHookRow(origin team.Origin, kind team.Kind, payload []byte, terminalOnly bool) (team.Approval, error) {
+// newHookRow is a fresh open hook row for origin, not yet stored, and its
+// request hash. A terminal_only row has no lease (nobody polls it); a
+// mod-raised one keeps the usual lease, renewed by each /api/ask/wait.
+// Neither has a deadline (NoExpiryAt): the row lives as long as the native
+// dialog.
+func (m *Module) newHookRow(origin team.Origin, kind team.Kind, payload []byte, terminalOnly bool) (team.Approval, string) {
 	now := m.now()
 	lease := now + team.LeaseS*1000
 	if terminalOnly {
 		lease = team.NoExpiryAt
 	}
-	id := uuid.NewString()
 	a := team.Approval{
-		ID: id, Kind: kind, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
+		ID: uuid.NewString(), Kind: kind, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
 		CreatedAt: now, DeadlineAt: team.NoExpiryAt, LeaseUntil: lease,
 	}
-	stored, _, inserted, err := m.store.Create(a, requestHash(kind, origin.SessionID, 0, payload))
+	return a, requestHash(kind, origin.SessionID, 0, payload)
+}
+
+// openHookRow inserts and announces a hook row for origin. Callers hold
+// createMu.
+func (m *Module) openHookRow(origin team.Origin, kind team.Kind, payload []byte, terminalOnly bool) (team.Approval, error) {
+	a, hash := m.newHookRow(origin, kind, payload, terminalOnly)
+	stored, _, inserted, err := m.store.Create(a, hash)
 	if err != nil {
 		return team.Approval{}, err
 	}
 	if !inserted {
 		return team.Approval{}, errors.New("fresh uuid already present")
 	}
-	m.logf("[team] approval %s opened: kind=%s origin=%s (%s) terminal_only=%v", stored.ID, kind, origin.Ref, origin.SessionID, terminalOnly)
-	m.broadcast("opened", &stored)
+	m.announceOpened(stored, terminalOnly)
 	return stored, nil
+}
+
+// takeOverTerminalOnly replaces the open terminal_only row old with a fresh
+// answerable row for the mod's begin. The close and the insert are one
+// transaction (Store.ReplaceTerminalOnly): an error leaves old open and
+// announces nothing. Only after the commit come old's closed and wake-up
+// (when this call closed it — something else may have first) and then the
+// new row's opened, so a card sees the read-only card go before the
+// answerable one arrives. Callers hold createMu.
+func (m *Module) takeOverTerminalOnly(old team.Approval, origin team.Origin, kind team.Kind, payload []byte) (team.Approval, error) {
+	a, hash := m.newHookRow(origin, kind, payload, false)
+	closed, won, stored, err := m.store.ReplaceTerminalOnly(old.ID, Close{State: team.StateDismissed, DecidedAt: m.now()}, a, hash)
+	if err != nil {
+		return team.Approval{}, err
+	}
+	if won {
+		m.logf("[team] approval %s dismissed: the mod's begin takes it over as %s", old.ID, stored.ID)
+		m.announceClosed(closed, nil)
+	}
+	m.announceOpened(stored, false)
+	return stored, nil
+}
+
+func (m *Module) announceOpened(a team.Approval, terminalOnly bool) {
+	m.logf("[team] approval %s opened: kind=%s origin=%s (%s) terminal_only=%v", a.ID, a.Kind, a.Origin.Ref, a.Origin.SessionID, terminalOnly)
+	m.broadcast("opened", &a)
 }
 
 // handleAskBegin is POST /api/ask/begin (spec §6.6 step 1).
@@ -142,25 +174,27 @@ func (m *Module) handleAskBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon is stopping", nil)
 		return
 	}
-	if open, found, err := m.store.OpenByToolUse(origin.SessionID, req.ToolUseID); err != nil {
+	open, found, err := m.store.OpenByToolUse(origin.SessionID, req.ToolUseID)
+	if err != nil {
 		m.logf("[team] ask begin: %v", err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
-	} else if found {
-		if !isTerminalOnly(open) {
-			m.writeErr(w, http.StatusConflict, team.ErrAskOpen, "this tool use already has an open request", &open)
-			return
-		}
-		// The settings hook got here first (the mod's hello was missed):
-		// the read-only card gives way to an answerable one.
-		if _, _, err := m.closeAs(open.ID, Close{State: team.StateDismissed, DecidedAt: m.now()}); err != nil {
-			m.logf("[team] ask begin: take over %s: %v", open.ID, err)
-		}
+	}
+	if found && !isTerminalOnly(open) {
+		m.writeErr(w, http.StatusConflict, team.ErrAskOpen, "this tool use already has an open request", &open)
+		return
 	}
 	if m.afterOpenByToolUse != nil {
 		m.afterOpenByToolUse()
 	}
-	stored, err := m.openHookRow(origin, req.Kind, payload, false)
+	var stored team.Approval
+	if found {
+		// The settings hook got here first (the mod's hello was missed):
+		// the read-only card gives way to an answerable one, atomically.
+		stored, err = m.takeOverTerminalOnly(open, origin, req.Kind, payload)
+	} else {
+		stored, err = m.openHookRow(origin, req.Kind, payload, false)
+	}
 	if err != nil {
 		m.logf("[team] ask begin: %v", err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)

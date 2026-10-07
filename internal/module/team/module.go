@@ -320,11 +320,17 @@ func (m *Module) closeWithOp(id string, cas func() (team.Approval, bool, error),
 		return team.Approval{}, false, err
 	}
 	if won {
-		m.broadcast("closed", &after)
-		m.wake(id)
-		m.afterClose(after, rep)
+		m.announceClosed(after, rep)
 	}
 	return after, won, nil
+}
+
+// announceClosed is what follows every close that won, once it is
+// committed: the closed broadcast, the long-poll wake-up and afterClose.
+func (m *Module) announceClosed(after team.Approval, rep *RelayReport) {
+	m.broadcast("closed", &after)
+	m.wake(after.ID)
+	m.afterClose(after, rep)
 }
 
 // broadcast queues one opened/closed event to every subscriber, under
