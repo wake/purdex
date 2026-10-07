@@ -803,9 +803,10 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	previousRefs, lineageUnavailable := m.previousRefs()
 	// Virtual names (Peer Address v5): every live conversation is named once,
 	// at first sighting, and the row pinned to its live entry is addressed by
-	// that name. Under the request's ctx rather than invCtx: a pass that spent
-	// its budget on tmux must not also cost every row its name.
-	virtualNames := m.resolveNames(ctx, entryNameCandidates(entries, proxyPIDs, previousRefs))
+	// that name. Under invCtx, the inventory's one budget: a name store that
+	// hangs, or a pass whose budget is already spent, costs this pass its
+	// names (every row takes the ref form), never the GET or the send.
+	virtualNames := m.resolveNames(invCtx, entryNameCandidates(entries, proxyPIDs, previousRefs))
 	peerRecords := ipeers.Build(ipeers.BuildInput{
 		HostID:       hostID,
 		Alias:        alias,

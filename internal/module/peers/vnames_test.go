@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/store"
@@ -407,5 +408,66 @@ func TestVirtualAddress_StoreErrorFallsBackToRef(t *testing.T) {
 	}
 	if o, _, _ := (&OriginResolver{m: f.m}).ResolveOrigin(f.inbox(10)); o.Address != want {
 		t.Errorf("origin address = %q, want %q", o.Address, want)
+	}
+}
+
+// blockingNames is a PeerNameStore whose Lookup waits for its ctx to end — a
+// name store that hangs — and signals entered once it is waiting.
+type blockingNames struct {
+	PeerNameStore
+	entered chan struct{}
+}
+
+func (b blockingNames) Lookup(ctx context.Context, _ []string) (map[string]store.PeerNameEntry, error) {
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func newBlockingNames(m *Module) blockingNames {
+	return blockingNames{PeerNameStore: m.peerNames, entered: make(chan struct{}, 1)}
+}
+
+// within runs f and fails the test if it has not returned after d, so a hung
+// name store fails this test rather than the whole package's timeout.
+func within(t *testing.T, d time.Duration, what string, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f()
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("%s did not return within %v", what, d)
+	}
+}
+
+// The inventory's one budget covers the namer too: a hung name store costs
+// that pass its names (every row takes the ref form), never the request.
+func TestVirtualAddress_EnvelopeNamerStaysInBudget(t *testing.T) {
+	f := newTitleFixture(t)
+	f.m.budget = 300 * time.Millisecond
+	f.m.WithPeerNames(newBlockingNames(f.m), nil)
+	snap := f.m.configSnapshot()
+	var env ipeers.Envelope
+	within(t, 5*time.Second, "localEnvelope", func() {
+		env = f.m.localEnvelope(context.Background(), snap.hostID, snap.alias)
+	})
+	seen := false
+	for _, row := range env.Peers {
+		if row.Agent != nil && row.Agent.SessionID == "sid-1" && row.Agent.PID == 10 {
+			seen = true
+			if want := "a/" + ipeers.RefID("sid-1"); row.Address != want || row.Name != "" {
+				t.Errorf("row name/address = %q/%q, want the ref form %s", row.Name, row.Address, want)
+			}
+		}
+	}
+	if !seen {
+		t.Fatalf("no row for sid-1 in %+v", env)
 	}
 }
