@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.534] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。沒有使用者看得到的變化。
+
+### Fixed：nex 停止時的假 log（#1656，#1709）
+
+`stopManualResume` 在 ctx 已逾時、但沒有任何 manual-resume 工作在跑時，仍可能記出「still running」。現在只在確實有工作在途時才記（以原子計數判斷）。
+
 ## [1.0.0-alpha.533] - 2026-10-07
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排；可與 alpha.532 合併一次重啟）。本版沒有使用者看得到的變化：還沒有任何東西註冊接力血統（P5a-2a 才會），`pdx peers` 輸出不變。`pdx` 指令、SPA、Electron 都沒有改動。
