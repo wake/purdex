@@ -144,6 +144,14 @@ type Module struct {
 	// team's lead is gone and just before EndTeam; tests move a relay op of
 	// that lead in this window and prove the end loses. nil in production.
 	beforeEndTeam func(t team.Team)
+	// beforeMarkGone, when set, runs in markGoneMembers after it decided the
+	// member is gone and just before MarkMemberGone; tests claim a relay of
+	// that member there and prove the mark loses. nil in production.
+	beforeMarkGone func(mr memberRow)
+	// beforeKillMark, when set, runs in handleKill after the member's tmux
+	// session was ended and just before its row is marked killed; tests move
+	// or relay the member there and prove the mark loses. nil in production.
+	beforeKillMark func(mr memberRow)
 	// clearedWait / clearedPoll bound how long a cleared report waits for
 	// the registry to show the new session id (checkClearedTarget).
 	clearedWait, clearedPoll time.Duration
@@ -264,6 +272,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/team/approvals/{id}/decide", m.handleDecide)
 	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)
 	mux.HandleFunc("POST /api/team/spawns", m.handleSpawn) // P4-5, spec §7.2
+	mux.HandleFunc("GET /api/team", m.handleTeam)          // P4-6, spec §7.3
+	mux.HandleFunc("POST /api/team/kill", m.handleKill)
 	mux.HandleFunc("POST /api/hooks/decide", m.handleHookDecide)
 	// P5a relay routes (spec §8.3, §8.7); all under TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/relay/hello", m.handleRelayHello)
