@@ -16,6 +16,7 @@ import { executionIdOfAgentCode, isExecAgentCode } from '../lib/nex/worker-agent
 import { isNonTmuxAgentCode } from '../lib/non-tmux-agent'
 import { readWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
 import { useHostStore } from '../stores/useHostStore'
+import { useApprovalStore } from '../stores/useApprovalStore'
 import { selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
 import { landOnHostsPageIfHidden } from '../lib/shown-hosts'
@@ -114,7 +115,8 @@ useAgentStore.subscribe((state, prevState) => {
 export type NotificationAction =
   | { kind: 'open-session'; hostId: string; sessionCode: string }
   | { kind: 'open-host'; hostId: string }
-  /** An approval request (lead-team spec §6.3): the dialog is already on screen; the click only focuses the window. */
+  /** An approval request (lead-team spec §6.3): the dialog is already on screen; the click focuses the window and
+   *  restores the dialog when it was minimized (U22 (b)). */
   | { kind: 'open-approval'; hostId: string }
 
 /** Check if a notification should be dispatched based on broadcast_ts dedup.
@@ -509,6 +511,9 @@ export function handleNotificationClick(action: NotificationAction): void {
     }
     case 'open-approval': {
       // The dialog is global and already shows the oldest open request; there is no tab to open or host to switch.
+      // Minimized in this window (U22 (b)): the click is the person's own action, so it restores the dialog (plan P9
+      // open question 4) — never an automatic expansion.
+      useApprovalStore.getState().setMinimized(false)
       if (window.electronAPI?.focusMyWindow) {
         window.electronAPI.focusMyWindow()
       }
