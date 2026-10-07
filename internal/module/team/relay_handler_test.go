@@ -409,6 +409,10 @@ func TestRelayBegin_ReconcilesAnAwaitingOpWhoseRowIsGoneOrClosed(t *testing.T) {
 	if code != http.StatusConflict || ae.Error != team.ErrRelayOpen || ae.Op == nil || ae.Op.ID != out.Op.ID {
 		t.Fatalf("begin over a claimed op: %d %s", code, body)
 	}
+	// The 409 carries the op AS RECONCILED, not the stale awaiting read.
+	if ae.Op.State != team.RelayClaimed {
+		t.Fatalf("409 op state = %s, want claimed (the reconciled state)", ae.Op.State)
+	}
 	if f.op(out.Op.ID).State != team.RelayClaimed {
 		t.Fatalf("op after reconcile = %s, want claimed (the row is approved)", f.op(out.Op.ID).State)
 	}

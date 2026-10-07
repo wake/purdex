@@ -216,12 +216,12 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	} else if found {
-		if still, err := m.reconcileAwaitingOp(open); err != nil {
+		if cur, still, err := m.reconcileAwaitingOp(open); err != nil {
 			m.logf("[team] relay begin %s: reconcile op %s: %v", req.SessionID, open.ID, err)
 			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 			return
 		} else if still {
-			m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "this session already has a relay in progress", Op: &open})
+			m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "this session already has a relay in progress", Op: &cur})
 			return
 		}
 	}
@@ -344,30 +344,32 @@ func opReportForClosedRow(a team.Approval, at int64) RelayReport {
 // is closed → the op takes the transition the close implied (afterClose
 // missed it, or failed); the row does not exist → the op is an orphan of a
 // begin that crashed between its two writes and is cancelled{abandoned}.
-// Any other op state is open by definition. Called under createMu.
-func (m *Module) reconcileAwaitingOp(op team.RelayOp) (still bool, err error) {
+// Any other op state is open by definition. It returns the op as it is
+// after the step (the 409 carries THAT, not the stale read) and whether
+// it is still open. Called under createMu.
+func (m *Module) reconcileAwaitingOp(op team.RelayOp) (cur team.RelayOp, still bool, err error) {
 	if op.State != team.RelayAwaitingApproval {
-		return true, nil
+		return op, true, nil
 	}
 	row, ok, err := m.store.Get(op.RequestID)
 	if err != nil {
-		return true, err
+		return op, true, err
 	}
 	rep := RelayReport{State: team.RelayCancelled, Reason: team.RelayReasonAbandoned, At: m.now()}
 	switch {
 	case ok && row.State == team.StateOpen:
-		return true, nil
+		return op, true, nil
 	case ok:
 		rep = opReportForClosedRow(row, m.now())
 	}
 	after, res, err := m.store.ReportRelay(op.ID, rep)
 	if err != nil {
-		return true, err
+		return op, true, err
 	}
 	if res == ReportApplied {
 		m.logf("[team] relay op %s → %s%s (reconciled at begin: approval %s %s)", op.ID, after.State, reasonSuffix(after), op.RequestID, rowStateOrMissing(row, ok))
 	}
-	return !after.State.Terminal(), nil
+	return after, !after.State.Terminal(), nil
 }
 
 func rowStateOrMissing(row team.Approval, ok bool) string {
