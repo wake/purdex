@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { useAgentStore, sanitizeOscTitle } from './useAgentStore'
 import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
+import type { PaneLayout, Tab, TerminatedReason } from '../types/tab'
 import type { NormalizedEvent, SubagentRef } from './useAgentStore'
 
 const H = 'test-host'
@@ -398,6 +399,84 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().statuses[`${H}:dev`]).toBeUndefined()
     expect(useAgentStore.getState().statuses[`${H}:staging`]).toBe('running')
     expect(useAgentStore.getState().agentTypes[`${H}:staging`]).toBe('cc')
+  })
+})
+
+// #1853: an actionable event writes unread unless SOME pane of the active tab shows the agent — the rule the
+// notification dispatcher uses (#1840) — not only when the active tab's primary pane does.
+describe('useAgentStore unread — every pane of the active tab (#1853)', () => {
+  const tmux = (id: string, sessionCode: string, terminated?: TerminatedReason): PaneLayout =>
+    ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId: H, sessionCode, mode: 'terminal', cachedName: '', tmuxInstance: '', ...(terminated ? { terminated } : {}) } } })
+  const exec = (id: string, executionId: string): PaneLayout =>
+    ({ type: 'leaf', pane: { id, content: { kind: 'execution', executionId, host: H } } })
+  const blank = (id: string): PaneLayout => ({ type: 'leaf', pane: { id, content: { kind: 'new-tab' } } })
+  const split = (id: string, children: PaneLayout[]): PaneLayout =>
+    ({ type: 'split', id, direction: 'h', children, sizes: children.map(() => 100 / children.length) })
+  const tab = (id: string, layout: PaneLayout): Tab => ({ id, pinned: false, locked: false, createdAt: 0, layout })
+  const activate = (layout: PaneLayout, others: Record<string, Tab> = {}) =>
+    useTabStore.setState({ tabs: { t1: tab('t1', layout), ...others }, activeTabId: 't1' })
+
+  const ACTIONABLE: Array<[string, NormalizedEvent]> = [
+    ['waiting', { agent_type: 'cc', status: 'waiting', raw_event_name: 'PdxPermissionRequest', broadcast_ts: 1 }],
+    ['error', { agent_type: 'cc', status: 'error', raw_event_name: 'PdxStopFailure', broadcast_ts: 1, detail: { error: 'rate_limit' } }],
+    ['Stop idle', { agent_type: 'cc', status: 'idle', raw_event_name: 'PdxStop', broadcast_ts: 1 }],
+  ]
+  const fire = (code: string, event: NormalizedEvent) => useAgentStore.getState().handleNormalizedEvent(H, code, event)
+  const unread = (code: string) => useAgentStore.getState().unread[`${H}:${code}`]
+
+  it.each(ACTIONABLE)('%s from a tmux agent in a SECONDARY pane of the active split tab → no unread', (_, event) => {
+    activate(split('s1', [tmux('p1', 'other'), tmux('p2', 'dev')]))
+    fire('dev', event)
+    expect(unread('dev')).toBeUndefined()
+  })
+
+  it.each(ACTIONABLE)('%s from a worker in a SECONDARY pane of the active split tab → no unread', (_, event) => {
+    activate(split('s1', [tmux('p1', 'other'), exec('p2', 'e1')]))
+    fire('exec-e1', event)
+    expect(unread('exec-e1')).toBeUndefined()
+  })
+
+  it.each(ACTIONABLE)('%s from an agent or a worker in a nested split (depth ≥ 2) → no unread', (_, event) => {
+    activate(split('s1', [tmux('p1', 'other'), split('s2', [blank('p2'), split('s3', [exec('p3', 'e1'), tmux('p4', 'dev')])])]))
+    fire('dev', event)
+    fire('exec-e1', event)
+    expect(unread('dev')).toBeUndefined()
+    expect(unread('exec-e1')).toBeUndefined()
+  })
+
+  it.each(ACTIONABLE)('%s from the PRIMARY pane agent → no unread (unchanged)', (_, event) => {
+    activate(split('s1', [tmux('p1', 'dev'), blank('p2')]))
+    fire('dev', event)
+    expect(unread('dev')).toBeUndefined()
+  })
+
+  it.each(ACTIONABLE)('%s with only an ENDED pane on the code in the active tab → unread (an ended pane shows nothing)', (_, event) => {
+    activate(tmux('p1', 'dev', 'tmux-restarted'))
+    fire('dev', event)
+    expect(unread('dev')).toBe(true)
+    useAgentStore.setState({ unread: {} })
+    activate(split('s1', [tmux('p1', 'other'), tmux('p2', 'dev', 'session-closed')]))
+    fire('dev', event)
+    expect(unread('dev')).toBe(true)
+  })
+
+  it.each(ACTIONABLE)('%s from an agent in a secondary pane of an INACTIVE tab → unread', (_, event) => {
+    activate(split('s1', [tmux('p1', 'other'), blank('p2')]), { t2: tab('t2', split('s2', [blank('p3'), tmux('p4', 'dev'), exec('p5', 'e1')])) })
+    fire('dev', event)
+    fire('exec-e1', event)
+    expect(unread('dev')).toBe(true)
+    expect(unread('exec-e1')).toBe(true)
+  })
+
+  it('Notification and silent Stop still do not mark, and running still clears, whatever pane shows the agent', () => {
+    activate(split('s1', [tmux('p1', 'other'), blank('p2')]))
+    fire('dev', { agent_type: 'cc', status: 'idle', raw_event_name: 'PdxNotification', broadcast_ts: 1, detail: { notification_type: 'idle_prompt' } })
+    fire('dev', { agent_type: 'opencode', status: 'idle', raw_event_name: 'PdxStop', broadcast_ts: 1, detail: { notification_silent: true } })
+    expect(unread('dev')).toBeUndefined()
+    useAgentStore.setState({ unread: { [`${H}:dev`]: true } })
+    activate(split('s1', [tmux('p1', 'other'), tmux('p2', 'dev')]))
+    fire('dev', { agent_type: 'cc', status: 'running', raw_event_name: 'PdxUserPromptSubmit', broadcast_ts: 1 })
+    expect(unread('dev')).toBeUndefined()
   })
 })
 

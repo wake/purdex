@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useTabStore } from '../stores/useTabStore'
 import { createTab } from '../types/tab'
-import { getActiveSessionCode, getActiveSessionInfo, isAgentVisibleInActiveTab } from './active-session'
+import { getActiveTabAgents, isAgentVisibleInActiveTab } from './active-session'
 import { useHostStore } from '../stores/useHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { compositeKey } from './composite-key'
@@ -11,30 +11,88 @@ beforeEach(() => {
   useTabStore.setState({ tabs: {}, activeTabId: null, tabOrder: [] })
 })
 
-describe('getActiveSessionCode', () => {
-  it('returns sessionCode when active tab is a session', () => {
-    const tab = { ...createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'dev', mode: 'terminal', cachedName: '', tmuxInstance: '' }), id: 't1' }
-    useTabStore.setState({ tabs: { t1: tab }, activeTabId: 't1' })
-    expect(getActiveSessionCode()).toBe('dev')
+const tmux = (id: string, hostId: string, sessionCode: string): PaneLayout =>
+  ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId, sessionCode, mode: 'terminal', cachedName: '', tmuxInstance: '' } } })
+const ended = (id: string, hostId: string, sessionCode: string): PaneLayout =>
+  ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId, sessionCode, mode: 'terminal', cachedName: '', tmuxInstance: '', terminated: 'tmux-restarted' } } })
+const exec = (id: string, executionId: string, host?: string): PaneLayout =>
+  ({ type: 'leaf', pane: { id, content: { kind: 'execution', executionId, ...(host !== undefined ? { host } : {}) } } })
+const blank = (id: string): PaneLayout => ({ type: 'leaf', pane: { id, content: { kind: 'new-tab' } } })
+const split = (id: string, children: PaneLayout[]): PaneLayout =>
+  ({ type: 'split', id, direction: 'h', children, sizes: children.map(() => 100 / children.length) })
+const tab = (id: string, layout: PaneLayout): Tab => ({ id, pinned: false, locked: false, createdAt: 0, layout })
+
+// #1853: every agent key on screen in the active tab — what unread marking and auto mark-read look at.
+describe('getActiveTabAgents (#1853)', () => {
+  beforeEach(() => {
+    useHostStore.setState({ hostOrder: ['h1'] })
   })
 
-  it('returns null when active tab is not a session', () => {
-    const tab = { ...createTab({ kind: 'settings', scope: 'global' }), id: 't3' }
-    useTabStore.setState({ tabs: { t3: tab }, activeTabId: 't3' })
-    expect(getActiveSessionCode()).toBeNull()
+  it('[] with no active tab, or an active id that names no tab', () => {
+    useTabStore.setState({ tabs: { t1: tab('t1', tmux('p1', 'h', 'dev')) }, activeTabId: null })
+    expect(getActiveTabAgents()).toEqual([])
+    useTabStore.setState({ activeTabId: 'nonexistent' })
+    expect(getActiveTabAgents()).toEqual([])
   })
 
-  it('returns null when no active tab', () => {
-    expect(getActiveSessionCode()).toBeNull()
+  it('[] when the active tab shows no agent', () => {
+    const settings = { ...createTab({ kind: 'settings', scope: 'global' }), id: 't3' }
+    useTabStore.setState({ tabs: { t3: settings }, activeTabId: 't3' })
+    expect(getActiveTabAgents()).toEqual([])
+    useTabStore.setState({ tabs: { t3: tab('t3', split('s1', [blank('p1'), blank('p2')])) } })
+    expect(getActiveTabAgents()).toEqual([])
   })
 
-  it('returns null when activeTabId points to missing tab', () => {
-    useTabStore.setState({ tabs: {}, activeTabId: 'nonexistent' })
-    expect(getActiveSessionCode()).toBeNull()
+  it('a single session tab → its host and code', () => {
+    const t1 = { ...createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'dev', mode: 'terminal', cachedName: '', tmuxInstance: '' }), id: 't1' }
+    useTabStore.setState({ tabs: { t1 }, activeTabId: 't1' })
+    expect(getActiveTabAgents()).toEqual([{ hostId: 'test-host', sessionCode: 'dev' }])
+  })
+
+  it('every pane of a split, at any depth, in layout order, each key once', () => {
+    useTabStore.setState({
+      tabs: {
+        t1: tab('t1', split('s1', [
+          tmux('p1', 'h', 'aaa'),
+          split('s2', [blank('p2'), exec('p3', 'e1', 'h2'), split('s3', [tmux('p4', 'h', 'bbb'), tmux('p5', 'h', 'aaa')])]),
+          tmux('p6', 'h2', 'aaa'),
+          exec('p7', 'e1', 'h2'),
+        ])),
+        t2: tab('t2', tmux('p8', 'h', 'ccc')),
+      },
+      activeTabId: 't1',
+    })
+    expect(getActiveTabAgents()).toEqual([
+      { hostId: 'h', sessionCode: 'aaa' },
+      { hostId: 'h2', sessionCode: 'exec-e1' },
+      { hostId: 'h', sessionCode: 'bbb' },
+      // the same code on another host is a different agent
+      { hostId: 'h2', sessionCode: 'aaa' },
+    ])
+  })
+
+  it('an ended (terminated) pane shows no agent; a live pane on the same code still does', () => {
+    useTabStore.setState({ tabs: { t1: tab('t1', split('s1', [ended('p1', 'h', 'aaa'), tmux('p2', 'h', 'bbb')])) }, activeTabId: 't1' })
+    expect(getActiveTabAgents()).toEqual([{ hostId: 'h', sessionCode: 'bbb' }])
+    useTabStore.setState({ tabs: { t1: tab('t1', split('s1', [ended('p1', 'h', 'aaa'), tmux('p2', 'h', 'aaa')])) } })
+    expect(getActiveTabAgents()).toEqual([{ hostId: 'h', sessionCode: 'aaa' }])
+  })
+
+  it('names exactly the keys isAgentVisibleInActiveTab calls visible (one rule)', () => {
+    useHostStore.setState({ hostOrder: ['h9'] })
+    useTabStore.setState({
+      tabs: { t1: tab('t1', split('s1', [ended('p1', 'h', 'aaa'), split('s2', [tmux('p2', 'h', 'bbb'), exec('p3', 'e1'), exec('p4', 'e2', 'h2')])])) },
+      activeTabId: 't1',
+    })
+    const shown = new Set(getActiveTabAgents().map((a) => compositeKey(a.hostId, a.sessionCode)))
+    const probes: Array<[string, string]> = [['h', 'aaa'], ['h', 'bbb'], ['h2', 'bbb'], ['h9', 'exec-e1'], ['h1', 'exec-e1'], ['h2', 'exec-e2'], ['h2', 'e2']]
+    for (const [hostId, code] of probes) {
+      expect(shown.has(compositeKey(hostId, code))).toBe(isAgentVisibleInActiveTab(hostId, code))
+    }
   })
 })
 
-describe('getActiveSessionInfo — worker (execution) tab (spec §8.2)', () => {
+describe('getActiveTabAgents — worker (execution) pane (spec §8.2)', () => {
   const execTab = (host?: string): Tab => ({
     id: 'tx', pinned: false, locked: false, createdAt: 0,
     layout: { type: 'leaf', pane: { id: 'px', content: { kind: 'execution', executionId: 'e1', ...(host ? { host } : {}) } } },
@@ -47,21 +105,22 @@ describe('getActiveSessionInfo — worker (execution) tab (spec §8.2)', () => {
 
   it('returns the exec-<id> key and the pane host', () => {
     useTabStore.setState({ tabs: { tx: execTab('h2') }, activeTabId: 'tx' })
-    expect(getActiveSessionInfo()).toEqual({ hostId: 'h2', sessionCode: 'exec-e1' })
+    expect(getActiveTabAgents()).toEqual([{ hostId: 'h2', sessionCode: 'exec-e1' }])
   })
 
   it('a host-less pane resolves to the first host', () => {
     useTabStore.setState({ tabs: { tx: execTab() }, activeTabId: 'tx' })
-    expect(getActiveSessionInfo()).toEqual({ hostId: 'h1', sessionCode: 'exec-e1' })
+    expect(getActiveTabAgents()).toEqual([{ hostId: 'h1', sessionCode: 'exec-e1' }])
   })
 
   it('a pane with an empty-string host resolves to the first host, same as no host', () => {
-    const tab: Tab = {
-      id: 'tx', pinned: false, locked: false, createdAt: 0,
-      layout: { type: 'leaf', pane: { id: 'px', content: { kind: 'execution', executionId: 'e1', host: '' } } },
-    }
-    useTabStore.setState({ tabs: { tx: tab }, activeTabId: 'tx' })
-    expect(getActiveSessionInfo()).toEqual({ hostId: 'h1', sessionCode: 'exec-e1' })
+    useTabStore.setState({ tabs: { tx: tab('tx', exec('px', 'e1', '')) }, activeTabId: 'tx' })
+    expect(getActiveTabAgents()).toEqual([{ hostId: 'h1', sessionCode: 'exec-e1' }])
+  })
+
+  it('a worker in a secondary pane resolves the same way', () => {
+    useTabStore.setState({ tabs: { tx: tab('tx', split('s1', [blank('p1'), exec('p2', 'e1', '')])) }, activeTabId: 'tx' })
+    expect(getActiveTabAgents()).toEqual([{ hostId: 'h1', sessionCode: 'exec-e1' }])
   })
 
   it('active exec tab is not unread', () => {
@@ -83,15 +142,6 @@ describe('getActiveSessionInfo — worker (execution) tab (spec §8.2)', () => {
 
 // #1840: the notification dispatcher's "the user is looking at it" check — any pane of the active tab counts.
 describe('isAgentVisibleInActiveTab (#1840)', () => {
-  const tmux = (id: string, hostId: string, sessionCode: string): PaneLayout =>
-    ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId, sessionCode, mode: 'terminal', cachedName: '', tmuxInstance: '' } } })
-  const exec = (id: string, executionId: string, host?: string): PaneLayout =>
-    ({ type: 'leaf', pane: { id, content: { kind: 'execution', executionId, ...(host !== undefined ? { host } : {}) } } })
-  const blank = (id: string): PaneLayout => ({ type: 'leaf', pane: { id, content: { kind: 'new-tab' } } })
-  const split = (id: string, children: PaneLayout[]): PaneLayout =>
-    ({ type: 'split', id, direction: 'h', children, sizes: children.map(() => 100 / children.length) })
-  const tab = (id: string, layout: PaneLayout): Tab => ({ id, pinned: false, locked: false, createdAt: 0, layout })
-
   beforeEach(() => {
     useHostStore.setState({ hostOrder: ['h1'] })
   })
@@ -142,21 +192,14 @@ describe('isAgentVisibleInActiveTab (#1840)', () => {
     expect(isAgentVisibleInActiveTab('h2', 'exec-e1')).toBe(false)
   })
 
-  it('leaves getActiveSessionInfo primary-only (its other callers are out of scope)', () => {
-    useTabStore.setState({ tabs: { t1: tab('t1', split('s1', [blank('p1'), tmux('p2', 'h', 'abc123')])) }, activeTabId: 't1' })
-    expect(getActiveSessionInfo()).toBeNull()
-  })
-
   // #1840 review A2: an ended pane's code may be a NEW live session's (tmux restarts reuse `$N`); it shows nothing.
   it('an ended (terminated) pane in the active tab does not show the agent', () => {
-    const ended = (id: string): PaneLayout =>
-      ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId: 'h', sessionCode: 'abc123', mode: 'terminal', cachedName: '', tmuxInstance: '', terminated: 'tmux-restarted' } } })
-    useTabStore.setState({ tabs: { t1: tab('t1', ended('p1')) }, activeTabId: 't1' })
+    useTabStore.setState({ tabs: { t1: tab('t1', ended('p1', 'h', 'abc123')) }, activeTabId: 't1' })
     expect(isAgentVisibleInActiveTab('h', 'abc123')).toBe(false)
-    useTabStore.setState({ tabs: { t1: tab('t1', split('s1', [blank('p1'), ended('p2')])) }, activeTabId: 't1' })
+    useTabStore.setState({ tabs: { t1: tab('t1', split('s1', [blank('p1'), ended('p2', 'h', 'abc123')])) }, activeTabId: 't1' })
     expect(isAgentVisibleInActiveTab('h', 'abc123')).toBe(false)
     // An ended primary next to the live session in a secondary pane: the live one is on screen.
-    useTabStore.setState({ tabs: { t1: tab('t1', split('s1', [ended('p1'), tmux('p2', 'h', 'abc123')])) }, activeTabId: 't1' })
+    useTabStore.setState({ tabs: { t1: tab('t1', split('s1', [ended('p1', 'h', 'abc123'), tmux('p2', 'h', 'abc123')])) }, activeTabId: 't1' })
     expect(isAgentVisibleInActiveTab('h', 'abc123')).toBe(true)
   })
 })

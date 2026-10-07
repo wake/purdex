@@ -63,15 +63,18 @@ interface WorkerRef { hostId: string; executionId: string }
  * Controller ruling (worker-pane theme spec §L1): a worker's status is
  * decided by the daemon regardless of which pane shows it — identical to a
  * tmux agent, whose status the daemon reports no matter which pane runs it.
- * Only the *tab lookups* (`getActiveSessionInfo`, `findTabBySessionCode`,
- * `useTabDisplay`) are primary-pane, because a tab has one place to show a
- * badge. This projection is not a tab lookup — it feeds the store every
- * execution pane reads from — so it must scan every pane, not just
- * `getPrimaryPane`. A worker in a secondary split pane still gets a
- * status/unread entry here; the notification dispatcher walks every pane too
- * (#1840: `findTabAndPaneBySessionCode` / `isAgentVisibleInActiveTab`), so it
+ * Only the *tab lookups* (`findTabBySessionCode`, `useTabDisplay`) are
+ * primary-pane, because a tab has one place to show a badge. This projection
+ * is not a tab lookup — it feeds the store every execution pane reads from —
+ * so it must scan every pane, not just `getPrimaryPane`. A worker in a
+ * secondary split pane still gets a status/unread entry here; the
+ * notification dispatcher walks every pane too (#1840:
+ * `findTabAndPaneBySessionCode` / `isAgentVisibleInActiveTab`), so it
  * notifies, is quiet while its tab is on screen and routes its click like a
- * primary-pane worker. Do not narrow this back to the primary pane — that
+ * primary-pane worker; unread marking and auto mark-read do as well (#1853:
+ * `isAgentVisibleInActiveTab` / `getActiveTabAgents`), so it is neither
+ * marked unread while on screen nor left unread when its tab comes on
+ * screen. Do not narrow this back to the primary pane — that
  * was tried and reverted (`d108afd7`, then undone) because it silently dropped secondary-pane
  * workers' status and unread instead of just their notification routing.
  */

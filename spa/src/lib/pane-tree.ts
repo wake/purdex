@@ -109,19 +109,26 @@ export function findTabBySessionCode(
 }
 
 /**
- * Does one pane show the agent key `hostId`/`sessionCode`? The matching rules of `findTabBySessionCode` applied to
- * a single pane, except that a tmux pane must be live: a `tmux-session` on that host and code that has not ended, or
- * a worker (execution) pane whose `exec-<executionId>` is the code on its resolved host (the pane's host hint, else
- * the first host).
+ * The agent key one pane shows — the matching rules of `findTabBySessionCode` applied to a single pane, except that a
+ * tmux pane must be live: a `tmux-session` that has not ended shows its host and code, a worker (execution) pane shows
+ * `exec-<executionId>` on its resolved host (the pane's host hint, else the first host). Null for any other pane.
  *
  * An ended (`terminated`) tmux pane shows nothing (#1840 review A2): a code encodes tmux's `$N`, which a restarted
  * tmux server hands out again, so the ended pane's code can be a NEW live session's. Execution panes carry no ended
  * marker (an execution id is never reused), so they have no such case.
+ *
+ * The one rule behind the notification dispatcher, unread marking and auto mark-read (#1853).
  */
+export function paneAgentKey(content: PaneContent): { hostId: string; sessionCode: string } | null {
+  if (content.kind === 'tmux-session') return content.terminated ? null : { hostId: content.hostId, sessionCode: content.sessionCode }
+  if (content.kind === 'execution') return { hostId: resolveExecutionHostId(content.host), sessionCode: execAgentCode(content.executionId) }
+  return null
+}
+
+/** Does one pane show the agent key `hostId`/`sessionCode`? Exactly `paneAgentKey` equals it. */
 export function paneShowsAgent(content: PaneContent, hostId: string, sessionCode: string): boolean {
-  if (content.kind === 'tmux-session') return !content.terminated && content.hostId === hostId && content.sessionCode === sessionCode
-  if (content.kind === 'execution') return execAgentCode(content.executionId) === sessionCode && resolveExecutionHostId(content.host) === hostId
-  return false
+  const key = paneAgentKey(content)
+  return key !== null && key.hostId === hostId && key.sessionCode === sessionCode
 }
 
 /**

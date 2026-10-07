@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, findTabAndPaneBySessionCode, paneShowsAgent, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, currentLayoutPattern, swapPaneContent, remountLeaf, countPanesOnSession } from './pane-tree'
-import type { PaneLayout, Pane, PaneContent } from '../types/tab'
+import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, findTabAndPaneBySessionCode, paneAgentKey, paneShowsAgent, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, currentLayoutPattern, swapPaneContent, remountLeaf, countPanesOnSession } from './pane-tree'
+import type { PaneLayout, Pane, PaneContent, TerminatedReason } from '../types/tab'
 import { useHostStore } from '../stores/useHostStore'
 
 const DEFAULT_HOST_ORDER = useHostStore.getState().hostOrder
@@ -684,5 +684,53 @@ describe('an ended tmux pane shows no agent (#1840 A2)', () => {
   it('a terminated pane alone → not found, as primary or as a secondary pane', () => {
     expect(findTabAndPaneBySessionCode({ t1: { layout: ended('p1', 'abc123') } }, 'h', 'abc123')).toBeUndefined()
     expect(findTabAndPaneBySessionCode({ t1: { layout: mkSplit('s1', 'h', [mkLeaf('p1'), ended('p2', 'abc123')]) } }, 'h', 'abc123')).toBeUndefined()
+  })
+})
+
+// #1853: the agent key one pane shows — the single rule behind paneShowsAgent, unread marking and auto mark-read.
+describe('paneAgentKey (#1853)', () => {
+  const tmux = (sessionCode: string, terminated?: TerminatedReason): PaneContent =>
+    ({ kind: 'tmux-session', hostId: 'h', sessionCode, mode: 'terminal', cachedName: '', tmuxInstance: '', ...(terminated ? { terminated } : {}) })
+
+  afterEach(() => {
+    useHostStore.setState({ hostOrder: DEFAULT_HOST_ORDER })
+  })
+
+  it('a live tmux pane shows its host and code', () => {
+    expect(paneAgentKey(tmux('abc123'))).toEqual({ hostId: 'h', sessionCode: 'abc123' })
+  })
+
+  it('an ended (terminated) tmux pane shows no agent, whatever the reason', () => {
+    for (const reason of ['session-closed', 'tmux-restarted', 'host-removed', 'conversation-ended'] as TerminatedReason[]) {
+      expect(paneAgentKey(tmux('abc123', reason))).toBeNull()
+    }
+  })
+
+  it('a worker pane shows exec-<id> on its host hint; a host-less or empty-host one on the first host', () => {
+    useHostStore.setState({ hostOrder: ['h9', 'h1'] })
+    expect(paneAgentKey({ kind: 'execution', executionId: 'e1', host: 'h2' })).toEqual({ hostId: 'h2', sessionCode: 'exec-e1' })
+    expect(paneAgentKey({ kind: 'execution', executionId: 'e1' })).toEqual({ hostId: 'h9', sessionCode: 'exec-e1' })
+    expect(paneAgentKey({ kind: 'execution', executionId: 'e1', host: '' })).toEqual({ hostId: 'h9', sessionCode: 'exec-e1' })
+  })
+
+  it('a pane that is neither shows no agent', () => {
+    for (const content of [{ kind: 'dashboard' }, { kind: 'new-tab' }, { kind: 'settings', scope: 'global' }] as PaneContent[]) {
+      expect(paneAgentKey(content)).toBeNull()
+    }
+  })
+
+  it('paneShowsAgent is exactly "paneAgentKey equals the probe"', () => {
+    useHostStore.setState({ hostOrder: ['h9'] })
+    const contents: PaneContent[] = [
+      tmux('abc123'), tmux('abc123', 'tmux-restarted'), tmux('e1'),
+      { kind: 'execution', executionId: 'e1', host: 'h2' }, { kind: 'execution', executionId: 'e1' }, { kind: 'dashboard' },
+    ]
+    const probes: Array<[string, string]> = [['h', 'abc123'], ['h2', 'abc123'], ['h', 'e1'], ['h', 'exec-e1'], ['h2', 'exec-e1'], ['h9', 'exec-e1'], ['h2', 'e1']]
+    for (const content of contents) {
+      const key = paneAgentKey(content)
+      for (const [hostId, code] of probes) {
+        expect(paneShowsAgent(content, hostId, code)).toBe(key !== null && key.hostId === hostId && key.sessionCode === code)
+      }
+    }
   })
 })
