@@ -16,11 +16,20 @@ import (
 // rolled back with it, so the row is still open.
 var ErrLeadHasTeam = errors.New("the session already leads a live team")
 
+// ErrNoSuchMember is returned by SetMemberState for an unknown spawn op.
+var ErrNoSuchMember = errors.New("no such member")
+
+// ErrMemberCannotLead is returned by CloseLeadApproved when the origin is
+// an active member of a live team (spec §6.2 member_cannot_lead): both
+// writes rolled back, the row is still open.
+var ErrMemberCannotLead = errors.New("the session is an active member of a live team")
+
 // teamSchema is the P4 teams table (spec §7.1). It is run by OpenStore
 // after relaySchema; every statement is idempotent, so it is safe on a
 // team.db written before it existed. A team's id is the id of the lead
 // request that approved it (plan v3 deviation 1), so request_id = id.
 // ended_at = 0 while the team is live; one live team per lead session.
+// team_members (P4-3, §7.3): one row per spawn op, one active row per session.
 const teamSchema = `
 	CREATE TABLE IF NOT EXISTS teams (
 		id              TEXT PRIMARY KEY,
@@ -33,21 +42,235 @@ const teamSchema = `
 		ended_at        INTEGER NOT NULL DEFAULT 0,
 		end_reason      TEXT    NOT NULL DEFAULT ''
 	);
-	CREATE UNIQUE INDEX IF NOT EXISTS teams_one_live_per_lead ON teams (lead_session_id) WHERE ended_at = 0;`
+	CREATE UNIQUE INDEX IF NOT EXISTS teams_one_live_per_lead ON teams (lead_session_id) WHERE ended_at = 0;
+	CREATE TABLE IF NOT EXISTS team_members (
+		spawn_op      TEXT PRIMARY KEY,
+		team_id       TEXT    NOT NULL,
+		host_id       TEXT    NOT NULL,
+		session_id    TEXT    NOT NULL,
+		ref           TEXT    NOT NULL,
+		title         TEXT    NOT NULL DEFAULT '',
+		cwd           TEXT    NOT NULL,
+		tmux_session  TEXT    NOT NULL,
+		tmux_id       TEXT    NOT NULL DEFAULT '',
+		tmux_instance TEXT    NOT NULL DEFAULT '',
+		pane_id       TEXT    NOT NULL DEFAULT '',
+		pid           INTEGER NOT NULL DEFAULT 0,
+		proc_start    TEXT    NOT NULL DEFAULT '',
+		model         TEXT    NOT NULL DEFAULT '',
+		effort        TEXT    NOT NULL DEFAULT '',
+		state         TEXT    NOT NULL,
+		created_at    INTEGER NOT NULL,
+		updated_at    INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS team_members_team ON team_members (team_id, state);
+	CREATE UNIQUE INDEX IF NOT EXISTS team_members_one_active ON team_members (session_id) WHERE state = 'active';`
 
 const teamCols = `id, host_id, lead_session_id, lead_ref, grant_json, request_id, created_at, ended_at, end_reason`
+
+const memberCols = `spawn_op, team_id, host_id, session_id, ref, title, cwd, tmux_session, tmux_id, tmux_instance, pane_id, pid, proc_start, model, effort, state, created_at, updated_at`
+
+// qualify prefixes every column of cols with alias, for a join.
+func qualify(alias, cols string) string {
+	parts := strings.Split(cols, ",")
+	for i, c := range parts {
+		parts[i] = alias + "." + strings.TrimSpace(c)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// teamDest is the Scan destination of teamCols; the grant is decoded after.
+func teamDest(t *team.Team, grantJSON *string) []any {
+	return []any{&t.ID, &t.HostID, &t.LeadSessionID, &t.LeadRef, grantJSON, &t.RequestID,
+		&t.CreatedAt, &t.EndedAt, &t.EndReason}
+}
+
+func decodeTeamGrant(t *team.Team, grantJSON string) error {
+	if err := json.Unmarshal([]byte(grantJSON), &t.Grant); err != nil {
+		return fmt.Errorf("decode grant of team %s: %w", t.ID, err)
+	}
+	return nil
+}
 
 func scanTeam(r rowScanner) (team.Team, error) {
 	var t team.Team
 	var grantJSON string
-	if err := r.Scan(&t.ID, &t.HostID, &t.LeadSessionID, &t.LeadRef, &grantJSON, &t.RequestID,
-		&t.CreatedAt, &t.EndedAt, &t.EndReason); err != nil {
+	if err := r.Scan(teamDest(&t, &grantJSON)...); err != nil {
 		return team.Team{}, err
 	}
-	if err := json.Unmarshal([]byte(grantJSON), &t.Grant); err != nil {
-		return team.Team{}, fmt.Errorf("decode grant of team %s: %w", t.ID, err)
+	if err := decodeTeamGrant(&t, grantJSON); err != nil {
+		return team.Team{}, err
 	}
 	return t, nil
+}
+
+// memberRow is one team_members row: the lead host's record of a member
+// (spec §7.2 step 6, §7.3), stored by the spawn runner (P4-5) once the
+// member registered.
+type memberRow struct {
+	SpawnOp, TeamID, HostID, SessionID, Ref, Title, Cwd string
+	TmuxSession, TmuxID, TmuxInstance, PaneID           string
+	PID                                                 int
+	ProcStart, Model, Effort                            string
+	State                                               team.MemberState
+	CreatedAt, UpdatedAt                                int64
+}
+
+func (m *memberRow) dest() []any {
+	return []any{&m.SpawnOp, &m.TeamID, &m.HostID, &m.SessionID, &m.Ref, &m.Title, &m.Cwd, &m.TmuxSession,
+		&m.TmuxID, &m.TmuxInstance, &m.PaneID, &m.PID, &m.ProcStart, &m.Model, &m.Effort, &m.State,
+		&m.CreatedAt, &m.UpdatedAt}
+}
+
+func validMemberState(s team.MemberState) bool {
+	switch s {
+	case team.MemberActive, team.MemberKilled, team.MemberGone:
+		return true
+	}
+	return false
+}
+
+// InsertMember stores m, idempotent on the spawn op (a spawn retried after
+// a restart stores one row; a stored row is left as it is). A second
+// active row for one session (team_members_one_active), or a row missing
+// spawn op, team or session or with an unknown state, is an error.
+func (s *Store) InsertMember(m memberRow) error {
+	if m.SpawnOp == "" || m.TeamID == "" || m.SessionID == "" || !validMemberState(m.State) {
+		return fmt.Errorf("insert member: spawn op %q, team %q, session %q and state %q must all be set and the state known",
+			m.SpawnOp, m.TeamID, m.SessionID, m.State)
+	}
+	if _, err := s.db.Exec(`INSERT INTO team_members (`+memberCols+`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (spawn_op) DO NOTHING`,
+		m.SpawnOp, m.TeamID, m.HostID, m.SessionID, m.Ref, m.Title, m.Cwd, m.TmuxSession, m.TmuxID,
+		m.TmuxInstance, m.PaneID, m.PID, m.ProcStart, m.Model, m.Effort, string(m.State), m.CreatedAt, m.UpdatedAt); err != nil {
+		return fmt.Errorf("insert member %s: %w", m.SpawnOp, err)
+	}
+	return nil
+}
+
+// ActiveMemberInLiveTeam returns the session's active member row and its
+// team, read in one statement, when that team is live: a killed or gone
+// member, or a member of an ended team (D4), is no member (spec §8.7,
+// §6.2 member_cannot_lead).
+func (s *Store) ActiveMemberInLiveTeam(sessionID string) (memberRow, team.Team, bool, error) {
+	var m memberRow
+	var t team.Team
+	var grantJSON string
+	err := s.db.QueryRow(`SELECT `+qualify("m", memberCols)+`, `+qualify("t", teamCols)+`
+		FROM team_members m JOIN teams t ON t.id = m.team_id
+		WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0`, sessionID).
+		Scan(append(m.dest(), teamDest(&t, &grantJSON)...)...)
+	if errors.Is(err, sql.ErrNoRows) {
+		return memberRow{}, team.Team{}, false, nil
+	}
+	if err == nil {
+		err = decodeTeamGrant(&t, grantJSON)
+	}
+	if err != nil {
+		return memberRow{}, team.Team{}, false, fmt.Errorf("active member %s: %w", sessionID, err)
+	}
+	return m, t, true, nil
+}
+
+// CloseSelfRelayApproved is the approve of a self_relay row (spec §8.7 (b))
+// in one write transaction (P4-3 review H2). Unless sessionID is an active
+// member of a live team it is CloseIfOpen(c). If it is (U13), the row
+// closes cancelled instead and its awaiting op becomes
+// cancelled{member_relay_is_leads}, both or neither; memberCancelled says
+// that committed. The row and won are as CloseIfOpen's.
+func (s *Store) CloseSelfRelayApproved(id string, c Close, sessionID string) (a team.Approval, won, memberCancelled bool, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return team.Approval{}, false, false, fmt.Errorf("approve self relay %s: begin: %w", id, err)
+	}
+	defer tx.Rollback()
+	// A write first, so SQLite takes the write lock before the member read.
+	_, err = tx.Exec(`UPDATE approval_requests SET id = id WHERE id = ?`, id)
+	var member bool
+	if err == nil {
+		member, err = isLiveMemberIn(tx, sessionID)
+	}
+	if member {
+		c = Close{State: team.StateCancelled, DecidedAt: c.DecidedAt}
+	}
+	var n int64
+	if err == nil {
+		n, err = closeRowIn(tx, id, c, "", 0)
+	}
+	if err == nil && member && n == 1 && s.beforeMemberCancelOp != nil {
+		err = s.beforeMemberCancelOp()
+	}
+	if err == nil && member && n == 1 {
+		_, err = tx.Exec(`UPDATE relay_ops SET state = ?, reason = ?, updated_at = ? WHERE request_id = ? AND state = ?`,
+			string(team.RelayCancelled), team.ErrMemberRelayIsLeads, c.DecidedAt, id, string(team.RelayAwaitingApproval))
+	}
+	if err == nil {
+		a, _, err = getRowIn(tx, id)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		return team.Approval{}, false, false, fmt.Errorf("approve self relay %s: %w", id, err)
+	}
+	return a, n == 1, member && n == 1, nil
+}
+
+// isLiveMemberIn reports, on q (a transaction's read under its write lock),
+// whether sessionID is an active member of a live team.
+func isLiveMemberIn(q dbtx, sessionID string) (bool, error) {
+	var one int
+	err := q.QueryRow(`SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
+		WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0`, sessionID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("member check %s: %w", sessionID, err)
+	}
+	return true, nil
+}
+
+// MembersOf returns every member row of the team, in any state, oldest
+// first. Never nil.
+func (s *Store) MembersOf(teamID string) ([]memberRow, error) {
+	rows, err := s.db.Query(`SELECT `+memberCols+` FROM team_members WHERE team_id = ? ORDER BY created_at, spawn_op`, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("members of %s: %w", teamID, err)
+	}
+	defer rows.Close()
+	out := []memberRow{}
+	for rows.Next() {
+		var m memberRow
+		if err := rows.Scan(m.dest()...); err != nil {
+			return nil, fmt.Errorf("members of %s: %w", teamID, err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("members of %s: %w", teamID, err)
+	}
+	return out, nil
+}
+
+// SetMemberState sets the member's state at at (spec §7.3: killed by pdx
+// kill, gone when its session ended). ErrNoSuchMember for an unknown spawn op.
+func (s *Store) SetMemberState(spawnOp string, state team.MemberState, at int64) error {
+	if !validMemberState(state) {
+		return fmt.Errorf("set member %s: unknown state %q", spawnOp, state)
+	}
+	res, err := s.db.Exec(`UPDATE team_members SET state = ?, updated_at = ? WHERE spawn_op = ?`, string(state), at, spawnOp)
+	if err != nil {
+		return fmt.Errorf("set member %s %s: %w", spawnOp, state, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set member %s rows affected: %w", spawnOp, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("set member %s: %w", spawnOp, ErrNoSuchMember)
+	}
+	return nil
 }
 
 // CloseLeadApproved is the approve of a lead request (spec §6.2: "Approval
@@ -85,6 +308,13 @@ func (s *Store) CloseLeadApproved(id string, c Close, t team.Team) (team.Approva
 		return fail(err)
 	}
 	if n == 1 {
+		// No nested teams, re-checked under the write lock (P4-3 review H1):
+		// the origin may have become a member since its request was created.
+		if member, err := isLiveMemberIn(tx, t.LeadSessionID); err != nil {
+			return fail(err)
+		} else if member {
+			return fail(ErrMemberCannotLead)
+		}
 		if _, err := tx.Exec(`INSERT INTO teams (`+teamCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '')`,
 			t.ID, t.HostID, t.LeadSessionID, t.LeadRef, string(grantJSON), t.RequestID, t.CreatedAt); err != nil {
 			if strings.Contains(err.Error(), "teams.lead_session_id") { // the partial unique index teams_one_live_per_lead

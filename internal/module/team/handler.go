@@ -213,6 +213,16 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrAlreadyLead, "this session already leads team "+t.ID, nil)
 		return
 	}
+	// No nested teams in v1 (spec §6.2): an active member of a live team
+	// cannot lead; a member of an ended team is an ordinary session (D4).
+	if _, t, found, err := m.store.ActiveMemberInLiveTeam(origin.SessionID); err != nil {
+		m.logf("[team] create %s: %v", req.ID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	} else if found {
+		m.writeErr(w, http.StatusConflict, team.ErrMemberCannotLead, "this session is a member of team "+t.ID+"; a member cannot lead", nil)
+		return
+	}
 	now := m.now()
 	stored, _, inserted, err := m.store.Create(team.Approval{
 		ID: req.ID, Kind: req.Kind, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
@@ -395,13 +405,18 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 	}
 	c := Close{State: state, DecidedAt: now, DecidedBy: &client, Grant: grant}
 	var after team.Approval
-	var won bool
+	var won, memberCancelled bool
 	if grant != nil {
 		// Spec §6.2: the approval creates the team (§7.1) in the same
 		// transaction. Its id is the request's id (plan v3 deviation 1).
 		t := team.Team{ID: id, HostID: a.HostID, LeadSessionID: a.Origin.SessionID, LeadRef: a.Origin.Ref,
 			Grant: *grant, RequestID: id, CreatedAt: now}
 		after, won, err = m.closeWith(id, func() (team.Approval, bool, error) { return m.store.CloseLeadApproved(id, c, t) })
+	} else if state == team.StateApproved && a.Kind == team.KindSelfRelay {
+		after, won, err = m.closeWith(id, func() (row team.Approval, won bool, err error) {
+			row, won, memberCancelled, err = m.store.CloseSelfRelayApproved(id, c, a.Origin.SessionID)
+			return row, won, err
+		})
 	} else {
 		after, won, err = m.closeAs(id, c)
 	}
@@ -417,6 +432,11 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrAlreadyLead, "this session already leads a live team; the request stays open", nil)
 		return
 	}
+	if errors.Is(err, ErrMemberCannotLead) { // as already_lead: rolled back, the row stays open
+		m.logf("[team] approval %s: approve by %s %q refused: origin %s is a member of a live team", id, client.Kind, client.Label, a.Origin.Ref)
+		m.writeErr(w, http.StatusConflict, team.ErrMemberCannotLead, "this session is a member of a live team; the request stays open", nil)
+		return
+	}
 	if err != nil {
 		m.logf("[team] decide %s: %v", id, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
@@ -424,6 +444,13 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 	}
 	if !won {
 		m.writeErr(w, http.StatusConflict, team.ErrAlreadyDecided, "this request was closed first by someone else", &after)
+		return
+	}
+	if memberCancelled {
+		// U13 (P4-3 review H2): the approve's transaction cancelled the
+		// request and its op instead; committed and broadcast (mod: exit 12).
+		m.logf("[team] approval %s: approve by %s %q: origin %s is a member of a live team; request and relay op cancelled", id, client.Kind, client.Label, after.Origin.Ref)
+		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排; the request is cancelled", nil)
 		return
 	}
 	teamNote := ""
