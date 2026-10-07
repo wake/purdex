@@ -97,7 +97,7 @@ func TestPeerNames_AdoptLineageUpgradesAFallbackOnce(t *testing.T) {
 	ctx := context.Background()
 	_, err := s.Assign(ctx, pnSID, pnRef, "purdex-k3", PeerNameSourceRegistry, 10)
 	require.NoError(t, err)
-	got, err := s.AdoptLineage(ctx, pnSID, "lead-a1", 20)
+	got, err := s.AdoptLineage(ctx, pnSID, "lead-a1")
 	require.NoError(t, err)
 	require.Equal(t, PeerNameEntry{Name: "lead-a1", Source: PeerNameSourceLineage}, got)
 }
@@ -110,7 +110,7 @@ func TestPeerNames_LineageRowIsNeverOverwritten(t *testing.T) {
 	ctx := context.Background()
 	_, err := s.Assign(ctx, pnSID, pnRef, "lead-a1", PeerNameSourceLineage, 10)
 	require.NoError(t, err)
-	got, err := s.AdoptLineage(ctx, pnSID, "other-b2", 20)
+	got, err := s.AdoptLineage(ctx, pnSID, "other-b2")
 	require.NoError(t, err)
 	require.Equal(t, PeerNameEntry{Name: "lead-a1", Source: PeerNameSourceLineage}, got)
 	got, err = s.Assign(ctx, pnSID, pnRef, "purdex-k3", PeerNameSourceRegistry, 30)
@@ -128,13 +128,36 @@ func TestPeerNames_RejectsBadInput(t *testing.T) {
 	require.Error(t, err)
 	_, err = s.Assign(ctx, pnSID, pnRef, "a-k3", "made-up", 1)
 	require.Error(t, err)
-	_, err = s.AdoptLineage(ctx, pnSID, "", 1)
+	_, err = s.AdoptLineage(ctx, pnSID, "")
 	require.Error(t, err)
-	_, err = s.AdoptLineage(ctx, pnSID, "a-k3", 1) // no row to upgrade
+	_, err = s.AdoptLineage(ctx, pnSID, "a-k3") // no row to upgrade
 	require.Error(t, err)
 	rows, err := s.Lookup(ctx, []string{pnSID})
 	require.NoError(t, err)
 	require.Empty(t, rows)
+}
+
+// ByRefs answers the earliest assignment among sessions sharing a ref, so a
+// lineage upgrade must not move a row's assigned_at: A (t=10) and B (t=20)
+// share a ref, and after A adopts a lineage name ByRefs still answers A.
+func TestPeerNames_AdoptLineageKeepsAssignedAt(t *testing.T) {
+	m, _ := openConvStore(t)
+	s := m.PeerNames()
+	ctx := context.Background()
+	// Two ids whose refs collide (found by search; FNV-1a mod 36^6).
+	const a, b = "cccccccc-0000-4000-8000-000000159958", "cccccccc-0000-4000-8000-000000454406"
+	ref := ipeers.RefID(a)
+	require.Equal(t, ref, ipeers.RefID(b), "fixture: the two ids must share a ref")
+	_, err := s.Assign(ctx, a, ref, "first-t1", PeerNameSourceRegistry, 10)
+	require.NoError(t, err)
+	_, err = s.Assign(ctx, b, ref, "second-t1", PeerNameSourceRegistry, 20)
+	require.NoError(t, err)
+	got, err := s.AdoptLineage(ctx, a, "lead-a1")
+	require.NoError(t, err)
+	require.Equal(t, PeerNameEntry{Name: "lead-a1", Source: PeerNameSourceLineage}, got)
+	refs, err := s.ByRefs(ctx, []string{ref})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{ref: "lead-a1"}, refs, "the earliest assignment is still A's")
 }
 
 // The ref is what a relay successor inherits a name by (ByRefs), so it must

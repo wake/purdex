@@ -89,15 +89,19 @@ func (s *PeerNameStore) Assign(ctx context.Context, sessionID, ref, name, source
 // whose source is already lineage is left alone, so a lineage name is never
 // overwritten (spec §3.2 "lineage 晚到時升級一次"). It returns the stored row;
 // an error when the session has no row at all.
-func (s *PeerNameStore) AdoptLineage(ctx context.Context, sessionID, name string, nowMs int64) (PeerNameEntry, error) {
+//
+// Only name and source change. assigned_at stays the first sighting's: it is
+// what ByRefs orders a shared ref by, and an upgrade must not move a row
+// behind another session that was assigned after it.
+func (s *PeerNameStore) AdoptLineage(ctx context.Context, sessionID, name string) (PeerNameEntry, error) {
 	sid := normPeerSID(sessionID)
 	if sid == "" || name == "" {
 		return PeerNameEntry{}, errors.New("peer name: empty session id or name")
 	}
 	return s.writeThenRead(ctx, sid, `
-		UPDATE peer_names SET name = ?, source = 'lineage', assigned_at = ?
+		UPDATE peer_names SET name = ?, source = 'lineage'
 		WHERE session_id = ? AND source <> 'lineage'`,
-		name, nowMs, sid)
+		name, sid)
 }
 
 func (s *PeerNameStore) writeThenRead(ctx context.Context, sid, write string, args ...any) (PeerNameEntry, error) {
