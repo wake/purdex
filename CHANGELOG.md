@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.570] - 2026-10-07
+
+> 只動 `pdx` 指令（CLI），daemon、SPA、Electron 都沒有改動，**不需要重啟 daemon**。新指令與轉送在 daemon 端接上（P8a-1d）、mod 接上（P8a-2）之前不會有可見變化。
+
+### Added：lead / member / team 與 context 接力 — P8a-1c（#1807）
+
+AskUserQuestion「分流」的指令端（spec §6.6；plan v2 Tasks 8a.6–8a.7）。
+
+- **`pdx ask begin|wait|report`**：mod 用來開申請、等遠端答案、回報「終端機已回答」。`begin` 掉了回應重送時會拿回原本那一筆；daemon 回的 id 為空或 `wait` 回的狀態不認得時，一律當錯誤（exit 1），不會留下沒人能關的申請。
+- **hook 有界轉送**：`pdx hook` 在同一個 5 秒預算內，把 AskUserQuestion／PermissionRequest 轉給 daemon（有旗標時也轉關閉事件）。任何出錯、旗標未開、daemon 不通都照常放行，不印任何東西、exit 永遠 0。旗標路徑只接受單一路徑元素，擋掉 `../` 別名。
+
 ## [1.0.0-alpha.569] - 2026-10-07
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。新路由還沒有 client 會呼叫（`pdx ask` 指令在 P8a-1c、mod 在 P8a-2），現有使用者無可見變化。`pdx` 指令、SPA、Electron 都沒有改動。
