@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useExecutionListStore } from '../../stores/useExecutionListStore'
+import { useNexHostStore, selectSessionTitleSupported } from '../../stores/useNexHostStore'
+import { workerRowName } from './worker-row-name'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { emptyListCache } from './execution-list-effects'
@@ -13,6 +15,11 @@ const ev = (executionId: string, tmuxSession = 'proj-2'): WorkerExitedEvent =>
 const value = (o: Record<string, unknown>) =>
   JSON.stringify({ execution_id: 'E9', session_id: 'S', reason: 'manual_resume', tmux_session: 'proj-2', ...o })
 
+const withTitleCap = (hostId: string, on: boolean) =>
+  useNexHostStore.setState({
+    byHost: { [hostId]: { phase: 'ready', capabilities: on ? { session_title: {} } : {} } },
+  } as never)
+
 const refetch = vi.fn()
 const original = useExecutionListStore.getState().refetch
 beforeEach(() => {
@@ -20,7 +27,10 @@ beforeEach(() => {
   useExecutionListStore.setState({ byHost: {}, refetch })
   useUndoToast.setState({ toast: null, notice: null })
 })
-afterEach(() => useExecutionListStore.setState({ byHost: {}, refetch: original }))
+afterEach(() => {
+  useExecutionListStore.setState({ byHost: {}, refetch: original })
+  useNexHostStore.setState({ byHost: {} } as never)
+})
 
 describe('nex-worker-exited', () => {
   it('parses the daemon value (JSON text)', () => {
@@ -44,13 +54,44 @@ describe('nex-worker-exited', () => {
     }
   })
 
-  it('names the worker by its list row, else the tmux session, else the execution id', () => {
+  it('names the worker like its list row: the brief wins over a title (rewritten: was title-first)', () => {
+    withTitleCap('h1', true)
     useExecutionListStore.setState({
       byHost: { h1: cacheOf([rowOf({ id: 'E1', session_title: { text: '修 bug', source: 'ai' }, brief: 'x' })]) },
     })
+    expect(workerExitedName('h1', ev('E1'))).toBe('x')
+  })
+
+  it('an empty brief falls to the title with the capability, to the cwd basename without it', () => {
+    const row = rowOf({ id: 'E1', brief: '', cwd: '/a/proj', session_title: { text: '修 bug', source: 'ai' } })
+    useExecutionListStore.setState({ byHost: { h1: cacheOf([row]) } })
+    withTitleCap('h1', true)
     expect(workerExitedName('h1', ev('E1'))).toBe('修 bug')
+    withTitleCap('h1', false)
+    expect(workerExitedName('h1', ev('E1'))).toBe('proj')
+  })
+
+  it('a row with nothing to show, or no row, falls to the tmux session then the execution id', () => {
+    useExecutionListStore.setState({ byHost: { h1: cacheOf([rowOf({ id: 'E1' })]) } })
+    expect(workerExitedName('h1', ev('E1'))).toBe('proj-2')
+    expect(workerExitedName('h1', ev('E1', ''))).toBe('E1')
     expect(workerExitedName('h1', ev('E9'))).toBe('proj-2')
     expect(workerExitedName('h1', ev('E9', ''))).toBe('E9')
+  })
+
+  it.each([
+    [{ brief: 'b\nmore', cwd: '/x/y', session_title: { text: 't', source: 'ai' } }],
+    [{ brief: '', cwd: '/x/y', session_title: { text: 't', source: 'ai' } }],
+    [{ brief: ' \n ', cwd: '/x/y' }],
+    [{ brief: '', session_title: { text: 'only title', source: 'ai' } }],
+  ])('toast name equals workerRowName for %j under both capabilities', (p) => {
+    const row = rowOf({ id: 'E1', ...p } as never)
+    useExecutionListStore.setState({ byHost: { h1: cacheOf([row]) } })
+    for (const on of [true, false]) {
+      withTitleCap('h1', on)
+      const want = workerRowName(row, selectSessionTitleSupported('h1')(useNexHostStore.getState())) || 'proj-2'
+      expect(workerExitedName('h1', ev('E1'))).toBe(want)
+    }
   })
 
   it('prefers the row label even when tmux_session is empty', () => {
