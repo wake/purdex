@@ -19,6 +19,14 @@ var ErrNoSuchRelayOp = errors.New("no such relay op")
 // with the open op; this is the floor beneath it).
 var ErrRelayOpOpen = errors.New("relay op already open for this session")
 
+// ErrBadRelayReport is returned by ReportRelay for a `cleared` report that
+// would corrupt the lineage: an empty new session id or ref, a new session
+// equal to the old one, a new session that already heads a lineage row of
+// another op, or one that is an ancestor of the old session (a cycle). The
+// op is left as it was. The HTTP handler (P5a-2b) answers 400 for the empty
+// fields before reaching here; this is the floor for every other caller.
+var ErrBadRelayReport = errors.New("bad relay report")
+
 // The store is the team.LineageReader the module publishes (P5a-1b).
 var _ team.LineageReader = (*Store)(nil)
 
@@ -69,6 +77,44 @@ var relayTransitions = map[team.RelayState]map[team.RelayState]bool{
 	team.RelayWriting:          {team.RelayWritten: true, team.RelayCleared: true, team.RelayFailed: true, team.RelayCancelled: true},
 	team.RelayWritten:          {team.RelayCleared: true, team.RelayFailed: true, team.RelayCancelled: true},
 	team.RelayCleared:          {team.RelayDone: true, team.RelayFailed: true},
+}
+
+// checkLineage guards the `cleared` transition inside ReportRelay's
+// transaction (spec §8.4): the new session id and ref are set, the new
+// session is not the old one, no other op has already cleared into the
+// new session, and the new session is not an ancestor of the old one.
+func checkLineage(tx *sql.Tx, cur team.RelayOp, r RelayReport) error {
+	if r.NewSessionID == "" || r.NewRef == "" {
+		return fmt.Errorf("%w: cleared needs new_session_id and new_ref", ErrBadRelayReport)
+	}
+	if r.NewSessionID == cur.SessionID {
+		return fmt.Errorf("%w: new session equals the old one", ErrBadRelayReport)
+	}
+	var otherOp string
+	err := tx.QueryRow(`SELECT op_id FROM session_lineage WHERE session_id = ?`, r.NewSessionID).Scan(&otherOp)
+	if err == nil {
+		return fmt.Errorf("%w: session %s already heads the lineage of op %s", ErrBadRelayReport, r.NewSessionID, otherOp)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	// Walk the old session's ancestors; the chain is finite because every
+	// accepted row passed this check, so no cycle exists yet.
+	for sid := cur.SessionID; sid != ""; {
+		var pred string
+		err := tx.QueryRow(`SELECT predecessor_session_id FROM session_lineage WHERE session_id = ?`, sid).Scan(&pred)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if pred == r.NewSessionID {
+			return fmt.Errorf("%w: session %s is an ancestor of %s (cycle)", ErrBadRelayReport, r.NewSessionID, cur.SessionID)
+		}
+		sid = pred
+	}
+	return nil
 }
 
 // RelayReport is one transition: the target state, the new session id and
@@ -219,6 +265,11 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 	if !relayTransitions[cur.State][r.State] {
 		return cur, ReportBadTransition, nil
 	}
+	if r.State == team.RelayCleared {
+		if err := checkLineage(tx, cur, r); err != nil {
+			return cur, ReportBadTransition, fmt.Errorf("report relay %s: %w", id, err)
+		}
+	}
 	next := cur
 	next.State, next.Reason, next.UpdatedAt = r.State, r.Reason, r.At
 	if r.State == team.RelayCleared {
@@ -233,8 +284,10 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: state changed under the transaction", id)
 	}
 	if r.State == team.RelayCleared {
+		// A plain INSERT: checkLineage has already proven the key is free,
+		// so a conflict here is a real error and rolls the op back with it.
 		if _, err := tx.Exec(`INSERT INTO session_lineage (session_id, predecessor_session_id, predecessor_ref, op_id, at)
-			VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_id) DO NOTHING`, r.NewSessionID, cur.SessionID, cur.Ref, id, r.At); err != nil {
+			VALUES (?, ?, ?, ?, ?)`, r.NewSessionID, cur.SessionID, cur.Ref, id, r.At); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: lineage: %w", id, err)
 		}
 	}

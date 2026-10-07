@@ -261,3 +261,65 @@ func TestRelayStore_OneOpenOpPerSessionIsEnforcedByTheTable(t *testing.T) {
 		t.Fatalf("won = %d, refused = %d, want 1 and %d", won, open, n-1)
 	}
 }
+
+// A `cleared` report that would corrupt the lineage is refused inside the
+// transaction and leaves the op and the lineage exactly as they were: empty
+// new session or ref, new == old, two ops clearing into one new session,
+// and a cycle (A→B, then B→A).
+func TestRelayStore_ClearedRefusesCorruptLineage(t *testing.T) {
+	s := openTestStore(t)
+	mk := func(id, sid, ref string) {
+		t.Helper()
+		op := selfOp(id, sid, ref, 1000)
+		op.State = team.RelayClaimed
+		if err := s.CreateRelayOp(op); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refuse := func(id string, r RelayReport, why string) {
+		t.Helper()
+		before, _, _ := s.GetRelayOp(id)
+		got, res, err := s.ReportRelay(id, r)
+		if !errors.Is(err, ErrBadRelayReport) || res != ReportBadTransition {
+			t.Fatalf("%s: err = %v, res = %v, want ErrBadRelayReport", why, err, res)
+		}
+		if got.State != before.State || got.NewSessionID != before.NewSessionID {
+			t.Fatalf("%s: returned op %+v differs from the stored one %+v", why, got, before)
+		}
+		after, _, _ := s.GetRelayOp(id)
+		if !reflect.DeepEqual(after, before) {
+			t.Fatalf("%s: the op changed: %+v → %+v", why, before, after)
+		}
+	}
+	mk("op-a", "A", "_aaaaaa")
+	refuse("op-a", RelayReport{State: team.RelayCleared, NewRef: "_bbbbbb", At: 1}, "empty new session")
+	refuse("op-a", RelayReport{State: team.RelayCleared, NewSessionID: "B", At: 1}, "empty new ref")
+	refuse("op-a", RelayReport{State: team.RelayCleared, NewSessionID: "A", NewRef: "_aaaaaa", At: 1}, "new == old")
+	refs, _ := s.PreviousRefs()
+	if len(refs) != 0 {
+		t.Fatalf("lineage written by a refused report: %v", refs)
+	}
+
+	// A → C accepted; then B → C must be refused (C already heads op-a's lineage).
+	mustReport(t, s, "op-a", RelayReport{State: team.RelayCleared, NewSessionID: "C", NewRef: "_cccccc", At: 2})
+	mk("op-b", "B", "_bbbbbb")
+	refuse("op-b", RelayReport{State: team.RelayCleared, NewSessionID: "C", NewRef: "_cccccc", At: 3}, "two ops into one new session")
+	refs, _ = s.PreviousRefs()
+	if !reflect.DeepEqual(refs["C"], []string{"_aaaaaa"}) {
+		t.Fatalf("C's lineage must still be op-a's alone: %v", refs)
+	}
+
+	// C → A would close a cycle (A is C's ancestor).
+	mk("op-c", "C", "_cccccc")
+	refuse("op-c", RelayReport{State: team.RelayCleared, NewSessionID: "A", NewRef: "_aaaaaa", At: 4}, "cycle")
+	// C → D is fine, and the chain reads D ← C ← A.
+	mustReport(t, s, "op-c", RelayReport{State: team.RelayCleared, NewSessionID: "D", NewRef: "_dddddd", At: 5})
+	refs, _ = s.PreviousRefs()
+	if !reflect.DeepEqual(refs["D"], []string{"_cccccc", "_aaaaaa"}) {
+		t.Fatalf("D's chain = %v, want [_cccccc _aaaaaa]", refs["D"])
+	}
+	// Reporting cleared again on op-c is the idempotent no-op, lineage untouched.
+	if _, res, err := s.ReportRelay("op-c", RelayReport{State: team.RelayCleared, NewSessionID: "D", NewRef: "_dddddd", At: 6}); err != nil || res != ReportNoop {
+		t.Fatalf("second cleared: res = %v err = %v", res, err)
+	}
+}
