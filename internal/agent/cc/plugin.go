@@ -136,13 +136,14 @@ func RemovePluginDir(dataDir string) error {
 	return nil
 }
 
-// mergePluginDirs adds pluginRoot to settings.env.CLAUDE_CODE_PLUGIN_DIRS
-// (remove=false) or takes every entry under <data_dir>/cc-plugin/ out of it
-// (remove=true). Other entries are kept in order; the env block and the
-// key are created or deleted as needed. Entries are recognised by the
-// cc-plugin prefix, not by equality, so a moved data dir's stale entry is
-// still ours to replace.
-func mergePluginDirs(settingsPath, dataDir, pluginRoot string, remove bool) error {
+// mergePluginDirs takes every Purdex entry out of
+// settings.env.CLAUDE_CODE_PLUGIN_DIRS and, when remove=false, appends
+// pluginRoot. Other entries are kept in order; the env block and the key are
+// created or deleted as needed. A Purdex entry is any …/cc-plugin/purdex
+// (isPurdexPluginDir), not only this data dir's, so a moved data dir's stale
+// entry is still ours to replace; a sibling such as <data_dir>/cc-plugin/custom
+// is not ours and is kept.
+func mergePluginDirs(settingsPath, pluginRoot string, remove bool) error {
 	settings, err := loadSettings(settingsPath)
 	if err != nil {
 		return err
@@ -159,10 +160,9 @@ func mergePluginDirs(settingsPath, dataDir, pluginRoot string, remove bool) erro
 		}
 		current = s
 	}
-	prefix := filepath.Join(dataDir, PluginDirName) + string(filepath.Separator)
 	kept := make([]string, 0, 4)
 	for _, p := range strings.Split(current, string(os.PathListSeparator)) {
-		if p == "" || isUnderPrefix(p, prefix) {
+		if p == "" || isPurdexPluginDir(p) {
 			continue
 		}
 		kept = append(kept, p)
@@ -183,8 +183,12 @@ func mergePluginDirs(settingsPath, dataDir, pluginRoot string, remove bool) erro
 	return writeSettingsAtomic(settingsPath, settings)
 }
 
-func isUnderPrefix(p, prefix string) bool {
-	return strings.HasPrefix(filepath.Clean(p)+string(filepath.Separator), prefix)
+// isPurdexPluginDir reports whether a CLAUDE_CODE_PLUGIN_DIRS entry is a
+// Purdex extraction: its last two elements are cc-plugin/purdex, under any
+// data dir.
+func isPurdexPluginDir(p string) bool {
+	p = filepath.Clean(p)
+	return filepath.Base(p) == PluginName && filepath.Base(filepath.Dir(p)) == PluginDirName
 }
 
 func envMapForMerge(settings map[string]any) (map[string]any, error) {

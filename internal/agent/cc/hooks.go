@@ -66,12 +66,12 @@ func (p *Provider) installPlugin(settingsPath, pdxPath string) error {
 	if err != nil {
 		return fmt.Errorf("extract plugin: %w", err)
 	}
-	return mergePluginDirs(settingsPath, dataDir, root, false)
+	return mergePluginDirs(settingsPath, root, false)
 }
 
 func (p *Provider) removePlugin(settingsPath string) error {
 	dataDir := p.dataDir()
-	if err := mergePluginDirs(settingsPath, dataDir, PluginRoot(dataDir), true); err != nil {
+	if err := mergePluginDirs(settingsPath, PluginRoot(dataDir), true); err != nil {
 		return err
 	}
 	return RemovePluginDir(dataDir)

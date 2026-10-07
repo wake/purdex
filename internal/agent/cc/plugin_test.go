@@ -129,7 +129,7 @@ func TestMergePluginDirs_CreatesEnvAndIsIdempotent(t *testing.T) {
 	dataDir := filepath.Join(dir, "pdx")
 	root := PluginRoot(dataDir)
 	for i := 0; i < 2; i++ {
-		if err := mergePluginDirs(path, dataDir, root, false); err != nil {
+		if err := mergePluginDirs(path, root, false); err != nil {
 			t.Fatalf("run %d: %v", i, err)
 		}
 	}
@@ -146,7 +146,7 @@ func TestMergePluginDirs_AppendsToExistingListAndKeepsOtherKeys(t *testing.T) {
 	root := PluginRoot(dataDir)
 	sep := string(os.PathListSeparator)
 	os.WriteFile(path, []byte(`{"env":{"FOO":"1","CLAUDE_CODE_PLUGIN_DIRS":"/Users/x/mods/a`+sep+`/Users/x/mods/b"},"hooks":{}}`), 0o644)
-	if err := mergePluginDirs(path, dataDir, root, false); err != nil {
+	if err := mergePluginDirs(path, root, false); err != nil {
 		t.Fatal(err)
 	}
 	s := readSettings(t, path)
@@ -162,20 +162,33 @@ func TestMergePluginDirs_AppendsToExistingListAndKeepsOtherKeys(t *testing.T) {
 	}
 }
 
-func TestMergePluginDirs_ReplacesStaleEntryUnderCcPluginPrefix(t *testing.T) {
+// R1 P2 + attacker: a Purdex entry is any …/cc-plugin/purdex, wherever the
+// data dir was (a moved data dir leaves one behind); anything else — even a
+// sibling under this data dir's cc-plugin/ — belongs to someone else.
+func TestMergePluginDirs_OwnsEveryCcPluginPurdexEntry_KeepsEverythingElse(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 	dataDir := filepath.Join(dir, "pdx")
 	root := PluginRoot(dataDir)
 	sep := string(os.PathListSeparator)
-	stale := filepath.Join(dataDir, "cc-plugin", "purdex-old")
-	os.WriteFile(path, []byte(`{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"`+stale+sep+`/Users/x/mods/a"}}`), 0o644)
-	if err := mergePluginDirs(path, dataDir, root, false); err != nil {
+	old := filepath.Join(dir, "old", "cc-plugin", "purdex")
+	custom := filepath.Join(dataDir, "cc-plugin", "custom")
+	seed := `{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"` + old + sep + custom + sep + `/Users/x/mods/a` + sep + root + `/"}}`
+
+	os.WriteFile(path, []byte(seed), 0o644)
+	if err := mergePluginDirs(path, root, false); err != nil {
 		t.Fatal(err)
 	}
-	v, _ := envDirs(t, readSettings(t, path))
-	if v != "/Users/x/mods/a"+sep+root {
-		t.Fatalf("got %q", v)
+	if v, _ := envDirs(t, readSettings(t, path)); v != custom+sep+"/Users/x/mods/a"+sep+root {
+		t.Fatalf("install: got %q", v)
+	}
+
+	os.WriteFile(path, []byte(seed), 0o644)
+	if err := mergePluginDirs(path, root, true); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := envDirs(t, readSettings(t, path)); v != custom+sep+"/Users/x/mods/a" {
+		t.Fatalf("remove: got %q", v)
 	}
 }
 
@@ -186,7 +199,7 @@ func TestMergePluginDirs_RemoveKeepsOthersAndDeletesEmptyEnv(t *testing.T) {
 	root := PluginRoot(dataDir)
 	sep := string(os.PathListSeparator)
 	os.WriteFile(path, []byte(`{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"/Users/x/mods/a`+sep+root+`"}}`), 0o644)
-	if err := mergePluginDirs(path, dataDir, root, true); err != nil {
+	if err := mergePluginDirs(path, root, true); err != nil {
 		t.Fatal(err)
 	}
 	v, _ := envDirs(t, readSettings(t, path))
@@ -194,7 +207,7 @@ func TestMergePluginDirs_RemoveKeepsOthersAndDeletesEmptyEnv(t *testing.T) {
 		t.Fatalf("got %q", v)
 	}
 	os.WriteFile(path, []byte(`{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"`+root+`"},"other":true}`), 0o644)
-	if err := mergePluginDirs(path, dataDir, root, true); err != nil {
+	if err := mergePluginDirs(path, root, true); err != nil {
 		t.Fatal(err)
 	}
 	s := readSettings(t, path)
@@ -209,7 +222,7 @@ func TestMergePluginDirs_RemoveKeepsOthersAndDeletesEmptyEnv(t *testing.T) {
 func TestMergePluginDirs_RemoveOnMissingFileIsNoop(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
-	if err := mergePluginDirs(path, filepath.Join(dir, "pdx"), PluginRoot(filepath.Join(dir, "pdx")), true); err != nil {
+	if err := mergePluginDirs(path, PluginRoot(filepath.Join(dir, "pdx")), true); err != nil {
 		t.Fatal(err)
 	}
 	s := readSettings(t, path)
@@ -223,11 +236,11 @@ func TestMergePluginDirs_UnsupportedShapesError(t *testing.T) {
 	path := filepath.Join(dir, "settings.json")
 	dataDir := filepath.Join(dir, "pdx")
 	os.WriteFile(path, []byte(`{"env":[]}`), 0o644)
-	if err := mergePluginDirs(path, dataDir, PluginRoot(dataDir), false); err == nil {
+	if err := mergePluginDirs(path, PluginRoot(dataDir), false); err == nil {
 		t.Fatal("env array must error")
 	}
 	os.WriteFile(path, []byte(`{"env":{"CLAUDE_CODE_PLUGIN_DIRS":["/a"]}}`), 0o644)
-	if err := mergePluginDirs(path, dataDir, PluginRoot(dataDir), false); err == nil {
+	if err := mergePluginDirs(path, PluginRoot(dataDir), false); err == nil {
 		t.Fatal("non-string value must error")
 	}
 }
@@ -305,7 +318,7 @@ func TestCCCheckHooks_PluginMissingOrOutdatedIsNotInstalled(t *testing.T) {
 	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
 		t.Fatal(err)
 	}
-	if err := mergePluginDirs(settingsPath, dataDir, root, true); err != nil {
+	if err := mergePluginDirs(settingsPath, root, true); err != nil {
 		t.Fatal(err)
 	}
 	status, _ = p.CheckHooks()
