@@ -69,10 +69,69 @@ type fakeOS struct {
 	refused  map[string]bool // absent ⇒ true (nobody listens)
 	signals  []sentSignal
 	onSignal func(pid int, sig os.Signal)
+
+	// Zombie seams. states[pid] is the (stat, ppid) procState reports: a
+	// pid not listed is a healthy "S" process; stateSeq[pid] is consumed
+	// one entry per call (the last one sticks) and wins over states.
+	states     map[int]fakeState
+	stateSeq   map[int][]fakeState
+	stateCalls map[int]int
+	reapOK     bool // reap succeeds (and the pid dies)
+	reaps      []int
 }
 
+// fakeState is one procState answer.
+type fakeState struct {
+	stat string
+	ppid int
+	err  error
+}
+
+// testOwnPID is the daemon pid the harness hands the manager.
+const testOwnPID = 777
+
 func newFakeOS() *fakeOS {
-	return &fakeOS{alive: map[int]bool{}, ps: map[int]string{}, psErr: map[int]error{}, refused: map[string]bool{}}
+	return &fakeOS{alive: map[int]bool{}, ps: map[int]string{}, psErr: map[int]error{}, refused: map[string]bool{},
+		states: map[int]fakeState{}, stateSeq: map[int][]fakeState{}, stateCalls: map[int]int{}}
+}
+
+func (f *fakeOS) procState(pid int) (string, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stateCalls[pid]++
+	st, ok := f.states[pid]
+	if !ok {
+		st = fakeState{stat: "S", ppid: 1}
+	}
+	if seq := f.stateSeq[pid]; len(seq) > 0 {
+		st = seq[0]
+		if len(seq) > 1 {
+			f.stateSeq[pid] = seq[1:]
+		}
+	}
+	return st.stat, st.ppid, st.err
+}
+
+func (f *fakeOS) reap(pid int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reaps = append(f.reaps, pid)
+	if f.reapOK {
+		f.alive[pid] = false
+	}
+	return f.reapOK
+}
+
+func (f *fakeOS) reaped() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.reaps...)
+}
+
+func (f *fakeOS) calls(pid int) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stateCalls[pid]
 }
 
 func (f *fakeOS) pidAlive(pid int) bool {
@@ -199,6 +258,7 @@ func withEntries(fn func() []ipeers.Entry) tmOption {
 const (
 	testReadyTimeout = 2 * time.Second
 	testTermGrace    = 100 * time.Millisecond
+	testZombieSettle = 20 * time.Millisecond
 )
 
 // newTestManager builds a manager over fakes. It does NOT sweep; most
@@ -233,6 +293,10 @@ func newTestManager(t *testing.T, opts ...tmOption) *testManager {
 		PidAlive:     tm.os.pidAlive,
 		DialRefused:  tm.os.dialRefused,
 		Signal:       tm.os.signal,
+		ProcState:    tm.os.procState,
+		Reap:         tm.os.reap,
+		ZombieSettle: testZombieSettle,
+		OwnPID:       testOwnPID,
 		LiveEntries:  func() []ipeers.Entry { return tm.entries() },
 		ReadyTimeout: testReadyTimeout,
 		TermGrace:    testTermGrace,

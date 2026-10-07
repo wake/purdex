@@ -142,7 +142,15 @@ type helperManagerConfig struct {
 	PidAlive    func(pid int) bool
 	DialRefused func(sock string) bool
 	Signal      func(pid int, sig os.Signal) error
-	LiveEntries func() []ipeers.Entry
+	// ProcState reports pid's ps state letters and parent pid (ps -o
+	// stat=,ppid= by default); Reap is a non-blocking wait4 that reports
+	// whether it collected pid; ZombieSettle is how long a zombie must stay
+	// one before it is reaped; OwnPID is this daemon's pid. Sweep seams.
+	ProcState    func(pid int) (state string, ppid int, err error)
+	Reap         func(pid int) bool
+	ZombieSettle time.Duration
+	OwnPID       int
+	LiveEntries  func() []ipeers.Entry
 	// RewriteName rewrites the name of <RegistryDir>/<pid>.json in place
 	// (ccuds.RewriteRegistryName by default); a test seam.
 	RewriteName func(dir string, pid int, name string, nameSince int64) error
@@ -174,6 +182,9 @@ type helperManager struct {
 	pidAlive    func(pid int) bool
 	dialRefused func(sock string) bool // true when connect fails with ECONNREFUSED/ENOENT
 	signal      func(pid int, sig os.Signal) error
+	procState   func(pid int) (state string, ppid int, err error)
+	reap        func(pid int) bool
+	ownPID      int
 	liveEntries func() []ipeers.Entry
 	rewriteName func(dir string, pid int, name string, nameSince int64) error
 
@@ -183,11 +194,13 @@ type helperManager struct {
 	version      string
 	readyTimeout time.Duration
 	termGrace    time.Duration
+	zombieSettle time.Duration
 
 	onFrame func(h *helper, line string)
 	log     func(format string, args ...any)
 
 	swept      bool
+	sweeping   bool // a Sweep has claimed the scan and not finished yet
 	unresolved []unresolvedRecord
 }
 
@@ -204,6 +217,10 @@ func newHelperManager(cfg helperManagerConfig) *helperManager {
 		pidAlive:     cfg.PidAlive,
 		dialRefused:  cfg.DialRefused,
 		signal:       cfg.Signal,
+		procState:    cfg.ProcState,
+		reap:         cfg.Reap,
+		ownPID:       cfg.OwnPID,
+		zombieSettle: cfg.ZombieSettle,
 		liveEntries:  cfg.LiveEntries,
 		rewriteName:  cfg.RewriteName,
 		proxiesPath:  cfg.ProxiesPath,
@@ -229,6 +246,18 @@ func newHelperManager(cfg helperManagerConfig) *helperManager {
 	}
 	if m.signal == nil {
 		m.signal = defaultSignal
+	}
+	if m.procState == nil {
+		m.procState = defaultProcState
+	}
+	if m.reap == nil {
+		m.reap = defaultReap
+	}
+	if m.ownPID == 0 {
+		m.ownPID = os.Getpid()
+	}
+	if m.zombieSettle <= 0 {
+		m.zombieSettle = defaultZombieSettle
 	}
 	if m.liveEntries == nil {
 		m.liveEntries = func() []ipeers.Entry { return nil }

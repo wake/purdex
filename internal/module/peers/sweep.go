@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,9 +31,17 @@ func (m *helperManager) identity(r proxyRecord) (alive bool, id ipeers.ProcIdent
 func (m *helperManager) waitGone(r proxyRecord) (alive bool, id ipeers.ProcIdentity) {
 	deadline := time.NewTimer(m.termGrace)
 	defer deadline.Stop()
+	// ps is forked at most once per zombieSettle, not once per poll.
+	var nextProbe time.Time
 	for {
 		if alive, id = m.identity(r); !alive || id != ipeers.ProcSame {
 			return alive, id
+		}
+		if !time.Now().Before(nextProbe) {
+			if m.tryReapZombie(r) {
+				return false, id
+			}
+			nextProbe = time.Now().Add(m.zombieSettle)
 		}
 		select {
 		case <-deadline.C:
@@ -89,6 +98,10 @@ func (m *helperManager) sweepRecord(r proxyRecord) (u unresolvedRecord, keep boo
 			m.log("peers: sweep: pid %d is alive but its start time is unknown; leaving %s and its files alone", r.PID, r.Sock)
 			return unresolvedRecord{proxyRecord: r, occupies: true}, true
 		case ipeers.ProcSame:
+			if m.tryReapZombie(r) {
+				// An unwaited zombie of ours: dead, nothing to signal.
+				break
+			}
 			if err := m.signal(r.PID, syscall.SIGTERM); err != nil {
 				m.log("peers: sweep: SIGTERM pid %d: %v", r.PID, err)
 			}
@@ -161,4 +174,48 @@ func (m *helperManager) unlinkOwned(who string, r proxyRecord) (cleanupOK bool) 
 func fileExists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil
+}
+
+// defaultZombieSettle is how long a pid must keep showing as a zombie
+// before Sweep reaps it (see tryReapZombie).
+const defaultZombieSettle = 200 * time.Millisecond
+
+// defaultProcState is ps -o stat=,ppid= -p pid. (stub)
+func defaultProcState(pid int) (string, int, error) {
+	return "", 0, errors.New("not implemented")
+}
+
+// defaultReap is a non-blocking wait4. (stub)
+func defaultReap(pid int) bool { return false }
+
+// isOurZombie reports whether pid currently shows as a zombie whose
+// parent is this daemon, returning the ppid it saw.
+func (m *helperManager) isOurZombie(pid int) (ppid int, ok bool) {
+	state, ppid, err := m.procState(pid)
+	if err != nil || !strings.HasPrefix(state, "Z") || ppid != m.ownPID {
+		return 0, false
+	}
+	return ppid, true
+}
+
+// tryReapZombie reaps r's pid when it is provably an unwaited zombie child
+// of this daemon: ps says Z with ppid == ownPID, and after zombieSettle it
+// still does (a child some Cmd.Wait is blocked on is collected within
+// milliseconds, so a zombie that outlives the settle has no waiter). The
+// caller has established identity ProcSame. Every failure is false and the
+// caller falls back to the signal path.
+func (m *helperManager) tryReapZombie(r proxyRecord) bool {
+	ppid, ok := m.isOurZombie(r.PID)
+	if !ok {
+		return false
+	}
+	time.Sleep(m.zombieSettle)
+	if ppid2, ok := m.isOurZombie(r.PID); !ok || ppid2 != ppid {
+		return false
+	}
+	if !m.reap(r.PID) {
+		return false
+	}
+	m.log("peers: sweep: reaped zombie pid %d (identity same)", r.PID)
+	return true
 }
