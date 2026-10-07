@@ -2,8 +2,9 @@
 //
 //   idle ──(turn.complete: used ≥ threshold, growth ≥ minGrowth, +10 since last ask)──▶ beginning
 //   beginning: `pdx relay begin --self` runs from a timer ──▶ awaiting, or back to idle on a refusal
-//   awaiting: a timer loops `pdx relay wait`; every prompt.submit waits for its answer (P5b-3),
-//   and one that arrives while beginning waits for begin first
+//   awaiting: a timer loops `pdx relay wait` and alone moves the state; every prompt.submit
+//   is held on its own `pdx relay wait --wait 60s` raced with that loop's answer (P5b-3),
+//   and one that arrives while beginning waits for begin first, at most 8 s
 //   awaiting ──approved──▶ approved: write prompt submitted (a fresh nonce), report writing
 //   approved ──(turn.complete of the write turn, file ok)──▶ clearing: report written, timer → /clear
 //   clearing ──(classic.SessionStart source=clear)──▶ seeding: report cleared --new-session, hello, seed prompt
@@ -20,8 +21,10 @@
 // inside a hook the turn waits on (F3), and a daemon that is down answers
 // only after the client's 30 s grace, which no turn end, session start or
 // /clear may wait for (P5b-1 review). Hooks only read the engine and move
-// the state; the prompt hold awaits an answer the timers settle, and /relay
-// alone awaits its daemon call (the person waits for its output; 8 s bound).
+// the state. Two hooks wait on purpose: the prompt hold, on its own
+// `pdx relay wait` (a `$` call in flight stops the hook's 10 s budget,
+// HookBudget; it only waits, the timers move the state) and failing open;
+// and /relay, on its daemon call (the person waits for its output; 8 s bound).
 
 const VERSION = '1' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
 const DEFAULT_THRESHOLD = 70
@@ -31,6 +34,9 @@ const MAX_FIX_ROUNDS = 2
 const WAIT_TIMEOUT_MS = 590_000 // $.process.run caps at 10 min (M24); pdx relay wait bounds itself to 9
 const CALL_TIMEOUT_MS = 35_000 // one daemonclient grace (30 s) plus slack
 const SELF_TIMEOUT_MS = 8_000 // /relay waits in its hook for `pdx relay self`: the person waits for the answer
+const HOLD_WAIT = '60s' // the prompt hold's own `pdx relay wait --wait`: called again while the request is open
+const HOLD_TIMEOUT_MS = 70_000 // its $.process.run bound: the 60 s plus the CLI's final read (5 s) and slack
+const BEGIN_HOLD_MS = 8_000 // a prompt that arrives while begin is out waits this long at most: $.clock.sleep runs the 10 s budget
 const STEP_MS = 50 // the timer a step that starts a turn or a command waits for (F3)
 const MAX_RESENDS = 20 // a report that keeps failing with 20 / 21 is re-sent at most this often, then dropped
 const MAX_OUTBOX = 50 // reports queued at once; one more pushes out the oldest
@@ -57,7 +63,7 @@ const fresh = () => ({
   helloBusy: false, // the newest hello has not answered yet
   gen: 0, // bumped at every return to idle and every session change: a begin answers only for its own
   state: 'idle', // idle | beginning | awaiting | approved | clearing | seeding
-  begun: undefined, // while beginning: resolves to the request begin opened and adopted, or undefined
+  begun: undefined, // while beginning: a deferred resolving to the request begin opened and adopted, or undefined
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
   floor: undefined,
@@ -319,7 +325,7 @@ async function maybeBegin($) {
   s.lastAskPct = u.percent
   const gen = s.gen
   const begun = deferred() // a prompt that arrives while begin is out waits on it (P5b-3)
-  s.begun = begun.promise
+  s.begun = begun
   later($, 0, () => begin($, sid, gen, u, begun.resolve).finally(() => begun.resolve(undefined)))
 }
 
@@ -374,6 +380,43 @@ async function begin($, sid, gen, u, adopted) {
   })
 }
 
+// waitAnswer reads one `pdx relay wait`. P5a-2c's shape: exit 0 + Approval
+// JSON, state 'approved' or 'open' (the call's --wait bound ran out: call
+// again). Anything else at exit 0 — empty or unparsable stdout, an unknown
+// state — is NOT an approval: never start the write turn on it (§8.7 (d));
+// 10 / 11 / 12 close the request; 20, 21, 1 (a rejected call reads as 20)
+// are 'unavailable', treated as not approved.
+function waitAnswer(r) {
+  if (r.exitCode === 0) {
+    const a = parseJSON(r.stdout)
+    if (a && a.state === 'open') return 'open'
+    if (a && a.state === 'approved') return 'approved'
+    return 'unavailable'
+  }
+  if (r.exitCode === 10) return 'denied'
+  if (r.exitCode === 11) return 'timeout'
+  if (r.exitCode === 12) return 'cancelled'
+  return 'unavailable'
+}
+
+// hold waits, inside the prompt.submit hook, for request p to close. It
+// races the request's answer (which the timer's loop settles, or the mod
+// when it lets the request go) with a `pdx relay wait --wait 60s` of the
+// hook's own: that call in flight stops the hook's 10 s budget (HookBudget),
+// where an await of the timers' promise alone would let it run out and the
+// engine release the prompt early. The hook's wait only reads: 'open' calls
+// again; a closed answer (approved, denied, timeout, cancelled) is taken as
+// is; 'unavailable' (20, 21, 1, …) lets the prompt go on unchanged — the
+// hold fails open. The loop stays the one thing that moves the state.
+async function hold($, p) {
+  const answered = p.answer.promise
+  for (;;) {
+    const own = pdx($, ['relay', 'wait', p.requestId, '--wait', HOLD_WAIT], HOLD_TIMEOUT_MS).then(waitAnswer)
+    const outcome = await Promise.race([answered, own])
+    if (outcome !== 'open') return outcome
+  }
+}
+
 // waitLoop is the one long-poll loop per request, its promise kept on the
 // request (a loop left over from a request the user's own /clear dropped
 // never answers for the next one). It runs in a timer's own dispatch, so a
@@ -385,21 +428,8 @@ function waitLoop($) {
   p.wait = (async () => {
     $.ui.toast(TOAST_WAITING) // once per request (one loop per request)
     for (;;) {
-      const r = await pdx($, ['relay', 'wait', p.requestId], WAIT_TIMEOUT_MS)
-      if (r.exitCode === 0) {
-        // P5a-2c's shape: exit 0 + Approval JSON, state 'approved' or 'open'
-        // (the CLI's own 9 min bound ran out: ask again). Anything else at
-        // exit 0 — empty or unparsable stdout, an unknown state — is NOT an
-        // approval: never start the write turn on it (§8.7 (d)).
-        const a = parseJSON(r.stdout)
-        if (a && a.state === 'open') continue
-        if (a && a.state === 'approved') return 'approved'
-        return 'unavailable'
-      }
-      if (r.exitCode === 10) return 'denied'
-      if (r.exitCode === 11) return 'timeout'
-      if (r.exitCode === 12) return 'cancelled'
-      return 'unavailable' // 20, 21, 1: treat as not approved (§8.7 (d))
+      const outcome = waitAnswer(await pdx($, ['relay', 'wait', p.requestId], WAIT_TIMEOUT_MS))
+      if (outcome !== 'open') return outcome
     }
   })().catch(() => 'unavailable').then((outcome) => {
     p.answer.resolve(outcome) // the held prompts go on after settle below has moved the state
@@ -609,20 +639,31 @@ export function register(on) {
 
   // The hold (U7, §8.7 (b)): while a request is open no prompt of the main
   // conversation starts a turn, whatever its origin (the mod's own never
-  // reaches this hook, MP3). A prompt that arrives while begin is still out
-  // waits for it (≤ CALL_TIMEOUT_MS) and goes on unchanged when begin opened
-  // nothing. Approved ⇒ NOTE after the existing context; anything else ⇒
-  // unchanged. The hook only awaits the request's answer: the status line,
-  // the toast and the loop are the timer's, so Esc here ends this prompt only.
+  // reaches this hook, MP3). The hook waits on its own `pdx relay wait`
+  // (hold): a `$` call in flight, so its 10 s budget stands still however
+  // long the request stays open. A prompt that arrives while begin is still
+  // out waits for it at most BEGIN_HOLD_MS (a $.clock.sleep runs the budget)
+  // and goes on unchanged when begin opened nothing in that time. Approved ⇒
+  // NOTE after the existing context; anything else ⇒ unchanged. The status
+  // line, the toast and the loop are the timer's, so Esc here ends this
+  // prompt only. The hold never loses a prompt: whatever fails, its .catch
+  // answers next(e) (fail-open; P5b-3 review).
   on('prompt.submit', async ($, e, next) => {
     if (!s.interactive) return next(e)
-    const p = s.state === 'beginning' ? await s.begun : s.state === 'awaiting' ? s.pending : undefined
+    let p = s.state === 'awaiting' ? s.pending : undefined
+    if (s.state === 'beginning' && s.begun) {
+      const bound = $.clock.sleep(BEGIN_HOLD_MS, { signal: next.signal }).then(() => undefined)
+      p = await Promise.race([s.begun.promise, bound])
+    }
     if (!p) return next(e)
-    const outcome = await p.answer.promise
+    const outcome = await hold($, p)
     // `s.pending === p`: an approval that raced a compaction or a /clear relays nothing
     if (outcome === 'approved' && s.pending === p) return next({ ...e, context: [...(e.context ?? []), NOTE] })
     return next(e)
-  }).catch(($, e, next) => (next.called ? next(e) : { drop: 'pdx-relay: hold failed' }))
+  }).catch(($, e, next) => {
+    log($, 'prompt hold failed (' + (next.error ? next.error.kind : '?') + '); the prompt goes on unchanged')
+    return next(e)
+  })
 
   // Compaction (§8.7 (c), deviation 9): an approved relay not yet written
   // skips an AUTO compaction (the handoff is written from the full context);
