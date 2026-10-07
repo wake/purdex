@@ -14,11 +14,9 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-// Lead-team-relay spec §7.2 step 4: team.member_command is the launch
-// command of a member, default the expansion of cld-yolo. A field left out
-// keeps its default; an unknown field, an explicit null, a blank command, a
-// control character (newline included), a trailing backslash or more than
-// 512 bytes is refused, because the daemon types the command into a shell.
+// Spec §7.2 step 4: team.member_command defaults to cld-yolo's expansion; a
+// field left out keeps it. Unknown fields, null, blank, control characters,
+// a trailing backslash and > 512 bytes are refused: it is typed into a shell.
 func TestNormalizeTeam_DefaultsUnknownFieldNullAndBlank(t *testing.T) {
 	assert.Equal(t, team.DefaultMemberCommand, DefaultTeamSettings.MemberCommand)
 	for raw, want := range map[string]string{
@@ -43,6 +41,11 @@ func TestNormalizeTeam_DefaultsUnknownFieldNullAndBlank(t *testing.T) {
 		_, err := normalizeTeam(json.RawMessage(raw))
 		assert.Error(t, err, raw)
 	}
+	// The exported rule (the launch line's re-check) takes a trimmed value only.
+	assert.NoError(t, ValidateMemberCommand("claude --x"))
+	for _, s := range []string{" claude", "claude ", "a\xffb"} {
+		assert.Error(t, ValidateMemberCommand(s), s)
+	}
 }
 
 // A host that never wrote the key reads the default, both on the GET and
@@ -50,11 +53,7 @@ func TestNormalizeTeam_DefaultsUnknownFieldNullAndBlank(t *testing.T) {
 func TestGetHostConfig_TeamDefault(t *testing.T) {
 	m := newTestModule(t)
 	rr := serve(m, http.MethodGet, "/api/hostconfig", "")
-	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
-	var got map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
-	assert.JSONEq(t, `{"items":{"member_command":"claude --dangerously-skip-permissions"},"revision":0}`, string(got["team"]))
-
+	assert.Contains(t, rr.Body.String(), `"team":{"items":{"member_command":"claude --dangerously-skip-permissions"},"revision":0}`)
 	ts, err := m.TeamSettings()
 	require.NoError(t, err)
 	assert.Equal(t, DefaultTeamSettings, ts)
@@ -88,12 +87,9 @@ func TestTeamSettings_PutAndReader(t *testing.T) {
 		rr = serve(m, http.MethodPut, "/api/hostconfig/team", body)
 		assert.Equal(t, http.StatusBadRequest, rr.Code, body)
 	}
-	e, err := m.store.Get(KeyTeam)
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), e.Revision)
-
 	// A stored value that fails validation (written around the PUT) is an error.
-	_, _, err = m.store.Put(KeyTeam, 1, func() (json.RawMessage, error) { return json.RawMessage(`{"member_command":"a\nb"}`), nil })
+	_, stored, err := m.store.Put(KeyTeam, 1, func() (json.RawMessage, error) { return json.RawMessage(`{"member_command":"a\nb"}`), nil })
+	require.True(t, stored, "the 400s stored nothing: the revision is still 1")
 	require.NoError(t, err)
 	_, err = m.TeamSettings()
 	assert.Error(t, err)
