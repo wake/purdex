@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -184,7 +185,7 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 	used := fs.Float64("used", -1, "")
 	fs.BoolVar(&req.Self, "self", false, "")
 	fs.StringVar(&req.SessionID, "session", "", "")
-	fs.IntVar(&req.Window, "window", 0, "")
+	fs.IntVar(&req.Window, "window", -1, "") // -1: not given (the grammar requires it)
 	cfgPath, ok := relayFlags(fs, args, stderr)
 	if !ok {
 		return ExitUsage
@@ -196,10 +197,10 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 		return relayUsageErr(stderr, "--self is required (a member relay is `pdx relay <ref>`, P6)")
 	case strings.TrimSpace(req.SessionID) == "":
 		return relayUsageErr(stderr, "--session 不能為空")
-	case *used < 0 || *used > 100:
-		return relayUsageErr(stderr, "--used 必須在 0 到 100 之間")
+	case math.IsNaN(*used) || math.IsInf(*used, 0) || *used < 0 || *used > 100:
+		return relayUsageErr(stderr, "--used 必須是 0 到 100 之間的數字")
 	case req.Window < 0:
-		return relayUsageErr(stderr, "--window 不能是負數")
+		return relayUsageErr(stderr, "--window <n> 是必要的，且不能是負數")
 	}
 	req.UsedPercentage = *used
 	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)

@@ -122,6 +122,9 @@ func TestRelayCmd_UsageErrorsExit2BeforeAnyRequest(t *testing.T) {
 	d := &fakeRelayDaemon{}
 	for _, args := range [][]string{
 		{}, {"dance"}, {"hello"}, {"begin", "--session", "s"}, {"begin", "--self", "--session", "s", "--used", "150"},
+		{"begin", "--self", "--session", "s", "--used", "NaN", "--window", "1000"}, // PR #1726 R1: non-finite is a grammar error, not a JSON failure
+		{"begin", "--self", "--session", "s", "--used", "+Inf", "--window", "1000"},
+		{"begin", "--self", "--session", "s", "--used", "70"}, // PR #1726 R1: --window is required
 		{"wait"}, {"self", "maybe", "--session", "s"}, {"self", "on"}, {"report", "op"}, {"report", "op", "flying"},
 		{"report", "op", "cleared"}, {"report", "op", "failed"}, {"op"},
 		// claimed is not a reportable state (P5a-2b codex R1): a self op is
@@ -188,7 +191,7 @@ func TestRelayCmd_BeginPrintsOpAndRequestOrRefuses(t *testing.T) {
 			body.Op = &team.RelayOp{ID: "op-open", State: team.RelayClaimed}
 		}
 		d := &fakeRelayDaemon{beginStatus: http.StatusConflict, beginBody: body}
-		code, stdout, stderr := driveRelay(t, context.Background(), d, "begin", "--self", "--session", "sid-1", "--used", "72")
+		code, stdout, stderr := driveRelay(t, context.Background(), d, "begin", "--self", "--session", "sid-1", "--used", "72", "--window", "200000")
 		if code != ExitRefused || !strings.HasPrefix(stderr, "pdx relay: ") {
 			t.Fatalf("%s: code=%d stderr=%q", c.code, code, stderr)
 		}
@@ -202,7 +205,7 @@ func TestRelayCmd_BeginPrintsOpAndRequestOrRefuses(t *testing.T) {
 		}
 	}
 	nf := &fakeRelayDaemon{beginStatus: http.StatusNotFound, beginBody: team.APIError{Error: team.ErrUnknownSession}}
-	if code, _, stderr := driveRelay(t, context.Background(), nf, "begin", "--self", "--session", "sid-x", "--used", "72"); code != ExitError || !strings.Contains(stderr, team.ErrUnknownSession) {
+	if code, _, stderr := driveRelay(t, context.Background(), nf, "begin", "--self", "--session", "sid-x", "--used", "72", "--window", "200000"); code != ExitError || !strings.Contains(stderr, team.ErrUnknownSession) {
 		t.Fatalf("unknown_session: code=%d stderr=%q", code, stderr)
 	}
 }
