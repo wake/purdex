@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.531] - 2026-10-07
+
+> 純型別與常數，**不需部署**（沒有任何行為變更；跑中的 daemon 完全不受影響）。資料庫、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-0（#1700）
+
+接力（relay，spec §8）的 wire 契約，plan v2 `docs/specs/2026-10-06-lead-team-relay-plan-v2.md` P5a 的第一個 PR；之後 P5a-1a 起的 store、路由、CLI、SPA、mod 都以這一份字面值為準。
+
+- **`internal/team/wire_relay.go`**：接力 op 的 kind（self／member）、九個狀態與終態判定、八個 failed／cancelled 原因、六個錯誤碼、門檻常數（70%、20000 tokens、10 分鐘、`<data_dir>/relay/`）、`RelayOp` 與 hello／begin／self／report 的 request／response 型別、`LineageReader` 介面。
+- **`APIError` 多了 `op`**：409 `relay_open`／`bad_transition` 會帶出現行的 op。
+- 契約測試逐一釘住每個字面值與每個 DTO 的 JSON 形狀（含 optional 欄位省略、`used_percentage` 的「沒量到」與「量到 0」之分）。
+
 ## [1.0.0-alpha.530] - 2026-10-07
 
 > 只動 `pdx` 指令，**需要部署新的 `pdx` 執行檔**（與 alpha.529 的 daemon 變更一起重啟即可），由統籌安排。資料庫、SPA、Electron 都沒有改動。
