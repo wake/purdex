@@ -1106,7 +1106,8 @@ function approvalRow(f: Fake, realOpenMs?: number) {
       return new Promise<any>((resolve) => {
         waiters.push(() => resolve(closed()))
         const bound = realOpenMs !== undefined ? new Promise((r) => setTimeout(r, realOpenMs)) : f.clock.sleep(argv.includes('--wait') ? 60_000 : 540_000)
-        bound.then(() => resolve(state === 'open' ? { exitCode: 0, stdout: APPROVAL('open') } : closed()))
+        // a wait whose dispatch was abandoned (the test ended under it) is dropped
+        bound.then(() => resolve(state === 'open' ? { exitCode: 0, stdout: APPROVAL('open') } : closed()), () => {})
       })
     },
   }
@@ -1397,9 +1398,9 @@ test('a compaction before the wait loop started releases a held prompt; no loop 
   expect(reports(f)).toEqual(['relay report op-1 cancelled --error compacted'])
 })
 
-// Mutation gates: drop the cancelled{compacted} report → no report, the
-// prompt stays held; skip the return to idle → the handoff path is still
-// allowed and a new prompt is held; skip compaction for an open request → red.
+// Mutation gates: drop the cancelled{compacted} report → no report; skip the
+// return to idle → the handoff path is still allowed and a new prompt is
+// held; skip compaction for an open request → red.
 test('auto-compact while a request is open: compaction runs, the request is reported cancelled{compacted} and a held prompt is released unchanged; the next ask needs ≥ threshold again', async ($, on) => {
   const f = relayWorld(on, { usage: AT72 })
   rowDaemon(f)
@@ -1412,13 +1413,12 @@ test('auto-compact while a request is open: compaction runs, the request is repo
   expect(await compact($, 'auto')).toEqual({ messages: MSGS })
   expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false) // idle at once
   await typed($, 'after') // nothing open now: not held
-  expect(f.submits.map((s) => s.text)).toEqual(['after'])
+  expect(f.submits.map((s) => s.text)).toEqual(['q', 'after']) // q went on at the compaction (P5b-3 review)
   await f.clock.settle() // the report goes out from a timer; the daemon closes the row; wait exits 12
   expect(reports(f)).toEqual(['relay report op-1 cancelled --error compacted'])
   expect(f.submits.length).toBe(2)
   await p
-  expect(f.submits[1].text).toBe('q')
-  expect(f.submits[1].context).toBeUndefined()
+  expect(f.submits[0].context).toBeUndefined()
   expect(f.statuses.at(-1)).toBeUndefined()
   f.usage = { tokens: 142000, window: 200000, percent: 71 }
   await turnAndSettle($, f, 't2')
@@ -1471,14 +1471,76 @@ test('a compaction while begin is still out: the late op is cancelled{abandoned}
   }
   await start($, f)
   await turnAndSettle($, f, 't1')
-  const p = typed($, 'q')
+  let done = false
+  const p = typed($, 'q').then(() => { done = true })
+  await f.clock.settle()
+  expect(done).toBe(false)
   expect(await compact($, 'auto')).toEqual({ messages: MSGS })
+  await f.clock.settle()
+  expect(done).toBe(true) // let go with the request it waited for (P5b-3 review), not when begin answers
+  expect(f.submits[0].context).toBeUndefined()
   b.release()
   await f.clock.advance(50)
   await p
   expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned'])
   expect(waits(f)).toEqual([])
+})
+
+// ---- P5b-3 review item 2 (attacker high): a request the mod lets go of
+// releases its held prompts at once ----
+// The mod lets a request go locally (a compaction, the user's /clear, a
+// failed step): the held prompts go on at once, unchanged, before any report
+// goes out — that report may never land (a daemon that is down: 20) and the
+// row then stays open, so no wait would ever answer. Mutation gate: toIdle
+// leaves the request's answer unsettled → the prompt stays held → red.
+for (const how of ['manual /compact', 'auto-compact', 'the user’s /clear'] as const) {
+  test(`${how} while a prompt is held releases it at once, unchanged, even when the cancelled report fails (20) and the row stays open`, async ($, on) => {
+    const f = relayWorld(on, { usage: AT72 })
+    rowDaemon(f, { report: () => ({ exitCode: 20, stderr: 'daemon unavailable' }) })
+    await start($, f)
+    await turn($, 't1')
+    await f.clock.advance(50) // begin; the loop's wait (open)
+    let done = false
+    const p = typed($, 'q', { context: ['c'] }).then(() => { done = true })
+    await f.clock.settle()
+    expect(done).toBe(false)
+    if (how === 'the user’s /clear') {
+      f.sessionId = 'sid-2'
+      await $.classic.SessionStart({ source: 'clear' })
+    } else {
+      expect(await compact($, how === 'auto-compact' ? 'auto' : 'manual')).toEqual({ messages: MSGS })
+    }
+    await f.clock.settle()
+    expect(done).toBe(true)
+    await p
+    expect(f.submits.length).toBe(1)
+    expect(f.submits[0].context).toEqual(['c']) // no NOTE
+    expect(reports(f)).toEqual([how === 'the user’s /clear' ? 'relay report op-1 cancelled --error abandoned' : 'relay report op-1 cancelled --error compacted'])
+    expect(loopWaits(f)).toEqual(['relay wait req-1']) // still out: the row never closed
+  })
+}
+
+// A step deferred to a timer that fails (here the write prompt, refused)
+// lets the request go the same way; a prompt the person typed meanwhile is
+// held on nothing. And a wait loop that answers late for a request the mod
+// let go is ignored (settle: s.pending === p).
+test('a late approval for a request the mod already let go is ignored: no NOTE, no write prompt', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const row = rowDaemon(f, { report: () => ({ exitCode: 20, stderr: 'daemon unavailable' }) })
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(50)
+  const p = typed($, 'q')
+  await f.clock.settle()
+  await compact($, 'auto')
+  await f.clock.settle()
+  row.decide('approved') // the report never landed; the daemon approved anyway
+  await p
+  await f.clock.advance(100)
+  expect(f.submits.length).toBe(1)
   expect(f.submits[0].context).toBeUndefined()
+  expect(f.statuses).toEqual(['接力等待核准中', undefined])
+  expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
 })
 
 // Mutation gate: skip on every trigger (drop `e.trigger === 'auto'`) → the manual test is red.

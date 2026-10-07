@@ -15,6 +15,8 @@
 //   the user's own /clear ──▶ idle: awaiting / approved report cancelled{abandoned}, seeding
 //   failed{handoff_incomplete}; a begin still out is cancelled{abandoned} when it answers (s.gen)
 //   a compaction ──▶ awaiting reports cancelled{compacted}, idle; approved skips an auto one
+//   every return to idle lets the request go first (letGo): its held prompts go on at once,
+//   unchanged, before any report; the loop's late answer for it is ignored
 //
 // Everything that starts a turn, runs a command or waits on the daemon goes
 // out from a $.clock.after timer, never inside a hook: $.command.run rejects
@@ -81,7 +83,19 @@ const s = fresh()
 // resetState starts the session over; the counters keep counting up, so a
 // begin or a hello sent before the reset never answers for one sent after it.
 function resetState() {
+  letGo()
   Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq })
+}
+
+// letGo releases the prompts held on the request the mod is leaving, at
+// once and unchanged — its answer settles 'cancelled' unless it already has
+// one — before anything is reported: that report may never land (a daemon
+// that is down) and the row would then stay open with no wait to answer.
+// A prompt held while begin is out goes on too. The wait loop's late answer
+// for a request let go is ignored (settle: s.pending === p). (P5b-3 review)
+function letGo() {
+  if (s.pending) s.pending.answer.resolve('cancelled')
+  if (s.begun) s.begun.resolve(undefined)
 }
 
 // deferred is a promise and the function that settles it; a second call is a no-op.
@@ -301,8 +315,11 @@ async function whoami($) {
   return (r.stdout || '').trim().replace(/\n/g, ' | ') || '(unknown)'
 }
 
+// toIdle is every return to idle: it lets the request go first (letGo), so
+// a caller that also reports does so after the held prompts went on.
 function toIdle() {
-  Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined })
+  letGo()
+  Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, begun: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined })
 }
 
 // maybeBegin runs in turn.complete: it reads the engine, moves to beginning
@@ -440,9 +457,12 @@ function waitLoop($) {
 }
 
 function settle($, p, outcome) {
-  if (s.pending && s.pending !== p) return // another request owns the status line now
+  // A request the mod let go answers for nothing (its held prompts went on
+  // at letGo, and whatever let it go cleared the status line or another
+  // request owns it now).
+  if (s.pending !== p) return
   $.ui.status(undefined)
-  if (s.state !== 'awaiting' || s.pending !== p) return
+  if (s.state !== 'awaiting') return
   if (outcome !== 'approved') return toIdle()
   s.state = 'approved'
   later($, STEP_MS, async () => {
@@ -475,8 +495,8 @@ async function submit($, text) {
 function giveUp($, p, inState, state, error, why) {
   log($, why)
   if (s.pending !== p || s.state !== inState) return false
-  report($, p.op.id, state, ['--error', error])
   toIdle()
+  report($, p.op.id, state, ['--error', error])
   return true
 }
 
@@ -517,9 +537,9 @@ async function onWriteTurnDone($) {
     })
     return
   }
+  toIdle()
   report($, p.op.id, 'failed', ['--error', 'handoff_incomplete'])
   $.ui.toast(TOAST_GAVE_UP)
-  toIdle()
 }
 
 async function onSeedTurnDone($) {
@@ -615,10 +635,12 @@ export function register(on) {
     // cancelled{abandoned} (the daemon closes the approval row), seeding →
     // failed{handoff_incomplete}; beginning needs nothing here — the
     // generation bump above has begin() cancel the op when it answers.
-    if (p && (s.state === 'awaiting' || s.state === 'approved')) report($, p.op.id, 'cancelled', ['--error', 'abandoned'])
-    else if (p && s.state === 'seeding') report($, p.op.id, 'failed', ['--error', 'handoff_incomplete'])
-    if (s.state === 'awaiting') $.ui.status(undefined)
+    // toIdle first: a prompt held on the request goes on before the report.
+    const was = s.state
     toIdle()
+    if (p && (was === 'awaiting' || was === 'approved')) report($, p.op.id, 'cancelled', ['--error', 'abandoned'])
+    else if (p && was === 'seeding') report($, p.op.id, 'failed', ['--error', 'handoff_incomplete'])
+    if (was === 'awaiting') $.ui.status(undefined)
     s.floor = undefined
     s.lastAskPct = undefined
     helloLater($)
@@ -679,9 +701,10 @@ export function register(on) {
       return next(e)
     }
     if (s.state === 'awaiting' && s.pending) {
-      report($, s.pending.op.id, 'cancelled', ['--error', 'compacted'])
+      const op = s.pending.op.id
+      toIdle() // a held prompt goes on at once, unchanged, before the report
       $.ui.status(undefined)
-      toIdle()
+      report($, op, 'cancelled', ['--error', 'compacted'])
     } else if (s.state === 'beginning') {
       toIdle() // the begin still out answers for a gone generation: its op is cancelled{abandoned}
     }
