@@ -455,10 +455,15 @@ func (eb *EventsBroadcaster) OnSubscribe(fn func(sub *EventSubscriber)) {
 	eb.onSubscribe = append(eb.onSubscribe, fn)
 }
 
-// featuresOf reads what a /ws/host-events upgrade request opts into: nex=v1
-// is FeatureNexV1; any other value of nex, or none, opts into nothing.
+// featuresOf reads what a /ws/host-events upgrade request opts into: a
+// query with exactly one nex value, and that value exactly "v1", is
+// FeatureNexV1. Anything else opts into nothing: no nex, any other value,
+// or more than one nex — even v1 twice. Query().Get would read only the
+// first value, so ?nex=v1&nex=v2 would opt in while ?nex=v2&nex=v1 would
+// not; an ambiguous request gets the conservative answer instead, since
+// opting in changes what the connection is sent and when it is closed.
 func featuresOf(r *http.Request) []string {
-	if r.URL.Query().Get("nex") == "v1" {
+	if nex := r.URL.Query()["nex"]; len(nex) == 1 && nex[0] == "v1" {
 		return []string{FeatureNexV1}
 	}
 	return nil

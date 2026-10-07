@@ -61,8 +61,10 @@ func dialQuery(t *testing.T, server *httptest.Server, subs <-chan *EventSubscrib
 	}
 }
 
-// The upgrade request's nex query parameter is the opt-in: exactly "v1"
-// opts into nex.v1; no parameter, or any other value, does not.
+// The upgrade request's nex query parameter is the opt-in: exactly one nex
+// value, and it exactly "v1", opts into nex.v1; no parameter, any other
+// value, or more than one value — in any order, even v1 twice — does not.
+// Other parameters (the ticket) do not matter.
 func TestHandleHostEvents_NexV1QueryOptsIn(t *testing.T) {
 	for _, tc := range []struct {
 		name, query string
@@ -72,8 +74,15 @@ func TestHandleHostEvents_NexV1QueryOptsIn(t *testing.T) {
 		{"nex=v1", "?nex=v1", true},
 		{"nex=v2", "?nex=v2", false},
 		{"nex empty", "?nex=", false},
+		{"nex bare", "?nex", false},
 		{"nex=V1", "?nex=V1", false},
 		{"other param", "?foo=v1", false},
+		{"v1 then v2", "?nex=v1&nex=v2", false},
+		{"v2 then v1", "?nex=v2&nex=v1", false},
+		{"v1 twice", "?nex=v1&nex=v1", false},
+		{"v1 then empty", "?nex=v1&nex=", false},
+		{"with a ticket after", "?nex=v1&ticket=abc123", true},
+		{"with a ticket before", "?ticket=abc123&nex=v1", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			eb := NewEventsBroadcaster()
