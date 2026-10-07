@@ -38,6 +38,15 @@ func (c *Core) handleReady(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"tmux": tmuxAlive})
 }
 
+// capabilities lists the optional API features this daemon serves. Clients gate
+// features on these names rather than on purdex_version, since one user runs
+// hosts on different versions. Add a name here in the same change that ships
+// the feature; never reuse or remove one.
+var capabilities = []string{
+	"transcript.v1",      // GET /api/sessions/{code}/transcript
+	"terminal.mirror.v1", // /ws/terminal/{code}?mirror=1 plus window text frames
+}
+
 // handleInfo returns daemon metadata: host ID, tmux instance, version, OS, and architecture.
 func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.RLock()
@@ -73,6 +82,7 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"os":             runtime.GOOS,
 		"arch":           runtime.GOARCH,
 		"nex":            nex,
+		"capabilities":   append([]string(nil), capabilities...),
 		"last_shutdown":  nil,
 	}
 	if r := c.LastShutdown; r != nil {

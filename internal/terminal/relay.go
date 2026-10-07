@@ -2,6 +2,7 @@
 package terminal
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -33,6 +34,24 @@ type Relay struct {
 	OnStart      func() // called after PTY starts, before I/O goroutines
 	PingInterval time.Duration // default: 30s
 	PongTimeout  time.Duration // default: 10s
+
+	// WindowSize, when set, makes the relay poll the actual window size and
+	// push it to the client as a text frame {"type":"window","cols":N,"rows":N}:
+	// once at connection start and afterwards only when the value changes.
+	// Query errors are skipped (nothing sent, connection kept). ctx is cancelled
+	// when the connection ends, so a stuck query must honour it.
+	WindowSize         func(ctx context.Context) (cols, rows uint16, err error)
+	WindowPollInterval time.Duration // default: 1s
+	// WindowQueryTimeout bounds each single WindowSize call (default 2s) so one
+	// stuck tmux query cannot stall reporting for the rest of the connection.
+	WindowQueryTimeout time.Duration
+}
+
+// WindowMsg is sent to the client when the window's actual size is (re)reported.
+type WindowMsg struct {
+	Type string `json:"type"`
+	Cols uint16 `json:"cols"`
+	Rows uint16 `json:"rows"`
 }
 
 func NewRelay(cmd string, args []string, cwd string) *Relay {
@@ -82,7 +101,43 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	})
 
 	var wg sync.WaitGroup
+	// writeMu serialises every WriteMessage on conn (gorilla allows a single
+	// writer): the batcher's binary frames and the window text frames.
 	var writeMu sync.Mutex
+
+	// ctx ends with the connection: either I/O goroutine exiting cancels it, so
+	// a stuck window query is released even while the other goroutine is still
+	// blocked in a PTY read.
+	ctx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+
+	// firstWindow is closed once the first window reading has been attempted
+	// (sent, failed or timed out). The PTY→WS writer waits for it so the
+	// client knows the window size before any terminal output arrives; it is
+	// bounded by WindowQueryTimeout, so output is never held back for long.
+	firstWindow := make(chan struct{})
+	if r.WindowSize != nil {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			var once sync.Once
+			ready := func() { once.Do(func() { close(firstWindow) }) }
+			defer ready()
+			r.pollWindowSize(ctx, ready, func(m WindowMsg) error {
+				data, _ := json.Marshal(m)
+				writeMu.Lock()
+				err := conn.WriteMessage(websocket.TextMessage, data)
+				writeMu.Unlock()
+				return err
+			}, ptmx)
+		}()
+		defer func() {
+			cancel()
+			<-done
+		}()
+	} else {
+		close(firstWindow)
+	}
 
 	// Periodic ping to keep connection alive through proxies/firewalls.
 	// WriteControl is documented as concurrent-safe with WriteMessage
@@ -103,6 +158,7 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer cancel()
 		defer conn.Close() // wake WS read goroutine on PTY EOF
 		batcher := NewBatcher(16*time.Millisecond, 64*1024, func(data []byte) {
 			writeMu.Lock()
@@ -113,6 +169,11 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 			}
 		})
 		defer batcher.Stop()
+		select {
+		case <-firstWindow:
+		case <-ctx.Done():
+			return
+		}
 		buf := make([]byte, 4096)
 		for {
 			n, err := ptmx.Read(buf)
@@ -132,6 +193,7 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer cancel()
 		defer conn.Close() // wake PTY→WS goroutine on read-deadline/disconnect
 		defer ptmx.Close() // wake PTY read goroutine on WS disconnect
 		for {
@@ -151,4 +213,56 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	}()
 
 	wg.Wait()
+}
+
+// pollWindowSize reports the window size through send: always the first
+// successful reading, then only changes. A failed send closes ptmx so both
+// I/O goroutines wake up and the connection ends, like a failed batcher write.
+// ready is called once the first reading has been attempted.
+func (r *Relay) pollWindowSize(ctx context.Context, ready func(), send func(WindowMsg) error, ptmx io.Closer) {
+	interval := r.WindowPollInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	queryTimeout := r.WindowQueryTimeout
+	if queryTimeout <= 0 {
+		queryTimeout = 2 * time.Second
+	}
+	var last WindowMsg
+	have := false
+	tick := func() bool {
+		qctx, qcancel := context.WithTimeout(ctx, queryTimeout)
+		cols, rows, err := r.WindowSize(qctx)
+		qcancel()
+		if err != nil || ctx.Err() != nil {
+			return true
+		}
+		if have && last.Cols == cols && last.Rows == rows {
+			return true
+		}
+		m := WindowMsg{Type: "window", Cols: cols, Rows: rows}
+		if err := send(m); err != nil {
+			ptmx.Close()
+			return false
+		}
+		last, have = m, true
+		return true
+	}
+	ok := tick()
+	ready()
+	if !ok {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if !tick() {
+				return
+			}
+		}
+	}
 }

@@ -244,7 +244,7 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 // handleInflight is GET /api/team/inflight (spec §9.5): what a restart of
 // this daemon would interrupt, for the App's restart confirm. Open requests
 // survive a restart (boot lease grace), so the count informs, it does not
-// block. relays_active is 0 until P6 adds relays.
+// block. relays_active counts ops not in done/failed/cancelled (P5a).
 func (m *Module) handleInflight(w http.ResponseWriter, r *http.Request) {
 	open, err := m.store.ListOpen()
 	if err != nil {
@@ -252,7 +252,13 @@ func (m *Module) handleInflight(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
-	m.writeJSON(w, http.StatusOK, team.InflightResponse{ApprovalsOpen: len(open), RelaysActive: 0})
+	active, err := m.store.ListActiveRelayOps()
+	if err != nil {
+		m.logf("[team] inflight: %v", err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	m.writeJSON(w, http.StatusOK, team.InflightResponse{ApprovalsOpen: len(open), RelaysActive: len(active)})
 }
 
 // pollWait parses GET's ?wait= (seconds): "" is 0, a negative or non-numeric

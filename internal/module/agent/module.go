@@ -42,7 +42,11 @@ type Module struct {
 	probeOrch *probeOrchestrator
 	tmux      tmux.Executor
 
-	mu             sync.Mutex
+	// ownerResolver is the test seam for the transcript handler; nil means
+	// resolveSessionOwnerErr.
+	ownerResolver func(ctx context.Context, code string) (PaneOwner, bool, error)
+
+	mu           sync.Mutex
 	currentStatus  map[string]agentpkg.Status
 	subagents      map[string][]agentpkg.SubagentRef
 	activeWatchers map[string]string // tmuxSession → agentType
@@ -287,6 +291,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 
 	// Ownership query: which agent owns this tmux session (spec §5.3)
 	mux.HandleFunc("GET /api/sessions/{code}/provenance", m.handleSessionProvenance)
+	mux.HandleFunc("GET /api/sessions/{code}/transcript", m.handleSessionTranscript)
 
 	// Upload (unchanged)
 	mux.HandleFunc("POST /api/agent/upload", m.handleUpload)

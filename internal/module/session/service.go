@@ -10,6 +10,7 @@ import (
 
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/terminal"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // --- SessionProvider implementation ---
@@ -259,49 +260,74 @@ func (m *SessionModule) HandleTerminalWS(w http.ResponseWriter, r *http.Request,
 
 	// Build tmux attach-session command and args.
 	target := info.Name
-	args := buildTerminalRelayArgs(target, sizingMode)
-
-	relay := terminal.NewRelay("tmux", args, "/")
-
-	switch sizingMode {
-	case "terminal-first":
-		// no OnStart — relay uses -f ignore-size, sizing handled by terminal
-	case "minimal-first":
-		relay.OnStart = func() {
-			go func() {
-				time.Sleep(1200 * time.Millisecond)
-				if err := m.tmux.ResizeWindowAuto(target); err != nil {
-					log.Printf("HandleTerminalWS: ResizeWindowAuto(%s): %v", target, err)
-				}
-				if err := m.tmux.SetWindowOption(target, "window-size", "smallest"); err != nil {
-					log.Printf("HandleTerminalWS: SetWindowOption(%s): %v", target, err)
-				}
-			}()
-		}
-	default:
-		if sizingMode != "auto" && sizingMode != "" {
-			log.Printf("HandleTerminalWS: unknown sizing_mode %q, falling back to auto", sizingMode)
-		}
-		relay.OnStart = func() {
-			go func() {
-				time.Sleep(1200 * time.Millisecond)
-				if err := m.tmux.ResizeWindowAuto(target); err != nil {
-					log.Printf("HandleTerminalWS: ResizeWindowAuto(%s): %v", target, err)
-				}
-				if err := m.tmux.SetWindowOption(target, "window-size", "latest"); err != nil {
-					log.Printf("HandleTerminalWS: SetWindowOption(%s): %v", target, err)
-				}
-			}()
-		}
-	}
+	mirror := isMirrorRequest(r)
+	relay := newTerminalRelay(m.tmux, target, sizingMode, mirror)
 
 	relay.HandleWebSocket(w, r)
 }
 
-// buildTerminalRelayArgs returns the tmux attach-session args for the given sizing mode.
-func buildTerminalRelayArgs(target, sizingMode string) []string {
+// isMirrorRequest reports whether the WebSocket request asked for a mirror
+// connection. Only the literal "1" counts.
+func isMirrorRequest(r *http.Request) bool {
+	return r.URL.Query().Get("mirror") == "1"
+}
+
+// newTerminalRelay builds the relay for a terminal connection. Only a mirror
+// connection reports the window's actual size to the client.
+func newTerminalRelay(ex tmux.Executor, target, sizingMode string, mirror bool) *terminal.Relay {
+	args, onStart := terminalRelaySetup(ex, target, sizingMode, mirror)
+	relay := terminal.NewRelay("tmux", args, "/")
+	relay.OnStart = onStart
+	if mirror {
+		relay.WindowSize = func(ctx context.Context) (uint16, uint16, error) {
+			return ex.WindowSize(ctx, target)
+		}
+	}
+	return relay
+}
+
+// terminalRelaySetup returns the tmux attach args and the optional OnStart hook
+// for a terminal connection. A mirror connection always ignores its own size
+// and never touches the window (no resize, no window-size option), whatever
+// the sizing mode is.
+func terminalRelaySetup(ex tmux.Executor, target, sizingMode string, mirror bool) ([]string, func()) {
+	args := buildTerminalRelayArgs(target, sizingMode, mirror)
+	if mirror {
+		return args, nil
+	}
+	switch sizingMode {
+	case "terminal-first":
+		// no OnStart — relay uses -f ignore-size, sizing handled by terminal
+		return args, nil
+	case "minimal-first":
+		return args, windowSizingOnStart(ex, target, "smallest")
+	default:
+		if sizingMode != "auto" && sizingMode != "" {
+			log.Printf("HandleTerminalWS: unknown sizing_mode %q, falling back to auto", sizingMode)
+		}
+		return args, windowSizingOnStart(ex, target, "latest")
+	}
+}
+
+func windowSizingOnStart(ex tmux.Executor, target, windowSize string) func() {
+	return func() {
+		go func() {
+			time.Sleep(1200 * time.Millisecond)
+			if err := ex.ResizeWindowAuto(target); err != nil {
+				log.Printf("HandleTerminalWS: ResizeWindowAuto(%s): %v", target, err)
+			}
+			if err := ex.SetWindowOption(target, "window-size", windowSize); err != nil {
+				log.Printf("HandleTerminalWS: SetWindowOption(%s): %v", target, err)
+			}
+		}()
+	}
+}
+
+// buildTerminalRelayArgs returns the tmux attach-session args for the given
+// sizing mode. A mirror connection always adds -f ignore-size.
+func buildTerminalRelayArgs(target, sizingMode string, mirror bool) []string {
 	args := []string{"attach-session", "-t", target}
-	if sizingMode == "terminal-first" {
+	if mirror || sizingMode == "terminal-first" {
 		args = append(args, "-f", "ignore-size")
 	}
 	return args

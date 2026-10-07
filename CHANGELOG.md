@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.0.0-alpha.540] - 2026-10-08
+
+> 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動，桌機上沒有使用者可見的變化。這是 purdex-ios 需要的三項 daemon 小改動的第 2、3 項（第 1 項在 alpha.538）。
+
+### Added：終端機鏡像連線 `/ws/terminal/{code}?mirror=1`（#1721）
+
+- 手機以前一連上終端機，tmux window 就被縮成手機的大小，桌機的畫面跟著變小。鏡像連線以 `-f ignore-size` attach，不參與 window 大小計算，**也不論 `terminal.sizing_mode` 為何都不會去改 window 大小**；只有這條連線自己的 PTY 大小會變。實測同樣是 40x20 的 client，一般 attach 把 120x40 的 window 縮成 40x19，鏡像連線維持 120x40。
+- 鏡像連線會收到 text frame `{"type":"window","cols":N,"rows":N}`（binary frame 仍是終端機輸出）：連線建立後、第一筆終端機輸出**之前**先送一次，之後每秒檢查，大小變了才再送，手機據此用桌機的欄數渲染。tmux 查詢卡住時，單次查詢 2 秒就放棄、下一輪重試，不會拖住輸出。
+- 沒帶 `mirror=1`（或值不是字面的 `1`）的連線行為完全不變。
+
+### Added：`/api/info` 的 `capabilities`（#1722）
+
+- 回傳這台 daemon 提供哪些選用功能，目前是 `["transcript.v1","terminal.mirror.v1"]`。client 依此開關功能，不再比對 `purdex_version`（使用者有多台主機，版本可能不同）。
+
+## [1.0.0-alpha.539] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。接力的回報路由上線，但還沒有 mod 或 `pdx relay` 指令去呼叫（P5a-2c／P5b），現有使用者流程不受影響。`pdx` 指令、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-2b（#1716）
+
+接力 op 的回報與重啟收斂（spec §8.1、§8.4、§8.7、§9.3；plan v2 Task 5a.8）。
+
+- **`POST /api/relay/ops/{id}/report`**：mod 回報 op 走到哪（writing／written／cleared／done／failed／cancelled）；同一狀態重送是冪等的，不合法的轉換回 409 並帶出 op。`claimed` 不能用這條路回報——self op 只由核准單的核准來 claim，擋掉「mod 自己宣稱已核准」。
+- **`cleared`**（舊 session 換成新 session）：新 session **必須**是這台主機上、與原來同一個行程的活 session（`/clear` 不換行程）——指向別人的活 session 回 400；registry 還沒出現新 session 時最多等 3 秒、等不到回 503 讓 mod 下個回合重送。寫下血統後把 title 搬到新 session。
+- **終態回報會把還開著的核准單一起關掉**（例如等核准時被 /compact 掉 → `cancelled`）：先走核准單的 CAS 再動 op，與使用者的核准／拒絕是同一個競爭點——誰先贏誰算數，mod 的回報永遠不會蓋掉使用者已做的決定。
+- **回報後續動作可重試**：title 搬家或關單失敗時，同一狀態重送就會再做一次；`done` 時也會再確認 title 已搬；daemon 重啟時把「op 已終態但核准單還開著」的單關掉、把 `cleared` 的 op 再搬一次 title。
+- **`GET /api/relay/ops/{id}`**；**`GET /api/team/inflight`** 多了 `relays_active`。
+
+Review 後補強（R1 一條、攻擊方四條、critic 三輪）全部收進上面的行為：`claimed` 不可回報、新 session 的行程綁定（fail-closed）、先關單再動 op、CAS 輸了先把 op 推到單的裁決、後續動作重試、讀不到 op 不盲寫。
+
+## [1.0.0-alpha.538] - 2026-10-08
+
+> 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動，桌機上沒有使用者可見的變化。這是 purdex-ios 需要的三項 daemon 小改動的第一項。
+
+### Added：`GET /api/sessions/{code}/transcript`（#1717）
+
+- 手機端以前得經 `/api/fs/read` 整份讀 Claude 的對話紀錄，但那支有 10 MB 上限，長時間的 session 常常超過（實測 37 MB），手機就完全看不到。新端點由 daemon 自己決定檔案，只回尾段或增量。
+- `tail=N` 取最後 N 個完整行（預設 800、上限 5000）；`after=OFFSET` 取該位置之後的完整行；兩者不可同時帶。永遠不會回半行。單次回應上限 2 MB，超過會帶 `more:true`，用 `end_offset` 接著讀。
+- 對話檔換了（`/clear`、`--resume`、重新啟動 claude）時回 `reset:true`，client 應重新取尾段。
+- 只讀得到 `~/.claude/projects/` 底下的 `.jsonl`；路徑由 daemon 決定，client 不送路徑，因此不會變成任意讀檔的管道。codex／opencode 目前回 404 `unsupported`。
+- 已知不處理：同檔名被外部替換不會觸發 reset（#1718）；Claude Code 自己的輪替一律換新檔名，不受影響。
+
 ## [1.0.0-alpha.537] - 2026-10-07
 
 > 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動。這一版沒有使用者可見的變化：權限通道（讓 worker 做有風險的事之前先問你）的前端還沒上，要等 SPA 那一半。

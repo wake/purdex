@@ -113,6 +113,12 @@ type Module struct {
 	// for the same session in that window and prove the table's conflict
 	// (ErrRelayOpOpen) is answered as 409 relay_open too. nil in production.
 	afterOpenCheck func(sessionID string)
+	// beforeTerminalClose is a test seam run by a terminal relay report just
+	// before it closes the op's approval row (the approve that races it).
+	beforeTerminalClose func(opID string)
+	// clearedWait / clearedPoll bound how long a cleared report waits for
+	// the registry to show the new session id (checkClearedTarget).
+	clearedWait, clearedPoll time.Duration
 }
 
 // New returns a Module with production defaults.
@@ -126,6 +132,10 @@ func New() *Module {
 		waiters:    map[string][]chan struct{}{},
 		newID:      uuid.NewString,
 		modSeen:    map[string]helloInfo{},
+		// A cleared report waits this long for the registry to show the new
+		// session id (measured ~0.6 s after /clear), polling every 100 ms.
+		clearedWait: 3 * time.Second,
+		clearedPoll: 100 * time.Millisecond,
 	}
 }
 
@@ -197,6 +207,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/relay/begin", m.handleRelayBegin)
 	mux.HandleFunc("GET /api/relay/wait/{id}", m.handleRelayWait)
 	mux.HandleFunc("POST /api/relay/self", m.handleRelaySelf)
+	mux.HandleFunc("POST /api/relay/ops/{id}/report", m.handleRelayReport)
+	mux.HandleFunc("GET /api/relay/ops/{id}", m.handleRelayOp)
 }
 
 // Start applies the boot lease grace (spec §9.2: every open request's
@@ -219,6 +231,7 @@ func (m *Module) Start(context.Context) error {
 	if n > 0 {
 		m.logf("[team] boot: extended the lease of %d open approval request(s) by %ds", n, team.BootGraceS)
 	}
+	m.reconcileRelays()
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.sweepWG.Add(1)
 	go m.runSweeper()
@@ -268,10 +281,23 @@ func (m *Module) closeAs(id string, c Close) (team.Approval, bool, error) {
 	return m.closeWith(id, func() (team.Approval, bool, error) { return m.store.CloseIfOpen(id, c) })
 }
 
+// closeAsWithOp is closeAs for a close that a relay REPORT drives (a
+// terminal report on an op still awaiting approval): the op takes the
+// report's own state and reason instead of the mapping a close implies.
+func (m *Module) closeAsWithOp(id string, c Close, rep RelayReport) (team.Approval, bool, error) {
+	return m.closeWithOp(id, func() (team.Approval, bool, error) { return m.store.CloseIfOpen(id, c) }, &rep)
+}
+
 // closeWith is closeAs over a given store CAS — CloseIfOpen for decide,
 // DELETE and a vanished origin; CloseIfExpired for the sweeper's timeout
 // and lease paths. The winner alone broadcasts and wakes.
 func (m *Module) closeWith(id string, cas func() (team.Approval, bool, error)) (team.Approval, bool, error) {
+	return m.closeWithOp(id, cas, nil)
+}
+
+// closeWithOp is closeWith with the op report the winner applies to a
+// self_relay row's op (nil: the mapping the row's state implies).
+func (m *Module) closeWithOp(id string, cas func() (team.Approval, bool, error), rep *RelayReport) (team.Approval, bool, error) {
 	after, won, err := cas()
 	if err != nil {
 		return team.Approval{}, false, err
@@ -279,7 +305,7 @@ func (m *Module) closeWith(id string, cas func() (team.Approval, bool, error)) (
 	if won {
 		m.broadcast("closed", &after)
 		m.wake(id)
-		m.afterClose(after)
+		m.afterClose(after, rep)
 	}
 	return after, won, nil
 }
