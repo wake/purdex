@@ -106,6 +106,7 @@ POST /mod/v1/events
 
 - 200 `{"ack": N}` — N is the highest seq of this stream the daemon has applied (including earlier batches). The mod removes every queued event with `seq ≤ N`.
 - 400 `{"error": "<code>"}` for: `v` ≠ 1 (`unsupported_version`), bad JSON or trailing data after the object (`bad_json`), bad stream id (`bad_stream`), 0 or > 500 events (`bad_events`), seq not strictly increasing within the batch (`bad_seq`), a bad `sid` (`bad_sid`), an event whose `type` does not match `^[a-z][a-z0-9._-]{0,63}$` or whose `data` is missing or not a JSON object (`bad_event`). The mod drops a batch answered 400 (no poison loop) and adds its event count to `dropped_total`; the daemon counts the rejection on the stream when the stream id itself was valid.
+- 503 `{"error": "registry_full"}` when the registry already holds 256 streams, none can be evicted, and the batch is for a stream it does not know; the mod treats it like any non-400 failure (backoff and resend).
 - `dropped_total` is cumulative and never reset by the mod; the daemon keeps `max(stored, received)`, so a resent batch (a 200 whose response was lost) or a batch in flight while more events are lost cannot double-count or erase a loss.
 - Events whose `seq ≤` the stream's last applied seq are skipped (retries). `seq > last + 1` increments the stream's `gaps` and is applied.
 - Unknown `type`s are accepted, counted under `unknown`, and not delivered (a newer mod against an older daemon).
@@ -133,8 +134,8 @@ Conversation content (`turn.step`, prompt text, `session.append`) is **not** in 
 ### 6.4 Daemon registry and bus (U1-1a)
 
 - `modevents.Registry`, in memory: per stream `{stream, agent, sid (latest), cwd, interactive, cc_version, mod_version, first_seen (set once), last_seen, last_seq, gaps, dropped_total, rejected, counts{type→n}, ended}` and a ring of its last 256 applied events.
-- Delivery: `Subscribe(func(Event)) (cancel)`; events are delivered synchronously in seq order per stream (one mutex per stream), across streams concurrently. Subscribers must not block.
-- Eviction: a stream is removed 30 min after `session.end`, or after 2 h without events; at most 256 streams (oldest `last_seen` evicted first).
+- Delivery: `Subscribe(func(Event)) (cancel)`; events are delivered synchronously in seq order per stream (one mutex per stream), across streams concurrently. Subscribers must not block and **must not call `Apply` on the same registry, directly or indirectly** (the stream's mutex is held during delivery and is not re-entrant); each subscriber is reviewed and tested for this when it is wired. Event `data` is copied on receipt and again for each subscriber and each read, so no caller can alter the stored history.
+- Eviction: a stream is removed 30 min after `session.end`, or after 2 h without events; at most 256 streams — a hard admission limit: a new stream evicts the oldest `last_seen` that is not in the middle of `Apply`, and is refused (503 above) when none can be evicted.
 - Not persisted: a daemon restart starts empty, and the next heartbeat (≤ 10 s) repopulates every live stream.
 - The registry is published in the core `ServiceRegistry` so the agent module (U1-2) can subscribe and look streams up by sid.
 
