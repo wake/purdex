@@ -5,6 +5,8 @@ import { createTab } from '../../types/tab'
 import { getPrimaryPane, collectLeaves } from '../../lib/pane-tree'
 import { renameSession } from '../../lib/host-api'
 import { closeTab } from '../../lib/tab-lifecycle'
+import { useUndoToast } from '../../stores/useUndoToast'
+import { useI18nStore } from '../../stores/useI18nStore'
 import type { Tab, PaneContent, PaneRebuildRecord, TerminatedReason } from '../../types/tab'
 import type { ContextMenuAction } from '../../components/TabContextMenu'
 import type { RebuildEditableField } from '../../components/RebuildActionSet'
@@ -206,7 +208,12 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         break
       }
       case 'tearOff': {
-        if (!window.electronAPI) break
+        // The App loads the SPA from the dev server, so its preload can be older than this code and lack the IPC
+        // (#1816). Checked before anything is touched: the tab stays, and the user is told why nothing happened.
+        if (typeof window.electronAPI?.tearOffTab !== 'function') {
+          useUndoToast.getState().show(useI18nStore.getState().t('tab.move_new_window_unsupported'))
+          break
+        }
         const tabData = tabs[tab.id]
         if (!tabData) break
         // Must remove tab BEFORE IPC to avoid duplication if locked

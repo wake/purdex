@@ -394,6 +394,8 @@
   "browser.copy_url": "Copy URL",
   "browser.pop_out": "Open in mini browser",
   "browser.move_to_tab": "Open in main window",
+  "browser.unsupported": "This version of the Purdex App doesn't support the built-in browser yet. Update the App.",
+  "browser.unsupported_back": "Back to New Tab",
 
   "tray.show_window": "Show Window",
   "tray.quit": "Quit Purdex",
@@ -657,6 +659,7 @@
   "performance_monitor.no_open_panes": "No open panes",
 
   "tab.move_new_window": "Move to New Window",
+  "tab.move_new_window_unsupported": "This version of the Purdex App can't move a tab to a new window yet. Update the App.",
   "tab.move_to": "Move to",
 
   "status.no_active": "No active session",
