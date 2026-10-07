@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.597] - 2026-10-08
+
+> 動 daemon 與 SPA：**需要部署新 binary 並重啟 daemon**（SPA 部分走 HMR）。config.toml 的 `[nex]` 多一段 `[nex.peer]`，舊設定檔沒有這段時自動視為開啟；不改資料庫。
+
+### Added：peer 信箱設定（peer mailbox P1，#1912）
+
+- 內嵌 Nexen 的 peer 信箱改由 `[nex.peer]` 控制，**預設開啟**：`enabled`、`max_pending`（排隊上限，0＝Nexen 預設 32）、`wake_template`／`reply_line`（喚醒 prompt 樣板，空白＝Nexen 預設）。
+- 樣板寫壞時，載入設定與從設定頁儲存時就會被擋下，不會等到下次重啟 daemon 才起不來。
+- 主機 → Nex 設定頁新增「peer 信箱」開關與「排隊上限」；排隊上限只接受 0 以上的整數，不會再把 `1.5`、`1e3` 截成 1。兩個樣板不在畫面上編輯，但儲存時原樣保留。
+- 從其他 client 或手寫 API 儲存時，沒帶到的 peer 欄位沿用目前的值；`"peer": null` 會被拒絕。
+- 改了 `[nex.peer]` 會顯示「需要重啟」。
+- 目前還沒有任何東西會送訊息進信箱；`pdx msg send` 送給執行體要等後續的 P4。
+
 ## [1.0.0-alpha.596] - 2026-10-08
 
 > 動 daemon：**需要部署新 binary 並重啟 daemon** 才會生效（SPA 部分走 HMR）。不改資料庫、不改既有寫入規則；舊版 SPA 讀新 daemon 也沒問題（新增的欄位會被忽略）。
