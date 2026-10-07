@@ -34,12 +34,14 @@ export interface LiveRowFilter {
   query?: string
   /** The host's home, for the `~` display form of a cwd. */
   home?: string
+  /** The host's `session_title` capability (`selectSessionTitleSupported`): lets the search see the title a row shows. */
+  titleSupported?: boolean
 }
 
 /** `liveEntityRows`, then the cwd split and the search. The one place the Workers list and 測試用 agree on a row set. */
-export function filterLiveRows(items: readonly ExecutionSummary[], { filter, query = '', home = '' }: LiveRowFilter = {}): ExecutionSummary[] {
+export function filterLiveRows(items: readonly ExecutionSummary[], { filter, query = '', home = '', titleSupported = false }: LiveRowFilter = {}): ExecutionSummary[] {
   let rows = liveEntityRows(items)
   if (filter) rows = rows.filter((row) => isTestCwd(row.cwd) === (filter === 'test'))
-  if (query.trim() !== '') rows = rows.filter((row) => matchesExecutionQuery(row, query, home))
+  if (query.trim() !== '') rows = rows.filter((row) => matchesExecutionQuery(row, query, home, titleSupported))
   return rows
 }

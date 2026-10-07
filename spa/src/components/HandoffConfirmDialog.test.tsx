@@ -12,6 +12,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
+import { useI18nStore } from '../stores/useI18nStore'
 import { createTab, type PaneRebuildRecord, type TmuxSessionContent } from '../types/tab'
 import { collectLeaves, getPrimaryPane } from '../lib/pane-tree'
 import { useHostStore } from '../stores/useHostStore'
@@ -72,6 +73,7 @@ function sessionTab(hostId: string, sessionCode: string): string {
 
 beforeEach(() => {
   cleanup()
+  useI18nStore.getState().setLocale('en')
   mockedHandToNex.mockReset()
   useUndoToast.setState({ toast: null })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
@@ -630,5 +632,49 @@ describe('HandoffConfirmDialog — 完全放行 or 需要核准 (permission chan
     }
     expect((zh as Record<string, string>)['handoff.approval.full']).toBe('完全放行（預設）')
     expect((zh as Record<string, string>)['handoff.approval.ask']).toBe('需要核准')
+  })
+
+  // P-2c (acceptance a1): the body follows the choice. 完全放行 keeps today's copy word for word; 需要核准 never says
+  // that nothing will ask. The start_idle capability still picks the idle or the legacy wording in both modes.
+  const body = () => screen.getByTestId('handoff-panel').querySelector('h3 + p') as HTMLParagraphElement
+  for (const startIdle of [true, false]) {
+    for (const locale of ['en', 'zh-TW'] as const) {
+      it(`the body describes the selected mode — ${startIdle ? 'start_idle' : 'legacy'} host, ${locale}`, () => {
+        const loc = (locale === 'en' ? en : zh) as Record<string, string>
+        const fullKey = startIdle ? 'handoff.confirm_body_idle' : 'handoff.confirm_body'
+        useI18nStore.getState().setLocale(locale)
+        nexWith({
+          delegate: { resume_session_id: true, ...(startIdle ? { start_idle: true } : {}) },
+          sandbox_profiles: ['default', 'handoff_ask', 'handoff'], permissions: PERMS,
+        })
+        renderDialog()
+        expect(body().textContent).toBe(loc[fullKey])
+        fireEvent.click(askRadio())
+        expect(body().textContent).toBe(loc[`${fullKey}_ask`])
+        fireEvent.click(fullRadio())
+        expect(body().textContent).toBe(loc[fullKey])
+      })
+    }
+  }
+
+  it('the asking copy says the worker stops and waits for an answer, how long, and never that nothing will ask', () => {
+    const enMap = en as Record<string, string>
+    const zhMap = zh as Record<string, string>
+    for (const key of ['handoff.confirm_body_ask', 'handoff.confirm_body_idle_ask']) {
+      expect(zhMap[key], key).toContain('同意或拒絕')
+      expect(zhMap[key], key).toContain('沒有人回答就一直等')
+      expect(zhMap[key], key).toContain('設定 → Worker')
+      expect(zhMap[key], key).not.toContain('不會再有權限詢問')
+      expect(enMap[key], key).toContain('allow or deny')
+      expect(enMap[key], key).toContain('Settings → Worker')
+      expect(enMap[key], key).not.toContain('no permission prompts')
+    }
+    expect(zhMap['handoff.confirm_body_idle_ask']).toContain('等待你的下一則訊息')
+    expect(enMap['handoff.confirm_body_idle_ask']).toContain('waits for your next message')
+    // 完全放行: today's copy, word for word.
+    expect(zhMap['handoff.confirm_body_idle']).toBe('Claude Code 會在這個窗格結束，這段對話改由 worker（nex，handoff profile，不會再有權限詢問）接手，並等待你的下一則訊息。之後可以隨時接回終端機。')
+    expect(zhMap['handoff.confirm_body']).toBe('Claude Code 會在這個窗格結束，改由 nex 以 handoff profile 在背景接手執行——不會再有權限詢問。之後可以隨時接回終端機。')
+    expect(enMap['handoff.confirm_body_idle']).toBe('Claude Code exits in this pane and the conversation moves to a worker (nex, handoff profile, no permission prompts), where it waits for your next message. You can take it back to the terminal later.')
+    expect(enMap['handoff.confirm_body']).toBe('Claude Code exits in this pane and continues headless under nex with the handoff profile — no permission prompts. You can take it back to the terminal later.')
   })
 })

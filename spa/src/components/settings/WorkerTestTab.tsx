@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useConversations, type UseConversations } from '../../hooks/useConversations'
 import { useHostExecutions } from '../../hooks/useHostExecutions'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { selectConversationsScope, useNexHostStore } from '../../stores/useNexHostStore'
+import { selectConversationsScope, selectSessionTitleSupported, useNexHostStore } from '../../stores/useNexHostStore'
 import { matchesConversationQuery } from '../../lib/nex/conversation-search'
 import { filterLiveRows } from '../../lib/nex/live-workers'
 import { rebuildConversation } from '../../lib/nex/rebuild-conversation'
@@ -92,6 +92,7 @@ function TestSections({ hostId }: { hostId: string }) {
   const ended = useConversations(hostId, 'ended', 'test')
   const gone = useConversations(hostId, 'gone', 'test')
   const exec = useHostExecutions(hostId)
+  const titleSupported = useNexHostStore(selectSessionTitleSupported(hostId))
   const [query, setQuery] = useState('')
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -113,8 +114,8 @@ function TestSections({ hostId }: { hostId: string }) {
     [gone.page, goneRootError, query, goneHome],
   )
   const liveCount = useMemo(
-    () => filterLiveRows(exec.items, { filter: 'test', query, home: endedHome || goneHome }).length,
-    [exec.items, query, endedHome, goneHome],
+    () => filterLiveRows(exec.items, { filter: 'test', query, home: endedHome || goneHome, titleSupported }).length,
+    [exec.items, query, endedHome, goneHome, titleSupported],
   )
   const allEmpty = liveCount === 0 && endedRows.length === 0 && goneRows.length === 0
     && exec.phase === 'ready' && ended.phase === 'ready' && gone.phase === 'ready'

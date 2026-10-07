@@ -170,6 +170,29 @@ describe('ExecutionsView', () => {
     expect(brief).toHaveClass('truncate')
   })
 
+  // #1771 (activity-bar Workers): the host id reaches the row through ExecutionsGroup, so the capability gate is this host's.
+  it('a handoff row (empty brief) is named by its conversation title with the capability, else by its cwd basename', () => {
+    const handoff = row({ id: 'exc_h', brief: '', cwd: '/w/repo', session_title: { text: 'Zebrafinch', source: 'ai' } })
+    useNexHostStore.setState({ byHost: { [H]: entryWith({ capabilities: { session_title: { sources: ['ai'], max_bytes: 200 } } as never }) } })
+    seedList([handoff])
+    const { unmount } = render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.getByTestId('executions-brief').textContent).toBe('Zebrafinch')
+    unmount()
+    useNexHostStore.setState({ byHost: { [H]: readyEntry } })
+    render(<ExecutionsView hostId={H} isActive />)
+    expect(screen.getByTestId('executions-brief').textContent).toBe('repo')
+  })
+
+  it('a hidden host\'s plain handoff row is named too (the non-openable branch gets the host id)', () => {
+    useShownHostsStore.setState({ ids: [OTHER] })
+    useNexHostStore.setState({ byHost: { [H]: entryWith({ capabilities: { session_title: { sources: ['ai'], max_bytes: 200 } } as never }) } })
+    seedList([row({ id: 'exc_h', brief: '', cwd: '/w/repo', session_title: { text: 'Zebrafinch', source: 'ai' } })])
+    render(<ExecutionsView hostId={H} isActive />)
+    const plain = screen.getByTestId('executions-row')
+    expect(plain.tagName).not.toBe('BUTTON')
+    expect(plain.getAttribute('aria-label') ?? '').toMatch(/^Zebrafinch · /)
+  })
+
   it('relative age boundaries', () => {
     seedList([
       row({ id: 'exc_now', updated_at: NOW - 59_000 }),
@@ -395,7 +418,8 @@ describe('ExecutionsView', () => {
     const rows = screen.getAllByTestId('executions-row')
     expect(rows).toHaveLength(2)
     expect(screen.getByTestId('executions-group-local')).toBeInTheDocument()
-    expect(within(rows[1]).getByTestId('executions-brief').textContent).toBe('')
+    // A non-string brief is no brief (#1771): the row falls back to its cwd basename ('/w' → 'w').
+    expect(within(rows[1]).getByTestId('executions-brief').textContent).toBe('w')
     expect(within(rows[1]).queryByTestId('executions-marker')).toBeNull()
   })
 

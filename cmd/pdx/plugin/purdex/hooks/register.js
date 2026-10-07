@@ -2,7 +2,10 @@
 //
 //   idle ──(turn.complete: used ≥ threshold, growth ≥ minGrowth, +10 since last ask)──▶ beginning
 //   beginning: `pdx relay begin --self` runs from a timer ──▶ awaiting, or back to idle on a refusal
-//   awaiting: a timer loops `pdx relay wait`; every prompt.submit waits on that loop (P5b-3)
+//   awaiting: a timer loops `pdx relay wait` and alone asks the daemon and moves the state;
+//   every prompt.submit is held until that loop's answer (≤ 11 min), on local `/bin/sleep 5`
+//   calls of its own (P5b-3 critic), and one that arrives while beginning waits for begin's
+//   answer first (≤ 40 s); every prompt is held, however many (U7: no new turn while a request is open)
 //   awaiting ──approved──▶ approved: write prompt submitted (a fresh nonce), report writing
 //   approved ──(turn.complete of the write turn, file ok)──▶ clearing: report written, timer → /clear
 //   clearing ──(classic.SessionStart source=clear)──▶ seeding: report cleared --new-session, hello, seed prompt
@@ -12,13 +15,20 @@
 //   failed{handoff_incomplete}, /clear reports cancelled{abandoned}
 //   the user's own /clear ──▶ idle: awaiting / approved report cancelled{abandoned}, seeding
 //   failed{handoff_incomplete}; a begin still out is cancelled{abandoned} when it answers (s.gen)
+//   a compaction ──▶ awaiting reports cancelled{compacted}, idle; approved skips an auto one
+//   every return to idle lets the request go first (letGo): its held prompts go on at once,
+//   unchanged, before any report; the loop's late answer for it is ignored
 //
 // Everything that starts a turn, runs a command or waits on the daemon goes
 // out from a $.clock.after timer, never inside a hook: $.command.run rejects
 // inside a hook the turn waits on (F3), and a daemon that is down answers
 // only after the client's 30 s grace, which no turn end, session start or
 // /clear may wait for (P5b-1 review). Hooks only read the engine and move
-// the state.
+// the state. Two hooks wait on purpose: the prompt hold, on local
+// `/bin/sleep 5` calls (a `$` call in flight stops the hook's 10 s budget,
+// HookBudget; it asks the daemon nothing, the timers ask it and move the
+// state) and failing open; and /relay, on its daemon call (the person waits
+// for its output; 8 s bound).
 
 const VERSION = '1' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
 const DEFAULT_THRESHOLD = 70
@@ -27,12 +37,22 @@ const REASK_POINTS = 10
 const MAX_FIX_ROUNDS = 2
 const WAIT_TIMEOUT_MS = 590_000 // $.process.run caps at 10 min (M24); pdx relay wait bounds itself to 9
 const CALL_TIMEOUT_MS = 35_000 // one daemonclient grace (30 s) plus slack
+const SELF_TIMEOUT_MS = 8_000 // /relay waits in its hook for `pdx relay self`: the person waits for the answer
+const HOLD_SLEEP = ['/bin/sleep', '5'] // the prompt hold's own `$` call, again while it waits: local, it asks the daemon nothing
+const HOLD_SLEEP_TIMEOUT_MS = 10_000 // its $.process.run bound
+const HOLD_MAX_MS = 660_000 // a held prompt waits for the request's answer at most 11 min: its 10 min deadline and slack
+const BEGIN_HOLD_MS = 40_000 // … and for begin's answer at most 40 s: begin's own bound (CALL_TIMEOUT_MS, 35 s) and slack
 const STEP_MS = 50 // the timer a step that starts a turn or a command waits for (F3)
 const MAX_RESENDS = 20 // a report that keeps failing with 20 / 21 is re-sent at most this often, then dropped
 const MAX_OUTBOX = 50 // reports queued at once; one more pushes out the oldest
 const REQUIRED = ['## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.', '## 8.']
 const STATUS_WAITING = '接力等待核准中'
 const TOAST_WAITING = '接力等待核准：請在 Purdex App 按核准或拒絕'
+const NOTE = '接力已核准，這一輪只做簡短回應；如果這是一件新工作，不要開始做，把它寫進接力檔「下一步」的第一項，由接手後的新對話處理。'
+const SKIP_COMPACT = '接力已核准，略過壓縮，改為寫接力檔'
+const RELAY_UNREACHABLE = 'Purdex daemon 連不上，無法變更自我接力'
+const RELAY_USAGE = '用法：/relay off|on|status'
+const RELAY_MEMBER = 'member 的接力由 lead 安排'
 const TOAST_GAVE_UP = '接力檔不完整，已放棄接力；對話照常繼續'
 const toastSeedFailed = (path) => '接力未完成：接力檔在 ' + path + '，可手動貼給新 session'
 
@@ -49,7 +69,8 @@ const fresh = () => ({
   helloBusy: false, // the newest hello has not answered yet
   gen: 0, // bumped at every return to idle and every session change: a begin answers only for its own
   state: 'idle', // idle | beginning | awaiting | approved | clearing | seeding
-  pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait }
+  begun: undefined, // while beginning: a deferred resolving to the request begin opened and adopted, or undefined
+  pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
   floor: undefined,
   fixRounds: 0,
@@ -63,10 +84,36 @@ const fresh = () => ({
 
 const s = fresh()
 
+// holding counts the prompts held right now (diagnostics only: no cap — U7
+// says no new turn starts while a request is open, and each held prompt
+// costs one local `/bin/sleep 5` at a time, never a daemon call; P5b-3
+// critic). It lives beside `s`: a session reset while prompts are held must
+// not zero it, since each hold gives its own place back (try/finally).
+let holding = 0
+
 // resetState starts the session over; the counters keep counting up, so a
 // begin or a hello sent before the reset never answers for one sent after it.
 function resetState() {
+  letGo()
   Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq })
+}
+
+// letGo releases the prompts held on the request the mod is leaving, at
+// once and unchanged — its answer settles 'cancelled' unless it already has
+// one — before anything is reported: that report may never land (a daemon
+// that is down) and the row would then stay open with no wait to answer.
+// A prompt held while begin is out goes on too. The wait loop's late answer
+// for a request let go is ignored (settle: s.pending === p). (P5b-3 review)
+function letGo() {
+  if (s.pending) s.pending.answer.resolve('cancelled')
+  if (s.begun) s.begun.resolve(undefined)
+}
+
+// deferred is a promise and the function that settles it; a second call is a no-op.
+function deferred() {
+  let resolve
+  const promise = new Promise((r) => { resolve = r })
+  return { promise, resolve }
 }
 
 function parseJSON(text) {
@@ -279,8 +326,11 @@ async function whoami($) {
   return (r.stdout || '').trim().replace(/\n/g, ' | ') || '(unknown)'
 }
 
+// toIdle is every return to idle: it lets the request go first (letGo), so
+// a caller that also reports does so after the held prompts went on.
 function toIdle() {
-  Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined })
+  letGo()
+  Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, begun: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined })
 }
 
 // maybeBegin runs in turn.complete: it reads the engine, moves to beginning
@@ -302,7 +352,9 @@ async function maybeBegin($) {
   s.state = 'beginning'
   s.lastAskPct = u.percent
   const gen = s.gen
-  later($, 0, () => begin($, sid, gen, u))
+  const begun = deferred() // a prompt that arrives while begin is out waits on it (P5b-3)
+  s.begun = begun
+  later($, 0, () => begin($, sid, gen, u, begun.resolve).finally(() => begun.resolve(undefined)))
 }
 
 // begin opens the self-relay request (from a timer, state beginning). Its
@@ -311,7 +363,8 @@ async function maybeBegin($) {
 // another begin may be in flight for the new session. An op opened for a
 // generation that is gone is reported cancelled{abandoned} at once, so the
 // daemon closes its approval row and no dialog is left without a mod.
-async function begin($, sid, gen, u) {
+// `adopted(p)` hands the request it opened to prompts held while beginning.
+async function begin($, sid, gen, u, adopted) {
   const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(u.percent), '--window', String(u.window)]
   const r = await pdx($, argv, CALL_TIMEOUT_MS)
   const now = await $.session.id().catch(() => undefined)
@@ -338,51 +391,100 @@ async function begin($, sid, gen, u) {
     nonce: undefined, // minted per prompt (arm)
     nonceState: undefined,
     who: '',
+    // The request's answer, made here so a prompt held before the loop's
+    // timer fires has it to wait on. Only the wait loop settles it (or the
+    // timer, for a request dropped before its loop started): the hold
+    // never starts the loop, which Esc on that prompt would end (§8.7).
+    answer: deferred(),
   }
   s.state = 'awaiting'
   s.fixRounds = 0
   $.ui.status(STATUS_WAITING)
   const p = s.pending
+  adopted(p)
   later($, STEP_MS, async () => {
     if (s.pending === p) await waitLoop($)
+    else p.answer.resolve('cancelled') // dropped before its loop started (the user's /clear, a compaction)
   })
+}
+
+// waitAnswer reads one `pdx relay wait`. P5a-2c's shape: exit 0 + Approval
+// JSON, state 'approved' or 'open' (the call's --wait bound ran out: call
+// again). Anything else at exit 0 — empty or unparsable stdout, an unknown
+// state — is NOT an approval: never start the write turn on it (§8.7 (d));
+// 10 / 11 / 12 close the request; 20, 21, 1 (a rejected call reads as 20)
+// are 'unavailable', treated as not approved.
+function waitAnswer(r) {
+  if (r.exitCode === 0) {
+    const a = parseJSON(r.stdout)
+    if (a && a.state === 'open') return 'open'
+    if (a && a.state === 'approved') return 'approved'
+    return 'unavailable'
+  }
+  if (r.exitCode === 10) return 'denied'
+  if (r.exitCode === 11) return 'timeout'
+  if (r.exitCode === 12) return 'cancelled'
+  return 'unavailable'
+}
+
+const TICK = Symbol('tick')
+
+// sleepUntil waits, inside the prompt.submit hook, for `target` — a promise
+// the timers settle (begin's answer, the request's answer) — at most `ms`.
+// It races the target with a local `/bin/sleep 5` of the hook's own, again
+// while the target is out: a `$` call in flight stops the hook's 10 s budget
+// (HookBudget), where an await of the timers' promise alone would let it run
+// out and the engine release the prompt early; and a sleep asks the daemon
+// nothing (P5b-3 critic: a `pdx relay wait` of the hold's own was one more
+// long poll, and lease renewal, per held prompt). Resolves { value } once the
+// target settles; undefined when `ms` ran out, a sleep could not run (the
+// call rejected, or the sleep failed and would come back at once, again and
+// again: the hold fails open, it never spins) or the prompt was abandoned.
+async function sleepUntil($, target, ms, signal) {
+  const settled = target.then((value) => ({ value }))
+  const abandoned = new Promise((resolve) => {
+    if (!signal) return // nothing abandons it
+    if (signal.aborted) return resolve(undefined)
+    signal.addEventListener('abort', () => resolve(undefined), { once: true })
+  })
+  const deadline = (await $.clock.now()) + ms
+  for (;;) {
+    const tick = $.process.run(HOLD_SLEEP, { timeoutMs: HOLD_SLEEP_TIMEOUT_MS }).then((r) => (r.exitCode === 0 ? TICK : undefined), () => undefined)
+    const r = await Promise.race([settled, abandoned, tick])
+    if (r !== TICK) return r
+    if ((await $.clock.now()) >= deadline) return undefined
+  }
 }
 
 // waitLoop is the one long-poll loop per request, its promise kept on the
 // request (a loop left over from a request the user's own /clear dropped
 // never answers for the next one). It runs in a timer's own dispatch, so a
-// held prompt that is abandoned (Esc) never kills it; hooks only await the
-// promise it returns.
+// held prompt that is abandoned (Esc) never kills it; it settles the
+// request's answer, which the held prompts await.
 function waitLoop($) {
   const p = s.pending
   if (p.wait) return p.wait
   p.wait = (async () => {
     $.ui.toast(TOAST_WAITING) // once per request (one loop per request)
     for (;;) {
-      const r = await pdx($, ['relay', 'wait', p.requestId], WAIT_TIMEOUT_MS)
-      if (r.exitCode === 0) {
-        // P5a-2c's shape: exit 0 + Approval JSON, state 'approved' or 'open'
-        // (the CLI's own 9 min bound ran out: ask again). Anything else at
-        // exit 0 — empty or unparsable stdout, an unknown state — is NOT an
-        // approval: never start the write turn on it (§8.7 (d)).
-        const a = parseJSON(r.stdout)
-        if (a && a.state === 'open') continue
-        if (a && a.state === 'approved') return 'approved'
-        return 'unavailable'
-      }
-      if (r.exitCode === 10) return 'denied'
-      if (r.exitCode === 11) return 'timeout'
-      if (r.exitCode === 12) return 'cancelled'
-      return 'unavailable' // 20, 21, 1: treat as not approved (§8.7 (d))
+      const outcome = waitAnswer(await pdx($, ['relay', 'wait', p.requestId], WAIT_TIMEOUT_MS))
+      if (outcome !== 'open') return outcome
     }
-  })().catch(() => 'unavailable').then((outcome) => { settle($, p, outcome); return outcome })
+  })().catch(() => 'unavailable').then((outcome) => {
+    p.answer.resolve(outcome) // the held prompts go on after settle below has moved the state
+    settle($, p, outcome)
+    return outcome
+  })
   return p.wait
 }
 
 function settle($, p, outcome) {
-  if (s.pending && s.pending !== p) return // another request owns the status line now
+  // A request the mod let go answers for nothing (its held prompts went on
+  // at letGo, and whatever let it go cleared the status line or another
+  // request owns it now).
+  if (s.pending !== p) return
   $.ui.status(undefined)
-  if (s.state !== 'awaiting' || s.pending !== p) return
+  if (s.state !== 'awaiting') return
   if (outcome !== 'approved') return toIdle()
   s.state = 'approved'
   later($, STEP_MS, async () => {
@@ -415,8 +517,8 @@ async function submit($, text) {
 function giveUp($, p, inState, state, error, why) {
   log($, why)
   if (s.pending !== p || s.state !== inState) return false
-  report($, p.op.id, state, ['--error', error])
   toIdle()
+  report($, p.op.id, state, ['--error', error])
   return true
 }
 
@@ -457,9 +559,9 @@ async function onWriteTurnDone($) {
     })
     return
   }
+  toIdle()
   report($, p.op.id, 'failed', ['--error', 'handoff_incomplete'])
   $.ui.toast(TOAST_GAVE_UP)
-  toIdle()
 }
 
 async function onSeedTurnDone($) {
@@ -482,6 +584,8 @@ export function register(on) {
     const cfg = parseJSON(await $.fs.read($.plugin.root + '/pdx.json').catch(() => ''))
     if (cfg && cfg.pdx) s.pdx = cfg.pdx // written beside VERSION by the extractor; absent in `claude plugin test`
     s.config = cfg && typeof cfg.config === 'string' ? cfg.config : ''
+    await $.command.register({ name: 'relay', description: 'Purdex 自我接力：off 暫停、on 恢復、status 查看', argumentHint: 'off|on|status' })
+      .catch((err) => log($, '/relay not registered: ' + String(err)))
     helloLater($)
     return next(e)
   })
@@ -553,10 +657,12 @@ export function register(on) {
     // cancelled{abandoned} (the daemon closes the approval row), seeding →
     // failed{handoff_incomplete}; beginning needs nothing here — the
     // generation bump above has begin() cancel the op when it answers.
-    if (p && (s.state === 'awaiting' || s.state === 'approved')) report($, p.op.id, 'cancelled', ['--error', 'abandoned'])
-    else if (p && s.state === 'seeding') report($, p.op.id, 'failed', ['--error', 'handoff_incomplete'])
-    if (s.state === 'awaiting') $.ui.status(undefined)
+    // toIdle first: a prompt held on the request goes on before the report.
+    const was = s.state
     toIdle()
+    if (p && (was === 'awaiting' || was === 'approved')) report($, p.op.id, 'cancelled', ['--error', 'abandoned'])
+    else if (p && was === 'seeding') report($, p.op.id, 'failed', ['--error', 'handoff_incomplete'])
+    if (was === 'awaiting') $.ui.status(undefined)
     s.floor = undefined
     s.lastAskPct = undefined
     helloLater($)
@@ -572,4 +678,86 @@ export function register(on) {
     if (s.pending && e.input && e.input.file_path === s.pending.path) return { decision: 'allow', reason: 'Purdex 接力檔' }
     return next(e)
   }).catch(($, e, next) => (next.called ? next(e) : { decision: 'deny', reason: 'pdx-relay guard failed' }))
+
+  // ---- P5b-3: the hold, the compact rule, /relay ----
+
+  // The hold (U7, §8.7 (b)): while a request is open no prompt of the main
+  // conversation starts a turn, whatever its origin (the mod's own never
+  // reaches this hook, MP3). The hook waits for the answer the timer's loop
+  // settles, on local sleeps of its own (sleepUntil): a `$` call in flight,
+  // so its 10 s budget stands still however long the request stays open, and
+  // the daemon is asked nothing more per held prompt (P5b-3 critic). A
+  // prompt that arrives while begin is still out waits for begin's answer
+  // (≤ BEGIN_HOLD_MS) and goes on unchanged when begin opened nothing; the
+  // request's answer is waited for ≤ HOLD_MAX_MS. Every prompt is held, however
+  // many: a cap that let one through would start a turn while the request is
+  // open (U7, spec §8.7 (b)); each costs a local sleep, not the daemon. Approved ⇒
+  // NOTE after the existing context; anything else ⇒ unchanged. The status
+  // line, the toast and the loop are the timer's, so Esc here ends this
+  // prompt only. The hold never loses a prompt: whatever fails, its .catch
+  // answers next(e) (fail-open; P5b-3 review).
+  on('prompt.submit', async ($, e, next) => {
+    if (!s.interactive) return next(e)
+    const open = s.state === 'awaiting' ? s.pending : undefined
+    const begun = s.state === 'beginning' ? s.begun : undefined
+    if (!open && !begun) return next(e)
+    let approved = false
+    holding += 1
+    try {
+      const p = open || (await sleepUntil($, begun.promise, BEGIN_HOLD_MS, next.signal))?.value
+      const outcome = p && (await sleepUntil($, p.answer.promise, HOLD_MAX_MS, next.signal))
+      // `s.pending === p`: an approval that raced a compaction or a /clear relays nothing
+      approved = !!outcome && outcome.value === 'approved' && s.pending === p
+    } finally {
+      holding -= 1
+    }
+    return next(approved ? { ...e, context: [...(e.context ?? []), NOTE] } : e)
+  }).catch(($, e, next) => {
+    log($, 'prompt hold failed (' + (next.error ? next.error.kind : '?') + '); the prompt goes on unchanged')
+    return next(e)
+  })
+
+  // Compaction (§8.7 (c), deviation 9): an approved relay not yet written
+  // skips an AUTO compaction (the handoff is written from the full context);
+  // a manual /compact runs, the person asked for it. An open request, any
+  // trigger, is reported cancelled{compacted}: the daemon closes its approval
+  // row (P5a-2b closeRequestOfReportedOp), every dialog closes and `pdx relay
+  // wait` exits 12, which releases the held prompts. No .catch: a hook that
+  // throws here lets the compaction run.
+  on('session.compact', async ($, e, next) => {
+    if (!s.interactive || e.agentId || e.trigger === 'precompute') return next(e)
+    if (s.state === 'approved') {
+      if (e.trigger === 'auto') return { skip: SKIP_COMPACT }
+      return next(e)
+    }
+    if (s.state === 'awaiting' && s.pending) {
+      const op = s.pending.op.id
+      toIdle() // a held prompt goes on at once, unchanged, before the report
+      $.ui.status(undefined)
+      report($, op, 'cancelled', ['--error', 'compacted'])
+    } else if (s.state === 'beginning') {
+      toIdle() // the begin still out answers for a gone generation: its op is cancelled{abandoned}
+    }
+    s.lastAskPct = undefined // after a compaction the next ask needs ≥ threshold again
+    return next(e)
+  })
+
+  // /relay off|on|status (§8.7 (a)): the person waits for the answer, so this
+  // one daemon call is awaited in the hook, bounded at SELF_TIMEOUT_MS; a
+  // timeout (read as 20), 20 or 21 says the daemon is unreachable.
+  on('command.run', { command: 'relay' }, async ($, e) => {
+    const action = (e.args || 'status').trim()
+    if (!['off', 'on', 'status'].includes(action)) return { text: RELAY_USAGE }
+    const r = await pdx($, ['relay', 'self', action, '--session', await $.session.id()], SELF_TIMEOUT_MS)
+    if (r.exitCode === 20 || r.exitCode === 21) return { text: RELAY_UNREACHABLE }
+    // on|off in a member: the daemon's 409 member_relay_is_leads, exit 13 (P5b-3 review)
+    if (r.exitCode === 13 && stderrCode(r) === 'member_relay_is_leads') return { text: RELAY_MEMBER }
+    if (r.exitCode !== 0) return { text: 'pdx relay self ' + action + ' 失敗：' + (r.stderr || '').trim() }
+    const b = parseJSON(r.stdout) || {}
+    if (b.member) return { text: RELAY_MEMBER } // status in a member answers 200
+    if (action === 'on') s.lastAskPct = undefined // asked again at once (still only after hello answered)
+    const host = b.host_switch === false ? '主機開關 關' : '主機開關 開'
+    const label = { on: '開啟', off: '關閉', paused: '本 session 暫停' }[b.self_relay] || String(b.self_relay)
+    return { text: '自我接力：' + label + '（' + host + '；門檻 ' + s.threshold + '%）' }
+  })
 }

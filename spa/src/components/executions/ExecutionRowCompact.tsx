@@ -13,11 +13,16 @@
 // Permission channel PC2 (spec §5.4): a row whose summary carries
 // `pending_permission` shows 「等待核准」 — the warning dot, a HandPalm icon
 // beside it, and the text as the tooltip. Queued keeps the bare warning dot.
+//
+// #1771: the row's name is `workerRowName` — the brief's first line as before, else (a handoff has no brief) the
+// conversation title when this host's capability says the field exists, else the cwd basename. The name is the
+// visible text and the plain row's aria-label lead.
 import { HandPalm, SignOut, Terminal } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { selectSessionTitleSupported, useNexHostStore } from '../../stores/useNexHostStore'
 import { workerDotClass } from '../../lib/nex/state-dot'
 import { isAwaitingApproval } from '../../lib/nex/worker-summary'
-import { firstLine } from '../../lib/nex/format'
+import { workerRowName } from '../../lib/nex/worker-row-name'
 import { formatUsd } from '../../lib/nex/format-cost'
 import { normalizePhase } from '../../lib/nex/activity'
 import { rowCostIncludesPriorHistory } from '../../lib/nex/prior-history'
@@ -29,6 +34,11 @@ type T = ReturnType<typeof useI18nStore.getState>['t']
 
 interface Props {
   row: ExecutionSummary
+  /**
+   * The client's host entry id: its `session_title` capability (`selectSessionTitleSupported`) decides whether a row
+   * without a brief may be named by the conversation title. Absent → the capability counts as absent (fail closed).
+   */
+  hostId?: string
   /** The daemon's own host id (`capabilities.host_id`), not the client's host entry id — `origin` is stamped by the daemon. */
   daemonHostId: string | null
   now: number
@@ -60,11 +70,12 @@ function activityLabel(t: T, row: ExecutionSummary, awaiting: boolean): string {
   return t(`executions.activity.${phase}`)
 }
 
-export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, onOpen, onExit, exitPending = false }: Props) {
+export function ExecutionRowCompact({ row, hostId, daemonHostId, now, showCost = false, onOpen, onExit, exitPending = false }: Props) {
   const t = useI18nStore((s) => s.t)
+  const titleSupported = useNexHostStore((s) => (hostId ? selectSessionTitleSupported(hostId)(s) : false))
   const age = relativeAge(row.updated_at, now)
   const sessionCode = daemonHostId ? sameHostSessionCode(row.origin, daemonHostId) : null
-  const brief = firstLine(typeof row.brief === 'string' ? row.brief : '')
+  const name = workerRowName(row, titleSupported)
   const markerTitle = sessionCode !== null ? t('executions.marker_title', { code: sessionCode }) : null
   const ageText = t(`executions.age.${age.key}`, { n: age.n })
   const awaiting = isAwaitingApproval(row)
@@ -88,7 +99,7 @@ export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, 
         </span>
       )}
       <span data-testid="executions-brief" className="flex-1 min-w-0 truncate text-xs text-text-primary">
-        {brief}
+        {name}
       </span>
       {markerTitle !== null && (
         <span data-testid="executions-marker" className="shrink-0 text-xs text-text-muted" title={markerTitle}>
@@ -120,7 +131,7 @@ export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, 
     // Not an action (plan H2d-2): a list item of the group's list — no tabIndex (a focusable non-interactive element
     // is an anti-pattern; screen readers reach it with the browse cursor), named with what a sighted user sees plus
     // the full id that is otherwise only in `title`.
-    const label = [brief, dotTitle, markerTitle, runningText, ageText, costText, row.id]
+    const label = [name, dotTitle, markerTitle, runningText, ageText, costText, row.id]
       .filter((part) => part !== null && part !== '')
       .join(' · ')
     return (

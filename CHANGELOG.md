@@ -1,5 +1,81 @@
 # Changelog
 
+## [1.0.0-alpha.566] - 2026-10-08
+
+> 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。
+
+### Changed：分頁上的「等待核准」改用手掌圖示（#1792）
+
+- 依你的決定，worker 分頁的**標題不再帶「（等待核准）」文字**。分頁上改成：黃色狀態點照舊（位置、大小、外環都不變，其他分頁的指示不會跳動），旁邊多一個小手掌圖示，滑過去顯示「等待核准」提示。窗格標頭、側欄與新分頁的 Workers 清單的完整文字不變。
+- 載入時就已經有待決請求的 worker 分頁，手掌一開始就會出現，不必等狀態同步。
+- 等待核准時，分頁**仍會**有紅色未讀標記（它和黃點是各自獨立的狀態）。
+- 已知：狀態指示樣式設成「只有圖示」時，分頁上不會顯示等待核准（窗格標頭與清單仍會）；這是否要當成例外，等你決定。
+
+## [1.0.0-alpha.565] - 2026-10-07
+
+> 只動 Purdex 的 Claude Code mod（隨 `pdx` 內嵌）與文件。**不需要部署動作**：mod 只有在主機上跑過 `pdx setup --agent cc` 才會被 Claude Code 載入；照使用者決定，mlab 何時安裝另行決定。至此自我接力（P5b）全部完成，已在拋棄式 session 端到端真機驗收三次。daemon、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5b-3（#1780）
+
+自我接力的最後一塊（spec §8.7、§10；plan v2 Task 5b.5）。
+
+- **等待核准時暫停輸入**：接力申請送出中或等待核准時，你打的訊息（以及 peer、bridge、其他 plugin 送進來的）都會先等著，不會開始新的一輪。核准後放行，並附一段說明請模型「這一輪只做簡短回應，新工作寫進接力檔的下一步」；拒絕、逾時、取消或 daemon 不在時原樣放行。等待期間 mod 只在本機計時，不會對 daemon 多發請求；任何異常都會放行訊息，絕不丟掉。
+- **壓縮**：已核准但還沒寫接力檔時，自動壓縮會被略過、改寫接力檔；你自己下的 `/compact` 照常執行。申請還開著時遇到壓縮，申請會被取消，所有裝置上的核准對話框一起關閉，等著的訊息放行。
+- **`/relay off|on|status`**：暫停或恢復這個 session 的接力詢問、看目前狀態（主機開關、門檻）；member 會看到「member 的接力由 lead 安排」。
+- **再問的規則**：拒絕後要再多用 10 個百分點才會再問；接手完成、`/relay on`、壓縮之後重新計算。
+- **`pdx-team` skill**：教模型何時申請 lead、怎麼等核准、lead／member 怎麼做、自我接力是怎麼回事。
+- **驗收食譜** `docs/testing/self-relay-acceptance.md`：在拋棄式 session 用 `--plugin-dir` 載入 mod 的 10 步檢查，不碰主機設定。
+- 內嵌 mod 時會濾掉 Claude Code 在 plugin 目錄裡產生的型別檔，避免被打包進 `pdx`。
+
+Review 後補強（R1 一條、攻擊方五條含一條 critical、critic 兩輪）全部收進上面的行為。
+
+## [1.0.0-alpha.564] - 2026-10-08
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。只多日誌，行為不變。SPA 沒有改動。
+
+### Added：關機耗時日誌與 tmux／ps fork 計數器（#1767，#1791）
+
+重啟「請求到回來」比新 image 的 `startup: ready` 長很多（舊 image 關機約 8 秒），但日誌看不出時間花在哪。現在關機會多這幾行：`shutdown: stop N modules in …`／`shutdown: close N modules in …`（各模組耗時）、`shutdown: in-flight requests: N […]` 與 HTTP `Shutdown` 之後剩幾條（只含方法與路徑前兩段，不含 query 或 token）、`shutdown: stop-modules=… http-shutdown=… serve-return=… close-modules=… total=…`（`Shutdown` 超時強關時有 `http-forced-close` 標記）、restart 路徑 exec 之前的 `shutdown: done, restarting after …`。另外 `internal/execstat` 以原子計數記 tmux 與 ps 的 fork 次數與總耗時（不記指令參數），顯示在 `[agent] start exec:` 與 `startup: ready` 行尾，用來判斷 `sweepOnce`／`replayStatus` 剩下的時間是不是 fork。沒有改任何 timeout、順序或行為。
+
+## [1.0.0-alpha.563] - 2026-10-08
+
+> 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。
+
+### Fixed：交接來的 worker 在清單裡有名字了（#1771，#1786）
+
+- 活動列、新分頁的 Workers 清單、設定 → Worker 的列：以前交接來的 worker 沒有任務說明（brief），整列只有圓點和圖示，同時有好幾個在等待核准時分不出誰是誰。現在沒有 brief 時，改顯示這個對話的標題（主機支援時），再沒有就顯示工作目錄的最後一段；**已經有 brief 的列完全不變**。
+- 搜尋也找得到列上顯示的名稱（例如用對話標題搜尋）；舊版 daemon 殘留的標題不會被搜到。
+- 另開 #1788：手動 resume 造成的「worker 已退出」提示用的名稱規則和列不同，之後再統一。
+
+## [1.0.0-alpha.562] - 2026-10-08
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。沒有使用者看得到的變化；重啟的瞬間不再有 hook 請求 panic。SPA 沒有改動。
+
+### Fixed：關機時 hook 事件撞到已關閉的 trace sink 而 panic（#1189，#1785）
+
+agent 模組在 `Stop` 就關掉 trace sink，但 HTTP server 還在處理請求，這段窗口內結束的 hook 請求會對已關閉的 channel 送值而 panic（日誌出現 `send on closed channel` 堆疊，該請求失敗）。現在 agent 實作 `core.Closer`，在 HTTP 請求都處理完之後（`CloseModules`）才關 sink，一般關機不再丟 trace；sink 本身也防護成「已關閉就丟棄並計數」（`Shutdown` 超時強關連線的極端情況），日誌只有一行 `sink closed: dropping trace records` 與累計到 10、100… 時的 `dropped N trace record(s) since close`，hook 事件本身的處理不受影響。另外修了 `FlushForTest` 與併發入列的 WaitGroup 誤用，並移除一個測試裡迴避同一個 panic 的 sleep。
+
+## [1.0.0-alpha.561] - 2026-10-08
+
+> 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。這一版是權限通道在 mlab 真機驗收後的修正。
+
+### Fixed：權限通道真機驗收找到的問題（#1779）
+
+- **等待核准時可以從窗格退出**：以前只要是從這個窗格送出訊息、那一輪還沒結束，窗格標頭的「退出」（和選單裡的）都是灰的，等待核准的期間也包含在內，只能去 Workers 清單那一列退出。現在只有訊息還在送出途中才會暫時不能按。
+- **交接確認框的說明跟著所選的模式走**：以前選了「需要核准」，內文還是寫「不會再有權限詢問」；現在會說明 worker 會停下來等你同意或拒絕。
+- **新分頁不再提供「需要核准」的 Sandbox profile**：這個模式只在交接時使用。若主機只提供這類 profile，新分頁會顯示「這台主機沒有可用的 Sandbox profile」並停用送出。
+- **請求卡的拒絕說明在切換分頁後保留**：打到一半的說明、展開的狀態、「已在這個窗格回答」都會跨分頁切換保留；回答之後切走再切回，已處理的卡片不會再冒出來。
+- 文件：驗收範例改用非唯讀指令（唯讀指令如 `echo`、`date` 在「需要核准」模式下 Claude Code 會自己放行，不會詢問）。
+- 另開 #1771：交接來的 worker 在清單裡沒有名字。
+
+## [1.0.0-alpha.560] - 2026-10-08
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。這次重啟起，啟動預期再快約 5 秒（`[agent] start:` 的 `replayStatus=` 由約 5600 ms 降到 500 ms 以內）。SPA 沒有改動。
+
+### Changed：daemon 啟動時 `replayStatus` 不再為每個 session 重建全部投影（#1767，#1781）
+
+alpha.559 的耗時日誌指出剩下的啟動時間幾乎都在 agent 模組的 `replayStatus`（5618 ms／6727 ms）：它對每個 session 都重新讀全部 frame 並為每個 pane 各 fork 一次 `tmux display-message`（還順便付了一個被丟棄的 session code 查詢）。現在這一輪只載入投影一次、每個 pane 最多解析一次（快取只活在這一輪，失敗不快取）；武裝 probe intent 之前會重讀目標 frame 的 DB row，已被 sweep 刪除的 frame 不會被武裝。另外 `selectSessionProjection` 不再為被丟棄的 session code 付 `resolveSessionCode`。熱路徑（每個 hook 事件約 P 次 tmux fork）另開 #1777；一個既有的「frame 在讀取與武裝之間被刪」窗口另開 #1782。
+
 ## [1.0.0-alpha.559] - 2026-10-08
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。只多了日誌，行為不變。SPA 沒有改動。

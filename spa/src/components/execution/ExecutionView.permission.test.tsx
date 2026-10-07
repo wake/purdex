@@ -12,6 +12,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { NexApiError, type NexEvent } from '../../lib/nex/types'
 import { exitWorker } from '../../lib/nex/exit-worker'
 import { takeBack } from '../../lib/nex/handoff'
+import { clearAllPermissionCards } from '../../lib/nex/permission-card-memory'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
@@ -65,6 +66,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   seq = 0
+  clearAllPermissionCards()
   useI18nStore.getState().setLocale('en')
   useExecutionStore.setState({ executions: {} })
   ensureLease.mockReset().mockResolvedValue('ls_1'); release.mockReset(); touch.mockReset(); forget.mockReset()
@@ -264,6 +266,43 @@ describe('ExecutionView — permission request card', () => {
     expect(screen.getByTestId('permission-allow')).toBeDisabled()
     expect(screen.getByTestId('permission-deny')).toBeDisabled()
     fireEvent.click(screen.getByTestId('permission-allow'))
+    expect(api.answerPermission).not.toHaveBeenCalled()
+    await act(async () => { d.resolve({ exited: true, terminated: true, archived: true, state: 'terminated' }) })
+  })
+
+  // Spec §5.4 / N7 (acceptance e1): the turn this pane sent is waiting on a request — 退出 in the header and the
+  // overflow is available, asks first, exits once with the pane's own lease, and freezes the card meanwhile.
+  it('a worker waiting for approval on the turn this pane sent can be exited from the pane', async () => {
+    const d = deferred<{ exited: boolean; terminated: boolean; archived: boolean; state: string }>()
+    vi.mocked(exitWorker).mockReturnValueOnce(d.promise)
+    vi.mocked(api.sendMessage).mockResolvedValueOnce({ turn_id: 'trn_2', delivery: 'delivered' })
+    useExecutionStore.getState().setLease(H, E, { leaseId: 'ls_1', expiresAt: Date.now() + 100_000 })
+    useI18nStore.getState().setLocale('zh-TW')
+    render(<ExecutionView {...base} isActive />)
+    const box = screen.getByRole('textbox')
+    fireEvent.change(box, { target: { value: 'run the marker command' } })
+    await act(async () => { fireEvent.keyDown(box, { key: 'Enter' }) })
+    expect(api.sendMessage).toHaveBeenCalledTimes(1)
+    apply('execution.message_accepted', { text: 'run the marker command', turn_id: 'trn_2' })
+    ask('req_a')
+    act(() => { useExecutionStore.getState().applySummaryPatch(H, E, { pending_permission: { request_id: 'req_a', tool_name: 'Bash', since: Date.now() } }) })
+    expect(screen.getByTestId('execution-state')).toHaveTextContent('等待核准')
+    expect(screen.getByTestId('header-exit')).toBeEnabled()
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    expect(screen.getByTestId('overflow-exit')).toBeEnabled()
+    fireEvent.click(screen.getByTestId('overflow-exit'))
+    expect(exitWorker).not.toHaveBeenCalled()
+    expect(screen.getByTestId('exit-dialog')).toHaveTextContent('退出 worker？')
+    expect(screen.getByTestId('exit-dialog')).toHaveTextContent('這一輪會被中斷。')
+    fireEvent.click(screen.getByTestId('exit-confirm'))
+    await waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
+    expect(exitWorker).toHaveBeenCalledWith(expect.objectContaining({ hostId: H, executionId: E, leaseId: 'ls_1', forgetLease: forget }))
+    expect(screen.getByTestId('permission-allow')).toBeDisabled()
+    expect(screen.getByTestId('permission-deny')).toBeDisabled()
+    expect(screen.getByTestId('header-exit')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('header-exit'))
+    fireEvent.click(screen.getByTestId('permission-allow'))
+    expect(exitWorker).toHaveBeenCalledTimes(1)
     expect(api.answerPermission).not.toHaveBeenCalled()
     await act(async () => { d.resolve({ exited: true, terminated: true, archived: true, state: 'terminated' }) })
   })

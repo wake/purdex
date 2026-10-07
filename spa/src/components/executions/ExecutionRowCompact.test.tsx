@@ -1,10 +1,11 @@
 // spa/src/components/executions/ExecutionRowCompact.test.tsx — R4 T4.1: the
 // worker_rollup fields on a sidebar row (cost behind the cost_basis gate,
 // running badge, activity as the dot's tooltip, hand-over note).
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { render, screen, act, fireEvent } from '@testing-library/react'
 import { ExecutionRowCompact } from './ExecutionRowCompact'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useNexHostStore } from '../../stores/useNexHostStore'
 import type { ExecutionSummary } from '../../lib/nex/types'
 
 const NOW = 1_700_000_000_000
@@ -238,5 +239,85 @@ describe('ExecutionRowCompact — exit action', () => {
   it('has no exit action without onExit', () => {
     render(<ExecutionRowCompact row={row()} daemonHostId={null} now={NOW} onOpen={() => {}} />)
     expect(screen.queryByTestId('executions-row-exit')).toBeNull()
+  })
+})
+
+// #1771: a worker created by a handoff has an empty brief; its row is named by the conversation title (when the
+// host capability says the field exists — fail closed), else the cwd basename. A row with a brief is unchanged.
+describe('ExecutionRowCompact — a row without a brief is named (#1771)', () => {
+  const HOST = 'host-a'
+  const setTitleSupported = (supported: boolean) =>
+    useNexHostStore.setState({
+      byHost: {
+        [HOST]: {
+          info: null, error: null, fetchedAt: 0, generation: 0, fingerprint: '',
+          phase: 'ready',
+          capabilities: (supported ? { session_title: { sources: ['ai'], max_bytes: 200 } } : {}) as never,
+        },
+      },
+    })
+  const handoff = (over: Partial<ExecutionSummary> = {}) =>
+    row({ brief: '', cwd: '/Users/wake/Workspace/wake/purdex', session_title: { text: 'Zebrafinch', source: 'ai' }, ...over })
+
+  beforeEach(() => { useNexHostStore.setState({ byHost: {} }) })
+  afterEach(() => { useNexHostStore.setState({ byHost: {} }) })
+
+  it('an empty brief + the capability: the conversation title is the name (text and the button\'s name)', () => {
+    setTitleSupported(true)
+    render(<ExecutionRowCompact row={handoff()} hostId={HOST} daemonHostId={null} now={NOW} onOpen={() => {}} />)
+    expect(screen.getByTestId('executions-brief').textContent).toBe('Zebrafinch')
+    expect(screen.getByRole('button', { name: /Zebrafinch/ })).toBe(screen.getByTestId('executions-row'))
+  })
+
+  it('the same row without the capability: the cwd basename (the title is never read)', () => {
+    setTitleSupported(false)
+    render(<ExecutionRowCompact row={handoff()} hostId={HOST} daemonHostId={null} now={NOW} onOpen={() => {}} />)
+    expect(screen.getByTestId('executions-brief').textContent).toBe('purdex')
+  })
+
+  it('the capability arriving later renames the row (read from the store, not snapshotted)', () => {
+    setTitleSupported(false)
+    render(<ExecutionRowCompact row={handoff()} hostId={HOST} daemonHostId={null} now={NOW} onOpen={() => {}} />)
+    expect(screen.getByTestId('executions-brief').textContent).toBe('purdex')
+    act(() => { setTitleSupported(true) })
+    expect(screen.getByTestId('executions-brief').textContent).toBe('Zebrafinch')
+  })
+
+  it('a row that cannot know its host (no hostId) fails closed: the cwd basename', () => {
+    setTitleSupported(true)
+    render(<ExecutionRowCompact row={handoff()} daemonHostId={null} now={NOW} onOpen={() => {}} />)
+    expect(screen.getByTestId('executions-brief').textContent).toBe('purdex')
+  })
+
+  it('a non-openable row\'s aria-label leads with the same name', () => {
+    setTitleSupported(true)
+    const { unmount } = render(<ExecutionRowCompact row={handoff()} hostId={HOST} daemonHostId={null} now={NOW} />)
+    expect(screen.getByTestId('executions-row').getAttribute('aria-label') ?? '').toMatch(/^Zebrafinch · /)
+    unmount()
+    setTitleSupported(false)
+    render(<ExecutionRowCompact row={handoff()} hostId={HOST} daemonHostId={null} now={NOW} />)
+    expect(screen.getByTestId('executions-row').getAttribute('aria-label') ?? '').toMatch(/^purdex · /)
+  })
+
+  it('two waiting handoff workers can be told apart', () => {
+    setTitleSupported(true)
+    const pending = { request_id: 'r1', tool_name: 'Bash', since: NOW - 5_000 }
+    render(
+      <div>
+        <ExecutionRowCompact row={handoff({ id: 'exc_1', pending_permission: pending })} hostId={HOST} daemonHostId={null} now={NOW} onOpen={() => {}} />
+        <ExecutionRowCompact row={handoff({ id: 'exc_2', pending_permission: pending, session_title: { text: 'Kestrel', source: 'ai' } })} hostId={HOST} daemonHostId={null} now={NOW} onOpen={() => {}} />
+      </div>,
+    )
+    expect(screen.getAllByTestId('executions-brief').map((el) => el.textContent)).toEqual(['Zebrafinch', 'Kestrel'])
+  })
+
+  it('pin: a row WITH a brief renders byte-identically to before #1771, title and capability notwithstanding', () => {
+    setTitleSupported(true)
+    const briefed = row({ brief: 'Fix the bug\nsecond line', cwd: '/w/repo', session_title: { text: 'Zebrafinch', source: 'ai' } })
+    const { container, unmount } = render(<ExecutionRowCompact row={briefed} hostId={HOST} daemonHostId={null} now={NOW} onOpen={() => {}} />)
+    expect(container.innerHTML).toMatchInlineSnapshot(`"<button type="button" data-testid="executions-row" title="exc_a" class="flex items-center gap-1.5 w-full min-w-0 px-3 py-1 text-left cursor-pointer hover:bg-surface-hover"><span data-testid="executions-state-dot" class="shrink-0 inline-block w-2 h-2 rounded-full bg-status-success" title="running"></span><span data-testid="executions-brief" class="flex-1 min-w-0 truncate text-xs text-text-primary">Fix the bug</span><span data-testid="executions-age" class="shrink-0 text-xs text-text-muted tabular-nums">just now</span></button>"`)
+    unmount()
+    const plain = render(<ExecutionRowCompact row={briefed} hostId={HOST} daemonHostId={null} now={NOW} />)
+    expect(plain.container.innerHTML).toMatchInlineSnapshot(`"<div data-testid="executions-row" role="listitem" aria-label="Fix the bug · running · just now · exc_a" title="exc_a" class="flex items-center gap-1.5 w-full min-w-0 px-3 py-1 text-left"><span data-testid="executions-state-dot" class="shrink-0 inline-block w-2 h-2 rounded-full bg-status-success" title="running"></span><span data-testid="executions-brief" class="flex-1 min-w-0 truncate text-xs text-text-primary">Fix the bug</span><span data-testid="executions-age" class="shrink-0 text-xs text-text-muted tabular-nums">just now</span></div>"`)
   })
 })

@@ -20,6 +20,7 @@ import (
 	"github.com/wake/purdex/internal/codexbroker"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/locale"
 	"github.com/wake/purdex/internal/module/agent"
 	backupmod "github.com/wake/purdex/internal/module/backup"
@@ -318,7 +319,7 @@ func runServe(args []string) *reexecPlan {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	log.Print(startupReadyLine(time.Since(bootStart), initDur, startDur))
+	log.Print(startupReadyLine(time.Since(bootStart), initDur, startDur, execstat.Take()))
 	log.Printf("pdx daemon listening on %s", addr)
 	listener, err := listenWithReuseAddr(addr)
 	if err != nil {
@@ -329,13 +330,16 @@ func runServe(args []string) *reexecPlan {
 	// CloseModules) and only return once it has finished, so the deferred
 	// store close and PID-lock release registered above run against closed
 	// modules.
-	err = serveAndWait(srv, listener, sigCh, restartCh, cancel, c, core.ShutdownBudget, log.Printf, os.Exit)
+	err = serveAndWait(srv, listener, sigCh, restartCh, cancel, c, core.ShutdownBudget, log.Printf, os.Exit, withInflight(processInflight))
 	if errors.Is(err, errRestart) {
 		if restartStillWanted(sigCh, func() { signal.Stop(sigCh) }, log.Printf) {
 			// The restart goes ahead despite cleanup errors; leave a record
 			// so the new image can report them (spec D13).
 			var rr *restartRequested
-			if errors.As(err, &rr) && len(rr.warnings) > 0 {
+			if errors.As(err, &rr) {
+				log.Print(shutdownDoneLine(rr.elapsed))
+			}
+			if rr != nil && len(rr.warnings) > 0 {
 				if werr := writeLastShutdown(cfg.DataDir, rr.warnings, time.Now()); werr != nil {
 					log.Printf("last shutdown: not recorded (%v)", werr)
 				}
