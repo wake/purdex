@@ -254,6 +254,28 @@ func TestWorkerRebuildFixRound1(t *testing.T) {
 		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`, 409, "handoff_unsupported")
 		assert.Empty(t, env.svc.Requests())
 	})
+	// Permission channel plan Task 2, same rule as the handoff: rebuilding an
+	// asking row works on a host whose max_profile is handoff_ask.
+	t.Run("handoff_ask below handoff: the asking profile rebuilds, plain handoff still refused", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		env.m.opts.Config.Sandbox.MaxProfile = "handoff_ask"
+		env.svc.result = execution.Result{ID: "N1", State: store.StateIdle, EffectiveProfile: "handoff_ask"}
+		code, out := rebuildPost(t, env, `{"session_id":"`+rbS+`","cwd":"/w","profile":"handoff_ask"}`)
+		require.Equal(t, 200, code, "%v", out)
+		require.Len(t, env.svc.Requests(), 1)
+		assert.Equal(t, "handoff_ask", env.svc.Requests()[0].SandboxProfile)
+
+		env = newHandoffEnv(t)
+		env.m.opts.Config.Sandbox.MaxProfile = "handoff_ask"
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`, 409, "handoff_unsupported")
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w","profile":"readonly"}`, 409, "handoff_unsupported")
+		assert.Empty(t, env.svc.Requests())
+
+		env = newHandoffEnv(t)
+		env.m.opts.Config.Sandbox.MaxProfile = "trusted"
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w","profile":"handoff_ask"}`, 400, "invalid_profile")
+		assert.Empty(t, env.svc.Requests())
+	})
 	t.Run("replaced row held by a non-pdx holder → held_by at exit_replaced", func(t *testing.T) {
 		env := newHandoffEnv(t)
 		env.svc.acquireErr = store.ErrLeaseHeld

@@ -346,6 +346,57 @@ func TestHandoffRequestHonoursProfileAndClientHeader(t *testing.T) {
 	assert.Equal(t, "pdx:host1/tab-7", reqs[0].PrincipalID)
 }
 
+// TestHandoffProfileCheckUsesTheRequestedProfile (permission channel plan
+// Task 2): the policy check looks at the profile the handoff will run under
+// (body.profile, default handoff), not at handoff alone. A permission-channel
+// profile (handoff_ask) needs only itself usable, so a host whose
+// max_profile is handoff_ask offers the asking mode and still refuses plain
+// handoff; any other profile keeps needing the host's handoff opt-in. A
+// refusal comes before the lock, the identity, any key and the delegate.
+func TestHandoffProfileCheckUsesTheRequestedProfile(t *testing.T) {
+	cases := []struct {
+		name       string
+		maxProfile string
+		profile    string // "" = body sends no profile
+		wantOK     bool
+		wantSent   string // SandboxProfile the delegate request carries
+	}{
+		{"(a) max handoff_ask, profile handoff_ask", "handoff_ask", "handoff_ask", true, "handoff_ask"},
+		{"(b) max handoff_ask, no profile (handoff)", "handoff_ask", "", false, ""},
+		{"(b) max handoff_ask, explicit handoff", "handoff_ask", "handoff", false, ""},
+		{"(c) max trusted, profile handoff_ask", "trusted", "handoff_ask", false, ""},
+		{"(d) max handoff, no profile", "handoff", "", true, "handoff"},
+		{"(d) max handoff, profile handoff_ask", "handoff", "handoff_ask", true, "handoff_ask"},
+		{"non-channel profile still needs the handoff opt-in", "handoff_ask", "readonly", false, ""},
+		{"non-channel profile on a trusted host", "trusted", "trusted", false, ""},
+		{"unknown profile", "handoff", "nope", false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newHandoffEnv(t)
+			env.m.opts.Config.Sandbox.MaxProfile = tc.maxProfile
+			b := goodBody()
+			if tc.profile != "" {
+				b["profile"] = tc.profile
+			}
+			status, body := env.post(t, hoCode, b)
+			if tc.wantOK {
+				require.Equal(t, http.StatusOK, status, "%v", body)
+				reqs := env.svc.Requests()
+				require.Len(t, reqs, 1)
+				assert.Equal(t, tc.wantSent, reqs[0].SandboxProfile)
+				return
+			}
+			assert.Equal(t, http.StatusConflict, status, "%v", body)
+			assert.Equal(t, "handoff_unsupported", body["code"])
+			assert.Empty(t, env.svc.Requests(), "nothing delegated")
+			assert.Empty(t, env.ops.Calls(), "Claude Code never stopped")
+			assert.Empty(t, env.tmux.RawKeysSent(), "tmux untouched")
+			assert.Equal(t, 0, env.owners.calls, "identity never resolved")
+		})
+	}
+}
+
 // --- rejection and rollback ---
 
 func rejectingEnv(t *testing.T) *handoffEnv {

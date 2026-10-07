@@ -49,6 +49,30 @@ func detachedContext(parent context.Context, d time.Duration) (context.Context, 
 // body names another one; it must be usable under the host policy.
 const handoffProfile = "handoff"
 
+// hasPermissionChannel reports whether the built-in profile called name
+// routes the CLI's permission prompts to the host (Nexen's handoff_ask).
+// Unknown names answer false.
+func hasPermissionChannel(name string) bool {
+	p, ok := sandbox.Lookup(name)
+	return ok && p.PermissionChannel
+}
+
+// handoffProfileAllowed reports whether a handoff may run under profile on a
+// host with this policy (permission channel plan Task 2). The profile itself
+// must be usable as is: Nexen would otherwise narrow it silently or, for a
+// permission-channel profile, reject it after the pane's Claude Code has
+// already exited. A profile without the channel also needs the host's
+// handoff opt-in (handoff usable), as every handoff did before; a channel
+// profile needs only itself, so a host whose max_profile is handoff_ask
+// (below handoff) offers the asking mode and refuses plain handoff.
+func handoffProfileAllowed(policy sandbox.Policy, profile string) bool {
+	usable := sandbox.UsableProfiles(policy)
+	if !slices.Contains(usable, profile) {
+		return false
+	}
+	return hasPermissionChannel(profile) || slices.Contains(usable, handoffProfile)
+}
+
 // handoffSessionLabel is the execution label that binds a handed-off
 // execution to its session code (spec §4.4 step 5). Together with the
 // origin (handoffOrigin) it is what a take-back checks before it touches
@@ -155,15 +179,22 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusServiceUnavailable, "nex_unavailable", msg, nil)
 		return
 	}
-	if !slices.Contains(sandbox.UsableProfiles(m.opts.Config.Sandbox), handoffProfile) {
-		writeHandoffError(w, http.StatusConflict, "handoff_unsupported",
-			"host sandbox policy does not allow the handoff profile", nil)
-		return
-	}
 
 	var body handoffRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeHandoffError(w, http.StatusBadRequest, "malformed_body", "invalid request body: "+err.Error(), nil)
+		return
+	}
+	// The policy check needs the body: it is about the profile this handoff
+	// will run under, not about handoff alone.
+	profile := body.Profile
+	if profile == "" {
+		profile = handoffProfile
+	}
+	if !handoffProfileAllowed(m.opts.Config.Sandbox, profile) {
+		writeHandoffError(w, http.StatusConflict, "handoff_unsupported",
+			"host sandbox policy does not allow a handoff under the "+profile+" profile",
+			map[string]any{"profile": profile})
 		return
 	}
 	if !tmux.ValidInstance(body.ExpectedTmuxInstance) {
@@ -246,10 +277,6 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	profile := body.Profile
-	if profile == "" {
-		profile = handoffProfile
-	}
 	req := execution.Request{
 		PrincipalID:     principal,
 		Provider:        "claude",

@@ -61,14 +61,17 @@ func (m *Module) handleWorkerRebuild(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusServiceUnavailable, "nex_unavailable", msg, nil)
 		return
 	}
-	if !slices.Contains(sandbox.UsableProfiles(m.opts.Config.Sandbox), handoffProfile) {
-		writeHandoffError(w, http.StatusConflict, "handoff_unsupported",
-			"host sandbox policy does not allow the handoff profile", nil)
-		return
-	}
 	profile := body.Profile
 	if profile == "" {
 		profile = handoffProfile
+	}
+	// The host's handoff opt-in, waived for a permission-channel profile as
+	// in the handoff (handoffProfileAllowed): an asking row rebuilds on a
+	// host whose max_profile is handoff_ask.
+	if !hasPermissionChannel(profile) && !slices.Contains(sandbox.UsableProfiles(m.opts.Config.Sandbox), handoffProfile) {
+		writeHandoffError(w, http.StatusConflict, "handoff_unsupported",
+			"host sandbox policy does not allow the handoff profile", nil)
+		return
 	}
 	if !slices.Contains(sandbox.UsableProfiles(m.opts.Config.Sandbox), profile) {
 		writeHandoffError(w, http.StatusBadRequest, "invalid_profile", "sandbox profile is not usable under the host policy",
