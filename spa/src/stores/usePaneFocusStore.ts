@@ -4,7 +4,8 @@
 //
 // Memory only: no persist and no syncManager. After a reload every tab starts from its primary pane.
 //
-// Writers are the pane leaf wrappers in `PaneLayoutRenderer` (pointerdown / focus inside a leaf). Ids of panes that
+// Writers are the pane leaf wrappers in `PaneLayoutRenderer` (pointerdown / focus inside a leaf) and `requestFocus`
+// (a notification click, which also posts the one-shot `focusRequest`). Ids of panes that
 // were closed or swapped away may linger in a live tab's list; every reader filters against the live leaves.
 import { create } from 'zustand'
 import { useTabStore } from './useTabStore'
@@ -12,15 +13,39 @@ import { useTabStore } from './useTabStore'
 /** Most panes remembered per tab. */
 export const PANE_FOCUS_CAP = 16
 
+/** A one-shot request that a pane take focus now (#1840 review A1). Only the newest request is kept. */
+export interface PaneFocusRequest {
+  tabId: string
+  paneId: string
+  /** Grows with every request, so asking for the same pane again is a new request. */
+  nonce: number
+  /** Some `useActivationFocus` of that pane took it (`takeFocusRequest`): it is used up. */
+  taken: boolean
+}
+
 interface PaneFocusState {
   /** tab id → pane ids, most recent first, no duplicates, at most `PANE_FOCUS_CAP`. */
   recent: Record<string, string[]>
   /** Record that the user focused `paneId` in `tabId`: move it to the front. */
   touch: (tabId: string, paneId: string) => void
   forgetTab: (tabId: string) => void
+  focusRequest: PaneFocusRequest | null
+  /**
+   * Ask `paneId` of `tabId` to take focus once, also when its tab is already on screen, where no activation focuses
+   * anything (`useActivationFocus`). Makes it the tab's most recent pane (`touch`) and posts a new request; that
+   * pane's `useActivationFocus` takes it and calls its focus function — or the tab's activation does, when the tab is
+   * being shown anyway.
+   */
+  requestFocus: (tabId: string, paneId: string) => void
+  /** Claim request `nonce`: true once, false when it is used up or no longer the current request. */
+  takeFocusRequest: (nonce: number) => boolean
+  /** Undo a claim whose focus never ran (its frame was cancelled), so a re-run can claim it again. */
+  releaseFocusRequest: (nonce: number) => void
 }
 
-export const usePaneFocusStore = create<PaneFocusState>()((set) => ({
+let lastRequestNonce = 0
+
+export const usePaneFocusStore = create<PaneFocusState>()((set, get) => ({
   recent: {},
   touch: (tabId, paneId) =>
     set((s) => {
@@ -30,6 +55,21 @@ export const usePaneFocusStore = create<PaneFocusState>()((set) => ({
       const next = [paneId, ...(list ?? []).filter((id) => id !== paneId)].slice(0, PANE_FOCUS_CAP)
       return { recent: { ...s.recent, [tabId]: next } }
     }),
+  focusRequest: null,
+  requestFocus: (tabId, paneId) => {
+    get().touch(tabId, paneId)
+    set({ focusRequest: { tabId, paneId, nonce: ++lastRequestNonce, taken: false } })
+  },
+  takeFocusRequest: (nonce) => {
+    const r = get().focusRequest
+    if (!r || r.nonce !== nonce || r.taken) return false
+    set({ focusRequest: { ...r, taken: true } })
+    return true
+  },
+  releaseFocusRequest: (nonce) => {
+    const r = get().focusRequest
+    if (r && r.nonce === nonce && r.taken) set({ focusRequest: { ...r, taken: false } })
+  },
   forgetTab: (tabId) =>
     set((s) => {
       if (!(tabId in s.recent)) return s

@@ -33,67 +33,67 @@ describe('shouldNotify', () => {
   })
 
   it('returns true for waiting event with matching tab', () => {
-    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(true)
+    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: defaultSettings })).toBe(true)
   })
   it('returns true for idle event', () => {
-    expect(shouldNotify({ derived: 'idle', eventName: 'Stop', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(true)
+    expect(shouldNotify({ derived: 'idle', eventName: 'Stop', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: defaultSettings })).toBe(true)
   })
   it('returns false for notification_silent event', () => {
-    expect(shouldNotify({ derived: 'idle', eventName: 'PdxStop', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings, notificationSilent: true })).toBe(false)
+    expect(shouldNotify({ derived: 'idle', eventName: 'PdxStop', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: defaultSettings, notificationSilent: true })).toBe(false)
   })
   it('returns false for running event', () => {
-    expect(shouldNotify({ derived: 'running', eventName: 'UserPromptSubmit', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(false)
+    expect(shouldNotify({ derived: 'running', eventName: 'UserPromptSubmit', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: defaultSettings })).toBe(false)
   })
   it('returns false when focused on same session and window has focus', () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true)
-    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', focusedCompositeKey: 'host:abc', hasTab: true, settings: defaultSettings })).toBe(false)
+    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', visibleInActiveTab: true, hasTab: true, settings: defaultSettings })).toBe(false)
     vi.restoreAllMocks()
   })
   it('returns true when focused on same session but window is in background', () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(false)
-    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', focusedCompositeKey: 'host:abc', hasTab: true, settings: defaultSettings })).toBe(true)
+    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', visibleInActiveTab: true, hasTab: true, settings: defaultSettings })).toBe(true)
     vi.restoreAllMocks()
   })
   it('returns false when no tab and notifyWithoutTab=false', () => {
-    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: false, settings: defaultSettings })).toBe(false)
+    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: false, settings: defaultSettings })).toBe(false)
   })
   it('returns true when no tab but notifyWithoutTab=true', () => {
-    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: false, settings: { ...defaultSettings, notifyWithoutTab: true } })).toBe(true)
+    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: false, settings: { ...defaultSettings, notifyWithoutTab: true } })).toBe(true)
   })
   it('returns false when agent disabled', () => {
-    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: { ...defaultSettings, enabled: false } })).toBe(false)
+    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: { ...defaultSettings, enabled: false } })).toBe(false)
   })
   it('returns false when event disabled', () => {
-    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: { ...defaultSettings, events: { Notification: false } } })).toBe(false)
+    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: { ...defaultSettings, events: { Notification: false } } })).toBe(false)
   })
   it('event defaults to true when not in events map', () => {
-    expect(shouldNotify({ derived: 'idle', eventName: 'Stop', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: { ...defaultSettings, events: {} } })).toBe(true)
+    expect(shouldNotify({ derived: 'idle', eventName: 'Stop', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: { ...defaultSettings, events: {} } })).toBe(true)
   })
   it('returns false for idle Notification (idle_prompt/auth_success are informational)', () => {
-    expect(shouldNotify({ derived: 'idle', eventName: 'Notification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(false)
+    expect(shouldNotify({ derived: 'idle', eventName: 'Notification', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: defaultSettings })).toBe(false)
   })
   it('returns true for waiting Notification (permission_prompt/elicitation_dialog)', () => {
-    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(true)
+    expect(shouldNotify({ derived: 'waiting', eventName: 'Notification', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: defaultSettings })).toBe(true)
   })
   it('returns true for error event (StopFailure)', () => {
-    expect(shouldNotify({ derived: 'error', eventName: 'StopFailure', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(true)
+    expect(shouldNotify({ derived: 'error', eventName: 'StopFailure', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: defaultSettings })).toBe(true)
   })
 
   // W2 transition: cc broadcasts PdxXxx; shouldNotify normalizes at entry so
   // PdxXxx behaves identically to the legacy literal.
   it('idle PdxNotification suppressed identically to Notification (W2)', () => {
-    expect(shouldNotify({ derived: 'idle', eventName: 'PdxNotification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(false)
+    expect(shouldNotify({ derived: 'idle', eventName: 'PdxNotification', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: defaultSettings })).toBe(false)
   })
   it('waiting PdxPermissionRequest dispatched identically to PermissionRequest (W2)', () => {
-    expect(shouldNotify({ derived: 'waiting', eventName: 'PdxPermissionRequest', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(true)
+    expect(shouldNotify({ derived: 'waiting', eventName: 'PdxPermissionRequest', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: defaultSettings })).toBe(true)
   })
   it('error PdxStopFailure dispatched identically to StopFailure (W2)', () => {
-    expect(shouldNotify({ derived: 'error', eventName: 'PdxStopFailure', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: defaultSettings })).toBe(true)
+    expect(shouldNotify({ derived: 'error', eventName: 'PdxStopFailure', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: defaultSettings })).toBe(true)
   })
   it('settings.events legacy key disables PdxXxx event (W2)', () => {
     // user previously toggled "Notification" off in settings UI; W2 cc still
     // broadcasts PdxNotification but normalize → legacy key lookup hits.
-    expect(shouldNotify({ derived: 'waiting', eventName: 'PdxNotification', compositeKey: 'host:abc', focusedCompositeKey: '', hasTab: true, settings: { ...defaultSettings, events: { Notification: false } } })).toBe(false)
+    expect(shouldNotify({ derived: 'waiting', eventName: 'PdxNotification', compositeKey: 'host:abc', visibleInActiveTab: false, hasTab: true, settings: { ...defaultSettings, events: { Notification: false } } })).toBe(false)
   })
 })
 
@@ -491,7 +491,7 @@ function makeErrorParams(ck: string, errorString: string, eventName = 'StopFailu
     derived: 'error',
     eventName,
     compositeKey: ck,
-    focusedCompositeKey: '',
+    visibleInActiveTab: false,
     hasTab: true,
     settings: errorSettings,
     errorString,
@@ -812,7 +812,7 @@ describe('debounce isolation guards', () => {
       derived: 'waiting' as const,
       eventName: 'PermissionRequest',
       compositeKey: 'host:sess',
-      focusedCompositeKey: '',
+      visibleInActiveTab: false,
       hasTab: true,
       settings: errorSettings,
     }
@@ -1074,13 +1074,10 @@ describe('worker (execution) tabs in the notification dispatcher', () => {
     unmount()
   })
 
-  // Controller ruling (worker-pane theme spec §L1): the worker projection
-  // (useWorkerAgentProjection) covers every execution pane, but the tab
-  // lookup this dispatcher uses (`findTabBySessionCode`) is primary-pane
-  // only — same as a tmux agent tab. So a worker sitting in a *secondary*
-  // split pane has `hasTab: false` here, exactly like a tab with no worker
-  // tab open at all, and is gated by `notifyWithoutTab` the same way.
-  it('a worker as the secondary pane of a split tab has no tab to route to — not notified when notifyWithoutTab is off', () => {
+  // #1840 (was: "has no tab to route to — not notified"): the dispatcher's tab lookup walks every pane, like the
+  // worker projection (useWorkerAgentProjection, spec §L1) — a worker sitting in a *secondary* split pane has a tab,
+  // so `notifyWithoutTab` off does not silence it. Split-pane cases in full: useNotificationDispatcher.splitpane.test.ts.
+  it('a worker as the secondary pane of a split tab has a tab — notified when notifyWithoutTab is off (#1840)', () => {
     const splitTab: Tab = {
       id: 'tx', pinned: false, locked: false, createdAt: 0,
       layout: {
@@ -1094,7 +1091,7 @@ describe('worker (execution) tabs in the notification dispatcher', () => {
     useTabStore.setState({ tabs: { [splitTab.id]: splitTab }, tabOrder: [splitTab.id], activeTabId: null })
     const { unmount } = renderHook(() => useNotificationDispatcher())
     dispatch({ status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2, detail: {} })
-    expect(showNotification).not.toHaveBeenCalled()
+    expect(showNotification).toHaveBeenCalledTimes(1)
     unmount()
   })
 

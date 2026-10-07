@@ -9,7 +9,7 @@ function tab(): Tab {
 
 beforeEach(() => {
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
-  usePaneFocusStore.setState({ recent: {} })
+  usePaneFocusStore.setState({ recent: {}, focusRequest: null })
 })
 
 describe('usePaneFocusStore.touch', () => {
@@ -124,5 +124,31 @@ describe('usePaneFocusStore cleanup subscription (spec §8.1)', () => {
     expect(usePaneFocusStore.getState().recent).toEqual({ [b.id]: ['pb'] })
 
     installPaneFocusCleanup()
+  })
+})
+
+describe('usePaneFocusStore.requestFocus (#1840 review A1)', () => {
+  const s = () => usePaneFocusStore.getState()
+
+  it('makes the pane its tab\'s most recent one and posts a request with a larger nonce every time', () => {
+    s().requestFocus('t1', 'a')
+    const first = s().focusRequest!
+    expect(s().recent.t1).toEqual(['a'])
+    expect(first).toMatchObject({ tabId: 't1', paneId: 'a', taken: false })
+    s().requestFocus('t1', 'a')
+    expect(s().focusRequest!.nonce).toBeGreaterThan(first.nonce)
+  })
+
+  it('takeFocusRequest claims a request once; release undoes a claim; a replaced request is never claimed', () => {
+    s().requestFocus('t1', 'a')
+    const n = s().focusRequest!.nonce
+    expect(s().takeFocusRequest(n)).toBe(true)
+    expect(s().takeFocusRequest(n)).toBe(false)
+    s().releaseFocusRequest(n)
+    expect(s().takeFocusRequest(n)).toBe(true)
+    s().requestFocus('t1', 'b')
+    expect(s().takeFocusRequest(n)).toBe(false)
+    s().releaseFocusRequest(n) // names the old request: the newer one is not touched
+    expect(s().focusRequest).toMatchObject({ paneId: 'b', taken: false })
   })
 })

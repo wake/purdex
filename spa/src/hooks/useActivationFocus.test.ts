@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { StrictMode } from 'react'
-import { renderHook } from '@testing-library/react'
-import { useActivationFocus } from './useActivationFocus'
+import { StrictMode, createElement, type ReactNode } from 'react'
+import { act, renderHook } from '@testing-library/react'
+import { PaneIdentityContext, useActivationFocus } from './useActivationFocus'
+import { usePaneFocusStore } from '../stores/usePaneFocusStore'
 
 interface Props {
   isActive: boolean
@@ -169,5 +170,103 @@ describe('useActivationFocus', () => {
       expect(frames).toHaveLength(0)
       expect(focus).toHaveBeenCalledTimes(1)
     })
+
+    it('StrictMode: a request in a tab on screen still focuses exactly once, after its frame', () => {
+      usePaneFocusStore.setState({ recent: {}, focusRequest: null })
+      const focus = vi.fn()
+      mountInPane({ isActive: true, isFocusTarget: true, focusFn: focus }, { raf: true }, true)
+      flush()
+      focus.mockClear()
+      act(() => { usePaneFocusStore.getState().requestFocus('t1', 'p1') })
+      expect(focus).not.toHaveBeenCalled()
+      flush()
+      expect(focus).toHaveBeenCalledTimes(1)
+      expect(focus).toHaveBeenLastCalledWith('request')
+    })
+
+    it('a request whose frame never ran (the pane unmounted first) is not used up: the next mount serves it', () => {
+      usePaneFocusStore.setState({ recent: {}, focusRequest: null })
+      const focus = vi.fn()
+      const first = mountInPane({ isActive: true, isFocusTarget: true, focusFn: focus }, { raf: true })
+      flush()
+      act(() => { usePaneFocusStore.getState().requestFocus('t1', 'p1') })
+      first.unmount()
+      focus.mockClear()
+      mountInPane({ isActive: true, isFocusTarget: true, focusFn: focus }, { raf: true })
+      flush()
+      expect(focus).toHaveBeenCalledTimes(1)
+      expect(focus).toHaveBeenLastCalledWith('request')
+    })
+  })
+})
+
+/** Mounts the hook inside pane t1/p1 (the identity PaneLayoutRenderer provides). */
+function mountInPane(initial: Props, opts?: { raf?: boolean }, strict = false) {
+  const wrapper = ({ children }: { children: ReactNode }) => {
+    const inner = createElement(PaneIdentityContext.Provider, { value: { tabId: 't1', paneId: 'p1' } }, children)
+    return strict ? createElement(StrictMode, null, inner) : inner
+  }
+  return renderHook((p: Props) => useActivationFocus(p.isActive, p.isFocusTarget, p.focusFn, opts), { initialProps: initial, wrapper })
+}
+
+// #1840 review A1: a one-shot explicit request (a notification click) focuses its pane even in a tab already on
+// screen, where no activation happens; used once, and never a second focus next to the activation's.
+describe('useActivationFocus — an explicit focus request (#1840 review A1)', () => {
+  const request = (paneId = 'p1') => act(() => { usePaneFocusStore.getState().requestFocus('t1', paneId) })
+  beforeEach(() => usePaneFocusStore.setState({ recent: {}, focusRequest: null }))
+
+  it('the tab on screen: each request for this pane focuses it once, as a request; re-renders add nothing', () => {
+    const focus = vi.fn()
+    const { rerender } = mountInPane({ isActive: true, isFocusTarget: true, focusFn: focus })
+    focus.mockClear()
+    request()
+    expect(focus).toHaveBeenCalledTimes(1)
+    expect(focus).toHaveBeenLastCalledWith('request')
+    rerender({ isActive: true, isFocusTarget: true, focusFn: focus })
+    expect(focus).toHaveBeenCalledTimes(1)
+    request()
+    expect(focus).toHaveBeenCalledTimes(2)
+  })
+
+  it('a request for another pane, or this pane no longer the target → no focus', () => {
+    const focus = vi.fn()
+    const { rerender } = mountInPane({ isActive: true, isFocusTarget: true, focusFn: focus })
+    focus.mockClear()
+    request('p2')
+    expect(focus).not.toHaveBeenCalled()
+    rerender({ isActive: true, isFocusTarget: false, focusFn: focus })
+    request()
+    expect(focus).not.toHaveBeenCalled()
+  })
+
+  it('the tab hidden: the request waits for the activation, which focuses exactly once', () => {
+    const focus = vi.fn()
+    const { rerender } = mountInPane({ isActive: false, isFocusTarget: true, focusFn: focus })
+    request()
+    expect(focus).not.toHaveBeenCalled()
+    rerender({ isActive: true, isFocusTarget: true, focusFn: focus })
+    expect(focus).toHaveBeenCalledTimes(1)
+    expect(focus).toHaveBeenLastCalledWith('request')
+  })
+
+  it('the request and the activation in one commit → one focus', () => {
+    const focus = vi.fn()
+    const { rerender } = mountInPane({ isActive: false, isFocusTarget: true, focusFn: focus })
+    act(() => {
+      usePaneFocusStore.getState().requestFocus('t1', 'p1')
+      rerender({ isActive: true, isFocusTarget: true, focusFn: focus })
+    })
+    expect(focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('a used request does not focus a remount of the pane again (only the mount\'s own activation does)', () => {
+    const focus = vi.fn()
+    const first = mountInPane({ isActive: true, isFocusTarget: true, focusFn: focus })
+    request()
+    first.unmount()
+    focus.mockClear()
+    mountInPane({ isActive: true, isFocusTarget: true, focusFn: focus })
+    expect(focus).toHaveBeenCalledTimes(1)
+    expect(focus).toHaveBeenLastCalledWith('activation')
   })
 })

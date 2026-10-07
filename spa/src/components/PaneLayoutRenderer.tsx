@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
+import { PaneIdentityContext } from '../hooks/useActivationFocus'
 import { resolvePaneRenderer, type PaneRendererProps } from '../lib/module-registry'
 import { getLayoutKey, collectLeaves, swapPaneContent, countLeaves, findPane } from '../lib/pane-tree'
 import { PaneSplitter } from './PaneSplitter'
@@ -70,6 +71,8 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
   const leafId = layout.type === 'leaf' ? layout.pane.id : null
   const focusTargetId = usePaneFocusStore((s) => (leafId ? focusTargetOf({ layout: tabLayout }, s.recent[tabId]) : null))
   const isFocusTarget = leafId !== null && focusTargetId === leafId
+  // Which pane the renderer draws, for the explicit focus request its `useActivationFocus` answers (#1840 A1).
+  const paneIdentity = useMemo(() => (leafId ? { tabId, paneId: leafId } : null), [tabId, leafId])
 
   if (layout.type === 'leaf') {
     let body: ReactNode
@@ -103,7 +106,11 @@ export function PaneLayoutRenderer({ layout, tabId, isActive, showHeader = false
         const paneKind = resolution.paneKind
         Component = () => <Custom moduleId={moduleId} paneKind={paneKind} />
       }
-      body = <Component pane={layout.pane} isActive={isActive} isFocusTarget={isFocusTarget} />
+      body = (
+        <PaneIdentityContext.Provider value={paneIdentity}>
+          <Component pane={layout.pane} isActive={isActive} isFocusTarget={isFocusTarget} />
+        </PaneIdentityContext.Provider>
+      )
     }
     // Right-click interception: editor(Monaco) panes are never intercepted so
     // their native menu survives; Shift+right-click is a universal escape hatch

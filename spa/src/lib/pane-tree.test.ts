@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, currentLayoutPattern, swapPaneContent, remountLeaf, countPanesOnSession } from './pane-tree'
+import { getPrimaryPane, findPane, updatePaneInLayout, getLayoutKey, findTabBySessionCode, findTabAndPaneBySessionCode, paneShowsAgent, scanPaneTree, splitAtPane, removePane, countLeaves, collectLeaves, applyLayoutPattern, currentLayoutPattern, swapPaneContent, remountLeaf, countPanesOnSession } from './pane-tree'
 import type { PaneLayout, Pane, PaneContent } from '../types/tab'
 import { useHostStore } from '../stores/useHostStore'
 
@@ -521,5 +521,168 @@ describe('countPanesOnSession (exec-to-terminal spec §4.3)', () => {
     expect(countPanesOnSession(tabs, 'h', 'abc123', 'p6')).toBe(3)
     expect(countPanesOnSession(tabs, 'h', 'zzz')).toBe(0)
     expect(countPanesOnSession({}, 'h', 'abc123')).toBe(0)
+  })
+})
+
+// #1840: the notification dispatcher's lookups walk every pane of a tab, not just its primary one.
+describe('findTabAndPaneBySessionCode / paneShowsAgent (#1840)', () => {
+  const sess = (id: string, hostId: string, sessionCode: string): PaneLayout =>
+    ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId, sessionCode, mode: 'terminal', cachedName: '', tmuxInstance: '' } } })
+  const exec = (id: string, executionId: string, host?: string): PaneLayout =>
+    ({ type: 'leaf', pane: { id, content: { kind: 'execution', executionId, ...(host !== undefined ? { host } : {}) } } })
+
+  afterEach(() => {
+    useHostStore.setState({ hostOrder: DEFAULT_HOST_ORDER })
+  })
+
+  it('returns undefined for no tabs and for tabs that do not show the key', () => {
+    expect(findTabAndPaneBySessionCode({}, 'h', 'abc123')).toBeUndefined()
+    const tabs = { t1: { layout: mkSplit('s1', 'h', [mkLeaf('p1'), sess('p2', 'h', 'other1')]) } }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toBeUndefined()
+  })
+
+  it('a primary leaf matches with its pane id', () => {
+    const tabs = { t1: { layout: sess('p1', 'h', 'abc123') } }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toEqual({ tabId: 't1', paneId: 'p1' })
+  })
+
+  it('finds a tmux agent in the SECONDARY pane of a split', () => {
+    const tabs = { t1: { layout: mkSplit('s1', 'h', [mkLeaf('p1'), sess('p2', 'h', 'abc123')]) } }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toEqual({ tabId: 't1', paneId: 'p2' })
+  })
+
+  it('finds an agent at any depth of nested splits', () => {
+    const tabs = {
+      t1: { layout: mkSplit('s1', 'h', [mkLeaf('p1'), mkSplit('s2', 'v', [mkLeaf('p2'), mkSplit('s3', 'h', [mkLeaf('p3'), sess('p4', 'h', 'abc123')])])]) },
+    }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toEqual({ tabId: 't1', paneId: 'p4' })
+  })
+
+  it('prefers the primary pane when the same tab shows the key twice', () => {
+    const tabs = { t1: { layout: mkSplit('s1', 'h', [sess('p1', 'h', 'abc123'), sess('p2', 'h', 'abc123')]) } }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toEqual({ tabId: 't1', paneId: 'p1' })
+  })
+
+  it('prefers a tab whose PRIMARY pane shows the key over an earlier tab that shows it in a secondary pane', () => {
+    const tabs = {
+      t1: { layout: mkSplit('s1', 'h', [mkLeaf('p1'), sess('p2', 'h', 'abc123')]) },
+      t2: { layout: mkSplit('s2', 'v', [sess('p3', 'h', 'abc123'), mkLeaf('p4')]) },
+    }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toEqual({ tabId: 't2', paneId: 'p3' })
+  })
+
+  it('without a primary match, the first secondary match in tab order wins', () => {
+    const tabs = {
+      t1: { layout: mkSplit('s1', 'h', [mkLeaf('p1'), sess('p2', 'h', 'abc123')]) },
+      t2: { layout: mkSplit('s2', 'v', [mkLeaf('p3'), sess('p4', 'h', 'abc123')]) },
+    }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toEqual({ tabId: 't1', paneId: 'p2' })
+  })
+
+  it('disambiguates the same code on two hosts by hostId, in secondary panes, regardless of tab order', () => {
+    const a = { layout: mkSplit('sa', 'h', [mkLeaf('pa1'), sess('pa2', 'host-a', 'zk16vd')]) }
+    const b = { layout: mkSplit('sb', 'h', [mkLeaf('pb1'), sess('pb2', 'host-b', 'zk16vd')]) }
+    for (const tabs of [{ tA: a, tB: b }, { tB: b, tA: a }]) {
+      expect(findTabAndPaneBySessionCode(tabs, 'host-a', 'zk16vd')).toEqual({ tabId: 'tA', paneId: 'pa2' })
+      expect(findTabAndPaneBySessionCode(tabs, 'host-b', 'zk16vd')).toEqual({ tabId: 'tB', paneId: 'pb2' })
+      expect(findTabAndPaneBySessionCode(tabs, 'host-c', 'zk16vd')).toBeUndefined()
+    }
+  })
+
+  it('a worker in a secondary pane matches exec-<id> on its host hint only', () => {
+    const tabs = { t1: { layout: mkSplit('s1', 'h', [mkLeaf('p1'), exec('p2', 'e1', 'h2')]) } }
+    expect(findTabAndPaneBySessionCode(tabs, 'h2', 'exec-e1')).toEqual({ tabId: 't1', paneId: 'p2' })
+    expect(findTabAndPaneBySessionCode(tabs, 'h1', 'exec-e1')).toBeUndefined()
+    expect(findTabAndPaneBySessionCode(tabs, 'h2', 'exec-e2')).toBeUndefined()
+    // the bare execution id is not an agent key
+    expect(findTabAndPaneBySessionCode(tabs, 'h2', 'e1')).toBeUndefined()
+  })
+
+  it('a host-less or empty-host worker in a secondary pane resolves to the first host, like the projection', () => {
+    useHostStore.setState({ hostOrder: ['h9', 'h1'] })
+    for (const host of [undefined, '']) {
+      const tabs = { t1: { layout: mkSplit('s1', 'h', [mkLeaf('p1'), exec('p2', 'e1', host)]) } }
+      expect(findTabAndPaneBySessionCode(tabs, 'h9', 'exec-e1')).toEqual({ tabId: 't1', paneId: 'p2' })
+      expect(findTabAndPaneBySessionCode(tabs, 'h1', 'exec-e1')).toBeUndefined()
+    }
+  })
+
+  it('a tmux pane on code e1 is not the worker exec-e1, and a worker abc123 is not the tmux code abc123', () => {
+    const tabs = { t1: { layout: mkSplit('s1', 'h', [sess('p1', 'h', 'e1'), exec('p2', 'abc123', 'h')]) } }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'exec-e1')).toBeUndefined()
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toBeUndefined()
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'exec-abc123')).toEqual({ tabId: 't1', paneId: 'p2' })
+  })
+
+  it('a corrupted (childless) split matches nothing and does not throw', () => {
+    const tabs = { t1: { layout: { type: 'split', id: 'broken', direction: 'h', children: [], sizes: [] } as PaneLayout } }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toBeUndefined()
+  })
+
+  it('agrees with findTabBySessionCode on every single-leaf tab (same matching rules)', () => {
+    useHostStore.setState({ hostOrder: ['h9', 'h1'] })
+    const tabs = {
+      tA: { layout: sess('pA', 'host-a', 'zk16vd') },
+      tB: { layout: sess('pB', 'host-b', 'zk16vd') },
+      tE: { layout: exec('pE', 'e1', 'h2') },
+      tN: { layout: exec('pN', 'e2') },
+      tZ: { layout: exec('pZ', 'e3', '') },
+      tD: { layout: mkLeaf('pD') },
+    }
+    const probes: Array<[string, string]> = [
+      ['host-a', 'zk16vd'], ['host-b', 'zk16vd'], ['host-c', 'zk16vd'],
+      ['h2', 'exec-e1'], ['h1', 'exec-e1'], ['h2', 'e1'],
+      ['h9', 'exec-e2'], ['h1', 'exec-e2'], ['h9', 'exec-e3'], ['h1', 'exec-e3'], ['h', 'abc123'],
+    ]
+    for (const [hostId, code] of probes) {
+      expect(findTabAndPaneBySessionCode(tabs, hostId, code)?.tabId).toBe(findTabBySessionCode(tabs, hostId, code))
+    }
+  })
+
+  it('paneShowsAgent applies the same rules to one pane content', () => {
+    useHostStore.setState({ hostOrder: ['h9'] })
+    const tmux: PaneContent = { kind: 'tmux-session', hostId: 'h', sessionCode: 'abc123', mode: 'terminal', cachedName: '', tmuxInstance: '' }
+    expect(paneShowsAgent(tmux, 'h', 'abc123')).toBe(true)
+    expect(paneShowsAgent(tmux, 'h2', 'abc123')).toBe(false)
+    expect(paneShowsAgent(tmux, 'h', 'abc124')).toBe(false)
+    expect(paneShowsAgent({ kind: 'execution', executionId: 'e1', host: 'h2' }, 'h2', 'exec-e1')).toBe(true)
+    expect(paneShowsAgent({ kind: 'execution', executionId: 'e1', host: 'h2' }, 'h9', 'exec-e1')).toBe(false)
+    expect(paneShowsAgent({ kind: 'execution', executionId: 'e1' }, 'h9', 'exec-e1')).toBe(true)
+    expect(paneShowsAgent({ kind: 'dashboard' }, 'h', 'abc123')).toBe(false)
+  })
+})
+
+// #1840 review A2: session codes encode tmux's `$N`, which a restarted tmux server hands out again, so an ENDED pane's
+// code can be a NEW live session's. An ended (terminated) pane shows no agent: it never matches.
+describe('an ended tmux pane shows no agent (#1840 A2)', () => {
+  const REASONS = ['session-closed', 'tmux-restarted', 'host-removed', 'conversation-ended'] as const
+  const ended = (id: string, code: string, reason: (typeof REASONS)[number] = 'tmux-restarted'): PaneLayout =>
+    ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId: 'h', sessionCode: code, mode: 'terminal', cachedName: '', tmuxInstance: 'old', terminated: reason } } })
+  const live = (id: string, code: string): PaneLayout =>
+    ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId: 'h', sessionCode: code, mode: 'terminal', cachedName: '', tmuxInstance: 'new' } } })
+
+  it('paneShowsAgent is false for a terminated tmux pane, whatever the reason', () => {
+    for (const reason of REASONS) {
+      const layout = ended('p1', 'abc123', reason)
+      expect(layout.type === 'leaf' && paneShowsAgent(layout.pane.content, 'h', 'abc123')).toBe(false)
+    }
+  })
+
+  it('a terminated primary and a live secondary on the same code → the live pane', () => {
+    const tabs = { t1: { layout: mkSplit('s1', 'h', [ended('p1', 'abc123'), live('p2', 'abc123')]) } }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toEqual({ tabId: 't1', paneId: 'p2' })
+  })
+
+  it('a terminated primary in an earlier tab does not win over a live secondary in a later tab', () => {
+    const tabs = {
+      t1: { layout: ended('p1', 'abc123') },
+      t2: { layout: mkSplit('s2', 'h', [mkLeaf('p2'), live('p3', 'abc123')]) },
+    }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toEqual({ tabId: 't2', paneId: 'p3' })
+  })
+
+  it('a terminated pane alone → not found, as primary or as a secondary pane', () => {
+    expect(findTabAndPaneBySessionCode({ t1: { layout: ended('p1', 'abc123') } }, 'h', 'abc123')).toBeUndefined()
+    expect(findTabAndPaneBySessionCode({ t1: { layout: mkSplit('s1', 'h', [mkLeaf('p1'), ended('p2', 'abc123')]) } }, 'h', 'abc123')).toBeUndefined()
   })
 })
