@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -27,6 +28,47 @@ func (f *fixture) flagExists(sid string) bool {
 
 func permReq(sid, input string) team.HookDecideRequest {
 	return team.HookDecideRequest{Agent: "cc", Event: "PermissionRequest", SessionID: sid, ToolName: "Bash", ToolInput: json.RawMessage(input)}
+}
+
+// R2 attacker: a close's flag refresh read "no open row", a concurrent
+// PreToolUse opened row B and wrote the flag, then the refresh removed it —
+// B open with no flag, so `pdx hook` never forwards its PostToolUse / Stop
+// and the card stays open. The close (read, close, refresh) and the open
+// are one createMu critical section. Mutation gate: drop the createMu in
+// closeTerminalOnlyAll / closeTerminalOnlyForTool → the flag is gone here.
+func TestObserve_CloseRefreshDoesNotRemoveAConcurrentOpensFlag(t *testing.T) {
+	for _, closer := range []team.HookDecideRequest{
+		{Agent: "cc", Event: "Stop", SessionID: "sid-1"},
+		{Agent: "cc", Event: "PostToolUse", SessionID: "sid-1", ToolName: "AskUserQuestion", ToolUseID: "toolu_a"},
+	} {
+		t.Run(closer.Event, func(t *testing.T) {
+			f := newFixture(t)
+			f.m.observeHookEvent(preAsk("sid-1", "toolu_a"))
+			opened := make(chan struct{})
+			f.m.afterAskFlagQuery = func() {
+				f.m.afterAskFlagQuery = nil
+				go func() {
+					f.m.observeHookEvent(preAsk("sid-1", "toolu_b"))
+					close(opened)
+				}()
+				// Give the open the window: unguarded it completes here; under
+				// createMu it waits for the close to finish.
+				select {
+				case <-opened:
+				case <-time.After(200 * time.Millisecond):
+				}
+			}
+			f.m.observeHookEvent(closer)
+			<-opened
+			rows, _ := f.m.store.OpenTerminalOnlyBySession("sid-1")
+			if len(rows) != 1 {
+				t.Fatalf("want row B open, got %d rows", len(rows))
+			}
+			if !f.flagExists("sid-1") {
+				t.Fatal("row B is open but its flag was removed by the stale refresh")
+			}
+		})
+	}
 }
 
 // Without the mod, a PreToolUse/AskUserQuestion opens a terminal_only row

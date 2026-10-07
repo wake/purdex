@@ -161,7 +161,13 @@ func answersOf(raw json.RawMessage) map[string]string {
 	return r.ToolResponse.Answers
 }
 
+// The closes hold createMu from the read of the open rows through the flag
+// refresh, as openTerminalOnly does from its check through the flag write:
+// otherwise a refresh that read "no row" could remove the flag a concurrent
+// open just wrote, and that row's closing events would never be forwarded.
 func (m *Module) closeTerminalOnlyForTool(req team.HookDecideRequest) {
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
 	rows, err := m.store.OpenTerminalOnlyBySession(req.SessionID)
 	if err != nil {
 		m.logf("[team] hook observe: %v", err)
@@ -199,6 +205,8 @@ func (m *Module) closeTerminalOnlyForTool(req team.HookDecideRequest) {
 }
 
 func (m *Module) closeTerminalOnlyAll(agent, sessionID string) {
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
 	rows, err := m.store.OpenTerminalOnlyBySession(sessionID)
 	if err != nil {
 		m.logf("[team] hook observe: %v", err)
@@ -215,10 +223,14 @@ func (m *Module) closeTerminalOnlyAll(agent, sessionID string) {
 
 // refreshAskFlag keeps the flag iff the session still has an open
 // terminal_only row (a failed read keeps it: a stale flag is cheap).
+// Callers hold createMu.
 func (m *Module) refreshAskFlag(agent, sessionID string) {
 	rows, err := m.store.OpenTerminalOnlyBySession(sessionID)
 	if err != nil {
 		return
+	}
+	if m.afterAskFlagQuery != nil {
+		m.afterAskFlagQuery()
 	}
 	m.setAskFlag(agent, sessionID, len(rows) > 0)
 }

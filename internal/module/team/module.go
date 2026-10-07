@@ -122,6 +122,12 @@ type Module struct {
 	// tool use in that window and prove it waits for createMu. nil in
 	// production.
 	afterOpenByToolUse func()
+	// afterAskFlagQuery, when set, runs in refreshAskFlag between its read of
+	// the session's open terminal_only rows and the flag write/removal; tests
+	// open a row for the same session in that window and prove it waits for
+	// createMu (else the stale read removes the new row's flag). nil in
+	// production.
+	afterAskFlagQuery func()
 	// beforeTerminalClose is a test seam run by a terminal relay report just
 	// before it closes the op's approval row (the approve that races it).
 	beforeTerminalClose func(opID string)
