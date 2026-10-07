@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"lab.protype.tw/wake/nexen/bus"
+	"lab.protype.tw/wake/nexen/execution"
 	"lab.protype.tw/wake/nexen/store"
 )
 
@@ -23,7 +24,8 @@ func publish(b *bus.Bus, id, kind string) {
 	b.PublishDurable(store.Event{ExecutionID: id, Kind: kind, Payload: json.RawMessage(`{}`)})
 }
 
-// specTriggers is §3.2's trigger list, spelled out.
+// specTriggers is §3.2's trigger list, spelled out, plus peer_message
+// (Nexen v0.20.0), which the list predates.
 var specTriggers = []string{
 	"execution.delegated", "execution.rejected", "execution.running", "execution.terminal",
 	"execution.interrupted", "execution.error", "execution.message_accepted", "execution.interrupt_requested",
@@ -31,6 +33,47 @@ var specTriggers = []string{
 	"execution.unarchived", "execution.title_changed", "execution.observer_attached", "execution.observer_detached",
 	"execution.credential_repaired", "permission.requested", "permission.resolved", "tool_use", "tool_result",
 	"task_start", "task_end", "result", "lease.acquired", "lease.released", "lease.renewed",
+	"peer_message",
+}
+
+// notRowChanges are the durable kinds Nexen declares (execution.EventKinds)
+// that deliberately do not mark their execution, each with the reason it
+// never changes a list row. Empty: every kind Nexen declares today can.
+var notRowChanges = map[string]string{}
+
+// undeclaredTriggers are the triggers Nexen does not declare in
+// execution.EventKinds, each with the reason.
+var undeclaredTriggers = map[string]string{
+	"result":        "provider-native (claude's stream-json), an open set Nexen only passes through",
+	"lease.renewed": "transient: bus only, never persisted, so not a durable kind",
+}
+
+// Every durable kind Nexen declares is classified — a trigger, or in
+// notRowChanges with its reason — so a kind a later Nexen adds fails here
+// until someone decides whether it changes a row (peer_message, Nexen
+// v0.20.0, was missed that way). And every trigger is a kind Nexen
+// declares, or in undeclaredTriggers: a kind Nexen renames would otherwise
+// leave a trigger that never fires.
+func TestProjector_EveryNexenEventKindIsClassified(t *testing.T) {
+	declared := map[string]bool{}
+	for _, kind := range execution.EventKinds {
+		declared[kind] = true
+		_, excluded := notRowChanges[kind]
+		switch {
+		case triggerKinds[kind] && excluded:
+			t.Errorf("%q is both a trigger and in notRowChanges", kind)
+		case !triggerKinds[kind] && !excluded:
+			t.Errorf("Nexen event kind %q is neither in triggerKinds nor in notRowChanges: decide whether it changes a list row", kind)
+		}
+	}
+	for kind := range notRowChanges {
+		assert.True(t, declared[kind], "notRowChanges lists %q, which Nexen no longer declares", kind)
+	}
+	for kind := range triggerKinds {
+		_, undeclared := undeclaredTriggers[kind]
+		assert.True(t, declared[kind] != undeclared,
+			"trigger %q: declared by Nexen = %v, in undeclaredTriggers = %v; exactly one must hold", kind, declared[kind], undeclared)
+	}
 }
 
 func TestProjector_TriggerKindsMarkAndNoiseDoesNot(t *testing.T) {

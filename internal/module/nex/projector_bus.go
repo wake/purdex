@@ -31,6 +31,10 @@ var triggerKinds = map[string]bool{
 	"execution.delegated": true, "execution.rejected": true, "execution.running": true,
 	"execution.terminal": true, "execution.interrupted": true, "execution.error": true,
 	"execution.message_accepted": true, "execution.interrupt_requested": true,
+	// The peer equivalent of message_accepted (Nexen v0.20.0): a turn a
+	// peer creates publishes peer_message instead of it, and changes the
+	// same row fields (turn_count).
+	"peer_message":           true,
 	"execution.turn_stalled": true, "execution.turn_orphaned": true, "execution.terminated": true,
 	"execution.archived": true, "execution.unarchived": true, "execution.title_changed": true,
 	"execution.observer_attached": true, "execution.observer_detached": true,
@@ -113,8 +117,10 @@ func (p *projector) observe(f bus.Frame) {
 //
 // Only a running projector registers the hello (projector_hello.go) as an
 // OnSubscribe callback: without it no delta will ever come, and a client
-// that never gets a hello stays on its legacy path. The core has no way to
-// unregister a callback; after stop the hello is a no-op.
+// that never gets a hello stays on its legacy path. Only subscribers that
+// opted into nex.v1 get a hello or a delta; every other one never sees a
+// nex frame. The core has no way to unregister a callback; after stop the
+// hello is a no-op.
 func (m *Module) startProjector() {
 	if m.sys.bus == nil || m.core == nil || m.core.Events == nil {
 		return

@@ -21,6 +21,33 @@ type HostEvent struct {
 	Seq   uint64 `json:"seq,omitempty"`
 }
 
+// FeatureNexV1 is the opt-in to the nex execution frames (#1866, spec
+// 2026-10-08 §3.5): nex.executions.hello and nex.execution. A client asks
+// for it with /ws/host-events?nex=v1. A subscriber that did not is never
+// sent one — an old SPA, or purdex-ios, would not know what to do with an
+// unknown type on this WS, which also carries the tmux agent status,
+// notifications and sessions — and is never disconnected over one.
+const FeatureNexV1 = "nex.v1"
+
+const (
+	// defaultSendBuffer is a subscriber's send buffer, in frames.
+	defaultSendBuffer = 64
+
+	// optedInSendBuffer is the send buffer of a subscriber that opted into a
+	// feature. The only feature, nex.v1, is a strict stream
+	// (BroadcastStrictTo): a frame that does not fit closes the connection.
+	// The projector pushes one delta per changed execution, back to back,
+	// so every execution touched in one coalescing window arrives as one
+	// burst; with 64 slots, a burst of 65 would disconnect a client that
+	// merely paused for that long, as if it were dead.
+	//
+	// Memory: the channel is 1024 slice headers (24 KiB) per opted-in
+	// connection. The frames in it exist only while that client is behind
+	// — at worst a full buffer of deltas, one execution row each, until it
+	// catches up or the next frame closes it.
+	optedInSendBuffer = 1024
+)
+
 // EventSubscriber wraps a WebSocket connection with a buffered send channel.
 // A dedicated goroutine per subscriber handles all writes to avoid concurrent
 // WriteMessage calls (gorilla/websocket requires one concurrent writer max).
@@ -28,20 +55,38 @@ type HostEvent struct {
 // A subscriber handle may outlive its connection (a background retry holds
 // one, #1293): once removed, Send is a no-op and Done is closed.
 type EventSubscriber struct {
-	conn *websocket.Conn
-	send chan []byte
+	conn     *websocket.Conn
+	send     chan []byte
+	features map[string]struct{} // what it opted into when it connected; never changes
 
 	mu     sync.Mutex // guards closed; held across a send so close never races it
 	closed bool
 	done   chan struct{}
 }
 
-func newEventSubscriber(conn *websocket.Conn) *EventSubscriber {
-	return &EventSubscriber{
+// newEventSubscriber builds a subscriber that opted into features: any
+// opt-in gets optedInSendBuffer, none the default.
+func newEventSubscriber(conn *websocket.Conn, features ...string) *EventSubscriber {
+	sub := &EventSubscriber{
 		conn: conn,
-		send: make(chan []byte, 64),
+		send: make(chan []byte, defaultSendBuffer),
 		done: make(chan struct{}),
 	}
+	if len(features) > 0 {
+		sub.features = make(map[string]struct{}, len(features))
+		for _, f := range features {
+			sub.features[f] = struct{}{}
+		}
+		sub.send = make(chan []byte, optedInSendBuffer)
+	}
+	return sub
+}
+
+// Wants reports whether the subscriber opted into feature when it
+// connected.
+func (sub *EventSubscriber) Wants(feature string) bool {
+	_, ok := sub.features[feature]
+	return ok
 }
 
 // Send pushes data to the subscriber's write pump. Non-blocking — if the
@@ -107,9 +152,10 @@ func NewEventsBroadcaster() *EventsBroadcaster {
 }
 
 // Add registers a WebSocket connection as subscriber and starts its write pump.
-// Returns the subscriber handle (needed for Remove).
-func (eb *EventsBroadcaster) Add(conn *websocket.Conn) *EventSubscriber {
-	sub := newEventSubscriber(conn)
+// Returns the subscriber handle (needed for Remove). features are what the
+// connection opted into (FeatureNexV1); Add(conn) opts into nothing.
+func (eb *EventsBroadcaster) Add(conn *websocket.Conn, features ...string) *EventSubscriber {
+	sub := newEventSubscriber(conn, features...)
 	eb.mu.Lock()
 	eb.subscribers[sub] = struct{}{}
 	eb.mu.Unlock()
@@ -184,18 +230,26 @@ func (eb *EventsBroadcaster) BroadcastEvent(ev HostEvent) {
 	}
 }
 
-// BroadcastStrict sends ev to every subscriber like BroadcastEvent, except
-// that a subscriber whose buffer is full loses its connection instead of
-// this frame: it is Removed (Done closes, the WS closes), so the client
-// reconnects and starts over from a fresh subscribe.
+// BroadcastStrictTo sends ev to every subscriber that opted into feature,
+// and to no other. Unlike BroadcastEvent, a subscriber whose buffer is full
+// loses its connection instead of this frame: it is Removed (Done closes,
+// the WS closes), so the client reconnects and starts over from a fresh
+// subscribe. A subscriber that did not opt in is neither sent the frame nor
+// ever Removed over it.
 //
-// Why (#1866, spec 2026-10-08 §3.5, round 2 #4): a frame stream a client
-// checks for gaps — the nex execution deltas, numbered by a contiguous bseq
-// — cannot afford a silent drop. A dropped frame in the middle shows up as a
-// gap at the next one, but a dropped LAST frame never does: nothing follows
-// it, and the client keeps the stale row. Closing the connection turns
-// every drop into a reconnect, which the client already handles (a fresh
-// hello, then a reconcile). Nothing is repaired on the same connection.
+// Why strict (#1866, spec 2026-10-08 §3.5, round 2 #4): a frame stream a
+// client checks for gaps — the nex execution deltas, numbered by a
+// contiguous bseq — cannot afford a silent drop. A dropped frame in the
+// middle shows up as a gap at the next one, but a dropped LAST frame never
+// does: nothing follows it, and the client keeps the stale row. Closing the
+// connection turns every drop into a reconnect, which the client already
+// handles (a fresh hello, then a reconcile). Nothing is repaired on the
+// same connection.
+//
+// Why scoped: closing a connection is a cost only a client that asked for
+// the stream should pay. The same WS carries every other host event, to
+// clients that know nothing of this one; they must never see its frames,
+// let alone lose the connection over them.
 //
 // The frame is marshalled once. Subscribers that could not take it are
 // collected while the read lock is held and Removed only after it is
@@ -206,7 +260,7 @@ func (eb *EventsBroadcaster) BroadcastEvent(ev HostEvent) {
 // making those strict too is a separate decision (§3.5), not taken here.
 // Concurrent strict broadcasts are not ordered against each other — a
 // caller that needs order (the nex projector) serializes its own.
-func (eb *EventsBroadcaster) BroadcastStrict(ev HostEvent) {
+func (eb *EventsBroadcaster) BroadcastStrictTo(feature string, ev HostEvent) {
 	msg, err := json.Marshal(ev)
 	if err != nil {
 		log.Printf("events: marshal error: %v", err)
@@ -216,7 +270,7 @@ func (eb *EventsBroadcaster) BroadcastStrict(ev HostEvent) {
 	var failed []*EventSubscriber
 	eb.mu.RLock()
 	for sub := range eb.subscribers {
-		if !sub.TrySend(msg) {
+		if sub.Wants(feature) && !sub.TrySend(msg) {
 			failed = append(failed, sub)
 		}
 	}
@@ -229,9 +283,11 @@ func (eb *EventsBroadcaster) BroadcastStrict(ev HostEvent) {
 }
 
 // SendStrict queues ev for one subscriber — an OnSubscribe callback's
-// snapshot, the nex hello — with BroadcastStrict's rule: if it cannot be
+// snapshot, the nex hello — with BroadcastStrictTo's rule: if it cannot be
 // queued, the subscriber is Removed (its connection closes) rather than
-// left running without the frame. It reports whether ev was queued.
+// left running without the frame. It reports whether ev was queued. It
+// does not check what sub opted into: a caller sending a feature's frame
+// checks sub.Wants first.
 //
 // A subscriber already removed (its connection gone, or dropped by an
 // earlier strict send) is left alone: nothing is queued and false is
@@ -264,7 +320,13 @@ func (eb *EventsBroadcaster) SendStrict(sub *EventSubscriber, ev HostEvent) bool
 // but has no write pump — messages accumulate in SendCh() for test assertions.
 // Caller must call RemoveTestSubscriber when done.
 func (eb *EventsBroadcaster) AddTestSubscriber() *EventSubscriber {
-	sub := newEventSubscriber(nil)
+	return eb.AddTestSubscriberWith()
+}
+
+// AddTestSubscriberWith is AddTestSubscriber for a subscriber that opted
+// into features, as a connection's query would (HandleHostEvents).
+func (eb *EventsBroadcaster) AddTestSubscriberWith(features ...string) *EventSubscriber {
+	sub := newEventSubscriber(nil, features...)
 	eb.mu.Lock()
 	eb.subscribers[sub] = struct{}{}
 	eb.mu.Unlock()
@@ -296,9 +358,20 @@ func (eb *EventsBroadcaster) OnSubscribe(fn func(sub *EventSubscriber)) {
 	eb.onSubscribe = append(eb.onSubscribe, fn)
 }
 
+// featuresOf reads what a /ws/host-events upgrade request opts into: nex=v1
+// is FeatureNexV1; any other value of nex, or none, opts into nothing.
+func featuresOf(r *http.Request) []string {
+	if r.URL.Query().Get("nex") == "v1" {
+		return []string{FeatureNexV1}
+	}
+	return nil
+}
+
 // HandleHostEvents handles /ws/host-events — SPA subscribes for
-// status, relay, handoff, and init events.
+// status, relay, handoff, and init events. The request's query says which
+// optional frame families the subscriber opts into (featuresOf).
 func (eb *EventsBroadcaster) HandleHostEvents(w http.ResponseWriter, r *http.Request) {
+	features := featuresOf(r)
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -312,7 +385,7 @@ func (eb *EventsBroadcaster) HandleHostEvents(w http.ResponseWriter, r *http.Req
 		return nil
 	})
 
-	sub := eb.Add(conn)
+	sub := eb.Add(conn, features...)
 	defer eb.Remove(sub)
 
 	// Call all registered OnSubscribe callbacks.

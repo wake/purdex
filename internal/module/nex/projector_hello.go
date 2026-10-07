@@ -8,9 +8,10 @@ import (
 )
 
 // The hello (spec 2026-10-08 §3.5): the first nex frame a new /ws/host-events
-// subscriber gets, {"epoch": E, "bseq": n}. It is the client's baseline: a
-// delta received before it is ignored, the next one must be n+1, anything
-// else is a gap that makes the client reconcile.
+// subscriber that opted in (?nex=v1, core.FeatureNexV1) gets, {"epoch": E,
+// "bseq": n}. It is the client's baseline: a delta received before it is
+// ignored, the next one must be n+1, anything else is a gap that makes the
+// client reconcile.
 //
 // Why it is sent under the slot: the core registers a subscriber (Add)
 // before it runs the OnSubscribe callbacks (§1 F6), so deltas can reach the
@@ -43,8 +44,12 @@ type helloValue struct {
 // 2 #4): the client reconnects and gets a new hello, rather than running
 // without a baseline. A projector that stopped sends nothing: no delta will
 // follow, so a baseline would mean nothing.
+//
+// A subscriber that did not opt into nex.v1 gets no hello, and nothing
+// else happens to it: the slot is not even asked for, so neither a busy
+// slot nor a full buffer can cost it its connection.
 func (p *projector) sendHello(sub *core.EventSubscriber) {
-	if p.ctx.Err() != nil {
+	if !sub.Wants(core.FeatureNexV1) || p.ctx.Err() != nil {
 		return
 	}
 	err := p.slot.hold(p.ctx, "hello", p.timing.helloWait, func(context.Context) error {

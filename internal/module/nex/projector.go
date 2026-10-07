@@ -364,8 +364,9 @@ func (p *projector) flush(id string, b *dirtyExec) {
 
 // push numbers one delta and broadcasts it. It runs inside the slot, right
 // after the read's ver was taken (readThen), so broadcast order is bseq
-// order (§3.5). The broadcast is strict: a subscriber that cannot take the
-// frame is disconnected rather than left without it.
+// order (§3.5). The broadcast reaches only the subscribers that opted into
+// nex.v1, and it is strict: one of them that cannot take the frame is
+// disconnected rather than left without it.
 func (p *projector) push(id string, st slotStamp, cause []string, row json.RawMessage, found bool) pushedRow {
 	if !found {
 		row = nil // encodes as null: remove
@@ -378,7 +379,7 @@ func (p *projector) push(id string, st slotStamp, cause []string, row json.RawMe
 		p.logf("nex-delta: encoding the delta of exec=%s failed: %v", id, err)
 		return pushedRow{}
 	}
-	p.events.BroadcastStrict(core.HostEvent{Type: deltaEventType, Value: value})
+	p.events.BroadcastStrictTo(core.FeatureNexV1, core.HostEvent{Type: deltaEventType, Value: value})
 	return p.recordPushed(id, st.Ver, row, found)
 }
 

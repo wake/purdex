@@ -84,6 +84,7 @@ Author: purdex-6d. Base: main (alpha.587). Nexen pinned v0.19.0.
   - `execution.{delegated, rejected, running, terminal, interrupted, error, message_accepted, interrupt_requested, turn_stalled, turn_orphaned, terminated, archived, unarchived, title_changed, observer_attached, observer_detached, credential_repaired}`
   - `permission.{requested, resolved}`, `tool_use`, `tool_result`, `task_start`, `task_end`, `result` (cost)
   - `lease.{acquired, released}` (durable) and `lease.renewed` (transient). Lease writes bump `updated_at`, which rows show.
+  - `peer_message` (Nexen v0.20.0): a peer-created turn publishes it instead of `execution.message_accepted` (codex PR1b R1). A test lists every kind in Nexen's `execution.EventKinds` as either a trigger or an explicitly excluded non-row change, so a kind added in a later Nexen fails the test until someone classifies it.
 - **Never:** `stream_event`, `stream_snapshot`, or the other raw provider frames.
 - **Coalescing per execution:** trailing 75 ms, capped at 250 ms after the first mark. The trigger kinds are accumulated into a set for that flush (`cause`).
 
@@ -132,6 +133,13 @@ Author: purdex-6d. Base: main (alpha.587). Nexen pinned v0.19.0.
   - `Remove` takes `eb.mu.Lock`, so failed subscribers are collected under `RLock` and removed after it is released.
   - A dropped hello is the same case: the connection closes and the next connection gets a new hello. So "legacy for that connection" no longer happens.
   - Other event types keep today's best-effort `Broadcast`. Making all frames strict is a separate decision, not taken here.
+- **Only subscribers that opted in see nex frames (coordinator ruling at PR1b).**
+  - The same `/ws/host-events` connection carries tmux agent status, notifications, sessions and approvals. An old SPA or purdex-ios (whose handling of unknown types is unknown) must neither receive `nex.*` nor be disconnected because of it.
+  - A client opts in when it connects: `/ws/host-events?nex=v1`. The subscriber records the feature `nex.v1`. Any other value, or no parameter, is not an opt-in.
+  - Deltas use a **feature-scoped strict broadcast**: sent only to subscribers that want `nex.v1`, and only those can be removed by it. Every other subscriber is neither sent to nor removed.
+  - The hello (`OnSubscribe`) is sent only to an opted-in subscriber; for anyone else the callback does nothing.
+  - **Burst-sized buffer** (codex PR1b attacker): opted-in subscribers get a 1,024-slot send buffer instead of 64. One coalescing window can flush one delta per execution, and a burst of 65 must not look like a dead client. A disconnect then means a client that really stopped draining.
+  - PR2b's SPA adds `nex=v1` to its host-events URL (next to the ticket).
 - `bseq` reaching 2^53−1 rotates the epoch (same rule as sessions).
 
 ### 3.6 Bus lifecycle (fixes R12, R13)
@@ -139,7 +147,7 @@ Author: purdex-6d. Base: main (alpha.587). Nexen pinned v0.19.0.
 - When the consumer's channel closes while `ctx` is live (slow-subscriber kick, or the bus closing):
   - back off (100 ms, doubling to 5 s);
   - `Subscribe` again;
-  - **after** the new subscription is registered, under the slot: new epoch, `bseq = 0`, broadcast a hello to everyone, and mark every execution in `lastPushed` dirty.
+  - **after** the new subscription is registered, under the slot: new epoch, `bseq = 0`, broadcast a hello to every opted-in subscriber (`nex.v1`, §3.5), and mark every execution in `lastPushed` dirty.
   - Every client then reconciles with list pages read after the new subscription existed, so nothing between the old channel's close and the re-registration is lost.
 - A closed bus returns an already-closed channel. The backoff keeps that from busy-looping, and `ctx` ends it.
 - An engine rebuild starts a new projector bound to the new bus.
@@ -487,3 +495,11 @@ PR1a–c are inert until PR2b lands: an old SPA ignores both the unknown event t
   - busy twice then 200 → the walk completes, and deltas that arrived during the retries are applied by the overlay;
   - busy six times → `error`, rows kept;
   - a walk superseded during backoff → no further request and no commit.
+
+### PR1b review (`review-muyn9iac-o2pg1q` R1, `review-muyn9wc5-6i63tx` attacker) and the coordinator's PR1b ruling
+
+| # | Source | Finding | Resolution |
+|---|---|---|---|
+| B1 | R1 P1 | `peer_message` (Nexen v0.20.0) is missing from the triggers, so a peer-created turn changes `turn_count` without a delta | §3.2: added, plus a test that classifies every Nexen `EventKinds` entry. The SPA's PR0 `SITE_STREAM_KINDS` (`?kind=` on the legacy site stream) misses it too; fixed in a separate small SPA PR. |
+| B2 | attacker medium | Strict deltas to every host-events subscriber over a shared 64-slot buffer: a burst of ≥ 65 rows disconnects slow clients, legacy SPAs included, which takes tmux status and notifications down with it | §3.5: nex frames only for subscribers that opted in (`?nex=v1`, coordinator ruling); a feature-scoped strict broadcast never touches anyone else; opted-in subscribers get a 1,024-slot buffer |
+| B3 | coordinator | No `nex.*` at all for clients that did not ask (old SPA, purdex-ios) | Same as B2 |

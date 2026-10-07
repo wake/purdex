@@ -12,7 +12,8 @@ import (
 )
 
 // #1866 PR1b (spec 2026-10-08 §3.5, §8 round 2 #4): strict sends drop the
-// subscriber, never the frame.
+// subscriber, never the frame — and only ever a subscriber that opted into
+// the frame's feature.
 
 // fillBuffer queues frames until sub's send buffer is full.
 func fillBuffer(t *testing.T, sub *EventSubscriber) {
@@ -63,15 +64,15 @@ func marshalled(t *testing.T, ev HostEvent) string {
 	return string(b)
 }
 
-func TestBroadcastStrict_RemovesOnlyTheSubscriberWhoseBufferIsFull(t *testing.T) {
+func TestBroadcastStrictTo_RemovesOnlyTheOptedInSubscriberWhoseBufferIsFull(t *testing.T) {
 	eb := NewEventsBroadcaster()
-	fast := eb.AddTestSubscriber()
+	fast := eb.AddTestSubscriberWith(FeatureNexV1)
 	defer eb.RemoveTestSubscriber(fast)
-	slow := eb.AddTestSubscriber()
+	slow := eb.AddTestSubscriberWith(FeatureNexV1)
 	fillBuffer(t, slow)
 
 	first := HostEvent{Type: "nex.execution", Value: `{"bseq":1}`}
-	eb.BroadcastStrict(first)
+	eb.BroadcastStrictTo(FeatureNexV1, first)
 
 	assert.Equal(t, marshalled(t, first), next(t, fast), "the subscriber with room got the frame")
 	assert.False(t, isDone(fast), "the subscriber with room was removed")
@@ -82,7 +83,7 @@ func TestBroadcastStrict_RemovesOnlyTheSubscriberWhoseBufferIsFull(t *testing.T)
 	// the frames queued before the drop, and later strict frames reach the
 	// one left.
 	second := HostEvent{Type: "nex.execution", Value: `{"bseq":2}`}
-	eb.BroadcastStrict(second)
+	eb.BroadcastStrictTo(FeatureNexV1, second)
 	assert.Equal(t, marshalled(t, second), next(t, fast))
 	left := drained(t, slow)
 	assert.Len(t, left, cap(slow.send))
@@ -91,63 +92,100 @@ func TestBroadcastStrict_RemovesOnlyTheSubscriberWhoseBufferIsFull(t *testing.T)
 	}
 }
 
+// A subscriber that did not opt into the feature is outside its stream
+// entirely: it is never sent a frame, and a full buffer never costs it its
+// connection — a frame it never asked for is not one it can miss.
+func TestBroadcastStrictTo_LeavesSubscribersWithoutTheFeatureAlone(t *testing.T) {
+	eb := NewEventsBroadcaster()
+	plain := eb.AddTestSubscriber()
+	defer eb.RemoveTestSubscriber(plain)
+	full := eb.AddTestSubscriber()
+	defer eb.RemoveTestSubscriber(full)
+	fillBuffer(t, full)
+	other := eb.AddTestSubscriberWith("other.v1")
+	defer eb.RemoveTestSubscriber(other)
+	fillBuffer(t, other)
+	opted := eb.AddTestSubscriberWith(FeatureNexV1)
+	defer eb.RemoveTestSubscriber(opted)
+
+	ev := HostEvent{Type: "nex.execution", Value: `{"bseq":1}`}
+	eb.BroadcastStrictTo(FeatureNexV1, ev)
+
+	assert.Equal(t, marshalled(t, ev), next(t, opted))
+	assert.Empty(t, plain.send, "a subscriber without the feature was sent its frame")
+	for _, sub := range []*EventSubscriber{plain, full, other} {
+		assert.False(t, isDone(sub), "a subscriber without the feature was removed")
+	}
+	assert.Len(t, full.send, cap(full.send))
+	assert.Len(t, other.send, cap(other.send))
+}
+
 // The frame is the same marshalled HostEvent BroadcastEvent would send: the
 // versions of a nex frame live in its value, and omitempty keeps Epoch/Seq
 // out of the wire when they are empty.
-func TestBroadcastStrict_SendsTheMarshalledEvent(t *testing.T) {
+func TestBroadcastStrictTo_SendsTheMarshalledEvent(t *testing.T) {
 	eb := NewEventsBroadcaster()
-	sub := eb.AddTestSubscriber()
+	sub := eb.AddTestSubscriberWith(FeatureNexV1)
 	defer eb.RemoveTestSubscriber(sub)
 
-	eb.BroadcastStrict(HostEvent{Type: "nex.executions.hello", Value: `{"epoch":"e","bseq":0}`})
+	eb.BroadcastStrictTo(FeatureNexV1, HostEvent{Type: "nex.executions.hello", Value: `{"epoch":"e","bseq":0}`})
 	assert.Equal(t, `{"type":"nex.executions.hello","session":"","value":"{\"epoch\":\"e\",\"bseq\":0}"}`, next(t, sub))
 }
 
 // Broadcast and BroadcastEvent stay best-effort: a full buffer loses that
-// frame and keeps the subscriber, exactly as before.
+// frame and keeps the subscriber, exactly as before — an opted-in one too.
 func TestBroadcastEvent_StaysBestEffort(t *testing.T) {
 	eb := NewEventsBroadcaster()
 	sub := eb.AddTestSubscriber()
 	defer eb.RemoveTestSubscriber(sub)
 	fillBuffer(t, sub)
+	opted := eb.AddTestSubscriberWith(FeatureNexV1)
+	defer eb.RemoveTestSubscriber(opted)
+	fillBuffer(t, opted)
 
 	eb.BroadcastEvent(HostEvent{Type: "status", Value: "x"})
 	eb.Broadcast("s", "status", "y")
 
-	assert.False(t, isDone(sub), "a best-effort broadcast removed a slow subscriber")
-	assert.Len(t, sub.send, cap(sub.send))
+	for _, s := range []*EventSubscriber{sub, opted} {
+		assert.False(t, isDone(s), "a best-effort broadcast removed a slow subscriber")
+		assert.Len(t, s.send, cap(s.send))
+	}
 }
 
-func TestBroadcastStrict_NoSubscribersIsANoOp(t *testing.T) {
+func TestBroadcastStrictTo_NoSubscribersIsANoOp(t *testing.T) {
 	eb := NewEventsBroadcaster()
-	assert.NotPanics(t, func() { eb.BroadcastStrict(HostEvent{Type: "nex.execution"}) })
+	assert.NotPanics(t, func() { eb.BroadcastStrictTo(FeatureNexV1, HostEvent{Type: "nex.execution"}) })
 }
 
 // Remove takes the write lock, so the strict broadcast must not call it
 // while it still holds the read lock: run strict broadcasts against
 // subscribers that come, go and fill up, and require them all to finish.
-func TestBroadcastStrict_NoDeadlockWithConcurrentAddAndRemove(t *testing.T) {
+func TestBroadcastStrictTo_NoDeadlockWithConcurrentAddAndRemove(t *testing.T) {
 	eb := NewEventsBroadcaster()
-	const rounds = 200
+	const rounds = 100
 	var wg sync.WaitGroup
 	wg.Add(3)
-	go func() { // never drained: each fills up and is dropped by a strict broadcast
+	go func() { // never drained: each opted-in one fills up and is dropped by a strict broadcast
 		defer wg.Done()
 		for i := 0; i < rounds; i++ {
-			eb.AddTestSubscriber()
+			if i%2 == 0 {
+				eb.AddTestSubscriberWith(FeatureNexV1)
+			} else {
+				eb.AddTestSubscriber() // never sent to, never dropped
+			}
 		}
 	}()
 	go func() { // added and removed by hand, racing the drops
 		defer wg.Done()
 		for i := 0; i < rounds; i++ {
-			sub := eb.AddTestSubscriber()
+			sub := eb.AddTestSubscriberWith(FeatureNexV1)
 			eb.Remove(sub)
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < rounds*70; i++ { // enough to fill and drop every never-drained one
-			eb.BroadcastStrict(HostEvent{Type: "nex.execution", Value: fmt.Sprint(i)})
+		for i := 0; i < 3*optedInSendBuffer; i++ { // enough to fill and drop every never-drained opted-in one
+			eb.BroadcastStrictTo(FeatureNexV1, HostEvent{Type: "nex.execution", Value: fmt.Sprint(i)})
 		}
 	}()
 

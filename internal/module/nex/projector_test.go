@@ -115,7 +115,7 @@ func (s *rowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 var fastTiming = projectorTiming{trailing: 20 * time.Millisecond, maxDelay: 80 * time.Millisecond, retryDelay: 40 * time.Millisecond}
 
 // projEnv is a running projector over a real Nexen bus, a rowServer and a
-// broadcaster with one test subscriber.
+// broadcaster with one test subscriber, opted into nex.v1.
 type projEnv struct {
 	p      *projector
 	slot   *readSlot
@@ -130,7 +130,7 @@ func newProjEnv(t *testing.T, timing projectorTiming) *projEnv {
 	t.Helper()
 	e := &projEnv{slot: newReadSlot(discardLogf), bus: bus.New(), events: core.NewEventsBroadcaster(),
 		rows: newRowServer(), logs: &logRecorder{}}
-	e.sub = e.events.AddTestSubscriber()
+	e.sub = e.events.AddTestSubscriberWith(core.FeatureNexV1)
 	e.p = newProjector(e.slot, rowReader{handler: e.rows, logf: e.logs.logf}, e.events, e.bus, e.logs.logf, timing)
 	e.p.start()
 	t.Cleanup(func() {
@@ -344,7 +344,7 @@ func TestProjector_FlushWaitsForAListPageAndIsOrderedAgainstIt(t *testing.T) {
 	rows.set("exc_a", "running")
 	m, mux := newListEnv(t, rows)
 	events := core.NewEventsBroadcaster()
-	sub := events.AddTestSubscriber()
+	sub := events.AddTestSubscriberWith(core.FeatureNexV1)
 	p := newProjector(m.reads(), rowReader{handler: rows, logf: discardLogf}, events, bus.New(), discardLogf, fastTiming)
 	p.start()
 	t.Cleanup(func() { p.stop(context.Background()) })
