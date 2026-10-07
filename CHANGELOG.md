@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.537] - 2026-10-07
+
+> 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動。這一版沒有使用者可見的變化：權限通道（讓 worker 做有風險的事之前先問你）的前端還沒上，要等 SPA 那一半。
+
+### Changed：Nexen 升到 v0.19.0（權限通道 P-1a）
+
+- Nexen 內嵌引擎從 v0.18.1 升到 v0.19.0（中間含 v0.18.2 關閉時等 context 結束、v0.18.4 watchdog、v0.19.0 權限通道）。資料庫 schema 不變，新增的兩張表在啟動時自動補建，不需要手動處理。
+- 「交接」與「worker 重建」改為檢查**實際要用的 profile** 是否可用：`max_profile` 設成 `handoff_ask` 的主機現在能用「需要核准」模式（以前連交接都會被拒）；不認得或不可用的 profile 在任何動作之前就回 409。
+- 「交接」與「worker 重建」可帶 `permission_timeout_s`（0–86400 秒，等待核准多久後自動拒絕）。型別或範圍不對、或搭配沒有通道的 profile，一律回 400 `invalid_permission_timeout`，且不會有任何副作用（不 delegate、不動 tmux、不退出被取代的 worker）。
+- 順序變動：profile 的檢查移到解析請求之後，所以不能交接的主機收到格式錯誤的請求時，現在回 400 `malformed_body`（原本是 409 `handoff_unsupported`）。
+
 ## [1.0.0-alpha.536] - 2026-10-07
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排；與 alpha.532／533 一次重啟）。這是接力第一個有行為的版本：四條 `/api/relay/*` 路由上線，但還沒有 mod 或 `pdx relay` 指令去呼叫（P5a-2c／P5b），所以現有使用者的流程不受影響。`pdx` 指令、SPA、Electron 都沒有改動。
