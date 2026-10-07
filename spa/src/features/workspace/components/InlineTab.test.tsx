@@ -1,11 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
+import { useI18nStore } from '../../../stores/useI18nStore'
 import { useAgentStore } from '../../../stores/useAgentStore'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useSessionStore } from '../../../stores/useSessionStore'
 import type { Tab } from '../../../types/tab'
+import { useExecutionStore, executionKey } from '../../../stores/useExecutionStore'
+import { defaultExecutionState } from '../../../lib/nex/event-reducer'
+import type { ExecutionSummary } from '../../../lib/nex/types'
 
 const mockOnPointerDown = vi.fn()
 
@@ -641,5 +645,53 @@ describe('InlineTab — pointer down (dnd-kit integration)', () => {
     const event = new PointerEvent('pointerdown', { bubbles: true, cancelable: true })
     el.dispatchEvent(event)
     expect(event.defaultPrevented).toBe(false)
+  })
+})
+
+// Permission channel PC2, user decision 2026-10-08: an awaiting worker's sidebar tab shows the hand on its light,
+// and its title is the plain worker title — no 「（等待核准）」 suffix.
+describe('InlineTab — worker awaiting approval', () => {
+  const pending = { request_id: 'r1', tool_name: 'Bash', since: 1_700_000_000_000 }
+  const workerTab: Tab = {
+    id: 'tx', pinned: false, locked: false, createdAt: 0,
+    layout: { type: 'leaf', pane: { id: 'px', content: { kind: 'execution', executionId: 'e1', host: 'h1' } } },
+  } as Tab
+  /** The worker's summary only — useWorkerAgentProjection has not written its `exec-e1` status yet (cold load). */
+  const seedSummary = (over: Partial<ExecutionSummary>) => {
+    useExecutionStore.setState({ executions: { [executionKey('h1', 'e1')]: { ...defaultExecutionState(), summary: ({
+      id: 'e1', state: 'running', provider: 'claude', principal_id: 'p', cwd: '/w/repo', mount_kind: 'dev', brief: 'Fix the bug',
+      labels: {}, created_at: 1, updated_at: 5, duration_ms: null, event_count: 0, observers: 0, archived: false, ...over,
+    }) as ExecutionSummary } } })
+  }
+  const seedWorker = (over: Partial<ExecutionSummary>) => {
+    seedSummary(over)
+    useAgentStore.setState({ statuses: { 'h1:exec-e1': 'waiting' } })
+  }
+  beforeEach(() => { useExecutionStore.setState({ executions: {} }) })
+  afterEach(() => { act(() => { useI18nStore.getState().setLocale('en') }) })
+
+  it('the hand beside the waiting dot, and the title without a suffix', () => {
+    seedWorker({ pending_permission: pending })
+    renderInline(workerTab)
+    expect(screen.getByTestId('tab-status-awaiting-hand')).toBeInTheDocument()
+    expect(screen.getByTestId('tab-status-indicator')).toBeInTheDocument()
+    expect(screen.getByTestId('inline-tab-title').textContent).toBe('Fix the bug - repo')
+  })
+
+  it('cold load: a pending summary shows the hand before the projection writes a status, titled 等待核准', () => {
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    seedSummary({ pending_permission: pending })
+    renderInline(workerTab)
+    expect(screen.getByTestId('tab-status-awaiting-hand')).toBeInTheDocument()
+    const light = screen.getByTestId('tab-status-awaiting')
+    expect(light).toHaveAttribute('title', '等待核准')
+    expect(light).toHaveAttribute('aria-label', '等待核准')
+  })
+
+  it('no pending request: the plain waiting dot', () => {
+    seedWorker({ pending_permission: null })
+    renderInline(workerTab)
+    expect(screen.getByTestId('tab-status-indicator')).toBeInTheDocument()
+    expect(screen.queryByTestId('tab-status-awaiting')).toBeNull()
   })
 })

@@ -376,7 +376,6 @@
   "page.pane.hosts": "主機管理",
   "page.pane.execution": "執行",
   "page.pane.terminated": "{{name}}（已結束）",
-  "page.pane.awaiting_approval": "{{name}}（等待核准）",
   "page.pane.settings_ws": "設定 — {{name}}",
 
   "session.title": "Sessions",

@@ -54,6 +54,7 @@ export function InlineTab({
     subagentRefs,
     tabIndicatorStyle,
     isHostOffline,
+    isAwaitingApproval,
   } = useTabDisplay(tab)
 
   // Vertical-only drag — x locked to 0 so the row never slides horizontally
@@ -122,6 +123,7 @@ export function InlineTab({
         isActive,
         subagentRefs,
         isUnread,
+        awaitingApproval: isAwaitingApproval,
       })}
       {badgeEnabled && hasHostBadge(hostBadge) && (
         <HostBadge
