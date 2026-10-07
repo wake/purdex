@@ -16,7 +16,9 @@ Vocabulary (spec §4): a **lead** runs a **team** of **members**. A member is ne
 
 ## As a lead
 
-- `pdx spawn --root <dir> [--repo <name>]` opens a member and prints its address and ref; `pdx kill <ref>` closes one; `pdx team` lists them. Address members by **ref** (`<host>/_xxxxxx`): names change, refs are redirected across relays.
+- `pdx spawn [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--brief-file <f> | --brief <text>]` opens a member on this host in `--cwd` (default: your working directory; it must be under the roots you were granted) and prints one JSON line with its address and ref. The brief reaches the member from you, after a first line saying it is your member, so its replies come back to you. `pdx kill <ref>` closes one of your members; `pdx team` lists them. Address members by **ref** (`<host>/_xxxxxx`): names change, refs are redirected across relays.
+- **Choose each member's model and effort for its task**: `--model sonnet` for mechanical work, `--model opus` for design; `--effort low|medium|high|xhigh|max`. The host's default model is not fixed, so a spawn without `--model` runs whatever it happens to be today. Check `pdx team`: its MODEL and EFFORT columns show what each member actually runs, from its first turn on.
+- Exit 13 means the team rules refused (`not_lead`, `team_full`, `cwd_outside_grant`, `not_your_member`, `relay_open`; the code is the last word on stderr). Exit 14 means the member did not start within 20 s (this host needs the Purdex hooks). Exit 1 with the member's JSON on stdout means only the brief was not sent: send it yourself with `pdx msg send <address>`.
 - **Recommend a worktree** to each member — have it `EnterWorktree`, or prepare one for it. Where the member works is your call (U10).
 - When a `[pdx team] <ref> context 已用 NN%` notice arrives, **you decide** whether and when to relay that member: `pdx relay <ref>`. The daemon only detects and reports (U9).
 - Write the team roster (each member's ref, address, task and worktree) into §8 「協作關係」 of your own handoff, so the conversation that takes over from you still knows its team.
