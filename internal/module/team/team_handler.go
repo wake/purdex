@@ -148,9 +148,15 @@ func (m *Module) handleKill(w http.ResponseWriter, r *http.Request) {
 // nothing is killed. "" means nothing of the member runs any more; else the
 // status, code and why the row must stay as it is: a session that lost its
 // tag (409), or tmux that did not answer while the member may still run (503;
-// once the sweeper confirms it gone, the kill goes through).
+// once the sweeper confirms it gone, the kill goes through). A row without
+// a recorded session id is never turned into a tmux target (":" would name
+// whatever session tmux calls current).
 func (m *Module) killMember(mr memberRow) (int, string, string) {
-	id, err := m.paneIdentity(mr.TmuxID + ":")
+	var id tmux.PaneIdentity
+	err := fmt.Errorf("no tmux session id recorded (%q)", mr.TmuxID)
+	if strings.HasPrefix(mr.TmuxID, "$") {
+		id, err = m.paneIdentity(mr.TmuxID + ":")
+	}
 	switch {
 	case err != nil && mr.State == team.MemberGone:
 		return 0, "", ""

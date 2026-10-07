@@ -231,6 +231,13 @@ func TestKill_IsIdempotentAndGenerationGuarded(t *testing.T) {
 	if code, mem, e := f.kill("/tmp/10.sock", m4.Ref); code != 200 || mem.State != team.MemberKilled {
 		t.Fatalf("a gone member's kill = %d %+v %+v, want 200 killed", code, mem, e)
 	}
+	bare := newMember("op-5", uid(1), "sid-m5", ipeers.RefID("sid-m5"), 1) // no tmux session recorded
+	if err := f.m.store.InsertMember(bare); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, e := f.kill("/tmp/10.sock", bare.Ref); code != 503 || e.Error != team.ErrNotReady {
+		t.Fatalf("an active member with no recorded session = %d %+v, want 503", code, e)
+	}
 
 	f.tmux.SetInstance("5151:1800000000") // the tmux server restarted; $N now names a stranger
 	if code, mem, e := f.kill("/tmp/10.sock", m3.Ref); code != 200 || mem.State != team.MemberKilled {
