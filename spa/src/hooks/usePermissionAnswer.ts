@@ -27,6 +27,7 @@ import { answerPermission } from '../lib/nex/nex-api'
 import { NexApiError } from '../lib/nex/types'
 import type { PermissionRequestState } from '../lib/nex/permissions'
 import { closePermissionCard, closedPermissionRequests, isPermissionCardClosed, permissionCardKey } from '../lib/nex/permission-card-memory'
+import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import type { ExecutionLeaseApi } from './useExecutionLease'
 
@@ -72,6 +73,9 @@ export function usePermissionAnswer(
   const inFlight = useRef(false)
 
   const close = useCallback((requestId: string) => {
+    // The stream may have outrun the HTTP reply: a request the store no longer lists as pending was already pruned
+    // by ExecutionView (permissions never change again, so nothing would drop a mark added now) — no mark.
+    if (useExecutionStore.getState().executions[executionKey(hostId, executionId)]?.permissions[requestId]?.status !== 'pending') return
     closePermissionCard(permissionCardKey(hostId, executionId, requestId))
     setClosed(closedPermissionRequests(hostId, executionId))
   }, [hostId, executionId])
