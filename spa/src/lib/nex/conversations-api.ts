@@ -4,11 +4,13 @@
 import { HandoffApiError, getJson } from './handoff-api'
 
 export type ConversationState = 'ended' | 'gone'
+/** `?scope=` (daemon capability `conversations.scope.v1`); omitted = all. */
+export type ConversationScope = 'test' | 'normal'
 
 export interface ConversationRow {
   session_id: string
   title: string
-  title_source: 'custom' | 'ai' | 'nexen' | 'prompt' | 'session_id'
+  title_source: 'custom' | 'ai' | 'nexen' | 'prompt' | 'registry' | 'session_id'
   first_prompt?: string
   cwd?: string
   cwd_exists: boolean
@@ -36,8 +38,9 @@ export interface ConversationsPage {
 }
 
 /** `GET /api/nex/conversations?state=…`. Errors arrive as `HandoffApiError`; 404 is `http_404` (Nexen disabled). */
-export async function listConversations(hostId: string, state: ConversationState): Promise<ConversationsPage> {
-  const body = await getJson<unknown>(hostId, `/api/nex/conversations?state=${encodeURIComponent(state)}`)
+export async function listConversations(hostId: string, state: ConversationState, scope?: ConversationScope): Promise<ConversationsPage> {
+  const query = `state=${encodeURIComponent(state)}${scope ? `&scope=${encodeURIComponent(scope)}` : ''}`
+  const body = await getJson<unknown>(hostId, `/api/nex/conversations?${query}`)
   if (typeof body !== 'object' || body === null || !Array.isArray((body as { conversations?: unknown }).conversations)) {
     throw new HandoffApiError(200, 'bad_response', {}, 'conversations: malformed response')
   }
