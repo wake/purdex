@@ -2,7 +2,6 @@ package teammod
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -129,18 +128,16 @@ var (
 // a new op rests on (P4-5 review H1), so a team end, a lead move or another
 // writer that lands after the caller read the team wins: the op's team is
 // live and led by its origin (else ErrSpawnNotLead), and the team's active
-// members, but those in free, plus its running ops but this one, are fewer
-// than its grant's max_members (else ErrSpawnTeamFull). A refusal writes
-// nothing. free is what the caller read from the registry: the active
-// members holding no place (spec §13 D4); one that became active since
-// counts.
-func (s *Store) AcceptSpawnOp(op spawnRow, hash string, free []string) (spawnRow, string, bool, error) {
+// member rows plus its running ops but this one are fewer than its grant's
+// max_members (else ErrSpawnTeamFull). A refusal writes nothing.
+//
+// The count is team.db alone, so it holds at the commit (P4-5 critic): a
+// member whose session ended still holds its place until its row is marked
+// gone (P4-6's sweeper), when the place frees (spec §13 D4). Conservative:
+// a registry read made before the transaction could undercount.
+func (s *Store) AcceptSpawnOp(op spawnRow, hash string) (spawnRow, string, bool, error) {
 	fail := func(err error) (spawnRow, string, bool, error) {
 		return spawnRow{}, "", false, fmt.Errorf("accept spawn op %s: %w", op.ID, err)
-	}
-	freeJSON, err := json.Marshal(append([]string{}, free...))
-	if err != nil {
-		return fail(err)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -158,9 +155,8 @@ func (s *Store) AcceptSpawnOp(op spawnRow, hash string, free []string) (spawnRow
 	if err == nil {
 		err = tx.QueryRow(`SELECT json_extract(grant_json, '$.max_members'),
 			(SELECT COUNT(*) FROM spawn_ops WHERE team_id = t.id AND state = 'running' AND id <> ?) +
-			(SELECT COUNT(*) FROM team_members WHERE team_id = t.id AND state = 'active'
-				AND session_id NOT IN (SELECT value FROM json_each(?)))
-			FROM teams t WHERE t.id = ?`, op.ID, string(freeJSON), op.TeamID).Scan(&limit, &used)
+			(SELECT COUNT(*) FROM team_members WHERE team_id = t.id AND state = 'active')
+			FROM teams t WHERE t.id = ?`, op.ID, op.TeamID).Scan(&limit, &used)
 	}
 	if err == nil && used >= limit {
 		err = ErrSpawnTeamFull

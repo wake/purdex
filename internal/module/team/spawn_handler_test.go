@@ -166,18 +166,20 @@ func TestSpawn_TwoConcurrentSpawnsForTheLastPlace(t *testing.T) {
 	}
 }
 
-// Spec §13 D4: the limit counts live members only. An active member whose
-// session ended frees its place, unless its relay is in flight (the old
-// session leaves the registry at the relay's /clear).
-func TestSpawn_LimitCountsLiveMembersOnly(t *testing.T) {
+// P4-5 critic on H1, ruled by the coordinator: the limit is counted from
+// team.db alone, inside the write transaction. An active member row holds
+// its place even when the registry no longer shows its session; the place
+// frees once the row is marked gone (P4-6's sweeper; spec §13 D4). A
+// registry read before the transaction could not be trusted at its commit.
+// Mutation gate: deduct the members the registry shows not live → red.
+func TestSpawn_AnActiveMemberHoldsItsPlaceUntilMarkedGone(t *testing.T) {
 	f, root := newSpawnFixture(t, 1)
 	seedMember(t, f.m.store, "op-1", uid(1), "sid-m9", 1)
 	f.origins.markDead("sid-m9")
-	claimedOp(t, f.m.store, rid(1), "sid-m9", "_mem9")
 	if code, _, e := f.spawn(1, root, nil); code != 409 || e.Error != team.ErrTeamFull {
-		t.Fatalf("a member mid-relay must hold its place: %d %+v", code, e)
+		t.Fatalf("an active member row must hold its place: %d %+v", code, e)
 	}
-	if _, _, err := f.m.store.ReportRelay(rid(1), RelayReport{State: team.RelayFailed, Reason: "member_gone", At: 2}); err != nil {
+	if err := f.m.store.SetMemberState("op-1", team.MemberGone, 2); err != nil {
 		t.Fatal(err)
 	}
 	f.register("%0", "sid-m1")

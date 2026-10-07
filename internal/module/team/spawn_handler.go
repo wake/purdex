@@ -143,10 +143,6 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	if !underRoots(cwd, t.Grant.Roots) {
 		return fail(http.StatusConflict, team.ErrCwdOutsideGrant, cwd+" is under none of the team's roots")
 	}
-	free, err := m.freeMembers(t.ID)
-	if err != nil {
-		return failStore(err)
-	}
 	name, err := team.SpawnTmuxName(req.ID)
 	if err != nil { // unreachable: normaliseSpawn made the id a canonical UUID v4
 		m.logf("[team] spawn: %v", err)
@@ -158,12 +154,12 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	now := m.now()
 	row, _, inserted, err := m.store.AcceptSpawnOp(spawnRow{ID: req.ID, TeamID: t.ID, HostID: m.hostID(),
 		OriginSessionID: origin.SessionID, Cwd: cwd, Title: req.Title, Model: req.Model, Effort: req.Effort,
-		TmuxName: name, Step: team.StepAccepted, State: team.SpawnRunning, CreatedAt: now, UpdatedAt: now}, hash, free)
+		TmuxName: name, Step: team.StepAccepted, State: team.SpawnRunning, CreatedAt: now, UpdatedAt: now}, hash)
 	switch {
 	case errors.Is(err, ErrSpawnNotLead):
 		return fail(http.StatusConflict, team.ErrNotLead, "this session no longer leads team "+t.ID)
 	case errors.Is(err, ErrSpawnTeamFull):
-		return fail(http.StatusConflict, team.ErrTeamFull, fmt.Sprintf("team %s has its %d live or starting members", t.ID, t.Grant.MaxMembers))
+		return fail(http.StatusConflict, team.ErrTeamFull, fmt.Sprintf("team %s has its %d active or starting members", t.ID, t.Grant.MaxMembers))
 	case err != nil:
 		return failStore(err)
 	case !inserted: // unreachable under createMu after the read above
@@ -172,31 +168,6 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	m.logf("[team] spawn %s accepted: team %s, %s in %s", row.ID, t.ID, row.TmuxName, row.Cwd)
 	m.startSpawn(row.ID)
 	return row, true
-}
-
-// freeMembers lists the team's active members that hold no place (spec §13
-// D4: the limit counts live members only): their session is not live and
-// no relay of theirs is in flight (the old session leaves the registry at a
-// relay's /clear while its op is still claimed, writing or written).
-func (m *Module) freeMembers(teamID string) ([]string, error) {
-	rows, err := m.store.MembersOf(teamID)
-	if err != nil {
-		return nil, err
-	}
-	var free []string
-	for _, r := range rows {
-		if r.State != team.MemberActive || m.origins.LiveSession(r.SessionID) {
-			continue
-		}
-		op, ok, err := m.store.OpenRelayOpBySession(r.SessionID)
-		if err != nil {
-			return nil, err
-		}
-		if !ok || (op.State != team.RelayClaimed && op.State != team.RelayWriting && op.State != team.RelayWritten) {
-			free = append(free, r.SessionID)
-		}
-	}
-	return free, nil
 }
 
 // awaitSpawn waits up to spawnWait for op id to leave running (the runner
