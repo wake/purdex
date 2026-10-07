@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/buildinfo"
+	"github.com/wake/purdex/internal/config"
 )
 
 const ccHooksSupportedVersion = "2.1.114"
@@ -17,7 +19,10 @@ func (p *Provider) InstallHooks(pdxPath string) error {
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return mergeClaudeHooks(settingsPath, pdxPath, false)
+	if err := mergeClaudeHooks(settingsPath, pdxPath, false); err != nil {
+		return err
+	}
+	return p.installPlugin(settingsPath, pdxPath)
 }
 
 func (p *Provider) RemoveHooks(pdxPath string) error {
@@ -25,7 +30,51 @@ func (p *Provider) RemoveHooks(pdxPath string) error {
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return mergeClaudeHooks(settingsPath, pdxPath, true)
+	if err := mergeClaudeHooks(settingsPath, pdxPath, true); err != nil {
+		return err
+	}
+	return p.removePlugin(settingsPath)
+}
+
+// dataDir is the daemon's data dir when the provider has a config (the
+// daemon's own provider, module.go:242), else the default config's
+// ($HOME/.config/pdx) — the case of `pdx setup` without a daemon
+// (cmd/pdx/setup.go:114 builds the provider with nil deps).
+func (p *Provider) dataDir() string {
+	if p.cfg != nil {
+		if p.cfgMu != nil {
+			p.cfgMu.RLock()
+			defer p.cfgMu.RUnlock()
+		}
+		if p.cfg.DataDir != "" {
+			return p.cfg.DataDir
+		}
+	}
+	cfg, _ := config.Load("")
+	return cfg.DataDir
+}
+
+// installPlugin extracts the embedded plugin (spec §5 "Shipping") and names
+// it in settings.json env. Without an embedded tree it does nothing, so the
+// hook installer's own tests are unaffected.
+func (p *Provider) installPlugin(settingsPath, pdxPath string) error {
+	if PluginSource == nil {
+		return nil
+	}
+	dataDir := p.dataDir()
+	root, _, err := ExtractPlugin(PluginSource, dataDir, buildinfo.Version, pdxPath)
+	if err != nil {
+		return fmt.Errorf("extract plugin: %w", err)
+	}
+	return mergePluginDirs(settingsPath, dataDir, root, false)
+}
+
+func (p *Provider) removePlugin(settingsPath string) error {
+	dataDir := p.dataDir()
+	if err := mergePluginDirs(settingsPath, dataDir, PluginRoot(dataDir), true); err != nil {
+		return err
+	}
+	return RemovePluginDir(dataDir)
 }
 
 func (p *Provider) CheckHooks() (agent.HookStatus, error) {

@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wake/purdex/cmd/pdx/plugin"
+	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/codexbroker"
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
@@ -43,6 +45,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, lead, relay, nex, path, version\n")
 		os.Exit(1)
 	}
+
+	// The embedded Claude Code plugin reaches the CC hook installer here, so
+	// internal/ never imports cmd/ (the installer only sees an fs.FS).
+	agentcc.PluginSource = plugin.Files()
 
 	switch os.Args[1] {
 	case "serve":
