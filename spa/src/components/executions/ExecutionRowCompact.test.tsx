@@ -236,6 +236,21 @@ describe('ExecutionRowCompact — exit action', () => {
     expect(onOpen).not.toHaveBeenCalled()
   })
 
+  // #1627 Q2 (user rule): like a storage row's actions, the exit sits in flow at the row's end with its width always
+  // reserved — revealed on hover / keyboard focus, never laid over the age or the cost (jsdom has no layout: classes + order).
+  it('sits in flow after the age and cost, its place always reserved, never absolutely over them', () => {
+    render(<ExecutionRowCompact row={row({ state: 'idle', cost_usd: 0.5 })} daemonHostId={null} now={NOW} showCost onOpen={() => {}} onExit={() => {}} />)
+    const exit = screen.getByTestId('executions-row-exit')
+    expect(exit).not.toHaveClass('absolute')
+    expect(exit.parentElement).not.toHaveClass('relative')
+    expect(exit.parentElement!.lastElementChild).toBe(exit)
+    for (const id of ['executions-age', 'executions-cost']) {
+      expect(screen.getByTestId(id).compareDocumentPosition(exit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+    expect(exit).toHaveClass('shrink-0', 'opacity-0', 'group-hover:opacity-100', 'group-focus-within:opacity-100', 'focus-visible:opacity-100')
+    expect(exit.className).not.toMatch(/(^|\s)(hidden|invisible)(\s|$)/)
+  })
+
   it('has no exit action without onExit', () => {
     render(<ExecutionRowCompact row={row()} daemonHostId={null} now={NOW} onOpen={() => {}} />)
     expect(screen.queryByTestId('executions-row-exit')).toBeNull()
