@@ -9,6 +9,7 @@ import {
 import { startNexHostInvalidation, useNexHostStore, type NexHostEntry } from './useNexHostStore'
 import { useHostStore } from './useHostStore'
 import { subscriptionSlots, capFor } from '../lib/nex/subscription-slots'
+import { SITE_STREAM_KINDS } from '../lib/nex/execution-list-effects'
 import { NexApiError, type ExecutionSummary, type ExecutionsPage } from '../lib/nex/types'
 import type { NexInfo } from '../lib/host-api'
 import * as api from '../lib/nex/nex-api'
@@ -93,7 +94,7 @@ describe('useExecutionListStore', () => {
     const u1 = useExecutionListStore.getState().subscribe(A)
     const u2 = useExecutionListStore.getState().subscribe(A)
     expect(sse.openNexSse).toHaveBeenCalledTimes(1)
-    expect(sseFor(A).opts.url).toBe('/api/nex/v1/events')
+    expect(sseFor(A).opts.url.split('?')[0]).toBe('/api/nex/v1/events')
     expect(subscriptionSlots.reserve).toHaveBeenCalledTimes(1)
     expect(subscriptionSlots.reserve).toHaveBeenCalledWith(A, 'site-wide')
     expect(capFor(A)).toBe(3)
@@ -161,6 +162,51 @@ describe('useExecutionListStore', () => {
     await vi.advanceTimersByTimeAsync(LIST_REFRESH_DEBOUNCE_MS - 1)
     expect(api.listExecutions).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1)
+    expect(api.listExecutions).toHaveBeenCalledTimes(2)
+  })
+
+  // #1866: the site stream used to carry every frame of every execution —
+  // token deltas and raw provider frames included — and each one pushed the
+  // trailing debounce back, so a host with one streaming worker never
+  // refreshed its list. It now asks only for the kinds that can change a row.
+  it('the site stream asks only for the kinds that can change a list row', () => {
+    useExecutionListStore.getState().subscribe(A)
+    const url = new URL(sseFor(A).opts.url, 'http://x')
+    expect(url.pathname).toBe('/api/nex/v1/events')
+    const kinds = url.searchParams.getAll('kind')
+    expect(kinds).toEqual([...SITE_STREAM_KINDS])
+    for (const k of ['execution.running', 'execution.terminal', 'permission.requested', 'permission.resolved', 'tool_use', 'task_end', 'execution.archived', 'result']) {
+      expect(kinds).toContain(k)
+    }
+    for (const k of ['stream_event', 'stream_snapshot', 'lease.renewed', 'assistant', 'user', 'system', 'rate_limit_event', 'control_request']) {
+      expect(kinds).not.toContain(k)
+    }
+  })
+
+  it('noise frames from a server that ignores kind= neither schedule nor postpone a refetch, but still advance lastSeq', async () => {
+    useExecutionListStore.getState().subscribe(A)
+    await flush()
+    expect(api.listExecutions).toHaveBeenCalledTimes(1)
+    const { opts } = sseFor(A)
+
+    opts.onFrame({ id: '10', event: 'permission.requested', data: '{}' })
+    // A worker keeps streaming: token deltas and raw frames every 100 ms.
+    for (let t = 0; t < 4; t++) {
+      await vi.advanceTimersByTimeAsync(100)
+      opts.onFrame({ id: null, event: 'stream_event', data: '{}' })
+      opts.onFrame({ id: String(11 + t), event: 'assistant', data: '{}' })
+    }
+    await vi.advanceTimersByTimeAsync(100)
+    expect(api.listExecutions).toHaveBeenCalledTimes(2)
+    expect(cache(A).lastSeq).toBe(14)
+
+    for (let t = 0; t < 10; t++) {
+      opts.onFrame({ id: null, event: 'stream_event', data: '{}' })
+      opts.onFrame({ id: null, event: 'stream_snapshot', data: '{}' })
+      opts.onFrame({ id: String(20 + t), event: 'user', data: '{}' })
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_DEBOUNCE_MS)
     expect(api.listExecutions).toHaveBeenCalledTimes(2)
   })
 

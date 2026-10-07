@@ -167,7 +167,7 @@ describe('HostWorkerRows', () => {
     renderRows()
     await waitFor(() => expect(screen.getByText('busy')).toBeInTheDocument())
     expect(screen.queryByTestId('executions-awaiting')).toBeNull()
-    expect(site.opts?.url).toBe('/api/nex/v1/events')
+    expect(site.opts?.url.split('?')[0]).toBe('/api/nex/v1/events')
 
     act(() => { site.opts!.onFrame({ id: '41', event: 'permission.requested', data: JSON.stringify({ execution_id: 'E1', request_id: 'r1', tool_name: 'Bash' }) }) })
     await waitFor(() => expect(screen.getByTestId('executions-awaiting')).toBeInTheDocument(), { timeout: 2000 })
