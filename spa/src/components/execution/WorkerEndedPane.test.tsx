@@ -212,10 +212,12 @@ describe('WorkerEndedPane', () => {
       fireEvent.click(screen.getByTestId('worker-rebuild'))
       await waitFor(() => expect(takeToTerminal).toHaveBeenCalled())
     }
-    it('exited:false leaves the persistent notice', async () => {
-      vi.mocked(takeToTerminal).mockResolvedValue({ result: { exited: false }, swapped: true } as never)
+    // #1627 A: only the notice — the toast would say the execution was archived, and it was not.
+    it.each([true, false])('exited:false leaves only the persistent notice, no toast (swapped:%s)', async (swapped) => {
+      vi.mocked(takeToTerminal).mockResolvedValue({ result: { exited: false }, swapped } as never)
       await take()
       await waitFor(() => expect(useUndoToast.getState().notice?.message).toBe('Resumed in the terminal, but the worker could not exit; exit it manually from the list.'))
+      expect(useUndoToast.getState().toast).toBeNull()
     })
     it('exited:true shows no exit notice', async () => {
       vi.mocked(takeToTerminal).mockResolvedValue({ result: { exited: true }, swapped: true } as never)
@@ -227,6 +229,7 @@ describe('WorkerEndedPane', () => {
       vi.mocked(takeToTerminal).mockResolvedValue({ result: { exited: true }, swapped: false } as never)
       await take()
       await waitFor(() => expect(useUndoToast.getState().toast?.message).toMatch(/pane was already closed/))
+      expect(useUndoToast.getState().notice).toBeNull()
     })
   })
 

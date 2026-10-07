@@ -949,20 +949,23 @@ describe('ExecutionView — take back to terminal', () => {
     expect(paneContent(ids.tabId).kind).toBe('tmux-session')
   })
 
-  it('a take-back whose worker could not exit leaves a persistent notice; exited:true leaves none', async () => {
+  // #1627 A: the worker was neither terminated nor archived, so the toast's 「執行已封存」 would be wrong — the notice alone.
+  it('a take-back whose worker could not exit leaves only the persistent notice, no toast', async () => {
     mockedTakeback.mockResolvedValueOnce({ ...takebackOk, exited: false, exit_error: 'terminate_failed' } as never)
     const ids = executionTab()
     render(<ExecutionView {...base} {...ids} from={from} isActive />)
     await clickTakeBack()
     expect(useUndoToast.getState().notice?.message).toBe('Resumed in the terminal, but the worker could not exit; exit it manually from the list.')
+    expect(toast()).toBeNull()
   })
 
-  it('a take-back with exited:true shows no notice', async () => {
+  it('a take-back with exited:true shows the toast and no notice', async () => {
     mockedTakeback.mockResolvedValueOnce({ ...takebackOk, exited: true } as never)
     const ids = executionTab()
     render(<ExecutionView {...base} {...ids} from={from} isActive />)
     await clickTakeBack()
     expect(useUndoToast.getState().notice).toBeNull()
+    expect(toast()?.message).toBe('In the terminal now; the execution is archived.')
   })
 
   it('a failed take-back thaws the input, Interrupt and 退出 again (R1-1)', async () => {
@@ -1172,12 +1175,13 @@ describe('ExecutionView — take to terminal (no `from`)', () => {
     })
   })
 
-  it('take to terminal whose worker could not exit leaves the persistent notice', async () => {
+  it('take to terminal whose worker could not exit leaves only the persistent notice, no toast (#1627 A)', async () => {
     useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: 'sid' }) as never)
     mockedToTerminal.mockResolvedValueOnce({ ...toTerminalOk, exited: false } as never)
     render(<ExecutionView {...base} {...headlessTab()} isActive />)
     await clickTakeBack()
     expect(useUndoToast.getState().notice?.message).toMatch(/could not exit/)
+    expect(toast()).toBeNull()
   })
 
   it('idle → no confirm; takeToTerminal (not takeBack) called with the summary cwd, the held lease id and the hook\'s forget; pane becomes the new session; success toast', async () => {
