@@ -107,7 +107,8 @@ Author: purdex-6d. Base: main (alpha.587). Nexen pinned v0.19.0.
 ### 3.4 List wrapper (fixes R5)
 - `GET /api/nex/v1/executions` gets a Purdex handler registered as a more specific mux pattern. Nexen's handler is unchanged.
 - It runs Nexen's list handler **inside the slot** into a buffer.
-- On 200 it injects a top-level `"pdx": {"epoch": E, "ver": V}` into the JSON object, using the `ver` taken for that page. `items` and `next_cursor` are untouched. Any non-200 response passes through unchanged, without `pdx`.
+- On 200 it injects a top-level `"pdx": {"epoch": E, "ver": V, "bseq": H}` into the JSON object, using the `ver` taken for that page and the current broadcast high-water mark `H`, both read inside the slot (R3-1). `bseq` stays 0 until PR1b starts broadcasting. `items` and `next_cursor` are untouched. Any non-200 response passes through unchanged, without `pdx`.
+- If the slot cannot be acquired within 2 s, the wrapper answers `503 {"code": "nex_busy"}` (R3-3).
 - Each page is its own read with its own `ver`. The SPA does not need a multi-page snapshot (§4.3).
 
 ### 3.5 Broadcast order, hello and gaps (fixes R2, R6, R14; round 2: 3, 4)
