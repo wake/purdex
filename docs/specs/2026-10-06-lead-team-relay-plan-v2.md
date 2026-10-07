@@ -36,7 +36,7 @@
 
 1. **A session with no flag file calls `pdx hook` on every tool call:** no daemon decision call is made, stdout stays empty, latency is today's. → P2c Task (hook gate test).
 2. **The daemon is unreachable while a flag is present:** `pdx hook` exits 0 with empty stdout within 5 s; the session continues under its normal permission flow. → P2c (unreachable test with a fake clock).
-3. **A relay reaches `cleared` while the daemon restarts:** the lineage is written once — by the mod's idempotent `cleared` report (P5a-2b; a re-send after the restart is a no-op) — and the old ref still resolves (P5a-1b); the title moved once (`moveTitle` idempotent, re-run by boot reconciliation for ops still in `cleared`). Boot reconciliation **from frames** (a past-`claimed` self op whose pane now shows another session id) is **P6**, with the member ops. → P5a-1/P5a-2 (idempotent `Report`, lineage test, Resolve tier test), P5b-2 (the mod re-sends `cleared` at the next `turn.complete`).
+3. **A relay reaches `cleared` while the daemon restarts:** the lineage is written once — by the mod's idempotent `cleared` report (P5a-2b; a re-send after the restart is a no-op) — and the old ref still resolves (P5a-1b); the title moved once (`moveTitle` idempotent, re-run by boot reconciliation for ops still in `cleared`). Boot reconciliation **from frames** (a past-`claimed` self op whose pane now shows another session id) is **P6**, with the member ops. → P5a-1/P5a-2 (idempotent `Report`, lineage test, Resolve tier test), **P5a-2b `TestRelayReport_ClearedAcrossRestartIsIdempotentEndToEnd`** (cleared once → a second `Module` over the same team.db + meta.db → cleared again: one lineage row, title moved once, old ref → new row through `LineageReader` → `Build` → `Resolve`; codex round), P5b-2 (the mod re-sends `cleared` at the next `turn.complete`).
 4. **A typed prompt arrives while a self-relay request is open:** it waits (the hold), runs in the old conversation with NOTE after approval, passes unchanged after denial; the write turn is recognised as the mod's own even with queued prompts ahead. → P5b-3 (hold, NOTE, own-turn tests; mutation "treat the next `turn.complete` as the write turn → red").
 5. **AskUserQuestion with no client connected, or a remote answer landing while the terminal answers:** no request is opened / the terminal wins and the card says 「已在終端機回答」; the native dialog never shows anything unusual. → P8a-1 (`no_responders`, `terminal_override` tests), P8a-2 (mod race tests).
 
@@ -3613,7 +3613,7 @@ and in the combined form, right after the first `resolveTier` (`:230-233`) and b
 
 **Files:**
 - Modify: `internal/module/peers/module.go:40-41` (import `internal/team`), `:789-805` (`PreviousRefs: m.previousRefs()` in the `BuildInput`), new method `previousRefs` before `titleSnapshot` (`:822`); `internal/module/peers/send.go:53-54`; `internal/module/peers/send_test.go:1490-1492`; `internal/module/peers/origin_resolver.go:38-58` (split into `originOf` + `ResolveOriginBySession`)
-- Test: `internal/module/peers/lineage_test.go`, `internal/module/peers/origin_resolver_session_test.go`
+- Test: `internal/module/peers/lineage_test.go`, `internal/module/peers/origin_resolver_session_test.go`, and **`internal/module/team/lineage_path_test.go`** (new, package `teammod` — the one package that can hold the real `LineageReader` (P5a-1a's `Store`) and `ipeers` together without a cycle; the full-path 12-hop test of spec §15 "Lineage", codex round; uses `openTestStore` / `selfOp` / `mustReport` from `relay_store_test.go`)
 
 **Interfaces:**
 - Produces: `func (r *OriginResolver) ResolveOriginBySession(sessionID string) (team.Origin, bool, error)` (same ok/err contract as `ResolveOrigin`); the inventory rows carry `previous_refs` when a `team.LineageReader` is registered under `team.LineageReaderKey`; the hint text.
@@ -3753,7 +3753,76 @@ And in `send_test.go`, after line 1492 (`t.Errorf("hint must say what a ref surv
 	}
 ```
 
-- [ ] **Step 2: Run and see them fail.** `go test ./internal/module/peers/ -run 'TestLocalEnvelope_AttachesPreviousRefs|TestOriginResolver_ResolveOriginBySession|TestSend_PeerNotFoundTeachesTheV4AddressForms' -v` → compile error `r.ResolveOriginBySession undefined`; after stubbing, the lineage test fails with `previous_refs = [] partial=false` and the hint test with `hint must say so`.
+New `internal/module/team/lineage_path_test.go` — spec §15 "Lineage: an uncapped chain still resolves a lead's oldest ref after 11 or more relays", through the **whole** path rather than one layer at a time: the real `Store` (team.db) as `team.LineageReader` → `ipeers.BuildInput.PreviousRefs` → `ipeers.Build` → `PeerRecord.PreviousRefs` → `ipeers.Resolve` with the **oldest** ref. (`TestRelayStore_ClearedWritesLineageAndChainIsUncapped` proves the store alone, `TestResolve_PreviousRefsTier` the resolver alone; a cap introduced in `Build`'s copy or in the module's map would pass both and fail here.)
+
+```go
+package teammod
+
+import (
+	"errors"
+	"fmt"
+	"testing"
+
+	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/team"
+)
+
+// Spec §15 "Lineage", end to end: twelve chained relays sid-0 → … → sid-12
+// written by the store at cleared; the live head row built by ipeers.Build
+// from the store's PreviousRefs() (as the peers module feeds it, Task
+// 5a.5); Resolve of the OLDEST ref, bare and in the combined form, answers
+// the live row. Mutation gate: cap previous_refs at 10 anywhere on the path
+// (the store's query, the module's map copy, Build's copy, resolveRefHead's
+// scan) → _r00000 and _r00001 are ErrNotFound → red.
+func TestLineagePath_TwelveHopsOldestRefResolvesToTheLiveRow(t *testing.T) {
+	s := openTestStore(t)
+	const n = 12
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("op-%d", i)
+		old, next := fmt.Sprintf("sid-%d", i), fmt.Sprintf("sid-%d", i+1)
+		oldRef, nextRef := fmt.Sprintf("_r%05d", i), fmt.Sprintf("_r%05d", i+1)
+		op := selfOp(id, old, oldRef, int64(1000*(i+1)))
+		op.State = team.RelayClaimed
+		if err := s.CreateRelayOp(op); err != nil {
+			t.Fatal(err)
+		}
+		mustReport(t, s, id, RelayReport{State: team.RelayCleared, NewSessionID: next, NewRef: nextRef, At: int64(1000*(i+1) + 500)})
+	}
+	var reader team.LineageReader = s // the registry value the peers module reads
+	refs, err := reader.PreviousRefs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := fmt.Sprintf("sid-%d", n)
+	records := ipeers.Build(ipeers.BuildInput{
+		HostID: "h:1", Alias: "mlab",
+		// The live conversation is the chain's head; only it is alive.
+		Entries:      []ipeers.Entry{{PID: 4242, SessionID: head, Name: "purdex-x", Inbox: "/s/4242", ProcStart: "Sun Sep 13 15:22:36 2026"}},
+		PreviousRefs: refs,
+	})
+	var live ipeers.PeerRecord
+	for _, r := range records {
+		if r.Agent != nil && r.Agent.SessionID == head {
+			live = r
+		}
+	}
+	if live.Agent == nil || len(live.PreviousRefs) != n || live.PreviousRefs[0] != fmt.Sprintf("_r%05d", n-1) || live.PreviousRefs[n-1] != "_r00000" {
+		t.Fatalf("live row previous_refs = %v (want %d, newest first)", live.PreviousRefs, n)
+	}
+	for _, in := range []string{"_r00000", "r00000", "_r00001", "purdex-x [r00000]", fmt.Sprintf("_r%05d", n-1)} {
+		rec, err := ipeers.Resolve(records, in, ipeers.ResolveSnapshot{})
+		if err != nil || rec.Agent == nil || rec.Agent.PID != 4242 || rec.Agent.SessionID != head {
+			t.Fatalf("Resolve(%q) = %+v err=%v; want the live head row (pid 4242)", in, rec, err)
+		}
+	}
+	// A ref that was never in the chain stays not found.
+	if _, err := ipeers.Resolve(records, "_r99999", ipeers.ResolveSnapshot{}); !errors.Is(err, ipeers.ErrNotFound) {
+		t.Fatalf("unknown ref: err=%v, want ErrNotFound", err)
+	}
+}
+```
+
+- [ ] **Step 2: Run and see them fail.** `go test ./internal/module/peers/ -run 'TestLocalEnvelope_AttachesPreviousRefs|TestOriginResolver_ResolveOriginBySession|TestSend_PeerNotFoundTeachesTheV4AddressForms' -v` → compile error `r.ResolveOriginBySession undefined`; after stubbing, the lineage test fails with `previous_refs = [] partial=false` and the hint test with `hint must say so`. `go test ./internal/module/team/ -run TestLineagePath -v` → with Task 5a.4 merged it passes at once (it exercises P5a-1a + Task 5a.4 code; it is the cross-layer gate, not a red-first test) — run it, record `PASS`, then apply the mutation gate once (cap `Build`'s copy at 10) and see `Resolve("_r00000") … err=peer not found`; revert.
 
 - [ ] **Step 3: Implement.** `module.go`: add `"github.com/wake/purdex/internal/team"` after the `internal/store` import (`:40`); in the `ipeers.Build(ipeers.BuildInput{` literal (`:789-805`) add `PreviousRefs: m.previousRefs(),` after `Contexts:   contexts,` (gofmt re-aligns the keys); before `// titleSnapshot reads …` (`:822`) add:
 
@@ -3857,7 +3926,7 @@ func (r *OriginResolver) originOf(e ipeers.Entry) team.Origin {
 
 - [ ] **Step 5: Commit.**
   ```bash
-  git add internal/module/peers/module.go internal/module/peers/lineage_test.go internal/module/peers/send.go internal/module/peers/send_test.go internal/module/peers/origin_resolver.go internal/module/peers/origin_resolver_session_test.go
+  git add internal/module/peers/module.go internal/module/peers/lineage_test.go internal/module/peers/send.go internal/module/peers/send_test.go internal/module/peers/origin_resolver.go internal/module/peers/origin_resolver_session_test.go internal/module/team/lineage_path_test.go
   git commit -m "feat(peers): inventory carries relay lineage, hint says relays keep a ref, resolver by session id
 
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
@@ -4060,7 +4129,7 @@ and replace `Init`'s body (`:28-31`) with:
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   ```
 
-- [ ] **Gate for P5a-1b:** `go build ./... && go vet ./... && go test ./internal/peers/ ./internal/module/peers/ ./internal/module/hostconfig/` green.
+- [ ] **Gate for P5a-1b:** `go build ./... && go vet ./... && go test ./internal/peers/ ./internal/module/peers/ ./internal/module/hostconfig/ ./internal/module/team/` green (the team package for `TestLineagePath_*`).
 
 ---
 
@@ -4983,8 +5052,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -5171,6 +5242,108 @@ func TestStart_ReconcilesSelfRelayOps(t *testing.T) {
 	f.m.reconcileRelays()
 	if len(f.titles.moves) != before {
 		t.Fatalf("title moved again at reconcile: %v", f.titles.moves)
+	}
+}
+
+// reboot is "the daemon restarted": the first Module is stopped and closed,
+// and a SECOND Module is built over the same core (same data dir ⇒ same
+// team.db) with the given title mover (the same meta.db), its routes on a
+// fresh mux, Start run (boot reconciliation included).
+func (f *fixture) reboot(titles TitleMover) *fixture {
+	f.t.Helper()
+	_ = f.m.Stop(context.Background())
+	_ = f.m.Close()
+	g := &fixture{t: f.t, core: f.core, origins: f.origins, switches: f.switches, usage: f.usage}
+	g.clock.Store(f.clock.Load())
+	g.m = New().WithTitles(titles)
+	g.m.logf = func(string, ...any) {}
+	g.m.now = func() int64 { return g.clock.Load() }
+	g.m.newID = sequentialIDs()
+	if err := g.m.Init(f.core); err != nil {
+		f.t.Fatal(err)
+	}
+	g.mux = http.NewServeMux()
+	g.m.RegisterRoutes(g.mux)
+	g.sub = f.core.Events.AddTestSubscriber()
+	if err := g.m.Start(context.Background()); err != nil {
+		f.t.Fatal(err)
+	}
+	f.t.Cleanup(func() {
+		f.core.Events.RemoveTestSubscriber(g.sub)
+		_ = g.m.Stop(context.Background())
+		_ = g.m.Close()
+	})
+	return g
+}
+
+// Review Focus 3 across the layers (codex round): the mod reports cleared,
+// the daemon restarts, and the mod re-sends the same cleared (P5b-2 re-sends
+// a failed report at the next turn.complete). Over a REAL meta.db
+// (store.OpenMeta + PeerLabels, the production TitleMover) and the same
+// team.db: exactly one lineage row, the title moved once — the new session
+// id holds it, the old row is released (label "", kept: P5a-1a's Move) —
+// and the old ref resolves to the new row through LineageReader → Build →
+// Resolve. Mutation gates: drop the no-op branch of ReportRelay's cleared
+// transition (apply it again) → two lineage rows → red; make Move not NULL
+// the old row → two rows with the label → red.
+func TestRelayReport_ClearedAcrossRestartIsIdempotentEndToEnd(t *testing.T) {
+	ms, err := store.OpenMeta(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ms.Close()
+	labels := ms.PeerLabels()
+	if _, err := labels.Claim("sid-1", "purdex-tester", time.UnixMilli(1000)); err != nil {
+		t.Fatal(err)
+	}
+
+	f := newFixture(t)
+	f.m.titles = labels // the real mover for this test, over the fake-titles default
+	out := f.begin("sid-1")
+	f.decide(out.RequestID, "approve")
+	id := out.Op.ID
+	for _, st := range []team.RelayState{team.RelayWriting, team.RelayWritten} {
+		f.report(id, team.RelayReportRequest{State: st})
+	}
+	if code, op, ae := f.report(id, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-1b"}); code != http.StatusOK || op.State != team.RelayCleared {
+		t.Fatalf("cleared #1: %d %+v %+v", code, op, ae)
+	}
+
+	g := f.reboot(labels) // the daemon came back; Start ran reconcileRelays over the op still in cleared
+	if code, op, ae := g.report(id, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-1b"}); code != http.StatusOK || op.State != team.RelayCleared || op.NewSessionID != "sid-1b" {
+		t.Fatalf("cleared #2 after restart: %d %+v %+v", code, op, ae)
+	}
+
+	// One lineage row.
+	refs, err := g.m.store.PreviousRefs()
+	if err != nil || len(refs) != 1 || len(refs["sid-1b"]) != 1 || refs["sid-1b"][0] != "_abc123" {
+		t.Fatalf("lineage after restart = %v err=%v (want one row sid-1b ← _abc123)", refs, err)
+	}
+	var n int
+	if err := g.m.store.db.QueryRow(`SELECT COUNT(*) FROM session_lineage`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("session_lineage rows = %d err=%v, want 1", n, err)
+	}
+	// The title moved once: the new id holds it, the old row is released.
+	rows, err := labels.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]store.PeerLabel{}
+	for _, r := range rows {
+		byID[r.SessionID] = r
+	}
+	if len(byID) != 2 || byID["sid-1b"].Label != "purdex-tester" || byID["sid-1b"].Rev != 2 || byID["sid-1"].Label != "" {
+		t.Fatalf("peer_labels after restart = %+v (want the label on sid-1b at rev 2 once, sid-1 released)", byID)
+	}
+	// The old ref resolves to the new row through the whole path.
+	records := ipeers.Build(ipeers.BuildInput{
+		HostID: "h:1", Alias: "mlab",
+		Entries:      []ipeers.Entry{{PID: 4242, SessionID: "sid-1b", Name: "purdex-tester", Inbox: "/s/4242", ProcStart: "Sun Sep 13 15:22:36 2026"}},
+		PreviousRefs: refs,
+	})
+	rec, err := ipeers.Resolve(records, "_abc123", ipeers.ResolveSnapshot{})
+	if err != nil || rec.Agent == nil || rec.Agent.SessionID != "sid-1b" {
+		t.Fatalf("Resolve(old ref) after restart = %+v err=%v; want the sid-1b row", rec, err)
 	}
 }
 ```
@@ -7421,9 +7594,9 @@ Measured in the scratch build (`wc -l` for new files, `diff | grep -c '^[<>]'` f
 |---|---|---|
 | **P5a-0** | `wire_relay.go` 154, `wire_relay_test.go` ≈ 45, `wire.go` +1 | **≈ 200** (2 new, 1 edit) |
 | **P5a-1a** | `relay_store.go` 293 (without the 75 retention lines), `relay_store_test.go` 204, `store.go` +4, `peer_label_move.go` 61, `peer_label_move_test.go` 74 | **≈ 636** (4 new, 1 edit) |
-| **P5a-1b** | `record.go` +33, `address.go` +31, `address_lineage_test.go` 104 (+ ≈ 40 for `TestResolve_TwelveHopLineageEndToEnd`), `peers/module.go` +48, `lineage_test.go` 79, `send.go` +5, `send_test.go` +3, `origin_resolver.go` +32, `origin_resolver_session_test.go` 37; `hostconfig/relay.go` 72, `relay_test.go` 44, `handler.go` +6, `module.go` +8, `handler_test.go` +3 | **≈ 545** (5 new, 9 edits) |
+| **P5a-1b** | `record.go` +33, `address.go` +31, `address_lineage_test.go` 104, `team/lineage_path_test.go` ≈ 60 (the 12-hop full-path test), `peers/module.go` +48, `lineage_test.go` 79, `send.go` +5, `send_test.go` +3, `origin_resolver.go` +32, `origin_resolver_session_test.go` 37; `hostconfig/relay.go` 72, `relay_test.go` 44, `handler.go` +6, `module.go` +8, `handler_test.go` +3 | **≈ 565** (6 new, 9 edits) |
 | **P5a-2a** | team `relay_handler.go` ≈ 300, `relay_handler_test.go` ≈ 245 (incl. `TestStart_MakesTheRelayDir`), `module.go` +50 (incl. the `Start` `MkdirAll`), `handler.go` +5, `handler_test.go` +89; `cmd/pdx/main.go` +12, `team_register_test.go` +3 | **≈ 704** (2 new, 5 edits) |
-| **P5a-2b** | `relay_report.go` ≈ 165 (incl. `closeRequestOfReportedOp`, the `not_ready` guard), `relay_report_test.go` ≈ 195 (incl. `TestRelayReport_CancelledClosesTheOpenApprovalOnce`), `module.go` +4, `handler.go` +8, `wire.go` +1 | **≈ 373** (2 new, 3 edits) |
+| **P5a-2b** | `relay_report.go` ≈ 165 (incl. `closeRequestOfReportedOp`, the `not_ready` guard), `relay_report_test.go` ≈ 285 (incl. `TestRelayReport_CancelledClosesTheOpenApprovalOnce` and the cross-layer restart test `TestRelayReport_ClearedAcrossRestartIsIdempotentEndToEnd` with its `reboot` helper), `module.go` +4, `handler.go` +8, `wire.go` +1 | **≈ 463** (2 new, 3 edits) |
 | **P5a-2c** | `relay.go` ≈ 405, `relay_test.go` ≈ 250, `main.go` +3 (no `exitcodes.go` change: still-open is exit 0 + `{"state":"open"}`) | **≈ 658** (2 new, 1 edit) |
 | **P5a-3a** | `retention.go` 134, `retention_test.go` 154, `relay_store.go` +75, `module.go` +2, `peers.go` +13, `peers_was_test.go` 23 | **≈ 401** (3 new, 3 edits) |
 | **P5a-3b** | `RelaySection.tsx` 80, `RelaySection.test.tsx` 88, `host-config-api.ts` +5, `useHostConfigStore.ts` +18, its test +4, `register-modules/index.tsx` +2, its test +2, `en.json` +17, `zh-TW.json` +17, `locale-completeness.test.ts` +9, `types.ts` +23, `approval-api.ts` +11, `approval-notify.ts` +11, `ApprovalDialogHost.tsx` 146 changed lines (file rewritten), `ApprovalDialogHost.selfRelay.test.tsx` 108 | **≈ 541** (3 new, 12 edits) |
@@ -7444,9 +7617,9 @@ Each PR's gate is the test that goes red when the named line is removed; spec §
 
 - **P5a-0:** change any wire constant or JSON tag → `wire_relay_test.go` red (the pinned strings).
 - **P5a-1a:** drop `AND state = ?` from `ReportRelay`'s UPDATE → `TestRelayStore_ConcurrentReportsOneWins` red (two reports apply); drop the `session_lineage` INSERT → `TestRelayStore_ClearedWritesLineageAndChainIsUncapped` red; drop `!relayTransitions[cur.State][r.State]` → `TestRelayStore_ReportTransitionsAndIdempotency` red (`awaiting → writing` applies); make `Move` not NULL the old row → `TestPeerLabels_MoveCarriesLabelOnce` red (idempotency and the released row).
-- **P5a-1b:** **drop the `previous_refs` tier from `resolveRefHead` → `TestResolve_PreviousRefsTier` red: the old ref is `ErrNotFound` (= `peer_not_found` at the HTTP edge)** — spec §15's named mutation; swap the two tiers (lineage before live) → the "live ref must win" assertion red; drop `hasLiveEntry` from the lineage predicate → the dead-holder assertion red; drop the `PreviousRefs` copy in `Build` → `TestBuild_AttachesPreviousRefsBySessionID` red; return `nil` from `previousRefs()` → `TestLocalEnvelope_AttachesPreviousRefsFromLineageReader` red; revert the hint → `TestSend_PeerNotFoundTeachesTheV4AddressForms` red; **cap `previous_refs` at 10 anywhere on the path** (the store's `Lineage` query, `Build`'s copy, or `resolveRefHead`'s scan) → `TestResolve_TwelveHopLineageEndToEnd` red (the oldest of 12 refs is `ErrNotFound`); hostconfig (Task 5a.6): drop `RelaySwitchesKey` from `Init` → `TestRelaySwitches_DefaultsPutAndReader` red at the registry lookup; `normalizeRelay` ignoring a non-boolean → the same test red.
+- **P5a-1b:** **drop the `previous_refs` tier from `resolveRefHead` → `TestResolve_PreviousRefsTier` red: the old ref is `ErrNotFound` (= `peer_not_found` at the HTTP edge)** — spec §15's named mutation; swap the two tiers (lineage before live) → the "live ref must win" assertion red; drop `hasLiveEntry` from the lineage predicate → the dead-holder assertion red; drop the `PreviousRefs` copy in `Build` → `TestBuild_AttachesPreviousRefsBySessionID` red; return `nil` from `previousRefs()` → `TestLocalEnvelope_AttachesPreviousRefsFromLineageReader` red; revert the hint → `TestSend_PeerNotFoundTeachesTheV4AddressForms` red; **cap `previous_refs` at 10 anywhere on the path** (the store's `Lineage` query, `Build`'s copy, or `resolveRefHead`'s scan) → `TestLineagePath_TwelveHopsOldestRefResolvesToTheLiveRow` red (the oldest of 12 refs is `ErrNotFound`); hostconfig (Task 5a.6): drop `RelaySwitchesKey` from `Init` → `TestRelaySwitches_DefaultsPutAndReader` red at the registry lookup; `normalizeRelay` ignoring a non-boolean → the same test red.
 - **P5a-2a:** drop any of the `member` / `off` / `paused` branches in `handleRelayBegin` → `TestRelayBegin_Refusals` red; drop `m.afterClose(after)` from `closeWith` → `TestRelayApprovalCloseMovesTheOp` red (op stays `awaiting_approval` after approve); drop `&& a.Kind == team.KindLead` in `handleDecide` → approving a `self_relay` row is 500 (payload decode) → same test red; drop the `OpenRelayOpBySession` check → the `relay_open` assertion red; drop the `MkdirAll` from `Start` → `TestStart_MakesTheRelayDir` red (`relay dir after Start: err=… no such file`). (The hostconfig gates moved to P5a-1b with Task 5a.6; `drop RelaySwitchesKey from hostconfig Init → every team fixture test fails at Init` still shows here once P5a-2a's fixture reads the key.)
-- **P5a-2b:** drop the `new_session_id` requirement → `TestRelayReport_ForwardPathLineageAndTitle` red (400 expected); drop `m.moveTitle(op)` → its `title moves` assertion red; drop `closeRequestOfReportedOp` from the `ReportApplied` branch → `TestRelayReport_CancelledClosesTheOpenApprovalOnce` red (approval stays `open`, 0 closed events); close it with `CloseIfOpen` directly instead of `closeAs` → the same test red (no `closed` broadcast); return `RelaysActive: 0` → its inflight assertion red; drop `reconcileRelays` from `Start` → `TestStart_ReconcilesSelfRelayOps` red; trust a body-supplied `new_ref` instead of `ipeers.RefID` → the `NewRef` assertion red.
+- **P5a-2b:** drop the `new_session_id` requirement → `TestRelayReport_ForwardPathLineageAndTitle` red (400 expected); drop `m.moveTitle(op)` → its `title moves` assertion red; drop `closeRequestOfReportedOp` from the `ReportApplied` branch → `TestRelayReport_CancelledClosesTheOpenApprovalOnce` red (approval stays `open`, 0 closed events); close it with `CloseIfOpen` directly instead of `closeAs` → the same test red (no `closed` broadcast); return `RelaysActive: 0` → its inflight assertion red; drop `reconcileRelays` from `Start` → `TestStart_ReconcilesSelfRelayOps` red; trust a body-supplied `new_ref` instead of `ipeers.RefID` → the `NewRef` assertion red; **drop the idempotency of the `cleared` transition in `ReportRelay` (apply a second `cleared` as a new transition instead of `ReportNoop`) → `TestRelayReport_ClearedAcrossRestartIsIdempotentEndToEnd` red (`session_lineage rows = 2`)**; make `Move` not NULL the old row → the same test red (`peer_labels … sid-1 released`).
 - **P5a-2c:** return a non-zero code, or print nothing on stdout, when `--wait` runs out with the request still open → `TestRelayCmd_WaitExitCodes` red (both the "after two open polls" and the "before the first answer" cases); map `relay_open` to `ExitError` or stop printing the op → `TestRelayCmd_BeginPrintsOpAndRequestOrRefuses` red; print the 409 code before the detail → the "last stderr token == code" assertion in the same test red; stop sending `self` in `begin` → the `sent.Self` assertion red; parse `wait`'s flags before its positional → `TestRelayCmd_WaitExitCodes` red (usage error).
 - **P5a-3a:** remove the `filepath.Clean(op.HandoffPath) != want` guard and remove `op.HandoffPath` → `TestSweepRetention_RemovesOnlyOwnFilesAndMarksPruned` red (`keep.md` deleted); drop the per-chain rule → `op1.md must be removed` red; drop the 3 d rule → `TestRetentionVictims_Rules` red (`f-old must be a victim`); drop `MarkRelayPruned` → `op1 … pruned` red; drop the `(was …)` suffix → `TestDisplayAddress_WasPreviousRef` red.
 - **P5a-3b:** drop the `kind` switch in the dialog → the `self_relay` body test red (`approval-usage` missing); drop `setSelfRelayPause` before `submitDecision` → the `invocationCallOrder` assertion red; swallow the pause error without a toast → `a pause that fails toasts` red; drop `'relay'` from the section list → `register-modules.test.ts` red; drop a locale key → `locale-completeness.test.ts` red (identical key sets, pinned strings); lock the toggles on `pending` → `two clicks in one tick serialize` red.
@@ -12939,6 +13112,40 @@ test('terminal first ⇒ the native result is returned unchanged and answered_lo
   if (releaseWait) releaseWait(ok('{"state":"closed","reason":"answered_local"}'))
 })
 
+// Review Focus 5 / spec §6.6 step 5 (terminal_override), the interleaving proper: the phone's
+// answer reaches the mod a beat AFTER the terminal's. The fake pdx holds `wait` until the native
+// promise has resolved and only then answers answered_remote 藍. The mod must return the native
+// result (紅) and report answered_local; the late remote answer is ignored (the daemon, which saw
+// the remote decide win its CAS first, records terminal_override — the terminal still stands).
+// Mutation gate: consult `remote` again after the race (`const late = await remote; if (late.who
+// === 'remote') return { result: … }`), i.e. prefer a remote answer that arrived after the native
+// one → `answers` is 藍 and no answered_local report → red.
+test('interleaving: answered_remote arrives after the terminal already answered ⇒ native result, answered_local reported, the late remote ignored', async ($, on) => {
+  session(on)
+  let answerNative: Resolver = null
+  let nativeDone: Promise<unknown> = Promise.resolve()
+  const reported = new Promise<Call>((resolve) => {
+    on('process.run', ($, e) => {
+      const a = e.argv
+      if (sub(a) === 'begin') return ok('{"id":"r5"}')
+      // answered_remote only once the native promise has resolved — never before.
+      if (sub(a) === 'wait') return nativeDone.then(() => ok('{"state":"answered_remote","hook":{"answers":{"紅還是藍？":"藍"}}}'))
+      if (sub(a) === 'report') { resolve([...a]); return ok('{}') }
+      return ok('')
+    })
+  })
+  nativeDone = new Promise((done) => {
+    on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => { answerNative = (v) => { res(v); done(v) } }))
+  })
+  setTimeout(() => answerNative && answerNative(NATIVE_RED), 20)
+  const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
+  expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, isReadOnly: true, ref: 1 }))
+  expect(r.result.answers).toEqual({ '紅還是藍？': '紅' }) // the terminal's, not the phone's
+  const rep = await reported
+  expect(rep.slice(2, 5)).toEqual(['report', 'r5', 'answered_local'])
+  expect(JSON.parse(rep[6])).toEqual({ answers: { '紅還是藍？': '紅' } })
+})
+
 test('the person answers before begin has even returned ⇒ native result, and the row begin opened is reported', async ($, on) => {
   session(on)
   let answerBegin: Resolver = null
@@ -13048,7 +13255,7 @@ test('begin that fails (daemon down, exit 20) ⇒ the native dialog runs alone a
 
 - [ ] **Step 2: Run the tests and verify they fail.**
   - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team-p8a && claude plugin test cmd/pdx/plugin/purdex`
-  - Expected: with `ask.js` absent from `hooks.json`, every test but "headless" and "a subagent's AskUserQuestion …" fails — e.g. `no_responders …`: `expect(calls.map(sub)).toEqual(['begin'])` → `Expected: ["begin"] Received: []` (no hook ran; the native stand-in answered). (The nine tests measured in the scratch build were run against the `cmd/pdx/plugin/hooks/` layout of that build; the two tests added at the consistency fix — `agentId`, `pdx.json` path — are unmeasured.)
+  - Expected: with `ask.js` absent from `hooks.json`, every test but "headless" and "a subagent's AskUserQuestion …" fails — e.g. `no_responders …`: `expect(calls.map(sub)).toEqual(['begin'])` → `Expected: ["begin"] Received: []` (no hook ran; the native stand-in answered). (The nine tests measured in the scratch build were run against the `cmd/pdx/plugin/hooks/` layout of that build; the two tests added at the consistency fix — `agentId`, `pdx.json` path — and the `interleaving …` test of the codex round are unmeasured.)
   - Run: `go test ./cmd/pdx/plugin/` after editing `hooks.json` and before `embed_test.go` → FAIL at `hooks.json = {"modules":["./register.js","./ask.js"]}`; then apply the `embed_test.go` change under **Files**.
 
 - [ ] **Step 3: Implement.** Create `cmd/pdx/plugin/purdex/hooks/ask.js` and list it in `hooks.json`:
@@ -13177,7 +13384,7 @@ function settleNative(n, e, next) {
 
 - [ ] **Step 4: Run the tests and verify they pass.**
   - Run: `claude plugin validate --strict cmd/pdx/plugin/purdex && claude plugin test cmd/pdx/plugin/purdex && go test ./cmd/pdx/plugin/`
-  - Expected: `✔ Validation passed` (the report line for `./ask.js` reads `gating hook with .catch: tool.call{tool=AskUserQuestion}` and lists `$.process.run (via pdx), $.fs.read, $.session.id, $.session.surfaces, $.ui.log`); `11 pass 0 fail` for `hooks/ask.test.ts` (9 measured + 2 added at the consistency fix) plus P5b's own files; `TestFiles_HasTheLayoutClaudeLoads` PASS with the two-module assertion.
+  - Expected: `✔ Validation passed` (the report line for `./ask.js` reads `gating hook with .catch: tool.call{tool=AskUserQuestion}` and lists `$.process.run (via pdx), $.fs.read, $.session.id, $.session.surfaces, $.ui.log`); `12 pass 0 fail` for `hooks/ask.test.ts` (9 measured + 2 added at the consistency fix + the `terminal_override` interleaving case of the codex round) plus P5b's own files; `TestFiles_HasTheLayoutClaudeLoads` PASS with the two-module assertion.
 
 - [ ] **Step 5: Commit.**
   ```bash
@@ -13255,7 +13462,7 @@ Measured in the scratch build (`wc -l` for new files, `diff | grep -c '^[<>]'` f
 | **P8a-1b** | `ask_handler.go` 366 · `ask_handler_test.go` 324 · `handler.go` ±54 · `module.go` +3 | **≈ 747, 4 files** |
 | **P8a-1c** | `cmd/pdx/ask.go` 289 · `ask_test.go` 183 · `main.go` +2 · `hook_ask.go` 96 · `hook_ask_test.go` 110 · `hook.go` ≈ +6 | **≈ 686, 6 files** |
 | **P8a-1d** | `hook_observe.go` 204 · `hook_observe_test.go` ≈ 140 (incl. the route-level `Stop` test) · P2c's `hooks.go` +6 and `hooks_test.go` ≈ +40 (no P5a hello edit: presence is read from `modSeen`) | **≈ 390, 4 files** |
-| **P8a-2** | `cmd/pdx/plugin/purdex/hooks/ask.js` ≈ 100 (`agentId` guard, `pdx.json` path) · `ask.test.ts` ≈ 200 · `hooks.json` +1 · `cmd/pdx/plugin/embed_test.go` ±3 · spec M25/M26 ≈ +30 | **≈ 334, 5 files** |
+| **P8a-2** | `cmd/pdx/plugin/purdex/hooks/ask.js` ≈ 100 (`agentId` guard, `pdx.json` path) · `ask.test.ts` ≈ 230 (incl. the `terminal_override` interleaving case) · `hooks.json` +1 · `cmd/pdx/plugin/embed_test.go` ±3 · spec M25/M26 ≈ +30 | **≈ 364, 5 files** |
 
 All five are under 800 lines and 20 files. The seams are real: 1a has no behaviour change for a running daemon beyond accepting `hook` on the wire; 1b adds routes nothing calls; 1c adds a CLI nothing calls and a hook forward the daemon answers `{}` to (P8a-1d is what makes it open rows); 1d is the degradation; P8a-2 is the only user-visible change and needs the whole line.
 
@@ -13278,6 +13485,7 @@ Each was applied in the scratch build, the named test went red, the mutation was
 5. **Mod: `still_open` loops without returning** — replace `continue` with a return → `still_open loops …` red (`expected 12, received 1`) and `a hold across several wait rounds …` red; measured 2 of 9 fail.
 6. **Terminal-only backstop (P8a-1d)** — make `observeHookEvent` ignore `modPresent` → `TestObserve_ModPresentOrNoRespondersOpensNothing_StopDismissesAll` red (`mod present: rows = […]`) (measured). The hook side is pinned, not mutated: `TestAskForward_UngatedOnlyForAskAndPermission` lists `PostToolUse` without the flag as `false` (U17's cost rule).
 7. **Override only from `approved`** — drop `AND state = 'approved'` in `OverrideIfApproved` → `TestStore_OverrideIfApprovedOnlyFromApproved` red (`an open row cannot be overridden: won=true`).
+8. **Mod: the terminal's answer stands when the remote one lands after it** (`terminal_override` interleaving, codex round; not yet applied in the scratch build) — after `Promise.race` consult `remote` again (`const late = await remote; if (late.who === 'remote' && late.out.state === 'answered_remote') return { result: { questions: e.questions, answers: late.out.hook.answers } }`), i.e. prefer a remote answer that arrived after the native one → `interleaving: answered_remote arrives after the terminal already answered …` red (`answers` is 藍, and `reported` never resolves within the test). Also: drop `settled = true` → the same test stays green (the late answer is ignored by the race either way) — the guard exists to stop the loop's next `wait`, pinned by no test; noted, not a gate.
 
 ---
 
