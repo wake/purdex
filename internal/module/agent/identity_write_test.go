@@ -670,3 +670,17 @@ func TestIdentityWrite_StoresTranscriptPathFromHook(t *testing.T) {
 	}
 	assertIdentity(t, f, "s1", "/w")
 }
+
+// #1624 Task 1: a hook that carries transcript_path but neither session_id
+// nor cwd records nothing: recordSessionIdentity returns early, before the
+// transcript path is looked at.
+func TestIdentityWrite_TranscriptPathWithoutIdentityIsNotRecorded(t *testing.T) {
+	m := newIdentityTestModule(t)
+	seedFrame(t, m, "%5", "cc", 100, "t100", 10)
+	postIdentityEventRaw(t, m, json.RawMessage(`{"hook_event_name":"Stop","transcript_path":"/t/orphan.jsonl"}`))
+	f := loadFrame(t, m, "%5", 100, "t100")
+	if f.TranscriptPath != "" {
+		t.Fatalf("TranscriptPath = %q, want it unrecorded", f.TranscriptPath)
+	}
+	assertIdentity(t, f, "", "")
+}
