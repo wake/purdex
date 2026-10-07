@@ -17,7 +17,8 @@ import { useExecutionStore } from '../stores/useExecutionStore'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { useWorkerSettingsStore } from '../stores/useWorkerSettingsStore'
 import { execAgentCode } from '../lib/nex/worker-agent-status'
-import { isAwaitingApproval, liveWorkerSummary, rowWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
+import { isAwaitingApproval, liveWorkerSummary, prefetchedWorkerSummary, rowWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
+import { useWorkerTitlePrefetchStore } from '../stores/useWorkerTitlePrefetchStore'
 import { selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
 import { workerIcon } from '../lib/worker-icon'
 import type { ExecutionSummary } from '../lib/nex/types'
@@ -84,6 +85,11 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const execRow = useExecutionListStore((s): ExecutionSummary | null =>
     exec && hostId && !execSummary ? rowWorkerSummary(s.byHost, hostId, exec.executionId) : null)
   const workerSummary = execSummary ?? execRow
+  // With neither (an archived worker's unopened tab after a reload, #1557), the summary prefetched for it — for the
+  // title and the icon only: a one-shot snapshot never says the worker is awaiting approval.
+  const execPrefetched = useWorkerTitlePrefetchStore((s): ExecutionSummary | null =>
+    exec && hostId && !workerSummary ? prefetchedWorkerSummary(s.byKey, hostId, exec.executionId) : null)
+  const titleSummary = workerSummary ?? execPrefetched
   const titleSupported = useNexHostStore(selectSessionTitleSupported(hostId))
   const workerIconStyle = useWorkerSettingsStore((s) => s.iconStyle)
   const workerCustomIcon = useWorkerSettingsStore((s) => s.customIcon)
@@ -93,7 +99,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const iconName = getPaneIcon(primaryContent)
   const paneIcon = ICON_MAP[iconName]
   const IconComponent = (exec
-    ? workerIcon(workerSummary?.provider ?? '', workerIconStyle, { ccVariant: ccIconVariant, codexVariant: codexIconVariant, customIcon: workerCustomIcon })
+    ? workerIcon(titleSummary?.provider ?? '', workerIconStyle, { ccVariant: ccIconVariant, codexVariant: codexIconVariant, customIcon: workerCustomIcon })
     : agentIcon ?? paneIcon) as TabIconComponent | undefined
 
   const sessionLookup = { getByCode: (code: string) => sessions.find((sess) => sess.code === code) }
@@ -104,7 +110,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const rawPaneTitle = dynamicTabName && !isTerminated && !!agentType ? session?.pane_title : undefined
   const paneTitle = rawPaneTitle && stripMarker ? stripAgentTitleMarker(rawPaneTitle, agentType) : rawPaneTitle
   // Shared with the notification dispatcher's worker title (worker-summary.ts).
-  const workerTitle = exec ? workerTitleOf(exec, workerSummary, titleSupported) ?? baseLabel : ''
+  const workerTitle = exec ? workerTitleOf(exec, titleSummary, titleSupported) ?? baseLabel : ''
   const displayTitle = exec ? workerTitle : paneTitle ? `${paneTitle} - ${baseLabel}` : baseLabel
   // Permission channel PC2 (spec §5.4, user decision 2026-10-08): 「等待核准」 on a tab is the hand on its light
   // (TabStatusIndicator), never label text. Lifecycle-aware: an ended worker or an old daemon never sets it.

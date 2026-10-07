@@ -1,10 +1,12 @@
 // spa/src/lib/nex/worker-summary.ts — where a worker (execution) tab reads its
-// summary: the live pane state when present, else the host's list row. The tab
-// (`useTabDisplay`) and the notification dispatcher both go through these, so
-// the tab title and the notification title cannot read different sources
-// (worker-pane theme spec §8.2 / §8.4).
+// summary: the live pane state when present, else the host's list row; for its
+// title only, else the summary prefetched for it (#1557, worker-title-prefetch.ts).
+// The tab (`useTabDisplay`) and the notification dispatcher both go through
+// these, so the tab title and the notification title cannot read different
+// sources (worker-pane theme spec §8.2 / §8.4).
 import { executionKey, useExecutionStore } from '../../stores/useExecutionStore'
 import { useExecutionListStore } from '../../stores/useExecutionListStore'
+import { useWorkerTitlePrefetchStore } from '../../stores/useWorkerTitlePrefetchStore'
 import type { ExecutionState } from './event-reducer'
 import type { HostListCaches } from './execution-list-effects'
 import type { ExecutionSummary } from './types'
@@ -22,10 +24,21 @@ export function rowWorkerSummary(byHost: HostListCaches, hostId: string, executi
   return byHost[hostId]?.items.find((r) => r.id === executionId) ?? null
 }
 
-/** Imperative read, same order as the tab: live summary, else list row. */
+/**
+ * The summary fetched only to title a worker that has neither of the above (`useWorkerTitlePrefetchStore`), or null.
+ * A one-shot snapshot: for the title and the icon, never for what the worker is doing. Selector-safe.
+ */
+export function prefetchedWorkerSummary(
+  byKey: Record<string, ExecutionSummary>, hostId: string, executionId: string,
+): ExecutionSummary | null {
+  return byKey[executionKey(hostId, executionId)] ?? null
+}
+
+/** Imperative read for a worker's title, same order as the tab's: live summary, else list row, else the prefetch. */
 export function readWorkerSummary(hostId: string, executionId: string): ExecutionSummary | null {
   return liveWorkerSummary(useExecutionStore.getState().executions, hostId, executionId)
     ?? rowWorkerSummary(useExecutionListStore.getState().byHost, hostId, executionId)
+    ?? prefetchedWorkerSummary(useWorkerTitlePrefetchStore.getState().byKey, hostId, executionId)
 }
 
 /**

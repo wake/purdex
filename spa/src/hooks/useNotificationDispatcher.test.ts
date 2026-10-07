@@ -15,6 +15,7 @@ import { getPrimaryPane } from '../lib/pane-tree'
 import type { Tab } from '../types/tab'
 import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
+import { useWorkerTitlePrefetchStore } from '../stores/useWorkerTitlePrefetchStore'
 import { defaultExecutionState } from '../lib/nex/event-reducer'
 import { emptyListCache } from '../lib/nex/execution-list-effects'
 import type { ExecutionSummary } from '../lib/nex/types'
@@ -928,6 +929,7 @@ describe('worker (execution) tabs in the notification dispatcher', () => {
     useShownHostsStore.setState({ ids: [HOST] })
     useExecutionStore.setState({ executions: {} })
     useExecutionListStore.setState({ byHost: {} })
+    useWorkerTitlePrefetchStore.setState({ byKey: {} })
     useNexHostStore.setState({ byHost: {} })
     showNotification = vi.fn()
     Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
@@ -973,6 +975,21 @@ describe('worker (execution) tabs in the notification dispatcher', () => {
 
     expect(showNotification.mock.calls[0][0].title).toBe(result.current.displayTitle)
     expect(result.current.displayTitle).toBe('Old terminal - proj')
+    unmount()
+  })
+
+  it('#1557: with neither a live summary nor a row, the prefetched summary titles the notification as it does the tab', () => {
+    setTitleSupported(true)
+    const tab = openExecTab()
+    useWorkerTitlePrefetchStore.setState({
+      byKey: { [executionKey(HOST, 'e1')]: summary({ archived: true, brief: '', session_title: { text: 'Fix login', source: 'ai' } }) },
+    })
+    const { result } = renderHook(() => useTabDisplay(tab))
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    dispatch({ status: 'idle', raw_event_name: 'Stop', broadcast_ts: 2, detail: {} })
+
+    expect(showNotification.mock.calls[0][0].title).toBe('Fix login - repo')
+    expect(showNotification.mock.calls[0][0].title).toBe(result.current.displayTitle)
     unmount()
   })
 

@@ -13,6 +13,7 @@ import { compositeKey } from '../lib/composite-key'
 import { useTabDisplay } from './useTabDisplay'
 import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
+import { useWorkerTitlePrefetchStore } from '../stores/useWorkerTitlePrefetchStore'
 import { useWorkerSettingsStore, DEFAULT_WORKER_SETTINGS } from '../stores/useWorkerSettingsStore'
 import { defaultExecutionState } from '../lib/nex/event-reducer'
 import { emptyListCache } from '../lib/nex/execution-list-effects'
@@ -304,6 +305,7 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
   beforeEach(() => {
     useExecutionStore.setState({ executions: {} })
     useExecutionListStore.setState({ byHost: {} })
+    useWorkerTitlePrefetchStore.setState({ byKey: {} })
     useWorkerSettingsStore.setState({ ...DEFAULT_WORKER_SETTINGS })
     useNexHostStore.setState({ byHost: {} })
   })
@@ -337,6 +339,43 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
     setLiveSummary()
     const { result } = renderHook(() => useTabDisplay(execTab({ fromTitle: 'Old terminal' })))
     expect(result.current.displayTitle).toBe('Old terminal - repo')
+  })
+
+  // #1557: an archived worker has no list row, and an unopened tab no live summary — the title prefetch fills in.
+  describe('the title prefetch (last fallback)', () => {
+    const setPrefetched = (over: Partial<ExecutionSummary> = {}) =>
+      useWorkerTitlePrefetchStore.setState({ byKey: { [executionKey('h1', 'e1')]: summary({ archived: true, ...over }) } })
+
+    it('with neither a live summary nor a row, the prefetched summary titles the tab and picks its icon', () => {
+      setTitleSupported(true)
+      setPrefetched({ provider: 'codex', brief: '', session_title: { text: 'Fix login', source: 'ai' } })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Fix login - repo')
+      expect(result.current.IconComponent).toBe(CODEX_ICON_VARIANTS.openai)
+    })
+
+    it('a live summary that arrives later wins over it', () => {
+      setTitleSupported(true)
+      setPrefetched({ session_title: { text: 'Prefetched', source: 'ai' } })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Prefetched - repo')
+      act(() => { setLiveSummary({ session_title: { text: 'Live', source: 'ai' } }) })
+      expect(result.current.displayTitle).toBe('Live - repo')
+    })
+
+    it('a list row wins over it', () => {
+      setPrefetched({ brief: 'Prefetched' })
+      useExecutionListStore.setState({ byHost: { h1: { ...emptyListCache(), items: [summary({ brief: 'Row brief' })] } } })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Row brief - repo')
+    })
+
+    it('names the tab only: a stale pending request in it never marks the tab awaiting approval', () => {
+      setPrefetched({ archived: false, state: 'running', brief: 'Prefetched', pending_permission: { request_id: 'r1', tool_name: 'Bash', since: 1 } })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Prefetched - repo')
+      expect(result.current.isAwaitingApproval).toBe(false)
+    })
   })
 
   it('honours the icon style setting', () => {
