@@ -146,6 +146,10 @@
   "worker.icon.color": "服務商標誌（彩色）",
   "worker.icon.custom": "自訂圖示",
   "worker.icon.pick": "選擇圖示…",
+  "worker.permission_timeout.label": "等待核准逾時",
+  "worker.permission_timeout.desc": "核准請求沒人回答時，過了這段時間就自動拒絕；只影響之後的交接",
+  "worker.permission_timeout.never": "不逾時",
+  "worker.permission_timeout.minutes": "{{n}} 分鐘",
 
   "settings.appearance.title": "外觀",
   "settings.appearance.desc": "應用程式視覺偏好設定",

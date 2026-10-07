@@ -146,6 +146,10 @@
   "worker.icon.color": "Provider logo (colour)",
   "worker.icon.custom": "Custom icon",
   "worker.icon.pick": "Choose icon…",
+  "worker.permission_timeout.label": "Approval timeout",
+  "worker.permission_timeout.desc": "Deny an unanswered approval request automatically after this long; applies to new handoffs only",
+  "worker.permission_timeout.never": "Never",
+  "worker.permission_timeout.minutes": "{{n}} minutes",
 
   "settings.appearance.title": "Appearance",
   "settings.appearance.desc": "Visual preferences for the application",

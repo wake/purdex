@@ -4,6 +4,8 @@ import { renderHook } from '@testing-library/react'
 import {
   NEX_HOST_TTL_MS,
   selectHandoffReady,
+  selectPermissionAskReady,
+  selectPermissionTimeoutMax,
   selectAttachmentFetch,
   selectImageAttachments,
   selectReady,
@@ -548,6 +550,52 @@ describe('selectors', () => {
     seed({ capabilities: caps({ worker_rollup: 'yes' as unknown as undefined }) })
     expect(selectWorkerRollup(H)(useNexHostStore.getState())).toBeNull()
     expect(selectWorkerRollup('ghost')(useNexHostStore.getState())).toBeNull()
+  })
+
+  // Permission channel (nexen contract §1.14, consumer-guide §9.8): the mode is offered only when BOTH the build has the
+  // channel (`capabilities.permissions`) AND this host's max_profile lets `handoff_ask` through (`sandbox_profiles`).
+  describe('permission channel (permission channel plan Task 6)', () => {
+    const PERMS = {
+      profiles: ['handoff_ask'],
+      answer: { method: 'POST', path: '/api/nex/v1/executions/{id}/permissions/{request_id}' },
+      timeout: { max_s: 86400 },
+    }
+    const ASK = ['readonly', 'standard', 'trusted', 'handoff_ask', 'handoff']
+    const NO_ASK = ['readonly', 'standard', 'trusted', 'handoff']
+
+    it.each([
+      ['channel + handoff_ask usable → true', PERMS, ASK, true],
+      ['channel, but max_profile below handoff_ask → false', PERMS, NO_ASK, false],
+      ['handoff_ask listed, but no channel (older build) → false', undefined, ASK, false],
+      ['neither → false', undefined, NO_ASK, false],
+    ] as const)('selectPermissionAskReady: %s', (_label, permissions, profiles, expected) => {
+      seed({ capabilities: caps({ permissions: permissions as never, sandbox_profiles: [...profiles] }) })
+      expect(selectPermissionAskReady(H)(useNexHostStore.getState())).toBe(expected)
+    })
+
+    it('selectPermissionAskReady is false for a host that is not ready, or unknown', () => {
+      seed({ phase: 'unavailable', capabilities: caps({ permissions: PERMS, sandbox_profiles: [...ASK] }) })
+      expect(selectPermissionAskReady(H)(useNexHostStore.getState())).toBe(false)
+      seed({ phase: 'loading', capabilities: null })
+      expect(selectPermissionAskReady(H)(useNexHostStore.getState())).toBe(false)
+      expect(selectPermissionAskReady('ghost')(useNexHostStore.getState())).toBe(false)
+    })
+
+    it('selectPermissionTimeoutMax is permissions.timeout.max_s of a ready host, else null', () => {
+      const st = () => useNexHostStore.getState()
+      seed({ capabilities: caps({ permissions: PERMS, sandbox_profiles: [...ASK] }) })
+      expect(selectPermissionTimeoutMax(H)(st())).toBe(86400)
+      // PR-B build: the channel without the timeout object — `permission_timeout_s` must not be sent.
+      seed({ capabilities: caps({ permissions: { profiles: PERMS.profiles, answer: PERMS.answer }, sandbox_profiles: [...ASK] }) })
+      expect(selectPermissionTimeoutMax(H)(st())).toBeNull()
+      seed({ capabilities: caps({ sandbox_profiles: [...ASK] }) })
+      expect(selectPermissionTimeoutMax(H)(st())).toBeNull()
+      seed({ capabilities: caps({ permissions: { ...PERMS, timeout: { max_s: 'x' } } as never }) })
+      expect(selectPermissionTimeoutMax(H)(st())).toBeNull()
+      seed({ phase: 'unavailable', capabilities: caps({ permissions: PERMS }) })
+      expect(selectPermissionTimeoutMax(H)(st())).toBeNull()
+      expect(selectPermissionTimeoutMax('ghost')(st())).toBeNull()
+    })
   })
 
   it('selectTranscriptPrelude returns the capability object when present and ready, else null', () => {

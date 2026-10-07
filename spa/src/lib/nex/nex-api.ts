@@ -18,6 +18,7 @@ import {
   type InterruptResponse,
   type NexCapabilities,
   type NexHostInfo,
+  type PermissionAnswerResult,
   type SendResponse,
   type WorkerTask,
   type WorkerTasksSnapshot,
@@ -336,6 +337,64 @@ export async function fetchAttachment(
   }
   if (!res.ok) throw await nexErrorFromResponse(res)
   return res.blob()
+}
+
+export interface PermissionAnswer {
+  decision: 'allow' | 'deny'
+  /** Deny only (Nexen ignores it on allow); ≤ 2048 UTF-8 bytes. Absent → Nexen's default sentence. */
+  message?: string
+  /** The pane's control lease — answers need it, like `send` / `interrupt`. */
+  leaseId: string
+}
+
+/**
+ * Answer a `handoff_ask` worker's pending permission request (nexen contract §1.14, consumer-guide §9.8). The route
+ * is read from the host's `capabilities.permissions.answer` with `{id}` and `{request_id}` substituted (URL-encoded).
+ * Like `fetchAttachment`'s, its path is origin-relative and already carries the public prefix (`/api/nex/v1/…`
+ * on a pdx daemon, measured on mlab), so it goes straight to `pinnedHostFetch` — never through `nexFetch`, which
+ * would prefix it a second time. The capabilities are the caller's (the cached `useNexHostStore` entry), passed in
+ * as `delegateExecution` takes them, so this module does not import that store (which imports this one).
+ *
+ * Refused unsent: a host without `permissions.answer` (`permission_unsupported`), a route that is not an
+ * origin-relative POST (`permission_route_invalid`), a host this device lacks (`host_removed`). Every other failure
+ * keeps the daemon's `code` — `permission_not_pending`, `permission_not_found`, `invalid_permission_answer`,
+ * `lease_*` — or is `network` for a request that never reached it.
+ */
+export async function answerPermission(
+  hostId: string,
+  executionId: string,
+  requestId: string,
+  a: PermissionAnswer,
+  caps: Pick<NexCapabilities, 'permissions'> | null | undefined,
+): Promise<PermissionAnswerResult> {
+  if (!useHostStore.getState().hosts[hostId]) throw new NexApiError(0, 'host_removed', 'host removed')
+  const route: unknown = caps?.permissions?.answer
+  if (typeof route !== 'object' || route === null) {
+    throw new NexApiError(0, 'permission_unsupported', 'host does not declare capabilities.permissions.answer')
+  }
+  const { method, path } = route as { method?: unknown; path?: unknown }
+  if (typeof method !== 'string' || method.toUpperCase() !== 'POST'
+    || typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
+    throw new NexApiError(0, 'permission_route_invalid', `permission answer route not usable: ${String(method)} ${String(path)}`)
+  }
+  const url = path
+    .replaceAll('{id}', () => encodeURIComponent(executionId))
+    .replaceAll('{request_id}', () => encodeURIComponent(requestId))
+  const body = a.message !== undefined
+    ? { decision: a.decision, message: a.message, lease_id: a.leaseId }
+    : { decision: a.decision, lease_id: a.leaseId }
+  let res: Response
+  try {
+    res = await pinnedHostFetch(hostId, url, {
+      method: 'POST',
+      headers: { 'X-Pdx-Client': getNexClientId(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch (e) {
+    if (!useHostStore.getState().hosts[hostId]) throw new NexApiError(0, 'host_removed', 'host removed')
+    throw new NexApiError(0, 'network', e instanceof Error ? e.message : String(e))
+  }
+  return okJson<PermissionAnswerResult>(res)
 }
 
 // Resolve an optional `host` hint (pane content / deeplink) onto a known SPA
