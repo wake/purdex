@@ -104,6 +104,18 @@ describe('NexExecutionsTable', () => {
     expect(rows()).toBe(250)
     expect(screen.queryByText(/show more/i)).toBeNull()
   })
+
+  it('a host switch starts from 100 rows again, not the grown count (#1593)', async () => {
+    const many = Array.from({ length: 250 }, (_, i) => row({ id: `exc_${String(i).padStart(16, '0')}` }))
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: many, next_cursor: '' })
+    const { container, rerender } = render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByText(/show more/i))
+    expect(container.querySelectorAll('tbody tr').length).toBe(200)
+    rerender(<NexExecutionsTable hostId="h2" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(container.querySelectorAll('tbody tr').length).toBe(100)
+  })
   it('lists executions with (you) on my lease and opens a host-scoped execution pane via the deeplink helper', async () => {
     render(<NexExecutionsTable hostId="h" enabled />)
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
