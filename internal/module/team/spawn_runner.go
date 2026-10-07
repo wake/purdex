@@ -2,7 +2,8 @@ package teammod
 
 // The spawn runner (spec §7.2 steps 3–6, §9.3): a state machine persisted in
 // spawn_ops, one compare-and-set per step. This file holds its seams, the
-// loop and the ways an op ends; the tmux steps are in spawn_tmux.go.
+// loop and the ways an op ends; the tmux steps are in spawn_tmux.go, the
+// registration and the member in spawn_register.go.
 
 import (
 	"context"
@@ -44,7 +45,7 @@ func (m *Module) initSpawn(c *core.Core) error {
 	if c.Tmux != nil {
 		m.tmux = c.Tmux
 	}
-	return nil
+	return m.initRegister(c)
 }
 
 func lookup[T any](c *core.Core, key string) (T, error) {
@@ -74,6 +75,7 @@ func (m *Module) startSpawn(id string) {
 // returns and leaves the op running at its step for the next boot; a step
 // team.db refuses to record aborts the op instead (abortSpawn).
 func (m *Module) runSpawn(id string) {
+	var member *team.Origin // the registry entry the registration step saw
 	for !m.stopping() {
 		op, ok, err := m.store.GetSpawnOp(id)
 		if err != nil {
@@ -92,6 +94,10 @@ func (m *Module) runSpawn(id string) {
 			next = m.spawnCreate(op)
 		case team.StepSessionCreated:
 			next = m.spawnLaunch(op)
+		case team.StepLaunched:
+			member, next = m.spawnRegister(op)
+		case team.StepRegistered:
+			m.spawnFinish(op, member)
 		default:
 			m.logf("[team] spawn %s: no runner step for %q", id, op.Step)
 		}

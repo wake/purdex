@@ -17,6 +17,13 @@ import (
 // the asked model and effort, is typed once into its window 0.
 func TestSpawn_LaunchLineHasPluginDirModelAndEffort(t *testing.T) {
 	f, root := newSpawnFixture(t, 2)
+	var tag string // read while the launched session is there
+	f.m.beforeSpawnStep = func(op spawnRow) {
+		if op.Step == team.StepLaunched {
+			id, _ := f.tmux.PaneIdentity(t.Context(), op.PaneID, spawnTagOption)
+			tag = id.Tag
+		}
+	}
 	op := f.runOp(1, root, func(r *spawnRow) { r.Model, r.Effort, r.Title = "opus[1m]", "high", "worker" })
 	if op.Step != team.StepLaunched || op.PaneID != "%0" || op.TmuxID != "$0" || op.TmuxInstance != "4242:1700000000" {
 		t.Fatalf("op = %+v", op)
@@ -25,8 +32,8 @@ func TestSpawn_LaunchLineHasPluginDirModelAndEffort(t *testing.T) {
 	if got := f.tmux.RawKeysSent(); len(got) != 1 || got[0].Target != "$0:0" || !reflect.DeepEqual(got[0].Keys, []string{keys}) {
 		t.Fatalf("keys = %+v, want one send of %q to $0:0", got, keys)
 	}
-	if id, _ := f.tmux.PaneIdentity(t.Context(), "%0", spawnTagOption); id.Tag != spawnID(1) {
-		t.Fatalf("the session's ownership tag = %q, want the op id", id.Tag)
+	if tag != spawnID(1) {
+		t.Fatalf("the session's ownership tag = %q, want the op id", tag)
 	}
 }
 

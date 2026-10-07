@@ -198,10 +198,11 @@ var _ agent.ContextUsageReader = (*fakeUsage)(nil)
 
 // fakeTitles records title moves (spec §8.4); *store.PeerLabelStore in production.
 type fakeTitles struct {
-	mu    sync.Mutex
-	moves [][2]string
-	has   map[string]bool // sessions that currently hold a title
-	fail  bool            // meta.db is down: every Move errors
+	mu     sync.Mutex
+	moves  [][2]string
+	has    map[string]bool // sessions that currently hold a title
+	fail   bool            // meta.db is down: every Move errors
+	claims [][2]string     // Claim(session, title): a spawned member's title
 }
 
 func (f *fakeTitles) Move(from, to string, _ time.Time) (bool, error) {
