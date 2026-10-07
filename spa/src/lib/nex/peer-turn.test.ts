@@ -128,6 +128,84 @@ describe('peer_message opens a turn (spec §7)', () => {
   })
 })
 
+// PR #1923 review A-1: a peer turn's end is not this pane's send settling. If it unlocked the reply box while the
+// pane's own POST is unanswered, a second send would overwrite pendingLocal and the first message_accepted would
+// then clear the wrong line.
+describe('a peer turn ending never settles the pane\'s own send (spec §7)', () => {
+  const PEER_TURN = scoped.payload.turn_id
+  const life = (seq: number, kind: string, payload: Record<string, unknown> = {}): NexEvent =>
+    ({ seq, execution_id: scoped.execution_id, kind, payload, created_at: scoped.created_at + seq })
+  const result = (seq: number): NexEvent => life(seq, 'result', { type: 'result', subtype: 'success', is_error: false, duration_ms: 1000 })
+  const terminal = (seq: number, turnId: string): NexEvent => life(seq, 'execution.terminal', { turn_id: turnId, reason: 'final_response', state: 'idle' })
+  /** This pane's POST is out and unanswered: its line is up, the box locked. */
+  const posting = (): ExecutionState => ({
+    ...defaultExecutionState(),
+    pendingSend: true,
+    sendLocked: true,
+    pendingLocal: { text: 'my own words', delivery: null },
+  })
+  const own = (s: ExecutionState) => ({ pendingSend: s.pendingSend, sendLocked: s.sendLocked, pendingLocal: s.pendingLocal })
+  const LOCKED = { pendingSend: true, sendLocked: true, pendingLocal: { text: 'my own words', delivery: null } }
+
+  it('POST unanswered → peer turn → its result and terminal keep the lock; the own message_accepted settles it', () => {
+    let s = applyDurableEvent(posting(), peerEvent())
+    s = applyDurableEvent(s, result(scoped.seq + 1))
+    expect(own(s)).toEqual(LOCKED)
+    s = applyDurableEvent(s, terminal(scoped.seq + 2, PEER_TURN))
+    expect(own(s)).toEqual(LOCKED)
+    // The peer turn itself still ended normally.
+    expect(s.turnMeta[0].outcome).toBe('ok')
+    expect(hasOpenTurn(s)).toBe(false)
+
+    s = applyDurableEvent(s, accepted(scoped.seq + 3, 'my own words', 'trn_mine'))
+    expect(s.pendingLocal).toBeNull()
+    expect(s.sendLocked).toBe(false)
+    expect(s.pendingSend).toBe(true)
+    // The own turn's end settles it, as before.
+    s = applyDurableEvent(s, result(scoped.seq + 4))
+    expect(s.pendingSend).toBe(false)
+  })
+
+  it('an own send queued behind the peer turn stays pending through the peer turn\'s result', () => {
+    let s = applyDurableEvent(posting(), peerEvent())
+    s = applyDurableEvent(s, accepted(scoped.seq + 1, 'my own words', 'trn_mine'))
+    expect(own(s)).toEqual({ pendingSend: true, sendLocked: false, pendingLocal: null })
+    s = applyDurableEvent(s, result(scoped.seq + 2))
+    expect(s.pendingSend).toBe(true)
+    s = applyDurableEvent(s, terminal(scoped.seq + 3, PEER_TURN))
+    expect(s.pendingSend).toBe(true)
+    s = applyDurableEvent(s, result(scoped.seq + 4))
+    expect(s.pendingSend).toBe(false)
+  })
+
+  it('the peer turn\'s error, orphaned and stalled ends keep the own send too', () => {
+    for (const kind of ['execution.error', 'execution.turn_orphaned', 'execution.turn_stalled']) {
+      let s = applyDurableEvent(posting(), peerEvent())
+      s = applyDurableEvent(s, life(scoped.seq + 1, kind, { turn_id: PEER_TURN }))
+      expect(own(s), kind).toEqual(LOCKED)
+      expect(s.turnMeta[0].outcome, kind).toBe('failed')
+    }
+  })
+
+  it('a non-peer turn ending keeps today\'s behaviour: it settles pendingSend / sendLocked', () => {
+    const base = (): ExecutionState => {
+      // Someone else's (or an earlier) send opened turn trn_x; this pane's POST is still out.
+      const s = applyDurableEvent(defaultExecutionState(), accepted(1, 'earlier', 'trn_x'))
+      return { ...s, ...LOCKED }
+    }
+    expect(applyDurableEvent(base(), result(2))).toMatchObject({ pendingSend: false, sendLocked: false })
+    expect(applyDurableEvent(base(), terminal(2, 'trn_x'))).toMatchObject({ pendingSend: false, sendLocked: false })
+    expect(applyDurableEvent(base(), life(2, 'execution.error', { turn_id: 'trn_x' }))).toMatchObject({ pendingSend: false, sendLocked: false })
+    expect(applyDurableEvent(base(), life(2, 'execution.turn_stalled', { turn_id: 'trn_x' }))).toMatchObject({ pendingSend: false, sendLocked: false, pendingLocal: null })
+  })
+
+  it('an execution-scoped end (terminated) still settles it during a peer turn: the execution is over', () => {
+    let s = applyDurableEvent(posting(), peerEvent())
+    s = applyDurableEvent(s, life(scoped.seq + 1, 'execution.terminated', { principal_id: 'p' }))
+    expect(s).toMatchObject({ pendingSend: false, sendLocked: false })
+  })
+})
+
 describe('the peer line is never the user\'s own', () => {
   it('isPeerMessage recognises it; isOpeningLine does not', () => {
     const [line] = applyDurableEvent(defaultExecutionState(), peerEvent()).messages
