@@ -343,7 +343,6 @@ export function registerBuiltinModules(): void {
 
   registerBuiltinTerminalLinks({
     urlOpener: {
-      isElectron: caps.isElectron,
       openBrowserTab,
       openExternal: (url) => window.electronAPI?.openExternalUrl(url),
     },
