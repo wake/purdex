@@ -132,9 +132,13 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 
 	done := make(chan struct{})
 	var closeDone sync.Once
-	// Deferred as well as called below: a panic out of the sequence must not leak the signal watcher.
-	defer closeDone.Do(func() { close(done) })
 	watcherDone := make(chan struct{})
+	// Deferred as well as done below: a panic out of the sequence must neither leak the signal
+	// watcher nor leave it running (it could still take a later signal and exit) once we unwind.
+	defer func() {
+		closeDone.Do(func() { close(done) })
+		<-watcherDone
+	}()
 	go func() {
 		defer close(watcherDone)
 		if !signalTriggered {
