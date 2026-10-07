@@ -35,9 +35,10 @@ func TestOriginResolver_LeadPresence(t *testing.T) {
 	writeRegistryFixture(t, dir, "10.json", `{"pid":10,"sessionId":"sid-1","cwd":"/w","procSt`)
 	check("its own file truncated", "sid-1", 10, targetProcStart, PresenceUnknown)
 
-	// An empty, missing or unlistable registry never makes a live pid gone.
-	// A dead pid is gone only from a registry that was read (empty): one
-	// that is missing or unlistable cannot show the session living on.
+	// An empty, missing or unlistable registry never makes a live pid gone,
+	// and never keeps a dead one alive: a dead pid is the process table's
+	// fact (the lead's conversation ended, spec §7.1), whatever the registry
+	// shows — so a dir that vanishes mid-read cannot flip the answer.
 	file := filepath.Join(t.TempDir(), "not-a-dir")
 	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -45,10 +46,6 @@ func TestOriginResolver_LeadPresence(t *testing.T) {
 	for name, d := range map[string]string{"empty": t.TempDir(), "missing": filepath.Join(t.TempDir(), "missing"), "unlistable": file} {
 		r.m.registryDir = d
 		check(name+" registry, live pid", "sid-1", 10, targetProcStart, PresenceUnknown)
-		wantDead := PresenceUnknown
-		if name == "empty" {
-			wantDead = PresenceGone
-		}
-		check(name+" registry, dead pid", "sid-3", 30, targetProcStart, wantDead)
+		check(name+" registry, dead pid", "sid-3", 30, targetProcStart, PresenceGone)
 	}
 }
