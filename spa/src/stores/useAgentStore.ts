@@ -1,6 +1,6 @@
 // spa/src/stores/useAgentStore.ts
 import { create } from 'zustand'
-import { getActiveSessionInfo } from '../lib/active-session'
+import { isAgentVisibleInActiveTab } from '../lib/active-session'
 import { compositeKey } from '../lib/composite-key'
 import { daemonNsToMsOrNull, parseExit, parseProvenance } from '../lib/rebuild/provenance'
 import { useTabStore } from './useTabStore'
@@ -290,18 +290,17 @@ export const useAgentStore = create<AgentState>()(
           return
         }
 
-        // Mark unread when not focused. Notification raises status=idle but
-        // shouldn't surface as actionable: cc emits PdxNotification post-W2,
-        // codex/opencode pre-migration still emit "Notification". Recognise
-        // both literals during the transition.
+        // Mark unread unless some pane of the active tab shows the agent
+        // (#1853 — the notification dispatcher's rule). Notification raises
+        // status=idle but shouldn't surface as actionable: cc emits
+        // PdxNotification post-W2, codex/opencode pre-migration still emit
+        // "Notification". Recognise both literals during the transition.
         const rawName = event.raw_event_name
         const isNotification = rawName === 'Notification' || rawName === 'PdxNotification'
         const notificationSilent = event.detail?.notification_silent === true
         const isActionable = status === 'waiting' || status === 'error' ||
           (status === 'idle' && !isNotification && !notificationSilent)
-        const activeInfo = getActiveSessionInfo()
-        const activeKey = activeInfo ? compositeKey(activeInfo.hostId, activeInfo.sessionCode) : ''
-        if (isActionable && activeKey !== key) {
+        if (isActionable && !isAgentVisibleInActiveTab(hostId, sessionCode)) {
           set((s) => ({ unread: { ...s.unread, [key]: true } }))
         }
       }
