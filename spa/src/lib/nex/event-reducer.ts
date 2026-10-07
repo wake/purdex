@@ -9,7 +9,7 @@ import { isResultError } from './cost-summary'
 import type { StreamMessage } from './message-types'
 import { defaultPreludeState, type PreludeState } from './prelude'
 import { finalizeBlock, type PartialAssembly } from './partial'
-import { applyPermissionEvent, isPermissionEventKind, type PermissionTable } from './permissions'
+import { applyPermissionEvent, isPermissionEventKind, settlePendingPermissions, type PermissionTable } from './permissions'
 import type { NexSseFrame } from './sse-parser'
 import { endTurn, recordN2ToolResult, recordN2ToolUse, recordToolEnds, recordToolStarts, type ToolActivity } from './tool-activity'
 import { applyTaskEvent, applyTaskSnapshot, type TaskTable } from './tasks'
@@ -602,6 +602,7 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       next = { ...next, pendingSend: false }
       const reason = str(p, 'reason')
       const state = str(p, 'state') ?? 'idle'
+      if (state === 'failed' || state === 'terminated') next = { ...next, permissions: settlePendingPermissions(next.permissions) }
       return patchSummary(next, {
         state, ...(reason ? { last_turn_reason: reason } : {}),
         // A turn that ended the execution (failed / terminated) leaves no live permission request.
@@ -611,13 +612,13 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
     case 'execution.error':
       return patchSummary({ ...next, pendingSend: false }, {})
     case 'execution.rejected':
-      return patchSummary(next, { state: 'rejected', pending_permission: null, ...(str(p, 'reason') ? { reject_reason: str(p, 'reason') } : {}) })
+      return patchSummary({ ...next, permissions: settlePendingPermissions(next.permissions) }, { state: 'rejected', pending_permission: null, ...(str(p, 'reason') ? { reject_reason: str(p, 'reason') } : {}) })
     case 'execution.terminated':
       // execution/service.go:1184 — {principal_id} only; terminal_reason is
       // the summary's business, the refetch brings it.
-      return patchSummary({ ...next, pendingSend: false }, { state: 'terminated', pending_permission: null })
+      return patchSummary({ ...next, pendingSend: false, permissions: settlePendingPermissions(next.permissions) }, { state: 'terminated', pending_permission: null })
     case 'execution.archived':
-      return patchSummary(next, { archived: true, pending_permission: null })
+      return patchSummary({ ...next, permissions: settlePendingPermissions(next.permissions) }, { archived: true, pending_permission: null })
     case 'execution.unarchived':
       return patchSummary(next, { archived: false })
     case 'execution.observer_attached':

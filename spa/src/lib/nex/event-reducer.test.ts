@@ -1142,6 +1142,44 @@ describe('permission events (Nexen v0.19.0 permission.requested / permission.res
     expect(selectPendingPermission(s)).toBeUndefined()
   })
 
+  describe('an ending lifecycle event settles pending requests', () => {
+    const pendingState = () => applyDurableEvent(started(), requested(3, 'req_a', 5000))
+    const enders: Array<[string, NexEvent]> = [
+      ['execution.terminated', at(4, 'execution.terminated', 6000, { principal_id: 'p' })],
+      ['execution.archived', at(4, 'execution.archived', 6000, {})],
+      ['execution.rejected', at(4, 'execution.rejected', 6000, { reason: 'no' })],
+      ['execution.terminal -> failed', at(4, 'execution.terminal', 6000, { turn_id: 'trn_1', reason: 'error', state: 'failed' })],
+      ['execution.terminal -> terminated', at(4, 'execution.terminal', 6000, { turn_id: 'trn_1', reason: 'x', state: 'terminated' })],
+    ]
+    for (const [name, e] of enders) {
+      it(`${name} cancels the pending entry as execution_ended (no notice)`, () => {
+        const s = applyDurableEvent(pendingState(), e)
+        expect(s.permissions.req_a).toMatchObject({ status: 'cancelled', reason: 'execution_ended', toolName: 'Bash', requestedAt: 5000 })
+        expect(selectPendingPermission(s)).toBeUndefined()
+        expect(s.expiredNotice).toBeNull()
+      })
+    }
+
+    it('execution.terminal -> idle keeps the pending entry', () => {
+      const s = applyDurableEvent(pendingState(), at(4, 'execution.terminal', 6000, { turn_id: 'trn_1', reason: 'done', state: 'idle' }))
+      expect(s.permissions.req_a.status).toBe('pending')
+    })
+
+    it('leaves already-settled entries untouched', () => {
+      let s = applyDurableEvent(pendingState(), resolved(4, 'req_a', 'allowed'))
+      s = applyDurableEvent(s, at(5, 'execution.terminated', 6000, {}))
+      expect(s.permissions.req_a.status).toBe('allowed')
+    })
+
+    it('a late permission.resolved after the sweep does not resurrect pending', () => {
+      let s = applyDurableEvent(pendingState(), enders[0][1])
+      s = applyDurableEvent(s, resolved(5, 'req_a', 'allowed'))
+      expect(s.permissions.req_a.status).toBe('allowed')
+      s = applyDurableEvent(s, requested(6, 'req_a', 5000))
+      expect(selectPendingPermission(s)).toBeUndefined()
+    })
+  })
+
   it('malformed payloads (no request_id, or an outcome outside the closed set) change nothing but the seq; never a message', () => {
     let s = started()
     const msgs = s.messages.length
