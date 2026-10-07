@@ -55,6 +55,7 @@ type fakeTeamCmdDaemon struct {
 	sendReq  []ipeers.SendRequest
 	send     answer
 	dropSend bool
+	holdSend bool
 	killReq  []team.KillRequest
 	kill     answer
 	queries  []string
@@ -90,6 +91,12 @@ func (f *fakeTeamCmdDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var req ipeers.SendRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		f.sendReq = append(f.sendReq, req)
+		if f.holdSend {
+			f.mu.Unlock()
+			<-r.Context().Done()
+			f.mu.Lock()
+			return
+		}
 		if f.dropSend {
 			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
 				conn.Close()
@@ -382,20 +389,28 @@ func TestSpawnCmd_BriefFromTheLeadInboxWithThePrefix(t *testing.T) {
 
 // Coordinator decision 14: a brief that fails after the spawn is exit 1, the
 // member stays on stdout, stderr says how to send it by hand, and the send
-// is never replayed (a dropped connection is one send).
+// is never replayed (a dropped connection is one send). The code is the
+// last stderr token (PR P4-7 review): the daemon's, else the CLI's.
 func TestSpawnCmd_BriefFailureExits1KeepsStdout(t *testing.T) {
-	for name, d := range map[string]*fakeTeamCmdDaemon{
-		"refused": {send: answer{status: http.StatusBadRequest, body: ipeers.APIError{Error: "text_invalid", Detail: "bad"}}},
-		"dropped": {dropSend: true},
+	defer func(d time.Duration) { briefTimeout = d }(briefTimeout)
+	briefTimeout = 100 * time.Millisecond
+	for code, d := range map[string]*fakeTeamCmdDaemon{
+		"text_invalid":       {send: answer{status: http.StatusBadRequest, body: ipeers.APIError{Error: "text_invalid", Detail: "bad"}}},
+		"not_ready":          {send: answer{status: http.StatusServiceUnavailable, body: ipeers.APIError{Error: "not_ready", Detail: "retry"}}},
+		"host_unknown":       {send: answer{status: http.StatusNotFound, body: ipeers.APIError{Error: "host_unknown", Detail: "no peer host"}}},
+		"unsupported":        {send: answer{status: http.StatusNotFound, body: "404 page not found"}},
+		"no_answer":          {holdSend: true},
+		"daemon_unavailable": {dropSend: true},
 	} {
 		d.spawns = []func(team.SpawnRequest) answer{spawnDone}
-		code, stdout, stderr := driveTeamCmdWith(t, runSpawnCmd, d, leadEnv(), []daemonclient.Option{leadClockOpt(), leadNoKeepAlive()},
+		exit, stdout, stderr := driveTeamCmdWith(t, runSpawnCmd, d, leadEnv(), []daemonclient.Option{leadClockOpt(), leadNoKeepAlive()},
 			"--model", "sonnet", "--brief", "hi")
-		if code != ExitError || !strings.Contains(stdout, `"ref":"_m1m1m1"`) || len(d.sendReq) != 1 {
-			t.Errorf("%s: code=%d stdout=%q sends=%d", name, code, stdout, len(d.sendReq))
+		if exit != ExitError || !strings.Contains(stdout, `"ref":"_m1m1m1"`) || len(d.sendReq) != 1 {
+			t.Errorf("%s: code=%d stdout=%q sends=%d", code, exit, stdout, len(d.sendReq))
 		}
-		if !strings.Contains(stderr, "pdx spawn: member 已開啟，但 brief 沒送出：") || !strings.Contains(stderr, "；請用 pdx msg send mlab/_m1m1m1 手動送") {
-			t.Errorf("%s: stderr = %q", name, stderr)
+		if !strings.HasPrefix(stderr, "pdx spawn: member 已開啟，但 brief 沒送出") ||
+			!strings.Contains(stderr, "；請用 pdx msg send mlab/_m1m1m1 手動送 ") || lastToken(stderr) != code {
+			t.Errorf("%s: stderr = %q", code, stderr)
 		}
 	}
 }

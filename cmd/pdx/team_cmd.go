@@ -69,6 +69,10 @@ var spawnNewID = uuid.NewString
 // can shorten it.
 var spawnSettleBound = 9 * time.Minute
 
+// briefTimeout bounds the brief's one POST (as `pdx msg send`). A var only
+// so tests can shorten it.
+var briefTimeout = msgSendTimeout
+
 func runSpawn(args []string) {
 	os.Exit(runSpawnCmd(context.Background(), args, os.Getenv, os.Stdout, os.Stderr))
 }
@@ -292,13 +296,34 @@ type spawnOutput struct {
 // with the member already on stdout (coordinator decision 14).
 func sendBrief(ctx context.Context, client *daemonclient.Client, inbox string, op team.SpawnOp, brief string, stderr io.Writer) int {
 	text := fmt.Sprintf(team.MemberBriefPrefixFmt, op.LeadAddress, op.TeamID) + "\n" + brief
-	sctx, cancel := context.WithTimeout(ctx, msgSendTimeout)
+	sctx, cancel := context.WithTimeout(ctx, briefTimeout)
 	defer cancel()
 	req := ipeers.SendRequest{To: op.Member.Address, Text: text, OriginInbox: inbox}
 	if _, err := client.Once(sctx, http.MethodPost, "/api/peers/send", req, nil); err != nil {
-		fmt.Fprintf(stderr, "pdx spawn: member 已開啟，但 brief 沒送出：%s；請用 pdx msg send %s 手動送\n",
-			sanitizeCell(err.Error()), sanitizeCell(op.Member.Address))
+		detail, code := briefErr(err)
+		fmt.Fprintf(stderr, "pdx spawn: member 已開啟，但 brief 沒送出（%s）；請用 pdx msg send %s 手動送 %s\n",
+			sanitizeCell(detail), sanitizeCell(op.Member.Address), sanitizeCell(code))
 		return ExitError
 	}
 	return ExitOK
+}
+
+// briefErr is a failed brief's detail and code, the code last on stderr as
+// for every API error: the daemon's own code when it sent one, else the
+// CLI's — unsupported (plain 404), no_answer (the bound ran out),
+// invalid_response (an answer with no code), daemon_unavailable (no answer).
+func briefErr(err error) (detail, code string) {
+	var se *daemonclient.StatusError
+	switch {
+	case errors.As(err, &se) && se.API.Error != "":
+		return se.API.Detail, se.API.Error
+	case se != nil:
+		return se.Error(), "invalid_response"
+	case errors.Is(err, daemonclient.ErrUnsupported):
+		return "這個 daemon 沒有 /api/peers/send", daemonclient.ErrUnsupported.Error()
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Sprintf("daemon %s 內沒有回應", briefTimeout), daemonclient.ErrNoAnswer.Error()
+	default:
+		return err.Error(), daemonclient.ErrUnavailable.Error()
+	}
 }
