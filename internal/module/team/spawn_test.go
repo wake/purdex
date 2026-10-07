@@ -1,13 +1,16 @@
 package teammod
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	ipeers "github.com/wake/purdex/internal/peers"
@@ -133,6 +136,125 @@ func TestSpawn_ExtractsThePluginTreeOnlyWhenAbsent(t *testing.T) {
 		if got, err := os.ReadFile(js); err != nil || string(got) != want {
 			t.Fatalf("spawn %d: register.js = %q (%v), want %q", i, got, err, want)
 		}
+	}
+}
+
+// waitSpawn polls op id until it leaves running (5 s at most).
+func waitSpawn(t *testing.T, s *Store, id string) spawnRow {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if op, ok, err := s.GetSpawnOp(id); err == nil && ok && op.State != team.SpawnRunning {
+			return op
+		}
+	}
+	t.Fatalf("spawn op %s still running after 5 s", id)
+	return spawnRow{}
+}
+
+// Spec §7.2 step 3, §9.3, §15: a daemon stopped right after it recorded
+// session_created; the restarted daemon (a second Module over the same
+// team.db) continues from that step: no second create, one launch, done.
+// The first runner then wakes with its stale read and loses the CAS that
+// is the right to send. Mutation gate: drop the step CAS → two sends.
+func TestSpawn_RestartMidOpOpensNothingTwice(t *testing.T) {
+	f, root := newSpawnFixture(t, 2)
+	held, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	letGo := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(letGo) // before the fixture's Stop, which joins the held runner
+	f.m.beforeSpawnStep = func(op spawnRow) {
+		if op.Step == team.StepSessionCreated {
+			once.Do(func() { close(held); <-release })
+		}
+	}
+	f.m.spawnWait = 10 * time.Millisecond
+	if code, op, e := f.spawn(spawnID(1), root, nil); code != 200 || op.State != team.SpawnRunning {
+		t.Fatalf("spawn = %d %+v %+v", code, op, e)
+	}
+	<-held
+	f.register("%0", "sid-m1")
+	g := New().WithTitles(f.titles)
+	g.logf, g.now, g.spawnSleep = func(string, ...any) {}, func() int64 { return f.clock.Load() }, f.fastSleep
+	if err := g.Init(f.core); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = g.Stop(context.Background()); _ = g.Close() })
+	op := waitSpawn(t, g.store, spawnID(1))
+	letGo()
+	_ = f.m.Stop(context.Background()) // joins the first runner
+	if op.State != team.SpawnDone || f.sessions.count() != 1 || len(f.tmux.RawKeysSent()) != 1 {
+		t.Fatalf("op %s, creates %d, sends %+v: want done, 1, 1", op.State, f.sessions.count(), f.tmux.RawKeysSent())
+	}
+}
+
+// Spec §9.3: at boot a launched op past its 20 s budget is killed (the
+// recorded id, under the recorded generation) and fails
+// member_start_timeout; one whose tmux session is gone is abandoned and
+// nothing is killed.
+func TestSpawn_RestartPastBudgetKillsAndFails(t *testing.T) {
+	cases := []struct {
+		name, step string
+		session    bool
+		reason     string
+	}{
+		{"launched past its budget", team.StepLaunched, true, team.SpawnReasonStartTimeout},
+		{"launched, session gone", team.StepLaunched, false, team.SpawnReasonAbandoned},
+		{"session_created, session gone", team.StepSessionCreated, false, team.SpawnReasonAbandoned},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f, root := newSpawnFixture(t, 2)
+			id := spawnID(1)
+			mustCreateSpawn(t, f.m.store, spawnRow{ID: id, TeamID: uid(1), HostID: "h:1", OriginSessionID: "sid-1", Cwd: root,
+				TmuxName: "tm-0000000100", Step: team.StepAccepted, State: team.SpawnRunning, CreatedAt: 1, UpdatedAt: 1})
+			mustStep(t, f.m.store, id, team.StepAccepted, spawnUpdate{Step: team.StepSessionCreated,
+				TmuxID: "$7", TmuxInstance: "4242:1700000000", PaneID: "%7", At: 1}, true)
+			if c.step == team.StepLaunched {
+				mustStep(t, f.m.store, id, team.StepSessionCreated, spawnUpdate{Step: team.StepLaunched, LaunchedAt: f.clock.Load() - 21_000, At: 2}, true)
+			}
+			if c.session {
+				f.tmux.AddSessionWithID("$7", "tm-0000000100", root)
+			}
+			if err := f.m.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if op := waitSpawn(t, f.m.store, id); op.State != team.SpawnFailed || op.Reason != c.reason {
+				t.Fatalf("op = %s %s, want failed %s", op.State, op.Reason, c.reason)
+			}
+			want := []tmux.KillIfInstanceCall(nil)
+			if c.session {
+				want = []tmux.KillIfInstanceCall{{SessionID: "$7", Expected: "4242:1700000000"}}
+			}
+			if got := f.tmux.KillIfInstanceCalls(); !reflect.DeepEqual(got, want) || len(f.tmux.RawKeysSent()) != 0 {
+				t.Fatalf("kills = %+v (want %+v), keys = %+v", got, want, f.tmux.RawKeysSent())
+			}
+		})
+	}
+}
+
+// Spec §9.3: Stop leaves a running op at its recorded step, for the next
+// boot, and returns once its runner has.
+func TestSpawn_StopLeavesTheOpRunning(t *testing.T) {
+	f, root := newSpawnFixture(t, 2)
+	polling := make(chan struct{}, 1)
+	f.m.spawnSleep = func(ctx context.Context, _ time.Duration) {
+		select {
+		case polling <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+	}
+	f.m.spawnWait = 10 * time.Millisecond
+	f.spawn(spawnID(1), root, nil)
+	<-polling
+	if err := f.m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if op, _, _ := f.m.store.GetSpawnOp(spawnID(1)); op.State != team.SpawnRunning || op.Step != team.StepLaunched || len(f.tmux.KillIfInstanceCalls()) != 0 {
+		t.Fatalf("after Stop: %s at %s, kills %+v; want running at launched, no kill", op.State, op.Step, f.tmux.KillIfInstanceCalls())
 	}
 }
 

@@ -93,6 +93,25 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 	}
 }
 
+// resumeSpawns continues every running op from its recorded step (spec
+// §9.3): launch, or wait for registration, or fail one whose tmux session
+// is gone (abandoned) or whose budget ran out (killed, member_start_timeout).
+// The store fails a corrupt row abandoned instead of listing it. A read
+// error is logged: those ops wait for the next boot.
+func (m *Module) resumeSpawns() {
+	ops, err := m.store.ListRunningSpawnOps(m.now())
+	if err != nil {
+		m.logf("[team] boot: spawn ops: %v", err)
+		return
+	}
+	for _, op := range ops {
+		m.startSpawn(op.ID, true)
+	}
+	if len(ops) > 0 {
+		m.logf("[team] boot: resuming %d spawn op(s)", len(ops))
+	}
+}
+
 // startSpawn runs op id's remaining steps on a goroutine that Stop joins.
 // The caller holds createMu (the POST) or is Start, so the Add never races
 // Stop's Wait: Stop cancels stopCtx under createMu before it waits.

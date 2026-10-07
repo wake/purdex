@@ -296,6 +296,7 @@ func (m *Module) Start(context.Context) error {
 		m.logf("[team] boot: extended the lease of %d open approval request(s) by %ds", n, team.BootGraceS)
 	}
 	m.reconcileRelays()
+	m.resumeSpawns()
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.sweepWG.Add(2)
 	go m.runSweeper()
