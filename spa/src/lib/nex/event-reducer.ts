@@ -6,7 +6,7 @@
 // alike.
 import { parseAttachmentMeta, type AttachmentMeta } from './attachments'
 import { isResultError } from './cost-summary'
-import type { StreamMessage } from './message-types'
+import type { PurdexPeerMessage, StreamMessage } from './message-types'
 import { defaultPreludeState, type PreludeState } from './prelude'
 import { finalizeBlock, type PartialAssembly } from './partial'
 import { applyPermissionEvent, isPermissionEventKind, settlePendingPermissions, type PermissionTable } from './permissions'
@@ -110,7 +110,7 @@ export interface ExecutionState {
   /**
    * Index into `messages` where each turn begins, in ascending order
    * (spec §4.1). Written when the daemon says a turn opened
-   * (execution.message_accepted / execution.delegated), **before** the
+   * (execution.message_accepted / execution.delegated / peer_message), **before** the
    * bubble those events may or may not append — so the boundary is exact
    * even when the payload carried no text.
    */
@@ -228,6 +228,15 @@ export function isTaskEventKind(kind: string): boolean {
 }
 
 /**
+ * Nexen's peer mailbox kind (v0.20.0, `capabilities.peer_message`): another
+ * conversation's message opened a turn. It replaces `execution.message_accepted`
+ * for that turn and, like the provider kinds, does not start with
+ * `execution.` — so it is handled before the passthrough, which would
+ * otherwise append its raw payload as a message (peer mailbox spec §7).
+ */
+export const PEER_MESSAGE_KIND = 'peer_message'
+
+/**
  * Merge a `GET /v1/executions/{id}/tasks` snapshot into the task table (the
  * #83 correction after every SSE (re)open). Not an event: `lastSeq` and
  * everything else stay as they are. Merge rules in `tasks.ts`.
@@ -317,6 +326,30 @@ function markTurnStart(s: ExecutionState, createdAt: number, turnId: string | nu
     turnMeta: [...s.turnMeta, { startAt: createdAt, endAt: null, outcome: null, durationMs: null }],
     turnEnds: [...s.turnEnds, { turnId, state: null, bySource: false, resulted: false }],
   }
+}
+
+/**
+ * A `peer_message` (peer mailbox spec §7): the daemon opened a turn for
+ * another conversation's message. The turn starts exactly as a send's does
+ * (`message_accepted`: boundary, meta, turn_id, summary refetch), but it is
+ * not this pane's send, so `pendingLocal` / `sendLocked` / `pendingSend` are
+ * left alone — an own send still waiting is settled by its own
+ * `message_accepted`. The line is a synthetic `purdex_peer`, never a user
+ * bubble; a payload without `text` (the site-wide shape, which never reaches
+ * this reducer, or anything malformed) opens the turn and draws nothing.
+ */
+function applyPeerMessage(s: ExecutionState, ev: NexEvent, p: Record<string, unknown>): ExecutionState {
+  const next = markTurnStart({ ...s, summaryStale: true }, ev.created_at, str(p, 'turn_id') || null)
+  const text = str(p, 'text')
+  if (text === undefined) return next
+  const line: PurdexPeerMessage = {
+    type: 'purdex_peer',
+    from_name: str(p, 'from_name') ?? '',
+    text,
+    msg_id: str(p, 'msg_id') ?? '',
+    at: ev.created_at,
+  }
+  return { ...next, messages: [...next.messages, line] }
 }
 
 /**
@@ -511,7 +544,7 @@ function applyTurnRules(s: ExecutionState, ev: NexEvent, p: Record<string, unkno
     return s
   }
   if (TURN_ENDING_KINDS.has(ev.kind)) return stampTurnEnd(endTurn(s, ev.created_at), ev, p)
-  if (ev.kind === 'execution.running' || ev.kind === 'execution.message_accepted') return { ...s, turnLive: true }
+  if (ev.kind === 'execution.running' || ev.kind === 'execution.message_accepted' || ev.kind === PEER_MESSAGE_KIND) return { ...s, turnLive: true }
   if (ev.kind === 'assistant') return finalizeBlock(recordToolStarts(s, p, ev.created_at), p)
   if (ev.kind === 'user') return recordToolEnds(s, p, ev.created_at)
   return s
@@ -572,6 +605,8 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
   // not a send acknowledgement — pendingSend / turnLive / partial / summary
   // are untouched.
   if (isToolEventKind(ev.kind)) return next
+
+  if (ev.kind === PEER_MESSAGE_KIND) return applyPeerMessage(next, ev, p)
 
   if (!isLifecycleKind(ev.kind)) {
     next = { ...next, messages: [...next.messages, p as StreamMessage] }

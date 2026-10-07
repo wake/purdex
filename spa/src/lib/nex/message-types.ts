@@ -119,6 +119,28 @@ export interface StreamEvent {
   }
 }
 
+/**
+ * SPA-internal, never on the wire: the line the reducer puts in `messages` for
+ * a Nexen `peer_message` turn (peer mailbox spec §7) — another conversation's
+ * message, not the user's own. Not `type: 'user'`, so `isOpeningLine` and the
+ * sent history (ArrowUp) never take it for something the user typed.
+ */
+export interface PurdexPeerMessage {
+  type: 'purdex_peer'
+  /** The sender's address as Nexen recorded it (`mlab/purdex-54`). */
+  from_name: string
+  /** The peer's text, verbatim. */
+  text: string
+  /** The sender's msg_id; '' when the payload carried none. */
+  msg_id: string
+  /** created_at of the event (epoch ms; a live frame's is its arrival time). */
+  at: number
+}
+
+export function isPeerMessage(msg: StreamMessage): msg is PurdexPeerMessage {
+  return msg.type === 'purdex_peer'
+}
+
 export type StreamMessage =
   | AssistantMessage
   | UserMessage
@@ -126,4 +148,5 @@ export type StreamMessage =
   | SystemMessage
   | ControlRequest
   | StreamEvent
+  | PurdexPeerMessage
   | { type: string; [key: string]: unknown }
