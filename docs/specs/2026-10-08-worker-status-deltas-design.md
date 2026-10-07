@@ -108,7 +108,12 @@ Author: purdex-6d. Base: main (alpha.587). Nexen pinned v0.19.0.
 - `GET /api/nex/v1/executions` gets a Purdex handler registered as a more specific mux pattern. Nexen's handler is unchanged.
 - It runs Nexen's list handler **inside the slot** into a buffer.
 - On 200 it injects a top-level `"pdx": {"epoch": E, "ver": V, "bseq": H}` into the JSON object, using the `ver` taken for that page and the current broadcast high-water mark `H`, both read inside the slot (R3-1). `bseq` stays 0 until PR1b starts broadcasting. `items` and `next_cursor` are untouched. Any non-200 response passes through unchanged, without `pdx`.
-- If the slot cannot be acquired within 2 s, the wrapper answers `503 {"code": "nex_busy"}` (R3-3).
+- **Slot not acquired within 2 s.**
+  - It answers `503 {"code": "nex_busy"}` (R3-3) **only to a client that opted in** with the query parameter `pdx=retry`. PR2a's SPA sends it.
+  - Any other client gets the page read directly, outside the slot, **unstamped** (no `pdx`, no `ver` consumed), and the module logs `nex-delta: list page served unstamped after <ms>ms slot wait`.
+  - Why (coordinator ruling at PR1a): the SPA in production before PR2a has no 503 retry, and its walk would go straight to `error`.
+  - The wrapper removes `pdx` from the query before Nexen sees it.
+- **A recovered engine panic** (before any write, after part of the body, or after a complete 200 object) fails the read: no `ver` is consumed, and the client gets `500 {"code": "nex_list_panicked"}`, never the buffered body (codex PR1a review). `http.ErrAbortHandler` still propagates to net/http, which aborts the connection, exactly as without the wrapper.
 - Each page is its own read with its own `ver`. The SPA does not need a multi-page snapshot (§4.3).
 
 ### 3.5 Broadcast order, hello and gaps (fixes R2, R6, R14; round 2: 3, 4)
@@ -470,6 +475,7 @@ PR1a–c are inert until PR2b lands: an old SPA ignores both the unknown event t
 - Today `listExecutions` turns any non-2xx into `NexApiError` and the walk goes straight to `error`.
 - The wrapper answers `503 {"code": "nex_busy"}` (Nexen's error shape, so `NexApiError.code === 'nex_busy'`).
 - **Contract (`listAllExecutions`):**
+  - in `delta` mode, send `pdx=retry` on every page; without it the daemon never answers 503 and serves an unstamped page instead (§3.4);
   - retry the **same page** (same cursor);
   - back off 250 ms, doubling, capped at 2 s;
   - at most 5 retries per page (about 5.75 s);
