@@ -20,6 +20,7 @@ import (
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/hostconfig"
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -35,6 +36,9 @@ type fakeOrigins struct {
 	readErr bool
 	entered chan struct{}
 	block   chan struct{}
+	// cleared is what the registry shows AFTER a /clear: new session id →
+	// the pid of the process that now carries it (ResolveOriginBySession).
+	cleared map[string]int
 }
 
 var fixtureOrigins = map[string]team.Origin{
@@ -85,6 +89,12 @@ func (f *fakeOrigins) ResolveOriginBySession(sid string) (team.Origin, bool, err
 		if o.SessionID == sid {
 			return o, true, nil
 		}
+	}
+	f.mu.Lock()
+	pid, ok := f.cleared[sid]
+	f.mu.Unlock()
+	if ok {
+		return team.Origin{SessionID: sid, Ref: ipeers.RefID(sid), PID: pid}, true, nil
 	}
 	return team.Origin{}, false, nil
 }
@@ -169,11 +179,15 @@ type fakeTitles struct {
 	mu    sync.Mutex
 	moves [][2]string
 	has   map[string]bool // sessions that currently hold a title
+	fail  bool            // meta.db is down: every Move errors
 }
 
 func (f *fakeTitles) Move(from, to string, _ time.Time) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.fail {
+		return false, errors.New("meta.db locked")
+	}
 	if !f.has[from] {
 		return false, nil
 	}
@@ -188,7 +202,9 @@ func (f *fakeTitles) Move(from, to string, _ time.Time) (bool, error) {
 // subscriber that collects every broadcast.
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := &fixture{t: t, origins: &fakeOrigins{}, switches: &fakeSwitches{sw: hostconfig.DefaultRelaySwitches}, titles: &fakeTitles{has: map[string]bool{"sid-1": true}}, usage: &fakeUsage{}}
+	// sid-1b / sid-1c are what sid-1's process (pid 10) becomes after a
+	// /clear; the registry of these tests already shows them.
+	f := &fixture{t: t, origins: &fakeOrigins{cleared: map[string]int{"sid-1b": 10, "sid-1c": 10}}, switches: &fakeSwitches{sw: hostconfig.DefaultRelaySwitches}, titles: &fakeTitles{has: map[string]bool{"sid-1": true}}, usage: &fakeUsage{}}
 	f.clock.Store(1_000_000)
 	f.core = core.New(core.CoreDeps{Config: &config.Config{HostID: "h:1", DataDir: t.TempDir()}})
 	f.core.Registry.Register(peersmod.OriginResolverKey, f.origins)
@@ -196,6 +212,7 @@ func newFixture(t *testing.T) *fixture {
 	f.core.Registry.Register(agent.OwnerResolverKey, f.usage) // the team module asserts agent.ContextUsageReader on it
 	f.m = New().WithTitles(f.titles)
 	f.m.newID = sequentialIDs()
+	f.m.clearedWait, f.m.clearedPoll = 200*time.Millisecond, 10*time.Millisecond
 	f.m.logf = func(string, ...any) {}
 	f.m.now = func() int64 { return f.clock.Load() }
 	if err := f.m.Init(f.core); err != nil {

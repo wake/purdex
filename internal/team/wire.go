@@ -128,7 +128,8 @@ type APIError struct {
 
 // InflightResponse is GET /api/team/inflight (spec §9.5): what a restart of
 // this daemon would interrupt. Neither field is omitempty — the restart
-// confirm reads a zero too. RelaysActive is a literal 0 until P6.
+// confirm reads a zero too. RelaysActive counts relay ops not yet
+// done/failed/cancelled (P5a).
 type InflightResponse struct {
 	ApprovalsOpen int `json:"approvals_open"`
 	RelaysActive  int `json:"relays_active"`
