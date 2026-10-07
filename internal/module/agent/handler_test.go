@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
@@ -3183,5 +3184,38 @@ func TestHistoryRouteGone(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for removed history route, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleHookSetup_CC_InstallsAndRemovesPlugin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	old := agentcc.PluginSource
+	agentcc.PluginSource = fstest.MapFS{
+		".claude-plugin/plugin.json": {Data: []byte(`{"name":"purdex","version":"0"}`)},
+		"hooks/hooks.json":           {Data: []byte(`{"modules":["./register.js"]}`)},
+		"hooks/register.js":          {Data: []byte("export function register() {}")},
+	}
+	t.Cleanup(func() { agentcc.PluginSource = old })
+
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+	root := filepath.Join(home, ".config", "pdx", "cc-plugin", "purdex")
+
+	for _, action := range []string{"install", "remove"} {
+		req := httptest.NewRequest("POST", "/api/hooks/cc/setup", strings.NewReader(`{"action":"`+action+`"}`))
+		req.SetPathValue("agent", "cc")
+		w := httptest.NewRecorder()
+		m.handleHookSetup(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d (body: %s)", action, w.Code, w.Body.String())
+		}
+		_, err := os.Stat(filepath.Join(root, "VERSION"))
+		if action == "install" && err != nil {
+			t.Fatalf("install: VERSION missing: %v", err)
+		}
+		if action == "remove" && !os.IsNotExist(err) {
+			t.Fatalf("remove: plugin folder still there (%v)", err)
+		}
 	}
 }

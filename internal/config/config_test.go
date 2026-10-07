@@ -1,8 +1,10 @@
 package config_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/config"
@@ -56,6 +58,48 @@ func TestLoadAutoDefaultPath(t *testing.T) {
 	}
 	if cfg.Port != 7860 {
 		t.Errorf("port: want 7860, got %d", cfg.Port)
+	}
+}
+
+// P5b-1 review: the mod calls `pdx relay … --config <Path>` so it reaches
+// the daemon that installed it; Path is where Load looked and is never
+// written back to config.toml nor shown in the JSON view.
+func TestLoadRecordsPathButNeverSerialisesIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".config", "pdx", "config.toml"); cfg.Path != want {
+		t.Fatalf("Load(\"\").Path = %q, want %q (missing file)", cfg.Path, want)
+	}
+
+	path := filepath.Join(t.TempDir(), "other.toml")
+	os.WriteFile(path, []byte("port = 7999\n"), 0o644)
+	cfg, err = config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Path != path || cfg.Clone().Path != path {
+		t.Fatalf("Load(path).Path = %q (Clone %q), want %q", cfg.Path, cfg.Clone().Path, path)
+	}
+	t.Chdir(filepath.Dir(path))
+	if rel, _ := config.Load("other.toml"); !filepath.IsAbs(rel.Path) || filepath.Base(rel.Path) != "other.toml" || rel.Port != 7999 {
+		t.Fatalf("Load(relative).Path = %q (port %d), want it absolute", rel.Path, rel.Port)
+	}
+
+	out := filepath.Join(t.TempDir(), "written.toml")
+	if err := config.WriteFile(out, cfg); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(out)
+	if strings.Contains(string(b), path) || strings.Contains(strings.ToLower(string(b)), "path =") {
+		t.Fatalf("Path leaked into the written config:\n%s", b)
+	}
+	j, _ := json.Marshal(cfg.Redacted())
+	if strings.Contains(string(j), path) {
+		t.Fatalf("Path leaked into the JSON view: %s", j)
 	}
 }
 

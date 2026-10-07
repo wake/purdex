@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/config"
 )
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
@@ -1085,5 +1087,61 @@ func TestMergeClaudeHooks_AtomicWrite_NoTmpLeft(t *testing.T) {
 	tmpPath := path + ".tmp"
 	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
 		t.Error(".tmp file should not exist after successful write")
+	}
+}
+
+func TestCCInstallHooks_InstallsPluginWhenSourceSet_RemoveTakesItOut(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dataDir := t.TempDir()
+	old := PluginSource
+	PluginSource = fakePlugin("v")
+	t.Cleanup(func() { PluginSource = old })
+	var mu sync.RWMutex
+	p := NewProvider(nil, nil, &config.Config{DataDir: dataDir}, &mu)
+
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	s := readSettings(t, settingsPath)
+	if _, ok := hooksMap(t, s)["Stop"]; !ok {
+		t.Fatal("the hooks are still installed")
+	}
+	dirs, ok := envDirs(t, s)
+	if !ok || dirs != PluginRoot(dataDir) {
+		t.Fatalf("CLAUDE_CODE_PLUGIN_DIRS = %q ok=%v", dirs, ok)
+	}
+	for _, rel := range []string{"VERSION", "pdx.json", "hooks/register.js"} {
+		if _, err := os.Stat(filepath.Join(PluginRoot(dataDir), filepath.FromSlash(rel))); err != nil {
+			t.Errorf("%s: %v", rel, err)
+		}
+	}
+
+	if err := p.RemoveHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("RemoveHooks: %v", err)
+	}
+	s = readSettings(t, settingsPath)
+	if _, ok := envDirs(t, s); ok {
+		t.Fatalf("env still names the plugin: %v", s["env"])
+	}
+	if _, err := os.Stat(PluginRoot(dataDir)); !os.IsNotExist(err) {
+		t.Fatal("the extracted folder must be removed")
+	}
+}
+
+func TestCCInstallHooks_NilPluginSourceLeavesEnvAlone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	old := PluginSource
+	PluginSource = nil
+	t.Cleanup(func() { PluginSource = old })
+	p := NewProvider(nil, nil, nil, nil)
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatalf("InstallHooks: %v", err)
+	}
+	s := readSettings(t, filepath.Join(home, ".claude", "settings.json"))
+	if _, ok := s["env"]; ok {
+		t.Fatalf("no plugin source ⇒ no env block, got %v", s["env"])
 	}
 }
