@@ -33,6 +33,8 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	// The team module reads the relay switches through this view (spec §8.7 (a)).
 	c.Registry.Register(RelaySwitchesKey, m)
+	// ... the relay prompt bodies through this one (spec §8.8) ...
+	c.Registry.Register(RelayPromptsKey, m)
 	// ... and the member launch command through this one (spec §7.2 step 4).
 	c.Registry.Register(TeamSettingsKey, m)
 	return nil
