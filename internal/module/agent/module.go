@@ -19,6 +19,7 @@ import (
 	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
@@ -85,6 +86,10 @@ type Module struct {
 
 	pathHintDedup  *PathHintDedupCache
 	pathHintBuffer *PathHintRingBuffer
+
+	// listFramesFn is a test seam for liveFrameProjections' frames.ListAll
+	// (fault injection); nil in production.
+	listFramesFn func() ([]store.Frame, error)
 }
 
 // Test seams for Module.New. framesInitFn failure is fatal (hook processing
@@ -312,6 +317,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 // (per spec §6.3 / §6.4).
 func (m *Module) Start(_ context.Context) error {
 	// Step timings (#1767): observation only, same order as before.
+	execBase := execstat.Take()
 	st := core.NewStepTimer(nil)
 	st.Run("sweepOnce", func() {
 		if err := m.sweepOnce(); err != nil {
@@ -326,6 +332,7 @@ func (m *Module) Start(_ context.Context) error {
 		}
 	})
 	log.Printf("[agent] start: %s", st)
+	log.Print(startExecLine(execBase))
 
 	if m.core != nil {
 		m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
@@ -365,9 +372,18 @@ func (m *Module) Stop(_ context.Context) error {
 	m.mu.Lock()
 	m.activeWatchers = make(map[string]string)
 	m.mu.Unlock()
-	if m.traceSink != nil {
-		m.traceSink.Close()
-	}
+	// The trace sink is deliberately NOT closed here: HTTP is still draining
+	// during Stop and hook handlers enqueue traces on their way out. It is
+	// closed by Close (core.Closer), which runs after the server has drained.
+	return nil
+}
+
+// Close implements core.Closer. It runs from CloseModules, after the HTTP
+// server has drained, so every hook handler's trailing trace Enqueue (and any
+// probe-intent consumer tail) has already been queued; Close then flushes the
+// trace sink. Idempotent: hookTraceSink.Close is sync.Once-guarded.
+func (m *Module) Close() error {
+	m.traceSink.Close() // nil-safe
 	return nil
 }
 
@@ -651,7 +667,11 @@ func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
 	if m.frames == nil {
 		return nil, nil
 	}
-	frames, err := m.frames.ListAll()
+	listAll := m.frames.ListAll
+	if m.listFramesFn != nil {
+		listAll = m.listFramesFn
+	}
+	frames, err := listAll()
 	if err != nil {
 		return nil, err
 	}
@@ -660,6 +680,63 @@ func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
 	}
 	frames = m.filterProjectionFrames(frames)
 	return BuildSessionProjections(frames), nil
+}
+
+// replayProjectionCache memoises, for ONE replayStatus round, the live frame
+// projections and the pane→tmux-session-name lookups (#1767 fix A). It is a
+// local value passed by pointer through the replay call chain: never stored on
+// Module, never shared across rounds or goroutines (callers hold m.mu).
+type replayProjectionCache struct {
+	projections []SessionProjection // set only after a SUCCESSFUL liveFrameProjections
+	loaded      bool
+	paneName    map[string]string // paneID -> session name; successful lookups only
+}
+
+// projectionForSessionWith is projectionForSession with an optional replay
+// cache. rc == nil is exactly projectionForSession. Failures are never cached:
+// a failed liveFrameProjections or PaneSessionName is retried by the next call.
+func (m *Module) projectionForSessionWith(sessionName string, rc *replayProjectionCache) (*SessionProjection, error) {
+	if rc == nil {
+		return m.projectionForSession(sessionName)
+	}
+	if !rc.loaded {
+		projections, err := m.liveFrameProjections()
+		if err != nil {
+			return nil, err
+		}
+		rc.projections = projections
+		rc.loaded = true
+	}
+	return m.selectSessionProjectionBy(sessionName, rc.projections, func(paneID string) string {
+		if name, ok := rc.paneName[paneID]; ok {
+			return name
+		}
+		if m.tmux == nil {
+			return ""
+		}
+		name, err := m.tmux.PaneSessionName(paneID)
+		if err != nil {
+			return ""
+		}
+		if rc.paneName == nil {
+			rc.paneName = make(map[string]string)
+		}
+		rc.paneName[paneID] = name
+		return name
+	}), nil
+}
+
+// paneSessionName is the name half of resolvePaneSession: the tmux session
+// name owning paneID, or "" when tmux is unavailable or the lookup fails.
+func (m *Module) paneSessionName(paneID string) string {
+	if m.tmux == nil {
+		return ""
+	}
+	name, err := m.tmux.PaneSessionName(paneID)
+	if err != nil {
+		return ""
+	}
+	return name
 }
 
 func (m *Module) resolvePaneSession(paneID string) (string, string) {
@@ -703,13 +780,16 @@ type sessionStatusSnapshot struct {
 // produce. Sessions without a resolvable top frame still appear in the
 // snapshot with agentType="" — applyIntentLifecycle handles that path
 // (frame lookup fails inside m.mu → skip arm).
-func (m *Module) snapshotStatuses() map[string]sessionStatusSnapshot {
+//
+// rc (nil for the legacy per-call behaviour) memoises the live projections
+// and pane→session lookups for one replay round (#1767).
+func (m *Module) snapshotStatuses(rc *replayProjectionCache) map[string]sessionStatusSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make(map[string]sessionStatusSnapshot, len(m.currentStatus))
 	for session, status := range m.currentStatus {
 		entry := sessionStatusSnapshot{status: status}
-		if proj, err := m.projectionForSession(session); err == nil && proj != nil && proj.TopFrame != nil {
+		if proj, err := m.projectionForSessionWith(session, rc); err == nil && proj != nil && proj.TopFrame != nil {
 			entry.agentType = proj.TopFrame.AgentType
 		}
 		out[session] = entry
@@ -732,11 +812,22 @@ func (m *Module) snapshotStatuses() map[string]sessionStatusSnapshot {
 // projection pipeline so daemon-restart hydrate replay (P1-T6) and the live
 // hook path observe identical (paneID, pid) selection logic.
 func (m *Module) lookupTopFrameForSessionLocked(session string) (paneID string, pid int, ok bool) {
-	projection, err := m.projectionForSession(session)
-	if err != nil || projection == nil || projection.TopFrame == nil {
+	frame, ok := m.lookupTopFrameWith(session, nil)
+	if !ok {
 		return "", 0, false
 	}
-	return projection.TopFrame.PaneID, projection.TopFrame.PID, true
+	return frame.PaneID, frame.PID, true
+}
+
+// lookupTopFrameWith is lookupTopFrameForSessionLocked with an optional
+// replay cache (rc == nil keeps the per-call behaviour) and the whole top
+// frame returned so callers can re-verify its identity. CALLER MUST hold m.mu.
+func (m *Module) lookupTopFrameWith(session string, rc *replayProjectionCache) (*store.Frame, bool) {
+	projection, err := m.projectionForSessionWith(session, rc)
+	if err != nil || projection == nil || projection.TopFrame == nil {
+		return nil, false
+	}
+	return projection.TopFrame, true
 }
 
 // manageActivityWatch is invoked by hook handlers as a status changes. The

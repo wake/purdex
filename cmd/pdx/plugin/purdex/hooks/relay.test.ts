@@ -7,6 +7,7 @@ import { test, expect, mock } from 'claude-code/testing'
 // The pdx.json the extractor writes: the installing daemon's config is the
 // `--config` every `pdx relay` call carries (P5b-1 review).
 const PDX_JSON = '{"pdx":"/opt/pdx/bin/pdx","data_dir":"/tmp/pdx","config":"/tmp/pdx b/config.toml"}'
+const REGISTER = async (_$: any, e: any) => ({ value: { command: e.name } }) // the engine's $.command.register
 
 function world(on: any, ids: { sid: string } = { sid: 'sid-1' }, pdxJSON: string = PDX_JSON) {
   const argvs: string[][] = []
@@ -18,6 +19,7 @@ function world(on: any, ids: { sid: string } = { sid: 'sid-1' }, pdxJSON: string
   on('session.id', async () => ({ value: ids.sid }))
   on('fs.read', async (_$: any, e: any) => (e.path.endsWith('/pdx.json') ? { value: pdxJSON } : { deny: 'ENOENT' }))
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('command.register', REGISTER) // P5b-3: an interactive session.start registers /relay
   on('classic.SessionStart', async () => ({}))
   return Object.assign(argvs, { settle: () => clock.settle() })
 }
@@ -83,6 +85,7 @@ test('without pdx.json the mod falls back to pdx on PATH', async ($, on) => {
   on('session.id', async () => ({ value: 'sid-1' }))
   on('fs.read', async () => ({ deny: 'ENOENT' }))
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('command.register', REGISTER)
   const r = await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   await clock.settle()
   expect(argvs[0][0]).toBe('pdx')
@@ -106,6 +109,7 @@ test('a hello that hangs never holds the session start or a /clear', async ($, o
   on('session.id', async () => ({ value: 'sid-1' }))
   on('fs.read', async () => ({ deny: 'ENOENT' }))
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('command.register', REGISTER)
   on('classic.SessionStart', async () => ({}))
   let started = false
   const p = $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true }).then(() => { started = true })
@@ -130,6 +134,8 @@ test('a hello that hangs never holds the session start or a /clear', async ($, o
 
 type Fake = {
   argvs: string[][]
+  timeouts: (number | undefined)[] // each pdx call's $.process.run timeoutMs, beside argvs
+  registered: any[] // $.command.register specs
   submits: any[]
   commands: string[]
   toasts: string[]
@@ -143,7 +149,25 @@ type Fake = {
   logs: string[]
   failSubmit?: (text: string) => 'reject' | 'drop' | undefined // how the engine refuses a plugin's prompt
   failCommand?: string // $.command.run rejects with this
+  refuseNow?: boolean // a hand-made clock instead of mock.clock: timers fire at once, $.clock.now is refused
+  // The prompt hold's local `/bin/sleep` calls (P5b-3 critic), kept apart from
+  // the pdx calls in argvs, and how each answers: by default it sleeps its
+  // seconds on the mocked clock and exits 0; `realSleep` sleeps in real time.
+  sleeps: { argv: string[]; timeoutMs?: number }[]
+  sleep?: (argv: string[]) => { exitCode: number } | Promise<{ exitCode: number }>
 }
+
+// The clock of `refuseNow`: the one way to make the prompt hold throw (its
+// `$.clock.now`, where it starts its bound), for the `.catch` test.
+function refusingClock(on: any) {
+  on('clock.now', async () => { throw new Error('the clock refused to tell the time') })
+  on('clock.after', async () => ({ value: undefined }))
+  const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 1)) }
+  return { settle, advance: settle, sleep: () => new Promise<void>(() => {}) }
+}
+
+// A `/bin/sleep <s>` that takes its seconds of real time (the real-time test).
+const realSleep = (argv: string[]) => new Promise<{ exitCode: number }>((r) => setTimeout(() => r({ exitCode: 0 }), Number(argv[1]) * 1000))
 
 const OP = { id: 'op-1', kind: 'self', host_id: 'h', session_id: 'sid-old', ref: '_abc123', state: 'awaiting_approval', handoff_path: '/data/relay/op-1.md', created_at: 1, updated_at: 1 }
 const BEGIN_OK = JSON.stringify({ op: OP, request_id: 'req-1' })
@@ -154,17 +178,23 @@ const AT72 = { tokens: 144000, window: 200000, percent: 72 }
 
 function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, string> = {}): Fake {
   const f: Fake = {
-    argvs: [], submits: [], commands: [], toasts: [], statuses: [], files: {}, logs: [],
+    argvs: [], timeouts: [], registered: [], submits: [], commands: [], toasts: [], statuses: [], files: {}, logs: [], sleeps: [],
     pdx: () => ({ exitCode: 0, stdout: HELLO() }),
     sessionId: 'sid-old',
     usage: { tokens: 10000, window: 200000, percent: 5 },
     ...opts,
   }
-  f.clock = mock.clock(on)
+  f.clock = f.refuseNow ? refusingClock(on) : mock.clock(on)
   mock.env(on, env)
   on('tool.check', async () => ({ decision: 'ask', reason: 'mode' }))
   on('process.run', async (_$: any, e: any) => {
+    if (e.argv[0] === '/bin/sleep') {
+      f.sleeps.push({ argv: [...e.argv], timeoutMs: e.init?.timeoutMs })
+      const r = await (f.sleep ? f.sleep([...e.argv]) : f.clock.sleep(Number(e.argv[1]) * 1000).then(() => ({ exitCode: 0 })))
+      return { value: { exitCode: r.exitCode, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     f.argvs.push([...e.argv])
+    f.timeouts.push(e.init?.timeoutMs)
     const r = await f.pdx([...e.argv].slice(1))
     return { value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
@@ -177,6 +207,7 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
   on('ui.toast', async (_$: any, e: any) => { f.toasts.push(e.text); return { value: undefined } })
   on('ui.status', async (_$: any, e: any) => { f.statuses.push(e.text); return { value: undefined } })
   on('ui.log', async (_$: any, e: any) => { f.logs.push(e.text); return { value: undefined } })
+  on('command.register', async (_$: any, e: any) => { f.registered.push(e); return { value: { command: e.name } } })
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
   on('turn.start', async (_$: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', async (_$: any, e: any) => ({ text: e.answer }))
@@ -226,6 +257,7 @@ function pdxWith(waits: Array<{ exitCode: number; stdout?: string }>, role = 'no
 test('headless does nothing, ever: no hello, no begin at 90 %, prompts and compaction untouched', async ($, on) => {
   const f = relayWorld(on, { pdx: pdxWith([]), usage: { tokens: 180000, window: 200000, percent: 90 } })
   await start($, f, false)
+  expect(f.registered).toEqual([]) // no /relay either
   await turnAndSettle($, f, 't1')
   await $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'composer' } })
   expect(await compact($, 'auto')).toEqual({ messages: MSGS })
@@ -1049,4 +1081,692 @@ test('the report queue holds 50: a 51st report pushes out the oldest (logged), w
   const sent = reports(f)
   expect(sent.filter((c) => c.startsWith('relay report op-1 ')).length).toBe(1)
   for (let i = 2; i <= 51; i++) expect(sent.filter((c) => c === 'relay report op-' + i + ' cancelled --error abandoned').length).toBe(1)
+})
+
+// ---------- P5b-3: the hold, NOTE, denial, +10, compact, /relay ----------
+// The hold (spec §8.7 (b)): the prompt.submit hook waits for the request's
+// answer, which the timer's wait loop settles — the loop alone asks the
+// daemon and moves the state — racing it with a local `/bin/sleep 5` of the
+// hook's own, started again while the answer is out: a `$` call in flight
+// stops the hook's 10 s budget (HookBudget) and asks the daemon nothing
+// (P5b-3 critic). A prompt that arrives while `begin` is still out waits for
+// begin's answer the same way (at most 40 s), then for the request it opened;
+// the request itself at most 11 min. At most 16 prompts are held at once.
+// Every failure lets the prompt go on unchanged (fail-open).
+
+const NOTE = '接力已核准，這一輪只做簡短回應；如果這是一件新工作，不要開始做，把它寫進接力檔「下一步」的第一項，由接手後的新對話處理。'
+const typed = ($: any, text: string, more: any = {}) => $.prompt.submit({ text, wait: false, origin: { kind: 'composer' }, ...more })
+
+// A fake daemon holding the one self_relay approval row. Every `pdx relay
+// wait` on it (the timer's loop) answers the row's state once it closes (at
+// once when it already has); an open row answers {state:"open"} when the
+// call's bound runs out (the 9 min default) on the mocked clock, or after
+// `realOpenMs` of real time when given. The first close wins, as in the
+// daemon; a cancelled report closes an open row (P5a-2b
+// closeRequestOfReportedOp: every dialog closes and the waits exit 12).
+const CLOSED: Record<string, number> = { denied: 10, timeout: 11, cancelled: 12 }
+function approvalRow(f: Fake, realOpenMs?: number) {
+  let state = 'open'
+  const waiters: Array<() => void> = []
+  const closed = () => (state === 'approved' ? { exitCode: 0, stdout: APPROVAL('approved') } : { exitCode: CLOSED[state], stderr: 'pdx relay: ' + state })
+  return {
+    decide(next: string) {
+      if (state !== 'open') return
+      state = next
+      for (const w of waiters.splice(0)) w()
+    },
+    wait() {
+      if (state !== 'open') return closed()
+      return new Promise<any>((resolve) => {
+        waiters.push(() => resolve(closed()))
+        const bound = realOpenMs !== undefined ? new Promise((r) => setTimeout(r, realOpenMs)) : f.clock.sleep(540_000)
+        // a wait whose dispatch was abandoned (the test ended under it) is dropped
+        bound.then(() => resolve(state === 'open' ? { exitCode: 0, stdout: APPROVAL('open') } : closed()), () => {})
+      })
+    },
+  }
+}
+
+type RowOpts = { realOpenMs?: number; begin?: () => any; wait?: (argv: string[]) => any; report?: (argv: string[]) => any }
+function rowDaemon(f: Fake, o: RowOpts = {}) {
+  const row = approvalRow(f, o.realOpenMs)
+  f.pdx = (argv) => {
+    if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO() }
+    if (argv[1] === 'begin') return o.begin ? o.begin() : { exitCode: 0, stdout: BEGIN_OK }
+    if (argv[1] === 'wait') return o.wait?.(argv) ?? row.wait()
+    if (argv[1] === 'report') {
+      if (o.report) return o.report(argv)
+      if (argv[3] === 'cancelled') row.decide('cancelled')
+    }
+    if (argv[0] === 'msg') return { exitCode: 0, stdout: 'mlab/purdex-x [abc123]' }
+    return { exitCode: 0, stdout: '{}' }
+  }
+  return row
+}
+const loopWaits = (f: Fake) => waits(f).filter((c) => !c.includes('--wait')) // the timer's loop
+const holdWaits = (f: Fake) => waits(f).filter((c) => c.includes('--wait')) // a hold's own long poll: there is none (P5b-3 critic)
+const SLEEP = { argv: ['/bin/sleep', '5'], timeoutMs: 10_000 } // the hold's local sleep and its bound
+
+// Mutation gates: hold body → `return next(e)` → red at the held assertion;
+// NOTE before the existing context → red at the context assertion.
+test('a prompt that arrives while a request is open waits; on approval it runs in the current conversation with NOTE appended after existing context, and the write prompt follows', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const row = rowDaemon(f)
+  const clock = f.clock
+  await start($, f)
+  await turn($, 't1')
+  await clock.advance(50) // begin, then the wait loop from its timer
+  const p = $.prompt.submit({ text: '請幫我看一下', context: ['prior'], wait: false, origin: { kind: 'composer' } })
+  await clock.settle()
+  expect(f.submits.length).toBe(0) // held
+  row.decide('approved')
+  await p
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].text).toBe('請幫我看一下')
+  expect(f.submits[0].context).toEqual(['prior', NOTE])
+  await clock.advance(50)
+  expect(f.submits.length).toBe(2)
+  expect(f.submits[1].text.startsWith('[pdx-relay op=op-1 n=')).toBe(true)
+  expect(loopWaits(f)).toEqual(['relay wait req-1']) // one loop for the request
+  expect(holdWaits(f)).toEqual([]) // the held prompt asked the daemon nothing
+  expect(f.sleeps).toEqual([SLEEP]) // it slept locally
+})
+
+test('on denial the held prompt passes unchanged (no NOTE); the request is gone; asking again only at +10 points', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const row = rowDaemon(f)
+  await start($, f)
+  await turn($, 't1')
+  const p = $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'peer' } })
+  await f.clock.advance(50)
+  expect(f.submits.length).toBe(0)
+  row.decide('denied')
+  await p
+  await f.clock.settle()
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].context).toBeUndefined()
+  expect(f.statuses).toEqual(['接力等待核准中', undefined])
+  f.usage = { tokens: 160000, window: 200000, percent: 80 }
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(1)
+  f.usage = AT82
+  await turnAndSettle($, f, 't3')
+  expect(count(f, 'begin')).toBe(2)
+})
+
+for (const [code, state] of [[11, 'timeout'], [20, '']] as const) {
+  test('on exit ' + code + ' (timeout / daemon gone) the hold releases unchanged', async ($, on) => {
+    const f = relayWorld(on, { usage: AT72 })
+    const row = rowDaemon(f, { wait: () => (state ? undefined : { exitCode: code, stderr: 'daemon unavailable' }) })
+    await start($, f)
+    await turn($, 't1')
+    const p = typed($, 'hi')
+    await f.clock.advance(50)
+    if (state) row.decide(state)
+    await p
+    expect(f.submits.length).toBe(1)
+    expect(f.submits[0].context).toBeUndefined()
+  })
+}
+
+test('a prompt submitted while nothing is open passes straight through', async ($, on) => {
+  const f = relayWorld(on)
+  await start($, f)
+  await typed($, 'hi')
+  expect(f.submits.length).toBe(1)
+  expect(count(f, 'wait')).toBe(0)
+})
+
+// Window (a), coordinator: a prompt that arrives while `pdx relay begin` is
+// still out waits for begin's answer (P5b-3 critic: no 8 s release), then for
+// the request it opened. Mutation gate: hold only while `awaiting` → the
+// prompt goes through at once.
+test('a prompt that arrives while begin is still out waits for it, then for the request it opened: approved → NOTE', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const b = gated()
+  const row = rowDaemon(f, { begin: async () => { await b.p; return { exitCode: 0, stdout: BEGIN_OK } } })
+  await start($, f)
+  await turnAndSettle($, f, 't1') // begin is out and hangs
+  const p = typed($, 'q')
+  await f.clock.advance(1000)
+  expect(f.submits.length).toBe(0) // held while begin is out
+  b.release()
+  await f.clock.settle() // begin answered: awaiting; the hold waits on the request now
+  expect(f.submits.length).toBe(0)
+  expect(holdWaits(f)).toEqual([])
+  row.decide('approved')
+  await f.clock.advance(50) // the loop's wait: approved at once
+  await p
+  expect(f.submits[0].context).toEqual([NOTE])
+})
+
+// ---- P5b-3 critic: the hold keeps a local `$` call of its own out — a
+// `/bin/sleep 5`, never a daemon call — and never loses a prompt ----
+
+// The budget is the engine's real-time clock, not the mocked one (`claude
+// plugin test` cuts a hook that awaits a plain promise at 10 s of real time,
+// as `timeout`; a mocked `$.clock` advance costs a hook nothing), so this
+// one test runs in real time: each local sleep takes 5 s and each of the
+// loop's waits answers "open" after 6 s, both under the test hooks' own 10 s
+// budget, and the prompt is held 11.5 s. Mutation gate: await only the
+// request's answer (no `$` call of the hook's) → the hook is cut at 10 s and
+// the prompt goes on early, without NOTE → red.
+test('the hold outlives the 10 s hook budget on its local sleeps: held 11.5 s of real time, no daemon call of its own, then approved → NOTE', { timeoutMs: 30_000 }, async ($, on) => {
+  const f = relayWorld(on, { usage: AT72, sleep: realSleep })
+  const row = rowDaemon(f, { realOpenMs: 6_000 })
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(50) // begin; the loop's first wait
+  let done = false
+  const p = typed($, 'q', { context: ['prior'] }).then((r: any) => { done = true; return r })
+  await new Promise((r) => setTimeout(r, 11_500))
+  expect(done).toBe(false) // neither dropped nor released by a timeout
+  expect(f.submits.length).toBe(0)
+  expect(f.sleeps.length).toBeGreaterThanOrEqual(3) // at 0, 5 and 10 s
+  expect(f.sleeps.every((x) => JSON.stringify(x) === JSON.stringify(SLEEP))).toBe(true)
+  expect(holdWaits(f)).toEqual([])
+  row.decide('approved')
+  await p
+  expect(f.submits[0].context).toEqual(['prior', NOTE])
+})
+
+// P5b-3 critic (high): a hold of its own `pdx relay wait` was one more long
+// poll — and lease — at the daemon per held prompt. Mutation gates: await
+// only the request's answer → no sleep → red; the old own wait → a `--wait`
+// call → red.
+test('the hold sleeps locally (/bin/sleep 5, 10 s bound), again and again while the clock runs far past 10 s, and asks the daemon nothing; approved → NOTE', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const row = rowDaemon(f)
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(50) // begin; the loop's one 9 min wait
+  const p = typed($, 'q')
+  await f.clock.settle()
+  expect(f.sleeps).toEqual([SLEEP])
+  await f.clock.advance(130_000)
+  expect(f.submits.length).toBe(0)
+  expect(f.sleeps.length).toBeGreaterThanOrEqual(26) // one every 5 s
+  expect(f.sleeps.every((x) => JSON.stringify(x) === JSON.stringify(SLEEP))).toBe(true)
+  expect(waits(f)).toEqual(['relay wait req-1']) // the loop's one call is all the daemon was asked
+  row.decide('approved')
+  await p
+  expect(f.submits[0].context).toEqual([NOTE])
+})
+
+// The hold waits for the request at most 11 min (its 10 min deadline and
+// slack), then lets the prompt go on unchanged; the loop still drives the
+// request. Mutation gate: no bound → still held → red.
+test('a request still open after 11 minutes lets the held prompt go on unchanged; the request stays open', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  rowDaemon(f)
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(50)
+  let done = false
+  const p = typed($, 'q', { context: ['c'] }).then(() => { done = true })
+  await f.clock.settle()
+  await f.clock.advance(659_999)
+  expect(done).toBe(false)
+  await f.clock.advance(1)
+  expect(done).toBe(true)
+  await p
+  expect(f.submits[0].context).toEqual(['c'])
+  expect(f.statuses).toEqual(['接力等待核准中']) // still awaiting
+  expect(holdWaits(f)).toEqual([])
+})
+
+// Fail-open: a local sleep that cannot run (the call rejects, at once) or
+// that fails (a non-zero exit; here after its 5 s, since one that failed at
+// once would otherwise come back again and again) lets the prompt go on
+// unchanged; the request stays open (the timer's loop still drives it).
+// Mutation gates: keep holding on a sleep that rejects → red; read a non-zero
+// exit as a full sleep → still held after it → red.
+for (const how of ['awaiting', 'beginning'] as const) {
+  for (const kind of ['rejects', 'exits 1'] as const) {
+    test(`a /bin/sleep that ${kind} while ${how} lets the held prompt go on unchanged; the request is not touched`, async ($, on) => {
+      const f = relayWorld(on, { usage: AT72 })
+      f.sleep = kind === 'rejects' ? () => { throw new Error('spawn /bin/sleep ENOENT') } : () => f.clock.sleep(5_000).then(() => ({ exitCode: 1 }))
+      const b = gated()
+      if (how === 'beginning') rowDaemon(f, { begin: async () => { await b.p; return { exitCode: 0, stdout: BEGIN_OK } } })
+      else rowDaemon(f)
+      await start($, f)
+      await turn($, 't1')
+      await f.clock.advance(50)
+      let done = false
+      const p = typed($, 'q', { context: ['c'] }).then(() => { done = true })
+      await f.clock.settle()
+      if (kind === 'exits 1') {
+        expect(done).toBe(false) // the sleep is still running
+        await f.clock.advance(5_000)
+      }
+      expect(done).toBe(true)
+      await p
+      expect(f.submits[0].context).toEqual(['c'])
+      expect(f.sleeps).toEqual([SLEEP])
+      b.release()
+      await f.clock.advance(50)
+      expect(f.statuses).toEqual(['接力等待核准中']) // the request opened / stays open
+      expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(true)
+    })
+  }
+}
+
+// P5b-3 critic (medium): a prompt that arrives while begin is out waits for
+// begin's own answer — begin is bounded at 35 s itself — on the same local
+// sleeps, no longer released after 8 s, then for the request it opened.
+// Mutation gate: release after 8 s → red.
+test('a prompt held while begin is out stays held the whole 20 s begin takes, then follows the request it opened: approved → NOTE', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const row = rowDaemon(f, { begin: async () => { await f.clock.sleep(20_000); return { exitCode: 0, stdout: BEGIN_OK } } })
+  await start($, f)
+  await turnAndSettle($, f, 't1') // begin is out for 20 s
+  let done = false
+  const p = typed($, 'q', { context: ['c'] }).then(() => { done = true })
+  await f.clock.advance(8_000)
+  expect(done).toBe(false) // no 8 s release
+  await f.clock.advance(11_999)
+  expect(done).toBe(false)
+  expect(f.statuses).toEqual([])
+  await f.clock.advance(1) // begin answers: awaiting
+  expect(f.statuses).toEqual(['接力等待核准中'])
+  expect(done).toBe(false)
+  expect(f.sleeps.length).toBeGreaterThanOrEqual(4)
+  expect(holdWaits(f)).toEqual([])
+  row.decide('approved')
+  await f.clock.advance(50) // the loop's wait: approved at once
+  await p
+  expect(f.submits[0].context).toEqual(['c', NOTE])
+})
+
+// Begin bounds itself at 35 s; a hold waits for it at most 40 s. Mutation
+// gate: no bound → still held → red.
+test('a begin that has not answered in 40 s lets the held prompt go on unchanged; the request opens as usual when begin answers', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  rowDaemon(f, { begin: async () => { await f.clock.sleep(60_000); return { exitCode: 0, stdout: BEGIN_OK } } })
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  let done = false
+  const p = typed($, 'q').then(() => { done = true })
+  await f.clock.advance(39_999)
+  expect(done).toBe(false)
+  await f.clock.advance(1)
+  expect(done).toBe(true)
+  await p
+  expect(f.submits[0].context).toBeUndefined()
+  await f.clock.advance(20_000) // begin answers: the request opens as usual
+  expect(f.statuses).toEqual(['接力等待核准中'])
+})
+
+// P5b-3 critic: every held prompt keeps a child process of its own going, so
+// at most 16 are held at once; the 17th starts no sleep and goes on unchanged
+// at once, logged. A hold gives its place back when it ends, whatever ended
+// it. Mutation gate: no limit → a 17th sleep, q17 held → red.
+// U7 (spec §8.7 (b)): no new turn starts while a request is open, however
+// many prompts arrive — the critic rejected a cap that let the 17th through.
+// Each held prompt keeps one local sleep going, never a daemon call.
+// Mutation gate: a cap of 16 that runs the 17th → q17 is submitted early → red.
+test('17 prompts at once: all 17 are held on their own sleeps; none runs before the answer; every place is given back', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const row = rowDaemon(f)
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(50)
+  const held = Array.from({ length: 17 }, (_, i) => typed($, 'q' + (i + 1)))
+  await f.clock.settle()
+  expect(f.sleeps.length).toBe(17)
+  expect(f.submits).toEqual([])
+  await f.clock.advance(5_000)
+  expect(f.sleeps.length).toBe(34) // all 17 go round again
+  expect(f.submits).toEqual([])
+  expect(f.argvs.filter((a) => a.includes('wait')).length).toBeLessThanOrEqual(2) // the timer's loop alone asks the daemon
+  row.decide('denied')
+  await Promise.all(held)
+  expect(f.submits.length).toBe(17)
+  expect(f.submits.every((x) => x.context === undefined)).toBe(true)
+  // every hold gave its place back: the next request holds a prompt again
+  const row2 = rowDaemon(f)
+  f.usage = AT82
+  await turnAndSettle($, f, 't2')
+  await f.clock.advance(50)
+  const n = f.sleeps.length
+  let done = false
+  const p = typed($, 'again').then(() => { done = true })
+  await f.clock.settle()
+  expect(done).toBe(false)
+  expect(f.sleeps.length).toBe(n + 1)
+  row2.decide('approved')
+  await p
+  expect(f.submits.at(-1).context).toEqual([NOTE])
+})
+
+// The hold's `.catch` answers next(e): a hold that fails runs the prompt,
+// never drops it. A clock that refuses `$.clock.now` makes it throw.
+// Mutation gate: the catch answers `{ drop }` → the prompt is lost → red.
+test('a hold that throws still runs the prompt: its .catch answers next(e), never a drop', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72, refuseNow: true })
+  const b = gated()
+  rowDaemon(f, { begin: async () => { await b.p; return { exitCode: 0, stdout: BEGIN_OK } } })
+  await start($, f)
+  await turnAndSettle($, f, 't1') // begin is out; the hold asks a refusing clock the time
+  const r = await typed($, 'q', { context: ['c'] })
+  expect(r.drop).toBeUndefined()
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].context).toEqual(['c'])
+  await f.clock.settle()
+  expect(f.logs.some((l) => l.includes('prompt hold failed (throw)'))).toBe(true) // the catch answered
+})
+
+test('a prompt held while begin is out goes on unchanged when begin opens nothing (refused 13)', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const b = gated()
+  f.pdx = async (argv) => {
+    if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO() }
+    if (argv[1] === 'begin') { await b.p; return { exitCode: 13, stderr: 'pdx relay: self_relay_paused' } }
+    return { exitCode: 0, stdout: '{}' }
+  }
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  const p = typed($, 'q')
+  await f.clock.settle()
+  expect(f.submits.length).toBe(0)
+  b.release()
+  await f.clock.settle()
+  await p
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].context).toBeUndefined()
+  expect(count(f, 'wait')).toBe(0)
+})
+
+// Window (b), coordinator: begin has answered but the wait loop's timer has
+// not fired. The hold only sleeps (P5b-3 critic): it asks the daemon nothing,
+// starts no loop and moves no state — the loop the timer starts is the one
+// that answers the request (Esc would end a loop started in the prompt's
+// dispatch), and the held prompt goes on once it has. Mutation gates: start
+// the loop from the hold → a loop wait goes out before the timer; let the
+// hold ask the daemon itself → the prompt goes on before the loop ran.
+test('a prompt that arrives after begin answered but before the wait loop started waits; only the loop the timer starts answers it and moves the state', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const row = rowDaemon(f)
+  await start($, f)
+  await turnAndSettle($, f, 't1') // begin answered: awaiting, the loop's timer is due in 50 ms
+  expect(f.statuses).toEqual(['接力等待核准中'])
+  let done = false
+  const p = typed($, 'q', { context: ['c'] }).then(() => { done = true })
+  await f.clock.settle()
+  expect(loopWaits(f)).toEqual([])
+  expect(holdWaits(f)).toEqual([])
+  expect(f.sleeps).toEqual([SLEEP])
+  row.decide('approved')
+  await f.clock.settle()
+  expect(done).toBe(false) // the daemon has approved, but no loop has asked it yet
+  expect(f.statuses).toEqual(['接力等待核准中'])
+  await f.clock.advance(50) // the loop: approved at once; the state moves, then the held prompt goes on
+  expect(loopWaits(f)).toEqual(['relay wait req-1'])
+  await p
+  expect(f.submits[0].context).toEqual(['c', NOTE])
+  expect(f.statuses).toEqual(['接力等待核准中', undefined])
+  await f.clock.advance(50) // the write prompt
+  expect(f.submits.length).toBe(2)
+  expect(f.submits[1].text.startsWith('[pdx-relay op=op-1 n=')).toBe(true)
+})
+
+// A request dropped between begin's answer and its loop's timer never gets a
+// loop: the timer settles its answer, so a prompt held in that gap goes on.
+// Mutation gate: drop that branch of the timer → the prompt stays held.
+test('a compaction before the wait loop started releases a held prompt; no loop ever starts for that request', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  rowDaemon(f, { report: () => ({ exitCode: 0, stdout: '{}' }) }) // the row stays open: only the mod lets go
+  await start($, f)
+  await turnAndSettle($, f, 't1') // awaiting; the loop's timer is due in 50 ms
+  const p = typed($, 'q')
+  await f.clock.settle()
+  expect(await compact($, 'auto')).toEqual({ messages: MSGS })
+  await f.clock.advance(50)
+  expect(f.submits.length).toBe(1)
+  await p
+  expect(f.submits[0].context).toBeUndefined()
+  expect(loopWaits(f)).toEqual([])
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error compacted'])
+})
+
+// Mutation gates: drop the cancelled{compacted} report → no report; skip the
+// return to idle → the handoff path is still allowed and a new prompt is
+// held; skip compaction for an open request → red.
+test('auto-compact while a request is open: compaction runs, the request is reported cancelled{compacted} and a held prompt is released unchanged; the next ask needs ≥ threshold again', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  rowDaemon(f)
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(50) // begin; the wait loop (open until the daemon closes the row)
+  const p = typed($, 'q')
+  await f.clock.settle()
+  expect(f.submits.length).toBe(0)
+  expect(await compact($, 'auto')).toEqual({ messages: MSGS })
+  expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false) // idle at once
+  await typed($, 'after') // nothing open now: not held
+  expect(f.submits.map((s) => s.text)).toEqual(['q', 'after']) // q went on at the compaction (P5b-3 review)
+  await f.clock.settle() // the report goes out from a timer; the daemon closes the row; wait exits 12
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error compacted'])
+  expect(f.submits.length).toBe(2)
+  await p
+  expect(f.submits[0].context).toBeUndefined()
+  expect(f.statuses.at(-1)).toBeUndefined()
+  f.usage = { tokens: 142000, window: 200000, percent: 71 }
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(2) // 71 ≥ 70 is enough after a compaction
+})
+
+test('manual /compact while a request is open cancels it like an auto one', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  rowDaemon(f)
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(50)
+  expect(await compact($, 'manual')).toEqual({ messages: MSGS })
+  expect(f.statuses).toEqual(['接力等待核准中', undefined]) // cleared at once, as the user's /clear does
+  await f.clock.settle()
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error compacted'])
+})
+
+// An approval that lands after the compaction cancelled the request is not
+// acted on: nothing relays, so the held prompt gets no NOTE.
+test('an approval that races a compaction is not acted on: the held prompt goes on without NOTE and no write prompt follows', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const row = rowDaemon(f)
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(50)
+  const p = typed($, 'q')
+  await compact($, 'auto')
+  row.decide('approved') // the daemon approved before the cancelled report reached it
+  await f.clock.advance(50)
+  await p
+  await f.clock.advance(50)
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].context).toBeUndefined()
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error compacted'])
+})
+
+// A begin still out at a compaction would open a request for the
+// conversation as it was before it shrank: the generation moves on, so the
+// op is cancelled{abandoned} when begin answers, and a prompt held on it
+// goes on unchanged.
+test('a compaction while begin is still out: the late op is cancelled{abandoned}; a prompt held on it is released unchanged', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const b = gated()
+  f.pdx = async (argv) => {
+    if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO() }
+    if (argv[1] === 'begin') { await b.p; return { exitCode: 0, stdout: BEGIN_OK } }
+    if (argv[1] === 'wait') return new Promise<never>(() => {})
+    return { exitCode: 0, stdout: '{}' }
+  }
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  let done = false
+  const p = typed($, 'q').then(() => { done = true })
+  await f.clock.settle()
+  expect(done).toBe(false)
+  expect(await compact($, 'auto')).toEqual({ messages: MSGS })
+  await f.clock.settle()
+  expect(done).toBe(true) // let go with the request it waited for (P5b-3 review), not when begin answers
+  expect(f.submits[0].context).toBeUndefined()
+  b.release()
+  await f.clock.advance(50)
+  await p
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned'])
+  expect(waits(f)).toEqual([])
+})
+
+// ---- P5b-3 review item 2 (attacker high): a request the mod lets go of
+// releases its held prompts at once ----
+// The mod lets a request go locally (a compaction, the user's /clear, a
+// failed step): the held prompts go on at once, unchanged, before any report
+// goes out — that report may never land (a daemon that is down: 20) and the
+// row then stays open, so no wait would ever answer. Mutation gate: toIdle
+// leaves the request's answer unsettled → the prompt stays held → red.
+for (const how of ['manual /compact', 'auto-compact', 'the user’s /clear'] as const) {
+  test(`${how} while a prompt is held releases it at once, unchanged, even when the cancelled report fails (20) and the row stays open`, async ($, on) => {
+    const f = relayWorld(on, { usage: AT72 })
+    rowDaemon(f, { report: () => ({ exitCode: 20, stderr: 'daemon unavailable' }) })
+    await start($, f)
+    await turn($, 't1')
+    await f.clock.advance(50) // begin; the loop's wait (open)
+    let done = false
+    const p = typed($, 'q', { context: ['c'] }).then(() => { done = true })
+    await f.clock.settle()
+    expect(done).toBe(false)
+    if (how === 'the user’s /clear') {
+      f.sessionId = 'sid-2'
+      await $.classic.SessionStart({ source: 'clear' })
+    } else {
+      expect(await compact($, how === 'auto-compact' ? 'auto' : 'manual')).toEqual({ messages: MSGS })
+    }
+    await f.clock.settle()
+    expect(done).toBe(true)
+    await p
+    expect(f.submits.length).toBe(1)
+    expect(f.submits[0].context).toEqual(['c']) // no NOTE
+    expect(reports(f)).toEqual([how === 'the user’s /clear' ? 'relay report op-1 cancelled --error abandoned' : 'relay report op-1 cancelled --error compacted'])
+    expect(loopWaits(f)).toEqual(['relay wait req-1']) // still out: the row never closed
+  })
+}
+
+// A step deferred to a timer that fails (here the write prompt, refused)
+// lets the request go the same way; a prompt the person typed meanwhile is
+// held on nothing. And a wait loop that answers late for a request the mod
+// let go is ignored (settle: s.pending === p).
+test('a late approval for a request the mod already let go is ignored: no NOTE, no write prompt', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const row = rowDaemon(f, { report: () => ({ exitCode: 20, stderr: 'daemon unavailable' }) })
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(50)
+  const p = typed($, 'q')
+  await f.clock.settle()
+  await compact($, 'auto')
+  await f.clock.settle()
+  row.decide('approved') // the report never landed; the daemon approved anyway
+  await p
+  await f.clock.advance(100)
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].context).toBeUndefined()
+  expect(f.statuses).toEqual(['接力等待核准中', undefined])
+  expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
+})
+
+// Mutation gate: skip on every trigger (drop `e.trigger === 'auto'`) → the manual test is red.
+test('auto-compact with an approved relay not yet written is skipped', async ($, on) => {
+  const { f } = await approvedRelay($, on)
+  expect(await compact($, 'auto')).toEqual({ skip: '接力已核准，略過壓縮，改為寫接力檔' })
+  await f.clock.settle()
+  expect(reports(f)).toEqual(['relay report op-1 writing'])
+})
+
+test('manual /compact with an approved relay not yet written runs (the person asked) and reports nothing', async ($, on) => {
+  const { f } = await approvedRelay($, on)
+  expect(await compact($, 'manual')).toEqual({ messages: MSGS })
+  await f.clock.settle()
+  expect(reports(f)).toEqual(['relay report op-1 writing'])
+})
+
+test('auto-compact passes through for a member', async ($, on) => {
+  const f = relayWorld(on, { pdx: pdxWith([], 'member'), usage: { tokens: 180000, window: 200000, percent: 90 } })
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  expect(await compact($, 'auto')).toEqual({ messages: MSGS })
+  await f.clock.settle()
+  expect(reports(f)).toEqual([])
+})
+
+test('auto-compact passes through for an idle solo session, and so does a precompute', async ($, on) => {
+  const f = relayWorld(on)
+  await start($, f)
+  expect(await compact($, 'auto')).toEqual({ messages: MSGS })
+  expect(await compact($, 'precompute')).toEqual({ messages: MSGS })
+  await f.clock.settle()
+  expect(reports(f)).toEqual([])
+})
+
+const PRES = { isFullscreen: false, columns: 100 }
+const relayCmd = ($: any, args: string) => $.command.run({ command: 'relay', args, origin: { kind: 'composer' }, presentation: PRES })
+
+// Mutation gate: a wrong member text → red.
+test('/relay status|off|on call pdx relay self; on resets the +10 guard; a member is refused', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  let selfBody = { self_relay: 'on', host_switch: true, member: false }
+  f.pdx = (argv) => {
+    if (argv[1] === 'self') return { exitCode: 0, stdout: JSON.stringify(selfBody) }
+    if (argv[1] === 'begin') return { exitCode: 13, stderr: 'pdx relay: self_relay_paused' }
+    return { exitCode: 0, stdout: HELLO() }
+  }
+  await start($, f)
+  expect(f.registered.map((r) => [r.name, r.argumentHint])).toEqual([['relay', 'off|on|status']])
+  expect((await relayCmd($, 'status')).text).toBe('自我接力：開啟（主機開關 開；門檻 70%）')
+  expect(f.argvs.map(sub)).toContain('relay self status --session sid-old')
+  selfBody = { self_relay: 'paused', host_switch: true, member: false }
+  expect((await relayCmd($, 'off')).text).toBe('自我接力：本 session 暫停（主機開關 開；門檻 70%）')
+  await turnAndSettle($, f, 't1') // asks, refused 13 → lastAskPct = 72
+  expect(count(f, 'begin')).toBe(1)
+  selfBody = { self_relay: 'on', host_switch: true, member: false }
+  await relayCmd($, 'on')
+  await turnAndSettle($, f, 't2') // same 72 %, but /relay on cleared the guard
+  expect(count(f, 'begin')).toBe(2)
+  selfBody = { self_relay: 'off', host_switch: true, member: true }
+  expect((await relayCmd($, 'status')).text).toBe('member 的接力由 lead 安排') // status answers 200 with member
+  expect((await relayCmd($, 'maybe')).text).toBe('用法：/relay off|on|status')
+})
+
+// P5b-3 review item 3 (R1 P2): the daemon refuses `self on|off` for a member
+// with 409 member_relay_is_leads, which the CLI prints as exit 13 with the
+// code as stderr's last token (relayReportErr); `status` answers 200 with
+// member. Any other 13 keeps the general text, stderr's detail included.
+// Mutation gate: drop the member branch → the generic failure text → red.
+test('/relay on|off in a member: exit 13 member_relay_is_leads answers member 的接力由 lead 安排; another 13 shows the detail', async ($, on) => {
+  const f = relayWorld(on)
+  let refusal = 'pdx relay: member 的接力由 lead 安排 member_relay_is_leads'
+  f.pdx = (argv) => (argv[1] === 'self' ? { exitCode: 13, stderr: refusal + '\n' } : { exitCode: 0, stdout: HELLO() })
+  await start($, f)
+  expect((await relayCmd($, 'on')).text).toBe('member 的接力由 lead 安排')
+  expect((await relayCmd($, 'off')).text).toBe('member 的接力由 lead 安排')
+  refusal = 'pdx relay: self relay is off on this host (host config relay) self_relay_off'
+  expect((await relayCmd($, 'on')).text).toBe('pdx relay self on 失敗：pdx relay: self relay is off on this host (host config relay) self_relay_off')
+})
+
+// Coordinator: /relay awaits `pdx relay self` in its hook (the person waits
+// for the answer) through pdx() — so it carries --config — bounded at 8 s;
+// a timeout, 20 or 21 reads as an unreachable daemon. Mutation gates: drop
+// --config or the 8 s bound → red.
+test('/relay runs the installed pdx with --config and an 8 s bound; a timeout, 20 or 21 reads as daemon unreachable', async ($, on) => {
+  const f = relayWorld(on, { pdxJSON: PDX_JSON })
+  let answer: () => any = () => ({ exitCode: 0, stdout: JSON.stringify({ self_relay: 'off', host_switch: false, member: false }) })
+  f.pdx = (argv) => (argv[1] === 'self' ? answer() : { exitCode: 0, stdout: HELLO() })
+  await start($, f)
+  expect((await relayCmd($, 'status')).text).toBe('自我接力：關閉（主機開關 關；門檻 70%）')
+  const i = f.argvs.findIndex((a) => a[2] === 'self')
+  expect(f.argvs[i]).toEqual(['/opt/pdx/bin/pdx', 'relay', 'self', 'status', '--session', 'sid-old', '--config', '/tmp/pdx b/config.toml'])
+  expect(f.timeouts[i]).toBe(8000)
+  for (const a of [() => ({ exitCode: 20 }), () => ({ exitCode: 21 }), () => Promise.reject(new Error('timed out'))]) {
+    answer = a
+    expect((await relayCmd($, 'off')).text).toBe('Purdex daemon 連不上，無法變更自我接力')
+  }
 })

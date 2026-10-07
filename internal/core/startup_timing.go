@@ -117,3 +117,17 @@ func (c *Core) logPhaseTimings(phase string, durs []moduleTiming, total time.Dur
 	}
 	c.logLine("startup: %s %s", phase, formatModuleTimings(durs, total))
 }
+
+// logShutdownTimings emits the per-phase shutdown summary (and slow-module
+// warnings) — the mirror of logPhaseTimings, observation only.
+func (c *Core) logShutdownTimings(phase string, durs []moduleTiming, total time.Duration) {
+	if len(durs) == 0 {
+		return
+	}
+	for _, t := range durs {
+		if t.Dur >= slowModuleThreshold {
+			c.logLine("shutdown: slow module %s: %s took %s", phase, t.Name, fmtMs(t.Dur))
+		}
+	}
+	c.logLine("shutdown: %s %s", phase, formatModuleTimings(durs, total))
+}

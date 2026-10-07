@@ -54,6 +54,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     subagentRefs,
     tabIndicatorStyle,
     isHostOffline,
+    isAwaitingApproval,
   } = useTabDisplay(tab)
 
   // Prevent focus theft when clicking the already-active tab.
@@ -102,7 +103,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
             : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
         }`}
       >
-        <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} />
+        <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} awaitingApproval={isAwaitingApproval} />
         {tab.locked && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
         {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (
           <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
@@ -144,7 +145,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
       }`}
     >
-      <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} />
+      <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} awaitingApproval={isAwaitingApproval} />
       {badgeEnabled && hasHostBadge(hostBadge) && (
         <HostBadge
           colors={hostBadge.colors}

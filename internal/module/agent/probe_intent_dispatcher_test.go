@@ -777,27 +777,24 @@ func TestConsumeSignals_GraceWindowDrop_RearmsAfterTeardown(t *testing.T) {
 
 	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
-	// Capture gen 1 (first arm) before the teardown+rearm cycle completes.
-	var gen1 uint64
-	waitFor(t, time.Second, func() bool {
-		cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
-		if !ok {
-			return false
-		}
-		gen1 = cur.generation
-		return gen1 > 0
-	}, "gen 1 active entry observed before teardown")
-
 	// Wait for the rearm: emitCount becomes 2 (second arm) AND active
-	// entry's generation has advanced past gen 1. With the round-3 fix
-	// the post-loop teardown calls applyStatus → applyIntentLifecycle
-	// arms a fresh gen.
+	// entry's generation has advanced past the first arm's. With the
+	// round-3 fix the post-loop teardown calls applyStatus →
+	// applyIntentLifecycle arms a fresh gen.
+	//
+	// The first arm of a fresh Module is always generation 1
+	// (nextProbeIntentGeneration starts from 0). It is NOT read back from
+	// the active entry: here the graceWindow is already open, so the signal
+	// is dropped at once (no pre-grace hold) and teardown+rearm can finish
+	// before the test's first poll — capturing "gen 1" then yields gen 2
+	// and the wait below would never be satisfied (#1581/#1706).
+	const firstGeneration uint64 = 1
 	waitFor(t, 2*time.Second, func() bool {
 		cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
 		if !ok {
 			return false
 		}
-		return cur.generation > gen1 && emitCount.Load() >= 2
+		return cur.generation > firstGeneration && emitCount.Load() >= 2
 	}, "rearm with new generation after graceWindow drop (F1 round-3 follow-up)")
 }
 
@@ -959,7 +956,7 @@ func TestApplyIntentLifecycle_UnsupportedKind_FailsClosed(t *testing.T) {
 	}
 
 	before := snapshotProbeIntentMetrics()
-	m.probeIntentDisp.applyIntentLifecycle("work", "codex", agentpkg.StatusRunning, futureIntent)
+	m.probeIntentDisp.applyIntentLifecycle("work", "codex", agentpkg.StatusRunning, futureIntent, nil)
 	after := snapshotProbeIntentMetrics()
 
 	if rec.startCount() != 0 {
@@ -1444,16 +1441,14 @@ func TestConsumeSignals_PreGraceDrop_RearmsAfterTeardown(t *testing.T) {
 	before := snapshotPreGraceMetrics()
 	m.probeIntentDisp.applyStatus("work", "codex", agentpkg.StatusRunning)
 
-	// Capture gen 1 before teardown completes.
-	var gen1 uint64
+	// The first arm of a fresh Module is always generation 1; it is not read
+	// back from the entry (a read can land after a teardown+rearm, see
+	// TestConsumeSignals_GraceWindowDrop_RearmsAfterTeardown).
+	const gen1 uint64 = 1
 	waitFor(t, time.Second, func() bool {
-		cur, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
-		if !ok {
-			return false
-		}
-		gen1 = cur.generation
-		return gen1 > 0
-	}, "gen 1 active entry observed before pre-grace teardown")
+		_, ok := readActiveIntent(m, "work", agentpkg.ProbeIntentKindProcessDead)
+		return ok
+	}, "first arm active before pre-grace teardown")
 
 	// Inject hook DURING the 300ms hold so pre-grace drops the signal.
 	// Use deterministic metric handshake (PR round-4 P2 finding) — wait

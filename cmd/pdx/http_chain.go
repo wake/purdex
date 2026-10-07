@@ -33,5 +33,5 @@ func newOuterHandler(c *core.Core, mux http.Handler, allow []string) http.Handle
 	outer.Handle("/api/peers", peerChain)
 	outer.Handle("/api/peers/", peerChain)
 	outer.Handle("/", general)
-	return outer
+	return processInflight.Wrap(outer)
 }

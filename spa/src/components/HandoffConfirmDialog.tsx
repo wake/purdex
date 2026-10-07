@@ -1,7 +1,8 @@
 // spa/src/components/HandoffConfirmDialog.tsx — the confirm step in front of
 // "Hand to nex" (P-C.3 spec §4.4). The handoff exits Claude Code in the pane
-// and continues it headless with no permission prompts, so it is never a
-// one-click action. The dialog owns only the busy state, the "keep the tmux
+// and continues it headless — with no permission prompts, or (需要核准) asking
+// in the worker pane — so it is never a one-click action; the body describes
+// the selected mode. The dialog owns only the busy state, the "keep the tmux
 // session" choice (G4: checked on every open, never remembered) and the
 // toasts; the request, the pane swap and the single-flight live in
 // `lib/nex/handoff.ts`; the modal shell is the shared `ConfirmDialog`.
@@ -118,7 +119,7 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
     <ConfirmDialog
       testIdPrefix="handoff"
       title={t('handoff.confirm_title')}
-      body={t(handoffConfirmBodyKey(nexCapabilities))}
+      body={t(handoffConfirmBodyKey(nexCapabilities, askApproval))}
       confirmLabel={t('handoff.menu')}
       busy={busy}
       onCancel={onClose}

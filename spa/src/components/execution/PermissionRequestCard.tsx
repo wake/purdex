@@ -3,15 +3,19 @@
 // channel plan Task 9; spec §5.3). Presentational: the pane decides which
 // request to show and does the answering (usePermissionAnswer); the card owns
 // only its own UI state — the deny note, the expanded preview, the clock.
+// The note, the open note field and the expanded preview outlive a tab
+// switch (the pane unmounts): they live in `lib/nex/permission-card-memory`
+// under `memoryKey`, read once on mount and written on every change.
 //
 // No "always allow" (PC4) and no edited input: 同意 sends the request's own
 // input. 拒絕 first opens a one-line note, which becomes the deny `message`
 // the model reads; Nexen caps it at 2048 **bytes**, so the note is capped by
 // UTF-8 bytes, never by characters.
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { HandPalm } from '@phosphor-icons/react'
 import type { PermissionRequestState } from '../../lib/nex/permissions'
+import { readPermissionCard, writePermissionCard, type PermissionCardMemo } from '../../lib/nex/permission-card-memory'
 import type { PermissionAnswerError } from '../../hooks/usePermissionAnswer'
 import { formatCoarseDuration } from '../../lib/nex/format-duration'
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
@@ -59,6 +63,18 @@ function preview(text: string): string {
   return `${cut}…`
 }
 
+/** One field of the card's memory: state seeded from it on mount, and every set written back. */
+function useRemembered<K extends keyof PermissionCardMemo>(key: string, field: K): [PermissionCardMemo[K], (v: PermissionCardMemo[K]) => void] {
+  const [value, setValue] = useState(() => readPermissionCard(key)[field])
+  const set = useCallback((v: PermissionCardMemo[K]) => {
+    setValue(v)
+    const change: Partial<PermissionCardMemo> = {}
+    change[field] = v
+    writePermissionCard(key, change)
+  }, [key, field])
+  return [value, set]
+}
+
 export interface PermissionRequestCardProps {
   request: PermissionRequestState
   /** For 「subagent: …」: the asking subagent's task description, else its id. */
@@ -70,14 +86,16 @@ export interface PermissionRequestCardProps {
   onAllow(): void
   /** The note as typed ('' = none; the hook trims it). */
   onDeny(note: string): void
+  /** `permissionCardKey(hostId, executionId, requestId)`: where the note, the open note field and the expanded preview are kept. */
+  memoryKey: string
 }
 
-export default function PermissionRequestCard({ request, agentLabel, disabled, error, onAllow, onDeny }: PermissionRequestCardProps) {
+export default function PermissionRequestCard({ request, agentLabel, disabled, error, onAllow, onDeny, memoryKey }: PermissionRequestCardProps) {
   const t = useI18nStore((s) => s.t)
   const now = useElapsedTicker(true)
-  const [expanded, setExpanded] = useState(false)
-  const [noteOpen, setNoteOpen] = useState(false)
-  const [note, setNote] = useState('')
+  const [expanded, setExpanded] = useRemembered(memoryKey, 'expanded')
+  const [noteOpen, setNoteOpen] = useRemembered(memoryKey, 'noteOpen')
+  const [note, setNote] = useRemembered(memoryKey, 'note')
 
   const text = inputText(request.input)
   const long = text.length > PREVIEW_CHARS
@@ -129,7 +147,7 @@ export default function PermissionRequestCard({ request, agentLabel, disabled, e
         </pre>
       )}
       {long && (
-        <button type="button" data-testid="permission-expand" onClick={() => setExpanded((v) => !v)}
+        <button type="button" data-testid="permission-expand" onClick={() => setExpanded(!expanded)}
           className="mt-0.5 text-text-muted hover:text-text-primary">
           {t(expanded ? 'execution.permission.collapse' : 'execution.permission.expand')}
         </button>

@@ -14,7 +14,6 @@ package tmux
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -53,7 +52,7 @@ func (r *RealExecutor) KillSessionIfInstance(sessionID, expectedInstance string)
 	if err != nil {
 		return false, err
 	}
-	cmd := exec.Command("tmux", args...)
+	cmd := tmuxCmd(args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
