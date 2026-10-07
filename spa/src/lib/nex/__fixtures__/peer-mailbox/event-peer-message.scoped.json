@@ -1,0 +1,16 @@
+{
+  "seq": 9,
+  "execution_id": "06GHFPZPKK8W5J196J88YGZG5M",
+  "kind": "peer_message",
+  "payload": {
+    "turn_id": "06GHFQ05387SNJ03J705Z2JKN8",
+    "from_name": "mlab/purdex-54",
+    "reply_to": "mlab/_vioqlc",
+    "from_mode": "prompting",
+    "msg_id": "fixture-0001",
+    "principal_id": "accept",
+    "template_version": 135107250,
+    "text": "Please reply with the single word PONG."
+  },
+  "created_at": 1791401657626
+}
