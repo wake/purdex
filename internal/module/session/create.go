@@ -188,21 +188,20 @@ func (m *SessionModule) CreateSessionTagged(name, cwd string, tag SessionTag) (*
 	return m.createSession(context.Background(), name, cwd, &tag)
 }
 
-// dropUntaggedPartial cleans up after a tagged create whose one invocation
-// failed (P4-5 critic): new-session may have made the session before its
-// set-option failed, leaving a session no caller owns or will ever adopt.
-// One read gives the session's generation, id and tag. Untagged, on the
-// generation sampled before the create (or the one it started), it is this
-// create's own half: the name was free just before, under createMu. It is
-// killed by id under that generation. Anything else (unreadable, tagged,
-// another generation) is left as it is; the create's error stands either way.
-func (m *SessionModule) dropUntaggedPartial(ctx context.Context, name string, tag SessionTag, before string) {
-	id, err := m.tmux.PaneIdentity(ctx, "="+name+":", tag.Option)
-	if err != nil || id.Tag != "" || (before != "" && id.Instance != before) {
+// dropHalfCreate cleans up after a tagged create whose one invocation failed
+// (P4-5 critic and re-review): new-session may have made the session before
+// its set-option failed, leaving a session no caller owns or will ever
+// adopt. new-session printed the id and the generation of the session it
+// made, also then (measured, tmux 3.6a); that session alone is killed, by
+// that id under that generation. Nothing is looked up by name: a session of
+// that name another process made is never touched. No id printed (new-session
+// made nothing) means nothing to remove. The create's error stands either way.
+func (m *SessionModule) dropHalfCreate(name, sessionID, instance string) {
+	if sessionID == "" {
 		return
 	}
-	if killed, err := m.tmux.KillSessionIfInstance(id.SessionID, id.Instance); err != nil || !killed {
-		log.Printf("session: tagged create %q failed half way; its untagged session %s was not removed: %v", name, id.SessionID, err)
+	if killed, err := m.tmux.KillSessionIfInstance(sessionID, instance); err != nil || !killed {
+		log.Printf("session: tagged create %q failed half way; its session %s was not removed: %v", name, sessionID, err)
 	}
 }
 
@@ -309,8 +308,9 @@ func (m *SessionModule) createSession(ctx context.Context, name, cwd string, tag
 	// createSession).
 	newCtx, cancelNew := context.WithTimeout(context.Background(), m.readTimeout())
 	var newErr error
+	var madeID, madeInstance string // what a tagged new-session printed
 	if tag != nil {
-		newErr = m.tmux.NewSessionTaggedContext(newCtx, name, cwd, tag.Option, tag.Value)
+		madeID, madeInstance, newErr = m.tmux.NewSessionTaggedContext(newCtx, name, cwd, tag.Option, tag.Value)
 	} else {
 		newErr = m.tmux.NewSessionContext(newCtx, name, cwd)
 	}
@@ -325,9 +325,7 @@ func (m *SessionModule) createSession(ctx context.Context, name, cwd string, tag
 
 	if newErr != nil {
 		if !errors.Is(newErr, context.DeadlineExceeded) {
-			if tag != nil {
-				m.dropUntaggedPartial(postCtx, name, *tag, before)
-			}
+			m.dropHalfCreate(name, madeID, madeInstance)
 			return fail(CreateStageNewSession, newErr)
 		}
 		// Killed at the cap: the client is gone, but the server may have

@@ -377,18 +377,22 @@ func (f *FakeExecutor) NewSessionContext(ctx context.Context, name, cwd string) 
 	return f.NewSession(name, cwd)
 }
 
-// NewSessionTaggedContext is NewSessionContext plus the session's user option.
-// With FailSetTag the session is made and the set-option fails, as one
-// invocation whose second command errs.
-func (f *FakeExecutor) NewSessionTaggedContext(ctx context.Context, name, cwd, option, value string) error {
+// NewSessionTaggedContext is NewSessionContext plus the session's user option,
+// answering the new session's id and the fake's instance. With FailSetTag the
+// session is made and the set-option fails, as one invocation whose second
+// command errs: the id is still answered.
+func (f *FakeExecutor) NewSessionTaggedContext(ctx context.Context, name, cwd, option, value string) (string, string, error) {
 	if err := f.NewSessionContext(ctx, name, cwd); err != nil {
-		return err
+		return "", "", err
 	}
+	f.mu.Lock()
+	id, inst := f.sessions[name].ID, f.instance
+	f.mu.Unlock()
 	if f.FailSetTag {
-		return fmt.Errorf("set-option: simulated failure")
+		return id, inst, fmt.Errorf("set-option: simulated failure")
 	}
 	f.SetSessionTag(name, option, value)
-	return nil
+	return id, inst, nil
 }
 
 // SetSessionTag sets a session user option, as `set-option -t` would.

@@ -43,12 +43,24 @@ func TestParsePaneIdentity(t *testing.T) {
 }
 
 // new-session and set-option go in one command list: the option lands on
-// the session being created and nowhere else (measured, tmux 3.6a).
+// the session being created and nowhere else, and new-session prints the
+// id and generation of the session it made even when the set-option after
+// it fails (exit 1; nothing printed when new-session itself fails;
+// measured, tmux 3.6a).
 func TestNewSessionTaggedArgs(t *testing.T) {
 	got, err := newSessionTaggedArgs("tm-abc", "/w", "@pdx_spawn_op", testTag)
-	want := []string{"new-session", "-d", "-s", "tm-abc", "-c", "/w", ";", "set-option", "@pdx_spawn_op", testTag}
+	want := []string{"new-session", "-d", "-s", "tm-abc", "-c", "/w", "-P", "-F", "#{session_id} #{pid}:#{start_time}",
+		";", "set-option", "@pdx_spawn_op", testTag}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %q, %v", got, err)
+	}
+	if id, inst := parseCreatedSession("$1 86338:1791397025\n"); id != "$1" || inst != "86338:1791397025" {
+		t.Fatalf("created = %q %q", id, inst)
+	}
+	for _, bad := range []string{"", "\n", "$1", "1 86338:1", "$1 a;b"} {
+		if id, inst := parseCreatedSession(bad); id != "" || inst != "" {
+			t.Errorf("%q parsed as %q %q", bad, id, inst)
+		}
 	}
 	for _, bad := range [][2]string{{"pdx", testTag}, {"@pdx_spawn_op", "a b"}, {"@pdx_spawn_op", "a;"}, {"@pdx_spawn_op", ""}} {
 		if _, err := newSessionTaggedArgs("tm-abc", "/w", bad[0], bad[1]); err == nil {
@@ -62,8 +74,8 @@ func TestNewSessionTaggedArgs(t *testing.T) {
 func TestFakeExecutor_TaggedSessionIdentity(t *testing.T) {
 	f := NewFakeExecutor()
 	f.SetInstance("1:2")
-	if err := f.NewSessionTaggedContext(t.Context(), "tm-abc", "/w", "@pdx_spawn_op", testTag); err != nil {
-		t.Fatal(err)
+	if id, inst, err := f.NewSessionTaggedContext(t.Context(), "tm-abc", "/w", "@pdx_spawn_op", testTag); err != nil || id != "$0" || inst != "1:2" {
+		t.Fatalf("create = %q %q %v", id, inst, err)
 	}
 	f.SetActivePaneMetadata("tm-abc", TmuxPaneMetadata{SessionID: "$0", SessionName: "tm-abc", PaneID: "%0"})
 	f.SetPaneCwd("%0", "/w")

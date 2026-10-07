@@ -53,29 +53,47 @@ func parsePaneIdentity(out string) (PaneIdentity, error) {
 
 // newSessionTaggedArgs is new-session followed, in the same command list,
 // by set-option of the session user option: without -t it applies to the
-// session just created and to no other (measured, tmux 3.6a). The value
-// must be inert in a tmux command (the generation's character set).
+// session just created and to no other. new-session prints (-P) the id and
+// the server generation of the session it made, also when the set-option
+// after it fails (exit 1); when new-session itself fails it prints nothing
+// (all measured, tmux 3.6a). The value must be inert in a tmux command (the
+// generation's character set).
 func newSessionTaggedArgs(name, cwd, option, value string) ([]string, error) {
 	if !userOptionPattern.MatchString(option) || !instancePattern.MatchString(value) {
 		return nil, fmt.Errorf("tmux: option %q = %q cannot tag a session", option, value)
 	}
-	return []string{"new-session", "-d", "-s", name, "-c", cwd, ";", "set-option", option, value}, nil
+	return []string{"new-session", "-d", "-s", name, "-c", cwd, "-P", "-F", "#{session_id} #{pid}:#{start_time}",
+		";", "set-option", option, value}, nil
+}
+
+// parseCreatedSession reads new-session's -P line; "" for anything else.
+func parseCreatedSession(out string) (sessionID, instance string) {
+	f := strings.Fields(out)
+	if len(f) != 2 || !sessionIDPattern.MatchString(f[0]) || !instancePattern.MatchString(f[1]) {
+		return "", ""
+	}
+	return f[0], f[1]
 }
 
 // NewSessionTaggedContext is NewSessionContext that also sets the new
-// session's user option to value, in the same tmux invocation.
-func (r *RealExecutor) NewSessionTaggedContext(ctx context.Context, name, cwd, option, value string) error {
+// session's user option to value, in the same tmux invocation. It returns
+// the id and generation of the session its new-session made, as that
+// command printed them, even with an error: a set-option that failed after
+// it leaves that session behind, and only the caller can remove it by id.
+func (r *RealExecutor) NewSessionTaggedContext(ctx context.Context, name, cwd, option, value string) (string, string, error) {
 	args, err := newSessionTaggedArgs(name, cwd, option, value)
 	if err != nil {
-		return err
+		return "", "", err
 	}
-	if err := boundedRead(ctx, args...).Run(); err != nil {
+	out, err := boundedRead(ctx, args...).Output()
+	id, inst := parseCreatedSession(string(out))
+	if err != nil {
 		if cerr := readCtxErr(ctx, "tmux new-session", err); cerr != nil {
-			return cerr
+			return id, inst, cerr
 		}
-		return err
+		return id, inst, err
 	}
-	return nil
+	return id, inst, nil
 }
 
 // PaneIdentity reads target's identity and the session user option in one
