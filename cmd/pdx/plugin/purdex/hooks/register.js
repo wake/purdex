@@ -25,13 +25,20 @@ async function hello($) {
   await run($, ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
 }
 
+// helloLater sends hello from a timer, never inside the hook: a daemon that
+// is down or restarting answers only after the client's 30 s grace, and a
+// session start or a /clear must not wait for that.
+function helloLater($) {
+  $.clock.after(0, () => { void hello($).catch(() => {}) })
+}
+
 export function register(on) {
   on('session.start', async ($, e, next) => {
     s.interactive = !!e.isInteractive
     if (!s.interactive) return next(e) // a Nexen worker's `claude -p`: the mod does nothing (spec §5)
     const cfg = parseJSON(await $.fs.read($.plugin.root + '/pdx.json').catch(() => ''))
     if (cfg && cfg.pdx) s.pdx = cfg.pdx // written beside VERSION by the extractor; absent in `claude plugin test`
-    await hello($)
+    helloLater($)
     return next(e)
   })
 
@@ -41,7 +48,7 @@ export function register(on) {
   // is session.start's hello) and never when headless.
   on('classic.SessionStart', async ($, e, next) => {
     const r = await next(e)
-    if (s.interactive && e.source === 'clear') await hello($)
+    if (s.interactive && e.source === 'clear') helloLater($)
     return r
   })
 }

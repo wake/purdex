@@ -70,6 +70,14 @@ func TestExtractPlugin_SameVersionIsNoop_NewVersionReplaces(t *testing.T) {
 	if _, err := os.Stat(stale); err != nil {
 		t.Fatal("a same-version extract must not touch the tree")
 	}
+	// …but it refreshes pdx.json: a binary moved since the last install is
+	// found by the mod (the rule's one exception).
+	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/usr/local/bin/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(PluginRoot(dataDir), "pdx.json")); !strings.Contains(string(b), `"/usr/local/bin/pdx"`) {
+		t.Fatalf("same-version extract must refresh pdx.json: %s", b)
+	}
 	_, changed, err = ExtractPlugin(fakePlugin("b"), dataDir, "b", "/opt/pdx")
 	if err != nil || !changed {
 		t.Fatalf("new version: changed=%v err=%v", changed, err)
