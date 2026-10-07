@@ -2,8 +2,10 @@ package main
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,7 +40,25 @@ func TestRegisterServeModules_MountsTeam(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, doRequest(t, outer, http.MethodGet, "/api/team/approvals/00000000-0000-4000-8000-000000000001", "t").Code)
 	assert.Equal(t, http.StatusUnauthorized, doRequest(t, outer, http.MethodGet, "/api/team/approvals", "").Code)
 	assert.Equal(t, http.StatusUnauthorized, doRequest(t, outer, http.MethodGet, "/api/team/inflight", "").Code)
+	// P2c: the hook decision route is live and behind TokenAuth too.
+	res = doRequestBody(t, outer, http.MethodPost, "/api/hooks/decide", "t", `{"agent":"cc","event":"PreToolUse","session_id":"sid-x"}`)
+	assert.Equal(t, http.StatusOK, res.Code, res.Body.String())
+	assert.JSONEq(t, `{}`, res.Body.String())
+	assert.Equal(t, http.StatusUnauthorized, doRequestBody(t, outer, http.MethodPost, "/api/hooks/decide", "", `{"agent":"cc","event":"PreToolUse","session_id":"sid-x"}`).Code)
 	_, err := os.Stat(filepath.Join(dataDir, "team.db"))
 	assert.NoError(t, err, "team.db must be created in the data dir")
 	require.NoError(t, c.CloseModules())
+}
+
+// doRequestBody is doRequest with a JSON body.
+func doRequestBody(t *testing.T, h http.Handler, method, target, bearer, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
 }

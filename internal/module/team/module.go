@@ -36,6 +36,12 @@ type Module struct {
 	now     func() int64 // unix ms; injectable for tests
 	logf    func(format string, args ...any)
 
+	// dataDir is the daemon's data dir; the hook lock flags live under
+	// <dataDir>/hooklocks (spec §6.6): the hook decide route removes a flag
+	// it answered {} for, and the sweeper prunes flags of sessions the
+	// registry no longer lists.
+	dataDir string
+
 	// stopCtx is cancelled first in Stop: long-polls return, the sweeper
 	// exits and POST create answers 503 not_ready. The DB stays open until
 	// Close (PD6): in-flight handlers still read it during srv.Shutdown.
@@ -108,10 +114,12 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("team: %w", err)
 	}
 	m.store = store
+	m.dataDir = c.Cfg.DataDir
 	return nil
 }
 
-// RegisterRoutes mounts the six /api/team/* routes (Go method patterns).
+// RegisterRoutes mounts the six /api/team/* routes and the hook decision
+// route (Go method patterns).
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/team/approvals", m.handleCreate)
 	mux.HandleFunc("GET /api/team/approvals", m.handleList)
@@ -119,6 +127,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/team/approvals/{id}", m.handleDelete)
 	mux.HandleFunc("POST /api/team/approvals/{id}/decide", m.handleDecide)
 	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)
+	mux.HandleFunc("POST /api/hooks/decide", m.handleHookDecide)
 }
 
 // Start applies the boot lease grace (spec §9.2: every open request's
