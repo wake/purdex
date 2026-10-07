@@ -19,7 +19,8 @@ import type { ExecutionViewMode, Tab } from '../../types/tab'
 import { readScrollMemo, forgetScrollMemo } from '../../lib/nex/transcript-scroll-memory'
 import { readWorkerDraft, forgetWorkerDraft } from '../../lib/nex/worker-draft-memory'
 import { clearAllPermissionCards, isPermissionCardClosed, permissionCardCount, permissionCardKey, readPermissionCard, writePermissionCard } from '../../lib/nex/permission-card-memory'
-import { NexApiError } from '../../lib/nex/types'
+import { NexApiError, type NexEvent } from '../../lib/nex/types'
+import peerScoped from '../../lib/nex/__fixtures__/peer-mailbox/event-peer-message.scoped.json'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import * as sub from '../../hooks/useExecutionSubscription'
@@ -423,5 +424,28 @@ describe('the permission request card across tab switches', () => {
       expect(screen.queryByTestId('permission-card')).toBeNull()
       expect(answeredIds()).toEqual(['req_a'])
     })
+  })
+})
+
+// Peer mailbox spec §7 / §10: a peer turn lives in the execution store, not in the pane, so the switch that unmounts
+// the pane brings it back as the peer block — and it never touches what the reader was typing.
+describe('a peer turn across tab switches', () => {
+  it('keeps the peer block and the reader\'s draft when the reader switches away and back', () => {
+    useI18nStore.getState().setLocale('en')
+    const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
+    fireEvent.change(box(), { target: { value: 'half a reply' } })
+    act(() => { useExecutionStore.getState().applyEvents(H, E, [structuredClone(peerScoped) as NexEvent]) })
+    expect(screen.getByTestId('peer-message')).toHaveTextContent(peerScoped.payload.text)
+    expect(box().value).toBe('half a reply')
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('execution-view')).toBeNull()
+
+    rerender(<TabContent activeTab={execTab} allTabs={all} />)
+    const block = screen.getByTestId('peer-message')
+    expect(block).toHaveTextContent(`From ${peerScoped.payload.from_name}`)
+    expect(block).toHaveTextContent(peerScoped.payload.text)
+    expect(screen.queryByTestId('room-user-line')).toBeNull()
+    expect(box().value).toBe('half a reply')
   })
 })
