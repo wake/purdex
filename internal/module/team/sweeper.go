@@ -33,7 +33,9 @@ func (m *Module) runSweeper() {
 // tick closes what is overdue (spec §6.2, §9.2): a passed deadline is a
 // timeout (U7), an expired lease is an abandonment, and — every
 // livenessEvery-th tick, only while something is open — a vanished origin
-// session is one too. A resolver that cannot read the registry answers
+// session is one too. The liveness tick also ends the teams whose lead is
+// gone (spec §7.1, endGoneTeams), open approvals or not. A resolver that
+// cannot read the registry answers
 // "live" (peers/origin_resolver.go), so a read error never abandons
 // anything. The deadline and lease paths close through CloseIfExpired:
 // the decision here is made on a copy, and a poll that renewed the lease
@@ -50,6 +52,7 @@ func (m *Module) tick() {
 		// With no flag on disk this is one ReadDir that answers ENOENT.
 		m.pruneHookLocks()
 		m.pruneAskFlags()
+		m.endGoneTeams()
 	}
 	open, err := m.store.ListOpen()
 	if err != nil {
@@ -93,4 +96,58 @@ func (m *Module) closeExpired(id string, now int64, state team.State) (team.Appr
 	return m.closeWith(id, func() (team.Approval, bool, error) {
 		return m.store.CloseIfExpired(id, now, Close{State: state, DecidedAt: now})
 	})
+}
+
+// endGoneTeams ends every live team whose lead's conversation ended (spec
+// §7.1): its session is gone from the registry and it is not mid-relay.
+// The relay guard is what keeps a relay's own /clear from ending the team:
+// the old session id leaves the registry about 0.6 s after /clear while
+// the op is still written, and the cleared report then moves the lead
+// (P4-3). A manual /clear has no op, so it ends the team. A registry read
+// error answers "live" (peers/origin_resolver.go) and a store error skips
+// the team, so neither ever ends one. EndTeam is guarded on the lead read
+// here, so a lead moved since is left alone. Members are untouched (D4).
+func (m *Module) endGoneTeams() {
+	teams, err := m.store.ListLiveTeams()
+	if err != nil {
+		m.logf("[team] sweep teams: %v", err)
+		return
+	}
+	for _, t := range teams {
+		if m.origins.LiveSession(t.LeadSessionID) {
+			continue
+		}
+		relaying, err := m.relayInFlight(t.LeadSessionID)
+		if err != nil {
+			m.logf("[team] sweep team %s: %v", t.ID, err)
+			continue
+		}
+		if relaying {
+			continue
+		}
+		ended, err := m.store.EndTeam(t.ID, t.LeadSessionID, team.TeamEndLeadGone, m.now())
+		if err != nil {
+			m.logf("[team] sweep team %s: %v", t.ID, err)
+			continue
+		}
+		if ended {
+			m.logf("[team] team %s ended (%s): its lead %s (%s) is gone", t.ID, team.TeamEndLeadGone, t.LeadRef, t.LeadSessionID)
+		}
+	}
+}
+
+// relayInFlight reports whether the session has a relay op past its claim
+// and not yet cleared (claimed, writing or written): the stretch in which
+// the session may /clear for the relay and so leave the registry while it
+// is still the same conversation.
+func (m *Module) relayInFlight(sessionID string) (bool, error) {
+	op, ok, err := m.store.OpenRelayOpBySession(sessionID)
+	if err != nil || !ok {
+		return false, err
+	}
+	switch op.State {
+	case team.RelayClaimed, team.RelayWriting, team.RelayWritten:
+		return true, nil
+	}
+	return false, nil
 }
