@@ -1,5 +1,4 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { useI18nStore } from '../stores/useI18nStore'
 import { BrowserToolbar } from './BrowserToolbar'
 import { useBrowserViewState } from '../hooks/useBrowserViewState'
 import { useBrowserViewResize } from '../hooks/useBrowserViewResize'
@@ -10,7 +9,6 @@ interface BrowserPaneProps {
 }
 
 export function BrowserPane({ paneId, url }: BrowserPaneProps) {
-  const t = useI18nStore((s) => s.t)
   const contentRef = useRef<HTMLDivElement>(null)
   const initialUrlRef = useRef(url)
   const state = useBrowserViewState(paneId)
@@ -51,15 +49,6 @@ export function BrowserPane({ paneId, url }: BrowserPaneProps) {
     () => window.electronAPI?.browserViewOpenMiniWindow(currentUrl),
     [currentUrl],
   )
-
-  // SPA fallback
-  if (!window.electronAPI) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-sm text-text-muted">{t('browser.requires_app')}</p>
-      </div>
-    )
-  }
 
   return (
     <div className="flex flex-col h-full" data-browser-pane={paneId}>
