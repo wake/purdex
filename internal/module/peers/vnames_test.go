@@ -271,6 +271,41 @@ func TestNamer_StoreErrorGivesNoName(t *testing.T) {
 	}
 }
 
+// failingConv is a ConversationNameReader whose read fails.
+type failingConv struct{ err error }
+
+func (f failingConv) All(context.Context) (map[string]string, error) { return nil, f.err }
+
+// An unreadable conversation_names table must not let a conversation fall
+// through to a lower source: the name is assigned once and for good, so a
+// cwd-basename name given while the recorded name could not be read would
+// never be corrected. Such a conversation goes unnamed this pass and is
+// named from its conversation name on the next; one with a usable registry
+// name is named as usual meanwhile.
+func TestNamer_ConversationNameReadErrorDefersTheName(t *testing.T) {
+	m, meta := namerFixture(t)
+	ctx := context.Background()
+	if err := meta.ConversationNames().Upsert(ctx, vnNew, "remembered", 1); err != nil {
+		t.Fatal(err)
+	}
+	needsConv := nameCandidate{sid: vnNew, ref: ipeers.RefID(vnNew), registryName: "Bad Name", dirBase: "proj"}
+	m.WithPeerNames(meta.PeerNames(), failingConv{errors.New("conv table locked")})
+	got := m.resolveNames(ctx, []nameCandidate{needsConv, cand(vnLead, "live-name")})
+	if _, named := got[vnNew]; named || got[vnLead] != vname(t, "live-name", vnLead) {
+		t.Fatalf("names = %v, want only %s named", got, vnLead)
+	}
+	if row := storedRow(t, meta, vnNew); row != (store.PeerNameEntry{}) {
+		t.Fatalf("stored %+v while the conversation name was unreadable", row)
+	}
+	m.WithPeerNames(meta.PeerNames(), meta.ConversationNames())
+	if got := m.resolveNames(ctx, []nameCandidate{needsConv}); got[vnNew] != vname(t, "remembered", vnNew) {
+		t.Fatalf("next pass = %v, want the conversation name", got)
+	}
+	if row := storedRow(t, meta, vnNew); row.Source != store.PeerNameSourceConversationName {
+		t.Fatalf("source = %q, want conversation_name", row.Source)
+	}
+}
+
 // Two live entries for one session (a resume pair) are one conversation:
 // one name, keyed by the session id as given.
 func TestNamer_DuplicateCandidatesShareOneName(t *testing.T) {

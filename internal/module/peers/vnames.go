@@ -100,7 +100,12 @@ func (m *Module) resolveNames(ctx context.Context, cands []nameCandidate) map[st
 	if len(refs) > 0 {
 		lineage, lineageErr = m.peerNames.ByRefs(ctx, refs)
 	}
+	// conversation_names is read at most once a pass, and only if some
+	// conversation needs it. A failed read leaves every such conversation
+	// unnamed this pass rather than named from a lower source (the cwd
+	// basename), since a name, once assigned, is never corrected.
 	var conv map[string]string
+	var convErr error
 	convRead := false
 
 	nowMs := m.now().UnixMilli()
@@ -121,13 +126,15 @@ func (m *Module) resolveNames(ctx context.Context, cands []nameCandidate) map[st
 		if !has {
 			name, source := ln, store.PeerNameSourceLineage
 			if name == "" {
-				if !convRead && m.convNames != nil && !ipeers.RoutableName(c.registryName) {
-					conv, err = m.convNames.All(ctx)
-					if err != nil {
-						conv = nil
-						fail(err)
+				if !ipeers.RoutableName(c.registryName) && m.convNames != nil {
+					if !convRead {
+						conv, convErr = m.convNames.All(ctx)
+						convRead = true
 					}
-					convRead = true
+					if convErr != nil {
+						fail(convErr)
+						continue
+					}
 				}
 				name, source = baseName(c, conv[k])
 			}
