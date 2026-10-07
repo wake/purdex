@@ -104,6 +104,7 @@ type FakeExecutor struct {
 	FailKillIfInstance    bool     // if true, KillSessionIfInstance returns an error (nothing killed)
 	killIfInstanceCalls   []KillIfInstanceCall
 	tags                  map[string]map[string]string // session name → user option → value
+	FailSetTag            bool                         // NewSessionTaggedContext makes the session, then fails its set-option
 	// ForceNewSessionCwd, when non-empty, is the cwd NewSession records for the
 	// new session instead of the one it was asked for — test-only. It models
 	// the one thing real tmux does that no error surfaces: `new-session -c
@@ -377,9 +378,14 @@ func (f *FakeExecutor) NewSessionContext(ctx context.Context, name, cwd string) 
 }
 
 // NewSessionTaggedContext is NewSessionContext plus the session's user option.
+// With FailSetTag the session is made and the set-option fails, as one
+// invocation whose second command errs.
 func (f *FakeExecutor) NewSessionTaggedContext(ctx context.Context, name, cwd, option, value string) error {
 	if err := f.NewSessionContext(ctx, name, cwd); err != nil {
 		return err
+	}
+	if f.FailSetTag {
+		return fmt.Errorf("set-option: simulated failure")
 	}
 	f.SetSessionTag(name, option, value)
 	return nil
@@ -398,14 +404,18 @@ func (f *FakeExecutor) SetSessionTag(name, option, value string) {
 	f.tags[name][option] = value
 }
 
-// PaneIdentity answers for a live session's active pane (SetActivePaneMetadata)
-// named by its pane id or by "=<name>:", with the current instance, the
-// session's option and the pane's SetPaneCwd directory.
+// PaneIdentity answers for a live session's active pane (SetActivePaneMetadata,
+// else pane %N of session $N) named by its pane id or by "=<name>:", with the
+// current instance, the session's option and the pane's SetPaneCwd directory.
 func (f *FakeExecutor) PaneIdentity(_ context.Context, target, option string) (PaneIdentity, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for name, md := range f.activePaneMetadata {
-		if _, live := f.sessions[name]; live && (target == md.PaneID || target == "="+name+":") {
+	for name, s := range f.sessions {
+		md, ok := f.activePaneMetadata[name]
+		if !ok {
+			md = TmuxPaneMetadata{SessionID: s.ID, PaneID: "%" + strings.TrimPrefix(s.ID, "$")}
+		}
+		if target == md.PaneID || target == "="+name+":" {
 			return PaneIdentity{Instance: f.instance, SessionID: md.SessionID, PaneID: md.PaneID,
 				Tag: f.tags[name][option], Cwd: f.paneCwds[md.PaneID]}, nil
 		}

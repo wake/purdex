@@ -188,6 +188,24 @@ func (m *SessionModule) CreateSessionTagged(name, cwd string, tag SessionTag) (*
 	return m.createSession(context.Background(), name, cwd, &tag)
 }
 
+// dropUntaggedPartial cleans up after a tagged create whose one invocation
+// failed (P4-5 critic): new-session may have made the session before its
+// set-option failed, leaving a session no caller owns or will ever adopt.
+// One read gives the session's generation, id and tag. Untagged, on the
+// generation sampled before the create (or the one it started), it is this
+// create's own half: the name was free just before, under createMu. It is
+// killed by id under that generation. Anything else (unreadable, tagged,
+// another generation) is left as it is; the create's error stands either way.
+func (m *SessionModule) dropUntaggedPartial(ctx context.Context, name string, tag SessionTag, before string) {
+	id, err := m.tmux.PaneIdentity(ctx, "="+name+":", tag.Option)
+	if err != nil || id.Tag != "" || (before != "" && id.Instance != before) {
+		return
+	}
+	if killed, err := m.tmux.KillSessionIfInstance(id.SessionID, id.Instance); err != nil || !killed {
+		log.Printf("session: tagged create %q failed half way; its untagged session %s was not removed: %v", name, id.SessionID, err)
+	}
+}
+
 // CreateSessionContext is createSession without a tag.
 func (m *SessionModule) CreateSessionContext(ctx context.Context, name, cwd string) (*SessionInfo, error) {
 	return m.createSession(ctx, name, cwd, nil)
@@ -307,6 +325,9 @@ func (m *SessionModule) createSession(ctx context.Context, name, cwd string, tag
 
 	if newErr != nil {
 		if !errors.Is(newErr, context.DeadlineExceeded) {
+			if tag != nil {
+				m.dropUntaggedPartial(postCtx, name, *tag, before)
+			}
 			return fail(CreateStageNewSession, newErr)
 		}
 		// Killed at the cap: the client is gone, but the server may have

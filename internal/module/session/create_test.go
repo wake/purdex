@@ -73,6 +73,22 @@ func TestCreateSessionTagged_TheSessionIsBornWithItsTag(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSessionExists, "the same checks as an untagged create")
 }
 
+// A tagged create whose new-session made the session but whose set-option
+// failed (one invocation, one error) would leave a session nobody owns or
+// will ever adopt (P4-5 critic): the create reads it back and, finding it
+// untagged on its own generation, kills it by id under that generation.
+// The create's error stands. Mutation gate: drop the cleanup → red.
+func TestCreateSessionTagged_AHalfDoneCreateLeavesNoSession(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.SetInstance("4471:1788740000")
+	mod.tmuxInstanceFn = func(context.Context) string { return "4471:1788740000" }
+	fake.FailSetTag = true
+	_, err := mod.CreateSessionTagged("tm-1111111122", t.TempDir(), SessionTag{Option: "@pdx_spawn_op", Value: "11111111-2222-4333-8444-555555555555"})
+	require.Error(t, err)
+	assert.False(t, fake.HasSession("tm-1111111122"), "the untagged half-made session is removed")
+	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: "$0", Expected: "4471:1788740000"}}, fake.KillIfInstanceCalls())
+}
+
 func TestCreateSession_ExpandsTilde(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 	home := t.TempDir()
