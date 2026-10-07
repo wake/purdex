@@ -231,6 +231,16 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 			return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) &&
 				r.Ref == ref && r.Agent.PeerName == typedName
 		})
+		if errors.Is(err, ErrNotFound) {
+			// The combined form with a relayed-from ref (lead-team-relay
+			// spec §8.4): the name must still be the row's, so the check
+			// the bracket exists for is kept; only the ref is read through
+			// the lineage. Below the live pair, as the bare tier is.
+			rec, err = resolveTier(records, session, func(r PeerRecord) bool {
+				return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) &&
+					hasPreviousRef(r, ref) && r.Agent.PeerName == typedName
+			})
+		}
 		switch {
 		case err == nil:
 			if snap.RegistryIncomplete {
@@ -358,6 +368,17 @@ func resolveRefHead(records []PeerRecord, ref string, snap ResolveSnapshot) (Pee
 	rec, err := resolveTier(records, ref, func(r PeerRecord) bool {
 		return hasLiveEntry(r) && r.Ref == ref
 	})
+	if errors.Is(err, ErrNotFound) {
+		// The lineage tier (lead-team-relay spec §8.4): a ref no live row
+		// carries, but exactly one live row lists among the refs it took
+		// over from through relays. It sits strictly BELOW the live-ref
+		// tier — a live ref always wins — and above nothing else: a bare
+		// tmux name (tier 4) is decided by the caller after this returns.
+		// Two rows listing the same old ref is an ambiguity, not a guess.
+		rec, err = resolveTier(records, ref, func(r PeerRecord) bool {
+			return hasLiveEntry(r) && hasPreviousRef(r, ref)
+		})
+	}
 	if err == nil && snap.RegistryIncomplete {
 		return PeerRecord{}, ErrResolveNotReady
 	}
@@ -365,6 +386,16 @@ func resolveRefHead(records []PeerRecord, ref string, snap ResolveSnapshot) (Pee
 		return PeerRecord{}, ErrResolveNotReady
 	}
 	return rec, err
+}
+
+// hasPreviousRef reports whether ref is one of the refs r relayed from.
+func hasPreviousRef(r PeerRecord, ref string) bool {
+	for _, p := range r.PreviousRefs {
+		if p == ref {
+			return true
+		}
+	}
+	return false
 }
 
 // hasLiveEntry reports whether r's agent is a real, live Claude Code
