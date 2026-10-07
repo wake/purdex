@@ -12,6 +12,7 @@ Status: **passed review by `air26/_9iwyyv` on 2026-10-06** (c358cd65 plus the re
 - U19 (2026-10-07) replaces §6.6's forwarding with **分流**: the terminal keeps its native AskUserQuestion and permission dialogs untouched, every other client (desktop or phone) gets an event card, the first answer wins and closes the rest; the Purdex mod races the native dialog against the daemon's answer (measured, M24); no per-session switch, no Mac App card; phases P8a/P8b.
 - U18 (2026-10-07) fixes the model tier: spawn uses the default model; a self relay keeps model and effort (measured: `/clear` already does, M21); handoff (切換) keeping them is tracked outside this spec (§16), and P1 records `model.id` / `effort.level` for it.
 - U20 (2026-10-07, after the line moved to `mlab/_7wcg1d`) replaces U18's spawn bullet: the CLI's default model is not stable, so `pdx spawn` takes optional `--model` / `--effort` (M25), and the lead is reminded at activation and at a spawn without `--model` to choose them per task (§2, §6.1, §7.2, §10; phase P4).
+- U21 and U22 (2026-10-08): the relay prompts (write, fix, seed) move into the daemon as host config the mod reads at use (§8.8, P9a); the approval dialog switches to the requester's tab after a decision made here and can be minimized to a corner pill (§6.3, P9b).
 - U16 (2026-10-07) fixes the Chinese vocabulary: 切換 (handoff, terminal ↔ worker) and 接力 (relay, a new conversation when context runs out); 交接 is retired. This spec's prompts and the 接力檔 follow it; English identifiers do not change.
 
 Every place where this spec departs from the brief's design draft (brief §5, D1–D8) is marked **⟲ changed from D…**, with the reason. §13 lists all of them.
@@ -152,6 +153,25 @@ air26's facts behind it (2026-10-07), re-verified here as M22: Nexen starts a wo
 - **(d) The skill** (§10, "As a lead") says to choose each member's model and effort for its task, and why: the host default is not fixed.
 - **(e) The lead sees what each member runs.** `pdx team` shows each member's model and effort from P1's statusline reading (§7.3), so a member that came up on an unexpected model is visible.
 - **(f) Across hosts and relays.** P4c forwards `model` / `effort` with the spawn to the member host. A member relay (P6) keeps them, because `/clear` does (U18 (a), M21).
+
+**Eleventh and twelfth supplementary decisions.** The user made them on 2026-10-08 directly to `mlab/_7wcg1d` (purdex-f0), then chose each shape from options (all four picks were the recommended ones). The user's words are copied verbatim; the chosen shapes follow.
+
+| # | 決策 |
+|---|---|
+| U21 | relay、喚醒兩者的 prompt 放進 daemon 中提供設定（我以為是跟著 daemon server；能夠動態讀進來）。<br>選定形狀：<br>- 三段都可設定：撰寫接力檔（write）、補齊不完整的接力檔（fix）、喚醒新對話（seed，`/clear` 之後送給新對話、叫它讀接力檔並繼續工作的那段）；<br>- 內文可改、骨架固定：機器標記 `[pdx-relay …]`、回覆暗號 `HANDOFF-WRITTEN`、接力檔 8 個必要段落標題由程式固定（設定頁唯讀顯示）；其餘文字可改，可用變數，附「還原預設」。 |
+| U22 | 現在的 ask modal（核准對話框）是跨 tab 出現，要增加介面處理：<br>1. 無論同意或拒絕，要切換到發起的那個 tab；<br>2. 可以先把 ask modal 暫時縮小，有可能我正在處理事情。<br>選定形狀：<br>- 那個 session 沒有開著的 tab 時，自動在按下按鈕的視窗開新 tab 接上；<br>- 縮小成角落小膠囊「待核准 N · 倒數」，點一下還原；縮小期間有新申請，數字更新並閃一下，但不自動展開。 |
+
+**How this spec reads U21** (§8.8; phase P9a):
+- **(a) Where they live.** The three templates are host config of the daemon that runs the session (`relay.prompt_write`, `relay.prompt_fix`, `relay.prompt_seed`), in `host_config.db` next to the relay switches (§8.7), edited on Hosts › 接力 (P5a-3b's page). An unset, empty or whitespace-only value means the built-in default, which is today's text in `register.js` moved to the daemon; **還原預設** clears the value.
+- **(b) Read at use, never baked in.** The mod asks for the templates each time it is about to submit one (`pdx relay prompts`, which prints the three templates as JSON), so an edit applies from the next relay without `pdx setup`. If the call fails, times out, or the daemon is older and has no route, the mod uses its own built-in copy of the defaults: a relay never fails because of this.
+- **(c) What stays fixed.** The mod composes each prompt as **fixed head + the user's body + fixed tail**. Fixed: the machine tag `[pdx-relay op=… n=…]` / `[pdx-relay seed op=… n=…]` that every prompt carries (the mod recognises its own turns by its nonce anywhere in the text, P5b-2). It opens the write and fix prompts; the seed keeps today's order, `↪ 接手自 <old ref>` as its first line (§8.2 step 7) and the tag opening the second, and both lines are fixed; for write, the reply rule (`寫完後只回一行「HANDOFF-WRITTEN」`), the eight `# HANDOFF` / `## 1.`…`## 8.` headings the completeness check (`tool.check`, fix) reads, and the machine facts list; for fix, the list of missing sections and the reply rule. The settings page shows the fixed parts read-only around each editable box.
+- **(d) Variables.** `{{path}}` (the handoff file), `{{old_ref}}`, `{{old_session}}`, `{{context}}` (usage at the relay), `{{whoami}}` (pdx identity), and from P6-3a `{{git}}` (the read-only git output the mod gathers). The mod substitutes them; an unknown `{{…}}` is left as typed. The daemon refuses (400) a template over 16 KiB, with control characters other than newline and tab, or that is not UTF-8; a template may not contain the literal `[pdx-relay` (the tag is the mod's).
+- **(e) Scope.** Per host, like the switches: a session uses the templates of the daemon it reports to. Members use their own host's (a cross-host member, P4c, reads its member host's).
+
+**How this spec reads U22** (§6.3; phase P9b):
+- **(a) Switch on my decision only.** After **核准** or **拒絕** succeeds in this window (including a queued click sent on reconnect), the window activates the tab showing the requester's tmux session (`origin.tmux`, on `hostId`). No such tab in this window → it opens a new tab attached to that tmux session, as opening a session from the host's session list does. No tmux on the origin (a request with `origin.tmux` empty) → nothing to switch to; the dialog just closes. A request closed by another client, a timeout or a cancel switches nothing. "This window" names who acts, not who sees it: the tabs and the active tab are one world shared by a device's windows (persisted and synced, `useTabStore` / workspace store), so the device's other windows follow this activation as they follow any tab activation today; U22 does not change that.
+- **(b) Minimize.** The dialog gets a **縮小** button. Minimized, it becomes a pill in the window's bottom-right corner: `● 待核准 N · m:ss` (N open requests across hosts, the countdown of the one with the nearest deadline). Clicking the pill restores the dialog. While minimized: no focus trap, keys and clicks go to the tabs; a new request updates N and flashes the pill once, but never re-opens the dialog; the request's own deadline still runs (a timeout is a denial, as today); the system notification (§6.3) still fires. Minimized state is per window and not persisted: a reload shows the dialog again.
+- **(c) Kinds.** Both `lead` and `self_relay` dialogs. The Mac App still draws no card for `hook_ask` / `hook_permission` (U19 (b)).
 
 **How this spec reads U15** (derived in §7.4; the measurements are M13–M16):
 - U15 pulls **cross-host spawn, kill and relay** out of §11 into the phases (P4b, P4c in §12). It changes none of U1–U14.
@@ -442,6 +462,7 @@ The table is `approval_requests{id, kind: lead | self_relay, origin_session_id, 
 - **During a daemon restart (D6):** the dialog stays, with its buttons disabled and `daemon 重啟中…`.
   - A click while disconnected is kept locally and re-sent on reconnect. CAS makes the resend safe.
   - A 409 then closes it with the "handled by" toast.
+- **(U22) Back to the requester, and minimize.** A decision made in this window switches to the requester's tab (opening one attached to its tmux session when none is open); the dialog can be minimized to a corner pill `● 待核准 N · m:ss` that never auto-expands. Rules in §2 "How this spec reads U22".
 
 ### 6.4 The soft lock (U7, D3)
 
@@ -842,6 +863,14 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
 - `pdx relay wait` uses the restart-aware client (§9.1). A restart during the wait keeps the request.
 - After `daemon_unavailable` (exit 20), the mod releases the hold and treats the request as not approved. The daemon's lease then closes it.
 
+### 8.8 Relay prompts in the daemon (U21)
+
+- **Host config** `relay.prompt_write`, `relay.prompt_fix`, `relay.prompt_seed` (strings; empty or whitespace only = built-in default). Read with the relay switches; written through the existing host-config route behind `TokenAuth` (admin token only, like `team.member_command`); 400 on a template over 16 KiB, not UTF-8, with control characters other than `\n` / `\t`, or containing `[pdx-relay`.
+- **`GET /api/relay/prompts`** answers `{write, fix, seed, defaults: {write, fix, seed}}`: the effective body of each (the stored value, or the default when unset) and the built-in defaults, so the settings page can show and restore them. The defaults live in the daemon (moved from `register.js`); the mod keeps an identical built-in copy for the fallback, and a test pins that the two copies are equal.
+- **`pdx relay prompts`** prints that JSON (exit 0); 20 / 21 as the other relay subcommands.
+- **The mod** calls `pdx relay prompts` (bounded, 8 s, through `pdx()` with `--config`) right before submitting a write, fix or seed prompt, composes fixed head + body + fixed tail (U21 (c)), substitutes the variables (U21 (d)), and falls back to its built-in defaults on any failure. The machine tag and nonce rules of P5b-2 are unchanged.
+- **The settings page** (Hosts › 接力) shows three editors with the fixed parts read-only around each, the variable list, and **還原預設** per editor.
+
 ## 9. Daemon restart (U12, D6)
 
 Waiting is tied to a **request or operation id**, never to a connection. All state is in `team.db`.
@@ -960,11 +989,13 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | P6 | Member relay: `pdx relay`, the daemon's virtual peer and control message, `claim`, timeouts, boot reconciliation of relay ops; completion and failure notices; restart-confirm line for relays | 2 |
 | P7 | Detection and the 70% notice to the lead; persisted usage on team rows; member auto-compact report | 3 |
 | P8a | 分流 for AskUserQuestion (U17 use 3, U19): kinds `hook_ask` and `hook_permission` on `approval_requests`, `HookDecision` on the wire, `RemoteResponders` (WS half), `pdx ask begin\|wait\|report`, the `answered_local` / `terminal_override` / `dismissed` closes and their `closed` broadcasts, the terminal-only degradation through the settings hooks, the mod's `tool.call{AskUserQuestion}` race with the bounded wait loop, an hours-long hold measured once; no Mac App UI | U17 (uses 3, 4), U19 |
+| P9a | Relay prompts in the daemon (U21, §8.8): host config keys and validation, `GET /api/relay/prompts` with the defaults moved from the mod, `pdx relay prompts`, the mod reading them at use with its built-in fallback, the Hosts › 接力 editors | U21 |
+| P9b | Approval dialog (U22, §6.3): switch to (or open) the requester's tab after a decision made in this window; minimize to a corner pill that never auto-expands | U22 |
 | P8b | 分流 for permission prompts (deferred until the iOS line needs it): the mod's `tool.call` race for permission-gated tools, `$.tool.call` re-issue with a `tool.check` allow hook, deny with the client's reason; the Codex `trusted_hash` probe | U19 (point 3) |
 
 **Notes on the split:**
 - **P5a/P5b depend on P2 and P3.**
-- **Order:** P0, P1, P2, P3, P2c, P5a, P5b, P8a, P4, P4b, P4c, P6, P7, then P8b when wanted.
+- **Order:** P0, P1, P2, P3, P2c, P5a, P5b, P8a, P4, **P9b, P9a** (U21/U22, asked for on 2026-10-08, so they go before the cross-host work), P4b, P4c, P6, P7, then P8b when wanted. P6-3a's `{{git}}` variable lands on P9a's templates.
   - P2c needs P2 (the lead request it locks) and nothing from P3; it is small and closes the soft lock's hole before the skill (P5b) tells agents to use `pdx lead request`.
   - P8a needs P5b (the mod is packaged there) and P2's approval table; it moves earlier if the iOS line needs it. P8b is not scheduled.
   - P4b needs P4 (team rows) and P1 (the statusline parser it extends). P4c needs P4b and the peers pairing that exists.
@@ -984,6 +1015,8 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | D2 | The grant has no host list; the host is chosen per spawn by the §7.4 rule, and the member host gates by its own `AllowTeam` flag | U15; the user picks hosts by rule, not per grant |
 | D4 | No `--worktree`; `--repo` and `--host` (U15); the brief is sent by the CLI from the lead's inbox; tmux name `tm-<op>`; start timeout kills and frees the slot | No worktree API and U10; U15 reinstated the host choice; replies reach the lead; D4's own idempotency idea; the limit counts only live members |
 | U18 | ~~Spawn has no model flags~~ (superseded by U20); self relay relies on `/clear` keeping model and effort; 切換 tracked in issues, P1 records the values | M21, M22 |
+| U21 | The write / fix / seed prompts are daemon host config, read by the mod at use with a built-in fallback; body editable, tag / reply rule / headings fixed | U21 |
+| U22 | A decision made here switches to (or opens) the requester's tab; the approval dialog minimizes to a pill that never auto-expands | U22 |
 | U20 | Spawn takes optional `--model` / `--effort` (validated, model single-quoted); reminders at activation and at a spawn without `--model`; `pdx team` shows each member's model and effort; replaces U18's spawn bullet only | U20; M25 |
 | U19 | 分流, not interception: the Purdex mod races the native dialog (`next(e)` not awaited) against the daemon; no per-session switch; no Mac App card; terminal-only degradation without the mod; terminal wins a tie and the card says so; P8a/P8b | U19; M24 probes; air26's five points |
 | §11 → §6.6 (U17) | `pdx hook` waits for the daemon on PreToolUse and PermissionRequest behind a flag file; lead and relay locks in P2c/P6; forwarded prompts as two more approval kinds in P8 | U17; M17–M20; one approval model serves the iOS line too |
@@ -1011,7 +1044,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | Code | Meaning |
 |---|---|
 | 0 | Approved / done / accepted |
-| 1 | Other runtime or API error (existing convention) |
+| 1 | Other runtime or API error (existing convention). Includes `spawn_wait_timeout` (PR P4-7 review): `pdx spawn` stopped waiting after 9 min while the daemon still reported the op `running`; stderr carries the op id, and the lead checks `pdx team` before spawning again (the op may still finish). Exit 14 is only the daemon's own `failed{member_start_timeout}`. |
 | 2 | Usage error (existing convention) |
 | 10 | Denied |
 | 11 | Timed out (counts as denied, U7) |
@@ -1028,6 +1061,8 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 - **Retention:** 3 per chain, 14 days, and 3 days for failed ops; nothing outside `<data_dir>/relay/` is touched.
 - **Lineage:** an uncapped chain still resolves a lead's oldest ref after 11 or more relays.
 - **Lead request:** create is idempotent; exactly one close wins under concurrent decide, timeout and cancel; the 409 carries `decided_by`; the snapshot reaches a late subscriber; the lease is extended on boot; abandonment fires when the origin dies.
+- **Relay prompts (U21):** unset → the defaults, which equal the mod's built-in copy byte for byte; an edited body is used from the next relay without `pdx setup`; `pdx relay prompts` failing, timing out or answering 404 → the mod's defaults and the relay proceeds; the tag, the reply rule and the eight headings are present whatever the body says; a body containing `[pdx-relay`, control characters, invalid UTF-8 or over 16 KiB → 400; **還原預設** clears the stored value.
+- **Approval dialog (U22):** approve and deny made here both activate the requester's tab; with no tab for that tmux session one is opened in this window; a request closed elsewhere switches nothing; minimize → pill with the open count and the nearest countdown, no focus trap; a new request while minimized updates the count and does not expand; clicking the pill restores the dialog.
 - **Spawn:** the limit, roots and symlink escape; retry after a mid-op restart opens nothing twice; the start timeout kills and frees the slot. **U20:** `--model` / `--effort` reach the launch command (model single-quoted, `opus[1m]` included); a model with a space, a quote, `;` or `$(` and an effort outside M25's five are exit 2 at the CLI and `400 bad_request` at the daemon; a spawn without `--model` prints the reminder on stderr and still exits 0; an approved `pdx lead request` prints the activation reminder on stderr and only the grant JSON on stdout; `pdx team` shows a member's model and effort.
 - **Relay:**
   - claim is accepted only for the target session;
