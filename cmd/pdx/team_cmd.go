@@ -36,9 +36,17 @@ const (
 	teamAttemptTimeout = 35 * time.Second
 	// teamMaxHungPolls: consecutive spawn POSTs with no answer at all before exit 20 (spec §9.1).
 	teamMaxHungPolls = 3
-	// briefPrefixRoom is what the brief's first line may take of the peers
-	// text limit: its fixed text, the lead's address and the team id.
-	briefPrefixRoom = 1024
+	// maxLeadAddressBytes is the longest lead address the brief's first line
+	// carries: "<alias>/<name or ref>" (the origin resolver's address), the
+	// alias at most 64 bytes (config aliasPattern
+	// ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$), the name at most 64
+	// (ipeers.RoutableName ^[a-z0-9][a-z0-9-]{1,63}$; a ref is 7). An alias
+	// outside that rule (a hand-edited config) can only make the daemon refuse
+	// the send, which is reported as a failed brief.
+	maxLeadAddressBytes = 64 + 1 + 64
+	// teamIDBytes: the team id is the approving request's id, which the
+	// daemon stores as a canonical UUID.
+	teamIDBytes = 36
 	// spawnStartTimeoutHint is the stderr hint of member_start_timeout: a
 	// member that never registers ran on a host without the Purdex hooks.
 	spawnStartTimeoutHint = "member 沒有在 20 秒內啟動（這台主機需要 Purdex hooks：pdx setup --agent cc）"
@@ -68,6 +76,12 @@ var spawnNewID = uuid.NewString
 // keeps answering running cannot hold the lead forever. A var only so tests
 // can shorten it.
 var spawnSettleBound = 9 * time.Minute
+
+// briefMaxBytes is the longest brief whose message (the first line with the
+// longest lead address and team id, "\n", the brief) still fits the peers
+// text limit, so a brief that passes it is never refused for its size.
+var briefMaxBytes = ipeers.MaxTextBytes - len("\n") - len(fmt.Sprintf(team.MemberBriefPrefixFmt,
+	strings.Repeat("a", maxLeadAddressBytes), strings.Repeat("0", teamIDBytes)))
 
 // briefTimeout bounds the brief's one POST (as `pdx msg send`). A var only
 // so tests can shorten it.
@@ -191,8 +205,8 @@ func parseSpawnArgs(args []string, stderr io.Writer) (spawnArgs, bool) {
 		if strings.TrimSpace(a.brief) == "" {
 			return reject("brief 不能為空")
 		}
-		if err := ipeers.ValidateText(a.brief); err != nil || len(a.brief) > ipeers.MaxTextBytes-briefPrefixRoom {
-			return reject(fmt.Sprintf("brief 必須是不超過 %d bytes 的 UTF-8 文字", ipeers.MaxTextBytes-briefPrefixRoom))
+		if len(a.brief) > briefMaxBytes || ipeers.ValidateText(a.brief) != nil {
+			return reject(fmt.Sprintf("brief 必須是不超過 %d bytes 的 UTF-8 文字（peers 訊息上限 %d bytes，扣掉首行）", briefMaxBytes, ipeers.MaxTextBytes))
 		}
 	}
 	return a, true

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -384,6 +385,32 @@ func TestSpawnCmd_BriefFromTheLeadInboxWithThePrefix(t *testing.T) {
 	d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnDone}}
 	if code, _, _ := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet"); code != ExitOK || len(d.sendReq) != 0 {
 		t.Errorf("no brief: code=%d sends=%d", code, len(d.sendReq))
+	}
+}
+
+// The brief's limit is exact (PR P4-7 review): with the longest lead address
+// the rules allow (a 64-byte alias, "/", a 64-byte name) and a 36-byte team
+// id, a brief of exactly the limit makes a message of exactly the peers
+// limit; one byte more is exit 2 before a member opens, naming the limit.
+func TestSpawnCmd_BriefLimitIsExact(t *testing.T) {
+	maxAddr := strings.Repeat("a", 64) + "/" + strings.Repeat("b", 64)
+	limit := ipeers.MaxTextBytes - len("[pdx team] 你是 "+maxAddr+" 的 member（team "+fakeTeamID+"）。接力由 lead 決定，不要自己接力。\n")
+	d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{func(req team.SpawnRequest) answer {
+		a := spawnDone(req)
+		op := a.body.(team.SpawnOp)
+		op.LeadAddress = maxAddr
+		return answer{body: op}
+	}}}
+	if code, _, stderr := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet", "--brief", strings.Repeat("x", limit)); code != ExitOK {
+		t.Fatalf("a brief of exactly %d bytes: code=%d stderr=%q", limit, code, stderr)
+	}
+	if len(d.sendReq) != 1 || len(d.sendReq[0].Text) != ipeers.MaxTextBytes || ipeers.ValidateText(d.sendReq[0].Text) != nil {
+		t.Fatalf("sent %d message(s), want one of exactly %d bytes", len(d.sendReq), ipeers.MaxTextBytes)
+	}
+	over := &fakeTeamCmdDaemon{spawns: d.spawns}
+	code, _, stderr := driveTeamCmd(t, runSpawnCmd, over, "--model", "sonnet", "--brief", strings.Repeat("x", limit+1))
+	if code != ExitUsage || over.count() != 0 || !strings.Contains(stderr, strconv.Itoa(limit)) {
+		t.Errorf("one byte over: code=%d requests=%d stderr=%q", code, over.count(), stderr)
 	}
 }
 
