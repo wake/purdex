@@ -327,10 +327,23 @@ describe('prelude item offset', () => {
     expect(page(v)).toMatchObject({ pos: '1.0', offset: null })
   })
 
-  it('is set on every item kind', () => {
-    expect(page(7, 'prelude.segment', { entrypoint: 'cli' }).offset).toBe(7)
-    expect(page(7, 'prelude.note', { source: 's', text: 't' }).offset).toBe(7)
-    expect(page(7, 'tool_use', { tool_use_id: 'x' }).offset).toBe(7)
-    expect(page(7, 'user', { message: { content: 'hi' } }).offset).toBe(7)
+  it('is set on every item kind (all seven kinds the sanitiser can emit)', () => {
+    const cases: Array<[string, unknown]> = [
+      ['prelude.segment', { entrypoint: 'cli' }],
+      ['prelude.compaction', { trigger: 'auto' }],
+      ['prelude.note', { source: 's', text: 't' }],
+      ['tool_use', { tool_use_id: 'x' }],
+      ['tool_result', { tool_use_id: 'x' }],
+      ['user', { message: { content: 'hi' } }],
+      ['assistant', { message: { content: [{ type: 'text', text: 'hi' }] } }],
+    ]
+    for (const [kind, payload] of cases) {
+      const out = page(7, kind, payload)
+      expect(out.kind, kind).toBe(kind)
+      expect(out.offset, kind).toBe(7)
+    }
+    // the case table must cover every kind the golden page exercises
+    const goldenKinds = new Set(golden.items.map((i) => i.kind))
+    expect(new Set(cases.map(([k]) => k))).toEqual(goldenKinds)
   })
 })
