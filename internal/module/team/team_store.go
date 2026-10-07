@@ -346,6 +346,18 @@ func (s *Store) LiveTeamByLead(sessionID string) (team.Team, bool, error) {
 	return t, true, nil
 }
 
+// TeamByID returns the team with id, live or ended.
+func (s *Store) TeamByID(id string) (team.Team, bool, error) {
+	t, err := scanTeam(s.db.QueryRow(`SELECT `+teamCols+` FROM teams WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return team.Team{}, false, nil
+	}
+	if err != nil {
+		return team.Team{}, false, fmt.Errorf("team %s: %w", id, err)
+	}
+	return t, true, nil
+}
+
 // ListLiveTeams returns every live team, oldest first. Never nil.
 func (s *Store) ListLiveTeams() ([]team.Team, error) {
 	rows, err := s.db.Query(`SELECT ` + teamCols + ` FROM teams WHERE ended_at = 0 ORDER BY created_at, id`)
