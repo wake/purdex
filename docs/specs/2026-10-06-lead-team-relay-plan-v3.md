@@ -1344,6 +1344,7 @@ Pre-split from the original P4c-3 per codex finding 6. Kill forwarding, the outb
 > - It puts `- 只用 Write 工具一次寫入整個接力檔；…` in the write **fixed tail**. The lock enforces that rule, so a custom body must not be able to drop it. The Write-not-Edit wording goes in the fix tail.
 > - It regenerates `hooks/prompts.js` (`go test ./cmd/pdx/plugin/ -run TestPromptsJS -update`).
 > - It re-reads the `register.js` line numbers below against P9a-2.
+> - **Files therefore add** `internal/team/relay_prompts.go`, `relay_prompts_test.go` and `cmd/pdx/plugin/purdex/hooks/prompts.js`. **Its gate adds** `go test ./internal/team/ ./cmd/pdx/plugin/ -count=1`: `TestPromptsJS_IsGeneratedFromTheDaemonsDefaults` green after the regeneration, `TestRelayPromptDefaults_ValidAndPublicVariablesOnly` green with `git` in the list, and a new `TestRelayPromptFixedParts_WriteTailHoldsTheOneWriteRule`. Mutation gate: change the Go default without `-update` → the golden test red (plan review).
 >
 > A host whose stored write body still asks the model to run git keeps that text. P9a-3's page shows it as 已自訂.
 
@@ -2013,13 +2014,13 @@ The questions this plan raised, kept for the record, with the ruling each receiv
   - `an ended pane on that code is not a match: a new tab opens`.
   - `empty origin.tmux, a name not in the host's list, a host hidden in this workbench: nothing changes`.
 - `approval-decide.goto.test.ts`:
-  - `approve 200 and deny 200 each switch once, with the closed approval`.
+  - `approve 200 and deny 200 each switch once, with the closed approval` — table-driven over both kinds, `lead` and `self_relay` (spec U22 (c); plan review).
   - `409 already_decided, 409 member_relay_is_leads, 404, host_removed, network (queued) and network (failed) switch nothing`.
   - `a gotoRequester that throws still returns 'closed'`.
 - `approval-ws.test.ts`:
   - `a queued decision resent on the reconnect snapshot switches on its 200`.
   - `a closed event from another client switches nothing`.
-- `open-session-tab.test.ts`: the two helpers. The existing `SessionsSection` and `useNotificationDispatcher*.test.ts` tests stay green unchanged.
+- `open-session-tab.test.ts`: the two helpers, including `opening the same session twice adds two tabs` (`tmux-session` is never a singleton, `lib/pane-utils.ts:23-26`; the helper must not change that). The existing `SessionsSection` and `useNotificationDispatcher*.test.ts` tests stay green unchanged.
 
 **Mutation gates.**
 - Call `gotoRequester` from the WS `closed` branch → `a closed event from another client switches nothing` red.
@@ -2087,10 +2088,11 @@ The questions this plan raised, kept for the record, with the ruling each receiv
 **Tests.**
 - Store:
   - `minimized resets when applyClosed, applySnapshot or reset leave no entry`.
+  - `a snapshot that still holds entries keeps minimized` (the reconnect case; plan review).
   - `setMinimized(true) with no entry stays false`.
   - `selectNearestDeadline across hosts`.
 - `ApprovalDialogHost.minimize.test.tsx`:
-  - `縮小 hides the dialog and shows the pill with N across hosts and the nearest m:ss`.
+  - `縮小 hides the dialog and shows the pill with N across hosts and the nearest m:ss` — for a `lead` and for a `self_relay` current request (spec U22 (c)); the new-request and restore cases below also run once with each kind as the newly opened one (plan review).
   - `minimized: Tab and Escape keydowns are not default-prevented, and focus returns to the element focused before the dialog`.
   - `a new request while minimized updates N, raises data-flash by one, and the dialog stays hidden`.
   - `a request closed while minimized updates N without a flash`.
@@ -2104,6 +2106,7 @@ The questions this plan raised, kept for the record, with the ruling each receiv
 
 **Mutation gates.**
 - `applyOpened` clears `minimized` → `… the dialog stays hidden` red.
+- `applySnapshot` always sets `minimized: false` → `a snapshot that still holds entries keeps minimized` red.
 - The Tab trap kept while minimized → the focus test red.
 - The dialog unmounted while minimized → the edits test red.
 
@@ -2221,7 +2224,8 @@ The fixed parts are `write.head = fix.head = "[pdx-relay op={{op}} n={{nonce}}] 
   - `RelaySwitches` gains `PromptWrite`, `PromptFix`, `PromptSeed string`, JSON `prompt_write`, `prompt_fix`, `prompt_seed`, all **`omitempty`**. A row without bodies therefore serializes as today, and so does the never-written default `relaySwitchesJSON` (`:29`).
   - `normalizeRelay` (`:39-71`) takes the three keys:
     - each must be a JSON string (`null` and other types are errors, as for the switches);
-    - whitespace-only text is stored as `""` (= the default);
+    - **the field's raw bytes** (its `json.RawMessage` in `fields`) must pass `utf8.Valid` **before** it is decoded. `encoding/json` turns an invalid byte into U+FFFD while decoding, so a check on the decoded string can never see one (plan review);
+    - whitespace-only text is stored as `""` (= the default; spec U21 (a) and §8.8 say so since the plan review);
     - any other text must pass `team.ValidateRelayPromptBody`;
     - an absent key stays `""`.
 
@@ -2259,6 +2263,7 @@ The fixed parts are `write.head = fix.head = "[pdx-relay op={{op}} n={{nonce}}] 
   - `TestRelayPrompts_WireNames`.
 - Host config `relay_test.go`:
   - `TestNormalizeRelay_PromptFields`: a string is stored; `null` or a number is an error; whitespace becomes `""`; over-limit text, the tag and control characters give a `ValidationError` (400); an unknown key is an error.
+  - `TestNormalizeRelay_InvalidUTF8InTheRawBodyIs400`: a PUT body built as bytes, with `\xff` inside a `prompt_write` string, is a `ValidationError`, and nothing is stored (not a U+FFFD body). Mutation gate: check only the decoded string → red.
   - `TestGetHostConfig_RelayDefaultUnchanged`: the never-written row equals `relaySwitchesJSON` byte for byte.
   - `TestRelayPrompts_DefaultsAndStored`.
   - `TestRelaySwitches_IgnoreABadStoredPrompt`: a row written straight into the DB with a tagged body still reads its switches, while the prompts reader errors.
@@ -2341,16 +2346,20 @@ The P5b-2 machine tag and nonce rules are unchanged.
 - `with the defaults, the write and seed prompts equal the pre-P9a text byte for byte` (a literal fixture of today's output for `OP`).
 - `the fix prompt is head, body, then 缺少段落 and the reply rule on the next line`.
 - `an edited write body lands between the fixed head and tail; the tag, the reply rule, # HANDOFF, ## 1.–## 8. and the facts are there for a one-word body`.
+- `an edited fix body keeps the tag head and the 缺少段落 + HANDOFF-WRITTEN tail; an edited seed body keeps both fixed head lines (↪ 接手自 <old ref>, then the seed tag with the nonce)` — each with a one-word body and with a 16 384-byte body (plan review).
 - `pdx relay prompts runs before the write, before each fix and before the seed, each with --config and timeoutMs 8000`.
 - `exit 20, 21 and 1, a rejected run, junk stdout and a non-string field each give the built-in body; the relay reports writing, written, cleared and done`.
 - `variables are filled once: {{path}} {{old_ref}} {{old_session}} {{context}} {{whoami}}; {{foo}} and {{nonce}} in a body stay as typed; a path holding {{path}} is not expanded again`.
 - `trailing newlines of a body give one newline before the tail`.
 - `a second relay uses the body the daemon answers then`.
 - `a pdx relay prompts that never answers holds no hook: turn.complete and classic.SessionStart return before it`.
+- `a pdx relay prompts that runs into its 8 s timeoutMs gives the built-in body, and the relay reports writing, written, cleared and done` — the fake settles the run the way the engine does at `timeoutMs` (read the 2.1.293 d.ts `ProcessRunResult` / rejection for the exact shape), driven by the kit's clock, once at each of the three steps (plan review).
 - `every REQUIRED heading and # HANDOFF are in FIXED.write.tail`, a guard between `:53` and the generated file.
 
 **Mutation gates.**
 - Skip the tail when a body is set → the one-word-body test red.
+- Drop the seed head's first line, or the fix tail, for a custom body → the fix/seed custom-body test red.
+- Use the daemon's body without the timeout fallback (await the run with no bound) → the timeout test red.
 - Fall back only on a non-zero exit → the junk-stdout case red.
 - Fill recursively → `… not expanded again` red.
 - Read once per relay → `… before each fix and before the seed` red.
@@ -2374,7 +2383,7 @@ The fallback paths are proved by the tests above, not live.
 
 **Goal.** Spec §8.8 bullet 5 and U21: three editors (write, fix, seed), with the fixed parts shown read-only around each, the variable list, and **還原預設** for each one. Also spec §15 "還原預設 clears the stored value".
 
-**Tab-hosted: yes.** The Hosts page is a tab, and `hosts` is not a light kind (`lib/pane-weight.ts:13, 18-24`). So switching tabs unmounts `RelaySection`, and so does switching the Hosts sub-page.
+**Tab-hosted: yes.** The Hosts page is a tab, and `hosts` is not a light kind (`lib/pane-weight.ts:13, 18-24`). So switching tabs unmounts `RelaySection` under the default `keepAliveCount: 0` (`stores/useUISettingsStore.ts:215`; with a larger count the tab is kept hidden in `TabContent`'s alive pool until evicted), and so does switching the Hosts sub-page.
 - Unsaved text therefore lives in `spa/src/lib/relay-prompt-draft-memory.ts`, keyed `${hostId}:${kind}`. It is memory only, the pattern of `lib/nex/worker-draft-memory.ts`, and is forgotten after a successful save or 還原預設.
 - A regression test mounts the real `TabContent` (example: `components/execution/ExecutionView.tab-switch.test.tsx`).
 
@@ -2434,7 +2443,7 @@ The fallback paths are proved by the tests above, not live.
   - a toggle after a save keeps the bodies;
   - a 409 keeps the draft and shows the conflict;
   - a daemon 400's detail is shown.
-- `RelaySection.tab-switch.test.tsx`: a typed draft survives a switch to another tab and back, and a Hosts sub-page switch; it is gone after a save.
+- `RelaySection.tab-switch.test.tsx`: a typed draft survives a switch to another tab and back, and a Hosts sub-page switch; it is gone after a save. The test sets `keepAliveCount: 0` itself and asserts that `RelaySection` really unmounted in between (an unmount spy or a missing node), so it does not pass by the tab being kept alive (plan review).
 - `locale-completeness.test.ts`.
 
 **Mutation gates.**
@@ -2469,7 +2478,7 @@ Kept for the record. Each had a recommended default, and the sections above are 
 ## Deviations from spec (P9 addendum)
 
 1. **`GET /api/relay/prompts` also answers `fixed` and `variables`.** `fixed` is `{write|fix|seed: {head, tail}}` with the mod's placeholders. Spec §8.8 lists `{write, fix, seed, defaults}`, so the two fields are additive. The mod ignores `fixed`: its own copy is the authority.
-2. **The seed's fixed head is two lines,** `↪ 接手自 {{old_ref}}` and then the tag. U21 (c) names only the tag, and §8.2 step 7 makes the first line fixed.
+2. **The seed's fixed head is two lines,** `↪ 接手自 {{old_ref}}` and then the tag. *Resolved in the spec (plan review, 2026-10-08):* U21 (c) now says the tag opens the write and fix prompts and the seed's second line, both seed lines fixed, which is the shipped order (`register.js:315-316`); the mod finds its turns by the nonce anywhere in the text (`:609`). So this is no longer a deviation.
 3. **The fix prompt's composed default has a line break before `缺少段落：`**, where today it has `，`.
 
 ---
@@ -2543,3 +2552,9 @@ Binding. **All 13 open questions of the P9 addendum take the plan's recommended 
 11. The bodies live in the one `relay` host-config row, beside the switches (P9a-1).
 12. Saving text equal to the default stores `""` (P9a-3).
 13. M29 is measured in P9a-2's acceptance and recorded in spec §3.2.
+
+**Codex review of the P9 addendum** (one round, plan + spec; job output `p9-plan-review.txt` in the scratchpad of session 8fff4c6b; 2 critical / 7 important / 2 minor):
+- **Critical 1, the seed tag is not the first line** — rebutted with evidence and fixed in the spec's wording: the shipped seed puts `↪ 接手自 <old ref>` first and the tag second (`register.js:315-316`), §8.2 step 7 requires that first line, and the mod finds its turns by the nonce anywhere (`:609`). U21 (c) now says so; deviation 2 is resolved.
+- **Critical 2, "only this window"** — rebutted with evidence: `activeTabId` and the workspaces are persisted and synced to every window of the device (`useTabStore.ts:1035-1043`, `lib/storage/sync.ts`), so every tab activation, a click included, already moves them all. U22 (a) now says "this window" names who acts; P9b changes nothing there.
+- **Adopted:** raw-bytes UTF-8 check before decoding (P9a-1); the timeout fallback test and the fix/seed custom-body tests (P9a-2); the tab-switch test pins `keepAliveCount: 0` and a real unmount (P9a-3); both kinds in the P9b tests; a non-empty snapshot keeps `minimized` (P9b-2); P6-3a's files and golden gate; the session list still opens a second tab (P9b-1).
+- **Minor, whitespace-only body** — the spec now says "unset, empty or whitespace only" means the default (U21 (a), §8.8), which is what the plan does.
