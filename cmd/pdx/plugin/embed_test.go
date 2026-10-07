@@ -10,10 +10,20 @@ import (
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	f := Files()
-	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "skills/pdx-team/SKILL.md"} {
+	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "skills/pdx-team/SKILL.md"} {
 		if _, err := fs.Stat(f, rel); err != nil {
 			t.Errorf("%s: %v", rel, err)
 		}
+	}
+	// hooks.json names one module (Claude Code 2.1.292 loads a single path and refuses a
+	// list of two: "names none in modules"), so register.js is the entry and brings in
+	// ask.js, the AskUserQuestion 分流 (P8a-2), by an import declaration.
+	reg, err := fs.ReadFile(f, "hooks/register.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(reg), "import { register as registerAsk } from './ask.js'") || !strings.Contains(string(reg), "registerAsk(on)") {
+		t.Error("register.js does not import and register ./ask.js")
 	}
 	b, err := fs.ReadFile(f, ".claude-plugin/plugin.json")
 	if err != nil {
