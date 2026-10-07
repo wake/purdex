@@ -413,6 +413,41 @@ func TestRelayStore_ClearedLeavesAnEndedTeamsMemberRowAlone(t *testing.T) {
 	}
 }
 
+// P4-3 review R1: a session holds at most one live role. A cleared of a
+// live lead into a live member, or of a live member into a live lead, is
+// refused whole (ErrClearedTargetHasRole, a bad report): nothing moves, the
+// op stays claimed, no lineage. Mutation gate: drop the cross-check → red.
+func TestRelayStore_ClearedIntoTheOtherLiveRoleMovesNothing(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, "team-1", "L1", 1000)
+	m1 := seedMember(t, s, "sp-1", "team-1", "M1", 1000)
+	seedTeam(t, s, "team-9", "L9", 1000)
+	m9 := seedMember(t, s, "sp-9", "team-9", "M9", 1000)
+	t1, _ := getTeam(t, s, "team-1")
+	t9, _ := getTeam(t, s, "team-9")
+	for _, tc := range []struct{ op, sid, ref, into string }{
+		{"op-l", "L1", "_abc123", "M9"}, // a lead into a live member
+		{"op-m", "M1", m1.Ref, "L9"},    // a member into a live lead
+	} {
+		claimedOp(t, s, tc.op, tc.sid, tc.ref)
+		_, _, err := s.ReportRelay(tc.op, RelayReport{State: team.RelayCleared, NewSessionID: tc.into, NewRef: "_nnnnnn", At: 5000})
+		if !errors.Is(err, ErrClearedTargetHasRole) || !errors.Is(err, ErrBadRelayReport) {
+			t.Fatalf("%s → %s: err=%v, want ErrClearedTargetHasRole", tc.sid, tc.into, err)
+		}
+		if op, _, _ := s.GetRelayOp(tc.op); op.State != team.RelayClaimed {
+			t.Fatalf("%s = %s, want still claimed", tc.op, op.State)
+		}
+		if refs, _ := s.PreviousRefs(); refs[tc.into] != nil {
+			t.Fatalf("%s heads a lineage: %v", tc.into, refs[tc.into])
+		}
+	}
+	g1, _ := getTeam(t, s, "team-1")
+	g9, _ := getTeam(t, s, "team-9")
+	if !reflect.DeepEqual(g1, t1) || !reflect.DeepEqual(g9, t9) || memberBySpawn(t, s, "sp-1") != m1 || memberBySpawn(t, s, "sp-9") != m9 {
+		t.Fatal("a refused cleared moved a team or a member")
+	}
+}
+
 // D4 / spec §7.1: an ended team stays as it ended. A relay of a session that
 // once led an ended team (and leads a live one now) moves only the live
 // team. Mutation gate: drop ended_at = 0 from the move → red.
