@@ -172,8 +172,15 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 			return
 		} else if ok {
+			// Same id ⇒ same request: the session AND the payload must match
+			// (Store.Create's idempotency rule, "same hash is a retry, a
+			// different hash is a conflicting reuse"); anything else is 409.
 			if op.SessionID != req.SessionID {
 				m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id belongs to another session's relay", nil)
+				return
+			}
+			if !sameBeginPayload(m, op, req) {
+				m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id reused with a different used_percentage or window", nil)
 				return
 			}
 			m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: op, RequestID: op.RequestID})
@@ -406,4 +413,23 @@ func rowStateOrMissing(row team.Approval, ok bool) string {
 		return "missing"
 	}
 	return string(row.State)
+}
+
+// sameBeginPayload reports whether a replayed begin carries the payload the
+// op was opened with: the op's used_percentage and the approval row's
+// window (SelfRelayPayload). A row that cannot be read or decoded is "not
+// the same" — a replay is proven, never assumed.
+func sameBeginPayload(m *Module, op team.RelayOp, req team.RelayBeginRequest) bool {
+	if op.UsedPercentage == nil || *op.UsedPercentage != req.UsedPercentage {
+		return false
+	}
+	row, ok, err := m.store.Get(op.RequestID)
+	if err != nil || !ok {
+		return false
+	}
+	var sp team.SelfRelayPayload
+	if err := json.Unmarshal(row.Payload, &sp); err != nil {
+		return false
+	}
+	return sp.Window == req.Window
 }

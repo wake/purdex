@@ -467,6 +467,19 @@ func TestRelayBegin_ReplayByRequestIDReturnsTheSameOp(t *testing.T) {
 	if active, _ := f.m.store.ListActiveRelayOps(); len(active) != 0 {
 		t.Fatalf("a second op was opened: %+v", active)
 	}
+	// The same id with a different payload is a conflicting reuse, not a replay.
+	changed := beginReq("sid-1")
+	changed.RequestID = uid(42)
+	changed.UsedPercentage = 90
+	if code, body := f.do(http.MethodPost, "/api/relay/begin", changed); code != http.StatusConflict {
+		t.Fatalf("same request_id, different used_percentage: %d %s", code, body)
+	}
+	changed = beginReq("sid-1")
+	changed.RequestID = uid(42)
+	changed.Window = 1
+	if code, body := f.do(http.MethodPost, "/api/relay/begin", changed); code != http.StatusConflict {
+		t.Fatalf("same request_id, different window: %d %s", code, body)
+	}
 	// Another session replaying someone else's id is refused.
 	other := beginReq("sid-2")
 	other.RequestID = uid(42)
