@@ -145,6 +145,36 @@ func TestRelayReport_CorruptLineageIs400NotStorageError(t *testing.T) {
 	}
 }
 
+// P4-3 R1, the coordinator's ruling on the critic: a cleared into a session
+// that already holds a live role breaks an invariant (/clear makes a fresh
+// session); it is not a bad report. 500 storage_error, which the mod
+// re-sends (exit 1, bounded) rather than drops; the op stays written for
+// P6-4's reconciliation and nothing moves. Mutation gate: make
+// ErrClearedTargetHasRole a bad report (400) → red.
+func TestRelayReport_ClearedIntoALiveRoleIs500(t *testing.T) {
+	f := newFixture(t)
+	seedTeam(t, f.m.store, uid(8), "sid-1", f.clock.Load()) // sid-1 leads uid(8)
+	seedTeam(t, f.m.store, uid(9), "sid-2", f.clock.Load())
+	seedMember(t, f.m.store, "op-9", uid(9), "sid-1b", f.clock.Load()) // sid-1b: a live member
+	out := f.begin("sid-1")
+	f.decide(out.RequestID, "approve")
+	for _, st := range []team.RelayState{team.RelayWriting, team.RelayWritten} {
+		if code, _, ae := f.report(out.Op.ID, team.RelayReportRequest{State: st}); code != http.StatusOK {
+			t.Fatalf("report %s: %d %+v", st, code, ae)
+		}
+	}
+	code, _, ae := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-1b"})
+	if code != http.StatusInternalServerError || ae.Error != errStorage {
+		t.Fatalf("cleared into a live member: %d %+v, want 500 %s", code, ae, errStorage)
+	}
+	if op := f.op(out.Op.ID); op.State != team.RelayWritten || len(f.titles.moves) != 0 {
+		t.Fatalf("op = %s (want written), title moves = %v", op.State, f.titles.moves)
+	}
+	if got, ok, _ := f.m.store.LiveTeamByLead("sid-1"); !ok || got.ID != uid(8) {
+		t.Fatalf("the lead moved: %+v ok=%v", got, ok)
+	}
+}
+
 // Spec §8.7 (c): the mod reports `cancelled --error compacted` while the
 // request is still open (auto-compact mid-wait). The report moves the op
 // AND closes the approval row through the same CAS as a cancel, so every

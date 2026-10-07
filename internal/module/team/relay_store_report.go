@@ -61,8 +61,10 @@ func checkLineage(tx *sql.Tx, cur team.RelayOp, r RelayReport) error {
 // ErrClearedTargetHasRole refuses a cleared whose old session holds a live
 // team role (lead, or active member of a live team) into a session that
 // already holds one: a session holds at most one live role (P4-3 review
-// R1). It is a bad report (the handler's 400); nothing commits.
-var ErrClearedTargetHasRole = fmt.Errorf("%w: the new session already leads or is a member of a live team", ErrBadRelayReport)
+// R1). Nothing commits. It is a broken invariant, not a bad report (a
+// /clear makes a fresh session): the handler answers 500, which the mod
+// re-sends, and the op stays written for reconciliation (P6-4, #1735).
+var ErrClearedTargetHasRole = errors.New("the new session already leads or is a member of a live team")
 
 // moveTeamRoles is the team half of a cleared (spec §8.4), run in its
 // lineage transaction after the lineage insert: the live team the old

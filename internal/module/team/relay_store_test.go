@@ -415,8 +415,9 @@ func TestRelayStore_ClearedLeavesAnEndedTeamsMemberRowAlone(t *testing.T) {
 
 // P4-3 review R1: a session holds at most one live role. A cleared of a
 // live lead into a live member, or of a live member into a live lead, is
-// refused whole (ErrClearedTargetHasRole, a bad report): nothing moves, the
-// op stays claimed, no lineage. Mutation gate: drop the cross-check → red.
+// refused whole (ErrClearedTargetHasRole — a broken invariant, not a bad
+// report: /clear makes a fresh session): nothing moves, the op stays
+// claimed, no lineage. Mutation gate: drop the cross-check → red.
 func TestRelayStore_ClearedIntoTheOtherLiveRoleMovesNothing(t *testing.T) {
 	s := openTestStore(t)
 	seedTeam(t, s, "team-1", "L1", 1000)
@@ -431,8 +432,8 @@ func TestRelayStore_ClearedIntoTheOtherLiveRoleMovesNothing(t *testing.T) {
 	} {
 		claimedOp(t, s, tc.op, tc.sid, tc.ref)
 		_, _, err := s.ReportRelay(tc.op, RelayReport{State: team.RelayCleared, NewSessionID: tc.into, NewRef: "_nnnnnn", At: 5000})
-		if !errors.Is(err, ErrClearedTargetHasRole) || !errors.Is(err, ErrBadRelayReport) {
-			t.Fatalf("%s → %s: err=%v, want ErrClearedTargetHasRole", tc.sid, tc.into, err)
+		if !errors.Is(err, ErrClearedTargetHasRole) || errors.Is(err, ErrBadRelayReport) {
+			t.Fatalf("%s → %s: err=%v, want ErrClearedTargetHasRole and not a bad report", tc.sid, tc.into, err)
 		}
 		if op, _, _ := s.GetRelayOp(tc.op); op.State != team.RelayClaimed {
 			t.Fatalf("%s = %s, want still claimed", tc.op, op.State)
