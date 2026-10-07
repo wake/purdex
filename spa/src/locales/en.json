@@ -681,6 +681,8 @@
   "stream.handoff.launching_cc": "Launching CC...",
   "stream.handoff.connecting": "Connecting...",
   "worker.input.placeholder": "Reply...",
+  "worker.quick_replies.collapse": "Collapse quick replies",
+  "worker.quick_replies.expand": "Expand quick replies",
   "worker.upload.attach": "Attach files",
   "worker.upload.remove": "Remove {{name}}",
   "worker.upload.uploading": "Uploading…",

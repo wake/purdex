@@ -398,7 +398,7 @@ describe('pane focus — first mount as the active tab (spec §8.3 path 2)', () 
     useExecutionStore.getState().setHistoryLoaded(H, EXEC, false)
     show(TW)
     await settle()
-    expect(workerBox()).toBeDisabled()
+    expect(workerBox()).toHaveAttribute('aria-disabled', 'true')
     expect(domFocusOn(workerBox())).toBe(0)
 
     act(() => { useExecutionStore.getState().setHistoryLoaded(H, EXEC, true) })
@@ -472,7 +472,7 @@ describe('pane focus — a worker send coming back (spec §8.3)', () => {
     await settle()
     fireEvent.pointerDown(screen.getByTestId('monaco-editor'))
     sending(true)
-    expect(workerBox()).toBeDisabled()
+    expect(workerBox()).toHaveAttribute('aria-disabled', 'true')
     clearFocusCalls()
 
     sending(false)

@@ -59,6 +59,9 @@ interface Props {
   onAddFiles?: (files: File[]) => void
   /** Every change of the typed text (the attachment planner counts it against the request budget). */
   onTextChange?: (text: string) => void
+  /** A turn is live: Esc on an empty box and Ctrl+C with no selection call `onInterrupt`. */
+  turnLive?: boolean
+  onInterrupt?: () => void
 }
 
 const NO_CHIPS: readonly Chip[] = []
@@ -66,7 +69,7 @@ const noop = () => {}
 
 export default function WorkerInput({
   onSend, disabled = false, pendingSend = false, placeholder, isActive = false, isFocusTarget = false, initialValue, chips = NO_CHIPS, onRemoveChip, onAddFiles,
-  onTextChange,
+  onTextChange, turnLive = false, onInterrupt,
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const resolvedPlaceholder = placeholder ?? t('worker.input.placeholder')
@@ -93,7 +96,8 @@ export default function WorkerInput({
   // (below).
   const pendingActivationRef = useRef(false)
   const focusAtActivation = useCallback(() => {
-    if (textareaRef.current?.disabled) pendingActivationRef.current = true
+    // The box is readOnly + aria-disabled (not `disabled`, see the textarea), so ask the attribute.
+    if (textareaRef.current?.getAttribute('aria-disabled') === 'true') pendingActivationRef.current = true
     else focusInput()
   }, [focusInput])
   useActivationFocus(isActive, isFocusTarget, focusAtActivation, { raf: true })
@@ -170,14 +174,28 @@ export default function WorkerInput({
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // An IME commit (Enter that picks a candidate) is not a send; 229 is what
+    // Safari / older Chromium report for it even with isComposing already false.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      send()
+      if (!disabled) send()
+      return
+    }
+    if (!turnLive || !onInterrupt) return
+    const ta = e.currentTarget
+    if (e.key === 'Escape' && value === '') {
+      e.preventDefault()
+      onInterrupt()
+    } else if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c' && ta.selectionStart === ta.selectionEnd) {
+      e.preventDefault()
+      onInterrupt()
     }
   }
 
   function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     if (!onAddFiles) return
+    if (disabled) { e.preventDefault(); return }
     const files = Array.from(e.clipboardData?.files ?? [])
     if (files.length === 0) return
     // A rich-text app (e.g. a chat client) puts an image rendition alongside
@@ -196,7 +214,7 @@ export default function WorkerInput({
 
   return (
     <div className={`w-full border-t border-border-subtle bg-surface-input transition-colors ${
-      disabled ? 'opacity-40' : 'focus-within:border-border-active'
+      disabled ? 'opacity-40 cursor-default' : 'focus-within:border-border-active'
     }`}>
       <UploadChips chips={chips} onRemove={onRemoveChip ?? noop} />
       {!gate.ok && (
@@ -227,10 +245,14 @@ export default function WorkerInput({
           ref={textareaRef}
           role="textbox"
           value={value}
-          onChange={e => { setValue(e.target.value); autoGrow() }}
+          onChange={e => { if (disabled) return; setValue(e.target.value); autoGrow() }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          disabled={disabled}
+          // readOnly + aria-disabled, not `disabled`: a disabled control swallows
+          // drag events, so a file dropped on it can skip the pane's drop handlers
+          // and Electron's default (open the file) fires. readOnly keeps them.
+          readOnly={disabled}
+          aria-disabled={disabled}
           placeholder={resolvedPlaceholder}
           rows={1}
           className="block w-full bg-transparent text-text-primary placeholder-text-muted px-3 py-2.5 text-sm outline-none resize-none"

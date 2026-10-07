@@ -45,7 +45,7 @@ describe('WorkerInput', () => {
 
   it('is disabled when disabled prop is true', () => {
     render(<WorkerInput onSend={vi.fn()} disabled />)
-    expect(screen.getByRole('textbox')).toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('does not call onSend for empty input', () => {
@@ -682,5 +682,70 @@ describe('WorkerInput — attachments (spec §9.1)', () => {
   it('has no + button without onAddFiles', () => {
     render(<WorkerInput onSend={vi.fn()} />)
     expect(screen.queryByRole('button', { name: 'Attach files' })).toBeNull()
+  })
+
+  describe('IME composition', () => {
+    it('does not send on Enter while composing (isComposing)', () => {
+      const onSend = vi.fn()
+      render(<WorkerInput onSend={onSend} />)
+      const ta = screen.getByRole('textbox')
+      fireEvent.change(ta, { target: { value: 'ni' } })
+      fireEvent.keyDown(ta, { key: 'Enter', isComposing: true })
+      expect(onSend).not.toHaveBeenCalled()
+    })
+    it('does not send on keyCode 229 (Safari / Chromium commit Enter)', () => {
+      const onSend = vi.fn()
+      render(<WorkerInput onSend={onSend} />)
+      const ta = screen.getByRole('textbox')
+      fireEvent.change(ta, { target: { value: 'ni' } })
+      fireEvent.keyDown(ta, { key: 'Enter', keyCode: 229 })
+      expect(onSend).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('a file drop on the disabled box', () => {
+    it('is claimed by the pane root (default prevented) and keeps the typed text', () => {
+      const rootDrop = vi.fn((e: React.DragEvent) => e.preventDefault())
+      const { rerender } = render(<div onDrop={rootDrop} onDragOver={(e) => e.preventDefault()}><WorkerInput onSend={vi.fn()} initialValue="keep me" /></div>)
+      rerender(<div onDrop={rootDrop} onDragOver={(e) => e.preventDefault()}><WorkerInput onSend={vi.fn()} initialValue="keep me" disabled /></div>)
+      const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+      const file = new File(['x'], 'a.png', { type: 'image/png' })
+      const dt = { types: ['Files'], files: [file] }
+      expect(fireEvent.dragOver(ta, { dataTransfer: dt })).toBe(false)
+      expect(fireEvent.drop(ta, { dataTransfer: dt })).toBe(false)
+      expect(rootDrop).toHaveBeenCalled()
+      expect(ta.value).toBe('keep me')
+      expect(ta.readOnly).toBe(true)
+    })
+  })
+
+  describe('interrupt keys', () => {
+    function setup(props: Partial<React.ComponentProps<typeof WorkerInput>> = {}, text = '') {
+      const onInterrupt = vi.fn()
+      render(<WorkerInput onSend={vi.fn()} turnLive onInterrupt={onInterrupt} initialValue={text} {...props} />)
+      return { onInterrupt, ta: screen.getByRole('textbox') as HTMLTextAreaElement }
+    }
+    it('Esc with an empty input interrupts a live turn', () => {
+      const { onInterrupt, ta } = setup()
+      fireEvent.keyDown(ta, { key: 'Escape' })
+      expect(onInterrupt).toHaveBeenCalledTimes(1)
+    })
+    it('Esc with text, or with no live turn, or while composing does nothing', () => {
+      const a = setup({}, 'hi'); fireEvent.keyDown(a.ta, { key: 'Escape' }); expect(a.onInterrupt).not.toHaveBeenCalled(); cleanup()
+      const b = setup({ turnLive: false }); fireEvent.keyDown(b.ta, { key: 'Escape' }); expect(b.onInterrupt).not.toHaveBeenCalled(); cleanup()
+      const c = setup(); fireEvent.keyDown(c.ta, { key: 'Escape', isComposing: true }); expect(c.onInterrupt).not.toHaveBeenCalled()
+    })
+    it('Ctrl+C without a selection interrupts a live turn', () => {
+      const { onInterrupt, ta } = setup({}, 'hello')
+      ta.setSelectionRange(2, 2)
+      fireEvent.keyDown(ta, { key: 'c', ctrlKey: true })
+      expect(onInterrupt).toHaveBeenCalledTimes(1)
+    })
+    it('Ctrl+C with a selection stays a copy; no interrupt without a live turn or while composing', () => {
+      const a = setup({}, 'hello'); a.ta.setSelectionRange(0, 3)
+      fireEvent.keyDown(a.ta, { key: 'c', ctrlKey: true }); expect(a.onInterrupt).not.toHaveBeenCalled(); cleanup()
+      const b = setup({ turnLive: false }); fireEvent.keyDown(b.ta, { key: 'c', ctrlKey: true }); expect(b.onInterrupt).not.toHaveBeenCalled(); cleanup()
+      const c = setup(); fireEvent.keyDown(c.ta, { key: 'c', ctrlKey: true, isComposing: true }); expect(c.onInterrupt).not.toHaveBeenCalled()
+    })
   })
 })
