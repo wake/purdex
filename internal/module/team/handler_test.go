@@ -849,6 +849,10 @@ func TestDecide_ApproveDenyAlreadyDecided(t *testing.T) {
 		t.Fatalf("approve with nil grant: %d %+v grant=%+v", code, a, a.Grant)
 	}
 	// A grant edit with max_members over the cap is capped; no roots keeps the payload's.
+	// sid-2 now leads uid(3)'s team (P4-2); it must end before sid-2 may ask again.
+	if ended, err := f.m.store.EndTeam(uid(3), "sid-2", team.TeamEndLeadGone, f.clock.Load()); err != nil || !ended {
+		t.Fatalf("end uid(3)'s team: ended=%v err=%v", ended, err)
+	}
 	f.clock.Add(1)
 	fourth := f.createReq(uid(4))
 	fourth.OriginInbox = "/tmp/20.sock"
