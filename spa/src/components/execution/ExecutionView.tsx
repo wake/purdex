@@ -47,6 +47,9 @@ import { StintEnrichmentContext } from '../../hooks/useStintEnrichment'
 import PreludeSection from '../room/prelude/PreludeSection'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
 import { useExecutionActions, type SendOptions } from '../../hooks/useExecutionActions'
+import { usePermissionAnswer } from '../../hooks/usePermissionAnswer'
+import { selectPendingPermission } from '../../lib/nex/permissions'
+import PermissionRequestCard, { PermissionExpiredNotice } from './PermissionRequestCard'
 import { useWorkerUploads } from '../../hooks/useWorkerUploads'
 import {
   canSend, composeWithAttachments, encodeImage, isAttachmentError, planAttachments, requestBytes, uploadErrorKey,
@@ -159,8 +162,15 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
     () => withStintTools(preludeView, preludeRedraw.attribution, enrichment.get),
     [preludeView, preludeRedraw, enrichment],
   )
-  const lease = useExecutionLease(hostId, executionId)
+  // Permission channel plan Task 9: while the worker waits on a request the
+  // lease is held (no idle lapse) — the answer needs it, and may come hours
+  // later. The card shows the earliest request this pane has not closed itself.
+  const permissions = st.permissions
+  const pendingPermission = useMemo(() => selectPendingPermission({ permissions }), [permissions])
+  const lease = useExecutionLease(hostId, executionId, { hold: pendingPermission !== undefined })
   const { draft, actionPending, handleSend, handleInterrupt, restoreDraft } = useExecutionActions(hostId, executionId, lease)
+  const permission = usePermissionAnswer(hostId, executionId, lease)
+  const shownPermission = useMemo(() => selectPendingPermission({ permissions }, permission.closed), [permissions, permission.closed])
   // Spec §9.2 (phase E): native images only when the host's capability
   // exists AND lists this execution's provider — null otherwise (an older
   // daemon, a codex execution, the summary not in yet), and then every image
@@ -669,6 +679,16 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
           {t(`worker.upload.${sendBlock}`)}
         </div>
       )}
+      {/* Spec §5.3: the request the worker waits on, above the composer (both views); frozen while
+          the pane exits or takes the worker to a terminal. An expiry leaves a muted line (§5.5). */}
+      {st.historyLoaded && (shownPermission ? (
+        <PermissionRequestCard key={shownPermission.requestId} request={shownPermission}
+          agentLabel={shownPermission.agentId ? (st.tasks[shownPermission.agentId]?.description || shownPermission.agentId) : undefined}
+          disabled={permission.busy || takeBackBusy || exitBusy}
+          error={permission.error?.requestId === shownPermission.requestId ? permission.error : undefined}
+          onAllow={() => { if (!takeBackBusy && !exitBusy) void permission.answer(shownPermission, 'allow') }}
+          onDeny={(note) => { if (!takeBackBusy && !exitBusy) void permission.answer(shownPermission, 'deny', note) }} />
+      ) : st.expiredNotice && <PermissionExpiredNotice timeoutS={st.expiredNotice.timeoutS} />)}
       {/* R3 T2.1: part of the input, so in chat too. A tap sends at once and
           never restores a draft — that would remount the input over what is typed. */}
       <QuickReplyDock replies={quickReplies} onSend={(text) => { sendWithAttachments(text, { restoreDraft: false }) }}
