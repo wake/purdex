@@ -6,6 +6,9 @@ import { useHostStore } from '../../../stores/useHostStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useSessionStore } from '../../../stores/useSessionStore'
 import type { Tab } from '../../../types/tab'
+import { useExecutionStore, executionKey } from '../../../stores/useExecutionStore'
+import { defaultExecutionState } from '../../../lib/nex/event-reducer'
+import type { ExecutionSummary } from '../../../lib/nex/types'
 
 const mockOnPointerDown = vi.fn()
 
@@ -641,5 +644,38 @@ describe('InlineTab — pointer down (dnd-kit integration)', () => {
     const event = new PointerEvent('pointerdown', { bubbles: true, cancelable: true })
     el.dispatchEvent(event)
     expect(event.defaultPrevented).toBe(false)
+  })
+})
+
+// Permission channel PC2, user decision 2026-10-08: an awaiting worker's sidebar tab shows the hand on its light,
+// and its title is the plain worker title — no 「（等待核准）」 suffix.
+describe('InlineTab — worker awaiting approval', () => {
+  const pending = { request_id: 'r1', tool_name: 'Bash', since: 1_700_000_000_000 }
+  const workerTab: Tab = {
+    id: 'tx', pinned: false, locked: false, createdAt: 0,
+    layout: { type: 'leaf', pane: { id: 'px', content: { kind: 'execution', executionId: 'e1', host: 'h1' } } },
+  } as Tab
+  const seedWorker = (over: Partial<ExecutionSummary>) => {
+    useExecutionStore.setState({ executions: { [executionKey('h1', 'e1')]: { ...defaultExecutionState(), summary: ({
+      id: 'e1', state: 'running', provider: 'claude', principal_id: 'p', cwd: '/w/repo', mount_kind: 'dev', brief: 'Fix the bug',
+      labels: {}, created_at: 1, updated_at: 5, duration_ms: null, event_count: 0, observers: 0, archived: false, ...over,
+    }) as ExecutionSummary } } })
+    useAgentStore.setState({ statuses: { 'h1:exec-e1': 'waiting' } })
+  }
+  beforeEach(() => { useExecutionStore.setState({ executions: {} }) })
+
+  it('the hand on the light, and the title without a suffix', () => {
+    seedWorker({ pending_permission: pending })
+    renderInline(workerTab)
+    expect(screen.getByTestId('tab-status-awaiting')).toBeInTheDocument()
+    expect(screen.queryByTestId('tab-status-indicator')).toBeNull()
+    expect(screen.getByTestId('inline-tab-title').textContent).toBe('Fix the bug - repo')
+  })
+
+  it('no pending request: the plain waiting dot', () => {
+    seedWorker({ pending_permission: null })
+    renderInline(workerTab)
+    expect(screen.getByTestId('tab-status-indicator')).toBeInTheDocument()
+    expect(screen.queryByTestId('tab-status-awaiting')).toBeNull()
   })
 })

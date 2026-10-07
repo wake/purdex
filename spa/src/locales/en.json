@@ -376,7 +376,6 @@
   "page.pane.hosts": "Hosts",
   "page.pane.execution": "Execution",
   "page.pane.terminated": "{{name}}（Terminated）",
-  "page.pane.awaiting_approval": "{{name}} (awaiting approval)",
   "page.pane.settings_ws": "Settings — {{name}}",
 
   "session.title": "Sessions",

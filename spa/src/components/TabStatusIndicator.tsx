@@ -1,6 +1,7 @@
 // spa/src/components/TabStatusIndicator.tsx
-import { WarningDiamond } from '@phosphor-icons/react'
+import { HandPalm, WarningDiamond } from '@phosphor-icons/react'
 import type { AgentStatus } from '../stores/useAgentStore'
+import { useI18nStore } from '../stores/useI18nStore'
 
 /** Render mode — orthogonal to the tab-level indicator style. */
 export type IndicatorRenderMode = 'overlay' | 'replace'
@@ -10,6 +11,12 @@ interface Props {
   mode: IndicatorRenderMode
   isActive: boolean
   isUnread?: boolean
+  /**
+   * A live worker waiting on a permission request (useTabDisplay's `isAwaitingApproval`): the light becomes a
+   * warning-coloured HandPalm with 「等待核准」 as its tooltip and accessible name. It never turns red for unread —
+   * a tab that needs an answer stays the warning colour.
+   */
+  awaitingApproval?: boolean
 }
 
 const STATUS_COLORS: Record<AgentStatus, string> = {
@@ -21,16 +28,38 @@ const STATUS_COLORS: Record<AgentStatus, string> = {
 
 const UNREAD_COLOR = '#ef4444'
 
-export function TabStatusIndicator({ status, mode, isActive, isUnread = false }: Props) {
+export function TabStatusIndicator({ status, mode, isActive, isUnread = false, awaitingApproval = false }: Props) {
+  const t = useI18nStore((s) => s.t)
   if (status === undefined) return null
 
   const isRunning = status === 'running'
   const isError = status === 'error'
+  const awaitingLabel = awaitingApproval ? t('executions.activity.awaiting_approval') : ''
 
   if (mode === 'overlay') {
     const ringColor = isActive
       ? 'var(--surface-active)'
       : 'var(--surface-secondary)'
+
+    if (awaitingApproval) {
+      return (
+        <span
+          data-testid="tab-status-awaiting"
+          role="img"
+          aria-label={awaitingLabel}
+          title={awaitingLabel}
+          className="inline-flex"
+          style={{
+            position: 'absolute',
+            top: -2,
+            right: -3,
+            filter: `drop-shadow(0 0 1px ${ringColor})`,
+          }}
+        >
+          <HandPalm size={10} weight="fill" color={STATUS_COLORS.waiting} aria-hidden="true" />
+        </span>
+      )
+    }
 
     if (isError) {
       return (
@@ -68,6 +97,20 @@ export function TabStatusIndicator({ status, mode, isActive, isUnread = false }:
   }
 
   // replace mode (dot-only / icon+dot)
+  if (awaitingApproval) {
+    return (
+      <span
+        data-testid="tab-status-awaiting"
+        role="img"
+        aria-label={awaitingLabel}
+        title={awaitingLabel}
+        className="inline-flex flex-shrink-0"
+      >
+        <HandPalm size={14} weight="fill" color={STATUS_COLORS.waiting} aria-hidden="true" />
+      </span>
+    )
+  }
+
   if (isError) {
     return (
       <WarningDiamond

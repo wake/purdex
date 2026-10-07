@@ -145,4 +145,52 @@ describe('renderInlineTabIcon', () => {
     expect(dot.getAttribute('data-is-proxy')).toBe('true')
     expect(dot.getAttribute('data-subagent-type')).toBe('codex')
   })
+
+  // Permission channel PC2, user decision 2026-10-08: 「等待核准」 is the hand on the tab light, in every indicator style.
+  describe('awaiting approval', () => {
+    it.each(['dot', 'iconDot', 'badge'] as const)('%s: awaitingApproval reaches the indicator (hand, not dot)', (style) => {
+      const { container } = render(
+        renderInlineTabIcon({
+          IconComponent: Terminal,
+          agentStatus: 'waiting',
+          tabIndicatorStyle: style,
+          isActive: false,
+          subagentRefs: EMPTY,
+          awaitingApproval: true,
+        }),
+      )
+      expect(container.querySelector('[data-testid="tab-status-awaiting"]')).toBeInTheDocument()
+      expect(container.querySelector('[data-testid="tab-status-indicator"]')).toBeNull()
+    })
+
+    it.each(['dot', 'iconDot'] as const)('%s + unread: no red pip on the hand', (style) => {
+      const { container } = render(
+        renderInlineTabIcon({
+          IconComponent: Terminal,
+          agentStatus: 'waiting',
+          tabIndicatorStyle: style,
+          isActive: false,
+          subagentRefs: EMPTY,
+          isUnread: true,
+          awaitingApproval: true,
+        }),
+      )
+      expect(container.querySelector('[data-testid="tab-status-awaiting"]')).toBeInTheDocument()
+      expect(container.querySelector('[data-testid="inline-tab-unread-pip"]')).toBeNull()
+    })
+
+    it('without the flag a waiting light stays the dot', () => {
+      const { container } = render(
+        renderInlineTabIcon({
+          IconComponent: Terminal,
+          agentStatus: 'waiting',
+          tabIndicatorStyle: 'badge',
+          isActive: false,
+          subagentRefs: EMPTY,
+        }),
+      )
+      expect(container.querySelector('[data-testid="tab-status-indicator"]')).toBeInTheDocument()
+      expect(container.querySelector('[data-testid="tab-status-awaiting"]')).toBeNull()
+    })
+  })
 })

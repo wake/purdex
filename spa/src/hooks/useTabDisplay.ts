@@ -38,6 +38,8 @@ export interface TabDisplayData {
   tabIndicatorStyle: TabIndicatorStyle
   isHostOffline: boolean
   isTerminated: boolean
+  /** A live worker with a pending permission request — the tab light shows the hand (TabStatusIndicator). */
+  isAwaitingApproval: boolean
 }
 
 /**
@@ -103,11 +105,10 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const paneTitle = rawPaneTitle && stripMarker ? stripAgentTitleMarker(rawPaneTitle, agentType) : rawPaneTitle
   // Shared with the notification dispatcher's worker title (worker-summary.ts).
   const workerTitle = exec ? workerTitleOf(exec, workerSummary, titleSupported) ?? baseLabel : ''
-  const displayTitle = exec
-    // Permission channel PC2 (spec §5.4): 「（等待核准）」 while a request is pending — a suffix, like the closed-terminal
-    // one (`page.pane.terminated`); gone once `pending_permission` is null, never there on an old daemon.
-    ? isAwaitingApproval(workerSummary) ? t('page.pane.awaiting_approval', { name: workerTitle }) : workerTitle
-    : paneTitle ? `${paneTitle} - ${baseLabel}` : baseLabel
+  const displayTitle = exec ? workerTitle : paneTitle ? `${paneTitle} - ${baseLabel}` : baseLabel
+  // Permission channel PC2 (spec §5.4, user decision 2026-10-08): 「等待核准」 on a tab is the hand on its light
+  // (TabStatusIndicator), never label text. Lifecycle-aware: an ended worker or an old daemon never sets it.
+  const awaitingApproval = !!exec && isAwaitingApproval(workerSummary)
 
   return {
     displayTitle,
@@ -119,5 +120,6 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
     tabIndicatorStyle,
     isHostOffline,
     isTerminated,
+    isAwaitingApproval: awaitingApproval,
   }
 }

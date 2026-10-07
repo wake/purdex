@@ -28,6 +28,8 @@ interface Props {
   iconSize: number
   subagentRefs: SubagentRef[]
   isUnread: boolean
+  /** useTabDisplay's `isAwaitingApproval` — the light becomes the 「等待核准」 hand (TabStatusIndicator). */
+  awaitingApproval?: boolean
 }
 
 export function TabIcon({
@@ -38,6 +40,7 @@ export function TabIcon({
   iconSize,
   subagentRefs,
   isUnread,
+  awaitingApproval = false,
 }: Props) {
   const iconBox = (
     <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
@@ -48,13 +51,14 @@ export function TabIcon({
   if (tabIndicatorStyle === 'icon' || !agentStatus) return iconBox
 
   // error warning diamond suppresses the overlayed unread pip on dot wrappers —
-  // error itself is already a louder signal than unread.
-  const showDotUnreadPip = isUnread && !isActive && agentStatus !== 'error'
+  // error itself is already a louder signal than unread. So does the 「等待核准」
+  // hand: a tab that needs an answer stays the warning colour, never red.
+  const showDotUnreadPip = isUnread && !isActive && agentStatus !== 'error' && !awaitingApproval
 
   if (tabIndicatorStyle === 'dot') {
     return (
       <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
-        <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
+        <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} awaitingApproval={awaitingApproval} />
         {showDotUnreadPip && <UnreadPip />}
         {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} />}
       </span>
@@ -65,7 +69,7 @@ export function TabIcon({
     return (
       <span className="relative inline-flex items-center flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
         <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0">
-          <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} />
+          <TabStatusIndicator status={agentStatus} mode="replace" isActive={isActive} awaitingApproval={awaitingApproval} />
           {showDotUnreadPip && <UnreadPip />}
           {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} />}
         </span>
@@ -88,6 +92,7 @@ export function TabIcon({
         mode="overlay"
         isActive={isActive}
         isUnread={isUnread && !isActive}
+        awaitingApproval={awaitingApproval}
       />
       {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} left={-4} />}
     </span>
