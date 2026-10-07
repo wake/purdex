@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useHostExecutions } from '../hooks/useHostExecutions'
 import { useI18nStore } from '../stores/useI18nStore'
-import { selectRollupCostShown, useNexHostStore } from '../stores/useNexHostStore'
+import { selectRollupCostShown, selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
 import { filterLiveRows } from '../lib/nex/live-workers'
 import { useIsRefShown } from '../lib/shown-hosts'
 import { ExecutionRowCompact } from './executions/ExecutionRowCompact'
@@ -34,7 +34,8 @@ export function HostWorkerRows({ hostId, onOpen, testIdPrefix, filter, query, ho
   const daemonHostId = typeof entry?.capabilities?.host_id === 'string' ? entry.capabilities.host_id : null
   const showCost = useNexHostStore(selectRollupCostShown(hostId))
   const { items, phase, error, truncated, refetch } = useHostExecutions(hostId)
-  const live = useMemo(() => filterLiveRows(items, { filter, query, home }), [items, filter, query, home])
+  const titleSupported = useNexHostStore(selectSessionTitleSupported(hostId))
+  const live = useMemo(() => filterLiveRows(items, { filter, query, home, titleSupported }), [items, filter, query, home, titleSupported])
   const shown = useIsRefShown(hostId)
   const { requestExit, pendingIds, dialog } = useRowExit(hostId, live)
   const [now, setNow] = useState(() => Date.now())

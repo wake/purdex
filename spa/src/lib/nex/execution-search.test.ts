@@ -7,20 +7,36 @@ const row = (o: Partial<ExecutionSummary>): ExecutionSummary =>
 
 describe('matchesExecutionQuery', () => {
   it('a blank query matches everything', () => {
-    expect(matchesExecutionQuery(row({}), '', '/Users/wake')).toBe(true)
-    expect(matchesExecutionQuery(row({}), '   ', '/Users/wake')).toBe(true)
+    expect(matchesExecutionQuery(row({}), '', '/Users/wake', false)).toBe(true)
+    expect(matchesExecutionQuery(row({}), '   ', '/Users/wake', false)).toBe(true)
   })
   it('matches brief, id, provider, case-insensitively and trimmed', () => {
-    expect(matchesExecutionQuery(row({}), ' login ', '')).toBe(true)
-    expect(matchesExecutionQuery(row({}), 'EXEC-12', '')).toBe(true)
-    expect(matchesExecutionQuery(row({ provider: 'codex' }), 'CODEX', '')).toBe(true)
+    expect(matchesExecutionQuery(row({}), ' login ', '', false)).toBe(true)
+    expect(matchesExecutionQuery(row({}), 'EXEC-12', '', false)).toBe(true)
+    expect(matchesExecutionQuery(row({ provider: 'codex' }), 'CODEX', '', false)).toBe(true)
   })
   it('matches the cwd as it is and as shown with ~', () => {
-    expect(matchesExecutionQuery(row({}), '/users/wake/proj', '/Users/wake')).toBe(true)
-    expect(matchesExecutionQuery(row({}), '~/proj', '/Users/wake')).toBe(true)
-    expect(matchesExecutionQuery(row({}), '~/proj', '')).toBe(false)
+    expect(matchesExecutionQuery(row({}), '/users/wake/proj', '/Users/wake', false)).toBe(true)
+    expect(matchesExecutionQuery(row({}), '~/proj', '/Users/wake', false)).toBe(true)
+    expect(matchesExecutionQuery(row({}), '~/proj', '', false)).toBe(false)
   })
   it('does not match unrelated text', () => {
-    expect(matchesExecutionQuery(row({}), 'zzz', '/Users/wake')).toBe(false)
+    expect(matchesExecutionQuery(row({}), 'zzz', '/Users/wake', false)).toBe(false)
+  })
+  describe('the name a row shows (#1771)', () => {
+    const handoff = () => row({ brief: '', cwd: '/w/repo', session_title: { text: 'Zebrafinch', source: 'ai' } })
+    it('with the capability: the session title is searchable, case-insensitively', () => {
+      expect(matchesExecutionQuery(handoff(), 'zebrafinch', '', true)).toBe(true)
+    })
+    it('without the capability: the cached title is NOT searchable, the cwd still is', () => {
+      expect(matchesExecutionQuery(handoff(), 'Zebrafinch', '', false)).toBe(false)
+      expect(matchesExecutionQuery(handoff(), 'repo', '', false)).toBe(true)
+    })
+    it('a brief row is still found by brief, cwd, id and provider', () => {
+      expect(matchesExecutionQuery(row({}), 'login', '', true)).toBe(true)
+      expect(matchesExecutionQuery(row({}), 'proj', '', false)).toBe(true)
+      expect(matchesExecutionQuery(row({}), 'exec-1', '', true)).toBe(true)
+      expect(matchesExecutionQuery(row({}), 'claude', '', false)).toBe(true)
+    })
   })
 })

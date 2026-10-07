@@ -234,6 +234,16 @@ describe('HostWorkerRows', () => {
       expect(screen.getAllByTestId('executions-row')).toHaveLength(1)
       expect(screen.getByText('one')).toBeInTheDocument()
     })
+    it('query finds a handoff row by its shown title only with the host capability (#1771)', () => {
+      useNexHostStore.setState({ byHost: { [H]: { ...readyEntry, capabilities: { session_title: { sources: ['ai'], max_bytes: 200 } } as never } } })
+      seed([row({ id: 'T1', session_id: 'ST', cwd: '/tmp/repo', brief: '', session_title: { text: 'Zebrafinch', source: 'ai' } })])
+      const { unmount } = render(<HostWorkerRows hostId={H} onOpen={vi.fn()} testIdPrefix={P} filter="test" query="zebrafinch" />)
+      expect(screen.getAllByTestId('executions-row')).toHaveLength(1)
+      unmount()
+      useNexHostStore.setState({ byHost: { [H]: readyEntry } })
+      render(<HostWorkerRows hostId={H} onOpen={vi.fn()} testIdPrefix={P} filter="test" query="zebrafinch" />)
+      expect(screen.queryByTestId('executions-row')).toBeNull()
+    })
     it('hideEmpty drops the empty copy', () => {
       two()
       render(<HostWorkerRows hostId={H} onOpen={vi.fn()} testIdPrefix={P} filter="test" query="nomatch" hideEmpty />)
