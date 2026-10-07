@@ -434,6 +434,11 @@ func TestPutConfigNexInvalidReturns400AndLeavesFileUntouched(t *testing.T) {
 		{"relative claude_bin", `{"nex":{"enabled":false,"claude_bin":"bin/claude"}}`, "nex.claude_bin"},
 		{"bad duration", `{"nex":{"enabled":false,"timeouts":{"turn":"soon"}}}`, "nex.timeouts.turn"},
 		{"unknown profile", `{"nex":{"enabled":false,"sandbox":{"max_profile":"yolo"}}}`, "nex.sandbox.max_profile"},
+		// [nex.peer] (peer mailbox spec §6): a bad template is refused here,
+		// not at the next restart's Assemble.
+		{"peer wake_template without Text", `{"nex":{"enabled":false,"peer":{"enabled":true,"wake_template":"hi {{.FromName}}"}}}`, "nex.peer.wake_template: "},
+		{"peer reply_line without ReplyTo", `{"nex":{"enabled":false,"peer":{"enabled":true,"reply_line":"reply somehow"}}}`, "nex.peer.reply_line: "},
+		{"peer negative max_pending", `{"nex":{"enabled":false,"peer":{"enabled":true,"max_pending":-3}}}`, "nex.peer.max_pending: "},
 		{"null", `{"nex":null}`, "nex must be an object"},
 	}
 	for _, tc := range cases {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	nexconfig "lab.protype.tw/wake/nexen/config"
 	"lab.protype.tw/wake/nexen/sandbox"
 )
 
@@ -137,6 +138,28 @@ func (n *NexConfig) Validate(home string) error {
 		}
 	}
 
+	return n.Peer.validate()
+}
+
+// validate checks [nex.peer] with Nexen's own parsers — the same ones
+// nexconfig.PeerConfig.Build runs at Assemble — whether or not nex or the
+// mailbox is enabled: a template Nexen would refuse must be rejected when
+// it is loaded or PUT, not at the next restart, where it would keep the nex
+// module from starting. An empty template is Nexen's default and valid.
+func (p NexPeerConfig) validate() error {
+	if p.MaxPending < 0 {
+		return fmt.Errorf("nex.peer.max_pending: must not be negative (got %d)", p.MaxPending)
+	}
+	if p.WakeTemplate != "" {
+		if _, err := nexconfig.ParseWakeTemplate(p.WakeTemplate); err != nil {
+			return fmt.Errorf("nex.peer.wake_template: %w", err)
+		}
+	}
+	if p.ReplyLine != "" {
+		if _, err := nexconfig.ParseReplyLine(p.ReplyLine); err != nil {
+			return fmt.Errorf("nex.peer.reply_line: %w", err)
+		}
+	}
 	return nil
 }
 
