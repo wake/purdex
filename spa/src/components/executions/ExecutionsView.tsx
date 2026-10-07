@@ -100,7 +100,7 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
           <p data-testid="executions-empty" className="px-3 py-2 text-xs text-text-muted">{t('executions.empty')}</p>
         )}
         {groups.map((group) => (
-          <ExecutionsGroup key={group.source} group={group} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={shown ? open : undefined} onExit={shown ? requestExit : undefined} exitPending={pendingIds} />
+          <ExecutionsGroup key={group.source} group={group} hostId={id} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={shown ? open : undefined} onExit={shown ? requestExit : undefined} exitPending={pendingIds} />
         ))}
       </>
     )

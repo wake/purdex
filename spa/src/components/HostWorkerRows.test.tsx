@@ -129,6 +129,22 @@ describe('HostWorkerRows', () => {
     expect(screen.queryByTestId('executions-row-exit')).toBeNull()
   })
 
+  // #1771 (New Tab / Settings Workers): the host id reaches the row, so the session_title capability gate is this host's.
+  describe('a handoff row (empty brief) is named (#1771)', () => {
+    const handoff = () => row({ id: 'E1', brief: '', cwd: '/w/repo', session_title: { text: 'Zebrafinch', source: 'ai' } })
+    it('with the host\'s session_title capability: the conversation title', () => {
+      useNexHostStore.setState({ byHost: { [H]: { ...readyEntry, capabilities: { session_title: { sources: ['ai'], max_bytes: 200 } } as never } } })
+      seed([handoff()])
+      renderRows()
+      expect(screen.getByTestId('executions-brief').textContent).toBe('Zebrafinch')
+    })
+    it('without it: the cwd basename', () => {
+      seed([handoff()])
+      renderRows()
+      expect(screen.getByTestId('executions-brief').textContent).toBe('repo')
+    })
+  })
+
   it('exits an idle row at once', async () => {
     seed([row({ id: 'E1', state: 'idle' })])
     renderRows()
@@ -217,6 +233,16 @@ describe('HostWorkerRows', () => {
       render(<HostWorkerRows hostId={H} onOpen={vi.fn()} testIdPrefix={P} filter="test" query="alpha" />)
       expect(screen.getAllByTestId('executions-row')).toHaveLength(1)
       expect(screen.getByText('one')).toBeInTheDocument()
+    })
+    it('query finds a handoff row by its shown title only with the host capability (#1771)', () => {
+      useNexHostStore.setState({ byHost: { [H]: { ...readyEntry, capabilities: { session_title: { sources: ['ai'], max_bytes: 200 } } as never } } })
+      seed([row({ id: 'T1', session_id: 'ST', cwd: '/tmp/repo', brief: '', session_title: { text: 'Zebrafinch', source: 'ai' } })])
+      const { unmount } = render(<HostWorkerRows hostId={H} onOpen={vi.fn()} testIdPrefix={P} filter="test" query="zebrafinch" />)
+      expect(screen.getAllByTestId('executions-row')).toHaveLength(1)
+      unmount()
+      useNexHostStore.setState({ byHost: { [H]: readyEntry } })
+      render(<HostWorkerRows hostId={H} onOpen={vi.fn()} testIdPrefix={P} filter="test" query="zebrafinch" />)
+      expect(screen.queryByTestId('executions-row')).toBeNull()
     })
     it('hideEmpty drops the empty copy', () => {
       two()

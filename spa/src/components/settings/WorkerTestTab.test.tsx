@@ -119,6 +119,21 @@ describe('WorkerTestTab', () => {
     expect(screen.getByTestId('worker-test-exited-loading')).toBeInTheDocument()
   })
 
+  it('the live search finds a handoff row by its shown title only with the host capability (#1771)', () => {
+    seedLive([erow({ id: 'L1', session_id: 'SL', cwd: '/tmp/repo', brief: '', session_title: { text: 'Zebrafinch', source: 'ai' } })])
+    answer(hook({ page: page('ended', []) }), hook({ page: page('gone', []) }))
+    setHost(entry(SCOPED, { capabilities: { session_title: { sources: ['ai'], max_bytes: 200 } } as never }))
+    const { unmount } = render(<WorkerTestTab hostId={H} />)
+    fireEvent.change(screen.getByTestId('worker-test-search'), { target: { value: 'zebrafinch' } })
+    expect(screen.getAllByTestId('executions-row')).toHaveLength(1)
+    expect(screen.queryByTestId('worker-test-empty')).toBeNull()
+    unmount()
+    setHost(entry(SCOPED))
+    render(<WorkerTestTab hostId={H} />)
+    fireEvent.change(screen.getByTestId('worker-test-search'), { target: { value: 'zebrafinch' } })
+    expect(screen.queryByTestId('executions-row')).toBeNull()
+  })
+
   it('one keyword filters all three sections', () => {
     seedLive([erow({ id: 'L1', session_id: 'SL', cwd: '/tmp/banana-live', brief: 'live brief' }), erow({ id: 'L2', session_id: 'SL2', cwd: '/tmp/other', brief: 'other live' })])
     answer(
