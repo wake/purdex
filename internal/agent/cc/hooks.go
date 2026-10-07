@@ -134,6 +134,15 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 			allInstalled = false
 		}
 	}
+	// With a plugin to ship, the hooks alone are not "installed": a user who
+	// installed before the plugin existed (or before this version's) must
+	// see Install again, or the mod never reaches their sessions.
+	if PluginSource != nil {
+		if issue := pluginIssue(settings, p.dataDir()); issue != "" {
+			issues = append(issues, issue)
+			allInstalled = false
+		}
+	}
 	managed := ccHooksManaged(hooks, allSpecs)
 	return agent.HookStatus{
 		Installed:         allInstalled,
@@ -145,6 +154,39 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 		SupportedVersion:  ccHooksSupportedVersion,
 		ExceedsSupport:    agent.CompareHookAgentVersions(agentVersion, ccHooksSupportedVersion) > 0,
 	}, nil
+}
+
+// pluginIssue says why the Purdex plugin is not usable as installed, or ""
+// when it is: settings env CLAUDE_CODE_PLUGIN_DIRS must name
+// PluginRoot(dataDir), and the tree there must hold hooks/register.js and a
+// VERSION equal to this binary's (a dev build, "unknown", accepts any).
+func pluginIssue(settings map[string]any, dataDir string) string {
+	const notInstalled = "Purdex plugin not installed"
+	root := PluginRoot(dataDir)
+	env, _ := settings["env"].(map[string]any)
+	dirs, _ := env[pluginDirsEnv].(string)
+	listed := false
+	for _, d := range strings.Split(dirs, string(os.PathListSeparator)) {
+		if d != "" && filepath.Clean(d) == root {
+			listed = true
+			break
+		}
+	}
+	if !listed {
+		return notInstalled
+	}
+	if _, err := os.Stat(filepath.Join(root, "hooks", "register.js")); err != nil {
+		return notInstalled
+	}
+	b, err := os.ReadFile(filepath.Join(root, "VERSION"))
+	if err != nil {
+		return notInstalled
+	}
+	got, want := strings.TrimSpace(string(b)), buildinfo.Version
+	if want != "" && want != "unknown" && got != want {
+		return fmt.Sprintf("Purdex plugin outdated (installed %s, want %s)", got, want)
+	}
+	return ""
 }
 
 // ccHooksManaged reports whether settings.json has any pdx-owned hook

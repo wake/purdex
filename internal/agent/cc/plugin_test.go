@@ -5,8 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
+
+	"github.com/wake/purdex/internal/buildinfo"
+	"github.com/wake/purdex/internal/config"
 )
 
 func fakePlugin(version string) fstest.MapFS {
@@ -225,5 +229,87 @@ func TestMergePluginDirs_UnsupportedShapesError(t *testing.T) {
 	os.WriteFile(path, []byte(`{"env":{"CLAUDE_CODE_PLUGIN_DIRS":["/a"]}}`), 0o644)
 	if err := mergePluginDirs(path, dataDir, PluginRoot(dataDir), false); err == nil {
 		t.Fatal("non-string value must error")
+	}
+}
+
+// pluginProvider sets PluginSource and buildinfo.Version for one test and
+// returns a provider whose data dir is a temp dir, with $HOME redirected.
+func pluginProvider(t *testing.T, version string) (p *Provider, home, dataDir string) {
+	t.Helper()
+	home = t.TempDir()
+	t.Setenv("HOME", home)
+	dataDir = t.TempDir()
+	oldSrc, oldVer := PluginSource, buildinfo.Version
+	PluginSource = fakePlugin(version)
+	buildinfo.Version = version
+	t.Cleanup(func() { PluginSource, buildinfo.Version = oldSrc, oldVer })
+	var mu sync.RWMutex
+	return NewProvider(nil, nil, &config.Config{DataDir: dataDir}, &mu), home, dataDir
+}
+
+func pluginIssues(issues []string) []string {
+	var out []string
+	for _, s := range issues {
+		if strings.Contains(s, "Purdex plugin") {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// R1 P1: a user who installed the hooks before the plugin shipped must see
+// Install again after upgrading — the hooks alone are not "installed".
+func TestCCCheckHooks_PluginMissingOrOutdatedIsNotInstalled(t *testing.T) {
+	p, home, dataDir := pluginProvider(t, "1.0.0-alpha.600")
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := mergeClaudeHooks(settingsPath, "/usr/local/bin/pdx", false); err != nil {
+		t.Fatal(err)
+	}
+	status, err := p.CheckHooks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pluginIssues(status.Issues); status.Installed || len(got) != 1 || !strings.Contains(got[0], "not installed") {
+		t.Fatalf("hooks without the plugin: Installed=%v issues=%v", status.Installed, status.Issues)
+	}
+
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	status, _ = p.CheckHooks()
+	if !status.Installed || len(pluginIssues(status.Issues)) != 0 {
+		t.Fatalf("after install: Installed=%v issues=%v", status.Installed, status.Issues)
+	}
+
+	root := PluginRoot(dataDir)
+	os.WriteFile(filepath.Join(root, "VERSION"), []byte("1.0.0-alpha.599\n"), 0o644)
+	status, _ = p.CheckHooks()
+	if got := pluginIssues(status.Issues); status.Installed || len(got) != 1 || !strings.Contains(got[0], "outdated (installed 1.0.0-alpha.599, want 1.0.0-alpha.600)") {
+		t.Fatalf("stale VERSION: Installed=%v issues=%v", status.Installed, status.Issues)
+	}
+
+	// A dev build ("unknown") accepts whatever VERSION is there.
+	buildinfo.Version = "unknown"
+	status, _ = p.CheckHooks()
+	if !status.Installed {
+		t.Fatalf("dev build with any VERSION: issues=%v", status.Issues)
+	}
+
+	os.Remove(filepath.Join(root, "hooks", "register.js"))
+	status, _ = p.CheckHooks()
+	if status.Installed || len(pluginIssues(status.Issues)) != 1 {
+		t.Fatalf("register.js missing: Installed=%v issues=%v", status.Installed, status.Issues)
+	}
+
+	buildinfo.Version = "1.0.0-alpha.600"
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mergePluginDirs(settingsPath, dataDir, root, true); err != nil {
+		t.Fatal(err)
+	}
+	status, _ = p.CheckHooks()
+	if status.Installed || len(pluginIssues(status.Issues)) != 1 {
+		t.Fatalf("env no longer names the plugin: Installed=%v issues=%v", status.Installed, status.Issues)
 	}
 }
