@@ -206,10 +206,26 @@ describe('renderInlineTabIcon', () => {
       expect(light).toHaveAttribute('aria-label', '等待核准')
     })
 
-    it('icon style shows no light at all, awaiting or not (the user turned indicators off)', () => {
+    // User decision 2026-10-08: awaiting approval is a must-show exception that overrides the lights-off ('icon') choice.
+    it('icon style: an awaiting worker still shows the hand, titled 等待核准', () => {
+      act(() => { useI18nStore.getState().setLocale('zh-TW') })
       const { container } = renderAwaiting('icon')
+      expect(q(container, 'tab-status-awaiting-hand')).toBeInTheDocument()
+      const light = q(container, 'tab-status-awaiting')!
+      expect(light).toHaveAttribute('title', '等待核准')
+      expect(light).toHaveAttribute('aria-label', '等待核准')
+    })
+
+    it('icon style + awaiting + no agentStatus yet (cold start): the hand', () => {
+      const { container } = renderAwaiting('icon', { agentStatus: undefined })
+      expect(q(container, 'tab-status-awaiting-hand')).toBeInTheDocument()
+    })
+
+    it.each(['running', 'idle', 'error', 'waiting'] as const)('icon style + %s, not awaiting: nothing', (agentStatus) => {
+      const { container } = renderAwaiting('icon', { agentStatus, awaitingApproval: false, isUnread: true })
       expect(q(container, 'tab-status-awaiting')).toBeNull()
       expect(q(container, 'tab-status-indicator')).toBeNull()
+      expect(q(container, 'inline-tab-unread-pip')).toBeNull()
     })
 
     it('without the flag a waiting light stays the dot', () => {

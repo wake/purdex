@@ -45,8 +45,11 @@ export function renderInlineTabIcon({
   // already carries the pending request while useWorkerAgentProjection (an App-level effect) has not written it.
   const status: AgentStatus | undefined = awaitingApproval ? 'waiting' : agentStatus
 
-  // icon-only OR no agent event → plain icon slot
-  if (tabIndicatorStyle === 'icon' || !status) {
+  // Lights off ('icon'): only an awaiting worker still shows its light (user decision 2026-10-08 — a pending approval
+  // is a must-show exception); it falls through to the overlay layout below, with no unread tint / subagent dots.
+  const lightsOff = tabIndicatorStyle === 'icon'
+  // lights off without an awaiting request OR no agent event → plain icon slot
+  if (!status || (lightsOff && !awaitingApproval)) {
     return (
       <span className={`relative inline-flex items-center justify-center ${DOT_SLOT} flex-shrink-0 ml-[1.5px] lowdpi:ml-px`}>
         {IconComponent && <IconComponent size={ICON_SIZE} className="flex-shrink-0" />}
@@ -99,10 +102,10 @@ export function renderInlineTabIcon({
         status={status}
         mode="overlay"
         isActive={isActive}
-        isUnread={isUnread && !isActive}
+        isUnread={isUnread && !isActive && !lightsOff}
         awaitingApproval={awaitingApproval}
       />
-      {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} left={-4} />}
+      {!lightsOff && subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} left={-4} />}
     </span>
   )
 }
