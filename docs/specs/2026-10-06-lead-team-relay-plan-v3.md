@@ -389,6 +389,13 @@ All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `Sp
 **Risks.**
 - **Spawn race.** The mod's first hello can land before P4-5 stores the member row, because hello is sent at `session.start` and the row is written after registration. That hello answers `none`. This is harmless: `begin` re-reads the role and refuses, and the mod then sets `s.role='member'` (`register.js:380`). P7-2 lets the daemon decide, for the same reason.
 
+**Fix notes (PR #1859 review, binding).** Shipped as P4-3a (table, roles, `member_cannot_lead`, H1, H2) and P4-3b (the `cleared` moves, `team_id`, H3, R1).
+- **H1, approve re-checks the member rule.** `CloseLeadApproved` checks in its write transaction that the origin is not an active member of a live team. If it is: `409 member_cannot_lead` without an approval, the row stays open (as `already_lead`).
+- **H2, a member's self relay is never claimed.** The approve of a `self_relay` row is one write transaction (`CloseSelfRelayApproved`). If the origin is now an active member of a live team, the row closes `cancelled` and its op `cancelled{member_relay_is_leads}`, both or neither. decide answers `409 member_relay_is_leads` only after that commit (the `closed` event goes out; the mod's wait exits 12); a failed commit is 500 and nothing changed. `afterClose` and the awaiting-op reconciliation apply the same rule, and begin re-reads the role under `createMu` just before the op. The row is what matters: the mod follows the row, not the op.
+- **H3, the member move needs a live team.** The `cleared` member UPDATE also requires the row's team to be live. An ended team's member rows stay as they ended (D4).
+- **R1, no session holds two live roles.** When the old session has a live role, a new session holding either one fails the whole `cleared` (`ErrClearedTargetHasRole`): nothing moves, and the report answers **500**, not 400. This is a broken invariant (a `/clear` makes a fresh session), not a bad report: the mod re-sends it, and the op stays `written` for P6-4's reconciliation (#1735).
+- After the lead move, the sweeper asks `LeadPresence(new sid, same pid, same start)`, which answers live (`TestTick_ALeadRelayKeepsItsTeam`).
+
 ## PR P4-4 — host config `team.member_command`; `spawn_ops`; the launch line
 
 **Goal.** Spec §7.2 step 4 (`team.member_command`, `--plugin-dir`), U20 (a) (the daemon appends `--model '<m>'` and `--effort <e>`), §9.3 (spawn steps persisted).
