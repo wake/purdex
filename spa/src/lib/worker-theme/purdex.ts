@@ -23,6 +23,11 @@ export const PURDEX_THEME: WorkerTheme = {
     'user-band-bg': 'color-mix(in srgb, var(--text-primary) 9%, transparent)',
     'user-band-fg': 'var(--text-primary)',
     'user-band-prefix-color': 'var(--text-muted)',
+    // A peer message's rule and header (peer mailbox spec §7): the design
+    // mock's info blue (#7aa2e8 dark / #3867c4 light). The app themes have no
+    // info token, so a fixed blue is mixed toward each theme's own text
+    // colour — lighter on a dark theme, darker on a light one.
+    'peer-color': 'color-mix(in srgb, #4a7fd9 70%, var(--text-primary))',
     'rail-color': 'color-mix(in srgb, var(--text-muted) 55%, transparent)',
     'footer-color': 'var(--text-muted)',
     'footer-error-color': 'var(--status-error)',

@@ -19,6 +19,7 @@ export type WorkerThemeVar =
   | 'user-band-bg'
   | 'user-band-fg'
   | 'user-band-prefix-color'
+  | 'peer-color'
   | 'rail-color'
   | 'footer-color'
   | 'footer-error-color'
