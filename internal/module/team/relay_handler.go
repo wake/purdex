@@ -30,38 +30,65 @@ type helloInfo struct {
 // modSeenCap bounds the modSeen map; sessions come and go and nothing else prunes it.
 const modSeenCap = 512
 
-// relayRole is the session's role for the switches (spec §8.7): "none",
-// "lead" or "member". Until P4 there are no team rows, so every session
-// is "none"; P4 replaces the body of this function, nothing else.
-func (m *Module) relayRole(sessionID string) string { return "none" }
+// The roles of spec §8.7, as RelayHelloResponse.Role carries them.
+const (
+	roleNone   = "none"
+	roleLead   = "lead"
+	roleMember = "member"
+)
 
-// selfRelayState is the effective self-relay state of a session (spec
-// §8.7): a member is off with no switch (U13); otherwise the host switch
-// for the role, then the session's pause. hostSwitch is the switch that
-// applied; member says a member has no switch at all.
-func (m *Module) selfRelayState(sessionID string) (state string, hostSwitch bool, member bool, err error) {
-	if m.relayRole(sessionID) == "member" {
-		return "off", false, true, nil
+// relayRole is the session's role for the switches (spec §8.7), read live
+// on every hello, self and begin (§8.7 (a)): "lead" when it leads a live
+// team, "member" when it is an active member of a live team, else "none"
+// — a member or lead of an ended team is an ordinary session again (D4).
+// A store error is an error, never "none" (plan v3 deviation 12): the
+// caller answers 500, the mod treats the daemon as unavailable and nothing
+// relays (fail closed, §8.7 (d)).
+func (m *Module) relayRole(sessionID string) (string, error) {
+	if _, ok, err := m.store.LiveTeamByLead(sessionID); err != nil {
+		return "", err
+	} else if ok {
+		return roleLead, nil
+	}
+	if _, _, ok, err := m.store.ActiveMemberInLiveTeam(sessionID); err != nil {
+		return "", err
+	} else if ok {
+		return roleMember, nil
+	}
+	return roleNone, nil
+}
+
+// selfRelayState is a session's role and effective self-relay state (spec
+// §8.7), from one role read: a member is off with no switch (U13);
+// otherwise the host switch for the role, then the session's pause.
+// hostSwitch is the switch that applied (false for a member, which has none).
+func (m *Module) selfRelayState(sessionID string) (role, state string, hostSwitch bool, err error) {
+	role, err = m.relayRole(sessionID)
+	if err != nil {
+		return "", "", false, err
+	}
+	if role == roleMember {
+		return role, "off", false, nil
 	}
 	sw, err := m.switches.RelaySwitches()
 	if err != nil {
-		return "", false, false, err
+		return role, "", false, err
 	}
 	hostSwitch = sw.SelfSolo
-	if m.relayRole(sessionID) == "lead" {
+	if role == roleLead {
 		hostSwitch = sw.SelfLead
 	}
 	if !hostSwitch {
-		return "off", false, false, nil
+		return role, "off", false, nil
 	}
 	paused, err := m.store.SelfRelayPaused(sessionID)
 	if err != nil {
-		return "", hostSwitch, false, err
+		return role, "", hostSwitch, err
 	}
 	if paused {
-		return "paused", hostSwitch, false, nil
+		return role, "paused", hostSwitch, nil
 	}
-	return "on", hostSwitch, false, nil
+	return role, "on", hostSwitch, nil
 }
 
 // handleRelayHello is POST /api/relay/hello (spec §8.3): the mod says this
@@ -75,10 +102,10 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "session_id is required", nil)
 		return
 	}
-	state, _, _, err := m.selfRelayState(req.SessionID)
+	role, state, _, err := m.selfRelayState(req.SessionID)
 	if err != nil {
 		m.logf("[team] relay hello %s: %v", req.SessionID, err)
-		m.writeErr(w, http.StatusInternalServerError, errStorage, "switches unreadable; see the daemon log", nil)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "role or switches unreadable; see the daemon log", nil)
 		return
 	}
 	m.mu.Lock()
@@ -94,7 +121,7 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 	m.modSeen[req.SessionID] = helloInfo{ModVersion: req.ModVersion, Agent: req.Agent, At: m.now()}
 	m.mu.Unlock()
 	m.writeJSON(w, http.StatusOK, team.RelayHelloResponse{
-		OK: true, Role: m.relayRole(req.SessionID), SelfRelay: state,
+		OK: true, Role: role, SelfRelay: state,
 		Threshold: team.RelayThresholdPct, MinGrowth: team.RelayMinGrowth,
 	})
 }
@@ -113,7 +140,13 @@ func (m *Module) handleRelaySelf(w http.ResponseWriter, r *http.Request) {
 	}
 	switch req.Action {
 	case "on", "off":
-		if m.relayRole(req.SessionID) == "member" {
+		role, err := m.relayRole(req.SessionID)
+		if err != nil {
+			m.logf("[team] relay self %s: %v", req.SessionID, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "role unreadable; see the daemon log", nil)
+			return
+		}
+		if role == roleMember {
 			m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排", nil)
 			return
 		}
@@ -127,13 +160,13 @@ func (m *Module) handleRelaySelf(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, `action must be "off", "on" or "status"`, nil)
 		return
 	}
-	state, hostSwitch, member, err := m.selfRelayState(req.SessionID)
+	role, state, hostSwitch, err := m.selfRelayState(req.SessionID)
 	if err != nil {
 		m.logf("[team] relay self %s: %v", req.SessionID, err)
-		m.writeErr(w, http.StatusInternalServerError, errStorage, "switches unreadable; see the daemon log", nil)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "role or switches unreadable; see the daemon log", nil)
 		return
 	}
-	m.writeJSON(w, http.StatusOK, team.RelaySelfResponse{SelfRelay: state, HostSwitch: hostSwitch, Member: member})
+	m.writeJSON(w, http.StatusOK, team.RelaySelfResponse{SelfRelay: state, HostSwitch: hostSwitch, Member: role == roleMember})
 }
 
 // handleRelayBegin is POST /api/relay/begin (spec §8.1, §8.7 (b)): the mod
@@ -196,14 +229,14 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusNotFound, team.ErrUnknownSession, "session_id is not a live Claude Code session on this host", nil)
 		return
 	}
-	state, _, member, err := m.selfRelayState(req.SessionID)
+	role, state, _, err := m.selfRelayState(req.SessionID)
 	if err != nil {
 		m.logf("[team] relay begin %s: %v", req.SessionID, err)
-		m.writeErr(w, http.StatusInternalServerError, errStorage, "switches unreadable; see the daemon log", nil)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "role or switches unreadable; see the daemon log", nil)
 		return
 	}
 	switch {
-	case member:
+	case role == roleMember:
 		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排", nil)
 		return
 	case state == "off":

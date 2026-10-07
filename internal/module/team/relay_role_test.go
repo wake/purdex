@@ -1,0 +1,224 @@
+package teammod
+
+import (
+	"encoding/json"
+	"net/http"
+	"testing"
+
+	"github.com/wake/purdex/internal/module/hostconfig"
+	"github.com/wake/purdex/internal/team"
+)
+
+// everySwitch is every setting of the two host switches (spec §8.7 (a)).
+var everySwitch = []hostconfig.RelaySwitches{
+	{SelfSolo: true, SelfLead: true},
+	{SelfSolo: true, SelfLead: false},
+	{SelfSolo: false, SelfLead: true},
+	{SelfSolo: false, SelfLead: false},
+}
+
+// makeMember makes sid an active member of live team uid(9), led by sid-2.
+func (f *fixture) makeMember(sid string) {
+	f.t.Helper()
+	seedTeam(f.t, f.m.store, uid(9), "sid-2", f.clock.Load())
+	seedMember(f.t, f.m.store, "op-1", uid(9), sid, f.clock.Load())
+}
+
+func (f *fixture) hello(sid string) (int, team.RelayHelloResponse, []byte) {
+	f.t.Helper()
+	code, body := f.do(http.MethodPost, "/api/relay/hello", team.RelayHelloRequest{SessionID: sid, ModVersion: "1", Agent: "cc"})
+	var h team.RelayHelloResponse
+	if code == http.StatusOK {
+		if err := json.Unmarshal(body, &h); err != nil {
+			f.t.Fatalf("decode hello: %v; body=%s", err, body)
+		}
+	}
+	return code, h, body
+}
+
+func (f *fixture) self(sid, action string) (int, team.RelaySelfResponse, []byte) {
+	f.t.Helper()
+	code, body := f.do(http.MethodPost, "/api/relay/self", team.RelaySelfRequest{SessionID: sid, Action: action})
+	var r team.RelaySelfResponse
+	if code == http.StatusOK {
+		if err := json.Unmarshal(body, &r); err != nil {
+			f.t.Fatalf("decode self: %v; body=%s", err, body)
+		}
+	}
+	return code, r, body
+}
+
+// Spec U13 / §8.7: a member has no switch — its hello answers role member
+// and self_relay off whatever the host switches say (the binding d3 ask).
+// Mutation gate: relayRole back to "none" → red.
+func TestRelayHello_MemberAnswersSelfRelayOff(t *testing.T) {
+	f := newFixture(t)
+	f.makeMember("sid-1")
+	for _, sw := range everySwitch {
+		f.switches.set(sw)
+		code, h, body := f.hello("sid-1")
+		if code != http.StatusOK || !h.OK || h.Role != "member" || h.SelfRelay != "off" {
+			t.Fatalf("member hello under %+v: %d %s, want role member, self_relay off", sw, code, body)
+		}
+	}
+	f.switches.set(hostconfig.DefaultRelaySwitches)
+	if code, h, body := f.hello("sid-2"); code != http.StatusOK || h.Role != "lead" || h.SelfRelay != "on" {
+		t.Fatalf("the team's lead: %d %s, want role lead, on", code, body)
+	}
+}
+
+// Spec §8.1 / §14: a member's self-relay begin is 409 member_relay_is_leads
+// (exit 13) under every switch setting, and nothing is opened — no op, no
+// approval row, no event, no id minted. Mutation gate: relayRole back to
+// "none" → red (begin answers 201, or self_relay_off).
+func TestRelayBegin_MemberIsRefused(t *testing.T) {
+	f := newFixture(t)
+	f.makeMember("sid-1")
+	for _, sw := range everySwitch {
+		f.switches.set(sw)
+		code, body := f.do(http.MethodPost, "/api/relay/begin", beginReq("sid-1"))
+		if e := decodeErr(t, body); code != http.StatusConflict || e.Error != team.ErrMemberRelayIsLeads {
+			t.Fatalf("member begin under %+v: %d %s, want 409 %s", sw, code, body, team.ErrMemberRelayIsLeads)
+		}
+	}
+	if active, _ := f.m.store.ListActiveRelayOps(); len(active) != 0 {
+		t.Fatalf("active ops after refused begins = %+v", active)
+	}
+	if open, _ := f.m.store.ListOpen(); len(open) != 0 {
+		t.Fatalf("open approvals after refused begins = %+v", open)
+	}
+	if n := len(f.events()); n != 0 {
+		t.Fatalf("%d events after refused begins", n)
+	}
+	// The team's lead may still self-relay (self_lead on): its op gets the
+	// first ids, so the refusals minted none.
+	f.switches.set(hostconfig.DefaultRelaySwitches)
+	if out := f.begin("sid-2"); out.Op.ID != rid(1) || out.RequestID != rid(2) {
+		t.Fatalf("lead begin = %+v, want op %s request %s", out, rid(1), rid(2))
+	}
+}
+
+// Spec §8.7 (a): `/relay on` and `/relay off` in a member answer
+// member_relay_is_leads and store no pause; status is 200 with member true,
+// self_relay off and no host switch.
+func TestRelaySelf_OnOffInAMemberIsRefusedStatusSaysMember(t *testing.T) {
+	f := newFixture(t)
+	f.makeMember("sid-1")
+	for _, action := range []string{"on", "off"} {
+		code, _, body := f.self("sid-1", action)
+		if e := decodeErr(t, body); code != http.StatusConflict || e.Error != team.ErrMemberRelayIsLeads {
+			t.Fatalf("member self %s: %d %s, want 409 %s", action, code, body, team.ErrMemberRelayIsLeads)
+		}
+	}
+	if paused, err := f.m.store.SelfRelayPaused("sid-1"); err != nil || paused {
+		t.Fatalf("a refused self off stored a pause: paused=%v err=%v", paused, err)
+	}
+	code, r, body := f.self("sid-1", "status")
+	if code != http.StatusOK || r.SelfRelay != "off" || r.HostSwitch || !r.Member {
+		t.Fatalf("member status: %d %s, want off, no host switch, member", code, body)
+	}
+}
+
+// Spec §8.7 (a): a lead reads relay.self_lead and an ordinary session
+// relay.self_solo; the pause narrows a lead too.
+func TestRelayHello_LeadReadsTheLeadSwitch(t *testing.T) {
+	f := newFixture(t)
+	seedTeam(t, f.m.store, uid(9), "sid-1", f.clock.Load())
+	f.switches.set(hostconfig.RelaySwitches{SelfSolo: true, SelfLead: false})
+	if code, h, body := f.hello("sid-1"); code != http.StatusOK || h.Role != "lead" || h.SelfRelay != "off" {
+		t.Fatalf("lead, self_lead off: %d %s", code, body)
+	}
+	if code, h, body := f.hello("sid-2"); code != http.StatusOK || h.Role != "none" || h.SelfRelay != "on" {
+		t.Fatalf("solo, self_solo on: %d %s", code, body)
+	}
+	if code, r, body := f.self("sid-1", "status"); code != http.StatusOK || r.SelfRelay != "off" || r.HostSwitch || r.Member {
+		t.Fatalf("lead status, self_lead off: %d %s", code, body)
+	}
+	code, body := f.do(http.MethodPost, "/api/relay/begin", beginReq("sid-1"))
+	if e := decodeErr(t, body); code != http.StatusConflict || e.Error != team.ErrSelfRelayOff {
+		t.Fatalf("lead begin, self_lead off: %d %s, want 409 %s", code, body, team.ErrSelfRelayOff)
+	}
+
+	f.switches.set(hostconfig.RelaySwitches{SelfSolo: false, SelfLead: true})
+	if code, h, body := f.hello("sid-1"); code != http.StatusOK || h.Role != "lead" || h.SelfRelay != "on" {
+		t.Fatalf("lead, self_lead on: %d %s", code, body)
+	}
+	if code, h, body := f.hello("sid-2"); code != http.StatusOK || h.Role != "none" || h.SelfRelay != "off" {
+		t.Fatalf("solo, self_solo off: %d %s", code, body)
+	}
+	if code, r, body := f.self("sid-1", "off"); code != http.StatusOK || r.SelfRelay != "paused" || !r.HostSwitch || r.Member {
+		t.Fatalf("lead self off: %d %s, want paused under self_lead", code, body)
+	}
+}
+
+// D4: when its team ends, a member is an ordinary session again — role
+// none, the solo switch, its own pause, and begin opens. A killed member of
+// a live team is none too.
+func TestRelayRole_MemberOfAnEndedTeamIsNone(t *testing.T) {
+	f := newFixture(t)
+	f.makeMember("sid-1")
+	if ended, err := f.m.store.EndTeam(uid(9), "sid-2", team.TeamEndLeadGone, f.clock.Load()); err != nil || !ended {
+		t.Fatalf("end: ended=%v err=%v", ended, err)
+	}
+	if code, h, body := f.hello("sid-1"); code != http.StatusOK || h.Role != "none" || h.SelfRelay != "on" {
+		t.Fatalf("member of an ended team: %d %s, want role none, on", code, body)
+	}
+	if code, h, body := f.hello("sid-2"); code != http.StatusOK || h.Role != "none" {
+		t.Fatalf("lead of an ended team: %d %s, want role none", code, body)
+	}
+	if code, r, body := f.self("sid-1", "off"); code != http.StatusOK || r.SelfRelay != "paused" || r.Member {
+		t.Fatalf("self off: %d %s", code, body)
+	}
+	if code, r, body := f.self("sid-1", "on"); code != http.StatusOK || r.SelfRelay != "on" {
+		t.Fatalf("self on: %d %s", code, body)
+	}
+	if out := f.begin("sid-1"); out.Op.SessionID != "sid-1" {
+		t.Fatalf("begin = %+v", out)
+	}
+
+	g := newFixture(t)
+	seedTeam(t, g.m.store, uid(8), "lead-x", g.clock.Load())
+	seedMember(t, g.m.store, "op-2", uid(8), "sid-2", g.clock.Load())
+	if err := g.m.store.SetMemberState("op-2", team.MemberKilled, g.clock.Load()); err != nil {
+		t.Fatal(err)
+	}
+	if code, h, body := g.hello("sid-2"); code != http.StatusOK || h.Role != "none" || h.SelfRelay != "on" {
+		t.Fatalf("killed member: %d %s, want role none, on", code, body)
+	}
+}
+
+// Plan v3 deviation 12: a role that cannot be read is a 500 on hello, self
+// and begin, never "none" (fail closed, spec §8.7 (d)). Both switches are
+// off, so the role read is the only store read on hello, status and begin:
+// a role read that swallowed the error would answer 200 / 409 here.
+func TestRelayRole_StoreErrorIs500(t *testing.T) {
+	for _, table := range []string{"teams", "team_members"} {
+		t.Run(table, func(t *testing.T) {
+			f := newFixture(t)
+			f.switches.set(hostconfig.RelaySwitches{})
+			if _, err := f.m.store.db.Exec(`DROP TABLE ` + table); err != nil {
+				t.Fatal(err)
+			}
+			check := func(what string, code int, body []byte) {
+				t.Helper()
+				if e := decodeErr(t, body); code != http.StatusInternalServerError || e.Error != errStorage {
+					t.Fatalf("%s with an unreadable role: %d %s, want 500 %s", what, code, body, errStorage)
+				}
+			}
+			code, _, body := f.hello("sid-1")
+			check("hello", code, body)
+			for _, action := range []string{"status", "on", "off"} {
+				code, _, body := f.self("sid-1", action)
+				check("self "+action, code, body)
+			}
+			code, body = f.do(http.MethodPost, "/api/relay/begin", beginReq("sid-1"))
+			check("begin", code, body)
+			if paused, err := f.m.store.SelfRelayPaused("sid-1"); err != nil || paused {
+				t.Fatalf("self off stored a pause: paused=%v err=%v", paused, err)
+			}
+			if active, _ := f.m.store.ListActiveRelayOps(); len(active) != 0 {
+				t.Fatalf("begin opened an op: %+v", active)
+			}
+		})
+	}
+}

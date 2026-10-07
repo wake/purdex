@@ -140,7 +140,7 @@ type RelaySelfRequest struct {
 type RelaySelfResponse struct {
 	SelfRelay  string `json:"self_relay"`  // "on" | "off" | "paused"
 	HostSwitch bool   `json:"host_switch"` // the host switch that applies to this session's role
-	Member     bool   `json:"member"`      // a member has no switch (U13); false until P4
+	Member     bool   `json:"member"`      // an active member of a live team: it has no switch (U13)
 }
 
 // RelayReportRequest is POST /api/relay/ops/{id}/report.
