@@ -207,6 +207,7 @@ describe('useExecutionActions — native image attachments (phase E)', () => {
     Object.assign(URL, { revokeObjectURL: revoke })
     try {
       useExecutionStore.getState().setPendingSend(H, E, true)
+      useExecutionStore.getState().setSendLocked(H, E, true)
       const { result } = renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
       let ok = true
       await act(async () => { ok = await result.current.handleSend('t', { attachments, previews: [{ previewUrl: 'blob:x', media_type: 'image/png' }] }) })

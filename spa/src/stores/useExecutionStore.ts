@@ -60,6 +60,8 @@ interface ExecutionStore {
   setLease: (hostId: string, executionId: string, lease: ExecutionState['lease']) => void
   setLeaseError: (hostId: string, executionId: string, err: ExecutionState['leaseError']) => void
   setPendingSend: (hostId: string, executionId: string, v: boolean) => void
+  /** The box lock: this pane's send POST is unresolved and not yet accepted (see ExecutionState.sendLocked). */
+  setSendLocked: (hostId: string, executionId: string, v: boolean) => void
   setPendingLocal: (hostId: string, executionId: string, local: ExecutionState['pendingLocal']) => void
   setSendError: (hostId: string, executionId: string, err: ExecutionState['sendError']) => void
   setLastTurn: (hostId: string, executionId: string, turn: ExecutionState['lastTurn']) => void
@@ -119,7 +121,10 @@ export const useExecutionStore = create<ExecutionStore>()(subscribeWithSelector(
 
     setLeaseError: (h, e, err) => patch(h, e, (c) => ({ ...c, leaseError: err })),
 
-    setPendingSend: (h, e, v) => patch(h, e, (c) => ({ ...c, pendingSend: v })),
+    // sendLocked implies pendingSend: ending the turn flag also frees the box.
+    setPendingSend: (h, e, v) => patch(h, e, (c) => ({ ...c, pendingSend: v, ...(v ? {} : { sendLocked: false }) })),
+
+    setSendLocked: (h, e, v) => patch(h, e, (c) => ({ ...c, sendLocked: v })),
 
     setPendingLocal: (h, e, local) => patch(h, e, (c) => ({ ...c, pendingLocal: local })),
 

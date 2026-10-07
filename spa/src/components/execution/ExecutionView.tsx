@@ -435,7 +435,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // this clears itself without redesigning the reconnect path.
   const streamDead = st.historyLoaded && st.sse === 'closed' && !!st.sseError
   // One gate for everything that sends: the input and the quick replies.
-  const inputDisabled = st.pendingSend || encodingBusy || !st.historyLoaded || streamDead || takeBackBusy || exitBusy
+  const inputDisabled = st.sendLocked || encodingBusy || !st.historyLoaded || streamDead || takeBackBusy || exitBusy
   const placeholder = streamDead ? t('execution.input.disconnected') : undefined
   const leaseHeld = st.leaseError?.code === 'lease_held'
 
@@ -691,7 +691,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       <QuickReplyDock replies={quickReplies} onSend={(text) => { sendWithAttachments(text, { restoreDraft: false }) }}
         disabled={inputDisabled || !attachGate.ok} />
       <WorkerInput key={draft ?? ''} initialValue={draft ?? readWorkerDraft(draftKey)} onSend={(text) => sendWithAttachments(text, { draftText: text })}
-        disabled={inputDisabled} pendingSend={st.pendingSend} placeholder={placeholder} isActive={isActive} isFocusTarget={isFocusTarget} onTextChange={onTextChange}
+        disabled={inputDisabled} pendingSend={st.sendLocked} placeholder={placeholder} isActive={isActive} isFocusTarget={isFocusTarget} onTextChange={onTextChange}
         turnLive={st.turnLive} onInterrupt={() => void handleInterrupt()}
         chips={uploads.chips} onRemoveChip={removeChip} onAddFiles={canAttach ? uploads.add : undefined} />
       {dragging && (

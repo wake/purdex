@@ -79,6 +79,14 @@ export interface ExecutionState {
   lease: { leaseId: string; expiresAt: number } | null
   leaseError: { code: string; heldBy?: string } | null
   pendingSend: boolean
+  /**
+   * This pane's own send POST is unresolved and the daemon has not accepted the
+   * message yet (no POST response, no `execution.message_accepted`). The reply
+   * box is locked only while this holds; `pendingSend` (the turn the send
+   * started, until its result) no longer locks it, so further messages can be
+   * typed and queued by the daemon. Invariant: sendLocked implies pendingSend.
+   */
+  sendLocked: boolean
   /** Optimistic user bubble; replaced by the durable execution.message_accepted. */
   pendingLocal: {
     text: string
@@ -145,6 +153,7 @@ export function defaultExecutionState(): ExecutionState {
     lease: null,
     leaseError: null,
     pendingSend: false,
+    sendLocked: false,
     pendingLocal: null,
     sendError: null,
     lastTurn: null,
@@ -527,7 +536,7 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
 
   if (!isLifecycleKind(ev.kind)) {
     next = { ...next, messages: [...next.messages, p as StreamMessage] }
-    if (ev.kind === 'result' && p.parent_tool_use_id == null) next = { ...next, pendingSend: false }
+    if (ev.kind === 'result' && p.parent_tool_use_id == null) next = { ...next, pendingSend: false, sendLocked: false }
     return next
   }
 
@@ -549,7 +558,7 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // summary moved, so the hook refetches (summaryStale) like any other.
       // Same empty-vs-absent distinction as execution.delegated above.
       const text = str(p, 'text')
-      next = markTurnStart({ ...next, pendingLocal: null, summaryStale: true }, ev.created_at, str(p, 'turn_id') || null)
+      next = markTurnStart({ ...next, pendingLocal: null, sendLocked: false, summaryStale: true }, ev.created_at, str(p, 'turn_id') || null)
       const bubble = turnBubble(text, p.attachments)
       if (bubble) next = { ...next, messages: [...next.messages, bubble] }
       return next
@@ -560,19 +569,19 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // execution/turn.go:568 — {turn_id, reason, state, detail?}; state is
       // the execution's state after the turn ended (idle, or failed, or a
       // terminal state that outranked it), so take it rather than assume idle.
-      next = { ...next, pendingSend: false }
+      next = { ...next, pendingSend: false, sendLocked: false }
       const reason = str(p, 'reason')
       const state = str(p, 'state') ?? 'idle'
       return patchSummary(next, { state, ...(reason ? { last_turn_reason: reason } : {}) })
     }
     case 'execution.error':
-      return patchSummary({ ...next, pendingSend: false }, {})
+      return patchSummary({ ...next, pendingSend: false, sendLocked: false }, {})
     case 'execution.rejected':
       return patchSummary(next, { state: 'rejected', ...(str(p, 'reason') ? { reject_reason: str(p, 'reason') } : {}) })
     case 'execution.terminated':
       // execution/service.go:1184 — {principal_id} only; terminal_reason is
       // the summary's business, the refetch brings it.
-      return patchSummary({ ...next, pendingSend: false }, { state: 'terminated' })
+      return patchSummary({ ...next, pendingSend: false, sendLocked: false }, { state: 'terminated' })
     case 'execution.archived':
       return patchSummary(next, { archived: true })
     case 'execution.unarchived':
@@ -597,12 +606,12 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // the input must not stay locked forever, so clear pendingSend;
       // pendingLocal (the optimistic bubble) is left alone — the turn is
       // still live, just orphaned from this client's view.
-      return { ...next, pendingSend: false, summaryStale: true }
+      return { ...next, pendingSend: false, sendLocked: false, summaryStale: true }
     case 'execution.turn_stalled':
       // Same restart reconcile, but for a queued turn the daemon withdraws
       // outright: both the pending flag and the optimistic bubble must
       // clear, or the input stays locked and a bubble is stuck forever.
-      return { ...next, pendingSend: false, pendingLocal: null, summaryStale: true }
+      return { ...next, pendingSend: false, sendLocked: false, pendingLocal: null, summaryStale: true }
     default:
       // interrupt_requested / interrupted …: nothing to render in P-B; the
       // summary refetch carries the state.

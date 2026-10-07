@@ -124,6 +124,94 @@ describe('ExecutionView', () => {
     expect(useExecutionStore.getState().executions[KEY].pendingSend).toBe(true)
   })
 
+  // Input unlock rule: the box is locked only while this pane's own send is unaccepted.
+  describe('input lock (own send unaccepted only)', () => {
+    const accepted = (seq: number, text: string) => act(() => {
+      useExecutionStore.getState().applyEvents(H, E, [
+        { seq, execution_id: E, kind: 'execution.message_accepted', payload: { text, turn_id: `t${seq}` }, created_at: 0 },
+      ])
+    })
+    const send = (text: string) => {
+      const box = screen.getByRole('textbox')
+      fireEvent.change(box, { target: { value: text } })
+      fireEvent.keyDown(box, { key: 'Enter' })
+    }
+
+    it('a: locked while the POST is unresolved, unlocked once it resolves, and a second message is sent and shown queued', async () => {
+      let resolveFirst!: (v: { turn_id: string; delivery: 'delivered' | 'queued' }) => void
+      vi.mocked(api.sendMessage)
+        .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+        .mockResolvedValueOnce({ turn_id: 't2', delivery: 'queued' })
+      render(<ExecutionView {...base} isActive />)
+      send('first')
+      await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
+      await act(async () => { resolveFirst({ turn_id: 't1', delivery: 'delivered' }); await Promise.resolve(); await Promise.resolve() })
+      const s1 = useExecutionStore.getState().executions[KEY]
+      expect(s1.sendLocked).toBe(false)
+      expect(s1.pendingSend).toBe(true) // the turn is still running; it no longer locks the box
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
+      accepted(1, 'first')
+      send('second')
+      await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(2))
+      expect(api.sendMessage).toHaveBeenLastCalledWith(H, E, 'ls_1', 'second')
+      await waitFor(() => expect(screen.getByText(/queued/i)).toBeInTheDocument())
+      expect(screen.getByText('second')).toBeInTheDocument()
+      accepted(2, 'second')
+      expect(screen.getAllByText('first')).toHaveLength(1)
+      expect(screen.getAllByText('second')).toHaveLength(1)
+      expect(screen.queryByText(/queued/i)).toBeNull()
+    })
+
+    it('a: message_accepted unlocks the box before the POST response arrives', async () => {
+      vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise(() => {}))
+      render(<ExecutionView {...base} isActive />)
+      send('first')
+      await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+      expect(useExecutionStore.getState().executions[KEY].sendLocked).toBe(true)
+      accepted(1, 'first')
+      expect(useExecutionStore.getState().executions[KEY].sendLocked).toBe(false)
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
+    })
+
+    it('a: a failed POST unlocks the box and restores the text', async () => {
+      vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'bad'))
+      render(<ExecutionView {...base} isActive />)
+      send('first')
+      await waitFor(() => expect(screen.getByTestId('send-error')).toBeInTheDocument())
+      expect(useExecutionStore.getState().executions[KEY].sendLocked).toBe(false)
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
+    })
+
+    it('b: a second send before the first is accepted is blocked, and the box shows the lock', async () => {
+      vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise(() => {}))
+      render(<ExecutionView {...base} isActive />)
+      send('first')
+      await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
+      expect(screen.getByRole('textbox')).toHaveAttribute('readonly')
+      send('second')
+      expect(api.sendMessage).toHaveBeenCalledTimes(1)
+    })
+
+    it('c: running background tasks and a live turn never lock the box', () => {
+      patchExec({ turnLive: true, pendingSend: false, tasks: { a: {
+        task_id: 'a', turn_id: 't1', kind: 'shell', task_type: 'local_bash', tool_use_id: 'tu_a', parent_tool_use_id: null, command: 'pnpm dev',
+        description: '', backgrounded: true, status: 'running', provider_status: null, closed_by: null, started_at: Date.now(), ended_at: null, startSeq: 1,
+      } } as unknown as Exec['tasks'] })
+      render(<ExecutionView {...base} isActive />)
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
+    })
+
+    it('d: quick replies follow the same gate (enabled mid-turn, disabled while unaccepted)', () => {
+      render(<ExecutionView {...base} isActive />)
+      act(() => { useExecutionStore.getState().setPendingSend(H, E, true) })
+      for (const b of screen.queryAllByTestId('quick-reply')) expect(b).not.toBeDisabled()
+      act(() => { useExecutionStore.getState().setSendLocked(H, E, true) })
+      for (const b of screen.queryAllByTestId('quick-reply')) expect(b).toBeDisabled()
+    })
+  })
+
   it('locks the input synchronously before the lease resolves, so a second submit while acquisition is in flight is a no-op', async () => {
     let resolveLease!: (v: string) => void
     ensureLease.mockReturnValueOnce(new Promise<string>((resolve) => { resolveLease = resolve }))
@@ -1485,7 +1573,7 @@ describe('ExecutionView — quick replies (R3 T2.1)', () => {
 
   it('is disabled while a send is pending', async () => {
     render(<ExecutionView {...base} isActive />)
-    act(() => useExecutionStore.getState().setPendingSend(H, E, true))
+    act(() => { useExecutionStore.getState().setPendingSend(H, E, true); useExecutionStore.getState().setSendLocked(H, E, true) })
     for (const b of screen.getAllByTestId('quick-reply')) expect(b).toBeDisabled()
     act(() => useExecutionStore.getState().setPendingSend(H, E, false))
     for (const b of screen.getAllByTestId('quick-reply')) expect(b).not.toBeDisabled()
@@ -2074,7 +2162,7 @@ describe('ExecutionView — attachments', () => {
   // Matches the disabled `+` button: while a send is in flight the input is
   // disabled, so a drop must not open the overlay or upload either.
   it('takes no drop while the input is disabled (a send in flight)', () => {
-    act(() => useExecutionStore.getState().setPendingSend(H, E, true))
+    act(() => { useExecutionStore.getState().setPendingSend(H, E, true); useExecutionStore.getState().setSendLocked(H, E, true) })
     render(<ExecutionView {...base} isActive />)
     const root = screen.getByTestId('execution-view')
     fireEvent.dragEnter(root, { dataTransfer: { types: ['Files'], files: [txt('a.txt')] } })
@@ -2380,7 +2468,7 @@ describe('ExecutionView — worker prelude', () => {
 // and after a send comes back, and only as its tab's focus target.
 describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
   const nextFrame = () => act(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
-  const setSending = (v: boolean) => act(() => { useExecutionStore.getState().setPendingSend(H, E, v) })
+  const setSending = (v: boolean) => act(() => { useExecutionStore.getState().setPendingSend(H, E, v); useExecutionStore.getState().setSendLocked(H, E, v) })
 
   it('mounting active as the focus target focuses the reply box', async () => {
     render(<ExecutionView {...base} isActive isFocusTarget />)
