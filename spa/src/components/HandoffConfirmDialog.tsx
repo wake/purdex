@@ -21,13 +21,14 @@ import {
   handToNex,
   handoffBlockReasonNow,
   executionContentFor,
+  openMissedExecution,
   handoffFromFor,
   handoffErrorMessage,
   handoffConfirmBodyKey,
   manualResumeHint,
   type HandToNexArgs,
 } from '../lib/nex/handoff'
-import { isRefShownNow, landOnHostsPageIfHidden } from '../lib/shown-hosts'
+import { isRefShownNow } from '../lib/shown-hosts'
 import { ConfirmDialog } from './ConfirmDialog'
 
 interface Props extends Omit<HandToNexArgs, 'keepSession' | 'fromTitle' | 'askApproval'> {
@@ -92,12 +93,9 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
         const from = handoffFromFor(args, result)
         toast.show(
           t('handoff.success'),
-          () => {
-            // Re-checked at click (H2d-3): hidden since → the Hosts page on that host, never an execution tab.
-            if (landOnHostsPageIfHidden(args.hostId)) return
-            // The same view the swap would have written (shell cleanup §9.4): a chat handoff opens in chat here too.
-            useTabStore.getState().openSingletonTab(executionContentFor(args.hostId, result.execution_id, from, fromTitle, args.mode))
-          },
+          // Re-checked at click (H2d-3). The same view the swap would have written (shell cleanup §9.4): a chat
+          // handoff opens in chat here too.
+          () => openMissedExecution(args.hostId, executionContentFor(args.hostId, result.execution_id, from, fromTitle, args.mode)),
           t('handoff.open_execution'),
         )
       }

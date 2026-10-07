@@ -12,6 +12,7 @@ import { exitWorker } from '../../lib/nex/exit-worker'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useExecutionListStore } from '../../stores/useExecutionListStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { ExecutionSummary, NexCapabilities } from '../../lib/nex/types'
 
 vi.mock('../../lib/nex/handoff', async (o) => ({ ...(await o<typeof import('../../lib/nex/handoff')>()), takeToTerminal: vi.fn() }))
@@ -241,10 +242,12 @@ describe('WorkerEndedPane', () => {
       fireEvent.click(screen.getByTestId('worker-rebuild'))
       await waitFor(() => expect(rebuildAsWorker).toHaveBeenCalled())
     }
-    it('swapped:false toasts and refetches the list', async () => {
+    it('swapped:false toasts with 開啟 (#1627 B) and refetches the list', async () => {
+      useShownHostsStore.setState({ ids: [H] })
       vi.mocked(rebuildAsWorker).mockResolvedValue({ result: { execution_id: 'n', state: 'running' }, swapped: false })
       await rebuild()
       await waitFor(() => expect(useUndoToast.getState().toast?.message).toMatch(/Rebuilt as a new worker, but the original tab/))
+      expect(useUndoToast.getState().toast?.actionLabel).toBe('Open')
       expect(refetch).toHaveBeenCalledWith(H)
     })
     it('swapped:true does neither', async () => {
