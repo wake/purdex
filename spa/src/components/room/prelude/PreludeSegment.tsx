@@ -218,7 +218,10 @@ export default function PreludeSegment(props: PreludeSegmentProps) {
       </AttachmentSourceContext.Provider>
     )
   }
-  // A footer is a sibling right after its span's last row (the row's own key is untouched).
+  // A footer is a sibling right after its span's last entry (the row's own key is untouched): the span's last line, as
+  // the live transcript's turn footer, also when that entry is a subagent child (drawn inside its Task card, nothing
+  // here) — a span's entries are contiguous (`preludeBlocks` closes one at every marker and note), so nothing falls
+  // between its last drawn row and the footer (#1627 D).
   const rows: ReactNode[] = []
   for (const e of props.entries) {
     if (e.kind !== 'message') { rows.push(entryNode(e)); continue }
