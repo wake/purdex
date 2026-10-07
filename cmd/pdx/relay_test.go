@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -102,6 +103,8 @@ func (f *fakeRelayDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(f.reportBody)
 	case strings.HasPrefix(r.URL.Path, "/api/relay/ops/"):
 		_ = json.NewEncoder(w).Encode(team.RelayOp{ID: strings.TrimPrefix(r.URL.Path, "/api/relay/ops/"), State: team.RelayClaimed})
+	case r.URL.Path == "/api/relay/prompts":
+		_ = json.NewEncoder(w).Encode(team.NewRelayPrompts(team.RelayPromptBodies{Write: "寫 {{path}}\n<&>"}))
 	default:
 		http.NotFound(w, r)
 	}
@@ -389,6 +392,78 @@ func TestRelayCmd_ReportNotReady503IsExit20(t *testing.T) {
 	}
 	if reports < 2 {
 		t.Fatalf("a 503 not_ready must be retried, got %d report(s): %v", reports, paths)
+	}
+}
+
+// Spec §8.8: `pdx relay prompts` GETs /api/relay/prompts and prints its
+// JSON on ONE line (the mod JSON.parses stdout), exit 0.
+func TestRelayPrompts_PrintsOneJSONLine(t *testing.T) {
+	d := &fakeRelayDaemon{}
+	code, stdout, stderr := driveRelay(t, context.Background(), d, "prompts")
+	if code != ExitOK || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if strings.Count(stdout, "\n") != 1 || !strings.HasSuffix(stdout, "\n") {
+		t.Fatalf("stdout must be one line: %q", stdout)
+	}
+	var got team.RelayPrompts
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("stdout=%q err=%v", stdout, err)
+	}
+	if want := team.NewRelayPrompts(team.RelayPromptBodies{Write: "寫 {{path}}\n<&>"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+	// The client reads /api/health (boot id) first; then one GET.
+	if paths, _ := d.snapshot(); len(paths) == 0 || paths[len(paths)-1] != "GET /api/relay/prompts" || strings.Count(strings.Join(paths, ","), "prompts") != 1 {
+		t.Fatalf("requests = %v", paths)
+	}
+}
+
+// A daemon from before P9a-1 has no route: plain 404 → 21 (spec §8.8).
+func TestRelayPrompts_Plain404Is21(t *testing.T) {
+	code, stdout, stderr := driveRelay(t, context.Background(), http.NotFoundHandler(), "prompts")
+	if code != ExitUnsupported || stdout != "" || !strings.Contains(stderr, "unsupported") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+// Any other API error is exit 1 with the code as the last stderr token.
+func TestRelayPrompts_ServerErrorIs1(t *testing.T) {
+	d := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(team.APIError{Error: "storage_error", Detail: "host config relay prompts unreadable"})
+	})
+	code, stdout, stderr := driveRelay(t, context.Background(), d, "prompts")
+	if toks := strings.Fields(stderr); code != ExitError || stdout != "" || len(toks) == 0 || toks[len(toks)-1] != "storage_error" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+// A daemon that stays unreachable through the grace (the fake clock makes
+// it instant) is exit 20 with daemon_unavailable as the last stderr token.
+func TestRelayPrompts_UnreachableIs20(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	srv.Close()
+	var stdout, stderr bytes.Buffer
+	code := runRelayCmd(context.Background(), []string{"prompts", "--config", cfgPath}, &stdout, &stderr, leadClockOpt())
+	if toks := strings.Fields(stderr.String()); code != ExitUnavailable || stdout.Len() != 0 || len(toks) == 0 || toks[len(toks)-1] != "daemon_unavailable" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+// An extra argument or an unknown flag is a usage error (exit 2) that
+// reaches no daemon.
+func TestRelayPrompts_ExtraArgIs2(t *testing.T) {
+	d := &fakeRelayDaemon{}
+	for _, args := range [][]string{{"prompts", "write"}, {"prompts", "--session", "s"}} {
+		code, stdout, stderr := driveRelay(t, context.Background(), d, args...)
+		if code != ExitUsage || stdout != "" || !strings.Contains(stderr, "pdx relay prompts [--config <path>]") {
+			t.Fatalf("%v: code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
+	}
+	if paths, _ := d.snapshot(); len(paths) != 0 {
+		t.Fatalf("usage errors must not reach the daemon: %v", paths)
 	}
 }
 
