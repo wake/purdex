@@ -211,13 +211,8 @@ func (m *Module) spawnView(r spawnRow, leadAddress string) (team.SpawnOp, error)
 		if mr.SpawnOp != r.ID {
 			continue
 		}
-		addr := ""
-		if o, ok, err := m.origins.ResolveOriginBySession(mr.SessionID); err == nil && ok {
-			addr = o.Address
-		}
-		op.Member = &team.Member{SessionID: mr.SessionID, Ref: mr.Ref, Address: addr, TeamID: mr.TeamID, HostID: mr.HostID,
-			Title: mr.Title, Cwd: mr.Cwd, TmuxSession: mr.TmuxSession, State: mr.State, Model: mr.Model, Effort: mr.Effort,
-			SpawnOp: mr.SpawnOp, CreatedAt: mr.CreatedAt}
+		v := m.memberView(mr) // as GET /api/team shows it (P4-6)
+		op.Member = &v
 		return op, nil
 	}
 	return team.SpawnOp{}, fmt.Errorf("spawn op %s is done but has no member row", r.ID)

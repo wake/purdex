@@ -268,6 +268,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/team/approvals/{id}/decide", m.handleDecide)
 	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)
 	mux.HandleFunc("POST /api/team/spawns", m.handleSpawn) // P4-5, spec §7.2
+	mux.HandleFunc("GET /api/team", m.handleTeam)          // P4-6, spec §7.3
 	mux.HandleFunc("POST /api/hooks/decide", m.handleHookDecide)
 	// P5a relay routes (spec §8.3, §8.7); all under TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/relay/hello", m.handleRelayHello)
