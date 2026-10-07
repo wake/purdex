@@ -245,7 +245,14 @@ function detailOf(status: WorkerProjection['status'], src: Source): Record<strin
 const signatureOf = (agentType: string, p: WorkerProjection): string =>
   `${agentType}|${p.status}|${p.subagents.map((s) => s.id).join(',')}`
 
-interface Dispatched { hostId: string; code: string; status: WorkerProjection['status']; sig: string }
+interface Dispatched {
+  hostId: string
+  code: string
+  status: WorkerProjection['status']
+  sig: string
+  /** The row source's `turn_count` when the last dispatch came from a list row; null for a live source. */
+  rowTurns: number | null
+}
 
 /** Start the projection; returns its teardown. Exported for tests — the app mounts it through the hook. */
 export function startWorkerAgentProjection(): () => void {
@@ -281,9 +288,28 @@ export function startWorkerAgentProjection(): () => void {
       const agentType = src.provider ? providerAgentType(src.provider) : ''
       const sig = signatureOf(agentType, projection)
       const prev = dispatched.get(key)
-      if (prev?.sig === sig) continue
+      // A list row knows only the current state and its refreshes are debounced, so a running -> idle between two
+      // refreshes leaves the status signature unchanged and the second Stop would be swallowed. `turn_count` still
+      // moves with every turn, so between two ROW-sourced dispatches a changed count is a new event. It is
+      // deliberately not part of `sig`: a live <-> row source switch (pane eviction) must not look like a new Stop.
+      const rowTurns = src.live ? null : (src.summary.turn_count ?? 0)
+      const missedTurn = prev !== undefined && prev.rowTurns !== null && rowTurns !== null && rowTurns !== prev.rowTurns
+      if (prev?.sig === sig && !missedTurn) continue
       const code = execAgentCode(w.executionId)
-      dispatched.set(key, { hostId: w.hostId, code, status: projection.status, sig })
+      // Terminated (not merely archived): an explicit event for the dispatcher before the clear, which would
+      // otherwise take the key out silently. Only for a worker this engine saw alive — a first sight of an already
+      // terminated one (reload) is history, not news. The dispatcher still suppresses it for the active, focused tab.
+      if (projection.status === 'clear' && src.summary.state === 'terminated' && prev !== undefined && prev.status !== 'clear') {
+        dispatch(w.hostId, code, {
+          agent_type: agentType,
+          status: 'idle',
+          subagents: [],
+          raw_event_name: 'WorkerTerminated',
+          broadcast_ts: Math.max(Date.now(), src.summary.updated_at),
+          detail: {},
+        })
+      }
+      dispatched.set(key, { hostId: w.hostId, code, status: projection.status, sig, rowTurns })
       dispatch(w.hostId, code, {
         agent_type: agentType,
         status: projection.status,

@@ -52,16 +52,20 @@ func (m *Module) verifyEvent(req EventRequest) verifyDecision {
 	if strings.TrimSpace(actualStart) != strings.TrimSpace(req.SenderStartTime) {
 		return verifyDecision{Reason: "pid_reused"}
 	}
-	if m.tmux == nil {
-		log.Printf("[agent][verify] warning: tmux executor unavailable for pid=%d pane=%s", req.SenderPID, req.TmuxPaneID)
-		return verifyDecision{Reason: "tmux_unavailable"}
-	}
-	panePID, err := resolvePanePIDFn(m.tmux, req.TmuxPaneID)
-	if err != nil {
-		return verifyDecision{Reason: "pane_unresolvable"}
-	}
-	if !pidAncestorIncludesFn(req.SenderPID, panePID) {
-		return verifyDecision{Reason: "pid_not_in_pane_tree"}
+	// A non-tmux session (no pane id) has no pane tree to be inside; the pid
+	// liveness, start-time and Identify checks still apply.
+	if req.TmuxPaneID != "" {
+		if m.tmux == nil {
+			log.Printf("[agent][verify] warning: tmux executor unavailable for pid=%d pane=%s", req.SenderPID, req.TmuxPaneID)
+			return verifyDecision{Reason: "tmux_unavailable"}
+		}
+		panePID, err := resolvePanePIDFn(m.tmux, req.TmuxPaneID)
+		if err != nil {
+			return verifyDecision{Reason: "pane_unresolvable"}
+		}
+		if !pidAncestorIncludesFn(req.SenderPID, panePID) {
+			return verifyDecision{Reason: "pid_not_in_pane_tree"}
+		}
 	}
 	provider, ok := m.registry.Get(req.AgentType)
 	if !ok {

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -92,6 +93,57 @@ type Liveness struct {
 	PidAlive  func(pid int) bool
 	StartTime func(pid int) (time.Time, error)         // kept for P1 fakes; unused per-entry once Info is set
 	Info      func(pid int) (agent.ProcessInfo, error) // optional; when non-nil, replaces StartTime and also supplies Argv/ExePath for proxy classification (D9)
+	// Zombie reports whether pid is a zombie (process state Z: exited, not yet
+	// reaped — kill(pid, 0) still succeeds for it and its registry file and
+	// inbox socket may still exist). Optional: nil means "never a zombie". It
+	// is asked only about entries that share a session id with another entry
+	// (dropZombieTwins), so a registry without duplicates costs no fork.
+	Zombie func(pid int) bool
+}
+
+// psZombie is DefaultLiveness's Zombie: the state column of `ps`, whose first
+// letter is Z for a zombie. The letter is not localized (unlike comm / the
+// <defunct> annotation some ps builds print), so no text of ps's is matched.
+func psZombie(pid int) bool {
+	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "stat=")
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return zombieState(string(out))
+}
+
+// zombieState reports whether a `ps -o stat=` value (e.g. "Ss", "Z+", "Z")
+// names a zombie.
+func zombieState(stat string) bool {
+	return strings.HasPrefix(strings.TrimSpace(stat), "Z")
+}
+
+// dropZombieTwins removes the zombie entries among those that share a session
+// id with another entry. A session that is exited-but-unreaped leaves its
+// registry file next to the live process that took over the same session id
+// (a resume), and the two together made one reference ambiguous. A session id
+// held by a single entry is left alone. Returns the survivors and how many
+// were dropped; each dropped one is confirmed dead.
+func dropZombieTwins(entries []Entry, live Liveness) ([]Entry, int) {
+	if live.Zombie == nil {
+		return entries, 0
+	}
+	count := make(map[string]int, len(entries))
+	for _, e := range entries {
+		count[e.SessionID]++
+	}
+	kept := entries[:0:0]
+	dropped := 0
+	for _, e := range entries {
+		if count[e.SessionID] > 1 && live.Zombie(e.PID) {
+			dropped++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	return kept, dropped
 }
 
 // killProbe is kill(2) — a package-level seam so DefaultLiveness's EPERM
@@ -120,7 +172,8 @@ func DefaultLiveness() Liveness {
 			}
 			return info.StartTime, nil
 		},
-		Info: agent.ReadProcessInfo,
+		Info:   agent.ReadProcessInfo,
+		Zombie: psZombie,
 	}
 }
 
@@ -392,6 +445,8 @@ func ReadRegistryDiag(dir string, live Liveness) (entries []Entry, diag Diagnosi
 		})
 	}
 
+	entries, droppedZombies := dropZombieTwins(entries, live)
+	diag.Dead += droppedZombies
 	return entries, diag, nil
 }
 
