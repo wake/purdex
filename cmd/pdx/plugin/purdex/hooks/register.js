@@ -1,17 +1,72 @@
-// Purdex mod (P5b-1): says hello to the daemon at an interactive session.start
-// and again after every /clear (the new conversation has a new session id,
-// M1, and the daemon keys mod presence by it — spec §8.3, P8a-1d).
-// The relay itself lands in P5b-2/P5b-3 (spec §8.7).
+// Purdex mod — self relay (spec §8.1–§8.3 steps 4–8, §8.7).
+//
+//   idle ──(turn.complete: used ≥ threshold, growth ≥ minGrowth, +10 since last ask)──▶ beginning
+//   beginning: `pdx relay begin --self` runs from a timer ──▶ awaiting, or back to idle on a refusal
+//   awaiting: a timer loops `pdx relay wait`; every prompt.submit waits on that loop (P5b-3)
+//   awaiting ──approved──▶ approved: write prompt submitted (nonce = op id), report writing
+//   approved ──(turn.complete of the write turn, file ok)──▶ clearing: report written, timer → /clear
+//   clearing ──(classic.SessionStart source=clear)──▶ seeding: report cleared --new-session, hello, seed prompt
+//   seeding ──(turn.complete of the seed turn)──▶ idle: report done, floor = tokens now
+//   awaiting ──denied / timeout / cancelled / unavailable──▶ idle (ask again at +10 points)
+//
+// Everything that starts a turn, runs a command or waits on the daemon goes
+// out from a $.clock.after timer, never inside a hook: $.command.run rejects
+// inside a hook the turn waits on (F3), and a daemon that is down answers
+// only after the client's 30 s grace, which no turn end, session start or
+// /clear may wait for (P5b-1 review). Hooks only read the engine and move
+// the state.
 
 const VERSION = '1' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
+const DEFAULT_THRESHOLD = 70
+const DEFAULT_MIN_GROWTH = 20000
+const REASK_POINTS = 10
+const MAX_FIX_ROUNDS = 2
+const WAIT_TIMEOUT_MS = 590_000 // $.process.run caps at 10 min (M24); pdx relay wait bounds itself to 9
 const CALL_TIMEOUT_MS = 35_000 // one daemonclient grace (30 s) plus slack
+const STEP_MS = 50 // the timer a step that starts a turn or a command waits for (F3)
+const REQUIRED = ['## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.', '## 8.']
+const STATUS_WAITING = '接力等待核准中'
+const TOAST_WAITING = '接力等待核准：請在 Purdex App 按核准或拒絕'
+const TOAST_GAVE_UP = '接力檔不完整，已放棄接力；對話照常繼續'
 
-// config: the installing daemon's config file (pdx.json "config"); '' lets
-// pdx fall back to its default one.
-const s = { interactive: false, pdx: 'pdx', config: '' }
+const fresh = () => ({
+  interactive: false,
+  envThreshold: false,
+  pdx: 'pdx',
+  config: '', // the installing daemon's config file (pdx.json "config"); '' lets pdx use its default
+  threshold: DEFAULT_THRESHOLD,
+  minGrowth: DEFAULT_MIN_GROWTH,
+  role: 'none',
+  state: 'idle', // idle | beginning | awaiting | approved | clearing | seeding
+  pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, seedNonce, who, wait }
+  lastAskPct: undefined,
+  floor: undefined,
+  fixRounds: 0,
+  writeTurnId: undefined,
+  seedTurnId: undefined,
+  outbox: [], // reports not yet landed, in order: { op, argv }
+  held: new Set(), // ops whose report did not land: their later reports wait for the next turn.complete
+  pumping: false,
+  again: false,
+})
+
+const s = fresh()
+
+function resetState() {
+  Object.assign(s, fresh())
+}
 
 function parseJSON(text) {
   try { return JSON.parse(text) } catch { return undefined }
+}
+
+function log($, text) {
+  try { $.ui.log('pdx-relay: ' + text) } catch {}
+}
+
+// later runs fn from a timer, outside every hook; a failure is logged.
+function later($, ms, fn) {
+  $.clock.after(ms, () => { void fn().catch((err) => log($, 'deferred call failed: ' + String(err))) })
 }
 
 async function run($, argv, timeoutMs) {
@@ -22,29 +77,271 @@ async function run($, argv, timeoutMs) {
   }
 }
 
-// relay runs `pdx relay <args>` against the daemon that installed the mod:
-// with a config in pdx.json every call carries `--config <path>`, so a
-// second daemon on this machine (another data dir) is never the one asked.
-function relay($, args, timeoutMs) {
-  return run($, ['relay', ...args, ...(s.config ? ['--config', s.config] : [])], timeoutMs)
+// pdx runs `pdx <args>` against the daemon that installed the mod: with a
+// config in pdx.json every call carries `--config <path>`, so a second
+// daemon on this machine (another data dir) is never the one asked.
+function pdx($, args, timeoutMs) {
+  return run($, [...args, ...(s.config ? ['--config', s.config] : [])], timeoutMs)
+}
+
+// stderrCode is the 409 code: the last whitespace-separated stderr token (P5a-2c).
+function stderrCode(r) {
+  return (r.stderr || '').trim().split(/\s+/).pop() || ''
 }
 
 async function hello($) {
   const sid = await $.session.id()
-  await relay($, ['hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
+  const r = await pdx($, ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
+  const h = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
+  if (!h) return // any other exit: keep the defaults
+  if (h.role) s.role = h.role
+  if (!s.envThreshold && h.threshold > 0) s.threshold = h.threshold
+  if (h.min_growth > 0) s.minGrowth = h.min_growth
 }
 
-// helloLater sends hello from a timer, never inside the hook: a daemon that
-// is down or restarting answers only after the client's 30 s grace, and a
-// session start or a /clear must not wait for that.
+// helloLater sends hello from a timer, never inside the hook: a session
+// start or a /clear must not wait for a daemon that is down.
 function helloLater($) {
   $.clock.after(0, () => { void hello($).catch(() => {}) })
 }
 
+// retryableReport: a report that did not reach the daemon (20 unreachable —
+// a cleared answered 503 not_ready through the CLI's grace ends here too —
+// 21 unsupported, 1 runtime) is re-sent at the next turn.complete (§8.3).
+// Exit 13 (`bad_transition`) means the daemon is already PAST this state —
+// a later report landed first, or the op was closed — so re-sending it
+// would be refused forever; it is dropped.
+function retryableReport(r) {
+  return r.exitCode !== 0 && r.exitCode !== 13
+}
+
+// report queues `pdx relay report <op> <state> …`; pump sends it from a
+// timer. An op's reports land in order: one sent while an earlier one is
+// still queued would be refused (written → done is bad_transition) and
+// dropped for good, so a report that does not land holds its op's later
+// reports until the next turn.complete re-sends it. The relay goes on
+// meanwhile (§8.3: the session matters more).
+function report($, p, state, extra = []) {
+  s.outbox.push({ op: p.op.id, argv: ['relay', 'report', p.op.id, state, ...extra] })
+  pump($)
+}
+
+function pump($) {
+  s.again = true
+  later($, 0, async () => {
+    if (s.pumping) return // the running pass goes round again (s.again)
+    s.pumping = true
+    try {
+      while (s.again) {
+        s.again = false
+        for (let i = 0; i < s.outbox.length;) {
+          const item = s.outbox[i]
+          if (s.held.has(item.op)) { i++; continue }
+          const r = await pdx($, item.argv, CALL_TIMEOUT_MS)
+          if (retryableReport(r)) { s.held.add(item.op); i++ } else s.outbox.splice(i, 1)
+        }
+      }
+    } finally {
+      s.pumping = false
+    }
+  })
+}
+
+function writePrompt(p) {
+  return [
+    '[pdx-relay op=' + p.op.id + '] 這個 session 的 context 已達接力門檻，使用者已核准接力（之後會 /clear）。',
+    '請先停下手邊工作，用你完整的工具撰寫接力檔：' + p.path,
+    '',
+    '要求：',
+    '- 自己跑 `git status`、`git diff --stat`、`git log --oneline -10` 取得檔案狀態，不要憑記憶寫。',
+    '- 接力檔必須自成一體：讀它的是一個完全沒有這段對話記憶的新對話。',
+    '- 寫完後只回一行「HANDOFF-WRITTEN」，不要繼續原本的工作。',
+    '',
+    '格式（每一段都要有，沒有內容就寫「無」）：',
+    '# HANDOFF',
+    '## 1. 目標與完成定義（使用者要的是什麼、怎樣算完成、範圍外）',
+    '## 2. 進度（已完成且驗證 / 進行中停在哪 / 下一步第一個動作具體到指令）',
+    '## 3. 檔案異動（git status 與 diff --stat 的結果，加上每個檔案的用途）',
+    '## 4. 決策紀錄（選了什麼、為什麼、否決了什麼）',
+    '## 5. 死路（試過失敗、不要再試的）',
+    '## 6. 環境與指令（測試 / 執行方式）',
+    '## 7. 未決問題與需要使用者決定的事',
+    '## 8. 協作關係（下面的 pdx 身分；我的 lead 與我管理的 members，沒有就寫無）',
+    '',
+    '機器提供的事實（請照抄進對應段落）：',
+    '- 舊 session id：' + p.oldSession,
+    '- 舊 ref：' + p.oldRef,
+    '- 接力時 context：' + p.before,
+    '- pdx 身分：' + p.who,
+  ].join('\n')
+}
+
+function fixPrompt(p, missing) {
+  return '[pdx-relay op=' + p.op.id + '] 接力檔 ' + p.path + ' 不完整，缺少段落：' + (missing.join('、') || '(內容過短)') + '。請補齊後只回「HANDOFF-WRITTEN」。'
+}
+
+function seedPrompt(p) {
+  return [
+    '↪ 接手自 ' + p.oldRef,
+    '[pdx-relay seed op=' + p.op.id + '] 你是接手的新對話：前一段對話 context 已滿並已清空。',
+    '請先讀接力檔 ' + p.path + '，然後：',
+    '1. 用三行複述：目標、下一步第一個動作、目前有哪些檔案異動。',
+    '2. 跑 `git status` 確認與接力檔一致，不一致就指出來。',
+    '3. 接著從「下一步」繼續原本的工作。',
+    '回覆的第一行請寫「↪ 接手自 ' + p.oldRef + '」。',
+  ].join('\n')
+}
+
+function usageLine(u) {
+  return (u.tokens ?? '?') + ' tokens / ' + u.window + ' (' + (u.percent ?? '?') + '%)'
+}
+
+async function whoami($) {
+  const r = await pdx($, ['msg', 'whoami'], 10_000)
+  return (r.stdout || '').trim().replace(/\n/g, ' | ') || '(unknown)'
+}
+
+function toIdle() {
+  Object.assign(s, { state: 'idle', pending: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined })
+}
+
+// maybeBegin runs in turn.complete: it reads the engine, moves to beginning
+// and leaves `pdx relay begin` to a timer.
+async function maybeBegin($) {
+  if (s.role === 'member') return
+  const u = (await $.session.usage()).context
+  if (u.percent === undefined || u.percent < s.threshold) return
+  if (s.floor !== undefined && (u.tokens ?? 0) < s.floor + s.minGrowth) return
+  if (s.lastAskPct !== undefined && u.percent < s.lastAskPct + REASK_POINTS) return
+  const sid = await $.session.id()
+  s.state = 'beginning'
+  s.lastAskPct = u.percent
+  later($, 0, () => begin($, sid, u))
+}
+
+// begin opens the self-relay request (from a timer, state beginning).
+async function begin($, sid, u) {
+  const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(u.percent), '--window', String(u.window)]
+  const r = await pdx($, argv, CALL_TIMEOUT_MS)
+  if (s.state !== 'beginning') return // the user's own /clear started over meanwhile
+  const body = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
+  if (!body || !body.op || !body.request_id) {
+    if (r.exitCode === 13 && stderrCode(r) === 'member_relay_is_leads') s.role = 'member'
+    s.state = 'idle'
+    return // 13 self_relay_off | self_relay_paused | relay_open, 20, 21, 1: nothing (§8.1, §8.7 (d)); ask again at +10
+  }
+  s.pending = {
+    op: body.op,
+    requestId: body.request_id,
+    path: body.op.handoff_path,
+    oldSession: sid,
+    oldRef: body.op.ref,
+    before: usageLine(u),
+    nonce: '[pdx-relay op=' + body.op.id + ']',
+    seedNonce: '[pdx-relay seed op=' + body.op.id + ']',
+    who: '',
+  }
+  s.state = 'awaiting'
+  s.fixRounds = 0
+  $.ui.status(STATUS_WAITING)
+  const p = s.pending
+  later($, STEP_MS, async () => {
+    if (s.pending === p) await waitLoop($)
+  })
+}
+
+// waitLoop is the one long-poll loop per request, its promise kept on the
+// request (a loop left over from a request the user's own /clear dropped
+// never answers for the next one). It runs in a timer's own dispatch, so a
+// held prompt that is abandoned (Esc) never kills it; hooks only await the
+// promise it returns.
+function waitLoop($) {
+  const p = s.pending
+  if (p.wait) return p.wait
+  p.wait = (async () => {
+    $.ui.toast(TOAST_WAITING) // once per request (one loop per request)
+    for (;;) {
+      const r = await pdx($, ['relay', 'wait', p.requestId], WAIT_TIMEOUT_MS)
+      if (r.exitCode === 0) {
+        // P5a-2c's shape: exit 0 + Approval JSON, state 'approved' or 'open'
+        // (the CLI's own 9 min bound ran out: ask again). Anything else at
+        // exit 0 — empty or unparsable stdout, an unknown state — is NOT an
+        // approval: never start the write turn on it (§8.7 (d)).
+        const a = parseJSON(r.stdout)
+        if (a && a.state === 'open') continue
+        if (a && a.state === 'approved') return 'approved'
+        return 'unavailable'
+      }
+      if (r.exitCode === 10) return 'denied'
+      if (r.exitCode === 11) return 'timeout'
+      if (r.exitCode === 12) return 'cancelled'
+      return 'unavailable' // 20, 21, 1: treat as not approved (§8.7 (d))
+    }
+  })().catch(() => 'unavailable').then((outcome) => { settle($, p, outcome); return outcome })
+  return p.wait
+}
+
+function settle($, p, outcome) {
+  if (s.pending && s.pending !== p) return // another request owns the status line now
+  $.ui.status(undefined)
+  if (s.state !== 'awaiting' || s.pending !== p) return
+  if (outcome !== 'approved') return toIdle()
+  s.state = 'approved'
+  later($, STEP_MS, async () => {
+    p.who = await whoami($)
+    if (s.pending !== p) return
+    await $.prompt.submit({ text: writePrompt(p) })
+    report($, p, 'writing')
+  })
+}
+
+async function checkHandoff($, p) {
+  const text = await $.fs.read(p.path).catch(() => '')
+  const missing = REQUIRED.filter((h) => !text.includes(h))
+  return { ok: text.length > 200 && missing.length === 0, missing }
+}
+
+async function onWriteTurnDone($) {
+  const p = s.pending
+  const c = await checkHandoff($, p)
+  if (s.pending !== p) return
+  if (c.ok) {
+    s.state = 'clearing'
+    report($, p, 'written')
+    later($, STEP_MS, async () => {
+      if (s.pending === p && s.state === 'clearing') await $.command.run({ command: 'clear' })
+    })
+    return
+  }
+  if (s.fixRounds < MAX_FIX_ROUNDS) {
+    s.fixRounds += 1
+    later($, STEP_MS, async () => {
+      if (s.pending === p) await $.prompt.submit({ text: fixPrompt(p, c.missing) })
+    })
+    return
+  }
+  report($, p, 'failed', ['--error', 'handoff_incomplete'])
+  $.ui.toast(TOAST_GAVE_UP)
+  toIdle()
+}
+
+async function onSeedTurnDone($) {
+  const p = s.pending
+  const u = (await $.session.usage()).context
+  if (s.pending !== p) return
+  report($, p, 'done')
+  toIdle()
+  s.floor = u.tokens // the loop guard: the next ask needs minGrowth more (§8.1)
+  s.lastAskPct = undefined
+}
+
 export function register(on) {
   on('session.start', async ($, e, next) => {
+    resetState()
     s.interactive = !!e.isInteractive
     if (!s.interactive) return next(e) // a Nexen worker's `claude -p`: the mod does nothing (spec §5)
+    const t = Number(await $.env.get('PDX_RELAY_THRESHOLD').catch(() => undefined))
+    if (t > 0 && t <= 100) { s.threshold = t; s.envThreshold = true }
     const cfg = parseJSON(await $.fs.read($.plugin.root + '/pdx.json').catch(() => ''))
     if (cfg && cfg.pdx) s.pdx = cfg.pdx // written beside VERSION by the extractor; absent in `claude plugin test`
     s.config = cfg && typeof cfg.config === 'string' ? cfg.config : ''
@@ -52,13 +349,63 @@ export function register(on) {
     return next(e)
   })
 
-  // /clear gives the conversation a new session id (M1): say hello again
-  // under it, or the daemon's presence record (and P8a-1d's terminal-only
-  // backstop) would still name the old one. Not for startup / resume (that
-  // is session.start's hello) and never when headless.
-  on('classic.SessionStart', async ($, e, next) => {
+  // Own-turn recognition (MP3): a plugin's own prompt.submit hook never sees
+  // its own $.prompt.submit, so the write / seed turn is told by its nonce
+  // at turn.start, and acted on at the turn.complete carrying that turnId.
+  on('turn.start', async ($, e, next) => {
+    if (s.interactive && s.pending) {
+      if (e.text.includes(s.pending.nonce)) s.writeTurnId = e.turnId
+      else if (e.text.includes(s.pending.seedNonce)) s.seedTurnId = e.turnId
+    }
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    if (s.interactive && e.source === 'clear') helloLater($)
+    if (!s.interactive || e.agentId) return r
+    try {
+      if (s.outbox.length) { s.held.clear(); pump($) } // re-send what did not land (§8.3)
+      if (s.pending && e.turnId === s.writeTurnId) await onWriteTurnDone($)
+      else if (s.pending && e.turnId === s.seedTurnId) await onSeedTurnDone($)
+      else if (s.state === 'idle') await maybeBegin($)
+    } catch (err) {
+      log($, 'turn.complete failed: ' + String(err))
+    }
     return r
   })
+
+  // /clear gives the conversation a new session id (M1). The mod's own
+  // /clear (state clearing) reports cleared under it and seeds the new
+  // conversation; any /clear says hello again under it (P5b-1: the daemon
+  // keys mod presence by session id). Startup / resume are session.start's.
+  on('classic.SessionStart', async ($, e, next) => {
+    const r = await next(e)
+    if (!s.interactive || e.source !== 'clear') return r
+    const p = s.pending
+    if (s.state === 'clearing' && p) {
+      s.state = 'seeding'
+      report($, p, 'cleared', ['--new-session', await $.session.id()])
+      helloLater($)
+      later($, STEP_MS, async () => {
+        if (s.pending === p) await $.prompt.submit({ text: seedPrompt(p) })
+      })
+      return r
+    }
+    // the user's own /clear: start over (the floor and the +10 re-ask were the old conversation's)
+    toIdle()
+    s.floor = undefined
+    s.lastAskPct = undefined
+    helloLater($)
+    return r
+  })
+
+  on('tool.check', { tool: 'Write' }, async ($, e, next) => {
+    if (s.pending && e.input && e.input.file_path === s.pending.path) return { decision: 'allow', reason: 'Purdex 接力檔' }
+    return next(e)
+  }).catch(($, e, next) => (next.called ? next(e) : { decision: 'deny', reason: 'pdx-relay guard failed' }))
+
+  on('tool.check', { tool: 'Edit' }, async ($, e, next) => {
+    if (s.pending && e.input && e.input.file_path === s.pending.path) return { decision: 'allow', reason: 'Purdex 接力檔' }
+    return next(e)
+  }).catch(($, e, next) => (next.called ? next(e) : { decision: 'deny', reason: 'pdx-relay guard failed' }))
 }
