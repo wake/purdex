@@ -27,9 +27,9 @@ function registerHost(ip = '1.2.3.4', port = 7860, token: string | null = 't') {
 
 /** A fetch nobody has answered yet, plus the switch that answers it. */
 function pendingFetch() {
-  let settle!: (p: typeof payload) => void
-  vi.mocked(api.fetchHostConfig).mockReturnValueOnce(new Promise<typeof payload>((resolve) => { settle = resolve }))
-  return { settle: (p: typeof payload = payload) => settle(p) }
+  let settle!: (p: unknown) => void
+  vi.mocked(api.fetchHostConfig).mockReturnValueOnce(new Promise<unknown>((resolve) => { settle = resolve }))
+  return { settle: (p: unknown = payload) => settle(p) }
 }
 
 beforeEach(() => {
@@ -266,6 +266,92 @@ describe('stale responses', () => {
     const e = useHostConfigStore.getState().byHost[H]
     expect(e.projects).toEqual(payload.projects.items)
     expect(e.revisions.projects).toBe(3)
+  })
+
+  // A refresh and a save share one host token, so the token cannot tell them apart: a GET read before a save
+  // landed carries the copy the save replaced. Only the field the save wrote is held; the rest is the GET's.
+  describe('a refresh sent before a save lands after it', () => {
+    const C1 = { id: 'c1', name: 'Claude', command: 'claude', icon: { kind: 'agent', value: 'cc-bot' } }
+    const P2 = { id: 'p2', name: 'B', slug: 'b', path: '/b' }
+    const Q1 = { id: 'q1', text: 'ok' }
+    // What the daemon held before the save: projects malformed, quick replies with a bad row.
+    const before = {
+      ...payload,
+      projects: { items: {}, revision: 4 },
+      quickReplies: { items: [Q1, { id: 'q2' }], revision: 6 },
+    }
+
+    beforeEach(async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.mocked(api.fetchHostConfig).mockResolvedValueOnce(before)
+      await useHostConfigStore.getState().load(H)
+    })
+    afterEach(() => { vi.mocked(console.warn).mockRestore() })
+
+    it('a successful save keeps its items, revision and cleared problem; another field takes the GET', async () => {
+      const refresh = pendingFetch()
+      const load = useHostConfigStore.getState().load(H)
+      vi.mocked(api.putHostConfig).mockResolvedValueOnce({ items: [P2], revision: 5 })
+      await useHostConfigStore.getState().saveProjects(H, [P2])
+      refresh.settle({ ...before, commands: { items: [C1], revision: 2 } })
+      await load
+
+      const e = useHostConfigStore.getState().byHost[H]
+      expect(e.projects).toEqual([P2])
+      expect(e.revisions.projects).toBe(5)
+      expect(e.problems.projects).toBeUndefined()
+      expect(e.commands).toEqual([C1])
+      expect(e.revisions.commands).toBe(2)
+      expect(e.problems.quickReplies).toEqual({ kind: 'rows', count: 1 })
+    })
+
+    it('a 409 keeps the daemon copy it carried, and the field stays supported', async () => {
+      const refresh = pendingFetch()
+      const load = useHostConfigStore.getState().load(H)
+      vi.mocked(api.putHostConfig).mockRejectedValueOnce(new HostConfigConflictError({ items: [Q1], revision: 8 }))
+      await expect(useHostConfigStore.getState().saveQuickReplies(H, [])).rejects.toBeInstanceOf(HostConfigConflictError)
+      // The stale answer even lacks the collection: the field the save wrote is held whole, its flag included.
+      const { quickReplies: _gone, ...stale } = before
+      refresh.settle({ ...stale, commands: { items: [C1], revision: 2 } })
+      await load
+
+      const e = useHostConfigStore.getState().byHost[H]
+      expect(e.quickReplies).toEqual([Q1])
+      expect(e.revisions.quickReplies).toBe(8)
+      expect(e.problems.quickReplies).toBeUndefined()
+      expect(e.quickRepliesSupported).toBe(true)
+      expect(e.commands).toEqual([C1])
+      expect(e.revisions.commands).toBe(2)
+      expect(e.problems.projects).toEqual({ kind: 'shape' })
+    })
+
+    it('a save that failed without a copy holds nothing back', async () => {
+      const refresh = pendingFetch()
+      const load = useHostConfigStore.getState().load(H)
+      vi.mocked(api.putHostConfig).mockRejectedValueOnce(new HostConfigApiError(500, 'unwell'))
+      await expect(useHostConfigStore.getState().saveProjects(H, [P2])).rejects.toThrow('unwell')
+      refresh.settle({ ...before, projects: { items: [P2], revision: 7 } })
+      await load
+
+      const e = useHostConfigStore.getState().byHost[H]
+      expect(e.projects).toEqual([P2])
+      expect(e.revisions.projects).toBe(7)
+      expect(e.problems.projects).toBeUndefined()
+    })
+
+    it('a GET sent after the save applies to every field', async () => {
+      vi.mocked(api.putHostConfig).mockResolvedValueOnce({ items: [P2], revision: 5 })
+      await useHostConfigStore.getState().saveProjects(H, [P2])
+      const refresh = pendingFetch()
+      const load = useHostConfigStore.getState().load(H)
+      refresh.settle({ ...before, projects: { items: [], revision: 9 } })
+      await load
+
+      const e = useHostConfigStore.getState().byHost[H]
+      expect(e.projects).toEqual([])
+      expect(e.revisions.projects).toBe(9)
+      expect(e.problems.projects).toBeUndefined()
+    })
   })
 
   it('a load for a host that is not configured touches nothing', async () => {

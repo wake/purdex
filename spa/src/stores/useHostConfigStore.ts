@@ -150,6 +150,45 @@ function invalidate(hostId: string): void {
   running.abort.abort()
 }
 
+/**
+ * How many daemon copies a save has put in each field, per host. A load and a
+ * save share the token above, so it cannot tell that a refresh was read before
+ * a save landed: that GET carries the copy the save replaced (its items, the
+ * older revision, the problem the save cleared). A load notes these counts when
+ * it is sent and leaves alone every field whose count moved since.
+ */
+type WriteCounts = Partial<Record<ConfigField, number>>
+const writes = new Map<string, WriteCounts>()
+
+function countWrite(hostId: string, field: ConfigField): void {
+  const counts = writes.get(hostId) ?? {}
+  writes.set(hostId, { ...counts, [field]: (counts[field] ?? 0) + 1 })
+}
+
+function writesOf(hostId: string): WriteCounts {
+  return writes.get(hostId) ?? {}
+}
+
+/** Where a field's `*Supported` flag lives, for the fields that have one. */
+const SUPPORTED_FLAG: Partial<Record<ConfigField, 'quickRepliesSupported' | 'relaySupported'>> = {
+  quickReplies: 'quickRepliesSupported',
+  relay: 'relaySupported',
+}
+
+/** `loaded` with each of `fields` — items, revision, problem, `*Supported` flag — as `now` holds it. */
+function holding(loaded: HostConfigEntry, now: HostConfigEntry | undefined, fields: readonly ConfigField[]): HostConfigEntry {
+  if (!now || fields.length === 0) return loaded
+  const out: HostConfigEntry = { ...loaded, revisions: { ...loaded.revisions } }
+  for (const field of fields) {
+    Object.assign(out, { [field]: now[field] })
+    out.revisions[field] = now.revisions[field]
+    out.problems = withProblem(out.problems, field, now.problems[field] ?? null)
+    const flag = SUPPORTED_FLAG[field]
+    if (flag) out[flag] = now[flag]
+  }
+  return out
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
@@ -175,6 +214,7 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
     const take = (raw: unknown) => {
       const parsed = parseHostConfigField[field](raw, hostId)
       const now = get().byHost[hostId] ?? entry
+      countWrite(hostId, field)
       patch(hostId, {
         [field]: parsed.items,
         revisions: { ...now.revisions, [field]: parsed.revision },
@@ -210,6 +250,7 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
       }
       const abort = new AbortController()
       const token = beginRequest(hostId, endpoint)
+      const sentWrites = writesOf(hostId)
       const run = (async () => {
         // A refresh of a ready host keeps showing its data while it loads.
         if (get().byHost[hostId]?.status !== 'ready') patch(hostId, { status: 'loading', error: undefined })
@@ -218,7 +259,10 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
           if (!stillCurrent(hostId, token)) return
           // Throws only for a body that is not an object at all: a load error.
           const p = parseHostConfig(body, hostId)
-          patch(hostId, {
+          // A field a save wrote since this GET was sent already holds a newer copy than the GET read.
+          const counts = writesOf(hostId)
+          const saved = CONFIG_FIELDS.filter((f) => (counts[f] ?? 0) !== (sentWrites[f] ?? 0))
+          patch(hostId, holding({
             status: 'ready',
             error: undefined,
             projects: p.projects.items,
@@ -236,7 +280,7 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
               relay: p.relay?.revision ?? 0,
             },
             problems: problemsOf(p),
-          })
+          }, get().byHost[hostId], saved))
         } catch (err) {
           // A failure is as endpoint-specific as a success: the old daemon
           // being unreachable is not this host's status any more.
@@ -271,6 +315,8 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
       // Dropping the entry is only half of it: an answer already in flight
       // would put the forgotten daemon's copy straight back.
       invalidate(hostId)
+      // Its write counts go too: every answer that could compare against them was just abandoned.
+      writes.delete(hostId)
       set((s) => {
         if (!(hostId in s.byHost)) return s
         const rest = { ...s.byHost }
