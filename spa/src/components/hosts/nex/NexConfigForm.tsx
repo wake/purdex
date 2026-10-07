@@ -36,10 +36,28 @@ interface FieldError {
 // attach to and becomes the general error line.
 const CONFIG_ERROR = /^nex\.([a-zA-Z0-9_.]+)(?:\[\d+\])?:\s*([\s\S]*)$/
 
+// The fields that render a FieldErrorText below. A key without one (the two
+// peer templates, which the form carries but never shows) goes to the
+// general error line with its key kept, instead of vanishing into a slot
+// that is not on screen.
+const FIELD_SLOTS = new Set([
+  'repo_roots', 'service_roots', 'path_prepend', 'claude_bin',
+  'sandbox.max_profile', 'sandbox.default_profile',
+  'timeouts.lease_ttl', 'timeouts.interrupt', 'timeouts.turn',
+  'peer.max_pending',
+])
+
 function parseConfigError(text: string): FieldError {
   const m = CONFIG_ERROR.exec(text.trim())
-  if (!m) return { field: null, message: text.trim() }
+  if (!m || !FIELD_SLOTS.has(m[1])) return { field: null, message: text.trim() }
   return { field: m[1], message: m[2] }
+}
+
+// A cleared or non-numeric queue limit means "Nexen's default" (0); a
+// negative one is sent as typed so the daemon's validator names it.
+function parseMaxPending(value: string): number {
+  const n = Number.parseInt(value, 10)
+  return Number.isNaN(n) ? 0 : n
 }
 
 function trimList(list: string[]): string[] {
@@ -64,6 +82,14 @@ function trimForSubmit(draft: NexConfig): NexConfig {
       lease_ttl: draft.timeouts.lease_ttl.trim(),
       interrupt: draft.timeouts.interrupt.trim(),
       turn: draft.timeouts.turn.trim(),
+    },
+    // The templates are not edited here: they go back exactly as GET
+    // returned them (no trim), or the PUT would reset or alter them.
+    peer: {
+      enabled: draft.peer.enabled,
+      max_pending: draft.peer.max_pending,
+      wake_template: draft.peer.wake_template,
+      reply_line: draft.peer.reply_line,
     },
   }
 }
@@ -284,6 +310,31 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
         />
       </Field>
       <FieldErrorText field="timeouts.turn" message={errorFor('timeouts.turn')} />
+
+      <Field label={t('hosts.nex.config.peer_enabled')}>
+        <input
+          type="checkbox"
+          aria-label={t('hosts.nex.config.peer_enabled')}
+          checked={draft.peer.enabled}
+          onChange={(e) => update({ peer: { ...draft.peer, enabled: e.target.checked } })}
+        />
+      </Field>
+
+      <Field label={t('hosts.nex.config.peer_max_pending')}>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            step={1}
+            aria-label={t('hosts.nex.config.peer_max_pending')}
+            value={String(draft.peer.max_pending)}
+            onChange={(e) => update({ peer: { ...draft.peer, max_pending: parseMaxPending(e.target.value) } })}
+            className="bg-surface-secondary border border-border-default rounded px-2 py-1 text-sm text-text-primary w-24"
+          />
+          <span className="text-xs text-text-muted">{t('hosts.nex.config.peer_max_pending_hint')}</span>
+        </div>
+      </Field>
+      <FieldErrorText field="peer.max_pending" message={errorFor('peer.max_pending')} />
 
       <div className="flex items-center gap-3 mt-3">
         <button

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import NexConfigForm from './NexConfigForm'
-import { emptyNexConfig } from './nex-config-diff'
+import { emptyNexConfig, normalizeNexConfig } from './nex-config-diff'
 import * as hostApi from '../../../lib/host-api'
 import { useDaemonRestartStore } from '../../../stores/useDaemonRestartStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -75,9 +75,77 @@ describe('NexConfigForm', () => {
     await waitFor(() => expect(hostApi.hostFetch).toHaveBeenCalled())
     const [, , init] = vi.mocked(hostApi.hostFetch).mock.calls[0]
     const body = JSON.parse(init!.body as string)
-    expect(Object.keys(body.nex).sort()).toEqual(['claude_bin', 'enabled', 'path_prepend', 'repo_roots', 'sandbox', 'service_roots', 'timeouts'])
+    expect(Object.keys(body.nex).sort()).toEqual(['claude_bin', 'enabled', 'path_prepend', 'peer', 'repo_roots', 'sandbox', 'service_roots', 'timeouts'])
     expect(Object.keys(body.nex.sandbox).sort()).toEqual(['default_profile', 'max_profile'])
     expect(Object.keys(body.nex.timeouts).sort()).toEqual(['interrupt', 'lease_ttl', 'turn'])
+    expect(Object.keys(body.nex.peer).sort()).toEqual(['enabled', 'max_pending', 'reply_line', 'wake_template'])
+    // U4: an empty form still sends the mailbox on, with Nexen's defaults.
+    expect(body.nex.peer).toEqual({ enabled: true, max_pending: 0, wake_template: '', reply_line: '' })
+  })
+
+  // The UI never edits the two templates, but PUT replaces the whole [nex]
+  // section — so whatever GET returned must go back byte for byte (no trim,
+  // no newline folding), or saving the form would silently reset them.
+  it('PUTs back two non-empty templates loaded by GET byte-identical', async () => {
+    const wake = '  Peer {{.FromName}} ({{.FromMode}}) wrote:\n\n{{.Text}}\n\t{{.ReplyLine}}  \n'
+    const reply = ' reply → pdx msg send {{.ReplyTo}} "<text>" '
+    const fromGet = { ...saved, peer: { enabled: false, max_pending: 9, wake_template: wake, reply_line: reply } }
+    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(new Response(JSON.stringify({ nex: fromGet }), { status: 200 }))
+    render(<NexConfigForm hostId="h" config={normalizeNexConfig(JSON.parse(JSON.stringify(fromGet)))} info={info} onSaved={() => {}} />)
+    fireEvent.change(screen.getByLabelText(/turn timeout/i), { target: { value: '5m' } })
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(hostApi.hostFetch).toHaveBeenCalled())
+    const body = JSON.parse(vi.mocked(hostApi.hostFetch).mock.calls[0][2]!.body as string)
+    expect(body.nex.peer.wake_template).toBe(wake)
+    expect(body.nex.peer.reply_line).toBe(reply)
+    expect(body.nex.peer).toEqual({ enabled: false, max_pending: 9, wake_template: wake, reply_line: reply })
+  })
+
+  it('mirrors the peer mailbox toggle and queue limit, and PUTs the edits', async () => {
+    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(new Response(JSON.stringify({ nex: saved }), { status: 200 }))
+    const withPeer = { ...saved, peer: { enabled: true, max_pending: 0, wake_template: '', reply_line: '' } }
+    render(<NexConfigForm hostId="h" config={withPeer} info={info} onSaved={() => {}} />)
+    const toggle = screen.getByLabelText(/peer mailbox/i) as HTMLInputElement
+    const limit = screen.getByLabelText(/queue limit/i) as HTMLInputElement
+    expect(toggle.checked).toBe(true)
+    expect(limit.value).toBe('0')
+    expect(screen.getByText('0 = default')).toBeInTheDocument()
+
+    fireEvent.click(toggle)
+    fireEvent.change(limit, { target: { value: '8' } })
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(hostApi.hostFetch).toHaveBeenCalled())
+    const body = JSON.parse(vi.mocked(hostApi.hostFetch).mock.calls[0][2]!.body as string)
+    expect(body.nex.peer.enabled).toBe(false)
+    expect(body.nex.peer.max_pending).toBe(8)
+  })
+
+  it('a cleared queue limit is sent as 0 (Nexen default)', async () => {
+    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(new Response(JSON.stringify({ nex: saved }), { status: 200 }))
+    const withPeer = { ...saved, peer: { enabled: true, max_pending: 12, wake_template: '', reply_line: '' } }
+    render(<NexConfigForm hostId="h" config={withPeer} info={info} onSaved={() => {}} />)
+    fireEvent.change(screen.getByLabelText(/queue limit/i), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(hostApi.hostFetch).toHaveBeenCalled())
+    const body = JSON.parse(vi.mocked(hostApi.hostFetch).mock.calls[0][2]!.body as string)
+    expect(body.nex.peer.max_pending).toBe(0)
+  })
+
+  it('shows a peer.max_pending 400 next to the queue limit', async () => {
+    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(new Response('nex.peer.max_pending: must not be negative (got -1)', { status: 400 }))
+    render(<NexConfigForm hostId="h" config={saved} info={info} onSaved={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(screen.getByTestId('field-error-peer.max_pending')).toHaveTextContent(/must not be negative/))
+  })
+
+  // The templates have no field in the form, so their 400 must not be
+  // attached to an invisible slot: it goes on the general error line, key
+  // included, so the user can tell which template is wrong.
+  it('shows a template 400 on the general error line, naming the key', async () => {
+    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(new Response('nex.peer.wake_template: {{.Text}} must appear exactly once, found 0', { status: 400 }))
+    render(<NexConfigForm hostId="h" config={saved} info={info} onSaved={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(screen.getByTestId('nex-config-error')).toHaveTextContent('nex.peer.wake_template: {{.Text}} must appear exactly once'))
   })
 
   it('shows the Enabled label exactly once', () => {
