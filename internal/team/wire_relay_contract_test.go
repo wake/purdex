@@ -90,6 +90,8 @@ func TestRelayContract_DTOJSON(t *testing.T) {
 			`{"ok":true,"role":"none","self_relay":"on","threshold":70,"min_growth":20000}`},
 		{"RelayBeginRequest", RelayBeginRequest{SessionID: "s", Self: true, UsedPercentage: 72.4, Window: 200000},
 			`{"session_id":"s","self":true,"used_percentage":72.4,"window":200000}`},
+		{"RelayBeginRequest with request_id", RelayBeginRequest{SessionID: "s", Self: true, UsedPercentage: 72.4, Window: 200000, RequestID: "r"},
+			`{"session_id":"s","self":true,"used_percentage":72.4,"window":200000,"request_id":"r"}`},
 		{"RelayBeginResponse", RelayBeginResponse{Op: RelayOp{ID: "op", Kind: RelayKindSelf, State: RelayAwaitingApproval}, RequestID: "r"},
 			`{"op":{"id":"op","kind":"self","host_id":"","session_id":"","ref":"","state":"awaiting_approval","handoff_path":"","created_at":0,"updated_at":0},"request_id":"r"}`},
 		{"RelaySelfRequest", RelaySelfRequest{SessionID: "s", Action: "status"}, `{"session_id":"s","action":"status"}`},

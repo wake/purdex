@@ -116,6 +116,12 @@ type RelayBeginRequest struct {
 	Self           bool    `json:"self"`
 	UsedPercentage float64 `json:"used_percentage"`
 	Window         int     `json:"window"`
+	// RequestID is the approval row's id, minted by the CLI (UUID v4) so
+	// that a begin replayed after a lost response is the SAME request: the
+	// daemon answers an existing id with the op it opened, whatever its
+	// state, instead of opening a second one. Optional: the daemon mints
+	// one when it is empty (PR #1726 attacker A-1).
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // RelayBeginResponse is begin's 201 body.
