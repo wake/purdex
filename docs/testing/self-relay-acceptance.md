@@ -13,7 +13,12 @@ The run must leave the host's own setup as it found it. **Do not run `pdx setup 
 - `pdx` on `PATH` is that build (`which pdx`; `pdx path` explains how to fix it). Loaded with `--plugin-dir`, the mod finds no `pdx.json` beside it, so it runs the `pdx` on `PATH` with that binary's default config — which is the running daemon's.
 - The mod is not already loaded on the host: `jq -r '.env.CLAUDE_CODE_PLUGIN_DIRS // empty' ~/.claude/settings.json` names no `…/cc-plugin/purdex` entry. If it does (someone ran `pdx setup --agent cc` since P5b-1), leave `--plugin-dir` out of step 1 — two copies of one plugin would both hook every prompt.
 - Purdex.app open on at least two clients (mlab's and a26's), both viewing this host.
-- Secrets: never print the daemon token; pass it as `$(pdx token)` inside the command.
+- Secrets: the daemon token never reaches the terminal or any process's argv (another process on the host can read argv from `ps` while a request runs). Use `pdx` subcommands where one exists (`pdx relay op`, `pdx relay report`); the one call that needs `curl` (step 6) reads the `Authorization` header from a private file, made once before step 1:
+  ```bash
+  HDR=$(mktemp -t pdx-acc-hdr)
+  ( umask 077; awk -F'"' '/^token = /{printf "Authorization: Bearer %s\n", $2; exit}' ~/.config/pdx/config.toml > "$HDR" )
+  ```
+  `awk` writes the header straight into the 0600 file: the token is in no command line and is never echoed. Never `cat` that file or `config.toml`. Do not run `pdx token generate` for this: it **replaces** the daemon's token (there is no `pdx token` that reads it).
 
 ## Steps
 
@@ -30,7 +35,11 @@ The run must leave the host's own setup as it found it. **Do not run `pdx setup 
 - [ ] 4. **Deny on one client.** The dialog closes on the other at once; the status line clears; a typed prompt runs **unchanged**. Grow usage to 15 % (not 10 %): the dialog returns (the +10 rule). `pdx relay op <id>` shows the first op `cancelled` with `denied`.
 - [ ] 5. **Type during the wait, then approve.** With the dialog open, type a short question and press Enter: it shows as sent with the spinner, no turn starts. Press Esc on **another** prompt: it is abandoned and the dialog stays. Approve with one click. Expect, in order: the typed question is answered **first, intact** (its `@file` mentions expand) and briefly (the NOTE); then the write prompt runs; the file appears at `<data_dir>/relay/<op>.md`; the screen clears; the new conversation's answer starts with `↪ 接手自 _<old ref>`. `pdx peers` shows the same name with `(was _<old ref>)`; `pdx msg send <host>/_<old ref> "hi"` still reaches it.
   - Also try a prompt typed **right after** the threshold turn ends, before the status line appears (`pdx relay begin` still out): it is held the same way (at most 8 s while begin is out).
-- [ ] 6. **Model and effort (U18 (a)).** Before approving in step 5: `curl -s -H "Authorization: Bearer $(pdx token)" http://100.64.0.2:7860/api/team/approvals/<request id>` — the `self_relay` row's payload has **both** `model_id` and `effort`, equal to step 1's `/status`. After the relay, `/status` again shows the same model and effort; `pdx relay op <id>` shows `state: done`. A payload missing either means the session had no statusline reading yet: retry after one more turn.
+- [ ] 6. **Model and effort (U18 (a)).** Before approving in step 5, list the open rows, the header read from `$HDR` (the address is mlab's daemon; on air26 use that host's):
+  ```bash
+  curl -s -H @"$HDR" http://100.64.0.2:7860/api/team/approvals | jq '.approvals[] | select(.kind == "self_relay") | {id, payload}'
+  ```
+  The `self_relay` row's payload has **both** `model_id` and `effort`, equal to step 1's `/status`; its `op_id` is the `<id>` the other steps pass to `pdx relay op`. After the relay, `/status` again shows the same model and effort; `pdx relay op <id>` shows `state: done`. A payload missing either means the session had no statusline reading yet: retry after one more turn (the reading comes from the statusline proxy an earlier `pdx setup` installed; on a host that never had it, record step 6 as not checkable — do not run setup for it).
 - [ ] 7. **Compaction while a request is open.** Cross the threshold again (+10), and with the dialog open type `/compact`: compaction runs, **the dialog closes on every client**, any held prompt goes on unchanged at once (no NOTE), and `pdx relay op <id>` shows `cancelled` with `compacted`. The next ask needs usage ≥ the threshold again (not +10).
 - [ ] 8. **No daemon.** `pdx stop`; cross the threshold in a fresh session: nothing happens, no status line; `/relay status` answers `Purdex daemon 連不上，無法變更自我接力` within about 8 s; auto-compact (if reached) runs. `pdx start`.
 - [ ] 9. **Measure once** (plan open question 6) and record:
@@ -40,4 +49,5 @@ The run must leave the host's own setup as it found it. **Do not run `pdx setup 
   - (d) whether `{ skip }` on an auto-compaction that fires mid-turn lets the turn go on. In a throwaway session (`PDX_RELAY_THRESHOLD=5`), approve, then before the write turn give a long multi-tool task and force a compaction (by context size, or `/compact` with `--plugin-dir` pointing at a scratch copy of the plugin folder whose `register.js` treats `manual` as `auto`). Watch `claude --debug` for `session.compact` followed by the next `tool.call`. Record the answer as spec **M27**. If the turn does not go on, apply spec §8.7 (c)'s fallback: answer `next(e)`, remember `s.compactedWhileApproved`, and submit the write prompt at the next `turn.complete` (one branch in `settle`, one in `turn.complete`, one test).
 - [ ] 10. **Clean up.** Nothing on the host was installed, so there is nothing to uninstall:
   - `tmux kill-session -t relay-acc` (it ends the throwaway Claude Code; the mod goes with it), then `rm -rf "$SCRATCH"` (and the scratch plugin copy of step 9 (d), if any).
+  - `rm -f "$HDR"` (the token's header file).
   - For every op of the run that is not `done`, `failed` or `cancelled` (`pdx relay op <id>`): `pdx relay report <op> cancelled --error abandoned`, so no dialog stays open on any client. Exit 13 (`bad_transition`) means it was already closed. Retention is the daemon's sweeper.
