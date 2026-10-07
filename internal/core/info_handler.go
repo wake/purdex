@@ -43,8 +43,9 @@ func (c *Core) handleReady(w http.ResponseWriter, r *http.Request) {
 // hosts on different versions. Add a name here in the same change that ships
 // the feature; never reuse or remove one.
 var capabilities = []string{
-	"transcript.v1",      // GET /api/sessions/{code}/transcript
-	"terminal.mirror.v1", // /ws/terminal/{code}?mirror=1 plus window text frames
+	"transcript.v1",          // GET /api/sessions/{code}/transcript
+	"terminal.mirror.v1",     // /ws/terminal/{code}?mirror=1 plus window text frames
+	"conversations.scope.v1", // GET /api/nex/conversations?scope=test|normal|all
 }
 
 // handleInfo returns daemon metadata: host ID, tmux instance, version, OS, and architecture.

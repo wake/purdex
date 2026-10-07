@@ -74,6 +74,10 @@ type conversationInputs struct {
 type conversationsResult struct {
 	Ended, Gone  []conversationRow // never nil; each sorted LastActivityAt desc, then SessionID asc; uncapped
 	UnknownOwner int               // S skipped because only unverified frames hold them (R-4-9)
+	// UnknownOwnerCwds is the cwd of each unknown-owner S (index, else latest
+	// stint; "" when neither knows one), so a request's ?scope= can count
+	// them without the snapshot knowing any scope. len == UnknownOwner.
+	UnknownOwnerCwds []string `json:"-"`
 }
 
 // buildConversations decides, for every in-scope S without an owner, whether
@@ -164,6 +168,7 @@ func buildConversations(in conversationInputs) conversationsResult {
 		}
 		if unverified[s] {
 			res.UnknownOwner++
+			res.UnknownOwnerCwds = append(res.UnknownOwnerCwds, firstNonEmpty(index[s].Cwd, latest[s].Cwd))
 			continue
 		}
 		row, hasRow := index[s]
