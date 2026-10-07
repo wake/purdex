@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.533] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排；可與 alpha.532 合併一次重啟）。本版沒有使用者看得到的變化：還沒有任何東西註冊接力血統（P5a-2a 才會），`pdx peers` 輸出不變。`pdx` 指令、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-1b（#1705）
+
+「接力後舊 ref 繼續有效」（U3，spec §8.4）的 peers 端，與 host 的接力開關（spec §8.7 (a)）。plan v2 Tasks 5a.4–5a.6。
+
+- **peer 列多了 `previous_refs`**：這個對話接力過的所有舊 ref，最新在前、不設上限。
+- **地址解析多一層**：`_ref` 沒有活的對話持有、但恰好是一個活的對話的舊 ref ⇒ 送到那個對話；活的 ref 永遠優先（含 `<name> [ref]` 寫法）；兩個對話都說那是自己的舊 ref ⇒ 不猜。「找不到」的提示改說：改名與接力都會保留 ref。
+- **血統讀不到時**（`lineage_unavailable`）：peer 清單照常、不標 partial，但 ref 形式的位址查不到時回「尚未就緒」而不是「不存在」，也絕不會落到 tmux 名稱那一層誤投。
+- **host 設定 `relay`**：`self_solo`／`self_lead` 兩個開關（預設都開）；PUT 只接受這兩個布林欄位，`null`、未知欄位、拼錯都回 400（避免「拼錯開關＝靜默開啟」）。
+- daemon 內部：以 session id 解析來源（給之後的 self relay／AskUserQuestion 分流用）。
+
+Review 後補強：combined form 的活 ref 優先（R1）、`null` 與未知欄位（R1／攻擊方）、`lineage_unavailable`（攻擊方 A-1）、血統鏈 memo 化。既有 `internal/module/agent` 測試在全套件負載下偶發逾時列 #1706。
+
 ## [1.0.0-alpha.532] - 2026-10-07
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）：啟動時 team.db 多建三張空表與索引，沒有其他行為變更，可以跟下一個 PR 合併一次重啟。`pdx` 指令、SPA、Electron 都沒有改動。
