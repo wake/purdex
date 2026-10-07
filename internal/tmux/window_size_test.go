@@ -22,6 +22,35 @@ func TestParseWindowSize(t *testing.T) {
 	}
 }
 
+// A client must be window height + status rows tall, or tmux (even for a sole
+// ignore-size client) shrinks the window by those rows.
+func TestParseStatusRows(t *testing.T) {
+	for in, want := range map[string]uint16{"off": 0, "on": 1, "2": 2, "5": 5, "on\n": 1} {
+		got, err := parseStatusRows(in)
+		require.NoError(t, err, in)
+		assert.Equal(t, want, got, in)
+	}
+	for _, bad := range []string{"", "junk", "-1", "6", "70000"} {
+		_, err := parseStatusRows(bad)
+		assert.Error(t, err, bad)
+	}
+}
+
+func TestFakeExecutor_StatusRows(t *testing.T) {
+	f := NewFakeExecutor()
+	n, err := f.StatusRows(context.Background(), "dev")
+	require.NoError(t, err)
+	assert.Equal(t, uint16(1), n, "default is the usual one status line")
+
+	f.SetStatusRows(0)
+	n, _ = f.StatusRows(context.Background(), "dev")
+	assert.Equal(t, uint16(0), n)
+
+	f.SetWindowSizeErr(errors.New("boom"))
+	_, err = f.StatusRows(context.Background(), "dev")
+	assert.EqualError(t, err, "boom", "shares the window-size error so one fault covers both queries")
+}
+
 func TestFakeExecutor_WindowSize(t *testing.T) {
 	f := NewFakeExecutor()
 	f.SetWindowSize(100, 30)
