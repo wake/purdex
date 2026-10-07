@@ -282,6 +282,17 @@ func newTerminalRelay(ex tmux.Executor, target, sizingMode string, mirror bool) 
 		relay.WindowSize = func(ctx context.Context) (uint16, uint16, error) {
 			return ex.WindowSize(ctx, target)
 		}
+		relay.PTYSize = func(ctx context.Context) (uint16, uint16, error) {
+			cols, rows, err := ex.WindowSize(ctx, target)
+			if err != nil {
+				return 0, 0, err
+			}
+			status, err := ex.StatusRows(ctx, target)
+			if err != nil {
+				return 0, 0, err
+			}
+			return cols, rows + status, nil
+		}
 	}
 	return relay
 }

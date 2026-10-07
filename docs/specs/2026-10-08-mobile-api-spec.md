@@ -67,3 +67,11 @@ codex／opencode transcript、`/api/fs/read` 的 10 MB 上限不動。
 - **開檔**：驗證後以 projects 根目錄 fd 為起點逐層 `openat(O_NOFOLLOW)`（`O_DIRECTORY` 用於中介層），任一層被換成 symlink 即拒絕（`no_transcript`）；開啟後 `fstat` 必為一般檔。威脅模型：hook 提供的路徑不可信，不能藉 check→open 之間的置換（含中介目錄）讀到 projects 外的檔案。projects 根目錄本身以 `EvalSymlinks` 解析一次作為信任錨。
 - **未完成尾行**：`completeEnd` 的反向掃描以 `MaxLineBytes` 為界，超過回 413 `line_too_large`。
 - **已知不處理（開 issue）**：同檔名被外部替換（rename 後同名新檔）不觸發 reset——Claude Code 的輪替一律換 session id＝新檔名；若要防禦需加 inode 型 generation（client 需回傳）。
+
+## 修訂 3（purdex-ios 實測：mirror 是唯一 client 時仍縮 window）
+
+- **事實**（tmux 3.6a 實測）：`-f ignore-size` 只在還有其他 client 時有效；mirror 是**唯一** client 時 tmux 照樣以它的大小決定 window。連「PTY 剛好等於 window 大小」也會縮一行：150x44 的 client → 150x43 的 window，因為 client 要留 status bar 的行數；client 為 window 高度＋status 行數（150x45）才不動。原 spec 的「client 的 resize 只改自己的 PTY」在無其他 client 時不成立。
+- **改動**：mirror 的 PTY 與 window 綁定：①連線前先查 window 大小，PTY 以「欄＝window 寬、列＝window 高＋status 行數」啟動；②**忽略** client 送來的 `resize`（不改 PTY）；③輪詢每次重新套用（window 或 status 變了就 `Setsize`，即使 window 大小沒變）；④查不到大小就拒絕連線（close 1011），不以猜的大小啟動。
+- **status 行數**：`#{status}` 為 `off`→0、`on`→1、`2`..`5`→該數。新增 `Executor.StatusRows`。
+- **對 client 的影響**：client 不必（也不該）再送 `resize`；以 window text frame 的 cols/rows 渲染。送了也會被忽略，不影響桌機。
+- **驗證**：真 tmux（私有 server）端到端測試：唯一 mirror client 送 83x55 的 resize，window 仍為 150x44；拿掉串接則為 83x54（即回報的現象）。
