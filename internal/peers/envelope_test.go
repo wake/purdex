@@ -28,7 +28,7 @@ func TestEnvelope_JSON_MatchesP1Shape(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	want := `{"host_id":"h","alias":"","ok":true,"partial":false,"peers":[],"daemon_version":"1.2.3","unknown_registry_files":[],"titles_unavailable":false}`
+	want := `{"host_id":"h","alias":"","ok":true,"partial":false,"peers":[],"daemon_version":"1.2.3","unknown_registry_files":[],"titles_unavailable":false,"lineage_unavailable":false}`
 	if string(got) != want {
 		t.Errorf("Envelope JSON = %s, want %s", got, want)
 	}
@@ -57,7 +57,7 @@ func TestHostResult_JSON_Shape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	want := `{"alias":"air","host_id":"air:1","self_alias":"air26","ok":true,"partial":true,"peers":[],"daemon_version":"1.2.3","unknown_registry_files":[],"titles_unavailable":true}`
+	want := `{"alias":"air","host_id":"air:1","self_alias":"air26","ok":true,"partial":true,"peers":[],"daemon_version":"1.2.3","unknown_registry_files":[],"titles_unavailable":true,"lineage_unavailable":false}`
 	if string(got) != want {
 		t.Errorf("HostResult JSON = %s, want %s", got, want)
 	}
@@ -80,7 +80,7 @@ func TestEnvelope_JSON_ErrorIncludedWhenSet(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	want := `{"host_id":"h","alias":"","ok":false,"error":"boom","partial":false,"peers":[],"daemon_version":"","unknown_registry_files":[],"titles_unavailable":false}`
+	want := `{"host_id":"h","alias":"","ok":false,"error":"boom","partial":false,"peers":[],"daemon_version":"","unknown_registry_files":[],"titles_unavailable":false,"lineage_unavailable":false}`
 	if string(got) != want {
 		t.Errorf("Envelope JSON = %s, want %s", got, want)
 	}

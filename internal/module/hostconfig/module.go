@@ -28,7 +28,12 @@ func (m *Module) Init(c *core.Core) error {
 	m.core = c
 	var err error
 	m.store, err = OpenStore(filepath.Join(c.Cfg.DataDir, "host_config.db"))
-	return err
+	if err != nil {
+		return err
+	}
+	// The team module reads the relay switches through this view (spec §8.7 (a)).
+	c.Registry.Register(RelaySwitchesKey, m)
+	return nil
 }
 
 // RegisterRoutes wires up all /api/hostconfig endpoints.
@@ -38,6 +43,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/commands", m.putHandler(KeyCommands, func(raw []byte) (any, error) { return normalizeCommands(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/resume-templates", m.putHandler(KeyResumeTemplates, func(raw []byte) (any, error) { return normalizeResumeTemplates(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/quick-replies", m.putHandler(KeyQuickReplies, func(raw []byte) (any, error) { return normalizeQuickReplies(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/relay", m.putHandler(KeyRelay, func(raw []byte) (any, error) { return normalizeRelay(raw) }))
 	mux.HandleFunc("POST /api/hostconfig/check-path", m.handleCheckPath)
 }
 

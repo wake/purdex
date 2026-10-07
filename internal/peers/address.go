@@ -37,7 +37,16 @@ type ResolveSnapshot struct {
 	// process may belong to the same conversation and make the name
 	// ambiguous. A caller setting RegistryIncomplete should set Partial
 	// too; Resolve does not require it.
+	//
+	// LineageUnavailable is the envelope's lineage_unavailable flag: the
+	// relay lineage could not be read, so rows carry no previous_refs. It
+	// does not make the inventory Partial (names and live refs are whole),
+	// but a REF that matches no live row is ErrResolveNotReady under it,
+	// not ErrNotFound: the ref may be a relayed-from one that the missing
+	// lineage would have answered, and a miss must never fall through to
+	// the tmux-name tier or be reported as gone (lead-team-relay spec §8.4).
 	RegistryIncomplete bool
+	LineageUnavailable bool
 }
 
 // ErrLegacyCC is returned (wrapped under ErrNotFound) by Resolve for the
@@ -231,6 +240,19 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 			return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) &&
 				r.Ref == ref && r.Agent.PeerName == typedName
 		})
+		if errors.Is(err, ErrNotFound) && !liveRefOwned(records, ref) {
+			// The combined form with a relayed-from ref (lead-team-relay
+			// spec §8.4): the name must still be the row's, so the check
+			// the bracket exists for is kept; only the ref is read through
+			// the lineage. Strictly below the live tier, as the bare form
+			// is: when any live row owns the ref, the lineage is not
+			// consulted, and the pair falls through to the mismatch answer
+			// below (the typed name is not the live owner's).
+			rec, err = resolveTier(records, session, func(r PeerRecord) bool {
+				return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) &&
+					hasPreviousRef(r, ref) && r.Agent.PeerName == typedName
+			})
+		}
 		switch {
 		case err == nil:
 			if snap.RegistryIncomplete {
@@ -358,13 +380,45 @@ func resolveRefHead(records []PeerRecord, ref string, snap ResolveSnapshot) (Pee
 	rec, err := resolveTier(records, ref, func(r PeerRecord) bool {
 		return hasLiveEntry(r) && r.Ref == ref
 	})
+	if errors.Is(err, ErrNotFound) {
+		// The lineage tier (lead-team-relay spec §8.4): a ref no live row
+		// carries, but exactly one live row lists among the refs it took
+		// over from through relays. It sits strictly BELOW the live-ref
+		// tier — a live ref always wins — and above nothing else: a bare
+		// tmux name (tier 4) is decided by the caller after this returns.
+		// Two rows listing the same old ref is an ambiguity, not a guess.
+		rec, err = resolveTier(records, ref, func(r PeerRecord) bool {
+			return hasLiveEntry(r) && hasPreviousRef(r, ref)
+		})
+	}
 	if err == nil && snap.RegistryIncomplete {
 		return PeerRecord{}, ErrResolveNotReady
 	}
-	if errors.Is(err, ErrNotFound) && snap.Partial {
+	if errors.Is(err, ErrNotFound) && (snap.Partial || snap.LineageUnavailable) {
 		return PeerRecord{}, ErrResolveNotReady
 	}
 	return rec, err
+}
+
+// hasPreviousRef reports whether ref is one of the refs r relayed from.
+// liveRefOwned reports whether some live row carries ref as its own: the
+// condition under which the lineage tier must not be consulted at all.
+func liveRefOwned(records []PeerRecord, ref string) bool {
+	for _, r := range records {
+		if hasLiveEntry(r) && r.Ref == ref {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPreviousRef(r PeerRecord, ref string) bool {
+	for _, p := range r.PreviousRefs {
+		if p == ref {
+			return true
+		}
+	}
+	return false
 }
 
 // hasLiveEntry reports whether r's agent is a real, live Claude Code

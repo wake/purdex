@@ -38,6 +38,7 @@ import (
 	"github.com/wake/purdex/internal/peers/ccuds"
 	"github.com/wake/purdex/internal/peers/proxyhelper"
 	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/team"
 )
 
 // fetchFunc is the fan-out seam: fetchRemote in production, a fake in tests.
@@ -786,16 +787,18 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		}
 	}
 
+	previousRefs, lineageUnavailable := m.previousRefs()
 	peerRecords := ipeers.Build(ipeers.BuildInput{
-		HostID:     hostID,
-		Alias:      alias,
-		Sessions:   summaries,
-		Owners:     owners,
-		Unresolved: unresolved,
-		Entries:    entries,
-		ProxyPIDs:  proxyPIDs,
-		Titles:     titles,
-		Contexts:   contexts,
+		HostID:       hostID,
+		Alias:        alias,
+		Sessions:     summaries,
+		Owners:       owners,
+		Unresolved:   unresolved,
+		Entries:      entries,
+		ProxyPIDs:    proxyPIDs,
+		Titles:       titles,
+		Contexts:     contexts,
+		PreviousRefs: previousRefs,
 		// An empty title map means "unreadable", not "no user titles".
 		// Build does not branch on this: it is passed through so the flag
 		// travels with the rows it explains, telling a consumer why their
@@ -816,7 +819,38 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		DaemonVersion:        buildinfo.Version,
 		UnknownRegistryFiles: unknown,
 		TitlesUnavailable:    titlesUnavailable,
+		LineageUnavailable:   lineageUnavailable,
 	}
+}
+
+// previousRefs reads the relay lineage the team module publishes under
+// team.LineageReaderKey (lead-team-relay spec §8.4). Looked up per call,
+// not in Init: team depends on peers, so it registers after peers' Init
+// ran. No reader (an older build, or tests without the team module) means
+// no lineage — rows render without previous_refs and an old ref is
+// peer_not_found, exactly the pre-P5a behaviour. A READ ERROR is different:
+// the lineage exists but could not be read, so the envelope says
+// lineage_unavailable (not partial — names and live refs are whole) and a
+// ref that matches no live row resolves as not-ready instead of not-found,
+// never falling through to the tmux-name tier; the error is logged.
+func (m *Module) previousRefs() (refs map[string][]string, unavailable bool) {
+	if m.core == nil || m.core.Registry == nil {
+		return nil, false
+	}
+	svc, ok := m.core.Registry.Get(team.LineageReaderKey)
+	if !ok {
+		return nil, false
+	}
+	reader, ok := svc.(team.LineageReader)
+	if !ok {
+		return nil, false
+	}
+	refs, err := reader.PreviousRefs()
+	if err != nil {
+		m.logf("peers: inventory: read relay lineage: %v", err)
+		return nil, true
+	}
+	return refs, false
 }
 
 // titleSnapshot reads the title table into Build's map. A nil store is an
@@ -896,6 +930,7 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 		DaemonVersion:        local.DaemonVersion,
 		UnknownRegistryFiles: local.UnknownRegistryFiles,
 		TitlesUnavailable:    local.TitlesUnavailable,
+		LineageUnavailable:   local.LineageUnavailable,
 	}
 
 	wg.Wait()
@@ -1122,5 +1157,6 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		DaemonVersion:        bound(env.DaemonVersion),
 		UnknownRegistryFiles: bounded,
 		TitlesUnavailable:    env.TitlesUnavailable,
+		LineageUnavailable:   env.LineageUnavailable,
 	}
 }

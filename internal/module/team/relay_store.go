@@ -324,20 +324,34 @@ func (s *Store) PreviousRefs() (map[string][]string, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read lineage: %w", err)
 	}
+	// Each session's chain is its predecessor's ref followed by the
+	// predecessor's own chain, so chains are memoised: every row's
+	// predecessor is looked up once. The output itself is Θ(sum of chain
+	// lengths) — a single chain of N relays yields N chains of 1..N refs —
+	// because the contract hands every head its whole chain (U3: uncapped)
+	// without knowing which heads are live; N is the number of relays one
+	// conversation has been through, tens at most, 7 bytes a ref. The
+	// lineage is acyclic (checkLineage), and `visiting` makes a cycle in a
+	// hand-edited database terminate instead of recursing forever.
 	out := make(map[string][]string, len(back))
-	for head := range back {
-		seen := map[string]bool{head: true}
-		var refs []string
-		for cur := head; ; {
-			lr, ok := back[cur]
-			if !ok || seen[lr.predecessorSessionID] {
-				break
-			}
-			seen[lr.predecessorSessionID] = true
-			refs = append(refs, lr.predecessorRef)
-			cur = lr.predecessorSessionID
+	visiting := map[string]bool{}
+	var chain func(sid string) []string
+	chain = func(sid string) []string {
+		if refs, done := out[sid]; done {
+			return refs
 		}
-		out[head] = refs
+		lr, ok := back[sid]
+		if !ok || visiting[sid] {
+			return nil
+		}
+		visiting[sid] = true
+		refs := append([]string{lr.predecessorRef}, chain(lr.predecessorSessionID)...)
+		visiting[sid] = false
+		out[sid] = refs
+		return refs
+	}
+	for head := range back {
+		chain(head)
 	}
 	return out, nil
 }
