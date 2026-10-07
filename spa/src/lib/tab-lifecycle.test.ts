@@ -7,7 +7,7 @@ import { useEditorStore } from '../stores/useEditorStore'
 import { createTab } from '../types/tab'
 import type { PaneContent, PaneLayout } from '../types/tab'
 import type { FileSource } from '../types/fs'
-import { closeTab } from './tab-lifecycle'
+import { closeTab, confirmCloseTab } from './tab-lifecycle'
 import { bufferKey } from './editor-buffer-key'
 
 function resetStores() {
@@ -263,5 +263,41 @@ describe('closeTab — unsaved editor warning', () => {
 
     expect(confirmSpy).not.toHaveBeenCalled()
     expect(closeSpy).toHaveBeenCalledWith(id, undefined)
+  })
+
+  // Tear-off asks the gates before it sends the tab to a new window, then closes it once that worked (#1816).
+  describe('confirmCloseTab / closeTab({ confirmed })', () => {
+    it('confirmCloseTab asks the same gates: missing → false, locked → false without asking, dirty → the user decides', () => {
+      expect(confirmCloseTab('nonexistent')).toBe(false)
+
+      seedBuffer('/a.md', true)
+      const id = addTabWithLayout({ type: 'leaf', pane: { id: 'p1', content: editorContent('/a.md') } })
+      confirmSpy.mockReturnValue(false)
+      expect(confirmCloseTab(id)).toBe(false)
+      confirmSpy.mockReturnValue(true)
+      expect(confirmCloseTab(id)).toBe(true)
+      expect(confirmSpy).toHaveBeenCalledTimes(2)
+
+      useTabStore.getState().toggleLock(id)
+      expect(confirmCloseTab(id)).toBe(false)
+      expect(confirmSpy).toHaveBeenCalledTimes(2)
+      // Asking never closes anything.
+      expect(closeSpy).not.toHaveBeenCalled()
+    })
+
+    it('closeTab with confirmed closes a dirty tab without asking again', () => {
+      seedBuffer('/a.md', true)
+      const id = addTabWithLayout({ type: 'leaf', pane: { id: 'p1', content: editorContent('/a.md') } })
+
+      closeTab(id, { confirmed: true })
+
+      expect(confirmSpy).not.toHaveBeenCalled()
+      expect(closeSpy).toHaveBeenCalledWith(id, { confirmed: true })
+    })
+
+    it('closeTab with confirmed on a tab that is already gone does nothing', () => {
+      expect(() => closeTab('nonexistent', { confirmed: true })).not.toThrow()
+      expect(closeSpy).not.toHaveBeenCalled()
+    })
   })
 })

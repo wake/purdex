@@ -394,6 +394,8 @@
   "browser.copy_url": "複製網址",
   "browser.pop_out": "在 Mini Browser 開啟",
   "browser.move_to_tab": "在主視窗重新開啟此網址",
+  "browser.unsupported": "這個版本的 Purdex App 還不支援內建瀏覽器，請更新 App",
+  "browser.unsupported_back": "回到新分頁",
 
   "tray.show_window": "顯示視窗",
   "tray.quit": "結束 Purdex",
@@ -657,6 +659,7 @@
   "performance_monitor.no_open_panes": "沒有開啟的面板",
 
   "tab.move_new_window": "移到新視窗",
+  "tab.move_new_window_unsupported": "這個版本的 Purdex App 還不支援移到新視窗，請更新 App",
   "tab.move_to": "移到",
 
   "status.no_active": "無使用中的 Session",

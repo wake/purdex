@@ -1,9 +1,13 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from './store'
 import { useTabStore } from '../../stores/useTabStore'
+import { useHistoryStore } from '../../stores/useHistoryStore'
+import { useEditorStore } from '../../stores/useEditorStore'
+import { useUndoToast } from '../../stores/useUndoToast'
 import { useTabWorkspaceActions } from './hooks'
 import { getVisibleTabIds } from './lib/getVisibleTabIds'
+import { bufferKey } from '../../lib/editor-buffer-key'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
 
@@ -354,5 +358,179 @@ describe('closeOthers / closeRight while activeWorkspaceId is null', () => {
     const { a1, b1, b2 } = world()
     act_('closeRight', a1.id)
     expect(Object.keys(useTabStore.getState().tabs).sort()).toEqual([a1.id, b1.id, b2.id].sort())
+  })
+})
+
+// #1816 — the Mac App loads the SPA from the dev server, so its Electron preload can be older than this code:
+// `window.electronAPI` is there but `tearOffTab` is not. The handler used to close the tab first and call the
+// IPC after, so a missing (or throwing) IPC lost the tab. Now nothing is touched when the IPC is missing — and
+// the user is told why nothing happened — and the tab leaves this window only once the new window was asked
+// for successfully, so a throwing or rejecting IPC keeps it too.
+describe('tearOff with an older preload (#1816)', () => {
+  const UNSUPPORTED = "This version of the Purdex App can't move a tab to a new window yet. Update the App."
+  let confirmSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
+    useEditorStore.setState({ buffers: {} })
+    useUndoToast.setState({ toast: null, notice: null })
+    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  })
+
+  afterEach(() => {
+    confirmSpy.mockRestore()
+    delete window.electronAPI
+  })
+
+  function setApi(api: Record<string, unknown>) {
+    window.electronAPI = api as unknown as Window['electronAPI']
+  }
+
+  /** A tab in a workspace; `layout` swaps in an editor pane for the unsaved-changes cases. */
+  function world(layout?: Tab['layout']) {
+    const base = createTab({ kind: 'new-tab' })
+    const tab = layout ? { ...base, layout } : base
+    useTabStore.getState().addTab(tab)
+    const ws = useWorkspaceStore.getState().addWorkspace('A')
+    useWorkspaceStore.getState().addTabToWorkspace(ws.id, tab.id)
+    return { tab, wsId: ws.id }
+  }
+
+  function tearOff(tabId: string) {
+    const { result } = renderHook(() => useTabWorkspaceActions(Object.values(useTabStore.getState().tabs)))
+    act(() => { result.current.handleContextMenu({ preventDefault() {}, clientX: 0, clientY: 0 } as unknown as React.MouseEvent, tabId) })
+    act(() => { result.current.handleContextAction('tearOff') })
+  }
+
+  /** Lets the IPC promise settle and its continuation run. */
+  async function settle() {
+    await act(async () => { await Promise.resolve() })
+  }
+
+  function expectKept(tabId: string, wsId: string) {
+    expect(useTabStore.getState().tabs[tabId]).toBeDefined()
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)?.tabs).toContain(tabId)
+    expect(useHistoryStore.getState().closedTabs).toHaveLength(0)
+  }
+
+  it('an electronAPI without tearOffTab: nothing changes, nothing throws, and a toast says why', async () => {
+    setApi({ destroyBrowserView: vi.fn() })
+    const { tab, wsId } = world()
+
+    expect(() => tearOff(tab.id)).not.toThrow()
+    await settle()
+
+    expectKept(tab.id, wsId)
+    expect(useUndoToast.getState().toast?.message).toBe(UNSUPPORTED)
+  })
+
+  it('no electronAPI at all: nothing changes either, and the same toast says why', async () => {
+    const { tab, wsId } = world()
+
+    expect(() => tearOff(tab.id)).not.toThrow()
+    await settle()
+
+    expectKept(tab.id, wsId)
+    expect(useUndoToast.getState().toast?.message).toBe(UNSUPPORTED)
+  })
+
+  it('a working tearOffTab: the tab is sent once while still here, then leaves this window once', async () => {
+    let presentWhenSent: boolean | undefined
+    const tearOffTab = vi.fn((json: string) => {
+      presentWhenSent = useTabStore.getState().tabs[(JSON.parse(json) as Tab).id] !== undefined
+      return Promise.resolve()
+    })
+    setApi({ tearOffTab, destroyBrowserView: vi.fn() })
+    const { tab, wsId } = world()
+    const closeSpy = vi.spyOn(useWorkspaceStore.getState(), 'closeTabInWorkspace')
+
+    tearOff(tab.id)
+    await settle()
+
+    expect(tearOffTab).toHaveBeenCalledTimes(1)
+    expect((JSON.parse(tearOffTab.mock.calls[0][0]) as Tab).id).toBe(tab.id)
+    expect(presentWhenSent).toBe(true)
+    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)?.tabs).not.toContain(tab.id)
+    expect(closeSpy).toHaveBeenCalledTimes(1)
+    expect(useUndoToast.getState().toast).toBeNull()
+    closeSpy.mockRestore()
+  })
+
+  it('a tearOffTab that throws: the tab stays and nothing throws out of the menu action', async () => {
+    const tearOffTab = vi.fn(() => { throw new Error('boom') })
+    setApi({ tearOffTab, destroyBrowserView: vi.fn() })
+    const { tab, wsId } = world()
+
+    expect(() => tearOff(tab.id)).not.toThrow()
+    await settle()
+
+    expect(tearOffTab).toHaveBeenCalledTimes(1)
+    expectKept(tab.id, wsId)
+  })
+
+  it('a tearOffTab that rejects: the tab stays', async () => {
+    const tearOffTab = vi.fn(() => Promise.reject(new Error('no handler')))
+    setApi({ tearOffTab, destroyBrowserView: vi.fn() })
+    const { tab, wsId } = world()
+
+    tearOff(tab.id)
+    await settle()
+
+    expect(tearOffTab).toHaveBeenCalledTimes(1)
+    expectKept(tab.id, wsId)
+  })
+
+  it('a locked tab is never sent (it could not leave this window)', async () => {
+    const tearOffTab = vi.fn(() => Promise.resolve())
+    setApi({ tearOffTab, destroyBrowserView: vi.fn() })
+    const { tab, wsId } = world()
+    useTabStore.getState().toggleLock(tab.id)
+
+    tearOff(tab.id)
+    await settle()
+
+    expect(tearOffTab).not.toHaveBeenCalled()
+    expectKept(tab.id, wsId)
+  })
+
+  describe('unsaved editor changes', () => {
+    const editorLayout: Tab['layout'] = {
+      type: 'leaf',
+      pane: { id: 'p-editor', content: { kind: 'editor', source: { type: 'inapp' }, filePath: '/a.md' } },
+    }
+
+    beforeEach(() => {
+      useEditorStore.setState({ buffers: { [bufferKey({ type: 'inapp' }, '/a.md')]: { isDirty: true } as never } })
+    })
+
+    it('the user keeps them: the tab is never sent', async () => {
+      confirmSpy.mockReturnValue(false)
+      const tearOffTab = vi.fn(() => Promise.resolve())
+      setApi({ tearOffTab, destroyBrowserView: vi.fn() })
+      const { tab, wsId } = world(editorLayout)
+
+      tearOff(tab.id)
+      await settle()
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1)
+      expect(tearOffTab).not.toHaveBeenCalled()
+      expectKept(tab.id, wsId)
+    })
+
+    it('the user lets them go: asked once (not again on the close), sent, and the tab leaves', async () => {
+      const tearOffTab = vi.fn(() => Promise.resolve())
+      setApi({ tearOffTab, destroyBrowserView: vi.fn() })
+      const { tab } = world(editorLayout)
+
+      tearOff(tab.id)
+      await settle()
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1)
+      expect(tearOffTab).toHaveBeenCalledTimes(1)
+      expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
+    })
   })
 })

@@ -4,7 +4,9 @@ import { useWorkspaceStore } from './store'
 import { createTab } from '../../types/tab'
 import { getPrimaryPane, collectLeaves } from '../../lib/pane-tree'
 import { renameSession } from '../../lib/host-api'
-import { closeTab } from '../../lib/tab-lifecycle'
+import { closeTab, confirmCloseTab } from '../../lib/tab-lifecycle'
+import { useUndoToast } from '../../stores/useUndoToast'
+import { useI18nStore } from '../../stores/useI18nStore'
 import type { Tab, PaneContent, PaneRebuildRecord, TerminatedReason } from '../../types/tab'
 import type { ContextMenuAction } from '../../components/TabContextMenu'
 import type { RebuildEditableField } from '../../components/RebuildActionSet'
@@ -114,8 +116,8 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
     // markRead is handled by the cross-store subscription in active-session.ts
   }, [setActiveTab, findWorkspaceByTab, setActiveWorkspace, setWorkspaceActiveTab])
 
-  const handleCloseTab = useCallback((tabId: string) => {
-    closeTab(tabId)
+  const handleCloseTab = useCallback((tabId: string, opts?: { confirmed?: boolean }) => {
+    closeTab(tabId, opts)
 
     // Clear rename popover if the renamed tab was closed
     if (renameTarget?.tabId === tabId) {
@@ -206,15 +208,28 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         break
       }
       case 'tearOff': {
-        if (!window.electronAPI) break
         const tabData = tabs[tab.id]
         if (!tabData) break
-        // Must remove tab BEFORE IPC to avoid duplication if locked
-        handleCloseTab(tab.id)
-        // Only send to new window if tab was actually removed
-        if (!useTabStore.getState().tabs[tab.id]) {
-          window.electronAPI.tearOffTab(JSON.stringify(tabData))
+        const api = window.electronAPI
+        // The App loads the SPA from the dev server, so its preload can be older than this code and lack the
+        // IPC (#1816): touch nothing, and say why nothing happened.
+        if (typeof api?.tearOffTab !== 'function') {
+          useUndoToast.getState().show(useI18nStore.getState().t('tab.move_new_window_unsupported'))
+          break
         }
+        // closeTab's gates (a locked tab, unsaved editor changes the user keeps) are asked BEFORE anything is
+        // sent, so a tab that is not going to leave never ends up in two windows. Then the new window is asked
+        // for first, and the tab leaves this one only once that call returned — an IPC that throws or rejects
+        // loses nothing.
+        if (!confirmCloseTab(tab.id)) break
+        void (async () => {
+          try {
+            await api.tearOffTab(JSON.stringify(tabData))
+          } catch {
+            return // no new window: the tab stays here
+          }
+          handleCloseTab(tab.id, { confirmed: true })
+        })()
         break
       }
       case 'rename': {
