@@ -40,6 +40,8 @@ export interface NexHandoffRequest {
    * keeps today's behaviour).
    */
   keep_session?: boolean
+  /** Seconds before an unanswered approval request is denied (permission channel §5.5); only with `handoff_ask`. */
+  permission_timeout_s?: number
 }
 
 export interface NexHandoffResult {
@@ -203,6 +205,8 @@ export interface NexWorkerRebuildRequest {
   profile?: string
   /** The failed (live-but-rejected) stint this rebuild replaces; the daemon exits it first. */
   replace_execution_id?: string
+  /** As `NexHandoffRequest.permission_timeout_s`. */
+  permission_timeout_s?: number
 }
 
 export interface NexWorkerRebuildResult {

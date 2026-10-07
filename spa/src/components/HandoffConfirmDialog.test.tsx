@@ -559,3 +559,76 @@ describe('HandoffConfirmDialog — errors keep the dialog open', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 })
+
+// Permission channel spec §5.2 / plan Task 7: 完全放行（預設） or 需要核准, offered only when the host can run handoff_ask.
+describe('HandoffConfirmDialog — 完全放行 or 需要核准 (permission channel §5.2)', () => {
+  const PERMS = { profiles: ['handoff_ask'], answer: { method: 'POST', path: '/api/nex/v1/executions/{id}/permissions/{request_id}' }, timeout: { max_s: 86400 } }
+  const nexWith = (capabilities: Record<string, unknown>) => useNexHostStore.setState({
+    byHost: { h1: { info: null, capabilities: { delegate: { resume_session_id: true }, ...capabilities } as never, phase: 'ready', error: null, fetchedAt: 0, generation: 1, fingerprint: 'f' } },
+  } as never)
+  const askReady = () => nexWith({ sandbox_profiles: ['default', 'handoff_ask', 'handoff'], permissions: PERMS })
+  const fullRadio = () => screen.getByTestId('handoff-approval-full') as HTMLInputElement
+  const askRadio = () => screen.getByTestId('handoff-approval-ask') as HTMLInputElement
+
+  it('hidden without the channel, and without handoff_ask in sandbox_profiles', () => {
+    renderDialog() // readyNex: no permissions
+    expect(screen.queryByTestId('handoff-approval')).toBeNull()
+    cleanup()
+    nexWith({ sandbox_profiles: ['default', 'handoff'], permissions: PERMS })
+    renderDialog()
+    expect(screen.queryByTestId('handoff-approval')).toBeNull()
+  })
+
+  it('shown when the host can ask: 完全放行 is the default, and one line explains 需要核准', () => {
+    askReady()
+    renderDialog()
+    expect(screen.getByLabelText('Full access (default)')).toBe(fullRadio())
+    expect(screen.getByLabelText('Ask for approval')).toBe(askRadio())
+    expect(fullRadio().checked).toBe(true)
+    expect(askRadio().checked).toBe(false)
+    expect(screen.getByTestId('handoff-approval-hint')).toHaveTextContent('waits for you to allow or deny')
+  })
+
+  it('confirming the default sends no approval choice (today\'s handoff)', async () => {
+    askReady()
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
+    renderDialog()
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex).toHaveBeenCalledWith({ ...args, keepSession: true })
+    expect(mockedHandToNex.mock.calls[0][0]).not.toHaveProperty('askApproval')
+  })
+
+  it('需要核准 → handToNex gets askApproval: true', async () => {
+    askReady()
+    mockedHandToNex.mockResolvedValueOnce({ result: ok, swapped: true })
+    renderDialog()
+    fireEvent.click(askRadio())
+    expect(askRadio().checked).toBe(true)
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(mockedHandToNex).toHaveBeenCalledWith({ ...args, keepSession: true, askApproval: true })
+  })
+
+  it('a rejected asking handoff shows the reject reason and is never resubmitted as 完全放行', async () => {
+    askReady()
+    mockedHandToNex.mockRejectedValueOnce(new HandoffApiError(409, 'delegate_rejected', {
+      reject_reason: 'permission channel unavailable: requested handoff_ask, host max_profile is trusted', rolled_back: true,
+    }))
+    const { onClose } = renderDialog()
+    fireEvent.click(askRadio())
+    await act(async () => { fireEvent.click(confirmBtn()) })
+    expect(toast()?.message).toContain('permission channel unavailable: requested handoff_ask')
+    expect(onClose).not.toHaveBeenCalled()
+    await waitFor(() => expect(confirmBtn().disabled).toBe(false))
+    expect(mockedHandToNex).toHaveBeenCalledTimes(1)
+    expect(mockedHandToNex.mock.calls[0][0]).toMatchObject({ askApproval: true })
+    expect(askRadio().checked).toBe(true) // the choice is kept, not flipped back to 完全放行
+  })
+
+  it('has its copy in both locales', () => {
+    for (const loc of [en, zh] as Array<Record<string, string>>) {
+      for (const k of ['handoff.approval.label', 'handoff.approval.full', 'handoff.approval.ask', 'handoff.approval.ask_hint']) expect(loc[k], k).toBeTruthy()
+    }
+    expect((zh as Record<string, string>)['handoff.approval.full']).toBe('完全放行（預設）')
+    expect((zh as Record<string, string>)['handoff.approval.ask']).toBe('需要核准')
+  })
+})

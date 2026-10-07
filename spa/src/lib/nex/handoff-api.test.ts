@@ -4,7 +4,7 @@
 // is the contract these tests pin.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
-import { HandoffApiError, nexHandoff, nexTakeback, nexTakeToTerminal } from './handoff-api'
+import { HandoffApiError, nexHandoff, nexTakeback, nexTakeToTerminal, nexWorkerRebuild } from './handoff-api'
 import { NEX_CLIENT_ID_RE } from './client-id'
 
 const testGlobal = globalThis as typeof globalThis & { fetch: ReturnType<typeof vi.fn> }
@@ -72,6 +72,17 @@ describe('handoff-api', () => {
       await nexHandoff(hostId, 'c1', { expected_tmux_instance: 'i' })
       const [, init] = testGlobal.fetch.mock.calls[0]
       expect(JSON.parse(init.body)).toEqual({ expected_tmux_instance: 'i' })
+    })
+
+    it('carries profile and permission_timeout_s when given (permission channel §5.2); worker-rebuild too', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ execution_id: 'e', state: 'running', session_id: 's', cwd: '/' }))
+      await nexHandoff(hostId, 'c1', { expected_tmux_instance: 'i', profile: 'handoff_ask', permission_timeout_s: 900 })
+      expect(JSON.parse(testGlobal.fetch.mock.calls[0][1].body)).toEqual({ expected_tmux_instance: 'i', profile: 'handoff_ask', permission_timeout_s: 900 })
+      testGlobal.fetch.mockResolvedValueOnce(json({ execution_id: 'e2', state: 'running' }))
+      await nexWorkerRebuild(hostId, { session_id: 's', cwd: '/w', profile: 'handoff_ask', permission_timeout_s: 300 })
+      const [url, init] = testGlobal.fetch.mock.calls[1]
+      expect(url).toBe('http://100.64.0.2:7860/api/nex/worker-rebuild')
+      expect(JSON.parse(init.body)).toEqual({ session_id: 's', cwd: '/w', profile: 'handoff_ask', permission_timeout_s: 300 })
     })
 
     it('200 is parsed into NexHandoffResult', async () => {

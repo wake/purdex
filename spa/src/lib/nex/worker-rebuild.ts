@@ -9,7 +9,7 @@ import { isRefShownNow } from '../shown-hosts'
 import type { TFunction } from '../pane-labels'
 import type { PaneContent } from '../../types/tab'
 import { HandoffApiError, nexWorkerRebuild, type NexWorkerRebuildResult } from './handoff-api'
-import { executionContentFor, handoffErrorMessage, singleFlight } from './handoff'
+import { ASK_PROFILE, executionContentFor, handoffErrorMessage, permissionTimeoutFor, singleFlight } from './handoff'
 
 export interface RebuildAsWorkerArgs {
   hostId: string
@@ -31,11 +31,14 @@ export interface RebuildAsWorkerArgs {
 export function rebuildAsWorker(args: RebuildAsWorkerArgs): Promise<{ result: NexWorkerRebuildResult; swapped: boolean }> {
   const { hostId, sessionId, cwd, profile, replaceExecutionId, tabId, paneId, expect } = args
   return singleFlight(`rebuild:${hostId}:${paneId}`, async () => {
+    // A rebuild keeps the mode: an asking row also gets the current approval timeout (permission channel plan Task 7).
+    const timeout = profile === ASK_PROFILE ? permissionTimeoutFor(hostId) : undefined
     const result = await nexWorkerRebuild(hostId, {
       session_id: sessionId,
       cwd,
       ...(profile ? { profile } : {}),
       ...(replaceExecutionId ? { replace_execution_id: replaceExecutionId } : {}),
+      ...(timeout !== undefined ? { permission_timeout_s: timeout } : {}),
     })
     const swapped = isRefShownNow(hostId)
       && useTabStore.getState().trySetPaneContent(tabId, paneId, executionContentFor(hostId, result.execution_id), expect)
