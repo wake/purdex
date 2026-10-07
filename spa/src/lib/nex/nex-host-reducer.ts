@@ -22,10 +22,12 @@ export interface NexHostEntry {
   generation: number
   /** The host identity (`ip:port:token`) the data came from; see `hostFingerprint`. */
   fingerprint: string
+  /** `/api/info.capabilities` strings of the daemon (e.g. `conversations.scope.v1`); absent until `/api/info` answered. */
+  daemonCapabilities?: string[]
 }
 
 /** What one fetch round produced, before it becomes an entry. */
-export type Loaded = Pick<NexHostEntry, 'info' | 'capabilities' | 'error'>
+export type Loaded = Pick<NexHostEntry, 'info' | 'capabilities' | 'error' | 'daemonCapabilities'>
 
 /**
  * A request captures the entry's generation and the host identity it went

@@ -31,7 +31,7 @@ describe('WorkerExitedTab retry (real hook)', () => {
     listConversations.mockRejectedValueOnce(new HandoffApiError(503, 'conversations_unavailable', {}, 'down'))
     render(<WorkerExitedTab hostId="h1" />)
     await flush()
-    expect(listConversations).toHaveBeenCalledWith('h1', 'ended')
+    expect(listConversations).toHaveBeenCalledWith('h1', 'ended', 'normal')
     expect(screen.getByTestId('worker-exited-error')).toHaveTextContent('conversations_unavailable')
     expect(screen.queryByTestId('worker-exited-loading')).toBeNull()
 

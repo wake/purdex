@@ -19,7 +19,7 @@ export function WorkerGoneTab({ hostId }: { hostId?: string }) {
 
 function GoneList({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
-  const { page, phase, error, unavailable, refetch } = useConversations(hostId, 'gone')
+  const { page, phase, error, unavailable, refetch } = useConversations(hostId, 'gone', 'normal')
   const [query, setQuery] = useState('')
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {

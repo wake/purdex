@@ -44,6 +44,18 @@ export function selectSessionFilter(hostId: string): (s: Pick<NexHostState, 'byH
   }
 }
 
+/**
+ * The daemon lists `conversations.scope.v1` in `/api/info.capabilities`: `GET /api/nex/conversations?scope=` is
+ * honoured and Workers/test tabs may split test from normal. Key presence, never a version compare; false until the
+ * host is ready.
+ */
+export function selectConversationsScope(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
+  return (s) => {
+    const entry = s.byHost[hostId]
+    return entry?.phase === 'ready' && entry.daemonCapabilities?.includes('conversations.scope.v1') === true
+  }
+}
+
 /** Nexen v0.17: every prelude item carries an integer `offset`. */
 export function selectPreludeItemOffset(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
   return (s) => {

@@ -2,6 +2,8 @@
 // Worker LIST UIs show live conversations only, one row per entity (its latest stint). The shared
 // execution store keeps raw items; only list views call `liveEntityRows`.
 import type { ExecutionSummary } from './types'
+import { isTestCwd } from './test-cwd'
+import { matchesExecutionQuery } from './execution-search'
 
 /** Spec §4.2: live = not archived and not terminated (failed / rejected still count as live). */
 export const isLiveRow = (row: Pick<ExecutionSummary, 'archived' | 'state'>): boolean => !row.archived && row.state !== 'terminated'
@@ -23,4 +25,21 @@ export function liveEntityRows(items: readonly ExecutionSummary[]): ExecutionSum
   }
   const keep = new Set(best.values())
   return items.filter((row) => keep.has(row))
+}
+
+export interface LiveRowFilter {
+  /** `normal` drops test cwds, `test` keeps only those; omitted keeps every row. */
+  filter?: 'normal' | 'test'
+  /** Search text (`matchesExecutionQuery`); blank keeps every row. */
+  query?: string
+  /** The host's home, for the `~` display form of a cwd. */
+  home?: string
+}
+
+/** `liveEntityRows`, then the cwd split and the search. The one place the Workers list and 測試用 agree on a row set. */
+export function filterLiveRows(items: readonly ExecutionSummary[], { filter, query = '', home = '' }: LiveRowFilter = {}): ExecutionSummary[] {
+  let rows = liveEntityRows(items)
+  if (filter) rows = rows.filter((row) => isTestCwd(row.cwd) === (filter === 'test'))
+  if (query.trim() !== '') rows = rows.filter((row) => matchesExecutionQuery(row, query, home))
+  return rows
 }

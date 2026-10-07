@@ -47,15 +47,16 @@ describe('WorkerSettingsPage', () => {
     expect(screen.getByTestId('probe')).toHaveTextContent('b')
   })
 
-  it('the tabs are 外觀 / Workers / 已退出 / 已消失, in that order (spec §13.3)', () => {
+  it('the tabs are 外觀 / Workers / 已退出 / 已消失 / 測試用, in that order (spec §13.3, test tab §3)', () => {
     act(() => { useI18nStore.getState().setLocale('zh-TW') })
     try {
       render(<WorkerSettingsPage />)
       const tabs = screen.getAllByRole('tab')
       expect(tabs.map((x) => x.getAttribute('data-testid'))).toEqual([
         'worker-settings-tab-appearance', 'worker-settings-tab-workers', 'worker-settings-tab-exited', 'worker-settings-tab-gone',
+        'worker-settings-tab-test',
       ])
-      expect(tabs.map((x) => x.textContent)).toEqual(['外觀', 'Workers', '已退出', '已消失'])
+      expect(tabs.map((x) => x.textContent)).toEqual(['外觀', 'Workers', '已退出', '已消失', '測試用'])
     } finally {
       act(() => { useI18nStore.getState().setLocale('en') })
     }
@@ -88,14 +89,17 @@ describe('WorkerSettingsPage', () => {
     expect(x).toHaveAttribute('aria-selected', 'true')
     fireEvent.keyDown(x, { key: 'ArrowRight' })
     expect(g).toHaveAttribute('aria-selected', 'true')
+    const z = screen.getByTestId('worker-settings-tab-test')
     fireEvent.keyDown(g, { key: 'ArrowRight' })
+    expect(z).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(z, { key: 'ArrowRight' })
     expect(a).toHaveAttribute('aria-selected', 'true')
     fireEvent.keyDown(a, { key: 'End' })
-    expect(g).toHaveAttribute('aria-selected', 'true')
-    fireEvent.keyDown(g, { key: 'Home' })
+    expect(z).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(z, { key: 'Home' })
     expect(a).toHaveAttribute('aria-selected', 'true')
     fireEvent.keyDown(a, { key: 'ArrowLeft' })
-    expect(g).toHaveAttribute('aria-selected', 'true')
+    expect(z).toHaveAttribute('aria-selected', 'true')
   })
 
   it('the Workers tab shows a disabled / unavailable host state instead of loading', () => {

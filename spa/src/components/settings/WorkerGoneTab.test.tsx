@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, within, act } from '@testing-library/react'
 
 const conversations = vi.fn()
-vi.mock('../../hooks/useConversations', () => ({ useConversations: (h: string, s: string) => conversations(h, s) }))
+vi.mock('../../hooks/useConversations', () => ({ useConversations: (h: string, s: string, sc?: string) => conversations(h, s, sc) }))
 const hostExecutions = vi.fn()
 vi.mock('../../hooks/useHostExecutions', () => ({ useHostExecutions: (h: string) => hostExecutions(h) }))
 import { WorkerGoneTab } from './WorkerGoneTab'
@@ -53,7 +53,7 @@ describe('WorkerGoneTab', () => {
   it('reads the gone conversations of its host, and holds no live-execution subscription (R-4-12)', () => {
     conversations.mockReturnValue(ready([]))
     render(<WorkerGoneTab hostId="h1" />)
-    expect(conversations).toHaveBeenCalledWith('h1', 'gone')
+    expect(conversations).toHaveBeenCalledWith('h1', 'gone', 'normal')
     expect(hostExecutions).not.toHaveBeenCalled()
   })
 

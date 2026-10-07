@@ -11,22 +11,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useConversations } from '../../hooks/useConversations'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { matchesConversationQuery } from '../../lib/nex/conversation-search'
-import { openConversationRebuild } from '../../lib/nex/open-conversation-rebuild'
-import { openWorkerTab } from '../../features/workspace/lib/open-worker-tab'
-import type { ConversationRow as ConversationRowData } from '../../lib/nex/conversations-api'
+import { rebuildConversation } from '../../lib/nex/rebuild-conversation'
 import { ConversationRow } from './ConversationRow'
 
 const AGE_TICK_MS = 60_000
-
-/** 重建… on an ended row: the latest stint's exited screen for a worker-last row that has one, else the rebuild tab. */
-function rebuildConversation(hostId: string, row: ConversationRowData): void {
-  if (row.last_in === 'worker' && row.latest_execution_id) {
-    openWorkerTab({ kind: 'execution', executionId: row.latest_execution_id, host: hostId })
-    return
-  }
-  // Never rejects: the host-config load and the home lookup it waits on swallow their own failures.
-  void openConversationRebuild(hostId, row)
-}
 
 export function WorkerExitedTab({ hostId }: { hostId?: string }) {
   if (!hostId) return null
@@ -35,7 +23,7 @@ export function WorkerExitedTab({ hostId }: { hostId?: string }) {
 
 function ExitedList({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
-  const { page, phase, error, unavailable, refetch } = useConversations(hostId, 'ended')
+  const { page, phase, error, unavailable, refetch } = useConversations(hostId, 'ended', 'normal')
   const [query, setQuery] = useState('')
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
