@@ -8,6 +8,7 @@
 // Only what rendering needs is checked; the daemon's own rules (id pattern,
 // lengths, Phosphor names) stay the daemon's.
 import { AGENT_ICON_VALUES } from './command-icons'
+import { trimLikeGo } from './go-trim'
 import type { HostCommand, HostProject, QuickReply, RelaySwitches, ResumeTemplateOverrides } from './host-config-api'
 
 /** Why a section shows less than the host stores. */
@@ -150,15 +151,37 @@ const RELAY_SWITCHES = ['self_solo', 'self_lead'] as const
 const RELAY_PROMPTS = ['prompt_write', 'prompt_fix', 'prompt_seed'] as const
 const RELAY_KEYS: readonly string[] = [...RELAY_SWITCHES, ...RELAY_PROMPTS]
 
+/** `team.RelayPromptMaxBytes` and the machine tag a body may not hold (`internal/team/relay_prompts.go`). */
+const RELAY_PROMPT_MAX_BYTES = 16 << 10
+const RELAY_TAG = '[pdx-relay'
+/** Go's `unicode.IsControl` (Cc) minus newline and tab. */
+// eslint-disable-next-line no-control-regex
+const RELAY_PROMPT_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/
+const utf8 = new TextEncoder()
+
+/**
+ * Why the daemon's PUT would refuse this stored body (`relayPromptsOf`: blank is
+ * the default, else `ValidateRelayPromptBody`), or null. A toggle sends the row
+ * back whole, so a body it refuses would lock the switches.
+ */
+function relayPromptProblem(v: unknown): string | null {
+  if (typeof v !== 'string') return 'is not a string'
+  if (trimLikeGo(v) === '') return null
+  if (utf8.encode(v).length > RELAY_PROMPT_MAX_BYTES) return `is over ${RELAY_PROMPT_MAX_BYTES} bytes`
+  if (RELAY_PROMPT_CONTROL.test(v)) return 'holds a control character'
+  if (v.includes(RELAY_TAG)) return `holds ${RELAY_TAG}`
+  return null
+}
+
 /**
  * The daemon's READ path, exactly (`relay.go` RelaySwitches → relayFields +
  * relaySwitchesOf): an object of the five known keys; an unknown key, or a
  * present switch that is not a boolean (null included), makes the whole value
  * unreadable; a missing switch is on. The prompt bodies are not the switches'
- * business there either: a string is kept as stored, anything else is dropped
- * (`warnings`) — the next write then stores the default, which the daemon takes.
+ * business there either: one the daemon would take is kept as stored, any other
+ * is dropped (`dropped`) — the next write then stores the default.
  */
-function readRelay(items: unknown, warnings: string[]): RelaySwitches | string {
+function readRelay(items: unknown, dropped: string[]): RelaySwitches | string {
   if (!isObject(items)) return 'items is not an object'
   const unknown = Object.keys(items).find((k) => !RELAY_KEYS.includes(k))
   if (unknown !== undefined) return `unknown key ${unknown}`
@@ -172,8 +195,9 @@ function readRelay(items: unknown, warnings: string[]): RelaySwitches | string {
   for (const key of RELAY_PROMPTS) {
     if (!Object.hasOwn(items, key)) continue
     const v = items[key]
-    if (typeof v === 'string') out[key] = v
-    else warnings.push(`${key} is not a string; dropped`)
+    const why = relayPromptProblem(v)
+    if (why === null) out[key] = v as string
+    else dropped.push(`${key} ${why}; dropped`)
   }
   return out
 }
@@ -189,11 +213,11 @@ export function parseRelay(raw: unknown, hostId: string): ParsedCollection<Relay
   }
   if (!isObject(raw)) return off(0, 'collection is not an object')
   const revision = revisionOf(raw, hostId, 'relay')
-  const warnings: string[] = []
-  const read = readRelay(raw.items, warnings)
+  const dropped: string[] = []
+  const read = readRelay(raw.items, dropped)
   if (typeof read === 'string') return off(revision, read)
-  for (const why of warnings) warn(hostId, 'relay', why)
-  return { items: read, revision, problem: null }
+  for (const why of dropped) warn(hostId, 'relay', why)
+  return { items: read, revision, problem: rowsProblem(dropped.length) }
 }
 
 /** One parser per field: what a load, a PUT answer and a 409's `current` all go through. */

@@ -171,15 +171,33 @@ describe('parseRelay', () => {
   })
 
   // RelaySwitches() decodes only the switches, so a bad stored body never turns self relay off: the switches read,
-  // the body is dropped from the SPA's copy (the next write stores the default, which the daemon accepts).
+  // the body is dropped from the SPA's copy and counted — a switch toggle PUTs the whole row, and the daemon's
+  // normalizeRelay would refuse a bad body (400), locking the switches; without it the write stores the default.
   it.each([
     ['null', null],
     ['a number', 3],
     ['an object', { text: 'x' }],
-  ])('a prompt body that is %s is dropped; the switches still read', (_name, body) => {
+    ['over 16 KiB', 'a'.repeat(16 * 1024 + 1)],
+    ['16 KiB of three-byte runes plus one byte', '接'.repeat((16 * 1024) / 3) + 'ab'],
+    ['holding a control character', 'a\u0007b'],
+    ['holding a C1 control character', 'a\u0085b'],
+    ['holding the machine tag', 'see [pdx-relay write]'],
+  ])('a prompt body that is %s is dropped and counted; the switches still read', (_name, body) => {
     expect(parseRelay({ items: { self_solo: false, prompt_fix: body, prompt_seed: 'kept' }, revision: 2 }, H))
-      .toEqual({ items: { self_solo: false, self_lead: true, prompt_seed: 'kept' }, revision: 2, problem: null })
+      .toEqual({ items: { self_solo: false, self_lead: true, prompt_seed: 'kept' }, revision: 2, problem: { kind: 'rows', count: 1 } })
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  // The daemon's ValidateRelayPromptBody bounds, and its blank rule (TrimSpace → "" = the default) come first.
+  it.each([
+    ['exactly 16 KiB', 'a'.repeat(16 * 1024)],
+    ['newline and tab', 'a\nb\tc'],
+    ['a near-miss of the tag', '[pdx relay] pdx-relay'],
+    ['blank (Go whitespace only, incl. NEL)', ' \u0085　 '],
+  ])('a prompt body with %s is kept', (_name, body) => {
+    expect(parseRelay({ items: { prompt_write: body }, revision: 2 }, H))
+      .toEqual({ items: { self_solo: true, self_lead: true, prompt_write: body }, revision: 2, problem: null })
+    expect(warn).not.toHaveBeenCalled()
   })
 })
 

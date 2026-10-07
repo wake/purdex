@@ -131,4 +131,17 @@ describe('a malformed host config collection', () => {
     await waitFor(() => expect(putHostConfig).toHaveBeenCalled())
     expect(putHostConfig).toHaveBeenCalledWith(H, 'relay', { self_solo: false, self_lead: true, ...prompts }, 6)
   })
+
+  it('Relay: a prompt body the daemon would refuse is dropped and said, so a toggle is not refused (400)', async () => {
+    await loadWith({ relay: { items: { self_solo: true, prompt_write: 'ok', prompt_fix: 'see [pdx-relay fix]' }, revision: 8 } })
+    await show(<RelaySection hostId={H} />)
+    expect(problem()).toHaveAttribute('data-problem', 'rows')
+    expect(problem()).toHaveTextContent('1 stored')
+    expect(screen.getByTestId('relay-self-solo').getAttribute('aria-checked')).toBe('true')
+
+    vi.mocked(putHostConfig).mockResolvedValue({ items: { self_solo: false, self_lead: true, prompt_write: 'ok' }, revision: 9 })
+    fireEvent.click(screen.getByTestId('relay-self-solo'))
+    await waitFor(() => expect(screen.queryByTestId('host-config-problem')).toBeNull())
+    expect(putHostConfig).toHaveBeenCalledWith(H, 'relay', { self_solo: false, self_lead: true, prompt_write: 'ok' }, 8)
+  })
 })
