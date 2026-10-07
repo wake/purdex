@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.593] - 2026-10-08
+
+> 動 daemon、`pdx` 指令與 SPA：**需要部署新 binary、重啟 daemon，並 fast-forward 主 checkout**（不需重跑 `pdx setup`：新的 `prompts.js` 在 P9a-2 之前沒有人使用）。使用者可見：在本視窗核准／拒絕之後會切到發起者的 tab。host config 的 `relay` 那一列可多存三段 prompt（`prompt_*`，未寫過就不出現）。⚠️ **回滾限制**：存過任何一段自訂 prompt 之後，若要把 daemon 換回這版以前的 binary，必須先在新版把 write／fix／seed 三段都按「還原預設」，否則舊版讀到不認得的欄位，self relay 會回 503。
+
+### Added：接力 prompt 放進 daemon — P9a-1（#1890、#1891，spec U21）
+
+- **host config `relay.prompt_write`／`prompt_fix`／`prompt_seed`**：撰寫接力檔、補齊接力檔、喚醒新對話三段 prompt 的可編輯內文。空白或未設定＝內建預設；超過 16 KiB、非 UTF-8、含控制字元（換行與 tab 除外）或含 `[pdx-relay` 會被拒（400）。只有 admin token 能寫。
+- **`GET /api/relay/prompts`** 與 **`pdx relay prompts`**：回傳三段目前生效的內文、內建預設、固定的頭尾與可用變數。
+- 內建預設與 mod 內的備用副本由同一份 Go 原始碼產生，測試釘住兩邊一致。mod 還不會讀取（P9a-2）。
+
+### Added：核准後切到發起者的 tab — P9b-1（#1897、#1898，spec U22 (a)）
+
+- 在這個視窗按下**核准**或**拒絕**（含斷線時排隊、重連後送出的決定）成功後，切到顯示發起者 tmux session 的 tab；沒有這樣的 tab 就開一個新 tab 接上，和從主機的 session 清單開啟一樣。lead 與 self relay 兩種申請都適用。
+- 別的視窗或裝置做的決定、逾時、取消、發起者沒有 tmux，或主機在這個工作台被隱藏，都不會切換。
+- 還有其他申請開著時，下一個對話框會留住鍵盤焦點：被切過去的終端機不會把焦點搶走（這也修好了對話框開著時點通知、按鍵卻打進終端機的情況）。
+
 ## [1.0.0-alpha.592] - 2026-10-08
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。現有使用者沒有可見變化：目前的 SPA 會忽略新加的欄位，也不會收到新的 503。SPA、`pdx` 指令、Electron 都沒有改動。
