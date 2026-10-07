@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/google/uuid"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,6 +65,17 @@ func (f *fakeRelayDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Unlock()
 		if onPoll != nil {
 			onPoll(n)
+		}
+		if r.URL.Query().Get("wait") == "0" {
+			// The bound's final short read: no long poll, the row as it is.
+			id := strings.TrimPrefix(r.URL.Path, "/api/relay/wait/")
+			ap := f.final
+			if ap.State == "" {
+				ap = team.Approval{Kind: team.KindSelfRelay, State: team.StateOpen}
+			}
+			ap.ID = id
+			_ = json.NewEncoder(w).Encode(ap)
+			return
 		}
 		if f.pollDelay > 0 {
 			select {
@@ -181,6 +193,11 @@ func TestRelayCmd_BeginPrintsOpAndRequestOrRefuses(t *testing.T) {
 	_ = json.Unmarshal([]byte(bodies[len(bodies)-1]), &sent)
 	if !sent.Self || sent.SessionID != "sid-1" || sent.UsedPercentage != 72.4 || sent.Window != 1_000_000 {
 		t.Fatalf("sent = %+v", sent)
+	}
+	// PR #1726 A-1: the CLI mints the request id (UUID v4) before the first
+	// attempt and sends it, so a replay is the same request at the daemon.
+	if u, err := uuid.Parse(sent.RequestID); err != nil || u.Version() != 4 {
+		t.Fatalf("request_id = %q, want a UUID v4", sent.RequestID)
 	}
 	for _, c := range []struct {
 		code   string
@@ -372,5 +389,29 @@ func TestRelayCmd_ReportNotReady503IsExit20(t *testing.T) {
 	}
 	if reports < 2 {
 		t.Fatalf("a 503 not_ready must be retried, got %d report(s): %v", reports, paths)
+	}
+}
+
+// PR #1726 attacker A-2: when the --wait bound fires while a long poll is
+// in flight, the outcome must be the daemon's state, not the scheduler's:
+// one short read (wait=0) decides. A row that was approved in the meantime
+// ends the wait approved (exit 0, state approved); one still open prints
+// the open row as before.
+func TestRelayCmd_WaitBoundReadsTheFinalState(t *testing.T) {
+	approved := &fakeRelayDaemon{pollDelay: 10 * time.Second, final: team.Approval{Kind: team.KindSelfRelay, State: team.StateApproved}}
+	code, stdout, stderr := driveRelayWith(t, context.Background(), approved, nil, "wait", "req-1", "--wait", "300ms")
+	var ap team.Approval
+	if err := json.Unmarshal([]byte(stdout), &ap); err != nil || code != ExitOK || ap.State != team.StateApproved {
+		t.Fatalf("approved in flight at the bound: code=%d stdout=%q stderr=%q err=%v", code, stdout, stderr, err)
+	}
+	paths, _ := approved.snapshot()
+	if len(paths) < 2 || !strings.Contains(paths[len(paths)-1], "wait=0") {
+		t.Fatalf("the bound must end with one short read: %v", paths)
+	}
+
+	open := &fakeRelayDaemon{pollDelay: 10 * time.Second}
+	code, stdout, _ = driveRelayWith(t, context.Background(), open, nil, "wait", "req-1", "--wait", "300ms")
+	if err := json.Unmarshal([]byte(stdout), &ap); err != nil || code != ExitOK || ap.State != team.StateOpen || ap.ID != "req-1" {
+		t.Fatalf("still open at the bound: code=%d stdout=%q err=%v", code, stdout, err)
 	}
 }

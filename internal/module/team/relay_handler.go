@@ -3,6 +3,7 @@ package teammod
 import (
 	"encoding/json"
 	"errors"
+	"github.com/google/uuid"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -158,6 +159,27 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "session_id is required; used_percentage must be 0–100 and window non-negative", nil)
 		return
 	}
+	if req.RequestID != "" {
+		if u, err := uuid.Parse(req.RequestID); err != nil || u.Version() != 4 || u.Variant() != uuid.RFC4122 {
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "request_id must be a UUID v4", nil)
+			return
+		}
+		// A replay (the CLI's retry after a lost response, PR #1726 A-1):
+		// the request already opened its op — answer with that op, in
+		// whatever state it is now, never a second one.
+		if op, ok, err := m.store.RelayOpByRequest(req.RequestID); err != nil {
+			m.logf("[team] relay begin %s: replay lookup %s: %v", req.SessionID, req.RequestID, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return
+		} else if ok {
+			if op.SessionID != req.SessionID {
+				m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id belongs to another session's relay", nil)
+				return
+			}
+			m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: op, RequestID: op.RequestID})
+			return
+		}
+	}
 	origin, ok, err := m.origins.ResolveOriginBySession(req.SessionID)
 	if err != nil {
 		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "registry unavailable; retry", nil)
@@ -234,7 +256,10 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := m.now()
-	opID, reqID := m.newID(), m.newID()
+	opID, reqID := m.newID(), req.RequestID
+	if reqID == "" {
+		reqID = m.newID()
+	}
 	pct := req.UsedPercentage
 	op := team.RelayOp{
 		ID: opID, Kind: team.RelayKindSelf, HostID: m.hostID(), SessionID: origin.SessionID, Ref: origin.Ref,

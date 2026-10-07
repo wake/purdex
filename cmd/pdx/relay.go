@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"math"
 	"net/http"
@@ -33,6 +34,10 @@ const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--ag
 const (
 	// relayAttemptTimeout bounds one long-poll (team.MaxPollWaitS plus room), as lead's does.
 	relayAttemptTimeout = 35 * time.Second
+	// relayFinalReadTimeout bounds the one short read a wait makes when its
+	// --wait bound fires, to tell a terminal answer that was in flight from
+	// a request that is still open.
+	relayFinalReadTimeout = 5 * time.Second
 	// relayMaxHungPolls: consecutive polls without any answer before exit 20 (spec §9.1, P2b decision).
 	relayMaxHungPolls = 3
 )
@@ -179,6 +184,9 @@ func runRelayHello(ctx context.Context, args []string, stdout, stderr io.Writer,
 	return relayPrintJSON(stdout, stderr, res)
 }
 
+// relayNewID mints the client-side request id of a begin (a test seam).
+var relayNewID = uuid.NewString
+
 func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
 	fs := flag.NewFlagSet("pdx relay begin", flag.ContinueOnError)
 	var req team.RelayBeginRequest
@@ -203,13 +211,15 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 		return relayUsageErr(stderr, "--window <n> 是必要的，且不能是負數")
 	}
 	req.UsedPercentage = *used
+	// The request id is minted here, once, before the first attempt: a
+	// replay after a lost response carries the same id and the daemon
+	// answers with the op that id opened — whatever its state by then —
+	// so a retry can never open a second request (PR #1726 A-1).
+	req.RequestID = relayNewID()
 	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
 	if code != ExitOK {
 		return code
 	}
-	// Replayable: a second begin for a session with an open op answers 409
-	// relay_open carrying that op, so a replay after a dropped connection
-	// cannot open two ops.
 	var res team.RelayBeginResponse
 	if _, err := client.Do(ctx, http.MethodPost, "/api/relay/begin", req, &res, daemonclient.Idempotent()); err != nil {
 		return relayReportErr(err, stdout, stderr)
@@ -265,6 +275,20 @@ func runRelayWait(ctx context.Context, args []string, stdout, stderr io.Writer, 
 			return ExitCancelled
 		}
 		if deadline.Err() != nil {
+			// The bound fired, possibly while a terminal answer was in
+			// flight (PR #1726 A-2): read the row once more, short and
+			// without a long poll, under a fresh context, so the outcome is
+			// the daemon's state and not the scheduler's.
+			final, fctx, fcancel := team.Approval{}, context.Context(nil), context.CancelFunc(nil)
+			fctx, fcancel = context.WithTimeout(ctx, relayFinalReadTimeout)
+			_, ferr := client.Do(fctx, http.MethodGet, fmt.Sprintf("/api/relay/wait/%s?wait=0", id), nil, &final)
+			fcancel()
+			if ferr == nil && final.ID != "" {
+				ap = final
+				if ap.State != team.StateOpen {
+					return relayFinish(ap, stdout, stderr)
+				}
+			}
 			fmt.Fprintln(stderr, "pdx relay: --wait 已到，申請仍在等待核准；請再呼叫一次 pdx relay wait")
 			// Always a row with state "open" (the last polled row when there is
 			// one, a bare state otherwise): the mod re-calls on this shape.
