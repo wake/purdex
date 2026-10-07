@@ -294,6 +294,11 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // could land after the daemon's settled check and before its archive;
   // the daemon re-verifies (#1171), and the SPA refuses to start the race.
   const writeInFlight = st.pendingSend || actionPending
+  // 退出 is held back only by a write still on its way: the unaccepted send (`sendLocked`) or an interrupt.
+  // `pendingSend` lasts until the turn's result, so it would lock 退出 for the whole turn this pane sent —
+  // a worker waiting for approval included (permission channel §5.4 / N7: that exit cancels the request).
+  // A running turn is exitable after the confirm, as from the Workers list.
+  const exitWriteInFlight = st.sendLocked || actionPending
   const onTakeBack = useCallback(() => {
     if (takeBackInFlight.current || exitInFlight.current || writeInFlight) return
     if (useExecutionStore.getState().executions[key]?.summary?.state === 'running') setConfirmTakeBack(true)
@@ -685,7 +690,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
       className="relative flex flex-col h-full">
       <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
-        onInterrupt={() => void handleInterrupt()} onExit={onExit} exitDisabled={!exitable || exitBusy || takeBackBusy || writeInFlight} busy={takeBackBusy || exitBusy}
+        onInterrupt={() => void handleInterrupt()} onExit={onExit} exitDisabled={!exitable || exitBusy || takeBackBusy || exitWriteInFlight} busy={takeBackBusy || exitBusy}
         onTakeBack={takeOffered ? onTakeBack : undefined} takeBackBusy={takeBusy}
         mode={mode} onModeChange={onModeChange} />
       {confirmExit && (

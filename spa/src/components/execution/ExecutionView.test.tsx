@@ -383,13 +383,38 @@ describe('ExecutionView', () => {
     await waitFor(() => expect(screen.getByTestId('header-exit')).toBeEnabled())
   })
 
-  it('exit is disabled while a send is in flight', () => {
+  it('exit is disabled while this pane\'s send is still on its way (not yet accepted)', () => {
     render(<ExecutionView {...base} isActive />)
     expect(screen.getByTestId('header-exit')).toBeEnabled()
-    act(() => { patchExec({ pendingSend: true, pendingLocal: { text: 'hi', delivery: null } as Exec['pendingLocal'] }) })
+    act(() => { patchExec({ pendingSend: true, sendLocked: true, pendingLocal: { text: 'hi', delivery: null } as Exec['pendingLocal'] }) })
     expect(screen.getByTestId('header-exit')).toBeDisabled()
     fireEvent.click(screen.getByTestId('header-exit'))
     expect(exitWorker).not.toHaveBeenCalled()
+  })
+
+  // `pendingSend` lasts until the turn's result; only the unaccepted send (`sendLocked`) is a write on its way.
+  it('once the daemon accepted this pane\'s send, its running turn can be exited from the pane: confirm, then the pane lease', async () => {
+    useExecutionStore.getState().setSummary(H, E, summary({ state: 'running' }) as never)
+    useExecutionStore.getState().setLease(H, E, { leaseId: 'L1', expiresAt: Date.now() + 100_000 })
+    render(<ExecutionView {...base} isActive />)
+    act(() => { patchExec({ pendingSend: true, sendLocked: false, turnLive: true }) })
+    expect(screen.getByTestId('header-exit')).toBeEnabled()
+    fireEvent.click(screen.getByTestId('header-exit'))
+    expect(exitWorker).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('exit-confirm'))
+    await waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
+    expect(exitWorker).toHaveBeenCalledWith(expect.objectContaining({ hostId: H, executionId: E, leaseId: 'L1', forgetLease: forget }))
+  })
+
+  it('exit is disabled while an interrupt is on its way', async () => {
+    let resolveInterrupt!: (v: { turn_id: string; state: string }) => void
+    vi.mocked(api.interruptExecution).mockReturnValueOnce(new Promise((res) => { resolveInterrupt = res }) as never)
+    render(<ExecutionView {...base} isActive />)
+    fireEvent.click(screen.getByRole('button', { name: /interrupt/i }))
+    await waitFor(() => expect(api.interruptExecution).toHaveBeenCalledTimes(1))
+    expect(screen.getByTestId('header-exit')).toBeDisabled()
+    await act(async () => { resolveInterrupt({ turn_id: 't1', state: 'idle' }) })
+    expect(screen.getByTestId('header-exit')).toBeEnabled()
   })
 
   it('freezes the composer, interrupt and exit while the exit is in flight', async () => {

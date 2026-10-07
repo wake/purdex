@@ -111,6 +111,22 @@ describe('ExecutionHeader', () => {
     expect(within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-exit')).toBeDisabled()
   })
 
+  // Permission channel §5.4 / N7: an exit while a request waits is allowed (it cancels the request);
+  // 「等待核准」 is only a label, never a reason to disable 退出 in the row or the overflow.
+  it('a worker awaiting approval still offers 退出, in the wide row and the overflow', () => {
+    const awaiting = summary({ state: 'running', pending_permission: { request_id: 'req_a', tool_name: 'Bash', since: 1 } })
+    render(<ExecutionHeader {...baseProps} summary={awaiting} />)
+    expect(screen.getByTestId('execution-state-awaiting')).toBeInTheDocument()
+    expect(screen.getByTestId('header-exit')).toBeEnabled()
+    fireEvent.click(screen.getByTestId('header-exit'))
+    expect(baseProps.onExit).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByTestId('header-overflow'))
+    const overflowExit = within(screen.getByTestId('header-overflow-panel')).getByTestId('overflow-exit')
+    expect(overflowExit).toBeEnabled()
+    fireEvent.click(overflowExit)
+    expect(baseProps.onExit).toHaveBeenCalledTimes(2)
+  })
+
   // Spec §1: take-to-terminal changes the pane's binding, it does not interrupt
   // a turn. It now lives in the view menu, whose trigger keeps the separator.
   it('separates the view menu from the interrupt actions', () => {
