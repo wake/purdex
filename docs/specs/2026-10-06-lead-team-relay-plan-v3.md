@@ -432,15 +432,15 @@ All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `Sp
   - `GetSpawnOp`.
   - `AdvanceSpawnOp(id, fromStep string, upd spawnUpdate) (bool, error)`, a CAS on `step` and `state='running'`.
   - `FailSpawnOp(id, reason string, at int64) (bool, error)`.
-  - `ListRunningSpawnOps() ([]spawnRow, error)`.
+  - `ListRunningSpawnOps(now int64) ([]spawnRow, error)` (PR #1862 review: a row that fails `checkRunning` is marked `failed{abandoned}` and not returned).
   - `CountRunningSpawns(teamID string, exceptID string) (int, error)`.
 - `func launchLine(memberCommand, pluginDir, model, effort string) (string, error)`:
-  - Result: `<member_command> --plugin-dir '<dir>'[ --model '<m>'][ --effort <e>]`, with no trailing newline (the runner adds `\n`).
+  - Result: `<member_command re-quoted word by word> --plugin-dir '<dir>'[ --model '<m>'][ --effort <e>]`, with no trailing newline (the runner adds `\n`). The default renders as `'claude' '--dangerously-skip-permissions' --plugin-dir '<dir>' …` (PR #1862 review).
   - It re-validates with `team.ValidModel` / `ValidEffort`.
   - It uses a local `shellQuote` (`'` → `'\''`), the same rule as `internal/agent/cc/statusline.go:85`, which is unexported.
 
 **Behaviour rules.**
-1. `member_command` is the host owner's text and is not quoted. Every value the daemon appends is quoted, except the effort enum.
+1. **Changed by PR #1862 review:** `member_command` must parse as **one simple command** (`hostconfig.ParseMemberCommand` → `MemberArgv{Env, Args}`: leading `NAME=value` words, plain words, single quotes, double quotes without `$`/backtick/`\`; outside quotes `# ; & | < > ( ) ` + "`" + ` $ { } * ? [ ~ ! \` and newlines are refused — PUT 400, the reader fails closed). `launchLine` re-quotes every word with `shellQuote` (env values as `NAME='value'`), so no member_command can swallow or change the appended flags. Every value the daemon appends is quoted, except the effort enum.
 2. `--plugin-dir` is always appended (spec §7.2). Even with the global install the plugin loads once (M5).
 
 **Tests.**
@@ -521,7 +521,7 @@ All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `Sp
 6. **Stop.** The runner observes `stopCtx`. It leaves the op `running` at its recorded step, for the next boot.
 
 **Tests** (fakes: `tmux.FakeExecutor`, plus fakes for the four seams):
-- `TestSpawn_LaunchLineHasPluginDirModelEffortAndRegisters`: keys = `claude --dangerously-skip-permissions --plugin-dir '<dd>/cc-plugin/purdex' --model 'opus[1m]' --effort high\n`; member row; title claimed; op done; `lead_address` set.
+- `TestSpawn_LaunchLineHasPluginDirModelEffortAndRegisters`: keys = `'claude' '--dangerously-skip-permissions' --plugin-dir '<dd>/cc-plugin/purdex' --model 'opus[1m]' --effort high\n` (word-by-word quoting, PR #1862); member row; title claimed; op done; `lead_address` set.
 - `TestSpawn_WithoutModelSendsNoModelFlag`.
 - `TestSpawn_Refusals`: `not_lead`; `team_full` counting a running op; `cwd_outside_grant`; a symlink inside a root pointing outside it → `cwd_outside_grant`; bad model, effort or title → 400; missing cwd → 400.
 - `TestSpawn_StartTimeoutKillsAndFreesTheSlot`: fake clock; kill with the recorded id and instance; with `max_members=1` the next spawn is accepted.
