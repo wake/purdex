@@ -2,7 +2,8 @@
 //
 //   idle ──(turn.complete: used ≥ threshold, growth ≥ minGrowth, +10 since last ask)──▶ beginning
 //   beginning: `pdx relay begin --self` runs from a timer ──▶ awaiting, or back to idle on a refusal
-//   awaiting: a timer loops `pdx relay wait`; every prompt.submit waits on that loop (P5b-3)
+//   awaiting: a timer loops `pdx relay wait`; every prompt.submit waits for its answer (P5b-3),
+//   and one that arrives while beginning waits for begin first
 //   awaiting ──approved──▶ approved: write prompt submitted (a fresh nonce), report writing
 //   approved ──(turn.complete of the write turn, file ok)──▶ clearing: report written, timer → /clear
 //   clearing ──(classic.SessionStart source=clear)──▶ seeding: report cleared --new-session, hello, seed prompt
@@ -12,13 +13,15 @@
 //   failed{handoff_incomplete}, /clear reports cancelled{abandoned}
 //   the user's own /clear ──▶ idle: awaiting / approved report cancelled{abandoned}, seeding
 //   failed{handoff_incomplete}; a begin still out is cancelled{abandoned} when it answers (s.gen)
+//   a compaction ──▶ awaiting reports cancelled{compacted}, idle; approved skips an auto one
 //
 // Everything that starts a turn, runs a command or waits on the daemon goes
 // out from a $.clock.after timer, never inside a hook: $.command.run rejects
 // inside a hook the turn waits on (F3), and a daemon that is down answers
 // only after the client's 30 s grace, which no turn end, session start or
 // /clear may wait for (P5b-1 review). Hooks only read the engine and move
-// the state.
+// the state; the prompt hold awaits an answer the timers settle, and /relay
+// alone awaits its daemon call (the person waits for its output; 8 s bound).
 
 const VERSION = '1' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
 const DEFAULT_THRESHOLD = 70
@@ -27,12 +30,17 @@ const REASK_POINTS = 10
 const MAX_FIX_ROUNDS = 2
 const WAIT_TIMEOUT_MS = 590_000 // $.process.run caps at 10 min (M24); pdx relay wait bounds itself to 9
 const CALL_TIMEOUT_MS = 35_000 // one daemonclient grace (30 s) plus slack
+const SELF_TIMEOUT_MS = 8_000 // /relay waits in its hook for `pdx relay self`: the person waits for the answer
 const STEP_MS = 50 // the timer a step that starts a turn or a command waits for (F3)
 const MAX_RESENDS = 20 // a report that keeps failing with 20 / 21 is re-sent at most this often, then dropped
 const MAX_OUTBOX = 50 // reports queued at once; one more pushes out the oldest
 const REQUIRED = ['## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.', '## 8.']
 const STATUS_WAITING = '接力等待核准中'
 const TOAST_WAITING = '接力等待核准：請在 Purdex App 按核准或拒絕'
+const NOTE = '接力已核准，這一輪只做簡短回應；如果這是一件新工作，不要開始做，把它寫進接力檔「下一步」的第一項，由接手後的新對話處理。'
+const SKIP_COMPACT = '接力已核准，略過壓縮，改為寫接力檔'
+const RELAY_UNREACHABLE = 'Purdex daemon 連不上，無法變更自我接力'
+const RELAY_USAGE = '用法：/relay off|on|status'
 const TOAST_GAVE_UP = '接力檔不完整，已放棄接力；對話照常繼續'
 const toastSeedFailed = (path) => '接力未完成：接力檔在 ' + path + '，可手動貼給新 session'
 
@@ -49,7 +57,8 @@ const fresh = () => ({
   helloBusy: false, // the newest hello has not answered yet
   gen: 0, // bumped at every return to idle and every session change: a begin answers only for its own
   state: 'idle', // idle | beginning | awaiting | approved | clearing | seeding
-  pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait }
+  begun: undefined, // while beginning: resolves to the request begin opened and adopted, or undefined
+  pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
   floor: undefined,
   fixRounds: 0,
@@ -67,6 +76,13 @@ const s = fresh()
 // begin or a hello sent before the reset never answers for one sent after it.
 function resetState() {
   Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq })
+}
+
+// deferred is a promise and the function that settles it; a second call is a no-op.
+function deferred() {
+  let resolve
+  const promise = new Promise((r) => { resolve = r })
+  return { promise, resolve }
 }
 
 function parseJSON(text) {
@@ -302,7 +318,9 @@ async function maybeBegin($) {
   s.state = 'beginning'
   s.lastAskPct = u.percent
   const gen = s.gen
-  later($, 0, () => begin($, sid, gen, u))
+  const begun = deferred() // a prompt that arrives while begin is out waits on it (P5b-3)
+  s.begun = begun.promise
+  later($, 0, () => begin($, sid, gen, u, begun.resolve).finally(() => begun.resolve(undefined)))
 }
 
 // begin opens the self-relay request (from a timer, state beginning). Its
@@ -311,7 +329,8 @@ async function maybeBegin($) {
 // another begin may be in flight for the new session. An op opened for a
 // generation that is gone is reported cancelled{abandoned} at once, so the
 // daemon closes its approval row and no dialog is left without a mod.
-async function begin($, sid, gen, u) {
+// `adopted(p)` hands the request it opened to prompts held while beginning.
+async function begin($, sid, gen, u, adopted) {
   const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(u.percent), '--window', String(u.window)]
   const r = await pdx($, argv, CALL_TIMEOUT_MS)
   const now = await $.session.id().catch(() => undefined)
@@ -338,21 +357,28 @@ async function begin($, sid, gen, u) {
     nonce: undefined, // minted per prompt (arm)
     nonceState: undefined,
     who: '',
+    // The request's answer, made here so a prompt held before the loop's
+    // timer fires has it to wait on. Only the wait loop settles it (or the
+    // timer, for a request dropped before its loop started): the hold
+    // never starts the loop, which Esc on that prompt would end (§8.7).
+    answer: deferred(),
   }
   s.state = 'awaiting'
   s.fixRounds = 0
   $.ui.status(STATUS_WAITING)
   const p = s.pending
+  adopted(p)
   later($, STEP_MS, async () => {
     if (s.pending === p) await waitLoop($)
+    else p.answer.resolve('cancelled') // dropped before its loop started (the user's /clear, a compaction)
   })
 }
 
 // waitLoop is the one long-poll loop per request, its promise kept on the
 // request (a loop left over from a request the user's own /clear dropped
 // never answers for the next one). It runs in a timer's own dispatch, so a
-// held prompt that is abandoned (Esc) never kills it; hooks only await the
-// promise it returns.
+// held prompt that is abandoned (Esc) never kills it; it settles the
+// request's answer, which the held prompts await.
 function waitLoop($) {
   const p = s.pending
   if (p.wait) return p.wait
@@ -375,7 +401,11 @@ function waitLoop($) {
       if (r.exitCode === 12) return 'cancelled'
       return 'unavailable' // 20, 21, 1: treat as not approved (§8.7 (d))
     }
-  })().catch(() => 'unavailable').then((outcome) => { settle($, p, outcome); return outcome })
+  })().catch(() => 'unavailable').then((outcome) => {
+    p.answer.resolve(outcome) // the held prompts go on after settle below has moved the state
+    settle($, p, outcome)
+    return outcome
+  })
   return p.wait
 }
 
@@ -482,6 +512,8 @@ export function register(on) {
     const cfg = parseJSON(await $.fs.read($.plugin.root + '/pdx.json').catch(() => ''))
     if (cfg && cfg.pdx) s.pdx = cfg.pdx // written beside VERSION by the extractor; absent in `claude plugin test`
     s.config = cfg && typeof cfg.config === 'string' ? cfg.config : ''
+    await $.command.register({ name: 'relay', description: 'Purdex 自我接力：off 暫停、on 恢復、status 查看', argumentHint: 'off|on|status' })
+      .catch((err) => log($, '/relay not registered: ' + String(err)))
     helloLater($)
     return next(e)
   })
@@ -572,4 +604,64 @@ export function register(on) {
     if (s.pending && e.input && e.input.file_path === s.pending.path) return { decision: 'allow', reason: 'Purdex 接力檔' }
     return next(e)
   }).catch(($, e, next) => (next.called ? next(e) : { decision: 'deny', reason: 'pdx-relay guard failed' }))
+
+  // ---- P5b-3: the hold, the compact rule, /relay ----
+
+  // The hold (U7, §8.7 (b)): while a request is open no prompt of the main
+  // conversation starts a turn, whatever its origin (the mod's own never
+  // reaches this hook, MP3). A prompt that arrives while begin is still out
+  // waits for it (≤ CALL_TIMEOUT_MS) and goes on unchanged when begin opened
+  // nothing. Approved ⇒ NOTE after the existing context; anything else ⇒
+  // unchanged. The hook only awaits the request's answer: the status line,
+  // the toast and the loop are the timer's, so Esc here ends this prompt only.
+  on('prompt.submit', async ($, e, next) => {
+    if (!s.interactive) return next(e)
+    const p = s.state === 'beginning' ? await s.begun : s.state === 'awaiting' ? s.pending : undefined
+    if (!p) return next(e)
+    const outcome = await p.answer.promise
+    // `s.pending === p`: an approval that raced a compaction or a /clear relays nothing
+    if (outcome === 'approved' && s.pending === p) return next({ ...e, context: [...(e.context ?? []), NOTE] })
+    return next(e)
+  }).catch(($, e, next) => (next.called ? next(e) : { drop: 'pdx-relay: hold failed' }))
+
+  // Compaction (§8.7 (c), deviation 9): an approved relay not yet written
+  // skips an AUTO compaction (the handoff is written from the full context);
+  // a manual /compact runs, the person asked for it. An open request, any
+  // trigger, is reported cancelled{compacted}: the daemon closes its approval
+  // row (P5a-2b closeRequestOfReportedOp), every dialog closes and `pdx relay
+  // wait` exits 12, which releases the held prompts. No .catch: a hook that
+  // throws here lets the compaction run.
+  on('session.compact', async ($, e, next) => {
+    if (!s.interactive || e.agentId || e.trigger === 'precompute') return next(e)
+    if (s.state === 'approved') {
+      if (e.trigger === 'auto') return { skip: SKIP_COMPACT }
+      return next(e)
+    }
+    if (s.state === 'awaiting' && s.pending) {
+      report($, s.pending.op.id, 'cancelled', ['--error', 'compacted'])
+      $.ui.status(undefined)
+      toIdle()
+    } else if (s.state === 'beginning') {
+      toIdle() // the begin still out answers for a gone generation: its op is cancelled{abandoned}
+    }
+    s.lastAskPct = undefined // after a compaction the next ask needs ≥ threshold again
+    return next(e)
+  })
+
+  // /relay off|on|status (§8.7 (a)): the person waits for the answer, so this
+  // one daemon call is awaited in the hook, bounded at SELF_TIMEOUT_MS; a
+  // timeout (read as 20), 20 or 21 says the daemon is unreachable.
+  on('command.run', { command: 'relay' }, async ($, e) => {
+    const action = (e.args || 'status').trim()
+    if (!['off', 'on', 'status'].includes(action)) return { text: RELAY_USAGE }
+    const r = await pdx($, ['relay', 'self', action, '--session', await $.session.id()], SELF_TIMEOUT_MS)
+    if (r.exitCode === 20 || r.exitCode === 21) return { text: RELAY_UNREACHABLE }
+    if (r.exitCode !== 0) return { text: 'pdx relay self ' + action + ' 失敗：' + (r.stderr || '').trim() }
+    const b = parseJSON(r.stdout) || {}
+    if (b.member) return { text: 'member 的接力由 lead 安排' }
+    if (action === 'on') s.lastAskPct = undefined // asked again at once (still only after hello answered)
+    const host = b.host_switch === false ? '主機開關 關' : '主機開關 開'
+    const label = { on: '開啟', off: '關閉', paused: '本 session 暫停' }[b.self_relay] || String(b.self_relay)
+    return { text: '自我接力：' + label + '（' + host + '；門檻 ' + s.threshold + '%）' }
+  })
 }
