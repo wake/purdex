@@ -79,7 +79,9 @@ func detectStatuslineMode(path string) (agent.StatuslineState, error) {
 }
 
 // shellSingleQuote returns a POSIX-safe single-quoted form of s that round-trips
-// through `sh -c`. Embedded ' characters become '\''.
+// through `sh -c`. Embedded ' characters become:
+//
+//	'\''
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

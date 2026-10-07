@@ -644,11 +644,11 @@ func TestStartScreenChangeDetector_TransientBaselineFailureRecoversAndEmits(t *t
 		target:       "%5",
 		script: []scriptedTopLinesStep{
 			{err: errors.New("transient capture failure")}, // baseline retry round 1
-			{content: "stable-screen"},                      // first success: seeds baseline silently
-			{content: "stable-screen"},                      // stable tick 1
-			{content: "stable-screen"},                      // stable tick 2
-			{content: "stable-screen"},                      // stable tick 3 → ScreenStable
-			{content: "approval-rendered"},                  // sticky → fires ScreenChanged
+			{content: "stable-screen"},                     // first success: seeds baseline silently
+			{content: "stable-screen"},                     // stable tick 1
+			{content: "stable-screen"},                     // stable tick 2
+			{content: "stable-screen"},                     // stable tick 3 → ScreenStable
+			{content: "approval-rendered"},                 // sticky → fires ScreenChanged
 		},
 	}
 	prober := probe.New(exec)

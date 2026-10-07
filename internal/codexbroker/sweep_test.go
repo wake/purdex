@@ -99,12 +99,12 @@ func newSweepHandlerForTest(scan *fakeScanner, killer *fakeKiller, eval *stubDec
 		KillerFactory: func(rec BrokerRecord) KillRunner {
 			return killerWrap{rec: rec, k: killer}
 		},
-		Quarantine: qf,
-		Registry:   registry,
-		E1Tracker:  NewE1Tracker(),
-		EvalFn:     eval.eval,
-		ApplyTimeout:   30 * time.Second,
-		DryRunTimeout:  10 * time.Second,
+		Quarantine:    qf,
+		Registry:      registry,
+		E1Tracker:     NewE1Tracker(),
+		EvalFn:        eval.eval,
+		ApplyTimeout:  30 * time.Second,
+		DryRunTimeout: 10 * time.Second,
 	}
 	return h
 }
@@ -123,7 +123,7 @@ func (w killerWrap) Run(ctx context.Context, decision DecisionResult, _ SocketVe
 type emptyRegistry struct{}
 
 func (emptyRegistry) Lookup(_ string) (*LaunchEntry, bool) { return nil, false }
-func (emptyRegistry) Empty() bool                           { return true }
+func (emptyRegistry) Empty() bool                          { return true }
 
 // populatedRegistry has the supplied keys.
 type populatedRegistry struct {

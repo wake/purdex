@@ -11,12 +11,12 @@ type topoTestModule struct {
 	deps []string
 }
 
-func (f *topoTestModule) Name() string               { return f.name }
-func (f *topoTestModule) Dependencies() []string      { return f.deps }
-func (f *topoTestModule) Init(_ *Core) error          { return nil }
+func (f *topoTestModule) Name() string                    { return f.name }
+func (f *topoTestModule) Dependencies() []string          { return f.deps }
+func (f *topoTestModule) Init(_ *Core) error              { return nil }
 func (f *topoTestModule) RegisterRoutes(_ *http.ServeMux) {}
-func (f *topoTestModule) Start(_ context.Context) error { return nil }
-func (f *topoTestModule) Stop(_ context.Context) error  { return nil }
+func (f *topoTestModule) Start(_ context.Context) error   { return nil }
+func (f *topoTestModule) Stop(_ context.Context) error    { return nil }
 
 func TestTopoSort_BasicOrder(t *testing.T) {
 	modules := []Module{

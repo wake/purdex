@@ -36,12 +36,12 @@ func NewE1Tracker() *E1Tracker {
 // Behaviour matrix:
 //
 //   - rec carries AnomalyCwdMissing (definitive ENOENT, not transient):
-//       no prior state → store first-seen, return (false, ...).
-//       prior state present, gap ≥ DefaultE1ConfirmationGap → set
-//         FirstConfirmedAt = now and return (true, *prior).
-//       prior state present, gap < DefaultE1ConfirmationGap → return
-//         (false, *prior) without mutation (keeps the original
-//         FirstSeenAt as the clock anchor).
+//     no prior state → store first-seen, return (false, ...).
+//     prior state present, gap ≥ DefaultE1ConfirmationGap → set
+//     FirstConfirmedAt = now and return (true, *prior).
+//     prior state present, gap < DefaultE1ConfirmationGap → return
+//     (false, *prior) without mutation (keeps the original
+//     FirstSeenAt as the clock anchor).
 //
 //   - rec carries AnomalyCwdTransientStatError (or no anomaly): clear any
 //     prior state for this brokerKey so a future ENOENT chain restarts

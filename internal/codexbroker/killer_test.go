@@ -895,7 +895,7 @@ func TestKillSequence_AppendPostscript_OnSuccess(t *testing.T) {
 type driftLister struct {
 	mu         sync.Mutex
 	rows       []RawProcess
-	swapAfter  int                            // call # at which to swap to swapRows
+	swapAfter  int // call # at which to swap to swapRows
 	swapRows   []RawProcess
 	calls      int
 	transition func(prev []RawProcess) []RawProcess
@@ -1013,9 +1013,9 @@ func TestKillSequenceRun_DriftBetweenStep0AndStep3_AbortsAndReturnsMismatch(t *t
 	driftedLstart := lstart.Add(1 * time.Hour)
 	// Step 0 (call 1) returns matching row; subsequent calls return drifted.
 	lister := &driftLister{
-		rows: []RawProcess{{PID: 4321, Lstart: lstart, Cmdline: "node app-server-broker.mjs"}},
+		rows:      []RawProcess{{PID: 4321, Lstart: lstart, Cmdline: "node app-server-broker.mjs"}},
 		swapAfter: 1, // first call (Step 0) sees match; later calls see drift
-		swapRows: []RawProcess{{PID: 4321, Lstart: driftedLstart, Cmdline: "/usr/bin/zsh"}},
+		swapRows:  []RawProcess{{PID: 4321, Lstart: driftedLstart, Cmdline: "/usr/bin/zsh"}},
 	}
 	sig := &capturingSignaller{}
 	ks := &KillSequence{

@@ -16,11 +16,11 @@ import (
 // the JSON tags and never accidentally leaks the daemon-internal SearchRoot
 // (whose Kind/Absolute fields are unexported on the wire).
 type httpSearchBodyT struct {
-	Mode    string                 `json:"mode"`
-	Query   map[string]string      `json:"query"`
-	Roots   []map[string]any       `json:"roots"`
-	Limits  map[string]int         `json:"limits,omitempty"`
-	Filters map[string]any         `json:"filters,omitempty"`
+	Mode    string            `json:"mode"`
+	Query   map[string]string `json:"query"`
+	Roots   []map[string]any  `json:"roots"`
+	Limits  map[string]int    `json:"limits,omitempty"`
+	Filters map[string]any    `json:"filters,omitempty"`
 }
 
 func newHTTPReq(t *testing.T, body httpSearchBodyT) *http.Request {

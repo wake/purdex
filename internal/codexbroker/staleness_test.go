@@ -10,7 +10,7 @@ import (
 // FakeProcessLister already exported in process.go (which we still use too —
 // this one is just shorter to construct inline).
 
-func intPtr(v int) *int       { return &v }
+func intPtr(v int) *int              { return &v }
 func timePtr(t time.Time) *time.Time { return &t }
 
 // TestIsStaleRunning_NilPidBeyondThreshold — pid is nil and updatedAt is
@@ -105,9 +105,9 @@ func TestIsStaleRunning_NonNilPidAliveCorrectCmdline(t *testing.T) {
 func TestStaleRunningCount_MixedJobs(t *testing.T) {
 	now := time.Now()
 	jobs := []StateJobLite{
-		{ID: "j1", Status: "running", UpdatedAt: now.Add(-2 * time.Hour), Pid: nil},                                    // stale (nil + past threshold)
-		{ID: "j2", Status: "running", UpdatedAt: now.Add(-30 * time.Minute), Pid: intPtr(99)},                          // stale (pid dead)
-		{ID: "j3", Status: "running", UpdatedAt: now.Add(-1 * time.Minute), Pid: nil},                                  // not stale
+		{ID: "j1", Status: "running", UpdatedAt: now.Add(-2 * time.Hour), Pid: nil},                                        // stale (nil + past threshold)
+		{ID: "j2", Status: "running", UpdatedAt: now.Add(-30 * time.Minute), Pid: intPtr(99)},                              // stale (pid dead)
+		{ID: "j3", Status: "running", UpdatedAt: now.Add(-1 * time.Minute), Pid: nil},                                      // not stale
 		{ID: "j4", Status: "completed", UpdatedAt: now.Add(-2 * time.Hour), CompletedAt: timePtr(now.Add(-1 * time.Hour))}, // not running, not counted
 	}
 	got := StaleRunningCount(jobs, NewFakeProcessLister(nil), DefaultStaleRunningThreshold, now)
