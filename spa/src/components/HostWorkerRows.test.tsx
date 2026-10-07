@@ -206,4 +206,23 @@ describe('HostWorkerRows', () => {
       expect(screen.getByTestId(`${P}-loading`)).toBeInTheDocument()
     })
   })
+
+  describe('query / hideEmpty (worker test tab S5)', () => {
+    const two = () => seed([
+      row({ id: 'T1', session_id: 'ST', cwd: '/tmp/alpha', brief: 'one' }),
+      row({ id: 'T2', session_id: 'ST2', cwd: '/tmp/beta', brief: 'two' }),
+    ])
+    it('query narrows the rows by cwd', () => {
+      two()
+      render(<HostWorkerRows hostId={H} onOpen={vi.fn()} testIdPrefix={P} filter="test" query="alpha" />)
+      expect(screen.getAllByTestId('executions-row')).toHaveLength(1)
+      expect(screen.getByText('one')).toBeInTheDocument()
+    })
+    it('hideEmpty drops the empty copy', () => {
+      two()
+      render(<HostWorkerRows hostId={H} onOpen={vi.fn()} testIdPrefix={P} filter="test" query="nomatch" hideEmpty />)
+      expect(screen.queryByTestId(`${P}-empty`)).toBeNull()
+      expect(screen.queryByTestId('executions-row')).toBeNull()
+    })
+  })
 })

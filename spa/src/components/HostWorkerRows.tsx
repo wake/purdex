@@ -6,8 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useHostExecutions } from '../hooks/useHostExecutions'
 import { useI18nStore } from '../stores/useI18nStore'
 import { selectRollupCostShown, useNexHostStore } from '../stores/useNexHostStore'
-import { liveEntityRows } from '../lib/nex/live-workers'
-import { isTestCwd } from '../lib/nex/test-cwd'
+import { filterLiveRows } from '../lib/nex/live-workers'
 import { useIsRefShown } from '../lib/shown-hosts'
 import { ExecutionRowCompact } from './executions/ExecutionRowCompact'
 import { useRowExit } from './executions/useRowExit'
@@ -21,19 +20,21 @@ export interface HostWorkerRowsProps {
   testIdPrefix: string
   /** Split by cwd: `normal` drops test cwds (under /private/tmp), `test` keeps only those. Omitted = every live row. */
   filter?: 'normal' | 'test'
+  /** Search text over cwd / brief / id / provider (`matchesExecutionQuery`); blank keeps every row. */
+  query?: string
+  /** Home directory for the `~` form of a cwd in the search. */
+  home?: string
+  /** Show nothing (not the empty copy) when no row is left; loading, error and truncation still show. */
+  hideEmpty?: boolean
 }
 
-export function HostWorkerRows({ hostId, onOpen, testIdPrefix, filter }: HostWorkerRowsProps) {
+export function HostWorkerRows({ hostId, onOpen, testIdPrefix, filter, query, home, hideEmpty }: HostWorkerRowsProps) {
   const t = useI18nStore((s) => s.t)
   const entry = useNexHostStore((s) => s.byHost[hostId])
   const daemonHostId = typeof entry?.capabilities?.host_id === 'string' ? entry.capabilities.host_id : null
   const showCost = useNexHostStore(selectRollupCostShown(hostId))
   const { items, phase, error, truncated, refetch } = useHostExecutions(hostId)
-  const live = useMemo(() => {
-    const rows = liveEntityRows(items)
-    if (!filter) return rows
-    return rows.filter((row) => isTestCwd(row.cwd) === (filter === 'test'))
-  }, [items, filter])
+  const live = useMemo(() => filterLiveRows(items, { filter, query, home }), [items, filter, query, home])
   const shown = useIsRefShown(hostId)
   const { requestExit, pendingIds, dialog } = useRowExit(hostId, live)
   const [now, setNow] = useState(() => Date.now())
@@ -83,7 +84,7 @@ export function HostWorkerRows({ hostId, onOpen, testIdPrefix, filter }: HostWor
       {truncated && (
         <p data-testid={`${testIdPrefix}-truncated`} className="px-3 py-1 text-xs text-text-muted">{t('executions.truncated')}</p>
       )}
-      {live.length === 0 && phase !== 'error' && (
+      {live.length === 0 && phase !== 'error' && !hideEmpty && (
         <p data-testid={`${testIdPrefix}-empty`} className="px-3 py-2 text-xs text-text-muted">{t('newtab.workers.empty')}</p>
       )}
       {live.length > 0 && (

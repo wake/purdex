@@ -34,6 +34,7 @@ import { WorkerSettingsPage } from '../../components/settings/WorkerSettingsPage
 import { WorkerLiveTab } from '../../components/settings/WorkerLiveTab'
 import { WorkerExitedTab } from '../../components/settings/WorkerExitedTab'
 import { WorkerGoneTab } from '../../components/settings/WorkerGoneTab'
+import { WorkerTestTab } from '../../components/settings/WorkerTestTab'
 import { registerWorkerSettingsTab } from '../worker-settings-tabs'
 import { useTabStore } from '../../stores/useTabStore'
 import type { ExecutionViewMode, PaneContent } from '../../types/tab'
@@ -269,6 +270,7 @@ export function registerBuiltinModules(): void {
   registerWorkerSettingsTab({ id: 'workers', labelKey: 'settings.worker.tabs.workers', order: 10, hostScoped: true, component: WorkerLiveTab })
   registerWorkerSettingsTab({ id: 'exited', labelKey: 'settings.worker.tabs.exited', order: 20, hostScoped: true, component: WorkerExitedTab })
   registerWorkerSettingsTab({ id: 'gone', labelKey: 'settings.worker.tabs.gone', order: 30, hostScoped: true, component: WorkerGoneTab })
+  registerWorkerSettingsTab({ id: 'test', labelKey: 'settings.worker.tabs.test', order: 40, hostScoped: true, component: WorkerTestTab })
 
   // Editor module
   registerModule(editorModuleDefinition)
