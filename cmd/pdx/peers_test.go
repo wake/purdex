@@ -353,6 +353,15 @@ func TestFormatPeersAllTable_EscapesUnreachableError(t *testing.T) {
 // from an httptest.Server) with the given token, returning the file path.
 func writeTestConfig(t *testing.T, addr, token string) string {
 	t.Helper()
+	return writeTestConfigDataDir(t, addr, token, "")
+}
+
+// writeTestConfigDataDir is writeTestConfig with data_dir set: the toml
+// encoder writes data_dir = "" otherwise, so config.Load gives "" (measured
+// 2026-10-07), and commands that put files under the data dir need a real
+// one in tests.
+func writeTestConfigDataDir(t *testing.T, addr, token, dataDir string) string {
+	t.Helper()
 	host, portStr, err := splitHostPort(addr)
 	if err != nil {
 		t.Fatalf("split host/port %q: %v", addr, err)
@@ -363,9 +372,10 @@ func writeTestConfig(t *testing.T, addr, token string) string {
 	}
 
 	cfg := config.Config{
-		Bind:  host,
-		Port:  port,
-		Token: token,
+		Bind:    host,
+		Port:    port,
+		Token:   token,
+		DataDir: dataDir,
 	}
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := config.WriteFile(path, cfg); err != nil {
