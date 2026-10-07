@@ -89,6 +89,19 @@ func (m *Module) WithConversationIndex(idx conversations.Index) *Module {
 	return m
 }
 
+// ConversationNameReader reads the registry names recorded for conversations
+// (store.ConversationNameStore).
+type ConversationNameReader interface {
+	All(ctx context.Context) (map[string]string, error)
+}
+
+// WithConversationNames wires the registry-name reader the title fallback
+// uses; nil (the default) means no names. Returns m.
+func (m *Module) WithConversationNames(r ConversationNameReader) *Module {
+	m.convNames = r
+	return m
+}
+
 // lstatIsRegular: p is a regular file, not followed when it is a symlink
 // (R-4-8, §13.6).
 func lstatIsRegular(p string) bool {
@@ -274,6 +287,15 @@ func (m *Module) collectConversations(ctx context.Context) (snap *convSnapshot, 
 	if err != nil {
 		return nil, fmt.Errorf("reading the conversation index: %w", err)
 	}
+	// Names are only a title fallback: a failure logs and lists without them.
+	var names map[string]string
+	if m.convNames != nil {
+		var nerr error
+		if names, nerr = m.convNames.All(ctx); nerr != nil {
+			m.logf("nex: conversations: reading registry names: %v", nerr)
+			names = nil
+		}
+	}
 	execs, err := m.listAllExecutions(ctx)
 	if err != nil {
 		return nil, err
@@ -289,6 +311,7 @@ func (m *Module) collectConversations(ctx context.Context) (snap *convSnapshot, 
 		IndexRows: rows,
 		Scan:      scan,
 		Execs:     execs,
+		Names:     names,
 		Terminals: terms,
 		IsRegular: m.convIsRegular,
 		DirExists: m.convDirExists,

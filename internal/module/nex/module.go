@@ -151,6 +151,7 @@ type Module struct {
 	// every convWG.Add, which happens only while convCtx is live (Stop
 	// cancels it under convMu before it waits).
 	convIdx       conversations.Index
+	convNames     ConversationNameReader // registry names for the title fallback; nil = none
 	convRoot      string             // $HOME/.claude/projects
 	convHome      string             // $HOME, for "~" display
 	convNow       func() time.Time   // default time.Now; the reuse window and the scan's clock

@@ -389,7 +389,8 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		// A nil meta store (tests) leaves the conversation listing off: its
 		// Conversations() would dereference it.
 		if meta != nil {
-			nexMod.WithConversationIndex(meta.Conversations())
+			nexMod.WithConversationIndex(meta.Conversations()).
+				WithConversationNames(meta.ConversationNames())
 		}
 		c.AddModule(nexMod)
 	} else {
