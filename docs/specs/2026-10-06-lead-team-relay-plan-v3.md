@@ -2448,9 +2448,9 @@ The fallback paths are proved by the tests above, not live.
 
 **Risks.** Two clients may edit the same body. The CAS makes the second save a 409, and its draft stays, so nothing is lost silently.
 
-## Open questions (P9 addendum, 2026-10-08)
+## Open questions (P9 addendum, all decided 2026-10-08)
 
-Not yet ruled. Each has a recommended default, and the sections above are written to it.
+Kept for the record. Each had a recommended default, and the sections above are written to it. The ruling is in **Coordinator decisions (P9 addendum)** at the end of this file.
 
 1. **A hidden host (P9b-1).** Should a decision for a host hidden in this workbench switch nothing (the Hosts › Sessions gate, `SessionsSection.tsx:80`), or land on the Hosts page (the notification's `landOnHostsPageIfHidden`, `lib/shown-hosts.ts:175-180`)? **Default: nothing.** A decision is not a request to navigate, and the person hid that host here.
 2. **The requester's session is not in this window's list (P9b-1)**, because it ended or the list has not loaded. **Default: nothing, with no toast.** The spec says the dialog "just closes" when there is nothing to switch to.
@@ -2525,3 +2525,21 @@ Binding. Each item names where it landed.
   So a spawn does not stop at a dialog. P4-5 needs no special handling and the skill says nothing about it.
 - **15:** item 8 above.
 - **Measurement numbers:** M25 = U20's `--model` / `--effort` (spec); **M26** = P8a-2's hours-long hold; **M27** = the launch in a never-opened directory; **M28** = whether `session.receive` fires while a turn runs.
+
+## Coordinator decisions (P9 addendum, 2026-10-08, purdex-f0)
+
+Binding. **All 13 open questions of the P9 addendum take the plan's recommended default**, so the sections above stand as written:
+
+1. A decision for a host hidden in this workbench switches nothing (P9b-1).
+2. The requester's session is not in this window's list → nothing, and no toast (P9b-1).
+3. The last request closing while minimized resets `minimized` (P9b-2).
+4. A click on the approval notification while minimized restores the dialog (P9b-2).
+5. `↪ 接手自 <old ref>` is part of the seed's fixed head (P9a, deviation 2).
+6. The eight heading lines are fixed as whole lines, parentheses included (P9a).
+7. The fix prompt's line break before `缺少段落：` is accepted (P9a, deviation 3).
+8. The single source of the defaults is Go (`internal/team/relay_prompts.go`), with the mod's `hooks/prompts.js` generated from it and pinned by a golden test (P9a-1).
+9. One `pdx relay prompts` call per prompt. Revisit only if M29 is well above 200 ms (P9a-2).
+10. `GET /api/relay/prompts` also answers `fixed` and `variables` (P9a-1, deviation 1).
+11. The bodies live in the one `relay` host-config row, beside the switches (P9a-1).
+12. Saving text equal to the default stores `""` (P9a-3).
+13. M29 is measured in P9a-2's acceptance and recorded in spec §3.2.
