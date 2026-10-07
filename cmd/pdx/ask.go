@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/wake/purdex/cmd/pdx/daemonclient"
@@ -27,11 +29,12 @@ import (
 //	    → one bounded round (≤ 9 min of GET ?wait=25 polls), stdout the daemon's
 //	      {"state":"still_open"} | {"state":"answered_remote","hook":…} | {"state":"closed","reason":…}
 //	      exit 0; a JSON 404 prints {"state":"closed","reason":"not_found"}; 20 / 21 only otherwise.
-//	pdx ask report <id> <answered_local|dismissed> [--hook <json> | --hook-file <f>]
-//	    → stdout the Approval, exit 0; 1 / 20 / 21.
+//	pdx ask report <id> <answered_local|dismissed> [--hook <json> | --hook-file <f>] [--detach]
+//	    → stdout the Approval, exit 0; 1 / 20 / 21. --detach: the same report
+//	      runs as a process of its own (setsid); this one prints nothing, exit 0.
 const askUsage = "usage: pdx ask begin --session <sid> --tool-use <id> --kind hook_ask|hook_permission (--payload <json> | --payload-file <f>) [--config <path>]\n" +
 	"       pdx ask wait <id> [--config <path>]\n" +
-	"       pdx ask report <id> answered_local|dismissed [--hook <json> | --hook-file <f>] [--config <path>]"
+	"       pdx ask report <id> answered_local|dismissed [--hook <json> | --hook-file <f>] [--detach] [--config <path>]"
 
 const (
 	// askAttemptTimeout bounds one poll: 25 s of daemon-side wait plus room (as lead's).
@@ -65,6 +68,8 @@ type askArgs struct {
 	id    string
 	state team.State
 	hook  *team.HookDecision
+	// report --detach: run the same report as a process of its own and exit
+	detach bool
 }
 
 // jsonArg reads an inline JSON flag or a file flag (exactly one may be set).
@@ -118,6 +123,7 @@ func parseAskArgs(args []string, stderr io.Writer) (askArgs, bool) {
 	case "report":
 		fs.StringVar(&hook, "hook", "", "")
 		fs.StringVar(&hookFile, "hook-file", "", "")
+		fs.BoolVar(&a.detach, "detach", false, "")
 	default:
 		return reject(fmt.Sprintf("unknown subcommand %q", a.verb))
 	}
@@ -189,6 +195,19 @@ func runAskCmd(ctx context.Context, args []string, stdout, stderr io.Writer, now
 	if !ok {
 		return ExitUsage
 	}
+	if a.detach {
+		// The mod's terminal answer must reach the daemon even when the
+		// report outlives the hook that started it (P8a-2 R2: the engine may
+		// end a hook's children once it returns, and a report lost after a
+		// remote CAS would leave the card on the remote answer for good).
+		// The same report runs as a setsid'd process of its own; this one
+		// exits at once. A report is idempotent, so a duplicate is harmless.
+		if err := startDetachedFn(append([]string{"ask"}, withoutDetach(args)...)); err != nil {
+			fmt.Fprintf(stderr, "pdx ask: report --detach: %v\n", err)
+			return ExitError
+		}
+		return ExitOK
+	}
 	cfg, err := config.Load(a.cfgPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx ask: %v\n", err)
@@ -205,6 +224,46 @@ func runAskCmd(ctx context.Context, args []string, stdout, stderr io.Writer, now
 	default:
 		return askReport(ctx, client, a, stdout, stderr)
 	}
+}
+
+// withoutDetach drops every --detach / -detach / --detach=… flag; flag
+// values (--hook's JSON) never start with "-", so they are never touched.
+func withoutDetach(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") && strings.TrimLeft(strings.SplitN(a, "=", 2)[0], "-") == "detach" {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// startDetachedFn starts `pdx <args>` detached; a var so tests can see the argv.
+var startDetachedFn = func(args []string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return startDetachedExe(exe, args)
+}
+
+// startDetachedExe starts exe in a session of its own (setsid), stdio on
+// /dev/null, and does not wait: it outlives this process and whatever
+// started it.
+func startDetachedExe(exe string, args []string) error {
+	devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer devnull.Close()
+	cmd := exec.Command(exe, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
 }
 
 func askBegin(ctx context.Context, client *daemonclient.Client, a askArgs, stdout, stderr io.Writer) int {
