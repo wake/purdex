@@ -188,6 +188,45 @@ func TestRelayPTYSize_InitialAndIgnoresClientResize(t *testing.T) {
 	assert.NotContains(t, out, "20 40")
 }
 
+// The window frame also carries the PTY's actual size, so a client can lay its
+// grid out exactly as tmux draws it; a PTY-only change (status bar toggled)
+// is reported too.
+func TestRelayPTYSize_FrameCarriesPTYSizeAndReportsPTYOnlyChange(t *testing.T) {
+	var ptyRows atomic.Uint32
+	ptyRows.Store(31)
+	relay := terminal.NewRelay("cat", nil, "/tmp")
+	relay.WindowPollInterval = 5 * time.Millisecond
+	relay.WindowSize = func(ctx context.Context) (uint16, uint16, error) { return 100, 30, nil }
+	relay.PTYSize = func(ctx context.Context) (uint16, uint16, error) { return 100, uint16(ptyRows.Load()), nil }
+	ws, closeAll := dialRelay(t, relay)
+	defer closeAll()
+
+	type frame struct {
+		Type    string `json:"type"`
+		Cols    int    `json:"cols"`
+		Rows    int    `json:"rows"`
+		PTYCols int    `json:"pty_cols"`
+		PTYRows int    `json:"pty_rows"`
+	}
+	next := func() frame {
+		_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+		for {
+			typ, msg, err := ws.ReadMessage()
+			require.NoError(t, err)
+			if typ != websocket.TextMessage {
+				continue
+			}
+			var f frame
+			require.NoError(t, json.Unmarshal(msg, &f))
+			return f
+		}
+	}
+	assert.Equal(t, frame{"window", 100, 30, 100, 31}, next())
+
+	ptyRows.Store(32) // window unchanged, status bar grew
+	assert.Equal(t, frame{"window", 100, 30, 100, 32}, next())
+}
+
 func TestRelayPTYSize_FollowsWindowChanges(t *testing.T) {
 	var rows atomic.Uint32
 	rows.Store(31)

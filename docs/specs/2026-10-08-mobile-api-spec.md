@@ -75,3 +75,4 @@ codex／opencode transcript、`/api/fs/read` 的 10 MB 上限不動。
 - **status 行數**：`#{status}` 為 `off`→0、`on`→1、`2`..`5`→該數。新增 `Executor.StatusRows`。
 - **對 client 的影響**：client 不必（也不該）再送 `resize`；以 window text frame 的 cols/rows 渲染。送了也會被忽略，不影響桌機。
 - **驗證**：真 tmux（私有 server）端到端測試：唯一 mirror client 送 83x55 的 resize，window 仍為 150x44；拿掉串接則為 83x54（即回報的現象）。
+- **window frame 帶 PTY 實際大小**（purdex-ios 請求）：`{"type":"window","cols":150,"rows":44,"pty_cols":150,"pty_rows":45}`。`cols/rows` 是 window 大小，`pty_cols/pty_rows` 是 PTY（window＋status 行數）；tmux 往 PTY 那個格子畫，client 的格子數以 `pty_*` 為準。frame 在 window **或** PTY 任一變化時重送（status bar 開關只動 PTY 也會送）；PTY 大小查詢失敗時整個 tick 不送（與其他查詢錯誤一致），故 mirror 連線的 frame 一定同時帶 `pty_*`。非 mirror 連線沒有 window frame。

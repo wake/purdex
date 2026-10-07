@@ -57,10 +57,16 @@ type Relay struct {
 }
 
 // WindowMsg is sent to the client when the window's actual size is (re)reported.
+//
+// PTYCols/PTYRows are the PTY's actual size (window plus status rows), present
+// when the PTY is slaved to the window (Relay.PTYSize): tmux draws into that
+// grid, so a client lays its terminal out with it rather than with cols/rows.
 type WindowMsg struct {
-	Type string `json:"type"`
-	Cols uint16 `json:"cols"`
-	Rows uint16 `json:"rows"`
+	Type    string `json:"type"`
+	Cols    uint16 `json:"cols"`
+	Rows    uint16 `json:"rows"`
+	PTYCols uint16 `json:"pty_cols,omitempty"`
+	PTYRows uint16 `json:"pty_rows,omitempty"`
 }
 
 func NewRelay(cmd string, args []string, cwd string) *Relay {
@@ -284,13 +290,19 @@ func (r *Relay) pollWindowSize(ctx context.Context, ready func(), send func(Wind
 		if err != nil || ctx.Err() != nil {
 			return true
 		}
-		if r.PTYSize != nil && perr == nil && applyPTY != nil {
-			applyPTY(pcols, prows)
+		m := WindowMsg{Type: "window", Cols: cols, Rows: rows}
+		if r.PTYSize != nil {
+			if perr != nil { // like any failed query: report nothing, keep going
+				return true
+			}
+			if applyPTY != nil {
+				applyPTY(pcols, prows)
+			}
+			m.PTYCols, m.PTYRows = pcols, prows
 		}
-		if have && last.Cols == cols && last.Rows == rows {
+		if have && last == m {
 			return true
 		}
-		m := WindowMsg{Type: "window", Cols: cols, Rows: rows}
 		if err := send(m); err != nil {
 			ptmx.Close()
 			return false
