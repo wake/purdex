@@ -123,6 +123,7 @@ type APIError struct {
 	Error    string    `json:"error"`
 	Detail   string    `json:"detail,omitempty"`
 	Approval *Approval `json:"approval,omitempty"` // request_open, already_decided
+	Op       *RelayOp  `json:"op,omitempty"`       // relay_open, bad_transition (P5a)
 }
 
 // InflightResponse is GET /api/team/inflight (spec §9.5): what a restart of
