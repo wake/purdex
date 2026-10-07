@@ -27,18 +27,20 @@ const evictEvery = time.Minute
 
 // Module is the modevents daemon module.
 type Module struct {
-	reg    *modevents.Registry
-	path   string
-	pathOK bool
+	reg  *modevents.Registry
+	path string
 
 	logf func(string, ...any)
 
-	mu      sync.Mutex
-	status  modevents.Status
-	ln      net.Listener
-	srv     *http.Server
-	cancel  context.CancelFunc
-	stopped bool
+	mu     sync.Mutex
+	status modevents.Status
+	ln     net.Listener
+	srv    *http.Server
+	cancel context.CancelFunc
+	// stopDone is made by the first Stop and closed when its cleanup ends;
+	// every other Stop waits on it. Non-nil also keeps a later Start from
+	// listening again.
+	stopDone chan struct{}
 
 	wg      sync.WaitGroup
 	running atomic.Int32 // goroutines started by Start and not yet returned
@@ -51,14 +53,15 @@ func (m *Module) Name() string           { return ServiceName }
 func (m *Module) Dependencies() []string { return nil }
 
 // Init creates the registry, publishes it as ServiceName and works out the
-// socket path from the data dir.
+// socket path from the data dir: the resolved path Listen binds at, which
+// pdx.json names too. Whether it fits is Listen's call.
 func (m *Module) Init(c *core.Core) error {
 	m.reg = modevents.NewRegistry(time.Now)
 	c.Registry.Register(ServiceName, m.reg)
 	c.CfgMu.RLock()
 	dataDir := c.Cfg.DataDir
 	c.CfgMu.RUnlock()
-	m.path, m.pathOK = modevents.SocketPath(dataDir)
+	m.path, _ = modevents.ResolveSocketPath(dataDir)
 	return nil
 }
 
@@ -72,16 +75,10 @@ func (m *Module) RegisterRoutes(*http.ServeMux) {}
 func (m *Module) Start(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.stopped || m.ln != nil {
+	if m.stopDone != nil || m.ln != nil {
 		return nil
 	}
-	if !m.pathOK {
-		m.status = modevents.Status{Reason: modevents.ReasonPathTooLong}
-	} else {
-		var ln net.Listener
-		ln, m.status = modevents.Listen(m.path)
-		m.ln = ln
-	}
+	m.ln, m.status = modevents.Listen(m.path)
 	if !m.status.Enabled {
 		m.logf("[modevents] disabled: %s", m.status.Reason)
 		return nil
@@ -127,15 +124,21 @@ func (m *Module) spawn(f func()) {
 // daemon's shared shutdown budget), closing what is still open when ctx
 // expires; stops the ticker and waits for both goroutines. It returns only
 // after all three, is idempotent, and is a no-op for a disabled channel.
+// The first call does the work; every other call, concurrent or later,
+// waits for it to finish. Nothing in it can fail, so every call returns
+// nil.
 func (m *Module) Stop(ctx context.Context) error {
 	m.mu.Lock()
-	if m.stopped {
+	if done := m.stopDone; done != nil {
 		m.mu.Unlock()
+		<-done
 		return nil
 	}
-	m.stopped = true
+	done := make(chan struct{})
+	m.stopDone = done
 	ln, srv, cancel := m.ln, m.srv, m.cancel
 	m.mu.Unlock()
+	defer close(done)
 
 	if ln != nil {
 		_ = ln.Close()
@@ -160,5 +163,6 @@ func (m *Module) Status() modevents.Status {
 	return m.status
 }
 
-// SocketPathForInfo is the socket path, also when the channel is disabled.
+// SocketPathForInfo is the resolved socket path the channel binds at (or
+// would), also when the channel is disabled.
 func (m *Module) SocketPathForInfo() string { return m.path }

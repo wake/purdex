@@ -20,7 +20,7 @@ Common rules:
 
 Files: `internal/modevents/path.go`, `wire.go`, `*_test.go`.
 
-- `func SocketPath(dataDir string) (path string, ok bool)` → `filepath.Join(abs(dataDir), "mod.sock")`, `ok=false` when `len(path) > 100` (spec §6.1). Pure; no I/O.
+- `func ResolveSocketPath(dataDir string) (path string, ok bool)` → `filepath.Join(EvalSymlinks(abs(dataDir)), "mod.sock")` (a dataDir that does not exist yet stays the cleaned absolute path), `ok=false` when `len(path) > 100` or the dir cannot be resolved (spec §6.1).
 - Wire (spec §6.2): `type Batch struct { V int; Stream, Agent, CCVersion, ModVersion string; DroppedTotal int64; Events []Event }` and `type Event struct { Seq int64; At int64; SID string; Type string; Data json.RawMessage }` with the JSON names of §6.2 (`cc_version`, `mod_version`, `dropped_total`, `sid`, …).
 - `func DecodeBatch(r io.Reader) (Batch, error)` returns an `*WireError{Code, Stream}` with the §6.2 codes: `bad_json` (incl. trailing data: after the first `Decode`, a second `Decode` must return `io.EOF`), `unsupported_version` (`v ≠ 1`), `bad_stream` (`^[A-Za-z0-9_-]{8,64}$`), `bad_events` (0 or > 500), `bad_seq` (not strictly increasing, or ≤ 0), `bad_sid` (lowercase UUID `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`), `bad_event` (`type` not `^[a-z][a-z0-9._-]{0,63}$`, or `data` missing or not a JSON object). The stream is validated as soon as the first object decodes, so a trailing-data `bad_json` also carries it. `WireError.Stream` is set when the JSON parsed and the stream id is valid (so the handler can count the rejection on it); empty otherwise. Unknown top-level and event fields are ignored. `dropped_total < 0` → `bad_events`.
 - `KnownTypes` = the 14 v1 types of §6.3 (`session.start`, `session.switch`, `session.end`, `turn.start`, `turn.complete`, `tool.check`, `tool.start`, `tool.end`, `agent.spawn`, `compact.start`, `compact.end`, `usage`, `background`, `heartbeat`).
@@ -59,7 +59,7 @@ Mutation gates: skip chmod → `CreatesSocket0600` red; skip the uid compare →
 
 Files: `internal/module/modevents/module.go`, `module_test.go`; `cmd/pdx/main.go` (`registerServeModules` adds it).
 
-- Name `modevents`, no dependencies. `Init`: `reg := modevents.NewRegistry(time.Now)`; `c.Registry.Register("modevents", reg)`; compute `SocketPath(c.Cfg.DataDir)`.
+- Name `modevents`, no dependencies. `Init`: `reg := modevents.NewRegistry(time.Now)`; `c.Registry.Register("modevents", reg)`; compute `ResolveSocketPath(c.Cfg.DataDir)`.
 - `Start(ctx)`: `Listen`; if enabled, serve in a goroutine (`srv.Serve(l)`, `http.ErrServerClosed` ignored, other errors logged); start the eviction ticker goroutine; both goroutines are tracked by one `sync.WaitGroup`; log one line `[modevents] socket <path>` or `[modevents] disabled: <reason>`. Never fails the daemon.
 - `Stop(ctx)` (spec §6.1 order): (1) close the listener — stops accepts and unlinks the file; (2) `srv.Shutdown(ctx)` — waits for in-flight requests within the shared shutdown budget, then `srv.Close()` if the context expired; (3) cancel the ticker and `wg.Wait()`. Returns only after all three; idempotent; safe when Start found the channel disabled. The file is gone before `Stop` returns even when `Shutdown` hits its deadline (step 1 already unlinked it).
 - `Status() Status` and `SocketPathForInfo() string` for the read API (U1-1b).
@@ -72,7 +72,7 @@ Restart boundary: `cmd/pdx/shutdown.go` runs `StopModules` (reverse order) befor
 
 Files: `internal/agent/cc/plugin.go` (`writePdxJSON`), `plugin_test.go`.
 
-- `writePdxJSON` adds `"mod_socket": <path>` when `modevents.SocketPath(dataDir)` is ok; omits it otherwise. No other field changes.
+- `writePdxJSON` adds `"mod_socket": <path>` when `modevents.ResolveSocketPath(dataDir)` is ok (the resolved path); omits it otherwise. No other field changes.
 - Tests: extend the existing pdx.json test: `TestExtractPlugin_PdxJSONHasModSocket`; `TestExtractPlugin_PdxJSONOmitsModSocketWhenTooLong`.
 - Import direction: `internal/agent/cc` → `internal/modevents` (modevents imports nothing from `internal/agent`). Add a compile-time check if a cycle appears.
 

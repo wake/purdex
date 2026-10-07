@@ -8,7 +8,11 @@
 // side subscribes to it, never the other way round.
 package modevents
 
-import "path/filepath"
+import (
+	"errors"
+	"io/fs"
+	"path/filepath"
+)
 
 // SocketName is the socket's file name inside the daemon's data dir.
 const SocketName = "mod.sock"
@@ -18,16 +22,29 @@ const SocketName = "mod.sock"
 // room for the terminator on both.
 const MaxSocketPath = 100
 
-// SocketPath is where the daemon listens and the mod connects:
-// <abs(dataDir)>/mod.sock. ok is false when that path is longer than
+// ResolveSocketPath is where the daemon listens and the mod connects:
+// mod.sock in dataDir made absolute with its symlinks resolved, the
+// directory Listen binds in. The daemon module and the pdx.json writer
+// both use it, so pdx.json names the socket the daemon actually binds.
+//
+// A dataDir that does not exist yet is not resolved: the path is in the
+// cleaned absolute dataDir. ok is false when the path is longer than
 // MaxSocketPath (the channel is then disabled, there is no fallback
-// location) or when dataDir cannot be made absolute; the path is returned
-// either way so it can be logged and reported.
-func SocketPath(dataDir string) (path string, ok bool) {
+// location), or when dataDir cannot be made absolute or resolved for any
+// other reason (Listen would fail there too). The path is returned either
+// way so it can be logged and reported.
+func ResolveSocketPath(dataDir string) (path string, ok bool) {
 	abs, err := filepath.Abs(dataDir)
 	if err != nil {
 		return filepath.Join(dataDir, SocketName), false
 	}
-	path = filepath.Join(abs, SocketName)
+	dir, err := filepath.EvalSymlinks(abs)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		dir = abs
+	case err != nil:
+		return filepath.Join(abs, SocketName), false
+	}
+	path = filepath.Join(dir, SocketName)
 	return path, len(path) <= MaxSocketPath
 }

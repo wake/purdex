@@ -262,14 +262,15 @@ var semverRe = regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
 // it, which the mod passes as `pdx relay --config` so it reaches that
 // daemon rather than whatever the default config names.
 //
-// mod_socket is the daemon's mod event socket (interface U1 spec §6.5),
-// omitted when its path is too long for the channel to listen on.
+// mod_socket is the daemon's mod event socket (interface U1 spec §6.5) at
+// the resolved path the daemon binds, omitted when that path is too long
+// for the channel to listen on.
 func writePdxJSON(root, pdxPath, dataDir, cfgPath string) error {
 	m := map[string]string{"pdx": pdxPath, "data_dir": dataDir}
 	if cfgPath != "" {
 		m["config"] = cfgPath
 	}
-	if sock, ok := modevents.SocketPath(dataDir); ok {
+	if sock, ok := modevents.ResolveSocketPath(dataDir); ok {
 		m["mod_socket"] = sock
 	}
 	b, _ := json.Marshal(m)

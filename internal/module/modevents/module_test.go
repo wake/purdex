@@ -104,10 +104,21 @@ func gone(path string) bool {
 	return errors.Is(err, os.ErrNotExist)
 }
 
+// resolvedSock is the socket path in dir with dir's symlinks resolved
+// (/tmp is one on macOS): where the module binds.
+func resolvedSock(t *testing.T, dir string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(r, modevents.SocketName)
+}
+
 func TestModule_StartServesAndStopUnlinks(t *testing.T) {
 	dir := shortDir(t)
 	m, c, lg := started(t, dir)
-	path := filepath.Join(dir, modevents.SocketName)
+	path := resolvedSock(t, dir)
 	if st := m.Status(); !st.Enabled || m.SocketPathForInfo() != path {
 		t.Fatalf("status = %+v, path = %q", st, m.SocketPathForInfo())
 	}
@@ -171,6 +182,91 @@ func TestModule_StopUnlinksEvenWhenShutdownTimesOut(t *testing.T) {
 		t.Fatalf("the next daemon must be able to bind: %+v", st)
 	}
 	l.Close()
+}
+
+// Attacker high: a second Stop racing the first must not return while the
+// first is still cleaning up — the caller would go on (exec-self, exit)
+// with the server still running.
+func TestModule_ConcurrentStopWaitsForCleanup(t *testing.T) {
+	m, c, _ := started(t, shortDir(t))
+	path := m.SocketPathForInfo()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enterOnce, releaseOnce sync.Once
+	releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseHandler) // before the Stop cleanup, which would block
+	registry(t, c).Subscribe(func(modevents.StreamInfo, modevents.Event) {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+	})
+	go func() { _, _, _ = postBatch(path, 1) }() // its handler blocks in the subscriber
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never reached the subscriber")
+	}
+
+	// Stop #1, with a live budget, closes the listener (unlinking the
+	// socket) and then waits in Shutdown for the blocked handler.
+	done1 := make(chan error, 1)
+	go func() { done1 <- m.Stop(context.Background()) }()
+	for deadline := time.Now().Add(5 * time.Second); !gone(path); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("Stop #1 never closed the listener")
+		}
+	}
+
+	done2 := make(chan error, 1)
+	go func() { done2 <- m.Stop(context.Background()) }()
+	select {
+	case err := <-done2:
+		t.Fatalf("Stop #2 returned (%v) while Stop #1 is still shutting down", err)
+	case err := <-done1:
+		t.Fatalf("Stop #1 returned (%v) with a handler still running", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	releaseHandler()
+	for i, done := range []chan error{done1, done2} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Stop #%d: %v", i+1, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("Stop #%d never returned", i+1)
+		}
+		if n := m.running.Load(); n != 0 {
+			t.Fatalf("Stop #%d returned with %d goroutines still running", i+1, n)
+		}
+	}
+	if !gone(path) {
+		t.Fatal("the socket must be gone")
+	}
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatalf("a later Stop returns the same result: %v", err)
+	}
+}
+
+// The module reports the path it actually binds at: the data dir's
+// symlinks resolved, as Listen does and as pdx.json names it.
+func TestModule_SocketPathIsResolved(t *testing.T) {
+	target := shortDir(t)
+	link := filepath.Join(shortDir(t), "data")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	m, _, lg := started(t, link)
+	want := resolvedSock(t, target)
+	if got := m.SocketPathForInfo(); got != want {
+		t.Fatalf("SocketPathForInfo = %q, want the resolved %q", got, want)
+	}
+	if !m.Status().Enabled || !lg.has("[modevents] socket "+want) {
+		t.Fatalf("status = %+v, logs = %q", m.Status(), lg.lines)
+	}
+	if code, body, err := postBatch(want, 1); err != nil || body != `{"ack":1}` {
+		t.Fatalf("post: %d %s %v", code, body, err)
+	}
 }
 
 func TestModule_StopJoinsGoroutines(t *testing.T) {

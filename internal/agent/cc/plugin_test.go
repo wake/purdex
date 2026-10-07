@@ -553,18 +553,24 @@ func TestInstallHooks_PdxJSONNamesTheInstallingConfig(t *testing.T) {
 }
 
 // pdx.json names the daemon's mod event socket (interface U1 spec §6.5):
-// the mod reports nothing without it.
+// the mod reports nothing without it. It is the path the daemon binds at,
+// with the data dir's symlinks resolved (/tmp is one on macOS).
 func TestExtractPlugin_PdxJSONHasModSocket(t *testing.T) {
 	dataDir, err := os.MkdirTemp("/tmp", "pdxm-") // t.TempDir is too long on macOS
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dataDir) })
+	resolved, err := filepath.EvalSymlinks(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(resolved, "mod.sock")
 	if _, _, err := ExtractPlugin(fakePlugin("1.0.0-alpha.600"), dataDir, "1.0.0-alpha.600", "/opt/pdx", "/etc/pdx/config.toml"); err != nil {
 		t.Fatal(err)
 	}
 	pj := readPdxJSON(t, dataDir)
-	if want := filepath.Join(dataDir, "mod.sock"); pj["mod_socket"] != want {
+	if pj["mod_socket"] != want {
 		t.Fatalf("pdx.json mod_socket = %q, want %q", pj["mod_socket"], want)
 	}
 	if len(pj) != 4 || pj["pdx"] != "/opt/pdx" || pj["data_dir"] != dataDir || pj["config"] != "/etc/pdx/config.toml" {
@@ -574,13 +580,48 @@ func TestExtractPlugin_PdxJSONHasModSocket(t *testing.T) {
 	if _, changed, err := ExtractPlugin(fakePlugin("1.0.0-alpha.600"), dataDir, "1.0.0-alpha.600", "/opt/pdx", ""); err != nil || changed {
 		t.Fatalf("refresh: changed=%v err=%v", changed, err)
 	}
-	if got := readPdxJSON(t, dataDir)["mod_socket"]; got != filepath.Join(dataDir, "mod.sock") {
+	if got := readPdxJSON(t, dataDir)["mod_socket"]; got != want {
 		t.Fatalf("refresh: mod_socket = %q", got)
 	}
 }
 
+// Attacker medium: the daemon binds in the data dir's resolved directory,
+// so pdx.json names that path, not the one through the symlink.
+func TestExtractPlugin_PdxJSONUsesResolvedSocket(t *testing.T) {
+	target, err := os.MkdirTemp("/tmp", "pdxm-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(target) })
+	linkParent, err := os.MkdirTemp("/tmp", "pdxl-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(linkParent) })
+	dataDir := filepath.Join(linkParent, "data")
+	if err := os.Symlink(target, dataDir); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := ExtractPlugin(fakePlugin("1.0.0-alpha.600"), dataDir, "1.0.0-alpha.600", "/opt/pdx", ""); err != nil {
+		t.Fatal(err)
+	}
+	pj := readPdxJSON(t, dataDir)
+	if want := filepath.Join(resolved, "mod.sock"); pj["mod_socket"] != want {
+		t.Fatalf("pdx.json mod_socket = %q, want the resolved %q", pj["mod_socket"], want)
+	}
+	if pj["data_dir"] != dataDir {
+		t.Fatalf("data_dir stays as configured: %v", pj)
+	}
+}
+
 // A data dir whose socket path would not fit leaves the channel off, so
-// pdx.json does not name a socket the daemon never listens on.
+// pdx.json does not name a socket the daemon never listens on — also when
+// a short symlink points at a long directory, where the daemon would bind.
 func TestExtractPlugin_PdxJSONOmitsModSocketWhenTooLong(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), strings.Repeat("d", 100))
 	if _, _, err := ExtractPlugin(fakePlugin("1.0.0-alpha.600"), dataDir, "1.0.0-alpha.600", "/opt/pdx", ""); err != nil {
@@ -592,6 +633,29 @@ func TestExtractPlugin_PdxJSONOmitsModSocketWhenTooLong(t *testing.T) {
 	}
 	if pj["pdx"] != "/opt/pdx" || pj["data_dir"] != dataDir {
 		t.Fatalf("pdx.json = %v", pj)
+	}
+
+	long := filepath.Join(t.TempDir(), strings.Repeat("d", 90))
+	if err := os.Mkdir(long, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkParent, err := os.MkdirTemp("/tmp", "pdxl-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(linkParent) })
+	short := filepath.Join(linkParent, "data")
+	if err := os.Symlink(long, short); err != nil {
+		t.Fatal(err)
+	}
+	if p := filepath.Join(short, "mod.sock"); len(p) > 100 {
+		t.Fatalf("setup: %s is already too long", p)
+	}
+	if _, _, err := ExtractPlugin(fakePlugin("1.0.0-alpha.600"), short, "1.0.0-alpha.600", "/opt/pdx", ""); err != nil {
+		t.Fatal(err)
+	}
+	if pj := readPdxJSON(t, short); pj["mod_socket"] != "" || len(pj) != 2 {
+		t.Fatalf("short link to a long dir: pdx.json = %v; mod_socket must be omitted", pj)
 	}
 }
 
