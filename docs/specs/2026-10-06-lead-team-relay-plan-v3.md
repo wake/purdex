@@ -549,6 +549,31 @@ All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `Sp
   So a spawn does not stop at a dialog. Neither the runner nor the skill handles one.
 - **No Purdex hooks.** A host without the Purdex hooks never produces a frame, so every spawn there times out. The CLI says so in P4-7.
 
+**Fix notes (PR P4-5 review, binding).** The review (R1, attacker H1–H4, critic) changed the rules above as follows; where they disagree, these notes win.
+- **Shipped as four stacked PRs**, each ≤ 800 lines:
+  - **P4-5a**, tmux and session: `NewSessionTaggedContext` (`new-session ; set-option @opt v` in one invocation) and `PaneIdentity` (generation, session id, pane id, the user option and `pane_current_path` in one `display-message`); `session.CreateSessionTagged`. A tagged create that fails after its `new-session` reads the name back and kills an untagged session on its own generation.
+  - **P4-5b**, the runner's create and launch steps.
+  - **P4-5c**, registration, the member row, boot resume and the plugin tree.
+  - **P4-5d**, the route.
+- **Test names.** `TestSpawn_LaunchLineHasPluginDirModelEffortAndRegisters` is split into `TestSpawn_LaunchLineHasPluginDirModelAndEffort` (P4-5b) and `TestSpawn_AMemberThatRegistersIsStoredAndTitled` (P4-5c). The POST's answer, with `lead_address`, is `TestSpawn_PostAnswersTheMemberAndTheLeadAddress` (P4-5d).
+- **Rule 4, the launch: record first, then send.** `launched` (with `launched_at`) is persisted **before** the generation-guarded send. Winning that compare-and-set is the right to send, so the line is typed at most once whatever races or restarts. The price is a crash window: a daemon that dies between the record and the send leaves a launched op that was never sent, and the next boot times it out (killed, `member_start_timeout`).
+- **Rule 3, the checks (H1).** The POST checks in this order: lead → cwd → (one write transaction) lead again + limit, then insert. `AcceptSpawnOp` takes the write lock with `UPDATE teams … WHERE id = ? AND lead_session_id = ? AND ended_at = 0` (no row → `not_lead`). It then counts the team's running ops (this one excepted) plus **every** `active` member row (≥ `max_members` → `team_full`) and inserts, all in that one transaction.
+  - The count is team.db alone and conservative. A member whose session ended holds its place until P4-6's sweeper marks its row `gone`.
+  - "A live member … or whose relay is in flight" above is replaced by this count: a registry read before the transaction could undercount at its commit.
+- **The cwd (H2), two more checks after the POST's.**
+  - (a) Before the create, the runner resolves the op's cwd again and checks it against the team's roots (else `session_create_failed`, nothing created).
+  - (b) Before any key, the pane's real `pane_current_path`, symlinks evaluated, must be under the roots. Otherwise the session is killed (recorded id and generation) and the op fails `launch_failed`, with nothing sent.
+  - The cwd is still a path, not a handle: tmux takes only paths, and the lead runs as the same user. The roots are a guard rail, not a security boundary.
+- **Ownership (H3).** The session is born with the session user option `@pdx_spawn_op` = the op's full UUID (the tmux name gives away 10 hex digits of it).
+  - An accepted op that finds a session of its name adopts it only when one `PaneIdentity` answer shows that tag. Untagged (a stranger, or the name on a restarted server) or another op's tag → `tmux_name_taken`, left alone. "Present but no `tmux_id` recorded: adopt it" above is replaced by this.
+  - Every later step re-reads the pane's identity: generation, session, pane and tag must all be the op's.
+- **Registration (H4).** A verified frame on the pane is the member only after one `PaneIdentity` answer confirms that the pane is still the op's (generation, session id, tag). Frames carry no tmux identity of their own. A pane that answers but is not the op's → `failed{abandoned}`; an unreadable one is looked at again.
+- **Registration deadline (R1, ruled after the critic).** Every poll judges `now ≥ launched_at + 20 s` first: kill, `member_start_timeout`. This holds even when the member has shown up by then, because nothing records when it registered.
+- **Failure reasons.** No new wire reason:
+  - H2 (a) → `session_create_failed`, H2 (b) → `launch_failed`;
+  - H3 → `tmux_name_taken`;
+  - H4 and a step team.db refuses to record (a corrupt row, a write error; P4-4 review) → `abandoned`, the session killed first. A refused write is not retried.
+
 ## PR P4-6 — kill, `pdx team`'s route, persisted usage, gone members
 
 **Goal.** Spec §7.3 (`pdx kill`, `pdx team` with context, model and effort; U20 (e)), §8.5 "Persist it for teams only". Persisted usage sits here by plan v2's coordinator decision ("persisted usage on team rows: P4"); spec §12 lists it under P7 (deviation 7, coordinator decision 10).
