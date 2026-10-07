@@ -509,3 +509,31 @@ func TestAskWait_RemoteDenyIsAnsweredRemoteWithHook(t *testing.T) {
 		t.Fatalf("wait after a remote deny = %d %+v hook=%+v", code, w, w.Hook)
 	}
 }
+
+// Fix note (P8a-1b R1): the terminal's answer replaces a remote decision
+// whichever way it went — a remote deny of a hook_permission that the
+// terminal had already allowed becomes terminal_override with the
+// terminal's allow, and a second closed is broadcast (step 5). Mutation
+// gate: the override CAS from approved only ⇒ the row stays denied ⇒ red.
+func TestAskReport_AnsweredLocalOverridesARemoteDeny(t *testing.T) {
+	f := newFixture(t)
+	id := f.askBeginPermission("toolu_d2")
+	if code, body := f.do(http.MethodPost, "/api/team/approvals/"+id+"/decide",
+		team.DecideRequest{Decision: "deny", Hook: &team.HookDecision{Message: "不要"}, Client: appClient()}); code != http.StatusOK {
+		t.Fatalf("deny = %d %s", code, body)
+	}
+	f.events()
+	code, body := f.do(http.MethodPost, "/api/ask/report/"+id,
+		team.AskReportRequest{State: team.StateAnsweredLocal, Hook: &team.HookDecision{Behavior: "allow"}})
+	a := decodeApproval(t, body)
+	if code != 200 || a.State != team.StateTerminalOverride || a.Hook == nil || a.Hook.Behavior != "allow" || a.DecidedBy == nil || a.DecidedBy.Kind != team.ClientKindTerminal {
+		t.Fatalf("override of a remote deny = %d %+v hook=%+v by=%+v", code, a, a.Hook, a.DecidedBy)
+	}
+	evs := f.events()
+	if len(evs) != 1 || evs[0].Op != "closed" || evs[0].Approval.State != team.StateTerminalOverride || evs[0].Approval.Hook == nil || evs[0].Approval.Hook.Behavior != "allow" {
+		t.Fatalf("second closed = %+v", evs)
+	}
+	if stored, _, _ := f.m.store.Get(id); stored.State != team.StateTerminalOverride || stored.Hook == nil || stored.Hook.Behavior != "allow" {
+		t.Fatalf("stored row = %+v hook=%+v", stored, stored.Hook)
+	}
+}

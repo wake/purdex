@@ -52,12 +52,14 @@ func (s *Store) OpenTerminalOnlyBySession(sessionID string) ([]team.Approval, er
 	return out, nil
 }
 
-// OverrideIfApproved is the second CAS of spec §6.6 step 5: a hook row a
-// remote decide already closed as approved becomes terminal_override,
-// carrying the terminal's answers and decided_by terminal. The UPDATE is
-// guarded by state='approved', so a row closed any other way is left as it
-// is (won=false) and the caller answers with it.
-func (s *Store) OverrideIfApproved(id string, decidedAt int64, hook *team.HookDecision) (team.Approval, bool, error) {
+// OverrideIfDecided is the second CAS of spec §6.6 step 5: a hook row a
+// remote decide already closed — approved, or denied (a hook_permission
+// deny) — becomes terminal_override, carrying the terminal's answer and
+// decided_by terminal: the terminal's answer stands whichever way the
+// remote one went. The UPDATE is guarded by state IN ('approved',
+// 'denied'), so a row closed any other way (or already overridden) is left
+// as it is (won=false) and the caller answers with it.
+func (s *Store) OverrideIfDecided(id string, decidedAt int64, hook *team.HookDecision) (team.Approval, bool, error) {
 	var hookJSON any
 	if hook != nil {
 		b, err := json.Marshal(hook)
@@ -73,7 +75,7 @@ func (s *Store) OverrideIfApproved(id string, decidedAt int64, hook *team.HookDe
 	res, err := s.db.Exec(`
 		UPDATE approval_requests
 		SET state = ?, decided_at = ?, decided_by_json = ?, grant_json = ?
-		WHERE id = ? AND state = 'approved' AND kind IN ('hook_ask', 'hook_permission')`,
+		WHERE id = ? AND state IN ('approved', 'denied') AND kind IN ('hook_ask', 'hook_permission')`,
 		string(team.StateTerminalOverride), decidedAt, string(by), hookJSON, id)
 	if err != nil {
 		return team.Approval{}, false, fmt.Errorf("override approval %s: %w", id, err)

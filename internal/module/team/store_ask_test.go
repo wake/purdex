@@ -74,10 +74,13 @@ func TestStore_OpenByToolUse_TerminalOnly_NonHook(t *testing.T) {
 	}
 }
 
-// OverrideIfApproved moves approved → terminal_override only (spec §6.6 step 5).
-func TestStore_OverrideIfApprovedOnlyFromApproved(t *testing.T) {
+// OverrideIfDecided moves approved or denied → terminal_override only
+// (spec §6.6 step 5; P8a-1b review: the terminal's answer replaces a remote
+// deny as well as a remote approve). Open rows, the terminal's own closes,
+// the other terminal states and lead rows are never overridden.
+func TestStore_OverrideIfDecidedOnlyFromApprovedOrDenied(t *testing.T) {
 	s := openTestStore(t)
-	for _, id := range []string{"hk-1", "hk-2"} {
+	for _, id := range []string{"hk-1", "hk-2", "hk-3"} {
 		if _, _, _, err := s.Create(openHookApproval(id, "sid-1", id, false), "h"); err != nil {
 			t.Fatal(err)
 		}
@@ -86,30 +89,47 @@ func TestStore_OverrideIfApprovedOnlyFromApproved(t *testing.T) {
 	if _, _, err := s.CloseIfOpen("hk-1", Close{State: team.StateApproved, DecidedAt: 2, DecidedBy: remote, Hook: &team.HookDecision{Answers: map[string]string{"q?": "藍"}}}); err != nil {
 		t.Fatal(err)
 	}
-	over, won, err := s.OverrideIfApproved("hk-1", 3, &team.HookDecision{Answers: map[string]string{"q?": "紅"}})
+	over, won, err := s.OverrideIfDecided("hk-1", 3, &team.HookDecision{Answers: map[string]string{"q?": "紅"}})
 	if err != nil || !won || over.State != team.StateTerminalOverride || over.Hook.Answers["q?"] != "紅" || over.DecidedBy.Kind != team.ClientKindTerminal || over.DecidedAt != 3 {
-		t.Fatalf("override: %+v hook=%+v by=%+v won=%v err=%v", over, over.Hook, over.DecidedBy, won, err)
+		t.Fatalf("override of approved: %+v hook=%+v by=%+v won=%v err=%v", over, over.Hook, over.DecidedBy, won, err)
 	}
-	if _, won, err := s.OverrideIfApproved("hk-1", 4, nil); err != nil || won {
+	if _, won, err := s.OverrideIfDecided("hk-1", 4, nil); err != nil || won {
 		t.Fatalf("a second override must lose: won=%v err=%v", won, err)
 	}
-	if _, won, err := s.OverrideIfApproved("hk-2", 4, nil); err != nil || won {
+	// A remote deny is overridden the same way.
+	if _, _, err := s.CloseIfOpen("hk-3", Close{State: team.StateDenied, DecidedAt: 2, DecidedBy: remote, Hook: &team.HookDecision{Behavior: "deny", Message: "不要"}}); err != nil {
+		t.Fatal(err)
+	}
+	over, won, err = s.OverrideIfDecided("hk-3", 3, &team.HookDecision{Behavior: "allow"})
+	if err != nil || !won || over.State != team.StateTerminalOverride || over.Hook.Behavior != "allow" || over.Hook.Message != "" || over.DecidedBy.Kind != team.ClientKindTerminal {
+		t.Fatalf("override of denied: %+v hook=%+v by=%+v won=%v err=%v", over, over.Hook, over.DecidedBy, won, err)
+	}
+	if _, won, err := s.OverrideIfDecided("hk-2", 4, nil); err != nil || won {
 		t.Fatalf("an open row cannot be overridden: won=%v err=%v", won, err)
 	}
-	if _, _, err := s.CloseIfOpen("hk-2", Close{State: team.StateDismissed, DecidedAt: 5}); err != nil {
-		t.Fatal(err)
+	for i, st := range []team.State{team.StateDismissed, team.StateAnsweredLocal, team.StateCancelled, team.StateAbandoned, team.StateTimeout} {
+		id := "hk-x" + string(rune('a'+i))
+		if _, _, _, err := s.Create(openHookApproval(id, "sid-1", id, false), "h"); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.CloseIfOpen(id, Close{State: st, DecidedAt: 5}); err != nil {
+			t.Fatal(err)
+		}
+		if _, won, err := s.OverrideIfDecided(id, 6, nil); err != nil || won {
+			t.Fatalf("a %s row cannot be overridden: won=%v err=%v", st, won, err)
+		}
 	}
-	if _, won, _ := s.OverrideIfApproved("hk-2", 6, nil); won {
-		t.Fatal("a dismissed row cannot be overridden")
-	}
-	if _, _, _, err := s.Create(openApproval("ld-1", "sid-1", 1000), "h"); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := s.CloseIfOpen("ld-1", Close{State: team.StateApproved, DecidedAt: 2}); err != nil {
-		t.Fatal(err)
-	}
-	if _, won, _ := s.OverrideIfApproved("ld-1", 7, nil); won {
-		t.Fatal("a lead row is never overridden")
+	for i, st := range []team.State{team.StateApproved, team.StateDenied} {
+		id := "ld-" + string(rune('1'+i))
+		if _, _, _, err := s.Create(openApproval(id, "sid-1", 1000), "h"); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.CloseIfOpen(id, Close{State: st, DecidedAt: 2}); err != nil {
+			t.Fatal(err)
+		}
+		if _, won, _ := s.OverrideIfDecided(id, 7, nil); won {
+			t.Fatalf("a %s lead row is never overridden", st)
+		}
 	}
 }
 

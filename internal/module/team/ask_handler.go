@@ -256,8 +256,8 @@ func (m *Module) handleAskWait(w http.ResponseWriter, r *http.Request) {
 
 // handleAskReport is POST /api/ask/report/{id} (spec §6.6 steps 3, 5, 6).
 // answered_local closes an open row through the CAS; when a remote decide
-// already won, the terminal's answer still stands: the row becomes
-// terminal_override and a second closed is broadcast. dismissed closes an
+// already won (approved or denied), the terminal's answer still stands: the
+// row becomes terminal_override and a second closed is broadcast. dismissed closes an
 // open row; against a closed one it is a no-op. Both answer the row as it
 // now is, so a repeat is idempotent.
 func (m *Module) handleAskReport(w http.ResponseWriter, r *http.Request) {
@@ -301,10 +301,11 @@ func (m *Module) handleAskReport(w http.ResponseWriter, r *http.Request) {
 		m.writeJSON(w, http.StatusOK, after)
 		return
 	}
-	if req.State == team.StateAnsweredLocal && after.State == team.StateApproved {
-		// Step 5: the remote decide won the CAS, but the terminal had already
-		// shown its answer. Record the override and tell every card.
-		over, won, err := m.store.OverrideIfApproved(id, now, req.Hook)
+	if req.State == team.StateAnsweredLocal && (after.State == team.StateApproved || after.State == team.StateDenied) {
+		// Step 5: the remote decide won the CAS — an approve, or a
+		// hook_permission deny — but the terminal had already shown its
+		// answer. Record the override and tell every card.
+		over, won, err := m.store.OverrideIfDecided(id, now, req.Hook)
 		if err != nil {
 			m.logf("[team] ask report %s: %v", id, err)
 			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
