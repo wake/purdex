@@ -23,7 +23,7 @@ import {
   type ParsedHostConfig,
 } from '../lib/host-config-parse'
 import { forgetRelayPromptDrafts } from '../lib/relay-prompt-draft-memory'
-import { useHostStore } from './useHostStore'
+import { useHostStore, type HostConfig } from './useHostStore'
 
 export type { HostConfigProblem } from '../lib/host-config-parse'
 
@@ -126,10 +126,14 @@ interface Inflight { promise: Promise<void>; endpoint: string; abort: AbortContr
 const inflight = new Map<string, Inflight>()
 const generations = new Map<string, number>()
 
+/** A host's endpoint as this cache tells daemons apart (address, port, token), or `null` for no host. */
+export function hostEndpointKey(h: HostConfig | undefined): string | null {
+  return h ? `${h.ip}:${h.port}:${h.token ?? ''}` : null
+}
+
 /** The address a request for `hostId` would go to, or `null` when there is none. */
 function endpointOf(hostId: string): string | null {
-  const h = useHostStore.getState().hosts[hostId]
-  return h ? `${h.ip}:${h.port}:${h.token ?? ''}` : null
+  return hostEndpointKey(useHostStore.getState().hosts[hostId])
 }
 
 function beginRequest(hostId: string, endpoint: string): RequestToken {
@@ -141,6 +145,17 @@ function stillCurrent(hostId: string, token: RequestToken): boolean {
   if ((generations.get(hostId) ?? 0) !== token.gen) return false
   return endpointOf(hostId) === token.endpoint
 }
+
+/**
+ * The same token, for a read of host config data outside this cache (the relay prompts on Hosts › 接力, P9a-3):
+ * `null` when the host has no endpoint. Its answer is usable only while `hostRequestStillCurrent` holds.
+ */
+export function beginHostRequest(hostId: string): RequestToken | null {
+  const endpoint = endpointOf(hostId)
+  return endpoint === null ? null : beginRequest(hostId, endpoint)
+}
+
+export const hostRequestStillCurrent = stillCurrent
 
 /** Abandon every answer in flight for `hostId`; aborts the fetch when it can. */
 function invalidate(hostId: string): void {
