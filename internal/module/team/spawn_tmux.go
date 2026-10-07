@@ -30,9 +30,16 @@ const tmuxReadTimeout = 5 * time.Second
 // (review H2 (a): the path may have changed since). The session is created
 // through the session module's create path, tagged with the op id at birth,
 // and one identity read confirms its id, generation and tag and gives its
-// pane. A session of the op's name that exists already is somebody else's.
+// pane. A session of the op's name that exists already is adopted only when
+// that one read shows it carries the op's tag (review H3: a daemon that
+// died between the create and its record); untagged, or another op's, it
+// is somebody else's (tmux_name_taken), left alone.
 func (m *Module) spawnCreate(op spawnRow) bool {
 	if m.sessions.SessionExists(op.TmuxName) {
+		if id, err := m.paneIdentity("=" + op.TmuxName + ":"); err == nil && id.Tag == op.ID {
+			m.logf("[team] spawn %s: adopting its tmux session %s (%s, generation %s)", op.ID, op.TmuxName, id.SessionID, id.Instance)
+			return m.recordSession(op, id)
+		}
 		m.failSpawn(op.ID, team.SpawnReasonNameTaken)
 		return false
 	}
@@ -80,6 +87,7 @@ func (m *Module) recordSession(op spawnRow, id tmux.PaneIdentity) bool {
 // restarts; a daemon that dies between the record and the send leaves a
 // launched op that times out (killed, member_start_timeout).
 func (m *Module) spawnLaunch(op spawnRow) bool {
+	m.ensurePluginTree()
 	line, err := m.memberLaunchLine(op)
 	if err == nil {
 		err = m.checkLaunchPane(op)
