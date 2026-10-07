@@ -18,17 +18,17 @@ import (
 )
 
 func TestBuildTerminalRelayArgs_Auto(t *testing.T) {
-	args := buildTerminalRelayArgs("dev", "auto")
+	args := buildTerminalRelayArgs("dev", "auto", false)
 	assert.Equal(t, []string{"attach-session", "-t", "dev"}, args)
 }
 
 func TestBuildTerminalRelayArgs_TerminalFirst(t *testing.T) {
-	args := buildTerminalRelayArgs("dev", "terminal-first")
+	args := buildTerminalRelayArgs("dev", "terminal-first", false)
 	assert.Equal(t, []string{"attach-session", "-t", "dev", "-f", "ignore-size"}, args)
 }
 
 func TestBuildTerminalRelayArgs_MinimalFirst(t *testing.T) {
-	args := buildTerminalRelayArgs("dev", "minimal-first")
+	args := buildTerminalRelayArgs("dev", "minimal-first", false)
 	// minimal-first does NOT add ignore-size — sizing is handled via OnStart callback
 	assert.Equal(t, []string{"attach-session", "-t", "dev"}, args)
 }
