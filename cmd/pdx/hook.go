@@ -136,9 +136,10 @@ func runHook(args []string) {
 		os.Exit(1)
 	}
 
-	// One 5 s budget for the whole hook: the stdin read, the event POST and
-	// the decision share it, so the agent is held ≤ 5 s end to end on every
-	// path (spec §6.6, §15; Codex's outer hook timeout is 10 s). The ctx
+	// One 5 s budget: the stdin read, the event POST and the decision share
+	// it, so what the lock path adds holds the agent ≤ 5 s on every path
+	// (spec §6.6, §15; Codex's outer hook timeout is 10 s). The tmux and
+	// provenance lookups above predate it and are not under it. The ctx
 	// carries a cancel, not a Deadline(), so daemonclient keeps its own
 	// (fake-able) attempt timer (client.go attemptCtx).
 	budget, cancelBudget := context.WithCancel(context.Background())
