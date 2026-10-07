@@ -42,7 +42,7 @@ const entry = (daemonCapabilities?: string[], over: Partial<NexHostEntry> = {}):
 const SCOPED = ['conversations.scope.v1']
 const setHost = (e: NexHostEntry) => useNexHostStore.setState({ byHost: { [H]: e }, ensure: vi.fn().mockResolvedValue(undefined) })
 const seedLive = (items: ExecutionSummary[]) =>
-  useExecutionListStore.setState({ byHost: { [H]: { items, phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false } } })
+  useExecutionListStore.setState({ byHost: { [H]: { items, phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false, complete: true } } })
 /** ended / gone answers by state. */
 const answer = (ended: UseConversations, gone: UseConversations) =>
   conversations.mockImplementation((_h: string, s: string) => (s === 'ended' ? ended : gone))

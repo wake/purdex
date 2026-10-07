@@ -44,7 +44,7 @@ const readyEntry: NexHostEntry = {
 const entryWith = (patch: Partial<NexHostEntry>): NexHostEntry => ({ ...readyEntry, ...patch })
 
 function seedList(items: ExecutionSummary[], patch: Partial<{ phase: 'idle' | 'loading' | 'ready' | 'error'; error: string | null; truncated: boolean }> = {}) {
-  useExecutionListStore.setState({ byHost: { [H]: { items, phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false, ...patch } } })
+  useExecutionListStore.setState({ byHost: { [H]: { items, phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false, complete: true, ...patch } } })
 }
 
 let ensure: ReturnType<typeof vi.fn<(hostId: string) => Promise<void>>>

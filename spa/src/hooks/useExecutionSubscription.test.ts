@@ -11,6 +11,13 @@ import type { NexSseOptions } from '../lib/nex/nex-sse'
 import { subscriptionSlots } from '../lib/nex/subscription-slots'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import type { WorkerTask, WorkerTasksSnapshot } from '../lib/nex/types'
+import { startWorkerAgentProjection } from './useWorkerAgentProjection'
+import { useAgentStore } from '../stores/useAgentStore'
+import { useTabStore } from '../stores/useTabStore'
+import { useExecutionListStore } from '../stores/useExecutionListStore'
+import { emptyListCache } from '../lib/nex/execution-list-effects'
+import { compositeKey } from '../lib/composite-key'
+import { execAgentCode } from '../lib/nex/worker-agent-status'
 
 vi.mock('../lib/nex/nex-api', () => ({ getExecution: vi.fn(), attachObserve: vi.fn(), fetchExecutionEvents: vi.fn(), fetchExecutionTasks: vi.fn() }))
 vi.mock('../lib/nex/nex-sse', () => ({ openNexSse: vi.fn() }))
@@ -321,6 +328,262 @@ describe('useExecutionSubscription', () => {
     warn.mockRestore()
   })
 
+  // The entry outlives the pane (a tab switch unmounts it); with no stream feeding it, it must not keep saying `open`.
+  it.each(['open', 'reconnecting'] as const)('unmount leaves the entry streamless (idle), not %s; a remount dials in again', async (status) => {
+    const first = renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { sseOpts!.onStatus(status) })
+    expect(useExecutionStore.getState().executions[KEY].sse).toBe(status)
+    first.unmount()
+    expect(useExecutionStore.getState().executions[KEY].sse).toBe('idle')
+    expect(useExecutionStore.getState().executions[KEY].sseError).toBeNull()
+
+    vi.mocked(api.fetchExecutionEvents).mockResolvedValueOnce({ items: [], next_cursor: 0 })
+    renderHook(() => useExecutionSubscription(H, E, true))
+    expect(useExecutionStore.getState().executions[KEY].sse).toBe('connecting')
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(sse.openNexSse).toHaveBeenCalledTimes(2)
+    act(() => { sseOpts!.onStatus('open') })
+    expect(useExecutionStore.getState().executions[KEY].sse).toBe('open')
+  })
+
+  it('unmount keeps a terminal problem as it is (closed, with its reason)', async () => {
+    vi.mocked(api.getExecution).mockRejectedValueOnce(new NexApiError(404, 'execution_not_found', 'nope'))
+    const { unmount } = renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    unmount()
+    expect(useExecutionStore.getState().executions[KEY]).toMatchObject({ sse: 'closed', sseError: 'nope' })
+  })
+
+  // Pin: alone on its execution, a pane whose stream fails gives the slot back and closes the entry with the reason.
+  it.each([
+    { name: 'chain fails terminally (not_found)', arrange: () => { vi.mocked(api.getExecution).mockRejectedValueOnce(new NexApiError(404, 'execution_not_found', 'nope')) }, fail: () => {}, err: 'nope' },
+    { name: 'chain fails before its stream opens', arrange: () => { vi.mocked(api.getExecution).mockRejectedValueOnce(new TypeError('Failed to fetch')) }, fail: () => {}, err: 'Failed to fetch' },
+    { name: 'stream closes terminally', arrange: () => {}, fail: () => { sseOpts!.onStatus('open'); sseOpts!.onStatus('closed', new Error('nex sse: HTTP 401')) }, err: 'nex sse: HTTP 401' },
+  ])('a pane alone on its execution whose $name gives the slot back and closes the entry with the reason', async ({ arrange, fail, err }) => {
+    arrange()
+    renderHook(() => useExecutionSubscription(H, E, true))
+    expect(subscriptionSlots.isLive(H, KEY)).toBe(true)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { fail() })
+    expect(useExecutionStore.getState().executions[KEY]).toMatchObject({ sse: 'closed', sseError: err })
+    expect(subscriptionSlots.isLive(H, KEY)).toBe(false)
+  })
+
+  // The same execution open in two panes (a split, or two tabs): two instances of this hook share the store entry and
+  // the slot key. Each closes its own stream; only the last one to go releases the slot and leaves the entry idle.
+  describe('the same execution in two panes', () => {
+    interface Stream { opts: NexSseOptions; close: CloseMock }
+    let streams: Stream[]
+    const AGENT_KEY = compositeKey(H, execAgentCode(E))
+    const entry = () => useExecutionStore.getState().executions[KEY]
+    const subagentIds = () => useAgentStore.getState().subagents[AGENT_KEY]?.map((s) => s.id)
+    const realListSubscribe = useExecutionListStore.getState().subscribe
+    const realEnsure = useNexHostStore.getState().ensure
+    let stopProjection: (() => void) | null = null
+
+    beforeEach(() => {
+      streams = []
+      vi.mocked(sse.openNexSse).mockReset().mockImplementation((o) => {
+        const s: Stream = { opts: o, close: vi.fn<() => void>() }
+        streams.push(s)
+        return { close: s.close }
+      })
+      vi.mocked(api.fetchExecutionEvents).mockReset().mockResolvedValue({ items: [ev(1), ev(2)], next_cursor: 0 })
+      // The worker projection reads the entry's decoration (running-subagent refs) while its stream is open.
+      useNexHostStore.setState({ ensure: vi.fn<(hostId: string) => Promise<void>>().mockResolvedValue(undefined) })
+      useExecutionListStore.setState({
+        subscribe: vi.fn(() => () => {}),
+        byHost: { [H]: { ...emptyListCache(), phase: 'ready', complete: true, items: [summary({ state: 'running', turn_count: 1 })] } },
+      })
+      useAgentStore.setState({ statuses: {}, agentTypes: {}, models: {}, subagents: {}, lastEvents: {}, oscTitles: {}, ccStatus: {}, unread: {} })
+      useTabStore.setState({
+        tabs: { t1: { id: 't1', pinned: false, locked: false, createdAt: 0, layout: { type: 'leaf', pane: { id: 'p1', content: { kind: 'execution', executionId: E, host: H } } } } },
+        tabOrder: ['t1'], activeTabId: null,
+      })
+      stopProjection = startWorkerAgentProjection()
+    })
+    afterEach(() => {
+      stopProjection?.()
+      stopProjection = null
+      useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+      useExecutionListStore.setState({ byHost: {}, subscribe: realListSubscribe })
+      useNexHostStore.setState({ ensure: realEnsure })
+    })
+
+    it('one pane closing leaves the other\'s stream feeding the entry: open, slot held, subagent refs kept; the last one closing goes idle and frees the slot', async () => {
+      const a = renderHook(() => useExecutionSubscription(H, E, true))
+      const b = renderHook(() => useExecutionSubscription(H, E, true))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(streams).toHaveLength(2)
+      act(() => { streams[0].opts.onStatus('open'); streams[1].opts.onStatus('open') })
+      act(() => {
+        streams[1].opts.onFrame({ id: '3', event: 'task_start', data: JSON.stringify({ task_id: 'sa', turn_id: 't1', kind: 'subagent', subagent_type: 'Explore', started_at: 1000 }) })
+      })
+      expect(subagentIds()).toEqual(['sa'])
+
+      a.unmount()
+      expect(streams[0].close).toHaveBeenCalledTimes(1)
+      expect(streams[1].close).not.toHaveBeenCalled()
+      expect(entry().sse).toBe('open')
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(true)
+      expect(subagentIds()).toEqual(['sa'])
+      // The remaining pane's stream still feeds the entry.
+      act(() => { streams[1].opts.onFrame({ id: '4', event: 'assistant', data: '{"type":"assistant"}' }) })
+      expect(entry().lastSeq).toBe(4)
+      expect(entry().sse).toBe('open')
+
+      b.unmount()
+      expect(streams[1].close).toHaveBeenCalledTimes(1)
+      expect(entry().sse).toBe('idle')
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(false)
+      expect(subagentIds()).toBeUndefined()
+    })
+
+    it('a pane switching to another execution releases nothing of the first one while another pane still shows it', async () => {
+      const a = renderHook(({ id }) => useExecutionSubscription(H, id, true), { initialProps: { id: E } })
+      const b = renderHook(() => useExecutionSubscription(H, E, true))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      act(() => { streams[0].opts.onStatus('open'); streams[1].opts.onStatus('open') })
+      a.rerender({ id: 'exc_2' })
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(streams[0].close).toHaveBeenCalledTimes(1)
+      expect(entry().sse).toBe('open')
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(true)
+
+      b.unmount()
+      expect(entry().sse).toBe('idle')
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(false)
+      // The switched pane holds its new execution's slot.
+      expect(subscriptionSlots.isLive(H, `${H}:exc_2`)).toBe(true)
+    })
+
+    // A pane whose own stream fails keeps that to itself while the other pane still streams: the slot and the entry's
+    // stream status are the other's. The last stream to end frees the slot and leaves the entry streamless.
+    const live = (seq: number) => ({ id: String(seq), event: 'assistant', data: '{"type":"assistant"}' })
+
+    it('a pane whose chain fails terminally (not_found) while the other streams keeps only its problem: the slot and the open entry stay the other\'s, which keeps feeding it', async () => {
+      const b = renderHook(() => useExecutionSubscription(H, E, true))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      act(() => { streams[0].opts.onStatus('open') })
+      vi.mocked(api.getExecution).mockRejectedValueOnce(new NexApiError(404, 'execution_not_found', 'nope'))
+      const a = renderHook(() => useExecutionSubscription(H, E, true))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(a.result.current.problem).toBe('not_found')
+      expect(streams).toHaveLength(1)
+      expect(entry()).toMatchObject({ sse: 'open', sseError: null })
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(true)
+      act(() => { streams[0].opts.onFrame(live(3)) })
+      expect(entry().lastSeq).toBe(3)
+      expect(entry().sse).toBe('open')
+
+      b.unmount()
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(false)
+      expect(entry().sse).toBe('idle')
+      a.unmount()
+    })
+
+    it('a pane whose own stream closes terminally (401) while the other streams leaves the slot, the open entry and a send in flight to the other', async () => {
+      const a = renderHook(() => useExecutionSubscription(H, E, true))
+      const b = renderHook(() => useExecutionSubscription(H, E, true))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      act(() => { streams[0].opts.onStatus('open'); streams[1].opts.onStatus('open') })
+      act(() => { useExecutionStore.getState().setPendingSend(H, E, true) })
+      act(() => { streams[0].opts.onStatus('closed', new Error('nex sse: HTTP 401')) })
+      expect(entry()).toMatchObject({ sse: 'open', sseError: null, pendingSend: true })
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(true)
+      act(() => { streams[1].opts.onFrame(live(3)) })
+      expect(entry().lastSeq).toBe(3)
+      expect(entry().sse).toBe('open')
+
+      b.unmount()
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(false)
+      expect(entry().sse).toBe('idle')
+      a.unmount()
+    })
+
+    it('a pane whose chain fails before its stream opens while the other streams leaves the slot and the open entry alone, and its own retry still dials in', async () => {
+      const b = renderHook(() => useExecutionSubscription(H, E, true))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      act(() => { streams[0].opts.onStatus('open') })
+      vi.mocked(api.getExecution).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      const a = renderHook(() => useExecutionSubscription(H, E, true))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(a.result.current.problem).toBeNull()
+      expect(streams).toHaveLength(1)
+      expect(entry()).toMatchObject({ sse: 'open', sseError: null })
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(true)
+      act(() => { streams[0].opts.onFrame(live(3)) })
+      expect(entry().lastSeq).toBe(3)
+
+      // Its own backoff (2 s) runs the chain again and opens a second stream onto the same entry.
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+      expect(streams).toHaveLength(2)
+      expect(entry().sse).toBe('open')
+      act(() => { streams[1].opts.onStatus('open') })
+      b.unmount()
+      expect(entry().sse).toBe('open')
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(true)
+      a.unmount()
+      expect(entry().sse).toBe('idle')
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(false)
+    })
+
+    it('a pane dialling in or reconnecting never hides the other\'s delivering stream; once that one ends the entry shows the survivor\'s own status', async () => {
+      renderHook(() => useExecutionSubscription(H, E, true))
+      const b = renderHook(() => useExecutionSubscription(H, E, true))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      act(() => { streams[0].opts.onStatus('open') })
+      expect(entry()).toMatchObject({ sse: 'open', sseError: null })
+      act(() => { streams[1].opts.onStatus('open'); streams[1].opts.onStatus('reconnecting', new Error('nex sse: idle timeout')) })
+      expect(entry()).toMatchObject({ sse: 'open', sseError: null })
+
+      act(() => { streams[0].opts.onStatus('closed', new Error('nex sse: HTTP 401')) })
+      expect(entry()).toMatchObject({ sse: 'reconnecting', sseError: 'nex sse: idle timeout' })
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(true)
+      act(() => { streams[1].opts.onStatus('open') })
+      expect(entry()).toMatchObject({ sse: 'open', sseError: null })
+      b.unmount()
+      expect(entry().sse).toBe('idle')
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(false)
+    })
+
+    it('an eviction of the shared slot pauses both panes and the entry', async () => {
+      const a = renderHook(() => useExecutionSubscription(H, E, true))
+      const b = renderHook(() => useExecutionSubscription(H, E, true))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      act(() => { streams[0].opts.onStatus('open'); streams[1].opts.onStatus('open') })
+      act(() => { for (const k of ['x1', 'x2', 'x3', 'x4']) subscriptionSlots.touch(H, `${H}:${k}`) })
+      expect(streams[0].close).toHaveBeenCalledTimes(1)
+      expect(streams[1].close).toHaveBeenCalledTimes(1)
+      expect(a.result.current.paused).toBe(true)
+      expect(b.result.current.paused).toBe(true)
+      expect(entry().sse).toBe('paused')
+      expect(subscriptionSlots.isLive(H, KEY)).toBe(false)
+    })
+
+    it('an eviction while the other pane is still dialling in leaves the entry to that attempt, which pauses it once no slot is free for it either', async () => {
+      const b = renderHook(() => useExecutionSubscription(H, E, true))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      act(() => { streams[0].opts.onStatus('open') })
+      let resolveHistory!: (page: Awaited<ReturnType<typeof api.fetchExecutionEvents>>) => void
+      vi.mocked(api.fetchExecutionEvents).mockReturnValueOnce(new Promise((r) => { resolveHistory = r }))
+      const a = renderHook(() => useExecutionSubscription(H, E, true))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(entry().sse).toBe('open')
+
+      act(() => { for (const k of ['x1', 'x2', 'x3', 'x4']) subscriptionSlots.touch(H, `${H}:${k}`) })
+      expect(streams[0].close).toHaveBeenCalledTimes(1)
+      expect(b.result.current.paused).toBe(true)
+      expect(entry().sse).toBe('connecting')
+
+      await act(async () => { resolveHistory({ items: [], next_cursor: 0 }); await vi.advanceTimersByTimeAsync(0) })
+      expect(streams).toHaveLength(1)
+      expect(a.result.current.paused).toBe(true)
+      expect(entry().sse).toBe('paused')
+    })
+  })
+
   it('closes the SSE on unmount and when the executionId changes', async () => {
     const { rerender, unmount } = renderHook(({ id }) => useExecutionSubscription(H, id, true), { initialProps: { id: E } })
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
@@ -402,6 +665,22 @@ describe('useExecutionSubscription', () => {
     expect(api.attachObserve).toHaveBeenCalledTimes(1)
     expect(sse.openNexSse).toHaveBeenCalledTimes(1)
     expect(subscriptionSlots.isLive(H, KEY)).toBe(true)
+  })
+
+  // A run without its host has no cleanup, so it must not count as an instance holding the shared slot and entry.
+  it('a pane whose host was missing and came back is the last instance: closing it frees the slot and idles the entry', async () => {
+    const hostRow = useHostStore.getState().hosts[H]
+    act(() => { useHostStore.setState({ hosts: {}, hostOrder: [] }) })
+    const { result, unmount } = renderHook(() => useExecutionSubscription(H, E, true))
+    expect(result.current.problem).toBe('host_removed')
+    act(() => { useHostStore.setState({ hosts: { [H]: hostRow }, hostOrder: [H] }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { sseOpts!.onStatus('open') })
+    expect(subscriptionSlots.isLive(H, KEY)).toBe(true)
+    unmount()
+    expect(sseClose).toHaveBeenCalledTimes(1)
+    expect(subscriptionSlots.isLive(H, KEY)).toBe(false)
+    expect(useExecutionStore.getState().executions[KEY].sse).toBe('idle')
   })
 
   it('an inactive-at-mount pane claims a free slot and goes live (spec §4.3.2 step 4); once slots are full it stays paused until activation evicts the LRU', async () => {

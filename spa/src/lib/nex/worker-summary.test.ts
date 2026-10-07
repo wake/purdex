@@ -1,6 +1,40 @@
-import { describe, it, expect } from 'vitest'
-import { isAwaitingApproval, workerTitleOf } from './worker-summary'
+import { describe, it, expect, beforeEach } from 'vitest'
+import { hostListTruncated, isAwaitingApproval, readWorkerSummary, workerTitleOf } from './worker-summary'
 import type { ExecutionSummary } from './types'
+import { executionKey, useExecutionStore } from '../../stores/useExecutionStore'
+import { useExecutionListStore } from '../../stores/useExecutionListStore'
+import { useWorkerTitlePrefetchStore } from '../../stores/useWorkerTitlePrefetchStore'
+import { defaultExecutionState } from './event-reducer'
+import { emptyListCache } from './execution-list-effects'
+
+describe('readWorkerSummary (a worker\'s title: the list row, else the live summary, else the prefetch)', () => {
+  const s = (brief: string) => ({ id: 'e1', state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/w', mount_kind: 'dev', brief, labels: {},
+    created_at: 1, updated_at: 5, duration_ms: null, event_count: 0, observers: 0, archived: false }) as ExecutionSummary
+  const setRow = () => useExecutionListStore.setState({ byHost: { h1: { ...emptyListCache(), phase: 'ready', items: [s('row')] } } })
+  const setLive = () => useExecutionStore.setState({ executions: { [executionKey('h1', 'e1')]: { ...defaultExecutionState(), summary: s('live') } } })
+  const setPrefetched = () => useWorkerTitlePrefetchStore.setState({ byKey: { [executionKey('h1', 'e1')]: s('prefetched') } })
+  beforeEach(() => {
+    useExecutionListStore.setState({ byHost: {} })
+    useExecutionStore.setState({ executions: {} })
+    useWorkerTitlePrefetchStore.setState({ byKey: {} })
+  })
+
+  it('the row first, then the live summary, then the prefetch; null with none', () => {
+    expect(readWorkerSummary('h1', 'e1')).toBeNull()
+    setPrefetched()
+    expect(readWorkerSummary('h1', 'e1')?.brief).toBe('prefetched')
+    setLive()
+    expect(readWorkerSummary('h1', 'e1')?.brief).toBe('live')
+    setRow()
+    expect(readWorkerSummary('h1', 'e1')?.brief).toBe('row')
+  })
+
+  it('hostListTruncated: only a list that hit its page cap', () => {
+    expect(hostListTruncated({}, 'h1')).toBe(false)
+    expect(hostListTruncated({ h1: { ...emptyListCache(), truncated: false } }, 'h1')).toBe(false)
+    expect(hostListTruncated({ h1: { ...emptyListCache(), truncated: true } }, 'h1')).toBe(true)
+  })
+})
 
 describe('isAwaitingApproval (permission channel PC2: the summary decides, no event stream)', () => {
   it('a pending_permission object → awaiting', () => {

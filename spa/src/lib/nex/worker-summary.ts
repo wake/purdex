@@ -1,9 +1,15 @@
 // spa/src/lib/nex/worker-summary.ts — where a worker (execution) tab reads its
-// summary: the live pane state when present, else the host's list row; for its
-// title only, else the summary prefetched for it (#1557, worker-title-prefetch.ts).
-// The tab (`useTabDisplay`) and the notification dispatcher both go through
-// these, so the tab title and the notification title cannot read different
-// sources (worker-pane theme spec §8.2 / §8.4).
+// summary. The boundary: the single source is for STATUS-class data only —
+// state, archived, pending_permission (the light, 等待核准), turn_count, the
+// dedupe stamps, the transitions — and it is the host's list row, the one the
+// worker projection reads too (useWorkerAgentProjection.ts); the live pane state
+// only when the list is truncated and has no row for it (`hostListTruncated`).
+// The TITLE is not status: it may fall back row → live pane state → the summary
+// prefetched for it (#1557, worker-title-prefetch.ts), freshest first
+// (`readWorkerSummary`). Never extend that fallback order to status. The tab
+// (`useTabDisplay`) and the notification dispatcher both go through these, so
+// the tab title and the notification title cannot read different sources
+// (worker-pane theme spec §8.2 / §8.4).
 import { executionKey, useExecutionStore } from '../../stores/useExecutionStore'
 import { useExecutionListStore } from '../../stores/useExecutionListStore'
 import { useWorkerTitlePrefetchStore } from '../../stores/useWorkerTitlePrefetchStore'
@@ -34,16 +40,32 @@ export function prefetchedWorkerSummary(
   return byKey[executionKey(hostId, executionId)] ?? null
 }
 
-/** Imperative read for a worker's title, same order as the tab's: live summary, else list row, else the prefetch. */
+/**
+ * The host's list hit its page cap (D9): the newest rows may be missing, so a missing row says nothing. A worker's
+ * STATUS is its list row; only then, with no row, its live summary (the projection's one fallback,
+ * useWorkerAgentProjection.ts) — never the prefetch, a one-shot snapshot that does not say what the worker is doing.
+ * Selector-safe.
+ */
+export function hostListTruncated(byHost: HostListCaches, hostId: string): boolean {
+  return byHost[hostId]?.truncated === true
+}
+
+/**
+ * Imperative read for a worker's TITLE (notification title, pane labels), same order as the tab's: the list row, else
+ * the live summary, else the prefetch. Freshest first: the prefetch is fetched only while there is no live summary, and
+ * a live entry is never dropped, so when both exist the live one is newer. A title is not status — the live summary
+ * stays a fallback here, or a worker archived while its tab is open (no row, no prefetch) would lose its title. Never
+ * read status (state, archived, pending_permission, turn_count) through this: status is the row alone.
+ */
 export function readWorkerSummary(hostId: string, executionId: string): ExecutionSummary | null {
-  return liveWorkerSummary(useExecutionStore.getState().executions, hostId, executionId)
-    ?? rowWorkerSummary(useExecutionListStore.getState().byHost, hostId, executionId)
+  return rowWorkerSummary(useExecutionListStore.getState().byHost, hostId, executionId)
+    ?? liveWorkerSummary(useExecutionStore.getState().executions, hostId, executionId)
     ?? prefetchedWorkerSummary(useWorkerTitlePrefetchStore.getState().byKey, hostId, executionId)
 }
 
 /**
  * 「等待核准」 (permission channel PC2, spec §5.4): the worker is waiting on a permission request. The summary
- * decides — the list row or the live summary, no event stream needed (Nexen contract §9.8 §2). `null` is an
+ * decides — the list row (`hostListTruncated` says when else), no event stream needed (Nexen contract §9.8 §2). `null` is an
  * answer (nothing pending); an absent field means a daemon older than Nexen v0.19.0, which is never awaiting.
  * Lifecycle-aware: archived, terminated, rejected and failed workers are never awaiting. The ONE shared definition.
  */

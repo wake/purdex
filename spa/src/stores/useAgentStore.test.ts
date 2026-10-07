@@ -169,6 +169,28 @@ describe('useAgentStore', () => {
     expect(useAgentStore.getState().subagents[`${H}:dev`]).toBeUndefined()
   })
 
+  it('setSubagents replaces the refs and touches nothing else (no status, no lastEvents, no unread)', () => {
+    const k = `${H}:exec-e1`
+    const event: NormalizedEvent = { agent_type: 'cc', status: 'idle', raw_event_name: 'Stop', broadcast_ts: 300 }
+    useAgentStore.setState({ statuses: { [k]: 'idle' }, lastEvents: { [k]: event } })
+    const before = useAgentStore.getState()
+
+    useAgentStore.getState().setSubagents(H, 'exec-e1', [ref('a')])
+    let s = useAgentStore.getState()
+    expect(s.subagents[k]).toEqual([ref('a')])
+    expect(s.statuses).toBe(before.statuses)
+    expect(s.lastEvents).toBe(before.lastEvents)
+    expect(s.unread).toBe(before.unread)
+
+    useAgentStore.getState().setSubagents(H, 'exec-e1', [])
+    s = useAgentStore.getState()
+    expect(k in s.subagents).toBe(false)
+    expect(s.lastEvents[k]).toBe(event)
+    // Clearing refs that are not there is a no-op (same state object).
+    useAgentStore.getState().setSubagents(H, 'exec-e1', [])
+    expect(useAgentStore.getState()).toBe(s)
+  })
+
   it('markRead → clears unread', () => {
     useAgentStore.setState({ unread: { [`${H}:dev`]: true } })
     useAgentStore.getState().markRead(H, 'dev')

@@ -7,8 +7,8 @@ import { useHostStore } from '../../../stores/useHostStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useSessionStore } from '../../../stores/useSessionStore'
 import type { Tab } from '../../../types/tab'
-import { useExecutionStore, executionKey } from '../../../stores/useExecutionStore'
-import { defaultExecutionState } from '../../../lib/nex/event-reducer'
+import { useExecutionListStore } from '../../../stores/useExecutionListStore'
+import { emptyListCache } from '../../../lib/nex/execution-list-effects'
 import type { ExecutionSummary } from '../../../lib/nex/types'
 
 const mockOnPointerDown = vi.fn()
@@ -656,18 +656,21 @@ describe('InlineTab — worker awaiting approval', () => {
     id: 'tx', pinned: false, locked: false, createdAt: 0,
     layout: { type: 'leaf', pane: { id: 'px', content: { kind: 'execution', executionId: 'e1', host: 'h1' } } },
   } as Tab
-  /** The worker's summary only — useWorkerAgentProjection has not written its `exec-e1` status yet (cold load). */
+  /**
+   * The worker's row in its host's list only — the one source of a worker's status (useWorkerAgentProjection) — before
+   * the projection has written its `exec-e1` status (cold load).
+   */
   const seedSummary = (over: Partial<ExecutionSummary>) => {
-    useExecutionStore.setState({ executions: { [executionKey('h1', 'e1')]: { ...defaultExecutionState(), summary: ({
+    useExecutionListStore.setState({ byHost: { h1: { ...emptyListCache(), phase: 'ready', items: [({
       id: 'e1', state: 'running', provider: 'claude', principal_id: 'p', cwd: '/w/repo', mount_kind: 'dev', brief: 'Fix the bug',
       labels: {}, created_at: 1, updated_at: 5, duration_ms: null, event_count: 0, observers: 0, archived: false, ...over,
-    }) as ExecutionSummary } } })
+    }) as ExecutionSummary] } } })
   }
   const seedWorker = (over: Partial<ExecutionSummary>) => {
     seedSummary(over)
     useAgentStore.setState({ statuses: { 'h1:exec-e1': 'waiting' } })
   }
-  beforeEach(() => { useExecutionStore.setState({ executions: {} }) })
+  beforeEach(() => { useExecutionListStore.setState({ byHost: {} }) })
   afterEach(() => { act(() => { useI18nStore.getState().setLocale('en') }) })
 
   it('the hand beside the waiting dot, and the title without a suffix', () => {

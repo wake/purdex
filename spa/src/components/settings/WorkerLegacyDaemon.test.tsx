@@ -48,7 +48,7 @@ describe('a daemon without conversations.scope.v1', () => {
       byHost: { [H]: { items: [
         erow({ id: 'N1', session_id: 'SN', cwd: '/Users/w/proj', brief: 'normal one' }),
         erow({ id: 'T1', session_id: 'ST', cwd: '/tmp/x', brief: 'test one' }),
-      ], phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false } },
+      ], phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false, complete: true } },
     })
   })
 

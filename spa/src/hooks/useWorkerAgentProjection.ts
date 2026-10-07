@@ -3,14 +3,23 @@
 // §8.1–8.2), under `exec-<id>` keys, so the sidebar light, unread and the
 // notification dispatcher treat a worker tab like a terminal agent tab.
 //
-// Source per pane: the live `useExecutionStore` entry (when it has a summary
-// and its SSE is open, or the list row is not strictly newer than it), else
-// the host's execution list row (a frozen live entry is still used when no
-// row exists). Every host with a worker tab
-// holds one list subscription so a row exists for an evicted pane. A dispatch
-// happens only when the projection (status, subagent ids, agent type, and the
-// pending request while waiting) changes; closing the last pane of a worker
-// dispatches `clear`.
+// One source of truth for STATUS: the host's execution list row
+// (`useExecutionListStore`) — like a tmux agent, whose status the daemon pushes
+// whatever its panes do. Every host with a worker tab holds one list
+// subscription, and its one site-wide stream refetches the list on every frame,
+// so a worker whose pane is not mounted (its tab switched away, or evicted)
+// still moves and notifies. Everything status-class — state, archived, the
+// pending request (等待核准), turn_count, the dedupe stamps, and so every
+// transition dispatched here — is read from the row. The pane's live entry
+// (`useExecutionStore`) serves the conversation and the request card inside the
+// pane; here it is only decoration (the running-subagent refs, a Stop /
+// StopFailure notification's detail) while its stream is delivering, and never
+// decides a status. The one fallback to it: a list cut at its page cap that has
+// no row for the worker. A status dispatch happens only when the status
+// signature (status, agent type, the pending request while waiting) changes or a
+// counted turn was missed while the row reads ended; a decoration-only change
+// writes the refs alone. Closing the last pane of a worker, or its row leaving a
+// list that answered in full (`complete`: archived), dispatches `clear`.
 import { useEffect } from 'react'
 import { useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
 import { useTabStore } from '../stores/useTabStore'
@@ -87,78 +96,88 @@ function collectWorkers(tabs: Record<string, Tab>): Map<string, WorkerRef> {
 interface Source {
   input: WorkerStatusInput
   provider: string
-  /** Live state when it is the source; null for a list-row source. */
-  live: ExecutionState | null
+  /** The list row — or, under the truncated fallback only, the live summary. Status, stamps and request come from it. */
   summary: ExecutionSummary
+  /** The live entry when IT is the status source (the truncated fallback); null for a list row. */
+  live: ExecutionState | null
+  /**
+   * Decoration only, never status: the live entry while its stream is delivering (`sse === 'open'`) — or the status
+   * source itself under the fallback. A stream in any other state (the pane unmounted: `idle`; evicted: `paused`;
+   * dialing: `connecting`; retrying: `reconnecting`; dead: `closed`) left the entry frozen, its tasks and messages
+   * possibly a turn behind the row, so it decorates nothing. Null = no decoration.
+   */
+  decor: ExecutionState | null
+}
+
+/** No row for the worker in a host list that answered in full (`HostListCache.complete`): the worker is not live there any more. */
+const GONE = 'gone'
+
+function runningSubagentsOf(live: ExecutionState | null): WorkerStatusInput['runningSubagents'] {
+  if (!live) return []
+  return runningTasks(live.tasks)
+    .filter((t) => t.kind === 'subagent')
+    .map((t) => ({ task_id: t.task_id, subagent_type: t.subagent_type, started_at: t.started_at }))
 }
 
 /**
- * How fresh the live snapshot is, on the daemon's clock: the newer of the
- * summary's `updated_at` (refreshed by every summary refetch — event patches
- * never touch it) and the `created_at` of the last applied durable event
- * (`lastEventAt`; the summary lags it between an event and its refetch).
- * Both are the same clock a list row's `updated_at` is on.
+ * Where a worker's status is read from. The single source is for STATUS-class data only — state, archived, the pending
+ * request (pending_permission), turn_count, the dedupe stamps and so every transition dispatched here — and it is the
+ * host's list row. The TITLE is not status: it may fall back row → live summary → the #1557 prefetch
+ * (`readWorkerSummary`, worker-summary.ts). Never extend that fallback order to status: the live entry is a source
+ * here only under the truncated fallback below, and the prefetch never is.
  */
-function liveFreshness(live: ExecutionState, summary: ExecutionSummary): number {
-  return Math.max(summary.updated_at, live.lastEventAt)
-}
-
-/**
- * Chosen by freshness, not by SSE state alone. An `open` stream is delivering,
- * so the live entry wins. Every other status leaves the entry frozen — an
- * evicted pane (`paused`, useExecutionSubscription's slot cap), a dead stream
- * (`closed`), a resumed one still dialing in (`connecting`), a stream retrying
- * (`reconnecting`) — and then the list row wins only when it is strictly newer
- * than the live snapshot. That serves both failure modes: a brief network
- * blip leaves the row older, so the live state holds (no false Stop then
- * UserPromptSubmit); a stream stuck retrying or evicted falls behind a row
- * that keeps advancing, so the row takes over. With no row the frozen live
- * entry is still the best we have.
- */
-function liveWins(live: ExecutionState, summary: ExecutionSummary, row: ExecutionSummary | undefined): boolean {
-  if (live.sse === 'open' || !row) return true
-  return !(row.updated_at > liveFreshness(live, summary))
-}
-
-function deriveSource({ hostId, executionId }: WorkerRef): Source | null {
+function deriveSource({ hostId, executionId }: WorkerRef): Source | typeof GONE | null {
   const live = useExecutionStore.getState().executions[executionKey(hostId, executionId)]
-  const row = useExecutionListStore.getState().byHost[hostId]?.items.find((r) => r.id === executionId)
-  if (live?.summary && liveWins(live, live.summary, row)) {
-    const subs = runningTasks(live.tasks).filter((t) => t.kind === 'subagent')
+  const list = useExecutionListStore.getState().byHost[hostId]
+  const row = list?.items.find((r) => r.id === executionId)
+  if (row) {
+    const decor = live?.sse === 'open' ? live : null
+    return {
+      input: {
+        // A list row knows only the current state; `turn_count` (Dispatched.rowTurns) covers a turn missed between
+        // two of its debounced refreshes.
+        state: row.state,
+        turnLive: row.state === 'running',
+        lastOutcome: row.state === 'failed' ? 'failed' : null,
+        hasTurn: (row.turn_count ?? 0) > 0,
+        archived: row.archived,
+        // A list row carries only a count (running_tasks), not the refs: those are the live stream's, when it delivers.
+        runningSubagents: runningSubagentsOf(decor),
+        awaitingApproval: isAwaitingApproval(row),
+      },
+      provider: row.provider,
+      summary: row,
+      live: null,
+      decor,
+    }
+  }
+  // The ONLY fallback to the live entry: the host's list hit its page cap (D9, `truncated`) and has no row for this
+  // worker, so the list cannot say anything about it. The live entry then decides as it did before the list became
+  // the one source — per turn, not the execution-wide `turnLive` alone (the first turn's end clears `turnLive` while a
+  // queued send is still pending).
+  if (list?.truncated && live?.summary) {
     return {
       input: {
         state: live.summary.state,
-        // Per turn, not the execution-wide `turnLive` alone: the first
-        // turn's end clears `turnLive` while a queued send is still pending.
         turnLive: live.turnLive || hasOpenTurn(live),
         lastOutcome: lastEndedOutcome(live),
         hasTurn: live.turnStarts.length > 0,
         archived: live.summary.archived,
-        runningSubagents: subs.map((t) => ({ task_id: t.task_id, subagent_type: t.subagent_type, started_at: t.started_at })),
-        // The summary decides (refetched on every permission event, Task 8), same as for a list row below.
+        runningSubagents: runningSubagentsOf(live),
         awaitingApproval: isAwaitingApproval(live.summary),
       },
       provider: live.summary.provider,
-      live,
       summary: live.summary,
+      live,
+      decor: live,
     }
   }
-  if (!row) return null
-  return {
-    input: {
-      state: row.state,
-      turnLive: row.state === 'running',
-      lastOutcome: row.state === 'failed' ? 'failed' : null,
-      hasTurn: (row.turn_count ?? 0) > 0,
-      archived: row.archived,
-      // A list row carries only a count (running_tasks), not the refs.
-      runningSubagents: [],
-      awaitingApproval: isAwaitingApproval(row),
-    },
-    provider: row.provider,
-    live: null,
-    summary: row,
-  }
+  // The list asks for unarchived executions only (execution-list-effects.ts): a row missing from a list that answered
+  // in full (`complete`) is a worker archived (or gone) since. Not before the list answered, nor from a walk that did
+  // not answer in full — cut at its page cap, a malformed row dropped, stopped on a repeated cursor: there a missing
+  // row says nothing, and the previous projection stands (no clear, no transition).
+  if (list?.phase === 'ready' && list.complete) return GONE
+  return null
 }
 
 /** Messages of the last turn (from its boundary; all messages when no boundary is known). */
@@ -185,10 +204,10 @@ function lastAssistantText(live: ExecutionState): string | undefined {
   return undefined
 }
 
-/** The failing turn's reason: its failing result's subtype, else the lifecycle / terminal reason. */
+/** The failing turn's reason: its failing result's subtype (decoration, from a delivering live stream), else the lifecycle / terminal reason. */
 function failureReason(src: Source): string {
-  if (src.live) {
-    const msgs = lastTurnMessages(src.live)
+  if (src.decor) {
+    const msgs = lastTurnMessages(src.decor)
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i] as Record<string, unknown>
       if (m.type !== 'result' || m.parent_tool_use_id != null || !isResultError(m)) continue
@@ -204,13 +223,16 @@ function failureReason(src: Source): string {
  * A timestamp tied to the state, not the clock: the dispatcher's persistent
  * dedup (`shouldDispatch`) compares it with the last one it saw for the key,
  * so re-projecting the same state after a reload must not look like a new
- * event. Running → the turn's start; idle / error → the turn's end; else the
- * summary's `updated_at`; the clock only as a last resort. Waiting (awaiting
- * approval) → the pending request's `since` (Unix ms, the daemon's clock).
+ * event. Read from the row only: running / idle / error → the row's
+ * `updated_at` (Nexen advances it on every state change); waiting (awaiting
+ * approval) → the pending request's `since` (Unix ms, the daemon's clock) —
+ * Nexen creating a request does not touch `updated_at` (`pending_permission`
+ * is a query-time subquery). The clock only as a last resort. Under the
+ * truncated fallback (the live entry is the source) running / idle / error
+ * keep the live turn's start / end, as before the row was the one source.
  *
- * The request's `since` is the same on the live summary and on a list row, so
- * unlike the turn stamps it never depends on the source, and it is used even
- * for the first projection after a reload. It is not what dedupes the request,
+ * The request's `since` is used even for the first projection after a
+ * reload. It is not what dedupes the request,
  * though: two requests can share a millisecond, so the dispatcher dedupes a
  * waiting event by its `detail.request_id` (`shouldDispatchRequest`) — quiet
  * for a request it already saw, once for one it has not (also one that came
@@ -219,17 +241,15 @@ function failureReason(src: Source): string {
  *
  * `firstInSession`: this engine has not dispatched the key yet. A list-row
  * source (any status but waiting, above) then stamps 0 instead of
- * `updated_at`. The live and list-row sources stamp the same state
- * differently (turn endAt vs `updated_at`), and Nexen
- * advances `updated_at` on lease acquire / renew / release and on
- * last_turn_reason writes with no status change — so after a reload the first
- * list-row projection would carry a stamp above the one the dispatcher stored
- * and replay an old Stop. 0 is a baseline the dispatcher records (for an
- * unseen key) but never shows, and it can never exceed a stored stamp. Later
- * list-row dispatches in the session keep `updated_at`: change detection only
- * lets them through on a real status / signature change, and that
- * `updated_at` is newer than anything stored. The live source always keeps
- * its turn-derived stamps.
+ * `updated_at`: Nexen advances `updated_at` on lease acquire / renew / release
+ * and on last_turn_reason writes with no status change — so after a reload the
+ * first list-row projection would carry a stamp above the one the dispatcher
+ * stored and replay an old Stop. 0 is a baseline the dispatcher records (for
+ * an unseen key) but never shows, and it can never exceed a stored stamp.
+ * Later list-row dispatches in the session keep `updated_at`: change detection
+ * only lets them through on a real status / signature change (or a missed
+ * turn), and that `updated_at` is newer than anything stored. A
+ * decoration-only change is never a dispatch, so it never carries a stamp.
  */
 function stateStamp(status: WorkerProjection['status'], src: Source, firstInSession: boolean): number {
   if (status === 'waiting') {
@@ -244,8 +264,10 @@ function stateStamp(status: WorkerProjection['status'], src: Source, firstInSess
 }
 
 function detailOf(status: WorkerProjection['status'], src: Source): Record<string, unknown> {
-  if (status === 'idle' && src.live) {
-    const text = lastAssistantText(src.live)
+  // Decoration: the turn's last reply, only from a live stream that is delivering (a frozen entry may hold an older
+  // turn's text). None is just a Stop without the snippet.
+  if (status === 'idle') {
+    const text = src.decor ? lastAssistantText(src.decor) : undefined
     return text !== undefined ? { last_assistant_message: text } : {}
   }
   if (status === 'error') return { error: failureReason(src) }
@@ -269,20 +291,27 @@ function requestIdOf(status: WorkerProjection['status'], src: Source): string {
 }
 
 /**
- * What makes a projection a new dispatch. While waiting it includes the pending request's id: a new request is a new
- * event even when the worker never left `waiting` (back-to-back requests), and the same request seen again through a
- * refetch, a reconnect or a live <-> row source switch is not (both sources carry the same `pending_permission`).
+ * What makes a projection a new dispatch: status-class data only. While waiting it includes the pending request's id:
+ * a new request is a new event even when the worker never left `waiting` (back-to-back requests), and the same request
+ * seen again through a refetch is not. The running-subagent refs are decoration and deliberately NOT part of it: a
+ * change of refs alone is written with `setSubagents` and dispatches nothing, so it can never carry a new stamp (a
+ * replayed Stop) or re-mark the tab unread — e.g. the refs dropping when the pane unmounts.
  */
-const signatureOf = (agentType: string, p: WorkerProjection, requestId: string): string =>
-  `${agentType}|${p.status}|${p.subagents.map((s) => s.id).join(',')}|${requestId}`
+const signatureOf = (agentType: string, status: WorkerProjection['status'], requestId: string): string =>
+  `${agentType}|${status}|${requestId}`
+
+/** The decoration a tab shows next to the light: the running-subagent ids. */
+const subagentsSigOf = (p: WorkerProjection): string => p.subagents.map((s) => s.id).join(',')
 
 interface Dispatched {
   hostId: string
   code: string
   status: WorkerProjection['status']
   sig: string
-  /** The row source's `turn_count` when the last dispatch came from a list row; null for a live source. */
+  /** The row's `turn_count` as last seen; null while the live entry is the source (the truncated fallback). */
   rowTurns: number | null
+  /** The subagent refs last written for the key (`subagentsSigOf`). */
+  subs: string
 }
 
 /** Start the projection; returns its teardown. Exported for tests — the app mounts it through the hook. */
@@ -314,19 +343,41 @@ export function startWorkerAgentProjection(): () => void {
 
     for (const [key, w] of workers) {
       const src = deriveSource(w)
+      const prev = dispatched.get(key)
+      if (src === GONE) {
+        // Its row left a list that answered in full: archived (or gone) since, so not live — like an archived summary
+        // (`isLiveRow`). Only for a worker this engine saw: one never listed yet (a new worker the list has not caught
+        // up with) keeps no light until its row appears.
+        if (prev && prev.status !== 'clear') {
+          dispatched.set(key, { ...prev, status: 'clear', sig: GONE, rowTurns: null, subs: '' })
+          clearKey(prev)
+        }
+        continue
+      }
       if (!src) continue
       const projection = projectWorkerStatus(src.input)
       const agentType = src.provider ? providerAgentType(src.provider) : ''
-      const sig = signatureOf(agentType, projection, requestIdOf(projection.status, src))
-      const prev = dispatched.get(key)
+      const sig = signatureOf(agentType, projection.status, requestIdOf(projection.status, src))
+      const subs = subagentsSigOf(projection)
       // A list row knows only the current state and its refreshes are debounced, so a running -> idle between two
       // refreshes leaves the status signature unchanged and the second Stop would be swallowed. `turn_count` still
-      // moves with every turn, so between two ROW-sourced dispatches a changed count is a new event. It is
-      // deliberately not part of `sig`: a live <-> row source switch (pane eviction) must not look like a new Stop.
+      // moves with every turn, so between two ROW-sourced projections a changed count is a new event. It is
+      // deliberately not part of `sig`: a switch between the row and the truncated fallback must not look like a Stop.
       const rowTurns = src.live ? null : (src.summary.turn_count ?? 0)
       const missedTurn = prev !== undefined && prev.rowTurns !== null && rowTurns !== null && rowTurns !== prev.rowTurns
-      if (prev?.sig === sig && !missedTurn) continue
+      // Re-dispatched, a missed turn is a real Stop / StopFailure only while the row reads ended (idle, error). Still
+      // running (running -> idle -> running inside one debounce window), a re-dispatch would be `running` again: no Stop
+      // for the turn that ended, and running clears the key's unread in the agent store. So then only the count moves.
+      // Known limitation: a full turn completed inside one debounce window yields no Stop — #1866 (state deltas on the
+      // site stream) closes it.
+      const missedStop = missedTurn && projection.status !== 'running'
       const code = execAgentCode(w.executionId)
+      if (prev?.sig === sig && !missedStop) {
+        // Same status: at most the decoration moved (refs from the live stream) — written alone, never dispatched.
+        if (prev.subs !== subs && projection.status !== 'clear') useAgentStore.getState().setSubagents(w.hostId, code, projection.subagents)
+        if (prev.subs !== subs || prev.rowTurns !== rowTurns) dispatched.set(key, { ...prev, subs, rowTurns })
+        continue
+      }
       // Terminated (not merely archived): an explicit event for the dispatcher before the clear, which would
       // otherwise take the key out silently. Only for a worker this engine saw alive — a first sight of an already
       // terminated one (reload) is history, not news. The dispatcher still suppresses it for the active, focused tab.
@@ -340,7 +391,7 @@ export function startWorkerAgentProjection(): () => void {
           detail: {},
         })
       }
-      dispatched.set(key, { hostId: w.hostId, code, status: projection.status, sig, rowTurns })
+      dispatched.set(key, { hostId: w.hostId, code, status: projection.status, sig, rowTurns, subs })
       dispatch(w.hostId, code, {
         agent_type: agentType,
         status: projection.status,

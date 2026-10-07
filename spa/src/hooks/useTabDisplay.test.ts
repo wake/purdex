@@ -290,6 +290,11 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
 
   const setLiveSummary = (over: Partial<ExecutionSummary> = {}) =>
     useExecutionStore.setState({ executions: { [executionKey('h1', 'e1')]: { ...defaultExecutionState(), summary: summary(over) } } })
+  /** The host's list with this worker's row; `truncated` without a row: a list cut at its page cap that misses it. */
+  const setRow = (over: Partial<ExecutionSummary> = {}) =>
+    useExecutionListStore.setState({ byHost: { h1: { ...emptyListCache(), phase: 'ready', items: [summary(over)] } } })
+  const setListWithoutRow = (truncated: boolean) =>
+    useExecutionListStore.setState({ byHost: { h1: { ...emptyListCache(), phase: 'ready', truncated, items: [summary({ id: 'other' })] } } })
 
   const setTitleSupported = (supported: boolean) =>
     useNexHostStore.setState({
@@ -333,6 +338,17 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
     const { result } = renderHook(() => useTabDisplay(execTab()))
     expect(result.current.displayTitle).toBe('Row brief - repo')
     expect(result.current.IconComponent).toBe(CODEX_ICON_VARIANTS.openai)
+  })
+
+  it('the list row wins over the live summary for the title, which stays a fallback without a row', () => {
+    setLiveSummary({ brief: 'Live brief' })
+    const { result } = renderHook(() => useTabDisplay(execTab()))
+    expect(result.current.displayTitle).toBe('Live brief - repo')
+    act(() => { setRow({ brief: 'Row brief' }) })
+    expect(result.current.displayTitle).toBe('Row brief - repo')
+    // Archived while its tab is open: the row leaves the list, the live summary still names the tab.
+    act(() => { setListWithoutRow(false) })
+    expect(result.current.displayTitle).toBe('Live brief - repo')
   })
 
   it('the pre-handoff title wins over the brief', () => {
@@ -389,13 +405,15 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
 
   // Permission channel PC2 / spec §5.4, user decision 2026-10-08: 「等待核准」 on a tab is the hand icon + tooltip on
   // the tab light (TabStatusIndicator), never label text — the title stays the plain worker title in both locales.
+  // Status: the host's list row decides (useWorkerAgentProjection's one source), never the pane's live summary — except
+  // in a list cut at its page cap that has no row for the worker.
   describe('awaiting approval (a flag for the tab light, no title suffix)', () => {
     const pending = { request_id: 'r1', tool_name: 'Bash', since: 1_700_000_000_000 }
     afterEach(() => { useI18nStore.getState().setLocale('en'); useI18nStore.setState({ t: (k: string) => k }) })
 
-    it('pending_permission set: isAwaitingApproval, and the title carries no suffix (en, then zh-TW)', () => {
+    it('pending_permission set on the row: isAwaitingApproval, and the title carries no suffix (en, then zh-TW)', () => {
       useI18nStore.getState().setLocale('en')
-      setLiveSummary({ state: 'running', pending_permission: pending })
+      setRow({ state: 'running', pending_permission: pending })
       const { result } = renderHook(() => useTabDisplay(execTab()))
       expect(result.current.isAwaitingApproval).toBe(true)
       expect(result.current.displayTitle).toBe('Fix the bug - repo')
@@ -404,21 +422,45 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
       expect(result.current.displayTitle).toBe('Fix the bug - repo')
     })
 
-    it('the flag clears when pending_permission turns null', () => {
+    it('the flag clears when the row\'s pending_permission turns null', () => {
       useI18nStore.getState().setLocale('zh-TW')
+      setRow({ state: 'running', pending_permission: pending })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.isAwaitingApproval).toBe(true)
+      act(() => { setRow({ state: 'running', pending_permission: null }) })
+      expect(result.current.isAwaitingApproval).toBe(false)
+      expect(result.current.displayTitle).toBe('Fix the bug - repo')
+    })
+
+    it('the pane\'s live summary never sets or clears it: the row decides, and a list that answered without a row is no fallback', () => {
+      // A frozen live entry (pane switched away) that missed the request, while the row has it.
+      setLiveSummary({ state: 'running', pending_permission: null })
+      setRow({ state: 'running', pending_permission: pending })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.isAwaitingApproval).toBe(true)
+      // The other way round: a live summary still pending while the row says it was answered.
+      act(() => {
+        setLiveSummary({ state: 'running', pending_permission: pending })
+        setRow({ state: 'running', pending_permission: null })
+      })
+      expect(result.current.isAwaitingApproval).toBe(false)
+      // No row in a list that answered in full (archived): nothing pending, whatever the live summary says.
+      act(() => { setListWithoutRow(false) })
+      expect(result.current.isAwaitingApproval).toBe(false)
+    })
+
+    it('a truncated list without the row: the live summary sets it (the one fallback)', () => {
+      setListWithoutRow(true)
       setLiveSummary({ state: 'running', pending_permission: pending })
       const { result } = renderHook(() => useTabDisplay(execTab()))
       expect(result.current.isAwaitingApproval).toBe(true)
-      act(() => { setLiveSummary({ state: 'running', pending_permission: null }) })
-      expect(result.current.isAwaitingApproval).toBe(false)
-      expect(result.current.displayTitle).toBe('Fix the bug - repo')
     })
 
     it.each([
       ['terminated', {}], ['rejected', {}], ['failed', {}], ['idle', { archived: true }],
     ])('pending + %s %j: not awaiting (an ended worker never is)', (state, extra) => {
       useI18nStore.getState().setLocale('zh-TW')
-      setLiveSummary({ state, ...extra, pending_permission: pending })
+      setRow({ state, ...extra, pending_permission: pending })
       const { result } = renderHook(() => useTabDisplay(execTab()))
       expect(result.current.isAwaitingApproval).toBe(false)
       expect(result.current.displayTitle).toBe('Fix the bug - repo')
@@ -426,7 +468,7 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
 
     it('the field absent (old daemon): not awaiting', () => {
       useI18nStore.getState().setLocale('zh-TW')
-      setLiveSummary({ state: 'running' })
+      setRow({ state: 'running' })
       const { result } = renderHook(() => useTabDisplay(execTab()))
       expect(result.current.isAwaitingApproval).toBe(false)
       expect(result.current.displayTitle).toBe('Fix the bug - repo')
@@ -452,7 +494,7 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
 
     it('with no worker title the locale label stands alone', () => {
       useI18nStore.getState().setLocale('en')
-      setLiveSummary({ state: 'running', brief: '', cwd: '', pending_permission: pending })
+      setRow({ state: 'running', brief: '', cwd: '', pending_permission: pending })
       const { result } = renderHook(() => useTabDisplay(execTab()))
       expect(result.current.isAwaitingApproval).toBe(true)
       expect(result.current.displayTitle).toBe('Execution')

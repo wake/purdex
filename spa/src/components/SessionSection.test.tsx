@@ -583,7 +583,7 @@ describe('HostSessionSection Sessions / Workers switch', () => {
 
   it('switches a host block to its live workers and opens one', () => {
     useNexHostStore.setState({ byHost: { [HOST_ID]: readyEntry }, ensure: vi.fn().mockResolvedValue(undefined) })
-    useExecutionListStore.setState({ byHost: { [HOST_ID]: { items: [wrow({ id: 'E1', session_id: 'S' }), wrow({ id: 'E2', state: 'terminated', session_id: 'T' })], phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false } } })
+    useExecutionListStore.setState({ byHost: { [HOST_ID]: { items: [wrow({ id: 'E1', session_id: 'S' }), wrow({ id: 'E2', state: 'terminated', session_id: 'T' })], phase: 'ready', error: null, lastSeq: null, refreshRevision: 0, truncated: false, complete: true } } })
     render(<HostSessionSection hostId={HOST_ID} onSelect={mockOnSelect} />)
     expect(screen.getByTestId(`host-view-sessions-${HOST_ID}`)).toHaveAttribute('aria-selected', 'true')
     fireEvent.click(screen.getByTestId(`host-view-workers-${HOST_ID}`))
