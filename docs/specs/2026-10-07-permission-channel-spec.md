@@ -155,8 +155,8 @@ The card targets the Mac App window. No phone-browser layout is required (PC2 as
   - it is the same event and setting as a terminal agent's ask: `PermissionRequest` under the worker's agent type (`cc` for a Claude worker);
   - there is no notification while the App is in the foreground **and** that tab is the current tab, nor when the user turned the event off; otherwise it notifies;
   - the title is the worker title, as on the tab, and the body names the tool;
-  - each request notifies once. A refetch, a reconnect, a list-row / live-summary switch or a tab switch does not notify again, and a second request while the worker is still waiting notifies once more;
-  - after an App reload a pending request behaves like an agent ask: it does not notify again when it was already seen, and notifies once when it came while the App was closed.
+  - each request notifies once, told apart by its `request_id` (not its `since`: two requests can share a millisecond, and both notify). A refetch, a reconnect, a list-row / live-summary switch or a tab switch does not notify again, and a second request while the worker is still waiting notifies once more;
+  - across an App reload it follows the same baseline as an agent ask: a worker never seen on this client only establishes a baseline on its first snapshot (no notification); for a known worker, a request not seen yet — including one that arrived while the App was closed — notifies once; a request already seen never notifies again.
 - **Q1 race — what the ending paths guarantee** (coordinator ruling R-PC-1, 2026-10-07):
   - Answers need the control lease (N3), so the pane's lease now gates answers as well as sends.
   - Every path that ends a worker while a request could be pending **preempts** the pane's lease before it interrupts or terminates (conversation entity D22): it releases a pdx holder's lease as the holder, then acquires an exclusive one under the daemon's own principal. The paths:

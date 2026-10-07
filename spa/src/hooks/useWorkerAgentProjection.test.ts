@@ -504,10 +504,11 @@ describe('useWorkerAgentProjection', () => {
       const ev = useAgentStore.getState().lastEvents[KEY]
       expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
       expect(ev.status).toBe('waiting')
-      // Named and shaped like a terminal Claude Code agent's ask (PdxPermissionRequest → PermissionRequest, tool_name).
+      // Named and shaped like a terminal Claude Code agent's ask (PdxPermissionRequest → PermissionRequest, tool_name),
+      // plus the request id the dispatcher dedupes it by (one notification per request).
       expect(ev.raw_event_name).toBe('PermissionRequest')
-      expect(ev.detail).toEqual({ tool_name: 'Bash' })
-      // State-tied stamp: the request's own start, so a re-projection after a reload is not a new event.
+      expect(ev.detail).toEqual({ tool_name: 'Bash', request_id: 'r1' })
+      // State-tied stamp: the request's own start (the same on every source).
       expect(ev.broadcast_ts).toBe(50)
 
       setLive({ summary: summary({ state: 'running', pending_permission: null }) })
@@ -520,7 +521,7 @@ describe('useWorkerAgentProjection', () => {
       useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
       useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), items: [summary({ state: 'running', turn_count: 1, pending_permission: pending(70) })] } } })
       expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
-      expect(useAgentStore.getState().lastEvents[KEY].detail).toEqual({ tool_name: 'Bash' })
+      expect(useAgentStore.getState().lastEvents[KEY].detail).toEqual({ tool_name: 'Bash', request_id: 'r1' })
       stop()
     })
 
@@ -583,6 +584,7 @@ describe('useWorkerAgentProjection', () => {
 
       beforeEach(() => {
         localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [KEY]: 1, [TMUX_KEY]: 1 }))
+        localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN_REQUESTS)
         useNotificationSettingsStore.setState({ agents: {} })
         showNotification = vi.fn()
         Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
@@ -595,6 +597,7 @@ describe('useWorkerAgentProjection', () => {
         dispatcher?.unmount()
         Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
         localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN)
+        localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN_REQUESTS)
       })
 
       it('the App in the background: a new pending request notifies exactly once, even on the current tab', () => {
@@ -717,8 +720,8 @@ describe('useWorkerAgentProjection', () => {
         useExecutionStore.getState().setSse(H, E, 'paused')
         listRow({ state: 'running', updated_at: 200, pending_permission: R1 })
         expect(askDispatches(spy)).toBe(2)
-        // ... with the same request-tied stamp, so the dispatcher's dedup does not notify it twice.
-        expect(useAgentStore.getState().lastEvents[KEY].broadcast_ts).toBe(50)
+        // ... carrying the same request id, so the dispatcher's dedup does not notify it twice.
+        expect(useAgentStore.getState().lastEvents[KEY].detail?.request_id).toBe('r1')
         expect(showNotification).toHaveBeenCalledTimes(1)
       })
 
@@ -740,7 +743,26 @@ describe('useWorkerAgentProjection', () => {
         expect(showNotification).toHaveBeenCalledTimes(2)
       })
 
-      describe('across an App reload — the same as an agent ask, whose snapshot replays it with its original stamp', () => {
+      it('two requests stamped in the same millisecond each notify once, with distinct Electron stamps', () => {
+        // Nexen serializes a worker's requests but does not make their `since` unique: R1 answered and R2 asked
+        // within one millisecond carry the same stamp.
+        mount()
+        runningLive()
+        openTabs()
+        setLive({ summary: summary({ state: 'running', updated_at: 45, pending_permission: R1 }) })
+        setLive({ summary: summary({ state: 'running', updated_at: 46, pending_permission: request('r2', 50, 'Write') }) })
+        expect(notified().map((n) => n.body)).toEqual(['Permission required: Bash', 'Permission required: Write'])
+        // Electron main drops a stamp it already showed in the last 5 s, so the two must differ.
+        const [a, b] = showNotification.mock.calls.map((c) => (c[0] as { broadcastTs: number }).broadcastTs)
+        expect(a).not.toBe(b)
+        // Both re-seen through a refetch and a reload: neither again.
+        setLive({ summary: summary({ state: 'running', updated_at: 47, pending_permission: request('r2', 50, 'Write') }) })
+        reload()
+        listRow({ state: 'running', updated_at: 300, pending_permission: request('r2', 50, 'Write') })
+        expect(showNotification).toHaveBeenCalledTimes(2)
+      })
+
+      describe('across an App reload — like an agent ask: a known worker\'s unseen request notifies once, a seen one never again', () => {
         it.each(['list row', 'live summary'] as const)('a request already seen before the reload is not notified again (%s first)', (first) => {
           mount()
           runningLive()
@@ -757,16 +779,19 @@ describe('useWorkerAgentProjection', () => {
         })
 
         it('a request that arrived while the App was closed notifies once on reload, like a terminal agent\'s ask', () => {
-          // Before the reload this client last saw both keys at 20 (say, a turn's end).
-          localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [KEY]: 20, [TMUX_KEY]: 20 }))
+          // Before the reload this client last saw the terminal agent at 20, and the worker's request r0 (since 50).
+          localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [KEY]: 50, [TMUX_KEY]: 20 }))
+          localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN_REQUESTS, JSON.stringify({ [KEY]: ['r0'] }))
           mount()
           openTabs()
           // The terminal agent: the snapshot replays its ask (stamped 50, after 20) — it notifies once.
           terminalAsk(50)
           terminalAsk(50)
           expect(notified().filter((n) => n.sessionCode === TMUX)).toHaveLength(1)
-          // The worker: the first source after the reload is the list row (its pane not subscribed yet), then the live
-          // summary. The request (since 50, after 20) notifies once — whichever source comes first.
+          // The worker: while the App was closed r0 was answered and R1 asked in the same millisecond (since 50, no
+          // newer than the stamp this client stored). The first source after the reload is the list row (its pane not
+          // subscribed yet), then the live summary: R1 is a request this client has not seen — it notifies once,
+          // whichever source comes first.
           listRow({ state: 'running', updated_at: 300, pending_permission: R1 })
           setLive({ summary: summary({ state: 'running', updated_at: 45, pending_permission: R1 }), turnLive: true, sse: 'open', ...turn(null) })
           expect(workerNotices()).toHaveLength(1)
@@ -779,8 +804,8 @@ describe('useWorkerAgentProjection', () => {
           terminalAsk(50)
           listRow({ state: 'running', updated_at: 300, pending_permission: R1 })
           expect(showNotification).not.toHaveBeenCalled()
-          // The next request is news.
-          listRow({ state: 'running', updated_at: 400, pending_permission: request('r2', 350) })
+          // The next request is news — even one stamped in the same millisecond.
+          listRow({ state: 'running', updated_at: 400, pending_permission: request('r2', 50) })
           expect(workerNotices()).toHaveLength(1)
         })
       })

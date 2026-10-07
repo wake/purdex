@@ -209,11 +209,12 @@ function failureReason(src: Source): string {
  *
  * The request's `since` is the same on the live summary and on a list row, so
  * unlike the turn stamps it never depends on the source, and it is used even
- * for the first projection after a reload. That is exactly what a terminal
- * agent's ask gets: the daemon's snapshot replays the ask with its original
- * `broadcast_ts`, so the dispatcher stays quiet when it already saw the ask
- * (stored stamp ≥ it), notifies once when the ask came while the App was
- * closed (stored stamp older), and only records it for a key it never saw.
+ * for the first projection after a reload. It is not what dedupes the request,
+ * though: two requests can share a millisecond, so the dispatcher dedupes a
+ * waiting event by its `detail.request_id` (`shouldDispatchRequest`) — quiet
+ * for a request it already saw, once for one it has not (also one that came
+ * while the App was closed), and only a baseline for a key it never saw — and
+ * keeps the newest stamp for the key's other events.
  *
  * `firstInSession`: this engine has not dispatched the key yet. A list-row
  * source (any status but waiting, above) then stamps 0 instead of
@@ -248,10 +249,15 @@ function detailOf(status: WorkerProjection['status'], src: Source): Record<strin
   }
   if (status === 'error') return { error: failureReason(src) }
   // 「等待核准」 notifies like a terminal agent's ask (PC2 as amended 2026-10-07), so it carries the ask's detail shape:
-  // `tool_name`, which the PermissionRequest notification body names (notification-content.ts).
+  // `tool_name`, which the PermissionRequest notification body names (notification-content.ts). And `request_id`: the
+  // dispatcher dedupes such an event by the request it is about, not by its stamp (`since`), which two requests can
+  // share (useNotificationDispatcher.ts, `shouldDispatchRequest`).
   if (status === 'waiting') {
-    const tool = src.summary.pending_permission?.tool_name
-    return typeof tool === 'string' && tool !== '' ? { tool_name: tool } : {}
+    const pending = src.summary.pending_permission
+    const detail: Record<string, unknown> = {}
+    if (typeof pending?.tool_name === 'string' && pending.tool_name !== '') detail.tool_name = pending.tool_name
+    if (typeof pending?.request_id === 'string' && pending.request_id !== '') detail.request_id = pending.request_id
+    return detail
   }
   return {}
 }
