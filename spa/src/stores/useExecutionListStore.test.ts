@@ -461,7 +461,7 @@ describe('useExecutionListStore', () => {
   })
 
   it('a truncated walk commits its rows ready with truncated, a later complete walk clears it, an error keeps it', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(api.listExecutions).mockImplementation(async (_h, opts) => {
       const n = Number(opts?.cursor ?? 0)
       return { items: [row(`exc_${n}`)], next_cursor: String(n + 1) }
@@ -470,6 +470,7 @@ describe('useExecutionListStore', () => {
     await flush()
     expect(cache(A).phase).toBe('ready')
     expect(cache(A).truncated).toBe(true)
+    expect(warn).toHaveBeenCalledWith('nex: executions list truncated', { hostId: A, pageLimit: 500, maxPages: 20 })
     expect(cache(A).items.length).toBeGreaterThan(0)
     const count = cache(A).items.length
 
