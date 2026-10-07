@@ -3,6 +3,8 @@ package teammod
 import (
 	"database/sql"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -66,5 +68,60 @@ func TestEnsureColumn_AddsOnceKeepsData(t *testing.T) {
 				t.Errorf("%s has no column %s", table, c)
 			}
 		}
+	}
+}
+
+// Two daemons opening one old team.db at once (P4-6 review, attacker
+// medium): both connections find a column absent, both ALTER, and the one
+// that loses the race meets "duplicate column". It re-reads the schema, finds
+// the column the other added, with the declared type, and goes on: both
+// migrations succeed. A column the other added with another type is still an
+// error. Mutation gate: drop the re-check after a failed ALTER → red.
+func TestEnsureColumn_TwoConnectionsMigrateOneOldDBAtOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "team.db")
+	open := func() *sql.DB {
+		db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { db.Close() })
+		return db
+	}
+	if _, err := open().Exec(teamSchema + `; CREATE TABLE t (id TEXT)`); err != nil { // teams and team_members as P4-3 shipped them
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	var both sync.WaitGroup
+	both.Add(2)
+	afterColumnCheck = func() { // both read "absent" before either ALTERs
+		if calls.Add(1) <= 2 {
+			both.Done()
+			both.Wait()
+		}
+	}
+	t.Cleanup(func() { afterColumnCheck = nil })
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i := range errs {
+		db := open()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = migrateUsage(db)
+		}()
+	}
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatalf("concurrent migrations: %v / %v, want both to succeed", errs[0], errs[1])
+	}
+	db := open()
+	if have := columnsOf(t, db, "team_members"); !have["usage_pct"] || !have["usage_at"] {
+		t.Fatalf("team_members columns after the race = %v", have)
+	}
+
+	other := open()
+	afterColumnCheck = func() { _, _ = other.Exec(`ALTER TABLE t ADD COLUMN n TEXT`) }
+	if err := ensureColumn(db, "t", "n", "INTEGER NOT NULL DEFAULT 0"); err == nil {
+		t.Fatal("a column the other connection added with another type was accepted")
 	}
 }
