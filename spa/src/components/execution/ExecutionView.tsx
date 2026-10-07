@@ -31,6 +31,7 @@ import { useQuickReplies } from '../../lib/quick-replies'
 import { announceTakeOutcome } from '../../lib/nex/take-outcome'
 import ExecutionHeader from './ExecutionHeader'
 import { WorkerEndedPane, workerEndedKind } from './WorkerEndedPane'
+import { readWorkerDraft, writeWorkerDraft, forgetWorkerDraft, workerDraftKey } from '../../lib/nex/worker-draft-memory'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { useExecutionStore, executionKey } from '../../stores/useExecutionStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
@@ -169,7 +170,14 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   useEffect(() => { void useNexHostStore.getState().ensure(hostId) }, [hostId])
   // The typed text, for planning an image added mid-draft against the request budget.
   const draftText = useRef('')
-  const onTextChange = useCallback((text: string) => { draftText.current = text }, [])
+  // The reply box's text outlives this component: a tab switch unmounts the
+  // pane (the alive pool keeps no execution tab by default), and the box would
+  // come back empty. Written on every change, read as the initial value; a
+  // restored failed-send `draft` still wins (it is the text that just failed).
+  const draftKey = workerDraftKey(hostId, executionId)
+  const onTextChange = useCallback((text: string) => { draftText.current = text; writeWorkerDraft(draftKey, text) }, [draftKey])
+  const workerEnded = !!st.summary && !!workerEndedKind(st.summary)
+  useEffect(() => { if (workerEnded) forgetWorkerDraft(draftKey) }, [workerEnded, draftKey])
   const getDraftText = useCallback(() => draftText.current, [])
   // Spec §9.1: attachments. The chips live here, not in WorkerInput — the
   // input is re-keyed on the restored draft and remounts after a failed send —
@@ -673,7 +681,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
           never restores a draft — that would remount the input over what is typed. */}
       <QuickReplyDock replies={quickReplies} onSend={(text) => { sendWithAttachments(text, { restoreDraft: false }) }}
         disabled={inputDisabled || !attachGate.ok} />
-      <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => sendWithAttachments(text, { draftText: text })}
+      <WorkerInput key={draft ?? ''} initialValue={draft ?? readWorkerDraft(draftKey)} onSend={(text) => sendWithAttachments(text, { draftText: text })}
         disabled={inputDisabled} pendingSend={st.pendingSend} placeholder={placeholder} isActive={isActive} isFocusTarget={isFocusTarget} onTextChange={onTextChange}
         turnLive={st.turnLive} onInterrupt={() => void handleInterrupt()}
         chips={uploads.chips} onRemoveChip={removeChip} onAddFiles={canAttach ? uploads.add : undefined} />
