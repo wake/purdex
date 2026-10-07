@@ -5,7 +5,7 @@
 //   awaiting: a timer loops `pdx relay wait` and alone asks the daemon and moves the state;
 //   every prompt.submit is held until that loop's answer (≤ 11 min), on local `/bin/sleep 5`
 //   calls of its own (P5b-3 critic), and one that arrives while beginning waits for begin's
-//   answer first (≤ 40 s); at most 16 prompts are held at once
+//   answer first (≤ 40 s); every prompt is held, however many (U7: no new turn while a request is open)
 //   awaiting ──approved──▶ approved: write prompt submitted (a fresh nonce), report writing
 //   approved ──(turn.complete of the write turn, file ok)──▶ clearing: report written, timer → /clear
 //   clearing ──(classic.SessionStart source=clear)──▶ seeding: report cleared --new-session, hello, seed prompt
@@ -42,7 +42,6 @@ const HOLD_SLEEP = ['/bin/sleep', '5'] // the prompt hold's own `$` call, again 
 const HOLD_SLEEP_TIMEOUT_MS = 10_000 // its $.process.run bound
 const HOLD_MAX_MS = 660_000 // a held prompt waits for the request's answer at most 11 min: its 10 min deadline and slack
 const BEGIN_HOLD_MS = 40_000 // … and for begin's answer at most 40 s: begin's own bound (CALL_TIMEOUT_MS, 35 s) and slack
-const MAX_HOLDING = 16 // prompts held at once (each keeps a child going); one more goes on unchanged, logged
 const STEP_MS = 50 // the timer a step that starts a turn or a command waits for (F3)
 const MAX_RESENDS = 20 // a report that keeps failing with 20 / 21 is re-sent at most this often, then dropped
 const MAX_OUTBOX = 50 // reports queued at once; one more pushes out the oldest
@@ -85,9 +84,11 @@ const fresh = () => ({
 
 const s = fresh()
 
-// holding counts the prompts held right now. It lives beside `s`, never in
-// it: a session reset while prompts are held must not zero it, since each
-// hold gives its own place back when it ends (try/finally).
+// holding counts the prompts held right now (diagnostics only: no cap — U7
+// says no new turn starts while a request is open, and each held prompt
+// costs one local `/bin/sleep 5` at a time, never a daemon call; P5b-3
+// critic). It lives beside `s`: a session reset while prompts are held must
+// not zero it, since each hold gives its own place back (try/finally).
 let holding = 0
 
 // resetState starts the session over; the counters keep counting up, so a
@@ -688,8 +689,9 @@ export function register(on) {
   // the daemon is asked nothing more per held prompt (P5b-3 critic). A
   // prompt that arrives while begin is still out waits for begin's answer
   // (≤ BEGIN_HOLD_MS) and goes on unchanged when begin opened nothing; the
-  // request's answer is waited for ≤ HOLD_MAX_MS. At most MAX_HOLDING
-  // prompts are held at once; one more goes on unchanged, logged. Approved ⇒
+  // request's answer is waited for ≤ HOLD_MAX_MS. Every prompt is held, however
+  // many: a cap that let one through would start a turn while the request is
+  // open (U7, spec §8.7 (b)); each costs a local sleep, not the daemon. Approved ⇒
   // NOTE after the existing context; anything else ⇒ unchanged. The status
   // line, the toast and the loop are the timer's, so Esc here ends this
   // prompt only. The hold never loses a prompt: whatever fails, its .catch
@@ -699,10 +701,6 @@ export function register(on) {
     const open = s.state === 'awaiting' ? s.pending : undefined
     const begun = s.state === 'beginning' ? s.begun : undefined
     if (!open && !begun) return next(e)
-    if (holding >= MAX_HOLDING) {
-      log($, 'hold limit reached (' + MAX_HOLDING + ' prompts held): this prompt goes on unchanged')
-      return next(e)
-    }
     let approved = false
     holding += 1
     try {

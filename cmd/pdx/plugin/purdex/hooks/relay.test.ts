@@ -1401,7 +1401,11 @@ test('a begin that has not answered in 40 s lets the held prompt go on unchanged
 // at most 16 are held at once; the 17th starts no sleep and goes on unchanged
 // at once, logged. A hold gives its place back when it ends, whatever ended
 // it. Mutation gate: no limit → a 17th sleep, q17 held → red.
-test('17 prompts at once: 16 are held on their own sleeps, the 17th goes on unchanged at once and is logged; every place is given back', async ($, on) => {
+// U7 (spec §8.7 (b)): no new turn starts while a request is open, however
+// many prompts arrive — the critic rejected a cap that let the 17th through.
+// Each held prompt keeps one local sleep going, never a daemon call.
+// Mutation gate: a cap of 16 that runs the 17th → q17 is submitted early → red.
+test('17 prompts at once: all 17 are held on their own sleeps; none runs before the answer; every place is given back', async ($, on) => {
   const f = relayWorld(on, { usage: AT72 })
   const row = rowDaemon(f)
   await start($, f)
@@ -1409,12 +1413,12 @@ test('17 prompts at once: 16 are held on their own sleeps, the 17th goes on unch
   await f.clock.advance(50)
   const held = Array.from({ length: 17 }, (_, i) => typed($, 'q' + (i + 1)))
   await f.clock.settle()
-  expect(f.sleeps.length).toBe(16)
-  expect(f.submits.map((x) => x.text)).toEqual(['q17'])
-  expect(f.submits[0].context).toBeUndefined()
-  expect(f.logs.filter((l) => l.includes('hold limit'))).toEqual(['pdx-relay: hold limit reached (16 prompts held): this prompt goes on unchanged'])
+  expect(f.sleeps.length).toBe(17)
+  expect(f.submits).toEqual([])
   await f.clock.advance(5_000)
-  expect(f.sleeps.length).toBe(32) // the 16 go round again; still no 17th
+  expect(f.sleeps.length).toBe(34) // all 17 go round again
+  expect(f.submits).toEqual([])
+  expect(f.argvs.filter((a) => a.includes('wait')).length).toBeLessThanOrEqual(2) // the timer's loop alone asks the daemon
   row.decide('denied')
   await Promise.all(held)
   expect(f.submits.length).toBe(17)
