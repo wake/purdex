@@ -2640,14 +2640,17 @@ describe('ExecutionView — task-owned thinking is not a main bubble', () => {
     patchExec({ tasks: { a: { ...runningTask, status: 'completed' as const } }, turnLive: true })
     render(<ExecutionView {...base} isActive />)
     expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
-    act(() => { vi.advanceTimersByTime(1_600) })
+    // shown only after the signal held 1.5 s, not before
+    act(() => { vi.advanceTimersByTime(1_400) })
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(200) })
     expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
-    // a brief gap does not hide them…
+    // a brief gap does not hide them (kept 1 s)…
     act(() => { patchExec({ turnLive: false }) })
-    act(() => { vi.advanceTimersByTime(500) })
+    act(() => { vi.advanceTimersByTime(900) })
     expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
     // …a held one does
-    act(() => { vi.advanceTimersByTime(600) })
+    act(() => { vi.advanceTimersByTime(200) })
     expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
   })
 
