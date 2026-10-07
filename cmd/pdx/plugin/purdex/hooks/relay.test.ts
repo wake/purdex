@@ -3,6 +3,7 @@
 // $.session.*, $.fs.read, $.ui.*, and the bottom of every event a test
 // raises. The P5b-1 hello tests come first, the P5b-2 relay after them.
 import { test, expect, mock } from 'claude-code/testing'
+import { FIXED } from './prompts.js'
 
 // The pdx.json the extractor writes: the installing daemon's config is the
 // `--config` every `pdx relay` call carries (P5b-1 review).
@@ -417,7 +418,7 @@ test('file check: missing headings get two fix rounds, then failed{handoff_incom
   await turn($, 'tw')
   await clock.advance(50)
   expect(f.submits.length).toBe(2)
-  expect(f.submits[1].text).toContain('不完整，缺少段落：## 2.、## 3.')
+  expect(f.submits[1].text).toContain('不完整。\n缺少段落：## 2.、## 3.') // P9a deviation 3: the fixed tail is a line of its own
   await $.turn.start({ text: f.submits[1].text, turnId: 'tf1' })
   await turn($, 'tf1')
   await clock.advance(50)
@@ -1825,4 +1826,39 @@ test('with the defaults, the write and seed prompts equal the pre-P9a text byte 
   await $.classic.SessionStart({ source: 'clear' })
   await clock.advance(50)
   expect(f.submits[1].text).toBe(PRE_P9A_SEED(nonceOf(f.submits[1].text)))
+})
+
+// P9a deviation 3: one composition rule (head + body + '\n' + tail) puts the
+// fixed 缺少段落 line on a line of its own, after the body's 不完整。.
+test('the fix prompt is head, body, then 缺少段落 and the reply rule on the next line', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  f.files['/data/relay/op-1.md'] = '# HANDOFF\n## 1. a\n## 4. d\n' + 'x'.repeat(300)
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  const text = f.submits[1].text
+  expect(text).toBe('[pdx-relay op=op-1 n=' + nonceOf(text) + '] 接力檔 /data/relay/op-1.md 不完整。\n缺少段落：## 2.、## 3.、## 5.、## 6.、## 7.、## 8.。請補齊後只回「HANDOFF-WRITTEN」。')
+  f.files['/data/relay/op-1.md'] = ''
+  await $.turn.start({ text, turnId: 'tf' })
+  await turn($, 'tf')
+  await clock.advance(50)
+  expect(f.submits[2].text).toBe('[pdx-relay op=op-1 n=' + nonceOf(f.submits[2].text) + '] 接力檔 /data/relay/op-1.md 不完整。\n缺少段落：## 1.、## 2.、## 3.、## 4.、## 5.、## 6.、## 7.、## 8.。請補齊後只回「HANDOFF-WRITTEN」。')
+})
+
+// A guard between the check (REQUIRED, register.js) and the generated
+// prompts.js: a handoff holding only the heading lines the write tail asks
+// for, each with some text, passes the check — no fix round. Mutation gate:
+// a REQUIRED heading the tail does not carry → a fix prompt → red.
+test('every REQUIRED heading and # HANDOFF are in FIXED.write.tail', async ($, on) => {
+  const headings = FIXED.write.tail.split('\n').filter((l: string) => l.startsWith('#'))
+  expect(headings[0]).toBe('# HANDOFF')
+  expect(headings.slice(1).map((h: string) => h.slice(0, 5))).toEqual(['## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.', '## 8.'])
+  const { f, clock } = await approvedRelay($, on)
+  f.files['/data/relay/op-1.md'] = headings.map((h: string) => h + '\nx').join('\n')
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  expect(f.submits.length).toBe(1)
+  expect(reports(f)).toEqual(['relay report op-1 writing', 'relay report op-1 written'])
+  expect(f.commands).toEqual(['clear'])
 })
