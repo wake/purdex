@@ -55,13 +55,18 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 // A pane that answers but is not the op's means the session died with its
 // server: the op is abandoned. An unreadable pane is looked at again.
 //
-// The frame is looked at before the deadline (review R1, ruled by the
-// coordinator): the 20 s bound the wait, they are not a rule against a
-// member that did register, so a poll that wakes late and finds it accepts
-// it. Past launched_at + the budget with no member, the session is killed
-// and the op fails member_start_timeout.
+// Every poll judges the deadline first (spec §7.2 step 5: "Wait up to 20 s
+// … On timeout: kill"; review R1, ruled again after the critic): past
+// launched_at + the budget the session is killed and the op fails
+// member_start_timeout, even when the member has shown up by then — there
+// is no record of when it registered to compare with the deadline.
 func (m *Module) spawnRegister(op spawnRow) (*team.Origin, bool) {
 	for {
+		if m.now() >= op.LaunchedAt+m.spawnBudget {
+			m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
+			m.failSpawn(op.ID, team.SpawnReasonStartTimeout)
+			return nil, false
+		}
 		if o, ok := m.memberOnPane(op.PaneID); ok {
 			id, err := m.paneIdentity(op.PaneID)
 			if err == nil && !ownsPane(op, id) {
@@ -75,11 +80,6 @@ func (m *Module) spawnRegister(op spawnRow) (*team.Origin, bool) {
 				}
 				return &o, err == nil && won
 			}
-		}
-		if m.now() >= op.LaunchedAt+m.spawnBudget {
-			m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
-			m.failSpawn(op.ID, team.SpawnReasonStartTimeout)
-			return nil, false
 		}
 		m.spawnSleep(m.stopCtx, m.spawnPoll)
 		if m.stopping() {

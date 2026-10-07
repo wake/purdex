@@ -51,17 +51,21 @@ func TestSpawn_StartTimeoutKillsAndFreesTheSlot(t *testing.T) {
 	}
 }
 
-// Review R1 (ruled by the coordinator): the 20 s bound the wait; a member
-// the first poll after it finds registered is accepted, not killed.
-// Mutation gate: check the deadline before the frame → red.
-func TestSpawn_AMemberSeenOnTheFirstPollPastTheBudgetIsAccepted(t *testing.T) {
+// Spec §7.2 step 5 ("Wait up to 20 s … On timeout: kill"), review R1 as the
+// critic read it: every poll judges the deadline first, so a poll that wakes
+// past launched_at + 20 s times out even when the member has shown up by
+// then. Mutation gate: look at the member before the deadline → red.
+func TestSpawn_PastTheBudgetItTimesOutEvenWithAMemberThere(t *testing.T) {
 	f, root := newSpawnFixture(t, 1)
 	f.m.spawnSleep = func(context.Context, time.Duration) {
 		f.clock.Add(21_000)
 		f.register("%0", "sid-m1")
 	}
-	if op := f.runOp(1, root, nil); op.State != team.SpawnDone || len(f.tmux.KillIfInstanceCalls()) != 0 {
+	if op := f.runOp(1, root, nil); op.State != team.SpawnFailed || op.Reason != team.SpawnReasonStartTimeout || len(f.tmux.KillIfInstanceCalls()) != 1 {
 		t.Fatalf("op = %+v, kills %+v", op, f.tmux.KillIfInstanceCalls())
+	}
+	if rows, _ := f.m.store.MembersOf(uid(1)); len(rows) != 0 {
+		t.Fatalf("a member past the budget was stored: %+v", rows)
 	}
 }
 
