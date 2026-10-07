@@ -434,6 +434,11 @@ func TestPutConfigNexInvalidReturns400AndLeavesFileUntouched(t *testing.T) {
 		{"relative claude_bin", `{"nex":{"enabled":false,"claude_bin":"bin/claude"}}`, "nex.claude_bin"},
 		{"bad duration", `{"nex":{"enabled":false,"timeouts":{"turn":"soon"}}}`, "nex.timeouts.turn"},
 		{"unknown profile", `{"nex":{"enabled":false,"sandbox":{"max_profile":"yolo"}}}`, "nex.sandbox.max_profile"},
+		// [nex.peer] (peer mailbox spec §6): a bad template is refused here,
+		// not at the next restart's Assemble.
+		{"peer wake_template without Text", `{"nex":{"enabled":false,"peer":{"enabled":true,"wake_template":"hi {{.FromName}}"}}}`, "nex.peer.wake_template: "},
+		{"peer reply_line without ReplyTo", `{"nex":{"enabled":false,"peer":{"enabled":true,"reply_line":"reply somehow"}}}`, "nex.peer.reply_line: "},
+		{"peer negative max_pending", `{"nex":{"enabled":false,"peer":{"enabled":true,"max_pending":-3}}}`, "nex.peer.max_pending: "},
 		{"null", `{"nex":null}`, "nex must be an object"},
 	}
 	for _, tc := range cases {
@@ -447,6 +452,158 @@ func TestPutConfigNexInvalidReturns400AndLeavesFileUntouched(t *testing.T) {
 			assert.Equal(t, original, string(data), "invalid nex must not touch config.toml")
 		})
 	}
+}
+
+// newPeerTestCore returns a Core whose config (in memory and on disk) has a
+// non-default [nex.peer], for the PUT-without-peer rule below.
+func newPeerTestCore(t *testing.T, peer config.NexPeerConfig) (*Core, string) {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cfg := config.Config{
+		HostID: "test:abc123",
+		Bind:   "127.0.0.1",
+		Port:   7860,
+		Nex: config.NexConfig{
+			Enabled: false,
+			Sandbox: config.NexSandboxConfig{MaxProfile: "trusted", DefaultProfile: "trusted"},
+			Peer:    peer,
+		},
+	}
+	require.NoError(t, config.WriteFile(cfgPath, cfg))
+	c := New(CoreDeps{Config: &cfg})
+	c.CfgPath = cfgPath
+	return c, cfgPath
+}
+
+// TestPutConfigNexWithoutPeerKeepsCurrentPeer: a nex body with no "peer"
+// key (an older client that never knew the section) keeps the current
+// [nex.peer] — neither the zero value (which would switch the mailbox off,
+// against U4) nor the default (which would drop a saved cap or template).
+func TestPutConfigNexWithoutPeerKeepsCurrentPeer(t *testing.T) {
+	current := config.NexPeerConfig{Enabled: false, MaxPending: 5, WakeTemplate: "X {{.Text}}"}
+	c, cfgPath := newPeerTestCore(t, current)
+
+	rec := httptest.NewRecorder()
+	body := `{"nex":{"enabled":false,"repo_roots":[],"service_roots":[],"claude_bin":"","path_prepend":[],"sandbox":{"max_profile":"handoff","default_profile":"trusted"},"timeouts":{"lease_ttl":"","interrupt":"","turn":""}}}`
+	c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	c.CfgMu.RLock()
+	assert.Equal(t, current, c.Cfg.Nex.Peer)
+	assert.Equal(t, "handoff", c.Cfg.Nex.Sandbox.MaxProfile, "the rest of the body still applies")
+	c.CfgMu.RUnlock()
+
+	loaded, err := config.Load(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, current, loaded.Nex.Peer, "persisted [nex.peer]")
+
+	var got config.Config
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+	assert.Equal(t, current, got.Nex.Peer, "response body")
+}
+
+// TestPutConfigNexWithPeerReplacesPeer: a "peer" key replaces the whole
+// section as before, including back to zero values.
+func TestPutConfigNexWithPeerReplacesPeer(t *testing.T) {
+	c, cfgPath := newPeerTestCore(t, config.NexPeerConfig{Enabled: false, MaxPending: 5, WakeTemplate: "X {{.Text}}"})
+
+	rec := httptest.NewRecorder()
+	body := `{"nex":{"enabled":false,"peer":{"enabled":true,"max_pending":0,"wake_template":"","reply_line":"r {{.ReplyTo}}"}}}`
+	c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(body)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	want := config.NexPeerConfig{Enabled: true, MaxPending: 0, WakeTemplate: "", ReplyLine: "r {{.ReplyTo}}"}
+	c.CfgMu.RLock()
+	assert.Equal(t, want, c.Cfg.Nex.Peer)
+	c.CfgMu.RUnlock()
+
+	loaded, err := config.Load(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, want, loaded.Nex.Peer, "persisted [nex.peer]")
+}
+
+// TestPutConfigNexPeerIsPresenceAware: a "peer" object replaces only the
+// keys it carries; every absent key keeps the current value (no "peer" key
+// at all is the special case where every key is absent). An omitted
+// "enabled" must never decode to false and switch the mailbox off (U4),
+// matching TOML Load, where a missing key keeps the default.
+func TestPutConfigNexPeerIsPresenceAware(t *testing.T) {
+	current := config.NexPeerConfig{Enabled: true, MaxPending: 5, WakeTemplate: "X {{.Text}}", ReplyLine: "R {{.ReplyTo}}"}
+	cases := []struct {
+		name string
+		peer string // the raw "peer" member of the nex body
+		want config.NexPeerConfig
+	}{
+		{"empty object keeps everything", `{}`, current},
+		{"only max_pending changes only it", `{"max_pending":4}`,
+			config.NexPeerConfig{Enabled: true, MaxPending: 4, WakeTemplate: "X {{.Text}}", ReplyLine: "R {{.ReplyTo}}"}},
+		{"only enabled changes only it", `{"enabled":false}`,
+			config.NexPeerConfig{Enabled: false, MaxPending: 5, WakeTemplate: "X {{.Text}}", ReplyLine: "R {{.ReplyTo}}"}},
+		{"all four keys replace everything", `{"enabled":false,"max_pending":0,"wake_template":"","reply_line":""}`,
+			config.NexPeerConfig{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, cfgPath := newPeerTestCore(t, current)
+			rec := httptest.NewRecorder()
+			body := `{"nex":{"enabled":false,"peer":` + tc.peer + `}}`
+			c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(body)))
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+			c.CfgMu.RLock()
+			assert.Equal(t, tc.want, c.Cfg.Nex.Peer, "in memory")
+			c.CfgMu.RUnlock()
+			loaded, err := config.Load(cfgPath)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, loaded.Nex.Peer, "persisted and reloaded")
+			var got config.Config
+			require.NoError(t, json.NewDecoder(rec.Body).Decode(&got))
+			assert.Equal(t, tc.want, got.Nex.Peer, "response body")
+		})
+	}
+}
+
+// TestPutConfigNexNullPeerIs400: "peer": null is not "absent" — it is a
+// malformed section, refused before anything is written.
+func TestPutConfigNexNullPeerIs400(t *testing.T) {
+	current := config.NexPeerConfig{Enabled: true, MaxPending: 5, WakeTemplate: "X {{.Text}}"}
+	c, cfgPath := newPeerTestCore(t, current)
+	before, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(`{"nex":{"enabled":false,"peer":null}}`)))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.True(t, strings.HasPrefix(rec.Body.String(), "nex.peer:"), "body %q", rec.Body.String())
+
+	after, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "config.toml untouched")
+	c.CfgMu.RLock()
+	assert.Equal(t, current, c.Cfg.Nex.Peer)
+	c.CfgMu.RUnlock()
+}
+
+// TestPutConfigNexMergedPeerIsValidated: Validate runs on the merged
+// section, not only on the keys the body carried. A current value that is
+// invalid (only reachable by building the Core directly) plus a partial
+// body that is valid on its own must still be refused, and nothing written.
+func TestPutConfigNexMergedPeerIsValidated(t *testing.T) {
+	c, cfgPath := newPeerTestCore(t, config.NexPeerConfig{Enabled: true})
+	c.CfgMu.Lock()
+	c.Cfg.Nex.Peer.WakeTemplate = "no text marker"
+	c.CfgMu.Unlock()
+	before, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(`{"nex":{"enabled":false,"peer":{"max_pending":4}}}`)))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.True(t, strings.HasPrefix(rec.Body.String(), "nex.peer.wake_template:"), "body %q", rec.Body.String())
+
+	after, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "config.toml untouched")
 }
 
 // TestPutConfigWithFullNexSectionPersistsNexByteIdentical pins I15: a PUT

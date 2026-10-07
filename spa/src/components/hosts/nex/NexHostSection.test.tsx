@@ -58,6 +58,7 @@ const savedConfig: NexConfig = {
   path_prepend: [],
   sandbox: { max_profile: 'standard', default_profile: 'standard' },
   timeouts: { lease_ttl: '', interrupt: '', turn: '' },
+  peer: { enabled: true, max_pending: 0, wake_template: '', reply_line: '' },
 }
 
 function infoResponse(nex: NexInfo | null): Response {

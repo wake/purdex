@@ -11,16 +11,31 @@ import (
 // bodyCap bounds request bodies. Reads cap+1 so an over-cap body is 413.
 const bodyCap = 1 << 20
 
+// collection is one collection as the GET, a PUT and a 409 answer it. The
+// markers (#1889) are omitempty, so a clean collection reads as before:
+// Invalid says the stored value is not this collection at all (Items is its
+// empty value), Dropped how many rows were left out and why.
 type collection struct {
-	Items    json.RawMessage `json:"items"`
-	Revision int64           `json:"revision"`
+	Items    any      `json:"items"`
+	Revision int64    `json:"revision"`
+	Invalid  bool     `json:"invalid,omitempty"`
+	Dropped  *Dropped `json:"dropped,omitempty"`
 }
 
+// writeJSON marshals v before writing the header, so a value that does not
+// marshal is a 500 rather than the status with an empty body. The body ends
+// in a newline, as json.Encoder writes it.
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	body, err := json.Marshal(v)
+	if err != nil {
+		log.Printf("[hostconfig] encode response: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("[hostconfig] encode response: %v", err)
+	if _, err := w.Write(append(body, '\n')); err != nil {
+		log.Printf("[hostconfig] write response: %v", err)
 	}
 }
 
@@ -37,12 +52,23 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	return body, true
 }
 
-// entryItems returns the stored JSON, or the empty value for a never-written key.
-func entryItems(e Entry, empty string) json.RawMessage {
+// collectionOf is a stored entry as op ("get" or "put") answers it: a
+// never-written key its empty value; a stored one only what a PUT would
+// accept, row by row, with the markers (#1889). Something left out is
+// logged once, naming no more of a row than its reason does.
+func collectionOf(op, key string, e Entry) collection {
 	if e.Value == nil {
-		return json.RawMessage(empty)
+		return collection{Items: json.RawMessage(emptyFor(key)), Revision: e.Revision}
 	}
-	return e.Value
+	r := readers[key](e.Value)
+	c := collection{Items: r.items, Revision: e.Revision, Invalid: r.invalid != nil, Dropped: r.dropped}
+	switch {
+	case r.invalid != nil:
+		log.Printf("[hostconfig] %s %s: invalid: %s", op, key, clipReason(r.invalid.Error()))
+	case r.dropped != nil:
+		log.Printf("[hostconfig] %s %s: dropped %d (%s)", op, key, r.dropped.Count, r.dropped.Reasons[0])
+	}
+	return c
 }
 
 func emptyFor(key string) string {
@@ -74,7 +100,7 @@ func (m *Module) handleGet(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		out[field] = collection{Items: entryItems(e, emptyFor(key)), Revision: e.Revision}
+		out[field] = collectionOf("get", key, e)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -131,7 +157,9 @@ func (m *Module) putHandler(key string, normalize func([]byte) (any, error)) htt
 		if !stored {
 			status = http.StatusConflict
 		}
-		writeJSON(w, status, collection{Items: entryItems(entry, emptyFor(key)), Revision: entry.Revision})
+		// A stored answer is already normalised; a 409's current may be a
+		// row edited by hand, and is read like the GET reads it.
+		writeJSON(w, status, collectionOf("put", key, entry))
 	}
 }
 

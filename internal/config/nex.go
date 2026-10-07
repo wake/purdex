@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	nexconfig "lab.protype.tw/wake/nexen/config"
 	"lab.protype.tw/wake/nexen/sandbox"
 )
 
@@ -22,6 +23,21 @@ type NexConfig struct {
 	PathPrepend  []string          `toml:"path_prepend"  json:"path_prepend"`
 	Sandbox      NexSandboxConfig  `toml:"sandbox"       json:"sandbox"`
 	Timeouts     NexTimeoutsConfig `toml:"timeouts"      json:"timeouts"`
+	Peer         NexPeerConfig     `toml:"peer"          json:"peer"`
+}
+
+// NexPeerConfig is the [nex.peer] section: Nexen's peer mailbox (peer
+// mailbox spec §6), mapped onto nexconfig.PeerConfig by buildOptions.
+//
+// Unlike Nexen's own default, pdx turns the mailbox ON by default (U4); the
+// SPA settings page can switch it off. MaxPending 0 and an empty template
+// mean "Nexen's default" (32, and Nexen's built-in wording). The templates
+// are not edited in the UI, but the SPA PUTs them back untouched.
+type NexPeerConfig struct {
+	Enabled      bool   `toml:"enabled"       json:"enabled"`
+	MaxPending   int    `toml:"max_pending"   json:"max_pending"`
+	WakeTemplate string `toml:"wake_template" json:"wake_template"`
+	ReplyLine    string `toml:"reply_line"    json:"reply_line"`
 }
 
 // NexSandboxConfig names the sandbox profile ceiling (MaxProfile) and the
@@ -46,7 +62,8 @@ type NexTimeoutsConfig struct {
 // DefaultNexConfig returns the zero-config-friendly nex defaults: disabled,
 // a conservative PATH prepend list, and the "trusted" sandbox profile for
 // both the ceiling and the default. Timeouts are left empty (Nexen's own
-// defaults apply).
+// defaults apply). The peer mailbox is on (U4) with Nexen's own cap and
+// wording.
 func DefaultNexConfig() NexConfig {
 	return NexConfig{
 		Enabled:     false,
@@ -55,6 +72,7 @@ func DefaultNexConfig() NexConfig {
 			MaxProfile:     "trusted",
 			DefaultProfile: "trusted",
 		},
+		Peer: NexPeerConfig{Enabled: true},
 	}
 }
 
@@ -120,6 +138,28 @@ func (n *NexConfig) Validate(home string) error {
 		}
 	}
 
+	return n.Peer.validate()
+}
+
+// validate checks [nex.peer] with Nexen's own parsers — the same ones
+// nexconfig.PeerConfig.Build runs at Assemble — whether or not nex or the
+// mailbox is enabled: a template Nexen would refuse must be rejected when
+// it is loaded or PUT, not at the next restart, where it would keep the nex
+// module from starting. An empty template is Nexen's default and valid.
+func (p NexPeerConfig) validate() error {
+	if p.MaxPending < 0 {
+		return fmt.Errorf("nex.peer.max_pending: must not be negative (got %d)", p.MaxPending)
+	}
+	if p.WakeTemplate != "" {
+		if _, err := nexconfig.ParseWakeTemplate(p.WakeTemplate); err != nil {
+			return fmt.Errorf("nex.peer.wake_template: %w", err)
+		}
+	}
+	if p.ReplyLine != "" {
+		if _, err := nexconfig.ParseReplyLine(p.ReplyLine); err != nil {
+			return fmt.Errorf("nex.peer.reply_line: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -203,5 +243,6 @@ func (n NexConfig) Equal(o NexConfig) bool {
 		slices.Equal(n.PathPrepend, o.PathPrepend) &&
 		n.ClaudeBin == o.ClaudeBin &&
 		n.Sandbox == o.Sandbox &&
-		n.Timeouts == o.Timeouts
+		n.Timeouts == o.Timeouts &&
+		n.Peer == o.Peer
 }

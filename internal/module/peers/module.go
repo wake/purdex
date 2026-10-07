@@ -256,6 +256,11 @@ type Module struct {
 	// inert until WithNameSink wires a sink.
 	names *nameWriter
 
+	// peerNames and convNames back the virtual names (vnames.go); nil
+	// peerNames (the default until WithPeerNames) assigns none.
+	peerNames PeerNameStore
+	convNames ConversationNameReader
+
 	// putHostAfterSnapshot is a test seam: called by handlePutHost right
 	// after its pre-lock snapshot, so a test can force a concurrent
 	// mutation into that window. No-op in production.

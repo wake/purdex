@@ -1303,6 +1303,10 @@
   "hosts.nex.config.lease_ttl": "Lease TTL",
   "hosts.nex.config.interrupt": "Interrupt timeout",
   "hosts.nex.config.turn": "Turn timeout",
+  "hosts.nex.config.peer_enabled": "Peer mailbox",
+  "hosts.nex.config.peer_max_pending": "Queue limit",
+  "hosts.nex.config.peer_max_pending_hint": "0 = default",
+  "hosts.nex.config.peer_max_pending_invalid": "Enter a whole number, 0 or more",
   "hosts.nex.config.nexen_default": "Nexen default",
   "hosts.nex.config.add": "Add",
   "hosts.nex.config.remove": "Remove",
@@ -2017,5 +2021,9 @@
   "approval.dialog.self_relay_note": "Once approved, this session writes its relay file, clears, and takes over in place (about 1 minute)",
   "approval.dialog.no_more_asking": "Stop asking for this session",
   "approval.dialog.pause_failed": "Could not pause relay requests for this session ({{code}}); the decision is sent anyway",
-  "approval.notify.title_self_relay": "{{host}}: {{session}} requests a relay ({{pct}}% used)"
+  "approval.notify.title_self_relay": "{{host}}: {{session}} requests a relay ({{pct}}% used)",
+  "approval.dialog.minimize": "Minimize",
+  "approval.pill.label": "{{count}} pending · {{countdown}}",
+  "approval.pill.restore": "{{label}}. Click to restore the approval dialog",
+  "approval.pill.announce": "New approval request: {{count}} pending"
 }

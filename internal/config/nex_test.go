@@ -28,6 +28,125 @@ func TestNexConfigDefaultsOnAbsentSection(t *testing.T) {
 	}
 }
 
+// TestNexPeerDefaultsEnabled pins U4 (peer mailbox spec §1): the peer
+// mailbox is ON by default — Nexen's own default is off, so pdx's default
+// must say so explicitly. The numeric/template fields stay zero, meaning
+// "Nexen's default".
+func TestNexPeerDefaultsEnabled(t *testing.T) {
+	want := config.NexPeerConfig{Enabled: true, MaxPending: 0, WakeTemplate: "", ReplyLine: ""}
+	if got := config.DefaultNexConfig().Peer; got != want {
+		t.Errorf("DefaultNexConfig().Peer = %+v, want %+v", got, want)
+	}
+}
+
+// TestNexPeerLoadDefaultsAndExplicitOff: a config.toml without [nex.peer] —
+// with or without a [nex] section — keeps the mailbox on; an explicit
+// `enabled = false` under [nex.peer] is honoured.
+func TestNexPeerLoadDefaultsAndExplicitOff(t *testing.T) {
+	cases := []struct {
+		name string
+		toml string
+		want bool
+	}{
+		{"no nex section", "bind = \"127.0.0.1\"\n", true},
+		{"nex section without peer", "[nex]\nenabled = false\n", true},
+		{"peer section without enabled", "[nex.peer]\nmax_pending = 4\n", true},
+		{"explicit off", "[nex.peer]\nenabled = false\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(tc.toml), 0644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Nex.Peer.Enabled != tc.want {
+				t.Errorf("Nex.Peer.Enabled = %v, want %v", cfg.Nex.Peer.Enabled, tc.want)
+			}
+		})
+	}
+}
+
+// TestNexPeerJSONKeys pins the wire names the SPA reads and PUTs back.
+func TestNexPeerJSONKeys(t *testing.T) {
+	data, err := json.Marshal(config.DefaultNexConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"peer":{"enabled":true,"max_pending":0,"wake_template":"","reply_line":""}`
+	if !strings.Contains(string(data), want) {
+		t.Errorf("JSON %s does not contain %s", data, want)
+	}
+}
+
+// TestNexPeerValidate: [nex.peer] is validated with Nexen's own template
+// parsers whether or not [nex] is enabled (the default section here is
+// disabled), so a broken template surfaces at Load / PUT, never at the next
+// restart's Assemble. Empty templates mean Nexen's default and are valid.
+func TestNexPeerValidate(t *testing.T) {
+	cases := []struct {
+		name    string
+		peer    config.NexPeerConfig
+		wantErr string // exact message; "" = valid
+	}{
+		{"defaults", config.NexPeerConfig{Enabled: true}, ""},
+		{"disabled with zero values", config.NexPeerConfig{}, ""},
+		{"custom valid templates", config.NexPeerConfig{
+			Enabled:      true,
+			MaxPending:   5,
+			WakeTemplate: "from {{.FromName}} ({{.FromMode}}, {{.MsgID}}):\n{{.Text}}\n{{.ReplyLine}}",
+			ReplyLine:    "reply: pdx msg send {{.ReplyTo}} \"...\"",
+		}, ""},
+		{"negative max_pending", config.NexPeerConfig{MaxPending: -1},
+			"nex.peer.max_pending: must not be negative (got -1)"},
+		{"wake template without Text", config.NexPeerConfig{WakeTemplate: "hello {{.FromName}}"},
+			"nex.peer.wake_template: {{.Text}} must appear exactly once, found 0"},
+		{"wake template with unknown variable", config.NexPeerConfig{WakeTemplate: "{{.Text}} {{.Nope}}"},
+			"nex.peer.wake_template: unknown variable .Nope"},
+		{"reply line without ReplyTo", config.NexPeerConfig{ReplyLine: "just reply"},
+			"nex.peer.reply_line: reply_line must contain {{.ReplyTo}}"},
+		{"reply line with a newline", config.NexPeerConfig{ReplyLine: "a\n{{.ReplyTo}}"},
+			"nex.peer.reply_line: control character U+000A is not allowed (the reply line is one line)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := config.DefaultNexConfig()
+			n.Peer = tc.peer
+			err := n.Validate("/home/u")
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Validate() = nil, want %q", tc.wantErr)
+			}
+			if err.Error() != tc.wantErr {
+				t.Errorf("Validate() = %q, want %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestNexPeerBadTemplateFailsLoad: the same check runs on config.toml.
+func TestNexPeerBadTemplateFailsLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[nex.peer]\nwake_template = \"no text here\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("Load() = nil error, want a nex.peer.wake_template error")
+	}
+	if !strings.HasPrefix(err.Error(), "nex.peer.wake_template:") {
+		t.Errorf("error = %q, want prefix %q", err.Error(), "nex.peer.wake_template:")
+	}
+}
+
 func TestNexConfigDisabledWithNoRootsIsValid(t *testing.T) {
 	n := config.DefaultNexConfig()
 	if n.Enabled {
@@ -276,6 +395,12 @@ func TestNexConfigTomlRoundTrip(t *testing.T) {
 		PathPrepend:  []string{"/opt/homebrew/bin"},
 		Sandbox:      config.NexSandboxConfig{MaxProfile: "handoff", DefaultProfile: "trusted"},
 		Timeouts:     config.NexTimeoutsConfig{LeaseTTL: "5m", Interrupt: "10s", Turn: "30m"},
+		Peer: config.NexPeerConfig{
+			Enabled:      false,
+			MaxPending:   7,
+			WakeTemplate: "peer {{.FromName}} says:\n{{.Text}}\n{{.ReplyLine}}",
+			ReplyLine:    "reply with pdx msg send {{.ReplyTo}}",
+		},
 	}
 
 	if err := config.WriteFile(path, cfg); err != nil {

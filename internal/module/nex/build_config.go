@@ -90,6 +90,14 @@ func buildOptions(hostID, dataDir string, n pdxconfig.NexConfig, shutdownBudget 
 		InterruptTimeout: nexconfig.Duration(interrupt),
 		TurnTimeout:      nexconfig.Duration(turn),
 		ShutdownTimeout:  nexconfig.Duration(shutdownBudget),
+		// [nex.peer] (peer mailbox spec §6). Zero max_pending and empty
+		// templates are filled with Nexen's defaults by cfg.Validate below.
+		Peer: nexconfig.PeerConfig{
+			Enabled:      n.Peer.Enabled,
+			MaxPending:   n.Peer.MaxPending,
+			WakeTemplate: n.Peer.WakeTemplate,
+			ReplyLine:    n.Peer.ReplyLine,
+		},
 	}
 
 	if err := cfg.Validate(); err != nil {

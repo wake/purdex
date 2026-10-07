@@ -49,6 +49,7 @@ export function notifyApprovalOpened(hostId: string, approval: Approval): void {
     sessionCode: '',
     eventName: 'ApprovalRequest',
     broadcastTs: approvalBroadcastTs(hostId, approval.id),
-    action: { kind: 'open-approval', hostId },
+    // The request id: the click restores a minimized dialog only while THIS request is still open (U22 (b)).
+    action: { kind: 'open-approval', hostId, requestId: approval.id },
   })
 }

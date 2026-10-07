@@ -15,6 +15,8 @@ export function emptyNexConfig(): NexConfig {
     path_prepend: [],
     sandbox: { max_profile: '', default_profile: '' },
     timeouts: { lease_ttl: '', interrupt: '', turn: '' },
+    // U4: the peer mailbox is on by default; 0 / '' = Nexen's defaults.
+    peer: { enabled: true, max_pending: 0, wake_template: '', reply_line: '' },
   }
 }
 
@@ -31,9 +33,10 @@ export function restartRequired(_saved: NexConfig | undefined, info: NexInfo | n
 
 /**
  * Coerces a `nex` section read from the daemon into a complete NexConfig:
- * null/missing lists become [] and a missing `sandbox`/`timeouts` object (or
- * key) falls back to emptyNexConfig()'s defaults. Older daemons and configs
- * without a [nex] section can emit `null` lists (spec §4.4.2).
+ * null/missing lists become [] and a missing `sandbox`/`timeouts`/`peer`
+ * object (or key) falls back to emptyNexConfig()'s defaults. Older daemons
+ * and configs without a [nex] section can emit `null` lists (spec §4.4.2);
+ * daemons before the peer mailbox send no `peer` at all.
  */
 export function normalizeNexConfig(raw: Partial<NexConfig> | null | undefined): NexConfig {
   const base = emptyNexConfig()
@@ -48,5 +51,6 @@ export function normalizeNexConfig(raw: Partial<NexConfig> | null | undefined): 
     enabled: r.enabled ?? false,
     sandbox: { ...base.sandbox, ...(r.sandbox ?? {}) },
     timeouts: { ...base.timeouts, ...(r.timeouts ?? {}) },
+    peer: { ...base.peer, ...(r.peer ?? {}) },
   }
 }

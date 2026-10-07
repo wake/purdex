@@ -23,7 +23,7 @@ const rowBodyLimit = 1 << 20
 var executionIDPattern = regexp.MustCompile(`^[0-9A-Za-z_-]{1,64}$`)
 
 // rowReader reads one execution through the engine's own HTTP handler, for
-// the projector (spec 2026-10-08 §3.3; PR1b calls it inside readSlot.read,
+// the projector (spec 2026-10-08 §3.3; projector.go calls it inside readSlot.readThen,
 // it never takes the slot itself). Going through the handler rather than
 // the store means a delta row is exactly the JSON GET /v1/executions/{id}
 // answers — the shape the SPA's getExecution already parses — including

@@ -178,6 +178,8 @@ describe('useExecutionListStore', () => {
     expect(url.pathname).toBe('/api/nex/v1/events')
     const kinds = url.searchParams.getAll('kind')
     expect(kinds).toEqual([...SITE_STREAM_KINDS])
+    // peer_message (Nexen v0.20.0): a peer-created turn publishes it instead of
+    // execution.message_accepted, and it changes turn_count on the row.
     for (const k of ['execution.running', 'execution.terminal', 'permission.requested', 'permission.resolved', 'tool_use', 'task_end', 'execution.archived', 'result', 'peer_message']) {
       expect(kinds).toContain(k)
     }

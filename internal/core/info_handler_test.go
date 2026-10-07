@@ -311,6 +311,35 @@ func TestInfoEndpoint_NexRestartRequired(t *testing.T) {
 		assert.Equal(t, false, getInfoNex(t, c)["restart_required"])
 	})
 
+	// [nex.peer] is part of the assembled engine (peer mailbox spec §6), so
+	// a change to it alone needs a restart like any other [nex] key.
+	peerBoot := func() config.NexConfig {
+		n := bootNex()
+		n.Peer = config.NexPeerConfig{Enabled: true}
+		return n
+	}
+	peerPut := func(peer string) string {
+		return fmt.Sprintf(`{"nex":{"enabled":true,"repo_roots":[%q],"peer":%s}}`, root, peer)
+	}
+
+	t.Run("PUT changing only peer.enabled reports true", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: peerBoot()}})
+		putConfig(t, c, peerPut(`{"enabled":false,"max_pending":0,"wake_template":"","reply_line":""}`))
+		assert.Equal(t, true, getInfoNex(t, c)["restart_required"])
+	})
+
+	t.Run("PUT changing only peer.max_pending reports true", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: peerBoot()}})
+		putConfig(t, c, peerPut(`{"enabled":true,"max_pending":8,"wake_template":"","reply_line":""}`))
+		assert.Equal(t, true, getInfoNex(t, c)["restart_required"])
+	})
+
+	t.Run("PUT with an identical peer section reports false", func(t *testing.T) {
+		c := New(CoreDeps{Config: &config.Config{Nex: peerBoot()}})
+		putConfig(t, c, peerPut(`{"enabled":true,"max_pending":0,"wake_template":"","reply_line":""}`))
+		assert.Equal(t, false, getInfoNex(t, c)["restart_required"])
+	})
+
 	t.Run("disabled at boot then PUT enabling reports true", func(t *testing.T) {
 		c := New(CoreDeps{Config: &config.Config{Nex: config.NexConfig{Enabled: false}}})
 		assert.Equal(t, false, getInfoNex(t, c)["restart_required"])
