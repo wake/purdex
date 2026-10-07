@@ -49,6 +49,7 @@ const NOTE = '接力已核准，這一輪只做簡短回應；如果這是一件
 const SKIP_COMPACT = '接力已核准，略過壓縮，改為寫接力檔'
 const RELAY_UNREACHABLE = 'Purdex daemon 連不上，無法變更自我接力'
 const RELAY_USAGE = '用法：/relay off|on|status'
+const RELAY_MEMBER = 'member 的接力由 lead 安排'
 const TOAST_GAVE_UP = '接力檔不完整，已放棄接力；對話照常繼續'
 const toastSeedFailed = (path) => '接力未完成：接力檔在 ' + path + '，可手動貼給新 session'
 
@@ -720,9 +721,11 @@ export function register(on) {
     if (!['off', 'on', 'status'].includes(action)) return { text: RELAY_USAGE }
     const r = await pdx($, ['relay', 'self', action, '--session', await $.session.id()], SELF_TIMEOUT_MS)
     if (r.exitCode === 20 || r.exitCode === 21) return { text: RELAY_UNREACHABLE }
+    // on|off in a member: the daemon's 409 member_relay_is_leads, exit 13 (P5b-3 review)
+    if (r.exitCode === 13 && stderrCode(r) === 'member_relay_is_leads') return { text: RELAY_MEMBER }
     if (r.exitCode !== 0) return { text: 'pdx relay self ' + action + ' 失敗：' + (r.stderr || '').trim() }
     const b = parseJSON(r.stdout) || {}
-    if (b.member) return { text: 'member 的接力由 lead 安排' }
+    if (b.member) return { text: RELAY_MEMBER } // status in a member answers 200
     if (action === 'on') s.lastAskPct = undefined // asked again at once (still only after hello answered)
     const host = b.host_switch === false ? '主機開關 關' : '主機開關 開'
     const label = { on: '開啟', off: '關閉', paused: '本 session 暫停' }[b.self_relay] || String(b.self_relay)

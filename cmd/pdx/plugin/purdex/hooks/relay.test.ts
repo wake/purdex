@@ -1601,8 +1601,24 @@ test('/relay status|off|on call pdx relay self; on resets the +10 guard; a membe
   await turnAndSettle($, f, 't2') // same 72 %, but /relay on cleared the guard
   expect(count(f, 'begin')).toBe(2)
   selfBody = { self_relay: 'off', host_switch: true, member: true }
-  expect((await relayCmd($, 'on')).text).toBe('member 的接力由 lead 安排')
+  expect((await relayCmd($, 'status')).text).toBe('member 的接力由 lead 安排') // status answers 200 with member
   expect((await relayCmd($, 'maybe')).text).toBe('用法：/relay off|on|status')
+})
+
+// P5b-3 review item 3 (R1 P2): the daemon refuses `self on|off` for a member
+// with 409 member_relay_is_leads, which the CLI prints as exit 13 with the
+// code as stderr's last token (relayReportErr); `status` answers 200 with
+// member. Any other 13 keeps the general text, stderr's detail included.
+// Mutation gate: drop the member branch → the generic failure text → red.
+test('/relay on|off in a member: exit 13 member_relay_is_leads answers member 的接力由 lead 安排; another 13 shows the detail', async ($, on) => {
+  const f = relayWorld(on)
+  let refusal = 'pdx relay: member 的接力由 lead 安排 member_relay_is_leads'
+  f.pdx = (argv) => (argv[1] === 'self' ? { exitCode: 13, stderr: refusal + '\n' } : { exitCode: 0, stdout: HELLO() })
+  await start($, f)
+  expect((await relayCmd($, 'on')).text).toBe('member 的接力由 lead 安排')
+  expect((await relayCmd($, 'off')).text).toBe('member 的接力由 lead 安排')
+  refusal = 'pdx relay: self relay is off on this host (host config relay) self_relay_off'
+  expect((await relayCmd($, 'on')).text).toBe('pdx relay self on 失敗：pdx relay: self relay is off on this host (host config relay) self_relay_off')
 })
 
 // Coordinator: /relay awaits `pdx relay self` in its hook (the person waits
