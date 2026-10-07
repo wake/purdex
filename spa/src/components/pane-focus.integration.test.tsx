@@ -465,7 +465,7 @@ describe('pane focus — click inside a visible tab (spec §8.3 path 3)', () => 
 // --- the worker's post-send refocus ------------------------------------------------------------------------------
 
 describe('pane focus — a worker send coming back (spec §8.3)', () => {
-  const sending = (v: boolean) => act(() => { useExecutionStore.getState().setPendingSend(H, EXEC, v) })
+  const sending = (v: boolean) => act(() => { useExecutionStore.getState().setPendingSend(H, EXEC, v); useExecutionStore.getState().setSendLocked(H, EXEC, v) })
 
   it('the worker is not the target (the user moved to the editor) → its reply box does not take focus', async () => {
     show(TW)

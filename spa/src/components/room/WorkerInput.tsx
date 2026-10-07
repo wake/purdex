@@ -4,12 +4,13 @@
 // Attachments (worker-pane theme spec §9.1): the chips live in ExecutionView
 // (this input remounts on a restored draft); here they render above the
 // textarea, gate the send, and paste / the `+` picker hand files up.
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react'
 import { Plus } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { canSend, type Chip } from '../../lib/nex/worker-upload'
 import { useActivationFocus } from '../../hooks/useActivationFocus'
 import UploadChips from './UploadChips'
+import { shouldNavigate, type HistoryDir, type RecallMark } from '../../hooks/useInputHistory'
 
 /** Ceiling for the auto-grown textarea, so a long paste can't squeeze the transcript away. */
 const MAX_INPUT_PX = 200
@@ -62,6 +63,13 @@ interface Props {
   /** A turn is live: Esc on an empty box and Ctrl+C with no selection call `onInterrupt`. */
   turnLive?: boolean
   onInterrupt?: () => void
+  /**
+   * Input-history step (ArrowUp at the very start / ArrowDown at the very end of the box). `current` is the
+   * box text; the answer is the text to show instead — `walking` says a recalled entry is shown, so the box
+   * parks the caret where the next press in the same direction works — or null for "nothing to recall": the
+   * key then behaves as an ordinary caret move.
+   */
+  onHistoryNav?: (dir: HistoryDir, current: string) => { text: string; walking: boolean } | null
 }
 
 const NO_CHIPS: readonly Chip[] = []
@@ -69,12 +77,15 @@ const noop = () => {}
 
 export default function WorkerInput({
   onSend, disabled = false, pendingSend = false, placeholder, isActive = false, isFocusTarget = false, initialValue, chips = NO_CHIPS, onRemoveChip, onAddFiles,
-  onTextChange, turnLive = false, onInterrupt,
+  onTextChange, turnLive = false, onInterrupt, onHistoryNav,
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const resolvedPlaceholder = placeholder ?? t('worker.input.placeholder')
   const [value, setValue] = useState(initialValue ?? '')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Where the last recall parked the caret (see `RecallMark`); applied after the render that shows the text.
+  const recallMark = useRef<RecallMark | null>(null)
+  const [recallTick, setRecallTick] = useState(0)
   const pickerRef = useRef<HTMLInputElement>(null)
   const gate = canSend(chips)
   const hasAttachment = chips.some((c) => c.status === 'done')
@@ -166,6 +177,7 @@ export default function WorkerInput({
     if (!trimmed && !hasAttachment) return
     if (!gate.ok) return
     if (onSend(trimmed) === false) return
+    recallMark.current = null
     setValue('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
@@ -173,10 +185,33 @@ export default function WorkerInput({
     }
   }
 
+  // The caret goes where the next press in the walking direction works: the start after Up, the end after Down.
+  useLayoutEffect(() => {
+    const ta = textareaRef.current
+    const mark = recallMark.current
+    if (!ta || !mark || ta.value !== mark.text) return
+    ta.setSelectionRange(mark.pos, mark.pos)
+  }, [recallTick])
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // An IME commit (Enter that picks a candidate) is not a send; 229 is what
     // Safari / older Chromium report for it even with isComposing already false.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && onHistoryNav && !disabled && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const dir: HistoryDir = e.key === 'ArrowUp' ? 'up' : 'down'
+      const ta = e.currentTarget
+      if (shouldNavigate(dir, ta, false, recallMark.current)) {
+        const next = onHistoryNav(dir, value)
+        if (next !== null) {
+          e.preventDefault()
+          recallMark.current = next.walking ? { text: next.text, pos: dir === 'up' ? 0 : next.text.length } : null
+          setValue(next.text)
+          setRecallTick((n) => n + 1)
+          requestAnimationFrame(autoGrow)
+          return
+        }
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       if (!disabled) send()

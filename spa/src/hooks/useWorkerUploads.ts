@@ -32,6 +32,19 @@ export interface WorkerUploads {
   markFailed(key: string, error?: string): void
   /** Whether the chip still exists (not removed or cleared) — for work that outlived a render. */
   isLive(key: string): boolean
+  /**
+   * Chips for files already on the daemon host (a recalled message's `[file: path]` lines): `done`
+   * path chips, no upload. Returns nothing; they join the current chips.
+   */
+  addPaths(paths: readonly string[]): void
+  /**
+   * Input-history navigation: move the current chips out of sight (kept alive — uploads go on, previews
+   * stay) so a recalled message's chips can take their place. `unpark` drops what is shown and brings
+   * the parked chips back; `discardParked` drops them for good (the recalled message was sent).
+   */
+  park(): void
+  unpark(): void
+  discardParked(): void
 }
 
 export interface WorkerUploadImages {
@@ -45,6 +58,9 @@ let seq = 0
 
 export function useWorkerUploads(hostId: string, executionId: string, images?: WorkerUploadImages): WorkerUploads {
   const [chips, setChips] = useState<Chip[]>([])
+  const [parked, setParked] = useState<Chip[]>([])
+  // Keys of parked chips: still live (their uploads finish), but not the shown chips.
+  const parkedKeys = useRef(new Set<string>())
   // Mirrors for work outside render: which chips still exist (a removed one
   // is skipped / ignored), their thumbnails (revoked on remove / unmount) and
   // the Files of native image chips (insertion order = chip order).
@@ -69,6 +85,7 @@ export function useWorkerUploads(hostId: string, executionId: string, images?: W
   const drop = useCallback((keys: Iterable<string>) => {
     for (const k of keys) {
       live.current.delete(k)
+      parkedKeys.current.delete(k)
       natives.current.delete(k)
       const url = previews.current.get(k)
       if (url) { URL.revokeObjectURL(url); previews.current.delete(k) }
@@ -78,6 +95,7 @@ export function useWorkerUploads(hostId: string, executionId: string, images?: W
   const patch = useCallback((key: string, p: Partial<Chip>) => {
     if (!mounted.current || !live.current.has(key)) return
     setChips((prev) => prev.map((c) => (c.key === key ? { ...c, ...p } : c)))
+    setParked((prev) => (prev.some((c) => c.key === key) ? prev.map((c) => (c.key === key ? { ...c, ...p } : c)) : prev))
   }, [])
 
   const enqueueUpload = useCallback((key: string, file: File) => {
@@ -153,7 +171,7 @@ export function useWorkerUploads(hostId: string, executionId: string, images?: W
       drop(gone)
       setChips((prev) => prev.filter((c) => !gone.has(c.key)))
     } else {
-      drop([...live.current])
+      drop([...live.current].filter((k) => !parkedKeys.current.has(k)))
       setChips([])
     }
   }, [drop])
@@ -173,5 +191,34 @@ export function useWorkerUploads(hostId: string, executionId: string, images?: W
 
   const isLive = useCallback((key: string) => live.current.has(key), [])
 
-  return { chips, add, remove, clear, nativeFiles, demote, markFailed, isLive }
+  const addPaths = useCallback((paths: readonly string[]) => {
+    if (paths.length === 0) return
+    const added: Chip[] = paths.map((path) => {
+      const key = `up${++seq}`
+      live.current.add(key)
+      return { key, kind: 'path', name: path.split('/').filter(Boolean).pop() ?? path, status: 'done', path }
+    })
+    setChips((prev) => [...prev, ...added])
+  }, [])
+
+  const park = useCallback(() => {
+    // A second park without an unpark in between would lose the first set; navigation never does that.
+    for (const c of chips) parkedKeys.current.add(c.key)
+    setParked((prev) => [...prev, ...chips])
+    setChips([])
+  }, [chips])
+
+  const unpark = useCallback(() => {
+    drop([...live.current].filter((k) => !parkedKeys.current.has(k)))
+    parkedKeys.current.clear()
+    setChips(parked)
+    setParked([])
+  }, [drop, parked])
+
+  const discardParked = useCallback(() => {
+    drop([...parkedKeys.current])
+    setParked([])
+  }, [drop])
+
+  return { chips, add, remove, clear, nativeFiles, demote, markFailed, isLive, addPaths, park, unpark, discardParked }
 }

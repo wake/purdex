@@ -1,6 +1,6 @@
 // spa/src/lib/nex/worker-upload.test.ts
 import { describe, it, expect } from 'vitest'
-import { canSend, composeWithAttachments, encodeImage, planAttachments, requestBytes, uploadErrorKey, type Chip } from './worker-upload'
+import { canSend, composeWithAttachments, splitAttachmentLines, encodeImage, planAttachments, requestBytes, uploadErrorKey, type Chip } from './worker-upload'
 import { selectImageAttachments } from '../../stores/useNexHostStore'
 import { NexApiError } from './types'
 import en from '../../locales/en.json'
@@ -174,5 +174,19 @@ describe('encodeImage', () => {
       expect(out.length % 4).toBe(0)
       expect(Uint8Array.from(atob(out), (c) => c.charCodeAt(0))).toEqual(bytes)
     }
+  })
+})
+
+describe('splitAttachmentLines', () => {
+  const done = (path: string): Chip => ({ key: path, kind: 'path', name: path, status: 'done', path })
+  it('inverts composeWithAttachments', () => {
+    const chips = [done('/a/x.txt'), done('/b/y z.png')]
+    for (const text of ['hello', 'two\nlines', '']) {
+      expect(splitAttachmentLines(composeWithAttachments(text, chips))).toEqual({ text, paths: ['/a/x.txt', '/b/y z.png'] })
+    }
+  })
+  it('leaves text without trailing file lines alone, and a file line in the middle', () => {
+    expect(splitAttachmentLines('plain')).toEqual({ text: 'plain', paths: [] })
+    expect(splitAttachmentLines('[file: /a]\nthen text')).toEqual({ text: '[file: /a]\nthen text', paths: [] })
   })
 })

@@ -49,11 +49,14 @@ import PreludeSection from '../room/prelude/PreludeSection'
 import { useExecutionLease } from '../../hooks/useExecutionLease'
 import { useExecutionActions, type SendOptions } from '../../hooks/useExecutionActions'
 import { useWorkerUploads } from '../../hooks/useWorkerUploads'
+import { useInputHistory, type HistoryDir } from '../../hooks/useInputHistory'
+import { buildSentHistory, type SentEntry } from '../../lib/nex/sent-history'
+import { fetchAttachment } from '../../lib/nex/nex-api'
 import {
   canSend, composeWithAttachments, encodeImage, isAttachmentError, planAttachments, requestBytes, uploadErrorKey,
   PER_IMAGE_ERRORS, type Chip, type WireImageAttachment,
 } from '../../lib/nex/worker-upload'
-import { selectImageAttachments, selectPreludeItemOffset, selectTranscriptPrelude, useNexHostStore } from '../../stores/useNexHostStore'
+import { selectAttachmentFetch, selectImageAttachments, selectPreludeItemOffset, selectTranscriptPrelude, useNexHostStore } from '../../stores/useNexHostStore'
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
@@ -184,6 +187,20 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // input is re-keyed on the restored draft and remounts after a failed send —
   // and the whole pane is the drop target (TerminalView's overlay pattern).
   const uploads = useWorkerUploads(hostId, executionId, { caps: imageCaps, getText: getDraftText })
+  // Reply-box history (see showEntry below); hooks live up here, above the early return.
+  const sentEntries = useMemo(() => buildSentHistory(st.messages, st.pendingLocal), [st.messages, st.pendingLocal])
+  const history = useInputHistory<SentEntry, string>(sentEntries)
+  const restoreAbort = useRef<AbortController | null>(null)
+  const endHistoryWalk = (discardParked: boolean) => {
+    restoreAbort.current?.abort()
+    restoreAbort.current = null
+    if (!history.isNavigating()) return
+    history.reset()
+    if (discardParked) uploads.discardParked()
+  }
+  useEffect(() => () => restoreAbort.current?.abort(), [])
+  // A failed send restores its text as the draft and remounts the box: that ends any walk.
+  useEffect(() => { if (draft !== null) endHistoryWalk(true) }, [draft]) // eslint-disable-line react-hooks/exhaustive-deps
   // A send refused before going out (phase E: the body would exceed
   // max_request_bytes); cleared by the next send or a removed chip.
   const [sendBlock, setSendBlock] = useState<'request_too_large' | null>(null)
@@ -455,6 +472,40 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // is re-uploaded by path first. A per-image refusal from the daemon fails
   // that chip (`attachment_index`, in send order).
   const attachGate = canSend(uploads.chips)
+  // Reply-box history (ArrowUp / ArrowDown): the messages this execution's reader sent, oldest first.
+  // Recalling one puts its text in the box and its attachments back as chips — `[file:]` lines as
+  // path chips, native images fetched back through the attachment route and re-added like a picked
+  // file (so they send natively again). The unsent draft and its chips are parked meanwhile.
+  const showEntry = (entry: SentEntry) => {
+    restoreAbort.current?.abort()
+    restoreAbort.current = null
+    uploads.clear()
+    uploads.addPaths(entry.paths)
+    if (entry.images.length === 0) return
+    const route = selectAttachmentFetch(hostId)(useNexHostStore.getState())
+    if (!route) return
+    const ctl = new AbortController()
+    restoreAbort.current = ctl
+    void Promise.allSettled(entry.images.map((m) => fetchAttachment(hostId, executionId, m.sha256, route, ctl.signal))).then((results) => {
+      if (ctl.signal.aborted) return
+      const files = results.flatMap((r, i) => (r.status === 'fulfilled'
+        ? [new File([r.value], `image-${i + 1}.${entry.images[i].media_type.split('/')[1] ?? 'png'}`, { type: entry.images[i].media_type })]
+        : []))
+      uploads.add(files)
+    })
+  }
+  const onHistoryNav = (dir: HistoryDir, current: string): { text: string; walking: boolean } | null => {
+    const move = dir === 'up' ? history.up(() => { uploads.park(); return current }) : history.down()
+    if (!move) return null
+    if (move.kind === 'entry') {
+      showEntry(move.entry)
+      return { text: move.entry.text, walking: true }
+    }
+    restoreAbort.current?.abort()
+    restoreAbort.current = null
+    uploads.unpark()
+    return { text: move.draft, walking: false }
+  }
   const sendWithAttachments = (text: string, opts: SendOptions): boolean => {
     if (encoding.current || !canSend(uploads.chips).ok) return false
     const sent = uploads.chips.filter((c) => c.status === 'done')
@@ -473,6 +524,8 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       }
     }
     setSendBlock(null)
+    // A recalled message is going out: the walk ends, and the draft it parked with it is dropped.
+    if (opts.restoreDraft !== false) endHistoryWalk(true)
     if (natives.length === 0) {
       // No await without images: a text-only send takes handleSend's lock in
       // the same tick as the submit, as in phase D.
@@ -692,7 +745,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
         disabled={inputDisabled || !attachGate.ok} />
       <WorkerInput key={draft ?? ''} initialValue={draft ?? readWorkerDraft(draftKey)} onSend={(text) => sendWithAttachments(text, { draftText: text })}
         disabled={inputDisabled} pendingSend={st.sendLocked} placeholder={placeholder} isActive={isActive} isFocusTarget={isFocusTarget} onTextChange={onTextChange}
-        turnLive={st.turnLive} onInterrupt={() => void handleInterrupt()}
+        turnLive={st.turnLive} onInterrupt={() => void handleInterrupt()} onHistoryNav={onHistoryNav}
         chips={uploads.chips} onRemoveChip={removeChip} onAddFiles={canAttach ? uploads.add : undefined} />
       {dragging && (
         <div data-testid="drop-overlay"
