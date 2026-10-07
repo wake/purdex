@@ -47,7 +47,7 @@ func (m *Module) handleHookDecide(w http.ResponseWriter, r *http.Request) {
 		// removed. Always 200 {} — P8a-1d forwards these very events to
 		// this route (its observeHookEvent runs above this line) and a 400
 		// would stop the terminal-only degradation from ever closing.
-		m.writeJSON(w, http.StatusOK, team.HookDecideResponse{})
+		m.answerEmptyDecision(w, req)
 		return
 	}
 	// The lookup and the removal are one critical section under createMu,
@@ -65,11 +65,11 @@ func (m *Module) handleHookDecide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !found {
-		m.writeJSON(w, http.StatusOK, team.HookDecideResponse{})
+		m.answerEmptyDecision(w, req)
 		return
 	}
 	if req.Event != team.HookEventPreToolUse {
-		m.writeJSON(w, http.StatusOK, team.HookDecideResponse{})
+		m.answerEmptyDecision(w, req)
 		return
 	}
 	m.logf("[team] hook deny: session %s tool %q while lead request %s is open", req.SessionID, req.ToolName, open.ID)
