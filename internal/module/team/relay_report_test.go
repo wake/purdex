@@ -437,13 +437,17 @@ func TestRelayReport_TerminalReportClosesTheRowFirst(t *testing.T) {
 		t.Fatalf("(1) closed events = %d, want 1", closed)
 	}
 
+	// (2) An approve wins the row's CAS first, and its afterClose has NOT
+	// run yet (the seam does the raw CAS only). The report must bring the
+	// op up to the approve (claimed) and then cancel it: row approved, op
+	// cancelled{compacted}.
 	out2 := f.begin("sid-1")
 	f.m.beforeTerminalClose = func(id string) {
 		if id != out2.Op.ID {
 			t.Fatalf("seam for %s", id)
 		}
-		if code, body := f.decide(out2.RequestID, "approve"); code != http.StatusOK {
-			t.Fatalf("racing approve: %d %s", code, body)
+		if _, won, err := f.m.store.CloseIfOpen(out2.RequestID, Close{State: team.StateApproved, DecidedAt: f.clock.Load()}); err != nil || !won {
+			t.Fatalf("racing approve CAS: won=%v err=%v", won, err)
 		}
 	}
 	code, op, _ = f.report(out2.Op.ID, team.RelayReportRequest{State: team.RelayCancelled, Error: team.RelayReasonCompacted})
@@ -453,6 +457,29 @@ func TestRelayReport_TerminalReportClosesTheRowFirst(t *testing.T) {
 	}
 	if row, _, _ := f.m.store.Get(out2.RequestID); row.State != team.StateApproved {
 		t.Fatalf("(2) row = %s, want approved (the approve won the CAS)", row.State)
+	}
+	// The winner's late afterClose is a no-op now (claimed does not lead
+	// anywhere from cancelled; it only logs).
+	row2, _, _ := f.m.store.Get(out2.RequestID)
+	f.m.afterClose(row2, nil)
+	if got := f.op(out2.Op.ID); got.State != team.RelayCancelled || got.Reason != team.RelayReasonCompacted {
+		t.Fatalf("(2) op after the late afterClose = %+v", got)
+	}
+
+	// (3) The discriminating case: a DENY wins the CAS first, afterClose
+	// not yet run. The op must take the row's verdict — cancelled{denied}
+	// — and the report's cancelled{compacted} is then the idempotent no-op:
+	// the person's decision stands, the report never overwrites it.
+	out3 := f.begin("sid-1")
+	f.m.beforeTerminalClose = func(string) {
+		if _, won, err := f.m.store.CloseIfOpen(out3.RequestID, Close{State: team.StateDenied, DecidedAt: f.clock.Load()}); err != nil || !won {
+			t.Fatalf("racing deny CAS: won=%v err=%v", won, err)
+		}
+	}
+	code, op, _ = f.report(out3.Op.ID, team.RelayReportRequest{State: team.RelayCancelled, Error: team.RelayReasonCompacted})
+	f.m.beforeTerminalClose = nil
+	if code != http.StatusOK || op.State != team.RelayCancelled || op.Reason != team.RelayReasonDenied {
+		t.Fatalf("(3) report after a racing deny: %d %+v, want cancelled (denied) — the row's verdict", code, op)
 	}
 }
 

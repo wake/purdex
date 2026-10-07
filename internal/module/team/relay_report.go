@@ -98,10 +98,27 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 			if m.beforeTerminalClose != nil {
 				m.beforeTerminalClose(id) // test seam: the approve that races this report
 			}
-			if _, _, err := m.closeAsWithOp(cur.RequestID, Close{State: team.StateCancelled, DecidedAt: m.now()}, rep); err != nil && !errors.Is(err, ErrNoSuchApproval) {
+			_, won, err := m.closeAsWithOp(cur.RequestID, Close{State: team.StateCancelled, DecidedAt: m.now()}, rep)
+			if err != nil && !errors.Is(err, ErrNoSuchApproval) {
 				m.logf("[team] relay report %s: close request %s: %v", id, cur.RequestID, err)
 				m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 				return
+			}
+			if !won {
+				// Another close won the row (an approve, a deny, the
+				// sweeper), and its afterClose may not have run yet. Bring
+				// the op up to that row's verdict first — approved → claimed,
+				// denied → cancelled{denied} — so this report is applied on
+				// top of the person's decision, never underneath it. The
+				// winner's own afterClose is then a no-op.
+				m.createMu.Lock()
+				_, _, rerr := m.reconcileAwaitingOp(cur)
+				m.createMu.Unlock()
+				if rerr != nil {
+					m.logf("[team] relay report %s: reconcile after a lost close: %v", id, rerr)
+					m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+					return
+				}
 			}
 		}
 	}
@@ -165,15 +182,27 @@ func (m *Module) afterReport(op team.RelayOp) {
 // written for a session this host cannot vouch for.
 func (m *Module) checkClearedTarget(opID, newSessionID string) (code int, detail string) {
 	op, ok, err := m.store.GetRelayOp(opID)
-	if err != nil || !ok {
-		return 0, "" // a missing op is the store's 404 below
+	if err != nil {
+		return http.StatusServiceUnavailable, "team.db failed; retry: " + err.Error()
 	}
-	wantPID := 0
-	if op.RequestID != "" {
-		if row, ok, err := m.store.Get(op.RequestID); err == nil && ok {
-			wantPID = row.Origin.PID
-		}
+	if !ok {
+		return 0, "" // the store's 404 below
 	}
+	// The binding is the op's approval row's origin PID; without it there
+	// is nothing to vouch for the new session, so the report is refused
+	// rather than waved through (fail closed). A member op (P6) will bring
+	// its own binding.
+	if op.RequestID == "" {
+		return http.StatusBadRequest, "relay op " + opID + " has no approval row to bind new_session_id to"
+	}
+	row, ok, err := m.store.Get(op.RequestID)
+	if err != nil {
+		return http.StatusServiceUnavailable, "team.db failed; retry: " + err.Error()
+	}
+	if !ok || row.Origin.PID == 0 {
+		return http.StatusBadRequest, "relay op " + opID + ": its approval row (" + op.RequestID + ") or origin pid is missing; cannot bind new_session_id"
+	}
+	wantPID := row.Origin.PID
 	deadline := time.Now().Add(m.clearedWait)
 	for {
 		target, live, err := m.origins.ResolveOriginBySession(newSessionID)
@@ -181,7 +210,7 @@ func (m *Module) checkClearedTarget(opID, newSessionID string) (code int, detail
 			return http.StatusServiceUnavailable, "registry unreadable; retry: " + err.Error()
 		}
 		if live {
-			if wantPID != 0 && target.PID != wantPID {
+			if target.PID != wantPID {
 				return http.StatusBadRequest, "new_session_id " + newSessionID + " is live under another process (pid " + strconv.Itoa(target.PID) + ", the op's is " + strconv.Itoa(wantPID) + "); a cleared session keeps its process"
 			}
 			return 0, ""
