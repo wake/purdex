@@ -141,6 +141,7 @@ func (m *Module) Start(context.Context) error {
 	if n > 0 {
 		m.logf("[team] boot: extended the lease of %d open approval request(s) by %ds", n, team.BootGraceS)
 	}
+	m.pruneHookLocks()
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.sweepWG.Add(1)
 	go m.runSweeper()

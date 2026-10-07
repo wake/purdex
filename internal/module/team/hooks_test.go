@@ -151,3 +151,49 @@ func TestHookDecide_RejectsBadInputAndStopping(t *testing.T) {
 		t.Fatalf("stopping: %d %s, want 503 not_ready", code, body)
 	}
 }
+
+// Spec §15 "stale flag ⇒ {} and the sweeper removes it": a flag whose
+// session the registry no longer lists goes on the 10th tick (the liveness
+// cadence), whether or not any request is open; a live session's flag and
+// the codex directory are left alone.
+func TestTick_PrunesStaleFlagsOnTheTenthTick(t *testing.T) {
+	f := newFixture(t)
+	dead := touchLock(t, f, "cc", "sid-dead")
+	live := touchLock(t, f, "cc", "sid-1")
+	codex := touchLock(t, f, "codex", "sid-dead")
+	f.origins.markDead("sid-dead")
+	for i := 1; i <= 9; i++ {
+		f.m.tick()
+		if !exists(dead) {
+			t.Fatalf("tick %d: pruned before the 10th tick", i)
+		}
+	}
+	f.m.tick()
+	if exists(dead) {
+		t.Fatal("10th tick: the dead session's flag must be removed")
+	}
+	if !exists(live) {
+		t.Fatal("10th tick: the live session's flag must stay")
+	}
+	if !exists(codex) {
+		t.Fatal("codex flags have no liveness oracle in P2c and must be left alone")
+	}
+}
+
+// Start prunes too (the registry is read on boot; a flag left by a session
+// that died while the daemon was down must not outlive the restart).
+func TestStart_PrunesStaleFlags(t *testing.T) {
+	f := newFixture(t)
+	dead := touchLock(t, f, "cc", "sid-dead")
+	live := touchLock(t, f, "cc", "sid-1")
+	f.origins.markDead("sid-dead")
+	if err := f.m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if exists(dead) || !exists(live) {
+		t.Fatalf("after Start: dead=%v live=%v, want false/true", exists(dead), exists(live))
+	}
+	if n := f.m.pruneHookLocks(); n != 0 {
+		t.Fatalf("second prune removed %d, want 0", n)
+	}
+}
