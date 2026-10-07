@@ -123,12 +123,12 @@ export function selectPendingPermission(s: { permissions: PermissionTable }, exc
  * the same table when nothing was pending. A real `permission.resolved`
  * arriving later still overwrites the status as usual (never back to pending).
  */
-export function settlePendingPermissions(table: PermissionTable): PermissionTable {
+export function settlePendingPermissions(table: PermissionTable, reason: 'execution_ended' | 'turn_ended' = 'execution_ended'): PermissionTable {
   let out: PermissionTable | null = null
   for (const r of Object.values(table)) {
     if (r.status !== 'pending') continue
     out ??= { ...table }
-    out[r.requestId] = { ...r, status: 'cancelled', reason: 'execution_ended' }
+    out[r.requestId] = { ...r, status: 'cancelled', reason }
   }
   return out ?? table
 }

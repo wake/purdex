@@ -602,7 +602,10 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       next = { ...next, pendingSend: false }
       const reason = str(p, 'reason')
       const state = str(p, 'state') ?? 'idle'
-      if (state === 'failed' || state === 'terminated') next = { ...next, permissions: settlePendingPermissions(next.permissions) }
+      // A request still pending when its turn ends was cancelled (turn_ended) by nexen; settle it
+      // here too in case that frame was lost. New turns raise new request_ids, so this is safe.
+      const ended = state === 'failed' || state === 'terminated'
+      next = { ...next, permissions: settlePendingPermissions(next.permissions, ended ? 'execution_ended' : 'turn_ended') }
       return patchSummary(next, {
         state, ...(reason ? { last_turn_reason: reason } : {}),
         // A turn that ended the execution (failed / terminated) leaves no live permission request.

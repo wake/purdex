@@ -1160,9 +1160,18 @@ describe('permission events (Nexen v0.19.0 permission.requested / permission.res
       })
     }
 
-    it('execution.terminal -> idle keeps the pending entry', () => {
+    it('execution.terminal -> idle cancels the pending entry as turn_ended (no notice)', () => {
       const s = applyDurableEvent(pendingState(), at(4, 'execution.terminal', 6000, { turn_id: 'trn_1', reason: 'done', state: 'idle' }))
-      expect(s.permissions.req_a.status).toBe('pending')
+      expect(s.permissions.req_a).toMatchObject({ status: 'cancelled', reason: 'turn_ended', toolName: 'Bash', requestedAt: 5000 })
+      expect(selectPendingPermission(s)).toBeUndefined()
+      expect(s.expiredNotice).toBeNull()
+    })
+
+    it('a request raised in the next turn (new request_id after the terminal) stays pending', () => {
+      let s = applyDurableEvent(pendingState(), at(4, 'execution.terminal', 6000, { turn_id: 'trn_1', reason: 'done', state: 'idle' }))
+      s = applyDurableEvent(s, requested(5, 'req_b', 7000))
+      expect(s.permissions.req_a.status).toBe('cancelled')
+      expect(selectPendingPermission(s)?.requestId).toBe('req_b')
     })
 
     it('leaves already-settled entries untouched', () => {
@@ -1316,7 +1325,9 @@ describe('permission events (Nexen v0.19.0 permission.requested / permission.res
     expect(permissionView(paged)).toEqual(permissionView(live))
     expect(live.permissions.req_a.status).toBe('allowed')
     expect(live.permissions.req_b).toMatchObject({ status: 'expired', timeoutS: 300 })
-    expect(selectPendingPermission(live)?.requestId).toBe('req_bg')
+    // req_bg was still pending when the turn's terminal event arrived → settled as turn_ended, live and replayed alike.
+    expect(live.permissions.req_bg).toMatchObject({ status: 'cancelled', reason: 'turn_ended' })
+    expect(selectPendingPermission(live)).toBeUndefined()
   })
 
   it('the global lastSeq guard is untouched: a history/live overlap re-delivering a mixed batch loses nothing and duplicates nothing', () => {
