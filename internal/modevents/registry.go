@@ -1,7 +1,9 @@
 package modevents
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"log"
 	"maps"
 	"sort"
@@ -13,13 +15,19 @@ import (
 // Registry limits (spec §6.4).
 const (
 	RingSize   = 256              // applied known events kept per stream
-	MaxStreams = 256              // streams kept; the oldest last_seen goes first
+	MaxStreams = 256              // hard limit on streams held; see Apply
 	EndedTTL   = 30 * time.Minute // an ended stream is kept this long after session.end
 	IdleTTL    = 2 * time.Hour    // any stream is kept this long after its last batch
 )
 
 // CountUnknown is the Counts key for event types this daemon does not know.
 const CountUnknown = "unknown"
+
+// ErrRegistryFull is Apply's error for a batch on a stream the registry
+// does not know while it holds MaxStreams streams and none can be evicted
+// (every one is in the middle of an Apply). The handler answers 503
+// registry_full; the mod backs off and resends.
+var ErrRegistryFull = errors.New("modevents: registry full")
 
 // StreamInfo is a snapshot of one mod stream. Counts is a copy the caller
 // owns.
@@ -47,6 +55,12 @@ func (i StreamInfo) clone() StreamInfo {
 	return i
 }
 
+// clone returns e with its own copy of Data.
+func (e Event) clone() Event {
+	e.Data = bytes.Clone(e.Data)
+	return e
+}
+
 // Registry holds the live mod streams in memory and delivers their known
 // events to subscribers. Use NewRegistry; it is safe for concurrent use.
 //
@@ -54,7 +68,8 @@ func (i StreamInfo) clone() StreamInfo {
 // also has an order mutex that one Apply holds from before its state
 // update until its last delivery returns, so a stream's events reach
 // subscribers in seq order while other streams, the readers and eviction
-// (which only take mu) carry on.
+// (which only take mu) carry on. The order mutex is not re-entrant: a
+// subscriber must never lead back into Apply (see Subscribe).
 type Registry struct {
 	now func() time.Time
 
@@ -94,13 +109,25 @@ func NewRegistry(now func() time.Time) *Registry {
 // Apply applies one decoded batch and returns the stream's highest applied
 // seq (the ack). Events at or below that seq are retries and are skipped;
 // a seq jump counts a gap and is applied. Known events are kept in the
-// stream's ring and delivered to every subscriber synchronously, in seq
-// order, before Apply returns; the next Apply of the same stream waits for
-// that delivery.
-func (r *Registry) Apply(b Batch) int64 {
+// stream's ring, with their own copy of Data, and delivered to every
+// subscriber synchronously, in seq order, before Apply returns; the next
+// Apply of the same stream waits for that delivery. Delivery holds the
+// stream's order mutex, which is not re-entrant: a subscriber that calls
+// Apply on this Registry, directly or indirectly, deadlocks (see
+// Subscribe).
+//
+// MaxStreams is a hard limit. A batch for a stream the registry does not
+// know, while it holds MaxStreams streams, evicts the stream with the
+// oldest last_seen that no Apply holds; when every stream is held it is
+// refused with ErrRegistryFull, and nothing is added or delivered.
+func (r *Registry) Apply(b Batch) (ack int64, err error) {
 	r.mu.Lock()
 	r.evictLocked(r.now())
-	s := r.admitLocked(b.Stream)
+	s, ok := r.admitLocked(b.Stream)
+	if !ok {
+		r.mu.Unlock()
+		return 0, ErrRegistryFull
+	}
 	s.pins++
 	r.mu.Unlock()
 
@@ -152,18 +179,20 @@ func (r *Registry) Apply(b Batch) int64 {
 			continue
 		}
 		in.Counts[e.Type]++
+		e = e.clone() // the caller may reuse the batch's buffers
 		s.push(e)
 		out = append(out, delivery{info: in.clone(), ev: e})
 	}
-	ack := in.LastSeq
+	ack = in.LastSeq
 	r.mu.Unlock()
 
 	r.deliver(out) // still under s.order
-	return ack
+	return ack, nil
 }
 
 // Reject counts a 400-rejected batch on a valid stream id, creating the
-// stream (under the same cap as Apply) when it is new.
+// stream (under the same hard cap as Apply) when it is new. A new stream
+// that the cap refuses is not counted anywhere.
 func (r *Registry) Reject(streamID string) {
 	if !ValidStream(streamID) {
 		return
@@ -172,37 +201,38 @@ func (r *Registry) Reject(streamID string) {
 	defer r.mu.Unlock()
 	now := r.now()
 	r.evictLocked(now)
-	s := r.admitLocked(streamID)
+	s, ok := r.admitLocked(streamID)
+	if !ok {
+		return
+	}
 	s.info.Rejected++
 	s.info.LastSeen = now
 }
 
 // admitLocked returns the stream, creating it with first_seen = last_seen
-// = now when new; a new stream past MaxStreams evicts the others with the
-// oldest last_seen. r.mu must be held.
-func (r *Registry) admitLocked(id string) *stream {
+// = now when new. A new stream at MaxStreams first evicts the stream with
+// the oldest last_seen that no Apply holds; when every stream is held, ok
+// is false and nothing changes. r.mu must be held.
+func (r *Registry) admitLocked(id string) (s *stream, ok bool) {
 	if s, ok := r.streams[id]; ok {
-		return s
+		return s, true
+	}
+	for len(r.streams) >= MaxStreams {
+		var oldest *stream
+		for _, c := range r.streams {
+			if c.pins == 0 && (oldest == nil || c.info.LastSeen.Before(oldest.info.LastSeen)) {
+				oldest = c
+			}
+		}
+		if oldest == nil {
+			return nil, false
+		}
+		delete(r.streams, oldest.info.Stream)
 	}
 	now := r.now()
-	s := &stream{info: StreamInfo{Stream: id, FirstSeen: now, LastSeen: now, Counts: map[string]int64{}}}
+	s = &stream{info: StreamInfo{Stream: id, FirstSeen: now, LastSeen: now, Counts: map[string]int64{}}}
 	r.streams[id] = s
-	if len(r.streams) > MaxStreams {
-		var cands []*stream
-		for _, c := range r.streams {
-			if c != s && c.pins == 0 {
-				cands = append(cands, c)
-			}
-		}
-		sort.Slice(cands, func(i, j int) bool { return cands[i].info.LastSeen.Before(cands[j].info.LastSeen) })
-		for _, c := range cands {
-			if len(r.streams) <= MaxStreams {
-				break
-			}
-			delete(r.streams, c.info.Stream)
-		}
-	}
-	return s
+	return s, true
 }
 
 // Evict drops ended streams EndedTTL after session.end and any stream
@@ -235,10 +265,18 @@ func (s *stream) push(e Event) {
 	s.head = (s.head + 1) % RingSize
 }
 
-// Subscribe registers fn for every known event applied from now on. fn
-// runs synchronously inside Apply and holds that stream's ordering, so it
-// must not block; a panic in it is recovered and logged. cancel stops
-// further deliveries and may be called more than once.
+// Subscribe registers fn for every known event applied from now on; each
+// call gets its own copy of the event's Data.
+//
+// fn runs synchronously inside Apply, while Apply holds that stream's
+// order mutex. fn must not block, and must not call Apply on the same
+// Registry, directly or indirectly (for example by handing the work to
+// another goroutine and waiting for it): the order mutex is not
+// re-entrant, so doing so deadlocks. Every subscriber is checked for this
+// when it is wired.
+//
+// A panic in fn is recovered and logged. cancel stops further deliveries
+// and may be called more than once.
 func (r *Registry) Subscribe(fn func(StreamInfo, Event)) (cancel func()) {
 	sub := &subscriber{fn: fn}
 	sub.live.Store(true)
@@ -271,7 +309,7 @@ func (r *Registry) deliver(out []delivery) {
 	for _, d := range out {
 		for _, sub := range subs {
 			if sub.live.Load() {
-				callSubscriber(sub.fn, d.info, d.ev)
+				callSubscriber(sub.fn, d.info, d.ev.clone())
 			}
 		}
 	}
@@ -303,8 +341,8 @@ func (r *Registry) Streams() []StreamInfo {
 	return out
 }
 
-// Events returns the stream's ring entries with seq > after, oldest first;
-// ok is false when the stream is unknown.
+// Events returns the stream's ring entries with seq > after, oldest first,
+// each with its own copy of Data; ok is false when the stream is unknown.
 func (r *Registry) Events(streamID string, after int64) (events []Event, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -315,7 +353,7 @@ func (r *Registry) Events(streamID string, after int64) (events []Event, ok bool
 	events = []Event{}
 	for i := range s.n {
 		if e := s.ring[(s.head+i)%RingSize]; e.Seq > after {
-			events = append(events, e)
+			events = append(events, e.clone())
 		}
 	}
 	return events, true

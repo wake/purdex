@@ -2,8 +2,10 @@ package modevents
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -79,19 +81,19 @@ func TestApply_DedupesRetriedEvents(t *testing.T) {
 	const s = "streamAAA"
 
 	b := mkBatch(s, 0, mkEvent(1, TypeTurnStart), mkEvent(2, TypeToolStart), mkEvent(3, TypeToolEnd))
-	if ack := reg.Apply(b); ack != 3 {
-		t.Fatalf("ack = %d, want 3", ack)
+	if ack, err := reg.Apply(b); err != nil || ack != 3 {
+		t.Fatalf("ack = %d, err = %v; want 3", ack, err)
 	}
-	if ack := reg.Apply(b); ack != 3 {
-		t.Fatalf("resent batch: ack = %d, want 3", ack)
+	if ack, err := reg.Apply(b); err != nil || ack != 3 {
+		t.Fatalf("resent batch: ack = %d, err = %v; want 3", ack, err)
 	}
 	want := []string{s + "#1", s + "#2", s + "#3"}
 	if got := rec.list(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("deliveries = %v, want %v (a resent batch is delivered once)", got, want)
 	}
 	// A batch overlapping the applied ones delivers only the new tail.
-	if ack := reg.Apply(mkBatch(s, 0, mkEvent(2, TypeToolStart), mkEvent(3, TypeToolEnd), mkEvent(4, TypeTurnComplete))); ack != 4 {
-		t.Fatalf("overlap: ack = %d, want 4", ack)
+	if ack, err := reg.Apply(mkBatch(s, 0, mkEvent(2, TypeToolStart), mkEvent(3, TypeToolEnd), mkEvent(4, TypeTurnComplete))); err != nil || ack != 4 {
+		t.Fatalf("overlap: ack = %d, err = %v; want 4", ack, err)
 	}
 	if got := rec.list(); !reflect.DeepEqual(got, append(want, s+"#4")) {
 		t.Fatalf("deliveries = %v", got)
@@ -148,8 +150,8 @@ func TestApply_CountsGaps(t *testing.T) {
 	reg.Subscribe(rec.fn)
 	const s = "streamAAA"
 	reg.Apply(mkBatch(s, 0, mkEvent(1, TypeTurnStart), mkEvent(2, TypeTurnComplete)))
-	if ack := reg.Apply(mkBatch(s, 0, mkEvent(5, TypeHeartbeat))); ack != 5 {
-		t.Fatalf("ack = %d, want 5 (a gap is applied)", ack)
+	if ack, err := reg.Apply(mkBatch(s, 0, mkEvent(5, TypeHeartbeat))); err != nil || ack != 5 {
+		t.Fatalf("ack = %d, err = %v; want 5 (a gap is applied)", ack, err)
 	}
 	reg.Apply(mkBatch(s, 0, mkEvent(6, TypeHeartbeat)))
 	reg.Apply(mkBatch(s, 0, mkEvent(9, TypeHeartbeat), mkEvent(10, TypeHeartbeat)))
@@ -175,9 +177,9 @@ func TestApply_UnknownTypeCountedNotDelivered(t *testing.T) {
 	rec := &recorder{}
 	reg.Subscribe(rec.fn)
 	const s = "streamAAA"
-	ack := reg.Apply(mkBatch(s, 0, mkEvent(1, TypeTurnStart), mkEvent(2, "turn.step"), mkEvent(3, TypeHeartbeat)))
-	if ack != 3 {
-		t.Fatalf("ack = %d, want 3 (an unknown type is applied)", ack)
+	ack, err := reg.Apply(mkBatch(s, 0, mkEvent(1, TypeTurnStart), mkEvent(2, "turn.step"), mkEvent(3, TypeHeartbeat)))
+	if err != nil || ack != 3 {
+		t.Fatalf("ack = %d, err = %v; want 3 (an unknown type is applied)", ack, err)
 	}
 	if got, want := rec.list(), []string{s + "#1", s + "#3"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("deliveries = %v, want %v", got, want)
@@ -300,8 +302,8 @@ func TestSubscribe_PanicIsContained(t *testing.T) {
 	rec := &recorder{}
 	cancel := reg.Subscribe(rec.fn)
 	const s = "streamAAA"
-	if ack := reg.Apply(mkBatch(s, 0, mkEvent(1, TypeTurnStart), mkEvent(2, TypeTurnComplete))); ack != 2 {
-		t.Fatalf("ack = %d, want 2", ack)
+	if ack, err := reg.Apply(mkBatch(s, 0, mkEvent(1, TypeTurnStart), mkEvent(2, TypeTurnComplete))); err != nil || ack != 2 {
+		t.Fatalf("ack = %d, err = %v; want 2", ack, err)
 	}
 	if got := rec.list(); len(got) != 2 {
 		t.Fatalf("deliveries = %v: a panicking subscriber must not stop the others", got)
@@ -451,5 +453,174 @@ func TestStreams_SortedByLastSeen(t *testing.T) {
 	}
 	if evs, _ := reg.Events("streamAAA", 1); len(evs) != 1 || evs[0].Seq != 2 {
 		t.Fatalf("Events after 1 = %+v", evs)
+	}
+}
+
+// Event data is copied on receipt, per subscriber and per read, so neither
+// the poster, a subscriber nor a reader can alter the stored history.
+func TestRegistry_EventDataIsOwned(t *testing.T) {
+	reg := NewRegistry(newFakeClock().Now)
+	const s = "streamAAA"
+	const orig = `{"turn_id":"t1"}`
+	scribble := func(b []byte) {
+		for i := range b {
+			b[i] = 'X'
+		}
+	}
+	// The first subscriber scribbles over what it receives; the second must
+	// still get the original bytes.
+	reg.Subscribe(func(_ StreamInfo, e Event) { scribble(e.Data) })
+	var second []string
+	reg.Subscribe(func(_ StreamInfo, e Event) { second = append(second, string(e.Data)) })
+
+	src := mkEvent(1, TypeTurnStart)
+	src.Data = json.RawMessage(orig)
+	b := mkBatch(s, 0, src)
+	if ack, err := reg.Apply(b); err != nil || ack != 1 {
+		t.Fatalf("ack = %d, err = %v; want 1", ack, err)
+	}
+	scribble(b.Events[0].Data) // the poster reuses its buffer
+	if want := []string{orig}; !reflect.DeepEqual(second, want) {
+		t.Fatalf("second subscriber got %q, want %q", second, want)
+	}
+	evs, _ := reg.Events(s, 0)
+	if len(evs) != 1 || string(evs[0].Data) != orig {
+		t.Fatalf("Events = %+v after the source and a subscriber were mutated, want data %s", evs, orig)
+	}
+	scribble(evs[0].Data) // a reader mutates its result
+	evs, _ = reg.Events(s, 0)
+	if len(evs) != 1 || string(evs[0].Data) != orig {
+		t.Fatalf("Events = %+v after a reader mutated its result, want data %s", evs, orig)
+	}
+}
+
+// pinAll fills reg with MaxStreams streams, "pinned0000" to "pinned0255",
+// whose deliveries block in a subscriber, so each is pinned by its own
+// Apply. Stream i is seen 1+i seconds after the clock's start, so
+// pinned0000 has the oldest last_seen. Deliveries of every other stream go
+// to rec. release unblocks the subscribers and waits for the pinned Applies
+// to return.
+func pinAll(t *testing.T, reg *Registry, clk *fakeClock) (rec *recorder, release func()) {
+	t.Helper()
+	entered := make(chan struct{})
+	unblock := make(chan struct{})
+	var unblockOnce sync.Once
+	t.Cleanup(func() { unblockOnce.Do(func() { close(unblock) }) })
+	rec = &recorder{}
+	reg.Subscribe(func(info StreamInfo, e Event) {
+		if strings.HasPrefix(info.Stream, "pinned") {
+			entered <- struct{}{}
+			<-unblock
+			return
+		}
+		rec.fn(info, e)
+	})
+	errs := make(chan error, MaxStreams)
+	for i := range MaxStreams {
+		clk.Advance(time.Second)
+		go func() {
+			_, err := reg.Apply(mkBatch(fmt.Sprintf("pinned%04d", i), 0, mkEvent(1, TypeHeartbeat)))
+			errs <- err
+		}()
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("pinned%04d did not reach its subscriber", i)
+		}
+	}
+	return rec, func() {
+		t.Helper()
+		unblockOnce.Do(func() { close(unblock) })
+		for range MaxStreams {
+			select {
+			case err := <-errs:
+				if err != nil {
+					t.Errorf("pinned Apply: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("a pinned Apply did not return after the release")
+			}
+		}
+	}
+}
+
+// MaxStreams is a hard limit: with every stream in the middle of Apply,
+// a batch for a new stream is refused, and nothing is added or delivered.
+func TestApply_HardCapWhenAllPinned(t *testing.T) {
+	clk := newFakeClock()
+	reg := NewRegistry(clk.Now)
+	rec, release := pinAll(t, reg, clk)
+
+	const extra = 10
+	errs := make([]error, extra)
+	var wg sync.WaitGroup
+	for i := range extra {
+		wg.Go(func() {
+			_, errs[i] = reg.Apply(mkBatch(fmt.Sprintf("extra%04d", i), 0, mkEvent(1, TypeTurnStart)))
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if !errors.Is(err, ErrRegistryFull) {
+			t.Errorf("extra%04d: err = %v, want ErrRegistryFull", i, err)
+		}
+	}
+	if n := len(reg.Streams()); n != MaxStreams {
+		t.Fatalf("%d streams with every stream pinned, want %d", n, MaxStreams)
+	}
+	if _, ok := reg.Events("extra0000", 0); ok {
+		t.Fatal("a refused stream must not be added")
+	}
+	if got := rec.list(); len(got) != 0 {
+		t.Fatalf("deliveries = %v: a refused batch must not be delivered", got)
+	}
+
+	release()
+	clk.Advance(time.Second)
+	if ack, err := reg.Apply(mkBatch("streamNEW", 0, mkEvent(1, TypeHeartbeat))); err != nil || ack != 1 {
+		t.Fatalf("after the release: ack = %d, err = %v; want 1, nil", ack, err)
+	}
+	has := func(id string) bool {
+		_, ok := reg.Events(id, 0)
+		return ok
+	}
+	if n := len(reg.Streams()); n != MaxStreams {
+		t.Fatalf("%d streams, want %d", n, MaxStreams)
+	}
+	if !has("streamNEW") || has("pinned0000") || !has("pinned0001") {
+		t.Fatal("the new stream must be admitted by evicting the oldest last_seen (pinned0000)")
+	}
+	if got, want := rec.list(), []string{"streamNEW#1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("deliveries = %v, want %v", got, want)
+	}
+}
+
+// Reject for a new stream is a no-op when the registry is full and no
+// stream can be evicted; a known stream still counts its rejection.
+func TestReject_NoOpWhenFull(t *testing.T) {
+	clk := newFakeClock()
+	reg := NewRegistry(clk.Now)
+	_, release := pinAll(t, reg, clk)
+
+	reg.Reject("streamNEW")
+	if n := len(reg.Streams()); n != MaxStreams {
+		t.Fatalf("%d streams after a Reject with every stream pinned, want %d", n, MaxStreams)
+	}
+	if _, ok := reg.Events("streamNEW", 0); ok {
+		t.Fatal("Reject must not add a stream when none can be evicted")
+	}
+	reg.Reject("pinned0005")
+	if info := streamInfo(t, reg, "pinned0005"); info.Rejected != 1 {
+		t.Fatalf("rejected = %d on a known stream, want 1", info.Rejected)
+	}
+
+	release()
+	clk.Advance(time.Second)
+	reg.Reject("streamNEW")
+	if info := streamInfo(t, reg, "streamNEW"); info.Rejected != 1 {
+		t.Fatalf("after the release: info = %+v, want rejected 1", info)
+	}
+	if _, ok := reg.Events("pinned0000", 0); ok || len(reg.Streams()) != MaxStreams {
+		t.Fatal("after the release Reject admits the stream by evicting the oldest last_seen")
 	}
 }
