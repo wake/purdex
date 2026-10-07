@@ -66,7 +66,7 @@ func TestProjector_HelloSplitsTheDeltasAroundIt(t *testing.T) {
 	e.p.markFrame("exc_a", "execution.running")
 	nextDelta(t, e.sub) // bseq 1, before the new subscriber exists
 
-	sub := e.events.AddTestSubscriber() // HandleHostEvents' Add
+	sub := e.events.AddTestSubscriberWith(core.FeatureNexV1) // HandleHostEvents' Add
 	t.Cleanup(func() { e.events.RemoveTestSubscriber(sub) })
 	e.p.markFrame("exc_a", "tool_use")
 	early := nextDelta(t, sub) // broadcast before the callback ran
@@ -105,7 +105,7 @@ func TestProjector_HelloSplitsAStreamOfDeltas(t *testing.T) {
 	}()
 	time.Sleep(20 * time.Millisecond)
 
-	sub := e.events.AddTestSubscriber()
+	sub := e.events.AddTestSubscriberWith(core.FeatureNexV1)
 	t.Cleanup(func() { e.events.RemoveTestSubscriber(sub) })
 	e.p.sendHello(sub)
 	var h *hello
@@ -135,9 +135,7 @@ func TestProjector_HelloSplitsAStreamOfDeltas(t *testing.T) {
 
 func TestProjector_HelloThatCannotBeQueuedRemovesTheSubscriber(t *testing.T) {
 	e := newProjEnv(t, fastTiming)
-	for i := 0; i < 64; i++ {
-		require.True(t, e.sub.TrySend([]byte(`{"type":"fill"}`)))
-	}
+	fill(t, e.sub)
 	e.p.sendHello(e.sub)
 	assert.True(t, isRemoved(e.sub), "a hello that could not be queued kept the subscriber")
 }
@@ -161,9 +159,11 @@ func TestProjector_StoppedProjectorSendsNoHello(t *testing.T) {
 	assert.False(t, isRemoved(e.sub), "a stopped projector closed a connection")
 }
 
-// Start registers the hello as an OnSubscribe callback: it is the first nex
-// frame on a new /ws/host-events connection, and after Stop none is sent.
-func TestModule_NewConnectionGetsTheHello(t *testing.T) {
+// startModuleWithEvents starts a module over a fake engine with a bus — so
+// its projector runs — and serves its core's /ws/host-events; dial connects
+// with a raw query string.
+func startModuleWithEvents(t *testing.T) (*Module, func(query string) *websocket.Conn) {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PATH", launchdPath)
 	cfg := baseConfig(t)
@@ -174,15 +174,23 @@ func TestModule_NewConnectionGetsTheHello(t *testing.T) {
 	m.logf = discardLogf
 	require.NoError(t, m.Init(newTestCore(&cfg)))
 	require.NoError(t, m.Start(context.Background()))
+	t.Cleanup(func() { _ = m.Stop(context.Background()) })
 	srv := httptest.NewServer(http.HandlerFunc(m.core.Events.HandleHostEvents))
-	defer srv.Close()
-	dial := func() *websocket.Conn {
-		conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	t.Cleanup(srv.Close)
+	return m, func(query string) *websocket.Conn {
+		conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+query, nil)
 		require.NoError(t, err)
 		return conn
 	}
+}
 
-	conn := dial()
+// Start registers the hello as an OnSubscribe callback: it is the first nex
+// frame on a new /ws/host-events?nex=v1 connection, and after Stop none is
+// sent.
+func TestModule_NewConnectionGetsTheHello(t *testing.T) {
+	m, dial := startModuleWithEvents(t)
+
+	conn := dial("?nex=v1")
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
 	_, msg, err := conn.ReadMessage()
 	require.NoError(t, err)
@@ -192,9 +200,37 @@ func TestModule_NewConnectionGetsTheHello(t *testing.T) {
 	conn.Close()
 
 	require.NoError(t, m.Stop(context.Background()))
-	conn = dial()
+	conn = dial("?nex=v1")
 	defer conn.Close()
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
 	_, msg, err = conn.ReadMessage()
 	assert.Error(t, err, "a stopped projector sent %s", msg)
+}
+
+// A connection that did not opt in — an old SPA, purdex-ios — gets no hello
+// and stays connected: the first frame it reads is the marker queued by an
+// OnSubscribe callback registered after the hello's, and a later broadcast
+// still reaches it.
+func TestModule_ConnectionWithoutNexGetsNoHello(t *testing.T) {
+	m, dial := startModuleWithEvents(t)
+	m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
+		sub.Send([]byte(`{"type":"marker","session":"","value":""}`))
+	})
+
+	for _, query := range []string{"", "?nex=v2"} {
+		conn := dial(query)
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+		_, msg, err := conn.ReadMessage()
+		require.NoError(t, err)
+		var ev core.HostEvent
+		require.NoError(t, json.Unmarshal(msg, &ev))
+		assert.Equal(t, "marker", ev.Type, "query %q: a frame came before the marker", query)
+
+		m.core.Events.Broadcast("s", "status", "running")
+		_, msg, err = conn.ReadMessage()
+		require.NoError(t, err, "query %q: the connection was closed", query)
+		require.NoError(t, json.Unmarshal(msg, &ev))
+		assert.Equal(t, "status", ev.Type)
+		conn.Close()
+	}
 }

@@ -113,8 +113,10 @@ func (p *projector) observe(f bus.Frame) {
 //
 // Only a running projector registers the hello (projector_hello.go) as an
 // OnSubscribe callback: without it no delta will ever come, and a client
-// that never gets a hello stays on its legacy path. The core has no way to
-// unregister a callback; after stop the hello is a no-op.
+// that never gets a hello stays on its legacy path. Only subscribers that
+// opted into nex.v1 get a hello or a delta; every other one never sees a
+// nex frame. The core has no way to unregister a callback; after stop the
+// hello is a no-op.
 func (m *Module) startProjector() {
 	if m.sys.bus == nil || m.core == nil || m.core.Events == nil {
 		return
