@@ -62,6 +62,10 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		// and check what each member actually runs.
 		"pdx spawn [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--brief-file <f> | --brief <text>]",
 		"--model sonnet", "--model opus", "not fixed", "pdx team",
+		// The CLI's own wait timeout is not the daemon's start timeout: check
+		// pdx team before spawning again (PR P4-7 critic ruling).
+		"`spawn_wait_timeout`", "do not spawn again",
+		"Exit 14 (`member_start_timeout`) means the daemon gave up",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md lacks %q", want)
