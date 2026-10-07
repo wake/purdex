@@ -67,20 +67,31 @@ func (m *helperManager) waitGone(r proxyRecord) (alive bool, id ipeers.ProcIdent
 // signalled.
 func (m *helperManager) Sweep() error {
 	m.mu.Lock()
-	if m.swept || m.sweeping {
+	if m.swept {
 		m.mu.Unlock()
 		return nil
 	}
-	m.sweeping = true // claim the scan before reading proxies.json
+	if done := m.sweepDone; done != nil {
+		// A scan is in flight: wait for it and share its result (a failure included), so a second caller can
+		// neither run it twice nor read an unfinished or failed scan as success.
+		m.mu.Unlock()
+		<-done
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.sweepErr
+	}
+	done := make(chan struct{})
+	m.sweepDone = done // claim the scan before reading proxies.json
+	m.sweepErr = nil
 	m.mu.Unlock()
 
-	swept := false
-	defer func() {
-		if !swept { // a failed Sweep stays retryable
-			m.mu.Lock()
-			m.sweeping = false
-			m.mu.Unlock()
-		}
+	var result error
+	defer func() { // a failed Sweep stays retryable: the claim is released either way
+		m.mu.Lock()
+		m.sweepErr = result
+		m.sweepDone = nil
+		m.mu.Unlock()
+		close(done)
 	}()
 
 	records := m.readProxies()
@@ -95,10 +106,10 @@ func (m *helperManager) Sweep() error {
 	defer m.mu.Unlock()
 	m.unresolved = unresolved
 	if err := m.writeProxiesLocked(); err != nil {
-		return fmt.Errorf("peers: write %s: %w", m.proxiesPath, err)
+		result = fmt.Errorf("peers: write %s: %w", m.proxiesPath, err)
+		return result
 	}
 	m.swept = true
-	swept = true
 	return nil
 }
 
@@ -244,6 +255,11 @@ func (m *helperManager) tryReapZombie(r proxyRecord) bool {
 	}
 	time.Sleep(m.zombieSettle)
 	if ppid2, ok := m.isOurZombie(r.PID); !ok || ppid2 != ppid {
+		return false
+	}
+	// Re-prove the identity right before wait4: during the settle the original process may have been collected
+	// and its pid recycled into another child that also shows as Z under the same parent.
+	if alive, id := m.identity(r); !alive || id != ipeers.ProcSame {
 		return false
 	}
 	if !m.reap(r.PID) {

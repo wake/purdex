@@ -209,7 +209,7 @@ func TestTryReapZombie_CmdWaitNotStolen(t *testing.T) {
 
 // Sweep claims the scan before reading proxies.json: a second concurrent
 // call returns at once and processes nothing.
-func TestSweep_ClaimBeforeScan(t *testing.T) {
+func TestSweep_ConcurrentCallWaitsForTheInFlightScan(t *testing.T) {
 	tm := newTestManager(t)
 	zombieSweepSetup(t, tm)
 	tm.os.onSignal = func(pid int, sig os.Signal) {
@@ -236,16 +236,21 @@ func TestSweep_ClaimBeforeScan(t *testing.T) {
 	go func() { second <- tm.m.Sweep() }()
 	select {
 	case err := <-second:
-		if err != nil {
-			t.Fatalf("second Sweep: %v", err)
-		}
-	case <-time.After(5 * time.Second):
 		close(release)
-		t.Fatalf("second Sweep did not return while the first was in progress")
+		t.Fatalf("second Sweep returned (%v) while the first scan was still running", err)
+	case <-time.After(200 * time.Millisecond):
 	}
 	close(release)
 	if err := <-first; err != nil {
 		t.Fatalf("first Sweep: %v", err)
+	}
+	select {
+	case err := <-second:
+		if err != nil {
+			t.Fatalf("second Sweep: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("second Sweep never finished")
 	}
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("record identity checked %d times, want once", n)
@@ -255,7 +260,47 @@ func TestSweep_ClaimBeforeScan(t *testing.T) {
 	}
 }
 
-// A failed Sweep releases the claim: it can be retried.
+// The waiter gets the in-flight scan's own result, a failure included (codex R2): it must not read as success.
+func TestSweep_ConcurrentCallGetsTheScansError(t *testing.T) {
+	tm := newTestManager(t)
+	zombieSweepSetup(t, tm)
+	tm.os.onSignal = func(pid int, sig os.Signal) {
+		if sig == syscall.SIGTERM {
+			tm.os.set(func() { tm.os.alive[pid] = false })
+		}
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	tm.m.procStart = func(pid int) (string, error) {
+		once.Do(func() { close(entered); <-release })
+		return tm.os.procStart(pid)
+	}
+
+	first := make(chan error, 1)
+	go func() { first <- tm.m.Sweep() }()
+	<-entered
+	second := make(chan error, 1)
+	go func() { second <- tm.m.Sweep() }()
+	time.Sleep(100 * time.Millisecond) // let the second reach its wait
+	tm.m.mu.Lock()
+	tm.m.proxiesPath = filepath.Join(tm.sockDir, "missing", "proxies.json") // the final write will fail
+	tm.m.mu.Unlock()
+	close(release)
+
+	if err := <-first; err == nil {
+		t.Fatalf("first Sweep: want the write error")
+	}
+	select {
+	case err := <-second:
+		if err == nil {
+			t.Fatalf("the waiter read a failed scan as success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the waiter never finished")
+	}
+}
+
 func TestSweep_FailureReleasesClaim(t *testing.T) {
 	tm := newTestManager(t)
 	good := tm.m.proxiesPath

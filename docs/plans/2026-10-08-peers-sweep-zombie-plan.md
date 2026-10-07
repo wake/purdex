@@ -31,10 +31,12 @@
 ### 安全性論證與剩餘窗口
 - **為什麼不盲目 wait4**：`ProcSame` 只證明 pid 與紀錄的啟動時間相符，不證明 daemon 自己沒有 `Cmd.Wait` 在等那個 pid（例如 stale 紀錄剛好指到 session module 的 tmux `wait-for` 等子行程）；`wait4` 搶走退出狀態會讓原 Wait 得到 `ECHILD`。所以前置條件改成「狀態確為 Z、ppid 是本 daemon、200 ms 後仍是 Z」。
 - **剩餘窗口**：一個子行程恰好在複查那一刻之前 ≥200 ms 內都處於 Z，且 daemon 內某個 `Cmd.Wait` 之後才要收它——正常的 `Cmd.Wait` goroutine 在子行程退出時就已在 `wait4` 阻塞，不會讓它停在 Z 這麼久；只有「已經沒有 waiter」才會如此，這正是我們要回收的對象。極端的 Wait goroutine 被長時間排程餓死（>200 ms）時理論上可能被搶，其後果是該 Wait 回 `ECHILD`（`os/exec` 視為一般錯誤、不會 panic），且該行程本來就已退出；可接受並在此明載。
+- **為什麼本 image 內不會有該 pid 的 `Cmd.Wait`（對「200 ms 不是所有權證明」的補強，codex R2）**：`Sweep` 只處理 `proxies.json` 的**前一個 image 寫下的紀錄**，而回收前提是該 pid 的行程啟動時間（秒級 `lstart`）與紀錄相符（`ProcSame`，且在 settle 後再驗一次）。本 image 內任何 `Cmd.Start` 出來的子行程都晚於本 image 啟動，其 pid 要等於紀錄的 pid 又同一秒啟動，必須在不到一秒內讓 pid 空間繞一圈，實務上不可能；所以對 `ProcSame` 的 pid，本 image 沒有 waiter。200 ms 複查是對「這個推論失靈」的第二道保險，不是唯一依據；排程餓死 Wait goroutine 而被搶的情形因此需要同時滿足一個本來就不成立的前提。
+- settle 之後、`wait4` 之前**再驗一次身分**（`identity` 仍為 `ProcSame`）：避免原行程被收走、pid 回收給另一個也呈 Z 的子行程（codex R2 A1）。
 - `reap` 失敗（任何 errno）一律當 false，等同現狀。
 
 ### 單次執行（review #3）
-- 「只跑一次」目前不是 `Sweep` 自身的 invariant：依賴 `runServe` 同步呼叫 `Start`、且在 HTTP listen 前完成。本 PR 加 **claim-before-scan**：進入 `Sweep` 時在鎖內檢查 `swept || sweeping`，否則設 `sweeping = true`；成功寫完才設 `swept = true`、任何錯誤路徑清掉 `sweeping`（維持現有「Sweep 失敗後可重試」行為，`TestModuleStart_SweepErrorReturned`）。並行第二個呼叫立即回 nil、不掃描，因此不會誤處理本 image 新建的 helper。
+- 「只跑一次」目前不是 `Sweep` 自身的 invariant：依賴 `runServe` 同步呼叫 `Start`、且在 HTTP listen 前完成。本 PR 加 **claim-before-scan，且並行呼叫等待並共用同一次掃描的結果**（codex R2 A3）：進入 `Sweep` 時在鎖內，已 `swept` ⇒ nil；已有進行中的掃描（`sweepDone` 非 nil）⇒ 等它結束並回傳**它的結果（失敗也一樣）**；否則自己 claim。掃描結束（成功或失敗）都釋放 claim（維持「Sweep 失敗後可重試」，`TestModuleStart_SweepErrorReturned`）。因此第二個呼叫既不會重跑掃描，也不會把未完成或失敗的掃描當成功。
 - plan 明記：正常路徑仍是 `Start` 同步呼叫一次；claim 只是把這個前提變成程式保證。
 
 ## 3. 任務（TDD：先紅）

@@ -200,7 +200,8 @@ type helperManager struct {
 	log     func(format string, args ...any)
 
 	swept      bool
-	sweeping   bool // a Sweep has claimed the scan and not finished yet
+	sweepDone  chan struct{} // non-nil while a Sweep has claimed the scan; closed when it finishes
+	sweepErr   error         // the result of the scan sweepDone belongs to, read after it closes
 	unresolved []unresolvedRecord
 }
 

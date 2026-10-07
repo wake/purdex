@@ -164,3 +164,26 @@ func TestSweepZombie_ConditionsNotMetNoReap(t *testing.T) {
 		})
 	}
 }
+
+// codex R2: the identity is re-proved after the settle, right before wait4 — the pid may have been recycled
+// into another child that also shows as Z under the same parent.
+func TestSweepZombie_IdentityChangedDuringSettleNoReap(t *testing.T) {
+	tm := newTestManager(t)
+	rec := zombieSweepSetup(t, tm)
+	tm.os.set(func() { tm.os.reapOK = true })
+	calls := 0
+	tm.m.procState = func(pid int) (string, int, error) {
+		calls++
+		if calls == 2 { // the settle has passed: a different process now owns the pid
+			tm.os.set(func() { tm.os.ps[pid] = "Thu Jan  1 00:00:00 2099" })
+		}
+		return "Z", testOwnPID, nil
+	}
+
+	tm.sweepOK(t)
+
+	if got := tm.os.reaped(); len(got) != 0 {
+		t.Fatalf("reap called on a recycled pid: %v", got)
+	}
+	t.Cleanup(func() { ccuds.RemoveRegistry(rec.Files) })
+}
