@@ -42,6 +42,9 @@ type Relay struct {
 	// when the connection ends, so a stuck query must honour it.
 	WindowSize         func(ctx context.Context) (cols, rows uint16, err error)
 	WindowPollInterval time.Duration // default: 1s
+	// WindowQueryTimeout bounds each single WindowSize call (default 2s) so one
+	// stuck tmux query cannot stall reporting for the rest of the connection.
+	WindowQueryTimeout time.Duration
 }
 
 // WindowMsg is sent to the client when the window's actual size is (re)reported.
@@ -108,11 +111,19 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	ctx, cancel := context.WithCancel(req.Context())
 	defer cancel()
 
+	// firstWindow is closed once the first window reading has been attempted
+	// (sent, failed or timed out). The PTY→WS writer waits for it so the
+	// client knows the window size before any terminal output arrives; it is
+	// bounded by WindowQueryTimeout, so output is never held back for long.
+	firstWindow := make(chan struct{})
 	if r.WindowSize != nil {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			r.pollWindowSize(ctx, func(m WindowMsg) error {
+			var once sync.Once
+			ready := func() { once.Do(func() { close(firstWindow) }) }
+			defer ready()
+			r.pollWindowSize(ctx, ready, func(m WindowMsg) error {
 				data, _ := json.Marshal(m)
 				writeMu.Lock()
 				err := conn.WriteMessage(websocket.TextMessage, data)
@@ -124,6 +135,8 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 			cancel()
 			<-done
 		}()
+	} else {
+		close(firstWindow)
 	}
 
 	// Periodic ping to keep connection alive through proxies/firewalls.
@@ -156,6 +169,11 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 			}
 		})
 		defer batcher.Stop()
+		select {
+		case <-firstWindow:
+		case <-ctx.Done():
+			return
+		}
 		buf := make([]byte, 4096)
 		for {
 			n, err := ptmx.Read(buf)
@@ -200,15 +218,22 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 // pollWindowSize reports the window size through send: always the first
 // successful reading, then only changes. A failed send closes ptmx so both
 // I/O goroutines wake up and the connection ends, like a failed batcher write.
-func (r *Relay) pollWindowSize(ctx context.Context, send func(WindowMsg) error, ptmx io.Closer) {
+// ready is called once the first reading has been attempted.
+func (r *Relay) pollWindowSize(ctx context.Context, ready func(), send func(WindowMsg) error, ptmx io.Closer) {
 	interval := r.WindowPollInterval
 	if interval <= 0 {
 		interval = time.Second
 	}
+	queryTimeout := r.WindowQueryTimeout
+	if queryTimeout <= 0 {
+		queryTimeout = 2 * time.Second
+	}
 	var last WindowMsg
 	have := false
 	tick := func() bool {
-		cols, rows, err := r.WindowSize(ctx)
+		qctx, qcancel := context.WithTimeout(ctx, queryTimeout)
+		cols, rows, err := r.WindowSize(qctx)
+		qcancel()
 		if err != nil || ctx.Err() != nil {
 			return true
 		}
@@ -223,7 +248,9 @@ func (r *Relay) pollWindowSize(ctx context.Context, send func(WindowMsg) error, 
 		last, have = m, true
 		return true
 	}
-	if !tick() {
+	ok := tick()
+	ready()
+	if !ok {
 		return
 	}
 	t := time.NewTicker(interval)

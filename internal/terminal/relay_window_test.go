@@ -114,6 +114,48 @@ func TestRelayWindow_QueryErrorSendsNothingKeepsConnection(t *testing.T) {
 	assert.Empty(t, f)
 }
 
+// The client must learn the window size before it sees any terminal output:
+// even with output ready immediately and a slow first query, the first frame
+// on the wire is the window text frame.
+func TestRelayWindow_FirstFrameIsWindowBeforePTYOutput(t *testing.T) {
+	relay := terminal.NewRelay("sh", []string{"-c", "printf hello; cat"}, "/tmp")
+	relay.WindowSize = func(ctx context.Context) (uint16, uint16, error) {
+		time.Sleep(200 * time.Millisecond)
+		return 100, 30, nil
+	}
+	ws, closeAll := dialRelay(t, relay)
+	defer closeAll()
+	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	typ, msg, err := ws.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, websocket.TextMessage, typ, "first frame must be the window frame, got %q", msg)
+	var f windowFrame
+	require.NoError(t, json.Unmarshal(msg, &f))
+	assert.Equal(t, windowFrame{"window", 100, 30}, f)
+}
+
+// One stuck query must not stall reporting: it is cut at its own deadline and
+// the next tick still reports.
+func TestRelayWindow_StuckQueryTimesOutAndRetries(t *testing.T) {
+	var calls atomic.Int32
+	relay := terminal.NewRelay("cat", nil, "/tmp")
+	relay.WindowPollInterval = 10 * time.Millisecond
+	relay.WindowQueryTimeout = 50 * time.Millisecond
+	relay.WindowSize = func(ctx context.Context) (uint16, uint16, error) {
+		if calls.Add(1) == 1 {
+			<-ctx.Done() // a hung tmux: only its own deadline frees it
+			return 0, 0, ctx.Err()
+		}
+		return 90, 25, nil
+	}
+	ws, closeAll := dialRelay(t, relay)
+	defer closeAll()
+	log := collect(ws)
+	require.Eventually(t, func() bool { f, _ := log.snapshot(); return len(f) == 1 }, 2*time.Second, 5*time.Millisecond)
+	f, _ := log.snapshot()
+	assert.Equal(t, windowFrame{"window", 90, 25}, f[0])
+}
+
 func TestRelayWindow_NotConfiguredSendsNoText(t *testing.T) {
 	relay := terminal.NewRelay("cat", nil, "/tmp")
 	ws, closeAll := dialRelay(t, relay)

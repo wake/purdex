@@ -728,9 +728,12 @@ func (r *RealExecutor) ResizeWindowAuto(target string) error {
 }
 
 func (r *RealExecutor) WindowSize(ctx context.Context, target string) (uint16, uint16, error) {
-	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", target,
+	out, err := boundedRead(ctx, "display-message", "-p", "-t", target,
 		"#{window_width} #{window_height}").Output()
 	if err != nil {
+		if cerr := readCtxErr(ctx, "display-message window size", err); cerr != nil {
+			return 0, 0, cerr
+		}
 		return 0, 0, fmt.Errorf("tmux display-message window size: %w", err)
 	}
 	return parseWindowSize(string(out))
