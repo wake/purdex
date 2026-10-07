@@ -19,6 +19,11 @@ var ErrLeadHasTeam = errors.New("the session already leads a live team")
 // ErrNoSuchMember is returned by SetMemberState for an unknown spawn op.
 var ErrNoSuchMember = errors.New("no such member")
 
+// ErrMemberCannotLead is returned by CloseLeadApproved when the origin is
+// an active member of a live team (spec §6.2 member_cannot_lead): both
+// writes rolled back, the row is still open.
+var ErrMemberCannotLead = errors.New("the session is an active member of a live team")
+
 // teamSchema is the P4 teams table (spec §7.1) and, from P4-3, the
 // team_members table (§7.2 step 6, §7.3). It is run by OpenStore after
 // relaySchema; every statement is idempotent, so it is safe on a team.db
@@ -184,6 +189,21 @@ func (s *Store) ActiveMemberInLiveTeam(sessionID string) (memberRow, team.Team, 
 	return m, t, true, nil
 }
 
+// isLiveMemberIn reports, on q (a transaction's read under its write lock),
+// whether sessionID is an active member of a live team.
+func isLiveMemberIn(q dbtx, sessionID string) (bool, error) {
+	var one int
+	err := q.QueryRow(`SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
+		WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0`, sessionID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("member check %s: %w", sessionID, err)
+	}
+	return true, nil
+}
+
 // MembersOf returns every member row of the team, in any state, oldest
 // first. Never nil.
 func (s *Store) MembersOf(teamID string) ([]memberRow, error) {
@@ -261,6 +281,13 @@ func (s *Store) CloseLeadApproved(id string, c Close, t team.Team) (team.Approva
 		return fail(err)
 	}
 	if n == 1 {
+		// No nested teams, re-checked under the write lock (P4-3 review H1):
+		// the origin may have become a member since its request was created.
+		if member, err := isLiveMemberIn(tx, t.LeadSessionID); err != nil {
+			return fail(err)
+		} else if member {
+			return fail(ErrMemberCannotLead)
+		}
 		if _, err := tx.Exec(`INSERT INTO teams (`+teamCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '')`,
 			t.ID, t.HostID, t.LeadSessionID, t.LeadRef, string(grantJSON), t.RequestID, t.CreatedAt); err != nil {
 			if strings.Contains(err.Error(), "teams.lead_session_id") { // the partial unique index teams_one_live_per_lead

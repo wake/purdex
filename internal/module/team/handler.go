@@ -427,6 +427,11 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrAlreadyLead, "this session already leads a live team; the request stays open", nil)
 		return
 	}
+	if errors.Is(err, ErrMemberCannotLead) { // as already_lead: rolled back, the row stays open
+		m.logf("[team] approval %s: approve by %s %q refused: origin %s is a member of a live team", id, client.Kind, client.Label, a.Origin.Ref)
+		m.writeErr(w, http.StatusConflict, team.ErrMemberCannotLead, "this session is a member of a live team; the request stays open", nil)
+		return
+	}
 	if err != nil {
 		m.logf("[team] decide %s: %v", id, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)

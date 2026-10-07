@@ -219,6 +219,26 @@ func TestCreate_MemberCannotLead(t *testing.T) {
 	}
 }
 
+// P4-3 review H1: the approve re-checks the member rule in its own
+// transaction. An origin that became an active member after it asked gets
+// 409 member_cannot_lead without an approval; the row stays open, no team.
+func TestDecide_MemberCannotLeadAtApprove(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.makeMember("sid-1")
+	f.events()
+	code, body := f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", appApprove(nil))
+	if e := decodeErr(t, body); code != http.StatusConflict || e.Error != team.ErrMemberCannotLead || e.Approval != nil {
+		t.Fatalf("approve of a new member: %d %s, want 409 %s", code, body, team.ErrMemberCannotLead)
+	}
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
+		t.Fatalf("row = %s, want open", a.State)
+	}
+	if _, ok := getTeam(t, f.m.store, uid(1)); ok || len(f.events()) != 0 {
+		t.Fatalf("team made=%v or an event was sent", ok)
+	}
+}
+
 // Plan v3 deviation 12: a role that cannot be read is a 500 on hello, self
 // and begin, never "none" (fail closed, spec §8.7 (d)). Both switches are
 // off, so the role read is the only store read on hello, status and begin:
