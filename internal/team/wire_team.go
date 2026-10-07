@@ -1,6 +1,9 @@
 package team
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"regexp"
+)
 
 // ---- P4: teams, members, spawn, kill (spec §7.1–§7.3, U20) ----
 
@@ -74,6 +77,31 @@ const (
 	// spawn goes on and the exit code is unchanged (U20 (c)).
 	ReminderNoModel = "提醒：沒有指定 --model，member 會用這台主機當下的預設模型。"
 )
+
+// Efforts are the levels Claude Code's --effort takes (M25), lowest first,
+// for usage text. ValidEffort does not read this slice, so a caller that
+// changes it cannot widen what the daemon appends to a launch line.
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
+
+// modelRE is U20 (a)'s rule: an alias or a full model name, optionally
+// with the 1M-context suffix. Go's $ is end of text, so no trailing newline
+// passes.
+var modelRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(\[1m\])?$`)
+
+// ValidModel reports whether s may be passed as `--model` (U20 (a)). The CLI
+// checks it first (exit 2) and the daemon again (400 bad_request) before the
+// launch line single-quotes it ("[1m]" would glob unquoted). "" is invalid:
+// a request without a model leaves the field out.
+func ValidModel(s string) bool { return modelRE.MatchString(s) }
+
+// ValidEffort reports whether s is one of Efforts, exact case (M25).
+func ValidEffort(s string) bool {
+	switch s {
+	case "low", "medium", "high", "xhigh", "max":
+		return true
+	}
+	return false
+}
 
 // Team is one lead's team (spec §7.1), created in the transaction that
 // approves the lead request. Its id is that request's id (plan v3

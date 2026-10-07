@@ -3,6 +3,8 @@ package team
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -153,5 +155,49 @@ func TestWireTeam_UsedPercentageNilVsZero(t *testing.T) {
 	var zero MemberContext
 	if err := json.Unmarshal([]byte(`{"used_percentage":0,"window":1,"at":1}`), &zero); err != nil || zero.UsedPercentage == nil || *zero.UsedPercentage != 0 {
 		t.Fatalf("zero: %v err=%v", zero.UsedPercentage, err)
+	}
+}
+
+// U20 (a): --model is single-quoted in the literal send, and it must also
+// be a plain name, so nothing in it can reach the shell or read as a flag.
+func TestValidModel_Table(t *testing.T) {
+	name64 := "a" + strings.Repeat("b", 63)
+	for _, s := range []string{
+		"opus", "sonnet", "fable", "haiku", "claude-opus-5-5", "claude-sonnet-4-5-20250929",
+		"opus[1m]", "claude-opus-5-5[1m]", "a", "A9", "x.y_z-1", "9x",
+		name64, name64 + "[1m]",
+	} {
+		if !ValidModel(s) {
+			t.Errorf("ValidModel(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{
+		"", "a b", " opus", "opus ", "opus\t", "opus\n", "\nopus",
+		"'x'", `"x"`, "x'y", "x;y", "$(x)", "x$(y)", "`x`", "x|y", "x&y", "x>y", "x*", "x?", `x\y`, "x/y", "x:y",
+		"-x", "--model", ".x", "_x", "opüs",
+		name64 + "c", // 65 characters
+		"opus[2m]", "opus[1M]", "opus[1m][1m]", "[1m]", "opus[1m]x", "opus[]", "opus[1m",
+	} {
+		if ValidModel(s) {
+			t.Errorf("ValidModel(%q) = true, want false", s)
+		}
+	}
+}
+
+// M25: Claude Code's five effort levels, exact case.
+func TestValidEffort_Table(t *testing.T) {
+	want := []string{"low", "medium", "high", "xhigh", "max"}
+	if !slices.Equal(Efforts, want) {
+		t.Fatalf("Efforts = %q, want %q", Efforts, want)
+	}
+	for _, s := range want {
+		if !ValidEffort(s) {
+			t.Errorf("ValidEffort(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "High", "LOW", "Max", "ultra", "minimal", "none", "x-high", "xHigh", " low", "low ", "max\n", "'low'"} {
+		if ValidEffort(s) {
+			t.Errorf("ValidEffort(%q) = true, want false", s)
+		}
 	}
 }
