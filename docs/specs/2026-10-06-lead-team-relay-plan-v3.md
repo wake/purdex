@@ -2065,7 +2065,7 @@ The questions this plan raised, kept for the record, with the ruling each receiv
 - **`ApprovalDialogHost`:**
   - It renders `<OpenApprovalDialog … minimized={minimized} />`, plus `<ApprovalPill />` when minimized.
   - The overlay (`:157-166`) gets `hidden={minimized}`.
-  - The Escape swallow (`:80-88`) and the Tab trap (`:91-110`) are not registered while minimized: both effects depend on `minimized`.
+  - The Escape swallow (`:80-88`), the Tab trap (`:91-110`) and **the focus guard** (P9b-1b: a document `focusin` listener that pulls focus back into the panel, added after P9b-1's review) are not registered while minimized: all three effects depend on `minimized`. Test: `minimized: a focus moved to a terminal stays there` (mutation: the guard ignores `minimized` → red).
   - The focus effect (`:74`) records `document.activeElement` before it focuses the panel. On minimize, it gives focus back to that element if it `isConnected`, else blurs. On restore, it focuses the panel again.
   - The header (`:173-176`) gets a `type="button"` with `data-testid="approval-minimize"`, the Phosphor `ArrowsInSimple` icon and `t('approval.dialog.minimize')`. It is never disabled: minimizing during a send is harmless.
 - **`ApprovalPill`:**
@@ -2290,6 +2290,7 @@ The fixed parts are `write.head = fix.head = "[pdx-relay op={{op}} n={{nonce}}] 
 **Risks.**
 - `cmd/pdx/relay.go` gains about 25 lines before P6-0 splits it. P6-0 moves `runRelayPrompts` with the other subcommands, as noted there.
 - `GET /api/hostconfig` now carries up to 48 KiB of bodies on every SPA load. That is acceptable.
+- **Rollback (review A-2, accepted for alpha; shipped in #1890/#1891).** A daemon from before P9a-1 refuses `prompt_*` as unknown keys, and its `RelaySwitches()` decodes the whole row, so after any custom body is stored a rolled-back daemon answers self-relay `begin` with 503. **Before rolling back below P9a-1, press 還原預設 on all three bodies** (or PUT them as `""`): `omitempty` then leaves no `prompt_*` on the row. The CHANGELOG entry of the bump says so.
 
 ## PR P9a-2 — the mod reads the bodies at use; fixed head and tail; built-in fallback
 
