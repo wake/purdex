@@ -14,6 +14,7 @@ import { usePeerInfo, type PeerInfo } from '../hooks/usePeerInfo'
 import type { PeerRow } from '../stores/usePeerStore'
 import { reasonText } from '../lib/peer-display'
 import { CopySegment, HostSegment, Separator, StatusBarLayout } from './status/StatusSegments'
+import { CcUsageSegments } from './status/UsageSegments'
 import { WorkerStatusBar } from './status/WorkerStatusBar'
 import { PaneModeButtons } from './status/PaneModeButtons'
 import { useCopyFeedback } from './status/useCopyFeedback'
@@ -347,6 +348,8 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
               ? t('hosts.error_tmux_down')
               : status}
         </span>
+        {/* Context window and 5h / weekly limits from the agent's latest statusLine snapshot. */}
+        <CcUsageSegments hostId={agentHostId} sessionCode={agentSessionCode} />
       </>}
       controls={<>
         {/* The model badge. It sits in the `shrink-0` controls group, so

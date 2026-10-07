@@ -10,6 +10,7 @@ import { workerTabTitle } from '../../lib/nex/worker-tab-title'
 import type { ExecutionContent } from '../../types/tab'
 import { CopySegment, HostSegment, Separator, StatusBarLayout } from './StatusSegments'
 import { PaneModeButtons } from './PaneModeButtons'
+import { HostQuotaSegments } from './UsageSegments'
 import { useCopyFeedback } from './useCopyFeedback'
 
 export function WorkerStatusBar({ tabId, pane, onNavigateToHost }: {
@@ -78,6 +79,8 @@ export function WorkerStatusBar({ tabId, pane, onNavigateToHost }: {
               />
             </>
           )}
+          {/* The host's 5h / weekly quota. Per-worker context % waits on Nexen exposing it. */}
+          <HostQuotaSegments hostId={hostId} />
         </>
       )}
       controls={<PaneModeButtons tabId={tabId} pane={pane} />}
