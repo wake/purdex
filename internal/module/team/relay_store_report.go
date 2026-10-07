@@ -58,6 +58,24 @@ func checkLineage(tx *sql.Tx, cur team.RelayOp, r RelayReport) error {
 	return nil
 }
 
+// moveTeamRoles is the team half of a cleared (spec §8.4), run in its
+// lineage transaction after the lineage insert: the live team the old
+// session leads now follows the new session and ref, and so does the old
+// session's active member row. An ended team stays as it ended (D4). A
+// move that fails (the new session already leads a live team or is an
+// active member: a unique index) fails the whole cleared.
+func moveTeamRoles(tx *sql.Tx, oldSessionID string, r RelayReport) error {
+	if _, err := tx.Exec(`UPDATE teams SET lead_session_id = ?, lead_ref = ?
+		WHERE lead_session_id = ? AND ended_at = 0`, r.NewSessionID, r.NewRef, oldSessionID); err != nil {
+		return fmt.Errorf("move lead: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE team_members SET session_id = ?, ref = ?, updated_at = ?
+		WHERE session_id = ? AND state = 'active'`, r.NewSessionID, r.NewRef, r.At, oldSessionID); err != nil {
+		return fmt.Errorf("move member: %w", err)
+	}
+	return nil
+}
+
 // RelayReport is one transition: the target state, the new session id and
 // ref (cleared only), the reason (failed / cancelled) and the time.
 type RelayReport struct {
@@ -82,7 +100,9 @@ const (
 // relayTransitions does not allow is ReportBadTransition; otherwise the row
 // is updated with a CAS on its state. For cleared, the lineage row is
 // written in the same transaction (spec §8.4): session_lineage{new →
-// old, old ref, op}. The row after the attempt is returned in every case;
+// old, old ref, op}, and the old session's live team and active member row
+// move to the new session (moveTeamRoles); if any of it fails, nothing
+// commits. The row after the attempt is returned in every case;
 // ErrNoSuchRelayOp for an unknown id.
 func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResult, error) {
 	tx, err := s.db.Begin()
@@ -133,6 +153,9 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 		if _, err := tx.Exec(`INSERT INTO session_lineage (session_id, predecessor_session_id, predecessor_ref, op_id, at)
 			VALUES (?, ?, ?, ?, ?)`, r.NewSessionID, cur.SessionID, cur.Ref, id, r.At); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: lineage: %w", id, err)
+		}
+		if err := moveTeamRoles(tx, cur.SessionID, r); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: %w", id, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

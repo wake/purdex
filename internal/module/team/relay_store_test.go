@@ -262,6 +262,151 @@ func TestRelayStore_OneOpenOpPerSessionIsEnforcedByTheTable(t *testing.T) {
 	}
 }
 
+// claimedOp stores a claimed self op of sid: a relay right before its
+// cleared report.
+func claimedOp(t *testing.T, s *Store, id, sid, ref string) {
+	t.Helper()
+	op := selfOp(id, sid, ref, 1000)
+	op.State = team.RelayClaimed
+	if err := s.CreateRelayOp(op); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// memberBySpawn reads one member row (tests only).
+func memberBySpawn(t *testing.T, s *Store, spawnOp string) memberRow {
+	t.Helper()
+	var m memberRow
+	if err := s.db.QueryRow(`SELECT `+memberCols+` FROM team_members WHERE spawn_op = ?`, spawnOp).Scan(m.dest()...); err != nil {
+		t.Fatalf("member %s: %v", spawnOp, err)
+	}
+	return m
+}
+
+// Spec §8.4: a cleared report moves the team's lead_session_id and lead_ref,
+// and the active member row's session id and ref, in the lineage
+// transaction. Other teams and members are untouched. A move that fails
+// (the new session already leads a live team, or is already an active
+// member) rolls back the whole cleared: op, lineage, every move. Mutation
+// gate: the UPDATEs after the commit → the failed move leaves the op
+// cleared and the lineage written → red.
+func TestRelayStore_ClearedMovesLeadAndMemberInTheSameTx(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, "team-1", "L1", 1000)
+	m1 := seedMember(t, s, "sp-1", "team-1", "M1", 1000)
+	seedTeam(t, s, "team-9", "L9", 1000)
+	m9 := seedMember(t, s, "sp-9", "team-9", "M9", 1000)
+	t9, _ := getTeam(t, s, "team-9")
+
+	claimedOp(t, s, "op-l", "L1", "_abc123")
+	mustReport(t, s, "op-l", RelayReport{State: team.RelayCleared, NewSessionID: "L2", NewRef: "_lll222", At: 5000})
+	got, ok, err := s.LiveTeamByLead("L2")
+	if err != nil || !ok || got.ID != "team-1" || got.LeadRef != "_lll222" || got.EndedAt != 0 {
+		t.Fatalf("team of the new lead = %+v ok=%v err=%v", got, ok, err)
+	}
+	if _, ok, _ := s.LiveTeamByLead("L1"); ok {
+		t.Fatal("the old lead session still leads")
+	}
+
+	claimedOp(t, s, "op-m", "M1", m1.Ref)
+	mustReport(t, s, "op-m", RelayReport{State: team.RelayCleared, NewSessionID: "M2", NewRef: "_mmm222", At: 6000})
+	want := m1
+	want.SessionID, want.Ref, want.UpdatedAt = "M2", "_mmm222", 6000
+	if got := memberBySpawn(t, s, "sp-1"); got != want {
+		t.Fatalf("moved member = %+v, want %+v", got, want)
+	}
+	if _, tm, ok, _ := s.ActiveMemberInLiveTeam("M2"); !ok || tm.ID != "team-1" || tm.LeadSessionID != "L2" {
+		t.Fatalf("M2: ok=%v team=%+v, want a member of team-1 under L2", ok, tm)
+	}
+	if _, _, ok, _ := s.ActiveMemberInLiveTeam("M1"); ok {
+		t.Fatal("the old member session is still a member")
+	}
+	if got, _ := getTeam(t, s, "team-9"); !reflect.DeepEqual(got, t9) || memberBySpawn(t, s, "sp-9") != m9 {
+		t.Fatal("a cleared moved another team or member")
+	}
+
+	// A failed move commits nothing: L2 → L9 (L9 leads team-9), M2 → M9 (M9
+	// is team-9's active member).
+	for _, tc := range []struct{ op, sid, ref, into string }{
+		{"op-x", "L2", "_lll222", "L9"},
+		{"op-y", "M2", "_mmm222", "M9"},
+	} {
+		claimedOp(t, s, tc.op, tc.sid, tc.ref)
+		if _, _, err := s.ReportRelay(tc.op, RelayReport{State: team.RelayCleared, NewSessionID: tc.into, NewRef: "_xxx999", At: 7000}); err == nil {
+			t.Fatalf("%s → %s: a move into a taken session succeeded", tc.sid, tc.into)
+		}
+		if op, _, _ := s.GetRelayOp(tc.op); op.State != team.RelayClaimed || op.NewSessionID != "" {
+			t.Fatalf("%s after a failed move = %+v, want still claimed", tc.op, op)
+		}
+		if refs, _ := s.PreviousRefs(); refs[tc.into] != nil {
+			t.Fatalf("%s heads a lineage after a failed move: %v", tc.into, refs[tc.into])
+		}
+	}
+	if got, ok, _ := s.LiveTeamByLead("L2"); !ok || got.ID != "team-1" || got.LeadRef != "_lll222" {
+		t.Fatalf("team-1 after the failed moves = %+v ok=%v", got, ok)
+	}
+	if got := memberBySpawn(t, s, "sp-1"); got != want {
+		t.Fatalf("sp-1 after the failed moves = %+v", got)
+	}
+}
+
+// Spec §8.4: "if checkLineage or the insert fails, nothing moves". A cleared
+// the lineage refuses (new == old, a new session that already heads a
+// lineage, a cycle) leaves the team and the member row as they were.
+// Mutation gate: the moves run before (outside) the lineage transaction →
+// red.
+func TestRelayStore_ClearedThatFailsLineageMovesNothing(t *testing.T) {
+	s := openTestStore(t)
+	claimedOp(t, s, "op-z", "Z", "_zzzzzz")
+	mustReport(t, s, "op-z", RelayReport{State: team.RelayCleared, NewSessionID: "C", NewRef: "_cccccc", At: 2000}) // C ← Z
+	seedTeam(t, s, "team-1", "C", 3000)
+	seedMember(t, s, "sp-1", "team-1", "M", 3000)
+	tBefore, _ := getTeam(t, s, "team-1")
+	mBefore := memberBySpawn(t, s, "sp-1")
+
+	claimedOp(t, s, "op-c", "C", "_cccccc")
+	claimedOp(t, s, "op-m", "M", mBefore.Ref)
+	for _, tc := range []struct {
+		op, into, why string
+	}{
+		{"op-c", "C", "lead: new == old"},
+		{"op-c", "Z", "lead: cycle (Z is C's ancestor)"},
+		{"op-m", "M", "member: new == old"},
+		{"op-m", "C", "member: C already heads a lineage"},
+	} {
+		if _, _, err := s.ReportRelay(tc.op, RelayReport{State: team.RelayCleared, NewSessionID: tc.into, NewRef: "_nnnnnn", At: 4000}); !errors.Is(err, ErrBadRelayReport) {
+			t.Fatalf("%s: err=%v, want ErrBadRelayReport", tc.why, err)
+		}
+		if got, _ := getTeam(t, s, "team-1"); !reflect.DeepEqual(got, tBefore) {
+			t.Fatalf("%s: the team moved: %+v → %+v", tc.why, tBefore, got)
+		}
+		if got := memberBySpawn(t, s, "sp-1"); got != mBefore {
+			t.Fatalf("%s: the member moved: %+v → %+v", tc.why, mBefore, got)
+		}
+	}
+}
+
+// D4 / spec §7.1: an ended team stays as it ended. A relay of a session that
+// once led an ended team (and leads a live one now) moves only the live
+// team. Mutation gate: drop ended_at = 0 from the move → red.
+func TestRelayStore_ClearedDoesNotReviveAnEndedTeam(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, "team-old", "L1", 1000)
+	if ended, err := s.EndTeam("team-old", "L1", team.TeamEndLeadGone, 2000); err != nil || !ended {
+		t.Fatalf("end: ended=%v err=%v", ended, err)
+	}
+	old, _ := getTeam(t, s, "team-old")
+	seedTeam(t, s, "team-new", "L1", 3000)
+	claimedOp(t, s, "op-1", "L1", "_abc123")
+	mustReport(t, s, "op-1", RelayReport{State: team.RelayCleared, NewSessionID: "L2", NewRef: "_lll222", At: 4000})
+	if got, _ := getTeam(t, s, "team-old"); !reflect.DeepEqual(got, old) {
+		t.Fatalf("the ended team changed: %+v → %+v", old, got)
+	}
+	if got, ok, _ := s.LiveTeamByLead("L2"); !ok || got.ID != "team-new" {
+		t.Fatalf("live team of L2 = %+v ok=%v, want team-new", got, ok)
+	}
+}
+
 // A `cleared` report that would corrupt the lineage is refused inside the
 // transaction and leaves the op and the lineage exactly as they were: empty
 // new session or ref, new == old, two ops clearing into one new session,

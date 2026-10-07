@@ -133,6 +133,55 @@ func TestTick_KeepsTheTeamWhileItsLeadIsRelaying(t *testing.T) {
 	}
 }
 
+// A lead's own relay keeps its team (spec §7.1, §8.4; P4-3 with P4-2b's
+// LeadPresence). After the relay's /clear the old session id leaves the
+// registry; the cleared report moves lead_session_id to the new one, so
+// the sweeper asks LeadPresence about the NEW session with the same process
+// (the lead request's pid and start time — /clear keeps the process), which
+// the registry lists: the team stays, through cleared and after done.
+// Without the move the sweeper would ask about the old session, gone, and
+// — the op past written — end the team.
+func TestTick_ALeadRelayKeepsItsTeam(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	if code, body := f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", appApprove(nil)); code != 200 {
+		t.Fatalf("approve lead: %d %s", code, body)
+	}
+	out := f.begin("sid-1") // the lead self-relays (relay.self_lead on)
+	if code, body := f.decide(out.RequestID, "approve"); code != 200 {
+		t.Fatalf("approve relay: %d %s", code, body)
+	}
+	report := func(req team.RelayReportRequest) {
+		t.Helper()
+		if code, body := f.do(http.MethodPost, "/api/relay/ops/"+out.Op.ID+"/report", req); code != 200 {
+			t.Fatalf("report %s: %d %s", req.State, code, body)
+		}
+	}
+	report(team.RelayReportRequest{State: team.RelayWriting})
+	report(team.RelayReportRequest{State: team.RelayWritten})
+	f.origins.markDead("sid-1") // /clear: the old session id leaves the registry
+	report(team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-1b"})
+
+	livenessTick(f)
+	got, ok, err := f.m.store.LiveTeamByLead("sid-1b")
+	if err != nil || !ok || got.ID != uid(1) || got.LeadRef != f.op(out.Op.ID).NewRef {
+		t.Fatalf("team after the lead's cleared = %+v ok=%v err=%v, want %s led by sid-1b", got, ok, err, uid(1))
+	}
+	f.origins.mu.Lock()
+	asked := f.origins.leadAsked["sid-1b"]
+	f.origins.mu.Unlock()
+	if asked != "10 Sun Sep 13 15:22:36 2026" {
+		t.Fatalf("LeadPresence asked about sid-1b with %q, want the lead request's process", asked)
+	}
+
+	report(team.RelayReportRequest{State: team.RelayDone})
+	f.clock.Add(1)
+	livenessTick(f)
+	if got, _ := getTeam(t, f.m.store, uid(1)); got.EndedAt != 0 || got.LeadSessionID != "sid-1b" {
+		t.Fatalf("team after done = %+v, want live under sid-1b", got)
+	}
+}
+
 // The relay guard and the end are one statement (P4-2 review): a relay
 // claimed after the sweeper decided the lead is gone — here in that window,
 // through the beforeEndTeam seam — still keeps the team. Once the op ends,
