@@ -1,11 +1,20 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from './store'
 import { useTabStore } from '../../stores/useTabStore'
+import { useHistoryStore } from '../../stores/useHistoryStore'
+import { useUndoToast } from '../../stores/useUndoToast'
 import { useTabWorkspaceActions } from './hooks'
 import { getVisibleTabIds } from './lib/getVisibleTabIds'
+import { closeTab } from '../../lib/tab-lifecycle'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
+
+// The real closeTab, observed: the tear-off cases below assert whether the handler reached it.
+vi.mock('../../lib/tab-lifecycle', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/tab-lifecycle')>()
+  return { ...actual, closeTab: vi.fn(actual.closeTab) }
+})
 
 describe('workspace tab recall', () => {
   beforeEach(() => {
@@ -354,5 +363,102 @@ describe('closeOthers / closeRight while activeWorkspaceId is null', () => {
     const { a1, b1, b2 } = world()
     act_('closeRight', a1.id)
     expect(Object.keys(useTabStore.getState().tabs).sort()).toEqual([a1.id, b1.id, b2.id].sort())
+  })
+})
+
+// #1816 — the Mac App loads the SPA from the dev server, so its Electron preload can be older than this code:
+// `window.electronAPI` is there but `tearOffTab` is not. The handler closed the tab and then called the missing
+// IPC, so the tab was lost and the menu action threw. The IPC is now checked before anything is touched: nothing
+// changes, and a toast says why. With the IPC there, tear-off is what it always was.
+describe('tearOff and a preload without tearOffTab (#1816)', () => {
+  const UNSUPPORTED = "This version of the Purdex App can't move a tab to a new window yet. Update the App."
+
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    useHistoryStore.setState({ browseHistory: [], closedTabs: [] })
+    useUndoToast.setState({ toast: null, notice: null })
+    vi.mocked(closeTab).mockClear()
+  })
+
+  afterEach(() => {
+    delete window.electronAPI
+  })
+
+  function setApi(api: Record<string, unknown>) {
+    window.electronAPI = api as unknown as Window['electronAPI']
+  }
+
+  /** An active browser tab (a close would destroy its BrowserView) in the active workspace. */
+  function world() {
+    const tab = createTab({ kind: 'browser', url: 'https://example.com' })
+    useTabStore.getState().addTab(tab)
+    useTabStore.getState().setActiveTab(tab.id)
+    const ws = useWorkspaceStore.getState().addWorkspace('A')
+    useWorkspaceStore.getState().addTabToWorkspace(ws.id, tab.id)
+    useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+    return { tab, wsId: ws.id }
+  }
+
+  function snapshot() {
+    const { tabs, tabOrder, activeTabId } = useTabStore.getState()
+    const { workspaces, activeWorkspaceId } = useWorkspaceStore.getState()
+    return { tabs, tabOrder, activeTabId, workspaces, activeWorkspaceId, closedTabs: useHistoryStore.getState().closedTabs }
+  }
+
+  function tearOff(tabId: string) {
+    const { result } = renderHook(() => useTabWorkspaceActions(Object.values(useTabStore.getState().tabs)))
+    act(() => { result.current.handleContextMenu({ preventDefault() {}, clientX: 0, clientY: 0 } as unknown as React.MouseEvent, tabId) })
+    act(() => { result.current.handleContextAction('tearOff') })
+  }
+
+  it('an electronAPI without tearOffTab: no close, no BrowserView destroyed, no store change, no throw — a toast says why', () => {
+    const destroyBrowserView = vi.fn()
+    setApi({ destroyBrowserView })
+    const { tab, wsId } = world()
+    const before = snapshot()
+
+    expect(() => tearOff(tab.id)).not.toThrow()
+
+    expect(vi.mocked(closeTab)).not.toHaveBeenCalled()
+    expect(destroyBrowserView).not.toHaveBeenCalled()
+    expect(snapshot()).toEqual(before)
+    expect(useTabStore.getState().tabs[tab.id]).toBeDefined()
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)?.tabs).toContain(tab.id)
+    expect(useUndoToast.getState().toast?.message).toBe(UNSUPPORTED)
+  })
+
+  it('no electronAPI at all: the same — nothing changes, and the toast says why', () => {
+    const { tab, wsId } = world()
+    const before = snapshot()
+
+    expect(() => tearOff(tab.id)).not.toThrow()
+
+    expect(vi.mocked(closeTab)).not.toHaveBeenCalled()
+    expect(snapshot()).toEqual(before)
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)?.tabs).toContain(tab.id)
+    expect(useUndoToast.getState().toast?.message).toBe(UNSUPPORTED)
+  })
+
+  it('an electronAPI with tearOffTab: unchanged — the tab leaves this window first, then is sent once; no toast', () => {
+    let goneWhenSent: boolean | undefined
+    const tearOffTab = vi.fn((json: string) => {
+      goneWhenSent = useTabStore.getState().tabs[(JSON.parse(json) as Tab).id] === undefined
+      return Promise.resolve()
+    })
+    const destroyBrowserView = vi.fn()
+    setApi({ tearOffTab, destroyBrowserView })
+    const { tab, wsId } = world()
+
+    tearOff(tab.id)
+
+    expect(vi.mocked(closeTab)).toHaveBeenCalledTimes(1)
+    expect(tearOffTab).toHaveBeenCalledTimes(1)
+    expect((JSON.parse(tearOffTab.mock.calls[0][0]) as Tab).id).toBe(tab.id)
+    expect(goneWhenSent).toBe(true)
+    expect(destroyBrowserView).toHaveBeenCalledTimes(1)
+    expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)?.tabs).not.toContain(tab.id)
+    expect(useUndoToast.getState().toast).toBeNull()
   })
 })

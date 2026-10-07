@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { RenamePopover } from './RenamePopover'
+import { TITLE_BAR_HEIGHT } from './FloatingPanel'
 import { emptyPeerHostEntry, usePeerStore, type PeerHostEntry, type PeerRow } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useSessionStore } from '../stores/useSessionStore'
@@ -172,15 +173,19 @@ describe('RenamePopover', () => {
       expect(el.style.top).toBe('126px')
     })
 
-    it('clamps to PADDING when both above and below overflow', () => {
+    it('clamps to the title bar\'s bottom edge when both above and below overflow (#1801)', () => {
       Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 40 })
       Object.defineProperty(window, 'innerHeight', { configurable: true, value: 50 })
       const anchor = { left: 100, top: 10, width: 120, height: 20, bottom: 30, right: 220 } as DOMRect
       const { container } = render(<RenamePopover {...defaultProps} anchorRect={anchor} />)
       const el = container.firstElementChild as HTMLElement
       // below: 30 + 4 = 34, 34 + 40 = 74 > 50 - 4 = 46 → flip
-      // above: 10 - 4 - 40 = -34 < 4 → clamp to PADDING
-      expect(el.style.top).toBe('4px')
+      // above: 10 - 4 - 40 = -34 < 36 → clamp to TITLE_BAR_HEIGHT (was PADDING,
+      // which put the input inside the title bar's drag region)
+      expect(el.style.top).toBe(`${TITLE_BAR_HEIGHT}px`)
+      // 36 + 40 > 46: what is left below the title bar is 50 - 36 - 4 = 10
+      expect(el.style.maxHeight).toBe('10px')
+      expect(el.style.overflowY).toBe('auto')
     })
 
     it('recalculates position when error changes popover height', () => {
@@ -574,5 +579,138 @@ describe('RenamePopover peer section', () => {
       expect(screen.getByTestId('peer-section-p1')).toBeInTheDocument()
       expect(screen.getByTestId('peer-refresh-p1')).toBeEnabled()
     })
+  })
+})
+
+// #1801. The top TITLE_BAR_HEIGHT px of the window is the title bar's OS drag
+// region: a click there drags the window instead of reaching an input, so no
+// part of the popover may be placed in it — a tall one scrolls instead.
+describe('RenamePopover stays below the title bar (#1801)', () => {
+  /** Never connected, so opening the panel fetches nothing. */
+  const HOST = 'inset-host'
+  const props = { currentName: 'dev', onConfirm: vi.fn(async () => {}), onCancel: vi.fn() }
+  const anchorAt = (left: number, top: number): DOMRect =>
+    ({ left, top, width: 120, height: 20, right: left + 120, bottom: top + 20, x: left, y: top, toJSON: () => ({}) }) as DOMRect
+
+  /** A tab holding `n` terminal panes: one detail block each. */
+  function tabWithPanes(n: number): Tab {
+    const panes = Array.from({ length: n }, (_, i) => ({
+      id: `p${i + 1}`,
+      content: { kind: 'tmux-session', hostId: HOST, sessionCode: `s${i + 1}`, mode: 'terminal', cachedName: `dev${i + 1}`, tmuxInstance: '1:1' } as PaneContent,
+    }))
+    return {
+      id: 't-inset',
+      pinned: false,
+      locked: false,
+      createdAt: 0,
+      layout: {
+        type: 'split',
+        id: 's-inset',
+        direction: 'h',
+        children: panes.map((pane) => ({ type: 'leaf' as const, pane })),
+        sizes: panes.map(() => 100 / n),
+      },
+    }
+  }
+
+  const saved: Array<[object, string, PropertyDescriptor | undefined]> = []
+  /** jsdom lays nothing out: hand the popover its height and the window its size. */
+  function stubLayout(height: number, innerHeight: number) {
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => height })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: innerHeight })
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
+  }
+
+  beforeEach(() => {
+    cleanup()
+    saved.push(
+      [HTMLElement.prototype, 'offsetHeight', Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')],
+      [window, 'innerHeight', Object.getOwnPropertyDescriptor(window, 'innerHeight')],
+      [window, 'innerWidth', Object.getOwnPropertyDescriptor(window, 'innerWidth')],
+    )
+  })
+  afterEach(() => {
+    cleanup()
+    for (const [target, key, descriptor] of saved.splice(0)) {
+      if (descriptor) Object.defineProperty(target, key, descriptor)
+      else delete (target as Record<string, unknown>)[key]
+    }
+  })
+
+  it('a tall popover in a short viewport starts below the title bar and scrolls instead of running off-screen', () => {
+    stubLayout(600, 300)
+    const { container } = render(<RenamePopover {...props} anchorRect={anchorAt(400, 40)} tab={tabWithPanes(5)} />)
+    expect(screen.getAllByTestId(/^rename-pane-block-/)).toHaveLength(5)
+    const el = container.firstElementChild as HTMLElement
+    // below: 60 + 4 + 600 > 296 → flip; above: 40 - 4 - 600 < 36 → the title bar's bottom edge
+    expect(el.style.top).toBe(`${TITLE_BAR_HEIGHT}px`)
+    expect(el.style.maxHeight).toBe(`${300 - TITLE_BAR_HEIGHT - 4}px`)
+    expect(el.style.overflowY).toBe('auto')
+    // Horizontal placement is untouched: 400 + 120 / 2 - 380 / 2
+    expect(el.style.left).toBe('270px')
+  })
+
+  it('an anchor with room below: the same place as before, and no cap', () => {
+    stubLayout(200, 800)
+    const { container } = render(<RenamePopover {...props} anchorRect={anchorAt(400, 60)} tab={tabWithPanes(3)} />)
+    const el = container.firstElementChild as HTMLElement
+    expect(el.style.left).toBe('270px')
+    expect(el.style.top).toBe('84px') // 80 + 4
+    expect(el.style.maxHeight).toBe('')
+    expect(el.style.overflowY).toBe('')
+  })
+
+  it('no room below: flips above the anchor as before, and no cap', () => {
+    stubLayout(200, 800)
+    const { container } = render(<RenamePopover {...props} anchorRect={anchorAt(400, 700)} tab={tabWithPanes(3)} />)
+    const el = container.firstElementChild as HTMLElement
+    expect(el.style.left).toBe('270px')
+    expect(el.style.top).toBe('496px') // 700 - 4 - 200
+    expect(el.style.maxHeight).toBe('')
+    expect(el.style.overflowY).toBe('')
+  })
+
+  it('drops an earlier cap when it is placed again with room to spare', () => {
+    stubLayout(600, 300)
+    const tab = tabWithPanes(5)
+    const { container, rerender } = render(<RenamePopover {...props} anchorRect={anchorAt(400, 40)} tab={tab} />)
+    const el = container.firstElementChild as HTMLElement
+    expect(el.style.maxHeight).toBe(`${300 - TITLE_BAR_HEIGHT - 4}px`)
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 1000 })
+    rerender(<RenamePopover {...props} anchorRect={anchorAt(400, 40)} tab={tab} />)
+    expect(el.style.top).toBe('64px') // 60 + 4, and 64 + 600 fits in 1000 - 4
+    expect(el.style.maxHeight).toBe('')
+    expect(el.style.overflowY).toBe('')
+  })
+
+  it('keeps its scroll position when it is placed again (an error arriving or clearing)', () => {
+    // Re-measuring takes the cap off, and in that layout the content fits, so a
+    // real browser drops the scroll offset. jsdom keeps it; the stub plays that part.
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this.style.maxHeight === '') this.scrollTop = 0
+        return 600
+      },
+    })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 300 })
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
+    const tab = tabWithPanes(5)
+    const anchor = anchorAt(400, 40)
+    const { container, rerender } = render(<RenamePopover {...props} anchorRect={anchor} tab={tab} />)
+    const el = container.firstElementChild as HTMLElement
+    el.scrollTop = 120
+    rerender(<RenamePopover {...props} anchorRect={anchor} tab={tab} error="Name taken" />)
+    expect(screen.getByText('Name taken')).toBeInTheDocument()
+    expect(el.style.maxHeight).toBe(`${300 - TITLE_BAR_HEIGHT - 4}px`)
+    expect(el.scrollTop).toBe(120)
+  })
+
+  it('is marked no-drag, so the title bar region does not take its pointer events', () => {
+    stubLayout(40, 800)
+    const { container } = render(<RenamePopover {...props} anchorRect={anchorAt(400, 60)} />)
+    const el = container.firstElementChild as HTMLElement
+    // React assigns the camelCase property, which jsdom keeps as is (see FloatingPanel.test.tsx).
+    expect((el.style as unknown as { WebkitAppRegion?: string }).WebkitAppRegion).toBe('no-drag')
   })
 })

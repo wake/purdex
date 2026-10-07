@@ -7,7 +7,9 @@ import { useEffect, type RefObject } from 'react'
 export function useBrowserViewResize(paneId: string, ref: RefObject<HTMLDivElement | null>): void {
   useEffect(() => {
     const el = ref.current
-    if (!window.electronAPI || !el) return
+    // The App loads the SPA from the dev server, so its preload can be older than this code and lack the
+    // IPC (#1816): then there is nothing to push bounds to — observe nothing.
+    if (typeof window.electronAPI?.resizeBrowserView !== 'function' || !el) return
 
     let rafId = 0
     const observer = new ResizeObserver(() => {
@@ -15,7 +17,7 @@ export function useBrowserViewResize(paneId: string, ref: RefObject<HTMLDivEleme
       rafId = requestAnimationFrame(() => {
         const rect = el.getBoundingClientRect()
         if (!rect.width || !rect.height) return
-        window.electronAPI!.resizeBrowserView(paneId, {
+        window.electronAPI?.resizeBrowserView?.(paneId, {
           x: Math.round(rect.x),
           y: Math.round(rect.y),
           width: Math.round(rect.width),
