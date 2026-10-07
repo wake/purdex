@@ -72,4 +72,18 @@ describe('approval-ws: 分流 kinds (spec §6.6, U19 (b))', () => {
     expect(useUndoToast.getState().toast).toBeNull()
     expect(useApprovalStore.getState().closedIds[H]).toBeUndefined()
   })
+
+  it('a kind this build does not know (a later daemon) is skipped row by row: the snapshot still applies, opened/closed of it are ignored', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const future = { ...lead({ id: 'fut-1' }), kind: 'something_new' }
+    handleApprovalEvent(H, JSON.stringify({ op: 'snapshot', approvals: [future, lead()] }))
+    expect(Object.values(useApprovalStore.getState().entries).map((e) => e.approval.id)).toEqual(['req-1'])
+    handleApprovalEvent(H, JSON.stringify({ op: 'opened', approval: future }))
+    expect(Object.keys(useApprovalStore.getState().entries)).toHaveLength(1)
+    expect(warn).not.toHaveBeenCalled()
+    // a malformed row of a KNOWN kind still rejects the whole frame (P3's whole-frame validation)
+    const bad = { ...lead({ id: 'bad-1' }), payload: 'x' }
+    expect(parseApprovalEvent(JSON.stringify({ op: 'snapshot', approvals: [bad, lead()] }))).toBeNull()
+    warn.mockRestore()
+  })
 })

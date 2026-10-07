@@ -150,6 +150,15 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 const APPROVAL_KINDS: readonly string[] = ['lead', 'self_relay', 'hook_ask', 'hook_permission'] satisfies ApprovalKind[]
+
+/**
+ * A row whose kind this build does not know (a later daemon's): a record with a string `kind` outside
+ * APPROVAL_KINDS. Such a row is skipped, never a reason to drop the frame it came in — a snapshot from a newer
+ * daemon must still deliver the rows this build can show (PR #1799 attacker).
+ */
+export function isUnknownKindRow(v: unknown): boolean {
+  return isRecord(v) && isString(v.kind) && !APPROVAL_KINDS.includes(v.kind)
+}
 const APPROVAL_STATES: readonly string[] = ['open', 'approved', 'denied', 'timeout', 'cancelled', 'abandoned', 'answered_local', 'terminal_override', 'dismissed'] satisfies ApprovalState[]
 
 /** Absent (`omitempty`) or of the given type; `null` is neither. */

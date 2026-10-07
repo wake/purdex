@@ -16,7 +16,7 @@ import { hostLabel, hostLookOf } from '../host-look'
 import { submitDecision, toastClosed } from './approval-decide'
 import { approvalKindLabel, approvalSessionLabel } from './approval-format'
 import { notifyApprovalOpened } from './approval-notify'
-import { isApproval, isHookKind, type Approval, type ApprovalEventValue } from './types'
+import { isApproval, isHookKind, isUnknownKindRow, type Approval, type ApprovalEventValue } from './types'
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -40,12 +40,16 @@ export function parseApprovalEvent(value: unknown): ApprovalEventValue | null {
   }
   if (!isRecord(o)) return null
   if (o.op === 'opened' || o.op === 'closed') {
+    if (isUnknownKindRow(o.approval)) return null // a later daemon's kind: not ours to show, not malformed
     return isApproval(o.approval) ? { op: o.op, approval: o.approval } : rejectFrame(o.op, 'approval is not the wire shape')
   }
   if (o.op === 'snapshot') {
     if (!Array.isArray(o.approvals)) return rejectFrame('snapshot', 'approvals is not an array')
     const approvals: Approval[] = []
     for (const [i, a] of o.approvals.entries()) {
+      // A kind this build does not know is skipped, the rest of the snapshot still applies; a malformed row of a
+      // known kind still rejects the frame (whole-frame validation, P3).
+      if (isUnknownKindRow(a)) continue
       if (!isApproval(a)) return rejectFrame('snapshot', `approvals[${i}] is not the wire shape`)
       approvals.push(a)
     }
