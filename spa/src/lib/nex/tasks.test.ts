@@ -1,6 +1,6 @@
 // spa/src/lib/nex/tasks.test.ts
 import { describe, it, expect } from 'vitest'
-import { anyRunningSubagent, applyTaskEvent, applyTaskSnapshot, parseTask, runningTasks, subagentTasksByToolUse, type TaskTable } from './tasks'
+import { anyRunningSubagent, anyRunningTask, applyTaskEvent, applyTaskSnapshot, parseTask, runningTasks, subagentTasksByToolUse, type TaskTable } from './tasks'
 
 // Payloads as the contract prints them (capability-matrix §3 "task_start／task_end 的 payload").
 const start = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -305,5 +305,16 @@ describe('subagentTasksByToolUse (R4 T3.3)', () => {
     expect(anyRunningSubagent(t)).toBe(false)
     t = applyTaskEvent(t, 'task_start', start({ task_id: 'a', kind: 'subagent', tool_use_id: 'T1' }), 2)
     expect(anyRunningSubagent(t)).toBe(true)
+  })
+})
+
+describe('anyRunningTask', () => {
+  it('true for any running kind, false once all closed', () => {
+    let t: TaskTable = {}
+    expect(anyRunningTask(t)).toBe(false)
+    t = applyTaskEvent(t, 'task_start', start({ task_id: 'a', kind: 'shell' }), 1)
+    expect(anyRunningTask(t)).toBe(true)
+    t = applyTaskEvent(t, 'task_end', { task_id: 'a', status: 'completed' }, 2)
+    expect(anyRunningTask(t)).toBe(false)
   })
 })

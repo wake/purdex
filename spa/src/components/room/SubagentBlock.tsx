@@ -84,6 +84,13 @@ export default function SubagentBlock({ name, toolCount, foldKey, depth, renderC
         onClick={toggle}
       >
         <Caret size={10} weight="bold" aria-hidden="true" />
+        {task?.status === 'running' && (
+          <span data-testid="subagent-working" role="status" aria-label={t('room.subagent.working')} className="inline-flex items-center gap-0.5">
+            {[0, 1, 2].map((i) => (
+              <span key={i} aria-hidden="true" className="w-1 h-1 rounded-full bg-blue-400 animate-pulse" style={{ animationDelay: `${i * 200}ms` }} />
+            ))}
+          </span>
+        )}
         <span>{summary}{c?.status && <> · <StatusWord status={c.status} /></>}</span>
       </button>
       {expanded && (
