@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.568] - 2026-10-07
+
+> 動 daemon 與 SPA，**需要部署新 binary 並重啟，並快轉主 checkout**（由統籌安排）。這版還不會開出任何新的申請，對現有使用者沒有可見變化；SPA 的變更最好與 daemon 同時或更早生效。`pdx` 指令、Electron 沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P8a-1a（#1799）
+
+AskUserQuestion／權限詢問「分流」（U19，spec §6.6）的底層：之後 Claude Code 跳出選擇題或權限詢問時，終端機照常顯示原生對話框，其他裝置（之後的 iOS App）會收到一張事件卡，誰先回答就算誰的。這個 PR 只放契約，路由、CLI、mod 在後續 PR。
+
+- **兩種新的申請類別**（AskUserQuestion、權限詢問）與三種結束狀態（已在終端機回答、終端機覆蓋了遠端答案、被取消），daemon 能儲存遠端給的答案。
+- daemon 能判斷「現在有沒有遠端可以回答」（有連線中的 App／裝置），以及某個 session 有沒有載入 Purdex mod。
+- **Mac App 不顯示這兩種卡片**（U19 (b)：終端機本身就是它的回答介面），但也不會因為清單裡出現它們就把整份申請清單（含 lead 申請）丟掉；遇到未來版本 daemon 的新類別，同樣只略過那一筆。
+
 ## [1.0.0-alpha.567] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。Mac App 上沒有可見的變化。
