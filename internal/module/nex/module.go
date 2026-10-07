@@ -128,6 +128,14 @@ type Module struct {
 	isDir    func(string) bool // default statIsDir; test seam
 	logf     func(string, ...any)
 
+	// The read slot every client-visible nex read goes through (spec
+	// 2026-10-08 §3.1, readslot.go), built on first use by reads(). listWait
+	// is how long a list page waits for it before 503 nex_busy (listwrap.go);
+	// 0 = listSlotWaitDefault, other values are a test seam.
+	slotOnce sync.Once
+	slot     *readSlot
+	listWait time.Duration
+
 	// Q1 lifecycle (manual_resume.go). Start creates q1Ctx and subscribes;
 	// every unit of Q1 work (a hub callback, a re-check) is counted in
 	// q1Work, and starts only under q1Mu while startsStopped is unset, so an
@@ -371,6 +379,12 @@ func (m *Module) softFail(err error) error {
 // themselves answer 503 nex_unavailable, so a client sees the structured
 // error rather than a 404 it would read as "old daemon". The conversation
 // listing likewise answers 503 conversations_unavailable for itself.
+//
+// With an engine, GET RoutePrefix+"/v1/executions" — the list, and only
+// the list — is the read-slot wrapper (listwrap.go), which stamps each page
+// with its version and runs the very handler mounted below. Without one,
+// the 503 fallback covers the list like every other engine path: there is
+// no page to stamp.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{code}/nex-handoff", m.handleNexHandoff)
 	mux.HandleFunc("POST /api/sessions/{code}/nex-takeback", m.handleNexTakeback)
@@ -385,7 +399,12 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 		mux.Handle(RoutePrefix+"/", unavailableHandler(m.initErr))
 		return
 	}
-	mux.Handle(RoutePrefix+"/", http.StripPrefix(RoutePrefix, recoverer(m.logf, m.sys.handler)))
+	engineMount := http.StripPrefix(RoutePrefix, recoverer(m.logf, m.sys.handler))
+	mux.Handle(RoutePrefix+"/", engineMount)
+	// More specific than RoutePrefix+"/" (one path, GET/HEAD only), so it
+	// wins for the list while GET /v1/executions/{id}, the delegate POST
+	// and every other route still reach the engine directly.
+	mux.Handle("GET "+RoutePrefix+"/v1/executions", m.handleListExecutions(engineMount))
 }
 
 // unavailableHandler answers every request under RoutePrefix with the same
