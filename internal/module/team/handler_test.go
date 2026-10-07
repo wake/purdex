@@ -169,11 +169,15 @@ type fakeTitles struct {
 	mu    sync.Mutex
 	moves [][2]string
 	has   map[string]bool // sessions that currently hold a title
+	fail  bool            // meta.db is down: every Move errors
 }
 
 func (f *fakeTitles) Move(from, to string, _ time.Time) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.fail {
+		return false, errors.New("meta.db locked")
+	}
 	if !f.has[from] {
 		return false, nil
 	}

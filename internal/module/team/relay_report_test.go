@@ -362,3 +362,102 @@ func TestRelayReport_ClaimedIsNotReportable(t *testing.T) {
 		t.Fatalf("op after approve = %s, want claimed", got.State)
 	}
 }
+
+// PR #1716 attacker A-1: a cleared whose new_session_id is live under
+// another process is a hijack of that conversation's title and ref — 400,
+// op unchanged, no lineage, no title move. A new id the registry does not
+// know yet (the normal case at SessionStart) is still accepted.
+func TestRelayReport_ClearedRefusesAnotherLiveConversation(t *testing.T) {
+	f := newFixture(t)
+	out := f.begin("sid-1") // origin pid 10
+	f.decide(out.RequestID, "approve")
+	f.titles.has["sid-2"] = true // sid-2 is live under pid 20 and has a title
+	code, _, ae := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-2"})
+	if code != http.StatusBadRequest || ae.Error != team.ErrBadRequest || !strings.Contains(ae.Detail, "another process") {
+		t.Fatalf("cleared into another live conversation: %d %+v", code, ae)
+	}
+	if got := f.op(out.Op.ID); got.State != team.RelayClaimed || got.NewSessionID != "" {
+		t.Fatalf("op after the refused cleared = %+v", got)
+	}
+	if refs, _ := f.m.store.PreviousRefs(); len(refs) != 0 {
+		t.Fatalf("lineage written: %v", refs)
+	}
+	if !f.titles.has["sid-2"] || !f.titles.has["sid-1"] || len(f.titles.moves) != 0 {
+		t.Fatalf("title touched: has=%v moves=%v", f.titles.has, f.titles.moves)
+	}
+	// The legitimate target — a fresh id — goes through.
+	if code, op, _ := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-1b"}); code != http.StatusOK || op.NewSessionID != "sid-1b" {
+		t.Fatalf("cleared into a fresh id: %d %+v", code, op)
+	}
+}
+
+// PR #1716 attacker A-2 / A-3: the follow-ups of a report (title move,
+// closing the open row) can fail after the op committed. They are retried
+// on the idempotent re-send of the same state, a done report moves the
+// title too, and the boot reconciliation closes an open row whose op is
+// already terminal.
+func TestRelayReport_FollowUpsAreRetriedOnResendAndAtBoot(t *testing.T) {
+	f := newFixture(t)
+	out := f.begin("sid-1")
+	f.decide(out.RequestID, "approve")
+
+	// (1) The title move fails on the first cleared; the re-send retries it.
+	f.titles.fail = true
+	if code, _, _ := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-1b"}); code != http.StatusOK {
+		t.Fatalf("cleared: %d", code)
+	}
+	if len(f.titles.moves) != 0 || f.titles.has["sid-1b"] {
+		t.Fatalf("a failed move must not have moved: %v", f.titles.moves)
+	}
+	f.titles.fail = false
+	if code, _, _ := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-1b"}); code != http.StatusOK {
+		t.Fatalf("cleared re-send: %d", code)
+	}
+	if !f.titles.has["sid-1b"] || len(f.titles.moves) != 1 {
+		t.Fatalf("the re-send must have moved the title: has=%v moves=%v", f.titles.has, f.titles.moves)
+	}
+
+	// (2) done also moves the title (idempotent: already moved → no-op).
+	if code, _, _ := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayDone}); code != http.StatusOK {
+		t.Fatalf("done: %d", code)
+	}
+	if len(f.titles.moves) != 1 {
+		t.Fatalf("done re-moved an already moved title: %v", f.titles.moves)
+	}
+
+	// (3) A fresh op: its row is left open although the op is terminal
+	// (model: the close after the op's commit failed) — the re-send of the
+	// terminal state closes it, and so does the boot reconciliation.
+	out2 := f.begin("sid-2")
+	if _, err := f.m.store.db.Exec(`UPDATE relay_ops SET state = ?, reason = ? WHERE id = ?`, string(team.RelayCancelled), team.RelayReasonCompacted, out2.Op.ID); err != nil {
+		t.Fatal(err)
+	}
+	if row, _, _ := f.m.store.Get(out2.RequestID); row.State != team.StateOpen {
+		t.Fatalf("sanity: row = %s", row.State)
+	}
+	_ = f.events() // drain what begin broadcast
+	if code, _, _ := f.report(out2.Op.ID, team.RelayReportRequest{State: team.RelayCancelled, Error: team.RelayReasonCompacted}); code != http.StatusOK {
+		t.Fatalf("cancelled re-send: %d", code)
+	}
+	if row, _, _ := f.m.store.Get(out2.RequestID); row.State != team.StateCancelled {
+		t.Fatalf("row after the re-send = %s, want cancelled", row.State)
+	}
+	closed := 0
+	for _, ev := range f.events() {
+		if ev.Op == "closed" {
+			closed++
+		}
+	}
+	if closed != 1 {
+		t.Fatalf("closed events on the re-send = %d, want 1", closed)
+	}
+
+	out3 := f.begin("sid-2") // sid-2's op is terminal now, so a new one may open
+	if _, err := f.m.store.db.Exec(`UPDATE relay_ops SET state = ?, reason = ? WHERE id = ?`, string(team.RelayFailed), team.RelayReasonHandoffIncomplete, out3.Op.ID); err != nil {
+		t.Fatal(err)
+	}
+	f2 := f.reboot(f.titles)
+	if row, _, _ := f2.m.store.Get(out3.RequestID); row.State != team.StateAbandoned {
+		t.Fatalf("row of a terminal op after boot = %s, want abandoned", row.State)
+	}
+}

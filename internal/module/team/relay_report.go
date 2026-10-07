@@ -3,6 +3,7 @@ package teammod
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,6 +77,10 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 		rep.NewSessionID = strings.TrimSpace(req.NewSessionID)
 		rep.NewRef = ipeers.RefID(rep.NewSessionID)
 		rep.Reason = ""
+		if code, detail := m.checkClearedTarget(id, rep.NewSessionID); code != 0 {
+			m.writeErr(w, code, team.ErrBadRequest, detail, nil)
+			return
+		}
 	}
 	op, res, err := m.store.ReportRelay(id, rep)
 	if errors.Is(err, ErrNoSuchRelayOp) {
@@ -100,14 +105,54 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 		return
 	case ReportApplied:
 		m.logf("[team] relay op %s → %s%s", id, op.State, reasonSuffix(op))
-		if op.State == team.RelayCleared {
-			m.moveTitle(op)
-		}
-		if op.State.Terminal() && op.RequestID != "" {
-			m.closeRequestOfReportedOp(op)
-		}
+		m.afterReport(op)
+	case ReportNoop:
+		// The idempotent re-send is also the retry of the follow-ups: a
+		// title move or a row close that failed after the first report
+		// committed runs again here (both are idempotent).
+		m.afterReport(op)
 	}
 	m.writeJSON(w, http.StatusOK, op)
+}
+
+// afterReport is what follows an op's state in the store: a cleared op
+// moves its title; a done op moves it too (the last chance before the op
+// leaves the active set that the boot reconciliation walks); a terminal op
+// closes its approval row if that is still open. Every step is idempotent,
+// so it runs on the first report and on every re-send of the same state.
+func (m *Module) afterReport(op team.RelayOp) {
+	if op.State == team.RelayCleared || op.State == team.RelayDone {
+		m.moveTitle(op)
+	}
+	if op.State.Terminal() && op.RequestID != "" {
+		m.closeRequestOfReportedOp(op)
+	}
+}
+
+// checkClearedTarget guards a cleared's new_session_id (PR #1716 attacker
+// A-1): /clear keeps the Claude Code PROCESS and gives it a new session id,
+// so when the new id is already a live session on this host it must belong
+// to the same process as the op's origin. A new id not yet in the registry
+// is allowed (the mod reports cleared at SessionStart, which can precede the
+// registry write); a new id live under ANOTHER process is someone else's
+// conversation, whose title and ref this report would hijack — 400.
+func (m *Module) checkClearedTarget(opID, newSessionID string) (code int, detail string) {
+	target, live, err := m.origins.ResolveOriginBySession(newSessionID)
+	if err != nil || !live {
+		return 0, "" // unknown to the registry: nothing to compare against
+	}
+	op, ok, err := m.store.GetRelayOp(opID)
+	if err != nil || !ok || op.RequestID == "" {
+		return 0, "" // a missing op is the store's 404 below; a member op (P6) has no row here
+	}
+	row, ok, err := m.store.Get(op.RequestID)
+	if err != nil || !ok {
+		return 0, ""
+	}
+	if row.Origin.PID != 0 && target.PID != row.Origin.PID {
+		return http.StatusBadRequest, "new_session_id " + newSessionID + " is live under another process (pid " + strconv.Itoa(target.PID) + ", the op's is " + strconv.Itoa(row.Origin.PID) + "); a cleared session keeps its process"
+	}
+	return 0, ""
 }
 
 // closeRequestOfReportedOp closes the op's approval row when a report put
@@ -167,6 +212,26 @@ func (m *Module) reconcileRelays() {
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 	now := m.now()
+	// Open self_relay rows whose op is already terminal (a report's close
+	// failed after the op committed): close them now, abandoned.
+	if rows, err := m.store.ListOpen(); err != nil {
+		m.logf("[team] boot: list open approvals: %v", err)
+	} else {
+		for _, row := range rows {
+			if row.Kind != team.KindSelfRelay {
+				continue
+			}
+			op, ok, err := m.store.RelayOpByRequest(row.ID)
+			if err != nil || !ok || !op.State.Terminal() {
+				continue
+			}
+			if _, won, err := m.closeAs(row.ID, Close{State: team.StateAbandoned, DecidedAt: now}); err != nil {
+				m.logf("[team] boot: close approval %s of terminal relay op %s: %v", row.ID, op.ID, err)
+			} else if won {
+				m.logf("[team] boot: approval %s closed, its relay op %s is already %s", row.ID, op.ID, op.State)
+			}
+		}
+	}
 	for _, op := range ops {
 		switch {
 		case op.Kind == team.RelayKindSelf && op.State == team.RelayAwaitingApproval:
