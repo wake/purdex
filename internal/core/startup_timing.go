@@ -62,6 +62,30 @@ func FormatStepTimings(steps []StepTiming) string {
 	return strings.Join(parts, " ")
 }
 
+// StepTimer times the named steps of one module Start and renders them with
+// FormatStepTimings. Single-goroutine use only.
+type StepTimer struct {
+	now   func() time.Time
+	steps []StepTiming
+}
+
+// NewStepTimer returns a timer on the given clock (nil = time.Now).
+func NewStepTimer(now func() time.Time) *StepTimer {
+	if now == nil {
+		now = time.Now
+	}
+	return &StepTimer{now: now}
+}
+
+// Run executes fn and records how long it took under name.
+func (s *StepTimer) Run(name string, fn func()) {
+	t0 := s.now()
+	fn()
+	s.steps = append(s.steps, StepTiming{name, s.now().Sub(t0)})
+}
+
+func (s *StepTimer) String() string { return FormatStepTimings(s.steps) }
+
 // clock / logger tolerate a Core built as a literal (nil now / logf).
 func (c *Core) clock() time.Time {
 	if c.now != nil {

@@ -133,6 +133,21 @@ func TestStartModulesFailureStillLogsCompletedTimings(t *testing.T) {
 	assert.NotContains(t, joined, "never")
 }
 
+func TestStepTimerRecordsStepsInOrder(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1000, 0)}
+	st := NewStepTimer(clk.now)
+	st.Run("sweepOnce", func() { clk.t = clk.t.Add(ms(12)) })
+	st.Run("replayFromDB", func() { clk.t = clk.t.Add(ms(3)) })
+	st.Run("replayStatus", func() { clk.t = clk.t.Add(ms(5190)) })
+	assert.Equal(t, "sweepOnce=12ms replayFromDB=3ms replayStatus=5190ms", st.String())
+}
+
+func TestStepTimerNilClockUsesRealTime(t *testing.T) {
+	st := NewStepTimer(nil)
+	st.Run("x", func() {})
+	assert.Regexp(t, `^x=\d+ms$`, st.String())
+}
+
 func TestModuleTimingsNoModulesNoLine(t *testing.T) {
 	c, lc := newTimedCore()
 	require.NoError(t, c.InitModules())
