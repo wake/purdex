@@ -16,7 +16,7 @@ import { hostLabel, hostLookOf } from '../host-look'
 import { submitDecision, toastClosed } from './approval-decide'
 import { approvalKindLabel, approvalSessionLabel } from './approval-format'
 import { notifyApprovalOpened } from './approval-notify'
-import { isApproval, type Approval, type ApprovalEventValue } from './types'
+import { isApproval, isHookKind, type Approval, type ApprovalEventValue } from './types'
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -64,8 +64,19 @@ export function toastEndedWhileAway(hostId: string, approval: Approval): void {
   }))
 }
 
+/**
+ * The 分流 kinds (hook_ask, hook_permission; spec §6.6, U19 (b)) are valid wire shapes — a snapshot carrying one is
+ * NOT malformed — but the Mac App shows no card for them: the terminal it displays is the answer surface. They are
+ * dropped here, before the store, so no dialog, toast, notification or restart-confirm count ever sees them.
+ */
+function withoutHookKinds(ev: ApprovalEventValue): ApprovalEventValue | null {
+  if (ev.op === 'snapshot') return { op: 'snapshot', approvals: ev.approvals.filter((a) => !isHookKind(a.kind)) }
+  return isHookKind(ev.approval.kind) ? null : ev
+}
+
 export function handleApprovalEvent(hostId: string, value: unknown): void {
-  const ev = parseApprovalEvent(value)
+  const parsed = parseApprovalEvent(value)
+  const ev = parsed ? withoutHookKinds(parsed) : null
   if (!ev) return
   const store = useApprovalStore.getState()
   if (ev.op === 'snapshot') {

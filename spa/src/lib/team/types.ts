@@ -7,9 +7,15 @@
 /** `HostEvent.type` of every approval event (`team.EventType`). */
 export const APPROVAL_EVENT_TYPE = 'approval.request'
 
-export type ApprovalKind = 'lead' | 'self_relay'
+/** The two 分流 kinds (spec §6.6, U19) ride the same event; the Mac App draws no card for them (U19 (b)) and drops them at the WS boundary (approval-ws.ts). */
+export type HookKind = 'hook_ask' | 'hook_permission'
+export type ApprovalKind = 'lead' | 'self_relay' | HookKind
 
-export type ApprovalState = 'open' | 'approved' | 'denied' | 'timeout' | 'cancelled' | 'abandoned'
+/** `answered_local`, `terminal_override` and `dismissed` close hook kinds only; `approved` on a hook kind means "answered remotely". */
+export type ApprovalState = 'open' | 'approved' | 'denied' | 'timeout' | 'cancelled' | 'abandoned' | 'answered_local' | 'terminal_override' | 'dismissed'
+
+export const HOOK_KINDS: readonly string[] = ['hook_ask', 'hook_permission'] satisfies HookKind[]
+export const isHookKind = (kind: string): kind is HookKind => HOOK_KINDS.includes(kind)
 
 /** Spec §6.1–§6.2 limits (`team.DefaultMaxMembers`, `team.MaxMaxMembers`). */
 export const DEFAULT_MAX_MEMBERS = 3
@@ -85,7 +91,8 @@ export interface Grant {
 
 /** The audit label of whoever decided (spec §6.5). `addr` is set by the daemon from RemoteAddr. */
 export interface Client {
-  kind: 'app'
+  /** `terminal` on the closes the terminal made (answered_local, terminal_override). */
+  kind: 'app' | 'terminal'
   label: string
   addr?: string
 }
@@ -106,6 +113,8 @@ export interface Approval {
   decided_at?: number
   /** approved only. */
   grant?: Grant
+  /** Hook kinds only: the answer (`answers` for hook_ask; `behavior` for hook_permission). Never read by the Mac App. */
+  hook?: Record<string, unknown>
 }
 
 /** `POST /api/team/approvals/{id}/decide`. `grant` is approve-only; absent → the payload's values. */
@@ -140,8 +149,8 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-const APPROVAL_KINDS: readonly string[] = ['lead', 'self_relay'] satisfies ApprovalKind[]
-const APPROVAL_STATES: readonly string[] = ['open', 'approved', 'denied', 'timeout', 'cancelled', 'abandoned'] satisfies ApprovalState[]
+const APPROVAL_KINDS: readonly string[] = ['lead', 'self_relay', 'hook_ask', 'hook_permission'] satisfies ApprovalKind[]
+const APPROVAL_STATES: readonly string[] = ['open', 'approved', 'denied', 'timeout', 'cancelled', 'abandoned', 'answered_local', 'terminal_override', 'dismissed'] satisfies ApprovalState[]
 
 /** Absent (`omitempty`) or of the given type; `null` is neither. */
 const optional = (v: unknown, ok: (x: unknown) => boolean): boolean => v === undefined || ok(v)
@@ -179,6 +188,7 @@ export function isApproval(v: unknown): v is Approval {
     && optional(v.decided_by, isRecord)
     && optional(v.decided_at, isNumber)
     && optional(v.grant, isRecord)
+    && optional(v.hook, isRecord)
 }
 
 /** The self-relay payload, defensively: a missing or non-finite percentage reads as 0, strings as ''. */

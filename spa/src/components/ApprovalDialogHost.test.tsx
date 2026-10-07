@@ -14,6 +14,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { ApprovalApiError, decideApproval } from '../lib/team/approval-api'
 import { toastClosed } from '../lib/team/approval-decide'
+import { handleApprovalEvent } from '../lib/team/approval-ws'
 import { __resetClientDescriptorForTests } from '../lib/team/client-label'
 import type { Approval } from '../lib/team/types'
 
@@ -386,5 +387,18 @@ describe('ApprovalDialogHost', () => {
     expect(mockedDecide.mock.calls[0][2]).toMatchObject({ client: { kind: 'app', label: 'Purdex.app @ mlab' } })
     expect(mockedDecide.mock.calls[1][2]).toMatchObject({ client: { kind: 'app', label: 'Purdex.app @ mlab' } })
     expect(localDaemonStatus).toHaveBeenCalledTimes(1)
+  })
+
+  it('a hook_ask / hook_permission row from the wire draws no dialog (U19 (b)); a lead request beside it is the only one shown', () => {
+    render(<ApprovalDialogHost />)
+    const ask = approval({ id: 'ask-1', kind: 'hook_ask', payload: { tool_use_id: 'toolu_1', questions: [{ question: '紅還是藍？' }] }, deadline_at: 32503680000000 })
+    const perm = approval({ id: 'perm-1', kind: 'hook_permission', payload: { tool_use_id: '', tool_name: 'Bash', tool_input: {} }, deadline_at: 32503680000000 })
+    act(() => handleApprovalEvent(H, JSON.stringify({ op: 'snapshot', approvals: [ask, perm] })))
+    expect(dialog()).toBeNull()
+    act(() => handleApprovalEvent(H, JSON.stringify({ op: 'opened', approval: { ...ask, id: 'ask-2' } })))
+    expect(dialog()).toBeNull()
+    act(() => handleApprovalEvent(H, JSON.stringify({ op: 'snapshot', approvals: [ask, approval({ created_at: 2_000 }), perm] })))
+    expect(dialog()?.getAttribute('data-kind')).toBe('lead')
+    expect(screen.queryByTestId('approval-more')).toBeNull()
   })
 })
