@@ -147,12 +147,14 @@ func (m *Module) resolveNames(ctx context.Context, cands []nameCandidate) map[st
 			}
 		}
 		if row.Source != store.PeerNameSourceLineage && ln != "" {
+			// On failure the stored fallback is about to be replaced, so it
+			// is not handed out either: no name this pass.
 			upgraded, err := m.peerNames.AdoptLineage(ctx, k, ln)
 			if err != nil {
-				fail(err) // the stored fallback still stands this pass
-			} else {
-				row = upgraded
+				fail(err)
+				continue
 			}
+			row = upgraded
 		}
 		if ipeers.RoutableName(row.Name) {
 			out[c.sid] = row.Name

@@ -219,7 +219,14 @@ func TestNamer_BaseSourceOrder(t *testing.T) {
 // failingNames wraps the real store and fails the chosen calls.
 type failingNames struct {
 	PeerNameStore
-	lookup, assign, byRefs error
+	lookup, assign, byRefs, adopt error
+}
+
+func (f failingNames) AdoptLineage(ctx context.Context, sid, name string) (store.PeerNameEntry, error) {
+	if f.adopt != nil {
+		return store.PeerNameEntry{}, f.adopt
+	}
+	return f.PeerNameStore.AdoptLineage(ctx, sid, name)
 }
 
 func (f failingNames) Lookup(ctx context.Context, sids []string) (map[string]store.PeerNameEntry, error) {
@@ -268,6 +275,34 @@ func TestNamer_StoreErrorGivesNoName(t *testing.T) {
 	// No store at all: no names, no panic.
 	if got := New(nil, nil).resolveNames(ctx, []nameCandidate{cand(vnNew, "purdex-54")}); len(got) != 0 {
 		t.Fatalf("no store: names = %v", got)
+	}
+}
+
+// A failed lineage upgrade hands out no name that pass: the stored fallback
+// is about to be replaced, so showing it would announce an address the
+// conversation loses on the next pass. The failures of a pass are logged as
+// one line.
+func TestNamer_AdoptLineageErrorGivesNoName(t *testing.T) {
+	m, meta := namerFixture(t)
+	ctx := context.Background()
+	m.resolveNames(ctx, []nameCandidate{cand(vnLead, "lead"), cand(vnNew, "fresh"), cand(vnOther, "other")})
+	logs := &logSink{}
+	m.logf = logs.logf
+	m.WithPeerNames(failingNames{PeerNameStore: meta.PeerNames(), adopt: errors.New("busy")}, meta.ConversationNames())
+	for pass := 1; pass <= 2; pass++ {
+		got := m.resolveNames(ctx, []nameCandidate{
+			cand(vnNew, "fresh", ipeers.RefID(vnLead)),
+			cand(vnOther, "other", ipeers.RefID(vnLead)),
+		})
+		if len(got) != 0 {
+			t.Fatalf("pass %d: names = %v, want none while the upgrade fails", pass, got)
+		}
+		if n := len(logs.all()); n != pass {
+			t.Fatalf("pass %d: %d log lines %q, want one per pass", pass, n, logs.all())
+		}
+	}
+	if row := storedRow(t, meta, vnNew); row.Source != store.PeerNameSourceRegistry {
+		t.Fatalf("stored %+v, want the untouched fallback row", row)
 	}
 }
 
