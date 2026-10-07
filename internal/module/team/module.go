@@ -197,6 +197,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/relay/begin", m.handleRelayBegin)
 	mux.HandleFunc("GET /api/relay/wait/{id}", m.handleRelayWait)
 	mux.HandleFunc("POST /api/relay/self", m.handleRelaySelf)
+	mux.HandleFunc("POST /api/relay/ops/{id}/report", m.handleRelayReport)
+	mux.HandleFunc("GET /api/relay/ops/{id}", m.handleRelayOp)
 }
 
 // Start applies the boot lease grace (spec §9.2: every open request's
@@ -219,6 +221,7 @@ func (m *Module) Start(context.Context) error {
 	if n > 0 {
 		m.logf("[team] boot: extended the lease of %d open approval request(s) by %ds", n, team.BootGraceS)
 	}
+	m.reconcileRelays()
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.sweepWG.Add(1)
 	go m.runSweeper()
