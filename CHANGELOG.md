@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.538] - 2026-10-08
+
+> 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動，桌機上沒有使用者可見的變化。這是 purdex-ios 需要的三項 daemon 小改動的第一項。
+
+### Added：`GET /api/sessions/{code}/transcript`（#1717）
+
+- 手機端以前得經 `/api/fs/read` 整份讀 Claude 的對話紀錄，但那支有 10 MB 上限，長時間的 session 常常超過（實測 37 MB），手機就完全看不到。新端點由 daemon 自己決定檔案，只回尾段或增量。
+- `tail=N` 取最後 N 個完整行（預設 800、上限 5000）；`after=OFFSET` 取該位置之後的完整行；兩者不可同時帶。永遠不會回半行。單次回應上限 2 MB，超過會帶 `more:true`，用 `end_offset` 接著讀。
+- 對話檔換了（`/clear`、`--resume`、重新啟動 claude）時回 `reset:true`，client 應重新取尾段。
+- 只讀得到 `~/.claude/projects/` 底下的 `.jsonl`；路徑由 daemon 決定，client 不送路徑，因此不會變成任意讀檔的管道。codex／opencode 目前回 404 `unsupported`。
+- 已知不處理：同檔名被外部替換不會觸發 reset（#1718）；Claude Code 自己的輪替一律換新檔名，不受影響。
+
 ## [1.0.0-alpha.537] - 2026-10-07
 
 > 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動。這一版沒有使用者可見的變化：權限通道（讓 worker 做有風險的事之前先問你）的前端還沒上，要等 SPA 那一半。
