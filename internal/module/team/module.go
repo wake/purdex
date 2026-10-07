@@ -35,6 +35,11 @@ type OriginResolver interface {
 	// inbox (P5a). Same ok/err contract.
 	ResolveOriginBySession(sessionID string) (team.Origin, bool, error)
 	LiveSession(sessionID string) bool
+	// SessionPresence is LiveSession in three states, for the team end
+	// (spec §7.1), which cannot be undone: only PresenceGone ends a team;
+	// a registry that could not be read or holds an unverifiable file of a
+	// live pid answers PresenceUnknown.
+	SessionPresence(sessionID string) peersmod.Presence
 }
 
 // Module owns team.db and serves /api/team/*.

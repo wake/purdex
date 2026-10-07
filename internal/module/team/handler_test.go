@@ -39,6 +39,9 @@ type fakeOrigins struct {
 	// cleared is what the registry shows AFTER a /clear: new session id →
 	// the pid of the process that now carries it (ResolveOriginBySession).
 	cleared map[string]int
+	// unknown marks a session the registry cannot place (an unverifiable
+	// file of a live pid): LiveSession false, SessionPresence unknown.
+	unknown map[string]bool
 }
 
 var fixtureOrigins = map[string]team.Origin{
@@ -121,7 +124,19 @@ func (f *fakeSwitches) set(sw hostconfig.RelaySwitches) {
 func (f *fakeOrigins) LiveSession(sid string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return !f.dead[sid]
+	return !f.dead[sid] && !f.unknown[sid]
+}
+
+func (f *fakeOrigins) SessionPresence(sid string) peersmod.Presence {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case f.unknown[sid]:
+		return peersmod.PresenceUnknown
+	case f.dead[sid]:
+		return peersmod.PresenceGone
+	}
+	return peersmod.PresenceLive
 }
 
 func (f *fakeOrigins) markDead(sid string) {

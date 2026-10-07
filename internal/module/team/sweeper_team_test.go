@@ -193,6 +193,29 @@ func TestTick_TeamsSurviveARestartUntilTheBootGraceEnds(t *testing.T) {
 	}
 }
 
+// Only a lead the registry confirms gone ends its team (P4-2 review): one
+// it cannot place — its file truncated while its pid lives, which
+// LiveSession reads as not live — keeps the team until it is confirmed.
+func TestTick_ALeadTheRegistryCannotPlaceKeepsItsTeam(t *testing.T) {
+	f := newFixture(t)
+	seedTeam(t, f.m.store, uid(1), "sid-1", f.clock.Load())
+	f.origins.mu.Lock()
+	f.origins.unknown = map[string]bool{"sid-1": true}
+	f.origins.mu.Unlock()
+	livenessTick(f)
+	if got, _ := getTeam(t, f.m.store, uid(1)); got.EndedAt != 0 {
+		t.Fatalf("team of an unknown lead = %+v, want live", got)
+	}
+	f.origins.mu.Lock()
+	f.origins.unknown = nil
+	f.origins.mu.Unlock()
+	f.origins.markDead("sid-1")
+	livenessTick(f)
+	if got, _ := getTeam(t, f.m.store, uid(1)); got.EndedAt == 0 {
+		t.Fatalf("team of a confirmed-gone lead = %+v, want ended", got)
+	}
+}
+
 // The team check runs on the liveness tick whether or not any approval is
 // open: the sweep's early return on an empty open set must not skip it.
 func TestTick_EndsTeamsEvenWithNoOpenApproval(t *testing.T) {

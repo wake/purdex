@@ -1,7 +1,10 @@
 package peers
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
@@ -104,6 +107,53 @@ func (r *OriginResolver) titleOf(sessionID string) string {
 		}
 	}
 	return ""
+}
+
+// Presence is what the registry says about one CC session, for a decision
+// that cannot be undone (lead-team spec §7.1: a team ends when its lead's
+// conversation ends). Unlike LiveSession's bool it keeps "could not tell"
+// apart from "gone".
+type Presence int
+
+const (
+	// PresenceUnknown: the registry could not be listed, its dir does not
+	// exist, or it holds a file whose (filename) pid is alive but whose
+	// contents could not be verified (BlockingUnknown) — that file may be
+	// this session.
+	PresenceUnknown Presence = iota
+	// PresenceLive: a live, non-proxy entry has this session id.
+	PresenceLive
+	// PresenceGone: the registry was read, nothing in it blocks, and no
+	// live non-proxy entry has this session id.
+	PresenceGone
+)
+
+// SessionPresence is LiveSession in three states (P4-2 review): the team
+// sweeper ends a team only on PresenceGone. ReadRegistry folds an
+// unverifiable file into its skipped count and reads a missing dir as an
+// empty registry, both with a nil error; here both are PresenceUnknown.
+func (r *OriginResolver) SessionPresence(sessionID string) Presence {
+	if sessionID == "" {
+		return PresenceGone
+	}
+	if _, err := os.Stat(r.m.registryDir); errors.Is(err, fs.ErrNotExist) {
+		return PresenceUnknown
+	}
+	entries, diag, err := ipeers.ReadRegistryDiag(r.m.registryDir, r.m.liveness)
+	if err != nil {
+		r.m.logf("peers: origin resolver: read registry: %v", err)
+		return PresenceUnknown
+	}
+	proxies := r.m.proxyPIDs()
+	for _, e := range entries {
+		if e.SessionID == sessionID && !e.IsProxy && !proxies[e.PID] {
+			return PresenceLive
+		}
+	}
+	if len(diag.BlockingUnknown()) > 0 {
+		return PresenceUnknown
+	}
+	return PresenceGone
 }
 
 // LiveSession reports whether a live, non-proxy registry entry has this

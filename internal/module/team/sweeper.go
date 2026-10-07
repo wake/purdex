@@ -3,6 +3,7 @@ package teammod
 import (
 	"time"
 
+	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -106,8 +107,10 @@ func (m *Module) closeExpired(id string, now int64, state team.State) (team.Appr
 // (P4-3). A manual /clear has no op, so it ends the team. The guard lives
 // in EndTeam's UPDATE, with the check that the lead is still the one read
 // here, so neither a relay claimed nor a lead moved since loses to the
-// end. A registry read error answers "live" (peers/origin_resolver.go) and
-// a store error skips the team, so neither ever ends one. Nothing ends
+// end. Only PresenceGone ends a team (peers/origin_resolver.go): a
+// registry that cannot be read, is missing, or holds an unverifiable file
+// of a live pid answers unknown, and a store error skips the team, so none
+// of them ever ends one. Nothing ends
 // within BootGraceS of Start: right after a restart a lead may not be
 // listed yet (P4-2 review). Members are untouched (D4).
 func (m *Module) endGoneTeams() {
@@ -120,8 +123,8 @@ func (m *Module) endGoneTeams() {
 		return
 	}
 	for _, t := range teams {
-		if m.origins.LiveSession(t.LeadSessionID) {
-			continue
+		if m.origins.SessionPresence(t.LeadSessionID) != peersmod.PresenceGone {
+			continue // live, or the registry cannot tell: only a confirmed absence ends a team
 		}
 		if m.beforeEndTeam != nil {
 			m.beforeEndTeam(t)
