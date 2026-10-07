@@ -41,15 +41,23 @@ func (f *fixture) registerSpawnFakes() {
 }
 
 // fakeFrames is the agent module's live frames.
+// afterRead, when set, runs once after the next read (a test lets another
+// runner act between a registration's look at the frames and its CAS).
 type fakeFrames struct {
-	mu   sync.Mutex
-	list []agent.TerminalSession
+	mu        sync.Mutex
+	list      []agent.TerminalSession
+	afterRead func()
 }
 
 func (f *fakeFrames) LiveSessions(context.Context, string) ([]agent.TerminalSession, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]agent.TerminalSession(nil), f.list...), nil
+	list, after := append([]agent.TerminalSession(nil), f.list...), f.afterRead
+	f.afterRead = nil
+	f.mu.Unlock()
+	if after != nil {
+		after()
+	}
+	return list, nil
 }
 
 func (f *fakeTitles) Claim(sid, label string, _ time.Time) (store.PeerLabel, error) {

@@ -57,14 +57,13 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 //
 // Every poll judges the deadline first (spec §7.2 step 5: "Wait up to 20 s
 // … On timeout: kill"; review R1, ruled again after the critic): past
-// launched_at + the budget the session is killed and the op fails
-// member_start_timeout, even when the member has shown up by then — there
-// is no record of when it registered to compare with the deadline.
+// launched_at + the budget the op times out (timeOutSpawn), even when the
+// member has shown up by then — there is no record of when it registered to
+// compare with the deadline.
 func (m *Module) spawnRegister(op spawnRow) (*team.Origin, bool) {
 	for {
 		if m.now() >= op.LaunchedAt+m.spawnBudget {
-			m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
-			m.failSpawn(op.ID, team.SpawnReasonStartTimeout)
+			m.timeOutSpawn(op)
 			return nil, false
 		}
 		if o, ok := m.memberOnPane(op.PaneID); ok {
@@ -86,6 +85,26 @@ func (m *Module) spawnRegister(op spawnRow) (*team.Origin, bool) {
 			return nil, false
 		}
 	}
+}
+
+// timeOutSpawn takes the timeout's decision before anything else (P4-5
+// re-review): one compare-and-set from launched to
+// failed{member_start_timeout}, which excludes the registration's own CAS
+// from launched (the same row and step). Only its winner kills the session,
+// under its recorded generation; a runner that lost it, to a registration
+// or another timeout, touches nothing. A daemon that dies between the CAS
+// and the kill leaves the session of a failed op behind.
+func (m *Module) timeOutSpawn(op spawnRow) {
+	won, err := m.store.FailSpawnOpAtStep(op.ID, team.StepLaunched, team.SpawnReasonStartTimeout, m.now())
+	if err != nil {
+		m.logf("[team] spawn %s: %v", op.ID, err)
+	}
+	if !won {
+		return
+	}
+	m.logf("[team] spawn %s failed: %s", op.ID, team.SpawnReasonStartTimeout)
+	m.wake(op.ID)
+	m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
 }
 
 func (m *Module) memberOnPane(pane string) (team.Origin, bool) {

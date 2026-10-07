@@ -69,6 +69,57 @@ func TestSpawn_PastTheBudgetItTimesOutEvenWithAMemberThere(t *testing.T) {
 	}
 }
 
+// P4-5 re-review: two runners of one op meet at the deadline. The timeout
+// takes its decision first, a compare-and-set from launched, the same one
+// the registration makes, and only its winner kills. Registration first:
+// the late timeout loses and kills nothing. Timeout first: it kills, and
+// the registration's CAS fails, so no member is written. Mutation gate:
+// kill before the CAS → the first case red.
+func TestSpawn_AtTheDeadlineOnlyOneRunnerActs(t *testing.T) {
+	// launched is an op launched now in its own tagged session $0 (pane %0),
+	// whose member has registered; the test plays both runners.
+	launched := func(t *testing.T) (*fixture, spawnRow) {
+		f, root := newSpawnFixture(t, 2)
+		f.tmux.FailKillIfInstance = true // a killed session would hide the second runner's CAS
+		id := f.acceptOp(1, root, nil)
+		f.tmux.AddSession("tm-0000000100", root)
+		f.tmux.SetSessionTag("tm-0000000100", spawnTagOption, id)
+		mustStep(t, f.m.store, id, team.StepAccepted, spawnUpdate{Step: team.StepSessionCreated,
+			TmuxID: "$0", TmuxInstance: "4242:1700000000", PaneID: "%0", At: 1}, true)
+		mustStep(t, f.m.store, id, team.StepSessionCreated, spawnUpdate{Step: team.StepLaunched, LaunchedAt: f.clock.Load(), At: 1}, true)
+		f.register("%0", "sid-m1")
+		op, _, _ := f.m.store.GetSpawnOp(id)
+		return f, op
+	}
+	t.Run("registration first", func(t *testing.T) {
+		f, op := launched(t)
+		if _, won := f.m.spawnRegister(op); !won {
+			t.Fatal("the registration did not win")
+		}
+		f.clock.Add(21_000)
+		f.m.spawnRegister(op) // the second runner, with its read from before
+		now, _, _ := f.m.store.GetSpawnOp(op.ID)
+		if now.State != team.SpawnRunning || now.Step != team.StepRegistered || len(f.tmux.KillIfInstanceCalls()) != 0 {
+			t.Fatalf("op %s at %s, kills %+v", now.State, now.Step, f.tmux.KillIfInstanceCalls())
+		}
+	})
+	t.Run("timeout first", func(t *testing.T) {
+		f, op := launched(t)
+		f.frames.afterRead = func() {
+			f.clock.Add(21_000)
+			f.m.spawnRegister(op) // the second runner times the op out
+		}
+		if _, won := f.m.spawnRegister(op); won {
+			t.Fatal("the registration won after the timeout")
+		}
+		now, _, _ := f.m.store.GetSpawnOp(op.ID)
+		rows, _ := f.m.store.MembersOf(uid(1))
+		if now.State != team.SpawnFailed || now.Reason != team.SpawnReasonStartTimeout || len(rows) != 0 || len(f.tmux.KillIfInstanceCalls()) != 1 {
+			t.Fatalf("op %s %s, members %+v, kills %+v", now.State, now.Reason, rows, f.tmux.KillIfInstanceCalls())
+		}
+	})
+}
+
 // Review H4: tmux restarts after the launch and the new server's %0 shows an
 // unrelated verified, live frame. The pane id alone is not the member: the
 // same read that confirms the pane sees another generation, so the op is
