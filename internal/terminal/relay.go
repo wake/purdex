@@ -154,11 +154,9 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 			defer ready()
 			curPTY := startSize // only this goroutine touches it
 			applyPTY := func(cols, rows uint16) {
-				if cols == curPTY.Cols && rows == curPTY.Rows {
-					return
-				}
-				curPTY = pty.Winsize{Cols: cols, Rows: rows}
-				pty.Setsize(ptmx, &curPTY)
+				applyPTYSize(&curPTY, pty.Winsize{Cols: cols, Rows: rows}, func(w pty.Winsize) error {
+					return pty.Setsize(ptmx, &w)
+				})
 			}
 			r.pollWindowSize(ctx, ready, func(m WindowMsg) error {
 				data, _ := json.Marshal(m)
@@ -252,6 +250,20 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	}()
 
 	wg.Wait()
+}
+
+// applyPTYSize sets the PTY to want unless cur already is that size. cur only
+// moves after set succeeds, so a failed set is retried on the next tick rather
+// than remembered as done.
+func applyPTYSize(cur *pty.Winsize, want pty.Winsize, set func(pty.Winsize) error) {
+	if want.Cols == cur.Cols && want.Rows == cur.Rows {
+		return
+	}
+	if err := set(want); err != nil {
+		log.Printf("pty setsize %dx%d: %v", want.Cols, want.Rows, err)
+		return
+	}
+	*cur = want
 }
 
 // slavesPTY reports whether the PTY follows the window (see StatusRows).
