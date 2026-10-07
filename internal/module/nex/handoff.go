@@ -3,8 +3,11 @@ package nex
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"lab.protype.tw/wake/nexen/execution"
@@ -48,6 +51,30 @@ func detachedContext(parent context.Context, d time.Duration) (context.Context, 
 // handoffProfile is the sandbox profile a handoff runs under unless the
 // body names another one; it must be usable under the host policy.
 const handoffProfile = "handoff"
+
+// hasPermissionChannel reports whether the built-in profile called name
+// routes the CLI's permission prompts to the host (Nexen's handoff_ask).
+// Unknown names answer false.
+func hasPermissionChannel(name string) bool {
+	p, ok := sandbox.Lookup(name)
+	return ok && p.PermissionChannel
+}
+
+// handoffProfileAllowed reports whether a handoff may run under profile on a
+// host with this policy (permission channel plan Task 2). The profile itself
+// must be usable as is: Nexen would otherwise narrow it silently or, for a
+// permission-channel profile, reject it after the pane's Claude Code has
+// already exited. A profile without the channel also needs the host's
+// handoff opt-in (handoff usable), as every handoff did before; a channel
+// profile needs only itself, so a host whose max_profile is handoff_ask
+// (below handoff) offers the asking mode and refuses plain handoff.
+func handoffProfileAllowed(policy sandbox.Policy, profile string) bool {
+	usable := sandbox.UsableProfiles(policy)
+	if !slices.Contains(usable, profile) {
+		return false
+	}
+	return hasPermissionChannel(profile) || slices.Contains(usable, handoffProfile)
+}
 
 // handoffSessionLabel is the execution label that binds a handed-off
 // execution to its session code (spec §4.4 step 5). Together with the
@@ -112,11 +139,51 @@ type handoffRequest struct {
 	Profile              string `json:"profile,omitempty"`
 	RollbackCommand      string `json:"rollback_command,omitempty"`
 	KeepSession          *bool  `json:"keep_session,omitempty"`
+	// PermissionTimeoutS is kept raw: decoding into an int would turn a
+	// string, a fraction, an exponent, a bool or an over-int64 number into
+	// malformed_body; validatePermissionTimeout answers each of them as
+	// invalid_permission_timeout instead.
+	PermissionTimeoutS json.RawMessage `json:"permission_timeout_s,omitempty"`
 }
 
 // keepSession is the request's KeepSession with the default applied.
 func (r handoffRequest) keepSession() bool {
 	return r.KeepSession == nil || *r.KeepSession
+}
+
+// permissionTimeoutField is the wire name of the auto-deny timeout, reported
+// in an invalid_permission_timeout's field.
+const permissionTimeoutField = "permission_timeout_s"
+
+// validatePermissionTimeout reads permission_timeout_s as sent (raw) for a
+// handoff or rebuild that will run under profile (permission channel plan
+// Task 3, Nexen's delegate rule). Absent and null mean none (0, which the
+// delegate request then leaves unset). Anything else must be a JSON integer
+// in 0..store.MaxPermissionTimeoutS; a string, a fraction, an exponent, a
+// bool or a number beyond int64 is refused, never coerced, and so is a
+// positive value next to a profile without the permission channel. A
+// refusal is 400 invalid_permission_timeout with field; the caller answers
+// it before any side effect.
+func validatePermissionTimeout(profile string, raw json.RawMessage) (int, *handoffError) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return 0, nil
+	}
+	refuse := func(msg string) (int, *handoffError) {
+		return 0, &handoffError{status: http.StatusBadRequest, code: "invalid_permission_timeout", msg: msg,
+			detail: map[string]any{"field": permissionTimeoutField}}
+	}
+	n, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil {
+		return refuse(permissionTimeoutField + " must be an integer number of seconds")
+	}
+	if n < 0 || n > store.MaxPermissionTimeoutS {
+		return refuse(fmt.Sprintf("%s %d is outside 0..%d", permissionTimeoutField, n, store.MaxPermissionTimeoutS))
+	}
+	if n > 0 && !hasPermissionChannel(profile) {
+		return refuse(fmt.Sprintf("%s needs a permission-channel profile, got %q", permissionTimeoutField, profile))
+	}
+	return int(n), nil
 }
 
 // writeJSON writes v as the response body with the given status.
@@ -155,15 +222,27 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		writeHandoffError(w, http.StatusServiceUnavailable, "nex_unavailable", msg, nil)
 		return
 	}
-	if !slices.Contains(sandbox.UsableProfiles(m.opts.Config.Sandbox), handoffProfile) {
-		writeHandoffError(w, http.StatusConflict, "handoff_unsupported",
-			"host sandbox policy does not allow the handoff profile", nil)
-		return
-	}
 
 	var body handoffRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeHandoffError(w, http.StatusBadRequest, "malformed_body", "invalid request body: "+err.Error(), nil)
+		return
+	}
+	// The policy check needs the body: it is about the profile this handoff
+	// will run under, not about handoff alone.
+	profile := body.Profile
+	if profile == "" {
+		profile = handoffProfile
+	}
+	if !handoffProfileAllowed(m.opts.Config.Sandbox, profile) {
+		writeHandoffError(w, http.StatusConflict, "handoff_unsupported",
+			"host sandbox policy does not allow a handoff under the "+profile+" profile",
+			map[string]any{"profile": profile})
+		return
+	}
+	permissionTimeout, herr := validatePermissionTimeout(profile, body.PermissionTimeoutS)
+	if herr != nil {
+		herr.write(w)
 		return
 	}
 	if !tmux.ValidInstance(body.ExpectedTmuxInstance) {
@@ -246,10 +325,6 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	profile := body.Profile
-	if profile == "" {
-		profile = handoffProfile
-	}
 	req := execution.Request{
 		PrincipalID:     principal,
 		Provider:        "claude",
@@ -260,6 +335,8 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		Origin:          handoffOrigin(m.opts.Config.HostID, code),
 		Labels:          map[string]string{"source": "purdex", handoffSessionLabel: code, purdexSessionLabel: owner.SessionID},
 		ResumeSessionID: owner.SessionID,
+		// 0 (absent) leaves it unset: a request that never asked waits forever.
+		PermissionTimeoutS: permissionTimeout,
 	}
 	// Detached from r.Context(): CC is already gone, and a client that
 	// disconnects mid-delegate must not cancel the admission and leave the

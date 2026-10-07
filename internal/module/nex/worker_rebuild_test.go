@@ -254,6 +254,28 @@ func TestWorkerRebuildFixRound1(t *testing.T) {
 		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`, 409, "handoff_unsupported")
 		assert.Empty(t, env.svc.Requests())
 	})
+	// Permission channel plan Task 2, same rule as the handoff: rebuilding an
+	// asking row works on a host whose max_profile is handoff_ask.
+	t.Run("handoff_ask below handoff: the asking profile rebuilds, plain handoff still refused", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		env.m.opts.Config.Sandbox.MaxProfile = "handoff_ask"
+		env.svc.result = execution.Result{ID: "N1", State: store.StateIdle, EffectiveProfile: "handoff_ask"}
+		code, out := rebuildPost(t, env, `{"session_id":"`+rbS+`","cwd":"/w","profile":"handoff_ask"}`)
+		require.Equal(t, 200, code, "%v", out)
+		require.Len(t, env.svc.Requests(), 1)
+		assert.Equal(t, "handoff_ask", env.svc.Requests()[0].SandboxProfile)
+
+		env = newHandoffEnv(t)
+		env.m.opts.Config.Sandbox.MaxProfile = "handoff_ask"
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w"}`, 409, "handoff_unsupported")
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w","profile":"readonly"}`, 409, "handoff_unsupported")
+		assert.Empty(t, env.svc.Requests())
+
+		env = newHandoffEnv(t)
+		env.m.opts.Config.Sandbox.MaxProfile = "trusted"
+		rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w","profile":"handoff_ask"}`, 400, "invalid_profile")
+		assert.Empty(t, env.svc.Requests())
+	})
 	t.Run("replaced row held by a non-pdx holder → held_by at exit_replaced", func(t *testing.T) {
 		env := newHandoffEnv(t)
 		env.svc.acquireErr = store.ErrLeaseHeld
@@ -271,6 +293,86 @@ func TestWorkerRebuildFixRound1(t *testing.T) {
 		env.svc.err = errors.New("spawn failed")
 		out := rebuildErr(t, env, `{"session_id":"`+rbS+`","cwd":"/w","replace_execution_id":"F1"}`, 500, "delegate_failed")
 		assert.Equal(t, true, out["replaced_exited"])
+	})
+}
+
+// rebuildTimeoutBody is a rebuild body replacing the failed row F1, with
+// profile (when non-empty) and permission_timeout_s as the raw JSON text
+// given (when non-empty).
+func rebuildTimeoutBody(profile, raw string) string {
+	b := `{"session_id":"` + rbS + `","cwd":"/w","replace_execution_id":"F1"`
+	if profile != "" {
+		b += `,"profile":"` + profile + `"`
+	}
+	if raw != "" {
+		b += `,"permission_timeout_s":` + raw
+	}
+	return b + `}`
+}
+
+// TestWorkerRebuildPermissionTimeout (permission channel plan Task 3): the
+// same validator as the handoff. A refusal is 400 invalid_permission_timeout
+// naming the field, never malformed_body, before any side effect (the
+// replaced row is not exited, nothing is delegated, no lock stays taken).
+func TestWorkerRebuildPermissionTimeout(t *testing.T) {
+	refusals := []struct{ name, profile, raw string }{
+		{"negative", "handoff_ask", `-1`},
+		{"above 86400", "handoff_ask", `86401`},
+		{"string", "handoff_ask", `"600"`},
+		{"fraction", "handoff_ask", `1.5`},
+		{"exponent", "handoff_ask", `1e3`},
+		{"bool", "handoff_ask", `true`},
+		{"beyond int64", "handoff_ask", `99999999999999999999`},
+		{"positive with explicit handoff", "handoff", `600`},
+		{"positive with the default profile", "", `600`},
+	}
+	for _, tc := range refusals {
+		t.Run("refused: "+tc.name, func(t *testing.T) {
+			env := newHandoffEnv(t)
+			rebuildStore(env).script(store.Execution{ID: "F1", State: store.StateFailed, SessionID: rbS})
+			out := rebuildErr(t, env, rebuildTimeoutBody(tc.profile, tc.raw), 400, "invalid_permission_timeout")
+			assert.Equal(t, "permission_timeout_s", out["field"])
+			assert.Empty(t, env.svc.Requests(), "nothing delegated")
+			assert.Empty(t, env.svc.ArchiveCalls(), "the replaced row is not exited")
+			assert.Empty(t, env.svc.TerminateIDs())
+			assert.True(t, env.m.locks.TryLock(sidLockKey(rbS)), "sid lock free")
+			assert.True(t, env.m.locks.TryLock(takeToTerminalLockKey("F1")), "replace lock free")
+		})
+	}
+	accepted := []struct {
+		name, profile, raw string
+		want               int
+	}{
+		{"600 with handoff_ask", "handoff_ask", `600`, 600},
+		{"0 with handoff_ask is not sent", "handoff_ask", `0`, 0},
+		{"0 with handoff is not sent", "handoff", `0`, 0},
+		{"absent", "", "", 0},
+		{"null is absent", "handoff", `null`, 0},
+	}
+	for _, tc := range accepted {
+		t.Run("accepted: "+tc.name, func(t *testing.T) {
+			env := newHandoffEnv(t)
+			rebuildStore(env).script(store.Execution{ID: "F1", State: store.StateFailed, SessionID: rbS})
+			env.svc.result = execution.Result{ID: "N1", State: store.StateIdle}
+			code, out := rebuildPost(t, env, rebuildTimeoutBody(tc.profile, tc.raw))
+			require.Equal(t, 200, code, "%v", out)
+			require.Len(t, env.svc.Requests(), 1)
+			assert.Equal(t, tc.want, env.svc.Requests()[0].PermissionTimeoutS)
+		})
+	}
+	// A rejected delegate stays data (today's 200 with reject_reason), as for
+	// any rejected rebuild; exactly one delegate, no retry under handoff.
+	t.Run("permission channel unavailable is a rejected row", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		rebuildStore(env).script(store.Execution{ID: "F1", State: store.StateFailed, SessionID: rbS})
+		reason := "permission channel unavailable: host max_profile narrows handoff_ask to trusted"
+		env.svc.result = execution.Result{ID: "R1", State: store.StateRejected, RejectReason: reason}
+		code, out := rebuildPost(t, env, rebuildTimeoutBody("handoff_ask", `600`))
+		require.Equal(t, 200, code, "%v", out)
+		assert.Equal(t, "rejected", out["state"])
+		assert.Equal(t, reason, out["reject_reason"])
+		require.Len(t, env.svc.Requests(), 1)
+		assert.Equal(t, "handoff_ask", env.svc.Requests()[0].SandboxProfile)
 	})
 }
 
