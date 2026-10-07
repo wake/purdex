@@ -699,10 +699,10 @@ The mod reaches the daemon through `$.process.run` on `pdx`, as the prototype di
 
 ### 8.4 Lineage: the ref keeps working (U3)
 
-`session_lineage{session_id, predecessor_session_id, predecessor_ref, op_id, at}` is written when an op reaches `cleared`. In the same transaction:
-- if the old session was a team's lead, `teams.lead_session_id` moves to the new session;
-- if it was a member, the member row's session id moves;
-- the title moves to the new session id (titles are stored per session id, §3.3).
+`session_lineage{session_id, predecessor_session_id, predecessor_ref, op_id, at}` is written when an op reaches `cleared`, in the same team.db transaction as the op's state change. With it:
+- if the old session was a team's lead, `teams.lead_session_id` moves to the new session (same transaction; P4);
+- if it was a member, the member row's session id moves (same transaction; P4);
+- the title moves to the new session id (titles are stored per session id, §3.3). **⟲ plan v2 coordinator decision:** titles live in meta.db, and `database/sql` has no cross-database transaction, so the title move is its own idempotent meta.db transaction run right after `cleared` commits, and re-run by the boot reconciliation for every op still in `cleared` — the crash window between the two is closed at the next boot, never left open.
 
 **Peer rows** gain `previous_refs` (newest first) for a live head: the **whole chain, uncapped.**
 - **⟲ changed after air26's review (e).** A cap of 10 would break a member's oldest lead ref after the lead's eleventh relay. A ref is 7 bytes, so even a hundred relays add under 1 KB to one row.
@@ -1002,7 +1002,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 - **Relay:**
   - claim is accepted only for the target session;
   - reports are idempotent;
-  - lineage moves title, lead and member in one transaction;
+  - lineage moves lead and member in the `cleared` transaction, and the title in its own idempotent transaction right after (re-run at boot);
   - Resolve finds an old ref in exactly one row, and a live ref wins over `previous_refs`;
   - boot reconciliation from frames, with no hooks.
 - **Usage:** parsed per session id; two panes in one tmux session no longer overwrite; a null `used_percentage`; `rate_limits` absent on the first refresh, present from the second; the per-account weekly reading goes `unknown` after 60 min.
