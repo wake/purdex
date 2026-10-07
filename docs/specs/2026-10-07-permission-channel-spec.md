@@ -56,6 +56,8 @@ Names below are placeholders; the Nexen implementer proposes the final ones, and
 >   - With a profile that has no channel, it answers 400 `invalid_permission_timeout`.
 >   - A `handoff_ask` request that clamps to a different profile is **rejected**, never silently downgraded.
 > - **Summary field:** `pending_permission: {request_id, tool_name, since} | null`.
+>   - `since` is **Unix milliseconds**, like `activity.tool.since` (not RFC 3339).
+>   - `null` is an answer (nothing pending); an absent field means a daemon older than v0.19.0.
 > - **Capability:** `capabilities.permissions: {profiles: ["handoff_ask"], answer: {method, path}, timeout: {max_s}}`.
 >   - The `timeout` object appears one PR later than the rest. **Purdex sends `permission_timeout_s` only when `capabilities.permissions.timeout` exists.**
 > - **N6 is feasible** (measured): stdin stays open past a `result` while a background task is open, for `handoff_ask` only.
@@ -90,7 +92,7 @@ Each request ends in exactly one terminal event, for example `permission.resolve
 A `control_cancel_request` from the CLI ends the request as `cancelled`.
 
 **N3 — answering.** An endpoint, for example `POST /v1/executions/{id}/permissions/{request_id}`, takes `{"behavior":"allow"|"deny", "message"?: string, "lease_id": …}`.
-- It **requires the control lease**, the same rule as `send` and `interrupt`. This is also what closes the Q1 race (§5.4).
+- It **requires the control lease**, the same rule as `send` and `interrupt`. This is also what narrows the Q1 race (§5.4 states what it guarantees and what remains).
 - `allow` writes `control_response{behavior:"allow", updatedInput:<the request's input>}`.
 - `deny` writes `{behavior:"deny", message: <message, or a default such as "The user denied this action.">, interrupt:false}`. Stopping the whole turn stays the job of the existing interrupt.
 - The answer is written to **that turn's stdin**. The request must still be pending; otherwise the endpoint returns 409 with a new code, for example `permission_not_pending`. Once a request has ended (answered, cancelled or expired), every later answer gets that 409. The check and the write are atomic per request: two concurrent answers produce exactly one write.
@@ -149,15 +151,22 @@ The card targets the Mac App window. No phone-browser layout is required (PC2 as
   - the tab label of a worker tab with a pending request reads 「等待核准」;
   - the activity-bar worker list and the New Tab Workers list show the same state, with the pane header's status dot.
   - The dot colour reuses the warning token, with a distinct icon so it is not read as "queued".
-- **Q1 race:**
-  - Answers need the control lease (N3).
-  - Every path that ends a worker while a request could be pending must take the lease **before** it interrupts or terminates:
+- **Q1 race — what the ending paths guarantee** (coordinator ruling R-PC-1, 2026-10-07):
+  - Answers need the control lease (N3), so the pane's lease now gates answers as well as sends.
+  - Every path that ends a worker while a request could be pending **preempts** the pane's lease before it interrupts or terminates (conversation entity D22): it releases a pdx holder's lease as the holder, then acquires an exclusive one under the daemon's own principal. The paths:
     - Q1;
     - exit;
     - take-to-terminal and take-back;
     - worker-rebuild with a replaced row.
 
-    The D4 / D22 rules already do this. The plan verifies each path and adds a test where an answer racing an exit gets `lease_mismatch` or `permission_not_pending`, never an allow.
+    Until R-PC-1 only take-to-terminal and take-back preempted. Exit, Q1 and worker-rebuild borrowed the holder's lease, so the original pane could keep writing until the terminate landed. A non-pdx holder still answers `held_by`, and nothing changes (D4). Exit still never fails on contention (D4): when the preempt keeps losing the lease for a bounded number of passes, it falls back to borrowing, as before, and the pane keeps its lease until the terminate lands.
+  - **Guarantees** (each pinned by a test):
+    1. After a preempt, an answer that carries the previous holder's `lease_id` gets 409 `lease_mismatch`.
+    2. After an interrupt or terminate took effect, any answer gets 409 `permission_not_pending`.
+    3. An ending path never turns a `denied`, `cancelled` or `expired` request into `allowed`.
+  - **Known residuals** (documented, not tested away):
+    1. Nexen re-checks the lease right before it writes an answer, but it does not fence the write. An answer whose check passed just before the preempt can still be written.
+    2. Q1 detection latency. An allow pressed after the user's terminal resume, and before Purdex detects that resume and preempts, still reaches the worker. The transcript-fork risk that follows is the consumer's (Nexen capability matrix #84).
 
 **5.5 The optional timeout (PC3).** Add a setting under Settings → Worker:
 - label 「等待核准逾時」;

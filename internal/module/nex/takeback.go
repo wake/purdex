@@ -387,24 +387,42 @@ func (m *Module) resumeInWindow(sess *session.SessionInfo, expected, resumeComma
 }
 
 // The engine calls of the take-back, each under its own detached, bounded
-// context (see handleNexTakeback and detachedContext).
+// context (see handleNexTakeback and detachedContext). The three lease-
+// phase calls also run inside a preemptBudget (control.go) when exit's
+// preempt phase makes them; noBudget leaves their own timeouts as they are.
 
 func (m *Module) getExecution(parent context.Context, id string) (store.Execution, error) {
-	ctx, cancel := detachedContext(parent, m.engineOpTimeout)
-	defer cancel()
-	return m.sys.store.Get(ctx, id)
+	return m.getExecutionWithin(parent, noBudget, id)
+}
+
+func (m *Module) getExecutionWithin(parent context.Context, b preemptBudget, id string) (row store.Execution, err error) {
+	err = b.run(parent, m.engineOpTimeout, func(ctx context.Context) error {
+		row, err = m.sys.store.Get(ctx, id)
+		return err
+	})
+	return row, err
 }
 
 func (m *Module) acquireLease(parent context.Context, execID, principal string) (store.Lease, error) {
-	ctx, cancel := detachedContext(parent, m.engineOpTimeout)
-	defer cancel()
-	return m.sys.service.AcquireLease(ctx, execID, principal)
+	return m.acquireLeaseWithin(parent, noBudget, execID, principal)
+}
+
+func (m *Module) acquireLeaseWithin(parent context.Context, b preemptBudget, execID, principal string) (lease store.Lease, err error) {
+	err = b.run(parent, m.engineOpTimeout, func(ctx context.Context) error {
+		lease, err = m.sys.service.AcquireLease(ctx, execID, principal)
+		return err
+	})
+	return lease, err
 }
 
 func (m *Module) releaseLease(parent context.Context, execID, leaseID, principal string) error {
-	ctx, cancel := detachedContext(parent, m.leaseCleanupTimeout)
-	defer cancel()
-	return m.sys.service.ReleaseLease(ctx, execID, leaseID, principal)
+	return m.releaseLeaseWithin(parent, noBudget, execID, leaseID, principal)
+}
+
+func (m *Module) releaseLeaseWithin(parent context.Context, b preemptBudget, execID, leaseID, principal string) error {
+	return b.run(parent, m.leaseCleanupTimeout, func(ctx context.Context) error {
+		return m.sys.service.ReleaseLease(ctx, execID, leaseID, principal)
+	})
 }
 
 func (m *Module) interruptExecution(parent context.Context, req execution.InterruptRequest) (execution.InterruptResult, error) {

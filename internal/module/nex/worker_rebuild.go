@@ -145,8 +145,9 @@ func (m *Module) handleWorkerRebuild(w http.ResponseWriter, r *http.Request) {
 
 	exited := false
 	if rid != "" && isLiveExecution(replaced) {
-		// An exit, not a transfer (D22 does not apply): it borrows a pdx
-		// holder's lease, and a non-pdx holder answers held_by (D4).
+		// An exit: like every ending path it preempts a pdx holder's lease
+		// (D22, ruling R-PC-1) — borrowing it only when the preempt stays
+		// contended — and a non-pdx holder answers held_by (D4).
 		if _, herr := m.exitWorker(parent, replaced, nil, m.internalPrincipal()); herr != nil {
 			if herr.detail == nil {
 				herr.detail = map[string]any{}

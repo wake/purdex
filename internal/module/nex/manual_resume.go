@@ -288,6 +288,8 @@ func (m *Module) exitManualResumeWorker(parent context.Context, sid, tmuxSession
 	if m.q1Halted(parent) {
 		return false, "" // Stop began: no new exit starts
 	}
+	// Like every ending path, the exit preempts a pdx tab's lease (D22,
+	// ruling R-PC-1), so that tab can no longer answer a permission request.
 	out, herr := m.exitWorker(parent, w, nil, principal)
 	if herr != nil || !out.Exited() {
 		m.logf("nex: manual resume %s: exiting %s failed: %v", sid, execID, herr)
