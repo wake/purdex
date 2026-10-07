@@ -371,19 +371,61 @@ func TestEviction_EndedAndIdleAndCap(t *testing.T) {
 	}
 }
 
-// session.end also fires on /clear and /resume, after which the same mod
-// load keeps reporting: a later applied event reopens the stream so it is
-// not evicted 30 min later while alive.
+func endEvent(seq int64, reason string) Event {
+	e := mkEvent(seq, TypeSessionEnd)
+	e.Data = json.RawMessage(`{"reason":"` + reason + `"}`)
+	return e
+}
+
+// session.end also fires on /clear and /resume; the same process and
+// stream go on (session.switch follows), so those reasons do not end it.
+func TestApply_SessionEndOnClearDoesNotEnd(t *testing.T) {
+	for _, reason := range []string{"clear", "resume"} {
+		clk := newFakeClock()
+		reg := NewRegistry(clk.Now)
+		const s = "streamAAA"
+		sw := mkEvent(3, TypeSessionSwitch)
+		sw.SID = sidB
+		sw.Data = json.RawMessage(`{"prev_sid":"` + sidA + `","source":"` + reason + `"}`)
+		reg.Apply(mkBatch(s, 0, mkEvent(1, TypeSessionStart), endEvent(2, reason)))
+		if info := streamInfo(t, reg, s); info.Ended || !info.EndedAt.IsZero() {
+			t.Fatalf("%s: session.end must not end the stream: %+v", reason, info)
+		}
+		reg.Apply(mkBatch(s, 0, sw))
+		clk.Advance(31 * time.Minute)
+		reg.Evict()
+		info, ok := reg.BySID(sidB)
+		if !ok || info.Stream != s || info.Ended {
+			t.Fatalf("%s: the stream must stay, on the new sid, 30 min later: %+v, %v", reason, info, ok)
+		}
+	}
+
+	// Any other reason ends it, and it goes 30 min later.
+	clk := newFakeClock()
+	reg := NewRegistry(clk.Now)
+	reg.Apply(mkBatch("streamEND", 0, endEvent(1, "prompt_input_exit")))
+	if info := streamInfo(t, reg, "streamEND"); !info.Ended || !info.EndedAt.Equal(clk.Now()) {
+		t.Fatalf("an exit must end the stream: %+v", info)
+	}
+	clk.Advance(31 * time.Minute)
+	reg.Evict()
+	if _, ok := reg.Events("streamEND", 0); ok {
+		t.Fatal("an ended stream is evicted 30 min later")
+	}
+}
+
+// A stream that reports again after it ended (any later applied event) is
+// alive: it is reopened, so it is not evicted 30 min later as ended.
 func TestApply_EventAfterEndReopens(t *testing.T) {
 	clk := newFakeClock()
 	reg := NewRegistry(clk.Now)
 	const s = "streamAAA"
-	reg.Apply(mkBatch(s, 0, mkEvent(1, TypeSessionEnd)))
-	reg.Apply(mkBatch(s, 0, mkEvent(1, TypeSessionEnd))) // a resend does not reopen
+	reg.Apply(mkBatch(s, 0, endEvent(1, "other")))
+	reg.Apply(mkBatch(s, 0, endEvent(1, "other"))) // a resend does not reopen
 	if info := streamInfo(t, reg, s); !info.Ended {
 		t.Fatalf("info = %+v", info)
 	}
-	reg.Apply(mkBatch(s, 0, mkEvent(2, TypeSessionClear)))
+	reg.Apply(mkBatch(s, 0, mkEvent(2, TypeHeartbeat)))
 	if info := streamInfo(t, reg, s); info.Ended || !info.EndedAt.IsZero() {
 		t.Fatalf("a later event must reopen the stream: %+v", info)
 	}
@@ -394,7 +436,7 @@ func TestApply_EventAfterEndReopens(t *testing.T) {
 	}
 }
 
-func TestBySID_FollowsClear(t *testing.T) {
+func TestBySID_FollowsSwitch(t *testing.T) {
 	clk := newFakeClock()
 	reg := NewRegistry(clk.Now)
 	const s = "streamAAA"
@@ -406,23 +448,30 @@ func TestBySID_FollowsClear(t *testing.T) {
 		t.Fatalf("BySID(A) = %+v, %v", info, ok)
 	}
 
-	clr := mkEvent(2, TypeSessionClear)
-	clr.SID = sidB
-	clr.Data = json.RawMessage(`{"prev_sid":"` + sidA + `"}`)
-	reg.Apply(mkBatch(s, 0, clr))
-	if info, ok := reg.BySID(sidB); !ok || info.Stream != s || info.SID != sidB {
+	// /clear: session.end{clear}, then session.switch carrying the new sid.
+	sw := mkEvent(3, TypeSessionSwitch)
+	sw.SID = sidB
+	sw.Data = json.RawMessage(`{"prev_sid":"` + sidA + `","source":"clear"}`)
+	reg.Apply(mkBatch(s, 0, endEvent(2, "clear"), sw))
+	if info, ok := reg.BySID(sidB); !ok || info.Stream != s || info.SID != sidB || info.Ended {
 		t.Fatalf("BySID(new sid) = %+v, %v", info, ok)
 	}
 	if _, ok := reg.BySID(sidA); ok {
 		t.Fatal("the old sid must no longer find the stream")
 	}
 
-	// Two streams on one sid (a resumed session): the newest wins.
+	// /resume back to the first session: the stream follows again.
+	back := mkEvent(5, TypeSessionSwitch)
+	back.Data = json.RawMessage(`{"prev_sid":"` + sidB + `","source":"resume"}`)
+	reg.Apply(mkBatch(s, 0, endEvent(4, "resume"), back))
+	if info, ok := reg.BySID(sidA); !ok || info.Stream != s {
+		t.Fatalf("BySID after resume = %+v, %v", info, ok)
+	}
+
+	// Two streams on one sid (a session resumed elsewhere): the newest wins.
 	clk.Advance(time.Minute)
-	other := mkEvent(1, TypeHeartbeat)
-	other.SID = sidB
-	reg.Apply(mkBatch("streamOTH", 0, other))
-	if info, _ := reg.BySID(sidB); info.Stream != "streamOTH" {
+	reg.Apply(mkBatch("streamOTH", 0, mkEvent(1, TypeHeartbeat))) // also on sidA
+	if info, _ := reg.BySID(sidA); info.Stream != "streamOTH" {
 		t.Fatalf("BySID = %s, want the stream seen last", info.Stream)
 	}
 }

@@ -40,24 +40,24 @@ type Event struct {
 
 // The v1 event types (spec §6.3).
 const (
-	TypeSessionStart = "session.start"
-	TypeSessionClear = "session.clear"
-	TypeSessionEnd   = "session.end"
-	TypeTurnStart    = "turn.start"
-	TypeTurnComplete = "turn.complete"
-	TypeToolCheck    = "tool.check"
-	TypeToolStart    = "tool.start"
-	TypeToolEnd      = "tool.end"
-	TypeAgentSpawn   = "agent.spawn"
-	TypeCompactStart = "compact.start"
-	TypeCompactEnd   = "compact.end"
-	TypeUsage        = "usage"
-	TypeBackground   = "background"
-	TypeHeartbeat    = "heartbeat"
+	TypeSessionStart  = "session.start"
+	TypeSessionSwitch = "session.switch" // /clear or /resume: the sid changes, the stream goes on
+	TypeSessionEnd    = "session.end"
+	TypeTurnStart     = "turn.start"
+	TypeTurnComplete  = "turn.complete"
+	TypeToolCheck     = "tool.check"
+	TypeToolStart     = "tool.start"
+	TypeToolEnd       = "tool.end"
+	TypeAgentSpawn    = "agent.spawn"
+	TypeCompactStart  = "compact.start"
+	TypeCompactEnd    = "compact.end"
+	TypeUsage         = "usage"
+	TypeBackground    = "background"
+	TypeHeartbeat     = "heartbeat"
 )
 
 var knownTypes = []string{
-	TypeSessionStart, TypeSessionClear, TypeSessionEnd,
+	TypeSessionStart, TypeSessionSwitch, TypeSessionEnd,
 	TypeTurnStart, TypeTurnComplete,
 	TypeToolCheck, TypeToolStart, TypeToolEnd,
 	TypeAgentSpawn, TypeCompactStart, TypeCompactEnd,

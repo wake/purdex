@@ -29,6 +29,7 @@ import (
 	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
 	hosttransfermod "github.com/wake/purdex/internal/module/hosttransfer"
 	"github.com/wake/purdex/internal/module/logs"
+	modeventsmod "github.com/wake/purdex/internal/module/modevents"
 	"github.com/wake/purdex/internal/module/monitor"
 	"github.com/wake/purdex/internal/module/nex"
 	peersmod "github.com/wake/purdex/internal/module/peers"
@@ -366,6 +367,9 @@ func runServe(args []string) *reexecPlan {
 
 func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *store.AgentEventStore) error {
 	c.AddModule(session.NewSessionModule(meta))
+	// The mod event channel publishes its stream registry at Init, before
+	// the agent module, which will subscribe to it (interface U1-2).
+	c.AddModule(modeventsmod.New())
 	agentMod, err := agent.New(agentEvents)
 	if err != nil {
 		return err

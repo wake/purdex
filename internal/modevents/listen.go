@@ -51,7 +51,8 @@ var peerUID = connPeerUID
 // daemon's effective uid; others are closed before a byte is read. That
 // check is the gate, the file mode is defence in depth. Closing the
 // listener unlinks the socket at the resolved path it was bound at; a
-// second Close is a no-op.
+// second Close is a no-op. ResolveSocketPath gives the same path for a
+// data dir.
 func Listen(path string) (net.Listener, Status) {
 	if len(path) > MaxSocketPath {
 		return nil, Status{Reason: ReasonPathTooLong}

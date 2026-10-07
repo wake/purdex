@@ -127,7 +127,7 @@ func TestDecodeBatch_IgnoresUnknownFields(t *testing.T) {
 }
 
 func TestKnownTypes(t *testing.T) {
-	want := []string{"session.start", "session.clear", "session.end", "turn.start", "turn.complete",
+	want := []string{"session.start", "session.switch", "session.end", "turn.start", "turn.complete",
 		"tool.check", "tool.start", "tool.end", "agent.spawn", "compact.start", "compact.end",
 		"usage", "background", "heartbeat"}
 	got := KnownTypes()
@@ -139,7 +139,7 @@ func TestKnownTypes(t *testing.T) {
 			t.Errorf("%s must be known", typ)
 		}
 	}
-	if IsKnownType("turn.step") || IsKnownType("") {
-		t.Fatal("v1 does not know turn.step or the empty type")
+	if IsKnownType("turn.step") || IsKnownType("session.clear") || IsKnownType("") {
+		t.Fatal("v1 does not know turn.step, session.clear or the empty type")
 	}
 }

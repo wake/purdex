@@ -83,7 +83,7 @@ U1-1 (a + b) is the first development segment; it ends with a deploy and a live 
 
 ### 6.1 Socket
 
-- Path: `ModSocketPath(dataDir) = <dataDir>/mod.sock`. If the absolute path is longer than 100 bytes the channel is **disabled** (logged once, reported by the read API as `reason: "path_too_long"`); there is no `/tmp` fallback. Default mlab path `/Users/wake/.config/pdx/mod.sock` (31 bytes).
+- Path: `ModSocketPath(dataDir) = <dataDir>/mod.sock`, made absolute with the directory's symlinks resolved — where the socket is bound (next point). The daemon module and the `pdx.json` writer compute it with the same function, so `mod_socket` names the bound socket and is omitted whenever the daemon would refuse the path. If that path is longer than 100 bytes the channel is **disabled** (logged once, reported by the read API as `reason: "path_too_long"`); there is no `/tmp` fallback. Default mlab path `/Users/wake/.config/pdx/mod.sock` (31 bytes).
 - The socket's directory is resolved with `EvalSymlinks`, and the socket is bound at `<resolved dir>/mod.sock`. The resolved directory must be owned by the daemon's effective uid and not group- or other-writable (mlab: `~/.config/pdx` is `drwx------`), and **every ancestor up to `/`** must be owned by that uid or by root and be either not group/other-writable or sticky (like `/private/tmp`, `drwxrwxrwt`); otherwise disabled (`reason: "unsafe_dir"`). Like OpenSSH's secure-path check, this means no other user can rename or replace any component of the path, so the stale-file check, bind and chmod below are race-free against other users.
 - Start (module `Start`): if the path exists, `Lstat`: a socket that accepts a connection within 200 ms → another daemon owns it → disabled (`reason: "in_use"`); a socket that refuses → removed and rebound; anything that is not a socket → disabled (`reason: "not_a_socket"`), never removed. After bind, `chmod 0600` (defence in depth).
 - **The peer-uid check is the gate**: every accepted connection's peer uid (`LOCAL_PEERCRED` on darwin / `SO_PEERCRED` on linux, `golang.org/x/sys/unix`) must equal the daemon's **effective** uid; otherwise the connection is closed before any byte is read. It wraps `Accept`, so a connection made in the window between bind and chmod is checked like any other. No token.
@@ -108,7 +108,7 @@ POST /mod/v1/events
 - 400 `{"error": "<code>"}` for: `v` ≠ 1 (`unsupported_version`), bad JSON or trailing data after the object (`bad_json`), bad stream id (`bad_stream`), 0 or > 500 events (`bad_events`), seq not strictly increasing within the batch (`bad_seq`), a bad `sid` (`bad_sid`), an event whose `type` does not match `^[a-z][a-z0-9._-]{0,63}$` or whose `data` is missing or not a JSON object (`bad_event`). The mod drops a batch answered 400 (no poison loop) and adds its event count to `dropped_total`; the daemon counts the rejection on the stream when the stream id itself was valid.
 - 503 `{"error": "registry_full"}` when the registry already holds 256 streams, none can be evicted, and the batch is for a stream it does not know; the mod treats it like any non-400 failure (backoff and resend).
 - `dropped_total` is cumulative and never reset by the mod; the daemon keeps `max(stored, received)`, so a resent batch (a 200 whose response was lost) or a batch in flight while more events are lost cannot double-count or erase a loss.
-- Events whose `seq ≤` the stream's last applied seq are skipped (retries). `seq > last + 1` increments the stream's `gaps` and is applied.
+- Events whose `seq ≤` the stream's last applied seq are skipped (retries). `seq > last + 1` increments the stream's `gaps` and is applied — except the first batch of a stream the registry has never seen (after a daemon restart a live stream resumes at its current seq; that is not a gap).
 - Unknown `type`s are accepted, counted under `unknown`, and not delivered (a newer mod against an older daemon).
 - `at` is the mod's `Date.now()` in ms; the daemon keeps it but orders only by seq.
 
@@ -117,8 +117,8 @@ POST /mod/v1/events
 | type | when (mod hook) | data |
 |---|---|---|
 | `session.start` | `session.start` (interactive only) | `{cwd, surface}` |
-| `session.clear` | `classic.SessionStart{source:'clear'}` (event `sid` = the new id) | `{prev_sid}` |
-| `session.end` | `session.end` | `{reason}` |
+| `session.switch` | `classic.SessionStart{source:'clear'|'resume'}` (event `sid` = the new id) | `{prev_sid, source}` |
+| `session.end` | `session.end` (also fires on `/clear` and `/resume`, reason `clear` / `resume`, before the switch) | `{reason}` |
 | `turn.start` | `turn.start` | `{turn_id}` |
 | `turn.complete` | `turn.complete` | `{turn_id, reason, agent_id?, duration_ms, aborted}` |
 | `tool.check` | `tool.check` | `{tool, tool_use_id?, agent_id?, decision}` |
@@ -135,7 +135,8 @@ Conversation content (`turn.step`, prompt text, `session.append`) is **not** in 
 
 - `modevents.Registry`, in memory: per stream `{stream, agent, sid (latest), cwd, interactive, cc_version, mod_version, first_seen (set once), last_seen, last_seq, gaps, dropped_total, rejected, counts{type→n}, ended}` and a ring of its last 256 applied events.
 - Delivery: `Subscribe(func(Event)) (cancel)`; events are delivered synchronously in seq order per stream (one mutex per stream), across streams concurrently. Subscribers must not block and **must not call `Apply` on the same registry, directly or indirectly** (the stream's mutex is held during delivery and is not re-entrant); each subscriber is reviewed and tested for this when it is wired. Event `data` is copied on receipt and again for each subscriber and each read, so no caller can alter the stored history.
-- Eviction: a stream is removed 30 min after `session.end`, or after 2 h without events; at most 256 streams — a hard admission limit: a new stream evicts the oldest `last_seen` that is not in the middle of `Apply`, and is refused (503 above) when none can be evicted.
+- A stream is **ended** only by a `session.end` whose reason is not `clear` / `resume` (those are followed by `session.switch` on the same stream); any later event reopens an ended stream.
+- Eviction: a stream is removed 30 min after it ended, or after 2 h without events; at most 256 streams — a hard admission limit: a new stream evicts the oldest `last_seen` that is not in the middle of `Apply`, and is refused (503 above) when none can be evicted.
 - Not persisted: a daemon restart starts empty, and the next heartbeat (≤ 10 s) repopulates every live stream.
 - The registry is published in the core `ServiceRegistry` so the agent module (U1-2) can subscribe and look streams up by sid.
 
@@ -150,8 +151,8 @@ Conversation content (`turn.step`, prompt text, `session.append`) is **not** in 
 - Timer callbacks are arrows that only call a top-level function with `$` (`$.clock.after(150, () => flushTick($))`), the form M-U1-2's check accepts (the probe's `$.clock.after(0, () => afterStart($, res))` loaded).
 - Queue: enqueue stamps `{seq: ++seq, at: Date.now(), sid: current sid}`; a flush is scheduled 150 ms later with `$.clock.after` (never awaited inside a hook). One request in flight at a time; ≤ 200 events per request; each request races a 5 s deadline (a request that misses it counts as failed and its late answer is ignored — resent events are deduplicated by seq). 200 → drop `seq ≤ ack`, reset backoff; failure → retry with backoff 1 s, 2 s, 4 s … capped at 30 s; 400 → drop the batch and add its size to `dropped_total`. Queue cap 1 000 events: overflow drops the oldest and adds to `dropped_total`.
 - Heartbeat every 10 s from `$.clock.every`; it is queued like any event.
-- `session.end`: queue the event, then a **final flush inside the hook** that ignores backoff and any request in flight: one POST of every unacked event from the lowest queued seq (so a slower in-flight batch arriving later is all duplicates), at most the newest 500 (older ones add to `dropped_total`). Awaited; the 1.5 s bound cuts it if the daemon does not answer. The heartbeat is cancelled.
-- Session id: read with `$.session.id()` at `session.start` and on `classic.SessionStart{source:'clear'}`; `session.end` uses its own `sessionId`.
+- `session.end`: queue the event, then a **flush inside the hook** that ignores backoff and any request in flight: one POST of every unacked event from the lowest queued seq (so a slower in-flight batch arriving later is all duplicates), at most the newest 500 (older ones add to `dropped_total`). Awaited; the 1.5 s bound cuts it if the daemon does not answer. The heartbeat is cancelled only when the reason is not `clear` / `resume` (the process goes on after those).
+- Session id: read with `$.session.id()` at `session.start` and on `classic.SessionStart` with source `clear` or `resume` (→ `session.switch`); `session.end` uses its own `sessionId`.
 - The reporter keeps the mirror state the heartbeat needs (running main turn id, open asks by tool_use_id, compacting); it derives no status.
 
 ### 6.6 Read API (U1-1b)
@@ -162,7 +163,7 @@ Conversation content (`turn.step`, prompt text, `session.append`) is **not** in 
 ### 6.7 Acceptance and deploy (end of U1-1b)
 
 - Deploy: ask the deploy coordinator (`mlab/_z9ruk0`) first and check running workers; swap `bin/pdx` (rm → cp → mv) and restart; re-run `pdx setup --agent cc` with `~/.claude/settings.json` backed up (0600, never printed) and compared key by key except `env.CLAUDE_CODE_PLUGIN_DIRS`.
-- Live acceptance on mlab with a fresh interactive `claude` in a throwaway tmux session: the stream appears in `/api/mod/streams` with the right sid and cwd; `turn.start` / `turn.complete` arrive in order; a heartbeat every 10 s; `/clear` gives `session.clear` with the new sid; exit gives `session.end`; a daemon restart in the middle loses nothing (`gaps` stays 0, `ack` catches up) or, for events lost, the next heartbeat restores the state.
+- Live acceptance on mlab with a fresh interactive `claude` in a throwaway tmux session: the stream appears in `/api/mod/streams` with the right sid and cwd; `turn.start` / `turn.complete` arrive in order; a heartbeat every 10 s; `/clear` gives `session.end{reason:clear}` then `session.switch` with the new sid on the same stream; exit gives `session.end`; a daemon restart in the middle loses nothing (`gaps` stays 0, `ack` catches up) or, for events lost, the next heartbeat restores the state.
 
 ## 7. Lights v2 (U1-2, U1-3) — contract
 
@@ -176,7 +177,7 @@ Wire statuses stay `running | waiting | idle | error | clear`.
 | waiting | `tool.check` decision `ask`; `tool.start` of `AskUserQuestion` or `ExitPlanMode` (main or subagent) | `tool.end` of that tool_use_id; main `turn.complete` |
 | idle | main `turn.complete` reason `answer`, `refusal`, `aborted` | — |
 | error | main `turn.complete` reason `error` | main `turn.start`; `session.start`; `session.end` |
-| clear | `session.end` (reason ≠ `clear`); pid death (sweep) | — |
+| clear | `session.end` (reason ≠ `clear` / `resume`); pid death (sweep) | — |
 
 - While a pane's stream is live, hook-derived *status* for that pane is ignored (hooks still feed identity, provenance, exit records, delegation).
 - Subagent dots: `agent.spawn` without `workflow_run_id` adds; that agent's `turn.complete` removes; the heartbeat's `agents` list reconciles (agents not listed and not workflow-spawned are removed).
