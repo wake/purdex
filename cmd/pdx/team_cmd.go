@@ -54,6 +54,12 @@ var teamRefusalCodes = map[string]bool{
 // one spawn (a test seam).
 var spawnNewID = uuid.NewString
 
+// spawnSettleBound caps the whole wait for one spawn, below the Bash tool's
+// 10-minute limit (as `pdx lead request --wait` 9m), so an op the daemon
+// keeps answering running cannot hold the lead forever. A var only so tests
+// can shorten it.
+var spawnSettleBound = 9 * time.Minute
+
 func runSpawn(args []string) {
 	os.Exit(runSpawnCmd(context.Background(), args, os.Getenv, os.Stdout, os.Stderr))
 }
@@ -199,16 +205,27 @@ func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string,
 // spawnSettle POSTs req until its op leaves running: the same id each time,
 // so the daemon joins the op, across a daemon restart too (Idempotent).
 // Three consecutive attempts with no answer at all are exit 20 (spec §9.1).
+// Past spawnSettleBound it gives up with exit 14: the member did not start
+// in time, though the op may still finish (stderr names it).
 func spawnSettle(ctx context.Context, client *daemonclient.Client, req team.SpawnRequest, stderr io.Writer) (team.SpawnOp, int) {
+	// A cancellation, not a deadline: the client bounds each attempt
+	// (ErrNoAnswer, counted below) only under a ctx without a deadline.
+	bounded, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer time.AfterFunc(spawnSettleBound, cancel).Stop()
 	hung := 0
 	for {
 		var op team.SpawnOp
-		_, err := client.Do(ctx, http.MethodPost, "/api/team/spawns", req, &op, daemonclient.Idempotent())
+		_, err := client.Do(bounded, http.MethodPost, "/api/team/spawns", req, &op, daemonclient.Idempotent())
 		switch {
-		case err == nil && op.State == team.SpawnRunning:
-			hung = 0
-		case err == nil:
+		case err == nil && op.State != team.SpawnRunning:
 			return op, ExitOK
+		case ctx.Err() == nil && bounded.Err() != nil:
+			fmt.Fprintf(stderr, "pdx spawn: spawn %s 在期限內沒有結束，daemon 上可能仍在進行；先用 pdx team 確認，再決定是否重開 %s\n",
+				req.ID, team.SpawnReasonStartTimeout)
+			return op, ExitMemberFailed
+		case err == nil: // running: the same body again joins the op
+			hung = 0
 		case ctx.Err() == nil && (errors.Is(err, daemonclient.ErrNoAnswer) || errors.Is(err, context.DeadlineExceeded)):
 			if hung++; hung >= teamMaxHungPolls {
 				fmt.Fprintln(stderr, "pdx spawn: daemon 沒有回應 daemon_unavailable")

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/cmd/pdx/daemonclient"
 	"github.com/wake/purdex/internal/team"
@@ -257,6 +258,26 @@ func TestSpawnCmd_PostsAgainWhileRunning(t *testing.T) {
 	}
 	if n := hung.count(); n != 3 {
 		t.Errorf("hung: %d spawn POSTs, want 3", n)
+	}
+}
+
+// A daemon that answers running forever (PR P4-7 review): the whole wait is
+// bounded by spawnSettleBound (9 min, under the Bash tool's 10) and ends
+// exit 14 with the op id on stderr and member_start_timeout last, and no
+// member on stdout.
+func TestSpawnCmd_AnOpThatNeverSettlesEndsAtTheBound(t *testing.T) {
+	defer func(b time.Duration) { spawnSettleBound = b }(spawnSettleBound)
+	spawnSettleBound = 50 * time.Millisecond
+	d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnRunning}}
+	code, stdout, stderr := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet")
+	if code != ExitMemberFailed || stdout != "" || !strings.Contains(stderr, d.spawnReq[0].ID) ||
+		lastToken(stderr) != team.SpawnReasonStartTimeout {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, r := range d.spawnReq {
+		if r != d.spawnReq[0] {
+			t.Fatalf("a POST changed the op: %+v", r)
+		}
 	}
 }
 
