@@ -110,6 +110,11 @@ func (p *projector) observe(f bus.Frame) {
 // broadcaster. Start calls it after a successful Init. The projector reads
 // through the module's one read slot (reads), the list wrapper's, so every
 // delta is ordered against every list page.
+//
+// Only a running projector registers the hello (projector_hello.go) as an
+// OnSubscribe callback: without it no delta will ever come, and a client
+// that never gets a hello stays on its legacy path. The core has no way to
+// unregister a callback; after stop the hello is a no-op.
 func (m *Module) startProjector() {
 	if m.sys.bus == nil || m.core == nil || m.core.Events == nil {
 		return
@@ -120,6 +125,7 @@ func (m *Module) startProjector() {
 	m.proj = p
 	m.projMu.Unlock()
 	p.start()
+	m.core.Events.OnSubscribe(p.sendHello)
 }
 
 // stopProjector stops a running projector (see projector.stop), once. Stop

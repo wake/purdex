@@ -51,12 +51,14 @@ const (
 	deltaEventType = "nex.execution"
 )
 
-// projectorTiming is the coalescing and retry timing; a zero field takes its
-// default. A test seam.
+// projectorTiming is the projector's timing; a zero field takes its default.
+// A test seam.
 type projectorTiming struct {
-	trailing   time.Duration // coalesceTrailing
-	maxDelay   time.Duration // coalesceCap
-	retryDelay time.Duration // readRetryDelay
+	trailing   time.Duration   // coalesceTrailing
+	maxDelay   time.Duration   // coalesceCap
+	retryDelay time.Duration   // readRetryDelay
+	recheck    []time.Duration // recheckOffsets (projector_recheck.go)
+	helloWait  time.Duration   // helloSlotWait (projector_hello.go)
 }
 
 func (t projectorTiming) withDefaults() projectorTiming {
@@ -68,6 +70,12 @@ func (t projectorTiming) withDefaults() projectorTiming {
 	}
 	if t.retryDelay <= 0 {
 		t.retryDelay = readRetryDelay
+	}
+	if t.recheck == nil {
+		t.recheck = recheckOffsets
+	}
+	if t.helloWait <= 0 {
+		t.helloWait = helloSlotWait
 	}
 	return t
 }
@@ -81,6 +89,7 @@ type dirtyExec struct {
 	forced  time.Time           // its earliest re-mark: due no later than this; zero when none
 	seq     uint64              // first-mark order, the FIFO tie-break
 	attempt int                 // 1 once a read of this batch failed and was re-marked
+	recheck bool                // a terminal recheck (projector_recheck.go) is part of this batch
 }
 
 // due is when the batch should be flushed: the trailing edge after its
@@ -126,6 +135,7 @@ type mark struct {
 	at      time.Time // when the event was seen, or when a re-mark is due
 	reMark  bool      // scheduled by the projector itself: due at `at` exactly, no trailing window
 	attempt int       // carried by a retry
+	recheck bool      // a terminal recheck's re-mark
 }
 
 // deltaValue is a delta's value (§3.5). The versions live here, never in
@@ -158,10 +168,11 @@ type projector struct {
 	done   chan struct{}     // closed once they have all returned
 	kick   chan struct{}     // capacity 1: a mark changed what the worker waits for
 
-	mu      sync.Mutex
-	dirty   map[string]*dirtyExec // marked, not yet popped for a flush
-	markSeq uint64
-	pushed  map[string]pushedRow // lastPushed (§3.7), for PR1c's reconcile
+	mu       sync.Mutex
+	dirty    map[string]*dirtyExec // marked, not yet popped for a flush
+	markSeq  uint64
+	pushed   map[string]pushedRow     // lastPushed (§3.7), for PR1c's reconcile
+	rechecks map[string]*recheckState // terminal rechecks in progress
 }
 
 func newProjector(slot *readSlot, rows rowReader, events *core.EventsBroadcaster, b frameBus, logf func(string, ...any), timing projectorTiming) *projector {
@@ -171,7 +182,7 @@ func newProjector(slot *readSlot, rows rowReader, events *core.EventsBroadcaster
 		timing: timing.withDefaults(), now: time.Now,
 		ctx: ctx, cancel: cancel,
 		done: make(chan struct{}), kick: make(chan struct{}, 1),
-		dirty: map[string]*dirtyExec{}, pushed: map[string]pushedRow{},
+		dirty: map[string]*dirtyExec{}, pushed: map[string]pushedRow{}, rechecks: map[string]*recheckState{},
 	}
 }
 
@@ -245,6 +256,9 @@ func (p *projector) markLocked(id string, m mark) {
 	}
 	if m.attempt > e.attempt {
 		e.attempt = m.attempt
+	}
+	if m.recheck {
+		e.recheck = true
 	}
 }
 
@@ -332,14 +346,18 @@ func (p *projector) flush(id string, b *dirtyExec) {
 	cause := sortedKinds(b.cause)
 	var row json.RawMessage
 	var found bool
+	var pushed pushedRow
 	_, err := p.slot.readThen(p.ctx, "row", 0, func(ctx context.Context) error {
 		var err error
 		row, found, err = p.rows.read(ctx, id)
 		return err
 	}, func(st slotStamp) {
-		p.push(id, st, cause, row, found)
+		pushed = p.push(id, st, cause, row, found)
 	})
-	if err != nil && p.ctx.Err() == nil {
+	switch {
+	case err == nil:
+		p.recheckAfter(id, b, pushed)
+	case p.ctx.Err() == nil:
 		p.readFailed(id, b, err)
 	}
 }
@@ -348,7 +366,7 @@ func (p *projector) flush(id string, b *dirtyExec) {
 // after the read's ver was taken (readThen), so broadcast order is bseq
 // order (§3.5). The broadcast is strict: a subscriber that cannot take the
 // frame is disconnected rather than left without it.
-func (p *projector) push(id string, st slotStamp, cause []string, row json.RawMessage, found bool) {
+func (p *projector) push(id string, st slotStamp, cause []string, row json.RawMessage, found bool) pushedRow {
 	if !found {
 		row = nil // encodes as null: remove
 	}
@@ -358,14 +376,14 @@ func (p *projector) push(id string, st slotStamp, cause []string, row json.RawMe
 		// Cannot happen: row is JSON the row reader just encoded. Were it to,
 		// the bseq skipped shows every client a gap, and a gap reconciles.
 		p.logf("nex-delta: encoding the delta of exec=%s failed: %v", id, err)
-		return
+		return pushedRow{}
 	}
 	p.events.BroadcastStrict(core.HostEvent{Type: deltaEventType, Value: value})
-	p.recordPushed(id, st.Ver, row, found)
+	return p.recordPushed(id, st.Ver, row, found)
 }
 
-// recordPushed keeps lastPushed[id] current.
-func (p *projector) recordPushed(id string, ver uint64, row json.RawMessage, found bool) {
+// recordPushed keeps lastPushed[id] current and returns what it recorded.
+func (p *projector) recordPushed(id string, ver uint64, row json.RawMessage, found bool) pushedRow {
 	rec := pushedRow{ver: ver, removed: !found}
 	if found {
 		d, err := digestOf(row)
@@ -377,6 +395,7 @@ func (p *projector) recordPushed(id string, ver uint64, row json.RawMessage, fou
 	p.mu.Lock()
 	p.pushed[id] = rec
 	p.mu.Unlock()
+	return rec
 }
 
 // digestOf extracts a row's status digest.
@@ -403,17 +422,24 @@ func digestOf(row json.RawMessage) (rowDigest, error) {
 }
 
 // readFailed re-marks a batch whose read failed, once, after retryDelay,
-// carrying its cause — it was never delivered. A batch already retried is
-// dropped with a log line: its next change marks it again, and PR1c's
-// safety reconcile catches one that never comes.
+// carrying its cause — it was never delivered — and its recheck. A batch
+// already retried is dropped with a log line (a recheck it carried ends
+// with it): its next change marks it again, and PR1c's safety reconcile
+// catches one that never comes.
 func (p *projector) readFailed(id string, b *dirtyExec, err error) {
 	if b.attempt > 0 {
 		p.logf("nex-delta: row read exec=%s failed again, giving up until it changes: %v", id, err)
+		if b.recheck {
+			p.mu.Lock()
+			delete(p.rechecks, id)
+			p.mu.Unlock()
+		}
 		return
 	}
 	p.logf("nex-delta: row read exec=%s failed, retrying in %v: %v", id, p.timing.retryDelay, err)
 	p.mu.Lock()
-	p.markLocked(id, mark{kinds: sortedKinds(b.cause), at: p.now().Add(p.timing.retryDelay), reMark: true, attempt: 1})
+	p.markLocked(id, mark{kinds: sortedKinds(b.cause), at: p.now().Add(p.timing.retryDelay), reMark: true,
+		attempt: 1, recheck: b.recheck})
 	p.mu.Unlock()
 	p.wake()
 }

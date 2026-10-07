@@ -372,6 +372,31 @@ func TestReadSlot_ReadThenRunsInsideTheHoldAfterTheVer(t *testing.T) {
 	assert.Equal(t, slotStamp{Epoch: s.epoch, Ver: 2, Bseq: 1}, st)
 }
 
+// hold takes the slot without reading anything (the hello, §3.5): it runs
+// fn inside it, consumes neither ver nor bseq, and frees the slot either way.
+func TestReadSlot_HoldConsumesNothing(t *testing.T) {
+	s := newReadSlot(discardLogf)
+	ctx := context.Background()
+	_, err := s.readThen(ctx, "row", 0, okRead, func(slotStamp) { s.nextBseq() })
+	require.NoError(t, err)
+
+	var seen slotStamp
+	var held bool
+	require.NoError(t, s.hold(ctx, "hello", 0, func(context.Context) error {
+		seen, held = s.current(), !readSlotFree(s)
+		return nil
+	}))
+	assert.True(t, held, "fn ran outside the slot")
+	assert.Equal(t, slotStamp{Epoch: s.epoch, Ver: 1, Bseq: 1}, seen)
+
+	boom := errors.New("boom")
+	assert.ErrorIs(t, s.hold(ctx, "hello", 0, func(context.Context) error { return boom }), boom)
+	assert.True(t, readSlotFree(s))
+	st, err := s.read(ctx, "list", 0, okRead)
+	require.NoError(t, err)
+	assert.Equal(t, slotStamp{Epoch: s.epoch, Ver: 2, Bseq: 1}, st, "a hold consumed a ver or a bseq")
+}
+
 func TestReadSlot_ReadThenSkipsTheContinuationOfAFailedRead(t *testing.T) {
 	s := newReadSlot(discardLogf)
 	ran := false

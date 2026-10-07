@@ -26,24 +26,39 @@ import (
 
 // rowServer is a fake engine handler. GET /v1/executions/{id} answers id's
 // row — 404 execution_not_found when it has none — after failing the first
-// fails[id] reads with a 500. GET /v1/executions answers listPage, first
-// waiting on listGate when one is set.
+// fails[id] reads with a 500; a script (states) sets the row's state anew
+// for each read until it runs out. GET /v1/executions answers listPage,
+// first waiting on listGate when one is set.
 type rowServer struct {
 	mu          sync.Mutex
 	rows        map[string]string
 	fails       map[string]int
 	reads       map[string]int
+	script      map[string][]string
 	listEntered chan struct{}
 	listGate    chan struct{}
 }
 
 func newRowServer() *rowServer {
-	return &rowServer{rows: map[string]string{}, fails: map[string]int{}, reads: map[string]int{}}
+	return &rowServer{rows: map[string]string{}, fails: map[string]int{}, reads: map[string]int{},
+		script: map[string][]string{}}
+}
+
+// states makes id's next reads answer these states, one per read, the last
+// one for good.
+func (s *rowServer) states(id string, states ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.script[id] = states
+}
+
+func rowBody(id, state string) string {
+	return fmt.Sprintf(`{"id":%q,"state":%q,"turn_count":1}`, id, state) + "\n"
 }
 
 // set gives id a row in state.
 func (s *rowServer) set(id, state string) {
-	s.setBody(id, fmt.Sprintf(`{"id":%q,"state":%q,"turn_count":1}`, id, state)+"\n")
+	s.setBody(id, rowBody(id, state))
 }
 
 func (s *rowServer) setBody(id, body string) {
@@ -76,6 +91,10 @@ func (s *rowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/v1/executions/")
 	s.mu.Lock()
 	s.reads[id]++
+	if q := s.script[id]; len(q) > 0 {
+		s.rows[id] = rowBody(id, q[0])
+		s.script[id] = q[1:]
+	}
 	body, ok := s.rows[id]
 	fail := s.fails[id] > 0
 	if fail {
