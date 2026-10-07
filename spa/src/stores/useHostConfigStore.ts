@@ -16,7 +16,15 @@ import {
   type RelaySwitches,
   type ResumeTemplateOverrides,
 } from '../lib/host-config-api'
+import {
+  parseHostConfig,
+  parseHostConfigField,
+  type HostConfigProblem,
+  type ParsedHostConfig,
+} from '../lib/host-config-parse'
 import { useHostStore } from './useHostStore'
+
+export type { HostConfigProblem } from '../lib/host-config-parse'
 
 export type HostConfigStatus = 'idle' | 'loading' | 'ready' | 'unsupported' | 'error'
 
@@ -36,6 +44,12 @@ export interface HostConfigEntry {
   /** The daemon's GET carried a `relay` field (P5a+). */
   relaySupported: boolean
   revisions: { projects: number; commands: number; resumeTemplates: number; quickReplies: number; relay: number }
+  /**
+   * #1489: each collection whose stored copy on the daemon was malformed, and
+   * how. Its field above holds only what could be read; the section says what
+   * it hid.
+   */
+  problems: Partial<Record<ConfigField, HostConfigProblem>>
   error?: string
 }
 
@@ -52,6 +66,7 @@ export function emptyHostConfigEntry(status: HostConfigStatus = 'idle'): HostCon
     relay: DEFAULT_RELAY_SWITCHES,
     relaySupported: false,
     revisions: { projects: 0, commands: 0, resumeTemplates: 0, quickReplies: 0, relay: 0 },
+    problems: {},
   }
 }
 
@@ -59,6 +74,24 @@ export function emptyHostConfigEntry(status: HostConfigStatus = 'idle'): HostCon
 export const EMPTY_HOST_CONFIG: HostConfigEntry = Object.freeze(emptyHostConfigEntry()) as HostConfigEntry
 
 type ConfigField = keyof HostConfigEntry['revisions']
+type Problems = HostConfigEntry['problems']
+
+const CONFIG_FIELDS: readonly ConfigField[] = ['projects', 'commands', 'resumeTemplates', 'quickReplies', 'relay']
+
+function problemsOf(p: ParsedHostConfig): Problems {
+  const out: Problems = {}
+  for (const field of CONFIG_FIELDS) {
+    const problem = p[field]?.problem
+    if (problem) out[field] = problem
+  }
+  return out
+}
+
+/** `problems` with `field`'s entry replaced by `problem`, or dropped when there is none. */
+function withProblem(problems: Problems, field: ConfigField, problem: HostConfigProblem | null): Problems {
+  const { [field]: _dropped, ...rest } = problems
+  return problem ? { ...rest, [field]: problem } : rest
+}
 
 interface HostConfigState {
   byHost: Record<string, HostConfigEntry>
@@ -136,19 +169,27 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
     const endpoint = endpointOf(hostId)
     if (endpoint === null) throw new Error(`host ${hostId} is not configured`)
     const token = beginRequest(hostId, endpoint)
+    // The daemon's copy of this one collection, read the way a load reads it.
+    // A stored answer is normalised, so it clears the field's problem; a 409's
+    // `current` is whatever the row holds and may set it again.
+    const take = (raw: unknown) => {
+      const parsed = parseHostConfigField[field](raw, hostId)
+      const now = get().byHost[hostId] ?? entry
+      patch(hostId, {
+        [field]: parsed.items,
+        revisions: { ...now.revisions, [field]: parsed.revision },
+        problems: withProblem(now.problems, field, parsed.problem),
+      })
+    }
     try {
       const stored = await putHostConfig(hostId, collection, items, entry.revisions[field])
       // The PUT went to the daemon that was there when it was sent. If that is
       // no longer this host's daemon, its answer says nothing about the one
       // whose copy the cache now holds.
       if (!stillCurrent(hostId, token)) return
-      const now = get().byHost[hostId] ?? entry
-      patch(hostId, { [field]: stored.items, revisions: { ...now.revisions, [field]: stored.revision } })
+      take(stored)
     } catch (err) {
-      if (err instanceof HostConfigConflictError && stillCurrent(hostId, token)) {
-        const now = get().byHost[hostId] ?? entry
-        patch(hostId, { [field]: err.current.items, revisions: { ...now.revisions, [field]: err.current.revision } })
-      }
+      if (err instanceof HostConfigConflictError && stillCurrent(hostId, token)) take(err.current)
       throw err
     }
   }
@@ -173,14 +214,16 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
         // A refresh of a ready host keeps showing its data while it loads.
         if (get().byHost[hostId]?.status !== 'ready') patch(hostId, { status: 'loading', error: undefined })
         try {
-          const p = await fetchHostConfig(hostId, abort.signal)
+          const body = await fetchHostConfig(hostId, abort.signal)
           if (!stillCurrent(hostId, token)) return
+          // Throws only for a body that is not an object at all: a load error.
+          const p = parseHostConfig(body, hostId)
           patch(hostId, {
             status: 'ready',
             error: undefined,
-            projects: p.projects.items ?? [],
-            commands: p.commands.items ?? [],
-            resumeTemplates: p.resumeTemplates.items ?? {},
+            projects: p.projects.items,
+            commands: p.commands.items,
+            resumeTemplates: p.resumeTemplates.items,
             quickReplies: p.quickReplies?.items ?? [],
             quickRepliesSupported: p.quickReplies !== undefined,
             relay: p.relay?.items ?? DEFAULT_RELAY_SWITCHES,
@@ -192,6 +235,7 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
               quickReplies: p.quickReplies?.revision ?? 0,
               relay: p.relay?.revision ?? 0,
             },
+            problems: problemsOf(p),
           })
         } catch (err) {
           // A failure is as endpoint-specific as a success: the old daemon

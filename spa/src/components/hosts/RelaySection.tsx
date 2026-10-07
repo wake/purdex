@@ -8,7 +8,7 @@ import { hostConfigQueueKey, queueHostConfigSave } from '../../lib/host-config-q
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
-import { HostConfigNotice, useHostConfigGate } from './HostConfigNotice'
+import { HostConfigNotice, HostConfigProblemNotice, useHostConfigGate } from './HostConfigNotice'
 
 export function RelaySection({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
@@ -48,6 +48,8 @@ export function RelaySection({ hostId }: { hostId: string }) {
     <div className="max-w-3xl" data-testid="relay-section" aria-busy={pending || undefined}>
       <h2 className="text-lg font-semibold mb-4">{t('hosts.relay')}</h2>
       <HostConfigNotice notice={notice} />
+      {/* An unreadable value shows both switches off, as the daemon reads it; a toggle rewrites it. */}
+      <HostConfigProblemNotice problem={entry.problems.relay} title="hosts.relay" />
       {unsupported ? (
         <p data-testid="relay-unsupported" className="text-xs text-text-muted">{t('hosts.relay.unsupported')}</p>
       ) : (

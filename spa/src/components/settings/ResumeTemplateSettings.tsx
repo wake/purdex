@@ -53,6 +53,7 @@ import { hostConfigQueueKey, queueHostConfigSave } from '../../lib/host-config-q
 import { lookupResumeTemplate, useResumeTemplateLookup, type ResumeTemplatePair } from '../../lib/resume-templates'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { HostConfigProblemNotice } from '../hosts/HostConfigNotice'
 import { ShellVerdict } from './ShellVerdict'
 
 type Field = 'exact' | 'fallback'
@@ -84,6 +85,8 @@ export function ResumeTemplateSettings({ hostId, busy = false }: { hostId: strin
   const t = useI18nStore((s) => s.t)
   const lookup = useResumeTemplateLookup(hostId)
   const ready = useHostConfigStore((s) => s.byHost[hostId]?.status === 'ready')
+  // A dropped override answers from the defaults until a save rewrites the map (#1489).
+  const problem = useHostConfigStore((s) => s.byHost[hostId]?.problems.resumeTemplates)
   const [saveError, setSaveError] = useState<string | null>(null)
   // Editing is only meaningful against a loaded copy: its revision is what the
   // PUT is compared against.
@@ -284,6 +287,7 @@ export function ResumeTemplateSettings({ hostId, busy = false }: { hostId: strin
         {' '}
         {t('resume_template.limit_probe')}
       </p>
+      <HostConfigProblemNotice problem={problem} title="resume_template.title" className="mt-2" />
       {saveError ? (
         <p data-testid="resume-template-save-error" className="mt-2 text-xs text-status-warning">{saveError}</p>
       ) : null}

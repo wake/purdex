@@ -2,7 +2,7 @@ import { ArrowDown, ArrowUp, Check, PencilSimple, Plus, Trash, X } from '@phosph
 import { type HostProject } from '../../lib/host-config-api'
 import { MAX_CONFIG_ITEMS, newConfigId } from '../../lib/host-config-validate'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { HostConfigNotice } from './HostConfigNotice'
+import { HostConfigNotice, HostConfigProblemNotice } from './HostConfigNotice'
 import { PathStatusIcon, ProjectEditDialog } from './ProjectEditDialog'
 import { useHostConfigCollection } from './useHostConfigCollection'
 import { usePathCheck } from './usePathCheck'
@@ -18,7 +18,7 @@ export function ProjectsSection({ hostId }: { hostId: string }) {
   // dialog's lifecycle, the delete confirmation and the queued, id-addressed
   // saves. What is left here is what a PROJECT is: its fields and its rows.
   const {
-    items: projects, editable, notice, atLimit, pending, saveError,
+    items: projects, editable, notice, problem, atLimit, pending, saveError,
     editing, openEditor, closeEditor, submit,
     deleting, askDelete, cancelDelete, confirmDelete, move,
   } = useHostConfigCollection<HostProject>(hostId, 'projects')
@@ -38,6 +38,7 @@ export function ProjectsSection({ hostId }: { hostId: string }) {
       </div>
 
       <HostConfigNotice notice={notice} />
+      <HostConfigProblemNotice problem={problem} title="hosts.projects" />
       {atLimit && (
         <p data-testid="projects-limit" className="mb-3 text-xs text-text-muted">{t('host_config.limit', { max: MAX_CONFIG_ITEMS })}</p>
       )}

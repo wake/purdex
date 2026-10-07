@@ -9,6 +9,7 @@ import { newConfigId } from '../../lib/host-config-validate'
 import { MAX_QUICK_REPLIES, trimLikeGo, validateQuickReplyText } from '../../lib/quick-replies'
 import { EMPTY_HOST_CONFIG, useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { HostConfigProblemNotice } from './HostConfigNotice'
 import { useHostConfigCollection } from './useHostConfigCollection'
 
 const iconBtn = 'p-1 rounded hover:bg-surface-tertiary text-text-secondary hover:text-text-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
@@ -63,7 +64,7 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
   const entry = useHostConfigStore((s) => s.byHost[hostId] ?? EMPTY_HOST_CONFIG)
   const {
-    items, editable, atLimit, pending, saveError,
+    items, editable, problem, atLimit, pending, saveError,
     editing, isNew, openEditor, closeEditor, submit,
     deleting, askDelete, cancelDelete, confirmDelete, move,
   } = useHostConfigCollection<QuickReply>(hostId, 'quick-replies')
@@ -95,6 +96,7 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
 
   return (
     <div data-testid="quick-replies">
+      <HostConfigProblemNotice problem={problem} title="hosts.quick_replies.tab" />
       <div className="mb-3 flex items-center justify-between gap-3">
         <p className="text-xs text-text-muted">
           {neverWritten && <span data-testid="quick-replies-defaults">{t('hosts.quick_replies.defaults_note')}</span>}

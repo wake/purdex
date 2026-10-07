@@ -26,7 +26,7 @@ import { HostConfigConflictError, type HostCommand, type HostProject, type Quick
 import { hostConfigQueueKey, queueHostConfigSave } from '../../lib/host-config-queue'
 import { MAX_CONFIG_ITEMS } from '../../lib/host-config-validate'
 import { effectiveQuickReplies, MAX_QUICK_REPLIES } from '../../lib/quick-replies'
-import { useHostConfigStore, type HostConfigEntry } from '../../stores/useHostConfigStore'
+import { useHostConfigStore, type HostConfigEntry, type HostConfigProblem } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostConfigGate, type GateNotice } from './HostConfigNotice'
 
@@ -43,6 +43,7 @@ type CollectionItem = HostProject | HostCommand | QuickReply
  */
 interface CollectionBinding {
   read: (entry: HostConfigEntry) => readonly CollectionItem[]
+  problem: (entry: HostConfigEntry) => HostConfigProblem | undefined
   save: (hostId: string, items: CollectionItem[]) => Promise<void>
   max: number
 }
@@ -50,11 +51,13 @@ interface CollectionBinding {
 const COLLECTIONS = {
   projects: {
     read: (entry) => entry.projects,
+    problem: (entry) => entry.problems.projects,
     save: (hostId, items) => useHostConfigStore.getState().saveProjects(hostId, items as HostProject[]),
     max: MAX_CONFIG_ITEMS,
   },
   commands: {
     read: (entry) => entry.commands,
+    problem: (entry) => entry.problems.commands,
     save: (hostId, items) => useHostConfigStore.getState().saveCommands(hostId, items as HostCommand[]),
     max: MAX_CONFIG_ITEMS,
   },
@@ -62,6 +65,7 @@ const COLLECTIONS = {
   // them — edited — for real.
   'quick-replies': {
     read: (entry) => effectiveQuickReplies(entry),
+    problem: (entry) => entry.problems.quickReplies,
     save: (hostId, items) => useHostConfigStore.getState().saveQuickReplies(hostId, items as QuickReply[]),
     max: MAX_QUICK_REPLIES,
   },
@@ -95,6 +99,8 @@ export interface HostConfigCollectionOps<T extends WithId> {
   editable: boolean
   /** Why editing is not allowed, for `HostConfigNotice`. */
   notice: GateNotice | null
+  /** The host's stored copy was malformed (#1489), for `HostConfigProblemNotice`. */
+  problem: HostConfigProblem | undefined
   /** The collection is full: no row may be added. */
   atLimit: boolean
   /** A save is in flight — for the dialog and the Add button, never for row actions. */
@@ -223,6 +229,7 @@ export function useHostConfigCollection<T extends WithId>(
     items,
     editable,
     notice,
+    problem: binding.problem(entry),
     atLimit: items.length >= binding.max,
     pending,
     saveError,

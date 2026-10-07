@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { emptyHostConfigEntry, useHostConfigStore } from './useHostConfigStore'
 import { useHostStore } from './useHostStore'
 import * as api from '../lib/host-config-api'
@@ -51,6 +51,7 @@ describe('load', () => {
     expect(e.revisions).toEqual({ projects: 3, commands: 0, resumeTemplates: 1, quickReplies: 0, relay: 0 })
     expect(e.relaySupported).toBe(false)
     expect(e.relay).toEqual({ self_solo: true, self_lead: true })
+    expect(e.problems).toEqual({})
   })
 
   it('404 → unsupported; never throws', async () => {
@@ -145,6 +146,77 @@ describe('save*', () => {
   it('refuses to save a host that is not ready', async () => {
     await expect(useHostConfigStore.getState().saveCommands('h-unloaded', [])).rejects.toThrow(/not loaded/)
     expect(api.putHostConfig).not.toHaveBeenCalled()
+  })
+})
+
+// The daemon's GET hands back whatever a row holds (#1489): a hand-edited row
+// must reach the sections sanitised, with the section told why.
+describe('malformed collections', () => {
+  const C1 = { id: 'c1', name: 'Claude', command: 'claude', icon: { kind: 'agent', value: 'cc-bot' } }
+  const malformed = {
+    ...payload,
+    projects: { items: {}, revision: 3 },
+    commands: { items: [C1, { id: 'c2', command: 'x' }], revision: 2 },
+    quickReplies: { items: [{ id: 'q1', text: 42 }], revision: 5 },
+    relay: { items: { self_solo: null }, revision: 1 },
+  }
+
+  beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+  afterEach(() => { vi.mocked(console.warn).mockRestore() })
+
+  it('load: ready and sanitised; each bad collection carries its problem, the good one is intact', async () => {
+    vi.mocked(api.fetchHostConfig).mockResolvedValue(malformed)
+    await useHostConfigStore.getState().load(H)
+    const e = useHostConfigStore.getState().byHost[H]
+    expect(e.status).toBe('ready')
+    expect(e.projects).toEqual([])
+    expect(e.commands).toEqual([C1])
+    expect(e.quickReplies).toEqual([])
+    // Fails closed like the daemon, which refuses self relay on a value it cannot read.
+    expect(e.relay).toEqual({ self_solo: false, self_lead: false })
+    expect(e.resumeTemplates).toEqual(payload.resumeTemplates.items)
+    expect(e.revisions).toEqual({ projects: 3, commands: 2, resumeTemplates: 1, quickReplies: 5, relay: 1 })
+    expect(e.problems).toEqual({
+      projects: { kind: 'shape' },
+      commands: { kind: 'rows', count: 1 },
+      quickReplies: { kind: 'rows', count: 1 },
+      relay: { kind: 'relay' },
+    })
+  })
+
+  it('a body that is not an object is still a load error', async () => {
+    vi.mocked(api.fetchHostConfig).mockResolvedValue(null)
+    await useHostConfigStore.getState().load(H)
+    expect(useHostConfigStore.getState().byHost[H].status).toBe('error')
+  })
+
+  it('a successful save clears that field\'s problem and no other', async () => {
+    vi.mocked(api.fetchHostConfig).mockResolvedValue(malformed)
+    await useHostConfigStore.getState().load(H)
+    const next = [{ id: 'p2', name: 'B', slug: 'b', path: '/b' }]
+    vi.mocked(api.putHostConfig).mockResolvedValue({ items: next, revision: 4 })
+    await useHostConfigStore.getState().saveProjects(H, next)
+    const e = useHostConfigStore.getState().byHost[H]
+    expect(e.projects).toEqual(next)
+    expect(Object.keys(e.problems).sort()).toEqual(['commands', 'quickReplies', 'relay'])
+  })
+
+  it('a 409 whose current copy is malformed is sanitised and sets the problem; a clean one clears it', async () => {
+    vi.mocked(api.fetchHostConfig).mockResolvedValue(payload)
+    await useHostConfigStore.getState().load(H)
+    const ok = { id: 'q1', text: 'ok' }
+    vi.mocked(api.putHostConfig).mockRejectedValueOnce(new HostConfigConflictError({ items: [ok, { id: 'q2' }], revision: 9 }))
+    await expect(useHostConfigStore.getState().saveQuickReplies(H, [])).rejects.toBeInstanceOf(HostConfigConflictError)
+    let e = useHostConfigStore.getState().byHost[H]
+    expect(e.quickReplies).toEqual([ok])
+    expect(e.revisions.quickReplies).toBe(9)
+    expect(e.problems).toEqual({ quickReplies: { kind: 'rows', count: 1 } })
+
+    vi.mocked(api.putHostConfig).mockRejectedValueOnce(new HostConfigConflictError({ items: [ok], revision: 10 }))
+    await expect(useHostConfigStore.getState().saveQuickReplies(H, [])).rejects.toBeInstanceOf(HostConfigConflictError)
+    e = useHostConfigStore.getState().byHost[H]
+    expect(e.revisions.quickReplies).toBe(10)
+    expect(e.problems).toEqual({})
   })
 })
 
