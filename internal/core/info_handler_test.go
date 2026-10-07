@@ -367,6 +367,17 @@ func TestHandleHealth_CarriesBootID(t *testing.T) {
 	assert.Equal(t, c.BootID, body["boot_id"])
 }
 
+// capabilities is how a client gates features per host instead of comparing
+// purdex_version strings; the order is part of the contract (stable output).
+func TestHandleInfo_Capabilities(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{}})
+	rec := httptest.NewRecorder()
+	c.handleInfo(rec, httptest.NewRequest("GET", "/api/info", nil))
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Equal(t, []any{"transcript.v1", "terminal.mirror.v1"}, body["capabilities"])
+}
+
 func TestHandleInfo_LastShutdown(t *testing.T) {
 	c := New(CoreDeps{Config: &config.Config{}})
 	get := func() map[string]any {
