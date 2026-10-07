@@ -43,6 +43,11 @@ const openTabs = (...tabs: Tab[]) =>
 
 const hostConfig = (id: string, ip = '10.0.0.1') => ({ id, name: id, ip, port: 7860, order: 0 })
 
+const setHosts = (...configs: ReturnType<typeof hostConfig>[]) =>
+  act(() => {
+    useHostStore.setState({ hosts: Object.fromEntries(configs.map((c) => [c.id, c])) as never, hostOrder: configs.map((c) => c.id) })
+  })
+
 const nexReady = (hostId: string, ready = true) =>
   act(() => {
     useNexHostStore.setState((s) => ({
@@ -281,6 +286,121 @@ describe('worker title prefetch (#1557)', () => {
     await flush()
     expect(getExecutionMock).toHaveBeenCalledTimes(2)
     expect(useWorkerTitlePrefetchStore.getState().byKey[executionKey(H, 'e1')]?.brief).toBe('New daemon')
+  })
+
+  // A1: the same id, ip, port and token after the host was forgotten — the fingerprint alone cannot tell the
+  // incarnations apart, so the answer of the old one must not be written as the new one's.
+  it.each([
+    ['removed and re-added', () => { setHosts(hostConfig(H2)); setHosts(hostConfig(H), hostConfig(H2)) }, 2],
+    ['re-pointed and pointed back', () => {
+      setHosts(hostConfig(H, '10.0.0.9'), hostConfig(H2))
+      setHosts(hostConfig(H), hostConfig(H2))
+    }, 3],
+  ])('a host %s with the same endpoint: the old request\'s answer is dropped, the current one is asked and kept', async (_, arrange, calls) => {
+    nexReady(H)
+    listAnswered(H)
+    const pending: Deferred<ExecutionSummary>[] = []
+    getExecutionMock.mockImplementation(() => {
+      const d = deferred<ExecutionSummary>()
+      pending.push(d)
+      return d.promise
+    })
+    const tab = execTab('t1', 'e1')
+    openTabs(tab)
+    const { result } = renderHook(() => useTabDisplay(tab))
+    start()
+    await flush()
+    expect(getExecutionMock).toHaveBeenCalledTimes(1)
+
+    arrange()
+    await flush()
+    // The forgotten incarnation's request is still out, yet the current one is asked.
+    expect(getExecutionMock).toHaveBeenCalledTimes(calls)
+
+    for (const d of pending.slice(0, -1)) d.resolve(summary('e1', { session_title: { text: 'Old', source: 'ai' } }))
+    await flush()
+    expect(useWorkerTitlePrefetchStore.getState().byKey).toEqual({})
+    expect(result.current.displayTitle).toBe('page.pane.execution')
+    expect(getExecutionMock).toHaveBeenCalledTimes(calls)
+
+    pending[pending.length - 1].resolve(summary('e1', { session_title: { text: 'Current', source: 'ai' } }))
+    await flush()
+    expect(result.current.displayTitle).toBe('Current - repo')
+  })
+
+  // A2: hostFetch has no timeout, so a request to the forgotten incarnation may never settle.
+  it('a request to a forgotten host that never settles does not hold back the host re-added under its id', async () => {
+    nexReady(H)
+    listAnswered(H)
+    getExecutionMock.mockReturnValueOnce(new Promise<ExecutionSummary>(() => {}))
+    getExecutionMock.mockResolvedValueOnce(summary('e1', { brief: 'Brief' }))
+    openTabs(execTab('t1', 'e1'))
+    start()
+    await flush()
+    setHosts(hostConfig(H2))
+    setHosts(hostConfig(H), hostConfig(H2))
+    await flush()
+    expect(getExecutionMock).toHaveBeenCalledTimes(2)
+    expect(useWorkerTitlePrefetchStore.getState().byKey[executionKey(H, 'e1')]?.brief).toBe('Brief')
+  })
+
+  it('the forgotten request settling late does not free the host while the current request is in flight', async () => {
+    nexReady(H)
+    listAnswered(H)
+    const pending: Deferred<ExecutionSummary>[] = []
+    getExecutionMock.mockImplementation(() => {
+      const d = deferred<ExecutionSummary>()
+      pending.push(d)
+      return d.promise
+    })
+    openTabs(execTab('t1', 'e1'), execTab('t2', 'e2'))
+    start()
+    await flush()
+    expect(getExecutionMock.mock.calls).toEqual([[H, 'e1']])
+
+    setHosts(hostConfig(H2))
+    setHosts(hostConfig(H), hostConfig(H2))
+    await flush()
+    expect(getExecutionMock.mock.calls).toEqual([[H, 'e1'], [H, 'e1']])
+
+    pending[0].reject(new NexApiError(0, 'network', 'offline'))
+    await flush()
+    // Still one request in flight for the host: e2 waits for the current one.
+    expect(getExecutionMock.mock.calls).toEqual([[H, 'e1'], [H, 'e1']])
+
+    pending[1].resolve(summary('e1'))
+    await flush()
+    expect(getExecutionMock.mock.calls).toEqual([[H, 'e1'], [H, 'e1'], [H, 'e2']])
+  })
+
+  // A3: the row that won over the answer can leave again — the worker archived since, which is #1557 itself.
+  it('an answer dropped for a list row is asked again once that row leaves the list (archived)', async () => {
+    nexReady(H)
+    listAnswered(H)
+    const d = deferred<ExecutionSummary>()
+    getExecutionMock.mockReturnValueOnce(d.promise)
+    getExecutionMock.mockResolvedValueOnce(summary('e1', { session_title: { text: 'Archived', source: 'ai' } }))
+    const tab = execTab('t1', 'e1')
+    openTabs(tab)
+    const { result } = renderHook(() => useTabDisplay(tab))
+    start()
+    await flush()
+    expect(getExecutionMock).toHaveBeenCalledTimes(1)
+
+    listAnswered(H, [summary('e1', { archived: false, state: 'idle', session_title: { text: 'Row', source: 'ai' } })])
+    await flush()
+    expect(result.current.displayTitle).toBe('Row - repo')
+
+    d.resolve(summary('e1', { session_title: { text: 'Stale', source: 'ai' } }))
+    await flush()
+    expect(useWorkerTitlePrefetchStore.getState().byKey).toEqual({})
+    expect(getExecutionMock).toHaveBeenCalledTimes(1)
+
+    listAnswered(H, [])
+    await flush()
+    expect(getExecutionMock).toHaveBeenCalledTimes(2)
+    expect(useWorkerTitlePrefetchStore.getState().byKey[executionKey(H, 'e1')]?.session_title?.text).toBe('Archived')
+    expect(result.current.displayTitle).toBe('Archived - repo')
   })
 
   it('stopped: no more fetches', async () => {
