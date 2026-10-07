@@ -103,10 +103,12 @@ func (m *Module) closeExpired(id string, now int64, state team.State) (team.Appr
 // The relay guard is what keeps a relay's own /clear from ending the team:
 // the old session id leaves the registry about 0.6 s after /clear while
 // the op is still written, and the cleared report then moves the lead
-// (P4-3). A manual /clear has no op, so it ends the team. A registry read
-// error answers "live" (peers/origin_resolver.go) and a store error skips
-// the team, so neither ever ends one. EndTeam is guarded on the lead read
-// here, so a lead moved since is left alone. Members are untouched (D4).
+// (P4-3). A manual /clear has no op, so it ends the team. The guard lives
+// in EndTeam's UPDATE, with the check that the lead is still the one read
+// here, so neither a relay claimed nor a lead moved since loses to the
+// end. A registry read error answers "live" (peers/origin_resolver.go) and
+// a store error skips the team, so neither ever ends one. Members are
+// untouched (D4).
 func (m *Module) endGoneTeams() {
 	teams, err := m.store.ListLiveTeams()
 	if err != nil {
@@ -117,13 +119,8 @@ func (m *Module) endGoneTeams() {
 		if m.origins.LiveSession(t.LeadSessionID) {
 			continue
 		}
-		relaying, err := m.relayInFlight(t.LeadSessionID)
-		if err != nil {
-			m.logf("[team] sweep team %s: %v", t.ID, err)
-			continue
-		}
-		if relaying {
-			continue
+		if m.beforeEndTeam != nil {
+			m.beforeEndTeam(t)
 		}
 		ended, err := m.store.EndTeam(t.ID, t.LeadSessionID, team.TeamEndLeadGone, m.now())
 		if err != nil {
@@ -134,20 +131,4 @@ func (m *Module) endGoneTeams() {
 			m.logf("[team] team %s ended (%s): its lead %s (%s) is gone", t.ID, team.TeamEndLeadGone, t.LeadRef, t.LeadSessionID)
 		}
 	}
-}
-
-// relayInFlight reports whether the session has a relay op past its claim
-// and not yet cleared (claimed, writing or written): the stretch in which
-// the session may /clear for the relay and so leave the registry while it
-// is still the same conversation.
-func (m *Module) relayInFlight(sessionID string) (bool, error) {
-	op, ok, err := m.store.OpenRelayOpBySession(sessionID)
-	if err != nil || !ok {
-		return false, err
-	}
-	switch op.State {
-	case team.RelayClaimed, team.RelayWriting, team.RelayWritten:
-		return true, nil
-	}
-	return false, nil
 }

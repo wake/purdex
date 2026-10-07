@@ -131,6 +131,10 @@ type Module struct {
 	// beforeTerminalClose is a test seam run by a terminal relay report just
 	// before it closes the op's approval row (the approve that races it).
 	beforeTerminalClose func(opID string)
+	// beforeEndTeam, when set, runs in endGoneTeams after it decided the
+	// team's lead is gone and just before EndTeam; tests move a relay op of
+	// that lead in this window and prove the end loses. nil in production.
+	beforeEndTeam func(t team.Team)
 	// clearedWait / clearedPoll bound how long a cleared report waits for
 	// the registry to show the new session id (checkClearedTarget).
 	clearedWait, clearedPoll time.Duration

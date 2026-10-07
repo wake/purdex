@@ -125,6 +125,34 @@ func TestTick_KeepsTheTeamWhileItsLeadIsRelaying(t *testing.T) {
 	}
 }
 
+// The relay guard and the end are one statement (P4-2 review): a relay
+// claimed after the sweeper decided the lead is gone — here in that window,
+// through the beforeEndTeam seam — still keeps the team. Once the op ends,
+// the next liveness tick ends it.
+func TestTick_ARelayClaimedAfterTheLivenessReadKeepsTheTeam(t *testing.T) {
+	f := newFixture(t)
+	seedTeam(t, f.m.store, uid(1), "sid-1", f.clock.Load())
+	if err := f.m.store.CreateRelayOp(selfOp("op-1", "sid-1", "_abc123", f.clock.Load())); err != nil { // awaiting approval
+		t.Fatal(err)
+	}
+	f.origins.markDead("sid-1")
+	seen := 0
+	f.m.beforeEndTeam = func(team.Team) {
+		seen++
+		mustReport(t, f.m.store, "op-1", RelayReport{State: team.RelayClaimed, At: f.clock.Load()})
+	}
+	livenessTick(f)
+	if got, _ := getTeam(t, f.m.store, uid(1)); seen != 1 || got.EndedAt != 0 {
+		t.Fatalf("seam ran %d times; team = %+v, want kept (claimed before the end)", seen, got)
+	}
+	f.m.beforeEndTeam = nil
+	mustReport(t, f.m.store, "op-1", RelayReport{State: team.RelayFailed, Reason: "handoff_incomplete", At: f.clock.Load()})
+	livenessTick(f)
+	if got, _ := getTeam(t, f.m.store, uid(1)); got.EndedAt == 0 || got.EndReason != team.TeamEndLeadGone {
+		t.Fatalf("team after its lead's op failed = %+v, want ended", got)
+	}
+}
+
 // The team check runs on the liveness tick whether or not any approval is
 // open: the sweep's early return on an empty open set must not skip it.
 func TestTick_EndsTeamsEvenWithNoOpenApproval(t *testing.T) {

@@ -137,14 +137,21 @@ func (s *Store) ListLiveTeams() ([]team.Team, error) {
 	return out, nil
 }
 
-// EndTeam ends a live team (spec §7.1) with reason at at. The UPDATE is
-// guarded by ended_at = 0 and by leadSessionID, the lead the caller saw:
-// a team already ended, or whose lead a relay has moved to a new session
-// since (P4-3's cleared transaction), is left as it is. ended says whether
+// EndTeam ends a live team (spec §7.1) with reason at at, in one guarded
+// UPDATE that leaves the team as it is when it already ended; when its
+// lead is no longer leadSessionID, the lead the caller saw (a relay moved
+// it since: P4-3's cleared transaction); or when that lead has a relay op
+// in claimed, writing or written — a team never ends mid-relay (the old
+// session id leaves the registry about 0.6 s after a relay's /clear while
+// its op is still written). The relay guard is in the statement itself, so
+// a relay claimed after the caller looked still wins. ended says whether
 // this call ended it. Members are not touched (D4).
 func (s *Store) EndTeam(id, leadSessionID, reason string, at int64) (bool, error) {
 	res, err := s.db.Exec(`UPDATE teams SET ended_at = ?, end_reason = ?
-		WHERE id = ? AND lead_session_id = ? AND ended_at = 0`, at, reason, id, leadSessionID)
+		WHERE id = ? AND lead_session_id = ? AND ended_at = 0
+		  AND NOT EXISTS (SELECT 1 FROM relay_ops
+			WHERE session_id = ? AND state IN ('claimed', 'writing', 'written'))`,
+		at, reason, id, leadSessionID, leadSessionID)
 	if err != nil {
 		return false, fmt.Errorf("end team %s: %w", id, err)
 	}
