@@ -107,9 +107,13 @@ func (m *Module) closeExpired(id string, now int64, state team.State) (team.Appr
 // in EndTeam's UPDATE, with the check that the lead is still the one read
 // here, so neither a relay claimed nor a lead moved since loses to the
 // end. A registry read error answers "live" (peers/origin_resolver.go) and
-// a store error skips the team, so neither ever ends one. Members are
-// untouched (D4).
+// a store error skips the team, so neither ever ends one. Nothing ends
+// within BootGraceS of Start: right after a restart a lead may not be
+// listed yet (P4-2 review). Members are untouched (D4).
 func (m *Module) endGoneTeams() {
+	if m.now() < m.bootAt+team.BootGraceS*1000 {
+		return
+	}
 	teams, err := m.store.ListLiveTeams()
 	if err != nil {
 		m.logf("[team] sweep teams: %v", err)

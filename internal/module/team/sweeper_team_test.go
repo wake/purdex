@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -150,6 +151,45 @@ func TestTick_ARelayClaimedAfterTheLivenessReadKeepsTheTeam(t *testing.T) {
 	livenessTick(f)
 	if got, _ := getTeam(t, f.m.store, uid(1)); got.EndedAt == 0 || got.EndReason != team.TeamEndLeadGone {
 		t.Fatalf("team after its lead's op failed = %+v, want ended", got)
+	}
+}
+
+// revive undoes markDead: the session is listed in the registry again.
+func (f *fakeOrigins) revive(sid string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.dead, sid)
+}
+
+// After a restart (P4-2 review, spec §9.2) team liveness gets the boot
+// grace open requests get: the registry may not list a lead yet when the
+// first liveness tick runs. A lead back within the grace keeps its team;
+// one still absent after it ends.
+func TestTick_TeamsSurviveARestartUntilTheBootGraceEnds(t *testing.T) {
+	f := newFixture(t)
+	seedTeam(t, f.m.store, uid(1), "sid-1", f.clock.Load())
+	seedTeam(t, f.m.store, uid(2), "sid-2", f.clock.Load())
+	f.origins.markDead("sid-1")
+	f.origins.markDead("sid-2")        // the registry lists neither lead at boot
+	g := f.reboot(f.titles)            // the same team.db; boot at 1_000_000
+	_ = g.m.Stop(context.Background()) // join the real sweeper: this test drives the ticks
+	for _, at := range []int64{10_000, 20_000, team.BootGraceS*1000 - 1} {
+		g.clock.Store(1_000_000 + at)
+		livenessTick(g)
+		for _, id := range []string{uid(1), uid(2)} {
+			if got, _ := getTeam(t, g.m.store, id); got.EndedAt != 0 {
+				t.Fatalf("boot+%d ms: team %s ended inside the grace", at, id)
+			}
+		}
+	}
+	f.origins.revive("sid-1") // its lead is listed again within the grace
+	g.clock.Store(1_000_000 + team.BootGraceS*1000)
+	livenessTick(g)
+	if got, _ := getTeam(t, g.m.store, uid(1)); got.EndedAt != 0 {
+		t.Fatalf("the returned lead's team = %+v, want live", got)
+	}
+	if got, _ := getTeam(t, g.m.store, uid(2)); got.EndedAt != 1_030_000 || got.EndReason != team.TeamEndLeadGone {
+		t.Fatalf("the absent lead's team after the grace = %+v, want ended at 1030000", got)
 	}
 }
 

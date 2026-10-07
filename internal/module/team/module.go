@@ -78,6 +78,10 @@ type Module struct {
 	stopCancel context.CancelFunc
 	sweepWG    sync.WaitGroup
 	tickN      int // sweeper ticks so far; only the sweeper goroutine (or a test) touches it
+	// bootAt is when Start ran (unix ms): no team ends before bootAt +
+	// BootGraceS, the grace open requests get (spec §9.2). 0 for a module
+	// that never started (most tests): no grace.
+	bootAt int64
 
 	// createMu serialises create's check-then-insert (idempotent retry,
 	// request_open, insert) and Stop's cancel of stopCtx: a create either
@@ -238,13 +242,15 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 }
 
 // Start applies the boot lease grace (spec §9.2: every open request's
-// lease becomes max(lease_until, boot + 30 s), so its pdx can reconnect),
+// lease becomes max(lease_until, boot + 30 s), so its pdx can reconnect;
+// teams get the same 30 s before an absent lead ends one, bootAt),
 // registers the snapshot for new subscribers and starts the sweeper. It
 // does not prune hook lock flags: during that same grace a CC session may
 // not have re-registered, so a registry snapshot taken here would call it
 // dead and the prune would delete the flag of an open lead request. The
 // sweeper prunes on its 10th tick, and never a flag whose request is open.
 func (m *Module) Start(context.Context) error {
+	m.bootAt = m.now() // before the sweeper starts: endGoneTeams reads it
 	// <data_dir>/relay/ exists from boot (spec §8.3); begin re-creates it
 	// too. A failure is logged, not fatal: begin reports its own.
 	if err := os.MkdirAll(m.relayDir, 0o700); err != nil {
