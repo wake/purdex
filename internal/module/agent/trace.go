@@ -64,6 +64,7 @@ import (
 	"log"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,12 +85,21 @@ const (
 	TraceStepProbeIntent = "probe-intent"
 )
 
+// enqueueAfterCheckHook is a test seam: called by Enqueue after the closed
+// check and before the send, while the read lock is held. nil in production.
+var enqueueAfterCheckHook func()
+
 type hookTraceSink struct {
 	store   *store.TraceStore
 	queue   chan store.TraceRecord
 	pending sync.WaitGroup
 	worker  sync.WaitGroup
 	close   sync.Once
+	// mu guards closed; Enqueue holds RLock through its send, Close takes Lock.
+	mu     sync.RWMutex
+	closed bool
+	// dropped counts records discarded because the sink was already closed.
+	dropped atomic.Int64
 }
 
 func newHookTraceSink(traces *store.TraceStore) *hookTraceSink {
@@ -117,6 +127,21 @@ func (s *hookTraceSink) Enqueue(record store.TraceRecord) {
 	if s == nil {
 		return
 	}
+	// The RLock is held across the closed check, pending.Add and the send:
+	// Close needs the write lock to set closed, so close(queue) can never
+	// race a send (a send on a closed channel panics even inside a select
+	// with default), and pending.Add never races pending.Wait in Close.
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		if s.dropped.Add(1) == 1 {
+			log.Printf("[agent][trace] sink closed: dropping trace records from now on")
+		}
+		return
+	}
+	if enqueueAfterCheckHook != nil {
+		enqueueAfterCheckHook()
+	}
 	s.pending.Add(1)
 	select {
 	case s.queue <- record:
@@ -126,21 +151,34 @@ func (s *hookTraceSink) Enqueue(record store.TraceRecord) {
 	}
 }
 
+// FlushForTest blocks until every queued record has been written. Test only.
+// The write lock briefly blocks new Enqueue calls so pending.Wait never runs
+// concurrently with pending.Add (a WaitGroup misuse when the counter is 0).
 func (s *hookTraceSink) FlushForTest() {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.pending.Wait()
 }
 
+// Close stops accepting records, drains what is queued, and stops the worker.
+// Records enqueued afterwards are dropped (and counted), never sent.
 func (s *hookTraceSink) Close() {
 	if s == nil {
 		return
 	}
 	s.close.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		s.mu.Unlock()
 		s.pending.Wait()
 		close(s.queue)
 		s.worker.Wait()
+		if n := s.dropped.Load(); n > 0 {
+			log.Printf("[agent][trace] dropped %d record(s) after close", n)
+		}
 	})
 }
 
