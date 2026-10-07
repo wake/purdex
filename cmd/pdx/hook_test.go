@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -57,7 +58,7 @@ func TestRunHook_PositionalArgPassedAsPurdexName(t *testing.T) {
 	loadConfigFn = func(string) (config.Config, error) { return config.Config{}, nil }
 
 	var got hookPayload
-	postHookEventFn = func(_ string, _ string, payload hookPayload) error {
+	postHookEventFn = func(_ context.Context, _ string, _ string, payload hookPayload) error {
 		got = payload
 		return nil
 	}
@@ -183,7 +184,7 @@ func TestPostHookEvent(t *testing.T) {
 		SenderStartTime: "Sun Apr 20 01:30:00 2026",
 	}
 
-	if err := postHookEvent(ts.URL+"/api/agent/event", "my-secret", p); err != nil {
+	if err := postHookEvent(context.Background(), ts.URL+"/api/agent/event", "my-secret", p); err != nil {
 		t.Fatalf("postHookEvent: %v", err)
 	}
 
@@ -224,7 +225,7 @@ func TestPostHookEvent_NoToken(t *testing.T) {
 		SenderStartTime: "Sun Apr 20 01:30:00 2026",
 	}
 
-	if err := postHookEvent(ts.URL+"/api/agent/event", "", p); err != nil {
+	if err := postHookEvent(context.Background(), ts.URL+"/api/agent/event", "", p); err != nil {
 		t.Fatalf("postHookEvent: %v", err)
 	}
 	if receivedAuth != "" {
@@ -242,7 +243,7 @@ func TestPostHookEvent_ServerDown(t *testing.T) {
 	}
 
 	// Use a port that is almost certainly not listening
-	err := postHookEvent("http://127.0.0.1:1/api/agent/event", "", p)
+	err := postHookEvent(context.Background(), "http://127.0.0.1:1/api/agent/event", "", p)
 	if err == nil {
 		t.Fatal("expected error for unreachable server, got nil")
 	}
@@ -358,7 +359,7 @@ func TestRunHook_PopulatesSessionID(t *testing.T) {
 	loadConfigFn = func(string) (config.Config, error) { return config.Config{}, nil }
 
 	var got hookPayload
-	postHookEventFn = func(_ string, _ string, payload hookPayload) error {
+	postHookEventFn = func(_ context.Context, _ string, _ string, payload hookPayload) error {
 		got = payload
 		return nil
 	}
@@ -408,7 +409,7 @@ func TestRunHook_PopulatesProvenance(t *testing.T) {
 	loadConfigFn = func(string) (config.Config, error) { return config.Config{}, nil }
 
 	var got hookPayload
-	postHookEventFn = func(_ string, _ string, payload hookPayload) error {
+	postHookEventFn = func(_ context.Context, _ string, _ string, payload hookPayload) error {
 		got = payload
 		return nil
 	}

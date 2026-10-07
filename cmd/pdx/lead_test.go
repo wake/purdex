@@ -100,6 +100,28 @@ func (c *leadClock) fireNext() {
 	next.fire()
 }
 
+// fireDue fires every pending timer whose time has come (at <= now), in
+// time order, without advancing the clock: what a real time.AfterFunc does
+// by itself once sleeps have carried the clock past it.
+func (c *leadClock) fireDue() {
+	for {
+		c.mu.Lock()
+		var next *leadTimer
+		for _, t := range c.timers {
+			if !t.fired && !t.stopped && !t.at.After(c.t) && (next == nil || t.at.Before(next.at)) {
+				next = t
+			}
+		}
+		if next == nil {
+			c.mu.Unlock()
+			return
+		}
+		next.fired = true
+		c.mu.Unlock()
+		next.fire()
+	}
+}
+
 func (c *leadClock) sleeps() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -154,6 +176,7 @@ type fakeTeamDaemon struct {
 	startOnce       sync.Once
 	bootID          string
 	onFirstPoll     func()
+	noOrigin        bool // answer create without origin.session_id (an older daemon)
 }
 
 func newFakeTeamDaemon(final team.Approval) *fakeTeamDaemon {
@@ -180,7 +203,7 @@ func (f *fakeTeamDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.creates = append(f.creates, req)
 		n := len(f.creates)
-		status, openID, drop, refuse := f.createStatus, f.openID, f.dropFirstCreate, f.refuseCode
+		status, openID, drop, refuse, noOrigin := f.createStatus, f.openID, f.dropFirstCreate, f.refuseCode, f.noOrigin
 		f.mu.Unlock()
 		if drop && n == 1 {
 			// The body was read: the daemon may have applied it. Then the
@@ -205,7 +228,11 @@ func (f *fakeTeamDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(status)
-		json.NewEncoder(w).Encode(team.Approval{ID: req.ID, Kind: req.Kind, State: team.StateOpen})
+		ap := team.Approval{ID: req.ID, Kind: req.Kind, State: team.StateOpen, Origin: team.Origin{SessionID: fakeLeadSessionID}}
+		if noOrigin {
+			ap.Origin = team.Origin{}
+		}
+		json.NewEncoder(w).Encode(ap)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/team/approvals/"):
 		f.mu.Lock()
 		f.polls = append(f.polls, r.URL.RequestURI())
@@ -249,6 +276,10 @@ func (f *fakeTeamDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// fakeLeadSessionID is the origin the fake daemon attributes every create
+// to: the CC session id the hard-lock flag is named after (P2c).
+const fakeLeadSessionID = "cc-sid-lead-1"
+
 func (f *fakeTeamDaemon) snapshot() (creates []team.CreateApprovalRequest, polls, deletes, auths []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -280,13 +311,22 @@ func driveLeadWith(t *testing.T, ctx context.Context, d http.Handler, opts []dae
 // signal.NotifyContext stop func) chosen by the test.
 func driveLeadHook(t *testing.T, ctx context.Context, d http.Handler, opts []daemonclient.Option, onCancelled func(), args ...string) (int, string, string) {
 	t.Helper()
+	code, stdout, stderr, _ := driveLeadDir(t, ctx, d, opts, onCancelled, t.TempDir(), args...)
+	return code, stdout, stderr
+}
+
+// driveLeadDir is driveLeadHook with the config's data_dir chosen by the
+// test (the hard-lock flag lives under it; "" means the config has none)
+// and returned, so the test can look for the flag.
+func driveLeadDir(t *testing.T, ctx context.Context, d http.Handler, opts []daemonclient.Option, onCancelled func(), dataDir string, args ...string) (int, string, string, string) {
+	t.Helper()
 	srv := httptest.NewServer(d)
 	defer srv.Close()
-	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	cfgPath := writeTestConfigDataDir(t, srv.URL, "admin-tok", dataDir)
 	var stdout, stderr bytes.Buffer
 	full := append(append([]string{"request"}, args...), "--config", cfgPath)
 	code := runLeadCmd(ctx, full, leadEnv(), &stdout, &stderr, fixedID(), onCancelled, opts...)
-	return code, stdout.String(), stderr.String()
+	return code, stdout.String(), stderr.String(), dataDir
 }
 
 // leadReservePort listens on a free 127.0.0.1 port and KEEPS the listener:
