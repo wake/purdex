@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.567] - 2026-10-08
+
+> 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。Mac App 上沒有可見的變化。
+
+### Changed：純瀏覽器收斂批 3 — 標題列一律渲染（#1800）
+
+- Purdex 之後只有 Mac App 與 iOS App，不再維護獨立的 Web 版。這一批把「沒有 Electron 時不畫標題列」的分支拿掉：`TitleBar` 一律渲染，浮動面板（FloatingPanel）與選單（Menu）一律避開標題列的高度。
+- **預期的副作用**：在一般瀏覽器裡開這個 SPA（例如用 Playwright 做驗收），畫面上方現在也會有標題列；以前沒有。這是預期，不是壞掉。repo 裡沒有需要同步更新的 Playwright 腳本（驗收腳本都在各 session 的暫存目錄）。
+- 沒動的：`lib/platform.ts` 的各項 can 旗標（批 4 另行決定）、`window.electronAPI?.` 的防呆。
+- 另開 #1801：改名彈窗與分頁右鍵選單在視窗很矮時可能被推進標題列的拖曳區（Electron 下本來就有，不是這次引入）。
+
 ## [1.0.0-alpha.566] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。
