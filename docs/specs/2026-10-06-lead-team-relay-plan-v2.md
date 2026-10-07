@@ -5567,13 +5567,13 @@ Also update the `InflightResponse` comment in `wire.go:130` (`RelaysActive is a 
 
 ## PR P5a-2c — `pdx relay hello | begin | wait | self | report | op`
 
-**Scope.** `cmd/pdx/relay.go`: the six subcommands the mod calls (spec §8.3) on the restart-aware `daemonclient`, with spec §14 exit codes — no new code: a `wait` whose `--wait` budget ran out with the request still open **exits 0 with `{"state":"open"}` on stdout** (coordinator decision; P5b-2's `waitLoop` loops on exactly that shape); `relay_open` and `bad_transition` print the op the daemon sent on stdout; every refusal prints the 409 code as the **last stderr token** (P5b-2's `stderrCode()` reads it). `pdx relay <ref>` and `claim` are P6.
+**Scope.** `cmd/pdx/relay.go`: the six subcommands the mod calls (spec §8.3) on the restart-aware `daemonclient`, with spec §14 exit codes — no new code: a `wait` whose `--wait` budget ran out with the request still open **exits 0 and prints the approval row's JSON (`{"id":…,"kind":"self_relay","state":"open",…}`; the mod reads `state`) on stdout** (coordinator decision; P5b-2's `waitLoop` loops on exactly that shape); `relay_open` and `bad_transition` print the op the daemon sent on stdout; every refusal prints the 409 code as the **last stderr token** (P5b-2's `stderrCode()` reads it). `pdx relay <ref>` and `claim` are P6.
 
 ### Task 5a.9: `cmd/pdx/relay.go`
 
 **Files:**
 - Create: `cmd/pdx/relay.go`
-- Modify: `cmd/pdx/main.go:43` (usage lists `relay`), `:70-71` (`case "relay": runRelay(os.Args[2:])`). `cmd/pdx/exitcodes.go` and `exitcodes_test.go` are **not** touched: the still-open end of a `wait` is exit 0 with `{"state":"open"}`, not a new code.
+- Modify: `cmd/pdx/main.go:43` (usage lists `relay`), `:70-71` (`case "relay": runRelay(os.Args[2:])`). `cmd/pdx/exitcodes.go` and `exitcodes_test.go` are **not** touched: the still-open end of a `wait` is exit 0 with the approval row (`state:"open"`) on stdout, not a new code.
 - Test: `cmd/pdx/relay_test.go`
 
 **Interfaces:**
@@ -5581,7 +5581,7 @@ Also update the `InflightResponse` comment in `wire.go:130` (`RelaysActive is a 
   ```
   pdx relay hello --session <sid> [--version <v>] [--agent cc] [--config <path>]         → stdout RelayHelloResponse; 0
   pdx relay begin --self --session <sid> --used <pct> --window <n>  → stdout {op, request_id} (no --model / --effort: the daemon fills both from the statusline reading); 0 | 13 on the 409s (code on stderr; relay_open also prints the open op on stdout) | 1 on 404 unknown_session
-  pdx relay wait <request_id> [--wait 9m]   → each GET ?wait=25 renews the lease; 0 approved (stdout Approval, state approved) | 0 still open after --wait (stdout `{"state":"open"}` — always printed, even when no poll answered; call again) | 10 denied | 11 timeout | 12 cancelled/abandoned or ctx cancelled | 20 | 21
+  pdx relay wait <request_id> [--wait 9m]   → each GET ?wait=25 renews the lease; 0 approved (stdout Approval, state approved) | 0 still open after --wait (stdout the approval row's JSON `{"id":…,"kind":"self_relay","state":"open",…}` — always printed, a bare `{id, kind, state}` row when no poll answered; the mod reads `state`; call again) | 10 denied | 11 timeout | 12 cancelled/abandoned or ctx cancelled | 20 | 21
   pdx relay self off|on|status --session <sid>   → stdout RelaySelfResponse; 0 | 13 member_relay_is_leads
   pdx relay report <op> <state> [--new-session <sid>] [--error <e>]   → stdout RelayOp; 0 | 13 bad_transition (op on stdout) | 1 not_found
   pdx relay op <id>   → stdout RelayOp; 0
@@ -5754,7 +5754,7 @@ func TestRelayCmd_BeginPrintsOpAndRequestOrRefuses(t *testing.T) {
 }
 
 // Exit codes for each terminal state (spec §14), plus "still open" (exit 0,
-// stdout {"state":"open"}) and the 404 → 21 path.
+// stdout the row with state "open") and the 404 → 21 path.
 func TestRelayCmd_WaitExitCodes(t *testing.T) {
 	cases := []struct {
 		state team.State
@@ -5791,7 +5791,7 @@ func TestRelayCmd_WaitExitCodes(t *testing.T) {
 			t.Fatalf("denied must say who: %q", stderr)
 		}
 	}
-	// Still open when --wait runs out: exit 0, `{"state":"open"}` on stdout
+	// Still open when --wait runs out: exit 0, the approval row (`"state":"open"`) on stdout
 	// (the mod's waitLoop re-calls on exactly that shape; anything else at
 	// exit 0 that is not state approved is treated as not approved).
 	d := &fakeRelayDaemon{openUntil: 1 << 30}
@@ -5803,7 +5803,7 @@ func TestRelayCmd_WaitExitCodes(t *testing.T) {
 		t.Fatalf("still open: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	// The bound can run out before the first poll answers (a slow daemon):
-	// stdout still carries {"state":"open"} — never empty at exit 0.
+	// stdout still carries a row with "state":"open" — never empty at exit 0.
 	slow := &fakeRelayDaemon{openUntil: 1 << 30, pollDelay: 2 * time.Second}
 	code, stdout, _ = driveRelay(t, context.Background(), slow, "wait", "req-1", "--wait", "50ms")
 	if code != ExitOK || !strings.Contains(stdout, `"state":"open"`) {
@@ -5853,7 +5853,7 @@ func TestRelayCmd_HelloSelfReportOp(t *testing.T) {
 }
 ```
 
-`exitcodes.go` / `exitcodes_test.go` are unchanged: the still-open end of a `wait` is **exit 0 with `{"state":"open"}` on stdout** (coordinator decision), so the pinned spec §14 table stays as shipped.
+`exitcodes.go` / `exitcodes_test.go` are unchanged: the still-open end of a `wait` is **exit 0 with the approval row's JSON (`state:"open"`) on stdout** (coordinator decision), so the pinned spec §14 table stays as shipped.
 
 - [ ] **Step 2: Run and see them fail.** `go test ./cmd/pdx/ -run 'TestRelayCmd' -v` → `undefined: runRelayCmd`.
 
@@ -6085,7 +6085,7 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 // each GET ?wait=25 renews the lease; the loop runs until the row closes
 // or --wait (default 9 min, cap 10 min) runs out. Exit: 0 approved with the
 // Approval on stdout; 0 still open when --wait ran out, with
-// {"state":"open"} on stdout (always — even when no poll has answered yet —
+// the approval row's JSON — {"id":…,"kind":"self_relay","state":"open",…} — on stdout (always — even when no poll has answered yet —
 // so the mod's waitLoop can tell "call again" from "approved" by `state`
 // alone); 10 denied; 11 timeout; 12 cancelled or abandoned, or ctx
 // cancelled; 20 / 21 as everywhere.
@@ -6123,7 +6123,7 @@ func runRelayWait(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		}
 		if deadline.Err() != nil {
 			fmt.Fprintln(stderr, "pdx relay: --wait 已到，申請仍在等待核准；請再呼叫一次 pdx relay wait")
-			// Always {"state":"open"} (the last polled row when there is
+			// Always a row with state "open" (the last polled row when there is
 			// one, a bare state otherwise): the mod re-calls on this shape.
 			if ap.ID == "" {
 				ap = team.Approval{ID: id, Kind: team.KindSelfRelay, State: team.StateOpen}
@@ -6299,7 +6299,7 @@ func runRelayOp(ctx context.Context, args []string, stdout, stderr io.Writer, cl
 - Produces: `retentionVictims(ops []team.RelayOp, chainOf func(team.RelayOp) string, now int64) []team.RelayOp` (pure), `func (m *Module) sweepRetention()`, `func (m *Module) runRetention()`; store: `ListUnprunedRelayOps() ([]team.RelayOp, error)`, `MarkRelayPruned(id string) error`, `ChainRoots() (map[string]string, error)` (every session id in `session_lineage` → the root of its chain).
 - Consumes: `m.relayDir`, `m.stopCtx`, `m.sweepWG`, `m.now`.
 
-**Rule as implemented** (`retentionVictims`): a `failed`/`cancelled` op whose `updated_at` is ≥ 3 d ago; any unpruned op whose `created_at` is ≥ 14 d ago; among `done` ops grouped by chain root (`chainOf`), all but the newest 3 by `created_at`. Active ops are never victims except by the 14 d rule.
+**Rule as implemented** (`retentionVictims`): a `failed`/`cancelled` op whose `updated_at` is ≥ 3 d ago — **and only that rule for those two states**: an op that failed yesterday is kept even if its file is older than 14 d (the person has 3 days from the failure to read the file, spec §9.3; the two age checks are one `switch`, not two `if`s); any **other** unpruned op whose `created_at` is ≥ 14 d ago; among `done` ops grouped by chain root (`chainOf`), all but the newest 3 by `created_at`. Active ops are never victims except by the 14 d rule.
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -6343,6 +6343,12 @@ func TestRetentionVictims_Rules(t *testing.T) {
 		{ID: "f-young", State: team.RelayFailed, SessionID: "f1", CreatedAt: 17*day + 1, UpdatedAt: 18 * day, HandoffPath: "x"},
 		{ID: "f-old", State: team.RelayFailed, SessionID: "f2", CreatedAt: 16 * day, UpdatedAt: 17 * day, HandoffPath: "x"},
 		{ID: "c-old", State: team.RelayCancelled, SessionID: "c1", CreatedAt: 15 * day, UpdatedAt: 16 * day, HandoffPath: "x"},
+		// Codex round: a file older than 14 d (created day 2) whose op turned
+		// failed YESTERDAY is kept — the 3 d rule governs failed/cancelled ops
+		// alone; the 14 d rule does not reach them. Mutation gate: make the
+		// two age checks independent (`if` + `if` instead of the switch) →
+		// "f-ancient must NOT be a victim" → red.
+		{ID: "f-ancient", State: team.RelayFailed, SessionID: "f3", CreatedAt: 2 * day, UpdatedAt: 19 * day, HandoffPath: "x"},
 		// an active op from yesterday: never a victim; one stuck for 15 days: the 14 d rule.
 		{ID: "live", State: team.RelayWriting, SessionID: "l1", CreatedAt: 19 * day, UpdatedAt: 19 * day, HandoffPath: "x"},
 		{ID: "stuck", State: team.RelayClaimed, SessionID: "l2", CreatedAt: 5 * day, UpdatedAt: 5 * day, HandoffPath: "x"},
@@ -6578,8 +6584,11 @@ func (m *Module) runRetention() {
 
 // retentionVictims decides, from every unpruned row, which ops lose their
 // file at now (unix ms). Pure, so the rule is tested without a filesystem:
-//   - failed / cancelled: older than 3 d (by updated_at — when it ended);
-//   - any op: older than 14 d (by created_at);
+//   - failed / cancelled: older than 3 d (by updated_at — when it ended),
+//     and ONLY that rule: the 14 d rule below does not reach these two
+//     states (an op that failed yesterday keeps its file for 3 days however
+//     old the file is — the switch, not two ifs, is what makes that so);
+//   - any other op: older than 14 d (by created_at);
 //   - done: per chain (chainOf), all but the newest 3 by created_at.
 //
 // Active ops (awaiting_approval … cleared) are never victims except by the
@@ -7572,7 +7581,7 @@ Locales: insert the eight `approval.*` keys of the table after `"approval.restar
 
 1. **"written at state=cleared in one tx with the title move (peer_labels)" cannot be literal.** `peer_labels` is in meta.db, `session_lineage` in team.db. The op's state change and the lineage row are one team.db transaction (`ReportRelay`); the title move is `PeerLabelStore.Move`, its own meta.db transaction right after, idempotent (a no-op once the old row has no label), and re-run by `reconcileRelays` for every op still in `cleared`. The team/member moves of §8.4 are **P4** (the team tables); P4 adds its UPDATEs inside `ReportRelay`'s `cleared` branch.
 2. **`previous_refs` lives on `PeerRecord`, not `AgentInfo`.** `Resolve` decides on `PeerRecord` fields and `Ref` is there; a remote host's rows carry it over the wire unchanged (`normalizeRemoteRows` copies the record). `BuildInput.PreviousRefs map[string][]string` is the input; the peers module fills it per request through `team.LineageReaderKey` (team depends on peers, so the dependency is inverted through the registry; the interface and key live in the leaf `internal/team`).
-3. **`pdx relay wait` adds no exit code for "`--wait` ran out and the request is still open": it exits 0 with `{"state":"open"}` on stdout** (coordinator decision; spec §14 stays at 0/10/11/12/20/21). A 9-minute wait on a 10-minute deadline needs a "call again" answer the mod can tell from approved, and the mod tells them apart by `state` (`approved` vs `open`) — P5b-2's `waitLoop` loops only on `state:"open"` and treats any other exit-0 body that is not `state:"approved"` as not approved.
+3. **`pdx relay wait` adds no exit code for "`--wait` ran out and the request is still open": it exits 0 and prints the approval row's JSON (`{"id":…,"kind":"self_relay","state":"open",…}`) on stdout; the mod reads `state`** (coordinator decision; spec §14 stays at 0/10/11/12/20/21). A 9-minute wait on a 10-minute deadline needs a "call again" answer the mod can tell from approved, and the mod tells them apart by `state` (`approved` vs `open`) — P5b-2's `waitLoop` loops only on `state:"open"` and treats any other exit-0 body that is not `state:"approved"` as not approved.
 4. **`relay_open` and `bad_transition` carry the op** (`APIError.Op`), and the CLI prints it on stdout while exiting 13 with the code on stderr, so a mod retry after a dropped connection can continue from the op it opened. `begin` and `report` are sent with `daemonclient.Idempotent()` for that reason (begin's replay is answered by `relay_open`).
 5. **The combined address form also reads the lineage** (`<name> [<oldref>]` with the name checked), not only the bare `_ref` the preamble names: an operator pastes what the table printed, and the table may print the newest `(was …)` beside the current name.
 6. **`ResolveOriginBySession` is added to the `OriginResolver` interface** (peers side in P5a-1b, team side in P5a-2a); the relay routes are called with a CC session id, not an inbox. The P2a fake in the team tests gains the method.
@@ -7597,16 +7606,16 @@ Measured in the scratch build (`wc -l` for new files, `diff | grep -c '^[<>]'` f
 | **P5a-1b** | `record.go` +33, `address.go` +31, `address_lineage_test.go` 104, `team/lineage_path_test.go` ≈ 60 (the 12-hop full-path test), `peers/module.go` +48, `lineage_test.go` 79, `send.go` +5, `send_test.go` +3, `origin_resolver.go` +32, `origin_resolver_session_test.go` 37; `hostconfig/relay.go` 72, `relay_test.go` 44, `handler.go` +6, `module.go` +8, `handler_test.go` +3 | **≈ 565** (6 new, 9 edits) |
 | **P5a-2a** | team `relay_handler.go` ≈ 300, `relay_handler_test.go` ≈ 245 (incl. `TestStart_MakesTheRelayDir`), `module.go` +50 (incl. the `Start` `MkdirAll`), `handler.go` +5, `handler_test.go` +89; `cmd/pdx/main.go` +12, `team_register_test.go` +3 | **≈ 704** (2 new, 5 edits) |
 | **P5a-2b** | `relay_report.go` ≈ 165 (incl. `closeRequestOfReportedOp`, the `not_ready` guard), `relay_report_test.go` ≈ 285 (incl. `TestRelayReport_CancelledClosesTheOpenApprovalOnce` and the cross-layer restart test `TestRelayReport_ClearedAcrossRestartIsIdempotentEndToEnd` with its `reboot` helper), `module.go` +4, `handler.go` +8, `wire.go` +1 | **≈ 463** (2 new, 3 edits) |
-| **P5a-2c** | `relay.go` ≈ 405, `relay_test.go` ≈ 250, `main.go` +3 (no `exitcodes.go` change: still-open is exit 0 + `{"state":"open"}`) | **≈ 658** (2 new, 1 edit) |
+| **P5a-2c** | `relay.go` ≈ 405, `relay_test.go` ≈ 250, `main.go` +3 (no `exitcodes.go` change: still-open is exit 0 + the approval row with `state:"open"`) | **≈ 658** (2 new, 1 edit) |
 | **P5a-3a** | `retention.go` 134, `retention_test.go` 154, `relay_store.go` +75, `module.go` +2, `peers.go` +13, `peers_was_test.go` 23 | **≈ 401** (3 new, 3 edits) |
 | **P5a-3b** | `RelaySection.tsx` 80, `RelaySection.test.tsx` 88, `host-config-api.ts` +5, `useHostConfigStore.ts` +18, its test +4, `register-modules/index.tsx` +2, its test +2, `en.json` +17, `zh-TW.json` +17, `locale-completeness.test.ts` +9, `types.ts` +23, `approval-api.ts` +11, `approval-notify.ts` +11, `ApprovalDialogHost.tsx` 146 changed lines (file rewritten), `ApprovalDialogHost.selfRelay.test.tsx` 108 | **≈ 541** (3 new, 12 edits) |
-| **Total** | 24 new files, 37 edits | **≈ 3 900 lines** |
+| **Total** | 25 new files, 37 edits | **≈ 4 070 lines** (eight PRs, each ≤ 800) |
 
 **Eight PRs, every one ≤ 800 lines and ≤ 20 files** (codex round: the line bound is applied strictly). The two that were a hair over — P5a-1a at ≈ 836 and P5a-2a at ≈ 837 — were split at the seams the first draft named: `wire_relay.go` + its test + the `wire.go` line (≈ 200) are **P5a-0** of their own (contract first, as P2a-1 did; Task 5a.1), and `hostconfig/relay.go` + its test + the three hostconfig edits (≈ 133; Task 5a.6) moved from P5a-2a into **P5a-1b**, a `hostconfig` leaf nobody reads until P5a-2a's Task 5a.7. Final list: **P5a-0 → P5a-1a → P5a-1b → P5a-2a → P5a-2b → P5a-2c → P5a-3a → P5a-3b.** (The earlier "merge P5a-1b + P5a-3a into six" option is withdrawn: with Task 5a.6 and the 12-hop test in P5a-1b it would be ≈ 950.)
 
 ### Open questions for the coordinator
 
-1. **"Still open" shape (deviation 3).** Decided: exit 0 with `{"state":"open"}` on stdout (see Coordinator decisions, P5a); the section above is written to that.
+1. **"Still open" shape (deviation 3).** Decided: exit 0 with the approval row's JSON (`{"id":…,"kind":"self_relay","state":"open",…}`) on stdout, the mod reading `state` (see Coordinator decisions, P5a); the section above is written to that.
 2. **The 「不再詢問」 affordance (deviation 10): checkbox-with-click vs a third button that pauses without deciding.** The spec says "offers … which sets the pause" and nothing about the request itself; a button that only pauses would leave the dialog open with nothing to do about it. Recommendation: the checkbox.
 3. **`relay_open` as 409 with the op (deviation 4) vs 200.** For a replayed `begin` the 409 is informative, not a refusal; P5b decides whether to treat exit 13 + op on stdout as "continue". Recommendation: keep 13 (spec §14 lists the code) and let the mod branch on the stdout op.
 4. **PR count** (size estimate): **decided by the codex round — eight** (P5a-0 for the wire, Task 5a.6 into P5a-1b); no PR is over 800. The "six with a P5a-1b + P5a-3a merge" option is withdrawn (it would be ≈ 950 now).
@@ -7621,7 +7630,7 @@ Each PR's gate is the test that goes red when the named line is removed; spec §
 - **P5a-2a:** drop any of the `member` / `off` / `paused` branches in `handleRelayBegin` → `TestRelayBegin_Refusals` red; drop `m.afterClose(after)` from `closeWith` → `TestRelayApprovalCloseMovesTheOp` red (op stays `awaiting_approval` after approve); drop `&& a.Kind == team.KindLead` in `handleDecide` → approving a `self_relay` row is 500 (payload decode) → same test red; drop the `OpenRelayOpBySession` check → the `relay_open` assertion red; drop the `MkdirAll` from `Start` → `TestStart_MakesTheRelayDir` red (`relay dir after Start: err=… no such file`). (The hostconfig gates moved to P5a-1b with Task 5a.6; `drop RelaySwitchesKey from hostconfig Init → every team fixture test fails at Init` still shows here once P5a-2a's fixture reads the key.)
 - **P5a-2b:** drop the `new_session_id` requirement → `TestRelayReport_ForwardPathLineageAndTitle` red (400 expected); drop `m.moveTitle(op)` → its `title moves` assertion red; drop `closeRequestOfReportedOp` from the `ReportApplied` branch → `TestRelayReport_CancelledClosesTheOpenApprovalOnce` red (approval stays `open`, 0 closed events); close it with `CloseIfOpen` directly instead of `closeAs` → the same test red (no `closed` broadcast); return `RelaysActive: 0` → its inflight assertion red; drop `reconcileRelays` from `Start` → `TestStart_ReconcilesSelfRelayOps` red; trust a body-supplied `new_ref` instead of `ipeers.RefID` → the `NewRef` assertion red; **drop the idempotency of the `cleared` transition in `ReportRelay` (apply a second `cleared` as a new transition instead of `ReportNoop`) → `TestRelayReport_ClearedAcrossRestartIsIdempotentEndToEnd` red (`session_lineage rows = 2`)**; make `Move` not NULL the old row → the same test red (`peer_labels … sid-1 released`).
 - **P5a-2c:** return a non-zero code, or print nothing on stdout, when `--wait` runs out with the request still open → `TestRelayCmd_WaitExitCodes` red (both the "after two open polls" and the "before the first answer" cases); map `relay_open` to `ExitError` or stop printing the op → `TestRelayCmd_BeginPrintsOpAndRequestOrRefuses` red; print the 409 code before the detail → the "last stderr token == code" assertion in the same test red; stop sending `self` in `begin` → the `sent.Self` assertion red; parse `wait`'s flags before its positional → `TestRelayCmd_WaitExitCodes` red (usage error).
-- **P5a-3a:** remove the `filepath.Clean(op.HandoffPath) != want` guard and remove `op.HandoffPath` → `TestSweepRetention_RemovesOnlyOwnFilesAndMarksPruned` red (`keep.md` deleted); drop the per-chain rule → `op1.md must be removed` red; drop the 3 d rule → `TestRetentionVictims_Rules` red (`f-old must be a victim`); drop `MarkRelayPruned` → `op1 … pruned` red; drop the `(was …)` suffix → `TestDisplayAddress_WasPreviousRef` red.
+- **P5a-3a:** remove the `filepath.Clean(op.HandoffPath) != want` guard and remove `op.HandoffPath` → `TestSweepRetention_RemovesOnlyOwnFilesAndMarksPruned` red (`keep.md` deleted); drop the per-chain rule → `op1.md must be removed` red; drop the 3 d rule → `TestRetentionVictims_Rules` red (`f-old must be a victim`); **make the two age checks independent (`if` + `if` instead of the `switch` in `retentionVictims`) → the same test red (`f-ancient must NOT be a victim`: a file older than 14 d whose op failed yesterday)**; drop `MarkRelayPruned` → `op1 … pruned` red; drop the `(was …)` suffix → `TestDisplayAddress_WasPreviousRef` red.
 - **P5a-3b:** drop the `kind` switch in the dialog → the `self_relay` body test red (`approval-usage` missing); drop `setSelfRelayPause` before `submitDecision` → the `invocationCallOrder` assertion red; swallow the pause error without a toast → `a pause that fails toasts` red; drop `'relay'` from the section list → `register-modules.test.ts` red; drop a locale key → `locale-completeness.test.ts` red (identical key sets, pinned strings); lock the toggles on `pending` → `two clicks in one tick serialize` red.
 
 ---
@@ -9735,7 +9744,7 @@ Preconditions: P5a-1..3, P5b-1..3 merged; the daemon deployed with the new binar
 4. **Type during the wait, then approve.** With the dialog open, type a short question and press Enter: it shows as sent with the spinner (M11), no turn starts. Press Esc on **another** prompt to see it abandoned while the dialog stays. Approve with one click (no Touch ID). The typed question is answered **first, intact** (its `@file` mentions expand); the answer is short (NOTE). Then the write prompt runs; the file appears at `~/.config/pdx/cc-plugin/../relay/<op>.md` — i.e. `<data_dir>/relay/<op>.md`; the screen clears; the first line of the new conversation's answer is `↪ 接手自 _<old ref>`. `pdx peers` shows the same name with `(was _<old ref>)`; `pdx msg send <host>/_<old ref> "hi"` still reaches it (P5a-1).
 5. **U18 (a) and the payload (deviation 8):** before approving in step 4, `curl -s -H "Authorization: Bearer $TOKEN" http://100.64.0.2:7860/api/team/approvals/<request id>` (or `pdx relay op <op>` + the App's dialog) — the `self_relay` row's payload has **both** `model_id` and `effort` present and equal to `/status`'s model and effort lines of step 1 (the daemon filled them from the statusline). After the relay, `/status` again — the model and effort lines match step 1 (Claude Code's `/clear` keeps them); `pdx relay op <id>` shows `state: done`. Assert: payload `model_id` == model before == model after, payload `effort` == effort before == effort after. A payload missing either means the session had no statusline reading yet — retry after one more turn.
 6. **No daemon:** `pdx stop`; cross the threshold in a fresh session → nothing happens, no status line; auto-compact (if reached) runs. `pdx start`.
-7. **Measure once** (flagged in Open questions): (a) the `turn.start` text of the mod's write prompt contains `[pdx-relay op=…]` (`claude --debug` log of `turn.start`, or the transcript's first user line); (b) a wait across two `pdx relay wait` rounds (approve after > 9 min) still releases the held prompt — the loop runs in a timer dispatch, which M11 did not cover; (c) Esc on a held prompt leaves the request open; (d) **spec §8.7 (c)'s open point — does `{ skip }` on an auto-compaction that fires mid-turn let the turn continue?** Probe recipe, in a throwaway session (not the acceptance one): `claude --model claude-haiku-4-5-20251001 --dangerously-skip-permissions` with `PDX_RELAY_THRESHOLD=5`, approve the relay, then before the write turn starts give the model a long multi-tool task (e.g. "read every file under `spa/src/lib/team` and summarise each") and, while it runs, force a compaction — either reach auto-compact by context size (pad the prompt with a large file) or, as the cheaper stand-in, type `/compact` and temporarily treat `manual` as `auto` in a scratch copy of `register.js` (`e.trigger === 'auto' || e.trigger === 'manual'`). Record: did the `{ skip }` answer let the running turn finish its tool calls (watch `claude --debug` for `session.compact` → the next `tool.call`), or did the turn end? Write the answer under spec M-list as **M27** in the same docs commit as 8a.11's M25/M26. **If the turn does not continue**, apply the fallback spec §8.7 (c) names: the mod answers `next(e)` (compaction runs), remembers `s.compactedWhileApproved = true`, and the write prompt is submitted at the next `turn.complete` instead of `later()` from `settle` — one branch in `settle` and one in `turn.complete`, plus one test ("approved, compaction ran: the write prompt follows at the next turn.complete").
+7. **Measure once** (flagged in Open questions): (a) the `turn.start` text of the mod's write prompt contains `[pdx-relay op=…]` (`claude --debug` log of `turn.start`, or the transcript's first user line); (b) a wait across two `pdx relay wait` rounds (approve after > 9 min) still releases the held prompt — the loop runs in a timer dispatch, which M11 did not cover; (c) Esc on a held prompt leaves the request open; (d) **spec §8.7 (c)'s open point — does `{ skip }` on an auto-compaction that fires mid-turn let the turn continue?** Probe recipe, in a throwaway session (not the acceptance one): `claude --model claude-haiku-4-5-20251001 --dangerously-skip-permissions` with `PDX_RELAY_THRESHOLD=5`, approve the relay, then before the write turn starts give the model a long multi-tool task (e.g. "read every file under `spa/src/lib/team` and summarise each") and, while it runs, force a compaction — either reach auto-compact by context size (pad the prompt with a large file) or, as the cheaper stand-in, type `/compact` and temporarily treat `manual` as `auto` in a scratch copy of `register.js` (`e.trigger === 'auto' || e.trigger === 'manual'`). Record: did the `{ skip }` answer let the running turn finish its tool calls (watch `claude --debug` for `session.compact` → the next `tool.call`), or did the turn end? Write the answer under spec M-list as **M27** in the same docs commit as Task 8a.10's M25 (M26, the Codex `trusted_hash` probe, is P8b's). **If the turn does not continue**, apply the fallback spec §8.7 (c) names: the mod answers `next(e)` (compaction runs), remembers `s.compactedWhileApproved = true`, and the write prompt is submitted at the next `turn.complete` instead of `later()` from `settle` — one branch in `settle` and one in `turn.complete`, plus one test ("approved, compaction ran: the write prompt follows at the next turn.complete").
 8. Kill the tmux session; `pdx relay op` for the ops of this run; the retention sweeper is P5a's.
 
 ---
@@ -9803,9 +9812,9 @@ Each was run on the scratch copy and turned the named test(s) red and nothing el
 |---|---|---|---|
 | **P8a-1a** | wire kinds/states/bodies, `HookDecision` in Grant's place in the store, `RemoteResponders` + `modPresent` (over P5a-2a's `modSeen`), SPA tolerance (`ResolveOriginBySession` is P5a-1b's, consumed here) | 8a.1–8a.4 | ≈ 700 |
 | **P8a-1b** | `/api/ask/*` routes, `decide` on hook kinds, `pollRow` refactor, inflight excludes hook rows | 8a.5 | 760 |
-| **P8a-1c** | `pdx ask begin\|wait\|report`, the hook's bounded forward predicate | 8a.6–8a.7 | 690 |
+| **P8a-1c** | `pdx ask begin\|wait\|report`, the hook's bounded forward predicate | 8a.6–8a.7 | ≈ 720 |
 | **P8a-1d** | terminal-only degradation in `/api/hooks/decide`, `hookasks/` flag, hello marks presence | 8a.8 | 350 + P2c/P5a edits |
-| **P8a-2** | the mod `hooks/ask.js` + `claude plugin test`, the hours-long hold measured once, the Codex `trusted_hash` probe | 8a.9–8a.11 | 300 + recipes |
+| **P8a-2** | the mod `hooks/ask.js` + `claude plugin test`, the hours-long hold measured once (the Codex `trusted_hash` probe recipe moves to P8b, codex round) | 8a.9–8a.10 | 330 + one recipe |
 
 **Prerequisites (merged before the first PR of each row):** P8a-1a needs P2a/P3 (shipped), **P5a-0** (`ErrUnknownSession` / `ErrBadTransition` in `wire_relay.go`, used — not redeclared — by `wire_ask.go`), **P5a-1b** (`ResolveOriginBySession` on the peers resolver and the `OriginResolver` interface; P8a consumes it) and **P5a-2a** (`m.modSeen`, the single mod-presence map written by the relay `hello` handler, and `fakeOrigins.ResolveOriginBySession` in `handler_test.go`). P8a-1b needs P8a-1a and **P5a-2b** (its `handleInflight` / `handleDecide` hunks apply over P5a-2b's versions). P8a-1c needs P8a-1b and **P2c** (`cmd/pdx/hook.go` decision path; the forward helper is self-contained but its call site is P2c's `runHook`). P8a-1d needs P8a-1c, **P2c** (`POST /api/hooks/decide` handler in the team module, which answers `200 {}` for the forwarded events) and **P5a-2a** (the relay `hello` handler's `modSeen`, read by `modPresent`). P8a-2 needs P8a-1c (the CLI the mod calls) and **P5b-1** (the embedded plugin tree at `cmd/pdx/plugin/purdex/` with `hooks/hooks.json`, `pdx.json` from the extractor, and `embed_test.go`). Nothing here needs P5a-3, P5b-2 or P5b-3.
 
@@ -11669,7 +11678,7 @@ func (m *Module) decideHook(w http.ResponseWriter, a team.Approval, req team.Dec
 
 ---
 
-## PR P8a-1c — `pdx ask` and the hook's bounded forward (≈ 690 lines, 5 files)
+## PR P8a-1c — `pdx ask` and the hook's bounded forward (≈ 720 lines, 6 files)
 
 ### Task 8a.6: `pdx ask begin|wait|report`
 
@@ -11799,6 +11808,8 @@ func TestRunAskCmd_UsageErrorsExit2(t *testing.T) {
 		{"begin", "--session", "s", "--tool-use", "t", "--payload", "{not json"},
 		{"begin", "--session", "s", "--tool-use", "t", "--kind", "lead", "--payload", "{}"},
 		{"wait"}, {"wait", "a", "b"}, {"report", "a"}, {"report", "a", "approved"}, {"report", "a", "dismissed", "--hook", "{", "--hook-file", "/x"},
+		// wait registers --config only (codex round): report's flags are a usage error here, not ignored.
+		{"wait", "a", "--hook", "{}"}, {"wait", "a", "--hook-file", "/x"}, {"wait", "a", "--session", "s"},
 	} {
 		var stdout, stderr bytes.Buffer
 		code := runAskCmd(context.Background(), args, &stdout, &stderr, time.Now)
@@ -12040,7 +12051,10 @@ func parseAskArgs(args []string, stderr io.Writer) (askArgs, bool) {
 		fs.StringVar(&kind, "kind", string(team.KindHookAsk), "")
 		fs.StringVar(&payload, "payload", "", "")
 		fs.StringVar(&payloadFile, "payload-file", "", "")
-	case "wait", "report":
+	case "wait":
+		// --config only (registered above): a stray --hook on wait is a
+		// usage error, not a silently ignored flag.
+	case "report":
 		fs.StringVar(&hook, "hook", "", "")
 		fs.StringVar(&hookFile, "hook-file", "", "")
 	default:
@@ -12983,7 +12997,7 @@ func (m *Module) answerEmptyDecision(w http.ResponseWriter, req team.HookDecideR
 
 ---
 
-## PR P8a-2 — the mod: `tool.call{AskUserQuestion}` race, the hold measured, the Codex probe (≈ 300 lines + two measurements)
+## PR P8a-2 — the mod: `tool.call{AskUserQuestion}` race, the hold measured (≈ 330 lines + one measurement; the Codex `trusted_hash` probe recipe moves to P8b)
 
 ### Task 8a.9: `hooks/ask.js` and its `claude plugin test` cases
 
@@ -13409,21 +13423,12 @@ Not a code task: one measurement on mlab, its result appended to the spec as **M
 8. Variant, 15 min: repeat steps 3–4, wait one full round (≥ 9 min, pid changed once), then answer remotely: `curl -s -X POST -H "Authorization: Bearer $(pdx token)" -H 'Content-Type: application/json' http://100.64.0.2:7860/api/team/approvals/<id>/decide -d '{"decision":"approve","hook":{"answers":{"紅還是藍？":"藍"}},"client":{"kind":"app","label":"curl @ mlab"}}'` → the dialog disappears within a second (capture), the transcript shows `→ 藍`, the row is `approved`. Then press `1` anyway: it only types into the composer (M24 P-B).
 9. Record in M25: rounds observed, dialog intact at each capture, `budget`/`skipped` lines in `debug.log` (expected none), `afkTimeoutMs` presence, both variants' outcomes. The debug log and captures stay in the scratchpad, as M24's did.
 
-### Task 8a.11: The Codex `trusted_hash` probe (M20 "unmeasured"; preamble P8a-2)
+> **The Codex `trusted_hash` probe (M20 "unmeasured") is not in this PR: its recipe moves to P8b**, where spec §12 places the Codex work (codex round). P8a-2 keeps the hours-long hold measurement above only.
 
-Also a measurement, recorded as **M26**. P2c's installer raises Codex's `PreToolUse` timeout 5 → 10 (`internal/agent/codex/hooks.go:327-335` writes `"timeout": 5` today); Codex keeps a `[hooks.state] trusted_hash` in `~/.codex/config.toml`, and whether a changed `timeout` re-prompts the user once is unknown (M20).
-
-**Recipe (10 min, on mlab, no model calls needed):**
-1. `cp ~/.codex/hooks.json /private/tmp/claude-501/<scratchpad>/codexprobe/hooks.json.bak`; `grep -n -A2 '\[hooks.state\]' ~/.codex/config.toml` → note `trusted_hash` (a hash, not a secret).
-2. Edit **one** entry's `timeout` in `~/.codex/hooks.json` from `5` to `10` (what P2c's installer will do), nothing else.
-3. `tmux new -d -s codexprobe -x 160 -y 48 'codex --model gpt-5.6-sol'`; after 5 s `tmux capture-pane -p -t codexprobe`: record whether a hooks-trust prompt appears (its exact text), and what key accepts it. If it does, accept once, quit (`/quit` or `C-c` twice), re-read `trusted_hash`: changed? Start `codex` again: no prompt the second time?
-4. Change the `timeout` back to `5`, start once more: does it prompt again (hash is of the content, not a monotonic version)? Restore `hooks.json` from the backup if the file differs from what P2c will write.
-5. Record in M26: prompt or no prompt, its text, whether the hash changed, and therefore whether P2c's installer change costs the user one acknowledgement per Codex host. If it prompts, P2c's installer notes `codex 第一次啟動時會問一次是否信任 hooks（P2c 把 PreToolUse 的 timeout 調成 10 秒）` in its `pdx setup` output — a one-line follow-up on P2c, not on this PR.
-
-- [ ] **Commit (both recipes' results):**
+- [ ] **Commit (the hold's result):**
   ```bash
   git add docs/specs/2026-10-06-lead-team-relay-spec.md
-  git commit -m "docs(spec): M25 hours-long 分流 hold and M26 Codex trusted_hash, measured
+  git commit -m "docs(spec): M25 hours-long 分流 hold, measured
 
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   ```
@@ -13460,9 +13465,9 @@ Measured in the scratch build (`wc -l` for new files, `diff | grep -c '^[<>]'` f
 | | `spa/src/lib/team/types.ts` +20 · `approval-ws.ts` +15 · `approval-ws.hooks.test.ts` 75 | 110 |
 | | **total** | **≈ 643, 12 files** (the peers `origin_resolver_session*.go` pair and the `handler_test.go` hunk moved to P5a-1b / P5a-2a) |
 | **P8a-1b** | `ask_handler.go` 366 · `ask_handler_test.go` 324 · `handler.go` ±54 · `module.go` +3 | **≈ 747, 4 files** |
-| **P8a-1c** | `cmd/pdx/ask.go` 289 · `ask_test.go` 183 · `main.go` +2 · `hook_ask.go` 96 · `hook_ask_test.go` 110 · `hook.go` ≈ +6 | **≈ 686, 6 files** |
+| **P8a-1c** | `cmd/pdx/ask.go` 291 · `ask_test.go` ≈ 215 (incl. the lost-response replay test and the `wait` stray-flag cases) · `main.go` +2 · `hook_ask.go` 96 · `hook_ask_test.go` 110 · `hook.go` ≈ +6 | **≈ 720, 6 files** |
 | **P8a-1d** | `hook_observe.go` 204 · `hook_observe_test.go` ≈ 140 (incl. the route-level `Stop` test) · P2c's `hooks.go` +6 and `hooks_test.go` ≈ +40 (no P5a hello edit: presence is read from `modSeen`) | **≈ 390, 4 files** |
-| **P8a-2** | `cmd/pdx/plugin/purdex/hooks/ask.js` ≈ 100 (`agentId` guard, `pdx.json` path) · `ask.test.ts` ≈ 230 (incl. the `terminal_override` interleaving case) · `hooks.json` +1 · `cmd/pdx/plugin/embed_test.go` ±3 · spec M25/M26 ≈ +30 | **≈ 364, 5 files** |
+| **P8a-2** | `cmd/pdx/plugin/purdex/hooks/ask.js` ≈ 100 (`agentId` guard, `pdx.json` path) · `ask.test.ts` ≈ 230 (incl. the `terminal_override` interleaving case) · `hooks.json` +1 · `cmd/pdx/plugin/embed_test.go` ±3 · spec M25 ≈ +15 | **≈ 349, 5 files** |
 
 All five are under 800 lines and 20 files. The seams are real: 1a has no behaviour change for a running daemon beyond accepting `hook` on the wire; 1b adds routes nothing calls; 1c adds a CLI nothing calls and a hook forward the daemon answers `{}` to (P8a-1d is what makes it open rows); 1d is the degradation; P8a-2 is the only user-visible change and needs the whole line.
 
@@ -13502,7 +13507,7 @@ Answers to the sections' open questions and contract problems. They bind the imp
 - A stdin over 64 KiB sends ids only: accepted.
 
 **P5a**
-- `pdx relay wait` reaching its 9 min bound with the request still open: **exit 0 with `{state:"open"}` on stdout**, not a new exit code 3 (spec §14 has no 3; P5b's loop already assumes `state:"open"`). P5a-2c changes accordingly.
+- `pdx relay wait` reaching its 9 min bound with the request still open: **exit 0 with the approval row's JSON (`{"id":…,"kind":"self_relay","state":"open",…}`) on stdout — the mod reads `state`**, not a new exit code 3 (spec §14 has no 3; P5b's loop already assumes `state:"open"`). P5a-2c changes accordingly.
 - The dialog's 「這個 session 不再詢問」 is a checkbox applied with whichever button is pressed (approve or deny): accepted.
 - `409 relay_open` / `bad_transition` carry the op and map to exit 13: accepted.
 - ~~Seven PRs (1a, 1b, 2a, 2b, 2c, 3a, 3b)~~ **Eight PRs after the codex round: P5a-0 (wire, Task 5a.1) → 1a → 1b (now with Task 5a.6 hostconfig `relay`) → 2a → 2b → 2c → 3a → 3b**; every one ≤ 800 lines; merge order as listed.
@@ -13532,8 +13537,8 @@ Answers to the sections' open questions and contract problems. They bind the imp
 **Plan v3** (after P8a-2 merges): P4, P4b, P4c, P6, P7 — one codex round with the spec, as before.
 
 **Fix notes (consistency pass, 2026-10-07 — where the sections had to be reconciled with the decisions above, and the choices made where the decision left room):**
-- `ErrUnknownSession` / `ErrBadTransition` are declared once, in P5a-1a's `wire_relay.go`; P8a-1a's `wire_ask.go` uses them. P8a-1a therefore needs P5a-1a merged (it did anyway by the global order).
-- `pdx relay wait` prints `{"state":"open"}` at exit 0 **always** when its bound runs out — a bare `{id, kind, state:"open"}` when no poll has answered yet — so the mod never sees an empty stdout at exit 0; the mod treats any exit-0 body that is not `state:"approved"` as not approved.
+- `ErrUnknownSession` / `ErrBadTransition` are declared once, in P5a-0's `wire_relay.go` (the wire PR split out of P5a-1a by the codex round); P8a-1a's `wire_ask.go` uses them. P8a-1a therefore needs P5a-0 merged (it did anyway by the global order).
+- `pdx relay wait` prints the approval row (`state:"open"`) at exit 0 **always** when its bound runs out — a bare `{id, kind, state:"open"}` when no poll has answered yet — so the mod never sees an empty stdout at exit 0; the mod treats any exit-0 body that is not `state:"approved"` as not approved.
 - Stderr shape for every `pdx relay *` / `pdx ask *` API error: `pdx relay: <detail> <code>` / `pdx ask: <detail> <code>`, code last; the fixed strings (`daemon_unavailable`, `unsupported`) follow the same shape.
 - P2c's decide route answers `200 {}` for any non-blank event other than `PreToolUse` / `PermissionRequest`, with the lead-lock flag untouched (400 only for a blank `event` / `session_id`, a bad agent or a malformed body); P8a-1d's `observeHookEvent` is called from the one `answerEmptyDecision` helper on every `{}` path.
 - A report that moves an op to a terminal state while its approval row is open closes the row as `cancelled` via `closeAs` (`closeRequestOfReportedOp`); `afterClose` is a no-op on it because `ReportRelay` is idempotent per state. `handleRelayReport` also gained the `503 not_ready` guard the other write routes have.
@@ -13546,3 +13551,18 @@ Answers to the sections' open questions and contract problems. They bind the imp
 - `{ skip }` mid-turn (spec §8.7 (c)) is measured in P5b-3's acceptance step 7 (d) and recorded as M27; the fallback (compaction runs, write prompt at the next `turn.complete`) is named there.
 - Boot reconciliation **from frames** (past-`claimed` self ops) is P6, named in P5a's deferred list and in Review Focus 3; P5a-2b's `reconcileRelays` covers `awaiting_approval` and `cleared`.
 - Every P5a-2a / P5a-2b / P8a task whose hunks touch `module.go`, `handler.go`, `store.go`, `types.ts`, `main.go` or `hook.go` now says its `:line`s are alpha.527's and names the preceding PR to re-verify against.
+
+**Fix notes (codex round, 2026-10-07 — the 13 findings applied as decided; the choices made where the decision left room):**
+- **Finding 1 (one 5 s hook budget).** The budget ctx is `context.WithCancel` armed by a new seam `hookAfterFn` (`time.AfterFunc` in production, the fake clock's `afterFunc` in tests), not `context.WithDeadline` — `daemonclient` disables its fake-able attempt timer when the ctx has a `Deadline()` (`client.go:289-291`). `hookDecision` now returns `(out, asked)`: when the daemon **was asked** (flag + decision event), the decision's return *is* the budget's end (an answer, or the grace spent) and `runHook` cancels the budget — a still-running event POST is cut and `runHook` returns at once, as the decision said ("returns when the decide answers or the budget ends"); when it was **not** asked (the common path: no flag, or another event), `runHook` waits for the event POST (its own 2 s timeout, and the 5 s budget timer) so the event is not lost when `main` exits. Chosen, not dictated: cutting the event POST on a fast decide — the daemon that answered the decision is the one that received the event (sent first, same loopback); the alternative (wait for the POST after the answer) would need a second fake-able timer for no observable gain. `postHookEventFn` gains a leading `context.Context`; the three stubs in `hook_test.go` change their signature only. P2c-2 is now ≈ 792 lines (8 files) — still ≤ 800. The Codex `PreToolUse` timeout stays 10 s; its comment now says the 5 s budget plus a ≤ 5 s stdin read is the worst case (the stdin read is instant in practice).
+- **Finding 2 (P5a re-split).** The optional split the section already proposed was applied, not the "move test files" fallback: **P5a-0** (Task 5a.1, the wire, ≈ 200) and Task 5a.6 (hostconfig `relay`, ≈ 133) moved into P5a-1b. Eight PRs; the "six with a P5a-1b + P5a-3a merge" option is withdrawn (≈ 950 now). The hostconfig mutation gates moved with the task; P8a-1a's prerequisite names P5a-0 for `ErrUnknownSession` / `ErrBadTransition`.
+- **Finding 3 (hello after `/clear` in P5b-1).** P5b-1's `register.js` gains a `classic.SessionStart` hook (`source === 'clear'` and interactive ⇒ `hello` under the new session id; startup / resume / headless ⇒ nothing) with three tests (`6 pass` for P5b-1). P5b-2's handler keeps that branch under its `clearing → seeding` one and its "user's own /clear resets the guards" test stays (it pins the state reset; the hello part is now P5b-1's). P5b-2's Step 2 expectation is `6 pass / 10 fail`.
+- **Finding 4 (spec §14).** `no_responders` added to exit 13; `ask_open` is explicitly **not** an exit 13 (the CLI adopts the row, exit 0) — the plan's Task 8a.6 mapping stands.
+- **Finding 5 (`pdx ask begin` idempotent).** `Idempotent()` on the POST; `409 ask_open` adopted as before (stdout `{"id":…}` as a 201); new test `TestRunAskCmd_BeginReplayAfterLostResponseAdoptsTheSameID` with `fakeAskDaemon.dropFirstBegin` (body read, row "opened", connection hijacked and closed — the `lead_test.go` `dropFirstCreate` pattern). Task 8a.9's parsing text notes the mod never sees `ask_open`.
+- **Finding 6 (daemon fills model/effort).** `RelayBeginRequest` loses `model_id` / `effort`; `pdx relay begin` loses `--model` / `--effort`; the mod no longer calls `$.session.model()`. The team module takes `agent.ContextUsageReader` by type-asserting the service under `agent.OwnerResolverKey` (the same edge the peers module uses — no new registry key), **optionally** at `Init` (a daemon without the agent module fills nothing); `Dependencies()` adds `"agent"`. The fixture registers a `fakeUsage` under that key; `TestRelayBegin_OpensOpAndApprovalTogether` asserts the daemon-filled values, `TestRelayBegin_NoStatuslineReadingLeavesModelAndEffortEmpty` the omission. Acceptance step 5 asserts both present and equal before/after the relay; MP8, deviation 8 and the coordinator line are rewritten; the follow-up issue is gone.
+- **Finding 7 (cross-layer restart, P5a-2b).** `TestRelayReport_ClearedAcrossRestartIsIdempotentEndToEnd` over a **real** meta.db (`store.OpenMeta(":memory:")` + `PeerLabels()` as the `TitleMover`) and the same team.db, via a `fixture.reboot(titles)` helper (stops and closes the first `Module`, builds a second over the same core, `Start` runs reconciliation). Read "peer_labels has one row for the new id, none for the old" as "the label is on the new id only": P5a-1a's `Move` *releases* the old row (label `""`, row kept) rather than deleting it, so the assertion is `sid-1b` label at rev 2, `sid-1` label `""`, two rows. Named in Review Focus 3 and the P5a-2b gates.
+- **Finding 8 (12-hop full path, P5a-1b).** `internal/module/team/lineage_path_test.go` (package `teammod` — the one package that can hold the real `LineageReader` and `ipeers` together without an import cycle; `internal/peers` cannot import the team store and `internal/module/peers` is imported by `teammod`). It is a cross-layer gate that passes once Task 5a.4 is in (not a red-first test) and is said so; the mutation is applied once by hand. P5a-1b's gate runs `./internal/module/team/` too.
+- **Finding 9 (`terminal_override` interleaving, P8a-2).** The fake `pdx` holds `wait` on the native promise and answers `answered_remote` only after it resolved; the test asserts the native result (紅), the `answered_local` report with 紅, and the late remote ignored. Gate 8 added; `12 pass` for `ask.test.ts`.
+- **Finding 10 (`pdx relay wait` still-open stdout).** Every mention now says: the approval row's JSON (`{"id":…,"kind":"self_relay","state":"open",…}`), exit 0, the mod reads `state`; a bare `{id, kind, state}` row when no poll answered. The code was already so; only the texts claiming exactly `{"state":"open"}` changed.
+- **Finding 11 (retention 3 d wins).** `f-ancient` added to `TestRetentionVictims_Rules` (created day 2, failed day 19 — kept); the rule text and `retentionVictims`'s comment say the 14 d rule does not reach `failed` / `cancelled` ops; gate "two independent age checks → red" added. The implementation (a `switch`) already behaved so.
+- **Finding 12 (`pdx ask wait` flags).** `wait` registers `--config` only; `--hook` / `--hook-file` are `report`'s; three stray-flag cases added to `TestRunAskCmd_UsageErrorsExit2`.
+- **Finding 13 (`trusted_hash` probe to P8b).** Task 8a.11 removed from P8a-2 with a one-line note; the hours-long hold (Task 8a.10) stays; the commit step records M25 only; the M27 cross-reference in P5b says M26 is P8b's.
