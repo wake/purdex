@@ -96,34 +96,51 @@ func relaySwitchesOf(fields map[string]json.RawMessage) (RelaySwitches, error) {
 	return out, nil
 }
 
-// relayPromptsOf reads the three bodies: strings (null refused), checked
-// for UTF-8 on the field's raw bytes before decoding — encoding/json turns
-// an invalid byte into U+FFFD, which a check of the decoded string can
-// never see. Empty or whitespace only is "" (the default, U21 (a)); any
-// other text must pass team.ValidateRelayPromptBody and is kept as written.
-// A field left out is "".
+// relayPromptField is one prompt body's key and where its value lands.
+type relayPromptField struct {
+	key string
+	dst *string
+}
+
+// relayPromptFields lists the three bodies of p, in the order they are read.
+func relayPromptFields(p *team.RelayPromptBodies) []relayPromptField {
+	return []relayPromptField{{"prompt_write", &p.Write}, {"prompt_fix", &p.Fix}, {"prompt_seed", &p.Seed}}
+}
+
+// relayPromptOf reads one body: a string (null refused), checked for UTF-8
+// on the field's raw bytes before decoding — encoding/json turns an invalid
+// byte into U+FFFD, which a check of the decoded string can never see.
+// Empty or whitespace only is "" (the default, U21 (a)); any other text must
+// pass team.ValidateRelayPromptBody and is kept as written.
+func relayPromptOf(key string, v json.RawMessage) (string, error) {
+	if !utf8.Valid(v) {
+		return "", fmt.Errorf("%s: %w", key, team.ErrRelayPromptNotUTF8)
+	}
+	var s string
+	if bytes.Equal(bytes.TrimSpace(v), []byte("null")) || json.Unmarshal(v, &s) != nil {
+		return "", errors.New(key + " must be a string")
+	}
+	if strings.TrimSpace(s) == "" {
+		return "", nil
+	}
+	if err := team.ValidateRelayPromptBody(s); err != nil {
+		return "", fmt.Errorf("%s: %w", key, err)
+	}
+	return s, nil
+}
+
+// relayPromptsOf reads the three bodies with relayPromptOf; the first that
+// fails is the error. A field left out is "".
 func relayPromptsOf(fields map[string]json.RawMessage) (team.RelayPromptBodies, error) {
 	var out team.RelayPromptBodies
-	for _, f := range []struct {
-		key string
-		dst *string
-	}{{"prompt_write", &out.Write}, {"prompt_fix", &out.Fix}, {"prompt_seed", &out.Seed}} {
+	for _, f := range relayPromptFields(&out) {
 		v, present := fields[f.key]
 		if !present {
 			continue
 		}
-		if !utf8.Valid(v) {
-			return team.RelayPromptBodies{}, fmt.Errorf("%s: %w", f.key, team.ErrRelayPromptNotUTF8)
-		}
-		var s string
-		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) || json.Unmarshal(v, &s) != nil {
-			return team.RelayPromptBodies{}, errors.New(f.key + " must be a string")
-		}
-		if strings.TrimSpace(s) == "" {
-			continue
-		}
-		if err := team.ValidateRelayPromptBody(s); err != nil {
-			return team.RelayPromptBodies{}, fmt.Errorf("%s: %w", f.key, err)
+		s, err := relayPromptOf(f.key, v)
+		if err != nil {
+			return team.RelayPromptBodies{}, err
 		}
 		*f.dst = s
 	}
@@ -148,6 +165,40 @@ func normalizeRelay(raw json.RawMessage) (RelaySwitches, error) {
 	}
 	out.PromptWrite, out.PromptFix, out.PromptSeed = p.Write, p.Fix, p.Seed
 	return out, nil
+}
+
+// readRelay is normalizeRelay's lenient twin (the GET's view). The switches
+// fail closed, as RelaySwitches() reads them: a value whose fields or
+// switches do not read is invalid and answers both off — never the defaults,
+// since the team module refuses self relay on it. A body relayPromptOf
+// refuses is dropped on its own (it reads as "", the default); the switches
+// and the other bodies are kept.
+func readRelay(raw json.RawMessage) readout {
+	fields, err := relayFields(raw)
+	if err != nil {
+		return readout{items: RelaySwitches{}, invalid: err}
+	}
+	out, err := relaySwitchesOf(fields)
+	if err != nil {
+		return readout{items: RelaySwitches{}, invalid: err}
+	}
+	var r readout
+	var p team.RelayPromptBodies
+	for _, f := range relayPromptFields(&p) {
+		v, present := fields[f.key]
+		if !present {
+			continue
+		}
+		s, err := relayPromptOf(f.key, v)
+		if err != nil {
+			r.drop(err.Error())
+			continue
+		}
+		*f.dst = s
+	}
+	out.PromptWrite, out.PromptFix, out.PromptSeed = p.Write, p.Fix, p.Seed
+	r.items = out
+	return r
 }
 
 // RelaySwitches reads the stored switches, defaults for a never-written

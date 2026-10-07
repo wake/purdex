@@ -132,6 +132,23 @@ describe('a malformed host config collection', () => {
     expect(putHostConfig).toHaveBeenCalledWith(H, 'relay', { self_solo: false, self_lead: true, ...prompts }, 6)
   })
 
+  // #1889: the daemon now sends only the rows its PUT would take and says how many it left out.
+  it("Projects: rows the daemon left out (its `dropped` marker) are said, though every row it sent is good", async () => {
+    const dropped = { count: 2, reasons: ['item 1: invalid slug "BAD"', 'item 2: duplicate id "p1"'] }
+    await loadWith({ projects: { items: [P1], revision: 2, dropped } })
+    await show(<ProjectsSection hostId={H} />)
+    expect(screen.getAllByTestId(/^project-row-/).map((r) => r.dataset.testid)).toEqual(['project-row-p1'])
+    expect(problem()).toHaveAttribute('data-problem', 'rows')
+    expect(problem()).toHaveTextContent('2 stored Projects item(s) on this host are malformed and are hidden')
+  })
+
+  it('Commands: a value the daemon could not read (its `invalid` marker) reads as empty and says so', async () => {
+    await loadWith({ commands: { items: [], revision: 3, invalid: true } })
+    await show(<CommandsSection hostId={H} />)
+    expect(problem()).toHaveAttribute('data-problem', 'shape')
+    expect(problem()).toHaveTextContent('The stored Commands on this host are malformed and read as empty')
+  })
+
   it('Relay: a prompt body the daemon would refuse is dropped and said, so a toggle is not refused (400)', async () => {
     await loadWith({ relay: { items: { self_solo: true, prompt_write: 'ok', prompt_fix: 'see [pdx-relay fix]' }, revision: 8 } })
     await show(<RelaySection hostId={H} />)

@@ -69,6 +69,18 @@ func normalizeTeam(raw json.RawMessage) (TeamSettings, error) {
 	return out, nil
 }
 
+// readTeam is normalizeTeam's lenient twin (the GET's view). The row is one
+// setting, so a value that does not validate is invalid and answers {} —
+// never the default command, which its owner did not write (TeamSettings()
+// refuses it too).
+func readTeam(raw json.RawMessage) readout {
+	ts, err := normalizeTeam(raw)
+	if err != nil {
+		return readout{items: struct{}{}, invalid: err}
+	}
+	return readout{items: ts}
+}
+
 // MemberArgv is a parsed member_command: its leading NAME=value
 // assignments, then the command word and its arguments.
 type MemberArgv struct {

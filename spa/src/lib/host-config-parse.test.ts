@@ -259,6 +259,54 @@ describe('parseRelay', () => {
   })
 })
 
+// #1889: the daemon's GET (and a PUT's answer, a 409's current) now sends only rows its PUT would take, and says
+// what it left out. The SPA shows its notice from those markers and keeps its own checks for an older daemon.
+describe("the daemon's markers", () => {
+  const off = { self_solo: false, self_lead: false }
+
+  it('`invalid: true` is a shape problem; the items are read as sent (the empty value)', () => {
+    expect(parseProjects({ items: [], revision: 3, invalid: true }, H)).toEqual({ items: [], revision: 3, problem: { kind: 'shape' } })
+    expect(parseCommands({ items: [], revision: 1, invalid: true }, H).problem).toEqual({ kind: 'shape' })
+    expect(parseQuickReplies({ items: [], revision: 1, invalid: true }, H).problem).toEqual({ kind: 'shape' })
+    expect(parseResumeTemplates({ items: {}, revision: 2, invalid: true }, H)).toEqual({ items: {}, revision: 2, problem: { kind: 'shape' } })
+  })
+
+  it('relay `invalid: true` is a relay problem, with the switches as sent (both off)', () => {
+    expect(parseRelay({ items: off, revision: 4, invalid: true }, H)).toEqual({ items: off, revision: 4, problem: { kind: 'relay' } })
+  })
+
+  it("`dropped.count` is a rows problem of the daemon's count; the rows sent are kept", () => {
+    const dropped = { count: 2, reasons: ['item 1: invalid slug "BAD"', 'item 2: duplicate id "p1"'] }
+    expect(parseProjects({ items: [P1, P2], revision: 3, dropped }, H)).toEqual({ items: [P1, P2], revision: 3, problem: { kind: 'rows', count: 2 } })
+    expect(parseResumeTemplates({ items: { cc: CC }, revision: 1, dropped: { count: 1, reasons: [] } }, H).problem).toEqual({ kind: 'rows', count: 1 })
+    expect(parseRelay({ items: { self_solo: false }, revision: 2, dropped: { count: 1, reasons: [] } }, H))
+      .toEqual({ items: { self_solo: false, self_lead: true }, revision: 2, problem: { kind: 'rows', count: 1 } })
+    // One line naming the host, the collection, the count and the daemon's reasons.
+    expect(String(warn.mock.calls[0][0])).toMatch(/h1.*projects.*2.*invalid slug "BAD"/)
+  })
+
+  it("a row the SPA still drops itself adds to the daemon's count", () => {
+    expect(parseCommands({ items: [C1, { id: 'x', command: 'x' }], revision: 1, dropped: { count: 2 } }, H).problem)
+      .toEqual({ kind: 'rows', count: 3 })
+    expect(parseRelay({ items: { prompt_fix: 3 }, revision: 2, dropped: { count: 1 } }, H).problem).toEqual({ kind: 'rows', count: 2 })
+  })
+
+  it.each([
+    ['`invalid` a string', { invalid: 'true' }],
+    ['`invalid` a number', { invalid: 1 }],
+    ['`invalid` false', { invalid: false }],
+    ['`dropped` not an object', { dropped: 2 }],
+    ['`dropped.count` negative', { dropped: { count: -1 } }],
+    ['`dropped.count` not an integer', { dropped: { count: 1.5 } }],
+    ['`dropped.count` a string', { dropped: { count: '2' } }],
+    ['`dropped.count` zero', { dropped: { count: 0 } }],
+  ])('a malformed or empty marker is ignored: %s', (_name, marker) => {
+    expect(parseProjects({ items: [P1], revision: 3, ...marker }, H)).toEqual({ items: [P1], revision: 3, problem: null })
+    expect(parseRelay({ items: off, revision: 3, ...marker }, H)).toEqual({ items: off, revision: 3, problem: null })
+    expect(warn).not.toHaveBeenCalled()
+  })
+})
+
 describe('parseHostConfig', () => {
   const good = {
     projects: { items: [P1], revision: 3 },
