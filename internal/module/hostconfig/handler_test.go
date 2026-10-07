@@ -21,7 +21,8 @@ func TestHandlerGetEmpty(t *testing.T) {
 		"projects":{"items":[],"revision":0},
 		"commands":{"items":[],"revision":0},
 		"resumeTemplates":{"items":{},"revision":0},
-		"quickReplies":{"items":[],"revision":0}
+		"quickReplies":{"items":[],"revision":0},
+		"relay":{"items":{"self_solo":true,"self_lead":true},"revision":0}
 	}`, rr.Body.String())
 }
 
