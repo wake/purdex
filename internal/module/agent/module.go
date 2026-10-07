@@ -662,6 +662,50 @@ func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
 	return BuildSessionProjections(frames), nil
 }
 
+// replayProjectionCache memoises, for ONE replayStatus round, the live frame
+// projections and the pane→tmux-session-name lookups (#1767 fix A). It is a
+// local value passed by pointer through the replay call chain: never stored on
+// Module, never shared across rounds or goroutines (callers hold m.mu).
+type replayProjectionCache struct {
+	projections []SessionProjection // set only after a SUCCESSFUL liveFrameProjections
+	loaded      bool
+	paneName    map[string]string // paneID -> session name; successful lookups only
+}
+
+// projectionForSessionWith is projectionForSession with an optional replay
+// cache. rc == nil is exactly projectionForSession. Failures are never cached:
+// a failed liveFrameProjections or PaneSessionName is retried by the next call.
+func (m *Module) projectionForSessionWith(sessionName string, rc *replayProjectionCache) (*SessionProjection, error) {
+	if rc == nil {
+		return m.projectionForSession(sessionName)
+	}
+	if !rc.loaded {
+		projections, err := m.liveFrameProjections()
+		if err != nil {
+			return nil, err
+		}
+		rc.projections = projections
+		rc.loaded = true
+	}
+	return m.selectSessionProjectionBy(sessionName, rc.projections, func(paneID string) string {
+		if name, ok := rc.paneName[paneID]; ok {
+			return name
+		}
+		if m.tmux == nil {
+			return ""
+		}
+		name, err := m.tmux.PaneSessionName(paneID)
+		if err != nil {
+			return ""
+		}
+		if rc.paneName == nil {
+			rc.paneName = make(map[string]string)
+		}
+		rc.paneName[paneID] = name
+		return name
+	}), nil
+}
+
 func (m *Module) resolvePaneSession(paneID string) (string, string) {
 	if m.tmux == nil {
 		return "", ""
@@ -703,13 +747,16 @@ type sessionStatusSnapshot struct {
 // produce. Sessions without a resolvable top frame still appear in the
 // snapshot with agentType="" — applyIntentLifecycle handles that path
 // (frame lookup fails inside m.mu → skip arm).
-func (m *Module) snapshotStatuses() map[string]sessionStatusSnapshot {
+//
+// rc (nil for the legacy per-call behaviour) memoises the live projections
+// and pane→session lookups for one replay round (#1767).
+func (m *Module) snapshotStatuses(rc *replayProjectionCache) map[string]sessionStatusSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make(map[string]sessionStatusSnapshot, len(m.currentStatus))
 	for session, status := range m.currentStatus {
 		entry := sessionStatusSnapshot{status: status}
-		if proj, err := m.projectionForSession(session); err == nil && proj != nil && proj.TopFrame != nil {
+		if proj, err := m.projectionForSessionWith(session, rc); err == nil && proj != nil && proj.TopFrame != nil {
 			entry.agentType = proj.TopFrame.AgentType
 		}
 		out[session] = entry
@@ -732,11 +779,22 @@ func (m *Module) snapshotStatuses() map[string]sessionStatusSnapshot {
 // projection pipeline so daemon-restart hydrate replay (P1-T6) and the live
 // hook path observe identical (paneID, pid) selection logic.
 func (m *Module) lookupTopFrameForSessionLocked(session string) (paneID string, pid int, ok bool) {
-	projection, err := m.projectionForSession(session)
-	if err != nil || projection == nil || projection.TopFrame == nil {
+	frame, ok := m.lookupTopFrameWith(session, nil)
+	if !ok {
 		return "", 0, false
 	}
-	return projection.TopFrame.PaneID, projection.TopFrame.PID, true
+	return frame.PaneID, frame.PID, true
+}
+
+// lookupTopFrameWith is lookupTopFrameForSessionLocked with an optional
+// replay cache (rc == nil keeps the per-call behaviour) and the whole top
+// frame returned so callers can re-verify its identity. CALLER MUST hold m.mu.
+func (m *Module) lookupTopFrameWith(session string, rc *replayProjectionCache) (*store.Frame, bool) {
+	projection, err := m.projectionForSessionWith(session, rc)
+	if err != nil || projection == nil || projection.TopFrame == nil {
+		return nil, false
+	}
+	return projection.TopFrame, true
 }
 
 // manageActivityWatch is invoked by hook handlers as a status changes. The

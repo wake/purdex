@@ -1442,10 +1442,18 @@ func (m *Module) setProjectionTopStatus(sessionName string, status agentpkg.Stat
 }
 
 func (m *Module) selectSessionProjection(sessionName string, projections []SessionProjection) *SessionProjection {
+	return m.selectSessionProjectionBy(sessionName, projections, func(paneID string) string {
+		name, _ := m.resolvePaneSession(paneID)
+		return name
+	})
+}
+
+// selectSessionProjectionBy picks the best projection whose pane resolves to
+// sessionName, using nameOf for the pane→session-name step.
+func (m *Module) selectSessionProjectionBy(sessionName string, projections []SessionProjection, nameOf func(paneID string) string) *SessionProjection {
 	var selected *SessionProjection
 	for i := range projections {
-		name, _ := m.resolvePaneSession(projections[i].PaneID)
-		if name != sessionName {
+		if nameOf(projections[i].PaneID) != sessionName {
 			continue
 		}
 		if selected == nil || projectionSortGreater(projections[i], *selected) {
