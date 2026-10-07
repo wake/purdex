@@ -31,6 +31,19 @@ func (f *fixture) askBegin(toolUse string) string {
 	return out.ID
 }
 
+// askBeginPermission opens a hook_permission (Bash `ls`) for sid-2 / toolUse
+// and returns its id.
+func (f *fixture) askBeginPermission(toolUse string) string {
+	f.t.Helper()
+	code, body := f.do(http.MethodPost, "/api/ask/begin", team.AskBeginRequest{SessionID: "sid-2", ToolUseID: toolUse, Kind: team.KindHookPermission,
+		Payload: json.RawMessage(`{"tool_name":"Bash","tool_input":{"command":"ls"}}`)})
+	var out team.AskBeginResponse
+	if err := json.Unmarshal(body, &out); err != nil || code != http.StatusCreated || out.ID == "" {
+		f.t.Fatalf("permission begin: %d %s (%v)", code, body, err)
+	}
+	return out.ID
+}
+
 func decodeWait(t *testing.T, body []byte) team.AskWaitResponse {
 	t.Helper()
 	var w team.AskWaitResponse
@@ -474,5 +487,25 @@ func TestPollRoutes_RenewLeaseLongPollAnd404(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("%s long-poll did not wake on the close", c.path)
 		}
+	}
+}
+
+// Fix note (P8a-1b R1): a remote deny of a hook_permission is a remote
+// answer too — the row is `denied` with hook.behavior "deny" (plan v2
+// Coordinator decisions, P8a-1b item 3), and wait answers answered_remote
+// carrying that hook, the same shape as an approve, so the mod returns the
+// deny instead of reading it as "closed another way". Mutation gate: drop
+// the denied case from askWaitOf ⇒ closed{denied} ⇒ red.
+func TestAskWait_RemoteDenyIsAnsweredRemoteWithHook(t *testing.T) {
+	f := newFixture(t)
+	id := f.askBeginPermission("toolu_d1")
+	if code, body := f.do(http.MethodPost, "/api/team/approvals/"+id+"/decide",
+		team.DecideRequest{Decision: "deny", Hook: &team.HookDecision{Message: "不要刪"}, Client: appClient()}); code != http.StatusOK {
+		t.Fatalf("deny = %d %s", code, body)
+	}
+	code, body := f.do(http.MethodGet, "/api/ask/wait/"+id+"?wait=25", nil)
+	w := decodeWait(t, body)
+	if code != 200 || w.State != team.AskAnsweredRemote || w.Reason != "" || w.Hook == nil || w.Hook.Behavior != "deny" || w.Hook.Message != "不要刪" {
+		t.Fatalf("wait after a remote deny = %d %+v hook=%+v", code, w, w.Hook)
 	}
 }
