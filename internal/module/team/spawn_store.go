@@ -115,15 +115,23 @@ func (s *Store) CreateSpawnOp(op spawnRow, hash string) (stored spawnRow, stored
 
 // GetSpawnOp returns the op with id; ok is false when there is none.
 func (s *Store) GetSpawnOp(id string) (spawnRow, bool, error) {
+	r, _, ok, err := s.spawnOpWithHash(id)
+	return r, ok, err
+}
+
+// spawnOpWithHash is GetSpawnOp plus the stored request hash: what the POST
+// compares a replay with before it joins the op.
+func (s *Store) spawnOpWithHash(id string) (spawnRow, string, bool, error) {
 	var r spawnRow
-	err := s.db.QueryRow(`SELECT `+spawnCols+` FROM spawn_ops WHERE id = ?`, id).Scan(r.dest()...)
+	var hash string
+	err := s.db.QueryRow(`SELECT request_hash, `+spawnCols+` FROM spawn_ops WHERE id = ?`, id).Scan(append([]any{&hash}, r.dest()...)...)
 	if errors.Is(err, sql.ErrNoRows) {
-		return spawnRow{}, false, nil
+		return spawnRow{}, "", false, nil
 	}
 	if err != nil {
-		return spawnRow{}, false, fmt.Errorf("get spawn op %s: %w", id, err)
+		return spawnRow{}, "", false, fmt.Errorf("get spawn op %s: %w", id, err)
 	}
-	return r, true, nil
+	return r, hash, true, nil
 }
 
 // spawnUpdate is what one runner step records: the facts of the step it

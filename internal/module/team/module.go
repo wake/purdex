@@ -147,6 +147,25 @@ type Module struct {
 	// clearedWait / clearedPoll bound how long a cleared report waits for
 	// the registry to show the new session id (checkClearedTarget).
 	clearedWait, clearedPoll time.Duration
+
+	// P4-5 spawn (spec §7.2, spawn.go): the session create path, the tmux
+	// executor, the agent frames, team.member_command and the title store
+	// (nil: no title). spawnWG joins the runners in Stop. spawnPoll and
+	// spawnSleep pace the registration poll, spawnBudget (ms) bounds it, and
+	// spawnWait is how long the POST waits for an op to leave running.
+	sessions    sessionCreator
+	tmux        tmuxOps
+	frames      frameReader
+	teamCfg     hostconfig.TeamSettingsReader
+	titleSet    TitleSetter
+	spawnWG     sync.WaitGroup
+	spawnPoll   time.Duration
+	spawnSleep  func(ctx context.Context, d time.Duration)
+	spawnBudget int64
+	spawnWait   time.Duration
+	// beforeSpawnStep, when set, runs before each runner step with the op as
+	// read; tests hold or steer a runner there. nil in production.
+	beforeSpawnStep func(op spawnRow)
 }
 
 // New returns a Module with production defaults.
@@ -164,6 +183,10 @@ func New() *Module {
 		// session id (measured ~0.6 s after /clear), polling every 100 ms.
 		clearedWait: 3 * time.Second,
 		clearedPoll: 100 * time.Millisecond,
+		spawnPoll:   250 * time.Millisecond,
+		spawnSleep:  sleepCtx,
+		spawnBudget: team.SpawnRegisterS * 1000,
+		spawnWait:   team.SpawnPollWaitS * time.Second,
 	}
 }
 
@@ -175,7 +198,7 @@ func (m *Module) WithTitles(t TitleMover) *Module {
 }
 
 func (m *Module) Name() string           { return "team" }
-func (m *Module) Dependencies() []string { return []string{"agent", "peers", "hostconfig"} }
+func (m *Module) Dependencies() []string { return []string{"agent", "peers", "hostconfig", "session"} }
 
 // Init resolves the origin resolver peers registered and opens team.db in
 // the data dir. Both are hard errors: without either the module cannot
@@ -200,6 +223,9 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("team: service %q does not implement RelaySwitchReader (%T)", hostconfig.RelaySwitchesKey, sw)
 	}
 	m.switches = switches
+	if err := m.initSpawn(c); err != nil {
+		return err
+	}
 	// The statusline reading lives in the agent module (P1); as peers does,
 	// type-assert the reader on the owner-resolver service rather than add
 	// a registry key. Optional: a daemon without it fills no model/effort.
@@ -232,6 +258,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/team/approvals/{id}", m.handleDelete)
 	mux.HandleFunc("POST /api/team/approvals/{id}/decide", m.handleDecide)
 	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)
+	mux.HandleFunc("POST /api/team/spawns", m.handleSpawn) // P4-5, spec §7.2
 	mux.HandleFunc("POST /api/hooks/decide", m.handleHookDecide)
 	// P5a relay routes (spec §8.3, §8.7); all under TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/relay/hello", m.handleRelayHello)
@@ -278,14 +305,17 @@ func (m *Module) Start(context.Context) error {
 }
 
 // Stop cancels stopCtx (long-polls return, create answers not_ready) and
-// joins the sweeper. Idempotent. The DB is closed in Close. The cancel is
-// taken under createMu so no create inserts after Stop returns: one that
-// is past its entry check waits for the lock and then re-checks stopping.
+// joins the sweeper and the spawn runners, which leave their ops running
+// at the recorded step for the next boot. Idempotent. The DB is closed in
+// Close. The cancel is taken under createMu so no create inserts after
+// Stop returns: one that is past its entry check waits for the lock and
+// then re-checks stopping.
 func (m *Module) Stop(context.Context) error {
 	m.createMu.Lock()
 	m.stopCancel()
 	m.createMu.Unlock()
 	m.sweepWG.Wait()
+	m.spawnWG.Wait()
 	return nil
 }
 

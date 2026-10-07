@@ -165,6 +165,7 @@ type fixture struct {
 	titles   *fakeTitles
 	usage    *fakeUsage
 	sub      *core.EventSubscriber
+	spawnFakes
 }
 
 // fakeUsage is the agent module's ContextUsageReader of these tests: the
@@ -197,10 +198,11 @@ var _ agent.ContextUsageReader = (*fakeUsage)(nil)
 
 // fakeTitles records title moves (spec §8.4); *store.PeerLabelStore in production.
 type fakeTitles struct {
-	mu    sync.Mutex
-	moves [][2]string
-	has   map[string]bool // sessions that currently hold a title
-	fail  bool            // meta.db is down: every Move errors
+	mu     sync.Mutex
+	moves  [][2]string
+	has    map[string]bool // sessions that currently hold a title
+	fail   bool            // meta.db is down: every Move errors
+	claims [][2]string     // Claim(session, title): a spawned member's title
 }
 
 func (f *fakeTitles) Move(from, to string, _ time.Time) (bool, error) {
@@ -231,6 +233,7 @@ func newFixture(t *testing.T) *fixture {
 	f.core.Registry.Register(peersmod.OriginResolverKey, f.origins)
 	f.core.Registry.Register(hostconfig.RelaySwitchesKey, f.switches)
 	f.core.Registry.Register(agent.OwnerResolverKey, f.usage) // the team module asserts agent.ContextUsageReader on it
+	f.registerSpawnFakes()
 	f.m = New().WithTitles(f.titles)
 	f.m.newID = sequentialIDs()
 	f.m.clearedWait, f.m.clearedPoll = 200*time.Millisecond, 10*time.Millisecond
