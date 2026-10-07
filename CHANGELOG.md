@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.564] - 2026-10-08
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。只多日誌，行為不變。SPA 沒有改動。
+
+### Added：關機耗時日誌與 tmux／ps fork 計數器（#1767，#1791）
+
+重啟「請求到回來」比新 image 的 `startup: ready` 長很多（舊 image 關機約 8 秒），但日誌看不出時間花在哪。現在關機會多這幾行：`shutdown: stop N modules in …`／`shutdown: close N modules in …`（各模組耗時）、`shutdown: in-flight requests: N […]` 與 HTTP `Shutdown` 之後剩幾條（只含方法與路徑前兩段，不含 query 或 token）、`shutdown: stop-modules=… http-shutdown=… serve-return=… close-modules=… total=…`（`Shutdown` 超時強關時有 `http-forced-close` 標記）、restart 路徑 exec 之前的 `shutdown: done, restarting after …`。另外 `internal/execstat` 以原子計數記 tmux 與 ps 的 fork 次數與總耗時（不記指令參數），顯示在 `[agent] start exec:` 與 `startup: ready` 行尾，用來判斷 `sweepOnce`／`replayStatus` 剩下的時間是不是 fork。沒有改任何 timeout、順序或行為。
+
 ## [1.0.0-alpha.563] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。
