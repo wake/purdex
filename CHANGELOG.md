@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.559] - 2026-10-08
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。只多了日誌，行為不變。SPA 沒有改動。
+
+### Added：daemon 啟動耗時日誌（#1767，#1774）
+
+重啟變慢時日誌看不出時間花在哪。現在每次啟動會多這幾行：`startup: init N modules in Xms: …` 與 `startup: start N modules in Xms: …`（各模組耗時由大到小，小於 5 ms 併成 `others`；單一模組 ≥ 1 秒另有 `slow module` 警示；啟動失敗時也會先記出已完成模組的耗時）、`[agent] start: sweepOnce=… replayFromDB=… startSweep=… replayStatus=…`、`[peers] start: sweep=…`、`session: start: …`，以及 `pdx daemon listening` 之前的 `startup: ready in Xms`。用來定位 #1767 剩下的 5–13 秒（agent 模組啟動）。日誌只含模組名稱與毫秒數。
+
+## [1.0.0-alpha.558] - 2026-10-08
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。這次重啟起，啟動會比近期快 8 秒左右。SPA 沒有改動。
+
+### Fixed：daemon 啟動被兩個殭屍 helper 拖慢 8 秒（#1767，#1769）
+
+peers 模組啟動時會清理上一個 image 留下的 helper 行程。若 helper 是在 exec 重啟邊界之後才結束，它會成為 daemon 的殭屍子行程：`kill(pid, 0)` 仍成功、SIGTERM／SIGKILL 無效，於是每次啟動都空等約 4 秒（每筆），紀錄還永遠清不掉，重啟時間因此從約 5 秒一路拖到 16 秒以上。現在在確認它確實是本 daemon 的殭屍（狀態 Z、父行程是本 daemon、200 ms 後仍是 Z、身分相符）之後直接回收，不再送訊號與等待；任何一項不成立都退回原本的 SIGTERM 流程。同時 `Sweep` 加上單次保護：並行的第二次呼叫會等待並共用第一次的結果，不會重跑，也不會把失敗讀成成功。回收時日誌會有 `peers: sweep: reaped zombie pid …`。
+
 ## [1.0.0-alpha.557] - 2026-10-07
 
 > 只動 Purdex 的 Claude Code mod（隨 `pdx` 內嵌）。**不需要任何部署動作**：mod 只有在主機上跑過 `pdx setup --agent cc` 才會被 Claude Code 載入，而這要等 P5b-3 完成後整個接力功能一起驗收再裝。daemon、SPA、Electron 都沒有改動。

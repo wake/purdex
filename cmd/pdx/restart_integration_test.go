@@ -214,6 +214,13 @@ func TestRestart_ReexecKeepsPidNewBootID(t *testing.T) {
 	if second == first {
 		t.Fatal("boot id unchanged")
 	}
+	// Every image's runServe logs its readiness line (#1767): the first boot
+	// and the re-exec'd image each contributed one.
+	if b, err := os.ReadFile(filepath.Join(dir, "serve.log")); err != nil {
+		t.Fatal(err)
+	} else if n := strings.Count(string(b), "startup: ready in "); n < 2 {
+		t.Fatalf("serve.log has %d %q lines, want one per image (>=2)", n, "startup: ready in")
+	}
 	// Same process: the child we started never exited (exec replaces the
 	// image in place; a waiter on it would have fired on any exit).
 	select {

@@ -92,6 +92,7 @@ func main() {
 }
 
 func runServe(args []string) *reexecPlan {
+	bootStart := time.Now() // monotonic; feeds the "startup: ready in" line
 	defer func() {
 		if r := recover(); r != nil {
 			home, _ := os.UserHomeDir()
@@ -279,9 +280,11 @@ func runServe(args []string) *reexecPlan {
 	}
 
 	// 6. Init all modules
+	initStart := time.Now()
 	if err := c.InitModules(); err != nil {
 		log.Fatalf("core init: %v", err)
 	}
+	initDur := time.Since(initStart)
 
 	// 7. Create shared http.ServeMux and register routes
 	mux := http.NewServeMux()
@@ -293,9 +296,11 @@ func runServe(args []string) *reexecPlan {
 	defer cancel()
 
 	// 8. Start modules (session resets stale modes, cc starts poller, agent registers snapshot)
+	startStart := time.Now()
 	if err := c.StartModules(ctx); err != nil {
 		log.Fatalf("core start: %v", err)
 	}
+	startDur := time.Since(startStart)
 
 	// 9. Apply middleware chain and start HTTP server
 	// Health endpoint bypasses auth (used for connection testing).
@@ -313,6 +318,7 @@ func runServe(args []string) *reexecPlan {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	log.Print(startupReadyLine(time.Since(bootStart), initDur, startDur))
 	log.Printf("pdx daemon listening on %s", addr)
 	listener, err := listenWithReuseAddr(addr)
 	if err != nil {

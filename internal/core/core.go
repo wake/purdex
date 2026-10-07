@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -92,6 +93,11 @@ type Core struct {
 	// restartHook / life back POST /api/daemon/restart (restart.go).
 	restartHook func()
 	life        atomic.Int32
+
+	// now / logf back the startup timing lines (startup_timing.go); New sets
+	// time.Now / log.Printf, tests inject a fake clock and a collector.
+	now  func() time.Time
+	logf func(string, ...any)
 }
 
 // New creates a Core from the given dependencies.
@@ -113,6 +119,8 @@ func New(deps CoreDeps) *Core {
 		Events:       NewEventsBroadcaster(),
 		Tickets:      NewTicketStore(),
 		SetupSecrets: NewSetupSecretStore(5 * time.Minute),
+		now:          time.Now,
+		logf:         log.Printf,
 	}
 }
 
@@ -160,11 +168,18 @@ func (c *Core) InitModules() error {
 	}
 	c.modules = sorted
 
+	begin := c.clock()
+	durs := make([]moduleTiming, 0, len(c.modules))
 	for _, m := range c.modules {
-		if err := m.Init(c); err != nil {
+		t0 := c.clock()
+		err := m.Init(c)
+		durs = append(durs, moduleTiming{m.Name(), c.clock().Sub(t0)})
+		if err != nil {
+			c.logPhaseTimings("init", durs, c.clock().Sub(begin), m.Name())
 			return fmt.Errorf("module %s init: %w", m.Name(), err)
 		}
 	}
+	c.logPhaseTimings("init", durs, c.clock().Sub(begin), "")
 	return nil
 }
 
@@ -177,11 +192,18 @@ func (c *Core) RegisterRoutes(mux *http.ServeMux) {
 
 // StartModules calls Start on each module in registration order.
 func (c *Core) StartModules(ctx context.Context) error {
+	begin := c.clock()
+	durs := make([]moduleTiming, 0, len(c.modules))
 	for _, m := range c.modules {
-		if err := m.Start(ctx); err != nil {
+		t0 := c.clock()
+		err := m.Start(ctx)
+		durs = append(durs, moduleTiming{m.Name(), c.clock().Sub(t0)})
+		if err != nil {
+			c.logPhaseTimings("start", durs, c.clock().Sub(begin), m.Name())
 			return fmt.Errorf("module %s start: %w", m.Name(), err)
 		}
 	}
+	c.logPhaseTimings("start", durs, c.clock().Sub(begin), "")
 	return nil
 }
 

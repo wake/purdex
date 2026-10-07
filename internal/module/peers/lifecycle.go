@@ -7,7 +7,10 @@ package peers
 
 import (
 	"context"
+	"log"
 	"time"
+
+	"github.com/wake/purdex/internal/core"
 )
 
 // helperReapInterval is how often idle helpers are reaped (HelperIdleReap
@@ -22,8 +25,13 @@ const replyWorkerCap = 8
 // never run without one — and then starts the idle-reap ticker under
 // stopCtx.
 func (m *Module) Start(context.Context) error {
-	if err := m.helpers.Sweep(); err != nil {
-		return err
+	// Timing (#1767): observation only.
+	st := core.NewStepTimer(nil)
+	var sweepErr error
+	st.Run("sweep", func() { sweepErr = m.helpers.Sweep() })
+	log.Printf("[peers] start: %s", st)
+	if sweepErr != nil {
+		return sweepErr
 	}
 	m.reapWG.Add(1)
 	go m.reapLoop()

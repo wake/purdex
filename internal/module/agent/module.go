@@ -311,14 +311,21 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 // → replayStatus so detectors see fully-hydrated state on first poll
 // (per spec §6.3 / §6.4).
 func (m *Module) Start(_ context.Context) error {
-	if err := m.sweepOnce(); err != nil {
-		log.Printf("[agent] startup sweep: %v", err)
-	}
-	m.replayFromDB()
-	m.startSweep()
-	if m.probeIntentDisp != nil {
-		m.probeIntentDisp.replayStatus()
-	}
+	// Step timings (#1767): observation only, same order as before.
+	st := core.NewStepTimer(nil)
+	st.Run("sweepOnce", func() {
+		if err := m.sweepOnce(); err != nil {
+			log.Printf("[agent] startup sweep: %v", err)
+		}
+	})
+	st.Run("replayFromDB", m.replayFromDB)
+	st.Run("startSweep", m.startSweep)
+	st.Run("replayStatus", func() {
+		if m.probeIntentDisp != nil {
+			m.probeIntentDisp.replayStatus()
+		}
+	})
+	log.Printf("[agent] start: %s", st)
 
 	if m.core != nil {
 		m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
