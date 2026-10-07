@@ -48,6 +48,9 @@ export function buildNotificationContent(
     case 'StopFailure':
       content = { title: sessionName, body: (rawEvent.error_details as string) || (rawEvent.error as string) || (t?.('notification.fallback.stopFailure') ?? 'Task stopped unexpectedly') }
       break
+    case 'WorkerTerminated':
+      content = { title: sessionName, body: t?.('notification.worker_terminated') ?? 'Worker terminated' }
+      break
     default:
       return null
   }
