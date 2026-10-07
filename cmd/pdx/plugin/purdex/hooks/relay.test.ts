@@ -668,3 +668,81 @@ test('a begin whose session id changed under it (no /clear seen) is cancelled{ab
   await turnAndSettle($, f, 't2') // idle again: +10 points asks again
   expect(count(f, 'begin')).toBe(2)
 })
+
+// Item 2 (R1 P2): the daemon's threshold is the one that counts, so nothing
+// is asked before hello has answered. Mutation gate: drop the helloOK check
+// in maybeBegin → t1 begins at 75 % on the default 70.
+test('no begin before hello answers: a 75 % turn ahead of the answer asks nothing, then the daemon’s threshold 90 holds', async ($, on) => {
+  const f = relayWorld(on, { usage: { tokens: 150000, window: 200000, percent: 75 } })
+  const g = gated()
+  f.pdx = async (argv) => {
+    if (argv[1] === 'hello') { await g.p; return { exitCode: 0, stdout: HELLO('none', { threshold: 90 }) } }
+    if (argv[1] === 'begin') return { exitCode: 0, stdout: BEGIN_OK }
+    if (argv[1] === 'wait') return new Promise<never>(() => {})
+    return { exitCode: 0, stdout: '{}' }
+  }
+  await start($, f) // hello hangs
+  await turnAndSettle($, f, 't1')
+  expect(count(f, 'begin')).toBe(0)
+  expect(count(f, 'hello')).toBe(1) // one hello in flight: the turn end does not send another
+  g.release()
+  await f.clock.settle()
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(0) // 75 < 90
+  f.usage = { tokens: 182000, window: 200000, percent: 91 }
+  await turnAndSettle($, f, 't3')
+  expect(count(f, 'begin')).toBe(1)
+})
+
+// Mutation gate: drop the re-send at turn.complete → one hello, never a begin.
+test('a failed hello is sent again from a timer at the next turn end (never awaited there); no begin until one answers', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const g = gated()
+  let hellos = 0
+  f.pdx = async (argv) => {
+    if (argv[1] === 'hello') {
+      if (++hellos === 1) return { exitCode: 20, stderr: 'daemon unavailable' }
+      await g.p
+      return { exitCode: 0, stdout: HELLO() }
+    }
+    if (argv[1] === 'begin') return { exitCode: 0, stdout: BEGIN_OK }
+    if (argv[1] === 'wait') return new Promise<never>(() => {})
+    return { exitCode: 0, stdout: '{}' }
+  }
+  await start($, f)
+  expect(count(f, 'hello')).toBe(1)
+  let done = false
+  const t = turn($, 't1').then(() => { done = true })
+  await f.clock.settle()
+  expect(done).toBe(true) // the second hello hangs; the turn end did not wait for it
+  expect(count(f, 'hello')).toBe(2)
+  expect(count(f, 'begin')).toBe(0)
+  g.release()
+  await t
+  await f.clock.settle()
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(1)
+  expect(count(f, 'hello')).toBe(2) // answered: no more hellos
+})
+
+// Mutation gate: keep helloOK across /clear → t1 begins under sid-2 before its hello answered.
+test('after /clear nothing is asked until the new session’s hello answers', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const g = gated()
+  f.pdx = async (argv) => {
+    if (argv[1] === 'hello') { if (argOf(argv, '--session') === 'sid-2') await g.p; return { exitCode: 0, stdout: HELLO() } }
+    if (argv[1] === 'begin') return { exitCode: 0, stdout: BEGIN_OK }
+    if (argv[1] === 'wait') return new Promise<never>(() => {})
+    return { exitCode: 0, stdout: '{}' }
+  }
+  await start($, f)
+  f.sessionId = 'sid-2'
+  await $.classic.SessionStart({ source: 'clear' })
+  await f.clock.settle()
+  await turnAndSettle($, f, 't1')
+  expect(count(f, 'begin')).toBe(0)
+  g.release()
+  await f.clock.settle()
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(1)
+})

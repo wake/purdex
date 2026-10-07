@@ -37,6 +37,9 @@ const fresh = () => ({
   threshold: DEFAULT_THRESHOLD,
   minGrowth: DEFAULT_MIN_GROWTH,
   role: 'none',
+  helloOK: false, // this session's hello answered (exit 0, JSON): only then is the threshold the daemon's
+  helloSeq: 0, // the newest hello sent; an older one's answer is dropped
+  helloBusy: false, // the newest hello has not answered yet
   gen: 0, // bumped at every return to idle and every session change: a begin answers only for its own
   state: 'idle', // idle | beginning | awaiting | approved | clearing | seeding
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, seedNonce, who, wait }
@@ -53,10 +56,10 @@ const fresh = () => ({
 
 const s = fresh()
 
-// resetState starts the session over; the generation keeps counting up, so a
-// begin sent before the reset never answers for one sent after it.
+// resetState starts the session over; the counters keep counting up, so a
+// begin or a hello sent before the reset never answers for one sent after it.
 function resetState() {
-  Object.assign(s, fresh(), { gen: s.gen + 1 })
+  Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq })
 }
 
 function parseJSON(text) {
@@ -92,20 +95,34 @@ function stderrCode(r) {
   return (r.stderr || '').trim().split(/\s+/).pop() || ''
 }
 
-async function hello($) {
-  const sid = await $.session.id()
-  const r = await pdx($, ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
-  const h = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
-  if (!h) return // any other exit: keep the defaults
-  if (h.role) s.role = h.role
-  if (!s.envThreshold && h.threshold > 0) s.threshold = h.threshold
-  if (h.min_growth > 0) s.minGrowth = h.min_growth
+// hello tells the daemon the mod is here and takes its role, threshold and
+// minimum growth. Only the newest hello's answer counts (a /clear sends one
+// under the new session id while the old one may still be out), and only an
+// answer that is exit 0 and JSON sets helloOK: until then nothing is asked
+// (the defaults are not the daemon's), and the next turn.complete sends
+// hello again.
+async function hello($, seq) {
+  try {
+    const sid = await $.session.id()
+    const r = await pdx($, ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
+    if (seq !== s.helloSeq) return // a newer hello answers for the session now
+    const h = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
+    if (!h || typeof h !== 'object') return // any other exit: not answered; said again at the next turn end
+    s.helloOK = true
+    if (h.role) s.role = h.role
+    if (!s.envThreshold && h.threshold > 0) s.threshold = h.threshold
+    if (h.min_growth > 0) s.minGrowth = h.min_growth
+  } finally {
+    if (seq === s.helloSeq) s.helloBusy = false
+  }
 }
 
 // helloLater sends hello from a timer, never inside the hook: a session
-// start or a /clear must not wait for a daemon that is down.
+// start, a /clear or a turn end must not wait for a daemon that is down.
 function helloLater($) {
-  $.clock.after(0, () => { void hello($).catch(() => {}) })
+  const seq = ++s.helloSeq
+  s.helloBusy = true
+  $.clock.after(0, () => { void hello($, seq).catch(() => {}) })
 }
 
 // retryableReport: a report that did not reach the daemon (20 unreachable —
@@ -211,7 +228,7 @@ function toIdle() {
 // maybeBegin runs in turn.complete: it reads the engine, moves to beginning
 // and leaves `pdx relay begin` to a timer.
 async function maybeBegin($) {
-  if (s.role === 'member') return
+  if (!s.helloOK || s.role === 'member') return
   const u = (await $.session.usage()).context
   if (u.percent === undefined || u.percent < s.threshold) return
   if (s.floor !== undefined && (u.tokens ?? 0) < s.floor + s.minGrowth) return
@@ -380,6 +397,7 @@ export function register(on) {
     const r = await next(e)
     if (!s.interactive || e.agentId) return r
     try {
+      if (!s.helloOK && !s.helloBusy) helloLater($) // the last hello failed (daemon down): say it again
       if (s.outbox.length) { s.held.clear(); pump($) } // re-send what did not land (§8.3)
       if (s.pending && e.turnId === s.writeTurnId) await onWriteTurnDone($)
       else if (s.pending && e.turnId === s.seedTurnId) await onSeedTurnDone($)
@@ -399,6 +417,7 @@ export function register(on) {
     if (!s.interactive || e.source !== 'clear') return r
     const p = s.pending
     s.gen += 1 // a new session id: no begin sent under the old one answers for it
+    s.helloOK = false // nor does the old session's hello: the new one is sent below
     if (s.state === 'clearing' && p) {
       s.state = 'seeding'
       report($, p.op.id, 'cleared', ['--new-session', await $.session.id()])
