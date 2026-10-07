@@ -2,7 +2,11 @@ package team
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
+	"strings"
+
+	"github.com/google/uuid"
 )
 
 // ---- P4: teams, members, spawn, kill (spec §7.1–§7.3, U20) ----
@@ -104,25 +108,28 @@ func ValidEffort(s string) bool {
 }
 
 // SpawnTmuxName is a member's tmux session name: "tm-" plus the first 10
-// hex digits of its spawn op id with the dashes removed (spec §7.2 step 3,
-// D4). It derives from the id alone, so a retry after a restart finds the
-// session this op created. Callers pass a validated UUID v4; any other
-// string still yields "tm-" plus its first 10 non-dash characters.
-func SpawnTmuxName(opID string) string {
-	const digits = 10
-	name := []rune("tm-")
-	n := 0
-	for _, r := range opID {
-		if n == digits {
-			break
-		}
-		if r == '-' {
-			continue
-		}
-		name = append(name, r)
-		n++
+// hex digits of its spawn op id, lowercase, with the dashes removed (spec
+// §7.2 step 3, D4). It derives from the id alone, so a retry after a
+// restart finds the session this op created. The id must be a canonical
+// UUID v4 (isCanonicalUUIDv4), in either case; anything else is an error,
+// because the name is a tmux target and must hold only hex digits.
+func SpawnTmuxName(opID string) (string, error) {
+	if !isCanonicalUUIDv4(opID) {
+		return "", fmt.Errorf("spawn op id %q is not a canonical UUID v4", opID)
 	}
-	return string(name)
+	digits := strings.ReplaceAll(strings.ToLower(opID), "-", "")
+	return "tm-" + digits[:10], nil
+}
+
+// isCanonicalUUIDv4 is the approvals handler's id rule (version 4 of the
+// RFC 4122 variant) restricted to the 8-4-4-4-12 spelling, hex of either
+// case: uuid.Parse alone also takes braces, a urn: prefix and 32 bare digits.
+func isCanonicalUUIDv4(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	u, err := uuid.Parse(s)
+	return err == nil && u.Version() == 4 && u.Variant() == uuid.RFC4122
 }
 
 // Team is one lead's team (spec §7.1), created in the transaction that

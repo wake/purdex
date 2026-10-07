@@ -202,31 +202,50 @@ func TestValidEffort_Table(t *testing.T) {
 	}
 }
 
-// §7.2 step 3 (D4): the tmux name derives from the op id alone, so a retry
-// after a restart names the same session.
+// §7.2 step 3 (D4): the tmux name is "tm-" plus the first 10 hex digits of
+// the op id, and derives from the id alone, so a retry after a restart
+// names the same session.
 func TestSpawnTmuxName_FromUUID(t *testing.T) {
-	const id = "0f8e2c4a-91b3-4d5e-a6f7-1234567890ab"
-	if got := SpawnTmuxName(id); got != "tm-0f8e2c4a91" {
-		t.Fatalf("SpawnTmuxName(%q) = %q, want tm-0f8e2c4a91", id, got)
-	}
-	if SpawnTmuxName(id) != SpawnTmuxName(id) {
-		t.Fatal("not deterministic")
-	}
-	// The dash after the 8th digit is skipped; only the first 10 digits count.
-	if a, b := SpawnTmuxName("01234567-89ab-4cde-8f01-23456789abcd"), SpawnTmuxName("01234567-89ff-4fff-bfff-ffffffffffff"); a != "tm-0123456789" || a != b {
-		t.Fatalf("names = %q / %q, want tm-0123456789 for both", a, b)
-	}
-	// Callers pass validated UUIDs; anything else still yields tm- plus its
-	// first 10 non-dash characters, never a panic.
 	for in, want := range map[string]string{
-		"":                 "tm-",
-		"abc":              "tm-abc",
-		"--a-b-":           "tm-ab",
-		"0123456789abcdef": "tm-0123456789",
-		"日本語0123456789":    "tm-日本語0123456",
+		"0f8e2c4a-91b3-4d5e-a6f7-1234567890ab": "tm-0f8e2c4a91",
+		// Either case is a UUID; the name is always lowercase hex.
+		"0F8E2C4A-91B3-4D5E-A6F7-1234567890AB": "tm-0f8e2c4a91",
+		"0f8E2c4A-91b3-4D5e-A6f7-1234567890aB": "tm-0f8e2c4a91",
+		// The dash after the 8th digit is skipped; only the first 10 digits count.
+		"01234567-89ab-4cde-8f01-23456789abcd": "tm-0123456789",
+		"01234567-89ff-4fff-bfff-ffffffffffff": "tm-0123456789",
 	} {
-		if got := SpawnTmuxName(in); got != want {
-			t.Errorf("SpawnTmuxName(%q) = %q, want %q", in, got, want)
+		got, err := SpawnTmuxName(in)
+		if err != nil || got != want {
+			t.Errorf("SpawnTmuxName(%q) = %q, %v; want %q, nil", in, got, err, want)
+		}
+	}
+}
+
+// Anything but a canonical UUID v4 is an error, never a name: the name is a
+// tmux target, so a ':', '.' or space in it would address something else.
+func TestSpawnTmuxName_RefusesAnythingButACanonicalUUIDv4(t *testing.T) {
+	for _, in := range []string{
+		"", "abc", "0123456789abcdef", "日本語0123456789",
+		"0f8e2c4a-91b3-4d5e-a6f7-1234567890a",   // 35 characters
+		"0f8e2c4a-91b3-4d5e-a6f7-1234567890abc", // 37 characters
+		"0f8e2c4a91b34d5ea6f71234567890ab",      // no dashes (uuid.Parse takes it)
+		"{0f8e2c4a-91b3-4d5e-a6f7-1234567890ab}",
+		"urn:uuid:0f8e2c4a-91b3-4d5e-a6f7-1234567890ab",
+		"0f8e2c4a9-1b3-4d5e-a6f7-1234567890ab", // a dash out of place
+		"0f8e2c4g-91b3-4d5e-a6f7-1234567890ab", // not hex
+		"0f8e2c4a:91b3-4d5e-a6f7-1234567890ab", // tmux target characters
+		"0f8e2c4a.91b3-4d5e-a6f7-1234567890ab",
+		"0f8e2c4a 91b3-4d5e-a6f7-1234567890ab",
+		" 0f8e2c4a-91b3-4d5e-a6f7-1234567890a",
+		"0f8e2c4a-91b3-4d5e-a6f7-1234567890a\n",
+		"日本ab-91b3-4d5e-a6f7-1234567890ab",     // 36 bytes, dashes in place, not hex
+		"0f8e2c4a-91b3-1d5e-a6f7-1234567890ab", // version 1
+		"0f8e2c4a-91b3-4d5e-c6f7-1234567890ab", // Microsoft variant, not RFC 4122
+		"00000000-0000-0000-0000-000000000000",
+	} {
+		if got, err := SpawnTmuxName(in); err == nil || got != "" {
+			t.Errorf("SpawnTmuxName(%q) = %q, %v; want \"\", an error", in, got, err)
 		}
 	}
 }
