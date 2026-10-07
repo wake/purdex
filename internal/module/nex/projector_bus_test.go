@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"slices"
 	"testing"
 	"time"
 
@@ -116,7 +115,7 @@ func TestProjector_ConsumerKeepsDrainingWhileTheSlotIsHeld(t *testing.T) {
 		for i := 0; i < projectorBusBuffer/2; i++ {
 			publish(e.bus, fmt.Sprintf("exc_%d", i%3), "tool_use")
 		}
-		require.Eventually(t, func() bool { return len(e.p.sub.Ch) == 0 }, 2*time.Second, time.Millisecond,
+		require.Eventually(t, func() bool { return len(e.p.subscription().Ch) == 0 }, 2*time.Second, time.Millisecond,
 			"the consumer stopped draining while the slot was held")
 	}
 	publish(e.bus, "exc_zz", "execution.running")
@@ -135,7 +134,7 @@ func TestProjector_StopUnsubscribesFromTheBus(t *testing.T) {
 	e.p.stop(context.Background())
 	closed := make(chan struct{})
 	go func() {
-		for range e.p.sub.Ch { // drain what was buffered; Unsubscribe closed it
+		for range e.p.subscription().Ch { // drain what was buffered; Unsubscribe closed it
 		}
 		close(closed)
 	}()
@@ -149,22 +148,8 @@ func TestProjector_StopUnsubscribesFromTheBus(t *testing.T) {
 	assert.Empty(t, e.logs.all(), "an unsubscribe of our own was reported as a lost subscription")
 }
 
-// A bus that closes under a running projector ends the consumer with a log
-// line (the resubscribe is PR1c's); the worker keeps flushing what is marked.
-func TestProjector_ClosedBusEndsTheConsumerWithALogLine(t *testing.T) {
-	e := newProjEnv(t, fastTiming)
-	e.bus.Close()
-	require.Eventually(t, func() bool {
-		return slices.Contains(e.logs.all(), "nex-delta: bus subscription closed; execution deltas stopped")
-	}, 2*time.Second, 2*time.Millisecond)
-
-	e.rows.set("exc_a", "idle")
-	e.p.markFrame("exc_a", "execution.running")
-	assert.Equal(t, "exc_a", nextDelta(t, e.sub).ID)
-}
-
 // lastPushed (§3.7) holds each execution's last pushed ver and status
-// digest, for PR1c's safety reconcile.
+// digest, for the safety reconcile.
 func TestProjector_RecordsWhatItPushed(t *testing.T) {
 	e := newProjEnv(t, fastTiming)
 	e.rows.setBody("exc_1", singleRow)
@@ -177,11 +162,11 @@ func TestProjector_RecordsWhatItPushed(t *testing.T) {
 
 	e.p.mu.Lock()
 	defer e.p.mu.Unlock()
-	assert.Equal(t, map[string]pushedRow{
-		"exc_1": {ver: 1, digest: rowDigest{State: "idle", PermissionRequest: "perm_1", TurnCount: 3}},
-		"exc_2": {ver: 2, digest: rowDigest{State: "idle", Archived: true, TurnCount: 4,
+	assert.Equal(t, map[string]pushedRow{ // ver 1 was the start seed's (empty) page
+		"exc_1": {ver: 2, digest: rowDigest{State: "idle", PermissionRequest: "perm_1", TurnCount: 3}},
+		"exc_2": {ver: 3, digest: rowDigest{State: "idle", Archived: true, TurnCount: 4,
 			LastTurnReason: "completed", TerminalReason: "terminated"}},
-		"exc_gone": {ver: 3, removed: true},
+		"exc_gone": {ver: 4, removed: true},
 	}, e.p.pushed)
 }
 

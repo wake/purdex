@@ -171,7 +171,9 @@ func newProjEnv(t *testing.T, timing projectorTiming) *projEnv {
 	return startProjEnv(t, timing, newRowServer())
 }
 
-// startProjEnv is newProjEnv over rows the test filled in already.
+// startProjEnv is newProjEnv over rows the test filled in already. It
+// returns once the start seed is done, so the seed's page reads (one ver
+// each) are behind the test before it does anything.
 func startProjEnv(t *testing.T, timing projectorTiming, rows *rowServer) *projEnv {
 	t.Helper()
 	e := &projEnv{slot: newReadSlot(discardLogf), bus: bus.New(), events: core.NewEventsBroadcaster(),
@@ -183,7 +185,15 @@ func startProjEnv(t *testing.T, timing projectorTiming, rows *rowServer) *projEn
 		e.p.stop(context.Background())
 		e.events.RemoveTestSubscriber(e.sub)
 	})
+	waitSeeds(t, e.p, 1)
 	return e
+}
+
+// waitSeeds waits until p has finished n seed walks.
+func waitSeeds(t *testing.T, p *projector, n int64) {
+	t.Helper()
+	require.Eventually(t, func() bool { return p.seeds.Load() >= n }, 2*time.Second, time.Millisecond,
+		"seed walk %d never finished", n)
 }
 
 // delta is a nex.execution frame's value, decoded.
@@ -321,11 +331,12 @@ func TestProjector_DeltaWireFormat(t *testing.T) {
 	row := `{"activity":{"phase":"idle"},"archived":false,"brief":"<b>fix & ship</b>","cost_usd":null,` +
 		`"duration_ms":null,"event_count":12,"id":"exc_1","labels":{"team":"a"},"observers":0,` +
 		`"pending_permission":{"request_id":"perm_1","tool_name":"Bash","since":5},"state":"idle","turn_count":3}`
-	assert.Equal(t, `{"epoch":"`+e.slot.epoch+`","bseq":1,"id":"exc_1","ver":1,"cause":["permission.requested"],"row":`+row+`}`, ev.Value)
+	// ver 1 was the start seed's one (empty) page.
+	assert.Equal(t, `{"epoch":"`+e.slot.epoch+`","bseq":1,"id":"exc_1","ver":2,"cause":["permission.requested"],"row":`+row+`}`, ev.Value)
 
 	e.p.markFrame("exc_gone", "execution.archived")
 	ev, _ = nextFrame(t, e.sub)
-	assert.Equal(t, `{"epoch":"`+e.slot.epoch+`","bseq":2,"id":"exc_gone","ver":2,"cause":["execution.archived"],"row":null}`, ev.Value)
+	assert.Equal(t, `{"epoch":"`+e.slot.epoch+`","bseq":2,"id":"exc_gone","ver":3,"cause":["execution.archived"],"row":null}`, ev.Value)
 }
 
 func TestProjector_BseqIsContiguousInBroadcastOrderAndVerIncreases(t *testing.T) {
@@ -362,7 +373,7 @@ func TestProjector_FailedReadConsumesNothingAndIsRetriedOnce(t *testing.T) {
 	d := nextDelta(t, e.sub)
 	assert.GreaterOrEqual(t, time.Since(start), fastTiming.retryDelay, "retried before the retry delay")
 	assert.Equal(t, uint64(1), d.Bseq, "the failed read consumed a bseq")
-	assert.Equal(t, uint64(1), d.Ver, "the failed read consumed a ver")
+	assert.Equal(t, uint64(2), d.Ver, "the failed read consumed a ver") // 1: the start seed's page
 	assert.Equal(t, []string{"permission.resolved"}, d.Cause, "the retry lost the failed batch's cause")
 	assert.Equal(t, 2, e.rows.readsOf("exc_f"))
 }
@@ -379,7 +390,7 @@ func TestProjector_ReadFailingTwiceGivesUp(t *testing.T) {
 	e.rows.set("exc_ok", "idle")
 	e.p.markFrame("exc_ok", "execution.running")
 	d := nextDelta(t, e.sub)
-	assert.Equal(t, [2]uint64{1, 1}, [2]uint64{d.Bseq, d.Ver}, "the failed reads left a gap")
+	assert.Equal(t, [2]uint64{1, 2}, [2]uint64{d.Bseq, d.Ver}, "the failed reads left a gap") // ver 1: the start seed
 }
 
 // A flush waits while a list page holds the slot, and a page stamped between
@@ -394,6 +405,7 @@ func TestProjector_FlushWaitsForAListPageAndIsOrderedAgainstIt(t *testing.T) {
 	p := newProjector(m.reads(), rowReader{handler: rows, logf: discardLogf}, events, bus.New(), discardLogf, fastTiming)
 	p.start()
 	t.Cleanup(func() { p.stop(context.Background()) })
+	waitSeeds(t, p, 1) // the start seed lists too: done before the gate goes up
 
 	p.markFrame("exc_a", "execution.running")
 	first := nextDelta(t, sub)

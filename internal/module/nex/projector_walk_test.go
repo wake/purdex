@@ -3,7 +3,9 @@ package nex
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,7 +16,8 @@ import (
 )
 
 // #1866 PR1c (spec 2026-10-08 §3.6, §3.7, §8 R3-2): the list walk — one
-// page per slot hold, each page its own ver.
+// page per slot hold, each page its own ver — and the lastPushed seed it
+// feeds at every epoch start.
 
 // rowsWith is a rowServer with one idle row per id.
 func rowsWith(ids ...string) *rowServer {
@@ -149,4 +152,83 @@ func TestProjectorWalk_FailedPageEndsTheWalkWithoutAVer(t *testing.T) {
 			assert.Equal(t, pages[0].ver+1, st.Ver, "the failed page consumed a ver")
 		})
 	}
+}
+
+// The start seed records every row the list shows as lastPushed — its
+// page's ver, its digest — and pushes nothing: clients reconcile against
+// list pages read after the epoch began, so they hold that baseline
+// already (§8 R3-2).
+func TestProjector_StartSeedRecordsEveryListedRowWithoutPushing(t *testing.T) {
+	rows := rowsWith("exc_01", "exc_02")
+	rows.setBody("exc_03", `{"id":"exc_03","state":"idle","pending_permission":{"request_id":"perm_9"},"turn_count":2}`)
+	rows.setBody("exc_04", `{"id":"exc_04","state":"idle","archived":true,"turn_count":1}`) // not in the list
+	tm := fastTiming
+	tm.walkLimit = 2
+	e := startProjEnv(t, tm, rows)
+
+	idle := rowDigest{State: "idle", TurnCount: 1}
+	e.p.mu.Lock()
+	assert.Equal(t, map[string]pushedRow{
+		"exc_01": {ver: 1, digest: idle},
+		"exc_02": {ver: 1, digest: idle},
+		"exc_03": {ver: 2, digest: rowDigest{State: "idle", PermissionRequest: "perm_9", TurnCount: 2}},
+	}, e.p.pushed)
+	e.p.mu.Unlock()
+	noFrame(t, e.sub, 50*time.Millisecond)
+	require.NoError(t, e.slot.hold(context.Background(), "test", 0, func(context.Context) error {
+		assert.Equal(t, uint64(0), e.slot.bseq, "the seed consumed a bseq")
+		return nil
+	}))
+	for _, id := range []string{"exc_01", "exc_02", "exc_03", "exc_04"} {
+		assert.Zero(t, rows.readsOf(id), "the seed read %s on its own", id)
+	}
+}
+
+// A seed applies a page by ver: an entry newer than the page (a delta read
+// after it) is kept, an older one takes the page's row. An older entry the
+// page covers but does not list (archived or gone since) is dropped, as no
+// client holds a row for it either; one outside the page's range is not
+// the page's to judge.
+func TestProjector_SeedPageNeverOverwritesANewerVer(t *testing.T) {
+	running, idle := rowDigest{State: "running"}, rowDigest{State: "idle"}
+	p := &projector{pushed: map[string]pushedRow{
+		"exc_01": {ver: 1, digest: running}, // before the page's range
+		"exc_02": {ver: 9, digest: running}, // flushed after the page was read
+		"exc_03": {ver: 3, digest: running}, // older than the page
+		"exc_04": {ver: 4, digest: running}, // covered, not listed, older
+		"exc_05": {ver: 9, digest: running}, // covered, not listed, newer
+		"exc_09": {ver: 1, digest: running}, // after the page's range
+	}}
+	p.seedPage(walkPage{ver: 5, upTo: "exc_06", rows: []walkRow{{id: "exc_02", digest: idle}, {id: "exc_03", digest: idle},
+		{id: "exc_06", digest: idle}}}, "exc_01")
+	assert.Equal(t, map[string]pushedRow{
+		"exc_01": {ver: 1, digest: running},
+		"exc_02": {ver: 9, digest: running},
+		"exc_03": {ver: 5, digest: idle},
+		"exc_05": {ver: 9, digest: running},
+		"exc_06": {ver: 5, digest: idle},
+		"exc_09": {ver: 1, digest: running},
+	}, p.pushed)
+
+	// The final page (upTo "") covers everything after the previous one.
+	p.seedPage(walkPage{ver: 10}, "exc_06")
+	assert.NotContains(t, p.pushed, "exc_09")
+	assert.Contains(t, p.pushed, "exc_06")
+}
+
+// A seed the page cap stopped keeps what it read and says so.
+func TestProjector_SeedStoppedByThePageCapLogsIt(t *testing.T) {
+	tm := fastTiming
+	tm.walkLimit, tm.walkPages = 1, 2
+	e := startProjEnv(t, tm, rowsWith("exc_01", "exc_02", "exc_03"))
+	var line string
+	for _, l := range e.logs.all() {
+		if strings.HasPrefix(l, "nex-delta: seeding lastPushed stopped:") {
+			line = l
+		}
+	}
+	assert.Contains(t, line, "2 pages")
+	e.p.mu.Lock()
+	defer e.p.mu.Unlock()
+	assert.Len(t, e.p.pushed, 2)
 }

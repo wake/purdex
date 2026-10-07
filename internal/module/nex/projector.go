@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"lab.protype.tw/wake/nexen/bus"
@@ -59,6 +60,8 @@ type projectorTiming struct {
 	retryDelay time.Duration   // readRetryDelay
 	recheck    []time.Duration // recheckOffsets (projector_recheck.go)
 	helloWait  time.Duration   // helloSlotWait (projector_hello.go)
+	backoffMin time.Duration   // resubscribeBackoffMin (projector_bus.go)
+	backoffMax time.Duration   // resubscribeBackoffMax (projector_bus.go)
 	walkLimit  int             // walkPageLimit (projector_walk.go)
 	walkPages  int             // walkMaxPages (projector_walk.go)
 }
@@ -78,6 +81,12 @@ func (t projectorTiming) withDefaults() projectorTiming {
 	}
 	if t.helloWait <= 0 {
 		t.helloWait = helloSlotWait
+	}
+	if t.backoffMin <= 0 {
+		t.backoffMin = resubscribeBackoffMin
+	}
+	if t.backoffMax <= 0 {
+		t.backoffMax = resubscribeBackoffMax
 	}
 	if t.walkLimit <= 0 {
 		t.walkLimit = walkPageLimit
@@ -119,7 +128,7 @@ func (e *dirtyExec) due(t projectorTiming) time.Time {
 // rowDigest is the part of a row the safety reconcile compares with what was
 // pushed (§3.7): state, pending_permission.request_id, archived, turn_count,
 // last_turn_reason, terminal_reason. The projector keeps it current with
-// every delta; a list walk reads it from each listed row.
+// every delta, and an epoch's seed sets it from the list.
 type rowDigest struct {
 	State             string
 	PermissionRequest string
@@ -129,8 +138,10 @@ type rowDigest struct {
 	TerminalReason    string
 }
 
-// pushedRow is lastPushed[id] (§3.7): the ver of the last delta pushed for
-// an execution and what its row showed.
+// pushedRow is lastPushed[id] (§3.7): what the clients were last given for
+// an execution, and the ver of the read it came from — the last delta
+// pushed for it, or the list page an epoch's seed read it on
+// (projector_epoch.go), whichever is newer.
 type pushedRow struct {
 	ver     uint64
 	removed bool      // that delta was a removal (row null)
@@ -169,18 +180,22 @@ type projector struct {
 	timing projectorTiming
 	now    func() time.Time
 
-	ctx    context.Context // cancelled by stop; every read runs under it
-	cancel context.CancelFunc
-	sub    *bus.Subscription // set by start (subscribe)
-	wg     sync.WaitGroup    // the projector's goroutines
-	done   chan struct{}     // closed once they have all returned
-	kick   chan struct{}     // capacity 1: a mark changed what the worker waits for
+	ctx       context.Context // cancelled by stop; every read runs under it
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup // the projector's goroutines
+	done      chan struct{}  // closed once they have all returned
+	kick      chan struct{}  // capacity 1: a mark changed what the worker waits for
+	maintKick chan struct{}  // capacity 1: epoch work was asked for (projector_epoch.go)
+	seeds     atomic.Int64   // seed walks finished, whatever their outcome; tests wait on it
 
-	mu       sync.Mutex
-	dirty    map[string]*dirtyExec // marked, not yet popped for a flush
-	markSeq  uint64
-	pushed   map[string]pushedRow     // lastPushed (§3.7), for PR1c's reconcile
-	rechecks map[string]*recheckState // terminal rechecks in progress
+	mu         sync.Mutex
+	sub        *bus.Subscription     // the live subscription: set by subscribe, replaced by a resubscribe
+	dirty      map[string]*dirtyExec // marked, not yet popped for a flush
+	markSeq    uint64
+	pushed     map[string]pushedRow     // lastPushed (§3.7)
+	rechecks   map[string]*recheckState // terminal rechecks in progress
+	wantSeed   bool                     // epoch work pending: seed lastPushed …
+	wantRotate bool                     // … after starting a new epoch
 }
 
 func newProjector(slot *readSlot, rows rowReader, events *core.EventsBroadcaster, b frameBus, logf func(string, ...any), timing projectorTiming) *projector {
@@ -189,17 +204,21 @@ func newProjector(slot *readSlot, rows rowReader, events *core.EventsBroadcaster
 		slot: slot, rows: rows, events: events, bus: b, logf: logf,
 		timing: timing.withDefaults(), now: time.Now,
 		ctx: ctx, cancel: cancel,
-		done: make(chan struct{}), kick: make(chan struct{}, 1),
+		done: make(chan struct{}), kick: make(chan struct{}, 1), maintKick: make(chan struct{}, 1),
 		dirty: map[string]*dirtyExec{}, pushed: map[string]pushedRow{}, rechecks: map[string]*recheckState{},
 	}
 }
 
 // start subscribes to the bus — before it returns, so no frame published
-// after start is missed — and starts the bus consumer and the flush worker.
+// after start is missed — asks for the start seed (the daemon's start is an
+// epoch start too, §3.6), and starts the bus consumer, the flush worker and
+// the maintenance goroutine that seeds. start does not wait for the seed.
 func (p *projector) start() {
 	p.subscribe()
+	p.requestEpochWork(false)
 	p.goTracked(p.consume)
 	p.goTracked(p.work)
+	p.goTracked(p.maintain)
 	go func() {
 		p.wg.Wait()
 		close(p.done)
