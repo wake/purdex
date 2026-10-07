@@ -292,7 +292,25 @@ The safety reconcile detects *apply-side* defects:
 
 ### 4.8 Untouched
 - `useWorkerAgentProjection`, `useTabDisplay`, `readWorkerSummary`, the notification dispatcher. They keep reading rows; the rows just change sooner.
-- Pane live never feeds status (aa's single-source model).
+- Pane live never feeds status (aa's single-source model, merged in #1873 / alpha.590).
+- PR2a must build on #1873:
+  - `HostListCache.complete`: only `ready` + `complete` treats a vanished row as archived.
+  - `useExecutionSubscription`'s `streamsByKey` registry: the `onCapacity` hook in §4.6 attaches there.
+- **A delta commit or a reconcile commit must keep `complete` truthful.**
+  - A delta-mode walk that was truncated, or a page that failed, leaves `complete: false`, exactly as the legacy walk does.
+  - Upserts and tombstones applied between walks do not change `complete`.
+
+### 4.9 Residuals of the single source (permission-channel spec §5.4)
+That spec lists four cases that #1866 should narrow. How the deltas change each:
+
+| # | Residual | With deltas |
+|---|---|---|
+| 1 | Terminate and archive inside one window → never reads `terminated`, no `WorkerTerminated` | The window shrinks from 500 ms (plus starvation) to the 75–250 ms coalesce. When both still fall in one flush, the delta's `cause` contains `execution.terminated`, and the projection *could* use that. |
+| 2 | `SettleIdle` between two queued turns → one extra Stop | Unchanged in kind: still a real `idle` read. Depends on nexen#162. |
+| 3 | A full turn inside one window → no Stop | Much narrower (a flush per turn boundary instead of one per 500 ms of quiet). Inside one coalesce, `cause` shows `execution.terminal` and `turn_count` grows. |
+| 4 | A permission asked and answered elsewhere inside one window → never shown | Narrower. Inside one coalesce, `cause` contains both `permission.requested` and `permission.resolved`. |
+
+Using `cause` to close 1, 3 and 4 completely is a projection change: aa's area, a follow-up after PR2b, not part of #1866. PR2b only passes `cause` through to the store alongside the row (no consumer yet).
 
 ## 5. Tests (R19)
 
