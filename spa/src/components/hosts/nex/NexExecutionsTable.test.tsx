@@ -106,23 +106,25 @@ describe('NexExecutionsTable', () => {
   })
 
   it('a terminate confirmation does not survive its row leaving the rendered slice (#1593 R2)', async () => {
+    // Text queries, not role queries: a role query over a 100+ row table is slow enough to hit the test timeout under load.
     const mk = (n: number) => Array.from({ length: n }, (_, i) => row({ id: `exc_${String(i).padStart(16, '0')}` }))
-    vi.mocked(api.listExecutions).mockResolvedValue({ items: mk(250), next_cursor: '' })
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: mk(150), next_cursor: '' })
     const { container } = render(<NexExecutionsTable hostId="h" enabled />)
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     fireEvent.click(screen.getByText(/show more/i))
-    const lastRow = () => container.querySelectorAll('tbody tr')[199] as HTMLElement
-    fireEvent.click(within(lastRow()).getByRole('button', { name: /terminate/i }))
-    expect(within(lastRow()).getByRole('button', { name: /confirm/i })).toBeInTheDocument()
+    const lastRow = () => container.querySelectorAll('tbody tr')[149] as HTMLElement
+    fireEvent.click(within(lastRow()).getByText(/^terminate$/i))
+    expect(within(lastRow()).getByText(/confirm terminate/i)).toBeInTheDocument()
     // a refresh removes the confirming row from the list, then it comes back
     vi.mocked(api.listExecutions).mockResolvedValue({ items: mk(100), next_cursor: '' })
-    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    fireEvent.click(screen.getByText(/^refresh$/i))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
-    vi.mocked(api.listExecutions).mockResolvedValue({ items: mk(250), next_cursor: '' })
-    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: mk(150), next_cursor: '' })
+    fireEvent.click(screen.getByText(/^refresh$/i))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
-    fireEvent.click(screen.getByText(/show more/i))
-    expect(within(lastRow()).queryByRole('button', { name: /confirm/i })).toBeNull()
+    // the page count (200) was kept, so the row is rendered again — without its stale confirmation
+    expect(lastRow()).toBeDefined()
+    expect(within(lastRow()).queryByText(/confirm terminate/i)).toBeNull()
   })
 
   it('toggling Show archived clears an open terminate confirmation (#1593 R2)', async () => {

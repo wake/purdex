@@ -82,6 +82,15 @@ describe('listAllExecutions', () => {
     expect(r!.dropped).toBe(1)
   })
 
+  it('sums dropped malformed rows across pages', async () => {
+    vi.mocked(api.listExecutions)
+      .mockResolvedValueOnce({ items: [row('a'), { nope: 1 }], next_cursor: 'a' } as never)
+      .mockResolvedValueOnce({ items: [row('b'), { nope: 2 }, { nope: 3 }], next_cursor: '' } as never)
+    const r = await listAllExecutions('h1', { includeArchived: false })
+    expect(r!.items.map((i) => i.id)).toEqual(['a', 'b'])
+    expect(r!.dropped).toBe(3)
+  })
+
   it('resolves a multi-step cursor cycle A -> B -> A after at most three requests as stuck', async () => {
     vi.mocked(api.listExecutions)
       .mockResolvedValueOnce({ items: [row('1')], next_cursor: 'A' } as never)

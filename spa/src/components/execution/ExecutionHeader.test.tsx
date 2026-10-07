@@ -4,6 +4,7 @@ import { render, screen, fireEvent, act, within } from '@testing-library/react'
 import ExecutionHeader from './ExecutionHeader'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { ExecutionSummary } from '../../lib/nex/types'
+import { STATE_DOT_CLASSES } from '../../lib/nex/state-dot'
 import { costSummary } from '../../lib/nex/cost-summary'
 import type { StreamMessage } from '../../lib/nex/message-types'
 import turnsFixture from '../../lib/nex/__fixtures__/cost-turns-06GB2ZFD.json'
@@ -784,16 +785,17 @@ describe('ExecutionHeader', () => {
 
   // D8: state dot colour matches the terminal agent badge
   describe('state dot colours', () => {
-    it('terminated state has bg-text-muted', () => {
-      render(<ExecutionHeader {...baseProps} summary={summary({ state: 'terminated' })} onTakeBack={vi.fn()} />)
-      const dot = screen.getByTestId('execution-state').previousElementSibling
-      expect(dot).toHaveClass('bg-text-muted')
+    // The dot is the rounded-full span sharing a parent with the state label; no sibling-order dependency.
+    const dotOf = () => screen.getByTestId('execution-state').parentElement!.querySelector('.rounded-full')
+
+    it.each(Object.entries(STATE_DOT_CLASSES))('%s state has %s', (state, cls) => {
+      render(<ExecutionHeader {...baseProps} summary={summary({ state: state as ExecutionSummary['state'] })} onTakeBack={vi.fn()} />)
+      expect(dotOf()).toHaveClass(cls)
     })
 
-    it('idle state has bg-text-muted', () => {
-      render(<ExecutionHeader {...baseProps} summary={summary({ state: 'idle' })} onTakeBack={vi.fn()} />)
-      const dot = screen.getByTestId('execution-state').previousElementSibling
-      expect(dot).toHaveClass('bg-text-muted')
+    it('an unknown state falls back to bg-text-muted', () => {
+      render(<ExecutionHeader {...baseProps} summary={summary({ state: 'weird' as ExecutionSummary['state'] })} onTakeBack={vi.fn()} />)
+      expect(dotOf()).toHaveClass('bg-text-muted')
     })
   })
 })
