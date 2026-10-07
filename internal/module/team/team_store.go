@@ -114,6 +114,9 @@ type memberRow struct {
 	ProcStart, Model, Effort                            string
 	State                                               team.MemberState
 	CreatedAt, UpdatedAt                                int64
+	// Usage is the persisted statusline reading (P4-6, spec §8.5), nil when
+	// none was stored. Only MembersOf reads it.
+	Usage *team.MemberContext
 }
 
 func (m *memberRow) dest() []any {
@@ -231,26 +234,11 @@ func isLiveMemberIn(q dbtx, sessionID string) (bool, error) {
 	return true, nil
 }
 
-// MembersOf returns every member row of the team, in any state, oldest
-// first. Never nil.
+// MembersOf returns every member row of the team, in any state, with its
+// persisted reading, oldest first. Never nil.
 func (s *Store) MembersOf(teamID string) ([]memberRow, error) {
-	rows, err := s.db.Query(`SELECT `+memberCols+` FROM team_members WHERE team_id = ? ORDER BY created_at, spawn_op`, teamID)
-	if err != nil {
-		return nil, fmt.Errorf("members of %s: %w", teamID, err)
-	}
-	defer rows.Close()
-	out := []memberRow{}
-	for rows.Next() {
-		var m memberRow
-		if err := rows.Scan(m.dest()...); err != nil {
-			return nil, fmt.Errorf("members of %s: %w", teamID, err)
-		}
-		out = append(out, m)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("members of %s: %w", teamID, err)
-	}
-	return out, nil
+	return s.queryMembers("members of "+teamID, `SELECT `+memberCols+`, `+memberUsageCols+`
+		FROM team_members WHERE team_id = ? ORDER BY created_at, spawn_op`, teamID)
 }
 
 // SetMemberState sets the member's state at at (spec §7.3: killed by pdx

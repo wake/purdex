@@ -3,6 +3,7 @@ package teammod
 import (
 	"time"
 
+	"github.com/wake/purdex/internal/module/agent"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/team"
 )
@@ -35,7 +36,9 @@ func (m *Module) runSweeper() {
 // timeout (U7), an expired lease is an abandonment, and — every
 // livenessEvery-th tick, only while something is open — a vanished origin
 // session is one too. The liveness tick also ends the teams whose lead is
-// gone (spec §7.1, endGoneTeams), open approvals or not. A resolver that
+// gone (spec §7.1, endGoneTeams), stores the members' and leads' readings
+// (persistUsage) and marks gone members (markGoneMembers), open approvals
+// or not. A resolver that
 // cannot read the registry answers
 // "live" (peers/origin_resolver.go), so a read error never abandons
 // anything. The deadline and lease paths close through CloseIfExpired:
@@ -53,7 +56,9 @@ func (m *Module) tick() {
 		// With no flag on disk this is one ReadDir that answers ENOENT.
 		m.pruneHookLocks()
 		m.pruneAskFlags()
+		m.persistUsage()
 		m.endGoneTeams()
+		m.markGoneMembers()
 	}
 	open, err := m.store.ListOpen()
 	if err != nil {
@@ -144,6 +149,89 @@ func (m *Module) endGoneTeams() {
 		}
 		if ended {
 			m.logf("[team] team %s ended (%s): its lead %s (%s) is gone", t.ID, team.TeamEndLeadGone, t.LeadRef, t.LeadSessionID)
+		}
+	}
+}
+
+// persistUsage copies the agent module's last statusline reading of each
+// live team's lead, and of each active member of one, onto its row when it
+// is newer than the stored one (spec §8.5: it survives a restart; GET
+// /api/team serves it until the next reading). A store error is logged and
+// the next liveness tick tries again.
+func (m *Module) persistUsage() {
+	if m.usage == nil {
+		return
+	}
+	teams, err := m.store.ListLiveTeams()
+	if err != nil {
+		m.logf("[team] sweep usage: %v", err)
+		return
+	}
+	for _, t := range teams {
+		if u, ok := m.usage.ContextUsage(t.LeadSessionID); ok {
+			if _, err := m.store.SetLeadUsage(t.ID, t.LeadSessionID, contextOf(u)); err != nil {
+				m.logf("[team] sweep usage: %v", err)
+			}
+		}
+	}
+	members, err := m.store.ActiveMembersOfLiveTeams()
+	if err != nil {
+		m.logf("[team] sweep usage: %v", err)
+		return
+	}
+	for _, mr := range members {
+		if u, ok := m.usage.ContextUsage(mr.SessionID); ok {
+			if _, err := m.store.SetMemberUsage(mr.SpawnOp, mr.SessionID, contextOf(u)); err != nil {
+				m.logf("[team] sweep usage: %v", err)
+			}
+		}
+	}
+}
+
+// contextOf is a statusline reading in the wire's shape, its percentage copied.
+func contextOf(u agent.ContextUsage) team.MemberContext {
+	c := team.MemberContext{Window: u.WindowSize, ModelID: u.ModelID, Effort: u.Effort, At: u.At}
+	if u.UsedPercentage != nil {
+		v := *u.UsedPercentage
+		c.UsedPercentage = &v
+	}
+	return c
+}
+
+// markGoneMembers marks gone every active member of a live team whose
+// conversation ended (spec §7.3), which frees its place: the spawn limit
+// counts active rows of team.db alone (P4-5 review). It is as conservative
+// as endGoneTeams, by the same rule: only PresenceGone of the member's own
+// process — the pid and start time its row recorded at registration, which
+// a relay's /clear keeps — dead or reused, or alive in another conversation
+// (a manual /clear). Anything the registry cannot tell keeps the member, as
+// does a relay op of its session in flight (in MarkMemberGone's statement)
+// and the boot grace. A row stored with no process (spawnFinish resumed
+// after the registry lost the session) is never confirmed gone: it holds
+// its place until pdx kill. A store error is logged.
+func (m *Module) markGoneMembers() {
+	if m.now() < m.bootAt+team.BootGraceS*1000 {
+		return
+	}
+	members, err := m.store.ActiveMembersOfLiveTeams()
+	if err != nil {
+		m.logf("[team] sweep members: %v", err)
+		return
+	}
+	for _, mr := range members {
+		if m.origins.LeadPresence(mr.SessionID, mr.PID, mr.ProcStart) != peersmod.PresenceGone {
+			continue
+		}
+		if m.beforeMarkGone != nil {
+			m.beforeMarkGone(mr)
+		}
+		gone, err := m.store.MarkMemberGone(mr.SpawnOp, mr.SessionID, m.now())
+		if err != nil {
+			m.logf("[team] sweep member %s: %v", mr.SpawnOp, err)
+			continue
+		}
+		if gone {
+			m.logf("[team] member %s (%s) of team %s is gone", mr.Ref, mr.SessionID, mr.TeamID)
 		}
 	}
 }
