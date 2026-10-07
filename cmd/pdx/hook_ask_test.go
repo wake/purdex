@@ -68,6 +68,29 @@ func TestAskFlagExists_ReadsTheDaemonsFlag(t *testing.T) {
 	}
 }
 
+// R2 attacker: Base() aliased "../victim" and an absolute path onto the real
+// victim's flag. Mutation gate: put filepath.Base back → the aliases match.
+func TestAskFlagExists_RejectsAliasedPaths(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "hookasks", "cc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hookasks", "cc", "victim"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !askFlagExists(dir, "cc", "victim") {
+		t.Fatal("the real flag must match")
+	}
+	for _, sid := range []string{"../victim", "/tmp/victim", "x/../victim", `a\victim`} {
+		if askFlagExists(dir, "cc", sid) {
+			t.Errorf("session %q aliased onto the victim's flag", sid)
+		}
+	}
+	if askFlagExists(dir, "../cc", "victim") || askFlagExists(dir, "/x/cc", "victim") {
+		t.Error("agent aliased onto cc")
+	}
+}
+
 // The forward carries the hook's fields and the raw stdin, with the token,
 // and sends nothing for an event the predicate refuses.
 func TestForwardHookAsk_SendsDecideWithRaw(t *testing.T) {

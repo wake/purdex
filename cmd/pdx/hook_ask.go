@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/cmd/pdx/daemonclient"
@@ -57,9 +58,18 @@ func askFlagExists(dataDir, agent, sessionID string) bool {
 	if agent == "" {
 		agent = "cc"
 	}
-	// A regular file only: Base("..") would otherwise name hookasks/ itself.
-	fi, err := os.Stat(filepath.Join(dataDir, "hookasks", filepath.Base(agent), filepath.Base(sessionID)))
+	// Reject anything that is not one plain path element: Base would alias
+	// "../victim" and "/tmp/victim" onto the real victim's flag.
+	if !plainElem(agent) || !plainElem(sessionID) {
+		return false
+	}
+	fi, err := os.Stat(filepath.Join(dataDir, "hookasks", agent, sessionID))
 	return err == nil && fi.Mode().IsRegular()
+}
+
+// plainElem reports whether s is a single, non-special path element.
+func plainElem(s string) bool {
+	return s != "" && s != "." && s != ".." && filepath.Base(s) == s && !strings.ContainsAny(s, `/\`)
 }
 
 // askForward decides whether this event is sent to POST /api/hooks/decide

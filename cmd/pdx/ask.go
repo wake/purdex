@@ -233,9 +233,22 @@ func askBegin(ctx context.Context, client *daemonclient.Client, a askArgs, stdou
 			return askReportErr(err, stderr)
 		}
 	}
+	if out.ID == "" {
+		// A 2xx or ask_open without an id (version skew, partial body) cannot
+		// be waited on or reported: failing here sends the mod to the native
+		// dialog alone instead of leaving a row nobody can close.
+		fmt.Fprintln(stderr, "pdx ask: daemon 回應缺少 id invalid_response")
+		return ExitError
+	}
 	b, _ := json.Marshal(out)
 	fmt.Fprintln(stdout, string(b))
 	return ExitOK
+}
+
+// validWaitState reports whether the daemon answered with a state the mod
+// knows how to act on.
+func validWaitState(s string) bool {
+	return s == team.AskStillOpen || s == team.AskAnsweredRemote || s == team.AskClosed
 }
 
 // askWait is one round: polls until an answer, or until askWaitRound — on
@@ -266,7 +279,7 @@ func askWait(ctx context.Context, client *daemonclient.Client, id string, stdout
 			if gone, ok := askRowGone(err); ok {
 				return printJSON(stdout, gone)
 			}
-			if err != nil || w.State == "" {
+			if err != nil || !validWaitState(w.State) {
 				w = team.AskWaitResponse{State: team.AskStillOpen}
 			}
 			return printJSON(stdout, w)
@@ -291,6 +304,10 @@ func askWait(ctx context.Context, client *daemonclient.Client, id string, stdout
 			return askReportErr(err, stderr)
 		}
 		hung = 0
+		if !validWaitState(w.State) {
+			fmt.Fprintln(stderr, "pdx ask: daemon 回應的 state 無法辨識 invalid_response")
+			return ExitError
+		}
 		if w.State != team.AskStillOpen || now().Sub(start) >= askWaitRound {
 			return printJSON(stdout, w)
 		}

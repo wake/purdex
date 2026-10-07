@@ -164,6 +164,31 @@ func TestRunAskCmd_BeginReplayAfterLostResponseAdoptsTheSameID(t *testing.T) {
 	}
 }
 
+// R2 attacker: a 2xx or ask_open without an id leaves a row nobody can wait
+// on, and an unknown wait state is not an answer the mod can act on — both
+// fail with exit 1 and an empty stdout. Mutation gates: drop the id check →
+// exit 0 with {"id":""}; drop validWaitState → exit 0 with the bogus state.
+func TestRunAskCmd_RejectsEmptyIDAndUnknownWaitState(t *testing.T) {
+	d := newFakeAskDaemon(t)
+	d.beginBody = team.AskBeginResponse{}
+	code, stdout, stderr := driveAsk(t, d, time.Now, "begin", "--session", "s", "--tool-use", "t", "--payload", `{"questions":[1]}`)
+	if code != ExitError || stdout != "" || !strings.HasSuffix(strings.TrimSpace(stderr), "invalid_response") {
+		t.Fatalf("empty id: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	d.beginStatus, d.beginBody = http.StatusConflict, team.APIError{Error: team.ErrAskOpen, Approval: &team.Approval{}}
+	if code, stdout, _ = driveAsk(t, d, time.Now, "begin", "--session", "s", "--tool-use", "t", "--payload", `{"questions":[1]}`); code != ExitError || stdout != "" {
+		t.Fatalf("ask_open with empty id: code=%d stdout=%q", code, stdout)
+	}
+	for _, st := range []string{"", "bogus"} {
+		dw := newFakeAskDaemon(t)
+		dw.waits = []team.AskWaitResponse{{State: st}}
+		code, stdout, stderr := driveAsk(t, dw, time.Now, "wait", "ask-1")
+		if code != ExitError || stdout != "" || !strings.HasSuffix(strings.TrimSpace(stderr), "invalid_response") {
+			t.Fatalf("state %q: code=%d stdout=%q stderr=%q", st, code, stdout, stderr)
+		}
+	}
+}
+
 // still_open polls repeat inside one round; the round ends with still_open
 // after 9 min, or sooner with the daemon's answer, printed verbatim.
 func TestRunAskCmd_WaitRoundAndAnswers(t *testing.T) {
