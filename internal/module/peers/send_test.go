@@ -2282,3 +2282,27 @@ func TestSend_RegistryNameNotFoundPointsAtTheVirtualAddress(t *testing.T) {
 		}
 	})
 }
+
+// TestSend_OriginResolverAddressResolves is the regression for the team
+// module's addresses: pdx spawn sends the brief to the member's address
+// (cmd/pdx/team_cmd.go sendBrief), and that address — like every lead and
+// team notice's — is the one OriginResolver answers. Under Peer Address v5
+// it is the virtual address, so /send must resolve it to that very session.
+func TestSend_OriginResolverAddressResolves(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	p := s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+	o, ok, err := (&OriginResolver{m: s.m}).ResolveOriginBySession(localPeerSessionID)
+	if err != nil || !ok {
+		t.Fatalf("ResolveOriginBySession = %+v %v %v", o, ok, err)
+	}
+	if want := localAlias + "/" + vname(t, localPeerName, localPeerSessionID); o.Address != want {
+		t.Fatalf("member address = %q, want the virtual %q", o.Address, want)
+	}
+	req := s.localSendReq()
+	req.To = o.Address
+	if resp := s.sendOK(req); resp.To.AgentSessionID != localPeerSessionID || resp.ToAddress != o.Address {
+		t.Errorf("sent to %q %+v, want %q, session %s", resp.ToAddress, resp.To, o.Address, localPeerSessionID)
+	}
+	p.recvLine()
+	p.assertNoLine()
+}

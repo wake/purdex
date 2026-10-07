@@ -69,8 +69,9 @@ func (m *Module) callerTeam(w http.ResponseWriter, inbox string) (team.Team, boo
 // memberView is a member row in the wire's shape. Context is the agent
 // module's live reading, else the one the sweeper persisted (spec §8.5),
 // else absent: so its model and effort stay blank until the member's first
-// statusline (U20 (e)). An active member's address is the registry's; any
-// other's, or one the registry does not list, is <self alias>/<ref>.
+// statusline (U20 (e)). An active member's address is the one the origin
+// resolver answers (its virtual address, the one pdx msg send routes by);
+// any other's, or one the registry does not list, is <self alias>/<ref>.
 func (m *Module) memberView(mr memberRow) team.Member {
 	alias, _ := m.selfHost()
 	v := team.Member{SessionID: mr.SessionID, Ref: mr.Ref, Address: alias + "/" + mr.Ref, TeamID: mr.TeamID,
@@ -226,9 +227,9 @@ func (m *Module) killMember(mr memberRow) (int, string, string) {
 // matchMember finds the one member of team t that target names (plan v3
 // P4-6; P4c-4 adds remote hosts). Only t's members are looked at, in any
 // state. A ref matches a member's current ref, else one of its previous
-// refs (the lineage, spec §8.4); a name matches an active member's live
-// registry name; "<name> [<ref>]" must match both. No match, or more than
-// one, is ok=false.
+// refs (the lineage, spec §8.4); a name matches the name in an active
+// member's live address (membersNamed); "<name> [<ref>]" must match both. No
+// match, or more than one, is ok=false.
 func (m *Module) matchMember(t team.Team, target string) (memberRow, bool, error) {
 	name, ref, ok := m.parseKillTarget(target)
 	if !ok {
@@ -304,7 +305,12 @@ func (m *Module) membersByRef(rows []memberRow, ref string) ([]memberRow, error)
 	return hits, nil
 }
 
-// membersNamed are the active rows whose live registry entry is named name.
+// membersNamed are the active rows whose live conversation's address carries
+// name: its virtual name (Peer Address v5, peer mailbox spec §3.3), the name
+// pdx msg send routes by — not the registry name in Origin.Name, which Claude
+// Code changes on every start. Only the address's session part is compared;
+// parseKillTarget has already matched its host to this one. A ref-form
+// address ("_xxxxxx") can never equal name, which is routable.
 func (m *Module) membersNamed(rows []memberRow, name string) ([]memberRow, error) {
 	var hits []memberRow
 	for _, r := range rows {
@@ -315,7 +321,7 @@ func (m *Module) membersNamed(rows []memberRow, name string) ([]memberRow, error
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", errRegistry, err)
 		}
-		if ok && o.Name == name {
+		if _, sess, split := ipeers.SplitAddress(o.Address); ok && split && sess == name {
 			hits = append(hits, r)
 		}
 	}
