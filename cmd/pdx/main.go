@@ -311,10 +311,7 @@ func runServe(args []string) *reexecPlan {
 	outerMux := newOuterHandler(c, mux, cfg.Allow)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: outerMux,
-	}
+	srv := newHTTPServer(addr, outerMux)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
