@@ -30,6 +30,12 @@ type Store struct {
 	// transaction after the row's cancel and before the op's; an error
 	// fails the call there (tests). nil in production.
 	beforeMemberCancelOp func() error
+	// afterApprovedInsert, when set, runs in CreateApproved's and
+	// CreateSelfRelayApproved's transaction after the inserts and before
+	// the approve, on that transaction; an error fails the create there
+	// (tests: nothing outside the transaction sees the open row). nil in
+	// production.
+	afterApprovedInsert func(tx *sql.Tx) error
 }
 
 // OpenStore opens (or creates) team.db at path. ":memory:" is for tests.
@@ -178,6 +184,68 @@ func (s *Store) Create(a team.Approval, hash string) (stored team.Approval, stor
 		return team.Approval{}, "", false, err
 	}
 	return stored, storedHash, n == 1, nil
+}
+
+// CreateApproved is the create of a request the daemon approves itself
+// (U23 unattended, D-U23-1): in one write transaction it inserts a (state
+// open; an id in use is an error — the caller answered replays under
+// createMu before calling) and runs approveIn, the kind's own approve
+// statements (closeLeadApprovedIn, …) on that transaction, so the row's
+// first committed state is approved and no reader outside the transaction
+// — a snapshot, a list, a poll — ever sees it open. A refusal or an error
+// from approveIn, or an approveIn that leaves the row anything but
+// approved, rolls the insert back: nothing is written and the error says
+// why (errors.Is finds a refusal such as ErrMemberCannotLead). It returns
+// the row as committed.
+func (s *Store) CreateApproved(a team.Approval, hash string, approveIn func(tx *sql.Tx) error) (team.Approval, error) {
+	fail := func(err error) (team.Approval, error) {
+		return team.Approval{}, fmt.Errorf("create approved %s: %w", a.ID, err)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fail(fmt.Errorf("begin: %w", err))
+	}
+	defer tx.Rollback()
+	// The first statement is a write, so SQLite takes the write lock at once.
+	if _, err := insertRowIn(tx, a, hash, ""); err != nil {
+		return fail(err)
+	}
+	if err := s.atApprovedInsert(tx); err != nil {
+		return fail(err)
+	}
+	if err := approveIn(tx); err != nil {
+		return fail(err)
+	}
+	after, err := approvedRowIn(tx, a.ID)
+	if err != nil {
+		return fail(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fail(fmt.Errorf("commit: %w", err))
+	}
+	return after, nil
+}
+
+// atApprovedInsert runs the afterApprovedInsert seam, if set.
+func (s *Store) atApprovedInsert(tx *sql.Tx) error {
+	if s.afterApprovedInsert == nil {
+		return nil
+	}
+	return s.afterApprovedInsert(tx)
+}
+
+// approvedRowIn reads the row a create-time approve just closed and refuses
+// anything but approved: the commit that follows must never be the row's
+// first state other than approved (D-U23-6).
+func approvedRowIn(tx *sql.Tx, id string) (team.Approval, error) {
+	a, _, err := getRowIn(tx, id)
+	if err != nil {
+		return team.Approval{}, err
+	}
+	if a.State != team.StateApproved {
+		return team.Approval{}, fmt.Errorf("the approve left the row %s, not approved", a.State)
+	}
+	return a, nil
 }
 
 // insertRowIn inserts a (state open) on ex with the conflict clause
