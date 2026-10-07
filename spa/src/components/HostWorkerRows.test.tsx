@@ -95,6 +95,20 @@ describe('HostWorkerRows', () => {
     expect(screen.getByTestId(`${P}-loading`)).toBeInTheDocument()
   })
 
+  it('loading with only non-live rows still shows the skeleton (keyed on the live row count)', () => {
+    seed([row({ id: 'E1', state: 'terminated', session_id: 'T' }), row({ id: 'E2', archived: true, session_id: 'A' })], { phase: 'loading' })
+    renderRows()
+    expect(screen.getByTestId(`${P}-loading`)).toBeInTheDocument()
+    expect(screen.queryByTestId('executions-row')).toBeNull()
+  })
+
+  it('loading with a live row already cached shows the row, not the skeleton', () => {
+    seed([row({ id: 'E1', session_id: 'S' })], { phase: 'loading' })
+    renderRows()
+    expect(screen.queryByTestId(`${P}-loading`)).toBeNull()
+    expect(screen.getAllByTestId('executions-row')).toHaveLength(1)
+  })
+
   it('shows the truncation notice', () => {
     seed([row({ id: 'E1' })], { truncated: true })
     renderRows()

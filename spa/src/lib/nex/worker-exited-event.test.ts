@@ -82,4 +82,12 @@ describe('nex-worker-exited', () => {
     expect(useUndoToast.getState().toast).toBeNull()
     expect(refetch).not.toHaveBeenCalled()
   })
+
+  it.each([[42], [null], [{ id: 'E1' }], [['E1']], [true], ['']])('a non-string or empty execution_id (%j) is ignored: no toast, no refetch', (id) => {
+    expect(parseWorkerExited({ execution_id: id, reason: 'manual_resume' })).toBeNull()
+    expect(parseWorkerExited(JSON.stringify({ execution_id: id, reason: 'manual_resume' }))).toBeNull()
+    handleWorkerExited('h1', value({ execution_id: id }))
+    expect(useUndoToast.getState().toast).toBeNull()
+    expect(refetch).not.toHaveBeenCalled()
+  })
 })
