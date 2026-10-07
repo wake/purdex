@@ -29,15 +29,21 @@ The run must leave the host's own setup as it found it. **Do not run `pdx setup 
   tmux new-session -d -s relay-acc -c "$SCRATCH"
   # Load a scratch COPY: Claude Code writes tsconfig.json and .claude-plugin/types/ into a folder it loads
   # in place, and the repo folder is what go:embed packs into pdx.
-  PLUG=$(mktemp -d)/purdex && cp -R "$REPO/cmd/pdx/plugin/purdex" "$PLUG"
+  PLUG_TMP=$(mktemp -d -t relay-acc-plugin)
+  PLUG=$PLUG_TMP/purdex
+  cp -R "$REPO/cmd/pdx/plugin/purdex" "$PLUG"
+  # If the run ends early (an error, a closed window), this shell still ends the throwaway session and
+  # removes what the run made (an op left open still needs step 10's report).
+  trap 'tmux kill-session -t relay-acc 2>/dev/null; rm -rf "$PLUG_TMP" "$SCRATCH"; rm -f "$HDR"' EXIT
   tmux send-keys -t relay-acc "PDX_RELAY_THRESHOLD=5 claude --plugin-dir '$PLUG' --model claude-haiku-4-5-20251001 --dangerously-skip-permissions" Enter
   ```
+  Run every step's commands in this same shell, so `$PLUG_TMP`, `$SCRATCH` and `$HDR` stay set and the trap covers them. Every other scratch copy of the plugin (step 9 (d)) goes under `$PLUG_TMP` too.
   Expect: `/relay` is in the slash-command menu; `/relay status` answers `自我接力：開啟（主機開關 開；門檻 5%）`. Run `/status` and note the model and effort lines.
 - [ ] 2. **`/relay off` / `on`.** `/relay off` answers `自我接力：本 session 暫停（主機開關 開；門檻 5%）`; a turn past 5 % asks nothing. `/relay on` answers `自我接力：開啟（…）` and the next turn end asks at once (the +10 guard is reset).
 - [ ] 3. **Cross the threshold.** Paste a long prompt (or have the model read a big file) so `/context` passes 5 %. At that turn's end: the status line reads `接力等待核准中`, one toast names the App, and **the self-relay dialog opens on every client** (host; session title, address, ref, cwd; `已用 N%`; the one-minute line).
 - [ ] 4. **Deny on one client.** The dialog closes on the other at once; the status line clears; a typed prompt runs **unchanged**. Grow usage to 15 % (not 10 %): the dialog returns (the +10 rule). `pdx relay op <id>` shows the first op `cancelled` with `denied`.
 - [ ] 5. **Type during the wait, then approve.** With the dialog open, type a short question and press Enter: it shows as sent with the spinner, no turn starts. Press Esc on **another** prompt: it is abandoned and the dialog stays. Approve with one click. Expect, in order: the typed question is answered **first, intact** (its `@file` mentions expand) and briefly (the NOTE); then the write prompt runs; the file appears at `<data_dir>/relay/<op>.md`; the screen clears; the new conversation's answer starts with `↪ 接手自 _<old ref>`. `pdx peers` shows the same name with `(was _<old ref>)`; `pdx msg send <host>/_<old ref> "hi"` still reaches it.
-  - Also try a prompt typed **right after** the threshold turn ends, before the status line appears (`pdx relay begin` still out): it is held the same way (at most 8 s while begin is out).
+  - Also try a prompt typed **right after** the threshold turn ends, before the status line appears (`pdx relay begin` still out): it is held the same way — first until begin answers (begin bounds itself at 35 s; the hold waits for it at most 40 s), then until the request is answered. A held prompt asks the daemon nothing of its own: it waits on local `/bin/sleep 5` calls while the timer's one `pdx relay wait` loop gets the answer.
 - [ ] 6. **Model and effort (U18 (a)).** Before approving in step 5, list the open rows, the header read from `$HDR` (the address is mlab's daemon; on air26 use that host's):
   ```bash
   curl -s -H @"$HDR" http://100.64.0.2:7860/api/team/approvals | jq '.approvals[] | select(.kind == "self_relay") | {id, payload}'
@@ -47,10 +53,10 @@ The run must leave the host's own setup as it found it. **Do not run `pdx setup 
 - [ ] 8. **No daemon.** `pdx stop`; cross the threshold in a fresh session: nothing happens, no status line; `/relay status` answers `Purdex daemon 連不上，無法變更自我接力` within about 8 s; auto-compact (if reached) runs. `pdx start`.
 - [ ] 9. **Measure once** (plan open question 6) and record:
   - (a) the `turn.start` text of the mod's write prompt contains `[pdx-relay op=… n=…]` (`claude --debug`, or the transcript's first user line of that turn);
-  - (b) a held prompt stays held across several of its own 60 s `pdx relay wait` rounds and one of the timer loop's 9 min rounds (approve after > 9 min, before the 10 min deadline) and is still released with the NOTE;
+  - (b) a held prompt stays held across one of the timer loop's 9 min `pdx relay wait` rounds (approve after > 9 min, before the 10 min deadline) and is still released with the NOTE; while two or three prompts are held, `pgrep -f 'pdx relay wait' | wc -l` reads 1 (the loop's; a held prompt starts no daemon call of its own — do not add `-l`, the full command lines are not needed);
   - (c) Esc on a held prompt leaves the request open;
-  - (d) whether `{ skip }` on an auto-compaction that fires mid-turn lets the turn go on. In a throwaway session (`PDX_RELAY_THRESHOLD=5`), approve, then before the write turn give a long multi-tool task and force a compaction (by context size, or `/compact` with `--plugin-dir` pointing at a scratch copy of the plugin folder whose `register.js` treats `manual` as `auto`). Watch `claude --debug` for `session.compact` followed by the next `tool.call`. Record the answer as spec **M27**. If the turn does not go on, apply spec §8.7 (c)'s fallback: answer `next(e)`, remember `s.compactedWhileApproved`, and submit the write prompt at the next `turn.complete` (one branch in `settle`, one in `turn.complete`, one test).
+  - (d) whether `{ skip }` on an auto-compaction that fires mid-turn lets the turn go on. In a throwaway session (`PDX_RELAY_THRESHOLD=5`), approve, then before the write turn give a long multi-tool task and force a compaction (by context size, or `/compact` with `--plugin-dir` pointing at a second scratch copy, `cp -R "$PLUG" "$PLUG_TMP/purdex-d"`, whose `register.js` treats `manual` as `auto`; never edit the repo folder). Watch `claude --debug` for `session.compact` followed by the next `tool.call`. Record the answer as spec **M27**. If the turn does not go on, apply spec §8.7 (c)'s fallback: answer `next(e)`, remember `s.compactedWhileApproved`, and submit the write prompt at the next `turn.complete` (one branch in `settle`, one in `turn.complete`, one test).
 - [ ] 10. **Clean up.** Nothing on the host was installed, so there is nothing to uninstall:
-  - `tmux kill-session -t relay-acc` (it ends the throwaway Claude Code; the mod goes with it), then `rm -rf "$SCRATCH"` (and the scratch plugin copy of step 9 (d), if any).
-  - `rm -f "$HDR"` (the token's header file).
+  - `tmux kill-session -t relay-acc` (it ends the throwaway Claude Code; the mod goes with it), then `rm -rf "$SCRATCH" "$PLUG_TMP"` (`$PLUG_TMP` holds the scratch plugin copy of step 1 and the one of step 9 (d), if any).
+  - `rm -f "$HDR"` (the token's header file), then `trap - EXIT` (nothing is left for the trap to remove).
   - For every op of the run that is not `done`, `failed` or `cancelled` (`pdx relay op <id>`): `pdx relay report <op> cancelled --error abandoned`, so no dialog stays open on any client. Exit 13 (`bad_transition`) means it was already closed. Retention is the daemon's sweeper.
