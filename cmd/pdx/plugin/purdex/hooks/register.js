@@ -197,19 +197,20 @@ function pump($) {
 }
 
 // newNonce mints the tag of one prompt of the mod's: 20 hex characters from
-// Web Crypto's getRandomValues when the module's environment has it (a
-// CSPRNG: critic on PR #1763); otherwise Math.random and the clock, which a
-// person typing cannot guess but which is not a security boundary. The nonce
-// is also only accepted once, in the state that expects it (arm / turn.start).
-function newNonce() {
+// The nonce comes from Web Crypto's getRandomValues (a CSPRNG) and nothing
+// else (critic on PR #1763): an environment without it never relays —
+// maybeBegin checks hasCSPRNG() and logs once. `claude plugin test` runs the
+// module in the engine's own environment, so every begin test passing is the
+// proof the engine has it. The nonce is also one-shot and state-bound.
+function hasCSPRNG() {
   const c = globalThis.crypto
-  if (c && typeof c.getRandomValues === 'function') {
-    const b = new Uint8Array(12)
-    c.getRandomValues(b)
-    return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
-  }
-  const r = () => Math.floor(Math.random() * 0x100000000).toString(16).padStart(8, '0')
-  return r() + r() + (Date.now() & 0xffff).toString(16).padStart(4, '0')
+  return !!(c && typeof c.getRandomValues === 'function')
+}
+
+function newNonce() {
+  const b = new Uint8Array(12)
+  globalThis.crypto.getRandomValues(b)
+  return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
 }
 
 // arm mints the nonce of the next write / fix / seed prompt. turn.start
@@ -286,6 +287,13 @@ function toIdle() {
 // and leaves `pdx relay begin` to a timer.
 async function maybeBegin($) {
   if (!s.helloOK || s.role === 'member') return
+  if (!hasCSPRNG()) {
+    if (!s.noCSPRNGLogged) {
+      s.noCSPRNGLogged = true
+      log($, 'relay disabled: this environment has no crypto.getRandomValues for the turn nonce')
+    }
+    return
+  }
   const u = (await $.session.usage()).context
   if (u.percent === undefined || u.percent < s.threshold) return
   if (s.floor !== undefined && (u.tokens ?? 0) < s.floor + s.minGrowth) return
