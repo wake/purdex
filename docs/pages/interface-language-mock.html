@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>介面語言設計稿</title>
+<meta name="description" content="Purdex 統一介面語言設計稿：同一段對話在指揮台／聊天／終端機三種控制模式、桌機與手機、終端機與執行體底層、Claude Code 與 Codex 下的呈現，元件依能力出現。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  /* page chrome */
+  --bg:#eef0f3; --paper:#fff; --line:#d5dbe2; --fg:#18212b; --fg2:#55636f; --fg3:#7f8c98; --chip:#e6e9ee; --chip-on:#4f4183; --chip-on-fg:#fff;
+  /* Purdex app tokens (spa/src/styles/themes.css · dark) */
+  --s1:#0a0a1a; --s2:#12122a; --s3:#08081a; --se:#1e1e3e; --sh:#1a1a32; --sa:#272444; --si:#2a2a2a;
+  --t1:#e0e0e0; --t2:#9ca3af; --t3:#6b7280; --bd:#404040; --bs:#2a2a2a; --ac:#7a6aaa; --acm:rgba(122,106,170,.3);
+  --err:#e06c75; --warn:#c8b560; --ok:#7ec699; --run:#e5a35a; --info:#7aa2e8;
+  --user-bg:rgba(122,106,170,.14); --user-bd:rgba(122,106,170,.42);
+  --sans:"Noto Sans TC",-apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){ :root:not([data-page="light"]){ --bg:#0f1419; --paper:#161c24; --line:#2a3441; --fg:#e4e9ef; --fg2:#a2aeba; --fg3:#71808e; --chip:#1d252f; --chip-on:#a596d6; --chip-on-fg:#0f1419; } }
+.app[data-theme="light"]{
+  --s1:#f5f5f5; --s2:#e8e8e8; --s3:#f0f0f0; --se:#ffffff; --sh:#e0e0e0; --sa:#d4d0e8; --si:#ffffff;
+  --t1:#1a1a2e; --t2:#4b5563; --t3:#7b8494; --bd:#c9c9d4; --bs:#dedee6; --ac:#6a5a9e; --acm:rgba(106,90,158,.18);
+  --err:#c2414b; --warn:#9a7d10; --ok:#2f8a57; --run:#c46f12; --info:#3867c4;
+  --user-bg:rgba(106,90,158,.09); --user-bd:rgba(106,90,158,.35);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+header.top{max-width:1360px;margin:0 auto;padding:22px 16px 6px}
+header.top h1{font-size:22px;margin:0 0 4px}
+header.top p{margin:0;color:var(--fg2);font-size:13.5px;max-width:90ch}
+header.top a.back{font-size:13px;color:var(--chip-on)}
+.controls{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line)}
+.controls .in{max-width:1360px;margin:0 auto;padding:10px 16px;display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.cg{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.cg .lb{font-size:11.5px;color:var(--fg3);font-weight:700;letter-spacing:.06em}
+.seg{display:inline-flex;background:var(--chip);border-radius:8px;padding:2px}
+.seg button{border:0;background:transparent;color:var(--fg2);font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;cursor:pointer;white-space:nowrap}
+.seg button.on{background:var(--chip-on);color:var(--chip-on-fg);font-weight:700}
+.seg button:disabled{opacity:.4;cursor:not-allowed}
+main{max-width:1360px;margin:0 auto;padding:16px;display:grid;gap:18px;grid-template-columns:1fr}
+@media (min-width:1180px){main{grid-template-columns:minmax(0,1fr) 340px}}
+.stage{display:flex;justify-content:center;align-items:flex-start;min-width:0}
+aside.caps{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-size:13px;align-self:start}
+aside.caps h2{font-size:14px;margin:0 0 4px}
+aside.caps .sub{color:var(--fg3);font-size:12px;margin-bottom:10px}
+aside.caps ul{list-style:none;margin:0;padding:0}
+aside.caps li{display:grid;grid-template-columns:18px 1fr;gap:4px;padding:5px 0;border-bottom:1px solid var(--line)}
+aside.caps li:last-child{border-bottom:0}
+aside.caps .ic{font-family:var(--mono);font-weight:700}
+aside.caps .ic.y{color:#2c7a58} aside.caps .ic.m{color:#a86a12} aside.caps .ic.x{color:#b8413a}
+aside.caps .why{display:block;color:var(--fg3);font-size:11.5px}
+aside.caps code{font-family:var(--mono);font-size:11px;background:var(--chip);padding:0 4px;border-radius:4px}
+.notes{max-width:1360px;margin:0 auto;padding:0 16px 60px;color:var(--fg2);font-size:13px}
+.notes li{margin-bottom:4px}
+
+/* ============ APP FRAME ============ */
+.app{background:var(--s1);color:var(--t1);font-family:var(--sans);font-size:13.5px;line-height:1.62;border:1px solid #2b2b40;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+.app.desk{width:100%;max-width:980px;height:780px}
+.app.phone{width:390px;height:800px;border-radius:38px;border:10px solid #111;}
+.app button{font:inherit;color:inherit}
+.mono{font-family:var(--mono)}
+.app{font-variant-ligatures:none}
+.phone .group .srow{grid-template-columns:16px 1fr auto}
+.phone .group .srow .sum{grid-row:2;grid-column:2/4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.phone .bgbar .capnote{display:none}
+.phone .dock{max-height:56%;overflow-y:auto}
+@media (max-width:440px){ .app.phone{width:100%;border-width:6px;border-radius:28px;height:740px} .app.desk{height:680px} }
+/* desktop chrome */
+.tabbar{display:flex;align-items:center;gap:8px;background:var(--s3);border-bottom:1px solid var(--bs);padding:6px 10px;font-size:12px;color:var(--t2)}
+.tabbar .dots{display:flex;gap:6px;margin-right:6px}.tabbar .dots i{width:11px;height:11px;border-radius:50%;background:#3a3a50;display:block}
+.tab{display:flex;align-items:center;gap:6px;background:var(--s1);border:1px solid var(--bs);border-bottom-color:var(--s1);border-radius:7px 7px 0 0;padding:3px 10px;color:var(--t1);margin-bottom:-7px}
+.hostdot{width:8px;height:8px;border-radius:2px;background:#4a8fd1;display:inline-block}
+.panehead{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--bs);font-size:12.5px}
+.panehead .nm{font-weight:700}
+.panehead .muted{color:var(--t3)}
+.panehead .sp{flex:1}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:1px 8px;border-radius:999px;border:1px solid var(--bd);color:var(--t2);white-space:nowrap}
+.pill .d{width:7px;height:7px;border-radius:50%}
+.btn{background:var(--se);border:1px solid var(--bd);border-radius:6px;padding:2px 9px;font-size:12px;color:var(--t2);cursor:pointer}
+.btn.danger{color:var(--err);border-color:color-mix(in srgb,var(--err) 40%,transparent)}
+.content{flex:1;overflow-y:auto;padding:14px 18px 10px}
+.phone .content{padding:10px 12px 8px}
+.statusbar{display:flex;align-items:center;gap:10px;border-top:1px solid var(--bs);background:var(--s3);padding:5px 12px;font-size:11.5px;color:var(--t2);flex-wrap:wrap}
+.statusbar .sp{flex:1}
+.vseg{display:inline-flex;border:1px solid var(--bd);border-radius:6px;overflow:hidden}
+.vseg button{background:transparent;border:0;padding:1px 9px;font-size:11.5px;color:var(--t2);cursor:pointer}
+.vseg button.on{background:var(--acm);color:var(--t1);font-weight:700}
+.vseg button:disabled{opacity:.35;cursor:not-allowed}
+.ring{display:inline-block;width:12px;height:12px;border-radius:50%;background:conic-gradient(var(--ac) var(--p),var(--bd) 0);vertical-align:-2px}
+/* phone chrome */
+.statusline-ios{display:flex;justify-content:space-between;padding:8px 22px 2px;font-size:12px;font-weight:600;color:var(--t1)}
+.navbar{display:flex;align-items:center;gap:8px;padding:6px 12px 8px;border-bottom:1px solid var(--bs)}
+.navbar .circ{width:34px;height:34px;border-radius:50%;background:var(--se);border:1px solid var(--bs);display:grid;place-items:center;font-size:15px;color:var(--t2);flex:none}
+.navbar .ttl{flex:1;min-width:0}
+.navbar .ttl b{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.navbar .ttl span{display:block;font-size:11.5px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.avatar{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:13px;color:#fff;flex:none;position:relative}
+.avatar.cc{background:linear-gradient(135deg,#c77d55,#8e4f30)}
+.avatar.cx{background:linear-gradient(135deg,#3b3b3b,#111)}
+.avatar .hb{position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:3px;background:#4a8fd1;border:2px solid var(--s1)}
+.homebar{height:22px;display:grid;place-items:center}.homebar i{width:120px;height:4px;border-radius:3px;background:var(--t3);opacity:.5}
+
+/* ============ DECK (指揮台) ============ */
+.turn{margin-bottom:14px}
+.ublock{background:var(--user-bg);border:1px solid var(--user-bd);border-radius:8px;padding:7px 11px;margin:6px 0 10px;white-space:pre-wrap}
+.ublock .who{font-size:11.5px;font-weight:700;color:var(--ac);display:block;margin-bottom:1px}
+.app[data-theme="dark"] .ublock .who{color:#b9aee6}
+.ublock.peer{background:transparent;border-color:var(--bs);border-left:3px solid var(--info);border-radius:2px 8px 8px 2px}
+.ublock.peer .who{color:var(--info)}
+.ublock.local{opacity:.75}
+.prose{margin:6px 0 10px;max-width:90ch}
+.prose p{margin:0 0 6px}
+.prose code{font-family:var(--mono);font-size:.88em;background:var(--se);border:1px solid var(--bs);border-radius:4px;padding:0 4px}
+.step{font-family:var(--mono);font-size:12.5px}
+.srow{display:grid;grid-template-columns:16px auto 1fr auto;gap:6px;align-items:baseline;padding:2px 0;cursor:pointer;border-radius:4px}
+.srow:hover{background:var(--sh)}
+.slot{width:12px;text-align:center;font-size:11px;line-height:1}
+.slot.done{color:var(--t3)} .slot.failed{color:var(--err)} .slot.denied{color:var(--t3)} .slot.running{color:var(--run);animation:br 1.4s ease-in-out infinite} .slot.wait{color:var(--warn)}
+@keyframes br{0%,100%{opacity:1}50%{opacity:.25}}
+.cat{font-family:var(--sans);font-weight:700;font-size:12.5px;color:var(--t1);white-space:nowrap}
+.sum{color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.phone .sum{white-space:normal;word-break:break-all}
+.meta{color:var(--t3);font-size:11.5px;white-space:nowrap;font-family:var(--sans)}
+.meta.failed{color:var(--err)} .meta.running{color:var(--run)} .meta.denied{color:var(--t3)} .meta.wait{color:var(--warn)}
+.rail{margin-left:8px;padding-left:12px;border-left:1px solid var(--bs);color:var(--t2);font-size:12px;white-space:pre-wrap;word-break:break-word;margin-bottom:4px}
+.rail .k{color:var(--t3)}
+.rail.err{color:var(--err)}
+.more{color:var(--t3);font-family:var(--sans);font-size:11.5px;cursor:pointer}
+.more:hover{color:var(--t1)}
+.card{border:1px solid var(--bs);border-radius:7px;margin:3px 0 6px 18px;overflow:hidden;background:var(--s2)}
+.card .ch{display:flex;gap:8px;align-items:baseline;padding:5px 10px;font-family:var(--mono);font-size:12px;border-bottom:1px solid var(--bs)}
+.card .ch .fp{color:var(--t3)} .card .ch .fn{color:var(--t1);font-weight:600}
+.add{color:var(--ok)} .del{color:var(--err)}
+.diff{font-family:var(--mono);font-size:11.5px;line-height:1.55;padding:4px 0;overflow-x:auto}
+.diff div{white-space:pre;padding:0 10px}
+.diff .a{background:color-mix(in srgb,var(--ok) 13%,transparent)} .diff .r{background:color-mix(in srgb,var(--err) 13%,transparent)}
+.diff .n{color:var(--t3);display:inline-block;width:3.2em}
+.cmd{background:#05050f;color:#d6d6e4;font-family:var(--mono);font-size:12px;padding:6px 10px;white-space:pre-wrap;word-break:break-all}
+.app[data-theme="light"] .cmd{background:#23232f}
+.cmd .desc{display:block;color:#8a8aa3;font-family:var(--sans);font-size:11.5px}
+.out{padding:5px 10px;font-family:var(--mono);font-size:11.5px;color:var(--t2);white-space:pre-wrap;word-break:break-word}
+.out .hd{font-family:var(--sans);color:var(--t3);cursor:pointer}
+.group{font-family:var(--mono);font-size:12.5px}
+.group .srow .cat{font-weight:500;color:var(--t2)}
+.nest{margin-left:8px;padding-left:12px;border-left:1px dashed var(--bs)}
+.sys{text-align:center;color:var(--t3);font-size:11.5px;margin:10px 0}
+.tail{display:flex;align-items:center;gap:8px;color:var(--t3);font-size:12px;margin:6px 0 2px}
+.dots3{display:inline-flex;gap:3px;background:var(--se);border:1px solid var(--bs);border-radius:999px;padding:6px 9px}
+.dots3 i{width:5px;height:5px;border-radius:50%;background:var(--t3);animation:br 1.2s infinite}
+.dots3 i:nth-child(2){animation-delay:.2s}.dots3 i:nth-child(3){animation-delay:.4s}
+.waitline{color:var(--warn);font-size:12px;cursor:pointer}
+.ghostcard{margin:4px 0 8px 18px;border:1px dashed var(--warn);border-radius:7px;padding:5px 10px;color:var(--warn);font-size:12px}
+.todo{margin:3px 0 6px 18px;font-size:12.5px}
+.todo div{padding:1px 0}
+.todo .dn{color:var(--t3);text-decoration:line-through}
+.todo .ip{color:var(--run)}
+.capnote{display:inline-block;font-size:10.5px;padding:0 6px;border-radius:4px;border:1px dashed var(--t3);color:var(--t3);margin-left:6px;font-family:var(--sans);vertical-align:1px}
+.typing::after{content:"▍";color:var(--ac);animation:br 1s infinite}
+
+/* bottom: background bar / dock / composer */
+.bgbar{display:flex;gap:10px;align-items:center;border-top:1px solid var(--bs);padding:4px 14px;font-size:12px;color:var(--t2);font-family:var(--mono);flex-wrap:wrap}
+.bgbar .lbl{font-family:var(--sans);color:var(--t3)}
+.dock{border-top:1px solid var(--bs);padding:8px 12px 4px}
+.dcard{border:1px solid color-mix(in srgb,var(--warn) 60%,transparent);background:color-mix(in srgb,var(--warn) 7%,var(--s1));border-radius:10px;padding:8px 10px}
+.dcard.tonly{border-color:var(--bd);background:var(--s2)}
+.dcard .dh{display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:4px}
+.dcard .dh .k{font-weight:700;color:var(--warn);border-left:3px solid var(--warn);padding-left:6px}
+.dcard.tonly .dh .k{color:var(--t2);border-color:var(--t3)}
+.dcard .dh .sp{flex:1}
+.dcard .dh .tl{color:var(--info);cursor:pointer;font-size:12px}
+.dcard .q{font-weight:700;margin:2px 0 6px}
+.dcard .qs{font-size:11.5px;color:var(--t3);margin-top:4px}
+.opt{display:flex;gap:10px;align-items:baseline;background:var(--se);border:1px solid var(--bs);border-radius:7px;padding:5px 10px;margin:4px 0;cursor:pointer}
+.opt:hover{border-color:var(--ac)}
+.opt .no{font-family:var(--mono);font-size:11px;color:var(--t3);background:var(--s2);border-radius:4px;padding:0 5px}
+.opt small{display:block;color:var(--t3);font-size:11.5px}
+.phone .opt{min-height:44px;padding:8px 12px}
+.dbtns{display:flex;gap:8px;margin-top:6px}
+.dbtns button{flex:1;border-radius:7px;padding:5px 10px;border:1px solid var(--bd);background:var(--se);cursor:pointer;font-size:13px}
+.dbtns button.pri{background:var(--ac);border-color:var(--ac);color:#fff;font-weight:700}
+.phone .dbtns button{min-height:44px}
+.dshow{font-family:var(--mono);font-size:11.5px;background:#05050f;color:#d6d6e4;border-radius:6px;padding:5px 8px;margin:4px 0;white-space:pre-wrap;word-break:break-all}
+.dmeta{display:flex;gap:6px;align-items:center;font-size:11px;color:var(--t3);margin-top:4px}
+.closednote{font-size:12px;color:var(--t2);padding:4px 2px}
+.composer{display:flex;gap:8px;align-items:flex-end;border-top:1px solid var(--bs);padding:8px 12px}
+.composer .box{flex:1;min-height:34px;background:transparent;border:0;color:var(--t3);font-size:13px;padding:7px 2px}
+.phone .composer .box{background:var(--se);border:1px solid var(--bs);border-radius:18px;padding:7px 12px}
+.composer .send{width:32px;height:32px;border-radius:50%;border:0;background:var(--ac);color:#fff;display:grid;place-items:center;font-size:14px;flex:none;cursor:pointer}
+.composer .send.stop{background:var(--se);color:var(--t1);border:1px solid var(--bd)}
+.composer .send:disabled{opacity:.35}
+.composer .tbtn{width:34px;height:34px;border-radius:9px;border:1px solid var(--bs);background:var(--se);display:grid;place-items:center;font-size:13px;color:var(--t2);flex:none;cursor:pointer}
+.composer .badge{font-size:11px;color:var(--t2);border:1px solid var(--bd);border-radius:999px;padding:0 8px;align-self:center;white-space:nowrap}
+.u-item{white-space:nowrap;cursor:pointer}.u-item b{color:var(--t1);font-weight:600}.dim{color:var(--t3)}
+.ustrip{display:flex;gap:12px;align-items:center;border-top:1px solid var(--bs);padding:4px 14px;font-size:11.5px;color:var(--t2);cursor:pointer}
+.ustrip span:last-child{margin-left:auto}
+.udet div{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--bs);font-size:12.5px}
+.udet b{font-weight:600}
+.bar{display:inline-block;width:80px;height:6px;border-radius:3px;background:var(--bd);margin-left:8px;vertical-align:1px;overflow:hidden}.bar i{display:block;height:100%;background:var(--ac)}
+.pendbar{background:color-mix(in srgb,var(--warn) 12%,var(--s1));border-bottom:1px solid color-mix(in srgb,var(--warn) 40%,transparent);color:var(--warn);font-size:12px;padding:5px 14px;cursor:pointer}
+
+/* ============ CHAT (聊天) ============ */
+.chat{display:flex;flex-direction:column;gap:6px}
+.bub{max-width:78%;padding:7px 12px;border-radius:16px;white-space:pre-wrap;word-break:break-word}
+.bub.me{align-self:flex-end;background:var(--ac);color:#fff;border-bottom-right-radius:5px}
+.bub.ag{align-self:flex-start;background:var(--se);border:1px solid var(--bs);border-bottom-left-radius:5px}
+.bub.ag p{margin:0 0 5px}.bub.ag p:last-child{margin:0}
+.bub.ag code{font-family:var(--mono);font-size:.86em;background:var(--s2);border-radius:4px;padding:0 4px}
+.bub.peer{align-self:flex-start;background:transparent;border:1px solid var(--bs);border-left:3px solid var(--info)}
+.from{font-size:11px;color:var(--t3);margin:6px 4px -2px}
+.from.r{align-self:flex-end}
+.workrow{align-self:flex-start;font-size:12px;color:var(--t3);cursor:pointer;padding:2px 6px;border-radius:6px}
+.workrow:hover{background:var(--sh);color:var(--t1)}
+.workrow .f{color:var(--err)}
+.chip{align-self:flex-start;font-size:12px;font-family:var(--mono);border:1px solid var(--bs);border-radius:8px;padding:3px 9px;background:var(--s2);cursor:pointer}
+.progress{align-self:flex-start;max-width:86%;background:var(--s2);border:1px solid var(--bs);border-radius:12px;padding:7px 11px;font-size:12.5px}
+.progress .ln{font-family:var(--mono);font-size:12px;color:var(--t2)}
+.progress .hd{display:flex;gap:8px;align-items:center;color:var(--t2);font-size:12px;margin-bottom:3px}
+.stamp{align-self:center;font-size:11px;color:var(--t3);margin:8px 0 2px}
+
+/* ============ TERMINAL ============ */
+.term{background:var(--s3);font-family:var(--mono);font-size:12px;line-height:1.55;color:#cfd2dc;padding:12px 14px;flex:1;overflow:auto;white-space:pre}
+.app[data-theme="light"] .term{background:#14141f;color:#d7d9e2}
+.term .d{color:#8f8fa8}.term .b{color:#7aa2e8}.term .g{color:#7ec699}.term .r{color:#e06c75}.term .o{color:#e5a35a}.term .w{color:#e9e9f2;font-weight:600}.term .p{color:#b9aee6}
+.noterm{flex:1;display:grid;place-items:center;text-align:center;color:var(--t2);padding:30px;font-size:13px}
+.noterm b{display:block;color:var(--t1);font-size:15px;margin-bottom:6px}
+
+/* sheet (phone detail) and side panel (desk) */
+.sheetwrap{position:absolute;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;z-index:5}
+.sheet{background:var(--s1);width:100%;max-height:78%;overflow:auto;border-radius:16px 16px 0 0;border-top:1px solid var(--bd);padding:8px 14px 18px}
+.sheet .grab{width:40px;height:4px;border-radius:3px;background:var(--t3);margin:2px auto 10px;opacity:.6}
+.sheet h4{margin:0 0 6px;font-size:13px}
+.side{position:absolute;top:0;right:0;bottom:0;width:58%;background:var(--s1);border-left:1px solid var(--bd);box-shadow:-12px 0 30px rgba(0,0,0,.3);z-index:5;display:flex;flex-direction:column}
+.side .sh{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--bs);font-size:12.5px}
+.side .sh .sp{flex:1}
+.side .sb{flex:1;overflow:auto;padding:10px 14px}
+.relwrap{position:relative;flex:1;display:flex;flex-direction:column;min-height:0}
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="back" href="interface-language.html">← 設計文件：統一介面語言 v0.3</a>
+  <h1>介面語言設計稿</h1>
+  <p>同一段對話，切換控制模式、裝置、底層、agent、mod、情境，看元件依能力出現或消失。內容是依 Purdex 實際開發情境改寫的範例，不是真實對話。點步驟可以展開；手機上的 diff 和長輸出會改用底部抽屜；dock 裡的選項可以點。</p>
+</header>
+
+<div class="controls"><div class="in" id="controls"></div></div>
+
+<main>
+  <div class="stage" id="stage"></div>
+  <aside class="caps" id="caps"></aside>
+</main>
+
+<div class="notes">
+  <ul>
+    <li><b>色彩</b>：App 框沿用 Purdex 的主題 token（<code>spa/src/styles/themes.css</code> 的 dark／light）。iOS 實作改用 SwiftUI 的系統元件，語意（狀態色、只有「你」有底色）保持一致。</li>
+    <li><b>狀態列三顆鈕</b>（桌機）照設計文件第 17 節第 5 題的提案：只切換介面；換底層是旁邊另一顆按鈕。</li>
+    <li><b>終端介面不畫 dock</b>（提案），只在頂部顯示一條「需要你」提示列。</li>
+  </ul>
+</div>
+
+<script>
+/* ======================= state ======================= */
+const S = { view:'transcript', device:'desktop', backend:'terminal', provider:'claude', mod:'on', density:'standard', scenario:'question', theme:'dark', open:new Set(['t3g']), answered:null, sheet:null, side:null };
+const isPhone = () => S.device === 'phone';
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ======================= capabilities ======================= */
+// level: full | partial | none | terminal_only ; reason code when not full
+const BASE = {
+  'claude/terminal': {
+    text:['message','no_mod','沒有 mod：transcript 只有整則訊息'], thinking:['when_present','','有文字才出現（實測 CC 多半是空的）'],
+    question:['terminal_only','no_mod','沒有 mod：P8a 退化成只能在終端回答'], permission:['terminal_only','no_mod','沒有 mod：只能在終端回答'], plan:['terminal_only','no_mod','只能在終端回答'],
+    todo:['partial','','從 transcript 的 TodoWrite 推得'], subagent:['full','','sidechain＋SubagentStart/Stop'], bg:['partial','','從 transcript 的 task-notification 推得'],
+    usage:['full','','statusline proxy（每次 statusline 刷新）'], peer:['full','','CC 原生 cross-session'], send:['keys','','按鍵送進終端'], steer:['none','provider_unsupported','執行中送出＝排在這回合之後（CC 原生佇列）'], terminal:['full','','tmux 裡的 TUI'],
+    modeswitch:['partial','','送進終端後無法確認是否生效']
+  },
+  'claude/worker': {
+    text:['token','','Nexen stream_event'], thinking:['when_present','','有文字才出現'],
+    question:['remote','','Nexen'], permission:['remote','','Nexen 權限通道'], plan:['remote','','走權限通道（待驗證）'],
+    todo:['full','',''], subagent:['partial','','沒有成本和結束時間（wire ask A2）'], bg:['full','','Nexen N3 task 事件（CLI 會等背景任務跑完）'],
+    usage:['full','','Nexen result＋rate_limit_event＋quota'], peer:['partial','','Nexen peer mailbox 會喚醒 worker（v0.19，預設關閉；Purdex 尚未接上）'], send:['turn','',''], steer:['none','provider_unsupported','CC -p 沒有插話'], terminal:['none','provider_unsupported','執行體沒有終端'],
+    modeswitch:['full','','每回合的參數']
+  },
+  'codex/terminal': {
+    text:['token','','經由共用 app-server'], thinking:['summary','','reasoning summary'],
+    question:['partial','','待驗證'], permission:['remote','','app-server server request'], plan:['partial','','plan item（待驗證）'],
+    todo:['full','','update_plan'], subagent:['partial','','collab item'], bg:['partial','','待驗證'],
+    usage:['partial','','token usage；額度待驗證'], peer:['full','','thread/queue/add'], send:['turn','','turn/start'], steer:['full','','turn/steer'], terminal:['full','','TUI 用 --remote 接共用 app-server'],
+    modeswitch:['partial','','thread settings（待驗證）']
+  },
+  'codex/worker': {
+    text:['token','',''], thinking:['summary','',''],
+    question:['partial','','待驗證'], permission:['remote','',''], plan:['partial','','待驗證'],
+    todo:['full','',''], subagent:['partial','',''], bg:['partial','','待驗證'],
+    usage:['partial','','token usage；額度待驗證'], peer:['full','','thread/queue/add'], send:['turn','',''], steer:['full','',''], terminal:['none','provider_unsupported','執行體沒有終端'],
+    modeswitch:['full','','']
+  }
+};
+// with the Purdex mod loaded, a CC terminal session gets the engine's own events (measured on 2.1.292)
+const MOD = {
+  text:['token','','mod turn.step 逐字（實測：21 個 text chunk）'], question:['remote','','mod 分流 AskUserQuestion（P8a）'],
+  permission:['partial','pending_p8b','mod tool.check 可答（P8b 待實作）'], plan:['partial','','mod tool.call ExitPlanMode 同 P8a 形狀（待驗證）'],
+  todo:['full','','mod tool.call TodoWrite'], bg:['full','','mod tool.call＋session.append 的 task-notification'],
+  usage:['full','','mod session.measure 數字一變就推（實測）'], send:['prompt','','mod $.prompt.submit（不打字）'], steer:['partial','','mod $.session.append 插入執行中的回合（待驗證）'],
+  modeswitch:['partial','','mod $.command.run（待驗證）']
+};
+function capsNow(){ const b = BASE[S.provider + '/' + S.backend]; return (S.provider === 'claude' && S.backend === 'terminal' && S.mod === 'on') ? Object.assign({}, b, MOD) : b; }
+const cap = k => capsNow()[k];
+const has = k => { const l = cap(k)[0]; return l !== 'none'; };
+
+/* ======================= sample conversation ======================= */
+// each step: cc / cx variants {kind, tool, sum}
+const K = { edit:'編輯', execute:'指令', read:'讀取', search:'搜尋', fetch:'網頁', task:'子 agent', other:'工具' };
+const step = (id, cc, cx, rest) => Object.assign({ t:'step', id, cc, cx }, rest);
+const T1 = { id:'t1', user:{ at:'14:02', text:'登入頁的 token 過期後沒有導回登入，幫我查一下並修好' }, dur:'2 分 13 秒', items:[
+  { t:'think', text:'先找 refresh 的位置，看 401 的分支怎麼處理。', cx:'在 api 層找 401 處理；預期 refresh 失敗後沒有導回。' },
+  step('a1', {kind:'search',tool:'Grep',sum:'"refreshToken" · spa/src'}, {kind:'execute',tool:'exec_command',sum:'$ rg -n refreshToken spa/src'}, { status:'done', dur:'0.3s', out:{ lines:12, head:['spa/src/lib/auth.ts:38:  const r = await refreshToken()','spa/src/lib/api.ts:71:    await refreshToken()','spa/src/lib/auth.test.ts:12:  it(\'refreshToken retries once\')'], },
+    note:'12 筆結果 · 4 個檔案' }),
+  step('a2', {kind:'read',tool:'Read',sum:'spa/src/lib/auth.ts'}, {kind:'execute',tool:'exec_command',sum:'$ sed -n 1,120p spa/src/lib/auth.ts'}, { status:'done', out:{ lines:118, head:['import { api } from \'./api\'','','export async function ensureSession() {'] } }),
+  step('a3', {kind:'read',tool:'Read',sum:'spa/src/lib/api.ts'}, {kind:'execute',tool:'exec_command',sum:'$ sed -n 50,110p spa/src/lib/api.ts'}, { status:'done', out:{ lines:204, head:['export async function fetchWithAuth(url, init) {','  let res = await fetch(url, withToken(init))'] } }),
+  step('a4', {kind:'edit',tool:'Edit',sum:'spa/src/lib/auth.ts'}, {kind:'edit',tool:'apply_patch',sum:'spa/src/lib/auth.ts'}, { status:'done', diff:{ add:8, del:2, lines:[['41','r','-  if (res.status === 401) return null'],['41','a','+  if (res.status === 401) {'],['42','a','+    clearSession()'],['43','a','+    redirectToLogin(location.pathname)'],['44','a','+    return null'],['45','a','+  }']] } }),
+  step('a5', {kind:'execute',tool:'Bash',sum:'pnpm vitest run src/lib/auth.test.ts'}, {kind:'execute',tool:'exec_command',sum:'pnpm vitest run src/lib/auth.test.ts'}, { status:'done', dur:'6.2s', cmd:'pnpm vitest run src/lib/auth.test.ts', desc:'跑 auth 的單元測試', out:{ lines:38, tail:[' ✓ src/lib/auth.test.ts (7 tests) 41ms','',' Test Files  1 passed (1)','      Tests  7 passed (7)','   Duration  1.12s'] } }),
+  step('a6', {kind:'execute',tool:'Bash',sum:'pnpm run lint'}, {kind:'execute',tool:'exec_command',sum:'pnpm run lint'}, { status:'failed', dur:'4.8s', exit:1, cmd:'pnpm run lint', out:{ lines:6, tail:['src/lib/auth.ts','  43:5  error  \'redirectToLogin\' is not defined  no-undef','','✖ 1 problem (1 error, 0 warnings)'] } }),
+  step('a7', {kind:'edit',tool:'Edit',sum:'spa/src/lib/auth.ts'}, {kind:'edit',tool:'apply_patch',sum:'spa/src/lib/auth.ts'}, { status:'done', diff:{ add:1, del:0, lines:[['2','a','+import { redirectToLogin } from \'./nav\'']] } }),
+  step('a8', {kind:'execute',tool:'Bash',sum:'pnpm run lint'}, {kind:'execute',tool:'exec_command',sum:'pnpm run lint'}, { status:'done', dur:'4.6s', cmd:'pnpm run lint', out:{ lines:1, tail:['✔ No problems'] } }),
+  { t:'text', md:'修好了：401 時改成清掉 session 並呼叫 <code>redirectToLogin()</code>，登入後會回到原頁。補了一個測試（<code>auth.test.ts</code>，7 個全過）。lint 一開始漏了 import，已補。' },
+]};
+const TP = { id:'tp', peer:{ at:'14:16', from:'mlab/purdex-14', text:'[pdx] 統籌：順便確認 Settings → Development 的 dev update 頁，token 過期時也會導回登入。' } };
+const TSYS = { id:'ts', sys:'對話已壓縮 · 14:20' };
+const T3 = { id:'t3', user:{ at:'14:21', text:'順便檢查 dev update 頁，改完跑全部測試' }, items:[
+  { t:'todo', id:'td', items:[['找出所有呼叫 fetchWithAuth 的頁面','dn'],['修 DevUpdatePage 的 401 處理','dn'],['跑全部測試','ip']] },
+  { t:'task', id:'sa', sum:'找出呼叫 fetchWithAuth 的頁面', dur:'18s', children:[
+    step('s1',{kind:'search',tool:'Grep',sum:'"fetchWithAuth" · spa/src/components'},{kind:'execute',tool:'exec_command',sum:'$ rg -l fetchWithAuth spa/src/components'},{status:'done',out:{lines:5,head:['spa/src/components/settings/DevUpdatePage.tsx','spa/src/components/hosts/HostPanel.tsx']}}),
+    step('s2',{kind:'read',tool:'Read',sum:'spa/src/components/settings/DevUpdatePage.tsx'},{kind:'execute',tool:'exec_command',sum:'$ sed -n 1,90p …/DevUpdatePage.tsx'},{status:'done',out:{lines:142,head:['export function DevUpdatePage() {']}}),
+    step('s3',{kind:'read',tool:'Read',sum:'spa/src/components/hosts/HostPanel.tsx'},{kind:'execute',tool:'exec_command',sum:'$ sed -n 1,60p …/HostPanel.tsx'},{status:'done',out:{lines:96,head:['export function HostPanel({ hostId }) {']}}),
+  ], result:'2 個頁面：DevUpdatePage 自己處理 401（沒導回）；HostPanel 走 ensureSession（沒問題）。' },
+  step('b1', {kind:'edit',tool:'Edit',sum:'spa/src/components/settings/DevUpdatePage.tsx'}, {kind:'edit',tool:'apply_patch',sum:'spa/src/components/settings/DevUpdatePage.tsx'}, { status:'done', diff:{ add:3, del:1, lines:[['58','r','-      if (r.status === 401) setError(\'unauthorized\')'],['58','a','+      if (r.status === 401) {'],['59','a','+        return redirectToLogin(location.pathname)'],['60','a','+      }']] } }),
+]};
+// scenario-dependent tail of T3
+function t3Tail(){
+  const sc = S.scenario;
+  const run = step('b2', {kind:'execute',tool:'Bash',sum:'pnpm vitest run'}, {kind:'execute',tool:'exec_command',sum:'pnpm vitest run'},
+    sc === 'working' ? { status:'running', dur:'1m 02s', cmd:'pnpm vitest run', desc:'跑全部測試', out:{ lines:212, live:true, tail:[' ✓ src/lib/auth.test.ts (7 tests)',' ✓ src/components/execution/ExecutionView.test.tsx (41 tests)',' ❯ src/components/settings/DevUpdatePage.test.tsx 0/9'] } }
+                     : { status:'done', dur:'1m 48s', cmd:'pnpm vitest run', desc:'跑全部測試', out:{ lines:241, tail:[' Test Files  212 passed (212)','      Tests  4127 passed (4127)','   Duration  101.4s'] } });
+  const items = [run];
+  if (sc === 'question') items.push({ t:'ask', id:'q', kind:'question' });
+  if (sc === 'permission') items.push(step('b3', {kind:'execute',tool:'Bash',sum:'rm -rf spa/node_modules/.vite'}, {kind:'execute',tool:'exec_command',sum:'rm -rf spa/node_modules/.vite'}, { status:'wait', cmd:'rm -rf spa/node_modules/.vite', desc:'清掉 Vite 快取後重跑' }), { t:'ask', id:'p', kind:'permission' });
+  if (sc === 'plan') items.push({ t:'text', md:'測試全過。接下來我想把三個頁面各自的 401 處理收斂成一個 hook，計畫如下，等你核准。' }, { t:'ask', id:'pl', kind:'plan' });
+  if (sc === 'done') items.push({ t:'text', md:'都改好了：DevUpdatePage 過期時也會導回登入；全部 4127 個測試通過。HostPanel 原本就走 <code>ensureSession()</code>，不用改。' });
+  return items;
+}
+const PENDING = {
+  question:{ title:'過期處理', q:'dev update 頁在 token 過期時要怎麼處理？', opts:[['導回登入','跟登入頁一致，回來後回到原頁'],['顯示重新登入按鈕','留在原頁，讓使用者自己按'],['靜默重試一次','重試失敗才導回']] },
+  permission:{ cmd:'rm -rf spa/node_modules/.vite', desc:'清掉 Vite 快取後重跑' },
+  plan:{ steps:['新增 useAuthGuard() hook，集中 401 → redirectToLogin','DevUpdatePage、HostPanel、SettingsPage 改用它','補 3 個頁面的回歸測試'] }
+};
+
+/* ======================= helpers ======================= */
+const V = it => (S.provider === 'codex' ? it.cx : it.cc);
+const dotOf = st => st === 'running' ? '<span class="slot running">⏺</span>' : st === 'failed' ? '<span class="slot failed">⏺</span>' : st === 'denied' ? '<span class="slot denied">⏺</span>' : st === 'wait' ? '<span class="slot wait">⏺</span>' : '<span class="slot done">⏺</span>';
+function metaOf(s){
+  if (s.status === 'running') return `<span class="meta running">執行中 ${s.dur||''}</span>`;
+  if (s.status === 'failed') return `<span class="meta failed">失敗${s.exit!=null?' · exit '+s.exit:''}</span>`;
+  if (s.status === 'denied') return `<span class="meta denied">已拒絕</span>`;
+  if (s.status === 'wait') return `<span class="meta wait">等待核准</span>`;
+  return `<span class="meta">${s.dur && parseFloat(s.dur) >= 1 || (s.dur||'').includes('m') ? s.dur : ''}</span>`;
+}
+function countSummary(steps){
+  const order = ['execute','edit','read','search','fetch','task','other'];
+  const n = {}; let fail = 0;
+  steps.forEach(s => { const k = s.t === 'task' ? 'task' : V(s).kind; n[k] = (n[k]||0)+1; if (s.status === 'failed') fail++; });
+  const unit = { execute:'個指令', edit:'個編輯', read:'個讀取', search:'個搜尋', fetch:'個網頁', task:'個子 agent', other:'個工具' };
+  return { text: order.filter(k=>n[k]).map(k=>`${n[k]} ${unit[k]}`).join('、'), fail };
+}
+
+/* ======================= transcript render ======================= */
+function stepHTML(s, depth){
+  const v = V(s); const open = S.open.has(s.id);
+  const isCard = (v.kind === 'edit' && s.diff) || (v.kind === 'execute' && s.cmd);
+  // card kinds carry the command / path in the card, so the row says what it is for
+  const rowSum = (v.kind === 'execute' && s.cmd) ? (s.desc || '') : (v.kind === 'edit' && s.diff) ? v.sum.slice(v.sum.lastIndexOf('/') + 1) : v.sum;
+  let h = `<div class="step"><div class="srow" data-tog="${s.id}">${dotOf(s.status)}<span class="cat">${K[v.kind]}</span><span class="sum">${esc(rowSum)}</span>${metaOf(s)}</div>`;
+  if (v.kind === 'edit' && s.diff){
+    const path = v.sum; const i = path.lastIndexOf('/');
+    const lines = s.diff.lines.map(([n,t,txt]) => `<div class="${t}"><span class="n">${n}</span>${esc(txt)}</div>`).join('');
+    h += `<div class="card"><div class="ch"><span><span class="fp">${esc(path.slice(0,i+1))}</span><span class="fn">${esc(path.slice(i+1))}</span></span><span class="add">+${s.diff.add}</span><span class="del">−${s.diff.del}</span></div>`;
+    h += (isPhone() ? `<div class="diff">${lines}</div>` : `<div class="diff">${lines}</div>`) + `</div>`;
+  } else if (v.kind === 'execute' && s.cmd){
+    h += `<div class="card"><div class="cmd">$ ${esc(s.cmd)}${s.desc?`<span class="desc">${esc(s.desc)}</span>`:''}</div>`;
+    if (s.out){
+      const failed = s.status === 'failed';
+      const showBody = open || failed || s.out.lines <= 6;
+      h += `<div class="out"><span class="hd" data-tog="${s.id}" data-detail="${s.id}">${showBody?'▾':'▸'} 輸出 · ${s.out.lines} 行${s.out.live?'（持續中）':''}</span>`;
+      if (showBody) h += `\n${esc((s.out.tail||[]).join('\n'))}${s.out.lines>10?`\n<span class="more" data-detail="${s.id}">… 看全部 ${s.out.lines} 行</span>`:''}`;
+      h += `</div>`;
+    }
+    h += `</div>`;
+  } else if (s.out || s.note){
+    if (open){
+      const lines = (s.out && s.out.head) || [];
+      h += `<div class="rail">${esc(lines.join('\n'))}${s.out && s.out.lines > lines.length ? `\n<span class="more" data-detail="${s.id}">… +${s.out.lines - lines.length} 行</span>`:''}</div>`;
+    } else if (s.note){
+      h += `<div class="rail"><span class="k">⎿</span> ${esc(s.note)}</div>`;
+    }
+  }
+  return h + `</div>`;
+}
+function taskHTML(t){
+  const open = S.open.has(t.id);
+  const n = t.children.length;
+  const note = cap('subagent')[0] === 'partial' ? `<span class="capnote">${esc(cap('subagent')[2] || '部分')}</span>` : '';
+  let h = `<div class="step"><div class="srow" data-tog="${t.id}"><span class="slot done">⏺</span><span class="cat">子 agent</span><span class="sum">${esc(t.sum)}${note}</span><span class="meta">${n} 步 · ${t.dur}</span></div>`;
+  if (open){ h += `<div class="nest">${t.children.map(c => stepHTML(c,1)).join('')}<div class="rail">⎿ ${esc(t.result)}</div></div>`; }
+  else h += `<div class="rail"><span class="k">⎿</span> ${esc(t.result)}</div>`;
+  return h + `</div>`;
+}
+function todoHTML(t){
+  if (!has('todo')) return '';
+  const done = t.items.filter(i => i[1]==='dn').length;
+  const open = S.open.has(t.id);
+  let h = `<div class="step"><div class="srow" data-tog="${t.id}"><span class="slot done">⏺</span><span class="cat">任務</span><span class="sum">${done}/${t.items.length} 完成</span><span class="meta"></span></div>`;
+  if (open || S.density === 'all') h += `<div class="todo">${t.items.map(([x,st]) => `<div class="${st}">${st==='dn'?'☑':st==='ip'?'▸':'☐'} ${esc(x)}</div>`).join('')}</div>`;
+  return h + `</div>`;
+}
+function thinkHTML(it){
+  if (!has('thinking')) return '';
+  const txt = S.provider === 'codex' ? it.cx : it.text;
+  if (!txt) return '';
+  const open = S.open.has('th');
+  return `<div class="step"><div class="srow" data-tog="th"><span class="slot done">✻</span><span class="cat" style="font-weight:500;color:var(--t3)">${S.provider==='codex'?'推理摘要':'思考'}</span><span class="sum"></span><span class="meta">${open?'':'▸'}</span></div>${open?`<div class="rail">${esc(txt)}</div>`:''}</div>`;
+}
+function askGhost(it){
+  const lvl = cap(it.kind === 'question' ? 'question' : it.kind === 'permission' ? 'permission' : 'plan')[0];
+  if (S.answered) return '';
+  const label = it.kind === 'question' ? '提問' : it.kind === 'permission' ? '核准' : '計畫';
+  return `<div class="ghostcard">${label} · ${lvl === 'terminal_only' ? '只能在終端回答' : '請在下方回答'}</div>`;
+}
+function renderItems(items, turnId, running){
+  // group consecutive steps (incl. thinking) >= 3
+  let out = ''; let buf = [];
+  const flush = () => {
+    if (!buf.length) return;
+    const steps = buf.filter(x => x.t === 'step' || x.t === 'task');
+    const gid = turnId + 'g';
+    const folded = S.density !== 'all' && buf.length >= 3 && !S.open.has(gid);
+    if (folded && !running){
+      const c = countSummary(steps); const last = steps[steps.length-1];
+      out += `<div class="group"><div class="srow" data-tog="${gid}"><span class="slot done">⏺</span><span class="cat">${c.text}</span><span class="sum">· 最後：${esc(V(last).sum)}</span><span class="meta ${c.fail?'failed':''}">${c.fail?c.fail+' 失敗 ':''}›</span></div></div>`;
+    } else {
+      let list = buf;
+      if (running && S.density !== 'all' && buf.length > 6 && !S.open.has(gid)) { out += `<div class="more" data-tog="${gid}" style="margin:2px 0 2px 18px">… 前面還有 ${buf.length-6} 步</div>`; list = buf.slice(-6); }
+      if (buf.length >= 3 && S.density !== 'all' && !running) out += `<div class="more" data-tog="${gid}" style="margin:0 0 2px 18px">▾ 收起這 ${buf.length} 步</div>`;
+      out += list.map(x => x.t === 'step' ? stepHTML(x) : x.t === 'task' ? taskHTML(x) : x.t === 'think' ? thinkHTML(x) : '').join('');
+    }
+    buf = [];
+  };
+  items.forEach(it => {
+    if (it.t === 'step' || it.t === 'task' || (it.t === 'think' && has('thinking'))) buf.push(it);
+    else { flush(); if (it.t === 'text') out += `<div class="prose"><p>${it.md}</p></div>`; else if (it.t === 'todo') out += todoHTML(it); else if (it.t === 'ask') out += askGhost(it); }
+  });
+  flush();
+  return out;
+}
+function transcriptHTML(){
+  let h = '';
+  h += `<div class="turn"><div class="ublock"><span class="who">你 · ${T1.user.at}</span>${esc(T1.user.text)}</div>${renderItems(T1.items,'t1',false)}</div>`;
+  if (has('peer')) h += `<div class="turn"><div class="ublock peer"><span class="who">來自 ${TP.peer.from} · ${TP.peer.at}</span>${esc(TP.peer.text)}</div><div class="prose"><p>收到，我會一起看 dev update 頁。</p></div></div>`;
+  h += `<div class="sys">── ${TSYS.sys} ──</div>`;
+  const running = S.scenario === 'working';
+  const t3items = T3.items.concat(t3Tail());
+  h += `<div class="turn" id="turn-t3"><div class="ublock"><span class="who">你 · ${T3.user.at}</span>${esc(T3.user.text)}</div>${renderItems(t3items,'t3',running)}`;
+  if (running) h += `<div class="tail"><span class="dots3"><i></i><i></i><i></i></span>${cap('text')[0]==='token'?'<span class="typing">正在寫回覆</span>':''}</div>`;
+  if (['question','permission','plan'].includes(S.scenario) && !S.answered) h += `<div class="tail"><span class="waitline" data-scrolldock="1">● 等待你回應</span></div>`;
+  if (S.answered) h += `<div class="sys">${esc(S.answered)}</div>`;
+  return h + `</div>`;
+}
+
+/* ======================= chat render ======================= */
+function chatHTML(){
+  let h = '<div class="chat">';
+  h += `<div class="stamp">今天 14:02</div>`;
+  h += `<div class="bub me">${esc(T1.user.text)}</div>`;
+  const s1 = T1.items.filter(x => x.t === 'step');
+  const c1 = countSummary(s1);
+  h += `<div class="workrow" data-side="t1">做了 ${T1.dur} · ${c1.text}${c1.fail?` · <span class="f">${c1.fail} 失敗</span>`:''} ›</div>`;
+  h += `<div class="bub ag"><p>${T1.items.find(x=>x.t==='text').md}</p></div>`;
+  h += `<div class="chip" data-side="t1">📄 1 個檔案 <span class="add">+9</span> <span class="del">−2</span></div>`;
+  if (has('peer')) { h += `<div class="from">mlab/purdex-14 · ${TP.peer.at}</div><div class="bub peer">${esc(TP.peer.text)}</div><div class="bub ag"><p>收到，我會一起看 dev update 頁。</p></div>`; }
+  h += `<div class="stamp">對話已壓縮 · 14:20</div>`;
+  h += `<div class="bub me">${esc(T3.user.text)}</div>`;
+  const sc = S.scenario;
+  if (sc === 'working'){
+    h += `<div class="progress"><div class="hd"><span class="slot running">⏺</span>工作中 · 1 分 02 秒</div><div class="ln">▸ 指令 pnpm vitest run</div>${has('todo')?`<div class="ln" style="color:var(--t3)">任務 2/3 · 子 agent 1 個已完成</div>`:''}</div>`;
+    h += `<div class="tail"><span class="dots3"><i></i><i></i><i></i></span></div>`;
+  } else {
+    h += `<div class="workrow" data-side="t3">做了 3 分 40 秒 · 2 個指令、1 個編輯、1 個子 agent ›</div>`;
+    if (sc === 'done') { h += `<div class="bub ag"><p>${t3Tail().find(x=>x.t==='text').md}</p></div><div class="chip" data-side="t3">📄 1 個檔案 <span class="add">+3</span> <span class="del">−1</span></div>`; }
+    if (sc === 'plan') h += `<div class="bub ag"><p>測試全過。接下來我想把三個頁面各自的 401 處理收斂成一個 hook，計畫在下方，等你核准。</p></div>`;
+    if (sc === 'question' || sc === 'permission') h += `<div class="bub ag"><p>${sc==='question'?'有一題要你決定，選項在下方。':'要清掉 Vite 快取才能重跑，需要你核准。'}</p></div>`;
+    if (S.answered) h += `<div class="stamp">${esc(S.answered)}</div>`;
+  }
+  return h + '</div>';
+}
+
+/* ======================= terminal render ======================= */
+function terminalHTML(){
+  if (!has('terminal')) return `<div class="noterm"><div><b>這個對話沒有終端</b>${esc(cap('terminal')[2])}（<code>${cap('terminal')[1]}</code>）。<br>可以用指揮台或聊天；要回到終端機，用「接回終端機」換底層。</div></div>`;
+  const sc = S.scenario;
+  if (S.provider === 'codex'){
+    let t = `<span class="d">╭──────────────────────────────────────────╮
+│ </span><span class="w">>_ OpenAI Codex</span><span class="d"> (v0.160.1)                  │
+│ model: gpt-5.6-sol   directory: ~/…/purdex │
+╰──────────────────────────────────────────╯</span>
+
+<span class="p">› 順便檢查 dev update 頁，改完跑全部測試</span>
+
+<span class="w">• Updated Plan</span>
+  <span class="d">└ ✔ 找出所有呼叫 fetchWithAuth 的頁面
+    ✔ 修 DevUpdatePage 的 401 處理
+    □ 跑全部測試</span>
+<span class="w">• Edited</span> spa/src/components/settings/DevUpdatePage.tsx <span class="g">(+3</span> <span class="r">-1)</span>
+<span class="w">• ${sc==='working'?'Running':'Ran'}</span> pnpm vitest run
+  <span class="d">└ ${sc==='working'?'❯ src/components/settings/DevUpdatePage.test.tsx 0/9':'Tests  4127 passed (4127)'}</span>
+`;
+    if (sc === 'permission') t += `
+<span class="o">  Allow command?</span>
+  <span class="w">$ rm -rf spa/node_modules/.vite</span>
+  <span class="b">› 1. Yes, proceed</span>
+    2. Yes, and don't ask again for this command
+    3. No, and tell Codex what to do differently <span class="d">esc</span>
+`;
+    t += `\n<span class="d">▌</span> <span class="d">Ask Codex to do anything</span>\n<span class="d">  ⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit   38% context left</span>`;
+    return `<div class="term">${t}</div>`;
+  }
+  let t = `<span class="p">&gt; 順便檢查 dev update 頁，改完跑全部測試</span>
+
+<span class="w">⏺</span> <span class="w">Task</span>(找出呼叫 fetchWithAuth 的頁面)
+  <span class="d">⎿  Done (3 tool uses · 18s)</span>
+
+<span class="w">⏺</span> <span class="w">Update</span>(spa/src/components/settings/DevUpdatePage.tsx)
+  <span class="d">⎿  Updated spa/src/components/settings/DevUpdatePage.tsx with 3 additions and 1 removal</span>
+
+<span class="${sc==='working'?'o':'w'}">⏺</span> <span class="w">Bash</span>(pnpm vitest run)
+  <span class="d">⎿  ${sc==='working'?'Running… (1m 2s)':'Test Files  212 passed (212)\n     …  +238 lines (ctrl+o to expand)'}</span>
+`;
+  if (sc === 'question') t += `
+<span class="d">────────────────────────────────────────────────</span>
+ <span class="b">☐ 過期處理</span>
+
+ <span class="w">dev update 頁在 token 過期時要怎麼處理？</span>
+
+ <span class="b">❯ 1. 導回登入</span>
+      <span class="d">跟登入頁一致，回來後回到原頁</span>
+   2. 顯示重新登入按鈕
+      <span class="d">留在原頁，讓使用者自己按</span>
+   3. 靜默重試一次
+      <span class="d">重試失敗才導回</span>
+   4. Type something.
+`;
+  if (sc === 'permission') t += `
+<span class="d">╭──────────────────────────────────────────────╮</span>
+ <span class="w">Bash command</span>
+   rm -rf spa/node_modules/.vite
+   <span class="d">清掉 Vite 快取後重跑</span>
+ Do you want to proceed?
+ <span class="b">❯ 1. Yes</span>
+   2. Yes, and don't ask again for <span class="w">rm</span> commands in this project
+   3. No, and tell Claude what to do differently <span class="d">(esc)</span>
+<span class="d">╰──────────────────────────────────────────────╯</span>
+`;
+  if (sc === 'plan') t += `
+<span class="d">╭──────────────────────────────────────────────╮</span>
+ <span class="w">Ready to code?</span>
+ Here is Claude's plan:
+   1. 新增 useAuthGuard() hook
+   2. 三個頁面改用它
+   3. 補回歸測試
+ <span class="b">❯ 1. Yes, and auto-accept edits</span>
+   2. Yes, and manually approve edits
+   3. No, keep planning
+<span class="d">╰──────────────────────────────────────────────╯</span>
+`;
+  if (sc === 'done') t += `\n<span class="w">⏺</span> 都改好了：DevUpdatePage 過期時也會導回登入；全部 4127 個測試通過。\n`;
+  if (!['question','permission','plan'].includes(sc)) t += `\n<span class="d">╭──────────────────────────────────────────────╮
+│ &gt;                                            │
+╰──────────────────────────────────────────────╯
+  ⏵⏵ bypass permissions on (shift+tab to cycle)</span>`;
+  return `<div class="term">${t}</div>`;
+}
+
+/* ======================= dock ======================= */
+function dockHTML(){
+  const sc = S.scenario;
+  if (!['question','permission','plan'].includes(sc)) return '';
+  if (S.answered) return `<div class="dock"><div class="closednote">✓ ${esc(S.answered)}</div></div>`;
+  const kind = sc === 'question' ? 'question' : sc === 'permission' ? 'permission' : 'plan';
+  const lvl = cap(kind)[0];
+  const termBtn = has('terminal') ? `<span class="tl" data-view="terminal">▣ 終端</span>` : '';
+  if (lvl === 'terminal_only'){
+    return `<div class="dock"><div class="dcard tonly"><div class="dh"><span class="k">${kind==='permission'?'核准':kind==='plan'?'計畫':'提問'}</span><span class="sp"></span>${termBtn}</div>
+      <div class="q">這題只能在終端機回答</div>
+      ${kind==='permission'?`<div class="dshow">$ ${esc(PENDING.permission.cmd)}</div>`:kind==='plan'?`<div class="qs">${PENDING.plan.steps.map((s,i)=>`${i+1}. ${esc(s)}`).join('<br>')}</div>`:`<div class="qs">${esc(PENDING.question.q)}</div>`}
+      <div class="dbtns"><button class="pri" data-view="terminal">開終端</button></div>
+      <div class="dmeta">理由：<code>${cap(kind)[1]}</code> · ${esc(cap(kind)[2])}</div></div></div>`;
+  }
+  const partial = lvl === 'partial' ? `<span class="capnote">待驗證</span>` : '';
+  if (kind === 'question'){
+    const p = PENDING.question;
+    return `<div class="dock"><div class="dcard"><div class="dh"><span class="k">請選擇</span>${partial}<span class="sp"></span><span style="color:var(--t3);font-size:11.5px">1/1</span>${termBtn}</div>
+      <div class="qs" style="margin:0">${esc(p.title)}</div><div class="q">${esc(p.q)}</div>
+      ${p.opts.map((o,i)=>`<div class="opt" data-answer="${esc(o[0])}"><span class="no">${i+1}</span><span>${esc(o[0])}<small>${esc(o[1])}</small></span></div>`).join('')}
+      <div class="dmeta">也可以直接打字回答 · <span class="more" data-term-answer="導回登入">模擬：在終端先回答</span></div></div></div>`;
+  }
+  if (kind === 'permission'){
+    const p = PENDING.permission;
+    return `<div class="dock"><div class="dcard"><div class="dh"><span class="k">核准</span>${partial}<span class="sp"></span>${termBtn}</div>
+      <div class="q">要執行這個指令嗎？</div><div class="dshow">$ ${esc(p.cmd)}</div><div class="qs">${esc(p.desc)}</div>
+      <div class="dbtns"><button data-answer="已拒絕">拒絕</button><button class="pri" data-answer="已允許">允許</button></div>
+      <div class="dmeta">不提供「一律允許」 · <span class="more" data-term-answer="允許">模擬：在終端先回答</span></div></div></div>`;
+  }
+  const p = PENDING.plan;
+  return `<div class="dock"><div class="dcard"><div class="dh"><span class="k">計畫</span>${partial}<span class="sp"></span>${termBtn}</div>
+    <div class="qs" style="margin:0 0 4px;color:var(--t1)">${p.steps.map((s,i)=>`${i+1}. ${esc(s)}`).join('<br>')}</div>
+    <div class="dbtns"><button data-answer="繼續規劃">繼續規劃（可附回饋）</button><button class="pri" data-answer="已核准計畫">核准</button></div></div></div>`;
+}
+function bgbarHTML(){
+  if (!has('bg')) return '';
+  return `<div class="bgbar"><span class="lbl">▸ 1 個背景任務</span><span><span class="slot running">⏺</span> pnpm dev（4m）</span>${cap('bg')[0]==='partial'?`<span class="capnote">${esc(cap('bg')[2])}</span>`:''}</div>`;
+}
+function composerHTML(){
+  const pending = ['question','permission','plan'].includes(S.scenario) && !S.answered;
+  const running = S.scenario === 'working';
+  const term = isPhone() && has('terminal') ? `<button class="tbtn" data-view="${S.view==='terminal'?'transcript':'terminal'}" title="終端">${S.view==='terminal'?'☰':'▣'}</button>` : '';
+  const todo = has('todo') && S.view !== 'terminal' ? `<span class="badge">任務 ${S.scenario==='working'?'2':'3'}/3</span>` : '';
+  let ph = '傳訊息給 agent';
+  if (pending) ph = cap(S.scenario === 'question' ? 'question' : S.scenario === 'permission' ? 'permission' : 'plan')[0] === 'terminal_only' ? 'agent 正在等你在終端回應' : 'agent 正在等你回應，請在上方回答';
+  else if (running) ph = has('steer') && cap('steer')[0] === 'full' ? '執行中：送出＝插話（或排隊）' : '執行中：送出＝排在這回合之後';
+  const btn = running ? `<button class="send stop" title="停止">■</button>` : `<button class="send" ${pending?'disabled':''}>↑</button>`;
+  return `<div class="composer">${term}<div class="box">${esc(ph)}</div>${isPhone()?'':todo}${btn}</div>`;
+}
+function statusbarHTML(){
+  const st = statusPill();
+  const model = S.provider === 'codex' ? 'gpt-5.6-sol · high' : 'Opus 5.5 (1M) · xhigh';
+  const u = usageParts();
+  const views = [['terminal','終端機'],['transcript','指揮台'],['chat','聊天']].map(([k,l]) => `<button class="${S.view===k?'on':''}" data-view="${k}" ${k==='terminal'&&!has('terminal')?'disabled title="執行體沒有終端"':''}>${l}</button>`).join('');
+  const swap = S.backend === 'terminal' ? '⇄ 交給執行體' : '⇄ 接回終端機';
+  return `<div class="statusbar">${st}<span>${model}</span>${u}<span class="sp"></span><span class="vseg">${views}</span><button class="btn" data-swap="1" title="換底層（另一個動作）">${swap}</button></div>`;
+}
+function usageParts(){
+  const lv = cap('usage')[0];
+  const ctx = `<span class="u-item" data-usage="1"><span class="ring" style="--p:38%"></span> 38% <span class="dim">380K/1M</span></span>`;
+  const lim = lv === 'full' ? `<span class="u-item" data-usage="1">5h <b>34%</b> <span class="dim">↺2h</span></span><span class="u-item" data-usage="1">7d <b>61%</b> <span class="dim">↺3d</span></span>` : `<span class="u-item dim" data-usage="1">額度 △</span>`;
+  return ctx + lim + `<span class="u-item" data-usage="1">$0.42</span>`;
+}
+function usageStrip(){ return `<div class="ustrip" data-usage="1"><span><span class="ring" style="--p:38%"></span> 38%</span>${cap('usage')[0]==='full'?'<span>5h 34%</span><span>7d 61%</span>':'<span class="dim">額度 △</span>'}<span>$0.42</span><span class="dim">›</span></div>`; }
+function usageDetail(){
+  const lv = cap('usage')[0];
+  return `<h4>用量</h4><div class="udet">
+  <div><b>模型</b><span>${S.provider==='codex'?'gpt-5.6-sol · effort high':'Opus 5.5 (1M) · effort xhigh'}</span></div>
+  <div><b>Context</b><span>380K / 1M（38%）<span class="bar"><i style="width:38%"></i></span></span></div>
+  <div class="dim" style="font-size:11.5px;padding-left:2px">細分（mod 的 $.session.usage({breakdown})）：系統 18K · 工具 31K · 記憶檔 9K · 對話 322K</div>
+  <div><b>5 小時</b><span>${lv==='full'?'34% · 2 小時後重置':'待驗證'}</span></div>
+  <div><b>7 天</b><span>${lv==='full'?'61% · 3 天後重置':'待驗證'}</span></div>
+  <div><b>本 session 成本</b><span>$0.42</span></div>
+  <div class="dim" style="font-size:11.5px;padding-left:2px">來源：${esc(cap('usage')[2])}</div></div>`;
+}
+function statusPill(){
+  const sc = S.scenario;
+  if (S.answered) return `<span class="pill"><span class="d" style="background:var(--ok)"></span>工作中</span>`;
+  if (sc === 'working') return `<span class="pill"><span class="d" style="background:var(--ok)"></span>工作中 1m 02s</span>`;
+  if (sc === 'done') return `<span class="pill"><span class="d" style="background:var(--t3)"></span>閒置</span>`;
+  return `<span class="pill" style="color:var(--warn);border-color:var(--warn)"><span class="d" style="background:var(--warn)"></span>等你回答</span>`;
+}
+function statusLine(){
+  const sc = S.scenario;
+  if (S.answered) return '工作中';
+  if (sc === 'working') return '正在：指令 pnpm vitest run';
+  if (sc === 'done') return '做完了';
+  return sc === 'permission' ? '等你核准' : '等你回答';
+}
+
+/* ======================= side / sheet ======================= */
+function detailFor(id){
+  const all = [...T1.items, ...T3.items, ...t3Tail()].flatMap(x => x.t === 'task' ? [x, ...x.children] : [x]);
+  const s = all.find(x => x.id === id); if (!s) return '';
+  const v = V(s);
+  if (s.diff) return `<h4>${K[v.kind]} · ${esc(v.sum)}</h4><div class="card" style="margin-left:0"><div class="diff">${s.diff.lines.map(([n,t,txt]) => `<div class="${t}"><span class="n">${n}</span>${esc(txt)}</div>`).join('')}</div></div>`;
+  const lines = (s.out && (s.out.tail || s.out.head)) || [];
+  return `<h4>${K[v.kind]} · ${esc(v.sum)}</h4><div class="card" style="margin-left:0">${s.cmd?`<div class="cmd">$ ${esc(s.cmd)}</div>`:''}<div class="out">${esc(lines.join('\n'))}\n<span class="more">（設計稿只放了部分輸出 · 共 ${s.out?s.out.lines:0} 行）</span></div></div>`;
+}
+
+/* ======================= app frame ======================= */
+function appHTML(){
+  const name = '登入 token 修正';
+  let body = '';
+  const pendingTop = S.view === 'terminal' && ['question','permission','plan'].includes(S.scenario) && !S.answered && has('terminal')
+    ? `<div class="pendbar" data-view="transcript">● 需要你：1 ${S.scenario==='permission'?'個核准':'題'} · 原生選擇框就在下方；要用卡片回答請切到指揮台 ›</div>` : '';
+  const content = S.view === 'terminal' ? terminalHTML() : `<div class="content" id="content">${S.view === 'chat' ? chatHTML() : transcriptHTML()}</div>`;
+  const lower = S.view === 'terminal'
+    ? (isPhone() ? `<div class="composer"><button class="tbtn" data-view="transcript" title="回到指揮台">☰</button><div class="box">直接在終端輸入（鍵盤＋特殊鍵列）</div></div>` : '')
+    : bgbarHTML() + dockHTML() + (isPhone() ? usageStrip() : '') + composerHTML();
+  let overlay = '';
+  if (S.sheet && isPhone()) overlay = `<div class="sheetwrap" data-close="1"><div class="sheet"><div class="grab"></div>${S.sheet === 'usage' ? usageDetail() : detailFor(S.sheet)}</div></div>`;
+  if (S.side === 'usage' && !isPhone()){
+    overlay = `<div class="side" style="width:42%"><div class="sh"><b>用量</b><span class="sp"></span><button class="btn" data-close="1">✕</button></div><div class="sb">${usageDetail()}</div></div>`;
+  } else if (S.side && !isPhone() && S.side.startsWith('d:')){
+    overlay = `<div class="side"><div class="sh"><b>細節</b><span class="sp"></span><button class="btn" data-close="1">✕</button></div><div class="sb">${detailFor(S.side.slice(2))}</div></div>`;
+  } else if (S.side && !isPhone()){
+    const turn = S.side === 't1' ? `<div class="ublock"><span class="who">你 · ${T1.user.at}</span>${esc(T1.user.text)}</div>${renderItemsAll(T1.items)}` : `<div class="ublock"><span class="who">你 · ${T3.user.at}</span>${esc(T3.user.text)}</div>${renderItemsAll(T3.items.concat(t3Tail()))}`;
+    overlay = `<div class="side"><div class="sh"><b>指揮台 · 這一回合</b><span class="sp"></span><button class="btn" data-view="transcript">在指揮台開啟</button><button class="btn" data-close="1">✕</button></div><div class="sb">${turn}</div></div>`;
+  }
+  if (isPhone()){
+    const nav = S.view === 'chat'
+      ? `<div class="navbar"><span class="circ">‹</span><span class="avatar ${S.provider==='codex'?'cx':'cc'}">${S.provider==='codex'?'CX':'CC'}<span class="hb"></span></span><span class="ttl"><b>${name}</b><span>${statusLine()}</span></span><span class="circ">ⓘ</span></div>`
+      : `<div class="navbar"><span class="circ">‹</span><span class="ttl"><b>${name} - purdex</b><span>${S.view==='terminal'?'終端機':'指揮台'} · ${statusLine()}</span></span><span class="circ">☆</span><span class="circ">ⓘ</span></div>`;
+    body = `<div class="statusline-ios"><span>14:23</span><span>●●● ▮</span></div>${nav}<div class="relwrap">${pendingTop}${content}${lower}${overlay}</div><div class="homebar"><i></i></div>`;
+  } else {
+    const head = `<div class="panehead"><span class="nm">${name}</span><span class="muted">${S.provider==='codex'?'Codex':'Claude Code'} · ${S.backend==='terminal'?'終端機底層':'執行體底層'} · ~/Workspace/wake/purdex</span><span class="sp"></span>${S.scenario==='working'?'<button class="btn">中斷</button>':''}</div>`;
+    body = `<div class="tabbar"><span class="dots"><i></i><i></i><i></i></span><span class="tab"><span class="hostdot"></span>${name}</span><span class="tab" style="opacity:.55;border-color:transparent;background:transparent">HostPanel 重構</span></div>${head}<div class="relwrap">${pendingTop}${content}${lower}${overlay}</div>${statusbarHTML()}`;
+  }
+  return `<div class="app ${isPhone()?'phone':'desk'}" data-theme="${S.theme}">${body}</div>`;
+}
+function renderItemsAll(items){ const d = S.density; S.density = 'all'; const h = renderItems(items, 'side', false); S.density = d; return h; }
+
+/* ======================= capability panel ======================= */
+function capsHTML(){
+  const rows = [
+    ['text','agent 文字'],['thinking','思考'],['subagent','子 agent'],['todo','任務（todo）'],['peer','其他 agent 的訊息'],
+    ['question','dock · 提問'],['permission','dock · 核准'],['plan','dock · 計畫'],['bg','背景任務列'],
+    ['usage','用量（context／5h／7d／成本）'],['send','送出'],['steer','執行中插話'],['terminal','終端介面'],['modeswitch','模式／model 切換']
+  ];
+  const lvlText = l => ({ full:'完整', partial:'部分／待驗證', none:'不出現', terminal_only:'只能在終端回答', message:'整則訊息（無逐字）', token:'逐字串流', when_present:'有文字才出現', summary:'摘要', remote:'可在介面回答', keys:'按鍵送進終端', turn:'開新回合', prompt:'mod 送出（不打字）' }[l] || l);
+  const icon = l => l === 'none' ? ['x','✗'] : (l === 'partial' || l === 'terminal_only' || l === 'message' || l === 'when_present' || l === 'keys') ? ['m','△'] : ['y','✓'];
+  const modline = (S.provider==='claude'&&S.backend==='terminal') ? (S.mod==='on' ? '有 Purdex mod：引擎事件（turn.step／tool.call／tool.check／session.measure／session.append）。' : '沒有 mod（--safe-mode、安裝前開的 session）：退回 transcript＋hook＋statusline。') : '';
+  return `<h2>這個組合的能力</h2><div class="sub">${S.provider==='codex'?'Codex':'Claude Code'} · ${S.backend==='terminal'?'終端機':'執行體'}底層。${modline}daemon 依能力宣告決定元件出不出現；不出現的寫出理由代碼。</div><ul>${rows.map(([k,l]) => { const [lv,why,note] = cap(k); const [c,g] = icon(lv); return `<li><span class="ic ${c}">${g}</span><span><b>${l}</b>：${lvlText(lv)}${why?` <code>${why}</code>`:''}${note?`<span class="why">${esc(note)}</span>`:''}</span></li>`; }).join('')}</ul>`;
+}
+
+/* ======================= controls ======================= */
+const CTRL = [
+  ['控制模式','view',[['transcript','指揮台'],['chat','聊天'],['terminal','終端機']]],
+  ['裝置','device',[['desktop','桌機'],['phone','手機']]],
+  ['底層','backend',[['terminal','終端機'],['worker','執行體']]],
+  ['agent','provider',[['claude','Claude Code'],['codex','Codex']]],
+  ['Purdex mod','mod',[['on','有 mod'],['off','沒有 mod']]],
+  ['情境','scenario',[['working','工作中'],['question','提問'],['permission','核准'],['plan','計畫'],['done','完成']]],
+  ['指揮台密度','density',[['standard','標準'],['all','全部']]],
+  ['App 主題','theme',[['dark','深色'],['light','淺色']]],
+];
+function controlsHTML(){
+  return CTRL.map(([lb,key,opts]) => `<div class="cg"><span class="lb">${lb}</span><span class="seg">${opts.map(([v,l]) => `<button class="${S[key]===v?'on':''}" data-set="${key}:${v}" ${key==='view'&&v==='terminal'&&!has('terminal')?'disabled title="執行體沒有終端"':''} ${key==='density'&&S.view!=='transcript'?'disabled':''} ${key==='mod'&&!(S.provider==='claude'&&S.backend==='terminal')?'disabled title="只有 CC terminal 底層用得到 mod"':''}>${l}</button>`).join('')}</span></div>`).join('');
+}
+
+/* ======================= render & events ======================= */
+function render(keep){
+  if (S.view === 'terminal' && !has('terminal')) S.view = 'transcript';
+  const prev = document.getElementById('content');
+  const top = prev ? prev.scrollTop : 0;
+  document.getElementById('controls').innerHTML = controlsHTML();
+  document.getElementById('stage').innerHTML = appHTML();
+  document.getElementById('caps').innerHTML = capsHTML();
+  // a live conversation sits at its newest line; expanding a step keeps your place
+  const c = document.getElementById('content');
+  if (c) c.scrollTop = keep ? top : c.scrollHeight;
+}
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-set],[data-tog],[data-view],[data-answer],[data-term-answer],[data-detail],[data-side],[data-close],[data-swap],[data-scrolldock],[data-usage]');
+  if (!el) return;
+  const d = el.dataset;
+  if (d.set){ const [k,v] = d.set.split(':'); S[k] = v; if (k==='scenario'||k==='provider'||k==='backend') { S.answered = null; } S.sheet = null; S.side = null; render(); return; }
+  if (d.close !== undefined && (e.target === el || el.tagName === 'BUTTON')){ S.sheet = null; S.side = null; render(); return; }
+  if (d.usage){ if (isPhone()) S.sheet = 'usage'; else S.side = 'usage'; render(true); return; }
+  if (d.detail && isPhone()){ S.sheet = d.detail; render(true); return; }
+  if (d.detail && !d.tog){ S.side = 'd:' + d.detail; render(true); return; }
+  if (d.tog){ S.open.has(d.tog) ? S.open.delete(d.tog) : S.open.add(d.tog); render(true); return; }
+  if (d.view){ S.view = d.view; S.sheet = null; S.side = null; render(); return; }
+  if (d.answer){ S.answered = (S.scenario === 'question' ? '已回答：' : '') + d.answer; render(); return; }
+  if (d.termAnswer){ S.answered = '已在終端機回答：' + d.termAnswer; render(); return; }
+  if (d.side){ if (isPhone()){ S.view = 'transcript'; S.side = null; render(); const t = document.getElementById(d.side === 't3' ? 'turn-t3' : 'content'); t && t.scrollIntoView({block:'start'}); } else { S.side = d.side; render(); } return; }
+  if (d.swap){ S.backend = S.backend === 'terminal' ? 'worker' : 'terminal'; S.answered = null; render(); return; }
+  if (d.scrolldock){ const dk = document.querySelector('.dock'); dk && dk.scrollIntoView({block:'nearest'}); return; }
+});
+render();
+</script>
+</body>
+</html>

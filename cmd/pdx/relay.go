@@ -29,7 +29,8 @@ const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--ag
 	"       pdx relay wait <request_id> [--wait 9m] [--config <path>]\n" +
 	"       pdx relay self off|on|status --session <sid> [--config <path>]\n" +
 	"       pdx relay report <op> <state> [--new-session <sid>] [--error <e>] [--config <path>]\n" +
-	"       pdx relay op <id> [--config <path>]"
+	"       pdx relay op <id> [--config <path>]\n" +
+	"       pdx relay prompts [--config <path>]"
 
 const (
 	// relayAttemptTimeout bounds one long-poll (team.MaxPollWaitS plus room), as lead's does.
@@ -106,6 +107,8 @@ func runRelayCmd(ctx context.Context, args []string, stdout, stderr io.Writer, c
 		return runRelayReport(ctx, args[1:], stdout, stderr, clientOpts)
 	case "op":
 		return runRelayOp(ctx, args[1:], stdout, stderr, clientOpts)
+	case "prompts":
+		return runRelayPrompts(ctx, args[1:], stdout, stderr, clientOpts)
 	default:
 		fmt.Fprintf(stderr, "pdx relay: unknown subcommand %q\n%s\n", args[0], relayUsage)
 		return ExitUsage
@@ -437,4 +440,29 @@ func runRelayOp(ctx context.Context, args []string, stdout, stderr io.Writer, cl
 		return relayReportErr(err, stdout, stderr)
 	}
 	return relayPrintJSON(stdout, stderr, op)
+}
+
+// runRelayPrompts prints this host's relay prompts — the effective bodies,
+// the defaults, the fixed parts and the variables — as one JSON line (spec
+// §8.8). The mod calls it before each write, fix and seed prompt and falls
+// back to its own copy on any non-zero exit: 20 unreachable, 21 a daemon
+// from before P9a, 1 otherwise.
+func runRelayPrompts(ctx context.Context, args []string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
+	fs := flag.NewFlagSet("pdx relay prompts", flag.ContinueOnError)
+	cfgPath, ok := relayFlags(fs, args, stderr)
+	if !ok {
+		return ExitUsage
+	}
+	if fs.NArg() != 0 {
+		return relayUsageErr(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
+	}
+	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
+	if code != ExitOK {
+		return code
+	}
+	var p team.RelayPrompts
+	if _, err := client.Do(ctx, http.MethodGet, "/api/relay/prompts", nil, &p); err != nil {
+		return relayReportErr(err, stdout, stderr)
+	}
+	return relayPrintJSON(stdout, stderr, p)
 }

@@ -61,7 +61,10 @@ type Module struct {
 	// relay_unsupported, P8a-1a's modPresent() reads it for the
 	// terminal-only degradation; nothing else writes it.
 	switches hostconfig.RelaySwitchReader
-	titles   TitleMover
+	// prompts is the relay prompt bodies (host config, spec §8.8), read
+	// on every GET /api/relay/prompts.
+	prompts hostconfig.RelayPromptReader
+	titles  TitleMover
 	// usage is the agent module's per-session statusline reading; begin
 	// copies model_id / effort from it into the self_relay payload (the mod
 	// sends neither). Nil when the agent module is absent: both stay "".
@@ -236,6 +239,11 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("team: service %q does not implement RelaySwitchReader (%T)", hostconfig.RelaySwitchesKey, sw)
 	}
 	m.switches = switches
+	prompts, err := lookup[hostconfig.RelayPromptReader](c, hostconfig.RelayPromptsKey)
+	if err != nil {
+		return err
+	}
+	m.prompts = prompts
 	if err := m.initSpawn(c); err != nil {
 		return err
 	}
@@ -282,6 +290,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/relay/self", m.handleRelaySelf)
 	mux.HandleFunc("POST /api/relay/ops/{id}/report", m.handleRelayReport)
 	mux.HandleFunc("GET /api/relay/ops/{id}", m.handleRelayOp)
+	mux.HandleFunc("GET /api/relay/prompts", m.handleRelayPrompts) // P9a, spec §8.8
 	// P8a 分流 routes (spec §6.6); TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/ask/begin", m.handleAskBegin)
 	mux.HandleFunc("GET /api/ask/wait/{id}", m.handleAskWait)

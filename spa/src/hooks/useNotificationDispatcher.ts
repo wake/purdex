@@ -11,7 +11,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { buildNotificationContent } from '../lib/notification-content'
 import { normalizeEventName } from '../lib/event-name'
 import { findPane, findTabAndPaneBySessionCode } from '../lib/pane-tree'
-import { usePaneFocusStore } from '../stores/usePaneFocusStore'
+import { activateTabPane } from '../lib/open-session-tab'
 import { executionIdOfAgentCode, isExecAgentCode } from '../lib/nex/worker-agent-status'
 import { isNonTmuxAgentCode } from '../lib/non-tmux-agent'
 import { readWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
@@ -464,21 +464,8 @@ export function handleNotificationClick(action: NotificationAction): void {
         // the Hosts page — no tab created, and none focused even when a tab of that session exists (its pane is gated).
         handled = true
       } else if (hit) {
-        const { tabId, paneId } = hit
-        // The pane becomes its tab's most recently focused pane (usePaneFocusStore, rule F) and is asked to take focus,
-        // both before the tab is shown. A tab already on screen has no activation, so the one-shot request is what
-        // moves the keyboard there (#1840 A1) — the user must not type the reply into the pane they were in. A tab
-        // being shown serves the request with its activation's focus (useActivationFocus), so it focuses once.
-        usePaneFocusStore.getState().requestFocus(tabId, paneId)
-        useTabStore.getState().setActiveTab(tabId)
-        const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
-        // No workspace = nobody has adopted the tab yet (features/workspace/lib/adopt-standalone.ts waits before
-        // it believes that). There is no "Home" view to switch to; like a click on the tab (`handleSelectTab`),
-        // the workspace on screen stays.
-        if (ws) {
-          useWorkspaceStore.getState().setActiveWorkspace(ws.id)
-          useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabId)
-        }
+        // The tab, its workspace and the pane's keyboard focus (#1840 A1) — shared with the approval switch (U22).
+        activateTabPane(hit.tabId, hit.paneId)
         handled = true
       } else if (isNonTmuxAgentCode(sessionCode)) {
         // A session outside tmux has no tab and never gets one (its code is not a tmux code): the click only clears
