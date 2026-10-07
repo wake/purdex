@@ -19,16 +19,17 @@ export function RelaySection({ hostId }: { hostId: string }) {
   const known = entry.status === 'ready' || entry.status === 'unsupported'
   const unsupported = known && !entry.relaySupported
 
-  const set = useCallback((field: keyof RelaySwitches, value: boolean) => {
+  const toggle = useCallback((field: keyof RelaySwitches) => {
     setPending(true)
     setSaveError(null)
-    // The value saved is a function of the store when the task RUNS, so a second toggle queued behind a first
-    // does not overwrite it with a stale copy.
+    // A click is a TOGGLE of the value stored when its task RUNS (PR #1742 R1): two quick clicks queue two tasks
+    // that both captured the same rendered `checked`; flipping the store's current value makes the second undo
+    // the first, as the person meant, instead of writing the same value twice.
     void queueHostConfigSave(hostConfigQueueKey(hostId, 'relay'), async () => {
       try {
         const current = useHostConfigStore.getState().byHost[hostId]?.relay
         if (!current) return
-        await useHostConfigStore.getState().saveRelay(hostId, { ...current, [field]: value })
+        await useHostConfigStore.getState().saveRelay(hostId, { ...current, [field]: !current[field] })
       } catch (err) {
         setSaveError(err instanceof HostConfigConflictError
           ? t('host_config.conflict')
@@ -57,14 +58,14 @@ export function RelaySection({ hostId }: { hostId: string }) {
               <span className="text-sm text-text-primary">{t('hosts.relay.self_solo')}</span>
               <span className={locked ? 'opacity-50 pointer-events-none' : ''}>
                 <ToggleSwitch testId="relay-self-solo" label={t('hosts.relay.self_solo')} checked={entry.relay.self_solo}
-                  onChange={(v) => { if (!locked) set('self_solo', v) }} />
+                  onChange={() => { if (!locked) toggle('self_solo') }} />
               </span>
             </div>
             <div className="flex items-center justify-between gap-4 px-3 py-2">
               <span className="text-sm text-text-primary">{t('hosts.relay.self_lead')}</span>
               <span className={locked ? 'opacity-50 pointer-events-none' : ''}>
                 <ToggleSwitch testId="relay-self-lead" label={t('hosts.relay.self_lead')} checked={entry.relay.self_lead}
-                  onChange={(v) => { if (!locked) set('self_lead', v) }} />
+                  onChange={() => { if (!locked) toggle('self_lead') }} />
               </span>
             </div>
             <div className="flex items-center justify-between gap-4 px-3 py-2">

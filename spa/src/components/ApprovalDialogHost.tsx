@@ -123,9 +123,11 @@ function OpenApprovalDialog({ entry }: { entry: ApprovalEntry }) {
     if (decision === 'approve' && !grantOk) return
     const grant: Grant | undefined = !isSelfRelay && decision === 'approve' ? { max_members: members, roots } : undefined
     if (!connected) {
-      // Spec §9.4: kept locally, sent on reconnect (the snapshot re-adds the request, or shows it gone). The pause is
-      // not queued: there is no daemon to tell, and the mod asks again only at +10 points anyway (spec §8.7 (c)).
-      useApprovalStore.getState().queueDecision(hostId, approval, decision, grant)
+      // Spec §9.4: kept locally, sent on reconnect (the snapshot re-adds the request, or shows it gone). A ticked
+      // 「這個 session 不再詢問」 is queued WITH the decision and sent before it on reconnect (PR #1742 R1): the
+      // person asked for it, and dropping it would let the session ask again.
+      const pause = isSelfRelay && noMoreAsking ? approval.origin.session_id : undefined
+      useApprovalStore.getState().queueDecision(hostId, approval, decision, grant, pause)
       return
     }
     inFlight.current = true

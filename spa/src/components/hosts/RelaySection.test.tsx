@@ -61,6 +61,16 @@ describe('RelaySection', () => {
     expect(saveRelay.mock.calls[1][1]).toEqual({ self_solo: false, self_lead: false })
   })
 
+  it('a double click on ONE switch in one tick toggles twice: back to where it was (PR #1742 R1)', async () => {
+    seed(entry({ self_solo: true, self_lead: true }))
+    render(<RelaySection hostId={H} />)
+    fireEvent.click(screen.getByTestId('relay-self-solo'))
+    fireEvent.click(screen.getByTestId('relay-self-solo')) // same render: both clicks saw checked=true
+    await waitFor(() => expect(saveRelay).toHaveBeenCalledTimes(2))
+    expect(saveRelay.mock.calls[0][1]).toEqual({ self_solo: false, self_lead: true })
+    expect(saveRelay.mock.calls[1][1]).toEqual({ self_solo: true, self_lead: true })
+  })
+
   it('a save failure is shown and the switch keeps the daemon copy', async () => {
     seed(entry({ self_solo: true, self_lead: true }))
     saveRelay.mockRejectedValueOnce(new Error('boom'))

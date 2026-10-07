@@ -27,6 +27,8 @@ export interface QueuedDecision {
   approval: Approval
   decision: Decision
   grant?: Grant
+  /** 「這個 session 不再詢問」 was ticked: the session id to pause (POST /api/relay/self off) before the decision. */
+  pauseSession?: string
 }
 
 /** NUL-joined, as the pane-keyed dialogs do: a host id or a request id may contain any printable separator. */
@@ -46,7 +48,7 @@ export interface ApprovalStoreState {
   applyClosed: (hostId: string, approval: Approval) => 'absent' | 'ours' | 'elsewhere'
   markDecidedHere: (hostId: string, id: string) => void
   unmarkDecidedHere: (hostId: string, id: string) => void
-  queueDecision: (hostId: string, approval: Approval, decision: Decision, grant?: Grant) => void
+  queueDecision: (hostId: string, approval: Approval, decision: Decision, grant?: Grant, pauseSession?: string) => void
   /** Remove and return the host's queued decisions (each is sent at most once). */
   takeQueued: (hostId: string) => QueuedDecision[]
   reset: () => void
@@ -124,8 +126,8 @@ export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
   markDecidedHere: (hostId, id) => set((s) => ({ decidedHere: { ...s.decidedHere, [approvalKey(hostId, id)]: true } })),
   unmarkDecidedHere: (hostId, id) => set((s) => ({ decidedHere: without(s.decidedHere, approvalKey(hostId, id)) })),
 
-  queueDecision: (hostId, approval, decision, grant) =>
-    set((s) => ({ queued: { ...s.queued, [approvalKey(hostId, approval.id)]: { hostId, approval, decision, grant } } })),
+  queueDecision: (hostId, approval, decision, grant, pauseSession) =>
+    set((s) => ({ queued: { ...s.queued, [approvalKey(hostId, approval.id)]: { hostId, approval, decision, grant, ...(pauseSession ? { pauseSession } : {}) } } })),
 
   takeQueued: (hostId) => {
     const taken: QueuedDecision[] = []
