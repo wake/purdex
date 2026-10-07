@@ -54,9 +54,29 @@ var hookAfterFn = func(d time.Duration, f func()) (stop func() bool) {
 	return t.Stop
 }
 
-// hookStdinTimeoutS bounds the stdin read (CC and Codex write the payload
-// and close; a hook started by hand would otherwise hang forever).
-const hookStdinTimeoutS = 5
+// readStdinUntil reads r to EOF unless ctx ends first; then, as on a read
+// error or an empty payload, it is "{}" (CC and Codex write the payload and
+// close at once; a hook started by hand would otherwise hang forever).
+func readStdinUntil(ctx context.Context, r io.Reader) []byte {
+	type result struct {
+		data []byte
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		data, err := io.ReadAll(r)
+		ch <- result{data, err}
+	}()
+	select {
+	case res := <-ch:
+		if res.err != nil || len(res.data) == 0 {
+			return []byte("{}")
+		}
+		return res.data
+	case <-ctx.Done():
+		return []byte("{}")
+	}
+}
 
 // hookDecideGrace is the hook's whole budget after the stdin read (spec
 // §6.6): the event POST and the decision run concurrently under one ctx
@@ -116,9 +136,19 @@ func runHook(args []string) {
 		os.Exit(1)
 	}
 
+	// One 5 s budget for the whole hook: the stdin read, the event POST and
+	// the decision share it, so the agent is held ≤ 5 s end to end on every
+	// path (spec §6.6, §15; Codex's outer hook timeout is 10 s). The ctx
+	// carries a cancel, not a Deadline(), so daemonclient keeps its own
+	// (fake-able) attempt timer (client.go attemptCtx).
+	budget, cancelBudget := context.WithCancel(context.Background())
+	defer cancelBudget()
+	stopBudget := hookAfterFn(hookDecideGrace, cancelBudget)
+	defer stopBudget()
+
 	tmuxSessionID, tmuxSession := queryTmuxSessionInfoFn()
 	provenance := resolveHookProvenanceFn()
-	raw := readStdinWithTimeout(os.Stdin, hookStdinTimeoutS)
+	raw := readStdinUntil(budget, os.Stdin)
 	payload := buildHookPayload(tmuxSessionID, tmuxSession, purdexName, bytes.NewReader(raw), agentType, provenance)
 
 	cfg, err := loadConfigFn("")
@@ -129,14 +159,6 @@ func runHook(args []string) {
 		url = fmt.Sprintf("http://%s:%d/api/agent/event", cfg.Bind, cfg.Port)
 		token = cfg.Token
 	}
-
-	// One budget for everything after the stdin read. The ctx carries a
-	// cancel, not a Deadline(), so daemonclient keeps its own (fake-able)
-	// attempt timer (client.go attemptCtx).
-	budget, cancelBudget := context.WithCancel(context.Background())
-	defer cancelBudget()
-	stopBudget := hookAfterFn(hookDecideGrace, cancelBudget)
-	defer stopBudget()
 
 	eventDone := make(chan struct{})
 	go func() {

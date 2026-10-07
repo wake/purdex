@@ -463,3 +463,66 @@ func TestRunHook_DecisionPathEndToEnd(t *testing.T) {
 		t.Fatalf("the hanging event POST must have been ended by the budget ctx: %v", postCtxEnded)
 	}
 }
+
+// A hook whose stdin never closes (started by hand, or an agent that died
+// mid-write) is bounded by the same 5 s budget as everything else: the
+// read ends with the budget, the payload is "{}", nothing is printed, and
+// runHook returns — not 5 s of stdin plus another budget (PR #1697 A-2).
+func TestRunHook_StdinThatNeverClosesIsInsideTheBudget(t *testing.T) {
+	origInfo, origResolve, origPost, origLoad := queryTmuxSessionInfoFn, resolveHookProvenanceFn, postHookEventFn, loadConfigFn
+	origStdin, origStdout, origAfter := os.Stdin, os.Stdout, hookAfterFn
+	t.Cleanup(func() {
+		queryTmuxSessionInfoFn, resolveHookProvenanceFn, postHookEventFn, loadConfigFn = origInfo, origResolve, origPost, origLoad
+		os.Stdin, os.Stdout, hookAfterFn = origStdin, origStdout, origAfter
+	})
+	queryTmuxSessionInfoFn = func() (string, string) { return "$1", "work" }
+	resolveHookProvenanceFn = func() hookProvenance { return hookProvenance{} }
+	dataDir := t.TempDir()
+	loadConfigFn = func(string) (config.Config, error) {
+		return config.Config{Bind: "127.0.0.1", Port: 1, Token: "tok", DataDir: dataDir}, nil
+	}
+	var postMu sync.Mutex
+	var posted []hookPayload
+	postHookEventFn = func(ctx context.Context, _ string, _ string, p hookPayload) error {
+		postMu.Lock()
+		posted = append(posted, p)
+		postMu.Unlock()
+		return nil
+	}
+	clock := newLeadClock()
+	hookAfterFn = clock.afterFunc
+
+	in, inW, _ := os.Pipe()
+	defer inW.Close() // never closed while runHook runs
+	os.Stdin = in
+	outR, outW, _ := os.Pipe()
+	os.Stdout = outW
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runHook([]string{"--agent", "cc", "PdxPreToolUse"})
+	}()
+	time.Sleep(100 * time.Millisecond) // runHook is blocked in the stdin read
+	select {
+	case <-done:
+		t.Fatal("runHook returned before the budget ended, with stdin still open")
+	default:
+	}
+	clock.fireNext() // the 5 s budget, by the fake clock
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runHook did not return once the budget ended: the stdin read is outside the budget")
+	}
+	outW.Close()
+	got, _ := io.ReadAll(outR)
+	if string(got) != "" {
+		t.Fatalf("stdout = %q, want empty", got)
+	}
+	postMu.Lock()
+	defer postMu.Unlock()
+	if len(posted) != 1 || string(posted[0].RawEvent) != "{}" {
+		t.Fatalf("the event POST still goes out with the empty payload: %+v", posted)
+	}
+}
