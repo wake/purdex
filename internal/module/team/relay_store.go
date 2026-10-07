@@ -325,8 +325,12 @@ func (s *Store) PreviousRefs() (map[string][]string, error) {
 		return nil, fmt.Errorf("read lineage: %w", err)
 	}
 	// Each session's chain is its predecessor's ref followed by the
-	// predecessor's own chain, so chains are memoised: every row is walked
-	// once and the whole map is O(rows), not O(rows × chain length). The
+	// predecessor's own chain, so chains are memoised: every row's
+	// predecessor is looked up once. The output itself is Θ(sum of chain
+	// lengths) — a single chain of N relays yields N chains of 1..N refs —
+	// because the contract hands every head its whole chain (U3: uncapped)
+	// without knowing which heads are live; N is the number of relays one
+	// conversation has been through, tens at most, 7 bytes a ref. The
 	// lineage is acyclic (checkLineage), and `visiting` makes a cycle in a
 	// hand-edited database terminate instead of recursing forever.
 	out := make(map[string][]string, len(back))
