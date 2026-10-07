@@ -206,6 +206,19 @@ func (s *Store) FailSpawnOp(id, reason string, at int64) (bool, error) {
 	return oneRow(res, err, "fail spawn op "+id)
 }
 
+// FailSpawnOpAtStep is FailSpawnOp only while the op is still running at
+// step: one compare-and-set on the step that a step's advance makes too, so
+// of the two exactly one wins (P4-5 re-review: the timeout decides before it
+// kills, against the registration).
+func (s *Store) FailSpawnOpAtStep(id, step, reason string, at int64) (bool, error) {
+	if !spawnReasons[reason] {
+		return false, fmt.Errorf("fail spawn op %s: unknown reason %q", id, reason)
+	}
+	res, err := s.db.Exec(`UPDATE spawn_ops SET state = 'failed', reason = ?, updated_at = ?
+		WHERE id = ? AND state = 'running' AND step = ?`, reason, at, id, step)
+	return oneRow(res, err, "fail spawn op "+id)
+}
+
 // oneRow reports whether a guarded single-row UPDATE changed its row.
 func oneRow(res sql.Result, err error, what string) (bool, error) {
 	var n int64

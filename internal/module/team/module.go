@@ -149,12 +149,19 @@ type Module struct {
 	clearedWait, clearedPoll time.Duration
 
 	// P4-5 spawn (spec §7.2, spawn_runner.go): the session create path, the
-	// tmux executor (nil: spawn disabled) and team.member_command. spawnWG
-	// joins the runners in Stop.
-	sessions sessionCreator
-	tmux     tmuxOps
-	teamCfg  hostconfig.TeamSettingsReader
-	spawnWG  sync.WaitGroup
+	// tmux executor (nil: spawn disabled), team.member_command, the agent
+	// frames and the title store (nil: no title). spawnWG joins the runners
+	// in Stop. spawnPoll and spawnSleep pace the registration poll,
+	// spawnBudget (ms) bounds it.
+	sessions    sessionCreator
+	tmux        tmuxOps
+	teamCfg     hostconfig.TeamSettingsReader
+	frames      frameReader
+	titleSet    TitleSetter
+	spawnWG     sync.WaitGroup
+	spawnPoll   time.Duration
+	spawnSleep  func(ctx context.Context, d time.Duration)
+	spawnBudget int64
 	// beforeSpawnStep, when set, runs before each runner step with the op as
 	// read; tests hold or steer a runner there. nil in production.
 	beforeSpawnStep func(op spawnRow)
@@ -175,6 +182,9 @@ func New() *Module {
 		// session id (measured ~0.6 s after /clear), polling every 100 ms.
 		clearedWait: 3 * time.Second,
 		clearedPoll: 100 * time.Millisecond,
+		spawnPoll:   250 * time.Millisecond,
+		spawnSleep:  sleepCtx,
+		spawnBudget: team.SpawnRegisterS * 1000,
 	}
 }
 
@@ -283,6 +293,7 @@ func (m *Module) Start(context.Context) error {
 		m.logf("[team] boot: extended the lease of %d open approval request(s) by %ds", n, team.BootGraceS)
 	}
 	m.reconcileRelays()
+	m.resumeSpawns()
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.sweepWG.Add(2)
 	go m.runSweeper()

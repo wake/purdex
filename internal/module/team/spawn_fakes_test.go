@@ -7,9 +7,14 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/hostconfig"
+	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/module/session"
+	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -19,6 +24,8 @@ type spawnFakes struct {
 	tmux     *tmux.FakeExecutor
 	sessions *fakeSessions
 	teamCfg  *fakeTeamCfg
+	frames   *fakeFrames
+	so       *spawnOrigins // newSpawnFixture only
 }
 
 func (f *fixture) registerSpawnFakes() {
@@ -27,8 +34,72 @@ func (f *fixture) registerSpawnFakes() {
 	f.core.Tmux = f.tmux
 	f.sessions = &fakeSessions{tm: f.tmux}
 	f.teamCfg = &fakeTeamCfg{s: hostconfig.DefaultTeamSettings}
+	f.frames = &fakeFrames{}
 	f.core.Registry.Register(session.RegistryKey, f.sessions)
 	f.core.Registry.Register(hostconfig.TeamSettingsKey, f.teamCfg)
+	f.core.Registry.Register(agent.TerminalSessionsKey, f.frames)
+}
+
+// fakeFrames is the agent module's live frames.
+// afterRead, when set, runs once after the next read (a test lets another
+// runner act between a registration's look at the frames and its CAS).
+type fakeFrames struct {
+	mu        sync.Mutex
+	list      []agent.TerminalSession
+	afterRead func()
+}
+
+func (f *fakeFrames) LiveSessions(context.Context, string) ([]agent.TerminalSession, error) {
+	f.mu.Lock()
+	list, after := append([]agent.TerminalSession(nil), f.list...), f.afterRead
+	f.afterRead = nil
+	f.mu.Unlock()
+	if after != nil {
+		after()
+	}
+	return list, nil
+}
+
+func (f *fakeTitles) Claim(sid, label string, _ time.Time) (store.PeerLabel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.claims = append(f.claims, [2]string{sid, label})
+	return store.PeerLabel{SessionID: sid, Label: label}, nil
+}
+
+// spawnOrigins is the fixture's resolver plus the member sessions that
+// registered (register).
+type spawnOrigins struct {
+	*fakeOrigins
+	mu      sync.Mutex
+	members map[string]team.Origin
+}
+
+func (s *spawnOrigins) ResolveOriginBySession(sid string) (team.Origin, bool, error) {
+	s.mu.Lock()
+	o, ok := s.members[sid]
+	s.mu.Unlock()
+	if ok {
+		return o, true, nil
+	}
+	return s.fakeOrigins.ResolveOriginBySession(sid)
+}
+
+// register makes sid's Claude Code come up on pane: a verified frame there
+// and a live registry entry.
+func (f *fixture) register(pane, sid string) {
+	f.frames.mu.Lock()
+	f.frames.list = append(f.frames.list, agent.TerminalSession{PaneID: pane, SessionID: sid, AgentType: "cc", Verified: true})
+	f.frames.mu.Unlock()
+	f.so.mu.Lock()
+	f.so.members[sid] = team.Origin{SessionID: sid, Ref: ipeers.RefID(sid), PID: 31, ProcStart: "p31", Address: "mlab/" + ipeers.RefID(sid)}
+	f.so.mu.Unlock()
+}
+
+// fastSleep is the registration poll's pause that advances the clock instead.
+func (f *fixture) fastSleep(context.Context, time.Duration) {
+	f.clock.Add(250)
+	time.Sleep(time.Millisecond)
 }
 
 // fakeSessions is the session module's tagged create over the fixture's
@@ -91,9 +162,13 @@ func spawnID(i int) string { return fmt.Sprintf("%08x-00aa-4bbb-8ccc-00000000000
 
 // newSpawnFixture is a fixture whose session sid-1 (/tmp/10.sock) leads team
 // uid(1) with one granted root (a temp dir, symlinks evaluated) and the
-// given limit.
+// given limit; the registration poll advances the clock instead of sleeping.
 func newSpawnFixture(t *testing.T, maxMembers int) (*fixture, string) {
 	f := newFixture(t)
+	f.so = &spawnOrigins{fakeOrigins: f.origins, members: map[string]team.Origin{}}
+	f.core.Registry.Register(peersmod.OriginResolverKey, f.so) // a second Module's Init takes it too
+	f.m.origins = f.so
+	f.m.spawnSleep = f.fastSleep
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
