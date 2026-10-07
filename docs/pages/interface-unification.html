@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>介面與通訊整合</title>
+<meta name="description" content="Purdex 介面整合與通訊整合的標竿研究：一套介面語言、兩種底層（terminal／worker）、桌機＋行動，以及讓 Codex 收得到 pdx 訊息的做法。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;600&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#f3f5f7; --paper:#ffffff; --inset:#e9edf1; --line:#d3dae2; --line2:#e4e9ee;
+  --fg:#18212b; --fg2:#55636f; --fg3:#7f8c98;
+  --pdx:#4a57cf; --pdx-soft:#e3e6fa; --pdx-ink:#333f9f;
+  --ok:#2c7a58; --ok-soft:#dff0e6; --ok-ink:#1d5c41;
+  --note:#a86a12; --note-soft:#f7ecd9;
+  --warn:#b8413a; --warn-soft:#f8e3e0;
+  --serif:"Noto Serif TC","Songti TC","PingFang TC",serif;
+  --sans:"Noto Sans TC",-apple-system,BlinkMacSystemFont,"PingFang TC","Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --r:10px; color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1419; --paper:#161c24; --inset:#1d252f; --line:#2a3441; --line2:#222b36;
+    --fg:#e4e9ef; --fg2:#a2aeba; --fg3:#71808e;
+    --pdx:#8b95ee; --pdx-soft:#1e2247; --pdx-ink:#b6bdf6;
+    --ok:#4fb283; --ok-soft:#173226; --ok-ink:#8fd6b3;
+    --note:#e0a34e; --note-soft:#332612;
+    --warn:#ef7a71; --warn-soft:#3a1d1b; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1419; --paper:#161c24; --inset:#1d252f; --line:#2a3441; --line2:#222b36;
+  --fg:#e4e9ef; --fg2:#a2aeba; --fg3:#71808e;
+  --pdx:#8b95ee; --pdx-soft:#1e2247; --pdx-ink:#b6bdf6;
+  --ok:#4fb283; --ok-soft:#173226; --ok-ink:#8fd6b3;
+  --note:#e0a34e; --note-soft:#332612;
+  --warn:#ef7a71; --warn-soft:#3a1d1b; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.72;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto;padding-inline:16px;padding-block:36px 96px}
+@media (min-width:700px){.wrap{padding-inline:24px}}
+a{color:var(--pdx-ink);text-decoration:none;border-bottom:1px solid transparent}
+a:hover{border-bottom-color:currentColor}
+code{font-family:var(--mono);font-size:.84em;background:var(--inset);border:1px solid var(--line2);border-radius:5px;padding:.05em .38em;overflow-wrap:anywhere}
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.6;background:var(--inset);border:1px solid var(--line2);border-radius:var(--r);padding:14px 16px;overflow-x:auto;margin:0 0 14px}
+h1,h2,h3{font-family:var(--serif);font-weight:600;text-wrap:balance;margin:0}
+h1{font-size:32px;line-height:1.25}
+h2{font-size:23px;line-height:1.3;margin-top:56px;margin-bottom:10px;padding-top:18px;border-top:1px solid var(--line)}
+h2 .n{font-family:var(--mono);font-size:14px;color:var(--fg3);margin-right:10px;font-weight:500}
+h3{font-size:16.5px;font-family:var(--sans);font-weight:700;margin-top:26px;margin-bottom:6px}
+p{margin:0 0 12px;max-width:76ch}
+ul,ol{margin:0 0 12px;padding-left:1.4em;max-width:80ch}
+li{margin-bottom:5px}
+li::marker{color:var(--fg3)}
+.eyebrow{font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg3);font-weight:700;font-family:var(--mono)}
+.lede{color:var(--fg2);font-size:16px;max-width:76ch;margin-top:10px}
+.meta{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--fg3)}
+.tag{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 8px;border-radius:999px;font-weight:500;white-space:nowrap}
+.tag.p{background:var(--pdx-soft);color:var(--pdx-ink)}
+.tag.o{background:var(--ok-soft);color:var(--ok-ink)}
+.tag.n{background:var(--note-soft);color:var(--note)}
+.tag.w{background:var(--warn-soft);color:var(--warn)}
+.box{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;margin:18px 0}
+.box.verdict .big{font-family:var(--serif);font-size:19px;line-height:1.5;margin-bottom:10px}
+.box ul,.box p{max-width:none}
+.callout{border-left:3px solid var(--note);background:var(--note-soft);padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:14px}
+.callout.p{border-color:var(--pdx);background:var(--pdx-soft)}
+.callout.o{border-color:var(--ok);background:var(--ok-soft)}
+.callout.w{border-color:var(--warn);background:var(--warn-soft)}
+.callout p:last-child,.callout ul:last-child{margin-bottom:0}
+.callout ul,.callout p{max-width:none}
+.tw{overflow-x:auto;margin:12px 0 16px;border:1px solid var(--line);border-radius:var(--r);background:var(--paper)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;line-height:1.55}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--line2)}
+th{font-size:12px;color:var(--fg2);background:var(--inset);font-weight:700;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+td:first-child{font-weight:600}
+table.dense{font-size:12.8px}
+table.dense td,table.dense th{padding:7px 10px}
+table.comp td:nth-child(1){font-family:var(--mono);font-size:11.5px;color:var(--fg3);font-weight:500;white-space:nowrap}
+table.comp td:nth-child(2){font-weight:700;white-space:nowrap}
+table.comp td{min-width:120px}
+table.comp td:nth-child(1),table.comp td:nth-child(2){min-width:0}
+tr.grp td{background:var(--inset);font-family:var(--mono);font-size:11.5px;letter-spacing:.06em;color:var(--fg2);font-weight:700;padding-block:6px}
+.y,.m,.x{font-family:var(--mono);font-weight:700;margin-right:3px}
+.y{color:var(--ok)} .m{color:var(--note)} .x{color:var(--warn)}
+.grid{display:grid;gap:14px;grid-template-columns:1fr}
+@media (min-width:820px){.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.card h3{margin-top:0}
+.card p,.card ul{font-size:14px}
+.card .k{font-family:var(--mono);font-size:11px;color:var(--fg3);letter-spacing:.08em}
+nav.toc{margin-top:22px;font-size:13.5px;columns:2;column-gap:28px}
+@media (max-width:600px){nav.toc{columns:1}}
+nav.toc a{display:block;padding:2px 0}
+.src{font-size:12.5px;columns:2;column-gap:24px}
+@media (max-width:700px){.src{columns:1}}
+.src li{overflow-wrap:anywhere;break-inside:avoid}
+.axis{display:grid;gap:10px;grid-template-columns:1fr;margin:14px 0}
+@media (min-width:760px){.axis{grid-template-columns:1fr 1fr}}
+.axis .card b{font-family:var(--serif);font-size:17px}
+.pill{display:inline-block;border:1px solid var(--line);background:var(--inset);border-radius:7px;padding:1px 9px;margin:2px 4px 2px 0;font-size:13px}
+.pill.on{border-color:var(--pdx);background:var(--pdx-soft);color:var(--pdx-ink)}
+.small{font-size:13px;color:var(--fg2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="eyebrow">Purdex · 研究筆記 · 介面整合／通訊整合</div>
+<h1>一套介面語言，兩種底層：介面整合與通訊整合的標竿研究</h1>
+<p class="lede">起點：<code>-p</code> 和互動式 terminal 有本質差異。手機端如果能「不放棄 terminal 模式」，對整體更好。所以 Purdex 要的是：不管底層是 terminal 還是 worker，使用者看到的都是同一套介面語言，而且桌機和行動都適用。另外，<code>pdx msg</code> 目前只送得進 Claude Code，送不進 Codex。這頁整理標竿產品怎麼解這兩件事，最後列出待收斂的決策。</p>
+<div class="meta">
+  <span>調研日 2026-10-07～08</span><span>Purdex alpha.581 · main b1bbbe69</span><span>Nexen v0.19.0</span><span>Codex CLI：mlab 0.153.4／最新 stable 0.160.1</span><span>方法：8 支 subagent 讀原始碼＋官方文件，主對話核對 Purdex／Nexen 原始碼</span>
+</div>
+<div class="callout"><p><b>可信度</b>：星數、版本都是 2026-10-07 用 <code>gh</code> 查的。開源產品的元件描述來自原始碼（附 file:line，見各研究原文），閉源產品（Claude、Codex 官方 App、Conductor）只根據官方文件。元件表裡標 <span class="m">△</span> 的是推論或沒有親自驗證的項目。<b>所有下載的程式都沒有執行過。</b></p></div>
+
+<div class="callout p"><p><b>名詞已定案（10-08）</b>：控制模式＝終端機／<b>指揮台 deck</b>／聊天；底層＝終端機／<b>執行體 execution</b>（worker 退出詞彙表）。本頁內文的「新名詞」「room」「worker 底層」請照此對應。</p><p><b>後續</b>：這份研究已經收斂成 <a href="interface-language.html">統一介面語言 v0 設計文件</a> 和 <a href="interface-language-mock.html">可互動的設計稿</a>。</p></div>
+
+<nav class="toc">
+  <a href="#verdict">0 · 結論</a>
+  <a href="#terms">1 · 定案：名詞兩軸與三條原則</a>
+  <a href="#bench">2 · 標竿總表</a>
+  <a href="#lang">3 · 介面語言對照：名詞與能力宣告</a>
+  <a href="#comp">4 · 統一元件清單草案（C01–C25）</a>
+  <a href="#term">5 · terminal 底層怎麼接</a>
+  <a href="#adaptive">6 · 桌機＋行動：一套元件兩種呈現</a>
+  <a href="#chat">7 · chat 的定位（已更正）</a>
+  <a href="#comm">8 · 通訊整合：讓 Codex 收得到 pdx 訊息</a>
+  <a href="#open">9 · 待決策與待驗證</a>
+  <a href="#sources">10 · Sources</a>
+</nav>
+
+<!-- 0 -->
+<h2 id="verdict"><span class="n">0</span>結論</h2>
+<div class="box verdict">
+  <p class="big">標竿產品已經收斂到同一個做法：語意層共用，元件依能力出現，外殼依裝置變形。Purdex 缺的不是一套新介面，而是一份<b>統一的對話模型</b>：兩種底層都輸出到這份模型，Mac App 和 iOS App 都只讀它。</p>
+  <ul>
+    <li><b>介面統一做得到，而且已經有人做出來</b>：
+      <ul>
+        <li>Collie 1.17（10-06）起，agent pane 預設開 Chat 畫面。</li>
+        <li>herdr-web-ui 讓同一個 pane 在 chat 和 terminal 兩種檢視（lens）間切換。</li>
+        <li>Orca 每個分頁都能在 Chat 和終端之間切換。</li>
+        <li>tuios 讓 TUI agent 和 headless agent 共用同一套狀態與 Inbox。</li>
+        <li>Nimbalyst 的「真 CLI 模式」只少了三個元件：plan 核准、todo、背景任務。這跟使用者的原則「terminal 有、worker 沒有的，頂多那個介面出不來」是同一件事。</li>
+      </ul></li>
+    <li><b>Codex：兩種底層會變成同一條 app-server</b>。TUI 用 <code>--remote</code> 接上 app-server，0.157 起也可以由共用 daemon 自動接上。介面、權限、通訊都走這一條。HAPI 已經做到 TUI 和 Web 同時操作同一個 thread。</li>
+    <li><b>Claude Code：沒有公開的同等協定，只能拼</b>：
+      <ul>
+        <li>結構化內容從 transcript 來，狀態和權限從 hook 來，再加上狀態檔。</li>
+        <li>使用者回覆時把字寫進 PTY。這是使用者本人的輸入，不違反「不替使用者打字」的原則。</li>
+        <li>Purdex 已經有 10 個 hook 事件、statusline proxy、完整對話檔渲染（E6）。<b>還缺權限和提問的作答通道，要先做 spike</b>。</li>
+      </ul></li>
+    <li><b>「讀」和「答」分開</b>：
+      <ul>
+        <li>對話串流只負責呈現。權限、提問、計畫固定在<b>輸入框上方的 dock</b>，三種介面共用，terminal 介面也有。Collie 和 T3 都這樣做。</li>
+        <li>答不了的直接說「到終端回答」，例如 CC TUI 的 plan 核准。這是 Claude agent view「peek 答不了就 attach」的規則。</li>
+      </ul></li>
+    <li><b>桌機＋行動</b>：
+      <ul>
+        <li>沒有任何一家讓同一個元件在兩邊長得一樣。大家共用的是語意層：狀態詞彙、事件歸併、工具摘要、待回應請求。</li>
+        <li>iOS App 在另一個 repo，所以<b>語意層最好放在 daemon</b>，兩個 client 只負責畫。</li>
+      </ul></li>
+    <li><b>chat＝對話式介面</b>（10-08 定案，已更正第 7 節）：主角是對話本身，工作過程退到背景；標竿是 agent chat 類產品（Grok Bot、Meta Muse、OpenAI Dots、OpenClaw）。</li>
+    <li><b>通訊</b>：
+      <ul>
+        <li>Codex 走 <code>thread/queue/add</code>，用的是同一條 app-server。不打字；對方忙就排隊、閒著就喚醒；訊息存在 SQLite，不會掉。</li>
+        <li>CC 維持現在的 peer socket，它在 8 月已經成為官方文件化的 cross-session messaging。</li>
+        <li>herdr 的做法是把字打進對方 pane，正是 peer bridge 當初拒絕的路。</li>
+      </ul></li>
+  </ul>
+</div>
+
+<!-- 1 -->
+<h2 id="terms"><span class="n">1</span>定案：名詞兩軸與三條原則</h2>
+<p>使用者 2026-10-07 定案。worker 收斂成 Nexen 的 execution；chat 和另一個新名詞只用來稱呼介面，因為 worker 和 chat 本來就只差在介面。</p>
+<div class="axis">
+  <div class="card"><div class="k">底層（誰在跑 agent）</div>
+    <p><b>terminal</b>：互動式 TUI 跑在 tmux（CC／Codex）</p>
+    <p><b>worker</b>：Nexen execution（<code>claude -p</code> stream-json／<code>codex app-server</code>）</p>
+    <p class="small">E2 定案仍然成立：一個對話同一時間只有一種底層狀態，分別是 terminal、worker、休眠、消失。</p></div>
+  <div class="card"><div class="k">介面（使用者看到什麼）</div>
+    <p><span class="pill">terminal</span>真終端，只有 terminal 底層才有</p>
+    <p><span class="pill on">新名詞（取代 room）</span>完整的結構化紀錄</p>
+    <p><span class="pill on">chat</span>定位見第 7 節</p>
+    <p class="small">後兩者兩種底層都能用，元件依能力出現。</p></div>
+</div>
+<div class="callout p">
+  <p><b>原則一：介面統一，由能力決定顯示什麼</b>。兩種底層用同一套介面語言（同樣的名詞、同樣的元件）。底層有提供的能力，元件就出現；沒提供，元件就不出現。不做降級版，也不討論哪種底層適合哪種使用情境。</p>
+  <p><b>原則二：一套名詞、一套元件，同時適用桌機和行動</b>。每個元件在兩種裝置上各有呈現方式。</p>
+  <p><b>動機</b>：worker 和 chat 當初就是為行動版準備的。但 <code>-p</code> 和 terminal 本質不同，所以手機端最好能不放棄 terminal 模式。Collie 這類標竿都建立在 terminal 底層上，要學它們，介面就得接得上 terminal 底層。</p>
+</div>
+<h3>連帶影響（尚未定案）</h3>
+<ul>
+  <li><b>狀態列三顆鈕</b>（殼層整理 D-下）混了兩個軸：「terminal→worker」其實是換底層（Hand to nex）。照新模型，三顆鈕應該只切換介面，換底層另外做成一個獨立動作。</li>
+  <li><b>「工作區」名詞衝突</b>：Purdex 的 workspace 是一組分頁；業界（Paseo、Orca、Happy）的 Workspace 是一個 cwd 或 worktree。</li>
+</ul>
+<h3>Purdex 現有的零件</h3>
+<div class="tw"><table class="dense">
+<tr><th>零件</th><th>現況</th><th>跟這次的關係</th></tr>
+<tr><td>agent hook</td><td>cc／codex／opencode 各 10 個事件，POST 到 daemon；狀態有 running、waiting、idle、error、clear；有 subagent dots 和工具計時</td><td>terminal 底層的狀態、回合邊界、工具起訖都從這裡來</td></tr>
+<tr><td>statusline proxy</td><td><code>internal/module/agent/context_usage.go</code></td><td>terminal 底層的 context 和成本（C18）</td></tr>
+<tr><td>完整對話檔渲染</td><td>E6 定案：「完整對話檔＋Nexen 資訊補充」</td><td>terminal 底層要讀結構化內容，現成就有</td></tr>
+<tr><td>worker 介面</td><td>room／chat 兩種檢視（<code>mode: 'room' | 'chat'</code>），N2 工具事件、行號 diff、成本 panel</td><td>新介面的起點</td></tr>
+<tr><td>權限通道</td><td>Nexen <code>--permission-prompt-tool stdio</code>（P4）</td><td>只有 worker 底層有</td></tr>
+<tr><td>peer 訊息</td><td>寫進 CC 原生的 inbox socket；Codex 標 <code>deliverable:false</code>；peer bridge 決定不採用打字投遞</td><td>第 8 節</td></tr>
+<tr><td>啟動 Codex</td><td>只用 resume 範本 <code>codex resume {id}</code>，沒有特殊旗標（<code>spa/src/lib/resume-templates.ts:22</code>）</td><td>升到 0.157 以上，應該會自動接上共用 daemon <span class="m">△</span></td></tr>
+</table></div>
+
+<!-- 2 -->
+<h2 id="bench"><span class="n">2</span>標竿總表</h2>
+<p>依原則二分級：<b>同時有桌機和行動版</b>的列為第一級；只做單一平台、但有關鍵設計可借的列為第二級。「terminal 底層」欄看的是它能不能把使用者自己開的互動式 TUI 呈現成結構化介面。</p>
+<h3>第一級：桌機＋行動，CC＋Codex</h3>
+<div class="tw"><table class="dense">
+<tr><th>產品</th><th>★／授權</th><th>最新</th><th>平台</th><th>怎麼接 CC／Codex</th><th>terminal 底層</th><th>最值得借的</th></tr>
+<tr><td><a href="https://github.com/getpaseo/paseo">Paseo</a></td><td>20.0k AGPL</td><td>v0.11.0 10-07</td><td>Expo（iOS／Android／web）＋Electron</td><td>CC SDK；Codex app-server</td><td>只有 hook 給的粗略狀態；import 是接手，不是一起看</td><td>glossary 制度；事件分「生命週期」和「內容項目」兩層；權限、提問、plan 合成一個物件，用 kind 分流；五類狀態聚合</td></tr>
+<tr><td><a href="https://github.com/slopus/happy">Happy</a></td><td>24.0k MIT</td><td>cli-1.2.5 09-22</td><td>RN（手機、web）＋Tauri；2 代桌機另開 repo</td><td>CC 在 local／remote 間切換；Codex app-server</td><td>手機一送訊就關掉 TUI，改用 SDK 接手</td><td>用一個優先序函式，同時驅動清單、狀態列和推播；權限決定後按鈕保留當紀錄</td></tr>
+<tr><td><a href="https://github.com/pingdotgg/t3code">T3 Code</a></td><td>26.0k MIT</td><td>v0.0.45 10-02</td><td>web＋Electron＋Expo</td><td>Agent SDK／app-server／ACP</td><td>只能匯入 transcript</td><td>12 組布林的能力 schema；「Worked for…」回合摺疊；核准和提問都在輸入框上方排隊</td></tr>
+<tr><td><a href="https://github.com/tiann/hapi">HAPI</a></td><td>5.2k AGPL</td><td>v0.30.7 09-15</td><td>PWA＋原生 iOS／Android＋Telegram</td><td>CC 是 PTY 包裝＋JSONL；<b>Codex 共用 app-server＋原生 TUI</b></td><td><b>Codex 可以兩端同時操作</b></td><td>兩層能力宣告（flavor 表＋session 執行期），不可用時寫原因；權限結果以引擎仲裁為準</td></tr>
+<tr><td>Nimbalyst</td><td>1.8k MIT</td><td>v0.80.0 10-05</td><td>桌面＋iOS（對話紀錄用同一份 web 元件）</td><td>SDK＋真 CLI 模式；Codex app-server</td><td><b>CC 真 CLI 模式</b>：PTY＋hook＋狀態檔＋proxy</td><td>窮舉、fail-closed 的分級能力表；TUI 收在「Raw terminal」抽屜，碰到互動選單就自動展開</td></tr>
+<tr><td>Claude 官方</td><td>閉源</td><td>持續</td><td>Desktop、手機、web、CLI agent view</td><td>本體</td><td>Remote Control 會即時鏡像互動 session，經過 Anthropic 雲端</td><td>依狀態分組，每列一句 Haiku 摘要，peek 可以就地回覆；答不了的要 attach</td></tr>
+<tr><td>Codex 官方</td><td>Apache 128k</td><td>持續</td><td>TUI、ChatGPT 桌面、手機</td><td>本體（app-server）</td><td>TUI <code>--remote</code></td><td>權限按鈕對應 app-server 的決策：accept、acceptForSession、decline</td></tr>
+<tr><td>Conductor</td><td>閉源</td><td>0.90.0 10-02</td><td>Mac＋iPhone</td><td>自帶 binary（未公開）</td><td>不行</td><td>手機定位成 review 和 merge；點陣狀態圖示在各處共用</td></tr>
+<tr><td><a href="https://github.com/K9i-0/ccpocket">CC Pocket</a></td><td>1.1k</td><td>10-03</td><td>Flutter 手機／iPad</td><td>CC＋Codex</td><td>—</td><td>總覽卡寫「Needs You · Approve Bash」，可就地核准；按鈕由請求自帶的 <code>availableDecisions</code> 決定</td></tr>
+</table></div>
+<h3>第二級：單一平台，但有關鍵設計</h3>
+<div class="tw"><table class="dense">
+<tr><th>產品</th><th>★</th><th>平台</th><th>看點</th></tr>
+<tr><td><a href="https://github.com/AltanS/collie">Collie</a> 1.17</td><td>1.2k</td><td>PWA</td><td>底層全是 terminal。內容區可切 chat、start、terminal，外框、dock、輸入框共用。讀不到 log 就退回 terminal 並寫明原因。Codex 權限只做一次性的按鈕，「don't ask again」永遠不做成按鈕</td></tr>
+<tr><td><a href="https://github.com/herdrdev/herdr">herdr</a></td><td>42.8k</td><td>終端 multiplexer</td><td>server 持有所有 PTY；畫面規則判讀狀態；socket API。agent 互傳訊息靠打字（第 8 節）</td></tr>
+<tr><td>herdr-web-ui</td><td>602</td><td>web／手機</td><td>同一個 pane 有 chat／terminal 兩種檢視；prompt card 從畫面解析出來；<code>prompt_id</code> 不符就回 409；連線分 interact／observe 兩種角色</td></tr>
+<tr><td><a href="https://github.com/stablyai/orca">Orca</a></td><td>86.9k</td><td>桌面</td><td>每個分頁有 <code>viewMode</code>，可在 terminal 和 chat 間切換。終端線的資料標來源和確認度（「Sent to the agent — not confirmed」）。別的 agent 傳來的訊息靠左加左邊線</td></tr>
+<tr><td><a href="https://github.com/block/buzz">Buzz</a></td><td>35.6k</td><td>桌面</td><td>人和 agent 在同一個頻道；工具細節另外放在 activity feed；<code>VISION_ACTIVITY.md</code> 的設計原則；缺席的元件給具名理由</td></tr>
+<tr><td>tuios</td><td>5.0k</td><td>終端視窗管理器</td><td>TUI 和 headless 共用狀態與 Inbox；每項 metadata 標明由哪個協議提供；狀態來源有排名：report＞osc＞screen＞stall＞detect</td></tr>
+<tr><td>Superset／cmux／emdash</td><td>15k／27.7k／5.9k</td><td>桌面</td><td>真 TUI＋hook，只到「狀態」這一層，沒有結構化內容</td></tr>
+<tr><td>claude-code-viewer／CloudCLI</td><td>1.3k／14k</td><td>web</td><td>即時讀 JSONL（只能看）；列出舊 session 再 resume</td></tr>
+</table></div>
+<div class="callout w"><p><b>警訊與淘汰</b>：coder/agentapi 在 09-13 棄用。它靠螢幕快照切出訊息，只有純文字、沒有工具結構，Coder 自己最後改用 ACP。Omnara 轉型成 managed agents，已經移除手機 App。Vibe Kanban 正在收掉。opcode、Toad、CodexMonitor 已經幾個月沒有更新。VibeTunnel 只是瀏覽器終端，不是 chat。</p></div>
+<h3>截圖</h3>
+<ul class="src">
+<li><a href="https://raw.githubusercontent.com/pingdotgg/t3code/main/apps/marketing/src/assets/app-desktop.webp">T3 Code 桌面</a>：Worked for、changed files、Diff Turn</li>
+<li><a href="https://mintcdn.com/claude-code/HDAmBwgbrZVk0pOt/images/agent-view-light.png">Claude agent view</a>：分組，每列一句摘要</li>
+<li><a href="https://raw.githubusercontent.com/K9i-0/ccpocket/main/apps/mobile/fastlane/screenshots/en-US/03_approval_list.png">CC Pocket 總覽卡核准</a></li>
+<li><a href="https://raw.githubusercontent.com/slopus/happy/main/packages/happy-app/marketing/app-store/en-US/iphone/04-multiplayer.png">Happy 多人聊天</a>：他人的訊息靠左</li>
+<li><a href="https://raw.githubusercontent.com/tiann/hapi/main/.github/pr-assets/pr-truncated-preview-after.jpg">HAPI 指令詳情＋狀態列</a></li>
+<li><a href="https://raw.githubusercontent.com/AltanS/collie/main/assets/ask-question.png">Collie dock 權限卡</a></li>
+<li><a href="https://raw.githubusercontent.com/AltanS/collie/main/assets/dashboard.png">Collie Dashboard</a></li>
+<li><a href="https://raw.githubusercontent.com/Nimbalyst/nimbalyst/main/.github/assets/ai-sessions-dark.webp">Nimbalyst sessions</a></li>
+<li><a href="https://raw.githubusercontent.com/block/buzz/main/docs/assets/screenshots/channel-agents.png">Buzz：agent 在頻道交棒</a></li>
+<li><a href="https://www.conductor.build/changelog/conductor-mobile-0.90.0.png">Conductor mobile</a></li>
+</ul>
+
+<!-- 3 -->
+<h2 id="lang"><span class="n">3</span>介面語言對照：名詞與能力宣告</h2>
+<h3>3.1 名詞</h3>
+<div class="tw"><table class="dense">
+<tr><th>產品</th><th>一件工作（N1）</th><th>一輪（N2）</th><th>檢視模式（N5）</th><th>狀態詞彙（N6）</th></tr>
+<tr><td>Purdex 現況</td><td>對話（主體）／worker</td><td>turn</td><td>terminal／room／chat</td><td>running／waiting／idle／error／clear</td></tr>
+<tr><td>Paseo</td><td>Agent session（禁用 Task／Job／Run）</td><td>turn；插進正在跑的 turn 叫 Steer</td><td>overview／detailed</td><td>五類：needs_input／failed／running／attention／done</td></tr>
+<tr><td>T3 Code</td><td>Thread</td><td>Run（provider 那層叫 Turn）</td><td>只有寬度設定</td><td>Working／Waiting／Approval／Input／Limited／Failed／Done</td></tr>
+<tr><td>Claude 官方</td><td>session；Projects 裡叫 thread</td><td>turn</td><td>Transcript view：Normal／Thinking／Verbose</td><td>Working／Needs input／Idle／Completed／Failed；分組多一個 Ready for review</td></tr>
+<tr><td>Codex 官方</td><td>thread</td><td>turn</td><td>—</td><td>Running／Needs input／Ready／Blocked</td></tr>
+<tr><td>Happy</td><td>Session</td><td>turn（「Worked {d}」）</td><td>Compact Tool Calls（預設關）／Zen mode</td><td>thinking／waiting／permission_required／input_required</td></tr>
+<tr><td>HAPI</td><td>Session</td><td>turn</td><td>Tool Cards：Compact／Detailed</td><td>Running／Permission required／Needs input／Idle</td></tr>
+<tr><td>CC Pocket</td><td>Session</td><td>幾乎不提</td><td>Standard／Performance</td><td>Working／Needs You／Ready，加動詞細節</td></tr>
+<tr><td>Collie</td><td>Pane（推播時叫 agent）</td><td>turn；單一工具叫 step</td><td>Chat view／Terminal view</td><td>needs you／working／idle／done（沒有 error）</td></tr>
+<tr><td>Orca</td><td>Chat／session</td><td>turn</td><td>Terminal chat／Chat UI</td><td>Working／Waiting for input／Needs attention／Done／Failed；看板欄 Needs You</td></tr>
+<tr><td>Nimbalyst</td><td>Session（上一層是 Workstream）</td><td>turn（「Finished in」）</td><td>Files／Split／Agent；Compact Mode</td><td>Awaiting input／Running／Unread</td></tr>
+<tr><td>Buzz</td><td>session（UI 上叫 Activity）</td><td>Turn</td><td>Activity／Raw</td><td>Working／Starting（沒有「等你回應」）</td></tr>
+</table></div>
+<div class="grid c2">
+  <div class="card"><h3>共識</h3><ul>
+    <li><b>Workspace 指 cwd 或 worktree</b>。Subagent、Plan、Approval、Question、Compaction 這幾個詞大家通用。</li>
+    <li><b>需要使用者處理的狀態一定放第一位</b>：Needs you、Needs input、Waiting on you。很多家把「要你回答」和「要你核准」分開（HAPI、Collie、Happy、Nimbalyst）。</li>
+    <li>每一輪結束時顯示「Worked for N」，失敗的那一輪不摺疊。</li>
+    <li>「Ready for review」（做完、還沒看過）和 done 分開，Claude、Collie、T3 都這樣做。</li>
+  </ul></div>
+  <div class="card"><h3>分歧</h3><ul>
+    <li><b>一等單位</b>：Paseo 以 agent session 為主，herdr 系和 Collie 以 pane 為主（agent 只是 pane 的屬性）。</li>
+    <li><b>檢視模式在切什麼</b>：細節多寡（Claude、Paseo、HAPI、Buzz）或底層呈現（Collie、Orca 的 chat／terminal）。沒有人切泡泡和全寬。</li>
+    <li><b>失敗狀態</b>：Collie 和 Buzz 沒有 error 狀態，其他家有。</li>
+    <li><b>一輪叫什麼</b>：T3 叫 Run，其他家都叫 turn。Paseo 明文禁用 Run。</li>
+  </ul></div>
+</div>
+<h3>3.2 能力宣告：五種粒度</h3>
+<p>原則一需要一個機制，讓介面知道「這個元件該不該出現」。標竿產品的做法由粗到細如下：</p>
+<div class="tw"><table class="dense">
+<tr><th>做法</th><th>代表</th><th>形狀</th><th>元件缺席時</th></tr>
+<tr><td>資料驅動</td><td>Paseo</td><td>有 <code>AgentCapabilityFlags</code>，但 UI 幾乎只看資料：modes、models 陣列是空的就不畫</td><td><b>隱藏，不 disable</b>（<code>docs/forms.md</code>）；舊 daemon 不做降級版，只提示更新</td></tr>
+<tr><td>布林</td><td>T3 Code</td><td><code>OrchestrationV2ProviderCapabilities</code>，12 組布林</td><td>有三種處理：隱藏（fork、Plan）、停用並說明（Steer）、降級（steer → queue → 中斷重來）</td></tr>
+<tr><td>列舉</td><td>Orca</td><td><code>steering: inject｜queue</code>、<code>approvalEnforcement: provider｜orca</code></td><td>沒宣告的欄位當成「沒宣稱」，看不懂的值退回最保守的處理</td></tr>
+<tr><td>分級、fail-closed</td><td>Nimbalyst</td><td>窮舉所有 provider，沒有選填欄位；<code>contextReporting: none｜token-counts｜context-window</code></td><td>沒宣告到的 provider 一律當沒有能力</td></tr>
+<tr><td>兩層＋原因</td><td>HAPI、Buzz、Happy</td><td>靜態的 flavor 表＋session 執行期能力；每個欄位都附「不可用原因」</td><td>永久不支援就隱藏（Happy 的理由：「灰掉會被誤以為能開」）；暫時不行就停用並附原因；缺席要給具名理由（Buzz）；「資訊未知」≠「不支援」</td></tr>
+</table></div>
+<div class="callout"><p><b>對 Purdex 的含意</b>：兩種底層的能力差異是<b>結構性的</b>。例如 worker 的背景任務撐不過一輪、CC TUI 的 plan 核准答不了，這些都是永久的，所以預設應該是<b>隱藏</b>。只有「暫時」的狀況（daemon 版本太舊、連線中）才停用並寫原因。Codex 在 terminal 和 worker 底層走同一條 app-server，所以能力差異主要在 CC 這一側。</p></div>
+
+<!-- 4 -->
+<h2 id="comp"><span class="n">4</span>統一元件清單草案（C01–C25）</h2>
+<div class="callout w"><p><b>已過時（10-08）</b>：這張表寫在 mod 實測之前。CC terminal 底層的逐字串流、權限、用量都能透過 Purdex mod 拿到；worker 的背景任務（Nexen N3）與收訊（Nexen peer mailbox）也不是 ✗。最新版本見 <a href="interface-language.html#s4">設計文件 v0.2 §4 事件簿</a>。</p></div>
+<p>「業界共識」欄是把各標竿實際做法歸納後的結果。後三欄是每個元件在 Purdex 兩種底層上的資料來源。<span class="y">✓</span> 表示拿得到（有出處，或 Purdex／Nexen 已經在用）；<span class="m">△</span> 表示推論或還沒驗證；<span class="x">✗</span> 表示拿不到，依原則一這個元件就不出現。Codex 的兩種底層走同一條 app-server，所以合成一欄。</p>
+<div class="tw"><table class="dense comp">
+<tr><th>#</th><th>元件</th><th>業界共識呈現（桌機 → 行動）</th><th>CC · terminal 底層</th><th>CC · worker 底層（<code>-p</code>）</th><th>Codex · 兩底層（app-server）</th></tr>
+<tr class="grp"><td colspan="6">對話內容</td></tr>
+<tr><td>C01</td><td>使用者訊息</td><td>靠右泡泡（各家都一樣）；排隊中、失敗都有標記，失敗可以重送</td><td><span class="y">✓</span>transcript</td><td><span class="y">✓</span>Nexen 事件</td><td><span class="y">✓</span>userMessage item</td></tr>
+<tr><td>C02</td><td>agent 回覆</td><td><b>全寬、不加泡泡</b>的 markdown，滑過才出現操作</td><td><span class="m">△</span>transcript 只有整則訊息，沒有逐字串流（Nimbalyst 用 API proxy 拿逐字，有合規疑慮）</td><td><span class="y">✓</span><code>stream_event</code> 逐字</td><td><span class="y">✓</span>delta 串流</td></tr>
+<tr><td>C03</td><td>思考</td><td>串流時展開「Thinking」，結束後收成「Thought for Ns」；<b>有內容才顯示</b>（Claude、Collie）</td><td><span class="m">△</span>block 在，但大多是空的（實測）</td><td><span class="m">△</span>同左</td><td><span class="y">✓</span>reasoning summary</td></tr>
+<tr><td>C04</td><td>工具呼叫</td><td>一行「圖示或動詞＋對象＋狀態」；<b>桌機原地展開 → 手機開底部抽屜或整頁</b>（Paseo、T3、Happy）</td><td><span class="y">✓</span>transcript 的 tool_use／result；起訖時間由 hook 的 Pre／PostToolUse 提供（Purdex 已有計時）</td><td><span class="y">✓</span>N2 正規化的工具事件</td><td><span class="y">✓</span>commandExecution／fileChange／mcpToolCall 等 item</td></tr>
+<tr><td>C05</td><td>回合摺疊</td><td>連續的工具合成一句「Read 3 files and ran 2 commands」；回合結束時折成「Worked for Xm」；<b>失敗或中斷的回合不折</b>；計畫、subagent、互動工具不合併（HAPI）</td><td><span class="y">✓</span>由 hook 的 UserPromptSubmit／Stop 決定邊界</td><td><span class="y">✓</span>由 execution 的 turn 決定</td><td><span class="y">✓</span>turn started／completed</td></tr>
+<tr><td>C06</td><td>長輸出</td><td>限制高度，附「Show N more lines」；預覽取最後 N 行（Collie）或前 N 行</td><td><span class="y">✓</span>tool_result</td><td><span class="y">✓</span>N2 的 <code>total_lines</code>／<code>truncated</code></td><td><span class="y">✓</span>output delta</td></tr>
+<tr><td>C07</td><td>shell 輸出</td><td>執行中顯示「Running …」並計時；結束標 Ran 或 Failed；exit code 不是 0 才顯示</td><td><span class="m">△</span>Bash 的 tool_result（exit code 格式待查）</td><td><span class="m">△</span>同左</td><td><span class="y">✓</span><code>exitCode</code></td></tr>
+<tr><td>C08</td><td>diff</td><td>桌機用側面板，可以並排 → <b>手機一律單欄、推入整頁</b>；並排是桌機的使用者設定</td><td><span class="y">✓</span>從 Edit／Write 的工具輸入算出</td><td><span class="y">✓</span>N2 的 hunks、行號 diff</td><td><span class="y">✓</span>fileChange／turn diff</td></tr>
+<tr><td>C09</td><td>changed files</td><td>「N changed files +a −d」卡，點了開 diff 面板</td><td><span class="y">✓</span>由 C08 彙總，或由 daemon 讀 git</td><td><span class="y">✓</span>同左</td><td><span class="y">✓</span>同左</td></tr>
+<tr class="grp"><td colspan="6">需要使用者（dock：「讀」和「答」分開）</td></tr>
+<tr><td>C10</td><td>權限</td><td><b>不放進對話串，釘在輸入框上方</b>，多個時顯示 1/N 排隊（T3、Collie、Paseo；CC Pocket 是直接取代輸入框）；手機按鈕 44pt，兩顆主按鈕＋⋯；做完決定後留下紀錄；<b>持久授權不做成按鈕</b>（Collie 對 Codex 的做法）</td><td><span class="m">△</span>PreToolUse hook 回傳 <code>permissionDecision</code>（Nimbalyst 這樣做）；PermissionRequest hook 會不會跟 TUI 對話框搶答，<b>需要 spike</b></td><td><span class="y">✓</span>權限通道 <code>--permission-prompt-tool stdio</code>（P4）</td><td><span class="y">✓</span>server request；多個 client 同時答時由引擎仲裁（HAPI）<span class="m">△</span></td></tr>
+<tr><td>C11</td><td>提問</td><td>佔用輸入框的位置；用數字鍵選；直接打字就是自訂答案；多題時分頁顯示 1/N</td><td><span class="m">△</span>transcript 看得到題目，但從外部作答的通道還沒驗證（Nimbalyst 停用內建版，改走 MCP 版）</td><td><span class="y">✓</span>Purdex exec 模式已有 AskUserQuestion 元件</td><td><span class="m">△</span>待查</td></tr>
+<tr><td>C12</td><td>計畫</td><td>Plan 卡，按鈕有 Approve／Keep planning（可附回饋）／在新 thread 實作</td><td><span class="x">✗</span>ExitPlanMode 只能在 TUI 回答（Nimbalyst 也放棄了）→ 顯示計畫內容，並提示「到終端回答」</td><td><span class="m">△</span>走權限通道</td><td><span class="m">△</span>plan item（T3 有宣告 planning 能力）</td></tr>
+<tr class="grp"><td colspan="6">進度與狀態</td></tr>
+<tr><td>C13</td><td>todo</td><td>輸入框上方顯示「2/5」徽章，點了開抽屜；對話串裡也有 checklist 卡</td><td><span class="m">△</span>transcript 裡有 TodoWrite／Task 工具（Nimbalyst 的真 CLI 模式沒有做）</td><td><span class="y">✓</span>工具事件</td><td><span class="m">△</span>plan updated</td></tr>
+<tr><td>C14</td><td>subagent</td><td>計數 pill「Kicked off 3 subagents · 2 working」，可展開名冊</td><td><span class="y">✓</span>hook 的 SubagentStart／Stop（Purdex 已有 dots）＋sidechain transcript</td><td><span class="m">△</span>有工具事件，但沒有成本和結束時間（spec §9 的 wire ask）</td><td><span class="m">△</span>collab item</td></tr>
+<tr><td>C15</td><td>背景任務</td><td>回合結束後顯示一條橫幅，例如「Running a dev server」，附停止鈕</td><td><span class="m">△</span>背景 shell 的 tool_result 和 task-notification</td><td><span class="x">✗</span>每輪才啟動一次，撐不過一輪</td><td><span class="m">△</span>待查</td></tr>
+<tr><td>C16</td><td>錯誤、中斷</td><td>錯誤要凸顯，不摺疊；紅卡附 Retry；額度用完用另一種顏色；中斷後把 prompt 還原到輸入框（HAPI）</td><td><span class="y">✓</span>hook＋transcript</td><td><span class="y">✓</span>execution 事件</td><td><span class="y">✓</span>turn failed</td></tr>
+<tr><td>C17</td><td>狀態＋一句摘要</td><td>「Working for 1m 2s」計時＋目前在跑的工具；清單每列一句摘要（Claude 用 Haiku，最多每 15 秒更新一次）</td><td><span class="y">✓</span>10 個 hook 事件；<code>claude agents --json</code></td><td><span class="y">✓</span>execution 狀態</td><td><span class="y">✓</span>thread status</td></tr>
+<tr><td>C18</td><td>context、成本</td><td>輸入框旁的 context 環，點開看成本和方案額度；超過 70%／90% 變色</td><td><span class="y">✓</span>statusline proxy＋transcript 的 usage</td><td><span class="y">✓</span>result cost（P-B4 成本 panel）</td><td><span class="y">✓</span>token usage</td></tr>
+<tr class="grp"><td colspan="6">輸入與控制</td></tr>
+<tr><td>C19</td><td>輸入框</td><td><code>/</code> 叫指令、<code>@</code> 選檔；agent 執行中送出時可選排隊（queue）或插話（steer）；停止鈕和送出鈕在同一個位置；<b>觸控裝置上 Enter 不送出</b></td><td><span class="y">✓</span>寫進 PTY（使用者本人的輸入）；中斷＝送 Esc；<span class="m">△</span>執行中排隊靠 TUI 本身</td><td><span class="y">✓</span>開新的一輪；中斷用 control_request</td><td><span class="y">✓</span>turn/start、turn/steer、queue、interrupt</td></tr>
+<tr><td>C25</td><td>模式切換</td><td>輸入框旁的 pill（model、effort、權限模式）；權限模式配固定顏色（HAPI）；沒確認的切換標「not confirmed」（Orca）</td><td><span class="m">△</span>打 slash 指令或按鍵進 PTY，無法確認有沒有生效</td><td><span class="y">✓</span>每一輪的參數</td><td><span class="m">△</span>thread settings</td></tr>
+<tr><td>C24</td><td>附件</td><td>縮圖；手機上可以在圖片上標註（CC Pocket）</td><td><span class="m">△</span>貼進 TUI 的方式待查</td><td><span class="y">✓</span>image block</td><td><span class="m">△</span>待查</td></tr>
+<tr class="grp"><td colspan="6">跨 session</td></tr>
+<tr><td>C20</td><td>通知</td><td>分成完成、權限、提問三種；<b>使用者正在看就不推</b>；從通知能直接回答的，只有二選一的權限和文字回覆</td><td colspan="3"><span class="y">✓</span>由狀態推導，三欄相同</td></tr>
+<tr><td>C21</td><td>清單／triage</td><td>依狀態分組，順序是 需要你＞工作中＞待檢閱＞完成；總覽卡可以就地核准（CC Pocket、Claude peek）</td><td colspan="3"><span class="y">✓</span>由狀態推導；由一個優先序函式同時驅動清單、狀態列、推播（Happy）</td></tr>
+<tr><td>C22</td><td>他人訊息</td><td>靠左，加左邊線，標「Message from X」，可點回來源（Orca、T3）</td><td><span class="y">✓</span>CC 原生的 cross-session 訊息（pdx 已在用）<span class="m">△</span>呈現格式待查</td><td><span class="x">✗</span>兩輪之間沒有行程，peer socket 不存在 <span class="m">△</span>可改由 Nexen 排進下一輪</td><td><span class="y">✓</span><code>thread/queue/add</code>（第 8 節）</td></tr>
+<tr><td>C23</td><td>系統事件</td><td>置中的分隔線，例如 Context compacted（附壓縮前後 tokens）、Context handoff、Switched to remote</td><td><span class="y">✓</span>PreCompact hook＋transcript 的壓縮邊界；交接</td><td><span class="y">✓</span>system 事件</td><td><span class="y">✓</span>compaction item</td></tr>
+</table></div>
+<div class="callout o"><p><b>看這張表會發現</b>：CC terminal 底層最弱的幾項都集中在「需要使用者處理」那一段（C10–C12），加上逐字串流（C02）。前者靠 dock＋「到終端回答」的退路，後者照原則一，沒有就只顯示「Working」。Codex 一欄幾乎全是 ✓ 或 △，沒有 ✗，因為兩種底層走同一條協定。</p></div>
+
+<!-- 5 -->
+<h2 id="term"><span class="n">5</span>terminal 底層怎麼接</h2>
+<p>「把使用者自己開的互動式 TUI 呈現成結構化介面」，業界有七種做法：</p>
+<div class="tw"><table class="dense">
+<tr><th>做法</th><th>代表</th><th>優點</th><th>缺點</th><th>能回覆／答權限嗎</th></tr>
+<tr><td>A 螢幕解析</td><td>agentapi（已棄用）、herdr、Collie 的 prompt grammar</td><td>任何 TUI 都能用</td><td>沒有工具結構；TUI 一改版就壞（Collie 一個 harness 就要 1,766 行 grammar）</td><td>打字可以；權限只能模擬按鍵</td></tr>
+<tr><td>B 讀 transcript</td><td>Happy、claude-code-viewer、Collie、herdr-web-ui</td><td>結構完整，不碰 TUI</td><td>看不到串流中的文字；格式沒有官方文件；權限詢問不在檔案裡</td><td>不行</td></tr>
+<tr><td>C hooks</td><td>Superset、cmux、emdash、Nimbalyst、<b>Purdex</b></td><td>官方介面；CC 和 Codex 的事件名稱已經對齊</td><td>只有事件點，沒有內容</td><td>權限可以（PreToolUse／PermissionRequest）</td></tr>
+<tr><td>D 狀態檔、官方 CLI</td><td><code>~/.claude/sessions/&lt;pid&gt;.json</code>、<code>claude agents --json</code></td><td>狀態判斷最穩</td><td>只有狀態</td><td>不行</td></tr>
+<tr><td>E API 流量觀測</td><td>Nimbalyst 的 proxy</td><td>能拿到逐字串流</td><td>OAuth token 會經過自家 proxy，有合規和穩定性風險</td><td>不行</td></tr>
+<tr><td>F 讓 TUI 成為 server 的 client</td><td><b>Codex <code>--remote</code>／共用 daemon（HAPI）</b>；CC 官方的 Remote Control</td><td>最可靠；兩端可以同時操作；權限由引擎仲裁</td><td>Codex 的 WS 傳輸還是 experimental；CC 版走 Anthropic 雲，協定不公開</td><td>都可以</td></tr>
+<tr><td>G 模式切換</td><td>Happy、HAPI 的 CC</td><td>簡單</td><td>同一時間只有一端能操作，等於把終端搶走</td><td>可以</td></tr>
+</table></div>
+<div class="grid c2">
+  <div class="card"><div class="k">建議 · Codex</div><h3>F：共用 app-server</h3>
+    <ul><li>tmux 裡的 Codex TUI 接上共用 daemon（0.157 起預設）或 <code>--remote unix://</code>，Purdex daemon 也連進同一條 socket。</li>
+    <li>介面（C01–C25）、權限、通訊（第 8 節）都走這一條，<b>terminal 和 worker 對 Codex 來說只差在「thread 是誰開的」</b>。</li>
+    <li>前提：mlab 的 Codex 要從 0.153.4 升級；啟動時不能帶 <code>-c</code>、<code>--profile</code>、<code>--no-daemon</code>，否則會改用 TUI 內建的 server，外部連不進去。</li></ul></div>
+  <div class="card"><div class="k">建議 · Claude Code</div><h3>B＋C＋D：transcript＋hook＋狀態</h3>
+    <ul><li>這三樣 Purdex 都已經有：E6 對話檔渲染、10 個 hook 事件、statusline proxy。</li>
+    <li>回覆：把使用者打的字寫進 PTY。可以參考 Nimbalyst 的做法：bracketed paste，間隔 25ms 再單獨送 Enter。</li>
+    <li>權限：用 PreToolUse hook 回傳 <code>permissionDecision</code>，<b>需要 spike</b>。</li>
+    <li>不建議 A（維護成本太高）和 E（合規風險）。</li></ul></div>
+</div>
+<div class="callout p"><p><b>退回 terminal 的規則</b>：遇到介面答不了的狀況，三家的做法都是讓終端出現：</p>
+<ul>
+  <li>Collie：讀不到 log 就退回 terminal，並寫明原因；退回條件看事件，不看時間。</li>
+  <li>Nimbalyst：TUI 收在「Raw terminal」抽屜裡，碰到互動式選單就自動展開；使用者手動收起後，不會再被輸出撐開。</li>
+  <li>Claude agent view：peek 答不了的就要 attach。</li>
+</ul>
+<p>terminal 底層一定有終端可以退，所以這條規則就是原則一在 terminal 底層的「安全網」。</p></div>
+
+<!-- 6 -->
+<h2 id="adaptive"><span class="n">6</span>桌機＋行動：一套元件兩種呈現</h2>
+<p>查了 Happy、T3、Nimbalyst、HAPI、Conductor、Claude、Codex 七家同時有兩種版本的產品，<b>沒有一家讓同一個元件在兩邊原封不動</b>，大家共用的是語意層。Claude 官方文件寫：「The app is the same for each; they differ in where the work happens.」</p>
+<h3>共通規則</h3>
+<ol>
+  <li><b>語意層一定共用，元件不一定</b>。狀態詞彙、事件歸併、工具摘要、待回應請求都放在純邏輯層，例如 T3 的 <code>client-runtime</code>、HAPI 的 golden fixtures。導航、輸入框、通知這些外殼則用各平台原生的做法。</li>
+  <li><b>換容器，不換導航樹</b>。畫面寬就並排，窄就堆疊。草稿和目前選取放在樹的上層，旋轉或縮放時不會遺失。Nimbalyst 的規範明文禁止依 size class 換導航樹。</li>
+  <li><b>斷點只看可用寬度，不看裝置</b>。高度不參與判斷，因為鍵盤把高度壓縮時不應該改變導航。每個元件有自己的門檻，例如 Happy 是 768／1100，T3 是 720／980，HAPI 是 920。</li>
+  <li><b>輸入方式和寬度分開判斷</b>。觸控（<code>pointer:coarse</code>）改變的是互動：Enter 不送出、可點範圍至少 44、hover 才出現的操作改成常駐、終端加一列特殊鍵。寬度改變的是版面。</li>
+  <li><b>權限和提問在手機上要放大</b>：按鈕 44pt；只露兩顆主按鈕加 ⋯，或全部攤開；提問直接取代輸入框。</li>
+  <li><b>細節移出對話串</b>。桌機在原地展開或開側面板，手機推入整頁或用 sheet。diff 在手機上一律單欄。</li>
+  <li><b>推播只負責把人帶回現場</b>。使用者正在看時不推；能從通知直接答的，只有二選一的權限和文字回覆。狀態指示用同一份快照，依顯示空間決定放多少，例如 Nimbalyst 的選單列放 1 個名稱、鎖定畫面放 3 列、Dynamic Island 放 1 個數字。</li>
+</ol>
+<h3>分歧</h3>
+<ul>
+  <li><b>共用到什麼程度</b>：
+    <ul>
+      <li>Happy 1 代用 React Native 一套程式通吃。</li>
+      <li>Nimbalyst 的對話紀錄是 web 元件，外殼用 SwiftUI。</li>
+      <li>T3 和 HAPI 只共用邏輯。</li>
+      <li><b>Happy 2 代把桌機另開一個 repo，明文禁止做行動適配</b>。這個反例值得注意：做成一套之後，他們又分開了。</li>
+    </ul></li>
+  <li>Live Activity：T3 和 Nimbalyst 有，Happy 和 HAPI 沒有。從通知直接核准：只有 HAPI 真的做到。</li>
+  <li><b>沒有任何一家做「手機預設精簡」的開關</b>。精簡程度寫死在版面常數裡。</li>
+</ul>
+<div class="callout"><p><b>對 Purdex 的含意</b>：Mac App 用 React，iOS App 在另一個 repo，兩邊不可能共用元件程式碼，只能共用語意。所以語意層（狀態詞彙、工具摘要、回合摺疊的歸併、待回應請求、能力宣告）最好<b>在 daemon 正規化</b>：daemon 把兩種底層都轉成同一份對話模型，兩個 client 只負責畫。這也是 Paseo（中性的 <code>AgentStreamEvent</code>）和 HAPI（共用 client contract＋golden fixtures）的做法。</p></div>
+
+<!-- 7 -->
+<h2 id="chat"><span class="n">7</span>chat 的定位（2026-10-08 定案，已更正）</h2>
+<div class="callout w"><p><b>更正</b>：這一節的第一版拿 coding agent 的介面（Happy、T3、CC Pocket）來比較，比錯了對象，得出「沒人用泡泡」的結論也跟著錯。那些產品其實是「紀錄介面」的參考，不是 chat 的。</p></div>
+<p><b>使用者定案：chat＝對話式介面</b>。主角是對話本身：你說一句、它回一句；工作過程退到背景，做事時只有一則會原地更新的進度，想看細節就點開紀錄。chat 的標竿是 <b>agent chat</b> 類產品。多人、多 agent 同房是對話式介面自然容納得下的情境，但不是 chat 的定義。</p>
+<div class="tw"><table class="dense">
+<tr><th>標竿</th><th>是什麼</th><th>值得借的</th></tr>
+<tr><td>Grok Bot</td><td>xAI（SpaceXAI）的常駐「Bot 同事」，2026-08 beta，桌機＋手機</td><td>群組 2–6 個 Bot，沒被 @ 時由 Bot 自己決定誰回；右側常駐 Bot 雲端電腦的縮圖；寄信或發訊息前先出草稿</td></tr>
+<tr><td>Meta Muse</td><td>個人 agent，2026-09，iOS／Android／web＋WhatsApp</td><td><b>頭像下方一行字顯示正在做什麼</b>；點頭像看完整活動紀錄；敏感動作用核准卡</td></tr>
+<tr><td>OpenAI Dots</td><td>常駐 agent，以 Codex harness 演化而來，2026-09-29 DevDay 發表</td><td>iMessage 風格（使用者泡泡染成 dot 的顏色）；委派的工作各自成 thread，對話裡只回「摘要＋連結」；另有 Activity 面板；多人場合只聽 owner</td></tr>
+<tr><td>OpenClaw</td><td>自架 gateway，接 24 個以上訊息平台，39 萬星</td><td>一則會原地更新的進度訊息；做完收成「Worked for 2 分 3 秒 · 2 failed」；多 agent 同房的輪次上限與「沒新東西就不出聲」；看得到核准請求不代表能核准</td></tr>
+</table></div>
+<p>完整的元件規則見 <a href="interface-language.html#s8">設計文件 §8</a>。多人、多 agent 同房的發言規則（Hermes Bot Mode、Claude Tag、Buzz 的防迴圈教訓）列在設計文件 §8 的「延伸」，不在 v1。</p>
+
+<!-- 8 -->
+<h2 id="comm"><span class="n">8</span>通訊整合：讓 Codex 收得到 pdx 訊息</h2>
+<h3>8.1 機制分類</h3>
+<div class="tw"><table class="dense">
+<tr><th>類型</th><th>CC</th><th>Codex TUI</th><th>Codex headless</th><th>能叫醒閒置的 agent</th><th>可靠度與安全</th></tr>
+<tr><td>A 原生 peer socket 推送</td><td><span class="y">✓</span> pdx 現在用的</td><td><span class="x">✗</span></td><td><span class="x">✗</span></td><td><span class="y">✓</span></td><td>高。CC 會標明「這是別的 session，不是使用者」，對方不能代為同意，有 <code>crossSessionInbound</code> 管控</td></tr>
+<tr><td>B app-server API</td><td><span class="x">✗</span></td><td><span class="y">✓</span> 有條件</td><td><span class="y">✓</span> Nexen 已在用</td><td><span class="y">✓</span></td><td>queue 存在 SQLite，不會掉，但屬於 experimental；socket 權限 0600、沒有 token；訊息一律以 user 身分進去</td></tr>
+<tr><td>C hook 在回合邊界注入</td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td>CC 用 <code>asyncRewake</code> 可以；Codex 不行</td><td>API 穩定，但只在回合結束或工具前後才送得進去；additionalContext 會把內容升成 developer 權限</td></tr>
+<tr><td>D MCP Channels 推送</td><td><span class="y">✓</span> research preview</td><td><span class="x">✗</span></td><td><span class="x">✗</span></td><td><span class="y">✓</span></td><td>自建的 channel 要加開發者旗標才能載入</td></tr>
+<tr><td>E MCP tool 拉取＋hook 提醒</td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="x">✗</span></td><td>要靠模型自己記得去查信箱（mcp_agent_mail）</td></tr>
+<tr><td>F PTY／send-keys 打字</td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td>—</td><td><span class="y">✓</span></td><td>會撞到使用者正在打的字，又帶著使用者的完整權限，<b>pdx 已經拒絕</b>。herdr、AWS CAO、Gastown、AgentWorkforce relay 都用這條</td></tr>
+</table></div>
+<div class="callout w"><p><b>herdr 的做法</b>：<code>herdr agent prompt B "…"</code> 對 Codex 有效，代價如下：</p>
+<ul>
+  <li>沒有寄件者標記（#2180 以 not planned 關閉），README 自己承認可以冒充使用者。</li>
+  <li>會吃掉使用者打到一半的字（作者回覆 not a priority）。</li>
+  <li>沒有佇列，也不保證送達。</li>
+</ul>
+<p>它做得細的地方可以借：對方卡在核准框時拒送、確認前景程序仍是對方、送出後 5 秒內沒開始工作就判定失敗。</p></div>
+<h3>8.2 Codex 的候選做法</h3>
+<div class="tw"><table class="dense">
+<tr><th>做法</th><th>前提</th><th>好處</th><th>代價與風險</th></tr>
+<tr><td>① 共用 daemon＋<code>thread/queue/add</code> <span class="tag o">建議</span></td><td>Codex ≥0.157，或手動執行 <code>codex app-server daemon start</code>；從 hook 的 session_id 取得 thread id；初始化時設 <code>experimentalApi</code></td><td>不碰 PTY 和輸入框；對方閒著就叫醒、忙就排隊；使用者按過 Esc 就不送；存在 SQLite，TUI 關掉後 resume 還會送到。<b>跟 Codex 的介面整合是同一條連線</b></td><td>API 還是 experimental；訊息以 user 身分進去，Codex 沒有 CC 那種「來自 peer、不能代為同意」的保證，要用 <code>&lt;pdx_peer from=…&gt;</code> 框住，再加 AGENTS.md 規則補上；同一個 uid 下的程序都能連進這條 socket</td></tr>
+<tr><td>② <code>--remote unix://</code> 接 Purdex 自己管的 app-server</td><td>Purdex 替每個 Codex session 起一個 app-server</td><td>不依賴 0.157 的預設行為，<code>-c</code> 也照樣能帶</td><td>Purdex 要負責 server 的生命週期；server 掛了，TUI 就斷線</td></tr>
+<tr><td>③ hook 在回合邊界收件（補強）</td><td>Purdex 現有的 codex hook 接收端</td><td>API 穩定（0.124 起）；Stop 時還有訊息就回 block＋reason，讓它繼續處理</td><td>叫不醒閒置的 session；additionalContext 等於把 peer 內容升成 developer 權限</td></tr>
+<tr><td>④ MCP 收件匣＋hook 提醒</td><td>—</td><td>最保守</td><td>送沒送到，要看模型記不記得去讀</td></tr>
+</table></div>
+<ul>
+  <li><b>CC</b>：維持 A。cross-session messaging 已經是官方文件寫的介面（v2.1.224），外部 script 可以寫 <code>CLAUDE_CODE_MESSAGING_SOCKET</code>，v2.1.236 起還有 <code>notify_when_idle</code>。</li>
+  <li><b>CC 的 worker 底層</b>：兩輪之間沒有行程，peer socket 不存在，所以收不到 <span class="x">✗</span>。照原則一可以不顯示；如果要補，可以讓 Nexen 把訊息排成下一輪 <span class="m">△</span>。</li>
+</ul>
+
+<!-- 9 -->
+<h2 id="open"><span class="n">9</span>待決策與待驗證</h2>
+<h3>待決策（之後逐項收斂）</h3>
+<ol>
+  <li><b>新名詞</b>（取代 room，指完整的結構化紀錄）。業界用過的稱呼可以參考：Claude 的「Transcript view」、Buzz 的「Activity」、Paseo 的「detailed」、Collie 和 herdr-web-ui 的「Chat view」。</li>
+  <li><b>chat 的定位</b>：<span class="tag o">已定案</span> chat＝對話式介面（第 7 節）。</li>
+  <li><b>統一狀態詞彙</b>：Purdex 現在用 running、waiting、idle、error、clear，業界常見的是 needs you、working、ready for review、done、failed。要不要把「要你回答」和「要你核准」分開？要不要加上「做完、還沒看過」這個狀態？</li>
+  <li><b>能力宣告的粒度</b>：第 3.2 節列的五種。建議「分級＋fail-closed」，再加上具名原因；永久不支援的隱藏，暫時不行的停用並寫原因。</li>
+  <li><b>語意層放哪裡</b>：在 daemon 正規化（建議），還是兩個 client 各自解析。這會決定 iOS App 要吃的 API 形狀。</li>
+  <li><b>dock</b>：權限、提問、計畫固定在輸入框上方，三種介面共用（terminal 介面也有）。採不採用？</li>
+  <li><b>狀態列三顆鈕</b>：改成只切換介面，換底層另外做成一個動作。這會改到殼層整理的 D-下。</li>
+  <li><b>元件清單第一版的範圍</b>：C01–C25 哪些先做。</li>
+  <li><b>Codex 通訊</b>：採用 ①＋③？要不要接受 experimental API？</li>
+</ol>
+<h3>待驗證（spike）</h3>
+<ul>
+  <li><span class="tag n">spike</span> <b>CC TUI 的權限作答</b>：用 PreToolUse 回 <code>permissionDecision</code>，或用 PermissionRequest hook，答案會不會跟 TUI 對話框搶？使用者同時在終端回答會怎樣？</li>
+  <li><span class="tag n">spike</span> <b>CC TUI 的提問作答</b>：AskUserQuestion 能不能從外部作答？Nimbalyst 改走 MCP 版的代價是什麼？</li>
+  <li><span class="tag n">spike</span> <b>Codex 共用 daemon</b>：升級到 0.160 後，tmux 裡的 <code>codex</code> 會不會自動接上 daemon？外部 queue 進去的訊息在 TUI 裡長什麼樣子（原始碼裡 TUI 沒有處理 <code>ThreadQueueChanged</code>）？多個 client 同時答 approval 時怎麼仲裁？</li>
+  <li><span class="tag n">待查</span> CC transcript 裡 Bash exit code 的格式、cross-session 訊息的記錄格式、圖片附件；Codex 的 request_user_input 和背景任務 item。</li>
+</ul>
+
+<!-- 10 -->
+<h2 id="sources"><span class="n">10</span>Sources</h2>
+<p class="small">研究原文（含 file:line）在本次 session 的 scratchpad <code>notes/01–08</code>，重點也記在 memory <code>kickoff_interface_unification.md</code>。原始碼 clone 的基準版本：herdr 4e624cd、Collie c4d9429、Happy 18ae87e、CC Pocket 8354ffd、HAPI 99cd3d4、T3 Code 611132c、Nimbalyst a3dbdb4、Orca 76d1b7b、Buzz da651ad、Codex main 0e1520605。</p>
+<h3>官方文件</h3>
+<ul class="src">
+<li><a href="https://code.claude.com/docs/en/remote-control">CC Remote Control</a> · <a href="https://code.claude.com/docs/en/agent-view">Agent View</a> · <a href="https://code.claude.com/docs/en/desktop">Desktop</a></li>
+<li><a href="https://code.claude.com/docs/en/mobile">CC mobile</a> · <a href="https://code.claude.com/docs/en/claude-projects">Claude Projects</a></li>
+<li><a href="https://code.claude.com/docs/en/hooks">CC hooks</a> · <a href="https://code.claude.com/docs/en/cross-session-messaging">cross-session messaging</a> · <a href="https://code.claude.com/docs/en/channels">channels</a></li>
+<li><a href="https://code.claude.com/docs/en/legal-and-compliance">CC legal &amp; compliance</a></li>
+<li><a href="https://learn.chatgpt.com/docs/app-server">Codex app-server</a> · <a href="https://learn.chatgpt.com/docs/remote-connections">remote connections</a> · <a href="https://learn.chatgpt.com/docs/hooks">hooks</a></li>
+<li><a href="https://learn.chatgpt.com/docs/notifications">Codex notifications</a></li>
+<li><a href="https://herdr.dev/docs/agents/">herdr agents</a> · <a href="https://herdr.dev/docs/socket-api/">socket API</a> · <a href="https://herdr.dev/compare/">compare</a></li>
+<li><a href="https://github.com/tiann/hapi/blob/main/docs/guide/codex-shared-sessions.md">HAPI：Codex shared sessions</a></li>
+<li><a href="https://docs.superset.sh/agent-status">Superset agent status</a> · <a href="https://docs.warp.dev/agent-platform/cli-agents/remote-control/">Warp Remote Control</a></li>
+<li><a href="https://www.conductor.build/changelog">Conductor changelog</a></li>
+</ul>
+<h3>Repo</h3>
+<ul class="src">
+<li><a href="https://github.com/AltanS/collie">AltanS/collie</a> · <a href="https://github.com/herdrdev/herdr">herdrdev/herdr</a></li>
+<li><a href="https://github.com/getpaseo/paseo">getpaseo/paseo</a> · <a href="https://github.com/slopus/happy">slopus/happy</a></li>
+<li><a href="https://github.com/pingdotgg/t3code">pingdotgg/t3code</a> · <a href="https://github.com/tiann/hapi">tiann/hapi</a></li>
+<li><a href="https://github.com/K9i-0/ccpocket">K9i-0/ccpocket</a> · <a href="https://github.com/stablyai/orca">stablyai/orca</a></li>
+<li><a href="https://github.com/block/buzz">block/buzz</a> · <a href="https://github.com/Gaurav-Gosain/tuios">Gaurav-Gosain/tuios</a></li>
+<li><a href="https://github.com/Dicklesworthstone/mcp_agent_mail">mcp_agent_mail</a> · <a href="https://github.com/awslabs/cli-agent-orchestrator">AWS CAO</a></li>
+<li><a href="https://github.com/gastownhall/gastown">Gastown</a> · <a href="https://github.com/coder/agentapi">coder/agentapi</a>（已封存）</li>
+</ul>
+<h3>Purdex 內部</h3>
+<ul class="src">
+<li><a href="collie-vs-purdex.html">Collie × Purdex 對照（2026-09-19）</a></li>
+<li><a href="context-relay.html">Context 接力調研（2026-10-06）</a></li>
+<li><a href="agent-execution-plane.html">Nexen · Type 2 執行平面</a></li>
+<li><code>docs/specs/2026-09-20-worker-pane-views-spec.md</code>（room／chat）</li>
+</ul>
+
+</div>
+</body>
+</html>

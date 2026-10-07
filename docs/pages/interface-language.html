@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>統一介面語言</title>
+<meta name="description" content="Purdex 統一介面語言 v0.4 設計文件：Mac App 與 iOS App、終端機與執行體兩種底層共用的名詞、事件簿、符號語法、元件、用量、dock、燈號、能力宣告與對話模型。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;600&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#f3f5f7; --paper:#ffffff; --inset:#e9edf1; --line:#d3dae2; --line2:#e4e9ee;
+  --fg:#18212b; --fg2:#55636f; --fg3:#7f8c98;
+  --pdx:#6a5a9e; --pdx-soft:#ebe7f6; --pdx-ink:#4f4183;
+  --ok:#2c7a58; --ok-soft:#dff0e6; --ok-ink:#1d5c41;
+  --note:#a86a12; --note-soft:#f7ecd9;
+  --warn:#b8413a; --warn-soft:#f8e3e0;
+  --serif:"Noto Serif TC","Songti TC","PingFang TC",serif;
+  --sans:"Noto Sans TC",-apple-system,BlinkMacSystemFont,"PingFang TC","Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --r:10px; color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1419; --paper:#161c24; --inset:#1d252f; --line:#2a3441; --line2:#222b36;
+    --fg:#e4e9ef; --fg2:#a2aeba; --fg3:#71808e;
+    --pdx:#a596d6; --pdx-soft:#272240; --pdx-ink:#c7bdf0;
+    --ok:#4fb283; --ok-soft:#173226; --ok-ink:#8fd6b3;
+    --note:#e0a34e; --note-soft:#332612;
+    --warn:#ef7a71; --warn-soft:#3a1d1b; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1419; --paper:#161c24; --inset:#1d252f; --line:#2a3441; --line2:#222b36;
+  --fg:#e4e9ef; --fg2:#a2aeba; --fg3:#71808e;
+  --pdx:#a596d6; --pdx-soft:#272240; --pdx-ink:#c7bdf0;
+  --ok:#4fb283; --ok-soft:#173226; --ok-ink:#8fd6b3;
+  --note:#e0a34e; --note-soft:#332612;
+  --warn:#ef7a71; --warn-soft:#3a1d1b; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.72;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding-inline:16px;padding-block:36px 96px}
+@media (min-width:700px){.wrap{padding-inline:24px}}
+a{color:var(--pdx-ink);text-decoration:none;border-bottom:1px solid transparent}
+a:hover{border-bottom-color:currentColor}
+code{font-family:var(--mono);font-size:.84em;background:var(--inset);border:1px solid var(--line2);border-radius:5px;padding:.05em .38em;overflow-wrap:anywhere}
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.6;background:var(--inset);border:1px solid var(--line2);border-radius:var(--r);padding:14px 16px;overflow-x:auto;margin:0 0 14px}
+h1,h2,h3{font-family:var(--serif);font-weight:600;text-wrap:balance;margin:0}
+h1{font-size:32px;line-height:1.25}
+h2{font-size:23px;line-height:1.3;margin-top:56px;margin-bottom:10px;padding-top:18px;border-top:1px solid var(--line)}
+h2 .n{font-family:var(--mono);font-size:14px;color:var(--fg3);margin-right:10px;font-weight:500}
+h3{font-size:16.5px;font-family:var(--sans);font-weight:700;margin-top:26px;margin-bottom:6px}
+p{margin:0 0 12px;max-width:76ch}
+ul,ol{margin:0 0 12px;padding-left:1.4em;max-width:80ch}
+li{margin-bottom:5px}
+li::marker{color:var(--fg3)}
+.eyebrow{font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg3);font-weight:700;font-family:var(--mono)}
+.lede{color:var(--fg2);font-size:16px;max-width:76ch;margin-top:10px}
+.meta{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--fg3)}
+.tag{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 8px;border-radius:999px;font-weight:500;white-space:nowrap}
+.tag.p{background:var(--pdx-soft);color:var(--pdx-ink)}
+.tag.o{background:var(--ok-soft);color:var(--ok-ink)}
+.tag.n{background:var(--note-soft);color:var(--note)}
+.tag.w{background:var(--warn-soft);color:var(--warn)}
+.box{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;margin:18px 0}
+.box.verdict .big{font-family:var(--serif);font-size:19px;line-height:1.5;margin-bottom:10px}
+.box ul,.box p{max-width:none}
+.callout{border-left:3px solid var(--note);background:var(--note-soft);padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:14px}
+.callout.p{border-color:var(--pdx);background:var(--pdx-soft)}
+.callout.o{border-color:var(--ok);background:var(--ok-soft)}
+.callout.w{border-color:var(--warn);background:var(--warn-soft)}
+.callout p:last-child,.callout ul:last-child{margin-bottom:0}
+.callout ul,.callout p{max-width:none}
+.tw{overflow-x:auto;margin:12px 0 16px;border:1px solid var(--line);border-radius:var(--r);background:var(--paper)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;line-height:1.55}
+th,td{text-align:left;vertical-align:top;padding:8px 11px;border-bottom:1px solid var(--line2)}
+th{font-size:12px;color:var(--fg2);background:var(--inset);font-weight:700;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+td:first-child{font-weight:600}
+tr.grp td{background:var(--inset);font-family:var(--mono);font-size:11.5px;letter-spacing:.06em;color:var(--fg2);font-weight:700;padding-block:6px}
+.y,.m,.x{font-family:var(--mono);font-weight:700;margin-right:3px}
+.y{color:var(--ok)} .m{color:var(--note)} .x{color:var(--warn)}
+.grid{display:grid;gap:14px;grid-template-columns:1fr}
+@media (min-width:820px){.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.card h3{margin-top:0}
+.card p,.card ul{font-size:14px}
+.card .k{font-family:var(--mono);font-size:11px;color:var(--fg3);letter-spacing:.08em}
+nav.toc{margin-top:22px;font-size:13.5px;columns:2;column-gap:28px}
+@media (max-width:600px){nav.toc{columns:1}}
+nav.toc a{display:block;padding:2px 0}
+.small{font-size:13px;color:var(--fg2)}
+.cta{display:inline-block;margin-top:6px;padding:8px 14px;border-radius:8px;background:var(--pdx);color:#fff;font-weight:700;font-size:14px;border:none}
+.cta:hover{border:none;filter:brightness(1.08)}
+.status{display:inline-block;font-family:var(--mono);font-size:11px;padding:0 7px;border-radius:5px;border:1px solid var(--line)}
+/* glyph samples */
+.sample{background:#0e0e1f;color:#e0e0e0;border-radius:var(--r);padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.7;overflow-x:auto;margin:10px 0 14px;border:1px solid #2a2a44;white-space:pre-wrap;font-variant-ligatures:none}
+.sample .u{display:block;white-space:normal;background:#1d1b36;border:1px solid #34305a;border-radius:6px;padding:6px 10px;margin:4px 0 8px;font-family:var(--sans)}
+.sample .u b{color:#b9aee6;font-weight:600;font-size:11.5px}
+.sample .d{color:#8f8fa8}.sample .o{color:#e5a35a}.sample .r{color:#e06c75}.sample .g{color:#7ec699}.sample .gr{color:#6b7280}.sample .a{color:#9a8ad0}
+.sample .ind{padding-left:1.6em;display:block;color:#a6a6b8}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+
+<div class="eyebrow">Purdex · 設計文件 · 統一介面語言 v0.4</div>
+<h1>統一介面語言：一套名詞與元件，兩種底層、兩個 App</h1>
+<p class="lede">這份文件定義 Purdex 的 Mac App 和 iOS App 共用的介面語言：名詞、符號語法、元件、用量、dock、退回終端的規則、能力宣告，以及 daemon 要提供的對話模型。終端機底層（TUI 在 tmux）和執行體底層（Nexen execution）都用同一套；底層提供了某項能力，對應的元件才會出現。</p>
+<div class="meta">
+  <span>v0.4 · 2026-10-08</span><span>統籌 mlab/purdex-73（ref _3fj93m）</span><span>Purdex alpha.581 · Nexen v0.19.0 · CC 2.1.292 · iOS 0.5.6</span><span>狀態：§17 全部定案；iOS 確認改動幅度中</span>
+</div>
+<p><a class="cta" href="interface-language-mock.html">開啟設計稿（介面／裝置／底層／agent／mod／情境都能切換）→</a></p>
+<div class="callout p"><p><b>怎麼讀這份文件</b>：<span class="tag o">定案</span> 是使用者已經決定的；<span class="tag p">建議</span> 是統籌的提案，等使用者定案；<span class="tag n">待驗證</span> 是還需要實測的。研究依據放在 <a href="interface-unification.html">介面與通訊整合研究頁</a>。</p>
+<p><b>v0.2 改了什麼</b>（依使用者 10-08 的回饋）：</p>
+<ul>
+  <li>iOS 已有的決定不再當成限制，合適的才挪用（§1）。</li>
+  <li>新增<b>事件簿</b>（§4），並實測 Purdex mod 能捕捉的事件：CC 終端機底層從此拿得到逐字串流、權限判斷和用量推送。</li>
+  <li>新增<b>用量與 statusline</b>（§7）。</li>
+  <li>更正執行體底層兩項：背景任務由 Nexen N3 提供；收訊由 Nexen 的 peer mailbox 喚醒。</li>
+</ul>
+<p><b>v0.3 改了什麼</b>：</p>
+<ul>
+  <li>名詞定案：控制模式是終端機／<b>指揮台 deck</b>／聊天；底層是終端機／<b>執行體 execution</b>；worker 退出詞彙表。</li>
+  <li>執行體也用 mod（§4.4）。</li>
+  <li>新增燈號 v2（§12）：16 種不準的情況和修法。</li>
+</ul>
+<p><b>v0.4 改了什麼</b>（§17 全部定案）：</p>
+<ul>
+  <li>燈號：黃＝等你回答（不分回答／核准）；不加待檢閱、失聯；優先序 失敗 ＞ 等你回答 ＞ 工作中 ＞ 閒置；workflow／monitor／排程喚醒改成 agent 圖示左上角的一顆符號；燈號 v2 全部併入 U1（§12）。</li>
+  <li>Mac App 在指揮台和聊天畫 dock，終端機不畫（§8）；狀態列三顆鈕只換畫面，換底層另一顆鈕（§15）。</li>
+  <li>mod 落地時程與分期定案；通訊線放最後（§16）。更正：mlab 已經裝好 mod（alpha.586）。</li>
+</ul></div>
+
+<nav class="toc">
+  <a href="#s0">0 · 摘要</a>
+  <a href="#s1">1 · 原則；從 iOS 挪用的設計</a>
+  <a href="#s2">2 · 名詞</a>
+  <a href="#s3">3 · 架構：語意層在 daemon</a>
+  <a href="#s4">4 · 事件簿：每項資料從哪裡來</a>
+  <a href="#s5">5 · 指揮台：符號語法</a>
+  <a href="#s6">6 · 元件清單</a>
+  <a href="#s7">7 · 用量與 statusline</a>
+  <a href="#s8">8 · dock：需要你的事</a>
+  <a href="#s9">9 · 退回終端的規則</a>
+  <a href="#s10">10 · 聊天介面</a>
+  <a href="#s11">11 · 桌機與行動</a>
+  <a href="#s12">12 · 狀態詞彙與燈號 v2</a>
+  <a href="#s13">13 · 能力宣告</a>
+  <a href="#s14">14 · 對話模型（資料契約草案）</a>
+  <a href="#s15">15 · 跟既有定案的關係</a>
+  <a href="#s16">16 · 交付物、流程與分期</a>
+  <a href="#s17">17 · 決策紀錄</a>
+</nav>
+
+<!-- 0 -->
+<h2 id="s0"><span class="n">0</span>摘要</h2>
+<div class="box verdict">
+  <p class="big">控制模式有三種：<b>終端機</b>、<b>指揮台</b>、<b>聊天</b>。daemon 把兩種底層都正規化成同一份<b>對話模型</b>，Mac App 和 iOS App 都只負責畫。CC 的資料以 <b>Purdex mod</b> 為主要來源（終端機底層；執行體底層也可以用，需 Nexen 配合），兩種底層的 CC 送出同一套事件。</p>
+  <ul>
+    <li><b>mod 補齊了 CC 終端機底層</b>（§4，2.1.292 實測）：
+      <ul>
+        <li><code>turn.step</code> 給逐字串流：文字、工具參數、thinking 的 chunk 都有，但 thinking 的內容是空的。</li>
+        <li><code>tool.call</code> 給工具的起訖和結果，<code>tool.check</code> 給權限判斷。</li>
+        <li><code>session.measure</code> 在用量一變就推：context、5 小時、7 天、成本。</li>
+        <li><code>session.append</code> 涵蓋對話裡新增的每一列。</li>
+        <li>寫入可以走 <code>$.prompt.submit</code>，不必打字。</li>
+      </ul>
+      transcript、hook、statusline 降成「沒有 mod 時」的退路。</li>
+    <li><b>用量是正式元件</b>（§7）：model、effort、context、5 小時與 7 天額度、成本。桌機放在狀態列；手機放在輸入框上方一條，點開是抽屜。</li>
+    <li><b>指揮台</b>採用 Collie 式「從 terminal 轉化的語言」。iOS 的 chat-v2 已經是它的現況版，Mac App 的 room 也是同一個方向。</li>
+    <li><b>聊天＝對話式介面</b>：主角是對話，工作過程退到背景。標竿是 agent chat 類產品。</li>
+    <li><b>燈號 v2</b>（§12）：現在的 16 種不準情況中，11 種可以靠 mod 事件、序號和心跳修掉，另外 3 種要改 daemon 和 SPA 的聚合與重連。</li>
+    <li><b>dock</b>：提問、核准、計畫放在輸入列上方；指揮台和聊天畫，終端機模式只顯示一條提示列（§8）。資料通道是 P8a、P8b（CC 終端機）、Nexen 權限通道（執行體）、app-server（Codex）。</li>
+    <li><b>決策紀錄</b>（§17）：使用者 10-08 已全部定案，下一步轉成 <code>docs/specs/</code> 的正式 spec，從 U1 開始。</li>
+  </ul>
+</div>
+
+<!-- 1 -->
+<h2 id="s1"><span class="n">1</span>原則；從 iOS 挪用的設計</h2>
+<div class="grid c3">
+  <div class="card"><div class="k">原則一 <span class="tag o">定案</span></div><h3>介面統一，由能力決定</h3><p>兩種底層用同一套名詞和元件。底層有提供某項能力，對應的元件才出現；不做降級版，也不討論哪種底層適合哪種情境。</p></div>
+  <div class="card"><div class="k">原則二 <span class="tag o">定案</span></div><h3>一套元件，同時給桌機和行動</h3><p>每個元件在兩種裝置上各有一種呈現。共用的是語意，不是程式碼。</p></div>
+  <div class="card"><div class="k">原則三 <span class="tag o">定案</span></div><h3>從 terminal 轉化而來</h3><p>指揮台採用 Collie 式的語言：CC 風格的符號，加上類別詞正規化。Codex 也照這套呈現。</p></div>
+</div>
+<p><span class="tag o">定案</span> <b>以整套設計的統一為主</b>。iOS 已經規劃好、而且合適的部分挪過來用，但它不是限制。</p>
+<div class="tw"><table>
+<tr><th>iOS 的設計</th><th>處理</th><th>理由</th></tr>
+<tr><td>只用手機檢視，不搬 session</td><td><span class="tag o">挪用</span></td><td>跟「介面不改變底層」的原則一致</td></tr>
+<tr><td>需要人回應的事件推給所有 client，任何一邊回答後全部關閉</td><td><span class="tag o">挪用</span></td><td>跟 P8a 的分流同形</td></tr>
+<tr><td>全寬的「你」框、不加泡泡、7 類工具、≥3 步摺疊、狀態槽、輸入列上方的回答卡</td><td><span class="tag o">挪用</span></td><td>就是指揮台的語法（§5）</td></tr>
+<tr><td>權限只給「允許」和「拒絕」</td><td><span class="tag o">挪用</span></td><td>Collie 也這樣做：持久授權不做成按鈕</td></tr>
+<tr><td>送出時有 3 秒緩衝，使用者看不到；停止鈕和送出鈕共用位置</td><td><span class="tag p">挪用，換通道</span></td><td>「反悔窗口」的體驗保留。有 mod 時改走 <code>$.prompt.submit</code>，不必打字</td></tr>
+<tr><td>多行送出用 LF、不用 bracketed paste；按鍵規則（數字、→、ESC）</td><td><span class="tag n">只當退路</span></td><td>這些是「打字進終端」這條通道的實測事實，只在沒有 mod 時用得到</td></tr>
+<tr><td>iOS 16（iPhone 8）</td><td>iOS 端的實作限制</td><td>不影響介面語言</td></tr>
+</table></div>
+
+<!-- 2 -->
+<h2 id="s2"><span class="n">2</span>名詞</h2>
+<div class="tw"><table>
+<tr><th>名詞</th><th>意思</th><th>狀態</th></tr>
+<tr class="grp"><td colspan="3">底層：誰在跑 agent</td></tr>
+<tr><td>終端機 terminal</td><td>互動式 TUI 跑在 tmux（CC、Codex）</td><td><span class="tag o">定案</span></td></tr>
+<tr><td>執行體 execution</td><td>Nexen 的 execution（<code>claude -p</code>、<code>codex app-server</code>）。<b>worker 一詞退出詞彙表</b>，程式裡的舊 key 等 wire 改版時一起改</td><td><span class="tag o">定案</span></td></tr>
+<tr class="grp"><td colspan="3">控制模式：使用者怎麼看、怎麼操作</td></tr>
+<tr><td>終端機 terminal</td><td>真終端（xterm.js、SwiftTerm）。只有終端機底層才有</td><td><span class="tag o">定案</span></td></tr>
+<tr><td><b>指揮台</b> deck</td><td>看 agent 做事、也指揮它的模式，以「做了什麼」為主角。取代 room（指揮室）、Worker，以及 iOS 的「對話模式」</td><td><span class="tag o">定案</span></td></tr>
+<tr><td><b>聊天</b> chat</td><td>以「對話」為主角的介面，工作過程退到背景</td><td><span class="tag o">定案</span>（定義）</td></tr>
+<tr class="grp"><td colspan="3">內容與狀態</td></tr>
+<tr><td>對話</td><td>一個 session 的主體（E1）。<b>只當實體名，不當介面名</b></td><td><span class="tag o">定案</span>（E1）</td></tr>
+<tr><td>回合 turn</td><td>使用者送出一則訊息，到 agent 停下來為止</td><td><span class="tag p">建議</span></td></tr>
+<tr><td>步驟 step</td><td>一次工具呼叫，加上它的結果</td><td><span class="tag p">建議</span></td></tr>
+<tr><td>需要你</td><td>等待使用者處理的事（提問、核准、計畫），放在 dock 裡</td><td><span class="tag p">建議</span></td></tr>
+<tr><td>用量</td><td>model、effort、context、5 小時與 7 天額度、成本</td><td><span class="tag p">建議</span></td></tr>
+</table></div>
+<div class="callout"><p><b>為什麼是「指揮台 deck」</b>（10-08 使用者從十個候選中選定）：terminal 和 chat 都是在講「用什麼方式操作」，Worker 卻是「做事的人」，詞性不一致；Work 也不夠貼。Deck 是艦上的指揮甲板，貼近「看它做事、也指揮它」的控制模式，中文「指揮台」也跟原本的「指揮室」接得上。</p>
+<p><b>不要使用的同義詞</b>：worker、room、指揮室、對話模式、紀錄介面都統一叫「指揮台」；「對話」只當實體名（E1）；「工作區」只指 Purdex 的分頁群組。</p></div>
+
+<!-- 3 -->
+<h2 id="s3"><span class="n">3</span>架構：語意層在 daemon</h2>
+<pre>  CC · 終端機底層                             執行體底層
+  ──────────────────                         ──────────
+  CC TUI ─┬─ Purdex mod（主）── 事件 ──┐       CC  -p ── Nexen 事件（stream-json、N2、N3）
+          └─ transcript／hook／statusline（沒有 mod 時的退路）
+  Codex TUI ── 共用 app-server ────────┤       Codex ─── app-server
+                                       ▼            ▼
+                     ┌──────────────────────────────────────┐
+                     │ daemon：對話模型（語意層）                │
+                     │  回合／項目／步驟（7 類）／串流 delta        │
+                     │  需要你（dock）／用量／能力宣告             │
+                     └──────────────────┬───────────────────┘
+                     snapshot＋增量（HTTP）＋事件（WS）
+                       ┌────────────────┴───────────────┐
+                    Mac App（React）                 iOS App（SwiftUI）</pre>
+<ul>
+  <li><b>為什麼放在 daemon</b>：React 和 SwiftUI 不可能共用元件程式碼，能共用的只有語意。iOS 現在自己解析 jsonl，它也表示 daemon 有正規化模型後就改接。</li>
+  <li><b>daemon 負責正規化</b>：工具歸類成 7 類、判斷狀態（含「已拒絕」）、算 diff、統計輸出量、切出回合邊界、歸屬子 agent、組串流 delta、整理用量、產生能力宣告。</li>
+  <li><b>client 負責呈現</b>：呈現規則寫在這份文件，兩邊各自實作，再用 golden fixtures 驗證兩邊畫出來的結構一致。</li>
+</ul>
+
+<!-- 4 -->
+<h2 id="s4"><span class="n">4</span>事件簿：每項資料從哪裡來</h2>
+<h3>4.1 mod 實測（CC 2.1.292）</h3>
+<p>在 scratchpad 寫一個只負責記錄的拋棄式 mod，用 <code>claude -p --plugin-dir</code> 跑兩個小提示（一個呼叫 Bash，一個要求長思考），記下實際收到的事件：</p>
+<div class="tw"><table>
+<tr><th>事件</th><th>實際收到的</th><th>補上什麼</th></tr>
+<tr><td><code>turn.step</code>（串流）</td><td>第 1 步：<code>thinking</code> 3 個、<code>tool</code> 1 個、<code>input</code> 6 個（工具參數邊產生邊送）、<code>stop</code>。第 2 步：<code>text</code> <b>21 個 chunk</b>，共 138 字。另外還帶 model（<code>claude-opus-5-5</code>）、effort（<code>xhigh</code>），子 agent 時帶 <code>agentId</code></td><td><b>逐字串流</b>（以前標成「transcript 只有整則」的那項）、工具參數的串流、目前用哪個 model 和 effort</td></tr>
+<tr><td><code>thinking</code> chunk</td><td>有 chunk，<b>但 text 是空字串</b>（thinkLen=0）</td><td>拿得到「正在思考、想了多久」，拿不到思考的內容。這是 API 端的行為，mod 也拿不回來</td></tr>
+<tr><td><code>tool.call</code></td><td><code>{tool, tool_use_id, command, description}</code>；<code>await next(e)</code> 拿到結果 <code>{result, text, isReadOnly}</code>，花了 1484ms</td><td>工具起訖、輸入、結果、耗時；可以攔截（P8a 的分流就是這樣做的）</td></tr>
+<tr><td><code>tool.check</code></td><td><code>{decision: "allow", rule: "Bash(echo:*)"}</code></td><td>權限判斷，還能知道是哪一條規則放行的。P8b 用它在介面回答權限</td></tr>
+<tr><td><code>session.measure</code></td><td><b>數字一變就推</b>：<code>context {tokens: 42612, window: 1000000, percent: 4}</code>、<code>rateLimits [{five_hour, percentUsed: 34, resetsAt}, {seven_day, …}]</code>、<code>cost</code>，另附 <code>changed</code> 標出哪幾項變了</td><td><b>用量</b>（§7），而且是推送，不用輪詢</td></tr>
+<tr><td><code>turn.start</code>／<code>turn.complete</code></td><td>turnId、使用者文字；結束原因 <code>answer</code>／<code>aborted</code>／<code>refusal</code>／<code>error</code>，以及 usage（含 cache tokens）</td><td>精確的回合邊界、中斷、失敗</td></tr>
+<tr><td><code>session.append</code></td><td>每一列都會經過，並標出來源：<code>prompt</code>、<code>response</code>、<code>tool-result</code>、<code>attachment</code>、<code>hook-context</code>、<code>notice</code>（另有 <code>delivery</code>、<code>compaction</code>、<code>command</code>），帶 uuid 和子 agent 的 id</td><td>完整、即時、結構化的紀錄，比 tail transcript 早，也不用自己解析格式</td></tr>
+</table></div>
+<p class="small">實測是在 <code>-p</code> 模式下做的。mod 本來就是為互動式 TUI 設計的，P8a 也已經在互動式 session 裡用 <code>tool.call</code>。互動式下的事件順序和延遲，會在 U1 的驗收時再量一次 <span class="tag n">待驗證</span>。</p>
+
+<h3>4.2 其他 mod 能力（型別定義有，尚未實測）</h3>
+<ul>
+  <li><code>session.receive</code>：收到其他 agent 的訊息時觸發（peer、relay、Remote Control）。<code>session.compact</code>、<code>session.end</code>（含 <code>/clear</code>）、<code>session.attach</code>／<code>detach</code>（有哪些介面接上來）。</li>
+  <li><b>寫入</b>：
+    <ul>
+      <li><code>$.prompt.submit</code>：閒置時開一個新回合，不打字。</li>
+      <li><code>$.prompt.fill</code>：把文字填進輸入框。</li>
+      <li><code>$.turn.abort</code>：中斷。</li>
+      <li><code>$.session.append</code>：在執行中的回合插一列使用者看不到、但模型讀得到的訊息，可以拿來插話。</li>
+      <li><code>$.command.run</code>：執行 slash 指令，例如切換 model 或模式。</li>
+    </ul></li>
+  <li><b>計畫</b>：ExitPlanMode 也是一個 <code>tool.call</code>，可以照 P8a 對 AskUserQuestion 的做法，讓原生對話框和遠端答案同時等，先答的生效 <span class="tag n">待驗證</span>。</li>
+  <li><b>傳輸</b>：<code>$.http.fetch(url, {socketPath})</code> 能透過 Unix socket 打到本機 daemon。逐字 chunk 要批次送，例如每 100–200ms 或每一步結束送一次，不要每個 chunk 都起一個行程（<code>$.process.run</code> 只留給低頻的指令）。</li>
+</ul>
+
+<h3>4.3 資料來源總表</h3>
+<p>同一項資料在每種組合下從哪裡來。<b>粗體</b>是主要來源，括號裡是退路。</p>
+<div class="tw"><table>
+<tr><th>資料</th><th>CC · 終端機（有 mod）</th><th>CC · 終端機（沒有 mod）</th><th>CC · 執行體</th><th>Codex（兩種底層）</th></tr>
+<tr><td>使用者訊息</td><td><b>turn.start、session.append</b></td><td>transcript</td><td><b>Nexen</b></td><td><b>userMessage item</b></td></tr>
+<tr><td>agent 文字</td><td><b>turn.step 逐字</b></td><td>transcript 整則</td><td><b>stream_event 逐字</b></td><td><b>delta</b></td></tr>
+<tr><td>思考</td><td>turn.step（有 chunk，沒內容）</td><td>transcript（多半是空的）</td><td>同左</td><td><b>reasoning summary</b></td></tr>
+<tr><td>步驟</td><td><b>tool.call 起訖＋turn.step 參數串流</b></td><td>transcript＋hook 計時</td><td><b>N2</b></td><td><b>item</b></td></tr>
+<tr><td>回合邊界</td><td><b>turn.start／turn.complete</b></td><td>hook UserPromptSubmit／Stop</td><td><b>Nexen turn</b></td><td><b>turn started／completed</b></td></tr>
+<tr><td>子 agent</td><td><b>agentId（step、tool.call、append）</b></td><td>sidechain＋hook</td><td>N2（沒有成本）</td><td>collab item <span class="tag n">待驗證</span></td></tr>
+<tr><td>todo</td><td><b>tool.call TodoWrite</b></td><td>transcript</td><td><b>N2</b></td><td><b>plan updated</b></td></tr>
+<tr><td>背景任務</td><td><b>tool.call＋session.append 的 task-notification</b></td><td>transcript</td><td><b>N3 task 事件、/tasks</b></td><td><span class="tag n">待驗證</span></td></tr>
+<tr><td>其他 agent 的訊息</td><td><b>session.receive</b>（CC 原生 inbox）</td><td>transcript</td><td><b>Nexen peer mailbox</b>（v0.19，預設關閉；Purdex 尚未接上）</td><td><b>thread/queue/add</b></td></tr>
+<tr><td>系統事件</td><td><b>session.compact／append(compaction、notice)</b></td><td>PreCompact hook＋transcript</td><td><b>system 事件</b></td><td><b>compaction item</b></td></tr>
+<tr><td>用量</td><td><b>session.measure（推送）</b></td><td>statusline proxy</td><td><b>result＋rate_limit_event＋quota</b></td><td>token usage（額度 <span class="tag n">待驗證</span>）</td></tr>
+<tr><td>提問</td><td><b>P8a 分流</b></td><td>只能在終端回答</td><td><b>Nexen 權限通道</b></td><td><span class="tag n">待驗證</span></td></tr>
+<tr><td>核准</td><td><b>tool.check（P8b）</b></td><td>只能在終端回答</td><td><b>Nexen 權限通道</b></td><td><b>server request</b></td></tr>
+<tr><td>計畫</td><td>tool.call ExitPlanMode <span class="tag n">待驗證</span></td><td>只能在終端回答</td><td>權限通道 <span class="tag n">待驗證</span></td><td>plan item <span class="tag n">待驗證</span></td></tr>
+<tr><td>送出</td><td><b>$.prompt.submit</b></td><td>按鍵（iOS 的規則）</td><td><b>開新回合</b></td><td><b>turn/start</b></td></tr>
+<tr><td>插話</td><td>$.session.append <span class="tag n">待驗證</span></td><td>（排在回合之後）</td><td>—</td><td><b>turn/steer</b></td></tr>
+<tr><td>中斷</td><td><b>$.turn.abort</b></td><td>送 Esc</td><td><b>interrupt</b></td><td><b>turn/interrupt</b></td></tr>
+<tr><td>模式、model</td><td>turn.step 讀得到；$.command.run 可以切 <span class="tag n">待驗證</span></td><td>statusline 讀得到；切換無法確認</td><td><b>每回合的參數</b></td><td>thread settings <span class="tag n">待驗證</span></td></tr>
+</table></div>
+<div class="callout"><p><b>mod 的前提和風險</b>：</p>
+<ul>
+  <li>mod 要已經載入。mlab 已經用 P5b 的 <code>pdx setup --agent cc</code> 全域安裝（10-08 起是 alpha.586）；a26 還沒確認。沒裝的機器走 transcript＋hook 退路。</li>
+  <li>用 <code>--safe-mode</code> 開的、或在安裝之前就開的 session，沒有 mod，這時退回 transcript＋hook。</li>
+  <li>mod 的 API 是 early access，會隨版本變動：用 <code>$.session.version()</code> 確認版本，並在 hello 時回報自己的能力。</li>
+  <li>Codex 沒有 mod，Codex 走 app-server。CC 的執行體本來就有 Nexen 事件；加上 mod 則是為了跟終端機底層共用同一套事件（§4.4）。</li>
+</ul></div>
+
+<h3>4.4 執行體也用 mod <span class="tag o">定案（方向）</span></h3>
+<ul>
+  <li><b>可行</b>：上面的實測本身就是用 <code>claude -p --plugin-dir</code> 跑的，headless 模式一樣會載入 mod。Nexen 啟動 <code>claude -p</code> 時加上 <code>--plugin-dir &lt;Purdex mod&gt;</code> 就可以了。lead／team 的 member 已經固定帶這個參數。</li>
+  <li><b>好處</b>：CC 不管跑在哪種底層，都送出同一套 mod 事件，daemon 只需要一個 CC 正規化器。另外還多拿到 stream-json 沒有的東西：用量推送、<code>tool.check</code> 的權限判斷和規則、<code>session.append</code> 的每一列和它的來源、思考了多久。</li>
+  <li><b>要 Nexen 決定</b>：Nexen 的一般 profile 刻意帶 <code>--setting-sources ""</code>，不載入使用者的設定和 plugin，這是它的沙箱與憑證邊界。用指定路徑只載入 Purdex 自己的 mod，是一個受控的例外。mod 會以使用者身分執行 <code>$.process</code>、<code>$.fs</code>、<code>$.http</code>，不受 Nexen 工具白名單的限制。</li>
+  <li><b>兩條事件流各管什麼</b>：Nexen 的事件帳本負責歷史、重播、成本帳；mod 事件負責即時畫面和燈號。daemon 用 tool_use_id 和 turn 對齊兩條流，不重複計算。</li>
+  <li><b>每回合重載</b>：執行體每個回合都會重新啟動行程，mod 也跟著重新載入（每次都觸發 <code>session.start</code>）。所以狀態由 daemon 保存，mod 自己不存狀態。</li>
+</ul>
+
+<!-- 5 -->
+<h2 id="s5"><span class="n">5</span>指揮台：符號語法</h2>
+<p>一條左邊界。作者身分不靠左右對齊，而是由<b>左側的符號</b>表示。整個串流裡只有「你」的區塊有底色。</p>
+<div class="sample">
+<span class="u"><b>你 · 14:02</b><br>登入頁的 token 過期後沒有導回登入，幫我查一下並修好</span>
+<span class="d">⏺</span> 搜尋 <span class="gr">"refreshToken" · spa/src</span>              <span class="gr">0.3s</span>
+<span class="ind">⎿ 12 筆結果 · 4 個檔案</span>
+<span class="d">⏺</span> 讀取 <span class="gr">spa/src/lib/auth.ts</span>
+<span class="g">⏺</span> 編輯 <span class="a">spa/src/lib/auth.ts</span>  <span class="g">+8</span> <span class="r">−2</span>
+<span class="ind"> 41  <span class="r">-  if (res.status === 401) return null</span>
+ 41  <span class="g">+  if (res.status === 401) {</span>
+ 42  <span class="g">+    redirectToLogin()</span>
+    … +5 行</span>
+<span class="o">⏺</span> 指令 <span class="gr">$ pnpm vitest run src/lib/auth.test.ts</span>       <span class="o">執行中 12s</span>
+<span class="ind">⎿ 輸出 · 38 行</span>
+<span class="r">⏺</span> 指令 <span class="gr">$ pnpm run lint</span>                              <span class="r">失敗 · exit 1</span>
+<span class="ind"><span class="r">⎿ src/lib/auth.ts:43:5  'redirectToLogin' is not defined</span></span>
+<span class="gr">⏺ 3 個指令、2 個編輯、1 個讀取 · 最後：pnpm run lint · 1 失敗 ›</span>
+修好了：401 時改成呼叫 redirectToLogin()，並補了一個測試。▍
+<span class="gr">              ── 對話已壓縮 · 14:20 ──</span></div>
+<div class="tw"><table>
+<tr><th>元素</th><th>規則</th></tr>
+<tr><td>你的區塊</td><td>全寬淡色底＋細框，標題「你 · HH:mm」，是串流裡唯一有底色的元素。slash command 用同一種樣式，內容用等寬字</td></tr>
+<tr><td>agent 文字</td><td>不加框的 markdown。<b>有逐字串流時，邊收邊顯示，結尾放游標 ▍</b>；只有整則訊息時，先顯示「思考中」三點，收到整則才一次出現。桌機的段落寬度約 90ch</td></tr>
+<tr><td>步驟列</td><td><code>狀態槽 ⏺</code>＋<b>類別詞</b>＋摘要＋時間（≥1 秒才顯示）。結果放在下一行的 <code>⎿</code> 縮排軌上。<b>工具參數有串流時</b>，參數還沒到齊前顯示工具名和一個穩定的佔位，<b>不顯示半截的 JSON</b>（room spec §3.1.1 #7）</td></tr>
+<tr><td>狀態槽</td><td>執行中＝橘色呼吸；完成＝中性灰；失敗＝紅；已拒絕＝灰色字「已拒絕」，跟失敗分開。狀態改變只換顏色、不換版面</td></tr>
+<tr><td>類別詞（7 類）</td><td><b>編輯</b>（Edit、MultiEdit、Write、NotebookEdit、apply_patch）· <b>指令</b>（Bash、exec_command）· <b>讀取</b> · <b>搜尋</b> · <b>網頁</b> · <b>子 agent</b>（Task、spawn_agent）· <b>其他</b>。Codex 的讀檔和搜尋多半經由 shell 執行，所以照實歸在「指令」</td></tr>
+<tr><td>兩種密度的步驟</td><td><b>卡片</b>：編輯（檔名、<code>+N −N</code>、diff 預覽 16 行）、指令（<code>$ 指令</code> 最多 6 行，輸出收起成「輸出 · N 行」）。<b>單行</b>：其他類別</td></tr>
+<tr><td>輸出摺疊</td><td>指令展開時先顯示<b>最後 10 行</b>；讀取和其他先顯示前 6 行；≤6 行且 ≤1KB 的直接全部顯示；失敗或已拒絕的比預設少摺一級；預覽不會把多行接成一行</td></tr>
+<tr><td>步驟摺疊</td><td>連續 ≥3 步摺成一列「3 個指令、2 個編輯、1 個讀取 · 最後一步摘要 · N 失敗」。執行中的那一串自動展開，只顯示最新 6 步；使用者展開後不會自動收回</td></tr>
+<tr><td>思考</td><td>有內容才出現，摺成「思考」。沒有內容時（CC 的常態），在「全部」密度下顯示一行「✻ 思考 4s」，在「標準」密度下不顯示</td></tr>
+<tr><td>子 agent</td><td>一行「子 agent · 摘要 · N 步 · 時間」，展開後在更深一層的縮排軌上顯示它自己的步驟。有 mod 時連子 agent 的串流也拿得到</td></tr>
+<tr><td>系統事件</td><td>置中的灰色小字：已中斷、對話已壓縮 · HH:mm、已交接給 …、已切換 model 到 …</td></tr>
+<tr><td>尾端即時狀態</td><td>工作中：顯示「思考中」三點；有逐字串流時改成直接顯示正在寫的文字。需要你：一列「● 等待你回應」，點了捲到 dock</td></tr>
+</table></div>
+<p class="small">密度分「標準」和「全部」兩級。Mock E 原本還有一級「結論」，它的角色現在由聊天承接。</p>
+
+<!-- 6 -->
+<h2 id="s6"><span class="n">6</span>元件清單</h2>
+<p><span class="y">✓</span>：能做；<span class="m">△</span>：有條件或待驗證；<span class="x">✗</span>：不出現（照原則一隱藏）。CC 終端機 欄寫的是<b>有 mod</b> 的情況，括號裡是沒有 mod 時。</p>
+<div class="tw"><table>
+<tr><th>元件</th><th>CC · 終端機</th><th>CC · 執行體</th><th>Codex</th><th>iOS 現況</th></tr>
+<tr class="grp"><td colspan="5">串流</td></tr>
+<tr><td>你的區塊</td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td></tr>
+<tr><td>agent 文字</td><td><span class="y">✓</span> 逐字（沒有 mod：整則）</td><td><span class="y">✓</span> 逐字</td><td><span class="y">✓</span> 逐字</td><td><span class="y">✓</span> 整則</td></tr>
+<tr><td>思考</td><td><span class="m">△</span> 只有時間</td><td><span class="m">△</span> 只有時間</td><td><span class="y">✓</span> 摘要</td><td><span class="y">✓</span></td></tr>
+<tr><td>步驟（7 類、兩種密度、摺疊）</td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td></tr>
+<tr><td>子 agent</td><td><span class="y">✓</span></td><td><span class="m">△</span> 沒有成本</td><td><span class="m">△</span></td><td><span class="m">△</span> 只有一行</td></tr>
+<tr><td>todo</td><td><span class="y">✓</span>（沒有 mod：△）</td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="x">✗</span> 還沒做</td></tr>
+<tr><td>系統事件</td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td></tr>
+<tr><td>其他 agent 的訊息</td><td><span class="y">✓</span></td><td><span class="m">△</span> Nexen peer mailbox，Purdex 尚未接上</td><td><span class="y">✓</span> queue</td><td><span class="x">✗</span></td></tr>
+<tr class="grp"><td colspan="5">需要你（dock，§8）</td></tr>
+<tr><td>提問</td><td><span class="y">✓</span> P8a（沒有 mod：只能在終端回答）</td><td><span class="y">✓</span></td><td><span class="m">△</span></td><td><span class="y">✓</span> 用按鍵</td></tr>
+<tr><td>核准</td><td><span class="m">△</span> P8b 待實作（沒有 mod：只能在終端回答）</td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span> 用按鍵</td></tr>
+<tr><td>計畫</td><td><span class="m">△</span> 待驗證（沒有 mod：只能在終端回答）</td><td><span class="m">△</span></td><td><span class="m">△</span></td><td>→ 請用終端</td></tr>
+<tr class="grp"><td colspan="5">狀態、用量與控制</td></tr>
+<tr><td>狀態＋一句話</td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td></tr>
+<tr><td><b>用量</b>（§7）</td><td><span class="y">✓</span> 推送（沒有 mod：statusline）</td><td><span class="y">✓</span></td><td><span class="m">△</span> 額度待驗證</td><td><span class="x">✗</span> 還沒做</td></tr>
+<tr><td>背景任務列</td><td><span class="y">✓</span>（沒有 mod：△）</td><td><span class="y">✓</span> N3</td><td><span class="m">△</span></td><td><span class="x">✗</span></td></tr>
+<tr><td>送出、停止</td><td><span class="y">✓</span> 不打字（沒有 mod：按鍵）</td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span> 按鍵</td></tr>
+<tr><td>執行中插話</td><td><span class="m">△</span>（沒有 mod：排在回合之後）</td><td><span class="x">✗</span></td><td><span class="y">✓</span> steer</td><td>排在回合之後</td></tr>
+<tr><td>模式、model 切換</td><td><span class="m">△</span></td><td><span class="y">✓</span></td><td><span class="m">△</span></td><td>—</td></tr>
+</table></div>
+
+<!-- 7 -->
+<h2 id="s7"><span class="n">7</span>用量與 statusline</h2>
+<p>使用者回饋：<b>context、用量、statusline 非常重要</b>。所以它是正式元件，三種介面、兩種裝置都要有，並以 CC 原生 statusline 的欄位為基準。</p>
+<div class="tw"><table>
+<tr><th>欄位</th><th>內容</th><th>來源</th></tr>
+<tr><td>model · effort</td><td>例如 Opus 5.5 (1M) · xhigh</td><td>mod 的 turn.step；statusline；Nexen；app-server</td></tr>
+<tr><td>context</td><td>已用／上限、百分比、一條進度條。超過 70% 轉黃、90% 轉紅（HAPI 的門檻）。點開可以看細分（系統、工具、記憶檔、對話），由 mod 的 <code>$.session.usage({breakdown:'summary'})</code> 提供，算在本機、不額外打 API</td><td>mod 的 session.measure；statusline；Nexen；app-server</td></tr>
+<tr><td>5 小時、7 天額度</td><td>已用百分比加上「N 小時後重置」。<b>這是整個帳號的</b>，同一個帳號的所有 session 共用同一個數字（lead／team spec §7.4(b)）</td><td>mod 的 rateLimits；statusline 的 rate_limits；Nexen rate_limit_event 和 quota；Codex <span class="tag n">待驗證</span></td></tr>
+<tr><td>成本</td><td>這個 session 的累計成本</td><td>mod 的 cost；statusline；Nexen result</td></tr>
+</table></div>
+<div class="grid c3">
+  <div class="card"><div class="k">桌機</div><h3>狀態列</h3><p>輸入框下方一整列：<code>● 工作中 · Opus 5.5 (1M) · xhigh · ◔ 38% 380K/1M · 5h 34% ↺2h · 7d 61% ↺3d · $0.42</code>。任何一項點了都開右側面板，顯示細節。</p></div>
+  <div class="card"><div class="k">行動</div><h3>輸入框上方一條</h3><p><code>◔ 38% · 5h 34% · 7d 61% · $0.42 ›</code>，點了開底部抽屜看完整細節。導覽列的副標題只放狀態，不放用量。</p></div>
+  <div class="card"><div class="k">清單</div><h3>每列帶 context</h3><p>session 清單每一列都顯示 context 百分比，方便判斷哪個快滿了（跟 context 接力那條線串起來）。帳號額度只放在清單頂端，顯示一次。</p></div>
+</div>
+
+<!-- 8 -->
+<h2 id="s8"><span class="n">8</span>dock：需要你的事</h2>
+<p><b>「讀」和「答」分開</b>：串流只負責呈現，串流裡只留一張不能點的卡片「請在下方回答」。真正作答的卡片固定在<b>輸入列上方</b>，指揮台和聊天共用同一份。</p>
+<div class="tw"><table>
+<tr><th>種類</th><th>內容與操作</th><th>資料通道</th></tr>
+<tr><td>提問</td><td>題目、編號選項，可以複選。有多題時用 1/N 切換，最後一次送出。右上角有「終端」按鈕</td><td>CC 終端機：P8a <code>hook_ask</code>（mod 讓原生對話框和遠端答案同時等，先答的生效）。CC 執行體：Nexen。Codex：app-server</td></tr>
+<tr><td>核准</td><td><b>只有「允許」和「拒絕」</b>，不提供持久授權的按鈕。顯示指令內容或 diff，讓使用者知道自己在核准什麼</td><td>CC 終端機：P8b（mod 的 <code>tool.check</code>）；CC 執行體：Nexen 權限通道；Codex：server request</td></tr>
+<tr><td>計畫</td><td>計畫內容加上「核准」和「繼續規劃（可附回饋）」</td><td>CC 終端機：mod 的 ExitPlanMode 分流 <span class="tag n">待驗證</span></td></tr>
+<tr><td>只能在終端回答</td><td>「這題只能在終端機回答」加上「開終端」按鈕，並寫出理由，例如 <code>no_mod</code>、<code>pending_p8b</code></td><td>P8a <code>terminal_only</code></td></tr>
+</table></div>
+<ul>
+  <li><b>關閉</b>：任何一邊回答後，所有 client 的卡片都關閉。如果是在終端先答的，卡片改成顯示「已在終端機回答：X」。</li>
+  <li><b>有待回答的卡片時</b>，輸入框改顯示「agent 正在等你回應，請在上方回答」。</li>
+  <li><b>終端介面</b> <span class="tag o">定案</span>：不畫 dock（照 U19(b)，原生選擇框就是回答介面），只在頂部顯示一條「● 等你回答」提示列。</li>
+  <li><b>Mac App</b> <span class="tag o">定案</span>（10-08）：在指揮台和聊天畫 dock（這兩種畫面看不到終端機）。U19(b)「Mac App 不另外做卡片」縮限為只適用終端機模式。CC 的 dock 第一版只有提問（P8b 不提前；計畫核准待實測）；執行體的核准走既有權限通道。</li>
+</ul>
+
+<!-- 9 -->
+<h2 id="s9"><span class="n">9</span>退回終端的規則</h2>
+<p>終端機底層一定有終端可以退，所以「介面做不到」時一律退回終端，而且<b>寫出原因</b>。判斷依據是事件，不是逾時。</p>
+<div class="tw"><table>
+<tr><th>觸發條件</th><th>行為</th></tr>
+<tr><td>dock 是「只能在終端回答」</td><td>卡片上放「開終端」按鈕，不會自動切換</td></tr>
+<tr><td>讀不到資料：沒有 mod，對話檔也讀不到；或第一回合還沒有內容</td><td>顯示「還讀不到紀錄」並寫出原因，提供「開終端」</td></tr>
+<tr><td>互動式的指令選單，例如 <code>/model</code> 的選單、Rewind</td><td>串流顯示「這個操作要在終端完成」</td></tr>
+<tr><td>沒有 mod，送出被擋下（開頭是 <code>!</code> 或 <code>/</code>）</td><td>提示改用終端</td></tr>
+</table></div>
+
+<!-- 10 -->
+<h2 id="s10"><span class="n">10</span>聊天介面</h2>
+<p><span class="tag o">定案</span> <b>聊天＝對話式介面</b>：主角是對話本身，你說一句、它回一句；工作過程退到背景，想看細節就點開指揮台。標竿是 agent chat 類產品：Grok Bot、Meta Muse、OpenAI Dots、OpenClaw。多人、多 agent 同房是聊天介面自然容納得下的情境，但不是聊天的定義。</p>
+<div class="tw"><table>
+<tr><th>元件</th><th>規則</th><th>標竿</th></tr>
+<tr><td>頂部身分列</td><td>agent 的頭像（provider 圖示加主機色）、名稱，名稱下面一行目前在做什麼</td><td>Dots、Muse</td></tr>
+<tr><td>訊息</td><td>左右泡泡：你在右，泡泡染 accent 色；agent 在左。<b>有逐字串流時，agent 的泡泡邊收邊長</b></td><td>Dots、Aigora</td></tr>
+<tr><td>回合的工作</td><td>每回合在 agent 回覆上方放一列「做了 2 分 13 秒 · 3 個指令、2 個編輯 · 1 失敗 ›」，點了開指揮台並捲到該回合</td><td>OpenClaw、T3、Dots</td></tr>
+<tr><td>工作中的進度</td><td>一則會原地更新的進度訊息：最新一步加上已用時間，做完收成上面那一列</td><td>OpenClaw、Claude Tag</td></tr>
+<tr><td>結果</td><td>agent 最後的回覆就是泡泡；改過的檔案用 chip「3 個檔案 +29 −12」表示</td><td>Dots、T3</td></tr>
+<tr><td>用量</td><td>跟指揮台相同（§7）</td><td>—</td></tr>
+<tr><td>dock</td><td>跟指揮台共用同一份</td><td>—</td></tr>
+<tr><td>其他參與者</td><td>左側泡泡，加上名字標籤和頭像</td><td>Happy、Orca</td></tr>
+</table></div>
+<h3>延伸：多人、多 agent 同房（不在 v1）</h3>
+<ul>
+  <li>預設要被叫到才回，沒被 @ 的訊息只當背景資料。</li>
+  <li>設回合預算；「沒有新資訊就不出聲，大家都不出聲就結束」；人一發言，計數就歸零。</li>
+  <li>看得到核准請求，不代表能核准。</li>
+  <li>pdx 交接的回執分三種狀態：已送達、已讀到、已接手。</li>
+</ul>
+
+<!-- 11 -->
+<h2 id="s11"><span class="n">11</span>桌機與行動</h2>
+<p>同一套元件，換的是容器，導航結構不變。斷點只看可用寬度；觸控改變的是互動，寬度改變的是版面。</p>
+<div class="tw"><table>
+<tr><th>元件</th><th>桌機（Mac App）</th><th>行動（iOS）</th></tr>
+<tr><td>步驟展開</td><td>在原地展開；長輸出或 diff 開右側面板</td><td>短的在原地展開；diff 和完整輸出推入新頁或底部抽屜</td></tr>
+<tr><td>diff</td><td>全寬、有行號，可以選擇左右並排</td><td>一律單欄，預覽 16 行</td></tr>
+<tr><td>用量</td><td>狀態列一整列；點開右側面板</td><td>輸入框上方一條；點開底部抽屜</td></tr>
+<tr><td>dock 按鈕</td><td>一般大小，可以用數字鍵選</td><td>至少 44pt，選項全部攤開</td></tr>
+<tr><td>聊天的回合列</td><td>開右側面板，顯示該回合的指揮台</td><td>推入指揮台</td></tr>
+<tr><td>輸入框</td><td>Enter 送出，Shift+Enter 換行</td><td>Enter 換行，用送出鈕送出；捲動時收起鍵盤</td></tr>
+<tr><td>終端</td><td>xterm.js</td><td>SwiftTerm，加一列特殊鍵</td></tr>
+<tr><td>推播</td><td>OS 通知；正在看的時候不通知</td><td>分完成、需要你兩類；正在看的時候不推</td></tr>
+</table></div>
+
+<!-- 12 -->
+<h2 id="s12"><span class="n">12</span>狀態詞彙與燈號 v2 <span class="tag o">定案</span></h2>
+<div class="tw"><table>
+<tr><th>狀態</th><th>意思</th><th>顏色</th><th>來源對應</th></tr>
+<tr><td>等你回答</td><td>有提問、計畫或核准等你處理（不分種類，使用者 10-08 定案）</td><td>黃</td><td>dock 有東西；執行體等核准另加手掌圖示（既有定案，alpha.566）</td></tr>
+<tr><td>工作中</td><td>回合進行中</td><td>綠</td><td><code>running</code>／<code>turn.start</code></td></tr>
+<tr><td>閒置</td><td>做完了，你也看過了</td><td>灰</td><td><code>idle</code></td></tr>
+<tr><td>失敗</td><td>回合出錯結束</td><td>紅</td><td><code>turn.complete</code> 的 reason 是 error，或 <code>error</code></td></tr>
+</table></div>
+<p class="small"><b>未讀</b>不是狀態，是疊在燈上的標記：切走的分頁有了新狀態、你還沒切回去看，燈就變紅點（既有行為）。不另設「待檢閱」，也不設「失聯」（使用者 10-08 定案）。</p>
+
+<h3>12.1 現在的燈號為什麼不準</h3>
+<p>燈號（每個 session 的狀態點）目前由 settings hooks 推算（<code>internal/agent/*/status.go</code> → <code>AgentEventStore</code> → SPA <code>useAgentStore.ts</code>）。不準的原因可以歸成三類：</p>
+<ul>
+  <li><b>CC 有些情況根本不發 hook</b>：按 Esc 中斷時不發 Stop；不是使用者打字開始的回合不發 UserPromptSubmit。</li>
+  <li><b>hook 送丟了不會補</b>：逾時 2 秒、不重試，daemon 重啟期間的事件也會漏掉。</li>
+  <li><b>SPA 重連時不清舊狀態</b>。</li>
+</ul>
+<div class="tw"><table>
+<tr><th>#</th><th>情況 → 使用者看到</th><th>根因</th><th>修法</th></tr>
+<tr><td>1</td><td>按 Esc 中斷 → 綠燈一直亮</td><td>CC 中斷時不發 Stop；<code>is_interrupt</code> 只當成附帶資訊（<code>cc/status.go:130-145</code>）</td><td><b>mod</b>：主 loop 的 <code>turn.complete</code> reason＝aborted → idle</td></tr>
+<tr><td>2</td><td>在權限框拒絕或按 Esc → 黃燈卡住</td><td>同上</td><td><b>mod</b>：同上</td></tr>
+<tr><td>3</td><td>核准權限後跑長工具 → 工具跑完前一直是黃燈</td><td>PostToolUse 要等工具結束才發</td><td><b>只能部分修</b>：mod 沒有「權限框關閉」事件，要等下一個 <code>turn.step</code> 或工具結果才會轉成 running。Codex 用 app-server 的 <code>serverRequest/resolved</code> 可以精確修</td></tr>
+<tr><td>4</td><td>不是打字開始的回合（Stop 續行、背景任務喚醒、peer 訊息、cron）→ 灰燈但其實在跑</td><td>這些回合不發 UserPromptSubmit（#339）</td><td><b>mod</b>：<code>turn.start</code> 一定會發</td></tr>
+<tr><td>5</td><td>subagent 撞到 rate limit → 主燈變紅，但主 agent 還在跑</td><td>帶 agent_id 的 StopFailure 也把主 frame 設成 error（<code>frame_ops.go:518-556</code>）</td><td><b>mod</b>：只有不帶 agentId 的 <code>turn.complete</code> error 才讓主燈變紅</td></tr>
+<tr><td>6</td><td>subagent 的藍點殘留</td><td>被中斷的 subagent 不發 SubagentStop（#1383）</td><td><b>mod</b>：帶 agentId 的 <code>turn.complete</code>，加上心跳時用 <code>$.agent.list()</code> 對帳</td></tr>
+<tr><td>7</td><td>手動 /compact 期間顯示灰燈</td><td>PreCompact 沒有處理</td><td><b>mod</b>：<code>session.compact</code></td></tr>
+<tr><td>8</td><td>同一個 session 有兩個 agent pane → 另一個 pane 的黃燈被蓋掉</td><td>只取最晚啟動的 frame（<code>frame_ops.go:1453-1466</code>）</td><td>mod 修不了：改成逐 pane 計算，再取最高優先序</td></tr>
+<tr><td>9</td><td>hook 逾時、daemon 重啟 → 燈停在舊狀態</td><td>逾時 2 秒不重試；WS 塞滿就丟（#728）</td><td><b>mod</b>：心跳帶完整狀態和序號，daemon 對帳</td></tr>
+<tr><td>10</td><td>SPA 斷線期間 agent 結束了 → 重連後燈還亮著</td><td>重連快照不送 clear，SPA 也不清（<code>module.go:590-662</code>）</td><td>mod 修不了：快照改成完整清單，SPA 依它整批替換</td></tr>
+<tr><td>11</td><td>重連後所有閒置 session 都冒出未讀紅點</td><td>replay 的 idle 被當成需要處理（<code>useAgentStore.ts:286-300</code>）</td><td>mod 修不了：SPA 不把 replay 標成未讀</td></tr>
+<tr><td>12</td><td>Nexen 的 <code>-p</code> 掛掉 → 永遠綠燈；重連後燈直接消失</td><td>不經 sweep，也不在快照裡（<code>nontmux.go</code>）</td><td>執行體帶 mod 時用心跳；不然看 Nexen 的 execution 狀態</td></tr>
+<tr><td>13</td><td>主回合結束但背景工作還在跑 → 只顯示純灰燈</td><td>Stop 其實帶了 <code>background_tasks</code>，但被丟掉</td><td>現有 hook 就能修，新增「閒置但有背景工作」</td></tr>
+<tr><td>14</td><td>Codex 遇到 API 錯誤但行程還活著 → 綠燈卡住</td><td>Codex 不發 StopFailure（#777）</td><td>app-server 的 <code>turn/completed</code>、<code>thread/status/changed</code></td></tr>
+<tr><td>15</td><td>OpenCode 回答權限後黃燈卡住</td><td>plugin 沒處理 <code>permission.replied</code>（#935）</td><td>改 plugin</td></tr>
+<tr><td>16</td><td>核准後又跳回黃燈</td><td>Notification 可能比 PostToolUse 晚到</td><td><b>mod</b>：用序號擋掉舊事件</td></tr>
+</table></div>
+<h3>12.2 燈號 v2 規則（10-08 定案）</h3>
+<ul>
+  <li><b>優先序</b>（使用者 10-08 定案）：失敗 ＞ 等你回答 ＞ 工作中 ＞ 閒置。一個分頁有多個 pane 時取最高的；未讀紅點另外疊上去，不參與排序。背景工作怎麼顯示見 §17。</li>
+  <li><b>背景工作</b>（使用者 10-08 定案）：背景指令（shell）不顯示。workflow、monitor、排程喚醒（<code>/loop</code>、ScheduleWakeup、CronCreate）在<b>分頁 agent 圖示的左上角</b>打一顆小符號，三種同時存在時只顯示一種，<b>不動主燈</b>。
+    <ul>
+      <li>順序（統籌排）：<b>workflow（TreeStructure）＞ monitor（Eye）＞ 排程喚醒（Clock）</b>。越接近「現在就有東西在跑」越優先：workflow 正在開 agent、花 token；monitor 隨時可能叫醒；排程要等時間到。滑鼠移上去列出全部三種的明細。</li>
+      <li>樣式：靜止不呼吸，跟圖示同色、縮小（顏色留給主燈）。燈號關閉（<code>icon</code> 樣式）時不顯示；只有點、沒有圖示的樣式（<code>dot</code>）畫在點的左上角。</li>
+      <li>藍點只算主 agent 自己開的 subagent；workflow 開出來的 agent 由角落符號代表，不佔藍點（一個 workflow 可能開幾十個 agent，會把 3 個點佔滿）。</li>
+      <li>資料來源：Stop 的 <code>background_tasks</code>（type＝<code>workflow</code>／<code>monitor</code>）與 <code>session_crons</code>。這三種結束或觸發都會喚醒 session 開新回合，所以每次 Stop 的清單就夠追蹤；有 mod 時可從 Workflow／Monitor／ScheduleWakeup／CronCreate 的 <code>tool.call</code> 即時加上。</li>
+    </ul></li>
+  <li><b>實作注意</b>：workflow 開出來的 agent 不在 <code>$.agent.list()</code> 裡（d.ts AgentLoop.agentId），心跳對帳不能因此刪掉它們的藍點。</li>
+  <li><b>來源分四層</b>：
+    <ol>
+      <li>mod 事件為準，每個 session 帶遞增序號，daemon 丟掉比上次舊的事件。</li>
+      <li>沒有 mod 時退回 hook，並先修三點：<code>is_interrupt</code> → idle；帶 agent_id 的 StopFailure 不動主燈；Stop 帶 <code>background_tasks</code> 時的呈現見 §17。</li>
+      <li>存活檢查：既有的 sweep 檢查 pid，再加上 mod 心跳。</li>
+      <li>畫面偵測只留給還沒接 app-server 的 Codex。</li>
+    </ol></li>
+  <li><b>心跳</b>：mod 每 10 秒透過 Unix socket 送一次完整狀態（序號、子 agent 名單）。心跳只用來對帳和補漏，不顯示「失聯」；pid 死了 → clear。心跳同時能補回 daemon 重啟期間漏掉的事件。</li>
+  <li><b>聚合</b>：逐 pane 計算狀態，tab 和 session 取最高優先序。SPA 改成用完整快照整批替換、比較序號、replay 不標未讀。</li>
+  <li><b>Codex</b>：接了 app-server 時以 <code>thread/status/changed</code> 為準，hook 當備援。</li>
+</ul>
+<p class="small">需要實測的：
+<ul class="small">
+  <li>CC 2.1.292 按 Esc 後確實不發 Stop 嗎？</li>
+  <li>拒絕權限後，<code>turn.complete</code> 是 aborted，還是模型會繼續跑？</li>
+  <li>背景任務、peer 訊息、cron 開始的回合，是否都會發 <code>turn.start</code>？</li>
+  <li>被中斷的 subagent 會不會發 SubagentStop？</li>
+  <li>mod 能不能在 <code>session.end</code> 約 1.5 秒的上限內送出最後一筆？</li>
+  <li>Codex 共用 app-server 的狀態通知能不能傳給其他 client？</li>
+</ul></p>
+
+<!-- 13 -->
+<h2 id="s13"><span class="n">13</span>能力宣告 <span class="tag p">建議</span></h2>
+<p>daemon 在每個對話上附一份能力表。採用<b>分級制，沒宣告到的一律當不支援</b>，再加上<b>具名的理由</b>。</p>
+<pre>capabilities: {
+  source:          "mod" | "transcript" | "nexen" | "app_server",     ← 這個對話的資料主要從哪裡來
+  text_streaming:  "none" | "message" | "token",
+  thinking:        "none" | "duration" | "summary",
+  answer_question / answer_permission / answer_plan: "none" | "terminal_only" | "remote",
+  usage:           "none" | "context" | "full",                        ← full＝含 5h／7d／成本
+  todo, subagent, background_tasks, peer_inbound: "none" | "partial" | "full",
+  send: "keys" | "prompt" | "turn",  interrupt: "keys" | "rpc",  steer: "none" | "partial" | "full",
+  reasons: { &lt;能力名&gt;: "no_mod" | "terminal_only" | "pending_p8b" | "not_wired"
+                       | "daemon_too_old" | "provider_unsupported" }
+}</pre>
+<ul>
+  <li><b>永久不支援就隱藏</b>，例如 <code>provider_unsupported</code>。</li>
+  <li><b>暫時不行就停用並寫出原因</b>，例如 <code>no_mod</code>、<code>pending_p8b</code>、<code>not_wired</code>（像執行體的 peer mailbox）、<code>daemon_too_old</code>。</li>
+  <li><code>terminal_only</code> 改成 dock 的「只能在終端回答」卡片。</li>
+  <li>資訊未知不等於不支援：daemon 還沒回報能力時，元件顯示載入中。</li>
+</ul>
+
+<!-- 14 -->
+<h2 id="s14"><span class="n">14</span>對話模型（資料契約草案）</h2>
+<pre>Conversation  { key: host_id + provider + session_id,  backend: "terminal" | "execution",
+                provider: "claude" | "codex",  title, status, capabilities, usage, turns[] }
+Usage         { model, effort, context{ tokens, window, percent }, rate_limits[{ kind, percent_used, resets_at }],
+                cost_usd, at }                                         ← 帳號額度也另有 host 層級的一份
+Turn          { id, started_at, ended_at?, outcome: "done"|"interrupted"|"failed"|"running", items[] }
+Item =
+  UserMessage { id, at, text, source: "user"|"queued"|"peer"|"slash", from? }
+  AgentText   { id, at, markdown, streaming? }                         ← streaming 時以 delta 累加
+  Thinking    { id, at, text?, duration_ms }                           ← text 常為空；duration 一定有
+  Step        { id, kind: "edit"|"execute"|"read"|"search"|"fetch"|"task"|"other", tool,
+                status: "running"|"done"|"failed"|"denied", summary, started_at, duration_ms?,
+                input, input_partial?, output?{ text, total_lines, total_bytes, truncated },
+                diff?{ path, added, removed, hunks[] }, command?{ text, description }, children?: Item[] }
+  System      { id, at, kind: "interrupted"|"compacted"|"handoff"|"model_changed"|"resumed", detail }
+Pending       ← approval_requests 的一列（kind: hook_ask | hook_permission | plan, terminal_only?）
+
+GET  /api/conversations/{key}?after=&lt;cursor&gt;    snapshot＋增量
+WS   conversation.items · conversation.delta（逐字、參數串流）· conversation.status · conversation.usage
+     · approval.request / approval.closed（沿用 P8a）
+POST /api/mod/events                         ← mod 批次上報（Unix socket），取代 transcript tail 當主來源</pre>
+<ul>
+  <li><b>golden fixtures</b>：兩種輸入各錄一份。一份是 mod 事件流，從實測 probe 擴充成正式錄製；另一份是 transcript、Nexen 事件、Codex 紀錄。再附上預期的正規化輸出，daemon 和兩個 App 都用它做測試。</li>
+  <li><b>iOS 解析器的知識搬進 daemon</b>：例如已拒絕的判斷、排隊訊息的比對。iOS 的實測結果直接變成 fixtures。</li>
+</ul>
+
+<!-- 15 -->
+<h2 id="s15"><span class="n">15</span>跟既有定案的關係</h2>
+<div class="tw"><table>
+<tr><th>既有定案</th><th>這份文件的影響</th><th>處理</th></tr>
+<tr><td>worker pane spec（room／chat）</td><td>room 改名為指揮台，範圍擴大到兩種底層；chat 的定義改為對話式介面</td><td>寫 spec 時取代</td></tr>
+<tr><td>殼層整理 D-下（狀態列三顆鈕）</td><td>三顆鈕改成「終端機／指揮台／聊天」純粹換畫面（執行體不顯示終端機鈕）；換底層另一顆鈕「交給執行體／拿回終端機」，沿用交接對話框與 Take to terminal；跟 U3 一起上</td><td>使用者 10-08 同意</td></tr>
+<tr><td>lead／team spec U19(b)「Mac App 不畫卡片」</td><td>Mac App 在指揮台和聊天畫 dock；U19(b) 只留給終端機模式</td><td>使用者 10-08 同意；寫正式 spec 時通知 lead／team 線改 spec</td></tr>
+<tr><td>lead／team P5b（mod 全域安裝）、P8a、P8b</td><td>mod 從「接力和分流用的工具」變成「CC 終端機底層的主要資料來源」；P8b 從「等 iOS 需要再做」變成 dock 核准的前提</td><td>§17 第 2 題</td></tr>
+<tr><td>Nexen peer mailbox（v0.19，預設關閉）</td><td>執行體收訊需要 Purdex 的 peers 把訊息轉進 <code>/peer-messages</code>，並在 <code>pdx peers</code> 列出執行體</td><td>分期 U4</td></tr>
+<tr><td>E1／E2／E3</td><td>沒有變</td><td>—</td></tr>
+<tr><td>peer bridge「不打字投遞」</td><td>沒有變；而且有 mod 之後，連使用者自己的送出也不必打字了</td><td>—</td></tr>
+</table></div>
+
+<!-- 16 -->
+<h2 id="s16"><span class="n">16</span>交付物、流程與分期 <span class="tag o">定案</span></h2>
+<h3>交給 iOS 的三樣東西</h3>
+<ol>
+  <li><b>介面語言規格</b>：這份文件定案後轉成 <code>docs/specs/</code>。</li>
+  <li><b>對話模型 API</b>：§14。</li>
+  <li><b>golden fixtures</b>：兩個 App 共用的畫面測試資料。</li>
+</ol>
+<h3>分期（10-08 定案）</h3>
+<div class="tw"><table>
+<tr><th>階段</th><th>內容</th><th>誰做</th></tr>
+<tr><td>U1</td><td>daemon 對話模型 v1（CC 終端機底層）：<code>/api/mod/events</code> 接收端、Purdex mod 加上事件上報（turn.step、tool.call、tool.check、session.measure、session.append、session.receive），以及沒有 mod 時的 transcript＋hook 退路。用量也在這一期。<b>燈號 v2 全部在這一期</b>（含不需要 mod 的那幾項：SPA 重連、Esc 中斷、subagent 錯誤、背景工作；不另出修正 PR）。附 fixtures</td><td>Purdex</td></tr>
+<tr><td>U2</td><td>iOS 改接對話模型，加上用量列；送出改走 mod 通道，沒有 mod 時保留按鍵</td><td>iOS</td></tr>
+<tr><td>U3</td><td>Mac App 指揮台接上終端機底層，用量放進狀態列，dock 接 P8a（指揮台、聊天畫，終端機不畫）；狀態列三顆鈕改純換畫面＋換底層獨立一顆鈕</td><td>Purdex</td></tr>
+<tr><td>U3b</td><td>P8b：dock 可以回答權限；計畫分流的驗證。<b>不提前</b>（10-08 定案），需要時再排</td><td>Purdex（lead／team 線）</td></tr>
+<tr><td>U4</td><td>執行體底層接進同一個模型（Nexen 帶 mod；開工時先找 Nexen 方定 <code>--plugin-dir</code>）</td><td>Purdex</td></tr>
+<tr><td>U5</td><td>Codex：共用 app-server 接進對話模型</td><td>Purdex</td></tr>
+<tr><td>U6</td><td>聊天介面</td><td>兩邊</td></tr>
+<tr><td>C1</td><td>通訊線（<b>放最後</b>，10-08 定案：同時用 Codex 終端機的情況太少，多半只委派 review）：<code>pdx peers</code> 列出執行體、<code>pdx msg</code> 送進執行體（接 Nexen peer mailbox）</td><td>Purdex</td></tr>
+<tr><td>C2</td><td>通訊線：<code>pdx msg</code> 送進 Codex（共用 app-server＋<code>thread/queue/add</code>，先實測 TUI 呈現；mlab Codex 0.153.4 可能要先升級）</td><td>Purdex</td></tr>
+</table></div>
+
+<!-- 17 -->
+<h2 id="s17"><span class="n">17</span>決策紀錄</h2>
+<p>已定案（10-08）：名詞（底層 終端機／執行體 execution；控制模式 終端機／指揮台 deck／聊天）、mod 成為 CC 的主要資料來源（終端機底層，執行體底層也要用）、燈號不另出修正 PR（全部跟 U1 一起做）、mod 落地時程（a26 等 U1 上線再裝；P8b 不提前；Nexen 開不開放 <code>--plugin-dir</code> 等 U4 開工時再找 Nexen 方定）、狀態詞彙與燈號優先序（黃＝等你回答，不分回答／核准；不加待檢閱、失聯；失敗 ＞ 等你回答 ＞ 工作中 ＞ 閒置）、背景工作（背景指令不顯示；workflow／monitor／排程喚醒在 agent 圖示左上角打一顆符號、只顯示一種、不動主燈，§12.2）、Mac App 的 dock（指揮台和聊天畫、終端機不畫，U19(b) 縮限為終端機模式，§8）、狀態列三顆鈕（純換畫面、換底層另一顆鈕、跟 U3 一起上，§15）、分期（U1 → U2 ∥ U3 → U4 → U5 → U6，通訊線 C1／C2 放最後，§16）。§17 已全部定案。</p>
+
+</div>
+</body>
+</html>
