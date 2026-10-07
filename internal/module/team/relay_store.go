@@ -4,12 +4,20 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/wake/purdex/internal/team"
 )
 
 // ErrNoSuchRelayOp is returned by the per-id relay methods for an unknown id.
 var ErrNoSuchRelayOp = errors.New("no such relay op")
+
+// ErrRelayOpOpen is returned by CreateRelayOp when the session already has
+// a non-terminal op: the table's partial unique index holds spec §8.7's
+// "at most one open relay per session" even if two creators race past the
+// handler's check (which runs under createMu and answers 409 relay_open
+// with the open op; this is the floor beneath it).
+var ErrRelayOpOpen = errors.New("relay op already open for this session")
 
 // The store is the team.LineageReader the module publishes (P5a-1b).
 var _ team.LineageReader = (*Store)(nil)
@@ -36,6 +44,8 @@ const relaySchema = `
 		updated_at      INTEGER NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS relay_ops_session_state ON relay_ops (session_id, state);
+	CREATE UNIQUE INDEX IF NOT EXISTS relay_ops_one_open ON relay_ops (session_id)
+		WHERE state NOT IN ('done', 'failed', 'cancelled');
 	CREATE TABLE IF NOT EXISTS session_lineage (
 		session_id             TEXT PRIMARY KEY,
 		predecessor_session_id TEXT    NOT NULL,
@@ -112,6 +122,9 @@ func (s *Store) CreateRelayOp(op team.RelayOp) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
 		op.ID, string(op.Kind), op.HostID, op.SessionID, op.NewSessionID, op.Ref, op.NewRef, op.TeamID, op.RequestID,
 		string(op.State), op.Reason, op.HandoffPath, used, op.CreatedAt, op.UpdatedAt); err != nil {
+		if strings.Contains(err.Error(), "relay_ops.session_id") { // the partial unique index relay_ops_one_open
+			return fmt.Errorf("insert relay op %s: %w", op.ID, ErrRelayOpOpen)
+		}
 		return fmt.Errorf("insert relay op %s: %w", op.ID, err)
 	}
 	return nil

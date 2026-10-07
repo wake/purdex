@@ -202,3 +202,62 @@ func TestRelayStore_SelfRelayPause(t *testing.T) {
 		t.Fatal("on lifts the pause")
 	}
 }
+
+// The database holds "at most one open relay per session" (spec §8.7) by
+// itself: a second non-terminal op for a session is refused with
+// ErrRelayOpOpen whatever the caller checked first; once the open op is
+// terminal a new one may be created, and terminal history never collides.
+func TestRelayStore_OneOpenOpPerSessionIsEnforcedByTheTable(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.CreateRelayOp(selfOp("op-1", "sid-1", "_aaaaaa", 1000)); err != nil {
+		t.Fatal(err)
+	}
+	second := selfOp("op-2", "sid-1", "_aaaaaa", 1001)
+	second.State = team.RelayRequested
+	if err := s.CreateRelayOp(second); !errors.Is(err, ErrRelayOpOpen) {
+		t.Fatalf("second open op for sid-1: err = %v, want ErrRelayOpOpen", err)
+	}
+	if _, ok, _ := s.GetRelayOp("op-2"); ok {
+		t.Fatal("the refused op must not have been inserted")
+	}
+	// A different session is unaffected.
+	if err := s.CreateRelayOp(selfOp("op-3", "sid-2", "_bbbbbb", 1002)); err != nil {
+		t.Fatal(err)
+	}
+	// Once op-1 is terminal, sid-1 may open again; two terminal rows coexist.
+	mustReport(t, s, "op-1", RelayReport{State: team.RelayCancelled, Reason: team.RelayReasonDenied, At: 1003})
+	if err := s.CreateRelayOp(second); err != nil {
+		t.Fatalf("after op-1 cancelled: %v", err)
+	}
+	mustReport(t, s, "op-2", RelayReport{State: team.RelayCancelled, Reason: team.RelayReasonDenied, At: 1004})
+	if err := s.CreateRelayOp(selfOp("op-4", "sid-1", "_aaaaaa", 1005)); err != nil {
+		t.Fatalf("third op after two terminal ones: %v", err)
+	}
+	// Racing creators: exactly one of n concurrent inserts for one fresh
+	// session wins, the others see ErrRelayOpOpen, none errors otherwise.
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = s.CreateRelayOp(selfOp(fmt.Sprintf("race-%d", i), "sid-race", "_cccccc", int64(2000+i)))
+		}(i)
+	}
+	wg.Wait()
+	won, open := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			won++
+		case errors.Is(err, ErrRelayOpOpen):
+			open++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if won != 1 || open != n-1 {
+		t.Fatalf("won = %d, refused = %d, want 1 and %d", won, open, n-1)
+	}
+}
