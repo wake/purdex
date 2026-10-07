@@ -15,6 +15,65 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 /** Trailing debounce applied to an SSE-triggered refetch (spec §4.4.3). */
 export const LIST_REFRESH_DEBOUNCE_MS = 500
 
+/**
+ * The only kinds the site stream is asked for (`?kind=`): those whose commit
+ * can change a list row. This is Nexen's declared durable vocabulary
+ * (`execution.EventKinds`, v0.19.0), which covers state, the pending
+ * permission, tool/task activity, observers, lease, title and archive. It
+ * also includes `result`, whose commit rolls the turn cost up onto the row.
+ * Token deltas, snapshots, `lease.renewed` and the other raw provider frames
+ * change nothing a row shows. Each of them used to push the trailing debounce
+ * back, so a host with one streaming worker never refreshed its list (#1866).
+ * Review this list when re-pinning Nexen.
+ */
+export const SITE_STREAM_KINDS = [
+  'execution.delegated',
+  'execution.rejected',
+  'execution.running',
+  'execution.terminal',
+  'execution.interrupted',
+  'execution.error',
+  'execution.message_accepted',
+  'execution.interrupt_requested',
+  'execution.turn_stalled',
+  'execution.turn_orphaned',
+  'tool_use',
+  'tool_result',
+  'task_start',
+  'task_end',
+  'permission.requested',
+  'permission.resolved',
+  'execution.observer_attached',
+  'execution.observer_detached',
+  'execution.credential_repaired',
+  'execution.archived',
+  'execution.unarchived',
+  'execution.terminated',
+  'execution.title_changed',
+  'lease.acquired',
+  'lease.released',
+  'result',
+] as const
+
+const SITE_STREAM_URL = `/api/nex/v1/events?${SITE_STREAM_KINDS.map((k) => `kind=${encodeURIComponent(k)}`).join('&')}`
+
+/**
+ * Frames that must not trigger a refetch even when a server ignores `kind=`.
+ * This is a denylist, so a kind nobody listed still refreshes the list.
+ */
+const NOISE_KINDS: ReadonlySet<string> = new Set([
+  'stream_event',
+  'stream_snapshot',
+  'lease.renewed',
+  'assistant',
+  'user',
+  'system',
+  'rate_limit_event',
+  'control_request',
+  'control_response',
+  'control_cancel_request',
+])
+
 export type HostListPhase = 'idle' | 'loading' | 'ready' | 'error'
 
 export interface HostListCache {
@@ -167,7 +226,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     let prevStatus: NexSseStatus | null = null
     const handle = openNexSse({
       hostId,
-      url: '/api/nex/v1/events',
+      url: SITE_STREAM_URL,
       getLastEventId: () => sink.get()[hostId]?.lastSeq ?? null,
       onFrame: (frame) => {
         if (rt.generation !== generation) return
@@ -175,7 +234,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
           const seq = Number(frame.id)
           patchCache(hostId, (c) => (c.lastSeq !== null && c.lastSeq >= seq ? c : { ...c, lastSeq: seq }))
         }
-        scheduleRefetch()
+        if (!NOISE_KINDS.has(frame.event)) scheduleRefetch()
       },
       onStatus: (status, err) => {
         if (rt.generation !== generation) return

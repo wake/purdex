@@ -164,7 +164,7 @@ describe('NexExecutionsTable', () => {
     render(<NexExecutionsTable hostId="h" enabled />)
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(sse.openNexSse).toHaveBeenCalledTimes(1)
-    expect(sseOpts!.url).toBe('/api/nex/v1/events')
+    expect(sseOpts!.url.split('?')[0]).toBe('/api/nex/v1/events')
     expect(api.listExecutions).toHaveBeenCalledTimes(1)
     act(() => {
       sseOpts!.onFrame({ id: '1', event: 'execution.delegated', data: '{}' })
