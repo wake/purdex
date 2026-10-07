@@ -71,6 +71,7 @@ const READER_IMPORTERS = [
   'src/lib/rebuild/host-reshow.ts',
   'src/lib/rebuild/reconcile-host.ts',
   'src/lib/rebuild/revive.ts',
+  'src/lib/team/approval-goto.ts', // U22: a decision for a host hidden here switches nothing (P9 addendum decision 1)
 ]
 
 /** Tab-closing references per file at `6858fb1f` (files absent here referenced none, or did not exist). */
