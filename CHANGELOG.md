@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-alpha.589] - 2026-10-08
+
+> 動 daemon、`pdx` 指令與接力 mod 的 skill：**需要部署新 binary、重啟 daemon，並重跑 `pdx setup --agent cc`**。team.db 新增 `spawn_ops` 表與 team 用量欄位（`CREATE TABLE IF NOT EXISTS`／`ALTER TABLE ADD COLUMN`，不改既有資料；舊版 binary 仍可讀）。使用者可見：lead 現在可以開、列、關 member。
+
+### Added：lead / member / team 與 context 接力 — P4-4～P4-7（#1862、#1864、#1865、#1867、#1868、#1869、#1872、#1876、#1878、#1879）
+
+- **`pdx spawn`**：lead 在 grant 允許的目錄開一個 member（新的 tmux session 跑 Claude Code，一律載入 Purdex mod）。
+  - 可用 `--model`／`--effort` 指定模型（U20）；沒指定時會提醒「member 會用這台主機當下的預設模型」。
+  - 成為 lead 時也會提醒依任務指定 member 的模型。
+  - 開好後把 brief 從 lead 送給 member。
+  - 超過 member 上限、目錄不在 grant 內、不是 lead 都會被拒。
+  - member 20 秒內沒啟動就收掉並釋放名額。
+  - daemon 重啟後會從記錄的那一步接續，同一個 member 不會開兩次。
+- **`pdx team`**：列出自己 team 的 member，含 address、狀態、context %、實際的 model 與 effort。
+- **`pdx kill`**：關掉自己 team 的 member；只動 Purdex 開的那個 tmux session（比對世代與所有權記號），接力中會拒絕。
+- **member 離開後釋放名額**：daemon 確定 member 的程序已結束才標記為離開（無法確認時保留）。
+- **安全**：member 啟動指令只接受單純的指令（`team.member_command`），每個參數重新加引號，model 一律單引號；目錄檢查在建立 session 前後各做一次。
+
+### 追蹤
+- #1856、#1857（存活判定的保守邊角）、#1845、#1848（分流的 daemon 端驗證與 begin 逾時邊角）。
+
 ## [1.0.0-alpha.588] - 2026-10-08
 
 > 只動 daemon 的依賴（內嵌 Nexen），**需要部署新 binary 並重啟**才會生效；但這版本身沒有任何使用者可見的變化，可以跟下一個 daemon 版本一起部署。
