@@ -35,7 +35,8 @@ var executionIDPattern = regexp.MustCompile(`^[0-9A-Za-z_-]{1,64}$`)
 // — the module mounts it with RoutePrefix stripped), no headers (so
 // principalAuth names the bare "pdx:<hostID>"; a GET needs no lease), no
 // body, and the caller's context. Nothing from any user request ever
-// reaches it.
+// reaches it. The projector's list walks read their pages through it too
+// (page, projector_walk.go), built the same way.
 type rowReader struct {
 	handler http.Handler // the engine's handler (engine.handler), unprefixed
 	logf    func(string, ...any)
@@ -63,27 +64,7 @@ func (rr rowReader) read(ctx context.Context, id string) (row json.RawMessage, f
 		return nil, false, fmt.Errorf("nex row read %s: %w", id, err)
 	}
 
-	// recoverer turns a handler panic into a 500 and a log line; the flag
-	// also catches a panic that came after a complete 200 had been written,
-	// which a status check alone would take for a good row.
-	panicked := false
-	res := newBufferedResponse(rowBodyLimit)
-	h := recoverer(func(format string, args ...any) {
-		panicked = true
-		rr.logf(format, args...)
-	}, rr.handler)
-	func() {
-		// recoverer re-panics http.ErrAbortHandler for net/http to handle,
-		// and there is no net/http above an in-process read: stop it here
-		// rather than let it take the daemon down.
-		defer func() {
-			if rec := recover(); rec != nil {
-				panicked = true
-			}
-		}()
-		h.ServeHTTP(res, req)
-	}()
-
+	res, panicked := rr.serve(req, rowBodyLimit)
 	switch {
 	case panicked:
 		return nil, false, fmt.Errorf("nex row read %s: engine handler panicked", id)
@@ -116,6 +97,31 @@ func (rr rowReader) read(ctx context.Context, id string) (row json.RawMessage, f
 		return nil, false, fmt.Errorf("nex row read %s: %w", id, err)
 	}
 	return bytes.TrimRight(out, "\n"), true, nil
+}
+
+// serve runs an in-process request through the engine's handler into a
+// buffer capped at limit and reports whether the handler panicked. recoverer
+// turns a panic into a 500 and a log line; the flag also catches a panic
+// that came after a complete 200 had been written, which a status check
+// alone would take for a good answer.
+func (rr rowReader) serve(req *http.Request, limit int) (res *bufferedResponse, panicked bool) {
+	res = newBufferedResponse(limit)
+	h := recoverer(func(format string, args ...any) {
+		panicked = true
+		rr.logf(format, args...)
+	}, rr.handler)
+	func() {
+		// recoverer re-panics http.ErrAbortHandler for net/http to handle,
+		// and there is no net/http above an in-process read: stop it here
+		// rather than let it take the daemon down.
+		defer func() {
+			if rec := recover(); rec != nil {
+				panicked = true
+			}
+		}()
+		h.ServeHTTP(res, req)
+	}()
+	return res, panicked
 }
 
 // errResponseTooLarge is what a bufferedResponse's Write returns once the

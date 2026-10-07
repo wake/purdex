@@ -13,7 +13,8 @@ import (
 //
 // Every nex read whose result reaches a client goes through one module-wide
 // slot: the projector's single-row reads (projector.go), each list page the list
-// wrapper serves (listwrap.go), and the safety reconcile's pages (PR1c). A
+// wrapper serves (listwrap.go), and each page of the projector's own list
+// walks (projector_walk.go: the lastPushed seed, the safety reconcile). A
 // read that succeeded is stamped, inside the slot, with ver — a counter that
 // never resets within the process. Because no read can straddle another,
 // rule V holds: of two stamped reads, the one with the larger ver started
@@ -33,6 +34,11 @@ import (
 // §3.8's table sits well below it, so a line in the log means a read was
 // slower than anything benchmarked — worth seeing, not routine noise.
 const slotLogThreshold = 250 * time.Millisecond
+
+// maxBseq is the last bseq an epoch hands out: 2^53−1, the largest integer
+// a JavaScript client holds exactly (the session module's seq has the same
+// bound). The delta that would pass it opens a new epoch instead (§3.6).
+const maxBseq = 1<<53 - 1
 
 // errSlotBusy is what acquire returns when maxWait passed before the slot
 // freed. It is deliberately distinct from the context errors: the list
@@ -73,9 +79,10 @@ type readSlot struct {
 
 	// Only a holder of the slot reads or writes these; the channel
 	// operations order every access, so they need no lock of their own.
-	epoch string
-	ver   uint64 // never resets within the process (rule V)
-	bseq  uint64 // broadcast high-water mark; the projector advances it (nextBseq)
+	epoch     string
+	ver       uint64 // never resets within the process (rule V)
+	bseq      uint64 // broadcast high-water mark; the projector advances it (nextBseq), an epoch restarts it
+	bseqLimit uint64 // maxBseq in production; test seam
 
 	logf      func(string, ...any)
 	now       func() time.Time // time.Now in production; test seam
@@ -96,6 +103,7 @@ func newReadSlot(logf func(string, ...any)) *readSlot {
 	return &readSlot{
 		sem:       make(chan struct{}, 1),
 		epoch:     newEpoch(),
+		bseqLimit: maxBseq,
 		logf:      logf,
 		now:       time.Now,
 		threshold: slotLogThreshold,
@@ -226,16 +234,29 @@ func (s *readSlot) current() slotStamp {
 // nextBseq consumes the next broadcast sequence number. Only a holder of the
 // slot may call it — in practice readThen's then, right before the
 // broadcast it numbers — so bseq stays contiguous and in broadcast order
-// (§3.5).
-//
-// bseq would rotate the epoch at 2^53−1 (§3.5, as the session module's seq
-// does), but a rotation is a new epoch every client must be told about with
-// a hello to all — the same broadcast PR1c's resubscribe adds (§3.6). At a
-// million deltas a second that is 285 years away, so the rotation lands
-// with it. TODO(PR1c): rotate here once the epoch-start hello exists.
+// (§3.5). The caller checks bseqExhausted first: an epoch whose bseq would
+// pass the limit is over, and the projector opens the next one (with its
+// hello) in the same hold before numbering the delta.
 func (s *readSlot) nextBseq() uint64 {
 	s.bseq++
 	return s.bseq
+}
+
+// bseqExhausted reports whether the next bseq would pass the epoch's limit.
+// Only a holder of the slot may call it.
+func (s *readSlot) bseqExhausted() bool { return s.bseq >= s.bseqLimit }
+
+// rotateEpoch starts a new epoch: a fresh epoch id, bseq back to 0. ver is
+// left alone — it orders reads across epochs too, and rule V never resets
+// within the process — so a client compares a row's ver with any page's,
+// whichever epoch each was read in. It returns the new epoch. Only a holder
+// of the slot may call it, and the holder tells every subscriber (the
+// projector's epoch hello, §3.6) before it releases the slot, so no stamp
+// or delta of the new epoch reaches anyone ahead of the hello.
+func (s *readSlot) rotateEpoch() string {
+	s.epoch = newEpoch()
+	s.bseq = 0
+	return s.epoch
 }
 
 // noteWait records a wait for the slot and logs it when it ran past the
