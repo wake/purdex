@@ -224,7 +224,32 @@ func writePdxJSON(root, pdxPath, dataDir, cfgPath string) error {
 		m["config"] = cfgPath
 	}
 	b, _ := json.Marshal(m)
-	return os.WriteFile(filepath.Join(root, "pdx.json"), append(b, '\n'), 0o644)
+	// Written beside and renamed in, so a session starting meanwhile reads
+	// the old file or the new one, never a half-written one (which the mod
+	// would read as absent: pdx from PATH, no --config).
+	f, err := os.CreateTemp(root, ".pdx.json-*")
+	if err != nil {
+		return fmt.Errorf("write pdx.json: %w", err)
+	}
+	tmp := f.Name()
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("write pdx.json: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("write pdx.json: %w", err)
+	}
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("write pdx.json: %w", err)
+	}
+	if err := os.Rename(tmp, filepath.Join(root, "pdx.json")); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("write pdx.json: %w", err)
+	}
+	return nil
 }
 
 func copyFS(dst string, src fs.FS) error {
