@@ -77,7 +77,7 @@ export function handleApprovalEvent(hostId: string, value: unknown): void {
     const vanished = new Set(store.applySnapshot(hostId, ev.approvals))
     for (const q of queued) {
       if (vanished.has(q.approval.id)) toastEndedWhileAway(hostId, q.approval)
-      else void submitDecision(hostId, q.approval, q.decision, q.grant, { fromQueue: true })
+      else void submitDecision(hostId, q.approval, q.decision, q.grant, { fromQueue: true, pauseSession: q.pauseSession })
     }
     return
   }

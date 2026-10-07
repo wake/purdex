@@ -54,6 +54,16 @@ describe('notifyApprovalOpened', () => {
     expect(NotificationCtor).not.toHaveBeenCalled()
   })
 
+  it('a self_relay request is titled with the rounded usage and carries the spec §8.7 note as body (P5a-3b)', () => {
+    notifyApprovalOpened(H, approval({ kind: 'self_relay', payload: { op_id: 'op-1', used_percentage: 72.6, window: 1_000_000 } }))
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    expect(showNotification.mock.calls[0][0]).toMatchObject({
+      title: 'mlab：purdex-7c 申請接力（已用 73%）',
+      body: '核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）',
+      action: { kind: 'open-approval', hostId: H },
+    })
+  })
+
   it('broadcastTs is the request\'s identity, not its created_at: two requests born in the same millisecond on two hosts get two keys (F4)', () => {
     const a = approval({ id: 'same-ms-1', created_at: 1_696_000_000_000 })
     const b = approval({ id: 'same-ms-2', created_at: 1_696_000_000_000 })

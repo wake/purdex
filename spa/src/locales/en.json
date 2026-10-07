@@ -1330,6 +1330,13 @@
   "hosts.snapshots": "Snapshots",
   "hosts.snapshots.host_desc": "Rebuild records for this host's tabs.",
   "hosts.peers": "Peers",
+  "hosts.relay": "Relay",
+  "hosts.relay.desc": "Past 70% used, a session asks for approval before it relays; the request is pushed to every Purdex.app.",
+  "hosts.relay.self_solo": "Self relay for plain sessions",
+  "hosts.relay.self_lead": "Self relay for leads",
+  "hosts.relay.member": "Self relay for members",
+  "hosts.relay.member_note": "A member's relay is always arranged by its lead",
+  "hosts.relay.unsupported": "This host's daemon is too old for relay settings. Update pdx on that host.",
   "peers.desc": "Daemon-to-daemon pairings configured on this host. Both directions are verified live on every refresh; nothing is cached.",
   "peers.refresh": "Refresh",
   "peers.checking": "Checking…",
@@ -1955,5 +1962,13 @@
   "approval.dialog.deny": "Deny",
   "approval.toast.ended_while_away": "{{host}}: the {{kind}} from {{session}} ended while this app was disconnected; your decision was not sent",
   "approval.notify.title": "{{host}}: {{session}} requests to become lead",
-  "approval.restart.pending": "{{count}} request(s) awaiting approval"
+  "approval.restart.pending": "{{count}} request(s) awaiting approval",
+  "approval.dialog.title_self_relay": "{{host}}: {{session}} requests a relay",
+  "approval.dialog.ref": "Ref",
+  "approval.dialog.usage": "Usage",
+  "approval.dialog.usage_value": "{{pct}}% used",
+  "approval.dialog.self_relay_note": "Once approved, this session writes its relay file, clears, and takes over in place (about 1 minute)",
+  "approval.dialog.no_more_asking": "Stop asking for this session",
+  "approval.dialog.pause_failed": "Could not pause relay requests for this session ({{code}}); the decision is sent anyway",
+  "approval.notify.title_self_relay": "{{host}}: {{session}} requests a relay ({{pct}}% used)"
 }

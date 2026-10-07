@@ -92,6 +92,17 @@ export async function listOpenApprovals(hostId: string): Promise<Approval[]> {
   return Array.isArray(r.approvals) ? r.approvals : []
 }
 
+/** `POST /api/relay/self` (spec §8.7 (a)): the dialog's 「這個 session 不再詢問」 sets the per-session pause. */
+export interface RelaySelfResponse { self_relay: 'on' | 'off' | 'paused'; host_switch: boolean; member: boolean }
+
+export function setSelfRelayPause(hostId: string, sessionId: string, action: 'off' | 'on' | 'status'): Promise<RelaySelfResponse> {
+  return send<RelaySelfResponse>(hostId, '/api/relay/self', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, action }),
+  })
+}
+
 const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.trunc(v) : 0)
 
 /**

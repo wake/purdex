@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import { ApprovalApiError, decideApproval, fetchInflight, listOpenApprovals } from './approval-api'
-import { leadPayloadOf, type Approval } from './types'
+import { leadPayloadOf, selfRelayPayloadOf, type Approval } from './types'
 
 const testGlobal = globalThis as typeof globalThis & { fetch: ReturnType<typeof vi.fn> }
 
@@ -174,6 +174,23 @@ describe('approval-api', () => {
       } finally {
         vi.useRealTimers()
       }
+    })
+  })
+
+  describe('selfRelayPayloadOf', () => {
+    it('reads the self_relay payload; model / effort only when non-empty strings', () => {
+      expect(selfRelayPayloadOf(approval({ kind: 'self_relay', payload: { op_id: 'op', used_percentage: 72.4, window: 200000, model_id: 'm', effort: 'low' } })))
+        .toEqual({ op_id: 'op', used_percentage: 72.4, window: 200000, model_id: 'm', effort: 'low' })
+      expect(selfRelayPayloadOf(approval({ kind: 'self_relay', payload: { op_id: 'op', used_percentage: 72.4, window: 200000, model_id: '', effort: 7 } })))
+        .toEqual({ op_id: 'op', used_percentage: 72.4, window: 200000 })
+    })
+    it('defends against a malformed payload: non-finite numbers read 0, non-strings read empty, window truncated', () => {
+      expect(selfRelayPayloadOf(approval({ kind: 'self_relay', payload: { op_id: 5, used_percentage: Number.NaN, window: 1.9 } })))
+        .toEqual({ op_id: '', used_percentage: 0, window: 1 })
+      expect(selfRelayPayloadOf(approval({ kind: 'self_relay', payload: { used_percentage: Infinity, window: '200000' } })))
+        .toEqual({ op_id: '', used_percentage: 0, window: 0 })
+      expect(selfRelayPayloadOf(approval({ kind: 'self_relay', payload: 'garbage' })))
+        .toEqual({ op_id: '', used_percentage: 0, window: 0 })
     })
   })
 
