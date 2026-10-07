@@ -1575,6 +1575,50 @@ func TestNormalizeRemoteRows_RefMustBeWellFormed(t *testing.T) {
 	}
 }
 
+// TestNormalizeRemoteRows_VirtualName is Peer Address v5 on the sending side
+// (peer mailbox spec §3.3): a remote row is addressed by the virtual name its
+// own daemon assigned. Only a batch in which no live row carries one — a
+// daemon from before v5 — has its registry names stand in, so mixed versions
+// keep working while a current remote's registry names stay unroutable, as
+// they are on that remote itself.
+func TestNormalizeRemoteRows_VirtualName(t *testing.T) {
+	live := func(name, peerName, ref string) ipeers.PeerRecord {
+		return ipeers.PeerRecord{RowKind: "entry", Ref: ref, Name: name,
+			Agent: &ipeers.AgentInfo{Type: "cc", PID: 7, PeerName: peerName, SessionID: "sid" + ref}}
+	}
+	check := func(t *testing.T, got ipeers.PeerRecord, wantName, wantAddr string) {
+		t.Helper()
+		if got.Name != wantName || got.Address != wantAddr {
+			t.Errorf("name/address = %q/%q, want %q/%q", got.Name, got.Address, wantName, wantAddr)
+		}
+	}
+
+	t.Run("a current remote's row takes its virtual name, a nameless one its ref", func(t *testing.T) {
+		got := normalizeRemoteRows([]ipeers.PeerRecord{
+			live("purdex-b0-q3", "purdex-b0", "_q34psn"),
+			live("", "nexen-f2", "_df25d0"),
+		}, "air", "air:111")
+		check(t, got[0], "purdex-b0-q3", "air/purdex-b0-q3")
+		check(t, got[1], "", "air/_df25d0") // its registry name is not promoted
+	})
+	t.Run("a pre-v5 remote's registry name stands in as the name", func(t *testing.T) {
+		got := normalizeRemoteRows([]ipeers.PeerRecord{live("", "purdex-b0", "_q34psn")}, "air", "air:111")
+		check(t, got[0], "purdex-b0", "air/purdex-b0")
+	})
+	t.Run("an unroutable virtual name is dropped, never printed", func(t *testing.T) {
+		for _, name := range []string{"trusted:ops", "q34psn", "has/slash", "Trusted", "trusted ops"} {
+			got := normalizeRemoteRows([]ipeers.PeerRecord{live(name, "purdex-b0", "_q34psn")}, "air", "air:111")
+			check(t, got[0], "", "air/_q34psn")
+		}
+	})
+	t.Run("a name on a row with no live entry is dropped", func(t *testing.T) {
+		dead := ipeers.PeerRecord{RowKind: "session", SessionName: "mt1", Name: "ghost-q3",
+			Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "sid"}}
+		got := normalizeRemoteRows([]ipeers.PeerRecord{live("purdex-b0-q3", "purdex-b0", "_q34psn"), dead}, "air", "air:111")
+		check(t, got[1], "", "air/tmux:mt1")
+	})
+}
+
 // TestNormalizeRemoteRows_NilRowsReturnsNonNilEmpty guards the fan-out
 // row-shape invariant fetchHostResult relies on: a "peers" list is always
 // a non-nil (possibly empty) slice, never null on the wire.

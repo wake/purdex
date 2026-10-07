@@ -737,9 +737,23 @@ func (p *localPeer) assertNoLine() {
 	}
 }
 
-// localSendReq addresses the extra local peer by name, from the origin.
+// localSendReq addresses the extra local peer by name, from the origin: its
+// virtual name (Peer Address v5), which is what routes — the registry name
+// it was assigned from does not.
 func (s *sendEnv) localSendReq() ipeers.SendRequest {
-	return ipeers.SendRequest{To: localAlias + "/" + localPeerName, Text: "hello from next door", OriginInbox: s.targetSock}
+	return ipeers.SendRequest{To: localAlias + "/" + vname(s.t, localPeerName, localPeerSessionID), Text: "hello from next door", OriginInbox: s.targetSock}
+}
+
+// nameAs stores name as each session's virtual name before any pass sees it
+// (Assign is first-writer-wins), so two conversations can be made to hold one
+// name — spec §3.2's "同名", which is otherwise only a chance collision.
+func (s *sendEnv) nameAs(name string, sessionIDs ...string) {
+	s.t.Helper()
+	for _, sid := range sessionIDs {
+		if _, err := s.m.peerNames.Assign(context.Background(), sid, ipeers.RefID(sid), name, "registry", 1); err != nil {
+			s.t.Fatalf("assign %s: %v", sid, err)
+		}
+	}
 }
 
 // TestSend_LocalTarget pins that all three host-segment forms HostMatches
@@ -757,7 +771,7 @@ func TestSend_LocalTarget(t *testing.T) {
 			s := newSendEnv(t, envOpts{})
 			p := s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
 			req := s.localSendReq()
-			req.To = host + "/" + localPeerName
+			req.To = host + "/" + vname(t, localPeerName, localPeerSessionID)
 
 			resp := s.sendOK(req)
 			if resp.Result != ipeers.ResultDelivered {
@@ -1099,9 +1113,10 @@ func TestSend_LocalRefusalsNameThisHost(t *testing.T) {
 		{
 			name: "ambiguous",
 			setup: func(s *sendEnv) string {
+				s.nameAs("twins-zz", localPeerSessionID, twinPeerSessionID)
 				s.addLocalPeer("twins", localPeerSessionID, localPeerPID)
 				s.addLocalPeer("twins", twinPeerSessionID, twinPeerPID)
-				return localAlias + "/twins"
+				return localAlias + "/twins-zz"
 			},
 			status: http.StatusConflict, code: ipeers.ErrAmbiguous,
 		},
@@ -1176,7 +1191,7 @@ func TestSend_LocalRefusalsNameThisHost(t *testing.T) {
 // delivered would be just as much a loop.
 func TestSend_SelfTargetRefused(t *testing.T) {
 	forms := []struct{ name, session string }{
-		{"by name", targetPeerName},
+		{"by name", vname(t, targetPeerName, targetSessionID)},
 		{"by ref", ipeers.RefID(targetSessionID)},
 	}
 	for _, f := range forms {
@@ -1224,7 +1239,7 @@ func TestSend_RemoteTargetSharingTheOriginsTupleIsNotSelfTarget(t *testing.T) {
 	s.set(func(s *sendEnv) { s.env = mirrored })
 
 	req := s.sendReq()
-	req.To = remoteAlias + "/" + targetPeerName // the origin's own name, on the OTHER host
+	req.To = remoteAlias + "/" + vname(t, targetPeerName, targetSessionID) // the origin's own name, on the OTHER host
 
 	resp := s.sendOK(req)
 	if resp.Result != ipeers.ResultDelivered {
@@ -2039,6 +2054,9 @@ func TestSend_PeerEchoesOurTokenIsRedacted(t *testing.T) {
 		to      string // request address; "" = sendReq()'s default
 		status  int
 		rows    int // audit rows expected (pre-insert refusals are unaudited)
+		// dropped: the field the peer filled is not echoed at all, so there
+		// is no redaction marker to find either.
+		dropped bool
 	}{
 		{name: "deliver refused", prepare: func(s *sendEnv) {
 			s.postRem = &ipeers.RemoteError{Status: http.StatusConflict, Error: echo, Detail: "detail " + remoteToken}
@@ -2073,12 +2091,14 @@ func TestSend_PeerEchoesOurTokenIsRedacted(t *testing.T) {
 			a.Cwd, b.Cwd = "/w/"+remoteToken+"/one", "/w/"+remoteToken+"/two"
 			s.env = remoteEnvelope(a, b)
 		}, to: remoteAlias + "/" + canonical, status: http.StatusConflict},
-		// The name-mismatch detail names the name the ref answers to now.
+		// The name-mismatch detail names the name the ref answers to now: a
+		// virtual name, which must be routable, and a redacted one is not —
+		// so a peer's name carrying our token is dropped, never echoed.
 		{name: "name mismatch detail", prepare: func(s *sendEnv) {
 			row := remoteRow(remoteSession, "fooc")
-			row.Agent.PeerName = "pn-" + remoteToken
+			row.Name = "pn-" + remoteToken
 			s.env = remoteEnvelope(row)
-		}, to: remoteAlias + "/decoy-name [" + strings.TrimPrefix(canonical, "_") + "]", status: http.StatusConflict},
+		}, to: remoteAlias + "/decoy-name [" + strings.TrimPrefix(canonical, "_") + "]", status: http.StatusConflict, dropped: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -2095,8 +2115,11 @@ func TestSend_PeerEchoesOurTokenIsRedacted(t *testing.T) {
 			if body := rr.Body.String(); strings.Contains(body, remoteToken) {
 				t.Errorf("wire response echoes our outbound token: %s", body)
 			}
-			if !strings.Contains(rr.Body.String(), "[redacted]") {
+			if !c.dropped && !strings.Contains(rr.Body.String(), "[redacted]") {
 				t.Errorf("wire response does not show the redaction marker: %s", rr.Body.String())
+			}
+			if c.dropped && strings.Contains(rr.Body.String(), "pn-") {
+				t.Errorf("wire response echoes the peer's unroutable name: %s", rr.Body.String())
 			}
 			rows := s.rows()
 			if len(rows) != c.rows {
@@ -2179,4 +2202,37 @@ func TestSend_CombinedNameMismatchRefused(t *testing.T) {
 	if rr := s.send(adminCtx(), req); rr.Code != http.StatusOK {
 		t.Fatalf("matching combined form: status = %d, want 200; body=%s", rr.Code, rr.Body.String())
 	}
+}
+
+// TestSend_RemoteRoutesByVirtualName is spec §3.3 on the sending side. A
+// current remote's row carries its virtual name, and that is what routes to
+// it; its registry name does not, exactly as on that remote itself. A pre-v5
+// remote (no name on any row) is still reached by registry name, so mixed
+// versions keep working.
+func TestSend_RemoteRoutesByVirtualName(t *testing.T) {
+	t.Run("current remote", func(t *testing.T) {
+		s := newSendEnv(t, envOpts{})
+		// Its tmux session is named apart from its registry name, so the bare
+		// tmux-name tier cannot answer for the registry name below.
+		row := remoteRow("air-main", "fooc")
+		row.Name = "foo-9z"
+		s.set(func(s *sendEnv) { s.env = remoteEnvelope(row) })
+
+		req := s.sendReq()
+		req.To = remoteAlias + "/foo-9z"
+		if resp := s.sendOK(req); resp.ToAddress != remoteAlias+"/foo-9z" || resp.To.AgentSessionID != remoteSessionID {
+			t.Errorf("sent to %q %+v, want %s/foo-9z, the remote row", resp.ToAddress, resp.To, remoteAlias)
+		}
+		req.To = remoteAlias + "/" + remoteSession
+		assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
+		if n := len(s.postCalls()); n != 1 {
+			t.Errorf("posts = %d, want 1: the registry name must not deliver", n)
+		}
+	})
+	t.Run("pre-v5 remote", func(t *testing.T) {
+		s := newSendEnv(t, envOpts{}) // remoteRow carries no name
+		if resp := s.sendOK(s.sendReq()); resp.ToAddress != remoteAlias+"/"+remoteSession {
+			t.Errorf("to_address = %q, want %s/%s by the old rule", resp.ToAddress, remoteAlias, remoteSession)
+		}
+	})
 }
