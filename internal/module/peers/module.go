@@ -207,10 +207,12 @@ type Module struct {
 	// titles is the peer_labels store (Task 3/7): Snapshot joins into every
 	// inventory build (localEnvelope, unguarded — a plain read with no
 	// ordering requirement of its own); the self routes (titles.go —
-	// whoami, claim, release) read and write it under titleMu, held across
-	// the whole verb (origin/registry read through the store call and the
-	// response construction), even whoami's own Snapshot-only read, so a
-	// concurrent claim/release can never interleave with it.
+	// whoami, claim, release) read and write it under titleMu, held from the
+	// origin/registry read through the title store call, even whoami's own
+	// Snapshot-only read, so a concurrent claim/release can never interleave
+	// with it. The record is built after the lock is released, from what was
+	// read under it: its virtual name comes from another store (renderSelf),
+	// and waiting on that store must never hold titleMu.
 	titles  TitleStore
 	titleMu sync.Mutex
 

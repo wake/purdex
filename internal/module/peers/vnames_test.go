@@ -363,7 +363,7 @@ func TestVirtualAddress_WhoamiOriginAndEnvelopeAgree(t *testing.T) {
 		20: "a/" + vname(t, "n20", "sid-2"),
 	}
 	// pid 20 is first seen by whoami, pid 10 by the inventory.
-	if res := f.m.whoami(f.inbox(20)); res.err != nil || res.rec.Address != want[20] || res.rec.Name != want[20][2:] {
+	if res := f.m.whoami(context.Background(), f.inbox(20)); res.err != nil || res.rec.Address != want[20] || res.rec.Name != want[20][2:] {
 		t.Fatalf("whoami(20) = %+v / %+v, want %s", res.rec, res.err, want[20])
 	}
 	snap := f.m.configSnapshot()
@@ -379,7 +379,7 @@ func TestVirtualAddress_WhoamiOriginAndEnvelopeAgree(t *testing.T) {
 		if row == nil || row.Address != want[pid] || row.Agent.PeerName != fmt.Sprintf("n%d", pid) {
 			t.Fatalf("envelope row for %s = %+v, want address %s", sid, row, want[pid])
 		}
-		if res := f.m.whoami(f.inbox(pid)); res.rec.Address != want[pid] {
+		if res := f.m.whoami(context.Background(), f.inbox(pid)); res.rec.Address != want[pid] {
 			t.Errorf("whoami(%d) = %q, want %q", pid, res.rec.Address, want[pid])
 		}
 		if o, ok, err := r.ResolveOrigin(f.inbox(pid)); !ok || err != nil || o.Address != want[pid] || o.Name != row.Agent.PeerName {
@@ -403,7 +403,7 @@ func TestVirtualAddress_StoreErrorFallsBackToRef(t *testing.T) {
 			t.Errorf("row name/address = %q/%q, want \"\"/%s", row.Name, row.Address, want)
 		}
 	}
-	if res := f.m.whoami(f.inbox(10)); res.rec.Address != want {
+	if res := f.m.whoami(context.Background(), f.inbox(10)); res.rec.Address != want {
 		t.Errorf("whoami = %q, want %q", res.rec.Address, want)
 	}
 	if o, _, _ := (&OriginResolver{m: f.m}).ResolveOrigin(f.inbox(10)); o.Address != want {
@@ -469,5 +469,60 @@ func TestVirtualAddress_EnvelopeNamerStaysInBudget(t *testing.T) {
 	}
 	if !seen {
 		t.Fatalf("no row for sid-1 in %+v", env)
+	}
+}
+
+// The self verbs name the caller under the request's ctx, bounded by
+// namerTimeout, and never while holding titleMu: a hung name store answers a
+// cancelled request at once, answers any request within the bound (in the
+// ref form), and never blocks another self verb.
+func TestVirtualAddress_SelfVerbsNamerIsBoundedAndOutsideTitleMu(t *testing.T) {
+	f := newTitleFixture(t)
+	blocking := newBlockingNames(f.m)
+	f.m.WithPeerNames(blocking, nil)
+	ref20 := "a/" + ipeers.RefID("sid-2")
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	verbs := map[string]func(context.Context) selfResult{
+		"whoami":  func(ctx context.Context) selfResult { return f.m.whoami(ctx, f.inbox(20)) },
+		"claim":   func(ctx context.Context) selfResult { return f.m.claim(ctx, f.inbox(20), "purdex-tester") },
+		"release": func(ctx context.Context) selfResult { return f.m.release(ctx, f.inbox(20)) },
+	}
+	for name, verb := range verbs {
+		start := time.Now()
+		var res selfResult
+		within(t, 5*time.Second, name+" (cancelled request)", func() { res = verb(cancelled) })
+		if el := time.Since(start); el >= namerTimeout/2 {
+			t.Errorf("%s on a cancelled request took %v; the request's ctx must reach the namer", name, el)
+		}
+		if res.err != nil || res.rec.Address != ref20 {
+			t.Errorf("%s = %+v / %+v, want address %s", name, res.rec, res.err, ref20)
+		}
+	}
+
+	// A request that never ends: bounded by namerTimeout, waiting outside titleMu.
+	select {
+	case <-blocking.entered:
+	default:
+	}
+	done := make(chan selfResult, 1)
+	go func() { done <- f.m.whoami(context.Background(), f.inbox(20)) }()
+	select {
+	case <-blocking.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("whoami never reached the name store")
+	}
+	if !f.m.titleMu.TryLock() {
+		t.Fatal("titleMu is held while whoami waits on the name store")
+	}
+	f.m.titleMu.Unlock()
+	select {
+	case res := <-done:
+		if res.rec.Address != ref20 {
+			t.Errorf("whoami = %q, want the ref form %s", res.rec.Address, ref20)
+		}
+	case <-time.After(namerTimeout + 3*time.Second):
+		t.Fatalf("whoami not bounded by namerTimeout (%v)", namerTimeout)
 	}
 }

@@ -34,6 +34,12 @@ func (m *Module) WithPeerNames(s PeerNameStore, convNames ConversationNameReader
 	return m
 }
 
+// namerTimeout bounds naming outside an inventory pass (the self verbs, the
+// origin resolver), which has no budget of its own: a name store that does
+// not answer in time costs that answer its virtual name (the ref form),
+// never the caller.
+const namerTimeout = time.Second
+
 // nameCandidate is one conversation an inventory pass may name: its session
 // id and ref, the registry name its live entry carries now, its relay
 // lineage (newest first) and, for an execution only (P4), its cwd basename.

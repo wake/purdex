@@ -114,26 +114,58 @@ func (m *Module) origin(inbox string) (entries []ipeers.Entry, proxies map[int]b
 // title store — no write, so a failing store only degrades this to
 // store_unavailable rather than reporting "no title" as fact when it
 // simply could not look (spec §3.6).
-func (m *Module) whoami(inbox string) selfResult {
-	m.titleMu.Lock()
-	defer m.titleMu.Unlock()
-	_, _, e, res, ok := m.origin(inbox)
-	if !ok {
+func (m *Module) whoami(ctx context.Context, inbox string) selfResult {
+	p, res := func() (*pendingRecord, selfResult) {
+		m.titleMu.Lock()
+		defer m.titleMu.Unlock()
+		_, _, e, res, ok := m.origin(inbox)
+		if !ok {
+			return nil, res
+		}
+		rows, err := m.titles.Snapshot()
+		if err != nil {
+			return nil, fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "title store read failed")
+		}
+		row, has := titleRows(rows)[e.SessionID]
+		return &pendingRecord{e: e, info: infoOf(row, has)}, selfResult{}
+	}()
+	if p == nil {
 		return res
 	}
-	rows, err := m.titles.Snapshot()
-	if err != nil {
-		return fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "title store read failed")
-	}
-	snap := m.configSnapshot()
-	row, has := titleRows(rows)[e.SessionID]
 	// The entry origin() validated is all whoami needs: the address is the
 	// conversation's virtual name from the store the listing reads (else
 	// RefID of that entry's own sessionId), so this answer is identical to
 	// the listing's (spec §4.5) rather than resolved over the same
 	// population.
-	vn := m.virtualNamesOf(context.Background(), e)[e.SessionID]
-	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, infoOf(row, has), vn)}
+	return selfResult{status: http.StatusOK, rec: m.renderSelf(ctx, *p)[0]}
+}
+
+// pendingRecord is a self-route record decided under titleMu — the entry and
+// the title it shows — and built after the lock is released.
+type pendingRecord struct {
+	e    ipeers.Entry
+	info ipeers.TitleInfo
+}
+
+// renderSelf builds the self verbs' records once titleMu is released: the
+// virtual names come from another store, so they are resolved outside the
+// lock, under the request's ctx and at most namerTimeout. A name store that
+// hangs costs these records their names (the ref form), never the answer,
+// and never another verb waiting on titleMu.
+func (m *Module) renderSelf(ctx context.Context, recs ...pendingRecord) []ipeers.PeerRecord {
+	ctx, cancel := context.WithTimeout(ctx, namerTimeout)
+	defer cancel()
+	entries := make([]ipeers.Entry, len(recs))
+	for i, r := range recs {
+		entries[i] = r.e
+	}
+	vnames := m.virtualNamesOf(ctx, entries...)
+	snap := m.configSnapshot()
+	out := make([]ipeers.PeerRecord, len(recs))
+	for i, r := range recs {
+		out[i] = ipeers.EntryRecord(snap.alias, snap.hostID, r.e, false, r.info, vnames[r.e.SessionID])
+	}
+	return out
 }
 
 // claim gives the caller's own conversation a title. A title another live
@@ -161,19 +193,42 @@ func (m *Module) whoami(inbox string) selfResult {
 // The reserved-word refusal is gone with the grammar: a title reaches
 // nothing, so "cc" and "tmux" have nothing to shadow — which is why no
 // path below can return ErrCodeTitleReserved any more.
-func (m *Module) claim(inbox, title string) selfResult {
+func (m *Module) claim(ctx context.Context, inbox, title string) selfResult {
 	if err := ipeers.ValidateTitle(title); err != nil {
 		return fail(http.StatusBadRequest, ipeers.ErrCodeTitleInvalid, err.Error())
 	}
+	caller, holders, liveTitles, res, ok := m.claimLocked(inbox, title)
+	if !ok {
+		return res
+	}
+	// One naming pass for the caller and every other holder, outside
+	// titleMu, so each record carries the address the listing shows for it.
+	recs := m.renderSelf(ctx, append([]pendingRecord{caller}, holders...)...)
+	out := selfResult{status: http.StatusOK, rec: recs[0]}
+	if len(holders) > 0 {
+		out.warn = &ipeers.SelfWarning{
+			Code:       ipeers.WarnTitleInUse,
+			Detail:     inUseDetail(title, len(holders)),
+			Holders:    recs[1:],
+			LiveTitles: liveTitles,
+		}
+	}
+	return out
+}
+
+// claimLocked is claim's work under titleMu: the origin, the title store
+// read and write, and the records to render — the caller's, and the other
+// live holders' of the title — with live_titles for the warning.
+func (m *Module) claimLocked(inbox, title string) (caller pendingRecord, holders []pendingRecord, liveTitles []string, res selfResult, ok bool) {
 	m.titleMu.Lock()
 	defer m.titleMu.Unlock()
 	entries, proxies, e, res, ok := m.origin(inbox)
 	if !ok {
-		return res
+		return pendingRecord{}, nil, nil, res, false
 	}
 	rows, err := m.titles.Snapshot()
 	if err != nil {
-		return fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "title store read failed")
+		return pendingRecord{}, nil, nil, fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "title store read failed"), false
 	}
 
 	// liveEntry maps every live, non-proxy entry's session id to that
@@ -219,7 +274,6 @@ func (m *Module) claim(inbox, title string) selfResult {
 	// whether to write at all: normalising it would swallow a re-cased or
 	// re-spaced rename of one's own title, leaving the store holding a
 	// string the caller did not ask for.
-	var liveTitles []string
 	var others []store.PeerLabel
 	var own *store.PeerLabel
 	want := ipeers.NormalizeTitle(title)
@@ -245,27 +299,8 @@ func (m *Module) claim(inbox, title string) selfResult {
 	liveTitles = append(liveTitles, title)
 	sort.Strings(liveTitles)
 
-	snap := m.configSnapshot()
-	// One naming pass for the caller and every other holder, so each record
-	// below carries the address the listing shows for it.
-	named := []ipeers.Entry{e}
 	for _, o := range others {
-		named = append(named, liveEntry[o.SessionID])
-	}
-	vnames := m.virtualNamesOf(context.Background(), named...)
-	var warn *ipeers.SelfWarning
-	if len(others) > 0 {
-		holders := make([]ipeers.PeerRecord, 0, len(others))
-		for _, o := range others {
-			he := liveEntry[o.SessionID]
-			holders = append(holders, ipeers.EntryRecord(snap.alias, snap.hostID, he, false, ipeers.TitleInfo{Title: o.Label, Rev: o.Rev}, vnames[he.SessionID]))
-		}
-		warn = &ipeers.SelfWarning{
-			Code:       ipeers.WarnTitleInUse,
-			Detail:     inUseDetail(title, len(others)),
-			Holders:    holders,
-			LiveTitles: liveTitles,
-		}
+		holders = append(holders, pendingRecord{e: liveEntry[o.SessionID], info: ipeers.TitleInfo{Title: o.Label, Rev: o.Rev}})
 	}
 
 	var row store.PeerLabel
@@ -276,14 +311,10 @@ func (m *Module) claim(inbox, title string) selfResult {
 		row, err = m.titles.Claim(e.SessionID, title, m.now())
 		if err != nil {
 			m.logf("peers: claim %q for %s: %v", title, e.SessionID, err)
-			return fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "title store write failed")
+			return pendingRecord{}, nil, nil, fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "title store write failed"), false
 		}
 	}
-	return selfResult{
-		status: http.StatusOK,
-		rec:    ipeers.EntryRecord(snap.alias, snap.hostID, e, false, ipeers.TitleInfo{Title: row.Label, Rev: row.Rev}, vnames[e.SessionID]),
-		warn:   warn,
-	}
+	return pendingRecord{e: e, info: ipeers.TitleInfo{Title: row.Label, Rev: row.Rev}}, holders, liveTitles, selfResult{}, true
 }
 
 // inUseDetail is the title_in_use warning's sentence. It says "also", and
@@ -309,28 +340,32 @@ func inUseDetail(title string, others int) string {
 // unreadable store leaves the title exactly where it was rather than
 // half-releasing it. What the read no longer has to do is resolve the
 // default the response should show — there is no default any more.
-func (m *Module) release(inbox string) selfResult {
-	m.titleMu.Lock()
-	defer m.titleMu.Unlock()
-	_, _, e, res, ok := m.origin(inbox)
-	if !ok {
+func (m *Module) release(ctx context.Context, inbox string) selfResult {
+	p, res := func() (*pendingRecord, selfResult) {
+		m.titleMu.Lock()
+		defer m.titleMu.Unlock()
+		_, _, e, res, ok := m.origin(inbox)
+		if !ok {
+			return nil, res
+		}
+		if _, err := m.titles.Snapshot(); err != nil {
+			return nil, fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "title store read failed")
+		}
+		row, had, err := m.titles.Release(e.SessionID, m.now())
+		if err != nil {
+			m.logf("peers: release for %s: %v", e.SessionID, err)
+			return nil, fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "title store write failed")
+		}
+		info := ipeers.TitleInfo{}
+		if had {
+			info.Rev = row.Rev
+		}
+		return &pendingRecord{e: e, info: info}, selfResult{}
+	}()
+	if p == nil {
 		return res
 	}
-	if _, err := m.titles.Snapshot(); err != nil {
-		return fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "title store read failed")
-	}
-	row, had, err := m.titles.Release(e.SessionID, m.now())
-	if err != nil {
-		m.logf("peers: release for %s: %v", e.SessionID, err)
-		return fail(http.StatusServiceUnavailable, ipeers.ErrStoreUnavailable, "title store write failed")
-	}
-	info := ipeers.TitleInfo{}
-	if had {
-		info.Rev = row.Rev
-	}
-	snap := m.configSnapshot()
-	vn := m.virtualNamesOf(context.Background(), e)[e.SessionID]
-	return selfResult{status: http.StatusOK, rec: ipeers.EntryRecord(snap.alias, snap.hostID, e, false, info, vn)}
+	return selfResult{status: http.StatusOK, rec: m.renderSelf(ctx, *p)[0]}
 }
 
 // handleSelf serves POST /api/peers/self: whoami.
@@ -344,7 +379,7 @@ func (m *Module) handleSelf(w http.ResponseWriter, r *http.Request) {
 		writeWireError(w, http.StatusBadRequest, ipeers.APIError{Error: ipeers.ErrBadRequest, Detail: "invalid JSON body"})
 		return
 	}
-	writeSelfResult(w, m.whoami(req.OriginInbox))
+	writeSelfResult(w, m.whoami(r.Context(), req.OriginInbox))
 }
 
 // handleClaimTitle serves PUT /api/peers/self/title: claim.
@@ -358,7 +393,7 @@ func (m *Module) handleClaimTitle(w http.ResponseWriter, r *http.Request) {
 		writeWireError(w, http.StatusBadRequest, ipeers.APIError{Error: ipeers.ErrBadRequest, Detail: "invalid JSON body"})
 		return
 	}
-	writeSelfResult(w, m.claim(req.OriginInbox, req.Title))
+	writeSelfResult(w, m.claim(r.Context(), req.OriginInbox, req.Title))
 }
 
 // handleReleaseTitle serves DELETE /api/peers/self/title: release.
@@ -372,14 +407,14 @@ func (m *Module) handleReleaseTitle(w http.ResponseWriter, r *http.Request) {
 		writeWireError(w, http.StatusBadRequest, ipeers.APIError{Error: ipeers.ErrBadRequest, Detail: "invalid JSON body"})
 		return
 	}
-	writeSelfResult(w, m.release(req.OriginInbox))
+	writeSelfResult(w, m.release(r.Context(), req.OriginInbox))
 }
 
 // writeSelfResult encodes a selfResult: the error body on failure, the
 // ipeers.SelfResponse envelope on success (spec §6.3 — the record used to
 // go out bare, with nowhere to carry a warning). Always called after
-// titleMu is released — the lock covers the registry read, the store write
-// and the construction of res itself, never the encode.
+// titleMu is released — the lock covers the registry read and the title
+// store read and write, never the naming, the record or the encode.
 func writeSelfResult(w http.ResponseWriter, res selfResult) {
 	if res.err != nil {
 		writeWireError(w, res.status, *res.err)

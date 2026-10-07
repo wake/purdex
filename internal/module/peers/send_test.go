@@ -1411,10 +1411,10 @@ func TestSend_AddressRevIsZeroAfterRelabel(t *testing.T) {
 
 	// Claim once, then claim a different label: two revisions of the label
 	// row, neither of them a revision of the address.
-	if res := s.m.claim(s.targetSock, "purdex-tester"); res.err != nil {
+	if res := s.m.claim(context.Background(), s.targetSock, "purdex-tester"); res.err != nil {
 		t.Fatalf("first claim: %+v", res.err)
 	}
-	res := s.m.claim(s.targetSock, "purdex-tester-2")
+	res := s.m.claim(context.Background(), s.targetSock, "purdex-tester-2")
 	if res.err != nil {
 		t.Fatalf("second claim: %+v", res.err)
 	}
