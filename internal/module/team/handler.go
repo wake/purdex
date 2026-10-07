@@ -412,6 +412,10 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		t := team.Team{ID: id, HostID: a.HostID, LeadSessionID: a.Origin.SessionID, LeadRef: a.Origin.Ref,
 			Grant: *grant, RequestID: id, CreatedAt: now}
 		after, won, err = m.closeWith(id, func() (team.Approval, bool, error) { return m.store.CloseLeadApproved(id, c, t) })
+	} else if state == team.StateApproved && a.Kind == team.KindSelfRelay {
+		after, won, err = m.closeWith(id, func() (team.Approval, bool, error) {
+			return m.store.CloseSelfRelayApproved(id, c, a.Origin.SessionID)
+		})
 	} else {
 		after, won, err = m.closeAs(id, c)
 	}
@@ -425,6 +429,17 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		// reads as "closed elsewhere" to the App.
 		m.logf("[team] approval %s: approve by %s %q from %s refused: origin %s already leads a live team", id, client.Kind, client.Label, client.Addr, a.Origin.Ref)
 		m.writeErr(w, http.StatusConflict, team.ErrAlreadyLead, "this session already leads a live team; the request stays open", nil)
+		return
+	}
+	if errors.Is(err, ErrMemberRelayIsLeads) {
+		// U13: the origin became a member after its begin. The mod follows
+		// the row, so the request is cancelled (its wait ends, exit 12) and
+		// the op with it, never claimed (P4-3 review H2).
+		rep := RelayReport{State: team.RelayCancelled, Reason: team.ErrMemberRelayIsLeads, At: now}
+		if _, _, cerr := m.closeAsWithOp(id, Close{State: team.StateCancelled, DecidedAt: now}, rep); cerr != nil {
+			m.logf("[team] approval %s: cancel the request of a member: %v", id, cerr)
+		}
+		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排; the request is cancelled", nil)
 		return
 	}
 	if errors.Is(err, ErrMemberCannotLead) { // as already_lead: rolled back, the row stays open

@@ -239,6 +239,56 @@ func TestDecide_MemberCannotLeadAtApprove(t *testing.T) {
 	}
 }
 
+// P4-3 review H2 (U13): a session that became a member after its solo
+// begin is never claimed. Its approve is 409 member_relay_is_leads in the
+// approve transaction, and the request and op are cancelled instead: the
+// mod follows the ROW, so an approved row would still write and /clear.
+func TestDecide_SelfRelayOfANewMemberIsCancelled(t *testing.T) {
+	f := newFixture(t)
+	out := f.begin("sid-1")
+	f.makeMember("sid-1")
+	f.events()
+	code, body := f.decide(out.RequestID, "approve")
+	if e := decodeErr(t, body); code != http.StatusConflict || e.Error != team.ErrMemberRelayIsLeads {
+		t.Fatalf("approve: %d %s, want 409 %s", code, body, team.ErrMemberRelayIsLeads)
+	}
+	if a, _, _ := f.m.store.Get(out.RequestID); a.State != team.StateCancelled || f.countOps("closed") != 1 {
+		t.Fatalf("row = %s, want cancelled with one closed event", a.State)
+	}
+	if op := f.op(out.Op.ID); op.State != team.RelayCancelled || op.Reason != team.ErrMemberRelayIsLeads {
+		t.Fatalf("op = %s (%s), want cancelled (%s)", op.State, op.Reason, team.ErrMemberRelayIsLeads)
+	}
+}
+
+// H2, the op paths: an approved row whose op was not moved yet (afterClose
+// missed it) is reconciled at boot, and a member's op is cancelled, not claimed.
+func TestReconcile_ANewMembersApprovedRowDoesNotClaim(t *testing.T) {
+	f := newFixture(t)
+	out := f.begin("sid-1")
+	if _, won, err := f.m.store.CloseIfOpen(out.RequestID, Close{State: team.StateApproved, DecidedAt: 1}); err != nil || !won {
+		t.Fatalf("approve in the store: won=%v err=%v", won, err)
+	}
+	f.makeMember("sid-1")
+	f.m.reconcileRelays()
+	if op := f.op(out.Op.ID); op.State != team.RelayCancelled || op.Reason != team.ErrMemberRelayIsLeads {
+		t.Fatalf("op = %s (%s), want cancelled (%s)", op.State, op.Reason, team.ErrMemberRelayIsLeads)
+	}
+}
+
+// H2, begin's TOCTOU: the role is read again under createMu just before
+// the op is created, so a session that became a member meanwhile opens nothing.
+func TestRelayBegin_MemberSinceTheCheckIsRefused(t *testing.T) {
+	f := newFixture(t)
+	f.m.afterOpenCheck = func(string) { f.makeMember("sid-1") }
+	code, body := f.do(http.MethodPost, "/api/relay/begin", beginReq("sid-1"))
+	if e := decodeErr(t, body); code != http.StatusConflict || e.Error != team.ErrMemberRelayIsLeads {
+		t.Fatalf("begin: %d %s, want 409 %s", code, body, team.ErrMemberRelayIsLeads)
+	}
+	if active, _ := f.m.store.ListActiveRelayOps(); len(active) != 0 {
+		t.Fatalf("ops opened: %+v", active)
+	}
+}
+
 // Plan v3 deviation 12: a role that cannot be read is a 500 on hello, self
 // and begin, never "none" (fail closed, spec §8.7 (d)). Both switches are
 // off, so the role read is the only store read on hello, status and begin:

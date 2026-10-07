@@ -290,6 +290,16 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	if m.afterOpenCheck != nil {
 		m.afterOpenCheck(req.SessionID)
 	}
+	// U13 again, under createMu just before the op is created (P4-3 review
+	// H2): a session that became a member since the check above opens nothing.
+	if role, err := m.relayRole(req.SessionID); err != nil {
+		m.logf("[team] relay begin %s: %v", req.SessionID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "role unreadable; see the daemon log", nil)
+		return
+	} else if role == roleMember {
+		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排", nil)
+		return
+	}
 	if err := os.MkdirAll(m.relayDir, 0o700); err != nil {
 		m.logf("[team] relay begin %s: mkdir %s: %v", req.SessionID, m.relayDir, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "cannot create the relay directory; see the daemon log", nil)
@@ -373,9 +383,12 @@ func (m *Module) afterClose(a team.Approval, rep *RelayReport) {
 		m.logf("[team] approval %s closed but its relay op is missing: ok=%v err=%v", a.ID, ok, err)
 		return
 	}
-	report := opReportForClosedRow(a, m.now())
+	var report RelayReport
 	if rep != nil {
 		report = *rep // a terminal report drove this close: its state and reason stand
+	} else if report, err = m.closedRowReport(a, m.now()); err != nil {
+		m.logf("[team] approval %s %s: relay op %s left for reconciliation: %v", a.ID, a.State, op.ID, err)
+		return
 	}
 	after, res, err := m.store.ReportRelay(op.ID, report)
 	if err != nil {
@@ -408,6 +421,22 @@ func opReportForClosedRow(a team.Approval, at int64) RelayReport {
 	return rep
 }
 
+// closedRowReport is opReportForClosedRow with U13 applied (P4-3 review
+// H2): an approved row whose session has become a member of a live team
+// does not claim; its op is cancelled{member_relay_is_leads}. A role that
+// cannot be read is an error: the op is left for the next reconciliation.
+func (m *Module) closedRowReport(a team.Approval, at int64) (RelayReport, error) {
+	rep := opReportForClosedRow(a, at)
+	if rep.State != team.RelayClaimed {
+		return rep, nil
+	}
+	role, err := m.relayRole(a.Origin.SessionID)
+	if role == roleMember {
+		rep.State, rep.Reason = team.RelayCancelled, team.ErrMemberRelayIsLeads
+	}
+	return rep, err
+}
+
 // reconcileAwaitingOp re-derives an awaiting_approval op from its approval
 // row: the row is open → the op is genuinely open (still = true); the row
 // is closed → the op takes the transition the close implied (afterClose
@@ -429,7 +458,9 @@ func (m *Module) reconcileAwaitingOp(op team.RelayOp) (cur team.RelayOp, still b
 	case ok && row.State == team.StateOpen:
 		return op, true, nil
 	case ok:
-		rep = opReportForClosedRow(row, m.now())
+		if rep, err = m.closedRowReport(row, m.now()); err != nil {
+			return op, true, err
+		}
 	}
 	after, res, err := m.store.ReportRelay(op.ID, rep)
 	if err != nil {

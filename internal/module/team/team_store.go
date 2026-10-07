@@ -24,6 +24,10 @@ var ErrNoSuchMember = errors.New("no such member")
 // writes rolled back, the row is still open.
 var ErrMemberCannotLead = errors.New("the session is an active member of a live team")
 
+// ErrMemberRelayIsLeads is returned by CloseSelfRelayApproved when the
+// origin is an active member of a live team: its relay is the lead's (U13).
+var ErrMemberRelayIsLeads = errors.New("a member's relay is the lead's")
+
 // teamSchema is the P4 teams table (spec §7.1) and, from P4-3, the
 // team_members table (§7.2 step 6, §7.3). It is run by OpenStore after
 // relaySchema; every statement is idempotent, so it is safe on a team.db
@@ -187,6 +191,36 @@ func (s *Store) ActiveMemberInLiveTeam(sessionID string) (memberRow, team.Team, 
 		return memberRow{}, team.Team{}, false, fmt.Errorf("active member %s: %w", sessionID, err)
 	}
 	return m, t, true, nil
+}
+
+// CloseSelfRelayApproved is the approve of a self_relay row (spec §8.7 (b)):
+// the open CAS, refused in the same transaction with ErrMemberRelayIsLeads
+// — the row left open — when sessionID is an active member of a live team
+// (U13; P4-3 review H2). Otherwise as CloseIfOpen.
+func (s *Store) CloseSelfRelayApproved(id string, c Close, sessionID string) (team.Approval, bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return team.Approval{}, false, fmt.Errorf("approve self relay %s: begin: %w", id, err)
+	}
+	defer tx.Rollback()
+	n, err := closeRowIn(tx, id, c, "", 0)
+	if err == nil && n == 1 {
+		var member bool
+		if member, err = isLiveMemberIn(tx, sessionID); err == nil && member {
+			err = ErrMemberRelayIsLeads
+		}
+	}
+	var a team.Approval
+	if err == nil {
+		a, _, err = getRowIn(tx, id)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		return team.Approval{}, false, fmt.Errorf("approve self relay %s: %w", id, err)
+	}
+	return a, n == 1, nil
 }
 
 // isLiveMemberIn reports, on q (a transaction's read under its write lock),
