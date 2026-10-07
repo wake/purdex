@@ -2,8 +2,12 @@ package teammod
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"testing/fstest"
 
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	ipeers "github.com/wake/purdex/internal/peers"
@@ -101,6 +105,34 @@ func TestSpawn_TmuxRestartBetweenStepsTouchesNothing(t *testing.T) {
 	}
 	if !f.tmux.HasSession("tm-0000000100") || len(f.tmux.KillIfInstanceCalls()) != 1 {
 		t.Fatalf("the session must stay (kill declined): has=%v kills=%+v", f.tmux.HasSession("tm-0000000100"), f.tmux.KillIfInstanceCalls())
+	}
+}
+
+// Spec §7.2 step 4, coordinator decision 9: the launch line's --plugin-dir
+// tree is extracted from the embedded mod when it is absent, and never
+// rewritten once it is there (pdx setup owns it).
+func TestSpawn_ExtractsThePluginTreeOnlyWhenAbsent(t *testing.T) {
+	old := agentcc.PluginSource
+	agentcc.PluginSource = fstest.MapFS{
+		".claude-plugin/plugin.json": {Data: []byte(`{"name":"purdex","version":"0"}`)},
+		"hooks/register.js":          {Data: []byte("export function register() {}")},
+	}
+	t.Cleanup(func() { agentcc.PluginSource = old })
+	f, root := newSpawnFixture(t, 3)
+	js := filepath.Join(agentcc.PluginRoot(f.core.Cfg.DataDir), "hooks", "register.js")
+	for i, want := range []string{"export function register() {}", "// the owner's edit"} {
+		if i == 1 {
+			if err := os.WriteFile(js, []byte(want), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f.register(fmt.Sprintf("%%%d", i), fmt.Sprintf("sid-m%d", i))
+		if code, op, e := f.spawn(spawnID(i+1), root, nil); code != 200 || op.State != team.SpawnDone {
+			t.Fatalf("spawn %d = %d %+v %+v", i, code, op, e)
+		}
+		if got, err := os.ReadFile(js); err != nil || string(got) != want {
+			t.Fatalf("spawn %d: register.js = %q (%v), want %q", i, got, err, want)
+		}
 	}
 }
 

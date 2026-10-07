@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"time"
 
 	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/hostconfig"
@@ -206,6 +210,7 @@ func (m *Module) recordSession(op spawnRow, tmuxID, inst, pane string) bool {
 // races or restarts; a daemon that dies between the record and the send
 // leaves a launched op that times out (killed, member_start_timeout).
 func (m *Module) spawnLaunch(op spawnRow) bool {
+	m.ensurePluginTree()
 	line, err := m.memberLaunchLine(op)
 	if err != nil {
 		m.logf("[team] spawn %s: %v", op.ID, err)
@@ -229,6 +234,29 @@ func (m *Module) spawnLaunch(op spawnRow) bool {
 		return false
 	}
 	return true
+}
+
+// ensurePluginTree extracts the embedded mod into the launch line's
+// --plugin-dir when that tree is absent (spec §7.2 step 4). A tree that is
+// there is never rewritten (coordinator decision 9): `pdx setup` owns it. A
+// failure is logged; the launch goes on.
+func (m *Module) ensurePluginTree() {
+	if agentcc.PluginSource == nil {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(agentcc.PluginRoot(m.dataDir), "hooks", "register.js")); !errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		m.core.CfgMu.RLock()
+		cfgPath := m.core.Cfg.Path
+		m.core.CfgMu.RUnlock()
+		_, _, err = agentcc.ExtractPlugin(agentcc.PluginSource, m.dataDir, buildinfo.Version, exe, cfgPath)
+	}
+	if err != nil {
+		m.logf("[team] spawn: extract the plugin tree: %v", err)
+	}
 }
 
 func (m *Module) memberLaunchLine(op spawnRow) (string, error) {
