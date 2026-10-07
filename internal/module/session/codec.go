@@ -14,7 +14,7 @@ const (
 	// Large mult ensures consecutive IDs jump ~75% of the space apart.
 	mult    uint64 = 1640531527
 	multInv uint64 = 1777800055 // modular multiplicative inverse of mult mod space: (mult * multInv) % space == 1
-	offset uint64 = 1013904223
+	offset  uint64 = 1013904223
 )
 
 // EncodeSessionID converts a tmux session ID ("$N") to a 6-char base36 code.

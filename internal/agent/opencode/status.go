@@ -22,7 +22,7 @@ func deriveOpenCodeStatus(eventName string, rawEvent json.RawMessage) agent.Deri
 	case "PdxStop":
 		return agent.DeriveResult{Valid: true, Status: agent.StatusIdle, Detail: map[string]any{
 			"notification_silent": true,
-			"stop_source":          "session.status.idle",
+			"stop_source":         "session.status.idle",
 		}}
 	case "PdxStopFailure":
 		// agent_id surfaces the failing subagent's identity for parity

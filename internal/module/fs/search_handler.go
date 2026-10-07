@@ -21,8 +21,8 @@ type httpSearchRequest struct {
 	Query struct {
 		Basename string `json:"basename"`
 	} `json:"query"`
-	Roots  []httpSearchRoot   `json:"roots"`
-	Limits *httpSearchLimits  `json:"limits,omitempty"`
+	Roots   []httpSearchRoot   `json:"roots"`
+	Limits  *httpSearchLimits  `json:"limits,omitempty"`
 	Filters *httpSearchFilters `json:"filters,omitempty"`
 }
 

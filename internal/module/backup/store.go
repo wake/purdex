@@ -431,4 +431,3 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
-
