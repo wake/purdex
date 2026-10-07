@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.548] - 2026-10-07
+
+> 只動 SPA（快轉主 checkout 即可），daemon 不用重啟。Electron 行為不變。
+
+### Changed：SPA 純瀏覽器路徑收斂 — 第 1 批（#1744）
+
+產品只有 Mac App 與 iOS App，一般瀏覽器不是目標（見 project_product_platforms）。移除兩處純瀏覽器 fallback：終端機連結開啟器非 Electron 時的 `window.open`（連同 `isElectron` 參數），以及 BrowserPane 沒有 Electron 時顯示的「需要桌面版本」placeholder。其餘 `window.electronAPI` 守衛是 jsdom／Playwright 驗收的安全網，刻意不動。
+
 ## [1.0.0-alpha.547] - 2026-10-07
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。沒有使用者看得到的變化。
