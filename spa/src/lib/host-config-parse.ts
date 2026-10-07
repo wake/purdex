@@ -6,7 +6,9 @@
 // malformed may reach a render (`items.map`, `text.trim()`, `icon.kind`).
 //
 // Only what rendering needs is checked; the daemon's own rules (id pattern,
-// lengths, Phosphor names) stay the daemon's.
+// lengths, Phosphor names) stay the daemon's. The exception is a value the
+// section cannot show yet sends back whole (resume templates, relay prompt
+// bodies): one the daemon would refuse is dropped, or no edit would save.
 import { AGENT_ICON_VALUES } from './command-icons'
 import { trimLikeGo } from './go-trim'
 import type { HostCommand, HostProject, QuickReply, RelaySwitches, ResumeTemplateOverrides } from './host-config-api'
@@ -43,6 +45,8 @@ export interface ParsedHostConfig {
 }
 
 type JsonObject = Record<string, unknown>
+
+const utf8 = new TextEncoder()
 
 /** What JSON calls an object: not null, not an array. */
 function isObject(v: unknown): v is JsonObject {
@@ -125,6 +129,32 @@ export function parseQuickReplies(raw: unknown, hostId: string): ParsedCollectio
   return parseList(raw, hostId, 'quickReplies', quickReplyProblem)
 }
 
+/**
+ * `normalizeResumeTemplates` (`internal/module/hostconfig/validate.go`) refuses
+ * the WHOLE map over one agent key off `agentTypePattern`, one template over
+ * `commandMaxBytes` (UTF-8) or holding a NUL (`validTemplate`), or more than
+ * `maxResumeAgents` agents. The section shows only the known agents yet PUTs
+ * the whole map back, so an entry it cannot show would make every edit a 400.
+ */
+const RESUME_AGENT_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/
+const RESUME_TEMPLATE_MAX_BYTES = 4096
+const RESUME_MAX_AGENTS = 32
+
+function resumeTemplateProblem(name: string, v: string): string | null {
+  if (utf8.encode(v).length > RESUME_TEMPLATE_MAX_BYTES) return `${name} is over ${RESUME_TEMPLATE_MAX_BYTES} bytes`
+  if (v.includes('\0')) return `${name} holds a NUL`
+  return null
+}
+
+/** Why the daemon's PUT would refuse this entry, or null. */
+function resumeEntryProblem(agent: string, pair: unknown): string | null {
+  const why = resumePairProblem(pair)
+  if (why) return why
+  if (!RESUME_AGENT_PATTERN.test(agent)) return 'not a valid agent type'
+  const { exact, fallback } = pair as { exact: string; fallback: string }
+  return resumeTemplateProblem('exact', exact) ?? resumeTemplateProblem('fallback', fallback)
+}
+
 export function parseResumeTemplates(raw: unknown, hostId: string): ParsedCollection<ResumeTemplateOverrides> {
   const field = 'resumeTemplates'
   if (!isObject(raw)) {
@@ -137,12 +167,15 @@ export function parseResumeTemplates(raw: unknown, hostId: string): ParsedCollec
     return { items: {}, revision, problem: { kind: 'shape' } }
   }
   const entries = Object.entries(raw.items)
-  const kept = entries.filter(([agent, pair]) => {
-    const why = resumePairProblem(pair)
+  const valid = entries.filter(([agent, pair]) => {
+    const why = resumeEntryProblem(agent, pair)
     if (why) warn(hostId, field, `agent ${agent} skipped: ${why}`)
     return why === null
   })
-  // `fromEntries` defines own keys: a stored `__proto__` agent stays a key.
+  // Over the cap, the first ones in object order stay.
+  const kept = valid.slice(0, RESUME_MAX_AGENTS)
+  for (const [agent] of valid.slice(RESUME_MAX_AGENTS)) warn(hostId, field, `agent ${agent} skipped: over ${RESUME_MAX_AGENTS} agents`)
+  // `fromEntries` defines own keys, never the prototype.
   const items = Object.fromEntries(kept) as ResumeTemplateOverrides
   return { items, revision, problem: rowsProblem(entries.length - kept.length) }
 }
@@ -157,7 +190,6 @@ const RELAY_TAG = '[pdx-relay'
 /** Go's `unicode.IsControl` (Cc) minus newline and tab. */
 // eslint-disable-next-line no-control-regex
 const RELAY_PROMPT_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/
-const utf8 = new TextEncoder()
 
 /**
  * Why the daemon's PUT would refuse this stored body (`relayPromptsOf`: blank is

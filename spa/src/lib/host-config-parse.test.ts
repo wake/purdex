@@ -125,11 +125,69 @@ describe('parseResumeTemplates', () => {
     expect(parseResumeTemplates(undefined, H)).toEqual({ items: {}, revision: 0, problem: { kind: 'shape' } })
   })
 
-  it('a stored `__proto__` agent stays an own key, never the prototype', () => {
+  // `__proto__` fails the agent-type pattern (it starts with `_`), so it is now dropped like any bad key; what
+  // still matters is that reading it never touches the prototype.
+  it('a stored `__proto__` agent is dropped and counted, never the prototype', () => {
     const items = JSON.parse('{"__proto__":{"exact":"x {id}","fallback":"x"},"codex":1}') as unknown
     const p = parseResumeTemplates({ items, revision: 1 }, H)
     expect(Object.getPrototypeOf(p.items)).toBe(Object.prototype)
-    expect(Object.keys(p.items)).toEqual(['__proto__'])
+    expect(Object.keys(p.items)).toEqual([])
+    expect(p.problem).toEqual({ kind: 'rows', count: 2 })
+  })
+
+  // The daemon's PUT (`normalizeResumeTemplates`) refuses the WHOLE map over one of these, and the section shows
+  // only the known agents but saves the whole map back: one such entry would make every edit a 400.
+  it.each([
+    ['a space', 'Bad Agent'],
+    ['an upper-case letter', 'Codex'],
+    ['a leading dash', '-cc'],
+    ['a leading underscore', '_cc'],
+    ['33 characters', 'a'.repeat(33)],
+    ['nothing', ''],
+  ])('an agent key with %s is dropped and counted', (_name, agent) => {
+    const p = parseResumeTemplates({ items: { [agent]: CC, cc: CC }, revision: 1 }, H)
+    expect(p.items).toEqual({ cc: CC })
+    expect(p.problem).toEqual({ kind: 'rows', count: 1 })
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('an agent key the pattern allows is kept', () => {
+    const items = { a: CC, '0x': CC, 'my_agent-2': CC, ['a'.repeat(32)]: CC }
+    expect(parseResumeTemplates({ items, revision: 1 }, H)).toEqual({ items, revision: 1, problem: null })
+  })
+
+  it.each([
+    ['exact over 4096 bytes', { exact: 'a'.repeat(4097), fallback: 'x' }],
+    ['fallback over 4096 bytes', { exact: 'x {id}', fallback: 'a'.repeat(4097) }],
+    ['4096 bytes of three-byte runes plus one byte', { exact: '接'.repeat(1365) + 'ab', fallback: 'x' }],
+    ['a NUL in exact', { exact: 'x\0 {id}', fallback: 'x' }],
+    ['a NUL in fallback', { exact: 'x {id}', fallback: 'x\0' }],
+  ])('a pair with %s is dropped and counted', (_name, pair) => {
+    const p = parseResumeTemplates({ items: { codex: pair, cc: CC }, revision: 1 }, H)
+    expect(p.items).toEqual({ cc: CC })
+    expect(p.problem).toEqual({ kind: 'rows', count: 1 })
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('a pair of exactly 4096 bytes each is kept, multi-byte runes counted as UTF-8 bytes', () => {
+    const pair = { exact: 'a'.repeat(4096), fallback: '接'.repeat(1365) + 'a' }
+    expect(parseResumeTemplates({ items: { cc: pair }, revision: 1 }, H)).toEqual({ items: { cc: pair }, revision: 1, problem: null })
+  })
+
+  it('32 agents are kept; from the 33rd on, in object order, each is dropped and counted', () => {
+    const items = Object.fromEntries(Array.from({ length: 34 }, (_, i) => [`agent-${i}`, CC]))
+    const p = parseResumeTemplates({ items, revision: 1 }, H)
+    expect(Object.keys(p.items)).toEqual(Object.keys(items).slice(0, 32))
+    expect(p.problem).toEqual({ kind: 'rows', count: 2 })
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
+
+  it('the 32-agent cap counts only the agents left after the bad ones are dropped', () => {
+    const items = { 'Bad Agent': CC, ...Object.fromEntries(Array.from({ length: 32 }, (_, i) => [`agent-${i}`, CC])) }
+    const p = parseResumeTemplates({ items, revision: 1 }, H)
+    expect(Object.keys(p.items)).toHaveLength(32)
+    expect(p.items['Bad Agent']).toBeUndefined()
+    expect(p.problem).toEqual({ kind: 'rows', count: 1 })
   })
 })
 
