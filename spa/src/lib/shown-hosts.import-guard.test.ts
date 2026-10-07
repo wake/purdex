@@ -58,13 +58,13 @@ const READER_IMPORTERS = [
   'src/components/hosts/nex/NexExecutionsTable.tsx',
   'src/components/settings/WorkerSettingsPage.tsx', // the host picker lists the shown hosts only
   'src/hooks/useHandoffCandidate.ts',
-  'src/hooks/useNotificationDispatcher.ts',
   'src/hooks/useRouteSync.ts',
   'src/hooks/useShortcuts.ts',
   'src/lib/deeplink/deeplinkResolver.ts',
   'src/lib/host-reresolve.ts',
   'src/lib/nex/handoff.ts',
   'src/lib/nex/worker-rebuild.ts',
+  'src/lib/notification-click.ts', // the notification click, moved with its hidden-host landing from useNotificationDispatcher (#1690)
   'src/lib/open-session-tab.ts', // SessionsSection's open, moved with its hidden-host gate (lead-team plan v3 P9b-1)
   'src/lib/profile/switch-active.ts',
   'src/lib/rebuild/cwd-probe.ts',
