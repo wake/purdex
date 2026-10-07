@@ -107,12 +107,13 @@ func (m *Module) closeExpired(id string, now int64, state team.State) (team.Appr
 // (P4-3). A manual /clear has no op, so it ends the team. The guard lives
 // in EndTeam's UPDATE, with the check that the lead is still the one read
 // here, so neither a relay claimed nor a lead moved since loses to the
-// end. Only PresenceGone ends a team (peers/origin_resolver.go): a
-// registry that cannot be read, is missing, or holds an unverifiable file
-// of a live pid answers unknown, and a store error skips the team, so none
-// of them ever ends one. Nothing ends
-// within BootGraceS of Start: right after a restart a lead may not be
-// listed yet (P4-2 review). Members are untouched (D4).
+// end. Only PresenceGone ends a team (peers/origin_resolver.go), and it is
+// tied to the lead's own process — the pid and start time its request
+// recorded, which a relay's /clear keeps: that process dead or reused, or
+// alive in another conversation. Anything the registry cannot tell, and
+// any store error, skips the team. Nothing ends within BootGraceS of
+// Start: right after a restart a lead may not be listed yet (P4-2
+// review). Members are untouched (D4).
 func (m *Module) endGoneTeams() {
 	if m.now() < m.bootAt+team.BootGraceS*1000 {
 		return
@@ -123,8 +124,15 @@ func (m *Module) endGoneTeams() {
 		return
 	}
 	for _, t := range teams {
-		if m.origins.SessionPresence(t.LeadSessionID) != peersmod.PresenceGone {
-			continue // live, or the registry cannot tell: only a confirmed absence ends a team
+		// The request row commits with the team (CloseLeadApproved) and is
+		// never deleted; without it the lead's process is unknown: skip.
+		req, ok, err := m.store.Get(t.RequestID)
+		if err != nil || !ok {
+			m.logf("[team] sweep team %s: its request row: ok=%v err=%v", t.ID, ok, err)
+			continue
+		}
+		if m.origins.LeadPresence(t.LeadSessionID, req.Origin.PID, req.Origin.ProcStart) != peersmod.PresenceGone {
+			continue // live, or nothing proves the lead's conversation ended
 		}
 		if m.beforeEndTeam != nil {
 			m.beforeEndTeam(t)

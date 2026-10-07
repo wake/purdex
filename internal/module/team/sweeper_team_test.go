@@ -58,6 +58,13 @@ func TestTick_EndsTheTeamOfAGoneLead(t *testing.T) {
 	if !ok || got.EndedAt != 1_000_007 || got.EndReason != team.TeamEndLeadGone {
 		t.Fatalf("team after the liveness tick = %+v, want ended lead_gone at 1000007", got)
 	}
+	// The lead's process is the one its request recorded (pid 10 and its start).
+	f.origins.mu.Lock()
+	asked := f.origins.leadAsked["sid-1"]
+	f.origins.mu.Unlock()
+	if asked != "10 Sun Sep 13 15:22:36 2026" {
+		t.Fatalf("LeadPresence asked about %q, want the request's origin process", asked)
+	}
 	if _, ok, _ := f.m.store.LiveTeamByLead("sid-2"); !ok {
 		t.Fatal("the live lead's team was ended")
 	}
@@ -193,9 +200,10 @@ func TestTick_TeamsSurviveARestartUntilTheBootGraceEnds(t *testing.T) {
 	}
 }
 
-// Only a lead the registry confirms gone ends its team (P4-2 review): one
-// it cannot place — its file truncated while its pid lives, which
-// LiveSession reads as not live — keeps the team until it is confirmed.
+// Only a lead confirmed gone ends its team (P4-2 review): one the registry
+// cannot place — its pid alive but its own file truncated, or the registry
+// missing or empty (TestOriginResolver_LeadPresence), which LiveSession
+// reads as not live — keeps the team until it is confirmed.
 func TestTick_ALeadTheRegistryCannotPlaceKeepsItsTeam(t *testing.T) {
 	f := newFixture(t)
 	seedTeam(t, f.m.store, uid(1), "sid-1", f.clock.Load())

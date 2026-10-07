@@ -40,8 +40,10 @@ type fakeOrigins struct {
 	// the pid of the process that now carries it (ResolveOriginBySession).
 	cleared map[string]int
 	// unknown marks a session the registry cannot place (an unverifiable
-	// file of a live pid): LiveSession false, SessionPresence unknown.
+	// file of a live pid): LiveSession false, LeadPresence unknown.
 	unknown map[string]bool
+	// leadAsked is what LeadPresence was last asked per session: "pid procStart".
+	leadAsked map[string]string
 }
 
 var fixtureOrigins = map[string]team.Origin{
@@ -127,9 +129,13 @@ func (f *fakeOrigins) LiveSession(sid string) bool {
 	return !f.dead[sid] && !f.unknown[sid]
 }
 
-func (f *fakeOrigins) SessionPresence(sid string) peersmod.Presence {
+func (f *fakeOrigins) LeadPresence(sid string, pid int, procStart string) peersmod.Presence {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.leadAsked == nil {
+		f.leadAsked = map[string]string{}
+	}
+	f.leadAsked[sid] = fmt.Sprintf("%d %s", pid, procStart)
 	switch {
 	case f.unknown[sid]:
 		return peersmod.PresenceUnknown
