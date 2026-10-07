@@ -104,11 +104,20 @@ func (f *fakeOrigins) ResolveOriginBySession(sid string) (team.Origin, bool, err
 	return team.Origin{}, false, nil
 }
 
-// fakeSwitches is the hostconfig RelaySwitchReader of these tests.
+// fakeSwitches is the hostconfig RelaySwitchReader of these tests, and its
+// RelayPromptReader (the same row in production).
 type fakeSwitches struct {
-	mu  sync.Mutex
-	sw  hostconfig.RelaySwitches
-	err error
+	mu         sync.Mutex
+	sw         hostconfig.RelaySwitches
+	err        error
+	prompts    team.RelayPromptBodies
+	promptsErr error
+}
+
+func (f *fakeSwitches) RelayPrompts() (team.RelayPromptBodies, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.prompts, f.promptsErr
 }
 
 func (f *fakeSwitches) RelaySwitches() (hostconfig.RelaySwitches, error) {
@@ -232,6 +241,7 @@ func newFixture(t *testing.T) *fixture {
 	f.core = core.New(core.CoreDeps{Config: &config.Config{HostID: "h:1", DataDir: t.TempDir()}})
 	f.core.Registry.Register(peersmod.OriginResolverKey, f.origins)
 	f.core.Registry.Register(hostconfig.RelaySwitchesKey, f.switches)
+	f.core.Registry.Register(hostconfig.RelayPromptsKey, f.switches)
 	f.core.Registry.Register(agent.OwnerResolverKey, f.usage) // the team module asserts agent.ContextUsageReader on it
 	f.registerSpawnFakes()
 	f.m = New().WithTitles(f.titles)
