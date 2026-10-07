@@ -11,7 +11,7 @@
 
 ### 路徑決定（client 不送路徑）
 1. `resolveSessionOwner(code)`；找不到 → 404 `{"error":"no_agent"}`。
-2. `agent_type != "claude"`（codex／opencode）→ 404 `{"error":"unsupported","agent_type":…}`。
+2. `agent_type != "cc"`（Claude Code 的 provider 名稱是 `cc`；codex／opencode 等）→ 404 `{"error":"unsupported","agent_type":…}`。
 3. 路徑 = owner.TranscriptPath；空則用 `~/.claude/projects/<slug(cwd)>/<session_id>.jsonl`，slug＝cwd 中非 `[A-Za-z0-9]` 的字元各換成 `-`。兩者皆缺 → 404 `no_transcript`。
 4. **安全**：`EvalSymlinks` 後必須落在 `~/.claude/projects/` 之下、是一般檔、副檔名 `.jsonl`；否則 404 `no_transcript`（provenance 的路徑來自 hook，不可信，不能變成任意讀檔管道）。檔案不存在 → 404 `file_missing`。
 
@@ -49,3 +49,15 @@
 
 ## 非目標
 codex／opencode transcript、`/api/fs/read` 的 10 MB 上限不動。
+
+## 修訂（plan／spec codex review，job task-muxmrlf3-21vl0q）
+
+- **owner 查詢錯誤**：用 `resolveSessionOwnerErr`；`found=false,err=nil` → 404 `no_agent`；`err != nil`（tmux／frames／timeout）→ 503 `lookup_failed`，不可當成沒有 agent。
+- **After 落在行中**：offset 不在行首時丟棄到下一個 `\n` 為止，`start_offset` 為丟棄後的位置；`start_offset` 永遠在行首。
+- **單行超限**：reader 回 `ErrLineTooLarge`（行 > 8 MB），handler 映射 413 `line_too_large`；2–8 MB 的單行獨立成一次回應並帶 `more:true`。
+- **tail 截斷**：超過 2 MB 時回傳最新的完整行區段，`start_offset` 為該區段首行行首，`more` 表示更早還有內容。
+- **路徑驗證順序**：①`Stat`（不存在 → `file_missing`）②`EvalSymlinks` ③是否落在 `<home>/.claude/projects/` 下 ④一般檔且 `.jsonl`（③④失敗 → `no_transcript`）。
+- **slug**：以實際 `~/.claude/projects/` 目錄名作 fixture 驗證（含底線、點、非 ASCII、連續符號）；provenance 的 transcript_path 優先，slug 僅 fallback。
+- **WindowSize**：簽章 `WindowSize(ctx, target) (cols, rows, err)`，ctx 隨 WebSocket 關閉取消（查詢卡住也要停）；target 為 session 名，attach-session 的 client 看的就是該 session 的 current window，故查 session 的 current window 即其實際畫面；interval 可注入（預設 1 s）。
+- **relay 寫入**：window text frame 與 binary 輸出共用同一把 `writeMu`（提升到 HandleWebSocket 層級可見處），寫失敗與 batcher 一樣關 ptmx 喚醒兩條 goroutine。
+- **Executor 介面**：`WindowSize` 加進 `tmux.Executor`，同步更新所有實作者（`RealExecutor`、`FakeExecutor`、其他測試 executor），編譯全綠為 task 完成條件。
