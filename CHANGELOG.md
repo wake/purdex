@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.559] - 2026-10-08
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。只多了日誌，行為不變。SPA 沒有改動。
+
+### Added：daemon 啟動耗時日誌（#1767，#1774）
+
+重啟變慢時日誌看不出時間花在哪。現在每次啟動會多這幾行：`startup: init N modules in Xms: …` 與 `startup: start N modules in Xms: …`（各模組耗時由大到小，小於 5 ms 併成 `others`；單一模組 ≥ 1 秒另有 `slow module` 警示；啟動失敗時也會先記出已完成模組的耗時）、`[agent] start: sweepOnce=… replayFromDB=… startSweep=… replayStatus=…`、`[peers] start: sweep=…`、`session: start: …`，以及 `pdx daemon listening` 之前的 `startup: ready in Xms`。用來定位 #1767 剩下的 5–13 秒（agent 模組啟動）。日誌只含模組名稱與毫秒數。
+
 ## [1.0.0-alpha.558] - 2026-10-08
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。這次重啟起，啟動會比近期快 8 秒左右。SPA 沒有改動。
