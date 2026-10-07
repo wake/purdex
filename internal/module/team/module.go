@@ -95,7 +95,7 @@ type Module struct {
 	// store write happens under it: each broadcast follows its own write.
 	eventMu sync.Mutex
 
-	// afterRead, when set, runs in handleGet right after the row is read
+	// afterRead, when set, runs in pollRow right after the row is read
 	// and before the wait. Tests use it to close the row in that window
 	// and prove the waiter was registered before the read; nil in production.
 	afterRead func(id string)
@@ -117,6 +117,11 @@ type Module struct {
 	// for the same session in that window and prove the table's conflict
 	// (ErrRelayOpOpen) is answered as 409 relay_open too. nil in production.
 	afterOpenCheck func(sessionID string)
+	// afterOpenByToolUse, when set, runs in handleAskBegin between its
+	// OpenByToolUse and its insert; tests start a second begin for the same
+	// tool use in that window and prove it waits for createMu. nil in
+	// production.
+	afterOpenByToolUse func()
 	// beforeTerminalClose is a test seam run by a terminal relay report just
 	// before it closes the op's approval row (the approve that races it).
 	beforeTerminalClose func(opID string)
@@ -216,6 +221,10 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/relay/self", m.handleRelaySelf)
 	mux.HandleFunc("POST /api/relay/ops/{id}/report", m.handleRelayReport)
 	mux.HandleFunc("GET /api/relay/ops/{id}", m.handleRelayOp)
+	// P8a 分流 routes (spec §6.6); TokenAuth like /api/team/*.
+	mux.HandleFunc("POST /api/ask/begin", m.handleAskBegin)
+	mux.HandleFunc("GET /api/ask/wait/{id}", m.handleAskWait)
+	mux.HandleFunc("POST /api/ask/report/{id}", m.handleAskReport)
 }
 
 // Start applies the boot lease grace (spec §9.2: every open request's
