@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/team"
@@ -44,11 +45,15 @@ func (m *Module) runRetention() {
 //     and ONLY that rule: the 14 d rule below does not reach these two
 //     states (an op that failed yesterday keeps its file for 3 days however
 //     old the file is — the switch, not two ifs, is what makes that so);
-//   - any other op: older than 14 d (by created_at);
-//   - done: per chain (chainOf), all but the newest 3 by created_at.
+//   - done: older than 14 d (by created_at), and per chain (chainOf) all
+//     but the newest 3 by created_at.
 //
-// Active ops (awaiting_approval … cleared) are never victims except by the
-// 14 d rule, which an op that long in flight has earned.
+// An op still in flight (awaiting_approval … cleared) is NEVER a victim,
+// however old (PR #1733 attacker A-2): its handoff is the only copy of the
+// conversation the relay is carrying — after a /clear (cleared) it is what
+// seeds the new session. A stuck op is ended by the state machine first
+// (sweeper, reconciliation, a report), and its file follows that state's
+// rule.
 func retentionVictims(ops []team.RelayOp, chainOf func(team.RelayOp) string, now int64) []team.RelayOp {
 	var out []team.RelayOp
 	seen := map[string]bool{}
@@ -63,15 +68,15 @@ func retentionVictims(ops []team.RelayOp, chainOf func(team.RelayOp) string, now
 		if op.Pruned {
 			continue
 		}
-		switch {
-		case op.State == team.RelayFailed || op.State == team.RelayCancelled:
+		switch op.State {
+		case team.RelayFailed, team.RelayCancelled:
 			if now-op.UpdatedAt >= retentionFailedAge.Milliseconds() {
 				take(op)
 			}
-		case now-op.CreatedAt >= retentionMaxAge.Milliseconds():
-			take(op)
-		}
-		if op.State == team.RelayDone {
+		case team.RelayDone:
+			if now-op.CreatedAt >= retentionMaxAge.Milliseconds() {
+				take(op)
+			}
 			c := chainOf(op)
 			byChain[c] = append(byChain[c], op)
 		}
@@ -122,11 +127,42 @@ func (m *Module) sweepRetention() {
 }
 
 // removeHandoff deletes op's handoff file when, and only when, it is
-// <relayDir>/<op id>.md; a file already gone is fine.
+// <relayDir>/<op id>.md; a file already gone is fine. The bound is checked
+// on the path, not trusted from the row (PR #1733 attacker A-1): the op id
+// must be a single path element (no separator, not "." or ".."), the
+// joined path's directory must be relayDir itself, relayDir must be a
+// real directory and not a symlink, and the target is unlinked only if it
+// is a regular file or a symlink (os.Remove unlinks a symlink, it does not
+// follow it). Anything else is logged and the row marked pruned with
+// nothing removed; a relayDir that is a symlink is an error (row left as
+// is, retried next sweep once the directory is fixed).
 func (m *Module) removeHandoff(op team.RelayOp) error {
-	want := filepath.Join(m.relayDir, op.ID+".md")
-	if filepath.Clean(op.HandoffPath) != want {
-		m.logf("[team] retention: op %s: handoff path %q is not %q; marking pruned without removing anything", op.ID, op.HandoffPath, want)
+	relayDir := filepath.Clean(m.relayDir)
+	want := filepath.Join(relayDir, op.ID+".md")
+	if op.ID == "" || op.ID == "." || op.ID == ".." || strings.ContainsAny(op.ID, `/\`) ||
+		filepath.Dir(want) != relayDir || filepath.Clean(op.HandoffPath) != want {
+		m.logf("[team] retention: op %s: handoff path %q is not <relay dir>/<op id>.md; marking pruned without removing anything", op.ID, op.HandoffPath)
+		return nil
+	}
+	dirInfo, err := os.Lstat(relayDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // no relay dir, no file
+		}
+		return fmt.Errorf("stat %s: %w", relayDir, err)
+	}
+	if !dirInfo.IsDir() {
+		return fmt.Errorf("%s is not a directory (a symlink or a file); nothing removed", relayDir)
+	}
+	fi, err := os.Lstat(want)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", want, err)
+	}
+	if !fi.Mode().IsRegular() && fi.Mode()&os.ModeSymlink == 0 {
+		m.logf("[team] retention: op %s: %s is not a regular file (%s); marking pruned without removing it", op.ID, want, fi.Mode().Type())
 		return nil
 	}
 	if err := os.Remove(want); err != nil && !errors.Is(err, os.ErrNotExist) {

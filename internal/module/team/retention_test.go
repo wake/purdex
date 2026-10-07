@@ -44,7 +44,8 @@ func TestRetentionVictims_Rules(t *testing.T) {
 		// two age checks independent (`if` + `if` instead of the switch) →
 		// "f-ancient must NOT be a victim" → red.
 		{ID: "f-ancient", State: team.RelayFailed, SessionID: "f3", CreatedAt: 2 * day, UpdatedAt: 19 * day, HandoffPath: "x"},
-		// an active op from yesterday: never a victim; one stuck for 15 days: the 14 d rule.
+		// an active op from yesterday: never a victim; one stuck for 15 days:
+		// still never a victim (PR #1733 A-2 — its file is the relay's only copy).
 		{ID: "live", State: team.RelayWriting, SessionID: "l1", CreatedAt: 19 * day, UpdatedAt: 19 * day, HandoffPath: "x"},
 		{ID: "stuck", State: team.RelayClaimed, SessionID: "l2", CreatedAt: 5 * day, UpdatedAt: 5 * day, HandoffPath: "x"},
 		// already pruned: ignored even though old.
@@ -55,7 +56,7 @@ func TestRetentionVictims_Rules(t *testing.T) {
 	for _, op := range got {
 		ids[op.ID] = true
 	}
-	want := map[string]bool{"a1": true, "old": true, "f-old": true, "c-old": true, "stuck": true}
+	want := map[string]bool{"a1": true, "old": true, "f-old": true, "c-old": true}
 	for id := range want {
 		if !ids[id] {
 			t.Errorf("%s must be a victim", id)
@@ -191,5 +192,92 @@ func TestChainRoots(t *testing.T) {
 		if roots[sid] != want {
 			t.Errorf("root(%s) = %q, want %q", sid, roots[sid], want)
 		}
+	}
+}
+
+// PR #1733 attacker A-1 / A-2 on the filesystem: an op id that would climb
+// out of the relay dir, a target that is a directory, a relay dir that is a
+// symlink, and an op still in flight (15 days old, cleared) — none of them
+// loses anything; the in-flight op is not even marked pruned.
+func TestSweepRetention_NeverEscapesTheRelayDirNorTouchesInFlightOps(t *testing.T) {
+	f := newFixture(t)
+	dataDir := f.core.Cfg.DataDir
+	relayDir := filepath.Join(dataDir, "relay")
+	if err := os.MkdirAll(relayDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(dataDir, "keep.md")
+	if err := os.WriteFile(keep, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// (1) id "../keep" with the path it joins to: outside the relay dir.
+	climb := doneOp("../keep", "c1", 1*day)
+	climb.HandoffPath = keep
+	if err := f.m.store.CreateRelayOp(climb); err != nil {
+		t.Fatal(err)
+	}
+	// (2) the target is a directory, not a file.
+	dirOp := doneOp("dirop", "d1", 1*day)
+	dirOp.HandoffPath = filepath.Join(relayDir, "dirop.md")
+	if err := os.Mkdir(dirOp.HandoffPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dirOp.HandoffPath, "inner"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.store.CreateRelayOp(dirOp); err != nil {
+		t.Fatal(err)
+	}
+	// (3) an op in flight for 15 days (cleared: its file seeds the new session).
+	live := doneOp("live", "l1", 1*day)
+	live.State = team.RelayCleared
+	live.HandoffPath = filepath.Join(relayDir, "live.md")
+	if err := os.WriteFile(live.HandoffPath, []byte("seed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.store.CreateRelayOp(live); err != nil {
+		t.Fatal(err)
+	}
+	f.clock.Store(20 * day)
+	f.m.sweepRetention()
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("keep.md outside the relay dir was touched: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dirOp.HandoffPath, "inner")); err != nil {
+		t.Fatalf("a directory at the handoff path was touched: %v", err)
+	}
+	if _, err := os.Stat(live.HandoffPath); err != nil {
+		t.Fatalf("an in-flight op's handoff was removed: %v", err)
+	}
+	if op := f.op("live"); op.Pruned {
+		t.Fatalf("an in-flight op was marked pruned: %+v", op)
+	}
+
+	// (4) the relay dir replaced by a symlink to another directory: nothing
+	// in the target directory is removed, and the row is left unpruned.
+	other := filepath.Join(dataDir, "elsewhere")
+	if err := os.MkdirAll(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	victim := doneOp("victim", "v1", 1*day)
+	victim.HandoffPath = filepath.Join(relayDir, "victim.md")
+	if err := os.WriteFile(filepath.Join(other, "victim.md"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.store.CreateRelayOp(victim); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(relayDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, relayDir); err != nil {
+		t.Fatal(err)
+	}
+	f.m.sweepRetention()
+	if _, err := os.Stat(filepath.Join(other, "victim.md")); err != nil {
+		t.Fatalf("a file behind a symlinked relay dir was removed: %v", err)
+	}
+	if op := f.op("victim"); op.Pruned {
+		t.Fatalf("victim marked pruned although nothing could be removed safely: %+v", op)
 	}
 }
