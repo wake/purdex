@@ -100,6 +100,28 @@ func (c *leadClock) fireNext() {
 	next.fire()
 }
 
+// fireDue fires every pending timer whose time has come (at <= now), in
+// time order, without advancing the clock: what a real time.AfterFunc does
+// by itself once sleeps have carried the clock past it.
+func (c *leadClock) fireDue() {
+	for {
+		c.mu.Lock()
+		var next *leadTimer
+		for _, t := range c.timers {
+			if !t.fired && !t.stopped && !t.at.After(c.t) && (next == nil || t.at.Before(next.at)) {
+				next = t
+			}
+		}
+		if next == nil {
+			c.mu.Unlock()
+			return
+		}
+		next.fired = true
+		c.mu.Unlock()
+		next.fire()
+	}
+}
+
 func (c *leadClock) sleeps() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

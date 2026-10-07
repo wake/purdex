@@ -335,15 +335,22 @@ func TestRunHook_DecisionPathEndToEnd(t *testing.T) {
 	var posted []hookPayload
 	var postCtxEnded []bool // per call: did the stub return because its ctx ended?
 	hangPost := false
+	slowPost := time.Duration(0) // > 0: the stub takes this long unless its ctx ends first
 	postHookEventFn = func(ctx context.Context, _ string, _ string, p hookPayload) error {
 		postMu.Lock()
 		posted = append(posted, p)
-		hang := hangPost
+		hang, slow := hangPost, slowPost
 		postMu.Unlock()
 		ended := false
 		if hang {
 			<-ctx.Done()
 			ended = true
+		} else if slow > 0 {
+			select {
+			case <-ctx.Done():
+				ended = true
+			case <-time.After(slow):
+			}
 		}
 		postMu.Lock()
 		postCtxEnded = append(postCtxEnded, ended)
@@ -390,6 +397,22 @@ func TestRunHook_DecisionPathEndToEnd(t *testing.T) {
 		t.Fatalf("decide calls = %d", d.calls())
 	}
 
+	// A fast decision must not cut the event POST short (R1 of PR #1697):
+	// the daemon denies at once while the POST takes 150 ms; the POST must
+	// still complete, and not because its ctx ended.
+	postMu.Lock()
+	slowPost = 150 * time.Millisecond
+	postMu.Unlock()
+	if got := run(t, srv.URL, "PdxPreToolUse"); !strings.Contains(got, `"permissionDecision":"deny"`) {
+		t.Fatalf("slow POST: stdout = %q", got)
+	}
+	postMu.Lock()
+	if len(posted) != 2 || len(postCtxEnded) != 2 || postCtxEnded[1] {
+		t.Fatalf("a fast decision must not end the event POST: posts = %d, ctxEnded = %v", len(posted), postCtxEnded)
+	}
+	slowPost = 0
+	postMu.Unlock()
+
 	// Not a decision event: the event POST alone, and runHook waits for it
 	// (a hook that returned before the POST ended would lose the event when
 	// main exits). The stub returns at once here, so nothing to time.
@@ -397,8 +420,8 @@ func TestRunHook_DecisionPathEndToEnd(t *testing.T) {
 		t.Fatalf("PostToolUse printed %q", got)
 	}
 	postMu.Lock()
-	if len(posted) != 2 || d.calls() != 1 {
-		t.Fatalf("PostToolUse: posts = %d (want 2), decides = %d (want 1)", len(posted), d.calls())
+	if len(posted) != 3 || d.calls() != 2 {
+		t.Fatalf("PostToolUse: posts = %d (want 3), decides = %d (want 2)", len(posted), d.calls())
 	}
 	postMu.Unlock()
 
@@ -409,7 +432,8 @@ func TestRunHook_DecisionPathEndToEnd(t *testing.T) {
 	clock := newLeadClock()
 	start := clock.now()
 	hookClientOpts = []daemonclient.Option{clock.opt()}
-	hookAfterFn = clock.afterFunc // the budget timer is the fake clock's too
+	hookAfterFn = clock.afterFunc                 // the budget timer is the fake clock's too
+	clock.onSleep = func(int) { clock.fireDue() } // and fires once the grace sleeps reach it, as a real one would
 	postMu.Lock()
 	hangPost = true
 	postMu.Unlock()
@@ -432,10 +456,10 @@ func TestRunHook_DecisionPathEndToEnd(t *testing.T) {
 	}
 	postMu.Lock()
 	defer postMu.Unlock()
-	if len(posted) != 3 {
-		t.Fatalf("event POST count = %d, want 3", len(posted))
+	if len(posted) != 4 {
+		t.Fatalf("event POST count = %d, want 4", len(posted))
 	}
-	if len(postCtxEnded) != 3 || !postCtxEnded[2] {
+	if len(postCtxEnded) != 4 || !postCtxEnded[3] {
 		t.Fatalf("the hanging event POST must have been ended by the budget ctx: %v", postCtxEnded)
 	}
 }

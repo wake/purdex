@@ -144,10 +144,8 @@ func runHook(args []string) {
 		_ = postHookEventFn(budget, url, token, payload) // its own 2 s client timeout, and the budget
 	}()
 
-	asked := false
 	if err == nil { // no config: no data dir to find a flag in
-		var out []byte
-		out, asked = hookDecision(budget, hookDecideInput{
+		out, _ := hookDecision(budget, hookDecideInput{
 			DataDir: cfg.DataDir,
 			Base:    fmt.Sprintf("http://%s:%d", resolveDaemonHost(cfg.Bind), cfg.Port),
 			Token:   cfg.Token,
@@ -158,13 +156,10 @@ func runHook(args []string) {
 			os.Stdout.Write(out)
 		}
 	}
-	if asked {
-		// The daemon answered, or the 5 s grace is spent — either way the
-		// budget is over for this hook; a still-running event POST ends now
-		// rather than holding the agent's tool call any longer.
-		cancelBudget()
-	}
-	<-eventDone // ≤ 2 s on its own, ≤ the budget always; immediate after a cancel
+	// The event POST is never cut short by the decision (spec §6.6: the
+	// event is still posted as today). Its own 2 s client timeout and the
+	// 5 s budget bound it, so the hook holds the agent ≤ 5 s on every path.
+	<-eventDone
 }
 
 // hookStdin is the part of the agent's hook payload the decision needs.
