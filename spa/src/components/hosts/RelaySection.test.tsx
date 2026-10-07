@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { RelaySection } from './RelaySection'
 import { useHostStore } from '../../stores/useHostStore'
 import { emptyHostConfigEntry, useHostConfigStore, type HostConfigEntry } from '../../stores/useHostConfigStore'
@@ -77,12 +77,14 @@ describe('RelaySection', () => {
     expect(screen.queryByTestId('relay-self-solo')).toBeNull()
   })
 
-  it('offline: the notice shows and a click saves nothing', () => {
+  it('offline: the notice shows and a click saves nothing', async () => {
     seed(entry({ self_solo: true, self_lead: true }))
     useHostStore.setState((s) => ({ runtime: { ...s.runtime, [H]: { status: 'disconnected' } } }))
     render(<RelaySection hostId={H} />)
     expect(screen.getByTestId('host-config-notice').dataset.notice).toBe('host_config.offline')
     fireEvent.click(screen.getByTestId('relay-self-solo'))
+    // A save would run from the queue, a microtask later: let it run before asserting it never did.
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
     expect(saveRelay).not.toHaveBeenCalled()
   })
 })
