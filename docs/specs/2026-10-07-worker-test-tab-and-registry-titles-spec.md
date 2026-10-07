@@ -42,7 +42,7 @@
 
 - 新分頁 id `test`、`labelKey: settings.worker.tabs.test`（「測試用」）、`order: 40`（Gone 之後）、`hostScoped: true`。
 - 內容＝三段式清單，依序「執行中」「已退出」「已不見（gone）」，每段沿用該狀態一般分頁的列元件與動作（退出、重建…、開啟），**不新增動作**。段內為空時該段不顯示；三段皆空時顯示空狀態文案。
-- 搜尋框沿用 `matchesConversationQuery`，三段共用一個關鍵字。
+- 搜尋：已退出／gone 兩段沿用 `matchesConversationQuery`，執行中段用 `matchesExecutionQuery`（比對 cwd、brief、id、provider），三段共用一個關鍵字。
 - 載入、錯誤、truncated、root_error 各段各自處理，與一般分頁相同。
 - i18n：新增 `settings.worker.tabs.test`、`settings.worker.test.empty`、三段標題三個鍵；zh-TW 與英文都補。
 
@@ -99,4 +99,4 @@ custom → ai → nexen → **registry 名稱（新，`title_source: "registry"`
 
 - **PR-1（daemon）**：`conversation_names` 表與寫入、`conversationTitle` 新階與 `title_source: registry`、`isTestCwd`、`?scope=`。
 - **PR-2（SPA）**：`isTestCwd`、`title_source` 型別、已退出／Gone 改 `scope=normal`、`HostWorkerRows.filter`、新分頁與 i18n。
-- 兩者互不依賴介面以外的程式；PR-1 先上、部署後 PR-2 才不會在舊 daemon 上讓 `scope` 被忽略（舊 daemon 忽略 `scope` 時，一般分頁會多顯示測試對話，測試用分頁會顯示全部——PR-2 因此要求 `/api/info` 的 capabilities 含 `conversations.scope.v1`（PR-1 加入，統籌裁定的名稱）才啟用，否則測試用分頁不註冊、一般分頁維持現狀）。
+- 兩者互不依賴介面以外的程式；PR-1 先上、部署後 PR-2 才不會在舊 daemon 上讓 `scope` 被忽略（舊 daemon 忽略 `scope` 時，一般分頁會多顯示測試對話，測試用分頁會顯示全部——PR-2 因此以 `/api/info` 的 capabilities 是否含 `conversations.scope.v1`（PR-1 加入，統籌裁定的名稱）決定行為：測試用分頁永遠註冊（它是 `hostScoped`，各 host 的 daemon 版本不同，無法在註冊時判斷）；host 沒有該 capability 時，測試用分頁只顯示說明、不打 API，Workers 分頁不套用測試過濾，已退出／Gone 照送 `scope=normal`（舊 daemon 忽略，行為不變））。
