@@ -7,10 +7,16 @@ import { useApprovalStore, approvalKey } from '../../stores/useApprovalStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useUndoToast } from '../../stores/useUndoToast'
+import { useTabStore } from '../../stores/useTabStore'
+import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
+import { useSessionStore } from '../../stores/useSessionStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { usePaneFocusStore } from '../../stores/usePaneFocusStore'
 import { ApprovalApiError, decideApproval } from './approval-api'
 import { __resetClientDescriptorForTests } from './client-label'
 import { handleApprovalEvent, parseApprovalEvent } from './approval-ws'
 import type { Approval } from './types'
+import type { PaneContent, PaneLayout, Tab } from '../../types/tab'
 
 vi.mock('./approval-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./approval-api')>()),
@@ -134,6 +140,56 @@ describe('approval-ws reconnect (spec §9.4)', () => {
     await flush()
     expect(mockedDecide).not.toHaveBeenCalled()
     expect(useApprovalStore.getState().queued[approvalKey('h2', 'req-1')]).toBeDefined()
+  })
+})
+
+// U22 (a), plan v3 P9b-1 rules 1–2: the queue is per renderer, so a click queued while the daemon was away switches
+// this window to the requester when its resend lands; a `closed` from another client never switches. Real tab stores.
+describe('approval-ws: back to the requester (U22)', () => {
+  const PAYLOADS = {
+    lead: { reason: 'r', max_members: 3, roots: ['/w/purdex'] },
+    self_relay: { op_id: 'op-1', used_percentage: 71, window: 200_000 },
+  }
+  const requester = (kind: 'lead' | 'self_relay' = 'lead') =>
+    approval({ kind, payload: PAYLOADS[kind], origin: { ...approval().origin, tmux: 'purdex:@1.%2' } })
+  const pane = (id: string, content: PaneContent): PaneLayout => ({ type: 'leaf', pane: { id, content } })
+  const tab = (id: string, layout: PaneLayout): Tab => ({ id, pinned: false, locked: false, createdAt: 0, layout })
+
+  beforeEach(() => {
+    useHostStore.setState({ hostOrder: [H] })
+    useShownHostsStore.setState({ ids: [H] })
+    useSessionStore.setState({ sessions: { [H]: [{ code: 'c01', name: 'purdex', cwd: '/w/purdex', mode: 'terminal' }] }, activeHostId: null, activeCode: null })
+    useWorkspaceStore.getState().reset()
+    usePaneFocusStore.setState({ recent: {}, focusRequest: null })
+    // The requester's session in tab tS; the person is on tab tO.
+    const tS = tab('tS', pane('pS', { kind: 'tmux-session', hostId: H, sessionCode: 'c01', mode: 'terminal', cachedName: 'purdex', tmuxInstance: '' }))
+    const tO = tab('tO', pane('pO', { kind: 'new-tab' }))
+    useTabStore.setState({ tabs: { tS, tO }, tabOrder: ['tS', 'tO'], activeTabId: 'tO', visitHistory: [] })
+  })
+
+  it.each(['lead', 'self_relay'] as const)('a queued decision resent on the reconnect snapshot switches on its 200 (%s)', async (kind) => {
+    const a = requester(kind)
+    useApprovalStore.getState().applyOpened(H, a)
+    useApprovalStore.getState().queueDecision(H, a, 'approve')
+    mockedDecide.mockResolvedValueOnce({ ...a, state: 'approved' })
+    handleApprovalEvent(H, snapshot([a]))
+    await flush()
+    expect(mockedDecide).toHaveBeenCalledTimes(1)
+    expect(useTabStore.getState().activeTabId).toBe('tS')
+    expect(usePaneFocusStore.getState().recent.tS?.[0]).toBe('pS')
+    expect(useTabStore.getState().tabOrder).toEqual(['tS', 'tO'])
+  })
+
+  it('a closed event from another client switches nothing', () => {
+    const a = requester()
+    useApprovalStore.getState().applyOpened(H, a)
+    const tabsBefore = useTabStore.getState().tabs
+    handleApprovalEvent(H, JSON.stringify({ op: 'closed', approval: { ...a, state: 'approved', decided_by: { kind: 'app', label: 'Purdex.app @ air26' }, decided_at: 5 } }))
+    expect(useApprovalStore.getState().entries).toEqual({})
+    expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由 Purdex.app @ air26 核准')
+    expect(useTabStore.getState().activeTabId).toBe('tO')
+    expect(useTabStore.getState().tabs).toBe(tabsBefore)
+    expect(usePaneFocusStore.getState().focusRequest).toBeNull()
   })
 })
 
