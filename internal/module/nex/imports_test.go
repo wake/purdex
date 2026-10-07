@@ -32,6 +32,8 @@ func TestImportBoundary(t *testing.T) {
 		// handoff calls the embedded Service directly (spec §4.4)
 		modulePath + "/execution": true,
 		modulePath + "/store":     true,
+		// the projector subscribes to System.Bus (spec 2026-10-08 §3.2)
+		modulePath + "/bus": true,
 	}
 
 	entries, err := os.ReadDir(".")
@@ -62,7 +64,7 @@ func TestImportBoundary(t *testing.T) {
 				continue
 			}
 			if !allowed[path] {
-				t.Errorf("%s imports %q: only %s and its /api, /config, /sandbox, /execution, /store subpackages may be imported", name, path, modulePath)
+				t.Errorf("%s imports %q: only %s and its /api, /config, /sandbox, /execution, /store, /bus subpackages may be imported", name, path, modulePath)
 			}
 		}
 	}
