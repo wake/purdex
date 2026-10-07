@@ -10,6 +10,8 @@
 //   awaiting ──denied / timeout / cancelled / unavailable──▶ idle (ask again at +10 points)
 //   a deferred step that fails (prompt refused, /clear refused) ──▶ idle: write / fix / seed report
 //   failed{handoff_incomplete}, /clear reports cancelled{abandoned}
+//   the user's own /clear ──▶ idle: awaiting / approved report cancelled{abandoned}, seeding
+//   failed{handoff_incomplete}; a begin still out is cancelled{abandoned} when it answers (s.gen)
 //
 // Everything that starts a turn, runs a command or waits on the daemon goes
 // out from a $.clock.after timer, never inside a hook: $.command.run rejects
@@ -505,7 +507,15 @@ export function register(on) {
       })
       return r
     }
-    // the user's own /clear: start over (the floor and the +10 re-ask were the old conversation's)
+    // The user's own /clear: start over (the floor and the +10 re-ask were the
+    // old conversation's). A relay in flight is ended at the daemon first, so
+    // no dialog or op waits on a mod that moved on: awaiting / approved →
+    // cancelled{abandoned} (the daemon closes the approval row), seeding →
+    // failed{handoff_incomplete}; beginning needs nothing here — the
+    // generation bump above has begin() cancel the op when it answers.
+    if (p && (s.state === 'awaiting' || s.state === 'approved')) report($, p.op.id, 'cancelled', ['--error', 'abandoned'])
+    else if (p && s.state === 'seeding') report($, p.op.id, 'failed', ['--error', 'handoff_incomplete'])
+    if (s.state === 'awaiting') $.ui.status(undefined)
     toIdle()
     s.floor = undefined
     s.lastAskPct = undefined

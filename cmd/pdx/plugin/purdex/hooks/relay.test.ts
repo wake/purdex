@@ -886,3 +886,79 @@ test('while seeding, a turn with the old seed tag or the write prompt is not the
   await turnAndSettle($, f, 'ts')
   expect(reports(f).at(-1)).toBe('relay report op-1 done')
 })
+
+// Item 5 (attacker medium): the user's own /clear in the middle of a relay
+// ends the relay at the daemon before the mod starts over, so no dialog or
+// op is left waiting on a mod that moved on. Mutation gate: drop the report
+// in the user's /clear branch → the awaiting / approved / seeding tests go
+// red (beginning is the generation bump of item 1).
+test('the user’s /clear while beginning: the late op is cancelled{abandoned}, nothing waits on it', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const g = gated()
+  f.pdx = async (argv) => {
+    if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO() }
+    if (argv[1] === 'begin') { await g.p; return { exitCode: 0, stdout: BEGIN_OK } }
+    if (argv[1] === 'wait') return new Promise<never>(() => {})
+    return { exitCode: 0, stdout: '{}' }
+  }
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  f.sessionId = 'sid-2'
+  await $.classic.SessionStart({ source: 'clear' })
+  await f.clock.settle()
+  g.release()
+  await f.clock.advance(50)
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned'])
+  expect(waits(f)).toEqual([])
+  expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
+})
+
+test('the user’s /clear while awaiting reports cancelled{abandoned} (the daemon closes the dialog), clears the status and starts over', async ($, on) => {
+  const f = relayWorld(on, { pdx: pdxWith([]), usage: AT72 })
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(50) // begin, then the wait (never answers)
+  expect(waits(f)).toEqual(['relay wait req-1'])
+  f.sessionId = 'sid-2'
+  await $.classic.SessionStart({ source: 'clear' })
+  await f.clock.settle()
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned'])
+  expect(f.statuses).toEqual(['接力等待核准中', undefined])
+  expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
+  await turnAndSettle($, f, 't2') // the new conversation is asked afresh
+  expect(count(f, 'begin')).toBe(2)
+})
+
+test('the user’s /clear while approved reports cancelled{abandoned}; the write turn that follows is nobody’s', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  f.sessionId = 'sid-2'
+  await $.classic.SessionStart({ source: 'clear' })
+  await clock.settle()
+  expect(reports(f)).toEqual(['relay report op-1 writing', 'relay report op-1 cancelled --error abandoned'])
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, f, 'tw')
+  await clock.advance(50)
+  expect(reports(f)).toEqual(['relay report op-1 writing', 'relay report op-1 cancelled --error abandoned'])
+  expect(f.commands).toEqual([])
+})
+
+test('the user’s /clear while seeding reports failed{handoff_incomplete}; the seed turn that follows reports nothing', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  f.sessionId = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' }) // the mod's own: seeding
+  await clock.advance(50)
+  expect(f.submits.length).toBe(2)
+  f.sessionId = 'sid-3'
+  await $.classic.SessionStart({ source: 'clear' }) // the user's, before the seed turn ran
+  await clock.settle()
+  const before = ['relay report op-1 writing', 'relay report op-1 written', 'relay report op-1 cleared --new-session sid-new']
+  expect(reports(f)).toEqual([...before, 'relay report op-1 failed --error handoff_incomplete'])
+  await $.turn.start({ text: f.submits[1].text, turnId: 'ts' })
+  await turnAndSettle($, f, 'ts')
+  expect(reports(f)).toEqual([...before, 'relay report op-1 failed --error handoff_incomplete'])
+})
