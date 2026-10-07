@@ -325,7 +325,22 @@ export interface NexCapabilities {
   transcript_prelude?: TranscriptPreludeCapability
   /** Presence = the permission channel exists in this build (nexen contract §1.14). */
   permissions?: PermissionsCapability
+  /**
+   * Nexen v0.20.0 peer mailbox (`api/peer.go` peerCapabilities). The whole key
+   * is absent when the mailbox is off: absent = send no peer messages (peer
+   * mailbox spec §2). `max_pending` is the effective queue cap.
+   */
+  peer_message?: PeerMessageCapability
   [key: string]: unknown
+}
+
+export interface PeerMessageCapability {
+  enabled: boolean
+  /** `POST {PublicPrefix}/v1/executions/{id}/peer-messages`; `path` is origin-relative. */
+  route: { method: string; path: string }
+  max_pending: number
+  /** Changes whenever the wake template does. */
+  wake_template_version: number
 }
 
 export interface DelegateRequest {

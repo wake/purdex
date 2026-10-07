@@ -12,7 +12,7 @@ import { buildSentHistory } from './sent-history'
 import { buildSearchUnits, findMatches, searchUnitId } from './transcript-search'
 import { indexOperations } from './operations'
 import { groupTurns, isOpeningLine } from './turns'
-import type { NexEvent } from './types'
+import type { NexCapabilities, NexEvent } from './types'
 
 /** The scoped event exactly as `/events` serves it (a history page item). */
 const peerEvent = (): NexEvent => structuredClone(scoped) as NexEvent
@@ -155,4 +155,21 @@ describe('search finds the peer text (spec §7)', () => {
       expect(findMatches(units, 'purdex-54').matches).toEqual([])
     })
   }
+})
+
+describe('capabilities.peer_message (spec §7)', () => {
+  // nexen v0.20.0 api/peer.go peerCapabilities; the whole key is absent when the mailbox is off.
+  it('is typed and optional', () => {
+    const on = JSON.parse(JSON.stringify({
+      phase: 'P1a',
+      peer_message: { enabled: true, route: { method: 'POST', path: '/v1/executions/{id}/peer-messages' }, max_pending: 32, wake_template_version: scoped.payload.template_version },
+    })) as Partial<NexCapabilities>
+    const maxPending: number | undefined = on.peer_message?.max_pending
+    const path: string | undefined = on.peer_message?.route.path
+    expect(maxPending).toBe(32)
+    expect(path).toBe('/v1/executions/{id}/peer-messages')
+    expect(on.peer_message?.wake_template_version).toBe(scoped.payload.template_version)
+    const off = { phase: 'P1a' } as Partial<NexCapabilities>
+    expect(off.peer_message).toBeUndefined()
+  })
 })
