@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.553] - 2026-10-07
+
+> 動 `pdx` 指令與 daemon，**需要部署新 binary 並重啟**（由統籌安排）。部署本身**不會**改 `~/.claude/settings.json`；要讓 mod 生效，需在該主機跑一次 `pdx setup --agent cc`（或 Hosts 頁 CC hooks 卡片的 Install）。之後每次部署若 mod 有改動也要再跑一次。SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5b-1（#1752）
+
+Purdex 的 Claude Code mod 隨 `pdx` 出貨（spec §5「Shipping」、§8.3；plan v2 Tasks 5b.1–5b.3）。這一版的 mod 只做一件事：向 daemon 報到。
+
+- **mod 內嵌在 `pdx` 裡**，`pdx setup --agent cc` 會把它解壓到 `<data_dir>/cc-plugin/purdex/`，並加進 `~/.claude/settings.json` 的 `env.CLAUDE_CODE_PLUGIN_DIRS`（附加在你原有的清單後面、重複安裝不會重複、移除時只拿掉 Purdex 的那一項）；`pdx setup --agent cc --remove` 全部拿掉。
+- **mod 的行為**：互動式 `claude` 開啟時與每次 `/clear` 之後，呼叫 `pdx relay hello` 告訴 daemon「這個 session 有 mod」；`claude -p`（Nexen worker）什麼都不做。報到從背景計時器送出，daemon 不在或重啟中時不會讓 session 啟動卡住。mod 會帶上安裝它的那個 daemon 的 config，不會打錯 daemon。
+- **安裝狀態**：Hosts 頁的 CC hooks 卡片現在會檢查 mod 是否已安裝且是目前版本；從舊版升級後會顯示「未安裝」，按 Install 即可。
+- **安裝的安全性**：解壓先寫到暫存目錄、舊版本先備份，就位失敗會還原；跨程序加鎖，daemon 與 `pdx setup` 同時跑不會互相刪檔；同版本時若檔案缺失或被改動會自動修復；`settings.json` 寫入失敗時還原成安裝前的樣子。
+
+Review 後補強（R1 兩條、攻擊方六條、critic 兩輪）全部收進上面的行為。
+
 ## [1.0.0-alpha.552] - 2026-10-07
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。SPA 沒有改動；使用者看得到的變化要等 PR-2（SPA）：本版只是 daemon 端先備好。
