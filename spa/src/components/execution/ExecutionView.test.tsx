@@ -124,6 +124,110 @@ describe('ExecutionView', () => {
     expect(useExecutionStore.getState().executions[KEY].pendingSend).toBe(true)
   })
 
+  // Input unlock rule: the box is locked only while this pane's own send is unaccepted.
+  describe('input lock (own send unaccepted only)', () => {
+    const accepted = (seq: number, text: string) => act(() => {
+      useExecutionStore.getState().applyEvents(H, E, [
+        { seq, execution_id: E, kind: 'execution.message_accepted', payload: { text, turn_id: `t${seq}` }, created_at: 0 },
+      ])
+    })
+    const send = (text: string) => {
+      const box = screen.getByRole('textbox')
+      fireEvent.change(box, { target: { value: text } })
+      fireEvent.keyDown(box, { key: 'Enter' })
+    }
+
+    it('a: locked while the POST is unresolved, unlocked once it resolves, and a second message is sent and shown queued', async () => {
+      let resolveFirst!: (v: { turn_id: string; delivery: 'delivered' | 'queued' }) => void
+      vi.mocked(api.sendMessage)
+        .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+        .mockResolvedValueOnce({ turn_id: 't2', delivery: 'queued' })
+      render(<ExecutionView {...base} isActive />)
+      send('first')
+      await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
+      await act(async () => { resolveFirst({ turn_id: 't1', delivery: 'delivered' }); await Promise.resolve(); await Promise.resolve() })
+      const s1 = useExecutionStore.getState().executions[KEY]
+      expect(s1.sendLocked).toBe(false)
+      expect(s1.pendingSend).toBe(true) // the turn is still running; it no longer locks the box
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
+      accepted(1, 'first')
+      send('second')
+      await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(2))
+      expect(api.sendMessage).toHaveBeenLastCalledWith(H, E, 'ls_1', 'second')
+      await waitFor(() => expect(screen.getByText(/queued/i)).toBeInTheDocument())
+      expect(screen.getByText('second')).toBeInTheDocument()
+      accepted(2, 'second')
+      expect(screen.getAllByText('first')).toHaveLength(1)
+      expect(screen.getAllByText('second')).toHaveLength(1)
+      expect(screen.queryByText(/queued/i)).toBeNull()
+    })
+
+    it('a: message_accepted unlocks the box before the POST response arrives', async () => {
+      vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise(() => {}))
+      render(<ExecutionView {...base} isActive />)
+      send('first')
+      await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+      expect(useExecutionStore.getState().executions[KEY].sendLocked).toBe(true)
+      accepted(1, 'first')
+      expect(useExecutionStore.getState().executions[KEY].sendLocked).toBe(false)
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
+    })
+
+    it('a: a failed POST unlocks the box and restores the text', async () => {
+      vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(400, 'invalid_text', 'bad'))
+      render(<ExecutionView {...base} isActive />)
+      send('first')
+      await waitFor(() => expect(screen.getByTestId('send-error')).toBeInTheDocument())
+      expect(useExecutionStore.getState().executions[KEY].sendLocked).toBe(false)
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
+    })
+
+    it('b: a second send before the first is accepted is blocked, and the box shows the lock', async () => {
+      vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise(() => {}))
+      render(<ExecutionView {...base} isActive />)
+      send('first')
+      await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
+      expect(screen.getByRole('textbox')).toHaveAttribute('readonly')
+      send('second')
+      expect(api.sendMessage).toHaveBeenCalledTimes(1)
+    })
+
+    it('b: a submit that slips in before the lock renders is refused with the typed text kept, not cleared', async () => {
+      vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise(() => {}))
+      render(<ExecutionView {...base} isActive />)
+      const box = screen.getByRole('textbox') as HTMLTextAreaElement
+      // Same tick, no re-render in between: the second Enter reaches the pane while the box still looks enabled.
+      act(() => {
+        fireEvent.change(box, { target: { value: 'first' } })
+        fireEvent.keyDown(box, { key: 'Enter' })
+        fireEvent.change(box, { target: { value: 'second' } })
+        fireEvent.keyDown(box, { key: 'Enter' })
+      })
+      await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+      expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('second')
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
+    })
+
+    it('c: running background tasks and a live turn never lock the box', () => {
+      patchExec({ turnLive: true, pendingSend: false, tasks: { a: {
+        task_id: 'a', turn_id: 't1', kind: 'shell', task_type: 'local_bash', tool_use_id: 'tu_a', parent_tool_use_id: null, command: 'pnpm dev',
+        description: '', backgrounded: true, status: 'running', provider_status: null, closed_by: null, started_at: Date.now(), ended_at: null, startSeq: 1,
+      } } as unknown as Exec['tasks'] })
+      render(<ExecutionView {...base} isActive />)
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
+    })
+
+    it('d: quick replies follow the same gate (enabled mid-turn, disabled while unaccepted)', () => {
+      render(<ExecutionView {...base} isActive />)
+      act(() => { useExecutionStore.getState().setPendingSend(H, E, true) })
+      for (const b of screen.queryAllByTestId('quick-reply')) expect(b).not.toBeDisabled()
+      act(() => { useExecutionStore.getState().setSendLocked(H, E, true) })
+      for (const b of screen.queryAllByTestId('quick-reply')) expect(b).toBeDisabled()
+    })
+  })
+
   it('locks the input synchronously before the lease resolves, so a second submit while acquisition is in flight is a no-op', async () => {
     let resolveLease!: (v: string) => void
     ensureLease.mockReturnValueOnce(new Promise<string>((resolve) => { resolveLease = resolve }))
@@ -294,11 +398,11 @@ describe('ExecutionView', () => {
     render(<ExecutionView {...base} isActive />)
     const textbox = () => screen.getByRole('textbox') as HTMLTextAreaElement
     const interrupt = () => screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement
-    expect(textbox().disabled).toBe(false)
+    expect(textbox().readOnly).toBe(false)
     expect(interrupt().disabled).toBe(false)
     fireEvent.click(screen.getByTestId('header-exit'))
     await waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
-    expect(textbox().disabled).toBe(true)
+    expect(textbox().readOnly).toBe(true)
     expect(interrupt().disabled).toBe(true)
     expect(screen.getByTestId('header-exit')).toBeDisabled()
     fireEvent.click(interrupt())
@@ -346,20 +450,20 @@ describe('ExecutionView', () => {
     render(<ExecutionView {...base} isActive />)
     // The loading placeholder replaces the conversation, but WorkerInput is
     // still rendered below it — must stay disabled while spinner is up.
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(true)
   })
 
   it('a terminally closed live stream (with error) disables input with a disconnected placeholder', () => {
     useExecutionStore.getState().setSse(H, E, 'closed', 'forbidden')
     render(<ExecutionView {...base} isActive />)
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(true)
     expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', expect.stringMatching(/lost/i))
   })
 
   it('sse closed with no error (e.g. an in-progress reconnect backoff) does not disable input', () => {
     useExecutionStore.getState().setSse(H, E, 'closed', null)
     render(<ExecutionView {...base} isActive />)
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(false)
   })
 
   it('archived: renders the ended screen, no input and no exit (not a live row)', () => {
@@ -801,13 +905,13 @@ describe('ExecutionView — take back to terminal', () => {
     const textbox = () => screen.getByRole('textbox') as HTMLTextAreaElement
     const interrupt = () => screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement
     const terminate = () => screen.getByTestId('header-exit') as HTMLButtonElement
-    expect(textbox().disabled).toBe(false)
+    expect(textbox().readOnly).toBe(false)
     expect(interrupt().disabled).toBe(false)
     expect(terminate().disabled).toBe(false)
 
     fireEvent.click(takeBackBtn())
     await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
-    expect(textbox().disabled).toBe(true)
+    expect(textbox().readOnly).toBe(true)
     expect(interrupt().disabled).toBe(true)
     expect(terminate().disabled).toBe(true)
     // Clicks on the frozen controls must not reach the daemon.
@@ -844,10 +948,10 @@ describe('ExecutionView — take back to terminal', () => {
     render(<ExecutionView {...base} {...ids} from={from} isActive />)
     fireEvent.click(takeBackBtn())
     await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(true)
     await act(async () => { reject(new HandoffApiError(409, 'held_by', { code: 'held_by', principal: 'x' })) })
     expect(toast()?.message).toBe('The execution lease is held by x.')
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(false)
     expect((screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement).disabled).toBe(false)
     expect((screen.getByTestId('header-exit') as HTMLButtonElement).disabled).toBe(false)
     expect(paneContent(ids.tabId).kind).toBe('execution')
@@ -864,10 +968,10 @@ describe('ExecutionView — take back to terminal', () => {
     await act(() => new Promise<void>((r) => requestAnimationFrame(() => r()))) // the activation frame
     fireEvent.click(takeBackBtn())
     await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(true)
     ;(document.activeElement as HTMLElement | null)?.blur()
     await act(async () => { reject(new HandoffApiError(409, 'held_by', { code: 'held_by', principal: 'x' })) })
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(false)
     expect(document.activeElement).toBe(document.body)
     await act(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
     expect(screen.getByRole('textbox')).not.toHaveFocus()
@@ -1485,7 +1589,7 @@ describe('ExecutionView — quick replies (R3 T2.1)', () => {
 
   it('is disabled while a send is pending', async () => {
     render(<ExecutionView {...base} isActive />)
-    act(() => useExecutionStore.getState().setPendingSend(H, E, true))
+    act(() => { useExecutionStore.getState().setPendingSend(H, E, true); useExecutionStore.getState().setSendLocked(H, E, true) })
     for (const b of screen.getAllByTestId('quick-reply')) expect(b).toBeDisabled()
     act(() => useExecutionStore.getState().setPendingSend(H, E, false))
     for (const b of screen.getAllByTestId('quick-reply')) expect(b).not.toBeDisabled()
@@ -1501,7 +1605,7 @@ describe('ExecutionView — quick replies (R3 T2.1)', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'first' } })
     fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
     await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('first'))
-    await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false))
+    await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(false))
     const box = screen.getByRole('textbox') as HTMLTextAreaElement
     fireEvent.change(box, { target: { value: 'half-typ' } })
     fireEvent.click(reply('go on'))
@@ -2074,7 +2178,7 @@ describe('ExecutionView — attachments', () => {
   // Matches the disabled `+` button: while a send is in flight the input is
   // disabled, so a drop must not open the overlay or upload either.
   it('takes no drop while the input is disabled (a send in flight)', () => {
-    act(() => useExecutionStore.getState().setPendingSend(H, E, true))
+    act(() => { useExecutionStore.getState().setPendingSend(H, E, true); useExecutionStore.getState().setSendLocked(H, E, true) })
     render(<ExecutionView {...base} isActive />)
     const root = screen.getByTestId('execution-view')
     fireEvent.dragEnter(root, { dataTransfer: { types: ['Files'], files: [txt('a.txt')] } })
@@ -2380,7 +2484,7 @@ describe('ExecutionView — worker prelude', () => {
 // and after a send comes back, and only as its tab's focus target.
 describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
   const nextFrame = () => act(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
-  const setSending = (v: boolean) => act(() => { useExecutionStore.getState().setPendingSend(H, E, v) })
+  const setSending = (v: boolean) => act(() => { useExecutionStore.getState().setPendingSend(H, E, v); useExecutionStore.getState().setSendLocked(H, E, v) })
 
   it('mounting active as the focus target focuses the reply box', async () => {
     render(<ExecutionView {...base} isActive isFocusTarget />)
@@ -2402,7 +2506,7 @@ describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
     // keeps a disabled element focused internally).
     screen.getByRole('textbox').blur()
     setSending(true)
-    expect(screen.getByRole('textbox')).toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
     setSending(false)
     expect(screen.getByRole('textbox')).not.toHaveFocus()
     await nextFrame()
@@ -2427,10 +2531,10 @@ describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
     await nextFrame() // the activation lands
     screen.getByRole('textbox').blur()
     act(() => { useExecutionStore.getState().setSse(H, E, 'closed', 'forbidden') })
-    expect(screen.getByRole('textbox')).toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
     await nextFrame()
     act(() => { useExecutionStore.getState().setSse(H, E, 'open', null) })
-    expect(screen.getByRole('textbox')).not.toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
     await nextFrame()
     expect(screen.getByRole('textbox')).not.toHaveFocus()
   })
@@ -2441,11 +2545,11 @@ describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
   it('opened while its history loads: the reply box takes focus once the history has loaded', async () => {
     useExecutionStore.getState().setHistoryLoaded(H, E, false)
     render(<ExecutionView {...base} isActive isFocusTarget />)
-    expect(screen.getByRole('textbox')).toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
     await nextFrame()
     expect(screen.getByRole('textbox')).not.toHaveFocus()
     act(() => { useExecutionStore.getState().setHistoryLoaded(H, E, true) })
-    expect(screen.getByRole('textbox')).not.toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
     await nextFrame()
     expect(screen.getByRole('textbox')).toHaveFocus()
   })
@@ -2494,8 +2598,67 @@ describe('ExecutionView — zero-turn idle execution (start_idle handoff)', () =
     } as never)
     render(<ExecutionView {...base} isActive />)
     expect(await screen.findByText('earlier talk')).toBeInTheDocument()
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(false)
     expect(screen.queryAllByTestId('turn-footer')).toHaveLength(0)
     expect(screen.queryByTestId('execution-loading')).toBeNull()
+  })
+})
+
+// Thinking that belongs to a task / subagent never shows as main-transcript dots.
+describe('ExecutionView — task-owned thinking is not a main bubble', () => {
+  const runningTask = {
+    task_id: 'a', turn_id: 't1', kind: 'subagent' as const, task_type: '', tool_use_id: 'tu_a', parent_tool_use_id: null,
+    description: '', backgrounded: true, status: 'running' as const, provider_status: null, closed_by: null,
+    started_at: Date.now(), ended_at: null, startSeq: 1,
+  }
+  afterEach(() => { vi.useRealTimers() })
+
+  it('a flapping turnLive with a running subagent never renders the dots', () => {
+    vi.useFakeTimers()
+    patchExec({ tasks: { a: runningTask } })
+    render(<ExecutionView {...base} isActive />)
+    for (let i = 0; i < 4; i++) {
+      act(() => { patchExec({ turnLive: true }) })
+      act(() => { vi.advanceTimersByTime(800) })
+      expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+      act(() => { patchExec({ turnLive: false }) })
+      act(() => { vi.advanceTimersByTime(800) })
+      expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    }
+  })
+
+  it('a running subagent with a long-held turnLive still shows no main dots (suppression, not just hysteresis)', () => {
+    vi.useFakeTimers()
+    patchExec({ tasks: { a: runningTask }, turnLive: true })
+    render(<ExecutionView {...base} isActive />)
+    act(() => { vi.advanceTimersByTime(10_000) })
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+  })
+
+  it('real main-agent silence still shows the dots (after the hold-off when tasks exist)', () => {
+    vi.useFakeTimers()
+    patchExec({ tasks: { a: { ...runningTask, status: 'completed' as const } }, turnLive: true })
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    // shown only after the signal held 1.5 s, not before
+    act(() => { vi.advanceTimersByTime(1_400) })
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(200) })
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+    // a brief gap does not hide them (kept 1 s)…
+    act(() => { patchExec({ turnLive: false }) })
+    act(() => { vi.advanceTimersByTime(900) })
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+    // …a held one does
+    act(() => { vi.advanceTimersByTime(200) })
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+  })
+
+  it('our own pending send still shows dots even while a task runs', () => {
+    vi.useFakeTimers()
+    patchExec({ tasks: { a: runningTask }, pendingSend: true, pendingLocal: { text: 'hi', delivery: 'delivered' } as Exec['pendingLocal'] })
+    render(<ExecutionView {...base} isActive />)
+    act(() => { vi.advanceTimersByTime(1_600) })
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
   })
 })

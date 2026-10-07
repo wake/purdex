@@ -38,3 +38,18 @@ describe('QuickReplyDock', () => {
     expect(onSend).not.toHaveBeenCalled()
   })
 })
+
+describe('QuickReplyDock collapse', () => {
+  it('toggles with the chevron, defaults expanded, and persists in the worker settings store', async () => {
+    const { useWorkerSettingsStore } = await import('../../stores/useWorkerSettingsStore')
+    useWorkerSettingsStore.setState({ quickRepliesCollapsed: false })
+    render(<QuickReplyDock replies={[{ id: 'a', text: 'ok' }] as never} onSend={vi.fn()} disabled={false} />)
+    expect(screen.getAllByTestId('quick-reply')).toHaveLength(1)
+    fireEvent.click(screen.getByTestId('quick-reply-toggle'))
+    expect(screen.queryAllByTestId('quick-reply')).toHaveLength(0)
+    expect(useWorkerSettingsStore.getState().quickRepliesCollapsed).toBe(true)
+    expect(screen.getByTestId('quick-reply-toggle')).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(screen.getByTestId('quick-reply-toggle'))
+    expect(screen.getAllByTestId('quick-reply')).toHaveLength(1)
+  })
+})

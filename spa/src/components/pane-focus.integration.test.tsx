@@ -398,7 +398,7 @@ describe('pane focus — first mount as the active tab (spec §8.3 path 2)', () 
     useExecutionStore.getState().setHistoryLoaded(H, EXEC, false)
     show(TW)
     await settle()
-    expect(workerBox()).toBeDisabled()
+    expect(workerBox()).toHaveAttribute('aria-disabled', 'true')
     expect(domFocusOn(workerBox())).toBe(0)
 
     act(() => { useExecutionStore.getState().setHistoryLoaded(H, EXEC, true) })
@@ -465,14 +465,14 @@ describe('pane focus — click inside a visible tab (spec §8.3 path 3)', () => 
 // --- the worker's post-send refocus ------------------------------------------------------------------------------
 
 describe('pane focus — a worker send coming back (spec §8.3)', () => {
-  const sending = (v: boolean) => act(() => { useExecutionStore.getState().setPendingSend(H, EXEC, v) })
+  const sending = (v: boolean) => act(() => { useExecutionStore.getState().setPendingSend(H, EXEC, v); useExecutionStore.getState().setSendLocked(H, EXEC, v) })
 
   it('the worker is not the target (the user moved to the editor) → its reply box does not take focus', async () => {
     show(TW)
     await settle()
     fireEvent.pointerDown(screen.getByTestId('monaco-editor'))
     sending(true)
-    expect(workerBox()).toBeDisabled()
+    expect(workerBox()).toHaveAttribute('aria-disabled', 'true')
     clearFocusCalls()
 
     sending(false)
