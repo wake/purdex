@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { HostConfigConflictError, type RelaySwitches } from '../../lib/host-config-api'
 import { hostConfigQueueKey, queueHostConfigSave } from '../../lib/host-config-queue'
 import { fetchRelayPrompts, RELAY_PROMPT_KINDS, type RelayPromptKind, type RelayPrompts } from '../../lib/relay-prompts-api'
-import { useHostConfigStore } from '../../stores/useHostConfigStore'
+import { beginHostRequest, hostEndpointKey, hostRequestStillCurrent, useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
@@ -23,28 +23,52 @@ type PromptsState =
   | { status: 'unsupported' }
   | { status: 'error'; reason: string }
 
+const LOADING: PromptsState = { status: 'loading' }
+
 export function RelaySection({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
   const { entry, editable, notice } = useHostConfigGate(hostId)
   const online = useHostStore((s) => s.runtime[hostId]?.status === 'connected')
+  const endpoint = useHostStore((s) => hostEndpointKey(s.hosts[hostId]))
   const [saveError, setSaveError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
-  const [prompts, setPrompts] = useState<PromptsState>({ status: 'loading' })
+
+  // The defaults, fixed parts and variables come from the daemon (one source); the bodies come from the host config
+  // row, which a save updates. What is on screen must be the daemon's that the boxes save to — the default decides
+  // whether a save sends "" — and a host id is not an endpoint (useHostConfigStore). So the prompts belong to this
+  // host at this endpoint while connected: any change of that (another host, a new address, port or token, a
+  // reconnect, a read the store invalidated) is a new read, and the previous answer is gone from the first render of
+  // it, editors included.
+  const [reread, setReread] = useState(0)
+  const promptsKey = online && endpoint !== null ? `${hostId}\n${endpoint}\n${reread}` : null
+  const [prompts, setPrompts] = useState<{ key: string | null; state: PromptsState }>({ key: promptsKey, state: LOADING })
+  if (prompts.key !== promptsKey) setPrompts({ key: promptsKey, state: LOADING })
+  const shown = prompts.state
 
   const known = entry.status === 'ready' || entry.status === 'unsupported'
   const unsupported = known && !entry.relaySupported
 
-  // The defaults, fixed parts and variables come from the daemon (one source); the bodies come from the host config
-  // row, which a save updates. Fetched once per mount, again only after a reconnect.
   useEffect(() => {
-    if (!online) return
+    if (promptsKey === null) return
+    const token = beginHostRequest(hostId)
     const abort = new AbortController()
+    // An answer lands only for the read that asked (a replaced read is aborted), and only while the store's own
+    // token holds: the host is still at the endpoint it was sent to and was not forgotten meanwhile (what
+    // host-config-loader does when the endpoint moves or the host goes). One that fails it is dropped and read again.
+    const apply = (state: PromptsState) => {
+      if (abort.signal.aborted) return
+      if (token === null || !hostRequestStillCurrent(hostId, token)) {
+        setReread((n) => n + 1)
+        return
+      }
+      setPrompts({ key: promptsKey, state })
+    }
     fetchRelayPrompts(hostId, abort.signal).then(
-      (r) => { if (!abort.signal.aborted) setPrompts(r === 'unsupported' ? { status: 'unsupported' } : { status: 'ready', prompts: r }) },
-      (err: unknown) => { if (!abort.signal.aborted) setPrompts({ status: 'error', reason: err instanceof Error ? err.message : String(err) }) },
+      (r) => apply(r === 'unsupported' ? { status: 'unsupported' } : { status: 'ready', prompts: r }),
+      (err: unknown) => apply({ status: 'error', reason: err instanceof Error ? err.message : String(err) }),
     )
     return () => abort.abort()
-  }, [hostId, online])
+  }, [hostId, promptsKey])
 
   const toggle = useCallback((field: 'self_solo' | 'self_lead') => {
     setPending(true)
@@ -113,23 +137,23 @@ export function RelaySection({ hostId }: { hostId: string }) {
           </div>
           {saveError && <p data-testid="relay-save-error" className="mt-3 text-xs text-status-warning whitespace-pre-wrap">{saveError}</p>}
 
-          {prompts.status === 'unsupported' && (
+          {shown.status === 'unsupported' && (
             <p data-testid="relay-prompts-unsupported" className="mt-6 text-xs text-text-muted">{t('hosts.relay.prompts.unsupported')}</p>
           )}
-          {(prompts.status === 'ready' || prompts.status === 'error') && (
+          {(shown.status === 'ready' || shown.status === 'error') && (
             <div data-testid="relay-prompts" className="mt-8">
               <h3 className="text-base font-semibold mb-1">{t('hosts.relay.prompts.title')}</h3>
               <p className="mb-3 text-xs text-text-muted">{t('hosts.relay.prompts.desc')}</p>
-              {prompts.status === 'error' ? (
+              {shown.status === 'error' ? (
                 <p data-testid="relay-prompts-error" className="text-xs text-status-warning">
-                  {t('hosts.relay.prompts.load_failed', { reason: prompts.reason })}
+                  {t('hosts.relay.prompts.load_failed', { reason: shown.reason })}
                 </p>
               ) : (
                 <div className="space-y-3">
                   {RELAY_PROMPT_KINDS.map((kind) => (
                     <RelayPromptEditor key={`${hostId}:${kind}`} hostId={hostId} kind={kind}
-                      fixed={prompts.prompts.fixed[kind]} defaultBody={prompts.prompts.defaults[kind]}
-                      stored={entry.relay[PROMPT_FIELD[kind]] ?? ''} variables={prompts.prompts.variables} locked={locked}
+                      fixed={shown.prompts.fixed[kind]} defaultBody={shown.prompts.defaults[kind]}
+                      stored={entry.relay[PROMPT_FIELD[kind]] ?? ''} variables={shown.prompts.variables} locked={locked}
                       onSave={(value) => savePrompt(kind, value)} onRestore={() => savePrompt(kind, '')} />
                   ))}
                 </div>

@@ -233,3 +233,91 @@ describe('RelaySection prompts', () => {
     expect(box('write').value).toBe('my write')
   })
 })
+
+// P9a-3 review: a host id is not an endpoint. The defaults, fixed parts and variables on screen must be the daemon's
+// that the boxes save to, or a save would judge "is this the default?" against another daemon's text.
+describe('RelaySection prompts across hosts and endpoints', () => {
+  const H2 = 'h2'
+  const OTHER: RelayPrompts = {
+    ...PROMPTS, write: 'other write', fix: 'other fix', seed: 'other seed',
+    defaults: { write: 'other write', fix: 'other fix', seed: 'other seed' },
+  }
+  const box = (kind: string) => screen.getByTestId(`relay-prompt-${kind}-box`) as HTMLTextAreaElement
+  function deferred<T>() {
+    let resolve!: (v: T) => void
+    const promise = new Promise<T>((r) => { resolve = r })
+    return { promise, resolve }
+  }
+  const moveH = () => act(() => useHostStore.setState((s) => ({ hosts: { ...s.hosts, [H]: { ...s.hosts[H], ip: '5.6.7.8' } } })))
+
+  beforeEach(() => {
+    useHostStore.setState((s) => ({
+      hosts: { ...s.hosts, [H2]: { id: H2, name: 'air', ip: '1.2.3.5', port: 7860, order: 1 } },
+      hostOrder: [H, H2], runtime: { ...s.runtime, [H2]: { status: 'connected' } },
+    }))
+    useHostConfigStore.setState({
+      byHost: { [H]: entry({ self_solo: true, self_lead: true }), [H2]: entry({ self_solo: true, self_lead: true }) },
+      load: vi.fn(async () => {}), saveRelay,
+    })
+  })
+
+  it('another host shows nothing of the first one until its own prompts arrive, and nothing can be saved meanwhile', async () => {
+    const other = deferred<RelayPrompts>()
+    vi.mocked(fetchRelayPrompts).mockImplementation((hostId) => (hostId === H ? Promise.resolve(PROMPTS) : other.promise))
+    const { rerender } = render(<RelaySection hostId={H} />)
+    await screen.findByTestId('relay-prompt-write')
+    expect(box('write').value).toBe('default write')
+
+    rerender(<RelaySection hostId={H2} />)
+    expect(screen.queryByTestId('relay-prompts')).toBeNull()
+    expect(screen.queryByTestId('relay-prompt-write-save')).toBeNull()
+    await act(async () => { other.resolve(OTHER) })
+    expect(box('write').value).toBe('other write')
+  })
+
+  it('a new endpoint for the same host hides the ready editors at once and reads again', async () => {
+    const moved = deferred<RelayPrompts>()
+    vi.mocked(fetchRelayPrompts).mockResolvedValueOnce(PROMPTS).mockReturnValueOnce(moved.promise)
+    render(<RelaySection hostId={H} />)
+    await screen.findByTestId('relay-prompt-write')
+    moveH()
+    expect(fetchRelayPrompts).toHaveBeenCalledTimes(2)
+    expect(screen.queryByTestId('relay-prompts')).toBeNull()
+    await act(async () => { moved.resolve(OTHER) })
+    expect(box('write').value).toBe('other write')
+  })
+
+  it("the old endpoint's answer, landing after the new one's, is not written", async () => {
+    const old = deferred<RelayPrompts>()
+    const moved = deferred<RelayPrompts>()
+    vi.mocked(fetchRelayPrompts).mockReturnValueOnce(old.promise).mockReturnValueOnce(moved.promise)
+    render(<RelaySection hostId={H} />)
+    moveH()
+    await act(async () => { moved.resolve(OTHER) })
+    expect(box('write').value).toBe('other write')
+    await act(async () => { old.resolve(PROMPTS) })
+    expect(box('write').value).toBe('other write')
+  })
+
+  // The store's token: a forget (what host-config-loader does on an endpoint change or a removal) invalidates every
+  // answer in flight for the host, this one too. It is dropped, and the prompts are read again.
+  it('an answer the store invalidated meanwhile is dropped and read again', async () => {
+    const first = deferred<RelayPrompts>()
+    vi.mocked(fetchRelayPrompts).mockReturnValueOnce(first.promise).mockResolvedValueOnce(OTHER)
+    render(<RelaySection hostId={H} />)
+    act(() => useHostConfigStore.getState().forget(H))
+    await act(async () => { first.resolve(PROMPTS) })
+    expect(fetchRelayPrompts).toHaveBeenCalledTimes(2)
+    expect((await screen.findByTestId('relay-prompt-write-box') as HTMLTextAreaElement).value).toBe('other write')
+  })
+
+  it("the first host's answer, landing after the second one's, is not written", async () => {
+    const first = deferred<RelayPrompts>()
+    vi.mocked(fetchRelayPrompts).mockImplementation((hostId) => (hostId === H ? first.promise : Promise.resolve(OTHER)))
+    const { rerender } = render(<RelaySection hostId={H} />)
+    rerender(<RelaySection hostId={H2} />)
+    await screen.findByTestId('relay-prompt-write')
+    await act(async () => { first.resolve(PROMPTS) })
+    expect(box('write').value).toBe('other write')
+  })
+})
