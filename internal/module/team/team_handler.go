@@ -40,6 +40,9 @@ func (m *Module) handleTeam(w http.ResponseWriter, r *http.Request) {
 
 // callerTeam is the live team the inbox's session leads; false means an
 // error was written: 503 (registry), 400 origin_unknown, 409 not_lead.
+// The inbox names the caller on trust: the host token is shared by the SPA
+// and pdx (spec §6.5), and lead/team is not a security boundary between
+// processes of one uid (P4-6 review, ruled by the coordinator).
 func (m *Module) callerTeam(w http.ResponseWriter, inbox string) (team.Team, bool) {
 	origin, ok, err := m.origins.ResolveOrigin(inbox)
 	if err != nil {
@@ -94,9 +97,9 @@ func (m *Module) selfHost() (alias, hostID string) {
 }
 
 // handleKill is POST /api/team/kill (spec §7.3): the caller's own member
-// only (else 409 not_your_member), its tmux session ended (killMember),
-// then its row killed. A killed member answers 200 again with no tmux call.
-// Worktrees are the lead's.
+// only (else 409 not_your_member), its tmux session ended and the row it
+// read marked killed (killAndMark). A killed member answers 200 again with
+// no tmux call. Worktrees are the lead's.
 func (m *Module) handleKill(w http.ResponseWriter, r *http.Request) {
 	if m.tmux == nil {
 		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon has no tmux", nil)
@@ -124,20 +127,71 @@ func (m *Module) handleKill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if mr.State != team.MemberKilled {
-		status, code, why := m.killMember(mr)
-		if why != "" {
-			m.writeErr(w, status, code, why, nil)
+		if mr, ok = m.killAndMark(w, t, mr); !ok {
 			return
 		}
-		if err := m.store.SetMemberState(mr.SpawnOp, team.MemberKilled, m.now()); err != nil {
-			m.logf("[team] kill %s: %v", mr.SpawnOp, err)
-			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-			return
-		}
-		m.logf("[team] member %s (%s) of team %s killed", mr.Ref, mr.SessionID, t.ID)
-		mr.State = team.MemberKilled
 	}
 	m.writeJSON(w, http.StatusOK, m.memberView(mr))
+}
+
+// killAndMark ends mr's tmux session and marks killed the row as it was
+// read (P4-6 review R1). A member mid-relay is refused before anything is
+// killed: 409 relay_open with its op. The mark is a compare-and-set on the
+// session read (MarkMemberKilled; a sweeper that marked the member gone
+// meanwhile does not undo the kill). When it loses, the row is read
+// again: another kill that marked it is a success; anything else — a relay
+// claimed since, or one that completed and moved the row to its new session,
+// which must not be marked — is 409 relay_open, the row as it is. false
+// means an error was written.
+func (m *Module) killAndMark(w http.ResponseWriter, t team.Team, mr memberRow) (memberRow, bool) {
+	failStore := func(err error) (memberRow, bool) {
+		m.logf("[team] kill %s: %v", mr.SpawnOp, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return memberRow{}, false
+	}
+	relayOpen := func(op team.RelayOp, ok bool, detail string) (memberRow, bool) {
+		e := team.APIError{Error: team.ErrRelayOpen, Detail: "member " + mr.Ref + " " + detail + "; its row is unchanged; kill it again"}
+		if ok {
+			e.Op = &op
+		}
+		m.writeJSON(w, http.StatusConflict, e)
+		return memberRow{}, false
+	}
+	if op, busy, err := m.store.RelayInFlight(mr.SessionID); err != nil {
+		return failStore(err)
+	} else if busy {
+		return relayOpen(op, true, "is relaying; nothing was killed")
+	}
+	if status, code, why := m.killMember(mr); why != "" {
+		m.writeErr(w, status, code, why, nil)
+		return memberRow{}, false
+	}
+	if m.beforeKillMark != nil {
+		m.beforeKillMark(mr)
+	}
+	killed, err := m.store.MarkMemberKilled(mr.SpawnOp, mr.SessionID, m.now())
+	if err != nil {
+		return failStore(err)
+	}
+	if killed {
+		m.logf("[team] member %s (%s) of team %s killed", mr.Ref, mr.SessionID, t.ID)
+		mr.State = team.MemberKilled
+		return mr, true
+	}
+	rows, err := m.store.MembersOf(t.ID)
+	if err != nil {
+		return failStore(err)
+	}
+	for _, now := range rows {
+		if now.SpawnOp == mr.SpawnOp && now.State == team.MemberKilled {
+			return now, true // another kill marked it first
+		}
+	}
+	op, open, err := m.store.OpenRelayOpBySession(mr.SessionID)
+	if err != nil {
+		return failStore(err)
+	}
+	return relayOpen(op, open, "relayed while it was being killed")
 }
 
 // killMember ends the tmux session the member's spawn created, and no other

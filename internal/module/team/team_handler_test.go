@@ -280,3 +280,60 @@ func TestKill_TargetForms(t *testing.T) {
 		}
 	}
 }
+
+// P4-6 review R1 [P1]: the kill marks the row it read, and only that one.
+// A member mid-relay (claimed, writing, written) is refused before anything
+// is killed: 409 relay_open with the op. Between the read and the mark —
+// the beforeKillMark seam — a relay may claim (the mark is refused) or
+// complete (cleared moved the row to the new session: the new session is
+// never marked killed); both answer 409 relay_open and leave the row as it
+// is. Another kill that marked it first makes this one a 200 (its time
+// kept); the sweeper marking it gone meanwhile does not undo the kill.
+// Mutation gates: drop session_id from the mark → the moved row is killed,
+// red; drop the relay guard from the mark → red; drop the check before the
+// tmux kill → a session is killed mid-relay, red.
+func TestKill_MarksOnlyTheRowItRead(t *testing.T) {
+	f, root := newTeamFixture(t, 4)
+	m1 := f.member(1, root, "sid-m1", "w-one", nil)
+	claimedOp(t, f.m.store, "relay-1", "sid-m1", m1.Ref)
+	code, _, e := f.kill("/tmp/10.sock", m1.Ref)
+	if code != 409 || e.Error != team.ErrRelayOpen || e.Op == nil || e.Op.ID != "relay-1" || len(f.tmux.KillIfInstanceCalls()) != 0 {
+		t.Fatalf("a member mid-relay = %d %+v (kill calls %d), want 409 relay_open with its op and nothing killed", code, e, len(f.tmux.KillIfInstanceCalls()))
+	}
+
+	cases := []struct {
+		name    string
+		race    func(mr memberRow)
+		code    int
+		state   team.MemberState
+		session string
+		at      int64 // updated_at, when checked
+	}{
+		{"a relay completes", func(mr memberRow) {
+			claimedOp(t, f.m.store, "relay-2", mr.SessionID, mr.Ref)
+			mustReport(t, f.m.store, "relay-2", RelayReport{State: team.RelayCleared, NewSessionID: "sid-m2b", NewRef: ipeers.RefID("sid-m2b"), At: 5})
+		}, 409, team.MemberActive, "sid-m2b", 0},
+		{"a relay claims", func(mr memberRow) { claimedOp(t, f.m.store, "relay-3", mr.SessionID, mr.Ref) }, 409, team.MemberActive, "sid-m3", 0},
+		{"another kill marks it first", func(mr memberRow) {
+			if err := f.m.store.SetMemberState(mr.SpawnOp, team.MemberKilled, 6); err != nil {
+				t.Fatal(err)
+			}
+		}, 200, team.MemberKilled, "sid-m4", 6},
+		{"the sweeper marks it gone", func(mr memberRow) {
+			if err := f.m.store.SetMemberState(mr.SpawnOp, team.MemberGone, 7); err != nil {
+				t.Fatal(err)
+			}
+		}, 200, team.MemberKilled, "sid-m5", 0},
+	}
+	for i, c := range cases {
+		mr := f.member(i+2, root, fmt.Sprintf("sid-m%d", i+2), fmt.Sprintf("w-%d", i+2), nil)
+		f.m.beforeKillMark = c.race
+		code, _, e := f.kill("/tmp/10.sock", mr.Ref)
+		f.m.beforeKillMark = nil
+		got := memberBySpawn(t, f.m.store, mr.SpawnOp)
+		if code != c.code || (code == 409 && e.Error != team.ErrRelayOpen) || got.State != c.state || got.SessionID != c.session ||
+			(c.at != 0 && got.UpdatedAt != c.at) {
+			t.Errorf("%s: %d %+v, row %s %s; want %d, row %s %s", c.name, code, e, got.State, got.SessionID, c.code, c.state, c.session)
+		}
+	}
+}

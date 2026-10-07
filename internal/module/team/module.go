@@ -148,6 +148,10 @@ type Module struct {
 	// member is gone and just before MarkMemberGone; tests claim a relay of
 	// that member there and prove the mark loses. nil in production.
 	beforeMarkGone func(mr memberRow)
+	// beforeKillMark, when set, runs in handleKill after the member's tmux
+	// session was ended and just before its row is marked killed; tests move
+	// or relay the member there and prove the mark loses. nil in production.
+	beforeKillMark func(mr memberRow)
 	// clearedWait / clearedPoll bound how long a cleared report waits for
 	// the registry to show the new session id (checkClearedTarget).
 	clearedWait, clearedPoll time.Duration
