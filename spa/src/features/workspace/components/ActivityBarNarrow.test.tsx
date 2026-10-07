@@ -97,7 +97,8 @@ describe('ActivityBarNarrow', () => {
       const rect = (left: number, top: number, width: number, height: number): DOMRect =>
         ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect
       vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-        if (this.dataset.testid === 'home-button') return rect(7, 8, 30, 30)
+        // 8 px into the bar, which sits under the 36 px title bar (always rendered, browser convergence batch 3).
+        if (this.dataset.testid === 'home-button') return rect(7, 44, 30, 30)
         if (this.dataset.testid === 'profile-switcher-menu') return rect(0, 0, 200, 120)
         return rect(0, 0, 0, 0)
       })
@@ -111,7 +112,7 @@ describe('ActivityBarNarrow', () => {
       const menu = screen.getByTestId('profile-switcher-menu')
       expect(menu.parentElement).toBe(document.body)
       expect(menu.style.left).toBe('41px') // right of the 30 px button, not under it
-      expect(menu.style.top).toBe('8px')
+      expect(menu.style.top).toBe('44px') // top edges aligned
       expect(screen.getByTestId('profile-item-s1')).toBeInTheDocument()
     })
   })
