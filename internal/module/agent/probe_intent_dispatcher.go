@@ -449,9 +449,9 @@ func (d *probeIntentDispatcher) reconcileSessionActive(
 //
 //  1. !shouldActive && !wasActive → noop
 //  2. !shouldActive &&  wasActive → cancel + delete
-//  3.  shouldActive && !wasActive (frame ok) → record + arm
-//  4.  shouldActive &&  wasActive (target match) → noop
-//  5.  shouldActive &&  wasActive (target mismatch) → cancel + record + arm
+//  3. shouldActive && !wasActive (frame ok) → record + arm
+//  4. shouldActive &&  wasActive (target match) → noop
+//  5. shouldActive &&  wasActive (target mismatch) → cancel + record + arm
 //
 // Edge cases (per spec §5.4 lines 717-739):
 //
@@ -975,4 +975,3 @@ func defaultStartProbeIntentDetector(
 ) {
 	<-ctx.Done()
 }
-

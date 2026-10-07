@@ -143,14 +143,14 @@ func TestOpenCodeEvents_FreshSliceDefensiveCopy(t *testing.T) {
 
 // frozenManifest is the JSON shape from testdata/opencode-1.14.23-manifest.json.
 type frozenManifest struct {
-	Tag             string `json:"tag"`
-	CommitSha       string `json:"commitSha"`
-	CatalogSummary  struct {
-		BusEvents    int `json:"busEvents"`
-		StrongHooks  int `json:"strongHooks"`
-		Installable  int `json:"installable"`
-		Ignored      int `json:"ignored"`
-		Unsupported  int `json:"unsupported"`
+	Tag            string `json:"tag"`
+	CommitSha      string `json:"commitSha"`
+	CatalogSummary struct {
+		BusEvents   int `json:"busEvents"`
+		StrongHooks int `json:"strongHooks"`
+		Installable int `json:"installable"`
+		Ignored     int `json:"ignored"`
+		Unsupported int `json:"unsupported"`
 	} `json:"catalogSummary"`
 }
 
@@ -238,20 +238,21 @@ func catalogByUpstreamKey(specs []agent.HookEventSpec) map[string]agent.HookEven
 // (plan v1.3 §3 H3-1).
 //
 // Rules:
-//  (a) For each events.json entry e:
-//      - kind == "installable": purdexEventName must exact-match an
-//        opencodeEventSpecs entry whose Handling resolves to status/detail.
-//      - kind == "ignored" or "unsupported": upstreamKey must exact-match
-//        an opencodeEventSpecs entry whose Handling matches.
-//      - kind == "core-mechanism" (event hook): no events.go counterpart
-//        expected (skip — it's the messaging mechanism itself).
-//  (b) For each opencodeEventSpecs entry g:
-//      - If installable: there must exist >=1 events.json entry mapping to
-//        it via purdexEventName.
-//      - Otherwise: there must exist exactly 1 events.json entry whose
-//        upstreamKey == g.Name and whose kind matches g.Handling.
-//  (c) No events.go-only entries (every events.go entry must have a
-//      manifest counterpart).
+//
+//	(a) For each events.json entry e:
+//	    - kind == "installable": purdexEventName must exact-match an
+//	      opencodeEventSpecs entry whose Handling resolves to status/detail.
+//	    - kind == "ignored" or "unsupported": upstreamKey must exact-match
+//	      an opencodeEventSpecs entry whose Handling matches.
+//	    - kind == "core-mechanism" (event hook): no events.go counterpart
+//	      expected (skip — it's the messaging mechanism itself).
+//	(b) For each opencodeEventSpecs entry g:
+//	    - If installable: there must exist >=1 events.json entry mapping to
+//	      it via purdexEventName.
+//	    - Otherwise: there must exist exactly 1 events.json entry whose
+//	      upstreamKey == g.Name and whose kind matches g.Handling.
+//	(c) No events.go-only entries (every events.go entry must have a
+//	    manifest counterpart).
 func TestOpenCodeEvents_ClassifyAgainstFrozenManifest(t *testing.T) {
 	p := opencode.NewProvider()
 	specs := p.Events()
@@ -331,9 +332,10 @@ func TestOpenCodeEvents_ClassifyAgainstFrozenManifest(t *testing.T) {
 
 // HC5b: collision check + non-installable explicit Handling.
 // Plan v1.3 §3 + §2.2:
-//   (a) ignored/unsupported entries set Handling explicitly (not blank);
-//   (b) ignored/unsupported entry PurdexName values must NOT collide with the
-//       8 installable Purdex Names (bipartite naming policy).
+//
+//	(a) ignored/unsupported entries set Handling explicitly (not blank);
+//	(b) ignored/unsupported entry PurdexName values must NOT collide with the
+//	    8 installable Purdex Names (bipartite naming policy).
 func TestOpenCodeEvents_NonInstallableHaveExplicitHandlingAndNoNameCollision(t *testing.T) {
 	p := opencode.NewProvider()
 	specs := p.Events()
@@ -370,9 +372,10 @@ func TestOpenCodeEvents_NonInstallableHaveEmptyEmitsStatus(t *testing.T) {
 
 // HC5d: manifest catalogSummary counts match events.json + opencodeEventSpecs.
 // Plan v1.3 §3 (Round 2 M2):
-//   (a) manifest.catalogSummary.busEvents == events.json.busEvents.length
-//   (b) manifest.catalogSummary.strongHooks == events.json.strongHooks.length
-//   (c) installable / ignored / unsupported counts match opencodeEventSpecs.
+//
+//	(a) manifest.catalogSummary.busEvents == events.json.busEvents.length
+//	(b) manifest.catalogSummary.strongHooks == events.json.strongHooks.length
+//	(c) installable / ignored / unsupported counts match opencodeEventSpecs.
 func TestOpenCodeManifestCatalogSummaryMatchesEvents(t *testing.T) {
 	p := opencode.NewProvider()
 	specs := p.Events()
@@ -411,11 +414,13 @@ func TestOpenCodeManifestCatalogSummaryMatchesEvents(t *testing.T) {
 // HC5e: partial-stale policy contract enforcement.
 // Plan v1.3 §6 H6.4 mandates that for every events.json entry whose
 // purdex.stalenessPolicy is non-null, the policy block must satisfy:
-//   (a) decision ∈ {"retain", "switch", "dualSubscribe"}.
-//   (d) decision == "switch" → switchTarget non-empty AND the entry resolved
-//       via switchTargetUpstreamKey has templateConsumesAt non-empty
-//       (i.e. switching to a target the plugin actually consumes).
-//   (e) decision == "dualSubscribe" → dedupRequired == true.
+//
+//	(a) decision ∈ {"retain", "switch", "dualSubscribe"}.
+//	(d) decision == "switch" → switchTarget non-empty AND the entry resolved
+//	    via switchTargetUpstreamKey has templateConsumesAt non-empty
+//	    (i.e. switching to a target the plugin actually consumes).
+//	(e) decision == "dualSubscribe" → dedupRequired == true.
+//
 // Rules (b) and (c) — audit doc rationale section presence and §7.3 retain
 // residual-risk note — remain manual reviewer responsibilities and are out of
 // automation scope.
@@ -437,9 +442,9 @@ func TestOpenCodeEvents_StalenessPolicyContract(t *testing.T) {
 	collect(frozen.StrongHooks)
 
 	allowedDecisions := map[string]bool{
-		"retain":         true,
-		"switch":         true,
-		"dualSubscribe":  true,
+		"retain":        true,
+		"switch":        true,
+		"dualSubscribe": true,
 	}
 
 	check := func(prefix string, entries []frozenEventEntry) {

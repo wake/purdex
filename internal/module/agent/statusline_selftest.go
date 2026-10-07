@@ -73,7 +73,7 @@ func (m *Module) markTestObserverReady(nonce string) bool {
 	m.testMu.Unlock()
 	if obs == nil {
 		return false
-}
+	}
 	obs.readyOnce.Do(func() { close(obs.ready) })
 	return true
 }
@@ -153,7 +153,6 @@ func (m *Module) handleStatuslineTestReady(w http.ResponseWriter, r *http.Reques
 // Spawns a real `pdx statusline-proxy` subprocess with a test nonce, then
 // streams per-stage pass/fail events over SSE for stages 1-3. Stages 4-5 are
 // marked by the SPA after it sees the daemon-broadcast WS event.
-//
 func (m *Module) handleStatuslineTest(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ClientProtocol string `json:"client_protocol"`

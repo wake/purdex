@@ -28,10 +28,10 @@ type ResizeMsg struct {
 }
 
 type Relay struct {
-	cmd     string
-	args    []string
-	cwd     string
-	OnStart      func() // called after PTY starts, before I/O goroutines
+	cmd          string
+	args         []string
+	cwd          string
+	OnStart      func()        // called after PTY starts, before I/O goroutines
 	PingInterval time.Duration // default: 30s
 	PongTimeout  time.Duration // default: 10s
 

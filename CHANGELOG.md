@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.0.0-alpha.580] - 2026-10-07
+
+> 只動 daemon 原始碼的排版（gofmt）與 `make lint`，編出來的程式行為完全相同，**不需要另外部署或重啟**（579 本身要部署，照 579 的說明即可）。SPA、`pdx` 指令、Electron 都沒有改動。
+
+### Changed：Go 原始碼排版整理，第二批，main 已全數 gofmt-clean（#1651，#1833）
+
+- 剩下的 12 個 Go 檔（agent／nex／peers 模組）照 `gofmt` 重新排版；逐檔比對程式碼 token 與註解，與原本完全一致，沒有行為變化。
+- `make lint` 會先檢查 `cmd/`、`internal/` 有沒有沒排版的 Go 檔，有就列出檔名並失敗，之後才跑 `go vet`。repo 沒有 CI 也沒有 pre-commit，這個檢查只在有人跑 `make lint` 時生效。
+
+## [1.0.0-alpha.579] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**。沒有裝接力 mod 的 session 從這版起，跳出選擇題或權限詢問時，連線中的客戶端會看到一張「只能在終端機回答」的唯讀卡片；目前 Mac App 還不畫這種卡片（spec U19(b)），要等 iOS App 才看得到，所以 Mac App 使用者無可見變化。`pdx` 指令、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P8a-1d（#1827）
+
+AskUserQuestion「分流」的終端機降級（spec §6.6；plan v2 Task 8a.8）。
+
+- **只能在終端機回答的卡片**：沒有 mod 的 session 跳出選擇題或權限詢問時，daemon 開一筆唯讀申請，讓其他裝置知道終端機在等人；同一題、同一個權限詢問重複觸發不會多開。使用者在終端機回答後卡片顯示「已在終端機回答」並帶上答案；取消、工具失敗、送出新訊息、對話結束都會把卡片收掉。
+- **不會影響原本的決策**：這條路徑永遠不產生決策、也不會讓 hook 失敗；被 lead 硬鎖的 session 不開卡片。
+- **旗標清理**：卡片開著時 daemon 會留一個旗標，讓 `pdx hook` 只在需要時才多轉送事件；daemon 定期清掉沒有對應卡片的旗標（例如重啟後殘留的）。
+- 已知限制：session 曾經載入過 mod、之後在同一 session 停用 mod 時不會開卡片（#1832）。
+
+## [1.0.0-alpha.578] - 2026-10-07
+
+> 只動 daemon 原始碼的排版（gofmt），編出來的程式行為完全相同，**不需要部署或重啟**。SPA、`pdx` 指令、Electron 都沒有改動。
+
+### Changed：Go 原始碼排版整理，第一批（#1651，#1829）
+
+- 15 個 Go 檔照 `gofmt` 重新排版；逐檔比對程式碼 token，與原本完全一致，沒有行為變化。
+- `shellSingleQuote` 的註解改寫：gofmt 會把註解裡的 shell 跳脫寫法 `'\''` 改成彎引號，把範例改錯；改成程式碼區塊後就不受影響。
+- 剩下的 12 個檔（agent／nex／peers 模組）與 `make lint` 的 gofmt 檢查在第二批。
+
 ## [1.0.0-alpha.577] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。

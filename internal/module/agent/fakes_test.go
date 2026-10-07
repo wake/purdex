@@ -132,8 +132,8 @@ func (f *fakeAgentProvider) Events() []agentpkg.HookEventSpec {
 	}
 	return f.events
 }
-func (f *fakeAgentProvider) InstallHooks(string) error        { return nil }
-func (f *fakeAgentProvider) RemoveHooks(string) error         { return nil }
+func (f *fakeAgentProvider) InstallHooks(string) error { return nil }
+func (f *fakeAgentProvider) RemoveHooks(string) error  { return nil }
 func (f *fakeAgentProvider) CheckHooks() (agentpkg.HookStatus, error) {
 	return agentpkg.HookStatus{}, nil
 }

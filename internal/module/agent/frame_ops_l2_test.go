@@ -904,7 +904,9 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 		// Register opencode provider distinct from cc/codex (matches §5 row).
 		m.registry.Register(&fakeAgentProvider{
 			typeName: "opencode",
-			derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+			derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			},
 		})
 		parent := seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, nil)
 		// Empty refs; we assert on Subagents staying empty/zero-length.
@@ -946,12 +948,12 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 			t.Errorf("Subagents = %+v, want empty (opencode UserPromptSubmit must not attach a ref)", final.Subagents)
 		}
 		l2Reasons := map[string]struct{}{
-			"proxy_subagent_attached_on_user_prompt":  {},
-			"proxy_subagent_upserted_on_user_prompt":  {},
-			"proxy_subagent_detached_on_stop_turn":    {},
-			"proxy_subagent_stop_no_match":            {},
-			"proxy_subagent_stop_parse_failed":        {},
-			"pre_tool_without_proxy_parent_skipped":   {},
+			"proxy_subagent_attached_on_user_prompt": {},
+			"proxy_subagent_upserted_on_user_prompt": {},
+			"proxy_subagent_detached_on_stop_turn":   {},
+			"proxy_subagent_stop_no_match":           {},
+			"proxy_subagent_stop_parse_failed":       {},
+			"pre_tool_without_proxy_parent_skipped":  {},
 		}
 		if _, isL2 := l2Reasons[meta.Reason]; isL2 {
 			t.Errorf("meta.Reason = %q, must not be in L2 vocabulary for opencode UserPromptSubmit", meta.Reason)
@@ -1408,7 +1410,9 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 		// Register opencode provider so registry resolves the parent type.
 		m.registry.Register(&fakeAgentProvider{
 			typeName: "opencode",
-			derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+			derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			},
 		})
 		seedProxyRef(t, m, "%5", "opencode", 100, "t100", 50, []agentpkg.SubagentRef{{
 			ID: "proxy:cc:42:t1", Type: "cc", StartedAt: 50,
@@ -1531,7 +1535,9 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 		// proxy-under-opencode shape from PR-2b).
 		m.registry.Register(&fakeAgentProvider{
 			typeName: "opencode",
-			derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+			derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			},
 		})
 		seedProxyRef(t, m, "%5", "opencode", 100, "t100", 50, []agentpkg.SubagentRef{{
 			ID: "proxy:cc:42:t1", Type: "cc", StartedAt: 50,
@@ -1575,7 +1581,9 @@ func TestApplyFrameEvent_TurnAwareProxyDetach(t *testing.T) {
 		// opencode-under-cc shape from PR-2b).
 		m.registry.Register(&fakeAgentProvider{
 			typeName: "opencode",
-			derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+			derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+				return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+			},
 		})
 		seedProxyRef(t, m, "%5", "cc", 100, "t100", 50, []agentpkg.SubagentRef{{
 			ID: "proxy:opencode:42:t1", Type: "opencode", StartedAt: 50,

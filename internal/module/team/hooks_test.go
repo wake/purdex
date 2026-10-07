@@ -315,3 +315,32 @@ func TestHookDecide_RemovalIsSerialisedWithCreate(t *testing.T) {
 		t.Fatal("a deny must leave the flag alone")
 	}
 }
+
+// P8a-1d: through the route — not by calling observeHookEvent directly — a
+// PreToolUse/AskUserQuestion opens a terminal_only row and a Stop closes
+// it, each answered 200 {}; a session with no hooklocks flag is the normal
+// case here.
+func TestHookDecide_RouteOpensAndClosesTerminalOnlyRows(t *testing.T) {
+	f := newFixture(t)
+	code, body := f.do(http.MethodPost, "/api/hooks/decide", preAsk("sid-1", "toolu_r"))
+	if code != http.StatusOK || string(body) != "{}\n" {
+		t.Fatalf("PreToolUse/AskUserQuestion: %d %q, want 200 {}", code, body)
+	}
+	if rows, _ := f.m.store.OpenTerminalOnlyBySession("sid-1"); len(rows) != 1 {
+		t.Fatalf("rows after PreToolUse = %d, want 1", len(rows))
+	}
+	code, body = f.do(http.MethodPost, "/api/hooks/decide", team.HookDecideRequest{Agent: "cc", Event: "Stop", SessionID: "sid-1"})
+	if code != http.StatusOK || string(body) != "{}\n" {
+		t.Fatalf("Stop: %d %q, want 200 {} (never 400)", code, body)
+	}
+	if rows, _ := f.m.store.OpenTerminalOnlyBySession("sid-1"); len(rows) != 0 || f.flagExists("sid-1") {
+		t.Fatalf("rows after Stop = %d, want 0", len(rows))
+	}
+	code, body = f.do(http.MethodPost, "/api/hooks/decide", permReq("sid-1", `{"command":"ls"}`))
+	if code != http.StatusOK || string(body) != "{}\n" {
+		t.Fatalf("PermissionRequest: %d %q", code, body)
+	}
+	if rows, _ := f.m.store.OpenTerminalOnlyBySession("sid-1"); len(rows) != 1 {
+		t.Fatalf("permission rows = %d, want 1", len(rows))
+	}
+}

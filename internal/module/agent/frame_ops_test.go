@@ -849,11 +849,15 @@ func newProxyTestModule(t *testing.T) *Module {
 	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "work-code", Name: "work"}}}
 	m.registry.Register(&fakeAgentProvider{
 		typeName: "cc",
-		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
 	})
 	m.registry.Register(&fakeAgentProvider{
 		typeName: "codex",
-		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
 	})
 	return m
 }
@@ -3328,8 +3332,8 @@ func TestPhase35_IT21c_ExistingFrameSessionStartPreservesNewNativeWithReusedID(t
 		t.Fatalf("cc frame disappeared")
 	}
 
-	hasNewNative := false           // ID="call-1", StartedAt=65 (NEW concurrent SubagentStart)
-	hasBaselineNative := false      // ID="call-1", StartedAt=5  (OLD baseline — must be dropped)
+	hasNewNative := false      // ID="call-1", StartedAt=65 (NEW concurrent SubagentStart)
+	hasBaselineNative := false // ID="call-1", StartedAt=5  (OLD baseline — must be dropped)
 	hasCodexProxy := false
 	for _, ref := range final.Subagents {
 		switch {
@@ -3488,7 +3492,9 @@ func TestPhase35_IT6_DescendantScanPartialDoesNotBlockOthers(t *testing.T) {
 	m := newProxyTestModule(t)
 	m.registry.Register(&fakeAgentProvider{
 		typeName: "opencode",
-		derive:   func(string, json.RawMessage) agentpkg.DeriveResult { return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle} },
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
 	})
 
 	// Seed two standalone children directly (skip applyFrameEvent paths so

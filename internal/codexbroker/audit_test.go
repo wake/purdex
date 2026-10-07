@@ -20,8 +20,8 @@ func (auditFS) Lstat(path string) (os.FileInfo, error)  { return os.Lstat(path) 
 func (auditFS) EvalSymlinks(path string) (string, error) {
 	return filepath.EvalSymlinks(path)
 }
-func (auditFS) Glob(pattern string) ([]string, error)         { return filepath.Glob(pattern) }
-func (auditFS) ReadDir(path string) ([]os.DirEntry, error)    { return os.ReadDir(path) }
+func (auditFS) Glob(pattern string) ([]string, error)      { return filepath.Glob(pattern) }
+func (auditFS) ReadDir(path string) ([]os.DirEntry, error) { return os.ReadDir(path) }
 
 // TestWritePreimage_HappyPath — writes file, reads back, validates JSON.
 func TestWritePreimage_HappyPath(t *testing.T) {
