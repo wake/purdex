@@ -47,14 +47,16 @@ function readJson(r: Response, path: string): Promise<HostInfo> {
 async function load(hostId: string): Promise<{ loaded: Loaded; observed: string }> {
   let info: Loaded['info']
   let observed = ''
+  let daemonCapabilities: string[] = []
   try {
     const data = await fetchInfo(hostId).then((r) => readJson(r, '/api/info'))
     info = data.nex ?? null
     if (typeof data.host_id === 'string') observed = data.host_id
+    if (Array.isArray(data.capabilities)) daemonCapabilities = data.capabilities.filter((c): c is string => typeof c === 'string')
   } catch (err) {
     return { loaded: { info: null, capabilities: null, error: errorText(err) }, observed }
   }
-  return { loaded: await loadCapabilities(hostId, info), observed }
+  return { loaded: { ...(await loadCapabilities(hostId, info)), daemonCapabilities }, observed }
 }
 
 async function loadCapabilities(hostId: string, info: Loaded['info']): Promise<Loaded> {

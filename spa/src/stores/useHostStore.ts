@@ -109,6 +109,8 @@ export interface HostInfo {
   os: string
   arch: string
   nex?: NexInfo
+  /** Daemon feature flags, e.g. `conversations.scope.v1`. */
+  capabilities?: unknown
 }
 
 /** `looks`: whether step 2 (the look store, plan §0.20) was written; `'failed'` leaves the hosts added. */

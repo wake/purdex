@@ -8,6 +8,7 @@ import {
   selectPermissionTimeoutMax,
   selectAttachmentFetch,
   selectImageAttachments,
+  selectConversationsScope,
   selectReady,
   selectRollupCostShown,
   selectSessionTitleSupported,
@@ -776,6 +777,49 @@ describe('selectors', () => {
       seed({ phase: 'unavailable', capabilities: caps({ session_title: { sources: [], max_bytes: 200 } }) })
       expect(selectSessionTitleSupported(H)(useNexHostStore.getState())).toBe(false)
       expect(selectSessionTitleSupported('ghost')(useNexHostStore.getState())).toBe(false)
+    })
+  })
+})
+
+describe('daemonCapabilities (worker test tab S2)', () => {
+  const infoWith = (capabilities: unknown): Response =>
+    ({ ok: true, status: 200, json: () => Promise.resolve({ nex: info(), capabilities }) }) as Response
+  const load = async (capabilities: unknown) => {
+    vi.mocked(hostApi.fetchInfo).mockResolvedValue(infoWith(capabilities))
+    await ensure()
+    return entry().daemonCapabilities
+  }
+
+  it('keeps the strings of /api/info.capabilities', async () => {
+    expect(await load(['transcript.v1', 'conversations.scope.v1'])).toEqual(['transcript.v1', 'conversations.scope.v1'])
+  })
+  it('missing → []', async () => {
+    expect(await load(undefined)).toEqual([])
+  })
+  it('non-array → []', async () => {
+    expect(await load({ a: 1 })).toEqual([])
+  })
+  it('drops non-string elements', async () => {
+    expect(await load(['x', 3, null, 'conversations.scope.v1'])).toEqual(['x', 'conversations.scope.v1'])
+  })
+
+  describe('selectConversationsScope', () => {
+    const seed = (over: Partial<NexHostEntry>) =>
+      useNexHostStore.setState({
+        byHost: { [H]: { info: info(), capabilities: caps(), phase: 'ready', error: null, fetchedAt: T0, generation: 1, fingerprint: 'x', ...over } },
+      })
+    it('true only when ready and the capability is listed', () => {
+      seed({ daemonCapabilities: ['conversations.scope.v1'] })
+      expect(selectConversationsScope(H)(useNexHostStore.getState())).toBe(true)
+      seed({ daemonCapabilities: ['transcript.v1'] })
+      expect(selectConversationsScope(H)(useNexHostStore.getState())).toBe(false)
+      seed({})
+      expect(selectConversationsScope(H)(useNexHostStore.getState())).toBe(false)
+    })
+    it('false when not ready or unknown host', () => {
+      seed({ phase: 'unavailable', daemonCapabilities: ['conversations.scope.v1'] })
+      expect(selectConversationsScope(H)(useNexHostStore.getState())).toBe(false)
+      expect(selectConversationsScope('ghost')(useNexHostStore.getState())).toBe(false)
     })
   })
 })
