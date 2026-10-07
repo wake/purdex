@@ -310,7 +310,8 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // `pendingSend` lasts until the turn's result, so it would lock 退出 for the whole turn this pane sent —
   // a worker waiting for approval included (permission channel §5.4 / N7: that exit cancels the request).
   // A running turn is exitable after the confirm, as from the Workers list.
-  const exitWriteInFlight = st.sendLocked || actionPending
+  // A message held in the send buffer is a write about to go out too: exiting would strand it.
+  const exitWriteInFlight = st.sendLocked || actionPending || !!st.pendingLocal?.buffered
   const onTakeBack = useCallback(() => {
     if (takeBackInFlight.current || exitInFlight.current || writeInFlight) return
     if (useExecutionStore.getState().executions[key]?.summary?.state === 'running') setConfirmTakeBack(true)
