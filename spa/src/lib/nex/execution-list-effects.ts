@@ -18,7 +18,7 @@ export const LIST_REFRESH_DEBOUNCE_MS = 500
 /**
  * The only kinds the site stream is asked for (`?kind=`): those whose commit
  * can change a list row. This is Nexen's declared durable vocabulary
- * (`execution.EventKinds`, v0.19.0), which covers state, the pending
+ * (`execution.EventKinds`, v0.20.0), which covers state, the pending
  * permission, tool/task activity, observers, lease, title and archive. It
  * also includes `result`, whose commit rolls the turn cost up onto the row.
  * Token deltas, snapshots, `lease.renewed` and the other raw provider frames
@@ -34,6 +34,8 @@ export const SITE_STREAM_KINDS = [
   'execution.interrupted',
   'execution.error',
   'execution.message_accepted',
+  // v0.20.0: a peer-created turn publishes this instead of message_accepted.
+  'peer_message',
   'execution.interrupt_requested',
   'execution.turn_stalled',
   'execution.turn_orphaned',
