@@ -13,6 +13,7 @@ import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { copyText } from '../lib/copy-text'
 import { reasonText } from '../lib/peer-display'
+import { TITLE_BAR_HEIGHT } from './FloatingPanel'
 import type { Tab } from '../types/tab'
 
 interface Props {
@@ -390,14 +391,29 @@ export function RenamePopover({ anchorRect, currentName, initialValue, allowUnch
     // Horizontal clamping (existing)
     let left = anchorRect.left + anchorRect.width / 2 - width / 2
     left = Math.max(PADDING, Math.min(left, window.innerWidth - width - PADDING))
-    // Vertical clamping
+    // Vertical clamping. Measure without the previous placement's cap, which
+    // would otherwise be read back as the content's height; taking it off drops
+    // the scroll offset, so that is put back below.
+    const scrollTop = el.scrollTop
+    el.style.maxHeight = ''
+    el.style.overflowY = ''
     const popoverHeight = el.offsetHeight
     let top = anchorRect.bottom + PADDING
     if (top + popoverHeight > window.innerHeight - PADDING) {
       top = anchorRect.top - PADDING - popoverHeight
     }
-    if (top < PADDING) {
-      top = PADDING
+    // Never inside the title bar's OS drag region (see `FloatingPanel`): an
+    // input there would drag the window instead of taking the click.
+    if (top < TITLE_BAR_HEIGHT) {
+      top = TITLE_BAR_HEIGHT
+    }
+    // Still taller than what is left below that top (a tab with many panes in a
+    // short window): cap it and scroll, rather than run off the bottom.
+    const available = window.innerHeight - top - PADDING
+    if (popoverHeight > available) {
+      el.style.maxHeight = `${Math.max(0, available)}px`
+      el.style.overflowY = 'auto'
+      el.scrollTop = scrollTop
     }
     el.style.left = `${left}px`
     el.style.top = `${top}px`
@@ -422,7 +438,8 @@ export function RenamePopover({ anchorRect, currentName, initialValue, allowUnch
       ref={containerRef}
       onKeyDown={handleKeyDown}
       className="fixed z-50 bg-surface-elevated border border-border-default rounded-lg shadow-xl p-2"
-      style={{ width }}
+      // no-drag: wherever it lands, the title bar's drag region must not take its clicks.
+      style={{ width, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
     >
       {paneMode
         ? (
