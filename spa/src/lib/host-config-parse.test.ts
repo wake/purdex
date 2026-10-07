@@ -161,6 +161,26 @@ describe('parseRelay', () => {
   it('a collection that is not an object fails closed too', () => {
     expect(parseRelay(null, H)).toEqual({ items: { self_solo: false, self_lead: false }, revision: 0, problem: { kind: 'relay' } })
   })
+
+  // The row also holds the three relay prompt bodies (P9a-1, `relayFields`): known keys, kept as stored so a switch
+  // toggle (which PUTs the whole object) never wipes them.
+  it('the prompt bodies are known keys, kept as stored', () => {
+    const items = { self_solo: false, self_lead: true, prompt_write: 'write it', prompt_fix: '', prompt_seed: '  seed  ' }
+    expect(parseRelay({ items, revision: 2 }, H)).toEqual({ items, revision: 2, problem: null })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  // RelaySwitches() decodes only the switches, so a bad stored body never turns self relay off: the switches read,
+  // the body is dropped from the SPA's copy (the next write stores the default, which the daemon accepts).
+  it.each([
+    ['null', null],
+    ['a number', 3],
+    ['an object', { text: 'x' }],
+  ])('a prompt body that is %s is dropped; the switches still read', (_name, body) => {
+    expect(parseRelay({ items: { self_solo: false, prompt_fix: body, prompt_seed: 'kept' }, revision: 2 }, H))
+      .toEqual({ items: { self_solo: false, self_lead: true, prompt_seed: 'kept' }, revision: 2, problem: null })
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('parseHostConfig', () => {

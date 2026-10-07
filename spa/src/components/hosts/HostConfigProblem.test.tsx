@@ -119,4 +119,16 @@ describe('a malformed host config collection', () => {
     expect(putHostConfig).toHaveBeenCalledWith(H, 'relay', { self_solo: true, self_lead: false }, 4)
     expect(screen.getByTestId('relay-self-solo').getAttribute('aria-checked')).toBe('true')
   })
+
+  it('Relay: a toggle keeps the stored prompt bodies (the PUT replaces the whole row)', async () => {
+    const prompts = { prompt_write: 'write it', prompt_seed: 'seed it' }
+    await loadWith({ relay: { items: { self_solo: true, self_lead: true, ...prompts }, revision: 6 } })
+    await show(<RelaySection hostId={H} />)
+    expect(screen.queryByTestId('host-config-problem')).toBeNull()
+
+    vi.mocked(putHostConfig).mockResolvedValue({ items: { self_solo: false, self_lead: true, ...prompts }, revision: 7 })
+    fireEvent.click(screen.getByTestId('relay-self-solo'))
+    await waitFor(() => expect(putHostConfig).toHaveBeenCalled())
+    expect(putHostConfig).toHaveBeenCalledWith(H, 'relay', { self_solo: false, self_lead: true, ...prompts }, 6)
+  })
 })

@@ -146,23 +146,34 @@ export function parseResumeTemplates(raw: unknown, hostId: string): ParsedCollec
   return { items, revision, problem: rowsProblem(entries.length - kept.length) }
 }
 
-const RELAY_KEYS = ['self_solo', 'self_lead'] as const
+const RELAY_SWITCHES = ['self_solo', 'self_lead'] as const
+const RELAY_PROMPTS = ['prompt_write', 'prompt_fix', 'prompt_seed'] as const
+const RELAY_KEYS: readonly string[] = [...RELAY_SWITCHES, ...RELAY_PROMPTS]
 
 /**
- * The daemon's READ path, exactly (`relay.go` RelaySwitches → normalizeRelay):
- * an object; an unknown key, or a present key that is not a boolean (null
- * included), makes the whole value unreadable; a missing key is on.
+ * The daemon's READ path, exactly (`relay.go` RelaySwitches → relayFields +
+ * relaySwitchesOf): an object of the five known keys; an unknown key, or a
+ * present switch that is not a boolean (null included), makes the whole value
+ * unreadable; a missing switch is on. The prompt bodies are not the switches'
+ * business there either: a string is kept as stored, anything else is dropped
+ * (`warnings`) — the next write then stores the default, which the daemon takes.
  */
-function readRelay(items: unknown): RelaySwitches | string {
+function readRelay(items: unknown, warnings: string[]): RelaySwitches | string {
   if (!isObject(items)) return 'items is not an object'
-  const unknown = Object.keys(items).find((k) => !(RELAY_KEYS as readonly string[]).includes(k))
+  const unknown = Object.keys(items).find((k) => !RELAY_KEYS.includes(k))
   if (unknown !== undefined) return `unknown key ${unknown}`
   const out: RelaySwitches = { self_solo: true, self_lead: true }
-  for (const key of RELAY_KEYS) {
+  for (const key of RELAY_SWITCHES) {
     if (!Object.hasOwn(items, key)) continue
     const v = items[key]
     if (typeof v !== 'boolean') return `${key} is not a boolean`
     out[key] = v
+  }
+  for (const key of RELAY_PROMPTS) {
+    if (!Object.hasOwn(items, key)) continue
+    const v = items[key]
+    if (typeof v === 'string') out[key] = v
+    else warnings.push(`${key} is not a string; dropped`)
   }
   return out
 }
@@ -178,8 +189,11 @@ export function parseRelay(raw: unknown, hostId: string): ParsedCollection<Relay
   }
   if (!isObject(raw)) return off(0, 'collection is not an object')
   const revision = revisionOf(raw, hostId, 'relay')
-  const read = readRelay(raw.items)
-  return typeof read === 'string' ? off(revision, read) : { items: read, revision, problem: null }
+  const warnings: string[] = []
+  const read = readRelay(raw.items, warnings)
+  if (typeof read === 'string') return off(revision, read)
+  for (const why of warnings) warn(hostId, 'relay', why)
+  return { items: read, revision, problem: null }
 }
 
 /** One parser per field: what a load, a PUT answer and a 409's `current` all go through. */

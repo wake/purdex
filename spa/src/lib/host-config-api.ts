@@ -13,8 +13,18 @@ export interface HostProject { id: string; name: string; slug: string; path: str
 export interface HostCommand { id: string; name: string; command: string; icon: CommandIcon }
 export type ResumeTemplateOverrides = Record<string, { exact: string; fallback: string }>
 export interface QuickReply { id: string; text: string }
-/** Host config `relay` (lead-team-relay spec §8.7 (a)): the two self-relay switches; a member has none (U13). */
-export interface RelaySwitches { self_solo: boolean; self_lead: boolean }
+/**
+ * Host config `relay` (lead-team-relay spec §8.7 (a)): the two self-relay switches; a member has none (U13). The same
+ * row holds the three relay prompt bodies (§8.8, P9a-1; absent = the built-in default) — carried along untouched, so
+ * a switch toggle, which PUTs the whole row, never wipes them.
+ */
+export interface RelaySwitches {
+  self_solo: boolean
+  self_lead: boolean
+  prompt_write?: string
+  prompt_fix?: string
+  prompt_seed?: string
+}
 
 export interface Versioned<T> { items: T; revision: number }
 
