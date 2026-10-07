@@ -132,7 +132,7 @@ Author: purdex-6d. Base: main (alpha.587). Nexen pinned v0.19.0.
   - So nex frames go through a new `EventsBroadcaster.BroadcastStrict(ev)` / `sub.SendStrict`. Any failed enqueue `Remove`s that subscriber, which closes the WS. The client reconnects, gets a fresh hello, and reconciles. Nothing is repaired on the same connection.
   - `Remove` takes `eb.mu.Lock`, so failed subscribers are collected under `RLock` and removed after it is released.
   - A dropped hello is the same case: the connection closes and the next connection gets a new hello. So "legacy for that connection" no longer happens.
-  - Other event types keep today's best-effort `Broadcast`. Making all frames strict is a separate decision, not taken here.
+  - For subscribers that did not opt in, other event types keep today's best-effort `Broadcast`. An opted-in subscriber is strict for every frame (next bullet).
 - **Only subscribers that opted in see nex frames (coordinator ruling at PR1b).**
   - The same `/ws/host-events` connection carries tmux agent status, notifications, sessions and approvals. An old SPA or purdex-ios (whose handling of unknown types is unknown) must neither receive `nex.*` nor be disconnected because of it.
   - A client opts in when it connects: `/ws/host-events?nex=v1`. The subscriber records the feature `nex.v1`. Only a query with **exactly one** `nex` value equal to `v1` opts in. Duplicates (`nex=v1&nex=v2` in either order), other values, or no parameter do not (codex PR1b-5 attacker).
