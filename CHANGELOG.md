@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.542] - 2026-10-08
+
+> 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動，桌機上沒有使用者可見的變化。修正 alpha.540 的終端機鏡像連線（purdex-ios 實測回報）。
+
+### Fixed：鏡像連線是唯一 client 時仍會縮小桌機的 window（#1725）
+
+- alpha.540 的 `?mirror=1` 以 `-f ignore-size` attach，但那只在**還有其他 client** 時有效；手機是唯一 client 時（桌機沒開著這個 session），tmux 仍以手機的大小決定 window，window 被縮成手機的大小（實測 150x44 的 window 變成 83x55），手機斷線後也不會復原。我先前只在有桌機 client 的情況下驗證，漏了這種情況。
+- 現在鏡像連線的 PTY 與 window 綁定：連線前先查 window 的大小與 status bar 的行數，PTY 以「window 寬 × (window 高 ＋ status 行數)」啟動——光是同高還不夠，tmux 會把 client 的 status 那一行從 window 扣掉（150x44 的 client 會讓 window 變 150x43）。之後每秒同步，window 或 status 變了就跟著調整。
+- 鏡像連線送來的 `resize` 一律忽略，不再改任何大小。查不到 window 大小時拒絕連線（WebSocket close 1011，client 當暫時失敗重試），不以猜的大小啟動。
+- window text frame 多了 `pty_cols`／`pty_rows`（PTY 實際大小）；client 的終端格線以它們為準，`cols`／`rows` 只是 window 本身。status bar 開關使 PTY 變動時也會重送。
+- 已知限制（#1727）：同步靠每秒輪詢，桌機在輪詢之間調整大小並立刻離開 session，或在查詢與 attach 之間切換 current window，仍可能讓 window 被舊尺寸重算；根治需要事件驅動，另案。
+
 ## [1.0.0-alpha.541] - 2026-10-08
 
 > 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動。桌機上沒有使用者可見的變化：這是權限通道（讓 worker 做有風險的事之前先問你）的 daemon 半段，前端要等 SPA 那一半。
