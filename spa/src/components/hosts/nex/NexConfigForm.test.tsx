@@ -131,6 +131,52 @@ describe('NexConfigForm', () => {
     expect(body.nex.peer.max_pending).toBe(0)
   })
 
+  // Only a cleared field means "Nexen default" (0). Anything else must be a
+  // safe non-negative integer as Number() reads it — parseInt would quietly
+  // turn 1.5 or 1e3 into 1. An invalid entry stays in the field, is flagged
+  // there, and is never sent.
+  it.each([
+    ['a decimal', '1.5'],
+    ['beyond the safe integer range', '9007199254740993'],
+    ['a negative number', '-1'],
+    ['not a number', 'abc'],
+  ])('keeps %s (%s) in the field, flags it, and does not send', async (_label, typed) => {
+    const withPeer = { ...saved, peer: { enabled: true, max_pending: 12, wake_template: '', reply_line: '' } }
+    render(<NexConfigForm hostId="h" config={withPeer} info={info} onSaved={() => {}} />)
+    const limit = screen.getByLabelText(/queue limit/i) as HTMLInputElement
+    fireEvent.change(limit, { target: { value: typed } })
+    expect(limit.value).toBe(typed)
+    expect(screen.getByTestId('field-error-peer.max_pending')).toHaveTextContent(/whole number/i)
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    await act(async () => {})
+    expect(hostApi.hostFetch).not.toHaveBeenCalled()
+  })
+
+  it('reads scientific notation as Number does (1e3 = 1000) and sends it', async () => {
+    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(new Response(JSON.stringify({ nex: saved }), { status: 200 }))
+    render(<NexConfigForm hostId="h" config={saved} info={info} onSaved={() => {}} />)
+    fireEvent.change(screen.getByLabelText(/queue limit/i), { target: { value: '1e3' } })
+    expect(screen.queryByTestId('field-error-peer.max_pending')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(hostApi.hostFetch).toHaveBeenCalled())
+    const body = JSON.parse(vi.mocked(hostApi.hostFetch).mock.calls[0][2]!.body as string)
+    expect(body.nex.peer.max_pending).toBe(1000)
+  })
+
+  it('an invalid queue limit corrected to a valid one clears the flag and is sent', async () => {
+    vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(new Response(JSON.stringify({ nex: saved }), { status: 200 }))
+    render(<NexConfigForm hostId="h" config={saved} info={info} onSaved={() => {}} />)
+    const limit = screen.getByLabelText(/queue limit/i)
+    fireEvent.change(limit, { target: { value: '1.5' } })
+    expect(screen.getByTestId('field-error-peer.max_pending')).toBeInTheDocument()
+    fireEvent.change(limit, { target: { value: '7' } })
+    expect(screen.queryByTestId('field-error-peer.max_pending')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(hostApi.hostFetch).toHaveBeenCalled())
+    const body = JSON.parse(vi.mocked(hostApi.hostFetch).mock.calls[0][2]!.body as string)
+    expect(body.nex.peer.max_pending).toBe(7)
+  })
+
   it('shows a peer.max_pending 400 next to the queue limit', async () => {
     vi.mocked(hostApi.hostFetch).mockResolvedValueOnce(new Response('nex.peer.max_pending: must not be negative (got -1)', { status: 400 }))
     render(<NexConfigForm hostId="h" config={saved} info={info} onSaved={() => {}} />)

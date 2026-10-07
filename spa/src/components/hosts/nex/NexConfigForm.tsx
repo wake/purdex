@@ -53,11 +53,15 @@ function parseConfigError(text: string): FieldError {
   return { field: m[1], message: m[2] }
 }
 
-// A cleared or non-numeric queue limit means "Nexen's default" (0); a
-// negative one is sent as typed so the daemon's validator names it.
-function parseMaxPending(value: string): number {
-  const n = Number.parseInt(value, 10)
-  return Number.isNaN(n) ? 0 : n
+// The queue limit as typed. Only a cleared field means "Nexen's default"
+// (0). Anything else must be a safe non-negative integer as Number() reads
+// it, so 1e3 is 1000 and 1.5 is refused rather than cut to 1 the way
+// parseInt would. null = not a valid limit: the text stays in the field,
+// flagged, and the form does not save.
+function parseMaxPending(value: string): number | null {
+  if (value.trim() === '') return 0
+  const n = Number(value)
+  return Number.isSafeInteger(n) && n >= 0 ? n : null
 }
 
 function trimList(list: string[]): string[] {
@@ -110,6 +114,11 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
   const [saving, setSaving] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const [fieldError, setFieldError] = useState<FieldError | null>(null)
+  // The queue limit field's text while it differs from what the draft holds
+  // (null = show draft.peer.max_pending). An invalid entry lives only here,
+  // so the draft never carries a number the user did not type.
+  const [maxPendingText, setMaxPendingText] = useState<string | null>(null)
+  const maxPendingInvalid = maxPendingText !== null && parseMaxPending(maxPendingText) === null
   // A re-sync from a changed `config` prop is skipped while the user has
   // unsaved edits, same pattern as EditorHomePathHostSection.
   const dirtyRef = useRef(false)
@@ -137,6 +146,7 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
   useEffect(() => {
     if (dirtyRef.current) return
     setDraft(config ?? emptyNexConfig())
+    setMaxPendingText(null)
   }, [config])
 
   const update = (patch: Partial<NexConfig>) => {
@@ -149,6 +159,7 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
   const errorFor = (field: string): string | null => (fieldError?.field === field ? fieldError.message : null)
 
   const handleSave = async () => {
+    if (maxPendingInvalid) return
     setSaving(true)
     setJustSaved(false)
     setFieldError(null)
@@ -171,6 +182,7 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
         if (editCounterRef.current === startCounter) {
           dirtyRef.current = false
           setDraft(nextNex)
+          setMaxPendingText(null)
           setJustSaved(true)
         }
         onSaved(data)
@@ -323,24 +335,34 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
       <Field label={t('hosts.nex.config.peer_max_pending')}>
         <div className="flex items-center gap-2">
           <input
-            type="number"
-            min={0}
-            step={1}
+            type="text"
+            inputMode="numeric"
             aria-label={t('hosts.nex.config.peer_max_pending')}
-            value={String(draft.peer.max_pending)}
-            onChange={(e) => update({ peer: { ...draft.peer, max_pending: parseMaxPending(e.target.value) } })}
+            aria-invalid={maxPendingInvalid}
+            value={maxPendingText ?? String(draft.peer.max_pending)}
+            onChange={(e) => {
+              // type="text": a number input would hand back "" for a
+              // half-typed "1e", indistinguishable from a cleared field.
+              const text = e.target.value
+              const n = parseMaxPending(text)
+              setMaxPendingText(text)
+              update(n === null ? {} : { peer: { ...draft.peer, max_pending: n } })
+            }}
             className="bg-surface-secondary border border-border-default rounded px-2 py-1 text-sm text-text-primary w-24"
           />
           <span className="text-xs text-text-muted">{t('hosts.nex.config.peer_max_pending_hint')}</span>
         </div>
       </Field>
-      <FieldErrorText field="peer.max_pending" message={errorFor('peer.max_pending')} />
+      <FieldErrorText
+        field="peer.max_pending"
+        message={maxPendingInvalid ? t('hosts.nex.config.peer_max_pending_invalid') : errorFor('peer.max_pending')}
+      />
 
       <div className="flex items-center gap-3 mt-3">
         <button
           type="button"
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || maxPendingInvalid}
           className="px-3 py-1.5 rounded-md bg-accent text-white text-sm hover:bg-accent/90 disabled:opacity-50 cursor-pointer"
         >
           {saving ? t('hosts.nex.config.saving') : t('hosts.nex.config.save')}

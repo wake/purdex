@@ -1306,6 +1306,7 @@
   "hosts.nex.config.peer_enabled": "Peer mailbox",
   "hosts.nex.config.peer_max_pending": "Queue limit",
   "hosts.nex.config.peer_max_pending_hint": "0 = default",
+  "hosts.nex.config.peer_max_pending_invalid": "Enter a whole number, 0 or more",
   "hosts.nex.config.nexen_default": "Nexen default",
   "hosts.nex.config.add": "Add",
   "hosts.nex.config.remove": "Remove",
