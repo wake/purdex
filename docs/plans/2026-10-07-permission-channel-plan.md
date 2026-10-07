@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Nexen pin: **v0.19.0** (from v0.18.1; schema stays v6; the new `permission_requests` table is created by `Open`, no DB step).
-- PC2 (amended): answers happen **only in the Mac App**. No phone-browser layout, no push notifications.
+- PC2 (amended): answers happen **only in the Mac App**. No phone-browser layout. ~~No push notifications.~~ **Amended 2026-10-07 (user):** waiting for approval notifies like an agent ask — the same desktop-notification rules and exceptions (App focused on that tab; the event turned off in settings), once per request (shipped after P-2c; see spec §5.4).
 - PC4: no "always allow". `allow` always sends the request's own input; `updatedInput` is never shown or edited.
 - The mode is offered only when **both** hold: `capabilities.permissions` exists **and** `capabilities.sandbox_profiles` contains `handoff_ask`. `permission_timeout_s` is sent **only** when `capabilities.permissions.timeout` exists (an old daemon ignores it silently). A `rejected` handoff shows its `reject_reason` and is **never** retried as 完全放行.
 - `pending_permission.since` is **Unix milliseconds**. `pending_permission: null` is an answer; an absent field means an old daemon.
@@ -201,7 +201,7 @@ Also pinned: `interrupt` while pending → `permission.resolved` `cancelled`/`in
 - Row (activity bar, New Tab Workers, Settings → Workers): dot `bg-status-warning` plus a small **`HandPalm`** icon (Phosphor) and the text 「等待核准」 in the activity tooltip; **not** the queued look (queued stays a plain warning dot with no icon).
 - Pane header: the state text shows 「等待核准」 with the icon.
 - Tab label: the worker tab title gets the suffix 「（等待核准）」 (same suffix mechanism as the closed-terminal suffix), removed when `pending_permission` is null.
-- Tab light: `projectWorkerStatus` returns `waiting` while awaiting approval (it already exists in `AgentStatus`); verify and test that this does **not** raise a notification (PC2 forbids push) — if the `waiting` path notifies, add the guard in the projection instead of the notification module and say so in the report.
+- Tab light: `projectWorkerStatus` returns `waiting` while awaiting approval (it already exists in `AgentStatus`); verify and test that this does **not** raise a notification (PC2 forbids push) — if the `waiting` path notifies, add the guard in the projection instead of the notification module and say so in the report. *(Superseded 2026-10-07 by the amended PC2: the guard was removed; waiting for approval now notifies like an agent ask, once per request.)*
 - A summary without the field (old daemon) behaves exactly as before.
 
 - [ ] **Step 1: Failing tests:** each surface with `pending_permission` set / null / absent; queued row still has no icon; tab label suffix on/off; `projectWorkerStatus` table adds the awaiting case; no notification call for the awaiting transition; i18n keys in both locales.
