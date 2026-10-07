@@ -27,24 +27,29 @@ export const SUMMARY_REFETCH_DEBOUNCE_MS = 300
 // a persistently failing daemon doesn't retry every debounce indefinitely.
 const MAX_CONSECUTIVE_STALE_REFETCHES = 5
 
-/**
- * Mounted instances of this hook per execution (its store key). The same execution shown in two panes (a split, or
- * two tabs) runs two instances that share the store entry and the subscription-slot key (the slot registry holds one
- * slot per key, however many instances touch it). Each instance closes its own stream; only the LAST one to go
- * releases the slot and leaves the entry streamless — until then another pane's stream still feeds it. Counted per
- * main-effect run that has a cleanup (a pane whose host is missing has none).
- */
-const instancesByKey = new Map<string, number>()
+/** One instance's own stream while it holds one: dialling in, delivering, or between two attempts. */
+interface HeldStream { status: 'connecting' | 'open' | 'reconnecting'; err: string | null }
+const HELD_RANK: Record<HeldStream['status'], number> = { connecting: 0, reconnecting: 1, open: 2 }
 
-/** One instance of `key` going away; true when it was the last. */
-function dropInstance(key: string): boolean {
-  const left = (instancesByKey.get(key) ?? 1) - 1
-  if (left > 0) {
-    instancesByKey.set(key, left)
-    return false
-  }
-  instancesByKey.delete(key)
-  return true
+/**
+ * The streams held per execution (its store key), one per main-effect run of this hook whose own stream is
+ * connecting, open or reconnecting. The same execution shown in two panes (a split, or two tabs) runs two instances
+ * that share the store entry and the subscription-slot key (the slot registry holds one slot per key, however many
+ * instances touch it), so neither the slot nor the entry's stream status is any one instance's to give up:
+ *  - the entry shows the best stream any instance holds (open, then reconnecting, then connecting), so a pane dialling
+ *    in or recovering never hides another pane's delivering stream;
+ *  - an instance whose own stream ends — for any reason: unmount, a terminal problem, a terminal close, a failed
+ *    attempt, an eviction — leaves the set. Only the last one out frees the slot and writes the entry's streamless
+ *    status (`closed` with its reason, `paused`, `idle`); before that the leaver keeps its problem / retry to itself.
+ * Membership, not mounting, is what counts: a mounted pane with a dead stream holds nothing for the others.
+ */
+const streamsByKey = new Map<string, Map<object, HeldStream>>()
+
+/** The stream the entry for `key` shows: the best one held; null when none is. */
+function bestStream(key: string): HeldStream | null {
+  let best: HeldStream | null = null
+  for (const s of streamsByKey.get(key)?.values() ?? []) if (!best || HELD_RANK[s.status] > HELD_RANK[best.status]) best = s
+  return best
 }
 
 export function useExecutionSubscription(hostId: string, executionId: string, active: boolean): { problem: SubscriptionProblem; paused: boolean } {
@@ -75,8 +80,7 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
     subscriptionSlots.touch(hostId, key)
     if (subscriptionSlots.isLive(hostId, key) && !sseRef.current && openStreamRef.current) {
       setPaused(false)
-      useExecutionStore.getState().setSse(hostId, executionId, 'connecting')
-      openStreamRef.current()
+      openStreamRef.current() // rejoins this execution's streams as `connecting`
     }
   }, [active, hostId, executionId, key, problem])
 
@@ -99,8 +103,29 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
       store().setSse(hostId, executionId, 'closed', 'host_removed')
       return
     }
-    // From here on this run has a cleanup, which drops it again (`instancesByKey`).
-    instancesByKey.set(key, (instancesByKey.get(key) ?? 0) + 1)
+    // This run's own stream among the ones held for `key` (`streamsByKey`).
+    const owner = {}
+    // Its stream is connecting / open / reconnecting: the entry shows the best one any instance holds.
+    const hold = (status: HeldStream['status'], err: string | null = null) => {
+      let held = streamsByKey.get(key)
+      if (!held) { held = new Map(); streamsByKey.set(key, held) }
+      held.set(owner, { status, err })
+      const best = bestStream(key)!
+      store().setSse(hostId, executionId, best.status, best.err)
+    }
+    // Its stream ended (idempotent). True when no instance holds one any more: the caller then frees the slot and
+    // writes the entry's streamless status. Otherwise the entry shows the best stream still held (this one may have
+    // been it) and the slot stays the others'.
+    const letGo = (): boolean => {
+      const held = streamsByKey.get(key)
+      if (!held) return true
+      if (held.delete(owner)) {
+        if (held.size === 0) { streamsByKey.delete(key); return true }
+        const best = bestStream(key)!
+        store().setSse(hostId, executionId, best.status, best.err)
+      }
+      return false
+    }
 
     let staleRefetchAttempts = 0
     const refetchSummary = async () => {
@@ -175,22 +200,28 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
     // closed queue never flushes again, and a pane resumed after eviction
     // opens a fresh stream with a fresh queue.
     let queue: TransientFrameQueue | null = null
-    const closeStream = () => {
+    // Closes this run's own stream; returns `letGo()`'s answer (no instance holds one any more).
+    const closeStream = (): boolean => {
       tasksGen += 1 // a /tasks read for the closed stream must not land
       sseRef.current?.close()
       sseRef.current = null
       queue?.close()
       queue = null
+      return letGo()
     }
 
-    const teardown = (reason?: SubscriptionProblem, detail?: string) => {
-      closeStream()
+    // The problem is this pane's own; the entry and the slot are shared, so only the last stream out closes and frees them.
+    const teardown = (reason?: SubscriptionProblem, detail?: string): boolean => {
+      const last = closeStream()
       if (refetchTimer) { clearTimeout(refetchTimer); refetchTimer = null }
       if (reason) {
         setProblem(reason)
-        store().setSse(hostId, executionId, 'closed', detail ?? reason)
-        subscriptionSlots.release(hostId, key)
+        if (last) {
+          store().setSse(hostId, executionId, 'closed', detail ?? reason)
+          subscriptionSlots.release(hostId, key)
+        }
       }
+      return last
     }
 
     // useHostStore has no subscribeWithSelector: compare prev/next by hand.
@@ -206,7 +237,7 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
     let retryAttempt = 0
 
     const connect = async () => {
-      store().setSse(hostId, executionId, 'connecting')
+      hold('connecting')
       try {
         const asOf = store().executions[key]?.lastSeq ?? 0
         const gen = store().executions[key]?.summaryGen ?? 0
@@ -268,7 +299,11 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
               if (cancelled) return
               if (status === 'connecting' || status === 'reconnecting') q.bumpGeneration()
               if (status === 'closed') q.close()
-              store().setSse(hostId, executionId, status, err?.message ?? null)
+              // This stream's status reaches the entry only as far as no other pane's stream says better (`hold`);
+              // a closed one says `closed` only when it was the last stream held.
+              if (status !== 'closed') hold(status, err?.message ?? null)
+              const last = status === 'closed' && letGo()
+              if (last) store().setSse(hostId, executionId, 'closed', err?.message ?? null)
               if (status === 'reconnecting') wasReconnecting = true
               if (status === 'open') { warnedMalformed = false; void refetchTasks(); if (wasReconnecting) { wasReconnecting = false; void refetchSummary() } }
               if (status === 'closed' && err) {
@@ -277,15 +312,19 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
                 // already dead and will never reconnect on its own. Drop it
                 // and free the slot so a later activation can claim a fresh
                 // one instead of the pane being stuck "live" forever with a
-                // broken stream and nobody else able to use its slot.
+                // broken stream and nobody else able to use its slot —
+                // unless another pane's stream still holds that slot.
                 sseRef.current = null
-                subscriptionSlots.release(hostId, key)
-                // A send already in flight when the stream dies terminally
-                // would otherwise leave pendingSend stuck forever: no SSE
-                // will ever deliver the message_accepted/result that would
-                // clear it, and the input stays disabled with no way out
-                // short of a full remount.
-                store().setPendingSend(hostId, executionId, false)
+                if (last) {
+                  subscriptionSlots.release(hostId, key)
+                  // A send already in flight when the stream dies terminally
+                  // would otherwise leave pendingSend stuck forever: no SSE
+                  // will ever deliver the message_accepted/result that would
+                  // clear it, and the input stays disabled with no way out
+                  // short of a full remount. Another pane's live stream
+                  // still delivers it, so then it stays.
+                  store().setPendingSend(hostId, executionId, false)
+                }
               }
             },
           })
@@ -299,14 +338,18 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
         // §4.3.2 step 4 says only eviction pauses; an idle cap should not.
         // claimIfFree grabs a free slot without evicting anyone, so a
         // restored (hidden, inactive) tab still goes live up to the cap.
+        // An eviction takes the key's one slot from every pane showing it
+        // (each gets the notice); the entry says `paused` once the last of
+        // their streams is out. A resume (activation effect) rejoins the
+        // streams held for the key as `connecting` before it dials.
         unsubEvict = subscriptionSlots.onEvict(key, () => {
-          closeStream()
+          const last = closeStream()
           setPaused(true)
-          store().setSse(hostId, executionId, 'paused')
+          if (last) store().setSse(hostId, executionId, 'paused')
         })
-        openStreamRef.current = openStream
+        openStreamRef.current = () => { hold('connecting'); openStream() }
         if (subscriptionSlots.isLive(hostId, key) || subscriptionSlots.claimIfFree(hostId, key)) openStream()
-        else { setPaused(true); store().setSse(hostId, executionId, 'paused') }
+        else { const last = letGo(); setPaused(true); if (last) store().setSse(hostId, executionId, 'paused') }
         retryAttempt = 0
       } catch (e) {
         if (cancelled) return
@@ -321,10 +364,14 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
           // whole chain with backoff (2s -> 4 -> 8 -> capped at 30s)
           // instead of getting stuck at "Loading execution..." forever.
           // `problem` is left null so the view keeps showing the loading
-          // state (with sseError surfaced) rather than a terminal one.
+          // state (with sseError surfaced) rather than a terminal one. While
+          // another pane's stream still holds the slot and feeds the entry,
+          // this attempt's failure stays this pane's own (its retry below).
           sseRef.current = null
-          subscriptionSlots.release(hostId, key)
-          store().setSse(hostId, executionId, 'closed', e instanceof Error ? e.message : String(e))
+          if (letGo()) {
+            subscriptionSlots.release(hostId, key)
+            store().setSse(hostId, executionId, 'closed', e instanceof Error ? e.message : String(e))
+          }
           retryAttempt += 1
           const delay = Math.min(2000 * 2 ** (retryAttempt - 1), 30000)
           retryTimer = setTimeout(() => {
@@ -343,12 +390,11 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
       unsubEvict?.()
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
       openStreamRef.current = null
-      // This instance's own stream always closes. The shared slot and entry are another pane's while it still shows
-      // this execution (`instancesByKey`): only the last instance releases the one and idles the other.
-      const last = dropInstance(key)
-      if (last) subscriptionSlots.release(hostId, key)
-      teardown()
+      // This instance's own stream always closes. The shared slot and entry are another pane's while its stream is
+      // still held (`streamsByKey`): only the last stream out releases the one and idles the other.
+      const last = teardown()
       if (!last) return
+      subscriptionSlots.release(hostId, key)
       // The entry outlives the pane (the next mount starts from it), but no stream of this hook feeds it any more, and
       // `cancelled` keeps the closing stream from saying so: mark it streamless (`idle`, what a fresh mount begins
       // from) so it is never taken for a live one. A terminal problem (`closed` with its reason) or an eviction
