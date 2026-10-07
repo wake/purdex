@@ -57,10 +57,22 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		"Never relay yourself",    // member
 		"never approve one",       // self relay is the mod's
 		"/relay off",              // the user's switch
+		// P4-7: the shipped grammar, and U20 (d): choose each member's model
+		// and effort for its task because the host default is not fixed,
+		// and check what each member actually runs.
+		"pdx spawn [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--brief-file <f> | --brief <text>]",
+		"--model sonnet", "--model opus", "not fixed", "pdx team",
+		// The CLI's own wait timeout is not the daemon's start timeout: check
+		// pdx team before spawning again (PR P4-7 critic ruling).
+		"`spawn_wait_timeout`", "do not spawn again",
+		"Exit 14 (`member_start_timeout`) means the daemon gave up",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md lacks %q", want)
 		}
+	}
+	if strings.Contains(s, "--root <dir> [--repo") {
+		t.Error("SKILL.md still teaches the pre-P4 spawn grammar")
 	}
 }
 
