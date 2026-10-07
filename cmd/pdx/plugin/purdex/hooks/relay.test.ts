@@ -441,9 +441,10 @@ test('cleared: report cleared --new-session, hello again, seed prompt ↪ 接手
 
 // §8.3: a report that did not reach the daemon (20 unreachable — also a
 // cleared the daemon answered 503 not_ready for through the CLI's grace —
-// 21 unsupported, 1 runtime) is re-sent at the next turn.complete and the
-// relay goes on. Mutation gate: drop any of the three instead → red.
-for (const code of [20, 21, 1]) {
+// 21 unsupported) is re-sent at the next turn.complete and the relay goes
+// on. Exit 1 is permanent since the P5b-2 review (its own test below).
+// Mutation gate: drop either of the two instead → red.
+for (const code of [20, 21]) {
   test(`a report that fails with ${code} is re-sent at the next turn.complete and the relay goes on`, async ($, on) => {
     const { f, clock } = await approvedRelay($, on)
     let failWritten = true
@@ -961,4 +962,71 @@ test('the user’s /clear while seeding reports failed{handoff_incomplete}; the 
   await $.turn.start({ text: f.submits[1].text, turnId: 'ts' })
   await turnAndSettle($, f, 'ts')
   expect(reports(f)).toEqual([...before, 'relay report op-1 failed --error handoff_incomplete'])
+})
+
+// Item 6 (attacker medium): only a transient failure (20 / 21, or a
+// $.process.run that rejected, read as 20) is re-sent, and only so often;
+// the queue is bounded. Mutation gates: re-send exit 1 → it goes out again
+// at `tx`; drop the re-send cap → 26 sends; drop the queue cap → op-1 is
+// held and re-sent at `tz`.
+test('a report that fails with 1 is dropped and logged, never re-sent; the op’s later reports go on', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  const inner = f.pdx
+  f.pdx = (argv) => (argv[1] === 'report' && argv[3] === 'written' ? { exitCode: 1, stderr: 'pdx relay: boom' } : inner(argv))
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  expect(f.commands).toEqual(['clear'])
+  await turnAndSettle($, f, 'tx')
+  await turnAndSettle($, f, 'ty')
+  expect(reports(f).filter((c) => c === 'relay report op-1 written').length).toBe(1)
+  expect(f.logs.some((l) => l.includes('exit 1') && l.includes('relay report op-1 written'))).toBe(true)
+  f.sessionId = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await clock.settle()
+  expect(reports(f).at(-1)).toBe('relay report op-1 cleared --new-session sid-new') // not held behind the dropped one
+})
+
+test('a report that keeps failing with 20 is re-sent 20 times, then dropped and logged', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  const inner = f.pdx
+  f.pdx = (argv) => (argv[1] === 'report' && argv[3] === 'written' ? { exitCode: 20, stderr: 'daemon unavailable' } : inner(argv))
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  for (let i = 0; i < 25; i++) await turnAndSettle($, f, 'r' + i)
+  expect(reports(f).filter((c) => c === 'relay report op-1 written').length).toBe(21) // the first send and 20 re-sends
+  expect(f.logs.some((l) => l.includes('20 re-sends') && l.includes('relay report op-1 written'))).toBe(true)
+})
+
+test('the report queue holds 50: a 51st report pushes out the oldest (logged), which is never re-sent', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const g = gated()
+  let n = 0
+  f.pdx = async (argv) => {
+    if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO() }
+    if (argv[1] === 'begin') return { exitCode: 0, stdout: beginOK(++n) }
+    if (argv[1] === 'wait') return new Promise<never>(() => {})
+    if (argv[1] === 'report' && argv[2] === 'op-1') { await g.p; return { exitCode: 20, stderr: 'daemon unavailable' } }
+    return { exitCode: 0, stdout: '{}' }
+  }
+  await start($, f)
+  for (let i = 1; i <= 51; i++) {
+    await turn($, 't' + i)
+    await f.clock.advance(50) // begin op-i, its wait (never answers)
+    f.sessionId = 'sid-' + i
+    await $.classic.SessionStart({ source: 'clear' }) // awaiting → cancelled{abandoned} for op-i
+    await f.clock.settle()
+  }
+  expect(n).toBe(51)
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned']) // op-1's send hangs: the rest queue behind it
+  expect(f.logs.some((l) => l.includes('queue full') && l.includes('relay report op-1 cancelled'))).toBe(true)
+  g.release() // op-1 answers 20: it was pushed out, so it is not held
+  await f.clock.settle()
+  await turnAndSettle($, f, 'tz') // a held op-1 would be re-sent here
+  const sent = reports(f)
+  expect(sent.filter((c) => c.startsWith('relay report op-1 ')).length).toBe(1)
+  for (let i = 2; i <= 51; i++) expect(sent.filter((c) => c === 'relay report op-' + i + ' cancelled --error abandoned').length).toBe(1)
 })

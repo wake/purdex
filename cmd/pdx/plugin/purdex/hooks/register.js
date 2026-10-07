@@ -28,6 +28,8 @@ const MAX_FIX_ROUNDS = 2
 const WAIT_TIMEOUT_MS = 590_000 // $.process.run caps at 10 min (M24); pdx relay wait bounds itself to 9
 const CALL_TIMEOUT_MS = 35_000 // one daemonclient grace (30 s) plus slack
 const STEP_MS = 50 // the timer a step that starts a turn or a command waits for (F3)
+const MAX_RESENDS = 20 // a report that keeps failing with 20 / 21 is re-sent at most this often, then dropped
+const MAX_OUTBOX = 50 // reports queued at once; one more pushes out the oldest
 const REQUIRED = ['## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.', '## 8.']
 const STATUS_WAITING = '接力等待核准中'
 const TOAST_WAITING = '接力等待核准：請在 Purdex App 按核准或拒絕'
@@ -53,7 +55,7 @@ const fresh = () => ({
   fixRounds: 0,
   writeTurnId: undefined,
   seedTurnId: undefined,
-  outbox: [], // reports not yet landed, in order: { op, argv }
+  outbox: [], // reports not yet landed, in order: { op, argv, tries }
   held: new Set(), // ops whose report did not land: their later reports wait for the next turn.complete
   pumping: false,
   again: false,
@@ -130,25 +132,36 @@ function helloLater($) {
   $.clock.after(0, () => { void hello($, seq).catch(() => {}) })
 }
 
-// retryableReport: a report that did not reach the daemon (20 unreachable —
-// a cleared answered 503 not_ready through the CLI's grace ends here too —
-// 21 unsupported, 1 runtime) is re-sent at the next turn.complete (§8.3).
-// Exit 13 (`bad_transition`) means the daemon is already PAST this state —
-// a later report landed first, or the op was closed — so re-sending it
-// would be refused forever; it is dropped.
-function retryableReport(r) {
-  return r.exitCode !== 0 && r.exitCode !== 13
+// transientReport: a report that did not reach the daemon — 20 unreachable
+// (a $.process.run that rejected reads as 20; a cleared answered 503
+// not_ready through the CLI's grace ends here too) or 21 unsupported — is
+// re-sent at the next turn.complete (§8.3), at most MAX_RESENDS times.
+// Anything else is final: 13 (`bad_transition`) means the daemon is already
+// PAST this state (a later report landed first, or the op was closed), and
+// 1 (a runtime error), 2 (usage) or any other code would fail the same way
+// again; those are dropped (all but 13 with a log line).
+function transientReport(r) {
+  return r.exitCode === 20 || r.exitCode === 21
 }
 
 // report queues `pdx relay report <op> <state> …`; pump sends it from a
 // timer. An op's reports land in order: one sent while an earlier one is
 // still queued would be refused (written → done is bad_transition) and
 // dropped for good, so a report that does not land holds its op's later
-// reports until the next turn.complete re-sends it. The relay goes on
-// meanwhile (§8.3: the session matters more).
+// reports until the next turn.complete re-sends it; a dropped one releases
+// them. The relay goes on meanwhile (§8.3: the session matters more). The
+// queue holds MAX_OUTBOX reports; one more pushes out the oldest.
 function report($, opId, state, extra = []) {
-  s.outbox.push({ op: opId, argv: ['relay', 'report', opId, state, ...extra] })
+  s.outbox.push({ op: opId, argv: ['relay', 'report', opId, state, ...extra], tries: 0 })
+  while (s.outbox.length > MAX_OUTBOX) log($, 'report queue full (' + MAX_OUTBOX + '), dropped: ' + s.outbox.shift().argv.join(' '))
   pump($)
+}
+
+// nextReport is the first queued report not yet tried in this pass whose op
+// is not held and that is its op's first: an op's reports go one at a time,
+// in order, even when a turn.complete releases the holds mid-pass.
+function nextReport(tried) {
+  return s.outbox.find((it, k) => !tried.has(it) && !s.held.has(it.op) && s.outbox.findIndex((o) => o.op === it.op) === k)
 }
 
 function pump($) {
@@ -159,11 +172,16 @@ function pump($) {
     try {
       while (s.again) {
         s.again = false
-        for (let i = 0; i < s.outbox.length;) {
-          const item = s.outbox[i]
-          if (s.held.has(item.op)) { i++; continue }
+        const tried = new Set()
+        for (let item = nextReport(tried); item; item = nextReport(tried)) {
+          tried.add(item)
           const r = await pdx($, item.argv, CALL_TIMEOUT_MS)
-          if (retryableReport(r)) { s.held.add(item.op); i++ } else s.outbox.splice(i, 1)
+          const i = s.outbox.indexOf(item)
+          if (i < 0) continue // pushed out of a full queue while it was out
+          if (transientReport(r) && ++item.tries <= MAX_RESENDS) { s.held.add(item.op); continue }
+          if (transientReport(r)) log($, 'report dropped after ' + MAX_RESENDS + ' re-sends (exit ' + r.exitCode + '): ' + item.argv.join(' '))
+          else if (r.exitCode !== 0 && r.exitCode !== 13) log($, 'report dropped (exit ' + r.exitCode + '): ' + item.argv.join(' '))
+          s.outbox.splice(i, 1)
         }
       }
     } finally {
