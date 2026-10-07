@@ -9,12 +9,6 @@ import { useHostStore } from '../../stores/useHostStore'
 import type { PlatformCapabilities } from '../../lib/platform'
 
 const IMAGE_FS_CAPS: PlatformCapabilities = {
-  isElectron: false,
-  canTearOffTab: false,
-  canMergeWindow: false,
-  canBrowserPane: false,
-  canSystemTray: false,
-  canNotification: false,
   devUpdateEnabled: false,
   hasLocalFilesystem: false,
 }

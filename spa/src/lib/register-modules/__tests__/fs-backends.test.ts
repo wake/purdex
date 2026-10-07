@@ -5,12 +5,6 @@ import { useHostStore } from '../../../stores/useHostStore'
 import type { PlatformCapabilities } from '../../platform'
 
 const CAPS: PlatformCapabilities = {
-  isElectron: false,
-  canTearOffTab: false,
-  canMergeWindow: false,
-  canBrowserPane: false,
-  canSystemTray: false,
-  canNotification: false,
   devUpdateEnabled: false,
   hasLocalFilesystem: false,
 }

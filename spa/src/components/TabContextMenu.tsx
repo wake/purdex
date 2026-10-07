@@ -3,7 +3,6 @@ import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useClickOutside } from '../hooks/useClickOutside'
 import { useI18nStore } from '../stores/useI18nStore'
-import { getPlatformCapabilities } from '../lib/platform'
 
 export type ContextMenuAction =
   | 'lock' | 'unlock' | 'pin' | 'unpin'
@@ -31,7 +30,6 @@ interface MenuItem {
 
 export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnlocked, hasRightUnlocked, targetTabs }: Props) {
   const t = useI18nStore((s) => s.t)
-  const caps = getPlatformCapabilities()
   const ref = useRef<HTMLDivElement>(null)
 
   // Viewport boundary correction — directly adjust DOM before paint (no state needed)
@@ -68,11 +66,9 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     { label: t('tab.unlock'), action: 'unlock' as const, show: tab.locked },
     { label: t('tab.pin'), action: 'pin' as const, show: !tab.pinned },
     { label: t('tab.unpin'), action: 'unpin' as const, show: tab.pinned },
-    // Tear-off section (Electron only)
-    ...(caps.canTearOffTab ? [
-      'separator' as const,
-      { label: t('tab.move_new_window'), action: 'tearOff' as const, show: true, disabled: tab.locked },
-    ] : []),
+    // Tear-off section (the 'tearOff' handler checks window.electronAPI)
+    'separator',
+    { label: t('tab.move_new_window'), action: 'tearOff' as const, show: true, disabled: tab.locked },
     // MergeToTab section
     ...(targetTabs && targetTabs.length > 0 ? [
       'separator' as const,

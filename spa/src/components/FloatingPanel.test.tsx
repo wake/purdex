@@ -21,18 +21,12 @@ vi.mock('../lib/platform', () => ({
 
 /** The title bar's drag region (see `FloatingPanel.tsx`'s `topInset`) is on
  * screen whatever the platform — `App.tsx` always renders `TitleBar` — so the
- * inset must not follow `getPlatformCapabilities().isElectron`. Stubbed the same
- * way `TabContextMenu.test.tsx` does, so the inset tests can run both values. */
+ * inset must not follow `getPlatformCapabilities()`. Stubbed so the inset tests
+ * can run both an all-false and an all-true capability set. */
 function mockElectron(isElectron: boolean) {
   vi.mocked(getPlatformCapabilities).mockReturnValue({
-    isElectron,
-    canTearOffTab: isElectron,
-    canMergeWindow: isElectron,
-    canBrowserPane: isElectron,
-    canSystemTray: isElectron,
-    canNotification: isElectron,
-    devUpdateEnabled: false,
-    hasLocalFilesystem: false,
+    devUpdateEnabled: isElectron,
+    hasLocalFilesystem: isElectron,
   } satisfies PlatformCapabilities)
 }
 

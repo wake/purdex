@@ -7,14 +7,8 @@ import { getPlatformCapabilities } from '../lib/platform'
 import type { PlatformCapabilities } from '../lib/platform'
 
 const capabilities = (isElectron: boolean): PlatformCapabilities => ({
-  isElectron,
-  canTearOffTab: isElectron,
-  canMergeWindow: isElectron,
-  canBrowserPane: isElectron,
-  canSystemTray: isElectron,
-  canNotification: isElectron,
-  devUpdateEnabled: false,
-  hasLocalFilesystem: false,
+  devUpdateEnabled: isElectron,
+  hasLocalFilesystem: isElectron,
 })
 
 vi.mock('../lib/platform', () => ({ getPlatformCapabilities: vi.fn() }))

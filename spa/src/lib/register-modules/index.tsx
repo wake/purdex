@@ -322,18 +322,16 @@ export function registerBuiltinModules(): void {
     icon: 'Globe',
     order: -10,
     component: BrowserNewTabSection,
-    disabled: !caps.canBrowserPane,
-    disabledReason: 'browser.requires_app',
   })
 
-  if (caps.canSystemTray) {
-    registerSettingsSection({
-      id: 'electron',
-      label: 'settings.section.electron',
-      order: SETTINGS_ORDER.ELECTRON,
-      component: ElectronSection,
-    })
-  }
+  // Always registered: the App is the only shell. ElectronSection reads
+  // `window.electronAPI?.tray` and disables its row when the preload lacks it.
+  registerSettingsSection({
+    id: 'electron',
+    label: 'settings.section.electron',
+    order: SETTINGS_ORDER.ELECTRON,
+    component: ElectronSection,
+  })
 
   if (caps.devUpdateEnabled) {
     registerSettingsSection({
