@@ -39,4 +39,22 @@ describe('WorkerLiveTab', () => {
     expect(screen.getAllByTestId('executions-row')).toHaveLength(1)
     expect(screen.queryByText('test one')).toBeNull()
   })
+
+  // codex R2: "capability not known yet" must not look like "an old daemon" — test rows would flash in Workers.
+  it('while the host entry is missing or loading, test-cwd workers stay hidden', () => {
+    useNexHostStore.setState({ byHost: {}, ensure: vi.fn().mockResolvedValue(undefined) })
+    const { unmount } = render(<WorkerLiveTab hostId={H} />)
+    expect(screen.queryByText('test one')).toBeNull()
+    unmount()
+    useNexHostStore.setState({ byHost: { [H]: { ...entry(), phase: 'loading', info: null } }, ensure: vi.fn().mockResolvedValue(undefined) })
+    render(<WorkerLiveTab hostId={H} />)
+    expect(screen.queryByText('test one')).toBeNull()
+    expect(screen.getByText('normal one')).toBeInTheDocument()
+  })
+
+  it('a ready host without the capability (an older daemon) still lists every row', () => {
+    useCaps(undefined)
+    render(<WorkerLiveTab hostId={H} />)
+    expect(screen.getAllByTestId('executions-row')).toHaveLength(2)
+  })
 })

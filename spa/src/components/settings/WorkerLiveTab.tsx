@@ -11,11 +11,15 @@ export function WorkerLiveTab({ hostId }: { hostId?: string }) {
 
 function LiveList({ hostId }: { hostId: string }) {
   const scoped = useNexHostStore(selectConversationsScope(hostId))
+  // Whether the daemon's capabilities are known yet: until then (no entry, or still loading) the safe side is to hide
+  // test rows, not to treat the host as an older daemon — they would show up here and vanish a moment later.
+  const phase = useNexHostStore((s) => s.byHost[hostId]?.phase)
+  const unknown = phase === undefined || phase === 'unknown' || phase === 'loading'
   return (
     <HostWorkerRows
       hostId={hostId}
       testIdPrefix="worker-settings-live"
-      filter={scoped ? 'normal' : undefined}
+      filter={scoped || unknown ? 'normal' : undefined}
       onOpen={(id) => { openWorkerTab({ kind: 'execution', executionId: id, host: hostId }) }}
     />
   )
