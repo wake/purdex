@@ -1,9 +1,12 @@
 // spa/src/lib/host-config-parse.ts — what the SPA makes of the daemon's host
-// config answers (#1489). Every write is normalised on the daemon, but its GET
-// hands back whatever a row holds, so a row edited by hand arrives as-is. One
-// parser per collection, and the rule is the same for all of them: a bad row is
-// skipped, a bad collection reads as empty, and the section is told so. Nothing
-// malformed may reach a render (`items.map`, `text.trim()`, `icon.kind`).
+// config answers (#1489). Every write is normalised on the daemon; since #1889
+// its GET (and a PUT's answer, a 409's current) also sends only the rows its
+// PUT would take, and marks what it left out (`invalid`, `dropped`). An older
+// daemon hands back whatever a row holds, so a row edited by hand arrives
+// as-is. One parser per collection, and the rule is the same for all of them:
+// a bad row is skipped, a bad collection reads as empty, and the section is
+// told so — by the daemon's markers plus whatever is still skipped here.
+// Nothing malformed may reach a render (`items.map`, `text.trim()`, `icon.kind`).
 //
 // Only what rendering needs is checked; the daemon's own rules (id pattern,
 // lengths, Phosphor names) stay the daemon's. The exception is a value the
@@ -99,6 +102,32 @@ function rowsProblem(count: number): HostConfigProblem | null {
   return count > 0 ? { kind: 'rows', count } : null
 }
 
+/**
+ * The section's problem, from the daemon's markers (#1889) and the `skipped`
+ * rows this parser dropped itself. `invalid: true` (the daemon could not read
+ * the stored value; `items` is the empty value) is `invalidKind`; a positive
+ * integer `dropped.count` adds to `skipped`. A malformed marker reads as none.
+ */
+function problemOf(
+  collection: JsonObject,
+  hostId: string,
+  field: HostConfigField,
+  skipped: number,
+  invalidKind: 'shape' | 'relay' = 'shape',
+): HostConfigProblem | null {
+  if (collection.invalid === true) {
+    warn(hostId, field, 'the daemon could not read the stored value and sent the empty value')
+    return { kind: invalidKind }
+  }
+  const dropped = isObject(collection.dropped) ? collection.dropped : {}
+  const count = Number.isInteger(dropped.count) && (dropped.count as number) > 0 ? (dropped.count as number) : 0
+  if (count > 0) {
+    const reasons = Array.isArray(dropped.reasons) ? dropped.reasons.filter((r) => typeof r === 'string') : []
+    warn(hostId, field, `the daemon left out ${count} row(s)${reasons.length > 0 ? `: ${reasons.join('; ')}` : ''}`)
+  }
+  return rowsProblem(count + skipped)
+}
+
 function parseList<T>(raw: unknown, hostId: string, field: HostConfigField, check: RowCheck): ParsedCollection<T[]> {
   if (!isObject(raw)) {
     warn(hostId, field, 'collection is not an object; reading as empty')
@@ -114,7 +143,7 @@ function parseList<T>(raw: unknown, hostId: string, field: HostConfigField, chec
     if (why) warn(hostId, field, `item ${i}${isObject(row) && typeof row.id === 'string' ? ` (id ${row.id})` : ''} skipped: ${why}`)
     return why === null
   }) as T[]
-  return { items, revision, problem: rowsProblem(raw.items.length - items.length) }
+  return { items, revision, problem: problemOf(raw, hostId, field, raw.items.length - items.length) }
 }
 
 export function parseProjects(raw: unknown, hostId: string): ParsedCollection<HostProject[]> {
@@ -177,7 +206,7 @@ export function parseResumeTemplates(raw: unknown, hostId: string): ParsedCollec
   for (const [agent] of valid.slice(RESUME_MAX_AGENTS)) warn(hostId, field, `agent ${agent} skipped: over ${RESUME_MAX_AGENTS} agents`)
   // `fromEntries` defines own keys, never the prototype.
   const items = Object.fromEntries(kept) as ResumeTemplateOverrides
-  return { items, revision, problem: rowsProblem(entries.length - kept.length) }
+  return { items, revision, problem: problemOf(raw, hostId, field, entries.length - kept.length) }
 }
 
 const RELAY_SWITCHES = ['self_solo', 'self_lead'] as const
@@ -249,7 +278,8 @@ export function parseRelay(raw: unknown, hostId: string): ParsedCollection<Relay
   const read = readRelay(raw.items, dropped)
   if (typeof read === 'string') return off(revision, read)
   for (const why of dropped) warn(hostId, 'relay', why)
-  return { items: read, revision, problem: rowsProblem(dropped.length) }
+  // The daemon marks an unreadable value `invalid` and already sends both switches off.
+  return { items: read, revision, problem: problemOf(raw, hostId, 'relay', dropped.length, 'relay') }
 }
 
 /** One parser per field: what a load, a PUT answer and a 409's `current` all go through. */
