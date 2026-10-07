@@ -11,7 +11,8 @@
 // network while the host is still connected is not queued (nothing would resend it): it toasts and the buttons come back.
 //
 // Focus: the panel takes focus on open and Tab stays inside, as ConfirmDialog does, so a stray keystroke never
-// reaches the pane behind; Escape is swallowed so a dialog beneath does not dismiss. The i18n strings are the spec's.
+// reaches the pane behind; focus that something behind takes anyway (a tab switch, a terminal's late focus) is pulled
+// back; Escape is swallowed so a dialog beneath does not dismiss. The i18n strings are the spec's.
 import { useEffect, useRef, useState } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -109,7 +110,24 @@ function OpenApprovalDialog({ entry }: { entry: ApprovalEntry }) {
     return () => document.removeEventListener('keydown', onKey, { capture: true })
   }, [])
 
-  const members = maxMembers.trim() === '' ? NaN : Number(maxMembers)
+  // Focus stays inside the panel (P9b-1 review). Something behind this modal can still take focus: the switch to the
+  // requester after a decision (U22, approval-goto.ts) shows a tab while the next request's dialog is already up, a
+  // notification click does the same, and a terminal focuses in the NEXT animation frame (TerminalView's
+  // `useActivationFocus(…, { raf: true })`) — after this panel took focus. Its keystrokes would reach the shell under
+  // the overlay, so any focus that lands outside the panel is pulled back. `panel.focus()` fires a `focusin` inside the
+  // panel, which this leaves alone, so the two cannot ping-pong. Same lifetime as the Escape swallow and the Tab trap.
+  useEffect(() => {
+    const panel = panelRef.current
+    if (!panel) return
+    const onFocusIn = (e: FocusEvent) => {
+      if (e.target instanceof Node && panel.contains(e.target)) return
+      panel.focus()
+    }
+    document.addEventListener('focusin', onFocusIn, { capture: true })
+    return () => document.removeEventListener('focusin', onFocusIn, { capture: true })
+  }, [])
+
+  const members =maxMembers.trim() === '' ? NaN : Number(maxMembers)
   const membersOk = Number.isInteger(members) && members >= 1 && members <= MAX_MAX_MEMBERS
   const roots = parseRoots(rootsText)
   const rootsOk = roots.length > 0
