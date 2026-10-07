@@ -198,6 +198,70 @@ func TestObserveNames_DuplicateEntriesDoNotFlap(t *testing.T) {
 	}
 }
 
+// Purdex's own proxy/helper registry entries carry fresh UUIDs and are not conversations.
+func TestObserveNames_SkipsProxyEntries(t *testing.T) {
+	sink := &fakeNameSink{}
+	m, _ := newNameModule(sink)
+	e := entry(nameSID1, "helper-one")
+	e.IsProxy = true
+	m.observeNames([]ipeers.Entry{e})
+	if sink.count() != 0 {
+		t.Fatalf("proxy entry recorded: %d", sink.count())
+	}
+}
+
+// blockingNameSink holds the first Upsert until released.
+type blockingNameSink struct {
+	fakeNameSink
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingNameSink) Upsert(ctx context.Context, sid, name string, nowMs int64) error {
+	first := false
+	s.once.Do(func() { first = true })
+	if first {
+		close(s.entered)
+		<-s.release
+	}
+	return s.fakeNameSink.Upsert(ctx, sid, name, nowMs)
+}
+
+// A rename seen while the previous write is in flight must still end up
+// written, even when no later pass includes the session (codex R2).
+func TestObserveNames_RenameDuringInflightWriteIsNotLost(t *testing.T) {
+	sink := &blockingNameSink{entered: make(chan struct{}), release: make(chan struct{})}
+	m, _ := newNameModule(sink)
+	done := make(chan struct{})
+	go func() {
+		m.observeNames([]ipeers.Entry{entry(nameSID1, "alpha-one")})
+		close(done)
+	}()
+	<-sink.entered
+	m.observeNames([]ipeers.Entry{entry(nameSID1, "beta-two")}) // skipped as in flight, but remembered
+	close(sink.release)
+	<-done
+	if got := sink.lastName(); got != "beta-two" {
+		t.Fatalf("last written name = %q, want beta-two", got)
+	}
+}
+
+// The throttle state is bounded by the live set: sessions that left the
+// registry are forgotten.
+func TestObserveNames_ForgetsSessionsThatLeft(t *testing.T) {
+	sink := &fakeNameSink{}
+	m, _ := newNameModule(sink)
+	m.observeNames([]ipeers.Entry{entry(nameSID1, "alpha-one"), entry(nameSID2, "beta-two")})
+	m.observeNames([]ipeers.Entry{entry(nameSID2, "beta-two")})
+	m.names.mu.Lock()
+	n := len(m.names.state)
+	m.names.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("state holds %d sessions, want 1", n)
+	}
+}
+
 func TestObserveNames_ConcurrentRespectsThrottle(t *testing.T) {
 	sink := &fakeNameSink{}
 	m, _ := newNameModule(sink)

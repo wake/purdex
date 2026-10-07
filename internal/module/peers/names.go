@@ -38,6 +38,7 @@ type nameWriter struct {
 	mu       sync.Mutex
 	state    map[string]nameState
 	inflight map[string]bool
+	pending  map[string]string // sid -> latest name seen while its write was in flight
 }
 
 func newNameWriter() *nameWriter {
@@ -45,6 +46,7 @@ func newNameWriter() *nameWriter {
 		now:      time.Now,
 		state:    make(map[string]nameState),
 		inflight: make(map[string]bool),
+		pending:  make(map[string]string),
 	}
 }
 
@@ -82,7 +84,10 @@ func (w *nameWriter) observe(entries []ipeers.Entry, logf func(string, ...any)) 
 	w.mu.Lock()
 	// A resumed session can have several live entries with one session id and
 	// different names. One name per session per pass: the recorded one while
-	// it is still live (no flapping), else the smallest (deterministic).
+	// it is still live (no flapping), else the smallest (deterministic). Known
+	// limit: the registry carries no usable update time, so after a daemon
+	// restart (state empty) two live entries with different names for one
+	// session resolve by that rule, not by recency; rare, and display-only.
 	chosen := make(map[string]string)
 	var order []string
 	for _, e := range entries {
@@ -93,6 +98,9 @@ func (w *nameWriter) observe(entries []ipeers.Entry, logf func(string, ...any)) 
 			continue
 		}
 		if !ipeers.RoutableName(e.Name) {
+			continue
+		}
+		if e.IsProxy { // Purdex's own helper entries: fresh UUIDs, not conversations
 			continue
 		}
 		cur, seen := chosen[e.SessionID]
@@ -106,9 +114,17 @@ func (w *nameWriter) observe(entries []ipeers.Entry, logf func(string, ...any)) 
 			chosen[e.SessionID] = e.Name
 		}
 	}
+	// The throttle state follows the live set, so it cannot grow without
+	// bound; a session that comes back is simply written once more.
+	for sid := range w.state {
+		if _, live := chosen[sid]; !live && !w.inflight[sid] {
+			delete(w.state, sid)
+		}
+	}
 	for _, sid := range order {
 		name := chosen[sid]
 		if w.inflight[sid] {
+			w.pending[sid] = name // the write in flight finishes with this one
 			continue
 		}
 		if st, ok := w.state[sid]; ok && st.name == name && now.Sub(st.writtenAt) <= nameRewriteAfter {
@@ -121,15 +137,28 @@ func (w *nameWriter) observe(entries []ipeers.Entry, logf func(string, ...any)) 
 
 	// Phase 2 (unlocked): write; Phase 3 (locked): record successes only.
 	for _, p := range todo {
-		err := w.sink.Upsert(context.Background(), p.sid, p.name, now.UnixMilli())
-		w.mu.Lock()
-		delete(w.inflight, p.sid)
-		if err == nil {
-			w.state[p.sid] = nameState{name: p.name, writtenAt: now}
-		}
-		w.mu.Unlock()
-		if err != nil {
-			logf("peers: record conversation name: %v", err)
+		name := p.name
+		for {
+			err := w.sink.Upsert(context.Background(), p.sid, name, now.UnixMilli())
+			w.mu.Lock()
+			if err == nil {
+				w.state[p.sid] = nameState{name: name, writtenAt: now}
+			}
+			// A rename seen while this write was in flight is written next, so
+			// the last name the session had is the one that stays.
+			next, renamed := w.pending[p.sid]
+			delete(w.pending, p.sid)
+			if err == nil && renamed && next != name {
+				name = next
+				w.mu.Unlock()
+				continue
+			}
+			delete(w.inflight, p.sid)
+			w.mu.Unlock()
+			if err != nil {
+				logf("peers: record conversation name: %v", err)
+			}
+			break
 		}
 	}
 }
