@@ -94,7 +94,15 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 		// or an approve did (row approved, op claimed — and the report
 		// below then cancels/fails the claimed op, a legal step): the op is
 		// never cancelled underneath an approve that is still to succeed.
-		if cur, ok, err := m.store.GetRelayOp(id); err == nil && ok && cur.State == team.RelayAwaitingApproval && cur.RequestID != "" {
+		cur, ok, err := m.store.GetRelayOp(id)
+		if err != nil {
+			// Not knowing the op's state is not a licence to commit a
+			// terminal state over a row that may still be open.
+			m.logf("[team] relay report %s: read op: %v", id, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return
+		}
+		if ok && cur.State == team.RelayAwaitingApproval && cur.RequestID != "" {
 			if m.beforeTerminalClose != nil {
 				m.beforeTerminalClose(id) // test seam: the approve that races this report
 			}
