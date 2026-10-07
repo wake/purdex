@@ -20,8 +20,9 @@ func needsTerminate(s store.State) bool {
 // exitWorker ends exec: terminate, then archive (§5's table). A control it
 // takes itself (ctl nil) is takeControl's: a pdx holder's lease preempted,
 // so the holder can write — send, answer a permission request — no more
-// (D22, ruling R-PC-1), borrowed only when the preempt stays contended
-// (D4); a non-pdx holder answers held_by and nothing changes. That control
+// (D22, ruling R-PC-1), borrowed only when the preempt stays contended or
+// releasing the holder's lease fails (D4); a non-pdx holder answers held_by
+// and nothing changes. That control
 // is released on return, after the archive, and so also when the
 // terminate or the archive fails: the preempted holder can re-attach. A
 // given ctl (the caller's own lease, a transfer's control) is used as is

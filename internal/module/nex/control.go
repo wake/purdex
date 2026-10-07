@@ -25,7 +25,7 @@ type controlMode int
 const (
 	borrowPdx      controlMode = iota // act under a pdx holder's current lease (only as exitPreemptPdx's fall back)
 	preemptPdx                        // transfers (D22): release the pdx holder's lease, acquire our own exclusive one
-	exitPreemptPdx                    // exit, Q1, worker-rebuild (D22, R-PC-1): preempt; when that stays contended, borrow (D4)
+	exitPreemptPdx                    // exit, Q1, worker-rebuild (D22, R-PC-1): preempt; when that stays contended or the release fails, borrow (D4)
 )
 
 // How many times takeControlMode tries before it gives up on a lease that
@@ -68,7 +68,10 @@ func (m *Module) takeControl(parent context.Context, execID, callerLease, princi
 // tried again, controlPasses passes in all, then lease_contended — except
 // in exitPreemptPdx, which preempts for exitPreemptPasses passes and then
 // falls back to borrowPdx (logged): an exit never fails merely because
-// another pdx tab holds control (D4).
+// another pdx tab holds control (D4). For the same reason a release of the
+// holder's lease that fails outright (not a lease-class refusal) is
+// lease_error in preemptPdx but, in exitPreemptPdx, borrows that still-held
+// lease (logged).
 func (m *Module) takeControlMode(parent context.Context, execID, callerLease, principal string, mode controlMode) (control, *handoffError) {
 	if callerLease != "" {
 		return control{LeaseID: callerLease, PrincipalID: principal, release: noRelease}, nil
@@ -109,6 +112,13 @@ func (m *Module) takeControlMode(parent context.Context, execID, callerLease, pr
 		if err := m.releaseLease(parent, execID, row.LeaseID, row.LeasePrincipalID); err != nil {
 			if isLeaseErr(err) {
 				continue // the holder re-attached or released between our read and our release
+			}
+			if mode == exitPreemptPdx {
+				// D4: an exit never fails because of another tab. The release
+				// failed outright, so the holder's lease is still held: act
+				// under it, as the contention fall back does.
+				m.logf("nex: %s: releasing lease %s of %s failed (%v); borrowing the holder's lease instead (D4)", execID, row.LeaseID, row.LeasePrincipalID, err)
+				return control{LeaseID: row.LeaseID, PrincipalID: row.LeasePrincipalID, release: noRelease}, nil
 			}
 			return control{release: noRelease}, &handoffError{http.StatusInternalServerError, "lease_error", "releasing the holder's lease: " + err.Error(), nil}
 		}

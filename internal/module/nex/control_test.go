@@ -568,3 +568,105 @@ func TestExit_PreemptsPdxHolderLease(t *testing.T) {
 		assert.Contains(t, env.svc.releases, releaseCall{"E", lb2.ID, tab2})
 	})
 }
+
+// D4 under R-PC-1, the infra half of the fall back: when releasing a pdx
+// holder's lease fails outright (not a lease-class refusal — the store is
+// locked, the call timed out), exit's mode borrows that holder's lease and
+// logs it, as when the preempt stays contended: an exit never fails because
+// of another tab, and the holder's lease is still held, so the borrow can
+// act under it. A transfer (preemptPdx) still surfaces the error as 500
+// lease_error.
+func TestTakeControl_ExitBorrowsWhenReleasingTheHolderFails(t *testing.T) {
+	const self = "pdx:" + testHostID
+	ctx := context.Background()
+	idle := store.Execution{ID: "E", State: store.StateIdle}
+	releaseFails := func(t *testing.T) (*takebackEnv, store.Lease, *logSink) {
+		t.Helper()
+		env, lb := preemptEnv(t)
+		env.svc.releaseErr = errors.New("db locked")
+		return env, lb, captureLogs(env.handoffEnv)
+	}
+
+	t.Run("takeControl → the holder's lease borrowed, logged, never lease_error", func(t *testing.T) {
+		env, lb, logs := releaseFails(t)
+		ctl, herr := env.m.takeControl(ctx, "E", "", self)
+		require.Nil(t, herr, "an exit never fails because releasing another tab's lease failed (D4)")
+		assert.Equal(t, lb.ID, ctl.LeaseID)
+		assert.Equal(t, tab2, ctl.PrincipalID, "borrowed: the holder's lease and principal")
+		assert.Equal(t, []string{"acquire", "release"}, env.svc.Calls(), "no acquire after the failed release")
+		ctl.release()
+		assert.Len(t, env.svc.releases, 1, "a borrowed lease is never released")
+		assert.Equal(t, 1, logs.count("borrowing"), "the fall back is logged: %q", logs.lines)
+	})
+	t.Run("renewControl's re-take borrows the same way", func(t *testing.T) {
+		env, lb, _ := releaseFails(t)
+		got, herr := env.m.renewControl(ctx, "E", control{LeaseID: "L-stale", PrincipalID: self, release: noRelease}, self)
+		require.Nil(t, herr)
+		assert.Equal(t, lb.ID, got.LeaseID)
+		assert.Equal(t, tab2, got.PrincipalID)
+	})
+	t.Run("exitWorker (idle) → terminated and archived under the borrowed lease", func(t *testing.T) {
+		env, lb, _ := releaseFails(t)
+		out, herr := env.m.exitWorker(ctx, idle, nil, self)
+		require.Nil(t, herr)
+		assert.True(t, out.Terminated && out.Archived, "%+v", out)
+		assert.Equal(t, []string{"acquire", "release", "terminate", "archive"}, env.svc.Calls())
+		assert.Equal(t, []execution.TerminateRequest{{ExecutionID: "E", LeaseID: lb.ID, PrincipalID: tab2}}, env.svc.terminateCalls)
+		reqs := env.svc.ArchiveReqs()
+		require.Len(t, reqs, 1)
+		assert.Equal(t, lb.ID, reqs[0].LeaseID)
+		assert.Equal(t, tab2, reqs[0].PrincipalID)
+	})
+	t.Run("exitWorker (failed row, #1665) → renewed, then archived under the borrowed lease", func(t *testing.T) {
+		env, lb, _ := releaseFails(t)
+		failed := store.Execution{ID: "E", State: store.StateFailed}
+		env.store.script(withLease(failed, lb))
+		out, herr := env.m.exitWorker(ctx, failed, nil, self)
+		require.Nil(t, herr)
+		assert.True(t, out.Archived, "%+v", out)
+		assert.Equal(t, []string{"acquire", "release", "renew", "archive"}, env.svc.Calls())
+		assert.Equal(t, []renewCall{{"E", lb.ID, tab2}}, env.svc.renewCalls)
+	})
+	t.Run("the exit endpoint with no lease → 200, terminated under the borrowed lease", func(t *testing.T) {
+		env, lb, _ := releaseFails(t)
+		status, body := exitPost(t, env, "E", ``)
+		require.Equal(t, http.StatusOK, status, "%v", body)
+		assert.Equal(t, true, body["exited"])
+		assert.Equal(t, true, body["terminated"], "not the archive-only path")
+		assert.Equal(t, []execution.TerminateRequest{{ExecutionID: "E", LeaseID: lb.ID, PrincipalID: tab2}}, env.svc.terminateCalls)
+	})
+
+	// The transfers keep surfacing it (preemptPdx; the unit case is
+	// TestTakeControlMode_Preempt's "release fails outright").
+	t.Run("take-to-terminal → 500 lease_error, nothing done", func(t *testing.T) {
+		env := newTTEnv(t)
+		lb := liveLease("L-b", tab2)
+		env.svc.enforceLease = true
+		env.svc.heldLease = lb
+		env.svc.lease = store.Lease{ID: "L-own"}
+		env.svc.releaseErr = errors.New("db locked")
+		env.store.script(withLease(ttExec(store.StateRunning), lb))
+		status, body := env.post(t, tbExecID, ttBody())
+		assert.Equal(t, http.StatusInternalServerError, status, "%v", body)
+		assert.Equal(t, "lease_error", body["code"])
+		assert.Equal(t, []string{"acquire", "release"}, env.timeline(t))
+		env.assertNoSession(t)
+		assert.Equal(t, lb, env.svc.heldLease, "the holder keeps its lease")
+	})
+	t.Run("take-back → 500 lease_error, nothing done", func(t *testing.T) {
+		env := newTakebackEnv(t)
+		tl := env.tbTimeline()
+		lb := liveLease("L-b", tab2)
+		env.svc.enforceLease = true
+		env.svc.heldLease = lb
+		env.svc.lease = store.Lease{ID: "L-own"}
+		env.svc.releaseErr = errors.New("db locked")
+		env.store.script(withLease(runningExec(), lb))
+		status, body := env.post(t, hoCode, takebackBody())
+		assert.Equal(t, http.StatusInternalServerError, status, "%v", body)
+		assert.Equal(t, "lease_error", body["code"])
+		assert.Equal(t, []string{"acquire", "release"}, tl.snapshot())
+		assert.Empty(t, env.tmux.RawKeysSent())
+		assert.Equal(t, lb, env.svc.heldLease, "the holder keeps its lease")
+	})
+}
