@@ -142,6 +142,23 @@ func TestBuildHookPayload_WithAgentType(t *testing.T) {
 	}
 }
 
+func TestBuildHookPayload_CarriesSessionID(t *testing.T) {
+	p := buildHookPayload("", "", "PdxStop", strings.NewReader(`{"session_id":"sid-1","tool_input":{"a":1}}`), "cc", hookProvenance{})
+	if p.SessionID != "sid-1" {
+		t.Errorf("SessionID = %q, want sid-1", p.SessionID)
+	}
+	b, _ := json.Marshal(p)
+	if !strings.Contains(string(b), `"session_id":"sid-1"`) {
+		t.Errorf("wire payload lacks session_id: %s", b)
+	}
+	// Not JSON / no id: empty, and omitted from the wire.
+	p = buildHookPayload("", "", "PdxStop", strings.NewReader(`nope`), "cc", hookProvenance{})
+	b, _ = json.Marshal(p)
+	if p.SessionID != "" || strings.Contains(string(b), `"session_id"`) {
+		t.Errorf("unexpected session_id: %q %s", p.SessionID, b)
+	}
+}
+
 func TestBuildHookPayload_EmptyAgent(t *testing.T) {
 	stdin := strings.NewReader(`{}`)
 	p := buildHookPayload("", "sess", "Stop", stdin, "", hookProvenance{})

@@ -94,7 +94,12 @@ type EventRequest struct {
 	// older pdx hook binaries.
 	TmuxSessionID   string          `json:"tmux_session_id,omitempty"`
 	TmuxPaneID      string          `json:"tmux_pane_id"`
-	PurdexName      string          `json:"purdex_name"`
+	// SessionID is the agent's own session id (CC `session_id`). Optional and
+	// additive: only the non-tmux path (no TmuxSession/TmuxPaneID) uses it, so
+	// older daemons ignore it and older hooks (which omit it) fall back to the
+	// id inside RawEvent.
+	SessionID       string          `json:"session_id,omitempty"`
+	PurdexName     string          `json:"purdex_name"`
 	RawEvent        json.RawMessage `json:"raw_event"`
 	AgentType       string          `json:"agent_type"`
 	SenderPID       int             `json:"sender_pid"`
@@ -178,7 +183,16 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// (round-2 A3).
 	req.SenderStartTime = strings.TrimSpace(req.SenderStartTime)
 
-	if req.TmuxSession == "" || req.TmuxPaneID == "" || req.AgentType == "" || req.PurdexName == "" || req.SenderPID == 0 {
+	// A session outside tmux (an sdk-cli session, a Nexen worker's `claude -p`)
+	// has no pane identity; it is keyed by its agent session id instead.
+	if req.TmuxSession == "" && req.TmuxPaneID == "" && req.AgentType == "cc" {
+		if req.SessionID = strings.TrimSpace(req.SessionID); req.SessionID == "" {
+			req.SessionID = m.payloadSessionID(req)
+		}
+	}
+	nonTmux := req.TmuxSession == "" && req.TmuxPaneID == "" && req.SessionID != ""
+
+	if (!nonTmux && (req.TmuxSession == "" || req.TmuxPaneID == "")) || req.AgentType == "" || req.PurdexName == "" || req.SenderPID == 0 {
 		http.Error(w, `{"error":"schema_invalid"}`, http.StatusBadRequest)
 		return
 	}
@@ -216,8 +230,12 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if isDevMode() {
+		session := req.TmuxSession
+		if nonTmux {
+			session = NonTmuxAgentCode(req.SessionID)
+		}
 		log.Printf("[hook] trigger session=%s agent=%s purdex_name=%s chain_id=%s",
-			req.TmuxSession, req.AgentType, req.PurdexName, trace.ChainID())
+			session, req.AgentType, req.PurdexName, trace.ChainID())
 	}
 
 	if decision := verifyEventFn(m, req); !decision.Accepted {
@@ -228,6 +246,12 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	trace.Verify(req, "accepted", "verify_passed", map[string]any{"decision": "accepted"})
+
+	if nonTmux {
+		m.handleNonTmuxEvent(w, req, trace)
+		traceFinished = true
+		return
+	}
 
 	// Emit PathHint for CC PreToolUse / PostToolUse before status derivation —
 	// path hints are independent of status and should still seed the SPA cache

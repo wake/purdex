@@ -521,6 +521,7 @@ func inventoryLiveness(base ipeers.Liveness, procs agentpkg.ProcessView) ipeers.
 	live := ipeers.Liveness{
 		Stat:     base.Stat,
 		PidAlive: base.PidAlive,
+		Zombie:   base.Zombie,
 		StartTime: func(pid int) (time.Time, error) {
 			got, err := info(pid)
 			if err != nil {

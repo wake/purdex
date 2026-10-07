@@ -12,6 +12,7 @@ import { buildNotificationContent } from '../lib/notification-content'
 import { normalizeEventName } from '../lib/event-name'
 import { findTabBySessionCode, getPrimaryPane } from '../lib/pane-tree'
 import { executionIdOfAgentCode, isExecAgentCode } from '../lib/nex/worker-agent-status'
+import { isNonTmuxAgentCode } from '../lib/non-tmux-agent'
 import { readWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
 import { useHostStore } from '../stores/useHostStore'
 import { selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
@@ -150,13 +151,15 @@ interface ShouldNotifyParams {
   focusedCompositeKey: string
   hasTab: boolean
   settings: NotificationSettings
+  /** A session that is not tmux-backed (`cc-<id>`): it can never have a Purdex tab, so "no tab" is not a reason to stay quiet. */
+  nonTmux?: boolean
   notificationSilent?: boolean
   /** Caller extracts from event.detail?.error before passing in (spec §4, option A). */
   errorString?: string
 }
 
 export function shouldNotify(params: ShouldNotifyParams): boolean {
-  const { derived, eventName: rawEventName, compositeKey: ck, focusedCompositeKey, hasTab, settings, notificationSilent = false, errorString } = params
+  const { derived, eventName: rawEventName, compositeKey: ck, focusedCompositeKey, hasTab, settings, nonTmux = false, notificationSilent = false, errorString } = params
   // W2 transition: cc broadcasts PdxXxx; legacy literal keys live in shouldNotify
   // suppression checks and NotificationSettings.events. Normalize once at entry.
   const eventName = normalizeEventName(rawEventName)
@@ -167,7 +170,7 @@ export function shouldNotify(params: ShouldNotifyParams): boolean {
   if (derived === 'idle' && eventName === 'Notification') return false
   if (!settings.enabled) return false
   if (settings.events[eventName] === false) return false
-  if (!hasTab && !settings.notifyWithoutTab) return false
+  if (!hasTab && !nonTmux && !settings.notifyWithoutTab) return false
   // Only suppress when user is actively looking at this session:
   // both the app window must be focused AND the session tab must be active.
   if (focusedCompositeKey === ck && document.hasFocus()) return false
@@ -247,6 +250,7 @@ export function useNotificationDispatcher(): void {
           focusedCompositeKey,
           hasTab,
           settings,
+          nonTmux: isNonTmuxAgentCode(sessionCode),
           notificationSilent: event.detail?.notification_silent === true,
           errorString,
         })) continue
@@ -371,6 +375,11 @@ export function handleNotificationClick(action: NotificationAction): void {
           useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabId)
         }
         handled = true
+      } else if (isNonTmuxAgentCode(sessionCode)) {
+        // A session outside tmux has no tab and never gets one (its code is not a tmux code): the click only clears
+        // the unread mark and brings the app to the front.
+        useAgentStore.getState().markRead(hostId, sessionCode)
+        window.electronAPI?.focusMyWindow?.()
       } else if (isExecAgentCode(sessionCode)) {
         // A worker with no open tab: never reopen it as a tmux tab (an exec key is not a tmux code). Nothing to
         // focus, so only the unread mark is cleared (worker-pane theme spec §8.2).

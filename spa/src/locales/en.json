@@ -904,6 +904,7 @@
   "notification.fallback.permission": "Permission required: unknown tool",
   "notification.fallback.stop": "Task completed",
   "notification.fallback.stopFailure": "Task stopped unexpectedly",
+  "notification.worker_terminated": "Worker terminated",
   "notification.permission_request": "Permission required: {{tool}}",
   "notification.permission_prompt": "Permission approval required",
   "notification.elicitation_dialog": "Input required (MCP)",
