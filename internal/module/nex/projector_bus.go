@@ -31,6 +31,10 @@ var triggerKinds = map[string]bool{
 	"execution.delegated": true, "execution.rejected": true, "execution.running": true,
 	"execution.terminal": true, "execution.interrupted": true, "execution.error": true,
 	"execution.message_accepted": true, "execution.interrupt_requested": true,
+	// The peer equivalent of message_accepted (Nexen v0.20.0): a turn a
+	// peer creates publishes peer_message instead of it, and changes the
+	// same row fields (turn_count).
+	"peer_message":           true,
 	"execution.turn_stalled": true, "execution.turn_orphaned": true, "execution.terminated": true,
 	"execution.archived": true, "execution.unarchived": true, "execution.title_changed": true,
 	"execution.observer_attached": true, "execution.observer_detached": true,
