@@ -194,6 +194,22 @@ describe('ExecutionView', () => {
       expect(api.sendMessage).toHaveBeenCalledTimes(1)
     })
 
+    it('b: a submit that slips in before the lock renders is refused with the typed text kept, not cleared', async () => {
+      vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise(() => {}))
+      render(<ExecutionView {...base} isActive />)
+      const box = screen.getByRole('textbox') as HTMLTextAreaElement
+      // Same tick, no re-render in between: the second Enter reaches the pane while the box still looks enabled.
+      act(() => {
+        fireEvent.change(box, { target: { value: 'first' } })
+        fireEvent.keyDown(box, { key: 'Enter' })
+        fireEvent.change(box, { target: { value: 'second' } })
+        fireEvent.keyDown(box, { key: 'Enter' })
+      })
+      await waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1))
+      expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('second')
+      expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
+    })
+
     it('c: running background tasks and a live turn never lock the box', () => {
       patchExec({ turnLive: true, pendingSend: false, tasks: { a: {
         task_id: 'a', turn_id: 't1', kind: 'shell', task_type: 'local_bash', tool_use_id: 'tu_a', parent_tool_use_id: null, command: 'pnpm dev',

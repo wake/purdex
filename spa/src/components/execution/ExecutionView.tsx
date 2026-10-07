@@ -507,6 +507,8 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
     return { text: move.draft, walking: false }
   }
   const sendWithAttachments = (text: string, opts: SendOptions): boolean => {
+    // Refused, not dropped: false keeps the typed text in the box (the lock shows on it meanwhile).
+    if (useExecutionStore.getState().executions[key]?.sendLocked) return false
     if (encoding.current || !canSend(uploads.chips).ok) return false
     const sent = uploads.chips.filter((c) => c.status === 'done')
     const finalText = composeWithAttachments(text, sent.filter((c) => c.kind === 'path'))
