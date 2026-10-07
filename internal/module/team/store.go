@@ -58,6 +58,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db: %w", err)
 	}
+	if _, err := db.Exec(relaySchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (relay): %w", err)
+	}
 	return &Store{db: db}, nil
 }
 
