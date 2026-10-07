@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/config"
@@ -69,6 +70,9 @@ func assertOnlyRoot(t *testing.T, dataDir string) {
 	}
 	var names []string
 	for _, e := range ents {
+		if e.Name() == lockFileName { // the cross-process lock stays (deleting it would race its waiters)
+			continue
+		}
 		names = append(names, e.Name())
 	}
 	if len(names) != 1 || names[0] != PluginName {
@@ -162,7 +166,13 @@ func TestRemovePluginDir_TakesLeftoverStagingAndBackupToo(t *testing.T) {
 	if err := RemovePluginDir(dataDir); err != nil {
 		t.Fatal(err)
 	}
-	ents, _ := os.ReadDir(parent)
+	all, _ := os.ReadDir(parent)
+	var ents []os.DirEntry
+	for _, e := range all {
+		if e.Name() != lockFileName {
+			ents = append(ents, e)
+		}
+	}
 	if len(ents) != 1 || ents[0].Name() != "custom" {
 		t.Fatalf("cc-plugin/ after remove: %v (only someone else's folder may stay)", ents)
 	}
@@ -230,6 +240,12 @@ func TestExtractPlugin_SameVersionVerifiesTheTree(t *testing.T) {
 			os.WriteFile(filepath.Join(root, ".claude-plugin", "plugin.json"), []byte(`{"name":`), 0o644)
 		}, true},
 		{"plugin.json deleted", func(root string) { os.Remove(filepath.Join(root, ".claude-plugin", "plugin.json")) }, true},
+		{"plugin.json valid JSON with the name changed", func(root string) {
+			os.WriteFile(filepath.Join(root, ".claude-plugin", "plugin.json"), []byte(`{"name":"other","version":"`+v+`"}`), 0o644)
+		}, true},
+		{"plugin.json emptied to {}", func(root string) {
+			os.WriteFile(filepath.Join(root, ".claude-plugin", "plugin.json"), []byte(`{}`), 0o644)
+		}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -587,6 +603,20 @@ func hasPdxHook(t *testing.T, settingsPath string) bool {
 // takes the env entry back out, so a failure never leaves the plugin named
 // without its hooks (nor the hooks without the plugin).
 func TestInstallHooks_PartialFailureLeavesNoHalfInstall(t *testing.T) {
+	t.Run("hooks write fails: an older install's entry is put back exactly", func(t *testing.T) {
+		p, home, _ := pluginProvider(t, "1.0.0-alpha.600")
+		settingsPath := filepath.Join(home, ".claude", "settings.json")
+		os.MkdirAll(filepath.Dir(settingsPath), 0o755)
+		prev := "/Users/x/mods/a" + string(os.PathListSeparator) + "/old/data/cc-plugin/purdex"
+		os.WriteFile(settingsPath, []byte(`{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"`+prev+`"}}`), 0o644)
+		failHooks(t, false)
+		if err := p.InstallHooks("/usr/local/bin/pdx"); err == nil {
+			t.Fatal("a failed hooks write must fail the install")
+		}
+		if v, _ := envDirs(t, readSettings(t, settingsPath)); v != prev {
+			t.Fatalf("CLAUDE_CODE_PLUGIN_DIRS = %q, want the value before the install %q", v, prev)
+		}
+	})
 	t.Run("hooks write fails: env is taken back out, other entries kept", func(t *testing.T) {
 		p, home, _ := pluginProvider(t, "1.0.0-alpha.600")
 		settingsPath := filepath.Join(home, ".claude", "settings.json")
@@ -649,4 +679,43 @@ func TestRemoveHooks_TriesEveryStepAndJoinsErrors(t *testing.T) {
 			t.Fatalf("plugin dir must still be removed (%v)", err)
 		}
 	})
+}
+
+// Critic on PR #1752: extraction and removal take a cross-process flock on
+// <cc-plugin>/.purdex.lock — the daemon's setup route and a `pdx setup` run
+// without it are two processes. Held here from the test (another open file
+// description, as another process would hold it), RemovePluginDir waits for
+// it instead of deleting a staging or backup dir in use.
+func TestRemovePluginDir_WaitsForTheCrossProcessLock(t *testing.T) {
+	dataDir := t.TempDir()
+	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", ""); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockPluginParent(filepath.Dir(PluginRoot(dataDir)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- RemovePluginDir(dataDir) }()
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("RemovePluginDir returned (%v) while another holder had the lock", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if _, err := os.Stat(PluginRoot(dataDir)); err != nil {
+		t.Fatalf("the tree must still be there while the lock is held: %v", err)
+	}
+	unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RemovePluginDir did not proceed once the lock was released")
+	}
+	if _, err := os.Stat(PluginRoot(dataDir)); !os.IsNotExist(err) {
+		t.Fatalf("tree not removed: %v", err)
+	}
 }

@@ -8,9 +8,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 // PluginDirName is the folder under <data_dir> that holds extracted Claude
@@ -65,6 +67,11 @@ func ExtractPlugin(src fs.FS, dataDir, version, pdxPath, cfgPath string) (root s
 	}
 	extractMu.Lock()
 	defer extractMu.Unlock()
+	unlock, err := lockPluginParent(filepath.Dir(root))
+	if err != nil {
+		return root, false, err
+	}
+	defer unlock()
 	// A binary built without ldflags reports "unknown"; such a dev build always
 	// re-extracts, so an edited mod reaches the next session without a bump.
 	// A same VERSION is not proof the tree is whole: a managed file that is
@@ -95,7 +102,7 @@ func ExtractPlugin(src fs.FS, dataDir, version, pdxPath, cfgPath string) (root s
 }
 
 // manifestPath is the one embedded file the extractor rewrites (the version
-// stamp), so treeMatches only checks that it is there and is JSON.
+// stamp), so treeMatches compares it with that key set aside.
 const manifestPath = ".claude-plugin/plugin.json"
 
 // treeMatches reports whether every embedded file is at root with the same
@@ -114,7 +121,14 @@ func treeMatches(src fs.FS, root string) bool {
 			return err
 		}
 		if p == manifestPath {
-			if !json.Valid(got) {
+			// The extractor stamps "version"; everything else must be the
+			// embedded manifest's (critic on PR #1752: valid JSON with the
+			// name changed is not a whole tree).
+			want, err := fs.ReadFile(src, p)
+			if err != nil {
+				return err
+			}
+			if !sameManifest(got, want) {
 				return errTreeDiffers
 			}
 			return nil
@@ -132,6 +146,33 @@ func treeMatches(src fs.FS, root string) bool {
 }
 
 var errTreeDiffers = errors.New("extracted tree differs from the embedded one")
+
+// lockFileName is the cross-process lock beside the extracted tree: the
+// daemon's setup route and a `pdx setup` run without the daemon are two
+// processes, and extractMu covers only one (critic on PR #1752). flock is
+// per open file description, so it also serialises two goroutines of one
+// process; extractMu stays as the cheap in-process guard.
+const lockFileName = ".purdex.lock"
+
+// lockPluginParent takes an exclusive flock on <parent>/.purdex.lock,
+// creating parent and the file as needed; the returned func releases it.
+func lockPluginParent(parent string) (func(), error) {
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return nil, fmt.Errorf("create %s: %w", parent, err)
+	}
+	f, err := os.OpenFile(filepath.Join(parent, lockFileName), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open plugin lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("lock plugin dir: %w", err)
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
+}
 
 // fillStaging writes the whole tree into staging: the embedded files,
 // VERSION, pdx.json and the stamped manifest.
@@ -276,6 +317,14 @@ func RemovePluginDir(dataDir string) error {
 	extractMu.Lock()
 	defer extractMu.Unlock()
 	root := PluginRoot(dataDir)
+	if _, err := os.Stat(filepath.Dir(root)); os.IsNotExist(err) {
+		return nil // never installed: nothing to lock, nothing to remove
+	}
+	unlock, err := lockPluginParent(filepath.Dir(root))
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	leftovers := []string{root + ".tmp"}
 	for _, pat := range []string{stagingPattern, backupPattern} {
 		m, _ := filepath.Glob(filepath.Join(filepath.Dir(root), pat))
@@ -337,6 +386,53 @@ func mergePluginDirs(settingsPath, pluginRoot string, remove bool) error {
 	return writeSettingsAtomic(settingsPath, settings)
 }
 
+// readPluginDirs returns settings.env.CLAUDE_CODE_PLUGIN_DIRS as it is (and
+// whether it is set at all); a missing settings file is "not set".
+func readPluginDirs(settingsPath string) (string, bool, error) {
+	settings, err := loadSettings(settingsPath)
+	if err != nil {
+		return "", false, err
+	}
+	env, err := envMapForMerge(settings)
+	if err != nil {
+		return "", false, err
+	}
+	v, ok := env[pluginDirsEnv]
+	if !ok || v == nil {
+		return "", false, nil
+	}
+	s, isStr := v.(string)
+	if !isStr {
+		return "", false, fmt.Errorf("claude env %s has unsupported value shape", pluginDirsEnv)
+	}
+	return s, true, nil
+}
+
+// restorePluginDirs puts settings.env.CLAUDE_CODE_PLUGIN_DIRS back to a value
+// readPluginDirs returned (unset when present is false), touching nothing
+// else.
+func restorePluginDirs(settingsPath, value string, present bool) error {
+	settings, err := loadSettings(settingsPath)
+	if err != nil {
+		return err
+	}
+	env, err := envMapForMerge(settings)
+	if err != nil {
+		return err
+	}
+	if present {
+		env[pluginDirsEnv] = value
+	} else {
+		delete(env, pluginDirsEnv)
+	}
+	if len(env) == 0 {
+		delete(settings, "env")
+	} else {
+		settings["env"] = env
+	}
+	return writeSettingsAtomic(settingsPath, settings)
+}
+
 // isPurdexPluginDir reports whether a CLAUDE_CODE_PLUGIN_DIRS entry is a
 // Purdex extraction: its last two elements are cc-plugin/purdex, under any
 // data dir.
@@ -355,4 +451,16 @@ func envMapForMerge(settings map[string]any) (map[string]any, error) {
 		return nil, fmt.Errorf("claude settings env has unsupported value shape")
 	}
 	return env, nil
+}
+
+// sameManifest reports whether two plugin.json documents are equal once the
+// "version" key the extractor stamps is set aside.
+func sameManifest(got, want []byte) bool {
+	var g, w map[string]any
+	if json.Unmarshal(got, &g) != nil || json.Unmarshal(want, &w) != nil {
+		return false
+	}
+	delete(g, "version")
+	delete(w, "version")
+	return reflect.DeepEqual(g, w)
 }

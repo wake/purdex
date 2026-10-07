@@ -30,13 +30,23 @@ func (p *Provider) InstallHooks(pdxPath string) error {
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
+	// The env value as it was, so a failed hooks write puts back exactly that
+	// (critic on PR #1752): a still-working entry of an older install must not
+	// be lost because this install failed half way.
+	prevDirs, prevPresent, snapErr := readPluginDirs(settingsPath)
 	root, err := p.installPlugin(settingsPath, pdxPath)
 	if err != nil {
 		return err
 	}
 	if err := mergeHooksFn(settingsPath, pdxPath, false); err != nil {
 		if root != "" {
-			if rerr := mergeEnvFn(settingsPath, root, true); rerr != nil {
+			var rerr error
+			if snapErr == nil {
+				rerr = restorePluginDirs(settingsPath, prevDirs, prevPresent)
+			} else {
+				rerr = mergeEnvFn(settingsPath, root, true)
+			}
+			if rerr != nil {
 				return errors.Join(err, fmt.Errorf("undo plugin env: %w", rerr))
 			}
 		}
