@@ -33,6 +33,15 @@ describe('live workers', () => {
     expect(liveEntityRows(rows).map((x) => x.id)).toEqual(['x', 'new'])
   })
 
+  it('a newer terminated stint does not hide an older live stint of the same entity', () => {
+    const rows = [
+      r({ id: 'older-live', session_id: 'S', created_at: 10 }),
+      r({ id: 'newer-dead', session_id: 'S', state: 'terminated', created_at: 20 }),
+    ]
+    expect(liveEntityRows(rows).map((x) => x.id)).toEqual(['older-live'])
+    expect(liveEntityRows([...rows].reverse()).map((x) => x.id)).toEqual(['older-live'])
+  })
+
   it('breaks a created_at tie by the larger id', () => {
     const rows = [r({ id: '01B', session_id: 'S', created_at: 5 }), r({ id: '01A', session_id: 'S', created_at: 5 })]
     expect(liveEntityRows(rows).map((x) => x.id)).toEqual(['01B'])
