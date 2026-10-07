@@ -199,6 +199,14 @@ describe('ExecutionRowCompact — awaiting approval', () => {
     expect(screen.queryByTestId('executions-awaiting')).toBeNull()
   })
 
+  it.each([
+    ['terminated', {}], ['rejected', {}], ['failed', {}], ['idle', { archived: true }],
+  ])('pending + %s %j: no waiting dot text, no icon', (state, extra) => {
+    renderRow(row({ state, ...extra, pending_permission: pending }))
+    expect(screen.queryByTestId('executions-awaiting')).toBeNull()
+    expect(screen.getByTestId('executions-state-dot')).not.toHaveAttribute('title', 'Awaiting approval')
+  })
+
   it('a queued row keeps the plain warning dot with no icon', () => {
     renderRow(row({ state: 'queued', activity: { phase: 'queued', open_tools: 0 } }))
     const dot = screen.getByTestId('executions-state-dot')

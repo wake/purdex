@@ -190,6 +190,25 @@ describe('applyDurableEvent', () => {
     expect(s.summary?.archived).toBe(true)
   })
 
+  it.each([
+    ['execution.terminated', { principal_id: 'p' }],
+    ['execution.archived', { principal_id: 'p' }],
+    ['execution.rejected', { reason: 'nope' }],
+    ['execution.terminal', { turn_id: 't', reason: 'error', state: 'failed' }],
+  ])('%s clears a stale pending_permission immediately (no wait for the refetch)', (kind, payload) => {
+    const pend = { request_id: 'r1', tool_name: 'Bash', since: 1 }
+    let s: ExecutionState = { ...defaultExecutionState(), summary: { ...summary(), pending_permission: pend } }
+    s = applyDurableEvent(s, ev(1, kind, payload))
+    expect(s.summary?.pending_permission).toBeNull()
+  })
+
+  it('a live-state terminal event keeps pending_permission', () => {
+    const pend = { request_id: 'r1', tool_name: 'Bash', since: 1 }
+    let s: ExecutionState = { ...defaultExecutionState(), summary: { ...summary(), pending_permission: pend } }
+    s = applyDurableEvent(s, ev(1, 'execution.terminal', { turn_id: 't', reason: 'completed', state: 'idle' }))
+    expect(s.summary?.pending_permission).toEqual(pend)
+  })
+
   it('does not invent summary fields when there is no summary yet', () => {
     const s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.running', {}))
     expect(s.summary).toBeNull()
@@ -1273,5 +1292,16 @@ describe('permission events (Nexen v0.19.0 permission.requested / permission.res
     // Still one guard for all: an event at or below lastSeq is dropped whatever its kind.
     expect(applyDurableEvent(once, resolved(13, 'req_bg', 'allowed'))).toBe(once)
     expect(applyDurableEvent(once, at(14, 'assistant', 1, { type: 'assistant' }))).toBe(once)
+  })
+})
+
+describe('refetch-failure regression: an ended worker never reads as waiting', () => {
+  it('after terminated the local summary is consistent even though summaryStale stays true', async () => {
+    const { isAwaitingApproval } = await import('./worker-summary')
+    const pend = { request_id: 'r1', tool_name: 'Bash', since: 1 }
+    let s: ExecutionState = { ...defaultExecutionState(), summary: { ...summary(), state: 'running', pending_permission: pend } }
+    s = applyDurableEvent(s, ev(1, 'execution.terminated', { principal_id: 'p' }))
+    expect(s.summaryStale).toBe(true)
+    expect(isAwaitingApproval(s.summary)).toBe(false)
   })
 })

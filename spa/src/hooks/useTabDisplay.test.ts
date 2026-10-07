@@ -372,6 +372,15 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
       expect(result.current.displayTitle).toBe('Fix the bug - repo')
     })
 
+    it.each([
+      ['terminated', {}], ['rejected', {}], ['failed', {}], ['idle', { archived: true }],
+    ])('pending + %s %j: no suffix', (state, extra) => {
+      useI18nStore.getState().setLocale('zh-TW')
+      setLiveSummary({ state, ...extra, pending_permission: pending })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Fix the bug - repo')
+    })
+
     it('the field absent (old daemon): no suffix', () => {
       useI18nStore.getState().setLocale('zh-TW')
       setLiveSummary({ state: 'running' })

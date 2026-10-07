@@ -766,6 +766,15 @@ describe('ExecutionHeader', () => {
       expect(screen.getByTestId('execution-state')).toHaveTextContent(/^等待核准$/)
     })
 
+    it.each([
+      ['terminated', {}], ['rejected', {}], ['failed', {}], ['idle', { archived: true }],
+    ])('pending + %s %j: no 等待核准 text, no icon', (state, extra) => {
+      act(() => { useI18nStore.getState().setLocale('zh-TW') })
+      render(<ExecutionHeader {...baseProps} summary={summary({ state, ...extra, pending_permission: pending })} onTakeBack={vi.fn()} />)
+      expect(screen.getByTestId('execution-state')).not.toHaveTextContent('等待核准')
+      expect(screen.queryByTestId('execution-state-awaiting')).toBeNull()
+    })
+
     it('pending_permission: null → the raw state on its own colour, no icon', () => {
       render(<ExecutionHeader {...baseProps} summary={summary({ state: 'running', pending_permission: null })} onTakeBack={vi.fn()} />)
       const state = screen.getByTestId('execution-state')

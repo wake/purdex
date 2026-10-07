@@ -21,6 +21,19 @@ describe('isAwaitingApproval (permission channel PC2: the summary decides, no ev
   })
 })
 
+describe('isAwaitingApproval is lifecycle-aware (an ended worker is never waiting)', () => {
+  const pending = { request_id: 'r1', tool_name: 'Bash', since: 1 }
+  it.each(['queued', 'running', 'idle'])('pending + %s → awaiting', (state) => {
+    expect(isAwaitingApproval({ state, pending_permission: pending })).toBe(true)
+  })
+  it.each(['terminated', 'rejected', 'failed'])('pending + %s → not awaiting', (state) => {
+    expect(isAwaitingApproval({ state, pending_permission: pending })).toBe(false)
+  })
+  it('pending + archived → not awaiting', () => {
+    expect(isAwaitingApproval({ state: 'idle', archived: true, pending_permission: pending })).toBe(false)
+  })
+})
+
 describe('workerTitleOf (spec §8.4; phase E: session_title gated by the host capability)', () => {
   type Summary = Pick<ExecutionSummary, 'brief' | 'cwd' | 'session_title'>
   const summary = (over: Partial<Summary> = {}): Summary => ({ brief: 'Fix the bug', cwd: '/w/repo', ...over })
