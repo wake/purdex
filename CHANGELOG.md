@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.550] - 2026-10-07
+
+> 只動 SPA（快轉主 checkout 即可），daemon 不用重啟。Electron 行為不變。
+
+### Changed：SPA 純瀏覽器路徑收斂 — 第 2 批（#1746）
+
+移除通知派送在沒有 Electron 時退回 Web Notification 的兩處 fallback（`useNotificationDispatcher`），以及開發環境頁「重新載入 SPA」按鈕的 `location.reload()` fallback（該區段只在 Electron 才註冊）。
+
 ## [1.0.0-alpha.549] - 2026-10-07
 
 > 純 SPA：主 checkout 快轉後 dev server 立即生效（Mac App 走 dev server 時自動帶到）；daemon、`pdx` 指令、Electron 都沒有改動，不需要重啟。
