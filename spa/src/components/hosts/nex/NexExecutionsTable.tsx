@@ -146,6 +146,14 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
   // (its revision), so its failure is the one worth showing first.
   const loadError = showArchived ? (shared.error ?? archived.error) : shared.error
 
+  // A terminate confirmation belongs to the row it was opened on: once that
+  // row leaves the rendered slice (removed, re-sorted past the page, mode
+  // switch) the confirmation must not come back when it reappears.
+  useEffect(() => {
+    if (confirmTerminateId === null) return
+    if (!items.slice(0, visibleCount).some((r) => r.id === confirmTerminateId)) setConfirmTerminateId(null)
+  }, [items, visibleCount, confirmTerminateId])
+
   const handleOpen = (row: ExecutionSummary) => {
     if (!isRefShownNow(hostId)) return
     // Spec §4.4.3: go through the same helper the deeplink resolver uses

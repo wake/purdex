@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import NexExecutionsTable from './NexExecutionsTable'
 import { LIST_REFRESH_DEBOUNCE_MS, resetExecutionListForTests, useExecutionListStore } from '../../../stores/useExecutionListStore'
 import { useNexHostStore, type NexHostEntry } from '../../../stores/useNexHostStore'
@@ -103,6 +103,26 @@ describe('NexExecutionsTable', () => {
     fireEvent.click(screen.getByText(/show more/i))
     expect(rows()).toBe(250)
     expect(screen.queryByText(/show more/i)).toBeNull()
+  })
+
+  it('a terminate confirmation does not survive its row leaving the rendered slice (#1593 R2)', async () => {
+    const mk = (n: number) => Array.from({ length: n }, (_, i) => row({ id: `exc_${String(i).padStart(16, '0')}` }))
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: mk(250), next_cursor: '' })
+    const { container } = render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByText(/show more/i))
+    const lastRow = () => container.querySelectorAll('tbody tr')[199] as HTMLElement
+    fireEvent.click(within(lastRow()).getByRole('button', { name: /terminate/i }))
+    expect(within(lastRow()).getByRole('button', { name: /confirm/i })).toBeInTheDocument()
+    // a refresh removes the confirming row from the list, then it comes back
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: mk(100), next_cursor: '' })
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: mk(250), next_cursor: '' })
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByText(/show more/i))
+    expect(within(lastRow()).queryByRole('button', { name: /confirm/i })).toBeNull()
   })
 
   it('a host switch starts from 100 rows again, not the grown count (#1593)', async () => {
