@@ -202,11 +202,12 @@ describe('applyDurableEvent', () => {
     expect(s.summary?.pending_permission).toBeNull()
   })
 
-  it('a live-state terminal event keeps pending_permission', () => {
+  it('an idle-state terminal event also clears pending_permission (the turn ended; no refetch needed)', () => {
     const pend = { request_id: 'r1', tool_name: 'Bash', since: 1 }
     let s: ExecutionState = { ...defaultExecutionState(), summary: { ...summary(), pending_permission: pend } }
     s = applyDurableEvent(s, ev(1, 'execution.terminal', { turn_id: 't', reason: 'completed', state: 'idle' }))
-    expect(s.summary?.pending_permission).toEqual(pend)
+    expect(s.summary?.pending_permission).toBeNull()
+    expect(s.summary?.state).toBe('idle')
   })
 
   it('does not invent summary fields when there is no summary yet', () => {

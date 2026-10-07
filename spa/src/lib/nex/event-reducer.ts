@@ -608,8 +608,8 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       next = { ...next, permissions: settlePendingPermissions(next.permissions, ended ? 'execution_ended' : 'turn_ended') }
       return patchSummary(next, {
         state, ...(reason ? { last_turn_reason: reason } : {}),
-        // A turn that ended the execution (failed / terminated) leaves no live permission request.
-        ...(state === 'failed' || state === 'terminated' ? { pending_permission: null } : {}),
+        // A turn that ended (idle or not) has no pending request; the next turn's arrives via permission.requested / the refetch.
+        pending_permission: null,
       })
     }
     case 'execution.error':

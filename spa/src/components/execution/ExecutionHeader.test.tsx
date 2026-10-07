@@ -2,6 +2,8 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { useState } from 'react'
 import { render, screen, fireEvent, act, within } from '@testing-library/react'
 import ExecutionHeader from './ExecutionHeader'
+import { useExecutionStore } from '../../stores/useExecutionStore'
+import { isAwaitingApproval } from '../../lib/nex/worker-summary'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import { STATE_DOT_CLASSES } from '../../lib/nex/state-dot'
@@ -758,6 +760,17 @@ describe('ExecutionHeader', () => {
       expect(state).toHaveTextContent(/^Awaiting approval$/)
       expect(screen.getByTestId('execution-state-awaiting').querySelector('svg')).not.toBeNull()
       expect(state.previousElementSibling).toHaveClass('bg-status-warning')
+    })
+
+    it('an idle terminal event clears the awaiting state even when the summary refetch never lands', () => {
+      const st = useExecutionStore.getState()
+      st.setSummary('h1', 'exc_1', summary({ state: 'running', pending_permission: pending }))
+      st.applyEvents('h1', 'exc_1', [{ seq: 1, execution_id: 'exc_1', kind: 'execution.terminal', payload: { turn_id: 't', reason: 'completed', state: 'idle' }, created_at: 0 }])
+      const live = useExecutionStore.getState().executions['h1:exc_1'].summary!
+      expect(isAwaitingApproval(live)).toBe(false)
+      render(<ExecutionHeader {...baseProps} summary={live} onTakeBack={vi.fn()} />)
+      expect(screen.getByTestId('execution-state')).not.toHaveTextContent(/Awaiting approval|等待核准/)
+      expect(screen.queryByTestId('execution-state-awaiting')).toBeNull()
     })
 
     it('zh-TW: 等待核准', () => {
