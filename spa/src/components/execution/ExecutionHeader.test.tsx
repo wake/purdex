@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { useState } from 'react'
 import { render, screen, fireEvent, act, within } from '@testing-library/react'
 import ExecutionHeader from './ExecutionHeader'
+import { useI18nStore } from '../../stores/useI18nStore'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import { costSummary } from '../../lib/nex/cost-summary'
 import type { StreamMessage } from '../../lib/nex/message-types'
@@ -742,6 +743,42 @@ describe('ExecutionHeader', () => {
       fireEvent.click(screen.getByTestId('view-mode-room'))
       expect(screen.getByTestId('view-mode')).toBeInTheDocument()
       expect(screen.queryByTestId('worker-info-panel')).toBeNull()
+    })
+  })
+
+  // Permission channel PC2 / spec §5.4: the header's state reads 「等待核准」 with the HandPalm icon on the warning dot.
+  describe('awaiting approval', () => {
+    const pending = { request_id: 'r1', tool_name: 'Bash', since: 1_700_000_000_000 }
+    afterEach(() => { act(() => { useI18nStore.getState().setLocale('en') }) })
+
+    it('pending_permission set: the state text and the icon, on the warning dot', () => {
+      render(<ExecutionHeader {...baseProps} summary={summary({ state: 'running', pending_permission: pending })} onTakeBack={vi.fn()} />)
+      const state = screen.getByTestId('execution-state')
+      expect(state).toHaveTextContent(/^Awaiting approval$/)
+      expect(screen.getByTestId('execution-state-awaiting').querySelector('svg')).not.toBeNull()
+      expect(state.previousElementSibling).toHaveClass('bg-status-warning')
+    })
+
+    it('zh-TW: 等待核准', () => {
+      act(() => { useI18nStore.getState().setLocale('zh-TW') })
+      render(<ExecutionHeader {...baseProps} summary={summary({ state: 'running', pending_permission: pending })} onTakeBack={vi.fn()} />)
+      expect(screen.getByTestId('execution-state')).toHaveTextContent(/^等待核准$/)
+    })
+
+    it('pending_permission: null → the raw state on its own colour, no icon', () => {
+      render(<ExecutionHeader {...baseProps} summary={summary({ state: 'running', pending_permission: null })} onTakeBack={vi.fn()} />)
+      const state = screen.getByTestId('execution-state')
+      expect(state).toHaveTextContent(/^running$/)
+      expect(screen.queryByTestId('execution-state-awaiting')).toBeNull()
+      expect(state.previousElementSibling).toHaveClass('bg-status-success')
+    })
+
+    it('the field absent (old daemon) → as before', () => {
+      render(<ExecutionHeader {...baseProps} summary={summary({ state: 'running' })} onTakeBack={vi.fn()} />)
+      const state = screen.getByTestId('execution-state')
+      expect(state).toHaveTextContent(/^running$/)
+      expect(screen.queryByTestId('execution-state-awaiting')).toBeNull()
+      expect(state.previousElementSibling).toHaveClass('bg-status-success')
     })
   })
 

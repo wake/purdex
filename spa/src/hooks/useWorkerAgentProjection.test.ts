@@ -9,7 +9,8 @@ import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useHostStore } from '../stores/useHostStore'
 import { compositeKey } from '../lib/composite-key'
-import { shouldDispatch } from './useNotificationDispatcher'
+import { shouldDispatch, useNotificationDispatcher } from './useNotificationDispatcher'
+import { useNotificationSettingsStore } from '../stores/useNotificationSettingsStore'
 import { STORAGE_KEYS } from '../lib/storage'
 import { defaultExecutionState, type ExecutionState } from '../lib/nex/event-reducer'
 import { emptyListCache } from '../lib/nex/execution-list-effects'
@@ -483,6 +484,84 @@ describe('useWorkerAgentProjection', () => {
       useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
       expect(useAgentStore.getState().statuses[KEY]).toBe('running')
       stop()
+    })
+  })
+
+  // Permission channel PC2 / spec §5.4: the tab light is `waiting` while the summary carries a pending request, and
+  // that transition must never push a notification.
+  describe('awaiting approval', () => {
+    const pending = (since: number) => ({ request_id: 'r1', tool_name: 'Bash', since })
+    const turn = (endAt: number | null) => ({ turnStarts: [0], turnMeta: [{ startAt: 10, endAt, outcome: endAt === null ? null : 'ok' as const, durationMs: null }] })
+
+    it('the live summary: running → waiting while pending → running again once it is null', () => {
+      const stop = startWorkerAgentProjection()
+      setLive({ summary: summary({ state: 'running' }), turnLive: true, ...turn(null) })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+
+      setLive({ summary: summary({ state: 'running', pending_permission: pending(50) }) })
+      const ev = useAgentStore.getState().lastEvents[KEY]
+      expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
+      expect(ev.status).toBe('waiting')
+      expect(ev.detail?.notification_silent).toBe(true)
+      // State-tied stamp: the request's own start, so a re-projection after a reload is not a new event.
+      expect(ev.broadcast_ts).toBe(50)
+
+      setLive({ summary: summary({ state: 'running', pending_permission: null }) })
+      expect(useAgentStore.getState().statuses[KEY]).toBe('running')
+      stop()
+    })
+
+    it('a list row (no pane state) that is awaiting approval projects waiting', () => {
+      const stop = startWorkerAgentProjection()
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), items: [summary({ state: 'running', turn_count: 1, pending_permission: pending(70) })] } } })
+      expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
+      expect(useAgentStore.getState().lastEvents[KEY].detail?.notification_silent).toBe(true)
+      stop()
+    })
+
+    it('the field absent (old daemon) projects exactly as before', () => {
+      const stop = startWorkerAgentProjection()
+      setLive({ summary: summary({ state: 'running' }), turnLive: true, ...turn(null) })
+      useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
+      const ev = useAgentStore.getState().lastEvents[KEY]
+      expect(ev.status).toBe('running')
+      expect(ev.raw_event_name).toBe('UserPromptSubmit')
+      expect(ev.detail).toEqual({})
+      stop()
+    })
+
+    describe('no notification (PC2 forbids push)', () => {
+      let showNotification: ReturnType<typeof vi.fn>
+      beforeEach(() => {
+        localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [KEY]: 1 }))
+        useNotificationSettingsStore.setState({ agents: {} })
+        showNotification = vi.fn()
+        Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
+      })
+      afterEach(() => {
+        Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+        localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN)
+      })
+
+      it('the awaiting transition raises none; the turn ending afterwards still notifies (the pipeline is live)', () => {
+        const dispatcher = renderHook(() => useNotificationDispatcher())
+        const stop = startWorkerAgentProjection()
+        setLive({ summary: summary({ state: 'running' }), turnLive: true, ...turn(null) })
+        useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'], activeTabId: null })
+
+        setLive({ summary: summary({ state: 'running', pending_permission: pending(50) }) })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
+        expect(showNotification).not.toHaveBeenCalled()
+
+        setLive({ summary: summary({ state: 'idle', pending_permission: null }), turnLive: false, ...turn(100) })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('idle')
+        expect(showNotification).toHaveBeenCalledTimes(1)
+        expect(showNotification.mock.calls[0][0].eventName).toBe('Stop')
+        stop()
+        dispatcher.unmount()
+      })
     })
   })
 

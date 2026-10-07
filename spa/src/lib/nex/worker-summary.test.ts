@@ -1,6 +1,25 @@
 import { describe, it, expect } from 'vitest'
-import { workerTitleOf } from './worker-summary'
+import { isAwaitingApproval, workerTitleOf } from './worker-summary'
 import type { ExecutionSummary } from './types'
+
+describe('isAwaitingApproval (permission channel PC2: the summary decides, no event stream)', () => {
+  it('a pending_permission object → awaiting', () => {
+    expect(isAwaitingApproval({ pending_permission: { request_id: 'r1', tool_name: 'Bash', since: 1_700_000_000_000 } })).toBe(true)
+  })
+
+  it('pending_permission: null is an answer (nothing pending) → not awaiting', () => {
+    expect(isAwaitingApproval({ pending_permission: null })).toBe(false)
+  })
+
+  it('the field absent (a daemon older than Nexen v0.19.0) → not awaiting', () => {
+    expect(isAwaitingApproval({})).toBe(false)
+  })
+
+  it('no summary at all → not awaiting', () => {
+    expect(isAwaitingApproval(null)).toBe(false)
+    expect(isAwaitingApproval(undefined)).toBe(false)
+  })
+})
 
 describe('workerTitleOf (spec §8.4; phase E: session_title gated by the host capability)', () => {
   type Summary = Pick<ExecutionSummary, 'brief' | 'cwd' | 'session_title'>

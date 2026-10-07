@@ -158,6 +158,61 @@ describe('ExecutionRowCompact — rollup fields', () => {
   })
 })
 
+// Permission channel PC2 / spec §5.4: 「等待核准」 on a row is the warning dot plus the HandPalm icon — never the queued
+// look (queued is the same warning dot with no icon).
+describe('ExecutionRowCompact — awaiting approval', () => {
+  const pending = { request_id: 'r1', tool_name: 'Bash', since: NOW - 5_000 }
+  const tool = { phase: 'tool', tool: { name: 'Bash', tool_use_id: 't', since: 1 }, open_tools: 1 } as const
+
+  it('pending_permission set: warning dot, the HandPalm icon, and 「Awaiting approval」 as the activity tooltip (en)', () => {
+    renderRow(row({ state: 'running', activity: tool, pending_permission: pending }))
+    const dot = screen.getByTestId('executions-state-dot')
+    expect(dot).toHaveClass('bg-status-warning')
+    expect(dot).not.toHaveClass('bg-status-success')
+    expect(dot).toHaveAttribute('title', 'Awaiting approval')
+    const icon = screen.getByTestId('executions-awaiting')
+    expect(icon.querySelector('svg')).not.toBeNull()
+    expect(icon).toHaveAttribute('title', 'Awaiting approval')
+    expect(icon).toHaveClass('shrink-0', 'text-status-warning')
+  })
+
+  it('zh-TW: the tooltip reads 等待核准', () => {
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    renderRow(row({ state: 'running', pending_permission: pending }))
+    expect(screen.getByTestId('executions-state-dot')).toHaveAttribute('title', '等待核准')
+    expect(screen.getByTestId('executions-awaiting')).toHaveAttribute('title', '等待核准')
+  })
+
+  it('pending_permission: null → the row as before (state colour, activity tooltip, no icon)', () => {
+    renderRow(row({ state: 'running', activity: tool, pending_permission: null }))
+    const dot = screen.getByTestId('executions-state-dot')
+    expect(dot).toHaveClass('bg-status-success')
+    expect(dot).toHaveAttribute('title', 'Running Bash')
+    expect(screen.queryByTestId('executions-awaiting')).toBeNull()
+  })
+
+  it('the field absent (old daemon) → the row as before', () => {
+    renderRow(row({ state: 'running', activity: tool }))
+    const dot = screen.getByTestId('executions-state-dot')
+    expect(dot).toHaveClass('bg-status-success')
+    expect(dot).toHaveAttribute('title', 'Running Bash')
+    expect(screen.queryByTestId('executions-awaiting')).toBeNull()
+  })
+
+  it('a queued row keeps the plain warning dot with no icon', () => {
+    renderRow(row({ state: 'queued', activity: { phase: 'queued', open_tools: 0 } }))
+    const dot = screen.getByTestId('executions-state-dot')
+    expect(dot).toHaveClass('bg-status-warning')
+    expect(dot).toHaveAttribute('title', 'Queued')
+    expect(screen.queryByTestId('executions-awaiting')).toBeNull()
+  })
+
+  it('a non-openable row names the state in its aria-label', () => {
+    render(<ExecutionRowCompact row={row({ pending_permission: pending })} daemonHostId={null} now={NOW} />)
+    expect(screen.getByTestId('executions-row').getAttribute('aria-label') ?? '').toContain('Awaiting approval')
+  })
+})
+
 describe('ExecutionRowCompact — exit action', () => {
   it('renders an exit action beside the open button, not inside it', () => {
     const onOpen = vi.fn(), onExit = vi.fn()

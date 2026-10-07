@@ -41,10 +41,12 @@ export interface WorkerStatusInput {
   hasTurn: boolean
   archived: boolean
   runningSubagents: { task_id: string; subagent_type?: string; started_at: number | null }[]
+  /** `isAwaitingApproval(summary)` (permission channel PC2). Absent = false, so an old daemon projects as before. */
+  awaitingApproval?: boolean
 }
 
 export interface WorkerProjection {
-  status: 'running' | 'idle' | 'error' | 'clear'
+  status: 'running' | 'waiting' | 'idle' | 'error' | 'clear'
   subagents: SubagentRef[]
 }
 
@@ -53,6 +55,9 @@ export interface WorkerProjection {
  * Rules apply in order, first match wins:
  * 1. not live (`isLiveRow`: `archived`, or execution `state === 'terminated'`) → `clear`.
  * 2. `state === 'rejected'` (rejected before any turn ran) → `error`.
+ * 2a. awaiting approval (a pending permission request on the summary, permission channel PC2) → `waiting`. Ahead of
+ *    rule 3: the worker is `running` while it waits (Nexen contract §9.8 §4.6), and also after the turn's `result`
+ *    when a background subagent asks.
  * 3. a live turn, or `state` `queued`/`running` → `running`. This is also
  *    the error guard: it is checked before rule 4, so a stale `error` is
  *    replaced the moment the next accepted turn goes live.
@@ -76,6 +81,8 @@ export function projectWorkerStatus(input: WorkerStatusInput): WorkerProjection 
     status = 'clear'
   } else if (input.state === 'rejected') {
     status = 'error'
+  } else if (input.awaitingApproval === true) {
+    status = 'waiting'
   } else if (input.turnLive || input.state === 'queued' || input.state === 'running') {
     status = 'running'
   } else if (input.lastOutcome === 'failed' || input.state === 'failed') {

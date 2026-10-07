@@ -17,7 +17,7 @@ import { useExecutionStore } from '../stores/useExecutionStore'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { useWorkerSettingsStore } from '../stores/useWorkerSettingsStore'
 import { execAgentCode } from '../lib/nex/worker-agent-status'
-import { liveWorkerSummary, rowWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
+import { isAwaitingApproval, liveWorkerSummary, rowWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
 import { selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
 import { workerIcon } from '../lib/worker-icon'
 import type { ExecutionSummary } from '../lib/nex/types'
@@ -101,9 +101,12 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
 
   const rawPaneTitle = dynamicTabName && !isTerminated && !!agentType ? session?.pane_title : undefined
   const paneTitle = rawPaneTitle && stripMarker ? stripAgentTitleMarker(rawPaneTitle, agentType) : rawPaneTitle
+  // Shared with the notification dispatcher's worker title (worker-summary.ts).
+  const workerTitle = exec ? workerTitleOf(exec, workerSummary, titleSupported) ?? baseLabel : ''
   const displayTitle = exec
-    // Shared with the notification dispatcher's worker title (worker-summary.ts).
-    ? workerTitleOf(exec, workerSummary, titleSupported) ?? baseLabel
+    // Permission channel PC2 (spec §5.4): 「（等待核准）」 while a request is pending — a suffix, like the closed-terminal
+    // one (`page.pane.terminated`); gone once `pending_permission` is null, never there on an old daemon.
+    ? isAwaitingApproval(workerSummary) ? t('page.pane.awaiting_approval', { name: workerTitle }) : workerTitle
     : paneTitle ? `${paneTitle} - ${baseLabel}` : baseLabel
 
   return {
