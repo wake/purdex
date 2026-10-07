@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.549] - 2026-10-07
+
+> 純 SPA：主 checkout 快轉後 dev server 立即生效（Mac App 走 dev server 時自動帶到）；daemon、`pdx` 指令、Electron 都沒有改動，不需要重啟。
+
+### Added：lead / member / team 與 context 接力 — P5a-3b（#1742）
+
+接力的介面（spec §8.7、§6.7；plan v2 Tasks 5a.12–5a.14）。至此 P5a（daemon 接力核心）全部完成。
+
+- **Hosts › 接力**：每台主機兩個開關——「solo 的 session 自己接力」與「lead 自己接力」，預設都開；下方註明「member 的接力一律由 lead 安排」。daemon 太舊時顯示不支援、離線時鎖住；連點兩下會正確地切回原值。
+- **接力申請對話框**：session 用量到門檻時跳出，顯示主機、session、位址、ref、工作目錄、「已用 72%」與說明「核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）」，一鍵核准／拒絕（不像 lead 申請要選人數與目錄）。
+- **「這個 session 不再詢問」**：勾選後在送出決定前先暫停這個 session 的接力詢問；暫停失敗會跳提示、決定照送。daemon 重啟中（斷線）時，決定連同暫停一起排隊，重連後先暫停再送決定。
+- **通知標題**：「mlab：purdex-tester 申請接力（已用 72%）」。
+
+Review 後補強：斷線時暫停隨決定排隊、開關連點（R1）；重連時暫停失敗不再靜默、離線連點不覆寫先按的決定（攻擊方）。
+
 ## [1.0.0-alpha.548] - 2026-10-07
 
 > 只動 SPA（快轉主 checkout 即可），daemon 不用重啟。Electron 行為不變。
