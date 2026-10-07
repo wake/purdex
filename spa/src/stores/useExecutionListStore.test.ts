@@ -15,6 +15,9 @@ import type { NexInfo } from '../lib/host-api'
 import * as api from '../lib/nex/nex-api'
 import * as sse from '../lib/nex/nex-sse'
 import type { NexSseOptions } from '../lib/nex/nex-sse'
+import { SseParser } from '../lib/nex/sse-parser'
+import { useExecutionStore } from './useExecutionStore'
+import sitewidePeerSse from '../lib/nex/__fixtures__/peer-mailbox/event-peer-message.sitewide.sse?raw'
 
 vi.mock('../lib/nex/nex-api', () => ({ listExecutions: vi.fn() }))
 vi.mock('../lib/nex/nex-sse', () => ({ openNexSse: vi.fn() }))
@@ -175,12 +178,33 @@ describe('useExecutionListStore', () => {
     expect(url.pathname).toBe('/api/nex/v1/events')
     const kinds = url.searchParams.getAll('kind')
     expect(kinds).toEqual([...SITE_STREAM_KINDS])
-    for (const k of ['execution.running', 'execution.terminal', 'permission.requested', 'permission.resolved', 'tool_use', 'task_end', 'execution.archived', 'result']) {
+    for (const k of ['execution.running', 'execution.terminal', 'permission.requested', 'permission.resolved', 'tool_use', 'task_end', 'execution.archived', 'result', 'peer_message']) {
       expect(kinds).toContain(k)
     }
     for (const k of ['stream_event', 'stream_snapshot', 'lease.renewed', 'assistant', 'user', 'system', 'rate_limit_event', 'control_request']) {
       expect(kinds).not.toContain(k)
     }
+  })
+
+  // Peer mailbox spec §7: a peer wake moves a row (idle → running) with no
+  // execution.message_accepted, so the list must hear peer_message. The
+  // site-wide frame is stripped (msg_id / template_version / turn_id only) and
+  // only refreshes the list — no pane's reducer sees it, no turn opens.
+  it('the recorded site-wide peer_message frame schedules a refetch and reaches no pane', async () => {
+    useExecutionListStore.getState().subscribe(A)
+    await flush()
+    expect(api.listExecutions).toHaveBeenCalledTimes(1)
+    const parser = new SseParser()
+    // The capture stops after `data:`; the dispatching blank line is the next byte on the wire.
+    const frames = [...parser.push(sitewidePeerSse), ...parser.push('\n')]
+    expect(frames).toEqual([{ id: '9', event: 'peer_message', data: expect.stringContaining('"turn_id"') }])
+
+    const panes = useExecutionStore.getState().executions
+    sseFor(A).opts.onFrame(frames[0])
+    expect(cache(A).lastSeq).toBe(9)
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_DEBOUNCE_MS)
+    expect(api.listExecutions).toHaveBeenCalledTimes(2)
+    expect(useExecutionStore.getState().executions).toBe(panes)
   })
 
   it('noise frames from a server that ignores kind= neither schedule nor postpone a refetch, but still advance lastSeq', async () => {
