@@ -125,13 +125,23 @@ func (m *Module) spawn(f func()) {
 // expires; stops the ticker and waits for both goroutines. It returns only
 // after all three, is idempotent, and is a no-op for a disabled channel.
 // The first call does the work; every other call, concurrent or later,
-// waits for it to finish. Nothing in it can fail, so every call returns
-// nil.
+// waits for it to finish, but if its own ctx ends first it closes the
+// server's connections (which ends the first call's Shutdown) and then
+// waits. Nothing in it can fail, so every call returns nil.
 func (m *Module) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	if done := m.stopDone; done != nil {
+		srv := m.srv
 		m.mu.Unlock()
-		<-done
+		select {
+		case <-done:
+		case <-ctx.Done():
+			if srv != nil {
+				m.logf("[modevents] stop: %v; closing connections", ctx.Err())
+				_ = srv.Close()
+			}
+			<-done
+		}
 		return nil
 	}
 	done := make(chan struct{})

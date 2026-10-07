@@ -248,6 +248,60 @@ func TestModule_ConcurrentStopWaitsForCleanup(t *testing.T) {
 	}
 }
 
+// Codex P1: a later Stop whose budget has run out must not wait forever
+// behind a first Stop that has a long budget and a hung handler; it forces
+// the server closed (plan Task A4), which lets the first Stop return too.
+func TestModule_SecondStopWithExpiredContextForcesClose(t *testing.T) {
+	m, c, _ := started(t, shortDir(t))
+	path := m.SocketPathForInfo()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enterOnce, releaseOnce sync.Once
+	releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseHandler) // before the Stop cleanup, which would block
+	registry(t, c).Subscribe(func(modevents.StreamInfo, modevents.Event) {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+	})
+	go func() { _, _, _ = postBatch(path, 1) }() // its handler blocks in the subscriber
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never reached the subscriber")
+	}
+
+	// Stop #1 has no deadline, so its Shutdown waits for the hung handler.
+	done1 := make(chan error, 1)
+	go func() { done1 <- m.Stop(context.Background()) }()
+	for deadline := time.Now().Add(5 * time.Second); !gone(path); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("Stop #1 never closed the listener")
+		}
+	}
+
+	// Stop #2's shared budget is already spent.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done2 := make(chan error, 1)
+	go func() { done2 <- m.Stop(ctx) }()
+	for i, done := range []chan error{done2, done1} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Stop #%d: %v", 2-i, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("Stop #%d did not return: an expired Stop must force the server closed", 2-i)
+		}
+	}
+	if n := m.running.Load(); n != 0 {
+		t.Fatalf("Stop returned with %d goroutines still running", n)
+	}
+	if !gone(path) {
+		t.Fatal("the socket must be gone")
+	}
+}
+
 // The module reports the path it actually binds at: the data dir's
 // symlinks resolved, as Listen does and as pdx.json names it.
 func TestModule_SocketPathIsResolved(t *testing.T) {
