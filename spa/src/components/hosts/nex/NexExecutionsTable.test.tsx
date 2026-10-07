@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import NexExecutionsTable from './NexExecutionsTable'
 import { LIST_REFRESH_DEBOUNCE_MS, resetExecutionListForTests, useExecutionListStore } from '../../../stores/useExecutionListStore'
 import { useNexHostStore, type NexHostEntry } from '../../../stores/useNexHostStore'
@@ -91,6 +91,61 @@ describe('NexExecutionsTable — a host hidden in this workbench (H2d-2)', () =>
 })
 
 describe('NexExecutionsTable', () => {
+  it('renders at most 100 rows at first and reveals more on demand (#1593)', async () => {
+    const many = Array.from({ length: 250 }, (_, i) => row({ id: `exc_${String(i).padStart(16, '0')}` }))
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: many, next_cursor: '' })
+    const { container } = render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    const rows = () => container.querySelectorAll('tbody tr').length
+    expect(rows()).toBe(100)
+    fireEvent.click(screen.getByText(/show more/i))
+    expect(rows()).toBe(200)
+    fireEvent.click(screen.getByText(/show more/i))
+    expect(rows()).toBe(250)
+    expect(screen.queryByText(/show more/i)).toBeNull()
+  })
+
+  it('a terminate confirmation does not survive its row leaving the rendered slice (#1593 R2)', async () => {
+    const mk = (n: number) => Array.from({ length: n }, (_, i) => row({ id: `exc_${String(i).padStart(16, '0')}` }))
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: mk(250), next_cursor: '' })
+    const { container } = render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByText(/show more/i))
+    const lastRow = () => container.querySelectorAll('tbody tr')[199] as HTMLElement
+    fireEvent.click(within(lastRow()).getByRole('button', { name: /terminate/i }))
+    expect(within(lastRow()).getByRole('button', { name: /confirm/i })).toBeInTheDocument()
+    // a refresh removes the confirming row from the list, then it comes back
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: mk(100), next_cursor: '' })
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: mk(250), next_cursor: '' })
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByText(/show more/i))
+    expect(within(lastRow()).queryByRole('button', { name: /confirm/i })).toBeNull()
+  })
+
+  it('toggling Show archived clears an open terminate confirmation (#1593 R2)', async () => {
+    render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByRole('button', { name: /terminate/i }))
+    expect(screen.getByRole('button', { name: /confirm terminate/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText(/show archived/i))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.queryByRole('button', { name: /confirm terminate/i })).toBeNull()
+  })
+
+  it('a host switch starts from 100 rows again, not the grown count (#1593)', async () => {
+    const many = Array.from({ length: 250 }, (_, i) => row({ id: `exc_${String(i).padStart(16, '0')}` }))
+    vi.mocked(api.listExecutions).mockResolvedValue({ items: many, next_cursor: '' })
+    const { container, rerender } = render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByText(/show more/i))
+    expect(container.querySelectorAll('tbody tr').length).toBe(200)
+    rerender(<NexExecutionsTable hostId="h2" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(container.querySelectorAll('tbody tr').length).toBe(100)
+  })
   it('lists executions with (you) on my lease and opens a host-scoped execution pane via the deeplink helper', async () => {
     render(<NexExecutionsTable hostId="h" enabled />)
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
