@@ -262,16 +262,18 @@ func TestSpawnCmd_PostsAgainWhileRunning(t *testing.T) {
 }
 
 // A daemon that answers running forever (PR P4-7 review): the whole wait is
-// bounded by spawnSettleBound (9 min, under the Bash tool's 10) and ends
-// exit 14 with the op id on stderr and member_start_timeout last, and no
-// member on stdout.
+// bounded by spawnSettleBound (9 min, under the Bash tool's 10). The op may
+// still run, so this is not the daemon's member_start_timeout (exit 14, a
+// killed session and a freed slot) but exit 1 with the op id on stderr, the
+// advice not to spawn again, and the CLI's spawn_wait_timeout last (critic
+// ruling); no member on stdout.
 func TestSpawnCmd_AnOpThatNeverSettlesEndsAtTheBound(t *testing.T) {
 	defer func(b time.Duration) { spawnSettleBound = b }(spawnSettleBound)
 	spawnSettleBound = 50 * time.Millisecond
 	d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnRunning}}
 	code, stdout, stderr := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet")
-	if code != ExitMemberFailed || stdout != "" || !strings.Contains(stderr, d.spawnReq[0].ID) ||
-		lastToken(stderr) != team.SpawnReasonStartTimeout {
+	if code != ExitError || stdout != "" || !strings.Contains(stderr, d.spawnReq[0].ID) ||
+		!strings.Contains(stderr, "不要直接重開") || lastToken(stderr) != "spawn_wait_timeout" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	for _, r := range d.spawnReq {

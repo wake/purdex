@@ -39,6 +39,12 @@ const (
 	// spawnStartTimeoutHint is the stderr hint of member_start_timeout: a
 	// member that never registers ran on a host without the Purdex hooks.
 	spawnStartTimeoutHint = "member 沒有在 20 秒內啟動（這台主機需要 Purdex hooks：pdx setup --agent cc）"
+	// spawnWaitTimeout is the CLI's own code, not a daemon wire code (so it
+	// is not in internal/team): `pdx spawn` stopped waiting after
+	// spawnSettleBound while the op may still run, exit 1. Only the daemon's
+	// failed{member_start_timeout} — the session killed, its place freed —
+	// is exit 14 (critic ruling on PR P4-7).
+	spawnWaitTimeout = "spawn_wait_timeout"
 )
 
 // teamRefusalCodes are the team-rule refusals these commands can meet: exit
@@ -205,8 +211,8 @@ func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string,
 // spawnSettle POSTs req until its op leaves running: the same id each time,
 // so the daemon joins the op, across a daemon restart too (Idempotent).
 // Three consecutive attempts with no answer at all are exit 20 (spec §9.1).
-// Past spawnSettleBound it gives up with exit 14: the member did not start
-// in time, though the op may still finish (stderr names it).
+// Past spawnSettleBound it stops waiting: exit 1, spawn_wait_timeout, the op
+// named on stderr, because the op may still finish on the daemon.
 func spawnSettle(ctx context.Context, client *daemonclient.Client, req team.SpawnRequest, stderr io.Writer) (team.SpawnOp, int) {
 	// A cancellation, not a deadline: the client bounds each attempt
 	// (ErrNoAnswer, counted below) only under a ctx without a deadline.
@@ -221,9 +227,9 @@ func spawnSettle(ctx context.Context, client *daemonclient.Client, req team.Spaw
 		case err == nil && op.State != team.SpawnRunning:
 			return op, ExitOK
 		case ctx.Err() == nil && bounded.Err() != nil:
-			fmt.Fprintf(stderr, "pdx spawn: spawn %s 在期限內沒有結束，daemon 上可能仍在進行；先用 pdx team 確認，再決定是否重開 %s\n",
-				req.ID, team.SpawnReasonStartTimeout)
-			return op, ExitMemberFailed
+			fmt.Fprintf(stderr, "pdx spawn: spawn %s 在期限內沒有結束，daemon 上可能仍在進行；先用 pdx team 確認，不要直接重開 %s\n",
+				req.ID, spawnWaitTimeout)
+			return op, ExitError
 		case err == nil: // running: the same body again joins the op
 			hung = 0
 		case ctx.Err() == nil && (errors.Is(err, daemonclient.ErrNoAnswer) || errors.Is(err, context.DeadlineExceeded)):
