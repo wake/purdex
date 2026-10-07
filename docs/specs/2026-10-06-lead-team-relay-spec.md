@@ -986,7 +986,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | 10 | Denied |
 | 11 | Timed out (counts as denied, U7) |
 | 12 | Cancelled or abandoned |
-| 13 | Refused by team rules: `not_lead`, `team_full`, `cwd_outside_grant`, `not_your_member`, `member_relay_is_leads`, `self_relay_off`, `self_relay_paused`, `relay_unsupported`, `already_lead`, `member_cannot_lead`, `request_open`, `no_host_for_repo`, `host_not_allowed`, `remote_unsupported` |
+| 13 | Refused by team rules: `not_lead`, `team_full`, `cwd_outside_grant`, `not_your_member`, `member_relay_is_leads`, `self_relay_off`, `self_relay_paused`, `relay_unsupported`, `already_lead`, `member_cannot_lead`, `request_open`, `no_host_for_repo`, `host_not_allowed`, `remote_unsupported`, `no_responders` (§6.6 step 1: nobody remote can answer; the mod lets the native dialog run alone). `409 ask_open` is **not** an exit 13: `pdx ask begin` adopts the open row it carries and exits 0 with its id (§6.6 step 1, P8a) |
 | 14 | The member did not start or did not respond: `member_start_timeout`, `member_unresponsive`, `remote_unreachable` |
 | 20 | Daemon unreachable through the 30 s grace |
 | 21 | Daemon does not support this (404) |

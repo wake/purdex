@@ -2534,14 +2534,16 @@ type RelayHelloResponse struct {
 	MinGrowth int    `json:"min_growth"` // RelayMinGrowth
 }
 
-// RelayBeginRequest is POST /api/relay/begin.
+// RelayBeginRequest is POST /api/relay/begin. It carries no model or
+// effort: the daemon fills SelfRelayPayload.ModelID / Effort itself from
+// the session's last statusline reading (agent.ContextUsageReader, P1 —
+// the only place Claude Code reports them, M21); the mod has no effort
+// accessor (MP8) and need not pass what the daemon already knows.
 type RelayBeginRequest struct {
 	SessionID      string  `json:"session_id"`
 	Self           bool    `json:"self"`
 	UsedPercentage float64 `json:"used_percentage"`
 	Window         int     `json:"window"`
-	ModelID        string  `json:"model_id,omitempty"`
-	Effort         string  `json:"effort,omitempty"`
 }
 
 // RelayBeginResponse is begin's 201 body.
@@ -4076,7 +4078,7 @@ and replace `Init`'s body (`:28-31`) with:
 - Test: `internal/module/team/relay_handler_test.go`
 
 **Interfaces:**
-- Produces (package `teammod`): `type TitleMover interface { Move(fromSessionID, toSessionID string, now time.Time) (bool, error) }`; `func (m *Module) WithTitles(t TitleMover) *Module`; `OriginResolver` gains `ResolveOriginBySession(sessionID string) (team.Origin, bool, error)`; `Dependencies()` = `{"peers", "hostconfig"}`; `Init` registers `team.LineageReaderKey → *Store` and requires `hostconfig.RelaySwitchesKey`; routes `POST /api/relay/hello` → 200 `RelayHelloResponse`; `POST /api/relay/self` → 200 `RelaySelfResponse` | 409 `member_relay_is_leads` | 400; `POST /api/relay/begin` → 201 `RelayBeginResponse` | 400 (not self / bad numbers) | 404 `unknown_session` | 409 `member_relay_is_leads` / `self_relay_off` / `self_relay_paused` / `relay_open` (carries `op`) | 503 `not_ready`; `GET /api/relay/wait/{id}?wait=N` → `handleGet` (200 Approval, lease renewed; 404 `not_found`). `relayRole(sessionID) string` returns `"none"` (P4 replaces its body).
+- Produces (package `teammod`): `type TitleMover interface { Move(fromSessionID, toSessionID string, now time.Time) (bool, error) }`; `func (m *Module) WithTitles(t TitleMover) *Module`; `OriginResolver` gains `ResolveOriginBySession(sessionID string) (team.Origin, bool, error)`; `Dependencies()` = `{"agent", "peers", "hostconfig"}`; `Init` registers `team.LineageReaderKey → *Store`, requires `hostconfig.RelaySwitchesKey` and optionally takes `agent.ContextUsageReader` from `agent.OwnerResolverKey` (fills the self-relay payload's `model_id` / `effort`); routes `POST /api/relay/hello` → 200 `RelayHelloResponse`; `POST /api/relay/self` → 200 `RelaySelfResponse` | 409 `member_relay_is_leads` | 400; `POST /api/relay/begin` → 201 `RelayBeginResponse` | 400 (not self / bad numbers) | 404 `unknown_session` | 409 `member_relay_is_leads` / `self_relay_off` / `self_relay_paused` / `relay_open` (carries `op`) | 503 `not_ready`; `GET /api/relay/wait/{id}?wait=N` → `handleGet` (200 Approval, lease renewed; 404 `not_found`). `relayRole(sessionID) string` returns `"none"` (P4 replaces its body).
 - Consumes: Tasks 5a.2, 5a.3, 5a.5, 5a.6; `closeWith`, `broadcast`, `createMu`, `requestHash`, `hostID()`.
 
 **Decisions (binding for P5b):**
@@ -4087,7 +4089,7 @@ and replace `Init`'s body (`:28-31`) with:
 5. `self on` under a host switch that is off answers `self_relay: "off"`: a session switch only narrows (spec §8.7 (a)).
 6. `hello` is recorded in memory (`m.modSeen map[string]helloInfo`, cap 512, oldest evicted) — the **single** mod-presence record: P6's `relay_unsupported` check reads it, and P8a-1a's `modPresent(sid)` reads it for the terminal-only degradation (P8a declares no map of its own). It does not require the session to be live.
 
-- [ ] **Step 1: Write the failing tests.** Test fixture changes in `handler_test.go` — import `"github.com/wake/purdex/internal/module/hostconfig"` after `internal/core` (`:19`); after `uid` (`:58`) add:
+- [ ] **Step 1: Write the failing tests.** Test fixture changes in `handler_test.go` — import `"github.com/wake/purdex/internal/module/agent"` and `"github.com/wake/purdex/internal/module/hostconfig"` after `internal/core` (`:19`); after `uid` (`:58`) add:
 
 ```go
 // sequentialIDs mints the daemon-side ids relay begin uses: op then request,
@@ -4150,8 +4152,37 @@ type fixture struct {
 	origins  *fakeOrigins
 	switches *fakeSwitches
 	titles   *fakeTitles
+	usage    *fakeUsage
 	sub      *core.EventSubscriber
 }
+
+// fakeUsage is the agent module's ContextUsageReader of these tests: the
+// per-session statusline reading begin copies model_id / effort from.
+// Registered under agent.OwnerResolverKey, as the agent module is in
+// production (the team module type-asserts the reader on that service,
+// as peers does).
+type fakeUsage struct {
+	mu sync.Mutex
+	by map[string]agent.ContextUsage
+}
+
+func (f *fakeUsage) set(sid, model, effort string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.by == nil {
+		f.by = map[string]agent.ContextUsage{}
+	}
+	f.by[sid] = agent.ContextUsage{ModelID: model, Effort: effort}
+}
+
+func (f *fakeUsage) ContextUsage(sid string) (agent.ContextUsage, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.by[sid]
+	return u, ok
+}
+
+var _ agent.ContextUsageReader = (*fakeUsage)(nil)
 
 // fakeTitles records title moves (spec §8.4); *store.PeerLabelStore in production.
 type fakeTitles struct {
@@ -4176,11 +4207,12 @@ func (f *fakeTitles) Move(from, to string, _ time.Time) (bool, error) {
 and in `newFixture` replace lines 91-96 with:
 
 ```go
-	f := &fixture{t: t, origins: &fakeOrigins{}, switches: &fakeSwitches{sw: hostconfig.DefaultRelaySwitches}, titles: &fakeTitles{has: map[string]bool{"sid-1": true}}}
+	f := &fixture{t: t, origins: &fakeOrigins{}, switches: &fakeSwitches{sw: hostconfig.DefaultRelaySwitches}, titles: &fakeTitles{has: map[string]bool{"sid-1": true}}, usage: &fakeUsage{}}
 	f.clock.Store(1_000_000)
 	f.core = core.New(core.CoreDeps{Config: &config.Config{HostID: "h:1", DataDir: t.TempDir()}})
 	f.core.Registry.Register(peersmod.OriginResolverKey, f.origins)
 	f.core.Registry.Register(hostconfig.RelaySwitchesKey, f.switches)
+	f.core.Registry.Register(agent.OwnerResolverKey, f.usage) // the team module asserts agent.ContextUsageReader on it
 	f.m = New().WithTitles(f.titles)
 	f.m.newID = sequentialIDs()
 ```
@@ -4195,6 +4227,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/module/hostconfig"
@@ -4202,7 +4235,7 @@ import (
 )
 
 func beginReq(sid string) team.RelayBeginRequest {
-	return team.RelayBeginRequest{SessionID: sid, Self: true, UsedPercentage: 72.4, Window: 1_000_000, ModelID: "claude-opus-5-5", Effort: "high"}
+	return team.RelayBeginRequest{SessionID: sid, Self: true, UsedPercentage: 72.4, Window: 1_000_000}
 }
 
 func (f *fixture) begin(sid string) team.RelayBeginResponse {
@@ -4234,9 +4267,14 @@ func (f *fixture) decide(id, decision string) (int, []byte) {
 
 // Spec §8.7 (b): begin opens one op in awaiting_approval and one self_relay
 // row together (10 min deadline, 30 s lease, payload with op_id and the
-// usage), broadcasts opened, and makes the handoff directory.
+// usage), broadcasts opened, and makes the handoff directory. The payload's
+// model_id / effort come from the DAEMON's statusline reading for the
+// session (agent.ContextUsageReader), not from the request — the request
+// has no such fields. Mutation gate: drop the m.usage lookup in
+// handleRelayBegin → p.ModelID == "" → red.
 func TestRelayBegin_OpensOpAndApprovalTogether(t *testing.T) {
 	f := newFixture(t)
+	f.usage.set("sid-1", "claude-opus-5-5", "high")
 	out := f.begin("sid-1")
 	if out.Op.ID != rid(1) || out.RequestID != rid(2) || out.Op.RequestID != rid(2) {
 		t.Fatalf("ids: %+v", out)
@@ -4274,6 +4312,23 @@ func TestRelayBegin_OpensOpAndApprovalTogether(t *testing.T) {
 	code, body = f.do(http.MethodPost, "/api/team/approvals", team.CreateApprovalRequest{ID: uid(9), Kind: team.KindSelfRelay, OriginInbox: "/tmp/20.sock", Reason: "x"})
 	if code != http.StatusBadRequest || decodeErr(t, body).Error != team.ErrUnsupportedKind {
 		t.Fatalf("generic create self_relay: %d %s", code, body)
+	}
+}
+
+// A session whose statusline never reported (or a daemon without the agent
+// module, m.usage nil) gets a payload without model_id / effort — the JSON
+// omits both (omitempty) and the dialog shows neither; nothing fails.
+func TestRelayBegin_NoStatuslineReadingLeavesModelAndEffortEmpty(t *testing.T) {
+	f := newFixture(t) // f.usage holds no reading for sid-2
+	out := f.begin("sid-2")
+	a, _, _ := f.m.store.Get(out.RequestID)
+	if strings.Contains(string(a.Payload), "model_id") || strings.Contains(string(a.Payload), "effort") {
+		t.Fatalf("payload must omit model_id/effort without a reading: %s", a.Payload)
+	}
+	g := newFixture(t)
+	g.m.usage = nil // a daemon whose agent module is absent
+	if out := g.begin("sid-1"); out.Op.SessionID != "sid-1" {
+		t.Fatalf("begin without a usage reader: %+v", out)
 	}
 }
 
@@ -4444,7 +4499,7 @@ func TestStart_MakesTheRelayDir(t *testing.T) {
 - [ ] **Step 2: Run and see them fail.** `go test ./internal/module/team/ -run 'TestRelayBegin|TestRelayHello|TestRelayApproval|TestStart_MakesTheRelayDir' -v` → compile errors (`undefined: hostconfig`, `f.m.newID undefined`, `New().WithTitles undefined`, `*fakeOrigins does not implement OriginResolver (missing method ResolveOriginBySession)` once the interface changes).
 
 - [ ] **Step 3: Implement.** `module.go` edits (exact):
-  - imports: add `"github.com/google/uuid"` (own group, after the stdlib block) and `"github.com/wake/purdex/internal/module/hostconfig"` after `internal/core`;
+  - imports: add `"github.com/google/uuid"` (own group, after the stdlib block), `"github.com/wake/purdex/internal/module/agent"` and `"github.com/wake/purdex/internal/module/hostconfig"` after `internal/core` (teammod → agent is a new edge; agent imports nothing of team, and peersmod already imports agent, so no cycle);
   - `OriginResolver` (`:26-29`): add after `ResolveOrigin`:
     ```go
     	// ResolveOriginBySession is ResolveOrigin keyed by CC session id: the
@@ -4462,6 +4517,10 @@ func TestStart_MakesTheRelayDir(t *testing.T) {
     	// terminal-only degradation; nothing else writes it.
     	switches hostconfig.RelaySwitchReader
     	titles   TitleMover
+    	// usage is the agent module's per-session statusline reading; begin
+    	// copies model_id / effort from it into the self_relay payload (the mod
+    	// sends neither). Nil when the agent module is absent: both stay "".
+    	usage    agent.ContextUsageReader
     	newID    func() string
     	relayDir string
     	modSeen  map[string]helloInfo
@@ -4475,7 +4534,7 @@ func TestStart_MakesTheRelayDir(t *testing.T) {
     	return m
     }
     ```
-  - `:90`: `func (m *Module) Dependencies() []string { return []string{"peers", "hostconfig"} }`
+  - `:90`: `func (m *Module) Dependencies() []string { return []string{"agent", "peers", "hostconfig"} }`
   - `Init`: after `m.origins = origins` (`:105`):
     ```go
     	sw, ok := c.Registry.Get(hostconfig.RelaySwitchesKey)
@@ -4487,7 +4546,16 @@ func TestStart_MakesTheRelayDir(t *testing.T) {
     		return fmt.Errorf("team: service %q does not implement RelaySwitchReader (%T)", hostconfig.RelaySwitchesKey, sw)
     	}
     	m.switches = switches
+    	// The statusline reading lives in the agent module (P1); as peers does,
+    	// type-assert the reader on the owner-resolver service rather than add
+    	// a registry key. Optional: a daemon without it fills no model/effort.
+    	if svc, ok := c.Registry.Get(agent.OwnerResolverKey); ok {
+    		if r, ok := svc.(agent.ContextUsageReader); ok {
+    			m.usage = r
+    		}
+    	}
     ```
+    `Dependencies()` therefore lists `"agent"` too: `[]string{"agent", "peers", "hostconfig"}` (peers already depends on agent, so the order is unchanged in practice).
     and after `m.store = store` (`:110`):
     ```go
     	m.relayDir = filepath.Join(c.Cfg.DataDir, team.RelayDir)
@@ -4714,7 +4782,16 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrSelfRelayPaused, "this session paused self relay (/relay on lifts it)", nil)
 		return
 	}
-	payload, err := json.Marshal(team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window, ModelID: req.ModelID, Effort: req.Effort})
+	// model_id / effort are the daemon's to fill (spec U18 (b), M21): the
+	// session's last statusline reading, kept by the agent module. The mod
+	// sends neither; a session without a reading shows neither.
+	sp := team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window}
+	if m.usage != nil {
+		if u, ok := m.usage.ContextUsage(req.SessionID); ok {
+			sp.ModelID, sp.Effort = u.ModelID, u.Effort
+		}
+	}
+	payload, err := json.Marshal(sp)
 	if err != nil {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "encode payload: "+err.Error(), nil)
 		return
@@ -5330,7 +5407,7 @@ Also update the `InflightResponse` comment in `wire.go:130` (`RelaysActive is a 
 - Produces: `func runRelayCmd(ctx context.Context, args []string, stdout, stderr io.Writer, clientOpts ...daemonclient.Option) int`. Grammar:
   ```
   pdx relay hello --session <sid> [--version <v>] [--agent cc] [--config <path>]         → stdout RelayHelloResponse; 0
-  pdx relay begin --self --session <sid> --used <pct> --window <n> [--model <id>] [--effort <lvl>]  → stdout {op, request_id}; 0 | 13 on the 409s (code on stderr; relay_open also prints the open op on stdout) | 1 on 404 unknown_session
+  pdx relay begin --self --session <sid> --used <pct> --window <n>  → stdout {op, request_id} (no --model / --effort: the daemon fills both from the statusline reading); 0 | 13 on the 409s (code on stderr; relay_open also prints the open op on stdout) | 1 on 404 unknown_session
   pdx relay wait <request_id> [--wait 9m]   → each GET ?wait=25 renews the lease; 0 approved (stdout Approval, state approved) | 0 still open after --wait (stdout `{"state":"open"}` — always printed, even when no poll answered; call again) | 10 denied | 11 timeout | 12 cancelled/abandoned or ctx cancelled | 20 | 21
   pdx relay self off|on|status --session <sid>   → stdout RelaySelfResponse; 0 | 13 member_relay_is_leads
   pdx relay report <op> <state> [--new-session <sid>] [--error <e>]   → stdout RelayOp; 0 | 13 bad_transition (op on stdout) | 1 not_found
@@ -5461,7 +5538,7 @@ func TestRelayCmd_UsageErrorsExit2BeforeAnyRequest(t *testing.T) {
 func TestRelayCmd_BeginPrintsOpAndRequestOrRefuses(t *testing.T) {
 	pct := 72.4
 	ok := &fakeRelayDaemon{beginStatus: 201, beginBody: team.RelayBeginResponse{Op: team.RelayOp{ID: "op-1", State: team.RelayAwaitingApproval, UsedPercentage: &pct}, RequestID: "req-1"}}
-	code, stdout, stderr := driveRelay(t, context.Background(), ok, "begin", "--self", "--session", "sid-1", "--used", "72.4", "--window", "1000000", "--model", "claude-opus-5-5", "--effort", "high")
+	code, stdout, stderr := driveRelay(t, context.Background(), ok, "begin", "--self", "--session", "sid-1", "--used", "72.4", "--window", "1000000")
 	if code != ExitOK {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
@@ -5472,7 +5549,7 @@ func TestRelayCmd_BeginPrintsOpAndRequestOrRefuses(t *testing.T) {
 	_, bodies := ok.snapshot()
 	var sent team.RelayBeginRequest
 	_ = json.Unmarshal([]byte(bodies[len(bodies)-1]), &sent)
-	if !sent.Self || sent.SessionID != "sid-1" || sent.UsedPercentage != 72.4 || sent.Window != 1_000_000 || sent.ModelID != "claude-opus-5-5" || sent.Effort != "high" {
+	if !sent.Self || sent.SessionID != "sid-1" || sent.UsedPercentage != 72.4 || sent.Window != 1_000_000 {
 		t.Fatalf("sent = %+v", sent)
 	}
 	for _, c := range []struct {
@@ -5637,7 +5714,7 @@ import (
 // These are the mod's calls (lead-team-relay spec §8.3); `pdx relay <ref>`
 // (the lead's member relay) and `claim` arrive with P6.
 const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--agent cc] [--config <path>]\n" +
-	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--model <id>] [--effort <lvl>] [--config <path>]\n" +
+	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--config <path>]\n" +
 	"       pdx relay wait <request_id> [--wait 9m] [--config <path>]\n" +
 	"       pdx relay self off|on|status --session <sid> [--config <path>]\n" +
 	"       pdx relay report <op> <state> [--new-session <sid>] [--error <e>] [--config <path>]\n" +
@@ -5799,8 +5876,6 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 	fs.BoolVar(&req.Self, "self", false, "")
 	fs.StringVar(&req.SessionID, "session", "", "")
 	fs.IntVar(&req.Window, "window", 0, "")
-	fs.StringVar(&req.ModelID, "model", "", "")
-	fs.StringVar(&req.Effort, "effort", "", "")
 	cfgPath, ok := relayFlags(fs, args, stderr)
 	if !ok {
 		return ExitUsage
@@ -7408,13 +7483,13 @@ Everything that starts a turn or runs a command goes out from a `$.clock.after` 
 ### Measured for this section (2026-10-07, mlab, Claude Code 2.1.292 CLI, 2.1.291 types)
 
 - **MP1 `claude plugin test` runs only `*.test.ts` and `*.test.tsx`** (`claude plugin test --help`: "Runs every *.test.ts and *.test.tsx under dir, each file in a child of this binary"). The preamble's `hooks/*.test.js` cannot run; the tests below are `hooks/relay.test.ts`. `register.js` stays plain JS (the probes' shape).
-- **MP2 The kit's shapes** (from the kit's own error messages, then green): an op the mod calls (`$.process.run`, `$.session.id`, `$.session.usage`, `$.session.model`, `$.fs.read`, `$.ui.toast`, `$.ui.status`, `$.ui.log`, `$.command.register`) is answered by the test's `on('<op>', …)` returning `{ value }` or `{ deny }`; the bottom of an event the test raises must be answered too (`on('session.start')` → `{ cwd }`, `on('turn.start')` → `{ turnId }`, `on('turn.complete')` → `{ text }`, `on('prompt.submit')` → `{ text, context }`, `on('command.run')` → `{ text }`, `on('session.compact')` → `{ messages }` with **at least one message**, `on('classic.SessionStart')` → `{}`); `$.turn.complete` takes `answer`, not `text`; every `on(...)` of the test must be registered **before the test's first call on `$`**; `mock.clock(on)` makes `$.clock.after` drive from `clock.advance(ms)`; `mock.env(on, {…})` answers `$.env.get`.
+- **MP2 The kit's shapes** (from the kit's own error messages, then green): an op the mod calls (`$.process.run`, `$.session.id`, `$.session.usage`, `$.fs.read`, `$.ui.toast`, `$.ui.status`, `$.ui.log`, `$.command.register`) is answered by the test's `on('<op>', …)` returning `{ value }` or `{ deny }`; the bottom of an event the test raises must be answered too (`on('session.start')` → `{ cwd }`, `on('turn.start')` → `{ turnId }`, `on('turn.complete')` → `{ text }`, `on('prompt.submit')` → `{ text, context }`, `on('command.run')` → `{ text }`, `on('session.compact')` → `{ messages }` with **at least one message**, `on('classic.SessionStart')` → `{}`); `$.turn.complete` takes `answer`, not `text`; every `on(...)` of the test must be registered **before the test's first call on `$`**; `mock.clock(on)` makes `$.clock.after` drive from `clock.advance(ms)`; `mock.env(on, {…})` answers `$.env.get`.
 - **MP3 A plugin's own `prompt.submit` hook does not see its own `$.prompt.submit`** (d.ts:2871-2876 "every hook but the calling one"; measured: a toast logged from the hook never fired for the plugin's own submit). So the hold never holds the mod's own write or seed prompt, and **own-turn recognition cannot use `prompt.submit`**: the mod recognises its turn at `turn.start` by a nonce in `e.text` (`[pdx-relay op=<id>]`), records `e.turnId`, and acts at the `turn.complete` carrying that id (`TurnStartInput.text`, d.ts:12982-12993; `turn.complete` carries `turnId`, d.ts:12906).
 - **MP4 `$.process.run` from a `$.clock.after` timer and `$.command.run` from a timer both work in the kit**; `$.env.get("PDX_RELAY_THRESHOLD")` is a string-literal read `claude plugin validate` lists ("env reads: PDX_RELAY_THRESHOLD"), so the acceptance threshold comes from the environment as in the prototype, no debug command needed.
 - **MP5 `tool.check` with a matcher `{ tool: 'Write' }` answering `{ decision: 'allow' }` wins over a bottom `ask`** for exactly the matching `file_path`; other paths and tools keep the bottom verdict.
 - **MP6 `claude plugin validate --strict` fails on a manifest without `author`** ("No author information provided"); with `author` it passes and prints the hooks, the `$` calls and the env reads of `register.js`.
 - **MP7 `session.start`'s input carries `isInteractive`** (d.ts:11345-11350: "true under the REPL, false for a `-p` run or the SDK"), which is the headless test; `$.plugin.root` is the folder holding `plugin.json` (d.ts:2269-2278).
-- **MP8 `$.session.model()` exists; there is no effort accessor** (d.ts:2660-2745 members: `cwd, root, model, turns, id, repo, usage, version, …`). The mod passes `--model` and no `--effort`; the daemon could fill `effort` from the statusline it already parses (`internal/module/agent/context_usage.go:16-24, 65-68`: `ModelID`, `Effort`) but P5a-2a's `begin` does not (deviation 8: a follow-up issue, not these PRs).
+- **MP8 `$.session.model()` exists; there is no effort accessor** (d.ts:2660-2745 members: `cwd, root, model, turns, id, repo, usage, version, …`). **Decided (codex round): the mod passes neither `--model` nor `--effort`** — the daemon's `begin` (Task 5a.7) fills both into the `self_relay` payload from the statusline reading it already keeps per session (`internal/module/agent/context_usage.go:16-24, 65-68`: `ModelID`, `Effort`, via `agent.ContextUsageReader`), which is the only place Claude Code reports them (M21). `pdx relay begin` has no such flags (Task 5a.9); deviation 8 records it.
 - **MP9 No `go:embed` exists in the repo yet** (`grep -rn go:embed` over `*.go` is empty). `embed.FS` with the pattern `all:purdex` brings the dot-folder `.claude-plugin/` in (a plain pattern skips names starting with `.`); verified by `TestFiles_HasTheLayoutClaudeLoads`.
 
 ---
@@ -8416,7 +8491,7 @@ and, in `main()` right after the usage check (`main.go:41-45`), before the `swit
 | Call | Exit / stdout the mod reads |
 |---|---|
 | `pdx relay hello --session <sid> --version 1 --agent cc` | 0 + `{ok, role, self_relay, threshold, min_growth}`; any other exit ⇒ keep defaults |
-| `pdx relay begin --self --session <sid> --used <pct> --window <n> [--model <id>]` | 0 + `{op: RelayOp, request_id}`; 13 with the stderr line `pdx relay: <detail> <code>` — the 409 code is **the last whitespace-separated token of stderr** (`member_relay_is_leads` ⇒ the mod remembers it is a member; `self_relay_off` / `self_relay_paused` / `relay_open` ⇒ nothing); 20 / 21 / 1 ⇒ nothing |
+| `pdx relay begin --self --session <sid> --used <pct> --window <n>` (no model / effort: the daemon fills both from the statusline reading) | 0 + `{op: RelayOp, request_id}`; 13 with the stderr line `pdx relay: <detail> <code>` — the 409 code is **the last whitespace-separated token of stderr** (`member_relay_is_leads` ⇒ the mod remembers it is a member; `self_relay_off` / `self_relay_paused` / `relay_open` ⇒ nothing); 20 / 21 / 1 ⇒ nothing |
 | `pdx relay wait <request_id>` | 0 + `Approval` JSON: `state: "approved"` ⇒ approved, `state: "open"` ⇒ the CLI's own ≤ 9 min bound ended with the request still open (P5a-2c always prints it, even when no poll answered), **loop again**; any other exit-0 body (empty, unparsable, another state) ⇒ not approved; 10 denied; 11 timeout; 12 cancelled / abandoned; 20 / 21 / other ⇒ treated as not approved (§8.7 (d)) |
 | `pdx relay report <op> <state> [--new-session <sid>] [--error <e>]` | 0; 13 `bad_transition` ⇒ the daemon is already past this state, **dropped** (re-sending would be refused forever); 20 / 21 / 1 ⇒ queued and re-sent at the next `turn.complete` (§8.3 "keeps relaying") |
 | `pdx msg whoami` | stdout pasted into the write prompt's facts (the prototype's `who`) |
@@ -8431,7 +8506,7 @@ The mod runs `pdx` by the path in `pdx.json` (Task 5b.2) with `timeoutMs` 35 s f
 - Test: `claude plugin test cmd/pdx/plugin/purdex`; gate `claude plugin validate --strict cmd/pdx/plugin/purdex`
 
 **Interfaces:**
-- Consumes: the `pdx relay` table above; `$.session.usage().context` `{tokens?, window, percent?}` (d.ts:10619-10645: `percent` is the status line's `used_percentage`, absent early in a session); `$.session.model()` (MP8); `turn.start.text` / `turnId` and `turn.complete.turnId` (MP3); `classic.SessionStart{source:'clear'}` after `$.command.run({command:'clear'})` (M1); `tool.check{tool, input.file_path}` (d.ts:12476-12520).
+- Consumes: the `pdx relay` table above; `$.session.usage().context` `{tokens?, window, percent?}` (d.ts:10619-10645: `percent` is the status line's `used_percentage`, absent early in a session); not `$.session.model()` — the daemon fills model/effort (MP8); `turn.start.text` / `turnId` and `turn.complete.turnId` (MP3); `classic.SessionStart{source:'clear'}` after `$.command.run({command:'clear'})` (M1); `tool.check{tool, input.file_path}` (d.ts:12476-12520).
 - Produces (the prompts the model reads — U16: 接力, never 交接; 接手 stays):
   - **Write prompt** (first line carries the nonce the mod recognises its turn by):
     > `[pdx-relay op=<op id>] 這個 session 的 context 已達接力門檻，使用者已核准接力（之後會 /clear）。`
@@ -8493,7 +8568,6 @@ function world(on: any, opts: Partial<Fake> = {}, env: Record<string, string> = 
     return { value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', async () => ({ value: f.sessionId }))
-  on('session.model', async () => ({ value: 'claude-opus-5-5' }))
   on('session.usage', async () => ({ value: { startedAt: 0, context: f.usage, rateLimits: [] } }))
   on('fs.read', async (_$: any, e: any) => (e.path in f.files ? { value: f.files[e.path] } : { deny: 'ENOENT' }))
   on('ui.toast', async (_$: any, e: any) => { f.toasts.push(e.text); return { value: undefined } })
@@ -8550,7 +8624,7 @@ test('begin at used ≥ 70: pdx relay begin --self with usage, model; status lin
   const clock = f.clock
   await start($)
   await turn($, 't1')
-  expect(f.argvs.map(sub).slice(1)).toEqual(['relay begin --self --session sid-old --used 72 --window 200000 --model claude-opus-5-5'])
+  expect(f.argvs.map(sub).slice(1)).toEqual(['relay begin --self --session sid-old --used 72 --window 200000'])
   expect(f.statuses).toEqual(['接力等待核准中'])
   await clock.advance(50)
   expect(f.argvs.map(sub).at(-1)).toBe('relay wait req-1')
@@ -8921,9 +8995,7 @@ async function whoami($) {
 async function begin($, u) {
   s.lastAskPct = u.percent
   const sid = await $.session.id()
-  const model = await $.session.model().catch(() => '')
   const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(u.percent), '--window', String(u.window)]
-  if (model) argv.push('--model', model)
   const r = await run($, argv, CALL_TIMEOUT_MS)
   if (r.exitCode === 13) {
     if (stderrCode(r) === 'member_relay_is_leads') s.role = 'member'
@@ -9488,7 +9560,7 @@ Preconditions: P5a-1..3, P5b-1..3 merged; the daemon deployed with the new binar
 2. **Cross the threshold.** Paste a long prompt (or ask the model to read a big file) so `/context` passes 5 %. At that turn's end the status line reads `接力等待核准中`, a toast names the App, and **the self-relay dialog opens on every client** (host, session title/address/ref/cwd, `已用 N%`, the one-minute line — P5a-3's body).
 3. **Deny on one client** → the dialog closes on the other at once; the status line clears; type a prompt — it runs **unchanged**. Grow usage to 15 % (not 10 %) → the dialog returns (`+10` rule). Check `pdx relay op <id>` shows the first op `cancelled` `denied`.
 4. **Type during the wait, then approve.** With the dialog open, type a short question and press Enter: it shows as sent with the spinner (M11), no turn starts. Press Esc on **another** prompt to see it abandoned while the dialog stays. Approve with one click (no Touch ID). The typed question is answered **first, intact** (its `@file` mentions expand); the answer is short (NOTE). Then the write prompt runs; the file appears at `~/.config/pdx/cc-plugin/../relay/<op>.md` — i.e. `<data_dir>/relay/<op>.md`; the screen clears; the first line of the new conversation's answer is `↪ 接手自 _<old ref>`. `pdx peers` shows the same name with `(was _<old ref>)`; `pdx msg send <host>/_<old ref> "hi"` still reaches it (P5a-1).
-5. **U18 (a):** `/status` again — the model and effort lines match step 1; `pdx relay op <id>` shows `state: done` and the self-relay row's payload has `model_id` equal to the model line (`effort` is empty here — deviation 8; the mod has no accessor and the daemon does not fill it yet).
+5. **U18 (a) and the payload (deviation 8):** before approving in step 4, `curl -s -H "Authorization: Bearer $TOKEN" http://100.64.0.2:7860/api/team/approvals/<request id>` (or `pdx relay op <op>` + the App's dialog) — the `self_relay` row's payload has **both** `model_id` and `effort` present and equal to `/status`'s model and effort lines of step 1 (the daemon filled them from the statusline). After the relay, `/status` again — the model and effort lines match step 1 (Claude Code's `/clear` keeps them); `pdx relay op <id>` shows `state: done`. Assert: payload `model_id` == model before == model after, payload `effort` == effort before == effort after. A payload missing either means the session had no statusline reading yet — retry after one more turn.
 6. **No daemon:** `pdx stop`; cross the threshold in a fresh session → nothing happens, no status line; auto-compact (if reached) runs. `pdx start`.
 7. **Measure once** (flagged in Open questions): (a) the `turn.start` text of the mod's write prompt contains `[pdx-relay op=…]` (`claude --debug` log of `turn.start`, or the transcript's first user line); (b) a wait across two `pdx relay wait` rounds (approve after > 9 min) still releases the held prompt — the loop runs in a timer dispatch, which M11 did not cover; (c) Esc on a held prompt leaves the request open; (d) **spec §8.7 (c)'s open point — does `{ skip }` on an auto-compaction that fires mid-turn let the turn continue?** Probe recipe, in a throwaway session (not the acceptance one): `claude --model claude-haiku-4-5-20251001 --dangerously-skip-permissions` with `PDX_RELAY_THRESHOLD=5`, approve the relay, then before the write turn starts give the model a long multi-tool task (e.g. "read every file under `spa/src/lib/team` and summarise each") and, while it runs, force a compaction — either reach auto-compact by context size (pad the prompt with a large file) or, as the cheaper stand-in, type `/compact` and temporarily treat `manual` as `auto` in a scratch copy of `register.js` (`e.trigger === 'auto' || e.trigger === 'manual'`). Record: did the `{ skip }` answer let the running turn finish its tool calls (watch `claude --debug` for `session.compact` → the next `tool.call`), or did the turn end? Write the answer under spec M-list as **M27** in the same docs commit as 8a.11's M25/M26. **If the turn does not continue**, apply the fallback spec §8.7 (c) names: the mod answers `next(e)` (compaction runs), remembers `s.compactedWhileApproved = true`, and the write prompt is submitted at the next `turn.complete` instead of `later()` from `settle` — one branch in `settle` and one in `turn.complete`, plus one test ("approved, compaction ran: the write prompt follows at the next turn.complete").
 8. Kill the tmux session; `pdx relay op` for the ops of this run; the retention sweeper is P5a's.
@@ -9504,7 +9576,7 @@ Preconditions: P5a-1..3, P5b-1..3 merged; the daemon deployed with the new binar
 5. **`hooks/relay.test.ts` ships inside the extracted folder** (go:embed has no exclude); it is inert at load and lets `claude plugin test <extracted folder>` run on a target host.
 6. **Own-turn recognition is by nonce in `turn.start.text`**, not by anything from `$.prompt.submit`'s result: `PromptSubmitResult` carries no `turnId` and a plugin's own `prompt.submit` hook never sees its own submit (MP3). The spec's fallback (drop, re-submit `asUser`) is not implemented; acceptance step 7 (a) confirms the text carries the nonce in a real session.
 7. **`tool.check` allows both `Write` and `Edit`** on the exact handoff path (the fix rounds often edit); the spec says "a write".
-8. **`--effort` is not passed by the mod** (no accessor, MP8), and **P5a-2a's `begin` does not fill it either** — it stores `req.Effort` as sent, so a self-relay payload opened by the mod has `model_id` and an empty `effort` (the SPA's `selfRelayPayloadOf` already omits an empty one). Filling it from the agent module's statusline parse (`internal/module/agent/context_usage.go:16-24, 65-68`, `ModelID`/`Effort`) needs a team → agent registry edge that neither P5a nor P5b adds; it is filed as a `gh issue` (label `feature`, `daemon`) when P5b-3 merges. `pdx relay begin` accepts a missing `--effort` (the preamble marks it optional). U18 (a) itself — the new conversation keeps the model and effort — is Claude Code's `/clear` behaviour and is checked by `/status` in the acceptance recipe; the payload's `effort` is display only.
+8. **Neither `--model` nor `--effort` is passed by the mod; the daemon fills both** (codex round; MP8: the mod has no effort accessor). P5a-2a's `begin` copies `ModelID` / `Effort` from the agent module's per-session statusline reading (`agent.ContextUsageReader`, `internal/module/agent/context_usage.go:16-24, 65-68`) into the `self_relay` payload; the team → agent edge is the same type-assertion on `agent.OwnerResolverKey` that peers uses, optional at `Init`. `RelayBeginRequest` has no `model_id` / `effort` fields and `pdx relay begin` no such flags. No follow-up issue remains. U18 (a) itself — the new conversation keeps the model and effort — is Claude Code's `/clear` behaviour; the acceptance recipe asserts both are present in the payload and equal before and after the relay (step 5).
 9. **The compact rule on `manual` (decided):** a `/compact` typed while a request is **open** cancels it like an auto one (a request kept open across a manual compaction would relay a conversation that just shrank); an **approved-not-written** relay is skipped only on `auto` — a manual `/compact` runs, because the person asked for it. Spec §8.7 (c) gains the sentence in this plan's spec commit.
 10. **After `begin` is refused (exit 13 / 20 / 21 / 1), the mod asks again only at +10 points**, same as after a denial, so a session with the switch off (or the daemon down) does not run `pdx relay begin` — up to a 30 s grace — at every turn's end. `/relay on` resets the guard so a user who flips the switch back is asked at once.
 11. **A hook `.catch`** is on `prompt.submit` and both `tool.check` hooks (the validate report calls them gating hooks); `session.compact` has none because its only refusal is the deliberate `{ skip }` and a thrown hook there should let compaction run.
@@ -11447,7 +11519,7 @@ func (m *Module) decideHook(w http.ResponseWriter, a team.Approval, req team.Dec
   func runAsk(args []string)
   func runAskCmd(ctx context.Context, args []string, stdout, stderr io.Writer, now func() time.Time, clientOpts ...daemonclient.Option) int
   ```
-- Consumes: `daemonclient.New / Do / Once / Idempotent / WithStderr / WithAttemptTimeout / ErrUnavailable / ErrUnsupported / ErrNoAnswer / *StatusError` (`cmd/pdx/daemonclient/client.go`), `resolveDaemonHost` (`statusline_proxy.go:145`), `Exit*` (`exitcodes.go`), Task 8a.1 bodies. `begin` is **not** marked `Idempotent()` (a replay would open a second row; a drop after the send is exit 1 and the mod runs the dialog alone); `report` is (the daemon answers the row as it is).
+- Consumes: `daemonclient.New / Do / Once / Idempotent / WithStderr / WithAttemptTimeout / ErrUnavailable / ErrUnsupported / ErrNoAnswer / *StatusError` (`cmd/pdx/daemonclient/client.go`), `resolveDaemonHost` (`statusline_proxy.go:145`), `Exit*` (`exitcodes.go`), Task 8a.1 bodies. `begin` **is** marked `Idempotent()` (codex round): the daemon keeps one open row per `(session, tool_use_id)`, so a replay after a lost response is answered `409 ask_open` with that row and the CLI adopts it — the same `{"id":…}` on stdout as a 201, exit 0. `report` is idempotent too (the daemon answers the row as it is).
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -11475,6 +11547,10 @@ type fakeAskDaemon struct {
 	mu          sync.Mutex
 	beginStatus int
 	beginBody   any
+	// dropFirstBegin: the first begin's body is read and "applied" (the row
+	// opened, id ask-1), then the connection dies without a response; every
+	// later begin for the same (session, tool_use) is 409 ask_open with it.
+	dropFirstBegin bool
 	waits       []team.AskWaitResponse
 	polls       int
 	reports     []team.AskReportRequest
@@ -11500,6 +11576,19 @@ func newFakeAskDaemon(t *testing.T) *fakeAskDaemon {
 			var req team.AskBeginRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			d.begins = append(d.begins, req)
+			if d.dropFirstBegin {
+				if len(d.begins) == 1 {
+					// The body was read and the row written; then the connection
+					// dies without an answer (as lead_test.go's dropFirstCreate).
+					if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+						conn.Close()
+					}
+					return
+				}
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(team.APIError{Error: team.ErrAskOpen, Approval: &team.Approval{ID: "ask-1", Kind: team.KindHookAsk, State: team.StateOpen}})
+				return
+			}
 			w.WriteHeader(d.beginStatus)
 			_ = json.NewEncoder(w).Encode(d.beginBody)
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/ask/wait/"):
@@ -11573,6 +11662,27 @@ func TestRunAskCmd_BeginNoRespondersExit13_AskOpenAdopts(t *testing.T) {
 	code, stdout, _ = driveAsk(t, d, time.Now, "begin", "--session", "s", "--tool-use", "t", "--payload", `{"questions":[1]}`)
 	if code != ExitOK || strings.TrimSpace(stdout) != `{"id":"ask-open-7"}` {
 		t.Fatalf("adopt: code=%d stdout=%q", code, stdout)
+	}
+}
+
+// The POST landed (the row is open) but the response was lost: begin is
+// Idempotent(), so the client replays inside the grace, the daemon answers
+// 409 ask_open with the row it opened, and the CLI adopts it — stdout
+// {"id":"ask-1"} exactly as a 201 would print, exit 0, nothing on stderr.
+// Mutation gates: drop Idempotent() → ErrSentNoResponse → exit 1 and an
+// empty stdout (the mod would run the dialog alone while a row is open);
+// treat ask_open as an error → exit 13.
+func TestRunAskCmd_BeginReplayAfterLostResponseAdoptsTheSameID(t *testing.T) {
+	d := newFakeAskDaemon(t)
+	d.dropFirstBegin = true
+	code, stdout, stderr := driveAsk(t, d, time.Now, "begin", "--session", "s", "--tool-use", "t", "--payload", `{"questions":[1]}`)
+	if code != ExitOK || strings.TrimSpace(stdout) != `{"id":"ask-1"}` || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.begins) != 2 || d.begins[0].ToolUseID != "t" || d.begins[1].ToolUseID != "t" {
+		t.Fatalf("want the dropped begin and one replay for the same tool use, got %+v", d.begins)
 	}
 }
 
@@ -11851,16 +11961,20 @@ func runAskCmd(ctx context.Context, args []string, stdout, stderr io.Writer, now
 
 func askBegin(ctx context.Context, client *daemonclient.Client, a askArgs, stdout, stderr io.Writer) int {
 	var out team.AskBeginResponse
-	// Not Idempotent(): a replayed begin would open a second row. A drop
-	// after the send is ErrSentNoResponse → exit 1 → the mod runs the
-	// native dialog alone; the daemon abandons the orphan when its lease ends.
+	// Idempotent(): the daemon keeps one open row per (session, tool_use_id)
+	// (Task 8a.2), so a replay after a lost response cannot open a second
+	// row — it is answered 409 ask_open with the row the first send opened,
+	// and that answer is a success below. Without the replay a drop after
+	// the send would be ErrSentNoResponse → exit 1 → the mod runs the native
+	// dialog alone while a row sits open for the phone.
 	_, err := client.Do(ctx, http.MethodPost, "/api/ask/begin",
-		team.AskBeginRequest{SessionID: a.session, ToolUseID: a.toolUse, Kind: a.kind, Payload: a.payload}, &out)
+		team.AskBeginRequest{SessionID: a.session, ToolUseID: a.toolUse, Kind: a.kind, Payload: a.payload}, &out, daemonclient.Idempotent())
 	if err != nil {
 		var se *daemonclient.StatusError
 		switch {
 		case errors.As(err, &se) && se.API.Error == team.ErrAskOpen && se.API.Approval != nil:
-			// The row for this tool use is already open (a retried begin): adopt it.
+			// The row for this tool use is already open (a replayed or retried
+			// begin): adopt it — the same stdout as a 201.
 			out.ID = se.API.Approval.ID
 		case errors.As(err, &se) && se.API.Error == team.ErrNoResponders:
 			// Same shape as pdx relay: `pdx ask: <detail> <code>`, the code
@@ -12711,7 +12825,7 @@ func (m *Module) answerEmptyDecision(w http.ResponseWriter, req team.HookDecideR
 - Produces: the `tool.call` hook on `AskUserQuestion` (spec §6.6 steps 1–7). Order of operations, which differs from the spec's step order in one deliberate way: **`next(e)` is issued first, `pdx ask begin` second**, so the native dialog never waits for the daemon (a restarting daemon costs the person nothing; `no_responders` and every failure just let the dialog run). If the person answers before `begin` returns, the row `begin` did open is reported `answered_local` / `dismissed` after the fact so the cards still show the terminal's answer.
   - a subagent's call (`e.agentId` set) ⇒ `next(e)` as the very first line, no pdx call (coordinator decision: subagents are not relayed in v1);
   - headless (`$.session.surfaces()` empty) ⇒ `next(e)`, no pdx call;
-  - `begin` ≠ 0 / no id (13 no_responders, 20, 21, 1) ⇒ the native outcome; a 13's code is read as the **last whitespace-separated token of stderr** (P8a-1c prints `pdx ask: <detail> <code>`, the same shape as `pdx relay`), only for the log line — every non-zero exit takes the same branch;
+  - `begin` ≠ 0 / no id (13 no_responders, 20, 21, 1) ⇒ the native outcome; a 13's code is read as the **last whitespace-separated token of stderr** (P8a-1c prints `pdx ask: <detail> <code>`, the same shape as `pdx relay`), only for the log line — every non-zero exit takes the same branch; a `409 ask_open` never reaches the mod as an error: `pdx ask begin` adopts the open row and exits 0 with its id (Task 8a.6), so a replayed `begin` after a lost response continues with the same `id`;
   - loop `$.process.run([<pdx>,'ask','wait',id], { timeoutMs: 590_000 })` while `still_open`; `Promise.race` with the native promise;
   - terminal first ⇒ `report <id> answered_local --hook {"answers":…}` (or `dismissed` when the native result has no answers — Esc, an interrupted turn, an error result), return the native object **unchanged**;
   - remote first ⇒ `return { result: { questions: e.questions, answers } }` with `next(e)` pending (closes the dialog, M24 P-B);
@@ -13118,7 +13232,7 @@ Also a measurement, recorded as **M26**. P2c's installer raises Codex's `PreTool
 5. **Hook rows have no deadline and the terminal-only ones no lease**: `DeadlineAt = NoExpiryAt` (3000-01-01 in ms, below 2^53), `LeaseUntil = NoExpiryAt` for terminal_only. The preamble did not say; spec §6.6 "no wait of its own" and "the row lives exactly as long as the native dialog" require it, and a sentinel keeps the shipped sweeper and `ExtendOpenLeases` untouched (verified: the shipped UPDATE is guarded by `lease_until < ?`, `store.go:239-242`, so a `NoExpiryAt` lease is never lowered at boot).
 6. **The terminal-only `PostToolUse` close is `answered_local` with CC's `tool_response.answers` when present, `dismissed` otherwise** — the preamble says "closes it as dismissed". The answers are in the hook's stdin (d.ts `PostToolUseHookInput.tool_response`); closing a row the person did answer as "dismissed" would hide 「已在終端機回答：紅」 from the phone for exactly the sessions that need the backstop. Both states exist in the contract; nothing else changes.
 7. **Five more events reach `/api/hooks/decide`, flag-gated** (`PostToolUse`, `PostToolUseFailure`, `Stop`, `UserPromptSubmit`, `SessionEnd`) and the daemon writes a second flag dir `hookasks/` — see `Contract problems` 1. Without them a terminal-only row dismissed with Esc (no `PostToolUse` fires) would linger until the session ends, and a `hook_permission` row (no `tool_use_id`, `Contract problems` 3) could never close.
-8. **`pdx ask begin` adopts a `409 ask_open`** (prints the open row's id, exit 0): a retried begin for the same `tool_use_id` is then idempotent without `Idempotent()` on the POST. The preamble lists `ask_open` as a plain 409.
+8. **`pdx ask begin` adopts a `409 ask_open`** (prints the open row's id, exit 0) **and is sent with `Idempotent()`** (codex round): a lost response is replayed inside the grace and the daemon's one-open-row-per-`(session, tool_use_id)` rule turns the replay into `ask_open` → the same id. `ask_open` is a success for the CLI and the mod, not an exit 13 (spec §14 says so). The preamble listed `ask_open` as a plain 409.
 9. **`pdx ask report` takes `--hook <json>` as well as `--hook-file <f>`; `begin` takes `--payload <json>` as well as `--payload-file <f>`.** The mod passes inline JSON on argv (`$.process.run` is argv, no shell; a 4-question payload is a few KB, far under `ARG_MAX`), so it needs no temp file and no cleanup. Both spellings are tested.
 10. **The mod issues `next(e)` before `pdx ask begin`** (Task 8a.9) so the dialog never waits on the daemon; spec step 1's "then the mod simply returns next(e)" is satisfied — `next(e)` is called exactly once and its result returned — but the daemon call is not on the dialog's critical path. The test `no_responders ⇒ … next(e) once` pins the count.
 11. **Mod tests are `hooks/ask.test.ts`** (`.test.js` is not collected — `Measured here`).
@@ -13219,7 +13333,7 @@ Answers to the sections' open questions and contract problems. They bind the imp
 - `<data_dir>/relay/`: `MkdirAll` in team `Start` (logged, not fatal) and in `begin`; `TestStart_MakesTheRelayDir` pins both.
 - Manual `/compact`: cancels an open request (as auto), never skips an approved-not-written relay (only `trigger:auto` skips); two mod tests added (unmeasured, said so).
 - `ask.js`: `if (e.agentId) return next(e)` first; `pdx` is run by the path in `pdx.json` (fallback `pdx`); paths under `cmd/pdx/plugin/purdex/`; P8a-2 updates `embed_test.go`'s two-module assertion.
-- `effort` on a self-relay payload stays empty in these PRs (the mod has no accessor, `begin` stores what it gets); filling it from the agent module's statusline parse is a follow-up `gh issue` at P5b-3 merge, not a hidden daemon behaviour.
+- ~~`effort` on a self-relay payload stays empty in these PRs~~ **Codex round: the daemon fills `model_id` and `effort` in `begin`** from the agent module's per-session statusline reading (`agent.ContextUsageReader`, P1), the mod passes neither, `pdx relay begin` has no `--model` / `--effort`; no follow-up issue. The acceptance recipe (P5b, step 5) asserts both present and equal before and after the relay.
 - `PermissionRequest` rows (no `tool_use_id`) are de-duplicated by session + `tool_name` + sha256(compacted `tool_input`) in `openTerminalOnly`, as the decision text says; a test pins it.
 - `{ skip }` mid-turn (spec §8.7 (c)) is measured in P5b-3's acceptance step 7 (d) and recorded as M27; the fallback (compaction runs, write prompt at the next `turn.complete`) is named there.
 - Boot reconciliation **from frames** (past-`claimed` self ops) is P6, named in P5a's deferred list and in Review Focus 3; P5a-2b's `reconcileRelays` covers `awaiting_approval` and `cleared`.
