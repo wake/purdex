@@ -130,8 +130,9 @@ type Module struct {
 
 	// The read slot every client-visible nex read goes through (spec
 	// 2026-10-08 §3.1, readslot.go), built on first use by reads(). listWait
-	// is how long a list page waits for it before 503 nex_busy (listwrap.go);
-	// 0 = listSlotWaitDefault, other values are a test seam.
+	// is how long a list page waits for it before giving up — 503 nex_busy
+	// or an unstamped page (listwrap.go); 0 = listSlotWaitDefault, other
+	// values are a test seam.
 	slotOnce sync.Once
 	slot     *readSlot
 	listWait time.Duration
@@ -382,9 +383,15 @@ func (m *Module) softFail(err error) error {
 //
 // With an engine, GET RoutePrefix+"/v1/executions" — the list, and only
 // the list — is the read-slot wrapper (listwrap.go), which stamps each page
-// with its version and runs the very handler mounted below. Without one,
-// the 503 fallback covers the list like every other engine path: there is
-// no page to stamp.
+// with its version. It gets the engine's raw handler and mounts it per
+// request exactly as below (prefix stripped, recoverer inside), with a
+// recoverer that also tells it a panic happened: a page whose engine
+// panicked must never be stamped, even when it had already written a
+// complete 200 object. When the slot stays busy past its wait, only a
+// client that sent pdx=retry is answered 503 nex_busy; any other gets the
+// page unstamped, because the SPA in production has no retry for a 503
+// until #1866 PR2a. Without an engine, the 503 fallback covers the list
+// like every other engine path: there is no page to stamp.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{code}/nex-handoff", m.handleNexHandoff)
 	mux.HandleFunc("POST /api/sessions/{code}/nex-takeback", m.handleNexTakeback)
@@ -399,12 +406,11 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 		mux.Handle(RoutePrefix+"/", unavailableHandler(m.initErr))
 		return
 	}
-	engineMount := http.StripPrefix(RoutePrefix, recoverer(m.logf, m.sys.handler))
-	mux.Handle(RoutePrefix+"/", engineMount)
+	mux.Handle(RoutePrefix+"/", http.StripPrefix(RoutePrefix, recoverer(m.logf, m.sys.handler)))
 	// More specific than RoutePrefix+"/" (one path, GET/HEAD only), so it
 	// wins for the list while GET /v1/executions/{id}, the delegate POST
 	// and every other route still reach the engine directly.
-	mux.Handle("GET "+RoutePrefix+"/v1/executions", m.handleListExecutions(engineMount))
+	mux.Handle("GET "+RoutePrefix+"/v1/executions", m.handleListExecutions(m.sys.handler))
 }
 
 // unavailableHandler answers every request under RoutePrefix with the same

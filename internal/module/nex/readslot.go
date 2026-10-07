@@ -36,9 +36,10 @@ const slotLogThreshold = 250 * time.Millisecond
 
 // errSlotBusy is what acquire returns when maxWait passed before the slot
 // freed. It is deliberately distinct from the context errors: the list
-// wrapper answers it as 503 nex_busy, which the SPA retries with backoff
-// (§8 R3-3), while a context that ended means the caller is gone and
-// nothing is written at all.
+// wrapper answers it as 503 nex_busy to a client that opted in with
+// pdx=retry (which retries with backoff, §8 R3-3) and serves anyone else
+// an unstamped page instead (§3.4), while a context that ended means the
+// caller is gone and nothing is written at all.
 var errSlotBusy = errors.New("nex read slot busy")
 
 // slotStamp is what a successful read is stamped with. All three values are
