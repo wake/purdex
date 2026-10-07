@@ -31,6 +31,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"sync/atomic"
 	"testing"
@@ -92,6 +93,9 @@ func setupScreenChangeIntegration(
 	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fakeTmux}
 	sub := m.core.Events.AddTestSubscriber()
 	t.Cleanup(func() { m.core.Events.RemoveTestSubscriber(sub) })
+	// The ProcessDead detector above polls for as long as its ctx lives: stop every armed detector at the end of
+	// the test (cleanups run LIFO, so this runs before the trace sink is closed and the test seams are restored).
+	t.Cleanup(func() { _ = m.Stop(context.Background()) })
 
 	return m, fw, sub
 }

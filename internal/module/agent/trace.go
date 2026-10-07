@@ -134,8 +134,12 @@ func (s *hookTraceSink) Enqueue(record store.TraceRecord) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.closed {
-		if s.dropped.Add(1) == 1 {
+		n := s.dropped.Add(1)
+		if n == 1 {
 			log.Printf("[agent][trace] sink closed: dropping trace records from now on")
+		} else if isPowerOfTen(n) {
+			// Cumulative, so a straggler arriving after Close returned is still visible.
+			log.Printf("[agent][trace] dropped %d trace record(s) since close", n)
 		}
 		return
 	}
@@ -176,10 +180,15 @@ func (s *hookTraceSink) Close() {
 		s.pending.Wait()
 		close(s.queue)
 		s.worker.Wait()
-		if n := s.dropped.Load(); n > 0 {
-			log.Printf("[agent][trace] dropped %d record(s) after close", n)
-		}
 	})
+}
+
+// isPowerOfTen reports n in {1, 10, 100, ...}: the drop log's cumulative checkpoints.
+func isPowerOfTen(n int64) bool {
+	for n >= 10 && n%10 == 0 {
+		n /= 10
+	}
+	return n == 1
 }
 
 // probeIntentTraceArgs is the input contract for AppendProbeIntent. Decision

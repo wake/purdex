@@ -22,7 +22,7 @@ agent `Module` 實作 `core.Closer`：`Close() error { m.traceSink.Close(); retu
 - `Enqueue`：`RLock`；`closed` ⇒ 解鎖、**丟棄**，return；否則在持有 `RLock` 時 `pending.Add(1)` 並做原有非阻塞送值，解鎖。
 - `Close`（`sync.Once`）：`Lock` 設 `closed = true`、解鎖（此後沒有新的 `Add`／送值）；再 `pending.Wait()` → `close(queue)` → `worker.Wait()`。送值只發生在 `RLock` 內，`closed` 的設定需 `Lock`（等所有 `RLock` 持有者結束），所以 `close(queue)` 時不可能有送值併發；`pending.Add` 也不再與 `pending.Wait` 併發。
 - `FlushForTest` 改為先 `RLock` 取得一致的檢查再 `pending.Wait()`（B4）：呼叫期間不得有新的 `Add` 與 `Wait` 併發——以 `RLock` 持有到 `Wait` 返回不可行（會阻塞 Enqueue），故改成「`Lock` 暫時擋住新 Add → `pending.Wait()` → 解鎖」，僅測試用；測試註解說明。
-- **丟棄的可觀測性（B1）**：closed 丟棄不逐筆印 log；用 `atomic.Int64` 計數，並在**第一次**丟棄時記一行 `[agent][trace] sink closed: dropping trace records from now on`，`Close` 完成時若有丟棄再記一行 `dropped N record(s) after close`（一次性，不洗版）。trace 是盡力而為的觀測資料，關機窗口內的丟失可接受，已明載；**hook 事件本身的處理不受影響**（handler 不再 panic，照常回 200；以測試斷言）。
+- **丟棄的可觀測性（B1）**：closed 丟棄不逐筆印 log；用 `atomic.Int64` 計數，並在**第一次**丟棄時記一行 `[agent][trace] sink closed: dropping trace records from now on`，之後在累計數達 10、100、1000… 時各記一行 `dropped N trace record(s) since close`（累計值；不在 `Close` 內宣稱最終總數，因為 `Close` 返回後仍可能有殘留 producer——codex R2）。trace 是盡力而為的觀測資料，關機窗口內的丟失可接受，已明載；**hook 事件本身的處理不受影響**（handler 不再 panic，照常回 200；以測試斷言）。
 - 既有 `queue full` 丟棄路徑不變。
 
 ### 2.3 行為變化小結
@@ -44,7 +44,7 @@ agent `Module` 實作 `core.Closer`：`Close() error { m.traceSink.Close(); retu
 - 不為 `consumeSignals` 加 join（`stopAll` 的語意不動；2.1 讓它的尾端 trace 在 `Close` 前入列即可）。
 
 ## 5. 驗收
-- 單元／並行測試（`-race`）。部署後關機日誌不再出現該堆疊；極端情況（`Shutdown` 超時）才會有一行 `sink closed: dropping trace records` 與 `dropped N record(s) after close`（可 grep）。
+- 單元／並行測試（`-race`）。部署後關機日誌不再出現該堆疊；極端情況（`Shutdown` 超時）才會有一行 `sink closed: dropping trace records`，丟棄多時另有 `dropped N trace record(s) since close`（可 grep）。
 - 回滾：單一 PR revert。
 
 ## 6. 規模

@@ -45,6 +45,23 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
+// codex R2: a straggler that arrives AFTER Close returned must still be reported — the log carries a cumulative
+// count at each power of ten instead of a one-off summary taken inside Close.
+func TestHookTraceSink_StragglersAfterCloseAreReportedCumulatively(t *testing.T) {
+	sink, _ := newCloseTestSink(t)
+	buf := captureLog(t)
+	sink.Close() // Close itself has nothing to summarise: no drops yet
+	for i := 0; i < 10; i++ {
+		sink.Enqueue(closeTestRecord("late"))
+	}
+	if !strings.Contains(buf.String(), "dropped 10 trace record(s) since close") {
+		t.Fatalf("no cumulative report for the 10th drop; log=%q", buf.String())
+	}
+	if strings.Contains(buf.String(), "after close") {
+		t.Fatalf("Close must not claim a final total; log=%q", buf.String())
+	}
+}
+
 // T1: Enqueue after Close must not panic, must drop + count, and log once.
 func TestHookTraceSink_EnqueueAfterClose_DropsWithoutPanic(t *testing.T) {
 	sink, _ := newCloseTestSink(t)
