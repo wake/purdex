@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.536] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排；與 alpha.532／533 一次重啟）。這是接力第一個有行為的版本：四條 `/api/relay/*` 路由上線，但還沒有 mod 或 `pdx relay` 指令去呼叫（P5a-2c／P5b），所以現有使用者的流程不受影響。`pdx` 指令、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-2a（#1708）
+
+接力（spec §8.1、§8.7）的 daemon 端起點，plan v2 Task 5a.7。
+
+- **`POST /api/relay/begin`**：session 的 mod 在 context 用量到門檻時來開一個接力 op，daemon 同時開一張 `self_relay` 的核准單（10 分鐘期限、30 秒租約），`model_id`／`effort` 由 daemon 從該 session 最近的 statusline 讀數填。拒絕的情況：member（U9，等 P4 才會出現）、host 的接力開關關著、該 session 自己暫停、已有一個進行中的 op（回 409 並帶出那個 op）。
+- **核准單一關，op 跟著動**：核准 → `claimed`；拒絕／逾時／取消／租約到期 → `cancelled` 並記原因；不論是從 App 決定、`DELETE`、sweeper 的逾時或租約、還是來源 session 消失，都走同一條路。
+- **卡住的 op 自癒**：op 與核准單是兩次寫入，中間 daemon crash 或第二次寫入失敗時，下一次 begin 會從核准單重新推導那個 op（單已關 → 照上面規則移動；單不存在 → 當作放棄），session 不會被 409 卡到重啟。
+- **`POST /api/relay/hello`**：mod 啟動時報到（daemon 記住最近 512 個 session 有 mod，給之後的降級判斷用）。
+- **`POST /api/relay/self`**：這個 session 的「暫停接力／恢復／查狀態」；host 開關關著時，session 自己開也還是關。
+- **`GET /api/relay/wait/{id}`**：核准單的長輪詢（續租）。
+- team module 開始對外提供接力血統（`previous_refs` 從這版起會出現在 `pdx peers`／App 的 peer 清單），讀 host 設定的接力開關，啟動時建 `<data_dir>/relay/`。
+
+Review 後補強：一個 session 最多一個 op 由資料表索引接住時同樣回 409 帶 op（P5a-1a fix note）；卡住 op 的就地自癒（攻擊方）；409 帶的是重導後的 op（critic）。
+
 ## [1.0.0-alpha.535] - 2026-10-07
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。沒有使用者看得到的變化。
