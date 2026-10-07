@@ -966,6 +966,23 @@ describe('worker (execution) tabs in the notification dispatcher', () => {
     unmount()
   })
 
+  // PC2 as amended 2026-10-07: a worker awaiting approval notifies like a terminal agent's ask (same event, same
+  // content rule) — titled like its tab, the body naming the tool.
+  it('worker waiting builds the PermissionRequest content (title = worker title, body = the tool)', () => {
+    openExecTab()
+    setLiveSummary({ pending_permission: { request_id: 'r1', tool_name: 'Bash', since: 2 } })
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    dispatch({ status: 'waiting', raw_event_name: 'PermissionRequest', broadcast_ts: 2, detail: { tool_name: 'Bash' } })
+
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    const payload = showNotification.mock.calls[0][0]
+    expect(payload.title).toBe('Fix the bug - repo')
+    expect(payload.body).toBe('Permission required: Bash')
+    expect(payload.eventName).toBe('PermissionRequest')
+    expect(payload.action).toEqual({ kind: 'open-session', hostId: HOST, sessionCode: CODE })
+    unmount()
+  })
+
   it('the notification title equals the tab displayTitle for the same worker', () => {
     const tab = openExecTab({ fromTitle: 'Old terminal' })
     useExecutionListStore.setState({ byHost: { [HOST]: { ...emptyListCache(), items: [summary({ brief: 'Row brief', cwd: '/x/proj' })] } } })

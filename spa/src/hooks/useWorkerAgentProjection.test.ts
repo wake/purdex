@@ -487,8 +487,9 @@ describe('useWorkerAgentProjection', () => {
     })
   })
 
-  // Permission channel PC2 / spec §5.4: the tab light is `waiting` while the summary carries a pending request, and
-  // that transition must never push a notification.
+  // Permission channel PC2 / spec §5.4: the tab light is `waiting` while the summary carries a pending request. As
+  // amended 2026-10-07 (user), that request is an event of the same level as a terminal agent's ask and goes through
+  // the same desktop-notification rules.
   describe('awaiting approval', () => {
     const pending = (since: number) => ({ request_id: 'r1', tool_name: 'Bash', since })
     const turn = (endAt: number | null) => ({ turnStarts: [0], turnMeta: [{ startAt: 10, endAt, outcome: endAt === null ? null : 'ok' as const, durationMs: null }] })
@@ -503,7 +504,9 @@ describe('useWorkerAgentProjection', () => {
       const ev = useAgentStore.getState().lastEvents[KEY]
       expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
       expect(ev.status).toBe('waiting')
-      expect(ev.detail?.notification_silent).toBe(true)
+      // Named and shaped like a terminal Claude Code agent's ask (PdxPermissionRequest → PermissionRequest, tool_name).
+      expect(ev.raw_event_name).toBe('PermissionRequest')
+      expect(ev.detail).toEqual({ tool_name: 'Bash' })
       // State-tied stamp: the request's own start, so a re-projection after a reload is not a new event.
       expect(ev.broadcast_ts).toBe(50)
 
@@ -517,7 +520,7 @@ describe('useWorkerAgentProjection', () => {
       useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'] })
       useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), items: [summary({ state: 'running', turn_count: 1, pending_permission: pending(70) })] } } })
       expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
-      expect(useAgentStore.getState().lastEvents[KEY].detail?.notification_silent).toBe(true)
+      expect(useAgentStore.getState().lastEvents[KEY].detail).toEqual({ tool_name: 'Bash' })
       stop()
     })
 
@@ -532,35 +535,254 @@ describe('useWorkerAgentProjection', () => {
       stop()
     })
 
-    describe('no notification (PC2 forbids push)', () => {
+    // PC2 as amended 2026-10-07 (user): waiting for approval is an event of the same level as an agent ask (a
+    // terminal agent waiting for the user, e.g. Claude Code's permission prompt) and goes through the same desktop-
+    // notification rules with the same exceptions — none while the App is in the foreground AND that tab is the
+    // current one, none when the user turned that event off — and the same request never notifies twice.
+    describe('notifies like an agent ask (PC2 as amended 2026-10-07)', () => {
+      const TMUX = 'ses001'
+      const TMUX_KEY = compositeKey(H, TMUX)
+      const tmuxTab = (): Tab => ({
+        id: 't-tmux', pinned: false, locked: false, createdAt: 0,
+        layout: { type: 'leaf', pane: { id: 'p-tmux', content: { kind: 'tmux-session', hostId: H, sessionCode: TMUX, mode: 'terminal', cachedName: '', tmuxInstance: '' } } },
+      })
+      const request = (request_id: string, since: number, tool_name = 'Bash') => ({ request_id, tool_name, since })
+      const R1 = request('r1', 50)
+      const listRow = (over: Partial<ExecutionSummary>) =>
+        useExecutionListStore.setState({ byHost: { [H]: { ...emptyListCache(), items: [summary({ turn_count: 1, ...over })] } } })
+      const runningLive = () =>
+        setLive({ summary: summary({ state: 'running', updated_at: 40 }), turnLive: true, sse: 'open', lastEventAt: 40, ...turn(null) })
+      const openTabs = (activeTabId: string | null = null) =>
+        useTabStore.setState({ tabs: { 't-exec': execTab(), 't-tmux': tmuxTab() }, tabOrder: ['t-exec', 't-tmux'], activeTabId })
+      /** A terminal Claude Code agent's ask, as the host event stream delivers it (cc broadcasts the Pdx name). */
+      const terminalAsk = (broadcast_ts: number) =>
+        useAgentStore.getState().handleNormalizedEvent(H, TMUX, { agent_type: 'cc', status: 'waiting', raw_event_name: 'PdxPermissionRequest', broadcast_ts, detail: { tool_name: 'Bash' } })
+      const focus = (focused: boolean) => vi.spyOn(document, 'hasFocus').mockReturnValue(focused)
+      const notified = () => showNotification.mock.calls.map((c) => c[0] as { title: string; body: string; eventName: string; sessionCode: string; action: unknown })
+      const workerNotices = () => notified().filter((n) => n.sessionCode === 'exec-E1')
+      const askDispatches = (spy: { mock: { calls: unknown[][] } }) =>
+        spy.mock.calls.filter((c) => c[1] === 'exec-E1' && (c[2] as { raw_event_name: string }).raw_event_name === 'PermissionRequest').length
+
       let showNotification: ReturnType<typeof vi.fn>
+      let dispatcher: { unmount: () => void } | null
+      let stop: (() => void) | null
+      const mount = () => {
+        dispatcher = renderHook(() => useNotificationDispatcher())
+        stop = startWorkerAgentProjection()
+      }
+      /** An App reload: nothing is torn down (no clear reaches the dispatcher), in-memory stores start fresh, the
+       *  dispatcher's seen map (localStorage) and the tabs survive. */
+      const reload = () => {
+        dispatcher?.unmount()
+        stop?.()
+        useAgentStore.setState({ statuses: {}, agentTypes: {}, models: {}, subagents: {}, lastEvents: {}, oscTitles: {}, ccStatus: {}, unread: {} })
+        useExecutionStore.setState({ executions: {} })
+        useExecutionListStore.setState({ byHost: {} })
+        mount()
+      }
+
       beforeEach(() => {
-        localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [KEY]: 1 }))
+        localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [KEY]: 1, [TMUX_KEY]: 1 }))
         useNotificationSettingsStore.setState({ agents: {} })
         showNotification = vi.fn()
         Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
+        focus(false)
+        dispatcher = null
+        stop = null
       })
       afterEach(() => {
+        stop?.()
+        dispatcher?.unmount()
         Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
         localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN)
       })
 
-      it('the awaiting transition raises none; the turn ending afterwards still notifies (the pipeline is live)', () => {
-        const dispatcher = renderHook(() => useNotificationDispatcher())
-        const stop = startWorkerAgentProjection()
-        setLive({ summary: summary({ state: 'running' }), turnLive: true, ...turn(null) })
-        useTabStore.setState({ tabs: { 't-exec': execTab() }, tabOrder: ['t-exec'], activeTabId: null })
+      it('the App in the background: a new pending request notifies exactly once, even on the current tab', () => {
+        mount()
+        runningLive()
+        openTabs('t-exec')
+        expect(showNotification).not.toHaveBeenCalled()
 
-        setLive({ summary: summary({ state: 'running', pending_permission: pending(50) }) })
+        setLive({ summary: summary({ state: 'running', updated_at: 45, pending_permission: R1 }) })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
+        expect(showNotification).toHaveBeenCalledTimes(1)
+        const n = notified()[0]
+        expect(n.eventName).toBe('PermissionRequest')
+        // The title is the worker title (what the tab shows), the body names the tool — the agent ask's content.
+        expect(n.title).toBe('b - w')
+        expect(n.body).toBe('Permission required: Bash')
+        expect(n.action).toEqual({ kind: 'open-session', hostId: H, sessionCode: 'exec-E1' })
+      })
+
+      it('the App in the foreground on another tab: still notifies once', () => {
+        focus(true)
+        mount()
+        runningLive()
+        openTabs('t-tmux')
+        setLive({ summary: summary({ state: 'running', updated_at: 45, pending_permission: R1 }) })
+        expect(showNotification).toHaveBeenCalledTimes(1)
+      })
+
+      it('the App in the foreground on that tab: none — and switching away later does not bring it back', () => {
+        focus(true)
+        mount()
+        runningLive()
+        openTabs('t-exec')
+        setLive({ summary: summary({ state: 'running', updated_at: 45, pending_permission: R1 }) })
         expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
         expect(showNotification).not.toHaveBeenCalled()
 
-        setLive({ summary: summary({ state: 'idle', pending_permission: null }), turnLive: false, ...turn(100) })
-        expect(useAgentStore.getState().statuses[KEY]).toBe('idle')
+        // Tab switch, then the App goes to the background and the summary is refetched: the request is not new.
+        useTabStore.setState({ activeTabId: 't-tmux' })
+        focus(false)
+        setLive({ summary: summary({ state: 'running', updated_at: 70, pending_permission: R1 }) })
+        expect(showNotification).not.toHaveBeenCalled()
+      })
+
+      it('the toggle that silences a terminal Claude Code agent\'s ask (cc · PermissionRequest) silences the worker\'s', () => {
+        useNotificationSettingsStore.getState().setEventEnabled('cc', 'PermissionRequest', false)
+        mount()
+        runningLive()
+        openTabs()
+        terminalAsk(2)
+        expect(useAgentStore.getState().statuses[TMUX_KEY]).toBe('waiting')
+        setLive({ summary: summary({ state: 'running', updated_at: 45, pending_permission: R1 }) })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
+        expect(useAgentStore.getState().agentTypes[KEY]).toBe('cc')
+        expect(showNotification).not.toHaveBeenCalled()
+
+        // Back on: both notify again (the pipeline is live, it was only the setting).
+        useNotificationSettingsStore.getState().setEventEnabled('cc', 'PermissionRequest', true)
+        terminalAsk(3)
+        setLive({ summary: summary({ state: 'running', updated_at: 90, pending_permission: request('r2', 80) }) })
+        expect(notified().map((n) => n.sessionCode)).toEqual([TMUX, 'exec-E1'])
+      })
+
+      it('a terminal Claude Code agent\'s ask still notifies exactly as before', () => {
+        mount()
+        openTabs()
+        terminalAsk(2)
         expect(showNotification).toHaveBeenCalledTimes(1)
-        expect(showNotification.mock.calls[0][0].eventName).toBe('Stop')
-        stop()
-        dispatcher.unmount()
+        expect(notified()[0]).toMatchObject({ title: TMUX, body: 'Permission required: Bash', eventName: 'PdxPermissionRequest', sessionCode: TMUX })
+        // The same ask again (a reconnect snapshot): no second notification.
+        terminalAsk(2)
+        expect(showNotification).toHaveBeenCalledTimes(1)
+        // The App in the foreground on its tab: a new ask is not pushed.
+        focus(true)
+        useTabStore.setState({ activeTabId: 't-tmux' })
+        terminalAsk(3)
+        expect(showNotification).toHaveBeenCalledTimes(1)
+      })
+
+      it('the same request seen again — refetch, reconnect, live → list row → live — is dispatched and notified once', () => {
+        const spy = vi.spyOn(useAgentStore.getState(), 'handleNormalizedEvent')
+        spy.mockClear()
+        mount()
+        runningLive()
+        listRow({ state: 'running', updated_at: 30 })
+        openTabs()
+        setLive({ summary: summary({ state: 'running', updated_at: 45, pending_permission: R1 }) })
+        expect(showNotification).toHaveBeenCalledTimes(1)
+
+        // A refetch brings the same request back with a newer updated_at.
+        setLive({ summary: summary({ state: 'running', updated_at: 60, pending_permission: R1 }) })
+        // A reconnect.
+        useExecutionStore.getState().setSse(H, E, 'reconnecting')
+        useExecutionStore.getState().setSse(H, E, 'open')
+        // The pane is evicted and a newer list row takes over, carrying the same request.
+        useExecutionStore.getState().setSse(H, E, 'paused')
+        listRow({ state: 'running', updated_at: 200, pending_permission: R1 })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
+        // The pane comes back: the live summary is the source again.
+        useExecutionStore.getState().setSse(H, E, 'open')
+        expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
+
+        expect(askDispatches(spy)).toBe(1)
+        expect(showNotification).toHaveBeenCalledTimes(1)
+      })
+
+      it('a source switch that re-dispatches the same request (subagent refs dropped) still notifies once', () => {
+        const spy = vi.spyOn(useAgentStore.getState(), 'handleNormalizedEvent')
+        spy.mockClear()
+        mount()
+        const sub: WorkerTask = { task_id: 'a', turn_id: 't', kind: 'subagent', task_type: 'x', tool_use_id: null, parent_tool_use_id: null, description: '',
+          backgrounded: true, status: 'running', provider_status: null, closed_by: null, started_at: 3, ended_at: null, startSeq: 1, subagent_type: 'Explore' }
+        runningLive()
+        setLive({ tasks: { a: sub } })
+        openTabs()
+        setLive({ summary: summary({ state: 'running', updated_at: 45, pending_permission: R1 }) })
+        expect(showNotification).toHaveBeenCalledTimes(1)
+
+        // A list row carries no subagent refs: the projection changes, so the same request is dispatched again ...
+        useExecutionStore.getState().setSse(H, E, 'paused')
+        listRow({ state: 'running', updated_at: 200, pending_permission: R1 })
+        expect(askDispatches(spy)).toBe(2)
+        // ... with the same request-tied stamp, so the dispatcher's dedup does not notify it twice.
+        expect(useAgentStore.getState().lastEvents[KEY].broadcast_ts).toBe(50)
+        expect(showNotification).toHaveBeenCalledTimes(1)
+      })
+
+      it('a second, different request while still waiting notifies once more', () => {
+        mount()
+        runningLive()
+        openTabs()
+        setLive({ summary: summary({ state: 'running', updated_at: 45, pending_permission: R1 }) })
+        expect(showNotification).toHaveBeenCalledTimes(1)
+
+        // R1 answered and R2 asked between two summaries: the worker never leaves `waiting`.
+        setLive({ summary: summary({ state: 'running', updated_at: 90, pending_permission: request('r2', 80, 'Write') }) })
+        expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
+        expect(showNotification).toHaveBeenCalledTimes(2)
+        expect(notified()[1].body).toBe('Permission required: Write')
+
+        // R2 re-seen through a refetch: not a third.
+        setLive({ summary: summary({ state: 'running', updated_at: 95, pending_permission: request('r2', 80, 'Write') }) })
+        expect(showNotification).toHaveBeenCalledTimes(2)
+      })
+
+      describe('across an App reload — the same as an agent ask, whose snapshot replays it with its original stamp', () => {
+        it.each(['list row', 'live summary'] as const)('a request already seen before the reload is not notified again (%s first)', (first) => {
+          mount()
+          runningLive()
+          openTabs()
+          setLive({ summary: summary({ state: 'running', updated_at: 45, pending_permission: R1 }) })
+          expect(showNotification).toHaveBeenCalledTimes(1)
+
+          reload()
+          const row = () => listRow({ state: 'running', updated_at: 300, pending_permission: R1 })
+          const live = () => setLive({ summary: summary({ state: 'running', updated_at: 45, pending_permission: R1 }), turnLive: true, sse: 'open', ...turn(null) })
+          if (first === 'list row') { row(); live() } else { live(); row() }
+          expect(useAgentStore.getState().statuses[KEY]).toBe('waiting')
+          expect(showNotification).toHaveBeenCalledTimes(1)
+        })
+
+        it('a request that arrived while the App was closed notifies once on reload, like a terminal agent\'s ask', () => {
+          // Before the reload this client last saw both keys at 20 (say, a turn's end).
+          localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [KEY]: 20, [TMUX_KEY]: 20 }))
+          mount()
+          openTabs()
+          // The terminal agent: the snapshot replays its ask (stamped 50, after 20) — it notifies once.
+          terminalAsk(50)
+          terminalAsk(50)
+          expect(notified().filter((n) => n.sessionCode === TMUX)).toHaveLength(1)
+          // The worker: the first source after the reload is the list row (its pane not subscribed yet), then the live
+          // summary. The request (since 50, after 20) notifies once — whichever source comes first.
+          listRow({ state: 'running', updated_at: 300, pending_permission: R1 })
+          setLive({ summary: summary({ state: 'running', updated_at: 45, pending_permission: R1 }), turnLive: true, sse: 'open', ...turn(null) })
+          expect(workerNotices()).toHaveLength(1)
+        })
+
+        it('a worker this client never saw: its first sight is recorded, not notified — like an agent ask\'s first event', () => {
+          localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN)
+          mount()
+          openTabs()
+          terminalAsk(50)
+          listRow({ state: 'running', updated_at: 300, pending_permission: R1 })
+          expect(showNotification).not.toHaveBeenCalled()
+          // The next request is news.
+          listRow({ state: 'running', updated_at: 400, pending_permission: request('r2', 350) })
+          expect(workerNotices()).toHaveLength(1)
+        })
       })
     })
   })
