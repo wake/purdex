@@ -353,9 +353,11 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	// "audit unavailable" and refuses every delivery.
 	var audit peersmod.AuditStore
 	var titles peersmod.TitleStore
+	var titleMover teammod.TitleMover
 	if meta != nil {
 		audit = meta.PeerMessages()
 		titles = meta.PeerLabels()
+		titleMover = meta.PeerLabels()
 	}
 	c.AddModule(peersmod.New(audit, titles))
 	c.AddModule(fsmod.New())
@@ -366,8 +368,10 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(backupmod.New())
 	c.AddModule(monitor.New())
 	c.AddModule(codexbroker.New())
-	// team depends on peers (the origin resolver); InitModules topo-sorts.
-	c.AddModule(teammod.New())
+	// team depends on peers (the origin resolver) and hostconfig (the relay
+	// switches); InitModules topo-sorts. The title mover is meta.db's
+	// peer_labels (nil in tests: titles then stay on the old session id).
+	c.AddModule(teammod.New().WithTitles(titleMover))
 
 	c.CfgMu.RLock()
 	nexEnabled := c.Cfg.Nex.Enabled

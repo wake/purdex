@@ -17,6 +17,8 @@ import (
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/agent"
+	"github.com/wake/purdex/internal/module/hostconfig"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/team"
 )
@@ -59,6 +61,53 @@ func (f *fakeOrigins) ResolveOrigin(inbox string) (team.Origin, bool, error) {
 // 10xx), which is what the handler requires of id (spec §6.1).
 func uid(i int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012x", i) }
 
+// sequentialIDs mints the daemon-side ids relay begin uses: op then request,
+// "11111111-…-0001", "…-0002", … so tests can name them.
+func sequentialIDs() func() string {
+	n := 0
+	return func() string {
+		n++
+		return fmt.Sprintf("11111111-1111-4111-8111-%012x", n)
+	}
+}
+
+func rid(i int) string { return fmt.Sprintf("11111111-1111-4111-8111-%012x", i) }
+
+// ResolveOriginBySession answers the fixture origin with that session id.
+func (f *fakeOrigins) ResolveOriginBySession(sid string) (team.Origin, bool, error) {
+	f.mu.Lock()
+	readErr := f.readErr
+	f.mu.Unlock()
+	if readErr {
+		return team.Origin{}, false, errors.New("read registry: not a directory")
+	}
+	for _, o := range fixtureOrigins {
+		if o.SessionID == sid {
+			return o, true, nil
+		}
+	}
+	return team.Origin{}, false, nil
+}
+
+// fakeSwitches is the hostconfig RelaySwitchReader of these tests.
+type fakeSwitches struct {
+	mu  sync.Mutex
+	sw  hostconfig.RelaySwitches
+	err error
+}
+
+func (f *fakeSwitches) RelaySwitches() (hostconfig.RelaySwitches, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.sw, f.err
+}
+
+func (f *fakeSwitches) set(sw hostconfig.RelaySwitches) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sw = sw
+}
+
 func (f *fakeOrigins) LiveSession(sid string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -75,13 +124,63 @@ func (f *fakeOrigins) markDead(sid string) {
 }
 
 type fixture struct {
-	t       *testing.T
-	m       *Module
-	mux     *http.ServeMux
-	core    *core.Core
-	clock   atomic.Int64 // unix ms
-	origins *fakeOrigins
-	sub     *core.EventSubscriber
+	t        *testing.T
+	m        *Module
+	mux      *http.ServeMux
+	core     *core.Core
+	clock    atomic.Int64 // unix ms
+	origins  *fakeOrigins
+	switches *fakeSwitches
+	titles   *fakeTitles
+	usage    *fakeUsage
+	sub      *core.EventSubscriber
+}
+
+// fakeUsage is the agent module's ContextUsageReader of these tests: the
+// per-session statusline reading begin copies model_id / effort from.
+// Registered under agent.OwnerResolverKey, as the agent module is in
+// production (the team module type-asserts the reader on that service,
+// as peers does).
+type fakeUsage struct {
+	mu sync.Mutex
+	by map[string]agent.ContextUsage
+}
+
+func (f *fakeUsage) set(sid, model, effort string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.by == nil {
+		f.by = map[string]agent.ContextUsage{}
+	}
+	f.by[sid] = agent.ContextUsage{ModelID: model, Effort: effort}
+}
+
+func (f *fakeUsage) ContextUsage(sid string) (agent.ContextUsage, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.by[sid]
+	return u, ok
+}
+
+var _ agent.ContextUsageReader = (*fakeUsage)(nil)
+
+// fakeTitles records title moves (spec §8.4); *store.PeerLabelStore in production.
+type fakeTitles struct {
+	mu    sync.Mutex
+	moves [][2]string
+	has   map[string]bool // sessions that currently hold a title
+}
+
+func (f *fakeTitles) Move(from, to string, _ time.Time) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.has[from] {
+		return false, nil
+	}
+	delete(f.has, from)
+	f.has[to] = true
+	f.moves = append(f.moves, [2]string{from, to})
+	return true, nil
 }
 
 // newFixture builds the module through Init (a fake resolver in the
@@ -89,11 +188,14 @@ type fixture struct {
 // subscriber that collects every broadcast.
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := &fixture{t: t, origins: &fakeOrigins{}}
+	f := &fixture{t: t, origins: &fakeOrigins{}, switches: &fakeSwitches{sw: hostconfig.DefaultRelaySwitches}, titles: &fakeTitles{has: map[string]bool{"sid-1": true}}, usage: &fakeUsage{}}
 	f.clock.Store(1_000_000)
 	f.core = core.New(core.CoreDeps{Config: &config.Config{HostID: "h:1", DataDir: t.TempDir()}})
 	f.core.Registry.Register(peersmod.OriginResolverKey, f.origins)
-	f.m = New()
+	f.core.Registry.Register(hostconfig.RelaySwitchesKey, f.switches)
+	f.core.Registry.Register(agent.OwnerResolverKey, f.usage) // the team module asserts agent.ContextUsageReader on it
+	f.m = New().WithTitles(f.titles)
+	f.m.newID = sequentialIDs()
 	f.m.logf = func(string, ...any) {}
 	f.m.now = func() int64 { return f.clock.Load() }
 	if err := f.m.Init(f.core); err != nil {

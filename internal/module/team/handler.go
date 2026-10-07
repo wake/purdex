@@ -120,7 +120,8 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	switch req.Kind {
 	case team.KindLead:
 	case team.KindSelfRelay:
-		m.writeErr(w, http.StatusBadRequest, team.ErrUnsupportedKind, "kind self_relay is not supported by this daemon yet", nil)
+		// A self relay opens an op with its row; that is POST /api/relay/begin (P5a).
+		m.writeErr(w, http.StatusBadRequest, team.ErrUnsupportedKind, "kind self_relay opens through POST /api/relay/begin", nil)
 		return
 	default:
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "kind must be lead", nil)
@@ -385,7 +386,9 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var grant *team.Grant
-	if state == team.StateApproved {
+	// A self_relay approval carries no grant (its payload is a
+	// SelfRelayPayload); its op moves in afterClose.
+	if state == team.StateApproved && a.Kind == team.KindLead {
 		var payload team.LeadPayload
 		if err := json.Unmarshal(a.Payload, &payload); err != nil {
 			m.logf("[team] decide %s: decode payload: %v", id, err)
