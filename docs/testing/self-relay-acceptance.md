@@ -27,7 +27,10 @@ The run must leave the host's own setup as it found it. **Do not run `pdx setup 
   REPO=~/Workspace/wake/purdex
   SCRATCH=$(mktemp -d -t relay-acc)
   tmux new-session -d -s relay-acc -c "$SCRATCH"
-  tmux send-keys -t relay-acc "PDX_RELAY_THRESHOLD=5 claude --plugin-dir '$REPO/cmd/pdx/plugin/purdex' --model claude-haiku-4-5-20251001 --dangerously-skip-permissions" Enter
+  # Load a scratch COPY: Claude Code writes tsconfig.json and .claude-plugin/types/ into a folder it loads
+  # in place, and the repo folder is what go:embed packs into pdx.
+  PLUG=$(mktemp -d)/purdex && cp -R "$REPO/cmd/pdx/plugin/purdex" "$PLUG"
+  tmux send-keys -t relay-acc "PDX_RELAY_THRESHOLD=5 claude --plugin-dir '$PLUG' --model claude-haiku-4-5-20251001 --dangerously-skip-permissions" Enter
   ```
   Expect: `/relay` is in the slash-command menu; `/relay status` answers `自我接力：開啟（主機開關 開；門檻 5%）`. Run `/status` and note the model and effort lines.
 - [ ] 2. **`/relay off` / `on`.** `/relay off` answers `自我接力：本 session 暫停（主機開關 開；門檻 5%）`; a turn past 5 % asks nothing. `/relay on` answers `自我接力：開啟（…）` and the next turn end asks at once (the +10 guard is reset).

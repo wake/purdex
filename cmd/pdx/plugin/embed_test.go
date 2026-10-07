@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
@@ -50,5 +51,62 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md lacks %q", want)
 		}
+	}
+}
+
+// What Claude Code lays into a plugin folder it loads in place
+// (tsconfig.json, .claude-plugin/types/) never reaches Files(): the filter is
+// what keeps a build from a working tree where someone ran
+// `claude --plugin-dir cmd/pdx/plugin/purdex` from shipping them.
+func TestGenerated_HidesWhatClaudeCodeLaysIn(t *testing.T) {
+	for name, want := range map[string]bool{
+		"tsconfig.json":                         true,
+		".claude-plugin/types":                  true,
+		".claude-plugin/types/claude-code/x.ts": true,
+		".claude-plugin/plugin.json":            false,
+		"hooks/register.js":                     false,
+		"hooks/tsconfig.json":                   false,
+	} {
+		if generated(name) != want {
+			t.Errorf("generated(%q) = %v, want %v", name, !want, want)
+		}
+	}
+	if _, err := fs.Stat(Files(), "tsconfig.json"); err == nil {
+		t.Error("Files() must not expose a root tsconfig.json")
+	}
+	_ = fs.WalkDir(Files(), ".", func(p string, d fs.DirEntry, err error) error {
+		if err == nil && generated(p) {
+			t.Errorf("WalkDir reached generated path %q", p)
+		}
+		return nil
+	})
+}
+
+func TestFiltered_WalkSkipsGeneratedPaths(t *testing.T) {
+	src := fstest.MapFS{
+		".claude-plugin/plugin.json":                  {Data: []byte(`{"name":"purdex"}`)},
+		".claude-plugin/types/.gitignore":             {Data: []byte("*")},
+		".claude-plugin/types/claude-code/index.d.ts": {Data: []byte("x")},
+		"tsconfig.json":                               {Data: []byte("{}")},
+		"hooks/register.js":                           {Data: []byte("x")},
+	}
+	var got []string
+	if err := fs.WalkDir(filtered{src}, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			got = append(got, p)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{".claude-plugin/plugin.json", "hooks/register.js"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("walk = %v, want %v", got, want)
+	}
+	if _, err := (filtered{src}).Open("tsconfig.json"); err == nil {
+		t.Fatal("Open(tsconfig.json) must fail")
 	}
 }
