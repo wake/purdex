@@ -15,7 +15,10 @@ const MaxBody = 1 << 20
 
 // NewHandler serves POST /mod/v1/events into reg: 200 {"ack":N}, 400
 // {"error":"<code>"} (counted on the stream when its id was valid), 413
-// {"error":"too_large"}. Any other path is 404, any other method 405.
+// {"error":"too_large"}, 503 {"error":"registry_full"} when Apply refuses
+// a new stream with ErrRegistryFull (the mod backs off and resends), and
+// 500 {"error":"internal"} for any other Apply error. Any other path is
+// 404, any other method 405.
 func NewHandler(reg *Registry) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != EventsPath {
@@ -45,7 +48,15 @@ func NewHandler(reg *Registry) http.Handler {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": code})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]int64{"ack": reg.Apply(b)})
+		ack, err := reg.Apply(b)
+		switch {
+		case errors.Is(err, ErrRegistryFull):
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "registry_full"})
+		case err != nil:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+		default:
+			writeJSON(w, http.StatusOK, map[string]int64{"ack": ack})
+		}
 	})
 }
 

@@ -101,6 +101,35 @@ func TestHandler_RejectCountsOnValidStream(t *testing.T) {
 	}
 }
 
+// A batch for a new stream while every one of MaxStreams streams is pinned
+// is 503 registry_full (spec §6.2); the mod backs off and resends.
+func TestHandler_RegistryFull503(t *testing.T) {
+	clk := newFakeClock()
+	reg := NewRegistry(clk.Now)
+	rec, release := pinAll(t, reg, clk)
+	p := sockPath(t)
+	serve(t, mustListen(t, p), NewHandler(reg))
+	c := unixClient(t, p)
+
+	res, err := c.Post("http://pdx/mod/v1/events", "application/json",
+		strings.NewReader(batchJSON(1, testStream, evs(ev(1, testSID, "turn.start")))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusServiceUnavailable || string(b) != `{"error":"registry_full"}` || res.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("full registry: %d %s (%s)", res.StatusCode, b, res.Header.Get("Content-Type"))
+	}
+	if _, ok := reg.Events(testStream, 0); ok {
+		t.Fatal("a refused stream must not be added")
+	}
+	if got := rec.list(); len(got) != 0 {
+		t.Fatalf("deliveries = %v: a refused batch must not be delivered", got)
+	}
+	release()
+}
+
 func TestNewServer_Timeouts(t *testing.T) {
 	s := NewServer(http.NotFoundHandler())
 	if s.ReadHeaderTimeout != 5*time.Second || s.ReadTimeout != 10*time.Second || s.WriteTimeout != 10*time.Second || s.MaxHeaderBytes != 16<<10 {
