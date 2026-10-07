@@ -37,6 +37,16 @@ func TestResolve_PreviousRefsTier(t *testing.T) {
 	if _, err := Resolve(two, refA, ResolveSnapshot{}); !errors.As(err, &amb) || len(amb.Candidates) != 2 {
 		t.Fatalf("two rows with the same previous ref: err=%v", err)
 	}
+	// Live-ref precedence holds for the combined form too (PR #1705 R1): when a
+	// live row owns refA under another name, "<lineage-name> [refA]" is a
+	// mismatch against that live owner, never a delivery through the lineage.
+	if _, err := Resolve(withLive, "purdex-b0 ["+refA[1:]+"]", ResolveSnapshot{}); !errors.Is(err, ErrNameMismatch) {
+		t.Fatalf("combined form must not reach the lineage past a live owner: err=%v, want ErrNameMismatch", err)
+	}
+	// …and the live owner's own pair still resolves.
+	if rec, err := Resolve(withLive, "fresh ["+refA[1:]+"]", ResolveSnapshot{}); err != nil || rec.Agent.PID != 9 {
+		t.Fatalf("live owner's pair: pid=%d err=%v", pidOf(rec), err)
+	}
 	// The combined form still checks the name: an old ref with the wrong name is a mismatch.
 	if _, err := Resolve(recs, "wrong-name ["+refA[1:]+"]", ResolveSnapshot{}); !errors.Is(err, ErrNameMismatch) {
 		t.Fatalf("old ref + wrong name: err=%v, want ErrNameMismatch", err)

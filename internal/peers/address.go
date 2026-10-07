@@ -231,11 +231,14 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 			return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) &&
 				r.Ref == ref && r.Agent.PeerName == typedName
 		})
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, ErrNotFound) && !liveRefOwned(records, ref) {
 			// The combined form with a relayed-from ref (lead-team-relay
 			// spec §8.4): the name must still be the row's, so the check
 			// the bracket exists for is kept; only the ref is read through
-			// the lineage. Below the live pair, as the bare tier is.
+			// the lineage. Strictly below the live tier, as the bare form
+			// is: when any live row owns the ref, the lineage is not
+			// consulted, and the pair falls through to the mismatch answer
+			// below (the typed name is not the live owner's).
 			rec, err = resolveTier(records, session, func(r PeerRecord) bool {
 				return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) &&
 					hasPreviousRef(r, ref) && r.Agent.PeerName == typedName
@@ -389,6 +392,17 @@ func resolveRefHead(records []PeerRecord, ref string, snap ResolveSnapshot) (Pee
 }
 
 // hasPreviousRef reports whether ref is one of the refs r relayed from.
+// liveRefOwned reports whether some live row carries ref as its own: the
+// condition under which the lineage tier must not be consulted at all.
+func liveRefOwned(records []PeerRecord, ref string) bool {
+	for _, r := range records {
+		if hasLiveEntry(r) && r.Ref == ref {
+			return true
+		}
+	}
+	return false
+}
+
 func hasPreviousRef(r PeerRecord, ref string) bool {
 	for _, p := range r.PreviousRefs {
 		if p == ref {

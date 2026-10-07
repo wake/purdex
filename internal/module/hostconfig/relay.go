@@ -1,6 +1,7 @@
 package hostconfig
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 )
@@ -39,19 +40,26 @@ func normalizeRelay(raw json.RawMessage) (RelaySwitches, error) {
 	if firstByte(raw) != '{' {
 		return RelaySwitches{}, errors.New("items must be a JSON object")
 	}
-	var in struct {
-		SelfSolo *bool `json:"self_solo"`
-		SelfLead *bool `json:"self_lead"`
-	}
-	if err := json.Unmarshal(raw, &in); err != nil {
-		return RelaySwitches{}, errors.New("self_solo and self_lead must be booleans")
+	// Decode field by field so that an explicit null is seen: a *bool would
+	// read `{"self_solo":null}` as "left out" and silently reset the switch.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return RelaySwitches{}, errors.New("items must be a JSON object")
 	}
 	out := DefaultRelaySwitches
-	if in.SelfSolo != nil {
-		out.SelfSolo = *in.SelfSolo
-	}
-	if in.SelfLead != nil {
-		out.SelfLead = *in.SelfLead
+	for _, f := range []struct {
+		key string
+		dst *bool
+	}{{"self_solo", &out.SelfSolo}, {"self_lead", &out.SelfLead}} {
+		v, present := fields[f.key]
+		if !present {
+			continue
+		}
+		var b bool
+		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) || json.Unmarshal(v, &b) != nil {
+			return RelaySwitches{}, errors.New("self_solo and self_lead must be booleans")
+		}
+		*f.dst = b
 	}
 	return out, nil
 }

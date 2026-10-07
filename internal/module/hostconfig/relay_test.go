@@ -37,7 +37,8 @@ func TestRelaySwitches_DefaultsPutAndReader(t *testing.T) {
 	assert.JSONEq(t, `{"items":{"self_solo":false,"self_lead":true},"revision":1}`, rr.Body.String())
 
 	// Not an object, or not booleans: 400, nothing stored.
-	for _, body := range []string{`{"items":[true],"baseRevision":1}`, `{"items":{"self_solo":"yes"},"baseRevision":1}`} {
+	for _, body := range []string{`{"items":[true],"baseRevision":1}`, `{"items":{"self_solo":"yes"},"baseRevision":1}`,
+		`{"items":{"self_solo":null},"baseRevision":1}`, `{"items":{"self_lead":null},"baseRevision":1}`, `{"items":{"self_lead":1},"baseRevision":1}`} {
 		rr = serve(m, http.MethodPut, "/api/hostconfig/relay", body)
 		assert.Equal(t, http.StatusBadRequest, rr.Code, body)
 	}
