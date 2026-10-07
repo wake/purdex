@@ -31,6 +31,7 @@ func TestBuildStatus(t *testing.T) {
 		LeaseTTL:         nexconfig.Duration(90e9),  // 90s
 		InterruptTimeout: nexconfig.Duration(5e9),   // 5s
 		TurnTimeout:      nexconfig.Duration(600e9), // 10m
+		Peer:             nexconfig.PeerConfig{Enabled: true, MaxPending: 32},
 	}
 
 	t.Run("not assembled, no error: effective nil, ready false", func(t *testing.T) {
@@ -65,6 +66,20 @@ func TestBuildStatus(t *testing.T) {
 		assert.Equal(t, "1m30s", eff["lease_ttl"])
 		assert.Equal(t, "5s", eff["interrupt"])
 		assert.Equal(t, "10m0s", eff["turn"])
+		// [nex.peer] as assembled (peer mailbox spec §6): Nexen's applied
+		// max_pending default, not the pdx-side 0.
+		assert.Equal(t, true, eff["peer_enabled"])
+		assert.Equal(t, 32, eff["peer_max_pending"])
+	})
+
+	t.Run("assembled with the peer mailbox off", func(t *testing.T) {
+		off := *cfg
+		off.Peer = nexconfig.PeerConfig{Enabled: false, MaxPending: 7}
+		st := buildStatus(nil, nexen.Options{Config: &off}, expanded, "", true)
+		eff, ok := st["effective"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, false, eff["peer_enabled"])
+		assert.Equal(t, 7, eff["peer_max_pending"])
 	})
 
 	t.Run("assembled with claude_bin empty (lazy PATH resolution)", func(t *testing.T) {

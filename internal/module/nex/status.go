@@ -39,6 +39,10 @@ func buildStatus(initErr error, opts nexen.Options, expanded pdxconfig.NexConfig
 		"lease_ttl":       time.Duration(cfg.LeaseTTL).String(), // nexconfig.Duration has no String()
 		"interrupt":       time.Duration(cfg.InterruptTimeout).String(),
 		"turn":            time.Duration(cfg.TurnTimeout).String(),
+		// [nex.peer] as assembled: max_pending carries Nexen's applied
+		// default (cfg was validated by buildOptions), never pdx's 0.
+		"peer_enabled":     cfg.Peer.Enabled,
+		"peer_max_pending": cfg.Peer.MaxPending,
 	}
 	return st
 }
