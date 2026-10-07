@@ -7,6 +7,7 @@ import { useHostExecutions } from '../hooks/useHostExecutions'
 import { useI18nStore } from '../stores/useI18nStore'
 import { selectRollupCostShown, useNexHostStore } from '../stores/useNexHostStore'
 import { liveEntityRows } from '../lib/nex/live-workers'
+import { isTestCwd } from '../lib/nex/test-cwd'
 import { useIsRefShown } from '../lib/shown-hosts'
 import { ExecutionRowCompact } from './executions/ExecutionRowCompact'
 import { useRowExit } from './executions/useRowExit'
@@ -18,15 +19,21 @@ export interface HostWorkerRowsProps {
   onOpen: (executionId: string) => void
   /** Prefix of this component's own testids: `-loading`, `-error`, `-retry`, `-truncated`, `-empty`. */
   testIdPrefix: string
+  /** Split by cwd: `normal` drops test cwds (under /private/tmp), `test` keeps only those. Omitted = every live row. */
+  filter?: 'normal' | 'test'
 }
 
-export function HostWorkerRows({ hostId, onOpen, testIdPrefix }: HostWorkerRowsProps) {
+export function HostWorkerRows({ hostId, onOpen, testIdPrefix, filter }: HostWorkerRowsProps) {
   const t = useI18nStore((s) => s.t)
   const entry = useNexHostStore((s) => s.byHost[hostId])
   const daemonHostId = typeof entry?.capabilities?.host_id === 'string' ? entry.capabilities.host_id : null
   const showCost = useNexHostStore(selectRollupCostShown(hostId))
   const { items, phase, error, truncated, refetch } = useHostExecutions(hostId)
-  const live = useMemo(() => liveEntityRows(items), [items])
+  const live = useMemo(() => {
+    const rows = liveEntityRows(items)
+    if (!filter) return rows
+    return rows.filter((row) => isTestCwd(row.cwd) === (filter === 'test'))
+  }, [items, filter])
   const shown = useIsRefShown(hostId)
   const { requestExit, pendingIds, dialog } = useRowExit(hostId, live)
   const [now, setNow] = useState(() => Date.now())

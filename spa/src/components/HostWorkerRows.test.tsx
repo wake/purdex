@@ -41,7 +41,8 @@ beforeEach(() => {
   vi.mocked(exitWorker).mockReset().mockResolvedValue({ exited: true, terminated: true, archived: true, state: 'terminated' })
 })
 
-const renderRows = (onOpen = vi.fn()) => render(<HostWorkerRows hostId={H} onOpen={onOpen} testIdPrefix={P} />)
+const renderRows = (onOpen = vi.fn(), filter?: 'normal' | 'test') =>
+  render(<HostWorkerRows hostId={H} onOpen={onOpen} testIdPrefix={P} filter={filter} />)
 
 describe('HostWorkerRows', () => {
   it('shows live rows only, one per conversation, and opens one', () => {
@@ -169,5 +170,40 @@ describe('HostWorkerRows', () => {
     expect(exitWorker).not.toHaveBeenCalled()
     await act(async () => { fireEvent.click(screen.getByTestId('exit-confirm')) })
     expect(exitWorker).toHaveBeenCalledWith({ hostId: H, executionId: 'E1' })
+  })
+
+  describe('filter (worker test tab S4)', () => {
+    const mixed = () => seed([
+      row({ id: 'N1', session_id: 'SN', cwd: '/Users/w/proj', brief: 'normal one' }),
+      row({ id: 'T1', session_id: 'ST', cwd: '/tmp/x', brief: 'test one' }),
+      row({ id: 'T2', session_id: 'ST2', cwd: '/private/tmp/a/b', brief: 'test two' }),
+    ])
+    it('normal drops test cwds', () => {
+      mixed()
+      renderRows(vi.fn(), 'normal')
+      expect(screen.getAllByTestId('executions-row')).toHaveLength(1)
+      expect(screen.getByText('normal one')).toBeInTheDocument()
+    })
+    it('test keeps only test cwds', () => {
+      mixed()
+      renderRows(vi.fn(), 'test')
+      expect(screen.getAllByTestId('executions-row')).toHaveLength(2)
+      expect(screen.queryByText('normal one')).toBeNull()
+    })
+    it('no filter keeps every row (New Tab / activity list unchanged)', () => {
+      mixed()
+      renderRows()
+      expect(screen.getAllByTestId('executions-row')).toHaveLength(3)
+    })
+    it('shows the empty copy when the filter leaves nothing', () => {
+      seed([row({ id: 'T1', session_id: 'ST', cwd: '/tmp/x' })])
+      renderRows(vi.fn(), 'normal')
+      expect(screen.getByTestId(`${P}-empty`)).toBeInTheDocument()
+    })
+    it('a loading list whose live rows are all filtered out still shows the skeleton', () => {
+      seed([row({ id: 'T1', session_id: 'ST', cwd: '/tmp/x' })], { phase: 'loading' })
+      renderRows(vi.fn(), 'normal')
+      expect(screen.getByTestId(`${P}-loading`)).toBeInTheDocument()
+    })
   })
 })
