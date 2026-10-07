@@ -23,28 +23,33 @@ Spec：`docs/specs/2026-10-07-worker-test-tab-and-registry-titles-spec.md`（§7
 
 ### T2 `conversation_names` 表與 store
 - `internal/store/conversation_names.go`：`migrateConversationNames`（`CREATE TABLE IF NOT EXISTS`，欄位如 spec §4.1）、`ConversationNames()` 取得 store、`Upsert(ctx, sessionID, name, nowMs)`（正規化：lowercase UUID、TrimSpace、空字串拒絕、截 120 runes）、`All(ctx) (map[string]string, error)`（sid→name）。接進既有 migrate 流程（與 `migrateConversationIndex` 同處）。
-- 測試：upsert 覆寫、空名拒絕、截斷在 rune 邊界、sid 大小寫正規化、`All`。
+- 測試：upsert 覆寫、空名拒絕、截斷在 rune 邊界、sid 大小寫正規化、`All`；**`seen_at` 在 conflict update 時更新**（codex #7）：store 提供僅供測試用的 `seenAt(ctx, sid)` accessor（unexported，同 package 測試讀），先 Upsert(t0) 再 Upsert(t1>t0) 同名，斷言 seen_at=t1、名字不變。
 
 ### T3 peers module 寫入（活著時記名）
-- peers module 在每次 inventory 建構後，對 `LiveEntries` 的每個 entry：有 `SessionID`（有效 UUID）且 `ipeers.RoutableName(Name)` ⇒ 候選。記憶體 map `sid → {name, writtenAt}`；**name 與記憶值不同、或距上次寫入 > 1 小時**才呼叫 store.Upsert；寫入失敗只 log（不影響 inventory）。
-- 以注入的 `NameSink interface{ Upsert(ctx, sid, name string, nowMs int64) error }` 接線（nil ＝ 不記錄，既有測試不變）；production 接 `MetaStore.ConversationNames()`。
-- 測試：首次寫入、同名 1 小時內不重寫、改名立刻寫、超過 1 小時重寫、unroutable name／無 session id 跳過、store 失敗不拋、nil sink 不 panic。
+- 掛點：`internal/module/peers/module.go` 的 inventory 建構，緊接 `m.warnNewerCCVersions(entries)` 之後呼叫 `m.observeNames(entries)`（該處已有本週期的 registry entries）。
+- 規則：entry 有有效 UUID 的 `SessionID` 且 `ipeers.RoutableName(Name)` ⇒ 候選。記憶體 map `sid → {name, writtenAt}`；**name 與記憶值不同、或距上次寫入 > 1 小時**才 Upsert。
+- **鎖（codex #3）**：inventory 可並行，map 與節流狀態放在 `nameWriter` 結構內以 `sync.Mutex` 保護；Upsert 本身在鎖外執行前先「預留」不行（失敗要能重試），故流程為：鎖內決定要寫哪些 → 解鎖 → 逐筆 Upsert → 成功的才鎖內回寫 `{name, writtenAt}`。
+- **失敗不推進節流狀態（codex #4）**：Upsert 失敗只 log，**不**更新該 sid 的 name／writtenAt，下一輪 inventory 自然重試。
+- 以注入的 `NameSink interface{ Upsert(ctx, sid, name string, nowMs int64) error }` 接線；`peersmod.New(audit, titles)` 之後加 `.WithNameSink(sink)`（nil＝不記錄，既有測試不變）。**production wiring**：`cmd/pdx/main.go` 在 `c.AddModule(peersmod.New(audit, titles))` 處，`meta != nil` 時 `.WithNameSink(meta.ConversationNames())`。
+- 測試：首次寫入、同名 1 小時內不重寫、改名立刻寫、超過 1 小時重寫、unroutable name／無 session id 跳過、nil sink 不 panic；**store 失敗後下一輪重試成功**（第一輪 sink 回錯 → 狀態不推進 → 第二輪再呼叫並成功，之後同名才節流）；**並行測試**：N 個 goroutine 同時 observeNames（含改名與相同名），`go test -race` 無競態且每個 (sid,name) 寫入次數符合節流規則。
 
-### T4 標題退路新階
-- `internal/module/nex/conversations.go`：新常數 `titleFromRegistry = "registry"`；`conversationInputs` 加 `Names map[string]string`（sid→name，由 handler 從 store 讀入；讀失敗＝空 map＋log）；`conversationTitle(s, row, nexenTitle, registryName)` 在 nexen 之後、prompt 之前插入。
-- 測試（spec §6）：有名無 prompt→registry；有名有 prompt→registry；有 ai 標題→ai（registry 不蓋）；有 custom→custom；有 nexen→nexen；名字僅空白→略過往下；無名→行為與現況完全相同（既有表格測試不動）。
-- `conversationRow.TitleSource` 註解補 `"registry"`。
+### T4 標題退路新階（含 nex 讀取的 production wiring）
+- `internal/module/nex/conversations.go`：新常數 `titleFromRegistry = "registry"`；`conversationInputs` 加 `Names map[string]string`（sid→name）；`conversationTitle(s, row, nexenTitle, registryName)` 在 nexen 之後、prompt 之前插入；`conversationRow.TitleSource` 註解補 `"registry"`。
+- **讀取 wiring（codex #2）**：nex Module 新增 `convNames ConversationNameReader`（`interface{ All(ctx) (map[string]string, error) }`）與 setter `WithConversationNames(r)`；`collectConversations` 在讀 index 之後呼叫 `m.convNames.All(ctx)`（nil＝空 map；失敗＝空 map＋log，**不讓整個 snapshot 失敗**——名字只是退路）。`cmd/pdx/main.go` 在既有 `nexMod.WithConversationIndex(meta.Conversations())` 的 `meta != nil` 區塊內加 `.WithConversationNames(meta.ConversationNames())`。
+- 名字在 snapshot 建立時併入（snapshot 內的 title 已含 registry 階）；名字的新鮮度受 `convReuse` 影響，可接受（標題只作退路顯示）。
+- 測試：`conversationTitle` 順序案例（有名無 prompt→registry；有名有 prompt→registry；有 ai→ai；有 custom→custom；有 nexen→nexen；名字僅空白→略過；無名→與現況相同，既有表格測試不動）；**整合測試（HTTP）**：以真的 `store.MetaStore`（臨時 DB）先 `ConversationNames().Upsert` 一個名字、index 放一列無標題無 prompt 的 ended 對話，打 `GET /api/nex/conversations?state=ended`，斷言回應 `title=<name>`、`title_source="registry"`；names reader 失敗時對話仍列出且退回 prompt／8 碼。
 
-### T5 `?scope=test|normal|all`
-- `handleConversations` 解析 `scope`（預設 `all`；其他值 → 400 `bad_scope`）。過濾在**排序與 cap 之前**、以 `IsTestCwd(r.Cwd)`（`r.Cwd` ＝ `firstNonEmpty(row.Cwd, stint.Cwd)`，即回應所顯示的 cwd）；`total`、`truncated` 以過濾後為準。
-- `unknown_owner`：該分支在建列前 `continue`，需在計數前取得同一個 cwd 規則（`firstNonEmpty(index[s].Cwd, latest[s].Cwd)`）並套同一過濾，使三種 scope 的 unknown_owner 互斥且加總等於 all。
-- 實作位置：`buildConversations` 加一個 `scope` 參數（或在其輸出上過濾並另算 unknown_owner——以測試先行決定較小的改動；兩者結果必須一致）。
-- 測試（spec §6）：同一資料集（含 `/tmp/x`、`/private/tmp/y`、一般路徑、空 cwd、unknown_owner 兩側）三種 scope 互斥、聯集＝all；`total`/`truncated` 在 cap 邊界以過濾後為準（例：test 側超過 cap、normal 側未超過）；`scope` 非法值 400；缺省＝all（舊 client 行為不變）。
+### T5 `?scope=test|normal|all`（snapshot 不可變）
+- **不改 `buildConversations` 的輸入與快取語意（codex #1）**：snapshot 跨 request 共用、排程掃描沒有 request scope，所以 scope **只在 handler 對副本過濾**，`snap.res.Ended/Gone` 本身不被修改、不被排序、不被重新切片後寫回。
+- 為了讓 `unknown_owner` 也能依 scope 計：`buildConversations` 額外把每個 unknown-owner 的 cwd（`firstNonEmpty(index[s].Cwd, latest[s].Cwd)`）記進結果的新欄位 `UnknownOwnerCwds []string`（`json:"-"`，與 scope 無關、純資料，snapshot 建立時一次算好）。
+- handler：解析 `scope`（預設 `all`；其他值 → 400 `bad_scope`）；`scope=all` 走原路徑（零行為差異）；否則在**新配置的 slice**（`make` 後逐列 append，不得 `rows[:0]` 之類共用底層陣列）上以 `conversations.IsTestCwd(r.Cwd)` 過濾，再套 cap；`total`、`truncated` 以過濾後為準；`unknown_owner` 以 `UnknownOwnerCwds` 同規則計。
 - capability：`internal/core/info_handler.go` 加 `"conversations.scope.v1"`＋對應測試（沿用該檔既有 capability 測試）。
+- 測試（spec §6＋codex #6）：同一資料集（含 `/tmp/x`、`/private/tmp/y`、一般路徑、空 cwd、unknown_owner 兩側）三種 scope 互斥、聯集＝all；`total`／`truncated` 在 cap 邊界以過濾後為準（test 側超 cap、normal 側未超）；非法值 400；缺省＝all；**同一份快取上依序查 test→normal→all→test 結果互不影響、`snap.res` 前後逐列相等；並行（多 goroutine 交錯三種 scope，`-race`）結果各自穩定**。
 
-### T6 變異驗證與整合
-- 變異（寫進 PR 描述）：(a) 把名字改存進 `conversation_index` 欄位並讓 `UpsertBatch` 覆蓋 → 「scan 覆蓋不洗掉名字」測試翻紅；(b) `IsTestCwd` 去掉 Clean → `../` 案例翻紅；(c) scope 過濾移到 cap 之後 → total/truncated 測試翻紅；(d) 標題階層順序對調 → 順序測試翻紅。
-- 全套：`go vet ./...`、`go test ./internal/... ./cmd/... -count=1`。
+### T6 變異驗證與整合測試
+- **scan 覆蓋不洗掉名字（codex #5）**：明列測試——先 `ConversationNames().Upsert(sid, name)`，再對同一 sid 做 `ConversationStore.UpsertBatch`（整列覆蓋，模擬 scan），斷言 `ConversationNames().All` 仍含該名字；另有一個走完整 `conversations.Scan` 的版本（Scan 寫入同 sid 後名字仍在）。
+- 變異（寫進 PR 描述）：(a) 把名字改存進 `conversation_index` 欄位並讓 `UpsertBatch` 覆蓋 → 上面的測試翻紅；(b) `IsTestCwd` 去掉 Clean → `../` 案例翻紅；(c) scope 過濾移到 cap 之後 → total/truncated 測試翻紅；(d) 標題階層順序對調 → 順序測試翻紅；(e) 過濾改成就地修改 `snap.res` → 不可變測試翻紅；(f) 失敗時仍推進節流狀態 → 重試測試翻紅；(g) 拿掉 nameWriter 的鎖 → `-race` 並行測試翻紅。
+- 全套：`go vet ./...`、`go test ./internal/... ./cmd/... -count=1`，並對 `internal/module/peers`、`internal/module/nex`、`internal/store`、`internal/conversations` 跑 `go test -race`。
 
 ## 2. 不做
 - 不改 ended/gone 的現有 R-4-* 規則、不加新動作、不回填歷史名字、不收 `/var/folders`、不碰 SPA（PR-2）。

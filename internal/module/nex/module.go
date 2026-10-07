@@ -151,19 +151,20 @@ type Module struct {
 	// every convWG.Add, which happens only while convCtx is live (Stop
 	// cancels it under convMu before it waits).
 	convIdx       conversations.Index
-	convRoot      string             // $HOME/.claude/projects
-	convHome      string             // $HOME, for "~" display
-	convNow       func() time.Time   // default time.Now; the reuse window and the scan's clock
-	convIsRegular func(string) bool  // default lstatIsRegular
-	convDirExists func(string) bool  // default statIsDir
-	convScan      convScanFunc       // default conversations.Scan
-	convMu        sync.Mutex         // see above
-	convCached    *convSnapshot      // the last successful snapshot
-	convFlight    *convFlight        // the snapshot in progress, nil when none
-	convCtx       context.Context    // every scan runs under it; created in Init, cancelled by Stop
-	convCancel    context.CancelFunc // cancels convCtx
-	convWG        sync.WaitGroup     // the schedule goroutine and every flight
-	convStopCap   time.Duration      // 0 = convStopWait; test seam
+	convNames     ConversationNameReader // registry names for the title fallback; nil = none
+	convRoot      string                 // $HOME/.claude/projects
+	convHome      string                 // $HOME, for "~" display
+	convNow       func() time.Time       // default time.Now; the reuse window and the scan's clock
+	convIsRegular func(string) bool      // default lstatIsRegular
+	convDirExists func(string) bool      // default statIsDir
+	convScan      convScanFunc           // default conversations.Scan
+	convMu        sync.Mutex             // see above
+	convCached    *convSnapshot          // the last successful snapshot
+	convFlight    *convFlight            // the snapshot in progress, nil when none
+	convCtx       context.Context        // every scan runs under it; created in Init, cancelled by Stop
+	convCancel    context.CancelFunc     // cancels convCtx
+	convWG        sync.WaitGroup         // the schedule goroutine and every flight
+	convStopCap   time.Duration          // 0 = convStopWait; test seam
 
 	// convBeforePublish, when set, runs in a flight between its collect and
 	// taking convMu to publish: a test seam for the Stop/publish race; nil in

@@ -361,7 +361,13 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		titles = meta.PeerLabels()
 		titleMover = meta.PeerLabels()
 	}
-	c.AddModule(peersmod.New(audit, titles))
+	peersMod := peersmod.New(audit, titles)
+	if meta != nil {
+		// Registry names of live sessions, kept for the conversation list's
+		// title fallback after the session ends.
+		peersMod.WithNameSink(meta.ConversationNames())
+	}
+	c.AddModule(peersMod)
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	c.AddModule(profilesmod.New())
@@ -383,7 +389,8 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		// A nil meta store (tests) leaves the conversation listing off: its
 		// Conversations() would dereference it.
 		if meta != nil {
-			nexMod.WithConversationIndex(meta.Conversations())
+			nexMod.WithConversationIndex(meta.Conversations()).
+				WithConversationNames(meta.ConversationNames())
 		}
 		c.AddModule(nexMod)
 	} else {

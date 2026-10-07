@@ -29,6 +29,7 @@ const (
 	titleFromCustom    = "custom"
 	titleFromAI        = "ai"
 	titleFromNexen     = "nexen"
+	titleFromRegistry  = "registry"
 	titleFromPrompt    = "prompt"
 	titleFromSessionID = "session_id"
 )
@@ -47,7 +48,7 @@ const conversationTitleMaxRunes = 120
 type conversationRow struct {
 	SessionID         string `json:"session_id"`
 	Title             string `json:"title"`
-	TitleSource       string `json:"title_source"` // "custom" | "ai" | "nexen" | "prompt" | "session_id"
+	TitleSource       string `json:"title_source"` // "custom" | "ai" | "nexen" | "registry" | "prompt" | "session_id"
 	FirstPrompt       string `json:"first_prompt,omitempty"`
 	Cwd               string `json:"cwd,omitempty"`
 	CwdExists         bool   `json:"cwd_exists"`
@@ -64,6 +65,7 @@ type conversationInputs struct {
 	IndexRows []pstore.ConversationIndexRow
 	Scan      conversations.ScanResult
 	Execs     []store.Execution       // Nexen: every execution, archived included
+	Names     map[string]string       // lowercase session id -> registry name (title fallback); may be nil
 	Terminals []agent.TerminalSession // LiveSessions(ctx, "cc"), in any order
 	IsRegular func(path string) bool  // Lstat(path).Mode().IsRegular()
 	DirExists func(path string) bool  // Stat(path).IsDir()
@@ -72,6 +74,10 @@ type conversationInputs struct {
 type conversationsResult struct {
 	Ended, Gone  []conversationRow // never nil; each sorted LastActivityAt desc, then SessionID asc; uncapped
 	UnknownOwner int               // S skipped because only unverified frames hold them (R-4-9)
+	// UnknownOwnerCwds is the cwd of each unknown-owner S (index, else latest
+	// stint; "" when neither knows one), so a request's ?scope= can count
+	// them without the snapshot knowing any scope. len == UnknownOwner.
+	UnknownOwnerCwds []string `json:"-"`
 }
 
 // buildConversations decides, for every in-scope S without an owner, whether
@@ -162,6 +168,7 @@ func buildConversations(in conversationInputs) conversationsResult {
 		}
 		if unverified[s] {
 			res.UnknownOwner++
+			res.UnknownOwnerCwds = append(res.UnknownOwnerCwds, firstNonEmpty(index[s].Cwd, latest[s].Cwd))
 			continue
 		}
 		row, hasRow := index[s]
@@ -174,7 +181,7 @@ func buildConversations(in conversationInputs) conversationsResult {
 			(hasStint && inUnreadableDir(stint.TranscriptPath))
 
 		r := conversationRow{SessionID: s, FirstPrompt: row.FirstPrompt}
-		r.Title, r.TitleSource = conversationTitle(s, row, stint.TitleText)
+		r.Title, r.TitleSource = conversationTitle(s, row, stint.TitleText, in.Names[s])
 		r.Cwd = firstNonEmpty(row.Cwd, stint.Cwd)
 		r.CwdExists = r.Cwd != "" && in.DirExists(r.Cwd)
 		// The listing, else the last the index saw (§13.3), else the stint.
@@ -226,8 +233,9 @@ func conversationLastIn(first, last string, hasStint bool) string {
 }
 
 // conversationTitle (R-4-10): custom-title, ai-title, the latest stint's
-// Nexen title, the first prompt's first line, then S[:8].
-func conversationTitle(s string, row pstore.ConversationIndexRow, nexenTitle string) (title, source string) {
+// Nexen title, the registry name Claude Code gave the session while it was
+// alive, the first prompt's first line, then S[:8].
+func conversationTitle(s string, row pstore.ConversationIndexRow, nexenTitle, registryName string) (title, source string) {
 	if t := strings.TrimSpace(row.CustomTitle); t != "" {
 		return t, titleFromCustom
 	}
@@ -236,6 +244,9 @@ func conversationTitle(s string, row pstore.ConversationIndexRow, nexenTitle str
 	}
 	if t := strings.TrimSpace(nexenTitle); t != "" {
 		return t, titleFromNexen
+	}
+	if t := strings.TrimSpace(registryName); t != "" {
+		return t, titleFromRegistry
 	}
 	if t := promptFirstLine(row.FirstPrompt); t != "" {
 		return t, titleFromPrompt
