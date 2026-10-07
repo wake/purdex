@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.539] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。接力的回報路由上線，但還沒有 mod 或 `pdx relay` 指令去呼叫（P5a-2c／P5b），現有使用者流程不受影響。`pdx` 指令、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-2b（#1716）
+
+接力 op 的回報與重啟收斂（spec §8.1、§8.4、§8.7、§9.3；plan v2 Task 5a.8）。
+
+- **`POST /api/relay/ops/{id}/report`**：mod 回報 op 走到哪（writing／written／cleared／done／failed／cancelled）；同一狀態重送是冪等的，不合法的轉換回 409 並帶出 op。`claimed` 不能用這條路回報——self op 只由核准單的核准來 claim，擋掉「mod 自己宣稱已核准」。
+- **`cleared`**（舊 session 換成新 session）：新 session **必須**是這台主機上、與原來同一個行程的活 session（`/clear` 不換行程）——指向別人的活 session 回 400；registry 還沒出現新 session 時最多等 3 秒、等不到回 503 讓 mod 下個回合重送。寫下血統後把 title 搬到新 session。
+- **終態回報會把還開著的核准單一起關掉**（例如等核准時被 /compact 掉 → `cancelled`）：先走核准單的 CAS 再動 op，與使用者的核准／拒絕是同一個競爭點——誰先贏誰算數，mod 的回報永遠不會蓋掉使用者已做的決定。
+- **回報後續動作可重試**：title 搬家或關單失敗時，同一狀態重送就會再做一次；`done` 時也會再確認 title 已搬；daemon 重啟時把「op 已終態但核准單還開著」的單關掉、把 `cleared` 的 op 再搬一次 title。
+- **`GET /api/relay/ops/{id}`**；**`GET /api/team/inflight`** 多了 `relays_active`。
+
+Review 後補強（R1 一條、攻擊方四條、critic 三輪）全部收進上面的行為：`claimed` 不可回報、新 session 的行程綁定（fail-closed）、先關單再動 op、CAS 輸了先把 op 推到單的裁決、後續動作重試、讀不到 op 不盲寫。
+
 ## [1.0.0-alpha.538] - 2026-10-08
 
 > 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動，桌機上沒有使用者可見的變化。這是 purdex-ios 需要的三項 daemon 小改動的第一項。
