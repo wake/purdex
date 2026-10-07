@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 
 vi.mock('../../lib/nex/nex-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/nex/nex-api')>()),
@@ -12,6 +12,7 @@ import { NexApiError, type NexCapabilities } from '../../lib/nex/types'
 import { useNexHostStore, type NexHostEntry } from '../../stores/useNexHostStore'
 import { useHeadlessLauncherMemoryStore } from '../../stores/useHeadlessLauncherMemoryStore'
 import { useHostStore } from '../../stores/useHostStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 import type { NexInfo } from '../../lib/host-api'
 
 const H = 'h1'
@@ -347,5 +348,102 @@ describe('HeadlessLauncher — New Tab does not offer the asking mode (permissio
     fireEvent.click(submit())
     await waitFor(() => expect(delegate).toHaveBeenCalledTimes(1))
     expect(delegate.mock.calls[0][1]).toMatchObject({ profile: 'readonly' })
+  })
+
+  it('a default the host lists as asking falls to the first profile New Tab offers', async () => {
+    askHost({ sandbox_profiles: ['ask_more', 'standard', 'handoff'], sandbox_default_profile: 'ask_more', permissions: { ...PERMS, profiles: ['ask_more'] } })
+    renderLauncher()
+    expect(offered()).toEqual(['standard', 'handoff'])
+    expect(profile().value).toBe('standard')
+    typeBrief('go')
+    fireEvent.click(submit())
+    await waitFor(() => expect(delegate).toHaveBeenCalledTimes(1))
+    expect(delegate.mock.calls[0][1]).toMatchObject({ profile: 'standard' })
+  })
+
+  // R1-1 / A1: with every profile filtered out, nothing may fall back to the host's (asking) default.
+  describe('a host with no profile New Tab may offer', () => {
+    const H2 = 'h2'
+    const onlyAsking = (over: Partial<NexCapabilities> = {}) => caps({
+      sandbox_profiles: ['handoff_ask', 'ask_more'], sandbox_default_profile: 'handoff_ask', sandbox_max_profile: 'handoff_ask',
+      permissions: { ...PERMS, profiles: ['handoff_ask', 'ask_more'] }, ...over,
+    })
+    const form = () => screen.getByTestId('headless-launcher')
+    /** Every way the form can be submitted: the button, the form's own submit, Mod+Enter in the brief. */
+    const tryEverySubmit = () => {
+      fireEvent.click(submit())
+      fireEvent.submit(form())
+      fireEvent.keyDown(brief(), { key: 'Enter', metaKey: true })
+    }
+    beforeEach(() => useI18nStore.getState().setLocale('en'))
+
+    it('offers no option, says so, disables submit and sends nothing', async () => {
+      seedReady(onlyAsking())
+      renderLauncher()
+      expect(offered()).toEqual([])
+      expect(screen.getByTestId('headless-no-profiles')).toHaveTextContent('No Sandbox profile is available on this host')
+      typeBrief('go')
+      expect(brief().value).toBe('go')
+      expect(submit()).toBeDisabled()
+      tryEverySubmit()
+      await Promise.resolve()
+      expect(delegate).not.toHaveBeenCalled()
+    })
+
+    it('says so in zh-TW too', () => {
+      seedReady(onlyAsking())
+      useI18nStore.getState().setLocale('zh-TW')
+      try {
+        renderLauncher()
+        expect(screen.getByTestId('headless-no-profiles')).toHaveTextContent('這台主機沒有可用的 Sandbox profile')
+      } finally {
+        useI18nStore.getState().setLocale('en')
+      }
+    })
+
+    it('a remembered handoff_ask is not sent either', async () => {
+      seedReady(onlyAsking())
+      useHeadlessLauncherMemoryStore.setState({ byHost: { [H]: { root: '/srv/dev', profile: 'handoff_ask' } } })
+      renderLauncher()
+      typeBrief('go')
+      expect(submit()).toBeDisabled()
+      tryEverySubmit()
+      await Promise.resolve()
+      expect(delegate).not.toHaveBeenCalled()
+    })
+
+    it('a profile the reader picked that the host later lists as asking is not sent', async () => {
+      seedReady(caps({ sandbox_profiles: ['ask_more'], sandbox_default_profile: 'ask_more', permissions: undefined }))
+      renderLauncher()
+      fireEvent.change(profile(), { target: { value: 'ask_more' } })
+      typeBrief('go')
+      expect(submit()).not.toBeDisabled()
+      act(() => { seedReady(caps({ sandbox_profiles: ['ask_more'], sandbox_default_profile: 'ask_more', permissions: { ...PERMS, profiles: ['ask_more'] } })) })
+      expect(offered()).toEqual([])
+      expect(submit()).toBeDisabled()
+      tryEverySubmit()
+      await Promise.resolve()
+      expect(delegate).not.toHaveBeenCalled()
+    })
+
+    it('switching from a host with profiles to one without leaves nothing to submit', async () => {
+      useHostStore.setState({
+        hosts: { [H]: { id: H, name: 'Mini', ip: '127.0.0.1', port: 7860, order: 0 }, [H2]: { id: H2, name: 'Air', ip: '127.0.0.2', port: 7860, order: 1 } },
+        runtime: { [H]: { status: 'connected', tmuxState: 'ok' } as never, [H2]: { status: 'connected', tmuxState: 'ok' } as never },
+      })
+      const entry = (c: NexCapabilities) => ({ info: READY_INFO, capabilities: c, phase: 'ready' as const, error: null, fetchedAt: 1, generation: 1, fingerprint: '' })
+      useNexHostStore.setState({ byHost: { [H]: entry(caps()), [H2]: entry(onlyAsking()) }, ensure: ensureSpy, invalidate: invalidateSpy })
+      const { rerender } = renderLauncher()
+      fireEvent.change(profile(), { target: { value: 'strict' } })
+      typeBrief('go')
+      expect(submit()).not.toBeDisabled()
+      rerender(<HeadlessLauncher hostId={H2} onSelect={onSelect} />)
+      expect(offered()).toEqual([])
+      expect(brief().value).toBe('go')
+      expect(submit()).toBeDisabled()
+      tryEverySubmit()
+      await Promise.resolve()
+      expect(delegate).not.toHaveBeenCalled()
+    })
   })
 })

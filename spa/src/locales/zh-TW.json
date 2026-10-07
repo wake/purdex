@@ -1518,6 +1518,7 @@
   "newtab.headless.disabled": "此主機未啟用 Nexen — Hosts → Nex",
   "newtab.headless.unavailable": "此主機的 Nexen 無法使用：{{error}}",
   "newtab.headless.no_roots": "此主機未開放任何目錄 — 無法在此啟動。",
+  "newtab.headless.no_profiles": "這台主機沒有可用的 Sandbox profile",
   "newtab.headless.rejected": "已拒絕：{{reason}}",
   "newtab.headless.bad_request": "請求被拒：{{code}}",
   "newtab.headless.offline": "主機離線 — 未啟動任何東西。",

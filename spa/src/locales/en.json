@@ -1518,6 +1518,7 @@
   "newtab.headless.disabled": "Nexen is not enabled on this host — Hosts → Nex",
   "newtab.headless.unavailable": "Nexen is unavailable on this host: {{error}}",
   "newtab.headless.no_roots": "This host allows no directories — nothing can be launched here.",
+  "newtab.headless.no_profiles": "No Sandbox profile is available on this host",
   "newtab.headless.rejected": "Rejected: {{reason}}",
   "newtab.headless.bad_request": "Request refused: {{code}}",
   "newtab.headless.offline": "Host is offline — nothing was launched.",

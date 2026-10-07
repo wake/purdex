@@ -94,13 +94,16 @@ function HeadlessForm({ hostId, caps, onSelect }: Props & { caps: NexCapabilitie
   const rootPaths = caps.roots.map((r) => r.path)
   const root = pick(rootChoice, remembered?.root, rootPaths, rootPaths[0] ?? '')
   const profiles = newTabProfiles(caps)
-  // A host default New Tab does not offer (an asking one) falls to the first profile it does.
-  const defaultProfile = profiles.includes(caps.sandbox_default_profile) ? caps.sandbox_default_profile : (profiles[0] ?? caps.sandbox_default_profile)
+  // A host default New Tab does not offer (an asking one) falls to the first profile it does — and with none
+  // left, to nothing: the host's own default is never the fallback, since it may be the asking one.
+  const defaultProfile = profiles.includes(caps.sandbox_default_profile) ? caps.sandbox_default_profile : (profiles[0] ?? '')
   const profile = pick(profileChoice, remembered?.profile, profiles, defaultProfile)
   const maxBytes = caps.brief?.max_bytes ?? DEFAULT_BRIEF_MAX_BYTES
   const usedBytes = utf8ByteLength(brief)
   const subVerdict = validateSubPath(sub)
-  const canSubmit = !busy && rootPaths.length > 0 && brief.trim() !== '' && usedBytes <= maxBytes && subVerdict.ok
+  // Only an offered profile is ever sent (§5.6): this holds whatever was picked, remembered or carried over
+  // from another host, and a host with no profile left to offer cannot submit at all.
+  const canSubmit = !busy && rootPaths.length > 0 && profiles.includes(profile) && brief.trim() !== '' && usedBytes <= maxBytes && subVerdict.ok
 
   const run = () => {
     if (!canSubmit || !subVerdict.ok) return
