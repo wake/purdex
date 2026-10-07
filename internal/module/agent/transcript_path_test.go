@@ -27,28 +27,56 @@ func TestTranscriptSlug(t *testing.T) {
 // A path that was a safe regular file when resolved but is a symlink by the
 // time it is opened must be refused, not followed.
 func TestOpenTranscriptRefusesSymlink(t *testing.T) {
-	dir := t.TempDir()
-	outside := filepath.Join(dir, "secret.jsonl")
-	if err := os.WriteFile(outside, []byte("x\n"), 0o600); err != nil {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(dir, "swapped.jsonl")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Fatal(err)
+	root := filepath.Join(base, "projects")
+	outsideDir := filepath.Join(base, "outside")
+	for _, d := range []string{filepath.Join(root, "safe"), outsideDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if f, err := openTranscript(link); !errors.Is(err, errNoTranscript) {
+	good := filepath.Join(root, "safe", "t.jsonl")
+	secret := filepath.Join(outsideDir, "t.jsonl")
+	for _, p := range []string{good, secret} {
+		if err := os.WriteFile(p, []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	open := func(p string) (error, bool) {
+		f, err := openTranscript(root, p)
 		if f != nil {
 			f.Close()
 		}
-		t.Fatalf("err = %v, want errNoTranscript", err)
+		return err, f != nil
 	}
-	f, err := openTranscript(outside)
-	if err != nil {
+
+	if err, ok := open(good); err != nil || !ok {
 		t.Fatalf("regular file: %v", err)
 	}
-	f.Close()
-	if _, err := openTranscript(filepath.Join(dir, "nope.jsonl")); !errors.Is(err, errFileMissing) {
+	if err, _ := open(filepath.Join(root, "safe", "nope.jsonl")); !errors.Is(err, errFileMissing) {
 		t.Fatalf("missing: %v", err)
+	}
+	// Final component swapped for a symlink to an outside file.
+	link := filepath.Join(root, "safe", "l.jsonl")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Fatal(err)
+	}
+	if err, ok := open(link); !errors.Is(err, errNoTranscript) || ok {
+		t.Fatalf("final symlink: err=%v opened=%v", err, ok)
+	}
+	// Intermediate directory swapped for a symlink to an outside directory
+	// after the path was validated: same name exists outside.
+	if err := os.RemoveAll(filepath.Join(root, "safe")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(root, "safe")); err != nil {
+		t.Fatal(err)
+	}
+	if err, ok := open(good); !errors.Is(err, errNoTranscript) || ok {
+		t.Fatalf("directory symlink: err=%v opened=%v", err, ok)
 	}
 }
 

@@ -5,7 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -34,24 +35,49 @@ func transcriptSlug(cwd string) string {
 	return b.String()
 }
 
-// openTranscript opens a path returned by resolveTranscriptPath without
-// following a final symlink and proves the descriptor is the same regular file
-// the resolver inspected, so a swap between check and open (the hook-supplied
-// path is untrusted) cannot redirect the read outside ~/.claude/projects.
-func openTranscript(path string) (*os.File, error) {
-	before, err := os.Lstat(path)
-	if err != nil {
-		return nil, errFileMissing
-	}
-	if !before.Mode().IsRegular() {
+// transcriptRoot is the symlink-resolved ~/.claude/projects directory.
+func transcriptRoot(home string) (string, error) {
+	return filepath.EvalSymlinks(filepath.Join(home, ".claude", "projects"))
+}
+
+// openTranscript opens a path returned by resolveTranscriptPath so that a swap
+// between the check and the open (the hook-supplied path is untrusted) cannot
+// redirect the read outside ~/.claude/projects.
+//
+// root is the symlink-resolved projects directory and path the resolved file
+// under it. The walk is descriptor-relative from root: every component below
+// it is opened with openat(O_NOFOLLOW), so a directory swapped for a symlink
+// after the check is refused at that component instead of being followed out
+// of root (O_NOFOLLOW on the last component alone would not catch that).
+func openTranscript(root, path string) (*os.File, error) {
+	rel, ok := strings.CutPrefix(path, root+string(filepath.Separator))
+	if !ok || rel == "" {
 		return nil, errNoTranscript
 	}
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	parts := strings.Split(rel, string(filepath.Separator))
+	dirFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, errNoTranscript
 	}
-	after, err := f.Stat()
-	if err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) {
+	for i, p := range parts {
+		last := i == len(parts)-1
+		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC
+		if !last {
+			flags |= unix.O_DIRECTORY
+		}
+		next, err := unix.Openat(dirFD, p, flags, 0)
+		unix.Close(dirFD)
+		if err != nil {
+			if errors.Is(err, unix.ENOENT) {
+				return nil, errFileMissing
+			}
+			return nil, errNoTranscript
+		}
+		dirFD = next
+	}
+	f := os.NewFile(uintptr(dirFD), path)
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
 		f.Close()
 		return nil, errNoTranscript
 	}
@@ -84,7 +110,7 @@ func resolveTranscriptPath(owner PaneOwner, home string) (string, error) {
 	if err != nil {
 		return "", errNoTranscript
 	}
-	root, err := filepath.EvalSymlinks(filepath.Join(home, ".claude", "projects"))
+	root, err := transcriptRoot(home)
 	if err != nil {
 		return "", errNoTranscript
 	}

@@ -100,7 +100,12 @@ func (m *Module) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		transcriptError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	f, err := openTranscript(path)
+	root, err := transcriptRoot(home)
+	if err != nil {
+		transcriptError(w, http.StatusNotFound, "no_transcript")
+		return
+	}
+	f, err := openTranscript(root, path)
 	if err != nil {
 		transcriptError(w, http.StatusNotFound, err.Error())
 		return

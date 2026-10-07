@@ -61,3 +61,9 @@ codex／opencode transcript、`/api/fs/read` 的 10 MB 上限不動。
 - **WindowSize**：簽章 `WindowSize(ctx, target) (cols, rows, err)`，ctx 隨 WebSocket 關閉取消（查詢卡住也要停）；target 為 session 名，attach-session 的 client 看的就是該 session 的 current window，故查 session 的 current window 即其實際畫面；interval 可注入（預設 1 s）。
 - **relay 寫入**：window text frame 與 binary 輸出共用同一把 `writeMu`（提升到 HandleWebSocket 層級可見處），寫失敗與 batcher 一樣關 ptmx 喚醒兩條 goroutine。
 - **Executor 介面**：`WindowSize` 加進 `tmux.Executor`，同步更新所有實作者（`RealExecutor`、`FakeExecutor`、其他測試 executor），編譯全綠為 task 完成條件。
+
+## 修訂 2（R2 critic）
+
+- **開檔**：驗證後以 projects 根目錄 fd 為起點逐層 `openat(O_NOFOLLOW)`（`O_DIRECTORY` 用於中介層），任一層被換成 symlink 即拒絕（`no_transcript`）；開啟後 `fstat` 必為一般檔。威脅模型：hook 提供的路徑不可信，不能藉 check→open 之間的置換（含中介目錄）讀到 projects 外的檔案。projects 根目錄本身以 `EvalSymlinks` 解析一次作為信任錨。
+- **未完成尾行**：`completeEnd` 的反向掃描以 `MaxLineBytes` 為界，超過回 413 `line_too_large`。
+- **已知不處理（開 issue）**：同檔名被外部替換（rename 後同名新檔）不觸發 reset——Claude Code 的輪替一律換 session id＝新檔名；若要防禦需加 inode 型 generation（client 需回傳）。
