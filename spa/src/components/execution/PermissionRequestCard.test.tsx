@@ -4,8 +4,10 @@ import { render, screen, fireEvent, act } from '@testing-library/react'
 import PermissionRequestCard, { PermissionExpiredNotice, NOTE_MAX_BYTES, PREVIEW_CHARS } from './PermissionRequestCard'
 import type { PermissionRequestState } from '../../lib/nex/permissions'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { clearAllPermissionCards, permissionCardKey, readPermissionCard } from '../../lib/nex/permission-card-memory'
 
 const bytes = (s: string) => new TextEncoder().encode(s).length
+const KEY = permissionCardKey('h', 'exc_1', 'req_a')
 const NOW = new Date('2026-10-07T10:00:00Z').getTime()
 const request = (extra: Partial<PermissionRequestState> = {}): PermissionRequestState => ({
   requestId: 'req_a', toolName: 'Bash', requestedAt: NOW - 65_000, status: 'pending',
@@ -15,7 +17,7 @@ const request = (extra: Partial<PermissionRequestState> = {}): PermissionRequest
 describe('PermissionRequestCard', () => {
   const onAllow = vi.fn(), onDeny = vi.fn()
   const renderCard = (props: Partial<Parameters<typeof PermissionRequestCard>[0]> = {}) =>
-    render(<PermissionRequestCard request={request()} disabled={false} onAllow={onAllow} onDeny={onDeny} {...props} />)
+    render(<PermissionRequestCard request={request()} disabled={false} onAllow={onAllow} onDeny={onDeny} memoryKey={KEY} {...props} />)
 
   beforeEach(() => {
     vi.useFakeTimers()
@@ -24,7 +26,33 @@ describe('PermissionRequestCard', () => {
     onDeny.mockReset()
     useI18nStore.getState().setLocale('en')
   })
-  afterEach(() => { vi.useRealTimers() })
+  afterEach(() => {
+    vi.useRealTimers()
+    clearAllPermissionCards()
+  })
+
+  it('a remount under the same memoryKey brings back the note, the open note field and the expanded preview; another key starts fresh', () => {
+    const long = { command: `${'x'.repeat(500)} THE-TAIL` }
+    const first = renderCard({ request: request({ input: long }) })
+    fireEvent.click(screen.getByTestId('permission-expand'))
+    fireEvent.click(screen.getByTestId('permission-deny'))
+    fireEvent.change(screen.getByTestId('permission-deny-note'), { target: { value: '中'.repeat(1000) } })
+    expect(readPermissionCard(KEY)).toEqual({ note: '中'.repeat(682), noteOpen: true, expanded: true })
+    first.unmount()
+
+    const second = renderCard({ request: request({ input: long }) })
+    expect((screen.getByTestId('permission-deny-note') as HTMLInputElement).value).toBe('中'.repeat(682))
+    expect(screen.getByTestId('permission-input')).toHaveTextContent('THE-TAIL')
+    // Escape hides the field and collapsing the preview is remembered too; the typed note stays for a reopen.
+    fireEvent.keyDown(screen.getByTestId('permission-deny-note'), { key: 'Escape' })
+    fireEvent.click(screen.getByTestId('permission-expand'))
+    expect(readPermissionCard(KEY)).toEqual({ note: '中'.repeat(682), noteOpen: false, expanded: false })
+    second.unmount()
+
+    renderCard({ request: request({ requestId: 'req_b', input: long }), memoryKey: permissionCardKey('h', 'exc_1', 'req_b') })
+    expect(screen.queryByTestId('permission-deny-note')).toBeNull()
+    expect(screen.getByTestId('permission-input')).not.toHaveTextContent('THE-TAIL')
+  })
 
   it('shows the tool (display name first), description, the command, the reason, the blocked path and the asking subagent', () => {
     renderCard({
@@ -131,9 +159,9 @@ describe('PermissionRequestCard', () => {
     const { rerender } = renderCard()
     fireEvent.click(screen.getByTestId('permission-deny'))
     fireEvent.change(screen.getByTestId('permission-deny-note'), { target: { value: 'my note' } })
-    rerender(<PermissionRequestCard request={request()} disabled onAllow={onAllow} onDeny={onDeny} />)
+    rerender(<PermissionRequestCard request={request()} disabled onAllow={onAllow} onDeny={onDeny} memoryKey={KEY} />)
     expect(screen.getByTestId('permission-deny')).toBeDisabled()
-    rerender(<PermissionRequestCard request={request()} disabled={false} onAllow={onAllow} onDeny={onDeny}
+    rerender(<PermissionRequestCard request={request()} disabled={false} onAllow={onAllow} onDeny={onDeny} memoryKey={KEY}
       error={{ code: 'invalid_permission_answer', message: 'message exceeds 2048 bytes', field: 'message' }} />)
     expect(screen.getByTestId('permission-error')).toHaveTextContent('message exceeds 2048 bytes')
     const note = screen.getByTestId('permission-deny-note') as HTMLInputElement
@@ -146,10 +174,10 @@ describe('PermissionRequestCard', () => {
   it('other errors show their line; none → no error element', () => {
     const { rerender } = renderCard()
     expect(screen.queryByTestId('permission-error')).toBeNull()
-    rerender(<PermissionRequestCard request={request()} disabled={false} onAllow={onAllow} onDeny={onDeny}
+    rerender(<PermissionRequestCard request={request()} disabled={false} onAllow={onAllow} onDeny={onDeny} memoryKey={KEY}
       error={{ code: 'permission_not_found', message: 'no such request' }} />)
     expect(screen.getByTestId('permission-error')).toBeInTheDocument()
-    rerender(<PermissionRequestCard request={request()} disabled={false} onAllow={onAllow} onDeny={onDeny}
+    rerender(<PermissionRequestCard request={request()} disabled={false} onAllow={onAllow} onDeny={onDeny} memoryKey={KEY}
       error={{ code: 'network', message: 'Failed to fetch' }} />)
     expect(screen.getByTestId('permission-error')).toHaveTextContent('Failed to fetch')
   })

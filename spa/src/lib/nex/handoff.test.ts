@@ -29,6 +29,7 @@ import {
   handoffErrorMessage,
   handoffBlockReasonNow,
   manualResumeHint,
+  handoffConfirmBodyKey,
   HANDOFF_ERROR_CODES,
   SESSION_ID_CODES,
 } from './handoff'
@@ -1006,7 +1007,7 @@ describe('handoffErrorMessage', () => {
       expect(zhMap[key], key).toBeTruthy()
       expect(placeholders(zhMap[key]), key).toEqual(placeholders(enMap[key]))
     }
-    for (const key of ['handoff.owner.terminal', 'handoff.owner.worker', 'handoff.rolled_back', 'handoff.not_rolled_back', 'handoff.menu', 'handoff.confirm_title', 'handoff.confirm_body', 'handoff.confirm_body_idle', 'handoff.success', 'handoff.open_execution', 'handoff.keep_session', 'handoff.other_panes', 'takeback.button', 'takeback.confirm_running', 'takeback.success', 'takeback.manual_resume']) {
+    for (const key of ['handoff.owner.terminal', 'handoff.owner.worker', 'handoff.rolled_back', 'handoff.not_rolled_back', 'handoff.menu', 'handoff.confirm_title', 'handoff.confirm_body', 'handoff.confirm_body_idle', 'handoff.confirm_body_ask', 'handoff.confirm_body_idle_ask', 'handoff.success', 'handoff.open_execution', 'handoff.keep_session', 'handoff.other_panes', 'takeback.button', 'takeback.confirm_running', 'takeback.success', 'takeback.manual_resume']) {
       expect(enMap[key], key).toBeTruthy()
       expect(zhMap[key], key).toBeTruthy()
       expect(placeholders(zhMap[key]), key).toEqual(placeholders(enMap[key]))
@@ -1015,6 +1016,25 @@ describe('handoffErrorMessage', () => {
     expect(zhMap['handoff.error.archive_failed']).toBeUndefined()
     expect(enMap['takeback.manual_resume']).toContain('{{id}}')
     expect(enMap['handoff.other_panes']).toContain('{{count}}')
+  })
+})
+
+// Spec §8.3 picks idle vs legacy by `delegate.start_idle`; P-2c adds the mode: 需要核准 never reads "no permission prompts".
+describe('handoffConfirmBodyKey', () => {
+  const idle = { delegate: { start_idle: true } }
+  it.each([
+    [idle, false, 'handoff.confirm_body_idle'],
+    [idle, true, 'handoff.confirm_body_idle_ask'],
+    [{ delegate: {} }, false, 'handoff.confirm_body'],
+    [{ delegate: {} }, true, 'handoff.confirm_body_ask'],
+    [null, false, 'handoff.confirm_body'],
+    [undefined, true, 'handoff.confirm_body_ask'],
+  ] as const)('caps %j, ask %s → %s', (caps, ask, key) => {
+    expect(handoffConfirmBodyKey(caps, ask)).toBe(key)
+  })
+  it('without a mode it is 完全放行 (today\'s copy)', () => {
+    expect(handoffConfirmBodyKey(idle)).toBe('handoff.confirm_body_idle')
+    expect(handoffConfirmBodyKey(null)).toBe('handoff.confirm_body')
   })
 })
 

@@ -51,6 +51,7 @@ import { useExecutionActions, type SendOptions } from '../../hooks/useExecutionA
 import { usePermissionAnswer } from '../../hooks/usePermissionAnswer'
 import { selectPendingPermission } from '../../lib/nex/permissions'
 import PermissionRequestCard, { PermissionExpiredNotice } from './PermissionRequestCard'
+import { permissionCardKey, prunePermissionCards } from '../../lib/nex/permission-card-memory'
 import { useWorkerUploads } from '../../hooks/useWorkerUploads'
 import { useInputHistory, type HistoryDir } from '../../hooks/useInputHistory'
 import { buildSentHistory, type SentEntry } from '../../lib/nex/sent-history'
@@ -192,6 +193,15 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   const onTextChange = useCallback((text: string) => { draftText.current = text; writeWorkerDraft(draftKey, text) }, [draftKey])
   const workerEnded = !!st.summary && !!workerEndedKind(st.summary)
   useEffect(() => { if (workerEnded) forgetWorkerDraft(draftKey) }, [workerEnded, draftKey])
+  // The request card's note / open / expanded outlive a tab switch the same way (permission-card-memory), and so
+  // does "this pane closed it" (an answer whose resolution has not arrived yet — closing drops the draft itself).
+  // One rule drops both: a request the store no longer lists as pending — resolved, cancelled, expired — and every
+  // request of an ended worker. Only once the history is in: before that the table may not have replayed a request
+  // yet, and a closed request dropped then would come back as a card when it does.
+  useEffect(() => {
+    if (workerEnded) prunePermissionCards(hostId, executionId)
+    else if (st.historyLoaded) prunePermissionCards(hostId, executionId, (id) => permissions[id]?.status === 'pending')
+  }, [hostId, executionId, workerEnded, st.historyLoaded, permissions])
   const getDraftText = useCallback(() => draftText.current, [])
   // Spec §9.1: attachments. The chips live here, not in WorkerInput — the
   // input is re-keyed on the restored draft and remounts after a failed send —
@@ -294,6 +304,11 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // could land after the daemon's settled check and before its archive;
   // the daemon re-verifies (#1171), and the SPA refuses to start the race.
   const writeInFlight = st.pendingSend || actionPending
+  // 退出 is held back only by a write still on its way: the unaccepted send (`sendLocked`) or an interrupt.
+  // `pendingSend` lasts until the turn's result, so it would lock 退出 for the whole turn this pane sent —
+  // a worker waiting for approval included (permission channel §5.4 / N7: that exit cancels the request).
+  // A running turn is exitable after the confirm, as from the Workers list.
+  const exitWriteInFlight = st.sendLocked || actionPending
   const onTakeBack = useCallback(() => {
     if (takeBackInFlight.current || exitInFlight.current || writeInFlight) return
     if (useExecutionStore.getState().executions[key]?.summary?.state === 'running') setConfirmTakeBack(true)
@@ -685,7 +700,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
       className="relative flex flex-col h-full">
       <ExecutionHeader summary={st.summary} cost={cost} hostId={hostId}
-        onInterrupt={() => void handleInterrupt()} onExit={onExit} exitDisabled={!exitable || exitBusy || takeBackBusy || writeInFlight} busy={takeBackBusy || exitBusy}
+        onInterrupt={() => void handleInterrupt()} onExit={onExit} exitDisabled={!exitable || exitBusy || takeBackBusy || exitWriteInFlight} busy={takeBackBusy || exitBusy}
         onTakeBack={takeOffered ? onTakeBack : undefined} takeBackBusy={takeBusy}
         mode={mode} onModeChange={onModeChange} />
       {confirmExit && (
@@ -755,6 +770,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
           the pane exits or takes the worker to a terminal. An expiry leaves a muted line (§5.5). */}
       {st.historyLoaded && (shownPermission ? (
         <PermissionRequestCard key={shownPermission.requestId} request={shownPermission}
+          memoryKey={permissionCardKey(hostId, executionId, shownPermission.requestId)}
           agentLabel={shownPermission.agentId ? (st.tasks[shownPermission.agentId]?.description || shownPermission.agentId) : undefined}
           disabled={permission.busy || takeBackBusy || exitBusy}
           error={permission.error?.requestId === shownPermission.requestId ? permission.error : undefined}

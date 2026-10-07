@@ -50,13 +50,23 @@ import {
 /** In-flight keys: `handoff:<host>:<session>`, `takeback:<host>:<execution>` and `rebuild:<host>:<pane>` (worker-rebuild.ts). */
 const inFlight = new Set<string>()
 
+export type HandoffConfirmBodyKey =
+  | 'handoff.confirm_body_idle' | 'handoff.confirm_body' | 'handoff.confirm_body_idle_ask' | 'handoff.confirm_body_ask'
+
 /**
  * Spec §8.3: a daemon that advertises `delegate.start_idle` hands off idle
  * (waits for the user's next message); an older one still delegates with the
  * placeholder brief and runs a turn at once, so it gets the legacy copy.
+ * Permission channel §5.2: the copy also names the selected mode — 完全放行
+ * says there are no permission prompts, 需要核准 (`askApproval`) says the
+ * worker stops before a risky action and waits for an answer in its pane.
  */
-export function handoffConfirmBodyKey(capabilities: { delegate?: { start_idle?: boolean } } | null | undefined): 'handoff.confirm_body_idle' | 'handoff.confirm_body' {
-  return capabilities?.delegate?.start_idle === true ? 'handoff.confirm_body_idle' : 'handoff.confirm_body'
+export function handoffConfirmBodyKey(
+  capabilities: { delegate?: { start_idle?: boolean } } | null | undefined,
+  askApproval = false,
+): HandoffConfirmBodyKey {
+  const base = capabilities?.delegate?.start_idle === true ? 'handoff.confirm_body_idle' : 'handoff.confirm_body'
+  return askApproval ? `${base}_ask` : base
 }
 
 export async function singleFlight<T>(key: string, run: () => Promise<T>): Promise<T> {

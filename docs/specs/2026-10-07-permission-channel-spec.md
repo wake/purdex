@@ -207,7 +207,7 @@ Plus one gated real-CLI test, mirroring E2.
 - the Q1 / exit race tests of §5.4;
 
 **Acceptance on mlab.** Hand off a throwaway session in 需要核准 mode, then:
-- ask it to run a Bash command;
+- ask it to run a Bash command that is **not read-only**, for example `python3 -c "print(1)"` or one that writes a file outside the cwd. `acceptEdits` (the asking profile's mode) lets Claude Code auto-allow read-only commands such as `echo` and `date`, so they never ask;
 - approve it in the Mac App;
 - deny a second one with a note, and confirm the model sees the note;
 - set a 5-minute timeout on a third, and confirm it expires.

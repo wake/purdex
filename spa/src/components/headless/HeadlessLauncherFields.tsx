@@ -15,6 +15,8 @@ export interface HeadlessLauncherFieldsProps {
   sub: string
   subVerdict: SubPathVerdict
   profile: string
+  /** The profiles to offer (`newTabProfiles`: the host's, minus the asking ones). */
+  profiles: string[]
   busy: boolean
   canSubmit: boolean
   error: string
@@ -31,7 +33,9 @@ const LABEL = 'text-xs text-text-secondary'
 export function HeadlessLauncherFields(p: HeadlessLauncherFieldsProps) {
   const t = useI18nStore((s) => s.t)
   const noRoots = p.caps.roots.length === 0
-  const locked = p.busy || noRoots
+  // Every profile the host has carries the permission channel, which New Tab never offers (§5.6).
+  const noProfiles = p.profiles.length === 0
+  const locked = p.busy || noRoots || noProfiles
   const overLimit = p.usedBytes > p.maxBytes
   const rootKind = p.caps.roots.find((r) => r.path === p.root)?.kind
 
@@ -50,6 +54,9 @@ export function HeadlessLauncherFields(p: HeadlessLauncherFieldsProps) {
     >
       {noRoots && (
         <p data-testid="headless-no-roots" className="text-xs text-text-muted">{t('newtab.headless.no_roots')}</p>
+      )}
+      {noProfiles && (
+        <p data-testid="headless-no-profiles" className="text-xs text-text-muted">{t('newtab.headless.no_profiles')}</p>
       )}
 
       <label className="flex flex-col gap-1">
@@ -123,7 +130,7 @@ export function HeadlessLauncherFields(p: HeadlessLauncherFieldsProps) {
             onChange={(e) => p.onProfile(e.target.value)}
             className={`${FIELD} w-auto`}
           >
-            {p.caps.sandbox_profiles.map((name) => <option key={name} value={name}>{name}</option>)}
+            {p.profiles.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
           <span data-testid="headless-max-profile" className="text-xs text-text-muted">
             {t('newtab.headless.max_profile', { profile: p.caps.sandbox_max_profile })}
