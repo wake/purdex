@@ -122,6 +122,18 @@ func WithAfterFunc(after func(d time.Duration, f func()) (stop func() bool)) Opt
 // per-attempt bound (the grace bound still applies once restarting).
 func WithAttemptTimeout(d time.Duration) Option { return func(c *Client) { c.attemptTimeout = d } }
 
+// WithGrace replaces Grace for this Client: how long Do keeps retrying
+// after the first restart signal. `pdx hook` uses 5 s (spec §6.6: a
+// session's tool call must not stall 30 s on a daemon restart); every
+// other command keeps the default. d <= 0 is ignored.
+func WithGrace(d time.Duration) Option {
+	return func(c *Client) {
+		if d > 0 {
+			c.grace = d
+		}
+	}
+}
+
 // WithStderr sets where the restart lines go; the default discards them.
 func WithStderr(w io.Writer) Option { return func(c *Client) { c.stderr = w } }
 
@@ -147,6 +159,7 @@ type Client struct {
 	sleep          func(context.Context, time.Duration) error
 	after          func(time.Duration, func()) func() bool
 	attemptTimeout time.Duration
+	grace          time.Duration
 
 	mu              sync.Mutex
 	stderr          io.Writer
@@ -167,6 +180,7 @@ func New(baseURL, token string, opts ...Option) *Client {
 		sleep:          sleepCtx,
 		after:          afterFunc,
 		attemptTimeout: DefaultAttemptTimeout,
+		grace:          Grace,
 		stderr:         io.Discard,
 	}
 	for _, o := range opts {
@@ -195,9 +209,11 @@ type outage struct {
 	failures int
 }
 
-// remaining is how much of the grace is left; it is only meaningful once
+// remaining is how much of grace is left; it is only meaningful once
 // failures > 0.
-func (o *outage) remaining(now time.Time) time.Duration { return Grace - now.Sub(o.first) }
+func (o *outage) remaining(now time.Time, grace time.Duration) time.Duration {
+	return grace - now.Sub(o.first)
+}
 
 // Do sends method path with body (JSON, nil for none) and decodes a 2xx
 // body into out when out != nil. It returns the HTTP status with a nil
@@ -290,7 +306,7 @@ func (c *Client) attemptCtx(ctx context.Context, o *outage) (actx context.Contex
 		d, bounded = c.attemptTimeout, true
 	}
 	if o.failures > 0 {
-		rem := o.remaining(c.now())
+		rem := o.remaining(c.now(), c.grace)
 		if rem <= 0 {
 			return nil, nil, false
 		}
@@ -441,7 +457,7 @@ func (c *Client) wait(ctx context.Context, o *outage) error {
 		c.noteRestarting()
 	}
 	o.failures++
-	rem := o.remaining(now)
+	rem := o.remaining(now, c.grace)
 	if rem <= 0 {
 		return ErrUnavailable
 	}

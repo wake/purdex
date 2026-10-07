@@ -36,6 +36,12 @@ type Module struct {
 	now     func() int64 // unix ms; injectable for tests
 	logf    func(format string, args ...any)
 
+	// dataDir is the daemon's data dir; the hook lock flags live under
+	// <dataDir>/hooklocks (spec §6.6): the hook decide route removes a flag
+	// it answered {} for, and the sweeper prunes flags of sessions the
+	// registry no longer lists.
+	dataDir string
+
 	// stopCtx is cancelled first in Stop: long-polls return, the sweeper
 	// exits and POST create answers 503 not_ready. The DB stays open until
 	// Close (PD6): in-flight handlers still read it during srv.Shutdown.
@@ -72,6 +78,11 @@ type Module struct {
 	// closes; tests renew a lease in that window and prove the sweeper
 	// does not close on the stale copy. nil in production.
 	afterListOpen func()
+	// afterOpenByOrigin, when set, runs in handleHookDecide between its
+	// OpenByOrigin and its flag removal; tests run a create for the same
+	// origin in that window and prove it waits for createMu. nil in
+	// production.
+	afterOpenByOrigin func()
 }
 
 // New returns a Module with production defaults.
@@ -108,10 +119,12 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("team: %w", err)
 	}
 	m.store = store
+	m.dataDir = c.Cfg.DataDir
 	return nil
 }
 
-// RegisterRoutes mounts the six /api/team/* routes (Go method patterns).
+// RegisterRoutes mounts the six /api/team/* routes and the hook decision
+// route (Go method patterns).
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/team/approvals", m.handleCreate)
 	mux.HandleFunc("GET /api/team/approvals", m.handleList)
@@ -119,11 +132,16 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/team/approvals/{id}", m.handleDelete)
 	mux.HandleFunc("POST /api/team/approvals/{id}/decide", m.handleDecide)
 	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)
+	mux.HandleFunc("POST /api/hooks/decide", m.handleHookDecide)
 }
 
 // Start applies the boot lease grace (spec §9.2: every open request's
 // lease becomes max(lease_until, boot + 30 s), so its pdx can reconnect),
-// registers the snapshot for new subscribers and starts the sweeper.
+// registers the snapshot for new subscribers and starts the sweeper. It
+// does not prune hook lock flags: during that same grace a CC session may
+// not have re-registered, so a registry snapshot taken here would call it
+// dead and the prune would delete the flag of an open lead request. The
+// sweeper prunes on its 10th tick, and never a flag whose request is open.
 func (m *Module) Start(context.Context) error {
 	n, err := m.store.ExtendOpenLeases(m.now() + team.BootGraceS*1000)
 	if err != nil {

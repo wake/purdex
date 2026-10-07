@@ -43,6 +43,13 @@ func (m *Module) runSweeper() {
 // cancel and broadcasts once.
 func (m *Module) tick() {
 	m.tickN++
+	checkLive := m.tickN%livenessEvery == 0
+	if checkLive {
+		// Flags outlive their request (spec §6.6): prune them on the same
+		// cadence as the liveness check, whether or not anything is open.
+		// With no flag on disk this is one ReadDir that answers ENOENT.
+		m.pruneHookLocks()
+	}
 	open, err := m.store.ListOpen()
 	if err != nil {
 		m.logf("[team] sweep: %v", err)
@@ -55,7 +62,6 @@ func (m *Module) tick() {
 		m.afterListOpen()
 	}
 	now := m.now()
-	checkLive := m.tickN%livenessEvery == 0
 	for _, a := range open {
 		var after team.Approval
 		var won bool

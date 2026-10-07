@@ -16,11 +16,25 @@ const codexHooksSupportedVersion = "0.153.4"
 
 // codexHookTimeouts is the per-event hook timeout in seconds. codex clamps
 // SessionEnd and Interrupt to 3 s and warns at every start if the file says
-// more (measured on codex-cli 0.153.4 startup, 2026-09-18).
+// more (measured on codex-cli 0.153.4 startup, 2026-09-18). PreToolUse is
+// the one event whose hook may wait for a daemon decision (lead-team spec
+// §6.6: the flag-gated lock path, one 5 s budget shared with the event
+// POST), so it gets room for that wait; PermissionRequest answers {} and
+// stays at the default. Claude Code's entries carry no timeout at all
+// (600 s default).
 var codexHookTimeouts = map[string]int{
 	"SessionEnd": 3,
 	"Interrupt":  3,
+	"PreToolUse": codexHookLockPathTimeout,
 }
+
+// codexHookLockPathTimeout is PreToolUse's timeout: the 5 s hook budget
+// (cmd/pdx hookDecideGrace — the event POST and the decision run under it
+// together) and the ≤ 5 s stdin read, with no room to spare in the worst
+// case of both; the stdin read is instant in practice (codex writes the
+// payload and closes). A hook that still times out does not block the
+// call (spec M18, M20).
+const codexHookLockPathTimeout = 10
 
 const codexHookDefaultTimeout = 5
 
