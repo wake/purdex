@@ -271,10 +271,13 @@ func leadReportErr(err error, stderr io.Writer) int {
 	}
 }
 
-// leadGrantOutput is what an approved request prints on stdout. Before P4
-// there is no team yet, so the grant is reported under the request id.
+// leadGrantOutput is what an approved request prints on stdout, one JSON
+// line (spec §6.1 step 4). The approval creates the team in the same
+// transaction and the team's id is the request's id (plan v3 deviation 1),
+// so TeamID needs no second call.
 type leadGrantOutput struct {
 	RequestID string      `json:"request_id"`
+	TeamID    string      `json:"team_id,omitempty"`
 	Grant     *team.Grant `json:"grant"`
 }
 
@@ -289,7 +292,7 @@ func leadFinish(ap team.Approval, stdout, stderr io.Writer) int {
 				grant = &team.Grant{MaxMembers: p.MaxMembers, Roots: p.Roots}
 			}
 		}
-		out, err := json.Marshal(leadGrantOutput{RequestID: ap.ID, Grant: grant})
+		out, err := json.Marshal(leadGrantOutput{RequestID: ap.ID, TeamID: ap.ID, Grant: grant})
 		if err != nil {
 			fmt.Fprintf(stderr, "pdx lead: %v\n", err)
 			return ExitError

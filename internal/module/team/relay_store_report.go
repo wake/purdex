@@ -58,6 +58,64 @@ func checkLineage(tx *sql.Tx, cur team.RelayOp, r RelayReport) error {
 	return nil
 }
 
+// ErrClearedTargetHasRole refuses a cleared whose old session holds a live
+// team role (lead, or active member of a live team) into a session that
+// already holds one: a session holds at most one live role (P4-3 review
+// R1). Nothing commits. It is a broken invariant, not a bad report (a
+// /clear makes a fresh session): the handler answers 500, which the mod
+// re-sends, and the op stays written for reconciliation (P6-4, #1735).
+var ErrClearedTargetHasRole = errors.New("the new session already leads or is a member of a live team")
+
+// moveTeamRoles is the team half of a cleared (spec §8.4), run in its
+// lineage transaction after the lineage insert: the live team the old
+// session leads now follows the new session and ref, and so does the old
+// session's active member row of a live team. An ended team, and the rows
+// of its members, stay as they ended (D4; P4-3 review H3). When the old
+// session has a live role, a new session that already has one, either
+// role, fails the whole cleared with ErrClearedTargetHasRole (R1).
+func moveTeamRoles(tx *sql.Tx, oldSessionID string, r RelayReport) error {
+	moving, err := hasLiveRoleIn(tx, oldSessionID)
+	if err != nil {
+		return err
+	}
+	if moving {
+		// The unique indexes catch only the same role; check both (R1).
+		if taken, err := hasLiveRoleIn(tx, r.NewSessionID); err != nil {
+			return err
+		} else if taken {
+			return fmt.Errorf("%w (%s)", ErrClearedTargetHasRole, r.NewSessionID)
+		}
+	}
+	if _, err := tx.Exec(`UPDATE teams SET lead_session_id = ?, lead_ref = ?
+		WHERE lead_session_id = ? AND ended_at = 0`, r.NewSessionID, r.NewRef, oldSessionID); err != nil {
+		return fmt.Errorf("move lead: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE team_members SET session_id = ?, ref = ?, updated_at = ?
+		WHERE session_id = ? AND state = 'active'
+		  AND EXISTS (SELECT 1 FROM teams WHERE teams.id = team_members.team_id AND teams.ended_at = 0)`,
+		r.NewSessionID, r.NewRef, r.At, oldSessionID); err != nil {
+		return fmt.Errorf("move member: %w", err)
+	}
+	return nil
+}
+
+// hasLiveRoleIn reports whether sessionID leads a live team or is an
+// active member of one, read in tx.
+func hasLiveRoleIn(tx *sql.Tx, sessionID string) (bool, error) {
+	if member, err := isLiveMemberIn(tx, sessionID); err != nil || member {
+		return member, err
+	}
+	var one int
+	err := tx.QueryRow(`SELECT 1 FROM teams WHERE lead_session_id = ? AND ended_at = 0`, sessionID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("lead check %s: %w", sessionID, err)
+	}
+	return true, nil
+}
+
 // RelayReport is one transition: the target state, the new session id and
 // ref (cleared only), the reason (failed / cancelled) and the time.
 type RelayReport struct {
@@ -82,7 +140,9 @@ const (
 // relayTransitions does not allow is ReportBadTransition; otherwise the row
 // is updated with a CAS on its state. For cleared, the lineage row is
 // written in the same transaction (spec §8.4): session_lineage{new →
-// old, old ref, op}. The row after the attempt is returned in every case;
+// old, old ref, op}, and the old session's live team and active member row
+// move to the new session (moveTeamRoles); if any of it fails, nothing
+// commits. The row after the attempt is returned in every case;
 // ErrNoSuchRelayOp for an unknown id.
 func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResult, error) {
 	tx, err := s.db.Begin()
@@ -133,6 +193,9 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 		if _, err := tx.Exec(`INSERT INTO session_lineage (session_id, predecessor_session_id, predecessor_ref, op_id, at)
 			VALUES (?, ?, ?, ?, ?)`, r.NewSessionID, cur.SessionID, cur.Ref, id, r.At); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: lineage: %w", id, err)
+		}
+		if err := moveTeamRoles(tx, cur.SessionID, r); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: %w", id, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

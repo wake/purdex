@@ -418,6 +418,9 @@ The table is `approval_requests{id, kind: lead | self_relay, origin_session_id, 
 - Every close broadcasts `{op:"closed", approval}`, carrying `decided_by` and `decided_at`.
 - A late `decide` gets **409 `already_decided`** with the closed request, so its client can say who handled it.
 - Approval creates the team (§7.1) in the same transaction.
+- **The approve re-checks membership (PR #1859 review).** If the origin has since become an active member of a live team:
+  - a `lead` row answers **409 `member_cannot_lead`** and stays open;
+  - a `self_relay` row is not approved: in that same transaction it closes `cancelled` and its op becomes `cancelled{member_relay_is_leads}` (U13). `decide` answers **409 `member_relay_is_leads`** once that has committed, with the usual `closed` broadcast.
 
 **Snapshot.** The module registers `OnSubscribe` and sends every open request to each new subscriber as one event `{op:"snapshot", approvals:[…]}` (`[]` when none). Late or reconnecting clients see the same set (D2).
 
@@ -724,6 +727,9 @@ The mod reaches the daemon through `$.process.run` on `pdx`, as the prototype di
 `session_lineage{session_id, predecessor_session_id, predecessor_ref, op_id, at}` is written when an op reaches `cleared`, in the same team.db transaction as the op's state change. With it:
 - if the old session was a team's lead, `teams.lead_session_id` moves to the new session (same transaction; P4);
 - if it was a member, the member row's session id moves (same transaction; P4);
+- **two guards on those moves (PR #1859 review):**
+  - only a live team's lead and a live team's active member row move. An ended team, and its members' rows, stay as they ended (D4).
+  - if the old session holds a live role and the new one already holds either, the whole `cleared` rolls back: nothing moves and the report answers 500. One session never holds two live roles. A `/clear` makes a fresh session, so this is a broken invariant: the mod re-sends the report and P6's reconciliation ends the op;
 - the title moves to the new session id (titles are stored per session id, §3.3). **⟲ plan v2 coordinator decision:** titles live in meta.db, and `database/sql` has no cross-database transaction, so the title move is its own idempotent meta.db transaction run right after `cleared` commits, and re-run by the boot reconciliation for every op still in `cleared` — the crash window between the two is closed at the next boot, never left open.
 
 **Peer rows** gain `previous_refs` (newest first) for a live head: the **whole chain, uncapped.**
