@@ -9,6 +9,8 @@ import { applyDurableEvent, defaultExecutionState, frameToEvent, hasOpenTurn, ty
 import { isPeerMessage } from './message-types'
 import { SseParser } from './sse-parser'
 import { buildSentHistory } from './sent-history'
+import { buildSearchUnits, findMatches, searchUnitId } from './transcript-search'
+import { indexOperations } from './operations'
 import { groupTurns, isOpeningLine } from './turns'
 import type { NexEvent } from './types'
 
@@ -138,4 +140,19 @@ describe('the peer line is never the user\'s own', () => {
     s = applyDurableEvent(s, peerEvent())
     expect(buildSentHistory(s.messages, null).map((e) => e.text)).toEqual(['my question'])
   })
+})
+
+describe('search finds the peer text (spec §7)', () => {
+  for (const view of ['room', 'chat'] as const) {
+    it(`${view}: one match, at the block's own anchor, nothing to unfold`, () => {
+      let s = applyDurableEvent(defaultExecutionState(), accepted(1, 'my question', 'trn_a'))
+      s = applyDurableEvent(s, peerEvent())
+      const units = buildSearchUnits({ messages: s.messages, index: indexOperations(s.messages), view, keyPrefix: 'k', turnStarts: s.turnStarts })
+      const { matches } = findMatches(units, 'single word')
+      expect(matches).toHaveLength(1)
+      expect(matches[0]).toMatchObject({ unitId: searchUnitId('1:0', 'text'), reveal: [] })
+      // The sender's name is the header, not the searchable body.
+      expect(findMatches(units, 'purdex-54').matches).toEqual([])
+    })
+  }
 })

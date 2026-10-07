@@ -19,7 +19,8 @@
 //   operations inside one tools line drawn where the first of them sits, an
 //   edit as a line holding only its diff, a failure as a line holding the
 //   room's block), and MessageRow's rules again inside a subagent — chat draws
-//   a subagent with the room's renderer, thinking included.
+//   a subagent with the room's renderer, thinking included;
+// - a peer's line (peer mailbox spec §7): its text as prose, in both views.
 // A unit's text is what is drawn: agent prose is `proseText` of its markdown
 // (the rendered text), everything else is drawn verbatim.
 // Pure: no React, no store.
@@ -29,7 +30,7 @@ import { groupTurns, INTERRUPT_TEXT } from './turns'
 import { pathBasename, showsRawInput, toolSummary } from './tool-summary'
 import { diffRows } from './diff-lines'
 import { proseText } from './markdown-text'
-import type { ContentBlock, StreamMessage } from './message-types'
+import { isPeerMessage, type ContentBlock, type StreamMessage } from './message-types'
 import type { ToolActivity } from './tool-activity'
 import { preludeBlocks, preludeId, type PreludeEntry, type PreludeView } from './prelude'
 
@@ -155,8 +156,22 @@ function operationUnits(w: Walk, mi: number, bj: number, reveal: string[]) {
   }
 }
 
+/**
+ * A peer's line (peer mailbox spec §7): PeerMessageBlock draws its text as
+ * prose at block 0, never folded — the pattern of the prelude's peer note.
+ * The sender's name is the block's header, not a search unit. True when
+ * `msg` was one.
+ */
+function peerUnits(w: Walk, mi: number, reveal: string[]): boolean {
+  const msg = w.messages[mi]
+  if (!msg || !isPeerMessage(msg)) return false
+  w.push(searchUnitId(keyOf(w, mi, 0), 'text'), proseText(msg.text), reveal)
+  return true
+}
+
 /** One message by MessageRow's rules (the room, and any subagent rail). */
 function messageUnits(w: Walk, mi: number, reveal: string[]) {
+  if (peerUnits(w, mi, reveal)) return
   const msg = w.messages[mi]
   if (!msg || !('message' in msg)) return
   blocksOf(msg).forEach((block, bj) => {
@@ -204,6 +219,7 @@ function chatTurnUnits(w: Walk, turns: readonly { start: number; end: number }[]
 
     for (let mi = turn.start; mi < turn.end; mi++) {
       if (w.index.childIndexes.has(mi)) continue
+      if (peerUnits(w, mi, [])) continue
       const msg = w.messages[mi]
       if (!('message' in msg)) continue
       const fromSubagent = (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id != null
