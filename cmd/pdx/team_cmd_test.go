@@ -513,12 +513,116 @@ func TestDispatch_SpawnKillTeam(t *testing.T) {
 // The lead's commands run inside a Claude Code session: no inbox is exit 1
 // before any request.
 func TestTeamCmds_NoInboxExit1(t *testing.T) {
-	for name, run := range map[string]teamCmdFunc{"spawn": runSpawnCmd} {
+	for name, run := range map[string]teamCmdFunc{"spawn": runSpawnCmd, "kill": runKillCmd, "team": runTeamCmd} {
 		d := &fakeTeamCmdDaemon{}
 		args := map[string][]string{"spawn": {"--model", "sonnet"}, "kill": {"_m1m1m1"}, "team": nil}[name]
 		code, _, stderr := driveTeamCmdWith(t, run, d, fakeGetenv(nil), []daemonclient.Option{leadClockOpt()}, args...)
 		if code != ExitError || !strings.Contains(stderr, "CLAUDE_CODE_MESSAGING_SOCKET") || d.count() != 0 {
 			t.Errorf("%s: code=%d stderr=%q requests=%d", name, code, stderr, d.count())
 		}
+	}
+}
+
+// Spec §7.3: pdx kill posts the lead's inbox and the target as typed, and
+// prints the killed member, one JSON line; the flags may come first.
+func TestKillCmd_PrintsTheKilledMember(t *testing.T) {
+	m := fakeMember(team.SpawnRequest{ID: "op-1", Cwd: "/w"})
+	m.State = team.MemberKilled
+	d := &fakeTeamCmdDaemon{kill: answer{body: m}}
+	code, stdout, stderr := driveTeamCmd(t, runKillCmd, d, "--config", "ignored-by-the-later-one", "mlab/purdex-m1 [m1m1m1]")
+	if code != ExitOK || strings.Count(stdout, "\n") != 1 || !strings.Contains(stdout, `"state":"killed"`) {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	want := team.KillRequest{OriginInbox: "/tmp/cc-socks/1.sock", Target: "mlab/purdex-m1 [m1m1m1]"}
+	if len(d.killReq) != 1 || d.killReq[0] != want {
+		t.Errorf("kill requests = %+v, want %+v", d.killReq, want)
+	}
+}
+
+// Not exactly one target is exit 2 with no request; not_your_member,
+// not_lead and relay_open (a member mid-relay, carrying its op; spec §14)
+// are exit 13, the code last.
+func TestKillCmd_UsageExit2RefusalsExit13(t *testing.T) {
+	d := &fakeTeamCmdDaemon{}
+	for _, args := range [][]string{nil, {"_m1m1m1", "_m2m2m2"}, {" "}, {"--bogus", "_m1m1m1"}} {
+		if code, stdout, stderr := driveTeamCmd(t, runKillCmd, d, args...); code != ExitUsage || stdout != "" || !strings.HasPrefix(stderr, "pdx kill: ") {
+			t.Errorf("%q: code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
+	}
+	if d.count() != 0 {
+		t.Errorf("usage errors reached the daemon %d time(s)", d.count())
+	}
+	for _, e := range []team.APIError{
+		{Error: team.ErrNotYourMember, Detail: "no"},
+		{Error: team.ErrNotLead},
+		{Error: team.ErrRelayOpen, Detail: "member _m1m1m1 is relaying; nothing was killed", Op: &team.RelayOp{ID: "op-relay-1"}},
+	} {
+		d := &fakeTeamCmdDaemon{kill: answer{status: http.StatusConflict, body: e}}
+		code, stdout, stderr := driveTeamCmd(t, runKillCmd, d, "_m1m1m1")
+		if code != ExitRefused || stdout != "" || lastToken(stderr) != e.Error || !strings.Contains(stderr, e.Detail) {
+			t.Errorf("%s: code=%d stdout=%q stderr=%q", e.Error, code, stdout, stderr)
+		}
+		if e.Op != nil && !strings.Contains(stderr, "op-relay-1") {
+			t.Errorf("relay_open: stderr = %q, want the op id", stderr)
+		}
+	}
+}
+
+// fakeView is a team with one member that has a statusline reading and one
+// that has none yet (U20 (e): blank until the first statusline).
+func fakeView() team.TeamView {
+	pct := 42.4
+	a := fakeMember(team.SpawnRequest{ID: "op-1", Cwd: "/w/a", Model: "sonnet", Effort: "low"})
+	a.Title = "p4 tester"
+	a.Context = &team.MemberContext{UsedPercentage: &pct, Window: 200000, ModelID: "claude-sonnet-4-5", Effort: "low", At: 1}
+	b := fakeMember(team.SpawnRequest{ID: "op-2", Cwd: "/w/b", Model: "opus"})
+	b.Ref, b.Address, b.TmuxSession, b.State = "_m2m2m2", "mlab/_m2m2m2", "tm-2222222222", team.MemberKilled
+	return team.TeamView{Team: team.Team{ID: fakeTeamID, Grant: team.Grant{MaxMembers: 3}}, Members: []team.Member{*a, *b}}
+}
+
+// Spec §7.3, U20 (e): the table shows each member's address, ref, title,
+// state, context %, the model and effort it actually runs (the reading, not
+// what was asked), cwd and tmux session, with - for unknown. The inbox goes
+// as the origin_inbox query.
+func TestTeamCmd_TableShowsModelAndEffort(t *testing.T) {
+	d := &fakeTeamCmdDaemon{view: answer{body: fakeView()}}
+	code, stdout, stderr := driveTeamCmd(t, runTeamCmd, d)
+	if code != ExitOK {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("stdout = %q, want a header and two rows", stdout)
+	}
+	for i, want := range [][]string{
+		{"ADDRESS", "REF", "TITLE", "STATE", "CTX", "MODEL", "EFFORT", "CWD", "TMUX"},
+		{"mlab/_m1m1m1", "_m1m1m1", "p4", "tester", "active", "42%", "claude-sonnet-4-5", "low", "/w/a", "tm-1111111122"},
+		{"mlab/_m2m2m2", "_m2m2m2", "-", "killed", "-", "-", "-", "/w/b", "tm-2222222222"},
+	} {
+		if got := strings.Fields(lines[i]); strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("line %d = %q, want fields %q", i, lines[i], want)
+		}
+	}
+	if len(d.queries) != 1 || d.queries[0] != "origin_inbox=%2Ftmp%2Fcc-socks%2F1.sock" {
+		t.Errorf("queries = %q", d.queries)
+	}
+}
+
+// --json prints the daemon's view as is, one line; not_lead is exit 13; a
+// stray argument is exit 2.
+func TestTeamCmd_JSONAndNotLead(t *testing.T) {
+	d := &fakeTeamCmdDaemon{view: answer{body: fakeView()}}
+	code, stdout, stderr := driveTeamCmd(t, runTeamCmd, d, "--json")
+	var v team.TeamView
+	if code != ExitOK || strings.Count(stdout, "\n") != 1 || json.Unmarshal([]byte(stdout), &v) != nil ||
+		len(v.Members) != 2 || v.Members[0].Context.ModelID != "claude-sonnet-4-5" || v.Members[1].Model != "opus" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	d = &fakeTeamCmdDaemon{view: answer{status: http.StatusConflict, body: team.APIError{Error: team.ErrNotLead}}}
+	if code, stdout, stderr := driveTeamCmd(t, runTeamCmd, d); code != ExitRefused || stdout != "" || lastToken(stderr) != team.ErrNotLead {
+		t.Errorf("not_lead: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if code, _, _ := driveTeamCmd(t, runTeamCmd, d, "extra"); code != ExitUsage {
+		t.Errorf("extra argument: code=%d", code)
 	}
 }

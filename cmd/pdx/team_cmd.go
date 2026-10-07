@@ -6,6 +6,7 @@ package main
 // print `pdx <cmd>: <detail> <code>`, the code last; exit codes are spec §14.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,9 +14,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +32,11 @@ import (
 const spawnUsage = "usage: pdx spawn [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--brief-file <f> | --brief <text>] [--config <path>]\n" +
 	"       (--cwd defaults to this directory; --effort is low, medium, high, xhigh or max;\n" +
 	"        without --model the member runs this host's default model, which is not fixed)"
+
+const killUsage = "usage: pdx kill <ref> [--config <path>]\n" +
+	"       (<ref> is _xxxxxx, or an address from pdx team; only a member of your own team)"
+
+const teamUsage = "usage: pdx team [--json] [--config <path>]"
 
 const (
 	// teamAttemptTimeout bounds one request: a spawn POST waits up to
@@ -59,12 +67,14 @@ const (
 )
 
 // teamRefusalCodes are the team-rule refusals these commands can meet: exit
-// 13 (spec §14). Any other API code is exit 1.
+// 13 (spec §14). relay_open is a kill of a member mid-relay (P4-6 review).
+// Any other API code is exit 1.
 var teamRefusalCodes = map[string]bool{
 	team.ErrNotLead:         true,
 	team.ErrTeamFull:        true,
 	team.ErrCwdOutsideGrant: true,
 	team.ErrNotYourMember:   true,
+	team.ErrRelayOpen:       true,
 }
 
 // spawnNewID mints the spawn op id, the idempotency key of every POST of
@@ -142,7 +152,11 @@ func teamReportErr(cmd string, err error, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pdx %s: 這個 daemon 沒有這個 /api/team 路由，請先更新 daemon unsupported\n", cmd)
 		return ExitUnsupported
 	case errors.As(err, &se) && se.API.Error != "":
-		fmt.Fprintln(stderr, strings.TrimSpace("pdx "+cmd+": "+sanitizeCell(se.API.Detail)), sanitizeCell(se.API.Error))
+		detail := se.API.Detail
+		if se.API.Op != nil { // relay_open: the relay to wait for (pdx relay op <id>)
+			detail += "（relay op " + se.API.Op.ID + "）"
+		}
+		fmt.Fprintln(stderr, strings.TrimSpace("pdx "+cmd+": "+sanitizeCell(detail)), sanitizeCell(se.API.Error))
 		if teamRefusalCodes[se.API.Error] {
 			return ExitRefused
 		}
@@ -371,4 +385,101 @@ func briefErr(err error) (detail, code string) {
 	default:
 		return err.Error(), daemonclient.ErrUnavailable.Error()
 	}
+}
+
+func runKill(args []string) {
+	os.Exit(runKillCmd(context.Background(), args, os.Getenv, os.Stdout, os.Stderr))
+}
+
+func runTeam(args []string) {
+	os.Exit(runTeamCmd(context.Background(), args, os.Getenv, os.Stdout, os.Stderr))
+}
+
+// runKillCmd implements `pdx kill <ref>` (spec §7.3): the target goes as
+// typed, the daemon matches it among the caller's members only. A replay is
+// safe (a killed member answers 200 again), so the POST is Idempotent.
+func runKillCmd(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer, clientOpts ...daemonclient.Option) int {
+	fs := flag.NewFlagSet("pdx kill", flag.ContinueOnError)
+	cfgPath := fs.String("config", "", "")
+	pos, err := parseTeamFlags(fs, args)
+	if err == nil && (len(pos) != 1 || strings.TrimSpace(pos[0]) == "") {
+		err = errors.New("需要剛好一個 <ref>（_xxxxxx 或 <host>/<name>）")
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx kill: %v\n%s\n", err, killUsage)
+		return ExitUsage
+	}
+	client, inbox, ok := teamSetup("kill", *cfgPath, getenv, stderr, clientOpts)
+	if !ok {
+		return ExitError
+	}
+	var m team.Member
+	if _, err := client.Do(ctx, http.MethodPost, "/api/team/kill", team.KillRequest{OriginInbox: inbox, Target: pos[0]}, &m, daemonclient.Idempotent()); err != nil {
+		return teamReportErr("kill", err, stderr)
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx kill: %v\n", err)
+		return ExitError
+	}
+	fmt.Fprintln(stdout, string(out))
+	return ExitOK
+}
+
+// runTeamCmd implements `pdx team [--json]` (spec §7.3, U20 (e)): --json is
+// the daemon's view as is; the table's MODEL and EFFORT are what each
+// member actually runs (its statusline reading), "-" until its first one.
+func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer, clientOpts ...daemonclient.Option) int {
+	fs := flag.NewFlagSet("pdx team", flag.ContinueOnError)
+	cfgPath := fs.String("config", "", "")
+	asJSON := fs.Bool("json", false, "")
+	pos, err := parseTeamFlags(fs, args)
+	if err == nil && len(pos) != 0 {
+		err = fmt.Errorf("unexpected argument %q", pos[0])
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx team: %v\n%s\n", err, teamUsage)
+		return ExitUsage
+	}
+	client, inbox, ok := teamSetup("team", *cfgPath, getenv, stderr, clientOpts)
+	if !ok {
+		return ExitError
+	}
+	var raw json.RawMessage
+	if _, err := client.Do(ctx, http.MethodGet, "/api/team?origin_inbox="+url.QueryEscape(inbox), nil, &raw); err != nil {
+		return teamReportErr("team", err, stderr)
+	}
+	var v team.TeamView
+	var line bytes.Buffer
+	if json.Unmarshal(raw, &v) != nil || json.Compact(&line, raw) != nil {
+		fmt.Fprintln(stderr, "pdx team: daemon 的回應不是 team view invalid_response")
+		return ExitError
+	}
+	if *asJSON {
+		fmt.Fprintln(stdout, line.String())
+		return ExitOK
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ADDRESS\tREF\tTITLE\tSTATE\tCTX\tMODEL\tEFFORT\tCWD\tTMUX")
+	for _, m := range v.Members {
+		pct, model, effort := "", "", ""
+		if c := m.Context; c != nil {
+			if c.UsedPercentage != nil {
+				pct = fmt.Sprintf("%.0f%%", *c.UsedPercentage)
+			}
+			model, effort = c.ModelID, c.Effort
+		}
+		cells := []string{m.Address, m.Ref, m.Title, string(m.State), pct, model, effort, m.Cwd, m.TmuxSession}
+		for i, c := range cells {
+			if cells[i] = sanitizeCell(c); c == "" {
+				cells[i] = "-"
+			}
+		}
+		fmt.Fprintln(tw, strings.Join(cells, "\t"))
+	}
+	if err := tw.Flush(); err != nil {
+		fmt.Fprintf(stderr, "pdx team: %v\n", err)
+		return ExitError
+	}
+	return ExitOK
 }
