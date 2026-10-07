@@ -595,3 +595,76 @@ test('with a config in pdx.json every pdx call of a relay carries --config', asy
     expect(a.slice(-2)).toEqual(['--config', '/tmp/pdx b/config.toml'])
   }
 })
+
+// ---------- P5b-2 review (codex R1 + R2) ----------
+
+const opN = (n: number) => ({ ...OP, id: 'op-' + n, handoff_path: '/data/relay/op-' + n + '.md' })
+const beginOK = (n: number) => JSON.stringify({ op: opN(n), request_id: 'req-' + n })
+function gated() {
+  let release!: () => void
+  const p = new Promise<void>((r) => { release = r })
+  return { p, release }
+}
+const argOf = (argv: string[], flag: string) => argv[argv.indexOf(flag) + 1]
+const waits = (f: Fake) => f.argvs.map(sub).filter((c) => c.startsWith('relay wait'))
+const writeAllowed = async ($: any, path: string) => (await $.tool.check({ tool: 'Write', input: { file_path: path, content: 'x' } })).decision === 'allow'
+
+// Item 1 (R1 P1 + attacker high): a begin's answer belongs to the generation
+// and the session it was sent from. Mutation gate: adopt on
+// `state === 'beginning'` alone → op-1 becomes the pending op, op-2 is never
+// adopted and op-1's dialog is never closed.
+test('a begin that answers after the user’s /clear and a newer begin is cancelled{abandoned}; the new session keeps its own op', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const older = gated()
+  const newer = gated()
+  f.pdx = async (argv) => {
+    if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO() }
+    if (argv[1] === 'begin') {
+      const first = argOf(argv, '--session') === 'sid-old'
+      await (first ? older.p : newer.p)
+      return { exitCode: 0, stdout: beginOK(first ? 1 : 2) }
+    }
+    if (argv[1] === 'wait') return new Promise<never>(() => {})
+    return { exitCode: 0, stdout: '{}' }
+  }
+  await start($, f)
+  await turnAndSettle($, f, 't1') // begin under sid-old: hangs
+  f.sessionId = 'sid-2'
+  await $.classic.SessionStart({ source: 'clear' })
+  await f.clock.settle() // hello under sid-2
+  await turnAndSettle($, f, 't2') // begin under sid-2: hangs too
+  expect(count(f, 'begin')).toBe(2)
+  older.release()
+  await f.clock.advance(50)
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned'])
+  expect(waits(f)).toEqual([])
+  newer.release()
+  await f.clock.advance(50)
+  expect(waits(f)).toEqual(['relay wait req-2'])
+  expect(await writeAllowed($, '/data/relay/op-2.md')).toBe(true)
+  expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned'])
+})
+
+// Mutation gate: drop the session-id comparison → op-1 is adopted under sid-x.
+test('a begin whose session id changed under it (no /clear seen) is cancelled{abandoned} and the mod is idle again', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  const g = gated()
+  f.pdx = async (argv) => {
+    if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO() }
+    if (argv[1] === 'begin') { await g.p; return { exitCode: 0, stdout: BEGIN_OK } }
+    if (argv[1] === 'wait') return new Promise<never>(() => {})
+    return { exitCode: 0, stdout: '{}' }
+  }
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  f.sessionId = 'sid-x'
+  g.release()
+  await f.clock.advance(50)
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned'])
+  expect(waits(f)).toEqual([])
+  expect(f.statuses).toEqual([])
+  f.usage = { tokens: 164000, window: 200000, percent: 82 }
+  await turnAndSettle($, f, 't2') // idle again: +10 points asks again
+  expect(count(f, 'begin')).toBe(2)
+})

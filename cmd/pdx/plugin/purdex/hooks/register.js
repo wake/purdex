@@ -37,6 +37,7 @@ const fresh = () => ({
   threshold: DEFAULT_THRESHOLD,
   minGrowth: DEFAULT_MIN_GROWTH,
   role: 'none',
+  gen: 0, // bumped at every return to idle and every session change: a begin answers only for its own
   state: 'idle', // idle | beginning | awaiting | approved | clearing | seeding
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, seedNonce, who, wait }
   lastAskPct: undefined,
@@ -52,8 +53,10 @@ const fresh = () => ({
 
 const s = fresh()
 
+// resetState starts the session over; the generation keeps counting up, so a
+// begin sent before the reset never answers for one sent after it.
 function resetState() {
-  Object.assign(s, fresh())
+  Object.assign(s, fresh(), { gen: s.gen + 1 })
 }
 
 function parseJSON(text) {
@@ -121,8 +124,8 @@ function retryableReport(r) {
 // dropped for good, so a report that does not land holds its op's later
 // reports until the next turn.complete re-sends it. The relay goes on
 // meanwhile (§8.3: the session matters more).
-function report($, p, state, extra = []) {
-  s.outbox.push({ op: p.op.id, argv: ['relay', 'report', p.op.id, state, ...extra] })
+function report($, opId, state, extra = []) {
+  s.outbox.push({ op: opId, argv: ['relay', 'report', opId, state, ...extra] })
   pump($)
 }
 
@@ -202,7 +205,7 @@ async function whoami($) {
 }
 
 function toIdle() {
-  Object.assign(s, { state: 'idle', pending: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined })
+  Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined })
 }
 
 // maybeBegin runs in turn.complete: it reads the engine, moves to beginning
@@ -216,18 +219,31 @@ async function maybeBegin($) {
   const sid = await $.session.id()
   s.state = 'beginning'
   s.lastAskPct = u.percent
-  later($, 0, () => begin($, sid, u))
+  const gen = s.gen
+  later($, 0, () => begin($, sid, gen, u))
 }
 
-// begin opens the self-relay request (from a timer, state beginning).
-async function begin($, sid, u) {
+// begin opens the self-relay request (from a timer, state beginning). Its
+// answer is taken only by the generation and the session it was sent from:
+// a /clear, a session start or a return to idle meanwhile bumped s.gen, and
+// another begin may be in flight for the new session. An op opened for a
+// generation that is gone is reported cancelled{abandoned} at once, so the
+// daemon closes its approval row and no dialog is left without a mod.
+async function begin($, sid, gen, u) {
   const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(u.percent), '--window', String(u.window)]
   const r = await pdx($, argv, CALL_TIMEOUT_MS)
-  if (s.state !== 'beginning') return // the user's own /clear started over meanwhile
+  const now = await $.session.id().catch(() => undefined)
   const body = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
-  if (!body || !body.op || !body.request_id) {
+  const opened = !!(body && body.op && body.op.id && body.request_id)
+  const mine = s.gen === gen && s.state === 'beginning'
+  if (!mine || now !== sid) {
+    if (opened) report($, body.op.id, 'cancelled', ['--error', 'abandoned'])
+    if (mine) toIdle() // same generation, another session id: nothing will ever answer for this begin
+    return
+  }
+  if (!opened) {
     if (r.exitCode === 13 && stderrCode(r) === 'member_relay_is_leads') s.role = 'member'
-    s.state = 'idle'
+    toIdle()
     return // 13 self_relay_off | self_relay_paused | relay_open, 20, 21, 1: nothing (§8.1, §8.7 (d)); ask again at +10
   }
   s.pending = {
@@ -291,7 +307,7 @@ function settle($, p, outcome) {
     p.who = await whoami($)
     if (s.pending !== p) return
     await $.prompt.submit({ text: writePrompt(p) })
-    report($, p, 'writing')
+    report($, p.op.id, 'writing')
   })
 }
 
@@ -307,7 +323,7 @@ async function onWriteTurnDone($) {
   if (s.pending !== p) return
   if (c.ok) {
     s.state = 'clearing'
-    report($, p, 'written')
+    report($, p.op.id, 'written')
     later($, STEP_MS, async () => {
       if (s.pending === p && s.state === 'clearing') await $.command.run({ command: 'clear' })
     })
@@ -320,7 +336,7 @@ async function onWriteTurnDone($) {
     })
     return
   }
-  report($, p, 'failed', ['--error', 'handoff_incomplete'])
+  report($, p.op.id, 'failed', ['--error', 'handoff_incomplete'])
   $.ui.toast(TOAST_GAVE_UP)
   toIdle()
 }
@@ -329,7 +345,7 @@ async function onSeedTurnDone($) {
   const p = s.pending
   const u = (await $.session.usage()).context
   if (s.pending !== p) return
-  report($, p, 'done')
+  report($, p.op.id, 'done')
   toIdle()
   s.floor = u.tokens // the loop guard: the next ask needs minGrowth more (§8.1)
   s.lastAskPct = undefined
@@ -382,9 +398,10 @@ export function register(on) {
     const r = await next(e)
     if (!s.interactive || e.source !== 'clear') return r
     const p = s.pending
+    s.gen += 1 // a new session id: no begin sent under the old one answers for it
     if (s.state === 'clearing' && p) {
       s.state = 'seeding'
-      report($, p, 'cleared', ['--new-session', await $.session.id()])
+      report($, p.op.id, 'cleared', ['--new-session', await $.session.id()])
       helloLater($)
       later($, STEP_MS, async () => {
         if (s.pending === p) await $.prompt.submit({ text: seedPrompt(p) })
