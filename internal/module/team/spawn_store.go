@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -89,6 +90,11 @@ func (r spawnRow) checkRunning() error {
 // restarted runner looks for; no milestone yet) and carry its request hash;
 // else nothing is written.
 func (s *Store) CreateSpawnOp(op spawnRow, hash string) (stored spawnRow, storedHash string, inserted bool, err error) {
+	return insertSpawnOp(s.db, op, hash)
+}
+
+// insertSpawnOp is CreateSpawnOp on q, the store or a transaction.
+func insertSpawnOp(q dbtx, op spawnRow, hash string) (stored spawnRow, storedHash string, inserted bool, err error) {
 	fail := func(err error) (spawnRow, string, bool, error) {
 		return spawnRow{}, "", false, fmt.Errorf("create spawn op %s: %w", op.ID, err)
 	}
@@ -98,14 +104,73 @@ func (s *Store) CreateSpawnOp(op spawnRow, hash string) (stored spawnRow, stored
 	if err := op.checkRunning(); err != nil {
 		return fail(err)
 	}
-	res, err := s.db.Exec(`INSERT INTO spawn_ops (request_hash, `+spawnCols+`)
+	res, err := q.Exec(`INSERT INTO spawn_ops (request_hash, `+spawnCols+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
 		hash, op.ID, op.TeamID, op.HostID, op.OriginSessionID, op.Cwd, op.Title, op.Model, op.Effort, op.TmuxName,
 		op.TmuxID, op.TmuxInstance, op.PaneID, op.Step, string(op.State), op.Reason, op.SessionID,
 		op.LaunchedAt, op.CreatedAt, op.UpdatedAt)
 	if inserted, err = oneRow(res, err, "insert"); err == nil {
-		err = s.db.QueryRow(`SELECT request_hash, `+spawnCols+` FROM spawn_ops WHERE id = ?`, op.ID).
+		err = q.QueryRow(`SELECT request_hash, `+spawnCols+` FROM spawn_ops WHERE id = ?`, op.ID).
 			Scan(append([]any{&storedHash}, stored.dest()...)...)
+	}
+	if err != nil {
+		return fail(err)
+	}
+	return stored, storedHash, inserted, nil
+}
+
+// ErrSpawnNotLead and ErrSpawnTeamFull are AcceptSpawnOp's refusals.
+var (
+	ErrSpawnNotLead  = errors.New("the origin leads no live team")
+	ErrSpawnTeamFull = errors.New("the team has no place left")
+)
+
+// AcceptSpawnOp is CreateSpawnOp in one write transaction with the two facts
+// a new op rests on (P4-5 review H1), so a team end, a lead move or another
+// writer that lands after the caller read the team wins: the op's team is
+// live and led by its origin (else ErrSpawnNotLead), and the team's active
+// members, but those in free, plus its running ops but this one, are fewer
+// than its grant's max_members (else ErrSpawnTeamFull). A refusal writes
+// nothing. free is what the caller read from the registry: the active
+// members holding no place (spec §13 D4); one that became active since
+// counts.
+func (s *Store) AcceptSpawnOp(op spawnRow, hash string, free []string) (spawnRow, string, bool, error) {
+	fail := func(err error) (spawnRow, string, bool, error) {
+		return spawnRow{}, "", false, fmt.Errorf("accept spawn op %s: %w", op.ID, err)
+	}
+	freeJSON, err := json.Marshal(append([]string{}, free...))
+	if err != nil {
+		return fail(err)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fail(err)
+	}
+	defer tx.Rollback()
+	// A write first, so SQLite takes the write lock before the reads; it is
+	// also the lead check.
+	res, err := tx.Exec(`UPDATE teams SET id = id WHERE id = ? AND lead_session_id = ? AND ended_at = 0`, op.TeamID, op.OriginSessionID)
+	lead, err := oneRow(res, err, "lead check")
+	if err == nil && !lead {
+		err = ErrSpawnNotLead
+	}
+	var limit, used int
+	if err == nil {
+		err = tx.QueryRow(`SELECT json_extract(grant_json, '$.max_members'),
+			(SELECT COUNT(*) FROM spawn_ops WHERE team_id = t.id AND state = 'running' AND id <> ?) +
+			(SELECT COUNT(*) FROM team_members WHERE team_id = t.id AND state = 'active'
+				AND session_id NOT IN (SELECT value FROM json_each(?)))
+			FROM teams t WHERE t.id = ?`, op.ID, string(freeJSON), op.TeamID).Scan(&limit, &used)
+	}
+	if err == nil && used >= limit {
+		err = ErrSpawnTeamFull
+	}
+	if err != nil {
+		return fail(err)
+	}
+	stored, storedHash, inserted, err := insertSpawnOp(tx, op, hash)
+	if err == nil {
+		err = tx.Commit()
 	}
 	if err != nil {
 		return fail(err)
@@ -115,15 +180,23 @@ func (s *Store) CreateSpawnOp(op spawnRow, hash string) (stored spawnRow, stored
 
 // GetSpawnOp returns the op with id; ok is false when there is none.
 func (s *Store) GetSpawnOp(id string) (spawnRow, bool, error) {
+	r, _, ok, err := s.spawnOpWithHash(id)
+	return r, ok, err
+}
+
+// spawnOpWithHash is GetSpawnOp plus the stored request hash: what the POST
+// compares a replay with before it joins the op.
+func (s *Store) spawnOpWithHash(id string) (spawnRow, string, bool, error) {
 	var r spawnRow
-	err := s.db.QueryRow(`SELECT `+spawnCols+` FROM spawn_ops WHERE id = ?`, id).Scan(r.dest()...)
+	var hash string
+	err := s.db.QueryRow(`SELECT request_hash, `+spawnCols+` FROM spawn_ops WHERE id = ?`, id).Scan(append([]any{&hash}, r.dest()...)...)
 	if errors.Is(err, sql.ErrNoRows) {
-		return spawnRow{}, false, nil
+		return spawnRow{}, "", false, nil
 	}
 	if err != nil {
-		return spawnRow{}, false, fmt.Errorf("get spawn op %s: %w", id, err)
+		return spawnRow{}, "", false, fmt.Errorf("get spawn op %s: %w", id, err)
 	}
-	return r, true, nil
+	return r, hash, true, nil
 }
 
 // spawnUpdate is what one runner step records: the facts of the step it
