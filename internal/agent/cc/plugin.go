@@ -1,6 +1,7 @@
 package cc
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,7 +50,8 @@ const (
 )
 
 // ExtractPlugin writes src into PluginRoot(dataDir) when the VERSION stamp
-// there differs from version (or is missing), then writes VERSION and
+// there differs from version (or is missing), or when a managed file there
+// is missing or differs from src (treeMatches), then writes VERSION and
 // pdx.json {pdx, data_dir, config}. It returns the root and whether files were
 // written. Extraction goes to a fresh staging sibling and is swapped into
 // place (publishDir), so a session loading the folder sees the old tree or
@@ -63,7 +65,9 @@ func ExtractPlugin(src fs.FS, dataDir, version, pdxPath, cfgPath string) (root s
 	defer extractMu.Unlock()
 	// A binary built without ldflags reports "unknown"; such a dev build always
 	// re-extracts, so an edited mod reaches the next session without a bump.
-	if cur, err := os.ReadFile(filepath.Join(root, "VERSION")); err == nil && version != "" && version != "unknown" && strings.TrimSpace(string(cur)) == version {
+	// A same VERSION is not proof the tree is whole: a managed file that is
+	// missing or edited also re-extracts.
+	if cur, err := os.ReadFile(filepath.Join(root, "VERSION")); err == nil && version != "" && version != "unknown" && strings.TrimSpace(string(cur)) == version && treeMatches(src, root) {
 		if err := writePdxJSON(root, pdxPath, dataDir, cfgPath); err != nil {
 			return root, false, err
 		}
@@ -87,6 +91,45 @@ func ExtractPlugin(src fs.FS, dataDir, version, pdxPath, cfgPath string) (root s
 	}
 	return root, true, nil
 }
+
+// manifestPath is the one embedded file the extractor rewrites (the version
+// stamp), so treeMatches only checks that it is there and is JSON.
+const manifestPath = ".claude-plugin/plugin.json"
+
+// treeMatches reports whether every embedded file is at root with the same
+// bytes (the manifest: present and valid JSON). Extra files at root are not
+// looked at.
+func treeMatches(src fs.FS, root string) bool {
+	err := fs.WalkDir(src, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		got, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(p)))
+		if err != nil {
+			return err
+		}
+		if p == manifestPath {
+			if !json.Valid(got) {
+				return errTreeDiffers
+			}
+			return nil
+		}
+		want, err := fs.ReadFile(src, p)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(got, want) {
+			return errTreeDiffers
+		}
+		return nil
+	})
+	return err == nil
+}
+
+var errTreeDiffers = errors.New("extracted tree differs from the embedded one")
 
 // fillStaging writes the whole tree into staging: the embedded files,
 // VERSION, pdx.json and the stamped manifest.
@@ -150,7 +193,7 @@ func stampManifest(root, version string) error {
 	if !semverRe.MatchString(version) {
 		return nil
 	}
-	path := filepath.Join(root, ".claude-plugin", "plugin.json")
+	path := filepath.Join(root, filepath.FromSlash(manifestPath))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read plugin.json: %w", err)

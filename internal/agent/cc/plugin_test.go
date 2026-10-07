@@ -173,16 +173,22 @@ func TestExtractPlugin_SameVersionIsNoop_NewVersionReplaces(t *testing.T) {
 	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", ""); err != nil {
 		t.Fatal(err)
 	}
+	// A file of our own beside the managed ones may stay (the same-version
+	// check compares the embedded files only)…
 	stale := filepath.Join(PluginRoot(dataDir), "hooks", "stale.js")
 	os.WriteFile(stale, []byte("old"), 0o644)
 	_, changed, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", "")
 	if err != nil || changed {
 		t.Fatalf("same version: changed=%v err=%v", changed, err)
 	}
-	if _, err := os.Stat(stale); err != nil {
-		t.Fatal("a same-version extract must not touch the tree")
+	// …but a managed file that went missing is put back (attacker high).
+	os.Remove(filepath.Join(PluginRoot(dataDir), "hooks", "register.js"))
+	_, changed, err = ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", "")
+	if err != nil || !changed {
+		t.Fatalf("same version, register.js missing: changed=%v err=%v", changed, err)
 	}
-	// …but it refreshes pdx.json: a binary moved since the last install is
+	assertWholeTree(t, dataDir, "a")
+	// …and it refreshes pdx.json: a binary moved since the last install is
 	// found by the mod (the rule's one exception).
 	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/usr/local/bin/pdx", ""); err != nil {
 		t.Fatal(err)
@@ -200,6 +206,56 @@ func TestExtractPlugin_SameVersionIsNoop_NewVersionReplaces(t *testing.T) {
 	js, _ := os.ReadFile(filepath.Join(PluginRoot(dataDir), "hooks", "register.js"))
 	if !strings.HasSuffix(strings.TrimSpace(string(js)), "// b") {
 		t.Fatalf("register.js not replaced: %q", js)
+	}
+}
+
+// Attacker high: a same VERSION is not proof the tree is whole. Every
+// embedded file must be there byte for byte — plugin.json only present and
+// valid JSON, since the extractor stamps the version into it — or the
+// tree is re-extracted (through the atomic publish).
+func TestExtractPlugin_SameVersionVerifiesTheTree(t *testing.T) {
+	const v = "1.0.0-alpha.600" // semver: plugin.json is stamped, so it differs from the embedded bytes
+	cases := []struct {
+		name    string
+		damage  func(root string)
+		changed bool
+	}{
+		{"intact (stamped plugin.json is fine)", func(string) {}, false},
+		{"register.js deleted", func(root string) { os.Remove(filepath.Join(root, "hooks", "register.js")) }, true},
+		{"hooks.json corrupted", func(root string) {
+			os.WriteFile(filepath.Join(root, "hooks", "hooks.json"), []byte(`{"modules":[]}`), 0o644)
+		}, true},
+		{"SKILL.md deleted", func(root string) { os.Remove(filepath.Join(root, "skills", "pdx-team", "SKILL.md")) }, true},
+		{"plugin.json not JSON", func(root string) {
+			os.WriteFile(filepath.Join(root, ".claude-plugin", "plugin.json"), []byte(`{"name":`), 0o644)
+		}, true},
+		{"plugin.json deleted", func(root string) { os.Remove(filepath.Join(root, ".claude-plugin", "plugin.json")) }, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			if _, _, err := ExtractPlugin(fakePlugin(v), dataDir, v, "/opt/pdx", ""); err != nil {
+				t.Fatal(err)
+			}
+			c.damage(PluginRoot(dataDir))
+			_, changed, err := ExtractPlugin(fakePlugin(v), dataDir, v, "/usr/local/bin/pdx", "")
+			if err != nil || changed != c.changed {
+				t.Fatalf("changed=%v err=%v, want changed=%v", changed, err, c.changed)
+			}
+			assertWholeTree(t, dataDir, v)
+			assertOnlyRoot(t, dataDir)
+			if hj, _ := os.ReadFile(filepath.Join(PluginRoot(dataDir), "hooks", "hooks.json")); string(hj) != `{"modules":["./register.js"]}` {
+				t.Fatalf("hooks.json = %s", hj)
+			}
+			var m map[string]any
+			pj, _ := os.ReadFile(filepath.Join(PluginRoot(dataDir), ".claude-plugin", "plugin.json"))
+			if err := json.Unmarshal(pj, &m); err != nil || m["version"] != v {
+				t.Fatalf("plugin.json = %s (%v)", pj, err)
+			}
+			if readPdxJSON(t, dataDir)["pdx"] != "/usr/local/bin/pdx" {
+				t.Fatal("pdx.json must be refreshed either way")
+			}
+		})
 	}
 }
 
