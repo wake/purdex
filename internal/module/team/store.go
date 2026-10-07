@@ -76,6 +76,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (teams): %w", err)
 	}
+	if _, err := db.Exec(spawnSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (spawn ops): %w", err)
+	}
 	return &Store{db: db}, nil
 }
 
