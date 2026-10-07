@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"lab.protype.tw/wake/nexen/bus"
+
 	"github.com/wake/purdex/internal/core"
 )
 
@@ -21,9 +23,9 @@ import (
 // event only says "this execution changed", and the delta is its row read
 // again afterwards.
 //
-// An event marks its execution dirty (markFrame); that must stay cheap and
-// never wait on the read slot, since whoever marks is draining the engine's
-// bus (§3.2). One flush worker pops due executions in order and, for each,
+// A trigger frame on the engine's bus marks its execution dirty: the bus
+// consumer (projector_bus.go) calls markFrame, which must stay cheap and
+// never wait on the read slot (§3.2). One flush worker pops due executions in order and, for each,
 // reads the row inside the slot and broadcasts it while still holding it
 // (readSlot.readThen). One worker means one execution's deltas are read and
 // sent in order; the slot makes bseq follow broadcast order and orders every
@@ -97,6 +99,27 @@ func (e *dirtyExec) due(t projectorTiming) time.Time {
 	return d
 }
 
+// rowDigest is the part of a row the safety reconcile compares with what was
+// pushed (§3.7): state, pending_permission.request_id, archived, turn_count,
+// last_turn_reason, terminal_reason. PR1c reads it; the projector keeps it
+// current with every delta.
+type rowDigest struct {
+	State             string
+	PermissionRequest string
+	Archived          bool
+	TurnCount         int64
+	LastTurnReason    string
+	TerminalReason    string
+}
+
+// pushedRow is lastPushed[id] (§3.7): the ver of the last delta pushed for
+// an execution and what its row showed.
+type pushedRow struct {
+	ver     uint64
+	removed bool      // that delta was a removal (row null)
+	digest  rowDigest // zero when removed
+}
+
 // mark is one reason to read an execution again.
 type mark struct {
 	kinds   []string  // trigger kinds it adds to the batch's cause
@@ -123,34 +146,40 @@ type projector struct {
 	slot   *readSlot
 	rows   rowReader
 	events *core.EventsBroadcaster
+	bus    frameBus
 	logf   func(string, ...any)
 	timing projectorTiming
 	now    func() time.Time
 
 	ctx    context.Context // cancelled by stop; every read runs under it
 	cancel context.CancelFunc
-	wg     sync.WaitGroup // the projector's goroutines
-	done   chan struct{}  // closed once they have all returned
-	kick   chan struct{}  // capacity 1: a mark changed what the worker waits for
+	sub    *bus.Subscription // set by start (subscribe)
+	wg     sync.WaitGroup    // the projector's goroutines
+	done   chan struct{}     // closed once they have all returned
+	kick   chan struct{}     // capacity 1: a mark changed what the worker waits for
 
 	mu      sync.Mutex
 	dirty   map[string]*dirtyExec // marked, not yet popped for a flush
 	markSeq uint64
+	pushed  map[string]pushedRow // lastPushed (§3.7), for PR1c's reconcile
 }
 
-func newProjector(slot *readSlot, rows rowReader, events *core.EventsBroadcaster, logf func(string, ...any), timing projectorTiming) *projector {
+func newProjector(slot *readSlot, rows rowReader, events *core.EventsBroadcaster, b frameBus, logf func(string, ...any), timing projectorTiming) *projector {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &projector{
-		slot: slot, rows: rows, events: events, logf: logf,
+		slot: slot, rows: rows, events: events, bus: b, logf: logf,
 		timing: timing.withDefaults(), now: time.Now,
 		ctx: ctx, cancel: cancel,
 		done: make(chan struct{}), kick: make(chan struct{}, 1),
-		dirty: map[string]*dirtyExec{},
+		dirty: map[string]*dirtyExec{}, pushed: map[string]pushedRow{},
 	}
 }
 
-// start starts the flush worker.
+// start subscribes to the bus — before it returns, so no frame published
+// after start is missed — and starts the bus consumer and the flush worker.
 func (p *projector) start() {
+	p.subscribe()
+	p.goTracked(p.consume)
 	p.goTracked(p.work)
 	go func() {
 		p.wg.Wait()
@@ -168,8 +197,8 @@ func (p *projector) goTracked(fn func()) {
 	}()
 }
 
-// stop cancels the projector — a read waiting for the slot or inside the
-// engine is abandoned and consumes nothing, pending marks and re-marks are
+// stop cancels the projector — the consumer unsubscribes, a read waiting for
+// the slot or inside the engine is abandoned and consumes nothing, pending marks and re-marks are
 // dropped — and waits for its goroutines, bounded by ctx and
 // projectorStopWait. Idempotent; only after start.
 func (p *projector) stop(ctx context.Context) {
@@ -332,6 +361,45 @@ func (p *projector) push(id string, st slotStamp, cause []string, row json.RawMe
 		return
 	}
 	p.events.BroadcastStrict(core.HostEvent{Type: deltaEventType, Value: value})
+	p.recordPushed(id, st.Ver, row, found)
+}
+
+// recordPushed keeps lastPushed[id] current.
+func (p *projector) recordPushed(id string, ver uint64, row json.RawMessage, found bool) {
+	rec := pushedRow{ver: ver, removed: !found}
+	if found {
+		d, err := digestOf(row)
+		if err != nil {
+			p.logf("nex-delta: no status digest for exec=%s: %v", id, err)
+		}
+		rec.digest = d
+	}
+	p.mu.Lock()
+	p.pushed[id] = rec
+	p.mu.Unlock()
+}
+
+// digestOf extracts a row's status digest.
+func digestOf(row json.RawMessage) (rowDigest, error) {
+	var r struct {
+		State             string `json:"state"`
+		PendingPermission *struct {
+			RequestID string `json:"request_id"`
+		} `json:"pending_permission"`
+		Archived       bool   `json:"archived"`
+		TurnCount      int64  `json:"turn_count"`
+		LastTurnReason string `json:"last_turn_reason"`
+		TerminalReason string `json:"terminal_reason"`
+	}
+	if err := json.Unmarshal(row, &r); err != nil {
+		return rowDigest{}, err
+	}
+	d := rowDigest{State: r.State, Archived: r.Archived, TurnCount: r.TurnCount,
+		LastTurnReason: r.LastTurnReason, TerminalReason: r.TerminalReason}
+	if r.PendingPermission != nil {
+		d.PermissionRequest = r.PendingPermission.RequestID
+	}
+	return d, nil
 }
 
 // readFailed re-marks a batch whose read failed, once, after retryDelay,

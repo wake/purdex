@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"lab.protype.tw/wake/nexen/bus"
+
 	"github.com/wake/purdex/internal/core"
 )
 
@@ -93,11 +95,12 @@ func (s *rowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // fastTiming coalesces quickly enough for tests to wait in real time.
 var fastTiming = projectorTiming{trailing: 20 * time.Millisecond, maxDelay: 80 * time.Millisecond, retryDelay: 40 * time.Millisecond}
 
-// projEnv is a running projector over a rowServer and a broadcaster with
-// one test subscriber.
+// projEnv is a running projector over a real Nexen bus, a rowServer and a
+// broadcaster with one test subscriber.
 type projEnv struct {
 	p      *projector
 	slot   *readSlot
+	bus    *bus.Bus
 	events *core.EventsBroadcaster
 	sub    *core.EventSubscriber
 	rows   *rowServer
@@ -106,9 +109,10 @@ type projEnv struct {
 
 func newProjEnv(t *testing.T, timing projectorTiming) *projEnv {
 	t.Helper()
-	e := &projEnv{slot: newReadSlot(discardLogf), events: core.NewEventsBroadcaster(), rows: newRowServer(), logs: &logRecorder{}}
+	e := &projEnv{slot: newReadSlot(discardLogf), bus: bus.New(), events: core.NewEventsBroadcaster(),
+		rows: newRowServer(), logs: &logRecorder{}}
 	e.sub = e.events.AddTestSubscriber()
-	e.p = newProjector(e.slot, rowReader{handler: e.rows, logf: e.logs.logf}, e.events, e.logs.logf, timing)
+	e.p = newProjector(e.slot, rowReader{handler: e.rows, logf: e.logs.logf}, e.events, e.bus, e.logs.logf, timing)
 	e.p.start()
 	t.Cleanup(func() {
 		e.p.stop(context.Background())
@@ -322,7 +326,7 @@ func TestProjector_FlushWaitsForAListPageAndIsOrderedAgainstIt(t *testing.T) {
 	m, mux := newListEnv(t, rows)
 	events := core.NewEventsBroadcaster()
 	sub := events.AddTestSubscriber()
-	p := newProjector(m.reads(), rowReader{handler: rows, logf: discardLogf}, events, discardLogf, fastTiming)
+	p := newProjector(m.reads(), rowReader{handler: rows, logf: discardLogf}, events, bus.New(), discardLogf, fastTiming)
 	p.start()
 	t.Cleanup(func() { p.stop(context.Background()) })
 

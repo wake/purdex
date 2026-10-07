@@ -36,6 +36,7 @@ type engine struct {
 	close    func() error
 	service  nexService // nil on a fake engine that never delegates
 	store    nexStore   // nil on a fake engine that never reads rows
+	bus      frameBus   // nil on a fake engine: no projector (projector.go)
 }
 
 // assembleFn builds an engine from the Options buildOptions produced. The
@@ -57,6 +58,7 @@ func realAssemble(ctx context.Context, opts nexen.Options) (engine, error) {
 		close:    sys.Close,
 		service:  sys.Service,
 		store:    sys.Store,
+		bus:      sys.Bus,
 	}, nil
 }
 
@@ -136,6 +138,15 @@ type Module struct {
 	slotOnce sync.Once
 	slot     *readSlot
 	listWait time.Duration
+
+	// The projector (projector.go), which pushes changed execution rows on
+	// /ws/host-events: started by Start when the engine has a bus, stopped
+	// first thing in Stop (and in Close, should Stop not have run) so it
+	// never reads from an engine on its way down. projTiming is a test seam;
+	// zero values take the defaults.
+	projMu     sync.Mutex
+	proj       *projector
+	projTiming projectorTiming
 
 	// Q1 lifecycle (manual_resume.go). Start creates q1Ctx and subscribes;
 	// every unit of Q1 work (a hub callback, a re-check) is counted in
@@ -445,6 +456,7 @@ func (m *Module) Start(context.Context) error {
 	if m.convIdx != nil {
 		m.startConversationScan()
 	}
+	m.startProjector()
 	return nil
 }
 
@@ -462,18 +474,20 @@ func profilesText(maxProfile, defaultProfile string) string {
 	return "max=" + name(maxProfile) + ",default=" + name(defaultProfile)
 }
 
-// Stop ends the manual-resume handling (stopManualResume: no new work,
+// Stop ends the execution-delta projector (stopProjector: no read or push
+// after it), the manual-resume handling (stopManualResume: no new work,
 // in-flight work cancelled and waited for, boundedly) and the conversation
 // listing (stopConversations: the same shape), then drains the engine within
 // ctx's budget (core.ShutdownBudget, shared with the HTTP server's
-// Shutdown). Both stop before the engine does, so neither calls into a
+// Shutdown). All three stop before the engine does, so none calls into a
 // draining engine unless its bounded wait ran out.
 //
 // The engine drain and Close are no-ops when Init never assembled an engine
 // (only a Validate error from Init is fatal to the daemon; an
 // engine-assembly error soft-fails, spec §4.4.1, and the lifecycle still
-// walks this Module); the two stop steps run either way.
+// walks this Module); the stop steps run either way.
 func (m *Module) Stop(ctx context.Context) error {
+	m.stopProjector(ctx)
 	m.stopManualResume(ctx)
 	m.stopConversations(ctx)
 	if m.sys.shutdown == nil {
@@ -483,8 +497,11 @@ func (m *Module) Stop(ctx context.Context) error {
 }
 
 // Close releases the engine's store and credential scope. Called by
-// core.CloseModules after the HTTP server has stopped.
+// core.CloseModules after the HTTP server has stopped. A projector still
+// running (Stop never ran) is stopped first, so it never reads a closed
+// store.
 func (m *Module) Close() error {
+	m.stopProjector(context.Background())
 	if m.sys.close == nil {
 		return nil
 	}
