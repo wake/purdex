@@ -25,11 +25,16 @@ import (
 	"lab.protype.tw/wake/nexen/store"
 
 	"github.com/wake/purdex/internal/fsutil"
+	"github.com/wake/purdex/internal/middleware"
 )
 
 // uploadMaxBytes caps one uploaded file (spec §9.1: 50 MiB). A var so tests
 // can shrink it.
 var uploadMaxBytes int64 = 50 << 20
+
+// uploadStallTimeout is how long the upload body may stall before the read
+// fails. A var so tests can shrink it.
+var uploadStallTimeout = middleware.UploadStallTimeout
 
 // uploadBodyOverhead is the multipart framing (boundaries, part headers,
 // other small fields) allowed on top of the file cap for the whole body.
@@ -110,7 +115,7 @@ func (m *Module) handleExecutionUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, uploadMaxBytes+uploadBodyOverhead)
+	r.Body = http.MaxBytesReader(w, middleware.StallTimeoutBody(w, r, uploadStallTimeout), uploadMaxBytes+uploadBodyOverhead)
 	part, err := findFilePart(r)
 	if err != nil {
 		var tooBig *http.MaxBytesError

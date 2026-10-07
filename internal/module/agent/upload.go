@@ -10,12 +10,18 @@ import (
 	"path/filepath"
 
 	"github.com/wake/purdex/internal/fsutil"
+	"github.com/wake/purdex/internal/middleware"
 	"github.com/wake/purdex/internal/module/session"
 )
+
+// uploadStallTimeout is how long the upload body may stall. A var so tests
+// can shrink it.
+var uploadStallTimeout = middleware.UploadStallTimeout
 
 // handleUpload handles POST /api/agent/upload.
 // It saves the uploaded file and injects the path into the tmux pane.
 func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
+	r.Body = middleware.StallTimeoutBody(w, r, uploadStallTimeout)
 	if err := r.ParseMultipartForm(256 << 20); err != nil {
 		http.Error(w, `{"error":"invalid multipart form"}`, http.StatusBadRequest)
 		return
