@@ -454,16 +454,14 @@ func TestRunLeadCmd_ApprovedExit0PrintsGrant(t *testing.T) {
 	}
 	var out struct {
 		RequestID string     `json:"request_id"`
+		TeamID    string     `json:"team_id"`
 		Grant     team.Grant `json:"grant"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
 		t.Fatalf("stdout %q: %v", stdout, err)
 	}
-	if out.RequestID != fixedID()() || out.Grant.MaxMembers != 2 || len(out.Grant.Roots) != 1 {
+	if out.RequestID != fixedID()() || out.TeamID != fixedID()() || out.Grant.MaxMembers != 2 || len(out.Grant.Roots) != 1 {
 		t.Errorf("stdout = %q", stdout)
-	}
-	if strings.Contains(stdout, "team_id") {
-		t.Errorf("stdout = %q, want no team id before P4", stdout)
 	}
 	want := "申請 lead 中（" + fixedID()() + "），請在 Purdex 介面核准；這個呼叫必須在前景等待（Bash timeout 600000）"
 	if !strings.Contains(stderr, want) {
@@ -559,6 +557,33 @@ func TestRunLeadCmd_WaitBelowOneSecondIsUsageError(t *testing.T) {
 	}
 	if creates, _, _, _ := d.snapshot(); len(creates) != 1 || creates[0].WaitS != 1 {
 		t.Errorf("--wait 1s: create body = %+v, want wait_s 1", creates)
+	}
+}
+
+// Spec §6.1 step 4: an approved request prints the grant with the team id on
+// stdout, one JSON line and nothing else. The team id is the approving
+// request's id (plan v3 deviation 1), so no second call is needed. Nothing
+// else is printed on approval yet: the U20 activation reminder ships with
+// pdx spawn (P4-7).
+func TestLeadFinish_ApprovedPrintsTeamID(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	ap := team.Approval{ID: "8f2c0f8e-3b1a-4c6e-9d2a-0e5b7c1d9a44", Kind: team.KindLead, State: team.StateApproved,
+		Grant: &team.Grant{MaxMembers: 3, Roots: []string{"/w"}}}
+	if code := leadFinish(ap, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if got := stdout.String(); strings.Count(got, "\n") != 1 || !strings.HasSuffix(got, "\n") {
+		t.Fatalf("stdout = %q, want exactly one line", got)
+	}
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("stdout %q: %v", stdout.String(), err)
+	}
+	if string(out["team_id"]) != `"`+ap.ID+`"` || string(out["request_id"]) != `"`+ap.ID+`"` || len(out) != 3 {
+		t.Fatalf("stdout = %s, want request_id, team_id (= the request id) and grant", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want nothing on approval", stderr.String())
 	}
 }
 
