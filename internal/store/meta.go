@@ -106,6 +106,11 @@ func migrateMetaDB(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS peer_messages_msg ON peer_messages(msg_id, direction)`); err != nil {
 		return err
 	}
+	// peer_names: the pdx-assigned virtual name per conversation (peer
+	// mailbox spec §3.2), peer_name.go.
+	if err := migratePeerNames(db); err != nil {
+		return err
+	}
 
 	// peer_labels: one self-declared display label per conversation
 	// (sessionId); label is NULL after a release so the row keeps carrying

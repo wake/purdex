@@ -4,6 +4,8 @@ package core
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -39,6 +41,31 @@ type detectUpdateRequest struct {
 	PollInterval *int      `json:"poll_interval,omitempty"`
 }
 
+// badRequestError marks an UpdateConfig mutate error as the client's fault
+// (400 with its message), not a failure to save (500).
+type badRequestError struct{ err error }
+
+func (e badRequestError) Error() string { return e.err.Error() }
+func (e badRequestError) Unwrap() error { return e.err }
+
+// mergeNex decodes a PUT's nex body into the [nex] section to store. Every
+// key except "peer" is replaced wholesale (absent = zero value), as before.
+// [nex.peer] is presence-aware: the body is decoded onto the CURRENT peer
+// section, so a key the body leaves out keeps its value, and a body with no
+// "peer" key at all keeps the whole section. An older client that never knew
+// the section — or a partial object — therefore cannot switch the mailbox
+// off (U4) or drop a saved cap/template by omission; this also matches TOML
+// Load, where a missing key keeps the default. It must run under
+// UpdateConfig's write lock, so a concurrent PUT cannot slip in between the
+// read of currentPeer and the write. A null "peer" is refused earlier.
+func mergeNex(currentPeer config.NexPeerConfig, body json.RawMessage) (config.NexConfig, error) {
+	next := config.NexConfig{Peer: currentPeer}
+	if err := json.Unmarshal(body, &next); err != nil {
+		return config.NexConfig{}, fmt.Errorf("invalid nex: %w", err)
+	}
+	return next, nil
+}
+
 // handlePutConfig accepts a partial config update, persists it to disk, and returns the updated config.
 func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	var req configUpdateRequest
@@ -48,7 +75,7 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate before mutating
-	var nexUpdate *config.NexConfig
+	home, _ := os.UserHomeDir()
 	if len(req.Nex) > 0 {
 		if bytes.Equal(bytes.TrimSpace(req.Nex), []byte("null")) {
 			http.Error(w, "nex must be an object", http.StatusBadRequest)
@@ -59,15 +86,27 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid nex: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		// RawMessage receives a JSON null as "null" (UnmarshalJSON is called
+		// for it), so a null "peer" is told apart from an absent one.
+		var probe struct {
+			Peer json.RawMessage `json:"peer"`
+		}
+		if err := json.Unmarshal(req.Nex, &probe); err != nil {
+			http.Error(w, "invalid nex: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if bytes.Equal(bytes.TrimSpace(probe.Peer), []byte("null")) {
+			http.Error(w, "nex.peer: must be an object", http.StatusBadRequest)
+			return
+		}
 		// Static shape validation only (spec §4.4.1 division of labour);
 		// whether the engine can actually assemble is Init's business after
-		// the restart the UI asks for.
-		home, _ := os.UserHomeDir()
+		// the restart the UI asks for. This early pass sees the body alone;
+		// the merged section is validated again under the lock below.
 		if err := n.Validate(home); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		nexUpdate = &n
 	}
 
 	if req.Terminal != nil && req.Terminal.SizingMode != "" {
@@ -102,11 +141,23 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		if req.UploadDir != nil {
 			cfg.UploadDir = *req.UploadDir
 		}
-		if nexUpdate != nil {
-			cfg.Nex = *nexUpdate // persisted, never applied live (I9)
+		if len(req.Nex) > 0 {
+			next, err := mergeNex(cfg.Nex.Peer, req.Nex)
+			if err != nil {
+				return badRequestError{err}
+			}
+			if err := next.Validate(home); err != nil {
+				return badRequestError{err}
+			}
+			cfg.Nex = next // persisted, never applied live (I9)
 		}
 		return nil
 	})
+	var badReq badRequestError
+	if errors.As(err, &badReq) {
+		http.Error(w, badReq.Error(), http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return

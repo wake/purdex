@@ -30,6 +30,18 @@ export interface NexTimeoutsConfig {
   turn: string
 }
 
+/**
+ * `[nex.peer]` (peer mailbox spec §6). `max_pending` 0 and an empty template
+ * mean Nexen's default. The templates are not edited in the UI but must be
+ * PUT back untouched: the daemon replaces the whole `[nex]` section.
+ */
+export interface NexPeerConfig {
+  enabled: boolean
+  max_pending: number
+  wake_template: string
+  reply_line: string
+}
+
 export interface NexConfig {
   enabled: boolean
   repo_roots: string[]
@@ -38,6 +50,7 @@ export interface NexConfig {
   path_prepend: string[]
   sandbox: NexSandboxConfig
   timeouts: NexTimeoutsConfig
+  peer: NexPeerConfig
 }
 
 export interface NexEffective {
@@ -51,6 +64,10 @@ export interface NexEffective {
   lease_ttl: string
   interrupt: string
   turn: string
+  // The peer mailbox as assembled (max_pending with Nexen's default applied).
+  // Optional so older daemons stay consumable.
+  peer_enabled?: boolean
+  peer_max_pending?: number
 }
 
 export interface NexInfo {
