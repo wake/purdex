@@ -10,7 +10,7 @@ import (
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	f := Files()
-	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "skills/pdx-team/SKILL.md"} {
+	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/prompts.js", "skills/pdx-team/SKILL.md"} {
 		if _, err := fs.Stat(f, rel); err != nil {
 			t.Errorf("%s: %v", rel, err)
 		}
