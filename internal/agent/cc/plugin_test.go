@@ -552,6 +552,49 @@ func TestInstallHooks_PdxJSONNamesTheInstallingConfig(t *testing.T) {
 	}
 }
 
+// pdx.json names the daemon's mod event socket (interface U1 spec §6.5):
+// the mod reports nothing without it.
+func TestExtractPlugin_PdxJSONHasModSocket(t *testing.T) {
+	dataDir, err := os.MkdirTemp("/tmp", "pdxm-") // t.TempDir is too long on macOS
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dataDir) })
+	if _, _, err := ExtractPlugin(fakePlugin("1.0.0-alpha.600"), dataDir, "1.0.0-alpha.600", "/opt/pdx", "/etc/pdx/config.toml"); err != nil {
+		t.Fatal(err)
+	}
+	pj := readPdxJSON(t, dataDir)
+	if want := filepath.Join(dataDir, "mod.sock"); pj["mod_socket"] != want {
+		t.Fatalf("pdx.json mod_socket = %q, want %q", pj["mod_socket"], want)
+	}
+	if len(pj) != 4 || pj["pdx"] != "/opt/pdx" || pj["data_dir"] != dataDir || pj["config"] != "/etc/pdx/config.toml" {
+		t.Fatalf("no other field changes: %v", pj)
+	}
+	// The same-version refresh keeps it.
+	if _, changed, err := ExtractPlugin(fakePlugin("1.0.0-alpha.600"), dataDir, "1.0.0-alpha.600", "/opt/pdx", ""); err != nil || changed {
+		t.Fatalf("refresh: changed=%v err=%v", changed, err)
+	}
+	if got := readPdxJSON(t, dataDir)["mod_socket"]; got != filepath.Join(dataDir, "mod.sock") {
+		t.Fatalf("refresh: mod_socket = %q", got)
+	}
+}
+
+// A data dir whose socket path would not fit leaves the channel off, so
+// pdx.json does not name a socket the daemon never listens on.
+func TestExtractPlugin_PdxJSONOmitsModSocketWhenTooLong(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), strings.Repeat("d", 100))
+	if _, _, err := ExtractPlugin(fakePlugin("1.0.0-alpha.600"), dataDir, "1.0.0-alpha.600", "/opt/pdx", ""); err != nil {
+		t.Fatal(err)
+	}
+	pj := readPdxJSON(t, dataDir)
+	if _, ok := pj["mod_socket"]; ok {
+		t.Fatalf("pdx.json = %v; mod_socket must be omitted", pj)
+	}
+	if pj["pdx"] != "/opt/pdx" || pj["data_dir"] != dataDir {
+		t.Fatalf("pdx.json = %v", pj)
+	}
+}
+
 // failHooks / failEnv swap a settings.json writer for one that fails when
 // remove == onRemove (restored at cleanup), to break one step.
 func failHooks(t *testing.T, onRemove bool) {
