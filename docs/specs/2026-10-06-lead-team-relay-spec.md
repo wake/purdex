@@ -11,6 +11,7 @@ Status: **passed review by `air26/_9iwyyv` on 2026-10-06** (c358cd65 plus the re
 - U17 (2026-10-07) brings the synchronous hook decision (`pdx hook` waits for the daemon on PreToolUse and PermissionRequest) from §11 into the phases: §6.6, M17–M21, phases P2c and P8.
 - U19 (2026-10-07) replaces §6.6's forwarding with **分流**: the terminal keeps its native AskUserQuestion and permission dialogs untouched, every other client (desktop or phone) gets an event card, the first answer wins and closes the rest; the Purdex mod races the native dialog against the daemon's answer (measured, M24); no per-session switch, no Mac App card; phases P8a/P8b.
 - U18 (2026-10-07) fixes the model tier: spawn uses the default model; a self relay keeps model and effort (measured: `/clear` already does, M21); handoff (切換) keeping them is tracked outside this spec (§16), and P1 records `model.id` / `effort.level` for it.
+- U20 (2026-10-07, after the line moved to `mlab/_7wcg1d`) replaces U18's spawn bullet: the CLI's default model is not stable, so `pdx spawn` takes optional `--model` / `--effort` (M25), and the lead is reminded at activation and at a spawn without `--model` to choose them per task (§2, §6.1, §7.2, §10; phase P4).
 - U16 (2026-10-07) fixes the Chinese vocabulary: 切換 (handoff, terminal ↔ worker) and 接力 (relay, a new conversation when context runs out); 交接 is retired. This spec's prompts and the 接力檔 follow it; English identifiers do not change.
 
 Every place where this spec departs from the brief's design draft (brief §5, D1–D8) is marked **⟲ changed from D…**, with the reason. §13 lists all of them.
@@ -125,7 +126,7 @@ air26's facts behind it (2026-10-07), re-verified here as M22: Nexen starts a wo
 - **(a) Self relay needs no reset.** `/clear` keeps both the model and the effort level in the same process (M21: `claude-sonnet-5-5` / `low` survived into the new session id). The mod does nothing about them; the P5b acceptance checks the statusline before and after a relay shows the same `model.id` and `effort.level`. If a later Claude Code drops either, the mod re-applies them with `$.command.run('model …')` / `('effort …')` from values it captured at `session.start` — the plan notes this as the fallback, not as v1 code.
 - **(b) The daemon learns model and effort from the statusline, not from hooks.** The statusline payload carries `model.id` and `effort.level`; the hook payloads carry neither (M21). P1's parser records both beside the context usage, per CC session id (§8.5). Today nothing in Purdex or Nexen carries them (M22).
 - **(c) 切換 is outside lead/team.** It is tracked as two issues, not a phase here: Purdex `wake/purdex` (pass the session's model and effort on terminal → worker through `execution.Request`, and append `--model` / `--effort` to the worker → terminal resume and rollback commands from the execution's values) and Nexen `wake/nexen` (`Model` / `Effort` on `execution.Request`, persisted on the execution because every turn is a new process, emitted after `--resume`, with a test that the flags beat the three settings scopes). Links in §16. This spec's only part of it is P1 recording the values.
-- **Spawn** (§7.2) stays `claude --dangerously-skip-permissions --plugin-dir …` with no model flags.
+- ~~**Spawn** (§7.2) stays `claude --dangerously-skip-permissions --plugin-dir …` with no model flags.~~ **Superseded by U20:** spawn takes optional `--model` / `--effort`, and the lead is reminded to choose them. U18's self-relay and 切換 parts stand.
 
 **Ninth supplementary decision.** The user made it on 2026-10-07, and `air26/_9iwyyv` relayed it (final version, after a first draft was withdrawn for the 攔截／分流 discussion). Copied verbatim.
 
@@ -137,6 +138,20 @@ air26's facts behind it (2026-10-07), re-verified here as M22: Nexen starts a wo
 - **Mechanism 1, the Purdex mod, is chosen; there is no send-keys fallback.** A `tool.call` hook on `AskUserQuestion` calls `next(e)` without awaiting it, so the engine's own dialog is drawn byte for byte; at the same time it waits for the daemon's answer. Whichever comes first wins: the terminal's answer flows out as the tool's result and the mod tells the daemon; a remote answer makes the hook return `{ result }`, which **closes the native dialog at once** (M24).
 - (a) No per-session switch. (b) The Mac App shows no card: the terminal it displays is the answer surface. (c) The flag file is only for the lead and relay hard locks; AskUserQuestion and permission prompts never hold. (d) The "answered on one side, close the other" signal is the mod's own report when `next(e)` resolves; the settings-hook `PostToolUse` report is the backstop for sessions without the mod. (e) P8 is split into **P8a** (daemon kinds + the mod's AskUserQuestion path) and **P8b** (the mod's permission path, deferred until the iOS line needs it) (§12).
 - **air26's five points (2026-10-07):** (1) "no client connected" becomes "no remote responder": a connected WS client **or a device registered for push**, behind one daemon interface, with only the WS half implemented in P8a; (2) `$.process.run` is capped at ten minutes, so the mod's wait is a loop of bounded long-polls; (3) the permission path leaves no trace in the terminal or the transcript the model reads (measured), and P8b is deferred because the user runs bypass mode; (4) a session without the mod degrades to a **terminal-only** card; (5) a near-simultaneous answer is decided for the terminal, and the phone's card says so.
+
+**Tenth supplementary decision.** The user made it on 2026-10-07 directly to `mlab/_7wcg1d` (purdex-f0), then chose the shape from three options (提醒＋可指定, over 強制指定 and 提醒＋主機預設). The user's words are copied verbatim; the chosen shape follows them.
+
+| # | 決策 |
+|---|---|
+| U20 | 我發現現在 claude code cli 的預設 model 不是一定的，會不穩定。調整為，啟用為 lead 時，提醒他按照需求指定 member 的模型呼叫。<br>選定形狀（提醒＋可指定）：<br>- 核准成為 lead 時印一行提醒，skill 也寫；<br>- `pdx spawn` 新增 `--model`（與 `--effort`）；<br>- 沒帶 `--model` 照樣用預設模型開，但 spawn 再提醒一次。 |
+
+**How this spec reads U20** (M25; it replaces U18's spawn bullet and nothing else of U18):
+- **(a) Spawn takes the flags.** `pdx spawn [--model <m>] [--effort <e>]` (§7.2). The daemon appends them to the launch command after `team.member_command`. `--model` must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(\[1m\])?$` and is single-quoted in the literal send (the `[1m]` suffix would glob); `--effort` must be one of M25's five levels. The CLI checks both first (exit 2); the daemon checks again and answers `400 bad_request`. Neither flag is required.
+- **(b) The reminder at activation.** On approval `pdx lead request` keeps the grant JSON alone on stdout and prints on stderr: `已成為 lead。預設模型不固定：spawn member 時請依工作需求用 --model 指定（例：--model sonnet 做機械性修改、--model opus 做設計）。` (§6.1 step 4). It ships with spawn in P4, so it never names a command that does not exist yet.
+- **(c) The reminder at spawn.** Without `--model`, `pdx spawn` still opens the member and prints on stderr: `提醒：沒有指定 --model，member 會用這台主機當下的預設模型。` The exit code is unchanged.
+- **(d) The skill** (§10, "As a lead") says to choose each member's model and effort for its task, and why: the host default is not fixed.
+- **(e) The lead sees what each member runs.** `pdx team` shows each member's model and effort from P1's statusline reading (§7.3), so a member that came up on an unexpected model is visible.
+- **(f) Across hosts and relays.** P4c forwards `model` / `effort` with the spawn to the member host. A member relay (P6) keeps them, because `/clear` does (U18 (a), M21).
 
 **How this spec reads U15** (derived in §7.4; the measurements are M13–M16):
 - U15 pulls **cross-host spawn, kill and relay** out of §11 into the phases (P4b, P4c in §12). It changes none of U1–U14.
@@ -229,6 +244,7 @@ A probe mod was loaded into a throwaway `claude` in tmux through `CLAUDE_CODE_PL
   - **P-C** A mod-drawn pane works (hotkeys, Enter, Esc, free text, several questions, multi-select, remote first) but does not look native (round border, `1: 紅` not `❯ 1. 紅`, the spinner keeps turning) and element handles went stale twice. **P-D** `ui.render` on the `AskUserQuestion` site fires, but a tree may only add content *above* the engine's node and keys never reach the mod's buttons. Both rejected.
   - **P-E** `tool.check` returning `ask` shows the native permission prompt (the hook's `reason` is not drawn); holding inside `tool.check` shows only `Waiting…`. **The workable shape is `tool.call`:** its `next(e)` contains the prompt and the run; remote allow first ⇒ the hook re-issues the call with `$.tool.call` and a `tool.check` hook that answers `allow` ⇒ the prompt closes and the tool runs; remote deny ⇒ `{ deny }` closes the prompt; terminal "Yes" first ⇒ native wins. The abandoned native `next(e)` settled as `The user doesn't want to proceed…` and was discarded: **the terminal showed only the Bash row and its result, and the model did not read it** (capture `pe/cap-e4-02-after-allow.txt`).
   - **Limits read from the 2.1.291 types:** `$.process.run` `timeoutMs` defaults to 30 s and is **ten minutes at most**; `HookBudget` counts a hook's own time (10 s) and stops while a `next(e)` or `$` call is in flight. **Unmeasured:** a hold of hours (the plan for P8a measures one).
+- **M25 Launch flags for model and effort** (2026-10-07, `claude --help`, CC 2.1.292): `--model <model>` takes an alias for the latest model (`fable`, `opus`, `sonnet`) or a model's full name; `--effort <level>` takes `low`, `medium`, `high`, `xhigh` or `max`. Both apply to the session they start, so a member launched with them runs that model and effort whatever the host's settings say. (Used by U20.)
 
 ### 3.3 Code (re-verified on origin/main `de37a4e5`, alpha.505)
 
@@ -360,7 +376,7 @@ pdx lead request --reason <text> [--max-members N] [--root <dir>]... [--wait 9m]
 1. pdx generates the request id (UUID v4, the idempotency key). It prints one stderr line: `申請 lead 中（<id>），請在 Purdex 介面核准；這個呼叫必須在前景等待（Bash timeout 600000）`.
 2. `POST /api/team/approvals {id, kind:"lead", origin_inbox, reason, max_members, roots, wait_s}`.
 3. Long-poll `GET /api/team/approvals/{id}?wait=25` until the request is closed. **Each poll renews the request's lease.**
-4. On approval it prints the grant on stdout (team id, max members, roots) and exits.
+4. On approval it prints the grant on stdout (team id, max members, roots) and exits. **(U20, from P4)** It also prints one stderr line reminding the new lead to choose each member's model: `已成為 lead。預設模型不固定：spawn member 時請依工作需求用 --model 指定（例：--model sonnet 做機械性修改、--model opus 做設計）。` stdout stays the grant JSON alone.
 5. On SIGINT or SIGTERM it sends `DELETE /api/team/approvals/{id}` (best effort), then exits 12.
 
 Defaults:
@@ -520,10 +536,10 @@ Created on approval.
 ### 7.2 Spawn
 
 ```
-pdx spawn [--repo <key|org/repo>] [--host <alias>] [--cwd <dir>] [--title <t>] [--brief-file <f> | --brief <text>]
+pdx spawn [--repo <key|org/repo>] [--host <alias>] [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--brief-file <f> | --brief <text>]
 ```
 
-1. pdx generates the operation id, then calls `POST /api/team/spawns {id, origin_inbox, cwd, title}`.
+1. pdx generates the operation id, then calls `POST /api/team/spawns {id, origin_inbox, cwd, title, model, effort}`. **(U20)** `model` and `effort` are optional and checked by the CLI first (exit 2): `model` matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(\[1m\])?$`, `effort` is one of `low`, `medium`, `high`, `xhigh`, `max` (M25). Without `--model` the CLI prints on stderr `提醒：沒有指定 --model，member 會用這台主機當下的預設模型。` and goes on.
 2. The daemon checks:
    - the origin is the lead of a live team;
    - active members < `max_members`;
@@ -534,7 +550,8 @@ pdx spawn [--repo <key|org/repo>] [--host <alias>] [--cwd <dir>] [--title <t>] [
    - an existing session of that name is this op's, so the daemon continues;
    - nothing opens twice.
 4. **Create the tmux session and launch the member.** This goes through the session module's create path, then a generation-checked literal send to window 0. Each step is persisted.
-   - The launch command is the host config `team.member_command`, default `claude --dangerously-skip-permissions` (the expansion of `cld-yolo`, because the daemon cannot rely on a shell alias). **No `--model` or `--effort` (U18):** a member runs the host's default model.
+   - The launch command is the host config `team.member_command`, default `claude --dangerously-skip-permissions` (the expansion of `cld-yolo`, because the daemon cannot rely on a shell alias).
+   - **⟲ changed by U20 (was U18's "no `--model` or `--effort`"):** when the request carries them, the daemon appends `--model '<m>'` (single-quoted) and `--effort <e>`, after validating both again (`400 bad_request`). Without them the member runs the host's default model.
    - **A member always carries the Purdex mod:** the command always gets `--plugin-dir <data_dir>/cc-plugin/purdex`. Even with the global install the plugin loads once (M5), so spawn never depends on the user's settings.
 5. **Wait up to 20 s for the member to register.** Same shape as take-to-terminal: a verified frame for the pane with a session id, plus a registry entry, so the ref is known.
    - On timeout: kill the tmux session, fail `member_start_timeout`. The member does not count against the limit.
@@ -559,7 +576,7 @@ The skill tells the lead to recommend in the brief that the member run `EnterWor
 - **`pdx kill <ref>`:** only the member's own lead may run it; otherwise 409 `not_your_member`.
   - It kills the member's tmux session, so the member's CC exits.
   - Sets `state=killed`. Worktrees are the lead's business.
-- **`pdx team [--json]`:** the caller's team — each member's address and ref, title, status, context %, cwd and tmux session.
+- **`pdx team [--json]`:** the caller's team — each member's address and ref, title, status, context %, **model and effort (U20, from P1's statusline reading; blank until the member's first statusline)**, cwd and tmux session.
 
 ### 7.4 Host selection and cross-host teams (U15)
 
@@ -888,6 +905,7 @@ The skill ships in the plugin (`skills/pdx-team/SKILL.md`). It says:
 
 **As a lead:**
 - spawn and kill;
+- choose each member's model (and effort) for its task with `pdx spawn --model` / `--effort`: the host's default model is not fixed (U20); check `pdx team` to see what each member actually runs;
 - recommend a worktree to members, by having them `EnterWorktree`, or prepare one (U10);
 - when a `[pdx team]` notice arrives, decide whether and when to `pdx relay` (U9);
 - write the team roster into your own handoff's §8.
@@ -925,9 +943,9 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | P2 | `team` module skeleton and `team.db`; `daemonclient` with the restart rules (§9.1); lead requests: create, poll and lease, cancel, decide, sweeper, boot grace, `OnSubscribe` snapshot; `pdx lead request`; exit codes (§14) | 1 |
 | P3 | Approval dialog host, store, event branch, one-click approve and deny (U5b), reconnect queue, notifications; restart-confirm line for open requests (§6.3, §9.5) | 1 |
 | P2c | Hook decisions (U17, §6.6): flag-file gate, `pdx hook` decision path for PreToolUse / PermissionRequest (CC and Codex) with the 5 s grace, `POST /api/hooks/decide` with the lead-request lock answer, Codex `PreToolUse` timeout 5 → 10 s (Claude Code entries untouched), flag written and removed by `pdx lead request`, sweeper of stale flags | U17 (uses 1) |
-| P4 | Teams and grants; `pdx spawn` / `kill` / `team` on this host; spawn reconciliation; team end on the lead's exit | 1 |
+| P4 | Teams and grants; `pdx spawn` / `kill` / `team` on this host, with spawn's `--model` / `--effort` and both U20 reminders, `pdx team`'s model and effort columns; spawn reconciliation; team end on the lead's exit | 1, U20 |
 | P4b | Host selection (U15): repo inventory and `developable` rule, `rate_limits` parsing and the per-account weekly reading, `GET /api/team/repos|hosts`, `GET /api/peers/team/repos|usage` for paired hosts, the selection rule and `pdx spawn --repo`, `team.repo_roots` / `team.min_weekly_remaining` / `team.preferred_host` host config | U15 |
-| P4c | Cross-host execution (U15): `AllowTeam` flag, CLI and Hosts toggle; `POST /api/peers/team/spawn|kill|relay|lead-moved` behind `HostRoutePolicy`; forwarding with op-id idempotency and the restart grace; `remote_members`; cross-host brief and notices; `remote_unsupported` / `host_not_allowed` / `remote_unreachable` | U15 |
+| P4c | Cross-host execution (U15): `AllowTeam` flag, CLI and Hosts toggle; `POST /api/peers/team/spawn|kill|relay|lead-moved` behind `HostRoutePolicy`; forwarding with op-id idempotency and the restart grace (the spawn carries U20's `model` / `effort`); `remote_members`; cross-host brief and notices; `remote_unsupported` / `host_not_allowed` / `remote_unreachable` | U15 |
 | P5a | Daemon relay core: `relay_ops`; `session_lineage` with uncapped `previous_refs` and the Resolve tier; title, team and lead-ref moves; the `self_relay` approval kind; host switches and Hosts UI toggles; session pause; handoff retention sweeper | 2 (part), U13 |
 | P5b | Plugin packaging (embed, extract, `CLAUDE_CODE_PLUGIN_DIRS` merge and uninstall) with the skill; mod self relay: `hello` / `begin` / `wait` / `report`, the prompt hold, asking again, the auto-compact rule, `/relay` | 2 (part), 4 (part), U13 |
 | P6 | Member relay: `pdx relay`, the daemon's virtual peer and control message, `claim`, timeouts, boot reconciliation of relay ops; completion and failure notices; restart-confirm line for relays | 2 |
@@ -956,7 +974,8 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 | D2 | Approve and deny are one click on any App; the `client` descriptor is an audit label | U5b (U5a withdrawn); one shared host token (§3.3) |
 | D2 | The grant has no host list; the host is chosen per spawn by the §7.4 rule, and the member host gates by its own `AllowTeam` flag | U15; the user picks hosts by rule, not per grant |
 | D4 | No `--worktree`; `--repo` and `--host` (U15); the brief is sent by the CLI from the lead's inbox; tmux name `tm-<op>`; start timeout kills and frees the slot | No worktree API and U10; U15 reinstated the host choice; replies reach the lead; D4's own idempotency idea; the limit counts only live members |
-| U18 | Spawn has no model flags; self relay relies on `/clear` keeping model and effort; 切換 tracked in issues, P1 records the values | M21, M22 |
+| U18 | ~~Spawn has no model flags~~ (superseded by U20); self relay relies on `/clear` keeping model and effort; 切換 tracked in issues, P1 records the values | M21, M22 |
+| U20 | Spawn takes optional `--model` / `--effort` (validated, model single-quoted); reminders at activation and at a spawn without `--model`; `pdx team` shows each member's model and effort; replaces U18's spawn bullet only | U20; M25 |
 | U19 | 分流, not interception: the Purdex mod races the native dialog (`next(e)` not awaited) against the daemon; no per-session switch; no Mac App card; terminal-only degradation without the mod; terminal wins a tie and the card says so; P8a/P8b | U19; M24 probes; air26's five points |
 | §11 → §6.6 (U17) | `pdx hook` waits for the daemon on PreToolUse and PermissionRequest behind a flag file; lead and relay locks in P2c/P6; forwarded prompts as two more approval kinds in P8 | U17; M17–M20; one approval model serves the iOS line too |
 | §11 → §7.4 (U15) | Cross-host spawn, kill and relay are in P4b/P4c; trust = the paired lead host's inbound token plus the member host's `AllowTeam` flag; the grant does not travel | U15; `PeerAuth` already identifies the calling host; both daemons are the same user's |
@@ -1000,7 +1019,7 @@ One phase is one PR, ≤ 800 lines or ≤ 20 files; split further when larger.
 - **Retention:** 3 per chain, 14 days, and 3 days for failed ops; nothing outside `<data_dir>/relay/` is touched.
 - **Lineage:** an uncapped chain still resolves a lead's oldest ref after 11 or more relays.
 - **Lead request:** create is idempotent; exactly one close wins under concurrent decide, timeout and cancel; the 409 carries `decided_by`; the snapshot reaches a late subscriber; the lease is extended on boot; abandonment fires when the origin dies.
-- **Spawn:** the limit, roots and symlink escape; retry after a mid-op restart opens nothing twice; the start timeout kills and frees the slot.
+- **Spawn:** the limit, roots and symlink escape; retry after a mid-op restart opens nothing twice; the start timeout kills and frees the slot. **U20:** `--model` / `--effort` reach the launch command (model single-quoted, `opus[1m]` included); a model with a space, a quote, `;` or `$(` and an effort outside M25's five are exit 2 at the CLI and `400 bad_request` at the daemon; a spawn without `--model` prints the reminder on stderr and still exits 0; an approved `pdx lead request` prints the activation reminder on stderr and only the grant JSON on stdout; `pdx team` shows a member's model and effort.
 - **Relay:**
   - claim is accepted only for the target session;
   - reports are idempotent;
