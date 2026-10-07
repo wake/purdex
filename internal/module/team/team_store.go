@@ -24,14 +24,12 @@ var ErrNoSuchMember = errors.New("no such member")
 // writes rolled back, the row is still open.
 var ErrMemberCannotLead = errors.New("the session is an active member of a live team")
 
-// teamSchema is the P4 teams table (spec §7.1) and, from P4-3, the
-// team_members table (§7.2 step 6, §7.3). It is run by OpenStore after
-// relaySchema; every statement is idempotent, so it is safe on a team.db
-// written before either existed. A team's id is the id of the lead request
-// that approved it (plan v3 deviation 1), so request_id = id. ended_at = 0
-// while the team is live; one live team per lead session. A member row is
-// keyed by the spawn op that started it; a session is an active member at
-// most once. The cleared transaction moves both (§8.4).
+// teamSchema is the P4 teams table (spec §7.1). It is run by OpenStore
+// after relaySchema; every statement is idempotent, so it is safe on a
+// team.db written before it existed. A team's id is the id of the lead
+// request that approved it (plan v3 deviation 1), so request_id = id.
+// ended_at = 0 while the team is live; one live team per lead session.
+// team_members (P4-3, §7.3): one row per spawn op, one active row per session.
 const teamSchema = `
 	CREATE TABLE IF NOT EXISTS teams (
 		id              TEXT PRIMARY KEY,

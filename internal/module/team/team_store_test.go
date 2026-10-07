@@ -312,8 +312,9 @@ func TestStore_EndTeamOnceAndOnlyForTheLeadItSaw(t *testing.T) {
 	}
 }
 
-// The deploy path: a team.db written before P4-2 has no teams table.
-// OpenStore adds it (CREATE … IF NOT EXISTS) and keeps every existing row.
+// The deploy path: a team.db written before P4-2 has no teams table (before
+// P4-3, no team_members). OpenStore adds them (CREATE … IF NOT EXISTS) and
+// keeps every existing row.
 func TestOpenStore_AddsTeamsToAnExistingDB(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "team.db")
 	s, err := OpenStore(path)
@@ -323,7 +324,8 @@ func TestOpenStore_AddsTeamsToAnExistingDB(t *testing.T) {
 	if _, _, _, err := s.Create(openApproval("id-1", "sid-1", 1000), "h1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`DROP INDEX teams_one_live_per_lead; DROP TABLE teams`); err != nil {
+	if _, err := s.db.Exec(`DROP INDEX teams_one_live_per_lead; DROP TABLE teams;
+		DROP INDEX team_members_one_active; DROP INDEX team_members_team; DROP TABLE team_members`); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -342,31 +344,9 @@ func TestOpenStore_AddsTeamsToAnExistingDB(t *testing.T) {
 	if _, ok, err := s.LiveTeamByLead("sid-1"); err != nil || !ok {
 		t.Fatalf("team on the migrated db: ok=%v err=%v", ok, err)
 	}
-}
-
-// The P4-3 deploy path: a team.db written by P4-2 has teams but no
-// team_members. OpenStore adds the table and its indexes and keeps the teams.
-func TestOpenStore_AddsTeamMembersToAnExistingDB(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "team.db")
-	s, err := OpenStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedTeam(t, s, "team-1", "lead-1", 1000)
-	if _, err := s.db.Exec(`DROP INDEX team_members_one_active; DROP INDEX team_members_team; DROP TABLE team_members`); err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
-	s, err = OpenStore(path)
-	if err != nil {
-		t.Fatalf("reopen a P4-2 db: %v", err)
-	}
-	defer s.Close()
-	if _, ok, err := s.LiveTeamByLead("lead-1"); err != nil || !ok {
-		t.Fatalf("existing team after the migration: ok=%v err=%v", ok, err)
-	}
-	seedMember(t, s, "op-1", "team-1", "sid-m1", 2000)
-	if err := s.InsertMember(newMember("op-2", "team-1", "sid-m1", "_x", 3000)); err == nil {
+	// P4-3: team_members and its one-active index come back too.
+	seedMember(t, s, "op-1", "id-1", "sid-m1", 2000)
+	if err := s.InsertMember(newMember("op-2", "id-1", "sid-m1", "_x", 3000)); err == nil {
 		t.Fatal("the migrated db lacks team_members_one_active")
 	}
 }

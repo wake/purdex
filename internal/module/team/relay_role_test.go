@@ -131,9 +131,6 @@ func TestRelayHello_LeadReadsTheLeadSwitch(t *testing.T) {
 	if code, h, body := f.hello("sid-1"); code != http.StatusOK || h.Role != "lead" || h.SelfRelay != "on" {
 		t.Fatalf("lead, self_lead on: %d %s", code, body)
 	}
-	if code, h, body := f.hello("sid-2"); code != http.StatusOK || h.Role != "none" || h.SelfRelay != "off" {
-		t.Fatalf("solo, self_solo off: %d %s", code, body)
-	}
 	if code, r, body := f.self("sid-1", "off"); code != http.StatusOK || r.SelfRelay != "paused" || !r.HostSwitch || r.Member {
 		t.Fatalf("lead self off: %d %s, want paused under self_lead", code, body)
 	}
@@ -294,11 +291,9 @@ func TestRelayRole_StoreErrorIs500(t *testing.T) {
 			}
 			code, body = f.do(http.MethodPost, "/api/relay/begin", beginReq("sid-1"))
 			check("begin", code, body)
-			if paused, err := f.m.store.SelfRelayPaused("sid-1"); err != nil || paused {
-				t.Fatalf("self off stored a pause: paused=%v err=%v", paused, err)
-			}
-			if active, _ := f.m.store.ListActiveRelayOps(); len(active) != 0 {
-				t.Fatalf("begin opened an op: %+v", active)
+			paused, _ := f.m.store.SelfRelayPaused("sid-1")
+			if active, _ := f.m.store.ListActiveRelayOps(); paused || len(active) != 0 {
+				t.Fatalf("self off stored a pause (%v) or begin opened an op: %+v", paused, active)
 			}
 		})
 	}

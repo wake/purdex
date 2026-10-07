@@ -37,13 +37,10 @@ const (
 	roleMember = "member"
 )
 
-// relayRole is the session's role for the switches (spec §8.7), read live
-// on every hello, self and begin (§8.7 (a)): "lead" when it leads a live
-// team, "member" when it is an active member of a live team, else "none"
-// — a member or lead of an ended team is an ordinary session again (D4).
-// A store error is an error, never "none" (plan v3 deviation 12): the
-// caller answers 500, the mod treats the daemon as unavailable and nothing
-// relays (fail closed, §8.7 (d)).
+// relayRole is the session's role (spec §8.7), read live on every hello,
+// self and begin: lead of a live team, active member of one, else none
+// (an ended team's lead or member, D4). A store error is an error, never
+// none (plan v3 deviation 12): the caller answers 500 (fail closed).
 func (m *Module) relayRole(sessionID string) (string, error) {
 	if _, ok, err := m.store.LiveTeamByLead(sessionID); err != nil {
 		return "", err
@@ -421,10 +418,9 @@ func opReportForClosedRow(a team.Approval, at int64) RelayReport {
 	return rep
 }
 
-// closedRowReport is opReportForClosedRow with U13 applied (P4-3 review
-// H2): an approved row whose session has become a member of a live team
-// does not claim; its op is cancelled{member_relay_is_leads}. A role that
-// cannot be read is an error: the op is left for the next reconciliation.
+// closedRowReport is opReportForClosedRow with U13 (P4-3 review H2): an
+// approved row of a session that is now a member cancels its op
+// {member_relay_is_leads} instead of claiming it. A role read error is an error.
 func (m *Module) closedRowReport(a team.Approval, at int64) (RelayReport, error) {
 	rep := opReportForClosedRow(a, at)
 	if rep.State != team.RelayClaimed {

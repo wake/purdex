@@ -447,9 +447,8 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if memberCancelled {
-		// U13 (P4-3 review H2): the origin became a member after its begin.
-		// The approve's transaction cancelled the request and its op instead
-		// (committed, closed broadcast: the mod follows the row, exit 12).
+		// U13 (P4-3 review H2): the approve's transaction cancelled the
+		// request and its op instead; committed and broadcast (mod: exit 12).
 		m.logf("[team] approval %s: approve by %s %q: origin %s is a member of a live team; request and relay op cancelled", id, client.Kind, client.Label, after.Origin.Ref)
 		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排; the request is cancelled", nil)
 		return
