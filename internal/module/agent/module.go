@@ -369,9 +369,18 @@ func (m *Module) Stop(_ context.Context) error {
 	m.mu.Lock()
 	m.activeWatchers = make(map[string]string)
 	m.mu.Unlock()
-	if m.traceSink != nil {
-		m.traceSink.Close()
-	}
+	// The trace sink is deliberately NOT closed here: HTTP is still draining
+	// during Stop and hook handlers enqueue traces on their way out. It is
+	// closed by Close (core.Closer), which runs after the server has drained.
+	return nil
+}
+
+// Close implements core.Closer. It runs from CloseModules, after the HTTP
+// server has drained, so every hook handler's trailing trace Enqueue (and any
+// probe-intent consumer tail) has already been queued; Close then flushes the
+// trace sink. Idempotent: hookTraceSink.Close is sync.Once-guarded.
+func (m *Module) Close() error {
+	m.traceSink.Close() // nil-safe
 	return nil
 }
 
