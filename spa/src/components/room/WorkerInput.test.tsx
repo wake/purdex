@@ -748,4 +748,36 @@ describe('WorkerInput — attachments (spec §9.1)', () => {
       const c = setup(); fireEvent.keyDown(c.ta, { key: 'c', ctrlKey: true, isComposing: true }); expect(c.onInterrupt).not.toHaveBeenCalled()
     })
   })
+
+  describe('send buffer cancel keys', () => {
+    function setup(props: Partial<React.ComponentProps<typeof WorkerInput>> = {}, text = '') {
+      const onInterrupt = vi.fn(), onCancelBuffered = vi.fn()
+      render(<WorkerInput onSend={vi.fn()} turnLive onInterrupt={onInterrupt} bufferedSend onCancelBuffered={onCancelBuffered} initialValue={text} {...props} />)
+      return { onInterrupt, onCancelBuffered, ta: screen.getByRole('textbox') as HTMLTextAreaElement }
+    }
+    it('Esc cancels the held message instead of interrupting, with an empty box or typed text', () => {
+      const a = setup(); fireEvent.keyDown(a.ta, { key: 'Escape' })
+      expect(a.onCancelBuffered).toHaveBeenCalledTimes(1); expect(a.onInterrupt).not.toHaveBeenCalled(); cleanup()
+      const b = setup({}, 'newer typing'); fireEvent.keyDown(b.ta, { key: 'Escape' })
+      expect(b.onCancelBuffered).toHaveBeenCalledTimes(1); expect(b.onInterrupt).not.toHaveBeenCalled()
+    })
+    it('Ctrl+C without a selection cancels; with a selection it stays a copy', () => {
+      const a = setup({}, 'hello'); a.ta.setSelectionRange(1, 1)
+      fireEvent.keyDown(a.ta, { key: 'c', ctrlKey: true })
+      expect(a.onCancelBuffered).toHaveBeenCalledTimes(1); expect(a.onInterrupt).not.toHaveBeenCalled(); cleanup()
+      const b = setup({}, 'hello'); b.ta.setSelectionRange(0, 3)
+      fireEvent.keyDown(b.ta, { key: 'c', ctrlKey: true })
+      expect(b.onCancelBuffered).not.toHaveBeenCalled()
+    })
+    it('with nothing held, Esc still interrupts a live turn', () => {
+      const { onInterrupt, onCancelBuffered, ta } = setup({ bufferedSend: false })
+      fireEvent.keyDown(ta, { key: 'Escape' })
+      expect(onInterrupt).toHaveBeenCalledTimes(1); expect(onCancelBuffered).not.toHaveBeenCalled()
+    })
+    it('an IME Esc does not cancel', () => {
+      const { onCancelBuffered, ta } = setup()
+      fireEvent.keyDown(ta, { key: 'Escape', isComposing: true })
+      expect(onCancelBuffered).not.toHaveBeenCalled()
+    })
+  })
 })
