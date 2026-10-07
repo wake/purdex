@@ -118,10 +118,20 @@ func (m *Module) stopManualResume(ctx context.Context) {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		m.logf("nex: stop: manual-resume work still running (%v); not waiting for it", ctx.Err())
+		if m.q1Running.Load() > 0 {
+			m.logf("nex: stop: manual-resume work still running (%v); not waiting for it", ctx.Err())
+		}
 	case <-timer.C:
-		m.logf("nex: stop: manual-resume work still running after %v; not waiting for it", limit)
+		if m.q1Running.Load() > 0 {
+			m.logf("nex: stop: manual-resume work still running after %v; not waiting for it", limit)
+		}
 	}
+}
+
+// q1End ends one unit of Q1 work begun by q1Begin.
+func (m *Module) q1End() {
+	m.q1Running.Add(-1)
+	m.q1Work.Done()
 }
 
 // q1Begin counts one unit of Q1 work and returns the context it runs under
@@ -135,6 +145,7 @@ func (m *Module) q1Begin() (context.Context, bool) {
 		return nil, false
 	}
 	m.q1Work.Add(1)
+	m.q1Running.Add(1)
 	if m.q1Ctx == nil {
 		return context.Background(), true
 	}
@@ -155,7 +166,7 @@ func (m *Module) onSessionStart(ev agent.SessionStartEvent) {
 	if !ok {
 		return
 	}
-	defer m.q1Work.Done()
+	defer m.q1End()
 	if !ev.Overflow && isResumeStart(ev) {
 		m.resetRecheckCount(ev.SessionID)
 	}
@@ -437,7 +448,7 @@ func (m *Module) runRecheck(sid string, st *q1Retry) {
 	if !ok {
 		return // Stop began
 	}
-	defer m.q1Work.Done()
+	defer m.q1End()
 	defer func() {
 		if r := recover(); r != nil {
 			m.logf("nex: manual resume re-check %s: panic: %v", sid, r)

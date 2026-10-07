@@ -410,3 +410,17 @@ func TestManualResume_HubEventAfterTheCapRetriesAgain(t *testing.T) {
 	env.m.onSessionStart(ev("resume")) // a fresh hub event
 	assert.GreaterOrEqual(t, logs.count("re-checking in"), manualResumeMaxRetries+1, "the hub event schedules a retry again")
 }
+
+// #1656: with nothing running, a Stop whose ctx already expired must not log
+// "still running" (select may pick ctx.Done() even when done is closed).
+func TestManualResume_StopWithExpiredCtxAndIdleLogsNothing(t *testing.T) {
+	env := newHandoffEnv(t)
+	logs := captureLogs(env)
+	require.NoError(t, env.m.Start(context.Background()))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 50; i++ {
+		env.m.stopManualResume(ctx)
+	}
+	assert.Zero(t, logs.count("still running"))
+}
