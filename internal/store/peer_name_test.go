@@ -3,19 +3,25 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	ipeers "github.com/wake/purdex/internal/peers"
 )
 
 const pnSID = "AAAAAAAA-0000-0000-0000-0000000000A1"
+
+// pnRef is pnSID's ref, derived from the lowercase id the store keys on.
+var pnRef = ipeers.RefID(strings.ToLower(pnSID))
 
 func TestPeerNames_AssignStoresLowercaseAndLooksUp(t *testing.T) {
 	m, _ := openConvStore(t)
 	s := m.PeerNames()
 	ctx := context.Background()
-	got, err := s.Assign(ctx, pnSID, "_k3m9qz", "purdex-54-k3", PeerNameSourceRegistry, 10)
+	got, err := s.Assign(ctx, pnSID, pnRef, "purdex-54-k3", PeerNameSourceRegistry, 10)
 	require.NoError(t, err)
 	require.Equal(t, PeerNameEntry{Name: "purdex-54-k3", Source: PeerNameSourceRegistry}, got)
 
@@ -25,9 +31,9 @@ func TestPeerNames_AssignStoresLowercaseAndLooksUp(t *testing.T) {
 		"aaaaaaaa-0000-0000-0000-0000000000a1": {Name: "purdex-54-k3", Source: PeerNameSourceRegistry},
 	}, rows)
 
-	refs, err := s.ByRefs(ctx, []string{"_k3m9qz", "_zzzzzz"})
+	refs, err := s.ByRefs(ctx, []string{pnRef, "_zzzzzz"})
 	require.NoError(t, err)
-	require.Equal(t, map[string]string{"_k3m9qz": "purdex-54-k3"}, refs)
+	require.Equal(t, map[string]string{pnRef: "purdex-54-k3"}, refs)
 
 	empty, err := s.Lookup(ctx, nil)
 	require.NoError(t, err)
@@ -44,9 +50,9 @@ func TestPeerNames_AssignKeepsFirstName(t *testing.T) {
 	m, _ := openConvStore(t)
 	s := m.PeerNames()
 	ctx := context.Background()
-	_, err := s.Assign(ctx, pnSID, "_k3m9qz", "first-k3", PeerNameSourceRegistry, 10)
+	_, err := s.Assign(ctx, pnSID, pnRef, "first-k3", PeerNameSourceRegistry, 10)
 	require.NoError(t, err)
-	got, err := s.Assign(ctx, pnSID, "_k3m9qz", "second-k3", PeerNameSourceConversationName, 20)
+	got, err := s.Assign(ctx, pnSID, pnRef, "second-k3", PeerNameSourceConversationName, 20)
 	require.NoError(t, err)
 	require.Equal(t, PeerNameEntry{Name: "first-k3", Source: PeerNameSourceRegistry}, got)
 	rows, err := s.Lookup(ctx, []string{pnSID})
@@ -71,7 +77,7 @@ func TestPeerNames_ConcurrentAssignConverges(t *testing.T) {
 			go func(g int) {
 				defer wg.Done()
 				<-start
-				got[g], errs[g] = s.Assign(ctx, sid, "_k3m9qz", fmt.Sprintf("name%d-k3", g), PeerNameSourceRegistry, int64(g))
+				got[g], errs[g] = s.Assign(ctx, sid, ipeers.RefID(sid), fmt.Sprintf("name%d-k3", g), PeerNameSourceRegistry, int64(g))
 			}(g)
 		}
 		close(start)
@@ -89,7 +95,7 @@ func TestPeerNames_AdoptLineageUpgradesAFallbackOnce(t *testing.T) {
 	m, _ := openConvStore(t)
 	s := m.PeerNames()
 	ctx := context.Background()
-	_, err := s.Assign(ctx, pnSID, "_k3m9qz", "purdex-k3", PeerNameSourceRegistry, 10)
+	_, err := s.Assign(ctx, pnSID, pnRef, "purdex-k3", PeerNameSourceRegistry, 10)
 	require.NoError(t, err)
 	got, err := s.AdoptLineage(ctx, pnSID, "lead-a1", 20)
 	require.NoError(t, err)
@@ -102,12 +108,12 @@ func TestPeerNames_LineageRowIsNeverOverwritten(t *testing.T) {
 	m, _ := openConvStore(t)
 	s := m.PeerNames()
 	ctx := context.Background()
-	_, err := s.Assign(ctx, pnSID, "_k3m9qz", "lead-a1", PeerNameSourceLineage, 10)
+	_, err := s.Assign(ctx, pnSID, pnRef, "lead-a1", PeerNameSourceLineage, 10)
 	require.NoError(t, err)
 	got, err := s.AdoptLineage(ctx, pnSID, "other-b2", 20)
 	require.NoError(t, err)
 	require.Equal(t, PeerNameEntry{Name: "lead-a1", Source: PeerNameSourceLineage}, got)
-	got, err = s.Assign(ctx, pnSID, "_k3m9qz", "purdex-k3", PeerNameSourceRegistry, 30)
+	got, err = s.Assign(ctx, pnSID, pnRef, "purdex-k3", PeerNameSourceRegistry, 30)
 	require.NoError(t, err)
 	require.Equal(t, PeerNameEntry{Name: "lead-a1", Source: PeerNameSourceLineage}, got)
 }
@@ -116,17 +122,44 @@ func TestPeerNames_RejectsBadInput(t *testing.T) {
 	m, _ := openConvStore(t)
 	s := m.PeerNames()
 	ctx := context.Background()
-	_, err := s.Assign(ctx, " ", "_k3m9qz", "a-k3", PeerNameSourceRegistry, 1)
+	_, err := s.Assign(ctx, " ", ipeers.RefID(""), "a-k3", PeerNameSourceRegistry, 1)
 	require.Error(t, err)
-	_, err = s.Assign(ctx, pnSID, "_k3m9qz", "", PeerNameSourceRegistry, 1)
+	_, err = s.Assign(ctx, pnSID, pnRef, "", PeerNameSourceRegistry, 1)
 	require.Error(t, err)
-	_, err = s.Assign(ctx, pnSID, "_k3m9qz", "a-k3", "made-up", 1)
+	_, err = s.Assign(ctx, pnSID, pnRef, "a-k3", "made-up", 1)
 	require.Error(t, err)
 	_, err = s.AdoptLineage(ctx, pnSID, "", 1)
 	require.Error(t, err)
 	_, err = s.AdoptLineage(ctx, pnSID, "a-k3", 1) // no row to upgrade
 	require.Error(t, err)
 	rows, err := s.Lookup(ctx, []string{pnSID})
+	require.NoError(t, err)
+	require.Empty(t, rows)
+}
+
+// The ref is what a relay successor inherits a name by (ByRefs), so it must
+// be the one the session id derives — RefID of the lowercase id the row is
+// keyed on — whatever the caller passed. A caller with an uppercase id still
+// lands under the lowercase id's ref; a wrong, empty or malformed ref is
+// refused and nothing is stored.
+func TestPeerNames_RefMatchesTheLowercaseSessionID(t *testing.T) {
+	m, _ := openConvStore(t)
+	s := m.PeerNames()
+	ctx := context.Background()
+	lower := strings.ToLower(pnSID)
+	_, err := s.Assign(ctx, pnSID, ipeers.RefID(lower), "purdex-k3", PeerNameSourceRegistry, 10)
+	require.NoError(t, err)
+	refs, err := s.ByRefs(ctx, []string{ipeers.RefID(lower)})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{ipeers.RefID(lower): "purdex-k3"}, refs)
+
+	const other = "bbbbbbbb-0000-0000-0000-000000000002"
+	require.NotEqual(t, ipeers.RefID("BBBBBBBB-0000-0000-0000-000000000002"), ipeers.RefID(other), "fixture")
+	for _, bad := range []string{"", "_k3m9qz", "k3m9qz", "_ZZZZZZ", ipeers.RefID(strings.ToUpper(other)), ipeers.RefID(other) + "x"} {
+		_, err := s.Assign(ctx, other, bad, "other-k3", PeerNameSourceRegistry, 20)
+		require.Error(t, err, "ref %q", bad)
+	}
+	rows, err := s.Lookup(ctx, []string{other})
 	require.NoError(t, err)
 	require.Empty(t, rows)
 }

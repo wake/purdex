@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	ipeers "github.com/wake/purdex/internal/peers"
 )
 
 // Where a virtual name's base came from (peer mailbox spec §3.2). Only a
@@ -59,11 +61,18 @@ func normPeerSID(sessionID string) string {
 // returns the row that is stored afterwards: the first writer wins and every
 // concurrent caller converges on its name (INSERT … DO NOTHING, then SELECT,
 // in one transaction).
+//
+// ref must be the ref of the lowercase session id the row is keyed on
+// (ipeers.RefID): it is what a relay successor inherits this name by
+// (ByRefs), so a row filed under any other ref would be a name no successor
+// can find. A wrong, empty or malformed ref is refused rather than stored.
 func (s *PeerNameStore) Assign(ctx context.Context, sessionID, ref, name, source string, nowMs int64) (PeerNameEntry, error) {
 	sid := normPeerSID(sessionID)
 	switch {
 	case sid == "":
 		return PeerNameEntry{}, errors.New("peer name: empty session id")
+	case ref != ipeers.RefID(sid):
+		return PeerNameEntry{}, fmt.Errorf("peer name: ref %q is not the ref of session %s", ref, sid)
 	case name == "":
 		return PeerNameEntry{}, errors.New("peer name: empty name")
 	case source != PeerNameSourceLineage && source != PeerNameSourceRegistry &&
@@ -73,7 +82,7 @@ func (s *PeerNameStore) Assign(ctx context.Context, sessionID, ref, name, source
 	return s.writeThenRead(ctx, sid, `
 		INSERT INTO peer_names (session_id, ref, name, source, assigned_at) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO NOTHING`,
-		sid, ref, name, source, nowMs)
+		sid, ipeers.RefID(sid), name, source, nowMs)
 }
 
 // AdoptLineage renames sessionID to its relay predecessor's name, once: a row
