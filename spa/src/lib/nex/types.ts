@@ -185,6 +185,45 @@ export interface PermissionAnswerResult {
   outcome: 'allowed' | 'denied'
 }
 
+/** `permission.resolved`'s `outcome` — a closed set (capability-matrix §3). */
+export type PermissionOutcome = 'allowed' | 'denied' | 'cancelled' | 'expired'
+
+/**
+ * `permission.requested` payload (capability-matrix §3, Nexen v0.19.0). `?` = present only when it has a value.
+ * `input` is the CLI's own object, unbounded. `agent_id` set = a subagent asks; it equals that subagent's
+ * `task_started.task_id`. Nexen emits no time here: the event's `created_at` is when it was asked.
+ */
+export interface PermissionRequestedPayload {
+  request_id: string
+  turn_id: string
+  tool_use_id?: string
+  agent_id?: string
+  tool_name: string
+  display_name?: string
+  description?: string
+  decision_reason?: string
+  decision_reason_type?: string
+  blocked_path?: string
+  input: Record<string, unknown>
+}
+
+/**
+ * `permission.resolved` payload — exactly one per request, correlated by `request_id` (its seq may follow the tool's
+ * `tool_result`). By outcome: `allowed` → `principal_id`; `denied` → `principal_id`, `message`; `cancelled` →
+ * `reason` (+ `interrupt_source` for `interrupt`); `expired` → `timeout_s`, `message`.
+ */
+export interface PermissionResolvedPayload {
+  request_id: string
+  turn_id: string
+  tool_use_id?: string
+  outcome: PermissionOutcome
+  principal_id?: string
+  message?: string
+  reason?: 'interrupt' | 'cli_cancelled' | 'turn_ended' | 'daemon_restart' | string
+  interrupt_source?: string
+  timeout_s?: number
+}
+
 /**
  * `capabilities.send.attachments.image` (nexen contract §0/§1.9). The whole
  * object being absent = this daemon does not accept images; presence plus
@@ -370,14 +409,17 @@ export class NexApiError extends Error {
   readonly turnId?: string
   /** 0-based index of the offending image, on Nexen's per-image attachment errors (contract §1.9). */
   readonly attachmentIndex?: number
+  /** The request field to fix, on `invalid_permission_answer` / `start_idle_conflict` (capability-matrix 錯誤碼). */
+  readonly field?: string
 
-  constructor(status: number, code: string, message: string, turnId?: string, attachmentIndex?: number) {
+  constructor(status: number, code: string, message: string, turnId?: string, attachmentIndex?: number, field?: string) {
     super(message)
     this.name = 'NexApiError'
     this.status = status
     this.code = code
     this.turnId = turnId
     this.attachmentIndex = attachmentIndex
+    this.field = field
   }
 }
 
@@ -390,13 +432,14 @@ export async function nexErrorFromResponse(res: Response): Promise<NexApiError> 
     return new NexApiError(res.status, fallback, `nex: HTTP ${res.status}`)
   }
   try {
-    const body = JSON.parse(text) as { error?: unknown; code?: unknown; turn_id?: unknown; attachment_index?: unknown }
+    const body = JSON.parse(text) as { error?: unknown; code?: unknown; turn_id?: unknown; attachment_index?: unknown; field?: unknown }
     if (typeof body.code === 'string' && body.code !== '') {
       const message = typeof body.error === 'string' && body.error !== '' ? body.error : `nex: HTTP ${res.status}`
       const turnId = typeof body.turn_id === 'string' && body.turn_id !== '' ? body.turn_id : undefined
       const idx = body.attachment_index
       const attachmentIndex = typeof idx === 'number' && Number.isInteger(idx) && idx >= 0 ? idx : undefined
-      return new NexApiError(res.status, body.code, message, turnId, attachmentIndex)
+      const field = typeof body.field === 'string' && body.field !== '' ? body.field : undefined
+      return new NexApiError(res.status, body.code, message, turnId, attachmentIndex, field)
     }
   } catch {
     // not JSON — fall through

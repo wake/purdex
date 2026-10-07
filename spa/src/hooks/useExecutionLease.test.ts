@@ -249,4 +249,63 @@ describe('useExecutionLease', () => {
     expect(api.releaseLease).toHaveBeenCalledWith(H, E, 'ls_1')
     expect(lease()).toBeNull()
   })
+
+  // Permission channel plan Task 9 (Review Focus #4): answers need the pane's lease, and a request can wait for hours.
+  describe('hold (a permission request is waiting for this pane)', () => {
+    const renders = () => renderHook(({ hold }: { hold: boolean }) => useExecutionLease(H, E, { hold }), { initialProps: { hold: true } })
+
+    it('suspends the idle lapse while held: a pending request outlives 2×ttl of silence and renewal continues', async () => {
+      const { result } = renders()
+      await act(async () => { await result.current.ensureLease() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000 * LEASE_IDLE_MULTIPLIER * 3) })
+      // ttl 30 s → a renew every 10 s for 180 s, with no touch at all.
+      expect(vi.mocked(api.renewLease).mock.calls.length).toBeGreaterThanOrEqual(17)
+      expect(lease()?.leaseId).toBe('ls_1')
+    })
+
+    it('releases the hold once nothing is pending: the idle lapse applies again', async () => {
+      const { result, rerender } = renders()
+      await act(async () => { await result.current.ensureLease() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000 * LEASE_IDLE_MULTIPLIER * 2) })
+      rerender({ hold: false })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) }) // the next tick sees the idleness and stops
+      const renews = vi.mocked(api.renewLease).mock.calls.length
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+      expect(vi.mocked(api.renewLease).mock.calls.length).toBe(renews)
+    })
+
+    it('a hold that starts after the idle policy stopped the heartbeat renews the still-valid lease at once and keeps it', async () => {
+      const { result, rerender } = renderHook(({ hold }: { hold: boolean }) => useExecutionLease(H, E, { hold }), { initialProps: { hold: false } })
+      await act(async () => { await result.current.ensureLease() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000 * LEASE_IDLE_MULTIPLIER + 15_000) }) // stopped; lease still valid
+      const stopped = vi.mocked(api.renewLease).mock.calls.length
+      expect(lease()!.expiresAt).toBeGreaterThan(Date.now())
+      rerender({ hold: true })
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(vi.mocked(api.renewLease).mock.calls.length).toBe(stopped + 1) // at once, not a full interval later
+      await act(async () => { await vi.advanceTimersByTimeAsync(120_000) })
+      expect(vi.mocked(api.renewLease).mock.calls.length).toBeGreaterThan(stopped + 10)
+      expect(lease()?.leaseId).toBe('ls_1')
+      expect(api.attachControl).toHaveBeenCalledTimes(1)
+    })
+
+    it('a hold does not acquire a lease the pane never took (observers stay observers)', async () => {
+      renders()
+      await act(async () => { await vi.advanceTimersByTimeAsync(120_000) })
+      expect(api.attachControl).not.toHaveBeenCalled()
+      expect(api.renewLease).not.toHaveBeenCalled()
+    })
+
+    it('a renew refused while held drops the lease, so the next ensureLease re-attaches', async () => {
+      const { result } = renders()
+      await act(async () => { await result.current.ensureLease() })
+      vi.mocked(api.renewLease).mockRejectedValueOnce(new NexApiError(409, 'lease_expired', 'gone'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      expect(lease()).toBeNull()
+      vi.mocked(api.attachControl).mockResolvedValueOnce({ mode: 'control', lease_id: 'ls_2', expires_at: Date.now() + 30_000 })
+      let id = ''
+      await act(async () => { id = await result.current.ensureLease() })
+      expect(id).toBe('ls_2')
+    })
+  })
 })
