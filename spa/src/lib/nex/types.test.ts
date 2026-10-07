@@ -33,6 +33,19 @@ describe('nexErrorFromResponse', () => {
     expect(await parse(null)).toBeUndefined()
   })
 
+  // invalid_permission_answer (and start_idle_conflict) carry `field` naming what to fix (capability-matrix 錯誤碼).
+  it('carries field only when it is a non-empty string', async () => {
+    const parse = async (field: unknown) => {
+      const body: Record<string, unknown> = { error: 'message exceeds 2048 bytes', code: 'invalid_permission_answer' }
+      if (field !== undefined) body.field = field
+      return (await nexErrorFromResponse(new Response(JSON.stringify(body), { status: 400 }))).field
+    }
+    expect(await parse('message')).toBe('message')
+    expect(await parse(undefined)).toBeUndefined()
+    expect(await parse('')).toBeUndefined()
+    expect(await parse(3)).toBeUndefined()
+  })
+
   it('falls back to http_<status> for a non-JSON body', async () => {
     const res = new Response('<html>nope</html>', { status: 502 })
     const err = await nexErrorFromResponse(res)

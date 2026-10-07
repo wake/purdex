@@ -5,6 +5,12 @@
 // other tab) can take over without this one actively holding it; the next
 // send re-acquires. Released exactly once on teardown. The store's `lease`
 // field is written ONLY from attach(control)/renew responses (I11).
+//
+// `hold` (permission channel plan Task 9): while a permission request waits
+// for this pane's answer — which needs the lease and may come hours later —
+// the idle lapse is suspended and renewal continues; a hold never acquires a
+// lease the pane does not have. Once nothing is pending the idle rule applies
+// again from the last activity.
 import { useCallback, useEffect, useRef } from 'react'
 import { attachControl, releaseLease, renewLease } from '../lib/nex/nex-api'
 import { getLeaseTtlSeconds } from '../lib/nex/lease-ttl'
@@ -26,12 +32,20 @@ export interface ExecutionLeaseApi {
   touch(): void
 }
 
-export function useExecutionLease(hostId: string, executionId: string): ExecutionLeaseApi {
+export interface ExecutionLeaseOptions {
+  /** A permission request waits for this pane's answer: suspend the idle lapse, keep renewing (see header). */
+  hold?: boolean
+}
+
+export function useExecutionLease(hostId: string, executionId: string, options?: ExecutionLeaseOptions): ExecutionLeaseApi {
   const key = executionKey(hostId, executionId)
+  const hold = options?.hold ?? false
   const inflight = useRef<Promise<string> | null>(null)
   const lastActivity = useRef<number>(Date.now())
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   const ttlMs = useRef<number>(120_000)
+  // Read by the timer at tick time; synced from the option after each render.
+  const holdRef = useRef(hold)
   // disposed: unmount or host removal happened — no async continuation may
   // write the store again. releasing: a release() is under way — an
   // in-flight renew/attach that resolves afterwards must not resurrect it.
@@ -47,39 +61,53 @@ export function useExecutionLease(hostId: string, executionId: string): Executio
     useExecutionStore.getState().setLease(hostId, executionId, lease)
   }, [hostId, executionId])
 
+  const renewTick = useCallback(async () => {
+    const cur = useExecutionStore.getState().executions[key]?.lease
+    if (!cur || disposed.current) { stopTimer(); return }
+    if (!holdRef.current && Date.now() - lastActivity.current > ttlMs.current * LEASE_IDLE_MULTIPLIER) {
+      // Idle policy: stop heart-beating and let the server expire it.
+      stopTimer()
+      return
+    }
+    // Nexen mints a new lease id on every attach. Capture the id this tick
+    // is renewing so a stale continuation (this call hung past a
+    // subsequent re-attach) can be detected once it settles.
+    const id = cur.leaseId
+    try {
+      const r = await renewLease(hostId, executionId, id)
+      const stillCurrent = useExecutionStore.getState().executions[key]?.lease?.leaseId === id
+      if (!releasing.current && stillCurrent) writeLease({ leaseId: r.lease_id, expiresAt: r.expires_at })
+    } catch (e) {
+      if (e instanceof NexApiError && (e.code === 'lease_expired' || e.code === 'lease_mismatch')) {
+        // A stale expired/mismatch for an id nobody holds any more must
+        // not wipe out — or stop the timer for — whatever lease is
+        // current now (e.g. a fresh re-attach that raced this renew).
+        const stillCurrent = useExecutionStore.getState().executions[key]?.lease?.leaseId === id
+        if (stillCurrent) {
+          writeLease(null)
+          stopTimer()
+        }
+      }
+      // anything else: keep trying at the same cadence
+    }
+  }, [hostId, executionId, key, writeLease, stopTimer])
+
   const startTimer = useCallback(() => {
     stopTimer()
-    timer.current = setInterval(async () => {
-      const cur = useExecutionStore.getState().executions[key]?.lease
-      if (!cur || disposed.current) { stopTimer(); return }
-      if (Date.now() - lastActivity.current > ttlMs.current * LEASE_IDLE_MULTIPLIER) {
-        // Idle policy: stop heart-beating and let the server expire it.
-        stopTimer()
-        return
-      }
-      // Nexen mints a new lease id on every attach. Capture the id this tick
-      // is renewing so a stale continuation (this call hung past a
-      // subsequent re-attach) can be detected once it settles.
-      const id = cur.leaseId
-      try {
-        const r = await renewLease(hostId, executionId, id)
-        const stillCurrent = useExecutionStore.getState().executions[key]?.lease?.leaseId === id
-        if (!releasing.current && stillCurrent) writeLease({ leaseId: r.lease_id, expiresAt: r.expires_at })
-      } catch (e) {
-        if (e instanceof NexApiError && (e.code === 'lease_expired' || e.code === 'lease_mismatch')) {
-          // A stale expired/mismatch for an id nobody holds any more must
-          // not wipe out — or stop the timer for — whatever lease is
-          // current now (e.g. a fresh re-attach that raced this renew).
-          const stillCurrent = useExecutionStore.getState().executions[key]?.lease?.leaseId === id
-          if (stillCurrent) {
-            writeLease(null)
-            stopTimer()
-          }
-        }
-        // anything else: keep trying at the same cadence
-      }
-    }, Math.max(1000, ttlMs.current / 3))
-  }, [hostId, executionId, key, writeLease, stopTimer])
+    timer.current = setInterval(() => { void renewTick() }, Math.max(1000, ttlMs.current / 3))
+  }, [renewTick, stopTimer])
+
+  // A hold that starts after the idle policy stopped the heartbeat, on a lease
+  // that is still valid, renews it at once and re-arms the timer — waiting a
+  // full interval could let it expire first. No lease → nothing to hold.
+  useEffect(() => {
+    holdRef.current = hold
+    if (!hold || timer.current || disposed.current || releasing.current) return
+    const cur = useExecutionStore.getState().executions[key]?.lease
+    if (!cur || cur.expiresAt <= Date.now()) return
+    startTimer()
+    void renewTick()
+  }, [hold, key, startTimer, renewTick])
 
   const ensureLease = useCallback((): Promise<string> => {
     // The host may be gone even though `disposed` is still false (that flag

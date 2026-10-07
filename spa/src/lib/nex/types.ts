@@ -409,14 +409,17 @@ export class NexApiError extends Error {
   readonly turnId?: string
   /** 0-based index of the offending image, on Nexen's per-image attachment errors (contract §1.9). */
   readonly attachmentIndex?: number
+  /** The request field to fix, on `invalid_permission_answer` / `start_idle_conflict` (capability-matrix 錯誤碼). */
+  readonly field?: string
 
-  constructor(status: number, code: string, message: string, turnId?: string, attachmentIndex?: number) {
+  constructor(status: number, code: string, message: string, turnId?: string, attachmentIndex?: number, field?: string) {
     super(message)
     this.name = 'NexApiError'
     this.status = status
     this.code = code
     this.turnId = turnId
     this.attachmentIndex = attachmentIndex
+    this.field = field
   }
 }
 
@@ -429,13 +432,14 @@ export async function nexErrorFromResponse(res: Response): Promise<NexApiError> 
     return new NexApiError(res.status, fallback, `nex: HTTP ${res.status}`)
   }
   try {
-    const body = JSON.parse(text) as { error?: unknown; code?: unknown; turn_id?: unknown; attachment_index?: unknown }
+    const body = JSON.parse(text) as { error?: unknown; code?: unknown; turn_id?: unknown; attachment_index?: unknown; field?: unknown }
     if (typeof body.code === 'string' && body.code !== '') {
       const message = typeof body.error === 'string' && body.error !== '' ? body.error : `nex: HTTP ${res.status}`
       const turnId = typeof body.turn_id === 'string' && body.turn_id !== '' ? body.turn_id : undefined
       const idx = body.attachment_index
       const attachmentIndex = typeof idx === 'number' && Number.isInteger(idx) && idx >= 0 ? idx : undefined
-      return new NexApiError(res.status, body.code, message, turnId, attachmentIndex)
+      const field = typeof body.field === 'string' && body.field !== '' ? body.field : undefined
+      return new NexApiError(res.status, body.code, message, turnId, attachmentIndex, field)
     }
   } catch {
     // not JSON — fall through
