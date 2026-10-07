@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.532] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）：啟動時 team.db 多建三張空表與索引，沒有其他行為變更，可以跟下一個 PR 合併一次重啟。`pdx` 指令、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-1a（#1702）
+
+接力的儲存層（spec §8.1、§8.4、§8.7；plan v2 Tasks 5a.2–5a.3）。還沒有任何路由或指令用到它；P5a-1b 起開始接。
+
+- **team.db 三張表**：`relay_ops`（接力 op 與九態狀態機；一個 session 同時只能有一個未結束的 op，由 partial unique index 保證）、`session_lineage`（session 換手的血統：誰接了誰、舊 ref 是什麼）、`session_prefs`（每 session 的「這個 session 不再詢問」）。
+- **狀態回報是 CAS 交易**：報同一狀態是冪等 no-op，不合法的轉換回 `bad_transition`；`cleared` 在同一交易寫下 lineage 並存新 session id／ref，會弄壞血統的回報（空 id、新舊相同、新 session 已被別的 op 接走、形成環）一律拒絕、op 不變。
+- **`PreviousRefs`**：整條鏈、最新在前、不設上限（U3），給 P5a-1b 的 peers 解析用。
+- **title 搬家**（`PeerLabelStore.Move`）：接力後 title 跟著新 session id 走，一次、冪等（舊 row 已釋放就不再搬），給 P5a-2b 在 `cleared` 後與 boot reconciliation 呼叫。
+- spec §8.4 措辭對齊 plan 裁決：title 搬家是 meta.db 另一個冪等交易，不是跟 lineage「同一交易」（`database/sql` 無跨庫交易）。
+
+Review 後補強：partial unique index（R1）、`cleared` 的血統守衛（攻擊方 A-1／A-3）；`relay_store.go` 的職責拆分列 #1703。
+
 ## [1.0.0-alpha.531] - 2026-10-07
 
 > 純型別與常數，**不需部署**（沒有任何行為變更；跑中的 daemon 完全不受影響）。資料庫、SPA、Electron 都沒有改動。
