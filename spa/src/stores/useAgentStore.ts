@@ -182,6 +182,12 @@ interface AgentState {
 
   // Actions
   handleNormalizedEvent: (hostId: string, sessionCode: string, event: NormalizedEvent) => void
+  /**
+   * Replace a key's running-subagent refs and nothing else — no status, no `lastEvents` entry, no unread. For a
+   * worker, whose refs are decoration read from its pane's live stream while its status comes from the host list
+   * (useWorkerAgentProjection): a change of refs alone must never look like an event to the notification dispatcher.
+   */
+  setSubagents: (hostId: string, sessionCode: string, subagents: SubagentRef[]) => void
   clearSession: (hostId: string, sessionCode: string) => void
   markRead: (hostId: string, sessionCode: string) => void
   removeHost: (hostId: string) => void
@@ -300,6 +306,14 @@ export const useAgentStore = create<AgentState>()(
         }
       }
     },
+
+    setSubagents: (hostId, sessionCode, subagents) => set((s) => {
+      const key = compositeKey(hostId, sessionCode)
+      if (subagents.length > 0) return { subagents: { ...s.subagents, [key]: subagents } }
+      if (!(key in s.subagents)) return s
+      const { [key]: _, ...rest } = s.subagents
+      return { subagents: rest }
+    }),
 
     markRead: (hostId, sessionCode) => set((s) => {
       const key = compositeKey(hostId, sessionCode)

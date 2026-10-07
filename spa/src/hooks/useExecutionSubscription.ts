@@ -323,6 +323,12 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
       openStreamRef.current = null
       subscriptionSlots.release(hostId, key)
       teardown()
+      // The entry outlives the pane (the next mount starts from it), but no stream of this hook feeds it any more, and
+      // `cancelled` keeps the closing stream from saying so: mark it streamless (`idle`, what a fresh mount begins
+      // from) so it is never taken for a live one. A terminal problem (`closed` with its reason) or an eviction
+      // (`paused`) is left as it is. The next mount's chain sets its own status first thing (`connecting`).
+      const sse = store().executions[key]?.sse
+      if (sse === 'open' || sse === 'connecting' || sse === 'reconnecting') store().setSse(hostId, executionId, 'idle')
     }
   }, [hostId, executionId, key, hostPresent])
 

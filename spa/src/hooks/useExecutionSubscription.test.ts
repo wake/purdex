@@ -321,6 +321,33 @@ describe('useExecutionSubscription', () => {
     warn.mockRestore()
   })
 
+  // The entry outlives the pane (a tab switch unmounts it); with no stream feeding it, it must not keep saying `open`.
+  it.each(['open', 'reconnecting'] as const)('unmount leaves the entry streamless (idle), not %s; a remount dials in again', async (status) => {
+    const first = renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    act(() => { sseOpts!.onStatus(status) })
+    expect(useExecutionStore.getState().executions[KEY].sse).toBe(status)
+    first.unmount()
+    expect(useExecutionStore.getState().executions[KEY].sse).toBe('idle')
+    expect(useExecutionStore.getState().executions[KEY].sseError).toBeNull()
+
+    vi.mocked(api.fetchExecutionEvents).mockResolvedValueOnce({ items: [], next_cursor: 0 })
+    renderHook(() => useExecutionSubscription(H, E, true))
+    expect(useExecutionStore.getState().executions[KEY].sse).toBe('connecting')
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(sse.openNexSse).toHaveBeenCalledTimes(2)
+    act(() => { sseOpts!.onStatus('open') })
+    expect(useExecutionStore.getState().executions[KEY].sse).toBe('open')
+  })
+
+  it('unmount keeps a terminal problem as it is (closed, with its reason)', async () => {
+    vi.mocked(api.getExecution).mockRejectedValueOnce(new NexApiError(404, 'execution_not_found', 'nope'))
+    const { unmount } = renderHook(() => useExecutionSubscription(H, E, true))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    unmount()
+    expect(useExecutionStore.getState().executions[KEY]).toMatchObject({ sse: 'closed', sseError: 'nope' })
+  })
+
   it('closes the SSE on unmount and when the executionId changes', async () => {
     const { rerender, unmount } = renderHook(({ id }) => useExecutionSubscription(H, id, true), { initialProps: { id: E } })
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
