@@ -177,28 +177,50 @@ func (s *readSlot) read(ctx context.Context, who string, maxWait time.Duration, 
 // read consumes neither ver nor bseq. The hold measured and logged covers
 // then too: it held the slot all the same.
 func (s *readSlot) readThen(ctx context.Context, who string, maxWait time.Duration, fn func(context.Context) error, then func(slotStamp)) (slotStamp, error) {
+	var st slotStamp
+	err := s.hold(ctx, who, maxWait, func(ctx context.Context) error {
+		if err := fn(ctx); err != nil {
+			return err
+		}
+		s.ver++
+		st = s.current()
+		if then != nil {
+			then(st)
+		}
+		return nil
+	})
+	if err != nil {
+		return slotStamp{}, err
+	}
+	return st, nil
+}
+
+// hold takes the slot exactly as read does (the same wait, the same release
+// in a defer, the same wait and hold logging) and runs fn inside it, but
+// consumes nothing of its own: it is for a holder that reads the counters
+// rather than the engine — the hello, which must see bseq at a moment no
+// delta is being sent (§3.5). fn's error, or the wait's, is returned as is.
+func (s *readSlot) hold(ctx context.Context, who string, maxWait time.Duration, fn func(context.Context) error) error {
 	start := s.now()
 	err := s.acquire(ctx, maxWait)
 	acquired := s.now()
 	s.noteWait(who, acquired.Sub(start), err)
 	if err != nil {
-		return slotStamp{}, err
+		return err
 	}
 	defer func() {
 		held := s.now().Sub(acquired)
 		s.release()
 		s.noteHold(who, held)
 	}()
+	return fn(ctx)
+}
 
-	if err := fn(ctx); err != nil {
-		return slotStamp{}, err
-	}
-	s.ver++
-	st := slotStamp{Epoch: s.epoch, Ver: s.ver, Bseq: s.bseq}
-	if then != nil {
-		then(st)
-	}
-	return st, nil
+// current is the stamp as it stands — epoch, the last ver taken, the
+// broadcast high-water mark — without consuming anything. Only a holder of
+// the slot may call it.
+func (s *readSlot) current() slotStamp {
+	return slotStamp{Epoch: s.epoch, Ver: s.ver, Bseq: s.bseq}
 }
 
 // nextBseq consumes the next broadcast sequence number. Only a holder of the
