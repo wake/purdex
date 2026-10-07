@@ -184,6 +184,81 @@ func (eb *EventsBroadcaster) BroadcastEvent(ev HostEvent) {
 	}
 }
 
+// BroadcastStrict sends ev to every subscriber like BroadcastEvent, except
+// that a subscriber whose buffer is full loses its connection instead of
+// this frame: it is Removed (Done closes, the WS closes), so the client
+// reconnects and starts over from a fresh subscribe.
+//
+// Why (#1866, spec 2026-10-08 §3.5, round 2 #4): a frame stream a client
+// checks for gaps — the nex execution deltas, numbered by a contiguous bseq
+// — cannot afford a silent drop. A dropped frame in the middle shows up as a
+// gap at the next one, but a dropped LAST frame never does: nothing follows
+// it, and the client keeps the stale row. Closing the connection turns
+// every drop into a reconnect, which the client already handles (a fresh
+// hello, then a reconcile). Nothing is repaired on the same connection.
+//
+// The frame is marshalled once. Subscribers that could not take it are
+// collected while the read lock is held and Removed only after it is
+// released: Remove takes the write lock, so calling it inside the loop
+// would deadlock against the read lock held right there.
+//
+// Broadcast and BroadcastEvent stay best-effort for every other frame type;
+// making those strict too is a separate decision (§3.5), not taken here.
+// Concurrent strict broadcasts are not ordered against each other — a
+// caller that needs order (the nex projector) serializes its own.
+func (eb *EventsBroadcaster) BroadcastStrict(ev HostEvent) {
+	msg, err := json.Marshal(ev)
+	if err != nil {
+		log.Printf("events: marshal error: %v", err)
+		return
+	}
+
+	var failed []*EventSubscriber
+	eb.mu.RLock()
+	for sub := range eb.subscribers {
+		if !sub.TrySend(msg) {
+			failed = append(failed, sub)
+		}
+	}
+	eb.mu.RUnlock()
+
+	for _, sub := range failed {
+		log.Printf("events: %s frame could not be queued (send buffer full); closing the connection so the client reconnects", ev.Type)
+		eb.Remove(sub)
+	}
+}
+
+// SendStrict queues ev for one subscriber — an OnSubscribe callback's
+// snapshot, the nex hello — with BroadcastStrict's rule: if it cannot be
+// queued, the subscriber is Removed (its connection closes) rather than
+// left running without the frame. It reports whether ev was queued.
+//
+// A subscriber already removed (its connection gone, or dropped by an
+// earlier strict send) is left alone: nothing is queued and false is
+// returned, the same answer as TrySend's. Remove is idempotent, so a
+// subscriber removed concurrently is never closed twice.
+//
+// It is a broadcaster method rather than one on EventSubscriber because
+// removal is the broadcaster's: a subscriber does not know which
+// broadcaster holds it.
+func (eb *EventsBroadcaster) SendStrict(sub *EventSubscriber, ev HostEvent) bool {
+	msg, err := json.Marshal(ev)
+	if err != nil {
+		log.Printf("events: marshal error: %v", err)
+		return false
+	}
+	if sub.TrySend(msg) {
+		return true
+	}
+	select {
+	case <-sub.Done(): // already removed: nothing to close
+	default:
+		log.Printf("events: %s frame could not be queued (send buffer full); closing the connection so the client reconnects", ev.Type)
+		eb.Remove(sub)
+	}
+	return false
+}
+
 // AddTestSubscriber creates a subscriber without a WebSocket connection.
 // The subscriber is registered in the subscriber set (HasSubscribers returns true)
 // but has no write pump — messages accumulate in SendCh() for test assertions.
