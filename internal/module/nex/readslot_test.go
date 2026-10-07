@@ -91,7 +91,7 @@ func TestReadSlot_VerIncrementsOnlyOnSuccess(t *testing.T) {
 	st, err := s.read(ctx, "row", 0, okRead)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), st.Ver)
-	assert.Equal(t, uint64(0), st.Bseq, "bseq stays 0 until PR1b broadcasts")
+	assert.Equal(t, uint64(0), st.Bseq, "a read alone never advances bseq")
 
 	boom := errors.New("engine said 500")
 	st, err = s.read(ctx, "row", 0, func(context.Context) error { return boom })
@@ -347,4 +347,39 @@ func TestReadSlot_MaximaKeepTheLargest(t *testing.T) {
 	hold, wait := s.maxima()
 	assert.Equal(t, int64(200), hold)
 	assert.Equal(t, int64(50), wait)
+}
+
+// #1866 PR1b (spec 2026-10-08 §3.3, §3.5): readThen runs its continuation
+// inside the same hold, right after the read succeeded and its ver was
+// taken — where the projector takes its bseq and broadcasts.
+func TestReadSlot_ReadThenRunsInsideTheHoldAfterTheVer(t *testing.T) {
+	s := newReadSlot(discardLogf)
+	ctx := context.Background()
+	var seen slotStamp
+	var held bool
+	st, err := s.readThen(ctx, "row", 0, okRead, func(in slotStamp) {
+		seen, held = in, !readSlotFree(s)
+		assert.Equal(t, uint64(1), s.nextBseq())
+	})
+	require.NoError(t, err)
+	assert.True(t, held, "the continuation ran outside the slot")
+	assert.Equal(t, slotStamp{Epoch: s.epoch, Ver: 1, Bseq: 0}, seen)
+	assert.Equal(t, seen, st)
+
+	// Every later stamp carries the advanced high-water mark (§8 R3-1).
+	st, err = s.read(ctx, "list", 0, okRead)
+	require.NoError(t, err)
+	assert.Equal(t, slotStamp{Epoch: s.epoch, Ver: 2, Bseq: 1}, st)
+}
+
+func TestReadSlot_ReadThenSkipsTheContinuationOfAFailedRead(t *testing.T) {
+	s := newReadSlot(discardLogf)
+	ran := false
+	_, err := s.readThen(context.Background(), "row", 0,
+		func(context.Context) error { return errors.New("500") },
+		func(slotStamp) { ran = true })
+	require.Error(t, err)
+	assert.False(t, ran, "a failed read ran its continuation")
+	assert.Equal(t, uint64(0), s.ver)
+	assert.Equal(t, uint64(0), s.bseq)
 }
