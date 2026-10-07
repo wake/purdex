@@ -10,7 +10,11 @@ export const LIST_MAX_PAGES = 20
 
 export interface ListAllResult { items: ExecutionSummary[]; dropped: number; truncated: boolean; stuck: boolean; stuckPage: number | null }
 
-/** Pages `listExecutions` until next_cursor is '' (truncated only at LIST_MAX_PAGES; a repeated cursor resolves stuck; a malformed page rejects). Resolves null as soon as `isCurrent()` is false after a page. */
+/**
+ * Pages `listExecutions` until next_cursor is '' (truncated only at LIST_MAX_PAGES;
+ * a repeated cursor resolves stuck; a malformed page rejects).
+ * Resolves null as soon as `isCurrent()` is false after a page.
+ */
 export async function listAllExecutions(
   hostId: string,
   opts: { includeArchived: boolean; sessionId?: string; labels?: Record<string, string> },
