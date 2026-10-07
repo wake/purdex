@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.565] - 2026-10-07
+
+> 只動 Purdex 的 Claude Code mod（隨 `pdx` 內嵌）與文件。**不需要部署動作**：mod 只有在主機上跑過 `pdx setup --agent cc` 才會被 Claude Code 載入；照使用者決定，mlab 何時安裝另行決定。至此自我接力（P5b）全部完成，已在拋棄式 session 端到端真機驗收三次。daemon、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5b-3（#1780）
+
+自我接力的最後一塊（spec §8.7、§10；plan v2 Task 5b.5）。
+
+- **等待核准時暫停輸入**：接力申請送出中或等待核准時，你打的訊息（以及 peer、bridge、其他 plugin 送進來的）都會先等著，不會開始新的一輪。核准後放行，並附一段說明請模型「這一輪只做簡短回應，新工作寫進接力檔的下一步」；拒絕、逾時、取消或 daemon 不在時原樣放行。等待期間 mod 只在本機計時，不會對 daemon 多發請求；任何異常都會放行訊息，絕不丟掉。
+- **壓縮**：已核准但還沒寫接力檔時，自動壓縮會被略過、改寫接力檔；你自己下的 `/compact` 照常執行。申請還開著時遇到壓縮，申請會被取消，所有裝置上的核准對話框一起關閉，等著的訊息放行。
+- **`/relay off|on|status`**：暫停或恢復這個 session 的接力詢問、看目前狀態（主機開關、門檻）；member 會看到「member 的接力由 lead 安排」。
+- **再問的規則**：拒絕後要再多用 10 個百分點才會再問；接手完成、`/relay on`、壓縮之後重新計算。
+- **`pdx-team` skill**：教模型何時申請 lead、怎麼等核准、lead／member 怎麼做、自我接力是怎麼回事。
+- **驗收食譜** `docs/testing/self-relay-acceptance.md`：在拋棄式 session 用 `--plugin-dir` 載入 mod 的 10 步檢查，不碰主機設定。
+- 內嵌 mod 時會濾掉 Claude Code 在 plugin 目錄裡產生的型別檔，避免被打包進 `pdx`。
+
+Review 後補強（R1 一條、攻擊方五條含一條 critical、critic 兩輪）全部收進上面的行為。
+
 ## [1.0.0-alpha.564] - 2026-10-08
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。只多日誌，行為不變。SPA 沒有改動。
