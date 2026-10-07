@@ -132,22 +132,25 @@ func TestBroadcastStrictTo_SendsTheMarshalledEvent(t *testing.T) {
 	assert.Equal(t, `{"type":"nex.executions.hello","session":"","value":"{\"epoch\":\"e\",\"bseq\":0}"}`, next(t, sub))
 }
 
-// Broadcast and BroadcastEvent stay best-effort: a full buffer loses that
-// frame and keeps the subscriber, exactly as before — an opted-in one too.
+// Broadcast and BroadcastEvent stay best-effort for a subscriber that did
+// not opt into nex.v1: a full buffer loses that frame and keeps the
+// subscriber, exactly as before. (An opted-in one is strict for every
+// frame: events_optedin_test.go.)
 func TestBroadcastEvent_StaysBestEffort(t *testing.T) {
 	eb := NewEventsBroadcaster()
 	sub := eb.AddTestSubscriber()
 	defer eb.RemoveTestSubscriber(sub)
 	fillBuffer(t, sub)
-	opted := eb.AddTestSubscriberWith(FeatureNexV1)
-	defer eb.RemoveTestSubscriber(opted)
-	fillBuffer(t, opted)
+	other := eb.AddTestSubscriberWith("other.v1")
+	defer eb.RemoveTestSubscriber(other)
+	fillBuffer(t, other)
 
 	eb.BroadcastEvent(HostEvent{Type: "status", Value: "x"})
 	eb.Broadcast("s", "status", "y")
 
-	for _, s := range []*EventSubscriber{sub, opted} {
+	for _, s := range []*EventSubscriber{sub, other} {
 		assert.False(t, isDone(s), "a best-effort broadcast removed a slow subscriber")
+		assert.True(t, registered(eb, s), "a best-effort broadcast deregistered a slow subscriber")
 		assert.Len(t, s.send, cap(s.send))
 	}
 }

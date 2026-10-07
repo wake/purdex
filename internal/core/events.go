@@ -27,6 +27,15 @@ type HostEvent struct {
 // sent one — an old SPA, or purdex-ios, would not know what to do with an
 // unknown type on this WS, which also carries the tmux agent status,
 // notifications and sessions — and is never disconnected over one.
+//
+// Opting in also makes the subscriber strict for EVERY frame it is sent,
+// not only the nex ones: a frame that cannot be queued for it ends it (its
+// connection closes) instead of being dropped (EventSubscriber.offer). Its
+// one queue carries the nex deltas and every other host event, so a nex
+// burst can fill it; a tmux, sessions or agent.status frame dropped after
+// that would leave the client stale with nothing to show it, while a
+// reconnect gives it every snapshot again. A subscriber that did not opt in
+// keeps the best effort it always had.
 const FeatureNexV1 = "nex.v1"
 
 const (
@@ -34,12 +43,13 @@ const (
 	defaultSendBuffer = 64
 
 	// optedInSendBuffer is the send buffer of a subscriber that opted into a
-	// feature. The only feature, nex.v1, is a strict stream
-	// (BroadcastStrictTo): a frame that does not fit closes the connection.
+	// feature. The only feature, nex.v1, makes the subscriber strict (see
+	// FeatureNexV1): any frame that does not fit closes the connection.
 	// The projector pushes one delta per changed execution, back to back,
 	// so every execution touched in one coalescing window arrives as one
 	// burst; with 64 slots, a burst of 65 would disconnect a client that
-	// merely paused for that long, as if it were dead.
+	// merely paused for that long, as if it were dead. The buffer absorbs
+	// a burst; strictness handles anything beyond it.
 	//
 	// Memory: the channel is 1024 slice headers (24 KiB) per opted-in
 	// connection. The frames in it exist only while that client is behind
@@ -53,11 +63,13 @@ const (
 // WriteMessage calls (gorilla/websocket requires one concurrent writer max).
 //
 // A subscriber handle may outlive its connection (a background retry holds
-// one, #1293): once removed, Send is a no-op and Done is closed.
+// one, #1293): once removed — or ended by a frame it could not take, if it
+// is strict — Send is a no-op and Done is closed.
 type EventSubscriber struct {
 	conn     *websocket.Conn
 	send     chan []byte
 	features map[string]struct{} // what it opted into when it connected; never changes
+	strict   bool                // opted into FeatureNexV1: a frame that does not fit ends it; never changes
 
 	mu     sync.Mutex // guards closed; held across a send so close never races it
 	closed bool
@@ -79,6 +91,7 @@ func newEventSubscriber(conn *websocket.Conn, features ...string) *EventSubscrib
 		}
 		sub.send = make(chan []byte, optedInSendBuffer)
 	}
+	sub.strict = sub.Wants(FeatureNexV1)
 	return sub
 }
 
@@ -90,26 +103,79 @@ func (sub *EventSubscriber) Wants(feature string) bool {
 }
 
 // Send pushes data to the subscriber's write pump. Non-blocking — if the
-// buffer is full the message is silently dropped; after Remove it is a no-op.
+// buffer is full the message is silently dropped, unless the subscriber
+// opted into nex.v1: then the subscriber is ended instead (its connection
+// closes, the client reconnects; see offer). After Remove it is a no-op.
 func (sub *EventSubscriber) Send(data []byte) {
 	sub.TrySend(data)
 }
 
 // TrySend is Send that reports whether data was actually queued: false when
-// the buffer is full (data dropped) or the subscriber has been removed.
+// the buffer is full (data dropped — and, for a subscriber that opted into
+// nex.v1, the subscriber ended) or the subscriber has been removed.
 // Non-blocking.
 func (sub *EventSubscriber) TrySend(data []byte) bool {
+	r := sub.offer(data)
+	if r == offerEnded {
+		log.Printf("events: a frame for a nex.v1 subscriber could not be queued (send buffer full); closing the connection so the client reconnects")
+	}
+	return r == offerQueued
+}
+
+// offerResult is what offer did with a frame.
+type offerResult uint8
+
+const (
+	offerQueued  offerResult = iota // queued for the write pump
+	offerDropped                    // buffer full, best-effort subscriber: the frame is lost, the subscriber kept
+	offerEnded                      // buffer full, strict subscriber: this call ended the subscriber
+	offerClosed                     // the subscriber was already removed or ended: nothing queued
+)
+
+// offer is the one place a frame is queued for a subscriber, whoever sends
+// it: a broadcast, a strict send, or a direct Send from an OnSubscribe
+// snapshot callback. Non-blocking.
+//
+// A strict subscriber (opted into nex.v1) whose buffer is full is ended
+// right here: marked closed, its send channel and Done closed, then its
+// connection closed. Ending takes only sub.mu, never the broadcaster's
+// lock, so it is safe from inside a broadcast's read-locked loop and from
+// inside a caller's own lock (the session module's statusMu, the team
+// module's eventMu); the connection is closed after sub.mu is released, and
+// gorilla allows Close concurrently with the read loop and the write pump.
+//
+// Taking the ended subscriber out of the broadcaster's set needs the write
+// lock, so it is left to whoever can take it: the broadcast methods once
+// their read lock is released, SendStrict, and — for a direct Send, which
+// knows no broadcaster — the connection's own goroutines, which see the
+// closed connection (the read loop exits into HandleHostEvents' deferred
+// Remove; the write pump fails its next write, or finds the send channel
+// closed, and Removes). Until then the ended subscriber is still in the
+// set, but closed: every later offer to it is offerClosed. A test
+// subscriber (no connection) stays registered until RemoveTestSubscriber;
+// its Done shows it ended.
+func (sub *EventSubscriber) offer(data []byte) offerResult {
 	sub.mu.Lock()
-	defer sub.mu.Unlock()
 	if sub.closed {
-		return false
+		sub.mu.Unlock()
+		return offerClosed
 	}
 	select {
 	case sub.send <- data:
-		return true
-	default: // drop if full
-		return false
+		sub.mu.Unlock()
+		return offerQueued
+	default:
 	}
+	if !sub.strict {
+		sub.mu.Unlock()
+		return offerDropped
+	}
+	sub.shutLocked()
+	sub.mu.Unlock()
+	if sub.conn != nil {
+		sub.conn.Close()
+	}
+	return offerEnded
 }
 
 // Done is closed once the subscriber has been removed (its connection is
@@ -120,6 +186,11 @@ func (sub *EventSubscriber) Done() <-chan struct{} { return sub.done }
 func (sub *EventSubscriber) shut() {
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
+	sub.shutLocked()
+}
+
+// shutLocked is shut with sub.mu already held.
+func (sub *EventSubscriber) shutLocked() {
 	if sub.closed {
 		return
 	}
@@ -169,7 +240,11 @@ func (eb *EventsBroadcaster) Add(conn *websocket.Conn, features ...string) *Even
 			select {
 			case msg, ok := <-sub.send:
 				if !ok {
-					return // channel closed by Remove
+					// Closed by Remove, or by the subscriber ending itself
+					// (offer), which leaves it registered: Remove is
+					// idempotent and takes it out of the set.
+					eb.Remove(sub)
+					return
 				}
 				if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 					eb.Remove(sub)
@@ -203,8 +278,9 @@ func (eb *EventsBroadcaster) Remove(sub *EventSubscriber) {
 	}
 }
 
-// Broadcast sends a JSON event to all subscribers.
-// Messages are sent non-blocking; slow subscribers that have a full buffer are dropped.
+// Broadcast sends a JSON event to all subscribers, with BroadcastEvent's
+// rules: non-blocking; a subscriber with a full buffer loses the message,
+// or — if it opted into nex.v1 — its connection.
 func (eb *EventsBroadcaster) Broadcast(session, eventType, value string) {
 	eb.BroadcastEvent(HostEvent{
 		Type:    eventType,
@@ -214,7 +290,11 @@ func (eb *EventsBroadcaster) Broadcast(session, eventType, value string) {
 }
 
 // BroadcastEvent sends a fully-formed HostEvent (including optional version
-// fields) to all subscribers, with the same non-blocking semantics as Broadcast.
+// fields) to all subscribers. Non-blocking. A subscriber whose buffer is
+// full loses this frame and keeps running — unless it opted into nex.v1,
+// which makes it strict for every frame (FeatureNexV1): then it is ended
+// (offer) and Removed once the read lock is released, so its client
+// reconnects instead of running without the frame.
 func (eb *EventsBroadcaster) BroadcastEvent(ev HostEvent) {
 	msg, err := json.Marshal(ev)
 	if err != nil {
@@ -222,11 +302,18 @@ func (eb *EventsBroadcaster) BroadcastEvent(ev HostEvent) {
 		return
 	}
 
+	var ended []*EventSubscriber
 	eb.mu.RLock()
-	defer eb.mu.RUnlock()
-
 	for sub := range eb.subscribers {
-		sub.Send(msg) // a subscriber too slow to keep up drops this message
+		if sub.offer(msg) == offerEnded {
+			ended = append(ended, sub)
+		}
+	}
+	eb.mu.RUnlock()
+
+	for _, sub := range ended {
+		log.Printf("events: %s frame could not be queued for a nex.v1 subscriber (send buffer full); closing the connection so the client reconnects", ev.Type)
+		eb.Remove(sub)
 	}
 }
 
@@ -256,10 +343,11 @@ func (eb *EventsBroadcaster) BroadcastEvent(ev HostEvent) {
 // released: Remove takes the write lock, so calling it inside the loop
 // would deadlock against the read lock held right there.
 //
-// Broadcast and BroadcastEvent stay best-effort for every other frame type;
-// making those strict too is a separate decision (§3.5), not taken here.
-// Concurrent strict broadcasts are not ordered against each other — a
-// caller that needs order (the nex projector) serializes its own.
+// A subscriber that opted into nex.v1 is strict for every frame, Broadcast
+// and BroadcastEvent included (FeatureNexV1); for every other subscriber
+// those stay best-effort. Concurrent strict broadcasts are not ordered
+// against each other — a caller that needs order (the nex projector)
+// serializes its own.
 func (eb *EventsBroadcaster) BroadcastStrictTo(feature string, ev HostEvent) {
 	msg, err := json.Marshal(ev)
 	if err != nil {
@@ -270,7 +358,13 @@ func (eb *EventsBroadcaster) BroadcastStrictTo(feature string, ev HostEvent) {
 	var failed []*EventSubscriber
 	eb.mu.RLock()
 	for sub := range eb.subscribers {
-		if sub.Wants(feature) && !sub.TrySend(msg) {
+		if !sub.Wants(feature) {
+			continue
+		}
+		// offerEnded: a nex.v1 subscriber ended itself. offerDropped: one
+		// that opted into some other feature, which this send is strict for
+		// all the same. offerClosed: already gone, nothing to close.
+		if r := sub.offer(msg); r == offerEnded || r == offerDropped {
 			failed = append(failed, sub)
 		}
 	}
@@ -303,15 +397,16 @@ func (eb *EventsBroadcaster) SendStrict(sub *EventSubscriber, ev HostEvent) bool
 		log.Printf("events: marshal error: %v", err)
 		return false
 	}
-	if sub.TrySend(msg) {
+	switch sub.offer(msg) {
+	case offerQueued:
 		return true
+	case offerClosed: // already removed: nothing to close
+		return false
 	}
-	select {
-	case <-sub.Done(): // already removed: nothing to close
-	default:
-		log.Printf("events: %s frame could not be queued (send buffer full); closing the connection so the client reconnects", ev.Type)
-		eb.Remove(sub)
-	}
+	// offerEnded (a nex.v1 subscriber ended itself and needs deregistering)
+	// or offerDropped (any other subscriber, which this send is strict for).
+	log.Printf("events: %s frame could not be queued (send buffer full); closing the connection so the client reconnects", ev.Type)
+	eb.Remove(sub)
 	return false
 }
 
@@ -351,7 +446,9 @@ func (eb *EventsBroadcaster) HasSubscribers() bool {
 }
 
 // OnSubscribe registers a callback invoked when a new WS subscriber connects.
-// Callbacks receive the subscriber and can use sub.Send() to push snapshot data.
+// Callbacks receive the subscriber and can use sub.Send() to push snapshot data
+// (for a subscriber that opted into nex.v1, a snapshot frame that does not
+// fit ends it, as any frame would).
 func (eb *EventsBroadcaster) OnSubscribe(fn func(sub *EventSubscriber)) {
 	eb.mu.Lock()
 	defer eb.mu.Unlock()
