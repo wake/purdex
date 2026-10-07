@@ -117,9 +117,9 @@ func TestExtractPlugin_FailedPublishRestoresTheOldTree(t *testing.T) {
 	assertOnlyRoot(t, dataDir)
 }
 
-// Attacker critical: two extractions at once (daemon route + pdx setup, two
-// clicks) must not interleave — the result is one whole version, with no
-// staging or backup left. Run with -race.
+// Attacker critical: two extractions at once in one process (two setup
+// requests to the daemon) must not interleave — the result is one whole
+// version, with no staging or backup left. Run with -race.
 func TestExtractPlugin_ConcurrentExtractionsLeaveOneWholeTree(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		dataDir := t.TempDir()

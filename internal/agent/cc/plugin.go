@@ -34,9 +34,11 @@ func PluginRoot(dataDir string) string {
 	return filepath.Join(dataDir, PluginDirName, PluginName)
 }
 
-// extractMu serialises ExtractPlugin and RemovePluginDir in this process:
-// the daemon's setup route and a second click (or the route and its own
-// boot) must not swap the folder under each other.
+// extractMu serialises ExtractPlugin and RemovePluginDir within this
+// process: two setup requests to the daemon at once must not swap the
+// folder under each other. Another process (`pdx setup` beside the daemon)
+// is not covered by it; the unique staging/backup names keep the two from
+// writing into one tree, and a lost rename race fails with an error.
 var extractMu sync.Mutex
 
 // renameFn is os.Rename; tests swap it to fail one step of the publish.
