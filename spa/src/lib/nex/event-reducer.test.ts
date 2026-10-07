@@ -1197,6 +1197,37 @@ describe('permission events (Nexen v0.19.0 permission.requested / permission.res
     }
   })
 
+  it('expiredNotice belongs to its request: another request being allowed / denied / cancelled drops it, another expiry replaces it', () => {
+    for (const outcome of ['allowed', 'denied', 'cancelled']) {
+      let s = applyDurableEvent(started(), requested(3, 'req_a', 5000))
+      s = applyDurableEvent(s, requested(4, 'req_b', 5100))
+      s = applyDurableEvent(s, resolved(5, 'req_a', 'expired', { timeout_s: 300 }))
+      expect(s.expiredNotice).toEqual({ requestId: 'req_a', timeoutS: 300 })
+      s = applyDurableEvent(s, resolved(6, 'req_b', outcome))
+      expect(s.expiredNotice).toBeNull()
+    }
+    let t = applyDurableEvent(started(), requested(3, 'req_a', 5000))
+    t = applyDurableEvent(t, requested(4, 'req_b', 5100))
+    t = applyDurableEvent(t, resolved(5, 'req_a', 'expired', { timeout_s: 300 }))
+    t = applyDurableEvent(t, resolved(6, 'req_b', 'expired', { timeout_s: 900 }))
+    expect(t.expiredNotice).toEqual({ requestId: 'req_b', timeoutS: 900 })
+  })
+
+  it('expiredNotice: a re-delivered resolution of the same request neither clears nor resurrects it', () => {
+    let s = applyDurableEvent(started(), requested(3, 'req_a', 5000))
+    s = applyDurableEvent(s, requested(4, 'req_b', 5100))
+    s = applyDurableEvent(s, resolved(5, 'req_a', 'expired', { timeout_s: 300 }))
+    s = applyDurableEvent(s, resolved(6, 'req_a', 'expired', { timeout_s: 300 }))
+    expect(s.expiredNotice).toEqual({ requestId: 'req_a', timeoutS: 300 })
+    // a later, different resolution of the SAME request is not "the user moved on to another request"
+    const u = applyDurableEvent(s, resolved(7, 'req_a', 'cancelled'))
+    expect(u.expiredNotice).toEqual({ requestId: 'req_a', timeoutS: 300 })
+    s = applyDurableEvent(s, resolved(7, 'req_b', 'allowed'))
+    expect(s.expiredNotice).toBeNull()
+    s = applyDurableEvent(s, resolved(8, 'req_a', 'expired', { timeout_s: 300 }))
+    expect(s.expiredNotice).toBeNull()
+  })
+
   // The recorded sequence: a turn whose Bash asks and is allowed, a second ask that expires, a background subagent's
   // ask after the result, then a new turn. Interleaved with assistant / user / tool / task / lifecycle kinds.
   const recorded = (): NexEvent[] => [

@@ -545,9 +545,13 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
     let expiredNotice = s.expiredNotice
     const requestId = typeof p.request_id === 'string' ? p.request_id : ''
     if (ev.kind === 'permission.requested' && permissions !== s.permissions && s.permissions[requestId] === undefined) expiredNotice = null
-    if (ev.kind === 'permission.resolved' && permissions[requestId]?.status === 'expired') {
-      const timeoutS = permissions[requestId].timeoutS
-      expiredNotice = timeoutS === undefined ? { requestId } : { requestId, timeoutS }
+    // Only a resolution that changed the table counts (a re-delivery is a no-op). The notice belongs to
+    // its request: an expiry replaces it (latest wins), any other outcome of ANOTHER request drops it —
+    // the user has moved on, and it must not read as that request timing out.
+    if (ev.kind === 'permission.resolved' && permissions !== s.permissions) {
+      const r = permissions[requestId]
+      if (r?.status === 'expired') expiredNotice = r.timeoutS === undefined ? { requestId } : { requestId, timeoutS: r.timeoutS }
+      else if (expiredNotice && expiredNotice.requestId !== requestId) expiredNotice = null
     }
     return { ...s, lastSeq: ev.seq, lastEventAt, permissions, expiredNotice, summaryStale: true }
   }

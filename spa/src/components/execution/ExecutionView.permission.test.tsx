@@ -200,6 +200,17 @@ describe('ExecutionView — permission request card', () => {
     expect(screen.queryByTestId('permission-expired')).toBeNull()
   })
 
+  it('an expiry of one request is not left on screen after the user handles another', () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    render(<ExecutionView {...base} isActive />)
+    ask('req_a')
+    ask('req_b')
+    resolve('req_a', 'expired', { timeout_s: 300 })
+    resolve('req_b', 'allowed')
+    expect(screen.queryByText(/已逾時自動拒絕/)).toBeNull()
+    expect(screen.queryByTestId('permission-card')).toBeNull()
+  })
+
   it('a request asked after the turn\'s result (a background subagent) shows the card, naming the subagent by its task', () => {
     render(<ExecutionView {...base} isActive />)
     apply('task_start', { task_id: 'a8fb', turn_id: 'trn_1', kind: 'subagent', task_type: 'local_agent', tool_use_id: 'toolu_ag', parent_tool_use_id: null, description: 'Probe the repo', backgrounded: true, started_at: 1 })
