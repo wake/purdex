@@ -67,6 +67,11 @@ export function useRowExit(hostId: string, live: readonly ExecutionSummary[]): R
     else void runExit(r.id)
   }
 
+  // The confirm is about one listed row: once that row has left the list (its worker ended elsewhere) the confirm
+  // closes by itself, as the pane header's goes with its pane (#1627 Q1). Render-time, so it never draws for a row that
+  // is gone, and a row that comes back does not bring it back. The confirm-time check below stays.
+  if (confirmExitId !== null && !live.some((r) => r.id === confirmExitId)) setConfirmExitId(null)
+
   const dialog = confirmExitId !== null ? (
     <ConfirmDialog testIdPrefix="exit" title={t('worker.exit.confirm_title')} body={t('worker.exit.confirm_running')}
       confirmLabel={t('worker.exit.button')} onCancel={() => setConfirmExitId(null)}

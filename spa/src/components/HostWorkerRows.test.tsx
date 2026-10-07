@@ -188,6 +188,25 @@ describe('HostWorkerRows', () => {
     expect(exitWorker).toHaveBeenCalledWith({ hostId: H, executionId: 'E1' })
   })
 
+  // #1627 Q1 (New Tab / Settings Workers): the confirm closes by itself once its row has left the list.
+  it('a running row\'s confirm stays while it is listed and closes by itself once it leaves; other rows are untouched', () => {
+    vi.mocked(exitWorker).mockImplementation(() => new Promise(() => {}))
+    const R = row({ id: 'R', state: 'running', session_id: 'SR', brief: 'run one' })
+    const I = row({ id: 'I', state: 'idle', session_id: 'SI', brief: 'idle one' })
+    seed([R, I, row({ id: 'X', state: 'idle', session_id: 'SX', brief: 'other one' })])
+    renderRows()
+    const exitOf = (brief: string) => screen.getByText(brief).closest('[data-testid="executions-row"]')!.parentElement!.querySelector<HTMLButtonElement>('[data-testid="executions-row-exit"]')!
+    fireEvent.click(exitOf('idle one'))
+    fireEvent.click(exitOf('run one'))
+    expect(screen.getByTestId('exit-dialog')).toBeInTheDocument()
+    act(() => { seed([R, I]) })
+    expect(screen.getByTestId('exit-dialog')).toBeInTheDocument()
+    act(() => { seed([I]) })
+    expect(screen.queryByTestId('exit-dialog')).toBeNull()
+    expect(exitOf('idle one')).toBeDisabled()
+    expect(exitWorker).toHaveBeenCalledTimes(1)
+  })
+
   describe('filter (worker test tab S4)', () => {
     const mixed = () => seed([
       row({ id: 'N1', session_id: 'SN', cwd: '/Users/w/proj', brief: 'normal one' }),

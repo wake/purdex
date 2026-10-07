@@ -564,14 +564,40 @@ describe('ExecutionsView', () => {
     expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
   })
 
-  it('confirming for a row that has disappeared sends no request', () => {
+  // #1627 Q1: the confirm is about one listed row; when that row leaves the list (its worker ended elsewhere) the
+  // confirm closes by itself, as the pane header's goes with its pane — and nothing is sent.
+  it('a running row that leaves the list closes its confirm by itself; nothing is sent', () => {
     seedList([row({ id: 'R', state: 'running' })])
     render(<ExecutionsView hostId={H} isActive />)
     fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(screen.getByTestId('exit-dialog')).toBeInTheDocument()
     act(() => { seedList([]) })
-    fireEvent.click(screen.getByTestId('exit-confirm'))
+    expect(screen.queryByTestId('exit-dialog')).toBeNull()
+    // The row coming back does not bring the confirm back.
+    act(() => { seedList([row({ id: 'R', state: 'running' })]) })
+    expect(screen.queryByTestId('exit-dialog')).toBeNull()
     expect(exitWorker).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('exit-confirm')).toBeNull()
+  })
+
+  it('a confirm whose row is still listed stays open; another row leaving, or another row\'s pending exit, is untouched', () => {
+    vi.mocked(exitWorker).mockImplementation(() => new Promise(() => {}))
+    seedList([
+      row({ id: 'R', state: 'running', brief: 'run one', session_id: 'SR' }),
+      row({ id: 'I', state: 'idle', brief: 'idle one', session_id: 'SI' }),
+      row({ id: 'X', state: 'idle', brief: 'other one', session_id: 'SX' }),
+    ])
+    render(<ExecutionsView hostId={H} isActive />)
+    const exitOf = (brief: string) => within(screen.getByText(brief).closest('[data-testid="executions-row"]')!.parentElement!).getByTestId('executions-row-exit')
+    fireEvent.click(exitOf('idle one'))
+    expect(exitOf('idle one')).toBeDisabled()
+    fireEvent.click(exitOf('run one'))
+    expect(screen.getByTestId('exit-dialog')).toBeInTheDocument()
+    act(() => { seedList([row({ id: 'R', state: 'running', brief: 'run one', session_id: 'SR' }), row({ id: 'I', state: 'idle', brief: 'idle one', session_id: 'SI' })]) })
+    expect(screen.getByTestId('exit-dialog')).toBeInTheDocument()
+    act(() => { seedList([row({ id: 'I', state: 'idle', brief: 'idle one', session_id: 'SI' })]) })
+    expect(screen.queryByTestId('exit-dialog')).toBeNull()
+    expect(exitOf('idle one')).toBeDisabled()
+    expect(exitWorker).toHaveBeenCalledTimes(1)
   })
 
   it('a host hidden in this workbench offers no exit', () => {
