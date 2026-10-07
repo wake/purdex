@@ -5,13 +5,46 @@
 //
 // It is not modal and never expands by itself: a request it has not shown yet raises `data-flash` by one and runs one
 // background flash, nothing more. A close never flashes. The deadlines keep running in the daemon; this only shows them.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Circle } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
-import { selectNearestDeadline, selectOpenCount, useApprovalStore } from '../stores/useApprovalStore'
+import { selectNearestDeadline, selectOpenCount, useApprovalStore, type ApprovalEntry } from '../stores/useApprovalStore'
 import { formatCountdown } from '../lib/team/approval-format'
 
 const FLASH_MS = 600
+
+interface PillSignals {
+  /** One per change that brought a request the pill had not shown. */
+  flashes: number
+}
+
+/**
+ * Watches the approval store for one pill. The baseline — the request keys the pill has shown — is the store as the
+ * pill FIRST RENDERED, not as it is when the subscription starts: a request that arrives in between (another
+ * component's layout effect, a WS message before the passive effects run) is still new. `subscribe` catches up on
+ * that gap before it listens. Created once per pill (useState initializer); read through useSyncExternalStore.
+ */
+function createPillSignals() {
+  let shown = new Set(Object.keys(useApprovalStore.getState().entries))
+  let snapshot: PillSignals = { flashes: 0 }
+  const observe = (entries: Record<string, ApprovalEntry>): boolean => {
+    const keys = Object.keys(entries)
+    const fresh = keys.some((k) => !shown.has(k))
+    shown = new Set(keys)
+    if (!fresh) return false
+    snapshot = { flashes: snapshot.flashes + 1 }
+    return true
+  }
+  return {
+    subscribe(onChange: () => void): () => void {
+      if (observe(useApprovalStore.getState().entries)) onChange()
+      return useApprovalStore.subscribe((s, prev) => {
+        if (s.entries !== prev.entries && observe(s.entries)) onChange()
+      })
+    },
+    getSnapshot: (): PillSignals => snapshot,
+  }
+}
 
 /** One background flash in the warning colour, back to the pill's own background (Web Animations; absent in jsdom). */
 function flash(el: HTMLElement): void {
@@ -26,10 +59,10 @@ export function ApprovalPill() {
   const count = useApprovalStore(selectOpenCount)
   const nearest = useApprovalStore(selectNearestDeadline)
   const [now, setNow] = useState(() => Date.now())
-  const [flashes, setFlashes] = useState(0)
   const ref = useRef<HTMLButtonElement>(null)
-  // The request keys this pill has shown. What was open when it appeared is not new.
-  const shown = useRef<Set<string>>(new Set())
+  // What was open when the pill first rendered is not new.
+  const [signals] = useState(createPillSignals)
+  const { flashes } = useSyncExternalStore(signals.subscribe, signals.getSnapshot)
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000)
@@ -37,17 +70,8 @@ export function ApprovalPill() {
   }, [])
 
   useEffect(() => {
-    shown.current = new Set(Object.keys(useApprovalStore.getState().entries))
-    return useApprovalStore.subscribe((s, prev) => {
-      if (s.entries === prev.entries) return
-      const keys = Object.keys(s.entries)
-      const fresh = keys.some((k) => !shown.current.has(k))
-      shown.current = new Set(keys)
-      if (!fresh) return
-      setFlashes((n) => n + 1)
-      if (ref.current) flash(ref.current)
-    })
-  }, [])
+    if (flashes > 0 && ref.current) flash(ref.current)
+  }, [flashes])
 
   if (nearest === null) return null
   return (

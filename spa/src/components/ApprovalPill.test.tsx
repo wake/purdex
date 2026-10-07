@@ -2,6 +2,7 @@
 // `● 待核准 N · m:ss`, N across hosts and the nearest deadline's countdown, ticking each second; a click restores the
 // dialog; a request it has not shown yet raises `data-flash` by one and runs one background flash, a close never does.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { StrictMode, useLayoutEffect } from 'react'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { ApprovalPill } from './ApprovalPill'
 import { useApprovalStore } from '../stores/useApprovalStore'
@@ -72,6 +73,25 @@ describe('ApprovalPill', () => {
       expect(pill().dataset.flash).toBe('1')
     })
   }
+
+  it('a request opened between the pill\'s render and its subscription is still new (a later sibling\'s layout effect)', () => {
+    useApprovalStore.getState().applyOpened('h1', lead('a', 600_000))
+    function OpensInLayoutEffect() {
+      useLayoutEffect(() => { useApprovalStore.getState().applyOpened('h2', relay('b', 400_000, 2_000)) }, [])
+      return null
+    }
+    render(<><ApprovalPill /><OpensInLayoutEffect /></>)
+    expect(pill().textContent).toBe('待核准 2 · 6:39')
+    expect(pill().dataset.flash).toBe('1')
+  })
+
+  it('under StrictMode (double effects) a new request flashes once', () => {
+    useApprovalStore.getState().applyOpened('h1', lead('a', 600_000))
+    render(<StrictMode><ApprovalPill /></StrictMode>)
+    expect(pill().dataset.flash).toBe('0')
+    opened('h2', relay('b', 400_000, 2_000))
+    expect(pill().dataset.flash).toBe('1')
+  })
 
   it('a close updates N and the countdown without a flash', () => {
     useApprovalStore.getState().applyOpened('h1', lead('a', 600_000))
