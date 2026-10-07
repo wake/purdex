@@ -1,9 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
-  checkRelayPromptBody,
   fetchRelayPrompts,
   normalizeRelayPromptBody,
-  relayPromptBytes,
   relayPromptValueToStore,
   RelayPromptsApiError,
   type RelayPrompts,
@@ -74,28 +72,6 @@ describe('fetchRelayPrompts', () => {
     vi.stubGlobal('fetch', fetchMock)
     await expect(fetchRelayPrompts('ghost')).rejects.toThrow()
     expect(fetchMock).not.toHaveBeenCalled()
-  })
-})
-
-// The client mirror of internal/team/relay_prompts.go ValidateRelayPromptBody.
-describe('checkRelayPromptBody', () => {
-  it('16 384 UTF-8 bytes pass, 16 385 are too long (bytes, not characters)', () => {
-    expect(checkRelayPromptBody('a'.repeat(16384))).toBeNull()
-    expect(checkRelayPromptBody('a'.repeat(16385))).toBe('too_long')
-    expect(relayPromptBytes('中')).toBe(3)
-    expect(checkRelayPromptBody('中'.repeat(5462))).toBe('too_long') // 16 386 bytes, 5 462 characters
-  })
-
-  it.each([['\r'], ['\x00'], ['\x7f'], ['\u0085'], ['\x1b']])('control character %j is refused', (c) => {
-    expect(checkRelayPromptBody(`a${c}b`)).toBe('control_chars')
-  })
-
-  it('newline and tab pass', () => {
-    expect(checkRelayPromptBody('a\n\tb')).toBeNull()
-  })
-
-  it.each([['[pdx-relay'], ['x [pdx-relay:control] y'], ['line\n[pdx-relay seed op=1 n=2]']])('the tag %j is refused wherever it stands', (s) => {
-    expect(checkRelayPromptBody(s)).toBe('has_tag')
   })
 })
 

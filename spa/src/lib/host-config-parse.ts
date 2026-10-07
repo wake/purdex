@@ -14,6 +14,7 @@
 // bodies): one the daemon would refuse is dropped, or no edit would save.
 import { AGENT_ICON_VALUES } from './command-icons'
 import { trimLikeGo } from './go-trim'
+import { checkRelayPromptBody, RELAY_PROMPT_MAX_BYTES, type RelayPromptProblem } from './relay-prompt-check'
 import type { HostCommand, HostProject, QuickReply, RelaySwitches, ResumeTemplateOverrides } from './host-config-api'
 
 /** Why a section shows less than the host stores. */
@@ -213,25 +214,26 @@ const RELAY_SWITCHES = ['self_solo', 'self_lead'] as const
 const RELAY_PROMPTS = ['prompt_write', 'prompt_fix', 'prompt_seed'] as const
 const RELAY_KEYS: readonly string[] = [...RELAY_SWITCHES, ...RELAY_PROMPTS]
 
-/** `team.RelayPromptMaxBytes` and the machine tag a body may not hold (`internal/team/relay_prompts.go`). */
-const RELAY_PROMPT_MAX_BYTES = 16 << 10
-const RELAY_TAG = '[pdx-relay'
-/** Go's `unicode.IsControl` (Cc) minus newline and tab. */
-// eslint-disable-next-line no-control-regex
-const RELAY_PROMPT_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/
+/** The warning for each of the shared check's answers (`relay-prompt-check`, the editor's rules too). */
+const RELAY_PROMPT_PROBLEM: Record<RelayPromptProblem, string> = {
+  not_utf8: 'holds an unpaired surrogate (stored as U+FFFD, not as written)',
+  too_long: `is over ${RELAY_PROMPT_MAX_BYTES} bytes`,
+  control_chars: 'holds a control character',
+  has_tag: 'holds [pdx-relay',
+}
 
 /**
  * Why the daemon's PUT would refuse this stored body (`relayPromptsOf`: blank is
  * the default, else `ValidateRelayPromptBody`), or null. A toggle sends the row
- * back whole, so a body it refuses would lock the switches.
+ * back whole, so a body it refuses would lock the switches. An unpaired
+ * surrogate the daemon would take, but as U+FFFD: dropped too, so a toggle
+ * never rewrites a body into one nobody wrote.
  */
 function relayPromptProblem(v: unknown): string | null {
   if (typeof v !== 'string') return 'is not a string'
   if (trimLikeGo(v) === '') return null
-  if (utf8.encode(v).length > RELAY_PROMPT_MAX_BYTES) return `is over ${RELAY_PROMPT_MAX_BYTES} bytes`
-  if (RELAY_PROMPT_CONTROL.test(v)) return 'holds a control character'
-  if (v.includes(RELAY_TAG)) return `holds ${RELAY_TAG}`
-  return null
+  const problem = checkRelayPromptBody(v)
+  return problem === null ? null : RELAY_PROMPT_PROBLEM[problem]
 }
 
 /**

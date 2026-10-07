@@ -1,8 +1,7 @@
 // spa/src/lib/relay-prompts-api.ts — the relay prompts of one host (lead-team-relay spec §8.8, U21; plan v3 P9a-3):
-// `GET /api/relay/prompts`, and the client mirror of the daemon's body check
-// (internal/team/relay_prompts.go `ValidateRelayPromptBody`). The bodies are saved through host config's `relay`
-// row (`saveRelay`), not here. The daemon stays the authority: when the two checks disagree, its 400 detail is
-// what the editor shows.
+// `GET /api/relay/prompts`, and what a box's text saves as. The bodies are saved through host config's `relay` row
+// (`saveRelay`), not here; the body check is `relay-prompt-check`. The daemon stays the authority: when the checks
+// disagree, its 400 detail is what the editor shows.
 import { trimLikeGo } from './go-trim'
 import { pinnedHostFetch } from './host-api'
 
@@ -19,10 +18,6 @@ export interface RelayPrompts extends RelayPromptBodies {
   fixed: Record<RelayPromptKind, RelayPromptFixed>
   variables: string[]
 }
-
-/** `team.RelayPromptMaxBytes`: the longest body, in UTF-8 bytes. */
-export const RELAY_PROMPT_MAX_BYTES = 16 << 10
-const RELAY_TAG = '[pdx-relay'
 
 export class RelayPromptsApiError extends Error {
   readonly status: number
@@ -69,26 +64,6 @@ export async function fetchRelayPrompts(hostId: string, signal?: AbortSignal): P
 /** A box's text as the daemon will see it: CRLF as LF (a pasted Windows text). */
 export function normalizeRelayPromptBody(text: string): string {
   return text.replace(/\r\n/g, '\n')
-}
-
-export function relayPromptBytes(text: string): number {
-  return new TextEncoder().encode(text).length
-}
-
-export type RelayPromptProblem = 'too_long' | 'control_chars' | 'has_tag'
-
-/**
- * `ValidateRelayPromptBody` on a normalized body, in its order: over 16 384 UTF-8 bytes; a control character other
- * than newline and tab (Go's `unicode.IsControl`: C0, DEL and C1, so a lone `\r` too); the machine tag anywhere.
- */
-export function checkRelayPromptBody(text: string): RelayPromptProblem | null {
-  if (relayPromptBytes(text) > RELAY_PROMPT_MAX_BYTES) return 'too_long'
-  for (const ch of text) {
-    const c = ch.codePointAt(0) ?? 0
-    if (c !== 0x09 && c !== 0x0a && (c < 0x20 || (c >= 0x7f && c <= 0x9f))) return 'control_chars'
-  }
-  if (text.includes(RELAY_TAG)) return 'has_tag'
-  return null
 }
 
 /**

@@ -1404,6 +1404,7 @@
   "hosts.relay.prompts.custom": "自訂",
   "hosts.relay.prompts.default": "預設",
   "hosts.relay.prompts.too_long": "超過 {{max}} bytes。",
+  "hosts.relay.prompts.not_utf8": "含有破損的字元（未配對的 surrogate），無法照原樣儲存。",
   "hosts.relay.prompts.has_tag": "不能包含 [pdx-relay：機器標記由 mod 加上。",
   "hosts.relay.prompts.control_chars": "除了換行與 tab，不能有控制字元。",
   "hosts.relay.prompts.unsupported": "這台主機的 daemon 太舊，不支援接力提示詞設定，mod 會用內建文字。上面的開關照常可用。",

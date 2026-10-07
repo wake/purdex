@@ -77,6 +77,7 @@ describe('RelayPromptEditor', () => {
     ['the tag', 'see [pdx-relay op=1]', '不能包含 [pdx-relay'],
     ['a control character', 'a\u0007b', '控制字元'],
     ['16 385 bytes', 'a'.repeat(16385), '16384'],
+    ['an unpaired surrogate', 'a\ud83db', 'surrogate'],
   ])('%s shows the error and disables 儲存', (_label, text, message) => {
     setup()
     type('a fine body')
@@ -111,6 +112,14 @@ describe('RelayPromptEditor', () => {
     await act(async () => { fireEvent.click(save()) })
     expect(props.onSave).toHaveBeenCalledWith('line 1\nline 2')
     expect(readRelayPromptDraft(KEY)).toBeUndefined()
+  })
+
+  it('an emoji (a surrogate pair) is saved as typed', async () => {
+    const { props } = setup()
+    type('交給你了 😀')
+    expect(screen.queryByTestId('relay-prompt-write-problem')).toBeNull()
+    await act(async () => { fireEvent.click(save()) })
+    expect(props.onSave).toHaveBeenCalledWith('交給你了 😀')
   })
 
   it('saving the default text sends ""', async () => {

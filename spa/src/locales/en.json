@@ -1404,6 +1404,7 @@
   "hosts.relay.prompts.custom": "Custom",
   "hosts.relay.prompts.default": "Default",
   "hosts.relay.prompts.too_long": "Over {{max}} bytes.",
+  "hosts.relay.prompts.not_utf8": "Holds a broken character (an unpaired surrogate) that would not be stored as written.",
   "hosts.relay.prompts.has_tag": "May not contain [pdx-relay: the machine tag is the mod's.",
   "hosts.relay.prompts.control_chars": "No control characters other than newline and tab.",
   "hosts.relay.prompts.unsupported": "This host's daemon is too old for relay prompts, so the mod uses its built-in text. The switches above still work.",

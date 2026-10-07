@@ -7,6 +7,7 @@ import {
   parseRelay,
   parseResumeTemplates,
 } from './host-config-parse'
+import { checkRelayPromptBody } from './relay-prompt-check'
 
 const H = 'h1'
 const P1 = { id: 'p1', name: 'Purdex', slug: 'purdex', path: '~/w/purdex' }
@@ -240,6 +241,8 @@ describe('parseRelay', () => {
     ['holding a control character', 'a\u0007b'],
     ['holding a C1 control character', 'a\u0085b'],
     ['holding the machine tag', 'see [pdx-relay write]'],
+    // One check for both callers (#1913): the daemon would store U+FFFD for it, not the text the row holds.
+    ['holding an unpaired surrogate', 'a\ud83db'],
   ])('a prompt body that is %s is dropped and counted; the switches still read', (_name, body) => {
     expect(parseRelay({ items: { self_solo: false, prompt_fix: body, prompt_seed: 'kept' }, revision: 2 }, H))
       .toEqual({ items: { self_solo: false, self_lead: true, prompt_seed: 'kept' }, revision: 2, problem: { kind: 'rows', count: 1 } })
@@ -252,11 +255,19 @@ describe('parseRelay', () => {
     ['newline and tab', 'a\nb\tc'],
     ['a near-miss of the tag', '[pdx relay] pdx-relay'],
     ['blank (Go whitespace only, incl. NEL)', ' \u0085　 '],
+    ['an emoji (a surrogate pair)', 'go 😀'],
   ])('a prompt body with %s is kept', (_name, body) => {
     expect(parseRelay({ items: { prompt_write: body }, revision: 2 }, H))
       .toEqual({ items: { self_solo: true, self_lead: true, prompt_write: body }, revision: 2, problem: null })
     expect(warn).not.toHaveBeenCalled()
   })
+
+  // #1913: the parser and the Hosts › 接力 editor answer with one rule set.
+  it.each([['fine'], ['a'.repeat(16385)], ['a\u0007b'], ['x [pdx-relay y'], ['a\ude00'], ['ok 😀']])(
+    'drops %j exactly when the editor\'s check refuses it', (body) => {
+      const kept = parseRelay({ items: { prompt_write: body }, revision: 2 }, H).items.prompt_write === body
+      expect(kept).toBe(checkRelayPromptBody(body) === null)
+    })
 })
 
 // #1889: the daemon's GET (and a PUT's answer, a 409's current) now sends only rows its PUT would take, and says

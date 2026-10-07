@@ -6,11 +6,9 @@
 // switch unmounts this (the tab-hosted checklist in the repo CLAUDE.md).
 import { useState } from 'react'
 import { HostConfigConflictError } from '../../lib/host-config-api'
+import { checkRelayPromptBody, RELAY_PROMPT_MAX_BYTES, relayPromptBytes } from '../../lib/relay-prompt-check'
 import {
-  checkRelayPromptBody,
   normalizeRelayPromptBody,
-  RELAY_PROMPT_MAX_BYTES,
-  relayPromptBytes,
   relayPromptValueToStore,
   type RelayPromptFixed,
   type RelayPromptKind,
