@@ -15,6 +15,8 @@ export interface HeadlessLauncherFieldsProps {
   sub: string
   subVerdict: SubPathVerdict
   profile: string
+  /** The profiles to offer (`newTabProfiles`: the host's, minus the asking ones). */
+  profiles: string[]
   busy: boolean
   canSubmit: boolean
   error: string
@@ -123,7 +125,7 @@ export function HeadlessLauncherFields(p: HeadlessLauncherFieldsProps) {
             onChange={(e) => p.onProfile(e.target.value)}
             className={`${FIELD} w-auto`}
           >
-            {p.caps.sandbox_profiles.map((name) => <option key={name} value={name}>{name}</option>)}
+            {p.profiles.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
           <span data-testid="headless-max-profile" className="text-xs text-text-muted">
             {t('newtab.headless.max_profile', { profile: p.caps.sandbox_max_profile })}

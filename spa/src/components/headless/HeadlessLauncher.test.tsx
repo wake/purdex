@@ -300,3 +300,52 @@ describe('HeadlessLauncher ready form', () => {
     expect(delegate).toHaveBeenCalledTimes(1)
   })
 })
+
+// Permission channel §5.6: v1 offers the asking mode only on a handoff, never for New Tab — the select must not
+// list the profile that carries the channel, even though the host's capabilities do (its max_profile allows it).
+describe('HeadlessLauncher — New Tab does not offer the asking mode (permission channel §5.6)', () => {
+  const PERMS = { profiles: ['handoff_ask'], answer: { method: 'POST', path: '/api/nex/v1/executions/{id}/permissions/{request_id}' }, timeout: { max_s: 86400 } }
+  const askHost = (over: Partial<NexCapabilities> = {}) => seedReady(caps({
+    sandbox_profiles: ['readonly', 'standard', 'trusted', 'handoff_ask', 'handoff'], permissions: PERMS, ...over,
+  }))
+  const offered = () => Array.from(profile().options).map((o) => o.value)
+
+  it('the profile select leaves handoff_ask out; the host ceiling line is unchanged', () => {
+    askHost()
+    renderLauncher()
+    expect(offered()).toEqual(['readonly', 'standard', 'trusted', 'handoff'])
+    expect(profile().value).toBe('standard')
+    expect(screen.getByTestId('headless-max-profile')).toHaveTextContent('handoff')
+  })
+
+  it('leaves out every profile the host says carries the channel, and handoff_ask even without the capability', () => {
+    askHost({ sandbox_profiles: ['standard', 'ask_more', 'handoff'], permissions: { ...PERMS, profiles: ['ask_more'] } })
+    const { unmount } = renderLauncher()
+    expect(offered()).toEqual(['standard', 'handoff'])
+    unmount()
+    askHost({ permissions: undefined })
+    renderLauncher()
+    expect(offered()).not.toContain('handoff_ask')
+  })
+
+  it('a remembered handoff_ask is not restored: the host default is preselected and sent', async () => {
+    askHost()
+    useHeadlessLauncherMemoryStore.setState({ byHost: { [H]: { root: '/srv/dev', profile: 'handoff_ask' } } })
+    renderLauncher()
+    expect(profile().value).toBe('standard')
+    typeBrief('go')
+    fireEvent.click(submit())
+    await waitFor(() => expect(delegate).toHaveBeenCalledTimes(1))
+    expect(delegate.mock.calls[0][1]).toMatchObject({ profile: 'standard' })
+  })
+
+  it('a host whose default profile is handoff_ask: the first offered profile is preselected and sent instead', async () => {
+    askHost({ sandbox_default_profile: 'handoff_ask' })
+    renderLauncher()
+    expect(profile().value).toBe('readonly')
+    typeBrief('go')
+    fireEvent.click(submit())
+    await waitFor(() => expect(delegate).toHaveBeenCalledTimes(1))
+    expect(delegate.mock.calls[0][1]).toMatchObject({ profile: 'readonly' })
+  })
+})

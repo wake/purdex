@@ -15,6 +15,7 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useHeadlessLauncherMemoryStore } from '../../stores/useHeadlessLauncherMemoryStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHeadlessLaunchSubmit } from '../../hooks/useHeadlessLaunchSubmit'
+import { ASK_PROFILE } from '../../lib/nex/handoff'
 import { HeadlessLauncherFields } from './HeadlessLauncherFields'
 
 interface Props {
@@ -73,6 +74,15 @@ function pick(choice: string | null, remembered: string | undefined, offered: st
   return fallback
 }
 
+/**
+ * The profiles New Tab offers: the host's, minus those that carry the permission channel (permission channel §5.6 —
+ * v1 asks only on a handoff). `capabilities.permissions.profiles` names them; `handoff_ask` is left out regardless.
+ */
+function newTabProfiles(caps: NexCapabilities): string[] {
+  const asking = new Set([ASK_PROFILE, ...(caps.permissions?.profiles ?? [])])
+  return caps.sandbox_profiles.filter((p) => !asking.has(p))
+}
+
 function HeadlessForm({ hostId, caps, onSelect }: Props & { caps: NexCapabilities }) {
   const remembered = useHeadlessLauncherMemoryStore((s) => s.byHost[hostId])
   const [brief, setBrief] = useState('')
@@ -83,7 +93,10 @@ function HeadlessForm({ hostId, caps, onSelect }: Props & { caps: NexCapabilitie
 
   const rootPaths = caps.roots.map((r) => r.path)
   const root = pick(rootChoice, remembered?.root, rootPaths, rootPaths[0] ?? '')
-  const profile = pick(profileChoice, remembered?.profile, caps.sandbox_profiles, caps.sandbox_default_profile)
+  const profiles = newTabProfiles(caps)
+  // A host default New Tab does not offer (an asking one) falls to the first profile it does.
+  const defaultProfile = profiles.includes(caps.sandbox_default_profile) ? caps.sandbox_default_profile : (profiles[0] ?? caps.sandbox_default_profile)
+  const profile = pick(profileChoice, remembered?.profile, profiles, defaultProfile)
   const maxBytes = caps.brief?.max_bytes ?? DEFAULT_BRIEF_MAX_BYTES
   const usedBytes = utf8ByteLength(brief)
   const subVerdict = validateSubPath(sub)
@@ -104,6 +117,7 @@ function HeadlessForm({ hostId, caps, onSelect }: Props & { caps: NexCapabilitie
       sub={sub}
       subVerdict={subVerdict}
       profile={profile}
+      profiles={profiles}
       busy={busy}
       canSubmit={canSubmit}
       error={error}
