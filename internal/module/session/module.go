@@ -183,18 +183,25 @@ func (m *SessionModule) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (m *SessionModule) Start(ctx context.Context) error {
-	if err := m.meta.ResetStaleModes(); err != nil {
-		return err
+	// Step timings (#1767): observation only.
+	st := core.NewStepTimer(nil)
+	var resetErr error
+	st.Run("resetStaleModes", func() { resetErr = m.meta.ResetStaleModes() })
+	if resetErr != nil {
+		return resetErr
 	}
 
 	// Install tmux hooks (log warning on error, don't fail startup). The
 	// outcome seeds the watcher, which retries a failed install once a
 	// server is up (#1473 spec D3).
-	m.hooksMu.Lock()
-	m.hooksStopped = false
-	err := m.installTmuxHooks()
-	m.wstate.setHooksInstalled(err, "")
-	m.hooksMu.Unlock()
+	var err error
+	st.Run("installTmuxHooks", func() {
+		m.hooksMu.Lock()
+		m.hooksStopped = false
+		err = m.installTmuxHooks()
+		m.wstate.setHooksInstalled(err, "")
+		m.hooksMu.Unlock()
+	})
 	if err != nil {
 		log.Printf("session: failed to install tmux hooks: %v (continuing without push; the watcher retries)", err)
 	}
@@ -203,11 +210,13 @@ func (m *SessionModule) Start(ctx context.Context) error {
 	watchCtx, cancel := context.WithCancel(ctx)
 	m.cancelWatch = cancel
 	m.runCtx = watchCtx
-	state := m.tmux.ServerState()
+	var state tmux.ServerState
+	st.Run("serverState", func() { state = m.tmux.ServerState() })
 	m.wstate.setTmuxAlive(state == tmux.ServerUp)
 	m.recordServerState(state)
 	m.core.TmuxAliveFunc = m.TmuxAlive
 	m.watchSessions(watchCtx)
+	log.Printf("session: start: %s", st)
 
 	// OnSubscribe: the current tmux value first (#1474 spec D3; it never
 	// waits on a tmux read), then the initial sessions snapshot.
