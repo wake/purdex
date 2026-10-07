@@ -25,6 +25,7 @@ import { useExecutionStore } from '../stores/useExecutionStore'
 import { useHostConfigStore } from '../stores/useHostConfigStore'
 import { useEditorStore } from '../stores/useEditorStore'
 import { bufferKey } from '../lib/editor-buffer-key'
+import { handleNotificationClick } from '../hooks/useNotificationDispatcher'
 import {
   clearAllBuiltinModuleRegistries,
   resetAndRegisterBuiltinModules,
@@ -117,6 +118,7 @@ vi.mock('../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
 
 const H = 'h'
 const EXEC = 'exc_1'
+const EXEC2 = 'exc_2'
 const FILE = '/notes/a.txt'
 
 const tmux = (code: string): PaneContent =>
@@ -133,7 +135,10 @@ const TW = tab('tW', split('sW', leaf('worker', { kind: 'execution', executionId
   leaf('editor', { kind: 'editor', source: { type: 'inapp' }, filePath: FILE })))
 /** Tab B: somewhere else to switch to. */
 const TB = tab('tB', leaf('dash', { kind: 'dashboard' }))
-const ALL = [TA, TW, TB]
+/** Tab WW: two workers (#1840 A1). */
+const TWW = tab('tWW', split('sWW', leaf('w1', { kind: 'execution', executionId: EXEC, host: H }),
+  leaf('w2', { kind: 'execution', executionId: EXEC2, host: H })))
+const ALL = [TA, TW, TB, TWW]
 
 let view: RenderResult
 let domFocus: MockInstance<HTMLElement['focus']>
@@ -196,7 +201,7 @@ beforeEach(() => {
     activeTabId: null,
     visitHistory: [],
   })
-  usePaneFocusStore.setState({ recent: {} })
+  usePaneFocusStore.setState({ recent: {}, focusRequest: null })
   useHostStore.setState({
     hosts: { [H]: { id: H, name: H, ip: '127.0.0.1', port: 7860, order: 0 } },
     hostOrder: [H],
@@ -209,12 +214,14 @@ beforeEach(() => {
   useHostConfigStore.setState({ byHost: {}, ensureLoaded: async () => {} })
 
   useExecutionStore.setState({ executions: {} })
-  useExecutionStore.getState().setSummary(H, EXEC, {
-    id: EXEC, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/Users/w/repo', mount_kind: 'dev', brief: 'b',
-    labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 1, archived: false,
-    effective_profile: 'standard', turn_count: 0,
-  } as never)
-  useExecutionStore.getState().setHistoryLoaded(H, EXEC, true)
+  for (const id of [EXEC, EXEC2]) {
+    useExecutionStore.getState().setSummary(H, id, {
+      id, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/Users/w/repo', mount_kind: 'dev', brief: 'b',
+      labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 1, archived: false,
+      effective_profile: 'standard', turn_count: 0,
+    } as never)
+    useExecutionStore.getState().setHistoryLoaded(H, id, true)
+  }
 
   useEditorStore.getState().clearAllBuffers()
   useEditorStore.getState().openBuffer(bufferKey({ type: 'inapp' }, FILE), 'hello', {
@@ -492,5 +499,83 @@ describe('pane focus — a worker send coming back (spec §8.3)', () => {
     await settle()
     expect(domFocusOn(workerBox())).toBe(1)
     expect(monaco().focus).not.toHaveBeenCalled()
+  })
+})
+
+// --- 4. an explicit request: a notification click (#1840 review A1) ----------------------------------------------
+
+describe('pane focus — a notification click focuses the notified pane (#1840 review A1)', () => {
+  /** Like App: the active tab is read from the store, so a click's writes and the tab's activation are one commit. */
+  function Shell() {
+    const tabs = useTabStore((s) => s.tabs)
+    const activeTabId = useTabStore((s) => s.activeTabId)
+    return <TabContent activeTab={activeTabId ? tabs[activeTabId] : null} allTabs={ALL} />
+  }
+  const mountShell = (activeTabId: string) => {
+    useTabStore.setState({ activeTabId })
+    view = render(<Shell />)
+  }
+  const click = (sessionCode: string) => act(() => { handleNotificationClick({ kind: 'open-session', hostId: H, sessionCode }) })
+
+  it('two terminals, the tab on screen, the left one in use: a notification for the right → only the right focuses, once', async () => {
+    mountShell('tA')
+    await settle()
+    await firstData()
+    const { left, right } = terms()
+    fireEvent.pointerDown(left.el!)
+    clearFocusCalls()
+
+    click('c2')
+    await settle()
+    expect(right.focus).toHaveBeenCalledTimes(1)
+    expect(left.focus).not.toHaveBeenCalled()
+
+    // Used once: the user goes back to the left; later renders never pull focus to the right again.
+    fireEvent.pointerDown(left.el!)
+    clearFocusCalls()
+    view.rerender(<Shell />)
+    await settle()
+    expect(right.focus).not.toHaveBeenCalled()
+  })
+
+  it('two terminals, another tab on screen: the click shows the tab and only the right terminal focuses, exactly once', async () => {
+    mountShell('tA')
+    await settle()
+    await firstData()
+    const { left, right } = terms()
+    fireEvent.pointerDown(left.el!)
+    act(() => { useTabStore.getState().setActiveTab('tB') })
+    await settle()
+    clearFocusCalls()
+
+    click('c2')
+    expect(useTabStore.getState().activeTabId).toBe('tA')
+    await settle()
+    expect(right.focus).toHaveBeenCalledTimes(1)
+    expect(left.focus).not.toHaveBeenCalled()
+  })
+
+  it('two workers, the tab on screen, typing in the first: a notification for the second → its reply box has the focus', async () => {
+    mountShell('tWW')
+    await settle()
+    const [box1, box2] = screen.getAllByTestId('execution-view').map((v) => v.querySelector('textarea')!)
+    fireEvent.pointerDown(box1)
+    act(() => box1.focus())
+    clearFocusCalls()
+
+    click(`exec-${EXEC2}`)
+    await settle()
+    expect(document.activeElement).toBe(box2)
+    expect(domFocusOn(box2)).toBe(1)
+    expect(domFocusOn(box1)).toBe(0)
+
+    // Used once: back in the first box, later renders leave the focus there.
+    fireEvent.pointerDown(box1)
+    act(() => box1.focus())
+    clearFocusCalls()
+    view.rerender(<Shell />)
+    await settle()
+    expect(document.activeElement).toBe(box1)
+    expect(domFocusOn(box2)).toBe(0)
   })
 })

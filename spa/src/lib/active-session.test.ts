@@ -146,4 +146,17 @@ describe('isAgentVisibleInActiveTab (#1840)', () => {
     useTabStore.setState({ tabs: { t1: tab('t1', split('s1', [blank('p1'), tmux('p2', 'h', 'abc123')])) }, activeTabId: 't1' })
     expect(getActiveSessionInfo()).toBeNull()
   })
+
+  // #1840 review A2: an ended pane's code may be a NEW live session's (tmux restarts reuse `$N`); it shows nothing.
+  it('an ended (terminated) pane in the active tab does not show the agent', () => {
+    const ended = (id: string): PaneLayout =>
+      ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId: 'h', sessionCode: 'abc123', mode: 'terminal', cachedName: '', tmuxInstance: '', terminated: 'tmux-restarted' } } })
+    useTabStore.setState({ tabs: { t1: tab('t1', ended('p1')) }, activeTabId: 't1' })
+    expect(isAgentVisibleInActiveTab('h', 'abc123')).toBe(false)
+    useTabStore.setState({ tabs: { t1: tab('t1', split('s1', [blank('p1'), ended('p2')])) }, activeTabId: 't1' })
+    expect(isAgentVisibleInActiveTab('h', 'abc123')).toBe(false)
+    // An ended primary next to the live session in a secondary pane: the live one is on screen.
+    useTabStore.setState({ tabs: { t1: tab('t1', split('s1', [ended('p1'), tmux('p2', 'h', 'abc123')])) }, activeTabId: 't1' })
+    expect(isAgentVisibleInActiveTab('h', 'abc123')).toBe(true)
+  })
 })

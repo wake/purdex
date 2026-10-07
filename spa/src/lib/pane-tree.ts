@@ -109,12 +109,17 @@ export function findTabBySessionCode(
 }
 
 /**
- * Does one pane show the agent key `hostId`/`sessionCode`? The matching rules of `findTabBySessionCode`, applied to
- * a single pane: a `tmux-session` on that host and code, or a worker (execution) pane whose `exec-<executionId>` is
- * the code on its resolved host (the pane's host hint, else the first host).
+ * Does one pane show the agent key `hostId`/`sessionCode`? The matching rules of `findTabBySessionCode` applied to
+ * a single pane, except that a tmux pane must be live: a `tmux-session` on that host and code that has not ended, or
+ * a worker (execution) pane whose `exec-<executionId>` is the code on its resolved host (the pane's host hint, else
+ * the first host).
+ *
+ * An ended (`terminated`) tmux pane shows nothing (#1840 review A2): a code encodes tmux's `$N`, which a restarted
+ * tmux server hands out again, so the ended pane's code can be a NEW live session's. Execution panes carry no ended
+ * marker (an execution id is never reused), so they have no such case.
  */
 export function paneShowsAgent(content: PaneContent, hostId: string, sessionCode: string): boolean {
-  if (content.kind === 'tmux-session') return content.hostId === hostId && content.sessionCode === sessionCode
+  if (content.kind === 'tmux-session') return !content.terminated && content.hostId === hostId && content.sessionCode === sessionCode
   if (content.kind === 'execution') return execAgentCode(content.executionId) === sessionCode && resolveExecutionHostId(content.host) === hostId
   return false
 }
@@ -125,7 +130,8 @@ export function paneShowsAgent(content: PaneContent, hostId: string, sessionCode
  * as one in its primary pane. `findTabBySessionCode` stays primary-only for its own semantics.
  *
  * When several panes match, a primary pane wins (the first tab, in `tabs` order, whose primary pane matches); else
- * the first matching leaf, in layout order, of the first tab that has one.
+ * the first matching leaf, in layout order, of the first tab that has one. Only live panes match (`paneShowsAgent`):
+ * an ended pane on the same code is never found, whatever its place.
  */
 export function findTabAndPaneBySessionCode(
   tabs: Record<string, { layout: PaneLayout }>,

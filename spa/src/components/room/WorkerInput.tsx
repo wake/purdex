@@ -8,7 +8,7 @@ import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react
 import { Plus } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { canSend, type Chip } from '../../lib/nex/worker-upload'
-import { useActivationFocus } from '../../hooks/useActivationFocus'
+import { useActivationFocus, type FocusCause } from '../../hooks/useActivationFocus'
 import UploadChips from './UploadChips'
 import { shouldNavigate, type HistoryDir, type RecallMark } from '../../hooks/useInputHistory'
 
@@ -94,9 +94,11 @@ export default function WorkerInput({
 
   // Shell cleanup spec §8.2: the reply box focuses itself only at activation
   // (its tab shown, or mounting in the active tab), as the tab's focus target.
-  const focusInput = useCallback(() => {
+  // `force`: an explicit request for this pane (a notification click, #1840 A1) — the reader asked to come here, so
+  // a field they were typing in elsewhere does not keep the focus.
+  const focusInput = useCallback((force = false) => {
     const ta = textareaRef.current
-    if (ta && !typingElsewhere(ta)) ta.focus()
+    if (ta && (force || !typingElsewhere(ta))) ta.focus()
   }, [])
   // A disabled box cannot take focus (history still loading, the stream not
   // back yet), so an activation that finds it disabled stays pending: the
@@ -105,15 +107,15 @@ export default function WorkerInput({
   // cancels it, so a pending focus always belongs to the active tab's focus
   // target. No other enabling of the box focuses it; a send coming back does
   // (below).
-  const pendingActivationRef = useRef(false)
-  const focusAtActivation = useCallback(() => {
+  const pendingActivationRef = useRef<FocusCause | null>(null)
+  const focusAtActivation = useCallback((cause: FocusCause) => {
     // The box is readOnly + aria-disabled (not `disabled`, see the textarea), so ask the attribute.
-    if (textareaRef.current?.getAttribute('aria-disabled') === 'true') pendingActivationRef.current = true
-    else focusInput()
+    if (textareaRef.current?.getAttribute('aria-disabled') === 'true') pendingActivationRef.current = cause
+    else focusInput(cause === 'request')
   }, [focusInput])
   useActivationFocus(isActive, isFocusTarget, focusAtActivation, { raf: true })
   useEffect(() => {
-    if (!isActive || !isFocusTarget) pendingActivationRef.current = false
+    if (!isActive || !isFocusTarget) pendingActivationRef.current = null
   }, [isActive, isFocusTarget])
   // Read when a scheduled focus frame runs (here and after a send, below).
   const isActiveRef = useRef(isActive)
@@ -129,15 +131,16 @@ export default function WorkerInput({
   useEffect(() => {
     const enabled = prevDisabledRef.current && !disabled
     prevDisabledRef.current = disabled
-    if (!enabled || !pendingActivationRef.current) return
+    const pending = pendingActivationRef.current
+    if (!enabled || pending === null) return
     // This first enabling uses it up now, focused or not: if the box is
     // disabled again before the frame runs, the cleanup cancels this one
     // focus and a later enabling is not the activation (P5 re-review).
-    pendingActivationRef.current = false
+    pendingActivationRef.current = null
     // Checked again when the frame runs: a click on another pane before then
-    // cancels it (P5 review A1); the reader typing elsewhere keeps their field.
+    // cancels it (P5 review A1); the reader typing elsewhere keeps their field, unless they asked for this pane.
     const id = requestAnimationFrame(() => {
-      if (isActiveRef.current && isFocusTargetRef.current && !disabledRef.current) focusInput()
+      if (isActiveRef.current && isFocusTargetRef.current && !disabledRef.current) focusInput(pending === 'request')
     })
     return () => cancelAnimationFrame(id)
   }, [disabled, focusInput])

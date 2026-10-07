@@ -651,3 +651,38 @@ describe('findTabAndPaneBySessionCode / paneShowsAgent (#1840)', () => {
     expect(paneShowsAgent({ kind: 'dashboard' }, 'h', 'abc123')).toBe(false)
   })
 })
+
+// #1840 review A2: session codes encode tmux's `$N`, which a restarted tmux server hands out again, so an ENDED pane's
+// code can be a NEW live session's. An ended (terminated) pane shows no agent: it never matches.
+describe('an ended tmux pane shows no agent (#1840 A2)', () => {
+  const REASONS = ['session-closed', 'tmux-restarted', 'host-removed', 'conversation-ended'] as const
+  const ended = (id: string, code: string, reason: (typeof REASONS)[number] = 'tmux-restarted'): PaneLayout =>
+    ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId: 'h', sessionCode: code, mode: 'terminal', cachedName: '', tmuxInstance: 'old', terminated: reason } } })
+  const live = (id: string, code: string): PaneLayout =>
+    ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId: 'h', sessionCode: code, mode: 'terminal', cachedName: '', tmuxInstance: 'new' } } })
+
+  it('paneShowsAgent is false for a terminated tmux pane, whatever the reason', () => {
+    for (const reason of REASONS) {
+      const layout = ended('p1', 'abc123', reason)
+      expect(layout.type === 'leaf' && paneShowsAgent(layout.pane.content, 'h', 'abc123')).toBe(false)
+    }
+  })
+
+  it('a terminated primary and a live secondary on the same code → the live pane', () => {
+    const tabs = { t1: { layout: mkSplit('s1', 'h', [ended('p1', 'abc123'), live('p2', 'abc123')]) } }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toEqual({ tabId: 't1', paneId: 'p2' })
+  })
+
+  it('a terminated primary in an earlier tab does not win over a live secondary in a later tab', () => {
+    const tabs = {
+      t1: { layout: ended('p1', 'abc123') },
+      t2: { layout: mkSplit('s2', 'h', [mkLeaf('p2'), live('p3', 'abc123')]) },
+    }
+    expect(findTabAndPaneBySessionCode(tabs, 'h', 'abc123')).toEqual({ tabId: 't2', paneId: 'p3' })
+  })
+
+  it('a terminated pane alone → not found, as primary or as a secondary pane', () => {
+    expect(findTabAndPaneBySessionCode({ t1: { layout: ended('p1', 'abc123') } }, 'h', 'abc123')).toBeUndefined()
+    expect(findTabAndPaneBySessionCode({ t1: { layout: mkSplit('s1', 'h', [mkLeaf('p1'), ended('p2', 'abc123')]) } }, 'h', 'abc123')).toBeUndefined()
+  })
+})

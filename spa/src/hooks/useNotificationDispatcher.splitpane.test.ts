@@ -162,6 +162,8 @@ describe.each(kinds)('#1840: $name in a split tab', ({ code, content, event }) =
       handleNotificationClick({ kind: 'open-session', hostId: HOST, sessionCode: code })
       expect(useTabStore.getState().activeTabId).toBe('tS')
       expect(usePaneFocusStore.getState().recent.tS?.[0]).toBe('pS2')
+      // No activation happens in a tab on screen: the one-shot request moves the keyboard (#1840 A1).
+      expect(usePaneFocusStore.getState().focusRequest).toMatchObject({ tabId: 'tS', paneId: 'pS2', taken: false })
     })
   })
 
@@ -221,6 +223,78 @@ describe.each(kinds)('#1840: $name in a split tab', ({ code, content, event }) =
     openTabs([tab('tX', split('sX', [blank('pX1'), leaf('pX2', elsewhere)])), secondaryTab()], 'tX')
     fire()
     expect(showNotification).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #1840 review A2: a tmux restart hands `$N` out again, so an ENDED pane can carry a NEW live session's code. An ended
+// (terminated) pane is not "a tab of" the agent, does not count as "on screen", and never takes the click.
+describe('#1840 A2: an ended tmux pane is not the agent', () => {
+  const CODE = 'ses001'
+  const CK = `${HOST}:${CODE}`
+  const tmuxPane = (terminated?: 'tmux-restarted'): PaneContent =>
+    ({ kind: 'tmux-session', hostId: HOST, sessionCode: CODE, mode: 'terminal', cachedName: '', tmuxInstance: '', ...(terminated ? { terminated } : {}) })
+  const openTabs = (list: Tab[], activeTabId: string | null) =>
+    useTabStore.setState({ tabs: Object.fromEntries(list.map((t) => [t.id, t])), tabOrder: list.map((t) => t.id), activeTabId })
+  const otherTab = () => tab('tO', blank('pO'))
+  let showNotification: ReturnType<typeof vi.fn>
+  let dispatcher: { unmount: () => void } | null
+
+  const fire = () => {
+    dispatcher ??= renderHook(() => useNotificationDispatcher())
+    useAgentStore.setState({ lastEvents: { [CK]: { agent_type: 'cc', status: 'waiting', raw_event_name: 'PdxPermissionRequest', broadcast_ts: 2, detail: { tool_name: 'Bash' } } } })
+  }
+
+  beforeEach(() => {
+    __resetDebounceStateForTests()
+    localStorage.setItem(STORAGE_KEYS.NOTIFICATION_SEEN, JSON.stringify({ [CK]: 1 }))
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    useWorkspaceStore.getState().reset()
+    useAgentStore.setState({ lastEvents: {}, statuses: {}, unread: {}, subagents: {}, models: {}, agentTypes: {} })
+    useNotificationSettingsStore.setState({ agents: {} }) // notifyWithoutTab = false
+    useSessionStore.setState({ sessions: {}, activeHostId: null, activeCode: null })
+    useHostStore.setState({ hostOrder: [HOST] })
+    useShownHostsStore.setState({ ids: [HOST] })
+    usePaneFocusStore.setState({ recent: {} })
+    showNotification = vi.fn()
+    Object.defineProperty(window, 'electronAPI', { value: { showNotification, focusMyWindow: vi.fn() }, writable: true, configurable: true })
+    dispatcher = null
+  })
+
+  afterEach(() => {
+    dispatcher?.unmount()
+    vi.restoreAllMocks()
+    Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
+    localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN)
+  })
+
+  it('only an ended pane on the code: no tab, so quiet with notifyWithoutTab off', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    openTabs([tab('tE', split('sE', [blank('pE1'), leaf('pE2', tmuxPane('tmux-restarted'))])), otherTab()], 'tO')
+    fire()
+    expect(showNotification).not.toHaveBeenCalled()
+  })
+
+  it('only an ended pane on the code, its tab active and the App focused: not "on screen" — notifies with notifyWithoutTab on', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+    useNotificationSettingsStore.getState().setNotifyWithoutTab('cc', true)
+    openTabs([tab('tE', split('sE', [leaf('pE1', tmuxPane('tmux-restarted')), blank('pE2')])), otherTab()], 'tE')
+    fire()
+    expect(showNotification).toHaveBeenCalledTimes(1)
+  })
+
+  it('an ended primary and the live session in a secondary pane: the click lands on the live pane', () => {
+    openTabs([tab('tE', split('sE', [leaf('pE1', tmuxPane('tmux-restarted')), leaf('pE2', tmuxPane())])), otherTab()], 'tO')
+    handleNotificationClick({ kind: 'open-session', hostId: HOST, sessionCode: CODE })
+    expect(useTabStore.getState().activeTabId).toBe('tE')
+    expect(usePaneFocusStore.getState().recent.tE?.[0]).toBe('pE2')
+  })
+
+  it('an ended primary in an earlier tab, the live session in a later tab: the click lands on the live one', () => {
+    openTabs([tab('tE', leaf('pE', tmuxPane('tmux-restarted'))), tab('tL', split('sL', [blank('pL1'), leaf('pL2', tmuxPane())])), otherTab()], 'tO')
+    handleNotificationClick({ kind: 'open-session', hostId: HOST, sessionCode: CODE })
+    expect(useTabStore.getState().activeTabId).toBe('tL')
+    expect(usePaneFocusStore.getState().recent.tL?.[0]).toBe('pL2')
+    expect(usePaneFocusStore.getState().recent.tE).toBeUndefined()
   })
 })
 

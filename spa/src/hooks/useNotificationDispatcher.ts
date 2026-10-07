@@ -465,11 +465,11 @@ export function handleNotificationClick(action: NotificationAction): void {
         handled = true
       } else if (hit) {
         const { tabId, paneId } = hit
-        // The pane becomes its tab's most recently focused pane (usePaneFocusStore, rule F), before the tab is shown:
-        // the activation then focuses that pane rather than the one the user last worked in, and the status bar
-        // shows it. A tab already on screen gets no programmatic focus move (useActivationFocus focuses on activation
-        // only); the record still changes, so the next activation lands there.
-        usePaneFocusStore.getState().touch(tabId, paneId)
+        // The pane becomes its tab's most recently focused pane (usePaneFocusStore, rule F) and is asked to take focus,
+        // both before the tab is shown. A tab already on screen has no activation, so the one-shot request is what
+        // moves the keyboard there (#1840 A1) — the user must not type the reply into the pane they were in. A tab
+        // being shown serves the request with its activation's focus (useActivationFocus), so it focuses once.
+        usePaneFocusStore.getState().requestFocus(tabId, paneId)
         useTabStore.getState().setActiveTab(tabId)
         const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
         // No workspace = nobody has adopted the tab yet (features/workspace/lib/adopt-standalone.ts waits before
