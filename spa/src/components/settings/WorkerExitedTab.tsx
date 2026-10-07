@@ -35,7 +35,7 @@ export function WorkerExitedTab({ hostId }: { hostId?: string }) {
 
 function ExitedList({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
-  const { page, phase, error, unavailable, refetch } = useConversations(hostId, 'ended')
+  const { page, phase, error, unavailable, refetch } = useConversations(hostId, 'ended', 'normal')
   const [query, setQuery] = useState('')
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {

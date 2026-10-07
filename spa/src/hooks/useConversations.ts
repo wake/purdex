@@ -1,8 +1,8 @@
 // spa/src/hooks/useConversations.ts — one host's ended or gone conversations (GET /api/nex/conversations).
-// R-4-12: fetched on mount and on refetch() only; no live-list coupling (the daemon reuses a snapshot for 5 s).
+// `scope` (test | normal) is part of the identity. R-4-12: fetched on mount and on refetch() only; no live-list coupling (the daemon reuses a snapshot for 5 s).
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { HandoffApiError } from '../lib/nex/handoff-api'
-import { listConversations, type ConversationsPage, type ConversationState } from '../lib/nex/conversations-api'
+import { listConversations, type ConversationScope, type ConversationsPage, type ConversationState } from '../lib/nex/conversations-api'
 
 export interface UseConversations {
   page: ConversationsPage | null
@@ -24,22 +24,22 @@ interface State {
 
 const fresh = (key: string): State => ({ key, page: null, phase: 'loading', error: null, unavailable: false })
 
-// One pending request per (host, state), shared by every hook instance, StrictMode's double mount and refetch;
+// One pending request per (host, state, scope), shared by every hook instance, StrictMode's double mount and refetch;
 // removed when it settles, so a later refetch starts a new one.
 const pending = new Map<string, Promise<ConversationsPage>>()
 
-function sharedList(key: string, hostId: string, state: ConversationState): Promise<ConversationsPage> {
+function sharedList(key: string, hostId: string, state: ConversationState, scope?: ConversationScope): Promise<ConversationsPage> {
   const cur = pending.get(key)
   if (cur) return cur
-  const p = listConversations(hostId, state)
+  const p = listConversations(hostId, state, scope)
   pending.set(key, p)
   const clear = () => { if (pending.get(key) === p) pending.delete(key) }
   p.then(clear, clear)
   return p
 }
 
-export function useConversations(hostId: string, state: ConversationState): UseConversations {
-  const key = `${hostId}\u0000${state}`
+export function useConversations(hostId: string, state: ConversationState, scope?: ConversationScope): UseConversations {
+  const key = `${hostId}\u0000${state}\u0000${scope ?? ''}`
   const [st, setSt] = useState<State>(() => fresh(key))
   // token changes with the key and on unmount; a response for an older token is dropped.
   const run = useRef({ token: 0 })
@@ -47,7 +47,7 @@ export function useConversations(hostId: string, state: ConversationState): UseC
   const start = useCallback(() => {
     const r = run.current
     const mine = r.token
-    sharedList(key, hostId, state)
+    sharedList(key, hostId, state, scope)
       .then((page) => {
         if (run.current.token !== mine) return
         setSt({ key, page, phase: 'ready', error: null, unavailable: false })
@@ -58,7 +58,7 @@ export function useConversations(hostId: string, state: ConversationState): UseC
         const unavailable = err instanceof HandoffApiError && err.status === 404
         setSt((cur) => ({ ...(cur.key === key ? cur : fresh(key)), phase: 'error', error: code, unavailable }))
       })
-  }, [hostId, state, key])
+  }, [hostId, state, scope, key])
 
   useEffect(() => {
     const r = run.current

@@ -29,7 +29,28 @@ describe('useConversations', () => {
     expect(result.current.page).toBeNull()
     await waitFor(() => expect(result.current.phase).toBe('ready'))
     expect(result.current.page?.home).toBe('a')
-    expect(mock).toHaveBeenCalledWith('h1', 'ended')
+    expect(mock).toHaveBeenCalledWith('h1', 'ended', undefined)
+  })
+
+  it('passes scope to listConversations; scopes do not share a pending request', async () => {
+    const d1 = deferred<ConversationsPage>()
+    const d2 = deferred<ConversationsPage>()
+    mock.mockReturnValueOnce(d1.promise).mockReturnValueOnce(d2.promise)
+    const a = renderHook(() => useConversations('hs', 'ended', 'normal'))
+    const b = renderHook(() => useConversations('hs', 'ended', 'test'))
+    expect(mock).toHaveBeenCalledTimes(2)
+    expect(mock).toHaveBeenCalledWith('hs', 'ended', 'normal')
+    expect(mock).toHaveBeenCalledWith('hs', 'ended', 'test')
+    await act(async () => { d1.resolve(mk('n')); d2.resolve(mk('t')) })
+    expect(a.result.current.page?.home).toBe('n')
+    expect(b.result.current.page?.home).toBe('t')
+  })
+
+  it('the same scope shares one request', async () => {
+    mock.mockResolvedValue(mk('x'))
+    renderHook(() => useConversations('hq', 'gone', 'test'))
+    renderHook(() => useConversations('hq', 'gone', 'test'))
+    expect(mock).toHaveBeenCalledTimes(1)
   })
 
   it('drops a stale host response and fetches the new host', async () => {
