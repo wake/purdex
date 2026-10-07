@@ -299,7 +299,7 @@ func reasonSuffix(op team.RelayOp) string {
 // The two writes are not one transaction: a failure here is logged, and
 // the op is re-derived from its row by reconcileAwaitingOp at the next
 // begin of that session and by the boot reconciliation (P5a-2b).
-func (m *Module) afterClose(a team.Approval) {
+func (m *Module) afterClose(a team.Approval, rep *RelayReport) {
 	if a.Kind != team.KindSelfRelay {
 		return
 	}
@@ -308,7 +308,11 @@ func (m *Module) afterClose(a team.Approval) {
 		m.logf("[team] approval %s closed but its relay op is missing: ok=%v err=%v", a.ID, ok, err)
 		return
 	}
-	after, res, err := m.store.ReportRelay(op.ID, opReportForClosedRow(a, m.now()))
+	report := opReportForClosedRow(a, m.now())
+	if rep != nil {
+		report = *rep // a terminal report drove this close: its state and reason stand
+	}
+	after, res, err := m.store.ReportRelay(op.ID, report)
 	if err != nil {
 		m.logf("[team] approval %s %s: relay op %s: %v", a.ID, a.State, op.ID, err)
 		return

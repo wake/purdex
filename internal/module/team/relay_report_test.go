@@ -131,13 +131,15 @@ func TestRelayReport_CorruptLineageIs400NotStorageError(t *testing.T) {
 	if len(f.titles.moves) != 0 {
 		t.Fatalf("a refused cleared must move no title: %v", f.titles.moves)
 	}
-	// A second op clearing into a session that already heads a lineage row.
-	if code, _, _ := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-1b"}); code != http.StatusOK {
+	// A second op clearing into a session that already heads a lineage row
+	// — within the same process (pid 10), so the handler's process check
+	// passes and it is the store's lineage guard that answers.
+	if code, _, _ := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-1c"}); code != http.StatusOK {
 		t.Fatalf("cleared #1: %d", code)
 	}
-	o2 := f.begin("sid-2")
+	o2 := f.begin("sid-1b") // another live session of pid 10
 	f.decide(o2.RequestID, "approve")
-	code, _, ae = f.report(o2.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-1b"})
+	code, _, ae = f.report(o2.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-1c"})
 	if code != http.StatusBadRequest || ae.Error != team.ErrBadRequest || !strings.Contains(ae.Detail, "already heads the lineage") {
 		t.Fatalf("cleared into a taken head: %d %+v", code, ae)
 	}
@@ -249,6 +251,7 @@ func (f *fixture) reboot(titles TitleMover) *fixture {
 	g.m.logf = func(string, ...any) {}
 	g.m.now = func() int64 { return g.clock.Load() }
 	g.m.newID = sequentialIDs()
+	g.m.clearedWait, g.m.clearedPoll = 200*time.Millisecond, 10*time.Millisecond
 	if err := g.m.Init(f.core); err != nil {
 		f.t.Fatal(err)
 	}
@@ -385,9 +388,71 @@ func TestRelayReport_ClearedRefusesAnotherLiveConversation(t *testing.T) {
 	if !f.titles.has["sid-2"] || !f.titles.has["sid-1"] || len(f.titles.moves) != 0 {
 		t.Fatalf("title touched: has=%v moves=%v", f.titles.has, f.titles.moves)
 	}
-	// The legitimate target — a fresh id — goes through.
-	if code, op, _ := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-1b"}); code != http.StatusOK || op.NewSessionID != "sid-1b" {
-		t.Fatalf("cleared into a fresh id: %d %+v", code, op)
+	// A new id the registry does not show (yet): 503 not_ready after the
+	// bounded wait, nothing written — the mod retries at its next turn.
+	code, _, ae = f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-unregistered"})
+	if code != http.StatusServiceUnavailable || ae.Error != team.ErrNotReady {
+		t.Fatalf("cleared into an unregistered id: %d %+v", code, ae)
+	}
+	if got := f.op(out.Op.ID); got.State != team.RelayClaimed || got.NewSessionID != "" {
+		t.Fatalf("op after the not-ready cleared = %+v", got)
+	}
+	// The registry catches up while the handler waits: accepted.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		f.origins.mu.Lock()
+		f.origins.cleared["sid-late"] = 10
+		f.origins.mu.Unlock()
+	}()
+	if code, op, _ := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-late"}); code != http.StatusOK || op.NewSessionID != "sid-late" {
+		t.Fatalf("cleared into an id the registry showed during the wait: %d %+v", code, op)
+	}
+}
+
+// PR #1716 critic on A-4: a terminal report on an op still awaiting
+// approval closes the row FIRST through the same CAS an approve uses, so
+// the op is never cancelled underneath an approve that then succeeds.
+// (1) The report wins: row cancelled, op cancelled{compacted} (the report's
+// reason, not the mapping's "abandoned"), one closed event. (2) An approve
+// slips in just before the report's close: the row stays approved, the op
+// goes claimed → cancelled{compacted} — approved first, given up after.
+func TestRelayReport_TerminalReportClosesTheRowFirst(t *testing.T) {
+	f := newFixture(t)
+	out := f.begin("sid-1")
+	_ = f.events()
+	code, op, _ := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayCancelled, Error: team.RelayReasonCompacted})
+	if code != http.StatusOK || op.State != team.RelayCancelled || op.Reason != team.RelayReasonCompacted {
+		t.Fatalf("(1) report: %d %+v", code, op)
+	}
+	if row, _, _ := f.m.store.Get(out.RequestID); row.State != team.StateCancelled {
+		t.Fatalf("(1) row = %s, want cancelled", row.State)
+	}
+	closed := 0
+	for _, ev := range f.events() {
+		if ev.Op == "closed" {
+			closed++
+		}
+	}
+	if closed != 1 {
+		t.Fatalf("(1) closed events = %d, want 1", closed)
+	}
+
+	out2 := f.begin("sid-1")
+	f.m.beforeTerminalClose = func(id string) {
+		if id != out2.Op.ID {
+			t.Fatalf("seam for %s", id)
+		}
+		if code, body := f.decide(out2.RequestID, "approve"); code != http.StatusOK {
+			t.Fatalf("racing approve: %d %s", code, body)
+		}
+	}
+	code, op, _ = f.report(out2.Op.ID, team.RelayReportRequest{State: team.RelayCancelled, Error: team.RelayReasonCompacted})
+	f.m.beforeTerminalClose = nil
+	if code != http.StatusOK || op.State != team.RelayCancelled || op.Reason != team.RelayReasonCompacted {
+		t.Fatalf("(2) report after a racing approve: %d %+v", code, op)
+	}
+	if row, _, _ := f.m.store.Get(out2.RequestID); row.State != team.StateApproved {
+		t.Fatalf("(2) row = %s, want approved (the approve won the CAS)", row.State)
 	}
 }
 

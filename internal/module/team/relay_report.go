@@ -78,8 +78,31 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 		rep.NewRef = ipeers.RefID(rep.NewSessionID)
 		rep.Reason = ""
 		if code, detail := m.checkClearedTarget(id, rep.NewSessionID); code != 0 {
-			m.writeErr(w, code, team.ErrBadRequest, detail, nil)
+			apiErr := team.ErrBadRequest
+			if code == http.StatusServiceUnavailable {
+				apiErr = team.ErrNotReady
+			}
+			m.writeErr(w, code, apiErr, detail, nil)
 			return
+		}
+	}
+	if rep.State.Terminal() {
+		// A terminal report on an op still awaiting approval closes the
+		// approval row FIRST, through the same CAS an approve uses, and the
+		// winner's afterClose moves the op with this report's state and
+		// reason. So either this report wins (row cancelled, op as reported)
+		// or an approve did (row approved, op claimed — and the report
+		// below then cancels/fails the claimed op, a legal step): the op is
+		// never cancelled underneath an approve that is still to succeed.
+		if cur, ok, err := m.store.GetRelayOp(id); err == nil && ok && cur.State == team.RelayAwaitingApproval && cur.RequestID != "" {
+			if m.beforeTerminalClose != nil {
+				m.beforeTerminalClose(id) // test seam: the approve that races this report
+			}
+			if _, _, err := m.closeAsWithOp(cur.RequestID, Close{State: team.StateCancelled, DecidedAt: m.now()}, rep); err != nil && !errors.Is(err, ErrNoSuchApproval) {
+				m.logf("[team] relay report %s: close request %s: %v", id, cur.RequestID, err)
+				m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+				return
+			}
 		}
 	}
 	op, res, err := m.store.ReportRelay(id, rep)
@@ -130,29 +153,44 @@ func (m *Module) afterReport(op team.RelayOp) {
 }
 
 // checkClearedTarget guards a cleared's new_session_id (PR #1716 attacker
-// A-1): /clear keeps the Claude Code PROCESS and gives it a new session id,
-// so when the new id is already a live session on this host it must belong
-// to the same process as the op's origin. A new id not yet in the registry
-// is allowed (the mod reports cleared at SessionStart, which can precede the
-// registry write); a new id live under ANOTHER process is someone else's
-// conversation, whose title and ref this report would hijack — 400.
+// A-1 and the critic's TOCTOU): /clear keeps the Claude Code PROCESS and
+// gives it a new session id, so the new id must be a live session on this
+// host under the SAME process as the op's origin — a new id live under
+// another process is someone else's conversation, whose title and ref this
+// report would hijack (400). The registry learns the new id a moment after
+// /clear (measured 2026-10-07: ~0.6 s after Enter, the SessionStart hook in
+// the same second), so the handler waits up to clearedWait for it to
+// appear; a new id the registry still does not know is 503 not_ready, which
+// the mod retries at its next turn.complete (P5b-2) — the lineage is never
+// written for a session this host cannot vouch for.
 func (m *Module) checkClearedTarget(opID, newSessionID string) (code int, detail string) {
-	target, live, err := m.origins.ResolveOriginBySession(newSessionID)
-	if err != nil || !live {
-		return 0, "" // unknown to the registry: nothing to compare against
-	}
 	op, ok, err := m.store.GetRelayOp(opID)
-	if err != nil || !ok || op.RequestID == "" {
-		return 0, "" // a missing op is the store's 404 below; a member op (P6) has no row here
-	}
-	row, ok, err := m.store.Get(op.RequestID)
 	if err != nil || !ok {
-		return 0, ""
+		return 0, "" // a missing op is the store's 404 below
 	}
-	if row.Origin.PID != 0 && target.PID != row.Origin.PID {
-		return http.StatusBadRequest, "new_session_id " + newSessionID + " is live under another process (pid " + strconv.Itoa(target.PID) + ", the op's is " + strconv.Itoa(row.Origin.PID) + "); a cleared session keeps its process"
+	wantPID := 0
+	if op.RequestID != "" {
+		if row, ok, err := m.store.Get(op.RequestID); err == nil && ok {
+			wantPID = row.Origin.PID
+		}
 	}
-	return 0, ""
+	deadline := time.Now().Add(m.clearedWait)
+	for {
+		target, live, err := m.origins.ResolveOriginBySession(newSessionID)
+		if err != nil {
+			return http.StatusServiceUnavailable, "registry unreadable; retry: " + err.Error()
+		}
+		if live {
+			if wantPID != 0 && target.PID != wantPID {
+				return http.StatusBadRequest, "new_session_id " + newSessionID + " is live under another process (pid " + strconv.Itoa(target.PID) + ", the op's is " + strconv.Itoa(wantPID) + "); a cleared session keeps its process"
+			}
+			return 0, ""
+		}
+		if time.Now().After(deadline) {
+			return http.StatusServiceUnavailable, "new_session_id " + newSessionID + " is not (yet) a live session on this host; retry"
+		}
+		time.Sleep(m.clearedPoll)
+	}
 }
 
 // closeRequestOfReportedOp closes the op's approval row when a report put
