@@ -160,3 +160,9 @@ Files: `internal/module/modevents/module.go` (`RegisterRoutes`), `api.go`, `api_
 | 15 | `Reject` wiring | `WireError.Stream`; test (A1, A3) |
 | 16 | Unreliable ordering gate | Deterministic blocking-subscriber test (A2) |
 | 17 | Trailing JSON | `bad_json` row (A1) |
+
+## Review fold-in, PR 2/4 (codex R1 + attack + critic, 2026-10-08)
+
+- `Event.Data` is deep-copied when the registry stores an event, and again per subscriber delivery and per `Events` result. Test: mutating the source batch, a subscriber's copy or an `Events` result leaves the ring unchanged.
+- `MaxStreams` is a hard admission limit. `Apply(b) (ack int64, err error)` returns `ErrRegistryFull` when 256 streams are held, none is evictable (all pinned) and the batch's stream is new; `Reject` is then a no-op. The handler (PR 3/4) maps it to 503 `registry_full`. Test: 256 streams all blocked in a subscriber + more new streams concurrently → never more than 256, the extra `Apply`s get `ErrRegistryFull`.
+- Re-entrancy (attack A-1, critic: concern, not high): documented contract on `Subscribe` — a subscriber must not call `Apply` on the same registry directly or indirectly; checked when each subscriber is wired (U1-2).
