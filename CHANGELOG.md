@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.584] - 2026-10-08
+
+> 動 `pdx` 指令與接力 mod。**部署要換 binary 並重跑 `pdx setup --agent cc`**（mlab 已全域安裝 mod）。daemon 沒有改動，但 binary 換了，照常重啟。Mac App 使用者沒有可見變化：Mac App 不畫選擇題卡片（spec U19(b)），終端機的原生對話框照常；能回答的遠端客戶端（iOS）上線後才看得到效果。
+
+### Added：lead / member / team 與 context 接力 — P8a-2（#1843）
+
+AskUserQuestion「分流」的 mod 端（spec §6.6；plan v2 Task 8a.9）。
+
+- **終端機與遠端同時能答**：Claude Code 跳出選擇題時，終端機照常畫原生對話框；同時 mod 開一筆申請給連線中的客戶端。誰先答就用誰的；遠端先答時終端機的對話框立刻關閉並帶入答案，終端機先答時以終端機為準並通知 daemon。
+- **任何狀況都不擋終端機**：daemon 不通、沒有客戶端、回應看不懂、mod 自己出錯，一律退回原生對話框；終端機答完最多再等 3 秒就繼續。
+- **遠端答案要完整才收**：遠端答案必須剛好回答每一題，否則忽略、對話框照常。
+- **`pdx ask report --detach`**：終端機先答而 daemon 一時沒回應時，回報交給獨立的背景行程送出，hook 結束後仍會送達。
+- 已知限制：終端機先答且 daemon 超過 3 秒沒回應開題時，卡片可能與終端機答案不一致（#1848，iOS 開放回答前修）；daemon 端尚未驗證遠端答案與題目一致（#1845）。
+
+### Changed：P4-0（#1846）
+
+- `internal/module/team/relay_store.go` 依職責拆成五個檔（純搬移，逐宣告位元組比對證明，#1703）。
+
 ## [1.0.0-alpha.583] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。

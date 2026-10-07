@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -333,4 +335,78 @@ func TestRunAskCmd_WaitBoundReadsTheFinalState(t *testing.T) {
 	if s := seen(); len(s) < 2 || !strings.HasSuffix(s[len(s)-1], "?wait=0") {
 		t.Fatalf("the bound must end with one short read: %v", s)
 	}
+}
+
+// P8a-2 R2: the mod's terminal answer must reach the daemon even when the
+// report outlives the hook. `report --detach` starts the same report as a
+// setsid'd process (no --detach) and exits 0 at once without calling the
+// daemon itself. Mutation gates: keep --detach in the child's argv → the
+// argv check is red; call the daemon before detaching → the report count
+// is red.
+func TestRunAskCmd_ReportDetachStartsItselfWithoutTheFlag(t *testing.T) {
+	d := newFakeAskDaemon(t)
+	var got []string
+	old := startDetachedFn
+	t.Cleanup(func() { startDetachedFn = old })
+	startDetachedFn = func(args []string) error { got = append([]string(nil), args...); return nil }
+	code, stdout, stderr := driveAsk(t, d, time.Now, "report", "ask-1", "answered_local", "--hook", `{"answers":{"q?":"a"}}`, "--detach")
+	if code != ExitOK || stdout != "" || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if len(got) < 6 || got[0] != "ask" || got[1] != "report" || got[2] != "ask-1" || got[3] != "answered_local" || got[4] != "--hook" || got[5] != `{"answers":{"q?":"a"}}` {
+		t.Fatalf("detached argv = %q", got)
+	}
+	for _, a := range got {
+		if strings.TrimLeft(strings.SplitN(a, "=", 2)[0], "-") == "detach" {
+			t.Fatalf("the child must not detach again: %q", got)
+		}
+	}
+	if !strings.Contains(strings.Join(got, " "), "--config ") {
+		t.Fatalf("the child keeps --config: %q", got)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.reports) != 0 {
+		t.Fatalf("the detaching parent must not report itself: %d reports", len(d.reports))
+	}
+}
+
+func TestRunAskCmd_ReportDetachFailureIsExit1(t *testing.T) {
+	d := newFakeAskDaemon(t)
+	old := startDetachedFn
+	t.Cleanup(func() { startDetachedFn = old })
+	startDetachedFn = func([]string) error { return io.ErrClosedPipe }
+	code, stdout, stderr := driveAsk(t, d, time.Now, "report", "ask-1", "dismissed", "--detach")
+	if code != ExitError || stdout != "" || !strings.HasPrefix(stderr, "pdx ask: ") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestRunAskCmd_DetachOnlyOnReport(t *testing.T) {
+	for _, args := range [][]string{
+		{"wait", "a", "--detach"},
+		{"begin", "--session", "s", "--tool-use", "t", "--payload", "{}", "--detach"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := runAskCmd(context.Background(), args, &stdout, &stderr, time.Now); code != ExitUsage {
+			t.Errorf("%v: code=%d stderr=%q", args, code, stderr.String())
+		}
+	}
+}
+
+// startDetached really starts a process that runs on its own: a shell that
+// writes a file after the call has returned.
+func TestStartDetachedRunsOnItsOwn(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "ran")
+	if err := startDetachedExe("/bin/sh", []string{"-c", "sleep 0.2; echo ok > " + out}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(out); err == nil && strings.TrimSpace(string(b)) == "ok" {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("the detached process never ran")
 }

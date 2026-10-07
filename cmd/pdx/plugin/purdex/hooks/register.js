@@ -29,6 +29,11 @@
 // HookBudget; it asks the daemon nothing, the timers ask it and move the
 // state) and failing open; and /relay, on its daemon call (the person waits
 // for its output; 8 s bound).
+//
+// This file is the plugin's one hooks module (hooks/hooks.json names a single
+// path); it also registers ask.js, the AskUserQuestion 分流 (P8a-2).
+
+import { register as registerAsk } from './ask.js'
 
 const VERSION = '1' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
 const DEFAULT_THRESHOLD = 70
@@ -575,6 +580,8 @@ async function onSeedTurnDone($) {
 }
 
 export function register(on) {
+  registerAsk(on) // tool.call{AskUserQuestion} only: no event this module hooks below
+
   on('session.start', async ($, e, next) => {
     resetState()
     s.interactive = !!e.isInteractive
