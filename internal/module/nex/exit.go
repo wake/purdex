@@ -17,6 +17,15 @@ func needsTerminate(s store.State) bool {
 	return s == store.StateQueued || s == store.StateRunning || s == store.StateIdle
 }
 
+// exitWorker ends exec: terminate, then archive (§5's table). A control it
+// takes itself (ctl nil) is takeControl's: a pdx holder's lease preempted,
+// so the holder can write — send, answer a permission request — no more
+// (D22, ruling R-PC-1), borrowed only when the preempt stays contended
+// (D4); a non-pdx holder answers held_by and nothing changes. That control
+// is released on return, after the archive, and so also when the
+// terminate or the archive fails: the preempted holder can re-attach. A
+// given ctl (the caller's own lease, a transfer's control) is used as is
+// and never released here.
 func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *control, principal string) (exitOutcome, *handoffError) {
 	out := exitOutcome{Terminated: exec.State == store.StateTerminated, Archived: exec.ArchivedAt != 0, State: exec.State}
 	var termErr *handoffError // a failed terminate; reported only if the archive cannot stand in for it
@@ -100,12 +109,14 @@ func (m *Module) exitWorker(parent context.Context, exec store.Execution, ctl *c
 				m.logf("nex: exit %s: no control for the archive (%s); not archiving", exec.ID, herr.msg)
 				return out, herr
 			}
-			// A borrowed lease may be near its end: renew it before the
-			// archive, or — gone, expired, someone else's — take control again
-			// (a non-pdx holder refused, D4). renewControl hands back the
-			// control to release: an own lease (the one taken, or the re-take's)
-			// carries its release, a borrowed one noRelease. A transfer's
-			// control (ctl) is the transfer's to renew.
+			// The control taken — preempted (an own lease, D22) or, on the
+			// contention fall back, borrowed and maybe near its end — is
+			// renewed before the archive, or — gone, expired, someone else's —
+			// control is taken again the same way (a non-pdx holder refused,
+			// D4). renewControl hands back the control to release: an own
+			// lease (the one taken, or the re-take's) carries its release, a
+			// borrowed one noRelease. A transfer's control (ctl) is the
+			// transfer's to renew.
 			renewed, herr := m.renewControl(parent, exec.ID, got, principal)
 			own = renewed
 			if herr != nil {
@@ -231,9 +242,10 @@ func (m *Module) handleExitWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A caller's lease is validated before it is acted under: renewControl
-	// renews it, and re-takes control (refusing a non-pdx holder) when it is
-	// stale or not the caller's. A row that needs no terminate ignores it:
-	// exitWorker takes control for that archive itself (#1665).
+	// renews it, and re-takes control when it is stale or not the caller's
+	// — preempting a pdx holder like any exit (D22), refusing a non-pdx one.
+	// A row that needs no terminate ignores it: exitWorker takes control for
+	// that archive itself (#1665).
 	var ctl *control
 	if body.LeaseID != "" && needsTerminate(exec.State) {
 		c, herr := m.renewControl(r.Context(), execID, control{LeaseID: body.LeaseID, PrincipalID: principal, release: noRelease}, principal)

@@ -287,6 +287,24 @@ func TestWorkerRebuildFixRound1(t *testing.T) {
 		assert.Empty(t, env.svc.Requests())
 		assert.Empty(t, env.svc.ArchiveCalls())
 	})
+	// Plan Task 5a (b), ruling R-PC-1: the replaced row's exit preempts a pdx
+	// tab's lease (D22) before the terminate, so that tab can no longer send
+	// or answer a permission request; the new stint is delegated after.
+	t.Run("replacing a live row a pdx tab holds preempts that tab's lease", func(t *testing.T) {
+		env := newHandoffEnv(t)
+		lb := liveLease("L-b", tab2)
+		rebuildStore(env).script(withLease(store.Execution{ID: "E1", State: store.StateIdle, SessionID: rbS}, lb))
+		env.svc.enforceLease = true
+		env.svc.heldLease = lb
+		env.svc.lease = store.Lease{ID: "L-own"}
+		env.svc.result = execution.Result{ID: "N1", State: store.StateIdle}
+		probe := probeAtTerminate(env.svc, "E1", lb)
+		code, out := rebuildPost(t, env, `{"session_id":"`+rbS+`","cwd":"/w","replace_execution_id":"E1"}`)
+		require.Equal(t, 200, code, "%v", out)
+		assert.Equal(t, []string{"acquire", "release", "acquire", "terminate", "archive", "release", "delegate"}, env.svc.Calls())
+		assert.Equal(t, []releaseCall{{"E1", lb.ID, tab2}, {"E1", "L-own", "pdx:host1"}}, env.svc.releases)
+		probe.assertRefused(t)
+	})
 	t.Run("delegate failing after a replace exit reports replaced_exited", func(t *testing.T) {
 		env := newHandoffEnv(t)
 		rebuildStore(env).script(store.Execution{ID: "F1", State: store.StateFailed, SessionID: rbS})

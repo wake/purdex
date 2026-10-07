@@ -98,6 +98,32 @@ func TestManualResume_ExitsLiveWorkersAndBroadcasts(t *testing.T) {
 	}
 }
 
+// Plan Task 5a (b), ruling R-PC-1: Q1's exit preempts a pdx tab's lease
+// like any exit (D22) — the tab's lease released as the holder, an own one
+// acquired, terminate + archive under it, released after — so from the
+// preempt on that tab's send or permission answer is refused, before the
+// worker ends.
+func TestManualResume_PreemptsAPdxHoldersLease(t *testing.T) {
+	const self = "pdx:" + testHostID
+	env := newHandoffEnv(t)
+	liveTerminal(env, true)
+	lb := liveLease("L-b", tab2)
+	fakeStore(env).listRows = []store.Execution{withLease(row("E1", "idle", false, tS, "", 1), lb)}
+	env.svc.enforceLease = true
+	env.svc.heldLease = lb
+	env.svc.lease = store.Lease{ID: "L-d"}
+	probe := probeAtTerminate(env.svc, "E1", lb)
+
+	env.m.onSessionStart(ev("resume"))
+
+	assert.Equal(t, []string{"acquire", "release", "acquire", "terminate", "archive", "release"}, env.svc.Calls())
+	assert.Equal(t, []releaseCall{{"E1", lb.ID, tab2}, {"E1", "L-d", self}}, env.svc.releases)
+	require.Len(t, env.svc.terminateCalls, 1)
+	assert.Equal(t, "L-d", env.svc.terminateCalls[0].LeaseID)
+	assert.Equal(t, self, env.svc.terminateCalls[0].PrincipalID)
+	probe.assertRefused(t)
+}
+
 func TestManualResume_DoesNothingWhen(t *testing.T) {
 	cases := map[string]func(env *handoffEnv) agent.SessionStartEvent{
 		"source is clear":   func(env *handoffEnv) agent.SessionStartEvent { liveTerminal(env, true); return ev("clear") },
