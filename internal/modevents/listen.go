@@ -2,6 +2,7 @@ package modevents
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net"
@@ -36,29 +37,41 @@ const staleProbe = 200 * time.Millisecond
 // another user; Listen captures it.
 var peerUID = connPeerUID
 
-// Listen binds the mod socket at path. The directory must be a real
-// directory owned by the effective uid and not group- or other-writable,
-// so only this user can have put anything at the path. A dead socket left
-// there is removed; a live one, or anything that is not a socket, is left
-// alone and the channel stays disabled. The socket is chmod 0600.
+// Listen binds the mod socket at path. Its directory is resolved with
+// EvalSymlinks and the socket is bound in the resolved directory. That
+// directory must be owned by the effective uid and not group- or
+// other-writable, and every ancestor up to / must be owned by that uid or
+// by root and be either not group- or other-writable or sticky (spec
+// §6.1): no other user can rename or replace any component of the path, so
+// only this user can have put anything at it. A dead socket left there is
+// removed; a live one, or anything that is not a socket, is left alone and
+// the channel stays disabled. The socket is chmod 0600.
 //
 // The returned listener only hands out connections whose peer uid is the
 // daemon's effective uid; others are closed before a byte is read. That
 // check is the gate, the file mode is defence in depth. Closing the
-// listener unlinks the socket; a second Close is a no-op.
+// listener unlinks the socket at the resolved path it was bound at; a
+// second Close is a no-op.
 func Listen(path string) (net.Listener, Status) {
 	if len(path) > MaxSocketPath {
 		return nil, Status{Reason: ReasonPathTooLong}
 	}
-	euid := os.Geteuid()
-	dir := filepath.Dir(path)
-	fi, err := os.Lstat(dir)
+	dir, err := filepath.Abs(filepath.Dir(path))
+	if err == nil {
+		dir, err = filepath.EvalSymlinks(dir)
+	}
 	if err != nil {
-		log.Printf("[modevents] socket dir %s: %v", dir, err)
+		log.Printf("[modevents] socket dir %s: %v", filepath.Dir(path), err)
 		return nil, Status{Reason: ReasonListenFailed}
 	}
-	if !safeDir(fi, euid) {
-		log.Printf("[modevents] socket dir %s is not a directory owned by uid %d and closed to group and others (%v)", dir, euid, fi.Mode())
+	path = filepath.Join(dir, filepath.Base(path))
+	if len(path) > MaxSocketPath {
+		log.Printf("[modevents] resolved socket path %s is longer than %d bytes", path, MaxSocketPath)
+		return nil, Status{Reason: ReasonPathTooLong}
+	}
+	euid := os.Geteuid()
+	if err := securePath(dir, euid); err != nil {
+		log.Printf("[modevents] socket dir %s is unsafe: %v", dir, err)
 		return nil, Status{Reason: ReasonUnsafeDir}
 	}
 
@@ -92,9 +105,37 @@ func Listen(path string) (net.Listener, Status) {
 	return &peerListener{Listener: ln, euid: uint32(euid), peerUID: peerUID}, Status{Enabled: true}
 }
 
-func safeDir(fi fs.FileInfo, euid int) bool {
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	return ok && fi.IsDir() && int(st.Uid) == euid && fi.Mode().Perm()&0o022 == 0
+// securePath checks dir, an absolute path with its symlinks resolved, the
+// way OpenSSH's secure-path check does: dir itself is a directory owned by
+// euid and closed to group and others; every ancestor up to / is a
+// directory owned by euid or root, and either closed to group and others
+// or sticky (only an entry's owner may then rename or remove it). The
+// error names the first component that fails. It uses Lstat, so a
+// component swapped for a symlink after EvalSymlinks fails as not a
+// directory.
+func securePath(dir string, euid int) error {
+	for d := dir; ; d = filepath.Dir(d) {
+		fi, err := os.Lstat(d)
+		if err != nil {
+			return err
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok || !fi.IsDir() {
+			return fmt.Errorf("%s is not a directory (%v)", d, fi.Mode())
+		}
+		uid := int(st.Uid)
+		writable := fi.Mode().Perm()&0o022 != 0
+		if d == dir {
+			if uid != euid || writable {
+				return fmt.Errorf("%s (uid %d, %v) must be owned by uid %d and closed to group and others", d, uid, fi.Mode(), euid)
+			}
+		} else if (uid != euid && uid != 0) || (writable && fi.Mode()&os.ModeSticky == 0) {
+			return fmt.Errorf("ancestor %s (uid %d, %v) must be owned by uid %d or root, and closed to group and others or sticky", d, uid, fi.Mode(), euid)
+		}
+		if d == filepath.Dir(d) {
+			return nil
+		}
+	}
 }
 
 // peerListener closes every accepted connection whose peer is not euid.

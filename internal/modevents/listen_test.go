@@ -232,14 +232,17 @@ func TestListen_UnsafeDir(t *testing.T) {
 		}
 	}
 
-	// The data dir itself may not be a symlink.
+	// A symlinked data dir is checked where it points.
 	target := shortDir(t)
+	if err := os.Chmod(target, 0o777); err != nil {
+		t.Fatal(err)
+	}
 	link := filepath.Join(shortDir(t), "data")
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
 	if _, st := Listen(filepath.Join(link, SocketName)); st.Reason != ReasonUnsafeDir {
-		t.Fatalf("symlinked dir: %+v", st)
+		t.Fatalf("symlink to an unsafe dir: %+v", st)
 	}
 
 	// A missing dir cannot be listened in.
@@ -249,6 +252,100 @@ func TestListen_UnsafeDir(t *testing.T) {
 	// Too long a path is refused before anything is looked at.
 	if _, st := Listen("/tmp/" + strings.Repeat("a", 120) + "/mod.sock"); st.Reason != ReasonPathTooLong {
 		t.Fatalf("long path: %+v", st)
+	}
+	// So is a short path whose resolved form is too long.
+	long := filepath.Join(shortDir(t), strings.Repeat("d", 90))
+	if err := os.Mkdir(long, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	short := filepath.Join(shortDir(t), "l")
+	if err := os.Symlink(long, short); err != nil {
+		t.Fatal(err)
+	}
+	if p := filepath.Join(short, SocketName); len(p) > MaxSocketPath {
+		t.Fatalf("setup: %s is already too long", p)
+	}
+	if _, st := Listen(filepath.Join(short, SocketName)); st.Reason != ReasonPathTooLong {
+		t.Fatalf("long resolved path: %+v", st)
+	}
+	if ents, _ := os.ReadDir(long); len(ents) != 0 {
+		t.Fatalf("long resolved path: %d entries", len(ents))
+	}
+}
+
+// nestedDir makes <shortDir>/a/b, with b (0700) the socket dir and a set
+// to aMode, and returns b.
+func nestedDir(t *testing.T, aMode os.FileMode) string {
+	t.Helper()
+	a := filepath.Join(shortDir(t), "a")
+	b := filepath.Join(a, "b")
+	if err := os.MkdirAll(b, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(a, aMode); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Lstat(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode() & (os.ModePerm | os.ModeSticky); got != aMode {
+		t.Fatalf("setup: %s is %v, want %v", a, got, aMode)
+	}
+	return b
+}
+
+func TestListen_UnsafeAncestor(t *testing.T) {
+	// Whoever can write to a can rename b away and put their own in its
+	// place, however safe b itself is.
+	b := nestedDir(t, 0o777)
+	l, st := Listen(filepath.Join(b, SocketName))
+	if l != nil || st.Enabled || st.Reason != ReasonUnsafeDir {
+		t.Fatalf("Listen = %v, %+v; want unsafe_dir", l, st)
+	}
+	if ents, _ := os.ReadDir(b); len(ents) != 0 {
+		t.Fatalf("nothing may be created: %d entries", len(ents))
+	}
+}
+
+func TestListen_StickyAncestorIsFine(t *testing.T) {
+	// A sticky ancestor (like /tmp itself) only lets b's owner rename it.
+	b := nestedDir(t, 0o777|os.ModeSticky)
+	p := filepath.Join(b, SocketName)
+	l := mustListen(t, p)
+	defer l.Close()
+	if !dialable(p) {
+		t.Fatal("the socket must be live")
+	}
+}
+
+func TestListen_SymlinkedDirIsResolved(t *testing.T) {
+	target := shortDir(t)
+	link := filepath.Join(shortDir(t), "data")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(resolved, SocketName)
+
+	l := mustListen(t, filepath.Join(link, SocketName))
+	if !isSocket(want) {
+		t.Fatalf("no socket at %s", want)
+	}
+	if got := l.Addr().String(); got != want {
+		t.Fatalf("bound at %s, want %s", got, want)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the symlink must stay: %v, %v", fi, err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(want); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Close must unlink the socket in the resolved dir: %v", err)
 	}
 }
 
