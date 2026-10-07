@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.560] - 2026-10-08
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。這次重啟起，啟動預期再快約 5 秒（`[agent] start:` 的 `replayStatus=` 由約 5600 ms 降到 500 ms 以內）。SPA 沒有改動。
+
+### Changed：daemon 啟動時 `replayStatus` 不再為每個 session 重建全部投影（#1767，#1781）
+
+alpha.559 的耗時日誌指出剩下的啟動時間幾乎都在 agent 模組的 `replayStatus`（5618 ms／6727 ms）：它對每個 session 都重新讀全部 frame 並為每個 pane 各 fork 一次 `tmux display-message`（還順便付了一個被丟棄的 session code 查詢）。現在這一輪只載入投影一次、每個 pane 最多解析一次（快取只活在這一輪，失敗不快取）；武裝 probe intent 之前會重讀目標 frame 的 DB row，已被 sweep 刪除的 frame 不會被武裝。另外 `selectSessionProjection` 不再為被丟棄的 session code 付 `resolveSessionCode`。熱路徑（每個 hook 事件約 P 次 tmux fork）另開 #1777；一個既有的「frame 在讀取與武裝之間被刪」窗口另開 #1782。
+
 ## [1.0.0-alpha.559] - 2026-10-08
 
 > 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。只多了日誌，行為不變。SPA 沒有改動。
