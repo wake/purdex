@@ -49,10 +49,8 @@ func TestParsePaneIdentity(t *testing.T) {
 	}
 }
 
-// A failed identity read says "no such session" (ErrNoSession) only when
-// tmux said so: no server (a stale or absent socket) or a target it cannot
-// find. Any other failure is unknown (P4-6 review: a kill must not take a
-// transient tmux failure for a session that is gone).
+// A failed identity read is ErrNoSession only when tmux said so (no server,
+// a target it cannot find); anything else is unknown (lead-team P4-6 critic).
 func TestIdentityReadErr_OnlyANoSessionAnswerIsErrNoSession(t *testing.T) {
 	exit := func(stderr string) error { return &exec.ExitError{Stderr: []byte(stderr)} }
 	for _, c := range []struct {

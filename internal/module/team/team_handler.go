@@ -134,15 +134,13 @@ func (m *Module) handleKill(w http.ResponseWriter, r *http.Request) {
 	m.writeJSON(w, http.StatusOK, m.memberView(mr))
 }
 
-// killAndMark ends mr's tmux session and marks killed the row as it was
-// read (P4-6 review R1). A member mid-relay is refused before anything is
-// killed: 409 relay_open with its op. The mark is a compare-and-set on the
-// session read (MarkMemberKilled; a sweeper that marked the member gone
-// meanwhile does not undo the kill). When it loses, the row is read
-// again: another kill that marked it is a success; anything else — a relay
-// claimed since, or one that completed and moved the row to its new session,
-// which must not be marked — is 409 relay_open, the row as it is. false
-// means an error was written.
+// killAndMark ends mr's tmux session and marks killed the row as read (P4-6
+// review R1). A member mid-relay (claimed, writing, written) is refused
+// before anything is killed: 409 relay_open with its op. The mark is a
+// compare-and-set on the session read (MarkMemberKilled). If it loses, a
+// row another kill marked is a success; anything else (a relay claimed, or
+// completed and moved the row to its new session) is 409 relay_open, the row
+// as it is. false means an error was written.
 func (m *Module) killAndMark(w http.ResponseWriter, t team.Team, mr memberRow) (memberRow, bool) {
 	failStore := func(err error) (memberRow, bool) {
 		m.logf("[team] kill %s: %v", mr.SpawnOp, err)
@@ -157,9 +155,9 @@ func (m *Module) killAndMark(w http.ResponseWriter, t team.Team, mr memberRow) (
 		m.writeJSON(w, http.StatusConflict, e)
 		return memberRow{}, false
 	}
-	if op, busy, err := m.store.RelayInFlight(mr.SessionID); err != nil {
+	if op, open, err := m.store.OpenRelayOpBySession(mr.SessionID); err != nil {
 		return failStore(err)
-	} else if busy {
+	} else if open && (op.State == team.RelayClaimed || op.State == team.RelayWriting || op.State == team.RelayWritten) {
 		return relayOpen(op, true, "is relaying; nothing was killed")
 	}
 	if status, code, why := m.killMember(mr); why != "" {
@@ -195,20 +193,14 @@ func (m *Module) killAndMark(w http.ResponseWriter, t team.Team, mr memberRow) (
 }
 
 // killMember ends the tmux session the member's spawn created, and no other
-// (P4-5: its id, generation and @pdx_spawn_op tag). One identity read of
-// that session id: on the recorded generation with the op's tag it is killed
-// by id under that generation (a restart in between declines). On another
-// generation the session died with its server and the id is a stranger's:
-// nothing is killed. "" means nothing of the member runs any more; else the
-// status, code and why the row must stay as it is: a session that lost its
-// tag (409), or a read that failed otherwise (503). A gone member — its
-// process confirmed gone, its shell perhaps left — skips the kill only when
-// tmux says its session is no more (ErrNoSession: no server, no such
-// target); any other failure is a 503 too, so the retry still reaches a
-// live shell (P4-6 critic). An active one is a 503 on any failure until the
-// sweeper confirms it gone. A row without a recorded session id is never
-// turned into a tmux target (":" would name whatever session tmux calls
-// current): nothing of it can be in tmux.
+// (P4-5: id, generation, @pdx_spawn_op tag): one identity read of the id,
+// then a kill by id under that generation. On another generation the
+// session died with its server: nothing is killed. "" means nothing of the
+// member runs any more; else why the row must stay: the tag is gone (409),
+// or the read failed (503). A gone member (its shell may be left) skips the
+// kill only on ErrNoSession — tmux said no such session (P4-6 critic); an
+// active one never does. An unrecorded id never becomes a target (":" names
+// tmux's current session).
 func (m *Module) killMember(mr memberRow) (int, string, string) {
 	var id tmux.PaneIdentity
 	err := fmt.Errorf("no tmux session id recorded (%q): %w", mr.TmuxID, tmux.ErrNoSession)

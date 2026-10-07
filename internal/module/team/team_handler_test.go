@@ -197,14 +197,13 @@ func TestKill_ByTheOldRefAfterARelay(t *testing.T) {
 // and the @pdx_spawn_op tag): a second kill answers 200 and kills nothing; a
 // session that lost the tag is refused and left running; on a restarted
 // server (another generation) nothing is killed — the member died with the
-// old server — and the row says killed. An active member whose session
-// cannot be read is a retry, until the sweeper confirms it gone.
+// old server — and the row says killed. An active row with no recorded
+// session is a retry.
 func TestKill_IsIdempotentAndGenerationGuarded(t *testing.T) {
 	f, root := newTeamFixture(t, 4)
 	m1 := f.member(1, root, "sid-m1", "w-one", nil)
 	m2 := f.member(2, root, "sid-m2", "w-two", nil)
 	m3 := f.member(3, root, "sid-m3", "w-three", nil)
-	m4 := f.member(4, root, "sid-m4", "w-four", nil)
 	for i := 0; i < 2; i++ {
 		if code, mem, e := f.kill("/tmp/10.sock", m1.Ref); code != 200 || mem.State != team.MemberKilled {
 			t.Fatalf("kill %d of m1 = %d %+v %+v", i+1, code, mem, e)
@@ -222,16 +221,6 @@ func TestKill_IsIdempotentAndGenerationGuarded(t *testing.T) {
 		t.Fatal("a session without the member's tag was touched")
 	}
 
-	_ = f.tmux.KillSession(m4.TmuxSession) // gone outside the daemon; the sweeper has not looked yet
-	if code, _, e := f.kill("/tmp/10.sock", m4.Ref); code != 503 || e.Error != team.ErrNotReady {
-		t.Fatalf("an active member whose session cannot be read = %d %+v, want 503 not_ready", code, e)
-	}
-	if err := f.m.store.SetMemberState(m4.SpawnOp, team.MemberGone, 9); err != nil {
-		t.Fatal(err)
-	}
-	if code, mem, e := f.kill("/tmp/10.sock", m4.Ref); code != 200 || mem.State != team.MemberKilled {
-		t.Fatalf("a gone member's kill = %d %+v %+v, want 200 killed", code, mem, e)
-	}
 	bare := newMember("op-5", uid(1), "sid-m5", ipeers.RefID("sid-m5"), 1) // no tmux session recorded
 	if err := f.m.store.InsertMember(bare); err != nil {
 		t.Fatal(err)
@@ -249,11 +238,9 @@ func TestKill_IsIdempotentAndGenerationGuarded(t *testing.T) {
 	}
 }
 
-// The targets pdx kill takes (plan v3 P4-6): a ref with or without its
-// underscore, bare or behind this host's alias or id; <host>/<name> by the
-// live registry name; <host>/<name> [<ref>] when both name the member.
-// Anything else — another host, a bare name, a name or ref of no member —
-// is not_your_member.
+// The targets pdx kill takes (plan v3 P4-6): a ref, with or without "_",
+// bare or behind this host; <host>/<name>; <host>/<name> [<ref>] when both
+// match. Anything else is not_your_member.
 func TestKill_TargetForms(t *testing.T) {
 	cases := []struct {
 		target func(ref string) string
@@ -282,20 +269,20 @@ func TestKill_TargetForms(t *testing.T) {
 	}
 }
 
-// P4-6 critic [high]: a gone member skips the tmux kill only when tmux says
-// its session is no more (ErrNoSession). An identity read that fails
-// otherwise, its shell perhaps still there, is a 503 and the row stays gone,
-// so a retry kills it. Mutation gate: any read error passes for a gone
-// member → red.
+// P4-6 critic [high]: a gone member skips the tmux kill only on ErrNoSession;
+// any other read failure (its shell may be there) is a 503, the row kept
+// gone, and the retry kills it. An active member is a 503 either way.
+// Mutation gate: any read error passes for a gone member → red.
 func TestKill_AGoneMemberSkipsTheKillOnlyWhenItsSessionIsSurelyGone(t *testing.T) {
 	f, root := newTeamFixture(t, 2)
 	m1 := f.member(1, root, "sid-m1", "w-one", nil)
 	m2 := f.member(2, root, "sid-m2", "w-two", nil)
-	for _, mr := range []memberRow{m1, m2} {
+	gone := func(mr memberRow) {
 		if err := f.m.store.SetMemberState(mr.SpawnOp, team.MemberGone, 9); err != nil {
 			t.Fatal(err)
 		}
 	}
+	gone(m1)
 	f.tmux.SetPaneIdentityErr(errors.New("tmux: server busy")) // m1's session is still there
 	if code, _, e := f.kill("/tmp/10.sock", m1.Ref); code != 503 || e.Error != team.ErrNotReady {
 		t.Fatalf("a gone member whose session could not be read = %d %+v, want 503", code, e)
@@ -304,7 +291,11 @@ func TestKill_AGoneMemberSkipsTheKillOnlyWhenItsSessionIsSurelyGone(t *testing.T
 		t.Fatalf("after the 503: row %s, session there %v; want gone and there", got.State, f.tmux.HasSession(m1.TmuxSession))
 	}
 	f.tmux.SetPaneIdentityErr(nil)
-	_ = f.tmux.KillSession(m2.TmuxSession) // surely gone
+	_ = f.tmux.KillSession(m2.TmuxSession) // surely gone; the sweeper has not looked yet
+	if code, _, e := f.kill("/tmp/10.sock", m2.Ref); code != 503 || e.Error != team.ErrNotReady {
+		t.Fatalf("an active member whose session is gone = %d %+v, want 503", code, e)
+	}
+	gone(m2)
 	if code, mem, e := f.kill("/tmp/10.sock", m2.Ref); code != 200 || mem.State != team.MemberKilled || len(f.tmux.KillIfInstanceCalls()) != 0 {
 		t.Fatalf("a gone member whose session is gone = %d %+v %+v, want 200 killed with no kill call", code, mem, e)
 	}
@@ -314,16 +305,12 @@ func TestKill_AGoneMemberSkipsTheKillOnlyWhenItsSessionIsSurelyGone(t *testing.T
 }
 
 // P4-6 review R1 [P1]: the kill marks the row it read, and only that one.
-// A member mid-relay (claimed, writing, written) is refused before anything
-// is killed: 409 relay_open with the op. Between the read and the mark —
-// the beforeKillMark seam — a relay may claim (the mark is refused) or
-// complete (cleared moved the row to the new session: the new session is
-// never marked killed); both answer 409 relay_open and leave the row as it
-// is. Another kill that marked it first makes this one a 200 (its time
-// kept); the sweeper marking it gone meanwhile does not undo the kill.
-// Mutation gates: drop session_id from the mark → the moved row is killed,
-// red; drop the relay guard from the mark → red; drop the check before the
-// tmux kill → a session is killed mid-relay, red.
+// A member mid-relay is refused before anything is killed (409 relay_open
+// with the op). At the beforeKillMark seam a relay that claims, or completes
+// (the row moves to the new session), makes it 409 relay_open, the row as
+// it is; a kill that marked it first makes it 200 (its time kept); a gone
+// mark does not undo it. Mutation gates: drop session_id, or the relay
+// guard, from the mark → red; drop the check before the tmux kill → red.
 func TestKill_MarksOnlyTheRowItRead(t *testing.T) {
 	f, root := newTeamFixture(t, 4)
 	m1 := f.member(1, root, "sid-m1", "w-one", nil)

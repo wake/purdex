@@ -97,11 +97,10 @@ func (s *Store) SetLeadUsage(teamID, leadSessionID string, c team.MemberContext)
 }
 
 // MarkMemberKilled is pdx kill's mark (spec §7.3), a compare-and-set on the
-// row its caller read: it still holds sessionID (a relay's cleared moves the
-// row to the new session, which must never be marked killed; P4-6 review
-// R1), it is not killed already (active, or gone — the sweeper may mark it
-// gone meanwhile, and a gone member is killed all the same), and that
-// session has no relay op in flight. killed says whether this call marked it.
+// row read: it still holds sessionID (a relay's cleared moves the row to a
+// new session, never to be marked killed; P4-6 review R1), it is active or
+// gone (the sweeper may mark it gone meanwhile), and that session has no
+// relay op in flight. killed says whether this call marked it.
 func (s *Store) MarkMemberKilled(spawnOp, sessionID string, at int64) (bool, error) {
 	res, err := s.db.Exec(`UPDATE team_members SET state = 'killed', updated_at = ?
 		WHERE spawn_op = ? AND session_id = ? AND state IN ('active', 'gone')
@@ -109,19 +108,6 @@ func (s *Store) MarkMemberKilled(spawnOp, sessionID string, at int64) (bool, err
 			WHERE session_id = ? AND state IN ('claimed', 'writing', 'written'))`,
 		at, spawnOp, sessionID, sessionID)
 	return oneRow(res, err, "mark member "+spawnOp+" killed")
-}
-
-// RelayInFlight returns the session's relay op when it is claimed, writing
-// or written: the member is mid-relay.
-func (s *Store) RelayInFlight(sessionID string) (team.RelayOp, bool, error) {
-	op, ok, err := s.OpenRelayOpBySession(sessionID)
-	switch {
-	case err != nil || !ok:
-		return team.RelayOp{}, false, err
-	case op.State == team.RelayClaimed || op.State == team.RelayWriting || op.State == team.RelayWritten:
-		return op, true, nil
-	}
-	return team.RelayOp{}, false, nil
 }
 
 // MarkMemberGone marks an active member gone (spec §7.3: its session ended
