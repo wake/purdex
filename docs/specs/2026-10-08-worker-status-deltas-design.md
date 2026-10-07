@@ -1,6 +1,11 @@
-# #1866: Worker status deltas on the host stream (design v2)
+# #1866: Worker status deltas on the host stream (design v3)
 
-Status: v2, rewritten after the coordinator's six decisions and codex design review `task-muyhy7u8-pw7x2s` (19 findings, all accepted). For the second codex round. Author: purdex-6d. Base: main (alpha.587). Nexen pinned v0.19.0.
+Status: v3, for an incremental codex round 3.
+- v2 answered the coordinator's six decisions and codex round 1 (`task-muyhy7u8-pw7x2s`, 19 findings).
+- v3 answers codex round 2 (`task-muyime61-up5dy4`, 10 findings, all accepted, with the coordinator's rulings) and one self-found fix (the safety reconcile now takes the slot per page, §3.7).
+- §8 maps round 2; §7 keeps round 1.
+
+Author: purdex-6d. Base: main (alpha.587). Nexen pinned v0.19.0.
 
 `N/` = `~/Library/Caches/go/pkg/mod/lab.protype.tw/wake/nexen@v0.19.0/`. Other paths are relative to the Purdex repo.
 
@@ -54,7 +59,7 @@ Status: v2, rewritten after the coordinator's six decisions and codex design rev
 |---|---|---|
 | 1 | Option B: a daemon projector, carried on `/ws/host-events`; no new SSE | §3–§4 |
 | 2 | A host that sent hello opens no site-wide SSE at all. Checked: the only consumer of the stream is `execution-list-effects`. `NexExecutionsTable`'s archived view depended on its refresh cadence; handled by decision 5. | §4.6, §4.7 |
-| 3 | Safety reconcile about every 120 s, only while subscribed, that **counts and logs** mismatches (to detect missed pushes, not to hide them). **Implemented daemon-side; see §3.7 for why. Please confirm.** | §3.7 |
+| 3 | Safety reconcile about every 120 s, only while subscribed, that **counts and logs** mismatches (to detect missed pushes, not to hide them). Round-2 ruling: on **both** sides. The daemon side detects missed pushes, including executions it never pushed. The SPA side detects apply-side defects, only while the window is visible. Two separate counters. | §3.7, §4.5 |
 | 4 | Nexen issues: nexen#162 and nexen#163 opened, comment on nexen#33 | header |
 | 5 | Separate `archivedRevision`, bumped only by deltas that change archive membership and by reconciles. `NexExecutionsTable` re-queries on it only while "show archived" is on. | §4.7 |
 
@@ -71,7 +76,7 @@ Status: v2, rewritten after the coordinator's six decisions and codex design rev
   - A per-execution version is ordered against a list read only if the list read of that row cannot interleave with the row's re-read.
   - Guaranteeing that means holding every execution's lock across the list read, which *is* a global slot.
   - Given the slot, one counter is enough. It also orders rows **absent** from a list page (tombstones, §4.3) with a single number per page.
-- **Cost:** reads are serialized. A single-row GET takes about a millisecond. A 500-row page takes tens of ms, and pages are only read on reconcile, not per frame.
+- **Cost:** reads are serialized, so how long a page holds the slot is how long the projector can be delayed. Nexen's page handler is not just a SELECT. It also checks title freshness per row (`N/api/session_title.go:42-63`), may commit `title_changed` and re-read the page, and counts events (`N/api/query.go:448-487`). So the hold time is measured, not assumed; see §3.8 for the numbers and the bounds.
 
 ### 3.2 Bus consumer (fixes R10, R11)
 - One goroutine runs `bus.Subscribe("", 1024)`. It **never blocks on the slot**: it filters by kind and marks the execution dirty.
@@ -105,14 +110,22 @@ Status: v2, rewritten after the coordinator's six decisions and codex design rev
 - On 200 it injects a top-level `"pdx": {"epoch": E, "ver": V}` into the JSON object, using the `ver` taken for that page. `items` and `next_cursor` are untouched. Any non-200 response passes through unchanged, without `pdx`.
 - Each page is its own read with its own `ver`. The SPA does not need a multi-page snapshot (§4.3).
 
-### 3.5 Broadcast order, hello and gaps (fixes R2, R6, R14)
-- **`bseq`** is a contiguous per-epoch counter. It is taken **only** when a delta is broadcast, inside the slot, and `BroadcastEvent` is called while still holding the slot. So broadcast (enqueue) order equals `bseq` order, and a failed read never makes a gap.
-- **Delta frame:** `HostEvent{type: "nex.execution", epoch: E, seq: bseq, value: {"id", "ver", "cause": [kinds], "row": {…} | null}}`. `row: null` means remove.
-- **hello:** `OnSubscribe` acquires the slot and sends `HostEvent{type: "nex.executions.hello", epoch: E, seq: bseq}` to that subscriber only. Because the slot is held:
-  - every delta enqueued to that subscriber *before* the hello has `seq ≤ hello.seq`;
-  - every delta after it has `seq > hello.seq`.
+### 3.5 Broadcast order, hello and gaps (fixes R2, R6, R14; round 2: 3, 4)
+- **`bseq`** is a contiguous per-epoch counter. It is taken **only** when a delta is broadcast, inside the slot, and the broadcast happens while still holding the slot. So broadcast (enqueue) order equals `bseq` order, and a failed read never makes a gap.
+- **Versions live in `value`, never in `HostEvent.Epoch` / `Seq`.** Those are `omitempty` (`internal/core/events.go:19-20`), so a hello with `seq 0` would lose its baseline (round 2 #3). Every nex frame carries its own explicit fields:
+  - **Delta:** `HostEvent{type: "nex.execution", value: {"epoch": E, "bseq": n, "id", "ver", "cause": [kinds], "row": {…} | null}}`. `row: null` means remove.
+  - **hello:** `HostEvent{type: "nex.executions.hello", value: {"epoch": E, "bseq": n}}`, where `bseq` 0 is spelled out.
+  - Tests assert the marshalled JSON text (`"bseq":0` present).
+- **hello timing:** `OnSubscribe` acquires the slot and sends the hello to that subscriber only. Because the slot is held:
+  - every delta enqueued to that subscriber *before* the hello has `bseq ≤ hello.bseq`;
+  - every delta after it has `bseq > hello.bseq`.
 - **Client rule:** ignore any delta received before a hello; after hello(S), expect `S+1`; anything else is a gap and triggers a reconcile.
-- If the hello itself is dropped (full buffer on a brand-new subscriber), the client stays in legacy mode for that connection. That is slower but correct.
+- **A drop closes the connection (round 2 #4, coordinator ruling).**
+  - `TrySend` drops silently on a full buffer (`events.go:47-66`). A dropped *last* delta would never show up as a gap.
+  - So nex frames go through a new `EventsBroadcaster.BroadcastStrict(ev)` / `sub.SendStrict`. Any failed enqueue `Remove`s that subscriber, which closes the WS. The client reconnects, gets a fresh hello, and reconciles. Nothing is repaired on the same connection.
+  - `Remove` takes `eb.mu.Lock`, so failed subscribers are collected under `RLock` and removed after it is released.
+  - A dropped hello is the same case: the connection closes and the next connection gets a new hello. So "legacy for that connection" no longer happens.
+  - Other event types keep today's best-effort `Broadcast`. Making all frames strict is a separate decision, not taken here.
 - `bseq` reaching 2^53−1 rotates the epoch (same rule as sessions).
 
 ### 3.6 Bus lifecycle (fixes R12, R13)
@@ -127,19 +140,74 @@ Status: v2, rewritten after the coordinator's six decisions and codex design rev
 
 ### 3.7 Silent transitions: recheck plus a 120 s safety reconcile (F2, R18)
 - **Recheck.** If a flush whose `cause` contains `execution.terminal` reads a row that is still `running`, the projector re-marks that execution at +150 ms, +600 ms and +2 s, stopping once the state is no longer `running`. This covers `SettleIdle`.
-- **Safety reconcile.** Every 120 s, but only while `core.Events.HasSubscribers()`:
-  - Under the slot, `Store.List` pages over all non-archived rows (taking a `ver` R).
-  - It compares each row's status digest (`state`, `pending_permission.request_id`, `archived`, `turn_count`, `last_turn_reason`, `terminal_reason`) with `lastPushed[id]`.
-  - Executions never pushed get a baseline only, with no count.
-  - A difference (including a pushed row that is now missing) is a **suspect**. After a 1 s grace:
-    - if a newer read (`lastPushed.ver > R`) has happened, it was in flight and is benign;
-    - otherwise `nex_delta_mismatch_total++`, log `nex-delta: missed push exec=<id> field=<f> pushed=<v> actual=<v> total=<n>`, and flush that execution.
-- **Why daemon-side rather than each SPA (decision 3, please confirm):**
-  - Only the daemon knows which executions are mid-coalescing or mid-flush, so its suspects are exact and need only a 1 s grace. The SPA cannot tell an in-flight push from a missed one.
-  - It is one list read per host per 120 s instead of one per client window.
-  - iOS gets the same coverage for free.
-  - The counter lives in one place.
-- Missed **delivery** (a dropped WS message) is detected by the client's `bseq` gap check, so between them both kinds of loss are detected.
+- **Daemon safety reconcile** (detects missed *pushes*). Every 120 s, only while `core.Events.HasSubscribers()`.
+  - **The slot is taken per page,** like the list wrapper (§3.4), so the projector waits at most one page (§3.8). Each page `p` is read with `Store.List` (limit 100) inside the slot and gets its own `ver` R_p. The slot is released between pages.
+  - Each row's status digest (`state`, `pending_permission.request_id`, `archived`, `turn_count`, `last_turn_reason`, `terminal_reason`) is compared with `lastPushed[id]`, for the rows in that page and for every `lastPushed` id that page's cursor range covers but that is missing (a missing row is a difference).
+  - **No `lastPushed` entry** (never pushed since this process started, e.g. a change that predates the projector or a first change that was never seen) → push it now and count `nex_delta_reconcile_unseen_total` (round 2 #5 ruling). A baseline alone would hide a first miss forever.
+  - **A difference** is a suspect. After a 1 s grace:
+    - if a newer read happened meanwhile (`lastPushed[id].ver > R_p`), the change was in flight and is benign;
+    - otherwise count `nex_delta_mismatch_total`, log `nex-delta: missed push exec=<id> field=<f> pushed=<v> actual=<v> total=<n>`, and flush that execution.
+  - **What it cannot see:** defects on the SPA's apply side (a delta delivered but applied wrongly, or a bad overlay merge). Those are covered by the SPA reconcile (§4.5), the `bseq` gap check and tests.
+- Missed **delivery** is no longer possible silently: a full buffer closes the connection (§3.5).
+
+### 3.8 How long the slot is held, and the bounds (round 2 #6)
+Measured on this machine (Apple M4, internal SSD).
+
+**Live mlab daemon** (`curl` over tailscale; 23 executions, 6,761 events):
+
+| request | time |
+|---|---|
+| `/v1/executions?limit=500` | 2.0–4.9 ms (1 non-archived row) |
+| `limit=500&include_archived=true` | 2.5–2.9 ms (23 rows) |
+| `/v1/executions/{id}` | 2.1 ms |
+| `/api/health` (baseline) | 1.3 ms |
+
+**Synthetic benchmark.**
+- **Setup:**
+  - the real `nexen.Assemble` with Purdex's `buildOptions`, called through `System.Handler.ServeHTTP` (no Purdex middleware and no TCP);
+  - 500 or 100 idle executions, each with 3 turns and a 207 KB JSONL transcript;
+  - 10 % with a pending permission;
+  - 200 or 1,000 events per execution, written straight to the store;
+  - each scenario ≥ 30 runs (single GET: 100);
+  - the benchmark file was deleted afterwards.
+
+Median ms (min–p95 where it matters):
+
+| request | 500 × 200 (100k events) | 500 × 1,000 (500k events) | 100 × 200 (20k events) |
+|---|---|---|---|
+| `limit=500` steady | **15.5** (14.0–19.1) | **41.4** (40.3–46.8) | 2.4 |
+| `limit=100` steady | **9.1** (8.7–10.1) | **36.6** (35.5–38.6) | 2.5 |
+| `limit=500`, every title changed (500 `title_changed` commits + re-list) | 155 (p95 175) | 190 (p95 250) | 31 |
+| `limit=500`, every transcript grew, titles unchanged | 83 | 111 | 16 |
+| `limit=500`, 10 titles changed | 20.7 | 50.2 | 5.8 |
+| first list in process (500 first-time title reads) | 454 | 472 | 69 |
+| `GET /v1/executions/{id}` | **0.12** | **0.17** | 0.12 |
+| single GET right after its title changed | 0.38 | 0.44 | 0.40 |
+| breakdown: `store.List(500)` | 4.3 | 4.0 | 0.9 |
+| breakdown: `store.EventCounts()` | **7.4** | **34.6** | 1.2 |
+
+**What the numbers say**
+- **A row read is about 0.1–0.4 ms.** The projector side of the slot is negligible.
+- **A page's floor is `EventCounts`.** It is a `GROUP BY` over the *whole* `events` table, archived executions included (`N/store/event.go:159-180`). It grows with total events (about 70 ns per event) and does **not** shrink with `limit`, which is why `limit=100` is barely faster at 500k events. Filed as [nexen#164](https://lab.protype.tw/wake/nexen/issues/164) (count only the page's ids).
+- **Title work is the spike.** A page where every transcript changed costs 0.14–0.3 ms per row on top. So a 100-row page bounds that part to about 30 ms, versus about 150 ms for 500 rows. The first list after a daemon start pays the first-time title reads (about 0.9 ms per row).
+
+**Expected worst-case projector wait with 100-row pages:**
+- 100k events: about 10 ms steady; 40–60 ms when every title on the page changed; about 100 ms for the first list after start.
+- 500k events: about 40 / 70 / 130 ms respectively.
+
+All of these are below today's 500 ms debounce. mlab today: 23 executions, 6,761 events.
+
+**Bounds**
+- **Page size.** Walks in `delta` mode use `limit=100`. The legacy walk keeps 500.
+- **Slot wait timeout.**
+  - The list wrapper waits for the slot at most 2 s, then answers 503 `nex_busy`, which the walk retries with backoff.
+  - The projector waits without a timeout, but in its own goroutine. Bus consumption never waits on the slot.
+  - The reconcile skips its turn if it waited more than 2 s.
+- **Observability.**
+  - Every slot hold longer than 250 ms logs `nex-delta: slot held <ms> by <list|row|reconcile>`.
+  - Every wait longer than 250 ms logs `nex-delta: slot wait <ms> for <who>`.
+  - `nex_delta_slot_max_hold_ms` and `nex_delta_slot_max_wait_ms` (since start) are printed with the mismatch counters every reconcile.
+- **Cancellation.** The wrapper passes the request context into the slot wait and into Nexen's handler. The slot is released in a `defer` whether the page finished, failed, timed out or the client went away. A test cancels mid-page and asserts the slot is free.
 
 ## 4. SPA
 
@@ -167,8 +235,10 @@ Status: v2, rewritten after the coordinator's six decisions and codex design rev
 
 ### 4.3 Versioned rows, overlay and tombstones (fixes R3, R4)
 - **Keys.** Each cached row stores `ver`. A delta is applied only if `delta.ver > row.ver`. Rows from a legacy (unversioned) fetch have `ver = 0`.
+- **One normalization, used everywhere (round 2 #2).** The store holds non-archived rows only, so a delta is a **tombstone** `{ver, null}` when its `row` is `null` **or** has `archived: true`. The same function normalizes deltas for the visible cache (§4.4) and for the overlay. An archived upsert can therefore never reach the overlay as a row, and cannot be resurrected by the commit.
 - **Walk in flight.** Deltas go into an **overlay** keyed by id, holding `{ver, row}` or a tombstone `{ver, null}`; a later higher `ver` replaces an entry. They also apply to the visible cache as usual, so the UI is not frozen.
-- **Each page records** `{ver, upTo}`, where `upTo` is the page's last id, or `∞` for the final page. Nexen pages by `id >` cursor in `ORDER BY id` (`N/store/execution.go:934-1016`), so every id has exactly one *covering page*.
+- **Each page records** `{ver, upTo}`, where `upTo` is the page's last id, or `∞` for the final page, including an empty final page. Nexen pages by `id >` cursor in `ORDER BY id` (`N/store/execution.go:934-1016`), so every id has exactly one *covering page*: the first page with `id ≤ upTo` (an id equal to `upTo` belongs to that page). Ids compare as plain strings, which matches SQLite's BINARY order for Nexen's ASCII ids.
+- **A row that moves into an already-walked range during the walk** (unarchive of an old id, which sorts early) is covered by an earlier page whose `ver` is older than the delta. So the overlay upsert wins and the row is present after the commit.
 - **Commit.** Start from the walk's rows, each keyed with its page's `ver`. Then apply each overlay entry if `entry.ver > coveringPage(id).ver`:
   - an upsert adds or replaces the row;
   - a tombstone removes it.
@@ -176,28 +246,40 @@ Status: v2, rewritten after the coordinator's six decisions and codex design rev
 - **Why this cannot resurrect a removed row.** Deltas of one execution are broadcast in `ver` order (§3.3) and arrive in that order over one WS. A stale upsert in the overlay is therefore always followed by its later tombstone, which outranks it.
 - **A page without a valid `pdx`** (missing or malformed) makes the walk *unversioned*: rows get `ver = 0` (any delta wins), and a warning is logged.
 - A page whose `pdx.epoch` differs from the current baseline does not mix epochs: the walk is discarded and a fresh walk starts.
-- **API change:** `listExecutions` returns `{page, pdx?}`; `listAllExecutions` returns `pages: {ver, upTo}[]` alongside `items`.
+- **API change:** `listExecutions` returns `{page, pdx?}`; `listAllExecutions` returns `pages: {ver, upTo}[]` alongside `items`. In `delta` mode it walks with `limit=100` (§3.8); the legacy walk keeps 500.
 
 ### 4.4 Delta handling
 - `useMultiHostEventWs` routes `nex.executions.hello` and `nex.execution` to the list effects.
 - Checks in order:
   - not in `delta` mode or no baseline → ignore;
   - epoch differs from the baseline → ignore (a hello for the new epoch follows);
-  - `seq ≠ last+1` → set `last = seq` and reconcile;
-  - otherwise apply the row: `archived: true` or `row: null` removes it (the store holds non-archived rows only), anything else upserts it.
+  - `bseq ≠ last+1` → set `last = bseq` and reconcile;
+  - otherwise normalize (§4.3: `row: null` or `archived: true` → tombstone) and apply: a tombstone removes the row, anything else upserts it.
 
 ### 4.5 Reconcile triggers (SPA)
 1. the first list subscribe;
 2. every hello;
 3. a `bseq` gap;
-4. an explicit `refetch` (exit, rebuild, worker-exited, host lifecycle).
+4. an explicit `refetch` (exit, rebuild, worker-exited, host lifecycle);
+5. **the SPA safety reconcile** (round 2 #5 ruling): every 120 s, only while the host is in `delta` mode, the list is subscribed and `document.visibilityState === 'visible'`.
 
-There is no SPA timer: the periodic check is daemon-side (§3.7).
+The safety reconcile detects *apply-side* defects:
+- Before committing, it compares each fetched row (page `ver` V) with the cached row. A **suspect** is either:
+  - `V > cached.ver` with a different status digest (same fields as §3.7);
+  - or a row present on one side only.
+- It commits as usual, which repairs the cache.
+- After a 1.5 s grace, any suspect for which no delta with `ver > V` arrived is a **mismatch**: `spaMismatchTotal++` on the host's list cache, plus `console.warn('nex-delta: spa mismatch', {hostId, id, field, cached, fetched, total})`. A delta that did arrive means the change was in flight, so it is benign.
+- This counter is kept separate from the daemon's counters (§3.7), so we can see later which side is losing updates.
 
-### 4.6 Connection lane (R9)
+### 4.6 Connection lane (R9; round 2 #1)
 - **In `delta` mode the lane is never reserved.**
-- **A late hello** (the list subscribed before the host-events hello arrived, as can happen at app start) unreserves. Any pane evicted meanwhile follows the existing rule: it resumes when it is re-activated, not spontaneously when a slot frees (`useExecutionSubscription.ts:45-51`, a deliberate spec §4.3.2 choice). So no slot is lost permanently; the slot is free, and that pane waits for its next activation.
-- **Proposal, open to veto:** keep that rule rather than add a capacity-freed notification.
+- **A late hello** (the list subscribed before the host-events hello arrived, as can happen at app start) unreserves.
+- My v2 rebuttal was wrong (round 2 #1). A pane evicted by `reserve` re-touches only when its `active` prop changes (`useExecutionSubscription.ts:45-61`), and `unreserve` only raises the cap (`subscription-slots.ts:90-98`). A pane that stays active would therefore stay paused.
+- **Fix:**
+  - `subscription-slots` records the keys evicted by a `reserve` (per host).
+  - `unreserve` notifies those keys through a new `onCapacity(key, cb)` listener and then forgets them.
+  - In `useExecutionSubscription`, a paused pane whose `active` is still true handles the notice by running the activation path (`touch` → `isLive` → `openStream`). An inactive pane ignores it and keeps today's resume-on-activation rule.
+  - This is limited to reserve-evicted keys, so an ordinary LRU eviction between panes still never resumes spontaneously.
 
 ### 4.7 `archivedRevision` (decision 5)
 - `HostListCache.archivedRevision` is bumped by:
@@ -220,12 +302,28 @@ There is no SPA timer: the periodic check is daemon-side (§3.7).
 - broadcast order:
   - two executions flushed back-to-back broadcast in `bseq` order;
   - concurrent flush attempts are serialized.
-- hello vs `Add`: a delta broadcast between `Add` and `OnSubscribe` has `seq ≤ hello.seq`, and the next has `hello.seq+1`.
-- two clients, one with a full buffer: only the slow one sees a gap.
+- hello vs `Add`: a delta broadcast between `Add` and `OnSubscribe` has `bseq ≤ hello.bseq`, and the next has `hello.bseq+1`.
+- **wire format (round 2 #3, #10):**
+  - the marshalled hello at epoch start contains `"bseq":0`;
+  - deltas carry `epoch`/`bseq` in `value`;
+  - `HostEvent.Epoch`/`Seq` stay empty for nex frames.
+- **strict send (round 2 #4, #10):**
+  - two clients, one with a full buffer: only the slow one is removed (its WS closed); the fast one keeps receiving with contiguous `bseq`;
+  - a dropped *last* delta still closes the connection;
+  - a dropped hello closes the connection;
+  - removal happens after `RLock` is released (no deadlock under `-race`).
+- **reconnect (round 2 #10):**
+  - same-epoch reconnect with no deltas in between → hello with the same `bseq` → client reconciles once, no gap;
+  - new-epoch hello is the first frame on the new connection.
 - list wrapper:
   - `pdx` injected on 200 with a page `ver` ordered against neighbouring deltas;
   - non-200 passes through unchanged;
   - query parameters are preserved.
+- **slot under the real Nexen handler (round 2 #9):**
+  - a page whose title refresh commits `title_changed` inside the slot → the bus consumer only marks dirty (no lock-order deadlock), and the flush happens after the page releases the slot;
+  - the measured hold is logged above the threshold;
+  - a page cancelled or timed out mid-read releases the slot (the next acquire succeeds immediately);
+  - a wrapper waiting longer than 2 s answers 503 `nex_busy`.
 - triggers: `lease.*`, `observer_*` and `result` mark dirty; `stream_event` and `assistant` do not.
 - recheck: terminal → still running → rechecked until idle.
 - bus overflow: channel closed with `ctx` live → resubscribe → new epoch hello → all executions dirty, with no busy loop on a closed bus.
@@ -237,7 +335,9 @@ There is no SPA timer: the periodic check is daemon-side (§3.7).
 - safety reconcile:
   - silent drift → mismatch counted, logged and repaired;
   - in-flight → benign;
-  - unseen execution → baseline only;
+  - unseen execution → **pushed** and counted as unseen;
+  - a pushed id missing from its covering page → counted and pushed as remove;
+  - the slot is released between pages;
   - runs only while subscribed.
 
 **SPA**
@@ -249,8 +349,22 @@ There is no SPA timer: the periodic check is daemon-side (§3.7).
   - a tombstone beats an older list row;
   - no resurrection;
   - truncated walk.
+- **overlay edges (round 2 #8):**
+  - an `archived: true` delta in the overlay becomes a tombstone, and the commit removes that id;
+  - a delta whose `ver` is between its covering page's `ver` and the next page's `ver` wins only against its covering page;
+  - an id equal to a page's `upTo` is covered by that page;
+  - an empty final page still covers ids beyond the previous `upTo`;
+  - unarchive and create land in an already-walked range and are present after the commit.
 - unversioned page → `ver = 0` rows.
-- late hello: the SSE closes and the lane is unreserved.
+- late hello (round 2 #1):
+  - the SSE closes and the lane is unreserved;
+  - a pane evicted by the reservation that is still active resumes via `onCapacity`;
+  - an inactive evicted pane stays paused until activated;
+  - an LRU eviction between panes never resumes spontaneously.
+- **SPA safety reconcile (round 2 #5):**
+  - runs only when visible, subscribed and in `delta` mode;
+  - a seeded apply-side defect (a delta dropped by the client after hello) → mismatch counted after the grace and repaired;
+  - an in-flight delta inside the grace → benign.
 - `delta` host: an explicit refetch does not reopen the SSE, and a subscribe reserves nothing.
 - fingerprint change resets the capability.
 - `archivedRevision`: bumped only by archive-membership deltas and reconciles, and the table re-queries only while the toggle is on.
@@ -259,13 +373,13 @@ There is no SPA timer: the periodic check is daemon-side (§3.7).
 
 | PR | Content | Depends on |
 |---|---|---|
-| PR1a | Read slot, `ver`, in-process row reader, list wrapper with `pdx` | – |
-| PR1b | Bus consumer, coalescing, flush worker, `bseq`, hello, deltas, terminal recheck | PR1a |
-| PR1c | Bus lifecycle (resubscribe/backoff/shutdown), 120 s safety reconcile + mismatch counter | PR1b |
-| PR2a | SPA: `listExecutions` `pdx`, versioned rows, overlay/tombstones, fetch/stream split, capability state machine, `archivedRevision` | PR1a; aa's PR merged |
-| PR2b | SPA: host-events routing (hello/delta), gap/epoch handling, `NexExecutionsTable` on `archivedRevision` | PR1b, PR2a |
+| PR1a | Read slot (timeouts, hold/wait logging), `ver`, in-process row reader, list wrapper with `pdx` | – |
+| PR1b | Bus consumer, coalescing, flush worker, `bseq`, strict broadcast, hello, deltas, terminal recheck | PR1a |
+| PR1c | Bus lifecycle (resubscribe/backoff/shutdown), 120 s daemon safety reconcile + counters | PR1b |
+| PR2a | SPA: `listExecutions` `pdx`, versioned rows, overlay/tombstones, fetch/stream split, capability state machine, `archivedRevision`, `onCapacity`. Built but **inert**: the capability never leaves `unknown` without PR2b. | PR1a; aa's PR merged |
+| PR2b | SPA: host-events routing (hello/delta), gap/epoch handling, SPA safety reconcile, `NexExecutionsTable` on `archivedRevision`. This is the PR that turns `delta` mode on and the legacy SSE off. | **PR1c** (round 2 #7), PR2a |
 
-PR1a–c are inert until PR2 lands: an old SPA ignores both the unknown event types and the extra `pdx` field. Each PR gets R1 + attacker + critic.
+PR1a–c are inert until PR2b lands: an old SPA ignores both the unknown event types and the extra `pdx` field. `delta` mode is never enabled against a daemon without resubscribe/backoff and the safety reconcile. Each PR gets R1 + attacker + critic.
 
 ## 7. Review response (`task-muyhy7u8-pw7x2s`)
 
@@ -288,5 +402,21 @@ PR1a–c are inert until PR2 lands: an old SPA ignores both the unknown event ty
 | 15 | In-process auth contract | §3.3 |
 | 16 | Cost bumps `updated_at` | F4 corrected |
 | 17 | F1 too absolute | F1 reworded |
-| 18 | 120 s reconcile + counter missing | §3.7 (daemon-side; please confirm) |
+| 18 | 120 s reconcile + counter missing | §3.7, §4.5 (both sides after the round-2 ruling) |
 | 19 | Test gaps | §5 |
+
+## 8. Review response, round 2 (`task-muyime61-up5dy4`)
+
+| # | Sev | Finding | Resolution |
+|---|---|---|---|
+| 1 | med | Late-hello rebuttal wrong: an active evicted pane stays paused | Accepted; rebuttal withdrawn. §4.6: `onCapacity` for reserve-evicted keys; an active pane re-runs activation. Tests in §5 |
+| 2 | high | `archived: true` in the overlay resurrects archived rows | §4.3: one normalization (null or archived → tombstone) for cache and overlay; §4.4 uses it |
+| 3 | high | `HostEvent.Seq` is `omitempty`, so a hello with seq 0 loses its baseline | §3.5: `epoch`/`bseq` move into `value` and are always present; the wire JSON is tested |
+| 4 | high | `TrySend` drops silently, so a dropped last frame is never a gap | §3.5: strict send for nex frames; any drop removes the subscriber (closes the WS) → reconnect → hello → reconcile |
+| 5 | high | Daemon reconcile misses SPA apply defects; a baseline-only entry hides a first miss | §3.7: unseen rows are pushed and counted. §4.5: SPA 120 s reconcile (visible + subscribed + delta) with its own counter |
+| 6 | med | Slot hold per page is unbounded; "tens of ms" unproven | §3.1/§3.8: measured (live + synthetic); 100-row pages in delta mode; 2 s wait timeout → 503 `nex_busy`; hold/wait logging and maxima; cancellation releases the slot |
+| 7 | high | PR2b must depend on PR1c | §6: PR2b depends on PR1c; PR2a is inert until PR2b |
+| 8 | med | Overlay archive/unarchive test gaps at page boundaries | §4.3 (covering-page edges spelled out), §5 overlay edges |
+| 9 | med | Real-handler `title_changed` inside the slot; timeout/cancel releases the slot | §5 "slot under the real Nexen handler" |
+| 10 | high | hello `seq 0` JSON, dropped last frame, same-epoch reconnect, dropped new-epoch hello | §5 wire format / strict send / reconnect |
+| self | – | §3.7 held the slot across the whole reconcile walk | §3.7: slot per page, each page its own `ver` |
