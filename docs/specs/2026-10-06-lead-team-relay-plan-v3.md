@@ -2,6 +2,7 @@
 
 > **Status (2026-10-07):** revised after one codex round (8 findings: 2 critical, 5 important, 1 minor; all applied) and the coordinator's rulings on every open question. The binding text is **"Coordinator decisions (plan v3)"** at the end. Written against origin/main `d57ca13b` (alpha.581; spec U20 merged in PR #1838); every `file:line` below was read on that commit. P8a-2 is still in flight on its own branch. Every PR here that touches the mod (P6-3a, P6-3c, P6-6, P7-2) rebases onto it.
 > **Addendum (2026-10-08):** phases **P9b** and **P9a** (spec U21 / U22, §6.3, §8.8) were added after "Deviations from spec", before the coordinator decisions. They were written against origin/main `993c5c11` (alpha.588), and the PR table carries their rows. Spec §12 orders them **P4 → P9b → P9a → P4b**. Their open questions are not yet ruled.
+> **Edited 2026-10-08 by the U23/U24 plan** (`docs/specs/2026-10-08-unattended-adopt-plan.md`, its decisions 12 and 15): P4b-4 needs U24 PL-1a and reuses its `remote_unsupported`; P6-1 needs U24 PL-1d1, which builds the in-process peers sender; P6-2b's member-relay insert confirms the membership in its own transaction, exclusive with U24's `pdx release`.
 > **Source:** spec `docs/specs/2026-10-06-lead-team-relay-spec.md` (U1–U20, M1–M25), the "Coordinator decisions" and "Fix notes" of plan v1 and plan v2 (binding), and the line's memory `kickoff_lead_team_relay.md` (what shipped, review rulings, pitfalls).
 > **Measurement numbers:** M25 is U20's launch flags (spec). **M26** is P8a-2's hours-long hold. **M27** (measured 2026-10-07, below) is the member launch in a never-opened directory. **M28** (still to measure) is whether `session.receive` fires while a turn runs.
 > **Relation to v1 and v2:** v1 shipped P0–P3 (alpha.513–527), v2 shipped P2c, P5a, P5b and P8a-1a…1d (alpha.529–579). v3 schedules what is left of spec §12: **P4, P4b, P4c, P6, P7**. P8b is not scheduled and not written here. v3 uses a **compact format**: contracts, rules, tests and mutation gates, but no full code blocks. v2's code blocks went stale after review, so v3 does not repeat that mistake. The implementer writes the code test-first from these contracts.
@@ -81,13 +82,13 @@
 | **P4b-1** | Parse `rate_limits`; account fingerprint; per-host weekly reading; `GET /api/peers/team/usage` | P4-1 | 600 / 10 | daemon |
 | **P4b-2** | Repo inventory (scan, `developable`, canonical key); `team.repo_roots|min_weekly_remaining|preferred_host`; `GET /api/team/repos`, `GET /api/peers/team/repos` | P4-4, P4b-1 | 680 / 10 | daemon |
 | **P4b-3** | Peers `HostCaller` (call path X on host Y); `GET /api/team/hosts` | P4b-2 | 400 / 6 | daemon |
-| **P4b-4** | Selection rule; `pdx spawn --repo/--host`; the choice line; `no_host_for_repo`; `remote_unsupported` until P4c | P4b-3, P4-7 | 560 / 10 | daemon + CLI + setup |
+| **P4b-4** | Selection rule; `pdx spawn --repo/--host`; the choice line; `no_host_for_repo`; `remote_unsupported` (reused from U24 PL-1a) until P4c | P4b-3, P4-7, U24 PL-1a | 550 / 10 | daemon + CLI + setup |
 | **P4c-1** | `PeerHost.AllowTeam`; `pdx peers host allow-team`; Hosts toggle | main | 380 / 12 | daemon + CLI + SPA |
 | **P4c-2** | Member host side: `remote_members`; `POST /api/peers/team/spawn|kill|lead-moved|end`; policy; role of a remote member | P4b-4, P4c-1 | 760 / 12 | daemon |
 | **P4c-3** | Lead host side, spawn: `forwarded_ops`; forwarding with op-id idempotency, classification and the restart grace; resume at boot; CLI codes | P4c-2 | 520 / 8 | daemon (both hosts) + CLI |
 | **P4c-4** | Lead host side, the rest: kill forwarding; lead-moved / end outbox (retried forever, backoff ≤ 10 min); remote members in `pdx team` (`ContextInfo` model/effort); `matchMember` on remote hosts | P4c-3 | 620 / 10 | daemon (both hosts) |
 | **P6-0** | Pure move: split `cmd/pdx/relay.go` (#1730) | main | 560 moved / 3 | none |
-| **P6-1** | Daemon notifier: virtual peer, in-process peers sender, auto-reply; lead-handover notice to members | P4-3 | 600 / 8 | daemon |
+| **P6-1** | Daemon notifier: virtual peer, auto-reply; lead-handover notice to members (the in-process peers sender is U24 PL-1d1's) | P4-3, U24 PL-1d1 | 420 / 5 | daemon |
 | **P6-2a** | Member-relay wire; `relay_ops.pid/pane_id`; persisted mod `hello`; `cleared` binding by op pid | P6-1 | 420 / 10 | daemon |
 | **P6-2b** | `POST /api/team/relays` and the control message; `POST /api/relay/ops/{id}/claim` (no lock at claim); op long-poll | P6-2a, P4-6 | 650 / 6 | daemon |
 | **P6-3a** | Mod: run the read-only git commands itself and embed them in the write prompt; write and fix prompts say "one `Write` of the whole file" | P9a-2 | 300 / 3 | daemon + setup |
@@ -868,7 +869,7 @@ pdx team [--json] [--config <path>]
 **Interfaces.**
 - `SpawnRequest` gains `Repo, Host string \`json:",omitempty"\``.
 - `SpawnOp` gains `Choice *HostChoice \`json:"choice,omitempty"\``, where `type HostChoice struct{ HostAlias, HostID string; Self bool; Cwd, Reason string }`.
-- Codes `ErrNoHostForRepo = "no_host_for_repo"`, `ErrRemoteUnsupported = "remote_unsupported"`, both 409 and exit 13.
+- Code `ErrNoHostForRepo = "no_host_for_repo"`, 409 and exit 13. **`ErrRemoteUnsupported = "remote_unsupported"` already exists** (U24 plan `2026-10-08-unattended-adopt-plan.md`, PL-1a, edited in by that plan's commit) and the CLI already maps it to exit 13 (its PL-1e): reuse both, do not define them again.
 - `func chooseHost(x string, hosts []team.HostInventory, preferred string, minRemaining int) (team.HostChoice, *team.APIError)`, a pure function.
 - `func matchRepo(x string, c team.RepoCheckout) bool`:
   1. the exact canonical key;
@@ -1189,19 +1190,14 @@ Pre-split from the original P4c-3 per codex finding 6. Kill forwarding, the outb
 
 **Goal.** Spec §8.5 "Daemon notices come from the daemon's own virtual peer … A reply to it gets one line back"; §7.4 (c) "notices … go through `POST /api/peers/send` from the member host's virtual peer"; §8.4 "When a lead relays, the daemon also tells each active member". Plan v2's P5a section deferred this notice to P4. It lands here, with the notifier it needs (deviation 8).
 
+> **Edited 2026-10-08 by the U23/U24 plan** (`docs/specs/2026-10-08-unattended-adopt-plan.md`, its decision 15): the in-process peers sender (`SenderKey`, `Sender`, `SendError`, `internal/module/peers/sender.go` and its two tests) is built by that plan's **PL-1d1**, which this PR needs. This PR adds only the virtual peer, the auto-reply and the handover notice; `notify.go` is shared with PL-1d1's notice outbox (extend it, do not create it).
+
 **Files.**
-- Create `internal/module/peers/sender.go` and `sender_test.go`.
-- Modify `internal/module/peers/module.go` (register `SenderKey`).
-- Create `internal/module/team/notify.go`, `notice.go` and `notify_test.go`.
-- Modify `internal/module/team/module.go` (`Start` / `Stop`, `Init` resolves the sender) and `relay_report.go` (handover after `cleared` applied).
+- Modify `internal/module/team/notify.go` (PL-1d1's) and create `notice.go`; modify `notify_test.go`.
+- Modify `internal/module/team/module.go` (`Start` / `Stop` for the virtual peer) and `relay_report.go` (handover after `cleared` applied).
 
 **Interfaces.**
-- Peers:
-  - `const SenderKey = "peers.sender"`.
-  - `type Sender interface{ Send(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) }`.
-  - `type SendError struct{ Status int; API ipeers.APIError }` for any non-2xx.
-  - The implementation runs `m.handleSend` (`internal/module/peers/send.go:197`) in process. The request context carries `middleware.WithPrincipal(ctx, Principal{Kind: PrincipalAdmin})`, because the handler is admin-only (`:202-206`). The response goes to a small buffered `http.ResponseWriter`.
-  - This keeps one send path: resolution, local and remote delivery, audit.
+- Peers (provided by PL-1d1, unchanged here): `SenderKey = "peers.sender"`, `Sender`, `SendError`; the implementation runs `m.handleSend` (`internal/module/peers/send.go:197`) in process under the admin principal, keeping one send path: resolution, local and remote delivery, audit.
 - Team:
   - `type notifier struct{ vp *ccuds.VirtualPeer; send peersmod.Sender; logf … }`.
   - `func (m *Module) notify(ctx context.Context, to, text string) error`: a 5 s context, with `OriginInbox = vp.SockPath()`.
@@ -1222,8 +1218,7 @@ Pre-split from the original P4c-3 per codex finding 6. Kill forwarding, the outb
 4. **Visibility.** `pdx peers` lists `<host>/pdx-daemon` from now on (risk).
 
 **Tests.**
-- `TestSender_RunsHandleSendAsAdmin`.
-- `TestSender_RefusalIsASendError`.
+- (`TestSender_RunsHandleSendAsAdmin` and `TestSender_RefusalIsASendError` moved to U24 PL-1d1.)
 - `TestNotifier_StartsAndStopsWithTheModule`: temp sock and registry dirs; files gone after `Stop`.
 - `TestNotify_UsesTheVirtualPeersInbox`.
 - `TestAutoReply_OncePerSenderPerWindow_NeverToPdxDaemon`.
@@ -1233,7 +1228,7 @@ Pre-split from the original P4c-3 per codex finding 6. Kill forwarding, the outb
 - Notify on `ReportNoop` → the once test red.
 - Drop the `pdx-daemon` guard → the loop test red.
 
-**Size.** 600 lines, 8 files.
+**Size.** ≈ 420 lines, 5 files (the sender moved to U24 PL-1d1).
 
 **Risks.**
 - **Origin attribution.** **Verify in this PR** that `findOrigin` (`send.go:147`) accepts the virtual peer's row as an origin, the way the peer-proxy helper's virtual peer is accepted (`internal/peers/proxyhelper/helper.go:114`). If it does not, the sender must name the origin by the daemon's pid instead. Stop and report rather than widen `findOrigin` silently.
@@ -1310,6 +1305,7 @@ Pre-split from the original P4c-3 per codex finding 6. Kill forwarding, the outb
    - **Mod.** `modSeen[member sid].ModVersion` ≥ 2 (decimal), else `relay_unsupported`. A mod of protocol 1 cannot handle the control message (deviation 14).
    - **One op.** `OpenRelayOpBySession` → 409 `relay_open` with the op.
    - **Insert.** `{ID: req.ID, Kind member, TeamID, SessionID, Ref, State requested, HandoffPath: <relay dir>/<id>.md, PID, PaneID}`, where PID and pane come from the member row. `ErrRelayOpOpen` from the insert → the same 409.
+   - **Exclusive with a release** (added 2026-10-08 by the U23/U24 plan, its "Contracts for later PRs" 1 and decision 12): the insert runs in **one write transaction that first takes the write lock and confirms the target's member row is still `active` in a live team**; no row → 409 `not_your_member`, nothing inserted. U24 PL-1d2's `ReleaseMember` is a conditional `UPDATE` that refuses while any relay op of the session is not terminal, so exactly one of a concurrent create and release commits: a release first → this create answers `not_your_member`; the op first → the release answers `relay_open`.
 2. **Control message.** After the commit, `notify(<self alias>/_<member ref>, "[pdx-relay:control] op=<id>")`. A failure is logged; the claim timeout (P6-4) covers it.
 3. **Claim.**
    - Op kind must be `member`, else 409 `bad_transition`.
@@ -1322,6 +1318,7 @@ Pre-split from the original P4c-3 per codex finding 6. Kill forwarding, the outb
 - `TestRelayCreate_Checks`: `not_lead`, `not_your_member`, `unknown_session`; no hello → `relay_unsupported`; version 1 → `relay_unsupported`; `relay_open`; replay; `id_conflict`.
 - `TestRelayCreate_SendsTheControlMessageToTheMember`.
 - `TestRelayCreate_TableConflictIs409`.
+- `TestRelayCreate_RacesReleaseOneWins`: a seam runs a `pdx release` of the member between the create's checks and its insert → the create answers 409 `not_your_member` and no op exists; the reverse order → the release answers 409 `relay_open`. Mutation gate: confirm the membership outside the insert's transaction → red.
 - `TestClaim_OnlyTheTargetSession` (the spec's mutation gate).
 - `TestClaim_IsIdempotentAndCarriesTheLead`.
 - `TestClaim_SelfOpIsBadTransition`.
