@@ -389,7 +389,6 @@
   "session.picker.no_match": "No matching sessions",
 
   "browser.provider_label": "Browser",
-  "browser.requires_app": "Requires desktop app",
   "browser.url_placeholder": "Enter URL...",
   "browser.open_external": "Open in browser",
   "browser.copy_url": "Copy URL",

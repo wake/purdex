@@ -13,7 +13,6 @@ import { normalizeEventName } from '../lib/event-name'
 import { findTabBySessionCode, getPrimaryPane } from '../lib/pane-tree'
 import { executionIdOfAgentCode, isExecAgentCode } from '../lib/nex/worker-agent-status'
 import { readWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
-import { getPlatformCapabilities } from '../lib/platform'
 import { useHostStore } from '../stores/useHostStore'
 import { selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
@@ -257,8 +256,7 @@ export function useNotificationDispatcher(): void {
         const content = buildNotificationContent(event.raw_event_name, (event.detail ?? {}) as Record<string, unknown>, sessionName, useI18nStore.getState().t)
         if (!content) continue
 
-        const capabilities = getPlatformCapabilities()
-        if (capabilities.canNotification && window.electronAPI?.showNotification) {
+        if (window.electronAPI?.showNotification) {
           window.electronAPI.showNotification({
             title: content.title,
             body: content.body,
@@ -419,8 +417,7 @@ export function handleNotificationClick(action: NotificationAction): void {
 }
 
 function sendConnectionNotification(message: string, action: NotificationAction): void {
-  const capabilities = getPlatformCapabilities()
-  if (capabilities.canNotification && window.electronAPI?.showNotification) {
+  if (window.electronAPI?.showNotification) {
     window.electronAPI.showNotification({
       title: message,
       body: '',

@@ -21,7 +21,7 @@ import { SETTINGS_ORDER } from '../settings-order'
 //   terminal(1)
 //   interface(2)
 //   profile(3)              — Profile Sync P3d-2: the last of the core band
-//   electron(5)             — gated by canSystemTray; filtered out
+//   electron(5)             — always on since browser convergence batch 4a
 //   module-config(10)
 //   browser(11)
 //   editor(13)
@@ -48,7 +48,6 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
   // would silently let an unexpected new row sneak in by simply not
   // checking against it; explicit allow-listing closes that hole.
   const OPTIONAL_GATED = new Set([
-    'electron',           // canSystemTray
     'dev-environment',    // devUpdateEnabled
   ])
 
@@ -64,6 +63,7 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
       { id: 'terminal',            order: SETTINGS_ORDER.TERMINAL },                    // 1
       { id: 'interface',           order: SETTINGS_ORDER.INTERFACE },                   // 2
       { id: 'profile',             order: SETTINGS_ORDER.PROFILE },                     // 3
+      { id: 'electron',            order: SETTINGS_ORDER.ELECTRON },                    // 5
       { id: 'module-config',       order: SETTINGS_ORDER.MODULE_CONFIG },               // 10
       { id: 'browser',             order: SETTINGS_ORDER.MODULE_BROWSER },              // 11
       { id: 'editor',              order: SETTINGS_ORDER.MODULE_EDITOR },               // 13
@@ -74,7 +74,7 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
     // Step 2: any entry not in the always-on list must be one of the
     // explicitly allowed gated ids — nothing else.
     const expectedAlwaysOnIds = new Set([
-      'appearance', 'terminal', 'interface', 'profile', 'module-config',
+      'appearance', 'terminal', 'interface', 'profile', 'electron', 'module-config',
       'browser', 'editor',
       'performance-monitor', 'worker',
     ])

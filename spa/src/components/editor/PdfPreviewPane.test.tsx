@@ -24,12 +24,6 @@ vi.mock('../../lib/fs-backend', async (importOriginal) => {
 })
 
 const PDF_FS_CAPS: PlatformCapabilities = {
-  isElectron: false,
-  canTearOffTab: false,
-  canMergeWindow: false,
-  canBrowserPane: false,
-  canSystemTray: false,
-  canNotification: false,
   devUpdateEnabled: false,
   hasLocalFilesystem: false,
 }

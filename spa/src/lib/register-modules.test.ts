@@ -33,6 +33,7 @@ import { clearHostBuiltinSources, HOST_BUILTIN_MODULE_ID } from './host-builtin-
 import enLocale from '../locales/en.json'
 import zhLocale from '../locales/zh-TW.json'
 import { useModuleEnabledStore } from '../stores/useModuleEnabledStore'
+import { SETTINGS_ORDER } from './settings-order'
 import { PlaceholderSettingsSection } from '../components/settings/PlaceholderSettingsSection'
 import { sortDisableableModulesForSwitchboard } from '../components/settings/ModulesSwitchboardSection'
 
@@ -118,33 +119,24 @@ describe('registerBuiltinModules', () => {
     expect(listContributions('purdex').some((item) => item.id === 'memory-monitor.performance-monitor')).toBe(false)
   })
 
-  it('registers browser provider as disabled when no electronAPI', () => {
+  // The App is the only shell: neither the browser provider nor the Electron
+  // section is gated on electronAPI any more (browser convergence, batch 4a).
+  // Their IPC call sites guard `window.electronAPI` themselves.
+  it('registers the browser provider enabled, with no electronAPI present', () => {
+    expect(window.electronAPI).toBeUndefined()
     registerBuiltinModules()
     const browser = getNewTabProviders().find((p) => p.id === 'browser')
     expect(browser).toBeDefined()
-    expect(browser?.disabled).toBe(true)
-    expect(browser?.disabledReason).toBe('browser.requires_app')
+    expect(browser?.disabled).toBeFalsy()
+    expect(browser?.disabledReason).toBeUndefined()
   })
 
-  it('registers browser provider as enabled when electronAPI present', () => {
-    ;(window as unknown as Record<string, unknown>).electronAPI = { tearOffTab: async () => {} }
-    registerBuiltinModules()
-    const browser = getNewTabProviders().find((p) => p.id === 'browser')
-    expect(browser).toBeDefined()
-    expect(browser?.disabled).toBe(false)
-  })
-
-  it('does not register electron section when no electronAPI', () => {
-    registerBuiltinModules()
-    const electron = getSettingsSections().find((s) => s.id === 'electron')
-    expect(electron).toBeUndefined()
-  })
-
-  it('registers electron section when electronAPI present', () => {
-    ;(window as unknown as Record<string, unknown>).electronAPI = { tearOffTab: async () => {} }
+  it('registers the electron section at SETTINGS_ORDER.ELECTRON, with no electronAPI present', () => {
+    expect(window.electronAPI).toBeUndefined()
     registerBuiltinModules()
     const electron = getSettingsSections().find((s) => s.id === 'electron')
     expect(electron).toBeDefined()
+    expect(electron?.order).toBe(SETTINGS_ORDER.ELECTRON)
   })
 
   it('no longer registers a global Snapshot settings section', () => {
@@ -400,8 +392,9 @@ describe('registerBuiltinModules → new contribution registry (PR-2)', () => {
     // `workspace` row stays removed (PR-3 decision 5a — nothing
     // consumes the reserved-items plumbing and the entry itself is dead).
     //
-    // Always-on: appearance / terminal / interface / module-config.
-    // Electron / dev-environment are gated by PlatformCapabilities.
+    // Always-on: appearance / terminal / interface / module-config, and
+    // electron (no longer gated, browser convergence batch 4a).
+    // dev-environment is gated by PlatformCapabilities.devUpdateEnabled.
     // `sync` was promoted to a structural module by PR-2 (spec §4.3)
     // and is no longer a legacy section; `editor-buffers` was removed
     // when the Editor module migrated to HSR — see R1-3 below.

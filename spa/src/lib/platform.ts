@@ -1,27 +1,17 @@
 // spa/src/lib/platform.ts
 
+// The App (Electron) is the only shell that loads this SPA, so there is no
+// "browser vs Electron" flag here. Both flags are real capability detection:
+// the Mac App can load the SPA from the dev server while its Electron preload
+// is OLDER than the SPA, so each one follows the preload method it needs.
 export interface PlatformCapabilities {
-  isElectron: boolean
-  canTearOffTab: boolean
-  canMergeWindow: boolean
-  canBrowserPane: boolean
-  canSystemTray: boolean
-  canNotification: boolean
   devUpdateEnabled: boolean
   hasLocalFilesystem: boolean
 }
 
 export function getPlatformCapabilities(): PlatformCapabilities {
-  const isElectron = !!window.electronAPI
-  const devUpdateEnabled = isElectron && !!window.electronAPI?.getAppInfo
   return {
-    isElectron,
-    canTearOffTab: isElectron,
-    canMergeWindow: isElectron,
-    canBrowserPane: isElectron,
-    canSystemTray: isElectron,
-    canNotification: isElectron,
-    devUpdateEnabled,
-    hasLocalFilesystem: isElectron && !!window.electronAPI?.fs,
+    devUpdateEnabled: !!window.electronAPI?.getAppInfo,
+    hasLocalFilesystem: !!window.electronAPI?.fs,
   }
 }

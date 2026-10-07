@@ -5,12 +5,6 @@ import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
 import { useI18nStore } from '../stores/useI18nStore'
 
-vi.mock('../lib/platform', () => ({
-  getPlatformCapabilities: vi.fn(() => ({ canTearOffTab: false, canMergeWindow: false, canBrowserPane: false, canSystemTray: false, canNotification: false, isElectron: false, devUpdateEnabled: false })),
-}))
-
-import { getPlatformCapabilities } from '../lib/platform'
-
 function makeSessionTab(mode: 'terminal' = 'terminal', opts?: { pinned?: boolean; locked?: boolean }): Tab {
   const tab = createTab({ kind: 'tmux-session', hostId: 'test-host', sessionCode: 'tst001', mode, cachedName: '', tmuxInstance: '' }, { pinned: opts?.pinned })
   if (opts?.locked) return { ...tab, locked: true }
@@ -159,21 +153,17 @@ describe('TabContextMenu', () => {
     expect(props.onAction).toHaveBeenCalledWith('rename', undefined)
   })
 
-  // --- Tear-off section (Electron only) ---
-  it('shows "Move to New Window" when caps.canTearOffTab is true', () => {
-    vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: true, canMergeWindow: false, canBrowserPane: false, canSystemTray: false, canNotification: true, isElectron: true, devUpdateEnabled: false, hasLocalFilesystem: true })
-    renderMenu()
-    expect(screen.getByText('Move to New Window')).toBeInTheDocument()
-  })
-
-  it('does not show "Move to New Window" when no electronAPI (canTearOffTab false)', () => {
-    vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: false, canMergeWindow: false, canBrowserPane: false, canSystemTray: false, canNotification: false, isElectron: false, devUpdateEnabled: false, hasLocalFilesystem: false })
-    renderMenu()
-    expect(screen.queryByText('Move to New Window')).not.toBeInTheDocument()
+  // --- Tear-off section ---
+  // The App is the only shell, so the item is always offered; the 'tearOff'
+  // handler (features/workspace/hooks.ts) is what checks for electronAPI.
+  it('offers "Move to New Window" with no electronAPI present', () => {
+    expect(window.electronAPI).toBeUndefined()
+    const props = renderMenu()
+    fireEvent.click(screen.getByText('Move to New Window'))
+    expect(props.onAction).toHaveBeenCalledWith('tearOff', undefined)
   })
 
   it('"Move to New Window" is disabled when tab is locked', () => {
-    vi.mocked(getPlatformCapabilities).mockReturnValue({ canTearOffTab: true, canMergeWindow: false, canBrowserPane: false, canSystemTray: false, canNotification: true, isElectron: true, devUpdateEnabled: false, hasLocalFilesystem: true })
     renderMenu({ tab: makeSessionTab('terminal', { locked: true }) })
     const tearOffBtn = screen.getByText('Move to New Window').closest('button')!
     expect(tearOffBtn).toBeDisabled()

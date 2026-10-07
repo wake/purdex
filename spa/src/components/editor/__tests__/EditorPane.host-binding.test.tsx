@@ -35,12 +35,6 @@ vi.mock('../TiptapEditor', async () => ({
 }))
 
 const HOST_BOUND_CAPS: PlatformCapabilities = {
-  isElectron: false,
-  canTearOffTab: false,
-  canMergeWindow: false,
-  canBrowserPane: false,
-  canSystemTray: false,
-  canNotification: false,
   devUpdateEnabled: false,
   hasLocalFilesystem: false,
 }

@@ -5,7 +5,6 @@
 // in the same millisecond (two hosts, or two sessions on one) would otherwise lose one notification. `approvalBroadcastTs`
 // hashes `<hostId>\0<approval.id>` — identical across the windows of one device, distinct per request. U14: the App is
 // the only client — no browser fallback.
-import { getPlatformCapabilities } from '../platform'
 import { hostLabel, hostLookOf } from '../host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { approvalSessionLabel } from './approval-format'
@@ -37,7 +36,7 @@ export function approvalBroadcastTs(hostId: string, id: string): number {
 }
 
 export function notifyApprovalOpened(hostId: string, approval: Approval): void {
-  if (!getPlatformCapabilities().canNotification || !window.electronAPI?.showNotification) return
+  if (!window.electronAPI?.showNotification) return
   const t = useI18nStore.getState().t
   const host = hostLabel(hostId, hostLookOf(hostId))
   const session = approvalSessionLabel(approval.origin)
