@@ -420,3 +420,45 @@ PR1a–c are inert until PR2b lands: an old SPA ignores both the unknown event t
 | 9 | med | Real-handler `title_changed` inside the slot; timeout/cancel releases the slot | §5 "slot under the real Nexen handler" |
 | 10 | high | hello `seq 0` JSON, dropped last frame, same-epoch reconnect, dropped new-epoch hello | §5 wire format / strict send / reconnect |
 | self | – | §3.7 held the slot across the whole reconcile walk | §3.7: slot per page, each page its own `ver` |
+
+### Round 3 (`task-muyjfxdr-el1o15`): 8 of 10 resolved, #5/#6 partly, 3 new Important (coordinator: PR1a released; these fixes land before the PRs named below)
+
+**R3-1. SPA reconcile counts a delayed-but-legitimate delta as a mismatch** (blocks PR2b).
+- A delta read before the page (`D ≤ V`) can be enqueued before the page read yet written to the socket after the page response, because the write pump is asynchronous (`internal/core/events.go:117-130`). "Benign only if `ver > V` arrives" misjudges this case.
+- **Fix:**
+  - the list wrapper's `pdx` gains `"bseq": H`, the broadcast high-water mark taken inside the slot together with the page's `ver` (`"pdx": {"epoch", "ver", "bseq"}`);
+  - at commit, a suspect is recorded with `{id, V, H, listDigest}`;
+  - it is **not evaluated until the client has processed every delta with `bseq ≤ H`** (`lastBseq ≥ H`), and then the grace (1.5 s) runs;
+  - it is benign if, meanwhile, any delta for that id arrived with `bseq ≤ H` and a digest equal to `listDigest` (in flight, carrying the same state; such a delta is not applied because `D ≤ V`, but it is observed), or with `ver > V` (a newer change);
+  - otherwise it is a mismatch.
+  - A gap or epoch change cancels pending suspects, because the following reconcile re-evaluates.
+- **Tests:**
+  - a delta with `D ≤ V` delivered after the page → benign;
+  - a delta withheld (seeded apply defect) → mismatch;
+  - a suspect stays pending while `lastBseq < H`.
+
+**R3-2. First reconcile after start pushes every execution as unseen → disconnect storm** (blocks PR1c).
+- With `lastPushed` empty, the first tick would push every row. The 64-slot buffer plus strict send would disconnect everyone.
+- **Fix (coordinator ruling):**
+  - when an epoch starts (daemon start, or bus resubscribe §3.6), the projector **seeds `lastPushed`** from a full read (per page, inside the slot) **without pushing**. The new epoch's hello makes every client do a full reconcile, so clients hold exactly that baseline and nothing is hidden;
+  - after seeding, unseen and mismatch pushes per tick are capped at 32 (oldest first; the rest wait for the next tick; the counters count every detection, pushed or deferred).
+- **Tests:**
+  - start with N > 64 existing executions → no pushes on the first tick, `lastPushed` seeded;
+  - 100 unseen in one tick → 32 pushed, the rest next tick;
+  - no subscriber disconnected.
+
+**R3-3. No SPA retry contract for 503 `nex_busy`** (blocks PR2a).
+- Today `listExecutions` turns any non-2xx into `NexApiError` and the walk goes straight to `error`.
+- The wrapper answers `503 {"code": "nex_busy"}` (Nexen's error shape, so `NexApiError.code === 'nex_busy'`).
+- **Contract (`listAllExecutions`):**
+  - retry the **same page** (same cursor);
+  - back off 250 ms, doubling, capped at 2 s;
+  - at most 5 retries per page (about 5.75 s);
+  - every wait and retry is guarded by the walk's existing `stillCurrent` (generation, fingerprint, readiness, subscribers), so a superseded walk stops quietly;
+  - the overlay stays open through the retries;
+  - only exhaustion (or any other error) puts the cache in `error`, keeping the previous rows.
+  - Other 5xx codes keep today's behaviour.
+- **Tests:**
+  - busy twice then 200 → the walk completes, and deltas that arrived during the retries are applied by the overlay;
+  - busy six times → `error`, rows kept;
+  - a walk superseded during backoff → no further request and no commit.
