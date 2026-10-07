@@ -49,6 +49,11 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Validate before mutating
 	var nexUpdate *config.NexConfig
+	// keepPeer: the nex body has no "peer" key. The rest of [nex] is still
+	// replaced wholesale, but [nex.peer] keeps its current value — a client
+	// that predates the section (an older bundled renderer) must not switch
+	// the mailbox off (U4) or drop a saved cap/template by omission.
+	keepPeer := false
 	if len(req.Nex) > 0 {
 		if bytes.Equal(bytes.TrimSpace(req.Nex), []byte("null")) {
 			http.Error(w, "nex must be an object", http.StatusBadRequest)
@@ -59,6 +64,13 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid nex: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal(req.Nex, &keys); err != nil {
+			http.Error(w, "invalid nex: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		_, hasPeer := keys["peer"]
+		keepPeer = !hasPeer
 		// Static shape validation only (spec §4.4.1 division of labour);
 		// whether the engine can actually assemble is Init's business after
 		// the restart the UI asks for.
@@ -103,7 +115,14 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			cfg.UploadDir = *req.UploadDir
 		}
 		if nexUpdate != nil {
-			cfg.Nex = *nexUpdate // persisted, never applied live (I9)
+			next := *nexUpdate
+			if keepPeer {
+				// Read under UpdateConfig's write lock, so a concurrent PUT
+				// cannot slip a stale [nex.peer] in between. The kept value
+				// was validated when it was loaded or PUT.
+				next.Peer = cfg.Nex.Peer
+			}
+			cfg.Nex = next // persisted, never applied live (I9)
 		}
 		return nil
 	})
