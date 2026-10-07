@@ -734,7 +734,8 @@ describe('ExecutionView — subagent tools drive the ticker and the dots (T5.3)'
   it("the ticker stops when a child's tool result arrives", () => {
     withFakeTimers(() => {
       patchExec({ turnLive: true })
-      render(<ExecutionView {...base} isActive />)
+      // Chat: its dots own no timer, so the count is the ticker's alone (the room's working line ticks too).
+      render(<ExecutionView {...base} mode="chat" isActive />)
       const idleTimers = vi.getTimerCount()
       apply(childToolUseFrame(1, 10_000))
       expect(childTool().status).toBe('running')
@@ -748,7 +749,8 @@ describe('ExecutionView — subagent tools drive the ticker and the dots (T5.3)'
   it('the main result stops the ticker even when a child tool never reported', () => {
     withFakeTimers(() => {
       patchExec({ turnLive: true })
-      render(<ExecutionView {...base} isActive />)
+      // Chat: its dots own no timer, so the count is the ticker's alone (the room's working line ticks too).
+      render(<ExecutionView {...base} mode="chat" isActive />)
       const idleTimers = vi.getTimerCount()
       apply(childToolUseFrame(1, 10_000))
       expect(vi.getTimerCount()).toBe(idleTimers + 1)
@@ -763,7 +765,8 @@ describe('ExecutionView — subagent tools drive the ticker and the dots (T5.3)'
   it("a child's own result frame does not stop the ticker while the parent turn is still running", () => {
     withFakeTimers(() => {
       patchExec({ turnLive: true })
-      render(<ExecutionView {...base} isActive />)
+      // Chat: its dots own no timer, so the count is the ticker's alone (the room's working line ticks too).
+      render(<ExecutionView {...base} mode="chat" isActive />)
       const idleTimers = vi.getTimerCount()
       apply(childToolUseFrame(1, 10_000))
       expect(vi.getTimerCount()).toBe(idleTimers + 1)
@@ -1524,6 +1527,31 @@ describe('ExecutionView — room and chat (R2 T1.4)', () => {
     expect(bubble.className).toContain('font-mono')
     expect(bubble.className).toContain('opacity-60')
     expect(within(bubble).getByText(/queued/i)).toBeInTheDocument()
+  })
+
+  // The thinking indicator differs by mode only in rendering: the room draws a
+  // terminal-style working line, chat keeps the three dots. Visibility is shared.
+  it('room draws the working line, chat the dots, for the same live turn', () => {
+    patchExec({ turnLive: true })
+    const room = render(<ExecutionView {...base} isActive />)
+    const line = screen.getByTestId('thinking-indicator')
+    expect(line.dataset.mode).toBe('room')
+    expect(screen.getByTestId('working-verb')).toHaveTextContent('…')
+    expect(screen.getByTestId('working-elapsed')).toHaveTextContent(/^\(\d+s\)$/)
+    expect(line.querySelector('.animate-pulse')).toBeNull()
+    room.unmount()
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    const dots = screen.getByTestId('thinking-indicator')
+    expect(dots.dataset.mode).toBeUndefined()
+    expect(dots.querySelectorAll('.animate-pulse')).toHaveLength(3)
+    expect(screen.queryByTestId('working-verb')).toBeNull()
+  })
+
+  it('room working line counts from the open turn start and keeps one verb for the turn', () => {
+    const t0 = Date.now() - 100_000
+    patchExec({ turnLive: true, turnStarts: [0], turnMeta: [{ startAt: t0, endAt: null, outcome: null, durationMs: null }] })
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.getByTestId('working-elapsed')).toHaveTextContent(/^\(1m 4\ds\)$/)
   })
 
   it('chat keeps the dots on while a thought streams', () => {

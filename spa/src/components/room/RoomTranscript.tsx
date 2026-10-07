@@ -19,6 +19,7 @@ import { indexOperations } from '../../lib/nex/operations'
 import { groupTurns, type RoomTurn } from '../../lib/nex/turns'
 import type { TurnMeta } from '../../lib/nex/event-reducer'
 import ThinkingIndicator from '../ThinkingIndicator'
+import WorkingLine from './WorkingLine'
 import PartialMessageGroup from '../PartialMessageGroup'
 import RoomTurnGroup from './RoomTurnGroup'
 import TurnFooter from './TurnFooter'
@@ -31,6 +32,8 @@ export interface RoomTranscriptProps {
   messages: StreamMessage[]
   keyPrefix: string            // stable per pane; keys are `${keyPrefix}-${i}`
   showThinking: boolean        // ThinkingIndicator visibility
+  /** When given, the thinking indicator is the terminal-style working line (the room's) rather than chat's dots. */
+  working?: { turnKey: string; startedAt?: number }
   showEmptyHint: boolean       // "waiting" hint (the caller decides when)
   emptyText?: string           // override for the hint (default t('stream.waiting'))
   scrollKey?: number           // extra auto-scroll dependency (the optimistic line)
@@ -80,6 +83,7 @@ export default function RoomTranscript({
   messages,
   keyPrefix,
   showThinking,
+  working,
   showEmptyHint,
   emptyText,
   scrollKey,
@@ -170,7 +174,9 @@ export default function RoomTranscript({
         )}
 
         {/* Thinking indicator */}
-        <ThinkingIndicator visible={showThinking} />
+        {working
+          ? <WorkingLine visible={showThinking} turnKey={working.turnKey} startedAt={working.startedAt} />
+          : <ThinkingIndicator visible={showThinking} />}
 
         {afterThinking}
       </FoldContext.Provider>

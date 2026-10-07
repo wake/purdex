@@ -64,7 +64,7 @@ import { selectAttachmentFetch, selectImageAttachments, selectPreludeItemOffset,
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
-import { defaultExecutionState } from '../../lib/nex/event-reducer'
+import { defaultExecutionState, hasOpenTurn } from '../../lib/nex/event-reducer'
 import { costSummary } from '../../lib/nex/cost-summary'
 import { useThinkingGate } from './useThinkingGate'
 import { anyRunningSubagent, anyRunningTask, runningTasks, subagentTasksByToolUse } from '../../lib/nex/tasks'
@@ -357,6 +357,15 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   const hasTasks = Object.keys(st.tasks).length > 0
   const rawThinking = (st.turnLive || ownSend) && !partialVisible && !anyRunning && !(taskRunning && !ownSend)
   const showThinking = useThinkingGate(rawThinking, hasTasks)
+  // The room's working line: the verb is fixed per turn (the open turn's number,
+  // or the one the pending send will open — the same number once it is accepted);
+  // it counts from the open turn's start, else from when the line appeared.
+  const openTurn = hasOpenTurn(st)
+  const openTurnStart = openTurn ? st.turnMeta.findLast((m) => m.outcome === null)?.startAt : undefined
+  const working = useMemo(
+    () => ({ turnKey: `${executionId}:${openTurn ? st.turnStarts.length - 1 : st.turnStarts.length}`, startedAt: openTurnStart }),
+    [executionId, openTurn, st.turnStarts.length, openTurnStart],
+  )
   // Spec §3.2: one fold memory per pane. It lives here, above the view
   // switch, because room ⇄ chat remounts the transcript (F2).
   const foldStore = useFoldMemory()
@@ -742,7 +751,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
               )}
             </ChatTranscript>
           ) : (
-            <RoomTranscript {...transcriptProps}>
+            <RoomTranscript {...transcriptProps} working={working}>
               {/* The optimistic line: a user line like any other, dimmed until message_accepted (spec §4.1). */}
               {st.pendingLocal && (
                 <RoomUserLine text={st.pendingLocal.text} pending attachments={pendingThumbs}>{queuedTag}</RoomUserLine>
