@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -18,6 +19,9 @@ import (
 // (daemon restart spec §3.1). Like http.ErrServerClosed, it is an outcome,
 // not a failure.
 var errRestart = errors.New("restart requested")
+
+// watcherJoinCap bounds how long a panicking serveAndWait waits for its signal watcher.
+const watcherJoinCap = time.Second
 
 // restartRequested is the restart outcome serveAndWait returns; it is
 // errRestart to errors.Is. The restart still re-execs after a cleanup
@@ -130,7 +134,18 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	}
 
 	done := make(chan struct{})
+	var closeDone sync.Once
 	watcherDone := make(chan struct{})
+	// Deferred as well as done below: a panic out of the sequence must neither leak the signal
+	// watcher nor leave it running (it could still take a later signal and exit) once we unwind.
+	defer func() {
+		closeDone.Do(func() { close(done) })
+		// Bounded: the watcher may be inside logf, and a stuck writer must not turn the panic into a hang.
+		select {
+		case <-watcherDone:
+		case <-time.After(watcherJoinCap):
+		}
+	}()
 	go func() {
 		defer close(watcherDone)
 		if !signalTriggered {
@@ -152,6 +167,11 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 		}
 		select {
 		case <-sig:
+			select {
+			case <-done: // the sequence ended (or panicked) while this watcher was busy: no exit from here
+				return
+			default:
+			}
 			logf("received second signal, exiting immediately")
 			exit(130)
 		case <-done:
@@ -186,7 +206,7 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 		warnings = append(warnings, fmt.Sprintf("close modules: %v", e))
 	}
 
-	close(done)
+	closeDone.Do(func() { close(done) })
 	<-watcherDone // a signal the watcher took is now recorded in restartCancelled
 	if restartTriggered && !restartCancelled.Load() {
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {

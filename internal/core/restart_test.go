@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,4 +110,14 @@ func TestBeginShutdown_ReportsAcceptedRestart(t *testing.T) {
 	c.handleDaemonRestart(rec, httptest.NewRequest("POST", "/api/daemon/restart", nil))
 	assert.Equal(t, http.StatusConflict, rec.Code, "a restart already accepted stays 409, not 503")
 	assert.Equal(t, "restart_in_progress", decode(t, rec)["error"])
+}
+
+// #1569: the time fallback must honour the same 16-hex-char shape as the
+// random id, whatever the clock reads.
+func TestBootID_TimeFallbackIsAlways16Hex(t *testing.T) {
+	for _, ns := range []int64{0, 1, 0xabc, 1 << 40, 1<<62 + 5} {
+		id := timeBootID(time.Unix(0, ns))
+		assert.Len(t, id, 16, "ns=%d", ns)
+		assert.Regexp(t, `^[0-9a-f]{16}$`, id)
+	}
 }

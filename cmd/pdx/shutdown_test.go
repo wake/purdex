@@ -1099,3 +1099,63 @@ func TestServeAndWait_CleanRestartHasNoWarnings(t *testing.T) {
 		t.Fatalf("err = %v, warnings = %v", err, rr)
 	}
 }
+
+// #1569: a panic out of the shutdown sequence must not leak the signal
+// watcher — a later signal would otherwise reach a watcher that calls
+// exit(130) for a process that is already unwinding.
+func TestServeAndWait_PanicInSequenceStopsTheSignalWatcher(t *testing.T) {
+	h := newHarness()
+	h.target.stopHook = func(context.Context) { panic("stop modules blew up") }
+	h.sig <- syscall.SIGTERM
+
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("serveAndWait did not re-panic")
+			}
+		}()
+		_ = h.run(testBudget)
+	}()
+
+	h.sig <- syscall.SIGTERM // a watcher still alive would take this and exit(130)
+	time.Sleep(100 * time.Millisecond)
+	if got := h.exited(); len(got) != 0 {
+		t.Fatalf("exit calls = %v, want none: the watcher outlived the panic", got)
+	}
+	if len(h.sig) != 1 {
+		t.Fatalf("sig holds %d value(s), want 1: the watcher consumed it", len(h.sig))
+	}
+}
+
+// #1569 R2: the panic path joins the watcher with a bound — a watcher stuck in
+// logf must not turn the panic into a hang.
+func TestServeAndWait_PanicWithAWatcherStuckInLogfStillUnwinds(t *testing.T) {
+	h := newHarness()
+	inLogf, release := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	var once sync.Once
+	logf := func(f string, a ...any) {
+		if strings.Contains(f, "during restart") { // the watcher's first-signal line
+			once.Do(func() { close(inLogf) })
+			<-release
+		}
+	}
+	h.target.stopHook = func(context.Context) {
+		h.sig <- syscall.SIGTERM
+		<-inLogf // the watcher took it and is now blocked in logf
+		panic("stop modules blew up")
+	}
+	h.restart <- struct{}{}
+
+	unwound := make(chan struct{})
+	go func() {
+		defer close(unwound)
+		defer func() { _ = recover() }()
+		_ = serveAndWait(h.srv, nil, h.sig, h.restart, h.cancel, h.target, testBudget, logf, h.exit)
+	}()
+	select {
+	case <-unwound:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serveAndWait hung joining a watcher stuck in logf")
+	}
+}
