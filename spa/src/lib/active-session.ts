@@ -1,5 +1,5 @@
 import { useTabStore } from '../stores/useTabStore'
-import { getPrimaryPane } from './pane-tree'
+import { collectLeaves, getPrimaryPane, paneShowsAgent } from './pane-tree'
 import { execAgentCode } from './nex/worker-agent-status'
 import { resolveExecutionHostId } from './nex/resolve-host'
 
@@ -28,4 +28,16 @@ export function getActiveSessionInfo(): { hostId: string; sessionCode: string } 
   if (c.kind === 'tmux-session') return { hostId: c.hostId, sessionCode: c.sessionCode }
   if (c.kind === 'execution') return { hostId: resolveExecutionHostId(c.host), sessionCode: execAgentCode(c.executionId) }
   return null
+}
+
+/** Is the agent key `hostId`/`sessionCode` shown by ANY pane of the active tab — the primary one or any other leaf of
+ *  a split, at any depth (#1840)? The notification dispatcher's "the user is looking at it" check; unlike
+ *  `getActiveSessionInfo` (primary pane only), a split tab shows every one of its panes at once.
+ *  False when no tab is active or the active id names no tab. */
+export function isAgentVisibleInActiveTab(hostId: string, sessionCode: string): boolean {
+  const { activeTabId, tabs } = useTabStore.getState()
+  if (!activeTabId) return false
+  const tab = tabs[activeTabId]
+  if (!tab) return false
+  return collectLeaves(tab.layout).some((p) => paneShowsAgent(p.content, hostId, sessionCode))
 }

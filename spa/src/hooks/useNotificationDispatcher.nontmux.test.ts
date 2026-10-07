@@ -18,7 +18,7 @@ describe('non-tmux (cc-<session id>) sessions', () => {
   const HOST = 'h1'
   const CODE = 'cc-sid-1'
   const CK = `${HOST}:${CODE}`
-  const base = { derived: 'idle', eventName: 'PdxStop', compositeKey: CK, focusedCompositeKey: '', hasTab: false, settings: defaultSettings }
+  const base = { derived: 'idle', eventName: 'PdxStop', compositeKey: CK, visibleInActiveTab: false, hasTab: false, settings: defaultSettings }
 
   beforeEach(() => {
     __resetDebounceStateForTests()
@@ -44,7 +44,7 @@ describe('non-tmux (cc-<session id>) sessions', () => {
   })
   it('keeps the active-tab + focused-window suppression and the per-event/enabled switches', () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true)
-    expect(shouldNotify({ ...base, nonTmux: true, focusedCompositeKey: CK })).toBe(false)
+    expect(shouldNotify({ ...base, nonTmux: true, visibleInActiveTab: true })).toBe(false)
     expect(shouldNotify({ ...base, nonTmux: true, settings: { ...defaultSettings, enabled: false } })).toBe(false)
     expect(shouldNotify({ ...base, nonTmux: true, settings: { ...defaultSettings, events: { Stop: false } } })).toBe(false)
   })

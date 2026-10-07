@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useAgentStore, type NormalizedEvent } from '../stores/useAgentStore'
-import { getActiveSessionInfo } from '../lib/active-session'
-import { compositeKey, splitCompositeKey } from '../lib/composite-key'
+import { isAgentVisibleInActiveTab } from '../lib/active-session'
+import { splitCompositeKey } from '../lib/composite-key'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useNotificationSettingsStore } from '../stores/useNotificationSettingsStore'
 import type { NotificationSettings } from '../stores/useNotificationSettingsStore'
@@ -10,7 +10,8 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { buildNotificationContent } from '../lib/notification-content'
 import { normalizeEventName } from '../lib/event-name'
-import { findTabBySessionCode, getPrimaryPane } from '../lib/pane-tree'
+import { findPane, findTabAndPaneBySessionCode } from '../lib/pane-tree'
+import { usePaneFocusStore } from '../stores/usePaneFocusStore'
 import { executionIdOfAgentCode, isExecAgentCode } from '../lib/nex/worker-agent-status'
 import { isNonTmuxAgentCode } from '../lib/non-tmux-agent'
 import { readWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
@@ -233,7 +234,9 @@ interface ShouldNotifyParams {
   derived: string | null
   eventName: string
   compositeKey: string
-  focusedCompositeKey: string
+  /** Some pane of the active tab shows this agent — its primary pane or any other leaf of a split (#1840). */
+  visibleInActiveTab: boolean
+  /** Some pane of some tab shows this agent (#1840: any leaf, not only a tab's primary pane). */
   hasTab: boolean
   settings: NotificationSettings
   /** A session that is not tmux-backed (`cc-<id>`): it can never have a Purdex tab, so "no tab" is not a reason to stay quiet. */
@@ -244,7 +247,7 @@ interface ShouldNotifyParams {
 }
 
 export function shouldNotify(params: ShouldNotifyParams): boolean {
-  const { derived, eventName: rawEventName, compositeKey: ck, focusedCompositeKey, hasTab, settings, nonTmux = false, notificationSilent = false, errorString } = params
+  const { derived, eventName: rawEventName, compositeKey: ck, visibleInActiveTab, hasTab, settings, nonTmux = false, notificationSilent = false, errorString } = params
   // W2 transition: cc broadcasts PdxXxx; legacy literal keys live in shouldNotify
   // suppression checks and NotificationSettings.events. Normalize once at entry.
   const eventName = normalizeEventName(rawEventName)
@@ -257,8 +260,8 @@ export function shouldNotify(params: ShouldNotifyParams): boolean {
   if (settings.events[eventName] === false) return false
   if (!hasTab && !nonTmux && !settings.notifyWithoutTab) return false
   // Only suppress when user is actively looking at this session:
-  // both the app window must be focused AND the session tab must be active.
-  if (focusedCompositeKey === ck && document.hasFocus()) return false
+  // both the app window must be focused AND a pane of the active tab must show it.
+  if (visibleInActiveTab && document.hasFocus()) return false
 
   // Trailing-edge sliding debounce for error notifications (spec §4.1–§4.3).
   // Gate is only for derived==='error'; waiting/idle are not affected.
@@ -317,7 +320,7 @@ export function useNotificationDispatcher(): void {
         // Dedup layer 1: localStorage-based persistent dedup (handles restart/snapshot).
         // New sessions use Infinity sentinel — first event is recorded but not dispatched.
         // An event about one request (a worker awaiting approval) is deduped by its request id instead.
-        // Layer 2: shouldNotify checks active session (derived from activeTabId) + document.hasFocus().
+        // Layer 2: shouldNotify checks "a pane of the active tab shows it" + document.hasFocus().
         // Layer 3: Electron main process recentBroadcasts dedup (5s window, multi-window).
         const fresh = requestId !== null
           ? shouldDispatchRequest(compositeKeyStr, requestId, event.broadcast_ts)
@@ -326,10 +329,11 @@ export function useNotificationDispatcher(): void {
 
         const derived = event.status || null
         const tabs = useTabStore.getState().tabs
-        const hasTab = findTabBySessionCode(tabs, hostId, sessionCode) !== undefined
+        // Every pane of every tab, not only a tab's primary pane (#1840): an agent in a secondary pane of a split is
+        // in a tab, and is in front of the user when that split tab is the active one.
+        const hasTab = findTabAndPaneBySessionCode(tabs, hostId, sessionCode) !== undefined
         const settings = useNotificationSettingsStore.getState().getSettingsForAgent(event.agent_type || '')
-        const activeInfo = getActiveSessionInfo()
-        const focusedCompositeKey = activeInfo ? compositeKey(activeInfo.hostId, activeInfo.sessionCode) : ''
+        const visibleInActiveTab = isAgentVisibleInActiveTab(hostId, sessionCode)
 
         // Extract errorString before passing to shouldNotify (spec §4, option A).
         const errorString = String(event.detail?.error ?? '')
@@ -338,7 +342,7 @@ export function useNotificationDispatcher(): void {
           derived,
           eventName: event.raw_event_name,
           compositeKey: compositeKeyStr,
-          focusedCompositeKey,
+          visibleInActiveTab,
           hasTab,
           settings,
           nonTmux: isNonTmuxAgentCode(sessionCode),
@@ -426,13 +430,16 @@ export function useNotificationDispatcher(): void {
  * The notification title for an agent key. A worker (`exec-<id>`) is titled
  * like its tab — same summary source, same title rule (worker-summary.ts) —
  * falling back to the execution id; a tmux session by its name, else its code.
+ * The worker's `fromTitle` is read from the pane that shows it, a secondary
+ * pane of a split included (#1840), as its status bar does.
  */
 function notificationName(hostId: string, sessionCode: string): string {
   const executionId = executionIdOfAgentCode(sessionCode)
   if (executionId !== null) {
-    const tabId = findTabBySessionCode(useTabStore.getState().tabs, hostId, sessionCode)
-    const primary = tabId ? getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content : undefined
-    const fromTitle = primary?.kind === 'execution' ? primary.fromTitle : undefined
+    const tabs = useTabStore.getState().tabs
+    const hit = findTabAndPaneBySessionCode(tabs, hostId, sessionCode)
+    const shown = hit ? findPane(tabs[hit.tabId].layout, hit.paneId)?.content : undefined
+    const fromTitle = shown?.kind === 'execution' ? shown.fromTitle : undefined
     const titleSupported = selectSessionTitleSupported(hostId)(useNexHostStore.getState())
     return workerTitleOf({ fromTitle }, readWorkerSummary(hostId, executionId), titleSupported) ?? executionId
   }
@@ -445,7 +452,8 @@ export function handleNotificationClick(action: NotificationAction): void {
     case 'open-session': {
       const { hostId, sessionCode } = action
       const tabs = useTabStore.getState().tabs
-      const tabId = findTabBySessionCode(tabs, hostId, sessionCode)
+      // Any pane of any tab, a primary pane preferred (#1840).
+      const hit = findTabAndPaneBySessionCode(tabs, hostId, sessionCode)
       const ck = `${hostId}:${sessionCode}`
       const event = useAgentStore.getState().lastEvents[ck]
       const agentSettings = useNotificationSettingsStore.getState().getSettingsForAgent(event?.agent_type || '')
@@ -455,7 +463,13 @@ export function handleNotificationClick(action: NotificationAction): void {
         // Host ownership H2d-3: the notification of a host hidden in this workbench still fired; its click lands on
         // the Hosts page — no tab created, and none focused even when a tab of that session exists (its pane is gated).
         handled = true
-      } else if (tabId) {
+      } else if (hit) {
+        const { tabId, paneId } = hit
+        // The pane becomes its tab's most recently focused pane (usePaneFocusStore, rule F), before the tab is shown:
+        // the activation then focuses that pane rather than the one the user last worked in, and the status bar
+        // shows it. A tab already on screen gets no programmatic focus move (useActivationFocus focuses on activation
+        // only); the record still changes, so the next activation lands there.
+        usePaneFocusStore.getState().touch(tabId, paneId)
         useTabStore.getState().setActiveTab(tabId)
         const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
         // No workspace = nobody has adopted the tab yet (features/workspace/lib/adopt-standalone.ts waits before
