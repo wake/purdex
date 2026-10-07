@@ -41,6 +41,15 @@ func (s *fakeNameSink) count() int {
 	return len(s.calls)
 }
 
+func (s *fakeNameSink) lastName() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.calls) == 0 {
+		return ""
+	}
+	return s.calls[len(s.calls)-1].name
+}
+
 func (s *fakeNameSink) countFor(sid, name string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -162,6 +171,30 @@ func TestObserveNames_FailureDoesNotAdvanceThrottle(t *testing.T) {
 	m.observeNames([]ipeers.Entry{entry(nameSID1, "alpha-one")})
 	if sink.count() != 2 {
 		t.Fatalf("after success same name must throttle: %d", sink.count())
+	}
+}
+
+// A resumed session can have two live registry entries with one session id and
+// different names; the recorded name must not flap between them (codex R1).
+func TestObserveNames_DuplicateEntriesDoNotFlap(t *testing.T) {
+	sink := &fakeNameSink{}
+	m, _ := newNameModule(sink)
+	both := []ipeers.Entry{entry(nameSID1, "zeta-two"), entry(nameSID1, "alpha-one")}
+	m.observeNames(both)
+	if sink.count() != 1 {
+		t.Fatalf("one write per session per pass, got %d", sink.count())
+	}
+	first := sink.lastName()
+	// reversed order, later passes: nothing may be rewritten, whatever the order
+	m.observeNames([]ipeers.Entry{both[1], both[0]})
+	m.observeNames(both)
+	if sink.count() != 1 {
+		t.Fatalf("flapped: %d writes, last %q", sink.count(), sink.lastName())
+	}
+	// the recorded name stays while it is still among the live names
+	m.observeNames([]ipeers.Entry{entry(nameSID1, "alpha-one")})
+	if sink.lastName() != first {
+		t.Fatalf("name changed from %q to %q", first, sink.lastName())
 	}
 }
 

@@ -80,6 +80,11 @@ func (w *nameWriter) observe(entries []ipeers.Entry, logf func(string, ...any)) 
 	// Phase 1 (locked): decide what to write and mark it in flight.
 	var todo []pendingName
 	w.mu.Lock()
+	// A resumed session can have several live entries with one session id and
+	// different names. One name per session per pass: the recorded one while
+	// it is still live (no flapping), else the smallest (deterministic).
+	chosen := make(map[string]string)
+	var order []string
 	for _, e := range entries {
 		if len(e.SessionID) != 36 {
 			continue
@@ -90,14 +95,27 @@ func (w *nameWriter) observe(entries []ipeers.Entry, logf func(string, ...any)) 
 		if !ipeers.RoutableName(e.Name) {
 			continue
 		}
-		if w.inflight[e.SessionID] {
+		cur, seen := chosen[e.SessionID]
+		switch {
+		case !seen:
+			order = append(order, e.SessionID)
+			chosen[e.SessionID] = e.Name
+		case w.state[e.SessionID].name == cur:
+			// keep the recorded name
+		case w.state[e.SessionID].name == e.Name || e.Name < cur:
+			chosen[e.SessionID] = e.Name
+		}
+	}
+	for _, sid := range order {
+		name := chosen[sid]
+		if w.inflight[sid] {
 			continue
 		}
-		if st, ok := w.state[e.SessionID]; ok && st.name == e.Name && now.Sub(st.writtenAt) <= nameRewriteAfter {
+		if st, ok := w.state[sid]; ok && st.name == name && now.Sub(st.writtenAt) <= nameRewriteAfter {
 			continue
 		}
-		w.inflight[e.SessionID] = true
-		todo = append(todo, pendingName{e.SessionID, e.Name})
+		w.inflight[sid] = true
+		todo = append(todo, pendingName{sid, name})
 	}
 	w.mu.Unlock()
 
