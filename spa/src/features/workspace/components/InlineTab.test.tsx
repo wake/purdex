@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
+import { useI18nStore } from '../../../stores/useI18nStore'
 import { useAgentStore } from '../../../stores/useAgentStore'
 import { useUISettingsStore } from '../../../stores/useUISettingsStore'
 import { useHostStore } from '../../../stores/useHostStore'
@@ -655,21 +656,36 @@ describe('InlineTab — worker awaiting approval', () => {
     id: 'tx', pinned: false, locked: false, createdAt: 0,
     layout: { type: 'leaf', pane: { id: 'px', content: { kind: 'execution', executionId: 'e1', host: 'h1' } } },
   } as Tab
-  const seedWorker = (over: Partial<ExecutionSummary>) => {
+  /** The worker's summary only — useWorkerAgentProjection has not written its `exec-e1` status yet (cold load). */
+  const seedSummary = (over: Partial<ExecutionSummary>) => {
     useExecutionStore.setState({ executions: { [executionKey('h1', 'e1')]: { ...defaultExecutionState(), summary: ({
       id: 'e1', state: 'running', provider: 'claude', principal_id: 'p', cwd: '/w/repo', mount_kind: 'dev', brief: 'Fix the bug',
       labels: {}, created_at: 1, updated_at: 5, duration_ms: null, event_count: 0, observers: 0, archived: false, ...over,
     }) as ExecutionSummary } } })
+  }
+  const seedWorker = (over: Partial<ExecutionSummary>) => {
+    seedSummary(over)
     useAgentStore.setState({ statuses: { 'h1:exec-e1': 'waiting' } })
   }
   beforeEach(() => { useExecutionStore.setState({ executions: {} }) })
+  afterEach(() => { act(() => { useI18nStore.getState().setLocale('en') }) })
 
-  it('the hand on the light, and the title without a suffix', () => {
+  it('the hand beside the waiting dot, and the title without a suffix', () => {
     seedWorker({ pending_permission: pending })
     renderInline(workerTab)
-    expect(screen.getByTestId('tab-status-awaiting')).toBeInTheDocument()
-    expect(screen.queryByTestId('tab-status-indicator')).toBeNull()
+    expect(screen.getByTestId('tab-status-awaiting-hand')).toBeInTheDocument()
+    expect(screen.getByTestId('tab-status-indicator')).toBeInTheDocument()
     expect(screen.getByTestId('inline-tab-title').textContent).toBe('Fix the bug - repo')
+  })
+
+  it('cold load: a pending summary shows the hand before the projection writes a status, titled 等待核准', () => {
+    act(() => { useI18nStore.getState().setLocale('zh-TW') })
+    seedSummary({ pending_permission: pending })
+    renderInline(workerTab)
+    expect(screen.getByTestId('tab-status-awaiting-hand')).toBeInTheDocument()
+    const light = screen.getByTestId('tab-status-awaiting')
+    expect(light).toHaveAttribute('title', '等待核准')
+    expect(light).toHaveAttribute('aria-label', '等待核准')
   })
 
   it('no pending request: the plain waiting dot', () => {
