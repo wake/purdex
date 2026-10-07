@@ -40,6 +40,13 @@ export interface WorkerSettingsState {
   permissionTimeoutMin: PermissionTimeoutMin
   /** The quick-reply dock above the reply box is folded away. Device-local: not in the profile projection. */
   quickRepliesCollapsed: boolean
+  /**
+   * Send buffer (undo window): seconds a sent message is held before it is
+   * posted, so Esc can take it back. Whole seconds 0–10; 0 disables it.
+   * Device-local, like the approval timeout: not in the profile projection.
+   */
+  sendBufferSec: number
+  setSendBufferSec: (sec: number) => void
   setQuickRepliesCollapsed: (collapsed: boolean) => void
   setTheme: (id: string) => void
   setIconStyle: (style: WorkerIconStyle) => void
@@ -56,7 +63,20 @@ export const DEFAULT_WORKER_SETTINGS = {
 
 const DEFAULT_PERMISSION_TIMEOUT_MIN: PermissionTimeoutMin = 0
 /** Device-local fields: persisted and cross-window synced, but not in the Profile Sync projection. */
-const DEFAULT_LOCAL = { quickRepliesCollapsed: false }
+export const SEND_BUFFER_MAX_SEC = 10
+export const DEFAULT_SEND_BUFFER_SEC = 3
+const DEFAULT_LOCAL = { quickRepliesCollapsed: false, sendBufferSec: DEFAULT_SEND_BUFFER_SEC }
+
+/** A whole number of seconds in 0–10; anything else is not a valid setting. */
+export function isSendBufferSec(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= SEND_BUFFER_MAX_SEC
+}
+
+/** A typed value → the nearest valid one (fractions round, out of range clamps, junk → default). */
+export function clampSendBufferSec(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return DEFAULT_SEND_BUFFER_SEC
+  return Math.min(SEND_BUFFER_MAX_SEC, Math.max(0, Math.round(v)))
+}
 
 function isWorkerIconStyle(v: unknown): v is WorkerIconStyle {
   return v === 'mono' || v === 'color' || v === 'custom'
@@ -66,7 +86,7 @@ export function isPermissionTimeoutMin(v: unknown): v is PermissionTimeoutMin {
   return (PERMISSION_TIMEOUT_MINUTES as readonly unknown[]).includes(v)
 }
 
-type PersistedFields = Pick<WorkerSettingsState, 'theme' | 'iconStyle' | 'customIcon' | 'permissionTimeoutMin' | 'quickRepliesCollapsed'>
+type PersistedFields = Pick<WorkerSettingsState, 'theme' | 'iconStyle' | 'customIcon' | 'permissionTimeoutMin' | 'quickRepliesCollapsed' | 'sendBufferSec'>
 
 /**
  * Silently replaces malformed entries with defaults — a corrupted
@@ -85,6 +105,7 @@ function sanitize(raw: unknown): Partial<PersistedFields> {
   // Only an offered value survives; anything else (7, '15', null, …) falls back to 0 in `merge`.
   if (isPermissionTimeoutMin(src.permissionTimeoutMin)) out.permissionTimeoutMin = src.permissionTimeoutMin
   if (typeof src.quickRepliesCollapsed === 'boolean') out.quickRepliesCollapsed = src.quickRepliesCollapsed
+  if (isSendBufferSec(src.sendBufferSec)) out.sendBufferSec = src.sendBufferSec
   return out
 }
 
@@ -98,6 +119,7 @@ export const useWorkerSettingsStore = create<WorkerSettingsState>()(
       setIconStyle: (style) => set({ iconStyle: style }),
       setCustomIcon: (icon) => set({ customIcon: icon }),
       setQuickRepliesCollapsed: (collapsed) => set({ quickRepliesCollapsed: collapsed }),
+      setSendBufferSec: (sec) => set({ sendBufferSec: clampSendBufferSec(sec) }),
       setPermissionTimeoutMin: (min) => set({ permissionTimeoutMin: isPermissionTimeoutMin(min) ? min : DEFAULT_PERMISSION_TIMEOUT_MIN }),
     }),
     {
@@ -110,6 +132,7 @@ export const useWorkerSettingsStore = create<WorkerSettingsState>()(
         customIcon: state.customIcon,
         permissionTimeoutMin: state.permissionTimeoutMin,
         quickRepliesCollapsed: state.quickRepliesCollapsed,
+        sendBufferSec: state.sendBufferSec,
       }),
       merge: (persisted, current) => {
         const clean = sanitize(persisted)

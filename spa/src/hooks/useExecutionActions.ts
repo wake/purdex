@@ -2,12 +2,14 @@
 // (spec §4.3.3): send, interrupt. Every one goes through
 // ensureLease(). Owns the restored draft after a failed send; ExecutionView
 // composes this with the subscription/lease hooks and only renders.
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { useExecutionStore, executionKey } from '../stores/useExecutionStore'
 import { interruptExecution, sendMessage } from '../lib/nex/nex-api'
 import { NexApiError } from '../lib/nex/types'
 import type { ExecutionLeaseApi } from './useExecutionLease'
 import type { WireImageAttachment } from '../lib/nex/worker-upload'
+import { cancelSend, flushSend, holdSend } from '../lib/nex/send-buffer'
+import { readWorkerDraft, workerDraftKey, writeWorkerDraft } from '../lib/nex/worker-draft-memory'
 
 export interface SendOptions {
   /**
@@ -34,6 +36,20 @@ export interface SendOptions {
    * delivery update); a re-entrant no-op send revokes them here.
    */
   previews?: { previewUrl: string; media_type: string }[]
+  /**
+   * The send buffer (undo window): hold the message this many ms before it is
+   * posted, so `cancelBuffered` can take it back. The optimistic line shows at
+   * once; `handleSend` resolves true as soon as it is held. A typed send only —
+   * ignored (sent at once) for `restoreDraft: false`.
+   */
+  bufferMs?: number
+  /**
+   * Buffered sends: how the held message ended — `sent` (the daemon accepted
+   * it), `cancelled` (taken back; the text is restored as the draft) or
+   * `failed` (the POST failed; likewise). The caller settles what it held
+   * for the message (attachment chips) accordingly.
+   */
+  onBufferEnd?: (outcome: 'sent' | 'cancelled' | 'failed') => void
 }
 
 export interface ExecutionActions {
@@ -49,6 +65,8 @@ export interface ExecutionActions {
    */
   handleSend(text: string, opts?: SendOptions): Promise<boolean>
   handleInterrupt(): Promise<void>
+  /** Takes back the message held in the send buffer, if any (its text goes back to the box); false when none was held. */
+  cancelBuffered(): boolean
   /** Put text back into the input for a send that failed before reaching `handleSend` (an image that could not be read). */
   restoreDraft(text: string): void
 }
@@ -57,6 +75,8 @@ export function useExecutionActions(
   hostId: string,
   executionId: string,
   lease: Pick<ExecutionLeaseApi, 'ensureLease' | 'touch' | 'forget'>,
+  /** The reply box's text right now: a restored message goes in front of it, never over it. */
+  getBoxText?: () => string,
 ): ExecutionActions {
   const { ensureLease, touch, forget } = lease
   const key = executionKey(hostId, executionId)
@@ -66,6 +86,21 @@ export function useExecutionActions(
   // (turn_stalled cleared the lock, the user sent again) must not touch the
   // newer send's bubble, lock, lastTurn, error or draft when it settles.
   const sendAttempt = useRef(0)
+  // False once the pane is gone: a restore then goes to the draft memory, not to state nobody reads.
+  const mounted = useRef(true)
+  const getBoxTextRef = useRef(getBoxText)
+  getBoxTextRef.current = getBoxText
+  // A held (buffered) message must not be lost with the pane: unmounting
+  // commits it at once, while this pane's lease is still held (layout cleanups
+  // run before the lease hook's passive release). The POST then outlives the
+  // pane; a failure lands in the draft memory (`restoreInto`).
+  useLayoutEffect(() => {
+    mounted.current = true
+    return () => {
+      flushSend(key)
+      mounted.current = false
+    }
+  }, [key])
 
   const store = () => useExecutionStore.getState()
   // A fetch that never reached the daemon rejects with a TypeError, not a
@@ -87,7 +122,19 @@ export function useExecutionActions(
     }
   }, [hostId, executionId, forget])
 
-  const handleSend = useCallback(async (text: string, opts?: SendOptions): Promise<boolean> => {
+  // Puts a message back for the reader: as the draft (remounting the box) while
+  // the pane is up, into the draft memory once it is gone. Whatever the box
+  // holds now is kept after it, separated by a newline — never replaced.
+  const restoreInto = useCallback((text: string) => {
+    const draftKey = workerDraftKey(hostId, executionId)
+    const live = mounted.current
+    const current = (live ? getBoxTextRef.current?.() : readWorkerDraft(draftKey)) ?? ''
+    const merged = current ? `${text}\n${current}` : text
+    if (live) setDraft(merged)
+    else writeWorkerDraft(draftKey, merged)
+  }, [hostId, executionId])
+
+  const post = useCallback(async (text: string, opts?: SendOptions, sentAt?: number): Promise<boolean> => {
     const restoreDraft = opts?.restoreDraft ?? true
     // Re-entrancy guard: sendLocked is set
     // synchronously below, before the `await ensureLease()`, so a second
@@ -106,7 +153,9 @@ export function useExecutionActions(
     touch()
     const previews = opts?.previews
     const attachments = opts?.attachments
-    store().setPendingLocal(hostId, executionId, previews ? { text, delivery: null, attachments: previews } : { text, delivery: null })
+    store().setPendingLocal(hostId, executionId, {
+      text, delivery: null, ...(previews ? { attachments: previews } : {}), ...(sentAt !== undefined ? { sentAt } : {}),
+    })
     store().setPendingSend(hostId, executionId, true)
     store().setSendLocked(hostId, executionId, true)
     const attempt = ++sendAttempt.current
@@ -124,8 +173,12 @@ export function useExecutionActions(
       // durable bubble; writing it back unconditionally here would
       // resurrect a second bubble (I12, spec §5). Only write if the event hasn't
       // already consumed it.
-      if (store().executions[key]?.pendingLocal) {
-        store().setPendingLocal(hostId, executionId, previews ? { text, delivery: r.delivery, attachments: previews } : { text, delivery: r.delivery })
+      // A line in the send buffer is a later message's, not this one's: leave it.
+      const cur = store().executions[key]?.pendingLocal
+      if (cur && !cur.buffered) {
+        store().setPendingLocal(hostId, executionId, {
+          text, delivery: r.delivery, ...(previews ? { attachments: previews } : {}), ...(sentAt !== undefined ? { sentAt } : {}),
+        })
       }
       store().setLastTurn(hostId, executionId, { turnId: r.turn_id, delivery: r.delivery })
       // Accepted by the daemon: the box unlocks (the turn flag stays until its result).
@@ -135,13 +188,60 @@ export function useExecutionActions(
       // Superseded: skip fail() too — a stale lease_* error must not forget
       // a lease the newer send may be using; that send reports its own.
       if (attempt !== sendAttempt.current) return false
-      store().setPendingLocal(hostId, executionId, null)
+      // …and a held later message keeps its line (the buffer settles it).
+      if (!store().executions[key]?.pendingLocal?.buffered) store().setPendingLocal(hostId, executionId, null)
       store().setPendingSend(hostId, executionId, false)
-      if (restoreDraft) setDraft(opts?.draftText ?? text)
+      if (restoreDraft) restoreInto(opts?.draftText ?? text)
       fail(e)
       return false
     }
-  }, [hostId, executionId, key, ensureLease, touch, fail])
+  }, [hostId, executionId, key, ensureLease, touch, fail, restoreInto])
+
+  // Runs `go` once the box is unlocked (this execution's earlier POST accepted).
+  const whenUnlocked = useCallback((go: () => void) => {
+    if (!store().executions[key]?.sendLocked) { go(); return }
+    const unsub = useExecutionStore.subscribe(
+      (s) => s.executions[key]?.sendLocked ?? false,
+      (locked) => { if (!locked) { unsub(); go() } },
+    )
+  }, [key])
+
+  const bufferSend = useCallback((text: string, opts: SendOptions, ms: number) => {
+    const restoreDraft = opts.restoreDraft ?? true
+    // An earlier held message is committed first; its optimistic line gives way to this one.
+    flushSend(key)
+    store().setSendError(hostId, executionId, null)
+    if (restoreDraft) setDraft(null)
+    touch()
+    const sentAt = Date.now()
+    store().setPendingLocal(hostId, executionId, {
+      text, delivery: null, ...(opts.previews ? { attachments: opts.previews } : {}), sentAt, buffered: { until: sentAt + ms },
+    })
+    holdSend(key, {
+      // The POST waits for an earlier unaccepted one (the lock starts when it is issued, not while held).
+      fire: () => whenUnlocked(() => {
+        void post(text, opts, sentAt).then((ok) => opts.onBufferEnd?.(ok ? 'sent' : 'failed'))
+      }),
+      undo: () => {
+        store().setPendingLocal(hostId, executionId, null)
+        opts.onBufferEnd?.('cancelled')
+        restoreInto(opts.draftText ?? text)
+      },
+    }, ms)
+  }, [hostId, executionId, key, touch, post, whenUnlocked, restoreInto])
+
+  const handleSend = useCallback(async (text: string, opts?: SendOptions): Promise<boolean> => {
+    const ms = opts?.bufferMs ?? 0
+    if (ms > 0 && (opts?.restoreDraft ?? true)) {
+      bufferSend(text, opts!, ms)
+      return true
+    }
+    // An immediate send (a quick reply, or the buffer off) goes after a message still held, never before it.
+    if (flushSend(key)) await new Promise<void>((resolve) => whenUnlocked(resolve))
+    return post(text, opts)
+  }, [key, bufferSend, post, whenUnlocked])
+
+  const cancelBuffered = useCallback(() => cancelSend(key), [key])
 
   const handleInterrupt = useCallback(async () => {
     touch()
@@ -151,5 +251,5 @@ export function useExecutionActions(
 
   const restoreDraft = useCallback((text: string) => setDraft(text), [])
 
-  return { draft, actionPending, handleSend, handleInterrupt, restoreDraft }
+  return { draft, actionPending, handleSend, handleInterrupt, cancelBuffered, restoreDraft }
 }

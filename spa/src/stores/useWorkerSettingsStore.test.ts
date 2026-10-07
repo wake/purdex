@@ -112,6 +112,49 @@ describe('useWorkerSettingsStore', () => {
     })
   })
 
+  describe('sendBufferSec (send buffer / undo window)', () => {
+    it('defaults to 3 seconds', () => {
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(3)
+    })
+
+    it('setSendBufferSec stores whole seconds 0-10, rounding and clamping, and persists', () => {
+      const { setSendBufferSec } = useWorkerSettingsStore.getState()
+      setSendBufferSec(0)
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(0)
+      setSendBufferSec(10)
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(10)
+      setSendBufferSec(99)
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(10)
+      setSendBufferSec(-4)
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(0)
+      setSendBufferSec(4.4)
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(4)
+      setSendBufferSec(Number.NaN)
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(3)
+      setSendBufferSec(7)
+      expect(persisted()?.state.sendBufferSec).toBe(7)
+    })
+
+    it('survives a reload, and 0 (off) is kept rather than defaulted', async () => {
+      localStorage.setItem(
+        STORAGE_KEYS.WORKER_SETTINGS,
+        JSON.stringify({ state: { theme: 'purdex', iconStyle: 'mono', customIcon: '', sendBufferSec: 0 }, version: 1 }),
+      )
+      await useWorkerSettingsStore.persist.rehydrate()
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(0)
+    })
+
+    it.each([[11], ['3'], [null], [-1], [2.5], [true]])('a persisted %j sanitizes to the default', async (bad) => {
+      useWorkerSettingsStore.setState({ sendBufferSec: 8 })
+      localStorage.setItem(
+        STORAGE_KEYS.WORKER_SETTINGS,
+        JSON.stringify({ state: { theme: 'purdex', iconStyle: 'mono', customIcon: '', sendBufferSec: bad }, version: 1 }),
+      )
+      await useWorkerSettingsStore.persist.rehydrate()
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(3)
+    })
+  })
+
   it('rehydrate: happy-path persisted values are restored', async () => {
     localStorage.setItem(
       STORAGE_KEYS.WORKER_SETTINGS,
