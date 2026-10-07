@@ -50,11 +50,15 @@ type TitleSetter interface {
 	Claim(sessionID, label string, now time.Time) (store.PeerLabel, error)
 }
 
+var _ TitleSetter = (*store.PeerLabelStore)(nil) // else members silently get no title
+
 // paneReadTimeout bounds one pane metadata read of the runner.
 const paneReadTimeout = 5 * time.Second
 
-// initSpawn resolves the runner's seams. Each is a hard error, as the origin
-// resolver is: a daemon without one is wired wrong and no spawn could run.
+// initSpawn resolves the runner's seams. Each service is a hard error, as
+// the origin resolver is: a daemon without one is wired wrong. A core
+// without a tmux executor (module wiring tests) only disables spawn: the
+// POST answers 503 and boot resumes nothing.
 func (m *Module) initSpawn(c *core.Core) error {
 	var err error
 	if m.sessions, err = lookup[sessionCreator](c, session.RegistryKey); err != nil {
@@ -66,10 +70,9 @@ func (m *Module) initSpawn(c *core.Core) error {
 	if m.teamCfg, err = lookup[hostconfig.TeamSettingsReader](c, hostconfig.TeamSettingsKey); err != nil {
 		return err
 	}
-	if c.Tmux == nil {
-		return errors.New("team: the core has no tmux executor")
+	if c.Tmux != nil {
+		m.tmux = c.Tmux
 	}
-	m.tmux = c.Tmux
 	m.titleSet, _ = m.titles.(TitleSetter)
 	return nil
 }
@@ -99,6 +102,9 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 // The store fails a corrupt row abandoned instead of listing it. A read
 // error is logged: those ops wait for the next boot.
 func (m *Module) resumeSpawns() {
+	if m.tmux == nil {
+		return
+	}
 	ops, err := m.store.ListRunningSpawnOps(m.now())
 	if err != nil {
 		m.logf("[team] boot: spawn ops: %v", err)

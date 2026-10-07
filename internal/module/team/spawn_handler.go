@@ -25,8 +25,8 @@ const errInternal = "internal"
 // leaves running, or after spawnWait while it still runs; the CLI then
 // posts the same body again.
 func (m *Module) handleSpawn(w http.ResponseWriter, r *http.Request) {
-	if m.stopping() {
-		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon is stopping", nil)
+	if m.stopping() || m.tmux == nil {
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon is stopping or has no tmux", nil)
 		return
 	}
 	var req team.SpawnRequest
