@@ -19,6 +19,8 @@ test:
 	go test -race -count=1 ./...
 
 lint:
+	@unformatted=$$(gofmt -l cmd internal); \
+	if [ -n "$$unformatted" ]; then echo "gofmt needed (run gofmt -w):"; echo "$$unformatted"; exit 1; fi
 	go vet ./...
 
 clean:
