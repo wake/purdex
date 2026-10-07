@@ -56,6 +56,12 @@ type Executor interface {
 	// created the session, so a caller whose ctx ended asks HasSessionContext
 	// before concluding that nothing exists.
 	NewSessionContext(ctx context.Context, name, cwd string) error
+	// NewSessionTaggedContext is NewSessionContext that also sets the new
+	// session's user option (`@name`) to value in the same invocation, and
+	// PaneIdentity reads a pane's server generation, session and pane ids,
+	// that option and its directory in one invocation (pane_identity.go).
+	NewSessionTaggedContext(ctx context.Context, name, cwd, option, value string) error
+	PaneIdentity(ctx context.Context, target, option string) (PaneIdentity, error)
 	KillSession(name string) error
 	RenameSession(oldName, newName string) error
 	HasSession(name string) bool
