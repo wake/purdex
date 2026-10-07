@@ -1465,24 +1465,26 @@ func TestSend_LegacyCCAddress(t *testing.T) {
 	}
 }
 
-// TestSend_PeerNotFoundTeachesTheV4AddressForms pins the peer_not_found
-// detail (v4 spec §5.5).
+// TestSend_PeerNotFoundTeachesTheV5AddressForms pins the peer_not_found
+// detail (v4 spec §5.5, Peer Address v5 in peer mailbox spec §3.3).
 //
 // This hint has been confidently backwards twice. Before v3 it taught the
 // tmux session name as the address, which v3 made false. v3 taught the
 // eight-digit canonical id, which v4 made false — no such form is minted
 // any more, so a reader following it hunts a string nothing produces. A
 // hint that is wrong is worse than none: it sends someone who typed a
-// correct address off to find an impossible one.
+// correct address off to find an impossible one. v5 would have made it
+// wrong a third time: "<name> is the session's own name" now names the one
+// string that no longer routes.
 //
 // The assertions below are therefore about coverage, not wording. The
-// detail must name all three v4 forms rather than crowning one, must keep
-// the clause that the self-declared title never addresses, and must point
-// at the two commands that print a live address. The negative assertions
-// pin the two retired teachings so neither can return. The wire "error"
+// detail must name all three forms rather than crowning one, must say that
+// neither Claude Code's own name nor the self-declared title addresses, and
+// must point at the two commands that print a live address. The negative
+// assertions pin the retired teachings so none can return. The wire "error"
 // code stays peer_not_found — assertRefused checks that — so nothing
 // matching on it breaks.
-func TestSend_PeerNotFoundTeachesTheV4AddressForms(t *testing.T) {
+func TestSend_PeerNotFoundTeachesTheV5AddressForms(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	req := s.sendReq()
 	req.To = remoteAlias + "/_ab12cd" // a ref that matches no row
@@ -1491,25 +1493,25 @@ func TestSend_PeerNotFoundTeachesTheV4AddressForms(t *testing.T) {
 	for _, want := range []string{
 		`"_ab12cd"`, `"` + remoteAlias + `"`,
 		"<host>/<name>", "[<ref>]", "<host>/_<ref>",
+		"pdx gave", "not Claude Code's own session name",
 		"title", "pdx peers --all", "pdx msg whoami",
 	} {
 		if !strings.Contains(ae.Detail, want) {
 			t.Errorf("detail = %q, want it to contain %s", ae.Detail, want)
 		}
 	}
-	for _, gone := range []string{"tmux session name", "canonical"} {
+	for _, gone := range []string{"tmux session name", "canonical", "the session's own name"} {
 		if strings.Contains(ae.Detail, gone) {
 			t.Errorf("detail = %q, still teaches the retired %q form", ae.Detail, gone)
 		}
 	}
 	if strings.Contains(ae.Detail, "never changes") {
-		t.Errorf("a ref changes on a manual /clear; the hint must not promise otherwise: %q", ae.Detail)
+		t.Errorf("a manual /clear starts a new conversation; the hint must not promise otherwise: %q", ae.Detail)
 	}
-	if !strings.Contains(ae.Detail, "survives renames") {
-		t.Errorf("hint must say what a ref survives: %q", ae.Detail)
-	}
-	if !strings.Contains(ae.Detail, "renames and relays") {
-		t.Errorf("a relay keeps the old ref reachable (spec §8.4); the hint must say so: %q", ae.Detail)
+	// The virtual name is inherited through a relay (spec §3.2) and an old
+	// ref stays reachable through the lineage (lead-team-relay spec §8.4).
+	if !strings.Contains(ae.Detail, "survive renames and relays") {
+		t.Errorf("hint must say what the name and the ref survive: %q", ae.Detail)
 	}
 	if len(s.postCalls()) != 0 {
 		t.Errorf("posts = %d, want none", len(s.postCalls()))
@@ -2233,6 +2235,50 @@ func TestSend_RemoteRoutesByVirtualName(t *testing.T) {
 		s := newSendEnv(t, envOpts{}) // remoteRow carries no name
 		if resp := s.sendOK(s.sendReq()); resp.ToAddress != remoteAlias+"/"+remoteSession {
 			t.Errorf("to_address = %q, want %s/%s by the old rule", resp.ToAddress, remoteAlias, remoteSession)
+		}
+	})
+}
+
+// TestSend_RegistryNameNotFoundPointsAtTheVirtualAddress is spec §3.3's
+// migration hint: a registry name no longer routes, and an operator who types
+// one (it is what Claude Code shows them) is told the address that does. The
+// hint is only offered for a live row that HAS a virtual name, and it is a
+// suggestion, never a delivery.
+func TestSend_RegistryNameNotFoundPointsAtTheVirtualAddress(t *testing.T) {
+	t.Run("local", func(t *testing.T) {
+		s := newSendEnv(t, envOpts{})
+		p := s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+		req := s.localSendReq()
+		req.To = localAlias + "/" + localPeerName
+
+		ae := assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
+		want := "did you mean " + localAlias + "/" + vname(t, localPeerName, localPeerSessionID) + "?"
+		if !strings.Contains(ae.Detail, want) {
+			t.Errorf("detail = %q, want it to contain %q", ae.Detail, want)
+		}
+		p.assertNoLine()
+	})
+	t.Run("remote", func(t *testing.T) {
+		s := newSendEnv(t, envOpts{})
+		named, nameless := remoteRow("air-main", "fooc"), remoteRow("air-two", "twoc")
+		named.Name = "foo-9z"
+		nameless.Agent.PeerName, nameless.Agent.PID, nameless.Ref = "bar", 778, "_bar123"
+		s.set(func(s *sendEnv) { s.env = remoteEnvelope(named, nameless) })
+
+		req := s.sendReq()
+		req.To = remoteAlias + "/" + remoteSession
+		ae := assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
+		if want := "did you mean " + remoteAlias + "/foo-9z?"; !strings.Contains(ae.Detail, want) {
+			t.Errorf("detail = %q, want it to contain %q", ae.Detail, want)
+		}
+		// A row with no virtual name has nothing to suggest.
+		req.To = remoteAlias + "/bar"
+		ae = assertRefused(t, s.send(adminCtx(), req), http.StatusNotFound, ipeers.ErrPeerNotFound)
+		if strings.Contains(ae.Detail, "did you mean") {
+			t.Errorf("detail = %q, want no suggestion for a row without a virtual name", ae.Detail)
+		}
+		if n := len(s.postCalls()); n != 0 {
+			t.Errorf("posts = %d, want none", n)
 		}
 	})
 }
