@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.562] - 2026-10-08
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。沒有使用者看得到的變化；重啟的瞬間不再有 hook 請求 panic。SPA 沒有改動。
+
+### Fixed：關機時 hook 事件撞到已關閉的 trace sink 而 panic（#1189，#1785）
+
+agent 模組在 `Stop` 就關掉 trace sink，但 HTTP server 還在處理請求，這段窗口內結束的 hook 請求會對已關閉的 channel 送值而 panic（日誌出現 `send on closed channel` 堆疊，該請求失敗）。現在 agent 實作 `core.Closer`，在 HTTP 請求都處理完之後（`CloseModules`）才關 sink，一般關機不再丟 trace；sink 本身也防護成「已關閉就丟棄並計數」（`Shutdown` 超時強關連線的極端情況），日誌只有一行 `sink closed: dropping trace records` 與累計到 10、100… 時的 `dropped N trace record(s) since close`，hook 事件本身的處理不受影響。另外修了 `FlushForTest` 與併發入列的 WaitGroup 誤用，並移除一個測試裡迴避同一個 panic 的 sleep。
+
 ## [1.0.0-alpha.561] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。這一版是權限通道在 mlab 真機驗收後的修正。
