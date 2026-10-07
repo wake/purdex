@@ -243,5 +243,6 @@ func (n NexConfig) Equal(o NexConfig) bool {
 		slices.Equal(n.PathPrepend, o.PathPrepend) &&
 		n.ClaudeBin == o.ClaudeBin &&
 		n.Sandbox == o.Sandbox &&
-		n.Timeouts == o.Timeouts
+		n.Timeouts == o.Timeouts &&
+		n.Peer == o.Peer
 }
