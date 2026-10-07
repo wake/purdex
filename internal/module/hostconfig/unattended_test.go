@@ -105,14 +105,42 @@ func TestSetUnattended_OnAgainIsANoop(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
-// A stored value that does not decode as the state is an error, never "off
-// with no error" and never "on": the team module then treats the switch as
-// off and logs (fail closed, PU-1b2).
+// A stored value that is not the shape SetUnattended writes is an error,
+// never "off with no error" and never "on": the team module then treats the
+// switch as off and logs (fail closed, PU-1b2). Every field is required and
+// typed, changed_by names a client, and an on switch has its since: a bare
+// {"on":true} would decode as on with since 0 — auto-approving with an empty
+// list. The App's next write repairs every one of them, the same value
+// included: an unreadable value never takes the "nothing to write" exit.
 func TestUnattended_CorruptValueIsAnError(t *testing.T) {
+	const by = `"changed_by":{"kind":"app","label":"x"}`
 	for _, raw := range []string{
 		`{"on":"yes"}`, `null`, `{"on":null}`, `{}`, `[]`, `true`, `"on"`, ``, `{`,
-		`{"on":true,"extra":1}`, `{"on":true,"changed_by":{"kind":"app","label":"x","who":1}}`,
+		`{"on":true,"extra":1}`, `{"on":true,"since":1,"changed_at":1,"changed_by":{"kind":"app","label":"x","who":1}}`,
 		`{"on":true,"since":"1"}`, `{"on":false,"on":true}`, `{"on":true} {}`,
+		// a field missing
+		`{"on":true}`,
+		`{"on":true,"changed_at":1000,` + by + `}`,
+		`{"on":false,"changed_at":1000,` + by + `}`,
+		`{"on":true,"since":1000,` + by + `}`,
+		`{"on":false,"since":0,` + by + `}`,
+		`{"on":true,"since":1000,"changed_at":1000}`,
+		`{"on":false,"since":0,"changed_at":1000}`,
+		// a field null
+		`{"on":true,"since":null,"changed_at":1000,` + by + `}`,
+		`{"on":false,"since":null,"changed_at":1000,` + by + `}`,
+		`{"on":true,"since":1000,"changed_at":null,` + by + `}`,
+		`{"on":false,"since":0,"changed_at":1000,"changed_by":null}`,
+		// a field of the wrong type or out of range
+		`{"on":true,"since":1.5,"changed_at":1000,` + by + `}`,
+		`{"on":false,"since":-1,"changed_at":1000,` + by + `}`,
+		`{"on":false,"since":0,"changed_at":0,` + by + `}`,
+		`{"on":false,"since":0,"changed_at":1000,"changed_by":"app"}`,
+		`{"on":false,"since":0,"changed_at":1000,"changed_by":{}}`,
+		`{"on":false,"since":0,"changed_at":1000,"changed_by":{"kind":"app","label":"  "}}`,
+		`{"on":false,"since":0,"changed_at":1000,"changed_by":{"kind":"","label":"x"}}`,
+		// on without its since
+		`{"on":true,"since":0,"changed_at":1000,` + by + `}`,
 	} {
 		t.Run(raw, func(t *testing.T) {
 			m := newTestModule(t)
@@ -120,8 +148,56 @@ func TestUnattended_CorruptValueIsAnError(t *testing.T) {
 			st, err := m.Unattended()
 			assert.Error(t, err)
 			assert.False(t, st.On)
+
+			st, changed, err := m.SetUnattended(true, appAir26, 5000)
+			require.NoError(t, err)
+			assert.True(t, changed, "an unreadable value is overwritten, even with on again")
+			want := team.UnattendedState{On: true, Since: 5000, ChangedAt: 5000, ChangedBy: &appAir26}
+			assert.Equal(t, want, st)
+			got, err := m.Unattended()
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
 		})
 	}
+}
+
+// What SetUnattended writes reads back: off with since 0 (written over a
+// value nobody could read) or with the since of the last on, and a client
+// with or without addr.
+func TestUnattended_WrittenShapesRead(t *testing.T) {
+	for raw, want := range map[string]team.UnattendedState{
+		`{"on":false,"since":0,"changed_at":2000,"changed_by":{"kind":"app","label":"x"}}`:                       {On: false, Since: 0, ChangedAt: 2000, ChangedBy: &team.Client{Kind: "app", Label: "x"}},
+		`{"on":false,"since":1000,"changed_at":2000,"changed_by":{"kind":"app","label":"x","addr":"1.2.3.4:5"}}`: {On: false, Since: 1000, ChangedAt: 2000, ChangedBy: &team.Client{Kind: "app", Label: "x", Addr: "1.2.3.4:5"}},
+		`{"on":true,"since":1000,"changed_at":1000,"changed_by":{"kind":"app","label":"x"}}`:                     {On: true, Since: 1000, ChangedAt: 1000, ChangedBy: &team.Client{Kind: "app", Label: "x"}},
+	} {
+		m := newTestModule(t)
+		writeRaw(t, m, KeyUnattended, raw)
+		got, err := m.Unattended()
+		require.NoError(t, err, raw)
+		assert.Equal(t, want, got, raw)
+	}
+}
+
+// SetUnattended never writes what Unattended would refuse: a client without
+// a kind or a label, or a time that is not a unix ms, is an error and
+// nothing is stored.
+func TestSetUnattended_RefusesWhatItCouldNotReadBack(t *testing.T) {
+	m := newTestModule(t)
+	for _, c := range []struct {
+		by  team.Client
+		now int64
+	}{
+		{team.Client{Kind: "app", Label: ""}, 1000},
+		{team.Client{Kind: "app", Label: "  "}, 1000},
+		{team.Client{Kind: "", Label: "x"}, 1000},
+		{appAir26, 0},
+		{appAir26, -5},
+	} {
+		_, changed, err := m.SetUnattended(true, c.by, c.now)
+		assert.Error(t, err, "%+v", c)
+		assert.False(t, changed)
+	}
+	assert.Equal(t, int64(0), unattendedRevision(t, m), "nothing stored")
 }
 
 // The App's write heals a value nobody can read: it is the person's
@@ -196,7 +272,7 @@ func TestSetUnattended_GivesUpAfterThreeRetries(t *testing.T) {
 		e, err := m.store.Get(KeyUnattended)
 		require.NoError(t, err)
 		_, ok, err := m.store.Put(KeyUnattended, e.Revision, func() (json.RawMessage, error) {
-			return json.RawMessage(`{"on":false,"since":0,"changed_at":1}`), nil
+			return json.RawMessage(`{"on":false,"since":0,"changed_at":1,"changed_by":{"kind":"app","label":"other"}}`), nil
 		})
 		require.NoError(t, err)
 		require.True(t, ok)
