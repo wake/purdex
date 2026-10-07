@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.572] - 2026-10-08
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。SPA 沒有改動。對正常使用沒有可見變化。
+
+### Added：HTTP 伺服器的 header／閒置逾時，與上傳 body 的停滯偵測（#1523，#1808）
+
+`http.Server` 原本完全沒有讀取逾時，任何通過驗證的連線都能用慢速 header 或慢速 body 長期佔住連線（slowloris）。實測後的做法：`ReadHeaderTimeout` 10 秒與 `IdleTimeout` 120 秒；**不**設全域 `ReadTimeout`／`WriteTimeout`（實測會誤砍慢網路上的大檔上傳，而 WebSocket 與 SSE 本來就不受 `ReadTimeout` 影響）。兩個上傳路由（`/api/agent/upload`、`/api/nex/executions/{id}/uploads`）改用「停滯偵測」：每次讀取前把讀取期限延長 30 秒，所以只要持續有資料就不會被砍（總時間不限），停滯超過 30 秒才中斷。上傳的累計配額與封存時的清理另開 #1806（design）。
+
 ## [1.0.0-alpha.571] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。
