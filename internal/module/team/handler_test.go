@@ -165,6 +165,7 @@ type fixture struct {
 	titles   *fakeTitles
 	usage    *fakeUsage
 	sub      *core.EventSubscriber
+	spawnFakes
 }
 
 // fakeUsage is the agent module's ContextUsageReader of these tests: the
@@ -231,6 +232,7 @@ func newFixture(t *testing.T) *fixture {
 	f.core.Registry.Register(peersmod.OriginResolverKey, f.origins)
 	f.core.Registry.Register(hostconfig.RelaySwitchesKey, f.switches)
 	f.core.Registry.Register(agent.OwnerResolverKey, f.usage) // the team module asserts agent.ContextUsageReader on it
+	f.registerSpawnFakes()
 	f.m = New().WithTitles(f.titles)
 	f.m.newID = sequentialIDs()
 	f.m.clearedWait, f.m.clearedPoll = 200*time.Millisecond, 10*time.Millisecond
