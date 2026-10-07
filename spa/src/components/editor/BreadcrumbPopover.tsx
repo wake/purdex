@@ -4,6 +4,7 @@ import { Check, FilePlus, Stack } from '@phosphor-icons/react'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { STORAGE_ROOT, join } from '../../lib/storage-paths'
+import { TITLE_BAR_HEIGHT } from '../FloatingPanel'
 
 interface BreadcrumbPopoverProps {
   buffers: string[]
@@ -62,13 +63,28 @@ export function BreadcrumbPopover({
     if (!el) return
     let left = anchorRect.left
     left = Math.max(PADDING, Math.min(left, window.innerWidth - POPOVER_WIDTH - PADDING))
+    // Measure under the popover's own cap, not a previous placement's tighter
+    // one, which would otherwise be read back as its height. (Not uncapped: a
+    // long buffer list is meant to be 320px with the list scrolling inside.)
+    el.style.maxHeight = `${POPOVER_MAX_HEIGHT}px`
+    el.style.overflowY = ''
     const popoverHeight = el.offsetHeight
     let top = anchorRect.bottom + PADDING
     if (top + popoverHeight > window.innerHeight - PADDING) {
       top = anchorRect.top - PADDING - popoverHeight
     }
-    if (top < PADDING) {
-      top = PADDING
+    // Never inside the title bar's OS drag region (see `FloatingPanel`): a row
+    // there would drag the window instead of taking the click.
+    if (top < TITLE_BAR_HEIGHT) {
+      top = TITLE_BAR_HEIGHT
+    }
+    // Still taller than what is left below that top (a short window): cap it
+    // tighter and scroll, rather than run off the bottom. The list shrinks and
+    // scrolls first; the root scrolls only what cannot shrink (the empty state).
+    const available = window.innerHeight - top - PADDING
+    if (popoverHeight > available) {
+      el.style.maxHeight = `${Math.max(0, available)}px`
+      el.style.overflowY = 'auto'
     }
     el.style.left = `${left}px`
     el.style.top = `${top}px`
@@ -80,7 +96,8 @@ export function BreadcrumbPopover({
       role="dialog"
       aria-label="Buffer quick switch"
       className="fixed bg-surface-elevated border border-border-default rounded-lg shadow-xl overflow-hidden flex flex-col"
-      style={{ width: POPOVER_WIDTH, maxHeight: POPOVER_MAX_HEIGHT, zIndex: Z_INDEX }}
+      // no-drag: wherever it lands, the title bar's drag region must not take its clicks.
+      style={{ width: POPOVER_WIDTH, maxHeight: POPOVER_MAX_HEIGHT, zIndex: Z_INDEX, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
     >
       {buffers.length === 0 ? (
         <div className="p-3 text-xs text-text-muted">

@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { PaneContextMenu, type MenuItem } from './PaneContextMenu'
+import { TITLE_BAR_HEIGHT } from './FloatingPanel'
 
 function renderMenu(overrides?: { canDetach?: boolean; extraItems?: MenuItem[] }) {
   const props = {
@@ -128,5 +129,123 @@ describe('PaneContextMenu', () => {
     expect(parseFloat(menu.style.left)).toBe(window.innerWidth - 200 - 4)
     expect(parseFloat(menu.style.top)).toBe(window.innerHeight - 150 - 4)
     spy.mockRestore()
+  })
+})
+
+// #1825 (the #1801 fix, applied here). The top TITLE_BAR_HEIGHT px of the window
+// is the title bar's OS drag region: a click there drags the window instead of
+// choosing an item, so no part of the menu may be placed in it — a tall one
+// scrolls instead.
+describe('PaneContextMenu stays below the title bar (#1825)', () => {
+  const saved: Array<[string, PropertyDescriptor | undefined]> = []
+
+  /** jsdom lays nothing out: the menu's own box is the only one its placement reads. */
+  function stubLayout(menu: { width: number; height: number }, viewport: { width: number; height: number }) {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(
+      { left: 0, top: 0, width: menu.width, height: menu.height, right: menu.width, bottom: menu.height, x: 0, y: 0, toJSON: () => ({}) } as DOMRect,
+    )
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: viewport.width })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: viewport.height })
+  }
+
+  /** The fullest menu a pane gets: split items, close / detach, and an extra item. */
+  function menuAt(position: { x: number; y: number }) {
+    return (
+      <PaneContextMenu
+        position={position}
+        canDetach
+        extraItems={[{ label: 'Hand to nex', action: 'hand-to-nex' }]}
+        onClose={vi.fn()}
+        onAction={vi.fn()}
+      />
+    )
+  }
+
+  beforeEach(() => {
+    cleanup()
+    for (const key of ['innerWidth', 'innerHeight']) saved.push([key, Object.getOwnPropertyDescriptor(window, key)])
+  })
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    for (const [key, descriptor] of saved.splice(0)) {
+      if (descriptor) Object.defineProperty(window, key, descriptor)
+      else delete (window as unknown as Record<string, unknown>)[key]
+    }
+  })
+
+  it('a tall menu opened near the top of a short window starts below the title bar and scrolls', () => {
+    stubLayout({ width: 200, height: 400 }, { width: 1024, height: 300 })
+    const { container } = render(menuAt({ x: 100, y: 40 }))
+    const el = container.firstElementChild as HTMLElement
+    // 40 + 400 > 300 → moved up to 300 - 400 - 4 = -104 → the title bar's bottom edge
+    expect(el.style.top).toBe(`${TITLE_BAR_HEIGHT}px`)
+    expect(el.style.maxHeight).toBe(`${300 - TITLE_BAR_HEIGHT - 4}px`)
+    expect(el.style.overflowY).toBe('auto')
+    expect(el.style.left).toBe('100px')
+  })
+
+  it('a tall menu opened near the bottom moves up only as far as the title bar, not to 4px', () => {
+    stubLayout({ width: 200, height: 400 }, { width: 1024, height: 300 })
+    const { container } = render(menuAt({ x: 100, y: 280 }))
+    const el = container.firstElementChild as HTMLElement
+    expect(el.style.top).toBe(`${TITLE_BAR_HEIGHT}px`)
+    expect(el.style.maxHeight).toBe(`${300 - TITLE_BAR_HEIGHT - 4}px`)
+    expect(el.style.overflowY).toBe('auto')
+  })
+
+  it('a menu opened inside the title bar band starts below it, uncapped when it fits', () => {
+    stubLayout({ width: 200, height: 150 }, { width: 1024, height: 800 })
+    const { container } = render(menuAt({ x: 100, y: 10 }))
+    const el = container.firstElementChild as HTMLElement
+    expect(el.style.top).toBe(`${TITLE_BAR_HEIGHT}px`)
+    expect(el.style.maxHeight).toBe('')
+  })
+
+  it('room to open where clicked: the same place as before, and no cap', () => {
+    stubLayout({ width: 200, height: 150 }, { width: 1024, height: 800 })
+    const { container } = render(menuAt({ x: 100, y: 100 }))
+    const el = container.firstElementChild as HTMLElement
+    expect(el.style.left).toBe('100px')
+    expect(el.style.top).toBe('100px')
+    expect(el.style.maxHeight).toBe('')
+    expect(el.style.overflowY).toBe('')
+  })
+
+  it('near the right and bottom edges: corrected as before, and no cap', () => {
+    stubLayout({ width: 200, height: 150 }, { width: 1024, height: 800 })
+    const { container } = render(menuAt({ x: 1000, y: 700 }))
+    const el = container.firstElementChild as HTMLElement
+    expect(el.style.left).toBe('820px') // 1024 - 200 - 4
+    expect(el.style.top).toBe('646px') // 800 - 150 - 4
+    expect(el.style.maxHeight).toBe('')
+    expect(el.style.overflowY).toBe('')
+  })
+
+  it('a menu that ends inside the window\'s last 4px is left where it was, not clipped', () => {
+    stubLayout({ width: 200, height: 150 }, { width: 1024, height: 800 })
+    const { container } = render(menuAt({ x: 100, y: 648 })) // 648 + 150 = 798: fits, so never moved
+    const el = container.firstElementChild as HTMLElement
+    expect(el.style.top).toBe('648px')
+    expect(el.style.maxHeight).toBe('')
+  })
+
+  it('drops an earlier cap when it opens again with room to spare', () => {
+    stubLayout({ width: 200, height: 400 }, { width: 1024, height: 300 })
+    const { container, rerender } = render(menuAt({ x: 100, y: 40 }))
+    const el = container.firstElementChild as HTMLElement
+    expect(el.style.maxHeight).toBe(`${300 - TITLE_BAR_HEIGHT - 4}px`)
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 })
+    rerender(menuAt({ x: 100, y: 100 }))
+    expect(el.style.top).toBe('100px')
+    expect(el.style.maxHeight).toBe('')
+    expect(el.style.overflowY).toBe('')
+  })
+
+  it('is marked no-drag, so the title bar region does not take its pointer events', () => {
+    const { container } = render(menuAt({ x: 100, y: 100 }))
+    const el = container.firstElementChild as HTMLElement
+    // React assigns the camelCase property, which jsdom keeps as is (see FloatingPanel.test.tsx).
+    expect((el.style as unknown as { WebkitAppRegion?: string }).WebkitAppRegion).toBe('no-drag')
   })
 })
