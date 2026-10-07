@@ -677,6 +677,8 @@
   "stream.handoff.launching_cc": "啟動 CC 中...",
   "stream.handoff.connecting": "連線中...",
   "worker.input.placeholder": "回覆...",
+  "worker.quick_replies.collapse": "收合快速回覆",
+  "worker.quick_replies.expand": "展開快速回覆",
   "worker.upload.attach": "附加檔案",
   "worker.upload.remove": "移除 {{name}}",
   "worker.upload.uploading": "上傳中…",

@@ -28,6 +28,9 @@ export interface WorkerSettingsState {
   theme: string
   iconStyle: WorkerIconStyle
   customIcon: string
+  /** The quick-reply dock above the reply box is folded away. Device-local: not in the profile projection. */
+  quickRepliesCollapsed: boolean
+  setQuickRepliesCollapsed: (collapsed: boolean) => void
   setTheme: (id: string) => void
   setIconStyle: (style: WorkerIconStyle) => void
   setCustomIcon: (icon: string) => void
@@ -39,6 +42,9 @@ export const DEFAULT_WORKER_SETTINGS = {
   customIcon: '',
 }
 
+/** Device-local fields: persisted and cross-window synced, but not in the Profile Sync projection. */
+const DEFAULT_LOCAL = { quickRepliesCollapsed: false }
+
 function isWorkerIconStyle(v: unknown): v is WorkerIconStyle {
   return v === 'mono' || v === 'color' || v === 'custom'
 }
@@ -48,7 +54,7 @@ function isWorkerIconStyle(v: unknown): v is WorkerIconStyle {
  * localStorage payload or a cross-version sync peer must not leave
  * `iconStyle` as some arbitrary string.
  */
-function sanitize(raw: unknown): Partial<Pick<WorkerSettingsState, 'theme' | 'iconStyle' | 'customIcon'>> {
+function sanitize(raw: unknown): Partial<Pick<WorkerSettingsState, 'theme' | 'iconStyle' | 'customIcon' | 'quickRepliesCollapsed'>> {
   if (raw === null || typeof raw !== 'object') return {}
   const src = raw as Record<string, unknown>
   const out: Partial<WorkerSettingsState> = {}
@@ -57,6 +63,7 @@ function sanitize(raw: unknown): Partial<Pick<WorkerSettingsState, 'theme' | 'ic
   // Anything non-string (a stale `null` from before this field was string-typed, a number, …) is left
   // unset here, so the `...DEFAULT_WORKER_SETTINGS` spread in `merge` below supplies `''`.
   if (typeof src.customIcon === 'string') out.customIcon = src.customIcon
+  if (typeof src.quickRepliesCollapsed === 'boolean') out.quickRepliesCollapsed = src.quickRepliesCollapsed
   return out
 }
 
@@ -64,18 +71,20 @@ export const useWorkerSettingsStore = create<WorkerSettingsState>()(
   persist(
     (set) => ({
       ...DEFAULT_WORKER_SETTINGS,
+      ...DEFAULT_LOCAL,
       setTheme: (id) => set({ theme: id }),
       setIconStyle: (style) => set({ iconStyle: style }),
       setCustomIcon: (icon) => set({ customIcon: icon }),
+      setQuickRepliesCollapsed: (collapsed) => set({ quickRepliesCollapsed: collapsed }),
     }),
     {
       name: STORAGE_KEYS.WORKER_SETTINGS,
       storage: purdexStorage,
       version: 1,
-      partialize: (state) => ({ theme: state.theme, iconStyle: state.iconStyle, customIcon: state.customIcon }),
+      partialize: (state) => ({ theme: state.theme, iconStyle: state.iconStyle, customIcon: state.customIcon, quickRepliesCollapsed: state.quickRepliesCollapsed }),
       merge: (persisted, current) => {
         const clean = sanitize(persisted)
-        return { ...current, ...DEFAULT_WORKER_SETTINGS, ...clean }
+        return { ...current, ...DEFAULT_WORKER_SETTINGS, ...DEFAULT_LOCAL, ...clean }
       },
     },
   ),

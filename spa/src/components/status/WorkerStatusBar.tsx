@@ -1,6 +1,6 @@
 // spa/src/components/status/WorkerStatusBar.tsx — the status bar for an `execution` (worker) target pane (shell
 // cleanup spec §9.2): the host segment the tmux bar uses, the worker name, its cwd, then the mode buttons (§9.3) in the
-// controls block. No refresh / peer-id / upload segments: those are tmux-specific.
+// controls block. The peer id appears only when the summary carries an address. No refresh / upload segments: those are tmux-specific.
 import { useHostStore } from '../../stores/useHostStore'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { selectSessionTitleSupported, useNexHostStore } from '../../stores/useNexHostStore'
@@ -35,6 +35,8 @@ export function WorkerStatusBar({ tabId, pane, onNavigateToHost }: {
     brief: summary?.brief,
   }) ?? t('page.pane.execution')
   const cwd = summary?.cwd ?? ''
+  // Rendered only when the daemon supplies the worker's address; nothing is derived or guessed here.
+  const peerAddress = summary?.peer_address ?? ''
 
   return (
     <StatusBarLayout
@@ -62,6 +64,20 @@ export function WorkerStatusBar({ tabId, pane, onNavigateToHost }: {
             className="max-w-[32ch] max-[600px]:hidden"
             onCopy={copy}
           />
+          {peerAddress && (
+            <>
+              <Separator className="max-[700px]:hidden" />
+              <CopySegment
+                testId="status-seg-peer-id"
+                display={peerAddress.slice(peerAddress.indexOf('/') + 1)}
+                value={peerAddress}
+                what={t('peer.label.peer_id')}
+                title={t('peer.copy_hint')}
+                className="max-w-[24ch] max-[700px]:hidden"
+                onCopy={copy}
+              />
+            </>
+          )}
         </>
       )}
       controls={<PaneModeButtons tabId={tabId} pane={pane} />}

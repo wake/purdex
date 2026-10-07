@@ -55,6 +55,11 @@ export interface ExecutionSummary {
    * order (`custom` highest); typed loosely here since an older/newer daemon
    * could in principle send a value outside today's three.
    */
+  /**
+   * The worker's peer address (what `pdx msg send` takes). NOT emitted by any daemon yet: Purdex has no worker-to-peer
+   * mapping (`/api/peers` rows are keyed by tmux session code). The worker status bar shows the peer id only when set.
+   */
+  peer_address?: string
   session_title?: { text: string; source: 'custom' | 'agent_name' | 'ai' | string }
 }
 

@@ -675,6 +675,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
         disabled={inputDisabled || !attachGate.ok} />
       <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => sendWithAttachments(text, { draftText: text })}
         disabled={inputDisabled} pendingSend={st.pendingSend} placeholder={placeholder} isActive={isActive} isFocusTarget={isFocusTarget} onTextChange={onTextChange}
+        turnLive={st.turnLive} onInterrupt={() => void handleInterrupt()}
         chips={uploads.chips} onRemoveChip={removeChip} onAddFiles={canAttach ? uploads.add : undefined} />
       {dragging && (
         <div data-testid="drop-overlay"

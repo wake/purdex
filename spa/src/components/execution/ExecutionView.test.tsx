@@ -294,11 +294,11 @@ describe('ExecutionView', () => {
     render(<ExecutionView {...base} isActive />)
     const textbox = () => screen.getByRole('textbox') as HTMLTextAreaElement
     const interrupt = () => screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement
-    expect(textbox().disabled).toBe(false)
+    expect(textbox().readOnly).toBe(false)
     expect(interrupt().disabled).toBe(false)
     fireEvent.click(screen.getByTestId('header-exit'))
     await waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
-    expect(textbox().disabled).toBe(true)
+    expect(textbox().readOnly).toBe(true)
     expect(interrupt().disabled).toBe(true)
     expect(screen.getByTestId('header-exit')).toBeDisabled()
     fireEvent.click(interrupt())
@@ -346,20 +346,20 @@ describe('ExecutionView', () => {
     render(<ExecutionView {...base} isActive />)
     // The loading placeholder replaces the conversation, but WorkerInput is
     // still rendered below it — must stay disabled while spinner is up.
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(true)
   })
 
   it('a terminally closed live stream (with error) disables input with a disconnected placeholder', () => {
     useExecutionStore.getState().setSse(H, E, 'closed', 'forbidden')
     render(<ExecutionView {...base} isActive />)
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(true)
     expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', expect.stringMatching(/lost/i))
   })
 
   it('sse closed with no error (e.g. an in-progress reconnect backoff) does not disable input', () => {
     useExecutionStore.getState().setSse(H, E, 'closed', null)
     render(<ExecutionView {...base} isActive />)
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(false)
   })
 
   it('archived: renders the ended screen, no input and no exit (not a live row)', () => {
@@ -801,13 +801,13 @@ describe('ExecutionView — take back to terminal', () => {
     const textbox = () => screen.getByRole('textbox') as HTMLTextAreaElement
     const interrupt = () => screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement
     const terminate = () => screen.getByTestId('header-exit') as HTMLButtonElement
-    expect(textbox().disabled).toBe(false)
+    expect(textbox().readOnly).toBe(false)
     expect(interrupt().disabled).toBe(false)
     expect(terminate().disabled).toBe(false)
 
     fireEvent.click(takeBackBtn())
     await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
-    expect(textbox().disabled).toBe(true)
+    expect(textbox().readOnly).toBe(true)
     expect(interrupt().disabled).toBe(true)
     expect(terminate().disabled).toBe(true)
     // Clicks on the frozen controls must not reach the daemon.
@@ -844,10 +844,10 @@ describe('ExecutionView — take back to terminal', () => {
     render(<ExecutionView {...base} {...ids} from={from} isActive />)
     fireEvent.click(takeBackBtn())
     await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(true)
     await act(async () => { reject(new HandoffApiError(409, 'held_by', { code: 'held_by', principal: 'x' })) })
     expect(toast()?.message).toBe('The execution lease is held by x.')
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(false)
     expect((screen.getByRole('button', { name: /interrupt/i }) as HTMLButtonElement).disabled).toBe(false)
     expect((screen.getByTestId('header-exit') as HTMLButtonElement).disabled).toBe(false)
     expect(paneContent(ids.tabId).kind).toBe('execution')
@@ -864,10 +864,10 @@ describe('ExecutionView — take back to terminal', () => {
     await act(() => new Promise<void>((r) => requestAnimationFrame(() => r()))) // the activation frame
     fireEvent.click(takeBackBtn())
     await waitFor(() => expect(mockedTakeback).toHaveBeenCalledTimes(1))
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(true)
     ;(document.activeElement as HTMLElement | null)?.blur()
     await act(async () => { reject(new HandoffApiError(409, 'held_by', { code: 'held_by', principal: 'x' })) })
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(false)
     expect(document.activeElement).toBe(document.body)
     await act(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
     expect(screen.getByRole('textbox')).not.toHaveFocus()
@@ -1501,7 +1501,7 @@ describe('ExecutionView — quick replies (R3 T2.1)', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'first' } })
     fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
     await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('first'))
-    await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false))
+    await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(false))
     const box = screen.getByRole('textbox') as HTMLTextAreaElement
     fireEvent.change(box, { target: { value: 'half-typ' } })
     fireEvent.click(reply('go on'))
@@ -2402,7 +2402,7 @@ describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
     // keeps a disabled element focused internally).
     screen.getByRole('textbox').blur()
     setSending(true)
-    expect(screen.getByRole('textbox')).toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
     setSending(false)
     expect(screen.getByRole('textbox')).not.toHaveFocus()
     await nextFrame()
@@ -2427,10 +2427,10 @@ describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
     await nextFrame() // the activation lands
     screen.getByRole('textbox').blur()
     act(() => { useExecutionStore.getState().setSse(H, E, 'closed', 'forbidden') })
-    expect(screen.getByRole('textbox')).toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
     await nextFrame()
     act(() => { useExecutionStore.getState().setSse(H, E, 'open', null) })
-    expect(screen.getByRole('textbox')).not.toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
     await nextFrame()
     expect(screen.getByRole('textbox')).not.toHaveFocus()
   })
@@ -2441,11 +2441,11 @@ describe('ExecutionView — reply box focus (shell cleanup §8.2)', () => {
   it('opened while its history loads: the reply box takes focus once the history has loaded', async () => {
     useExecutionStore.getState().setHistoryLoaded(H, E, false)
     render(<ExecutionView {...base} isActive isFocusTarget />)
-    expect(screen.getByRole('textbox')).toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
     await nextFrame()
     expect(screen.getByRole('textbox')).not.toHaveFocus()
     act(() => { useExecutionStore.getState().setHistoryLoaded(H, E, true) })
-    expect(screen.getByRole('textbox')).not.toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
     await nextFrame()
     expect(screen.getByRole('textbox')).toHaveFocus()
   })
@@ -2494,7 +2494,7 @@ describe('ExecutionView — zero-turn idle execution (start_idle handoff)', () =
     } as never)
     render(<ExecutionView {...base} isActive />)
     expect(await screen.findByText('earlier talk')).toBeInTheDocument()
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).disabled).toBe(false)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).readOnly).toBe(false)
     expect(screen.queryAllByTestId('turn-footer')).toHaveLength(0)
     expect(screen.queryByTestId('execution-loading')).toBeNull()
   })

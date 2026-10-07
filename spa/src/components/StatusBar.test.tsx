@@ -1021,6 +1021,18 @@ describe('StatusBar worker bar', () => {
     expect(screen.getByTestId('status-seg-cwd').textContent).toBe('/Users/w/repo')
   })
 
+  it('shows the peer id only when the summary carries an address, and copies the full address', async () => {
+    render(<StatusBar activeTab={workerTab()} />)
+    expect(screen.queryByTestId('status-seg-peer-id')).toBeNull()
+    cleanup()
+    seedSummary(summary({ peer_address: 'mlab/fix-login' }))
+    render(<StatusBar activeTab={workerTab()} />)
+    const seg = screen.getByTestId('status-seg-peer-id')
+    expect(seg.textContent).toBe('fix-login')
+    await act(async () => { fireEvent.click(seg) })
+    expect(copyTextMock).toHaveBeenCalledWith('mlab/fix-login')
+  })
+
   it('has no tmux-only segments: no session name, peer, refresh, status or upload', () => {
     render(<StatusBar activeTab={workerTab()} />)
     for (const id of ['status-seg-session-name', 'status-seg-agent', 'status-seg-peer-id', 'status-peer-refresh', 'status-seg-status', 'upload-status']) {

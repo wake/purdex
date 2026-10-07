@@ -4,6 +4,9 @@
 // typed in the input alone. Part of the input (§4.8), so it shows in room and
 // chat alike — it is not the §4.6 state dock that chat drops. An empty list
 // draws nothing (Q3: emptied means no dock).
+import { CaretDown, CaretRight } from '@phosphor-icons/react'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import type { QuickReply } from '../../lib/host-config-api'
 
 export interface QuickReplyDockProps {
@@ -13,9 +16,21 @@ export interface QuickReplyDockProps {
 }
 
 export default function QuickReplyDock({ replies, onSend, disabled }: QuickReplyDockProps) {
+  const t = useI18nStore((s) => s.t)
+  const collapsed = useWorkerSettingsStore((s) => s.quickRepliesCollapsed)
+  const setCollapsed = useWorkerSettingsStore((s) => s.setQuickRepliesCollapsed)
   if (replies.length === 0) return null
+  const label = t(collapsed ? 'worker.quick_replies.expand' : 'worker.quick_replies.collapse')
+  const Chevron = collapsed ? CaretRight : CaretDown
   return (
-    <div className="flex gap-1.5 overflow-x-auto whitespace-nowrap px-2 py-1.5 [scrollbar-width:none]">
+    <div className="flex items-center gap-1 px-2 py-1.5">
+      <button type="button" data-testid="quick-reply-toggle" aria-expanded={!collapsed} aria-label={label} title={label}
+        onClick={() => setCollapsed(!collapsed)}
+        className="shrink-0 p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover cursor-pointer">
+        <Chevron size={12} />
+      </button>
+      {collapsed ? null : (
+    <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none]">
       {replies.map((r) => (
         <button
           key={r.id}
@@ -29,6 +44,8 @@ export default function QuickReplyDock({ replies, onSend, disabled }: QuickReply
           {r.text}
         </button>
       ))}
+    </div>
+      )}
     </div>
   )
 }
