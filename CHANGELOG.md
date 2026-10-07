@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.0.0-alpha.543] - 2026-10-07
+
+> 動 `pdx` 指令與 daemon（begin 的 `request_id` 重送），**需要部署新 binary 並重啟**（由統籌安排）。mod 在 P5b 才會呼叫這些指令，現有使用者流程不受影響。SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-2c（#1726）
+
+mod 要用的 `pdx relay` 指令（spec §8.3、§14；plan v2 Task 5a.9）。
+
+- **`pdx relay hello | begin | wait | self | report | op`**：跑在會等 daemon 重啟的 client 上，exit code 照 spec §14（核准 0、拒絕 10、逾時 11、取消／中斷 12、被規則拒絕 13、daemon 不在 20／送出沒回應 21、用法錯 2）。
+- **`wait`** 每輪長輪詢續租；`--wait` 用完申請還開著 → exit 0 並印出 `state:"open"` 的核准單（mod 看到就再呼叫一次）；到期那一刻剛好核准下來的話，會多讀一次拿到真實結果，不會因為時間差印成「還開著」；daemon 三次沒回應 → 20。
+- **被規則拒絕時** 把 409 的代碼印在 stderr 最後一個字（mod 直接讀）；`relay_open`／`bad_transition` 把 daemon 回的 op 印在 stdout。
+- **`begin` 可以安全重送**：CLI 先產生一個 request id 帶上去，daemon 看到同一個 id（同一 session、同樣的用量與 window）就回原來那個 op，不會因為回應在半路掉了而開第二筆申請；不同 payload 拿舊 id 來用是 409。
+- **`report claimed`** 在本地就擋（用法錯）；`cleared` 時 daemon 若還沒看到新 session 回 503，CLI 回 20 讓 mod 下個回合重送。
+- spec §14 的 exit 13 清單補上 `relay_open`、`bad_transition`。
+
+Review 後補強：`--window` 必填、`--used` 拒 NaN／Inf（R1）；request id 重送與到期短讀（攻擊方）；重送要同 payload（critic）。`cmd/pdx/relay.go` 的職責拆分列 #1730。
+
+## [1.0.0-alpha.542] - 2026-10-08
+
+> 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動，桌機上沒有使用者可見的變化。修正 alpha.540 的終端機鏡像連線（purdex-ios 實測回報）。
+
+### Fixed：鏡像連線是唯一 client 時仍會縮小桌機的 window（#1725）
+
+- alpha.540 的 `?mirror=1` 以 `-f ignore-size` attach，但那只在**還有其他 client** 時有效；手機是唯一 client 時（桌機沒開著這個 session），tmux 仍以手機的大小決定 window，window 被縮成手機的大小（實測 150x44 的 window 變成 83x55），手機斷線後也不會復原。我先前只在有桌機 client 的情況下驗證，漏了這種情況。
+- 現在鏡像連線的 PTY 與 window 綁定：連線前先查 window 的大小與 status bar 的行數，PTY 以「window 寬 × (window 高 ＋ status 行數)」啟動——光是同高還不夠，tmux 會把 client 的 status 那一行從 window 扣掉（150x44 的 client 會讓 window 變 150x43）。之後每秒同步，window 或 status 變了就跟著調整。
+- 鏡像連線送來的 `resize` 一律忽略，不再改任何大小。查不到 window 大小時拒絕連線（WebSocket close 1011，client 當暫時失敗重試），不以猜的大小啟動。
+- window text frame 多了 `pty_cols`／`pty_rows`（PTY 實際大小）；client 的終端格線以它們為準，`cols`／`rows` 只是 window 本身。status bar 開關使 PTY 變動時也會重送。
+- 已知限制（#1727）：同步靠每秒輪詢，桌機在輪詢之間調整大小並立刻離開 session，或在查詢與 attach 之間切換 current window，仍可能讓 window 被舊尺寸重算；根治需要事件驅動，另案。
+
 ## [1.0.0-alpha.541] - 2026-10-08
 
 > 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動。桌機上沒有使用者可見的變化：這是權限通道（讓 worker 做有風險的事之前先問你）的 daemon 半段，前端要等 SPA 那一半。

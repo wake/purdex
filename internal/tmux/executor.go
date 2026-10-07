@@ -141,6 +141,10 @@ type Executor interface {
 	// WindowSize returns the actual size of the target's current window
 	// (`#{window_width} #{window_height}`). ctx cancels a stuck query.
 	WindowSize(ctx context.Context, target string) (cols, rows uint16, err error)
+	// StatusRows returns how many rows the target's status bar takes (0 when
+	// off). A client must be window height + this tall for tmux to keep the
+	// window at its size when that client is the only one attached.
+	StatusRows(ctx context.Context, target string) (uint16, error)
 	SetWindowOption(target, option, value string) error
 	SetWindowOptionGlobal(option, value string) error
 	ShowWindowOption(option string) (string, error)
@@ -737,6 +741,33 @@ func (r *RealExecutor) WindowSize(ctx context.Context, target string) (uint16, u
 		return 0, 0, fmt.Errorf("tmux display-message window size: %w", err)
 	}
 	return parseWindowSize(string(out))
+}
+
+func (r *RealExecutor) StatusRows(ctx context.Context, target string) (uint16, error) {
+	out, err := boundedRead(ctx, "display-message", "-p", "-t", target, "#{status}").Output()
+	if err != nil {
+		if cerr := readCtxErr(ctx, "display-message status rows", err); cerr != nil {
+			return 0, cerr
+		}
+		return 0, fmt.Errorf("tmux display-message status rows: %w", err)
+	}
+	return parseStatusRows(string(out))
+}
+
+// parseStatusRows parses tmux's `status` option: off, on (one row) or 2..5.
+func parseStatusRows(s string) (uint16, error) {
+	switch v := strings.TrimSpace(s); v {
+	case "off":
+		return 0, nil
+	case "on":
+		return 1, nil
+	default:
+		n, err := strconv.ParseUint(v, 10, 8)
+		if err != nil || n < 2 || n > 5 {
+			return 0, fmt.Errorf("parse status rows: %q", s)
+		}
+		return uint16(n), nil
+	}
 }
 
 // parseWindowSize parses "<cols> <rows>"; both must be in 1..65535.

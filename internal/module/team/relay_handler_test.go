@@ -435,3 +435,60 @@ func TestRelayBegin_ReconcilesAnAwaitingOpWhoseRowIsGoneOrClosed(t *testing.T) {
 		t.Fatal("begin did not open a new op")
 	}
 }
+
+// PR #1726 attacker A-1: a begin that carries the CLI's request_id is
+// replayable — the same id answers with the op it opened, in whatever
+// state it is now (here: already denied), never with a second op; an id
+// of another session's op is refused; a malformed id is 400.
+func TestRelayBegin_ReplayByRequestIDReturnsTheSameOp(t *testing.T) {
+	f := newFixture(t)
+	req := beginReq("sid-1")
+	req.RequestID = uid(42)
+	code, body := f.do(http.MethodPost, "/api/relay/begin", req)
+	if code != http.StatusCreated {
+		t.Fatalf("begin: %d %s", code, body)
+	}
+	var first team.RelayBeginResponse
+	_ = json.Unmarshal(body, &first)
+	if first.RequestID != uid(42) || first.Op.RequestID != uid(42) {
+		t.Fatalf("the daemon must use the client's request id: %+v", first)
+	}
+	// The person denies before the (lost-response) replay arrives.
+	f.decide(uid(42), "deny")
+	code, body = f.do(http.MethodPost, "/api/relay/begin", req)
+	if code != http.StatusCreated {
+		t.Fatalf("replay: %d %s", code, body)
+	}
+	var again team.RelayBeginResponse
+	_ = json.Unmarshal(body, &again)
+	if again.Op.ID != first.Op.ID || again.Op.State != team.RelayCancelled || again.Op.Reason != team.RelayReasonDenied {
+		t.Fatalf("replay must return the same, now denied, op: %+v", again.Op)
+	}
+	if active, _ := f.m.store.ListActiveRelayOps(); len(active) != 0 {
+		t.Fatalf("a second op was opened: %+v", active)
+	}
+	// The same id with a different payload is a conflicting reuse, not a replay.
+	changed := beginReq("sid-1")
+	changed.RequestID = uid(42)
+	changed.UsedPercentage = 90
+	if code, body := f.do(http.MethodPost, "/api/relay/begin", changed); code != http.StatusConflict {
+		t.Fatalf("same request_id, different used_percentage: %d %s", code, body)
+	}
+	changed = beginReq("sid-1")
+	changed.RequestID = uid(42)
+	changed.Window = 1
+	if code, body := f.do(http.MethodPost, "/api/relay/begin", changed); code != http.StatusConflict {
+		t.Fatalf("same request_id, different window: %d %s", code, body)
+	}
+	// Another session replaying someone else's id is refused.
+	other := beginReq("sid-2")
+	other.RequestID = uid(42)
+	if code, _ := f.do(http.MethodPost, "/api/relay/begin", other); code != http.StatusConflict {
+		t.Fatalf("foreign request_id: %d", code)
+	}
+	bad := beginReq("sid-2")
+	bad.RequestID = "not-a-uuid"
+	if code, _ := f.do(http.MethodPost, "/api/relay/begin", bad); code != http.StatusBadRequest {
+		t.Fatalf("malformed request_id: %d", code)
+	}
+}

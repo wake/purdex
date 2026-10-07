@@ -156,6 +156,135 @@ func TestRelayWindow_StuckQueryTimesOutAndRetries(t *testing.T) {
 	assert.Equal(t, windowFrame{"window", 90, 25}, f[0])
 }
 
+// readUntil reads binary output until it contains want (or fails on timeout).
+func readUntil(t *testing.T, ws *websocket.Conn, want string) string {
+	t.Helper()
+	var got strings.Builder
+	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	for !strings.Contains(got.String(), want) {
+		typ, msg, err := ws.ReadMessage()
+		require.NoError(t, err, "waiting for %q, got %q", want, got.String())
+		if typ == websocket.BinaryMessage {
+			got.Write(msg)
+		}
+	}
+	return got.String()
+}
+
+// A mirror's PTY is sized from the window up front (rows include the status
+// bar) and the client's own resize is ignored: tmux lets even a lone
+// ignore-size client decide the window, so any other size would shrink it.
+func TestRelayPTYSize_InitialAndIgnoresClientResize(t *testing.T) {
+	relay := terminal.NewRelay("sh", []string{"-c", "while read l; do stty size; done"}, "/tmp")
+	relay.WindowPollInterval = 5 * time.Millisecond
+	relay.WindowSize = func(ctx context.Context) (uint16, uint16, error) { return 100, 30, nil }
+	relay.StatusRows = func(ctx context.Context) (uint16, error) { return 1, nil }
+	ws, closeAll := dialRelay(t, relay)
+	defer closeAll()
+
+	require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"resize","cols":40,"rows":20}`)))
+	require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte("x\n")))
+	out := readUntil(t, ws, "31 100")
+	assert.NotContains(t, out, "20 40")
+}
+
+// The window frame also carries the PTY's actual size, so a client can lay its
+// grid out exactly as tmux draws it; a PTY-only change (status bar toggled)
+// is reported too.
+func TestRelayPTYSize_FrameCarriesPTYSizeAndReportsPTYOnlyChange(t *testing.T) {
+	var status atomic.Uint32
+	status.Store(1)
+	relay := terminal.NewRelay("cat", nil, "/tmp")
+	relay.WindowPollInterval = 5 * time.Millisecond
+	relay.WindowSize = func(ctx context.Context) (uint16, uint16, error) { return 100, 30, nil }
+	relay.StatusRows = func(ctx context.Context) (uint16, error) { return uint16(status.Load()), nil }
+	ws, closeAll := dialRelay(t, relay)
+	defer closeAll()
+
+	type frame struct {
+		Type    string `json:"type"`
+		Cols    int    `json:"cols"`
+		Rows    int    `json:"rows"`
+		PTYCols int    `json:"pty_cols"`
+		PTYRows int    `json:"pty_rows"`
+	}
+	next := func() frame {
+		_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+		for {
+			typ, msg, err := ws.ReadMessage()
+			require.NoError(t, err)
+			if typ != websocket.TextMessage {
+				continue
+			}
+			var f frame
+			require.NoError(t, json.Unmarshal(msg, &f))
+			return f
+		}
+	}
+	assert.Equal(t, frame{"window", 100, 30, 100, 31}, next())
+
+	status.Store(2) // window unchanged, status bar grew
+	assert.Equal(t, frame{"window", 100, 30, 100, 32}, next())
+}
+
+func TestRelayPTYSize_FollowsWindowChanges(t *testing.T) {
+	var rows atomic.Uint32
+	rows.Store(30)
+	relay := terminal.NewRelay("sh", []string{"-c", "while read l; do stty size; done"}, "/tmp")
+	relay.WindowPollInterval = 5 * time.Millisecond
+	relay.WindowSize = func(ctx context.Context) (uint16, uint16, error) { return 100, uint16(rows.Load()), nil }
+	relay.StatusRows = func(ctx context.Context) (uint16, error) { return 1, nil }
+	ws, closeAll := dialRelay(t, relay)
+	defer closeAll()
+
+	rows.Store(50)
+	time.Sleep(100 * time.Millisecond) // several ticks
+	require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte("x\n")))
+	readUntil(t, ws, "51 100")
+}
+
+// If the window size cannot be learned the mirror must not start a PTY at a
+// guessed size (it could shrink the desktop window): the connection is refused.
+func TestRelayPTYSize_FailureRefusesConnection(t *testing.T) {
+	relay := terminal.NewRelay("cat", nil, "/tmp")
+	relay.WindowSize = func(ctx context.Context) (uint16, uint16, error) { return 100, 30, nil }
+	relay.StatusRows = func(ctx context.Context) (uint16, error) { return 0, errors.New("tmux gone") }
+	ws, closeAll := dialRelay(t, relay)
+	defer closeAll()
+	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, _, err := ws.ReadMessage()
+	require.Error(t, err)
+	assert.True(t, websocket.IsCloseError(err, websocket.CloseInternalServerErr), "got %v", err)
+}
+
+// Each tmux query has its own deadline and a tick reads the window once: two
+// queries that are each under the timeout but together over it must still
+// report (they used to share one context, and PTYSize re-read the window).
+func TestRelayPTYSize_EachQueryHasItsOwnDeadlineAndWindowIsReadOncePerTick(t *testing.T) {
+	var windowCalls, statusCalls atomic.Int32
+	relay := terminal.NewRelay("cat", nil, "/tmp")
+	relay.WindowPollInterval = 10 * time.Millisecond
+	relay.WindowQueryTimeout = 100 * time.Millisecond
+	relay.WindowSize = func(ctx context.Context) (uint16, uint16, error) {
+		windowCalls.Add(1)
+		time.Sleep(60 * time.Millisecond)
+		return 100, 30, nil
+	}
+	relay.StatusRows = func(ctx context.Context) (uint16, error) {
+		statusCalls.Add(1)
+		time.Sleep(60 * time.Millisecond) // 60+60 > 100: only separate deadlines pass
+		return 1, nil
+	}
+	ws, closeAll := dialRelay(t, relay)
+	defer closeAll()
+	log := collect(ws)
+	require.Eventually(t, func() bool { f, _ := log.snapshot(); return len(f) == 1 }, 3*time.Second, 5*time.Millisecond)
+	time.Sleep(300 * time.Millisecond) // a few more ticks
+	w, s := windowCalls.Load(), statusCalls.Load()
+	// start-up reads the window once for the PTY size, then once per tick.
+	assert.InDelta(t, float64(w), float64(s), 1.0, "window=%d status=%d: one status read per window read", w, s)
+}
+
 func TestRelayWindow_NotConfiguredSendsNoText(t *testing.T) {
 	relay := terminal.NewRelay("cat", nil, "/tmp")
 	ws, closeAll := dialRelay(t, relay)
