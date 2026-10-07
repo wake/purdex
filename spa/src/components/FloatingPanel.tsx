@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } fr
 import { createPortal } from 'react-dom'
 import { X } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
-import { getPlatformCapabilities } from '../lib/platform'
 
 export interface FloatingPanelProps {
   title: string
@@ -21,13 +20,11 @@ const PADDING = 4
 const Z_INDEX = 100
 /** How much of the panel must stay on screen when dragged. */
 const MIN_VISIBLE = 40
-/** Height of the Electron title bar's OS drag region (see `TitleBar.tsx`, which
- * is only rendered under Electron — `App.tsx` gates it on the same
- * `getPlatformCapabilities().isElectron` check used below). The panel's top
- * must never land inside it — that region intercepts pointer events for
- * window-dragging, so a panel header there could be neither dragged nor have
- * its × clicked. In the browser there's no such region, so the inset is just
- * the ordinary viewport padding. */
+/** Height of the title bar's OS drag region (see `TitleBar.tsx`, which `App.tsx`
+ * renders in every window — Purdex ships only as the Mac and iOS apps). The
+ * panel's top must never land inside it — that region intercepts pointer events
+ * for window-dragging, so a panel header there could be neither dragged nor have
+ * its × clicked. */
 export const TITLE_BAR_HEIGHT = 36
 /** Floor on the panel's usable height when auto-placed below an anchor near the
  * bottom of the viewport — it slides up only as much as needed to keep at least
@@ -57,10 +54,9 @@ const openPanels: symbol[] = []
  */
 export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId = 'floating-panel', placement = 'below', children }: FloatingPanelProps) {
   const t = useI18nStore((s) => s.t)
-  // Only the Electron title bar's drag region needs the panel pushed down —
-  // `App.tsx` renders `TitleBar` under the same check, so this stays in sync
-  // with whether that region actually exists on screen.
-  const topInset = getPlatformCapabilities().isElectron ? TITLE_BAR_HEIGHT : PADDING
+  // The title bar's drag region is always on screen (`App.tsx` renders `TitleBar`
+  // unconditionally), so the panel always clears it.
+  const topInset = TITLE_BAR_HEIGHT
   const panelRef = useRef<HTMLDivElement>(null)
   const posRef = useRef<{ left: number; top: number }>({ left: PADDING, top: PADDING })
   const drag = useRef<{ pointerId: number; startX: number; startY: number; left: number; top: number } | null>(null)
@@ -94,12 +90,12 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
 
   // Always below the anchor — never the "above" fallback, so the panel stays next
   // to the field that opened it instead of jumping to wherever it happens to fit.
-  // Clamped on both ends: never above `topInset` (the Electron title bar's drag
-  // region, or ordinary padding in the browser), and never so low that less than
-  // `MIN_PANEL_HEIGHT` of the viewport remains below it — past that point the
-  // panel slides up just enough to keep that floor, rather than opening with
-  // almost nothing to show. `maxHeight` then fits the panel from there to the
-  // bottom edge, with the body scrolling for the rest.
+  // Clamped on both ends: never above `topInset` (the title bar's drag region),
+  // and never so low that less than `MIN_PANEL_HEIGHT` of the viewport remains
+  // below it — past that point the panel slides up just enough to keep that
+  // floor, rather than opening with almost nothing to show. `maxHeight` then
+  // fits the panel from there to the bottom edge, with the body scrolling for
+  // the rest.
   const placeBelow = () => {
     const a = anchorRef.current?.getBoundingClientRect()
     let left = a ? a.left : PADDING

@@ -35,7 +35,6 @@ import { HandoffDialogHost } from './components/HandoffDialogHost'
 import { ApprovalDialogHost } from './components/ApprovalDialogHost'
 import { ThemeInjector } from './components/ThemeInjector'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { getPlatformCapabilities } from './lib/platform'
 import type { Tab } from './types/tab'
 import { GlobalUndoToast } from './components/GlobalUndoToast'
 
@@ -43,8 +42,6 @@ import { GlobalUndoToast } from './components/GlobalUndoToast'
 prefetchWeight('bold').catch(() => {})
 
 export default function App() {
-  const isElectron = getPlatformCapabilities().isElectron
-
   // Host store
   const hostOrder = useHostStore((s) => s.hostOrder)
   const firstHostId = hostOrder[0] ?? ''
@@ -192,7 +189,7 @@ export default function App() {
     <Router>
       <ThemeInjector />
       <div className="h-screen flex flex-col bg-surface-primary text-text-primary">
-        {isElectron && <TitleBar title={titleText} />}
+        <TitleBar title={titleText} />
         <div className="flex-1 flex min-h-0">
           <ActivityBar
             workspaces={workspaces}

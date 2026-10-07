@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { useRef, useState } from 'react'
-import { FloatingPanel } from './FloatingPanel'
+import { FloatingPanel, TITLE_BAR_HEIGHT } from './FloatingPanel'
 import { ConfirmDialog } from './ConfirmDialog'
 import { getPlatformCapabilities } from '../lib/platform'
 import type { PlatformCapabilities } from '../lib/platform'
@@ -19,9 +19,10 @@ vi.mock('../lib/platform', () => ({
   })),
 }))
 
-/** The Electron title bar's drag region (see `FloatingPanel.tsx`'s `topInset`)
- * only exists when `getPlatformCapabilities().isElectron` is true — stub it
- * the same way `TabContextMenu.test.tsx` does. */
+/** The title bar's drag region (see `FloatingPanel.tsx`'s `topInset`) is on
+ * screen whatever the platform — `App.tsx` always renders `TitleBar` — so the
+ * inset must not follow `getPlatformCapabilities().isElectron`. Stubbed the same
+ * way `TabContextMenu.test.tsx` does, so the inset tests can run both values. */
 function mockElectron(isElectron: boolean) {
   vi.mocked(getPlatformCapabilities).mockReturnValue({
     isElectron,
@@ -210,8 +211,8 @@ describe('FloatingPanel', () => {
     expect(parseInt(panel.style.left)).toBe(left0 + 50)
   })
 
-  it('a drag never moves the panel fully off-screen, nor above the Electron title bar under Electron', () => {
-    mockElectron(true)
+  it.each([false, true])('a drag never moves the panel fully off-screen, nor above the title bar (isElectron=%s)', (isElectron) => {
+    mockElectron(isElectron)
     render(<Harness onClose={() => {}} />)
     const panel = screen.getByTestId('floating-panel')
     const handle = screen.getByTestId('floating-panel-handle')
@@ -220,19 +221,7 @@ describe('FloatingPanel', () => {
     fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
     fireEvent.pointerMove(handle, { clientX: -5000, clientY: -5000, pointerId: 1 })
     expect(parseInt(panel.style.left)).toBeGreaterThanOrEqual(-320 + 40)
-    expect(parseInt(panel.style.top)).toBeGreaterThanOrEqual(36)
-  })
-
-  it('a drag never moves the panel fully off-screen in the browser (no title bar region to avoid)', () => {
-    render(<Harness onClose={() => {}} />)
-    const panel = screen.getByTestId('floating-panel')
-    const handle = screen.getByTestId('floating-panel-handle')
-    handle.setPointerCapture = () => {}
-    handle.releasePointerCapture = () => {}
-    fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
-    fireEvent.pointerMove(handle, { clientX: -5000, clientY: -5000, pointerId: 1 })
-    expect(parseInt(panel.style.left)).toBeGreaterThanOrEqual(-320 + 40)
-    expect(parseInt(panel.style.top)).toBeGreaterThanOrEqual(4)
+    expect(parseInt(panel.style.top)).toBe(TITLE_BAR_HEIGHT)
   })
 
   it('is marked no-drag so the Electron title bar region does not intercept its pointer events', () => {
@@ -247,21 +236,12 @@ describe('FloatingPanel', () => {
     expect(withCamel.WebkitAppRegion).toBe('no-drag')
   })
 
-  it('never exceeds the viewport height in the browser, and scrolls its body instead', () => {
+  it.each([false, true])('never exceeds the viewport height, leaving room for the title bar, and scrolls its body instead (isElectron=%s)', (isElectron) => {
+    mockElectron(isElectron)
     Object.defineProperty(window, 'innerHeight', { value: 300, configurable: true })
     render(<Harness onClose={() => {}} />)
     const panel = screen.getByTestId('floating-panel')
-    expect(panel.style.maxHeight).toBe('292px')
-    const body = screen.getByTestId('inside').closest('div')
-    expect(body?.style.overflowY).toBe('auto')
-  })
-
-  it('never exceeds the viewport height under Electron, leaving room for the title bar', () => {
-    mockElectron(true)
-    Object.defineProperty(window, 'innerHeight', { value: 300, configurable: true })
-    render(<Harness onClose={() => {}} />)
-    const panel = screen.getByTestId('floating-panel')
-    expect(panel.style.maxHeight).toBe('260px')
+    expect(panel.style.maxHeight).toBe(`${300 - TITLE_BAR_HEIGHT - 4}px`)
     const body = screen.getByTestId('inside').closest('div')
     expect(body?.style.overflowY).toBe('auto')
   })
@@ -271,27 +251,17 @@ describe('FloatingPanel', () => {
     const panel = screen.getByTestId('floating-panel')
     Object.defineProperty(window, 'innerHeight', { value: 250, configurable: true })
     fireEvent(window, new Event('resize'))
-    expect(panel.style.maxHeight).toBe('242px')
+    expect(panel.style.maxHeight).toBe(`${250 - TITLE_BAR_HEIGHT - 4}px`)
   })
 
-  it('still opens below the anchor under Electron, but the MIN_PANEL_HEIGHT floor never pushes it above the title bar', () => {
-    mockElectron(true)
+  it.each([false, true])('still opens below the anchor, but the MIN_PANEL_HEIGHT floor never pushes it above the title bar (isElectron=%s)', (isElectron) => {
+    mockElectron(isElectron)
     Object.defineProperty(window, 'innerHeight', { value: 40, configurable: true })
     const { rerender } = render(<Harness onClose={() => {}} open={false} />)
     rect(screen.getByTestId('anchor'), { top: 38, bottom: 40, left: 10, right: 50 })
     rerender(<Harness onClose={() => {}} open />)
     const panel = screen.getByTestId('floating-panel')
-    expect(parseInt(panel.style.top)).toBe(36)
-    expect(parseInt(panel.style.top)).toBeGreaterThanOrEqual(36)
-  })
-
-  it('in the browser, only needs the ordinary padding above a short viewport (no title bar region)', () => {
-    Object.defineProperty(window, 'innerHeight', { value: 40, configurable: true })
-    const { rerender } = render(<Harness onClose={() => {}} open={false} />)
-    rect(screen.getByTestId('anchor'), { top: 38, bottom: 40, left: 10, right: 50 })
-    rerender(<Harness onClose={() => {}} open />)
-    const panel = screen.getByTestId('floating-panel')
-    expect(parseInt(panel.style.top)).toBeGreaterThanOrEqual(4)
+    expect(parseInt(panel.style.top)).toBe(TITLE_BAR_HEIGHT)
   })
 
   it('pointer events inside the body do not start a drag', () => {
@@ -390,14 +360,14 @@ describe('FloatingPanel', () => {
     handle.setPointerCapture = () => {}
     handle.releasePointerCapture = () => {}
     const top0 = parseInt(panel.style.top)
-    expect(top0).toBe(4)
+    expect(top0).toBe(TITLE_BAR_HEIGHT)
     fireEvent.pointerDown(handle, { clientX: 0, clientY: 0, pointerId: 1, button: 0 })
-    fireEvent.pointerMove(handle, { clientX: 0, clientY: 4 - top0, pointerId: 1 })
-    expect(parseInt(panel.style.top)).toBe(4)
-    expect(panel.style.maxHeight).toBe('92px')
+    fireEvent.pointerMove(handle, { clientX: 0, clientY: TITLE_BAR_HEIGHT - top0, pointerId: 1 })
+    expect(parseInt(panel.style.top)).toBe(TITLE_BAR_HEIGHT)
+    expect(panel.style.maxHeight).toBe(`${100 - TITLE_BAR_HEIGHT - 4}px`)
     fireEvent.pointerUp(handle, { pointerId: 1 })
     fireEvent(window, new Event('resize'))
-    expect(panel.style.maxHeight).toBe('92px')
+    expect(panel.style.maxHeight).toBe(`${100 - TITLE_BAR_HEIGHT - 4}px`)
   })
 
   it('does not re-anchor on scroll once the panel has been dragged', () => {
@@ -511,19 +481,14 @@ describe("FloatingPanel — placement='right'", () => {
 
   it('bounds the panel by the whole viewport height below topInset, so its body scrolls past that', () => {
     const panel = openBeside({ left: 0, right: 48, top: 700, bottom: 740 })
-    expect(panel.style.maxHeight).toBe(`${800 - 4 - 4}px`)
+    expect(panel.style.maxHeight).toBe(`${800 - TITLE_BAR_HEIGHT - 4}px`)
   })
 
-  it('clamps to topInset when the anchor is too near the top for the panel to end at its bottom', () => {
+  it.each([false, true])('clamps to the title bar when the anchor is too near the top for the panel to end at its bottom, and leaves room for it in maxHeight (isElectron=%s)', (isElectron) => {
+    mockElectron(isElectron)
     const panel = openBeside({ left: 0, right: 48, top: 60, bottom: 100 })
-    expect(parseInt(panel.style.top)).toBe(4)
-  })
-
-  it('clamps to the Electron title bar under Electron, and leaves room for it in maxHeight', () => {
-    mockElectron(true)
-    const panel = openBeside({ left: 0, right: 48, top: 60, bottom: 100 })
-    expect(parseInt(panel.style.top)).toBe(36)
-    expect(panel.style.maxHeight).toBe(`${800 - 36 - 4}px`)
+    expect(parseInt(panel.style.top)).toBe(TITLE_BAR_HEIGHT)
+    expect(panel.style.maxHeight).toBe(`${800 - TITLE_BAR_HEIGHT - 4}px`)
   })
 
   it('never lets the panel bottom pass the viewport bottom padding', () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { useRef, useState } from 'react'
 import { Menu, type MenuEntry, type MenuPlacement } from './Menu'
-import { FloatingPanel } from './FloatingPanel'
+import { FloatingPanel, TITLE_BAR_HEIGHT } from './FloatingPanel'
 import { getPlatformCapabilities } from '../lib/platform'
 import type { PlatformCapabilities } from '../lib/platform'
 
@@ -313,12 +313,12 @@ describe('Menu — placement', () => {
     expect(menu.style.top).toBe('84px')
   })
 
-  it('right-start: beside the trigger, top edges aligned (the narrow bar sits at the far left)', () => {
-    mockRects(rect(7, 8, 30, 30), { width: 200, height: 120 })
+  it('right-start: beside the trigger, top edges aligned (the narrow bar sits at the far left, under the title bar)', () => {
+    mockRects(rect(7, 44, 30, 30), { width: 200, height: 120 }) // 8 px into the bar, under the 36 px title bar
     render(<Harness items={entries()} placement="right-start" />)
     const menu = screen.getByTestId('menu')
     expect(menu.style.left).toBe('41px')
-    expect(menu.style.top).toBe('8px')
+    expect(menu.style.top).toBe('44px')
   })
 
   it('stays inside the viewport: clamped on the right, flipped above when there is no room below', () => {
@@ -338,11 +338,13 @@ describe('Menu — placement', () => {
     expect(screen.getByTestId('menu').style.left).toBe(`${vw - 40 - 4 - 200}px`)
   })
 
-  it('under Electron it never opens inside the title bar\'s drag region (it could not be clicked there)', () => {
-    vi.mocked(getPlatformCapabilities).mockReturnValue(capabilities(true))
+  // The title bar is on screen whatever the platform (`App.tsx` always renders it), so the inset must not follow
+  // `isElectron`: both values are run.
+  it.each([false, true])('never opens inside the title bar\'s drag region, it could not be clicked there (isElectron=%s)', (isElectron) => {
+    vi.mocked(getPlatformCapabilities).mockReturnValue(capabilities(isElectron))
     mockRects(rect(7, 8, 30, 30), { width: 200, height: 120 })
     render(<Harness items={entries()} placement="right-start" />)
-    expect(screen.getByTestId('menu').style.top).toBe('36px')
+    expect(screen.getByTestId('menu').style.top).toBe(`${TITLE_BAR_HEIGHT}px`)
   })
 
   it('follows the trigger on resize', () => {

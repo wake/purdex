@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { Check, CircleNotch } from '@phosphor-icons/react'
-import { getPlatformCapabilities } from '../lib/platform'
 import { TITLE_BAR_HEIGHT } from './FloatingPanel'
 
 export interface MenuItem {
@@ -59,7 +58,7 @@ const isAvailable = (e: MenuItem) => !e.disabled && !e.busy
  *
  * It is `FloatingPanel`'s sibling, not its child: that one is a titled, draggable `role="dialog"` — a header, a
  * × button and a drag handle a menu must not have — so what is shared is its conventions (portal, imperative
- * position, the Electron title-bar inset, the IME Escape guard, "restore focus only if it is still ours").
+ * position, the title-bar inset, the IME Escape guard, "restore focus only if it is still ours").
  */
 export function Menu(props: MenuProps) {
   // A fresh instance per opening: every effect below is a mount / unmount effect.
@@ -69,8 +68,8 @@ export function Menu(props: MenuProps) {
 
 function MenuPopup({ trigger, onClose, items, label, placement = 'bottom-start', testId = 'menu' }: MenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
-  // Under Electron the top 36 px is the OS drag region: a menu there could not be clicked (see `FloatingPanel`).
-  const topInset = getPlatformCapabilities().isElectron ? TITLE_BAR_HEIGHT : PADDING
+  // The top 36 px is the title bar's OS drag region, always on screen: a menu there could not be clicked (see `FloatingPanel`).
+  const topInset = TITLE_BAR_HEIGHT
 
   // Imperative, like `FloatingPanel`: the position depends on the menu's own measured size.
   const place = () => {
