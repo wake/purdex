@@ -1,0 +1,221 @@
+package cc
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"testing/fstest"
+)
+
+func fakePlugin(version string) fstest.MapFS {
+	return fstest.MapFS{
+		".claude-plugin/plugin.json": {Data: []byte(`{"name":"purdex","version":"` + version + `"}`)},
+		"hooks/hooks.json":           {Data: []byte(`{"modules":["./register.js"]}`)},
+		"hooks/register.js":          {Data: []byte("export function register(on) {} // " + version)},
+		"skills/pdx-team/SKILL.md":   {Data: []byte("---\nname: pdx-team\n---\n")},
+	}
+}
+
+func envDirs(t *testing.T, settings map[string]any) (string, bool) {
+	t.Helper()
+	env, ok := settings["env"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	v, ok := env["CLAUDE_CODE_PLUGIN_DIRS"].(string)
+	return v, ok
+}
+
+func TestExtractPlugin_WritesTreeVersionAndPdxJSON(t *testing.T) {
+	dataDir := t.TempDir()
+	root, changed, err := ExtractPlugin(fakePlugin("1.0.0-alpha.530"), dataDir, "1.0.0-alpha.530", "/opt/pdx")
+	if err != nil || !changed {
+		t.Fatalf("first extract: changed=%v err=%v", changed, err)
+	}
+	if root != filepath.Join(dataDir, "cc-plugin", "purdex") {
+		t.Fatalf("root = %s", root)
+	}
+	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "skills/pdx-team/SKILL.md", "VERSION", "pdx.json"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("%s missing: %v", rel, err)
+		}
+	}
+	v, _ := os.ReadFile(filepath.Join(root, "VERSION"))
+	if strings.TrimSpace(string(v)) != "1.0.0-alpha.530" {
+		t.Fatalf("VERSION = %q", v)
+	}
+	var pj map[string]string
+	b, _ := os.ReadFile(filepath.Join(root, "pdx.json"))
+	if err := json.Unmarshal(b, &pj); err != nil || pj["pdx"] != "/opt/pdx" || pj["data_dir"] != dataDir {
+		t.Fatalf("pdx.json = %s (%v)", b, err)
+	}
+	if _, err := os.Stat(root + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("the .tmp sibling must not remain")
+	}
+}
+
+func TestExtractPlugin_SameVersionIsNoop_NewVersionReplaces(t *testing.T) {
+	dataDir := t.TempDir()
+	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(PluginRoot(dataDir), "hooks", "stale.js")
+	os.WriteFile(stale, []byte("old"), 0o644)
+	_, changed, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx")
+	if err != nil || changed {
+		t.Fatalf("same version: changed=%v err=%v", changed, err)
+	}
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatal("a same-version extract must not touch the tree")
+	}
+	_, changed, err = ExtractPlugin(fakePlugin("b"), dataDir, "b", "/opt/pdx")
+	if err != nil || !changed {
+		t.Fatalf("new version: changed=%v err=%v", changed, err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatal("a re-extract must replace the whole tree, not merge into it")
+	}
+	js, _ := os.ReadFile(filepath.Join(PluginRoot(dataDir), "hooks", "register.js"))
+	if !strings.HasSuffix(strings.TrimSpace(string(js)), "// b") {
+		t.Fatalf("register.js not replaced: %q", js)
+	}
+}
+
+func TestExtractPlugin_UnknownVersionAlwaysReextracts_AndSemverStampsManifest(t *testing.T) {
+	dataDir := t.TempDir()
+	for i := 0; i < 2; i++ {
+		_, changed, err := ExtractPlugin(fakePlugin("x"), dataDir, "unknown", "/opt/pdx")
+		if err != nil || !changed {
+			t.Fatalf("run %d with version unknown: changed=%v err=%v (a dev build must always re-extract)", i, changed, err)
+		}
+	}
+	b, _ := os.ReadFile(filepath.Join(PluginRoot(dataDir), ".claude-plugin", "plugin.json"))
+	if !strings.Contains(string(b), `"version":"unknown"`) && strings.Contains(string(b), `"unknown"`) {
+		t.Fatalf("unknown must not be stamped into plugin.json: %s", b)
+	}
+	if _, _, err := ExtractPlugin(fakePlugin("x"), dataDir, "1.0.0-alpha.530", "/opt/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(filepath.Join(PluginRoot(dataDir), ".claude-plugin", "plugin.json"))
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil || m["version"] != "1.0.0-alpha.530" || m["name"] != "purdex" {
+		t.Fatalf("plugin.json = %s (%v)", b, err)
+	}
+}
+
+func TestExtractPlugin_NilSourceErrors(t *testing.T) {
+	if _, _, err := ExtractPlugin(nil, t.TempDir(), "v", "/opt/pdx"); err == nil {
+		t.Fatal("nil source must error")
+	}
+}
+
+func TestMergePluginDirs_CreatesEnvAndIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	dataDir := filepath.Join(dir, "pdx")
+	root := PluginRoot(dataDir)
+	for i := 0; i < 2; i++ {
+		if err := mergePluginDirs(path, dataDir, root, false); err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+	v, ok := envDirs(t, readSettings(t, path))
+	if !ok || v != root {
+		t.Fatalf("CLAUDE_CODE_PLUGIN_DIRS = %q ok=%v, want exactly %q once", v, ok, root)
+	}
+}
+
+func TestMergePluginDirs_AppendsToExistingListAndKeepsOtherKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	dataDir := filepath.Join(dir, "pdx")
+	root := PluginRoot(dataDir)
+	sep := string(os.PathListSeparator)
+	os.WriteFile(path, []byte(`{"env":{"FOO":"1","CLAUDE_CODE_PLUGIN_DIRS":"/Users/x/mods/a`+sep+`/Users/x/mods/b"},"hooks":{}}`), 0o644)
+	if err := mergePluginDirs(path, dataDir, root, false); err != nil {
+		t.Fatal(err)
+	}
+	s := readSettings(t, path)
+	v, _ := envDirs(t, s)
+	if v != "/Users/x/mods/a"+sep+"/Users/x/mods/b"+sep+root {
+		t.Fatalf("got %q", v)
+	}
+	if s["env"].(map[string]any)["FOO"] != "1" {
+		t.Fatal("other env keys must be kept")
+	}
+	if _, ok := s["hooks"]; !ok {
+		t.Fatal("other settings keys must be kept")
+	}
+}
+
+func TestMergePluginDirs_ReplacesStaleEntryUnderCcPluginPrefix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	dataDir := filepath.Join(dir, "pdx")
+	root := PluginRoot(dataDir)
+	sep := string(os.PathListSeparator)
+	stale := filepath.Join(dataDir, "cc-plugin", "purdex-old")
+	os.WriteFile(path, []byte(`{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"`+stale+sep+`/Users/x/mods/a"}}`), 0o644)
+	if err := mergePluginDirs(path, dataDir, root, false); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := envDirs(t, readSettings(t, path))
+	if v != "/Users/x/mods/a"+sep+root {
+		t.Fatalf("got %q", v)
+	}
+}
+
+func TestMergePluginDirs_RemoveKeepsOthersAndDeletesEmptyEnv(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	dataDir := filepath.Join(dir, "pdx")
+	root := PluginRoot(dataDir)
+	sep := string(os.PathListSeparator)
+	os.WriteFile(path, []byte(`{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"/Users/x/mods/a`+sep+root+`"}}`), 0o644)
+	if err := mergePluginDirs(path, dataDir, root, true); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := envDirs(t, readSettings(t, path))
+	if v != "/Users/x/mods/a" {
+		t.Fatalf("got %q", v)
+	}
+	os.WriteFile(path, []byte(`{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"`+root+`"},"other":true}`), 0o644)
+	if err := mergePluginDirs(path, dataDir, root, true); err != nil {
+		t.Fatal(err)
+	}
+	s := readSettings(t, path)
+	if _, ok := s["env"]; ok {
+		t.Fatalf("env block must go when empty: %v", s["env"])
+	}
+	if s["other"] != true {
+		t.Fatal("other keys kept")
+	}
+}
+
+func TestMergePluginDirs_RemoveOnMissingFileIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := mergePluginDirs(path, filepath.Join(dir, "pdx"), PluginRoot(filepath.Join(dir, "pdx")), true); err != nil {
+		t.Fatal(err)
+	}
+	s := readSettings(t, path)
+	if len(s) != 0 {
+		t.Fatalf("got %v", s)
+	}
+}
+
+func TestMergePluginDirs_UnsupportedShapesError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	dataDir := filepath.Join(dir, "pdx")
+	os.WriteFile(path, []byte(`{"env":[]}`), 0o644)
+	if err := mergePluginDirs(path, dataDir, PluginRoot(dataDir), false); err == nil {
+		t.Fatal("env array must error")
+	}
+	os.WriteFile(path, []byte(`{"env":{"CLAUDE_CODE_PLUGIN_DIRS":["/a"]}}`), 0o644)
+	if err := mergePluginDirs(path, dataDir, PluginRoot(dataDir), false); err == nil {
+		t.Fatal("non-string value must error")
+	}
+}
