@@ -1131,19 +1131,22 @@ func TestCCInstallHooks_EntriesCarryNoTimeoutOrMatcher(t *testing.T) {
 // SessionEnd and Interrupt to 3 s and warns at every start if the file says
 // more (measured on codex-cli 0.153.4 startup, 2026-09-18). PreToolUse is
 // the one event whose hook may wait for a daemon decision (lead-team spec
-// §6.6: the flag-gated lock path, 5 s grace), so it gets room for that
-// wait plus the event POST; PermissionRequest answers {} and stays at the
-// default. Claude Code's entries carry no timeout at all (600 s default).
+// §6.6: the flag-gated lock path, one 5 s budget shared with the event
+// POST), so it gets room for that wait; PermissionRequest answers {} and
+// stays at the default. Claude Code's entries carry no timeout at all
+// (600 s default).
 var codexHookTimeouts = map[string]int{
 	"SessionEnd": 3,
 	"Interrupt":  3,
 	"PreToolUse": codexHookLockPathTimeout,
 }
 
-// codexHookLockPathTimeout is PreToolUse's timeout: the 5 s decision grace
-// (cmd/pdx hookDecideGrace), the 2 s event POST and the stdin read, with
-// room to spare. A hook that still times out does not block the call
-// (spec M18, M20).
+// codexHookLockPathTimeout is PreToolUse's timeout: the 5 s hook budget
+// (cmd/pdx hookDecideGrace — the event POST and the decision run under it
+// together) and the ≤ 5 s stdin read, with no room to spare in the worst
+// case of both; the stdin read is instant in practice (codex writes the
+// payload and closes). A hook that still times out does not block the
+// call (spec M18, M20).
 const codexHookLockPathTimeout = 10
 ```
 
@@ -1485,24 +1488,28 @@ In `cmd/pdx/lead.go`, after line 182 (the closing `}` of `if err != nil { … le
 
 ---
 
-### Task 2c.7: `pdx hook` decision path — flag gate, 5 s grace, the deny JSON, always exit 0
+### Task 2c.7: `pdx hook` decision path — flag gate, one 5 s budget for the event POST and the decision, the deny JSON, always exit 0
 
 **Files:**
-- Modify: `cmd/pdx/hook.go:3-15` (imports), `:41` (constants and seams after `loadConfigFn`), `:43-47` (doc), `:73-75` (stdin read), `:86-87` (after the POST), and new types + `hookDecision` after `runHook`
+- Modify: `cmd/pdx/hook.go:3-15` (imports), `:41` (constants and seams after `loadConfigFn`), `:43-47` (doc), `:73-75` (stdin read), `:77-87` (the event POST and the decision run concurrently), `:155-172` (`postHookEvent` takes a ctx), and new types + `hookDecision` after `runHook`
+- Modify: `cmd/pdx/hook_test.go:60`, `:361`, `:411` — the three `postHookEventFn` stubs gain the leading `context.Context` parameter (`func(_ context.Context, _ string, _ string, payload hookPayload) error`); nothing else in them changes
 - Test: `cmd/pdx/hook_decide_test.go`
 
 **Interfaces:**
 - Produces (package `main`):
   ```go
   var hookClientOpts []daemonclient.Option            // test seam, nil in production
+  var hookAfterFn = func(d time.Duration, f func()) (stop func() bool) { t := time.AfterFunc(d, f); return t.Stop } // test seam: the budget timer
+  var postHookEventFn func(ctx context.Context, url, token string, payload hookPayload) error // existing seam, now takes the budget ctx
   const hookStdinTimeoutS = 5
-  const hookDecideGrace = 5 * time.Second
+  const hookDecideGrace = 5 * time.Second             // the whole hook budget: event POST ∥ decision
   const hookDecideMaxInline = 64 << 10
   var hookDecideEvents = map[string]string{"PdxPreToolUse": "PreToolUse", "PdxPermissionRequest": "PermissionRequest"}
   type hookDecideInput struct{ DataDir, Base, Token, Agent, PurdexName string; Raw []byte; ClientOpts []daemonclient.Option }
-  func hookDecision(ctx context.Context, in hookDecideInput) []byte // nil = print nothing
+  func hookDecision(ctx context.Context, in hookDecideInput) (out []byte, asked bool) // out nil = print nothing; asked = the daemon was asked (flag + decision event)
   ```
   stdout on a PreToolUse deny, exactly: `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"<reason>"}}` + `\n`. Nothing otherwise. `runHook` never exits non-zero on this path.
+  **Timing contract (spec §6.6, §15):** `runHook` opens one budget context cancelled by `hookAfterFn(hookDecideGrace, cancel)`; the event POST (`postHookEventFn`, its own 2 s client timeout kept) runs in a goroutine under that ctx **concurrently** with `hookDecision`, whose client gets `WithGrace(hookDecideGrace)` + `WithAttemptTimeout(hookDecideGrace)` on the same ctx (the ctx carries a cancel, not a `Deadline()`, so `daemonclient` keeps its fake-able attempt timer — `client.go:289-291`). When the daemon was asked, `runHook` returns as soon as the decision returns (an answer, or the grace spent — that *is* the budget's end) and cancels the budget, which ends a still-running event POST; when it was not asked (no flag / another event), `runHook` waits for the event POST to finish or the budget to end, whichever first. End to end the hook holds the agent **≤ 5 s** on every path.
 - Consumes: `readStdinWithTimeout` (`statusline_proxy.go:19`), `resolveDaemonHost` (`:145`), `hookLockExists` (Task 2c.6), `team.HookLockPath`, `team.HookDecideRequest/Response`, `daemonclient.New/Do/WithGrace/WithAttemptTimeout/Idempotent`.
 
 - [ ] **Step 1: Write the failing tests.** `cmd/pdx/hook_decide_test.go`:
@@ -1608,15 +1615,15 @@ func TestHookDecision_NoFlagMeansNoCallAndNoOutput(t *testing.T) {
 	defer srv.Close()
 	dataDir := t.TempDir()
 	for _, ev := range []string{"PdxPreToolUse", "PdxPermissionRequest"} {
-		if out := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", ev, ccPreToolUseStdin)); out != nil {
-			t.Fatalf("%s without a flag printed %q", ev, out)
+		if out, asked := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", ev, ccPreToolUseStdin)); out != nil || asked {
+			t.Fatalf("%s without a flag printed %q (asked=%v)", ev, out, asked)
 		}
 	}
 	// A flag for another session, or the other agent, is not this one's.
 	touchHookLock(t, dataDir, "cc", "cc-sid-other")
 	touchHookLock(t, dataDir, "codex", "cc-sid-1")
-	if out := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", ccPreToolUseStdin)); out != nil {
-		t.Fatalf("other flags printed %q", out)
+	if out, asked := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", ccPreToolUseStdin)); out != nil || asked {
+		t.Fatalf("other flags printed %q (asked=%v)", out, asked)
 	}
 	if n := d.calls(); n != 0 {
 		t.Fatalf("daemon was called %d times without this session's flag; want 0", n)
@@ -1636,12 +1643,12 @@ func TestHookDecision_FlagAndDenyPrintsPreToolUseJSONOnly(t *testing.T) {
 	dataDir := t.TempDir()
 	touchHookLock(t, dataDir, "cc", "cc-sid-1")
 
-	out := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", ccPreToolUseStdin))
+	out, _ := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", ccPreToolUseStdin))
 	want := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"` + reason + `"}}` + "\n"
 	if string(out) != want {
 		t.Fatalf("PreToolUse out = %q\nwant %q", out, want)
 	}
-	if out := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPermissionRequest", ccPreToolUseStdin)); out != nil {
+	if out, _ := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPermissionRequest", ccPreToolUseStdin)); out != nil {
 		t.Fatalf("PermissionRequest printed %q, want nothing", out)
 	}
 	d.mu.Lock()
@@ -1676,7 +1683,7 @@ func TestHookDecision_LargeStdinSendsIdsOnly(t *testing.T) {
 	dataDir := t.TempDir()
 	touchHookLock(t, dataDir, "cc", "cc-sid-1")
 	big := `{"session_id":"cc-sid-1","hook_event_name":"PreToolUse","tool_name":"Write","tool_use_id":"toolu_big","tool_input":{"file_path":"/w/big.txt","content":"` + strings.Repeat("x", 2<<20) + `"}}`
-	out := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", big))
+	out, _ := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", big))
 	if string(out) != `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"r"}}`+"\n" {
 		t.Fatalf("large stdin out = %q", out)
 	}
@@ -1700,7 +1707,7 @@ func TestHookDecision_CodexFixtureSameShape(t *testing.T) {
 	defer srv.Close()
 	dataDir := t.TempDir()
 	touchHookLock(t, dataDir, "codex", "01a00000-0000-7000-8000-000000000001")
-	out := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "codex", "PdxPreToolUse", string(raw)))
+	out, _ := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "codex", "PdxPreToolUse", string(raw)))
 	if string(out) != `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"r"}}`+"\n" {
 		t.Fatalf("codex out = %q", out)
 	}
@@ -1727,9 +1734,9 @@ func TestHookDecision_UnreachableDaemonIsSilentWithinFiveSeconds(t *testing.T) {
 	dataDir := t.TempDir()
 	touchHookLock(t, dataDir, "cc", "cc-sid-1")
 	wall := time.Now()
-	out := hookDecision(context.Background(), hookInput(dataDir, "http://"+addr, "cc", "PdxPreToolUse", ccPreToolUseStdin, clock.opt()))
-	if out != nil {
-		t.Fatalf("unreachable daemon printed %q", out)
+	out, asked := hookDecision(context.Background(), hookInput(dataDir, "http://"+addr, "cc", "PdxPreToolUse", ccPreToolUseStdin, clock.opt()))
+	if out != nil || !asked {
+		t.Fatalf("unreachable daemon printed %q (asked=%v, want true: the flag was there)", out, asked)
 	}
 	if got := clock.now().Sub(start); got != hookDecideGrace {
 		t.Fatalf("gave up after %v of fake time, want exactly %v", got, hookDecideGrace)
@@ -1752,7 +1759,8 @@ func TestHookDecision_ErrorsAndEmptyAnswersPrintNothing(t *testing.T) {
 		defer srv.Close()
 		done := make(chan []byte, 1)
 		go func() {
-			done <- hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", ccPreToolUseStdin, clock.opt()))
+			out, _ := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", ccPreToolUseStdin, clock.opt()))
+			done <- out
 		}()
 		deadline := time.Now().Add(5 * time.Second)
 		for d.calls() == 0 && time.Now().Before(deadline) {
@@ -1771,7 +1779,7 @@ func TestHookDecision_ErrorsAndEmptyAnswersPrintNothing(t *testing.T) {
 	t.Run("404 older daemon", func(t *testing.T) {
 		srv := httptest.NewServer(http.NotFoundHandler())
 		defer srv.Close()
-		if out := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", ccPreToolUseStdin)); out != nil {
+		if out, _ := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", ccPreToolUseStdin)); out != nil {
 			t.Fatalf("404 printed %q", out)
 		}
 	})
@@ -1782,7 +1790,7 @@ func TestHookDecision_ErrorsAndEmptyAnswersPrintNothing(t *testing.T) {
 		d.status = http.StatusServiceUnavailable
 		srv := httptest.NewServer(d)
 		defer srv.Close()
-		if out := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", ccPreToolUseStdin, clock.opt())); out != nil {
+		if out, _ := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", ccPreToolUseStdin, clock.opt())); out != nil {
 			t.Fatalf("503 printed %q", out)
 		}
 		if got := clock.now().Sub(start); got != hookDecideGrace {
@@ -1796,7 +1804,7 @@ func TestHookDecision_ErrorsAndEmptyAnswersPrintNothing(t *testing.T) {
 		d := newFakeHookDaemon(team.HookDecideResponse{})
 		srv := httptest.NewServer(d)
 		defer srv.Close()
-		if out := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", ccPreToolUseStdin)); out != nil {
+		if out, _ := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", "PdxPreToolUse", ccPreToolUseStdin)); out != nil {
 			t.Fatalf("{} printed %q", out)
 		}
 	})
@@ -1811,7 +1819,7 @@ func TestHookDecision_ErrorsAndEmptyAnswersPrintNothing(t *testing.T) {
 			{"PdxPreToolUse", `not json`},
 			{"PdxPreToolUse", `{"session_id":"../cc-sid-1"}`},
 		} {
-			if out := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", c.ev, c.raw)); out != nil {
+			if out, _ := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", c.ev, c.raw)); out != nil {
 				t.Fatalf("%s %q printed %q", c.ev, c.raw, out)
 			}
 		}
@@ -1822,21 +1830,43 @@ func TestHookDecision_ErrorsAndEmptyAnswersPrintNothing(t *testing.T) {
 }
 
 // End to end through runHook with the production seams: the event POST
-// still happens first, the deny is printed on stdout, and runHook returns
-// (exit 0 is main's). Then the same with the daemon unreachable: runHook
-// returns with nothing on stdout. Mutation gate: an os.Exit(1) on the
-// error path kills the test binary → red.
+// and the decision run concurrently under one budget, the deny is printed
+// on stdout, and runHook returns (exit 0 is main's). Then the same with the
+// daemon unreachable AND the event POST hanging (the stub blocks until its
+// ctx ends, as a real POST to a half-dead daemon would until its own 2 s
+// timeout): runHook returns with nothing on stdout, having spent exactly
+// the 5 s grace of fake time — not 5 s + the event POST. Mutation gates:
+// an os.Exit(1) on the error path kills the test binary → red; running the
+// event POST and the decision sequentially → the hanging POST never ends
+// before the decision starts → the test's 5 s wall deadline → red.
 func TestRunHook_DecisionPathEndToEnd(t *testing.T) {
 	origInfo, origResolve, origPost, origLoad := queryTmuxSessionInfoFn, resolveHookProvenanceFn, postHookEventFn, loadConfigFn
-	origStdin, origStdout, origOpts := os.Stdin, os.Stdout, hookClientOpts
+	origStdin, origStdout, origOpts, origAfter := os.Stdin, os.Stdout, hookClientOpts, hookAfterFn
 	t.Cleanup(func() {
 		queryTmuxSessionInfoFn, resolveHookProvenanceFn, postHookEventFn, loadConfigFn = origInfo, origResolve, origPost, origLoad
-		os.Stdin, os.Stdout, hookClientOpts = origStdin, origStdout, origOpts
+		os.Stdin, os.Stdout, hookClientOpts, hookAfterFn = origStdin, origStdout, origOpts, origAfter
 	})
 	queryTmuxSessionInfoFn = func() (string, string) { return "$1", "work" }
 	resolveHookProvenanceFn = func() hookProvenance { return hookProvenance{TmuxPaneID: "%5", SenderPID: 42} }
+	var postMu sync.Mutex
 	var posted []hookPayload
-	postHookEventFn = func(_ string, _ string, p hookPayload) error { posted = append(posted, p); return nil }
+	var postCtxEnded []bool // per call: did the stub return because its ctx ended?
+	hangPost := false
+	postHookEventFn = func(ctx context.Context, _ string, _ string, p hookPayload) error {
+		postMu.Lock()
+		posted = append(posted, p)
+		hang := hangPost
+		postMu.Unlock()
+		ended := false
+		if hang {
+			<-ctx.Done()
+			ended = true
+		}
+		postMu.Lock()
+		postCtxEnded = append(postCtxEnded, ended)
+		postMu.Unlock()
+		return nil
+	}
 
 	run := func(t *testing.T, base string, purdexName string) string {
 		t.Helper()
@@ -1868,29 +1898,69 @@ func TestRunHook_DecisionPathEndToEnd(t *testing.T) {
 	if got := run(t, srv.URL, "PdxPreToolUse"); got != `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"r"}}`+"\n" {
 		t.Fatalf("stdout = %q", got)
 	}
+	postMu.Lock()
 	if len(posted) != 1 || posted[0].PurdexName != "PdxPreToolUse" || string(posted[0].RawEvent) != ccPreToolUseStdin {
-		t.Fatalf("the event POST must still happen first: %+v", posted)
+		t.Fatalf("the event POST must still be sent: %+v", posted)
 	}
+	postMu.Unlock()
 	if d.calls() != 1 {
 		t.Fatalf("decide calls = %d", d.calls())
 	}
 
+	// Not a decision event: the event POST alone, and runHook waits for it
+	// (a hook that returned before the POST ended would lose the event when
+	// main exits). The stub returns at once here, so nothing to time.
+	if got := run(t, srv.URL, "PdxPostToolUse"); got != "" {
+		t.Fatalf("PostToolUse printed %q", got)
+	}
+	postMu.Lock()
+	if len(posted) != 2 || d.calls() != 1 {
+		t.Fatalf("PostToolUse: posts = %d (want 2), decides = %d (want 1)", len(posted), d.calls())
+	}
+	postMu.Unlock()
+
+	// Daemon unreachable, event POST hanging until its ctx ends: one budget.
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	dead := ln.Addr().String()
 	ln.Close()
-	hookClientOpts = []daemonclient.Option{newLeadClock().opt()}
-	if got := run(t, "http://"+dead, "PdxPreToolUse"); got != "" {
-		t.Fatalf("unreachable daemon: stdout = %q, want empty", got)
+	clock := newLeadClock()
+	start := clock.now()
+	hookClientOpts = []daemonclient.Option{clock.opt()}
+	hookAfterFn = clock.afterFunc // the budget timer is the fake clock's too
+	postMu.Lock()
+	hangPost = true
+	postMu.Unlock()
+	wall := time.Now()
+	done := make(chan string, 1)
+	go func() { done <- run(t, "http://"+dead, "PdxPreToolUse") }()
+	select {
+	case got := <-done:
+		if got != "" {
+			t.Fatalf("unreachable daemon: stdout = %q, want empty", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runHook did not return within 5 s of wall time: the event POST and the decision are not under one budget")
 	}
-	if len(posted) != 2 {
-		t.Fatalf("event POST count = %d, want 2", len(posted))
+	if got := clock.now().Sub(start); got != hookDecideGrace {
+		t.Fatalf("spent %v of fake time, want exactly the %v budget (not budget + event POST)", got, hookDecideGrace)
+	}
+	if real := time.Since(wall); real > 2*time.Second {
+		t.Fatalf("took %v of wall time; the clock must be the fake one", real)
+	}
+	postMu.Lock()
+	defer postMu.Unlock()
+	if len(posted) != 3 {
+		t.Fatalf("event POST count = %d, want 3", len(posted))
+	}
+	if len(postCtxEnded) != 3 || !postCtxEnded[2] {
+		t.Fatalf("the hanging event POST must have been ended by the budget ctx: %v", postCtxEnded)
 	}
 }
 ```
 
 - [ ] **Step 2: Run the tests and verify they fail.**
   - Run: `go test ./cmd/pdx/ -run 'TestHookDecision|TestRunHook_DecisionPath' -v`
-  - Expected: compile failure, `undefined: hookDecideInput`, `undefined: hookDecision`, `undefined: hookDecideGrace`, `undefined: hookClientOpts`.
+  - Expected: compile failure, `undefined: hookDecideInput`, `undefined: hookDecision`, `undefined: hookDecideGrace`, `undefined: hookClientOpts`, `undefined: hookAfterFn`, and `cannot use func(_ string, _ string, p hookPayload) error … as func(context.Context, string, string, hookPayload) error` on the three `hook_test.go` stubs.
 
 - [ ] **Step 3: Implement.** Edits to `cmd/pdx/hook.go`:
 
@@ -1923,14 +1993,23 @@ After line 41 (`var loadConfigFn = config.Load`) insert, and replace the `runHoo
 // production, a fake clock in tests.
 var hookClientOpts []daemonclient.Option
 
+// hookAfterFn arms the hook's budget timer; time.AfterFunc in production,
+// the fake clock's afterFunc in tests.
+var hookAfterFn = func(d time.Duration, f func()) (stop func() bool) {
+	t := time.AfterFunc(d, f)
+	return t.Stop
+}
+
 // hookStdinTimeoutS bounds the stdin read (CC and Codex write the payload
 // and close; a hook started by hand would otherwise hang forever).
 const hookStdinTimeoutS = 5
 
-// hookDecideGrace is the decision path's whole budget (spec §6.6): the
-// restart grace and the per-attempt timeout are both 5 s, so an
-// unreachable, restarting or silent daemon costs this session's tool call
-// at most 5 s and then the normal permission flow runs.
+// hookDecideGrace is the hook's whole budget after the stdin read (spec
+// §6.6): the event POST and the decision run concurrently under one ctx
+// that this timer cancels, and the decision client's restart grace and
+// per-attempt timeout are the same 5 s. An unreachable, restarting or
+// silent daemon costs this session's tool call at most 5 s — not 5 s plus
+// the event POST — and then the normal permission flow runs.
 const hookDecideGrace = 5 * time.Second
 
 // hookDecideMaxInline is the stdin size above which the decision request
@@ -1953,8 +2032,10 @@ var hookDecideEvents = map[string]string{
 //
 // For PreToolUse and PermissionRequest only (spec §6.6), and only when the
 // session's flag file <data_dir>/hooklocks/<agent>/<session_id> exists, it
-// then asks POST /api/hooks/decide and prints the agent's JSON for a deny;
-// otherwise it prints nothing. It exits 0 on every path.
+// also asks POST /api/hooks/decide and prints the agent's JSON for a deny;
+// otherwise it prints nothing. The event POST and the decision run
+// concurrently under one 5 s budget (hookDecideGrace): the hook holds the
+// agent at most 5 s on every path, and exits 0 on every path.
 ```
 
 Replace line 75 (`payload := buildHookPayload(tmuxSessionID, tmuxSession, purdexName, os.Stdin, agentType, provenance)`) with:
@@ -1964,24 +2045,53 @@ Replace line 75 (`payload := buildHookPayload(tmuxSessionID, tmuxSession, purdex
 	payload := buildHookPayload(tmuxSessionID, tmuxSession, purdexName, bytes.NewReader(raw), agentType, provenance)
 ```
 
-Replace the end of `runHook` (lines 86-87: `_ = postHookEventFn(url, token, payload)` and the closing `}`) with:
+Replace lines 77-87 (from `cfg, err := loadConfigFn("")` to the closing `}` of `runHook`) with:
 
 ```go
-	_ = postHookEventFn(url, token, payload)
-
+	cfg, err := loadConfigFn("")
+	var url, token string
 	if err != nil {
-		return // no config: no data dir to find a flag in
+		url = "http://127.0.0.1:7860/api/agent/event"
+	} else {
+		url = fmt.Sprintf("http://%s:%d/api/agent/event", cfg.Bind, cfg.Port)
+		token = cfg.Token
 	}
-	out := hookDecision(context.Background(), hookDecideInput{
-		DataDir: cfg.DataDir,
-		Base:    fmt.Sprintf("http://%s:%d", resolveDaemonHost(cfg.Bind), cfg.Port),
-		Token:   cfg.Token,
-		Agent:   agentType, PurdexName: purdexName, Raw: raw,
-		ClientOpts: hookClientOpts,
-	})
-	if len(out) > 0 {
-		os.Stdout.Write(out)
+
+	// One budget for everything after the stdin read. The ctx carries a
+	// cancel, not a Deadline(), so daemonclient keeps its own (fake-able)
+	// attempt timer (client.go:289-291).
+	budget, cancelBudget := context.WithCancel(context.Background())
+	defer cancelBudget()
+	stopBudget := hookAfterFn(hookDecideGrace, cancelBudget)
+	defer stopBudget()
+
+	eventDone := make(chan struct{})
+	go func() {
+		defer close(eventDone)
+		_ = postHookEventFn(budget, url, token, payload) // its own 2 s client timeout, and the budget
+	}()
+
+	asked := false
+	if err == nil { // no config: no data dir to find a flag in
+		var out []byte
+		out, asked = hookDecision(budget, hookDecideInput{
+			DataDir: cfg.DataDir,
+			Base:    fmt.Sprintf("http://%s:%d", resolveDaemonHost(cfg.Bind), cfg.Port),
+			Token:   cfg.Token,
+			Agent:   agentType, PurdexName: purdexName, Raw: raw,
+			ClientOpts: hookClientOpts,
+		})
+		if len(out) > 0 {
+			os.Stdout.Write(out)
+		}
 	}
+	if asked {
+		// The daemon answered, or the 5 s grace is spent — either way the
+		// budget is over for this hook; a still-running event POST ends now
+		// rather than holding the agent's tool call any longer.
+		cancelBudget()
+	}
+	<-eventDone // ≤ 2 s on its own, ≤ the budget always; immediate after a cancel
 }
 
 // hookStdin is the part of the agent's hook payload the decision needs.
@@ -2022,18 +2132,20 @@ type hookSpecificOutput struct {
 // an event other than the two, a stdin without a session id, no flag file
 // (the gate: then the daemon is not called at all), the daemon unreachable
 // or restarting past the 5 s grace, silent, a 404, any other error, and a
-// {} or PermissionRequest answer. Only a PreToolUse deny prints.
-func hookDecision(ctx context.Context, in hookDecideInput) []byte {
+// {} or PermissionRequest answer. Only a PreToolUse deny prints. asked is
+// true once the gate passed and the daemon was called: runHook then treats
+// the decision's return as the end of the hook's budget.
+func hookDecision(ctx context.Context, in hookDecideInput) (out []byte, asked bool) {
 	event, ok := hookDecideEvents[in.PurdexName]
 	if !ok {
-		return nil
+		return nil, false
 	}
 	var stdin hookStdin
 	if err := json.Unmarshal(in.Raw, &stdin); err != nil || stdin.SessionID == "" {
-		return nil
+		return nil, false
 	}
 	if !hookLockExists(team.HookLockPath(in.DataDir, in.Agent, stdin.SessionID)) {
-		return nil
+		return nil, false
 	}
 	opts := append([]daemonclient.Option{
 		daemonclient.WithGrace(hookDecideGrace),
@@ -2057,22 +2169,42 @@ func hookDecision(ctx context.Context, in hookDecideInput) []byte {
 	// for it), so a connection lost after the send may be replayed inside
 	// the grace.
 	if _, err := client.Do(ctx, http.MethodPost, "/api/hooks/decide", req, &resp, daemonclient.Idempotent()); err != nil {
-		return nil
+		return nil, true
 	}
 	if resp.Decision != "deny" || event != team.HookEventPreToolUse {
-		return nil
+		return nil, true
 	}
 	out, err := json.Marshal(hookDecisionOutput{HookSpecificOutput: hookSpecificOutput{
 		HookEventName: event, PermissionDecision: "deny", PermissionDecisionReason: resp.Reason,
 	}})
 	if err != nil {
-		return nil
+		return nil, true
 	}
-	return append(out, '\n')
+	return append(out, '\n'), true
 }
 ```
 
-**Why no ctx deadline:** `daemonclient` disables the per-attempt timeout when the caller's ctx has a deadline (`client.go:289-291`); the hook wants both bounds to be the fake-able 5 s timers, so it passes `context.Background()` and sets `WithAttemptTimeout` + `WithGrace`. Worst case: health probe answers, decide hangs → 5 s; nothing listens → 5 s grace; `not_ready` through a restart → 5 s grace; total with the existing 2 s event POST ≤ 7 s, inside Codex's new 10 s (Task 2c.5) and far inside CC's 600 s default.
+`postHookEvent` (lines 155-172) takes the budget ctx; its 2 s client timeout stays — the request is bounded by whichever ends first:
+
+```go
+// postHookEvent POSTs the payload as JSON to the given URL with a 2-second
+// timeout, under the caller's ctx (the hook's budget) as well.
+// If token is non-empty, it is sent as a Bearer Authorization header.
+func postHookEvent(ctx context.Context, url, token string, payload hookPayload) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+```
+
+(the rest of the function is unchanged). `var postHookEventFn = postHookEvent` (line 40) keeps its name; the three stubs in `cmd/pdx/hook_test.go` (`:60`, `:361`, `:411`) become `func(_ context.Context, _ string, _ string, payload hookPayload) error` with their bodies untouched, and `hook_test.go` imports `context`.
+
+**Why a cancel and not a ctx deadline:** `daemonclient` disables the per-attempt timeout when the caller's ctx has a `Deadline()` (`client.go:289-291`); the hook wants both of its bounds to be the fake-able timers, so the budget ctx is `context.WithCancel` armed by `hookAfterFn` (a `time.AfterFunc` in production, the fake clock in tests) and the client gets `WithAttemptTimeout` + `WithGrace`. **Worst case on every path is the 5 s budget, end to end**: health probe answers, decide hangs → 5 s; nothing listens → 5 s grace; `not_ready` through a restart → 5 s grace; the event POST runs *concurrently* under the same budget (its own 2 s client timeout is the shorter bound in practice), so the sum is never 5 s + 2 s. That is inside Codex's new 10 s (Task 2c.5) and far inside CC's 600 s default. The stdin read (≤ 5 s, `hookStdinTimeoutS`) precedes the budget and is not part of it — CC and Codex write the payload and close the pipe at once; the timeout exists for a hook started by hand.
 
 - [ ] **Step 4: Run the tests and verify they pass.**
   - Run: `go vet ./cmd/pdx/ && go test -race ./cmd/pdx/ 2>&1 | tail -1`
@@ -2081,7 +2213,7 @@ func hookDecision(ctx context.Context, in hookDecideInput) []byte {
 - [ ] **Step 5: Commit.**
   ```bash
   git add cmd/pdx/hook.go cmd/pdx/hook_decide_test.go
-  git commit -m "feat(pdx): hook waits for the daemon's lock decision behind the flag file, 5 s grace, exit 0 always
+  git commit -m "feat(pdx): hook asks the daemon's lock decision behind the flag file, event POST and decision under one 5 s budget, exit 0 always
 
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   ```
@@ -2106,8 +2238,8 @@ func hookDecision(ctx context.Context, in hookDecideInput) []byte {
 7. **The hook sends `raw` (the whole stdin) on every decide call, except when the stdin exceeds 64 KiB** — then `tool_input` and `raw` are dropped and only the ids go (`hookDecideMaxInline`). Without this a large `Write` would exceed the daemon's 1 MiB `bodyCap` → 400 → no decision → the lock bypassed for exactly the biggest writes. P8a's `AskUserQuestion` payloads are small and unaffected.
 8. **`pdx lead request` prints one stderr line when it cannot place the flag** — `pdx lead: 無法建立硬鎖旗標（<why>），這次只有軟鎖` — and goes on with the soft lock (an empty `data_dir`, a create answer without `origin.session_id` from an older daemon, an `mkdir`/write error). A new user-visible string the spec does not list; it is a diagnostic, not a flow change.
 9. **The hook's stdin read now has a 5 s timeout** (`readStdinWithTimeout`, reused from `statusline_proxy.go`), as the task asked; the measured absence of any timeout is M17's `io.ReadAll`.
-10. **Test seams and helpers:** `hookClientOpts` (package var, nil in production) injects the fake clock into the end-to-end `runHook` test; `writeTestConfigDataDir` (the existing `writeTestConfig` wrote `data_dir = ""`, measured); `fakeTeamDaemon` answers `Origin.SessionID` on create and gains `noOrigin`; `driveLeadDir` returns the data dir. No production code path changed for them beyond `hookClientOpts`.
-11. **Two PRs, not one.** The preamble estimated ≈ 500 lines; measured ≈ 1 440 (≈ 62 % tests). Split at the daemon/CLI seam, each under 800.
+10. **Test seams and helpers:** `hookClientOpts` (package var, nil in production) injects the fake clock into the end-to-end `runHook` test and `hookAfterFn` (package var, `time.AfterFunc` in production) lets the same fake clock own the hook's budget timer; `postHookEventFn` gains a leading `context.Context` (the budget) — the three existing stubs in `hook_test.go` change their signature only; `writeTestConfigDataDir` (the existing `writeTestConfig` wrote `data_dir = ""`, measured); `fakeTeamDaemon` answers `Origin.SessionID` on create and gains `noOrigin`; `driveLeadDir` returns the data dir. No production code path changed for them beyond `hookClientOpts`, `hookAfterFn` and the ctx parameter.
+11. **Two PRs, not one.** The preamble estimated ≈ 500 lines; measured ≈ 1 480 (≈ 62 % tests). Split at the daemon/CLI seam, each under 800.
 12. **Spec §12's P2c row says "installer `timeout: 600` on the two events"; §6.6 says "5 → 10 for `PreToolUse`, Claude Code's entries alone".** The task text and §6.6 agree; this plan follows them. Open question 1.
 
 ### Size estimate
@@ -2143,11 +2275,12 @@ Measured in the scratch build (`diff -u … | grep -c '^+[^+]'` for edits, `wc -
 | `cmd/pdx/lead_test.go` | +20 −4 |
 | `cmd/pdx/peers_test.go` | +12 −3 |
 | `cmd/pdx/lead_hooklock_test.go` (new) | 135 |
-| `cmd/pdx/hook.go` | +128 −2 |
-| `cmd/pdx/hook_decide_test.go` (new) | 378 |
-| **Total** | **≈ 724 added, 7 files** |
+| `cmd/pdx/hook.go` | +152 −12 |
+| `cmd/pdx/hook_test.go` | +4 −3 |
+| `cmd/pdx/hook_decide_test.go` (new) | 418 |
+| **Total** | **≈ 792 added, 8 files** |
 
-Both under the 800-line bound and the 20-file bound. If the coordinator wants one PR anyway it is ≈ 1 440 lines / 21 files.
+Both under the 800-line bound and the 20-file bound. If the coordinator wants one PR anyway it is ≈ 1 510 lines / 22 files.
 
 ### Open questions for the coordinator
 
@@ -2163,6 +2296,7 @@ Each line is a change to the implementation and the test that must go red; the o
 
 - Drop the `hookLockExists(...)` gate in `hookDecision` (`cmd/pdx/hook.go`) → `TestHookDecision_NoFlagMeansNoCallAndNoOutput` red: `PdxPreToolUse without a flag printed "{\"hookSpecificOutput\":…deny…}"`. *Verified.*
 - `os.Exit(1)` on the `client.Do` error in `hookDecision` → `TestRunHook_DecisionPathEndToEnd` red (the test binary exits 1 on the unreachable-daemon run). *Verified.*
+- Run the event POST and the decision sequentially in `runHook` (`_ = postHookEventFn(budget, …)` inline before `hookDecision`, no goroutine) → `TestRunHook_DecisionPathEndToEnd` red: the hanging POST stub never returns before the decision starts, the test's 5 s wall-time `select` fires (`runHook did not return within 5 s of wall time`). Variant: keep the goroutine but drop `if asked { cancelBudget() }` → the hanging POST waits for a budget timer the fake clock never fires → the same red.
 - Remove `"PreToolUse": codexHookLockPathTimeout` from `codexHookTimeouts` → `TestCodexHookTimeoutSeconds_PreToolUseIsTen` and `TestCodexInstallHooks_WritesPreToolUseTimeoutTenAndUpgradesFive` red (`PreToolUse timeout = 5, want 10`). *Verified.*
 - Answer the deny on `PermissionRequest` too (drop the `req.Event != team.HookEventPreToolUse` branch in `handleHookDecide`) → `TestHookDecide_OpenLeadRequestDeniesPreToolUseOnly` red. *Verified.*
 - Prune on every tick (`if checkLive` → `if true` in `tick`) → `TestTick_PrunesStaleFlagsOnTheTenthTick` red (`tick 1: pruned before the 10th tick`). *Verified.*
@@ -2187,12 +2321,12 @@ None that stop the contract. One line of the preamble cannot be done literally a
 
 - **P2c** (preamble order) — nothing here depends on it technically; it is the agreed order.
 - Everything P2a-1 … P3b shipped: `internal/team/wire.go` as on `746759d2`, `internal/module/team/*` (CAS `CloseIfOpen` / `CloseIfExpired`, `closeWith`, `eventMu`), `internal/module/peers/origin_resolver.go`, `cmd/pdx/daemonclient`, `cmd/pdx/lead.go` + `exitcodes.go`, `spa/src/lib/team/*`, `ApprovalDialogHost.tsx`.
-- Inside P5a the order is **P5a-1a → P5a-1b → P5a-2a → P5a-2b → P5a-2c → P5a-3a → P5a-3b** (the seven PRs the size estimate forces; each is independently green). P5b consumes the routes from P5a-2b and the CLI from P5a-2c; nothing in the mod is touched here.
+- Inside P5a the order is **P5a-0 → P5a-1a → P5a-1b → P5a-2a → P5a-2b → P5a-2c → P5a-3a → P5a-3b** (the eight PRs the size estimate forces — P5a-0 and the Task 5a.6 move came out of the codex round; each is independently green). P5b consumes the routes from P5a-2b and the CLI from P5a-2c; nothing in the mod is touched here.
 
 ### Scope of P5a (what the three parts own)
 
-- **P5a-1** — store and identity: `relay_ops`, `session_lineage`, `session_prefs` tables in `team.db` with idempotent `ReportRelay` transitions and the lineage row written at `cleared`; `PeerRecord.previous_refs` (uncapped, newest first) filled from the team module's `LineageReader` through the registry; the `ipeers.Resolve` lineage tier (a live ref always wins); `peerNotFoundHint` says "renames and relays"; `PeerLabelStore.Move` (the title move); the peers resolver gains `ResolveOriginBySession`.
-- **P5a-2** — daemon behaviour and CLI: host config section `relay {self_solo, self_lead}` (hostconfig module, defaults true); `session_prefs` pause; `self_relay` approval rows opened only by `POST /api/relay/begin`, their close moving the op (approve → `claimed`; deny / timeout / abandon → `cancelled{denied|timeout|abandoned}`); the six `/api/relay/*` routes; `relays_active` in inflight; boot reconciliation of **self** ops; `cmd/pdx/relay.go` with spec §14 exit codes.
+- **P5a-0 / P5a-1** — contract, store and identity: the wire contract alone in **P5a-0** (`wire_relay.go`, `APIError.Op`); then `relay_ops`, `session_lineage`, `session_prefs` tables in `team.db` with idempotent `ReportRelay` transitions and the lineage row written at `cleared`; `PeerRecord.previous_refs` (uncapped, newest first) filled from the team module's `LineageReader` through the registry; the `ipeers.Resolve` lineage tier (a live ref always wins); `peerNotFoundHint` says "renames and relays"; `PeerLabelStore.Move` (the title move); the peers resolver gains `ResolveOriginBySession`; the host config section `relay {self_solo, self_lead}` (hostconfig module, defaults true — Task 5a.6, in P5a-1b). **Final PR list of P5a (eight):** P5a-0 (Task 5a.1) · P5a-1a (5a.2, 5a.3) · P5a-1b (5a.4, 5a.5, 5a.6) · P5a-2a (5a.7) · P5a-2b (5a.8) · P5a-2c (5a.9) · P5a-3a (5a.10, 5a.11) · P5a-3b (5a.12–5a.14).
+- **P5a-2** — daemon behaviour and CLI: `session_prefs` pause; `self_relay` approval rows opened only by `POST /api/relay/begin`, their close moving the op (approve → `claimed`; deny / timeout / abandon → `cancelled{denied|timeout|abandoned}`); the six `/api/relay/*` routes; `relays_active` in inflight; boot reconciliation of **self** ops; `cmd/pdx/relay.go` with spec §14 exit codes.
 - **P5a-3** — the retention sweeper (hourly + boot), `pdx peers` `(was _xxxxxx)`, the Hosts 「接力」 section, the `self_relay` dialog body with 「這個 session 不再詢問」, the notification title for a relay request.
 
 **Deferred and said so:** `teams.lead_session_id` / member-row moves at `cleared` (spec §8.4) and persisted usage on team rows (§8.5) need the team tables — **P4** (the `cleared` transaction in `ReportRelay` is where P4 adds its two UPDATEs); the lead-handover notice to members (§8.4) — **P4**; `pdx relay <ref>`, `claim`, the control message, `requested`-op reconciliation, **boot reconciliation from frames** (spec §9.3 "past `claimed`": a self op whose pane's verified frame shows another session id is `cleared` with that id — P5a-2b's `reconcileRelays` handles `awaiting_approval` and `cleared` only) and the member lock — **P6**; the restart-confirm line `N 個接力進行中` — **P6** (spec §9.5; the daemon already fills `relays_active` here); member role detection (`relayRole`) returns `"none"` until P4 fills it from team rows.
@@ -2213,9 +2347,9 @@ None that stop the contract. One line of the preamble cannot be done literally a
 
 ---
 
-## PR P5a-1a — wire, relay store, lineage row, title move
+## PR P5a-0 — the wire contract
 
-**Scope.** The leaf contract (`internal/team/wire_relay.go`, `APIError.Op`), the three tables and their store methods in `teammod` (`relay_store.go`), and `PeerLabelStore.Move`. No route, no behaviour change for a running daemon; `OpenStore` only creates three more empty tables.
+**Scope.** The leaf contract alone (`internal/team/wire_relay.go`, `APIError.Op`): contract first, as P2a-1 did. Nothing consumes it until P5a-1a; a running daemon is unchanged. (Split out of P5a-1a by the codex round so that every P5a PR is ≤ 800 lines.)
 
 ### Task 5a.1: The wire contract — `internal/team/wire_relay.go` and `APIError.Op`
 
@@ -2471,6 +2605,14 @@ type APIError struct {
 
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   ```
+
+- [ ] **Gate for P5a-0:** `go build ./... && go vet ./internal/team/ && go test ./internal/team/` green. Open PR P5a-0.
+
+---
+
+## PR P5a-1a — relay store, lineage row, title move
+
+**Scope.** The three tables and their store methods in `teammod` (`relay_store.go`), and `PeerLabelStore.Move`. Consumes P5a-0's wire types. No route, no behaviour change for a running daemon; `OpenStore` only creates three more empty tables.
 
 ### Task 5a.2: The relay store — `relay_ops`, `session_lineage`, `session_prefs`
 
@@ -3236,9 +3378,9 @@ func (s *PeerLabelStore) Move(fromSessionID, toSessionID string, now time.Time) 
 
 ---
 
-## PR P5a-1b — `previous_refs` on peer rows, the Resolve lineage tier, the hint, the resolver by session id
+## PR P5a-1b — `previous_refs` on peer rows, the Resolve lineage tier, the hint, the resolver by session id, host config `relay`
 
-**Scope.** `PeerRecord.PreviousRefs` filled by `Build` from `BuildInput.PreviousRefs`; `ipeers.Resolve` gains the lineage tier below the live-ref tier (bare form and combined form); the peers module reads the lineage through `team.LineageReaderKey` at request time; `peerNotFoundHint` says "renames and relays"; `OriginResolver.ResolveOriginBySession` (peers side only — the team-side interface change is P5a-2a). No daemon registers a `LineageReader` yet (P5a-2a does), so `pdx peers` output is unchanged until then.
+**Scope.** `PeerRecord.PreviousRefs` filled by `Build` from `BuildInput.PreviousRefs`; `ipeers.Resolve` gains the lineage tier below the live-ref tier (bare form and combined form); the peers module reads the lineage through `team.LineageReaderKey` at request time; `peerNotFoundHint` says "renames and relays"; `OriginResolver.ResolveOriginBySession` (peers side only — the team-side interface change is P5a-2a). No daemon registers a `LineageReader` yet (P5a-2a does), so `pdx peers` output is unchanged until then. Also here (moved from P5a-2a): the host config section `relay {self_solo, self_lead}` with its `RelaySwitchReader` on the registry (Task 5a.6) — a `hostconfig` leaf nobody reads until P5a-2a.
 
 ### Task 5a.4: `PeerRecord.previous_refs` and the lineage tier in `Resolve`
 
@@ -3719,15 +3861,9 @@ func (r *OriginResolver) originOf(e ipeers.Entry) team.Origin {
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   ```
 
-- [ ] **Gate for P5a-1b:** `go build ./... && go vet ./... && go test ./internal/peers/ ./internal/module/peers/` green.
-
----
-
-## PR P5a-2a — host switches, the pause, `hello` / `self` / `begin`, and an approval's close moves its op
-
-**Scope.** Host config section `relay {self_solo, self_lead}` with a `RelaySwitchReader` on the registry; the team module depends on `hostconfig`, takes a `TitleMover`, registers its `LineageReader`, mints ids, and gains the relay directory; `OriginResolver` gains `ResolveOriginBySession`; routes `POST /api/relay/hello`, `POST /api/relay/begin`, `GET /api/relay/wait/{id}`, `POST /api/relay/self`; `handleCreate` keeps refusing kind `self_relay` (the one door is `begin`); `handleDecide` skips the grant for a `self_relay` row; `closeWith`'s winner branch calls `afterClose`, which moves the op (approve → `claimed`; deny → `cancelled{denied}`; timeout → `cancelled{timeout}`; cancelled/abandoned → `cancelled{abandoned}`). The report/op routes, inflight and boot reconciliation are **P5a-2b**.
-
 ### Task 5a.6: Host config section `relay`
+
+> In **P5a-1b** (moved here from P5a-2a by the codex round so that P5a-2a is ≤ 800 lines): the section is a leaf of `hostconfig` with no reader yet — the team module starts reading `RelaySwitchesKey` in P5a-2a (Task 5a.7).
 
 **Files:**
 - Create: `internal/module/hostconfig/relay.go`
@@ -3921,6 +4057,14 @@ and replace `Init`'s body (`:28-31`) with:
 
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   ```
+
+- [ ] **Gate for P5a-1b:** `go build ./... && go vet ./... && go test ./internal/peers/ ./internal/module/peers/ ./internal/module/hostconfig/` green.
+
+---
+
+## PR P5a-2a — the pause, `hello` / `self` / `begin`, and an approval's close moves its op
+
+**Scope.** The team module depends on `hostconfig` (reads P5a-1b's `RelaySwitchReader` through the registry), takes a `TitleMover`, registers its `LineageReader`, mints ids, and gains the relay directory; `OriginResolver` gains `ResolveOriginBySession`; routes `POST /api/relay/hello`, `POST /api/relay/begin`, `GET /api/relay/wait/{id}`, `POST /api/relay/self`; `handleCreate` keeps refusing kind `self_relay` (the one door is `begin`); `handleDecide` skips the grant for a `self_relay` row; `closeWith`'s winner branch calls `afterClose`, which moves the op (approve → `claimed`; deny → `cancelled{denied}`; timeout → `cancelled{timeout}`; cancelled/abandoned → `cancelled{abandoned}`). The report/op routes, inflight and boot reconciliation are **P5a-2b**.
 
 ### Task 5a.7: Team module wiring, `hello` / `self` / `begin`, and `afterClose`
 
@@ -7200,31 +7344,33 @@ Measured in the scratch build (`wc -l` for new files, `diff | grep -c '^[<>]'` f
 
 | PR | Files | Lines |
 |---|---|---|
-| **P5a-1a** | `wire_relay.go` 154, `wire_relay_test.go` ≈ 45, `wire.go` +1, `relay_store.go` 293 (without the 75 retention lines), `relay_store_test.go` 204, `store.go` +4, `peer_label_move.go` 61, `peer_label_move_test.go` 74 | **≈ 836** (7 new, 2 edits) |
-| **P5a-1b** | `record.go` +33, `address.go` +31, `address_lineage_test.go` 104, `peers/module.go` +48, `lineage_test.go` 79, `send.go` +5, `send_test.go` +3, `origin_resolver.go` +32, `origin_resolver_session_test.go` 37 | **≈ 372** (3 new, 6 edits) |
-| **P5a-2a** | `hostconfig/relay.go` 72, `relay_test.go` 44, `handler.go` +6, `module.go` +8, `handler_test.go` +3; team `relay_handler.go` ≈ 300, `relay_handler_test.go` ≈ 245 (incl. `TestStart_MakesTheRelayDir`), `module.go` +50 (incl. the `Start` `MkdirAll`), `handler.go` +5, `handler_test.go` +89; `cmd/pdx/main.go` +12, `team_register_test.go` +3 | **≈ 837** (4 new, 8 edits) |
+| **P5a-0** | `wire_relay.go` 154, `wire_relay_test.go` ≈ 45, `wire.go` +1 | **≈ 200** (2 new, 1 edit) |
+| **P5a-1a** | `relay_store.go` 293 (without the 75 retention lines), `relay_store_test.go` 204, `store.go` +4, `peer_label_move.go` 61, `peer_label_move_test.go` 74 | **≈ 636** (4 new, 1 edit) |
+| **P5a-1b** | `record.go` +33, `address.go` +31, `address_lineage_test.go` 104 (+ ≈ 40 for `TestResolve_TwelveHopLineageEndToEnd`), `peers/module.go` +48, `lineage_test.go` 79, `send.go` +5, `send_test.go` +3, `origin_resolver.go` +32, `origin_resolver_session_test.go` 37; `hostconfig/relay.go` 72, `relay_test.go` 44, `handler.go` +6, `module.go` +8, `handler_test.go` +3 | **≈ 545** (5 new, 9 edits) |
+| **P5a-2a** | team `relay_handler.go` ≈ 300, `relay_handler_test.go` ≈ 245 (incl. `TestStart_MakesTheRelayDir`), `module.go` +50 (incl. the `Start` `MkdirAll`), `handler.go` +5, `handler_test.go` +89; `cmd/pdx/main.go` +12, `team_register_test.go` +3 | **≈ 704** (2 new, 5 edits) |
 | **P5a-2b** | `relay_report.go` ≈ 165 (incl. `closeRequestOfReportedOp`, the `not_ready` guard), `relay_report_test.go` ≈ 195 (incl. `TestRelayReport_CancelledClosesTheOpenApprovalOnce`), `module.go` +4, `handler.go` +8, `wire.go` +1 | **≈ 373** (2 new, 3 edits) |
 | **P5a-2c** | `relay.go` ≈ 405, `relay_test.go` ≈ 250, `main.go` +3 (no `exitcodes.go` change: still-open is exit 0 + `{"state":"open"}`) | **≈ 658** (2 new, 1 edit) |
 | **P5a-3a** | `retention.go` 134, `retention_test.go` 154, `relay_store.go` +75, `module.go` +2, `peers.go` +13, `peers_was_test.go` 23 | **≈ 401** (3 new, 3 edits) |
 | **P5a-3b** | `RelaySection.tsx` 80, `RelaySection.test.tsx` 88, `host-config-api.ts` +5, `useHostConfigStore.ts` +18, its test +4, `register-modules/index.tsx` +2, its test +2, `en.json` +17, `zh-TW.json` +17, `locale-completeness.test.ts` +9, `types.ts` +23, `approval-api.ts` +11, `approval-notify.ts` +11, `ApprovalDialogHost.tsx` 146 changed lines (file rewritten), `ApprovalDialogHost.selfRelay.test.tsx` 108 | **≈ 541** (3 new, 12 edits) |
 | **Total** | 24 new files, 37 edits | **≈ 3 900 lines** |
 
-Seven PRs, every one ≤ 20 files; P5a-1a (≈ 836) and P5a-2a (≈ 837 after the consistency fixes) are a hair over 800 — both are ≈ 40 % tests and have no clean further seam (the wire file is the contract and belongs with the first store; the four `begin`/`hello`/`self` handlers share one fixture). If the coordinator applies the line bound strictly: move `wire_relay.go` + its test (≈ 200) into a **P5a-0** of their own (contract first, as P2a-1 did), and move `hostconfig/relay.go` + its test + edits (≈ 133) from P5a-2a into P5a-1b (which then is ≈ 505). Recommended merge, if fewer PRs are wanted: **P5a-1b + P5a-3a** (≈ 773; "lineage display + retention", both depend only on P5a-1a's store) — then six PRs.
+**Eight PRs, every one ≤ 800 lines and ≤ 20 files** (codex round: the line bound is applied strictly). The two that were a hair over — P5a-1a at ≈ 836 and P5a-2a at ≈ 837 — were split at the seams the first draft named: `wire_relay.go` + its test + the `wire.go` line (≈ 200) are **P5a-0** of their own (contract first, as P2a-1 did; Task 5a.1), and `hostconfig/relay.go` + its test + the three hostconfig edits (≈ 133; Task 5a.6) moved from P5a-2a into **P5a-1b**, a `hostconfig` leaf nobody reads until P5a-2a's Task 5a.7. Final list: **P5a-0 → P5a-1a → P5a-1b → P5a-2a → P5a-2b → P5a-2c → P5a-3a → P5a-3b.** (The earlier "merge P5a-1b + P5a-3a into six" option is withdrawn: with Task 5a.6 and the 12-hop test in P5a-1b it would be ≈ 950.)
 
 ### Open questions for the coordinator
 
 1. **"Still open" shape (deviation 3).** Decided: exit 0 with `{"state":"open"}` on stdout (see Coordinator decisions, P5a); the section above is written to that.
 2. **The 「不再詢問」 affordance (deviation 10): checkbox-with-click vs a third button that pauses without deciding.** The spec says "offers … which sets the pause" and nothing about the request itself; a button that only pauses would leave the dialog open with nothing to do about it. Recommendation: the checkbox.
 3. **`relay_open` as 409 with the op (deviation 4) vs 200.** For a replayed `begin` the 409 is informative, not a refusal; P5b decides whether to treat exit 13 + op on stdout as "continue". Recommendation: keep 13 (spec §14 lists the code) and let the mod branch on the stdout op.
-4. **PR count** (size estimate): seven as written, six with the P5a-1b + P5a-3a merge, or eight with a P5a-0 wire PR. Any of the three works without text changes beyond moving tasks between sections.
+4. **PR count** (size estimate): **decided by the codex round — eight** (P5a-0 for the wire, Task 5a.6 into P5a-1b); no PR is over 800. The "six with a P5a-1b + P5a-3a merge" option is withdrawn (it would be ≈ 950 now).
 
 ### Mutation gates
 
 Each PR's gate is the test that goes red when the named line is removed; spec §15's mutation deliverable is the third P5a-1b item.
 
+- **P5a-0:** change any wire constant or JSON tag → `wire_relay_test.go` red (the pinned strings).
 - **P5a-1a:** drop `AND state = ?` from `ReportRelay`'s UPDATE → `TestRelayStore_ConcurrentReportsOneWins` red (two reports apply); drop the `session_lineage` INSERT → `TestRelayStore_ClearedWritesLineageAndChainIsUncapped` red; drop `!relayTransitions[cur.State][r.State]` → `TestRelayStore_ReportTransitionsAndIdempotency` red (`awaiting → writing` applies); make `Move` not NULL the old row → `TestPeerLabels_MoveCarriesLabelOnce` red (idempotency and the released row).
-- **P5a-1b:** **drop the `previous_refs` tier from `resolveRefHead` → `TestResolve_PreviousRefsTier` red: the old ref is `ErrNotFound` (= `peer_not_found` at the HTTP edge)** — spec §15's named mutation; swap the two tiers (lineage before live) → the "live ref must win" assertion red; drop `hasLiveEntry` from the lineage predicate → the dead-holder assertion red; drop the `PreviousRefs` copy in `Build` → `TestBuild_AttachesPreviousRefsBySessionID` red; return `nil` from `previousRefs()` → `TestLocalEnvelope_AttachesPreviousRefsFromLineageReader` red; revert the hint → `TestSend_PeerNotFoundTeachesTheV4AddressForms` red.
-- **P5a-2a:** drop any of the `member` / `off` / `paused` branches in `handleRelayBegin` → `TestRelayBegin_Refusals` red; drop `m.afterClose(after)` from `closeWith` → `TestRelayApprovalCloseMovesTheOp` red (op stays `awaiting_approval` after approve); drop `&& a.Kind == team.KindLead` in `handleDecide` → approving a `self_relay` row is 500 (payload decode) → same test red; drop the `OpenRelayOpBySession` check → the `relay_open` assertion red; drop `RelaySwitchesKey` from `Init` → every fixture test fails at `Init`; `normalizeRelay` ignoring a non-boolean → `TestRelaySwitches_DefaultsPutAndReader` red; drop the `MkdirAll` from `Start` → `TestStart_MakesTheRelayDir` red (`relay dir after Start: err=… no such file`).
+- **P5a-1b:** **drop the `previous_refs` tier from `resolveRefHead` → `TestResolve_PreviousRefsTier` red: the old ref is `ErrNotFound` (= `peer_not_found` at the HTTP edge)** — spec §15's named mutation; swap the two tiers (lineage before live) → the "live ref must win" assertion red; drop `hasLiveEntry` from the lineage predicate → the dead-holder assertion red; drop the `PreviousRefs` copy in `Build` → `TestBuild_AttachesPreviousRefsBySessionID` red; return `nil` from `previousRefs()` → `TestLocalEnvelope_AttachesPreviousRefsFromLineageReader` red; revert the hint → `TestSend_PeerNotFoundTeachesTheV4AddressForms` red; **cap `previous_refs` at 10 anywhere on the path** (the store's `Lineage` query, `Build`'s copy, or `resolveRefHead`'s scan) → `TestResolve_TwelveHopLineageEndToEnd` red (the oldest of 12 refs is `ErrNotFound`); hostconfig (Task 5a.6): drop `RelaySwitchesKey` from `Init` → `TestRelaySwitches_DefaultsPutAndReader` red at the registry lookup; `normalizeRelay` ignoring a non-boolean → the same test red.
+- **P5a-2a:** drop any of the `member` / `off` / `paused` branches in `handleRelayBegin` → `TestRelayBegin_Refusals` red; drop `m.afterClose(after)` from `closeWith` → `TestRelayApprovalCloseMovesTheOp` red (op stays `awaiting_approval` after approve); drop `&& a.Kind == team.KindLead` in `handleDecide` → approving a `self_relay` row is 500 (payload decode) → same test red; drop the `OpenRelayOpBySession` check → the `relay_open` assertion red; drop the `MkdirAll` from `Start` → `TestStart_MakesTheRelayDir` red (`relay dir after Start: err=… no such file`). (The hostconfig gates moved to P5a-1b with Task 5a.6; `drop RelaySwitchesKey from hostconfig Init → every team fixture test fails at Init` still shows here once P5a-2a's fixture reads the key.)
 - **P5a-2b:** drop the `new_session_id` requirement → `TestRelayReport_ForwardPathLineageAndTitle` red (400 expected); drop `m.moveTitle(op)` → its `title moves` assertion red; drop `closeRequestOfReportedOp` from the `ReportApplied` branch → `TestRelayReport_CancelledClosesTheOpenApprovalOnce` red (approval stays `open`, 0 closed events); close it with `CloseIfOpen` directly instead of `closeAs` → the same test red (no `closed` broadcast); return `RelaysActive: 0` → its inflight assertion red; drop `reconcileRelays` from `Start` → `TestStart_ReconcilesSelfRelayOps` red; trust a body-supplied `new_ref` instead of `ipeers.RefID` → the `NewRef` assertion red.
 - **P5a-2c:** return a non-zero code, or print nothing on stdout, when `--wait` runs out with the request still open → `TestRelayCmd_WaitExitCodes` red (both the "after two open polls" and the "before the first answer" cases); map `relay_open` to `ExitError` or stop printing the op → `TestRelayCmd_BeginPrintsOpAndRequestOrRefuses` red; print the 409 code before the detail → the "last stderr token == code" assertion in the same test red; stop sending `self` in `begin` → the `sent.Self` assertion red; parse `wait`'s flags before its positional → `TestRelayCmd_WaitExitCodes` red (usage error).
 - **P5a-3a:** remove the `filepath.Clean(op.HandoffPath) != want` guard and remove `op.HandoffPath` → `TestSweepRetention_RemovesOnlyOwnFilesAndMarksPruned` red (`keep.md` deleted); drop the per-chain rule → `op1.md must be removed` red; drop the 3 d rule → `TestRetentionVictims_Rules` red (`f-old must be a victim`); drop `MarkRelayPruned` → `op1 … pruned` red; drop the `(was …)` suffix → `TestDisplayAddress_WasPreviousRef` red.
@@ -7240,7 +7386,7 @@ Each PR's gate is the test that goes red when the named line is removed; spec §
 
 | PR | Content | Needs merged first |
 |---|---|---|
-| **P5b-1** | The plugin tree embedded in `pdx` (`cmd/pdx/plugin/purdex/`), extraction to `<data_dir>/cc-plugin/purdex/` with a `VERSION` stamp and `pdx.json`, the `CLAUDE_CODE_PLUGIN_DIRS` merge/remove in `~/.claude/settings.json` `env`, wired into the CC `HookInstaller` so `pdx setup --agent cc` and `POST /api/hooks/cc/setup` install and remove it; a `register.js` that only says `hello`; the skill as a placeholder; Go tests and the `claude plugin validate --strict` gate | nothing of P5a (the `hello` call fails harmlessly until P5a-2 ships the subcommand); P2c per the preamble's order |
+| **P5b-1** | The plugin tree embedded in `pdx` (`cmd/pdx/plugin/purdex/`), extraction to `<data_dir>/cc-plugin/purdex/` with a `VERSION` stamp and `pdx.json`, the `CLAUDE_CODE_PLUGIN_DIRS` merge/remove in `~/.claude/settings.json` `env`, wired into the CC `HookInstaller` so `pdx setup --agent cc` and `POST /api/hooks/cc/setup` install and remove it; a `register.js` that only says `hello` — at every interactive `session.start` **and again after each `/clear`** (`classic.SessionStart{source:'clear'}` → `pdx relay hello --session <new sid>`; moved here from P5b-2 by the codex round so P8a-1d / P8a-2 need only P5b-1); the skill as a placeholder; Go tests and the `claude plugin validate --strict` gate | nothing of P5a (the `hello` call fails harmlessly until P5a-2 ships the subcommand); P2c per the preamble's order |
 | **P5b-2** | The mod's relay core in `register.js`: `begin` (used ≥ 70 % and growth ≥ 20K), the `pdx relay wait` loop from a timer, the write prompt (8 sections), own-turn recognition by nonce, the file check with two fix rounds, `/clear` from a timer, `cleared` → `hello` → seed `↪ 接手自 <old ref>` → `done`, `tool.check` allow for the exact handoff path, failed reports re-sent, headless and daemon-unreachable do nothing | **P5a-2** (the routes and `pdx relay hello|begin|wait|report|self`), P5b-1 |
 | **P5b-3** | The prompt hold (`prompt.submit` awaits the shared wait loop; status `接力等待核准中`; one toast), release with NOTE in `context` on approval and unchanged on denial / timeout / daemon gone, the +10-point re-ask, the `session.compact{trigger:auto}` rule, `/relay off|on|status`, the §10 skill text, the acceptance recipe at a test threshold | P5b-2 |
 
@@ -7384,7 +7530,9 @@ func Files() fs.FS {
 `cmd/pdx/plugin/purdex/hooks/register.js`:
 
 ```js
-// Purdex mod (P5b-1): says hello to the daemon at an interactive session.start.
+// Purdex mod (P5b-1): says hello to the daemon at an interactive session.start
+// and again after every /clear (the new conversation has a new session id,
+// M1, and the daemon keys mod presence by it — spec §8.3, P8a-1d).
 // The relay itself lands in P5b-2/P5b-3 (spec §8.7).
 
 const VERSION = '1' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
@@ -7418,6 +7566,16 @@ export function register(on) {
     await hello($)
     return next(e)
   })
+
+  // /clear gives the conversation a new session id (M1): say hello again
+  // under it, or the daemon's presence record (and P8a-1d's terminal-only
+  // backstop) would still name the old one. Not for startup / resume (that
+  // is session.start's hello) and never when headless.
+  on('classic.SessionStart', async ($, e, next) => {
+    const r = await next(e)
+    if (s.interactive && e.source === 'clear') await hello($)
+    return r
+  })
 }
 ```
 
@@ -7428,17 +7586,20 @@ export function register(on) {
 // stand for the engine beneath the mod (a fake pdx behind $.process.run).
 import { test, expect } from 'claude-code/testing'
 
-function world(on: any) {
+function world(on: any, ids: { sid: string } = { sid: 'sid-1' }) {
   const argvs: string[][] = []
   on('process.run', async (_$: any, e: any) => {
     argvs.push([...e.argv])
     return { value: { exitCode: 0, stdout: '{"ok":true,"role":"none","self_relay":"on","threshold":70,"min_growth":20000}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('session.id', async () => ({ value: 'sid-1' }))
+  on('session.id', async () => ({ value: ids.sid }))
   on('fs.read', async (_$: any, e: any) => (e.path.endsWith('/pdx.json') ? { value: '{"pdx":"/opt/pdx/bin/pdx","data_dir":"/tmp/pdx"}' } : { deny: 'ENOENT' }))
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('classic.SessionStart', async () => ({}))
   return argvs
 }
+
+const sub = (a: string[]) => a.slice(1).join(' ')
 
 test('an interactive session.start says hello through the pdx named in pdx.json', async ($, on) => {
   const argvs = world(on)
@@ -7449,6 +7610,32 @@ test('an interactive session.start says hello through the pdx named in pdx.json'
 test('a headless session.start (claude -p) calls nothing', async ($, on) => {
   const argvs = world(on)
   await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  expect(argvs).toEqual([])
+})
+
+// Spec §8.3 / P8a-1d: presence is keyed by session id and /clear mints a new
+// one. Mutation gate: drop the classic.SessionStart hook → one hello only.
+test('after /clear the mod says hello again with the new session id', async ($, on) => {
+  const ids = { sid: 'sid-1' }
+  const argvs = world(on, ids)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  ids.sid = 'sid-2'
+  await $.classic.SessionStart({ source: 'clear' })
+  expect(argvs.map(sub)).toEqual(['relay hello --session sid-1 --version 1 --agent cc', 'relay hello --session sid-2 --version 1 --agent cc'])
+})
+
+test('a SessionStart that is not a clear adds no hello (startup / resume are session.start’s)', async ($, on) => {
+  const argvs = world(on)
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await $.classic.SessionStart({ source: 'startup' })
+  await $.classic.SessionStart({ source: 'resume' })
+  expect(argvs.length).toBe(1)
+})
+
+test('a /clear while headless says nothing', async ($, on) => {
+  const argvs = world(on)
+  await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
+  await $.classic.SessionStart({ source: 'clear' })
   expect(argvs).toEqual([])
 })
 
@@ -7479,13 +7666,13 @@ Placeholder; the skill text (spec §10) ships with P5b-3.
 
 - [ ] **Step 4: Run the Go test, the mod tests and the validate gate; see them pass.**
   - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team-p5b && go test ./cmd/pdx/plugin/ -run TestFiles -v` → `PASS`
-  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team-p5b && claude plugin test cmd/pdx/plugin/purdex` → `3 pass`, `0 fail` (measured 0.15 s)
+  - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team-p5b && claude plugin test cmd/pdx/plugin/purdex` → `6 pass`, `0 fail` (the 3 measured at 0.15 s plus the three `/clear` cases)
   - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team-p5b && claude plugin validate --strict cmd/pdx/plugin/purdex` → ends `✔ Validation passed`, with `./register.js env reads: nothing` and `calls: $.fs.read, $.process.run (via run), $.session.id`
 
 - [ ] **Step 5: Commit.**
   ```bash
   git add cmd/pdx/plugin/embed.go cmd/pdx/plugin/embed_test.go cmd/pdx/plugin/purdex/.claude-plugin/plugin.json cmd/pdx/plugin/purdex/hooks/hooks.json cmd/pdx/plugin/purdex/hooks/register.js cmd/pdx/plugin/purdex/hooks/relay.test.ts cmd/pdx/plugin/purdex/skills/pdx-team/SKILL.md
-  git commit -m "feat(pdx): embed the Purdex Claude Code plugin (hello-only mod, skill placeholder)
+  git commit -m "feat(pdx): embed the Purdex Claude Code plugin (hello-only mod: session.start and after /clear; skill placeholder)
 
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   ```
@@ -8239,7 +8426,7 @@ The mod runs `pdx` by the path in `pdx.json` (Task 5b.2) with `timeoutMs` 35 s f
 ### Task 5b.4: `register.js` — begin, wait, write, check, clear, seed, report
 
 **Files:**
-- Modify: `cmd/pdx/plugin/purdex/hooks/register.js` (whole file replaced; the P5b-1 `hello` shape is kept inside)
+- Modify: `cmd/pdx/plugin/purdex/hooks/register.js` (whole file replaced; the P5b-1 `hello` shape is kept inside, including its `classic.SessionStart{source:'clear'}` → `hello` branch — P5b-2 adds the `clearing` → `seeding` branch above it)
 - Modify: `cmd/pdx/plugin/purdex/hooks/relay.test.ts` (whole file replaced; the three P5b-1 tests survive as the first `hello` / headless / fallback blocks)
 - Test: `claude plugin test cmd/pdx/plugin/purdex`; gate `claude plugin validate --strict cmd/pdx/plugin/purdex`
 
@@ -8554,6 +8741,8 @@ test('tool.check allows Write/Edit to exactly the handoff path while an op is pe
   void f
 })
 
+// The hello after /clear is P5b-1's (its own test there); this one pins that the
+// relay state resets on the user's own /clear and the hello still goes out.
 test('the user’s own /clear while idle resets the guards and says hello again', async ($, on) => {
   const f = world(on, { pdx: pdxWith([]), usage: { tokens: 1000, window: 200000, percent: 1 } })
   await start($)
@@ -8565,7 +8754,7 @@ test('the user’s own /clear while idle resets the guards and says hello again'
 
 - [ ] **Step 2: Run them and see them fail.**
   - Run: `cd /Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team-p5b && claude plugin test cmd/pdx/plugin/purdex`
-  - Expected (measured with the P5b-1 `register.js` in place): `5 pass` (`hello…`, `headless…`, `below the threshold…`, `a member does not self-relay`, `daemon unreachable…` — the hello-only mod trivially does nothing) and `11 fail`, the first of them `begin at used ≥ 70…` with `AssertionError … Expected: ["relay begin --self --session sid-old --used 72 --window 200000 --model claude-opus-5-5"] Received: []`.
+  - Expected (measured with the P5b-1 `register.js` in place): `6 pass` (`hello…`, `headless…`, `below the threshold…`, `a member does not self-relay`, `daemon unreachable…`, `the user’s own /clear … says hello again` — the hello-only mod trivially does nothing, and its P5b-1 `/clear` hello already satisfies the last) and `10 fail`, the first of them `begin at used ≥ 70…` with `AssertionError … Expected: ["relay begin --self --session sid-old --used 72 --window 200000 --model claude-opus-5-5"] Received: []`.
 
 - [ ] **Step 3: Implement** — replace `cmd/pdx/plugin/purdex/hooks/register.js` with:
 
@@ -8899,7 +9088,7 @@ export function register(on) {
       later($, () => $.prompt.submit({ text: seedPrompt(p) }))
       return r
     }
-    // the user's own /clear: start over
+    // the user's own /clear: start over; the hello under the new session id is P5b-1's rule, kept here
     s.state = 'idle'; s.pending = undefined; s.floor = undefined; s.lastAskPct = undefined
     await hello($)
     return r
@@ -9326,8 +9515,8 @@ Measured (`wc -l`) on the scratch copies; edits counted by lines added.
 
 | PR | Files | Lines |
 |---|---|---|
-| **P5b-1** | `cmd/pdx/plugin/embed.go` 25, `embed_test.go` 29, `purdex/.claude-plugin/plugin.json` 6, `hooks/hooks.json` 1, `hooks/register.js` 35, `hooks/relay.test.ts` 38, `skills/pdx-team/SKILL.md` 8; `internal/agent/cc/plugin.go` ≈ 200, `plugin_test.go` ≈ 225, `hooks.go` +50 / −8, `hooks_test.go` +55; `cmd/pdx/main.go` +5; `cmd/pdx/setup_test.go` +38; `internal/module/agent/handler_test.go` +33 | **≈ 750 lines, 14 files** |
-| **P5b-2** | `hooks/register.js` 331 (−35), `hooks/relay.test.ts` 284 (−38) | **≈ 615 lines, 2 files** |
+| **P5b-1** | `cmd/pdx/plugin/embed.go` 25, `embed_test.go` 29, `purdex/.claude-plugin/plugin.json` 6, `hooks/hooks.json` 1, `hooks/register.js` 44, `hooks/relay.test.ts` 64, `skills/pdx-team/SKILL.md` 8; `internal/agent/cc/plugin.go` ≈ 200, `plugin_test.go` ≈ 225, `hooks.go` +50 / −8, `hooks_test.go` +55; `cmd/pdx/main.go` +5; `cmd/pdx/setup_test.go` +38; `internal/module/agent/handler_test.go` +33 | **≈ 785 lines, 14 files** |
+| **P5b-2** | `hooks/register.js` 331 (−44), `hooks/relay.test.ts` 284 (−64) | **≈ 615 lines, 2 files** (the diff shrinks by the ≈ 35 lines P5b-1 now owns) |
 | **P5b-3** | `hooks/register.js` +37, `hooks/relay.test.ts` +136, `skills/pdx-team/SKILL.md` 32 (−8), `embed_test.go` +25 | **≈ 230 lines, 4 files** |
 
 All three are under 800 lines and 20 files. P5b-1 is closest; if a reviewer wants headroom, the three test appendices of Task 5b.3 (≈ 125 lines) can move into a P5b-1b with `main.go`'s two lines, leaving P5b-1 at ≈ 620.
@@ -9373,7 +9562,7 @@ Each was run on the scratch copy and turned the named test(s) red and nothing el
 | **P8a-1d** | terminal-only degradation in `/api/hooks/decide`, `hookasks/` flag, hello marks presence | 8a.8 | 350 + P2c/P5a edits |
 | **P8a-2** | the mod `hooks/ask.js` + `claude plugin test`, the hours-long hold measured once, the Codex `trusted_hash` probe | 8a.9–8a.11 | 300 + recipes |
 
-**Prerequisites (merged before the first PR of each row):** P8a-1a needs P2a/P3 (shipped), **P5a-1a** (`ErrUnknownSession` / `ErrBadTransition` in `wire_relay.go`, used — not redeclared — by `wire_ask.go`), **P5a-1b** (`ResolveOriginBySession` on the peers resolver and the `OriginResolver` interface; P8a consumes it) and **P5a-2a** (`m.modSeen`, the single mod-presence map written by the relay `hello` handler, and `fakeOrigins.ResolveOriginBySession` in `handler_test.go`). P8a-1b needs P8a-1a and **P5a-2b** (its `handleInflight` / `handleDecide` hunks apply over P5a-2b's versions). P8a-1c needs P8a-1b and **P2c** (`cmd/pdx/hook.go` decision path; the forward helper is self-contained but its call site is P2c's `runHook`). P8a-1d needs P8a-1c, **P2c** (`POST /api/hooks/decide` handler in the team module, which answers `200 {}` for the forwarded events) and **P5a-2a** (the relay `hello` handler's `modSeen`, read by `modPresent`). P8a-2 needs P8a-1c (the CLI the mod calls) and **P5b-1** (the embedded plugin tree at `cmd/pdx/plugin/purdex/` with `hooks/hooks.json`, `pdx.json` from the extractor, and `embed_test.go`). Nothing here needs P5a-3, P5b-2 or P5b-3.
+**Prerequisites (merged before the first PR of each row):** P8a-1a needs P2a/P3 (shipped), **P5a-0** (`ErrUnknownSession` / `ErrBadTransition` in `wire_relay.go`, used — not redeclared — by `wire_ask.go`), **P5a-1b** (`ResolveOriginBySession` on the peers resolver and the `OriginResolver` interface; P8a consumes it) and **P5a-2a** (`m.modSeen`, the single mod-presence map written by the relay `hello` handler, and `fakeOrigins.ResolveOriginBySession` in `handler_test.go`). P8a-1b needs P8a-1a and **P5a-2b** (its `handleInflight` / `handleDecide` hunks apply over P5a-2b's versions). P8a-1c needs P8a-1b and **P2c** (`cmd/pdx/hook.go` decision path; the forward helper is self-contained but its call site is P2c's `runHook`). P8a-1d needs P8a-1c, **P2c** (`POST /api/hooks/decide` handler in the team module, which answers `200 {}` for the forwarded events) and **P5a-2a** (the relay `hello` handler's `modSeen`, read by `modPresent`). P8a-2 needs P8a-1c (the CLI the mod calls) and **P5b-1** (the embedded plugin tree at `cmd/pdx/plugin/purdex/` with `hooks/hooks.json`, `pdx.json` from the extractor, and `embed_test.go`). Nothing here needs P5a-3, P5b-2 or P5b-3.
 
 **Worktree for implementation:** `/Users/wake/Workspace/wake/purdex/.claude/worktrees/lead-team-p8a` (every command below is written against it).
 
@@ -11788,7 +11977,7 @@ func askReportErr(err error, stderr io.Writer) int {
 
 **Files:**
 - Create: `cmd/pdx/hook_ask.go`
-- Modify: `cmd/pdx/hook.go` — **P2c-2's shape (Task 2c.7), re-read after it merges; `:line`s are alpha.527's**: in `runHook`, after the event POST (`postHookEventFn`, today `:86`) and after P2c's lock-gated decision path, add one call `forwardHookAsk(base, cfg.Token, cfg.DataDir, agentType, payload.RawEvent)` **unless P2c's path already sent `/api/hooks/decide` for this event** (then the daemon has already observed it). `base` is the same string P2c's decision path builds — `fmt.Sprintf("http://%s:%d", resolveDaemonHost(cfg.Bind), cfg.Port)` (Task 2c.7; a `Bind` of `0.0.0.0` is not dialable as is) — not the raw `cfg.Bind` the event URL used at alpha.527 (`hook.go:82`). Nothing is printed by this call and the exit code stays 0.
+- Modify: `cmd/pdx/hook.go` — **P2c-2's shape (Task 2c.7), re-read after it merges; `:line`s are alpha.527's**: in `runHook`, inside the `if err == nil` block right after `hookDecision` returns and before `if asked { cancelBudget() }`, add one call `forwardHookAsk(base, cfg.Token, cfg.DataDir, agentType, payload.RawEvent)` **guarded by `!asked`** — P2c's `hookDecision` returns `asked == true` exactly when it already sent `/api/hooks/decide` for this event (then the daemon has already observed it); the forward runs inside the same 5 s budget (its 2 s bound is the shorter) and the event POST is still in flight concurrently, as P2c left it. `base` is the same string P2c's decision path builds — `fmt.Sprintf("http://%s:%d", resolveDaemonHost(cfg.Bind), cfg.Port)` (Task 2c.7; a `Bind` of `0.0.0.0` is not dialable as is) — not the raw `cfg.Bind` the event URL used at alpha.527 (`hook.go:82`). Nothing is printed by this call and the exit code stays 0.
 - Test: `cmd/pdx/hook_ask_test.go`
 
 **Interfaces:**
@@ -12994,7 +13183,7 @@ Answers to the sections' open questions and contract problems. They bind the imp
 - `pdx relay wait` reaching its 9 min bound with the request still open: **exit 0 with `{state:"open"}` on stdout**, not a new exit code 3 (spec §14 has no 3; P5b's loop already assumes `state:"open"`). P5a-2c changes accordingly.
 - The dialog's 「這個 session 不再詢問」 is a checkbox applied with whichever button is pressed (approve or deny): accepted.
 - `409 relay_open` / `bad_transition` carry the op and map to exit 13: accepted.
-- Seven PRs (1a, 1b, 2a, 2b, 2c, 3a, 3b): accepted; merge order as listed.
+- ~~Seven PRs (1a, 1b, 2a, 2b, 2c, 3a, 3b)~~ **Eight PRs after the codex round: P5a-0 (wire, Task 5a.1) → 1a → 1b (now with Task 5a.6 hostconfig `relay`) → 2a → 2b → 2c → 3a → 3b**; every one ≤ 800 lines; merge order as listed.
 - The title move is a separate idempotent meta.db transaction (different database from `team.db`): accepted, with the boot reconciliation covering a crash between the two.
 - `ResolveOriginBySession` is added in **P5a-1b**; P8a consumes it.
 - Team/member moves at `cleared`, persisted usage on team rows, `relayRole` beyond `"none"`: P4. `pdx relay <ref>`, `claim`, `requested` reconciliation, the restart-confirm relay line: P6.
