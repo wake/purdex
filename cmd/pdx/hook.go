@@ -18,9 +18,13 @@ import (
 )
 
 type hookPayload struct {
-	TmuxSession     string          `json:"tmux_session"`
-	TmuxSessionID   string          `json:"tmux_session_id,omitempty"`
-	TmuxPaneID      string          `json:"tmux_pane_id"`
+	TmuxSession   string `json:"tmux_session"`
+	TmuxSessionID string `json:"tmux_session_id,omitempty"`
+	TmuxPaneID    string `json:"tmux_pane_id"`
+	// SessionID is the agent's session_id from its hook stdin. The daemon keys
+	// a session that is not inside tmux (no tmux identity) by it; an older
+	// daemon ignores the field.
+	SessionID       string          `json:"session_id,omitempty"`
 	PurdexName      string          `json:"purdex_name"`
 	RawEvent        json.RawMessage `json:"raw_event"`
 	AgentType       string          `json:"agent_type"`
@@ -325,7 +329,10 @@ func buildHookPayload(tmuxSessionID, tmuxSession, purdexName string, stdin io.Re
 	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
 		raw = []byte("{}")
 	}
+	var stdinIDs hookStdin
+	_ = json.Unmarshal(raw, &stdinIDs) // best effort; tool_input etc. are ignored
 	return hookPayload{
+		SessionID:       stdinIDs.SessionID,
 		TmuxSession:     tmuxSession,
 		TmuxSessionID:   tmuxSessionID,
 		TmuxPaneID:      provenance.TmuxPaneID,
