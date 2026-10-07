@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/module/agent"
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // newTeamFixture is newSpawnFixture with this host's alias set to "self"
@@ -48,6 +51,19 @@ func (f *fixture) teamView(inbox string) (int, team.TeamView, team.APIError) {
 		f.t.Fatalf("decode team view: %v; %s", err, body)
 	}
 	return code, v, team.APIError{}
+}
+
+func (f *fixture) kill(inbox, target string) (int, team.Member, team.APIError) {
+	f.t.Helper()
+	code, body := f.do(http.MethodPost, "/api/team/kill", team.KillRequest{OriginInbox: inbox, Target: target})
+	var mem team.Member
+	if code != http.StatusOK {
+		return code, mem, decodeErr(f.t, body)
+	}
+	if err := json.Unmarshal(body, &mem); err != nil {
+		f.t.Fatalf("decode member: %v; %s", err, body)
+	}
+	return code, mem, team.APIError{}
 }
 
 // Spec §7.3, U20 (e): the lead's team, every member in any state, oldest
@@ -123,5 +139,137 @@ func TestTeam_ServesThePersistedReadingAfterARestart(t *testing.T) {
 	}
 	if c := v.Members[0].Context; c == nil || *c.UsedPercentage != 41 || c.ModelID != "claude-sonnet-5-5" || c.Effort != "low" || c.At != 50 {
 		t.Fatalf("context after the restart = %+v, want the persisted reading", c)
+	}
+}
+
+// Spec §7.3: only the member's own lead may kill it. A session leading no
+// team is not_lead; another team's member is not_your_member and is left
+// alone. The lead's own member: its recorded session is killed by id under
+// its generation, and the row says killed. Mutation gate: drop the team_id
+// filter → the cross-team kill goes through, red.
+func TestKill_OnlyTheLeadsOwnMember(t *testing.T) {
+	f, root := newTeamFixture(t, 2)
+	m1 := f.member(1, root, "sid-m1", "w-one", nil)
+	if code, _, e := f.kill("/tmp/20.sock", m1.Ref); code != 409 || e.Error != team.ErrNotLead {
+		t.Fatalf("a non-lead's kill = %d %+v, want 409 not_lead", code, e)
+	}
+	seedTeam(t, f.m.store, uid(7), "sid-2", 1)
+	other := newMember("op-9", uid(7), "sid-m9", ipeers.RefID("sid-m9"), 1)
+	if err := f.m.store.InsertMember(other); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, e := f.kill("/tmp/10.sock", other.Ref); code != 409 || e.Error != team.ErrNotYourMember {
+		t.Fatalf("another team's member = %d %+v, want 409 not_your_member", code, e)
+	}
+	if got := memberBySpawn(t, f.m.store, "op-9"); got.State != team.MemberActive {
+		t.Fatalf("another team's member = %s, want untouched", got.State)
+	}
+	code, mem, e := f.kill("/tmp/10.sock", m1.Ref)
+	if code != 200 || mem.State != team.MemberKilled || mem.SessionID != "sid-m1" {
+		t.Fatalf("the lead's kill = %d %+v %+v", code, mem, e)
+	}
+	if calls := f.tmux.KillIfInstanceCalls(); len(calls) != 1 || calls[0] != (tmux.KillIfInstanceCall{SessionID: m1.TmuxID, Expected: m1.TmuxInstance}) {
+		t.Fatalf("kill calls = %+v, want one for %s under %s", calls, m1.TmuxID, m1.TmuxInstance)
+	}
+	if f.tmux.HasSession(m1.TmuxSession) || memberBySpawn(t, f.m.store, m1.SpawnOp).State != team.MemberKilled {
+		t.Fatal("the member's session is still there, or its row is not killed")
+	}
+}
+
+// Spec §8.4 (U3): after a relay the member's old ref still reaches it
+// (lineage), as does the new one. Mutation gate: drop the lineage tier → red.
+func TestKill_ByTheOldRefAfterARelay(t *testing.T) {
+	f, root := newTeamFixture(t, 1)
+	m1 := f.member(1, root, "sid-m1", "w-one", nil)
+	claimedOp(t, f.m.store, "relay-1", "sid-m1", m1.Ref)
+	mustReport(t, f.m.store, "relay-1", RelayReport{State: team.RelayCleared, NewSessionID: "sid-m1b", NewRef: ipeers.RefID("sid-m1b"), At: 5})
+	code, mem, e := f.kill("/tmp/10.sock", strings.TrimPrefix(m1.Ref, "_"))
+	if code != 200 || mem.State != team.MemberKilled || mem.SessionID != "sid-m1b" || mem.Ref != ipeers.RefID("sid-m1b") {
+		t.Fatalf("kill by the old ref = %d %+v %+v", code, mem, e)
+	}
+	if len(f.tmux.KillIfInstanceCalls()) != 1 {
+		t.Fatal("the relayed member's session was not killed")
+	}
+}
+
+// The kill touches only the session its spawn created (P4-5: id, generation
+// and the @pdx_spawn_op tag): a second kill answers 200 and kills nothing; a
+// session that lost the tag is refused and left running; on a restarted
+// server (another generation) nothing is killed — the member died with the
+// old server — and the row says killed. An active member whose session
+// cannot be read is a retry, until the sweeper confirms it gone.
+func TestKill_IsIdempotentAndGenerationGuarded(t *testing.T) {
+	f, root := newTeamFixture(t, 4)
+	m1 := f.member(1, root, "sid-m1", "w-one", nil)
+	m2 := f.member(2, root, "sid-m2", "w-two", nil)
+	m3 := f.member(3, root, "sid-m3", "w-three", nil)
+	m4 := f.member(4, root, "sid-m4", "w-four", nil)
+	for i := 0; i < 2; i++ {
+		if code, mem, e := f.kill("/tmp/10.sock", m1.Ref); code != 200 || mem.State != team.MemberKilled {
+			t.Fatalf("kill %d of m1 = %d %+v %+v", i+1, code, mem, e)
+		}
+	}
+	if n := len(f.tmux.KillIfInstanceCalls()); n != 1 {
+		t.Fatalf("kill calls after two kills = %d, want 1", n)
+	}
+
+	f.tmux.SetSessionTag(m2.TmuxSession, spawnTagOption, spawnID(9)) // no longer this member's tag
+	if code, _, e := f.kill("/tmp/10.sock", m2.Ref); code != 409 || e.Error != team.ErrNotYourMember {
+		t.Fatalf("an untagged session = %d %+v, want 409 not_your_member", code, e)
+	}
+	if !f.tmux.HasSession(m2.TmuxSession) || memberBySpawn(t, f.m.store, m2.SpawnOp).State != team.MemberActive {
+		t.Fatal("a session without the member's tag was touched")
+	}
+
+	_ = f.tmux.KillSession(m4.TmuxSession) // gone outside the daemon; the sweeper has not looked yet
+	if code, _, e := f.kill("/tmp/10.sock", m4.Ref); code != 503 || e.Error != team.ErrNotReady {
+		t.Fatalf("an active member whose session cannot be read = %d %+v, want 503 not_ready", code, e)
+	}
+	if err := f.m.store.SetMemberState(m4.SpawnOp, team.MemberGone, 9); err != nil {
+		t.Fatal(err)
+	}
+	if code, mem, e := f.kill("/tmp/10.sock", m4.Ref); code != 200 || mem.State != team.MemberKilled {
+		t.Fatalf("a gone member's kill = %d %+v %+v, want 200 killed", code, mem, e)
+	}
+
+	f.tmux.SetInstance("5151:1800000000") // the tmux server restarted; $N now names a stranger
+	if code, mem, e := f.kill("/tmp/10.sock", m3.Ref); code != 200 || mem.State != team.MemberKilled {
+		t.Fatalf("kill after a server restart = %d %+v %+v", code, mem, e)
+	}
+	if n := len(f.tmux.KillIfInstanceCalls()); n != 1 || !f.tmux.HasSession(m3.TmuxSession) {
+		t.Fatalf("a stranger's session was killed (kill calls %d)", n)
+	}
+}
+
+// The targets pdx kill takes (plan v3 P4-6): a ref with or without its
+// underscore, bare or behind this host's alias or id; <host>/<name> by the
+// live registry name; <host>/<name> [<ref>] when both name the member.
+// Anything else — another host, a bare name, a name or ref of no member —
+// is not_your_member.
+func TestKill_TargetForms(t *testing.T) {
+	cases := []struct {
+		target func(ref string) string
+		ok     bool
+	}{
+		{func(r string) string { return r }, true},
+		{func(r string) string { return r[1:] }, true},
+		{func(r string) string { return "self/" + r }, true},
+		{func(r string) string { return "h:1/" + r[1:] }, true},
+		{func(string) string { return "self/w-one" }, true},
+		{func(r string) string { return "self/w-one [" + r[1:] + "]" }, true},
+		{func(r string) string { return "air26/" + r }, false},
+		{func(string) string { return "w-one" }, false},
+		{func(string) string { return "self/w-two" }, false},
+		{func(r string) string { return "self/w-two [" + r[1:] + "]" }, false},
+		{func(string) string { return "self/_zzzzzz" }, false},
+	}
+	for i, c := range cases {
+		f, root := newTeamFixture(t, 1)
+		m1 := f.member(1, root, "sid-m1", "w-one", nil)
+		target := c.target(m1.Ref)
+		code, _, e := f.kill("/tmp/10.sock", target)
+		if ok := code == 200; ok != c.ok || (!ok && e.Error != team.ErrNotYourMember) {
+			t.Errorf("case %d %q: %d %+v, want matched=%v", i, target, code, e, c.ok)
+		}
 	}
 }

@@ -409,8 +409,8 @@ func (f *FakeExecutor) SetSessionTag(name, option, value string) {
 }
 
 // PaneIdentity answers for a live session's active pane (SetActivePaneMetadata,
-// else pane %N of session $N) named by its pane id or by "=<name>:", with the
-// current instance, the session's option and the pane's SetPaneCwd directory.
+// else pane %N of session $N) named by its pane id, "=<name>:" or "$N:", with
+// the current instance, the session's option and the pane's SetPaneCwd directory.
 func (f *FakeExecutor) PaneIdentity(_ context.Context, target, option string) (PaneIdentity, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -419,7 +419,7 @@ func (f *FakeExecutor) PaneIdentity(_ context.Context, target, option string) (P
 		if !ok {
 			md = TmuxPaneMetadata{SessionID: s.ID, PaneID: "%" + strings.TrimPrefix(s.ID, "$")}
 		}
-		if target == md.PaneID || target == "="+name+":" {
+		if target == md.PaneID || target == "="+name+":" || target == s.ID+":" {
 			return PaneIdentity{Instance: f.instance, SessionID: md.SessionID, PaneID: md.PaneID,
 				Tag: f.tags[name][option], Cwd: f.paneCwds[md.PaneID]}, nil
 		}
