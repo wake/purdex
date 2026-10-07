@@ -70,7 +70,11 @@ export interface NexInfo {
 export interface PeerAgentWire {
   type: string                // cc | codex | opencode | proxy
   session_id?: string
-  /** The agent's identity — the readable half of an address, e.g. `ai-chat-story-3a`. */
+  /**
+   * Claude Code's own session name, e.g. `ai-chat-story-3a`. Display only: it
+   * changes on every start and is not an address (Peer Address v5) — the
+   * row's `address` carries the conversation's virtual name instead.
+   */
   peer_name?: string
   pid?: number
   proc_start?: string

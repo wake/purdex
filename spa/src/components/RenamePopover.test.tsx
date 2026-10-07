@@ -231,7 +231,9 @@ describe('RenamePopover peer section', () => {
     deliverable: true,
     reason: '',
     tmuxInstance: GEN,
-    agent: { type: 'cc', peerName: 'ai-chat-story-3a', status: 'idle' },
+    // Peer Address v5: the address carries the virtual name; Claude Code's own
+    // session name changes on every start, so it differs from it here.
+    agent: { type: 'cc', peerName: 'ai-chat-story-7f', status: 'idle' },
   }
 
   const popoverProps = {
@@ -325,8 +327,12 @@ describe('RenamePopover peer section', () => {
     expect(screen.getByTestId('peer-address-p1').textContent).toContain('mini-lab/ai-chat-story-3a')
     const agent = screen.getByTestId('peer-agent-p1').textContent ?? ''
     expect(agent).toContain('cc')
-    expect(agent).toContain('ai-chat-story-3a')
     expect(agent).toContain('idle')
+    // Claude Code's own name routes nothing (Peer Address v5): it is shown on
+    // its own row, labelled as the CLI's, never beside the address as if it
+    // were the conversation's name.
+    expect(agent).not.toContain('ai-chat-story-7f')
+    expect(screen.getByTestId('peer-cli-name-p1').textContent).toBe('ai-chat-story-7f')
     expect(screen.getByTestId('peer-deliverable-p1').textContent).toBe('yes')
   })
 
@@ -498,7 +504,7 @@ describe('RenamePopover peer section', () => {
       seedHost(H1, 'abc123', { ...ROW, ref: '', title: '', address: '', titleSource: '' })
       const { unmount } = render(<RenamePopover {...popoverProps} tab={tabOf(terminalPane())} />)
       expect(screen.queryByTestId('peer-address-p1')).toBeNull()
-      expect(screen.getByTestId('peer-agent-p1').textContent).toContain('ai-chat-story-3a')
+      expect(screen.getByTestId('peer-cli-name-p1').textContent).toContain('ai-chat-story-7f')
       unmount()
 
       seedHost(H1, 'abc123', { ...ROW, title: '', titleSource: '' })
