@@ -2018,5 +2018,6 @@
   "approval.notify.title_self_relay": "{{host}}: {{session}} requests a relay ({{pct}}% used)",
   "approval.dialog.minimize": "Minimize",
   "approval.pill.label": "{{count}} pending · {{countdown}}",
-  "approval.pill.restore": "Restore the approval dialog"
+  "approval.pill.restore": "{{label}}. Click to restore the approval dialog",
+  "approval.pill.announce": "New approval request: {{count}} pending"
 }

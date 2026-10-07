@@ -40,9 +40,11 @@ describe('ApprovalPill', () => {
     useApprovalStore.getState().applyOpened('h2', relay('b', 1_000 + 65_000, 2_000))
     render(<ApprovalPill />)
     expect(pill().textContent).toBe('待核准 2 · 1:05')
-    expect(pill().getAttribute('aria-label')).toBe('還原核准對話框')
+    // The accessible name carries what the pill shows, then what a click does (P9b-2 review).
+    expect(screen.getByRole('button', { name: '待核准 2 · 1:05，點一下還原核准對話框' })).toBe(pill())
     act(() => { vi.advanceTimersByTime(5_000) })
     expect(pill().textContent).toBe('待核准 2 · 1:00')
+    expect(pill().getAttribute('aria-label')).toBe('待核准 2 · 1:00，點一下還原核准對話框')
     act(() => { vi.advanceTimersByTime(120_000) })
     expect(pill().textContent).toBe('待核准 2 · 0:00')
   })
@@ -91,6 +93,42 @@ describe('ApprovalPill', () => {
     expect(pill().dataset.flash).toBe('0')
     opened('h2', relay('b', 400_000, 2_000))
     expect(pill().dataset.flash).toBe('1')
+  })
+
+  // A screen reader hears a new request once, politely, and never the per-second countdown (P9b-2 review).
+  describe('the live region', () => {
+    const live = () => screen.getByRole('status')
+
+    it('is polite and silent until the count grows; then it says so once; a close and the countdown say nothing', () => {
+      useApprovalStore.getState().applyOpened('h1', lead('a', 600_000))
+      render(<ApprovalPill />)
+      expect(live().getAttribute('aria-live')).toBe('polite')
+      expect(live().textContent).toBe('')
+      expect(live().dataset.announce).toBe('0')
+
+      opened('h2', relay('b', 400_000, 2_000))
+      expect(live().textContent).toBe('新的核准申請，待核准 2 筆')
+      expect(live().dataset.announce).toBe('1')
+      const said = live().firstElementChild
+
+      act(() => { vi.advanceTimersByTime(5_000) }) // the countdown moves
+      closed('h2', relay('b', 400_000, 2_000)) // and one closes
+      expect(live().dataset.announce).toBe('1')
+      expect(live().firstElementChild).toBe(said)
+      expect(live().textContent).toBe('新的核准申請，待核准 2 筆')
+    })
+
+    it('a count it said before is said again: each announcement is a new node', () => {
+      useApprovalStore.getState().applyOpened('h1', lead('a', 600_000))
+      render(<ApprovalPill />)
+      opened('h2', lead('b', 400_000, 2_000))
+      const first = live().firstElementChild
+      closed('h2', lead('b', 400_000, 2_000))
+      opened('h2', lead('c', 400_000, 3_000))
+      expect(live().dataset.announce).toBe('2')
+      expect(live().textContent).toBe('新的核准申請，待核准 2 筆')
+      expect(live().firstElementChild).not.toBe(first)
+    })
   })
 
   it('a close updates N and the countdown without a flash', () => {
