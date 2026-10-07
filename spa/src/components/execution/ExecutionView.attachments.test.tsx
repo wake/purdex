@@ -2,6 +2,7 @@
 // The phase D path flow is pinned in ExecutionView.test.tsx; this file pins
 // what changes when the host accepts images for the execution's provider,
 // and that nothing changes when it does not (Review Focus 1–3).
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
@@ -81,6 +82,8 @@ let createUrl: ReturnType<typeof vi.fn>, revokeUrl: ReturnType<typeof vi.fn>
 const origCreate = URL.createObjectURL, origRevoke = URL.revokeObjectURL
 
 beforeEach(() => {
+  // These tests send and expect the POST at once: the send buffer (default 3 s) is off here.
+  useWorkerSettingsStore.setState({ sendBufferSec: 0 })
   useExecutionStore.setState({ executions: {} })
   ensureLease.mockReset().mockResolvedValue('ls_1'); release.mockReset(); touch.mockReset(); forget.mockReset()
   vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease, release, forget, touch })

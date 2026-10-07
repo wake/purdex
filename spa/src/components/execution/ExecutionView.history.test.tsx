@@ -1,5 +1,6 @@
 // ExecutionView — reply-box input history (ArrowUp / ArrowDown). The caret and stash rules are
 // pinned in hooks/useInputHistory.test.ts; this file drives them through the real pane, with chips.
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
@@ -51,6 +52,8 @@ function key(k: 'ArrowUp' | 'ArrowDown', caret?: number) {
 
 const origCreate = URL.createObjectURL, origRevoke = URL.revokeObjectURL
 beforeEach(() => {
+  // These tests send and expect the POST at once: the send buffer (default 3 s) is off here.
+  useWorkerSettingsStore.setState({ sendBufferSec: 0 })
   seq = 0
   useExecutionStore.setState({ executions: {} })
   ensureLease.mockReset().mockResolvedValue('ls_1')

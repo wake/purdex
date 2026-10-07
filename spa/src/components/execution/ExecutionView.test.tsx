@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { StrictMode, useEffect, useState } from 'react'
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
@@ -57,6 +58,8 @@ const ensureLease = vi.fn(), release = vi.fn(), touch = vi.fn(), forget = vi.fn(
 const summary = (extra = {}) => ({ id: E, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/Users/w/repo', mount_kind: 'dev', brief: 'b', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 2, archived: false, effective_profile: 'standard', turn_count: 3, ...extra })
 
 beforeEach(() => {
+  // These tests send and expect the POST at once: the send buffer (default 3 s) is off here.
+  useWorkerSettingsStore.setState({ sendBufferSec: 0 })
   clearStintsSpy()
   useExecutionStore.setState({ executions: {} })
   ensureLease.mockReset().mockResolvedValue('ls_1'); release.mockReset(); touch.mockReset(); forget.mockReset()

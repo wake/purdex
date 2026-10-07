@@ -1,5 +1,6 @@
 // spa/src/components/execution/ExecutionView.permission.test.tsx — the request card in the worker pane
 // (permission channel plan Task 9; spec §5.3, §5.5; Review Focus #3 / #4).
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
@@ -65,6 +66,8 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  // These tests send and expect the POST at once: the send buffer (default 3 s) is off here.
+  useWorkerSettingsStore.setState({ sendBufferSec: 0 })
   seq = 0
   clearAllPermissionCards()
   useI18nStore.getState().setLocale('en')

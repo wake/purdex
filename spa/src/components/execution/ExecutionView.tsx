@@ -35,6 +35,7 @@ import { readWorkerDraft, writeWorkerDraft, forgetWorkerDraft, workerDraftKey } 
 import { ConfirmDialog } from '../ConfirmDialog'
 import { useExecutionStore, executionKey } from '../../stores/useExecutionStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
+import BufferCountdown from './BufferCountdown'
 import { getWorkerTheme, workerThemeStyle } from '../../lib/worker-theme/registry'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useExecutionSubscription } from '../../hooks/useExecutionSubscription'
@@ -174,7 +175,10 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   const permissions = st.permissions
   const pendingPermission = useMemo(() => selectPendingPermission({ permissions }), [permissions])
   const lease = useExecutionLease(hostId, executionId, { hold: pendingPermission !== undefined })
-  const { draft, actionPending, handleSend, handleInterrupt, restoreDraft } = useExecutionActions(hostId, executionId, lease)
+  // The typed text, for planning an image added mid-draft against the request budget
+  // (and for a restored held message to go in front of, never over).
+  const draftText = useRef('')
+  const { draft, actionPending, handleSend, handleInterrupt, cancelBuffered, restoreDraft } = useExecutionActions(hostId, executionId, lease, () => draftText.current)
   const permission = usePermissionAnswer(hostId, executionId, lease)
   const shownPermission = useMemo(() => selectPendingPermission({ permissions }, permission.closed), [permissions, permission.closed])
   // Spec §9.2 (phase E): native images only when the host's capability
@@ -183,8 +187,6 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // goes by path exactly as in phase D. The result is reference-stable.
   const imageCaps = useNexHostStore(selectImageAttachments(hostId, st.summary?.provider ?? ''))
   useEffect(() => { void useNexHostStore.getState().ensure(hostId) }, [hostId])
-  // The typed text, for planning an image added mid-draft against the request budget.
-  const draftText = useRef('')
   // The reply box's text outlives this component: a tab switch unmounts the
   // pane (the alive pool keeps no execution tab by default), and the box would
   // come back empty. Written on every change, read as the initial value; a
@@ -303,7 +305,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // A write already on its way to the daemon (send, interrupt)
   // could land after the daemon's settled check and before its archive;
   // the daemon re-verifies (#1171), and the SPA refuses to start the race.
-  const writeInFlight = st.pendingSend || actionPending
+  const writeInFlight = st.pendingSend || actionPending || !!st.pendingLocal?.buffered
   // 退出 is held back only by a write still on its way: the unaccepted send (`sendLocked`) or an interrupt.
   // `pendingSend` lasts until the turn's result, so it would lock 退出 for the whole turn this pane sent —
   // a worker waiting for approval included (permission channel §5.4 / N7: that exit cancels the request).
@@ -352,7 +354,8 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // our own awaiting an answer) belongs inside that task's row, never as main
   // dots; the gate holds the dots back ~1.5 s / keeps them ~1 s so a task
   // notification's short turns cannot flap them.
-  const ownSend = st.pendingSend && st.pendingLocal?.delivery !== 'queued'
+  // A message held in the send buffer counts: the reader sees it as sent, so the indicator shows meanwhile.
+  const ownSend = (st.pendingSend || !!st.pendingLocal?.buffered) && st.pendingLocal?.delivery !== 'queued'
   const taskRunning = useMemo(() => anyRunningTask(st.tasks), [st.tasks])
   const hasTasks = Object.keys(st.tasks).length > 0
   const rawThinking = (st.turnLive || ownSend) && !partialVisible && !anyRunning && !(taskRunning && !ownSend)
@@ -361,10 +364,11 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // or the one the pending send will open — the same number once it is accepted);
   // it counts from the open turn's start, else from when the line appeared.
   const openTurn = hasOpenTurn(st)
+  const sentAt = st.pendingLocal?.sentAt
   const openTurnStart = openTurn ? st.turnMeta.findLast((m) => m.outcome === null)?.startAt : undefined
   const working = useMemo(
-    () => ({ turnKey: `${executionId}:${openTurn ? st.turnStarts.length - 1 : st.turnStarts.length}`, startedAt: openTurnStart }),
-    [executionId, openTurn, st.turnStarts.length, openTurnStart],
+    () => ({ turnKey: `${executionId}:${openTurn ? st.turnStarts.length - 1 : st.turnStarts.length}`, startedAt: openTurnStart ?? sentAt }),
+    [executionId, openTurn, st.turnStarts.length, openTurnStart, sentAt],
   )
   // Spec §3.2: one fold memory per pane. It lives here, above the view
   // switch, because room ⇄ chat remounts the transcript (F2).
@@ -610,11 +614,31 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
     const previews = natives.length > 0
       ? natives.map((n) => ({ previewUrl: URL.createObjectURL(n.file), media_type: n.file.type }))
       : undefined
-    const ok = await handleSend(finalText, previews ? { ...opts, attachments, previews } : opts)
+    const sendOpts = previews ? { ...opts, attachments, previews } : opts
+    // The send buffer (typed sends only; a quick reply goes at once): the chips leave the box now but are
+    // kept under a token — gone once the message is out, back if it is taken back or fails.
+    const bufferSec = opts.restoreDraft === false ? 0 : useWorkerSettingsStore.getState().sendBufferSec
+    if (bufferSec > 0) {
+      const token = uploads.hold(sentKeys)
+      await handleSend(finalText, {
+        ...sendOpts, bufferMs: bufferSec * 1000,
+        onBufferEnd: (outcome) => {
+          if (outcome === 'sent') { uploads.releaseHeld(token); return }
+          uploads.restoreHeld(token)
+          if (outcome === 'failed') settleFailedSend(natives)
+        },
+      })
+      return
+    }
+    const ok = await handleSend(finalText, sendOpts)
     if (ok) {
       uploads.clear(sentKeys)
       return
     }
+    settleFailedSend(natives)
+  }
+  // What a refused send leaves behind on its chips (shared by the buffered and the immediate path).
+  const settleFailedSend = (natives: { key: string; file: File }[]) => {
     const err = useExecutionStore.getState().executions[key]?.sendError
     if (err && PER_IMAGE_ERRORS.has(err.code) && err.attachmentIndex !== undefined) {
       const failed = natives[err.attachmentIndex]
@@ -676,7 +700,10 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // them off in both views: the room's spinner, chat's tools line (F1,
   // revisited in R2-B — one signal per state, as in the room).
   const queuedTag = st.pendingLocal?.delivery === 'queued'
-    && <span className="text-[10px] uppercase font-normal text-text-muted">{t('execution.queued')}</span>
+    ? <span className="text-[10px] uppercase font-normal text-text-muted">{t('execution.queued')}</span>
+    : st.pendingLocal?.buffered
+      ? <BufferCountdown until={st.pendingLocal.buffered.until} />
+      : false
   // The optimistic line's images: the local previews the execution store owns (phase E).
   const pendingPreviews = st.pendingLocal?.attachments
   const pendingThumbs = pendingPreviews && pendingPreviews.length > 0
@@ -793,6 +820,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       <WorkerInput key={draft ?? ''} initialValue={draft ?? readWorkerDraft(draftKey)} onSend={(text) => sendWithAttachments(text, { draftText: text })}
         disabled={inputDisabled} pendingSend={st.sendLocked} placeholder={placeholder} isActive={isActive} isFocusTarget={isFocusTarget} onTextChange={onTextChange}
         turnLive={st.turnLive} onInterrupt={() => void handleInterrupt()} onHistoryNav={onHistoryNav}
+        bufferedSend={!!st.pendingLocal?.buffered} onCancelBuffered={() => { cancelBuffered() }} focusOnMount={draft !== null}
         chips={uploads.chips} onRemoveChip={removeChip} onAddFiles={canAttach ? uploads.add : undefined} />
       {dragging && (
         <div data-testid="drop-overlay"
