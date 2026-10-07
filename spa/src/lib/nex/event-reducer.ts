@@ -9,6 +9,7 @@ import { isResultError } from './cost-summary'
 import type { StreamMessage } from './message-types'
 import { defaultPreludeState, type PreludeState } from './prelude'
 import { finalizeBlock, type PartialAssembly } from './partial'
+import { applyPermissionEvent, isPermissionEventKind, type PermissionTable } from './permissions'
 import type { NexSseFrame } from './sse-parser'
 import { endTurn, recordN2ToolResult, recordN2ToolUse, recordToolEnds, recordToolStarts, type ToolActivity } from './tool-activity'
 import { applyTaskEvent, applyTaskSnapshot, type TaskTable } from './tasks'
@@ -129,6 +130,17 @@ export interface ExecutionState {
   tasks: TaskTable
   /** The transcript before turn 1 (worker prelude spec §5.2). Its own slice: never read by the rules above. */
   prelude: PreludeState
+  /**
+   * The permission requests a `handoff_ask` worker raised, keyed by request_id
+   * (permission channel plan Task 8). Written only by the durable
+   * `permission.requested` / `permission.resolved` kinds; `{}` elsewhere.
+   */
+  permissions: PermissionTable
+  /**
+   * The last request Nexen denied on its timeout: the pane shows a muted line
+   * for it until the next turn opens or the worker asks again (spec §5.5).
+   */
+  expiredNotice: { requestId: string; timeoutS?: number } | null
 }
 
 export function defaultExecutionState(): ExecutionState {
@@ -156,6 +168,8 @@ export function defaultExecutionState(): ExecutionState {
     tools: {},
     tasks: {},
     prelude: defaultPreludeState(),
+    permissions: {},
+    expiredNotice: null,
   }
 }
 
@@ -288,6 +302,8 @@ function turnBubble(text: string | undefined, rawAttachments: unknown): StreamMe
 function markTurnStart(s: ExecutionState, createdAt: number, turnId: string | null): ExecutionState {
   return {
     ...s,
+    // A new turn retires the last turn's 「已逾時自動拒絕」 line.
+    expiredNotice: null,
     turnStarts: [...s.turnStarts, s.messages.length],
     turnMeta: [...s.turnMeta, { startAt: createdAt, endAt: null, outcome: null, durationMs: null }],
     turnEnds: [...s.turnEnds, { turnId, state: null, bySource: false, resulted: false }],
@@ -517,6 +533,25 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
   if (ev.seq <= s.lastSeq) return s
 
   const lastEventAt = ev.created_at > s.lastEventAt ? ev.created_at : s.lastEventAt
+
+  // Permission kinds (Nexen v0.19.0) go through the seq guard above like
+  // every other kind — live SSE order is seq order, and a history/live overlap
+  // is a duplicate the guard drops. They only touch `permissions` (and the
+  // expiry line): not a message, not a turn rule — a background subagent asks
+  // after the main turn's result. The summary carries `pending_permission`, so
+  // it goes stale and the pane refetches it.
+  if (isPermissionEventKind(ev.kind)) {
+    const permissions = applyPermissionEvent(s.permissions, ev.kind, p, ev.created_at)
+    let expiredNotice = s.expiredNotice
+    const requestId = typeof p.request_id === 'string' ? p.request_id : ''
+    if (ev.kind === 'permission.requested' && permissions !== s.permissions && s.permissions[requestId] === undefined) expiredNotice = null
+    if (ev.kind === 'permission.resolved' && permissions[requestId]?.status === 'expired') {
+      const timeoutS = permissions[requestId].timeoutS
+      expiredNotice = timeoutS === undefined ? { requestId } : { requestId, timeoutS }
+    }
+    return { ...s, lastSeq: ev.seq, lastEventAt, permissions, expiredNotice, summaryStale: true }
+  }
+
   let next: ExecutionState = applyTurnRules({ ...s, lastSeq: ev.seq, lastEventAt }, ev, p)
 
   // The N2 tool kinds are consumed by applyTurnRules alone: not a message

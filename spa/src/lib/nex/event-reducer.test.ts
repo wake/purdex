@@ -1,6 +1,7 @@
 // spa/src/lib/nex/event-reducer.test.ts
 import { describe, it, expect } from 'vitest'
 import { applyDurableEvent, applyTasksSnapshot, applyTransientFrame, defaultExecutionState, frameToEvent, hasOpenTurn, isLifecycleKind, isTaskEventKind, lastEndedOutcome, type ExecutionState } from './event-reducer'
+import { isPermissionEventKind, selectPendingPermission } from './permissions'
 import { parseTask } from './tasks'
 import type { NexEvent, ExecutionSummary } from './types'
 
@@ -1022,5 +1023,224 @@ describe('hasOpenTurn / lastEndedOutcome (queued sends)', () => {
     expect(s.turnMeta.map(m => m.outcome)).toEqual([null, 'failed'])
     expect(hasOpenTurn(s)).toBe(true)
     expect(lastEndedOutcome(s)).toBe('failed')
+  })
+})
+
+// Permission channel plan Task 8 (spec §5.3; capability-matrix §1.14 / §3; consumer-guide §9.8).
+describe('permission events (Nexen v0.19.0 permission.requested / permission.resolved)', () => {
+  const at = (seq: number, kind: string, created_at: number, payload: Record<string, unknown> = {}): NexEvent =>
+    ({ seq, execution_id: 'exc_1', kind, payload, created_at })
+  const requested = (seq: number, requestId: string, createdAt: number, extra: Record<string, unknown> = {}) =>
+    at(seq, 'permission.requested', createdAt, {
+      request_id: requestId, turn_id: 'trn_1', tool_use_id: `toolu_${requestId}`, tool_name: 'Bash',
+      input: { command: 'rm -rf build', description: 'Clean the build' }, ...extra,
+    })
+  const resolved = (seq: number, requestId: string, outcome: string, extra: Record<string, unknown> = {}) =>
+    at(seq, 'permission.resolved', 1000 + seq, { request_id: requestId, turn_id: 'trn_1', tool_use_id: `toolu_${requestId}`, outcome, ...extra })
+  const started = (): ExecutionState => {
+    let s = defaultExecutionState()
+    s = applyDurableEvent(s, at(1, 'execution.delegated', 10, { brief: 'go' }))
+    return applyDurableEvent(s, at(2, 'execution.running', 11, { turn_id: 'trn_1' }))
+  }
+
+  it('defaultExecutionState has no permission requests and no notice', () => {
+    expect(defaultExecutionState().permissions).toEqual({})
+    expect(defaultExecutionState().expiredNotice).toBeNull()
+  })
+
+  it('isPermissionEventKind is exactly the two kinds; they are not lifecycle kinds', () => {
+    expect(isPermissionEventKind('permission.requested')).toBe(true)
+    expect(isPermissionEventKind('permission.resolved')).toBe(true)
+    expect(isPermissionEventKind('permission.other')).toBe(false)
+    expect(isPermissionEventKind('control_request')).toBe(false)
+    expect(isLifecycleKind('permission.requested')).toBe(false)
+  })
+
+  it('requested → a pending entry keyed by request_id with every payload field; never a message; the summary goes stale', () => {
+    let s: ExecutionState = { ...started(), summaryStale: false, summary: summary({ state: 'running' }) }
+    const before = s.messages.length
+    s = applyDurableEvent(s, requested(3, 'req_a', 5000, {
+      display_name: 'Bash', description: 'Clean the build', decision_reason: 'This command requires approval',
+      decision_reason_type: 'other', blocked_path: '/etc/hosts', agent_id: 'a8fbe6ba3e2e8d1c6',
+    }))
+    expect(s.messages).toHaveLength(before)
+    expect(s.lastSeq).toBe(3)
+    expect(s.summaryStale).toBe(true)
+    expect(s.permissions).toEqual({
+      req_a: {
+        requestId: 'req_a', toolUseId: 'toolu_req_a', toolName: 'Bash', displayName: 'Bash', description: 'Clean the build',
+        input: { command: 'rm -rf build', description: 'Clean the build' }, decisionReason: 'This command requires approval',
+        blockedPath: '/etc/hosts', agentId: 'a8fbe6ba3e2e8d1c6', requestedAt: 5000, status: 'pending',
+      },
+    })
+    expect(selectPendingPermission(s)?.requestId).toBe('req_a')
+  })
+
+  it('requested does not touch the turn (no turnLive, no boundary, no partial, no pendingSend)', () => {
+    const s0 = { ...started(), pendingSend: true }
+    const s = applyDurableEvent(s0, requested(3, 'req_a', 5000))
+    expect(s.turnLive).toBe(s0.turnLive)
+    expect(s.turnStarts).toEqual(s0.turnStarts)
+    expect(s.turnMeta).toEqual(s0.turnMeta)
+    expect(s.partial).toBe(s0.partial)
+    expect(s.pendingSend).toBe(true)
+    expect(s.tools).toBe(s0.tools)
+  })
+
+  it.each([
+    ['allowed', { principal_id: 'pdx:mlab/t-1' }, {}],
+    ['denied', { principal_id: 'pdx:mlab/t-1', message: 'no' }, {}],
+    ['cancelled', { reason: 'interrupt', interrupt_source: 'user' }, { reason: 'interrupt' }],
+    ['expired', { timeout_s: 900, message: 'This permission request timed out after 15 minutes and was denied automatically.' }, { timeoutS: 900 }],
+  ])('resolved %s → the entry takes that status (never a message; summary stale)', (outcome, extra, fields) => {
+    let s = applyDurableEvent(started(), requested(3, 'req_a', 5000))
+    s = { ...s, summaryStale: false }
+    const before = s.messages.length
+    s = applyDurableEvent(s, resolved(4, 'req_a', outcome, extra))
+    expect(s.permissions.req_a).toMatchObject({ requestId: 'req_a', toolName: 'Bash', requestedAt: 5000, status: outcome, ...fields })
+    expect(s.messages).toHaveLength(before)
+    expect(s.summaryStale).toBe(true)
+    expect(selectPendingPermission(s)).toBeUndefined()
+  })
+
+  it('a duplicate requested (same seq) is the same state object; one re-delivered after its resolved never reopens it', () => {
+    let s = applyDurableEvent(started(), requested(3, 'req_a', 5000))
+    expect(applyDurableEvent(s, requested(3, 'req_a', 5000))).toBe(s)
+    s = applyDurableEvent(s, resolved(4, 'req_a', 'denied', { message: 'no' }))
+    // The seq guard drops the overlap; even a copy that slipped past it (a higher seq) must not reopen the request.
+    expect(applyDurableEvent(s, requested(3, 'req_a', 5000))).toBe(s)
+    s = applyDurableEvent(s, requested(9, 'req_a', 9000))
+    expect(s.permissions.req_a.status).toBe('denied')
+    expect(s.permissions.req_a.requestedAt).toBe(5000)
+    expect(selectPendingPermission(s)).toBeUndefined()
+  })
+
+  it('a resolved for a request this state never saw is recorded as ended; its requested arriving later does not reopen it', () => {
+    let s = applyDurableEvent(started(), resolved(5, 'req_x', 'cancelled', { reason: 'daemon_restart' }))
+    expect(s.permissions.req_x).toMatchObject({ requestId: 'req_x', status: 'cancelled', reason: 'daemon_restart' })
+    s = applyDurableEvent(s, requested(6, 'req_x', 7000, { description: 'late copy' }))
+    expect(s.permissions.req_x.status).toBe('cancelled')
+    expect(selectPendingPermission(s)).toBeUndefined()
+  })
+
+  it('malformed payloads (no request_id, or an outcome outside the closed set) change nothing but the seq; never a message', () => {
+    let s = started()
+    const msgs = s.messages.length
+    s = applyDurableEvent(s, at(3, 'permission.requested', 1, { tool_name: 'Bash', input: {} }))
+    s = applyDurableEvent(s, requested(4, 'req_a', 5000))
+    s = applyDurableEvent(s, at(5, 'permission.resolved', 1, { request_id: 'req_a', outcome: 'maybe' }))
+    s = applyDurableEvent(s, at(6, 'permission.resolved', 1, { outcome: 'allowed' }))
+    expect(Object.keys(s.permissions)).toEqual(['req_a'])
+    expect(s.permissions.req_a.status).toBe('pending')
+    expect(s.messages).toHaveLength(msgs)
+    expect(s.lastSeq).toBe(6)
+  })
+
+  it('correlates by request_id, not seq: a resolved after the tool_result of the same tool_use_id still ends the request', () => {
+    let s = applyDurableEvent(started(), requested(3, 'req_a', 5000))
+    s = applyDurableEvent(s, at(4, 'tool_use', 5100, { tool_use_id: 'toolu_req_a', parent_tool_use_id: null, name: 'Bash' }))
+    s = applyDurableEvent(s, at(5, 'tool_result', 5200, { tool_use_id: 'toolu_req_a', parent_tool_use_id: null, status: 'ok', duration_ms: 3 }))
+    expect(s.permissions.req_a.status).toBe('pending')
+    s = applyDurableEvent(s, resolved(6, 'req_a', 'allowed', { principal_id: 'p' }))
+    expect(s.permissions.req_a.status).toBe('allowed')
+    expect(s.tools.toolu_req_a).toMatchObject({ status: 'done', durationMs: 3 })
+  })
+
+  it('two pending → the earliest requestedAt (ties by request_id), never by seq; the next one follows once it ends', () => {
+    let s = started()
+    s = applyDurableEvent(s, requested(3, 'req_late', 9000))
+    s = applyDurableEvent(s, requested(4, 'req_early', 4000))
+    expect(selectPendingPermission(s)?.requestId).toBe('req_early')
+    s = applyDurableEvent(s, resolved(5, 'req_early', 'allowed'))
+    expect(selectPendingPermission(s)?.requestId).toBe('req_late')
+    let t = started()
+    t = applyDurableEvent(t, requested(3, 'req_b', 4000))
+    t = applyDurableEvent(t, requested(4, 'req_a', 4000))
+    expect(selectPendingPermission(t)?.requestId).toBe('req_a')
+    // `exclude` skips requests the pane already closed itself (an answer that landed before its resolved).
+    expect(selectPendingPermission(t, new Set(['req_a']))?.requestId).toBe('req_b')
+    expect(selectPendingPermission(t, new Set(['req_a', 'req_b']))).toBeUndefined()
+  })
+
+  it('a request asked after the turn\'s result (a background subagent) is pending like any other and leaves the ended turn alone', () => {
+    let s = started()
+    s = applyDurableEvent(s, at(3, 'result', 6000, { type: 'result', subtype: 'success', duration_ms: 40 }))
+    const turn = { turnLive: s.turnLive, turnMeta: s.turnMeta, turnEnds: s.turnEnds }
+    s = applyDurableEvent(s, requested(4, 'req_bg', 7000, { agent_id: 'a8fbe6ba3e2e8d1c6' }))
+    expect(selectPendingPermission(s)).toMatchObject({ requestId: 'req_bg', agentId: 'a8fbe6ba3e2e8d1c6', status: 'pending' })
+    expect({ turnLive: s.turnLive, turnMeta: s.turnMeta, turnEnds: s.turnEnds }).toEqual(turn)
+  })
+
+  it('expiredNotice: set by an expired resolution, kept through the rest of the turn, cleared by the next turn and by a new request', () => {
+    let s = applyDurableEvent(started(), requested(3, 'req_a', 5000))
+    expect(s.expiredNotice).toBeNull()
+    s = applyDurableEvent(s, resolved(4, 'req_a', 'expired', { timeout_s: 300 }))
+    expect(s.expiredNotice).toEqual({ requestId: 'req_a', timeoutS: 300 })
+    s = applyDurableEvent(s, at(5, 'assistant', 6000, { type: 'assistant', message: { role: 'assistant', content: [], stop_reason: null } }))
+    s = applyDurableEvent(s, at(6, 'result', 6100, { type: 'result', subtype: 'success' }))
+    s = applyDurableEvent(s, at(7, 'execution.terminal', 6200, { turn_id: 'trn_1', reason: 'final_response', state: 'idle' }))
+    expect(s.expiredNotice).toEqual({ requestId: 'req_a', timeoutS: 300 })
+    s = applyDurableEvent(s, at(8, 'execution.message_accepted', 7000, { text: 'next', turn_id: 'trn_2' }))
+    expect(s.expiredNotice).toBeNull()
+    s = applyDurableEvent(s, requested(9, 'req_b', 8000))
+    s = applyDurableEvent(s, resolved(10, 'req_b', 'expired', { timeout_s: 900 }))
+    expect(s.expiredNotice).toEqual({ requestId: 'req_b', timeoutS: 900 })
+    s = applyDurableEvent(s, requested(11, 'req_c', 9000))
+    expect(s.expiredNotice).toBeNull()
+  })
+
+  it('cancelled, allowed and denied leave no notice', () => {
+    for (const outcome of ['cancelled', 'allowed', 'denied']) {
+      let s = applyDurableEvent(started(), requested(3, 'req_a', 5000))
+      s = applyDurableEvent(s, resolved(4, 'req_a', outcome))
+      expect(s.expiredNotice).toBeNull()
+    }
+  })
+
+  // The recorded sequence: a turn whose Bash asks and is allowed, a second ask that expires, a background subagent's
+  // ask after the result, then a new turn. Interleaved with assistant / user / tool / task / lifecycle kinds.
+  const recorded = (): NexEvent[] => [
+    at(1, 'execution.delegated', 10, { brief: 'go' }),
+    at(2, 'execution.running', 11, { turn_id: 'trn_1' }),
+    at(3, 'assistant', 20, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_req_a', name: 'Bash', input: {} }], stop_reason: null } }),
+    at(4, 'tool_use', 21, { tool_use_id: 'toolu_req_a', parent_tool_use_id: null, name: 'Bash' }),
+    requested(5, 'req_a', 22),
+    at(6, 'user', 30, { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_req_a', content: 'ok' }] } }),
+    at(7, 'tool_result', 31, { tool_use_id: 'toolu_req_a', parent_tool_use_id: null, status: 'ok', duration_ms: 5 }),
+    resolved(8, 'req_a', 'allowed', { principal_id: 'p' }),
+    at(9, 'task_start', 40, { task_id: 'a8fbe6ba3e2e8d1c6', turn_id: 'trn_1', kind: 'subagent', task_type: 'local_agent', tool_use_id: 'toolu_agent', parent_tool_use_id: null, description: 'Probe', backgrounded: true, started_at: 40 }),
+    requested(10, 'req_b', 41),
+    resolved(11, 'req_b', 'expired', { timeout_s: 300 }),
+    at(12, 'result', 50, { type: 'result', subtype: 'success', duration_ms: 40 }),
+    requested(13, 'req_bg', 60, { agent_id: 'a8fbe6ba3e2e8d1c6' }),
+    at(14, 'execution.terminal', 70, { turn_id: 'trn_1', reason: 'final_response', state: 'idle' }),
+  ]
+  const permissionView = (s: ExecutionState) => ({
+    permissions: s.permissions, expiredNotice: s.expiredNotice, messages: s.messages, lastSeq: s.lastSeq,
+    tools: s.tools, tasks: s.tasks, turnMeta: s.turnMeta, pending: selectPendingPermission(s)?.requestId,
+  })
+
+  it('replaying the recorded sequence as history pages yields the same state as receiving it live, one by one', () => {
+    const events = recorded()
+    const live = events.reduce(applyDurableEvent, defaultExecutionState())
+    let paged = defaultExecutionState()
+    for (const page of [events.slice(0, 4), events.slice(4, 9), events.slice(9)]) paged = page.reduce(applyDurableEvent, paged)
+    expect(permissionView(paged)).toEqual(permissionView(live))
+    expect(live.permissions.req_a.status).toBe('allowed')
+    expect(live.permissions.req_b).toMatchObject({ status: 'expired', timeoutS: 300 })
+    expect(selectPendingPermission(live)?.requestId).toBe('req_bg')
+  })
+
+  it('the global lastSeq guard is untouched: a history/live overlap re-delivering a mixed batch loses nothing and duplicates nothing', () => {
+    const events = recorded()
+    const once = events.reduce(applyDurableEvent, defaultExecutionState())
+    // History applied up to seq 10, then the live stream re-delivers from seq 6 (the overlap) to the end.
+    let overlapped = events.slice(0, 10).reduce(applyDurableEvent, defaultExecutionState())
+    overlapped = events.slice(5).reduce(applyDurableEvent, overlapped)
+    expect(permissionView(overlapped)).toEqual(permissionView(once))
+    expect(overlapped.messages.filter((m) => (m as { type?: string }).type === 'user')).toHaveLength(2) // brief + tool_result
+    // Still one guard for all: an event at or below lastSeq is dropped whatever its kind.
+    expect(applyDurableEvent(once, resolved(13, 'req_bg', 'allowed'))).toBe(once)
+    expect(applyDurableEvent(once, at(14, 'assistant', 1, { type: 'assistant' }))).toBe(once)
   })
 })

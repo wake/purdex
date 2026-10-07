@@ -185,6 +185,45 @@ export interface PermissionAnswerResult {
   outcome: 'allowed' | 'denied'
 }
 
+/** `permission.resolved`'s `outcome` — a closed set (capability-matrix §3). */
+export type PermissionOutcome = 'allowed' | 'denied' | 'cancelled' | 'expired'
+
+/**
+ * `permission.requested` payload (capability-matrix §3, Nexen v0.19.0). `?` = present only when it has a value.
+ * `input` is the CLI's own object, unbounded. `agent_id` set = a subagent asks; it equals that subagent's
+ * `task_started.task_id`. Nexen emits no time here: the event's `created_at` is when it was asked.
+ */
+export interface PermissionRequestedPayload {
+  request_id: string
+  turn_id: string
+  tool_use_id?: string
+  agent_id?: string
+  tool_name: string
+  display_name?: string
+  description?: string
+  decision_reason?: string
+  decision_reason_type?: string
+  blocked_path?: string
+  input: Record<string, unknown>
+}
+
+/**
+ * `permission.resolved` payload — exactly one per request, correlated by `request_id` (its seq may follow the tool's
+ * `tool_result`). By outcome: `allowed` → `principal_id`; `denied` → `principal_id`, `message`; `cancelled` →
+ * `reason` (+ `interrupt_source` for `interrupt`); `expired` → `timeout_s`, `message`.
+ */
+export interface PermissionResolvedPayload {
+  request_id: string
+  turn_id: string
+  tool_use_id?: string
+  outcome: PermissionOutcome
+  principal_id?: string
+  message?: string
+  reason?: 'interrupt' | 'cli_cancelled' | 'turn_ended' | 'daemon_restart' | string
+  interrupt_source?: string
+  timeout_s?: number
+}
+
 /**
  * `capabilities.send.attachments.image` (nexen contract §0/§1.9). The whole
  * object being absent = this daemon does not accept images; presence plus

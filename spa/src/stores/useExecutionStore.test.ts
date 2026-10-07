@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useExecutionStore, executionKey, splitExecutionKey } from './useExecutionStore'
 import type { NexEvent } from '../lib/nex/types'
 import { defaultPreludeState } from '../lib/nex/prelude'
+import { selectPendingPermission } from '../lib/nex/permissions'
 
 const ev = (seq: number, kind: string, payload: Record<string, unknown> = {}): NexEvent =>
   ({ seq, execution_id: 'exc_1', kind, payload, created_at: 0 })
@@ -32,6 +33,31 @@ describe('useExecutionStore', () => {
     expect(st.messages).toHaveLength(0)
     // Task events never move lastSeq (the SSE Last-Event-ID high-water mark).
     expect(st.lastSeq).toBe(0)
+  })
+
+  // Permission channel plan Task 8: the store reduces permission events like any other durable kind.
+  it('applyEvents folds permission events into `permissions` (not messages) and marks the summary stale for a refetch', () => {
+    const s = useExecutionStore.getState()
+    s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'running' } as never)
+    s.applyEvents('h', 'exc_1', [
+      ev(1, 'assistant', { type: 'assistant' }),
+      ev(2, 'permission.requested', { request_id: 'req_1', turn_id: 't', tool_name: 'Bash', input: { command: 'ls' } }),
+      ev(3, 'permission.requested', { request_id: 'req_2', turn_id: 't', tool_name: 'Write', input: {} }),
+      ev(4, 'permission.resolved', { request_id: 'req_1', turn_id: 't', outcome: 'allowed', principal_id: 'p' }),
+    ])
+    let st = useExecutionStore.getState().executions['h:exc_1']
+    expect(st.messages).toHaveLength(1)
+    expect(st.summaryStale).toBe(true)
+    expect(st.permissions.req_1.status).toBe('allowed')
+    expect(selectPendingPermission(st)?.requestId).toBe('req_2')
+    // The refetch (pending_permission) lands and clears the stale flag.
+    s.setSummary('h', 'exc_1', { id: 'exc_1', state: 'running', pending_permission: { request_id: 'req_2', tool_name: 'Write', since: 1 } } as never, 4)
+    st = useExecutionStore.getState().executions['h:exc_1']
+    expect(st.summaryStale).toBe(false)
+    expect(st.summary?.pending_permission?.request_id).toBe('req_2')
+    // A replayed batch (history/live overlap) changes nothing.
+    s.applyEvents('h', 'exc_1', [ev(3, 'permission.requested', { request_id: 'req_2', turn_id: 't', tool_name: 'Write', input: {} }), ev(4, 'permission.resolved', { request_id: 'req_1', turn_id: 't', outcome: 'allowed' })])
+    expect(useExecutionStore.getState().executions['h:exc_1']).toBe(st)
   })
 
   it('applyEvents with only already-seen seqs does not create a new object', () => {
