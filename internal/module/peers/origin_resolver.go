@@ -72,11 +72,17 @@ func (r *OriginResolver) ResolveOriginBySession(sessionID string) (team.Origin, 
 // the registry name; the address is the conversation's virtual name, from
 // the same namer and store the listing reads, else its ref — so a lead or
 // team notice built from it names the conversation as `pdx peers` does.
+//
+// The team module's callers carry no ctx (the interface predates naming),
+// so the naming is bounded here by namerTimeout: a name store that does not
+// answer costs the origin its virtual name (the ref form), never the caller.
 func (r *OriginResolver) originOf(e ipeers.Entry) team.Origin {
 	ref := ipeers.RefID(e.SessionID)
 	alias := r.m.configSnapshot().alias
 	addr := alias + "/" + ref
-	if vn := r.m.virtualNamesOf(context.Background(), e)[e.SessionID]; ipeers.RoutableName(vn) {
+	ctx, cancel := context.WithTimeout(context.Background(), namerTimeout)
+	defer cancel()
+	if vn := r.m.virtualNamesOf(ctx, e)[e.SessionID]; ipeers.RoutableName(vn) {
 		addr = alias + "/" + vn
 	}
 	return team.Origin{

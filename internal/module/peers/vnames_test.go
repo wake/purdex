@@ -526,3 +526,22 @@ func TestVirtualAddress_SelfVerbsNamerIsBoundedAndOutsideTitleMu(t *testing.T) {
 		t.Fatalf("whoami not bounded by namerTimeout (%v)", namerTimeout)
 	}
 }
+
+// The origin resolver (team and lead notices) names under namerTimeout: a
+// hung name store gives the caller the ref-form address within the bound.
+func TestVirtualAddress_OriginResolverNamerIsBounded(t *testing.T) {
+	f := newTitleFixture(t)
+	f.m.WithPeerNames(newBlockingNames(f.m), nil)
+	r := &OriginResolver{m: f.m}
+	want := "a/" + ipeers.RefID("sid-1")
+	within(t, namerTimeout+3*time.Second, "ResolveOrigin", func() {
+		if o, ok, err := r.ResolveOrigin(f.inbox(10)); !ok || err != nil || o.Address != want {
+			t.Errorf("ResolveOrigin = %+v ok=%v err=%v, want address %s", o, ok, err, want)
+		}
+	})
+	within(t, namerTimeout+3*time.Second, "ResolveOriginBySession", func() {
+		if o, ok, err := r.ResolveOriginBySession("sid-1"); !ok || err != nil || o.Address != want {
+			t.Errorf("ResolveOriginBySession = %+v ok=%v err=%v, want address %s", o, ok, err, want)
+		}
+	})
+}
