@@ -150,6 +150,21 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: begin: %w", id, err)
 	}
 	defer tx.Rollback()
+	op, res, err := reportRelayIn(tx, id, r)
+	if err != nil || res != ReportApplied {
+		return op, res, err
+	}
+	if err := tx.Commit(); err != nil {
+		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: commit: %w", id, err)
+	}
+	return op, res, nil
+}
+
+// reportRelayIn is ReportRelay's statements on the caller's transaction
+// (ReportRelay's own, or CreateSelfRelayApproved's), with ReportRelay's
+// answers; the caller commits only a ReportApplied and rolls back on an
+// error.
+func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportResult, error) {
 	// The first statement is a write, so SQLite takes the write lock at
 	// once (same reasoning as peer_label.go Release): two concurrent
 	// reports cannot both read the same state and both pass the CAS.
@@ -197,9 +212,6 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 		if err := moveTeamRoles(tx, cur.SessionID, r); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: %w", id, err)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: commit: %w", id, err)
 	}
 	return next, ReportApplied, nil
 }
