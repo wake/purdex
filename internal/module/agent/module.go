@@ -714,6 +714,19 @@ func (m *Module) projectionForSessionWith(sessionName string, rc *replayProjecti
 	}), nil
 }
 
+// paneSessionName is the name half of resolvePaneSession: the tmux session
+// name owning paneID, or "" when tmux is unavailable or the lookup fails.
+func (m *Module) paneSessionName(paneID string) string {
+	if m.tmux == nil {
+		return ""
+	}
+	name, err := m.tmux.PaneSessionName(paneID)
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
 func (m *Module) resolvePaneSession(paneID string) (string, string) {
 	if m.tmux == nil {
 		return "", ""
