@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Sliders, ArrowSquareOut, ArrowSquareIn } from '@phosphor-icons/react'
 import { useI18nStore } from '../../../stores/useI18nStore'
+import { TITLE_BAR_HEIGHT } from '../../../components/FloatingPanel'
+
+const PADDING = 4
 
 interface Props {
   position: { x: number; y: number }
@@ -19,6 +22,39 @@ export function WorkspaceContextMenu({
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const [windowList, setWindowList] = useState<ElectronWindowInfo[] | null>(null)
+  const ref = useRef<HTMLDivElement>(null)
+
+  // Viewport boundary correction, as in TabContextMenu — directly adjust DOM
+  // before paint (no state needed). Also re-run when the window list arrives:
+  // the "Loading…" row turning into one row per window changes the height.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    // Measure without the previous placement's cap, which would otherwise be
+    // read back as the menu's height; taking it off drops the scroll offset,
+    // so that is put back below.
+    const scrollTop = el.scrollTop
+    el.style.maxHeight = ''
+    el.style.overflowY = ''
+    const rect = el.getBoundingClientRect()
+    let { x, y } = position
+    if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - PADDING
+    if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - PADDING
+    if (x < 0) x = PADDING
+    // Never inside the title bar's OS drag region (see `FloatingPanel`): a tall
+    // menu moved up to fit would put its first items where a click drags the window.
+    if (y < TITLE_BAR_HEIGHT) y = TITLE_BAR_HEIGHT
+    // Now running off the bottom edge (taller than the window below the title
+    // bar — many windows to move to): cap it and scroll. The same overflow test
+    // as above, so only a menu that would otherwise be cut off gets a cap.
+    if (y + rect.height > window.innerHeight) {
+      el.style.maxHeight = `${Math.max(0, window.innerHeight - y - PADDING)}px`
+      el.style.overflowY = 'auto'
+      el.scrollTop = scrollTop
+    }
+    el.style.left = `${x}px`
+    el.style.top = `${y}px`
+  }, [position, windowList])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -44,10 +80,20 @@ export function WorkspaceContextMenu({
 
   return (
     <>
-      <div data-testid="context-menu-backdrop" className="fixed inset-0 z-40" onMouseDown={onClose} />
       <div
+        data-testid="context-menu-backdrop"
+        className="fixed inset-0 z-40"
+        // The backdrop also covers the Electron title bar, a window drag region that would otherwise swallow clicks
+        // there — and a click there must close the menu like a click anywhere else outside it (as ConfirmDialog's).
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        onMouseDown={onClose}
+      />
+      <div
+        ref={ref}
+        data-testid="workspace-context-menu"
         className="fixed z-50 min-w-44 bg-surface-secondary border border-border-default rounded-lg shadow-xl py-1"
-        style={{ left: position.x, top: position.y }}
+        // no-drag: wherever it lands, the title bar's drag region must not take its clicks.
+        style={{ left: position.x, top: position.y, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         {/* Settings */}
         <button
