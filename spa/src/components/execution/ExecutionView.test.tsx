@@ -2499,3 +2499,59 @@ describe('ExecutionView — zero-turn idle execution (start_idle handoff)', () =
     expect(screen.queryByTestId('execution-loading')).toBeNull()
   })
 })
+
+// Thinking that belongs to a task / subagent never shows as main-transcript dots.
+describe('ExecutionView — task-owned thinking is not a main bubble', () => {
+  const runningTask = {
+    task_id: 'a', turn_id: 't1', kind: 'subagent' as const, task_type: '', tool_use_id: 'tu_a', parent_tool_use_id: null,
+    description: '', backgrounded: true, status: 'running' as const, provider_status: null, closed_by: null,
+    started_at: Date.now(), ended_at: null, startSeq: 1,
+  }
+  afterEach(() => { vi.useRealTimers() })
+
+  it('a flapping turnLive with a running subagent never renders the dots', () => {
+    vi.useFakeTimers()
+    patchExec({ tasks: { a: runningTask } })
+    render(<ExecutionView {...base} isActive />)
+    for (let i = 0; i < 4; i++) {
+      act(() => { patchExec({ turnLive: true }) })
+      act(() => { vi.advanceTimersByTime(800) })
+      expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+      act(() => { patchExec({ turnLive: false }) })
+      act(() => { vi.advanceTimersByTime(800) })
+      expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    }
+  })
+
+  it('a running subagent with a long-held turnLive still shows no main dots (suppression, not just hysteresis)', () => {
+    vi.useFakeTimers()
+    patchExec({ tasks: { a: runningTask }, turnLive: true })
+    render(<ExecutionView {...base} isActive />)
+    act(() => { vi.advanceTimersByTime(10_000) })
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+  })
+
+  it('real main-agent silence still shows the dots (after the hold-off when tasks exist)', () => {
+    vi.useFakeTimers()
+    patchExec({ tasks: { a: { ...runningTask, status: 'completed' as const } }, turnLive: true })
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(1_600) })
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+    // a brief gap does not hide them…
+    act(() => { patchExec({ turnLive: false }) })
+    act(() => { vi.advanceTimersByTime(500) })
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+    // …a held one does
+    act(() => { vi.advanceTimersByTime(600) })
+    expect(screen.queryByTestId('thinking-indicator')).not.toBeInTheDocument()
+  })
+
+  it('our own pending send still shows dots even while a task runs', () => {
+    vi.useFakeTimers()
+    patchExec({ tasks: { a: runningTask }, pendingSend: true, pendingLocal: { text: 'hi', delivery: 'delivered' } as Exec['pendingLocal'] })
+    render(<ExecutionView {...base} isActive />)
+    act(() => { vi.advanceTimersByTime(1_600) })
+    expect(screen.getByTestId('thinking-indicator')).toBeInTheDocument()
+  })
+})

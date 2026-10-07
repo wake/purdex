@@ -1881,6 +1881,7 @@
   "room.turn.expand_all": "expand all",
   "room.turn.collapse_all": "collapse all",
   "room.thinking": "Thought · {{words}} words",
+  "room.subagent.working": "working",
   "room.subagent.summary": "{{name}} · {{tools}} tools",
   "room.subagent.tokens": "{{tokens}} tokens",
   "room.subagent.tools_one": "{{count}} tool",

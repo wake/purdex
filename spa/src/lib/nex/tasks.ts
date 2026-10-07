@@ -198,3 +198,13 @@ export function runningTasks(table: TaskTable): WorkerTask[] {
     .filter((t) => t.status === 'running')
     .sort((a, b) => (a.started_at ?? Infinity) - (b.started_at ?? Infinity) || a.startSeq - b.startSeq)
 }
+
+/**
+ * Whether any task / subagent is running. Its thinking belongs inside its own
+ * row (SubagentBlock / dock), not the main transcript dots: subagent frames
+ * carry parent_tool_use_id so the reducer already keeps them off main
+ * turnLive / partial, but a background task notification starts main turns.
+ */
+export function anyRunningTask(table: TaskTable): boolean {
+  return Object.values(table).some((row) => row.status === 'running')
+}

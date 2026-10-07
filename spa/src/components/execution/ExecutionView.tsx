@@ -58,7 +58,8 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
 import { defaultExecutionState } from '../../lib/nex/event-reducer'
 import { costSummary } from '../../lib/nex/cost-summary'
-import { anyRunningSubagent, runningTasks, subagentTasksByToolUse } from '../../lib/nex/tasks'
+import { useThinkingGate } from './useThinkingGate'
+import { anyRunningSubagent, anyRunningTask, runningTasks, subagentTasksByToolUse } from '../../lib/nex/tasks'
 import { indexOperations } from '../../lib/nex/operations'
 import { toolUseUnit } from '../../lib/nex/transcript-search'
 import { partialHasChatContent, partialHasVisibleContent } from '../../lib/nex/partial'
@@ -294,6 +295,18 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   const subagentRunning = useMemo(() => anyRunningSubagent(st.tasks), [st.tasks])
   const subagentTasks = useMemo(() => subagentTasksByToolUse(st.tasks), [st.tasks])
   const now = useElapsedTicker(anyRunning || subagentRunning)
+  // Thinking-dots rule: see the spec §4.4 R3 comment further down.
+  const chat = mode === 'chat'
+  const partialVisible = chat ? partialHasChatContent(st.partial) : partialHasVisibleContent(st.partial)
+  // Task-owned activity (a running subagent / background task, with no send of
+  // our own awaiting an answer) belongs inside that task's row, never as main
+  // dots; the gate holds the dots back ~1.5 s / keeps them ~1 s so a task
+  // notification's short turns cannot flap them.
+  const ownSend = st.pendingSend && st.pendingLocal?.delivery !== 'queued'
+  const taskRunning = useMemo(() => anyRunningTask(st.tasks), [st.tasks])
+  const hasTasks = Object.keys(st.tasks).length > 0
+  const rawThinking = (st.turnLive || ownSend) && !partialVisible && !anyRunning && !(taskRunning && !ownSend)
+  const showThinking = useThinkingGate(rawThinking, hasTasks)
   // Spec §3.2: one fold memory per pane. It lives here, above the view
   // switch, because room ⇄ chat remounts the transcript (F2).
   const foldStore = useFoldMemory()
@@ -565,10 +578,6 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // shows as the turn's "Using N tools…" line (R2-B). A running tool switches
   // them off in both views: the room's spinner, chat's tools line (F1,
   // revisited in R2-B — one signal per state, as in the room).
-  const chat = mode === 'chat'
-  const partialVisible = chat ? partialHasChatContent(st.partial) : partialHasVisibleContent(st.partial)
-  const showThinking = (st.turnLive || (st.pendingSend && st.pendingLocal?.delivery !== 'queued'))
-    && !partialVisible && !anyRunning
   const queuedTag = st.pendingLocal?.delivery === 'queued'
     && <span className="text-[10px] uppercase font-normal text-text-muted">{t('execution.queued')}</span>
   // The optimistic line's images: the local previews the execution store owns (phase E).
