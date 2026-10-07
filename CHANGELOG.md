@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.587] - 2026-10-08
+
+> 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。
+
+### Fixed：有 worker 在輸出時，其他 worker 的狀態不再一直延後更新（#1866，#1870）
+
+- 每台主機的 worker 清單靠一條站台事件流觸發重抓。這條流以前連 token 串流、原始對話內容都會送，每一筆都把 0.5 秒的重抓計時重新歸零；只要有一個 worker 在輸出，同一台主機上其他 worker 的狀態（等待核准、跑完、出錯）就一直等不到更新。
+- 現在只訂閱會改到清單內容的事件（狀態、權限請求、工具與子任務進度、費用、封存、標題等），token 和原始內容不再觸發重抓。第一次連線也不再把所有歷史對話內容整段重播。
+- 這是 #1866 的第一步；之後會改由 daemon 直接推送有變動的那一列，不必整份重抓。
+
 ## [1.0.0-alpha.586] - 2026-10-08
 
 > 動 daemon 與 `pdx` 指令，**需要部署新 binary 並重啟**（不需要重跑 `pdx setup`，mod 沒有改動）。daemon 的 team.db 新增 `teams`、`team_members` 兩張表（`CREATE TABLE IF NOT EXISTS`，不改既有表；舊版 binary 會忽略它們）。使用者可見的變化：核准 lead 申請後真的建立 team；同一個 lead 不能再開第二個 team；team 的 member 不能自我接力。還不能 spawn member（P4-5 起）。
