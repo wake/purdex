@@ -30,6 +30,12 @@
 // state) and failing open; and /relay, on its daemon call (the person waits
 // for its output; 8 s bound).
 //
+// Each write / fix / seed prompt is composed at use (U21, spec §8.8): the
+// mod's own fixed head and tail (prompts.js) around the body that `pdx relay
+// prompts` answers right before the prompt goes out, from the step's timer
+// (8 s bound); a call that fails, times out or answers junk gives the
+// built-in body, and the relay goes on.
+//
 // This file is the plugin's one hooks module (hooks/hooks.json names a single
 // path); it also registers ask.js, the AskUserQuestion 分流 (P8a-2), and
 // imports prompts.js, the copy of the daemon's relay prompts generated from
@@ -47,6 +53,8 @@ const MAX_FIX_ROUNDS = 2
 const WAIT_TIMEOUT_MS = 590_000 // $.process.run caps at 10 min (M24); pdx relay wait bounds itself to 9
 const CALL_TIMEOUT_MS = 35_000 // one daemonclient grace (30 s) plus slack
 const SELF_TIMEOUT_MS = 8_000 // /relay waits in its hook for `pdx relay self`: the person waits for the answer
+const PROMPTS_TIMEOUT_MS = 8_000 // `pdx relay prompts` before each write / fix / seed prompt (spec §8.8); then the built-in body
+const MAX_BODY_BYTES = 16_384 // a body's limit in UTF-8 bytes, the daemon's (internal/team RelayPromptMaxBytes)
 const HOLD_SLEEP = ['/bin/sleep', '5'] // the prompt hold's own `$` call, again while it waits: local, it asks the daemon nothing
 const HOLD_SLEEP_TIMEOUT_MS = 10_000 // its $.process.run bound
 const HOLD_MAX_MS = 660_000 // a held prompt waits for the request's answer at most 11 min: its 10 min deadline and slack
@@ -301,6 +309,38 @@ function compose(kind, body, p, extra = {}) {
   return fill(head, all) + fill(body.replace(/\n+$/, ''), pub) + (tail === '' ? '' : '\n' + fill(tail, all))
 }
 
+// utf8Bytes is text's length in UTF-8, as the daemon counts a body.
+function utf8Bytes(text) {
+  let n = 0
+  for (const ch of text) {
+    const c = ch.codePointAt(0)
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4
+  }
+  return n
+}
+
+// bodyFor asks the daemon for the body of the `kind` prompt about to go out
+// (U21 (b), spec §8.8): read afresh for every prompt, so an edit applies from
+// the next one with no `pdx setup`. Only an answer at exit 0 whose `kind` is
+// a string with text, of at most MAX_BODY_BYTES, is used. Anything else gives
+// the built-in body and one log line — 20 (unreachable, or a run that
+// rejected: PROMPTS_TIMEOUT_MS ran out), 21 (a daemon from before the route),
+// 1, junk, a missing field, a wrong type: a relay never fails because of its
+// prompts. Called from the step's timer, never inside a hook.
+async function bodyFor($, kind) {
+  const r = await pdx($, ['relay', 'prompts'], PROMPTS_TIMEOUT_MS)
+  const answer = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
+  const body = answer && typeof answer === 'object' ? answer[kind] : undefined
+  let why
+  if (r.exitCode !== 0) why = 'exit ' + r.exitCode
+  else if (typeof body !== 'string') why = 'no string ' + kind + ' in the answer'
+  else if (body.trim() === '') why = kind + ' is empty'
+  else if (utf8Bytes(body) > MAX_BODY_BYTES) why = kind + ' is over ' + MAX_BODY_BYTES + ' bytes'
+  else return body
+  log($, 'relay prompts: the built-in ' + kind + ' body (' + why + ')')
+  return DEFAULT_BODIES[kind]
+}
+
 function usageLine(u) {
   return (u.tokens ?? '?') + ' tokens / ' + u.window + ' (' + (u.percent ?? '?') + '%)'
 }
@@ -472,11 +512,13 @@ function settle($, p, outcome) {
   if (outcome !== 'approved') return toIdle()
   s.state = 'approved'
   later($, STEP_MS, async () => {
-    p.who = await whoami($)
-    if (s.pending !== p) return
+    // both bounded (10 s, 8 s) and asked together: the step waits no longer than whoami did
+    const [who, body] = await Promise.all([whoami($), bodyFor($, 'write')])
+    p.who = who
+    if (s.pending !== p || s.state !== 'approved') return // the await may span the user's /clear
     arm(p, 'approved')
     try {
-      await submit($, compose('write', DEFAULT_BODIES.write, p))
+      await submit($, compose('write', body, p))
     } catch (err) {
       giveUp($, p, 'approved', 'failed', 'handoff_incomplete', 'write prompt: ' + String(err))
       return
@@ -534,9 +576,11 @@ async function onWriteTurnDone($) {
     s.fixRounds += 1
     later($, STEP_MS, async () => {
       if (s.pending !== p) return
+      const body = await bodyFor($, 'fix') // every round asks again (open question 9)
+      if (s.pending !== p || s.state !== 'approved') return
       arm(p, 'approved')
       try {
-        await submit($, compose('fix', DEFAULT_BODIES.fix, p, { missing: c.missing.join('、') || '(內容過短)' }))
+        await submit($, compose('fix', body, p, { missing: c.missing.join('、') || '(內容過短)' }))
       } catch (err) {
         giveUp($, p, 'approved', 'failed', 'handoff_incomplete', 'fix prompt: ' + String(err))
       }
@@ -624,9 +668,13 @@ export function register(on) {
       helloLater($)
       later($, STEP_MS, async () => {
         if (s.pending !== p) return
+        // The new conversation is idle while the body is asked for (≤ 8 s;
+        // M29 with the daemon up): a prompt typed meanwhile runs first.
+        const body = await bodyFor($, 'seed')
+        if (s.pending !== p || s.state !== 'seeding') return // the user's own /clear meanwhile
         arm(p, 'seeding')
         try {
-          await submit($, compose('seed', DEFAULT_BODIES.seed, p))
+          await submit($, compose('seed', body, p))
         } catch (err) {
           if (!giveUp($, p, 'seeding', 'failed', 'handoff_incomplete', 'seed prompt: ' + String(err))) return
           // the /clear did happen: this is a new conversation, asked afresh
