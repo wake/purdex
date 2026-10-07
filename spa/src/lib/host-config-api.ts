@@ -13,6 +13,8 @@ export interface HostProject { id: string; name: string; slug: string; path: str
 export interface HostCommand { id: string; name: string; command: string; icon: CommandIcon }
 export type ResumeTemplateOverrides = Record<string, { exact: string; fallback: string }>
 export interface QuickReply { id: string; text: string }
+/** Host config `relay` (lead-team-relay spec §8.7 (a)): the two self-relay switches; a member has none (U13). */
+export interface RelaySwitches { self_solo: boolean; self_lead: boolean }
 
 export interface Versioned<T> { items: T; revision: number }
 
@@ -22,6 +24,8 @@ export interface HostConfigPayload {
   resumeTemplates: Versioned<ResumeTemplateOverrides>
   /** Absent on a daemon that predates the collection (R3-A). */
   quickReplies?: Versioned<QuickReply[]>
+  /** Absent on a daemon that predates P5a. */
+  relay?: Versioned<RelaySwitches>
 }
 
 export type PathCheckStatus = 'dir' | 'not_dir' | 'missing' | 'error' | 'unverifiable'
@@ -32,6 +36,7 @@ export interface HostConfigCollectionItems {
   commands: HostCommand[]
   'resume-templates': ResumeTemplateOverrides
   'quick-replies': QuickReply[]
+  relay: RelaySwitches
 }
 export type HostConfigCollection = keyof HostConfigCollectionItems
 
