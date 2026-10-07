@@ -134,6 +134,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
 
   const handleIncludeArchived = (checked: boolean) => {
     setIncludeArchived(checked)
+    setConfirmTerminateId(null)
     if (!checked) {
       archivedTokenRef.current += 1
       setArchived(null)

@@ -125,6 +125,16 @@ describe('NexExecutionsTable', () => {
     expect(within(lastRow()).queryByRole('button', { name: /confirm/i })).toBeNull()
   })
 
+  it('toggling Show archived clears an open terminate confirmation (#1593 R2)', async () => {
+    render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByRole('button', { name: /terminate/i }))
+    expect(screen.getByRole('button', { name: /confirm terminate/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText(/show archived/i))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.queryByRole('button', { name: /confirm terminate/i })).toBeNull()
+  })
+
   it('a host switch starts from 100 rows again, not the grown count (#1593)', async () => {
     const many = Array.from({ length: 250 }, (_, i) => row({ id: `exc_${String(i).padStart(16, '0')}` }))
     vi.mocked(api.listExecutions).mockResolvedValue({ items: many, next_cursor: '' })
