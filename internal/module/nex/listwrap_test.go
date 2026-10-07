@@ -463,6 +463,28 @@ func TestListWrapper_MalformedQueryReachesTheEngineUntouched(t *testing.T) {
 	assert.Equal(t, q, inner.requests()[0].rawQuery)
 }
 
+// A malformed query is not an opt-in, even when its "pdx=retry" pair parsed
+// (codex PR1a critic): ParseQuery fails, so the busy path must still hand the
+// query to the engine untouched and relay Nexen's own 400, never answer 503
+// nex_busy for a request that can only ever be a 400.
+func TestListWrapper_MalformedQueryIsNeverAnOptIn(t *testing.T) {
+	inner := &recordingHandler{respond: func(w http.ResponseWriter, _ *http.Request) {
+		writeNexError(w, http.StatusBadRequest, "malformed query string", "malformed_parameter")
+	}}
+	m, mux := newListEnv(t, inner)
+	m.listWait = 30 * time.Millisecond
+	require.NoError(t, m.reads().acquire(context.Background(), 0))
+	const q = "pdx=retry&label.a=%zz&limit=100"
+
+	w := serveBehindHeldSlot(t, mux, "/api/nex/v1/executions?"+q)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	_, code := nexErrorOf(t, w)
+	assert.Equal(t, "malformed_parameter", code)
+	reqs := inner.requests()
+	require.Len(t, reqs, 1, "the engine must see the malformed query")
+	assert.Equal(t, q, reqs[0].rawQuery)
+}
+
 // The default wait is the spec's 2 s.
 func TestListWrapper_DefaultWaitIsTwoSeconds(t *testing.T) {
 	assert.Equal(t, 2*time.Second, (&Module{}).listSlotWait())

@@ -187,11 +187,19 @@ func writeUnstampedList(w http.ResponseWriter, res *bufferedResponse, panicked b
 // or rebuilding it from the pairs that did parse, could turn it into a
 // query that parses with the broken filter quietly gone — the wrong-rows
 // answer Nexen's 400 exists to prevent. Nexen ignores a parameter it does
-// not know, so the leftover pdx is harmless there.
+// not know, so the leftover pdx is harmless there. Such a query is also
+// never an opt-in, whatever its pdx pair says: it can only be a 400.
 func retryOptIn(r *http.Request) (*http.Request, bool) {
-	q, err := url.ParseQuery(r.URL.RawQuery) // on error, q still holds the pairs that parsed
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		// On error q still holds the pairs that did parse, a "pdx=retry"
+		// among them — but this request can only ever be Nexen's 400, so it
+		// is never an opt-in: a busy slot must not turn it into a retryable
+		// 503 (codex PR1a critic). The query goes to the engine untouched.
+		return r, false
+	}
 	retries := q.Get(listRetryParam) == listRetryValue
-	if err != nil || !q.Has(listRetryParam) {
+	if !q.Has(listRetryParam) {
 		return r, retries
 	}
 	pairs := strings.Split(r.URL.RawQuery, "&")
