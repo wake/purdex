@@ -28,6 +28,60 @@ func TestNexConfigDefaultsOnAbsentSection(t *testing.T) {
 	}
 }
 
+// TestNexPeerDefaultsEnabled pins U4 (peer mailbox spec §1): the peer
+// mailbox is ON by default — Nexen's own default is off, so pdx's default
+// must say so explicitly. The numeric/template fields stay zero, meaning
+// "Nexen's default".
+func TestNexPeerDefaultsEnabled(t *testing.T) {
+	want := config.NexPeerConfig{Enabled: true, MaxPending: 0, WakeTemplate: "", ReplyLine: ""}
+	if got := config.DefaultNexConfig().Peer; got != want {
+		t.Errorf("DefaultNexConfig().Peer = %+v, want %+v", got, want)
+	}
+}
+
+// TestNexPeerLoadDefaultsAndExplicitOff: a config.toml without [nex.peer] —
+// with or without a [nex] section — keeps the mailbox on; an explicit
+// `enabled = false` under [nex.peer] is honoured.
+func TestNexPeerLoadDefaultsAndExplicitOff(t *testing.T) {
+	cases := []struct {
+		name string
+		toml string
+		want bool
+	}{
+		{"no nex section", "bind = \"127.0.0.1\"\n", true},
+		{"nex section without peer", "[nex]\nenabled = false\n", true},
+		{"peer section without enabled", "[nex.peer]\nmax_pending = 4\n", true},
+		{"explicit off", "[nex.peer]\nenabled = false\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(tc.toml), 0644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Nex.Peer.Enabled != tc.want {
+				t.Errorf("Nex.Peer.Enabled = %v, want %v", cfg.Nex.Peer.Enabled, tc.want)
+			}
+		})
+	}
+}
+
+// TestNexPeerJSONKeys pins the wire names the SPA reads and PUTs back.
+func TestNexPeerJSONKeys(t *testing.T) {
+	data, err := json.Marshal(config.DefaultNexConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"peer":{"enabled":true,"max_pending":0,"wake_template":"","reply_line":""}`
+	if !strings.Contains(string(data), want) {
+		t.Errorf("JSON %s does not contain %s", data, want)
+	}
+}
+
 func TestNexConfigDisabledWithNoRootsIsValid(t *testing.T) {
 	n := config.DefaultNexConfig()
 	if n.Enabled {
@@ -276,6 +330,12 @@ func TestNexConfigTomlRoundTrip(t *testing.T) {
 		PathPrepend:  []string{"/opt/homebrew/bin"},
 		Sandbox:      config.NexSandboxConfig{MaxProfile: "handoff", DefaultProfile: "trusted"},
 		Timeouts:     config.NexTimeoutsConfig{LeaseTTL: "5m", Interrupt: "10s", Turn: "30m"},
+		Peer: config.NexPeerConfig{
+			Enabled:      false,
+			MaxPending:   7,
+			WakeTemplate: "peer {{.FromName}} says:\n{{.Text}}\n{{.ReplyLine}}",
+			ReplyLine:    "reply with pdx msg send {{.ReplyTo}}",
+		},
 	}
 
 	if err := config.WriteFile(path, cfg); err != nil {

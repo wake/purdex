@@ -22,6 +22,21 @@ type NexConfig struct {
 	PathPrepend  []string          `toml:"path_prepend"  json:"path_prepend"`
 	Sandbox      NexSandboxConfig  `toml:"sandbox"       json:"sandbox"`
 	Timeouts     NexTimeoutsConfig `toml:"timeouts"      json:"timeouts"`
+	Peer         NexPeerConfig     `toml:"peer"          json:"peer"`
+}
+
+// NexPeerConfig is the [nex.peer] section: Nexen's peer mailbox (peer
+// mailbox spec §6), mapped onto nexconfig.PeerConfig by buildOptions.
+//
+// Unlike Nexen's own default, pdx turns the mailbox ON by default (U4); the
+// SPA settings page can switch it off. MaxPending 0 and an empty template
+// mean "Nexen's default" (32, and Nexen's built-in wording). The templates
+// are not edited in the UI, but the SPA PUTs them back untouched.
+type NexPeerConfig struct {
+	Enabled      bool   `toml:"enabled"       json:"enabled"`
+	MaxPending   int    `toml:"max_pending"   json:"max_pending"`
+	WakeTemplate string `toml:"wake_template" json:"wake_template"`
+	ReplyLine    string `toml:"reply_line"    json:"reply_line"`
 }
 
 // NexSandboxConfig names the sandbox profile ceiling (MaxProfile) and the
@@ -46,7 +61,8 @@ type NexTimeoutsConfig struct {
 // DefaultNexConfig returns the zero-config-friendly nex defaults: disabled,
 // a conservative PATH prepend list, and the "trusted" sandbox profile for
 // both the ceiling and the default. Timeouts are left empty (Nexen's own
-// defaults apply).
+// defaults apply). The peer mailbox is on (U4) with Nexen's own cap and
+// wording.
 func DefaultNexConfig() NexConfig {
 	return NexConfig{
 		Enabled:     false,
@@ -55,6 +71,7 @@ func DefaultNexConfig() NexConfig {
 			MaxProfile:     "trusted",
 			DefaultProfile: "trusted",
 		},
+		Peer: NexPeerConfig{Enabled: true},
 	}
 }
 
