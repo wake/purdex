@@ -102,6 +102,53 @@ describe('useWorkerUploads', () => {
     expect(result.current.chips).toEqual([])
   })
 
+  describe('hold / restoreHeld / releaseHeld (send buffer)', () => {
+    async function twoDone() {
+      vi.mocked(api.uploadWorkerFile).mockResolvedValueOnce({ path: '/p/a', name: 'a', size: 1 }).mockResolvedValueOnce({ path: '/p/b', name: 'b', size: 1 })
+      const hook = renderHook(() => useWorkerUploads('h', 'exc_1'))
+      act(() => hook.result.current.add([png('a.png'), txt('b.txt')]))
+      await vi.waitFor(() => expect(hook.result.current.chips.every((c) => c.status === 'done')).toBe(true))
+      return hook
+    }
+
+    it('hold hides the chips but keeps them live (previews not revoked)', async () => {
+      const { result } = await twoDone()
+      const keys = result.current.chips.map((c) => c.key)
+      let token = ''
+      act(() => { token = result.current.hold(keys) })
+      expect(result.current.chips).toEqual([])
+      expect(keys.every((k) => result.current.isLive(k))).toBe(true)
+      expect(revokeUrl).not.toHaveBeenCalled()
+      // a clear-all while held spares them
+      act(() => result.current.clear())
+      expect(keys.every((k) => result.current.isLive(k))).toBe(true)
+      expect(token).not.toBe('')
+    })
+
+    it('restoreHeld puts them back in front of newer chips', async () => {
+      const { result } = await twoDone()
+      const first = result.current.chips.map((c) => c.name)
+      let token = ''
+      act(() => { token = result.current.hold(result.current.chips.map((c) => c.key)) })
+      vi.mocked(api.uploadWorkerFile).mockResolvedValueOnce({ path: '/p/c', name: 'c', size: 1 })
+      act(() => result.current.add([txt('c.txt')]))
+      act(() => result.current.restoreHeld(token))
+      expect(result.current.chips.map((c) => c.name)).toEqual([...first, 'c.txt'])
+    })
+
+    it('releaseHeld drops them for good', async () => {
+      const { result } = await twoDone()
+      const keys = result.current.chips.map((c) => c.key)
+      let token = ''
+      act(() => { token = result.current.hold(keys) })
+      act(() => result.current.releaseHeld(token))
+      expect(keys.some((k) => result.current.isLive(k))).toBe(false)
+      expect(revokeUrl).toHaveBeenCalled()
+      act(() => result.current.restoreHeld(token))
+      expect(result.current.chips).toEqual([])
+    })
+  })
+
   describe('native images (phase E)', () => {
     const MiB = 1024 * 1024
     const caps = (over: Record<string, unknown> = {}) => ({
