@@ -103,6 +103,8 @@ type FakeExecutor struct {
 	FailPasteText         bool     // if true, PasteText returns an error
 	FailKillIfInstance    bool     // if true, KillSessionIfInstance returns an error (nothing killed)
 	killIfInstanceCalls   []KillIfInstanceCall
+	tags                  map[string]map[string]string // session name → user option → value
+	FailSetTag            bool                         // NewSessionTaggedContext makes the session, then fails its set-option
 	// ForceNewSessionCwd, when non-empty, is the cwd NewSession records for the
 	// new session instead of the one it was asked for — test-only. It models
 	// the one thing real tmux does that no error surfaces: `new-session -c
@@ -373,6 +375,56 @@ func (f *FakeExecutor) NewSessionContext(ctx context.Context, name, cwd string) 
 		return err
 	}
 	return f.NewSession(name, cwd)
+}
+
+// NewSessionTaggedContext is NewSessionContext plus the session's user option,
+// answering the new session's id and the fake's instance. With FailSetTag the
+// session is made and the set-option fails, as one invocation whose second
+// command errs: the id is still answered.
+func (f *FakeExecutor) NewSessionTaggedContext(ctx context.Context, name, cwd, option, value string) (string, string, error) {
+	if err := f.NewSessionContext(ctx, name, cwd); err != nil {
+		return "", "", err
+	}
+	f.mu.Lock()
+	id, inst := f.sessions[name].ID, f.instance
+	f.mu.Unlock()
+	if f.FailSetTag {
+		return id, inst, fmt.Errorf("set-option: simulated failure")
+	}
+	f.SetSessionTag(name, option, value)
+	return id, inst, nil
+}
+
+// SetSessionTag sets a session user option, as `set-option -t` would.
+func (f *FakeExecutor) SetSessionTag(name, option, value string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.tags == nil {
+		f.tags = map[string]map[string]string{}
+	}
+	if f.tags[name] == nil {
+		f.tags[name] = map[string]string{}
+	}
+	f.tags[name][option] = value
+}
+
+// PaneIdentity answers for a live session's active pane (SetActivePaneMetadata,
+// else pane %N of session $N) named by its pane id or by "=<name>:", with the
+// current instance, the session's option and the pane's SetPaneCwd directory.
+func (f *FakeExecutor) PaneIdentity(_ context.Context, target, option string) (PaneIdentity, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for name, s := range f.sessions {
+		md, ok := f.activePaneMetadata[name]
+		if !ok {
+			md = TmuxPaneMetadata{SessionID: s.ID, PaneID: "%" + strings.TrimPrefix(s.ID, "$")}
+		}
+		if target == md.PaneID || target == "="+name+":" {
+			return PaneIdentity{Instance: f.instance, SessionID: md.SessionID, PaneID: md.PaneID,
+				Tag: f.tags[name][option], Cwd: f.paneCwds[md.PaneID]}, nil
+		}
+	}
+	return PaneIdentity{}, fmt.Errorf("fake: can't find pane %s", target)
 }
 
 func (f *FakeExecutor) KillSession(name string) error {

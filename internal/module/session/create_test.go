@@ -55,6 +55,60 @@ func TestCreateSession_ReturnsInfo(t *testing.T) {
 	assert.Equal(t, dir, m.Cwd)
 }
 
+// A tagged create is the same create path whose new-session also sets the
+// tag (lead-team spawn ownership, P4-5 review H3): the session is born
+// carrying it, readable back from its pane in one tmux invocation.
+func TestCreateSessionTagged_TheSessionIsBornWithItsTag(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	mod.tmuxInstanceFn = func(context.Context) string { return "4471:1788740000" }
+	tag := SessionTag{Option: "@pdx_spawn_op", Value: "11111111-2222-4333-8444-555555555555"}
+	info, err := mod.CreateSessionTagged("tm-1111111122", t.TempDir(), tag)
+	require.NoError(t, err)
+	assert.Equal(t, "$0", info.TmuxID)
+	fake.SetActivePaneMetadata("tm-1111111122", tmux.TmuxPaneMetadata{SessionID: "$0", PaneID: "%0"})
+	id, err := fake.PaneIdentity(t.Context(), "%0", tag.Option)
+	require.NoError(t, err)
+	assert.Equal(t, tag.Value, id.Tag)
+	_, err = mod.CreateSessionTagged("tm-1111111122", t.TempDir(), tag)
+	assert.ErrorIs(t, err, ErrSessionExists, "the same checks as an untagged create")
+}
+
+// A tagged create whose new-session made the session but whose set-option
+// failed (one invocation, one error) would leave a session nobody owns or
+// will ever adopt (P4-5 critic): the create kills the session by the id
+// and generation its own new-session printed. The create's error stands.
+// Mutation gate: drop the cleanup → red.
+func TestCreateSessionTagged_AHalfDoneCreateLeavesNoSession(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.SetInstance("4471:1788740000")
+	mod.tmuxInstanceFn = func(context.Context) string { return "4471:1788740000" }
+	fake.FailSetTag = true
+	_, err := mod.CreateSessionTagged("tm-1111111122", t.TempDir(), SessionTag{Option: "@pdx_spawn_op", Value: "11111111-2222-4333-8444-555555555555"})
+	require.Error(t, err)
+	assert.False(t, fake.HasSession("tm-1111111122"), "the untagged half-made session is removed")
+	assert.Equal(t, []tmux.KillIfInstanceCall{{SessionID: "$0", Expected: "4471:1788740000"}}, fake.KillIfInstanceCalls())
+}
+
+// P4-5 re-review: a new-session that made nothing printed no id, so nothing
+// is killed — not the session of that name another process made just
+// after, untagged, on the same server. Mutation gate: clean up by name → red.
+func TestCreateSessionTagged_AFailedCreateKillsNoSessionOfThatName(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.SetInstance("4471:1788740000")
+	mod.tmuxInstanceFn = func(context.Context) string { return "4471:1788740000" }
+	fake.SetCreateHook(func(_ context.Context, op tmux.ReadOp, name string) error {
+		if op != tmux.OpNewSession {
+			return nil
+		}
+		fake.AddSession(name, "/") // another process, between our has-session and our new-session
+		return errors.New("duplicate session: " + name)
+	})
+	_, err := mod.CreateSessionTagged("tm-1111111122", t.TempDir(), SessionTag{Option: "@pdx_spawn_op", Value: "11111111-2222-4333-8444-555555555555"})
+	require.Error(t, err)
+	assert.True(t, fake.HasSession("tm-1111111122"), "the other process's session stays")
+	assert.Empty(t, fake.KillIfInstanceCalls())
+}
+
 func TestCreateSession_ExpandsTilde(t *testing.T) {
 	mod, _, fake := newTestModule(t)
 	home := t.TempDir()
