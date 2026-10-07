@@ -29,6 +29,21 @@ export function readWorkerSummary(hostId: string, executionId: string): Executio
 }
 
 /**
+ * 「等待核准」 (permission channel PC2, spec §5.4): the worker is waiting on a permission request. The summary
+ * decides — the list row or the live summary, no event stream needed (Nexen contract §9.8 §2). `null` is an
+ * answer (nothing pending); an absent field means a daemon older than Nexen v0.19.0, which is never awaiting.
+ * Lifecycle-aware: archived, terminated, rejected and failed workers are never awaiting. The ONE shared definition.
+ */
+export function isAwaitingApproval(
+  summary: Partial<Pick<ExecutionSummary, 'pending_permission' | 'state' | 'archived'>> | null | undefined,
+): boolean {
+  if (summary?.pending_permission == null) return false
+  // An ended worker is never waiting: the summary can keep a stale pending request until the refetch lands.
+  if (summary.archived) return false
+  return summary.state !== 'terminated' && summary.state !== 'rejected' && summary.state !== 'failed'
+}
+
+/**
  * The worker title from a pane's content and its summary (null when nothing
  * has text). `sessionTitle` is read from the summary only when the caller
  * says the host capability (`selectSessionTitleSupported`) is present —

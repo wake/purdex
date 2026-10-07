@@ -23,14 +23,20 @@ import { resolveExecutionHostId } from '../lib/nex/resolve-host'
 import { runningTasks } from '../lib/nex/tasks'
 import { isResultError } from '../lib/nex/cost-summary'
 import { execAgentCode, projectWorkerStatus, providerAgentType, type WorkerProjection, type WorkerStatusInput } from '../lib/nex/worker-agent-status'
+import { isAwaitingApproval } from '../lib/nex/worker-summary'
 import { hasOpenTurn, lastEndedOutcome, type ExecutionState } from '../lib/nex/event-reducer'
 import type { ExecutionSummary } from '../lib/nex/types'
 import type { AssistantMessage, StreamMessage } from '../lib/nex/message-types'
 import type { Tab } from '../types/tab'
 
-/** Names the notification pipeline already understands (notification-content.ts, event-name.ts). */
+/**
+ * Names the notification pipeline already understands (notification-content.ts, event-name.ts). `waiting` is a
+ * worker awaiting approval: it is named for what it is, and `detailOf` marks it `notification_silent` so the
+ * dispatcher never pushes it (permission channel PC2: no push notifications).
+ */
 const RAW_EVENT_NAME: Record<WorkerProjection['status'], string> = {
   running: 'UserPromptSubmit',
+  waiting: 'PermissionRequest',
   idle: 'Stop',
   error: 'StopFailure',
   clear: 'SessionEnd',
@@ -125,6 +131,8 @@ function deriveSource({ hostId, executionId }: WorkerRef): Source | null {
         hasTurn: live.turnStarts.length > 0,
         archived: live.summary.archived,
         runningSubagents: subs.map((t) => ({ task_id: t.task_id, subagent_type: t.subagent_type, started_at: t.started_at })),
+        // The summary decides (refetched on every permission event, Task 8), same as for a list row below.
+        awaitingApproval: isAwaitingApproval(live.summary),
       },
       provider: live.summary.provider,
       live,
@@ -141,6 +149,7 @@ function deriveSource({ hostId, executionId }: WorkerRef): Source | null {
       archived: row.archived,
       // A list row carries only a count (running_tasks), not the refs.
       runningSubagents: [],
+      awaitingApproval: isAwaitingApproval(row),
     },
     provider: row.provider,
     live: null,
@@ -192,7 +201,8 @@ function failureReason(src: Source): string {
  * dedup (`shouldDispatch`) compares it with the last one it saw for the key,
  * so re-projecting the same state after a reload must not look like a new
  * event. Running → the turn's start; idle / error → the turn's end; else the
- * summary's `updated_at`; the clock only as a last resort.
+ * summary's `updated_at`; the clock only as a last resort. Waiting (awaiting
+ * approval) → the pending request's `since` (Unix ms, the daemon's clock).
  *
  * `firstInSession`: this engine has not dispatched the key yet. A list-row
  * source then stamps 0 instead of `updated_at`. The live and list-row sources
@@ -209,6 +219,10 @@ function failureReason(src: Source): string {
  */
 function stateStamp(status: WorkerProjection['status'], src: Source, firstInSession: boolean): number {
   if (!src.live && firstInSession) return 0
+  if (status === 'waiting') {
+    const since = src.summary.pending_permission?.since
+    if (typeof since === 'number' && since > 0) return since
+  }
   const meta = src.live?.turnMeta.at(-1)
   const t = status === 'running' ? meta?.startAt : meta?.endAt
   if (typeof t === 'number' && t > 0) return t
@@ -221,6 +235,10 @@ function detailOf(status: WorkerProjection['status'], src: Source): Record<strin
     return text !== undefined ? { last_assistant_message: text } : {}
   }
   if (status === 'error') return { error: failureReason(src) }
+  // PC2 forbids push notifications for 「等待核准」. The guard lives here, not in the notification module: the
+  // dispatcher's `shouldNotify` drops a `notification_silent` event (the same flag opencode's idle uses). The tab
+  // still marks unread like any `waiting` agent — that is not a push.
+  if (status === 'waiting') return { notification_silent: true }
   return {}
 }
 

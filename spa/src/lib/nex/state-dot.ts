@@ -12,3 +12,11 @@ export const STATE_DOT_CLASSES: Record<string, string> = {
 }
 
 export const stateDotClass = (state: string): string => STATE_DOT_CLASSES[state] ?? 'bg-text-muted'
+
+/**
+ * A worker's dot (rows and the pane header): 「等待核准」 (permission channel PC2, spec §5.4) reuses the warning
+ * token, which queued also uses — the surfaces put the HandPalm icon beside it so the two are never confused.
+ * `awaitingApproval` comes from `isAwaitingApproval(summary)`.
+ */
+export const workerDotClass = (state: string, awaitingApproval: boolean): string =>
+  awaitingApproval ? 'bg-status-warning' : stateDotClass(state)

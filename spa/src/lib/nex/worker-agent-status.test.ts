@@ -68,6 +68,13 @@ describe('projectWorkerStatus', () => {
     { name: 'interrupted turn, no live turn → idle', patch: { hasTurn: true, lastOutcome: 'interrupted', turnLive: false }, expected: 'idle' },
     { name: 'rejected before any turn → error', patch: { state: 'rejected', hasTurn: false }, expected: 'error' },
     { name: 'archived → clear', patch: { archived: true }, expected: 'clear' },
+    // Permission channel PC2: a live worker awaiting approval is `waiting` (the tab light), ahead of rule 3.
+    { name: 'awaiting approval on a running worker → waiting', patch: { state: 'running', turnLive: true, awaitingApproval: true }, expected: 'waiting' },
+    { name: 'awaiting approval after the turn\'s result (background subagent) → waiting', patch: { state: 'running', turnLive: false, awaitingApproval: true }, expected: 'waiting' },
+    { name: 'awaiting approval beats a stale failed outcome → waiting', patch: { state: 'running', lastOutcome: 'failed', awaitingApproval: true }, expected: 'waiting' },
+    { name: 'awaiting approval on an archived row → clear (rule 1 first)', patch: { archived: true, state: 'running', awaitingApproval: true }, expected: 'clear' },
+    { name: 'awaiting approval on a terminated row → clear (rule 1 first)', patch: { state: 'terminated', awaitingApproval: true }, expected: 'clear' },
+    { name: 'awaitingApproval false → running, as before', patch: { state: 'running', turnLive: true, awaitingApproval: false }, expected: 'running' },
   ]
 
   for (const { name, patch, expected } of rows) {

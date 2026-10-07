@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useAgentStore } from '../stores/useAgentStore'
 import type { SubagentRef } from '../stores/useAgentStore'
@@ -346,6 +346,61 @@ describe('useTabDisplay — execution (worker) tab (spec §8.1 / §8.3 / §8.4)'
     expect(result.current.IconComponent).toBe(CC_COLOR_ICON_VARIANTS.bot)
     act(() => { useWorkerSettingsStore.setState({ iconStyle: 'custom', customIcon: '' }) })
     expect(result.current.IconComponent).toBe(ICON_MAP.Robot)
+  })
+
+  // Permission channel PC2 / spec §5.4: the worker tab title gets the 「（等待核准）」 suffix while a request is pending —
+  // UI copy, so read it through the real locales, not the key stub.
+  describe('awaiting approval suffix', () => {
+    const pending = { request_id: 'r1', tool_name: 'Bash', since: 1_700_000_000_000 }
+    afterEach(() => { useI18nStore.getState().setLocale('en'); useI18nStore.setState({ t: (k: string) => k }) })
+
+    it('pending_permission set: the suffix (en, then zh-TW)', () => {
+      useI18nStore.getState().setLocale('en')
+      setLiveSummary({ state: 'running', pending_permission: pending })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Fix the bug - repo (awaiting approval)')
+      act(() => { useI18nStore.getState().setLocale('zh-TW') })
+      expect(result.current.displayTitle).toBe('Fix the bug - repo（等待核准）')
+    })
+
+    it('the suffix goes away when pending_permission turns null', () => {
+      useI18nStore.getState().setLocale('zh-TW')
+      setLiveSummary({ state: 'running', pending_permission: pending })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Fix the bug - repo（等待核准）')
+      act(() => { setLiveSummary({ state: 'running', pending_permission: null }) })
+      expect(result.current.displayTitle).toBe('Fix the bug - repo')
+    })
+
+    it.each([
+      ['terminated', {}], ['rejected', {}], ['failed', {}], ['idle', { archived: true }],
+    ])('pending + %s %j: no suffix', (state, extra) => {
+      useI18nStore.getState().setLocale('zh-TW')
+      setLiveSummary({ state, ...extra, pending_permission: pending })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Fix the bug - repo')
+    })
+
+    it('the field absent (old daemon): no suffix', () => {
+      useI18nStore.getState().setLocale('zh-TW')
+      setLiveSummary({ state: 'running' })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Fix the bug - repo')
+    })
+
+    it('a list row that is awaiting approval carries the suffix too (no pane open)', () => {
+      useI18nStore.getState().setLocale('zh-TW')
+      useExecutionListStore.setState({ byHost: { h1: { ...emptyListCache(), items: [summary({ state: 'running', brief: 'Row brief', pending_permission: pending })] } } })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Row brief - repo（等待核准）')
+    })
+
+    it('with no worker title the locale label gets the suffix', () => {
+      useI18nStore.getState().setLocale('en')
+      setLiveSummary({ state: 'running', brief: '', cwd: '', pending_permission: pending })
+      const { result } = renderHook(() => useTabDisplay(execTab()))
+      expect(result.current.displayTitle).toBe('Execution (awaiting approval)')
+    })
   })
 
   describe('phase E: session_title gated by the host capability', () => {

@@ -186,6 +186,30 @@ describe('ExecutionView — permission request card', () => {
     expect(screen.queryByTestId('permission-expired')).toBeNull()
   })
 
+  it('execution.terminated with no permission.resolved and a failing summary refetch → card gone, lease hold released', () => {
+    vi.mocked(api.listExecutions).mockRejectedValue(new Error('boom'))
+    render(<ExecutionView {...base} isActive />)
+    ask('req_a')
+    expect(screen.getByTestId('permission-card')).toBeInTheDocument()
+    expect(holds().at(-1)).toBe(true)
+    apply('execution.terminated', { principal_id: 'p' })
+    expect(screen.queryByTestId('permission-card')).toBeNull()
+    expect(screen.queryByTestId('permission-expired')).toBeNull()
+    expect(holds().at(-1)).toBe(false)
+  })
+
+  it('execution.terminal -> idle with no permission.resolved and a failing summary refetch → card gone, lease hold released', () => {
+    vi.mocked(api.listExecutions).mockRejectedValue(new Error('boom'))
+    render(<ExecutionView {...base} isActive />)
+    ask('req_a')
+    expect(screen.getByTestId('permission-card')).toBeInTheDocument()
+    expect(holds().at(-1)).toBe(true)
+    apply('execution.terminal', { turn_id: 'trn_1', reason: 'done', state: 'idle' })
+    expect(screen.queryByTestId('permission-card')).toBeNull()
+    expect(screen.queryByTestId('permission-expired')).toBeNull()
+    expect(holds().at(-1)).toBe(false)
+  })
+
   it('expired → a muted 「已逾時自動拒絕（N 分鐘）」 line that stays through the turn\'s end and goes with the next turn', () => {
     useI18nStore.getState().setLocale('zh-TW')
     render(<ExecutionView {...base} isActive />)

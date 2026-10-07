@@ -28,14 +28,15 @@
 // Chat (`mode === 'chat'`, spec §5) keeps only state, cost and the overflow at
 // every width; interrupt, exit and the view items live in the overflow.
 import { useEffect, useId, useRef, useState } from 'react'
-import { CurrencyDollar, DotsThree, Prohibit, SignOut } from '@phosphor-icons/react'
+import { CurrencyDollar, DotsThree, HandPalm, Prohibit, SignOut } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HoverTooltip } from '../HoverTooltip'
 import { FloatingPanel } from '../FloatingPanel'
 import CostPanel from './CostPanel'
 import WorkerInfoPanel from './WorkerInfoPanel'
 import ViewModeMenu, { ViewModeItems, ViewModeLabel } from './ViewModeMenu'
-import { stateDotClass } from '../../lib/nex/state-dot'
+import { workerDotClass } from '../../lib/nex/state-dot'
+import { isAwaitingApproval } from '../../lib/nex/worker-summary'
 import type { ExecutionViewMode } from '../../types/tab'
 import type { ExecutionSummary } from '../../lib/nex/types'
 import type { CostSummary } from '../../lib/nex/cost-summary'
@@ -160,6 +161,8 @@ export default function ExecutionHeader({
   }, [costOpen, overflowOpen, viewOpen])
 
   const state = summary?.state ?? '…'
+  // Permission channel PC2 (spec §5.4): 「等待核准」 replaces the raw state text, with the HandPalm icon on the warning dot.
+  const awaiting = isAwaitingApproval(summary)
   const cwdBase = summary?.cwd ? summary.cwd.split('/').filter(Boolean).pop() ?? summary.cwd : ''
   // H2: the tooltip counts what it summed (`turns.length`, not summary.turn_count).
   const costLine = cost ? t('execution.cost.summary', {
@@ -196,8 +199,15 @@ export default function ExecutionHeader({
 
   return (
     <div ref={rootRef} className="@container flex items-center gap-2 px-4 py-2 border-b border-border-default text-xs text-text-muted">
-      <span className={`shrink-0 w-2 h-2 rounded-full ${stateDotClass(state)}`} />
-      <span data-testid="execution-state" className="shrink-0 text-text-primary font-medium">{state}</span>
+      <span className={`shrink-0 w-2 h-2 rounded-full ${workerDotClass(state, awaiting)}`} />
+      <span data-testid="execution-state" className="shrink-0 inline-flex items-center gap-1 text-text-primary font-medium">
+        {awaiting && (
+          <span data-testid="execution-state-awaiting" className="inline-flex text-status-warning">
+            <HandPalm size={12} weight="fill" aria-hidden="true" />
+          </span>
+        )}
+        {awaiting ? t('executions.activity.awaiting_approval') : state}
+      </span>
       {!chat && cwdBase && (
         <button type="button" data-testid="worker-name" ref={nameRef} title={summary?.cwd}
           aria-expanded={infoOpen} onClick={() => setInfoOpen((v) => !v)}

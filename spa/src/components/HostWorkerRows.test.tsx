@@ -8,6 +8,7 @@ import { useNexHostStore, type NexHostEntry } from '../stores/useNexHostStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { subscriptionSlots } from '../lib/nex/subscription-slots'
 import { exitWorker } from '../lib/nex/exit-worker'
+import { openNexSse, type NexSseOptions } from '../lib/nex/nex-sse'
 import type { ExecutionSummary } from '../lib/nex/types'
 
 vi.mock('../lib/nex/nex-api', () => ({ listExecutions: vi.fn().mockResolvedValue({ items: [], next_cursor: '' }), attachControl: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), archiveExecution: vi.fn() }))
@@ -132,6 +133,33 @@ describe('HostWorkerRows', () => {
     renderRows()
     await act(async () => { fireEvent.click(screen.getByTestId('executions-row-exit')) })
     expect(exitWorker).toHaveBeenCalledWith({ hostId: H, executionId: 'E1' })
+  })
+
+  // Permission channel Review Focus #6 (consumer guide §9.8 §2): the site-wide stream carries relay fields only, so a
+  // permission frame is the signal and the row comes from the list refetch — a row of a list that is not open in any
+  // pane shows 「等待核准」 once its refetched summary carries pending_permission, and drops it when that turns null.
+  it('a permission frame on the site-wide stream refetches the rows: the row gains, then loses, 等待核准', async () => {
+    const site: { opts?: NexSseOptions } = {}
+    vi.mocked(openNexSse).mockImplementation((o) => { site.opts = o; return { close: vi.fn() } })
+    const pending = { request_id: 'r1', tool_name: 'Bash', since: 5 }
+    vi.mocked(listExecutions)
+      .mockResolvedValueOnce({ items: [row({ id: 'E1', state: 'running', brief: 'busy', pending_permission: null })], next_cursor: '' })
+      .mockResolvedValueOnce({ items: [row({ id: 'E1', state: 'running', brief: 'busy', pending_permission: pending })], next_cursor: '' })
+      .mockResolvedValueOnce({ items: [row({ id: 'E1', state: 'running', brief: 'busy', pending_permission: null })], next_cursor: '' })
+    const callsBefore = vi.mocked(listExecutions).mock.calls.length
+    renderRows()
+    await waitFor(() => expect(screen.getByText('busy')).toBeInTheDocument())
+    expect(screen.queryByTestId('executions-awaiting')).toBeNull()
+    expect(site.opts?.url).toBe('/api/nex/v1/events')
+
+    act(() => { site.opts!.onFrame({ id: '41', event: 'permission.requested', data: JSON.stringify({ execution_id: 'E1', request_id: 'r1', tool_name: 'Bash' }) }) })
+    await waitFor(() => expect(screen.getByTestId('executions-awaiting')).toBeInTheDocument(), { timeout: 2000 })
+    expect(screen.getByTestId('executions-state-dot')).toHaveClass('bg-status-warning')
+
+    act(() => { site.opts!.onFrame({ id: '42', event: 'permission.resolved', data: JSON.stringify({ execution_id: 'E1', request_id: 'r1', outcome: 'allowed' }) }) })
+    await waitFor(() => expect(screen.queryByTestId('executions-awaiting')).toBeNull(), { timeout: 2000 })
+    expect(screen.getByTestId('executions-state-dot')).toHaveClass('bg-status-success')
+    expect(vi.mocked(listExecutions).mock.calls.length - callsBefore).toBe(3)
   })
 
   it('asks before exiting a running row', async () => {

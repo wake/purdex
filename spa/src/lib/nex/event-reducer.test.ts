@@ -190,6 +190,26 @@ describe('applyDurableEvent', () => {
     expect(s.summary?.archived).toBe(true)
   })
 
+  it.each([
+    ['execution.terminated', { principal_id: 'p' }],
+    ['execution.archived', { principal_id: 'p' }],
+    ['execution.rejected', { reason: 'nope' }],
+    ['execution.terminal', { turn_id: 't', reason: 'error', state: 'failed' }],
+  ])('%s clears a stale pending_permission immediately (no wait for the refetch)', (kind, payload) => {
+    const pend = { request_id: 'r1', tool_name: 'Bash', since: 1 }
+    let s: ExecutionState = { ...defaultExecutionState(), summary: { ...summary(), pending_permission: pend } }
+    s = applyDurableEvent(s, ev(1, kind, payload))
+    expect(s.summary?.pending_permission).toBeNull()
+  })
+
+  it('an idle-state terminal event also clears pending_permission (the turn ended; no refetch needed)', () => {
+    const pend = { request_id: 'r1', tool_name: 'Bash', since: 1 }
+    let s: ExecutionState = { ...defaultExecutionState(), summary: { ...summary(), pending_permission: pend } }
+    s = applyDurableEvent(s, ev(1, 'execution.terminal', { turn_id: 't', reason: 'completed', state: 'idle' }))
+    expect(s.summary?.pending_permission).toBeNull()
+    expect(s.summary?.state).toBe('idle')
+  })
+
   it('does not invent summary fields when there is no summary yet', () => {
     const s = applyDurableEvent(defaultExecutionState(), ev(1, 'execution.running', {}))
     expect(s.summary).toBeNull()
@@ -1123,6 +1143,53 @@ describe('permission events (Nexen v0.19.0 permission.requested / permission.res
     expect(selectPendingPermission(s)).toBeUndefined()
   })
 
+  describe('an ending lifecycle event settles pending requests', () => {
+    const pendingState = () => applyDurableEvent(started(), requested(3, 'req_a', 5000))
+    const enders: Array<[string, NexEvent]> = [
+      ['execution.terminated', at(4, 'execution.terminated', 6000, { principal_id: 'p' })],
+      ['execution.archived', at(4, 'execution.archived', 6000, {})],
+      ['execution.rejected', at(4, 'execution.rejected', 6000, { reason: 'no' })],
+      ['execution.terminal -> failed', at(4, 'execution.terminal', 6000, { turn_id: 'trn_1', reason: 'error', state: 'failed' })],
+      ['execution.terminal -> terminated', at(4, 'execution.terminal', 6000, { turn_id: 'trn_1', reason: 'x', state: 'terminated' })],
+    ]
+    for (const [name, e] of enders) {
+      it(`${name} cancels the pending entry as execution_ended (no notice)`, () => {
+        const s = applyDurableEvent(pendingState(), e)
+        expect(s.permissions.req_a).toMatchObject({ status: 'cancelled', reason: 'execution_ended', toolName: 'Bash', requestedAt: 5000 })
+        expect(selectPendingPermission(s)).toBeUndefined()
+        expect(s.expiredNotice).toBeNull()
+      })
+    }
+
+    it('execution.terminal -> idle cancels the pending entry as turn_ended (no notice)', () => {
+      const s = applyDurableEvent(pendingState(), at(4, 'execution.terminal', 6000, { turn_id: 'trn_1', reason: 'done', state: 'idle' }))
+      expect(s.permissions.req_a).toMatchObject({ status: 'cancelled', reason: 'turn_ended', toolName: 'Bash', requestedAt: 5000 })
+      expect(selectPendingPermission(s)).toBeUndefined()
+      expect(s.expiredNotice).toBeNull()
+    })
+
+    it('a request raised in the next turn (new request_id after the terminal) stays pending', () => {
+      let s = applyDurableEvent(pendingState(), at(4, 'execution.terminal', 6000, { turn_id: 'trn_1', reason: 'done', state: 'idle' }))
+      s = applyDurableEvent(s, requested(5, 'req_b', 7000))
+      expect(s.permissions.req_a.status).toBe('cancelled')
+      expect(selectPendingPermission(s)?.requestId).toBe('req_b')
+    })
+
+    it('leaves already-settled entries untouched', () => {
+      let s = applyDurableEvent(pendingState(), resolved(4, 'req_a', 'allowed'))
+      s = applyDurableEvent(s, at(5, 'execution.terminated', 6000, {}))
+      expect(s.permissions.req_a.status).toBe('allowed')
+    })
+
+    it('a late permission.resolved after the sweep does not resurrect pending', () => {
+      let s = applyDurableEvent(pendingState(), enders[0][1])
+      s = applyDurableEvent(s, resolved(5, 'req_a', 'allowed'))
+      expect(s.permissions.req_a.status).toBe('allowed')
+      s = applyDurableEvent(s, requested(6, 'req_a', 5000))
+      expect(selectPendingPermission(s)).toBeUndefined()
+    })
+  })
+
   it('malformed payloads (no request_id, or an outcome outside the closed set) change nothing but the seq; never a message', () => {
     let s = started()
     const msgs = s.messages.length
@@ -1259,7 +1326,9 @@ describe('permission events (Nexen v0.19.0 permission.requested / permission.res
     expect(permissionView(paged)).toEqual(permissionView(live))
     expect(live.permissions.req_a.status).toBe('allowed')
     expect(live.permissions.req_b).toMatchObject({ status: 'expired', timeoutS: 300 })
-    expect(selectPendingPermission(live)?.requestId).toBe('req_bg')
+    // req_bg was still pending when the turn's terminal event arrived → settled as turn_ended, live and replayed alike.
+    expect(live.permissions.req_bg).toMatchObject({ status: 'cancelled', reason: 'turn_ended' })
+    expect(selectPendingPermission(live)).toBeUndefined()
   })
 
   it('the global lastSeq guard is untouched: a history/live overlap re-delivering a mixed batch loses nothing and duplicates nothing', () => {
@@ -1273,5 +1342,16 @@ describe('permission events (Nexen v0.19.0 permission.requested / permission.res
     // Still one guard for all: an event at or below lastSeq is dropped whatever its kind.
     expect(applyDurableEvent(once, resolved(13, 'req_bg', 'allowed'))).toBe(once)
     expect(applyDurableEvent(once, at(14, 'assistant', 1, { type: 'assistant' }))).toBe(once)
+  })
+})
+
+describe('refetch-failure regression: an ended worker never reads as waiting', () => {
+  it('after terminated the local summary is consistent even though summaryStale stays true', async () => {
+    const { isAwaitingApproval } = await import('./worker-summary')
+    const pend = { request_id: 'r1', tool_name: 'Bash', since: 1 }
+    let s: ExecutionState = { ...defaultExecutionState(), summary: { ...summary(), state: 'running', pending_permission: pend } }
+    s = applyDurableEvent(s, ev(1, 'execution.terminated', { principal_id: 'p' }))
+    expect(s.summaryStale).toBe(true)
+    expect(isAwaitingApproval(s.summary)).toBe(false)
   })
 })

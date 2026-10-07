@@ -114,3 +114,21 @@ export function selectPendingPermission(s: { permissions: PermissionTable }, exc
   }
   return best
 }
+
+/**
+ * The execution ended (terminated / archived / rejected / failed): no request
+ * of it can still be answered, so settle every pending one as cancelled — the
+ * same shape a real `cancelled` resolution leaves, so the card and the lease
+ * hold go away even if Nexen's own resolution frame is late or lost. Returns
+ * the same table when nothing was pending. A real `permission.resolved`
+ * arriving later still overwrites the status as usual (never back to pending).
+ */
+export function settlePendingPermissions(table: PermissionTable, reason: 'execution_ended' | 'turn_ended' = 'execution_ended'): PermissionTable {
+  let out: PermissionTable | null = null
+  for (const r of Object.values(table)) {
+    if (r.status !== 'pending') continue
+    out ??= { ...table }
+    out[r.requestId] = { ...r, status: 'cancelled', reason }
+  }
+  return out ?? table
+}

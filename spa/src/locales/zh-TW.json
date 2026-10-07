@@ -369,6 +369,7 @@
   "page.pane.hosts": "主機管理",
   "page.pane.execution": "執行",
   "page.pane.terminated": "{{name}}（已結束）",
+  "page.pane.awaiting_approval": "{{name}}（等待核准）",
   "page.pane.settings_ws": "設定 — {{name}}",
 
   "session.title": "Sessions",
@@ -1533,6 +1534,7 @@
   "executions.activity.starting": "啟動中",
   "executions.activity.idle": "閒置",
   "executions.activity.queued": "排隊中",
+  "executions.activity.awaiting_approval": "等待核准",
   "workers.list.none": "沒有開啟 Nexen 的主機",
   "peer.label.host": "主機",
   "peer.label.cwd": "工作目錄",

@@ -9,9 +9,14 @@
 // as the state dot's tooltip. The brief is the only part that shrinks; every
 // other item is `shrink-0 whitespace-nowrap`, so a narrow sidebar truncates
 // the brief instead of wrapping the row.
-import { SignOut, Terminal } from '@phosphor-icons/react'
+//
+// Permission channel PC2 (spec §5.4): a row whose summary carries
+// `pending_permission` shows 「等待核准」 — the warning dot, a HandPalm icon
+// beside it, and the text as the tooltip. Queued keeps the bare warning dot.
+import { HandPalm, SignOut, Terminal } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { stateDotClass } from '../../lib/nex/state-dot'
+import { workerDotClass } from '../../lib/nex/state-dot'
+import { isAwaitingApproval } from '../../lib/nex/worker-summary'
 import { firstLine } from '../../lib/nex/format'
 import { formatUsd } from '../../lib/nex/format-cost'
 import { normalizePhase } from '../../lib/nex/activity'
@@ -39,8 +44,12 @@ interface Props {
 
 const ROW_CLASS = 'flex items-center gap-1.5 w-full min-w-0 px-3 py-1 text-left'
 
-/** The dot's tooltip: the activity when the row carries one, else (and for `ended`) the state as before. */
-function activityLabel(t: T, row: ExecutionSummary): string {
+/**
+ * The dot's tooltip: 「等待核准」 while the row awaits approval, else the activity when the row carries one, else (and
+ * for `ended`) the state as before.
+ */
+function activityLabel(t: T, row: ExecutionSummary, awaiting: boolean): string {
+  if (awaiting) return t('executions.activity.awaiting_approval')
   if (!row.activity) return row.state
   const phase = normalizePhase(row.activity.phase)
   if (phase === 'ended') return row.state
@@ -58,7 +67,8 @@ export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, 
   const brief = firstLine(typeof row.brief === 'string' ? row.brief : '')
   const markerTitle = sessionCode !== null ? t('executions.marker_title', { code: sessionCode }) : null
   const ageText = t(`executions.age.${age.key}`, { n: age.n })
-  const dotTitle = activityLabel(t, row)
+  const awaiting = isAwaitingApproval(row)
+  const dotTitle = activityLabel(t, row, awaiting)
   const running = typeof row.running_tasks === 'number' && row.running_tasks > 0 ? row.running_tasks : 0
   const runningText = running > 0 ? t(running === 1 ? 'room.dock.running_one' : 'room.dock.running_other', { count: running }) : null
   const costText = showCost && typeof row.cost_usd === 'number' ? formatUsd(row.cost_usd, 2) : null
@@ -68,9 +78,15 @@ export function ExecutionRowCompact({ row, daemonHostId, now, showCost = false, 
     <>
       <span
         data-testid="executions-state-dot"
-        className={`shrink-0 inline-block w-2 h-2 rounded-full ${stateDotClass(row.state)}`}
+        className={`shrink-0 inline-block w-2 h-2 rounded-full ${workerDotClass(row.state, awaiting)}`}
         title={dotTitle}
       />
+      {awaiting && (
+        // The icon is what tells 「等待核准」 apart from queued, which has the same warning dot and no icon.
+        <span data-testid="executions-awaiting" className="shrink-0 inline-flex text-status-warning" title={dotTitle}>
+          <HandPalm size={11} weight="fill" aria-hidden="true" />
+        </span>
+      )}
       <span data-testid="executions-brief" className="flex-1 min-w-0 truncate text-xs text-text-primary">
         {brief}
       </span>
