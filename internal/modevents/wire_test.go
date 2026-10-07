@@ -21,6 +21,12 @@ func ev(seq int64, sid, typ string) string {
 	return fmt.Sprintf(`{"seq":%d,"at":1791409762960,"sid":%q,"type":%q,"data":{}}`, seq, sid, typ)
 }
 
+// evData builds one event whose data member is the raw dataField, e.g.
+// `,"data":null`; an empty dataField leaves data out.
+func evData(typ, dataField string) string {
+	return fmt.Sprintf(`{"seq":1,"at":1791409762960,"sid":%q,"type":%q%s}`, testSID, typ, dataField)
+}
+
 func evs(items ...string) string { return "[" + strings.Join(items, ",") + "]" }
 
 func TestDecodeBatch_Codes(t *testing.T) {
@@ -40,8 +46,10 @@ func TestDecodeBatch_Codes(t *testing.T) {
 		{"not json", `{"v":1,`, CodeBadJSON, false},
 		{"wrong shape", `[1,2]`, CodeBadJSON, false},
 		{"wrong field type", `{"v":"1","stream":"` + testStream + `","events":[]}`, CodeBadJSON, false},
-		{"trailing object", valid + `{"v":1}`, CodeBadJSON, false},
-		{"trailing junk", valid + `x`, CodeBadJSON, false},
+		{"trailing object", valid + `{"v":1}`, CodeBadJSON, true},
+		{"trailing junk", valid + `x`, CodeBadJSON, true},
+		{"trailing junk, bad stream", batchJSON(1, "short", evs(ev(1, testSID, "turn.start"))) + `x`, CodeBadJSON, false},
+		{"malformed first object", `{"v":1,"stream":"` + testStream + `","events":[}`, CodeBadJSON, false},
 		{"unsupported version", batchJSON(2, testStream, evs(ev(1, testSID, "turn.start"))), CodeUnsupportedVersion, true},
 		{"unsupported version, bad stream", batchJSON(2, "short", evs(ev(1, testSID, "turn.start"))), CodeUnsupportedVersion, false},
 		{"stream too short", batchJSON(1, "short", evs(ev(1, testSID, "turn.start"))), CodeBadStream, false},
@@ -58,6 +66,17 @@ func TestDecodeBatch_Codes(t *testing.T) {
 		{"uppercase sid", batchJSON(1, testStream, evs(ev(1, strings.ToUpper(testSID), "turn.start"))), CodeBadSID, true},
 		{"empty sid", batchJSON(1, testStream, evs(ev(1, "", "turn.start"))), CodeBadSID, true},
 		{"not a uuid", batchJSON(1, testStream, evs(ev(1, "0f8e2c1a1b2c4d3e8f90a1b2c3d4e5f6", "turn.start"))), CodeBadSID, true},
+		{"bad sid before bad event", batchJSON(1, testStream, evs(ev(1, "", "Turn.start"))), CodeBadSID, true},
+		{"empty type", batchJSON(1, testStream, evs(ev(1, testSID, ""))), CodeBadEvent, true},
+		{"uppercase type", batchJSON(1, testStream, evs(ev(1, testSID, "Turn.start"))), CodeBadEvent, true},
+		{"65-char type", batchJSON(1, testStream, evs(ev(1, testSID, strings.Repeat("a", 65)))), CodeBadEvent, true},
+		{"data missing", batchJSON(1, testStream, evs(evData("turn.start", ""))), CodeBadEvent, true},
+		{"data null", batchJSON(1, testStream, evs(evData("turn.start", `,"data":null`))), CodeBadEvent, true},
+		{"data array", batchJSON(1, testStream, evs(evData("turn.start", `,"data":[]`))), CodeBadEvent, true},
+		{"data string", batchJSON(1, testStream, evs(evData("turn.start", `,"data":"x"`))), CodeBadEvent, true},
+		{"data number", batchJSON(1, testStream, evs(evData("turn.start", `,"data":1`))), CodeBadEvent, true},
+		{"data bool", batchJSON(1, testStream, evs(evData("turn.start", `,"data":true`))), CodeBadEvent, true},
+		{"session.start with empty data object", batchJSON(1, testStream, evs(evData("session.start", `,"data":{}`))), "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -65,6 +84,9 @@ func TestDecodeBatch_Codes(t *testing.T) {
 			if tc.code == "" {
 				if err != nil {
 					t.Fatalf("valid batch: %v", err)
+				}
+				if tc.name != "valid" {
+					return
 				}
 				if b.V != 1 || b.Stream != testStream || b.Agent != "cc" || b.CCVersion != "2.1.293" || b.ModVersion != "1.0.0-alpha.596" || len(b.Events) != 2 {
 					t.Fatalf("decoded = %+v", b)

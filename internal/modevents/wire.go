@@ -1,6 +1,7 @@
 package modevents
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -27,7 +28,8 @@ type Batch struct {
 }
 
 // Event is one mod event. Seq is per stream and strictly increasing; At
-// is the mod's Date.now() in ms (kept, never used for ordering).
+// is the mod's Date.now() in ms (kept, never used for ordering). A decoded
+// event always has a well-formed Type and a JSON object as Data.
 type Event struct {
 	Seq  int64           `json:"seq"`
 	At   int64           `json:"at"`
@@ -85,11 +87,12 @@ const (
 	CodeBadEvents          = "bad_events"
 	CodeBadSeq             = "bad_seq"
 	CodeBadSID             = "bad_sid"
+	CodeBadEvent           = "bad_event"
 )
 
-// WireError is a rejected batch. Stream is set when the body parsed and
-// its stream id is valid, so the rejection can be counted on that stream;
-// it is empty otherwise. Err is the underlying decode error, if any (a
+// WireError is a rejected batch. Stream is set when the first JSON object
+// decoded and its stream id is valid, so the rejection (trailing data
+// included) can be counted on that stream; it is empty otherwise. Err is the underlying decode error, if any (a
 // read past an http.MaxBytesReader limit surfaces through it).
 type WireError struct {
 	Code   string
@@ -107,8 +110,9 @@ func (e *WireError) Error() string {
 func (e *WireError) Unwrap() error { return e.Err }
 
 var (
-	streamRe = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
-	sidRe    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	streamRe    = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
+	sidRe       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	eventTypeRe = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
 )
 
 // ValidStream reports whether s is a well-formed stream id.
@@ -123,19 +127,21 @@ func DecodeBatch(r io.Reader) (Batch, error) {
 	if err := dec.Decode(&b); err != nil {
 		return Batch{}, &WireError{Code: CodeBadJSON, Err: err}
 	}
+	// The object decoded: take the stream now, so that every later
+	// rejection, trailing data included, can be counted on it.
+	stream := ""
+	if ValidStream(b.Stream) {
+		stream = b.Stream
+	}
 	// Anything after the object, other than whitespace, is a bad body.
 	var extra json.RawMessage
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
 			err = errors.New("trailing data after the batch")
 		}
-		return Batch{}, &WireError{Code: CodeBadJSON, Err: err}
+		return Batch{}, &WireError{Code: CodeBadJSON, Stream: stream, Err: err}
 	}
 
-	stream := ""
-	if ValidStream(b.Stream) {
-		stream = b.Stream
-	}
 	fail := func(code string) (Batch, error) {
 		return Batch{}, &WireError{Code: code, Stream: stream}
 	}
@@ -160,5 +166,17 @@ func DecodeBatch(r io.Reader) (Batch, error) {
 			return fail(CodeBadSID)
 		}
 	}
+	for _, e := range b.Events {
+		if !eventTypeRe.MatchString(e.Type) || !isObject(e.Data) {
+			return fail(CodeBadEvent)
+		}
+	}
 	return b, nil
+}
+
+// isObject reports whether raw, already valid JSON, is an object. A
+// missing member leaves raw empty; JSON null arrives as "null".
+func isObject(raw json.RawMessage) bool {
+	raw = bytes.TrimLeft(raw, " \t\r\n")
+	return len(raw) > 0 && raw[0] == '{'
 }
