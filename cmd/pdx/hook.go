@@ -168,15 +168,22 @@ func runHook(args []string) {
 	}()
 
 	if err == nil { // no config: no data dir to find a flag in
-		out, _ := hookDecision(budget, hookDecideInput{
+		base := fmt.Sprintf("http://%s:%d", resolveDaemonHost(cfg.Bind), cfg.Port)
+		out, asked := hookDecision(budget, hookDecideInput{
 			DataDir: cfg.DataDir,
-			Base:    fmt.Sprintf("http://%s:%d", resolveDaemonHost(cfg.Bind), cfg.Port),
+			Base:    base,
 			Token:   cfg.Token,
 			Agent:   agentType, PurdexName: purdexName, Raw: raw,
 			ClientOpts: hookClientOpts,
 		})
 		if len(out) > 0 {
 			os.Stdout.Write(out)
+		}
+		// The terminal-only degradation's forward (P8a, hook_ask.go): not
+		// when the lock path already sent this event to the daemon; under
+		// the same budget, printing nothing.
+		if !asked {
+			forwardHookAsk(budget, base, cfg.Token, cfg.DataDir, agentType, payload.RawEvent)
 		}
 	}
 	// The event POST is never cut short by the decision (spec §6.6: the
