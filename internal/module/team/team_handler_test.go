@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -278,6 +279,37 @@ func TestKill_TargetForms(t *testing.T) {
 		if ok := code == 200; ok != c.ok || (!ok && e.Error != team.ErrNotYourMember) {
 			t.Errorf("case %d %q: %d %+v, want matched=%v", i, target, code, e, c.ok)
 		}
+	}
+}
+
+// P4-6 critic [high]: a gone member skips the tmux kill only when tmux says
+// its session is no more (ErrNoSession). An identity read that fails
+// otherwise, its shell perhaps still there, is a 503 and the row stays gone,
+// so a retry kills it. Mutation gate: any read error passes for a gone
+// member → red.
+func TestKill_AGoneMemberSkipsTheKillOnlyWhenItsSessionIsSurelyGone(t *testing.T) {
+	f, root := newTeamFixture(t, 2)
+	m1 := f.member(1, root, "sid-m1", "w-one", nil)
+	m2 := f.member(2, root, "sid-m2", "w-two", nil)
+	for _, mr := range []memberRow{m1, m2} {
+		if err := f.m.store.SetMemberState(mr.SpawnOp, team.MemberGone, 9); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.tmux.SetPaneIdentityErr(errors.New("tmux: server busy")) // m1's session is still there
+	if code, _, e := f.kill("/tmp/10.sock", m1.Ref); code != 503 || e.Error != team.ErrNotReady {
+		t.Fatalf("a gone member whose session could not be read = %d %+v, want 503", code, e)
+	}
+	if got := memberBySpawn(t, f.m.store, m1.SpawnOp); got.State != team.MemberGone || !f.tmux.HasSession(m1.TmuxSession) {
+		t.Fatalf("after the 503: row %s, session there %v; want gone and there", got.State, f.tmux.HasSession(m1.TmuxSession))
+	}
+	f.tmux.SetPaneIdentityErr(nil)
+	_ = f.tmux.KillSession(m2.TmuxSession) // surely gone
+	if code, mem, e := f.kill("/tmp/10.sock", m2.Ref); code != 200 || mem.State != team.MemberKilled || len(f.tmux.KillIfInstanceCalls()) != 0 {
+		t.Fatalf("a gone member whose session is gone = %d %+v %+v, want 200 killed with no kill call", code, mem, e)
+	}
+	if code, mem, e := f.kill("/tmp/10.sock", m1.Ref); code != 200 || mem.State != team.MemberKilled || f.tmux.HasSession(m1.TmuxSession) {
+		t.Fatalf("the retry = %d %+v %+v, want its session killed", code, mem, e)
 	}
 }
 

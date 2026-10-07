@@ -201,18 +201,22 @@ func (m *Module) killAndMark(w http.ResponseWriter, t team.Team, mr memberRow) (
 // generation the session died with its server and the id is a stranger's:
 // nothing is killed. "" means nothing of the member runs any more; else the
 // status, code and why the row must stay as it is: a session that lost its
-// tag (409), or tmux that did not answer while the member may still run (503;
-// once the sweeper confirms it gone, the kill goes through). A row without
-// a recorded session id is never turned into a tmux target (":" would name
-// whatever session tmux calls current).
+// tag (409), or a read that failed otherwise (503). A gone member — its
+// process confirmed gone, its shell perhaps left — skips the kill only when
+// tmux says its session is no more (ErrNoSession: no server, no such
+// target); any other failure is a 503 too, so the retry still reaches a
+// live shell (P4-6 critic). An active one is a 503 on any failure until the
+// sweeper confirms it gone. A row without a recorded session id is never
+// turned into a tmux target (":" would name whatever session tmux calls
+// current): nothing of it can be in tmux.
 func (m *Module) killMember(mr memberRow) (int, string, string) {
 	var id tmux.PaneIdentity
-	err := fmt.Errorf("no tmux session id recorded (%q)", mr.TmuxID)
+	err := fmt.Errorf("no tmux session id recorded (%q): %w", mr.TmuxID, tmux.ErrNoSession)
 	if strings.HasPrefix(mr.TmuxID, "$") {
 		id, err = m.paneIdentity(mr.TmuxID + ":")
 	}
 	switch {
-	case err != nil && mr.State == team.MemberGone:
+	case errors.Is(err, tmux.ErrNoSession) && mr.State == team.MemberGone:
 		return 0, "", ""
 	case err != nil:
 		return http.StatusServiceUnavailable, team.ErrNotReady, "tmux did not show the member's session; retry: " + err.Error()

@@ -105,6 +105,7 @@ type FakeExecutor struct {
 	killIfInstanceCalls   []KillIfInstanceCall
 	tags                  map[string]map[string]string // session name → user option → value
 	FailSetTag            bool                         // NewSessionTaggedContext makes the session, then fails its set-option
+	paneIdentityErr       error                        // SetPaneIdentityErr: every PaneIdentity fails with it
 	// ForceNewSessionCwd, when non-empty, is the cwd NewSession records for the
 	// new session instead of the one it was asked for — test-only. It models
 	// the one thing real tmux does that no error surfaces: `new-session -c
@@ -410,10 +411,15 @@ func (f *FakeExecutor) SetSessionTag(name, option, value string) {
 
 // PaneIdentity answers for a live session's active pane (SetActivePaneMetadata,
 // else pane %N of session $N) named by its pane id, "=<name>:" or "$N:", with
-// the current instance, the session's option and the pane's SetPaneCwd directory.
+// the current instance, the session's option and the pane's SetPaneCwd
+// directory. A target it does not hold is ErrNoSession, as real tmux's empty
+// answer is; SetPaneIdentityErr makes every read fail otherwise.
 func (f *FakeExecutor) PaneIdentity(_ context.Context, target, option string) (PaneIdentity, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.paneIdentityErr != nil {
+		return PaneIdentity{}, f.paneIdentityErr
+	}
 	for name, s := range f.sessions {
 		md, ok := f.activePaneMetadata[name]
 		if !ok {
@@ -424,7 +430,14 @@ func (f *FakeExecutor) PaneIdentity(_ context.Context, target, option string) (P
 				Tag: f.tags[name][option], Cwd: f.paneCwds[md.PaneID]}, nil
 		}
 	}
-	return PaneIdentity{}, fmt.Errorf("fake: can't find pane %s", target)
+	return PaneIdentity{}, fmt.Errorf("fake: can't find pane %s: %w", target, ErrNoSession)
+}
+
+// SetPaneIdentityErr makes every PaneIdentity fail with err (nil: answer again).
+func (f *FakeExecutor) SetPaneIdentityErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paneIdentityErr = err
 }
 
 func (f *FakeExecutor) KillSession(name string) error {

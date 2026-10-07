@@ -1,7 +1,10 @@
 package tmux
 
 import (
+	"errors"
+	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -36,8 +39,34 @@ func TestParsePaneIdentity(t *testing.T) {
 		t.Fatalf("untagged = %+v, %v", got, err)
 	}
 	for _, bad := range []string{"\n", "", "86338:1 0 %0 [] /w", "86338:1 $0 0 [] /w", "86338:1 $0 %0 x /w", "86338:1 $0 %0 []"} {
-		if _, err := parsePaneIdentity(bad); err == nil {
+		_, err := parsePaneIdentity(bad)
+		if err == nil {
 			t.Errorf("%q parsed", bad)
+		}
+		if absent := strings.TrimSpace(bad) == ""; errors.Is(err, ErrNoSession) != absent {
+			t.Errorf("%q: ErrNoSession = %v, want %v (only the empty line says the target is gone)", bad, !absent, absent)
+		}
+	}
+}
+
+// A failed identity read says "no such session" (ErrNoSession) only when
+// tmux said so: no server (a stale or absent socket) or a target it cannot
+// find. Any other failure is unknown (P4-6 review: a kill must not take a
+// transient tmux failure for a session that is gone).
+func TestIdentityReadErr_OnlyANoSessionAnswerIsErrNoSession(t *testing.T) {
+	exit := func(stderr string) error { return &exec.ExitError{Stderr: []byte(stderr)} }
+	for _, c := range []struct {
+		err    error
+		absent bool
+	}{
+		{exit("no server running on /private/tmp/tmux-501/default\n"), true},
+		{exit("can't find session: $7\n"), true},
+		{exit("error connecting to " + t.TempDir() + " (Permission denied)\n"), false}, // the socket is there
+		{exit("server exited unexpectedly\n"), false},
+		{errors.New("signal: killed"), false},
+	} {
+		if got := identityReadErr(c.err); got == nil || errors.Is(got, ErrNoSession) != c.absent {
+			t.Errorf("%v → %v, want ErrNoSession=%v", c.err, got, c.absent)
 		}
 	}
 }
@@ -80,12 +109,16 @@ func TestFakeExecutor_TaggedSessionIdentity(t *testing.T) {
 	f.SetActivePaneMetadata("tm-abc", TmuxPaneMetadata{SessionID: "$0", SessionName: "tm-abc", PaneID: "%0"})
 	f.SetPaneCwd("%0", "/w")
 	want := PaneIdentity{Instance: "1:2", SessionID: "$0", PaneID: "%0", Tag: testTag, Cwd: "/w"}
-	for _, target := range []string{"%0", "=tm-abc:"} {
+	for _, target := range []string{"%0", "=tm-abc:", "$0:"} {
 		if got, err := f.PaneIdentity(t.Context(), target, "@pdx_spawn_op"); err != nil || got != want {
 			t.Fatalf("identity of %s = %+v, %v", target, got, err)
 		}
 	}
-	if _, err := f.PaneIdentity(t.Context(), "%9", "@pdx_spawn_op"); err == nil {
-		t.Fatal("a pane the fake does not hold has an identity")
+	if _, err := f.PaneIdentity(t.Context(), "%9", "@pdx_spawn_op"); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("a pane the fake does not hold = %v, want ErrNoSession", err)
+	}
+	f.SetPaneIdentityErr(errors.New("tmux: busy"))
+	if _, err := f.PaneIdentity(t.Context(), "%0", "@pdx_spawn_op"); err == nil || errors.Is(err, ErrNoSession) {
+		t.Fatalf("an injected failure = %v, want a plain error", err)
 	}
 }

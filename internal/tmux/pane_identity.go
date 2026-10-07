@@ -11,7 +11,9 @@ package tmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -39,10 +41,13 @@ func paneIdentityArgs(target, option string) ([]string, error) {
 }
 
 // parsePaneIdentity reads paneIdentityArgs' line. A target tmux cannot find
-// prints an empty line with exit 0 (measured, tmux 3.6a), so anything short
-// of every field, well formed, is an error. The directory is last: it may
-// hold spaces.
+// prints an empty line with exit 0 (measured, tmux 3.6a): that is
+// ErrNoSession. Anything else short of every field, well formed, is an
+// error. The directory is last: it may hold spaces.
 func parsePaneIdentity(out string) (PaneIdentity, error) {
+	if strings.TrimSpace(out) == "" {
+		return PaneIdentity{}, fmt.Errorf("tmux: the target answers an empty line: %w", ErrNoSession)
+	}
 	f := strings.SplitN(strings.TrimRight(out, "\n"), " ", 5)
 	if len(f) != 5 || !instancePattern.MatchString(f[0]) || !sessionIDPattern.MatchString(f[1]) ||
 		!paneIDPattern.MatchString(f[2]) || len(f[3]) < 2 || f[3][0] != '[' || f[3][len(f[3])-1] != ']' {
@@ -108,7 +113,24 @@ func (r *RealExecutor) PaneIdentity(ctx context.Context, target, option string) 
 		if cerr := readCtxErr(ctx, "tmux display-message", err); cerr != nil {
 			return PaneIdentity{}, cerr
 		}
-		return PaneIdentity{}, fmt.Errorf("tmux display-message: %w", err)
+		return PaneIdentity{}, identityReadErr(err)
 	}
 	return parsePaneIdentity(string(out))
+}
+
+// identityReadErr is a failed identity read: ErrNoSession only when tmux said
+// there is no such session — no server (IsNoServer) or a target it cannot
+// find. Anything else proves nothing about the session and stays a plain
+// error (lead-team P4-6 review: a kill must not take a passing tmux failure
+// for a session that is gone).
+func identityReadErr(err error) error {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		stderr := strings.TrimSpace(string(exitErr.Stderr))
+		if IsNoServer(stderr) || strings.Contains(stderr, "can't find session") || strings.Contains(stderr, "can't find pane") {
+			return fmt.Errorf("tmux display-message: %w: %s", ErrNoSession, stderr)
+		}
+		return fmt.Errorf("tmux display-message: %w: %s", err, stderr)
+	}
+	return fmt.Errorf("tmux display-message: %w", err)
 }
