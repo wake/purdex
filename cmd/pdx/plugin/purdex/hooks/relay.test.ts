@@ -1770,3 +1770,59 @@ test('/relay runs the installed pdx with --config and an 8 s bound; a timeout, 2
     expect((await relayCmd($, 'off')).text).toBe('Purdex daemon 連不上，無法變更自我接力')
   }
 })
+
+// ---------- P9a-2: the prompts are read at use (U21, spec §8.8) ----------
+// Each write / fix / seed prompt is the mod's fixed head, the body `pdx relay
+// prompts` answers (or the built-in one) and the mod's fixed tail.
+
+// The pre-P9a prompts for OP, written out literally (register.js before P9a):
+// the default bodies must compose to exactly these bytes. `who` is the
+// pdx msg whoami answer, `n` the nonce of that one prompt.
+const PRE_P9A_WRITE = (n: string, who = 'mlab/purdex-x [abc123]') => [
+  '[pdx-relay op=op-1 n=' + n + '] 這個 session 的 context 已達接力門檻，使用者已核准接力（之後會 /clear）。',
+  '請先停下手邊工作，用你完整的工具撰寫接力檔：/data/relay/op-1.md',
+  '',
+  '要求：',
+  '- 自己跑 `git status`、`git diff --stat`、`git log --oneline -10` 取得檔案狀態，不要憑記憶寫。',
+  '- 接力檔必須自成一體：讀它的是一個完全沒有這段對話記憶的新對話。',
+  '- 寫完後只回一行「HANDOFF-WRITTEN」，不要繼續原本的工作。',
+  '',
+  '格式（每一段都要有，沒有內容就寫「無」）：',
+  '# HANDOFF',
+  '## 1. 目標與完成定義（使用者要的是什麼、怎樣算完成、範圍外）',
+  '## 2. 進度（已完成且驗證 / 進行中停在哪 / 下一步第一個動作具體到指令）',
+  '## 3. 檔案異動（git status 與 diff --stat 的結果，加上每個檔案的用途）',
+  '## 4. 決策紀錄（選了什麼、為什麼、否決了什麼）',
+  '## 5. 死路（試過失敗、不要再試的）',
+  '## 6. 環境與指令（測試 / 執行方式）',
+  '## 7. 未決問題與需要使用者決定的事',
+  '## 8. 協作關係（下面的 pdx 身分；我的 lead 與我管理的 members，沒有就寫無）',
+  '',
+  '機器提供的事實（請照抄進對應段落）：',
+  '- 舊 session id：sid-old',
+  '- 舊 ref：_abc123',
+  '- 接力時 context：144000 tokens / 200000 (72%)',
+  '- pdx 身分：' + who,
+].join('\n')
+const PRE_P9A_SEED = (n: string) => [
+  '↪ 接手自 _abc123',
+  '[pdx-relay seed op=op-1 n=' + n + '] 你是接手的新對話：前一段對話 context 已滿並已清空。',
+  '請先讀接力檔 /data/relay/op-1.md，然後：',
+  '1. 用三行複述：目標、下一步第一個動作、目前有哪些檔案異動。',
+  '2. 跑 `git status` 確認與接力檔一致，不一致就指出來。',
+  '3. 接著從「下一步」繼續原本的工作。',
+  '回覆的第一行請寫「↪ 接手自 _abc123」。',
+].join('\n')
+
+test('with the defaults, the write and seed prompts equal the pre-P9a text byte for byte', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  expect(f.submits[0].text).toBe(PRE_P9A_WRITE(nonceOf(f.submits[0].text)))
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  f.sessionId = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await clock.advance(50)
+  expect(f.submits[1].text).toBe(PRE_P9A_SEED(nonceOf(f.submits[1].text)))
+})
