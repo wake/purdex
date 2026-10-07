@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>統一介面語言</title>
-<meta name="description" content="Purdex 統一介面語言 v0.4 設計文件：Mac App 與 iOS App、終端機與執行體兩種底層共用的名詞、事件簿、符號語法、元件、用量、dock、燈號、能力宣告與對話模型。">
+<meta name="description" content="Purdex 統一介面語言 v0.5 設計文件：Mac App 與 iOS App、終端機與執行體兩種底層共用的名詞、事件簿、符號語法、元件、用量、dock、燈號、能力宣告與對話模型。">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;600&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
@@ -107,11 +107,11 @@ nav.toc a{display:block;padding:2px 0}
 <body>
 <div class="wrap">
 
-<div class="eyebrow">Purdex · 設計文件 · 統一介面語言 v0.4</div>
+<div class="eyebrow">Purdex · 設計文件 · 統一介面語言 v0.5</div>
 <h1>統一介面語言：一套名詞與元件，兩種底層、兩個 App</h1>
 <p class="lede">這份文件定義 Purdex 的 Mac App 和 iOS App 共用的介面語言：名詞、符號語法、元件、用量、dock、退回終端的規則、能力宣告，以及 daemon 要提供的對話模型。終端機底層（TUI 在 tmux）和執行體底層（Nexen execution）都用同一套；底層提供了某項能力，對應的元件才會出現。</p>
 <div class="meta">
-  <span>v0.4 · 2026-10-08</span><span>統籌 mlab/purdex-73（ref _3fj93m）</span><span>Purdex alpha.581 · Nexen v0.19.0 · CC 2.1.292 · iOS 0.5.6</span><span>狀態：§17 全部定案；iOS 確認改動幅度中</span>
+  <span>v0.5 · 2026-10-08</span><span>統籌 mlab/purdex-73（ref _3fj93m）</span><span>Purdex alpha.581 · Nexen v0.19.0 · CC 2.1.292 · iOS 0.5.6</span><span>狀態：§17 全部定案；iOS 已確認改動幅度；下一步 U1 spec</span>
 </div>
 <p><a class="cta" href="interface-language-mock.html">開啟設計稿（介面／裝置／底層／agent／mod／情境都能切換）→</a></p>
 <div class="callout p"><p><b>怎麼讀這份文件</b>：<span class="tag o">定案</span> 是使用者已經決定的；<span class="tag p">建議</span> 是統籌的提案，等使用者定案；<span class="tag n">待驗證</span> 是還需要實測的。研究依據放在 <a href="interface-unification.html">介面與通訊整合研究頁</a>。</p>
@@ -133,6 +133,12 @@ nav.toc a{display:block;padding:2px 0}
   <li>燈號：黃＝等你回答（不分回答／核准）；不加待檢閱、失聯；優先序 失敗 ＞ 等你回答 ＞ 工作中 ＞ 閒置；workflow／monitor／排程喚醒改成 agent 圖示左上角的一顆符號；燈號 v2 全部併入 U1（§12）。</li>
   <li>Mac App 在指揮台和聊天畫 dock，終端機不畫（§8）；狀態列三顆鈕只換畫面，換底層另一顆鈕（§15）。</li>
   <li>mod 落地時程與分期定案；通訊線放最後（§16）。更正：mlab 已經裝好 mod（alpha.586）。</li>
+</ul>
+<p><b>v0.5 改了什麼</b>（採納 iOS 確認改動幅度時的回報）：</p>
+<ul>
+  <li>手機用量列在鍵盤升起或 dock 出現時收成 ◔ 圖示（§7）；逐字串流每 150ms 合併重畫（§6）；步驟的「執行中」改綠色，跟燈號統一（§6）。</li>
+  <li>沒有 mod 時所有提問與核准一律「只能在終端回答」（§9）。</li>
+  <li>§14 加上 U1 spec 必須補的 7 個 API 缺口；推播排進 U2（§16）。</li>
 </ul></div>
 
 <nav class="toc">
@@ -335,9 +341,9 @@ nav.toc a{display:block;padding:2px 0}
 <div class="tw"><table>
 <tr><th>元素</th><th>規則</th></tr>
 <tr><td>你的區塊</td><td>全寬淡色底＋細框，標題「你 · HH:mm」，是串流裡唯一有底色的元素。slash command 用同一種樣式，內容用等寬字</td></tr>
-<tr><td>agent 文字</td><td>不加框的 markdown。<b>有逐字串流時，邊收邊顯示，結尾放游標 ▍</b>；只有整則訊息時，先顯示「思考中」三點，收到整則才一次出現。桌機的段落寬度約 90ch</td></tr>
+<tr><td>agent 文字</td><td>不加框的 markdown。<b>有逐字串流時，邊收邊顯示，結尾放游標 ▍</b>；client 每 150ms 合併一次 delta 再重畫（兩個 App 同一個常數，跟 mod 端批次同一量級；iPhone 8 每個 delta 都重排 Markdown 會掉幀）；只有整則訊息時，先顯示「思考中」三點，收到整則才一次出現。桌機的段落寬度約 90ch</td></tr>
 <tr><td>步驟列</td><td><code>狀態槽 ⏺</code>＋<b>類別詞</b>＋摘要＋時間（≥1 秒才顯示）。結果放在下一行的 <code>⎿</code> 縮排軌上。<b>工具參數有串流時</b>，參數還沒到齊前顯示工具名和一個穩定的佔位，<b>不顯示半截的 JSON</b>（room spec §3.1.1 #7）</td></tr>
-<tr><td>狀態槽</td><td>執行中＝橘色呼吸；完成＝中性灰；失敗＝紅；已拒絕＝灰色字「已拒絕」，跟失敗分開。狀態改變只換顏色、不換版面</td></tr>
+<tr><td>狀態槽</td><td>執行中＝綠色呼吸（跟燈號的「工作中」同色，10-08 統一）；完成＝中性灰；失敗＝紅；已拒絕＝灰色字「已拒絕」，跟失敗分開。狀態改變只換顏色、不換版面</td></tr>
 <tr><td>類別詞（7 類）</td><td><b>編輯</b>（Edit、MultiEdit、Write、NotebookEdit、apply_patch）· <b>指令</b>（Bash、exec_command）· <b>讀取</b> · <b>搜尋</b> · <b>網頁</b> · <b>子 agent</b>（Task、spawn_agent）· <b>其他</b>。Codex 的讀檔和搜尋多半經由 shell 執行，所以照實歸在「指令」</td></tr>
 <tr><td>兩種密度的步驟</td><td><b>卡片</b>：編輯（檔名、<code>+N −N</code>、diff 預覽 16 行）、指令（<code>$ 指令</code> 最多 6 行，輸出收起成「輸出 · N 行」）。<b>單行</b>：其他類別</td></tr>
 <tr><td>輸出摺疊</td><td>指令展開時先顯示<b>最後 10 行</b>；讀取和其他先顯示前 6 行；≤6 行且 ≤1KB 的直接全部顯示；失敗或已拒絕的比預設少摺一級；預覽不會把多行接成一行</td></tr>
@@ -388,7 +394,7 @@ nav.toc a{display:block;padding:2px 0}
 </table></div>
 <div class="grid c3">
   <div class="card"><div class="k">桌機</div><h3>狀態列</h3><p>輸入框下方一整列：<code>● 工作中 · Opus 5.5 (1M) · xhigh · ◔ 38% 380K/1M · 5h 34% ↺2h · 7d 61% ↺3d · $0.42</code>。任何一項點了都開右側面板，顯示細節。</p></div>
-  <div class="card"><div class="k">行動</div><h3>輸入框上方一條</h3><p><code>◔ 38% · 5h 34% · 7d 61% · $0.42 ›</code>，點了開底部抽屜看完整細節。導覽列的副標題只放狀態，不放用量。</p></div>
+  <div class="card"><div class="k">行動</div><h3>輸入框上方一條</h3><p><code>◔ 38% · 5h 34% · 7d 61% · $0.42 ›</code>，點了開底部抽屜看完整細節。導覽列的副標題只放狀態，不放用量。<b>鍵盤升起或 dock 出現時，這一條收成輸入列裡的一個 ◔ 圖示</b>（點了照樣開抽屜），把高度讓給對話區（iOS 10-08 實測：iPhone 8 高度 667pt，dock 出現時對話區只剩約 1/3）。</p></div>
   <div class="card"><div class="k">清單</div><h3>每列帶 context</h3><p>session 清單每一列都顯示 context 百分比，方便判斷哪個快滿了（跟 context 接力那條線串起來）。帳號額度只放在清單頂端，顯示一次。</p></div>
 </div>
 
@@ -414,7 +420,7 @@ nav.toc a{display:block;padding:2px 0}
 <p>終端機底層一定有終端可以退，所以「介面做不到」時一律退回終端，而且<b>寫出原因</b>。判斷依據是事件，不是逾時。</p>
 <div class="tw"><table>
 <tr><th>觸發條件</th><th>行為</th></tr>
-<tr><td>dock 是「只能在終端回答」</td><td>卡片上放「開終端」按鈕，不會自動切換</td></tr>
+<tr><td>dock 是「只能在終端回答」。<b>沒有 mod 時，所有提問和核准一律是這一種</b>（照 P8a）：不用打字通道代答，多題、多選也就不會遇到「終端機選擇框狀態不明」的風險</td><td>卡片上放「開終端」按鈕，不會自動切換</td></tr>
 <tr><td>讀不到資料：沒有 mod，對話檔也讀不到；或第一回合還沒有內容</td><td>顯示「還讀不到紀錄」並寫出原因，提供「開終端」</td></tr>
 <tr><td>互動式的指令選單，例如 <code>/model</code> 的選單、Rewind</td><td>串流顯示「這個操作要在終端完成」</td></tr>
 <tr><td>沒有 mod，送出被擋下（開頭是 <code>!</code> 或 <code>/</code>）</td><td>提示改用終端</td></tr>
@@ -573,6 +579,16 @@ POST /api/mod/events                         ← mod 批次上報（Unix socket�
   <li><b>golden fixtures</b>：兩種輸入各錄一份。一份是 mod 事件流，從實測 probe 擴充成正式錄製；另一份是 transcript、Nexen 事件、Codex 紀錄。再附上預期的正規化輸出，daemon 和兩個 App 都用它做測試。</li>
   <li><b>iOS 解析器的知識搬進 daemon</b>：例如已拒絕的判斷、排隊訊息的比對。iOS 的實測結果直接變成 fixtures。</li>
 </ul>
+<p><b>U1 spec 必須補上的缺口</b>（iOS 10-08 回報，全部採納）：</p>
+<ol>
+  <li><b>寫入端點</b>：送出（<code>$.prompt.submit</code>；沒有 mod 時由 daemon 代打字）、停止（<code>$.turn.abort</code>／Esc）、插話、回答（沿用 P8a 的 decide，計畫的回饋怎麼帶）。要定 POST 介面和回傳（已送出／被拒／只送一半）。沒有 mod 時的打字由 <b>daemon</b> 實作：文字＋Enter 原子送出、copy mode 防護、每回合最多一次 Esc（閒置時連按兩次 Esc 會開 Rewind，iOS 實測）。client 只看 <code>capabilities.send</code> 決定行為。</li>
+  <li><b>送出回執</b>：UserMessage 帶 client 送出時的 <code>client_msg_id</code>，client 才能確定地把本地項目換成正式項目，不再靠「內容相同＋送出後新出現」推測。</li>
+  <li><b>pane → 對話的對應</b>：client 的分頁綁的是 tmux session；對話的 key（host＋provider＋session id）會因 <code>/clear</code>、<code>--resume</code>、改跑 Codex 而換。sessions 清單或事件要帶「這個 pane 目前的對話 key」，換對話時要通知。要跟「一個對話＝一個主體」那條線的對話身分對齊。</li>
+  <li><b>snapshot 大小與往前翻頁</b>：<code>before</code> 游標、snapshot 的回合數上限、snapshot 層級的截斷標記（之前 37MB transcript、tool_result 內嵌圖片的問題在這裡解決）。</li>
+  <li><b>清單用的摘要</b>：sessions／host-events 層級要有 status、序號、context 百分比、背景符號種類、未讀基準；帳號額度要有 host 層級的來源。client 不可能為了清單每一列都開對話。</li>
+  <li><b>推播</b>：iOS 在背景沒有 WS，靠 APNs。daemon 端要有裝置登記、「正在看」的判斷（focus 回報）、內文帶問題本身（iOS P6 brief §6、§6b）。排進 U2。</li>
+  <li><b>斷線補齊</b>：WS 斷開期間的 delta 和 <code>approval.closed</code> 都要能用 <code>after</code> 游標補回，否則手機會留著已經答過的卡片。</li>
+</ol>
 
 <!-- 15 -->
 <h2 id="s15"><span class="n">15</span>跟既有定案的關係</h2>
@@ -599,7 +615,7 @@ POST /api/mod/events                         ← mod 批次上報（Unix socket�
 <div class="tw"><table>
 <tr><th>階段</th><th>內容</th><th>誰做</th></tr>
 <tr><td>U1</td><td>daemon 對話模型 v1（CC 終端機底層）：<code>/api/mod/events</code> 接收端、Purdex mod 加上事件上報（turn.step、tool.call、tool.check、session.measure、session.append、session.receive），以及沒有 mod 時的 transcript＋hook 退路。用量也在這一期。<b>燈號 v2 全部在這一期</b>（含不需要 mod 的那幾項：SPA 重連、Esc 中斷、subagent 錯誤、背景工作；不另出修正 PR）。附 fixtures</td><td>Purdex</td></tr>
-<tr><td>U2</td><td>iOS 改接對話模型，加上用量列；送出改走 mod 通道，沒有 mod 時保留按鍵</td><td>iOS</td></tr>
+<tr><td>U2</td><td>iOS 改接對話模型，加上用量列；送出改走 mod 通道，沒有 mod 時由 daemon 代打字；推播（APNs 裝置登記、focus 回報，daemon 端由 Purdex 做）。iOS 10-08 自評：改動幅度大（資料層整個換掉、指揮台每一列重寫），沒有做不到的項目</td><td>iOS</td></tr>
 <tr><td>U3</td><td>Mac App 指揮台接上終端機底層，用量放進狀態列，dock 接 P8a（指揮台、聊天畫，終端機不畫）；狀態列三顆鈕改純換畫面＋換底層獨立一顆鈕</td><td>Purdex</td></tr>
 <tr><td>U3b</td><td>P8b：dock 可以回答權限；計畫分流的驗證。<b>不提前</b>（10-08 定案），需要時再排</td><td>Purdex（lead／team 線）</td></tr>
 <tr><td>U4</td><td>執行體底層接進同一個模型（Nexen 帶 mod；開工時先找 Nexen 方定 <code>--plugin-dir</code>）</td><td>Purdex</td></tr>
