@@ -139,6 +139,7 @@ type Module struct {
 	q1Ctx             context.Context     // nil until Start subscribes; cancelled by Stop
 	q1Cancel          context.CancelFunc  // cancels q1Ctx
 	q1Work            sync.WaitGroup      // Q1 work in flight
+	q1Running         atomic.Int32        // same count as q1Work, readable: select can pick ctx.Done() with nothing running
 	q1Retries         map[string]*q1Retry // per-session re-check slots, under q1Mu
 	recheck           func(sid string)    // test seam for recheckSession; nil arms S's re-check slot
 	q1StopCap         time.Duration       // 0 = q1StopWait; test seam

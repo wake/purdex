@@ -27,6 +27,11 @@ type ScanResult struct {
 	BytesRead      int64            // bytes read this round, including those of a read that failed midway
 }
 
+// scanChunk is how many rows Scan accumulates before writing them, so a scan
+// cut off by its deadline keeps the chunks already written (#1655); a var
+// only so tests can shrink it.
+var scanChunk = 200
+
 // openTranscript is OpenTranscript; a var only so tests can act between the
 // listing and the open.
 var openTranscript = OpenTranscript
@@ -54,7 +59,8 @@ var openTranscript = OpenTranscript
 // A root failure returns RootErr and writes nothing. A failure to open or
 // read one file skips that file this round (it stays Present; its row is
 // unchanged). ctx is checked between files. Every written row (re-read or
-// only seen) goes into one UpsertBatch. The returned error is only an index
+// only seen) is upserted in chunks of scanChunk, so rows written before a
+// cancel or deadline stay in the index. The returned error is only an index
 // error or ctx.Err(); with it, the result is the zero ScanResult.
 func Scan(ctx context.Context, root string, idx Index, now func() time.Time) (ScanResult, error) {
 	res := ScanResult{ScannedAt: now().UnixMilli()}
@@ -94,6 +100,15 @@ func Scan(ctx context.Context, root string, idx Index, now func() time.Time) (Sc
 			res.Reread++
 		}
 		batch = append(batch, row)
+		if len(batch) >= scanChunk {
+			if err := idx.UpsertBatch(ctx, batch); err != nil {
+				return ScanResult{}, fmt.Errorf("conversations: write index: %w", err)
+			}
+			batch = nil
+		}
+	}
+	if len(batch) == 0 {
+		return res, nil
 	}
 	if err := idx.UpsertBatch(ctx, batch); err != nil {
 		return ScanResult{}, fmt.Errorf("conversations: write index: %w", err)

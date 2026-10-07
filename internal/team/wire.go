@@ -123,6 +123,7 @@ type APIError struct {
 	Error    string    `json:"error"`
 	Detail   string    `json:"detail,omitempty"`
 	Approval *Approval `json:"approval,omitempty"` // request_open, already_decided
+	Op       *RelayOp  `json:"op,omitempty"`       // relay_open, bad_transition (P5a)
 }
 
 // InflightResponse is GET /api/team/inflight (spec §9.5): what a restart of
@@ -161,4 +162,54 @@ func (v EventValue) MarshalJSON() ([]byte, error) {
 		Op        string     `json:"op"`
 		Approvals []Approval `json:"approvals"`
 	}{Op: v.Op, Approvals: approvals})
+}
+
+// ---- P2c: hook decisions (lock path), spec §6.6 ----
+
+// HookLocksDir is the flag directory under <data_dir>: an empty file
+// <data_dir>/hooklocks/<agent>/<session_id> means that session has
+// something pending and its PreToolUse / PermissionRequest hook must ask
+// the daemon. Written by `pdx lead request` while its request is open (P2c)
+// and by the Purdex mod during a relay (P6); nobody else (U19 (c)).
+const HookLocksDir = "hooklocks"
+
+// Hook agents and the two events whose hook waits for a decision.
+const (
+	HookAgentCC    = "cc"
+	HookAgentCodex = "codex"
+
+	HookEventPreToolUse        = "PreToolUse"
+	HookEventPermissionRequest = "PermissionRequest"
+)
+
+// Lock names on HookDecideResponse.Lock.
+const (
+	HookLockLeadRequest = "lead_request"
+	HookLockRelay       = "relay" // P6
+)
+
+// LeadLockReasonFmt is the PreToolUse deny reason while a lead request is
+// open (spec §6.6); the argument is the request id.
+const LeadLockReasonFmt = "lead 申請等待核准中（%s），核准或拒絕前這個 session 不能執行工具；請在 Purdex 介面處理"
+
+// HookDecideRequest is POST /api/hooks/decide: what `pdx hook` read on
+// stdin, for the two events that wait. Raw is the whole stdin, for later
+// kinds (P8a).
+type HookDecideRequest struct {
+	Agent     string          `json:"agent"`      // "cc" | "codex"
+	Event     string          `json:"event"`      // "PreToolUse" | "PermissionRequest" decide; any other hook event name is answered {} (P8a-1d forwards PostToolUse / Stop / … here)
+	SessionID string          `json:"session_id"` // the agent's own session id (the hook stdin's session_id)
+	ToolName  string          `json:"tool_name,omitempty"`
+	ToolInput json.RawMessage `json:"tool_input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Raw       json.RawMessage `json:"raw,omitempty"`
+}
+
+// HookDecideResponse is the 200 body. The empty struct ({}) is "no
+// decision": the hook prints nothing and the normal permission flow runs.
+type HookDecideResponse struct {
+	Decision string `json:"decision,omitempty"` // "deny" | ""
+	Reason   string `json:"reason,omitempty"`
+	Lock     string `json:"lock,omitempty"` // "lead_request" | "relay" | ""
+	ID       string `json:"id,omitempty"`   // the request / op that holds the lock
 }

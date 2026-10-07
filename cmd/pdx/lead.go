@@ -181,6 +181,23 @@ func runLeadCmd(ctx context.Context, args []string, getenv func(string) string, 
 		return leadReportErr(err, stderr)
 	}
 
+	// The hard lock (spec §6.6): while the request is open this session's
+	// PreToolUse hooks ask the daemon, which denies them. The flag is the
+	// gate the hook checks before calling; it goes up right after the
+	// daemon confirmed the row and comes down on every exit path below —
+	// approval, denial, timeout, the signal path through leadCancel, every
+	// error. The session id is the daemon's attribution of this caller
+	// (Approval.origin.session_id): the CLI knows only its inbox. A SIGKILL
+	// skips the defer; the daemon then removes the flag with its first {}.
+	// The flag carries this request's id so that the defer never lowers a
+	// flag a later request of the same session has raised (hooklock.go).
+	if lock := team.HookLockPath(cfg.DataDir, team.HookAgentCC, ap.Origin.SessionID); lock == "" {
+		fmt.Fprintln(stderr, "pdx lead: 無法建立硬鎖旗標（data_dir 或 session id 為空），這次只有軟鎖")
+	} else {
+		writeHookLock(lock, id, stderr)
+		defer removeHookLock(lock, id)
+	}
+
 	hung := 0
 	for ap.State == team.StateOpen {
 		if ctx.Err() != nil {

@@ -46,8 +46,11 @@ func entryItems(e Entry, empty string) json.RawMessage {
 }
 
 func emptyFor(key string) string {
-	if key == KeyResumeTemplates {
+	switch key {
+	case KeyResumeTemplates:
 		return `{}`
+	case KeyRelay:
+		return relaySwitchesJSON
 	}
 	return `[]`
 }
@@ -60,6 +63,7 @@ func (m *Module) handleGet(w http.ResponseWriter, _ *http.Request) {
 		"commands":        KeyCommands,
 		"resumeTemplates": KeyResumeTemplates,
 		"quickReplies":    KeyQuickReplies,
+		"relay":           KeyRelay,
 	} {
 		e, err := m.store.Get(key)
 		if err != nil {

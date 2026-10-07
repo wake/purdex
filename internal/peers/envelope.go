@@ -35,6 +35,7 @@ type Envelope struct {
 	DaemonVersion        string       `json:"daemon_version"`         // this daemon's buildinfo.Version
 	UnknownRegistryFiles []string     `json:"unknown_registry_files"` // never null; alive-but-undecodable registry files (Diagnosis.BlockingUnknown)
 	TitlesUnavailable    bool         `json:"titles_unavailable"`     // the title store could not be read: every row renders without its title. Addresses are unaffected
+	LineageUnavailable   bool         `json:"lineage_unavailable"`    // the relay lineage could not be read: rows carry no previous_refs, and a ref that matches no live row is not-ready rather than not-found (lead-team-relay spec §8.4)
 }
 
 // HostResult is one host's row in a scope=all response: like Envelope, plus
@@ -60,6 +61,7 @@ type HostResult struct {
 	DaemonVersion        string       `json:"daemon_version"`         // "" when this row is a local fetch failure
 	UnknownRegistryFiles []string     `json:"unknown_registry_files"` // never null
 	TitlesUnavailable    bool         `json:"titles_unavailable"`     // copied from the host's Envelope
+	LineageUnavailable   bool         `json:"lineage_unavailable"`    // copied from the host's Envelope
 }
 
 // AllEnvelope is GET /api/peers?scope=all's body.

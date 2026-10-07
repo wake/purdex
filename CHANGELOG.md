@@ -1,5 +1,110 @@
 # Changelog
 
+## [1.0.0-alpha.536] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排；與 alpha.532／533 一次重啟）。這是接力第一個有行為的版本：四條 `/api/relay/*` 路由上線，但還沒有 mod 或 `pdx relay` 指令去呼叫（P5a-2c／P5b），所以現有使用者的流程不受影響。`pdx` 指令、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-2a（#1708）
+
+接力（spec §8.1、§8.7）的 daemon 端起點，plan v2 Task 5a.7。
+
+- **`POST /api/relay/begin`**：session 的 mod 在 context 用量到門檻時來開一個接力 op，daemon 同時開一張 `self_relay` 的核准單（10 分鐘期限、30 秒租約），`model_id`／`effort` 由 daemon 從該 session 最近的 statusline 讀數填。拒絕的情況：member（U9，等 P4 才會出現）、host 的接力開關關著、該 session 自己暫停、已有一個進行中的 op（回 409 並帶出那個 op）。
+- **核准單一關，op 跟著動**：核准 → `claimed`；拒絕／逾時／取消／租約到期 → `cancelled` 並記原因；不論是從 App 決定、`DELETE`、sweeper 的逾時或租約、還是來源 session 消失，都走同一條路。
+- **卡住的 op 自癒**：op 與核准單是兩次寫入，中間 daemon crash 或第二次寫入失敗時，下一次 begin 會從核准單重新推導那個 op（單已關 → 照上面規則移動；單不存在 → 當作放棄），session 不會被 409 卡到重啟。
+- **`POST /api/relay/hello`**：mod 啟動時報到（daemon 記住最近 512 個 session 有 mod，給之後的降級判斷用）。
+- **`POST /api/relay/self`**：這個 session 的「暫停接力／恢復／查狀態」；host 開關關著時，session 自己開也還是關。
+- **`GET /api/relay/wait/{id}`**：核准單的長輪詢（續租）。
+- team module 開始對外提供接力血統（`previous_refs` 從這版起會出現在 `pdx peers`／App 的 peer 清單），讀 host 設定的接力開關，啟動時建 `<data_dir>/relay/`。
+
+Review 後補強：一個 session 最多一個 op 由資料表索引接住時同樣回 409 帶 op（P5a-1a fix note）；卡住 op 的就地自癒（攻擊方）；409 帶的是重導後的 op（critic）。
+
+## [1.0.0-alpha.535] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。沒有使用者看得到的變化。
+
+### Fixed：對話索引冷掃描逾時就永遠完成不了（#1655，#1711）
+
+`conversations.Scan` 原本掃完才一次寫入索引，所以超過 60 秒的冷掃描什麼都不會留下、下一次又從零開始。現在每 200 筆分塊寫入，逾時前寫好的進度會保留，下一次掃描從那裡接著做。
+
+## [1.0.0-alpha.534] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）。沒有使用者看得到的變化。
+
+### Fixed：nex 停止時的假 log（#1656，#1709）
+
+`stopManualResume` 在 ctx 已逾時、但沒有任何 manual-resume 工作在跑時，仍可能記出「still running」。現在只在確實有工作在途時才記（以原子計數判斷）。
+
+## [1.0.0-alpha.533] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排；可與 alpha.532 合併一次重啟）。本版沒有使用者看得到的變化：還沒有任何東西註冊接力血統（P5a-2a 才會），`pdx peers` 輸出不變。`pdx` 指令、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-1b（#1705）
+
+「接力後舊 ref 繼續有效」（U3，spec §8.4）的 peers 端，與 host 的接力開關（spec §8.7 (a)）。plan v2 Tasks 5a.4–5a.6。
+
+- **peer 列多了 `previous_refs`**：這個對話接力過的所有舊 ref，最新在前、不設上限。
+- **地址解析多一層**：`_ref` 沒有活的對話持有、但恰好是一個活的對話的舊 ref ⇒ 送到那個對話；活的 ref 永遠優先（含 `<name> [ref]` 寫法）；兩個對話都說那是自己的舊 ref ⇒ 不猜。「找不到」的提示改說：改名與接力都會保留 ref。
+- **血統讀不到時**（`lineage_unavailable`）：peer 清單照常、不標 partial，但 ref 形式的位址查不到時回「尚未就緒」而不是「不存在」，也絕不會落到 tmux 名稱那一層誤投。
+- **host 設定 `relay`**：`self_solo`／`self_lead` 兩個開關（預設都開）；PUT 只接受這兩個布林欄位，`null`、未知欄位、拼錯都回 400（避免「拼錯開關＝靜默開啟」）。
+- daemon 內部：以 session id 解析來源（給之後的 self relay／AskUserQuestion 分流用）。
+
+Review 後補強：combined form 的活 ref 優先（R1）、`null` 與未知欄位（R1／攻擊方）、`lineage_unavailable`（攻擊方 A-1）、血統鏈 memo 化。既有 `internal/module/agent` 測試在全套件負載下偶發逾時列 #1706。
+
+## [1.0.0-alpha.532] - 2026-10-07
+
+> 動 daemon，**需要部署新 binary 並重啟**（由統籌安排）：啟動時 team.db 多建三張空表與索引，沒有其他行為變更，可以跟下一個 PR 合併一次重啟。`pdx` 指令、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-1a（#1702）
+
+接力的儲存層（spec §8.1、§8.4、§8.7；plan v2 Tasks 5a.2–5a.3）。還沒有任何路由或指令用到它；P5a-1b 起開始接。
+
+- **team.db 三張表**：`relay_ops`（接力 op 與九態狀態機；一個 session 同時只能有一個未結束的 op，由 partial unique index 保證）、`session_lineage`（session 換手的血統：誰接了誰、舊 ref 是什麼）、`session_prefs`（每 session 的「這個 session 不再詢問」）。
+- **狀態回報是 CAS 交易**：報同一狀態是冪等 no-op，不合法的轉換回 `bad_transition`；`cleared` 在同一交易寫下 lineage 並存新 session id／ref，會弄壞血統的回報（空 id、新舊相同、新 session 已被別的 op 接走、形成環）一律拒絕、op 不變。
+- **`PreviousRefs`**：整條鏈、最新在前、不設上限（U3），給 P5a-1b 的 peers 解析用。
+- **title 搬家**（`PeerLabelStore.Move`）：接力後 title 跟著新 session id 走，一次、冪等（舊 row 已釋放就不再搬），給 P5a-2b 在 `cleared` 後與 boot reconciliation 呼叫。
+- spec §8.4 措辭對齊 plan 裁決：title 搬家是 meta.db 另一個冪等交易，不是跟 lineage「同一交易」（`database/sql` 無跨庫交易）。
+
+Review 後補強：partial unique index（R1）、`cleared` 的血統守衛（攻擊方 A-1／A-3）；`relay_store.go` 的職責拆分列 #1703。
+
+## [1.0.0-alpha.531] - 2026-10-07
+
+> 純型別與常數，**不需部署**（沒有任何行為變更；跑中的 daemon 完全不受影響）。資料庫、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P5a-0（#1700）
+
+接力（relay，spec §8）的 wire 契約，plan v2 `docs/specs/2026-10-06-lead-team-relay-plan-v2.md` P5a 的第一個 PR；之後 P5a-1a 起的 store、路由、CLI、SPA、mod 都以這一份字面值為準。
+
+- **`internal/team/wire_relay.go`**：接力 op 的 kind（self／member）、九個狀態與終態判定、八個 failed／cancelled 原因、六個錯誤碼、門檻常數（70%、20000 tokens、10 分鐘、`<data_dir>/relay/`）、`RelayOp` 與 hello／begin／self／report 的 request／response 型別、`LineageReader` 介面。
+- **`APIError` 多了 `op`**：409 `relay_open`／`bad_transition` 會帶出現行的 op。
+- 契約測試逐一釘住每個字面值與每個 DTO 的 JSON 形狀（含 optional 欄位省略、`used_percentage` 的「沒量到」與「量到 0」之分）。
+
+## [1.0.0-alpha.530] - 2026-10-07
+
+> 只動 `pdx` 指令，**需要部署新的 `pdx` 執行檔**（與 alpha.529 的 daemon 變更一起重啟即可），由統籌安排。資料庫、SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P2c-2（#1697）
+
+硬鎖（U17）完成：lead 申請等待核准期間，該 session 的每一次工具呼叫都會被 Claude Code 的 hook 擋下（spec §6.4、§6.6），補上軟鎖「模型把指令丟背景執行」的漏洞。
+
+- **`pdx lead request`** 建立申請成功後，在 `<data_dir>/hooklocks/cc/<session_id>` 寫下旗標；不論核准、拒絕、逾時、Ctrl-C 或 kill，結束時都會移除。寫不了旗標時印一行提醒並退回軟鎖。
+- **`pdx hook`**：只有該 session 有旗標時才去問 daemon（沒有旗標的 session 跟以前一樣零成本）。`PreToolUse` 收到「拒絕」就印出 Claude Code 讀得懂的 deny 與原因（「lead 申請等待核准中（<id>），核准或拒絕前這個 session 不能執行工具；請在 Purdex 介面處理」）；`PermissionRequest` 與其他情況不印。**整條路徑最多 5 秒**（事件回報與詢問並行、共用一個預算），daemon 連不上就當沒事、照常放行；永遠 exit 0，不會卡住任何 session。
+- Review 後的補強：旗標內容是申請 id，結束時只在仍屬於自己時才移除（flock 保證跨程序原子），同 session 緊接著的下一個申請不會被前一個的收尾誤刪；hook 的 stdin 讀取也納入同一個 5 秒預算；事件回報與詢問並行、不互相等待（spec §6.6 措辭同步修正）。
+
+## [1.0.0-alpha.529] - 2026-10-07
+
+> 動 daemon 與 `pdx` 指令，**需要部署新 binary 並重啟 daemon**，由統籌安排。Codex 使用者要重跑一次 `pdx setup --agent codex` 才會拿到新的 hook timeout。資料庫結構不變（只多 `<data_dir>/hooklocks/` 目錄）。SPA、Electron 都沒有改動。
+
+### Added：lead / member / team 與 context 接力 — P2c-1（#1695）
+
+硬鎖的 daemon 端（spec §6.6；plan v2 `docs/specs/2026-10-06-lead-team-relay-plan-v2.md`，本版也併入該 plan 的文件 PR #1694）：
+
+- **`POST /api/hooks/decide`**：hook 問「這個 session 現在能不能執行工具」。該 session 有尚未核准的 lead 申請時回「拒絕」與原因（「lead 申請等待核准中（<id>），核准或拒絕前這個 session 不能執行工具；請在 Purdex 介面處理」）；其他情況回空（照常執行）。
+- **旗標檔目錄 `<data_dir>/hooklocks/<agent>/<session_id>`**：只有存在旗標的 session，hook 才會來問；旗標的 session 已不存在時由 sweeper 清掉。
+- `pdx` 的 daemon client 多了可調的重啟寬限（hook 路徑用 5 秒，不是 30 秒）。
+- Codex 的 `PreToolUse` hook timeout 從 5 秒調到 10 秒（給硬鎖路徑用）；Claude Code 的 hook 設定不變。
+
+`pdx hook` 真正去問 daemon、`pdx lead request` 寫旗標，在下一個 PR（P2c-2）。
+
 ## [1.0.0-alpha.528] - 2026-10-07
 
 > 只動 daemon，**需要部署新 binary 並重啟 daemon**，由統籌安排。SPA、資料庫、Electron 都沒有改動。目前部署環境裡所有 lease 持有者都是 pdx 自己，所以這版沒有可見的行為變化，是補一個之後才會碰到的缺口。

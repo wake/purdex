@@ -1,0 +1,86 @@
+package hostconfig
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+)
+
+// KeyRelay is the host_config row of the relay switches (lead-team-relay
+// spec §8.7 (a)): per host, read by the team module when a session asks to
+// self-relay. Both default to true; a member has no switch (U13).
+const KeyRelay = "relay"
+
+// RelaySwitchesKey is the service-registry key under which Init publishes
+// the module as a RelaySwitchReader for the team module.
+const RelaySwitchesKey = "hostconfig.relay-switches"
+
+// RelaySwitches is the stored shape and the GET field `relay.items`.
+type RelaySwitches struct {
+	SelfSolo bool `json:"self_solo"` // a session that is neither lead nor member
+	SelfLead bool `json:"self_lead"` // a lead
+}
+
+// DefaultRelaySwitches is what a host that never wrote the row reads as.
+var DefaultRelaySwitches = RelaySwitches{SelfSolo: true, SelfLead: true}
+
+// relaySwitchesJSON is DefaultRelaySwitches as the GET answers it for a
+// never-written key (emptyFor).
+const relaySwitchesJSON = `{"self_solo":true,"self_lead":true}`
+
+// RelaySwitchReader is what the team module type-asserts on the registry value.
+type RelaySwitchReader interface {
+	RelaySwitches() (RelaySwitches, error)
+}
+
+// normalizeRelay validates a PUT body: a JSON object whose two fields are
+// booleans; a field left out keeps its default (true). Anything else is
+// a validation error.
+func normalizeRelay(raw json.RawMessage) (RelaySwitches, error) {
+	if firstByte(raw) != '{' {
+		return RelaySwitches{}, errors.New("items must be a JSON object")
+	}
+	// Decode field by field so that an explicit null is seen: a *bool would
+	// read `{"self_solo":null}` as "left out" and silently reset the switch.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return RelaySwitches{}, errors.New("items must be a JSON object")
+	}
+	for k := range fields {
+		if k != "self_solo" && k != "self_lead" {
+			// A misspelt switch must not save as "left out = on" (fail-open).
+			return RelaySwitches{}, errors.New("unknown relay field " + k + "; only self_solo and self_lead")
+		}
+	}
+	out := DefaultRelaySwitches
+	for _, f := range []struct {
+		key string
+		dst *bool
+	}{{"self_solo", &out.SelfSolo}, {"self_lead", &out.SelfLead}} {
+		v, present := fields[f.key]
+		if !present {
+			continue
+		}
+		var b bool
+		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) || json.Unmarshal(v, &b) != nil {
+			return RelaySwitches{}, errors.New("self_solo and self_lead must be booleans")
+		}
+		*f.dst = b
+	}
+	return out, nil
+}
+
+// RelaySwitches reads the stored switches, defaults for a never-written
+// key. A stored value that no longer decodes is an error, not a silent
+// "on": the team module then refuses self relay with 503 rather than
+// relaying against a switch it could not read.
+func (m *Module) RelaySwitches() (RelaySwitches, error) {
+	e, err := m.store.Get(KeyRelay)
+	if err != nil {
+		return RelaySwitches{}, err
+	}
+	if e.Value == nil {
+		return DefaultRelaySwitches, nil
+	}
+	return normalizeRelay(e.Value)
+}

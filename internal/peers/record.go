@@ -52,13 +52,20 @@ type PeerRecord struct {
 	// Ref is the sessionId-derived disambiguator, "_q34psn"; "" when the row
 	// has no cc agent. It is the one part of an address that cannot drift, and
 	// what Resolve falls back to when a name does.
-	Ref          string `json:"ref"`
-	Title        string `json:"title"`        // self-declared display name; "" until one is set, and never routed on (spec §4.5)
-	TitleSource  string `json:"title_source"` // user | ""
-	TitleRev     int64  `json:"title_rev"`
-	SessionCode  string `json:"session_code"`  // always present
-	SessionName  string `json:"session_name"`  // always present
-	TmuxInstance string `json:"tmux_instance"` // always present
+	Ref string `json:"ref"`
+	// PreviousRefs are the refs this conversation took over from through
+	// relays (lead-team-relay spec §8.4): newest first, the whole chain,
+	// uncapped. Resolve delivers a bare old ref to the row that lists it
+	// when no live row carries it; `pdx peers` prints the newest as
+	// "(was _xxxxxx)". Absent (omitempty) for a conversation that never
+	// relayed, and on a daemon that predates P5a.
+	PreviousRefs []string `json:"previous_refs,omitempty"`
+	Title        string   `json:"title"`        // self-declared display name; "" until one is set, and never routed on (spec §4.5)
+	TitleSource  string   `json:"title_source"` // user | ""
+	TitleRev     int64    `json:"title_rev"`
+	SessionCode  string   `json:"session_code"`  // always present
+	SessionName  string   `json:"session_name"`  // always present
+	TmuxInstance string   `json:"tmux_instance"` // always present
 	// TmuxName is the tmux session this row's agent is in, for display only.
 	// NOTHING routes on it, and that is the point: its two provenances differ
 	// in how much they can be trusted, and RowKind tells them apart.
@@ -130,6 +137,11 @@ type BuildInput struct {
 	// carries that session id, so two CC panes in one tmux session each
 	// show their own usage.
 	Contexts map[string]ContextInfo // by CC session id; nil means unknown for every row
+	// PreviousRefs is the relay lineage per CC session id (lead-team-relay
+	// spec §8.4): the refs that session took over from, newest first. Build
+	// copies each onto the row carrying that session id. nil means no
+	// lineage is known (no team module, or it could not be read).
+	PreviousRefs map[string][]string
 }
 
 // Build joins sessions, owners and registry entries into PeerRecords. It is
@@ -168,6 +180,13 @@ func Build(in BuildInput) []PeerRecord {
 			if c, ok := in.Contexts[a.SessionID]; ok {
 				c := c
 				a.Context = &c
+			}
+			// The lineage rides on the row, not the agent: Resolve decides
+			// on PeerRecord fields, and the ref it falls back from lives
+			// there too. A copy, so a caller mutating the input map later
+			// cannot change a built row.
+			if refs := in.PreviousRefs[a.SessionID]; len(refs) > 0 {
+				records[i].PreviousRefs = append([]string(nil), refs...)
 			}
 		}
 	}

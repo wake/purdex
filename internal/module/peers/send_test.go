@@ -1490,6 +1490,9 @@ func TestSend_PeerNotFoundTeachesTheV4AddressForms(t *testing.T) {
 	if !strings.Contains(ae.Detail, "survives renames") {
 		t.Errorf("hint must say what a ref survives: %q", ae.Detail)
 	}
+	if !strings.Contains(ae.Detail, "renames and relays") {
+		t.Errorf("a relay keeps the old ref reachable (spec §8.4); the hint must say so: %q", ae.Detail)
+	}
 	if len(s.postCalls()) != 0 {
 		t.Errorf("posts = %d, want none", len(s.postCalls()))
 	}
