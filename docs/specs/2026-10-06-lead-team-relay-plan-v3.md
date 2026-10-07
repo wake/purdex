@@ -1,7 +1,8 @@
 # Lead / member / team and context relay — Implementation Plan v3 (P4, P4b, P4c, P6, P7)
 
-> **Status (2026-10-07):** draft, not yet through codex review. Written against origin/main `d57ca13b` (alpha.581; spec U20 merged in PR #1838). Every `file:line` below was read on that commit. P8a-2 is still in flight on its own branch; the one PR here that touches the mod (P6-6) and the one that touches `register.js` again (P7-2) rebase onto it.
+> **Status (2026-10-07):** revised after one codex round (8 findings: 2 critical, 5 important, 1 minor; all applied) and the coordinator's rulings on every open question. The binding text is **"Coordinator decisions (plan v3)"** at the end. Written against origin/main `d57ca13b` (alpha.581; spec U20 merged in PR #1838); every `file:line` below was read on that commit. P8a-2 is still in flight on its own branch. Every PR here that touches the mod (P6-3a, P6-3c, P6-6, P7-2) rebases onto it.
 > **Source:** spec `docs/specs/2026-10-06-lead-team-relay-spec.md` (U1–U20, M1–M25), the "Coordinator decisions" and "Fix notes" of plan v1 and plan v2 (binding), and the line's memory `kickoff_lead_team_relay.md` (what shipped, review rulings, pitfalls).
+> **Measurement numbers:** M25 is U20's launch flags (spec). **M26** is P8a-2's hours-long hold. **M27** (measured 2026-10-07, below) is the member launch in a never-opened directory. **M28** (still to measure) is whether `session.receive` fires while a turn runs.
 > **Relation to v1 and v2:** v1 shipped P0–P3 (alpha.513–527), v2 shipped P2c, P5a, P5b and P8a-1a…1d (alpha.529–579). v3 schedules what is left of spec §12: **P4, P4b, P4c, P6, P7**. P8b is not scheduled and not written here. v3 uses a **compact format**: contracts, rules, tests and mutation gates, but no full code blocks. v2's code blocks went stale after review, so v3 does not repeat that mistake. The implementer writes the code test-first from these contracts.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. Each PR is TDD, one task per commit. Before you start a PR, re-verify its `file:line`s against main, because another line moves fast.
@@ -13,7 +14,11 @@
 ## Global constraints
 
 - **Size.** Each PR is ≤ 800 lines of diff **and** ≤ 20 files. The sections below are already split. A pure-move PR (P4-0, P6-0) is proved by per-declaration byte comparison, not by diffstat. Pure-move and bump PRs get no codex review (repo CLAUDE.md).
-- **Order.** Merge in the order of the PR table. Exceptions: P6-0 and P4c-1 have no upstream dependency and may land early. P6-8 needs only P6-2b.
+- **Order.** Merge in the order of the PR table (spec order, coordinator decision 1).
+  - P6-0 and P4c-1 have no upstream dependency and may land early.
+  - P6-3a (mod only) may land any time before P6-3c.
+  - P6-8 needs only P6-2b.
+  - **M28 should be measured before P6-4 starts** (the coordinator said before P6-6). The branch-specific code is in P6-4, P6-5 and P6-6 (P6-4 "Claim timeout"). If M28 is not ready by then, P6-4 takes branch B, which is correct for either outcome.
 - **Tests.**
   - Go: `go test ./<pkg>/ -race` and `gofmt -l` (empty output). `make lint` fails on unformatted Go since `d71853ba`.
   - SPA: `cd spa && npx vitest run <path>`, `pnpm run lint`, `npx tsc -p tsconfig.app.json --noEmit`, `pnpm run build`.
@@ -41,10 +46,14 @@
 
 1. **Approval → team in one transaction, and a team never ends mid-relay.** → P4-2 (`CloseLeadApproved`, the team-end guard), P4-3 (lead and member move in the `cleared` transaction).
 2. **A spawn survives a daemon restart without launching twice.** A start timeout kills only the session this op created (generation-guarded). → P4-5.
-3. **Cross-host trust.** Only `principal.HostID == lead_host_id` with a matching `team_id` may kill or relay. `AllowTeam` gates writes. The admin token is refused on the peer team routes. An older daemon (404 **or** plain-text 403) reads as `remote_unsupported`. → P4c-2, P4c-3, P6-7.
-4. **The relay lock is checked before the flag is removed.** It never outlives the op: lowered at `cleared` and at every terminal state. → P6-3.
+3. **Cross-host trust.** Only `principal.HostID == lead_host_id` with a matching `team_id` may kill or relay. `AllowTeam` gates writes. The admin token is refused on the peer team routes. An older daemon (404 **or** plain-text 403) reads as `remote_unsupported`. → P4c-2, P4c-3, P4c-4, P6-7a.
+4. **The relay lock is exactly spec §6.6.** Only a `Write` to the op's handoff path is `allow`; every other tool is `deny`. It is checked before the flag is removed.
+   - The mod raises the flag only at the write turn and lowers it before `/clear`. The daemon's safety net removes it at every terminal state.
+   - The write prompt no longer asks the model to run git: the mod embeds the outputs.
+   - → P6-3a, P6-3b, P6-3c.
 5. **#1735.** An op stuck past `claimed` is ended from frames. A cleared report is accepted only for the op's own process. → P6-4.
-6. **The member relay is safe to spoof.** The claim is accepted only for the target session. The control message is consumed only with its marker, from a peer. A mod older than protocol 2 is refused (`relay_unsupported`). → P6-2b, P6-6.
+6. **The member relay is safe to spoof and never leaks.** The claim is accepted only for the target session. The control message is **always** consumed with its marker, from a peer: busy or idle, the model never sees it. A mod older than protocol 2 is refused (`relay_unsupported`). → P6-2b, P6-6.
+7. **A cross-host relay updates the lead host's roster.** After the member host's `cleared`, the lead host's member row carries the new session and ref, and the old ref still targets it. → P6-7b.
 
 ---
 
@@ -66,21 +75,25 @@
 | **P4b-4** | Selection rule; `pdx spawn --repo/--host`; the choice line; `no_host_for_repo`; `remote_unsupported` until P4c | P4b-3, P4-7 | 560 / 10 | daemon + CLI + setup |
 | **P4c-1** | `PeerHost.AllowTeam`; `pdx peers host allow-team`; Hosts toggle | main | 380 / 12 | daemon + CLI + SPA |
 | **P4c-2** | Member host side: `remote_members`; `POST /api/peers/team/spawn|kill|lead-moved|end`; policy; role of a remote member | P4b-4, P4c-1 | 760 / 12 | daemon |
-| **P4c-3** | Lead host side: forwarding spawn and kill; `forwarded_ops` with retry; lead-moved and end outbox; remote members in `pdx team` | P4c-2 | 790 / 14 | daemon (both hosts) + CLI |
+| **P4c-3** | Lead host side, spawn: `forwarded_ops`; forwarding with op-id idempotency, classification and the restart grace; resume at boot; CLI codes | P4c-2 | 520 / 8 | daemon (both hosts) + CLI |
+| **P4c-4** | Lead host side, the rest: kill forwarding; lead-moved / end outbox (retried forever, backoff ≤ 10 min); remote members in `pdx team` (`ContextInfo` model/effort); `matchMember` on remote hosts | P4c-3 | 620 / 10 | daemon (both hosts) |
 | **P6-0** | Pure move: split `cmd/pdx/relay.go` (#1730) | main | 560 moved / 3 | none |
 | **P6-1** | Daemon notifier: virtual peer, in-process peers sender, auto-reply; lead-handover notice to members | P4-3 | 600 / 8 | daemon |
 | **P6-2a** | Member-relay wire; `relay_ops.pid/pane_id`; persisted mod `hello`; `cleared` binding by op pid | P6-1 | 420 / 10 | daemon |
-| **P6-2b** | `POST /api/team/relays` and the control message; `POST /api/relay/ops/{id}/claim`; op long-poll | P6-2a, P4-6 | 650 / 6 | daemon |
-| **P6-3** | Relay lock: decide answer before flag removal; daemon raises and lowers the flag; shared flock helpers | P6-2b | 620 / 10 | daemon + CLI |
-| **P6-4** | Claim (60 s) and whole-op (15 min) timeouts; boot and sweeper reconciliation from frames (#1735); completion and failure notices | P6-3 | 700 / 6 | daemon |
-| **P6-5** | CLI `pdx relay <ref> [--wait]` and `pdx relay claim` | P6-0, P6-2b | 520 / 4 | CLI |
-| **P6-6** | Mod: control message, claim, write with 協作關係 facts; protocol `VERSION` 2; acceptance recipe | P6-5, P6-4 (P8a-2 if merged) | 560 / 5 | daemon + setup |
-| **P6-7** | Cross-host member relay: `POST /api/peers/team/relay`; forwarding; proxied wait; notices across hosts | P6-6, P4c-3 | 650 / 8 | daemon (both hosts) |
+| **P6-2b** | `POST /api/team/relays` and the control message; `POST /api/relay/ops/{id}/claim` (no lock at claim); op long-poll | P6-2a, P4-6 | 650 / 6 | daemon |
+| **P6-3a** | Mod: run the read-only git commands itself and embed them in the write prompt; write and fix prompts say "one `Write` of the whole file" | main (P8a-2 if merged) | 300 / 3 | daemon + setup |
+| **P6-3b** | Relay-lock machinery: flock helpers moved to `internal/team`; `pdx relay lock|unlock`; decide answer (`allow` exact handoff `Write`, `deny` others) before flag removal; `pdx hook` prints `allow`; daemon safety net; prune guard | P6-0, P6-2b | 720 / 12 | daemon + CLI |
+| **P6-3c** | Mod raises the flag at the write turn's `turn.start`, lowers it before `/clear` and on every give-up | P6-3a, P6-3b | 320 / 3 | daemon + setup |
+| **P6-4** | Claim timeout (60 s; basis by M28: branch A `seen` from the request, or branch B from the next idle); the 15-min stall timeout; boot and sweeper reconciliation from frames (#1735); completion and failure notices | P6-3c | 720 / 7 (A: 780 / 10) | daemon |
+| **P6-5** | CLI `pdx relay <ref> [--wait]`, `pdx relay claim` (+ `pdx relay seen`, branch A) | P6-0, P6-2b, P6-4 | 560 / 4 | CLI |
+| **P6-6** | Mod: control message always consumed, kept until the running turn ends, then claim; write with 協作關係 facts; protocol `VERSION` 2; acceptance recipe | P6-5, P6-4 (P8a-2 if merged) | 600 / 5 | daemon + setup |
+| **P6-7a** | Cross-host member relay: `POST /api/peers/team/relay`; forwarding; proxied wait; notices to a remote lead | P6-6, P4c-4 | 600 / 8 | daemon (both hosts) |
+| **P6-7b** | After a cross-host `cleared`: member host → lead host `POST /api/peers/team/member-moved` (outbox); lead host updates the remote member row and keeps its old refs (`prev_refs`) for `matchMember` | P6-7a | 450 / 9 | daemon (both hosts) |
 | **P6-8** | SPA: restart-confirm line `N 個接力進行中` | P6-2b | 120 / 5 | SPA |
-| **P7-1** | Agent-status accessor; the 70% idle notice, armed once and re-armed after a relay or a drop | P6-4 | 620 / 8 | daemon |
-| **P7-2** | Member auto-compact report: route, CLI, mod; skill notice texts | P7-1 | 420 / 8 | daemon + CLI + setup |
+| **P7-1** | Agent-status accessor (unless P6-4 branch B already added it); the 70% idle notice, armed once and re-armed after a relay or a drop below 70% | P6-4 | 620 / 8 | daemon |
+| **P7-2** | Member auto-compact report: route, CLI, mod; the notice **disarms** the 70% notice; skill notice texts | P7-1 | 430 / 8 | daemon + CLI + setup |
 
-Total ≈ 14 300 lines across 26 PRs. Spec order P4 → P4b → P4c → P6 → P7 is kept. The local member relay (P6-1…P6-6) depends on no part of P4b or P4c, so it could ship before them (open question 1).
+Total ≈ 17 000 lines across 31 PRs. Spec order P4 → P4b → P4c → P6 → P7 is kept (coordinator decision 1).
 
 ---
 
@@ -90,8 +103,8 @@ Total ≈ 14 300 lines across 26 PRs. Spec order P4 → P4b → P4c → P6 → P
 
 | Code | Cases |
 |---|---|
-| 0 | spawn done; kill done; team listed; relay accepted; claim accepted; `--wait` ended `done` or hit its bound (op JSON printed) |
-| 1 | runtime/API error; spawn `failed` with any reason other than `member_start_timeout`; relay `failed{handoff_incomplete}`; brief not sent after a successful spawn (stdout still carries the member) |
+| 0 | spawn done; kill done; team listed; relay accepted; claim (or `seen`) accepted; `relay lock|unlock` done; `--wait` ended `done` or hit its bound (op JSON printed) |
+| 1 | runtime/API error; spawn `failed` with any reason other than `member_start_timeout`; relay `failed{handoff_incomplete}`; brief not sent after a successful spawn (stdout still carries the member); a flag file that cannot be written or removed |
 | 2 | usage, including `--model` / `--effort` invalid (U20), both `--brief` and `--brief-file`, an unknown `pdx relay` word |
 | 12 | relay op `cancelled` (`--wait`) |
 | 13 | `not_lead`, `team_full`, `cwd_outside_grant`, `not_your_member`, `relay_unsupported`, `relay_open`, `bad_transition`, `not_your_op` (new), `no_host_for_repo`, `host_not_allowed`, `remote_unsupported`, `already_lead`, `member_cannot_lead` |
@@ -103,13 +116,18 @@ Total ≈ 14 300 lines across 26 PRs. Spec order P4 → P4b → P4c → P6 → P
 | Table | PR | Key | Purpose |
 |---|---|---|---|
 | `teams` | P4-2 | `id` (= the approving request's id) | one row per approval; `lead_session_id` follows relays |
-| `team_members` | P4-3 | `spawn_op` | the lead host's members (local and, from P4c-3, remote) |
+| `team_members` | P4-3 | `spawn_op` | the lead host's members (local and, from P4c-3, remote; `prev_refs` from P6-7b) |
 | `spawn_ops` | P4-4 | `id` (client UUID) | persisted spawn steps (spec §9.3) |
 | `remote_members` | P4c-2 | `spawn_op` | the member host's record of members whose lead is elsewhere (spec §7.4 (c)) |
-| `forwarded_ops` | P4c-3 | `id` | the lead host's forwarded spawn/kill/relay and its lead-moved/end outbox |
+| `forwarded_ops` | P4c-3 | `id` | forwarded spawn/kill/relay and the cross-host outbox (`lead_moved`, `end` on the lead host; `member_moved` on the member host, P6-7b) |
 | `mod_hello` | P6-2a | `session_id` | the persisted `hello` (mod presence survives a restart) |
 
-**`Start` order after v3** (`internal/module/team/module.go:243-263`): MkdirAll relay dir → boot lease grace → start the notifier's virtual peer (P6-1) → `reconcileRelays` (P5a + P6-4) → re-raise relay locks (P6-3) → resume running spawns (P4-5) and forwarded ops (P4c-3) → `OnSubscribe` → sweepers → repo scan (P4b-2, async). `Stop` cancels `stopCtx`, waits for the sweepers **and** the spawn and forward goroutines (`spawnWG`), then closes the virtual peer.
+**Who writes the relay flag** (spec §6.6, coordinator decision on codex finding 4):
+- `<data_dir>/hooklocks/cc/<session_id>`, content = the op id, is written **by the mod** through `pdx relay lock`.
+- It goes up at the write turn's `turn.start` and down through `pdx relay unlock` before `/clear` and on every give-up.
+- The daemon only **removes** it, by op id (compare-and-remove), when the op reaches `cleared` or any terminal state. That is a safety net for a mod that died.
+
+**`Start` order after v3** (`internal/module/team/module.go:243-263`): MkdirAll relay dir → boot lease grace → start the notifier's virtual peer (P6-1) → `reconcileRelays` (P5a + P6-4) → resume running spawns (P4-5) and forwarded ops and the outbox (P4c-3/P4c-4) → `OnSubscribe` → sweepers → repo scan (P4b-2, async). `Stop` cancels `stopCtx`, waits for the sweepers **and** the spawn and forward goroutines (`spawnWG`), then closes the virtual peer.
 
 **Notices** (P6-1 sends all of them from the daemon's virtual peer; texts pinned in `internal/module/team/notice.go`). In bracket forms `ref` is the bare 6 characters; elsewhere it is `_xxxxxx`:
 
@@ -221,7 +239,7 @@ type KillRequest struct{ OriginInbox, Target string } // POST /api/team/kill
 type TeamView struct { Team Team `json:"team"`; Members []Member `json:"members"` } // members never null
 ```
 
-All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `SpawnOp.Choice` and two codes. P4c-3 adds `host_not_allowed` and `remote_unreachable`. Nothing is added ahead of its phase.
+All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `SpawnOp.Choice` and two codes. P4c-2 adds `host_not_allowed` and `admin_not_allowed`. P4c-3 adds `remote_unreachable`. Nothing is added ahead of its phase.
 
 **Behaviour rules.**
 - `ValidModel` accepts `opus`, `sonnet`, `fable`, `claude-opus-5-5` and `opus[1m]`. It refuses `""`, `a b`, `'x'`, `x;y`, `$(x)`, `-x`, a 65-character name and `opus[2m]`.
@@ -333,7 +351,7 @@ All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `Sp
   CREATE UNIQUE INDEX IF NOT EXISTS team_members_one_active ON team_members (session_id) WHERE state = 'active';
   ```
 - Store: `InsertMember(memberRow) error` (idempotent on `spawn_op`); `ActiveMemberInLiveTeam(sessionID) (memberRow, team.Team, bool, error)`; `MembersOf(teamID) ([]memberRow, error)`; `SetMemberState(spawnOp, state, at) error`.
-- `func (m *Module) relayRole(sessionID string) (string, error)`: `"lead"` when `LiveTeamByLead`, `"member"` when `ActiveMemberInLiveTeam`, else `"none"`. **A store error is an error** (deviation 14): hello, self and begin answer 500, so the mod treats it as unavailable and nothing relays (fail closed; spec §8.7 (d)).
+- `func (m *Module) relayRole(sessionID string) (string, error)`: `"lead"` when `LiveTeamByLead`, `"member"` when `ActiveMemberInLiveTeam`, else `"none"`. **A store error is an error** (deviation 12): hello, self and begin answer 500, so the mod treats it as unavailable and nothing relays (fail closed; spec §8.7 (d)).
 - Inside `ReportRelay`'s `cleared` transaction, after the lineage insert:
   ```sql
   UPDATE teams SET lead_session_id=?, lead_ref=? WHERE lead_session_id=? AND ended_at=0;
@@ -454,7 +472,7 @@ All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `Sp
   - `frameReader{ LiveSessions(ctx, agentType string) ([]agent.TerminalSession, error) }`, from `agent.TerminalSessionsKey` (`terminal_sessions.go:15,47-54`).
   - `hostconfig.TeamSettingsReader` (P4-4).
   - `TitleSetter{ Claim(sessionID, label string, now time.Time) (store.PeerLabel, error) }`, type-asserted on the value `WithTitles` was given (`*store.PeerLabelStore`, `internal/store/peer_label.go:63`).
-- `POST /api/team/spawns`, body `team.SpawnRequest` → **200 `team.SpawnOp`**, in state `running|done|failed`. This is create-or-join: the handler waits up to `SpawnPollWaitS` for the op to leave `running` (deviation 13). Errors:
+- `POST /api/team/spawns`, body `team.SpawnRequest` → **200 `team.SpawnOp`**, in state `running|done|failed`. This is create-or-join: the handler waits up to `SpawnPollWaitS` for the op to leave `running` (deviation 11). Errors:
   - 400 `bad_request`: id not UUID v4, invalid model or effort, title fails `ipeers.ValidateTitle`, cwd relative or missing.
   - 400 `origin_unknown`.
   - 409 `not_lead`, `team_full`, `cwd_outside_grant`, `id_conflict`.
@@ -478,7 +496,7 @@ All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `Sp
      - Tmux session present but no `tmux_id` recorded: a crash between create and record, so adopt it (the name derives from this op's id).
      - Present on a brand-new op: `failed{tmux_name_taken}`.
    - **session_created**
-     - Ensure the plugin tree: if `<data_dir>/cc-plugin/purdex/hooks/register.js` is missing and `agentcc.PluginSource != nil`, call `agentcc.ExtractPlugin(…)` (`internal/agent/cc/plugin.go:35,63`). It is never called on an existing tree (open question 9). A failure is logged.
+     - Ensure the plugin tree: if `<data_dir>/cc-plugin/purdex/hooks/register.js` is missing and `agentcc.PluginSource != nil`, call `agentcc.ExtractPlugin(…)` (`internal/agent/cc/plugin.go:35,63`). It is never called on an existing tree (coordinator decision 9). A failure is logged.
      - Send `launchLine(...)+"\n"` with `SendKeysIfInstanceTarget(tmux_id, "0", tmux_instance, …)`.
      - Not sent or an error → kill (generation-guarded), then `failed{launch_failed}`.
      - Sent → record `launched_at` → `launched`.
@@ -514,13 +532,19 @@ All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `Sp
 
 **Size.** 780 lines, 7 files. If it runs over, move boot resume and its two tests to P4-6.
 
-**Risks** (see open questions 2 and 9 for the measurements):
-- **Trust dialogs.** A member launched into a directory never opened before may stop at Claude Code's folder-trust or bypass-mode dialog before `SessionStart`. The spawn then times out. **Needs measuring**; see open question 2.
+**Risks.**
+- **Trust dialogs: measured, none (M27).** On 2026-10-07, with CC 2.1.292, `claude --dangerously-skip-permissions --model haiku` run in tmux in a directory never opened before (new under `/private/tmp`) behaved as follows:
+  - the input box appeared within 2 s;
+  - there was no folder-trust dialog and no bypass dialog;
+  - `~/.claude/sessions/<pid>.json` was written;
+  - the status line showed Haiku 4.5, so `--model` took effect.
+
+  So a spawn does not stop at a dialog. Neither the runner nor the skill handles one.
 - **No Purdex hooks.** A host without the Purdex hooks never produces a frame, so every spawn there times out. The CLI says so in P4-7.
 
 ## PR P4-6 — kill, `pdx team`'s route, persisted usage, gone members
 
-**Goal.** Spec §7.3 (`pdx kill`, `pdx team` with context, model and effort; U20 (e)), §8.5 "Persist it for teams only". Persisted usage sits here by plan v2's coordinator decision ("persisted usage on team rows: P4"); spec §12 lists it under P7 (deviation 9).
+**Goal.** Spec §7.3 (`pdx kill`, `pdx team` with context, model and effort; U20 (e)), §8.5 "Persist it for teams only". Persisted usage sits here by plan v2's coordinator decision ("persisted usage on team rows: P4"); spec §12 lists it under P7 (deviation 7, coordinator decision 10).
 
 **Files.**
 - Create `internal/module/team/team_handler.go` and its test.
@@ -536,7 +560,7 @@ All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `Sp
 - `POST /api/team/kill`, body `team.KillRequest` → 200 `team.Member` (state `killed`) | 409 `not_lead` / `not_your_member` | 503.
 - `func (m *Module) matchMember(t team.Team, target string) (memberRow, bool, error)`. Targets:
   - `_xxxxxx`, `xxxxxx`;
-  - `<host>/_xxxxxx`, `<host>/<name>`, `<host>/<name> [xxxxxx]`. In P4 the host must be this host (self alias or host id, from `c.Cfg.Peers` under `CfgMu`); P4c-3 extends it to remote hosts.
+  - `<host>/_xxxxxx`, `<host>/<name>`, `<host>/<name> [xxxxxx]`. In P4 the host must be this host (self alias or host id, from `c.Cfg.Peers` under `CfgMu`); P4c-4 extends it to remote hosts.
   - It matches the team's members by current ref, then by lineage (`store.PreviousRefs()[member.session_id]`), then by live registry name.
 
 **Behaviour rules.**
@@ -591,7 +615,7 @@ pdx team [--json] [--config <path>]
    - `--model` failing `team.ValidModel`; `--effort` failing `team.ValidEffort`;
    - both briefs given; `--brief-file` unreadable; `--title` failing `ipeers.ValidateTitle`;
    - `kill` without exactly one target.
-2. **Inbox.** `CLAUDE_CODE_MESSAGING_SOCKET`; unset → exit 1, as `pdx lead request` does (`lead.go:143-147`). `--cwd` defaults to the process cwd, made absolute (open question 6).
+2. **Inbox.** `CLAUDE_CODE_MESSAGING_SOCKET`; unset → exit 1, as `pdx lead request` does (`lead.go:143-147`). `--cwd` defaults to the process cwd, made absolute (coordinator decision 6).
 3. **Without `--model`.** stderr gets `team.ReminderNoModel`, then the spawn goes on and the exit code is unchanged (U20 (c)).
 4. **The spawn loop.**
    - Mint a UUID v4. `POST /api/team/spawns` with `Idempotent()`.
@@ -600,7 +624,7 @@ pdx team [--json] [--config <path>]
    - `failed` → `member_start_timeout` exits 14, with the stderr hint `member 沒有在 20 秒內啟動（這台主機需要 Purdex hooks：pdx setup --agent cc）`. Other reasons exit 1.
 5. **The brief**, only after `done`.
    - `POST /api/peers/send` through `Once`, never replayed: `{to: member.address, origin_inbox: inbox, text: fmt.Sprintf(MemberBriefPrefixFmt, op.lead_address, op.team_id) + "\n" + brief}`.
-   - On failure: stderr `pdx spawn: member 已開啟，但 brief 沒送出：<err>；請用 pdx msg send <address> 手動送`, exit 1, stdout already printed (open question 14).
+   - On failure: stderr `pdx spawn: member 已開啟，但 brief 沒送出：<err>；請用 pdx msg send <address> 手動送`, exit 1, stdout already printed (coordinator decision 14).
 6. **Kill.** `POST /api/team/kill` → stdout the member JSON, exit 0. 409s exit 13.
 7. **Team.** `GET /api/team?origin_inbox=…`. `--json` prints the `TeamView` as is. Otherwise a table, with `-` for unknown:
    ```
@@ -671,7 +695,7 @@ pdx team [--json] [--config <path>]
 1. **Parsing.** `rate_limits` is parsed **before** the `context_window == nil` early return (`context_usage.go:56`).
    - A payload whose windows are all absent or have a null percentage leaves the host reading as it was. M13: the first refresh has none.
    - Otherwise it replaces the host-level reading: newest wins, `At` = now.
-2. **The account.** Read from `~/.claude.json` `oauthAccount.emailAddress` (seam `claudeJSONPath`) at `Start` and every 10 minutes on the sweeper. It is stored as `AccountFP = hex(sha256(lowercase email))[:16]` and never the email itself (open question 8). Unreadable → `""` and one log line per state change.
+2. **The account.** Read from `~/.claude.json` `oauthAccount.emailAddress` (seam `claudeJSONPath`) at `Start` and every 10 minutes on the sweeper. It is stored as `AccountFP = hex(sha256(lowercase email))[:16]` and never the email itself (coordinator decision 8). Unreadable → `""` and one log line per state change.
 3. **Staleness.** `State` is `"unknown"` and both windows are nil when there is no reading or `now - At > 60 min` (spec §7.4 (b)).
 
 **Tests.**
@@ -768,7 +792,7 @@ pdx team [--json] [--config <path>]
 1. **Self** is filled from the local cache and usage.
 2. **Peers.** For each verified peer host, in parallel with a 5 s total budget, GET both peer routes.
    - **200** → supported.
-   - **404, or a 403 whose body is not a JSON `APIError`** → `Supported=false` ("older daemon"; open question 7). An older daemon's `PeerAuth` answers plain-text `forbidden` for an unknown `/api/peers/*` path (`internal/middleware/peer_auth.go:88-90`).
+   - **404, or a 403 whose body is not a JSON `APIError`** → `Supported=false` ("older daemon"; coordinator decision 7). An older daemon's `PeerAuth` answers plain-text `forbidden` for an unknown `/api/peers/*` path (`internal/middleware/peer_auth.go:88-90`).
    - **A transport error** → `Reachable=false`.
 3. The token is read from the live config per call, never cached.
 
@@ -788,7 +812,7 @@ pdx team [--json] [--config <path>]
 
 ## PR P4b-4 — the selection rule and `pdx spawn --repo / --host`
 
-**Goal.** Spec §7.4 rule steps 1–5 and the stderr line; §7.2 `--repo` / `--host`. Execution is still local only (§7.4 (d)): a rule that picks another host answers `409 remote_unsupported` until P4c-3 (open question 18).
+**Goal.** Spec §7.4 rule steps 1–5 and the stderr line; §7.2 `--repo` / `--host`. Execution is still local only (§7.4 (d)): a rule that picks another host answers `409 remote_unsupported` until P4c-3 (coordinator decision 18).
 
 **Files.**
 - Create `internal/module/team/choose.go` and `choose_test.go`.
@@ -815,7 +839,7 @@ pdx team [--json] [--config <path>]
 4. **Several.** Rank: enough remaining (≥ `min_weekly_remaining`) = 2, `unknown` = 1, below = 0.
    - If **every** candidate is rank 2: `preferred_host` when it is among them, else the most remaining.
    - Otherwise: the best rank, then the most remaining, with the preferred host as the tiebreak, then alias order.
-   - If every candidate is below the threshold, the same ordering still picks one. This case is unspecified (open question 17).
+   - If every candidate is below the threshold, the same ordering still picks one. This case is unspecified (coordinator decision 17).
 5. **`--host <h>`** skips the rule.
    - With `--repo`, `<h>` must be a candidate, else 409 `no_host_for_repo`.
    - An unknown alias is 400.
@@ -870,7 +894,7 @@ pdx team [--json] [--config <path>]
 **Interfaces.**
 - `AllowTeam bool \`toml:"allow_team" json:"allow_team"\``.
 - `hostRow.AllowTeam` (`allow_team`) and `putHostRequest.AllowTeam *bool` (`allow_team`).
-- CLI: `pdx peers host allow-team <alias> on|off [--config <path>]` (deviation 7: the existing grammar is singular `host`).
+- CLI: `pdx peers host allow-team <alias> on|off [--config <path>]` (deviation 5: the existing grammar is singular `host`).
 - SPA: the `updatePeerHost` patch gains `allow_team?: boolean`. Locale key `hosts.peers.allow_team` = 「允許 {alias} 在這台開 member」 / "Allow {alias} to open members on this host".
 
 **Behaviour rules.**
@@ -892,7 +916,7 @@ pdx team [--json] [--config <path>]
 
 ## PR P4c-2 — the member host side
 
-**Goal.** Spec §7.4 (c): `remote_members`; `POST /api/peers/team/spawn|kill|lead-moved` behind `HostRoutePolicy`; `AllowTeam` on the writes; accept only `principal.HostID == lead_host_id` with a matching `team_id`; spawn idempotent on the op id. Plus `POST /api/peers/team/end` (deviation 5).
+**Goal.** Spec §7.4 (c): `remote_members`; `POST /api/peers/team/spawn|kill|lead-moved` behind `HostRoutePolicy`; `AllowTeam` on the writes; accept only `principal.HostID == lead_host_id` with a matching `team_id`; spawn idempotent on the op id. Plus `POST /api/peers/team/end` (deviation 3, coordinator decision 19).
 
 **Files.**
 - Create `internal/module/team/remote_store.go` and its test.
@@ -920,7 +944,7 @@ pdx team [--json] [--config <path>]
 - Wire:
   - `type RemoteSpawnRequest struct{ ID, TeamID, LeadSessionID, LeadRef, LeadAddress, Cwd, Title, Model, Effort string }`;
   - `type RemoteKillRequest struct{ TeamID, MemberSessionID string }`;
-  - `type LeadMovedRequest struct{ TeamID, LeadSessionID, LeadRef string }`, with `lead_ref` added (deviation 5);
+  - `type LeadMovedRequest struct{ TeamID, LeadSessionID, LeadRef string }`, with `lead_ref` added (deviation 3);
   - `type TeamEndRequest struct{ TeamID string }`;
   - codes `ErrHostNotAllowed = "host_not_allowed"` (403, JSON) and `ErrAdminNotAllowed = "admin_not_allowed"` (403).
 - Routes, each `POST` and each listed by exact path in `HostRoutePolicy`:
@@ -936,7 +960,7 @@ pdx team [--json] [--config <path>]
    - the live config entry for `principal.Alias` must still carry `principal.HostID`, else 403 `host_unverified`.
 2. **`AllowTeam`** gates `spawn` and `kill` (spec: "gates spawn, kill and relay"). Off → 403 JSON `host_not_allowed`. `lead-moved` and `end` need only the binding plus existing `remote_members` rows of that `team_id` and lead host.
 3. **Spawn on the member host.** Idempotent on `ID` (same hash joins). Neither the grant nor `max_members` travels (spec §7.4 (c)); the lead host checked them.
-   - `cwd` must exist and lie under this host's own `team.repo_roots` (deviation 11, open question 5), else 409 `cwd_outside_grant`.
+   - `cwd` must exist and lie under this host's own `team.repo_roots` (deviation 9, coordinator decision 5), else 409 `cwd_outside_grant`.
    - The P4-5 runner runs unchanged, with `lead_*` recorded. At `registered` it inserts `remote_members` instead of `team_members`.
    - The handler answers the op's state after ≤ 8 s (`InterDaemonTimeout` is 10 s). The lead host re-posts.
 4. **Kill.** Accepted only when a `remote_members` row has `member_session_id`, `team_id`, and `lead_host_id == principal.HostID`; else 409 `not_your_member`. Same kill semantics as P4-6.
@@ -964,18 +988,24 @@ pdx team [--json] [--config <path>]
 
 **Risks.** None.
 
-## PR P4c-3 — the lead host side: forwarding, the outbox, remote members in `pdx team`
+## PR P4c-3 — the lead host side, spawn: forwarding, classification, resume
 
-**Goal.** Spec §7.4 (c): forwarding with op-id idempotency and the restart grace; `remote_unsupported`, `host_not_allowed`, `remote_unreachable`; the cross-host brief; `lead-moved` after a lead relay; U20 (f) (model and effort travel); remote model and effort visible in `pdx team` (U20 (e)).
+Pre-split from the original P4c-3 per codex finding 6. Kill forwarding, the outbox and the team view are P4c-4.
+
+**Goal.** Spec §7.4 (c):
+- forwarding with op-id idempotency and the restart grace;
+- `remote_unsupported`, `host_not_allowed`, `remote_unreachable`;
+- the cross-host brief;
+- U20 (f): model and effort travel with the spawn.
 
 **Files.**
-- Create `internal/module/team/forward.go`, `forward_store.go` and tests.
-- Modify `spawn_handler.go` (replace P4b-4's remote branch), `team_handler.go` (kill and view for remote members), `relay_report.go` (after `cleared` applied: enqueue `lead-moved`) and `sweeper.go` (on team end: enqueue `end`; pump the outbox).
-- Modify `internal/peers/record.go:22-26` and `internal/module/peers/module.go:779-787` (`ContextInfo` gains `model_id`, `effort`) with their tests.
+- Create `internal/module/team/forward.go`, `forward_store.go` and their tests.
+- Modify `spawn_handler.go` (replace P4b-4's remote branch) and `module.go` (resume at `Start`).
+- Modify `internal/team/wire_team.go` and its test (the code).
 - Modify `cmd/pdx/team_cmd.go` (map the two new codes) and its test.
 
 **Interfaces.**
-- Schema:
+- Schema. The outbox columns (`attempts`, `next_at`) are used from P4c-4 on.
   ```sql
   CREATE TABLE IF NOT EXISTS forwarded_ops (id TEXT PRIMARY KEY, kind TEXT NOT NULL,
     host_alias TEXT NOT NULL, host_id TEXT NOT NULL, path TEXT NOT NULL,
@@ -983,9 +1013,15 @@ pdx team [--json] [--config <path>]
     result_json TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
     next_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
   ```
-  `kind` is `spawn`, `kill`, `lead_moved` or `end`; P6-7 adds `relay`. `state` is `forwarding`, `done` or `failed`.
-- Codes `ErrRemoteUnreachable = "remote_unreachable"` (exit 14). The lead host maps the member host's `host_not_allowed` to 409 (exit 13).
-- `ipeers.ContextInfo` gains `ModelID string \`json:"model_id,omitempty"\``, `Effort string \`json:"effort,omitempty"\``. This is additive: older readers ignore it.
+  `kind`:
+  - `spawn` (here);
+  - `kill`, `lead_moved`, `end` (P4c-4);
+  - `relay` (P6-7a);
+  - `member_moved` (P6-7b, on the member host).
+
+  `state` is `forwarding`, `done` or `failed`.
+- Codes `ErrRemoteUnreachable = "remote_unreachable"` (exit 14). The lead host maps the member host's JSON 403 `host_not_allowed` to 409 `host_not_allowed` (exit 13).
+- `func (m *Module) forwardCall(ctx context.Context, f forwardRow) (status int, raw []byte, class forwardClass, err error)`. `forwardClass` is one of `ok`, `unsupported`, `not_allowed`, `transient`, `refused`; spawn and kill here, and the outbox and relay later, all classify through it.
 
 **Behaviour rules.**
 1. **Spawn to a remote host.**
@@ -994,49 +1030,99 @@ pdx team [--json] [--config <path>]
    - Loop `HostCaller.Call(POST /api/peers/team/spawn, RemoteSpawnRequest{… Model, Effort …})` with the same id. A `running` op loops; the total budget is 60 s.
    - `done` → insert `team_members` (`host_id` remote, `ref`, `session_id`, and `address = <entry alias>/_<ref>`, the lead's own alias for that host). The local op is done.
    - `failed` → failed with its reason.
-2. **Classification** (spawn and kill):
-   - **404, or a plain-text 403** → `remote_unsupported` (open question 7).
-   - **JSON 403 `host_not_allowed`** → `host_not_allowed`.
-   - **Transport errors and 503** → retried with backoff 0.25 s → 1 s for a 30 s grace (spec §9.1 applied daemon-to-daemon), then `remote_unreachable`.
-   - The forwarded op is persisted, so a lead-host restart resumes it in `Start`. A re-POST is idempotent on the member host.
-3. **Kill of a remote member.** Forward `RemoteKillRequest`. A 200 sets the local row `killed`.
-4. **The outbox.**
-   - After a lead relay's `cleared` (P4-3 moved `lead_session_id`), enqueue one `lead_moved` per remote host that has active members of that team.
-   - When P4-2's sweeper ends a team, enqueue one `end` per such host.
-   - The sweeper pumps the outbox: every 30 s, at most 120 attempts (1 h), then `failed` with a log line. A stale lead id is not fatal (spec §7.4 (c)).
-5. **The team view for remote members.**
-   - Fetch `/api/peers` from each member host through `HostCaller` (3 s; host principals may GET it). Match by session id, and take `agent.context` including the new `model_id` and `effort`.
-   - An unreachable host leaves the columns blank, and the CLI marks the row `(主機無回應)`.
-6. **The brief.** It is unchanged in the CLI because it is address-based. Its first line names `LeadAddress` (`<lead self alias>/<name|_ref>`); risk below.
+2. **Classification** (`forwardCall`):
+   - **404, or a 403 whose body is not a JSON `APIError`** → `unsupported` → `remote_unsupported` (coordinator decision 7).
+   - **JSON 403 `host_not_allowed`** → `not_allowed`.
+   - **Transport errors and 503** → `transient`. A spawn retries them with backoff 0.25 s → 1 s for a 30 s grace (spec §9.1 applied daemon-to-daemon), then `remote_unreachable`.
+   - **Other 4xx** → `refused` (its code passes through).
+3. **Restart.** The forwarded op is persisted, so a lead-host restart resumes it in `Start`. A re-POST is idempotent on the member host.
+4. **The brief.** It is unchanged in the CLI because it is address-based. Its first line names `LeadAddress` (`<lead self alias>/<name|_ref>`); risk below.
 
-**Tests.**
-- Forwarding against two team modules over `httptest`: `TestForward_SpawnDoneRecordsTheRemoteMember`, `TestForward_RetryAfterLeadRestartOpensOneMember`.
+**Tests.** Forwarding runs against two team modules over `httptest`.
+- `TestForward_SpawnDoneRecordsTheRemoteMember`: model and effort reach the member host.
+- `TestForward_RetryAfterLeadRestartOpensOneMember`.
 - `TestForward_404AndPlain403AreRemoteUnsupported`.
 - `TestForward_JSON403IsHostNotAllowed`.
 - `TestForward_UnreachableThroughTheGraceIsRemoteUnreachable` (fake clock).
-- `TestForward_KillMarksTheRowKilled`.
-- `TestOutbox_LeadMovedAfterALeadRelay`.
-- `TestOutbox_EndAfterTeamEndIsRetried`.
-- `TestTeamView_RemoteMemberShowsModelAndEffort`.
-- `TestBuild_ContextCarriesModelAndEffort`.
 - CLI: `TestSpawnCmd_HostNotAllowed13RemoteUnreachable14`.
 
 **Mutation gates.**
 - Treat a plain 403 as `host_not_allowed` → its test red.
 - Mint a new id per retry → the one-member test red.
+
+**Size.** 520 lines, 8 files.
+
+**Risks.**
+- **Brief address.** If a member host knows the lead host under an alias other than the lead's self alias, the brief's lead address does not resolve from the member host. Replies still route through the message envelope; the member host also matches the host segment against the host id (`ipeers.HostMatches`). Noted, not fixed.
+
+## PR P4c-4 — the lead host side, the rest: kill, the outbox, remote members in `pdx team`
+
+**Goal.**
+- Spec §7.4 (c): kill on another host; "the member host is told through the same route" (`lead-moved`); team end reaches the member host (coordinator decision 19).
+- U20 (e): remote model and effort visible in `pdx team`.
+- Codex finding 7: the outbox never gives up for good.
+
+**Files.**
+- Modify `internal/module/team/forward.go`, `forward_store.go` and their tests (the outbox pump).
+- Modify `team_handler.go` (kill and view for remote members; `matchMember` on remote host segments), `relay_report.go` (after `cleared` applied: enqueue `lead_moved`), `sweeper.go` (on team end: enqueue `end`; pump the outbox) and their tests.
+- Modify `internal/peers/record.go:22-26` and `internal/module/peers/module.go:779-787` (`ContextInfo` gains `model_id`, `effort`) with their tests.
+
+**Interfaces.**
+- `ipeers.ContextInfo` gains `ModelID string \`json:"model_id,omitempty"\``, `Effort string \`json:"effort,omitempty"\``. This is additive: older readers ignore it.
+- `const outboxBackoffMin = 30 * time.Second`, `outboxBackoffMax = 10 * time.Minute`.
+- `func (m *Module) enqueueOutbox(kind, hostAlias, hostID, path string, body any) error`.
+- `func (m *Module) pumpOutbox(now int64)`.
+
+**Behaviour rules.**
+1. **Kill of a remote member.** Forward `RemoteKillRequest` through `forwardCall` (`transient` is retried through the 30 s grace, then `remote_unreachable`). A 200 sets the local row `killed`. `matchMember` accepts `<host>/…` for every host its team has members on.
+2. **The outbox.**
+   - After a lead relay's `cleared` (P4-3 moved `lead_session_id`), enqueue one `lead_moved` per remote host that has active members of that team.
+   - When P4-2's sweeper ends a team, enqueue one `end` per such host.
+   - Entries go out FIFO per host.
+3. **Outbox retry: forever, with a cap.**
+   - The backoff starts at 30 s, doubles, and is **capped at 10 minutes**. There is no attempt limit and no `failed` for a transient cause.
+   - An entry ends only when:
+     - it was delivered (2xx);
+     - the row it describes no longer needs it: for `lead_moved`, the team ended meanwhile (an `end` follows);
+     - the member host refused it for good: `refused`, e.g. 400, or JSON 409 `not_your_member` because the member host has no such rows. One log line;
+     - the host was unpaired (`HostCaller` → `ErrHostUnknown`). One log line.
+   - `unsupported` (an older member daemon) keeps retrying at the cap: the host may be upgraded.
+4. **No member-host pull.** Infinite retry is enough:
+   - The outbox lives in the same `team.db` as the team rows it describes, and is retried while the host stays paired.
+   - The only loss it cannot cover is a lead host whose `team.db` was deleted, or an unpairing. In the latter case the member host could not ask the lead host either.
+   - A pull route (`GET /api/peers/team/state`, the member host asking at boot and every 10 min) would cover only the deleted-`team.db` case, for about 220 lines. It goes to a follow-up issue, not v3.
+5. **The team view for remote members.**
+   - Fetch `/api/peers` from each member host through `HostCaller` (3 s; host principals may GET it). Match by session id, and take `agent.context` including the new `model_id` and `effort`.
+   - An unreachable host leaves the columns blank, and the CLI marks the row `(主機無回應)`.
+
+**Tests.**
+- `TestForward_KillMarksTheRowKilled`.
+- `TestKill_ByRemoteAddress`.
+- `TestOutbox_LeadMovedAfterALeadRelay`.
+- `TestOutbox_EndAfterTeamEnd`.
+- `TestOutbox_RetriesForeverWithBackoffCappedAt10Min`: fake clock; 200 transient failures are still retried, at most 10 min apart; then delivered → done.
+- `TestOutbox_DropsOnPermanentRefusalOrUnpairedHost`.
+- `TestOutbox_LeadMovedDroppedWhenTheTeamEnded`.
+- `TestOutbox_FIFOPerHost`.
+- `TestTeamView_RemoteMemberShowsModelAndEffort`.
+- `TestBuild_ContextCarriesModelAndEffort`.
+
+**Mutation gates.**
+- Give up after N attempts → the forever test red.
+- No 10-min cap → the backoff assertion red.
 - No outbox retry → the end test red.
 
-**Acceptance** (needs both daemons at this version; air26's daemon has been behind before):
+**Acceptance** (after P4c-4; needs both daemons at this version, and air26's daemon has been behind before):
 1. On mlab, allow-team for a26.
 2. From a26, a throwaway lead runs `pdx spawn --host mlab --model sonnet --brief …`.
 3. `pdx team` on a26 shows the mlab member with its model and effort.
 4. `pdx kill` it.
 5. Repeat with allow-team off → exit 13 `host_not_allowed`.
+6. Stop mlab's daemon, end the a26 team, start mlab's daemon again: the `end` lands within 10 min and the mlab member's `hello` answers `role:"none"`.
 
-**Size.** 790 lines, 14 files. If it runs over, split kill forwarding and the outbox into P4c-4.
+**Size.** 620 lines, 10 files.
 
-**Risks.**
-- **Brief address.** If a member host knows the lead host under an alias other than the lead's self alias, the brief's lead address does not resolve from the member host. Replies still route through the message envelope; the member host also matches the host segment against the host id (`ipeers.HostMatches`). Noted, not fixed.
+**Risks.** None.
 
 ---
 
@@ -1057,7 +1143,7 @@ pdx team [--json] [--config <path>]
 
 ## PR P6-1 — the daemon's notifier; the lead-handover notice
 
-**Goal.** Spec §8.5 "Daemon notices come from the daemon's own virtual peer … A reply to it gets one line back"; §7.4 (c) "notices … go through `POST /api/peers/send` from the member host's virtual peer"; §8.4 "When a lead relays, the daemon also tells each active member". Plan v2's P5a section deferred this notice to P4. It lands here, with the notifier it needs (deviation 10).
+**Goal.** Spec §8.5 "Daemon notices come from the daemon's own virtual peer … A reply to it gets one line back"; §7.4 (c) "notices … go through `POST /api/peers/send` from the member host's virtual peer"; §8.4 "When a lead relays, the daemon also tells each active member". Plan v2's P5a section deferred this notice to P4. It lands here, with the notifier it needs (deviation 8).
 
 **Files.**
 - Create `internal/module/peers/sender.go` and `sender_test.go`.
@@ -1131,7 +1217,7 @@ pdx team [--json] [--config <path>]
   - `type RelayClaimResponse struct{ Op RelayOp; Lead *RelayLead }`;
   - `type RelayLead struct{ Address, Ref, TeamID string }`;
   - codes `ErrRelayUnsupported = "relay_unsupported"` and `ErrNotYourOp = "not_your_op"` (new, 409, exit 13);
-  - `const MinMemberRelayModVersion = 2`, `RelayControlPrefix = "[pdx-relay:control] op="`, `RelayClaimTimeoutS = 60`, `RelayOpTimeoutS = 900`.
+  - `const MinMemberRelayModVersion = 2`, `RelayControlPrefix = "[pdx-relay:control] op="`, `RelayClaimTimeoutS = 60`, `RelayStallTimeoutS = 900`.
 - Schema `mod_hello(session_id TEXT PRIMARY KEY, mod_version TEXT NOT NULL, agent TEXT NOT NULL, at INTEGER NOT NULL)`. `Init` loads the newest 512 into `modSeen`. `hello` upserts, and evicts the oldest past 512.
 
 **Behaviour rules.**
@@ -1151,7 +1237,7 @@ pdx team [--json] [--config <path>]
 
 **Size.** 420 lines, 10 files.
 
-**Risks.** #1832 (`modPresent` never expires) is unchanged in kind. Persistence lets presence outlive a restart, which matches how long the process lives. Noted in open question 11.
+**Risks.** #1832 (`modPresent` never expires) is unchanged in kind. Persistence lets presence outlive a restart, which matches how long the process lives (coordinator decision 11).
 
 ## PR P6-2b — `POST /api/team/relays`, the control message, `claim`, the op long-poll
 
@@ -1175,9 +1261,9 @@ pdx team [--json] [--config <path>]
 1. **Create** (under `createMu`):
    - **Replay.** `GetRelayOp(req.ID)` for the same target session → that op, as is. Another session → `id_conflict`.
    - **Lead.** The caller (by inbox) leads a live team.
-   - **Target.** `matchMember` (P4-6) on an **active local** member. P6-7 adds remote members.
+   - **Target.** `matchMember` (P4-6) on an **active local** member. P6-7a adds remote members.
    - **Running.** The member is live (`ResolveOriginBySession`).
-   - **Mod.** `modSeen[member sid].ModVersion` ≥ 2 (decimal), else `relay_unsupported`. A mod of protocol 1 cannot handle the control message (deviation 16).
+   - **Mod.** `modSeen[member sid].ModVersion` ≥ 2 (decimal), else `relay_unsupported`. A mod of protocol 1 cannot handle the control message (deviation 14).
    - **One op.** `OpenRelayOpBySession` → 409 `relay_open` with the op.
    - **Insert.** `{ID: req.ID, Kind member, TeamID, SessionID, Ref, State requested, HandoffPath: <relay dir>/<id>.md, PID, PaneID}`, where PID and pane come from the member row. `ErrRelayOpOpen` from the insert → the same 409.
 2. **Control message.** After the commit, `notify(<self alias>/_<member ref>, "[pdx-relay:control] op=<id>")`. A failure is logged; the claim timeout (P6-4) covers it.
@@ -1186,6 +1272,7 @@ pdx team [--json] [--config <path>]
    - `op.SessionID == req.SessionID`, else 409 `not_your_op`.
    - `ReportRelay(claimed)`: Applied or Noop → 200 with `Lead{Address: <live origin address of teams.lead_session_id, else <self alias>/_<lead_ref>>, Ref: lead_ref, TeamID}`. BadTransition → 409 with the op.
 4. **Wake-ups.** Every applied report and claim wakes `op.ID` waiters (`addWaiter`/`wake`).
+5. **The claim does not lock.** The relay flag is the mod's to raise, at the write turn (P6-3c, coordinator decision on codex finding 4).
 
 **Tests.**
 - `TestRelayCreate_Checks`: `not_lead`, `not_your_member`, `unknown_session`; no hello → `relay_unsupported`; version 1 → `relay_unsupported`; `relay_open`; replay; `id_conflict`.
@@ -1195,6 +1282,7 @@ pdx team [--json] [--config <path>]
 - `TestClaim_IsIdempotentAndCarriesTheLead`.
 - `TestClaim_SelfOpIsBadTransition`.
 - `TestRelayOp_LongPollWakesOnReport`.
+- `TestClaim_RaisesNoFlag`.
 
 **Mutation gates.**
 - Drop the claim's session check → `…OnlyTheTargetSession` red (spec §15).
@@ -1202,67 +1290,161 @@ pdx team [--json] [--config <path>]
 
 **Size.** 650 lines, 6 files.
 
-**Risks.** **Needs measuring:** whether `session.receive` fires while a turn is running (open question 3). If it does not, the 60 s claim timeout may fire on a busy member.
+**Risks.** None. Everything that depends on M28 is in P6-4, P6-5 and P6-6.
 
-## PR P6-3 — the relay lock (U17 use 2)
+## PR P6-3a — the mod embeds the git facts; one `Write` of the whole file
 
-**Goal.** Spec §6.6 table row 2 ("relay op past `claimed` … deny, reason `接力進行中，這一輪只寫接力檔`"), plan v2 coordinator decision ("P6 must check the relay lock before that removal"). The flag is raised and lowered by the daemon (deviation 3, open question 2b).
+**Goal.** Coordinator decision on codex finding 3. The relay lock is exactly spec §6.6: only the handoff `Write` is allowed. But the shipped write prompt tells the model to run `git status`, `git diff --stat` and `git log --oneline -10` itself (`register.js:281`), and those calls would be denied once the lock is up.
+
+So the **mod** runs these read-only git commands itself and embeds their output, and the model only writes. This PR must ship **before or with** the lock taking effect, which is P6-3c (the mod raising the flag). It is mod-only and safe alone, so it may land any time.
 
 **Files.**
-- Create `internal/team/hooklock_flock.go`: move `openHookLockLocked`, `writeHookLock`, `removeHookLock` and `hookLockExists` out of `cmd/pdx/hooklock.go` (`:23-102`), exported. Move their tests too.
-- Modify the call sites `cmd/pdx/lead.go:197-198` and `cmd/pdx/hook.go:249`; delete `cmd/pdx/hooklock.go`.
-- Modify `internal/module/team/hooks.go:23-110` (decide order, prune guard) and `hooks_test.go`.
-- Modify `relay_member.go` (raise at claim), `relay_handler.go` (raise in `afterClose` when the op turns `claimed`) and `relay_report.go` (lower in `afterReport`).
+- Modify `cmd/pdx/plugin/purdex/hooks/register.js`: `writePrompt` and `fixPrompt` (`:275-306`), and the approved branch of `settle` (`:481-505`, collect the facts before `arm`).
+- Modify `relay.test.ts`.
+- Modify `SKILL.md` ("Self relay": write the file the prompt names with one `Write`, then answer `HANDOFF-WRITTEN`).
+
+**Interfaces.**
+- `async function gitFacts($)` returns `{ status, diffStat, log }`, each a string.
+  - It runs `git status --short`, `git diff --stat` and `git log --oneline -10` through `$.process.run`, each with `timeoutMs: 10_000`, in the session's working directory.
+  - **Check the 2.1.292 d.ts in this PR** (a read, not a measurement): which call gives that directory (a `$.session` accessor, or `$.process.run`'s default `cwd`). Run `git -C <dir>` when the d.ts gives a directory but not a default. If neither exists, stop and report.
+  - Each output is capped at 200 lines / 12 000 bytes, with a final `…（截斷）`.
+  - A failure embeds `（git 失敗：<first stderr line>）`, which also covers "not a git repo".
+- Write prompt changes:
+  - The line `自己跑 git status…` is removed.
+  - New block `機器提供的 git 狀態（照抄進 §3）：` with the three outputs, fenced.
+  - New requirement `- 只用 Write 工具一次寫入整個接力檔；這一輪不要執行其他工具（接力期間其他工具會被拒絕）。`
+- Fix prompt: `… 請用 Write 重寫整個接力檔（不要用 Edit），補齊後只回「HANDOFF-WRITTEN」。`
+
+**Behaviour rules.**
+1. The facts are collected once per relay, from the timer that already runs `whoami` (`settle`'s approved branch). They are not collected again for fix rounds.
+2. Nothing else changes: the nonce, the check (8 headings, > 200 characters) and the fix rounds stay as shipped.
+
+**Tests** (`relay.test.ts`):
+- `the write prompt embeds git status, diff --stat and log from the mod's own runs`.
+- `the write prompt no longer asks the model to run git`.
+- `git output is capped and a failing git is embedded as such`.
+- `the fix prompt asks for one Write of the whole file`.
+
+**Mutation gates.** Keep the old instruction line → the second test red.
+
+**Size.** 300 lines, 3 files.
+
+**Risks.** The working-directory API is the one unknown; see the d.ts check under Interfaces.
+
+## PR P6-3b — the relay-lock machinery: flock helpers, `pdx relay lock|unlock`, the decide answer, `allow` in `pdx hook`
+
+**Goal.**
+- Spec §6.6 table row 2, **exactly**: the session is in a relay op past `claimed`, and the tool is not the handoff write → PreToolUse `deny`, reason `接力進行中，這一輪只寫接力檔`. A `Write` to exactly `<data_dir>/relay/<op>.md` is `allow`.
+- Spec §6.6 "Who writes the flag: … the Purdex mod while a relay op runs": the CLI the mod calls.
+- Plan v2 coordinator decision: "P6 must check the relay lock before that removal".
+- Codex findings 3 and 4.
+
+In this PR no mod raises a flag yet (that is P6-3c), so running sessions see no change.
+
+**Files.**
+- Create `internal/team/hooklock_flock.go` and its test: move `openHookLockLocked`, `writeHookLock`, `removeHookLock` and `hookLockExists` out of `cmd/pdx/hooklock.go` (`:23-102`), exported, with their tests. Delete `cmd/pdx/hooklock.go`.
+- Modify the call sites `cmd/pdx/lead.go:197-198` and `cmd/pdx/hook.go:249`.
+- Modify `cmd/pdx/hook.go:240-283` (print `allow`) and `hook_decide_test.go`.
+- Modify `internal/team/wire.go:211-218` (`Decision` comment: `"deny" | "allow" | ""`).
+- Create `cmd/pdx/relay_lock_cmd.go` and its test.
+- Modify `cmd/pdx/relay.go` (dispatch).
+- Modify `internal/module/team/hooks.go:23-175` (decide order, prune guard), `hooks_test.go`, and `relay_report.go` (the safety net in `afterReport`).
 
 **Interfaces.**
 - `team.WriteHookLock(path, id string) error`.
-- `team.RemoveHookLock(path, id string) (bool, error)`: compare-and-remove under flock.
+- `team.RemoveHookLock(path, id string) (removed bool, err error)`: compare-and-remove under flock, as P2c-2 shipped it.
 - `team.HookLockExists(path string) bool`.
-- `HookDecideResponse` for this lock: `{decision:"deny", reason:"接力進行中，這一輪只寫接力檔", lock:"relay", id:<op>}` (`team.HookLockRelay`, `wire.go:191`).
+- CLI:
+  ```
+  pdx relay lock <op> --session <sid> [--config <path>]
+  pdx relay unlock <op> --session <sid> [--config <path>]
+  ```
+  - Both are **local file operations** on `team.HookLockPath(cfg.DataDir, "cc", sid)` with the op id as content. There is no daemon call, so they work during a daemon restart.
+  - The op id must be a single path element (UUID form).
+  - Exit 0: done, including an `unlock` that found someone else's or no flag. Exit 1: an I/O error. Exit 2: usage.
+- Relay-lock answers on `/api/hooks/decide`:
+  - **PreToolUse `Write`** whose `tool_input.file_path` equals the op's `handoff_path` (both `filepath.Clean`'d; a relative path never matches) → `{decision:"allow", reason:"Purdex 接力檔", lock:"relay", id:<op>}`.
+  - **Any other PreToolUse**, `Edit` included → `{decision:"deny", reason:"接力進行中，這一輪只寫接力檔", lock:"relay", id:<op>}`.
+  - **PermissionRequest** → `{}`, flag kept. The spec gives the relay row no PermissionRequest answer, and a PreToolUse `allow` already skips the prompt.
+- `pdx hook` prints, for PreToolUse only:
+  - `allow` as `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":<reason>}}` (M18, and the same shape for Codex, M20);
+  - `deny` as today (`hook.go:276-282`).
 
 **Behaviour rules.**
-1. **Raise.** When an op reaches `claimed` (member: the claim route; self: `afterClose` approved), write `<data_dir>/hooklocks/cc/<op session id>` with the op id as content.
-2. **Lower.** At `cleared` (the old session id's flag) and at any terminal state, through `afterReport`, so the re-send and reconciliation paths are covered too. Compare-and-remove by op id.
-3. **Decide order**, under `createMu`:
+1. **Decide order**, under `createMu`:
    1. the lead lock (unchanged; it wins);
    2. the relay lock: `OpenRelayOpBySession(sid)` in `claimed|writing|written` and agent `cc`;
-   3. only then the existing `{}` plus flag removal (`openLeadAndRemoveStaleFlag`).
-4. **The relay-lock answer** (open question 2):
-   - `PermissionRequest` → `{}`.
-   - `PreToolUse` → `{}` (no decision) for:
-     - `Write` or `Edit` whose `file_path` equals the op's `handoff_path`;
-     - `Read`, `Glob`, `Grep`;
-     - `Bash` whose command matches `^git (status|diff|log|show)( [^;&|<>$`\\\n]*)?$` and has no `--output` argument.
-   - Every other tool → deny.
-   - It applies to both kinds: the spec's table is kind-agnostic.
-5. **Prune.** `pruneUnlessLeadOpen` (`hooks.go:161-175`) also keeps a flag whose session has an op in `claimed|writing|written`.
-6. **Boot.** `Start` re-raises flags for live sessions with ops in those states.
+   3. only when neither applies, the existing `{}` plus flag removal (`openLeadAndRemoveStaleFlag`).
+
+   A flag left behind by a relay that ended therefore costs one `{}` and is removed, as P2c intended.
+2. **The daemon never raises the flag.** As a safety net for a mod that died, it compare-and-removes `HookLockPath(dataDir, cc, op.SessionID)` **by op id** when the op reaches `cleared` (the old session id) or any terminal state, in `afterReport`. Reports, reconciliation and timeouts all pass through it. A flag holding a lead request's id is never touched.
+3. **Prune.** `pruneUnlessLeadOpen` (`hooks.go:161-175`) also keeps a flag whose session has an op in `claimed|writing|written`.
 
 **Tests.**
-- `TestHookDecide_RelayLockDeniesOtherToolsAllowsHandoffAndGitReads`.
+- `TestHookDecide_RelayLockAllowsExactlyTheHandoffWrite`.
+- `TestHookDecide_RelayLockDeniesEditReadBashAndOtherPaths`.
+- `TestHookDecide_RelayLockPermissionRequestIsEmpty`.
 - `TestHookDecide_RelayLockIsCheckedBeforeFlagRemoval`.
 - `TestHookDecide_LeadLockWinsOverRelay`.
-- `TestRelayLock_UpAtClaimDownAtClearedAndTerminal`.
-- `TestRelayLock_SelfOpUpAtApproval`.
+- `TestSafetyNet_RemovesTheRelayFlagByOpIDAtClearedAndTerminal_KeepsALeadFlag`.
 - `TestPrune_KeepsTheFlagOfAnActiveRelay`.
-- `TestBoot_ReraisesRelayLocks`.
+- `TestRelayLockCmd_LockUnlockCompareAndRemove`.
+- `TestRelayLockCmd_UsageAndBadOpID`.
+- `TestRunHook_PrintsAllowAndDenyShapes`.
 - The moved `TestHookLock_*` tests, unchanged in content.
-- `TestRunHook_RelayDenyIsPrinted` (CLI end to end against a fake daemon).
 
 **Mutation gates.**
+- Allow `Edit` too → the deny test red.
 - Put the removal before the relay check → `…BeforeFlagRemoval` red.
-- Do not lower at `cleared` → its case red.
-- Allow every `Bash` → the deny case red.
+- A blind (not by-op-id) safety-net remove → the lead-flag case red.
+- `pdx hook` printing only deny → the allow shape red.
 
-**Size.** 620 lines, 10 files.
+**Size.** 720 lines, 12 files.
 
-**Risks.**
-- **Self relays change.** This changes shipped self-relay behaviour: prompts released after an approval can no longer run arbitrary tools (P5b-3 released them with NOTE only). The spec's §6.6 row requires it. Open question 2 asks the coordinator to confirm the allow-list.
+**Risks.** None. Until P6-3c no flag is raised by a relay.
+
+## PR P6-3c — the mod raises the flag at the write turn and lowers it before `/clear`
+
+**Goal.** Spec §6.6 (the mod writes the flag while a relay op runs on that session) and U17 use 2. The coordinator's precision (codex finding 4): the flag goes up only in **the turn that actually writes the handoff**, after any running or released turn has completed, and comes down before `/clear`.
+
+**Files.**
+- Modify `cmd/pdx/plugin/purdex/hooks/register.js`:
+  - `turn.start` (`:600-608`);
+  - `onWriteTurnDone` (`:531-565`, unlock before `/clear`);
+  - `toIdle` / `giveUp` (`:331-336`, `:517-523`, unlock on every give-up);
+  - the pending object gains `locked`.
+- Modify `relay.test.ts`.
+
+**Behaviour rules.**
+1. **Raise.** In `turn.start`, when the write nonce matches (state `approved`, the write prompt's turn), the hook awaits `pdx relay lock <op> --session <sid>` (8 s bound) **before** `next(e)`. Its own `$` call is in flight, so the hook budget pauses.
+   - On exit 0: `p.locked = true`.
+   - On any failure: one log line and the write goes on (fail-open: the lock is a guard, never a reason to lose the relay).
+   - Fix-round turns do not lock again.
+   - **If the kit shows that `turn.start` cannot hold the turn,** raise it right before `$.prompt.submit` of the write prompt instead, and say so in the PR. Released prompts queued ahead would then run under the lock, which is acceptable: NOTE already tells them to stay short.
+2. **Lower.** Before `$.command.run('clear')` in `onWriteTurnDone`, the timer awaits `pdx relay unlock` (8 s). A failure is logged and the `/clear` goes on: the daemon's safety net removes the flag at `cleared`.
+3. **Every give-up** with `p.locked` (failed check, a refused prompt or `/clear`, the user's own `/clear`, a compaction while approved) unlocks from a timer, never awaited in a hook.
+4. **Member relays** (P6-6) use the same write path, so they inherit 1–3.
+
+**Tests.**
+- `the write turn's turn.start runs pdx relay lock before next(e)`.
+- `a released prompt's turn does not lock`.
+- `unlock runs before /clear`.
+- `every give-up path unlocks`.
+- `a failed lock does not stop the write`.
+- `fix rounds do not lock again`.
+
+**Mutation gates.**
+- Lock at claim or approval instead of the write turn → the released-prompt test red.
+- Unlock after `/clear` → the order test red.
+
+**Size.** 320 lines, 3 files.
+
+**Risks.** Whether `turn.start` can hold the turn is checked in the kit (rule 1 has the fallback).
 
 ## PR P6-4 — timeouts, reconciliation from frames (#1735), completion and failure notices
 
 **Goal.**
-- Spec §8.2 timeouts (claim 60 s → `failed{member_unresponsive}`; whole op 15 min).
+- Spec §8.2 timeouts: claim 60 s → `failed{member_unresponsive}`; whole op 15 min (here a 15-min stall, deviation 13).
 - §9.3 relay ops: `requested` → re-send; past `claimed` → compare with the pane's verified frame; a different session id → write the lineage; no frame → `failed{member_gone}`.
 - Issue #1735: a stuck op is ended, then follows its state's retention rule.
 - §8.2 step 8 and "the lead is told about every failure".
@@ -1270,28 +1452,46 @@ pdx team [--json] [--config <path>]
 **Files.**
 - Create `internal/module/team/relay_reconcile.go` and `relay_reconcile_test.go`.
 - Modify `relay_report.go:270-332` (`reconcileRelays` calls the new pieces), `sweeper.go` (runtime timeouts), `notice.go` and `retention.go:41-55` (comment only: #1735 closed), with tests.
+- **Branch A only:** modify `internal/team/wire_relay.go` and its contract test (`RelayOp.SeenAt`), `relay_store.go` (column `seen_at INTEGER NOT NULL DEFAULT 0` via `ensureColumn`), and `relay_member.go` (the `seen` route) with its test.
+- **Branch B only:** modify `internal/module/agent/module.go` (the `AgentStatus` accessor, moved here from P7-1) and its test.
 
 **Interfaces.**
 - `func (m *Module) reconcileFromFrames(ctx context.Context, op team.RelayOp) (team.RelayOp, error)`.
 - `func (m *Module) opBinding(op team.RelayOp) (pid int, pane string)`: the op's columns, else (old self ops) the approval row's `Origin.PID` and the pane of `Origin.Tmux`.
+- Branch A:
+  - `RelayOp.SeenAt int64 \`json:"seen_at,omitempty"\``.
+  - `POST /api/relay/ops/{id}/seen`, body `RelayClaimRequest` → 200 `{op}` | 404 | 409 `not_your_op` / `bad_transition`. It records `seen_at` once (a CAS on `seen_at = 0 AND state = 'requested'`; a repeat answers 200 unchanged), changes no state, and is accepted only from the target session.
+- Branch B: `type AgentStatusReader interface{ AgentStatus(tmuxSession string) (string, bool) }`, implemented by `*agent.Module` under `m.mu` (`currentStatus` is keyed by tmux session name, `internal/module/agent/handler.go:614`).
+
+**Claim timeout: the basis is decided by M28** (to be measured before this PR starts). Both branches are written. The claim itself always comes after the member's running turn has completed (coordinator ruling on codex finding 1).
+
+- **Branch A — M28 shows `session.receive` fires while a turn runs. Count from the request.**
+  - The mod consumes the control at once and sends `pdx relay seen` right away (route here, CLI in P6-5, mod in P6-6). It claims after the running turn ends.
+  - The daemon fails `requested` with `seen_at = 0` and `created_at + 60 s` passed → `failed{member_unresponsive}`.
+  - After `seen`, an op still `requested` 15 min after `seen_at` → `failed{member_unresponsive}`: the relay waits at most 15 min for the member's running turn.
+  - This detects a dead mod within 60 s even while the member keeps running.
+- **Branch B — M28 shows it fires only when idle. Count from the member's next idle.**
+  - The delivery itself waits for the turn's end, so no early sign is possible.
+  - The sweeper records, per `requested` op in memory, the first liveness tick at or after `created_at` where `AgentStatus(member tmux) == "idle"`. It fails the op 60 s after that (`failed{member_unresponsive}`). The record restarts at boot.
+  - A member whose status is not readable counts as idle, so the op cannot wait forever.
+- **If M28 is not measured before this PR starts, implement branch B** and drop branch A (and `pdx relay seen` from P6-5/P6-6). Branch B is correct for either outcome. Branch A is valid only for M28 = yes, and adds only the earlier dead-mod detection.
 
 **Behaviour rules.**
 1. **`reconcileFromFrames`.**
-   - **Another session on the pane.** A verified frame on the pane (`LiveSessions(ctx,"cc")`) with `sid' != op.SessionID` and `ResolveOriginBySession(sid').PID == pid` → `ReportRelay(cleared, sid', RefID(sid'))`, then `afterReport` (title move, lock lower, handover). Another process's session is never written.
+   - **Another session on the pane.** A verified frame on the pane (`LiveSessions(ctx,"cc")`) with `sid' != op.SessionID` and `ResolveOriginBySession(sid').PID == pid` → `ReportRelay(cleared, sid', RefID(sid'))`, then `afterReport` (title move, flag safety net, handover). Another process's session is never written.
    - **CC gone.** No verified frame on the pane and `!LiveSession(op.SessionID)` → `failed{member_gone}`.
    - **Same session, alive.** Left as is.
 2. **Boot.** `reconcileRelays` adds:
    - a member op in `requested` → re-send the control message (the claim is a CAS);
    - any op in `claimed|writing|written` → `reconcileFromFrames`.
 3. **Sweeper, liveness tick.**
-   - A member op in `requested` older than 60 s → `failed{member_unresponsive}`.
-   - A member op not terminal 15 min after `created_at` → `reconcileFromFrames`, then, if still not terminal, `failed{member_unresponsive}`.
-   - A **self** op past `claimed` with no progress (`updated_at`) for 15 min → `reconcileFromFrames`, then `failed{handoff_incomplete}` (open question 4).
-   - `cleared` → `failed` is legal (`relayTransitions`).
+   - The claim timeout of the chosen branch.
+   - **Stall.** An op of either kind past `claimed` with no state change (`updated_at`) for 15 min → `reconcileFromFrames`. If still not terminal: `failed{member_unresponsive}` for a member op, `failed{handoff_incomplete}` for a self op (coordinator decision 4).
+   - The 15 minutes count from the last state change, not from the request, because the claim deliberately waits for the member's running turn. `cleared` → `failed` is legal (`relayTransitions`).
 4. **Notices to the lead**, member ops only, sent on `ReportApplied` only:
    - `done` → the done text;
    - `failed` / `cancelled` → the failure or cancel text.
-   - The lead address is the live origin address of the team's `lead_session_id`, else `<self alias>/_<lead_ref>`. P6-7 extends this to remote leads.
+   - The lead address is the live origin address of the team's `lead_session_id`, else `<self alias>/_<lead_ref>`. P6-7a extends this to remote leads.
 
 **Tests.**
 - `TestReconcile_PastClaimedWithANewFrameSessionWritesTheLineage` (#1735).
@@ -1299,8 +1499,10 @@ pdx team [--json] [--config <path>]
 - `TestReconcile_NoFrameFailsMemberGone`.
 - `TestReconcile_SameSessionAliveIsLeftAlone`.
 - `TestReconcile_RequestedResendsTheControl`.
-- `TestSweep_ClaimTimeoutFailsAndNotifiesOnce`.
-- `TestSweep_WholeOp15Min`.
+- Claim timeout:
+  - branch A: `TestSeen_OnlyTheTargetSessionOnceWhileRequested`, `TestSweep_UnseenRequested60sFails`, `TestSweep_SeenRequestedWaitsUpTo15Min`;
+  - branch B: `TestSweep_ClaimTimeoutCountsFromTheNextIdle` (a member running for 5 min is not failed; 60 s after its idle it is).
+- `TestSweep_StallAfterClaim15Min`.
 - `TestSweep_SelfOpStalledFails`.
 - `TestNotice_DoneAndFailureOncePerTransition`.
 - `TestRetention_AStuckOpEndedByReconcileLosesItsFileByItsStateRule`: #1735 end to end with P5a-3a's sweeper.
@@ -1309,12 +1511,13 @@ pdx team [--json] [--config <path>]
 - Skip the PID check → `…AnotherPID…` red.
 - Reconcile only `awaiting_approval` (today's behaviour) → the #1735 test red.
 - Notify on Noop → the once test red.
+- Branch B: count from `created_at` → the running-member case red.
 
-**Size.** 700 lines, 6 files.
+**Size.** 720 lines, 7 files (branch B, with the accessor). Branch A: about 780 lines, 10 files.
 
-**Risks.** None beyond open question 4.
+**Risks.** M28 should be known before this PR starts. Without it, branch B (Global constraints, Order).
 
-## PR P6-5 — CLI: `pdx relay <ref> [--wait <dur>]`, `pdx relay claim`
+## PR P6-5 — CLI: `pdx relay <ref> [--wait <dur>]`, `pdx relay claim` (+ `pdx relay seen`, branch A)
 
 **Goal.** Spec §8.2 ("`pdx relay` returns once the op is accepted and prints the op id. `--wait` blocks until done or failed"), §8.3 `claim`, §14.
 
@@ -1327,10 +1530,12 @@ pdx team [--json] [--config <path>]
 ```
 pdx relay <ref|address> [--wait <dur>] [--config <path>]
 pdx relay claim <op> --session <sid> [--config <path>]
+pdx relay seen <op> --session <sid> [--config <path>]      (M28 branch A only)
 ```
 
 **Behaviour rules.**
-1. **Dispatch.** A first argument that is not one of the known words (`hello`, `begin`, `wait`, `self`, `report`, `op`, `claim`, and `compacted` from P7-2) is a member relay when it matches `^_[0-9a-z]{6}$`, contains `/`, or has the `name [xxxxxx]` form. Otherwise it is a usage error, exit 2.
+1. **Dispatch.** A first argument that is not one of the known words is a member relay when it matches `^_[0-9a-z]{6}$`, contains `/`, or has the `name [xxxxxx]` form. Otherwise it is a usage error, exit 2.
+   - Known words: `hello`, `begin`, `wait`, `self`, `report`, `op`, `claim`, `lock`, `unlock`; `seen` in branch A; `compacted` from P7-2.
 2. **The member relay.**
    - `CLAUDE_CODE_MESSAGING_SOCKET` is required.
    - A UUID v4. `POST /api/team/relays` with `Idempotent()`.
@@ -1341,7 +1546,7 @@ pdx relay claim <op> --session <sid> [--config <path>]
    - other `failed` → 1;
    - `cancelled` → 12;
    - the bound → stdout the op JSON, exit 0 (mirrors `pdx relay wait`).
-4. **`claim`** → stdout the claim JSON. `not_your_op` → 13. `bad_transition` → 13, with the op on stdout.
+4. **`claim`** → stdout the claim JSON. **`seen`** → stdout the op JSON. `not_your_op` → 13. `bad_transition` → 13, with the op on stdout.
 5. **The refusal map** (`relay.go:47-53`) adds `not_lead`, `not_your_member`, `relay_unsupported` and `not_your_op`. The code stays the last stderr token.
 
 **Tests.**
@@ -1351,84 +1556,91 @@ pdx relay claim <op> --session <sid> [--config <path>]
 - `TestRelayCmd_ReplayAfterALostResponseIsTheSameOp`.
 - `TestRelayCmd_WaitMapping`: a table of the five outcomes.
 - `TestRelayCmd_ClaimPrintsAndMaps`.
+- Branch A: `TestRelayCmd_SeenPrintsAndMaps`.
 
 **Mutation gates.** Map `member_gone` to 1 → the mapping table red.
 
-**Size.** 520 lines, 4 files.
+**Size.** 560 lines, 4 files (branch B: about 520).
 
-## PR P6-6 — the mod: control message, claim, write with team facts; protocol 2; acceptance
+## PR P6-6 — the mod: control always consumed, claim after the running turn, write with team facts; protocol 2; acceptance
 
 **Goal.**
 - Spec §8.2 steps 3–8 for members.
 - §15 Mod: "the control message is consumed only with the marker; claim failure does nothing; write → check → fix rounds → clear → seed".
 - §8.2 step 4: "§8 協作關係 is filled from the claim. A member gets its lead and team id; a lead gets its roster".
 - §15 real acceptance 2 and 3 (relay half).
+- Codex finding 1 (critical): the control message is **always** consumed, busy or idle. While a turn runs, the mod keeps the op and claims after that turn's `turn.complete`.
 - Rebase onto P8a-2 if it merged; it touches `hooks.json` and `embed_test.go`, not `register.js`.
 
 **Files.**
 - Modify `cmd/pdx/plugin/purdex/hooks/register.js`:
   - `VERSION` (`:33`) becomes `'2'`;
   - a new `session.receive` hook;
-  - `settle`'s approved branch (`:481-505`) is factored into `startWrite($, p)`;
+  - `settle`'s approved branch (`:481-505`, already holding P6-3a's facts) is factored into `startWrite($, p)`;
   - `writePrompt` facts (`:275-302`);
-  - main-turn tracking in `turn.start` and `turn.complete` (`:600-627`).
+  - main-turn tracking and the deferred claim in `turn.start` / `turn.complete` (`:600-627`).
 - Create `cmd/pdx/plugin/purdex/hooks/member.test.ts`.
 - Modify `relay.test.ts` (the hello `--version 2` assertion).
-- Modify `SKILL.md` (As a member: the lead relays you; do nothing when 接力 starts except write the file asked).
+- Modify `SKILL.md` (As a member: the lead relays you; when 接力 starts, write the file asked with one `Write` and nothing else).
 - Create `docs/testing/member-relay-acceptance.md`.
 
 **Interfaces.**
+- New state: `s.turnRunning` (a main-conversation turn is between `turn.start` and `turn.complete`, `e.agentId` unset) and `s.control` (`{ opId }` or `undefined`, the newest control kept).
 - `session.receive`:
-  - The text contains `RelayControlPrefix` followed by a UUID, and `e.origin.kind === 'peer'` (M1) → return `{ consumed: true }`. The model never sees it.
-  - When `s.interactive`, `s.state === 'idle'` and no claim is pending, schedule `later($, 0, claim(opId))`.
-  - Otherwise `next(e)`.
+  - The text contains `RelayControlPrefix` followed by a UUID, and `e.origin.kind === 'peer'` (M1) → **always** return `{ consumed: true }`, whatever the state. The model never sees it.
+  - Unless the op is already `s.pending`'s, set `s.control = { opId }`.
+  - **Branch A:** also run `pdx relay seen <op> --session <sid>` from a timer at once, never awaited.
+  - Then, if `!s.turnRunning && s.state === 'idle'`, schedule `later($, 0, claim)`. Otherwise the claim waits.
+  - Any other text → `next(e)`.
+- `turn.complete` (main conversation): if `s.control` is set and `s.state === 'idle'`, schedule the claim from a timer. This runs before `maybeBegin`, which a member never runs anyway.
 - `claim`:
-  - `pdx relay claim <op> --session <sid>` (`CALL_TIMEOUT_MS`).
-  - Exit 0 → `s.pending = {op, requestId: undefined, path: op.handoff_path, oldSession: sid, oldRef: op.ref, before: usageLine(u), lead: body.lead, answer: deferred()}` with `answer` resolved `'approved'`, and `s.state = 'approved'`.
-  - If a main-conversation turn is running, `startWrite` waits for its `turn.complete`; otherwise it starts now.
-  - Any non-zero exit → nothing, so the daemon's claim timeout reports it.
+  - `pdx relay claim <op> --session <sid>` (`CALL_TIMEOUT_MS`); `s.control` is cleared.
+  - Exit 0 → `s.pending = {op, requestId: undefined, path: op.handoff_path, oldSession: sid, oldRef: op.ref, before: usageLine(u), lead: body.lead, answer: deferred()}` with `answer` resolved `'approved'`; `s.state = 'approved'`; then `startWrite` (no turn is running at this point).
+  - Any non-zero exit → nothing, so the daemon's timeout reports it.
 - `writePrompt` facts, one line each:
   - member: `- 我的 lead：<lead.address>（ref <lead.ref>，team <lead.team_id>）`;
   - lead (`s.role === 'lead'`): `- 我管理的 members：` followed by `pdx team --json` rows (`ref`, `address`, `title`, `cwd`), or `無`.
 
 **Behaviour rules.**
-1. **Everything after the claim** is the shipped path:
+1. **Everything after the claim** is the shipped path, now with P6-3a's facts and P6-3c's lock:
    - write → check → fix ×2 → `written`;
-   - `/clear` → `cleared` with the new id → seed → `done`.
+   - unlock → `/clear` → `cleared` with the new id → seed → `done`.
    - The reports carry the member op's id.
-   - P6-3's lock is raised by the daemon at the claim.
 2. **The `prompt.submit` hold** (P5b-3) is untouched. It only applies to `awaiting` / `beginning`, which a member relay never enters.
 3. **A member never calls `maybeBegin`.** Unchanged (`register.js:338-340`).
-4. **The model never decides** a relay (U9). The control message is invisible to it (M1).
+4. **The model never decides** a relay (U9). The control message is invisible to it in every state (M1).
 
-**Tests** (`member.test.ts`):
+**Tests** (`member.test.ts`). Each test drives the engine through the interface: `turn.start` / `turn.complete` / `session.receive` from the test's own `on` hooks.
 - `the control message is consumed only with the marker and only from a peer`.
+- `a control that arrives while a turn runs is consumed, not claimed, and claimed at that turn's turn.complete`. It asserts the sequence `session.receive` → `{consumed}` → no `pdx relay claim` → `turn.complete` → `pdx relay claim` → write prompt.
+- `a control that arrives while idle is claimed at once`.
 - `a claim that fails does nothing`.
-- `a claim while idle writes with the lead facts`.
-- `a claim during a running turn writes after that turn completes`.
-- `the full member path reports claimed-op written, cleared (new id), done`.
+- `the write prompt carries the lead facts`.
+- `the full member path reports written, cleared (new id), done under the member op id; lock before the write turn, unlock before /clear`.
 - `a lead's write prompt carries the roster from pdx team --json`.
 - `hello reports --version 2`.
+- Branch A: `a control that arrives mid-turn sends pdx relay seen at once`.
 
 **Mutation gates.**
+- Return `next(e)` for a busy control → the mid-turn test red (codex finding 1).
+- Claim before the running turn completes → the same test red.
 - Consume without the marker check → the first test red.
-- Start writing before the running turn completes → the fourth red.
 
 **Acceptance** (`docs/testing/member-relay-acceptance.md`, throwaway sessions, scratch plugin copy as `docs/testing/self-relay-acceptance.md` does):
 1. A throwaway lead spawns two members.
-2. `pdx relay _<ref>` on one. The member writes, clears and seeds. The lead gets the done notice.
+2. `pdx relay _<ref>` on one, **once while the member is idle and once while it runs a long turn** (`Bash sleep 90`). In both cases the model never shows the control text. The member writes, clears and seeds. The lead gets the done notice.
 3. `pdx msg send <host>/_<old ref>` still reaches the member (lineage).
 4. Restart the daemon mid-relay: the relay finishes, or is reconciled from frames.
 5. The statusline before and after shows the same `model.id` / `effort.level` (U20 (f), M21).
 6. Afterwards, no flags are left and no op is open.
 
-**Size.** 560 lines, 5 files.
+**Size.** 600 lines, 5 files.
 
 **Risks.** `register.js` grows past 900 lines. Splitting the member path into `hooks/member.js` would need shared state across modules. That is left for a follow-up issue, not this PR.
 
-## PR P6-7 — cross-host member relay
+## PR P6-7a — cross-host member relay: the relay route, forwarding, proxied wait, remote-lead notices
 
-**Goal.** Spec §7.4 (c) "`POST /api/peers/team/relay` … The relay op row and the lineage live on the member host. Notices to the lead … from the member host's virtual peer to the lead's cross-host address"; §12 "P6 rides on P4c for a member on another host". The route is deferred from P4c to here (deviation 4).
+**Goal.** Spec §7.4 (c) "`POST /api/peers/team/relay` … The relay op row and the lineage live on the member host. Notices to the lead … from the member host's virtual peer to the lead's cross-host address"; §12 "P6 rides on P4c for a member on another host". The route is deferred from P4c to here (deviation 2).
 
 **Files.**
 - Modify `peer_team_handler.go` (relay route) and its test.
@@ -1443,10 +1655,10 @@ pdx relay claim <op> --session <sid> [--config <path>]
 **Behaviour rules.**
 1. **On the member host.**
    - The same principal binding and `AllowTeam` gate as P4c-2.
-   - A `remote_members` row with that session id, team and `lead_host_id == principal.HostID`, else `not_your_member`.
+   - A `remote_members` row with that session id, team and `lead_host_id == principal.HostID`, else `not_your_member`. P6-7b adds the lineage-forward lookup.
    - Then P6-2b's create steps from "running" on: live check, mod version, one op, insert, control message.
    - Done, failure and P7 notices go to `<lead_host_alias>/_<lead_ref>`, the member host's own alias for the lead host (`principal.Alias` at spawn).
-2. **On the lead host.** `POST /api/team/relays` for a remote member persists `forwarded_ops{kind:relay}` and forwards. Classification as P4c-3.
+2. **On the lead host.** `POST /api/team/relays` for a remote member persists `forwarded_ops{kind:relay}` and forwards through `forwardCall` (P4c-3).
    - `GET /api/relay/ops/{id}?wait` for a forwarded op re-posts the relay with the same id to the member host (≤ 8 s per call) and answers the op it returns. `pdx relay <ref> --wait` therefore works unchanged.
 
 **Tests.**
@@ -1458,9 +1670,63 @@ pdx relay claim <op> --session <sid> [--config <path>]
 
 **Mutation gates.** Address notices by the lead's self alias → the alias test red.
 
-**Acceptance.** a26 lead, mlab member: `pdx relay _<ref>`. The member relays on mlab; a26's lead gets the done notice; the old ref resolves from a26.
+**Size.** 600 lines, 8 files.
 
-**Size.** 650 lines, 8 files.
+## PR P6-7b — the lead host learns the member's new session after a cross-host relay
+
+**Goal.** Codex finding 2 (critical). After a cross-host relay, the member host's `cleared` transaction moves its own `remote_members` row and lineage, but the lead host's `team_members` row still names the old session and ref. Then `pdx team`, `pdx relay <old ref>` and `pdx kill <old ref>` on the lead host would all target a session that no longer exists.
+
+Spec §8.4 (member row moves with the relay; the old ref keeps working) holds across hosts **eventually**, through the outbox. A cross-host transaction does not exist.
+
+**Choice.** A new route on the **lead host**, `POST /api/peers/team/member-moved`, fed by the member host's outbox (P4c-4's pump, every host runs it). The alternative, carrying the move in the proxied `--wait` answer, was rejected: a lead that never waits would never learn it.
+
+**Files.**
+- Modify `internal/module/team/peer_team_handler.go` (the route) and its test.
+- Modify `relay_report.go` (member host: enqueue on an applied `cleared` of a remote member's op) and its test.
+- Modify `team_store.go` (`prev_refs` column via `ensureColumn`; the move) and its test.
+- Modify `team_handler.go` (`matchMember` reads `prev_refs` for remote members).
+- Modify `internal/module/peers/policy.go` and its test.
+- Modify `internal/team/wire_team.go` and its test.
+
+**Interfaces.**
+- `type MemberMovedRequest struct{ TeamID, SpawnOp, OpID, OldSessionID, NewSessionID, NewRef string }`.
+- `POST /api/peers/team/member-moved`, exact path in `HostRoutePolicy` → 200 `{updated: 0|1}` | 403 (admin, unverified, rebind) | 409 `not_your_member`.
+- Column `team_members.prev_refs TEXT NOT NULL DEFAULT '[]'`: a JSON array, newest first, uncapped (spec §8.4, review (e)).
+
+**Behaviour rules.**
+1. **On the member host.** When `cleared` is **applied** for an op whose session was an active `remote_members` row (moved in the transaction, P4c-2), enqueue one `member_moved` to that row's lead host. Same outbox rules as P4c-4: forever, backoff ≤ 10 min, FIFO per host.
+2. **On the lead host.**
+   - Principal binding as P4c-2. **No `AllowTeam`:** it is the member host reporting on a member it was allowed to run.
+   - The row with `spawn_op` must have `host_id == principal.HostID` and `team_id` equal to the request's, else 409 `not_your_member`.
+   - If the row is still at `OldSessionID`: set `session_id = NewSessionID`, `ref = NewRef`, `address = <entry alias>/_<NewRef>`, and prepend the old ref to `prev_refs`, in one statement. If it is already at the new session: 200 `{updated:0}`, idempotent.
+3. **`matchMember`** (P4-6 / P4c-4): for a remote member, try the current ref, then `prev_refs`. Local members keep using the lineage.
+4. **The stale window.** Between the member host's `cleared` and delivery, the lead host may forward a relay or kill naming the old session.
+   - The member host's relay and kill routes therefore follow `session_lineage` **forward** (predecessor → successor, repeatedly) when no active `remote_members` row matches the given session id, then apply the same binding.
+   - `pdx msg send <member host>/_<old ref>` needs nothing new: the member host's rows carry `previous_refs` (P5a-1b), and Resolve runs over them from any host.
+
+**Tests.**
+- `TestMemberMoved_UpdatesTheRemoteRowAndKeepsTheOldRef`.
+- `TestMemberMoved_IsIdempotent`.
+- `TestMemberMoved_FromAnotherHostOrTeamIsRefused`.
+- `TestOutbox_MemberMovedEnqueuedOnClearedOfARemoteMember` (member host).
+- `TestTeamView_ShowsTheNewRefAfterACrossHostRelay`.
+- `TestRelay_ByTheOldRefAfterACrossHostRelayTargetsTheNewSession`.
+- `TestKill_ByTheOldRefAfterACrossHostRelayTargetsTheNewSession`.
+- `TestPeerRelayAndKill_FollowTheLineageForwardInTheStaleWindow`.
+- `TestHostRoutePolicy_MemberMovedExactPath`.
+
+**Mutation gates.**
+- Drop the `prev_refs` tier → the old-ref relay and kill tests red.
+- No lineage-forward lookup → the stale-window test red.
+- No enqueue on `cleared` → the outbox test red.
+
+**Acceptance** (with P6-7a). a26 lead, mlab member:
+1. `pdx relay _<ref>`. The member relays on mlab and a26's lead gets the done notice.
+2. Within the outbox delay, `pdx team` on a26 shows the new ref.
+3. `pdx relay _<old ref>` and `pdx kill _<old ref>` on a26 reach the new session.
+4. `pdx msg send mlab/_<old ref>` from a26 reaches it.
+
+**Size.** 450 lines, 9 files.
 
 ## PR P6-8 — SPA: the restart-confirm relay line
 
@@ -1496,7 +1762,7 @@ pdx relay claim <op> --session <sid> [--config <path>]
 - "The daemon decides nothing".
 
 **Files.**
-- Modify `internal/module/agent/module.go` (`AgentStatus` accessor, under `m.mu`; `currentStatus` is keyed by tmux session name, `handler.go:614`) and its test.
+- Modify `internal/module/agent/module.go` (`AgentStatus` accessor, under `m.mu`; `currentStatus` is keyed by tmux session name, `handler.go:614`) and its test. **Skip this if P6-4 shipped branch B**, which added it already.
 - Create `internal/module/team/notice_usage.go` and its test.
 - Modify `team_store.go` and `remote_store.go` (`notice_armed` column via `ensureColumn`), `relay_store_report.go` (`cleared` re-arms) and `sweeper.go`.
 
@@ -1511,7 +1777,9 @@ pdx relay claim <op> --session <sid> [--config <path>]
    - When `u.UsedPercentage < 70` → arm.
 2. **The `cleared` transaction** arms the moved row.
 3. **Text.** As the notices table. The address is the member's live address. `<N>` is the integer percentage. `<title>` is the member's title, else its tmux session name.
-4. **Acceptance threshold.** For acceptance only, the daemon reads `PDX_TEAM_NOTICE_THRESHOLD` (1–100) once at `Init`; unset means 70 (open question 15). It never changes the mod's threshold.
+4. **Acceptance threshold** (codex finding 8). The daemon reads **`PDX_RELAY_THRESHOLD`**, the name spec §15 real acceptance 2 already uses for the prototype's test threshold, from its own environment once at `Init`. Accepted values are 1–100; unset or invalid means `team.RelayThresholdPct` (70).
+   - It sets this notice's threshold only. The `hello` answer's `threshold` and the mod's own reading of the same variable (P5b, `register.js:582`) are unchanged.
+   - The acceptance starts the daemon under test with it set.
 
 **Tests.**
 - `TestNotice70_CrossingWhileRunningWaitsForIdle`.
@@ -1519,17 +1787,19 @@ pdx relay claim <op> --session <sid> [--config <path>]
 - `TestNotice70_RearmsAfterADropBelow70`.
 - `TestNotice70_NotWhileARelayIsOpen`.
 - `TestNotice70_RemoteMemberAddressedToTheLeadHost`.
-- `TestAgentStatus_ByTmuxSession`.
+- `TestAgentStatus_ByTmuxSession` (unless P6-4 branch B has it).
+- `TestNotice70_ThresholdFromPDXRelayThreshold`: `5` → fires at 6%; invalid → 70.
 
 **Mutation gates.**
 - Drop the idle check → the waits-for-idle test red.
 - Drop disarming → duplicate notices red.
+- Read another variable name → the env test red.
 
 **Size.** 620 lines, 8 files.
 
 ## PR P7-2 — member auto-compact report
 
-**Goal.** Spec §8.5 "derived: auto-compact": "Member: never intercepted … its mod lets compaction run and reports `compacted`. The lead hears: `[pdx team] <ref> 已自動壓縮（lead 未在 70% 時接力）`". The spec names no route, so this PR defines one (deviation 8).
+**Goal.** Spec §8.5 "derived: auto-compact": "Member: never intercepted … its mod lets compaction run and reports `compacted`. The lead hears: `[pdx team] <ref> 已自動壓縮（lead 未在 70% 時接力）`". The spec names no route, so this PR defines one (deviation 6).
 
 **Files.**
 - Create `internal/module/team/compacted.go` and its test.
@@ -1542,84 +1812,136 @@ pdx relay claim <op> --session <sid> [--config <path>]
 - CLI: `pdx relay compacted --session <sid> --trigger auto|manual [--config]`.
 
 **Behaviour rules.**
-1. **The daemon decides.** Only for an active member (any table) **and** `trigger == "auto"`: send the notice and arm (P7-1). Otherwise `{noticed:false}`.
-2. **The mod** reports every compaction it does not intercept, from a timer (`later`), never awaited. Compaction never waits for it. It does not use `s.role` (open question 12): the first hello may answer before the member row exists (P4-3 risk).
+1. **The daemon decides.** Only for an active member (any table) **and** `trigger == "auto"`: send the notice and **disarm** the 70% notice (`notice_armed = 0`). Otherwise `{noticed:false}`.
+   - The compaction notice never re-arms (codex finding 5): the last reading can still be ≥ 70% until the next statusline refresh, so arming here would send the 70% notice on the very next tick.
+   - Re-arming stays exactly P7-1's: after a relay (the `cleared` transaction), or when a reading below 70% arrives (spec §8.5).
+2. **The mod** reports every compaction it does not intercept, from a timer (`later`), never awaited. Compaction never waits for it. It does not use `s.role` (coordinator decision 12): the first hello may answer before the member row exists (P4-3 risk).
 3. **Skill.** The `[pdx team]` notice texts match §8.5 exactly. Today's skill paraphrases the 70% notice (`SKILL.md:21`).
 
 **Tests.**
 - Daemon: `TestCompacted_MemberAutoNotifiesOnce`, `…ManualDoesNot`, `…NonMemberDoesNot`.
+- `TestCompacted_NoticeIsNotFollowedByA70NoticeOnTheNextTick`: a stale ≥ 70% idle reading, compaction notice, next tick → no 70% notice. Then a 30% reading → armed. Then a 75% idle reading → one 70% notice.
 - CLI grammar.
 - Mod: `an auto compaction in idle reports once from a timer`, `the compaction never waits for the report`.
 
-**Mutation gates.** Notice on `manual` → red.
+**Mutation gates.**
+- Notice on `manual` → red.
+- Arm instead of disarm → the next-tick test red.
 
-**Size.** 420 lines, 8 files.
+**Size.** 430 lines, 8 files.
 
 ---
 
-## Open questions for the coordinator
+## Open questions (all decided 2026-10-07)
 
-Each has a proposed default, which the sections above are written to.
+The questions this plan raised, kept for the record, with the ruling each received. The binding text is in **Coordinator decisions** below, numbered the same.
 
-1. **Order.**
-   - Spec order is P4 → P4b → P4c → P6 → P7.
-   - The local member relay (P6-1…P6-6) needs nothing from P4b or P4c, so it could ship first and give spec goal 2 sooner on one host.
-   - **Default: spec order.** Reorder only if the user wants member relay before cross-host spawn.
-2. **The relay lock's allowed tools.** Spec §6.6 allows only the handoff write, but the shipped write prompt (`register.js:281`) requires `git status`, `git diff --stat` and `git log`.
-   - **Default:** allow `Read`, `Glob`, `Grep`, the read-only git `Bash` pattern, and `Write`/`Edit` to the handoff path; deny the rest; apply to both kinds (spec table).
-   - **2b. Who writes the flag:** the spec says the mod. **Default:** the daemon. It owns the op state, already writes the sibling `hookasks` flags, and shares the CLI's flock protocol (moved to `internal/team`). A dead mod then leaves no flag that only it could lower.
-3. **Needs measuring: does `session.receive` fire while a turn is running?** The 60 s claim timeout assumes it does (spec §8.2).
-   - **Steps:** a throwaway tmux `claude --plugin-dir <probe>` whose `session.receive` logs `Date.now()`. Start a turn running `Bash sleep 45`. `pdx msg send` it at t+5 s. Compare the log time with the turn's end.
-   - **If it fires only at idle:** the claim timeout counts from the member's next `idle` (P7-1's accessor) instead of from the request. That changes P6-4 only.
-4. **Self ops stuck at runtime** (#1735 without a restart). The spec times member ops (15 min); self ops are reconciled only at boot.
-   - **Default:** a self op past `claimed` with no progress for 15 min → frames → `failed{handoff_incomplete}`.
-5. **cwd scope on a member host.** The grant's roots are paths on the lead's host, and the grant does not travel (§7.4 (c)).
-   - **Default:** the member host requires the cwd to be under its own `team.repo_roots`.
-6. **Default `--cwd` of `pdx spawn`.** The spec names none.
-   - **Default:** the CLI's working directory (as `pdx lead request --root` defaults). A `--host` other than this one requires `--cwd` or `--repo`.
-7. **Older-daemon detection.** The spec says "a plain 404 means an older daemon". In this codebase an older daemon answers **403 `forbidden` (plain text)**, because `PeerAuth` refuses a host principal on any path `HostRoutePolicy` does not list (`internal/middleware/peer_auth.go:88-90`).
-   - **Default:** 404, or a 403 whose body is not a JSON `APIError`, → `remote_unsupported`. A JSON 403 is a real refusal.
-8. **Account identity across hosts.** The spec compares accounts by `oauthAccount.emailAddress`.
-   - **Default:** send a fingerprint (`sha256(lowercase email)[:16]`) over the peer API, never the email.
-9. **The plugin tree at spawn.** The spec appends `--plugin-dir` but does not say who extracts the tree.
-   - **Default:** extract only when it is absent, never overwrite. A version refresh stays with `pdx setup` (the user and d3 control that).
-   - **Also needs measuring** (P4-5): whether a never-opened cwd stops a tmux-launched `claude --dangerously-skip-permissions` at a trust or bypass dialog before `SessionStart`.
-     - **Steps:** a throwaway dir; `tmux new -d -s t1 -c <dir>`; send the launch line; capture the pane at 2 s and 10 s; check `~/.claude/sessions/` for the pid and the daemon's frames for the pane.
-     - **If it stops:** document it in the skill (spawn into a repo root you have opened before), and report `member_start_timeout` with that hint.
-10. **Persisted usage in P4 vs P7.** Plan v2's coordinator decision says P4; spec §12 says P7. **Default:** P4-6, per the binding decision.
-11. **Persisting `hello`.** Without it, every daemon restart makes `pdx relay <ref>` answer `relay_unsupported`, because the mod re-sends hello only after a failure or a `/clear`.
-    - **Default:** persist in `mod_hello` (P6-2a).
-    - #1832 (presence never expires) stays as accepted in P8a-1a.
-12. **Who sends the member compaction report.** **Default:** the mod reports every un-intercepted compaction and the daemon decides member-ness. This avoids the first-hello race.
-13. **Nexen's host quota** (`GET /v1/host` → `quota.seven_day_pct`, read through the usage API, shown in the status bar since alpha.575) could replace or back up the statusline reading for rule 2.
-    - **Default:** no. Follow the spec (statusline, stale after 60 min). Revisit if `unknown` turns out to be common.
-14. **A brief that fails after a successful spawn.** **Default:** exit 1, stdout still carries the member, stderr says to send it by hand.
-15. **The acceptance threshold for the 70% notice.** **Default:** the daemon env `PDX_TEAM_NOTICE_THRESHOLD`, read at `Init`. The member relay itself needs no threshold: the lead decides.
-16. **`not_your_op`.** A new 409 code (exit 13) for a claim from a session that is not the target. Spec §14 has no code for it.
-17. **Every candidate below the weekly threshold.** The spec does not say. **Default:** the same ranking still picks the one with the most remaining. Not refused.
-18. **P4b before P4c.** **Default:** a rule that picks another host answers `409 remote_unsupported` (detail names the host) until P4c-3. `--host <self>` and local picks work.
-19. **Team end reaching member hosts.** The spec has no route for it, so a remote member would stay "member" (no self relay) after its lead's team ended.
-    - **Default:** a new `POST /api/peers/team/end`, with the same outbox retry as `lead-moved` (P4c-2/3).
+1. **Order.** The local member relay could ship before P4b/P4c. **Decided: spec order.**
+2. **The relay lock's allowed tools.** **Decided: spec §6.6 exactly.**
+   - Only a `Write` to the op's handoff path is `allow`; everything else is `deny`.
+   - So the write turn needs no other tool, the mod embeds the git facts (P6-3a).
+   - `pdx hook` learns to print `allow` (P6-3b).
+   - **2b. Who writes the flag. Decided: the mod** (spec), through `pdx relay lock|unlock`, at the write turn. The daemon removes it by op id as a safety net (P6-3b, P6-3c).
+3. **`session.receive` while a turn runs.** **Decided: to be measured as M28**, by the coordinator, before P6-4 starts. Both claim-timeout branches are written (P6-4).
+   - **M28 steps:**
+     1. A throwaway tmux `claude --plugin-dir <probe>` whose `session.receive` logs `Date.now()`.
+     2. Start a turn running `Bash sleep 45`.
+     3. `pdx msg send` it at t+5 s.
+     4. Compare the log time with the turn's end.
+4. **Self ops stuck at runtime.** **Decided:** a self op stalled past `claimed` for 15 min → frames → `failed{handoff_incomplete}`.
+5. **cwd scope on a member host.** **Decided:** under the member host's own `team.repo_roots`.
+6. **Default `--cwd` of `pdx spawn`.** **Decided:** the CLI's working directory. A remote `--host` needs `--cwd` or `--repo`.
+7. **Older-daemon detection.** **Decided:** 404, or a non-JSON 403, → `remote_unsupported`.
+8. **Account identity across hosts.** **Decided:** a fingerprint, never the email.
+9. **The plugin tree at spawn.** **Decided:** extract only when absent, never overwrite.
+   - The launch in a never-opened directory **was measured (M27): no dialog**. P4-5 and the skill handle none.
+10. **Persisted usage.** **Decided:** P4-6 (plan v2's binding decision).
+11. **Persisting `hello`.** **Decided:** `mod_hello` in P6-2a.
+12. **Who sends the member compaction report.** **Decided:** every role reports; the daemon decides.
+13. **Nexen's host quota as a usage source.** **Decided:** no; the spec's statusline reading.
+14. **A brief that fails after a successful spawn.** **Decided:** exit 1, stdout keeps the member.
+15. **The 70% notice's acceptance threshold.** **Decided: `PDX_RELAY_THRESHOLD`** (spec §15). No new variable.
+16. **`not_your_op`.** **Decided:** a new 409, exit 13.
+17. **Every candidate below the weekly threshold.** **Decided:** the same ranking picks the most remaining.
+18. **P4b before P4c.** **Decided:** a remote pick answers `remote_unsupported` until P4c-3.
+19. **Team end reaching member hosts.** **Decided:** `POST /api/peers/team/end` through the outbox, retried forever (codex finding 7).
 
 ## Deviations from spec
 
 1. **Team id = the approving request's id** (`teams.id = teams.request_id`). The spec's row keeps both fields. This lets `pdx lead request` print the team id with no extra call, and lets approval replays find the team.
-2. **Relay-lock answers.** Allowed tools answer `{}` (no decision) instead of `allow`, and the allow-list is wider than "only the handoff write" (open question 2). `pdx hook` prints decisions only for `deny` (P2c), and in bypass mode `allow` and `{}` behave the same.
-3. **The relay flag is written by the daemon, not the mod** (open question 2b).
-4. **`POST /api/peers/team/relay` lands in P6-7, not P4c.** Its handler needs P6's member-op creation.
-5. **New peer route `POST /api/peers/team/end`; `lead-moved` also carries `lead_ref`.** Notices are addressed by ref, so the member host needs the current ref (open question 19).
-6. **`remote_unsupported` also on a plain-text 403** (open question 7).
-7. **`pdx peers host allow-team`.** Singular, as the existing grammar is (`cmd/pdx/peers.go:70-80`). The spec wrote `hosts`.
-8. **New interfaces the spec does not name:**
+2. **`POST /api/peers/team/relay` lands in P6-7a, not P4c.** Its handler needs P6's member-op creation.
+3. **New peer routes the spec does not list:**
+   - `POST /api/peers/team/end` (lead host → member host, coordinator decision 19);
+   - `POST /api/peers/team/member-moved` (member host → lead host, P6-7b, codex finding 2).
+   - `lead-moved` also carries `lead_ref`, because notices are addressed by ref.
+   - The spec's member-row move "in the same transaction" holds across hosts only eventually, through the outbox.
+4. **`remote_unsupported` also on a plain-text 403** (coordinator decision 7). This corrects the spec's "plain 404" for this codebase's `PeerAuth`.
+5. **`pdx peers host allow-team`.** Singular, as the existing grammar is (`cmd/pdx/peers.go:70-80`). The spec wrote `hosts`.
+6. **New interfaces the spec does not name:**
    - code `not_your_op`;
    - spawn failure reasons `session_create_failed`, `launch_failed`, `tmux_name_taken`, `abandoned`;
-   - routes `POST /api/relay/ops/{id}/claim`, `POST /api/team/kill`, `GET /api/team`, `POST /api/relay/compacted`;
-   - CLI `pdx relay compacted`.
-9. **Persisted usage in P4-6** (plan v2 decision), not P7 (spec §12).
-10. **The lead-handover notice in P6-1.** Plan v2's P5a section deferred it to P4, but it needs the notifier.
-11. **Member-host cwd scope = its own `team.repo_roots`** (open question 5).
-12. **The account is compared by fingerprint** (open question 8).
-13. **Spawn POSTs are create-or-join** and answer the op's state within a wait (25 s local, 8 s across hosts). There is no separate GET.
-14. **`relayRole` returns an error.** A store error is 500 (fail closed), not "none".
-15. **A whole-op timeout for self ops** (open question 4).
-16. **"A compatible version" (spec §8.2 step 1) = mod protocol ≥ 2.** P6-6 bumps `VERSION` from `'1'` to `'2'`. Protocol 1 has no control-message handler.
+   - routes `POST /api/relay/ops/{id}/claim`, `POST /api/team/kill`, `GET /api/team`, `POST /api/relay/compacted`; `POST /api/relay/ops/{id}/seen` (M28 branch A only);
+   - CLI `pdx relay lock|unlock` (the mod's way to write the flag), `pdx relay compacted`; `pdx relay seen` (branch A only).
+7. **Persisted usage in P4-6** (plan v2 decision), not P7 (spec §12).
+8. **The lead-handover notice in P6-1.** Plan v2's P5a section deferred it to P4, but it needs the notifier.
+9. **Member-host cwd scope = its own `team.repo_roots`** (coordinator decision 5).
+10. **The account is compared by fingerprint** (coordinator decision 8).
+11. **Spawn POSTs are create-or-join** and answer the op's state within a wait (25 s local, 8 s across hosts). There is no separate GET.
+12. **`relayRole` returns an error.** A store error is 500 (fail closed), not "none".
+13. **The 15-minute limit counts from the last state change (a stall), not from the request, for both kinds** (coordinator decision 4). The claim deliberately waits for the member's running turn, so counting from the request would fail any relay asked for during a long turn.
+14. **"A compatible version" (spec §8.2 step 1) = mod protocol ≥ 2.** P6-6 bumps `VERSION` from `'1'` to `'2'`. Protocol 1 has no control-message handler.
+15. **The claim comes after the member's running turn has completed** (the coordinator's reading of spec §8.2 step 3, codex finding 1). The control message is consumed at once in every state. The claim timeout's basis (from the request with a `seen` sign, or from the member's next idle) is decided by M28 (P6-4).
+
+---
+
+## Coordinator decisions (plan v3, 2026-10-07, mlab/_7wcg1d purdex-f0)
+
+Binding. Each item names where it landed.
+
+**Codex review of plan v3** (one round; job output `scratchpad/planv3-review.txt` of session 27d44874; all 8 findings adopted):
+
+1. **[critical] The control message is always consumed. While a turn runs the op is kept, and the claim follows that turn's `turn.complete`.** → P6-6:
+   - `session.receive` returns `{consumed}` in every state;
+   - `s.control` holds the op;
+   - the claim runs from `turn.complete` or at once when idle;
+   - the test drives `turn.start` → `session.receive` → `turn.complete` through the interface.
+
+   **The claim timeout's basis is decided by M28.** Both branches are written in P6-4 "Claim timeout":
+   - **Branch A** (fires mid-turn): from the request, stopped by the mod's `seen`; the `seen` route is in P6-4 and the CLI in P6-5.
+   - **Branch B** (fires only when idle): from the member's next idle, with the agent-status accessor moved into P6-4.
+2. **[critical] After a cross-host relay the lead host learns the member's new session and ref.** → **P6-7b** (pre-split from P6-7):
+   - the member host's outbox sends `POST /api/peers/team/member-moved`;
+   - the lead host updates the row and keeps `prev_refs`;
+   - `matchMember` reads them;
+   - the member host follows its lineage forward for a stale session id.
+   - Tests cover `pdx team` showing the new ref, and `pdx relay` / `pdx kill` by the old ref reaching the new session.
+3. **[important] The relay lock is spec §6.6 exactly.** Only the exact handoff `Write` gets `allow`; everything else gets `deny`; `PermissionRequest` gets `{}`. `pdx hook` prints `allow` (the same PR) → **P6-3b**.
+   - To keep the handoff's quality, the mod runs `git status --short`, `git diff --stat` and `git log --oneline -10` itself and embeds them in the write prompt. The model only writes, with one `Write` of the whole file → **P6-3a**, which ships before the lock takes effect (P6-3c).
+   - Open question 2 is decided.
+4. **[important] The mod writes the flag** (spec):
+   - `pdx relay lock|unlock <op> --session <sid>` use the flock helpers moved to `internal/team` (compare-and-remove by op id) → P6-3b.
+   - The mod locks at the write turn's `turn.start`, after any existing turn completed, and unlocks before `/clear` and on every give-up → **P6-3c**.
+   - The daemon compare-and-removes by op id at `cleared` and every terminal state as a safety net. The prune guard keeps flags of ops in `claimed|writing|written` → P6-3b.
+   - Open question 2b and the former deviation 3 are decided, so this is no longer a deviation.
+5. **[important] The compaction notice disarms the 70% notice.** Re-arm only after a relay or a reading below 70% → **P7-2**, with the test "no 70% notice on the next tick after the compaction notice".
+6. **[important] P4c-3 is pre-split into P4c-3 (spawn forwarding) and P4c-4 (kill, outbox, remote team view)**, each ≤ 800 lines and ≤ 20 files. P6-7 is likewise pre-split into P6-7a and P6-7b, and P6-3 into P6-3a, b and c.
+7. **[important] The outbox never fails for good.**
+   - The backoff is capped at 10 minutes and retries are unbounded.
+   - An entry ends only on delivery, when the row it describes no longer needs it, on a permanent refusal, or when the host is unpaired.
+   - The member-host pull (`GET /api/peers/team/state`) is not added: P4c-4 rule 4 says why unbounded retry is enough, and the pull becomes a follow-up issue.
+   - → **P4c-4**, with tests.
+8. **[minor] The 70% notice's acceptance threshold is `PDX_RELAY_THRESHOLD`** (spec §15). There is no `PDX_TEAM_NOTICE_THRESHOLD` → **P7-1**.
+
+**The open questions** (numbers as in "Open questions (all decided)"):
+- **1 Order:** spec order, P4 → P4b → P4c → P6 → P7.
+- **3:** to be measured as **M28** by the coordinator before P6-4 starts. The plan carries both branches (above, item 1).
+- **4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 17, 18, 19:** the plan's defaults are adopted. For 19, the outbox retries forever (item 7).
+- **9:** the default is adopted (extract only when absent, never overwrite). **Measured as M27** on 2026-10-07, CC 2.1.292, in tmux, in a directory never opened before (new under `/private/tmp`), with `claude --dangerously-skip-permissions --model haiku`:
+  - the input box appeared within 2 s;
+  - there was no trust dialog and no bypass dialog;
+  - `~/.claude/sessions/<pid>.json` was written;
+  - the status line showed Haiku 4.5, so `--model` took effect.
+
+  So a spawn does not stop at a dialog. P4-5 needs no special handling and the skill says nothing about it.
+- **15:** item 8 above.
+- **Measurement numbers:** M25 = U20's `--model` / `--effort` (spec); **M26** = P8a-2's hours-long hold; **M27** = the launch in a never-opened directory; **M28** = whether `session.receive` fires while a turn runs.
