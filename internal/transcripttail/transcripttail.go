@@ -175,11 +175,16 @@ func After(r io.ReaderAt, size, off int64, maxBytes int) (Result, error) {
 			return Result{}, err
 		}
 		if prev[0] != '\n' {
-			idx, _, _, err := nextNewline(r, off, end, int64(end-off)+1)
+			// An arbitrary client offset must not make us scan the rest of
+			// the file: the half line is bounded by the same hard cap.
+			idx, found, exceeded, err := nextNewline(r, off, end, MaxLineBytes)
 			if err != nil {
 				return Result{}, err
 			}
-			start = idx + 1 // exists: end-1 is a '\n' and off < end
+			if exceeded || !found || idx-off > MaxLineBytes {
+				return Result{}, ErrLineTooLarge
+			}
+			start = idx + 1
 		}
 	}
 	if start >= end {

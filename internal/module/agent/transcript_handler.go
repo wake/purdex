@@ -100,9 +100,9 @@ func (m *Module) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		transcriptError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	f, err := os.Open(path)
+	f, err := openTranscript(path)
 	if err != nil {
-		transcriptError(w, http.StatusNotFound, "file_missing")
+		transcriptError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	defer f.Close()

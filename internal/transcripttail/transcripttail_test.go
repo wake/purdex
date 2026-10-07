@@ -187,3 +187,12 @@ func TestAfterOversizeLine(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// An arbitrary offset inside a line longer than the hard cap must be refused
+// rather than scanned to the end of the file.
+func TestAfterMidHugeLineIsBounded(t *testing.T) {
+	s := "a\n" + strings.Repeat("x", MaxLineBytes+10) + "\nb\n"
+	if _, err := After(rd(s), int64(len(s)), 5, 1<<20); !errors.Is(err, ErrLineTooLarge) {
+		t.Fatalf("err = %v, want ErrLineTooLarge", err)
+	}
+}

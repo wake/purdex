@@ -24,6 +24,34 @@ func TestTranscriptSlug(t *testing.T) {
 	}
 }
 
+// A path that was a safe regular file when resolved but is a symlink by the
+// time it is opened must be refused, not followed.
+func TestOpenTranscriptRefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "secret.jsonl")
+	if err := os.WriteFile(outside, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "swapped.jsonl")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := openTranscript(link); !errors.Is(err, errNoTranscript) {
+		if f != nil {
+			f.Close()
+		}
+		t.Fatalf("err = %v, want errNoTranscript", err)
+	}
+	f, err := openTranscript(outside)
+	if err != nil {
+		t.Fatalf("regular file: %v", err)
+	}
+	f.Close()
+	if _, err := openTranscript(filepath.Join(dir, "nope.jsonl")); !errors.Is(err, errFileMissing) {
+		t.Fatalf("missing: %v", err)
+	}
+}
+
 func projectsDir(t *testing.T, home string) string {
 	t.Helper()
 	d := filepath.Join(home, ".claude", "projects")

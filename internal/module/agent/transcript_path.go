@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 var (
@@ -31,6 +32,30 @@ func transcriptSlug(cwd string) string {
 		}
 	}
 	return b.String()
+}
+
+// openTranscript opens a path returned by resolveTranscriptPath without
+// following a final symlink and proves the descriptor is the same regular file
+// the resolver inspected, so a swap between check and open (the hook-supplied
+// path is untrusted) cannot redirect the read outside ~/.claude/projects.
+func openTranscript(path string) (*os.File, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, errFileMissing
+	}
+	if !before.Mode().IsRegular() {
+		return nil, errNoTranscript
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, errNoTranscript
+	}
+	after, err := f.Stat()
+	if err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) {
+		f.Close()
+		return nil, errNoTranscript
+	}
+	return f, nil
 }
 
 // resolveTranscriptPath picks the transcript file for a Claude Code owner and
