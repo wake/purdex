@@ -562,9 +562,8 @@ func TestRunLeadCmd_WaitBelowOneSecondIsUsageError(t *testing.T) {
 
 // Spec §6.1 step 4: an approved request prints the grant with the team id on
 // stdout, one JSON line and nothing else. The team id is the approving
-// request's id (plan v3 deviation 1), so no second call is needed. Nothing
-// else is printed on approval yet: the U20 activation reminder ships with
-// pdx spawn (P4-7).
+// request's id (plan v3 deviation 1), so no second call is needed. stderr
+// carries only the U20 activation reminder (P4-7).
 func TestLeadFinish_ApprovedPrintsTeamID(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	ap := team.Approval{ID: "8f2c0f8e-3b1a-4c6e-9d2a-0e5b7c1d9a44", Kind: team.KindLead, State: team.StateApproved,
@@ -582,8 +581,42 @@ func TestLeadFinish_ApprovedPrintsTeamID(t *testing.T) {
 	if string(out["team_id"]) != `"`+ap.ID+`"` || string(out["request_id"]) != `"`+ap.ID+`"` || len(out) != 3 {
 		t.Fatalf("stdout = %s, want request_id, team_id (= the request id) and grant", stdout.String())
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want nothing on approval", stderr.String())
+	if stderr.String() != leadActivationReminder+"\n" {
+		t.Fatalf("stderr = %q, want the activation reminder alone", stderr.String())
+	}
+}
+
+// leadActivationReminder is U20 (b)'s line, spelled out here rather than read
+// from team.ReminderAtActivation, so dropping or rewording it turns this
+// package's tests red too.
+const leadActivationReminder = "已成為 lead。預設模型不固定：spawn member 時請依工作需求用 --model 指定（例：--model sonnet 做機械性修改、--model opus 做設計）。"
+
+// U20 (b), spec §15: an approved `pdx lead request` prints the activation
+// reminder once on stderr, and stdout stays the grant JSON alone. A request
+// that is not approved never prints it.
+func TestLeadRequest_ApprovedPrintsTheReminderOnStderrOnlyTheGrantOnStdout(t *testing.T) {
+	d := newFakeTeamDaemon(team.Approval{State: team.StateApproved, Grant: &team.Grant{MaxMembers: 2, Roots: []string{"/w"}}})
+	code, stdout, stderr := driveLead(t, context.Background(), d, "--reason", "r")
+	if code != ExitOK {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	var out map[string]json.RawMessage
+	if strings.Count(stdout, "\n") != 1 || json.Unmarshal([]byte(stdout), &out) != nil || len(out) != 3 {
+		t.Fatalf("stdout = %q, want the grant JSON line alone", stdout)
+	}
+	if strings.Contains(stdout, "已成為 lead") {
+		t.Errorf("stdout carries the reminder: %q", stdout)
+	}
+	if n := strings.Count(stderr, leadActivationReminder+"\n"); n != 1 {
+		t.Errorf("stderr has the reminder line %d times, want 1: %q", n, stderr)
+	}
+
+	for _, st := range []team.State{team.StateDenied, team.StateTimeout, team.StateCancelled, team.StateAbandoned} {
+		d := newFakeTeamDaemon(team.Approval{State: st})
+		_, _, stderr := driveLead(t, context.Background(), d, "--reason", "r")
+		if strings.Contains(stderr, "已成為 lead") {
+			t.Errorf("%s: stderr carries the reminder: %q", st, stderr)
+		}
 	}
 }
 
