@@ -20,6 +20,9 @@ import (
 // not a failure.
 var errRestart = errors.New("restart requested")
 
+// watcherJoinCap bounds how long a panicking serveAndWait waits for its signal watcher.
+const watcherJoinCap = time.Second
+
 // restartRequested is the restart outcome serveAndWait returns; it is
 // errRestart to errors.Is. The restart still re-execs after a cleanup
 // error, but does not hide it: warnings (one per logged error) go to
@@ -137,7 +140,11 @@ func serveAndWait(srv server, ln net.Listener, sig <-chan os.Signal,
 	// watcher nor leave it running (it could still take a later signal and exit) once we unwind.
 	defer func() {
 		closeDone.Do(func() { close(done) })
-		<-watcherDone
+		// Bounded: the watcher may be inside logf, and a stuck writer must not turn the panic into a hang.
+		select {
+		case <-watcherDone:
+		case <-time.After(watcherJoinCap):
+		}
 	}()
 	go func() {
 		defer close(watcherDone)
