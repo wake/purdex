@@ -1,0 +1,175 @@
+package team
+
+import "encoding/json"
+
+// ---- P4: teams, members, spawn, kill (spec §7.1–§7.3, U20) ----
+
+// Team error codes (APIError.Error on /api/team/*); 409 and CLI exit 13.
+const (
+	ErrNotLead         = "not_lead"          // the origin leads no live team
+	ErrTeamFull        = "team_full"         // live members plus running spawns reached grant.max_members
+	ErrCwdOutsideGrant = "cwd_outside_grant" // the cwd, symlinks evaluated, is under no granted root
+	ErrNotYourMember   = "not_your_member"   // kill: the target is no member of the caller's team
+)
+
+// Spawn failure reasons: SpawnOp.Reason when State is SpawnFailed. The CLI
+// exits 14 on SpawnReasonStartTimeout and 1 on every other reason (§14).
+const (
+	SpawnReasonStartTimeout = "member_start_timeout"  // not registered within SpawnRegisterS; its tmux session was killed
+	SpawnReasonCreateFailed = "session_create_failed" // the tmux session could not be created
+	SpawnReasonLaunchFailed = "launch_failed"         // the launch line was not sent; the session was killed
+	SpawnReasonNameTaken    = "tmux_name_taken"       // SpawnTmuxName(id) existed before this op created it
+	SpawnReasonAbandoned    = "abandoned"             // boot found the op's tmux session gone mid-spawn
+)
+
+// MemberState is a member row's state (spec §7.3).
+type MemberState string
+
+const (
+	MemberActive MemberState = "active"
+	MemberKilled MemberState = "killed" // pdx kill
+	MemberGone   MemberState = "gone"   // its session ended without a kill
+)
+
+// SpawnState is a spawn op's state. A running op is resumed at boot from
+// its Step (spec §9.3).
+type SpawnState string
+
+const (
+	SpawnRunning SpawnState = "running"
+	SpawnDone    SpawnState = "done"   // Member is set
+	SpawnFailed  SpawnState = "failed" // Reason is set
+)
+
+// Spawn steps: SpawnOp.Step, how far a spawn got. Persisted after each
+// step, so a retry after a restart continues from it and nothing opens
+// twice (spec §7.2 step 3, §9.3).
+const (
+	StepAccepted       = "accepted"        // the op row exists, no tmux session yet
+	StepSessionCreated = "session_created" // the tmux session exists, its id and instance recorded
+	StepLaunched       = "launched"        // the launch line was sent to window 0
+	StepRegistered     = "registered"      // the member's frame and registry entry were seen
+)
+
+// Team limits and texts (spec §6.1 step 4, §7.1, §7.2, U20).
+const (
+	TeamEndLeadGone = "lead_gone" // Team.EndReason: the lead's conversation ended (§7.1)
+
+	SpawnRegisterS = 20 // §7.2 step 5: a launched member must register within this
+	SpawnPollWaitS = 25 // POST /api/team/spawns answers within this, running or not
+
+	// DefaultMemberCommand is host config team.member_command when unset
+	// (§7.2 step 4): the expansion of the cld-yolo alias.
+	DefaultMemberCommand = "claude --dangerously-skip-permissions"
+
+	// MemberBriefPrefixFmt is the brief's first line (§7.2); the arguments
+	// are the lead's address and the team id.
+	MemberBriefPrefixFmt = "[pdx team] 你是 %s 的 member（team %s）。接力由 lead 決定，不要自己接力。"
+
+	// ReminderAtActivation goes to stderr when `pdx lead request` is
+	// approved; stdout stays the grant JSON alone (U20 (b)).
+	ReminderAtActivation = "已成為 lead。預設模型不固定：spawn member 時請依工作需求用 --model 指定（例：--model sonnet 做機械性修改、--model opus 做設計）。"
+
+	// ReminderNoModel goes to stderr when `pdx spawn` has no --model; the
+	// spawn goes on and the exit code is unchanged (U20 (c)).
+	ReminderNoModel = "提醒：沒有指定 --model，member 會用這台主機當下的預設模型。"
+)
+
+// Team is one lead's team (spec §7.1), created in the transaction that
+// approves the lead request. Its id is that request's id (plan v3
+// deviation 1), so RequestID == ID.
+type Team struct {
+	ID            string `json:"id"`
+	HostID        string `json:"host_id"`
+	LeadSessionID string `json:"lead_session_id"` // follows the lead through its relays (§8.4)
+	LeadRef       string `json:"lead_ref"`        // "_xxxxxx", moves with LeadSessionID
+	Grant         Grant  `json:"grant"`
+	RequestID     string `json:"request_id"`
+	CreatedAt     int64  `json:"created_at"`           // unix ms
+	EndedAt       int64  `json:"ended_at,omitempty"`   // unix ms; 0 while the team is live
+	EndReason     string `json:"end_reason,omitempty"` // TeamEndLeadGone
+}
+
+// MemberContext is a member's last statusline reading (P1), live or, from
+// P4-6, persisted on its row. The shape is the peers wire's agent.context
+// plus the model and effort the member actually runs (U20 (e)).
+// UsedPercentage is nil until Claude Code reports one.
+type MemberContext struct {
+	UsedPercentage *float64 `json:"used_percentage"`
+	Window         int      `json:"window"`
+	ModelID        string   `json:"model_id,omitempty"`
+	Effort         string   `json:"effort,omitempty"`
+	At             int64    `json:"at"` // unix ms when the daemon received it
+}
+
+// Member is one member of a team (spec §7.2 step 6, §7.3).
+type Member struct {
+	SessionID   string         `json:"session_id"`
+	Ref         string         `json:"ref"`     // "_xxxxxx"
+	Address     string         `json:"address"` // "<alias>/<name>" for a routable name, else "<alias>/_<ref>"
+	TeamID      string         `json:"team_id"`
+	HostID      string         `json:"host_id"` // the host the member runs on
+	Title       string         `json:"title,omitempty"`
+	Cwd         string         `json:"cwd"`
+	TmuxSession string         `json:"tmux_session"` // SpawnTmuxName(SpawnOp)
+	State       MemberState    `json:"state"`
+	Model       string         `json:"model,omitempty"`  // as asked at spawn (U20); "" = the host's default
+	Effort      string         `json:"effort,omitempty"` // as asked at spawn (U20)
+	Context     *MemberContext `json:"context,omitempty"`
+	SpawnOp     string         `json:"spawn_op"`
+	CreatedAt   int64          `json:"created_at"` // unix ms
+}
+
+// SpawnRequest is POST /api/team/spawns.
+type SpawnRequest struct {
+	ID          string `json:"id"`               // UUID v4 from the CLI; idempotency key
+	OriginInbox string `json:"origin_inbox"`     // CLAUDE_CODE_MESSAGING_SOCKET of the lead
+	Cwd         string `json:"cwd,omitempty"`    // absolute; the CLI defaults it to its working directory
+	Title       string `json:"title,omitempty"`  // the member's title (pdx msg name)
+	Model       string `json:"model,omitempty"`  // ValidModel; "" = the host's default model (U20)
+	Effort      string `json:"effort,omitempty"` // ValidEffort; "" = the host's default effort (U20)
+}
+
+// SpawnOp is a spawn operation, persisted step by step (spec §9.3). It is
+// the 200 body of POST /api/team/spawns in every state.
+type SpawnOp struct {
+	ID          string     `json:"id"`
+	TeamID      string     `json:"team_id"`
+	HostID      string     `json:"host_id"`
+	State       SpawnState `json:"state"`
+	Step        string     `json:"step"`             // StepAccepted … StepRegistered
+	Reason      string     `json:"reason,omitempty"` // failed only: a SpawnReason*
+	Cwd         string     `json:"cwd"`
+	Title       string     `json:"title"`
+	Model       string     `json:"model"`
+	Effort      string     `json:"effort"`
+	TmuxSession string     `json:"tmux_session"`           // SpawnTmuxName(ID)
+	LeadAddress string     `json:"lead_address,omitempty"` // for the brief's first line (§7.2)
+	Member      *Member    `json:"member,omitempty"`       // done only
+	CreatedAt   int64      `json:"created_at"`             // unix ms
+	UpdatedAt   int64      `json:"updated_at"`             // unix ms
+}
+
+// KillRequest is POST /api/team/kill.
+type KillRequest struct {
+	OriginInbox string `json:"origin_inbox"` // CLAUDE_CODE_MESSAGING_SOCKET of the lead
+	Target      string `json:"target"`       // the member's ref or address, as `pdx kill <ref>` takes it
+}
+
+// TeamView is GET /api/team: the caller's team and every member of it, in
+// any state.
+type TeamView struct {
+	Team    Team     `json:"team"`
+	Members []Member `json:"members"` // never null: MarshalJSON emits [] for none
+}
+
+// MarshalJSON keeps the struct tags' shape and makes "no members" an
+// explicit []: consumers range over it, and a nil slice would print null.
+func (v TeamView) MarshalJSON() ([]byte, error) {
+	type plain TeamView // no methods: avoids recursion
+	p := plain(v)
+	if p.Members == nil {
+		p.Members = []Member{}
+	}
+	return json.Marshal(p)
+}
