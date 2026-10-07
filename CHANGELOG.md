@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.574] - 2026-10-08
+
+> 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。Mac App 上沒有可見的變化（順序與位置逐項不變）。
+
+### Changed：純瀏覽器收斂批 4a — 拿掉「瀏覽器還是 Electron」的平台旗標（#1815）
+
+- `lib/platform.ts` 原本有 8 個旗標，其中 6 個其實就是「有沒有 Electron」：`isElectron`、`canTearOffTab`、`canMergeWindow`（沒有人用）、`canBrowserPane`、`canSystemTray`、`canNotification`。現在都拿掉，使用點一律當作有 Electron。
+- **保留**兩個真的能力偵測：`devUpdateEnabled`（preload 有 `getAppInfo`）和 `hasLocalFilesystem`（preload 有 `fs`）。原因：Mac App 是從開發伺服器載入畫面，Electron 的 preload 可能比畫面舊。`window.electronAPI?.` 的防呆也都沒動。
+- Mac App 上：分頁右鍵選單的「移到新視窗」、設定裡 Electron（系統匣）區塊與它的順序、瀏覽器新分頁入口、桌面通知，都和以前一樣。
+- 預期的副作用：在一般瀏覽器開這個畫面（例如做驗收）時，現在也會看到這些入口（移到新視窗、瀏覽器窗格、系統匣設定區塊）；它們的呼叫點都有 `window.electronAPI` 防呆，不會當掉。
+- 另開 #1816：Electron preload 比畫面舊（缺 `tearOffTab`／`openBrowserView`）時，「移到新視窗」會先關掉原分頁再失敗、瀏覽器窗格會拋錯；這在本批之前就存在。
+
 ## [1.0.0-alpha.573] - 2026-10-08
 
 > 只動 SPA，透過 HMR 生效，daemon 和 Electron 都不必更新。
