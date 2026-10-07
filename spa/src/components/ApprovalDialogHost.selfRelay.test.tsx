@@ -87,6 +87,20 @@ describe('ApprovalDialogHost — self_relay', () => {
     expect(mockedPause.mock.invocationCallOrder[0]).toBeLessThan(mockedDecide.mock.invocationCallOrder[0])
   })
 
+  it('while the host is disconnected the decision is queued and the pause is NOT sent nor queued (Decision 1)', async () => {
+    render(<ApprovalDialogHost />)
+    open(relay())
+    act(() => { useHostStore.getState().setRuntime(H, { status: 'reconnecting' }) })
+    fireEvent.click(screen.getByTestId('approval-no-more-asking'))
+    fireEvent.click(screen.getByTestId('approval-deny'))
+    await waitFor(() => expect(Object.keys(useApprovalStore.getState().queued)).toHaveLength(1))
+    expect(mockedPause).not.toHaveBeenCalled()
+    expect(mockedDecide).not.toHaveBeenCalled()
+    const q = Object.values(useApprovalStore.getState().queued)[0]
+    expect(q.decision).toBe('deny')
+    expect(q.grant).toBeUndefined()
+  })
+
   it('a pause that fails toasts and the decision still goes out', async () => {
     mockedPause.mockRejectedValueOnce(new ApprovalApiError(0, 'network', 'Failed to fetch'))
     mockedDecide.mockResolvedValueOnce(relay({ state: 'denied', decided_by: { kind: 'app', label: 'Purdex.app' } }))
