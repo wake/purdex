@@ -20,6 +20,12 @@ var ErrNoSuchApproval = errors.New("no such approval")
 // Store is the SQLite persistence of approval requests.
 type Store struct {
 	db *sql.DB
+
+	// beforeReplaceInsert, when set, runs in ReplaceTerminalOnly's
+	// transaction after the old row's close and before the new row's
+	// insert; a non-nil error fails the replace there. Tests use it to
+	// prove the close rolls back with a failed insert. nil in production.
+	beforeReplaceInsert func() error
 }
 
 // OpenStore opens (or creates) team.db at path. ":memory:" is for tests.
@@ -73,6 +79,13 @@ const selectCols = `id, kind, host_id, origin_json, payload_json, request_hash, 
 
 type rowScanner interface{ Scan(dest ...any) error }
 
+// dbtx is what *sql.DB and *sql.Tx share: the single-statement helpers
+// below run on either, so a transaction (ReplaceTerminalOnly) reuses them.
+type dbtx interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 // scanRow decodes one approval_requests row and its request hash.
 func scanRow(r rowScanner) (team.Approval, string, error) {
 	var a team.Approval
@@ -112,8 +125,11 @@ func scanRow(r rowScanner) (team.Approval, string, error) {
 }
 
 // getRow reads one row with its hash; ErrNoSuchApproval when absent.
-func (s *Store) getRow(id string) (team.Approval, string, error) {
-	a, hash, err := scanRow(s.db.QueryRow(`SELECT `+selectCols+` FROM approval_requests WHERE id = ?`, id))
+func (s *Store) getRow(id string) (team.Approval, string, error) { return getRowIn(s.db, id) }
+
+// getRowIn is getRow on q (the database, or a transaction).
+func getRowIn(q dbtx, id string) (team.Approval, string, error) {
+	a, hash, err := scanRow(q.QueryRow(`SELECT `+selectCols+` FROM approval_requests WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return team.Approval{}, "", ErrNoSuchApproval
 	}
@@ -137,29 +153,39 @@ func (s *Store) Get(id string) (team.Approval, bool, error) {
 // stored row and the hash it was stored with, so the caller can tell an
 // idempotent retry (same hash) from a conflicting reuse of the id.
 func (s *Store) Create(a team.Approval, hash string) (stored team.Approval, storedHash string, inserted bool, err error) {
-	originJSON, err := json.Marshal(a.Origin)
+	n, err := insertRowIn(s.db, a, hash, "\n\t\tON CONFLICT(id) DO NOTHING")
 	if err != nil {
-		return team.Approval{}, "", false, fmt.Errorf("encode origin: %w", err)
-	}
-	res, err := s.db.Exec(`
-		INSERT INTO approval_requests
-			(id, kind, host_id, origin_session_id, origin_json, payload_json, request_hash, state, created_at, deadline_at, lease_until)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO NOTHING`,
-		a.ID, string(a.Kind), a.HostID, a.Origin.SessionID, string(originJSON), string(a.Payload), hash,
-		string(team.StateOpen), a.CreatedAt, a.DeadlineAt, a.LeaseUntil)
-	if err != nil {
-		return team.Approval{}, "", false, fmt.Errorf("insert approval %s: %w", a.ID, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return team.Approval{}, "", false, fmt.Errorf("insert approval %s rows affected: %w", a.ID, err)
+		return team.Approval{}, "", false, err
 	}
 	stored, storedHash, err = s.getRow(a.ID)
 	if err != nil {
 		return team.Approval{}, "", false, err
 	}
 	return stored, storedHash, n == 1, nil
+}
+
+// insertRowIn inserts a (state open) on ex with the conflict clause
+// appended ("" makes an existing id an error) and returns how many rows it
+// inserted.
+func insertRowIn(ex dbtx, a team.Approval, hash, conflict string) (int64, error) {
+	originJSON, err := json.Marshal(a.Origin)
+	if err != nil {
+		return 0, fmt.Errorf("encode origin: %w", err)
+	}
+	res, err := ex.Exec(`
+		INSERT INTO approval_requests
+			(id, kind, host_id, origin_session_id, origin_json, payload_json, request_hash, state, created_at, deadline_at, lease_until)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`+conflict,
+		a.ID, string(a.Kind), a.HostID, a.Origin.SessionID, string(originJSON), string(a.Payload), hash,
+		string(team.StateOpen), a.CreatedAt, a.DeadlineAt, a.LeaseUntil)
+	if err != nil {
+		return 0, fmt.Errorf("insert approval %s: %w", a.ID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("insert approval %s rows affected: %w", a.ID, err)
+	}
+	return n, nil
 }
 
 // Close is how a request leaves the open state. DecidedBy is set for
@@ -201,25 +227,39 @@ func (s *Store) CloseIfExpired(id string, now int64, c Close) (team.Approval, bo
 // closeWhere runs the close UPDATE guarded by state='open' and, when guard
 // is non-empty, that extra SQL condition (one ? bound to guardArg).
 func (s *Store) closeWhere(id string, c Close, guard string, guardArg int64) (team.Approval, bool, error) {
+	n, err := closeRowIn(s.db, id, c, guard, guardArg)
+	if err != nil {
+		return team.Approval{}, false, err
+	}
+	a, _, err := s.getRow(id)
+	if err != nil {
+		return team.Approval{}, false, err
+	}
+	return a, n == 1, nil
+}
+
+// closeRowIn runs closeWhere's guarded UPDATE on ex and returns how many
+// rows it changed (1: this close won).
+func closeRowIn(ex dbtx, id string, c Close, guard string, guardArg int64) (int64, error) {
 	var decidedBy, grant any // NULL unless set
 	if c.DecidedBy != nil {
 		b, err := json.Marshal(c.DecidedBy)
 		if err != nil {
-			return team.Approval{}, false, fmt.Errorf("encode decided_by: %w", err)
+			return 0, fmt.Errorf("encode decided_by: %w", err)
 		}
 		decidedBy = string(b)
 	}
 	if c.Grant != nil {
 		b, err := json.Marshal(c.Grant)
 		if err != nil {
-			return team.Approval{}, false, fmt.Errorf("encode grant: %w", err)
+			return 0, fmt.Errorf("encode grant: %w", err)
 		}
 		grant = string(b)
 	}
 	if c.Hook != nil {
 		b, err := json.Marshal(c.Hook)
 		if err != nil {
-			return team.Approval{}, false, fmt.Errorf("encode hook decision: %w", err)
+			return 0, fmt.Errorf("encode hook decision: %w", err)
 		}
 		grant = string(b)
 	}
@@ -227,22 +267,18 @@ func (s *Store) closeWhere(id string, c Close, guard string, guardArg int64) (te
 	if guard != "" {
 		args = append(args, guardArg)
 	}
-	res, err := s.db.Exec(`
+	res, err := ex.Exec(`
 		UPDATE approval_requests
 		SET state = ?, decided_at = ?, decided_by_json = ?, grant_json = ?
 		WHERE id = ? AND state = 'open'`+guard, args...)
 	if err != nil {
-		return team.Approval{}, false, fmt.Errorf("close approval %s: %w", id, err)
+		return 0, fmt.Errorf("close approval %s: %w", id, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return team.Approval{}, false, fmt.Errorf("close approval %s rows affected: %w", id, err)
+		return 0, fmt.Errorf("close approval %s rows affected: %w", id, err)
 	}
-	a, _, err := s.getRow(id)
-	if err != nil {
-		return team.Approval{}, false, err
-	}
-	return a, n == 1, nil
+	return n, nil
 }
 
 // RenewLease moves an open request's lease forward to until (never back).

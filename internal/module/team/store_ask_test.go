@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 
@@ -74,10 +75,13 @@ func TestStore_OpenByToolUse_TerminalOnly_NonHook(t *testing.T) {
 	}
 }
 
-// OverrideIfApproved moves approved → terminal_override only (spec §6.6 step 5).
-func TestStore_OverrideIfApprovedOnlyFromApproved(t *testing.T) {
+// OverrideIfDecided moves approved or denied → terminal_override only
+// (spec §6.6 step 5; P8a-1b review: the terminal's answer replaces a remote
+// deny as well as a remote approve). Open rows, the terminal's own closes,
+// the other terminal states and lead rows are never overridden.
+func TestStore_OverrideIfDecidedOnlyFromApprovedOrDenied(t *testing.T) {
 	s := openTestStore(t)
-	for _, id := range []string{"hk-1", "hk-2"} {
+	for _, id := range []string{"hk-1", "hk-2", "hk-3"} {
 		if _, _, _, err := s.Create(openHookApproval(id, "sid-1", id, false), "h"); err != nil {
 			t.Fatal(err)
 		}
@@ -86,30 +90,108 @@ func TestStore_OverrideIfApprovedOnlyFromApproved(t *testing.T) {
 	if _, _, err := s.CloseIfOpen("hk-1", Close{State: team.StateApproved, DecidedAt: 2, DecidedBy: remote, Hook: &team.HookDecision{Answers: map[string]string{"q?": "藍"}}}); err != nil {
 		t.Fatal(err)
 	}
-	over, won, err := s.OverrideIfApproved("hk-1", 3, &team.HookDecision{Answers: map[string]string{"q?": "紅"}})
+	over, won, err := s.OverrideIfDecided("hk-1", 3, &team.HookDecision{Answers: map[string]string{"q?": "紅"}})
 	if err != nil || !won || over.State != team.StateTerminalOverride || over.Hook.Answers["q?"] != "紅" || over.DecidedBy.Kind != team.ClientKindTerminal || over.DecidedAt != 3 {
-		t.Fatalf("override: %+v hook=%+v by=%+v won=%v err=%v", over, over.Hook, over.DecidedBy, won, err)
+		t.Fatalf("override of approved: %+v hook=%+v by=%+v won=%v err=%v", over, over.Hook, over.DecidedBy, won, err)
 	}
-	if _, won, err := s.OverrideIfApproved("hk-1", 4, nil); err != nil || won {
+	if _, won, err := s.OverrideIfDecided("hk-1", 4, nil); err != nil || won {
 		t.Fatalf("a second override must lose: won=%v err=%v", won, err)
 	}
-	if _, won, err := s.OverrideIfApproved("hk-2", 4, nil); err != nil || won {
+	// A remote deny is overridden the same way.
+	if _, _, err := s.CloseIfOpen("hk-3", Close{State: team.StateDenied, DecidedAt: 2, DecidedBy: remote, Hook: &team.HookDecision{Behavior: "deny", Message: "不要"}}); err != nil {
+		t.Fatal(err)
+	}
+	over, won, err = s.OverrideIfDecided("hk-3", 3, &team.HookDecision{Behavior: "allow"})
+	if err != nil || !won || over.State != team.StateTerminalOverride || over.Hook.Behavior != "allow" || over.Hook.Message != "" || over.DecidedBy.Kind != team.ClientKindTerminal {
+		t.Fatalf("override of denied: %+v hook=%+v by=%+v won=%v err=%v", over, over.Hook, over.DecidedBy, won, err)
+	}
+	if _, won, err := s.OverrideIfDecided("hk-2", 4, nil); err != nil || won {
 		t.Fatalf("an open row cannot be overridden: won=%v err=%v", won, err)
 	}
-	if _, _, err := s.CloseIfOpen("hk-2", Close{State: team.StateDismissed, DecidedAt: 5}); err != nil {
+	for i, st := range []team.State{team.StateDismissed, team.StateAnsweredLocal, team.StateCancelled, team.StateAbandoned, team.StateTimeout} {
+		id := "hk-x" + string(rune('a'+i))
+		if _, _, _, err := s.Create(openHookApproval(id, "sid-1", id, false), "h"); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.CloseIfOpen(id, Close{State: st, DecidedAt: 5}); err != nil {
+			t.Fatal(err)
+		}
+		if _, won, err := s.OverrideIfDecided(id, 6, nil); err != nil || won {
+			t.Fatalf("a %s row cannot be overridden: won=%v err=%v", st, won, err)
+		}
+	}
+	for i, st := range []team.State{team.StateApproved, team.StateDenied} {
+		id := "ld-" + string(rune('1'+i))
+		if _, _, _, err := s.Create(openApproval(id, "sid-1", 1000), "h"); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.CloseIfOpen(id, Close{State: st, DecidedAt: 2}); err != nil {
+			t.Fatal(err)
+		}
+		if _, won, _ := s.OverrideIfDecided(id, 7, nil); won {
+			t.Fatalf("a %s lead row is never overridden", st)
+		}
+	}
+}
+
+// ReplaceTerminalOnly closes the open terminal_only row and inserts the new
+// one in one transaction (P8a-1b R2): a failed insert — a taken id, or the
+// test seam — rolls the close back; a row already closed, or one that is not
+// terminal_only, is not closed (won=false) and only the new row goes in.
+func TestStore_ReplaceTerminalOnly(t *testing.T) {
+	s := openTestStore(t)
+	for _, a := range []team.Approval{
+		openHookApproval("ro-1", "sid-1", "toolu_1", true),
+		openHookApproval("ro-2", "sid-1", "toolu_2", true),
+		openHookApproval("hk-1", "sid-1", "toolu_3", false),
+	} {
+		if _, _, _, err := s.Create(a, "h"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dismiss := Close{State: team.StateDismissed, DecidedAt: 2}
+	stateOf := func(id string) team.State {
+		a, ok, err := s.Get(id)
+		if err != nil || !ok {
+			t.Fatalf("get %s: ok=%v err=%v", id, ok, err)
+		}
+		return a.State
+	}
+	// A taken id fails the insert: the close rolls back.
+	if _, _, _, err := s.ReplaceTerminalOnly("ro-1", dismiss, openHookApproval("hk-1", "sid-1", "toolu_1", false), "h"); err == nil {
+		t.Fatal("an insert on a taken id must fail")
+	}
+	if st := stateOf("ro-1"); st != team.StateOpen {
+		t.Fatalf("ro-1 after a failed insert = %s, want open", st)
+	}
+	// So does the seam's failure.
+	s.beforeReplaceInsert = func() error { return errors.New("disk I/O error") }
+	if _, _, _, err := s.ReplaceTerminalOnly("ro-1", dismiss, openHookApproval("new-0", "sid-1", "toolu_1", false), "h"); err == nil {
+		t.Fatal("the seam's error must fail the replace")
+	}
+	s.beforeReplaceInsert = nil
+	if _, ok, _ := s.Get("new-0"); ok || stateOf("ro-1") != team.StateOpen {
+		t.Fatalf("after the seam's failure: new-0 present=%v ro-1=%s", ok, stateOf("ro-1"))
+	}
+	// Success: the old row dismissed, the new one open.
+	closed, won, stored, err := s.ReplaceTerminalOnly("ro-1", dismiss, openHookApproval("new-1", "sid-1", "toolu_1", false), "h")
+	if err != nil || !won || closed.ID != "ro-1" || closed.State != team.StateDismissed || stored.ID != "new-1" || stored.State != team.StateOpen {
+		t.Fatalf("replace: closed=%+v won=%v stored=%+v err=%v", closed, won, stored, err)
+	}
+	// Already closed: only the insert.
+	if _, _, err := s.CloseIfOpen("ro-2", dismiss); err != nil {
 		t.Fatal(err)
 	}
-	if _, won, _ := s.OverrideIfApproved("hk-2", 6, nil); won {
-		t.Fatal("a dismissed row cannot be overridden")
+	closed, won, stored, err = s.ReplaceTerminalOnly("ro-2", dismiss, openHookApproval("new-2", "sid-1", "toolu_2", false), "h")
+	if err != nil || won || closed.ID != "" || stored.ID != "new-2" || stored.State != team.StateOpen {
+		t.Fatalf("replace of a closed row: closed=%+v won=%v stored=%+v err=%v", closed, won, stored, err)
 	}
-	if _, _, _, err := s.Create(openApproval("ld-1", "sid-1", 1000), "h"); err != nil {
-		t.Fatal(err)
+	// Not terminal_only: the guard leaves it open.
+	if _, won, _, err := s.ReplaceTerminalOnly("hk-1", dismiss, openHookApproval("new-3", "sid-1", "toolu_3", false), "h"); err != nil || won {
+		t.Fatalf("replace of an answerable row: won=%v err=%v", won, err)
 	}
-	if _, _, err := s.CloseIfOpen("ld-1", Close{State: team.StateApproved, DecidedAt: 2}); err != nil {
-		t.Fatal(err)
-	}
-	if _, won, _ := s.OverrideIfApproved("ld-1", 7, nil); won {
-		t.Fatal("a lead row is never overridden")
+	if st := stateOf("hk-1"); st != team.StateOpen {
+		t.Fatalf("hk-1 = %s, want open (not terminal_only)", st)
 	}
 }
 

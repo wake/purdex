@@ -98,7 +98,7 @@ type Approval struct {
 	DecidedBy  *Client         `json:"decided_by,omitempty"` // approved / denied only
 	DecidedAt  int64           `json:"decided_at,omitempty"` // any close
 	Grant      *Grant          `json:"grant,omitempty"`      // approved only
-	Hook       *HookDecision   `json:"hook,omitempty"`       // hook kinds: the answer (approved = remote, answered_local / terminal_override = terminal)
+	Hook       *HookDecision   `json:"hook,omitempty"`       // hook kinds: the answer (approved / denied = remote, answered_local / terminal_override = terminal)
 }
 
 // CreateApprovalRequest is POST /api/team/approvals.

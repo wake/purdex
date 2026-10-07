@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -244,9 +243,10 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 // handleInflight is GET /api/team/inflight (spec §9.5): what a restart of
 // this daemon would interrupt, for the App's restart confirm. Open requests
 // survive a restart (boot lease grace), so the count informs, it does not
-// block. relays_active counts ops not in done/failed/cancelled (P5a).
+// block. relays_active counts ops not in done/failed/cancelled (P5a). Hook
+// rows (P8a) are not counted: their pollers ride out a restart.
 func (m *Module) handleInflight(w http.ResponseWriter, r *http.Request) {
-	open, err := m.store.ListOpen()
+	open, err := m.store.ListOpenNonHook()
 	if err != nil {
 		m.logf("[team] inflight: %v", err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
@@ -275,57 +275,17 @@ func pollWait(s string) (int, error) {
 	return min(n, team.MaxPollWaitS), nil
 }
 
-// handleGet is GET /api/team/approvals/{id}?wait=N: it renews the lease
-// and, while the request is open and N > 0, waits for the close, N
-// seconds (≤ 25), the client going away, or Stop — whichever is first —
-// then answers the row as it is. A poll cut by Stop therefore answers 200
-// with the row still open; the CLI re-polls and meets the restart. A poll
-// whose renewal failed answers 503 not_ready instead of a 200 that would
-// let the CLI believe the lease holds while the sweeper abandons it; the
-// restart-aware CLI retries a 503.
+// handleGet is GET /api/team/approvals/{id}?wait=N (and P5a-2a's GET
+// /api/relay/wait/{id}): the long-poll of pollRow (shared with GET
+// /api/ask/wait/{id}), answering the row as it is. A poll cut by Stop
+// therefore answers 200 with the row still open; the CLI re-polls and
+// meets the restart. A poll whose renewal failed answers 503 not_ready
+// instead of a 200 that would let the CLI believe the lease holds while
+// the sweeper abandons it; the restart-aware CLI retries a 503.
 func (m *Module) handleGet(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	wait, err := pollWait(r.URL.Query().Get("wait"))
-	if err != nil {
-		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, err.Error(), nil)
-		return
-	}
-	// Register before the read, so a close between the read and the
-	// select cannot be missed.
-	ch := m.addWaiter(id)
-	defer m.removeWaiter(id, ch)
-	if err := m.store.RenewLease(id, m.now()+team.LeaseS*1000); err != nil {
-		m.logf("[team] get %s: %v", id, err)
-		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "storage error; retry", nil)
-		return
-	}
-	a, ok, err := m.store.Get(id)
-	if err != nil {
-		m.logf("[team] get %s: %v", id, err)
-		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-		return
-	}
+	a, ok := m.pollRow(w, r, r.PathValue("id"))
 	if !ok {
-		m.writeErr(w, http.StatusNotFound, team.ErrNotFound, "no such approval request", nil)
 		return
-	}
-	if m.afterRead != nil {
-		m.afterRead(id)
-	}
-	if a.State == team.StateOpen && wait > 0 {
-		timer := time.NewTimer(time.Duration(wait) * time.Second)
-		defer timer.Stop()
-		select {
-		case <-ch:
-		case <-timer.C:
-		case <-r.Context().Done():
-		case <-m.stopCtx.Done():
-		}
-		if a, ok, err = m.store.Get(id); err != nil || !ok {
-			m.logf("[team] get %s after wait: ok=%v err=%v", id, ok, err)
-			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-			return
-		}
 	}
 	m.writeJSON(w, http.StatusOK, a)
 }
@@ -389,6 +349,10 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 	}
 	if a.State != team.StateOpen {
 		m.writeErr(w, http.StatusConflict, team.ErrAlreadyDecided, "this request is already closed", &a)
+		return
+	}
+	if team.IsHookKind(a.Kind) {
+		m.decideHook(w, a, req, state, client)
 		return
 	}
 	var grant *team.Grant
