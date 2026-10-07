@@ -202,7 +202,7 @@ const (
 var Efforts = []string{"low", "medium", "high", "xhigh", "max"} // M25
 func ValidModel(s string) bool       // ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(\[1m\])?$
 func ValidEffort(s string) bool      // one of Efforts, exact case
-func SpawnTmuxName(opID string) string // "tm-" + first 10 hex digits of the op id with dashes removed
+func SpawnTmuxName(opID string) (string, error) // "tm-" + first 10 lowercase hex digits of a canonical UUID v4 (dashes removed); error otherwise (PR #1849 review)
 
 type Team struct {
 	ID, HostID, LeadSessionID, LeadRef string // json: id, host_id, lead_session_id, lead_ref
@@ -244,7 +244,7 @@ All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `Sp
 **Behaviour rules.**
 - `ValidModel` accepts `opus`, `sonnet`, `fable`, `claude-opus-5-5` and `opus[1m]`. It refuses `""`, `a b`, `'x'`, `x;y`, `$(x)`, `-x`, a 65-character name and `opus[2m]`.
 - `ValidEffort` is case-sensitive. `High` is refused.
-- `SpawnTmuxName` is deterministic. Given a non-UUID it still returns `tm-` plus the first 10 hex-ish characters. Callers pass validated UUID v4s only.
+- `SpawnTmuxName` is deterministic and **refuses anything but a canonical UUID v4** (36 characters, 8-4-4-4-12, version 4, RFC 4122 variant; upper or lower case in, lower case out) with an error and `""` (PR #1849 review: a fallback for non-UUIDs would put arbitrary characters, including tmux target characters, into a session name). Callers already hold a validated UUID v4; they still check the error.
 
 **Tests.**
 - `TestWireTeam_LiteralsArePinned`: every code, reason, state, step, limit and both reminder strings.
@@ -489,7 +489,7 @@ All JSON keys are snake_case as listed. P4b-4 adds `SpawnRequest.Repo/Host`, `Sp
    - **Lead.** `LiveTeamByLead(origin)`, else 409 `not_lead`.
    - **Limit.** Live members plus running spawn ops of the team, this one excepted, must be < `grant.max_members`, else 409 `team_full`. A live member is an active row whose session is live, or whose relay is in flight. This is "the limit counts only live members" (spec §13 D4).
    - **cwd.** `filepath.EvalSymlinks(cwd)`, else 400 "cwd does not exist". `ValidateCwd(resolved)`. Under at least one granted root, each root `EvalSymlinks`'d and compared with `filepath.Rel` (no `..`), else 409 `cwd_outside_grant`.
-   - Then insert the op (`step accepted`, `tmux_name = SpawnTmuxName(id)`), release `createMu`, and start `go m.runSpawn(id)` under `spawnWG`.
+   - Then insert the op (`step accepted`, `tmux_name, err = SpawnTmuxName(id)`; an error here is a programming error after the handler's UUID check → `500 internal`, nothing inserted), release `createMu`, and start `go m.runSpawn(id)` under `spawnWG`.
 4. **The runner.** Each step is a CAS from the recorded step, and every terminal transition wakes the op's waiters (`addWaiter`/`wake`, `module.go:409-445`).
    - **accepted**
      - Tmux session absent: `CreateSession(tmux_name, cwd)`, then record `tmux_id`, `tmux_instance`, and `pane_id` from `ActivePaneMetadata` → `session_created`. A create error → `failed{session_create_failed}`.
