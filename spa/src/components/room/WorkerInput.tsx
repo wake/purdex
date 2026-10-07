@@ -64,6 +64,14 @@ interface Props {
   turnLive?: boolean
   onInterrupt?: () => void
   /**
+   * A sent message is held in the send buffer: Esc (any box content) and Ctrl+C with no selection
+   * take it back (`onCancelBuffered`) before they would interrupt a live turn.
+   */
+  bufferedSend?: boolean
+  onCancelBuffered?: () => void
+  /** Focus the box when it mounts (a message was restored into it), where the pane is the active focus target. */
+  focusOnMount?: boolean
+  /**
    * Input-history step (ArrowUp at the very start / ArrowDown at the very end of the box). `current` is the
    * box text; the answer is the text to show instead — `walking` says a recalled entry is shown, so the box
    * parks the caret where the next press in the same direction works — or null for "nothing to recall": the
@@ -77,7 +85,7 @@ const noop = () => {}
 
 export default function WorkerInput({
   onSend, disabled = false, pendingSend = false, placeholder, isActive = false, isFocusTarget = false, initialValue, chips = NO_CHIPS, onRemoveChip, onAddFiles,
-  onTextChange, turnLive = false, onInterrupt, onHistoryNav,
+  onTextChange, turnLive = false, onInterrupt, onHistoryNav, bufferedSend = false, onCancelBuffered, focusOnMount = false,
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const resolvedPlaceholder = placeholder ?? t('worker.input.placeholder')
@@ -112,6 +120,17 @@ export default function WorkerInput({
     else focusInput()
   }, [focusInput])
   useActivationFocus(isActive, isFocusTarget, focusAtActivation, { raf: true })
+  // A restored message remounts the box (it is keyed on the draft): take focus back, caret at the end.
+  useEffect(() => {
+    if (!focusOnMount || !isActive || !isFocusTarget) return
+    const id = requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta || typingElsewhere(ta)) return
+      ta.focus()
+      ta.setSelectionRange(ta.value.length, ta.value.length)
+    })
+    return () => cancelAnimationFrame(id)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps -- mount only
   useEffect(() => {
     if (!isActive || !isFocusTarget) pendingActivationRef.current = false
   }, [isActive, isFocusTarget])
@@ -216,6 +235,14 @@ export default function WorkerInput({
       e.preventDefault()
       if (!disabled) send()
       return
+    }
+    // A held message is taken back first; with none, the keys interrupt as before.
+    if (bufferedSend && onCancelBuffered) {
+      const sel = e.currentTarget
+      if (e.key === 'Escape') { e.preventDefault(); onCancelBuffered(); return }
+      if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c' && sel.selectionStart === sel.selectionEnd) {
+        e.preventDefault(); onCancelBuffered(); return
+      }
     }
     if (!turnLive || !onInterrupt) return
     const ta = e.currentTarget

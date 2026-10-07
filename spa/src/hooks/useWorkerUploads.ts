@@ -45,6 +45,14 @@ export interface WorkerUploads {
   park(): void
   unpark(): void
   discardParked(): void
+  /**
+   * The send buffer: take the sent chips out of sight but keep them alive (previews, Files) under a
+   * token while the message is held. `restoreHeld` puts them back in front of the shown chips (the
+   * message was taken back or failed); `releaseHeld` drops them for good (it was sent).
+   */
+  hold(keys: readonly string[]): string
+  restoreHeld(token: string): void
+  releaseHeld(token: string): void
 }
 
 export interface WorkerUploadImages {
@@ -61,6 +69,12 @@ export function useWorkerUploads(hostId: string, executionId: string, images?: W
   const [parked, setParked] = useState<Chip[]>([])
   // Keys of parked chips: still live (their uploads finish), but not the shown chips.
   const parkedKeys = useRef(new Set<string>())
+  // Chips held for a message in the send buffer, by token: live, never shown.
+  const heldChips = useRef(new Map<string, Chip[]>())
+  const heldKeys = useRef(new Set<string>())
+  // The shown chips for work that outlived a render (a send that encoded images first).
+  const shownRef = useRef(chips)
+  shownRef.current = chips
   // Mirrors for work outside render: which chips still exist (a removed one
   // is skipped / ignored), their thumbnails (revoked on remove / unmount) and
   // the Files of native image chips (insertion order = chip order).
@@ -171,7 +185,7 @@ export function useWorkerUploads(hostId: string, executionId: string, images?: W
       drop(gone)
       setChips((prev) => prev.filter((c) => !gone.has(c.key)))
     } else {
-      drop([...live.current].filter((k) => !parkedKeys.current.has(k)))
+      drop([...live.current].filter((k) => !parkedKeys.current.has(k) && !heldKeys.current.has(k)))
       setChips([])
     }
   }, [drop])
@@ -209,7 +223,7 @@ export function useWorkerUploads(hostId: string, executionId: string, images?: W
   }, [chips])
 
   const unpark = useCallback(() => {
-    drop([...live.current].filter((k) => !parkedKeys.current.has(k)))
+    drop([...live.current].filter((k) => !parkedKeys.current.has(k) && !heldKeys.current.has(k)))
     parkedKeys.current.clear()
     setChips(parked)
     setParked([])
@@ -220,5 +234,31 @@ export function useWorkerUploads(hostId: string, executionId: string, images?: W
     setParked([])
   }, [drop])
 
-  return { chips, add, remove, clear, nativeFiles, demote, markFailed, isLive, addPaths, park, unpark, discardParked }
+  const hold = useCallback((keys: readonly string[]) => {
+    const token = `hold${++seq}`
+    const want = new Set(keys)
+    const taken = shownRef.current.filter((c) => want.has(c.key))
+    for (const c of taken) heldKeys.current.add(c.key)
+    heldChips.current.set(token, taken)
+    setChips((prev) => prev.filter((c) => !want.has(c.key)))
+    return token
+  }, [])
+
+  const restoreHeld = useCallback((token: string) => {
+    const taken = heldChips.current.get(token)
+    if (!taken) return
+    heldChips.current.delete(token)
+    for (const c of taken) heldKeys.current.delete(c.key)
+    setChips((prev) => [...taken, ...prev])
+  }, [])
+
+  const releaseHeld = useCallback((token: string) => {
+    const taken = heldChips.current.get(token)
+    if (!taken) return
+    heldChips.current.delete(token)
+    for (const c of taken) heldKeys.current.delete(c.key)
+    drop(taken.map((c) => c.key))
+  }, [drop])
+
+  return { chips, add, remove, clear, nativeFiles, demote, markFailed, isLive, addPaths, park, unpark, discardParked, hold, restoreHeld, releaseHeld }
 }

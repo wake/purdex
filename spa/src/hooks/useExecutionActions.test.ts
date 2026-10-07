@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useExecutionActions } from './useExecutionActions'
 import { useExecutionStore } from '../stores/useExecutionStore'
@@ -226,6 +226,49 @@ describe('useExecutionActions — native image attachments (phase E)', () => {
     await act(async () => { ok = await result.current.handleSend('t', { attachments, previews }) })
     expect(ok).toBe(false)
     expect(st().sendError).toMatchObject({ code: 'attachment_too_large', attachmentIndex: 1 })
+    expect(st().pendingLocal).toBeNull()
+  })
+})
+
+describe('useExecutionActions — send buffer', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }) })
+  afterEach(async () => { const { clearAllHeldSends } = await import('../lib/nex/send-buffer'); clearAllHeldSends(); vi.useRealTimers() })
+  const hook = () => renderHook(() => useExecutionActions(H, E, { ensureLease, touch, forget }))
+
+  it('a quick reply (restoreDraft: false) bypasses the buffer and posts at once', async () => {
+    vi.mocked(api.sendMessage).mockResolvedValue({ turn_id: 't', delivery: 'delivered' })
+    const { result } = hook()
+    await act(async () => { await result.current.handleSend('qr', { restoreDraft: false, bufferMs: 3000 }) })
+    expect(api.sendMessage).toHaveBeenCalledWith(H, E, 'ls_1', 'qr')
+  })
+
+  it('a quick reply sent while a message is held goes out after it, never before', async () => {
+    vi.mocked(api.sendMessage).mockResolvedValue({ turn_id: 't', delivery: 'delivered' })
+    const { result } = hook()
+    await act(async () => { await result.current.handleSend('typed', { bufferMs: 3000 }) })
+    expect(api.sendMessage).not.toHaveBeenCalled()
+    await act(async () => { await result.current.handleSend('qr', { restoreDraft: false, bufferMs: 3000 }) })
+    expect(vi.mocked(api.sendMessage).mock.calls.map((c) => c[3])).toEqual(['typed', 'qr'])
+  })
+
+  it('the box lock starts when the POST is issued, not while held', async () => {
+    vi.mocked(api.sendMessage).mockResolvedValue({ turn_id: 't', delivery: 'delivered' })
+    const { result } = hook()
+    await act(async () => { await result.current.handleSend('typed', { bufferMs: 3000 }) })
+    expect(st().sendLocked).toBe(false)
+    expect(st().pendingSend).toBe(false)
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+    expect(api.sendMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancelBuffered restores the typed text (not the composed text) and reports whether anything was held', async () => {
+    const { result } = hook()
+    expect(result.current.cancelBuffered()).toBe(false)
+    await act(async () => { await result.current.handleSend('typed\n[file: /x]', { bufferMs: 3000, draftText: 'typed' }) })
+    let cancelled = false
+    act(() => { cancelled = result.current.cancelBuffered() })
+    expect(cancelled).toBe(true)
+    expect(result.current.draft).toBe('typed')
     expect(st().pendingLocal).toBeNull()
   })
 })

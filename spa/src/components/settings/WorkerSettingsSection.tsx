@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { SettingItem } from './SettingItem'
 import { useI18nStore } from '../../stores/useI18nStore'
 import {
-  useWorkerSettingsStore, isPermissionTimeoutMin, PERMISSION_TIMEOUT_MINUTES, type WorkerIconStyle,
+  useWorkerSettingsStore, isPermissionTimeoutMin, PERMISSION_TIMEOUT_MINUTES, SEND_BUFFER_MAX_SEC, type WorkerIconStyle,
 } from '../../stores/useWorkerSettingsStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore, selectPermissionTimeoutMax } from '../../stores/useNexHostStore'
@@ -30,6 +30,8 @@ export function WorkerSettingsSection() {
   const setCustomIcon = useWorkerSettingsStore((s) => s.setCustomIcon)
   const permissionTimeoutMin = useWorkerSettingsStore((s) => s.permissionTimeoutMin)
   const setPermissionTimeoutMin = useWorkerSettingsStore((s) => s.setPermissionTimeoutMin)
+  const sendBufferSec = useWorkerSettingsStore((s) => s.sendBufferSec)
+  const setSendBufferSec = useWorkerSettingsStore((s) => s.setSendBufferSec)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const timeoutOffered = useNexHostStore((s) => hostOrder.some((hostId) => selectPermissionTimeoutMax(hostId)(s) !== null))
   const [picking, setPicking] = useState(false)
@@ -94,6 +96,23 @@ export function WorkerSettingsSection() {
           />
         </div>
       )}
+
+      <SettingItem label={t('worker.send_buffer.label')} description={t('worker.send_buffer.desc')}>
+        <div className="flex items-center gap-2">
+          <input
+            aria-label={t('worker.send_buffer.label')}
+            data-testid="worker-send-buffer"
+            type="number"
+            min={0}
+            max={SEND_BUFFER_MAX_SEC}
+            step={1}
+            value={sendBufferSec}
+            onChange={(e) => { if (e.target.value !== '') setSendBufferSec(Number(e.target.value)) }}
+            className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-20 hover:border-text-muted focus:border-border-active focus:outline-none"
+          />
+          <span className="text-xs text-text-muted">{t('worker.send_buffer.seconds')}</span>
+        </div>
+      </SettingItem>
 
       {timeoutOffered && (
         <SettingItem label={t('worker.permission_timeout.label')} description={t('worker.permission_timeout.desc')}>

@@ -41,7 +41,7 @@ vi.mock('../../lib/worker-theme/registry', async (importOriginal) => {
 
 describe('WorkerSettingsSection', () => {
   beforeEach(() => {
-    useWorkerSettingsStore.setState({ ...DEFAULT_WORKER_SETTINGS, permissionTimeoutMin: 0 })
+    useWorkerSettingsStore.setState({ ...DEFAULT_WORKER_SETTINGS, permissionTimeoutMin: 0, sendBufferSec: 3 })
   })
 
   afterEach(() => {
@@ -164,6 +164,40 @@ describe('WorkerSettingsSection', () => {
       expect(z['worker.permission_timeout.desc']).toContain('只影響之後的交接')
       expect(z['worker.permission_timeout.never']).toBe('不逾時')
       expect(z['worker.permission_timeout.minutes']).toBe('{{n}} 分鐘')
+    })
+  })
+
+  describe('send buffer (undo window)', () => {
+    const field = () => screen.getByTestId('worker-send-buffer') as HTMLInputElement
+
+    it('shows the stored seconds (default 3) in a 0-10 number field', () => {
+      render(<WorkerSettingsSection />)
+      expect(field().value).toBe('3')
+      expect(field().min).toBe('0')
+      expect(field().max).toBe('10')
+    })
+
+    it('typing a value stores it; out of range clamps; 0 turns the buffer off', () => {
+      render(<WorkerSettingsSection />)
+      fireEvent.change(field(), { target: { value: '6' } })
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(6)
+      fireEvent.change(field(), { target: { value: '40' } })
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(10)
+      fireEvent.change(field(), { target: { value: '0' } })
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(0)
+    })
+
+    it('an emptied field does not overwrite the setting', () => {
+      render(<WorkerSettingsSection />)
+      fireEvent.change(field(), { target: { value: '' } })
+      expect(useWorkerSettingsStore.getState().sendBufferSec).toBe(3)
+    })
+
+    it('has en and zh-TW copy', () => {
+      for (const k of ['worker.send_buffer.label', 'worker.send_buffer.desc', 'worker.send_buffer.seconds', 'execution.buffer.undo']) {
+        expect((en as Record<string, string>)[k]).toBeTruthy()
+        expect((zh as Record<string, string>)[k]).toBeTruthy()
+      }
     })
   })
 

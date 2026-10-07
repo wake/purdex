@@ -99,6 +99,13 @@ export interface ExecutionState {
      * never a pane — and never to the chips they were sent from.
      */
     attachments?: { previewUrl: string; media_type: string }[]
+    /** When the user pressed send (ms epoch): the working line counts from here until the turn opens. */
+    sentAt?: number
+    /**
+     * Held in the send buffer (undo window): not posted yet. `until` is when it
+     * is committed (ms epoch). Set and cleared only by the send actions.
+     */
+    buffered?: { until: number }
   } | null
   /** `attachmentIndex`: the offending image on Nexen's per-image attachment errors (contract §1.9). */
   sendError: { code: string; message: string; turnId?: string; attachmentIndex?: number } | null
@@ -597,7 +604,9 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // summary moved, so the hook refetches (summaryStale) like any other.
       // Same empty-vs-absent distinction as execution.delegated above.
       const text = str(p, 'text')
-      next = markTurnStart({ ...next, pendingLocal: null, sendLocked: false, summaryStale: true }, ev.created_at, str(p, 'turn_id') || null)
+      // A line still held in the send buffer is not what was accepted (another
+      // message — an earlier flushed one, another client's — was): it stays.
+      next = markTurnStart({ ...next, pendingLocal: next.pendingLocal?.buffered ? next.pendingLocal : null, sendLocked: false, summaryStale: true }, ev.created_at, str(p, 'turn_id') || null)
       const bubble = turnBubble(text, p.attachments)
       if (bubble) next = { ...next, messages: [...next.messages, bubble] }
       return next
@@ -658,7 +667,7 @@ export function applyDurableEvent(s: ExecutionState, ev: NexEvent): ExecutionSta
       // Same restart reconcile, but for a queued turn the daemon withdraws
       // outright: both the pending flag and the optimistic bubble must
       // clear, or the input stays locked and a bubble is stuck forever.
-      return { ...next, pendingSend: false, sendLocked: false, pendingLocal: null, summaryStale: true }
+      return { ...next, pendingSend: false, sendLocked: false, pendingLocal: next.pendingLocal?.buffered ? next.pendingLocal : null, summaryStale: true }
     default:
       // interrupt_requested / interrupted …: nothing to render in P-B; the
       // summary refetch carries the state.

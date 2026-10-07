@@ -192,6 +192,11 @@ export function anyRunningSubagent(table: TaskTable): boolean {
   return Object.values(table).some((row) => row.kind === 'subagent' && row.status === 'running')
 }
 
+/** Every row, oldest first (by start time, then start seq). */
+export function allTasks(table: TaskTable): WorkerTask[] {
+  return Object.values(table).sort((a, b) => (a.started_at ?? Infinity) - (b.started_at ?? Infinity) || a.startSeq - b.startSeq)
+}
+
 /** Running rows, oldest first (by start time, then start seq). */
 export function runningTasks(table: TaskTable): WorkerTask[] {
   return Object.values(table)

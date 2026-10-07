@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { StrictMode, useEffect, useState } from 'react'
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
 import ExecutionView from './ExecutionView'
@@ -57,6 +58,8 @@ const ensureLease = vi.fn(), release = vi.fn(), touch = vi.fn(), forget = vi.fn(
 const summary = (extra = {}) => ({ id: E, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/Users/w/repo', mount_kind: 'dev', brief: 'b', labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 2, archived: false, effective_profile: 'standard', turn_count: 3, ...extra })
 
 beforeEach(() => {
+  // These tests send and expect the POST at once: the send buffer (default 3 s) is off here.
+  useWorkerSettingsStore.setState({ sendBufferSec: 0 })
   clearStintsSpy()
   useExecutionStore.setState({ executions: {} })
   ensureLease.mockReset().mockResolvedValue('ls_1'); release.mockReset(); touch.mockReset(); forget.mockReset()
@@ -94,20 +97,17 @@ describe('ExecutionView', () => {
     expect(screen.queryByText(/standard/)).toBeNull()
   })
 
-  // Worker pane spec §4.6/§4.7 (Q3): observers, lease and SSE left the header
-  // for the dock, which sits inside the pane between the transcript and the input.
-  it('shows observers, lease and sse in the dock between the transcript and the input, not in the header', () => {
+  // Observers, lease and SSE are chips in the header (room only), beside the state label.
+  it('shows observers, lease and sse as header chips, not in a dock above the input', () => {
     useExecutionStore.getState().setSummary(H, E, summary({ lease: { principal_id: 'pdx:mlab/t-me000000', expires_at: 1 } }) as never)
     render(<ExecutionView {...base} isActive />)
-    const dock = screen.getByTestId('worker-dock')
-    expect(within(dock).getByTestId('worker-dock-row')).toHaveTextContent(/2 observers · lease: you/)
+    const chips = screen.getByTestId('header-status-chips')
+    expect(within(chips).getByTestId('header-sse')).toHaveTextContent('connecting') // the subscription is mocked: the store's sse stays idle
+    expect(within(chips).getByTestId('header-observers')).toHaveTextContent('2 observers')
+    expect(within(chips).getByTestId('header-lease')).toHaveTextContent('lease: you')
+    expect(screen.queryByTestId('worker-dock')).toBeNull()
     expect(screen.queryByTestId('execution-sse')).toBeNull()
-    expect(screen.queryByTestId('execution-lease')).toBeNull()
     expect(screen.queryByText(/3 turns/)).toBeNull()
-    const transcript = screen.getByText('No messages yet.')
-    const input = screen.getByRole('textbox')
-    expect(transcript.compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(dock.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('send: optimistic bubble, lease acquired, message posted, queued tag shown', async () => {
@@ -734,7 +734,8 @@ describe('ExecutionView — subagent tools drive the ticker and the dots (T5.3)'
   it("the ticker stops when a child's tool result arrives", () => {
     withFakeTimers(() => {
       patchExec({ turnLive: true })
-      render(<ExecutionView {...base} isActive />)
+      // Chat: its dots own no timer, so the count is the ticker's alone (the room's working line ticks too).
+      render(<ExecutionView {...base} mode="chat" isActive />)
       const idleTimers = vi.getTimerCount()
       apply(childToolUseFrame(1, 10_000))
       expect(childTool().status).toBe('running')
@@ -748,7 +749,8 @@ describe('ExecutionView — subagent tools drive the ticker and the dots (T5.3)'
   it('the main result stops the ticker even when a child tool never reported', () => {
     withFakeTimers(() => {
       patchExec({ turnLive: true })
-      render(<ExecutionView {...base} isActive />)
+      // Chat: its dots own no timer, so the count is the ticker's alone (the room's working line ticks too).
+      render(<ExecutionView {...base} mode="chat" isActive />)
       const idleTimers = vi.getTimerCount()
       apply(childToolUseFrame(1, 10_000))
       expect(vi.getTimerCount()).toBe(idleTimers + 1)
@@ -763,7 +765,8 @@ describe('ExecutionView — subagent tools drive the ticker and the dots (T5.3)'
   it("a child's own result frame does not stop the ticker while the parent turn is still running", () => {
     withFakeTimers(() => {
       patchExec({ turnLive: true })
-      render(<ExecutionView {...base} isActive />)
+      // Chat: its dots own no timer, so the count is the ticker's alone (the room's working line ticks too).
+      render(<ExecutionView {...base} mode="chat" isActive />)
       const idleTimers = vi.getTimerCount()
       apply(childToolUseFrame(1, 10_000))
       expect(vi.getTimerCount()).toBe(idleTimers + 1)
@@ -1416,7 +1419,7 @@ describe('ExecutionView — room and chat (R2 T1.4)', () => {
     render(<ExecutionView {...base} isActive />)
     expect(screen.getByTestId('room-user-line')).toHaveTextContent('hello')
     expect(screen.queryByTestId('chat-bubble-user')).toBeNull()
-    expect(screen.getByTestId('worker-dock')).toBeInTheDocument()
+    expect(screen.getByTestId('header-status-chips')).toBeInTheDocument()
   })
 
   it('renders chat when the pane says chat', () => {
@@ -1470,9 +1473,11 @@ describe('ExecutionView — room and chat (R2 T1.4)', () => {
     expect(screen.queryByTestId('fold-more')).toBeNull()
   })
 
-  it('chat has no dock', () => {
+  it('chat has neither the header chips nor the task list', () => {
+    patchExec({ tasks: { a: { task_id: 'a', turn_id: 't1', kind: 'shell', task_type: 'local_bash', tool_use_id: 'tu_a', parent_tool_use_id: null, description: '', command: 'x', backgrounded: true, status: 'running', provider_status: null, closed_by: null, started_at: Date.now(), ended_at: null, startSeq: 1 } } })
     render(<ExecutionView {...base} mode="chat" isActive />)
-    expect(screen.queryByTestId('worker-dock')).toBeNull()
+    expect(screen.queryByTestId('header-status-chips')).toBeNull()
+    expect(screen.queryByTestId('worker-task-list')).toBeNull()
     expect(screen.getByRole('textbox')).toBeInTheDocument()
   })
 
@@ -1524,6 +1529,31 @@ describe('ExecutionView — room and chat (R2 T1.4)', () => {
     expect(bubble.className).toContain('font-mono')
     expect(bubble.className).toContain('opacity-60')
     expect(within(bubble).getByText(/queued/i)).toBeInTheDocument()
+  })
+
+  // The thinking indicator differs by mode only in rendering: the room draws a
+  // terminal-style working line, chat keeps the three dots. Visibility is shared.
+  it('room draws the working line, chat the dots, for the same live turn', () => {
+    patchExec({ turnLive: true })
+    const room = render(<ExecutionView {...base} isActive />)
+    const line = screen.getByTestId('thinking-indicator')
+    expect(line.dataset.mode).toBe('room')
+    expect(screen.getByTestId('working-verb')).toHaveTextContent('…')
+    expect(screen.getByTestId('working-elapsed')).toHaveTextContent(/^\(\d+s\)$/)
+    expect(line.querySelector('.animate-pulse')).toBeNull()
+    room.unmount()
+    render(<ExecutionView {...base} mode="chat" isActive />)
+    const dots = screen.getByTestId('thinking-indicator')
+    expect(dots.dataset.mode).toBeUndefined()
+    expect(dots.querySelectorAll('.animate-pulse')).toHaveLength(3)
+    expect(screen.queryByTestId('working-verb')).toBeNull()
+  })
+
+  it('room working line counts from the open turn start and keeps one verb for the turn', () => {
+    const t0 = Date.now() - 100_000
+    patchExec({ turnLive: true, turnStarts: [0], turnMeta: [{ startAt: t0, endAt: null, outcome: null, durationMs: null }] })
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.getByTestId('working-elapsed')).toHaveTextContent(/^\(1m 4\ds\)$/)
   })
 
   it('chat keeps the dots on while a thought streams', () => {
@@ -2008,15 +2038,25 @@ describe('ExecutionView — dock tasks (R4 T3.2)', () => {
     delete (Element.prototype as { scrollTo?: unknown }).scrollTo
   })
 
-  it('shows running tasks in the dock, oldest first; closed ones are not listed', () => {
+  it('lists every task terminal-style between the transcript and the input, oldest first, a main row leading', () => {
     patchExec({ tasks: {
       b: running('b', 'tu_b', { command: 'tail -f log', started_at: Date.now() - 60_000 }),
       a: running('a', 'tu_a', { command: 'pnpm dev' }),
-      c: { ...running('c', 'tu_c', { command: 'done' }), status: 'completed' },
+      c: { ...running('c', 'tu_c', { command: 'done' }), status: 'completed', ended_at: Date.now(), started_at: Date.now() - 300_000 },
     } })
     render(<ExecutionView {...base} isActive />)
-    expect(screen.getByTestId('worker-dock-tasks')).toHaveTextContent('2 running')
-    expect(screen.getAllByTestId('worker-dock-task').map((el) => el.textContent)).toEqual(['pnpm dev (2m)', 'tail -f log (1m)'])
+    const list = screen.getByTestId('worker-task-list')
+    expect(within(list).getByTestId('worker-task-main')).toHaveTextContent('main')
+    const rows = within(list).getAllByTestId('worker-task-row')
+    expect(rows.map((r) => r.textContent)).toEqual(['○bashdone(5m)', '●bashpnpm dev(2m)', '●bashtail -f log(1m)'])
+    expect(rows.map((r) => r.dataset.running)).toEqual(['false', 'true', 'true'])
+    expect(screen.getByRole('textbox').compareDocumentPosition(list) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+  })
+
+  it('renders nothing when there are no tasks', () => {
+    render(<ExecutionView {...base} isActive />)
+    expect(screen.queryByTestId('worker-task-list')).toBeNull()
+    expect(screen.queryByTestId('worker-task-main')).toBeNull()
   })
 
   it('inspect opens the subagent that hides the call and scrolls to it, once', () => {
@@ -2031,8 +2071,7 @@ describe('ExecutionView — dock tasks (R4 T3.2)', () => {
     })
     render(<ExecutionView {...base} isActive />)
     expect(document.querySelector('[data-search-unit="2:0:arg"]')).toBeNull()
-    fireEvent.click(screen.getByTestId('worker-dock-toggle'))
-    fireEvent.click(screen.getByTestId('worker-dock-inspect'))
+    fireEvent.click(screen.getByTestId('worker-task-inspect'))
     const target = document.querySelector('[data-search-unit="2:0:arg"]')
     expect(target).not.toBeNull()
     expect(intoView).toHaveBeenCalledTimes(1)
@@ -2061,8 +2100,7 @@ describe('ExecutionView — dock tasks (R4 T3.2)', () => {
     fireEvent.scroll(scroller)
     const intoView = vi.fn(() => { scroller.scrollTop = 300 })
     Element.prototype.scrollIntoView = intoView
-    fireEvent.click(screen.getByTestId('worker-dock-toggle'))
-    fireEvent.click(screen.getByTestId('worker-dock-inspect'))
+    fireEvent.click(screen.getByTestId('worker-task-inspect'))
     expect(intoView).toHaveBeenCalledTimes(1)
     expect(screen.queryByTestId('transcript-search-input')).toBeNull()
     fireEvent.scroll(scroller)
@@ -2077,8 +2115,7 @@ describe('ExecutionView — dock tasks (R4 T3.2)', () => {
     Element.prototype.scrollIntoView = intoView
     patchExec({ messages: [said('go')], turnStarts: [0], tasks: { a: running('a', 'missing', { command: 'x' }) } })
     render(<ExecutionView {...base} isActive />)
-    fireEvent.click(screen.getByTestId('worker-dock-toggle'))
-    fireEvent.click(screen.getByTestId('worker-dock-inspect'))
+    fireEvent.click(screen.getByTestId('worker-task-inspect'))
     expect(intoView).not.toHaveBeenCalled()
   })
 })
