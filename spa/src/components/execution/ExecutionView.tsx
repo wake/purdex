@@ -31,6 +31,7 @@ import { useQuickReplies } from '../../lib/quick-replies'
 import { announceTakeOutcome } from '../../lib/nex/take-outcome'
 import ExecutionHeader from './ExecutionHeader'
 import { WorkerEndedPane, workerEndedKind } from './WorkerEndedPane'
+import { readWorkerDraft, writeWorkerDraft, forgetWorkerDraft, workerDraftKey } from '../../lib/nex/worker-draft-memory'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { useExecutionStore, executionKey } from '../../stores/useExecutionStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
@@ -51,17 +52,21 @@ import { usePermissionAnswer } from '../../hooks/usePermissionAnswer'
 import { selectPendingPermission } from '../../lib/nex/permissions'
 import PermissionRequestCard, { PermissionExpiredNotice } from './PermissionRequestCard'
 import { useWorkerUploads } from '../../hooks/useWorkerUploads'
+import { useInputHistory, type HistoryDir } from '../../hooks/useInputHistory'
+import { buildSentHistory, type SentEntry } from '../../lib/nex/sent-history'
+import { fetchAttachment } from '../../lib/nex/nex-api'
 import {
   canSend, composeWithAttachments, encodeImage, isAttachmentError, planAttachments, requestBytes, uploadErrorKey,
   PER_IMAGE_ERRORS, type Chip, type WireImageAttachment,
 } from '../../lib/nex/worker-upload'
-import { selectImageAttachments, selectPreludeItemOffset, selectTranscriptPrelude, useNexHostStore } from '../../stores/useNexHostStore'
+import { selectAttachmentFetch, selectImageAttachments, selectPreludeItemOffset, selectTranscriptPrelude, useNexHostStore } from '../../stores/useNexHostStore'
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
 import { defaultExecutionState } from '../../lib/nex/event-reducer'
 import { costSummary } from '../../lib/nex/cost-summary'
-import { anyRunningSubagent, runningTasks, subagentTasksByToolUse } from '../../lib/nex/tasks'
+import { useThinkingGate } from './useThinkingGate'
+import { anyRunningSubagent, anyRunningTask, runningTasks, subagentTasksByToolUse } from '../../lib/nex/tasks'
 import { indexOperations } from '../../lib/nex/operations'
 import { toolUseUnit } from '../../lib/nex/transcript-search'
 import { partialHasChatContent, partialHasVisibleContent } from '../../lib/nex/partial'
@@ -179,12 +184,33 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   useEffect(() => { void useNexHostStore.getState().ensure(hostId) }, [hostId])
   // The typed text, for planning an image added mid-draft against the request budget.
   const draftText = useRef('')
-  const onTextChange = useCallback((text: string) => { draftText.current = text }, [])
+  // The reply box's text outlives this component: a tab switch unmounts the
+  // pane (the alive pool keeps no execution tab by default), and the box would
+  // come back empty. Written on every change, read as the initial value; a
+  // restored failed-send `draft` still wins (it is the text that just failed).
+  const draftKey = workerDraftKey(hostId, executionId)
+  const onTextChange = useCallback((text: string) => { draftText.current = text; writeWorkerDraft(draftKey, text) }, [draftKey])
+  const workerEnded = !!st.summary && !!workerEndedKind(st.summary)
+  useEffect(() => { if (workerEnded) forgetWorkerDraft(draftKey) }, [workerEnded, draftKey])
   const getDraftText = useCallback(() => draftText.current, [])
   // Spec §9.1: attachments. The chips live here, not in WorkerInput — the
   // input is re-keyed on the restored draft and remounts after a failed send —
   // and the whole pane is the drop target (TerminalView's overlay pattern).
   const uploads = useWorkerUploads(hostId, executionId, { caps: imageCaps, getText: getDraftText })
+  // Reply-box history (see showEntry below); hooks live up here, above the early return.
+  const sentEntries = useMemo(() => buildSentHistory(st.messages, st.pendingLocal), [st.messages, st.pendingLocal])
+  const history = useInputHistory<SentEntry, string>(sentEntries)
+  const restoreAbort = useRef<AbortController | null>(null)
+  const endHistoryWalk = (discardParked: boolean) => {
+    restoreAbort.current?.abort()
+    restoreAbort.current = null
+    if (!history.isNavigating()) return
+    history.reset()
+    if (discardParked) uploads.discardParked()
+  }
+  useEffect(() => () => restoreAbort.current?.abort(), [])
+  // A failed send restores its text as the draft and remounts the box: that ends any walk.
+  useEffect(() => { if (draft !== null) endHistoryWalk(true) }, [draft]) // eslint-disable-line react-hooks/exhaustive-deps
   // A send refused before going out (phase E: the body would exceed
   // max_request_bytes); cleared by the next send or a removed chip.
   const [sendBlock, setSendBlock] = useState<'request_too_large' | null>(null)
@@ -304,6 +330,18 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   const subagentRunning = useMemo(() => anyRunningSubagent(st.tasks), [st.tasks])
   const subagentTasks = useMemo(() => subagentTasksByToolUse(st.tasks), [st.tasks])
   const now = useElapsedTicker(anyRunning || subagentRunning)
+  // Thinking-dots rule: see the spec §4.4 R3 comment further down.
+  const chat = mode === 'chat'
+  const partialVisible = chat ? partialHasChatContent(st.partial) : partialHasVisibleContent(st.partial)
+  // Task-owned activity (a running subagent / background task, with no send of
+  // our own awaiting an answer) belongs inside that task's row, never as main
+  // dots; the gate holds the dots back ~1.5 s / keeps them ~1 s so a task
+  // notification's short turns cannot flap them.
+  const ownSend = st.pendingSend && st.pendingLocal?.delivery !== 'queued'
+  const taskRunning = useMemo(() => anyRunningTask(st.tasks), [st.tasks])
+  const hasTasks = Object.keys(st.tasks).length > 0
+  const rawThinking = (st.turnLive || ownSend) && !partialVisible && !anyRunning && !(taskRunning && !ownSend)
+  const showThinking = useThinkingGate(rawThinking, hasTasks)
   // Spec §3.2: one fold memory per pane. It lives here, above the view
   // switch, because room ⇄ chat remounts the transcript (F2).
   const foldStore = useFoldMemory()
@@ -424,7 +462,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // this clears itself without redesigning the reconnect path.
   const streamDead = st.historyLoaded && st.sse === 'closed' && !!st.sseError
   // One gate for everything that sends: the input and the quick replies.
-  const inputDisabled = st.pendingSend || encodingBusy || !st.historyLoaded || streamDead || takeBackBusy || exitBusy
+  const inputDisabled = st.sendLocked || encodingBusy || !st.historyLoaded || streamDead || takeBackBusy || exitBusy
   const placeholder = streamDead ? t('execution.input.disconnected') : undefined
   const leaseHeld = st.leaseError?.code === 'lease_held'
 
@@ -444,7 +482,43 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // is re-uploaded by path first. A per-image refusal from the daemon fails
   // that chip (`attachment_index`, in send order).
   const attachGate = canSend(uploads.chips)
+  // Reply-box history (ArrowUp / ArrowDown): the messages this execution's reader sent, oldest first.
+  // Recalling one puts its text in the box and its attachments back as chips — `[file:]` lines as
+  // path chips, native images fetched back through the attachment route and re-added like a picked
+  // file (so they send natively again). The unsent draft and its chips are parked meanwhile.
+  const showEntry = (entry: SentEntry) => {
+    restoreAbort.current?.abort()
+    restoreAbort.current = null
+    uploads.clear()
+    uploads.addPaths(entry.paths)
+    if (entry.images.length === 0) return
+    const route = selectAttachmentFetch(hostId)(useNexHostStore.getState())
+    if (!route) return
+    const ctl = new AbortController()
+    restoreAbort.current = ctl
+    void Promise.allSettled(entry.images.map((m) => fetchAttachment(hostId, executionId, m.sha256, route, ctl.signal))).then((results) => {
+      if (ctl.signal.aborted) return
+      const files = results.flatMap((r, i) => (r.status === 'fulfilled'
+        ? [new File([r.value], `image-${i + 1}.${entry.images[i].media_type.split('/')[1] ?? 'png'}`, { type: entry.images[i].media_type })]
+        : []))
+      uploads.add(files)
+    })
+  }
+  const onHistoryNav = (dir: HistoryDir, current: string): { text: string; walking: boolean } | null => {
+    const move = dir === 'up' ? history.up(() => { uploads.park(); return current }) : history.down()
+    if (!move) return null
+    if (move.kind === 'entry') {
+      showEntry(move.entry)
+      return { text: move.entry.text, walking: true }
+    }
+    restoreAbort.current?.abort()
+    restoreAbort.current = null
+    uploads.unpark()
+    return { text: move.draft, walking: false }
+  }
   const sendWithAttachments = (text: string, opts: SendOptions): boolean => {
+    // Refused, not dropped: false keeps the typed text in the box (the lock shows on it meanwhile).
+    if (useExecutionStore.getState().executions[key]?.sendLocked) return false
     if (encoding.current || !canSend(uploads.chips).ok) return false
     const sent = uploads.chips.filter((c) => c.status === 'done')
     const finalText = composeWithAttachments(text, sent.filter((c) => c.kind === 'path'))
@@ -462,6 +536,8 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       }
     }
     setSendBlock(null)
+    // A recalled message is going out: the walk ends, and the draft it parked with it is dropped.
+    if (opts.restoreDraft !== false) endHistoryWalk(true)
     if (natives.length === 0) {
       // No await without images: a text-only send takes handleSend's lock in
       // the same tick as the submit, as in phase D.
@@ -575,10 +651,6 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
   // shows as the turn's "Using N tools…" line (R2-B). A running tool switches
   // them off in both views: the room's spinner, chat's tools line (F1,
   // revisited in R2-B — one signal per state, as in the room).
-  const chat = mode === 'chat'
-  const partialVisible = chat ? partialHasChatContent(st.partial) : partialHasVisibleContent(st.partial)
-  const showThinking = (st.turnLive || (st.pendingSend && st.pendingLocal?.delivery !== 'queued'))
-    && !partialVisible && !anyRunning
   const queuedTag = st.pendingLocal?.delivery === 'queued'
     && <span className="text-[10px] uppercase font-normal text-text-muted">{t('execution.queued')}</span>
   // The optimistic line's images: the local previews the execution store owns (phase E).
@@ -693,8 +765,9 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
           never restores a draft — that would remount the input over what is typed. */}
       <QuickReplyDock replies={quickReplies} onSend={(text) => { sendWithAttachments(text, { restoreDraft: false }) }}
         disabled={inputDisabled || !attachGate.ok} />
-      <WorkerInput key={draft ?? ''} initialValue={draft ?? undefined} onSend={(text) => sendWithAttachments(text, { draftText: text })}
-        disabled={inputDisabled} pendingSend={st.pendingSend} placeholder={placeholder} isActive={isActive} isFocusTarget={isFocusTarget} onTextChange={onTextChange}
+      <WorkerInput key={draft ?? ''} initialValue={draft ?? readWorkerDraft(draftKey)} onSend={(text) => sendWithAttachments(text, { draftText: text })}
+        disabled={inputDisabled} pendingSend={st.sendLocked} placeholder={placeholder} isActive={isActive} isFocusTarget={isFocusTarget} onTextChange={onTextChange}
+        turnLive={st.turnLive} onInterrupt={() => void handleInterrupt()} onHistoryNav={onHistoryNav}
         chips={uploads.chips} onRemoveChip={removeChip} onAddFiles={canAttach ? uploads.add : undefined} />
       {dragging && (
         <div data-testid="drop-overlay"

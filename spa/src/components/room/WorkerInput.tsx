@@ -4,12 +4,13 @@
 // Attachments (worker-pane theme spec §9.1): the chips live in ExecutionView
 // (this input remounts on a restored draft); here they render above the
 // textarea, gate the send, and paste / the `+` picker hand files up.
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react'
 import { Plus } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { canSend, type Chip } from '../../lib/nex/worker-upload'
 import { useActivationFocus } from '../../hooks/useActivationFocus'
 import UploadChips from './UploadChips'
+import { shouldNavigate, type HistoryDir, type RecallMark } from '../../hooks/useInputHistory'
 
 /** Ceiling for the auto-grown textarea, so a long paste can't squeeze the transcript away. */
 const MAX_INPUT_PX = 200
@@ -59,6 +60,16 @@ interface Props {
   onAddFiles?: (files: File[]) => void
   /** Every change of the typed text (the attachment planner counts it against the request budget). */
   onTextChange?: (text: string) => void
+  /** A turn is live: Esc on an empty box and Ctrl+C with no selection call `onInterrupt`. */
+  turnLive?: boolean
+  onInterrupt?: () => void
+  /**
+   * Input-history step (ArrowUp at the very start / ArrowDown at the very end of the box). `current` is the
+   * box text; the answer is the text to show instead — `walking` says a recalled entry is shown, so the box
+   * parks the caret where the next press in the same direction works — or null for "nothing to recall": the
+   * key then behaves as an ordinary caret move.
+   */
+  onHistoryNav?: (dir: HistoryDir, current: string) => { text: string; walking: boolean } | null
 }
 
 const NO_CHIPS: readonly Chip[] = []
@@ -66,12 +77,15 @@ const noop = () => {}
 
 export default function WorkerInput({
   onSend, disabled = false, pendingSend = false, placeholder, isActive = false, isFocusTarget = false, initialValue, chips = NO_CHIPS, onRemoveChip, onAddFiles,
-  onTextChange,
+  onTextChange, turnLive = false, onInterrupt, onHistoryNav,
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const resolvedPlaceholder = placeholder ?? t('worker.input.placeholder')
   const [value, setValue] = useState(initialValue ?? '')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Where the last recall parked the caret (see `RecallMark`); applied after the render that shows the text.
+  const recallMark = useRef<RecallMark | null>(null)
+  const [recallTick, setRecallTick] = useState(0)
   const pickerRef = useRef<HTMLInputElement>(null)
   const gate = canSend(chips)
   const hasAttachment = chips.some((c) => c.status === 'done')
@@ -93,7 +107,8 @@ export default function WorkerInput({
   // (below).
   const pendingActivationRef = useRef(false)
   const focusAtActivation = useCallback(() => {
-    if (textareaRef.current?.disabled) pendingActivationRef.current = true
+    // The box is readOnly + aria-disabled (not `disabled`, see the textarea), so ask the attribute.
+    if (textareaRef.current?.getAttribute('aria-disabled') === 'true') pendingActivationRef.current = true
     else focusInput()
   }, [focusInput])
   useActivationFocus(isActive, isFocusTarget, focusAtActivation, { raf: true })
@@ -162,6 +177,7 @@ export default function WorkerInput({
     if (!trimmed && !hasAttachment) return
     if (!gate.ok) return
     if (onSend(trimmed) === false) return
+    recallMark.current = null
     setValue('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
@@ -169,15 +185,52 @@ export default function WorkerInput({
     }
   }
 
+  // The caret goes where the next press in the walking direction works: the start after Up, the end after Down.
+  useLayoutEffect(() => {
+    const ta = textareaRef.current
+    const mark = recallMark.current
+    if (!ta || !mark || ta.value !== mark.text) return
+    ta.setSelectionRange(mark.pos, mark.pos)
+  }, [recallTick])
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // An IME commit (Enter that picks a candidate) is not a send; 229 is what
+    // Safari / older Chromium report for it even with isComposing already false.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && onHistoryNav && !disabled && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const dir: HistoryDir = e.key === 'ArrowUp' ? 'up' : 'down'
+      const ta = e.currentTarget
+      if (shouldNavigate(dir, ta, false, recallMark.current)) {
+        const next = onHistoryNav(dir, value)
+        if (next !== null) {
+          e.preventDefault()
+          recallMark.current = next.walking ? { text: next.text, pos: dir === 'up' ? 0 : next.text.length } : null
+          setValue(next.text)
+          setRecallTick((n) => n + 1)
+          requestAnimationFrame(autoGrow)
+          return
+        }
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      send()
+      if (!disabled) send()
+      return
+    }
+    if (!turnLive || !onInterrupt) return
+    const ta = e.currentTarget
+    if (e.key === 'Escape' && value === '') {
+      e.preventDefault()
+      onInterrupt()
+    } else if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c' && ta.selectionStart === ta.selectionEnd) {
+      e.preventDefault()
+      onInterrupt()
     }
   }
 
   function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     if (!onAddFiles) return
+    if (disabled) { e.preventDefault(); return }
     const files = Array.from(e.clipboardData?.files ?? [])
     if (files.length === 0) return
     // A rich-text app (e.g. a chat client) puts an image rendition alongside
@@ -196,7 +249,7 @@ export default function WorkerInput({
 
   return (
     <div className={`w-full border-t border-border-subtle bg-surface-input transition-colors ${
-      disabled ? 'opacity-40' : 'focus-within:border-border-active'
+      disabled ? 'opacity-40 cursor-default' : 'focus-within:border-border-active'
     }`}>
       <UploadChips chips={chips} onRemove={onRemoveChip ?? noop} />
       {!gate.ok && (
@@ -227,10 +280,14 @@ export default function WorkerInput({
           ref={textareaRef}
           role="textbox"
           value={value}
-          onChange={e => { setValue(e.target.value); autoGrow() }}
+          onChange={e => { if (disabled) return; setValue(e.target.value); autoGrow() }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          disabled={disabled}
+          // readOnly + aria-disabled, not `disabled`: a disabled control swallows
+          // drag events, so a file dropped on it can skip the pane's drop handlers
+          // and Electron's default (open the file) fires. readOnly keeps them.
+          readOnly={disabled}
+          aria-disabled={disabled}
           placeholder={resolvedPlaceholder}
           rows={1}
           className="block w-full bg-transparent text-text-primary placeholder-text-muted px-3 py-2.5 text-sm outline-none resize-none"

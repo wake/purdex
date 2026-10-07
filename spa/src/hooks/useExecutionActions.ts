@@ -89,12 +89,13 @@ export function useExecutionActions(
 
   const handleSend = useCallback(async (text: string, opts?: SendOptions): Promise<boolean> => {
     const restoreDraft = opts?.restoreDraft ?? true
-    // Re-entrancy guard: pendingSend is set
+    // Re-entrancy guard: sendLocked is set
     // synchronously below, before the `await ensureLease()`, so a second
-    // submit fired while the first lease acquisition is still in flight
-    // reads the lock here and is a no-op — without this, a slow lease let
-    // two sends race and both post (sharing the same pendingLocal bubble).
-    if (store().executions[key]?.pendingSend) {
+    // submit fired while the first is still unaccepted (lease acquisition or
+    // POST in flight) reads the lock here and is a no-op — the box shows it
+    // as locked meanwhile. Once the daemon accepted the first, the lock is
+    // released and a further send is allowed: the daemon queues it.
+    if (store().executions[key]?.sendLocked) {
       // The previews never reach the store, whose write-drop revoke owns
       // them otherwise (useExecutionStore's revokeDroppedPreviews).
       for (const p of opts?.previews ?? []) URL.revokeObjectURL(p.previewUrl)
@@ -107,6 +108,7 @@ export function useExecutionActions(
     const attachments = opts?.attachments
     store().setPendingLocal(hostId, executionId, previews ? { text, delivery: null, attachments: previews } : { text, delivery: null })
     store().setPendingSend(hostId, executionId, true)
+    store().setSendLocked(hostId, executionId, true)
     const attempt = ++sendAttempt.current
     try {
       const leaseId = await ensureLease()
@@ -126,6 +128,8 @@ export function useExecutionActions(
         store().setPendingLocal(hostId, executionId, previews ? { text, delivery: r.delivery, attachments: previews } : { text, delivery: r.delivery })
       }
       store().setLastTurn(hostId, executionId, { turnId: r.turn_id, delivery: r.delivery })
+      // Accepted by the daemon: the box unlocks (the turn flag stays until its result).
+      store().setSendLocked(hostId, executionId, false)
       return true
     } catch (e) {
       // Superseded: skip fail() too — a stale lease_* error must not forget

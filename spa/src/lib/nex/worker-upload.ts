@@ -115,6 +115,24 @@ export function composeWithAttachments(text: string, chips: readonly Chip[]): st
   return text ? `${text}\n\n${lines.join('\n')}` : lines.join('\n')
 }
 
+/**
+ * The inverse of `composeWithAttachments`: the typed text and the paths of the trailing `[file: …]` lines.
+ * Only an unbroken run of such lines at the very end counts; text without one is returned as is.
+ */
+export function splitAttachmentLines(text: string): { text: string; paths: string[] } {
+  const lines = text.split('\n')
+  const paths: string[] = []
+  while (lines.length > 0) {
+    const m = /^\[file: (.+)\]$/.exec(lines[lines.length - 1])
+    if (!m) break
+    paths.unshift(m[1])
+    lines.pop()
+  }
+  if (paths.length === 0) return { text, paths }
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  return { text: lines.join('\n'), paths }
+}
+
 export type CanSend = { ok: true } | { ok: false; reason: 'uploading' | 'failed' }
 
 /**

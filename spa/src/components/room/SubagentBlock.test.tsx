@@ -202,6 +202,14 @@ describe('SubagentBlock — task close-out (R4 T3.3)', () => {
     expect(screen.queryByTestId('subagent-status')).toBeNull()
   })
 
+  it('running: the folded line carries its own working dots; ended ones do not', () => {
+    const { unmount } = withTask(task())
+    expect(screen.getByTestId('subagent-working')).toBeInTheDocument()
+    unmount()
+    withTask(done('completed'))
+    expect(screen.queryByTestId('subagent-working')).toBeNull()
+  })
+
   it('completed: tokens, tools and duration from usage — no cost, no status word', () => {
     withTask(done('completed', { total_tokens: 26_400, tool_uses: 8, duration_ms: 12_300 }))
     expect(toggle()).toHaveTextContent(/^general-purpose · 26k tokens · 8 tools · 12s$/)

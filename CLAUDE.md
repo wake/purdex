@@ -139,3 +139,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 活躍開發的 phase 建 milestone（如 `Phase 5b`），完成後 close
 - 其餘放 `Backlog`，開工時再移入對應 milestone
 - 不回溯建已完成 phase 的 milestone
+
+## Tab-hosted 元件檢查清單
+
+- [ ] 任何新的 tab-hosted 元件：必須跨 tab 切換存活的 state（草稿文字、捲動位置、選取範圍）— 以 unmount/remount 測試。`useTabAlivePool` 預設 `keepAliveCount: 0`，且 `lib/pane-weight.ts` 的 light 白名單之外的 pane（含 execution / worker）切走就會 unmount，元件內 `useState` 會歸零；state 要放在元件外（例：`lib/nex/worker-draft-memory.ts`、`transcript-scroll-memory.ts`），並用真的 `TabContent` 寫切走再切回的回歸測試（範例：`components/execution/ExecutionView.tab-switch.test.tsx`）。

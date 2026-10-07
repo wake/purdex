@@ -376,14 +376,14 @@ describe('ExecutionView — native image attachments', () => {
     enter()
     await waitFor(() => expect(reads.count).toBe(1))
     expect(reply()).toBeDisabled()
-    expect(screen.getByRole('textbox')).toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'true')
     // The chip can still be removed meanwhile (A1); with nothing left the
     // send is dropped, and the gate lifts once the encode settles.
     fireEvent.click(screen.getByRole('button', { name: 'Remove a.png' }))
     expect(reply()).toBeDisabled()
     act(() => reads.flush())
     await waitFor(() => expect(reply()).not.toBeDisabled())
-    expect(screen.getByRole('textbox')).not.toBeDisabled()
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-disabled', 'false')
     expect(api.sendMessage).not.toHaveBeenCalled()
   })
 })

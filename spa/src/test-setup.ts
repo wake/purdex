@@ -4,6 +4,7 @@ import { afterEach, beforeAll } from 'vitest'
 import { cleanup } from '@testing-library/react'
 import { registerBuiltinLocales } from './lib/register-locales'
 import { clearLocaleRegistry } from './lib/locale-registry'
+import { clearAllWorkerDrafts } from './lib/nex/worker-draft-memory'
 
 // Register built-in locales once so t() returns real strings in all tests
 beforeAll(() => {
@@ -12,7 +13,7 @@ beforeAll(() => {
 })
 
 // Auto-cleanup after each test (required because vitest doesn't expose afterEach globally)
-afterEach(() => cleanup())
+afterEach(() => { cleanup(); clearAllWorkerDrafts() })
 
 // jsdom does not implement ResizeObserver
 globalThis.ResizeObserver = class ResizeObserver {

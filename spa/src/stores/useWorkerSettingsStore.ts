@@ -38,6 +38,9 @@ export interface WorkerSettingsState {
   iconStyle: WorkerIconStyle
   customIcon: string
   permissionTimeoutMin: PermissionTimeoutMin
+  /** The quick-reply dock above the reply box is folded away. Device-local: not in the profile projection. */
+  quickRepliesCollapsed: boolean
+  setQuickRepliesCollapsed: (collapsed: boolean) => void
   setTheme: (id: string) => void
   setIconStyle: (style: WorkerIconStyle) => void
   setCustomIcon: (icon: string) => void
@@ -52,6 +55,8 @@ export const DEFAULT_WORKER_SETTINGS = {
 }
 
 const DEFAULT_PERMISSION_TIMEOUT_MIN: PermissionTimeoutMin = 0
+/** Device-local fields: persisted and cross-window synced, but not in the Profile Sync projection. */
+const DEFAULT_LOCAL = { quickRepliesCollapsed: false }
 
 function isWorkerIconStyle(v: unknown): v is WorkerIconStyle {
   return v === 'mono' || v === 'color' || v === 'custom'
@@ -61,7 +66,7 @@ export function isPermissionTimeoutMin(v: unknown): v is PermissionTimeoutMin {
   return (PERMISSION_TIMEOUT_MINUTES as readonly unknown[]).includes(v)
 }
 
-type PersistedFields = Pick<WorkerSettingsState, 'theme' | 'iconStyle' | 'customIcon' | 'permissionTimeoutMin'>
+type PersistedFields = Pick<WorkerSettingsState, 'theme' | 'iconStyle' | 'customIcon' | 'permissionTimeoutMin' | 'quickRepliesCollapsed'>
 
 /**
  * Silently replaces malformed entries with defaults — a corrupted
@@ -79,6 +84,7 @@ function sanitize(raw: unknown): Partial<PersistedFields> {
   if (typeof src.customIcon === 'string') out.customIcon = src.customIcon
   // Only an offered value survives; anything else (7, '15', null, …) falls back to 0 in `merge`.
   if (isPermissionTimeoutMin(src.permissionTimeoutMin)) out.permissionTimeoutMin = src.permissionTimeoutMin
+  if (typeof src.quickRepliesCollapsed === 'boolean') out.quickRepliesCollapsed = src.quickRepliesCollapsed
   return out
 }
 
@@ -87,9 +93,11 @@ export const useWorkerSettingsStore = create<WorkerSettingsState>()(
     (set) => ({
       ...DEFAULT_WORKER_SETTINGS,
       permissionTimeoutMin: DEFAULT_PERMISSION_TIMEOUT_MIN,
+      ...DEFAULT_LOCAL,
       setTheme: (id) => set({ theme: id }),
       setIconStyle: (style) => set({ iconStyle: style }),
       setCustomIcon: (icon) => set({ customIcon: icon }),
+      setQuickRepliesCollapsed: (collapsed) => set({ quickRepliesCollapsed: collapsed }),
       setPermissionTimeoutMin: (min) => set({ permissionTimeoutMin: isPermissionTimeoutMin(min) ? min : DEFAULT_PERMISSION_TIMEOUT_MIN }),
     }),
     {
@@ -101,10 +109,11 @@ export const useWorkerSettingsStore = create<WorkerSettingsState>()(
         iconStyle: state.iconStyle,
         customIcon: state.customIcon,
         permissionTimeoutMin: state.permissionTimeoutMin,
+        quickRepliesCollapsed: state.quickRepliesCollapsed,
       }),
       merge: (persisted, current) => {
         const clean = sanitize(persisted)
-        return { ...current, ...DEFAULT_WORKER_SETTINGS, permissionTimeoutMin: DEFAULT_PERMISSION_TIMEOUT_MIN, ...clean }
+        return { ...current, ...DEFAULT_WORKER_SETTINGS, ...DEFAULT_LOCAL, permissionTimeoutMin: DEFAULT_PERMISSION_TIMEOUT_MIN, ...clean }
       },
     },
   ),
