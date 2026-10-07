@@ -206,8 +206,10 @@ func TestRunMsgSend_Success(t *testing.T) {
 }
 
 // TestRunMsgUsage_TeachesTheV4AddressForms pins what the grammar
-// rejection prints about addresses: all four forms of spec §5.5, and the
-// two commands that print a current one.
+// rejection prints about addresses: all four forms of spec §5.5, what
+// <name> is under Peer Address v5 (the virtual name pdx gave the
+// conversation, never Claude Code's own session name — peer mailbox spec
+// §3.3), and the two commands that print a current one.
 //
 // The bracket form is listed quoted because it contains a space, and a
 // usage line that showed it unquoted would teach an invocation the shell
@@ -231,7 +233,10 @@ func TestRunMsgUsage_TeachesTheV4AddressForms(t *testing.T) {
 		`"<host>/<name> [<ref>]"`,
 		"<host>/_<ref>",
 		"<host>/tmux:<name>",
+		"mlab/purdex-b0-q3",
 		"mlab/_q34psn",
+		"the name pdx gave the conversation",
+		"Claude Code's own session name is not an address",
 		"pdx peers --all",
 		"pdx msg whoami",
 	} {
@@ -864,10 +869,13 @@ func TestRunMsgWhoami_Text(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/peers/self" {
 			t.Errorf("%s %s", r.Method, r.URL.Path)
 		}
+		// Peer Address v5: the address carries the virtual name, and the
+		// registry name Claude Code shows (agent.peer_name) is not printed as
+		// one — it no longer routes.
 		json.NewEncoder(w).Encode(ipeers.SelfResponse{Peer: ipeers.PeerRecord{
-			Host: "air", HostID: "air:9k2m4q", Address: "air/purdex-3f",
+			Host: "air", HostID: "air:9k2m4q", Address: "air/purdex-3f-3k", Name: "purdex-3f-3k",
 			Ref: "_3k9f2m", Title: "purdex-tester", TitleSource: "user", TitleRev: 7,
-			Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "fa5d4c07-0000", PID: 76973},
+			Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "fa5d4c07-0000", PID: 76973, PeerName: "addr-97"},
 		}})
 	}))
 	defer srv.Close()
@@ -878,7 +886,7 @@ func TestRunMsgWhoami_Text(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	want := "address:    air/purdex-3f\n" +
+	want := "address:    air/purdex-3f-3k\n" +
 		"ref:        _3k9f2m\n" +
 		"title:      purdex-tester (user, rev 7)\n" +
 		"host:       air (air:9k2m4q)\n" +
