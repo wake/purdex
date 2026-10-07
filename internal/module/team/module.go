@@ -6,11 +6,16 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/agent"
+	"github.com/wake/purdex/internal/module/hostconfig"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/team"
 )
@@ -25,6 +30,10 @@ import (
 // error means the registry was read and the inbox is not a live session.
 type OriginResolver interface {
 	ResolveOrigin(inbox string) (team.Origin, bool, error)
+	// ResolveOriginBySession is ResolveOrigin keyed by CC session id: the
+	// relay routes are called by the mod with its session id, not its
+	// inbox (P5a). Same ok/err contract.
+	ResolveOriginBySession(sessionID string) (team.Origin, bool, error)
 	LiveSession(sessionID string) bool
 }
 
@@ -35,6 +44,22 @@ type Module struct {
 	origins OriginResolver
 	now     func() int64 // unix ms; injectable for tests
 	logf    func(format string, args ...any)
+
+	// P5a: the relay switches (host config), the title mover (meta.db; nil
+	// without a meta store), the op/request id minter, the handoff
+	// directory and what each session's mod said in hello (under mu).
+	// modSeen is THE mod-presence record: P6 reads it for
+	// relay_unsupported, P8a-1a's modPresent() reads it for the
+	// terminal-only degradation; nothing else writes it.
+	switches hostconfig.RelaySwitchReader
+	titles   TitleMover
+	// usage is the agent module's per-session statusline reading; begin
+	// copies model_id / effort from it into the self_relay payload (the mod
+	// sends neither). Nil when the agent module is absent: both stay "".
+	usage    agent.ContextUsageReader
+	newID    func() string
+	relayDir string
+	modSeen  map[string]helloInfo
 
 	// dataDir is the daemon's data dir; the hook lock flags live under
 	// <dataDir>/hooklocks (spec §6.6): the hook decide route removes a flag
@@ -83,6 +108,11 @@ type Module struct {
 	// origin in that window and prove it waits for createMu. nil in
 	// production.
 	afterOpenByOrigin func()
+	// afterOpenCheck, when set, runs in handleRelayBegin between its
+	// OpenRelayOpBySession check and its CreateRelayOp; tests open an op
+	// for the same session in that window and prove the table's conflict
+	// (ErrRelayOpOpen) is answered as 409 relay_open too. nil in production.
+	afterOpenCheck func(sessionID string)
 }
 
 // New returns a Module with production defaults.
@@ -94,11 +124,20 @@ func New() *Module {
 		stopCtx:    stopCtx,
 		stopCancel: stopCancel,
 		waiters:    map[string][]chan struct{}{},
+		newID:      uuid.NewString,
+		modSeen:    map[string]helloInfo{},
 	}
 }
 
+// WithTitles sets the title mover (the meta store's PeerLabels in
+// production). Nil is allowed: titles then stay on the old session id.
+func (m *Module) WithTitles(t TitleMover) *Module {
+	m.titles = t
+	return m
+}
+
 func (m *Module) Name() string           { return "team" }
-func (m *Module) Dependencies() []string { return []string{"peers"} }
+func (m *Module) Dependencies() []string { return []string{"agent", "peers", "hostconfig"} }
 
 // Init resolves the origin resolver peers registered and opens team.db in
 // the data dir. Both are hard errors: without either the module cannot
@@ -114,12 +153,32 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("team: service %q does not implement OriginResolver (%T)", peersmod.OriginResolverKey, svc)
 	}
 	m.origins = origins
+	sw, ok := c.Registry.Get(hostconfig.RelaySwitchesKey)
+	if !ok {
+		return fmt.Errorf("team: service %q not registered", hostconfig.RelaySwitchesKey)
+	}
+	switches, ok := sw.(hostconfig.RelaySwitchReader)
+	if !ok {
+		return fmt.Errorf("team: service %q does not implement RelaySwitchReader (%T)", hostconfig.RelaySwitchesKey, sw)
+	}
+	m.switches = switches
+	// The statusline reading lives in the agent module (P1); as peers does,
+	// type-assert the reader on the owner-resolver service rather than add
+	// a registry key. Optional: a daemon without it fills no model/effort.
+	if svc, ok := c.Registry.Get(agent.OwnerResolverKey); ok {
+		if r, ok := svc.(agent.ContextUsageReader); ok {
+			m.usage = r
+		}
+	}
 	store, err := OpenStore(filepath.Join(c.Cfg.DataDir, "team.db"))
 	if err != nil {
 		return fmt.Errorf("team: %w", err)
 	}
 	m.store = store
 	m.dataDir = c.Cfg.DataDir
+	m.relayDir = filepath.Join(c.Cfg.DataDir, team.RelayDir)
+	// The peers inventory reads the relay lineage through this (spec §8.4).
+	c.Registry.Register(team.LineageReaderKey, store)
 	return nil
 }
 
@@ -133,6 +192,11 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/team/approvals/{id}/decide", m.handleDecide)
 	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)
 	mux.HandleFunc("POST /api/hooks/decide", m.handleHookDecide)
+	// P5a relay routes (spec §8.3, §8.7); all under TokenAuth like /api/team/*.
+	mux.HandleFunc("POST /api/relay/hello", m.handleRelayHello)
+	mux.HandleFunc("POST /api/relay/begin", m.handleRelayBegin)
+	mux.HandleFunc("GET /api/relay/wait/{id}", m.handleRelayWait)
+	mux.HandleFunc("POST /api/relay/self", m.handleRelaySelf)
 }
 
 // Start applies the boot lease grace (spec §9.2: every open request's
@@ -143,6 +207,11 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 // dead and the prune would delete the flag of an open lead request. The
 // sweeper prunes on its 10th tick, and never a flag whose request is open.
 func (m *Module) Start(context.Context) error {
+	// <data_dir>/relay/ exists from boot (spec §8.3); begin re-creates it
+	// too. A failure is logged, not fatal: begin reports its own.
+	if err := os.MkdirAll(m.relayDir, 0o700); err != nil {
+		m.logf("[team] relay dir %s: %v", m.relayDir, err)
+	}
 	n, err := m.store.ExtendOpenLeases(m.now() + team.BootGraceS*1000)
 	if err != nil {
 		return fmt.Errorf("team: %w", err)
@@ -210,6 +279,7 @@ func (m *Module) closeWith(id string, cas func() (team.Approval, bool, error)) (
 	if won {
 		m.broadcast("closed", &after)
 		m.wake(id)
+		m.afterClose(after)
 	}
 	return after, won, nil
 }

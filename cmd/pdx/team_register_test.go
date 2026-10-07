@@ -40,6 +40,9 @@ func TestRegisterServeModules_MountsTeam(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, doRequest(t, outer, http.MethodGet, "/api/team/approvals/00000000-0000-4000-8000-000000000001", "t").Code)
 	assert.Equal(t, http.StatusUnauthorized, doRequest(t, outer, http.MethodGet, "/api/team/approvals", "").Code)
 	assert.Equal(t, http.StatusUnauthorized, doRequest(t, outer, http.MethodGet, "/api/team/inflight", "").Code)
+	res = doRequest(t, outer, http.MethodPost, "/api/relay/hello", "t")
+	assert.Equal(t, http.StatusBadRequest, res.Code, "the relay routes are mounted (400 for an empty body, not 404)")
+	assert.Equal(t, http.StatusUnauthorized, doRequest(t, outer, http.MethodPost, "/api/relay/hello", "").Code)
 	// P2c: the hook decision route is live and behind TokenAuth too.
 	res = doRequestBody(t, outer, http.MethodPost, "/api/hooks/decide", "t", `{"agent":"cc","event":"PreToolUse","session_id":"sid-x"}`)
 	assert.Equal(t, http.StatusOK, res.Code, res.Body.String())
