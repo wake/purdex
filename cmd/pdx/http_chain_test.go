@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/middleware"
+	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
 	hosttransfermod "github.com/wake/purdex/internal/module/hosttransfer"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -739,5 +741,38 @@ func TestDaemonRestartRequiresHostToken(t *testing.T) {
 	}
 	if rec := doRequest(t, h, "POST", "/api/daemon/restart", "host-token"); rec.Code != http.StatusAccepted {
 		t.Fatalf("host token: got %d, want 202", rec.Code)
+	}
+}
+
+// PUT /api/hostconfig/team (R2 note) through the daemon's outer chain with the
+// real hostconfig routes: only the admin token reaches the handler. A peer
+// host's token is refused like a wrong one (401): /api/hostconfig is on the
+// general chain, whose TokenAuth knows the admin token alone, so
+// HostRoutePolicy (403 on /api/peers/*) is never consulted. The refusals
+// store nothing: the admin PUT that follows still wins at revision 0.
+func TestNewOuterHandler_HostConfigTeamPutIsAdminOnly(t *testing.T) {
+	c := newTestCore(&config.Config{Token: "admin-secret", DataDir: t.TempDir(), Peers: config.PeersConfig{
+		Hosts: []config.PeerHost{{Alias: "host-a", HostID: "hostid-a", InboundToken: "host-a-token"}}}})
+	hc := hostconfigmod.New()
+	if err := hc.Init(c); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { hc.Stop(context.Background()) })
+	mux := http.NewServeMux()
+	hc.RegisterRoutes(mux)
+	outer := newOuterHandler(c, mux, nil)
+	for _, tc := range []struct {
+		bearer string
+		want   int
+	}{{"host-a-token", 401}, {"wrong-token", 401}, {"", 401}, {"admin-secret", 200}} {
+		req := httptest.NewRequest(http.MethodPut, "/api/hostconfig/team", strings.NewReader(`{"items":{"member_command":"claude"},"baseRevision":0}`))
+		if tc.bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+tc.bearer)
+		}
+		rec := httptest.NewRecorder()
+		outer.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("bearer %q: got %d %s, want %d", tc.bearer, rec.Code, rec.Body.String(), tc.want)
+		}
 	}
 }

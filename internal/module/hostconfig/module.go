@@ -33,6 +33,8 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	// The team module reads the relay switches through this view (spec §8.7 (a)).
 	c.Registry.Register(RelaySwitchesKey, m)
+	// ... and the member launch command through this one (spec §7.2 step 4).
+	c.Registry.Register(TeamSettingsKey, m)
 	return nil
 }
 
@@ -44,6 +46,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/resume-templates", m.putHandler(KeyResumeTemplates, func(raw []byte) (any, error) { return normalizeResumeTemplates(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/quick-replies", m.putHandler(KeyQuickReplies, func(raw []byte) (any, error) { return normalizeQuickReplies(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/relay", m.putHandler(KeyRelay, func(raw []byte) (any, error) { return normalizeRelay(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/team", m.putHandler(KeyTeam, func(raw []byte) (any, error) { return normalizeTeam(raw) }))
 	mux.HandleFunc("POST /api/hostconfig/check-path", m.handleCheckPath)
 }
 

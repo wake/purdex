@@ -51,6 +51,8 @@ func emptyFor(key string) string {
 		return `{}`
 	case KeyRelay:
 		return relaySwitchesJSON
+	case KeyTeam:
+		return teamSettingsJSON
 	}
 	return `[]`
 }
@@ -64,6 +66,7 @@ func (m *Module) handleGet(w http.ResponseWriter, _ *http.Request) {
 		"resumeTemplates": KeyResumeTemplates,
 		"quickReplies":    KeyQuickReplies,
 		"relay":           KeyRelay,
+		"team":            KeyTeam,
 	} {
 		e, err := m.store.Get(key)
 		if err != nil {

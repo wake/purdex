@@ -22,7 +22,8 @@ func TestHandlerGetEmpty(t *testing.T) {
 		"commands":{"items":[],"revision":0},
 		"resumeTemplates":{"items":{},"revision":0},
 		"quickReplies":{"items":[],"revision":0},
-		"relay":{"items":{"self_solo":true,"self_lead":true},"revision":0}
+		"relay":{"items":{"self_solo":true,"self_lead":true},"revision":0},
+		"team":{"items":{"member_command":"claude --dangerously-skip-permissions"},"revision":0}
 	}`, rr.Body.String())
 }
 
