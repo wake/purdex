@@ -204,6 +204,92 @@ func nexErrorOf(t *testing.T, w *httptest.ResponseRecorder) (msg, code string) {
 	return e.Error, e.Code
 }
 
+// An engine that panicked never yields a stamped page — also when it had
+// already written a 200 and a complete JSON object, which recoverer's
+// WriteHeader(500) can no longer change and which would otherwise read as a
+// good page. The client gets 500 nex_list_panicked instead of whatever was
+// buffered, the panic is logged, and no ver is consumed.
+func TestListWrapper_EnginePanicIs500AndNeverStamped(t *testing.T) {
+	cases := map[string]func(http.ResponseWriter, *http.Request){
+		"before writing": func(http.ResponseWriter, *http.Request) { panic("store exploded") },
+		"after a partial body": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"items":[{"id":"exc_a","state":"idle"`)
+			panic("mid-page explosion")
+		},
+		"after a complete 200": func(w http.ResponseWriter, r *http.Request) {
+			answer(http.StatusOK, listPage)(w, r)
+			panic("late explosion")
+		},
+	}
+	for name, explode := range cases {
+		t.Run(name, func(t *testing.T) {
+			panicking := false
+			inner := &recordingHandler{respond: func(w http.ResponseWriter, r *http.Request) {
+				if panicking {
+					explode(w, r)
+					return
+				}
+				answer(http.StatusOK, listPage)(w, r)
+			}}
+			m, mux := newListEnv(t, inner)
+			logs := &logRecorder{}
+			m.logf = logs.logf
+			assert.Equal(t, uint64(1), stampOf(t, serve(mux, context.Background(), http.MethodGet, "/api/nex/v1/executions")).Ver)
+
+			panicking = true
+			w := serve(mux, context.Background(), http.MethodGet, "/api/nex/v1/executions")
+			assert.Equal(t, http.StatusInternalServerError, w.Code)
+			msg, code := nexErrorOf(t, w)
+			assert.Equal(t, "nex_list_panicked", code)
+			assert.Equal(t, "nex list failed", msg)
+			assert.NotContains(t, w.Body.String(), "exc_a", "the buffered body reached the client")
+			assert.NotContains(t, w.Body.String(), "pdx")
+			lines := logs.all()
+			require.Len(t, lines, 1, "%q", lines)
+			assert.Contains(t, lines[0], "nex: panic recovered: method=GET path=/v1/executions ",
+				"recoverer must see the stripped path, as the mount gives it")
+			require.True(t, readSlotFree(m.reads()), "the panicked page left the slot held")
+
+			panicking = false
+			assert.Equal(t, uint64(2), stampOf(t, serve(mux, context.Background(), http.MethodGet, "/api/nex/v1/executions")).Ver,
+				"the panicked page consumed a ver")
+		})
+	}
+}
+
+// http.ErrAbortHandler keeps its net/http contract: recoverer re-panics it,
+// and the wrapper lets it propagate (net/http aborts the response) — nothing
+// is written, the slot is free afterwards and no ver is consumed.
+func TestListWrapper_AbortHandlerPropagates(t *testing.T) {
+	aborting := false
+	inner := &recordingHandler{respond: func(w http.ResponseWriter, r *http.Request) {
+		if aborting {
+			answer(http.StatusOK, listPage)(w, r)
+			panic(http.ErrAbortHandler)
+		}
+		answer(http.StatusOK, listPage)(w, r)
+	}}
+	m, mux := newListEnv(t, inner)
+	assert.Equal(t, uint64(1), stampOf(t, serve(mux, context.Background(), http.MethodGet, "/api/nex/v1/executions")).Ver)
+
+	aborting = true
+	w := httptest.NewRecorder()
+	var rec any
+	func() {
+		defer func() { rec = recover() }()
+		mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/nex/v1/executions", nil))
+	}()
+	assert.Equal(t, http.ErrAbortHandler, rec, "the abort did not propagate")
+	assert.Empty(t, w.Body.String(), "an aborted page reached the client")
+	require.True(t, readSlotFree(m.reads()), "the aborted page left the slot held")
+
+	aborting = false
+	assert.Equal(t, uint64(2), stampOf(t, serve(mux, context.Background(), http.MethodGet, "/api/nex/v1/executions")).Ver,
+		"the aborted page consumed a ver")
+}
+
 func TestListWrapper_SlotBusyIs503NexBusy(t *testing.T) {
 	inner := &recordingHandler{respond: answer(http.StatusOK, listPage)}
 	m, mux := newListEnv(t, inner)

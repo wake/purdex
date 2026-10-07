@@ -29,6 +29,11 @@ const (
 // client exactly as the engine wrote it.
 var errListNotStampable = errors.New("nex list answer is not a stampable page")
 
+// errListPanicked is the list read's failure when the engine's handler
+// panicked, whatever it had written by then: the read consumes no ver, and
+// the client gets 500 nex_list_panicked instead of the buffered answer.
+var errListPanicked = errors.New("nex list engine handler panicked")
+
 // listSlotWait is the configured wait (the listWait test seam), or the
 // default.
 func (m *Module) listSlotWait() time.Duration {
@@ -51,16 +56,18 @@ func (m *Module) reads() *readSlot {
 }
 
 // handleListExecutions wraps the engine's GET /v1/executions (spec
-// 2026-10-08 §3.4). engineMount is the handler RegisterRoutes mounts the
-// engine with (RoutePrefix stripped, recoverer inside), so the engine sees
-// exactly the request it would have seen unwrapped — same path, the full
-// query string (limit, cursor, include_archived, state, label.<k>,
-// session_id), the client's headers and principal, the request's context.
+// 2026-10-08 §3.4). handler is the engine's own handler (engine.handler,
+// unprefixed); every page runs through runList, which mounts it the way
+// RegisterRoutes does (RoutePrefix stripped, recoverer inside), so the
+// engine sees exactly the request it would have seen unwrapped — same path,
+// the full query string (limit, cursor, include_archived, state,
+// label.<k>, session_id), the client's headers and principal, the request's
+// context.
 //
 // The page runs inside the read slot (who "list"), into a buffer capped at
-// listBodyLimit. Only a 200 whose body is a JSON object is a successful
-// read: it consumes a ver, and the client gets the page with one more
-// top-level key,
+// listBodyLimit. Only a 200 whose body is a JSON object, from a handler
+// that did not panic, is a successful read: it consumes a ver, and the
+// client gets the page with one more top-level key,
 //
 //	"pdx": {"epoch": E, "ver": V, "bseq": H}
 //
@@ -71,24 +78,31 @@ func (m *Module) reads() *readSlot {
 // header would be unreadable to it (§1 F7).
 //
 // Everything else consumes nothing:
+//   - a handler that panicked is 500 nex_list_panicked, whatever it had
+//     written before (a complete 200 object included — see runList);
 //   - any other answer (a 400 bad_state, a 500, a non-object 200) goes out
 //     as the engine wrote it: status, headers, body, no pdx;
 //   - a page over listBodyLimit is 502 nex_list_too_large;
 //   - a slot not acquired within listSlotWait is 503 nex_busy, in Nexen's
 //     error shape so the SPA's NexApiError carries the code (§8 R3-3);
 //   - a request whose context ended while waiting gets no answer at all —
-//     the client is gone.
+//     the client is gone;
+//   - http.ErrAbortHandler gets none either: it propagates to net/http,
+//     which aborts the response (see runList).
 //
 // The slot is released in a defer inside readSlot.read, so a page that
 // failed, was cancelled mid-read (Nexen's handler sees the same context) or
 // panicked frees it at once.
-func (m *Module) handleListExecutions(engineMount http.Handler) http.Handler {
+func (m *Module) handleListExecutions(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var res *bufferedResponse // non-nil once the page ran inside the slot
+		var panicked bool
 		var page map[string]json.RawMessage
 		stamp, err := m.reads().read(r.Context(), "list", m.listSlotWait(), func(ctx context.Context) error {
-			res = newBufferedResponse(listBodyLimit)
-			engineMount.ServeHTTP(res, r.WithContext(ctx))
+			res, panicked = m.runList(handler, r.WithContext(ctx))
+			if panicked {
+				return errListPanicked
+			}
 			if res.overflow || res.code() != http.StatusOK {
 				return errListNotStampable
 			}
@@ -106,6 +120,8 @@ func (m *Module) handleListExecutions(engineMount http.Handler) http.Handler {
 		case res == nil:
 			// The request's context ended while the page waited for the
 			// slot: nobody is left to answer.
+		case panicked:
+			writeNexError(w, http.StatusInternalServerError, "nex list failed", "nex_list_panicked")
 		case res.overflow:
 			writeNexError(w, http.StatusBadGateway,
 				fmt.Sprintf("nex list page exceeds %d bytes", listBodyLimit), "nex_list_too_large")
@@ -115,6 +131,37 @@ func (m *Module) handleListExecutions(engineMount http.Handler) http.Handler {
 			m.writeStampedPage(w, res, page, stamp)
 		}
 	})
+}
+
+// runList serves r through the engine's handler into a buffer capped at
+// listBodyLimit, mounted exactly as RegisterRoutes mounts it for every other
+// engine path — http.StripPrefix(RoutePrefix, recoverer(...)) — and reports
+// whether recoverer contained a panic.
+//
+// The mount is built per request, not shared, for that report. recoverer
+// answers a panic with WriteHeader(500), which is a no-op once the handler
+// has written its status (bufferedResponse keeps the first, as net/http
+// does). An engine that wrote 200 and a complete JSON object and only then
+// panicked would therefore look like a good page and be stamped: a ver
+// consumed for a read that never finished, and a client told the page is
+// current. recoverer calls its logf for every panic it contains, before or
+// after any write, so a logf that sets the flag and then forwards to m.logf
+// sees them all (rowReader does the same). m.logf is read when the line is
+// written, as for the slot's own lines (reads).
+//
+// http.ErrAbortHandler is not contained: recoverer re-panics it for
+// net/http, and runList lets it propagate out of the wrapper to the server,
+// which aborts the response as its contract says. Inside the slot,
+// readSlot.read's defer releases the slot on the way, and fn never
+// returned, so no ver is consumed.
+func (m *Module) runList(handler http.Handler, r *http.Request) (res *bufferedResponse, panicked bool) {
+	mount := http.StripPrefix(RoutePrefix, recoverer(func(format string, args ...any) {
+		panicked = true
+		m.logf(format, args...)
+	}, handler))
+	res = newBufferedResponse(listBodyLimit)
+	mount.ServeHTTP(res, r)
+	return res, panicked
 }
 
 // writeStampedPage adds "pdx" to a successful page and writes it. The
