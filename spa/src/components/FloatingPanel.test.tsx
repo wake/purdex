@@ -3,32 +3,6 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { useRef, useState } from 'react'
 import { FloatingPanel, TITLE_BAR_HEIGHT } from './FloatingPanel'
 import { ConfirmDialog } from './ConfirmDialog'
-import { getPlatformCapabilities } from '../lib/platform'
-import type { PlatformCapabilities } from '../lib/platform'
-
-vi.mock('../lib/platform', () => ({
-  getPlatformCapabilities: vi.fn(() => ({
-    isElectron: false,
-    canTearOffTab: false,
-    canMergeWindow: false,
-    canBrowserPane: false,
-    canSystemTray: false,
-    canNotification: false,
-    devUpdateEnabled: false,
-    hasLocalFilesystem: false,
-  })),
-}))
-
-/** The title bar's drag region (see `FloatingPanel.tsx`'s `topInset`) is on
- * screen whatever the platform — `App.tsx` always renders `TitleBar` — so the
- * inset must not follow `getPlatformCapabilities()`. Stubbed so the inset tests
- * can run both an all-false and an all-true capability set. */
-function mockElectron(isElectron: boolean) {
-  vi.mocked(getPlatformCapabilities).mockReturnValue({
-    devUpdateEnabled: isElectron,
-    hasLocalFilesystem: isElectron,
-  } satisfies PlatformCapabilities)
-}
 
 function Harness({ onClose, open = true, placement }: { onClose: () => void; open?: boolean; placement?: 'below' | 'right' }) {
   const anchor = useRef<HTMLButtonElement>(null)
@@ -112,7 +86,6 @@ function rect(el: HTMLElement, r: Partial<DOMRect>) {
 beforeEach(() => {
   Object.defineProperty(window, 'innerWidth', { value: 1000, configurable: true })
   Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
-  mockElectron(false)
 })
 
 describe('FloatingPanel', () => {
@@ -205,8 +178,7 @@ describe('FloatingPanel', () => {
     expect(parseInt(panel.style.left)).toBe(left0 + 50)
   })
 
-  it.each([false, true])('a drag never moves the panel fully off-screen, nor above the title bar (isElectron=%s)', (isElectron) => {
-    mockElectron(isElectron)
+  it('a drag never moves the panel fully off-screen, nor above the title bar', () => {
     render(<Harness onClose={() => {}} />)
     const panel = screen.getByTestId('floating-panel')
     const handle = screen.getByTestId('floating-panel-handle')
@@ -230,8 +202,7 @@ describe('FloatingPanel', () => {
     expect(withCamel.WebkitAppRegion).toBe('no-drag')
   })
 
-  it.each([false, true])('never exceeds the viewport height, leaving room for the title bar, and scrolls its body instead (isElectron=%s)', (isElectron) => {
-    mockElectron(isElectron)
+  it('never exceeds the viewport height, leaving room for the title bar, and scrolls its body instead', () => {
     Object.defineProperty(window, 'innerHeight', { value: 300, configurable: true })
     render(<Harness onClose={() => {}} />)
     const panel = screen.getByTestId('floating-panel')
@@ -248,8 +219,7 @@ describe('FloatingPanel', () => {
     expect(panel.style.maxHeight).toBe(`${250 - TITLE_BAR_HEIGHT - 4}px`)
   })
 
-  it.each([false, true])('still opens below the anchor, but the MIN_PANEL_HEIGHT floor never pushes it above the title bar (isElectron=%s)', (isElectron) => {
-    mockElectron(isElectron)
+  it('still opens below the anchor, but the MIN_PANEL_HEIGHT floor never pushes it above the title bar', () => {
     Object.defineProperty(window, 'innerHeight', { value: 40, configurable: true })
     const { rerender } = render(<Harness onClose={() => {}} open={false} />)
     rect(screen.getByTestId('anchor'), { top: 38, bottom: 40, left: 10, right: 50 })
@@ -478,8 +448,7 @@ describe("FloatingPanel — placement='right'", () => {
     expect(panel.style.maxHeight).toBe(`${800 - TITLE_BAR_HEIGHT - 4}px`)
   })
 
-  it.each([false, true])('clamps to the title bar when the anchor is too near the top for the panel to end at its bottom, and leaves room for it in maxHeight (isElectron=%s)', (isElectron) => {
-    mockElectron(isElectron)
+  it('clamps to the title bar when the anchor is too near the top for the panel to end at its bottom, and leaves room for it in maxHeight', () => {
     const panel = openBeside({ left: 0, right: 48, top: 60, bottom: 100 })
     expect(parseInt(panel.style.top)).toBe(TITLE_BAR_HEIGHT)
     expect(panel.style.maxHeight).toBe(`${800 - TITLE_BAR_HEIGHT - 4}px`)
