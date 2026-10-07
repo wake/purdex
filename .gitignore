@@ -2,6 +2,7 @@
 .superpowers/
 .worktrees/
 bin/
+/pdx
 node_modules/
 spa/node_modules/
 spa/dist/
