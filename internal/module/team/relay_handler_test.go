@@ -365,3 +365,69 @@ func TestStart_MakesTheRelayDir(t *testing.T) {
 		t.Fatalf("begin must re-create the dir: err=%v path=%s", err, out.Op.HandoffPath)
 	}
 }
+
+// The op and its approval row are two writes (Decision 2). When a begin
+// meets an awaiting_approval op whose row is gone (a crash between the two
+// writes) or already closed (afterClose missed it or failed), the op is
+// re-derived from the row and the begin goes through — the session is not
+// held at 409 until the next daemon boot (PR #1708 attacker A-1 / A-2).
+func TestRelayBegin_ReconcilesAnAwaitingOpWhoseRowIsGoneOrClosed(t *testing.T) {
+	f := newFixture(t)
+
+	// (1) Orphan: an op with no approval row at all.
+	orphan := team.RelayOp{
+		ID: uid(7), Kind: team.RelayKindSelf, HostID: "h:1", SessionID: "sid-1", Ref: "_abc123", RequestID: uid(8),
+		State: team.RelayAwaitingApproval, HandoffPath: "/x/" + uid(7) + ".md", CreatedAt: 1, UpdatedAt: 1,
+	}
+	if err := f.m.store.CreateRelayOp(orphan); err != nil {
+		t.Fatal(err)
+	}
+	out := f.begin("sid-1") // 201, not 409
+	if got := f.op(uid(7)); got.State != team.RelayCancelled || got.Reason != team.RelayReasonAbandoned {
+		t.Fatalf("orphan op after begin = %s (%s), want cancelled (abandoned)", got.State, got.Reason)
+	}
+	if f.op(out.Op.ID).State != team.RelayAwaitingApproval {
+		t.Fatalf("the new op is not open: %+v", f.op(out.Op.ID))
+	}
+
+	// (2) Row closed but the op never moved (afterClose failed): approve
+	// through the API, then force the op back to awaiting_approval as a
+	// failed second write would have left it.
+	if code, body := f.decide(out.RequestID, "approve"); code != http.StatusOK {
+		t.Fatalf("approve: %d %s", code, body)
+	}
+	if f.op(out.Op.ID).State != team.RelayClaimed {
+		t.Fatalf("sanity: approve moved the op to %s", f.op(out.Op.ID).State)
+	}
+	if _, err := f.m.store.db.Exec(`UPDATE relay_ops SET state = ? WHERE id = ?`, string(team.RelayAwaitingApproval), out.Op.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The row says approved, so the op must become claimed — and claimed IS
+	// an open op: this begin is 409 relay_open carrying the reconciled op.
+	code, body := f.do(http.MethodPost, "/api/relay/begin", beginReq("sid-1"))
+	ae := decodeErr(t, body)
+	if code != http.StatusConflict || ae.Error != team.ErrRelayOpen || ae.Op == nil || ae.Op.ID != out.Op.ID {
+		t.Fatalf("begin over a claimed op: %d %s", code, body)
+	}
+	if f.op(out.Op.ID).State != team.RelayClaimed {
+		t.Fatalf("op after reconcile = %s, want claimed (the row is approved)", f.op(out.Op.ID).State)
+	}
+
+	// (3) Row denied, op stuck awaiting: reconciled to cancelled{denied}
+	// and the begin goes through.
+	if _, err := f.m.store.db.Exec(`UPDATE relay_ops SET state = ? WHERE id = ?`, string(team.RelayAwaitingApproval), out.Op.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The row is already closed (approved); write the denied state directly
+	// to model "closed as denied, op never moved".
+	if _, err := f.m.store.db.Exec(`UPDATE approval_requests SET state = ? WHERE id = ?`, string(team.StateDenied), out.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	third := f.begin("sid-1")
+	if got := f.op(out.Op.ID); got.State != team.RelayCancelled || got.Reason != team.RelayReasonDenied {
+		t.Fatalf("op after a denied row = %s (%s), want cancelled (denied)", got.State, got.Reason)
+	}
+	if third.Op.ID == out.Op.ID {
+		t.Fatal("begin did not open a new op")
+	}
+}

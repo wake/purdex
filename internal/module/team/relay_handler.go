@@ -206,14 +206,24 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// At most one open self-relay per session (spec §8.7 (c)): the op is
-	// the authority; the approval row follows it.
+	// the authority; the approval row follows it. An op still in
+	// awaiting_approval whose row is no longer open (or never got written)
+	// is re-derived from the row first — the op and the row are two
+	// writes, and a crash or a failed second write between them must not
+	// hold the session's begins at 409 until the next daemon boot.
 	if open, found, err := m.store.OpenRelayOpBySession(req.SessionID); err != nil {
 		m.logf("[team] relay begin %s: %v", req.SessionID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	} else if found {
-		m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "this session already has a relay in progress", Op: &open})
-		return
+		if still, err := m.reconcileAwaitingOp(open); err != nil {
+			m.logf("[team] relay begin %s: reconcile op %s: %v", req.SessionID, open.ID, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return
+		} else if still {
+			m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "this session already has a relay in progress", Op: &open})
+			return
+		}
 	}
 	if m.afterOpenCheck != nil {
 		m.afterOpenCheck(req.SessionID)
@@ -286,8 +296,9 @@ func reasonSuffix(op team.RelayOp) string {
 // self_relay row's close moves its op (spec §8.7 (b)): approved →
 // claimed; denied → cancelled{denied}; timeout → cancelled{timeout};
 // cancelled or abandoned → cancelled{abandoned}. A lead row has no op.
-// The two writes are not one transaction; the boot reconciliation
-// re-derives the op's state from a closed row it missed.
+// The two writes are not one transaction: a failure here is logged, and
+// the op is re-derived from its row by reconcileAwaitingOp at the next
+// begin of that session and by the boot reconciliation (P5a-2b).
 func (m *Module) afterClose(a team.Approval) {
 	if a.Kind != team.KindSelfRelay {
 		return
@@ -297,7 +308,24 @@ func (m *Module) afterClose(a team.Approval) {
 		m.logf("[team] approval %s closed but its relay op is missing: ok=%v err=%v", a.ID, ok, err)
 		return
 	}
-	rep := RelayReport{At: m.now()}
+	after, res, err := m.store.ReportRelay(op.ID, opReportForClosedRow(a, m.now()))
+	if err != nil {
+		m.logf("[team] approval %s %s: relay op %s: %v", a.ID, a.State, op.ID, err)
+		return
+	}
+	switch res {
+	case ReportApplied:
+		m.logf("[team] relay op %s → %s%s (approval %s %s)", op.ID, after.State, reasonSuffix(after), a.ID, a.State)
+	case ReportBadTransition:
+		m.logf("[team] approval %s %s: relay op %s is %s, which does not lead to the row's state; left as is", a.ID, a.State, op.ID, after.State)
+	}
+}
+
+// opReportForClosedRow is the op transition a closed self_relay row
+// implies (spec §8.7 (b)); afterClose and reconcileAwaitingOp share it so
+// the mapping lives once.
+func opReportForClosedRow(a team.Approval, at int64) RelayReport {
+	rep := RelayReport{At: at}
 	switch a.State {
 	case team.StateApproved:
 		rep.State = team.RelayClaimed
@@ -308,12 +336,43 @@ func (m *Module) afterClose(a team.Approval) {
 	default: // cancelled, abandoned
 		rep.State, rep.Reason = team.RelayCancelled, team.RelayReasonAbandoned
 	}
+	return rep
+}
+
+// reconcileAwaitingOp re-derives an awaiting_approval op from its approval
+// row: the row is open → the op is genuinely open (still = true); the row
+// is closed → the op takes the transition the close implied (afterClose
+// missed it, or failed); the row does not exist → the op is an orphan of a
+// begin that crashed between its two writes and is cancelled{abandoned}.
+// Any other op state is open by definition. Called under createMu.
+func (m *Module) reconcileAwaitingOp(op team.RelayOp) (still bool, err error) {
+	if op.State != team.RelayAwaitingApproval {
+		return true, nil
+	}
+	row, ok, err := m.store.Get(op.RequestID)
+	if err != nil {
+		return true, err
+	}
+	rep := RelayReport{State: team.RelayCancelled, Reason: team.RelayReasonAbandoned, At: m.now()}
+	switch {
+	case ok && row.State == team.StateOpen:
+		return true, nil
+	case ok:
+		rep = opReportForClosedRow(row, m.now())
+	}
 	after, res, err := m.store.ReportRelay(op.ID, rep)
 	if err != nil {
-		m.logf("[team] approval %s %s: relay op %s: %v", a.ID, a.State, op.ID, err)
-		return
+		return true, err
 	}
 	if res == ReportApplied {
-		m.logf("[team] relay op %s → %s%s (approval %s %s)", op.ID, after.State, reasonSuffix(after), a.ID, a.State)
+		m.logf("[team] relay op %s → %s%s (reconciled at begin: approval %s %s)", op.ID, after.State, reasonSuffix(after), op.RequestID, rowStateOrMissing(row, ok))
 	}
+	return !after.State.Terminal(), nil
+}
+
+func rowStateOrMissing(row team.Approval, ok bool) string {
+	if !ok {
+		return "missing"
+	}
+	return string(row.State)
 }
