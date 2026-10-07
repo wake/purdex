@@ -65,6 +65,7 @@ const READER_IMPORTERS = [
   'src/lib/host-reresolve.ts',
   'src/lib/nex/handoff.ts',
   'src/lib/nex/worker-rebuild.ts',
+  'src/lib/open-session-tab.ts', // SessionsSection's open, moved with its hidden-host gate (lead-team plan v3 P9b-1)
   'src/lib/profile/switch-active.ts',
   'src/lib/rebuild/cwd-probe.ts',
   'src/lib/rebuild/host-reshow.ts',
