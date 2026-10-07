@@ -187,6 +187,38 @@ func TestRelayRole_MemberOfAnEndedTeamIsNone(t *testing.T) {
 	}
 }
 
+// Spec §6.2 member_cannot_lead (no nested teams in v1): an active member of
+// a live team asking for lead is 409 member_cannot_lead (exit 13), and
+// nothing is stored or broadcast. Once its team has ended it may ask (D4).
+// A member read that fails is a 500, never a pass.
+func TestCreate_MemberCannotLead(t *testing.T) {
+	f := newFixture(t)
+	f.makeMember("sid-1")
+	code, body := f.do(http.MethodPost, "/api/team/approvals", f.createReq(uid(1)))
+	if e := decodeErr(t, body); code != http.StatusConflict || e.Error != team.ErrMemberCannotLead || e.Approval != nil {
+		t.Fatalf("member asks for lead: %d %s, want 409 %s", code, body, team.ErrMemberCannotLead)
+	}
+	if _, ok, _ := f.m.store.Get(uid(1)); ok {
+		t.Fatal("member_cannot_lead stored the request")
+	}
+	if n := len(f.events()); n != 0 {
+		t.Fatalf("%d events after member_cannot_lead", n)
+	}
+	if ended, err := f.m.store.EndTeam(uid(9), "sid-2", team.TeamEndLeadGone, f.clock.Load()); err != nil || !ended {
+		t.Fatalf("end: ended=%v err=%v", ended, err)
+	}
+	f.create(uid(1)) // a member of an ended team is an ordinary session
+
+	g := newFixture(t)
+	if _, err := g.m.store.db.Exec(`DROP TABLE team_members`); err != nil {
+		t.Fatal(err)
+	}
+	code, body = g.do(http.MethodPost, "/api/team/approvals", g.createReq(uid(1)))
+	if e := decodeErr(t, body); code != http.StatusInternalServerError || e.Error != errStorage {
+		t.Fatalf("create with an unreadable member table: %d %s, want 500 %s", code, body, errStorage)
+	}
+}
+
 // Plan v3 deviation 12: a role that cannot be read is a 500 on hello, self
 // and begin, never "none" (fail closed, spec §8.7 (d)). Both switches are
 // off, so the role read is the only store read on hello, status and begin:

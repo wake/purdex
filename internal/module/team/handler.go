@@ -213,6 +213,16 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrAlreadyLead, "this session already leads team "+t.ID, nil)
 		return
 	}
+	// No nested teams in v1 (spec §6.2): an active member of a live team
+	// cannot lead; a member of an ended team is an ordinary session (D4).
+	if _, t, found, err := m.store.ActiveMemberInLiveTeam(origin.SessionID); err != nil {
+		m.logf("[team] create %s: %v", req.ID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	} else if found {
+		m.writeErr(w, http.StatusConflict, team.ErrMemberCannotLead, "this session is a member of team "+t.ID+"; a member cannot lead", nil)
+		return
+	}
 	now := m.now()
 	stored, _, inserted, err := m.store.Create(team.Approval{
 		ID: req.ID, Kind: req.Kind, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
