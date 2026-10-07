@@ -13,7 +13,7 @@ Today a handed-off conversation runs fully trusted: the `handoff` profile is `by
 | # | Decision |
 |---|---|
 | PC1 | **Build it.** A handoff offers a second mode, **「需要核准」**. **「完全放行」 stays the default.** |
-| PC2 | The user answers **in the worker pane**, with 同意 / 拒絕. The **tab label and the activity-bar list show 「等待核准」**. ~~A phone works by opening Purdex in its browser.~~ **Amended 2026-10-07 (user):** Purdex ships only as the **Mac App** and an **iOS App**; the standalone web version is withdrawn. So v1 answers only in the Mac App, and the phone answers once the iOS App exists, using the same Nexen API. **No push notifications.** |
+| PC2 | The user answers **in the worker pane**, with 同意 / 拒絕. The **tab label and the activity-bar list show 「等待核准」**. ~~A phone works by opening Purdex in its browser.~~ **Amended 2026-10-07 (user):** Purdex ships only as the **Mac App** and an **iOS App**; the standalone web version is withdrawn. So v1 answers only in the Mac App, and the phone answers once the iOS App exists, using the same Nexen API. ~~**No push notifications.**~~ **Amended 2026-10-07 (user):** 等待核准與 agent ask 同層級，走同一套桌面通知規則（含相同的前景／設定例外）。 |
 | PC3 | **By default an unanswered request waits forever**, and the UI keeps showing 「等待核准中」. An **optional setting** denies a request automatically after N minutes. |
 | PC4 | **No "always allow this" in v1.** |
 
@@ -151,6 +151,12 @@ The card targets the Mac App window. No phone-browser layout is required (PC2 as
   - the tab label of a worker tab with a pending request reads 「等待核准」;
   - the activity-bar worker list and the New Tab Workers list show the same state, with the pane header's status dot.
   - The dot colour reuses the warning token, with a distinct icon so it is not read as "queued".
+- **Desktop notification** (PC2 as amended 2026-10-07): a new pending request is an event of the same level as an agent ask (a terminal agent waiting for the user, such as Claude Code's permission prompt), so it goes through the same desktop-notification rules:
+  - it is the same event and setting as a terminal agent's ask: `PermissionRequest` under the worker's agent type (`cc` for a Claude worker);
+  - there is no notification while the App is in the foreground **and** that tab is the current tab, nor when the user turned the event off; otherwise it notifies;
+  - the title is the worker title, as on the tab, and the body names the tool;
+  - each request notifies once. A refetch, a reconnect, a list-row / live-summary switch or a tab switch does not notify again, and a second request while the worker is still waiting notifies once more;
+  - after an App reload a pending request behaves like an agent ask: it does not notify again when it was already seen, and notifies once when it came while the App was closed.
 - **Q1 race — what the ending paths guarantee** (coordinator ruling R-PC-1, 2026-10-07):
   - Answers need the control lease (N3), so the pane's lease now gates answers as well as sends.
   - Every path that ends a worker while a request could be pending **preempts** the pane's lease before it interrupts or terminates (conversation entity D22): it releases a pdx holder's lease as the holder, then acquires an exclusive one under the daemon's own principal. The paths:
@@ -178,7 +184,7 @@ When a request expires, the pane shows a muted line:「已逾時自動拒絕（N
 
 **5.6 What is not in v1.**
 - "Always allow" (PC4).
-- Push notifications (PC2).
+- ~~Push notifications (PC2).~~ Amended 2026-10-07 (user): a pending request notifies like an agent ask (§5.4).
 - The asking mode for New Tab or other non-handoff starts.
 - Showing or editing `updatedInput`; an allow always sends the request's own input.
 - Answering from a phone. That comes with the iOS App, which consumes the same Nexen endpoints (§4 N3) and capability (N8).
