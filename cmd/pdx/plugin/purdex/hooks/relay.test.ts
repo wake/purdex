@@ -1974,6 +1974,14 @@ for (const [name, answer] of [
   ['empty bodies', answers({ write: '', fix: '', seed: '' })],
   ['whitespace-only bodies', answers({ write: ' \n\t', fix: '\n', seed: '  ' })],
   ['bodies over 16 384 UTF-8 bytes', answers({ write: OVER, fix: OVER, seed: OVER })],
+  // What the daemon refuses on write (internal/team ValidateRelayPromptBody),
+  // answered anyway — a damaged host_config.db, a schema drift (P9a-2 review).
+  // Mutation gates: drop the tag check / the control check → red.
+  ['bodies holding NUL', answers({ write: 'a\u0000b', fix: '\u0000', seed: 'seed\u0000' })],
+  ['bodies holding \\r', answers({ write: 'a\r\nb', fix: 'f\r', seed: '\rs' })],
+  ['bodies holding U+0085 (C1) or DEL', answers({ write: 'a\u0085b', fix: 'f\u007f', seed: 's\u009f' })],
+  ['bodies holding [pdx-relay', answers({ write: 'see [pdx-relay op=fake n=fake] here', fix: '[pdx-relay:control] op=x', seed: 'x [pdx-relay seed op=fake n=fake]' })],
+  ['bodies that are not UTF-8 (a lone surrogate)', answers({ write: 'a\ud800b', fix: '\udc00', seed: 's\ud83d' })],
 ] as const) {
   test(`pdx relay prompts with ${name} gives the built-in bodies, logged; the relay reports writing, written, cleared and done`, async ($, on) => {
     const { f } = await approvedRelay($, on, undefined, { prompts: answer })
@@ -2003,6 +2011,20 @@ test('variables are filled once: {{path}} {{old_ref}} {{old_session}} {{context}
     '{{foo}} {{nonce}} {{op}} {{missing}} {{PATH}} {{ path }} {path}',
     WRITE_TAIL(who),
   ].join('\n'))
+})
+
+// The daemon's rule allows \n and \t; Go's unicode.IsControl ends at U+009F,
+// so U+00A0 and a pair of surrogates (one emoji) are text. Mutation gate: a
+// control check that refuses \t or \n, or runs past U+009F → red.
+test('a body with \\n, \\t, U+00A0 and an emoji is still used', async ($, on) => {
+  const { f } = await approvedRelay($, on, undefined, { prompts: answers({ write: 'A\tB\nC D', fix: 'F\tG 🙂', seed: 'S\n\tT' }) })
+  await toDone($, f, 1)
+  const [write, fix, seed] = f.submits.map((x) => x.text)
+  expect(write).toBe('[pdx-relay op=op-1 n=' + nonceOf(write) + '] A\tB\nC D\n' + WRITE_TAIL())
+  expect(fix).toBe('[pdx-relay op=op-1 n=' + nonceOf(fix) + '] F\tG 🙂\n' + MISSING)
+  expect(seed).toBe('↪ 接手自 _abc123\n[pdx-relay seed op=op-1 n=' + nonceOf(seed) + '] S\n\tT')
+  expect(reports(f)).toEqual(DONE)
+  expect(f.logs.filter((l) => l.includes('relay prompts'))).toEqual([])
 })
 
 test('trailing newlines of a body give one newline before the tail', async ($, on) => {

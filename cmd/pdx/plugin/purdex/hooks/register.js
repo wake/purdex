@@ -319,14 +319,31 @@ function utf8Bytes(text) {
   return n
 }
 
+// refusal is why the daemon would have refused text as a body on write
+// (internal/team ValidateRelayPromptBody), '' when it would not: not UTF-8
+// (in a JS string, a lone surrogate), a control character other than \n and
+// \t (Go's unicode.IsControl: U+0000–U+001F, U+007F–U+009F; so \r, NUL, DEL
+// and C1), or the machine tag anywhere — the tag is the mod's alone. A
+// daemon answers only what it validated; this holds against a damaged store
+// or a schema drift (P9a-2 review).
+function refusal(text) {
+  for (const ch of text) {
+    const c = ch.codePointAt(0)
+    if (c >= 0xd800 && c <= 0xdfff) return 'a lone surrogate (not UTF-8)'
+    if (c !== 0x0a && c !== 0x09 && (c <= 0x1f || (c >= 0x7f && c <= 0x9f))) return 'control character U+' + c.toString(16).toUpperCase().padStart(4, '0')
+  }
+  return text.includes('[pdx-relay') ? 'the machine tag [pdx-relay' : ''
+}
+
 // bodyFor asks the daemon for the body of the `kind` prompt about to go out
 // (U21 (b), spec §8.8): read afresh for every prompt, so an edit applies from
 // the next one with no `pdx setup`. Only an answer at exit 0 whose `kind` is
-// a string with text, of at most MAX_BODY_BYTES, is used. Anything else gives
-// the built-in body and one log line — 20 (unreachable, or a run that
-// rejected: PROMPTS_TIMEOUT_MS ran out), 21 (a daemon from before the route),
-// 1, junk, a missing field, a wrong type: a relay never fails because of its
-// prompts. Called from the step's timer, never inside a hook.
+// a string with text, of at most MAX_BODY_BYTES, that the daemon's own rule
+// (refusal) passes is used. Anything else gives the built-in body and one log
+// line — 20 (unreachable, or a run that rejected: PROMPTS_TIMEOUT_MS ran
+// out), 21 (a daemon from before the route), 1, junk, a missing field, a
+// wrong type: a relay never fails because of its prompts. Called from the
+// step's timer, never inside a hook.
 async function bodyFor($, kind) {
   const r = await pdx($, ['relay', 'prompts'], PROMPTS_TIMEOUT_MS)
   const answer = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
@@ -336,6 +353,7 @@ async function bodyFor($, kind) {
   else if (typeof body !== 'string') why = 'no string ' + kind + ' in the answer'
   else if (body.trim() === '') why = kind + ' is empty'
   else if (utf8Bytes(body) > MAX_BODY_BYTES) why = kind + ' is over ' + MAX_BODY_BYTES + ' bytes'
+  else if (refusal(body)) why = kind + ' holds ' + refusal(body)
   else return body
   log($, 'relay prompts: the built-in ' + kind + ' body (' + why + ')')
   return DEFAULT_BODIES[kind]
