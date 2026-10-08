@@ -2,7 +2,7 @@
 // D-U23-6; plan PU-2c): the real panel over the real host store; only the API is mocked.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { createRef } from 'react'
+import { createRef, StrictMode } from 'react'
 import { UnattendedPanel } from './UnattendedPanel'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -385,6 +385,68 @@ describe('UnattendedPanel', () => {
     unmount()
     await act(async () => { release(page([approved('a1', at(9, 0))])) })
     expect(screen.queryByTestId('unattended-row')).toBeNull()
+  })
+
+  describe('lifecycle (PU-2c critic)', () => {
+    /** Every call's signal and its release, in order, per host. */
+    function controlled() {
+      const calls: { hostId: string; before?: number; signal?: AbortSignal; release: (v: UnattendedView) => void }[] = []
+      mockedGet.mockImplementation((hostId, q, signal) => new Promise<UnattendedView>((res) => {
+        calls.push({ hostId, before: q?.before, signal, release: res })
+      }))
+      return calls
+    }
+
+    it('StrictMode: the first setup\'s reads are aborted and a late old answer never overwrites the newer one', async () => {
+      const calls = controlled()
+      const anchorRef = createRef<HTMLDivElement>()
+      render(<StrictMode><div ref={anchorRef} /><UnattendedPanel hostIds={[A]} anchorRef={anchorRef} onClose={vi.fn()} /></StrictMode>)
+      await flush()
+      expect(calls).toHaveLength(2) // setup, cleanup, setup
+      expect(calls[0].signal!.aborted).toBe(true)
+      expect(calls[1].signal!.aborted).toBe(false)
+      await act(async () => { calls[1].release(page([approved('new', at(9, 0))])) })
+      expect(rows()).toEqual(['mlab：sess-new · 接力申請 · 09:00'])
+      await act(async () => { calls[0].release(page([approved('old', at(7, 0))])) }) // the cancelled one arrives late
+      expect(rows()).toEqual(['mlab：sess-new · 接力申請 · 09:00'])
+    })
+
+    it('StrictMode: a late old answer does not commit even before the newer one has arrived', async () => {
+      const calls = controlled()
+      const anchorRef = createRef<HTMLDivElement>()
+      render(<StrictMode><div ref={anchorRef} /><UnattendedPanel hostIds={[A]} anchorRef={anchorRef} onClose={vi.fn()} /></StrictMode>)
+      await flush()
+      await act(async () => { calls[0].release(page([approved('old', at(7, 0))])) })
+      expect(screen.queryByTestId('unattended-row')).toBeNull()
+      expect(document.querySelector('[aria-busy]')!.getAttribute('aria-busy')).toBe('true')
+    })
+
+    it('closing the panel aborts the first read and 「顯示更多」, and leaves no timer behind', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const calls = controlled()
+      const { unmount } = open([A])
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(calls).toHaveLength(1)
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      unmount()
+      expect(calls[0].signal!.aborted).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('closing the panel with a 「顯示更多」 read in flight aborts that read and clears its timer', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const calls = controlled()
+      const { unmount } = open([A])
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      await act(async () => { calls[0].release(page([approved('a2', at(9, 0))], { truncated: true, next_before: 5 })) })
+      fireEvent.click(screen.getByTestId('unattended-more'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(calls).toHaveLength(2)
+      expect(calls[1].signal!.aborted).toBe(false)
+      unmount()
+      expect(calls[1].signal!.aborted).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    })
   })
 
   it('the panel title and the close button come from the FloatingPanel', async () => {

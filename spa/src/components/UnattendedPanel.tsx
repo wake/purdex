@@ -48,17 +48,50 @@ const codeOf = (e: unknown) => (e instanceof ApprovalApiError ? e.code : 'error'
 export const HOST_READ_TIMEOUT_MS = 10_000
 
 /**
- * One host's page, bounded: a host that has not answered in `HOST_READ_TIMEOUT_MS` fails as `timeout` (its request is
- * aborted) so a single silent daemon never keeps the others' rows, or the panel's busy state, hostage.
+ * What one effect setup owns: every request and timer it started, and whether it was cancelled. A cancelled setup is
+ * cancelled for good (the flag is never reset): StrictMode runs setup, cleanup, setup on one mount, and a late answer
+ * of the first setup must not read a shared "alive" the second setup has flipped back to true.
  */
-function readPage(hostId: string, before: number | undefined): Promise<UnattendedView> {
-  const ctl = new AbortController()
+class Lifecycle {
+  cancelled = false
+  private readonly controllers = new Set<AbortController>()
+  private readonly timers = new Set<ReturnType<typeof setTimeout>>()
+
+  /** Start a bounded request owned by this lifecycle. */
+  track(): { ctl: AbortController; arm: (ms: number, onTimeout: () => void) => () => void } {
+    const ctl = new AbortController()
+    this.controllers.add(ctl)
+    const arm = (ms: number, onTimeout: () => void) => {
+      const timer = setTimeout(() => { this.timers.delete(timer); onTimeout() }, ms)
+      this.timers.add(timer)
+      return () => { clearTimeout(timer); this.timers.delete(timer); this.controllers.delete(ctl) }
+    }
+    return { ctl, arm }
+  }
+
+  cancel(): void {
+    this.cancelled = true
+    for (const t of this.timers) clearTimeout(t)
+    this.timers.clear()
+    for (const c of this.controllers) c.abort()
+    this.controllers.clear()
+  }
+}
+
+/**
+ * One host's page, bounded: a host that has not answered in `HOST_READ_TIMEOUT_MS` fails as `timeout` (its request is
+ * aborted) so a single silent daemon never keeps the others' rows, or the panel's busy state, hostage. The request and
+ * its timer belong to `life`: cancelling it aborts the request (rejecting as `aborted`) and clears the timer.
+ */
+function readPage(life: Lifecycle, hostId: string, before: number | undefined): Promise<UnattendedView> {
+  const { ctl, arm } = life.track()
   return new Promise<UnattendedView>((resolve, reject) => {
-    const timer = setTimeout(() => { ctl.abort(); reject(new ApprovalApiError(0, 'timeout')) }, HOST_READ_TIMEOUT_MS)
+    ctl.signal.addEventListener('abort', () => reject(new ApprovalApiError(0, 'aborted')), { once: true })
+    const done = arm(HOST_READ_TIMEOUT_MS, () => { reject(new ApprovalApiError(0, 'timeout')); ctl.abort() })
     getUnattended(hostId, before === undefined ? undefined : { before }, ctl.signal).then(
       // `list_failed` is the PUT's flag (the daemon's GET never sets it): if it ever comes, `approved` says nothing.
-      (v) => { clearTimeout(timer); if (v.list_failed === true) reject(new ApprovalApiError(200, 'list_failed')); else resolve(v) },
-      (e: unknown) => { clearTimeout(timer); reject(e) },
+      (v) => { done(); if (v.list_failed === true) reject(new ApprovalApiError(200, 'list_failed')); else resolve(v) },
+      (e: unknown) => { done(); reject(e) },
     )
   })
 }
@@ -84,22 +117,26 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
   // Each host commits its own answer the moment it arrives; a host absent here has not answered yet.
   const [pages, setPages] = useState<Record<string, HostPages>>({})
   const [paging, setPaging] = useState(false)
-  const alive = useRef(true)
+  // The current effect setup's lifecycle (null between a cleanup and the next setup, and after unmount). Callbacks hold
+  // the lifecycle they started under, never this ref, so an old setup's answer cannot commit.
+  const lifeRef = useRef<Lifecycle | null>(null)
   const pagingNow = useRef(false)
 
   useEffect(() => {
-    alive.current = true
+    const life = new Lifecycle()
+    lifeRef.current = life
     for (const hostId of hosts) {
-      void readPage(hostId, undefined).then(
+      void readPage(life, hostId, undefined).then(
         (v) => firstPage(v),
         (e: unknown): HostPages => ({ rows: [], since: 0, failed: codeOf(e) }),
-      ).then((p) => { if (alive.current) setPages((cur) => ({ ...cur, [hostId]: p })) })
+      ).then((p) => { if (!life.cancelled) setPages((cur) => ({ ...cur, [hostId]: p })) })
     }
-    return () => { alive.current = false }
+    return () => { life.cancel(); if (lifeRef.current === life) lifeRef.current = null }
   }, [hosts])
 
   const more = useCallback(async () => {
-    if (pagingNow.current) return
+    const life = lifeRef.current
+    if (pagingNow.current || life === null || life.cancelled) return
     // Only the hosts that said "more" (and whose cursor we hold): a host at its last page is not asked again.
     const todo = hosts.filter((h) => pages[h]?.nextBefore !== undefined)
     if (todo.length === 0) return
@@ -109,16 +146,16 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
     await Promise.all(todo.map(async (hostId) => {
       let patch: (cur: HostPages) => HostPages
       try {
-        const v = await readPage(hostId, pages[hostId].nextBefore)
+        const v = await readPage(life, hostId, pages[hostId].nextBefore)
         patch = (cur) => ({ ...cur, rows: [...cur.rows, ...v.approved], nextBefore: v.truncated ? v.next_before : undefined, failed: undefined })
       } catch (e) {
         const failed = codeOf(e)
         patch = (cur) => ({ ...cur, failed }) // the rows and the cursor stay: 「顯示更多」 retries
       }
-      if (alive.current) setPages((cur) => ({ ...cur, [hostId]: patch(cur[hostId]) }))
+      if (!life.cancelled) setPages((cur) => ({ ...cur, [hostId]: patch(cur[hostId]) }))
     }))
     pagingNow.current = false
-    if (alive.current) setPaging(false)
+    if (!life.cancelled) setPaging(false)
   }, [hosts, pages])
 
   const label = (hostId: string) => hostLabel(hostId, hostLookOf(hostId))
