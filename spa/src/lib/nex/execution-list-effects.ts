@@ -20,6 +20,8 @@ export const LIST_REFRESH_DEBOUNCE_MS = 500
 export const SAFETY_RECONCILE_MS = 120_000
 /** How long a suspect waits for a delta that explains it, once the stream has caught up with its page (§4.5). */
 export const SUSPECT_GRACE_MS = 1_500
+/** A walk older than this does not hold back the safety reconcile: the next tick replaces it (its answer is then stale and dropped). */
+export const WALK_DEADLINE_MS = 60_000
 
 /**
  * The only kinds the site stream is asked for (`?kind=`): those whose commit
@@ -151,6 +153,8 @@ interface HostListRuntime {
   baseline: { epoch: string; last: number } | null
   /** Deltas that arrive while a walk is in flight (§4.3); null between walks. */
   overlay: Overlay | null
+  /** When the walk that owns `overlay` started (ms); 0 between walks. */
+  walkStartedAt: number
   debounce: ReturnType<typeof setTimeout> | null
   fetchToken: number
   /** The 120 s safety reconcile (§4.5); only while a delta host has a subscriber. */
@@ -198,7 +202,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
   const runtimeOf = (hostId: string): HostListRuntime => {
     let rt = runtimes.get(hostId)
     if (!rt) {
-      rt = { subscribers: new Set(), generation: 0, sse: null, reserved: false, deltaCap: 'unknown', baseline: null, overlay: null, debounce: null, fetchToken: 0, safetyTimer: null, suspects: [] }
+      rt = { subscribers: new Set(), generation: 0, sse: null, reserved: false, deltaCap: 'unknown', baseline: null, overlay: null, walkStartedAt: 0, debounce: null, fetchToken: 0, safetyTimer: null, suspects: [] }
       runtimes.set(hostId, rt)
     }
     return rt
@@ -224,6 +228,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     const delta = rt.deltaCap === 'delta'
     const overlay: Overlay | null = delta ? new Map() : null
     rt.overlay = overlay
+    rt.walkStartedAt = Date.now()
     patchCache(hostId, (c) => (c.phase === 'ready' ? c : { ...c, phase: 'loading' }))
 
     const stillCurrent = () =>
@@ -232,7 +237,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
       && fingerprintOf(hostId) === fingerprint
       && infoReady(hostId)
       && rt.subscribers.size > 0
-    const endWalk = () => { if (rt.fetchToken === token) rt.overlay = null }
+    const endWalk = () => { if (rt.fetchToken === token) { rt.overlay = null; rt.walkStartedAt = 0 } }
 
     listAllExecutions(hostId, { includeArchived: false, delta }, stillCurrent)
       .then((result) => {
@@ -328,7 +333,11 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     rt.safetyTimer = setInterval(() => {
       if (rt.deltaCap !== 'delta' || rt.subscribers.size === 0 || !infoReady(hostId)) return
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
-      if (rt.overlay) return
+      if (rt.overlay) {
+        if (Date.now() - rt.walkStartedAt < WALK_DEADLINE_MS) return
+        // fetchAll bumps the token, so the hung walk can no longer commit or clear the new overlay.
+        console.warn('nex-delta: list walk exceeded its deadline; superseded', { hostId, ageMs: Date.now() - rt.walkStartedAt })
+      }
       fetchAll(hostId, true)
     }, SAFETY_RECONCILE_MS)
   }

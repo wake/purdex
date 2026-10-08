@@ -130,14 +130,27 @@ describe('the safety reconcile runs only while visible, subscribed and in delta 
     expect(listCalls()).toBe(n + 1)
   })
 
-  it('skips a tick while a walk is still in flight', async () => {
+  it('G3: a request that never settles is superseded by a later tick, which reconciles', async () => {
     await ready()
+    vi.mocked(api.listExecutions).mockReset().mockImplementationOnce(() => new Promise(() => {}))
+    await advance(SAFETY_MS) // the walk hangs
+    expect(listCalls()).toBe(1)
+    vi.mocked(api.listExecutions).mockResolvedValue(page(9, [row('a', { state: 'idle' })]))
+    await advance(SAFETY_MS) // the walk is older than the deadline: this tick replaces it
+    expect(listCalls()).toBe(2)
+    expect(stateOf('a')).toBe('idle')
+    expect(warn).toHaveBeenCalledWith('nex-delta: list walk exceeded its deadline; superseded', expect.objectContaining({ hostId: A }))
+  })
+
+  it('skips a tick while a young walk is still in flight', async () => {
+    await ready()
+    await advance(SAFETY_MS - 10_000)
     vi.mocked(api.listExecutions).mockReset().mockImplementation(() => new Promise(() => {}))
-    await advance(SAFETY_MS)
-    const n = listCalls()
-    expect(n).toBe(1)
-    await advance(SAFETY_MS)
-    expect(listCalls()).toBe(n)
+    store().onHello(A, { epoch: E1, bseq: 0 }) // a walk starts 10 s before the tick and hangs
+    await advance(0)
+    expect(listCalls()).toBe(1)
+    await advance(10_000) // the tick: the walk is younger than the deadline
+    expect(listCalls()).toBe(1)
   })
 
   it('a hello with nobody subscribed schedules nothing', async () => {
