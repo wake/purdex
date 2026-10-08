@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -49,7 +50,9 @@ func TestLockOrder_ConcurrentPaths(t *testing.T) {
 	r.m.modTick = time.Millisecond
 	r.m.startModLights()
 
-	// Keep the events bus from filling up; its content is not the point.
+	// Keep the events bus from filling up. Only the codes it carries matter:
+	// the test checks afterwards that the non-tmux path really emitted.
+	seen := &codeSet{}
 	stopDrain := make(chan struct{})
 	var drainWG sync.WaitGroup
 	drainWG.Add(1)
@@ -57,7 +60,11 @@ func TestLockOrder_ConcurrentPaths(t *testing.T) {
 		defer drainWG.Done()
 		for {
 			select {
-			case <-r.sub.SendCh():
+			case msg := <-r.sub.SendCh():
+				var env struct{ Type, Session string }
+				if json.Unmarshal(msg, &env) == nil && env.Type == "hook" {
+					seen.Add(env.Session)
+				}
 			case <-stopDrain:
 				return
 			}
@@ -84,6 +91,22 @@ func TestLockOrder_ConcurrentPaths(t *testing.T) {
 				Session: "work", AgentType: "cc", Reason: "probe:activity",
 				Mapping: mappingTo(want), StaleCheck: staleAlways,
 			})
+		},
+		// Every other way into the emit slot: a sweep emit, the pane-bound
+		// probe and a non-tmux hook (empty session name).
+		"sweep emit": func(int) { r.m.broadcastProxyPruned(store.Frame{PaneID: "%5", AgentType: "cc"}) },
+		"pane probe": func(i int) {
+			want := agentpkg.StatusRunning
+			if i%2 == 1 {
+				want = agentpkg.StatusIdle
+			}
+			applyPaneProbe(r.m, probeGuardArgs{
+				Session: "work", PaneID: "%5", AgentType: "cc", Reason: "probe:pane",
+				StaleCheck: staleAlways,
+			}, want)
+		},
+		"non-tmux hook": func(int) {
+			postEvent(r.m, `{"tmux_session":"","tmux_pane_id":"",`+nonTmuxTail+`,"raw_event":{"session_id":"lock-test"}}`)
 		},
 		"rename": func(i int) {
 			if i%2 == 0 {
@@ -125,4 +148,36 @@ func TestLockOrder_ConcurrentPaths(t *testing.T) {
 		t.Fatalf("deadlock: the concurrent paths did not all finish (%d loops)", len(loops))
 	}
 	r.m.stopModLights()
+	// The drain is stopped by Cleanup; give it what is already queued.
+	if code := NonTmuxAgentCode("lock-test"); !seen.wait(code, 2*time.Second) {
+		t.Fatalf("the non-tmux path never emitted %s: the test is not exercising it", code)
+	}
+}
+
+// codeSet is a set of session codes safe for the drain goroutine and the test.
+type codeSet struct {
+	mu    sync.Mutex
+	codes map[string]bool
+}
+
+func (c *codeSet) Add(code string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.codes == nil {
+		c.codes = make(map[string]bool)
+	}
+	c.codes[code] = true
+}
+
+// wait reports whether code was added within d.
+func (c *codeSet) wait(code string, d time.Duration) bool {
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		c.mu.Lock()
+		ok := c.codes[code]
+		c.mu.Unlock()
+		if ok {
+			return true
+		}
+	}
+	return false
 }
