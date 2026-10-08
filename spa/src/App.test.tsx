@@ -42,7 +42,7 @@ vi.mock('./hooks/useNewTabBootstrap', () => ({ useNewTabBootstrap: vi.fn() }))
 vi.mock('./hooks/useWorkspaceWindowActions', () => ({
   useWorkspaceWindowActions: () => ({ handleWsTearOff: vi.fn(), handleWsMergeTo: vi.fn() }),
 }))
-vi.mock('./hooks/useTabWorkspaceActions', () => ({
+vi.mock('./features/workspace/hooks', () => ({
   useTabWorkspaceActions: () => ({
     contextMenu: null,
     setContextMenu: vi.fn(),
