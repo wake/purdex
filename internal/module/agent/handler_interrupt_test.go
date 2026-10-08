@@ -64,6 +64,69 @@ func TestHandler_InterruptIdlesExistingFrame(t *testing.T) {
 	}
 }
 
+// Esc's idle is only as new as the interrupt itself: a frame a newer event has
+// already written (here a running turn stamped later than the interrupt)
+// keeps its status and nothing is emitted (U1-2a-4 F2).
+func TestHandler_InterruptNeverOverwritesNewerFrame(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	seedCCFrameWithSubagentReal(t, m, "agent-X")
+	row := findCCFrameRow(t, m)
+	newer := time.Now().Add(time.Hour).UnixNano()
+	if err := m.frames.UpdateStatusAndLastSeen(row.FrameID, agentpkg.StatusRunning, newer); err != nil {
+		t.Fatalf("seed newer running: %v", err)
+	}
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, interruptBody(""))
+
+	got := findCCFrameRow(t, m)
+	if got.Status != agentpkg.StatusRunning || got.LastSeenAt != newer {
+		t.Fatalf("frame = status %q last_seen %d, want running at %d untouched", got.Status, got.LastSeenAt, newer)
+	}
+	if msgs := drainBroadcasts(sub, 150*time.Millisecond); len(msgs) != 0 {
+		t.Fatalf("broadcasts = %+v, want none", msgs)
+	}
+}
+
+// The race itself: between the interrupt's read of the frame and its write,
+// another hook writes running with a newer stamp. The conditional write loses
+// (its expected last_seen no longer matches), the re-read shows a newer
+// frame, and the interrupt gives way: running survives and idle is not sent.
+func TestHandler_InterruptLosesRaceToNewerRunning(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	seedCCFrameWithSubagentReal(t, m, "agent-X")
+	sendBody(t, m, promptBody())
+	row := findCCFrameRow(t, m)
+
+	fired := false
+	orig := interruptBeforeWriteFn
+	interruptBeforeWriteFn = func(m *Module) {
+		if fired {
+			return
+		}
+		fired = true
+		if err := m.frames.UpdateStatusAndLastSeen(row.FrameID, agentpkg.StatusRunning, time.Now().Add(time.Hour).UnixNano()); err != nil {
+			t.Errorf("racing writer: %v", err)
+		}
+	}
+	t.Cleanup(func() { interruptBeforeWriteFn = orig })
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, interruptBody(""))
+
+	if !fired {
+		t.Fatal("the seam between the read and the write never ran")
+	}
+	if got := findCCFrameRow(t, m).Status; got != agentpkg.StatusRunning {
+		t.Fatalf("frame status = %q, want running (the newer write must survive)", got)
+	}
+	if msgs := drainBroadcasts(sub, 150*time.Millisecond); len(msgs) != 0 {
+		t.Fatalf("broadcasts = %+v, want none: idle must not be sent over a newer running", msgs)
+	}
+}
+
 // A failure hook that arrives after the frame is gone must not bring it back
 // (the detail-only branch's rule, unchanged by giving interrupts a status).
 func TestHandler_InterruptNeverResurrects(t *testing.T) {
