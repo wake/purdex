@@ -22,7 +22,7 @@ type Post = { url: string; init: any; body: any; at: number }
 type W = {
   posts: Post[]
   sid: string
-  agents: any[] | 'fail'
+  agents: any[] | 'fail' | (() => Promise<any[]>) // a function: agent.list waits on what it returns
   pdxJSON: string | null
   decision: string // what tool.check answers beneath the mod
   daemon: (body: any, n: number) => Answer | Promise<Answer>
@@ -60,7 +60,7 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
   on('session.usage', async () => ({ value: { startedAt: 0, context: { tokens: 1000, window: 200000, percent: 1 }, rateLimits: [] } }))
   on('agent.list', async () => {
     if (w.agents === 'fail') throw new Error('agent list refused')
-    return { value: w.agents }
+    return { value: typeof w.agents === 'function' ? await w.agents() : w.agents }
   })
   on('fs.read', async (_$: any, e: any) => {
     if (e.path.endsWith('/pdx.json')) return w.pdxJSON === null ? { deny: 'ENOENT' } : { value: w.pdxJSON }
@@ -371,6 +371,25 @@ test('a startup SessionStart is not a switch; a resume is', async ($, on) => {
   await w.clock.advance(150)
   expect(types(w)).toEqual(['session.start', 'session.end', 'session.switch'])
   expect(ofType(w, 'session.switch')[0].data).toEqual({ prev_sid: SID1, source: 'resume' })
+})
+
+// Mutation gate: a beat checks only on its way in (or stopBeat leaves the beat in flight
+// valid) → the heartbeat waiting on agent.list lands after session.end.
+test('a heartbeat in flight when the session ends never lands after session.end', async ($, on) => {
+  let release: (() => void) | undefined
+  const w = evWorld(on)
+  await start($, w)
+  await w.clock.advance(150) // session.start acked
+  w.agents = () => new Promise<any[]>((r) => { release = () => r([]) })
+  await w.clock.advance(9_850) // the 10 s beat has begun: it waits on agent.list
+  expect(typeof release).toBe('function')
+  await end($, 'prompt_input_exit') // the final flush goes out inside the hook
+  expect(w.posts.length).toBe(2)
+  release!() // the beat in flight goes on now
+  await w.clock.settle()
+  await w.clock.advance(30_000)
+  expect(types(w)).toEqual(['session.start', 'session.end'])
+  expect(w.posts.length).toBe(2)
 })
 
 test('session.end flushes inside the hook', async ($, on) => {

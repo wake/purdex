@@ -62,6 +62,7 @@ const ev = {
   asks: new Set(), // tool_use_ids waiting on the person
   compacting: false, // the main conversation is compacting
   beat: null, // the heartbeat timer
+  beatGen: 0, // bumped when the heartbeat stops: a beat begun before then lands nowhere
 }
 
 const parse = (s) => { try { return JSON.parse(s) } catch { return null } }
@@ -225,12 +226,17 @@ function beatTick($) {
   void beat($).catch((err) => log($, 'heartbeat failed: ' + String(err)))
 }
 
+// beat reads the agents and queues one heartbeat — unless the heartbeat stopped while it
+// waited on $.agent.list (a session.end, a new session.start): stopping cancels the timer,
+// not a beat already past its start, so that one checks again on its way out.
 async function beat($) {
   if (!ev.on) return
+  const gen = ev.beatGen
   let agents = []
   try {
     agents = (await $.agent.list()).map((a) => ({ id: a.id, status: a.status }))
   } catch {}
+  if (gen !== ev.beatGen) return
   const data = { asks: [...ev.asks], compacting: ev.compacting, agents }
   if (ev.turnId) data.turn_id = ev.turnId
   enqueue($, 'heartbeat', data)
@@ -239,6 +245,7 @@ async function beat($) {
 function stopBeat() {
   if (ev.beat) ev.beat.cancel()
   ev.beat = null
+  ev.beatGen += 1
 }
 
 // ---- the session ----
@@ -285,11 +292,12 @@ async function sessionSwitch($, source) {
 
 // sessionEnd queues session.end under the ending session's own id and flushes inside the
 // hook. `session.end` also fires on /clear and /resume (reason clear / resume), after which
-// the same process and stream go on: the heartbeat stops only on the other reasons.
+// the same process and stream go on: the heartbeat stops only on the other reasons, before
+// the final flush, so nothing of it (not even a beat in flight) lands after session.end.
 async function sessionEnd($, e) {
   if (!ev.on) return
-  enqueue($, 'session.end', { reason: e.reason }, e.sessionId)
   if (e.reason !== 'clear' && e.reason !== 'resume') stopBeat()
+  enqueue($, 'session.end', { reason: e.reason }, e.sessionId)
   await finalFlush($)
 }
 
