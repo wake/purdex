@@ -194,6 +194,26 @@ func TestApply_UnknownTypeCountedNotDelivered(t *testing.T) {
 	}
 }
 
+// tool.approved (U1-2a-1) is a known type: counted under its own name,
+// kept in the ring and delivered.
+func TestApply_ToolApprovedIsDelivered(t *testing.T) {
+	reg := NewRegistry(newFakeClock().Now)
+	rec := &recorder{}
+	reg.Subscribe(rec.fn)
+	const s = "streamAPP"
+	approved := mkEvent(2, TypeToolApproved)
+	approved.Data = json.RawMessage(`{"tool_use_id":"tu-1"}`)
+	if _, err := reg.Apply(mkBatch(s, 0, mkEvent(1, TypeToolCheck), approved)); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := rec.list(), []string{s + "#1", s + "#2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("deliveries = %v, want %v", got, want)
+	}
+	if info := streamInfo(t, reg, s); info.Counts[TypeToolApproved] != 1 || info.Counts[CountUnknown] != 0 {
+		t.Fatalf("counts = %v", info.Counts)
+	}
+}
+
 func TestApply_DeliveryHoldsTheStream(t *testing.T) {
 	reg := NewRegistry(newFakeClock().Now)
 	const a, b = "streamAAA", "streamBBB"

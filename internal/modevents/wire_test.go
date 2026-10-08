@@ -148,7 +148,7 @@ func TestDecodeBatch_EnvelopeFieldsOptional(t *testing.T) {
 
 func TestKnownTypes(t *testing.T) {
 	want := []string{"session.start", "session.switch", "session.end", "turn.start", "turn.complete",
-		"tool.check", "tool.start", "tool.end", "agent.spawn", "compact.start", "compact.end",
+		"tool.check", "tool.start", "tool.end", "tool.approved", "agent.spawn", "compact.start", "compact.end",
 		"usage", "background", "heartbeat"}
 	got := KnownTypes()
 	if len(got) != len(want) {

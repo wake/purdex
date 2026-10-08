@@ -53,6 +53,7 @@ const (
 	TypeToolCheck     = "tool.check"
 	TypeToolStart     = "tool.start"
 	TypeToolEnd       = "tool.end"
+	TypeToolApproved  = "tool.approved" // a permission ask approved: its tool row started running
 	TypeAgentSpawn    = "agent.spawn"
 	TypeCompactStart  = "compact.start"
 	TypeCompactEnd    = "compact.end"
@@ -64,7 +65,7 @@ const (
 var knownTypes = []string{
 	TypeSessionStart, TypeSessionSwitch, TypeSessionEnd,
 	TypeTurnStart, TypeTurnComplete,
-	TypeToolCheck, TypeToolStart, TypeToolEnd,
+	TypeToolCheck, TypeToolStart, TypeToolEnd, TypeToolApproved,
 	TypeAgentSpawn, TypeCompactStart, TypeCompactEnd,
 	TypeUsage, TypeBackground, TypeHeartbeat,
 }
