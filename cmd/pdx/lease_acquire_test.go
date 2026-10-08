@@ -216,9 +216,17 @@ func TestAcquire_FailOpenOnRefusalsAndServerErrors(t *testing.T) {
 		"plain 500":    {500, map[string]string{}, "http_500"},
 	} {
 		d := &fakeLeaseDaemon{post: func(resources.LeaseRequest) (int, any) { return c.code, c.body }}
-		code, stdout, _ := driveLease(t, context.Background(), d, nil, "acquire", "--kind", "build")
+		code, stdout, _ := driveLease(t, context.Background(), d, nil, "acquire", "--kind", "build", "--client-id", leaseCID)
 		if l := parseAcquireLine(t, stdout); code != ExitOK || !l.Granted || l.FailOpen != c.reason {
 			t.Errorf("%s: code=%d line=%+v", name, code, l)
+		}
+		// A 5xx may have made the row (the answer was lost): it is taken back by
+		// client id. A refusal made nothing, and a 409 must not delete the other
+		// request's lease.
+		_, _, deletes := d.snapshot()
+		wantDelete := c.code >= 500 && c.code != 503
+		if (len(deletes) == 1) != wantDelete || len(deletes) > 1 {
+			t.Errorf("%s: deletes = %v, want a cleanup: %v", name, deletes, wantDelete)
 		}
 	}
 	// A lease that ended before it was granted (cancelled elsewhere): go.
@@ -240,9 +248,12 @@ func TestAcquire_FailOpenOnHungPolls(t *testing.T) {
 		hold: true,
 	}
 	code, stdout, _ := driveLeaseWith(t, context.Background(), d, []daemonclient.Option{daemonclient.WithAttemptTimeout(30 * time.Millisecond)}, "acquire", "--kind", "build")
-	_, polls, _ := d.snapshot()
+	_, polls, deletes := d.snapshot()
 	if l := parseAcquireLine(t, stdout); code != ExitOK || !l.Granted || l.FailOpen != "daemon_not_answering" || polls < leaseMaxHungPolls {
 		t.Errorf("code=%d line=%+v polls=%d", code, l, polls)
+	}
+	if len(deletes) != 1 || !strings.Contains(deletes[0], "client_id=") {
+		t.Errorf("the row the polls were about was not taken back: %v", deletes)
 	}
 }
 
@@ -336,6 +347,20 @@ func TestRelease_BestEffort(t *testing.T) {
 	for _, args := range [][]string{{"release"}, {"release", "a", "b"}, {"release", "a", "--client-id", leaseCID}, {"release", "--client-id", "x"}} {
 		if code, _, _ := driveLease(t, context.Background(), &fakeLeaseDaemon{}, nil, args...); code != ExitUsage {
 			t.Errorf("%v: code %d, want usage", args, code)
+		}
+	}
+}
+
+// wait_s is whole seconds and 0 means the host's default: a shorter --wait is
+// rounded up, never turned into the default.
+func TestAcquire_WaitIsRoundedUpToWholeSeconds(t *testing.T) {
+	fixedHolder(t)
+	for wait, want := range map[string]int{"1ms": 1, "500ms": 1, "999ms": 1, "1s": 1, "1500ms": 2, "2m": 120, "0s": 0} {
+		d := &fakeLeaseDaemon{}
+		driveLease(t, context.Background(), d, nil, "acquire", "--kind", "build", "--wait", wait)
+		posts, _, _ := d.snapshot()
+		if len(posts) != 1 || posts[0].WaitS != want {
+			t.Errorf("--wait %s: wait_s = %+v, want %d", wait, posts, want)
 		}
 	}
 }

@@ -47,7 +47,10 @@ func (m *Module) addLeases(snap *resources.Snapshot) {
 		return
 	}
 	nowMs := nowT.UnixMilli()
-	set := m.settings()
+	set := resources.DefaultSettings() // before the first tick
+	if s := m.lastSettings.Load(); s != nil {
+		set = *s
+	}
 	use := m.leaseUseSnapshot()
 	for _, a := range active {
 		charge := resources.Charge(resources.Lease{ID: a.ID, Weight: a.Weight, GrantedAt: time.UnixMilli(a.GrantedAt),

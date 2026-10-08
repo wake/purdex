@@ -480,3 +480,24 @@ func TestSnapshot_LeaseChargeAndUse(t *testing.T) {
 		t.Fatalf("leases = %+v", snap.Leases)
 	}
 }
+
+// GET /api/resources reads no settings of its own: the settings the last tick
+// read are the ones its lease charges use.
+type noSettings struct{ t *testing.T }
+
+func (n noSettings) ResourcesSettings() (resources.Settings, error) {
+	n.t.Error("the snapshot route read the settings store")
+	return resources.Settings{}, nil
+}
+
+func TestSnapshot_DoesNotReadSettings(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	f.m.lastSettings.Store(&resources.Settings{})
+	f.held("h", 99, "", f.nowMS()-60000)
+	f.m.settingsSrc = noSettings{t}
+	snap := f.m.current()
+	f.m.addLeases(&snap)
+	if len(snap.Leases) != 1 {
+		t.Fatalf("leases = %+v", snap.Leases)
+	}
+}

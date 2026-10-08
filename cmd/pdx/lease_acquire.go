@@ -121,6 +121,11 @@ func parseAcquireFlags(args []string) (o acquireOpts, cfgPath string, msg string
 	case *holderStart != "" && !validHolderStartText(*holderStart):
 		return o, "", "--holder-start must be a process start time as ps prints it"
 	}
+	if *wait%time.Second != 0 {
+		// wait_s is whole seconds, and 0 means the host's default: a shorter
+		// wait is rounded up, never silently turned into the default.
+		*wait = (*wait/time.Second + 1) * time.Second
+	}
 	o = acquireOpts{kind: *kind, weight: *weight, wait: *wait, session: *session, toolUse: *toolUse,
 		holderPID: *holderPID, holderStart: *holderStart, clientID: *clientID}
 	if o.clientID == "" {
@@ -193,6 +198,11 @@ func leaseAcquire(ctx context.Context, client *daemonclient.Client, o acquireOpt
 		if ctx.Err() != nil {
 			return leaseCancel(client, o.clientID, stderr)
 		}
+		// The create may have gone through although the answer did not come
+		// back: take back what the client id may name before running.
+		if postMayHaveLanded(err) {
+			leaseCleanup(client, o.clientID, stderr)
+		}
 		return acquireOutcome{failOpen: leaseFailReason(err)}
 	}
 	hung := 0
@@ -213,10 +223,12 @@ func leaseAcquire(ctx context.Context, client *daemonclient.Client, o acquireOpt
 			}
 			if errors.Is(err, daemonclient.ErrNoAnswer) || errors.Is(err, context.DeadlineExceeded) {
 				if hung++; hung >= leaseMaxHungPolls {
+					leaseCleanup(client, o.clientID, stderr)
 					return acquireOutcome{failOpen: "daemon_not_answering"}
 				}
 				continue
 			}
+			leaseCleanup(client, o.clientID, stderr) // the row is ours, whatever the poll said
 			return acquireOutcome{failOpen: leaseFailReason(err)}
 		}
 		hung = 0
@@ -239,6 +251,31 @@ func leaseFailReason(err error) string {
 		return fmt.Sprintf("http_%d", se.Status)
 	}
 	return "error"
+}
+
+// postMayHaveLanded says whether a failed create may still have made the row:
+// the answer was lost (no answer, a write the daemon may have applied, a 5xx).
+// A refusal (4xx: the daemon looked at the request and said no) made nothing,
+// and a 409 client_id_reused must never delete the other request's lease. An
+// unreachable daemon cannot be asked again.
+func postMayHaveLanded(err error) bool {
+	var se *daemonclient.StatusError
+	switch {
+	case errors.Is(err, daemonclient.ErrNoAnswer), errors.Is(err, daemonclient.ErrSentNoResponse), errors.Is(err, context.DeadlineExceeded):
+		return true
+	case errors.As(err, &se):
+		return se.Status >= 500
+	}
+	return false
+}
+
+// leaseCleanup is a best-effort DELETE by client id before a fail-open: the
+// caller will run without an id to release, so what the daemon may hold for it
+// is taken back now. Short budget, no retry.
+func leaseCleanup(client *daemonclient.Client, clientID string, stderr io.Writer) {
+	dctx, cancel := context.WithTimeout(context.Background(), leaseReleaseTimeout)
+	defer cancel()
+	_, _ = client.Once(dctx, http.MethodDelete, "/api/resources/leases?client_id="+url.QueryEscape(clientID), nil, nil)
 }
 
 // leaseCancel is the caller being interrupted: a best-effort DELETE by client
