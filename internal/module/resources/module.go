@@ -98,8 +98,7 @@ func (m *Module) Init(c *core.Core) error {
 }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
-	// The GET route arrives with the handler (Task 0.7).
-	_ = mux
+	mux.HandleFunc("GET /api/resources", m.handleGet)
 }
 
 // Start launches the sampler goroutine: one tick at once, then one per
