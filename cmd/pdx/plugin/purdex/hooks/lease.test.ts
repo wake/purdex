@@ -188,11 +188,16 @@ const GRANT = (extra: object = {}) => JSON.stringify({ id: 'lease-1', granted: t
 const BASH_OK = { ref: 1, result: { stdout: 'ok', stderr: '', interrupted: false }, text: 'ok' }
 const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
-type Rig = { calls: string[][]; ran: string[]; sid: { v: string } }
+type Rig = { calls: string[][]; ran: string[]; sid: { v: string; mode: 'ok' | 'throw' | 'hang' } }
 // rig stands the engine up: `answer` is what pdx says to each call (by subcommand), `bash` the tool beneath.
 function rig(on: any, answer: (argv: string[]) => any, bash: (e: any) => any = () => BASH_OK, pdxJSON?: string): Rig {
-  const r: Rig = { calls: [], ran: [], sid: { v: 'sess-1' } }
-  on('session.id', () => ({ value: r.sid.v }))
+  const r: Rig = { calls: [], ran: [], sid: { v: 'sess-1', mode: 'ok' } }
+  on('session.id', () => {
+    if (r.sid.mode === 'throw') throw new Error('the engine refused session.id')
+    if (r.sid.mode === 'hang') return new Promise(() => {})
+    return { value: r.sid.v }
+  })
+  on('clock.sleep', async (_$: any, e: any) => { await new Promise((res) => setTimeout(res, e.ms)); return { value: undefined } })
   on('fs.read', (_$: any, e: any) => (pdxJSON !== undefined && e.path.endsWith('/pdx.json') ? { value: pdxJSON } : { deny: 'ENOENT' }))
   on('ui.log', () => ({ value: undefined }))
   on('process.run', (_$: any, e: any) => { r.calls.push([...e.argv]); return answer(e.argv) })
@@ -312,3 +317,15 @@ test('pdx.json names the binary and the config, for acquire and release alike', 
     expect(arg(a, '--config')).toBe('/tmp/pdx b/config.toml')
   }
 })
+
+for (const mode of ['throw', 'hang'] as const) {
+  test(`session.id ${mode === 'throw' ? 'rejects' : 'never answers'} → no lease is asked for, the command runs once with the worker cap`, async ($, on) => {
+    const r = rig(on, () => ok(GRANT()))
+    r.sid.mode = mode
+    const out = await bash($, 'npx vitest run')
+    expect(out.result).toEqual(BASH_OK.result)
+    expect(r.calls).toEqual([])
+    expect(r.ran).toEqual(['npx vitest run --maxWorkers=3'])
+    expect(out.context?.[0]).toContain('--maxWorkers=3')
+  })
+}

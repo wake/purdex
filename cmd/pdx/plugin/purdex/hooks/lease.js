@@ -374,6 +374,7 @@ function rewriteAt(command, depth) {
 
 const ACQUIRE_TIMEOUT_MS = 600_000 // $.process.run's cap; the daemon's own deadline is at most 590 s
 const RELEASE_TIMEOUT_MS = 5_000
+const PRE_MS = 3_000 // pdx.json and the session id: a read that has not answered by then is a failed one
 const WAIT_NOTE_MS = 1_000 // a wait shorter than this is not worth telling the model about
 const HEX = '0123456789abcdef'
 
@@ -387,11 +388,17 @@ function log($, text) {
   } catch {}
 }
 
+// bounded runs one engine read and gives its answer, or undefined when it rejects or has not answered
+// within PRE_MS: the hook must reach next(e) whatever those reads do, so the command is never held by them.
+async function bounded($, read) {
+  const cap = Promise.resolve().then(() => $.clock.sleep(PRE_MS)).then(() => undefined, () => undefined)
+  return Promise.race([Promise.resolve().then(read).catch(() => undefined), cap])
+}
+
 // leaseConfig reads pdx.json beside VERSION as ask.js does: the binary to run and the installing
 // daemon's config. Absent — as under `claude plugin test` — it is `pdx` from PATH and its default config.
 async function leaseConfig($) {
-  let cfg = null
-  try { cfg = parse(await $.fs.read($.plugin.root + '/pdx.json')) } catch {}
+  const cfg = parse(await bounded($, () => $.fs.read($.plugin.root + '/pdx.json')))
   return {
     bin: isObject(cfg) && typeof cfg.pdx === 'string' && cfg.pdx ? cfg.pdx : 'pdx',
     config: isObject(cfg) && typeof cfg.config === 'string' ? cfg.config : '',
@@ -459,12 +466,19 @@ async function leaseCall($, e, next) {
     if (w.changed) { command = w.command; rewritten = true }
   }
   const cfg = await leaseConfig($)
-  const sid = await $.session.id() // this call's: a /clear or a resume is picked up by the next one
+  const sid = await bounded($, () => $.session.id()) // this call's: a /clear or a resume is picked up by the next one
+  if (typeof sid !== 'string' || !sid) {
+    // Without a session the lease cannot be asked for: the command runs, with the cap if it was given one.
+    log($, 'no session id, the command runs without a lease')
+    const r = await next(rewritten ? { ...e, command } : e)
+    const notes = leaseNotes(rewritten, command, null)
+    return notes.length ? { ...r, context: [...(r.context ?? []), ...notes] } : r
+  }
   const clientId = newClientId()
   let answer = null
   try {
     try {
-      answer = readAcquire(await $.process.run([cfg.bin, 'lease', 'acquire', '--kind', c.kind, '--session', String(sid || ''),
+      answer = readAcquire(await $.process.run([cfg.bin, 'lease', 'acquire', '--kind', c.kind, '--session', sid,
         '--tool-use', String(e.tool_use_id || ''), ...(clientId ? ['--client-id', clientId] : []),
         ...(cfg.config ? ['--config', cfg.config] : [])], { timeoutMs: ACQUIRE_TIMEOUT_MS }))
     } catch (err) {
