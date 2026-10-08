@@ -275,6 +275,7 @@ export const useAgentStore = create<AgentState>()(
       // Store status (skip events with no status, e.g. SubagentStart/Stop)
       const status = event.status as AgentStatus | ''
       if (status) {
+        const prevStatus = get().statuses[key]
         set((s) => ({ statuses: { ...s.statuses, [key]: status } }))
 
         // running is unambiguous user activity — clear any leftover unread
@@ -289,6 +290,12 @@ export const useAgentStore = create<AgentState>()(
           })
           return
         }
+
+        // Stopgap: a reconnect replay re-sends every session's current status, and SPA
+        // statuses outlive a daemon restart — an unchanged (or first-seen) status is not
+        // news. Superseded by the interface-line U1-3 rework (`snapshot: true` +
+        // `(epoch, seq)`, docs/specs/2026-10-08-interface-u1-spec.md §7).
+        if (event.raw_event_name === 'replay' && (prevStatus === undefined || prevStatus === status)) return
 
         // Mark unread unless some pane of the active tab shows the agent
         // (#1853 — the notification dispatcher's rule). Notification raises

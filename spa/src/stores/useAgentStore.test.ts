@@ -641,3 +641,62 @@ describe('sanitizeOscTitle', () => {
     expect(sanitizeOscTitle('你好 world')).toBe('你好 world')
   })
 })
+
+// Reconnect replay (raw_event_name 'replay') re-sends every session's current status. SPA statuses survive a
+// daemon restart, so a replay of an unchanged status is not news and must not raise unread.
+describe('useAgentStore unread — reconnect replay of an unchanged status', () => {
+  const key = `${H}:dev`
+  const replay = (status: NormalizedEvent['status']): NormalizedEvent =>
+    ({ agent_type: 'cc', status, raw_event_name: 'replay', broadcast_ts: 1 })
+  const fire = (event: NormalizedEvent) => useAgentStore.getState().handleNormalizedEvent(H, 'dev', event)
+  const seed = (status: 'idle' | 'running' | 'waiting' | 'error') => useAgentStore.setState({ statuses: { [key]: status } })
+  const unread = () => useAgentStore.getState().unread[key]
+  const status = () => useAgentStore.getState().statuses[key]
+
+  it.each(['idle', 'waiting', 'error'] as const)('replay %s with the same previous status → no unread', (s) => {
+    seed(s)
+    fire(replay(s))
+    expect(status()).toBe(s)
+    expect(unread()).toBeUndefined()
+  })
+
+  it('replay idle after previous running (finished while offline) → unread', () => {
+    seed('running')
+    fire(replay('idle'))
+    expect(status()).toBe('idle')
+    expect(unread()).toBe(true)
+  })
+
+  it('replay waiting after previous idle → unread', () => {
+    seed('idle')
+    fire(replay('waiting'))
+    expect(status()).toBe('waiting')
+    expect(unread()).toBe(true)
+  })
+
+  it('replay idle with no previous status (fresh SPA load) → status stored, no unread', () => {
+    fire(replay('idle'))
+    expect(status()).toBe('idle')
+    expect(unread()).toBeUndefined()
+  })
+
+  it('replay of an unchanged status leaves an existing unread untouched', () => {
+    seed('idle')
+    useAgentStore.setState({ unread: { [key]: true } })
+    fire(replay('idle'))
+    expect(unread()).toBe(true)
+  })
+
+  it('replay running still clears unread', () => {
+    seed('idle')
+    useAgentStore.setState({ unread: { [key]: true } })
+    fire(replay('running'))
+    expect(unread()).toBeUndefined()
+  })
+
+  it('non-replay PdxStop idle after previous idle → unread (unchanged)', () => {
+    seed('idle')
+    fire({ agent_type: 'cc', status: 'idle', raw_event_name: 'PdxStop', broadcast_ts: 1 })
+    expect(unread()).toBe(true)
+  })
+})
