@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"encoding/json"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -114,5 +116,80 @@ func TestEmitSlot_BroadcastFailureDoesNotConsumeSeq(t *testing.T) {
 	r.m.core = &core.Core{Events: bus}
 	if !r.m.emitSession("code-work", "work", plainBuild) || r.m.emit.seq != 1 {
 		t.Fatalf("after the bus is back: seq = %d, want 1", r.m.emit.seq)
+	}
+}
+
+// TestEmitSlot_SeqContiguousAcrossSessions: one counter for the whole daemon.
+// Frames for two sessions, interleaved, reach a subscriber as 1, 2, 3, ...
+func TestEmitSlot_SeqContiguousAcrossSessions(t *testing.T) {
+	r := newWorkerRig(t)
+	r.m.core.BootID = "boot-a"
+	seedIdentityFrame(t, r.m, "%5", "cc", 200, "Sun Apr 20 01:30:00 2026", 10, modSID1, "/w")
+	seedIdentityFrame(t, r.m, "%6", "cc", 201, "Sun Apr 20 01:30:01 2026", 11, "S-other", "/o")
+
+	for _, step := range []struct{ code, name string }{
+		{"code-work", "work"}, {"code-other", "other"}, {"code-other", "other"},
+		{"code-work", "work"}, {"code-other", "other"},
+	} {
+		if !r.m.emitSession(step.code, step.name, plainBuild) {
+			t.Fatalf("emit %+v did not go out", step)
+		}
+	}
+	got := r.drain(t)
+	if len(got) != 5 {
+		t.Fatalf("%d frames, want 5: %+v", len(got), got)
+	}
+	for i, f := range got {
+		if f.Ev.Seq != uint64(i+1) || f.Ev.Epoch != "boot-a" {
+			t.Fatalf("frame %d (%s) = epoch %q seq %d, want boot-a/%d", i, f.Session, f.Ev.Epoch, f.Ev.Seq, i+1)
+		}
+	}
+}
+
+// TestEmitSlot_WireJSON: epoch and seq are in the frame's value, always, as
+// the first frame's raw JSON shows.
+func TestEmitSlot_WireJSON(t *testing.T) {
+	r := newWorkerRig(t)
+	r.m.core.BootID = "boot-a"
+	seedIdentityFrame(t, r.m, "%5", "cc", 200, "Sun Apr 20 01:30:00 2026", 10, modSID1, "/w")
+	if !r.m.emitSession("code-work", "work", plainBuild) {
+		t.Fatal("emit did not go out")
+	}
+	var env struct{ Value string }
+	if err := json.Unmarshal(<-r.sub.SendCh(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(env.Value, `"epoch":"boot-a","seq":1`) {
+		t.Fatalf("value = %s, want it to carry \"epoch\":\"boot-a\",\"seq\":1", env.Value)
+	}
+}
+
+// TestEmitSlot_EpochRotatesAtMax: at the largest integer a JS client counts
+// exactly the counter starts over under a new epoch, which a client takes as
+// "not mine, wait for a snapshot".
+func TestEmitSlot_EpochRotatesAtMax(t *testing.T) {
+	if hookSeqMax != 1<<53-1 {
+		t.Fatalf("hookSeqMax = %d, want 2^53-1", hookSeqMax)
+	}
+	r := newWorkerRig(t)
+	r.m.core.BootID = "boot-a"
+	r.m.emit.seqMax = 3
+	seedIdentityFrame(t, r.m, "%5", "cc", 200, "Sun Apr 20 01:30:00 2026", 10, modSID1, "/w")
+	for i := 0; i < 5; i++ {
+		if !r.m.emitSession("code-work", "work", plainBuild) {
+			t.Fatalf("emit %d did not go out", i)
+		}
+	}
+	type pos struct {
+		epoch string
+		seq   uint64
+	}
+	var got []pos
+	for _, f := range r.drain(t) {
+		got = append(got, pos{f.Ev.Epoch, f.Ev.Seq})
+	}
+	want := []pos{{"boot-a", 1}, {"boot-a", 2}, {"boot-a", 3}, {"boot-a-1", 1}, {"boot-a-1", 2}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("frames = %v, want %v", got, want)
 	}
 }

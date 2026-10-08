@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"log"
+	"strconv"
 	"sync"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
@@ -28,8 +29,39 @@ import (
 // Module.sendFrameSnapshot (the subscribe-time replay).
 type hookEmitter struct {
 	mu sync.Mutex
-	// seq counts the frames the slot has broadcast. Protected by mu.
-	seq uint64
+	// seq counts the frames broadcast under epoch; epoch is core.BootID, or
+	// BootID-n after n rotations. All protected by mu.
+	seq       uint64
+	epoch     string
+	rotations int
+	// seqMax is the largest seq before the epoch rotates; 0 means
+	// hookSeqMax. A test seam: no run gets near it.
+	seqMax uint64
+}
+
+// hookSeqMax is the largest integer a JS client represents exactly (2^53-1):
+// the seq after it starts a new epoch at 1.
+const hookSeqMax uint64 = 1<<53 - 1
+
+// stamp takes the next (epoch, seq) for n. It returns an undo for a frame
+// that could not be sent, so a hole never reaches a subscriber. Under mu.
+func (e *hookEmitter) stamp(boot string, n *agentpkg.NormalizedEvent) (undo func()) {
+	prevSeq, prevEpoch, prevRotations := e.seq, e.epoch, e.rotations
+	limit := e.seqMax
+	if limit == 0 {
+		limit = hookSeqMax
+	}
+	if e.epoch == "" {
+		e.epoch = boot
+	}
+	if e.seq >= limit {
+		e.rotations++
+		e.epoch = boot + "-" + strconv.Itoa(e.rotations)
+		e.seq = 0
+	}
+	e.seq++
+	n.Epoch, n.Seq = e.epoch, e.seq
+	return func() { e.seq, e.epoch, e.rotations = prevSeq, prevEpoch, prevRotations }
 }
 
 // buildFn builds the frame to send from p, the session's projection as read
@@ -101,9 +133,13 @@ func (m *Module) emitSessionWith(code, sessionName string, build buildTolerantFn
 	if code == "" {
 		return false
 	}
-	e.seq++
+	boot := ""
+	if m.core != nil {
+		boot = m.core.BootID
+	}
+	undo := e.stamp(boot, &n)
 	if !m.emitNormalizedToCode(code, n) {
-		e.seq--
+		undo()
 		return false
 	}
 	m.recordEmittedLights(sessionName, p, n)
