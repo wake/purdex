@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="zh-Hant" data-page="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Team 分頁群組設計稿</title>
+<meta name="description" content="Purdex Team 介面確認包的設計稿：lead 與 member 在側欄縮排、上方 tab 列群組、未開 member 三種顯示方式，可點擊操作。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  /* page chrome (light) */
+  --bg:#eef0f3; --paper:#fff; --line:#d5dbe2; --fg:#18212b; --fg2:#55636f; --fg3:#7f8c98; --chip:#e6e9ee; --chip-on:#4f4183; --chip-on-fg:#fff; --hl:rgba(79,65,131,.12);
+  /* Purdex app tokens (spa/src/styles/themes.css · dark) */
+  --s1:#0a0a1a; --s2:#12122a; --s3:#08081a; --se:#1e1e3e; --sh:#1a1a32; --sa:#272444; --si:#2a2a2a;
+  --t1:#e0e0e0; --t2:#9ca3af; --t3:#6b7280; --bd:#404040; --bs:#2a2a2a; --ac:#7a6aaa; --acm:rgba(122,106,170,.3);
+  --err:#e06c75; --warn:#c8b560; --ok:#7ec699; --info:#7aa2e8; --actfg:#fff;
+  --team:#7dd3fc;
+  --sans:"Noto Sans TC",-apple-system,BlinkMacSystemFont,"PingFang TC",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --ctlh:96px;
+}
+:root[data-page="dark"]{ --bg:#0f1419; --paper:#161c24; --line:#2a3441; --fg:#e4e9ef; --fg2:#a2aeba; --fg3:#71808e; --chip:#1d252f; --chip-on:#a596d6; --chip-on-fg:#0f1419; --hl:rgba(165,150,214,.16); }
+.app[data-theme="light"]{
+  --s1:#f5f5f5; --s2:#e8e8e8; --s3:#f0f0f0; --se:#ffffff; --sh:#e0e0e0; --sa:#d4d0e8; --si:#ffffff;
+  --t1:#1a1a2e; --t2:#4b5563; --t3:#7b8494; --bd:#c9c9d4; --bs:#dedee6; --ac:#6a5a9e; --acm:rgba(106,90,158,.18);
+  --err:#c2414b; --warn:#9a7d10; --ok:#2f8a57; --info:#3867c4; --actfg:#1a1a2e;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+header.top{max-width:1360px;margin:0 auto;padding:22px 16px 6px}
+header.top h1{font-size:22px;margin:0 0 4px}
+header.top p{margin:0;color:var(--fg2);font-size:13.5px;max-width:90ch}
+.controls{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line)}
+.controls .in{max-width:1360px;margin:0 auto;padding:10px 16px;display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.cg{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.cg .lb{font-size:11.5px;color:var(--fg3);font-weight:700;letter-spacing:.06em}
+.seg{display:inline-flex;background:var(--chip);border-radius:8px;padding:2px;flex-wrap:wrap}
+.seg button{border:0;background:transparent;color:var(--fg2);font:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;cursor:pointer;white-space:nowrap}
+.seg button.on{background:var(--chip-on);color:var(--chip-on-fg);font-weight:700}
+.seg button:disabled{opacity:.4;cursor:not-allowed}
+.seg.act button{border:1px solid var(--line);margin:1px}
+.seg.act button:hover:not(:disabled){background:var(--hl)}
+main{max-width:1360px;margin:0 auto;padding:16px;display:grid;gap:18px;grid-template-columns:minmax(0,1fr)}
+@media (min-width:1180px){main{grid-template-columns:minmax(0,1fr) 360px}
+  aside.caps{position:sticky;top:calc(var(--ctlh) + 12px);max-height:calc(100vh - var(--ctlh) - 24px);overflow-y:auto}}
+@media (max-width:720px){.controls{position:static}}
+.stage{min-width:0}
+.appwrap{overflow-x:auto;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+aside.caps{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-size:13px;align-self:start;min-width:0}
+aside.caps h2{font-size:14px;margin:0 0 2px}
+aside.caps .sub{color:var(--fg3);font-size:12px;margin-bottom:10px}
+aside.caps ol{list-style:none;margin:0;padding:0}
+aside.caps li{padding:7px 8px;border-bottom:1px solid var(--line);border-radius:6px;transition:background .2s}
+aside.caps li:last-child{border-bottom:0}
+aside.caps li b.t{display:block;font-size:13px}
+aside.caps li b.t i{font-style:normal;font-family:var(--mono);color:var(--chip-on);margin-right:6px}
+aside.caps .rule{display:block;color:var(--fg2)}
+aside.caps .rec{display:block;color:#2c7a58;font-size:12.5px}
+:root[data-page="dark"] aside.caps .rec{color:#6fcf9f}
+aside.caps .ask{display:block;color:#a86a12;font-size:12.5px}
+:root[data-page="dark"] aside.caps .ask{color:#e0b062}
+aside.caps code{font-family:var(--mono);font-size:11px;background:var(--chip);padding:0 4px;border-radius:4px}
+.hl,.core.hl{background:var(--hl)}
+.core{border:2px solid var(--chip-on);border-radius:10px;padding:10px 12px;margin-bottom:12px;background:var(--paper);transition:background .2s}
+.core .badge{display:inline-block;font-size:11px;font-weight:700;background:var(--chip-on);color:var(--chip-on-fg);border-radius:999px;padding:0 9px;margin-bottom:4px}
+.core h3{font-size:14.5px;margin:0 0 4px}
+.core p{margin:3px 0;color:var(--fg2)}
+.core .opt{border:1px solid var(--line);border-radius:8px;padding:6px 9px;margin:6px 0;display:flex;gap:8px;align-items:flex-start}
+.core .opt.rc{border-color:var(--chip-on);background:var(--hl)}
+.core .opt .o{flex:1;font-size:12.5px}
+.core .opt button{border:1px solid var(--line);background:var(--chip);color:var(--fg);font:inherit;font-size:11.5px;border-radius:6px;padding:1px 8px;cursor:pointer;white-space:nowrap}
+.core .opt button.on{background:var(--chip-on);color:var(--chip-on-fg);border-color:var(--chip-on)}
+.core .ios{margin-top:8px;font-size:12.5px;color:var(--fg2);border-top:1px dashed var(--line);padding-top:6px}
+.sw{display:flex;gap:5px;flex-wrap:wrap;margin:5px 0 0}
+.sw button{width:22px;height:22px;border-radius:6px;border:2px solid transparent;cursor:pointer;padding:0}
+.sw button.on{border-color:var(--fg)}
+.howto{max-width:1360px;margin:0 auto;padding:6px 16px 60px;color:var(--fg2);font-size:13.5px}
+.howto h2{font-size:17px;color:var(--fg);margin:14px 0 6px}
+.howto ol{padding-left:22px;margin:6px 0}
+.howto li{margin-bottom:4px}
+.howto code{font-family:var(--mono);font-size:12px;background:var(--chip);padding:0 5px;border-radius:4px}
+.howto .ex{background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-family:var(--mono);font-size:12.5px;margin:8px 0;overflow-x:auto;white-space:pre-wrap}
+
+/* ============ APP FRAME ============ */
+.app{min-width:780px;background:var(--s1);color:var(--t1);font-family:var(--sans);font-size:13px;line-height:1.5;border:1px solid #2b2b40;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;height:600px}
+.app button{font:inherit;color:inherit}
+.titlebar{display:flex;align-items:center;gap:10px;background:var(--s3);border-bottom:1px solid var(--bs);padding:7px 12px;font-size:12px;color:var(--t2)}
+.titlebar .dots{display:flex;gap:6px}.titlebar .dots i{width:11px;height:11px;border-radius:50%;background:#3a3a50;display:block}
+.titlebar .ttl{flex:1;text-align:center}
+.body{flex:1;display:flex;min-height:0}
+/* activity bar */
+.act-bar{width:232px;flex:none;background:var(--s2);border-right:1px solid var(--bs);padding:8px 6px;overflow-y:auto;font-size:12px}
+.act-bar.narrow{width:176px}
+.sb-h{font-size:10.5px;letter-spacing:.08em;color:var(--t3);font-weight:700;padding:2px 6px 6px}
+.wsrow{display:flex;align-items:center;gap:7px;padding:5px 6px;border-radius:6px;cursor:pointer;color:var(--t1);margin-top:4px}
+.wsrow:hover{background:var(--sh)}
+.wsrow.act{background:var(--sh);font-weight:700}
+.wsi{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;color:#fff;font-size:10px;font-style:normal;font-weight:700;flex:none}
+.wsrow .cnt{margin-left:auto;color:var(--t3);font-weight:400;font-size:11px}
+.irow{display:flex;align-items:center;gap:6px;height:26px;padding:0 6px 0 8px;margin:1px 0 1px 14px;border-radius:6px;border:1px solid transparent;color:var(--t2);cursor:pointer;position:relative;white-space:nowrap}
+.irow:hover{background:var(--sh);color:var(--t1)}
+.irow.act{background:var(--sa);color:var(--actfg)}
+.irow.ind{margin-left:34px}
+.irow .tt{overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+.irow.un{color:var(--t3);opacity:.75}
+.irow.un .tt{font-style:italic}
+.irow.dead .tt{text-decoration:line-through;opacity:.7}
+.caret{width:14px;height:18px;display:grid;place-items:center;font-size:12px;color:var(--t2);cursor:pointer;border-radius:4px;flex:none;margin-left:-6px}
+.caret:hover{background:var(--sh);color:var(--t1)}
+.irow .n{font-size:10.5px;background:var(--bs);color:var(--t2);border-radius:999px;padding:0 6px}
+.tag{font-size:10px;border:1px dashed var(--t3);color:var(--t3);border-radius:4px;padding:0 4px;flex:none}
+.tag.end{border-style:solid;color:var(--err);border-color:color-mix(in srgb,var(--err) 50%,transparent)}
+.orph{margin:-1px 0 3px 36px;font-size:10.5px;color:var(--t3)}
+.hint{margin:10px 6px;padding:7px 8px;border:1px dashed var(--bd);border-radius:6px;color:var(--t3);font-size:11.5px}
+/* status icons */
+.sd{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;background:var(--t3)}
+.sd.run{background:var(--ok);animation:br 1.6s ease-in-out infinite}
+.sd.idle{background:transparent;border:1.5px solid var(--t2)}
+.sd.wait{background:var(--warn)}
+.sd.dead{background:transparent;border:1.5px dashed var(--t3)}
+.sd.off{background:transparent;border:1.5px dotted var(--t3)}
+@keyframes br{0%,100%{opacity:1}50%{opacity:.4}}
+.gl{font-style:normal;font-size:10px;color:var(--t3);width:8px;text-align:center;flex:none;line-height:1}
+.hb{width:8px;height:8px;border-radius:2px;background:#4a8fd1;display:inline-block;flex:none}
+.pip{position:absolute;top:-4px;right:-4px;width:8px;height:8px;border-radius:50%;background:#b91c1c;z-index:2}
+.irow .pip{top:9px;right:8px}
+/* main column */
+.col{flex:1;min-width:0;display:flex;flex-direction:column}
+.tbwrap{position:relative;flex:none}
+.tabstrip{display:flex;align-items:flex-end;gap:2px;background:var(--s3);border-bottom:1px solid var(--bs);padding:4px 8px 0;height:36px;overflow-x:auto;overflow-y:hidden}
+.ttab{position:relative;flex:0 1 140px;width:140px;min-width:80px;height:26px;margin:0 1px 4px;display:flex;align-items:center;gap:6px;padding:0 6px 0 8px;font-size:12px;white-space:nowrap;cursor:pointer;border-radius:6px;border:1px solid transparent;background:var(--s2);color:var(--t3)}
+.ttab:hover{background:var(--sh);color:var(--t1)}
+.ttab.act{background:var(--sa);color:var(--actfg)}
+.ttab .tt{overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;text-align:left}
+.ttab.g::after{content:"";position:absolute;left:0;right:0;bottom:-4px;height:2px;border-radius:2px;background:var(--team)}
+.ttab.dead .tt{text-decoration:line-through;opacity:.7}
+.ttab .x{display:none;font-style:normal;text-decoration:none;width:16px;height:16px;line-height:16px;text-align:center;border-radius:4px;color:var(--t2);flex:none}
+.ttab.act .x,.ttab:hover .x{display:block}
+.ttab .x:hover{background:var(--bd)}
+.gc{display:inline-flex;align-items:center;flex:none;height:22px;margin:0 3px 6px 4px;border-radius:6px;background:var(--team);color:#0b1020;font-size:11.5px;font-weight:700;overflow:hidden}
+.gc button{border:0;background:transparent;color:#0b1020;height:100%;padding:0 8px;cursor:pointer;font-weight:700;font-size:11.5px;white-space:nowrap}
+.gc button:hover{background:rgba(0,0,0,.12)}
+.gc button.m{padding:0 6px;border-left:1px solid rgba(0,0,0,.2)}
+.menu{position:absolute;top:34px;z-index:30;min-width:230px;background:var(--se);border:1px solid var(--bd);border-radius:8px;box-shadow:0 10px 28px rgba(0,0,0,.35);padding:5px;font-size:12px}
+.menu .mh{color:var(--t3);font-size:11px;padding:3px 8px}
+.menu .mr{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;cursor:pointer}
+.menu .mr:hover{background:var(--sh)}
+.menu .mr .id{font-family:var(--mono);font-size:10.5px;color:var(--t3);margin-left:auto}
+.dragnote{flex:none;font-size:11.5px;color:var(--t3);background:var(--s1);border-bottom:1px dashed var(--bs);padding:4px 12px}
+.dragnote b{color:var(--t2)}
+.content{flex:1;overflow-y:auto;padding:16px 20px}
+.ctitle{font-size:12px;color:var(--t3)}
+.cname{font-size:22px;font-weight:700;margin:0 0 8px;display:flex;align-items:center;gap:10px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;font-size:12.5px;margin-bottom:14px}
+.kv dt{color:var(--t3)} .kv dd{margin:0;color:var(--t1)}
+.mono{font-family:var(--mono);font-size:11.5px}
+.panel{border:1px solid var(--bs);background:var(--s2);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:12.5px}
+.panel h4{margin:0 0 4px;font-size:11px;letter-spacing:.06em;color:var(--t3)}
+.panel .r{display:flex;align-items:center;gap:8px;padding:2px 0}
+.panel .r .id{font-family:var(--mono);font-size:11px;color:var(--t3)}
+.panel .r .st{margin-left:auto;color:var(--t3);font-size:11.5px}
+.panel.note{border-color:var(--ac);background:var(--acm)}
+.panel.logp{border-style:dashed}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Team 分頁群組設計稿</h1>
+  <p>用 Purdex 實際的側欄與 tab 列畫出 lead「purdex-1f」與它的 member α／β／γ。上方控制列切換「還沒開成 tab 的 member 怎麼出現」「tab 位置」「群組顯示設定」並觸發事件；點分頁、點群組標籤、點側欄箭頭都會動。右邊十項是要你回答的待確認事項，最近碰的那一項會亮起來。</p>
+</header>
+
+<div class="controls"><div class="in" id="controls"></div></div>
+
+<main>
+  <div class="stage"><div class="appwrap" id="stage"></div></div>
+  <aside class="caps" id="caps">
+    <div class="core" data-i="1" id="core">
+      <span class="badge">核心問題 · 第 1 項</span>
+      <h3>還沒開成 tab 的 member 怎麼出現</h3>
+      <p>spawn 出來的 member 跑在 daemon 建的 tmux session（<code>tm-…</code>），App 不會替它開 tab。plan 原本的縮排與群組只看「已開著的 tab」：lead 剛 spawn 3 個 member、你只開著 lead 與 notes 時，側欄和上方 tab 列都看不出 lead 有 3 個 member。</p>
+      <div class="opt" data-o="a"><div class="o"><b>(a)</b> 維持只看已開 tab。你得手動到「新分頁 → session 清單」開 <code>tm-a1</code> 等；「看不出誰在跑誰」沒解決。</div><button data-act="set" data-k="mode" data-v="a">套用</button></div>
+      <div class="opt" data-o="b"><div class="o"><b>(b)</b> spawn 時自動在 lead 的工作區開 member tab（不搶焦點、放進 lead 群組）。一定看得到，但一次 spawn 5 個就多 5 個 tab，關掉也不會自己回來。</div><button data-act="set" data-k="mode" data-v="b">套用</button></div>
+      <div class="opt rc" data-o="c"><div class="o"><b>(c) 建議</b> member 不論開沒開都列出：側欄 lead 底下全列、未開的淡色標「未開」，點一下才開（開在 lead 旁邊）；tab 列標籤顯示總數，「▾」列出全部 member。一定看得到誰在跑誰，又不會冒出一堆 tab；關掉 member tab 只是回到「未開」。</div><button data-act="set" data-k="mode" data-v="c">套用</button></div>
+      <p><span style="color:#a86a12;font-weight:700">附帶：</span>選 b 或 c 時，member 的 tab 標題建議用 member 的 title（spawn 時 <code>--title</code> 給的，例如「team-view」），沒有就用 tmux 名。</p>
+      <div class="ios"><b>iOS 與其他 client：</b>名單來自 daemon 同一份 roster（<code>team.roster</code> 事件／<code>GET /api/team/roster</code>），跟 tab 無關。iOS 沒有 tab 列，可直接在 session 清單把 member 縮在 lead 底下（等同 (c) 的側欄做法）。所以 (c) 的「依名單顯示」在 Mac 與 iOS 是同一套規則，(a)／(b) 則是 Mac 專屬的 tab 行為。</div>
+    </div>
+    <h2>其餘待確認項目（2–10）</h2>
+    <div class="sub">每項：規則 → 建議 → 待確認。</div>
+    <ol>
+      <li data-i="2"><b class="t"><i>2</i>側欄縮排在哪裡看得到</b>
+        <span class="rule">縮排只出現在側欄「每個工作區底下的 tab 清單」，該清單只在 tab 位置為「左側」或「兩側」時存在；預設「上方」時側欄沒有清單，只看得到上方群組。</span>
+        <span class="rec">建議：維持，縮排跟側欄 tab 清單，不另外在 Workers 清單加（Workers 是執行體，不會長期擁有 team 角色，D-U24-5）。</span>
+        <span class="ask">待確認：或改成 tab 在上方時側欄另加「Teams」區塊？範圍變大；選第 1 項 (c) 多半就不需要。</span></li>
+      <li data-i="3"><b class="t"><i>3</i>側欄縮排長怎樣</b>
+        <span class="rule">member 緊接 lead 底下、縮一層；lead 左邊有收合箭頭，收合時只剩 lead 與 member 數；正在看的 tab 被收在裡面會自動展開；收合狀態每視窗各自記、重開全展開；member 只能在 lead 底下互換順序，拖出去或把別的 tab 拖進來都彈回；縮排永遠開著，不受第 10 項設定影響。</span>
+        <span class="rec">建議：收合時的數字顯示全部 member 數（含未開，如 3）。</span>
+        <span class="ask">待確認：收合時數字要不要包含「未開」的 member（第 1 項選 c 時）？</span></li>
+      <li data-i="4"><b class="t"><i>4</i>member 的 lead 不在這個清單時</b>
+        <span class="rule">lead 沒有 tab 在同一工作區（別台主機、另一工作區、或已結束），member 的 tab 留在原位，下面多一行小字「purdex-1f 的 member」。</span>
+        <span class="rec">建議：先小字，不加連結（點了要切工作區，行為較複雜）。</span>
+        <span class="ask">待確認：小字夠不夠？或加可點的「→ 跳到 lead」？（試「把 β 移到『實驗』」）</span></li>
+      <li data-i="5"><b class="t"><i>5</i>上方 tab 列的群組長怎樣</b>
+        <span class="rule">每個至少有一個開著 tab 的 team 一個群組；最前面一個標籤寫 lead 名稱（title 優先，沒有用位址裡的名字）；群組內每個 tab 底下一條 team 顏色的線；顏色是 8 種淡色依 team 自動分配、重開不變、刻意和主機色不同；順序 lead 在最前、member 接後面，整組放在其中第一個 tab 原本的位置，非 team 的 tab 不動；任一分割窗格顯示 lead／member 就算進群組，兩個 team 同時出現以主窗格為準；主機徽章、狀態點、未讀紅點等照舊。</span>
+        <span class="sw" id="sw"></span>
+        <span class="rec">建議：標籤數字顯示 member 總數（含未開，若選 c）；用底線而不是整個 tab 染色（Chrome 的做法，不跟主機色、狀態點搶）。</span>
+        <span class="ask">待確認：數字怎麼算？底線 vs. 整個 tab 染色？</span></li>
+      <li data-i="6"><b class="t"><i>6</i>收合群組</b>
+        <span class="rule">點標籤收成只剩標籤（顯示 +N），再點展開；切到收合群組裡的 tab 自動展開。收合「正在看的 tab」所在群組時，先切到群組外最近的 tab（右邊優先、沒有就左邊），沒有可切的就不收合。</span>
+        <span class="rec">建議：維持 plan（先切走再收合），規則單純。</span>
+        <span class="ask">待確認：「先切走再收合」OK 嗎？另一種是收合時正在看的那個 tab 留著露出、其餘收起（會改 plan 的 OQ15 定案）。</span></li>
+      <li data-i="7"><b class="t"><i>7</i>拖曳</b>
+        <span class="rule">群組內可調順序（會記住）；群組裡的 tab 拖出去、或外面的 tab 拖進群組 → 彈回原位；標籤本身不能拖。</span>
+        <span class="rec">建議：第一版不支援拖整組（標籤只負責收合），之後再加。</span>
+        <span class="ask">待確認：Chrome 允許拖整個群組，要不要第一版就做？</span></li>
+      <li data-i="8"><b class="t"><i>8</i>釘選的 tab</b>
+        <span class="rule">釘選的 tab 不進群組（Chrome：釘選會讓 tab 離開群組）。lead 釘選後留在最左釘選區，群組仍在、只剩 member，標籤照樣寫 purdex-1f。</span>
+        <span class="rec">建議：照此規則（本設計稿未畫釘選）。</span></li>
+      <li data-i="9"><b class="t"><i>9</i>member 離開時</b>
+        <span class="rule">member 結束（<code>pdx kill</code>、行程不在）或 team 結束時，tab 立刻離開群組、側欄取消縮排，標籤數字減少；沒有任何開著 tab 的 team 沒有群組。<code>pdx release</code> 上線後同樣處理。（試「kill γ」）</span>
+        <span class="rec">建議：已結束 member 的 tab 不自動關（可能還想看最後的輸出）。</span>
+        <span class="ask">待確認：要不要自動關？</span></li>
+      <li data-i="10"><b class="t"><i>10</i>設定</b>
+        <span class="rule">設定 → 介面 → 分頁 →「分頁群組顯示 team」，預設開；關掉後上方 tab 列完全回到原樣（側欄縮排不受影響）；只存在這台裝置，不同步。</span>
+        <span class="rec">建議：預設開。</span>
+        <span class="ask">待確認：預設開 OK？</span></li>
+    </ol>
+  </aside>
+</main>
+
+<div class="howto">
+  <h2>怎麼確認</h2>
+  <p>玩完設計稿後，請<b>依項目編號</b>回答每個「待確認」，不用逐項解釋；同意建議就寫「照建議」。需要討論的項目直接寫編號加疑問。</p>
+  <ol>
+    <li><b>第 1 項</b>：(a)／(b)／(c) 選哪個？member 的 tab 標題用 title（沒有用 tmux 名）OK 嗎？</li>
+    <li><b>第 2 項</b>：縮排只跟側欄 tab 清單（維持），還是 tab 在上方時要另加 Teams 區塊？</li>
+    <li><b>第 3 項</b>：側欄收合時的數字含不含「未開」的 member？</li>
+    <li><b>第 4 項</b>：lead 不在清單時，小字夠不夠，還是要加「跳到 lead」連結？</li>
+    <li><b>第 5 項</b>：標籤數字怎麼算？底線還是整個 tab 染色？</li>
+    <li><b>第 6 項</b>：收合時「先切走再收合」OK 嗎？</li>
+    <li><b>第 7 項</b>：第一版先不支援拖整組，OK 嗎？</li>
+    <li><b>第 8 項</b>：釘選不進群組，沒有疑問就免回。</li>
+    <li><b>第 9 項</b>：已結束 member 的 tab 不自動關，OK 嗎？</li>
+    <li><b>第 10 項</b>：「分頁群組顯示 team」預設開，OK 嗎？</li>
+  </ol>
+  <div class="ex">範例回覆：
+1 c，標題用 title；2 維持；3 含未開；4 小字；5 總數＋底線；6 照 plan；7 OK；9 不自動關；10 開</div>
+  <p>這份設計稿只畫了桌機 Mac App。拖曳、釘選、分割窗格、顏色的自動分配與記憶，在稿中以文字說明，沒有實際操作。</p>
+</div>
+
+<script>
+/* ======================= data ======================= */
+const COLORS = ['#fda4af','#fcd34d','#bef264','#6ee7b7','#67e8f9','#7dd3fc','#c4b5fd','#f0abfc'];
+const CNAMES = ['玫瑰','琥珀','萊姆','翠綠','青','天藍','紫','洋紅'];
+const WS = [{id:'dev',name:'開發',c:'#7a6aaa',ic:'D'},{id:'lab',name:'實驗',c:'#b8862f',ic:'實'}];
+const ST = {run:'執行中', idle:'閒置', wait:'等待回覆', dead:'已結束'};
+const MODE_NOTE = {
+  a:'(a) 只看已開 tab：γ 沒有 tab，所以側欄與上方群組都完全看不到它；要自己去「新分頁 → session 清單」開 tm-c3。',
+  b:'(b) spawn 自動開 tab：α β γ 三個都有 tab，放在 lead 群組裡；關掉後不會自己回來。',
+  c:'(c) 名單全列（建議）：γ 沒有 tab 也列在側欄（淡色「未開」）與標籤的 ▾ 選單；標籤數字是 member 總數。'
+};
+const HL = {mode:1, pos:2, team:10};
+
+/* ======================= state ======================= */
+let S;
+function fresh(mode){
+  const T = (id,title,kind,ws,status,x) => Object.assign({id,title,kind,ws,status}, x || {});
+  const tabs = {
+    notes:T('notes','notes','plain','dev',null),
+    lead:T('lead','purdex-1f','lead','dev','run'),
+    a:T('a','α','member','dev','idle'),
+    b:T('b','β','member','dev','wait',{unread:true}),
+    scratch:T('scratch','scratch','plain','lab',null)
+  };
+  const order = ['notes','a','lead','b','scratch'];   // stored order: notes | α | purdex-1f | β
+  if(mode === 'b'){ tabs.c = T('c','γ','member','dev','run'); order.splice(4,0,'c'); }
+  return {
+    tabs, order, active:'lead', ws:'dev', topCollapsed:false, sideCollapsed:false, menu:false, hl:null,
+    roster:[{k:'a',name:'α',sid:'tm-a1',alive:true},{k:'b',name:'β',sid:'tm-b2',alive:true},{k:'c',name:'γ',sid:'tm-c3',alive:true}],
+    log:'初始：tab 存放順序 notes | α | purdex-1f | β，lead 在中間；γ ' + (mode === 'b' ? '已被 spawn 自動開成 tab。' : '尚未開成 tab。')
+  };
+}
+function init(keep){
+  const k = keep || {mode:'c', pos:'both', team:true, theme:'dark', color:5};
+  S = Object.assign({mode:k.mode, pos:k.pos, team:k.team, theme:k.theme, color:k.color}, fresh(k.mode));
+}
+
+/* ======================= derived ======================= */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const $ = s => document.querySelector(s);
+const tabsIn = ws => S.order.map(i => S.tabs[i]).filter(t => t && t.ws === ws);
+const leadHere = ws => S.tabs.lead.ws === ws;
+const openMembers = () => tabsIn(S.tabs.lead.ws).filter(t => t.kind === 'member');
+const unopened = () => S.mode === 'c' ? S.roster.filter(r => r.alive && !S.tabs[r.k]) : [];
+const memberCount = () => openMembers().length + unopened().length;
+// group block is placed where its first tab sat; lead first, then members in stored order; others untouched
+function arrange(ws){
+  const list = tabsIn(ws);
+  if(!leadHere(ws)) return {seq:list.map(t => ({t, g:false})), has:false};
+  const block = [S.tabs.lead].concat(list.filter(t => t.kind === 'member'));
+  const first = Math.min.apply(null, block.map(t => list.indexOf(t)));
+  const rest = list.filter(t => !block.includes(t));
+  const wrap = g => t => ({t, g});
+  return {has:true, seq:rest.slice(0,first).map(wrap(false)).concat(block.map(wrap(true)), rest.slice(first).map(wrap(false)))};
+}
+
+/* ======================= actions ======================= */
+function activate(id){
+  const t = S.tabs[id]; if(!t) return;
+  const was = S.topCollapsed || (S.sideCollapsed && t.kind === 'member');
+  S.active = id; S.ws = t.ws;
+  if(leadHere(t.ws) && (t.kind === 'lead' || t.kind === 'member')){
+    S.topCollapsed = false;
+    if(t.kind === 'member') S.sideCollapsed = false;
+    if(was) S.log = '切到「' + t.title + '」，它在收合的群組裡，所以自動展開。';
+  }
+}
+function toggleTop(){
+  S.hl = 6;
+  if(S.topCollapsed){ S.topCollapsed = false; S.log = '展開群組。'; return; }
+  const {seq} = arrange(S.ws);
+  const gi = seq.map((x,i) => x.g ? i : -1).filter(i => i >= 0);
+  const cur = seq.find(x => x.t.id === S.active);
+  if(cur && cur.g){
+    const r = seq[gi[gi.length-1] + 1], l = seq[gi[0] - 1], tgt = r || l;
+    if(!tgt){ S.log = '群組外沒有任何 tab 可以切過去 → 不收合（第 6 項規則）。'; return; }
+    activate(tgt.t.id);
+    S.log = '你正在看群組裡的 tab，先切到群組外最近的「' + tgt.t.title + '」（' + (r ? '右' : '左') + '邊優先），再收合。';
+  } else S.log = '收合群組：只剩標籤與 +N。';
+  S.topCollapsed = true;
+}
+function toggleSide(){
+  S.hl = 3;
+  if(S.sideCollapsed){ S.sideCollapsed = false; S.log = '側欄展開 purdex-1f。'; return; }
+  const a = S.tabs[S.active];
+  if(a.kind === 'member' && leadHere(a.ws)){ S.log = '你正在看的「' + a.title + '」在裡面，所以不會收合（正在看的 tab 一定看得到）。先切到別的 tab 再收合。'; return; }
+  S.sideCollapsed = true; S.log = '側欄收合：只剩 lead 一列與 member 數 ' + memberCount() + '。';
+}
+function openMember(k){
+  const r = S.roster.find(x => x.k === k);
+  S.tabs[k] = {id:k, title:r.name, kind:'member', ws:S.tabs.lead.ws, status:'idle'};
+  S.order.splice(S.order.indexOf('lead') + 1, 0, k);
+  activate(k); S.hl = 1;
+  S.log = '點了「未開」的 ' + r.name + ' → 在 lead 旁邊開成 tab 並加入群組。';
+}
+function closeTab(id){
+  const t = S.tabs[id]; if(!t || t.kind === 'lead') return;
+  const {seq} = arrange(t.ws), i = seq.findIndex(x => x.t.id === id);
+  delete S.tabs[id]; S.order = S.order.filter(x => x !== id);
+  if(S.active === id){ const n = seq[i+1] || seq[i-1]; activate(n ? n.t.id : 'lead'); }
+  if(t.kind === 'member'){ S.hl = 1; S.log = '關掉 ' + t.title + ' 的 tab。' + (S.mode === 'c' ? '它只是回到「未開」，不會從名單消失。' : '(' + S.mode + ') 模式下它不會再出現。'); }
+  else S.log = '關掉 ' + t.title + '。';
+}
+function killG(){
+  const r = S.roster.find(x => x.k === 'c'); if(!r.alive) return;
+  r.alive = false; S.hl = 9;
+  const t = S.tabs.c;
+  if(t){
+    t.kind = 'plain'; t.dead = true; t.status = 'dead';
+    S.order = S.order.filter(x => x !== 'c');
+    const ids = S.order.filter(x => S.tabs[x] && S.tabs[x].ws === t.ws && (S.tabs[x].kind === 'lead' || S.tabs[x].kind === 'member'));
+    S.order.splice(S.order.indexOf(ids[ids.length-1]) + 1, 0, 'c');
+    S.log = 'γ 結束：它的 tab 離開群組（底線消失、停在群組右邊，不自動關），側欄取消縮排，標籤數字 ' + (memberCount()+1) + ' → ' + memberCount() + '。';
+  } else S.log = 'γ 結束：它本來就沒有 tab，名單少一位，標籤數字 ' + (memberCount()+1) + ' → ' + memberCount() + '。';
+}
+function moveB(){
+  const t = S.tabs.b; if(!t || t.ws === 'lab') return;
+  t.ws = 'lab'; S.order = S.order.filter(x => x !== 'b'); S.order.push('b');
+  S.hl = 4; S.ws = 'lab'; S.active = 'b';
+  S.log = 'β 搬到「實驗」。那裡沒有 lead 的 tab，所以 β 留在原位、底下多一行「purdex-1f 的 member」；回到「開發」，lead 底下少了 β。';
+}
+
+/* ======================= render: pieces ======================= */
+function dotOf(t){ return t.status ? '<i class="sd ' + t.status + '"></i>' : '<i class="gl">▤</i>'; }
+function topTab(t, g){
+  const act = S.active === t.id;
+  return '<div class="ttab' + (act ? ' act' : '') + (g ? ' g' : '') + (t.dead ? ' dead' : '') + '" data-act="tab" data-id="' + t.id + '" title="' + esc(t.title) + (t.dead ? '（已結束）' : '') + '">'
+    + dotOf(t) + '<i class="hb"></i><span class="tt">' + esc(t.title) + '</span>'
+    + (t.unread && !act ? '<b class="pip"></b>' : '')
+    + (t.kind !== 'lead' ? '<u class="x" data-act="close" data-id="' + t.id + '" title="關閉">×</u>' : '') + '</div>';
+}
+function chipHTML(){
+  const lead = S.tabs.lead;
+  const hidden = 1 + openMembers().length;
+  const label = esc(lead.title) + (S.topCollapsed ? ' +' + hidden : ' · ' + memberCount());
+  return '<span class="gc"><button data-act="chip" title="點一下收合／展開">' + label + '</button>'
+    + (S.mode === 'c' ? '<button class="m" data-act="menu" title="列出全部 member">▾</button>' : '') + '</span>';
+}
+function tabbarHTML(){
+  const ws = S.ws;
+  let h = '<div class="tbwrap"><div class="tabstrip" id="strip">';
+  if(S.team){
+    const {seq, has} = arrange(ws);
+    let chipDone = false;
+    seq.forEach(x => {
+      if(has && x.g && !chipDone){ h += chipHTML(); chipDone = true; }
+      if(x.g && S.topCollapsed) return;
+      h += topTab(x.t, x.g);
+    });
+  } else tabsIn(ws).forEach(t => { h += topTab(t, false); });
+  h += '</div>';
+  if(S.menu && S.mode === 'c' && S.team){
+    h += '<div class="menu" id="menu"><div class="mh">' + esc(S.tabs.lead.title) + ' 的 member（' + memberCount() + '）</div>';
+    S.roster.filter(r => r.alive).forEach(r => {
+      const t = S.tabs[r.k];
+      const where = !t ? '<span class="tag">未開</span>' : (t.ws !== 'dev' ? '<span class="tag">在「實驗」</span>' : '<span class="tag" style="border-style:solid">已開</span>');
+      h += '<div class="mr" data-act="mrow" data-k="' + r.k + '"><i class="sd ' + (t ? t.status : 'off') + '"></i>' + r.name + where + '<span class="id">' + r.sid + '</span></div>';
+    });
+    h += '</div>';
+  }
+  return h + '</div>';
+}
+function inlineRow(t, kind){
+  const act = S.active === t.id;
+  const lead = t.kind === 'lead';
+  let cls = 'irow' + (act ? ' act' : '') + (kind === 'ind' ? ' ind' : '') + (t.dead ? ' dead' : '');
+  let h = '<div class="' + cls + '" data-act="tab" data-id="' + t.id + '">';
+  if(lead && (openMembers().length + unopened().length) > 0) h += '<span class="caret" data-act="side" title="收合／展開">' + (S.sideCollapsed ? '▸' : '▾') + '</span>';
+  h += dotOf(t) + '<i class="hb"></i><span class="tt">' + esc(t.title) + '</span>';
+  if(t.unread && !act) h += '<b class="pip"></b>';
+  if(t.dead) h += '<span class="tag end">已結束</span>';
+  if(lead && S.sideCollapsed) h += '<span class="n" title="member 數">' + memberCount() + '</span>';
+  return h + '</div>';
+}
+function listHTML(ws){
+  const {seq, has} = arrange(ws);
+  let h = '';
+  const lastG = has ? seq.map(x => x.g).lastIndexOf(true) : -1;
+  seq.forEach((x, i) => {
+    const t = x.t;
+    if(x.g && t.kind === 'member'){ if(!S.sideCollapsed) h += inlineRow(t, 'ind'); }
+    else h += inlineRow(t, '');
+    if(!x.g && t.kind === 'member') h += '<div class="orph">' + esc(S.tabs.lead.title) + ' 的 member</div>';
+    if(i === lastG && !S.sideCollapsed){
+      unopened().forEach(r => {
+        h += '<div class="irow ind un" data-act="open" data-k="' + r.k + '" title="點一下開成 tab"><i class="sd off"></i><span class="tt">' + r.name + '</span><span class="tag">未開</span></div>';
+      });
+    }
+  });
+  return h;
+}
+function sideHTML(){
+  const narrow = S.pos === 'top';
+  let h = '<div class="act-bar' + (narrow ? ' narrow' : '') + '"><div class="sb-h">工作區</div>';
+  WS.forEach(w => {
+    h += '<div class="wsrow' + (S.ws === w.id ? ' act' : '') + '" data-act="ws" data-id="' + w.id + '"><i class="wsi" style="background:' + w.c + '">' + w.ic + '</i>' + w.name + '<span class="cnt">' + tabsIn(w.id).length + '</span></div>';
+    if(!narrow) h += listHTML(w.id);
+  });
+  if(narrow) h += '<div class="hint">tab 位置是「上方」：側欄沒有 tab 清單，所以看不到縮排（第 2 項）。改成「左側」或「兩側」看看。</div>';
+  return h + '</div>';
+}
+function contentHTML(){
+  const t = S.tabs[S.active];
+  const role = t.kind === 'lead' ? 'lead' : t.kind === 'member' ? 'member（隸屬 purdex-1f）' : (t.dead ? '已結束的 member（不再屬於 team）' : '一般分頁（非 team）');
+  const wsName = WS.find(w => w.id === t.ws).name;
+  let h = '<div class="content"><div class="ctitle">目前分頁</div><div class="cname">' + dotOf(t) + esc(t.title) + '</div>'
+    + '<dl class="kv"><dt>工作區</dt><dd>' + wsName + '</dd><dt>主機</dt><dd>mlab</dd><dt>角色</dt><dd>' + role + '</dd>'
+    + (t.status ? '<dt>狀態</dt><dd>' + ST[t.status] + '</dd>' : '') + '</dl>';
+  h += '<div class="panel note">' + MODE_NOTE[S.mode] + '</div>';
+  h += '<div class="panel"><h4>DAEMON ROSTER（purdex-1f 的 member，與 tab 無關）</h4>';
+  S.roster.forEach(r => {
+    const tb = S.tabs[r.k];
+    h += '<div class="r"><i class="sd ' + (r.alive ? (tb ? tb.status : 'off') : 'dead') + '"></i>' + r.name + '<span class="id">' + r.sid + '</span><span class="st">'
+      + (!r.alive ? '已結束' : (tb ? '已開成 tab' + (tb.ws === 'lab' ? '（在「實驗」）' : '') : '沒有 tab')) + '</span></div>';
+  });
+  return h + '</div><div class="panel logp"><h4>最近操作</h4>' + esc(S.log) + '</div></div>';
+}
+function appHTML(){
+  const showTop = S.pos !== 'left';
+  const showSide = true; // activity bar always exists; the tab list inside depends on position
+  return '<div class="app" data-theme="' + S.theme + '" style="--team:' + COLORS[S.color] + '">'
+    + '<div class="titlebar"><span class="dots"><i></i><i></i><i></i></span><span class="ttl">Purdex · ' + WS.find(w => w.id === S.ws).name + '</span></div>'
+    + '<div class="body">' + (showSide ? sideHTML() : '')
+    + '<div class="col">' + (showTop ? tabbarHTML() : '')
+    + '<div class="dragnote"><b>拖曳規則（第 7 項，此稿不能拖）：</b>群組內可調順序並記住；把群組裡的 tab 拖出去、或把外面的 tab 拖進群組 → 彈回原位；標籤本身不能拖；拖到別的工作區照常。</div>'
+    + contentHTML() + '</div></div></div>';
+}
+function controlsHTML(){
+  const seg = (lb, k, opts) => '<div class="cg"><span class="lb">' + lb + '</span><div class="seg">'
+    + opts.map(o => '<button data-act="set" data-k="' + k + '" data-v="' + o[0] + '"' + (String(S[k]) === String(o[0]) ? ' class="on"' : '') + '>' + o[1] + '</button>').join('') + '</div></div>';
+  const kd = !S.roster[2].alive, mv = !S.tabs.b || S.tabs.b.ws === 'lab';
+  return seg('未開 member', 'mode', [['a','(a) 只看已開 tab'],['b','(b) spawn 自動開 tab'],['c','(c) 名單全列（建議）']])
+    + seg('分頁位置', 'pos', [['top','上方（App 預設）'],['left','左側'],['both','兩側']])
+    + seg('分頁群組顯示 team', 'team', [[true,'開'],[false,'關']])
+    + '<div class="cg"><span class="lb">事件</span><div class="seg act">'
+    + '<button data-act="kill"' + (kd ? ' disabled' : '') + '>kill γ</button>'
+    + '<button data-act="move"' + (mv ? ' disabled' : '') + '>把 β 移到『實驗』</button>'
+    + '<button data-act="reset">重設</button></div></div>'
+    + seg('外觀', 'theme', [['dark','深色'],['light','淺色']]);
+}
+
+/* ======================= render ======================= */
+function render(){
+  document.documentElement.dataset.page = S.theme;
+  const strip = $('#strip'), sl = strip ? strip.scrollLeft : 0;
+  $('#controls').innerHTML = controlsHTML();
+  $('#stage').innerHTML = appHTML();
+  const ns = $('#strip'); if(ns) ns.scrollLeft = sl;
+  document.documentElement.style.setProperty('--ctlh', $('.controls').offsetHeight + 'px');
+  const menu = $('#menu'), gc = $('.gc');
+  if(menu && gc){ menu.style.left = (gc.getBoundingClientRect().left - menu.parentNode.getBoundingClientRect().left) + 'px'; }
+  // aside: option marker, swatches and highlight
+  document.querySelectorAll('#core .opt').forEach(o => { o.classList.toggle('rc', o.dataset.o === 'c'); o.querySelector('button').classList.toggle('on', o.dataset.o === S.mode); });
+  $('#sw').innerHTML = COLORS.map((c, i) => '<button class="' + (i === S.color ? 'on' : '') + '" style="background:' + c + '" data-act="color" data-v="' + i + '" title="' + CNAMES[i] + '"></button>').join('');
+  const caps = $('#caps');
+  let target = null;
+  caps.querySelectorAll('[data-i]').forEach(el => { const on = Number(el.dataset.i) === S.hl; el.classList.toggle('hl', on); if(on) target = el; });
+  if(target && caps.scrollHeight > caps.clientHeight + 4) caps.scrollTo({top: target.offsetTop - 70, behavior:'smooth'});
+}
+
+/* ======================= events ======================= */
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]');
+  const act = el && el.dataset.act;
+  let dirty = false;
+  if(S.menu && act !== 'menu' && !e.target.closest('.menu')){ S.menu = false; dirty = true; }
+  if(act){
+    const d = el.dataset;
+    if(act === 'set'){
+      const v = d.v === 'true' ? true : d.v === 'false' ? false : d.v;
+      if(d.k === 'mode'){ init({mode:v, pos:S.pos, team:S.team, theme:S.theme, color:S.color}); S.hl = 1; S.log = '改成 ' + MODE_NOTE[v].split('：')[0] + '，情境重設為初始狀態。'; }
+      else { S[d.k] = v; if(HL[d.k]) S.hl = HL[d.k]; }
+    }
+    else if(act === 'reset'){ init({mode:S.mode, pos:S.pos, team:S.team, theme:S.theme, color:S.color}); }
+    else if(act === 'tab') activate(d.id);
+    else if(act === 'close') closeTab(d.id);
+    else if(act === 'ws'){ S.ws = d.id; const f = tabsIn(d.id).find(t => t.id === S.active) || tabsIn(d.id)[0]; if(f) S.active = f.id; }
+    else if(act === 'chip') toggleTop();
+    else if(act === 'side') { toggleSide(); }
+    else if(act === 'menu'){ S.menu = !S.menu; S.hl = 1; }
+    else if(act === 'mrow'){ S.menu = false; const t = S.tabs[d.k]; if(t) activate(d.k); else openMember(d.k); S.hl = 1; }
+    else if(act === 'open') openMember(d.k);
+    else if(act === 'kill') killG();
+    else if(act === 'move') moveB();
+    else if(act === 'color'){ S.color = Number(d.v); S.hl = 5; }
+    dirty = true;
+  }
+  if(dirty) render();
+});
+window.addEventListener('resize', () => document.documentElement.style.setProperty('--ctlh', $('.controls').offsetHeight + 'px'));
+init(); render();
+</script>
+</body>
+</html>
