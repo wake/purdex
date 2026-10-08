@@ -636,10 +636,6 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	if m.sessions == nil {
 		return
 	}
-	// The two stores that do not depend on the slot (legacy rows, session
-	// names) are read before it, so the hold is what it was before agent.v2:
-	// the frame-projection read.
-	legacy, legacyErr := m.readLegacyRows()
 	var stale []string
 	defer func() {
 		// stale legacy rows are deleted after the slot is released
@@ -662,6 +658,14 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	if e.epoch == "" {
 		e.epoch = boot
 	}
+	// The legacy rows and the session names are read inside the slot too: the
+	// snapshot is the complete list as of H, and a session that emitted its
+	// first frame (seq <= H) while the names were read outside would be in
+	// neither the snapshot nor the frames the client keeps. Cost (measured):
+	// the agent_events listing is ~0.5 ms for 200 rows; ListSessions has a 1 s
+	// cache that resolveSessionCode may just have warmed, ~27 ms cold for 5
+	// sessions.
+	legacy, legacyErr := m.readLegacyRows()
 	items, staleNames, framesErr := m.snapshotItemsLocked(legacy)
 	stale = staleNames
 	for i := range items {
@@ -760,8 +764,8 @@ func (m *Module) snapshotItemsLocked(legacy *legacyRows) (items []snapshotItem, 
 	return items, stale, framesErr
 }
 
-// legacyRows is the agent_events table and the session names, read before the
-// emit slot is taken.
+// legacyRows is the agent_events table and the session names, read inside the
+// emit slot (sendSnapshot).
 type legacyRows struct {
 	events     []store.AgentEvent
 	nameToCode map[string]string
