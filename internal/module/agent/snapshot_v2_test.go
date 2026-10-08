@@ -9,6 +9,7 @@ import (
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 type snapV2Entry struct {
@@ -28,7 +29,10 @@ func rawFrames(t *testing.T, sub *core.EventSubscriber) []core.HostEvent {
 	var out []core.HostEvent
 	for {
 		select {
-		case msg := <-sub.SendCh():
+		case msg, ok := <-sub.SendCh():
+			if !ok { // the subscriber was ended
+				return out
+			}
 			var ev core.HostEvent
 			if err := json.Unmarshal(msg, &ev); err != nil {
 				t.Fatal(err)
@@ -174,6 +178,31 @@ func TestSnapshot_OrderedAgainstLiveEmits(t *testing.T) {
 	f, _ := oneSnapshot(t, sub)
 	if f.Seq != 7 {
 		t.Fatalf("snapshot seq = %d, want 7 (after the frame that held the slot)", f.Seq)
+	}
+}
+
+// agent.snapshot is authoritative, so a list built from a failed read is never
+// sent: the v2 subscriber is ended (it reconnects and asks again), while a
+// legacy subscriber still gets the per-session frames it can use.
+func TestSnapshot_V2NotSentWhenProjectionReadFails(t *testing.T) {
+	r, sub := v2Rig(t)
+	r.registerIdleHooks()
+	seedIdentityFrame(t, r.m, "%5", "cc", 200, "Sun Apr 20 01:30:00 2026", 10, modSID1, "/w")
+	orig := paneSnapshotTimeout
+	paneSnapshotTimeout = 30 * time.Millisecond
+	t.Cleanup(func() { paneSnapshotTimeout = orig })
+	st := &stuckFake{FakeExecutor: tmux.NewFakeExecutor(), stuck: true}
+	st.SetPaneSessionName("%5", "work")
+	r.m.tmux = st
+
+	r.m.sendSnapshot(sub)
+	if got := rawFrames(t, sub); len(got) != 0 {
+		t.Fatalf("an incomplete agent.snapshot was sent: %+v", got)
+	}
+	select {
+	case <-sub.Done():
+	default:
+		t.Fatal("the v2 subscriber was not ended, so it would never ask for a complete snapshot")
 	}
 }
 

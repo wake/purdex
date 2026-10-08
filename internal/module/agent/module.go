@@ -636,6 +636,20 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	if m.sessions == nil {
 		return
 	}
+	// The two stores that do not depend on the slot (legacy rows, session
+	// names) are read before it, so the hold is what it was before agent.v2:
+	// the frame-projection read.
+	legacy, legacyErr := m.readLegacyRows()
+	var stale []string
+	defer func() {
+		// stale legacy rows are deleted after the slot is released
+		for _, name := range stale {
+			if err := m.events.Delete(name); err != nil {
+				log.Printf("[agent] snapshot cleanup of legacy event: %v", err)
+			}
+		}
+	}()
+
 	e := &m.emit
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -648,12 +662,24 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	if e.epoch == "" {
 		e.epoch = boot
 	}
-	items := m.snapshotItemsLocked()
+	items, staleNames, framesErr := m.snapshotItemsLocked(legacy)
+	stale = staleNames
 	for i := range items {
 		items[i].event.Epoch, items[i].event.Seq, items[i].event.Snapshot = e.epoch, e.seq, true
 	}
 
 	if sub.Wants(core.FeatureAgentV2) {
+		// agent.snapshot is authoritative: the client replaces the host's
+		// whole agent state with it. A list built from a failed read would
+		// clear sessions that are merely unreadable, so it is not sent; the
+		// connection ends and the reconnect asks again.
+		if framesErr != nil || legacyErr != nil {
+			log.Printf("[agent] agent.snapshot not sent (frames: %v, legacy: %v); closing the subscriber so it reconnects", framesErr, legacyErr)
+			if m.core != nil {
+				m.core.Events.Remove(sub)
+			}
+			return
+		}
 		sent := m.sendAgentSnapshot(sub, e.epoch, e.seq, items)
 		for _, it := range items {
 			m.syncSnapshotItem(it, sent)
@@ -693,13 +719,18 @@ func (m *Module) syncSnapshotItem(it snapshotItem, sent bool) {
 }
 
 // snapshotItemsLocked lists every session with an agent: the frame
-// projections, the legacy agent_events sessions, and the non-tmux sessions
-// the slot has seen (nonTmuxLast, expired first). Under emit.mu.
-func (m *Module) snapshotItemsLocked() []snapshotItem {
-	var items []snapshotItem
+// projections, the legacy agent_events sessions (rows read by readLegacyRows),
+// and the non-tmux sessions the slot has seen (nonTmuxLast, expired first).
+// Under emit.mu. framesErr is a failed frame-projection read: the list is then
+// missing sessions (the legacy subscriber still gets what there is; agent.v2
+// must not treat it as complete). stale are legacy rows to delete once the
+// slot is released.
+func (m *Module) snapshotItemsLocked(legacy *legacyRows) (items []snapshotItem, stale []string, framesErr error) {
 	projectedSessions := make(map[string]struct{})
-	if projections, err := m.liveSessionProjections(); err != nil {
+	projections, err := m.liveSessionProjections()
+	if err != nil {
 		log.Printf("[agent] snapshot frames: %v", err)
+		framesErr = err
 	} else {
 		for i := range projections {
 			item := projections[i]
@@ -712,7 +743,8 @@ func (m *Module) snapshotItemsLocked() []snapshotItem {
 			items = append(items, snapshotItem{code: item.SessionCode, session: item.SessionName, event: normalized, proj: &proj})
 		}
 	}
-	items = append(items, m.legacySnapshotItems(projectedSessions)...)
+	legacyItems, stale := m.legacySnapshotItems(legacy, projectedSessions)
+	items = append(items, legacyItems...)
 
 	m.expireNonTmuxLocked(m.nonTmuxClock())
 	codes := make([]string, 0, len(m.nonTmuxLast))
@@ -725,39 +757,54 @@ func (m *Module) snapshotItemsLocked() []snapshotItem {
 		ev.RawEventName = "replay"
 		items = append(items, snapshotItem{code: code, event: ev})
 	}
-	return items
+	return items, stale, framesErr
 }
 
-// legacySnapshotItems is the agent_events part of the snapshot: the latest
-// stored hook event of every session that has no frame projection.
-func (m *Module) legacySnapshotItems(projectedSessions map[string]struct{}) []snapshotItem {
+// legacyRows is the agent_events table and the session names, read before the
+// emit slot is taken.
+type legacyRows struct {
+	events     []store.AgentEvent
+	nameToCode map[string]string
+}
+
+// readLegacyRows reads the legacy part of a snapshot. nil rows with a nil error
+// means there is nothing legacy to list.
+func (m *Module) readLegacyRows() (*legacyRows, error) {
 	if m.events == nil {
-		return nil
+		return nil, nil
 	}
 	all, err := m.events.ListAll()
 	if err != nil {
 		log.Printf("[agent] snapshot: %v", err)
-		return nil
+		return nil, err
 	}
 	if len(all) == 0 {
-		return nil
+		return nil, nil
 	}
 	sessions, err := m.sessions.ListSessions()
 	if err != nil {
 		log.Printf("[agent] snapshot sessions: %v", err)
-		return nil
+		return nil, err
 	}
 	nameToCode := make(map[string]string, len(sessions))
 	for _, s := range sessions {
 		nameToCode[s.Name] = s.Code
 	}
+	return &legacyRows{events: all, nameToCode: nameToCode}, nil
+}
 
-	var items []snapshotItem
-	for _, ev := range all {
+// legacySnapshotItems is the agent_events part of the snapshot: the latest
+// stored hook event of every session that has no frame projection. stale are
+// the sessions whose stored event no longer derives to a valid status.
+func (m *Module) legacySnapshotItems(rows *legacyRows, projectedSessions map[string]struct{}) (items []snapshotItem, stale []string) {
+	if rows == nil {
+		return nil, nil
+	}
+	for _, ev := range rows.events {
 		if _, ok := projectedSessions[ev.TmuxSession]; ok {
 			continue
 		}
-		code, ok := nameToCode[ev.TmuxSession]
+		code, ok := rows.nameToCode[ev.TmuxSession]
 		if !ok {
 			continue
 		}
@@ -772,15 +819,13 @@ func (m *Module) legacySnapshotItems(projectedSessions map[string]struct{}) []sn
 			// raw_event_name on cold reconnect (which would re-key
 			// hook-module lastTrigger and surface stale legacy events
 			// despite replayFromDB intentionally skipping them).
-			if err := m.events.Delete(ev.TmuxSession); err != nil {
-				log.Printf("[agent] snapshot cleanup of legacy event: %v", err)
-			}
+			stale = append(stale, ev.TmuxSession)
 			continue
 		}
 		normalized := m.buildNormalized(ev.TmuxSession, ev.EventName, ev.AgentType, ev.BroadcastTs, result)
 		items = append(items, snapshotItem{code: code, event: normalized})
 	}
-	return items
+	return items, stale
 }
 
 // agentSnapshotFrame is the value of the one frame an agent.v2 subscriber gets
