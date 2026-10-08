@@ -73,10 +73,16 @@ func (m *Module) taskCallerOf(w http.ResponseWriter, inbox string) (taskCaller, 
 		return taskCaller{}, m.taskStorageErr(w, "member "+origin.SessionID, err)
 	}
 	if !member {
-		m.writeErr(w, http.StatusConflict, team.ErrNotMember, "this session neither leads a live team nor is an active member of one", nil)
+		m.notMember(w)
 		return taskCaller{}, false
 	}
 	return taskCaller{team: t, member: &mr}, true
+}
+
+// notMember is the one answer for a session that is not (or no longer) a
+// live team's lead or active member.
+func (m *Module) notMember(w http.ResponseWriter) {
+	m.writeErr(w, http.StatusConflict, team.ErrNotMember, "this session neither leads a live team nor is an active member of one", nil)
 }
 
 // taskStorageErr logs err and answers 500; it always returns false.
@@ -211,12 +217,28 @@ func (m *Module) handleTaskList(w http.ResponseWriter, r *http.Request) {
 		}
 		owner = mr.SpawnOp
 	}
-	rows, err := m.store.ListTasks(c.team.ID, owner, q.Get("all") == "1" || q.Get("all") == "true")
+	if m.afterTaskLookup != nil {
+		m.afterTaskLookup()
+	}
+	all := q.Get("all") == "1" || q.Get("all") == "true"
+	var rows []TaskRow
+	var err error
+	if c.member != nil {
+		// The member's right is checked again in the read; a member that lost
+		// it meanwhile is no member, as taskCallerOf would have answered.
+		var live bool
+		if rows, live, err = m.store.ListTasksForOwner(c.team.ID, owner, all); err == nil && !live {
+			m.notMember(w)
+			return
+		}
+	} else {
+		rows, err = m.store.ListTasks(c.team.ID, owner, all)
+	}
 	if err != nil {
 		m.taskStorageErr(w, "list", err)
 		return
 	}
-	v, ok := m.newTaskView(w, c.team.ID)
+	v, ok := m.newTaskView(w, c.team.ID, c.ownerKey())
 	if !ok {
 		return
 	}
@@ -250,7 +272,7 @@ func (m *Module) handleTaskGet(w http.ResponseWriter, r *http.Request) {
 		m.taskNotFound(w)
 		return
 	}
-	v, ok := m.newTaskView(w, c.team.ID)
+	v, ok := m.newTaskView(w, c.team.ID, c.ownerKey())
 	if !ok {
 		return
 	}
@@ -327,7 +349,7 @@ func (m *Module) handleTaskReassign(w http.ResponseWriter, r *http.Request) {
 
 // respondTask logs one line for a successful mutation and answers the task.
 func (m *Module) respondTask(w http.ResponseWriter, status int, c taskCaller, row TaskRow, verb string) {
-	v, ok := m.newTaskView(w, c.team.ID)
+	v, ok := m.newTaskView(w, c.team.ID, c.ownerKey())
 	if !ok {
 		return
 	}
@@ -340,15 +362,19 @@ func (m *Module) respondTask(w http.ResponseWriter, status int, c taskCaller, ro
 // the team's members and tasks once, so a list costs two queries, not two
 // per task.
 type taskView struct {
-	m       *Module
-	teamID  string
-	members map[string]memberRow // by spawn op (the member key)
-	tasks   map[int]TaskRow
-	blocks  map[int][]int // seq -> seqs of the tasks that name it in blocked_by
-	owners  map[string]team.TaskOwner
+	m         *Module
+	teamID    string
+	viewerKey string               // a member caller's key, "" for a lead
+	members   map[string]memberRow // by spawn op (the member key)
+	tasks     map[int]TaskRow
+	blocks    map[int][]int // seq -> seqs of the tasks that name it in blocked_by
+	owners    map[string]team.TaskOwner
 }
 
-func (m *Module) newTaskView(w http.ResponseWriter, teamID string) (*taskView, bool) {
+// newTaskView reads the team once. viewerKey is the member key of a member
+// caller ("" for a lead): that view names, in blocks and blocked_by, only
+// the tasks the member owns; the flag blocked still counts every blocker.
+func (m *Module) newTaskView(w http.ResponseWriter, teamID, viewerKey string) (*taskView, bool) {
 	members, err := m.store.MembersOf(teamID)
 	if err != nil {
 		return nil, m.taskStorageErr(w, "members of "+teamID, err)
@@ -357,7 +383,7 @@ func (m *Module) newTaskView(w http.ResponseWriter, teamID string) (*taskView, b
 	if err != nil {
 		return nil, m.taskStorageErr(w, "tasks of "+teamID, err)
 	}
-	v := &taskView{m: m, teamID: teamID, members: map[string]memberRow{}, tasks: map[int]TaskRow{}, blocks: map[int][]int{}, owners: map[string]team.TaskOwner{}}
+	v := &taskView{m: m, teamID: teamID, viewerKey: viewerKey, members: map[string]memberRow{}, tasks: map[int]TaskRow{}, blocks: map[int][]int{}, owners: map[string]team.TaskOwner{}}
 	for _, mr := range members {
 		v.members[mr.SpawnOp] = mr
 	}
@@ -390,9 +416,14 @@ func (v *taskView) owner(key string) team.TaskOwner {
 	return o
 }
 
+// displayIDs names the tasks of seqs the viewer may see: all for a lead, only
+// its own for a member (another member's task id is not its to know).
 func (v *taskView) displayIDs(seqs []int) []string {
 	out := make([]string, 0, len(seqs))
 	for _, s := range seqs {
+		if t, ok := v.tasks[s]; v.viewerKey != "" && (!ok || t.OwnerKey != v.viewerKey) {
+			continue
+		}
 		out = append(out, team.TaskDisplayID(v.teamID, s))
 	}
 	return out

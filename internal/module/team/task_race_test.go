@@ -97,3 +97,40 @@ func TestTasks_ShowRacesReassign(t *testing.T) {
 		})
 	}
 }
+
+// GET /api/team/tasks has no task id to be "not found": a member whose right
+// ended after the handler resolved it is not a member any more, and gets what
+// a session with no role gets, 409 not_member, byte for byte, with no task in
+// the body. Mutation gate: drop the active or live check from
+// ListTasksForOwner → red.
+func TestTasks_ListRacesMemberState(t *testing.T) {
+	races := taskRaces(nil, "")
+	delete(races, "the lead reassigns it to B") // a list has no task to lose
+	names := []string{"the member moves to another team"}
+	for name := range races {
+		names = append(names, name)
+	}
+	for _, name := range names {
+		for _, q := range []string{"", "&all=1"} {
+			t.Run(name+q, func(t *testing.T) {
+				w := newTaskWorld(t)
+				tk := w.mustTask(leadInbox, w.ma.Ref, "work", nil)
+				wantCode, wantBody := w.missing(http.MethodGet, "/api/team/tasks?origin_inbox="+url.QueryEscape("/tmp/n.sock"), "")
+
+				race := taskRaces(w, tk.ID)[name]
+				if name == "the member moves to another team" {
+					race = func() {
+						if _, err := w.m.store.db.Exec(`UPDATE team_members SET team_id = ? WHERE spawn_op = 'op-a'`, uid(2)); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				w.m.afterTaskLookup = func() { w.m.afterTaskLookup = nil; race() }
+				code, raw := w.do(http.MethodGet, "/api/team/tasks?origin_inbox="+url.QueryEscape(maInbox)+q, "")
+				if code != wantCode || string(raw) != wantBody {
+					t.Fatalf("raced list = %d %s, want exactly %d %s", code, raw, wantCode, wantBody)
+				}
+			})
+		}
+	}
+}

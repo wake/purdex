@@ -344,6 +344,39 @@ func (s *Store) GetTask(teamID string, seq int) (TaskRow, bool, error) {
 // seq DESC). ownerKey "" is every owner; all=false hides completed and
 // deleted ones. The slice is never nil.
 func (s *Store) ListTasks(teamID, ownerKey string, all bool) ([]TaskRow, error) {
+	return listTasksIn(context.Background(), s.db, teamID, ownerKey, all)
+}
+
+// ListTasksForOwner is a member's list: its own tasks (ListTasks' order and
+// all flag), read in the transaction that first checks the member is still
+// an active member of a live team of teamID. ok=false, nothing returned,
+// when it is not (or ownerKey is empty): the caller answers not_member.
+func (s *Store) ListTasksForOwner(teamID, ownerKey string, all bool) ([]TaskRow, bool, error) {
+	if ownerKey == "" {
+		return nil, false, nil
+	}
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("list tasks %s: %w", teamID, err)
+	}
+	defer tx.Rollback() // a read: nothing to commit
+	live, err := liveMemberIn(ctx, tx, teamID, ownerKey)
+	if err != nil {
+		return nil, false, fmt.Errorf("list tasks %s: check owner: %w", teamID, err)
+	}
+	if !live {
+		return nil, false, nil
+	}
+	rows, err := listTasksIn(ctx, tx, teamID, ownerKey, all)
+	if err != nil {
+		return nil, false, err
+	}
+	return rows, true, nil
+}
+
+// listTasksIn is ListTasks on a database or on an open transaction.
+func listTasksIn(ctx context.Context, db rowsQuerier, teamID, ownerKey string, all bool) ([]TaskRow, error) {
 	q := `SELECT ` + taskCols + ` FROM tasks WHERE team_id = ?`
 	args := []any{teamID}
 	if ownerKey != "" {
@@ -354,7 +387,7 @@ func (s *Store) ListTasks(teamID, ownerKey string, all bool) ([]TaskRow, error) 
 		q += ` AND status IN ('pending', 'in_progress')`
 	}
 	q += ` ORDER BY updated_at DESC, seq DESC`
-	rows, err := s.db.Query(q, args...)
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list tasks %s: %w", teamID, err)
 	}

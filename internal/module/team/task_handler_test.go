@@ -316,9 +316,66 @@ func TestTasks_BlocksAndBlockedAreDerived(t *testing.T) {
 	if view(t3.ID).Blocked {
 		t.Fatal("a deleted blocker blocks nothing")
 	}
-	// The member's own view carries the same derived fields.
-	if code, d, _ := w.showTask(mbInbox, t3.ID); code != 200 || d.Task.Blocked || !slices.Equal(d.Task.BlockedBy, []string{t1.ID, t2.ID}) {
+	// A member's view keeps only the edges to its OWN tasks (the ids of other
+	// members' tasks are not its to see) and the derived blocked flag.
+	if code, d, _ := w.showTask(mbInbox, t3.ID); code != 200 || d.Task.Blocked || len(d.Task.BlockedBy) != 0 {
 		t.Fatalf("mb view of t3 = %d %+v", code, d.Task)
+	}
+	if code, d, _ := w.showTask(maInbox, t1.ID); code != 200 || !slices.Equal(d.Task.Blocks, []string{t2.ID}) {
+		t.Fatalf("ma view of t1 = %d %+v, want blocks only its own t2", code, d.Task)
+	}
+}
+
+// A member sees no id of another member's task through blocks or blocked_by,
+// on the detail and on the list alike, but blocked stays true: it knows it
+// waits, not on whom. The lead sees both edges.
+func TestTasks_MemberViewHidesForeignDependencyIds(t *testing.T) {
+	w := newTaskWorld(t)
+	t1 := w.mustTask(leadInbox, w.ma.Ref, "a's", nil)
+	t2 := w.mustTask(leadInbox, w.mb.Ref, "b's", func(r *team.CreateTaskRequest) { r.BlockedBy = []string{t1.ID} })
+	t3 := w.mustTask(leadInbox, w.mb.Ref, "b's own follow-up", func(r *team.CreateTaskRequest) { r.BlockedBy = []string{t2.ID} })
+
+	byID := func(inbox string) map[string]team.Task {
+		code, l, e := w.listTasks(inbox, "")
+		if code != 200 {
+			t.Fatalf("list %s: %d %+v", inbox, code, e)
+		}
+		out := map[string]team.Task{}
+		for _, tk := range l.Tasks {
+			out[tk.ID] = tk
+		}
+		return out
+	}
+	detail := func(inbox, id string) team.Task {
+		code, d, e := w.showTask(inbox, id)
+		if code != 200 {
+			t.Fatalf("show %s %s: %d %+v", inbox, id, code, e)
+		}
+		return d.Task
+	}
+	for how, get := range map[string]func(inbox, id string) team.Task{
+		"detail": detail,
+		"list":   func(inbox, id string) team.Task { return byID(inbox)[id] },
+	} {
+		if v := get(mbInbox, t2.ID); len(v.BlockedBy) != 0 || !v.Blocked || !slices.Equal(v.Blocks, []string{t3.ID}) {
+			t.Fatalf("%s: b's view of t2 = %+v, want blocked_by [], blocked, blocks its own t3", how, v)
+		}
+		if v := get(mbInbox, t3.ID); !slices.Equal(v.BlockedBy, []string{t2.ID}) || !v.Blocked {
+			t.Fatalf("%s: b's view of t3 = %+v, want its own edge to t2", how, v)
+		}
+		if v := get(maInbox, t1.ID); len(v.Blocks) != 0 || v.Blocked {
+			t.Fatalf("%s: a's view of t1 = %+v, want blocks []", how, v)
+		}
+		if v := get(leadInbox, t1.ID); !slices.Equal(v.Blocks, []string{t2.ID}) {
+			t.Fatalf("%s: lead's view of t1 = %+v", how, v)
+		}
+		if v := get(leadInbox, t2.ID); !slices.Equal(v.BlockedBy, []string{t1.ID}) || !slices.Equal(v.Blocks, []string{t3.ID}) {
+			t.Fatalf("%s: lead's view of t2 = %+v", how, v)
+		}
+	}
+	// The answer to a member's own status change is the same view.
+	if code, v, _ := w.setStatus(mbInbox, t2.ID, team.TaskInProgress); code != 200 || len(v.BlockedBy) != 0 || !v.Blocked {
+		t.Fatalf("b's status answer = %d %+v", code, v)
 	}
 }
 

@@ -105,6 +105,66 @@ func TestGetTaskDetail_ReadsTaskAndReportsUnderTheSameGuard(t *testing.T) {
 	}
 }
 
+// ListTasksForOwner lists a member's own tasks only while the member is an
+// active member of a live team, checked in the transaction that reads them;
+// otherwise ok=false and nothing is returned. A task reassigned away simply
+// is not in the list.
+func TestListTasksForOwner_ChecksTheMemberWhereItReads(t *testing.T) {
+	for name := range ownerChanges {
+		t.Run(name, func(t *testing.T) {
+			s := ownerFixture(t, name)
+			rows, ok, err := s.ListTasksForOwner(tTeamA, "op-a", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch name {
+			case ownerControl:
+				if !ok || len(rows) != 1 || rows[0].Seq != 1 {
+					t.Fatalf("control = %+v ok=%v", rows, ok)
+				}
+			case "the task was reassigned":
+				if !ok || rows == nil || len(rows) != 0 {
+					t.Fatalf("after the reassign = %#v ok=%v, want an empty list", rows, ok)
+				}
+			default:
+				if ok || len(rows) != 0 {
+					t.Fatalf("a refused list leaked: %+v ok=%v", rows, ok)
+				}
+			}
+		})
+	}
+}
+
+func TestListTasksForOwner_HidesFinishedUnlessAllAndKeepsTheOrder(t *testing.T) {
+	s := ownerFixture(t, ownerControl)
+	mustCreateTask(t, s, newTask(tTeamA, "op-a", "second", 20))  // seq 2
+	mustCreateTask(t, s, newTask(tTeamA, "op-b", "not a's", 21)) // seq 3
+	if _, err := s.SetTaskStatus(tTeamA, 1, team.TaskCompleted, team.TaskByLead, 30); err != nil {
+		t.Fatal(err)
+	}
+	seqs := func(all bool) []int {
+		rows, ok, err := s.ListTasksForOwner(tTeamA, "op-a", all)
+		if err != nil || !ok {
+			t.Fatalf("list: ok=%v err=%v", ok, err)
+		}
+		out := []int{}
+		for _, r := range rows {
+			out = append(out, r.Seq)
+		}
+		return out
+	}
+	if got := seqs(false); !reflect.DeepEqual(got, []int{2}) {
+		t.Fatalf("unfinished = %v", got)
+	}
+	want, _ := s.ListTasks(tTeamA, "op-a", true)
+	if got := seqs(true); len(got) != 2 || got[0] != want[0].Seq || got[1] != want[1].Seq {
+		t.Fatalf("all = %v, want ListTasks' order %v", got, want)
+	}
+	if _, ok, _ := s.ListTasksForOwner(tTeamA, "", true); ok {
+		t.Fatal("an empty owner key listed")
+	}
+}
+
 // A lead (ownerKey "") reads any task of its team; a wrong team or seq is
 // simply not found; reports are never nil.
 func TestGetTaskDetail_LeadScopeAndEmptyReports(t *testing.T) {
