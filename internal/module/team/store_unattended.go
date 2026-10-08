@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -17,8 +18,8 @@ var ErrMemberRelayIsLeads = errors.New("the session is an active member of a liv
 // row: in one write transaction it inserts op (awaiting_approval) and a
 // (open), runs the click's approve statements (closeSelfRelayApprovedIn)
 // and moves the op to what the approved row implies (claimed), so neither
-// the op nor the row is ever committed open. op must be a's (RequestID =
-// a.ID) and awaiting approval. A session that became an active member of a
+// the op nor the row is ever committed open. op must be a's — one relay,
+// as sameSelfRelay checks — and awaiting approval. A session that became an active member of a
 // live team rolls everything back with ErrMemberRelayIsLeads (U13); a
 // session with an open op, with ErrRelayOpOpen (the table's floor beneath
 // the begin's check); any other failure, or a close that is no approval,
@@ -27,8 +28,8 @@ func (s *Store) CreateSelfRelayApproved(op team.RelayOp, a team.Approval, hash s
 	fail := func(err error) (team.Approval, team.RelayOp, error) {
 		return team.Approval{}, team.RelayOp{}, fmt.Errorf("create approved self relay %s: %w", a.ID, err)
 	}
-	if a.Kind != team.KindSelfRelay || op.RequestID != a.ID || op.State != team.RelayAwaitingApproval {
-		return fail(fmt.Errorf("op %s (request %q, %s) is not the awaiting op of %s row %s", op.ID, op.RequestID, op.State, a.Kind, a.ID))
+	if err := sameSelfRelay(op, a); err != nil {
+		return fail(err)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -65,6 +66,27 @@ func (s *Store) CreateSelfRelayApproved(op team.RelayOp, a team.Approval, hash s
 		return fail(fmt.Errorf("commit: %w", err))
 	}
 	return after, claimed, nil
+}
+
+// sameSelfRelay is nil when op and a are one self relay, as the click's
+// begin builds them (relay_handler.go): a self_relay row and an awaiting
+// self op of the same host, session and ref, the op's RequestID the row's
+// id and the row's payload op_id the op's id. The member re-check reads
+// a.Origin.SessionID, so an op of another session would be claimed
+// unchecked (U13).
+func sameSelfRelay(op team.RelayOp, a team.Approval) error {
+	var p team.SelfRelayPayload
+	if err := json.Unmarshal(a.Payload, &p); err != nil {
+		return fmt.Errorf("%s row %s: payload: %w", a.Kind, a.ID, err)
+	}
+	if a.Kind != team.KindSelfRelay || op.Kind != team.RelayKindSelf || op.State != team.RelayAwaitingApproval ||
+		op.HostID != a.HostID || op.SessionID != a.Origin.SessionID || op.Ref != a.Origin.Ref ||
+		op.RequestID != a.ID || p.OpID != op.ID {
+		return fmt.Errorf("op %s (%s, %s, host %q, session %q, ref %q, request %q) is not the awaiting self op of %s row %s (host %q, session %q, ref %q, payload op %q)",
+			op.ID, op.Kind, op.State, op.HostID, op.SessionID, op.Ref, op.RequestID,
+			a.Kind, a.ID, a.HostID, a.Origin.SessionID, a.Origin.Ref, p.OpID)
+	}
+	return nil
 }
 
 // ListAutoApproved is one page of the "while you were away" list (D-U23-6,

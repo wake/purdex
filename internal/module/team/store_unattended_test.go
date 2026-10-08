@@ -282,6 +282,78 @@ func TestCreateSelfRelayApproved_MisuseWritesNothing(t *testing.T) {
 	}
 }
 
+// assertNothingWritten fails unless neither row id nor op opID exists.
+func assertNothingWritten(t *testing.T, s *Store, id, opID string) {
+	t.Helper()
+	if _, ok, err := s.Get(id); err != nil || ok {
+		t.Fatalf("row %s: ok=%v err=%v, want none", id, ok, err)
+	}
+	if _, ok, err := s.GetRelayOp(opID); err != nil || ok {
+		t.Fatalf("op %s: ok=%v err=%v, want none", opID, ok, err)
+	}
+}
+
+// The op, the row and the row's payload are one relay, as the click's
+// begin builds them (relay_handler.go): op.Kind self, op.HostID = row's,
+// op.SessionID / op.Ref = the origin's, op.RequestID = the row id, and
+// payload.op_id = op.ID. Each field that disagrees is refused before
+// anything is written.
+func TestCreateSelfRelayApproved_OpRowAndPayloadMustAgree(t *testing.T) {
+	withPayload := func(a team.Approval, raw string) team.Approval { a.Payload = json.RawMessage(raw); return a }
+	for name, mutate := range map[string]func(team.RelayOp, team.Approval) (team.RelayOp, team.Approval){
+		"a member op": func(op team.RelayOp, a team.Approval) (team.RelayOp, team.Approval) {
+			op.Kind = team.RelayKindMember
+			return op, a
+		},
+		"another host": func(op team.RelayOp, a team.Approval) (team.RelayOp, team.Approval) { op.HostID = "h:2"; return op, a },
+		"another session": func(op team.RelayOp, a team.Approval) (team.RelayOp, team.Approval) {
+			op.SessionID = "sid-2"
+			return op, a
+		},
+		"another ref": func(op team.RelayOp, a team.Approval) (team.RelayOp, team.Approval) { op.Ref = "_zzz999"; return op, a },
+		"another request": func(op team.RelayOp, a team.Approval) (team.RelayOp, team.Approval) {
+			op.RequestID = "req-x"
+			return op, a
+		},
+		"payload names another op": func(op team.RelayOp, a team.Approval) (team.RelayOp, team.Approval) {
+			return op, withPayload(a, `{"op_id":"op-9","used_percentage":72.4,"window":200000}`)
+		},
+		"payload without op_id": func(op team.RelayOp, a team.Approval) (team.RelayOp, team.Approval) {
+			return op, withPayload(a, `{"used_percentage":72.4,"window":200000}`)
+		},
+		"malformed payload": func(op team.RelayOp, a team.Approval) (team.RelayOp, team.Approval) { return op, withPayload(a, `{`) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := openTestStore(t)
+			base := selfOp("op-1", "sid-1", "_abc123", 1000)
+			op, a := mutate(base, selfRelayRow(base))
+			if _, _, err := s.CreateSelfRelayApproved(op, a, "h1", unattendedClose(2000, nil)); err == nil {
+				t.Fatal("no error")
+			}
+			assertNothingWritten(t, s, a.ID, op.ID)
+		})
+	}
+}
+
+// U13 cannot be dodged by pairing a member's op with another session's row:
+// the member re-check reads the row's origin, so an op of member session
+// sid-m under a row of sid-1 would be claimed unchecked. It is refused, and
+// nothing is written for either session.
+func TestCreateSelfRelayApproved_MemberHiddenInAnotherSessionsOpIsRefused(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, "team-x", "lead-sid", 500)
+	seedMember(t, s, "m-1", "team-x", "sid-m", 600)
+	a := selfRelayRow(selfOp("op-1", "sid-1", "_abc123", 1000))
+	op := selfOp("op-1", "sid-m", "_mmm111", 1000)
+	if _, _, err := s.CreateSelfRelayApproved(op, a, "h1", unattendedClose(2000, nil)); err == nil {
+		t.Fatal("no error: the member's op was claimed")
+	}
+	assertNothingWritten(t, s, a.ID, op.ID)
+	if got, ok, err := s.OpenRelayOpBySession("sid-m"); err != nil || ok {
+		t.Fatalf("member's op: %+v ok=%v err=%v, want none", got, ok, err)
+	}
+}
+
 // closedAt stores request id closed state at by.
 func closedAt(t *testing.T, s *Store, id string, at int64, by team.Client, state team.State) {
 	t.Helper()
