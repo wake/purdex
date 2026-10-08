@@ -3,6 +3,7 @@ package agent
 import (
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
@@ -31,6 +32,14 @@ type modLights struct {
 	modBySID   map[string]string              // sid → the newest stream reporting it
 	modDirty   map[string]struct{}            // sids whose panes must be re-emitted
 	modKick    chan struct{}                  // cap 1: wakes the re-emit worker
+
+	// modOverlayOn is the overlay switch, off until the re-emit worker
+	// (a-3b) runs: without it a mod change after a hook emit is never
+	// re-sent (the Stop hook arrives before the mod's 150 ms-batched
+	// turn.complete, and the light would stay running). The subscriber
+	// records either way; only applyModOverlay reads the switch. Nothing in
+	// production code turns it on yet; tests do.
+	modOverlayOn atomic.Bool
 }
 
 func newModLights() modLights {
@@ -153,7 +162,7 @@ type modLight struct {
 // light. It takes modMu only to copy the stream states (callers may hold
 // m.mu: the order is m.mu → modMu, and modMu is a leaf).
 func (m *Module) applyModOverlay(projections []SessionProjection) {
-	if len(projections) == 0 {
+	if len(projections) == 0 || !m.modOverlayOn.Load() {
 		return
 	}
 	lit := make(map[int]modLight)
