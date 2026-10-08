@@ -105,6 +105,7 @@ func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw 
 	}
 	m.setLeaseUse(latest)
 	m.useAt = lastAt
+	m.measuredThisBoot.Store(true)
 	return held, true
 }
 

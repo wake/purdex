@@ -32,6 +32,10 @@ const (
 	EndVanished   = "vanished"
 )
 
+// EventType is the WS host event that carries the snapshot (without recent)
+// while something is held or waiting, and once more when the last lease ends.
+const EventType = "resources.changed"
+
 // Limits of the lease routes.
 const (
 	// MaxWaitS is the longest a request may ask to wait: the mod's own call

@@ -94,6 +94,9 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	held, heldOK := m.measureLeases(ctx, procs, raw)
 	m.noteMinute(ctx, host, m.now(), held, heldOK)
 	m.admissionPass(ctx, "")
+	if m.store != nil && m.hasLeaseActivity(held) {
+		m.requestEvent() // while something is held or waits, the state is worth a push per window
+	}
 	return false
 }
 
