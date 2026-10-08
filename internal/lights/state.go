@@ -62,12 +62,13 @@ type StreamState struct {
 	Background  Background
 	// StatusEventAt is when the last event that moved, or could have moved,
 	// the light happened: the event's own at (the mod's Date.now()), clamped
-	// to the time the daemon received it, never going back (see Apply and
-	// apply). It is the event time and not the receive time because mod events
-	// reach the daemon a second or more late, and a hook that arrived in
-	// between must not read as older than them. A heartbeat, usage,
-	// background or agent.spawn does not move it, so a hook edge compared
-	// against it is not handed back by a mere beat. Zero until the first.
+	// to the time the daemon received it, going back only when a clock
+	// rollback is seen (see Apply and apply). It is the event time and not the
+	// receive time because mod events reach the daemon a second or more late,
+	// and a hook that arrived in between must not read as older than them. A
+	// heartbeat, usage, background or agent.spawn does not move it, so a hook
+	// edge compared against it is not handed back by a mere beat. Zero until
+	// the first.
 	StatusEventAt time.Time
 	// AtRejected counts the light events whose at was not believed (farther
 	// than atSkewWindow from the receive time) and so was replaced by it.
@@ -97,10 +98,14 @@ var activeAgent = map[string]bool{"pending": true, "running": true, "waiting": t
 // a change. StatusEventAt moves only with the events apply says touch the
 // light, and with a heartbeat that changed Status(); it takes the event's at,
 // or now when at is missing, later than now, or not believed (more than
-// atSkewWindow from now: AtRejected counts those), and never moves back. The mod
-// reaches the daemon only through a Unix socket on the same host, so at and now
-// come off one wall clock. Data that does not decode leaves everything but SID,
-// LastEvent and Ended as it was.
+// atSkewWindow from now: AtRejected counts those), and does not move back unless
+// a clock rollback is seen: a StatusEventAt later than now can only come from a
+// wall clock that was set back (NTP, a wake from sleep; it never exceeds the
+// receive time it was set at), so any event, light-moving or not, starts it over
+// from zero before the new value is merged. The mod reaches the daemon only
+// through a Unix socket on the same host, so at and now come off one wall clock.
+// Data that does not decode leaves everything but SID, LastEvent and Ended as it
+// was.
 func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 	status, bg, sid := s.Status(), s.Background, s.SID
 	dots := maps.Clone(s.Dots)
@@ -108,6 +113,9 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 	s.SID = ev.SID
 	s.LastEvent = now
 	s.Ended = false // any later event reopens an ended stream, as in the registry
+	if s.StatusEventAt.After(now) {
+		s.StatusEventAt = time.Time{} // the wall clock went back
+	}
 	touched := s.apply(ev)
 	if ev.Type == modevents.TypeHeartbeat && s.Status() != status {
 		// A heartbeat that repairs the light (a lost turn.start /
