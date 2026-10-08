@@ -60,6 +60,11 @@ type StreamState struct {
 	Ended       bool
 	Dots        map[string]Dot // keyed by agent id
 	Background  Background
+	// StatusEventAt is the daemon receive time of the last event that moved,
+	// or could have moved, the light (see apply). A heartbeat, usage,
+	// background or agent.spawn does not move it, so a hook edge compared
+	// against it is not handed back by a mere beat. Zero until the first.
+	StatusEventAt time.Time
 }
 
 // NewStreamState returns the empty state of stream: idle, no dots, not
@@ -82,8 +87,9 @@ var activeAgent = map[string]bool{"pending": true, "running": true, "waiting": t
 
 // Apply applies one event received at now. It reports whether Status(),
 // DotList(), Background or SID changed; LastEvent always moves and is not
-// a change. Data that does not decode leaves everything but SID,
-// LastEvent and Ended as it was.
+// a change. StatusEventAt moves only with the events apply says touch the
+// light. Data that does not decode leaves everything but SID, LastEvent and
+// Ended as it was.
 func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 	status, bg, sid := s.Status(), s.Background, s.SID
 	dots := maps.Clone(s.Dots)
@@ -91,17 +97,26 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 	s.SID = ev.SID
 	s.LastEvent = now
 	s.Ended = false // any later event reopens an ended stream, as in the registry
-	s.apply(ev)
+	if s.apply(ev) {
+		s.StatusEventAt = now
+	}
 
 	return status != s.Status() || bg != s.Background || sid != s.SID || !maps.Equal(dots, s.Dots)
 }
 
-func (s *StreamState) apply(ev modevents.Event) {
+// apply applies ev and reports whether it touched the inputs of Status(): a
+// session boundary, a main turn's start or end, an ask opened or closed, a
+// main compaction. Events that merely repeat or refine the state (heartbeat,
+// usage, background, agent.spawn), a subagent's turn, a check that allowed, a
+// tool that was not waiting on the person and data that does not decode
+// report false.
+func (s *StreamState) apply(ev modevents.Event) (touched bool) {
 	switch ev.Type {
 	case modevents.TypeSessionStart, modevents.TypeSessionSwitch:
 		var d struct{}
 		if decode(ev.Data, &d) {
 			s.reset()
+			touched = true
 		}
 	case modevents.TypeSessionEnd:
 		var d struct {
@@ -111,6 +126,7 @@ func (s *StreamState) apply(ev modevents.Event) {
 			s.Ended = true
 			s.Background = ""
 			s.Err = false // spec §7: session.end leaves error
+			touched = true
 		}
 	case modevents.TypeTurnStart:
 		var d struct {
@@ -121,6 +137,7 @@ func (s *StreamState) apply(ev modevents.Event) {
 			s.TurnID = d.TurnID
 			clear(s.Asks)
 			s.Err = false
+			touched = true
 		}
 	case modevents.TypeTurnComplete:
 		var d struct {
@@ -128,15 +145,16 @@ func (s *StreamState) apply(ev modevents.Event) {
 			AgentID string `json:"agent_id"`
 		}
 		if !decode(ev.Data, &d) {
-			return
+			return false
 		}
 		if d.AgentID != "" {
 			delete(s.Dots, d.AgentID)
-			return
+			return false
 		}
 		s.TurnID = ""
 		clear(s.Asks)
 		s.Err = d.Reason == "error"
+		touched = true
 	case modevents.TypeToolCheck:
 		var d struct {
 			ToolUseID string `json:"tool_use_id"`
@@ -148,6 +166,7 @@ func (s *StreamState) apply(ev modevents.Event) {
 				id = "check:" + strconv.FormatInt(ev.Seq, 10)
 			}
 			s.Asks[id] = true
+			touched = true
 		}
 	case modevents.TypeToolStart:
 		var d struct {
@@ -156,6 +175,7 @@ func (s *StreamState) apply(ev modevents.Event) {
 		}
 		if decode(ev.Data, &d) && askTools[d.Tool] && d.ToolUseID != "" {
 			s.Asks[d.ToolUseID] = true
+			touched = true
 		}
 	case modevents.TypeToolEnd, typeToolApproved:
 		// An approved permission ask stops waiting on the person at once;
@@ -164,6 +184,7 @@ func (s *StreamState) apply(ev modevents.Event) {
 			ToolUseID string `json:"tool_use_id"`
 		}
 		if decode(ev.Data, &d) {
+			touched = s.Asks[d.ToolUseID]
 			delete(s.Asks, d.ToolUseID)
 		}
 	case modevents.TypeCompactStart, modevents.TypeCompactEnd:
@@ -173,6 +194,7 @@ func (s *StreamState) apply(ev modevents.Event) {
 		}
 		if decode(ev.Data, &d) && d.AgentID == "" && d.Trigger != "precompute" {
 			s.Compacting = ev.Type == modevents.TypeCompactStart
+			touched = true
 		}
 	case modevents.TypeAgentSpawn:
 		var d struct {
@@ -193,6 +215,7 @@ func (s *StreamState) apply(ev modevents.Event) {
 	case modevents.TypeHeartbeat:
 		s.reconcile(ev)
 	}
+	return touched
 }
 
 type backgroundData struct {
