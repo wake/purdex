@@ -59,6 +59,9 @@ func (m *Module) tick() {
 		m.persistUsage()
 		m.endGoneTeams()
 		m.markGoneMembers()
+		// Titles and names change in the registry without a write of ours:
+		// the hash gate in rosterChanged makes the unchanged case a read.
+		m.rosterChanged()
 	}
 	open, err := m.store.ListOpen()
 	if err != nil {
@@ -156,6 +159,7 @@ func (m *Module) endGoneTeams() {
 		}
 		if ended {
 			m.logf("[team] team %s ended (%s): its lead %s (%s) is gone", t.ID, team.TeamEndLeadGone, t.LeadRef, t.LeadSessionID)
+			m.rosterChanged()
 		}
 	}
 }
@@ -239,6 +243,7 @@ func (m *Module) markGoneMembers() {
 		}
 		if gone {
 			m.logf("[team] member %s (%s) of team %s is gone", mr.Ref, mr.SessionID, mr.TeamID)
+			m.rosterChanged()
 		}
 	}
 }

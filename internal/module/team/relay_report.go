@@ -171,6 +171,10 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 func (m *Module) afterReport(op team.RelayOp) {
 	if op.State == team.RelayCleared || op.State == team.RelayDone {
 		m.moveTitle(op)
+		// A cleared moved the team's lead or a member to the new session
+		// (relay_store_report.go moveTeamRoles); done re-announces after a
+		// restart between the two. Unchanged is free (the hash gate).
+		m.rosterChanged()
 	}
 	if op.State.Terminal() && op.RequestID != "" {
 		m.closeRequestOfReportedOp(op)
