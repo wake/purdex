@@ -38,11 +38,12 @@
 //
 // This file is the plugin's one hooks module (hooks/hooks.json names a single
 // path); it also registers ask.js, the AskUserQuestion 分流 (P8a-2), and
-// imports prompts.js, the copy of the daemon's relay prompts generated from
+// events.js, the event reporter (interface U1 spec §6.5), and imports prompts.js, the copy of the daemon's relay prompts generated from
 // internal/team/relay_prompts.go (P9a): the fixed head and tail of each
 // prompt, and the built-in bodies.
 
 import { register as registerAsk } from './ask.js'
+import { registerEvents } from './events.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
 
 const VERSION = '1' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
@@ -622,6 +623,9 @@ async function onSeedTurnDone($) {
 
 export function register(on) {
   registerAsk(on) // tool.call{AskUserQuestion} only: no event this module hooks below
+  // The event reporter (interface U1 spec §6.5): unmatched on events this module does not
+  // hook, matched on the ones it does; registered first, so its hooks wrap the relay's.
+  registerEvents(on)
 
   on('session.start', async ($, e, next) => {
     resetState()
