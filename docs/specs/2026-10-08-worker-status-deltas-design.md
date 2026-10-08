@@ -510,3 +510,18 @@ PR1a–c are inert until PR2b lands: an old SPA ignores both the unknown event t
 | B3 | coordinator | No `nex.*` at all for clients that did not ask (old SPA, purdex-ios) | Same as B2 |
 | B4 | PR1b-5 attacker high | The opted-in queue is shared, so a delta burst can make a later tmux/status frame drop silently, with no reconnect | §3.5: an opted-in subscriber is strict for every frame; any failed enqueue ends its connection |
 | B5 | PR1b-5 attacker medium | `Query().Get("nex")` reads the first value only, so the opt-in depends on parameter order | §3.5: exactly one `nex` value equal to `v1` |
+
+### PR2a/PR2b fold-in
+
+What PR2a shipped that the text above does not say, and what PR2b changed.
+
+- `listExecutions` still returns the page; the daemon's `pdx` stamp rides in that body and is exposed by `sanitizeExecutionsPage` (no `{page, pdx}` wrapper).
+- `pdx=retry` is sent only in `delta` mode (legacy walks never see 503 `nex_busy`).
+- `HostListCache.rowVers` and `archivedRevision` are optional, so a hand-built cache need not name them (absent reads as `{}` / 0). PR2b adds the same kind of optional fields: `spaMismatchTotal` and `walkPages`.
+- `upTo` is the daemon's `next_cursor`, not the last kept row, so a tail row dropped as malformed still belongs to its page.
+- A walk whose `pdx.epoch` differs from the hello baseline is discarded; the new epoch's hello reconciles.
+- PR2b:
+  - `useMultiHostEventWs` connects with `nex=v1` and routes `nex.executions.hello` / `nex.execution` (`value` is a JSON string; malformed → warn and ignore) through `lib/nex/nex-host-events.ts`. This is what turns `delta` mode on.
+  - Safety reconcile (§4.5 item 5): every 120 s while a `delta` host has a subscriber and the document is visible; skipped while a walk is in flight. Pure suspect finder in `lib/nex/delta-reconcile.ts`; each `WalkPage` also records the stamp's `bseq` (H, §8 R3-1). A suspect waits until `lastBseq >= H`, then 1.5 s; a delta for its id with `ver > V`, or `bseq <= H` and the listed digest, makes it benign; otherwise `spaMismatchTotal++` plus `console.warn('nex-delta: spa mismatch', …)`. A gap, a hello, `close` and `clearHost` cancel pending suspects and the timer.
+  - `NexExecutionsTable` keys the archived query on `archivedRevision` **and** `refreshRevision`. Keeping `refreshRevision` preserves the existing "a failed shared refresh still re-runs the archived query" behaviour; ordinary deltas move neither.
+  - #1963: `HostListCache.walkPages` keeps the last walk's pages, so an id absent from the walk is floored by its covering page's ver and a stale delta upsert (`ver <=` that) is dropped.
