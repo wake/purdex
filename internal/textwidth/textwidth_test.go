@@ -1,6 +1,8 @@
 package textwidth
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -31,3 +33,26 @@ func TestCutWidth(t *testing.T) {
 
 // Every row's later columns start at the same display column, whatever the
 // widths of the cells before them.
+
+// The shared fixture: the strings and the weights the daemon (this package)
+// and the App (spa/src/lib/textwidth.ts) must both give. Two hand-written range
+// tables cannot be proved the same, but they can be made to agree on these.
+func TestWidthFixture(t *testing.T) {
+	b, err := os.ReadFile("../../testdata/textwidth/cases.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Name  string `json:"name"`
+		S     string `json:"s"`
+		Width int    `json:"width"`
+	}
+	if err := json.Unmarshal(b, &cases); err != nil || len(cases) < 20 {
+		t.Fatalf("fixture: %v (%d cases)", err, len(cases))
+	}
+	for _, c := range cases {
+		if got := CellWidth(c.S); got != c.Width {
+			t.Errorf("%s: CellWidth(%q) = %d, want %d", c.Name, c.S, got, c.Width)
+		}
+	}
+}

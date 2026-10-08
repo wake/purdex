@@ -1,0 +1,137 @@
+[
+  {
+    "name": "empty",
+    "s": "",
+    "width": 0
+  },
+  {
+    "name": "ascii",
+    "s": "abc",
+    "width": 3
+  },
+  {
+    "name": "space",
+    "s": " ",
+    "width": 1
+  },
+  {
+    "name": "cjk",
+    "s": "長",
+    "width": 2
+  },
+  {
+    "name": "mixed",
+    "s": "a長b",
+    "width": 4
+  },
+  {
+    "name": "租約",
+    "s": "租約",
+    "width": 4
+  },
+  {
+    "name": "A 線",
+    "s": "A 線",
+    "width": 4
+  },
+  {
+    "name": "A線派工",
+    "s": "A線派工",
+    "width": 7
+  },
+  {
+    "name": "資源租約派工",
+    "s": "資源租約派工",
+    "width": 12
+  },
+  {
+    "name": "lease-p1",
+    "s": "lease-p1",
+    "width": 8
+  },
+  {
+    "name": "resource-lease",
+    "s": "resource-lease",
+    "width": 14
+  },
+  {
+    "name": "combining mark",
+    "s": "é",
+    "width": 1
+  },
+  {
+    "name": "ellipsis",
+    "s": "…",
+    "width": 1
+  },
+  {
+    "name": "ideographic tilde",
+    "s": "〜",
+    "width": 2
+  },
+  {
+    "name": "fullwidth latin",
+    "s": "Ａ",
+    "width": 2
+  },
+  {
+    "name": "halfwidth katakana",
+    "s": "ｱ",
+    "width": 1
+  },
+  {
+    "name": "emoji",
+    "s": "😀",
+    "width": 2
+  },
+  {
+    "name": "emoji modifier",
+    "s": "👍🏽",
+    "width": 2
+  },
+  {
+    "name": "rocket",
+    "s": "🚀",
+    "width": 2
+  },
+  {
+    "name": "text heart + VS16",
+    "s": "❤️",
+    "width": 1
+  },
+  {
+    "name": "keycap",
+    "s": "1️⃣",
+    "width": 1
+  },
+  {
+    "name": "ZWJ family",
+    "s": "👨‍👩‍👧‍👦",
+    "width": 8
+  },
+  {
+    "name": "flag (two regional indicators)",
+    "s": "🇹🇼",
+    "width": 2
+  },
+  {
+    "name": "Hangul syllable",
+    "s": "한",
+    "width": 2
+  },
+  {
+    "name": "Hangul decomposed jamo",
+    "s": "한",
+    "width": 4
+  },
+  {
+    "name": "variation selector alone",
+    "s": "a️",
+    "width": 1
+  },
+  {
+    "name": "zero width space",
+    "s": "a​b",
+    "width": 2
+  }
+]
