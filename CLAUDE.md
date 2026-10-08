@@ -21,21 +21,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Peer addresses（跨主機 agent 訊息）
 
-- **日常地址是 `<host>/<name>`**，`<name>` 就是 Claude Code 註冊表裡這個對話自己的名字，
-  例如 `mlab/purdex-b0`。`pdx peers` 與 `pdx msg whoami` 會連同 ref 一起顯示成
-  `<host>/<name> [<ref>]`。名字會變，所以這個形式**不保證終生不變**（要不變的形式看下面的 ref）。
+- **日常地址是 `<host>/<name>`**，`<name>` 是 pdx 替這個對話配的**虛擬名**（Peer Address v5）：
+  `<基底>-<ref 前兩碼>`，例如 ref `_q34psn`、基底 `purdex-b0` → `mlab/purdex-b0-q3`。
+  基底取這個對話**第一次**被 daemon 看到時的名字（當時的 CLI 名字；沒有就用記過的名字；
+  執行體用工作目錄名），**配一次就終生不變**：`/rename`、Claude Code 每次啟動換名都不影響；
+  接力（relay）後的新 session 沿用前任的名字（後綴不重算）；手動 `/clear` 是新對話，重新配。
+  `pdx peers` 與 `pdx msg whoami` 會連同 ref 一起顯示成 `<host>/<name> [<ref>]`。
+- **Claude Code 自己的 session 名字（CLI 名字）不是地址，不路由**：拿它送會回 `peer_not_found`；
+  它若剛好是某個活著的對話的 CLI 名字，detail 會附 `did you mean <host>/<虛擬名>?`。
+  地址一律問 `pdx msg whoami`（自己的）／`pdx peers --all`（別人的），不要從 CLI 名字推。
+  例外：對方主機的 daemon 還是舊版（列沒有虛擬名）時，對它照舊用 CLI 名字定址。
 - **`pdx msg send` 接受三種寫法**：
-  - `pdx msg send mlab/purdex-b0 "..."` —— 日常型，不必引號。
-  - `pdx msg send "mlab/purdex-b0 [q34psn]" "..."` —— 表格看到什麼就整串貼上。
+  - `pdx msg send mlab/purdex-b0-q3 "..."` —— 日常型，不必引號。
+  - `pdx msg send "mlab/purdex-b0-q3 [q34psn]" "..."` —— 表格看到什麼就整串貼上。
     **括號形式的 name 會拿去跟 ref 核對**，對不上就**拒送**（`name_mismatch`），
     不是「以 ref 為準」照送 —— 那個 name 是給人看的檢查碼。含空白，一定要引號。
-  - `pdx msg send mlab/_q34psn "..."` —— 精確型，**改名也不會失效**，跨時間交接就用這個。
+  - `pdx msg send mlab/_q34psn "..."` —— 精確型；兩個對話剛好配到同一個虛擬名
+    （同名會回 `ambiguous`，附候選）時用它，跨時間交接用它也行。
   - `<host>/tmux:<tmux session 名>` 仍是位置型 fallback，但它跟著 tmux 名走，改名就失效。
 - **ref 是 `_` 加 6 位 base36**（`^_[0-9a-z]{6}$`），由該對話的 sessionId 導出（純函數，
-  resume 與 daemon 重啟都不變，改名也不變）。表格括號裡印的是**去掉底線**的 6 碼，
-  當地址打時要把 `_` 補回去。agent 算不出自己的 ref（拿不到 sessionId），只能問 `pdx msg whoami`。
-- **name 要通過 routable 規則才能當地址**：`^[a-z0-9][a-z0-9-]{1,63}$`，且**不得剛好是 6 碼
-  base36**（否則會遮蔽別人的 ref）。不合格的 name 照樣顯示，那一列也照樣送得到，
+  resume 與 daemon 重啟都不變，改名也不變；接力後舊 ref 經 lineage 照樣送得到）。表格括號裡印的是
+  **去掉底線**的 6 碼，當地址打時要把 `_` 補回去。agent 算不出自己的 ref（拿不到 sessionId），只能問 `pdx msg whoami`。
+- **虛擬名一定通過 routable 規則**：`^[a-z0-9][a-z0-9-]{1,63}$`，且**不得剛好是 6 碼 base36**
+  （否則會遮蔽別人的 ref）。取不到合格的基底（例如 CLI 名字含大寫或符號）就**不配名**，那一列照樣送得到，
   只是只能用 ref 定址 —— `address` 本身就會印成 ref 形式。`reason` 不記這件事：
   那個欄位講的是「為什麼送不到」，而這一列送得到。
 - **`title` 取代了舊的 `label`**：自由文字，≤64 bytes、可列印 UTF-8、無控制字元，**沒有保留字**

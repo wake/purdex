@@ -17,18 +17,30 @@ const (
 )
 
 // liveRow is the row shape the name and ref tiers decide on: a live cc entry
-// carrying both its registry name and its ref. The label rides along and is
-// deliberately never what any tier matches — that is D3, unchanged in v4.
+// carrying its name and its ref. The name is the virtual name the name tier
+// matches (Peer Address v5); the registry name is set to the same string so
+// these pre-v5 cases keep testing the tiers rather than which name is read —
+// v5Row is where the two differ. The label rides along and is deliberately
+// never what any tier matches — that is D3, unchanged since v4.
 func liveRow(ref, name, label, sessionName string, pid int) PeerRecord {
 	source := ""
 	if label != "" {
 		source = "user"
 	}
 	return PeerRecord{
-		SessionName: sessionName, Ref: ref, Title: label, TitleSource: source,
+		SessionName: sessionName, Ref: ref, Name: name, Title: label, TitleSource: source,
 		Agent:       &AgentInfo{Type: "cc", PID: pid, PeerName: name},
 		Deliverable: true,
 	}
+}
+
+// v5Row is a live row whose virtual name and registry name differ, as they
+// do for every conversation once Claude Code has renamed it (it does so on
+// every start).
+func v5Row(ref, vname, registryName string, pid int) PeerRecord {
+	r := liveRow(ref, vname, "", "", pid)
+	r.Agent.PeerName = registryName
+	return r
 }
 
 // inboxDeadRow is the owner-fallback session row Build emits when a cc
@@ -528,6 +540,79 @@ func TestResolve_UnroutableNameNeverWinsTier1(t *testing.T) {
 	recs := []PeerRecord{liveRow("_aaaaaa", "has/slash", "", "a", 1)}
 	if _, err := Resolve(recs, "has/slash", ResolveSnapshot{}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// --- Resolve: Peer Address v5, the virtual name (peer mailbox spec §3.3) ---
+
+// The name tier matches the virtual name, and only it: the registry name
+// changes every time Claude Code starts, so it no longer routes.
+func TestResolve_V5_VirtualNameRoutesRegistryNameDoesNot(t *testing.T) {
+	recs := []PeerRecord{
+		v5Row("_q34psn", "purdex-b0-q3", "purdex-b0", 1),
+		v5Row("_df25d0", "nexen-f2-df", "addr-97", 2),
+	}
+	for in, pid := range map[string]int{"purdex-b0-q3": 1, "nexen-f2-df": 2, "purdex-b0-q3 [q34psn]": 1} {
+		got, err := Resolve(recs, in, ResolveSnapshot{})
+		if err != nil || got.Agent.PID != pid {
+			t.Errorf("Resolve(%q) = pid %v, %v; want pid %d", in, pidOf(got), err, pid)
+		}
+	}
+	for _, in := range []string{"purdex-b0", "addr-97"} {
+		if _, err := Resolve(recs, in, ResolveSnapshot{}); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Resolve(%q) = %v, want ErrNotFound: a registry name no longer routes", in, err)
+		}
+	}
+}
+
+// A row with no virtual name is addressed by its ref, and its registry name
+// does not quietly take the name's place.
+func TestResolve_V5_NamelessRowReachedByRefOnly(t *testing.T) {
+	recs := []PeerRecord{v5Row("_q34psn", "", "purdex-b0", 1)}
+	if _, err := Resolve(recs, "purdex-b0", ResolveSnapshot{}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("registry name: %v, want ErrNotFound", err)
+	}
+	if got, err := Resolve(recs, "_q34psn", ResolveSnapshot{}); err != nil || got.Agent.PID != 1 {
+		t.Errorf("ref: %+v %v, want the row", got, err)
+	}
+}
+
+// The combined form checks the typed name against the VIRTUAL name: an old
+// "<registry name> [<ref>]" from a scrollback is a mismatch that names the
+// conversation's current address, never a delivery.
+func TestResolve_V5_CombinedRegistryNameIsMismatch(t *testing.T) {
+	recs := []PeerRecord{v5Row("_q34psn", "purdex-b0-q3", "purdex-b0", 1)}
+	_, err := Resolve(recs, "purdex-b0 [q34psn]", ResolveSnapshot{})
+	if !errors.Is(err, ErrNameMismatch) {
+		t.Fatalf("err = %v, want ErrNameMismatch", err)
+	}
+	if !strings.Contains(err.Error(), `"purdex-b0-q3"`) {
+		t.Errorf("error %q does not name the ref's virtual name", err)
+	}
+	// Through the lineage too: a relayed-from ref keeps the name check.
+	relayed := []PeerRecord{v5Row("_zq81ab", "purdex-b0-q3", "purdex-b0", 2)}
+	relayed[0].PreviousRefs = []string{"_q34psn"}
+	if got, err := Resolve(relayed, "purdex-b0-q3 [q34psn]", ResolveSnapshot{}); err != nil || got.Agent.PID != 2 {
+		t.Errorf("lineage, virtual name: %+v %v, want the relayed row", got, err)
+	}
+	if _, err := Resolve(relayed, "purdex-b0 [q34psn]", ResolveSnapshot{}); !errors.Is(err, ErrNameMismatch) {
+		t.Errorf("lineage, registry name: %v, want ErrNameMismatch", err)
+	}
+}
+
+// Two conversations that happen to hold one virtual name are not told apart
+// by guessing (spec §3.2 "同名"): ambiguous, with both as candidates.
+func TestResolve_V5_SharedVirtualNameIsAmbiguous(t *testing.T) {
+	recs := []PeerRecord{
+		v5Row("_q34psn", "purdex-b0-q3", "purdex-b0", 1),
+		v5Row("_q3zzzz", "purdex-b0-q3", "purdex-b7", 2),
+	}
+	var amb *AmbiguousError
+	if _, err := Resolve(recs, "purdex-b0-q3", ResolveSnapshot{}); !errors.As(err, &amb) || len(amb.Candidates) != 2 {
+		t.Fatalf("err = %v, want AmbiguousError with 2 candidates", err)
+	}
+	if got, err := Resolve(recs, "purdex-b0-q3 [q3zzzz]", ResolveSnapshot{}); err != nil || got.Agent.PID != 2 {
+		t.Errorf("combined form: %+v %v, want the ref to tell them apart", got, err)
 	}
 }
 

@@ -42,15 +42,22 @@ const msgDefaultLogTail = 50
 // the reader who most needs it — someone who has just run `pdx msg name`
 // and is about to type that string as an address — because what that verb
 // sets is a title, and a title routes nothing.
+//
+// Under Peer Address v5 (peer mailbox spec §3.3) <name> is the virtual name
+// pdx gave the conversation, "<base>-<ref[1:3]>"; the block says so, and
+// that Claude Code's own session name — the one its UI shows, which changes
+// on every start — is not an address either.
 const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--config <path>] [--] <address> <text>\n" +
 	"           (-- ends the options: use it before text that starts with -)\n" +
 	"           (<address> is one of:\n" +
-	"              <host>/<name>              the everyday form — mlab/purdex-b0\n" +
+	"              <host>/<name>              the everyday form — mlab/purdex-b0-q3\n" +
 	"              \"<host>/<name> [<ref>]\"     pasted whole; the name is checked against the ref\n" +
-	"              <host>/_<ref>              exact, and survives a rename — mlab/_q34psn\n" +
+	"              <host>/_<ref>              exact — mlab/_q34psn\n" +
 	"              <host>/tmux:<name>         the tmux session itself\n" +
-	"            The title claimed with `pdx msg name` is never an address: it is how you choose\n" +
-	"            a peer, not how you reach one. `pdx msg whoami` prints your own address,\n" +
+	"            <name> is the name pdx gave the conversation, fixed for its life;\n" +
+	"            Claude Code's own session name is not an address, and the title claimed\n" +
+	"            with `pdx msg name` is never an address: it is how you choose a peer, not\n" +
+	"            how you reach one. `pdx msg whoami` prints your own address,\n" +
 	"            `pdx peers --all` prints every host's.)\n" +
 	"       pdx msg log [--tail N] [--json] [--config <path>]\n" +
 	"       pdx msg deliver <on|off|status> [--json] [--config <path>]\n" +

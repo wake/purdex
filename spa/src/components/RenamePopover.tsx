@@ -134,7 +134,18 @@ function PanePeerSection({ target }: { target: RenameTargetPane }) {
       {row.agent && (
         <DetailRow label={t('peer.agent')}>
           <span data-testid={`peer-agent-${pid}`} className="block truncate text-[11px] text-text-primary">
-            {[row.agent.type, row.agent.peerName, row.agent.status].filter(Boolean).join(' · ')}
+            {[row.agent.type, row.agent.status].filter(Boolean).join(' · ')}
+          </span>
+        </DetailRow>
+      )}
+      {/* Claude Code's own session name, on a row of its own: under Peer
+          Address v5 it changes on every start and routes nothing, so it is
+          not offered beside the address as the conversation's name, and it
+          is not click-to-copy. */}
+      {row.agent?.peerName && (
+        <DetailRow label={t('peer.cli_name')}>
+          <span data-testid={`peer-cli-name-${pid}`} className="block truncate text-[11px] text-text-secondary">
+            {row.agent.peerName}
           </span>
         </DetailRow>
       )}

@@ -613,10 +613,11 @@ func TestE2E_TwoDaemons(t *testing.T) {
 		PeerName: e2eOriginName, SessionName: "mt1", DeclaredMode: ipeers.ModePrompting,
 	}
 	targetTo := ipeers.WireTo{AgentSessionID: e2eTargetSID, PID: e2eTargetPID, ProcStart: e2eCCProcStart}
-	// v4 (§5.2): the resolved row's address is "<alias>/<registry name>".
+	// v5 (peer mailbox spec §3): the resolved row's address is
+	// "<alias>/<virtual name>", which B assigned and A reads off B's row.
 	// Neither session has claimed a label and it would not matter if they had
 	// — a label never addresses.
-	targetAddr := "b/" + e2eTargetName
+	targetAddr := "b/" + vname(t, e2eTargetName, e2eTargetSID)
 	// from-name (§5.6): each side names the other's helper after the SENDER's
 	// wire address, which is the bare ref rather than the name. The two forms
 	// are deliberately different strings for the same conversation: the wire
@@ -932,7 +933,7 @@ func TestE2E_Labels(t *testing.T) {
 	// addressed to "b/purdex-tester" is a plain 404 and nothing is
 	// delivered. That is D3, end to end. ----
 	sent := a.sendOK(ipeers.SendRequest{To: "b/" + ipeers.RefID(e2eTargetSID), Text: "ping", OriginInbox: originSock})
-	wantAddr := "b/" + e2eTargetName
+	wantAddr := "b/" + vname(t, e2eTargetName, e2eTargetSID)
 	if sent.ToAddress != wantAddr || sent.To != targetTo {
 		t.Errorf("step 2: to = %s %+v, want %s %+v", sent.ToAddress, sent.To, wantAddr, targetTo)
 	}
@@ -1062,7 +1063,7 @@ func TestE2E_CanonicalSurvivesATmuxRename(t *testing.T) {
 
 	// ---- 2. Before the rename: the canonical delivers; the label does not. ----
 	sent := a.sendOK(ipeers.SendRequest{To: canonical, Text: "before", OriginInbox: originSock})
-	if want := "b/" + e2eTargetName; sent.ToAddress != want || sent.To != targetTo {
+	if want := "b/" + vname(t, e2eTargetName, e2eTargetSID); sent.ToAddress != want || sent.To != targetTo {
 		t.Fatalf("step 2: to = %s %+v, want %s %+v", sent.ToAddress, sent.To, want, targetTo)
 	}
 	target.recv("step 2")
@@ -1085,7 +1086,7 @@ func TestE2E_CanonicalSurvivesATmuxRename(t *testing.T) {
 	if sent.To != targetTo {
 		t.Errorf("step 4: to tuple = %+v, want the unchanged %+v", sent.To, targetTo)
 	}
-	if want := "b/" + e2eTargetName; sent.ToAddress != want {
+	if want := "b/" + vname(t, e2eTargetName, e2eTargetSID); sent.ToAddress != want {
 		t.Errorf("step 4: to_address = %q, want the unchanged %q — a tmux rename does not reach an address", sent.ToAddress, want)
 	}
 	target.recv("step 4: the canonical survived the rename")
@@ -1178,18 +1179,21 @@ func TestE2E_LabelAmbiguityUnderUnknownFile(t *testing.T) {
 	st, raw := a.send(ipeers.SendRequest{To: "b/" + head, Text: "x", OriginInbox: originSock})
 	ae := a.assertAPIError(st, raw, http.StatusConflict, ipeers.ErrAmbiguous, "two processes, one address")
 	// Both candidates, each named well enough to be told apart: the two
-	// share the address, so agent name, pid and cwd are the only things
-	// that say WHICH live process is which (spec §6.4).
+	// share the address — one conversation, one virtual name, taken from the
+	// smaller of its registry names at first sighting — so agent name, pid
+	// and cwd are the only things that say WHICH live process is which
+	// (spec §6.4).
 	if len(ae.Candidates) != 2 {
 		t.Fatalf("step 2: candidates = %+v, want 2", ae.Candidates)
 	}
+	shared := "b/" + vname(t, "twin-1", twinSID)
 	for i, want := range []struct {
 		name string
 		pid  int
 	}{{"twin-1", twin1PID}, {"twin-2", twin2PID}} {
 		got := ae.Candidates[i]
-		if got.Address != "b/"+want.name || got.AgentName != want.name || got.PID != want.pid || got.Cwd != "/w" {
-			t.Errorf("step 2: candidate %d = %+v, want address b/%s, agent %s, pid %d, cwd /w", i, got, want.name, want.name, want.pid)
+		if got.Address != shared || got.AgentName != want.name || got.PID != want.pid || got.Cwd != "/w" {
+			t.Errorf("step 2: candidate %d = %+v, want address %s, agent %s, pid %d, cwd /w", i, got, shared, want.name, want.pid)
 		}
 	}
 	twin1.none("step 2")
@@ -1241,10 +1245,9 @@ func TestE2E_LabelAmbiguityUnderUnknownFile(t *testing.T) {
 //
 // It is the exact OPPOSITE fixture to TestE2E_LabelAmbiguityUnderUnknownFile
 // above, which is why that one covers nothing of this. The twins there are
-// two processes of ONE conversation: two registry names, hence two addresses,
-// hence self-distinguishing under v4 — the ambiguity that does not need refs.
-// Here there are TWO conversations that happen to share one registry name:
-// one address, two refs. Their refusal lists two rows with identical
+// two processes of ONE conversation: one ref, so the refs cannot tell them
+// apart. Here there are TWO conversations that happen to share one name: one
+// address, two refs. Their refusal lists two rows with identical
 // addresses, so the ref is the only thing in it an operator can act on, and a
 // refusal nobody can act on has told them nothing.
 //
@@ -1269,11 +1272,16 @@ func TestE2E_LocalSameNameToldApartByRef(t *testing.T) {
 		sockDir:  sockDir, regDir: regDir, live: live,
 	})
 
-	// ---- 1. Two conversations sharing one registry name, on A itself. ----
+	// ---- 1. Two conversations sharing one name, on A itself. Under Peer
+	// Address v5 the name is the virtual one, "<registry name>-<ref[1:3]>",
+	// so the two sessionIds are chosen to derive refs that agree on those two
+	// digits (_avx3t7, _avhngk): one registry name then yields one virtual
+	// name — the chance collision peer mailbox spec §3.2 leaves to the
+	// ambiguity rule. ----
 	const (
 		dupeName = "purdex-dd"
 		dupeSID1 = "dddddddd-1111-4111-8111-aaaaaaaaaaaa"
-		dupeSID2 = "dddddddd-2222-4222-8222-bbbbbbbbbbbb"
+		dupeSID2 = "dddddddd-2222-4222-8222-0000000000f1"
 
 		dupePID1 = 41011
 		dupePID2 = 41012
@@ -1294,22 +1302,17 @@ func TestE2E_LocalSameNameToldApartByRef(t *testing.T) {
 	inboxByRef := map[string]*fakeInbox{ref1: dupe1, ref2: dupe2}
 	otherByRef := map[string]*fakeInbox{ref1: dupe2, ref2: dupe1}
 
-	// Peer Address v5 shows each conversation under its own virtual name
-	// (the registry name plus its ref's first two digits); until resolution
-	// moves to virtual names (P3b), the shared registry name still routes —
-	// and is still ambiguous, which steps 2 and 3 pin.
-	wantAddress := a.alias + "/" + dupeName
-	virtualAddress := func(ref string) string {
-		n, _ := ipeers.VirtualName(dupeName, ref)
-		return a.alias + "/" + n
+	wantAddress := a.alias + "/" + vname(t, dupeName, dupeSID1)
+	if other := a.alias + "/" + vname(t, dupeName, dupeSID2); other != wantAddress {
+		t.Fatalf("fixture: virtual addresses %q and %q differ; choose sessionIds whose refs share two digits", wantAddress, other)
 	}
 	env := a.peers()
 	if env.Partial || len(env.UnknownRegistryFiles) != 0 {
 		t.Fatalf("step 1: A's inventory partial=%v unknown=%v, want complete", env.Partial, env.UnknownRegistryFiles)
 	}
 	for ref, sock := range map[string]string{ref1: dupe1Sock, ref2: dupe2Sock} {
-		if rec := a.peerByInbox(env, sock); rec.Address != virtualAddress(ref) || rec.Ref != ref || rec.RowKind != "entry" {
-			t.Fatalf("step 1: row for %s = %+v, want entry row %q with ref %q", filepath.Base(sock), rec, virtualAddress(ref), ref)
+		if rec := a.peerByInbox(env, sock); rec.Address != wantAddress || rec.Ref != ref || rec.RowKind != "entry" {
+			t.Fatalf("step 1: row for %s = %+v, want entry row %q with ref %q", filepath.Base(sock), rec, wantAddress, ref)
 		}
 	}
 
@@ -1320,8 +1323,8 @@ func TestE2E_LocalSameNameToldApartByRef(t *testing.T) {
 		t.Fatalf("step 2: candidates = %+v, want 2", ae.Candidates)
 	}
 	for i, c := range ae.Candidates {
-		if c.Address != virtualAddress(c.Ref) {
-			t.Errorf("step 2: candidate %d address = %q, want its own %q", i, c.Address, virtualAddress(c.Ref))
+		if c.Address != wantAddress {
+			t.Errorf("step 2: candidate %d address = %q, want %q — the two SHARE an address, which is this test's premise", i, c.Address, wantAddress)
 		}
 	}
 	// Identical addresses mean everything rests on the refs: pid and cwd are
@@ -1444,7 +1447,7 @@ func TestE2E_HelperRename(t *testing.T) {
 	oldRev := claimResp.Peer.TitleRev // the "purdex-tester" claim's revision — the stale one step 4 replays
 
 	sent := a.sendOK(ipeers.SendRequest{To: "b/" + ipeers.RefID(e2eTargetSID), Text: "ping", OriginInbox: originSock})
-	wantAddr1 := "b/" + e2eTargetName
+	wantAddr1 := "b/" + vname(t, e2eTargetName, e2eTargetSID)
 	if sent.ToAddress != wantAddr1 {
 		t.Errorf("step 1: to_address = %q, want %q", sent.ToAddress, wantAddr1)
 	}

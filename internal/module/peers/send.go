@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/middleware"
@@ -54,7 +56,46 @@ const maxSendBodyBytes = 1 << 20
 // 2026-10-07 (P5a): a relay keeps the old ref reachable through the
 // lineage (spec §8.4), so the hint says "renames and relays"; a manual
 // /clear still does not.
-const peerNotFoundHint = "an address is `<host>/<name>`, where <name> is the session's own name — not the title it calls itself; add its ref as `<host>/<name> [<ref>]` when two sessions share a name, or use `<host>/_<ref>` alone, which survives renames and relays (a manual /clear starts a new ref) — run `pdx peers --all` for the current addresses, or `pdx msg whoami` for your own"
+// 2026-10-08 (Peer Address v5, peer mailbox spec §3): <name> is the virtual
+// name pdx assigned, fixed for the conversation's life and inherited through
+// relays; "the session's own name" — Claude Code's, which changes on every
+// start — was about to become the third backwards teaching, so the hint now
+// names it as the string that does NOT route. A typed registry name of a live
+// row gets its virtual address suggested (registryNameSuggestion).
+const peerNotFoundHint = "an address is `<host>/<name>`, where <name> is the name pdx gave the conversation — not Claude Code's own session name, which changes on every start, and not the title it calls itself; add its ref as `<host>/<name> [<ref>]` when two conversations share a name, or use `<host>/_<ref>` alone; both survive renames and relays (a manual /clear starts a new conversation) — run `pdx peers --all` for the current addresses, or `pdx msg whoami` for your own"
+
+// maxNameSuggestions bounds registryNameSuggestion's list: rows can be a
+// remote's, and a hostile one could hold a thousand rows of one name.
+const maxNameSuggestions = 3
+
+// registryNameSuggestion is the migration hint of spec §3.3: when the typed
+// session is the registry name of live rows that carry a virtual name, it
+// answers "did you mean <alias>/<name>?" naming them (sorted, deduplicated,
+// at most maxNameSuggestions); "" otherwise. It only suggests: the registry
+// name stays unroutable, and the operator decides. A row's Name is routable
+// by construction (applyIdentity, remoteName), so nothing echoed here is
+// text a remote could shape beyond that grammar.
+func registryNameSuggestion(rows []ipeers.PeerRecord, session, alias string) string {
+	if !ipeers.RoutableName(session) {
+		return ""
+	}
+	seen := map[string]bool{}
+	var addrs []string
+	for _, r := range rows {
+		if isLiveCC(r) && r.Agent.PeerName == session && ipeers.RoutableName(r.Name) && !seen[r.Name] {
+			seen[r.Name] = true
+			addrs = append(addrs, alias+"/"+r.Name)
+		}
+	}
+	if len(addrs) == 0 {
+		return ""
+	}
+	sort.Strings(addrs)
+	if len(addrs) > maxNameSuggestions {
+		addrs = addrs[:maxNameSuggestions]
+	}
+	return "did you mean " + strings.Join(addrs, " or ") + "?"
+}
 
 // maxDeliverRespBytes caps a remote daemon's /deliver answer: a
 // DeliverResponse or an APIError is a few hundred bytes at most, and the
@@ -367,7 +408,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		for i := range env.Peers {
 			redactRecord(&env.Peers[i], entry.Token)
 		}
-		rows = normalizeRemoteRows(env.Peers, targetAlias, targetHostID)
+		rows = normalizeRemoteRows(env.Peers, targetAlias, targetHostID, env.AddressVersion)
 		rsnap = ipeers.ResolveSnapshot{
 			Partial:            env.Partial,
 			RegistryIncomplete: len(env.UnknownRegistryFiles) > 0,
@@ -429,7 +470,11 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, ipeers.ErrLegacyCC):
 			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, err.Error())
 		default:
-			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, fmt.Sprintf("no session %q on %q; %s", session, targetAlias, peerNotFoundHint))
+			head := fmt.Sprintf("no session %q on %q", session, targetAlias)
+			if s := registryNameSuggestion(rows, session, targetAlias); s != "" {
+				head += "; " + s
+			}
+			refuseUnaudited(http.StatusNotFound, ipeers.ErrPeerNotFound, head+"; "+peerNotFoundHint)
 		}
 		return
 	}

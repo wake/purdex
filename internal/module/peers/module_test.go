@@ -1501,7 +1501,7 @@ func TestNormalizeRemoteRows(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := normalizeRemoteRows([]ipeers.PeerRecord{tc.row}, tc.alias, tc.hostID)
+			got := normalizeRemoteRows([]ipeers.PeerRecord{tc.row}, tc.alias, tc.hostID, 0)
 			if len(got) != 1 {
 				t.Fatalf("len = %d, want 1", len(got))
 			}
@@ -1545,7 +1545,7 @@ func TestNormalizeRemoteRows_HostileEnvelope(t *testing.T) {
 			Ref:   "_q34psn",
 			Agent: &ipeers.AgentInfo{Type: "cc", PID: 7, PeerName: name, SessionID: "sid"},
 		}
-		got := normalizeRemoteRows([]ipeers.PeerRecord{row}, "air", "air:111")[0]
+		got := normalizeRemoteRows([]ipeers.PeerRecord{row}, "air", "air:111", 0)[0]
 		if got.Address != "air/_q34psn" {
 			t.Errorf("peer_name %q: Address = %q, want air/_q34psn", name, got.Address)
 		}
@@ -1569,9 +1569,78 @@ func TestNormalizeRemoteRows_RefMustBeWellFormed(t *testing.T) {
 			Address: "laptop/" + ref, RowKind: "entry", Ref: ref,
 			Agent: &ipeers.AgentInfo{Type: "cc", PID: 7, PeerName: "has/slash", SessionID: "sid"},
 		}
-		if got := normalizeRemoteRows([]ipeers.PeerRecord{row}, "air", "air:111")[0]; got.Address != "" {
+		if got := normalizeRemoteRows([]ipeers.PeerRecord{row}, "air", "air:111", 0)[0]; got.Address != "" {
 			t.Errorf("ref %q: Address = %q, want it blanked", ref, got.Address)
 		}
+	}
+}
+
+// TestNormalizeRemoteRows_VirtualName is Peer Address v5 on the sending side
+// (peer mailbox spec §3.3): a remote row is addressed by the virtual name its
+// own daemon assigned. Which rule applies is the envelope's address_version,
+// stated outright: a v5 remote's registry names never route here, as they do
+// not on that remote, and only an envelope without the field — a daemon from
+// before v5 — has its registry names stand in, so mixed versions keep working.
+func TestNormalizeRemoteRows_VirtualName(t *testing.T) {
+	live := func(name, peerName, ref string) ipeers.PeerRecord {
+		return ipeers.PeerRecord{RowKind: "entry", Ref: ref, Name: name,
+			Agent: &ipeers.AgentInfo{Type: "cc", PID: 7, PeerName: peerName, SessionID: "sid" + ref}}
+	}
+	check := func(t *testing.T, got ipeers.PeerRecord, wantName, wantAddr string) {
+		t.Helper()
+		if got.Name != wantName || got.Address != wantAddr {
+			t.Errorf("name/address = %q/%q, want %q/%q", got.Name, got.Address, wantName, wantAddr)
+		}
+	}
+
+	const v5 = ipeers.AddressVersionV5
+	t.Run("a v5 remote's row takes its virtual name, a nameless one its ref", func(t *testing.T) {
+		got := normalizeRemoteRows([]ipeers.PeerRecord{
+			live("purdex-b0-q3", "purdex-b0", "_q34psn"),
+			live("", "nexen-f2", "_df25d0"),
+		}, "air", "air:111", v5)
+		check(t, got[0], "purdex-b0-q3", "air/purdex-b0-q3")
+		check(t, got[1], "", "air/_df25d0") // its registry name is not promoted
+	})
+	// A v5 remote whose name store failed this pass sends every row without
+	// a name. That is not an old daemon, and reading it as one would make its
+	// registry names routable here — a fail-open onto whichever conversation
+	// holds that CLI name now.
+	t.Run("a v5 remote with no names at all still has no registry-name routes", func(t *testing.T) {
+		got := normalizeRemoteRows([]ipeers.PeerRecord{
+			live("", "purdex-b0", "_q34psn"),
+			live("", "nexen-f2", "_df25d0"),
+		}, "air", "air:111", v5)
+		check(t, got[0], "", "air/_q34psn")
+		check(t, got[1], "", "air/_df25d0")
+	})
+	t.Run("a pre-v5 remote's registry name stands in as the name", func(t *testing.T) {
+		got := normalizeRemoteRows([]ipeers.PeerRecord{live("", "purdex-b0", "_q34psn")}, "air", "air:111", 0)
+		check(t, got[0], "purdex-b0", "air/purdex-b0")
+	})
+	t.Run("an unroutable virtual name is dropped, never printed", func(t *testing.T) {
+		for _, name := range []string{"trusted:ops", "q34psn", "has/slash", "Trusted", "trusted ops"} {
+			got := normalizeRemoteRows([]ipeers.PeerRecord{live(name, "purdex-b0", "_q34psn")}, "air", "air:111", v5)
+			check(t, got[0], "", "air/_q34psn")
+		}
+	})
+	t.Run("a name on a row with no live entry is dropped", func(t *testing.T) {
+		dead := ipeers.PeerRecord{RowKind: "session", SessionName: "mt1", Name: "ghost-q3",
+			Agent: &ipeers.AgentInfo{Type: "cc", SessionID: "sid"}}
+		got := normalizeRemoteRows([]ipeers.PeerRecord{live("purdex-b0-q3", "purdex-b0", "_q34psn"), dead}, "air", "air:111", v5)
+		check(t, got[1], "", "air/tmux:mt1")
+	})
+}
+
+// The local envelope says which address rules its rows follow, so a peer
+// reading it never has to infer that from the rows.
+func TestLocalEnvelope_StatesAddressVersion(t *testing.T) {
+	c := newTestCore(t, "mlab:abc123", "mlab")
+	clock := &fakeClock{times: []time.Time{time.Unix(0, 0)}}
+	m := newTestModule(t, c, &fakeSessions{}, &fakeOwners{}, t.TempDir(), allLiveLiveness(fixture76973ProcStart), clock, time.Second)
+	env := m.localEnvelope(context.Background(), "mlab:abc123", "mlab")
+	if !env.OK || env.AddressVersion != ipeers.AddressVersionV5 {
+		t.Errorf("ok/address_version = %v/%d, want true/%d", env.OK, env.AddressVersion, ipeers.AddressVersionV5)
 	}
 }
 
@@ -1579,7 +1648,7 @@ func TestNormalizeRemoteRows_RefMustBeWellFormed(t *testing.T) {
 // row-shape invariant fetchHostResult relies on: a "peers" list is always
 // a non-nil (possibly empty) slice, never null on the wire.
 func TestNormalizeRemoteRows_NilRowsReturnsNonNilEmpty(t *testing.T) {
-	got := normalizeRemoteRows(nil, "air", "air:1")
+	got := normalizeRemoteRows(nil, "air", "air:1", 0)
 	if got == nil {
 		t.Errorf("got nil, want non-nil empty slice")
 	}

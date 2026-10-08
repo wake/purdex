@@ -632,6 +632,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	writeError := func(errMsg string) ipeers.Envelope {
 		return ipeers.Envelope{
 			HostID:               hostID,
+			AddressVersion:       ipeers.AddressVersionV5,
 			Alias:                alias,
 			OK:                   false,
 			Error:                errMsg,
@@ -831,6 +832,10 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 
 	return ipeers.Envelope{
 		HostID: hostID,
+		// Stated, not left for a peer to infer from the rows: a pass whose
+		// name store failed has no named row and must still not read as a
+		// pre-v5 daemon (normalizeRemoteRows).
+		AddressVersion: ipeers.AddressVersionV5,
 		// The caller's snapshot alias, published so a peer pairing with this
 		// host can adopt the name this host uses for itself (spec §7) rather
 		// than inventing a local one that makes addresses unportable.
@@ -976,21 +981,60 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 // "trusted:ops" with address "air/trusted:ops" got `pdx peers --all` to render
 // "air/trusted:ops [q34psn]", a pasteable address for a name spec §5.2 says
 // can never be one.
-func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string) []ipeers.PeerRecord {
+//
+// Name is settled before the address is derived from it (Peer Address v5,
+// peer mailbox spec §3.3): see remoteName. addressVersion is the remote
+// envelope's own statement of its rules. It is read, never inferred from the
+// rows: a v5 daemon whose name store failed sends no named row at all, and
+// taking that for a pre-v5 daemon made its registry names routable here — a
+// fail-open onto whichever conversation holds that CLI name now.
+func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string, addressVersion int) []ipeers.PeerRecord {
+	preV5 := addressVersion < ipeers.AddressVersionV5
 	out := make([]ipeers.PeerRecord, len(rows))
 	for i, rec := range rows {
 		rec.Host = alias
 		rec.HostID = hostID
+		rec.Name = remoteName(rec, preV5)
 		rec.Address = remoteAddress(rec, alias)
 		out[i] = rec
 	}
 	return out
 }
 
+// remoteName is the name this host routes a remote row by: the virtual name
+// its daemon assigned, when it is routable and the row carries a live cc entry
+// (the rows Resolve's name tier decides on), else none.
+//
+// preV5 says the remote's envelope stated no address_version: it predates
+// Peer Address v5 and still routes by registry name, so that name stands in
+// (spec §3.3: mixed versions keep working). A v5 remote's row that has no
+// name is addressed by its ref there, and must be here too — promoting its
+// registry name would print an address that remote no longer routes by.
+func remoteName(rec ipeers.PeerRecord, preV5 bool) string {
+	if !isLiveCC(rec) {
+		return ""
+	}
+	name := rec.Name
+	if preV5 {
+		name = rec.Agent.PeerName
+	}
+	if !ipeers.RoutableName(name) {
+		return ""
+	}
+	return name
+}
+
+// isLiveCC is Resolve's hasLiveEntry condition, spelled out: the row carries
+// a real, live cc registry entry.
+func isLiveCC(rec ipeers.PeerRecord) bool {
+	return rec.Agent != nil && rec.Agent.Type == "cc" && rec.Agent.PID != 0
+}
+
 // remoteAddress derives the address this host will print for one remote row,
 // from that row's own fields and in the same order applyIdentity uses for a
-// local one: a live cc entry with a routable name, else that entry's ref, else
-// the tmux form of a session this host can actually address.
+// local one: a live cc entry with a routable name (rec.Name, as remoteName
+// settled it), else that entry's ref, else the tmux form of a session this
+// host can actually address.
 //
 // The remote's own Address is not read at all, by design: it is the one field
 // whose body carried whatever the remote wanted rendered, and a rule that
@@ -1010,10 +1054,10 @@ func remoteAddress(rec ipeers.PeerRecord, alias string) string {
 	// hasLiveEntry's condition, spelled out: Resolve's name and ref tiers
 	// decide only on rows carrying a real live cc registry entry, so only
 	// those two forms may be printed for one.
-	case rec.Agent != nil && rec.Agent.Type == "cc" && rec.Agent.PID != 0:
+	case isLiveCC(rec):
 		switch {
-		case ipeers.RoutableName(rec.Agent.PeerName):
-			session = rec.Agent.PeerName
+		case ipeers.RoutableName(rec.Name):
+			session = rec.Name
 		case ipeers.IsRef(rec.Ref):
 			session = rec.Ref
 		}
@@ -1104,7 +1148,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		resultHostID = env.HostID
 	}
 
-	peers := normalizeRemoteRows(env.Peers, h.Alias, resultHostID)
+	peers := normalizeRemoteRows(env.Peers, h.Alias, resultHostID, env.AddressVersion)
 	for i := range peers {
 		redactRecord(&peers[i], h.Token)
 	}

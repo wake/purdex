@@ -240,7 +240,9 @@ func TestKill_IsIdempotentAndGenerationGuarded(t *testing.T) {
 
 // The targets pdx kill takes (plan v3 P4-6): a ref, with or without "_",
 // bare or behind this host; <host>/<name>; <host>/<name> [<ref>] when both
-// match. Anything else is not_your_member.
+// match. Anything else is not_your_member. The name is the one the member's
+// address carries — its virtual name (Peer Address v5), as for pdx msg send;
+// the registry name ("w-one") no longer names it.
 func TestKill_TargetForms(t *testing.T) {
 	cases := []struct {
 		target func(ref string) string
@@ -250,10 +252,12 @@ func TestKill_TargetForms(t *testing.T) {
 		{func(r string) string { return r[1:] }, true},
 		{func(r string) string { return "self/" + r }, true},
 		{func(r string) string { return "h:1/" + r[1:] }, true},
-		{func(string) string { return "self/w-one" }, true},
-		{func(r string) string { return "self/w-one [" + r[1:] + "]" }, true},
+		{func(string) string { return "self/w-one-v5" }, true},
+		{func(r string) string { return "self/w-one-v5 [" + r[1:] + "]" }, true},
+		{func(string) string { return "self/w-one" }, false},
+		{func(r string) string { return "self/w-one [" + r[1:] + "]" }, false},
 		{func(r string) string { return "air26/" + r }, false},
-		{func(string) string { return "w-one" }, false},
+		{func(string) string { return "w-one-v5" }, false},
 		{func(string) string { return "self/w-two" }, false},
 		{func(r string) string { return "self/w-two [" + r[1:] + "]" }, false},
 		{func(string) string { return "self/_zzzzzz" }, false},
@@ -261,6 +265,11 @@ func TestKill_TargetForms(t *testing.T) {
 	for i, c := range cases {
 		f, root := newTeamFixture(t, 1)
 		m1 := f.member(1, root, "sid-m1", "w-one", nil)
+		f.so.mu.Lock()
+		o := f.so.members["sid-m1"]
+		o.Address = "mlab/w-one-v5" // what OriginResolver answers: the virtual address
+		f.so.members["sid-m1"] = o
+		f.so.mu.Unlock()
 		target := c.target(m1.Ref)
 		code, _, e := f.kill("/tmp/10.sock", target)
 		if ok := code == 200; ok != c.ok || (!ok && e.Error != team.ErrNotYourMember) {

@@ -107,8 +107,13 @@ func (e *AmbiguousError) Error() string {
 //     name must be routable and both halves must match the SAME row; failing
 //     that the ref is asked on its own, only to say which half went wrong. A
 //     mismatch is ErrNameMismatch, never a delivery.
-//   - tier 1, "<name>": Agent.PeerName == head, over rows carrying a LIVE cc
-//     entry whose name is routable.
+//   - tier 1, "<name>": PeerRecord.Name == head, over rows carrying a LIVE cc
+//     entry whose name is routable. Name is the conversation's virtual name
+//     (Peer Address v5, peer mailbox spec §3.3); the registry name in
+//     Agent.PeerName is display only and routes nothing — Claude Code renames
+//     a conversation every time it starts. A pre-v5 remote's rows get their
+//     registry name as Name from the sender (module peers, remoteName), which
+//     is how mixed versions keep resolving.
 //   - tiers 2 and 3, "_<ref>" and the same ref without its underscore:
 //     PeerRecord.Ref == head over those same live rows.
 //   - tier 4, "<name>" read as a bare tmux session name: SessionName == head,
@@ -237,8 +242,8 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		// a name carried by no row with this ref is refused below, never
 		// delivered.
 		rec, err := resolveTier(records, session, func(r PeerRecord) bool {
-			return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) &&
-				r.Ref == ref && r.Agent.PeerName == typedName
+			return hasLiveEntry(r) && RoutableName(r.Name) &&
+				r.Ref == ref && r.Name == typedName
 		})
 		if errors.Is(err, ErrNotFound) && !liveRefOwned(records, ref) {
 			// The combined form with a relayed-from ref (lead-team-relay
@@ -249,8 +254,8 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 			// consulted, and the pair falls through to the mismatch answer
 			// below (the typed name is not the live owner's).
 			rec, err = resolveTier(records, session, func(r PeerRecord) bool {
-				return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) &&
-					hasPreviousRef(r, ref) && r.Agent.PeerName == typedName
+				return hasLiveEntry(r) && RoutableName(r.Name) &&
+					hasPreviousRef(r, ref) && r.Name == typedName
 			})
 		}
 		switch {
@@ -275,9 +280,12 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		byRef, refErr := resolveRefHead(records, ref, snap)
 		var amb *AmbiguousError
 		switch {
+		case refErr == nil && byRef.Name == "":
+			return PeerRecord{}, fmt.Errorf("%w: typed %q, but %s has no name",
+				ErrNameMismatch, typedName, ref)
 		case refErr == nil:
 			return PeerRecord{}, fmt.Errorf("%w: typed %q, but %s is now %q",
-				ErrNameMismatch, typedName, ref, byRef.Agent.PeerName)
+				ErrNameMismatch, typedName, ref, byRef.Name)
 		case errors.As(refErr, &amb):
 			// The ref is ambiguous and none of its rows carries the typed
 			// name — a mismatch, not an ambiguity: no candidate was ever in
@@ -303,12 +311,12 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 	// gate the other suffixed forms are stopped by. Only "cc:" and
 	// "tmux:<name>", decided above, ever carry a ':' legitimately.
 	if !strings.Contains(session, ":") {
-		// Tier 1: the registry name, over live rows whose name is routable.
+		// Tier 1: the virtual name, over live rows whose name is routable.
 		// The RoutableName guard is not decoration — an unroutable name must
 		// not win a tier, because it could never have produced the address
 		// being typed.
 		rec, err := resolveTier(records, session, func(r PeerRecord) bool {
-			return hasLiveEntry(r) && RoutableName(r.Agent.PeerName) && r.Agent.PeerName == head
+			return hasLiveEntry(r) && RoutableName(r.Name) && r.Name == head
 		})
 		if err == nil && snap.RegistryIncomplete {
 			// One hit, but a registry file for an alive pid could not be

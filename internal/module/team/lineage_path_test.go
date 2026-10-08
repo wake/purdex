@@ -41,6 +41,9 @@ func TestLineagePath_TwelveHopsOldestRefResolvesToTheLiveRow(t *testing.T) {
 		// The live conversation is the chain's head; only it is alive.
 		Entries:      []ipeers.Entry{{PID: 4242, SessionID: head, Name: "purdex-x", Inbox: "/s/4242", ProcStart: "Sun Sep 13 15:22:36 2026"}},
 		PreviousRefs: refs,
+		// The virtual name the head inherited down the chain (peer mailbox
+		// spec §3.2); the combined form below checks against it.
+		VirtualNames: map[string]string{head: "purdex-x-r0"},
 	})
 	var live ipeers.PeerRecord
 	for _, r := range records {
@@ -51,7 +54,7 @@ func TestLineagePath_TwelveHopsOldestRefResolvesToTheLiveRow(t *testing.T) {
 	if live.Agent == nil || len(live.PreviousRefs) != n || live.PreviousRefs[0] != fmt.Sprintf("_r%05d", n-1) || live.PreviousRefs[n-1] != "_r00000" {
 		t.Fatalf("live row previous_refs = %v (want %d, newest first)", live.PreviousRefs, n)
 	}
-	for _, in := range []string{"_r00000", "r00000", "_r00001", "purdex-x [r00000]", fmt.Sprintf("_r%05d", n-1)} {
+	for _, in := range []string{"_r00000", "r00000", "_r00001", "purdex-x-r0 [r00000]", fmt.Sprintf("_r%05d", n-1)} {
 		rec, err := ipeers.Resolve(records, in, ipeers.ResolveSnapshot{})
 		if err != nil || rec.Agent == nil || rec.Agent.PID != 4242 || rec.Agent.SessionID != head {
 			t.Fatalf("Resolve(%q) = %+v err=%v; want the live head row (pid 4242)", in, rec, err)

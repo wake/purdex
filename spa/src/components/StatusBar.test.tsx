@@ -90,6 +90,9 @@ const PEER_ROW: PeerRow = {
   deliverable: true,
   reason: '',
   tmuxInstance: GEN,
+  // Peer Address v5: the address carries the conversation's virtual name
+  // (`purdex-b0`); `peerName` is Claude Code's own session name, which
+  // changes on every start and routes nothing, so it differs on purpose.
   agent: { type: 'cc', peerName: 'ai-chat-story-3a', status: 'idle' },
 }
 
@@ -369,7 +372,7 @@ describe('StatusBar peer segments', () => {
     render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-host').textContent).toBe('mlab')
     expect(screen.getByTestId('status-seg-cwd').textContent).toBe('/Users/wake/Workspace/wake/purdex')
-    expect(screen.getByTestId('status-seg-agent').textContent).toBe('ai-chat-story-3a')
+    expect(screen.getByTestId('status-seg-agent').textContent).toBe('purdex-b0')
     // The *name* is displayed with its ref; the full address is what a click copies.
     expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('purdex-b0 [q34psn]')
     expect(screen.getByTestId('status-seg-status').textContent).toContain('connected')
@@ -387,13 +390,36 @@ describe('StatusBar peer segments', () => {
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mlab/purdex-b0 [q34psn]'))
   })
 
+  // Peer Address v5 (peer mailbox spec §3.4): the agent segment is the
+  // conversation's name as its address carries it — the virtual name — and a
+  // click copies that address. Claude Code's own session name no longer routes,
+  // so it is neither shown nor copied: pasted into `pdx msg send` it is a 404.
+  it('shows the virtual name and copies the virtual address, never the CLI name', async () => {
+    render(<StatusBar activeTab={sessionTab()} />)
+    const seg = screen.getByTestId('status-seg-agent')
+    expect(seg.textContent).toBe('purdex-b0')
+    expect(screen.getByTestId('status-segments').textContent).not.toContain('ai-chat-story-3a')
+    fireEvent.click(seg)
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mlab/purdex-b0'))
+    expect(copyTextMock).not.toHaveBeenCalledWith('ai-chat-story-3a')
+  })
+
+  // A conversation with no virtual name is addressed by its ref, which the
+  // peer id segment already shows: the agent segment has no name to offer.
+  it('shows no name for a conversation addressed by its ref', () => {
+    seedPeers({}, { ...PEER_ROW, address: 'mlab/_q34psn' })
+    render(<StatusBar activeTab={sessionTab()} />)
+    expect(screen.getByTestId('status-seg-agent').textContent).toBe('—')
+    expect(screen.getByTestId('status-seg-agent')).toBeDisabled()
+  })
+
   // The old guard declined to render a row whose *title* was empty. Under v4 a
   // title is usually empty and never identified a row, so an untitled peer must
   // still appear — its name is what identifies it.
   it('renders a peer that has no title', () => {
     render(<StatusBar activeTab={sessionTab()} />)
     expect(PEER_ROW.title).toBe('')
-    expect(screen.queryByText(/purdex-b0/)).not.toBeNull()
+    expect(screen.getByTestId('status-seg-peer-id').textContent).toContain('purdex-b0')
     expect(screen.getByTestId('status-seg-peer-id')).not.toBeDisabled()
   })
 
@@ -439,7 +465,7 @@ describe('StatusBar peer segments', () => {
   it.each([
     ['status-seg-host', 'mlab', 'copied: host'],
     ['status-seg-cwd', '/Users/wake/Workspace/wake/purdex', 'copied: cwd'],
-    ['status-seg-agent', 'ai-chat-story-3a', 'copied: agent'],
+    ['status-seg-agent', 'mlab/purdex-b0', 'copied: address'],
     ['status-seg-peer-id', 'mlab/purdex-b0 [q34psn]', 'copied: peer id'],
   ])('%s copies its value and confirms in the fixed slot', async (testId, value, message) => {
     render(<StatusBar activeTab={sessionTab()} />)
