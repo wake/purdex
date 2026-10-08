@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/wake/purdex/cmd/pdx/daemonclient"
 )
 
@@ -26,6 +28,15 @@ var leaseSignals = func() (<-chan os.Signal, func()) {
 	ch := make(chan os.Signal, 4)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	return ch, func() { signal.Stop(ch) }
+}
+
+// leaseStdinIsTTY says whether stdin is a terminal (a seam for tests): then the
+// child stays in pdx's own process group, which is the terminal's foreground
+// group. A child in a group of its own would be stopped by SIGTTIN the moment it
+// read the terminal.
+var leaseStdinIsTTY = func() bool {
+	_, err := unix.IoctlGetInt(int(os.Stdin.Fd()), unix.TIOCGPGRP)
+	return err == nil
 }
 
 // leaseWaitNotice is how long a wait must last to be worth a line.
@@ -71,6 +82,10 @@ func runLeaseRun(ctx context.Context, args []string, stdout, stderr io.Writer, c
 		return ExitUsage
 	}
 
+	// Listening starts before the wait: a signal that comes at any point up to
+	// the child's start is held here, not lost, and the child gets it at once.
+	sigs, stopSigs := leaseSignals()
+	defer stopSigs()
 	client, ok := leaseClientT("lease", *cfgPath, stderr, leasePollAttempt, clientOpts)
 	var out acquireOutcome
 	if ok {
@@ -96,7 +111,12 @@ func runLeaseRun(ctx context.Context, args []string, stdout, stderr io.Writer, c
 			defer leaseReleaseByID(client, r.ID, stderr)
 		}
 	}
-	return runChild(command, stderr)
+	if ctx.Err() != nil {
+		// Interrupted between the grant and the start: the command does not run
+		// (the deferred release gives the room back).
+		return ExitCancelled
+	}
+	return runChild(command, sigs, leaseStdinIsTTY(), stderr)
 }
 
 // waitedText is a wait in whole seconds, or minutes from one minute on.
@@ -108,15 +128,15 @@ func waitedText(ms int64) string {
 	return fmt.Sprintf("%d 秒", s)
 }
 
-// runChild runs the command with this process's stdio in its own process
-// group, passes SIGINT, SIGTERM and SIGHUP on to the group, and returns the
+// runChild runs the command with this process's stdio (in its own process
+// group unless stdin is a terminal), passes SIGINT, SIGTERM and SIGHUP on to the group, and returns the
 // exit code the way a shell would.
-func runChild(command []string, stderr io.Writer) int {
+func runChild(command []string, sigs <-chan os.Signal, tty bool, stderr io.Writer) int {
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	sigs, stop := leaseSignals()
-	defer stop()
+	if !tty {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(stderr, "pdx lease: 無法執行 %s：%v\n", command[0], err)
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
@@ -124,14 +144,18 @@ func runChild(command []string, stderr io.Writer) int {
 		}
 		return 126
 	}
-	pgid := cmd.Process.Pid // Setpgid: the child leads its own group
+	// The signal goes to the child's group when it leads one, else to the child.
+	target := cmd.Process.Pid
+	if !tty {
+		target = -target
+	}
 	done := make(chan struct{})
 	go func() {
 		for {
 			select {
 			case sig := <-sigs:
 				if s, ok := sig.(syscall.Signal); ok {
-					_ = syscall.Kill(-pgid, s)
+					_ = syscall.Kill(target, s)
 				}
 			case <-done:
 				return

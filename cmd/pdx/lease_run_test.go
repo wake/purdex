@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -111,6 +112,79 @@ func TestRun_SignalForwarded(t *testing.T) {
 	_, _, deletes := d.snapshot()
 	if code != 7 || len(deletes) != 1 {
 		t.Fatalf("code=%d deletes=%v", code, deletes)
+	}
+}
+
+// The child leads its own process group, unless stdin is a terminal: a group
+// that is not the terminal's foreground would be stopped by SIGTTIN when it
+// read.
+func TestRun_ProcessGroupDependsOnTheTerminal(t *testing.T) {
+	for _, tty := range []bool{false, true} {
+		old := leaseStdinIsTTY
+		leaseStdinIsTTY = func() bool { return tty }
+		out := filepath.Join(t.TempDir(), "pgid")
+		d := &fakeLeaseDaemon{}
+		driveRunCmd(t, d, nil, []string{"--kind", "build"}, "sh", "-c", "ps -o pgid= -p $$ > "+out)
+		leaseStdinIsTTY = old
+		b, _ := os.ReadFile(out)
+		got := strings.TrimSpace(string(b))
+		same := got == strconv.Itoa(syscall.Getpgrp())
+		if same != tty {
+			t.Errorf("tty=%v: child pgid %q, pdx pgid %d (same group: %v)", tty, got, syscall.Getpgrp(), same)
+		}
+	}
+}
+
+// cancelOnWrite cancels a context when something is written to it: the signal
+// that arrives while the wait notice is being printed, after the grant.
+type cancelOnWrite struct {
+	bytes.Buffer
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnWrite) Write(p []byte) (int, error) {
+	c.cancel()
+	return c.Buffer.Write(p)
+}
+
+// A signal that came after the grant and before the child started is not
+// lost: the command does not run, the lease is given back, exit 12.
+func TestRun_InterruptBetweenGrantAndStartDoesNotRun(t *testing.T) {
+	fixedHolder(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &fakeLeaseDaemon{
+		post: func(resources.LeaseRequest) (int, any) {
+			// A grant that waited 5 s: acquire returns it, then the notice is printed.
+			return 201, resources.LeaseResponse{ID: leaseRow, State: resources.StateHeld, Granted: true, WaitedMS: 5000}
+		},
+	}
+	srv := httptest.NewServer(d)
+	defer srv.Close()
+	cfg := writeTestConfig(t, srv.URL, "admin-tok")
+	out := filepath.Join(t.TempDir(), "out")
+	var stdout bytes.Buffer
+	stderr := &cancelOnWrite{cancel: cancel}
+	code := runLeaseCmd(ctx, []string{"run", "--config", cfg, "--kind", "build", "--", "sh", "-c", "echo ran > " + out},
+		fakeGetenv(nil), &stdout, stderr, leadNoKeepAlive())
+	_, _, deletes := d.snapshot()
+	if _, err := os.Stat(out); code != ExitCancelled || err == nil || len(deletes) != 1 {
+		t.Fatalf("code=%d ran=%v deletes=%v", code, err == nil, deletes)
+	}
+}
+
+// SIGHUP ends only `run` (a closing terminal); the other lease commands keep
+// the default for it.
+func TestRunSignals_SIGHUPOnlyForRun(t *testing.T) {
+	has := func(args ...string) bool {
+		for _, s := range runSignals(args) {
+			if s == syscall.SIGHUP {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("run") || has("acquire") || has("ls") || has("release") || has() {
+		t.Error("SIGHUP is wired to the wrong commands")
 	}
 }
 

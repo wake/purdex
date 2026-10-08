@@ -44,10 +44,20 @@ const (
 	pressureCritical = 4
 )
 
+// runSignals are the signals that end a lease command: SIGINT and SIGTERM, and
+// for `run`, whose terminal may close under it, SIGHUP as well.
+func runSignals(args []string) []os.Signal {
+	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if len(args) > 0 && args[0] == "run" {
+		sigs = append(sigs, syscall.SIGHUP)
+	}
+	return sigs
+}
+
 func runLease(args []string) {
 	// SIGINT and SIGTERM cancel ctx: acquire turns that into a DELETE and exit
 	// 12 (as `pdx lead`).
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	ctx, stop := signal.NotifyContext(context.Background(), runSignals(args)...)
 	defer stop()
 	os.Exit(runLeaseCmd(ctx, args, os.Getenv, os.Stdout, os.Stderr))
 }
