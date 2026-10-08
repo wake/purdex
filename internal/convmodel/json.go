@@ -25,7 +25,9 @@ func (t Turn) MarshalJSON() ([]byte, error) {
 
 // MarshalJSON writes the flat object {"type": …, <the variant's fields>}.
 // A known Type needs exactly its own variant non-nil; an unknown Type with
-// no variant (one that was decoded) is written back as received.
+// no variant (one that was decoded) is written back as the received JSON
+// value (compacted by encoding/json; same members and values, not the same
+// bytes).
 func (i Item) MarshalJSON() ([]byte, error) {
 	var variant any
 	var want ItemType
@@ -77,7 +79,8 @@ func (i Item) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON reads the flat form. An unknown type is not an error: the
-// Item keeps the raw type string, no variant, and the received bytes.
+// Item keeps the raw type string, no variant, and the received JSON value
+// (as a RawMessage, so numbers are not re-encoded).
 func (i *Item) UnmarshalJSON(data []byte) error {
 	var head struct {
 		Type ItemType `json:"type"`

@@ -99,6 +99,49 @@ func TestItemJSON_MarshalRejectsZeroOrTwoVariants(t *testing.T) {
 	}
 }
 
+// jsonEqual compares two JSON documents by value (members, not bytes).
+func jsonEqual(t *testing.T, a, b []byte) bool {
+	t.Helper()
+	var x, y any
+	if err := json.Unmarshal(a, &x); err != nil {
+		t.Fatalf("unmarshal %s: %v", a, err)
+	}
+	if err := json.Unmarshal(b, &y); err != nil {
+		t.Fatalf("unmarshal %s: %v", b, err)
+	}
+	return reflect.DeepEqual(x, y)
+}
+
+// An unknown item keeps the received JSON value (compacted), not its bytes.
+func TestItemJSON_UnknownTypePreservesValue(t *testing.T) {
+	in := "{ \"type\" : \"hologram\",\n  \"id\":\"h1\",\n  \"nested\": { \"a\": [1, 2, {\"b\": null}], \"c\": \"x\" },\n  \"big\": 9007199254740993 }"
+	var it Item
+	if err := json.Unmarshal([]byte(in), &it); err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(it)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !jsonEqual(t, b, []byte(in)) {
+		t.Errorf("value changed:\n got %s\nwant %s", b, in)
+	}
+	if !bytes.Contains(b, []byte("9007199254740993")) {
+		t.Errorf("large integer not preserved exactly: %s", b)
+	}
+
+	// also inside a whole conversation
+	doc := `{"turns":[{"id":"t","index":0,"started_at":1,"outcome":"done","items":[` + in + `]}]}`
+	var c Conversation
+	if err := json.Unmarshal([]byte(doc), &c); err != nil {
+		t.Fatal(err)
+	}
+	cb, err := json.Marshal(c.Turns[0].Items[0])
+	if err != nil || !bytes.Contains(cb, []byte("9007199254740993")) {
+		t.Errorf("big integer lost in conversation: %s, %v", cb, err)
+	}
+}
+
 func TestItemJSON_UnknownTypeDecodesWithoutError(t *testing.T) {
 	in := `{"type":"hologram","id":"h1","spin":3}`
 	var it Item
@@ -111,9 +154,9 @@ func TestItemJSON_UnknownTypeDecodesWithoutError(t *testing.T) {
 	if it.User != nil || it.AgentText != nil || it.Thinking != nil || it.Step != nil || it.System != nil {
 		t.Errorf("variants must be nil: %+v", it)
 	}
-	// re-marshal keeps what was received
+	// re-marshal keeps the received value
 	b, err := json.Marshal(it)
-	if err != nil || string(b) != in {
+	if err != nil || !jsonEqual(t, b, []byte(in)) {
 		t.Errorf("re-marshal = %s, %v; want %s", b, err, in)
 	}
 

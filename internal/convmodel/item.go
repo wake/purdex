@@ -79,7 +79,8 @@ const (
 // On the wire it is a flat object {"type": …, <the variant's fields>}.
 //
 // An Item decoded from an unknown type has Type set to the raw string, every
-// variant nil, and re-marshals to what was received.
+// variant nil, and re-marshals to the JSON value that was received: same
+// members and values (numbers kept exactly), but compacted, not byte-identical.
 type Item struct {
 	Type      ItemType
 	User      *UserMessage
