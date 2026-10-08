@@ -91,6 +91,8 @@ const KINDS: [string, string | null][] = [
   ['echo `npx vitest run`', 'test-full'],
   ['x=$(cd spa && pnpm run build)', 'build'],
   ["echo '$(npx vitest run)'", null],
+  ['echo "it\'s $(npx vitest run)"', 'test-full'],
+  ["echo \"it's\" '$(npx vitest run)'", null],
   ['fish -c "npx vitest run"', 'test-full'],
   ['echo $(echo $(npx vitest run))', 'test-full'],
   // heredoc bodies and comments are data
@@ -100,6 +102,8 @@ const KINDS: [string, string | null][] = [
   ['cat <<A <<B\nnpx vitest run\nA\npnpm run build\nB', null],
   ['cat > f <<EOF\nx\nEOF\ngo vet ./...', 'lint-full'],
   ['echo ok # npx vitest run', null],
+  ["cat <<'END X'\ndata\nEND X\nnpx vitest run", 'test-full'],
+  ["cat <<\"E E\"\nnpx vitest run\nE E", null],
   ['# npx vitest run\nls', null],
   ['ls # ; npx vitest run', null],
   ['echo a#b && npx vitest run', 'test-full'],

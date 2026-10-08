@@ -89,7 +89,15 @@ function scan(cmd) {
         if (strip) j++
         while (cmd[j] === ' ' || cmd[j] === '\t') j++
         let delim = ''
-        for (; j < cmd.length && !' \t\n;|&()<>'.includes(cmd[j]); j++) if (!'\'"\\'.includes(cmd[j])) delim += cmd[j]
+        // a shell word: quotes group (and keep their spaces), a backslash escapes, the rest ends at a separator
+        for (let q = ''; j < cmd.length; j++) {
+          const d = cmd[j]
+          if (q) { if (d === q) q = ''; else delim += d; continue }
+          if (d === "'" || d === '"') { q = d; continue }
+          if (d === '\\' && j + 1 < cmd.length) { delim += cmd[++j]; continue }
+          if (' \t\n;|&()<>'.includes(d)) break
+          delim += d
+        }
         heredocs.push({ delim, strip })
       }
       push(c, i)
@@ -246,10 +254,12 @@ const ORDER = ['test-full', 'build', 'test-pkg', 'lint-full']
 function substitutions(cmd) {
   const out = []
   let single = false
+  let double = false
   for (let i = 0; i < cmd.length; i++) {
     const c = cmd[i]
     if (single) { if (c === "'") single = false; continue }
-    if (c === "'") { single = true; continue }
+    if (c === '"') { double = !double; continue }
+    if (c === "'" && !double) { single = true; continue }
     if (c === '\\') { i++; continue }
     if (c === '`') {
       let j = i + 1
@@ -271,7 +281,8 @@ function substitutions(cmd) {
 }
 
 // classifyKind is the heaviest kind among a command's segments and the command lines substituted into
-// them. A segment already going through `pdx lease` is skipped, not the whole command: what follows it
+// them (a heavy command inside a substitution is leased but not given the R7 cap: rewriting inside
+// `$( )` is not attempted). A segment already going through `pdx lease` is skipped, not the whole command: what follows it
 // is not covered by its lease. null for none or an unparseable command.
 function classifyKind(cmd, depth) {
   const segs = scan(cmd)
