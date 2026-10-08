@@ -445,7 +445,11 @@ func teamHostShares(ctx context.Context, client *daemonclient.Client) map[string
 	}
 	out := make(map[string]resources.SessionUse, len(snap.Sessions))
 	for _, u := range snap.Sessions {
-		out[u.SessionID] = u
+		// One row per session is the contract; if a daemon lists a twin, the
+		// busier row is the session's load.
+		if prev, ok := out[u.SessionID]; !ok || u.Use > prev.Use {
+			out[u.SessionID] = u
+		}
 	}
 	return out
 }
@@ -485,7 +489,13 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 		fmt.Fprintln(stdout, line.String())
 		return ExitOK
 	}
-	shares := teamHostShares(ctx, client)
+	// The resources call is optional, so it gets a client of its own whose
+	// stderr is discarded: the shared client would print its "daemon restarting"
+	// line for a failure the table already hides.
+	var shares map[string]resources.SessionUse
+	if quiet, _, ok := teamSetup("team", *cfgPath, getenv, io.Discard, clientOpts); ok {
+		shares = teamHostShares(ctx, quiet)
+	}
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ADDRESS\tREF\tTITLE\tSTATE\tCTX\tCPU\tMEM\tMODEL\tEFFORT\tCWD\tTMUX")
 	for _, m := range v.Members {

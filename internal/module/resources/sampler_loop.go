@@ -40,6 +40,9 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	sctx, cancel := context.WithTimeout(ctx, sampleBudget)
 	defer cancel()
 
+	// The roots are read before the sampler (whose ps fork is the process
+	// read) and again after it; see sessions.
+	before, beforeErr := m.readRoots(sctx)
 	raw, procs, err := m.sampler.Sample(sctx)
 	if ctx.Err() != nil {
 		return true // stopping: whatever the sampler said, it is not a failure
@@ -57,7 +60,7 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		return false
 	}
 
-	sessions := m.sessions(sctx, raw, procs)
+	sessions := m.sessions(sctx, raw, procs, before, beforeErr)
 	if m.degraded {
 		m.logf("[resources] sampling recovered after %d failed tick(s)", m.fails)
 	}
@@ -74,25 +77,68 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	return false
 }
 
-// sessions attributes the process list to the registry's sessions. Any
-// trouble reading the roots leaves the list empty, never fails the tick: the
-// host figures stand on their own. A standing problem is logged once.
-func (m *Module) sessions(ctx context.Context, raw resources.HostRaw, procs []resources.Proc) []resources.SessionUse {
+// readRoots takes one process snapshot (start times, no argv, no fork) and
+// lists the sessions whose processes it vouches for. The error text names
+// which step failed.
+func (m *Module) readRoots(ctx context.Context) ([]resources.Root, error) {
 	if m.roots == nil {
-		return []resources.SessionUse{}
+		return nil, nil
 	}
 	snap, err := m.procSnapshot(ctx)
 	if err != nil {
-		m.noteRoots(fmt.Sprintf("process table: %v", err))
-		return []resources.SessionUse{}
+		return nil, fmt.Errorf("process table: %w", err)
 	}
 	roots, err := m.roots.ProcessRoots(snap)
 	if err != nil {
-		m.noteRoots(fmt.Sprintf("session roots: %v", err))
+		return nil, fmt.Errorf("session roots: %w", err)
+	}
+	return roots, nil
+}
+
+// sessions attributes the process list to the registry's sessions. The
+// process list is the sampler's ps, taken between two reads of the roots, and
+// ps carries no start times, so a root is only trusted when both reads
+// vouch for the same process (same session, pid and start): a pid that was
+// reused while ps ran would otherwise be charged with the old process's
+// numbers (codex R1 + attack on P0-2). A session whose root changed in
+// between is simply left out of this tick.
+//
+// Any trouble reading the roots leaves the list empty, never fails the tick:
+// the host figures stand on their own. A standing problem is logged once.
+func (m *Module) sessions(ctx context.Context, raw resources.HostRaw, procs []resources.Proc, before []resources.Root, beforeErr error) []resources.SessionUse {
+	if m.roots == nil {
+		return []resources.SessionUse{}
+	}
+	if beforeErr != nil {
+		m.noteRoots(beforeErr.Error())
+		return []resources.SessionUse{}
+	}
+	after, err := m.readRoots(ctx)
+	if err != nil {
+		m.noteRoots(err.Error())
 		return []resources.SessionUse{}
 	}
 	m.noteRoots("")
-	return resources.Attribute(procs, roots, raw.NCPU, raw.MemBytes)
+	return resources.Attribute(procs, sameRoots(before, after), raw.NCPU, raw.MemBytes)
+}
+
+// sameRoots keeps the roots both lists agree on, in the order of after.
+func sameRoots(before, after []resources.Root) []resources.Root {
+	type identity struct {
+		session, start string
+		pid            int
+	}
+	seen := make(map[identity]bool, len(before))
+	for _, r := range before {
+		seen[identity{r.SessionID, r.ProcStart, r.PID}] = true
+	}
+	out := make([]resources.Root, 0, len(after))
+	for _, r := range after {
+		if seen[identity{r.SessionID, r.ProcStart, r.PID}] {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // noteRoots logs a roots problem when it changes, and the return to normal.

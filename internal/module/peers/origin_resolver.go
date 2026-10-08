@@ -308,17 +308,32 @@ func (r *OriginResolver) processRoots(view rootView) ([]resources.Root, error) {
 	}
 	proxies := r.m.proxyPIDs()
 	roots := make([]resources.Root, 0, len(entries))
+	// A session id is one root. After a resume the old process can linger
+	// (a zombie keeps its registry file and inbox) next to the new one under
+	// the same id; the snapshot has no process state to tell them apart, so
+	// the process that started last is the session.
+	at := map[string]int{} // session id -> index in roots
+	began := map[string]time.Time{}
 	for _, e := range entries {
 		if e.SessionID == "" || e.IsProxy || proxies[e.PID] {
 			continue
 		}
-		roots = append(roots, resources.Root{
+		start, _ := view.Start(e.PID) // the registry read vouched for it already
+		root := resources.Root{
 			SessionID: e.SessionID,
 			PID:       e.PID,
 			ProcStart: e.ProcStart,
 			Tmux:      e.Tmux,
 			Cwd:       e.Cwd,
-		})
+		}
+		if i, twin := at[e.SessionID]; twin {
+			if start.After(began[e.SessionID]) {
+				roots[i], began[e.SessionID] = root, start
+			}
+			continue
+		}
+		at[e.SessionID], began[e.SessionID] = len(roots), start
+		roots = append(roots, root)
 	}
 	return roots, nil
 }

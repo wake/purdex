@@ -157,6 +157,43 @@ func TestProcessRoots_StartMismatchLeftOut(t *testing.T) {
 	}
 }
 
+// Codex attack (medium): after a resume the old process can linger as a
+// zombie with its registry file and inbox still there, both under the same
+// session id. Nothing here can tell a zombie (no state in the snapshot, and
+// Liveness.Zombie would cost a fork), so a session id is one root: the
+// newest process wins. Two rows for one session would have the later one
+// overwrite the earlier in `pdx team` and be listed twice in `pdx lease ls`.
+func TestProcessRoots_TwinSessionKeepsNewestProcess(t *testing.T) {
+	later := fixture76973ProcStart.Add(time.Hour)
+	for name, entries := range map[string][]rootsEntry{
+		"older file first": {
+			{pid: 10, sid: "sid-twin"},
+			{pid: 20, sid: "sid-twin", procStart: "Sun Sep 13 16:22:36 2026"},
+		},
+		"newer file first": {
+			{pid: 20, sid: "sid-twin", procStart: "Sun Sep 13 16:22:36 2026"},
+			{pid: 10, sid: "sid-twin"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, _ := rootsFixture(t, append(entries, rootsEntry{pid: 30, sid: "sid-other"})...)
+			view := &fakeRootView{procs: map[int]fakeRootProc{
+				10: {start: fixture76973ProcStart},
+				20: {start: later},
+				30: {start: fixture76973ProcStart},
+			}}
+			roots, err := r.processRoots(view)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := rootsBySID(roots)
+			if len(roots) != 2 || got["sid-twin"].PID != 20 || got["sid-other"].PID != 30 {
+				t.Fatalf("roots = %+v, want sid-twin -> pid 20 (the newest) and sid-other", roots)
+			}
+		})
+	}
+}
+
 func TestProcessRoots_NoFork(t *testing.T) {
 	r, _ := rootsFixture(t, rootsEntry{pid: 10, sid: "sid-1"})
 	view := &fakeRootView{procs: map[int]fakeRootProc{10: {start: fixture76973ProcStart}}}

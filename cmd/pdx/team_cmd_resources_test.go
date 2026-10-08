@@ -95,6 +95,52 @@ func TestTeam_ResourcesFailureShowsDash(t *testing.T) {
 	}
 }
 
+// Codex attack (medium): the optional resources call shares the command's
+// daemon client, which prints "daemon 重啟中" on a retryable failure. A daemon
+// that restarts right after /api/team answered must not put a line on stderr
+// for a call whose failure the table already hides.
+func TestTeam_ResourcesRestartDiagnosticStaysSilent(t *testing.T) {
+	old := teamResourcesTimeout
+	teamResourcesTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { teamResourcesTimeout = old })
+
+	d := &fakeResourcesDaemon{
+		next: &fakeTeamCmdDaemon{view: answer{body: teamViewTwoSessions()}},
+		serve: func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"shutting_down"}`))
+		},
+	}
+	code, stdout, stderr := driveTeamCmd(t, runTeamCmd, d)
+	if code != ExitOK || stderr != "" {
+		t.Fatalf("code=%d stderr=%q, want exit 0 and a silent stderr", code, stderr)
+	}
+	if got, want := fieldsOf(teamRows(t, stdout)[1]), "mlab/_m1m1m1 _m1m1m1 p4 tester active 42% - - claude-sonnet-4-5 low /w/a tm-1111111122"; got != want {
+		t.Errorf("row 1 = %q, want %q", got, want)
+	}
+}
+
+// Codex attack (medium): two rows for one session id (a daemon that lists a
+// lingering twin) must not let the later, smaller one hide the real load.
+func TestTeam_DuplicateSessionKeepsTheLargerShare(t *testing.T) {
+	for name, rows := range map[string][]resources.SessionUse{
+		"big first":   {{SessionID: "cc-sid-member-1", CPU: 30, Mem: 9, Use: 30}, {SessionID: "cc-sid-member-1", CPU: 0, Mem: 0, Use: 0}},
+		"small first": {{SessionID: "cc-sid-member-1", CPU: 0, Mem: 0, Use: 0}, {SessionID: "cc-sid-member-1", CPU: 30, Mem: 9, Use: 30}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			snap := fakeSnapshot()
+			snap.Sessions = rows
+			code, stdout, stderr := driveTeamCmd(t, runTeamCmd, teamWithResources(answer{body: snap}))
+			if code != ExitOK || stderr != "" {
+				t.Fatalf("code=%d stderr=%q", code, stderr)
+			}
+			if got, want := fieldsOf(teamRows(t, stdout)[1]), "mlab/_m1m1m1 _m1m1m1 p4 tester active 42% 30% 9% claude-sonnet-4-5 low /w/a tm-1111111122"; got != want {
+				t.Errorf("row 1 = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // --json is the daemon's team view as is, and costs no resources request.
 func TestTeam_JSONUnchanged(t *testing.T) {
 	inner := &fakeTeamCmdDaemon{view: answer{body: teamViewTwoSessions()}}

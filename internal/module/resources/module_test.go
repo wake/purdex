@@ -3,6 +3,7 @@ package resourcesmod
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -40,10 +41,15 @@ type fakeRoots struct {
 	roots []resources.Root
 	err   error
 	calls atomic.Int64
+	// fn, when set, answers instead of roots and err; the call number is 1-based.
+	fn func(call int) ([]resources.Root, error)
 }
 
 func (f *fakeRoots) ProcessRoots(*iagent.ProcessSnapshot) ([]resources.Root, error) {
-	f.calls.Add(1)
+	n := int(f.calls.Add(1))
+	if f.fn != nil {
+		return f.fn(n)
+	}
 	return f.roots, f.err
 }
 
@@ -278,8 +284,75 @@ func TestModule_SessionsFromRoots(t *testing.T) {
 	if u.SessionID != "sid-1" || u.Procs != 2 || u.Pcpu != 150 || u.RSSBytes != 2<<30 || u.Tmux != "t:@1.%1" {
 		t.Fatalf("session = %+v", u)
 	}
-	if roots.calls.Load() != 1 {
-		t.Fatalf("roots read %d times per tick, want 1", roots.calls.Load())
+	if roots.calls.Load() != 2 {
+		t.Fatalf("roots read %d times per tick, want 2 (before and after the process read)", roots.calls.Load())
+	}
+}
+
+// Codex R1 + attack (high): ps runs between two reads of the roots. A root
+// has to be vouched for by the snapshot taken BEFORE the process read and by
+// the one taken AFTER it, or a pid reused in between would be charged with
+// the old process's numbers. A root that is gone, or came back as another
+// process (a different start), after the read is not attributed this tick.
+func TestModule_RootMustSurviveTheProcessRead(t *testing.T) {
+	procs := []resources.Proc{
+		{PID: 100, PPID: 1, Pcpu: 100, RSSBytes: 1 << 30},
+		{PID: 200, PPID: 1, Pcpu: 10, RSSBytes: 1 << 20},
+	}
+	stay := resources.Root{SessionID: "stays", PID: 200, ProcStart: "Thu Oct  9 00:00:01 2026"}
+	old := resources.Root{SessionID: "old", PID: 100, ProcStart: "Thu Oct  9 00:00:00 2026"}
+	cases := map[string]func(call int) ([]resources.Root, error){
+		"gone after the read": func(call int) ([]resources.Root, error) {
+			if call == 1 {
+				return []resources.Root{old, stay}, nil
+			}
+			return []resources.Root{stay}, nil
+		},
+		"reused after the read": func(call int) ([]resources.Root, error) {
+			if call == 1 {
+				return []resources.Root{old, stay}, nil
+			}
+			reused := old
+			reused.ProcStart = "Thu Oct  9 00:00:02 2026"
+			return []resources.Root{reused, stay}, nil
+		},
+		"appeared after the read": func(call int) ([]resources.Root, error) {
+			if call == 1 {
+				return []resources.Root{stay}, nil
+			}
+			return []resources.Root{old, stay}, nil
+		},
+	}
+	for name, fn := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := &fakeSampler{fn: func(context.Context, int) (resources.HostRaw, []resources.Proc, error) {
+				return goodRaw(), procs, nil
+			}}
+			m := newTestModule(s, &fakeRoots{fn: fn})
+			m.tick(context.Background())
+			got := m.latest.Load()
+			if got == nil || len(got.Sessions) != 1 || got.Sessions[0].SessionID != "stays" {
+				t.Fatalf("sessions = %+v, want only the root both reads agree on", got.Sessions)
+			}
+		})
+	}
+}
+
+// The first read of the roots comes before the sampler runs, the second after.
+func TestModule_RootsAreReadAroundTheSample(t *testing.T) {
+	var order []string
+	s := &fakeSampler{fn: func(context.Context, int) (resources.HostRaw, []resources.Proc, error) {
+		order = append(order, "sample")
+		return goodRaw(), nil, nil
+	}}
+	roots := &fakeRoots{fn: func(int) ([]resources.Root, error) {
+		order = append(order, "roots")
+		return nil, nil
+	}}
+	m := newTestModule(s, roots)
+	m.tick(context.Background())
+	if got := strings.Join(order, ","); got != "roots,sample,roots" {
+		t.Fatalf("order = %s, want roots,sample,roots", got)
 	}
 }
 
