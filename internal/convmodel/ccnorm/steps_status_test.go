@@ -77,6 +77,52 @@ func TestStatus_Matrix(t *testing.T) {
 	}
 }
 
+func TestStatus_MultiResultRowWithDenialKindIsCountedNotAttributed(t *testing.T) {
+	multi := func() []byte {
+		o := common("user", "r1", 3)
+		o["message"] = obj{"role": "user", "content": []obj{
+			{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a"},
+			{"type": "tool_result", "tool_use_id": "toolu_2", "content": "Exit code 1", "is_error": true},
+		}}
+		return line(o, denialKind("user-rejected"))
+	}
+	n := norm(t, userRow("u1", 1, "go"),
+		toolCall("a1", 2, "toolu_1", "Bash", obj{"command": "a"}), toolCall("a2", 2.1, "toolu_2", "Bash", obj{"command": "b"}),
+		multi())
+	c := validated(t, n)
+	for _, id := range []string{"toolu_1", "toolu_2"} {
+		if s := stepNamed(t, c, id); s.Status == convmodel.StepDenied || s.Denial != "" {
+			t.Errorf("%s: the row's field was attributed: %q %q", id, s.Status, s.Denial)
+		}
+	}
+	if got := n.Stats().Skipped["multi_result_denial"]; got != 1 {
+		t.Errorf("multi_result_denial = %d, want 1", got)
+	}
+
+	// a single-result row with the field is unchanged, and not counted
+	n = norm(t, userRow("u1", 1, "go"), toolCall("a1", 2, "toolu_1", "Bash", obj{"command": "a"}),
+		resultRow("r1", 3, "toolu_1", "x", false, denialKind("user-rejected")))
+	if s := stepNamed(t, validated(t, n), "toolu_1"); s.Status != convmodel.StepDenied || s.Denial != "user-rejected" {
+		t.Errorf("single result: %q %q", s.Status, s.Denial)
+	}
+	if got := n.Stats().Skipped["multi_result_denial"]; got != 0 {
+		t.Errorf("single result counted: %d", got)
+	}
+
+	// several results without the field: nothing to count
+	o := common("user", "r2", 4)
+	o["message"] = obj{"role": "user", "content": []obj{
+		{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a"},
+		{"type": "tool_result", "tool_use_id": "toolu_2", "content": "b"},
+	}}
+	n = norm(t, userRow("u1", 1, "go"),
+		toolCall("a1", 2, "toolu_1", "Bash", obj{"command": "a"}), toolCall("a2", 2.1, "toolu_2", "Bash", obj{"command": "b"}),
+		line(o))
+	if got := n.Stats().Skipped["multi_result_denial"]; got != 0 {
+		t.Errorf("no field, counted: %d", got)
+	}
+}
+
 func TestStatus_DenialKindOnRowWithSeveralResultsIsNotApplied(t *testing.T) {
 	// the row-level toolDenialKind cannot say which of two results it is for
 	o := common("user", "r1", 3)

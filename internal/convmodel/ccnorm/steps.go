@@ -112,13 +112,19 @@ const maxDenial = 64
 //
 // toolDenialKind and toolUseResult are members of the row, not of a block:
 // they are read only when the row holds exactly one result, since otherwise
-// there is no saying which result they are about.
+// there is no saying which result they are about. A several-result row that
+// carries toolDenialKind is counted as Skipped["multi_result_denial"].
 func (n *Normalizer) toolResultRow(l *rawLine, blocks []block, off int64) {
 	var results []block
 	for _, b := range blocks {
 		if b.typ == "tool_result" {
 			results = append(results, b)
 		}
+	}
+	if len(results) > 1 && l.str(l.ToolDenialKind) != "" {
+		// not seen in any real transcript; if it ever happens, say so
+		// instead of guessing which result the field is about
+		n.skip("multi_result_denial")
 	}
 	for _, b := range results {
 		r := result{at: l.at, isErr: jsonTrue(b.obj.get("is_error"))}
