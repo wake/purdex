@@ -2,9 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
-	"strconv"
-	"strings"
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
@@ -45,16 +44,10 @@ func lightsDigestOf(p *SessionProjection, n agentpkg.NormalizedEvent) lightsDige
 	if p != nil && p.TopFrame != nil {
 		d.frameID = p.TopFrame.FrameID
 	}
-	var b strings.Builder
-	for _, r := range n.Subagents {
-		if r.IsProxy {
-			b.WriteString("p" + strconv.Itoa(r.SourcePID) + "/" + r.SourceStartTime)
-		} else {
-			b.WriteString("n" + r.ID)
-		}
-		b.WriteByte(0)
-	}
-	d.dots = b.String()
+	// Every wire field of every ref, in the order the overlay decided: the
+	// SPA draws delegating, the type and the start time too.
+	dots, _ := json.Marshal(n.Subagents)
+	d.dots = string(dots)
 	return d
 }
 
