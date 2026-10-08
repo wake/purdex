@@ -1,6 +1,8 @@
 package resourcesmod
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -45,7 +47,9 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "body unreadable or over 64 KiB")
 		return
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields() // a misspelt field must not read as "left out"
+	if err := dec.Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
@@ -82,17 +86,20 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A replay returns the row it made, whatever has become of it.
+	// A replay returns the row it made, whatever has become of it, but only to
+	// a request that is the one it was made for.
 	if row, ok, err := m.store.GetByClientID(req.ClientID); err != nil {
 		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "read lease: "+err.Error())
 		return
 	} else if ok {
-		if row.State == resources.StateWaiting {
-			m.admissionPass(r.Context(), row.ID)
-			row, _, _ = m.store.Get(row.ID)
-		}
-		writeJSON(w, http.StatusOK, m.leaseResponse(row, set, false))
+		m.replay(w, r, req, row, set)
 		return
+	}
+	if req.Scope != resources.ScopeSessionNew {
+		if code, detail := validHolderStart(req.HolderStart); code != "" {
+			writeErr(w, http.StatusBadRequest, code, detail)
+			return
+		}
 	}
 
 	now := m.now()
@@ -118,6 +125,10 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 			row.HolderPID, row.HolderStart = pid, start
 		} else {
 			row.Scope, fallback = resources.ScopeProcess, true
+			if code, detail := validHolderStart(req.HolderStart); code != "" {
+				writeErr(w, http.StatusBadRequest, code, detail+" (the session is unknown, so the holder process is what is tracked)")
+				return
+			}
 		}
 	}
 
@@ -128,15 +139,67 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "create lease: "+err.Error())
 		return
 	}
+	if !created {
+		// Another POST of the same client id won the insert between the
+		// lookup and the create: it is a replay after all.
+		m.replay(w, r, req, got, set)
+		return
+	}
 	if got.State == resources.StateWaiting {
 		m.admissionPass(r.Context(), got.ID)
-		got, _, _ = m.store.Get(got.ID)
+		var ok bool
+		if got, ok, err = m.store.Get(got.ID); err != nil || !ok {
+			writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "read lease after admission failed")
+			return
+		}
 	}
-	status := http.StatusOK
-	if created {
-		status = http.StatusCreated
+	writeJSON(w, http.StatusCreated, m.leaseResponse(got, set, fallback))
+}
+
+// validHolderStart requires the start time the sweeper judges the holder by: a
+// start text that does not parse would make the holder count as alive until
+// max_hold.
+func validHolderStart(s string) (code, detail string) {
+	if s == "" {
+		return resources.ErrBadRequest, "holder_start is required"
 	}
-	writeJSON(w, status, m.leaseResponse(got, set, fallback))
+	if t, err := ipeers.ParseProcStart(s); err != nil || t.IsZero() {
+		return resources.ErrBadRequest, "holder_start must be a process start time as ps prints it"
+	}
+	return "", ""
+}
+
+// replay answers a POST whose client id already has a row: the row, when the
+// request is the one it was made for (kind or weight, session, tool use, and
+// the holder for a process-scope request), else 409 client_id_reused. A
+// session-new request compares no holder: the row holds the agent process it
+// resolved to.
+func (m *Module) replay(w http.ResponseWriter, r *http.Request, req resources.LeaseRequest, row leaseRow, set resources.Settings) {
+	same := row.SessionID == req.SessionID && row.ToolUseID == req.ToolUseID
+	if req.Kind != "" {
+		same = same && row.Kind == req.Kind
+	} else {
+		same = same && row.Kind == "" && row.Weight == req.Weight
+	}
+	if req.Scope != resources.ScopeSessionNew {
+		same = same && row.HolderPID == req.HolderPID && row.HolderStart == req.HolderStart
+	}
+	if !same {
+		writeErr(w, http.StatusConflict, resources.ErrClientIDReused, "this client_id was used for a different request")
+		return
+	}
+	if row.State == resources.StateWaiting {
+		m.admissionPass(r.Context(), row.ID)
+		var ok bool
+		var err error
+		if row, ok, err = m.store.Get(row.ID); err != nil || !ok {
+			writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "read lease after admission failed")
+			return
+		}
+	}
+	// A session-new request whose row tracks a plain process is the fallback.
+	fallback := req.Scope == resources.ScopeSessionNew && row.Scope == resources.ScopeProcess
+	writeJSON(w, http.StatusOK, m.leaseResponse(row, set, fallback))
 }
 
 // requestWeight resolves exactly one of kind and weight; code is "" on
@@ -165,7 +228,9 @@ func (m *Module) sessionRoot(r *http.Request, sessionID string) (pid int, start 
 	if m.roots == nil {
 		return 0, "", false
 	}
-	snap, err := m.procSnapshot(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), sampleBudget)
+	defer cancel()
+	snap, err := m.procSnapshot(ctx)
 	if err != nil {
 		return 0, "", false
 	}
@@ -202,6 +267,7 @@ func (m *Module) handleLeaseGet(w http.ResponseWriter, r *http.Request) {
 	}
 	timer := time.NewTimer(time.Duration(wait) * time.Second)
 	defer timer.Stop()
+	final := false // the wait is over: answer with the row as it is now
 	for {
 		// The row is read and the generation captured under one lock hold: a
 		// transition after this read closes the channel taken here, so it
@@ -222,7 +288,7 @@ func (m *Module) handleLeaseGet(w http.ResponseWriter, r *http.Request) {
 		case !ok:
 			writeErr(w, http.StatusNotFound, resources.ErrNoLease, "no such lease")
 			return
-		case row.State != resources.StateWaiting:
+		case row.State != resources.StateWaiting || final:
 			writeJSON(w, http.StatusOK, m.leaseResponse(row, m.settings(), false))
 			return
 		}
@@ -232,13 +298,11 @@ func (m *Module) handleLeaseGet(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-gen:
 		case <-timer.C:
-			writeJSON(w, http.StatusOK, m.leaseResponse(row, m.settings(), false))
-			return
+			final = true // a grant that landed with the timer is not missed: read again
 		case <-r.Context().Done():
 			return
 		case <-m.runCtx.Done():
-			writeJSON(w, http.StatusOK, m.leaseResponse(row, m.settings(), false))
-			return
+			final = true
 		}
 	}
 }

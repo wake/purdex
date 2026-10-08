@@ -221,7 +221,7 @@ func TestLeases_SessionNewResolvesOrFallsBack(t *testing.T) {
 	f := newRouteFix(t, resources.ModeLease)
 	f.m.procSnapshot = func(context.Context) (*iagent.ProcessSnapshot, error) { return nil, nil }
 	f.m.roots = oneRoot{resources.Root{SessionID: "sid-known", PID: 777, ProcStart: "Thu Oct  9 01:00:00 2026"}}
-	req := resources.LeaseRequest{ClientID: cidA, Kind: "test-pkg", HolderPID: 4242, Scope: resources.ScopeSessionNew, SessionID: "sid-known"}
+	req := resources.LeaseRequest{ClientID: cidA, Kind: "test-pkg", HolderPID: 4242, HolderStart: "Thu Oct  9 00:00:00 2026", Scope: resources.ScopeSessionNew, SessionID: "sid-known"}
 	r := decodeLease(t, f.do(http.MethodPost, "/api/resources/leases", req))
 	row := f.row(r.ID)
 	if r.ScopeFallback || row.Scope != resources.ScopeSessionNew || row.HolderPID != 777 || row.HolderStart != "Thu Oct  9 01:00:00 2026" {
@@ -237,7 +237,7 @@ func TestLeases_SessionNewResolvesOrFallsBack(t *testing.T) {
 
 func TestLeases_Validation(t *testing.T) {
 	f := newRouteFix(t, resources.ModeLease)
-	ok := resources.LeaseRequest{ClientID: cidA, Kind: "test-full", HolderPID: 4242}
+	ok := resources.LeaseRequest{ClientID: cidA, Kind: "test-full", HolderPID: 4242, HolderStart: "Thu Oct  9 00:00:00 2026"}
 	for name, mut := range map[string]func(*resources.LeaseRequest){
 		"both kind and weight": func(r *resources.LeaseRequest) { r.Weight = 5 },
 		"neither":              func(r *resources.LeaseRequest) { r.Kind = "" },
@@ -251,6 +251,8 @@ func TestLeases_Validation(t *testing.T) {
 		"no holder pid":        func(r *resources.LeaseRequest) { r.HolderPID = 0 },
 		"bad scope":            func(r *resources.LeaseRequest) { r.Scope = "tree" },
 		"session-new no sid":   func(r *resources.LeaseRequest) { r.Scope = resources.ScopeSessionNew },
+		"no holder start":      func(r *resources.LeaseRequest) { r.HolderStart = "" },
+		"garbage holder start": func(r *resources.LeaseRequest) { r.HolderStart = "garbage" },
 	} {
 		req := ok
 		mut(&req)
@@ -352,7 +354,7 @@ func TestPoll_AfterRestartObservesPersistedRow(t *testing.T) {
 	mux1 := http.NewServeMux()
 	m1.RegisterRoutes(mux1)
 	post := func(mux *http.ServeMux, cid string, w int) resources.LeaseResponse {
-		b, _ := json.Marshal(resources.LeaseRequest{ClientID: cid, Weight: w, HolderPID: 4242})
+		b, _ := json.Marshal(resources.LeaseRequest{ClientID: cid, Weight: w, HolderPID: 4242, HolderStart: "Thu Oct  9 00:00:00 2026"})
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/resources/leases", bytes.NewReader(b)))
 		return decodeLease(t, rec)
@@ -379,5 +381,92 @@ func TestPoll_AfterRestartObservesPersistedRow(t *testing.T) {
 	mux2.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/resources/leases/"+a.ID, nil))
 	if got := get(b.ID); got.State != resources.StateHeld {
 		t.Fatalf("after the release in the new module: %+v", got)
+	}
+}
+
+// A misspelt field is refused, not read as "left out".
+func TestLeases_UnknownFieldIsRefused(t *testing.T) {
+	f := newRouteFix(t, resources.ModeLease)
+	req := httptest.NewRequest(http.MethodPost, "/api/resources/leases",
+		strings.NewReader(`{"client_id":"`+cidA+`","kind":"test-full","holder_pid":1,"holder_start":"Thu Oct  9 00:00:00 2026","holder_strat":"x"}`))
+	rec := httptest.NewRecorder()
+	f.mux.ServeHTTP(rec, req)
+	if rec.Code != 400 {
+		t.Errorf("code %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A client id belongs to the request it was made for: the same request is a
+// replay, another one is a 409 that grants nothing.
+func TestLeases_ClientIDReuseIsRefused(t *testing.T) {
+	f := newRouteFix(t, resources.ModeLease)
+	base := resources.LeaseRequest{ClientID: cidA, Weight: 10, HolderPID: 4242, HolderStart: "Thu Oct  9 00:00:00 2026", ToolUseID: "tu1"}
+	first := decodeLease(t, f.do(http.MethodPost, "/api/resources/leases", base))
+	for name, mut := range map[string]func(*resources.LeaseRequest){
+		"heavier weight": func(r *resources.LeaseRequest) { r.Weight = 200 },
+		"a kind":         func(r *resources.LeaseRequest) { r.Weight, r.Kind = 0, "test-full" },
+		"other holder":   func(r *resources.LeaseRequest) { r.HolderPID = 99 },
+		"other start":    func(r *resources.LeaseRequest) { r.HolderStart = "Thu Oct  9 00:00:01 2026" },
+		"other tool use": func(r *resources.LeaseRequest) { r.ToolUseID = "tu2" },
+		"other session":  func(r *resources.LeaseRequest) { r.SessionID = "sid-x" },
+	} {
+		req := base
+		mut(&req)
+		rec := f.do(http.MethodPost, "/api/resources/leases", req)
+		if rec.Code != http.StatusConflict || apiCode(rec) != resources.ErrClientIDReused {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body.String())
+		}
+	}
+	// The identical request, also after the lease ended, is a replay.
+	f.do(http.MethodDelete, "/api/resources/leases/"+first.ID, nil)
+	rec := f.do(http.MethodPost, "/api/resources/leases", base)
+	if got := decodeLease(t, rec); rec.Code != 200 || got.ID != first.ID || got.State != resources.StateEnded {
+		t.Errorf("replay after end: %d %+v", rec.Code, got)
+	}
+}
+
+// The holder start decides whether a vanished holder is noticed: a request
+// without one that parses is refused, so no lease can sit out its max_hold.
+func TestLeases_HolderStartThatParsesIsWhatTheSweeperJudges(t *testing.T) {
+	f := newRouteFix(t, resources.ModeLease)
+	r := decodeLease(t, f.post(cidA, "test-full", 0))
+	if r.State != resources.StateHeld {
+		t.Fatal(r)
+	}
+	f.advance(2 * time.Second)
+	f.m.sweepOnce(context.Background()) // pid 4242 is not in the (empty) table
+	if got := f.row(r.ID); got.State != "ended" || got.EndReason != resources.EndHolderGone {
+		t.Errorf("row = %+v", got)
+	}
+}
+
+// The scope fallback is told again on a replay of the same request.
+func TestLeases_ReplayRepeatsTheScopeFallback(t *testing.T) {
+	f := newRouteFix(t, resources.ModeLease)
+	req := resources.LeaseRequest{ClientID: cidA, Kind: "test-pkg", HolderPID: 4242, HolderStart: "Thu Oct  9 00:00:00 2026",
+		Scope: resources.ScopeSessionNew, SessionID: "sid-unknown"}
+	first := decodeLease(t, f.do(http.MethodPost, "/api/resources/leases", req))
+	again := decodeLease(t, f.do(http.MethodPost, "/api/resources/leases", req))
+	if !first.ScopeFallback || !again.ScopeFallback || first.ID != again.ID {
+		t.Errorf("first %+v again %+v", first, again)
+	}
+}
+
+// A poll whose timer and whose wake come together answers with the row as it
+// is, not as it was before the wait.
+func TestPoll_TimeoutReadsTheRowAgain(t *testing.T) {
+	f := newRouteFix(t, resources.ModeLease)
+	a := decodeLease(t, f.post(cidA, "", 60))
+	b := decodeLease(t, f.post(cidB, "", 60))
+	f.m.pollHook = func() {
+		f.m.pollHook = nil
+		// The room appears with no wake the poll could see: the row changes in
+		// the database only, then the timer fires.
+		f.m.store.End(a.ID, resources.EndReleased, f.nowMS())
+		f.m.store.GrantDecided(b.ID, f.nowMS(), false, resources.Grant{Decision: resources.Decision{Path: resources.PathWaited}}, "")
+	}
+	got := decodeLease(t, f.do(http.MethodGet, "/api/resources/leases/"+b.ID+"?wait=1", nil))
+	if got.State != resources.StateHeld {
+		t.Fatalf("resp %+v: the timeout answered with the row it read before waiting", got)
 	}
 }

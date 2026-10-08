@@ -134,6 +134,9 @@ const (
 	ErrUnknownKind = "unknown_kind"
 	ErrNoLease     = "no_lease"
 	ErrNotReady    = "not_ready" // the daemon is stopping, or resources.db is not open
+	// ErrClientIDReused: the client id names a lease that was made for a
+	// different request. A replay must repeat the request it replays.
+	ErrClientIDReused = "client_id_reused"
 )
 
 // APIError is the body of a refused lease request: {"error": code, "detail": text}.
