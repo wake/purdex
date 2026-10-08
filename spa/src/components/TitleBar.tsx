@@ -12,6 +12,8 @@ import type { LayoutPattern, Pane } from '../types/tab'
 import { CollapseButton } from '../features/workspace/components/CollapseButton'
 import { ConfirmDialog } from './ConfirmDialog'
 import { LayoutClosingList, LayoutKeepPicker } from './LayoutKeepPicker'
+import { UnattendedButton } from './UnattendedButton'
+import { BUTTON, IDLE, PRESSED } from './title-bar-styles'
 
 interface Props { title: string }
 
@@ -20,10 +22,6 @@ const patterns: { pattern: LayoutPattern; icon: typeof Square; labelKey: string 
   { pattern: 'split-h', icon: Columns, labelKey: 'pane.split_horizontal' },
   { pattern: 'split-v', icon: Rows, labelKey: 'pane.split_vertical' },
 ]
-
-const BUTTON = 'p-1 rounded cursor-pointer disabled:opacity-40 disabled:pointer-events-none'
-const PRESSED = 'text-accent-base bg-accent-base/10'
-const IDLE = 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'
 
 /**
  * How long the Confirm of a dialog opened by a re-plan stays inert. The click that found the plan changed may be the
@@ -173,6 +171,8 @@ export function TitleBar({ title }: Props) {
         </div>
 
         <div className="flex-1" />
+        {/* 無人值守模式 (U23): left of the layout buttons, in its own no-drag wrapper. */}
+        <UnattendedButton />
         <div
           data-testid="layout-buttons"
           className="shrink-0 flex items-center gap-0.5 translate-y-[2.5px]"
