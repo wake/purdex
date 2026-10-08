@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.0-alpha.605] - 2026-10-08
+
+> 動 daemon、skill 和 SPA：**要部署 daemon，也要重跑 `pdx setup --agent cc`**（skill 文字改了）；主 checkout 快轉後 SPA 即生效；Electron 不必更新。使用者看得到的是 worker 狀態改由 daemon 推送（燈號更即時）；無人值守模式的 daemon 端已就緒，標題列按鈕在之後的版本。
+
+### Added：worker 狀態改由 daemon 推送 — #1866 PR2（#1960、#1961、#1964、#1965）
+
+- App 連到主機時改帶 `?nex=v1`，worker 的狀態變化由 daemon 主動推過來，不再整份清單重抓；斷線、漏推、daemon 重啟都會自動對帳補齊。
+- 每 120 秒做一次安全對帳（只在畫面看得到、有訂閱時），發現不一致會修正並計數。
+- 已封存的 worker 清單以封存版本號重新整理。
+- App 要重新整理（或重連）一次才會開始接收推送。
+
+### Added：無人值守模式的 daemon 端 — U23（#1957、#1962、#1967、#1969、#1971）
+
+- 開關存在各主機的 daemon（重啟後保留）。開著時，「成為 lead」與「自我接力」的申請由 daemon 立即自動核准，記錄的決定者是 `unattended`；開啟當下已在等待的這兩種申請也一併核准。worker 的工具權限與 agent 的提問照常等人。
+- 自動核准的 lead 申請，member 上限最多 3（U25）。
+- 新 API：`GET`／`PUT /api/team/unattended`（只能由 App 呼叫、需管理權限）；能力宣告 `relay.unattended.v1`；開關變更以嚴格推送通知所有視窗（塞不下就斷線重連拿最新狀態）。
+- skill 明定 agent 絕不開啟、也不要求開啟無人值守。
+- 標題列的開關按鈕與「離開期間自動核准了哪些」清單在之後的版本。
+
+### Added：peer 清單的執行體列 — peer mailbox P4a（#1956）
+
+- daemon 的 peer 清單多了執行體列（依 session 去重：tmux 列 ＞ 執行體列 ＞ 其他），目前**還不能送訊**；送訊（P4b）留到通訊線恢復。
+
+### Docs
+
+- Claude Code 官方 Agent Teams 與 workflow 的設計研究（#1966）；介面語言 U1-2 plan（#1972，含 spec §7 的序號修正）。
+
+### 追蹤
+
+- #1968（team module Start 職責膨脹）、#1970（核准框的開啟／關閉通知可能遺失）、#1959（peers/module.go 拆分）。
+
 ## [1.0.0-alpha.604] - 2026-10-08
 
 > 動 daemon、mod 和 SPA：**要部署 daemon，也要重跑 `pdx setup --agent cc`**（mod 換版）；主 checkout 快轉後 SPA 即生效；Electron 不必更新。使用者看得到的是清單與設定的小修；其餘是底層（mod 事件上報、執行體狀態推送的 daemon 端、無人值守開關的儲存），還沒有畫面。
