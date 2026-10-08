@@ -137,10 +137,6 @@ func (m *Module) reportLead(t team.Team) team.ReportLead {
 // the lead lists its team's reports (narrowed to one task by task), a member
 // those of one of its own tasks (task is then required). Newest first.
 func (m *Module) handleReportList(w http.ResponseWriter, r *http.Request) {
-	if true { // STUB (red phase)
-		http.Error(w, "stub", http.StatusNotImplemented)
-		return
-	}
 	q := r.URL.Query()
 	c, ok := m.taskCallerOf(w, q.Get("origin_inbox"))
 	if !ok {
