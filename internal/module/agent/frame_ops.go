@@ -662,13 +662,15 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			// would create the sender's frame, resurrecting one a SessionEnd
 			// or the sweep already removed, so it is skipped (U1-2a-4 F1).
 			if isSubagentStopFailure(lifecycle, result) {
-				projection, perr := m.projectPane(req.TmuxPaneID)
-				return projection, FrameTraceMeta{
+				// Nothing was changed and nothing will be emitted, so no
+				// projection is built: a failing read here would only turn
+				// a no-op into a 500 the hook retries (U1-2a-4 F4).
+				return nil, FrameTraceMeta{
 					Decision: "skipped",
 					Reason:   reasonSubagentStopFailureNoFrame,
 					Before:   map[string]any{},
 					After:    map[string]any{},
-				}, perr
+				}, nil
 			}
 			// No matching ref — fall through to generic post-switch path
 			// so legacy behavior (no frame mutation, projection refresh)

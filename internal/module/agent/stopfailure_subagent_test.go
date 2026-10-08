@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -84,6 +85,38 @@ func TestStopFailure_SubagentWithoutFrameDoesNotResurrect(t *testing.T) {
 	}
 	if msgs := drainBroadcasts(sub, 150*time.Millisecond); len(msgs) != 0 {
 		t.Fatalf("broadcasts = %+v, want none", msgs)
+	}
+}
+
+// The skipped path reads nothing: a projection layer that fails (a store read
+// error) must not turn a request that changed nothing into a 500 the hook then
+// retries (U1-2a-4 F4). The projection function is never even called.
+func TestStopFailure_SubagentWithoutFrameSkipDoesNotProject(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	calls := 0
+	orig := projectPaneFn
+	projectPaneFn = func(*Module, string) (*SessionProjection, error) {
+		calls++
+		return nil, errors.New("projection layer down")
+	}
+	t.Cleanup(func() { projectPaneFn = orig })
+
+	sendBody(t, m, stopFailureBody("agent-X")) // fails the test unless 200
+
+	if calls != 0 {
+		t.Fatalf("projectPane called %d times on the skipped path, want 0", calls)
+	}
+
+	// The same through applyFrameEvent: skipped, nil projection, nil error.
+	req := EventRequest{TmuxSession: "work", TmuxPaneID: "%5", PurdexName: "PdxStopFailure", AgentType: "cc",
+		SenderPID: 200, SenderStartTime: "Sun Apr 20 01:30:00 2026", RawEvent: json.RawMessage(`{}`)}
+	proj, meta, err := m.applyFrameEvent(req, agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusError,
+		Detail: map[string]any{"agent_id": "agent-X"}}, 1)
+	if err != nil || proj != nil || meta.Decision != "skipped" || meta.Reason != reasonSubagentStopFailureNoFrame {
+		t.Fatalf("applyFrameEvent = %+v, %+v, %v; want nil projection, skipped/%s, nil error", proj, meta, err, reasonSubagentStopFailureNoFrame)
+	}
+	if calls != 0 {
+		t.Fatalf("projectPane called %d times via applyFrameEvent, want 0", calls)
 	}
 }
 
