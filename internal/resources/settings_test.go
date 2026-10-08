@@ -14,7 +14,7 @@ import (
 func TestSettings_EffectiveDefaults(t *testing.T) {
 	d := DefaultSettings()
 	assert.Equal(t, "lease", d.Mode)
-	assert.Equal(t, map[string]int{"test-full": 45, "build": 35, "test-pkg": 15, "lint-full": 10}, d.Kinds)
+	assert.Equal(t, map[string]int{"test-full": 35, "build": 35, "test-pkg": 15, "lint-full": 10}, d.Kinds)
 	require.NotNil(t, d.DeadlineS)
 	assert.Equal(t, 300, *d.DeadlineS)
 	assert.Equal(t, 20, *d.WarmupS)
@@ -42,11 +42,11 @@ func TestSettings_EffectiveMergesClampsAndCopies(t *testing.T) {
 	s := Settings{Mode: "bogus", Kinds: map[string]int{"build": 20, "custom": 7, "huge": 500}, DeadlineS: intp(9999)}
 	e := s.Effective()
 	assert.Equal(t, "lease", e.Mode)
-	assert.Equal(t, map[string]int{"test-full": 45, "build": 20, "test-pkg": 15, "lint-full": 10, "custom": 7, "huge": 100}, e.Kinds)
+	assert.Equal(t, map[string]int{"test-full": 35, "build": 20, "test-pkg": 15, "lint-full": 10, "custom": 7, "huge": 100}, e.Kinds)
 	assert.Equal(t, 590, *e.DeadlineS)
 
 	e.Kinds["test-full"] = 1
-	assert.Equal(t, 45, DefaultKinds["test-full"], "the default table is not shared")
+	assert.Equal(t, 35, DefaultKinds["test-full"], "the default table is not shared")
 	assert.Equal(t, 20, s.Kinds["build"])
 
 	w, ok := s.Weight("custom")

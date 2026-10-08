@@ -52,7 +52,7 @@ const (
 
 // DefaultKinds are the built-in kinds and their weights (spec D-7).
 var DefaultKinds = map[string]int{
-	"test-full": 45,
+	"test-full": 35,
 	"build":     35,
 	"test-pkg":  15,
 	"lint-full": 10,
