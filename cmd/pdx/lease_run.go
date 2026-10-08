@@ -96,6 +96,7 @@ func runLeaseRun(ctx context.Context, args []string, stdout, stderr io.Writer, c
 	}
 	switch {
 	case out.cancelled:
+		fmt.Fprintln(stderr, "pdx lease: 等待中被中斷，指令沒有執行")
 		return ExitCancelled
 	case out.failOpen != "":
 		fmt.Fprintf(stderr, "pdx lease: daemon 連不上或無法使用（%s），直接執行\n", out.failOpen)
@@ -114,6 +115,7 @@ func runLeaseRun(ctx context.Context, args []string, stdout, stderr io.Writer, c
 	if ctx.Err() != nil {
 		// Interrupted between the grant and the start: the command does not run
 		// (the deferred release gives the room back).
+		fmt.Fprintln(stderr, "pdx lease: 取得租約後被中斷，指令沒有執行")
 		return ExitCancelled
 	}
 	return runChild(command, sigs, leaseStdinIsTTY(), stderr)

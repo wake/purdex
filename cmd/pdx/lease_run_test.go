@@ -170,6 +170,9 @@ func TestRun_InterruptBetweenGrantAndStartDoesNotRun(t *testing.T) {
 	if _, err := os.Stat(out); code != ExitCancelled || err == nil || len(deletes) != 1 {
 		t.Fatalf("code=%d ran=%v deletes=%v", code, err == nil, deletes)
 	}
+	if !strings.Contains(stderr.String(), "pdx lease: 取得租約後被中斷") {
+		t.Errorf("exit 12 left no pdx lease: line: %q", stderr.String())
+	}
 }
 
 // SIGHUP ends only `run` (a closing terminal); the other lease commands keep
@@ -251,6 +254,9 @@ func TestRun_InterruptWhileWaitingDoesNotRun(t *testing.T) {
 	_, _, deletes := d.snapshot()
 	if _, err := os.Stat(out); code != ExitCancelled || err == nil || len(deletes) != 1 {
 		t.Fatalf("code=%d ran=%v deletes=%v", code, err == nil, deletes)
+	}
+	if !strings.Contains(stderr.String(), "pdx lease: 等待中被中斷") {
+		t.Errorf("exit 12 left no pdx lease: line: %q", stderr.String())
 	}
 }
 
