@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -424,6 +425,32 @@ func TestTick_RefusalSetForgetsClosedRows(t *testing.T) {
 	}
 	if len(f.m.notAutoApproved) != 0 {
 		t.Fatalf("set = %v, want empty", f.m.notAutoApproved)
+	}
+}
+
+// Rule 7: Start sweeps when the switch is on (the daemon restarted while
+// requests were open), before its sweeper's first tick. Mutation gate:
+// drop the boot sweep from Start → red.
+func TestStart_UnattendedOnSweepsAtBoot(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.unatt.set(true)
+	if err := f.m.Start(context.Background()); err != nil { // newFixture's Cleanup stops it
+		t.Fatal(err)
+	}
+	a, _, _ := f.m.store.Get(uid(1))
+	assertDecidedByUnattended(t, a, f.clock.Load())
+}
+
+// Rule 7: with the switch off, Start approves nothing.
+func TestStart_UnattendedOffLeavesRowsOpen(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	if err := f.m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
+		t.Fatalf("state %s, want open", a.State)
 	}
 }
 

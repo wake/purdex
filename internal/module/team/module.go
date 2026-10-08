@@ -340,6 +340,14 @@ func (m *Module) Start(context.Context) error {
 	}
 	m.reconcileRelays()
 	m.resumeSpawns()
+	// U23 rule 7: requests left open across a restart while the switch is
+	// on are approved now, not at the first tick; createMu as every reader
+	// of the switch.
+	m.createMu.Lock()
+	if m.unattendedOn() {
+		m.sweepUnattended("boot")
+	}
+	m.createMu.Unlock()
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.sweepWG.Add(2)
 	go m.runSweeper()
