@@ -172,7 +172,8 @@ export function useMultiHostEventWs() {
           if (event.type === 'hook') {
             try {
               const hookData = JSON.parse(event.value)
-              useAgentStore.getState().handleNormalizedEvent(hostId, event.session, hookData)
+              // the transition rule (U1-3): a daemon hook frame is news only when the status really changed
+              useAgentStore.getState().applyHookEvent(hostId, event.session, hookData)
               // The second provenance trigger (spec §5.4), and the one v2
               // lacked: the first probe of a pre-deploy session runs before any
               // event has filled the frame's `session_id`, gets `found: false`,
@@ -180,7 +181,7 @@ export function useMultiHostEventWs() {
               // not changed and the pane is not re-attached. The hook stream is
               // exactly the signal that the daemon now knows more than it did.
               //
-              // AFTER `handleNormalizedEvent`, not before: a broadcast that
+              // AFTER `applyHookEvent`, not before: a broadcast that
               // itself writes the record leaves the pane ineligible, so it
               // costs no request.
               for (const { sessionCode, tmuxInstance } of provenanceBindings(hostId, event.session)) {
