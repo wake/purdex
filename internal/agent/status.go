@@ -49,4 +49,9 @@ type NormalizedEvent struct {
 	RawEventName string         `json:"raw_event_name"`
 	BroadcastTs  int64          `json:"broadcast_ts"`
 	Detail       map[string]any `json:"detail,omitempty"`
+	// Background is the corner symbol (lights v2, spec §7): "workflow",
+	// "monitor", "schedule" or "". Always on the wire: "" clears it.
+	Background string `json:"background"`
+	// Source says what decided Status: "mod" (a live mod stream) or "hook".
+	Source string `json:"source"`
 }

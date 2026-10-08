@@ -68,6 +68,12 @@ func NewStreamState(stream string) *StreamState {
 	return &StreamState{Stream: stream, Asks: map[string]bool{}, Dots: map[string]Dot{}}
 }
 
+// typeToolApproved is the mod's report that the person approved a
+// permission ask (M-U1-6). internal/modevents names it TypeToolApproved in
+// a parallel change; lights keeps its own spelling so neither waits on the
+// other.
+const typeToolApproved = "tool.approved"
+
 // The ask tools: their tool.start waits on the person until their tool.end.
 var askTools = map[string]bool{"AskUserQuestion": true, "ExitPlanMode": true}
 
@@ -151,7 +157,9 @@ func (s *StreamState) apply(ev modevents.Event) {
 		if decode(ev.Data, &d) && askTools[d.Tool] && d.ToolUseID != "" {
 			s.Asks[d.ToolUseID] = true
 		}
-	case modevents.TypeToolEnd:
+	case modevents.TypeToolEnd, typeToolApproved:
+		// An approved permission ask stops waiting on the person at once;
+		// the tool itself runs on until its tool.end.
 		var d struct {
 			ToolUseID string `json:"tool_use_id"`
 		}

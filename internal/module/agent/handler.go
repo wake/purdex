@@ -711,6 +711,7 @@ func (m *Module) buildNormalized(tmuxSession, eventName, agentType string, broad
 		RawEventName: eventName,
 		BroadcastTs:  broadcastTs,
 		Detail:       result.Detail,
+		Source:       SourceHook, // legacy agent_events rows predate the mod
 	}
 	return normalized
 }

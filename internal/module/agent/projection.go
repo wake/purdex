@@ -12,6 +12,31 @@ type SessionProjection struct {
 	PrimaryFrame *store.Frame
 	TopFrame     *store.Frame
 	Subagents    []agentpkg.SubagentRef
+
+	// The effective light (spec §7): the top frame's hook status, or the
+	// pane's live mod stream's once applyModOverlay has run. Source is
+	// "hook" or "mod"; Background is the corner symbol ("" for none).
+	Status     agentpkg.Status
+	Source     string
+	Background string
+}
+
+// The values of SessionProjection.Source and NormalizedEvent.Source.
+const (
+	SourceHook = "hook"
+	SourceMod  = "mod"
+)
+
+// EffectiveStatus is the status the pane shows: the overlaid Status, or
+// the top frame's for a projection built without one (tests).
+func (p *SessionProjection) EffectiveStatus() agentpkg.Status {
+	if p.Status != "" {
+		return p.Status
+	}
+	if p.TopFrame != nil {
+		return p.TopFrame.Status
+	}
+	return ""
 }
 
 func BuildSessionProjections(frames []store.Frame) []SessionProjection {
@@ -166,5 +191,7 @@ func buildPaneProjection(paneID string, frames []store.Frame) SessionProjection 
 		PrimaryFrame: &primary,
 		TopFrame:     &top,
 		Subagents:    subagents,
+		Status:       top.Status,
+		Source:       SourceHook,
 	}
 }
