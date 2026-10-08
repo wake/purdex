@@ -108,30 +108,42 @@ func parseAcquireFlags(args []string) (o acquireOpts, cfgPath string, msg string
 		return o, "", err.Error()
 	case len(pos) != 0:
 		return o, "", fmt.Sprintf("unexpected argument %q", pos[0])
-	case (*kind == "") == (*weight == 0):
-		return o, "", "give exactly one of --kind and --weight"
-	case *weight != 0 && (*weight < 1 || *weight > resources.MaxExplicitWeight):
-		return o, "", fmt.Sprintf("--weight must be between 1 and %d", resources.MaxExplicitWeight)
-	case *wait < 0 || *wait > resources.MaxWaitS*time.Second:
-		return o, "", fmt.Sprintf("--wait must be between 0 and %ds", resources.MaxWaitS)
-	case *clientID != "" && !validLeaseClientID(*clientID):
-		return o, "", "--client-id must be a lower-case UUID v4"
 	case *holderPID < 0:
 		return o, "", "--holder-pid must be a pid"
 	case *holderStart != "" && !validHolderStartText(*holderStart):
 		return o, "", "--holder-start must be a process start time as ps prints it"
 	}
-	if *wait%time.Second != 0 {
+	o, msg = checkLeaseSize(*kind, *weight, *wait, *clientID)
+	if msg != "" {
+		return o, "", msg
+	}
+	o.session, o.toolUse, o.holderPID, o.holderStart = *session, *toolUse, *holderPID, *holderStart
+	return o, *cfg, ""
+}
+
+// checkLeaseSize checks the flags acquire and run share: how much (exactly one
+// of kind and weight), how long to wait, and the client id.
+func checkLeaseSize(kind string, weight int, wait time.Duration, clientID string) (o acquireOpts, msg string) {
+	switch {
+	case (kind == "") == (weight == 0):
+		return o, "give exactly one of --kind and --weight"
+	case weight != 0 && (weight < 1 || weight > resources.MaxExplicitWeight):
+		return o, fmt.Sprintf("--weight must be between 1 and %d", resources.MaxExplicitWeight)
+	case wait < 0 || wait > resources.MaxWaitS*time.Second:
+		return o, fmt.Sprintf("--wait must be between 0 and %ds", resources.MaxWaitS)
+	case clientID != "" && !validLeaseClientID(clientID):
+		return o, "--client-id must be a lower-case UUID v4"
+	}
+	if wait%time.Second != 0 {
 		// wait_s is whole seconds, and 0 means the host's default: a shorter
 		// wait is rounded up, never silently turned into the default.
-		*wait = (*wait/time.Second + 1) * time.Second
+		wait = (wait/time.Second + 1) * time.Second
 	}
-	o = acquireOpts{kind: *kind, weight: *weight, wait: *wait, session: *session, toolUse: *toolUse,
-		holderPID: *holderPID, holderStart: *holderStart, clientID: *clientID}
+	o = acquireOpts{kind: kind, weight: weight, wait: wait, clientID: clientID}
 	if o.clientID == "" {
 		o.clientID = uuid.NewString()
 	}
-	return o, *cfg, ""
+	return o, ""
 }
 
 func validLeaseClientID(id string) bool { return ipeers.IsUUID(id) && id[14] == '4' }
@@ -323,15 +335,30 @@ func runLeaseRelease(ctx context.Context, args []string, stdout, stderr io.Write
 	defer cancel()
 	var raw json.RawMessage
 	if _, err := client.Once(rctx, http.MethodDelete, path, nil, &raw); err != nil {
-		var se *daemonclient.StatusError
-		if !(errors.As(err, &se) && se.API.Error == resources.ErrNoLease) { // nothing to release is not worth a line
-			fmt.Fprintf(stderr, "pdx lease: 釋放沒成功（%s）；daemon 會在 holder 結束或逾時後自己收回\n", leaseFailReason(err))
-		}
+		reportReleaseFailure(err, stderr)
 		return ExitOK
 	}
 	if *asJSON {
-		var compact json.RawMessage = raw
-		fmt.Fprintln(stdout, string(compact))
+		fmt.Fprintln(stdout, string(raw))
 	}
 	return ExitOK
+}
+
+// reportReleaseFailure is the one stderr line of a release that did not go
+// through ("no such lease" is not worth a line).
+func reportReleaseFailure(err error, stderr io.Writer) {
+	var se *daemonclient.StatusError
+	if errors.As(err, &se) && se.API.Error == resources.ErrNoLease {
+		return
+	}
+	fmt.Fprintf(stderr, "pdx lease: 釋放沒成功（%s）；daemon 會在 holder 結束或逾時後自己收回\n", leaseFailReason(err))
+}
+
+// leaseReleaseByID is a best-effort release of a lease this process holds.
+func leaseReleaseByID(client *daemonclient.Client, id string, stderr io.Writer) {
+	rctx, cancel := context.WithTimeout(context.Background(), leaseReleaseTimeout)
+	defer cancel()
+	if _, err := client.Once(rctx, http.MethodDelete, "/api/resources/leases/"+url.PathEscape(id), nil, nil); err != nil {
+		reportReleaseFailure(err, stderr)
+	}
 }
