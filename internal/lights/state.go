@@ -60,11 +60,19 @@ type StreamState struct {
 	Ended       bool
 	Dots        map[string]Dot // keyed by agent id
 	Background  Background
-	// StatusEventAt is the daemon receive time of the last event that moved,
-	// or could have moved, the light (see apply). A heartbeat, usage,
-	// background or agent.spawn does not move it, so a hook edge compared
-	// against it is not handed back by a mere beat. Zero until the first.
+	// StatusEventAt is when the last event that moved, or could have moved,
+	// the light happened: the event's own at (the mod's Date.now()), clamped
+	// to the time the daemon received it, going back only when a clock
+	// rollback is seen (see Apply and apply). It is the event time and not the
+	// receive time because mod events reach the daemon a second or more late,
+	// and a hook that arrived in between must not read as older than them. A
+	// heartbeat, usage, background or agent.spawn does not move it, so a hook
+	// edge compared against it is not handed back by a mere beat. Zero until
+	// the first.
 	StatusEventAt time.Time
+	// AtRejected counts the light events whose at was not believed (farther
+	// than atSkewWindow from the receive time) and so was replaced by it.
+	AtRejected int
 }
 
 // NewStreamState returns the empty state of stream: idle, no dots, not
@@ -88,8 +96,16 @@ var activeAgent = map[string]bool{"pending": true, "running": true, "waiting": t
 // Apply applies one event received at now. It reports whether Status(),
 // DotList(), Background or SID changed; LastEvent always moves and is not
 // a change. StatusEventAt moves only with the events apply says touch the
-// light, and with a heartbeat that changed Status(). Data that does not decode leaves everything but SID, LastEvent and
-// Ended as it was.
+// light, and with a heartbeat that changed Status(); it takes the event's at,
+// or now when at is missing, later than now, or not believed (more than
+// atSkewWindow from now: AtRejected counts those), and does not move back unless
+// a clock rollback is seen: a StatusEventAt later than now can only come from a
+// wall clock that was set back (NTP, a wake from sleep; it never exceeds the
+// receive time it was set at), so any event, light-moving or not, starts it over
+// from zero before the new value is merged. The mod reaches the daemon only
+// through a Unix socket on the same host, so at and now come off one wall clock.
+// Data that does not decode leaves everything but SID, LastEvent and Ended as it
+// was.
 func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 	status, bg, sid := s.Status(), s.Background, s.SID
 	dots := maps.Clone(s.Dots)
@@ -97,6 +113,9 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 	s.SID = ev.SID
 	s.LastEvent = now
 	s.Ended = false // any later event reopens an ended stream, as in the registry
+	if s.StatusEventAt.After(now) {
+		s.StatusEventAt = time.Time{} // the wall clock went back
+	}
 	touched := s.apply(ev)
 	if ev.Type == modevents.TypeHeartbeat && s.Status() != status {
 		// A heartbeat that repairs the light (a lost turn.start /
@@ -105,10 +124,41 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 		touched = true
 	}
 	if touched {
-		s.StatusEventAt = now
+		at, rejected := eventTime(ev.At, now)
+		if rejected {
+			s.AtRejected++
+		}
+		if at.After(s.StatusEventAt) {
+			s.StatusEventAt = at
+		}
 	}
 
 	return status != s.Status() || bg != s.Background || sid != s.SID || !maps.Equal(dots, s.Dots)
+}
+
+// atSkewWindow is how far an event's at may be from the time the daemon received
+// it before it is not believed. Mod events arrive a few seconds late at worst, so
+// a larger gap is a wrong unit (Unix seconds sent as milliseconds), a version
+// mismatch or a mod clock gone wrong. It equals LiveWindow.
+const atSkewWindow = LiveWindow
+
+// eventTime is the time an event happened, from its at (ms) and the time now it
+// was received. A missing at (<= 0) is now; an at later than now by up to the
+// window is now (the clocks differ by a few seconds, the event cannot come from
+// the future); an at farther than the window from now, either way, is not
+// believed: it is now and rejected is true.
+func eventTime(atMs int64, now time.Time) (at time.Time, rejected bool) {
+	if atMs <= 0 {
+		return now, false
+	}
+	t := time.UnixMilli(atMs)
+	switch {
+	case now.Sub(t) > atSkewWindow || t.Sub(now) > atSkewWindow:
+		return now, true
+	case t.After(now):
+		return now, false
+	}
+	return t, false
 }
 
 // apply applies ev and reports whether it touched the inputs of Status(): a

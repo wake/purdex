@@ -7,8 +7,8 @@ import (
 	"github.com/wake/purdex/internal/modevents"
 )
 
-// TestStatusEventAt_OnlyStatusEventsUpdateIt: StatusEventAt is the daemon time
-// of the last event that moved (or could have moved) the light. A heartbeat,
+// TestStatusEventAt_OnlyStatusEventsUpdateIt: StatusEventAt is the time of the
+// last event that moved (or could have moved) the light. A heartbeat,
 // a usage report, a background report or an agent.spawn describes the old
 // state again and must not move it, or the periodic heartbeat would hand a
 // pane back to a mod that has not yet caught up with a hook.
