@@ -4,9 +4,28 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 
 	_ "modernc.org/sqlite"
 )
+
+// dbFileMode: the rows name sessions, pids and tool use ids, and the data dir
+// itself is 0755, so the database and its WAL sidecars are owner-only.
+const dbFileMode = 0o600
+
+// restrictDBFiles chmods the database and whichever of its WAL siblings exist.
+func restrictDBFiles(path string) error {
+	if err := os.Chmod(path, dbFileMode); err != nil {
+		return fmt.Errorf("chmod resources db: %w", err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.Chmod(path+suffix, dbFileMode); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("chmod resources db%s: %w", suffix, err)
+		}
+	}
+	return nil
+}
 
 // leaseRow is one row of resource_leases. Times are unix milliseconds; a
 // zero GrantedAt, EndedAt or WaitedMS stands for NULL (not yet).
@@ -53,6 +72,13 @@ type leaseStore struct{ db *sql.DB }
 func openLeaseStore(path string) (*leaseStore, error) {
 	dsn := path
 	if path != ":memory:" {
+		// Created private before SQLite sees it: it gives its WAL sidecars the
+		// mode of the main file, so they are private from their first byte.
+		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, dbFileMode)
+		if err != nil {
+			return nil, fmt.Errorf("create resources db: %w", err)
+		}
+		_ = f.Close()
 		// busy_timeout: a concurrent writer waits instead of failing with SQLITE_BUSY.
 		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)"
 	}
@@ -94,6 +120,14 @@ func openLeaseStore(path string) (*leaseStore, error) {
 		CREATE INDEX IF NOT EXISTS resource_leases_state ON resource_leases (state);`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate resources db: %w", err)
+	}
+	if path != ":memory:" {
+		// A file an earlier run left loose, and any sidecar it left, are
+		// tightened now that the migration has made SQLite create them.
+		if err := restrictDBFiles(path); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	return &leaseStore{db: db}, nil
 }
