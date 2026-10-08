@@ -72,6 +72,7 @@ type LeadPayload struct {
 	MaxMembers int      `json:"max_members"` // normalised: 0→3, cap 8
 	Roots      []string `json:"roots"`       // normalised: absolute, Clean; default [origin.Cwd]
 	TeamName   string   `json:"team_name"`   // normalised (NormaliseTeamName); always present, "" = none
+	TeamLabel  string   `json:"team_label"`  // normalised (NormaliseTeamLabel); always present, "" = none requested
 }
 
 // Grant is what the user approved (edited in the dialog). P4 turns it into a team.
@@ -82,6 +83,11 @@ type Grant struct {
 	// requested name and "" clears it (D-N3); a served grant always carries it
 	// once this version has decided the approval.
 	TeamName *string `json:"team_name,omitempty"`
+	// TeamLabel is the approved short name (team-label spec D-L4): in a decide
+	// body nil (key absent) keeps the requested label, "" asks for the label to
+	// be derived from the name (D-L3). In the grant of a decided approval it is
+	// the explicit label, "" when the team's label was derived.
+	TeamLabel *string `json:"team_label,omitempty"`
 }
 
 // Client is the audit label of whoever decided (spec §6.5). Addr is set by the daemon from RemoteAddr.
@@ -117,9 +123,10 @@ type CreateApprovalRequest struct {
 	Reason      string   `json:"reason"`
 	MaxMembers  int      `json:"max_members,omitempty"`
 	Roots       []string `json:"roots,omitempty"`
-	TeamName    string   `json:"team_name,omitempty"` // lead only, optional (D-N1)
-	WaitS       int      `json:"wait_s,omitempty"`    // 0→540, cap 600
-	Target      string   `json:"target,omitempty"`    // adopt only: the target as `pdx adopt` takes it (ref or address)
+	TeamName    string   `json:"team_name,omitempty"`  // lead only, optional (D-N1)
+	TeamLabel   string   `json:"team_label,omitempty"` // lead only, optional (team-label D-L4)
+	WaitS       int      `json:"wait_s,omitempty"`     // 0→540, cap 600
+	Target      string   `json:"target,omitempty"`     // adopt only: the target as `pdx adopt` takes it (ref or address)
 }
 
 // DecideRequest is POST /api/team/approvals/{id}/decide.

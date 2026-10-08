@@ -142,6 +142,7 @@ type Team struct {
 	ID            string `json:"id"`
 	HostID        string `json:"host_id"`
 	TeamName      string `json:"team_name"`       // the team's current name; always present, "" = none
+	TeamLabel     string `json:"team_label"`      // the team's short label (explicit or derived, D-L3); always present, "" = none
 	LeadSessionID string `json:"lead_session_id"` // follows the lead through its relays (§8.4)
 	LeadRef       string `json:"lead_ref"`        // "_xxxxxx", moves with LeadSessionID
 	Grant         Grant  `json:"grant"`

@@ -71,7 +71,7 @@ func TestWireTeam_JSONShapes(t *testing.T) {
 		Model: "sonnet", Effort: "low", Context: ctx, Origin: MemberOriginSpawned, SpawnOp: "op", CreatedAt: 5}
 	const memberFull = `{"session_id":"s","ref":"_abc123","address":"mlab/_abc123","team_id":"t","host_id":"h","title":"worker","cwd":"/w/r","tmux_session":"tm-0123456789","state":"active","origin":"spawned","model":"sonnet","effort":"low","context":{"used_percentage":41.5,"window":200000,"model_id":"claude-sonnet-5","effort":"low","at":7},"spawn_op":"op","created_at":5}`
 	const memberMin = `{"session_id":"","ref":"","address":"","team_id":"","host_id":"","cwd":"","tmux_session":"","state":"","origin":"","spawn_op":"","created_at":0}`
-	const teamMin = `{"id":"","host_id":"","team_name":"","lead_session_id":"","lead_ref":"","grant":{"max_members":0,"roots":null},"request_id":"","created_at":0}`
+	const teamMin = `{"id":"","host_id":"","team_name":"","team_label":"","lead_session_id":"","lead_ref":"","grant":{"max_members":0,"roots":null},"request_id":"","created_at":0}`
 	cases := []struct {
 		name string
 		v    any
@@ -79,7 +79,7 @@ func TestWireTeam_JSONShapes(t *testing.T) {
 	}{
 		{"Team full", Team{ID: "t", HostID: "h", LeadSessionID: "ls", LeadRef: "_lead01", Grant: grant, RequestID: "t",
 			CreatedAt: 1, EndedAt: 2, EndReason: TeamEndLeadGone},
-			`{"id":"t","host_id":"h","team_name":"","lead_session_id":"ls","lead_ref":"_lead01","grant":{"max_members":3,"roots":["/w"]},"request_id":"t","created_at":1,"ended_at":2,"end_reason":"lead_gone"}`},
+			`{"id":"t","host_id":"h","team_name":"","team_label":"","lead_session_id":"ls","lead_ref":"_lead01","grant":{"max_members":3,"roots":["/w"]},"request_id":"t","created_at":1,"ended_at":2,"end_reason":"lead_gone"}`},
 		{"Team minimal (live: no ended_at, no end_reason)", Team{}, teamMin},
 
 		{"MemberContext full", *ctx, `{"used_percentage":41.5,"window":200000,"model_id":"claude-sonnet-5","effort":"low","at":7}`},

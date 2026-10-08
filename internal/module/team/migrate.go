@@ -73,6 +73,12 @@ var usageColumns = [][2]string{
 	{"usage_at", "INTEGER NOT NULL DEFAULT 0"},
 }
 
+// migrateTeamLabel gives teams the team's short label (team-label spec D-L5):
+// the final one, explicit or derived. A row written before it reads "".
+func migrateTeamLabel(db *sql.DB) error {
+	return ensureColumn(db, "teams", "team_label", "TEXT NOT NULL DEFAULT ''")
+}
+
 // migrateTeamName gives teams the team's current name (team-name spec D-N5);
 // a row written before it reads "" (no name).
 func migrateTeamName(db *sql.DB) error {

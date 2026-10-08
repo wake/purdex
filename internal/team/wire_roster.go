@@ -43,7 +43,8 @@ type RosterMember struct {
 type TeamRoster struct {
 	ID        string         `json:"id"`
 	HostID    string         `json:"host_id"`
-	TeamName  string         `json:"team_name"` // always present, "" = none
+	TeamName  string         `json:"team_name"`  // always present, "" = none
+	TeamLabel string         `json:"team_label"` // always present, "" = none
 	CreatedAt int64          `json:"created_at"`
 	Lead      RosterSession  `json:"lead"`
 	Members   []RosterMember `json:"members"` // active members, join order; never null (MarshalJSON)
