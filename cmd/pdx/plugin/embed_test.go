@@ -2,7 +2,9 @@ package plugin
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -10,20 +12,24 @@ import (
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	f := Files()
-	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/prompts.js", "skills/pdx-team/SKILL.md"} {
+	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/prompts.js", "skills/pdx-team/SKILL.md"} {
 		if _, err := fs.Stat(f, rel); err != nil {
 			t.Errorf("%s: %v", rel, err)
 		}
 	}
 	// hooks.json names one module (Claude Code 2.1.292 loads a single path and refuses a
 	// list of two: "names none in modules"), so register.js is the entry and brings in
-	// ask.js, the AskUserQuestion 分流 (P8a-2), by an import declaration.
+	// ask.js, the AskUserQuestion 分流 (P8a-2), and events.js, the event reporter
+	// (interface U1 spec §6.5), by import declarations.
 	reg, err := fs.ReadFile(f, "hooks/register.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(reg), "import { register as registerAsk } from './ask.js'") || !strings.Contains(string(reg), "registerAsk(on)") {
 		t.Error("register.js does not import and register ./ask.js")
+	}
+	if !strings.Contains(string(reg), "import { registerEvents } from './events.js'") || !strings.Contains(string(reg), "registerEvents(on)") {
+		t.Error("register.js does not import and register ./events.js")
 	}
 	b, err := fs.ReadFile(f, ".claude-plugin/plugin.json")
 	if err != nil {
@@ -37,6 +43,434 @@ func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	hb, _ := fs.ReadFile(f, "hooks/hooks.json")
 	if err := json.Unmarshal(hb, &h); err != nil || len(h.Modules) != 1 || h.Modules[0] != "./register.js" {
 		t.Fatalf("hooks.json = %s", hb)
+	}
+}
+
+// registration is one on('<event>', …) call in a hooks module: its file, its event and
+// its matcher literal (the leading {…} of the second argument; "" when it has none).
+type registration struct {
+	file, event, matcher string
+}
+
+// The guard has to see every registration, because Claude Code refuses the whole module over
+// an event registered twice without a matcher (M-U1-3), however the call is spelled. So it
+// fails closed (U1-1b review, attack #3): every use of the name `on` in the code must be
+// one it reads — on('<event>', …) or on?.('<event>', …) with a quoted literal as the whole
+// first argument, its arguments on any line — or one that cannot register anything: a
+// function's parameter, a property key, the two calls that hand `on` to the other files
+// (registerAsk(on), registerEvents(on), whose files are scanned too). Anything else (an
+// alias, `on` passed elsewhere, a variable or template event name) is an error.
+var (
+	handsOnTo   = regexp.MustCompile(`(?:^|[^\w$.])(?:registerAsk|registerEvents)\s*\(\s*$`)
+	onParameter = regexp.MustCompile(`(?:^|[^\w$.])function\s*\*?\s*[\w$]*\s*\(\s*$`)
+)
+
+// scanRegistrations lists the on(...) calls of one hooks module, in source order, and what
+// in it the scan cannot read (each a reason for the guard to fail).
+func scanRegistrations(file, src string) (regs []registration, problems []string) {
+	code, err := jsCode(src)
+	if err != nil {
+		return nil, []string{fmt.Sprintf("%s: %v; the registration guard cannot read the file", file, err)}
+	}
+	where := func(i int) string { return fmt.Sprintf("%s:%d", file, 1+strings.Count(src[:i], "\n")) }
+	for i := 0; ; {
+		k := strings.Index(code[i:], "on")
+		if k < 0 {
+			break
+		}
+		at := i + k
+		i = at + 2
+		if (at > 0 && isIdentByte(code[at-1])) || (at+2 < len(code) && isIdentByte(code[at+2])) {
+			continue // a longer name: once, json, $on
+		}
+		prev, next := lastCode(code, at), skipSpace(code, at+2)
+		if prev >= 0 && code[prev] == '.' {
+			if prev >= 2 && code[prev-2:prev+1] == "..." {
+				problems = append(problems, where(at)+": `on` is used other than in on('<event>', …): spread")
+			}
+			continue // a property: $.ui.on, x?.on
+		}
+		call := next
+		if strings.HasPrefix(code[call:], "?.") {
+			call = skipSpace(code, call+2)
+		}
+		switch {
+		case call < len(code) && code[call] == '(':
+			r, problem := readCall(file, src, code, call)
+			if problem != "" {
+				problems = append(problems, where(at)+": "+problem)
+			} else {
+				regs = append(regs, r)
+			}
+		case next < len(code) && code[next] == ')' && (handsOnTo.MatchString(code[:at]) || onParameter.MatchString(code[:at])):
+			// registerAsk(on) / registerEvents(on), or function register(on)
+		case next < len(code) && code[next] == ':' && prev >= 0 && (code[prev] == '{' || code[prev] == ','):
+			// a property key: { on: … }
+		default:
+			problems = append(problems, where(at)+": `on` is used other than in on('<event>', …), registerAsk(on) or registerEvents(on) (an alias, an argument, a parameter of an arrow, …): the guard cannot follow it, so call on('<event>', …) directly")
+		}
+	}
+	return regs, problems
+}
+
+// readCall reads the on(…) call whose ( is at open: the event, a quoted literal that is the
+// whole first argument, and the matcher, the second argument when it is a {…} literal.
+func readCall(file, src, code string, open int) (registration, string) {
+	q := skipSpace(code, open+1)
+	if q >= len(code) || (code[q] != '\'' && code[q] != '"') {
+		return registration{}, "on(…) whose event is not a quoted string literal (a variable, a template literal, an expression): write the event as 'event.name' so the guard can check it"
+	}
+	end := q + 1 + strings.IndexByte(code[q+1:], code[q]) // the literal's inside is blank: the next quote closes it
+	event := src[q+1 : end]
+	if event == "" || strings.Contains(event, "\\") {
+		return registration{}, "on(…) whose event literal is empty or holds an escape: write the event name as it is"
+	}
+	comma := skipSpace(code, end+1)
+	if comma >= len(code) || code[comma] != ',' {
+		return registration{}, "on(…) whose event literal is not the whole first argument"
+	}
+	r := registration{file: file, event: event}
+	if m := skipSpace(code, comma+1); m < len(code) && code[m] == '{' {
+		closing := matchingBrace(code, m)
+		if closing < 0 {
+			return registration{}, "on(…) whose matcher {…} is not closed"
+		}
+		r.matcher = src[m : closing+1]
+	}
+	return r, ""
+}
+
+// jsCode returns src with every comment blanked and the inside of every string, template
+// literal and regular expression literal blanked — their delimiters, and a template's ${ … }
+// with the code in it, kept — newlines and byte offsets unchanged: what is left is the code
+// alone, so "on(" in a comment, a string or a pattern is not a call, and a literal is found by
+// its delimiters and read from src at the same offsets. A comment, literal or template left
+// open, or a quoted string or pattern running into a newline, is an error: the scan could no
+// longer be trusted. A `/` starts a pattern unless what precedes it ends an operand (a name
+// that is not a keyword, a number, `)`, `]`, a literal) — the usual rule; it holds for the
+// mod's code, and a misread pattern runs into a newline or the end and is an error.
+func jsCode(src string) (string, error) {
+	out := []byte(src)
+	blank := func(from, to int) {
+		for k := from; k < to; k++ {
+			if out[k] != '\n' {
+				out[k] = ' '
+			}
+		}
+	}
+	line := func(i int) int { return 1 + strings.Count(src[:i], "\n") }
+	var exprs []int // per open ${ … } of a template: its { … } depth
+	prev := -1      // the last code byte that is not white space
+	n := len(src)
+	// text reads template text from i up to its closing ` (returns the index after it) or to
+	// a ${ (returns the index after the {, the expression opened).
+	text := func(i int) (int, bool, error) {
+		start := i
+		for i < n {
+			switch {
+			case src[i] == '\\':
+				i += 2
+			case src[i] == '`':
+				blank(start, i)
+				return i + 1, false, nil
+			case src[i] == '$' && i+1 < n && src[i+1] == '{':
+				blank(start, i)
+				return i + 2, true, nil
+			default:
+				i++
+			}
+		}
+		return 0, false, fmt.Errorf("line %d: a template literal is not closed", line(start))
+	}
+	for i := 0; i < n; {
+		c := src[i]
+		switch {
+		case c == '/' && i+1 < n && src[i+1] == '/':
+			j := strings.IndexByte(src[i:], '\n')
+			if j < 0 {
+				j = n - i
+			}
+			blank(i, i+j)
+			i += j
+		case c == '/' && i+1 < n && src[i+1] == '*':
+			j := strings.Index(src[i+2:], "*/")
+			if j < 0 {
+				return "", fmt.Errorf("line %d: a block comment is not closed", line(i))
+			}
+			blank(i, i+2+j+2)
+			i += 2 + j + 2
+		case c == '\'' || c == '"' || (c == '/' && startsPattern(out, prev)):
+			j, inClass := i+1, false
+			for ; ; j++ {
+				if j >= n || src[j] == '\n' {
+					return "", fmt.Errorf("line %d: a string or a regular expression is not closed on its line", line(i))
+				}
+				if src[j] == '\\' {
+					if j+1 < n && src[j+1] == '\n' && c == '/' {
+						return "", fmt.Errorf("line %d: a regular expression is not closed on its line", line(i))
+					}
+					j++ // the escaped byte (in a string, a newline here continues the line)
+					continue
+				}
+				if c == '/' && src[j] == '[' {
+					inClass = true
+				} else if c == '/' && src[j] == ']' {
+					inClass = false
+				} else if src[j] == c && !inClass {
+					break
+				}
+			}
+			blank(i+1, j)
+			prev, i = j, j+1
+		case c == '`':
+			j, opened, err := text(i + 1)
+			if err != nil {
+				return "", err
+			}
+			if opened {
+				exprs = append(exprs, 0)
+			}
+			prev, i = j-1, j
+		case c == '{':
+			if len(exprs) > 0 {
+				exprs[len(exprs)-1]++
+			}
+			prev, i = i, i+1
+		case c == '}' && len(exprs) > 0 && exprs[len(exprs)-1] == 0:
+			exprs = exprs[:len(exprs)-1] // the end of a ${ … }: back in the template's text
+			j, opened, err := text(i + 1)
+			if err != nil {
+				return "", err
+			}
+			if opened {
+				exprs = append(exprs, 0)
+			}
+			prev, i = j-1, j
+		case c == '}':
+			if len(exprs) > 0 {
+				exprs[len(exprs)-1]--
+			}
+			prev, i = i, i+1
+		default:
+			if !isSpaceByte(c) {
+				prev = i
+			}
+			i++
+		}
+	}
+	if len(exprs) > 0 {
+		return "", fmt.Errorf("a template literal is not closed")
+	}
+	return string(out), nil
+}
+
+// startsPattern says whether a / after the code byte at prev starts a regular expression.
+func startsPattern(code []byte, prev int) bool {
+	if prev < 0 || strings.IndexByte("(,=:[!&|?{};+-*%<>~^", code[prev]) >= 0 {
+		return true
+	}
+	if !isIdentByte(code[prev]) {
+		return false // ) ] or the end of a literal: a division
+	}
+	from := prev
+	for from > 0 && isIdentByte(code[from-1]) {
+		from--
+	}
+	switch string(code[from : prev+1]) {
+	case "return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "instanceof", "yield", "await":
+		return true
+	}
+	return false
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || c == '$' || c == '#' || c >= 0x80 || ('0' <= c && c <= '9') || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
+}
+
+func isSpaceByte(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
+
+// skipSpace returns the index of the first byte at or after i that is not white space.
+func skipSpace(code string, i int) int {
+	for i < len(code) && isSpaceByte(code[i]) {
+		i++
+	}
+	return i
+}
+
+// lastCode returns the index of the last byte before i that is not white space, -1 if none.
+func lastCode(code string, i int) int {
+	for i--; i >= 0 && isSpaceByte(code[i]); i-- {
+	}
+	return i
+}
+
+// matchingBrace returns the index of the } closing the { at open, -1 if none. Braces inside
+// literals and comments are blank in code.
+func matchingBrace(code string, open int) int {
+	depth := 0
+	for i := open; i < len(code); i++ {
+		switch code[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// registrationConflicts names what makes Claude Code refuse to load the whole hooks module
+// (interface U1 spec §3, M-U1-3: on("turn.complete") is registered twice without a
+// matcher): an event registered without a matcher in two places across the plugin's
+// files, or one file registering an event twice with the same matcher.
+func registrationConflicts(regs []registration) []string {
+	var out []string
+	unmatched := map[string]string{} // event → the file that registered it first
+	matched := map[string]bool{}     // file, event, matcher
+	for _, r := range regs {
+		if r.matcher == "" {
+			if first, ok := unmatched[r.event]; ok {
+				out = append(out, fmt.Sprintf("on(%q) is registered without a matcher in %s and in %s", r.event, first, r.file))
+			} else {
+				unmatched[r.event] = r.file
+			}
+			continue
+		}
+		key := r.file + "\x00" + r.event + "\x00" + strings.Join(strings.Fields(r.matcher), "") // spacing aside
+		if matched[key] {
+			out = append(out, fmt.Sprintf("%s registers on(%q, %s) twice", r.file, r.event, r.matcher))
+		}
+		matched[key] = true
+	}
+	return out
+}
+
+// TestHooks_NoEventRegisteredTwiceWithoutMatcher keeps the plugin loadable: register.js,
+// ask.js and events.js are one module to Claude Code, and from U1-1b events.js owns
+// tool.call, tool.check, agent.spawn, session.measure, session.end and classic.Stop
+// without a matcher, so a later change must use a matcher there (spec §10).
+func TestHooks_NoEventRegisteredTwiceWithoutMatcher(t *testing.T) {
+	f := Files()
+	names, err := fs.Glob(f, "hooks/*.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var regs []registration
+	for _, name := range names {
+		b, err := fs.ReadFile(f, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, problems := scanRegistrations(name, string(b))
+		for _, p := range problems {
+			t.Error(p)
+		}
+		regs = append(regs, r...)
+	}
+	for _, c := range registrationConflicts(regs) {
+		t.Error(c)
+	}
+	// The scan sees what it guards: one of each kind, so a pattern that matched nothing
+	// cannot pass vacuously.
+	for _, want := range []registration{
+		{"hooks/events.js", "tool.call", ""},
+		{"hooks/events.js", "turn.complete", "{ turnId: /^/ }"},
+		{"hooks/register.js", "turn.complete", ""},
+		{"hooks/ask.js", "tool.call", "{ tool: 'AskUserQuestion' }"},
+	} {
+		found := false
+		for _, r := range regs {
+			found = found || r == want
+		}
+		if !found {
+			t.Errorf("the scan did not find %+v among %d registrations", want, len(regs))
+		}
+	}
+}
+
+func TestRegistrationConflicts(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{"one unmatched each", map[string]string{"a.js": "on('turn.start', h)\non('turn.complete', h)", "b.js": "on('tool.call', h)"}, nil},
+		{"unmatched in two files", map[string]string{"a.js": "  on('turn.complete', h)", "b.js": "on(\"turn.complete\", async ($, e, next) => next(e))"},
+			[]string{`on("turn.complete") is registered without a matcher in a.js and in b.js`}},
+		{"unmatched twice in one file", map[string]string{"a.js": "on('session.end', h)\n  on('session.end', g)"},
+			[]string{`on("session.end") is registered without a matcher in a.js and in a.js`}},
+		{"matched beside unmatched", map[string]string{"a.js": "on('tool.call', { tool: 'Bash' }, h)", "b.js": "on('tool.call', h)"}, nil},
+		{"the same matcher twice in a file", map[string]string{"a.js": "on('tool.check', { tool: 'Write' }, h)\non('tool.check', {tool:  'Write'}, g)"},
+			[]string{`a.js registers on("tool.check", {tool:  'Write'}) twice`}},
+		{"different matchers", map[string]string{"a.js": "on('tool.check', { tool: 'Write' }, h)\non('tool.check', { tool: 'Edit' }, g)"}, nil},
+		{"the same matcher in two files", map[string]string{"a.js": "on('turn.start', { turnId: /^/ }, h)", "b.js": "on('turn.start', { turnId: /^/ }, g)"}, nil},
+		{"a property named on is not a registration", map[string]string{"a.js": "on('tool.call', h)\n$.ui.on('tool.call', h)\nx.on('tool.call', h)\nx?.on('tool.call', h)\nfunction(on) {}"}, nil},
+		// What the scan must still see (U1-1b review, attack #3): an optional call, a call
+		// whose arguments start on the next line, a registration inside a template literal's
+		// ${…}, and what a comment, a string or a regular expression holds is not one.
+		{"an optional call", map[string]string{"a.js": "on('turn.complete', h)", "b.js": "on?.('turn.complete', h)"},
+			[]string{`on("turn.complete") is registered without a matcher in a.js and in b.js`}},
+		{"arguments on the next lines", map[string]string{"a.js": "on('turn.complete', h)", "b.js": "on\n  (\n    'turn.complete'\n    ,\n    h)"},
+			[]string{`on("turn.complete") is registered without a matcher in a.js and in b.js`}},
+		{"a matcher on the next line", map[string]string{"a.js": "on('tool.call', h)", "b.js": "on('tool.call',\n  { tool: 'Bash' }, h)"}, nil},
+		{"inside a template expression", map[string]string{"a.js": "on('turn.complete', h)", "b.js": "const s = `x${on('turn.complete', h)}y`"},
+			[]string{`on("turn.complete") is registered without a matcher in a.js and in b.js`}},
+		{"comments, strings and a regular expression", map[string]string{"a.js": "on('turn.complete', h)", "b.js": "// on('turn.complete', h)\n/* on('turn.complete', h) */\nconst s = \"on('turn.complete', h)\" + 'on(\\'turn.complete\\', h)'\nconst re = /on\\('turn.complete'[\"/]/\nconst t = `on('turn.complete', h)`"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var regs []registration
+			for _, name := range []string{"a.js", "b.js"} {
+				if src, ok := tc.files[name]; ok {
+					r, problems := scanRegistrations(name, src)
+					if len(problems) > 0 {
+						t.Errorf("%s: problems %q", name, problems)
+					}
+					regs = append(regs, r...)
+				}
+			}
+			got := registrationConflicts(regs)
+			if strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
+				t.Errorf("conflicts = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestScanRegistrations_FailsClosed: a use of `on` the scan cannot read as on('<event>', …)
+// is an error, not a skipped registration (U1-1b review, attack #3) — Claude Code refuses the
+// whole module over an event registered twice without a matcher, whatever the spelling.
+func TestScanRegistrations_FailsClosed(t *testing.T) {
+	for _, tc := range []struct{ name, src, want string }{
+		{"a variable event name", "const E = 'turn.complete'\non(E, h)", "not a quoted string literal"},
+		{"a template literal event name", "on(`turn.complete`, h)", "not a quoted string literal"},
+		{"a concatenated event name", "on('turn' + '.complete', h)", "the whole first argument"},
+		{"an escape in the event name", "on('turn\\x2ecomplete', h)", "escape"},
+		{"an alias", "const reg = on\nreg('turn.complete', h)", "used other than"},
+		{"passed to a function", "helper(on)", "used other than"},
+		{"called through call()", "on.call(null, 'turn.complete', h)", "used other than"},
+		{"spread", "const o = { ...on }", "used other than"},
+		{"a tagged template", "on`turn.complete`", "used other than"},
+		{"an arrow parameter", "const f = (on) => on('turn.complete', h)", "used other than"},
+		{"an unclosed string", "on('turn.complete, h)", "not closed"},
+		{"an unclosed comment", "on('turn.complete', h) /* x", "not closed"},
+		{"an unclosed template", "const s = `x${on('turn.complete', h)}", "not closed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, problems := scanRegistrations("a.js", tc.src)
+			if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), tc.want) {
+				t.Errorf("problems = %q, want one saying %q", problems, tc.want)
+			}
+		})
+	}
+	// What the mod itself does with `on` passes: registerAsk(on), registerEvents(on), a
+	// function's parameter, a property key, a property access.
+	ok := "export function register(on) {\n  registerAsk(on)\n  registerEvents( on )\n  on('tool.call', { tool: 'Bash' }, h)\n}\nconst label = { on: 'x', off: 'y' }[k]\n$.ui.on('x', h)\nconst json = once + on_ + $on\n"
+	regs, problems := scanRegistrations("a.js", ok)
+	if len(problems) > 0 || len(regs) != 1 || regs[0] != (registration{"a.js", "tool.call", "{ tool: 'Bash' }"}) {
+		t.Errorf("scan = %+v, problems %q; want the one registration and no problem", regs, problems)
 	}
 }
 
