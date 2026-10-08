@@ -418,6 +418,21 @@ describe('TerminatedPane rebuild as worker', () => {
     expect(screen.queryByTestId('terminated-rebuild-error')).toBeNull()
   })
 
+  // #1627 F: any change of the effective mode clears a rebuild error — also the fallback to 終端機 when Nexen readiness
+  // drops after a failed Worker rebuild, so the error does not come back with the choice.
+  it('an automatic fallback to terminal clears a stale rebuild error, which does not come back with the choice', async () => {
+    vi.mocked(rebuildAsWorker).mockRejectedValue(new HandoffApiError(409, 'session_owned', { owner: 'worker' }))
+    renderTerminated(fullRecord)
+    fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+    fireEvent.click(screen.getByTestId('terminated-rebuild-worker'))
+    await screen.findByTestId('terminated-rebuild-error')
+    act(() => { useNexHostStore.setState({ byHost: {} } as never) })
+    expect(screen.queryByTestId('rebuild-mode-worker')).toBeNull()
+    act(() => { useNexHostStore.setState({ byHost: { [H]: readyEntry } } as never) })
+    expect(screen.getByTestId('rebuild-mode-worker')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByTestId('terminated-rebuild-error')).toBeNull()
+  })
+
   it('a failing readiness check is handled: the terminal screen stays in charge', async () => {
     // jsdom's types leave out Node's process; the rejection would surface there.
     const proc = (globalThis as unknown as { process: { on(e: string, f: () => void): void; off(e: string, f: () => void): void } }).process

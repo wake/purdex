@@ -115,10 +115,12 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
 
   // Any held operation lock (a terminal rebuild of this pane, or a batch) freezes the choice.
   const locked = useRebuildStore((s) => s.lockedBy !== null)
-  // A rebuild error belongs to the mode it was tried in.
-  const changeMode = (m: RebuildMode) => {
-    if (m !== mode) setError(null)
-    setChoice(m)
+  // A rebuild error belongs to the mode it was tried in. Any change of the effective mode clears it — a toggle, or the
+  // fallback to 終端機 when Nexen readiness drops (#1627 F) — so it does not come back with the choice. Render-time.
+  const [lastMode, setLastMode] = useState(mode)
+  if (mode !== lastMode) {
+    setLastMode(mode)
+    setError(null)
   }
 
   const rebuildWorker = async () => {
@@ -176,7 +178,7 @@ export function TerminatedPane({ content, tabId, paneId }: Props) {
     >
       {showChoice && (
         <div className="mb-6">
-          <RebuildModeChoice value={mode} onChange={changeMode} terminalAvailable workerAvailable disabled={locked || busy} />
+          <RebuildModeChoice value={mode} onChange={setChoice} terminalAvailable workerAvailable disabled={locked || busy} />
         </div>
       )}
       {mode === 'worker' ? (
