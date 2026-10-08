@@ -48,6 +48,11 @@ type Store struct {
 	// COMMIT would run; an error stands for a failed COMMIT, the
 	// transaction still open on its connection (tests). nil in production.
 	beforeTaskCommit func() error
+	// afterReportInsert, when set, runs in InsertReport's transaction after
+	// the report row was inserted and its effect applied to the task, before
+	// COMMIT; an error fails the call there (tests: neither the row nor the
+	// effect may survive). nil in production.
+	afterReportInsert func() error
 }
 
 // OpenStore opens (or creates) team.db at path. ":memory:" is for tests.
@@ -103,6 +108,10 @@ func OpenStore(path string) (*Store, error) {
 	if _, err := db.Exec(taskSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (tasks): %w", err)
+	}
+	if _, err := db.Exec(reportSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (reports): %w", err)
 	}
 	if err := migrateUsage(db); err != nil {
 		db.Close()
