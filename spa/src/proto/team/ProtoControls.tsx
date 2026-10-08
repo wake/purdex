@@ -46,7 +46,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
   const [open, setOpen] = useState(true)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
   const theme = useThemeStore((s) => s.activeThemeId)
-  const { seats, beadHost, groupStyle, sidebarStyle, collapseStyle, hookStyle, hookTop, cornerSize, badgeIcon, edgeWidth, openMark, namesOff, target, log } = useProtoTeam()
+  const { seats, beadHost, groupStyle, sidebarStyle, collapseStyle, hookStyle, hookTop, cornerSize, badgeIcon, edgeWidth, bookmarkCut, bookmarkPos, openMark, namesOff, target, log } = useProtoTeam()
   const members = Object.values(seats).filter((s) => s.role === 'member' && s.alive && s.teamKey)
   const tgt = target ? seats[target] : null
   const tgtTab = tgt ? tabOfSeat(tgt) : null
@@ -63,7 +63,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
     <div data-testid="proto-controls" className="fixed right-3 bottom-3 z-50 w-[min(380px,calc(100vw-24px))] max-h-[48vh] overflow-y-auto rounded-xl border border-border-default bg-surface-elevated shadow-2xl p-3 text-xs flex flex-col gap-2">
       <div className="flex items-center">
         <span className="font-semibold">原型控制</span>
-        <span className="ml-2 text-text-muted">team 介面 · 第五版 d</span>
+        <span className="ml-2 text-text-muted">team 介面 · 第五版 e</span>
         <button type="button" onClick={() => setOpen(false)} className="ml-auto text-text-muted hover:text-text-primary cursor-pointer">收起</button>
       </div>
       <Seg label="分頁位置" value={tabPosition} options={[['top', '上方'], ['left', '左側'], ['both', '兩側']]} onChange={(v) => useLayoutStore.getState().setTabPosition(v)} />
@@ -77,6 +77,12 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
       <Seg label="斜角" value={groupStyle} options={[['corner-tr', '右上斜角'], ['corner-br', '右下斜角'], ['corner-tr-icon', '右上＋圖示'], ['corner-br-icon', '右下＋圖示'], ['badge-icon', '轉角徽章・純圖示'], ['badge-disc', '轉角徽章・圓底'], ['edge-arc', '右邊線・弧邊'], ['edge-short', '右邊線・短邊（對照）']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
       <Seg label="斜角大小" value={cornerSize} options={[['sm', '小'], ['md', '中（預設）'], ['lg', '大']]} onChange={(v) => useProtoTeam.setState({ cornerSize: v })} />
       <Seg label="徽章圖示" value={badgeIcon} options={[['bookmark', '書籤（預設）'], ['users', '人群'], ['hexagon', '六角'], ['diamond', '菱形'], ['dot', '實心點'], ['letter', '首字'], ['user', '舊：人形']]} onChange={(v) => useProtoTeam.setState({ badgeIcon: v })} />
+      {groupStyle === 'badge-icon' && badgeIcon === 'bookmark' && (
+        <>
+          <Seg label="書籤裁切" value={bookmarkCut} options={[['third', '截 1/3（預設）'], ['half', '截 1/2']]} onChange={(v) => useProtoTeam.setState({ bookmarkCut: v })} />
+          <Seg label="書籤位置" value={bookmarkPos} options={[['before-x', '× 前面'], ['above-left', '× 左上'], ['above-right', '× 右上（預設）']]} onChange={(v) => useProtoTeam.setState({ bookmarkPos: v })} />
+        </>
+      )}
       <Seg label="邊線粗細" value={String(edgeWidth)} options={[['1.5', '1.5px'], ['2', '2px（預設）']]} onChange={(v) => useProtoTeam.setState({ edgeWidth: v === '1.5' ? 1.5 : 2 })} />
       <Seg label="舊群組" value={groupStyle} options={[['tint', '淡色底'], ['frame', '外框'], ['topbar', '頂端色條'], ['plate', '共用底板']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
       <Seg label="收起樣式" value={collapseStyle} options={[['users', '新：人群圖示＋燈點'], ['sign', '舊：符號＋「N 個收起」']]} onChange={(v) => useProtoTeam.setState({ collapseStyle: v })} />
@@ -128,13 +134,13 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
         {[0, 1, 2, 3].map((n) => <Btn key={n} testId={`ctl-sub-${n}`} disabled={!tgt} onClick={() => tgt && setSubagents(tgt.sessionId, n)}>{n}</Btn>)}
       </div>
       <details data-testid="ctl-notes" className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" open>
-        <summary className="cursor-pointer font-semibold text-text-primary">第五版（d）說明與待確認</summary>
+        <summary className="cursor-pointer font-semibold text-text-primary">第五版（e）說明與待確認</summary>
         <div className="mt-1 flex flex-col gap-1 leading-snug">
-          <div><b>這版改了</b>：①轉角徽章的圖示可換（控制面板「徽章圖示」）：書籤（預設）、人群、六角、菱形、實心點、team 名第一個字，另留舊的人形對照；「純圖示」「圓底」兩種都能套，大小沿用「斜角大小」。②斜角那一列新增「右邊線・弧邊」與「右邊線・短邊（對照）」：弧邊是貼在分頁右緣、順著 6px 圓角在上下兩端轉彎的 team 色線，active 貼著底色區塊，inactive 用同樣幾何；短邊只畫右緣中段、不轉彎。粗細用「邊線粗細」切換 1.5／2px。③「站在底線」已放棄，徽章位置那一列與實作都移除，只剩右上轉角。</div>
+          <div><b>這版改了</b>：①書籤（群組樣式選「轉角徽章・純圖示」、圖示選書籤時）改成頂端貼齊分頁上緣、往下垂的短緞帶，上方截掉 1/3 或 1/2（「書籤裁切」），位置三選一（「書籤位置」）：× 前面、× 左上、× 右上（預設）。顏色是 team 色，大小沿用「斜角大小」，不收滑鼠、不蓋 ×。②右邊線（弧邊、短邊都一樣）只畫在群組的最後一個分頁，當整組的收尾括號；只有 lead 時畫在 lead；拖曳換順序後會跟著換到新的最後一個。</div>
           <div className="font-semibold text-text-primary pt-0.5">待確認</div>
-          <div>1. 徽章圖示預設用書籤（「這個分頁被標記屬於某 team」）；請在六個圖示與兩種底（純圖示／圓底）中挑一組，字母版會因 team 名第一個字而不同。</div>
-          <div>2. 右邊線：弧邊 vs 短邊，1.5px vs 2px（預設 2px）；線在分頁最右緣，× 在往內 12px 處，不重疊，分頁寬度不變。lead 與每個 member 分頁都有，可搭配「群組樣式：只有標籤」看。</div>
-          <div>3. 邊線與徽章是二選一（都在「斜角」列）；要不要允許同時開？</div>
+          <div>1. 書籤截 1/3 還是 1/2？位置選哪個？大尺寸（大）在「× 左上」會稍微靠近 ×，要不要限制大小？</div>
+          <div>2. 右邊線只在最後一個分頁，收合後只剩 lead 時會畫在 lead 上，這樣可以嗎？</div>
+          <div>3. 書籤與右邊線是否允許同時開（目前二選一）？</div>
         </div>
       </details>
       <div className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" data-testid="ctl-log">

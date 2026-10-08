@@ -71,6 +71,30 @@ export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
   const badge = groupBadge(mark.style)
   const display = useTeamDisplay()
   const size = display?.cornerSize ?? 'md'
+  if (badge === 'icon' && (display?.badgeIcon ?? 'bookmark') === 'bookmark') {
+    // Hanging bookmark: the glyph's top is cut off (1/3 or 1/2) and the ribbon hangs from the tab's very top edge.
+    // Phosphor's bookmark occupies the middle 50% of its box, so the wrapper is that wide and the glyph is shifted left/up.
+    const full = BADGE_PX.icon[size]
+    const cut = display?.bookmarkCut === 'half' ? 0.5 : 1 / 3
+    const w = full * 0.5
+    const h = full * (1 - cut)
+    // Offsets from the tab's right edge: the close X is a 24px-wide slot (glyph centered, 12px wide).
+    const pos = display?.bookmarkPos ?? 'above-right'
+    const right = pos === 'before-x' ? 26 : pos === 'above-left' ? 14 : 3
+    return (
+      <span
+        data-testid="team-tab-badge"
+        data-badge="icon"
+        data-bookmark-cut={display?.bookmarkCut ?? 'third'}
+        data-bookmark-pos={pos}
+        aria-hidden="true"
+        className="absolute pointer-events-none z-20 overflow-hidden"
+        style={{ top: -1, right, width: w, height: h }}
+      >
+        <BookmarkSimple weight="fill" size={full} color={mark.color} style={{ position: 'absolute', left: -full * 0.25, top: -full * cut }} />
+      </span>
+    )
+  }
   if (badge) {
     const px = BADGE_PX[badge][size]
     // Center sits on the corner, nudged inward by 2px so the TabBar scroller (which clips vertically) keeps the whole badge visible.
@@ -89,6 +113,8 @@ export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
   }
   const edge = groupEdge(mark.style)
   if (edge) {
+    // Only the group's last tab draws it, as the closing bracket of the whole group.
+    if (!mark.last) return null
     const w = display?.edgeWidth ?? 2
     // Arc: a right-only border on a box with the tab's own corner radius (6px, drawn over the 1px transparent border),
     // so the line follows the active tab's rounded corners and tapers off at the top/bottom like a ")" bracket.

@@ -97,6 +97,8 @@ export function ProtoApp() {
       cornerSize: proto.cornerSize,
       badgeIcon: proto.badgeIcon,
       edgeWidth: proto.edgeWidth,
+      bookmarkCut: proto.bookmarkCut,
+      bookmarkPos: proto.bookmarkPos,
       openMark: proto.openMark,
       tabMark: (id) => marks.get(id) ?? null,
       sidebarHidden: (id) => hidden.has(id),

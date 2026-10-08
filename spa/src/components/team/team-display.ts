@@ -61,6 +61,10 @@ export type TeamCornerSize = 'sm' | 'md' | 'lg'
 /** The glyph in a corner badge ('user' is the old v5b one, kept as a comparison). */
 export type TeamBadgeIcon = 'bookmark' | 'users' | 'hexagon' | 'diamond' | 'dot' | 'letter' | 'user'
 
+/** How much of the bookmark's top is cut off (a short hanging ribbon), and where it hangs along the tab's top edge. */
+export type TeamBookmarkCut = 'third' | 'half'
+export type TeamBookmarkPos = 'before-x' | 'above-left' | 'above-right'
+
 /** Right-edge line thickness in px. */
 export type TeamEdgeWidth = 1.5 | 2
 
@@ -128,6 +132,8 @@ export interface TeamDisplay {
   cornerSize: TeamCornerSize
   badgeIcon: TeamBadgeIcon
   edgeWidth: TeamEdgeWidth
+  bookmarkCut: TeamBookmarkCut
+  bookmarkPos: TeamBookmarkPos
   openMark: TeamOpenMark
   tabMark: (tabId: string) => TeamTabMark | null
   /** Member tabs folded into the bead row (their lead row is in the same list). */
