@@ -311,3 +311,33 @@ func TestLs_HoldersWaitersRecentOverrun(t *testing.T) {
 		t.Errorf("empty sections printed:\n%s", s)
 	}
 }
+
+// With a terminal the child is in pdx's foreground group and the terminal
+// already signals it for Ctrl-C: a SIGINT is not forwarded again, a SIGTERM
+// (which no terminal sends) is.
+func TestRun_TTYDoesNotForwardWhatTheTerminalSends(t *testing.T) {
+	old := leaseStdinIsTTY
+	leaseStdinIsTTY = func() bool { return true }
+	t.Cleanup(func() { leaseStdinIsTTY = old })
+	dir := t.TempDir()
+	marker, got := filepath.Join(dir, "ready"), filepath.Join(dir, "got")
+	sigs := make(chan os.Signal, 2)
+	go func() {
+		for {
+			if _, err := os.Stat(marker); err == nil {
+				sigs <- syscall.SIGINT // not forwarded
+				time.Sleep(200 * time.Millisecond)
+				sigs <- syscall.SIGTERM // forwarded
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	d := &fakeLeaseDaemon{}
+	script := `trap 'echo INT >> ` + got + `' INT; trap 'echo TERM >> ` + got + `; exit 7' TERM; touch ` + marker + `; while :; do sleep 0.05; done`
+	code, _, _ := driveRunCmd(t, d, sigs, []string{"--kind", "build"}, "sh", "-c", script)
+	b, _ := os.ReadFile(got)
+	if code != 7 || strings.TrimSpace(string(b)) != "TERM" {
+		t.Errorf("code=%d got=%q, want only TERM", code, b)
+	}
+}

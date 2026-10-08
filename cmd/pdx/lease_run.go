@@ -155,6 +155,14 @@ func runChild(command []string, sigs <-chan os.Signal, tty bool, stderr io.Write
 			select {
 			case sig := <-sigs:
 				if s, ok := sig.(syscall.Signal); ok {
+					// With a terminal the child shares pdx's foreground group,
+					// which the terminal already signals for Ctrl-C and a
+					// hangup: forwarding those again would run the child's
+					// handlers twice. SIGTERM, which no terminal sends, is
+					// still passed on.
+					if tty && (s == syscall.SIGINT || s == syscall.SIGHUP) {
+						continue
+					}
 					_ = syscall.Kill(target, s)
 				}
 			case <-done:
