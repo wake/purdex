@@ -10,5 +10,5 @@ full      0.4% of the time, 2 runs, longest 300s
 
 KIND       N  WEIGHT  PEAK   MEAN
 build      2  35      28.0%  15.0%
-test-full  4  35      55.0%  31.8%
+test-full  3  35      55.0%  35.7%
 test-pkg   1  15      10.0%  6.0%

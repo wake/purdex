@@ -109,3 +109,13 @@ func TestReport_JSONAndSinceAreSent(t *testing.T) {
 		t.Errorf("stray argument: %d", code)
 	}
 }
+
+// A kind name cannot pass for the report's own structure.
+func TestReport_KindNamesAreQuotedWhenNotPlain(t *testing.T) {
+	for in, want := range map[string]string{"": "(weight)", "build": "build", "test-full": "test-full",
+		"build 0), overrun 999 (": `"build 0), overrun 999 ("`, "a\x1b[31mb": `"a\x1b[31mb"`} {
+		if got := reportKindName(in); got != want {
+			t.Errorf("%q -> %s, want %s", in, got, want)
+		}
+	}
+}

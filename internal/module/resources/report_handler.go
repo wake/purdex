@@ -69,6 +69,9 @@ func parseReportSince(q string) (time.Duration, string) {
 		if err != nil || n <= 0 {
 			return 0, "since must be a positive duration such as 24h, 90m or 7d"
 		}
+		if n > resources.MaxReportSince/24 { // before the multiplication, which would overflow
+			return 0, "since is at most 14 days (the rows are kept that long)"
+		}
 		d = time.Duration(n) * 24 * time.Hour
 	} else {
 		var err error

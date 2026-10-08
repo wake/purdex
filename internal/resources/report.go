@@ -54,7 +54,10 @@ func BuildReport(since, until int64, leases []ReportLease, minutes []ReportMinut
 			continue
 		}
 		if !l.Recorded {
+			// Granted before the decision record existed: in no figure, the
+			// per-kind ones included (spec D-8: the report counts dec_recorded = 1).
 			r.NotRecorded++
+			continue
 		} else {
 			switch l.Path {
 			case PathImmediate:

@@ -13,6 +13,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,11 +62,20 @@ func reportTime(ms int64, loc *time.Location) string {
 	return time.UnixMilli(ms).In(loc).Format("01-02 15:04")
 }
 
+// safeKind is what a kind name looks like when settings validation let it in.
+var safeKind = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
+// reportKindName is a kind as the report prints it: "(weight)" for a request
+// that named a weight, a validated name as it is, anything else quoted so that
+// its commas and brackets cannot pass for the report's own structure.
 func reportKindName(k string) string {
-	if k == "" {
+	switch {
+	case k == "":
 		return "(weight)"
+	case safeKind.MatchString(k):
+		return k
 	}
-	return sanitizeCell(k)
+	return strconv.QuoteToASCII(k)
 }
 
 func seconds(ms int64) string { return fmt.Sprintf("%.1fs", float64(ms)/1000) }

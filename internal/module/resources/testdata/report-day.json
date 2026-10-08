@@ -60,10 +60,10 @@
     },
     {
       "kind": "test-full",
-      "n": 4,
+      "n": 3,
       "weight": 35,
       "peak_max": 55,
-      "mean_avg": 31.75
+      "mean_avg": 35.666666666666664
     },
     {
       "kind": "test-pkg",

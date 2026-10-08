@@ -157,7 +157,7 @@ func TestReport_FixtureDayExactly(t *testing.T) {
 		Heavy:       resources.ReportHeavy{Minutes: 3, MaxLoad1: 11.2, MaxMem: 83.5},
 		Kinds: []resources.ReportKind{
 			{Kind: "build", N: 2, Weight: 35, PeakMax: 28, MeanAvg: 15},
-			{Kind: "test-full", N: 4, Weight: 35, PeakMax: 55, MeanAvg: 31.75},
+			{Kind: "test-full", N: 3, Weight: 35, PeakMax: 55, MeanAvg: 107.0 / 3.0}, // l01, l02, l03: l08 was granted before the record existed
 			{Kind: "test-pkg", N: 1, Weight: 15, PeakMax: 10, MeanAvg: 6},
 		},
 	}
@@ -218,7 +218,7 @@ func TestReport_Route(t *testing.T) {
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/resources/report"+q, nil))
 		return rec
 	}
-	for _, bad := range []string{"?since=soon", "?since=-1h", "?since=0s", "?since=15d", "?since=337h", "?since=0d"} {
+	for _, bad := range []string{"?since=soon", "?since=-1h", "?since=0s", "?since=15d", "?since=337h", "?since=0d", "?since=213504d", "?since=106752d", "?since=9223372036854775807d", "?since=1.5d", "?since=24H", "?since=%2024h", "?since=7%20d"} {
 		if rec := get(bad); rec.Code != 400 || apiCode(rec) != resources.ErrBadRequest {
 			t.Errorf("%s: %d %s", bad, rec.Code, rec.Body.String())
 		}
@@ -244,5 +244,17 @@ func TestReport_Route(t *testing.T) {
 	get("?since=24h")
 	if s.calls.Load() != before {
 		t.Error("the report sampled")
+	}
+}
+
+// A lease granted before the decision record existed is in no per-kind figure
+// either, whatever it measured.
+func TestReport_UnrecordedLeaseIsInNoKindFigure(t *testing.T) {
+	rep := resources.BuildReport(0, 1, []resources.ReportLease{
+		{Kind: "build", Weight: 35, GrantedAt: 1, Recorded: true, Path: resources.PathImmediate, Samples: 4, PeakUse: 20, MeanUse: 10},
+		{Kind: "build", Weight: 35, GrantedAt: 1, Recorded: false, Samples: 9, PeakUse: 90, MeanUse: 80},
+	}, nil)
+	if len(rep.Kinds) != 1 || rep.Kinds[0].N != 1 || rep.Kinds[0].PeakMax != 20 || rep.Kinds[0].MeanAvg != 10 || rep.NotRecorded != 1 {
+		t.Errorf("report = %+v", rep)
 	}
 }
