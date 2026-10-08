@@ -439,6 +439,10 @@ func runKillCmd(ctx context.Context, args []string, getenv func(string) string, 
 // included. A var only so tests can shorten it.
 var teamResourcesTimeout = 5 * time.Second
 
+// teamTaskSubjectRunes is the longest task subject the team table shows, the
+// ellipsis included.
+const teamTaskSubjectRunes = 30
+
 // teamHostShares is each session's share of the host (D-1 units, host
 // percent) from one GET /api/resources, keyed by session id. It is
 // best-effort: any failure, an unavailable sample or a daemon without the
@@ -510,7 +514,7 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 		fmt.Fprintf(stdout, "team: %s\n", sanitizeCell(v.Team.TeamName))
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ADDRESS\tREF\tTITLE\tSTATE\tCTX\tCPU\tMEM\tMODEL\tEFFORT\tCWD\tTMUX")
+	fmt.Fprintln(tw, "ADDRESS\tREF\tTITLE\tSTATE\tCTX\tCPU\tMEM\tMODEL\tEFFORT\tTASK\tLAST\tCWD\tTMUX")
 	for _, m := range v.Members {
 		pct, model, effort := "", "", ""
 		if c := m.Context; c != nil {
@@ -523,7 +527,17 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 		if u, ok := shares[m.SessionID]; ok {
 			cpu, mem = fmt.Sprintf("%.0f%%", u.CPU), fmt.Sprintf("%.0f%%", u.Mem)
 		}
-		cells := []string{m.Address, m.Ref, m.Title, string(m.State), pct, cpu, mem, model, effort, m.Cwd, m.TmuxSession}
+		// TASK: "<id> <status> <subject>", the subject cut to 30 runes; LAST:
+		// how long ago. Both "-" for a member with no task, or a daemon that
+		// predates the fields.
+		task, last := "", ""
+		if mt := m.Task; mt != nil {
+			task = sanitizeCell(mt.ID) + " " + sanitizeCell(string(mt.Status)) + " " + cutRunes(sanitizeCell(mt.Subject), teamTaskSubjectRunes)
+		}
+		if m.LastAt != 0 {
+			last = taskAge(m.LastAt)
+		}
+		cells := []string{m.Address, m.Ref, m.Title, string(m.State), pct, cpu, mem, model, effort, task, last, m.Cwd, m.TmuxSession}
 		for i, c := range cells {
 			if cells[i] = sanitizeCell(c); c == "" {
 				cells[i] = "-"
