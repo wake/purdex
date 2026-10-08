@@ -418,6 +418,9 @@ func (f *fixture) events() []team.EventValue {
 			if err := json.Unmarshal(raw, &ev); err != nil {
 				f.t.Fatalf("decode HostEvent: %v", err)
 			}
+			if ev.Type == team.RosterEventType {
+				continue // the roster's tests read their own subscriber
+			}
 			if ev.Type != team.EventType || ev.Session != "" {
 				f.t.Fatalf("event = %+v", ev)
 			}
