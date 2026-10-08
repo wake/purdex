@@ -1414,6 +1414,12 @@ Implementation rulings (U23 SPA, purdex-1f, 2026-10-08):
 35. **"Unreachable and too-old hosts are never written" is tested on a partial press**, not an off press: under D-U23-5 a shown unreachable or too-old host makes the button partial, so an off button with such a host cannot exist. → PU-2b tests.
 36. **Open question 1's "no toast" covers only a close nobody pressed** (the WS `closed` of a daemon approval). When a person's own approve or deny loses to the daemon, the 409 `already_decided` path still tells them who decided, as for any other lost race. → PU-2b; `approval-decide.ts`.
 37. **The tooltips name the request kinds as the spec does** ("become lead", "self relay") and say that tool permissions and agent questions still wait (lead's wording). → PU-2b locales.
+38. **The panel's words say "while unattended"**, not a bare "期間": the ▾ is 「無人值守期間自動通過的申請」, the title 「無人值守期間自動通過」, the empty state 「自這次開啟無人值守以來，沒有自動通過的申請」 (lead's wording). → PU-2c locales.
+39. **A shown host that is unreachable is named without a GET** (「{{host}}：無法連線，可能仍在自動通過」): it may still be approving. When every shown host is unreachable the empty state is not shown; a host whose daemon is too old is not listed (it never auto-approves). → PU-2c `UnattendedPanel`.
+40. **Each host's read commits on its own, with a 10 s limit** (code `timeout`, the request aborted): one host that never answers cannot hold the others' rows or 「顯示更多」; `aria-busy` holds only until the first host answers, and the empty state waits for every host. → PU-2c.
+41. **A row's time is HH:mm today and M/D HH:mm on another day** (`decided_at`, else `created_at`), like the panel's 「自 {{time}} 起」 (the earliest `since` of the hosts). → PU-2c.
+42. **A GET answer with `list_failed: true` is that host's failure**, never an empty page (the daemon's GET does not send it today; defensive). → PU-2c.
+43. **The ▾ is disabled when no host is shown; the hosts read are fixed when the panel opens** (a connection change while it is open does not refetch); **a failed 「顯示更多」 keeps the loaded rows and the cursor** so a retry continues. → PU-2c.
 
 ## Codex review of this plan
 

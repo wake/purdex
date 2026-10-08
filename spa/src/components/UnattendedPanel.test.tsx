@@ -74,7 +74,7 @@ describe('UnattendedPanel', () => {
   it('empty state: nothing approved on any host', async () => {
     mockedGet.mockResolvedValue(page([]))
     open([A, B])
-    expect(await screen.findByTestId('unattended-empty')).toHaveTextContent('自上次開啟以來，沒有自動通過的申請')
+    expect(await screen.findByTestId('unattended-empty')).toHaveTextContent('自這次開啟無人值守以來，沒有自動通過的申請')
     expect(screen.queryByTestId('unattended-row')).toBeNull()
     expect(screen.queryByTestId('unattended-more')).toBeNull()
   })
@@ -391,7 +391,7 @@ describe('UnattendedPanel', () => {
     mockedGet.mockResolvedValue(page([]))
     const { onClose } = open([A])
     const panel = await screen.findByTestId('unattended-panel')
-    expect(within(panel).getByText('期間自動通過')).toBeInTheDocument()
+    expect(within(panel).getByText('無人值守期間自動通過')).toBeInTheDocument()
     fireEvent.click(within(panel).getByTestId('floating-panel-close'))
     expect(onClose).toHaveBeenCalled()
   })
