@@ -131,6 +131,14 @@ type Executor interface {
 	// A successful listing is complete: a row that does not parse fails the
 	// whole call, so a pane absent from the answer is a pane that is gone.
 	ListAllPanes(ctx context.Context) ([]PaneLocation, error)
+	// ListPanePlacements reads every pane's pid and owning session NAME in ONE
+	// tmux round trip, keyed by pane id, where ActivePanePID and
+	// PaneSessionName cost one each per pane. A pane absent from a successful
+	// answer is a pane that is gone. A pane linked into several sessions whose
+	// owner the listing cannot decide comes back Ambiguous (see
+	// buildPanePlacements). Bounded by ctx like ListAllPanes; a row that does
+	// not parse fails the whole call.
+	ListPanePlacements(ctx context.Context) (map[string]PanePlacement, error)
 	PanePID(target string) (string, error)
 	ActivePanePID(target string) (string, error)
 	PaneChildCommands(target string) ([]string, error)
@@ -615,6 +623,21 @@ func (r *RealExecutor) ListAllPanes(ctx context.Context) ([]PaneLocation, error)
 		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
 	}
 	return panes, nil
+}
+
+func (r *RealExecutor) ListPanePlacements(ctx context.Context) (map[string]PanePlacement, error) {
+	out, err := boundedRead(ctx, "list-panes", "-a", "-F", listPanePlacementsFormat).Output()
+	if err != nil {
+		if cerr := readCtxErr(ctx, "tmux list-panes -a", err); cerr != nil {
+			return nil, cerr
+		}
+		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
+	}
+	rows, err := parsePaneRows(out)
+	if err != nil {
+		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
+	}
+	return buildPanePlacements(rows), nil
 }
 
 var panePIDRe = regexp.MustCompile(`^[0-9]+$`)

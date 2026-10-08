@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"slices"
 	"time"
 
@@ -83,25 +84,59 @@ func (m *Module) runModRound(now time.Time) {
 	}
 	slices.Sort(sids)
 
-	type target struct{ session, why string }
-	var targets []target
-	seen := make(map[string]bool)
+	// redirty puts a sid back for the next round: its panes could not be
+	// resolved or its projection could not be read (tmux stuck), nothing was
+	// sent and the baseline is untouched.
+	redirty := func(sid, why string) {
+		m.modMu.Lock()
+		if _, ok := m.modDirty[sid]; !ok {
+			m.markDirtyLocked(sid, why)
+		}
+		m.modMu.Unlock()
+	}
+
+	// Roots first, then the pane listing: a root created in between is then
+	// never missing from a listing taken after it.
+	rootsBySID := make(map[string][]string, len(sids))
 	for _, sid := range sids {
 		roots, err := m.frames.ListRootsBySessionID(sid)
 		if err != nil {
 			continue
 		}
 		for _, f := range roots {
-			name := m.paneSessionName(f.PaneID)
+			rootsBySID[sid] = append(rootsBySID[sid], f.PaneID)
+		}
+	}
+
+	// Pane -> session names come from one bounded batch call (a per-pane
+	// lookup has no deadline and would hang the worker, and its shutdown, on a
+	// stuck tmux). A timed-out call retries every sid next round.
+	snap, err := m.takePaneSnapshot()
+	if err != nil {
+		for _, sid := range sids {
+			redirty(sid, dirty[sid])
+		}
+		return
+	}
+	nameOf := m.paneNameFunc(snap)
+
+	type target struct{ sid, session, why string }
+	var targets []target
+	seen := make(map[string]bool)
+	for _, sid := range sids {
+		for _, paneID := range rootsBySID[sid] {
+			name := nameOf(paneID)
 			if name == "" || seen[name] {
 				continue
 			}
 			seen[name] = true
-			targets = append(targets, target{name, dirty[sid]})
+			targets = append(targets, target{sid, name, dirty[sid]})
 		}
 	}
 	for _, t := range targets {
-		m.emitSessionState(t.session, "mod", map[string]any{"mod_event": t.why})
+		if m.emitSessionState(t.session, "mod", map[string]any{"mod_event": t.why}) {
+			redirty(t.sid, t.why)
+		}
 	}
 }
 
@@ -156,15 +191,23 @@ func (m *Module) takeModDirty(now time.Time) map[string]string {
 // projection older than the baseline it compares with, and a round that
 // finds nothing new spends no sequence number. The session code is resolved
 // before the slot is entered; the baseline is taken with m.mu inside it.
-func (m *Module) emitSessionState(sessionName, rawEvent string, detail map[string]any) {
+//
+// retry is true when the projection could not be read: nothing was sent, the
+// baseline is untouched, and the caller should try the session again later.
+func (m *Module) emitSessionState(sessionName, rawEvent string, detail map[string]any) (retry bool) {
 	if m.core == nil || m.core.Events == nil {
-		return
+		return false
 	}
 	code := m.resolveSessionCode(sessionName)
 	if code == "" {
-		return
+		return false
 	}
-	m.emitSession(kindWorker, code, sessionName, func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
+	m.emitSessionWith(kindWorker, code, sessionName, func(p *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
+		if readErr != nil {
+			log.Printf("[agent] emit slot: projection of %q: %v", sessionName, readErr)
+			retry = true
+			return agentpkg.NormalizedEvent{}, false
+		}
 		if p == nil || p.TopFrame == nil || p.EffectiveStatus() == agentpkg.StatusClear {
 			return agentpkg.NormalizedEvent{}, false
 		}
@@ -178,6 +221,7 @@ func (m *Module) emitSessionState(sessionName, rawEvent string, detail map[strin
 		}
 		return n, true
 	})
+	return retry
 }
 
 // startModWorker launches the worker and returns once it is in its loop, so

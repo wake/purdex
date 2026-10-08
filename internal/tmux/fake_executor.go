@@ -92,16 +92,18 @@ type FakeExecutor struct {
 	globalOptionErrs      map[string]error
 	globalOptionDelays    map[string]time.Duration
 	showGlobalOptionCalls []string
-	paneIDs               []string // global pane id list for HasPane
-	hasPaneErr            error    // simulated transient tmux error for HasPane
-	listAllPanesErr       error    // returned by ListAllPanes when non-nil
-	listCallCount         int      // how many times ListSessions was called
-	HooksOutput           string   // returned by ShowHooksGlobal
-	hookSets              []string // events passed to SetHookGlobal, failed calls included
-	hookSetErr            error    // returned by SetHookGlobal when non-nil
-	FailSendKeys          bool     // if true, SendKeysRaw returns an error
-	FailPasteText         bool     // if true, PasteText returns an error
-	FailKillIfInstance    bool     // if true, KillSessionIfInstance returns an error (nothing killed)
+	paneIDs               []string        // global pane id list for HasPane
+	hasPaneErr            error           // simulated transient tmux error for HasPane
+	listAllPanesErr       error           // returned by ListAllPanes when non-nil
+	placementsErr         error           // returned by ListPanePlacements when non-nil
+	ambiguousPanes        map[string]bool // panes ListPanePlacements reports Ambiguous
+	listCallCount         int             // how many times ListSessions was called
+	HooksOutput           string          // returned by ShowHooksGlobal
+	hookSets              []string        // events passed to SetHookGlobal, failed calls included
+	hookSetErr            error           // returned by SetHookGlobal when non-nil
+	FailSendKeys          bool            // if true, SendKeysRaw returns an error
+	FailPasteText         bool            // if true, PasteText returns an error
+	FailKillIfInstance    bool            // if true, KillSessionIfInstance returns an error (nothing killed)
 	killIfInstanceCalls   []KillIfInstanceCall
 	tags                  map[string]map[string]string // session name → user option → value
 	FailSetTag            bool                         // NewSessionTaggedContext makes the session, then fails its set-option
@@ -241,6 +243,9 @@ const (
 	ReadListSessions ReadOp = "list-sessions"
 	ReadPaneMetadata ReadOp = "pane-metadata"
 	ReadListAllPanes ReadOp = "list-all-panes"
+	// ReadListPanePlacements is ListPanePlacements, the batched pid + session
+	// name read.
+	ReadListPanePlacements ReadOp = "list-pane-placements"
 )
 
 // ReadHook runs at the start of every FakeExecutor ListSessions /
@@ -733,6 +738,61 @@ func (f *FakeExecutor) ListAllPanes(ctx context.Context) ([]PaneLocation, error)
 	}
 	sort.Slice(panes, func(i, j int) bool { return panes[i].PaneID < panes[j].PaneID })
 	return panes, nil
+}
+
+// ListPanePlacements is the batched read of what ActivePanePID and
+// PaneSessionName answer one pane at a time. It lists every pane the fake was
+// told a session name, a session id or a pid for, with the values those two
+// calls would return (a pane without a configured name has an empty one,
+// which callers treat like PaneSessionName's error). It goes through the read
+// hook as ReadListPanePlacements.
+func (f *FakeExecutor) ListPanePlacements(ctx context.Context) (map[string]PanePlacement, error) {
+	if err := f.beginRead(ctx, ReadListPanePlacements, ""); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if f.placementsErr != nil {
+		return nil, f.placementsErr
+	}
+	known := make(map[string]bool)
+	for _, m := range []map[string]string{f.paneSessions, f.paneSessionIDs, f.activePanePIDs, f.panePIDs} {
+		for paneID := range m {
+			known[paneID] = true
+		}
+	}
+	out := make(map[string]PanePlacement, len(known))
+	for paneID := range known {
+		p := PanePlacement{PID: f.activePanePIDLocked(paneID), SessionName: f.paneSessions[paneID]}
+		if f.ambiguousPanes[paneID] {
+			p.SessionName, p.Ambiguous = "", true
+		}
+		out[paneID] = p
+	}
+	return out, nil
+}
+
+// SetListPanePlacementsError makes ListPanePlacements fail with err (the
+// batched read could not be completed); nil clears it.
+func (f *FakeExecutor) SetListPanePlacementsError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.placementsErr = err
+}
+
+// SetPaneAmbiguous makes ListPanePlacements report the pane Ambiguous (linked
+// into sessions the listing cannot tell apart); PaneSessionName still answers
+// with the configured name.
+func (f *FakeExecutor) SetPaneAmbiguous(target string, ambiguous bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ambiguousPanes == nil {
+		f.ambiguousPanes = make(map[string]bool)
+	}
+	f.ambiguousPanes[target] = ambiguous
 }
 
 // SetListAllPanesError makes ListAllPanes fail with err, the shape of a

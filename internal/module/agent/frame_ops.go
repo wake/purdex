@@ -1199,7 +1199,9 @@ func (m *Module) projectPane(paneID string) (*SessionProjection, error) {
 	return &projections[0], nil
 }
 
-func (m *Module) filterProjectionFrames(frames []store.Frame) []store.Frame {
+// filterProjectionFrames keeps, per pane, the frames the pane owns. With a
+// snapshot the pane pids come from it, with none (nil) each pane is asked.
+func (m *Module) filterProjectionFrames(frames []store.Frame, snap *paneSnapshot) []store.Frame {
 	if len(frames) == 0 {
 		return frames
 	}
@@ -1209,16 +1211,28 @@ func (m *Module) filterProjectionFrames(frames []store.Frame) []store.Frame {
 	}
 	filtered := make([]store.Frame, 0, len(frames))
 	for paneID, paneFrames := range byPane {
-		filtered = append(filtered, m.filterPaneOwnedProjectionFrames(paneID, paneFrames)...)
+		filtered = append(filtered, m.filterPaneFramesBy(paneID, paneFrames, snap)...)
 	}
 	return filtered
 }
 
 func (m *Module) filterPaneOwnedProjectionFrames(paneID string, frames []store.Frame) []store.Frame {
+	return m.filterPaneFramesBy(paneID, frames, nil)
+}
+
+func (m *Module) filterPaneFramesBy(paneID string, frames []store.Frame, snap *paneSnapshot) []store.Frame {
 	if len(frames) == 0 || m == nil || m.tmux == nil {
 		return frames
 	}
-	panePID, err := resolvePanePIDFn(m.tmux, paneID)
+	var (
+		panePID int
+		err     error
+	)
+	if snap != nil {
+		panePID, err = snap.panePID(paneID)
+	} else {
+		panePID, err = resolvePanePIDFn(m.tmux, paneID)
+	}
 	if err != nil {
 		return frames
 	}
@@ -1467,11 +1481,11 @@ func isSubagentStopFailure(lifecycle agentpkg.LifecycleEventKind, result agentpk
 }
 
 func (m *Module) projectionForSession(sessionName string) (*SessionProjection, error) {
-	projections, err := m.liveFrameProjections()
+	projections, snap, err := m.liveFrameProjectionsWithSnapshot()
 	if err != nil {
 		return nil, err
 	}
-	return m.selectSessionProjection(sessionName, projections), nil
+	return m.selectSessionProjectionBy(sessionName, projections, m.paneNameFunc(snap)), nil
 }
 
 func (m *Module) setProjectionTopStatus(sessionName string, status agentpkg.Status) (*SessionProjection, error) {
@@ -1529,7 +1543,7 @@ type namedProjection struct {
 }
 
 func (m *Module) liveSessionProjections() ([]namedProjection, error) {
-	projections, err := m.liveFrameProjections()
+	projections, snap, err := m.liveFrameProjectionsWithSnapshot()
 	if err != nil {
 		return nil, err
 	}
@@ -1539,10 +1553,11 @@ func (m *Module) liveSessionProjections() ([]namedProjection, error) {
 	selected := make(map[string]namedProjection)
 	background := make(map[string]string) // the highest across all of a session's panes
 	for _, projection := range projections {
-		sessionName, sessionCode := m.resolvePaneSession(projection.PaneID)
+		sessionName := m.paneNameFunc(snap)(projection.PaneID)
 		if sessionName == "" {
 			continue
 		}
+		sessionCode := m.resolveSessionCode(sessionName)
 		background[sessionName] = higherBackground(background[sessionName], projection.Background)
 		current, ok := selected[sessionName]
 		if !ok || projectionRankGreater(projection, current.Projection) {
