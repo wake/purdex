@@ -4,7 +4,8 @@
 // guards that decide whether a list answer may still be committed. Where
 // the rendered cache lives is the caller's business (`useExecutionListStore`),
 // reached through the small `ListSink`.
-import { listAllExecutions, LIST_MAX_PAGES, LIST_PAGE_LIMIT } from './list-all-executions'
+import { commitWalk, normalizeDelta, putOverlay, type Overlay } from './execution-overlay'
+import { listAllExecutions, DELTA_PAGE_LIMIT, LIST_MAX_PAGES, LIST_PAGE_LIMIT } from './list-all-executions'
 import { openNexSse, type NexSseHandle, type NexSseStatus } from './nex-sse'
 import { fingerprintOf } from './nex-host-effects'
 import { subscriptionSlots } from './subscription-slots'
@@ -98,6 +99,29 @@ export interface HostListCache {
    * walk answers. An error keeps the previous value with the previous rows.
    */
   complete: boolean
+  /** (Optional so a hand-built cache need not name it; absent reads as {}.) Version of each cached row (#1866 §4.3): the covering page's `ver`, a delta's `ver`, or 0 from a legacy fetch. */
+  rowVers?: Record<string, number>
+  /**
+   * (Optional; absent reads as 0.) Bumped by an archive-membership delta (`execution.archived` / `unarchived` in `cause`, a `null` row, an archived
+   * row) and by every committed reconcile; the archived query keys on it (§4.7).
+   */
+  archivedRevision?: number
+}
+
+/** Per-host capability (§4.1): `delta` once the host's first hello arrives; sticky until the fingerprint changes. */
+export type DeltaCap = 'unknown' | 'delta'
+
+/** `nex.executions.hello` value. */
+export interface NexHello { epoch: string; bseq: number }
+
+/** `nex.execution` value (§3.5): `row` is `null` when the execution is gone. */
+export interface NexDelta {
+  epoch: string
+  bseq: number
+  id: string
+  ver: number
+  cause: readonly string[]
+  row: ExecutionSummary | null
 }
 
 export type HostListCaches = Record<string, HostListCache>
@@ -113,6 +137,11 @@ interface HostListRuntime {
   generation: number
   sse: NexSseHandle | null
   reserved: boolean
+  deltaCap: DeltaCap
+  /** The hello's epoch and the last bseq processed; null until a hello. */
+  baseline: { epoch: string; last: number } | null
+  /** Deltas that arrive while a walk is in flight (§4.3); null between walks. */
+  overlay: Overlay | null
   debounce: ReturnType<typeof setTimeout> | null
   fetchToken: number
 }
@@ -121,6 +150,10 @@ export interface ExecutionListEffects {
   subscribe: (hostId: string) => () => void
   refetch: (hostId: string) => void
   clearHost: (hostId: string) => void
+  /** A hello arrived on the host-events stream (§4.1). Not wired into production until PR2b. */
+  onHello: (hostId: string, hello: NexHello) => void
+  /** A `nex.execution` delta arrived (§4.4). Not wired into production until PR2b. */
+  applyDelta: (hostId: string, delta: NexDelta) => void
   open: (hostId: string) => void
   close: (hostId: string, opts: { dropCache: boolean }) => void
   /** Hosts that currently have at least one subscriber. */
@@ -128,8 +161,8 @@ export interface ExecutionListEffects {
   resetForTests: () => void
 }
 
-export const emptyListCache = (refreshRevision = 0): HostListCache =>
-  ({ items: [], phase: 'idle', error: null, lastSeq: null, refreshRevision, truncated: false, complete: false })
+export const emptyListCache = (refreshRevision = 0, archivedRevision = 0): HostListCache =>
+  ({ items: [], phase: 'idle', error: null, lastSeq: null, refreshRevision, truncated: false, complete: false, rowVers: {}, archivedRevision })
 
 const errorText = (err: unknown): string =>
   err instanceof NexApiError ? err.code : err instanceof Error ? err.message : String(err)
@@ -150,7 +183,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
   const runtimeOf = (hostId: string): HostListRuntime => {
     let rt = runtimes.get(hostId)
     if (!rt) {
-      rt = { subscribers: new Set(), generation: 0, sse: null, reserved: false, debounce: null, fetchToken: 0 }
+      rt = { subscribers: new Set(), generation: 0, sse: null, reserved: false, deltaCap: 'unknown', baseline: null, overlay: null, debounce: null, fetchToken: 0 }
       runtimes.set(hostId, rt)
     }
     return rt
@@ -167,11 +200,15 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
   const ensureCache = (hostId: string) =>
     sink.set((byHost) => (byHost[hostId] ? byHost : { ...byHost, [hostId]: emptyListCache() }))
 
-  function fetch(hostId: string): void {
+  /** A one-shot walk of the list (§4.2). In `delta` mode it is versioned and deltas that arrive meanwhile are overlaid. */
+  function fetchAll(hostId: string): void {
     const rt = runtimeOf(hostId)
     const generation = rt.generation
     const token = ++rt.fetchToken
     const fingerprint = fingerprintOf(hostId)
+    const delta = rt.deltaCap === 'delta'
+    const overlay: Overlay | null = delta ? new Map() : null
+    rt.overlay = overlay
     patchCache(hostId, (c) => (c.phase === 'ready' ? c : { ...c, phase: 'loading' }))
 
     const stillCurrent = () =>
@@ -180,26 +217,39 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
       && fingerprintOf(hostId) === fingerprint
       && infoReady(hostId)
       && rt.subscribers.size > 0
+    const endWalk = () => { if (rt.fetchToken === token) rt.overlay = null }
 
-    listAllExecutions(hostId, { includeArchived: false }, stillCurrent)
+    listAllExecutions(hostId, { includeArchived: false, delta }, stillCurrent)
       .then((result) => {
         if (!result || !stillCurrent()) return
         const { items, dropped, truncated, stuck, stuckPage } = result
+        if (rt.baseline && result.epoch !== undefined && result.epoch !== rt.baseline.epoch) {
+          // Another daemon process than the one whose hello we hold: its vers are not comparable with the deltas
+          // we have seen. The hello for the new epoch follows and reconciles (§4.4).
+          console.warn('nex-delta: list walk from another epoch discarded', { hostId, walk: result.epoch, baseline: rt.baseline.epoch })
+          return
+        }
         if (stuck) console.warn('nex: executions cursor repeated', { hostId, page: stuckPage })
-        if (truncated) console.warn('nex: executions list truncated', { hostId, pageLimit: LIST_PAGE_LIMIT, maxPages: LIST_MAX_PAGES })
+        if (truncated) console.warn('nex: executions list truncated', { hostId, pageLimit: delta ? DELTA_PAGE_LIMIT : LIST_PAGE_LIMIT, maxPages: LIST_MAX_PAGES })
         if (dropped > 0) console.warn('nex: executions page dropped malformed row(s)', { hostId, dropped })
         const complete = dropped === 0 && !stuck && !truncated
-        patchCache(hostId, (c) => ({ ...c, items, phase: 'ready', error: null, truncated, complete, refreshRevision: c.refreshRevision + 1 }))
+        const committed = overlay
+          ? commitWalk(items, result.pages, overlay)
+          : { items, vers: Object.fromEntries(items.map((i) => [i.id, 0])) }
+        patchCache(hostId, (c) => ({
+          ...c, items: committed.items, rowVers: committed.vers, phase: 'ready', error: null, truncated, complete,
+          refreshRevision: c.refreshRevision + 1, archivedRevision: (c.archivedRevision ?? 0) + 1,
+        }))
       })
       .catch((err: unknown) => {
         if (!stillCurrent()) return
         patchCache(hostId, (c) => ({ ...c, phase: 'error', error: errorText(err), refreshRevision: c.refreshRevision + 1 }))
       })
+      .finally(endWalk)
   }
 
-  function close(hostId: string, { dropCache }: { dropCache: boolean }): void {
-    const rt = runtimeOf(hostId)
-    rt.generation += 1
+  /** Stop the legacy stream and give its lane back (a hello, or a close). */
+  function dropLegacyStream(rt: HostListRuntime, hostId: string): void {
     if (rt.debounce) {
       clearTimeout(rt.debounce)
       rt.debounce = null
@@ -211,8 +261,20 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
       rt.reserved = false
       subscriptionSlots.unreserve(hostId, 'site-wide')
     }
+  }
+
+  function close(hostId: string, { dropCache }: { dropCache: boolean }): void {
+    const rt = runtimeOf(hostId)
+    rt.generation += 1
+    rt.overlay = null
+    dropLegacyStream(rt, hostId)
+    if (dropCache) {
+      // Another daemon, or the host is gone: whatever it announced does not carry over (§4.1).
+      rt.deltaCap = 'unknown'
+      rt.baseline = null
+    }
     patchCache(hostId, (c) => {
-      if (dropCache) return emptyListCache(c.refreshRevision)
+      if (dropCache) return emptyListCache(c.refreshRevision, c.archivedRevision)
       return c.phase === 'loading' ? { ...c, phase: 'idle' } : c
     })
   }
@@ -221,6 +283,14 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     const rt = runtimeOf(hostId)
     ensureCache(hostId)
     if (rt.sse || !infoReady(hostId)) return
+    // A delta host has no lane and no stream: the host-events stream carries its changes (§4.1).
+    if (rt.deltaCap === 'delta') fetchAll(hostId)
+    else if (openLegacyStream(hostId)) fetchAll(hostId)
+  }
+
+  /** Reserve the lane and open the site-wide SSE (§4.2). False when the stream is already dead on arrival. */
+  function openLegacyStream(hostId: string): boolean {
+    const rt = runtimeOf(hostId)
     const generation = rt.generation
 
     // Reserve before the stream exists: the lane is what keeps a fifth pane
@@ -232,7 +302,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
       if (rt.debounce) clearTimeout(rt.debounce)
       rt.debounce = setTimeout(() => {
         rt.debounce = null
-        fetch(hostId)
+        fetchAll(hostId)
       }, LIST_REFRESH_DEBOUNCE_MS)
     }
 
@@ -269,10 +339,10 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     // commit rows for a stream that is not there.
     if (rt.generation !== generation) {
       handle.close()
-      return
+      return false
     }
     rt.sse = handle
-    fetch(hostId)
+    return true
   }
 
   const subscribe = (hostId: string): (() => void) => {
@@ -290,7 +360,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
   const refetch = (hostId: string): void => {
     const rt = runtimes.get(hostId)
     if (!rt || rt.subscribers.size === 0) return
-    if (rt.sse) fetch(hostId)
+    if (rt.deltaCap === 'delta' || rt.sse) fetchAll(hostId)
     else open(hostId)
   }
 
@@ -301,6 +371,44 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
       const next = { ...byHost }
       delete next[hostId]
       return next
+    })
+  }
+
+  const onHello = (hostId: string, hello: NexHello): void => {
+    const rt = runtimeOf(hostId)
+    rt.deltaCap = 'delta'
+    rt.baseline = { epoch: hello.epoch, last: hello.bseq }
+    dropLegacyStream(rt, hostId)
+    // Every hello reconciles when anything is subscribed: deltas may have been missed while disconnected.
+    if (rt.subscribers.size > 0 && infoReady(hostId)) fetchAll(hostId)
+  }
+
+  const applyDelta = (hostId: string, d: NexDelta): void => {
+    const rt = runtimes.get(hostId)
+    if (!rt || rt.deltaCap !== 'delta' || !rt.baseline) return
+    if (d.epoch !== rt.baseline.epoch) return
+    if (d.bseq !== rt.baseline.last + 1) {
+      rt.baseline.last = d.bseq
+      if (rt.subscribers.size > 0) fetchAll(hostId)
+      return
+    }
+    rt.baseline.last = d.bseq
+    const entry = normalizeDelta(d.ver, d.row)
+    if (rt.overlay) putOverlay(rt.overlay, d.id, entry)
+    const membership = d.row === null || d.row.archived === true
+      || d.cause.includes('execution.archived') || d.cause.includes('execution.unarchived')
+    patchCache(hostId, (c) => {
+      const known = c.rowVers?.[d.id]
+      if (known !== undefined && d.ver <= known) return membership ? { ...c, archivedRevision: (c.archivedRevision ?? 0) + 1 } : c
+      const rest = c.items.filter((i) => i.id !== d.id)
+      const items = entry.row === null
+        ? rest
+        : [...rest, entry.row].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      const { [d.id]: _gone, ...vers } = c.rowVers ?? {}
+      return {
+        ...c, items, rowVers: entry.row === null ? vers : { ...vers, [d.id]: d.ver },
+        archivedRevision: membership ? (c.archivedRevision ?? 0) + 1 : c.archivedRevision,
+      }
     })
   }
 
@@ -315,5 +423,5 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     nextToken = 1
   }
 
-  return { subscribe, refetch, clearHost, open, close, subscribedHosts, resetForTests }
+  return { subscribe, refetch, clearHost, onHello, applyDelta, open, close, subscribedHosts, resetForTests }
 }
