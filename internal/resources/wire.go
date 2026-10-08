@@ -32,14 +32,18 @@ const (
 	ReasonSampleFailed        = "sample_failed"
 	// ReasonWarmingUp is what a snapshot says before the first sample lands.
 	ReasonWarmingUp = "warming_up"
+	// ReasonOff is what a snapshot says while the host setting has mode off:
+	// the sampler skips its reads and the figures, if any, are stale.
+	ReasonOff = "off"
 )
 
-// ModeMeasure is the only mode P0 reports: measure, no admission.
+// ModeMeasure is sampling without admission: the mode P0 always reported, and
+// what the module falls back to when it cannot read or store its settings.
 const ModeMeasure = "measure"
 
-// Snapshot is one reading of the host. P1 adds Leases and Waiters; those
-// field names are reserved so the App contract stays stable, and nothing
-// emits them in P0.
+// Snapshot is one reading of the host. Mode is the host setting's mode. From
+// P1 the lease routes' GET also fills Leases, Waiters and Recent; they are
+// omitted when empty, so a host with no leases reads as in P0.
 type Snapshot struct {
 	SampledAt time.Time    `json:"sampled_at"`
 	Available bool         `json:"available"`
@@ -48,6 +52,11 @@ type Snapshot struct {
 	Host      HostUse      `json:"host"`
 	Sessions  []SessionUse `json:"sessions"`
 	Mode      string       `json:"mode"`
+	// Leases are the held leases, Waiters the queue (FIFO) and Recent the
+	// last ended leases, newest first.
+	Leases  []LeaseView  `json:"leases,omitempty"`
+	Waiters []WaiterView `json:"waiters,omitempty"`
+	Recent  []RecentView `json:"recent,omitempty"`
 	// SampleMS is how long the tick that produced this snapshot took, for
 	// seeing the cost of sampling; a debug field.
 	SampleMS int64 `json:"sample_ms,omitempty"`
