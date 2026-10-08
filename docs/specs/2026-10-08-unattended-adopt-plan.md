@@ -1406,6 +1406,15 @@ Implementation rulings (U23 daemon batch, purdex-1f, 2026-10-08):
 
 **The other Open questions** take the plan's recommended defaults: 1, 3, 4, 5, 6, 8, 10, 11, 12, 13, 15, 17, 19, 20 (each marked *Ruled* in "Open questions"). Open questions 7 and 9 follow their defaults, now written into the spec (decision 21); 2, 14, 16 and 18 are decided by decisions 19, 10, 11 and 16.
 
+Implementation rulings (U23 SPA, purdex-1f, 2026-10-08):
+
+32. **The toggle never writes a PUT's answer into the store**: a press only learns success or failure from it; every window follows the `changed` event, which ruling 29 delivers, so two windows' answers arriving late cannot overwrite each other. → PU-2b.
+33. **A second press while one is in flight sends nothing.** → PU-2b.
+34. **`BUTTON` / `PRESSED` / `IDLE` move to `components/title-bar-styles.ts`**, shared by the title bar and the toggle; the slot (after the spacer, left of the layout buttons, its own no-drag wrapper) was agreed with the interface lead (U3 does not touch the title bar). → PU-2b.
+35. **"Unreachable and too-old hosts are never written" is tested on a partial press**, not an off press: under D-U23-5 a shown unreachable or too-old host makes the button partial, so an off button with such a host cannot exist. → PU-2b tests.
+36. **Open question 1's "no toast" covers only a close nobody pressed** (the WS `closed` of a daemon approval). When a person's own approve or deny loses to the daemon, the 409 `already_decided` path still tells them who decided, as for any other lost race. → PU-2b; `approval-decide.ts`.
+37. **The tooltips name the request kinds as the spec does** ("become lead", "self relay") and say that tool permissions and agent questions still wait (lead's wording). → PU-2b locales.
+
 ## Codex review of this plan
 
 One round, plan + both specs (job output `scratchpad/u23u24-plan-review.txt` of session 8fff4c6b): **3 critical / 15 important / 2 minor, all adopted** through the decisions above.

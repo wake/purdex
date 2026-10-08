@@ -50,6 +50,7 @@ const READER_IMPORTERS = [
   'src/components/PaneLayoutRenderer.tsx',
   'src/components/SessionPickerList.tsx',
   'src/components/StatusBar.tsx',
+  'src/components/UnattendedButton.tsx', // D-U23-5: the switch reads and presses every shown host (hostOrder.filter(useShownRefFilter()))
   'src/components/executions/ExecutionsView.tsx',
   'src/components/executions/WorkerList.tsx',
   'src/components/hosts/HostSidebar.tsx',

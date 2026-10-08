@@ -272,3 +272,24 @@ describe('approval-ws trust boundary (F1 / F2)', () => {
     expect(warn).not.toHaveBeenCalled()
   })
 })
+
+// U23 (unattended spec D-U23-6; plan PU-2b, Open question 1): what the daemon approved by itself while 無人值守模式 was
+// on closes the dialog on every window, but no one pressed anything — no "handled by" toast.
+describe('approval-ws: a close decided by unattended', () => {
+  const closedBy = (decided_by: Approval['decided_by']) =>
+    JSON.stringify({ op: 'closed', approval: { ...approval(), state: 'approved', decided_by, decided_at: 5 } })
+
+  it('a closed decided by unattended closes the dialog and shows no toast', () => {
+    useApprovalStore.getState().applyOpened(H, approval())
+    handleApprovalEvent(H, closedBy({ kind: 'unattended', label: '無人值守模式' }))
+    expect(useApprovalStore.getState().entries).toEqual({})
+    expect(useUndoToast.getState().toast).toBeNull()
+  })
+
+  it('a closed decided by an app still toasts', () => {
+    useApprovalStore.getState().applyOpened(H, approval())
+    handleApprovalEvent(H, closedBy({ kind: 'app', label: 'Purdex.app @ air26' }))
+    expect(useApprovalStore.getState().entries).toEqual({})
+    expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由 Purdex.app @ air26 核准')
+  })
+})

@@ -2052,5 +2052,16 @@
   "approval.dialog.minimize": "縮小",
   "approval.pill.label": "待核准 {{count}} · {{countdown}}",
   "approval.pill.restore": "{{label}}，點一下還原核准對話框",
-  "approval.pill.announce": "新的核准申請，待核准 {{count}} 筆"
+  "approval.pill.announce": "新的核准申請，待核准 {{count}} 筆",
+  "unattended.button_off": "無人值守模式：關",
+  "unattended.button_on": "無人值守模式：開",
+  "unattended.button_partial": "無人值守模式：部分",
+  "unattended.on_label": "無人值守中",
+  "unattended.tooltip.off": "無人值守模式已關閉。開啟後，所有顯示中主機的『成為 lead』與『自我接力』申請會自動通過；工具權限與 agent 提問仍會等你",
+  "unattended.tooltip.on": "無人值守中：『成為 lead』與『自我接力』申請自動通過；工具權限與 agent 提問仍會等你。按下關閉",
+  "unattended.tooltip.partial_off": "未開啟：{{hosts}}",
+  "unattended.tooltip.partial_unreachable": "無法連線：{{hosts}}",
+  "unattended.tooltip.partial_unsupported": "daemon 版本過舊：{{hosts}}",
+  "unattended.tooltip.none": "這個工作台沒有顯示中的主機",
+  "unattended.toast.failed": "無法切換無人值守模式：{{hosts}}"
 }

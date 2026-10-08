@@ -4,6 +4,10 @@ import { TitleBar, REPLAN_CONFIRM_LOCK_MS } from './TitleBar'
 import { useTabStore } from '../stores/useTabStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { usePaneFocusStore } from '../stores/usePaneFocusStore'
+import { useHostStore } from '../stores/useHostStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { useUnattendedStore } from '../stores/useUnattendedStore'
+import { useI18nStore } from '../stores/useI18nStore'
 import { compositeKey } from '../lib/composite-key'
 import { collectLeaves } from '../lib/pane-tree'
 import { createTab } from '../types/tab'
@@ -681,5 +685,41 @@ describe('TitleBar layout buttons', () => {
       unmount()
       expect(pendingTimers()).toBe(othersTimers)
     })
+  })
+})
+
+// ── 無人值守模式 (unattended spec D-U23-5, D-U23-6; plan PU-2b): the toggle's slot, and its state across a remount ──
+describe('TitleBar unattended button', () => {
+  const H = 'h1'
+  beforeEach(() => {
+    useHostStore.setState({
+      hosts: { [H]: { id: H, name: 'mlab', ip: '1', port: 1, token: 't', order: 0 } },
+      hostOrder: [H], activeHostId: H, runtime: { [H]: { status: 'connected' } },
+    })
+    useShownHostsStore.setState({ ids: [H] })
+    useUnattendedStore.setState({ byHost: { [H]: { support: 'yes', state: { on: true, since: 1, changed_at: 1 } } } })
+  })
+  afterEach(() => {
+    useHostStore.getState().reset()
+    useUnattendedStore.getState().reset()
+  })
+
+  it('the unattended button sits in a no-drag wrapper before the layout buttons', () => {
+    render(<TitleBar title="test" />)
+    const wrapper = screen.getByTestId('unattended-buttons')
+    expect((wrapper.style as unknown as { WebkitAppRegion?: string }).WebkitAppRegion).toBe('no-drag')
+    expect(within(wrapper).getByTestId('unattended-toggle')).toBeDefined()
+    const layout = screen.getByTestId('layout-buttons')
+    expect(wrapper.nextElementSibling).toBe(layout)
+    expect(wrapper.compareDocumentPosition(layout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('TitleBar remounted keeps the button\'s state', () => {
+    const first = render(<TitleBar title="test" />)
+    expect(screen.getByTestId('unattended-toggle')).toHaveAttribute('data-state', 'on')
+    first.unmount()
+    render(<TitleBar title="test" />)
+    expect(screen.getByTestId('unattended-toggle')).toHaveAttribute('data-state', 'on')
+    expect(screen.getByTestId('unattended-toggle')).toHaveTextContent(useI18nStore.getState().t('unattended.on_label'))
   })
 })
