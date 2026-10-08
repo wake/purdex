@@ -1391,6 +1391,17 @@ Follow-up rulings the same day (purdex-d3, relayed by purdex-f0), folded into th
 22. **U25 / D-U24-7 in the plan.** Daemon half: an unattended lead approval's grant is `min(requested — unspecified counts as 3 —, 3)` members, in PU-1b2 (`unattendedGrant`, `TestUnattendedLeadGrant_IsMinOfRequestAndThree`, `TestDecide_ClickGrantIsNotCapped`, a mutation gate). Dialog half: a small PR of its own, PU-2d (`OpenApprovalDialog`'s member field prefilled 3, 「lead 申請 N 個」 beside it, tests and gates). → PR table; PU-1a constant; PU-1b2; PU-2d.
 23. **A user-visible behaviour list** in Traditional Chinese, every item with its source, for d3 to review. → "User-visible behaviour (for coordinator review)".
 
+Implementation rulings (U23 daemon batch, purdex-1f, 2026-10-08):
+
+24. **PU-1b2 was cut at its cut point:** `reconcileUnattended`, the boot sweep and the once-per-row refusal log are PU-1b3 (#1969), shipped in the same U23 batch. → PU-1b2 / PU-1b3.
+25. **The daemon never approves an overdue row:** an auto-approval's CAS also requires `deadline_at > now AND lease_until > now` (`Close.UnexpiredAt`); the overdue row is left to the expiry sweeper and is not counted as pending. A click's approve is unchanged (a click on a row overdue by less than one tick stays the person's decision). → PU-1b3.
+26. **`GET /api/team/unattended` caps `limit` at 200** instead of answering 400; `before`/`limit` that are 0, negative or not a number are 400. → PU-1c.
+27. **A switch value that cannot be read sends no snapshot** and keeps the subscriber (reconnecting would not repair it; the App's GET gets the 500). → PU-1c.
+28. **The guard test is stricter than planned:** no pdx source names the route or `UnattendedRoute`, no `hooks/*.js` contains "unattended", SKILL.md never writes the route; `main()` strings are checked through the AST. → PU-1c.
+29. **`team.unattended` `changed` is sent strictly to every subscriber** (`BroadcastStrict`): a subscriber that cannot take it is closed so it reconnects for the snapshot; a dropped frame would leave a window showing the wrong switch (D-U23-6). → PU-1c.
+30. **A PUT whose write took effect answers 200** even when the list cannot be read, with `approved: []` and `list_failed: true`; the client GETs the list. → PU-1a wire (additive), PU-1c.
+31. **The skill's lead-mode paragraph says the answer may be an automatic approval** under unattended mode, which the agent never turns on and never asks for. → PU-1c.
+
 **The other Open questions** take the plan's recommended defaults: 1, 3, 4, 5, 6, 8, 10, 11, 12, 13, 15, 17, 19, 20 (each marked *Ruled* in "Open questions"). Open questions 7 and 9 follow their defaults, now written into the spec (decision 21); 2, 14, 16 and 18 are decided by decisions 19, 10, 11 and 16.
 
 ## Codex review of this plan
