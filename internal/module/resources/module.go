@@ -92,9 +92,20 @@ type Module struct {
 	// cannot be built outside package agent; nil reads procSnapshot);
 	// sweepHook runs before each end the sweeper attempts, for tests to race a
 	// writer in.
-	sweepEvery  time.Duration
-	sweepView   func(ctx context.Context) (procView, error)
-	sweepHook   func(r leaseRow)
+	sweepEvery time.Duration
+	sweepView  func(ctx context.Context) (procView, error)
+	sweepHook  func(r leaseRow)
+	// passHook runs inside the admission pass, after the rows were read and
+	// before the first grant: a seam for tests to race a writer in.
+	passHook func()
+	// beforeLockHook runs between the unlocked baseline work and the locked
+	// part of a round: a seam for a request that arrives in between.
+	beforeLockHook func()
+	// baselineFailing: the "no baseline" problem has been logged (the unlocked part
+	// of the pass runs on the sampler and the sweeper goroutine).
+	baselineFailing atomic.Bool
+	// skipPass makes admissionPass a no-op (a test seam).
+	skipPass    bool
 	lastPrune   time.Time
 	viewFailing bool
 

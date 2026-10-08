@@ -36,6 +36,7 @@ func (m *Module) runSweeper(ctx context.Context) {
 			return
 		case <-t.C:
 			m.sweepOnce(ctx)
+			m.passIfWaiting(ctx)
 		}
 	}
 }
@@ -212,3 +213,17 @@ func holderGone(view procView, r leaseRow) bool {
 }
 
 var _ procView = (*iagent.ProcessSnapshot)(nil)
+
+// passIfWaiting runs the admission pass after a sweeper tick when a request is
+// waiting: the sweep may just have freed capacity, and a deadline passes with
+// no sample and no change (spec R6, plan review #3). With nobody waiting it is
+// one indexed count.
+func (m *Module) passIfWaiting(ctx context.Context) {
+	if m.store == nil {
+		return
+	}
+	if n, err := m.store.CountWaiting(ctx); err != nil || n == 0 {
+		return
+	}
+	m.admissionPass(ctx, "")
+}

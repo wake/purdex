@@ -91,6 +91,7 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	// path: it reads the process table once more when a lease is held.
 	held, heldOK := m.measureLeases(ctx, procs, raw)
 	m.noteMinute(ctx, host, m.now(), held, heldOK)
+	m.admissionPass(ctx, "")
 	return false
 }
 

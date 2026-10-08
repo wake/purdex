@@ -20,6 +20,9 @@ func leasedModule(t *testing.T, sampler resources.Sampler, clock *fakeClock, fn 
 	set.set(resources.Settings{Mode: resources.ModeLease})
 	m, logs := initedModule(t, dir, set, sampler)
 	m.now = clock.now
+	// The listing tests want the rows as they were seeded: the tick's
+	// admission pass would grant the waiters it can.
+	m.skipPass = true
 	m.tick(context.Background())
 	return m, logs
 }
