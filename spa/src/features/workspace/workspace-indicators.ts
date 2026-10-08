@@ -1,26 +1,21 @@
 import type { Tab } from '../../types/tab'
 import type { AgentStatus } from '../../stores/useAgentStore'
-import { getPrimaryPane } from '../../lib/pane-tree'
-import { compositeKey } from '../../lib/composite-key'
+import { tabAgentPanes } from '../../lib/agent-lights/tab-aggregate'
+import { statusRank } from '../../lib/agent-lights/status-rank'
 
-/** Extract compositeKeys from a workspace's tab IDs. Skips non-session and missing tabs. */
-export function getWorkspaceCompositeKeys(tabIds: string[], tabs: Record<string, Tab>): string[] {
-  const keys: string[] = []
+/**
+ * The agent keys of each of a workspace's tabs, one array per tab: every agent pane of the tab's layout (U1-3
+ * ruling 6), so a split tab's second pane counts. Skips missing tabs and tabs with no agent pane.
+ */
+export function getWorkspaceTabKeys(tabIds: string[], tabs: Record<string, Tab>): string[][] {
+  const out: string[][] = []
   for (const id of tabIds) {
     const tab = tabs[id]
     if (!tab) continue
-    const { content } = getPrimaryPane(tab.layout)
-    if (content.kind !== 'tmux-session') continue
-    keys.push(compositeKey(content.hostId, content.sessionCode))
+    const keys = tabAgentPanes(tab.layout).map((p) => p.key)
+    if (keys.length > 0) out.push(keys)
   }
-  return keys
-}
-
-const STATUS_PRIORITY: Record<AgentStatus, number> = {
-  error: 3,
-  waiting: 2,
-  running: 1,
-  idle: 0,
+  return out
 }
 
 export type ActiveStatus = Exclude<AgentStatus, 'idle'>
@@ -28,13 +23,12 @@ export type ActiveStatus = Exclude<AgentStatus, 'idle'>
 /** Returns highest-priority status across tabs, or undefined if all idle/absent. */
 export function aggregateStatus(statuses: (AgentStatus | undefined)[]): ActiveStatus | undefined {
   let highest: AgentStatus | undefined
-  let highestPri = -1
+  let highestRank = 0
   for (const s of statuses) {
-    if (s === undefined) continue
-    const p = STATUS_PRIORITY[s]
-    if (p > highestPri) {
+    const r = statusRank(s)
+    if (r > highestRank) {
       highest = s
-      highestPri = p
+      highestRank = r
     }
   }
   return highest === 'idle' ? undefined : highest

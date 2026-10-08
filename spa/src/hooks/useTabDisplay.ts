@@ -1,5 +1,6 @@
+import { useMemo } from 'react'
 import type { Tab } from '../types/tab'
-import type { AgentStatus, SubagentRef } from '../stores/useAgentStore'
+import type { AgentStatus, BackgroundKind, SubagentRef } from '../stores/useAgentStore'
 import type { TabIndicatorStyle } from '../stores/useUISettingsStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
@@ -17,15 +18,18 @@ import { useExecutionStore } from '../stores/useExecutionStore'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { useWorkerSettingsStore } from '../stores/useWorkerSettingsStore'
 import { execAgentCode } from '../lib/nex/worker-agent-status'
-import { hostListTruncated, isAwaitingApproval, liveWorkerSummary, prefetchedWorkerSummary, rowWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
+import { liveWorkerSummary, prefetchedWorkerSummary, rowWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
 import { useWorkerTitlePrefetchStore } from '../stores/useWorkerTitlePrefetchStore'
 import { selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
 import { workerIcon } from '../lib/worker-icon'
 import type { ExecutionSummary } from '../lib/nex/types'
 import { useSessionAgentIndicator } from './useSessionAgentIndicator'
+import { useTabAgentAggregate } from './useTabAgentAggregate'
+import { tabAgentPanes } from '../lib/agent-lights/tab-aggregate'
 import type { TabIconComponent } from './useSessionAgentIndicator'
 
 const EMPTY_SESSIONS: Session[] = []
+const EMPTY_REFS: SubagentRef[] = []
 
 export type { TabIconComponent }
 
@@ -39,8 +43,10 @@ export interface TabDisplayData {
   tabIndicatorStyle: TabIndicatorStyle
   isHostOffline: boolean
   isTerminated: boolean
-  /** A live worker with a pending permission request — the tab light shows the hand (TabStatusIndicator). */
+  /** A live worker (any execution pane of the tab) with a pending permission request — the tab light shows the hand (TabStatusIndicator). */
   isAwaitingApproval: boolean
+  /** The highest background-work kind over the tab's panes (N6): the corner symbol of the agent icon. */
+  background: BackgroundKind | undefined
 }
 
 /**
@@ -48,6 +54,9 @@ export interface TabDisplayData {
  * TabBar). Centralises label + agent title resolution, agent-icon fallback,
  * host-offline detection, and agent store reads so both surfaces render
  * identically.
+ *
+ * The LIGHT fields (status, unread, dots, hand, background) aggregate over every agent pane of the tab (spec N5,
+ * U1-3 ruling 6); the icon, title and every other identity field stay the primary pane's.
  */
 export function useTabDisplay(tab: Tab): TabDisplayData {
   const t = useI18nStore((s) => s.t)
@@ -66,8 +75,14 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const sessions = useSessionStore((s) => (hostId ? s.sessions[hostId] : undefined) ?? EMPTY_SESSIONS)
   const workspaces = useWorkspaceStore((s) => s.workspaces)
 
-  const { agentIcon, agentStatus, subagentRefs, isUnread, tabIndicatorStyle } =
-    useSessionAgentIndicator(hostId, sessionCode, { isTerminated })
+  // identity (icon) from the primary pane; the light from all panes
+  const { agentIcon, tabIndicatorStyle } = useSessionAgentIndicator(hostId, sessionCode, { isTerminated })
+  const panes = useMemo(() => tabAgentPanes(tab.layout), [tab.layout])
+  const agg = useTabAgentAggregate(panes)
+  const agentStatus = agg.status
+  const isUnread = agg.isUnread
+  // the dots come from the representative pane
+  const subagentRefs = useAgentStore((s) => (agg.repKey ? (s.subagents[agg.repKey] ?? EMPTY_REFS) : EMPTY_REFS))
   const subagentCount = subagentRefs.length
   const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
   const dynamicTabName = useUISettingsStore((s) => s.dynamicTabName)
@@ -87,10 +102,8 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   // order to status (`statusSummary` below).
   const execRow = useExecutionListStore((s): ExecutionSummary | null =>
     exec && hostId ? rowWorkerSummary(s.byHost, hostId, exec.executionId) : null)
-  const listTruncated = useExecutionListStore((s) => (exec && hostId ? hostListTruncated(s.byHost, hostId) : false))
   const execLive = useExecutionStore((s): ExecutionSummary | null =>
     exec && hostId && !execRow ? liveWorkerSummary(s.executions, hostId, exec.executionId) : null)
-  const statusSummary = execRow ?? (listTruncated ? execLive : null)
   const execPrefetched = useWorkerTitlePrefetchStore((s): ExecutionSummary | null =>
     exec && hostId && !execRow && !execLive ? prefetchedWorkerSummary(s.byKey, hostId, exec.executionId) : null)
   const titleSummary = execRow ?? execLive ?? execPrefetched
@@ -118,7 +131,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const displayTitle = exec ? workerTitle : paneTitle ? `${paneTitle} - ${baseLabel}` : baseLabel
   // Permission channel PC2 (spec §5.4, user decision 2026-10-08): 「等待核准」 on a tab is the hand on its light
   // (TabStatusIndicator), never label text. Lifecycle-aware: an ended worker or an old daemon never sets it.
-  const awaitingApproval = !!exec && isAwaitingApproval(statusSummary)
+  // Over every execution pane of the tab (useTabAgentAggregate), not only the primary one.
 
   return {
     displayTitle,
@@ -130,6 +143,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
     tabIndicatorStyle,
     isHostOffline,
     isTerminated,
-    isAwaitingApproval: awaitingApproval,
+    isAwaitingApproval: agg.isAwaitingApproval,
+    background: agg.background,
   }
 }
