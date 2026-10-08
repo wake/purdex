@@ -514,6 +514,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
+		dropForeignModel(&normalized, req, projection)
 		emitDecision, emitReason := m.emitHookRecorded(req, projection, normalized)
 		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 		if isDevMode() {
@@ -639,6 +640,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
 		m.mu.Unlock()
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
+		dropForeignModel(&normalized, req, projection)
 		emitDecision, emitReason := m.emitHookRecorded(req, projection, normalized)
 		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 		if isDevMode() {
@@ -705,6 +707,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 
 	// Build and broadcast normalized event
 	normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
+	dropForeignModel(&normalized, req, projection)
 	// Rebuild-record envelope (spec §4.3.1). applyFrameEvent grants it only
 	// when the mutation outcome confirmed the sender kept its own top-level
 	// frame; nil means no envelope. The outer normalized.AgentType keeps its
@@ -796,6 +799,21 @@ func (m *Module) buildNormalized(tmuxSession, eventName, agentType string, broad
 		Source:       SourceHook, // legacy agent_events rows predate the mod
 	}
 	return normalized
+}
+
+// dropForeignModel clears the model of a session-level hook frame whose
+// sender is not the pane representing the session: the frame carries the
+// representative's status, so another pane's model must not ride on it
+// (U1-2b-1). An empty model means "no update" on the wire. The pane id is
+// the sender's identity here because frameMeta.FrameID can be a subagent
+// owner's frame or empty; a request without a pane (non-tmux) is left alone.
+func dropForeignModel(n *agentpkg.NormalizedEvent, req EventRequest, representative *SessionProjection) {
+	if n.Model == "" || representative == nil || req.TmuxPaneID == "" {
+		return
+	}
+	if representative.PaneID != req.TmuxPaneID {
+		n.Model = ""
+	}
 }
 
 // emitHookToSession routes a hook-derived normalized event to its WS code.
