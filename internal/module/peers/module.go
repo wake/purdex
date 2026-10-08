@@ -138,6 +138,7 @@ func redactRecord(rec *ipeers.PeerRecord, secret string) {
 	rec.Address = redactSecret(rec.Address, secret)
 	rec.RowKind = redactSecret(rec.RowKind, secret)
 	rec.Ref = redactSecret(rec.Ref, secret)
+	rec.Name = redactSecret(rec.Name, secret)
 	rec.Title = redactSecret(rec.Title, secret)
 	rec.TitleSource = redactSecret(rec.TitleSource, secret)
 	rec.SessionCode = redactSecret(rec.SessionCode, secret)
@@ -206,10 +207,12 @@ type Module struct {
 	// titles is the peer_labels store (Task 3/7): Snapshot joins into every
 	// inventory build (localEnvelope, unguarded — a plain read with no
 	// ordering requirement of its own); the self routes (titles.go —
-	// whoami, claim, release) read and write it under titleMu, held across
-	// the whole verb (origin/registry read through the store call and the
-	// response construction), even whoami's own Snapshot-only read, so a
-	// concurrent claim/release can never interleave with it.
+	// whoami, claim, release) read and write it under titleMu, held from the
+	// origin/registry read through the title store call, even whoami's own
+	// Snapshot-only read, so a concurrent claim/release can never interleave
+	// with it. The record is built after the lock is released, from what was
+	// read under it: its virtual name comes from another store (renderSelf),
+	// and waiting on that store must never hold titleMu.
 	titles  TitleStore
 	titleMu sync.Mutex
 
@@ -753,8 +756,8 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 
 	// The title snapshot (Task 3's peer_labels table) is joined the same
 	// way: a nil store or a read failure never blocks the inventory build
-	// (every row still gets its address, which is derived from the
-	// registry and owes the store nothing), but a failed read is reported
+	// (every row still gets its address, which comes from the virtual-name
+	// store and the ref and owes this store nothing), but a failed read is reported
 	// the same way a failed owner lookup is — this response is showing a
 	// blank title column it cannot vouch for — and signalled on its own as
 	// titles_unavailable, so a consumer (pdx peers, the SPA) names the
@@ -800,6 +803,12 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	}
 
 	previousRefs, lineageUnavailable := m.previousRefs()
+	// Virtual names (Peer Address v5): every live conversation is named once,
+	// at first sighting, and the row pinned to its live entry is addressed by
+	// that name. Under invCtx, the inventory's one budget: a name store that
+	// hangs, or a pass whose budget is already spent, costs this pass its
+	// names (every row takes the ref form), never the GET or the send.
+	virtualNames := m.resolveNames(invCtx, entryNameCandidates(entries, proxyPIDs, previousRefs))
 	peerRecords := ipeers.Build(ipeers.BuildInput{
 		HostID:       hostID,
 		Alias:        alias,
@@ -811,6 +820,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		Titles:       titles,
 		Contexts:     contexts,
 		PreviousRefs: previousRefs,
+		VirtualNames: virtualNames,
 		// An empty title map means "unreadable", not "no user titles".
 		// Build does not branch on this: it is passed through so the flag
 		// travels with the rows it explains, telling a consumer why their

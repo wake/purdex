@@ -53,6 +53,12 @@ type PeerRecord struct {
 	// has no cc agent. It is the one part of an address that cannot drift, and
 	// what Resolve falls back to when a name does.
 	Ref string `json:"ref"`
+	// Name is the conversation's pdx-assigned virtual name (Peer Address v5,
+	// peer mailbox spec §3): "<base>-<ref[1:3]>", fixed for the
+	// conversation's life. "" when the row has none — no live entry stands
+	// behind it, or none could be assigned — and Address then takes the ref
+	// form. The registry name stays in Agent.PeerName, for display only.
+	Name string `json:"name,omitempty"`
 	// PreviousRefs are the refs this conversation took over from through
 	// relays (lead-team-relay spec §8.4): newest first, the whole chain,
 	// uncapped. Resolve delivers a bare old ref to the row that lists it
@@ -120,8 +126,8 @@ type BuildInput struct {
 	Titles        map[string]TitleInfo // by sessionId; absent ⇒ no title, rev 0
 	// TitlesUnavailable says the title snapshot in Titles could NOT be
 	// read. Under v3 that costs display only: Titles feeds Title and
-	// TitleRev, and nothing else. Every address is built from the registry
-	// name and RefID(sessionID) — never from this store — so an
+	// TitleRev, and nothing else. Every address is built from VirtualNames
+	// and RefID(sessionID) — never from this store — so an
 	// unreadable title store cannot make a single address wrong, late or
 	// ambiguous. The rows simply render without their display names.
 	//
@@ -142,6 +148,10 @@ type BuildInput struct {
 	// copies each onto the row carrying that session id. nil means no
 	// lineage is known (no team module, or it could not be read).
 	PreviousRefs map[string][]string
+	// VirtualNames is the pdx-assigned virtual name per CC session id (peer
+	// mailbox spec §3.2). Build puts it on the row pinned to that session's
+	// live entry; a session absent here gets the ref-form address.
+	VirtualNames map[string]string
 }
 
 // Build joins sessions, owners and registry entries into PeerRecords. It is
@@ -266,9 +276,9 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 	// deliverable row all carry the same ref for the same conversation by
 	// construction rather than by agreeing on a shared lookup.
 	//
-	// What DOES differ between them is the registry name. Only a branch that
-	// pinned the row to exactly one live entry has one to pass; the fallbacks
-	// pass "", which is why their addresses take the ref form (§5.2).
+	// What DOES differ between them is the virtual name. Only a branch that
+	// pinned the row to exactly one live entry passes one; the fallbacks pass
+	// "", which is why their addresses take the ref form (§5.2).
 
 	var candidates []Entry
 	for _, e := range entriesBySessionID[owner.SessionID] {
@@ -295,7 +305,7 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 		rec.Agent = agentInfoFromEntry(candidates[0])
 		preferCwd(&rec, candidates[0].Cwd, owner.Cwd)
 		rec.Deliverable = true
-		applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), candidates[0].Name)
+		applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), in.VirtualNames[owner.SessionID])
 		return rec, candidates[0], true
 	default:
 		var paneMatches []Entry
@@ -315,7 +325,7 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 			rec.Agent = agentInfoFromEntry(paneMatches[0])
 			preferCwd(&rec, paneMatches[0].Cwd, owner.Cwd)
 			rec.Deliverable = true
-			applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), paneMatches[0].Name)
+			applyIdentity(&rec, in.Alias, in.Titles[owner.SessionID], RefID(owner.SessionID), in.VirtualNames[owner.SessionID])
 			return rec, paneMatches[0], true
 		}
 		rec.Agent = ownerFallbackAgent(owner)
@@ -326,14 +336,15 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 	}
 }
 
-// applyIdentity fills Ref/Title/TitleSource/TitleRev/Address for a row whose
-// agent is a cc conversation. It is the single writer of those fields, which
-// is what makes the spec's invariant table checkable in one place.
+// applyIdentity fills Ref/Name/Title/TitleSource/TitleRev/Address for a row
+// whose agent is a cc conversation. It is the single writer of those fields,
+// which is what makes the spec's invariant table checkable in one place.
 //
-// The address has two forms and RoutableName picks between them (v4 §5.2): a
-// routable registry name gives "<host>/<name>", anything else gives
-// "<host>/<ref>". A row is never left holding an address that cannot be typed
-// back in.
+// The address has two forms (Peer Address v5): the conversation's virtual
+// name gives "<host>/<name>", no virtual name gives "<host>/<ref>". The
+// registry name is not an input any more — it changes every time Claude Code
+// starts. A virtual name that fails RoutableName is treated as none, so a row
+// is never left holding an address that cannot be typed back in.
 //
 // It does NOT touch Reason, and must not. Reason says why a row cannot be
 // DELIVERED to — "" | no_agent | not_cc | inbox_dead | proxy | ambiguous —
@@ -344,13 +355,13 @@ func buildSessionRecord(in BuildInput, s SessionSummary, entriesBySessionID map[
 // deliverableField renders "yes" for any deliverable row, the value could
 // never have reached a screen anyway.
 //
-// ccName is the registry name. The owner-fallback callers pass "" — no live
+// vname is the virtual name. The owner-fallback callers pass "" — no live
 // entry stands behind those rows, so they have no name to offer, and the ref
 // form matches their being unreachable anyway.
 //
 // info.Rev is carried straight through: it is still the TITLE's revision. It
 // does not imply an address change.
-func applyIdentity(rec *PeerRecord, alias string, info TitleInfo, ref, ccName string) {
+func applyIdentity(rec *PeerRecord, alias string, info TitleInfo, ref, vname string) {
 	rec.Ref = ref
 	if info.Title != "" {
 		rec.Title, rec.TitleSource = info.Title, TitleSourceUser
@@ -358,10 +369,12 @@ func applyIdentity(rec *PeerRecord, alias string, info TitleInfo, ref, ccName st
 		rec.Title, rec.TitleSource = "", ""
 	}
 	rec.TitleRev = info.Rev
-	if RoutableName(ccName) {
-		rec.Address = alias + "/" + ccName
+	if RoutableName(vname) {
+		rec.Name = vname
+		rec.Address = alias + "/" + vname
 		return
 	}
+	rec.Name = ""
 	rec.Address = alias + "/" + ref
 }
 
@@ -397,14 +410,13 @@ func agentInfoFromEntry(e Entry) *AgentInfo {
 // the address it renders must be identical to the listing's: a proxy entry
 // keeps the unresolvable "alias/cc:<name>" form (unchanged from rule 5); a
 // live cc entry gets the same address applyIdentity gives a session row,
-// derived from the entry's own registry name and sessionId.
+// derived from the session's virtual name (vname, "" for none) and sessionId.
 //
-// It takes no population argument: the ref is RefID(e.SessionID) and the name
-// is the entry's own, so a self route answering from one validated entry and
-// the listing building from the whole registry cannot disagree about the
-// caller's own address (v4 spec §5.3). That agreement used to require passing
-// the same resolved default-label map to both.
-func EntryRecord(alias, hostID string, e Entry, proxy bool, info TitleInfo) PeerRecord {
+// It takes no population argument: the ref is RefID(e.SessionID) and the
+// virtual name comes from the one store every caller shares, so a self route
+// answering from one validated entry and the listing building from the whole
+// registry cannot disagree about the caller's own address (v4 spec §5.3).
+func EntryRecord(alias, hostID string, e Entry, proxy bool, info TitleInfo, vname string) PeerRecord {
 	agent := agentInfoFromEntry(e)
 	rec := PeerRecord{
 		Host: alias, HostID: hostID, RowKind: "entry",
@@ -419,7 +431,7 @@ func EntryRecord(alias, hostID string, e Entry, proxy bool, info TitleInfo) Peer
 		rec.Reason = "proxy"
 		return rec
 	}
-	applyIdentity(&rec, alias, info, RefID(e.SessionID), e.Name)
+	applyIdentity(&rec, alias, info, RefID(e.SessionID), vname)
 	return rec
 }
 
@@ -445,7 +457,7 @@ func buildEntryRecords(in BuildInput, consumed map[Entry]bool) []PeerRecord {
 		if consumed[e] {
 			continue
 		}
-		rec := EntryRecord(in.Alias, in.HostID, e, e.IsProxy || in.ProxyPIDs[e.PID], in.Titles[e.SessionID])
+		rec := EntryRecord(in.Alias, in.HostID, e, e.IsProxy || in.ProxyPIDs[e.PID], in.Titles[e.SessionID], in.VirtualNames[e.SessionID])
 		candidates = append(candidates, entryCandidate{rec: rec, peerName: e.Name, pid: e.PID})
 	}
 

@@ -20,11 +20,17 @@ func resolverFixture(t *testing.T, live ipeers.Liveness) (*OriginResolver, strin
 	dir := t.TempDir()
 	writeRegistryFixture(t, dir, "10.json", `{"pid":10,"sessionId":"sid-1","cwd":"/w","procStart":"`+targetProcStart+`","version":"2.1.270","tmux":"mt0:@1.%1","messagingSocketPath":"`+dir+`/10.sock","name":"n10","status":"idle"}`)
 	writeRegistryFixture(t, dir, "20.json", `{"pid":20,"sessionId":"sid-2","cwd":"/w2","procStart":"`+targetProcStart+`","version":"2.1.270","messagingSocketPath":"`+dir+`/20.sock","name":"","status":"idle"}`)
+	meta, err := store.OpenMeta(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { meta.Close() })
 	m := &Module{
 		core:        newTestCore(t, "mlab:abc123", "mlab"), // alias "mlab" for Address
 		registryDir: dir,
 		liveness:    live,
 		titles:      fakeTitles{"sid-1": "lead-team"},
+		peerNames:   meta.PeerNames(), // Address carries the virtual name
 		logf:        func(string, ...any) {},
 	}
 	return &OriginResolver{m: m}, dir
@@ -58,15 +64,18 @@ func TestOriginResolver_ResolveOrigin(t *testing.T) {
 		o.ProcStart != targetProcStart || o.Cwd != "/w" || o.Tmux != "mt0:@1.%1" {
 		t.Fatalf("origin = %+v", o)
 	}
-	if o.Title != "lead-team" || o.Address != "mlab/n10" {
-		t.Fatalf("title/address = %q/%q, want lead-team / mlab/n10", o.Title, o.Address)
+	// The address a lead or team notice carries is the virtual one `pdx
+	// peers` shows; Name stays the registry name.
+	n10 := "mlab/" + vname(t, "n10", "sid-1")
+	if o.Title != "lead-team" || o.Address != n10 {
+		t.Fatalf("title/address = %q/%q, want lead-team / %s", o.Title, o.Address, n10)
 	}
 	if o2, ok, err := r.ResolveOrigin(dir + "/20.sock"); !ok || err != nil || o2.Tmux != "" || o2.Name != "" || o2.Cwd != "/w2" ||
 		o2.Title != "" || o2.Address != "mlab/"+ipeers.RefID("sid-2") {
 		t.Fatalf("pid 20 = %+v ok=%v err=%v (no title; address falls back to the ref)", o2, ok, err)
 	}
 	r.m.titles = nil
-	if o3, ok, err := r.ResolveOrigin(dir + "/10.sock"); !ok || err != nil || o3.Title != "" || o3.Address != "mlab/n10" {
+	if o3, ok, err := r.ResolveOrigin(dir + "/10.sock"); !ok || err != nil || o3.Title != "" || o3.Address != n10 {
 		t.Fatalf("nil title store must give an empty title, not a panic: %+v ok=%v err=%v", o3, ok, err)
 	}
 	r.m.titles = failingTitles{}

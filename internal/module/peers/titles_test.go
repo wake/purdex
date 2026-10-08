@@ -213,7 +213,7 @@ func TestSelf_Whoami(t *testing.T) {
 	f := newTitleFixture(t)
 	status, body := f.self(ipeers.SelfRequest{OriginInbox: f.inbox(20)})
 	rec := decodeRecord(t, status, body)
-	want := "a/n20"
+	want := "a/" + vname(t, "n20", "sid-2")
 	if rec.Address != want || rec.Title != "" || rec.TitleSource != "" || rec.RowKind != "entry" || rec.Agent.PID != 20 {
 		t.Errorf("record = %+v, want address %s", rec, want)
 	}
@@ -223,7 +223,7 @@ func TestSelf_Whoami(t *testing.T) {
 	// A session inside tmux renders the same address the listing shows.
 	status, body = f.self(ipeers.SelfRequest{OriginInbox: f.inbox(10)})
 	rec = decodeRecord(t, status, body)
-	if rec.Address != "a/n10" || rec.Ref != ipeers.RefID("sid-1") {
+	if rec.Address != "a/"+vname(t, "n10", "sid-1") || rec.Ref != ipeers.RefID("sid-1") {
 		t.Errorf("tmux session address/ref = %q/%q", rec.Address, rec.Ref)
 	}
 	status, body = f.self(ipeers.SelfRequest{OriginInbox: "/nope.sock"})
@@ -250,7 +250,7 @@ func TestClaim_Matrix(t *testing.T) {
 	for i, good := range []string{"Bad Label", "cc", "tmux", "_abc123", "測試 01"} {
 		status, body := f.claim(f.inbox(20), good)
 		rec := decodeRecord(t, status, body)
-		if rec.Title != good || rec.TitleSource != "user" || rec.TitleRev != int64(i+1) || rec.Address != "a/n20" {
+		if rec.Title != good || rec.TitleSource != "user" || rec.TitleRev != int64(i+1) || rec.Address != "a/"+vname(t, "n20", "sid-2") {
 			t.Errorf("%q: %+v", good, rec)
 		}
 	}
@@ -296,7 +296,7 @@ func TestClaim_DuplicateLabelWarnsAndSucceeds(t *testing.T) {
 	if resp.Peer.Title != "purdex-tester" || resp.Peer.TitleSource != "user" {
 		t.Errorf("claim record = %+v, want the label actually set", resp.Peer)
 	}
-	if want := "a/n10"; resp.Peer.Address != want {
+	if want := "a/" + vname(t, "n10", "sid-1"); resp.Peer.Address != want {
 		t.Errorf("claimant address = %q, want its own unchanged %q", resp.Peer.Address, want)
 	}
 
@@ -476,7 +476,7 @@ func TestRelease(t *testing.T) {
 	if rec.TitleSource != "" || rec.TitleRev != 2 || rec.Title != "" {
 		t.Errorf("released = %+v, want no label at rev 2", rec)
 	}
-	if want := "a/n20"; rec.Address != want {
+	if want := "a/" + vname(t, "n20", "sid-2"); rec.Address != want {
 		t.Errorf("released address = %q, want the unchanged %q — releasing a label does not move a conversation", rec.Address, want)
 	}
 	// Release with no row: 200, default, rev 0, nothing written.

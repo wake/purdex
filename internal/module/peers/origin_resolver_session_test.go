@@ -19,7 +19,7 @@ func TestOriginResolver_ResolveOriginBySession(t *testing.T) {
 	if o != byInbox {
 		t.Fatalf("by session = %+v, by inbox = %+v; they must agree", o, byInbox)
 	}
-	if o.Address != "mlab/n10" || o.Title != "lead-team" || o.Ref != ipeers.RefID("sid-1") {
+	if o.Address != "mlab/"+vname(t, "n10", "sid-1") || o.Title != "lead-team" || o.Ref != ipeers.RefID("sid-1") {
 		t.Fatalf("origin = %+v", o)
 	}
 	for _, sid := range []string{"", "sid-99"} {

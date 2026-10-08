@@ -391,6 +391,9 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		// Registry names of live sessions, kept for the conversation list's
 		// title fallback after the session ends.
 		peersMod.WithNameSink(meta.ConversationNames())
+		// Each conversation's pdx-assigned virtual name (Peer Address v5),
+		// falling back on the recorded registry names for a base.
+		peersMod.WithPeerNames(meta.PeerNames(), meta.ConversationNames())
 	}
 	c.AddModule(peersMod)
 	c.AddModule(fsmod.New())

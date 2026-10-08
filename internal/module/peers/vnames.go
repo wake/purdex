@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"time"
 
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/store"
@@ -32,6 +33,12 @@ func (m *Module) WithPeerNames(s PeerNameStore, convNames ConversationNameReader
 	m.peerNames, m.convNames = s, convNames
 	return m
 }
+
+// namerTimeout bounds naming outside an inventory pass (the self verbs, the
+// origin resolver), which has no budget of its own: a name store that does
+// not answer in time costs that answer its virtual name (the ref form),
+// never the caller.
+const namerTimeout = time.Second
 
 // nameCandidate is one conversation an inventory pass may name: its session
 // id and ref, the registry name its live entry carries now, its relay
@@ -108,7 +115,11 @@ func (m *Module) resolveNames(ctx context.Context, cands []nameCandidate) map[st
 	var convErr error
 	convRead := false
 
-	nowMs := m.now().UnixMilli()
+	now := time.Now
+	if m.now != nil { // a Module literal (tests) may leave the clock unset
+		now = m.now
+	}
+	nowMs := now().UnixMilli()
 	for _, k := range keys {
 		c := byKey[k]
 		if len(c.previousRefs) > 0 && lineageErr != nil {
@@ -161,6 +172,35 @@ func (m *Module) resolveNames(ctx context.Context, cands []nameCandidate) map[st
 		}
 	}
 	return out
+}
+
+// entryNameCandidates is one candidate per live, non-proxy registry entry,
+// with that session's relay lineage.
+func entryNameCandidates(entries []ipeers.Entry, proxyPIDs map[int]bool, lineage map[string][]string) []nameCandidate {
+	out := make([]nameCandidate, 0, len(entries))
+	for _, e := range entries {
+		if e.SessionID == "" || e.IsProxy || proxyPIDs[e.PID] {
+			continue
+		}
+		out = append(out, nameCandidate{
+			sid: e.SessionID, ref: ipeers.RefID(e.SessionID),
+			registryName: e.Name, previousRefs: lineage[e.SessionID],
+		})
+	}
+	return out
+}
+
+// virtualNamesOf names the conversations of live entries outside an
+// inventory pass — whoami, claim, release and the origin resolver — with the
+// same namer, store and lineage GET /api/peers uses, so each answers the
+// address the listing shows. Seeing a conversation here first assigns its
+// name exactly as an inventory pass would.
+func (m *Module) virtualNamesOf(ctx context.Context, entries ...ipeers.Entry) map[string]string {
+	if m.peerNames == nil {
+		return map[string]string{}
+	}
+	lineage, _ := m.previousRefs()
+	return m.resolveNames(ctx, entryNameCandidates(entries, nil, lineage))
 }
 
 // baseName picks a fallback name for a conversation without a row or a

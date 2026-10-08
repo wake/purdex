@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/store"
@@ -349,4 +350,198 @@ func TestNamer_DuplicateCandidatesShareOneName(t *testing.T) {
 	if want := vname(t, "alpha", vnNew); len(got) != 1 || got[vnNew] != want {
 		t.Fatalf("names = %v, want {%s: %s}", got, vnNew, want)
 	}
+}
+
+// whoami, the origin resolver (lead and team notices are built from its
+// Address: team spawn_handler.go, team_handler.go) and GET /api/peers give a
+// conversation one address — the same namer over the same store — whichever
+// of them sees the conversation first.
+func TestVirtualAddress_WhoamiOriginAndEnvelopeAgree(t *testing.T) {
+	f := newTitleFixture(t)
+	want := map[int]string{
+		10: "a/" + vname(t, "n10", "sid-1"),
+		20: "a/" + vname(t, "n20", "sid-2"),
+	}
+	// pid 20 is first seen by whoami, pid 10 by the inventory.
+	if res := f.m.whoami(context.Background(), f.inbox(20)); res.err != nil || res.rec.Address != want[20] || res.rec.Name != want[20][2:] {
+		t.Fatalf("whoami(20) = %+v / %+v, want %s", res.rec, res.err, want[20])
+	}
+	snap := f.m.configSnapshot()
+	env := f.m.localEnvelope(context.Background(), snap.hostID, snap.alias)
+	r := &OriginResolver{m: f.m}
+	for pid, sid := range map[int]string{10: "sid-1", 20: "sid-2"} {
+		var row *ipeers.PeerRecord
+		for i := range env.Peers {
+			if a := env.Peers[i].Agent; a != nil && a.SessionID == sid && a.PID == pid {
+				row = &env.Peers[i]
+			}
+		}
+		if row == nil || row.Address != want[pid] || row.Agent.PeerName != fmt.Sprintf("n%d", pid) {
+			t.Fatalf("envelope row for %s = %+v, want address %s", sid, row, want[pid])
+		}
+		if res := f.m.whoami(context.Background(), f.inbox(pid)); res.rec.Address != want[pid] {
+			t.Errorf("whoami(%d) = %q, want %q", pid, res.rec.Address, want[pid])
+		}
+		if o, ok, err := r.ResolveOrigin(f.inbox(pid)); !ok || err != nil || o.Address != want[pid] || o.Name != row.Agent.PeerName {
+			t.Errorf("ResolveOrigin(%d) = %+v ok=%v err=%v, want address %s", pid, o, ok, err, want[pid])
+		}
+		if o, ok, err := r.ResolveOriginBySession(sid); !ok || err != nil || o.Address != want[pid] {
+			t.Errorf("ResolveOriginBySession(%s) = %+v ok=%v err=%v, want address %s", sid, o, ok, err, want[pid])
+		}
+	}
+}
+
+// A store that cannot be read costs the names, never correctness: every
+// row, whoami and the origin resolver fall back to the ref form together.
+func TestVirtualAddress_StoreErrorFallsBackToRef(t *testing.T) {
+	f := newTitleFixture(t)
+	f.m.WithPeerNames(failingNames{PeerNameStore: f.m.peerNames, lookup: errors.New("boom")}, nil)
+	want := "a/" + ipeers.RefID("sid-1")
+	snap := f.m.configSnapshot()
+	for _, row := range f.m.localEnvelope(context.Background(), snap.hostID, snap.alias).Peers {
+		if row.Agent != nil && row.Agent.SessionID == "sid-1" && (row.Address != want || row.Name != "") {
+			t.Errorf("row name/address = %q/%q, want \"\"/%s", row.Name, row.Address, want)
+		}
+	}
+	if res := f.m.whoami(context.Background(), f.inbox(10)); res.rec.Address != want {
+		t.Errorf("whoami = %q, want %q", res.rec.Address, want)
+	}
+	if o, _, _ := (&OriginResolver{m: f.m}).ResolveOrigin(f.inbox(10)); o.Address != want {
+		t.Errorf("origin address = %q, want %q", o.Address, want)
+	}
+}
+
+// blockingNames is a PeerNameStore whose Lookup waits for its ctx to end — a
+// name store that hangs — and signals entered once it is waiting.
+type blockingNames struct {
+	PeerNameStore
+	entered chan struct{}
+}
+
+func (b blockingNames) Lookup(ctx context.Context, _ []string) (map[string]store.PeerNameEntry, error) {
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func newBlockingNames(m *Module) blockingNames {
+	return blockingNames{PeerNameStore: m.peerNames, entered: make(chan struct{}, 1)}
+}
+
+// within runs f and fails the test if it has not returned after d, so a hung
+// name store fails this test rather than the whole package's timeout.
+func within(t *testing.T, d time.Duration, what string, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f()
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("%s did not return within %v", what, d)
+	}
+}
+
+// The inventory's one budget covers the namer too: a hung name store costs
+// that pass its names (every row takes the ref form), never the request.
+func TestVirtualAddress_EnvelopeNamerStaysInBudget(t *testing.T) {
+	f := newTitleFixture(t)
+	f.m.budget = 300 * time.Millisecond
+	f.m.WithPeerNames(newBlockingNames(f.m), nil)
+	snap := f.m.configSnapshot()
+	var env ipeers.Envelope
+	within(t, 5*time.Second, "localEnvelope", func() {
+		env = f.m.localEnvelope(context.Background(), snap.hostID, snap.alias)
+	})
+	seen := false
+	for _, row := range env.Peers {
+		if row.Agent != nil && row.Agent.SessionID == "sid-1" && row.Agent.PID == 10 {
+			seen = true
+			if want := "a/" + ipeers.RefID("sid-1"); row.Address != want || row.Name != "" {
+				t.Errorf("row name/address = %q/%q, want the ref form %s", row.Name, row.Address, want)
+			}
+		}
+	}
+	if !seen {
+		t.Fatalf("no row for sid-1 in %+v", env)
+	}
+}
+
+// The self verbs name the caller under the request's ctx, bounded by
+// namerTimeout, and never while holding titleMu: a hung name store answers a
+// cancelled request at once, answers any request within the bound (in the
+// ref form), and never blocks another self verb.
+func TestVirtualAddress_SelfVerbsNamerIsBoundedAndOutsideTitleMu(t *testing.T) {
+	f := newTitleFixture(t)
+	blocking := newBlockingNames(f.m)
+	f.m.WithPeerNames(blocking, nil)
+	ref20 := "a/" + ipeers.RefID("sid-2")
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	verbs := map[string]func(context.Context) selfResult{
+		"whoami":  func(ctx context.Context) selfResult { return f.m.whoami(ctx, f.inbox(20)) },
+		"claim":   func(ctx context.Context) selfResult { return f.m.claim(ctx, f.inbox(20), "purdex-tester") },
+		"release": func(ctx context.Context) selfResult { return f.m.release(ctx, f.inbox(20)) },
+	}
+	for name, verb := range verbs {
+		start := time.Now()
+		var res selfResult
+		within(t, 5*time.Second, name+" (cancelled request)", func() { res = verb(cancelled) })
+		if el := time.Since(start); el >= namerTimeout/2 {
+			t.Errorf("%s on a cancelled request took %v; the request's ctx must reach the namer", name, el)
+		}
+		if res.err != nil || res.rec.Address != ref20 {
+			t.Errorf("%s = %+v / %+v, want address %s", name, res.rec, res.err, ref20)
+		}
+	}
+
+	// A request that never ends: bounded by namerTimeout, waiting outside titleMu.
+	select {
+	case <-blocking.entered:
+	default:
+	}
+	done := make(chan selfResult, 1)
+	go func() { done <- f.m.whoami(context.Background(), f.inbox(20)) }()
+	select {
+	case <-blocking.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("whoami never reached the name store")
+	}
+	if !f.m.titleMu.TryLock() {
+		t.Fatal("titleMu is held while whoami waits on the name store")
+	}
+	f.m.titleMu.Unlock()
+	select {
+	case res := <-done:
+		if res.rec.Address != ref20 {
+			t.Errorf("whoami = %q, want the ref form %s", res.rec.Address, ref20)
+		}
+	case <-time.After(namerTimeout + 3*time.Second):
+		t.Fatalf("whoami not bounded by namerTimeout (%v)", namerTimeout)
+	}
+}
+
+// The origin resolver (team and lead notices) names under namerTimeout: a
+// hung name store gives the caller the ref-form address within the bound.
+func TestVirtualAddress_OriginResolverNamerIsBounded(t *testing.T) {
+	f := newTitleFixture(t)
+	f.m.WithPeerNames(newBlockingNames(f.m), nil)
+	r := &OriginResolver{m: f.m}
+	want := "a/" + ipeers.RefID("sid-1")
+	within(t, namerTimeout+3*time.Second, "ResolveOrigin", func() {
+		if o, ok, err := r.ResolveOrigin(f.inbox(10)); !ok || err != nil || o.Address != want {
+			t.Errorf("ResolveOrigin = %+v ok=%v err=%v, want address %s", o, ok, err, want)
+		}
+	})
+	within(t, namerTimeout+3*time.Second, "ResolveOriginBySession", func() {
+		if o, ok, err := r.ResolveOriginBySession("sid-1"); !ok || err != nil || o.Address != want {
+			t.Errorf("ResolveOriginBySession = %+v ok=%v err=%v, want address %s", o, ok, err, want)
+		}
+	})
 }

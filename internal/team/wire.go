@@ -62,7 +62,7 @@ type Origin struct {
 	Cwd       string `json:"cwd"`
 	Tmux      string `json:"tmux"`              // "<session>:@<win>.%<pane>" or ""
 	Title     string `json:"title,omitempty"`   // the session's title (pdx msg name), "" when none
-	Address   string `json:"address,omitempty"` // "<alias>/<name>" for a routable name, else "<alias>/_<ref>"
+	Address   string `json:"address,omitempty"` // "<alias>/<virtual name>" (Peer Address v5), else "<alias>/_<ref>"
 }
 
 // LeadPayload is Approval.Payload for KindLead.
