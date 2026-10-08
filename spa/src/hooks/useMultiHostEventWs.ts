@@ -22,6 +22,8 @@ import { handleWorkerExited } from '../lib/nex/worker-exited-event'
 import { dispatchNexHostEvent, NEX_OPT_IN } from '../lib/nex/nex-host-events'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { handleApprovalEvent } from '../lib/team/approval-ws'
+import { handleUnattendedEvent } from '../lib/team/unattended-ws'
+import { UNATTENDED_EVENT_TYPE } from '../lib/team/types'
 
 /**
  * The operation lock's observer (#1309 + #1310 spec §3.1): every tree rewriter —
@@ -226,6 +228,11 @@ export function useMultiHostEventWs() {
             // Lead / self-relay approval requests (lead-team spec §6.2): snapshot on
             // subscribe, opened, closed. `session` is empty; the value carries the host id.
             handleApprovalEvent(hostId, event.value)
+            return
+          }
+          if (event.type === UNATTENDED_EVENT_TYPE) {
+            // 無人值守模式's switch (unattended spec D-U23-6): snapshot on subscribe, changed after every change.
+            handleUnattendedEvent(hostId, event.value)
             return
           }
           // `handoff` / `relay` events: the daemon stopped emitting them in
