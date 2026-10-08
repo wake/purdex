@@ -55,12 +55,15 @@ func (m *Module) runEvents(ctx context.Context) {
 		case <-m.evSig:
 		default:
 		}
-		last = time.Now()
 		if ev, err := m.eventNow(); err != nil {
 			m.logf("[resources] resources.changed not sent: %v", err)
 		} else if m.core != nil && m.core.Events != nil {
 			m.core.Events.BroadcastEvent(ev)
 		}
+		// The window runs from when the send ended: the snapshot's reads can
+		// wait on the database, and a window counted from before them would let
+		// the next event follow at once.
+		last = time.Now()
 	}
 }
 

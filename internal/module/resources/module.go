@@ -114,6 +114,10 @@ type Module struct {
 	// evSig carries requestEvent's signal to the publisher goroutine
 	// (events.go); capacity 1, so any number of requests are one.
 	evSig chan struct{}
+	// measuredThisBoot: a lease measurement has completed since this process
+	// started. The empty_samples a row carries from before a restart say nothing
+	// about the command now, so the vanished rule waits for a fresh one.
+	measuredThisBoot atomic.Bool
 	// skipPass makes admissionPass a no-op (a test seam).
 	skipPass    bool
 	lastPrune   time.Time

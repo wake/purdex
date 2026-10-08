@@ -130,7 +130,7 @@ func (m *Module) sweepLeases(now time.Time, set resources.Settings, view procVie
 			reason = resources.EndHolderGone
 		case now.Sub(time.UnixMilli(r.GrantedAt)) >= maxHold:
 			reason = resources.EndExpired
-		case vanished(r, now, set):
+		case m.measuredThisBoot.Load() && vanished(r, now, set):
 			reason = resources.EndVanished
 		}
 		if reason == "" {
@@ -139,7 +139,13 @@ func (m *Module) sweepLeases(now time.Time, set resources.Settings, view procVie
 		if m.sweepHook != nil {
 			m.sweepHook(r)
 		}
-		won, err := m.store.End(r.ID, reason, nowMS)
+		var won bool
+		var err error
+		if reason == resources.EndVanished {
+			won, err = m.store.EndVanished(r.ID, emptySamplesToVanish, nowMS)
+		} else {
+			won, err = m.store.End(r.ID, reason, nowMS)
+		}
 		m.ended(r, reason, won, err)
 	}
 }

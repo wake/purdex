@@ -268,6 +268,17 @@ func (s *leaseStore) End(id, reason string, now int64) (bool, error) {
 		WHERE id = ? AND state != 'ended'`, now, reason, now, id)
 }
 
+// EndVanished ends a held session-new row as vanished only if its tracked tree
+// is still counted empty for minEmpty samples in the same statement: a sample
+// that found the command running since the sweeper read the row resets the
+// count, and that sample wins.
+func (s *leaseStore) EndVanished(id string, minEmpty int, now int64) (bool, error) {
+	return s.changed(`
+		UPDATE resource_leases
+		SET state = 'ended', ended_at = ?, end_reason = 'vanished', waited_ms = COALESCE(waited_ms, ? - created_at)
+		WHERE id = ? AND state = 'held' AND scope = 'session-new' AND empty_samples >= ?`, now, now, id, minEmpty)
+}
+
 // CloseIfExpired is the sweeper's close of a waiting row nobody polls any
 // more: End(abandoned) whose UPDATE also requires lease_until <= now, in the
 // same statement, so a poll that renewed the lease between the sweeper's read

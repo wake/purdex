@@ -174,6 +174,7 @@ func TestSweeper_VanishedSessionNew(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	f.m.measuredThisBoot.Store(true) // this boot has measured
 	mk("gone", resources.ScopeSessionNew, time.Minute, 2)
 	mk("one", resources.ScopeSessionNew, time.Minute, 1)
 	mk("warm", resources.ScopeSessionNew, 5*time.Second, 9) // still inside the 20 s warmup
@@ -186,5 +187,41 @@ func TestSweeper_VanishedSessionNew(t *testing.T) {
 		if f.state(id) != "held" {
 			t.Errorf("%s ended", id)
 		}
+	}
+}
+
+// The vanished end is conditional on the count still being there: a sample that
+// found the command running between the sweeper's read and its end wins.
+func TestSweeper_VanishedLosesToASampleThatFoundTheCommand(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	f.held("s", 99, "", f.nowMS()-time.Minute.Milliseconds())
+	f.m.store.db.Exec(`UPDATE resource_leases SET scope = ?, empty_samples = 2 WHERE id = 's'`, resources.ScopeSessionNew)
+	f.m.measuredThisBoot.Store(true)
+	f.m.sweepHook = func(leaseRow) { // between the read and the end
+		f.m.sweepHook = nil
+		f.m.store.UpdateUse("s", 5, 5, 5, 3, 0) // a sample finds a process: the count is back at 0
+	}
+	f.m.sweepOnce(context.Background())
+	if f.state("s") != "held" {
+		t.Fatal("a lease whose command was found running was ended as vanished")
+	}
+}
+
+// Empty samples carried over a restart prove nothing: the rule waits for a
+// measurement made by this process.
+func TestSweeper_VanishedWaitsForAFreshMeasurementAfterARestart(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	f.held("s", 99, "", f.nowMS()-time.Minute.Milliseconds())
+	f.m.store.db.Exec(`UPDATE resource_leases SET scope = ?, empty_samples = 5 WHERE id = 's'`, resources.ScopeSessionNew)
+	f.m.sweepOnce(context.Background()) // this boot has measured nothing yet
+	if f.state("s") != "held" {
+		t.Fatal("ended on a count from before the restart")
+	}
+	f.m.measureLeases(context.Background(), []resources.Proc{cpuProc(500, 1, 10)}, goodRaw()) // measured: the agent has no child -> empty again
+	f.m.sweepOnce(context.Background())
+	// After a measurement of this boot the stored count is this boot's own (it
+	// was 5, one more empty sample makes 6): the lease is vanished.
+	if r := f.row("s"); r.State != "ended" || r.EndReason != resources.EndVanished {
+		t.Errorf("after a fresh measurement: %+v", r)
 	}
 }
