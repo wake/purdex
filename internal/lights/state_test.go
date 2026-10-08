@@ -122,6 +122,18 @@ func TestStatus_ToolEndClearsOnlyItsAsk(t *testing.T) {
 	})
 }
 
+func TestStatus_ApprovedLeavesWaiting(t *testing.T) {
+	ask1 := e(modevents.TypeToolCheck, `{"tool":"Bash","tool_use_id":"u1","decision":"ask"}`)
+	ask2 := e(modevents.TypeToolCheck, `{"tool":"Edit","tool_use_id":"u2","decision":"ask"}`)
+	approved1 := e(typeToolApproved, `{"tool_use_id":"u1"}`)
+	runStatus(t, []statusCase{
+		{"the only ask approved runs", []modevents.Event{start, turnStart, ask1, approved1}, agentpkg.StatusRunning},
+		{"one of two asks approved still waits", []modevents.Event{start, turnStart, ask1, ask2, approved1}, agentpkg.StatusWaiting},
+		{"a new ask after an approval waits again", []modevents.Event{start, turnStart, ask1, approved1, ask2}, agentpkg.StatusWaiting},
+		{"approval of another tool still waits", []modevents.Event{start, turnStart, ask1, e(typeToolApproved, `{"tool_use_id":"u9"}`)}, agentpkg.StatusWaiting},
+	})
+}
+
 func TestStatus_ErrorUntilNextMainTurn(t *testing.T) {
 	ask := e(modevents.TypeToolCheck, `{"tool":"Bash","tool_use_id":"u1","decision":"ask"}`)
 	runStatus(t, []statusCase{
