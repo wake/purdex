@@ -79,6 +79,11 @@ func openLeaseStore(path string) (*leaseStore, error) {
 			return nil, fmt.Errorf("create resources db: %w", err)
 		}
 		_ = f.Close()
+		// The mode above only applies to a new file: one an earlier run left
+		// loose, and its sidecars, are tightened before SQLite opens them.
+		if err := restrictDBFiles(path); err != nil {
+			return nil, err
+		}
 		// busy_timeout: a concurrent writer waits instead of failing with SQLITE_BUSY.
 		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)"
 	}

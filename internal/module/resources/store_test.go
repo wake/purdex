@@ -1,6 +1,8 @@
 package resourcesmod
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -56,6 +58,35 @@ func TestStore_FilesArePrivate(t *testing.T) {
 		}
 		check(t, path)
 	})
+}
+
+// Re-review (P1): a loose file is tightened before SQLite touches it, not
+// only after a successful migration. A file that is not a database makes the
+// migration fail, and it still must not stay readable.
+func TestStore_LooseFileIsTightenedEvenWhenTheMigrationFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "resources.db")
+	if err := os.WriteFile(path, []byte("this is not a sqlite database, padded to be longer than a header......"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+"-wal", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := openLeaseStore(path); err == nil {
+		_ = s.Close()
+		t.Fatal("a garbage file must fail to open")
+	}
+	for _, p := range []string{path, path + "-wal"} {
+		fi, err := os.Stat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // SQLite may delete a stale sidecar; gone is private enough
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s mode = %o after a failed open, want 600", filepath.Base(p), got)
+		}
+	}
 }
 
 func baseRow(id, client string) leaseRow {
