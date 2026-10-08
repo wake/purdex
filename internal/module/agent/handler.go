@@ -461,7 +461,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
-		emitDecision, emitReason := m.emitHookToSession(req, normalized)
+		emitDecision, emitReason := m.emitHookRecorded(req, projection, normalized)
 		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 		if isDevMode() {
 			log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s detail_only=true",
@@ -535,7 +535,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			paneID = projection.PaneID
 			subagentCount = len(projection.Subagents)
 			if projection.TopFrame != nil {
-				topStatus = string(projection.TopFrame.Status)
+				topStatus = string(projection.EffectiveStatus())
 			}
 		}
 		log.Printf("[handler] projection_built session=%s top_status=%s subagents=%d pane_id=%s chain_id=%s",
@@ -572,7 +572,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
 		m.mu.Unlock()
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
-		emitDecision, emitReason := m.emitHookToSession(req, normalized)
+		emitDecision, emitReason := m.emitHookRecorded(req, projection, normalized)
 		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 		if isDevMode() {
 			log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s",
@@ -623,7 +623,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	watchStatus := result.Status
 	if projection != nil && projection.TopFrame != nil {
 		watchAgentType = projection.TopFrame.AgentType
-		watchStatus = projection.TopFrame.Status
+		watchStatus = projection.EffectiveStatus()
 	}
 	if req.TmuxSession != "" && m.prober != nil && result.Valid {
 		m.manageActivityWatch(req.TmuxSession, watchAgentType, watchStatus)
@@ -668,7 +668,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
 		m.mu.Unlock()
 	}
-	emitDecision, emitReason := m.emitHookToSession(req, normalized)
+	emitDecision, emitReason := m.emitHookRecorded(req, projection, normalized)
 	trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 	if isDevMode() {
 		log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s",
@@ -716,47 +716,30 @@ func (m *Module) buildNormalized(tmuxSession, eventName, agentType string, broad
 	return normalized
 }
 
-// broadcastToSession resolves the tmux session name to a session code and
-// broadcasts. Used by the probe orchestrator (no hook payload available, so
-// no tmux_session_id) — falls through to the name-based resolveSessionCode
-// path, which is still cache-backed. Hook callsites should use
-// emitHookToSession instead so the immutable ID path engages.
-func (m *Module) broadcastToSession(tmuxSession string, normalized agentpkg.NormalizedEvent) {
-	if m.core == nil {
-		return
-	}
-	code := m.resolveSessionCode(tmuxSession)
-	if code == "" {
-		return
-	}
-	m.emitNormalizedToCode(code, normalized)
-}
-
 // emitHookToSession routes a hook-derived normalized event to its WS code.
 // Prefers req.TmuxSessionID (immutable, pure-function resolution) over
 // req.TmuxSession (cache-backed, racy across kill+recreate). Returns the
 // (decision, reason) tuple the trace pipeline annotates onto the chain;
 // the reason value carries the resolution path label so operators can grep
 // daemon logs and confirm hook clients have migrated to the ID payload.
+// It records no baseline (it has no projection to describe the frame with):
+// the handler uses emitHookRecorded.
 func (m *Module) emitHookToSession(req EventRequest, normalized agentpkg.NormalizedEvent) (string, string) {
-	if m.core == nil {
-		return "skipped", "core_unavailable"
-	}
-	code, path := m.resolveSessionCodeFromHook(req)
-	if code == "" {
-		return "skipped", "session_code_missing"
-	}
-	m.emitNormalizedToCode(code, normalized)
-	return "broadcasted", string(path)
+	return m.emitHookRecorded(req, nil, normalized)
 }
 
-// emitNormalizedToCode is the shared bottom half of both broadcast paths:
+// emitNormalizedToCode is the shared bottom half of every broadcast path:
 // marshals the normalized event JSON and pushes it onto the events bus.
 // Callers MUST resolve the session code first; this helper makes no
-// assumptions about how it was obtained.
-func (m *Module) emitNormalizedToCode(code string, normalized agentpkg.NormalizedEvent) {
+// assumptions about how it was obtained. False when there is no bus to put
+// it on.
+func (m *Module) emitNormalizedToCode(code string, normalized agentpkg.NormalizedEvent) bool {
+	if m.core == nil || m.core.Events == nil {
+		return false
+	}
 	payload, _ := json.Marshal(normalized)
 	m.core.Events.Broadcast(code, "hook", string(payload))
+	return true
 }
 
 // hookSessionCodePath labels which resolution branch produced the session

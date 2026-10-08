@@ -52,6 +52,13 @@ type Module struct {
 	currentStatus  map[string]agentpkg.Status
 	subagents      map[string][]agentpkg.SubagentRef
 	activeWatchers map[string]string // tmuxSession → agentType
+	// lastEmittedLights is, per tmux session, the digest of the last light
+	// frame sent for it (hook, probe, sweep or mod worker). The mod worker
+	// emits only when its fresh digest differs. Protected by m.mu.
+	lastEmittedLights map[string]lightsDigest
+	// emitMu orders "broadcast a light frame and record its baseline" (see
+	// modemit.go). Total lock order: emitMu → mu → modMu.
+	emitMu sync.Mutex
 
 	// W6-3 P1-T4: ProbeIntent dispatcher state. activeProbeIntents and
 	// probeIntentGen are protected by m.mu (same mutex as activeWatchers).
@@ -140,6 +147,7 @@ func New(events *store.AgentEventStore) (*Module, error) {
 		currentStatus:      make(map[string]agentpkg.Status),
 		subagents:          make(map[string][]agentpkg.SubagentRef),
 		activeWatchers:     make(map[string]string),
+		lastEmittedLights:  make(map[string]lightsDigest),
 		activeProbeIntents: make(map[string]map[agentpkg.ProbeIntentKind]activeIntent),
 		statusSnapshots:    make(map[string]statusSnapshot),
 		contextUsage:       make(map[string]ContextUsage),
@@ -416,6 +424,10 @@ func (m *Module) renameSessionLocked(oldName, newName string) []context.CancelFu
 		m.currentStatus[newName] = status
 		delete(m.currentStatus, oldName)
 	}
+	if d, ok := m.lastEmittedLights[oldName]; ok {
+		m.lastEmittedLights[newName] = d
+		delete(m.lastEmittedLights, oldName)
+	}
 	if _, ok := m.activeWatchers[oldName]; ok {
 		// W3 撤回: rename is now stop-only. Phase 4a-1 wired a stopWatch +
 		// startWatch(newName) sequence to keep the screen-watcher alive across
@@ -595,30 +607,51 @@ func (m *Module) replayFromDB() {
 	}
 }
 
+// sendFrameSnapshot sends one replay frame per session that has a frame
+// projection and returns those sessions' names. Reading the projections,
+// sending, syncing the in-memory state and seeding the baseline are one
+// critical section under emitMu: the mod worker (and every hook emit) is
+// either wholly before it, in which case the snapshot reads what they sent,
+// or wholly after it, in which case their frame follows the snapshot's on
+// this connection. A snapshot sent outside the lock could land after a newer
+// frame and, with a baseline that already exists, leave this connection on
+// the stale state for good. The legacy agent_events part of the snapshot
+// stays outside.
+func (m *Module) sendFrameSnapshot(sub *core.EventSubscriber) map[string]struct{} {
+	projectedSessions := make(map[string]struct{})
+	m.emitMu.Lock()
+	defer m.emitMu.Unlock()
+	projections, err := m.liveSessionProjections()
+	if err != nil {
+		log.Printf("[agent] snapshot frames: %v", err)
+		return projectedSessions
+	}
+	for _, item := range projections {
+		projectedSessions[item.SessionName] = struct{}{}
+		if item.SessionCode == "" {
+			continue
+		}
+		normalized := buildProjectionNormalized(&item.Projection, item.Projection.TopFrame.AgentType, "replay", time.Now().UnixNano(), agentpkg.DeriveResult{})
+		payload, _ := json.Marshal(normalized)
+		event := core.HostEvent{Type: "hook", Session: item.SessionCode, Value: string(payload)}
+		data, _ := json.Marshal(event)
+		sent := sub.TrySend(data)
+		m.mu.Lock()
+		syncProjectionState(m.currentStatus, m.subagents, item.SessionName, &item.Projection)
+		if sent {
+			m.seedBaselineLocked(item.SessionName, &item.Projection, normalized)
+		}
+		m.mu.Unlock()
+	}
+	return projectedSessions
+}
+
 // sendSnapshot sends the latest hook event for each known session to a new WS subscriber.
 func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	if m.sessions == nil {
 		return
 	}
-	projectedSessions := make(map[string]struct{})
-	if projections, err := m.liveSessionProjections(); err == nil {
-		for _, item := range projections {
-			projectedSessions[item.SessionName] = struct{}{}
-			if item.SessionCode == "" {
-				continue
-			}
-			normalized := buildProjectionNormalized(&item.Projection, item.Projection.TopFrame.AgentType, "replay", time.Now().UnixNano(), agentpkg.DeriveResult{})
-			payload, _ := json.Marshal(normalized)
-			event := core.HostEvent{Type: "hook", Session: item.SessionCode, Value: string(payload)}
-			data, _ := json.Marshal(event)
-			sub.Send(data)
-			m.mu.Lock()
-			syncProjectionState(m.currentStatus, m.subagents, item.SessionName, &item.Projection)
-			m.mu.Unlock()
-		}
-	} else {
-		log.Printf("[agent] snapshot frames: %v", err)
-	}
+	projectedSessions := m.sendFrameSnapshot(sub)
 	all, err := m.events.ListAll()
 	if err != nil {
 		log.Printf("[agent] snapshot: %v", err)

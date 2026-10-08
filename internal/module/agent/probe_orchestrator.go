@@ -273,7 +273,7 @@ func (args probeGuardArgs) effectivePostGraceWindow() time.Duration {
 //  4. Final critical section: m.mu Lock → StaleCheck re-check + ErrorGuard +
 //     transition gate; mutate currentStatus on pass.
 //  5. Broadcast: setProjectionTopStatus + buildProjectionNormalized +
-//     broadcastToSession (with NormalizedEvent fallback when the projection
+//     broadcastRecorded (with NormalizedEvent fallback when the projection
 //     is unavailable).
 //
 // Returns applied=true iff step 4 mutated currentStatus and step 5 broadcast
@@ -343,6 +343,17 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 		return false, ""
 	}
 
+	// Mod gate (lights v2): while the session's representative pane takes
+	// its light from a live mod stream, the probe has nothing to recover —
+	// the stream is the better observer. Read before the final critical
+	// section (the projection read takes modMu, never m.mu).
+	if p, _ := m.projectionForSession(args.Session); p != nil && p.Source == SourceMod {
+		if args.OnDrop != nil {
+			args.OnDrop("mod-live")
+		}
+		return false, ""
+	}
+
 	// Test-only seam: simulate a concurrent stop/rename that mutates the
 	// active-set between the early fast-path and the final critical section.
 	// Production leaves interruptBeforeFinalLockFn nil (no-op).
@@ -383,8 +394,20 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 			args.Session, args.AgentType, newStatus, args.Reason)
 	}
 	if projection, err := m.setProjectionTopStatus(args.Session, newStatus); err == nil && projection != nil {
+		if projection.Source == SourceMod {
+			// The mod took over between the gate and the write (the write
+			// cannot be undone): the frame we would send is the mod's
+			// light, not the probe's, so leave it to the worker.
+			m.mu.Lock()
+			syncProjectionState(m.currentStatus, m.subagents, args.Session, projection)
+			m.mu.Unlock()
+			if args.OnDrop != nil {
+				args.OnDrop("mod-live-late")
+			}
+			return false, ""
+		}
 		normalized := buildProjectionNormalized(projection, args.AgentType, args.Reason, time.Now().UnixNano(), agentpkg.DeriveResult{})
-		m.broadcastToSession(args.Session, normalized)
+		m.broadcastRecorded(args.Session, projection, normalized)
 		return true, newStatus
 	}
 	// Fallback when the projection is unavailable (e.g. frames row removed
@@ -396,7 +419,7 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 		RawEventName: args.Reason,
 		BroadcastTs:  time.Now().UnixNano(),
 	}
-	m.broadcastToSession(args.Session, normalized)
+	m.broadcastRecorded(args.Session, nil, normalized)
 	return true, newStatus
 }
 
