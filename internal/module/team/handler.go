@@ -96,6 +96,23 @@ func requestHash(kind team.Kind, sessionID string, waitS int, payload []byte) st
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// leadHashPayload is the LeadPayload the idempotency hash is taken over: the
+// same fields in the same order, but an empty team name is left out. The
+// stored and served payload always carries team_name, so hashing it as-is
+// would change the bytes of every request, named or not; a request opened
+// before names and retried after a restart with the same id would then be
+// answered id_conflict (its stored hash is over the old bytes).
+type leadHashPayload struct {
+	Reason     string   `json:"reason"`
+	MaxMembers int      `json:"max_members"`
+	Roots      []string `json:"roots"`
+	TeamName   string   `json:"team_name,omitempty"`
+}
+
+func hashPayload(p team.LeadPayload) leadHashPayload {
+	return leadHashPayload{Reason: p.Reason, MaxMembers: p.MaxMembers, Roots: p.Roots, TeamName: p.TeamName}
+}
+
 // handleCreate is POST /api/team/approvals.
 func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if m.stopping() {
@@ -135,6 +152,11 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "reason is required", nil)
 		return
 	}
+	teamName, err := team.NormaliseTeamName(req.TeamName)
+	if err != nil {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "team_name: "+err.Error(), nil)
+		return
+	}
 	origin, ok, err := m.origins.ResolveOrigin(req.OriginInbox)
 	if err != nil {
 		// The registry could not be read (already logged by the resolver):
@@ -159,12 +181,18 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if waitS > team.MaxWaitS {
 		waitS = team.MaxWaitS
 	}
-	payload, err := json.Marshal(team.LeadPayload{Reason: reason, MaxMembers: normaliseMaxMembers(req.MaxMembers, team.DefaultMaxMembers), Roots: roots})
+	lead := team.LeadPayload{Reason: reason, MaxMembers: normaliseMaxMembers(req.MaxMembers, team.DefaultMaxMembers), Roots: roots, TeamName: teamName}
+	payload, err := json.Marshal(lead)
 	if err != nil {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "encode payload: "+err.Error(), nil)
 		return
 	}
-	hash := requestHash(req.Kind, origin.SessionID, waitS, payload)
+	hashed, err := json.Marshal(hashPayload(lead))
+	if err != nil {
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "encode payload: "+err.Error(), nil)
+		return
+	}
+	hash := requestHash(req.Kind, origin.SessionID, waitS, hashed)
 
 	// Everything from here to the insert is one critical section: Stop
 	// cancels stopCtx under the same lock, so a create that passed the
