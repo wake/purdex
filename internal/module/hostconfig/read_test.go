@@ -47,6 +47,9 @@ func TestRead_AValidValueReadsAsNormalized(t *testing.T) {
 		{"relay left out", `{}`, readRelay, func(r json.RawMessage) (any, error) { return normalizeRelay(r) }},
 		{"team", `{"member_command":" claude --x "}`, readTeam, func(r json.RawMessage) (any, error) { return normalizeTeam(r) }},
 		{"team left out", `{}`, readTeam, func(r json.RawMessage) (any, error) { return normalizeTeam(r) }},
+		{"resources", `{"mode":"advise","kinds":{"build":20},"warmup_s":0}`,
+			readResources, func(r json.RawMessage) (any, error) { return normalizeResources(r) }},
+		{"resources left out", `{}`, readResources, func(r json.RawMessage) (any, error) { return normalizeResources(r) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			want, err := c.normalize(json.RawMessage(c.raw))

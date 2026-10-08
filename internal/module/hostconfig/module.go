@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/resources"
 )
 
 // Module serves per-host launcher config over /api/hostconfig*.
@@ -39,6 +40,9 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(RelayPromptsKey, m)
 	// ... the member launch command through this one (spec §7.2 step 4) ...
 	c.Registry.Register(TeamSettingsKey, m)
+	// ... the resources module reads the host resource settings through this
+	// one (lease plan Task 1.1) ...
+	c.Registry.Register(resources.SettingsKey, m)
 	// ... and reads and writes the unattended switch through this one
 	// (unattended spec D-U23-1), its only writer.
 	c.Registry.Register(UnattendedKey, m)
@@ -54,6 +58,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/quick-replies", m.putHandler(KeyQuickReplies, func(raw []byte) (any, error) { return normalizeQuickReplies(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/relay", m.putHandler(KeyRelay, func(raw []byte) (any, error) { return normalizeRelay(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/team", m.putHandler(KeyTeam, func(raw []byte) (any, error) { return normalizeTeam(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/resources", m.putHandler(KeyResources, func(raw []byte) (any, error) { return normalizeResources(raw) }))
 	mux.HandleFunc("POST /api/hostconfig/check-path", m.handleCheckPath)
 }
 

@@ -65,11 +65,13 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		m.logf("[resources] sampling recovered after %d failed tick(s)", m.fails)
 	}
 	m.fails, m.degraded = 0, false
+	host := resources.ComputeHost(raw)
+	host.Full = m.fullLatch.Update(host)
 	m.publish(&resources.Snapshot{
 		SampledAt: m.now(),
 		Available: true,
 		Capacity:  resources.Capacity,
-		Host:      resources.ComputeHost(raw),
+		Host:      host,
 		Sessions:  sessions,
 		Mode:      resources.ModeMeasure,
 		SampleMS:  time.Since(began).Milliseconds(),
