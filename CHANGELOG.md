@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.603] - 2026-10-08
+
+> 動 daemon：**要部署 daemon**；不需 `pdx setup`、Electron 不必更新。使用者可見：peer 地址改成虛擬名。⚠️ **地址格式改變**：Claude Code 自己的 session 名（CLI 名）不再能當收件人。
+
+### Changed：peer 地址改成虛擬名 — peer mailbox P3a／P3b（#1917、#1918、#1915、#1937）
+
+- peer 地址改成虛擬名 `<基底>-<ref 前兩碼>`（例 `mlab/purdex-b0-q3`），`pdx peers`／`pdx msg whoami`／狀態列都顯示這個名字，也可以直接複製。
+- Claude Code 自己的 session 名（CLI 名）不再路由，用它送會回 `peer_not_found`。
+- `peer_not_found` 會附「did you mean `<host>/<虛擬名>`?」提示虛擬地址。
+- 送訊支援括號形式 `"<host>/<name> [ref]"` 並核對 name（不符回 `name_mismatch`）；同名回 `ambiguous` 並附候選。`pdx kill` 與 `pdx team` 也依虛擬名比對。
+- 送訊 envelope 帶 `address_version=5`，新舊版本互通以此判斷。
+
+### Added：mod 事件通道的 daemon 端 — 介面語言 U1-1a（#1925–#1928，無使用者可見變化）
+
+- daemon 在 `<data_dir>/mod.sock` 開 Unix socket，接收 Purdex mod 上報的事件；mod 端的上報（events.js）在 U1-1b，下一版才上。
+- stream registry 有上限，滿了回 503 `registry_full`；socket 無法 listen 時只記錄，不影響 daemon 啟動。
+- `pdx setup --agent cc` 寫出的 `pdx.json` 多一個 `mod_socket` 欄位（下次跑 `pdx setup` 才會寫入）。
+
+
 ## [1.0.0-alpha.602] - 2026-10-08
 
 > 只動 SPA：**fast-forward 主 checkout 即生效**，不需部署 daemon、不需 `pdx setup`。使用者可見：核准對話框可以縮小成右下角膠囊；Hosts › 接力 可以編輯三段接力 prompt。lead/team 接力線的 P9（spec U21／U22）至此全部完成。
