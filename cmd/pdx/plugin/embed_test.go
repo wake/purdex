@@ -8,11 +8,13 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/wake/purdex/internal/resources"
 )
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	f := Files()
-	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/prompts.js", "skills/pdx-team/SKILL.md"} {
+	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/prompts.js", "skills/pdx-team/SKILL.md", "skills/pdx-lease/SKILL.md"} {
 		if _, err := fs.Stat(f, rel); err != nil {
 			t.Errorf("%s: %v", rel, err)
 		}
@@ -471,6 +473,62 @@ func TestScanRegistrations_FailsClosed(t *testing.T) {
 	regs, problems := scanRegistrations("a.js", ok)
 	if len(problems) > 0 || len(regs) != 1 || regs[0] != (registration{"a.js", "tool.call", "{ tool: 'Bash' }"}) {
 		t.Errorf("scan = %+v, problems %q; want the one registration and no problem", regs, problems)
+	}
+}
+
+// The lease skill tells an agent to wrap heavy commands in `pdx lease run`, what
+// counts as heavy, how to behave while waiting, and never to acquire in a
+// subshell (the lease is held for acquire's parent, which exits at once).
+func TestSkill_LeaseMentionsRun(t *testing.T) {
+	b, err := fs.ReadFile(Files(), "skills/pdx-lease/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"name: pdx-lease",
+		"pdx lease run --kind <kind> -- <指令…>", // the line an agent copies
+		"`test-full`", "`build`", "`test-pkg`", "`lint-full`", // D-7 kinds
+		"--maxWorkers=3", // R7
+		"等待就是主機忙，不是卡住",
+		"不要用 `run_in_background` 繞過排隊", // R8
+		"不要在子 shell 裡直接 acquire",
+		"agent 一律用 `pdx lease run`",
+		"pdx lease ls",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("SKILL.md of pdx-lease lacks %q", want)
+		}
+	}
+	// The weights in the table are the built-in ones of spec D-7.
+	for _, row := range []string{"| `test-full` |", "| 35 |", "| 15 |", "| 10 |"} {
+		if !strings.Contains(s, row) {
+			t.Errorf("weight table lacks %q", row)
+		}
+	}
+}
+
+// The weights the skill prints are the built-in ones: a change of D-7 that
+// forgets the skill fails here.
+func TestSkill_LeaseWeightsAreTheBuiltInOnes(t *testing.T) {
+	b, err := fs.ReadFile(Files(), "skills/pdx-lease/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := regexp.MustCompile("(?m)^\\| `([a-z-]+)` \\|.*\\| (\\d+) \\|$")
+	got := map[string]int{}
+	for _, m := range row.FindAllStringSubmatch(string(b), -1) {
+		n := 0
+		fmt.Sscan(m[2], &n)
+		got[m[1]] = n
+	}
+	if len(got) != len(resources.DefaultKinds) {
+		t.Fatalf("skill table = %v, built-in = %v", got, resources.DefaultKinds)
+	}
+	for k, w := range resources.DefaultKinds {
+		if got[k] != w {
+			t.Errorf("kind %s: skill says %d, built-in is %d", k, got[k], w)
+		}
 	}
 }
 
