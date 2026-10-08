@@ -53,6 +53,7 @@ type sweepFix struct {
 // procStart is when the fixture's holders started: an hour before the clock.
 var procStart = time.Date(2026, 10, 9, 11, 0, 0, 0, time.UTC)
 
+// startText is a start time as resources.db keeps it: the registry's UTC text.
 func startText(t time.Time) string { return t.UTC().Format(ipeers.ProcStartLayout) }
 
 func newSweepFix(t *testing.T, mode string) *sweepFix {
