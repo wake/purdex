@@ -182,6 +182,31 @@ func TestValidate_AcceptsTruncatedFlagAtCap(t *testing.T) {
 	}
 }
 
+func TestValidate_RejectsThinkingTruncatedShorterThanCap(t *testing.T) {
+	rejects(t, func(c *Conversation) {
+		th := c.Turns[0].Items[1].Thinking
+		th.Text, th.Truncated = "tiny", true
+	}, "thinking")
+	// no text at all but flagged truncated
+	rejects(t, func(c *Conversation) { c.Turns[0].Items[1].Thinking.Truncated = true }, "thinking")
+	// one byte under the UTF-8 slack
+	rejects(t, func(c *Conversation) {
+		th := c.Turns[0].Items[1].Thinking
+		th.Text, th.Truncated = strings.Repeat("a", MaxText-4), true
+	}, "thinking")
+}
+
+func TestValidate_AcceptsThinkingTruncatedAtCap(t *testing.T) {
+	for _, n := range []int{MaxText - 3, MaxText} {
+		c := wellFormed()
+		th := c.Turns[0].Items[1].Thinking
+		th.Text, th.Truncated = strings.Repeat("a", n), true
+		if err := c.Validate(); err != nil {
+			t.Fatalf("truncated thinking of %d bytes rejected: %v", n, err)
+		}
+	}
+}
+
 func TestValidate_RejectsTypeVariantMismatch(t *testing.T) {
 	variants := map[ItemType]func(*Item){
 		ItemUser:      func(it *Item) { it.User = &UserMessage{ID: "m1", Source: SourceUser} },

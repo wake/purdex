@@ -133,6 +133,7 @@ type Thinking struct {
 	ID         string `json:"id"`
 	At         int64  `json:"at"`
 	Text       string `json:"text,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
 }
 

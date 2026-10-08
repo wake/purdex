@@ -87,6 +87,9 @@ func validateItem(it Item, ids map[string]bool) error {
 		}
 	case ItemThinking:
 		id = it.Thinking.ID
+		if it.Thinking.Truncated && len(it.Thinking.Text) < MaxText-3 {
+			err = fmt.Errorf("thinking flagged truncated but only %d bytes", len(it.Thinking.Text))
+		}
 	case ItemSystem:
 		id = it.System.ID
 		if !slices.Contains([]SystemKind{SystemInterrupted, SystemCompacted, SystemHandoff, SystemModelChanged, SystemResumed, SystemCommandOutput}, it.System.Kind) {

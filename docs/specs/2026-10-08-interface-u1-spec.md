@@ -248,7 +248,7 @@ Turn         { id, index, started_at, ended_at?, outcome: done|interrupted|faile
 item user        { id, at, text, truncated?, source, from?{kind, name?}, images?[{media_type, bytes}],
                    client_msg_id? }
 item agent_text  { id, at, markdown, truncated?, streaming? }
-item thinking    { id, at, text?, duration_ms? }
+item thinking    { id, at, text?, truncated?, duration_ms? }
 item step        { id, at, kind, tool, status: running|done|failed|denied, denial?, summary,
                    started_at, duration_ms?, input, input_truncated?, input_partial?,
                    output?{text, total_lines, total_bytes, truncated, keep: head|tail, images?[…]},

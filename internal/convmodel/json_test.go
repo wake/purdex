@@ -20,7 +20,7 @@ func sampleItems() []Item {
 			Images: []Image{{MediaType: "image/png", Bytes: 12}}, ClientMsgID: "c1",
 		}},
 		{Type: ItemAgentText, AgentText: &AgentText{ID: "a1", At: 2, Markdown: "# x", Truncated: true, Streaming: true}},
-		{Type: ItemThinking, Thinking: &Thinking{ID: "t1", At: 3, Text: "hmm", DurationMS: 1500}},
+		{Type: ItemThinking, Thinking: &Thinking{ID: "t1", At: 3, Text: "hmm", Truncated: true, DurationMS: 1500}},
 		{Type: ItemStep, Step: &Step{
 			ID: "s1", At: 4, Kind: StepEdit, Tool: "Edit", Status: StepDenied, Denial: "user-rejected",
 			Summary: "a.go", StartedAt: 4, DurationMS: i64(20),
@@ -140,6 +140,7 @@ func TestConversationJSON_OmitsEmptyOptionals(t *testing.T) {
 		Turns: []Turn{{ID: "t", Index: 0, StartedAt: 1, Outcome: OutcomeRunning, Items: []Item{
 			{Type: ItemUser, User: &UserMessage{ID: "t", At: 1, Text: "x", Source: SourceUser}},
 			{Type: ItemAgentText, AgentText: &AgentText{ID: "a", At: 2, Markdown: "y"}},
+			{Type: ItemThinking, Thinking: &Thinking{ID: "k", At: 2, Text: "z"}},
 			{Type: ItemStep, Step: &Step{ID: "s", At: 3, Kind: StepOther, Tool: "T", Status: StepRunning,
 				Summary: "", StartedAt: 3, Input: json.RawMessage(`{}`)}},
 		}}},
