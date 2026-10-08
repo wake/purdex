@@ -70,6 +70,20 @@ type Module struct {
 	settingsFailing bool // a run of settings read failures is under way and has been logged
 	listFailing     bool // the lease listing is failing and has been logged
 
+	// stateMu is the one serialization boundary of the lease rows: every
+	// read-decide-write on them (the sweeper's ends today; the admission pass,
+	// create, delete and the per-tick use update later) holds it from the read
+	// to the last write, so no transition lands between the rows a decision was
+	// made on and the writes that follow (plan Task 1.5, review #4). The writes
+	// under it are single statements, and a long poll never holds it while it
+	// waits.
+	stateMu sync.Mutex
+	// gen is the generation channel: wake closes it and installs a fresh one on
+	// every state transition, so a poller that took genChan before it read the
+	// rows is woken by any change after that read. genMu guards the swap only.
+	genMu sync.Mutex
+	gen   chan struct{}
+
 	// runCtx ends when Stop is called; it is made in New so that a Stop
 	// before Start still keeps a later Start from running.
 	runCtx    context.Context
@@ -92,7 +106,26 @@ func New() *Module {
 		procSnapshot: iagent.SnapshotProcesses,
 		runCtx:       runCtx,
 		stopRun:      stopRun,
+		gen:          make(chan struct{}),
 	}
+}
+
+// wake tells every poller holding the current generation channel that a lease
+// row changed state: it closes the channel and installs a fresh one. A writer
+// calls it after the write, normally still under stateMu.
+func (m *Module) wake() {
+	m.genMu.Lock()
+	defer m.genMu.Unlock()
+	close(m.gen)
+	m.gen = make(chan struct{})
+}
+
+// genChan is the channel the next wake closes. A poller takes it before it
+// reads the rows, so a change after that read cannot be missed.
+func (m *Module) genChan() <-chan struct{} {
+	m.genMu.Lock()
+	defer m.genMu.Unlock()
+	return m.gen
 }
 
 func (m *Module) Name() string           { return "resources" }
