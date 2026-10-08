@@ -224,6 +224,7 @@ func (m *Module) applyModOverlay(projections []SessionProjection) {
 		return
 	}
 	lit := make(map[int]modLight)
+	bySID := make(map[string]*modLight) // each sid's state is copied once; nil: no live stream
 	now := m.modClock()
 	m.modMu.Lock()
 	for i := range projections {
@@ -231,14 +232,20 @@ func (m *Module) applyModOverlay(projections []SessionProjection) {
 		if top == nil || top.SessionID == "" {
 			continue
 		}
-		st := m.modStreams[m.modBySID[top.SessionID]]
-		// An ended stream is never live: the pane falls back to its frame,
-		// which the hook SessionEnd or the sweep removes; the overlay
-		// never invents a clear.
-		if st == nil || st.SID != top.SessionID || !st.Live(now) {
-			continue
+		l, seen := bySID[top.SessionID]
+		if !seen {
+			st := m.modStreams[m.modBySID[top.SessionID]]
+			// An ended stream is never live: the pane falls back to its
+			// frame, which the hook SessionEnd or the sweep removes; the
+			// overlay never invents a clear.
+			if st != nil && st.SID == top.SessionID && st.Live(now) {
+				l = &modLight{status: st.Status(), background: st.Background, dots: st.DotList()}
+			}
+			bySID[top.SessionID] = l
 		}
-		lit[i] = modLight{status: st.Status(), background: st.Background, dots: st.DotList()}
+		if l != nil {
+			lit[i] = *l
+		}
 	}
 	m.modMu.Unlock()
 

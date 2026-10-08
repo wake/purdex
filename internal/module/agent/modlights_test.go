@@ -416,6 +416,19 @@ func TestModOverlay_MatchesBySid(t *testing.T) {
 	wantLight(t, "projectPane of the other pane", *paneProjection(t, m, "%6"), agentpkg.StatusIdle, "hook")
 }
 
+// TestModOverlay_PanesSharingASidAreAllOverlaid: the sid's light is copied
+// once per overlay pass, and every pane carrying the sid gets it.
+func TestModOverlay_PanesSharingASidAreAllOverlaid(t *testing.T) {
+	m, _ := overlayModule(t)
+	seedIdentityFrame(t, m, "%5", "cc", 501, "s501", 10, modSID1, "/w")
+	seedIdentityFrame(t, m, "%6", "cc", 601, "s601", 20, modSID1, "/w")
+	feedMod(m, modStrm, modStart, modTurnStart)
+
+	all := liveProjectionByPane(t, m)
+	wantLight(t, "first pane", all["%5"], agentpkg.StatusRunning, "mod")
+	wantLight(t, "second pane", all["%6"], agentpkg.StatusRunning, "mod")
+}
+
 // TestModOverlay_FollowsClear: a /clear moves the stream to a new sid; the
 // pane is overlaid again once the hook SessionStart{clear} has moved its
 // frame to that sid, and not before.
