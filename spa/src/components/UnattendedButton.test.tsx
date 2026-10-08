@@ -208,7 +208,7 @@ describe('UnattendedButton', () => {
       fireEvent.click(list())
       expect(await screen.findByTestId('unattended-panel')).toBeInTheDocument()
       await waitFor(() => expect(rowTexts()).toEqual(['mlab：sess-a1 · 接力申請 · 09:05']))
-      expect(mockedGet.mock.calls).toEqual([[A], [B]])
+      expect(mockedGet.mock.calls.map(([h]) => [h])).toEqual([[A], [B]])
       expect(mockedPut).not.toHaveBeenCalled()
     })
 
@@ -218,7 +218,7 @@ describe('UnattendedButton', () => {
       fireEvent.click(list())
       const lines = await screen.findAllByTestId('unattended-host-unreachable')
       expect(lines.map((l) => l.textContent)).toEqual(['air19：無法連線，可能仍在自動通過'])
-      expect(mockedGet.mock.calls).toEqual([[A]])
+      expect(mockedGet.mock.calls.map(([h]) => [h])).toEqual([[A]])
     })
 
     it('no host reachable: the panel lists the unreachable and shows no empty state', async () => {
