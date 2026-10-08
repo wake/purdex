@@ -1,6 +1,6 @@
 # Team tasks and reports (T) — Implementation Plan
 
-> **Status (2026-10-09):** revised after one codex round (plan + spec, thread `01a11c69-1b0f`: 2 critical / 13 important / 3 minor). The section **"Codex review of this plan"** at the end records every disposition. Written against origin/main **`532e07bc`** by member β (`mlab/_tyfq9z`) for the coordinator purdex-1f (`mlab/_vqnjx1`).
+> **Status (2026-10-09):** final — the coordinator's rulings on D-T3…D-T8 are folded in ("Decisions" below). Revised after one codex round (plan + spec, thread `01a11c69-1b0f`: 2 critical / 13 important / 3 minor). The section **"Codex review of this plan"** at the end records every disposition. Written against origin/main **`532e07bc`** by member β (`mlab/_tyfq9z`) for the coordinator purdex-1f (`mlab/_vqnjx1`).
 > **Source:** spec `docs/specs/2026-10-09-team-task-report-spec.md` (T0–T3, D-1…D-7, phases T-1…T-3, M-T1). Research `docs/research/2026-10-08-agent-teams-and-workflow.md` §2.3–§2.5. U24 plan `docs/specs/2026-10-08-unattended-adopt-plan.md` (deviation 5: an adopted member's row key).
 > **Format:** the compact format of plan v3 and the U23/U24 plan — contracts, rules, named tests and mutation gates, no full code. The implementer writes the code test-first from these contracts.
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Each PR is TDD, one task per commit. Re-verify every `file:line` against main before starting a PR: the resource-lease line (δ), the U24 display line (γ) and the interface line (U1, its lights member `mlab/_l540z1` in `internal/module/agent`) move fast.
@@ -14,7 +14,7 @@
 - Plan v3's constraints apply: ≤ 800 diff lines **or** ≤ 20 files per PR (the coordinator accepts a test-heavy overshoot case by case); Go `go test ./<pkg>/ -count=1`, `-race` on the touched packages one at a time, `gofmt -l`, `make lint`; build `pdx` only with `-o` into a scratch dir (never `go build ./cmd/pdx/` at the root).
 - **Resource rules** for every subagent brief: affected tests only while developing; the full vitest once before merge with `--maxWorkers=3` after asking the coordinator; `go test -race` per affected package, one at a time.
 - **No SPA change in T.** The roster field (T-3b) is additive; whether the Mac App shows it is the interface lead's call (spec D-7).
-- **No mod hook change for the last turn** (M-T1, decision D-T4, **pending the coordinator's / user's confirmation**). The one mod change in T is T-2's seed variable (the relay notice's task list, spec T-2), coordinated with the interface lead (`mlab/_b84f5i`) before `register.js` is touched.
+- **No mod hook change for the last turn** (M-T1, decision D-T4, ruled by the coordinator 2026-10-09). The one mod change in T is T-2's seed variable (the relay notice's task list, spec T-2), coordinated with the interface lead (`mlab/_b84f5i`) before `register.js` is touched.
 - **`internal/module/agent` is the interface line's lights member's ground** (88, 2026-10-09): T-3a1 adds a new file there, `handler.go` gets **one** call placed after the frame write and outside every emit path, no subscriber runs under `m.mu` or `modMu` (lock order `emitMu → m.mu → modMu`); rebase onto the newest main before the PR, tell 88 before merging.
 - **Older peers stay silent.** Every new wire field is `omitempty`; a newer CLI against an older daemon gets a plain 404 → exit 21 (`unsupported`, `cmd/pdx/exitcodes.go`).
 - **Text is peer-safe both sides.** Every stored text that later becomes a peer message (subject, description, done-when lines, summary, body) passes `ipeers.ValidateText` (the brief's check, `cmd/pdx/team_cmd.go:224-225`) in the CLI **and** in the daemon (400 `bad_request`), so nothing is stored that cannot be sent.
@@ -92,7 +92,7 @@ team_members + last_turn_summary, last_turn_at, last_turn_seq  -- T-3a2, ensureC
 | `POST /api/team/reports` | member, own task | 201 `{report, task, lead: {ref, address}}` · 200 replay (same id, same content) · 400 · 409 `not_member` / `task_not_found` |
 | `GET /api/team/reports?task=<id>&since=<ms>` | lead (its team) or the task's owner | 200 `{reports: []}` newest first, ≤ 200 |
 
-Transitions: `pending → in_progress → completed`; `pending → completed` (a lead closing); any non-deleted → `deleted` (lead only); `completed → in_progress` (lead reopen, decision D-T7); nothing else leaves `completed` / `deleted`. Report effects (spec D-3), **in the report's insert transaction**: `ack` → `in_progress` (from `pending`); `ready` → `metadata.prs += pr`; `merged` → `metadata.shas += sha`; `done` → `completed`; every report sets `last_report_*`. A report on a `completed` / `deleted` task is stored and changes no status. `POST /api/team/reports` with no task: the member's only `in_progress` task; none or several → 400 naming the choice. Capability `team.tasks.v1` appended to `/api/info` (T-1b1).
+Transitions: `pending → in_progress → completed`; `pending → completed` (a lead closing); `pending` / `in_progress` → `deleted` (lead only); nothing leaves `completed` / `deleted` (a lead that wants more work opens a new task, decision D-T7). Report effects (spec D-3), **in the report's insert transaction**: `ack` → `in_progress` (from `pending`); `ready` → `metadata.prs += pr`; `merged` → `metadata.shas += sha`; `done` → `completed`; every report sets `last_report_*`. A report on a `completed` / `deleted` task is stored and changes no status. `POST /api/team/reports` with no task: the member's only `in_progress` task; none or several → 400 naming the choice. Capability `team.tasks.v1` appended to `/api/info` (T-1b1).
 
 **Messages (CLI-composed, `POST /api/peers/send` from the caller's inbox with `client.Once`; peer wire unchanged):**
 - Down (`pdx task add`, `reassign`): `[pdx task <id>] <subject>` / blank / description / `完成定義：` + `- <line>`… / `回報：pdx report ack|progress|ready|done --task <id> --summary "…"（見 pdx-team skill）`.
@@ -261,15 +261,15 @@ T-3a1 needs only main and may start any time (tell 88 first); T-3a2 / T-3b run i
 
 ---
 
-## Decisions for the coordinator
+## Decisions (ruled by the coordinator purdex-1f, 2026-10-09)
 
 - **D-T1 · The owner is the member key** (`team_members.spawn_op` value: the spawn op, or for an adopted member the adopt request id — U24 plan deviation 5), not a ref. The row already follows relays in place; the wire shows the current ref.
 - **D-T2 · The task id is a display id `<team6>-<seq>`; the key is `(team_id, seq)`.** Lookups always carry the caller's team id.
-- **D-T3 · The CLI sends the messages, not the daemon** (spec D-2 / D-3 say "the daemon … sends"). The daemon has no in-process peer send; spawn's brief already works this way. Same user-visible result; the failure mode is spawn's (record stored, exit 1, the manual command printed). **Needs confirmation (spec wording).**
-- **D-T4 · The last turn comes from the settings `Stop` hook, daemon side** (spec T2 / D-4 say "the mod"). No fork, no mod hook; interface lead 88 confirmed the hook stays and asked for no new mod event type. Accepted gaps: an Esc-interrupted turn and a lost hook delivery leave the previous value. **Needs the coordinator's — and, since T2 names the mod, the user's — confirmation.** If refused, T-3a1 / T-3a2 are replaced by a mod `turn.complete` hook (`e.answer`) plus a write channel the interface lead must define.
+- **D-T3 · The CLI sends the messages, not the daemon** (spec D-2 / D-3 say "the daemon … sends"). The daemon has no in-process peer send; spawn's brief already works this way. Same user-visible result; the failure mode is spawn's (record stored, exit 1, the manual command printed). **Ruled by the coordinator (2026-10-09); spec D-2 / D-3 carry the note.**
+- **D-T4 · The last turn comes from the settings `Stop` hook, daemon side** (spec T2 / D-4 say "the mod"). No fork, no mod hook; interface lead 88 confirmed the hook stays and asked for no new mod event type. Accepted gaps: an Esc-interrupted turn and a lost hook delivery leave the previous value. **Ruled by the coordinator (2026-10-09):** T2's user-visible ask (automatic, no message, visible in `pdx team`) holds either way; spec D-4 carries the note; the user is told in plain words that an Esc-interrupted turn does not update.
 - **D-T5 · `blocks[]` is derived** from the team's `blocked_by` edges.
 - **D-T6 · One current task per member for display** (`pdx team` TASK, roster, last-turn target): the `in_progress` task with the newest `updated_at`, then the highest `seq`; else the newest `pending`.
-- **D-T7 · Reopen:** the lead may move `completed → in_progress`; nothing else leaves a final state. Not in the spec; harmless; drop it if unwanted.
+- **D-T7 · No reopen** (coordinator, 2026-10-09): `completed` and `deleted` are final; more work is a new task.
 - **D-T8 · Spawn task #1 is created by the daemon in the member-insert transaction** (spec D-2 "a spawn's brief becomes task #1"), so a member never exists without it.
 
 ## Open questions
@@ -287,7 +287,7 @@ One round, plan + spec (thread `01a11c69-1b0f-7251-b377-bebc5dd870ff`): 2 critic
 | 1 | critical · 1.00 | The owner key `spawn_op` cannot hold an adopted member (D-U24-2 "no spawn op"; wire `SpawnOp=""`). | **Rebutted with evidence, contract clarified:** the U24 plan stores an adopted member's row key (the adopt request id) in the `spawn_op` **column** (deviation 5); the wire field is what shows `""`. The plan now calls the column value the member key (`owner_key`) and cites deviation 5. |
 | 2 | critical · 1.00 | `<team6>-<seq>` as a table-wide primary key collides across teams. | **Adopted:** key `(team_id, seq)`; the display id is parsed and looked up with the caller's team; a same-prefix test and a mutation gate. |
 | 3 | important · 1.00 | The relay notice must list the member's tasks (spec T-2); the open question defaulted to a skill line. | **Adopted:** a fixed seed Tail `{{tasks}}` filled by the mod with `pdx task mine --seed` (T-2; cut point T-2b). |
-| 4 | important · 0.98 | D-T4 (Stop hook instead of the mod) deviates from the user decision T2 and accepts data loss. | **Escalated:** D-T4 marked as needing the coordinator's and the user's confirmation, with the fallback named. |
+| 4 | important · 0.98 | D-T4 (Stop hook instead of the mod) deviates from the user decision T2 and accepts data loss. | **Escalated → ruled:** the coordinator adopted D-T4 (2026-10-09); spec D-4 carries the implementation note and the gaps. |
 | 5 | important · 0.97 | The session id is not in `PdxStop`'s detail; read it from the raw event. | **Adopted:** `IdentifyEvent` on the raw event; tests for a real payload, no id, another provider, a rejected event. |
 | 6 | important · 0.91 | An earlier Stop finishing later can overwrite a newer turn. | **Adopted:** stamp `At` + `Seq` at handler entry; guard on both; an out-of-order test. |
 | 7 | important · 0.88 | "Never blocks" is not what the existing hub does; the publish point is the SessionStart site. | **Adopted:** a per-subscriber fixed channel in a new file, one call after the frame write outside emit (88's placement rule), drop counter, race tests. |
@@ -301,4 +301,4 @@ One round, plan + spec (thread `01a11c69-1b0f-7251-b377-bebc5dd870ff`): 2 critic
 | 15 | important · 0.93 | T-3a's files and size are incomplete. | **Adopted:** split into T-3a1 (agent hub, 5 files) and T-3a2 (team consumer, 6 files) with the module lifecycle and fakes listed. |
 | 16 | minor · 0.86 | T-1a's estimate is optimistic. | **Adopted:** pre-split T-1a1 / T-1a2 (and T-1b1 / T-1b2 to match). |
 | 17 | minor · 1.00 | Stale references; stray tags at the end of the file. | **Adopted:** references corrected (lifecycle in `module.go`, the SessionStart publish site), the stray tags removed. |
-| 18 | minor · 0.89 | Reopen and the multi-in-progress choice are unconfirmed and untied. | **Adopted:** listed as D-T6 / D-T7 for confirmation; tie-break `updated_at DESC, seq DESC` with a test. |
+| 18 | minor · 0.89 | Reopen and the multi-in-progress choice are unconfirmed and untied. | **Adopted:** D-T6 ruled; reopen dropped (D-T7); tie-break `updated_at DESC, seq DESC` with a test. |

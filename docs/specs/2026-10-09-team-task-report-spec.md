@@ -1,6 +1,6 @@
 # Team tasks and reports (spec)
 
-Date: 2026-10-09. Coordinator: purdex-1f (`mlab/_vqnjx1`). Status: **user decisions final (§1)**; plan pending.
+Date: 2026-10-09. Coordinator: purdex-1f (`mlab/_vqnjx1`). Status: **user decisions final (§1)**; plan `docs/specs/2026-10-09-team-task-report-plan.md` (ruled 2026-10-09).
 Line: lead/member (A). Order (user, 2026-10-08): U23 → host resource lease → **this** → U24 adopt/release.
 Research: `docs/research/2026-10-08-agent-teams-and-workflow.md` §2.3–§2.5, §5(b)(c).
 
@@ -30,6 +30,7 @@ Research: `docs/research/2026-10-08-agent-teams-and-workflow.md` §2.3–§2.5, 
 - Completed and deleted tasks stay (history); `pdx task ls` hides them unless `--all`.
 
 **D-2 · Assignment (down).** `pdx task add --to <ref> --subject … [--brief-file f | --brief text] [--done-when …]… [--blocked-by <id>]…` (lead only; `not_lead` / `not_your_member` refusals as `pdx kill`). The daemon stores the task and sends the member one message: `[pdx task <id>] <subject>` + the brief + the done-when lines + how to report (one line). `pdx spawn` gains `--task-subject` / `--done-when` so a spawn's brief becomes task #1 for that member. A task is `pending` until the member's first report or `pdx task start <id>` (→ `in_progress`).
+  - *Implementation note (purdex-1f ruling, 2026-10-09):* the **CLI** sends the message, as it sends the spawn brief (the daemon has no in-process peer send); a send that fails keeps the stored record, exits 1 and prints the command to send it by hand.
 
 **D-3 · Reports (up).** `pdx report <kind> [--task <id>] --summary "<≤ 200 chars>" [kind fields] [--file <md> | --text …]`, member only (a lead may report to nobody). Kinds and required fields:
 
@@ -44,8 +45,10 @@ Research: `docs/research/2026-10-08-agent-teams-and-workflow.md` §2.3–§2.5, 
 | `done` | done-when met | — | `completed` |
 
 The CLI validates the fields per kind (exit 2 with the missing field named), stores the report, and sends the lead one peer message: header line `[report <kind> <task id>] <summary>` then the body (human-readable; the structured data lives in the daemon, read with `pdx report ls` / `pdx task show`). `--task` defaults to the member's only `in_progress` task. Peer wire is unchanged (no envelope field added).
+  - *Implementation note (purdex-1f ruling, 2026-10-09):* the **CLI** sends the message, as it sends the spawn brief (the daemon has no in-process peer send); a send that fails keeps the stored record, exits 1 and prints the command to send it by hand.
 
 **D-4 · Automatic last-turn status (T2).** In a **member** session, the mod, at each main `turn.complete`, takes the turn's final assistant text, trims it to one line (≤ 200 chars, first sentence preferred), and records it as `last_turn` of the member's `in_progress` task — through the daemon, **never as a message**. No task in progress → record on the member row instead. Never in lead or solo sessions. Fail-open; at most one write per turn; no fork per turn if the plan can avoid it (M-T1, #1777 lesson).
+  - *Implementation note (purdex-1f ruling, 2026-10-09, the interface lead agreeing):* the daemon takes the text from the settings `Stop` hook's `last_assistant_message`, not from a mod hook. Known gaps: a turn interrupted with Esc and a turn whose hook delivery is lost keep the previous value.
 
 **D-5 · Lead side.** `pdx task ls [--member <ref>] [--all] [--json]`, `pdx task show <id>` (brief, reports, last turn), `pdx task done|delete <id>`, `pdx task reassign <id> --to <ref>`. `pdx team` gains a **TASK** column (`<id> <status> <subject…>`) and a **LAST** column (age of `last_turn` or last report). `pdx report ls [--task <id>] [--since 1h]`.
 
