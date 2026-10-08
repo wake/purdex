@@ -381,6 +381,17 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			req.AgentType, req.PurdexName, result.Status, result.Reason, trace.ChainID())
 	}
 
+	// A StopFailure that names a subagent (non-empty agent_id) is that
+	// subagent's failure, not the main agent's (U1-2a-4): it detaches the dot
+	// but carries no status for the session, so the in-memory write below and
+	// the error guard treat it as status-less. applyFrameEvent applies the
+	// same rule to the stored frame.
+	if lifecycle == agentpkg.LifecycleStopFailure {
+		if id, _ := result.Detail["agent_id"].(string); id != "" {
+			result.Status = ""
+		}
+	}
+
 	// Error guard: when in error state, only whitelisted events can clear it
 	if result.Valid && result.Status != "" && result.Status != agentpkg.StatusError {
 		m.mu.Lock()
