@@ -29,8 +29,8 @@ import (
 
 const reportUsage = "usage: pdx report <ack|progress|question|ready|merged|blocked|done> [--task <id>] --summary <s> [--needs lead|user] [--pr <n>] [--reviews <stage>=<job>]… [--sha <sha>] [--file <md> | --text <t>] [--id <rid>] [--json] [--config <path>]\n" +
 	"       pdx report ls [--task <id>] [--since <dur>] [--json]\n" +
-	"       pdx report show <rid> [--json | --message]\n" +
-	"       (needs: question, blocked · pr: ready, merged · reviews: ready · sha: merged; only a member, only its own tasks)"
+	"       pdx report show <rid> [--task <id>] [--json | --message]\n" +
+	"       (ls and show: a member must pass --task, a lead may omit it; needs: question, blocked · pr: ready, merged · reviews: ready · sha: merged; only a member, only its own tasks)"
 
 // reportNewID mints a report id (a test seam); reportNow is the clock of
 // `ls --since`.
@@ -165,7 +165,7 @@ func (c reportCall) notify(client *daemonclient.Client, inbox, cfgPath string, r
 	if code != "" {
 		fmt.Fprintln(c.stdout, compact)
 		id, reason := sanitizeCell(r.ID), sanitizeCell(detail)
-		cmd := reportResendCommand(resp.Lead.Address, r.ID, cfgPath)
+		cmd := reportResendCommand(resp.Lead.Address, r.ID, r.Task, cfgPath)
 		if resp.Lead.Address == "" {
 			fmt.Fprintf(c.stderr, "pdx report: 回報 %s 已存下，但 lead 的地址不明、訊息沒送出（%s）；請先用 pdx team 查到 lead 的地址，再執行下面的命令（把 <ADDRESS> 自行替換成它）：%s %s\n",
 				id, reason, cmd, sanitizeCell(code))
@@ -200,8 +200,9 @@ func sendReportMessage(ctx context.Context, client *daemonclient.Client, inbox s
 }
 
 // reportResendCommand is the command that sends a report's up message by
-// hand, quoted like taskResendCommand's.
-func reportResendCommand(address, rid, cfgPath string) string {
+// hand, quoted like taskResendCommand's. The show carries --task: the daemon
+// lists a member's reports only per task.
+func reportResendCommand(address, rid, task, cfgPath string) string {
 	if address == "" {
 		address = "<ADDRESS>"
 	}
@@ -210,7 +211,7 @@ func reportResendCommand(address, rid, cfgPath string) string {
 		cfg = "--config " + shellQuote(sanitizeCell(cfgPath)) + " "
 	}
 	return "pdx msg send " + cfg + shellQuote(sanitizeCell(address)) +
-		" \"$(pdx report show " + cfg + shellQuote(sanitizeCell(rid)) + " --message)\""
+		" \"$(pdx report show " + cfg + shellQuote(sanitizeCell(rid)) + " --task " + shellQuote(sanitizeCell(task)) + " --message)\""
 }
 
 // fetch asks GET /api/team/reports and decodes the list; ok=false: a line
@@ -282,16 +283,22 @@ func (c reportCall) ls(args []string) int {
 }
 
 // show implements `pdx report show <rid> [--json | --message]`. The daemon has
-// no route for one report, so it reads the list (newest 200) and picks the id.
+// no route for one report, so it reads the list (the task's, newest 200) and
+// picks the id.
 func (c reportCall) show(args []string) int {
 	fs := flag.NewFlagSet("pdx report show", flag.ContinueOnError)
 	cfgPath := fs.String("config", "", "")
+	task := fs.String("task", "", "")
 	asJSON := fs.Bool("json", false, "")
 	asMessage := fs.Bool("message", false, "")
 	pos, err := parseTeamFlags(fs, args)
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	switch {
 	case err != nil:
 		return reportUsageErr(c.stderr, err.Error())
+	case set["task"] && !validTaskID(*task):
+		return reportUsageErr(c.stderr, badTaskID("--task", *task))
 	case len(pos) != 1:
 		return reportUsageErr(c.stderr, "需要剛好一個 <rid>")
 	case team.ValidReportID(pos[0]) != nil:
@@ -299,7 +306,11 @@ func (c reportCall) show(args []string) int {
 	case *asJSON && *asMessage:
 		return reportUsageErr(c.stderr, "--json 與 --message 只能擇一")
 	}
-	list, _, ok := c.fetch(*cfgPath, url.Values{})
+	q := url.Values{}
+	if set["task"] {
+		q.Set("task", *task)
+	}
+	list, _, ok := c.fetch(*cfgPath, q)
 	if !ok {
 		return ExitError
 	}
@@ -320,6 +331,6 @@ func (c reportCall) show(args []string) int {
 		}
 		return ExitOK
 	}
-	fmt.Fprintf(c.stderr, "pdx report: 找不到回報 %s（只看得到最新 200 筆） report_not_found\n", sanitizeCell(pos[0]))
+	fmt.Fprintf(c.stderr, "pdx report: 找不到回報 %s（只看得到該任務最新 200 筆；member 需用 --task） report_not_found\n", sanitizeCell(pos[0]))
 	return ExitError
 }

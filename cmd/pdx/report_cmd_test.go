@@ -79,6 +79,10 @@ func (f *fakeReportDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Task: fakeTask(task, team.TaskInProgress, "S"), Lead: team.ReportLead{Ref: fakeLeadRef, Address: fakeLeadAddr}}})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/team/reports":
 		f.queries = append(f.queries, r.URL.Query())
+		if r.URL.Query().Get("task") == "" { // the real handler: a member must pass task
+			write(w, answer{status: http.StatusBadRequest, body: team.APIError{Error: team.ErrBadRequest, Detail: "pass task=<id>"}})
+			return
+		}
 		write(w, f.list)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/peers/send":
 		var req ipeers.SendRequest
@@ -196,7 +200,7 @@ func TestReport_SendFailures(t *testing.T) {
 	}
 	cmd := resendCommand(t, stderr)
 	if !strings.Contains(cmd, "pdx msg send") || !strings.Contains(cmd, "'"+fakeLeadAddr+"'") ||
-		!strings.Contains(cmd, "pdx report show") || !strings.Contains(cmd, fakeReportID) || !strings.Contains(cmd, "--message") {
+		!strings.Contains(cmd, "pdx report show") || !strings.Contains(cmd, "--task '"+fakeTaskID+"'") || !strings.Contains(cmd, fakeReportID) || !strings.Contains(cmd, "--message") {
 		t.Errorf("manual command = %q", cmd)
 	}
 	if err := shellSyntaxOK(cmd); err != nil {
@@ -276,7 +280,7 @@ func TestReportLs_TableQueryAndJSON(t *testing.T) {
 		t.Errorf("a control character reached the terminal: %q", stdout)
 	}
 
-	code, stdout, _ = driveReport(t, &fakeReportDaemon{list: answer{body: fakeReports()}}, "ls", "--json")
+	code, stdout, _ = driveReport(t, &fakeReportDaemon{list: answer{body: fakeReports()}}, "ls", "--json", "--task", fakeTaskID)
 	var back team.ReportList
 	if code != ExitOK || json.Unmarshal([]byte(stdout), &back) != nil || len(back.Reports) != 2 || strings.Count(stdout, "\n") != 1 {
 		t.Errorf("--json: code=%d stdout=%q", code, stdout)
@@ -292,7 +296,7 @@ func TestReportLs_TableQueryAndJSON(t *testing.T) {
 	reportNow = func() time.Time { return time.UnixMilli(10_000_000) }
 	t.Cleanup(func() { reportNow = old })
 	d = &fakeReportDaemon{list: answer{body: fakeReports()}}
-	driveReport(t, d, "ls", "--since", "1m")
+	driveReport(t, d, "ls", "--since", "1m", "--task", fakeTaskID)
 	if got := d.queries[0].Get("since"); got != "9940000" {
 		t.Errorf("since = %q, want 9940000", got)
 	}
@@ -300,21 +304,21 @@ func TestReportLs_TableQueryAndJSON(t *testing.T) {
 
 func TestReportShow_MessageAndNotFound(t *testing.T) {
 	d := &fakeReportDaemon{list: answer{body: fakeReports()}}
-	code, stdout, stderr := driveReport(t, d, "show", fakeReportID, "--message")
+	code, stdout, stderr := driveReport(t, d, "show", fakeReportID, "--task", fakeTaskID, "--message")
 	want := "[report ready 8f2c0f-3] PR up\npr: #7\nreviews: R1=j\n"
 	if code != ExitOK || stderr != "" || stdout != want {
 		t.Errorf("--message: code=%d stdout=%q stderr=%q want %q", code, stdout, stderr, want)
 	}
-	code, stdout, _ = driveReport(t, d, "show", fakeReportID, "--json")
+	code, stdout, _ = driveReport(t, d, "show", fakeReportID, "--task", fakeTaskID, "--json")
 	var r team.Report
 	if code != ExitOK || json.Unmarshal([]byte(stdout), &r) != nil || r.ID != fakeReportID {
 		t.Errorf("--json: code=%d stdout=%q", code, stdout)
 	}
-	code, stdout, stderr = driveReport(t, d, "show", "aaaaaaaa-2222-4333-8444-555555555555")
+	code, stdout, stderr = driveReport(t, d, "show", "aaaaaaaa-2222-4333-8444-555555555555", "--task", fakeTaskID)
 	if code != ExitError || stdout != "" || lastToken(stderr) != "report_not_found" {
 		t.Errorf("unknown id: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	for _, bad := range [][]string{{"show"}, {"show", "x"}, {"show", fakeReportID, "--json", "--message"}} {
+	for _, bad := range [][]string{{"show"}, {"show", "x"}, {"show", fakeReportID, "--json", "--message"}, {"show", fakeReportID, "--task", "nope"}} {
 		d := &fakeReportDaemon{}
 		if code, _, _ := driveReport(t, d, bad...); code != ExitUsage || d.count() != 0 {
 			t.Errorf("%v: code=%d requests=%d", bad, code, d.count())
@@ -330,5 +334,18 @@ func TestMainUsage_ListsReport(t *testing.T) {
 	src := string(b)
 	if !strings.Contains(src, "case \"report\":\n\t\trunReport(os.Args[2:])\n") || !strings.Contains(src, " report,") {
 		t.Errorf("main.go does not dispatch or list report")
+	}
+}
+
+// A member's list and show need --task (the daemon refuses without it): the
+// failure is the daemon's 400, exit 1, naming the flag; with the task the
+// manual command's show works.
+func TestReportLsShow_MemberWithoutTaskIsTheDaemons400(t *testing.T) {
+	for _, args := range [][]string{{"ls"}, {"show", fakeReportID}} {
+		d := &fakeReportDaemon{list: answer{body: fakeReports()}}
+		code, stdout, stderr := driveReport(t, d, args...)
+		if code != ExitError || stdout != "" || !strings.Contains(stderr, "pass task=<id>") {
+			t.Errorf("%v: code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
 	}
 }
