@@ -4,7 +4,7 @@ Spec: `docs/specs/2026-10-08-interface-u1-spec.md` §2 (N5, N6), §3, §6 (the m
 
 Format as the U1-1 plan: contracts, rules, named tests and mutation gates; implementers write the code (TDD: each named test is written red first). Line numbers are as of `61d6931f`; re-check before editing.
 
-Seven PRs, each ≤ 800 lines diff / ≤ 20 files (estimates include tests; a PR that grows past the limit splits again before review):
+Eight PRs (seven rows, a-3 split in two), each ≤ 800 lines diff / ≤ 20 files (estimates include tests; a PR that grows past the limit splits again before review):
 
 | PR | Content | Depends on | Est. lines |
 |---|---|---|---|
@@ -16,7 +16,7 @@ Seven PRs, each ≤ 800 lines diff / ≤ 20 files (estimates include tests; a PR
 | **U1-2b-2** | the **hook emit slot**: every `hook` frame is read fresh, stamped `(epoch, seq)` and broadcast inside one mutex | b-1 | ~680 |
 | **U1-2b-3** | complete snapshot: opt-in `agent=v2` → one `agent.snapshot` frame (complete list, high-water seq); legacy replay frames gain `snapshot: true` | b-2 | ~450 |
 
-a-1 and a-2 are independent and can be built in parallel (different files). The rest is a chain. a-1 is the only PR that touches the mod; it can merge and deploy ahead of the others (its daemon half only fills registry fields). **Release gate: all seven merged** — the acceptance (restart recovery of error / background / cwd) needs a-1 as much as b-3.
+a-1 and a-2 are independent and can be built in parallel (different files). The rest is a chain. a-1 is the only PR that touches the mod; it can merge and deploy ahead of the others (its daemon half only fills registry fields). **Release gate: all eight merged** — the acceptance (restart recovery of error / background / cwd) needs a-1 as much as b-3.
 
 Common rules:
 - Go: `make lint` clean; `go test` for touched packages; `-race` only for the touched package, one package at a time (`internal/lights`, `internal/module/agent`, `internal/modevents`).
