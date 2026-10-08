@@ -30,6 +30,7 @@ import (
 const leaseUsage = "usage: pdx lease ls [--json] [--config <path>]\n" +
 	"       pdx lease acquire (--kind <k> | --weight <n>) [--wait <dur>] [--session <sid>] [--tool-use <id>] [--holder-pid <pid>] [--holder-start <text>] [--client-id <uuid>] [--config <path>]\n" +
 	"       pdx lease run (--kind <k> | --weight <n>) [--wait <dur>] [--client-id <uuid>] [--config <path>] -- <command…>\n" +
+	"       pdx lease report [--since 24h] [--json] [--config <path>]   (since: a duration such as 90m or 24h, or days as 7d; at most 14d)\n" +
 	"       pdx lease release (<id> | --client-id <uuid>) [--json] [--config <path>]\n" +
 	"       (--wait: how long to queue before being let in anyway; default the host setting deadline_s, 5 minutes unless changed. acquire holds for --holder-pid, default the parent of pdx: a bare acquire in a subshell or $(…) names a process that exits at once. Give --holder-pid a long-lived pid, or use pdx lease run.)"
 
@@ -74,6 +75,8 @@ func runLeaseCmd(ctx context.Context, args []string, getenv func(string) string,
 			return runLeaseRelease(ctx, args[1:], stdout, stderr, clientOpts)
 		case "run":
 			return runLeaseRun(ctx, args[1:], stdout, stderr, clientOpts)
+		case "report":
+			return runLeaseReport(ctx, args[1:], stdout, stderr, clientOpts)
 		}
 	}
 	msg := "需要一個子指令"

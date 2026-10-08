@@ -1,0 +1,14 @@
+period    10-08 12:00 → 10-09 12:00
+timeline  1430 minute rows, 10-08 12:00 → 10-09 11:59
+requests  9  (test-full 4, build 3, (weight) 1, test-pkg 1)
+let in    at once 4, after waiting 2, over the deadline 1; never granted 1
+          1 granted before the decision record existed are in no figure below
+wait      p50 0.0s  p90 300.0s  max 300.0s
+old rule  would have held back 3 of 7 grants
+full      0.4% of the time, 2 runs, longest 300s
+2+ heavy  3 minutes, highest load1 11.20, highest memory 83.5%
+
+KIND       N  WEIGHT  PEAK   MEAN
+build      2  35      28.0%  15.0%
+test-full  4  35      55.0%  31.8%
+test-pkg   1  15      10.0%  6.0%
