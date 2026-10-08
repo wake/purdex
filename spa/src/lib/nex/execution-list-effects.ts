@@ -265,7 +265,11 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
           refreshRevision: c.refreshRevision + 1, archivedRevision: (c.archivedRevision ?? 0) + 1,
         }))
         // A successful safety walk supersedes whatever the previous one left waiting, clean or not (it re-evaluated them).
-        if (safety && delta && result.epoch !== undefined) cancelSuspects(rt)
+        // An incomplete walk (truncated, stuck, rows dropped) re-evaluated only the ids its pages cover; the rest keep waiting.
+        if (safety && delta && result.epoch !== undefined) {
+          if (complete) cancelSuspects(rt)
+          else cancelSuspects(rt, (sus) => coveringPage(result.pages, sus.id) !== undefined)
+        }
         if (found.length > 0) registerSuspects(hostId, rt, found)
       })
       .catch((err: unknown) => {
@@ -275,9 +279,10 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
       .finally(endWalk)
   }
 
-  function cancelSuspects(rt: HostListRuntime): void {
-    for (const s of rt.suspects) if (s.timer) clearTimeout(s.timer)
-    rt.suspects = []
+  /** Drop the pending suspects (all, or those `which` accepts) and their timers. */
+  function cancelSuspects(rt: HostListRuntime, which: (s: PendingSuspect) => boolean = () => true): void {
+    for (const s of rt.suspects) if (which(s) && s.timer) clearTimeout(s.timer)
+    rt.suspects = rt.suspects.filter((s) => !which(s))
   }
 
   function registerSuspects(hostId: string, rt: HostListRuntime, found: Suspect[]): void {

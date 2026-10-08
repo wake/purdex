@@ -226,6 +226,41 @@ describe('suspects', () => {
     expect(mismatches()).toBe(0)
   })
 
+  it('G1 limit: an incomplete (truncated) walk keeps the suspects outside its pages, which still count after H and the grace', async () => {
+    vi.mocked(api.listExecutions).mockResolvedValue(page(5, [row('a', { state: 'running' }), row('z', { state: 'running' })]))
+    await ready9()
+    vi.mocked(api.listExecutions).mockResolvedValue(page(9, [row('a', { state: 'running' }), row('z', { state: 'idle' })], 2))
+    await advance(SAFETY_MS) // suspect z, waiting for bseq 2
+    let n = 0
+    vi.mocked(api.listExecutions).mockReset().mockImplementation(async () => {
+      const i = n++
+      return { items: i === 0 ? [row('a', { state: 'running' })] : [], next_cursor: `c${i}`, pdx: { epoch: E1, ver: 12, bseq: 2 } } as never
+    })
+    await advance(SAFETY_MS) // 20 pages, never reaches the end: truncated, and z (> every cursor) is not covered
+    expect(cache().truncated).toBe(true)
+    store().applyDelta(A, delta(1, 'b', 3, row('b')))
+    store().applyDelta(A, delta(2, 'c', 4, row('c')))
+    await advance(GRACE_MS + 10)
+    expect(mismatches()).toBe(1)
+  })
+
+  it('G1 limit: an incomplete walk still re-evaluates (and clears) the suspects whose ids its pages cover', async () => {
+    await ready()
+    vi.mocked(api.listExecutions).mockResolvedValue(page(9, [row('a', { state: 'idle' })], 2))
+    await advance(SAFETY_MS) // suspect a
+    let n = 0
+    vi.mocked(api.listExecutions).mockReset().mockImplementation(async () => {
+      const i = n++
+      return { items: i === 0 ? [row('a', { state: 'idle' })] : [], next_cursor: `c${i}`, pdx: { epoch: E1, ver: 12, bseq: 2 } } as never
+    })
+    await advance(SAFETY_MS)
+    expect(cache().truncated).toBe(true)
+    store().applyDelta(A, delta(1, 'b', 3, row('b')))
+    store().applyDelta(A, delta(2, 'c', 4, row('c')))
+    await advance(GRACE_MS * 3)
+    expect(mismatches()).toBe(0)
+  })
+
   it('a row only on one side is a suspect; the commit repairs it', async () => {
     await ready()
     vi.mocked(api.listExecutions).mockResolvedValue(page(9, [row('a', { state: 'running' }), row('n')]))
