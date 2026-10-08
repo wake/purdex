@@ -1,0 +1,45 @@
+// spa/src/lib/team/roster-forget.test.ts — a removed or re-pointed host's roster is forgotten (plan PL-2b′): what the
+// old daemon said about its teams is not the new one's. Same triggers as unattended-support.ts.
+import { describe, it, expect, beforeEach } from 'vitest'
+import { useHostStore } from '../../stores/useHostStore'
+import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
+import { startRosterForget } from './roster-forget'
+
+const host = (id: string, ip = '1.2.3.4', token: string | null = null) => ({ id, name: id, ip, port: 7860, order: 0, token })
+
+let stop: (() => void) | undefined
+beforeEach(() => {
+  stop?.()
+  useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2') }, hostOrder: ['h1', 'h2'], runtime: {}, activeHostId: 'h1' })
+  useTeamRosterStore.getState().reset()
+  useTeamRosterStore.getState().apply('h1', [])
+  useTeamRosterStore.getState().apply('h2', [])
+  stop = startRosterForget()
+})
+
+describe('startRosterForget', () => {
+  it('forgets a removed host and keeps the others', () => {
+    useHostStore.setState({ hosts: { h2: host('h2') }, hostOrder: ['h2'] })
+    expect(Object.keys(useTeamRosterStore.getState().byHost)).toEqual(['h2'])
+  })
+
+  it('forgets a host whose endpoint or token changed', () => {
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: host('h1', '5.6.7.8') } }))
+    expect(Object.keys(useTeamRosterStore.getState().byHost)).toEqual(['h2'])
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, h2: host('h2', '1.2.3.4', 'tok') } }))
+    expect(useTeamRosterStore.getState().byHost).toEqual({})
+  })
+
+  it('leaves everyone alone on a change that is neither (a rename, a runtime update)', () => {
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, name: 'renamed' } } }))
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } as never } })
+    expect(Object.keys(useTeamRosterStore.getState().byHost).sort()).toEqual(['h1', 'h2'])
+  })
+
+  it('stops when the returned function is called', () => {
+    stop?.()
+    stop = undefined
+    useHostStore.setState({ hosts: {}, hostOrder: [] })
+    expect(Object.keys(useTeamRosterStore.getState().byHost).sort()).toEqual(['h1', 'h2'])
+  })
+})

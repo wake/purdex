@@ -15,6 +15,7 @@ export interface HostEvent {
     | 'nex-worker-exited'
     | 'approval.request'
     | 'team.unattended'
+    | 'team.roster'
     | 'nex.executions.hello'
     | 'nex.execution'
   session: string

@@ -24,6 +24,8 @@ import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { handleApprovalEvent } from '../lib/team/approval-ws'
 import { handleUnattendedEvent } from '../lib/team/unattended-ws'
 import { UNATTENDED_EVENT_TYPE } from '../lib/team/types'
+import { handleRosterEvent } from '../lib/team/roster-ws'
+import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
 
 /**
  * The operation lock's observer (#1309 + #1310 spec §3.1): every tree rewriter —
@@ -246,6 +248,16 @@ export function useMultiHostEventWs() {
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
             handleUnattendedEvent(hostId, event.value)
+            return
+          }
+          if (event.type === ROSTER_EVENT_TYPE) {
+            // The host's live teams (plan PL-2b′): snapshot on subscribe, changed after every change. Bound to the
+            // connection exactly like `team.unattended` above — a frame is dropped unless the host still exists
+            // under the endpoint and token this socket was opened with, so the old daemon's roster is never
+            // written back after a removal or a re-point (roster-forget.ts has already forgotten it).
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handleRosterEvent(hostId, event.value)
             return
           }
           // `handoff` / `relay` events: the daemon stopped emitting them in
