@@ -71,6 +71,12 @@ var usageColumns = [][2]string{
 	{"usage_at", "INTEGER NOT NULL DEFAULT 0"},
 }
 
+// migrateTeamName gives teams the team's current name (team-name spec D-N5);
+// a row written before it reads "" (no name).
+func migrateTeamName(db *sql.DB) error {
+	return ensureColumn(db, "teams", "team_name", "TEXT NOT NULL DEFAULT ''")
+}
+
 // migrateUsage gives team_members and teams their usage columns (P4-6).
 func migrateUsage(db *sql.DB) error {
 	for _, c := range usageColumns {

@@ -66,7 +66,7 @@ const teamSchema = `
 	CREATE INDEX IF NOT EXISTS team_members_team ON team_members (team_id, state);
 	CREATE UNIQUE INDEX IF NOT EXISTS team_members_one_active ON team_members (session_id) WHERE state = 'active';`
 
-const teamCols = `id, host_id, lead_session_id, lead_ref, grant_json, request_id, created_at, ended_at, end_reason`
+const teamCols = `id, host_id, lead_session_id, lead_ref, grant_json, request_id, created_at, ended_at, end_reason, team_name`
 
 const memberCols = `spawn_op, team_id, host_id, session_id, ref, title, cwd, tmux_session, tmux_id, tmux_instance, pane_id, pid, proc_start, model, effort, state, created_at, updated_at`
 
@@ -82,7 +82,7 @@ func qualify(alias, cols string) string {
 // teamDest is the Scan destination of teamCols; the grant is decoded after.
 func teamDest(t *team.Team, grantJSON *string) []any {
 	return []any{&t.ID, &t.HostID, &t.LeadSessionID, &t.LeadRef, grantJSON, &t.RequestID,
-		&t.CreatedAt, &t.EndedAt, &t.EndReason}
+		&t.CreatedAt, &t.EndedAt, &t.EndReason, &t.TeamName}
 }
 
 func decodeTeamGrant(t *team.Team, grantJSON string) error {
@@ -338,8 +338,8 @@ func closeLeadApprovedIn(tx *sql.Tx, id string, c Close, t team.Team) (int64, er
 		} else if member {
 			return 0, ErrMemberCannotLead
 		}
-		if _, err := tx.Exec(`INSERT INTO teams (`+teamCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '')`,
-			t.ID, t.HostID, t.LeadSessionID, t.LeadRef, string(grantJSON), t.RequestID, t.CreatedAt); err != nil {
+		if _, err := tx.Exec(`INSERT INTO teams (`+teamCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', ?)`,
+			t.ID, t.HostID, t.LeadSessionID, t.LeadRef, string(grantJSON), t.RequestID, t.CreatedAt, t.TeamName); err != nil {
 			if strings.Contains(err.Error(), "teams.lead_session_id") { // the partial unique index teams_one_live_per_lead
 				return 0, ErrLeadHasTeam
 			}

@@ -141,7 +141,7 @@ func TestCreate_UnattendedRefusalInTheTransactionIs409NothingWritten(t *testing.
 	f := newFixture(t)
 	f.unatt.set(true)
 	f.m.store.afterApprovedInsert = func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`INSERT INTO teams (` + teamCols + `) VALUES ('team-x', 'h:1', 'sid-2', '_def456', '{}', 'team-x', 1, 0, '')`); err != nil {
+		if _, err := tx.Exec(`INSERT INTO teams (` + teamCols + `) VALUES ('team-x', 'h:1', 'sid-2', '_def456', '{}', 'team-x', 1, 0, '', '')`); err != nil {
 			return err
 		}
 		m := newMember("op-x", "team-x", "sid-1", "_abc123", 1)
