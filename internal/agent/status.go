@@ -64,4 +64,8 @@ type NormalizedEvent struct {
 	// omitempty counter hides the first frame.
 	Epoch string `json:"epoch"`
 	Seq   uint64 `json:"seq"`
+	// Snapshot marks a subscribe-time replay (U1-2b-3): the frame carries the
+	// emit slot's high-water mark as Seq (not a new one), so a client takes it
+	// as the state at that point, not as the next live frame.
+	Snapshot bool `json:"snapshot,omitempty"`
 }

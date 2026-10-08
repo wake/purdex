@@ -77,7 +77,7 @@ func TestBatchTimeout_NoPathBroadcastsAndRecoveryRestoresState(t *testing.T) {
 	}
 
 	// 3. snapshot to a subscriber: no frame.
-	r.m.sendFrameSnapshot(r.sub)
+	r.m.sendSnapshot(r.sub)
 	if got := r.drain(t); len(got) != 0 {
 		t.Fatalf("snapshot sent during a stuck tmux: %+v", got)
 	}
