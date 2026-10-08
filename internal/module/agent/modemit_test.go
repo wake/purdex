@@ -78,6 +78,10 @@ func TestEmitBaseline_WorkerDoesNotOvertakeNewerHook(t *testing.T) {
 	seedIdentityFrame(t, r.m, "%5", "cc", 200, "Sun Apr 20 01:30:00 2026", 10, modSID1, "/w")
 	bt := &blockingTmux{FakeExecutor: tmux.NewFakeExecutor(), entered: make(chan struct{}), release: make(chan struct{})}
 	bt.SetPaneSessionName("%5", "work")
+	// The batch snapshot answers the name without a PaneSessionName call; an
+	// ambiguous pane is the one that still asks, and that call is the hold
+	// point (after the overlay was applied) this test needs.
+	bt.SetPaneAmbiguous("%5", true)
 	r.m.tmux = bt
 
 	feedMod(r.m, modStrm, modStart, modTurnStart)

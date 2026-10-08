@@ -708,8 +708,18 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 }
 
 func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
+	projections, _, err := m.liveFrameProjectionsWithSnapshot()
+	return projections, err
+}
+
+// liveFrameProjectionsWithSnapshot is liveFrameProjections that also returns
+// the pane snapshot the frames were filtered with, so the caller's pane ->
+// session-name step reads the same tmux answer instead of asking again. The
+// snapshot is nil when there were no frames to filter (no tmux call is made
+// then) or the batch call failed; a nil snapshot makes every lookup per pane.
+func (m *Module) liveFrameProjectionsWithSnapshot() ([]SessionProjection, *paneSnapshot, error) {
 	if m.frames == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	listAll := m.frames.ListAll
 	if m.listFramesFn != nil {
@@ -717,15 +727,25 @@ func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
 	}
 	frames, err := listAll()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(frames) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	frames = m.filterProjectionFrames(frames)
+	snap := m.takePaneSnapshot()
+	frames = m.filterProjectionFrames(frames, snap)
 	projections := BuildSessionProjections(frames)
 	m.applyModOverlay(projections)
-	return projections, nil
+	return projections, snap, nil
+}
+
+// paneNameFunc is the pane -> tmux session name step of a read: from snap, or
+// (snap == nil) one tmux lookup per pane.
+func (m *Module) paneNameFunc(snap *paneSnapshot) func(paneID string) string {
+	if snap == nil {
+		return m.paneSessionName
+	}
+	return snap.sessionName
 }
 
 // replayProjectionCache memoises, for ONE replayStatus round, the live frame
