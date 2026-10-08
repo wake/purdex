@@ -101,6 +101,7 @@ const KINDS: [string, string | null][] = [
   ['cat > f <<EOF\nx\nEOF\ngo vet ./...', 'lint-full'],
   ['echo ok # npx vitest run', null],
   ['# npx vitest run\nls', null],
+  ['ls # ; npx vitest run', null],
   ['echo a#b && npx vitest run', 'test-full'],
 ]
 
@@ -149,6 +150,7 @@ for (const [cmd, want] of REWRITES) {
 const UNCHANGED = [
   'cat <<EOF\nnpx vitest run\nEOF',
   'echo ok # npx vitest run',
+  'ls # ; npx vitest run',
   'npx vitest run --maxWorkers=3',
   'npx vitest run --max-workers=2',
   'npx vitest run src/lib/foo.test.ts',
