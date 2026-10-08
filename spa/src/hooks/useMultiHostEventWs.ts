@@ -199,6 +199,14 @@ export function useMultiHostEventWs() {
             handleSessionsFrame(hostId, event)
             return
           }
+          if (event.type === 'agent.snapshot' || event.type === 'hook') {
+            // Bound to the host this connection was made for (as approval / team frames below): a removal or a
+            // re-point reaches the host store before this effect closes the old socket, and a frame still queued on
+            // it in between would bring the old daemon's lights back. After the close, host-events.ts's epoch drops
+            // whatever is left on the socket.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+          }
           if (event.type === 'agent.snapshot') {
             // The host's complete agent list (`session` is ""): replaces what this host's codes held, then opens the
             // cursor at the snapshot's high-water seq. A malformed one is dropped without a reconnect (a daemon bug:

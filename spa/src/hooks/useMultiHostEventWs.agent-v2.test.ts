@@ -249,6 +249,20 @@ describe('useMultiHostEventWs agent=v2 (U1-3b)', () => {
     view.unmount()
   })
 
+  it('a snapshot or hook frame queued on the socket of a re-pointed or removed host is not written', async () => {
+    const view = await connect()
+    act(() => { sockets[0].emit(snapshotFrame('E1', 10, { dev: 'idle' })) })
+    // the host store changes first; the effect that closes the old socket has not run yet (same act)
+    act(() => {
+      useHostStore.setState({ hosts: { [HOST]: { id: HOST, name: 'Host', ip: '9.9.9.9', port: 7860, order: 0 } } })
+      sockets[0].emit(hookFrame('dev', 'running', 'E1', 11))
+      sockets[0].emit(snapshotFrame('E1', 50, { other: 'running' }))
+    })
+    expect(agent().statuses[key('dev')]).toBe('idle')
+    expect(agent().statuses[key('other')]).toBeUndefined()
+    view.unmount()
+  })
+
   it('the nex cursor is untouched by a hook resync', async () => {
     const view = await connect()
     act(() => { sockets[0].emit(nexFrame('nex.executions.hello', { epoch: 'N1', bseq: 0 })) })
