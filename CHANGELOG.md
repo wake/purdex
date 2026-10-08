@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.614] - 2026-10-09
+
+> 動 daemon 和 CLI：**要部署 daemon**（`bin/pdx` 一起換新）；mod 與 skill 都沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版修好 613 的資源租約：613 的租約一建立就被收回，排隊從沒真正生效。
+
+### Fixed：資源租約在非 UTC 時區失效（#2057）
+
+- 613 在台灣時區（UTC+8）下，每個 `pdx lease run`／`acquire` 的租約一建立就被判「持有者已不在」而收回，所以不會排隊，也不會佔額度。方向是全部放行，不會擋到任何人，但租約等於沒有生效。
+- 原因：持有者的啟動時間有兩個來源。`ps` 印的是本地時間；Claude Code 的 session 紀錄是 UTC。主機一律當 UTC 解讀，所以 `ps` 來的差了 8 小時。
+- 現在 `pdx` 指令會先用自己的時區把 `ps` 的時間轉成 UTC 再送出，主機存的一律是 UTC。測試也改成在 UTC+8 下執行。**主機和指令要同一版**：新主機搭配舊的 `pdx` 指令，問題會再出現。
+
+### Docs
+
+- 燈號 v2 的 App 端（U1-3）plan（#2058）。
+
 ## [1.0.0-alpha.613] - 2026-10-09
 
 > 動 daemon、CLI 和 skill：**要部署 daemon，也要重跑 `pdx setup --agent cc`**（skill 新增 pdx-lease；mod 沒有改）；SPA、Electron 不必更新。使用者看得到的是**資源租約第一版**：`pdx lease run` 把重指令包起來，主機忙時先排隊。這一版只有主動用 `pdx lease run` 的指令會排隊，外掛還不會自動攔截。
