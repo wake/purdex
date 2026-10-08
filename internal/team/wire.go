@@ -14,6 +14,7 @@ type Kind string
 const (
 	KindLead      Kind = "lead"
 	KindSelfRelay Kind = "self_relay" // accepted from P5a on; P2 answers 400 unsupported_kind
+	KindAdopt     Kind = "adopt"      // U24: the lead asks to take a running session into its team
 )
 
 type State string
@@ -99,6 +100,8 @@ type Approval struct {
 	DecidedAt  int64           `json:"decided_at,omitempty"` // any close
 	Grant      *Grant          `json:"grant,omitempty"`      // approved only
 	Hook       *HookDecision   `json:"hook,omitempty"`       // hook kinds: the answer (approved / denied = remote, answered_local / terminal_override = terminal)
+
+	CloseReason string `json:"close_reason,omitempty"` // cancelled by a re-check: the code (adopt: ErrAdopt*)
 }
 
 // CreateApprovalRequest is POST /api/team/approvals.
@@ -110,6 +113,7 @@ type CreateApprovalRequest struct {
 	MaxMembers  int      `json:"max_members,omitempty"`
 	Roots       []string `json:"roots,omitempty"`
 	WaitS       int      `json:"wait_s,omitempty"` // 0→540, cap 600
+	Target      string   `json:"target,omitempty"` // adopt only: the target as `pdx adopt` takes it (ref or address)
 }
 
 // DecideRequest is POST /api/team/approvals/{id}/decide.

@@ -36,6 +36,9 @@ const (
 	MemberActive MemberState = "active"
 	MemberKilled MemberState = "killed" // pdx kill
 	MemberGone   MemberState = "gone"   // its session ended without a kill
+	// MemberReleased: the lead let it go (pdx release); the session lives on.
+	// Only the store of a later PR (PL-1b) writes it.
+	MemberReleased MemberState = "released"
 )
 
 // SpawnState is a spawn op's state. A running op is resumed at boot from
@@ -161,20 +164,23 @@ type MemberContext struct {
 
 // Member is one member of a team (spec §7.2 step 6, §7.3).
 type Member struct {
-	SessionID   string         `json:"session_id"`
-	Ref         string         `json:"ref"`     // "_xxxxxx"
-	Address     string         `json:"address"` // "<alias>/<name>" for a routable name, else "<alias>/_<ref>"
-	TeamID      string         `json:"team_id"`
-	HostID      string         `json:"host_id"` // the host the member runs on
-	Title       string         `json:"title,omitempty"`
-	Cwd         string         `json:"cwd"`
-	TmuxSession string         `json:"tmux_session"` // SpawnTmuxName(SpawnOp)
-	State       MemberState    `json:"state"`
-	Model       string         `json:"model,omitempty"`  // as asked at spawn (U20); "" = the host's default
-	Effort      string         `json:"effort,omitempty"` // as asked at spawn (U20)
-	Context     *MemberContext `json:"context,omitempty"`
-	SpawnOp     string         `json:"spawn_op"`
-	CreatedAt   int64          `json:"created_at"` // unix ms
+	SessionID    string         `json:"session_id"`
+	Ref          string         `json:"ref"`     // "_xxxxxx"
+	Address      string         `json:"address"` // "<alias>/<name>" for a routable name, else "<alias>/_<ref>"
+	TeamID       string         `json:"team_id"`
+	HostID       string         `json:"host_id"` // the host the member runs on
+	Title        string         `json:"title,omitempty"`
+	Cwd          string         `json:"cwd"`
+	TmuxSession  string         `json:"tmux_session"` // SpawnTmuxName(SpawnOp)
+	State        MemberState    `json:"state"`
+	Origin       string         `json:"origin"`           // MemberOriginSpawned | MemberOriginAdopted; always present (a view without it is an older daemon's: spawned)
+	Model        string         `json:"model,omitempty"`  // as asked at spawn (U20); "" = the host's default
+	Effort       string         `json:"effort,omitempty"` // as asked at spawn (U20)
+	Context      *MemberContext `json:"context,omitempty"`
+	SpawnOp      string         `json:"spawn_op"`                // "" for an adopted member
+	AdoptRequest string         `json:"adopt_request,omitempty"` // adopted only: the approval that took it in
+	CreatedAt    int64          `json:"created_at"`              // unix ms
+	EndedAt      int64          `json:"ended_at,omitempty"`      // unix ms; 0 while the member is active
 }
 
 // SpawnRequest is POST /api/team/spawns.
