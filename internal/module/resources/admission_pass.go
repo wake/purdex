@@ -237,12 +237,10 @@ func (m *Module) baselinesForWaiting(ctx context.Context) map[string]string {
 // and is charged to the lease (a known, conservative error, spec D-8).
 func (m *Module) captureBaselines(ctx context.Context, rows []leaseRow) map[string]string {
 	out := make(map[string]string, len(rows))
-	var procs []resources.Proc
-	if p := m.lastProcs.Load(); p != nil {
-		procs = *p
-	}
+	// One load: the list tested for "there is a sample" is the list used.
+	last := m.lastProcs.Load()
 	view, err := m.readView(ctx)
-	if err != nil || m.lastProcs.Load() == nil {
+	if err != nil || last == nil {
 		// Unknown, not empty: "" is stored as NULL and measured as the whole
 		// tree (spec D-5: fail open, on the high side).
 		if !m.baselineFailing.Swap(true) {
@@ -254,6 +252,7 @@ func (m *Module) captureBaselines(ctx context.Context, rows []leaseRow) map[stri
 		return out
 	}
 	m.baselineFailing.Store(false)
+	procs := *last
 	children := make(map[int][]int, len(procs))
 	for _, p := range procs {
 		children[p.PPID] = append(children[p.PPID], p.PID)
